@@ -1,4 +1,4 @@
-package main
+package httpapi
 
 import (
 	"encoding/json"
@@ -11,7 +11,7 @@ func TestHealthHandler(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/health", nil)
 	recorder := httptest.NewRecorder()
 
-	newHandler().ServeHTTP(recorder, req)
+	New(nil).ServeHTTP(recorder, req)
 
 	res := recorder.Result()
 	defer res.Body.Close()
@@ -39,7 +39,7 @@ func TestHealthHandlerRejectsPost(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/health", nil)
 	recorder := httptest.NewRecorder()
 
-	newHandler().ServeHTTP(recorder, req)
+	New(nil).ServeHTTP(recorder, req)
 
 	res := recorder.Result()
 

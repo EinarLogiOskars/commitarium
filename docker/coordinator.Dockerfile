@@ -7,6 +7,7 @@ COPY go.mod ./
 RUN go mod download
 
 COPY cmd/coordinator ./cmd/coordinator
+COPY internal ./internal
 
 RUN CGO_ENABLED=0 GOOS=linux go build -o /coordinator ./cmd/coordinator
 
