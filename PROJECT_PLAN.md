@@ -441,15 +441,15 @@ The phone must connect through the Commitarium control API, never directly to Do
 These are current defaults, subject to explicit architecture decisions before significant implementation:
 
 - **Repository:** Public monorepo using pnpm workspaces.
-- **Coordinator:** TypeScript on Node.js.
-- **HTTP service:** Fastify.
+- **Coordinator:** Go
+- **HTTP service:** Go's net/http initially
 - **Coordinator persistence:** SQLite for the initial single-user product.
 - **Live updates:** Server-sent events initially; WebSocket only when bidirectional realtime needs justify it.
 - **Desktop:** Tauri 2 with a web frontend.
 - **Internal forge:** Forgejo.
 - **Infrastructure:** Docker Compose.
 - **Agent integration:** Provider-specific worker adapters around Codex CLI and Claude Code.
-- **Contracts:** Shared, versioned TypeScript schemas between the coordinator, workers, and UI.
+- **Contracts:** OpenAPI/JSON Schema with generated TypeScript clients later
 
 The choice of frontend framework remains open. The coordinator stack should be confirmed before scaffolding.
 
@@ -541,7 +541,6 @@ Real CLI authentication, repository mutation, and the desktop interface should w
 
 ## Decisions still to make
 
-- Confirm TypeScript/Node.js for the coordinator.
 - Choose the frontend framework for Tauri.
 - Define the exact project import, mirror, and worktree strategy.
 - Define the coordinator-to-worker protocol and trust boundary.
