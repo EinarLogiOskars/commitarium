@@ -7,3 +7,20 @@ services:
       dockerfile: docker/coordinator.Dockerfile
     ports:
       - "127.0.0.1:8080:8080"
+
+  forgejo:
+    image: codeberg.org/forgejo/forgejo:16.0.3-rootless
+    user: "1000:1000"
+    environment:
+      FORGEJO__database__DB_TYPE: sqlite3
+      FORGEJO__server__DOMAIN: localhost
+      FORGEJO__server__ROOT_URL: http://localhost:3001/
+      FORGEJO__server__DISABLE_SSH: "true"
+    volumes:
+      - forgejo-data:/var/lib/gitea
+    ports:
+      - "127.0.0.1:3001:3000"
+
+volumes:
+  forgejo-data:
+  
