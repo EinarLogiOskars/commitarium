@@ -65,8 +65,54 @@ func (api *API) createProjectHandler(
 		CreatedAt: createdProject.CreatedAt,
 	}
 
+	w.Header().Set(
+		"Location",
+		"/api/v1/projects/"+createdProject.ID,
+	)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
+
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		log.Printf("encode project response: %v", err)
+	}
+}
+
+func (api *API) getProjectByIDHandler(
+	w http.ResponseWriter,
+	r *http.Request,
+) {
+	id := r.PathValue("id")
+
+	foundProject, err := api.projects.GetByID(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, project.ErrNotFound) {
+			writeError(
+				w,
+				http.StatusNotFound,
+				"project_not_found",
+				"project not found",
+			)
+			return
+		}
+		log.Printf("get project %q: %v", id, err)
+
+		writeError(
+			w,
+			http.StatusInternalServerError,
+			"internal_error",
+			"internal server error",
+		)
+		return
+	}
+
+	response := projectResponse{
+		ID:        foundProject.ID,
+		Name:      foundProject.Name,
+		CreatedAt: foundProject.CreatedAt,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
 
 	if err := json.NewEncoder(w).Encode(response); err != nil {
 		log.Printf("encode project response: %v", err)

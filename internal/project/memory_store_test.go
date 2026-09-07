@@ -25,3 +25,36 @@ func TestMemoryStoreCreateRejectsDuplicateID(t *testing.T) {
 		t.Fatalf("expected error %v, got %v", ErrAlreadyExists, err)
 	}
 }
+
+func TestMemoryStoreGetByID(t *testing.T) {
+	store := NewMemoryStore()
+
+	expected := Project{
+		ID:        "prj_test",
+		Name:      "Test project",
+		CreatedAt: time.Date(2026, time.September, 7, 12, 0, 0, 0, time.UTC),
+	}
+
+	if err := store.Create(t.Context(), expected); err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+
+	actual, err := store.GetByID(t.Context(), expected.ID)
+	if err != nil {
+		t.Fatalf("get project: %v", err)
+	}
+
+	if actual != expected {
+		t.Errorf("expected project %+v, got %+v", expected, actual)
+	}
+}
+
+func TestMemoryStoreGetByIDReturnsNotFound(t *testing.T) {
+	store := NewMemoryStore()
+
+	_, err := store.GetByID(t.Context(), "prj_missing")
+
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected error %v, got %v", ErrNotFound, err)
+	}
+}

@@ -7,18 +7,16 @@ import (
 	"github.com/EinarLogiOskars/commitarium/internal/project"
 )
 
-type ProjectCreator interface {
-	Create(
-		ctx context.Context,
-		name string,
-	) (project.Project, error)
+type ProjectService interface {
+	Create(ctx context.Context, name string) (project.Project, error)
+	GetByID(ctx context.Context, id string) (project.Project, error)
 }
 
 type API struct {
-	projects ProjectCreator
+	projects ProjectService
 }
 
-func New(projects ProjectCreator) http.Handler {
+func New(projects ProjectService) http.Handler {
 	api := &API{
 		projects: projects,
 	}
@@ -28,6 +26,10 @@ func New(projects ProjectCreator) http.Handler {
 	mux.HandleFunc(
 		"POST /api/v1/projects",
 		api.createProjectHandler,
+	)
+	mux.HandleFunc(
+		"GET /api/v1/projects/{id}",
+		api.getProjectByIDHandler,
 	)
 
 	return mux

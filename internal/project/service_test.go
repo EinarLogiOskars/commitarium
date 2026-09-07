@@ -10,6 +10,10 @@ import (
 type recordingStore struct {
 	createdProject Project
 	err            error
+
+	receivedID    string
+	projectResult Project
+	getByIDErr    error
 }
 
 func (s *recordingStore) Create(
@@ -18,6 +22,14 @@ func (s *recordingStore) Create(
 ) error {
 	s.createdProject = project
 	return s.err
+}
+
+func (s *recordingStore) GetByID(
+	_ context.Context,
+	id string,
+) (Project, error) {
+	s.receivedID = id
+	return s.projectResult, s.getByIDErr
 }
 
 func TestServiceCreate(t *testing.T) {
@@ -89,5 +101,56 @@ func TestServiceCreateReturnsStoreError(t *testing.T) {
 
 	if project != (Project{}) {
 		t.Errorf("expected empty project, got %+v", project)
+	}
+}
+
+func TestServiceGetByID(t *testing.T) {
+	expected := Project{
+		ID:        "prj_test",
+		Name:      "Commitarium",
+		CreatedAt: time.Date(2026, time.September, 7, 12, 0, 0, 0, time.UTC),
+	}
+
+	store := &recordingStore{
+		projectResult: expected,
+	}
+	service := NewService(store)
+
+	actual, err := service.GetByID(t.Context(), expected.ID)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if store.receivedID != expected.ID {
+		t.Errorf("expected store ID %q, got %q", expected.ID, store.receivedID)
+	}
+
+	if actual != expected {
+		t.Errorf("expected project %+v, got %+v", expected, actual)
+	}
+}
+
+func TestServiceGetByIDReturnsStoreError(t *testing.T) {
+	store := &recordingStore{
+		getByIDErr: ErrNotFound,
+	}
+	service := NewService(store)
+
+	project, err := service.GetByID(t.Context(), "prj_missing")
+
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected error %v, got %v", ErrNotFound, err)
+	}
+
+	if project != (Project{}) {
+		t.Errorf("expected empty project, got %+v", project)
+	}
+
+	if store.receivedID != "prj_missing" {
+		t.Errorf(
+			"expected store to receive ID %q, got %q",
+			"prj_missing",
+			store.receivedID,
+		)
 	}
 }
