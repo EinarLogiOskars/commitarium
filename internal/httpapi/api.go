@@ -25,6 +25,10 @@ func New(projects ProjectCreator) http.Handler {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", api.healthHandler)
+	mux.HandleFunc(
+		"POST /api/v1/projects",
+		api.createProjectHandler,
+	)
 
 	return mux
 }
