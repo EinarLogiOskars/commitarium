@@ -3,7 +3,7 @@ FROM golang:1.27-alpine AS build-stage
 
 WORKDIR /app
 
-COPY go.mod ./
+COPY go.mod go.sum ./
 RUN go mod download
 
 COPY cmd/coordinator ./cmd/coordinator
