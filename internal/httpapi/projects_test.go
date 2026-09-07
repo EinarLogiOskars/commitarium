@@ -14,11 +14,15 @@ import (
 	"github.com/EinarLogiOskars/commitarium/internal/project"
 )
 
-type recordingProjectCreator struct {
+type recordingProjectService struct {
 	calls        int
 	receivedName string
 	result       project.Project
 	err          error
+
+	receivedID    string
+	getByIDResult project.Project
+	getByIDErr    error
 }
 
 type testErrorResponse struct {
@@ -28,13 +32,21 @@ type testErrorResponse struct {
 	} `json:"error"`
 }
 
-func (c *recordingProjectCreator) Create(
+func (s *recordingProjectService) Create(
 	_ context.Context,
 	name string,
 ) (project.Project, error) {
-	c.calls++
-	c.receivedName = name
-	return c.result, c.err
+	s.calls++
+	s.receivedName = name
+	return s.result, s.err
+}
+
+func (s *recordingProjectService) GetByID(
+	_ context.Context,
+	id string,
+) (project.Project, error) {
+	s.receivedID = id
+	return s.getByIDResult, s.getByIDErr
 }
 
 func TestCreateProject(t *testing.T) {
@@ -49,7 +61,7 @@ func TestCreateProject(t *testing.T) {
 		time.UTC,
 	)
 
-	creator := &recordingProjectCreator{
+	service := &recordingProjectService{
 		result: project.Project{
 			ID:        "prj_test",
 			Name:      "Commitarium",
@@ -67,7 +79,7 @@ func TestCreateProject(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 
 	recorder := httptest.NewRecorder()
-	New(creator).ServeHTTP(recorder, req)
+	New(service).ServeHTTP(recorder, req)
 
 	var response struct {
 		ID        string    `json:"id"`
@@ -82,6 +94,16 @@ func TestCreateProject(t *testing.T) {
 		t.Fatalf("expected status code %d, got %d", http.StatusCreated, res.StatusCode)
 	}
 
+	expectedLocation := "/api/v1/projects/prj_test"
+
+	if location := res.Header.Get("Location"); location != expectedLocation {
+		t.Errorf(
+			"expected Location header %q, got %q",
+			expectedLocation,
+			location,
+		)
+	}
+
 	if contentType := res.Header.Get("Content-Type"); contentType != "application/json" {
 		t.Errorf("expected application/json, got %q", contentType)
 	}
@@ -90,25 +112,25 @@ func TestCreateProject(t *testing.T) {
 		t.Fatalf("decode response: %v", err)
 	}
 
-	if creator.receivedName != "Commitarium" {
-		t.Errorf("expected receivedName Commitarium, got %v", creator.receivedName)
+	if service.receivedName != "Commitarium" {
+		t.Errorf("expected receivedName Commitarium, got %v", service.receivedName)
 	}
 
-	if response.ID != creator.result.ID {
-		t.Errorf("expected response ID %v, got %v", creator.result.ID, response.ID)
+	if response.ID != service.result.ID {
+		t.Errorf("expected response ID %v, got %v", service.result.ID, response.ID)
 	}
 
-	if response.Name != creator.result.Name {
-		t.Errorf("expected response Name %v, got %v", creator.result.Name, response.Name)
+	if response.Name != service.result.Name {
+		t.Errorf("expected response Name %v, got %v", service.result.Name, response.Name)
 	}
 
-	if response.CreatedAt != creator.result.CreatedAt {
-		t.Errorf("expected response CreatedAt %v, got %v", creator.result.CreatedAt, response.CreatedAt)
+	if response.CreatedAt != service.result.CreatedAt {
+		t.Errorf("expected response CreatedAt %v, got %v", service.result.CreatedAt, response.CreatedAt)
 	}
 }
 
 func TestCreateProjectRejectsMalformedJSON(t *testing.T) {
-	creator := &recordingProjectCreator{}
+	service := &recordingProjectService{}
 	requestBody := strings.NewReader(`{"name":`)
 
 	request := httptest.NewRequest(
@@ -119,7 +141,7 @@ func TestCreateProjectRejectsMalformedJSON(t *testing.T) {
 	request.Header.Set("Content-Type", "application/json")
 
 	recorder := httptest.NewRecorder()
-	New(creator).ServeHTTP(recorder, request)
+	New(service).ServeHTTP(recorder, request)
 
 	response := recorder.Result()
 	defer response.Body.Close()
@@ -157,16 +179,16 @@ func TestCreateProjectRejectsMalformedJSON(t *testing.T) {
 		)
 	}
 
-	if creator.calls != 0 {
+	if service.calls != 0 {
 		t.Fatalf(
-			"expected project creator not to be called, got %d calls",
-			creator.calls,
+			"expected project service not to be called, got %d calls",
+			service.calls,
 		)
 	}
 }
 
 func TestCreateProjectRejectsEmptyName(t *testing.T) {
-	creator := &recordingProjectCreator{
+	service := &recordingProjectService{
 		err: project.ErrNameRequired,
 	}
 	requestBody := strings.NewReader(`{"name":""}`)
@@ -178,7 +200,7 @@ func TestCreateProjectRejectsEmptyName(t *testing.T) {
 	)
 
 	recorder := httptest.NewRecorder()
-	New(creator).ServeHTTP(recorder, request)
+	New(service).ServeHTTP(recorder, request)
 
 	response := recorder.Result()
 	defer response.Body.Close()
@@ -213,13 +235,13 @@ func TestCreateProjectRejectsEmptyName(t *testing.T) {
 		)
 	}
 
-	if creator.calls != 1 {
-		t.Fatalf("expected project creator to be called once, got %d", creator.calls)
+	if service.calls != 1 {
+		t.Fatalf("expected project service to be called once, got %d", service.calls)
 	}
 }
 
 func TestCreateProjectHandlesUnexpectedError(t *testing.T) {
-	creator := &recordingProjectCreator{
+	service := &recordingProjectService{
 		err: errors.New("database connection failed"),
 	}
 	requestBody := strings.NewReader(`{"name":"Commitarium"}`)
@@ -231,7 +253,7 @@ func TestCreateProjectHandlesUnexpectedError(t *testing.T) {
 	)
 
 	recorder := httptest.NewRecorder()
-	New(creator).ServeHTTP(recorder, request)
+	New(service).ServeHTTP(recorder, request)
 
 	response := recorder.Result()
 	defer response.Body.Close()
@@ -271,7 +293,131 @@ func TestCreateProjectHandlesUnexpectedError(t *testing.T) {
 		)
 	}
 
-	if strings.Contains(string(body), creator.err.Error()) {
+	if strings.Contains(string(body), service.err.Error()) {
 		t.Fatal("response exposed the internal error")
+	}
+}
+
+func TestGetProjectByID(t *testing.T) {
+	expected := project.Project{
+		ID:        "prj_test",
+		Name:      "Commitarium",
+		CreatedAt: time.Date(2026, time.September, 7, 12, 0, 0, 0, time.UTC),
+	}
+
+	projects := &recordingProjectService{
+		getByIDResult: expected,
+	}
+
+	request := httptest.NewRequest(
+		http.MethodGet,
+		"/api/v1/projects/prj_test",
+		nil,
+	)
+
+	recorder := httptest.NewRecorder()
+	New(projects).ServeHTTP(recorder, request)
+
+	response := recorder.Result()
+	defer response.Body.Close()
+
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf(
+			"expected status code %d, got %d",
+			http.StatusOK,
+			response.StatusCode,
+		)
+	}
+
+	if contentType := response.Header.Get("Content-Type"); contentType != "application/json" {
+		t.Errorf("expected application/json, got %q", contentType)
+	}
+
+	var body projectResponse
+	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+		t.Fatalf("decode project response: %v", err)
+	}
+
+	if projects.receivedID != expected.ID {
+		t.Errorf(
+			"expected service to receive ID %q, got %q",
+			expected.ID,
+			projects.receivedID,
+		)
+	}
+
+	if body.ID != expected.ID {
+		t.Errorf("expected ID %q, got %q", expected.ID, body.ID)
+	}
+
+	if body.Name != expected.Name {
+		t.Errorf("expected name %q, got %q", expected.Name, body.Name)
+	}
+
+	if body.CreatedAt != expected.CreatedAt {
+		t.Errorf(
+			"expected creation time %v, got %v",
+			expected.CreatedAt,
+			body.CreatedAt,
+		)
+	}
+}
+
+func TestGetProjectByIDReturnsNotFound(t *testing.T) {
+	service := &recordingProjectService{
+		getByIDErr: project.ErrNotFound,
+	}
+
+	request := httptest.NewRequest(
+		http.MethodGet,
+		"/api/v1/projects/prj_missing",
+		nil,
+	)
+
+	recorder := httptest.NewRecorder()
+	New(service).ServeHTTP(recorder, request)
+
+	response := recorder.Result()
+	defer response.Body.Close()
+
+	if response.StatusCode != http.StatusNotFound {
+		t.Fatalf(
+			"expected status code %d, got %d",
+			http.StatusNotFound,
+			response.StatusCode,
+		)
+	}
+
+	if contentType := response.Header.Get("Content-Type"); contentType != "application/json" {
+		t.Errorf("expected application/json, got %q", contentType)
+	}
+
+	var body errorResponse
+	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+		t.Fatalf("decode error response: %v", err)
+	}
+
+	if body.Error.Code != "project_not_found" {
+		t.Errorf(
+			"expected error code %q, got %q",
+			"project_not_found",
+			body.Error.Code,
+		)
+	}
+
+	if body.Error.Message != "project not found" {
+		t.Errorf(
+			"expected error message %q, got %q",
+			"project not found",
+			body.Error.Message,
+		)
+	}
+
+	if service.receivedID != "prj_missing" {
+		t.Errorf(
+			"expected service to receive ID %q, got %q",
+			"prj_missing",
+			service.receivedID,
+		)
 	}
 }

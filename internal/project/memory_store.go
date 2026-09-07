@@ -30,3 +30,18 @@ func (s *MemoryStore) Create(
 	s.projects[project.ID] = project
 	return nil
 }
+
+func (s *MemoryStore) GetByID(
+	_ context.Context,
+	id string,
+) (Project, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	project, exists := s.projects[id]
+	if !exists {
+		return Project{}, ErrNotFound
+	}
+
+	return project, nil
+}

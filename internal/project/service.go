@@ -50,5 +50,20 @@ func (s *Service) Create(
 	}
 
 	return project, nil
+}
 
+func (s *Service) GetByID(
+	ctx context.Context,
+	id string,
+) (Project, error) {
+	project, err := s.store.GetByID(ctx, id)
+	if err != nil {
+		return Project{}, fmt.Errorf(
+			"get project %q: %w",
+			id,
+			err,
+		)
+	}
+
+	return project, nil
 }
