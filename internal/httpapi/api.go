@@ -36,6 +36,10 @@ type WorkflowService interface {
 		actor workflow.Actor,
 		idempotencyKey string,
 	) (workflow.Event, error)
+	EventsForFeature(
+		ctx context.Context,
+		featureID string,
+	) ([]workflow.Event, error)
 }
 
 type API struct {
@@ -76,6 +80,10 @@ func New(
 	mux.HandleFunc(
 		"POST /api/v1/projects/{projectID}/features/{id}/transitions",
 		api.transitionFeatureHandler,
+	)
+	mux.HandleFunc(
+		"GET /api/v1/projects/{projectID}/features/{id}/events",
+		api.getFeatureEventsHandler,
 	)
 
 	return mux

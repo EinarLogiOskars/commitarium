@@ -22,6 +22,8 @@ type recordingWorkflowService struct {
 	result         workflow.Event
 	err            error
 	calls          int
+	eventsResult   []workflow.Event
+	eventsErr      error
 }
 
 func (s *recordingWorkflowService) TransitionFeature(
@@ -37,6 +39,14 @@ func (s *recordingWorkflowService) TransitionFeature(
 	s.actor = actor
 	s.idempotencyKey = idempotencyKey
 	return s.result, s.err
+}
+
+func (s *recordingWorkflowService) EventsForFeature(
+	_ context.Context,
+	featureID string,
+) ([]workflow.Event, error) {
+	s.featureID = featureID
+	return s.eventsResult, s.eventsErr
 }
 
 func TestTransitionFeature(t *testing.T) {
@@ -135,5 +145,58 @@ func TestTransitionFeatureRejectsInvalidRequests(t *testing.T) {
 				t.Fatal("expected workflow service not to be called")
 			}
 		})
+	}
+}
+
+func TestGetFeatureEvents(t *testing.T) {
+	payload, err := workflow.EncodeFeatureStateChangedPayload(
+		feature.StateDraft,
+		feature.StatePlanning,
+	)
+	if err != nil {
+		t.Fatalf("encode test payload: %v", err)
+	}
+	features := &recordingFeatureService{
+		getResult: feature.Feature{ID: "fea_test", ProjectID: "prj_test"},
+	}
+	workflows := &recordingWorkflowService{eventsResult: []workflow.Event{{
+		ID:          "evt_test",
+		AggregateID: "fea_test",
+		Type:        workflow.EventTypeFeatureStateChanged,
+		Actor: workflow.Actor{
+			Kind: workflow.ActorKindAgent,
+			ID:   "agt_coder",
+		},
+		OccurredAt:     time.Date(2026, time.September, 8, 18, 0, 0, 0, time.UTC),
+		Sequence:       1,
+		PayloadVersion: workflow.FeatureStateChangedPayloadVersion,
+		IdempotencyKey: "cmd_test",
+		Payload:        payload,
+	}}}
+	request := httptest.NewRequest(
+		http.MethodGet,
+		"/api/v1/projects/prj_test/features/fea_test/events",
+		nil,
+	)
+	recorder := httptest.NewRecorder()
+
+	New(nil, features, workflows).ServeHTTP(recorder, request)
+
+	response := recorder.Result()
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, response.StatusCode)
+	}
+	var body []featureEventResponse
+	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+		t.Fatalf("decode events response: %v", err)
+	}
+	if len(body) != 1 {
+		t.Fatalf("expected one event, got %d", len(body))
+	}
+	if body[0].PreviousState != feature.StateDraft ||
+		body[0].State != feature.StatePlanning ||
+		body[0].Actor.ID != "agt_coder" {
+		t.Errorf("unexpected event response %+v", body[0])
 	}
 }
