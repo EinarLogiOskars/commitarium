@@ -292,22 +292,20 @@ The user may sync completed Forgejo history to any external repository using nor
 The initial state machine is expected to include:
 
 ```text
-draft
-  -> discovery
-  -> planning
-  -> awaiting_user_decision   (only when consensus cannot be reached)
-  -> ready_to_implement
-  -> implementing
-  -> internal_pr_open
-  -> reviewing
-  -> changes_requested
-  -> implementing             (review loop)
-  -> approved
-  -> ready_to_merge
-  -> completed                (Forgejo PR merged into its default branch)
+draft -> discovery -> planning
+
+planning -> awaiting_user_decision -> planning
+planning -> ready_to_implement -> implementing
+
+implementing -> planning                       (material plan change)
+implementing -> internal_pr_open -> reviewing  (initial review)
+reviewing -> changes_requested -> implementing -> reviewing
+reviewing -> approved -> ready_to_merge -> completed
 ```
 
-Terminal and exceptional states must include cancellation and failure. Paused/waiting conditions should be represented separately from the durable business state where practical.
+`completed` means the Forgejo pull request was merged into its protected default branch. `implementing -> reviewing` is valid only during a review loop when an internal pull request already exists; this is enforced as a transition precondition rather than by the state pair alone.
+
+Any non-terminal state may transition to the terminal exceptional states `cancelled` or `failed`. Paused and operational waiting conditions should be represented separately from the durable business state where practical; `awaiting_user_decision` remains durable because resolving the recorded disagreement is part of the business workflow.
 
 Every transition must:
 

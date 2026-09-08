@@ -2,10 +2,6 @@ package feature
 
 import "time"
 
-type State string
-
-const StateDraft State = "draft"
-
 type Feature struct {
 	ID          string
 	ProjectID   string
