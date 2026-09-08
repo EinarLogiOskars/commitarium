@@ -96,8 +96,11 @@ client can securely read and validate that stream. A narrow ingestion service
 now applies the coordinator's second safety filter and atomically stores each
 accepted activity event together with its durable worker replay position. This
 makes repeated delivery and coordinator restarts safe without duplicating public
-activity. Continuous stream supervision and runtime wiring are not implemented
-yet. A real worker process and worker Compose services also remain to be built.
+activity. A single-attempt pump can now open that stream from SQLite's saved
+cursor, copy events continuously, and inspect the worker when the connection
+ends so a disconnect is not mistaken for agent completion. It deliberately
+leaves automatic reconnection and runtime wiring to future orchestration. A real
+worker process and worker Compose services also remain to be built.
 
 ## Development checks
 
