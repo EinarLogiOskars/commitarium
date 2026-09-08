@@ -91,6 +91,8 @@ type Adapter interface {
 
 // Session is a running or resumable provider conversation. Stop is cooperative;
 // forced termination belongs to the worker supervisor outside this interface.
+// Events must close when the session finishes so the coordinator can collect
+// the final result without guessing whether more observable output is coming.
 type Session interface {
 	Events() <-chan Event
 	Send(ctx context.Context, command Command) error
