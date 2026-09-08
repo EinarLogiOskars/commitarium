@@ -4,8 +4,10 @@ import (
 	"context"
 	"net/http"
 
+	"github.com/EinarLogiOskars/commitarium/internal/execution"
 	"github.com/EinarLogiOskars/commitarium/internal/feature"
 	"github.com/EinarLogiOskars/commitarium/internal/project"
+	"github.com/EinarLogiOskars/commitarium/internal/worker"
 	"github.com/EinarLogiOskars/commitarium/internal/workflow"
 )
 
@@ -43,21 +45,40 @@ type WorkflowService interface {
 	SubscribeFeatureEvents(featureID string) (<-chan workflow.Event, func())
 }
 
+type ExecutionService interface {
+	GetSession(ctx context.Context, id string) (execution.Session, error)
+	EventsForSession(ctx context.Context, sessionID string) ([]execution.Event, error)
+}
+
+type SessionController interface {
+	SendCommand(
+		ctx context.Context,
+		sessionID string,
+		command worker.Command,
+	) (execution.Command, error)
+}
+
 type API struct {
-	projects ProjectService
-	features FeatureService
-	workflow WorkflowService
+	projects   ProjectService
+	features   FeatureService
+	workflow   WorkflowService
+	execution  ExecutionService
+	controller SessionController
 }
 
 func New(
 	projects ProjectService,
 	features FeatureService,
 	workflow WorkflowService,
+	executionService ExecutionService,
+	controller SessionController,
 ) http.Handler {
 	api := &API{
-		projects: projects,
-		features: features,
-		workflow: workflow,
+		projects:   projects,
+		features:   features,
+		workflow:   workflow,
+		execution:  executionService,
+		controller: controller,
 	}
 
 	mux := http.NewServeMux()
@@ -90,6 +111,9 @@ func New(
 		"GET /api/v1/projects/{projectID}/features/{id}/events/stream",
 		api.streamFeatureEventsHandler,
 	)
+	mux.HandleFunc("GET /api/v1/sessions/{id}", api.getSessionHandler)
+	mux.HandleFunc("GET /api/v1/sessions/{id}/events", api.getSessionEventsHandler)
+	mux.HandleFunc("POST /api/v1/sessions/{id}/commands", api.sendSessionCommandHandler)
 
 	return mux
 }

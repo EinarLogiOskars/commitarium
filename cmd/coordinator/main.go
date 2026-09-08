@@ -8,8 +8,10 @@ import (
 	"os"
 
 	coordinatordatabase "github.com/EinarLogiOskars/commitarium/internal/database"
+	"github.com/EinarLogiOskars/commitarium/internal/execution"
 	"github.com/EinarLogiOskars/commitarium/internal/feature"
 	"github.com/EinarLogiOskars/commitarium/internal/httpapi"
+	"github.com/EinarLogiOskars/commitarium/internal/orchestration"
 	"github.com/EinarLogiOskars/commitarium/internal/project"
 	"github.com/EinarLogiOskars/commitarium/internal/workflow"
 )
@@ -46,7 +48,17 @@ func run(ctx context.Context) error {
 	featureService := feature.NewService(featureStore, projectService)
 	workflowStore := coordinatordatabase.NewWorkflowStore(db)
 	workflowService := workflow.NewService(workflowStore)
-	handler := httpapi.New(projectService, featureService, workflowService)
+	executionStore := coordinatordatabase.NewExecutionStore(db)
+	executionService := execution.NewService(executionStore)
+	activeSessions := orchestration.NewActiveSessions()
+	sessionController := orchestration.NewController(executionService, activeSessions)
+	handler := httpapi.New(
+		projectService,
+		featureService,
+		workflowService,
+		executionService,
+		sessionController,
+	)
 
 	log.Print("Listening...")
 	if err := http.ListenAndServe(":8080", handler); err != nil {
