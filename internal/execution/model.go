@@ -85,6 +85,7 @@ var ErrInvalidRun = errors.New("invalid execution run")
 var ErrInvalidSession = errors.New("invalid execution session")
 var ErrInvalidEvent = errors.New("invalid execution event")
 var ErrInvalidCommand = errors.New("invalid execution command")
+var ErrInvalidStatusTransition = errors.New("invalid execution status transition")
 
 func (status RunStatus) IsValid() bool {
 	switch status {
@@ -103,6 +104,22 @@ func (status RunStatus) IsTerminal() bool {
 	return status == RunStatusSucceeded ||
 		status == RunStatusStopped ||
 		status == RunStatusFailed
+}
+
+func (status RunStatus) CanTransitionTo(next RunStatus) bool {
+	if !status.IsValid() || !next.IsValid() || status.IsTerminal() || status == next {
+		return false
+	}
+	switch status {
+	case RunStatusRunning:
+		return next == RunStatusWaitingForUser || next.IsTerminal()
+	case RunStatusWaitingForUser:
+		return next == RunStatusRunning ||
+			next == RunStatusStopped ||
+			next == RunStatusFailed
+	default:
+		return false
+	}
 }
 
 func (run Run) Validate() error {
@@ -149,6 +166,30 @@ func (status SessionStatus) IsTerminal() bool {
 	return status == SessionStatusCompleted ||
 		status == SessionStatusStopped ||
 		status == SessionStatusFailed
+}
+
+func (status SessionStatus) CanTransitionTo(next SessionStatus) bool {
+	if !status.IsValid() || !next.IsValid() || status.IsTerminal() || status == next {
+		return false
+	}
+	switch status {
+	case SessionStatusStarting:
+		return next == SessionStatusRunning ||
+			next == SessionStatusStopped ||
+			next == SessionStatusFailed
+	case SessionStatusRunning:
+		return next == SessionStatusPauseRequested || next.IsTerminal()
+	case SessionStatusPauseRequested:
+		return next == SessionStatusPaused ||
+			next == SessionStatusRunning ||
+			next.IsTerminal()
+	case SessionStatusPaused:
+		return next == SessionStatusRunning ||
+			next == SessionStatusStopped ||
+			next == SessionStatusFailed
+	default:
+		return false
+	}
 }
 
 func (session Session) Validate() error {

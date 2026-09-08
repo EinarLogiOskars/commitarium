@@ -64,6 +64,72 @@ func (s *ExecutionStore) GetRun(
 	return run, nil
 }
 
+func (s *ExecutionStore) TransitionRun(
+	ctx context.Context,
+	transition execution.RunTransition,
+) (execution.Run, error) {
+	if err := transition.Validate(); err != nil {
+		return execution.Run{}, err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return execution.Run{}, fmt.Errorf("begin run transition: %w", err)
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
+	run, err := scanExecutionRun(tx.QueryRowContext(
+		ctx,
+		`SELECT id, feature_id, status, reason, started_at, updated_at, ended_at
+		 FROM runs WHERE id = ?`,
+		transition.RunID,
+	))
+	if errors.Is(err, sql.ErrNoRows) {
+		return execution.Run{}, execution.ErrNotFound
+	}
+	if err != nil {
+		return execution.Run{}, fmt.Errorf("select run %q for transition: %w", transition.RunID, err)
+	}
+	if run.Status != transition.Expected {
+		return execution.Run{}, execution.ErrStateConflict
+	}
+
+	run.Status = transition.Status
+	run.Reason = transition.Reason
+	run.UpdatedAt = transition.OccurredAt.UTC()
+	run.EndedAt = nil
+	if transition.Status.IsTerminal() {
+		endedAt := run.UpdatedAt
+		run.EndedAt = &endedAt
+	}
+	if err := run.Validate(); err != nil {
+		return execution.Run{}, err
+	}
+	result, err := tx.ExecContext(
+		ctx,
+		`UPDATE runs
+		 SET status = ?, reason = ?, updated_at = ?, ended_at = ?
+		 WHERE id = ? AND status = ?`,
+		run.Status,
+		run.Reason,
+		formatExecutionTime(run.UpdatedAt),
+		formatOptionalExecutionTime(run.EndedAt),
+		run.ID,
+		transition.Expected,
+	)
+	if err != nil {
+		return execution.Run{}, fmt.Errorf("update run %q: %w", run.ID, err)
+	}
+	if err := requireExecutionUpdate(result, "run", run.ID); err != nil {
+		return execution.Run{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return execution.Run{}, fmt.Errorf("commit run %q transition: %w", run.ID, err)
+	}
+	return run, nil
+}
+
 func (s *ExecutionStore) CreateSession(
 	ctx context.Context,
 	session execution.Session,
@@ -110,6 +176,83 @@ func (s *ExecutionStore) GetSession(
 	}
 	if err != nil {
 		return execution.Session{}, fmt.Errorf("select session %q: %w", id, err)
+	}
+	return session, nil
+}
+
+func (s *ExecutionStore) TransitionSession(
+	ctx context.Context,
+	transition execution.SessionTransition,
+) (execution.Session, error) {
+	if err := transition.Validate(); err != nil {
+		return execution.Session{}, err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return execution.Session{}, fmt.Errorf("begin session transition: %w", err)
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
+	session, err := scanExecutionSession(tx.QueryRowContext(
+		ctx,
+		`SELECT id, run_id, agent_id, role, status, provider_session_id,
+		        started_at, updated_at, ended_at
+		 FROM sessions WHERE id = ?`,
+		transition.SessionID,
+	))
+	if errors.Is(err, sql.ErrNoRows) {
+		return execution.Session{}, execution.ErrNotFound
+	}
+	if err != nil {
+		return execution.Session{}, fmt.Errorf(
+			"select session %q for transition: %w",
+			transition.SessionID,
+			err,
+		)
+	}
+	if session.Status != transition.Expected {
+		return execution.Session{}, execution.ErrStateConflict
+	}
+	if transition.ProviderSessionID != "" {
+		if session.ProviderSessionID != "" &&
+			session.ProviderSessionID != transition.ProviderSessionID {
+			return execution.Session{}, execution.ErrStateConflict
+		}
+		session.ProviderSessionID = transition.ProviderSessionID
+	}
+
+	session.Status = transition.Status
+	session.UpdatedAt = transition.OccurredAt.UTC()
+	session.EndedAt = nil
+	if transition.Status.IsTerminal() {
+		endedAt := session.UpdatedAt
+		session.EndedAt = &endedAt
+	}
+	if err := session.Validate(); err != nil {
+		return execution.Session{}, err
+	}
+	result, err := tx.ExecContext(
+		ctx,
+		`UPDATE sessions
+		 SET status = ?, provider_session_id = ?, updated_at = ?, ended_at = ?
+		 WHERE id = ? AND status = ?`,
+		session.Status,
+		session.ProviderSessionID,
+		formatExecutionTime(session.UpdatedAt),
+		formatOptionalExecutionTime(session.EndedAt),
+		session.ID,
+		transition.Expected,
+	)
+	if err != nil {
+		return execution.Session{}, fmt.Errorf("update session %q: %w", session.ID, err)
+	}
+	if err := requireExecutionUpdate(result, "session", session.ID); err != nil {
+		return execution.Session{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return execution.Session{}, fmt.Errorf("commit session %q transition: %w", session.ID, err)
 	}
 	return session, nil
 }
@@ -292,6 +435,75 @@ func (s *ExecutionStore) GetCommand(
 	return command, nil
 }
 
+func (s *ExecutionStore) ResolveCommand(
+	ctx context.Context,
+	resolution execution.CommandResolution,
+) (execution.Command, error) {
+	if err := resolution.Validate(); err != nil {
+		return execution.Command{}, err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return execution.Command{}, fmt.Errorf("begin command resolution: %w", err)
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
+	command, err := scanExecutionCommand(tx.QueryRowContext(
+		ctx,
+		`SELECT id, session_id, command_type, message, status,
+		        requested_at, applied_at, error
+		 FROM session_commands WHERE id = ?`,
+		resolution.CommandID,
+	))
+	if errors.Is(err, sql.ErrNoRows) {
+		return execution.Command{}, execution.ErrNotFound
+	}
+	if err != nil {
+		return execution.Command{}, fmt.Errorf(
+			"select session command %q for resolution: %w",
+			resolution.CommandID,
+			err,
+		)
+	}
+	if command.Status != execution.CommandStatusPending {
+		if command.Status == resolution.Status && command.Error == resolution.Error {
+			return command, nil
+		}
+		return execution.Command{}, execution.ErrCommandConflict
+	}
+
+	appliedAt := resolution.AppliedAt.UTC()
+	command.Status = resolution.Status
+	command.AppliedAt = &appliedAt
+	command.Error = resolution.Error
+	if err := command.Validate(); err != nil {
+		return execution.Command{}, err
+	}
+	result, err := tx.ExecContext(
+		ctx,
+		`UPDATE session_commands
+		 SET status = ?, applied_at = ?, error = ?
+		 WHERE id = ? AND status = ?`,
+		command.Status,
+		formatExecutionTime(appliedAt),
+		command.Error,
+		command.ID,
+		execution.CommandStatusPending,
+	)
+	if err != nil {
+		return execution.Command{}, fmt.Errorf("resolve session command %q: %w", command.ID, err)
+	}
+	if err := requireExecutionUpdate(result, "session command", command.ID); err != nil {
+		return execution.Command{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return execution.Command{}, fmt.Errorf("commit session command %q resolution: %w", command.ID, err)
+	}
+	return command, nil
+}
+
 type executionScanner interface {
 	Scan(dest ...any) error
 }
@@ -466,6 +678,25 @@ func requireExecutionInsert(result sql.Result, kind string, id string) error {
 	if rowsAffected != 1 {
 		return fmt.Errorf(
 			"insert %s %q: expected one affected row, got %d",
+			kind,
+			id,
+			rowsAffected,
+		)
+	}
+	return nil
+}
+
+func requireExecutionUpdate(result sql.Result, kind string, id string) error {
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("read updated %s %q row count: %w", kind, id, err)
+	}
+	if rowsAffected == 0 {
+		return execution.ErrStateConflict
+	}
+	if rowsAffected != 1 {
+		return fmt.Errorf(
+			"update %s %q: expected one affected row, got %d",
 			kind,
 			id,
 			rowsAffected,
