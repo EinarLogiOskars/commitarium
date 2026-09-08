@@ -112,3 +112,29 @@ func TestServiceEventsForFeature(t *testing.T) {
 		t.Errorf("expected events %+v, got %+v", expected, actual)
 	}
 }
+
+func TestServicePublishesSuccessfulTransition(t *testing.T) {
+	expected := validTestEvent(t)
+	service := NewService(&recordingWorkflowStore{transitionResult: expected})
+	events, cancel := service.SubscribeFeatureEvents(expected.AggregateID)
+	defer cancel()
+
+	if _, err := service.TransitionFeature(
+		t.Context(),
+		expected.AggregateID,
+		feature.StatePlanning,
+		expected.Actor,
+		expected.IdempotencyKey,
+	); err != nil {
+		t.Fatalf("transition feature: %v", err)
+	}
+
+	select {
+	case actual := <-events:
+		if actual != expected {
+			t.Errorf("expected event %+v, got %+v", expected, actual)
+		}
+	default:
+		t.Fatal("expected transition event to be published")
+	}
+}

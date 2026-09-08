@@ -132,32 +132,40 @@ func (api *API) getFeatureEventsHandler(w http.ResponseWriter, r *http.Request) 
 
 	response := make([]featureEventResponse, 0, len(events))
 	for _, event := range events {
-		payload, err := workflow.DecodeFeatureStateChangedPayload(
-			event.PayloadVersion,
-			event.Payload,
-		)
+		eventResponse, err := newFeatureEventResponse(event)
 		if err != nil {
 			log.Printf("decode workflow event %q: %v", event.ID, err)
 			writeError(w, http.StatusInternalServerError, "internal_error", "internal server error")
 			return
 		}
-		response = append(response, featureEventResponse{
-			ID:   event.ID,
-			Type: event.Type,
-			Actor: eventActorResponse{
-				Kind: event.Actor.Kind,
-				ID:   event.Actor.ID,
-			},
-			OccurredAt:     event.OccurredAt,
-			Sequence:       event.Sequence,
-			PayloadVersion: event.PayloadVersion,
-			PreviousState:  payload.PreviousState,
-			State:          payload.State,
-		})
+		response = append(response, eventResponse)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(response); err != nil {
 		log.Printf("encode feature events response: %v", err)
 	}
+}
+
+func newFeatureEventResponse(event workflow.Event) (featureEventResponse, error) {
+	payload, err := workflow.DecodeFeatureStateChangedPayload(
+		event.PayloadVersion,
+		event.Payload,
+	)
+	if err != nil {
+		return featureEventResponse{}, err
+	}
+	return featureEventResponse{
+		ID:   event.ID,
+		Type: event.Type,
+		Actor: eventActorResponse{
+			Kind: event.Actor.Kind,
+			ID:   event.Actor.ID,
+		},
+		OccurredAt:     event.OccurredAt,
+		Sequence:       event.Sequence,
+		PayloadVersion: event.PayloadVersion,
+		PreviousState:  payload.PreviousState,
+		State:          payload.State,
+	}, nil
 }
