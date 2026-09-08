@@ -8,20 +8,13 @@ import (
 type State string
 
 const (
-	StateDraft                State = "draft"
-	StateDiscovery            State = "discovery"
-	StatePlanning             State = "planning"
-	StateAwaitingUserDecision State = "awaiting_user_decision"
-	StateReadyToImplement     State = "ready_to_implement"
-	StateImplementing         State = "implementing"
-	StateInternalPROpen       State = "internal_pr_open"
-	StateReviewing            State = "reviewing"
-	StateChangesRequested     State = "changes_requested"
-	StateApproved             State = "approved"
-	StateReadyToMerge         State = "ready_to_merge"
-	StateCompleted            State = "completed"
-	StateCancelled            State = "cancelled"
-	StateFailed               State = "failed"
+	StateDraft        State = "draft"
+	StatePlanning     State = "planning"
+	StateImplementing State = "implementing"
+	StateReviewing    State = "reviewing"
+	StateReadyToMerge State = "ready_to_merge"
+	StateCompleted    State = "completed"
+	StateCancelled    State = "cancelled"
 )
 
 var ErrInvalidTransition = errors.New("invalid feature state transition")
@@ -29,19 +22,12 @@ var ErrInvalidTransition = errors.New("invalid feature state transition")
 func (state State) IsValid() bool {
 	switch state {
 	case StateDraft,
-		StateDiscovery,
 		StatePlanning,
-		StateAwaitingUserDecision,
-		StateReadyToImplement,
 		StateImplementing,
-		StateInternalPROpen,
 		StateReviewing,
-		StateChangesRequested,
-		StateApproved,
 		StateReadyToMerge,
 		StateCompleted,
-		StateCancelled,
-		StateFailed:
+		StateCancelled:
 		return true
 	default:
 		return false
@@ -50,8 +36,7 @@ func (state State) IsValid() bool {
 
 func (state State) IsTerminal() bool {
 	return state == StateCompleted ||
-		state == StateCancelled ||
-		state == StateFailed
+		state == StateCancelled
 }
 
 func (state State) CanTransitionTo(next State) bool {
@@ -59,37 +44,25 @@ func (state State) CanTransitionTo(next State) bool {
 		return false
 	}
 
-	if next == StateCancelled || next == StateFailed {
+	if next == StateCancelled {
 		return true
 	}
 
 	switch state {
 	case StateDraft:
-		return next == StateDiscovery
-	case StateDiscovery:
 		return next == StatePlanning
 	case StatePlanning:
-		return next == StateAwaitingUserDecision ||
-			next == StateReadyToImplement
-	case StateAwaitingUserDecision:
-		return next == StatePlanning
-	case StateReadyToImplement:
-		return next == StateImplementing
+		return next == StateDraft ||
+			next == StateImplementing
 	case StateImplementing:
 		return next == StatePlanning ||
-			next == StateInternalPROpen ||
 			next == StateReviewing
-	case StateInternalPROpen:
-		return next == StateReviewing
 	case StateReviewing:
-		return next == StateChangesRequested ||
-			next == StateApproved
-	case StateChangesRequested:
-		return next == StateImplementing
-	case StateApproved:
-		return next == StateReadyToMerge
+		return next == StatePlanning ||
+			next == StateReadyToMerge
 	case StateReadyToMerge:
-		return next == StateCompleted
+		return next == StateReviewing ||
+			next == StateCompleted
 	default:
 		return false
 	}
