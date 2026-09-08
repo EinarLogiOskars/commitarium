@@ -80,6 +80,8 @@ func TestRecoveryMigrationPreservesExistingExecutionRecords(t *testing.T) {
 		 VALUES ('run_old', 'fea_old', 'running', '', ?, ?, NULL)`,
 		`INSERT INTO sessions (id, run_id, agent_id, role, status, provider_session_id, started_at, updated_at, ended_at)
 		 VALUES ('ses_old', 'run_old', 'agt_old', 'lead', 'running', 'provider_old', ?, ?, NULL)`,
+		`INSERT INTO session_events (id, session_id, sequence, event_type, text, occurred_at)
+		 VALUES ('sev_old', 'ses_old', 1, 'activity', 'old activity', ?)`,
 	}
 	for index, statement := range statements {
 		arguments := []any{now}
@@ -107,6 +109,13 @@ func TestRecoveryMigrationPreservesExistingExecutionRecords(t *testing.T) {
 	}
 	if storedSession.ProviderSessionID != "provider_old" || storedSession.RecoveryAttempt != 0 {
 		t.Fatalf("unexpected migrated session %+v", storedSession)
+	}
+	events, err := NewExecutionStore(db).ListEvents(t.Context(), "ses_old")
+	if err != nil {
+		t.Fatalf("list migrated events: %v", err)
+	}
+	if len(events) != 1 || events[0].WorkerAttemptID != "" || events[0].WorkerEventSequence != 0 {
+		t.Fatalf("unexpected migrated events %+v", events)
 	}
 }
 
@@ -152,7 +161,8 @@ func TestMigrateCreatesExecutionTables(t *testing.T) {
 		`SELECT name
 		 FROM sqlite_schema
 		 WHERE type = 'table'
-		   AND name IN ('runs', 'sessions', 'session_events', 'session_commands')`,
+		   AND name IN ('runs', 'sessions', 'session_events', 'session_commands',
+		                'worker_attempt_checkpoints')`,
 	)
 	if err != nil {
 		t.Fatalf("query execution tables: %v", err)
@@ -170,7 +180,9 @@ func TestMigrateCreatesExecutionTables(t *testing.T) {
 	if err := rows.Err(); err != nil {
 		t.Fatalf("iterate table names: %v", err)
 	}
-	for _, name := range []string{"runs", "sessions", "session_events", "session_commands"} {
+	for _, name := range []string{
+		"runs", "sessions", "session_events", "session_commands", "worker_attempt_checkpoints",
+	} {
 		if !found[name] {
 			t.Errorf("expected table %q to exist", name)
 		}

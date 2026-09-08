@@ -58,12 +58,26 @@ type Session struct {
 }
 
 type Event struct {
-	ID         string
-	SessionID  string
-	Sequence   int64
-	Type       worker.EventType
-	Text       string
-	OccurredAt time.Time
+	ID                  string
+	SessionID           string
+	Sequence            int64
+	Type                worker.EventType
+	Text                string
+	OccurredAt          time.Time
+	WorkerAttemptID     string
+	WorkerEventSequence int64
+}
+
+// WorkerAttemptCheckpoint identifies the one worker process incarnation whose
+// events a coordinator session currently accepts. LastEventSequence is the
+// durable reconnect cursor and advances only in the same transaction that
+// stores the corresponding public session activity.
+type WorkerAttemptCheckpoint struct {
+	SessionID         string
+	AttemptID         string
+	LastEventSequence int64
+	CreatedAt         time.Time
+	UpdatedAt         time.Time
 }
 
 type CommandStatus string
@@ -88,6 +102,7 @@ type Command struct {
 var ErrInvalidRun = errors.New("invalid execution run")
 var ErrInvalidSession = errors.New("invalid execution session")
 var ErrInvalidEvent = errors.New("invalid execution event")
+var ErrInvalidWorkerAttempt = errors.New("invalid worker attempt checkpoint")
 var ErrInvalidCommand = errors.New("invalid execution command")
 var ErrInvalidStatusTransition = errors.New("invalid execution status transition")
 
@@ -237,6 +252,8 @@ func (session Session) Validate() error {
 }
 
 func (event Event) Validate() error {
+	hasWorkerAttempt := strings.TrimSpace(event.WorkerAttemptID) != ""
+	hasWorkerSequence := event.WorkerEventSequence > 0
 	switch {
 	case strings.TrimSpace(event.ID) == "":
 		return fmt.Errorf("%w: ID is required", ErrInvalidEvent)
@@ -250,6 +267,27 @@ func (event Event) Validate() error {
 		return fmt.Errorf("%w: text is required", ErrInvalidEvent)
 	case event.OccurredAt.IsZero():
 		return fmt.Errorf("%w: occurrence time is required", ErrInvalidEvent)
+	case event.WorkerEventSequence < 0:
+		return fmt.Errorf("%w: worker event sequence cannot be negative", ErrInvalidEvent)
+	case hasWorkerAttempt != hasWorkerSequence:
+		return fmt.Errorf("%w: worker attempt and event sequence must be provided together", ErrInvalidEvent)
+	default:
+		return nil
+	}
+}
+
+func (checkpoint WorkerAttemptCheckpoint) Validate() error {
+	switch {
+	case strings.TrimSpace(checkpoint.SessionID) == "":
+		return fmt.Errorf("%w: session ID is required", ErrInvalidWorkerAttempt)
+	case strings.TrimSpace(checkpoint.AttemptID) == "":
+		return fmt.Errorf("%w: attempt ID is required", ErrInvalidWorkerAttempt)
+	case checkpoint.LastEventSequence < 0:
+		return fmt.Errorf("%w: last event sequence cannot be negative", ErrInvalidWorkerAttempt)
+	case checkpoint.CreatedAt.IsZero():
+		return fmt.Errorf("%w: creation time is required", ErrInvalidWorkerAttempt)
+	case checkpoint.UpdatedAt.Before(checkpoint.CreatedAt):
+		return fmt.Errorf("%w: update time precedes creation time", ErrInvalidWorkerAttempt)
 	default:
 		return nil
 	}

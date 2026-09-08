@@ -507,8 +507,9 @@ func (s *ExecutionStore) AppendEvent(
 	if _, err := tx.ExecContext(
 		ctx,
 		`INSERT INTO session_events (
-			id, session_id, sequence, event_type, text, occurred_at
-		 ) VALUES (?, ?, ?, ?, ?, ?)`,
+			id, session_id, sequence, event_type, text, occurred_at,
+			worker_attempt_id, worker_event_sequence
+		 ) VALUES (?, ?, ?, ?, ?, ?, NULL, NULL)`,
 		event.ID,
 		event.SessionID,
 		event.Sequence,
@@ -530,7 +531,8 @@ func (s *ExecutionStore) ListEvents(
 ) ([]execution.Event, error) {
 	rows, err := s.db.QueryContext(
 		ctx,
-		`SELECT id, session_id, sequence, event_type, text, occurred_at
+		`SELECT id, session_id, sequence, event_type, text, occurred_at,
+		        worker_attempt_id, worker_event_sequence
 		 FROM session_events WHERE session_id = ? ORDER BY sequence`,
 		sessionID,
 	)
@@ -824,7 +826,8 @@ func findExecutionEvent(
 ) (execution.Event, bool, error) {
 	event, err := scanExecutionEvent(tx.QueryRowContext(
 		ctx,
-		`SELECT id, session_id, sequence, event_type, text, occurred_at
+		`SELECT id, session_id, sequence, event_type, text, occurred_at,
+		        worker_attempt_id, worker_event_sequence
 		 FROM session_events WHERE id = ?`,
 		id,
 	))
@@ -841,6 +844,8 @@ func scanExecutionEvent(scanner executionScanner) (execution.Event, error) {
 	event := execution.Event{}
 	var eventType string
 	var occurredAt string
+	var workerAttemptID sql.NullString
+	var workerEventSequence sql.NullInt64
 	if err := scanner.Scan(
 		&event.ID,
 		&event.SessionID,
@@ -848,10 +853,18 @@ func scanExecutionEvent(scanner executionScanner) (execution.Event, error) {
 		&eventType,
 		&event.Text,
 		&occurredAt,
+		&workerAttemptID,
+		&workerEventSequence,
 	); err != nil {
 		return execution.Event{}, err
 	}
 	event.Type = worker.EventType(eventType)
+	if workerAttemptID.Valid {
+		event.WorkerAttemptID = workerAttemptID.String
+	}
+	if workerEventSequence.Valid {
+		event.WorkerEventSequence = workerEventSequence.Int64
+	}
 	var err error
 	event.OccurredAt, err = parseExecutionTime(occurredAt)
 	if err != nil {

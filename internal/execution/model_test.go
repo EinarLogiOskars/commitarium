@@ -55,9 +55,33 @@ func TestEventValidate(t *testing.T) {
 	if err := valid.Validate(); err != nil {
 		t.Fatalf("validate event: %v", err)
 	}
+	valid.WorkerAttemptID = "att_test"
+	valid.WorkerEventSequence = 1
+	if err := valid.Validate(); err != nil {
+		t.Fatalf("validate worker-sourced event: %v", err)
+	}
+	valid.WorkerEventSequence = 0
+	if err := valid.Validate(); !errors.Is(err, ErrInvalidEvent) {
+		t.Fatalf("expected paired worker source error %v, got %v", ErrInvalidEvent, err)
+	}
+	valid.WorkerAttemptID = ""
 	valid.Sequence = 0
 	if err := valid.Validate(); !errors.Is(err, ErrInvalidEvent) {
 		t.Fatalf("expected error %v, got %v", ErrInvalidEvent, err)
+	}
+}
+
+func TestWorkerAttemptCheckpointValidate(t *testing.T) {
+	now := time.Date(2026, time.September, 8, 22, 0, 0, 0, time.UTC)
+	valid := WorkerAttemptCheckpoint{
+		SessionID: "ses_test", AttemptID: "att_test", CreatedAt: now, UpdatedAt: now,
+	}
+	if err := valid.Validate(); err != nil {
+		t.Fatalf("validate worker attempt checkpoint: %v", err)
+	}
+	valid.LastEventSequence = -1
+	if err := valid.Validate(); !errors.Is(err, ErrInvalidWorkerAttempt) {
+		t.Fatalf("expected error %v, got %v", ErrInvalidWorkerAttempt, err)
 	}
 }
 

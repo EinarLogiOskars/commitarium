@@ -18,6 +18,17 @@ type PendingEvent struct {
 	OccurredAt time.Time
 }
 
+type PendingWorkerEvent struct {
+	ID             string
+	SessionID      string
+	AttemptID      string
+	SourceSequence int64
+	Type           worker.EventType
+	Text           string
+	OccurredAt     time.Time
+	AcceptedAt     time.Time
+}
+
 type RunTransition struct {
 	RunID      string
 	Expected   RunStatus
@@ -62,6 +73,9 @@ type Store interface {
 	TransitionSession(ctx context.Context, transition SessionTransition) (Session, error)
 	BeginSessionRecovery(ctx context.Context, recovery SessionRecovery) (Session, error)
 	AppendEvent(ctx context.Context, event PendingEvent) (Event, bool, error)
+	CreateWorkerAttempt(ctx context.Context, checkpoint WorkerAttemptCheckpoint) (WorkerAttemptCheckpoint, bool, error)
+	GetWorkerAttempt(ctx context.Context, sessionID string) (WorkerAttemptCheckpoint, error)
+	AppendWorkerEvent(ctx context.Context, event PendingWorkerEvent) (Event, bool, error)
 	ListEvents(ctx context.Context, sessionID string) ([]Event, error)
 	CreateCommand(ctx context.Context, command Command) (Command, bool, error)
 	GetCommand(ctx context.Context, id string) (Command, error)
@@ -72,6 +86,9 @@ type Store interface {
 var ErrAlreadyExists = errors.New("execution record already exists")
 var ErrNotFound = errors.New("execution record not found")
 var ErrEventConflict = errors.New("execution event ID reused for different content")
+var ErrWorkerAttemptConflict = errors.New("session is bound to a different worker attempt")
+var ErrWorkerEventConflict = errors.New("worker event sequence was reused for different content")
+var ErrWorkerEventSequence = errors.New("worker event sequence is not the next expected value")
 var ErrCommandConflict = errors.New("execution command ID reused for different content")
 var ErrStateConflict = errors.New("execution record is not in the expected state")
 var ErrRecordConflict = errors.New("execution record ID reused for different content")
@@ -88,6 +105,29 @@ func (event PendingEvent) Validate() error {
 		return fmt.Errorf("%w: text is required", ErrInvalidEvent)
 	case event.OccurredAt.IsZero():
 		return fmt.Errorf("%w: occurrence time is required", ErrInvalidEvent)
+	default:
+		return nil
+	}
+}
+
+func (event PendingWorkerEvent) Validate() error {
+	switch {
+	case strings.TrimSpace(event.ID) == "":
+		return fmt.Errorf("%w: ID is required", ErrInvalidEvent)
+	case strings.TrimSpace(event.SessionID) == "":
+		return fmt.Errorf("%w: session ID is required", ErrInvalidEvent)
+	case strings.TrimSpace(event.AttemptID) == "":
+		return fmt.Errorf("%w: worker attempt ID is required", ErrInvalidEvent)
+	case event.SourceSequence < 1:
+		return fmt.Errorf("%w: worker event sequence must be positive", ErrInvalidEvent)
+	case strings.TrimSpace(string(event.Type)) == "":
+		return fmt.Errorf("%w: type is required", ErrInvalidEvent)
+	case strings.TrimSpace(event.Text) == "":
+		return fmt.Errorf("%w: text is required", ErrInvalidEvent)
+	case event.OccurredAt.IsZero():
+		return fmt.Errorf("%w: occurrence time is required", ErrInvalidEvent)
+	case event.AcceptedAt.IsZero():
+		return fmt.Errorf("%w: acceptance time is required", ErrInvalidEvent)
 	default:
 		return nil
 	}

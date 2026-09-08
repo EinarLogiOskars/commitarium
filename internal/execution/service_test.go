@@ -23,6 +23,12 @@ type recordingStore struct {
 	appendedEvent       PendingEvent
 	appendEventResult   Event
 	appendEventCreated  bool
+	createdAttempt      WorkerAttemptCheckpoint
+	createAttemptResult WorkerAttemptCheckpoint
+	createAttemptMade   bool
+	workerEvent         PendingWorkerEvent
+	workerEventResult   Event
+	workerEventCreated  bool
 	createdCommand      Command
 	createCommandResult Command
 	resolvedCommand     CommandResolution
@@ -57,6 +63,22 @@ func (s *recordingStore) AppendEvent(
 ) (Event, bool, error) {
 	s.appendedEvent = event
 	return s.appendEventResult, s.appendEventCreated, nil
+}
+
+func (s *recordingStore) CreateWorkerAttempt(
+	_ context.Context,
+	checkpoint WorkerAttemptCheckpoint,
+) (WorkerAttemptCheckpoint, bool, error) {
+	s.createdAttempt = checkpoint
+	return s.createAttemptResult, s.createAttemptMade, nil
+}
+
+func (s *recordingStore) AppendWorkerEvent(
+	_ context.Context,
+	event PendingWorkerEvent,
+) (Event, bool, error) {
+	s.workerEvent = event
+	return s.workerEventResult, s.workerEventCreated, nil
 }
 
 func (s *recordingStore) CreateCommand(
@@ -206,6 +228,83 @@ func TestServicePublishesOnlyNewSessionEvent(t *testing.T) {
 		worker.Event{Type: expected.Type, Text: expected.Text},
 	); err != nil {
 		t.Fatalf("retry event: %v", err)
+	}
+	select {
+	case duplicate := <-events:
+		t.Fatalf("expected retry not to publish, got %+v", duplicate)
+	default:
+	}
+}
+
+func TestServiceCreatesWorkerAttemptWithCoordinatorTime(t *testing.T) {
+	fixedTime := time.Date(2026, time.September, 9, 1, 0, 0, 0, time.UTC)
+	expected := WorkerAttemptCheckpoint{
+		SessionID: "ses_test", AttemptID: "att_test",
+		CreatedAt: fixedTime, UpdatedAt: fixedTime,
+	}
+	store := &recordingStore{createAttemptResult: expected, createAttemptMade: true}
+	service := testService(store, fixedTime)
+
+	actual, created, err := service.CreateWorkerAttempt(
+		t.Context(),
+		expected.SessionID,
+		expected.AttemptID,
+	)
+	if err != nil {
+		t.Fatalf("create worker attempt: %v", err)
+	}
+	if !created || actual != expected || store.createdAttempt != expected {
+		t.Fatalf("unexpected worker attempt result %+v, stored %+v", actual, store.createdAttempt)
+	}
+}
+
+func TestServicePublishesOnlyNewWorkerEventAfterStoreAcceptance(t *testing.T) {
+	acceptedAt := time.Date(2026, time.September, 9, 1, 0, 2, 0, time.UTC)
+	occurredAt := acceptedAt.Add(-time.Second)
+	expected := Event{
+		ID: "sev_generated", SessionID: "ses_test", Sequence: 3,
+		Type: worker.EventActivity, Text: "running tests", OccurredAt: occurredAt,
+		WorkerAttemptID: "att_test", WorkerEventSequence: 2,
+	}
+	store := &recordingStore{workerEventResult: expected, workerEventCreated: true}
+	service := testService(store, acceptedAt)
+	service.broker = newEventBroker(1)
+	events, cancel := service.SubscribeSessionEvents(expected.SessionID)
+	defer cancel()
+
+	actual, created, err := service.RecordWorkerEvent(
+		t.Context(),
+		expected.SessionID,
+		expected.WorkerAttemptID,
+		expected.WorkerEventSequence,
+		expected.OccurredAt,
+		worker.Event{Type: expected.Type, Text: expected.Text},
+	)
+	if err != nil {
+		t.Fatalf("record worker event: %v", err)
+	}
+	if !created || actual != expected {
+		t.Fatalf("unexpected worker event result %+v, created %t", actual, created)
+	}
+	if store.workerEvent.ID != "sev_generated" ||
+		store.workerEvent.AcceptedAt != acceptedAt ||
+		store.workerEvent.OccurredAt != occurredAt {
+		t.Fatalf("unexpected pending worker event %+v", store.workerEvent)
+	}
+	if published := <-events; published != expected {
+		t.Fatalf("expected published event %+v, got %+v", expected, published)
+	}
+
+	store.workerEventCreated = false
+	if _, created, err := service.RecordWorkerEvent(
+		t.Context(),
+		expected.SessionID,
+		expected.WorkerAttemptID,
+		expected.WorkerEventSequence,
+		expected.OccurredAt,
+		worker.Event{Type: expected.Type, Text: expected.Text},
+	); err != nil || created {
+		t.Fatalf("retry worker event: created %t, error %v", created, err)
 	}
 	select {
 	case duplicate := <-events:
