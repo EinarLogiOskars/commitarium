@@ -183,11 +183,15 @@ still applies.
 ## Mutating requests and safe retries
 
 `PUT` and `POST` requests require exactly one `Idempotency-Key` header. This
-identifier lets the future worker service recognize a retried request and
-return its existing result instead of performing the action twice.
+identifier lets the worker recognize a retried request and return its existing
+journal record instead of performing the action twice.
 
-The HTTP boundary validates and forwards the key, but durable storage and
-duplicate-request handling belong to the future worker journal and supervisor.
+The durable worker-journal foundation stores the key with a SHA-256 digest of
+the validated request. It does not keep another copy of the raw request body.
+The same key and digest is an exact retry; reusing the key for different input
+is a conflict. A mutation is recorded as pending before a future supervisor
+delivers it. If the worker restarts while delivery is unfinished, the journal
+marks that mutation indeterminate so it cannot be silently repeated.
 
 A newly created attempt returns `201 Created` with a `Location` header. An
 existing attempt returned for a safe retry uses `200 OK`. Commands are accepted
@@ -242,11 +246,21 @@ worker decision.
 ## Current boundary
 
 The HTTP handler depends on a small process-control service interface plus a
-separate event-source interface. Tests currently supply safe fake events; there
-is no durable worker journal yet. The coordinator client implements both the
-non-streaming service operations and strict SSE reading over the network, but
-neither is wired into coordinator orchestration yet. A future worker supervisor
-and durable journal will implement the server side. Keeping this translation
-separate means process management, persistence, provider credentials, and Codex
-or Claude Code behavior can be added without changing how requests are
-authenticated and decoded.
+separate event-source interface. The worker journal now uses its own SQLite
+database and embedded migrations, intended for the private worker-journal
+volume. It persists immutable launch assignments, early provider session IDs,
+supervised attempt states, terminal results, idempotent mutation records, and
+the complete normalized/redacted event JSON needed for ordered replay.
+
+Only one nonterminal attempt may exist for a coordinator session. A terminal
+attempt releases that fence, but an indeterminate attempt continues blocking a
+replacement. On worker restart, active attempts and pending mutations are
+marked indeterminate together in one transaction. Exact retries remain
+recognizable after database reopen, while changed retries, event gaps, and
+altered event replay are rejected.
+
+The journal is still a storage foundation, not the process-control service or
+live event source used by the HTTP handler. Tests continue to use controlled
+fakes at that boundary. The coordinator client and event pump are also not yet
+wired into runtime orchestration. A future worker supervisor will connect these
+pieces without changing how HTTP requests are authenticated and decoded.
