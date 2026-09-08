@@ -8,6 +8,7 @@ import (
 	"os"
 
 	coordinatordatabase "github.com/EinarLogiOskars/commitarium/internal/database"
+	"github.com/EinarLogiOskars/commitarium/internal/feature"
 	"github.com/EinarLogiOskars/commitarium/internal/httpapi"
 	"github.com/EinarLogiOskars/commitarium/internal/project"
 )
@@ -38,9 +39,11 @@ func run(ctx context.Context) error {
 		return fmt.Errorf("migrate coordinator database: %w", err)
 	}
 
-	store := coordinatordatabase.NewProjectStore(db)
-	projectService := project.NewService(store)
-	handler := httpapi.New(projectService)
+	projectStore := coordinatordatabase.NewProjectStore(db)
+	projectService := project.NewService(projectStore)
+	featureStore := coordinatordatabase.NewFeatureStore(db)
+	featureService := feature.NewService(featureStore, projectService)
+	handler := httpapi.New(projectService, featureService)
 
 	log.Print("Listening...")
 	if err := http.ListenAndServe(":8080", handler); err != nil {
