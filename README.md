@@ -92,9 +92,12 @@ The versioned [internal worker API](docs/worker-api.md) now has tested client an
 server components for authenticated attempt inspection and control. Its worker
 server can also replay and stream safe, structured agent activity, providing the
 data foundation for timelines and future graphical agent views. The coordinator
-client can securely read and validate that stream, but SQLite ingestion and
-runtime wiring are not implemented yet. A real worker process and worker Compose
-services also remain to be built.
+client can securely read and validate that stream. A narrow ingestion service
+now applies the coordinator's second safety filter and atomically stores each
+accepted activity event together with its durable worker replay position. This
+makes repeated delivery and coordinator restarts safe without duplicating public
+activity. Continuous stream supervision and runtime wiring are not implemented
+yet. A real worker process and worker Compose services also remain to be built.
 
 ## Development checks
 

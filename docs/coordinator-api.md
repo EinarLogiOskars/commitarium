@@ -97,6 +97,13 @@ Streams send keep-alive heartbeats, enforce write deadlines, and disconnect a
 client whose bounded event buffer fills. The client can reconnect and recover
 from durable history.
 
+Internally, activity imported from a worker carries its worker attempt and
+source sequence in SQLite. The coordinator stores that event and advances the
+source checkpoint in the same transaction, then publishes it to this public
+stream. This internal source identity does not change the public event shape;
+it exists to prevent duplicate or skipped activity after a coordinator restart.
+Continuous worker-stream supervision is not connected to the runtime yet.
+
 ## Session commands
 
 Commands use this JSON shape:

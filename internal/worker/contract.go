@@ -72,8 +72,8 @@ type RecoveryAssessment struct {
 	RequiresUserReview bool
 }
 
-// Event contains observable worker output, not private model reasoning.
-// The coordinator will add durable IDs, timestamps, and ordering when it records it.
+// Event contains observable worker output, not private model reasoning. The
+// transport or coordinator adds delivery identity, timestamps, and ordering.
 type Event struct {
 	Type               EventType
 	Text               string

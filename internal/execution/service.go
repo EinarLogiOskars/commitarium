@@ -182,6 +182,81 @@ func (s *Service) RecordSessionEventWithID(
 	return recorded, nil
 }
 
+// CreateWorkerAttempt binds a coordinator session to one concrete worker
+// process incarnation. Retrying the same binding is safe; a different attempt
+// remains fenced until a future recovery operation explicitly replaces it.
+func (s *Service) CreateWorkerAttempt(
+	ctx context.Context,
+	sessionID string,
+	attemptID string,
+) (WorkerAttemptCheckpoint, bool, error) {
+	now := s.now().UTC()
+	checkpoint, created, err := s.store.CreateWorkerAttempt(ctx, WorkerAttemptCheckpoint{
+		SessionID: sessionID,
+		AttemptID: attemptID,
+		CreatedAt: now,
+		UpdatedAt: now,
+	})
+	if err != nil {
+		return WorkerAttemptCheckpoint{}, false, fmt.Errorf(
+			"create worker attempt %q for session %q: %w",
+			attemptID,
+			sessionID,
+			err,
+		)
+	}
+	return checkpoint, created, nil
+}
+
+func (s *Service) GetWorkerAttempt(
+	ctx context.Context,
+	sessionID string,
+) (WorkerAttemptCheckpoint, error) {
+	checkpoint, err := s.store.GetWorkerAttempt(ctx, sessionID)
+	if err != nil {
+		return WorkerAttemptCheckpoint{}, fmt.Errorf(
+			"get worker attempt for session %q: %w",
+			sessionID,
+			err,
+		)
+	}
+	return checkpoint, nil
+}
+
+// RecordWorkerEvent stores a worker event and advances its replay cursor as one
+// database operation. Publication happens only after that operation commits.
+func (s *Service) RecordWorkerEvent(
+	ctx context.Context,
+	sessionID string,
+	attemptID string,
+	sourceSequence int64,
+	occurredAt time.Time,
+	event worker.Event,
+) (Event, bool, error) {
+	recorded, created, err := s.store.AppendWorkerEvent(ctx, PendingWorkerEvent{
+		ID:             s.generateID(),
+		SessionID:      sessionID,
+		AttemptID:      attemptID,
+		SourceSequence: sourceSequence,
+		Type:           event.Type,
+		Text:           event.Text,
+		OccurredAt:     occurredAt,
+		AcceptedAt:     s.now().UTC(),
+	})
+	if err != nil {
+		return Event{}, false, fmt.Errorf(
+			"record worker event %d for session %q: %w",
+			sourceSequence,
+			sessionID,
+			err,
+		)
+	}
+	if created && s.broker != nil {
+		s.broker.publish(recorded)
+	}
+	return recorded, created, nil
+}
+
 func (s *Service) CreateCommand(
 	ctx context.Context,
 	id string,

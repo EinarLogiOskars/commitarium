@@ -146,11 +146,20 @@ each SSE frame to 128 KiB, rejects unsupported or duplicate fields, strictly
 decodes event JSON, and independently verifies the attempt identity, event
 name, and next consecutive sequence.
 
-The reader does not reconnect or acknowledge events automatically. The future
-coordinator ingestion loop must persist a returned event before requesting the
-next one, and it must reconnect from the last sequence that SQLite confirms was
-stored. A normal end of the HTTP body returns `io.EOF`; the caller must inspect
-the attempt rather than assuming that EOF means the agent finished.
+The reader does not reconnect or acknowledge events automatically. The
+coordinator now has a narrow ingestion boundary that handles one returned event
+at a time. It validates the event again, applies the coordinator's independent
+fail-closed filter, and then stores the public session activity and advances the
+worker sequence in one SQLite transaction. It publishes live activity only
+after that transaction commits. An exact replay returns the existing activity;
+a gap, conflicting replay, or event from a different attempt is rejected
+without moving the checkpoint.
+
+The continuous stream supervisor remains future work. It will request the next
+event only after the current one is durable and reconnect from the last sequence
+SQLite confirms was stored. A normal end of the HTTP body returns `io.EOF`; the
+caller must inspect the attempt rather than assuming that EOF means the agent
+finished.
 
 A valid `protocol_error` frame becomes a typed stream-protocol error. Malformed
 frames, network failures, and normal HTTP worker rejections remain separate
