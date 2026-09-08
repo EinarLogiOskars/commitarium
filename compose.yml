@@ -2,9 +2,13 @@ name: commitarium
 
 services:
   coordinator:
-    build: 
+    build:
       context: .
       dockerfile: docker/coordinator.Dockerfile
+    environment:
+      COMMITARIUM_DATABASE_PATH: /var/lib/commitarium/coordinator.db
+    volumes:
+      - coordinator-data:/var/lib/commitarium
     ports:
       - "127.0.0.1:8080:8080"
 
@@ -22,5 +26,5 @@ services:
       - "127.0.0.1:3001:3000"
 
 volumes:
+  coordinator-data:
   forgejo-data:
-  
