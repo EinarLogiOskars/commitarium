@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 
+	"github.com/EinarLogiOskars/commitarium/internal/feature"
 	"github.com/EinarLogiOskars/commitarium/internal/project"
 )
 
@@ -12,13 +13,32 @@ type ProjectService interface {
 	GetByID(ctx context.Context, id string) (project.Project, error)
 }
 
-type API struct {
-	projects ProjectService
+type FeatureService interface {
+	Create(
+		ctx context.Context,
+		projectID string,
+		title string,
+		description string,
+	) (feature.Feature, error)
+	GetByID(
+		ctx context.Context,
+		projectID string,
+		id string,
+	) (feature.Feature, error)
 }
 
-func New(projects ProjectService) http.Handler {
+type API struct {
+	projects ProjectService
+	features FeatureService
+}
+
+func New(
+	projects ProjectService,
+	features FeatureService,
+) http.Handler {
 	api := &API{
 		projects: projects,
+		features: features,
 	}
 
 	mux := http.NewServeMux()
@@ -30,6 +50,14 @@ func New(projects ProjectService) http.Handler {
 	mux.HandleFunc(
 		"GET /api/v1/projects/{id}",
 		api.getProjectByIDHandler,
+	)
+	mux.HandleFunc(
+		"POST /api/v1/projects/{projectID}/features",
+		api.createFeatureHandler,
+	)
+	mux.HandleFunc(
+		"GET /api/v1/projects/{projectID}/features/{id}",
+		api.getFeatureByIDHandler,
 	)
 
 	return mux
