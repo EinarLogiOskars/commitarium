@@ -117,6 +117,22 @@ func TestWorkflowStoreSequencesEventsAndHandlesIdempotentRetry(t *testing.T) {
 	if len(events) != 2 {
 		t.Fatalf("expected two events, got %d", len(events))
 	}
+
+	replayedState, err := workflow.ReplayFeatureState(events)
+	if err != nil {
+		t.Fatalf("replay stored workflow events: %v", err)
+	}
+	storedFeature, err := features.GetByID(t.Context(), created.ID)
+	if err != nil {
+		t.Fatalf("get transitioned feature: %v", err)
+	}
+	if replayedState != storedFeature.State {
+		t.Errorf(
+			"expected replayed state %q to match stored state %q",
+			replayedState,
+			storedFeature.State,
+		)
+	}
 }
 
 func TestWorkflowStoreRejectsIdempotencyKeyReuse(t *testing.T) {
