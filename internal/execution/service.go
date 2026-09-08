@@ -150,15 +150,15 @@ func (s *Service) CreateCommand(
 	sessionID string,
 	commandType worker.CommandType,
 	message string,
-) (Command, error) {
-	command, err := s.store.CreateCommand(ctx, Command{
+) (Command, bool, error) {
+	command, created, err := s.store.CreateCommand(ctx, Command{
 		ID: id, SessionID: sessionID, Type: commandType, Message: message,
 		Status: CommandStatusPending, RequestedAt: s.now().UTC(),
 	})
 	if err != nil {
-		return Command{}, fmt.Errorf("create command %q: %w", id, err)
+		return Command{}, false, fmt.Errorf("create command %q: %w", id, err)
 	}
-	return command, nil
+	return command, created, nil
 }
 
 func (s *Service) ResolveCommand(

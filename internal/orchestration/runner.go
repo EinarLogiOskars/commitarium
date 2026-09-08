@@ -98,11 +98,13 @@ type Execution interface {
 		sessionID string,
 		event worker.Event,
 	) (execution.Event, error)
+	GetSession(ctx context.Context, id string) (execution.Session, error)
 }
 
 type Runner struct {
 	workflow   Workflow
 	executions Execution
+	sessions   SessionRegistry
 }
 
 var ErrInvalidRunRequest = errors.New("invalid orchestration run request")
@@ -111,8 +113,14 @@ var ErrRunAlreadyActive = errors.New("orchestration run is already active")
 var ErrStoredRunFailed = errors.New("orchestration run previously failed")
 var ErrSessionAlreadyExists = errors.New("orchestration session already exists")
 
-func NewRunner(workflowService Workflow, executions Execution) *Runner {
-	return &Runner{workflow: workflowService, executions: executions}
+func NewRunner(
+	workflowService Workflow,
+	executions Execution,
+	sessions SessionRegistry,
+) *Runner {
+	return &Runner{
+		workflow: workflowService, executions: executions, sessions: sessions,
+	}
 }
 
 func (r *Runner) Run(
@@ -429,6 +437,107 @@ func (r *Runner) transition(
 	return nil
 }
 
+func (r *Runner) applySessionEvent(
+	ctx context.Context,
+	sessionID string,
+	event worker.Event,
+) error {
+	var expected execution.SessionStatus
+	var status execution.SessionStatus
+	switch event.Type {
+	case worker.EventPauseAcknowledged:
+		expected = execution.SessionStatusPauseRequested
+		status = execution.SessionStatusPaused
+	case worker.EventContinued:
+		expected = execution.SessionStatusPaused
+		status = execution.SessionStatusRunning
+	default:
+		return nil
+	}
+
+	session, err := r.executions.GetSession(ctx, sessionID)
+	if err != nil {
+		return fmt.Errorf("get session state: %w", err)
+	}
+	if session.Status == status {
+		return nil
+	}
+	if session.Status != expected {
+		return fmt.Errorf(
+			"%w: event %q expected %q, found %q",
+			execution.ErrStateConflict,
+			event.Type,
+			expected,
+			session.Status,
+		)
+	}
+	if _, err := r.executions.TransitionSession(
+		ctx,
+		sessionID,
+		expected,
+		status,
+		"",
+	); err != nil {
+		return fmt.Errorf("transition from event %q: %w", event.Type, err)
+	}
+	return nil
+}
+
+func (r *Runner) finishSession(
+	ctx context.Context,
+	sessionID string,
+	status execution.SessionStatus,
+	providerSessionID string,
+) error {
+	session, err := r.executions.GetSession(ctx, sessionID)
+	if err != nil {
+		return fmt.Errorf("get final session state: %w", err)
+	}
+	if session.Status.IsTerminal() {
+		if session.Status == status &&
+			session.ProviderSessionID == providerSessionID {
+			return nil
+		}
+		return execution.ErrStateConflict
+	}
+	if _, err := r.executions.TransitionSession(
+		ctx,
+		sessionID,
+		session.Status,
+		status,
+		providerSessionID,
+	); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (r *Runner) failSession(
+	ctx context.Context,
+	sessionID string,
+	role worker.Role,
+	cause error,
+) error {
+	cleanupCtx := context.WithoutCancel(ctx)
+	session, err := r.executions.GetSession(cleanupCtx, sessionID)
+	if err != nil {
+		return errors.Join(cause, fmt.Errorf("get failed %s session: %w", role, err))
+	}
+	if session.Status.IsTerminal() {
+		return cause
+	}
+	if _, err := r.executions.TransitionSession(
+		cleanupCtx,
+		sessionID,
+		session.Status,
+		execution.SessionStatusFailed,
+		"",
+	); err != nil {
+		return errors.Join(cause, fmt.Errorf("mark %s session failed: %w", role, err))
+	}
+	return cause
+}
+
 func (r *Runner) runAgent(
 	ctx context.Context,
 	request RunRequest,
@@ -438,7 +547,6 @@ func (r *Runner) runAgent(
 	sessionSuffix string,
 ) (SessionSummary, error) {
 	sessionID := request.ID + ":" + sessionSuffix
-	trackedStatus := execution.SessionStatusStarting
 	if r.executions != nil {
 		_, created, err := r.executions.CreateSession(
 			ctx,
@@ -462,20 +570,7 @@ func (r *Runner) runAgent(
 		if r.executions == nil {
 			return cause
 		}
-		_, transitionErr := r.executions.TransitionSession(
-			context.WithoutCancel(ctx),
-			sessionID,
-			trackedStatus,
-			execution.SessionStatusFailed,
-			"",
-		)
-		if transitionErr != nil {
-			return errors.Join(
-				cause,
-				fmt.Errorf("mark %s session failed: %w", role, transitionErr),
-			)
-		}
-		return cause
+		return r.failSession(ctx, sessionID, role, cause)
 	}
 
 	session, err := agent.Adapter.Start(ctx, worker.SessionRequest{
@@ -491,7 +586,7 @@ func (r *Runner) runAgent(
 		if _, err := r.executions.TransitionSession(
 			ctx,
 			sessionID,
-			trackedStatus,
+			execution.SessionStatusStarting,
 			execution.SessionStatusRunning,
 			"",
 		); err != nil {
@@ -501,8 +596,19 @@ func (r *Runner) runAgent(
 				err,
 			))
 		}
-		trackedStatus = execution.SessionStatusRunning
 	}
+	removeActive := func() {}
+	if r.sessions != nil {
+		removeActive, err = r.sessions.Register(sessionID, session)
+		if err != nil {
+			return SessionSummary{}, fail(fmt.Errorf(
+				"register %s session: %w",
+				role,
+				err,
+			))
+		}
+	}
+	defer removeActive()
 	eventNumber := 0
 	for event := range session.Events() {
 		if r.executions == nil {
@@ -518,6 +624,13 @@ func (r *Runner) runAgent(
 		); err != nil {
 			return SessionSummary{}, fail(fmt.Errorf(
 				"record %s session event: %w",
+				role,
+				err,
+			))
+		}
+		if err := r.applySessionEvent(ctx, sessionID, event); err != nil {
+			return SessionSummary{}, fail(fmt.Errorf(
+				"apply %s session event: %w",
 				role,
 				err,
 			))
@@ -539,10 +652,9 @@ func (r *Runner) runAgent(
 		if workerResult.Outcome == worker.OutcomeStopped {
 			status = execution.SessionStatusStopped
 		}
-		if _, err := r.executions.TransitionSession(
+		if err := r.finishSession(
 			ctx,
 			sessionID,
-			trackedStatus,
 			status,
 			workerResult.ProviderSessionID,
 		); err != nil {

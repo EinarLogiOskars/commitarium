@@ -23,7 +23,8 @@ func TestRunnerDrivesPlanningImplementationAndReviewLoop(t *testing.T) {
 		worker.DispositionChangesRequested,
 		worker.DispositionSucceeded,
 	))
-	runner := NewRunner(workflowService, executionService)
+	activeSessions := NewActiveSessions()
+	runner := NewRunner(workflowService, executionService, activeSessions)
 	request := testRunRequest(codex, claude, 2)
 
 	result, err := runner.Run(t.Context(), request)
@@ -83,6 +84,9 @@ func TestRunnerDrivesPlanningImplementationAndReviewLoop(t *testing.T) {
 		if len(events) != 1 || events[0].Sequence != 1 {
 			t.Errorf("unexpected events for session %q: %+v", summary.SessionID, events)
 		}
+		if _, active := activeSessions.Get(summary.SessionID); active {
+			t.Errorf("expected completed session %q to be unregistered", summary.SessionID)
+		}
 	}
 	retried, err := runner.Run(t.Context(), request)
 	if err != nil {
@@ -125,7 +129,7 @@ func TestRunnerWaitsForUserWhenReviewLimitIsReached(t *testing.T) {
 	workflowService, featureStore, executionService := orchestrationDatabase(t)
 	codex := autoAdvance(newTestCodex())
 	claude := autoAdvance(newTestClaude(worker.DispositionChangesRequested))
-	runner := NewRunner(workflowService, executionService)
+	runner := NewRunner(workflowService, executionService, NewActiveSessions())
 
 	result, err := runner.Run(t.Context(), testRunRequest(codex, claude, 1))
 	if err != nil {
@@ -163,7 +167,7 @@ func TestRunnerWaitsForUserWhenPlanningLimitIsReached(t *testing.T) {
 		},
 	}))
 	claude := autoAdvance(newTestClaude(worker.DispositionSucceeded))
-	runner := NewRunner(workflowService, executionService)
+	runner := NewRunner(workflowService, executionService, NewActiveSessions())
 	request := testRunRequest(codex, claude, 1)
 	request.MaxPlanningRounds = 1
 
@@ -198,7 +202,7 @@ func TestRunnerPersistsWorkerStartFailure(t *testing.T) {
 		map[worker.Role][]worker.Script{},
 	))
 	claude := autoAdvance(newTestClaude(worker.DispositionSucceeded))
-	runner := NewRunner(workflowService, executionService)
+	runner := NewRunner(workflowService, executionService, NewActiveSessions())
 
 	_, err := runner.Run(t.Context(), testRunRequest(codex, claude, 1))
 	if !errors.Is(err, worker.ErrScriptNotFound) {
@@ -236,7 +240,7 @@ func TestRunnerRejectsDuplicateActiveRun(t *testing.T) {
 	} else if !created {
 		t.Fatal("expected active run to be newly created")
 	}
-	runner := NewRunner(workflowService, executionService)
+	runner := NewRunner(workflowService, executionService, NewActiveSessions())
 
 	_, err := runner.Run(
 		t.Context(),
@@ -245,6 +249,149 @@ func TestRunnerRejectsDuplicateActiveRun(t *testing.T) {
 	if !errors.Is(err, ErrRunAlreadyActive) {
 		t.Fatalf("expected error %v, got %v", ErrRunAlreadyActive, err)
 	}
+}
+
+func TestRunnerRoutesCommandsThroughActiveSessionRegistry(t *testing.T) {
+	workflowService, _, executionService := orchestrationDatabase(t)
+	codex := worker.NewQueuedScriptedAdapter("fake-codex", map[worker.Role][]worker.Script{
+		worker.RoleLead: {
+			{
+				Events:      []worker.Event{{Type: worker.EventActivity, Text: "drafting"}},
+				Disposition: worker.DispositionSucceeded,
+				Summary:     "drafted",
+			},
+		},
+	})
+	claude := newTestClaude(worker.DispositionSucceeded)
+	activeSessions := NewActiveSessions()
+	runner := NewRunner(workflowService, executionService, activeSessions)
+	controller := NewController(executionService, activeSessions)
+	type runOutcome struct {
+		result RunResult
+		err    error
+	}
+	finished := make(chan runOutcome, 1)
+	go func() {
+		result, err := runner.Run(t.Context(), testRunRequest(codex, claude, 1))
+		finished <- runOutcome{result: result, err: err}
+	}()
+
+	waitForActiveSession(t, activeSessions, "run_test:plan-lead-1")
+	if _, err := controller.SendCommand(t.Context(), "run_test:plan-lead-1", worker.Command{
+		ID: "cmd_pause", Type: worker.CommandPause,
+	}); err != nil {
+		t.Fatalf("pause active session: %v", err)
+	}
+	waitForSessionStatus(
+		t,
+		executionService,
+		"run_test:plan-lead-1",
+		execution.SessionStatusPaused,
+	)
+	if _, err := controller.SendCommand(t.Context(), "run_test:plan-lead-1", worker.Command{
+		ID: "cmd_continue", Type: worker.CommandContinue,
+	}); err != nil {
+		t.Fatalf("continue active session: %v", err)
+	}
+	waitForSessionStatus(
+		t,
+		executionService,
+		"run_test:plan-lead-1",
+		execution.SessionStatusRunning,
+	)
+	if _, err := controller.SendCommand(t.Context(), "run_test:plan-lead-1", worker.Command{
+		ID: "cmd_stop", Type: worker.CommandStop,
+	}); err != nil {
+		t.Fatalf("stop active session: %v", err)
+	}
+
+	select {
+	case outcome := <-finished:
+		if outcome.err != nil {
+			t.Fatalf("finish stopped run: %v", outcome.err)
+		}
+		if outcome.result.Status != RunStatusStopped {
+			t.Errorf("unexpected stopped result %+v", outcome.result)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for stopped run")
+	}
+	storedRun, err := executionService.GetRun(t.Context(), "run_test")
+	if err != nil {
+		t.Fatalf("get stopped run: %v", err)
+	}
+	if storedRun.Status != execution.RunStatusStopped || storedRun.EndedAt == nil {
+		t.Errorf("unexpected stopped run %+v", storedRun)
+	}
+	storedSession, err := executionService.GetSession(t.Context(), "run_test:plan-lead-1")
+	if err != nil {
+		t.Fatalf("get stopped session: %v", err)
+	}
+	if storedSession.Status != execution.SessionStatusStopped || storedSession.EndedAt == nil {
+		t.Errorf("unexpected stopped session %+v", storedSession)
+	}
+	events, err := executionService.EventsForSession(t.Context(), "run_test:plan-lead-1")
+	if err != nil {
+		t.Fatalf("get controlled session events: %v", err)
+	}
+	if len(events) != 2 ||
+		events[0].Type != worker.EventPauseAcknowledged ||
+		events[1].Type != worker.EventContinued {
+		t.Errorf("unexpected controlled session events %+v", events)
+	}
+	if _, active := activeSessions.Get("run_test:plan-lead-1"); active {
+		t.Error("expected stopped session to be unregistered")
+	}
+}
+
+func waitForActiveSession(
+	t *testing.T,
+	registry *ActiveSessions,
+	sessionID string,
+) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, found := registry.Get(sessionID); found {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for active session %q", sessionID)
+}
+
+func waitForSessionStatus(
+	t *testing.T,
+	service *execution.Service,
+	sessionID string,
+	status execution.SessionStatus,
+) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	var last execution.SessionStatus
+	var runID string
+	for time.Now().Before(deadline) {
+		session, err := service.GetSession(t.Context(), sessionID)
+		if err != nil {
+			t.Fatalf("get session %q: %v", sessionID, err)
+		}
+		if session.Status == status {
+			return
+		}
+		last = session.Status
+		runID = session.RunID
+		if last == execution.SessionStatusFailed {
+			storedRun, _ := service.GetRun(t.Context(), runID)
+			t.Fatalf("session %q failed while waiting for %q; run: %+v", sessionID, status, storedRun)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf(
+		"timed out waiting for session %q status %q; last status was %q",
+		sessionID,
+		status,
+		last,
+	)
 }
 
 func newTestCodex() *worker.ScriptedAdapter {

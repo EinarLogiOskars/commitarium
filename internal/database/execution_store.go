@@ -361,12 +361,12 @@ func (s *ExecutionStore) ListEvents(
 func (s *ExecutionStore) CreateCommand(
 	ctx context.Context,
 	command execution.Command,
-) (execution.Command, error) {
+) (execution.Command, bool, error) {
 	if err := command.Validate(); err != nil {
-		return execution.Command{}, err
+		return execution.Command{}, false, err
 	}
 	if command.Status != execution.CommandStatusPending {
-		return execution.Command{}, fmt.Errorf(
+		return execution.Command{}, false, fmt.Errorf(
 			"%w: new command must be pending",
 			execution.ErrInvalidCommand,
 		)
@@ -386,17 +386,17 @@ func (s *ExecutionStore) CreateCommand(
 		formatExecutionTime(command.RequestedAt),
 	)
 	if err != nil {
-		return execution.Command{}, fmt.Errorf("insert session command %q: %w", command.ID, err)
+		return execution.Command{}, false, fmt.Errorf("insert session command %q: %w", command.ID, err)
 	}
 	rowsAffected, err := result.RowsAffected()
 	if err != nil {
-		return execution.Command{}, fmt.Errorf("read inserted command %q row count: %w", command.ID, err)
+		return execution.Command{}, false, fmt.Errorf("read inserted command %q row count: %w", command.ID, err)
 	}
 	if rowsAffected == 1 {
-		return command, nil
+		return command, true, nil
 	}
 	if rowsAffected != 0 {
-		return execution.Command{}, fmt.Errorf(
+		return execution.Command{}, false, fmt.Errorf(
 			"insert session command %q: expected zero or one affected row, got %d",
 			command.ID,
 			rowsAffected,
@@ -404,14 +404,14 @@ func (s *ExecutionStore) CreateCommand(
 	}
 	existing, err := s.GetCommand(ctx, command.ID)
 	if err != nil {
-		return execution.Command{}, err
+		return execution.Command{}, false, err
 	}
 	if existing.SessionID != command.SessionID ||
 		existing.Type != command.Type ||
 		existing.Message != command.Message {
-		return execution.Command{}, execution.ErrCommandConflict
+		return execution.Command{}, false, execution.ErrCommandConflict
 	}
-	return existing, nil
+	return existing, false, nil
 }
 
 func (s *ExecutionStore) GetCommand(

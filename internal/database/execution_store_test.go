@@ -36,7 +36,7 @@ func TestExecutionStorePersistsAcrossDatabaseReopen(t *testing.T) {
 		ID: "cmd_pause", SessionID: session.ID, Type: worker.CommandPause,
 		Status: execution.CommandStatusPending, RequestedAt: run.StartedAt.Add(2 * time.Second),
 	}
-	if _, err := store.CreateCommand(t.Context(), command); err != nil {
+	if _, _, err := store.CreateCommand(t.Context(), command); err != nil {
 		t.Fatalf("create command: %v", err)
 	}
 	if err := db.Close(); err != nil {
@@ -130,15 +130,21 @@ func TestExecutionStoreCreatesCommandsIdempotently(t *testing.T) {
 		Message: "Please use the simpler approach.",
 		Status:  execution.CommandStatusPending, RequestedAt: run.StartedAt.Add(time.Second),
 	}
-	created, err := store.CreateCommand(t.Context(), command)
+	created, wasCreated, err := store.CreateCommand(t.Context(), command)
 	if err != nil {
 		t.Fatalf("create command: %v", err)
 	}
+	if !wasCreated {
+		t.Error("expected command to be newly created")
+	}
 	retry := command
 	retry.RequestedAt = retry.RequestedAt.Add(time.Hour)
-	retried, err := store.CreateCommand(t.Context(), retry)
+	retried, wasCreated, err := store.CreateCommand(t.Context(), retry)
 	if err != nil {
 		t.Fatalf("retry command: %v", err)
+	}
+	if wasCreated {
+		t.Error("expected retry to return the existing command")
 	}
 	if retried != created {
 		t.Errorf("expected original command %+v, got %+v", created, retried)
@@ -147,7 +153,7 @@ func TestExecutionStoreCreatesCommandsIdempotently(t *testing.T) {
 	conflict := command
 	conflict.Type = worker.CommandPause
 	conflict.Message = ""
-	if _, err := store.CreateCommand(t.Context(), conflict); !errors.Is(err, execution.ErrCommandConflict) {
+	if _, _, err := store.CreateCommand(t.Context(), conflict); !errors.Is(err, execution.ErrCommandConflict) {
 		t.Fatalf("expected error %v, got %v", execution.ErrCommandConflict, err)
 	}
 }
@@ -241,7 +247,7 @@ func TestExecutionStoreTransitionsRunAndSessionWithExpectedState(t *testing.T) {
 func TestExecutionStoreResolvesCommandsIdempotently(t *testing.T) {
 	db, store := newTestExecutionStore(t)
 	run, session := createExecutionRecords(t, db, store)
-	command, err := store.CreateCommand(t.Context(), execution.Command{
+	command, _, err := store.CreateCommand(t.Context(), execution.Command{
 		ID: "cmd_pause", SessionID: session.ID, Type: worker.CommandPause,
 		Status: execution.CommandStatusPending, RequestedAt: run.StartedAt,
 	})
