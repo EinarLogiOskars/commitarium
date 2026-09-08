@@ -11,7 +11,7 @@ func TestHealthHandler(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/health", nil)
 	recorder := httptest.NewRecorder()
 
-	New(nil, nil, nil, nil, nil).ServeHTTP(recorder, req)
+	New(nil, nil, nil, nil, nil, nil).ServeHTTP(recorder, req)
 
 	res := recorder.Result()
 	defer res.Body.Close()
@@ -39,7 +39,7 @@ func TestHealthHandlerRejectsPost(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/health", nil)
 	recorder := httptest.NewRecorder()
 
-	New(nil, nil, nil, nil, nil).ServeHTTP(recorder, req)
+	New(nil, nil, nil, nil, nil, nil).ServeHTTP(recorder, req)
 
 	res := recorder.Result()
 

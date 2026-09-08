@@ -180,6 +180,36 @@ func (s *ExecutionStore) GetSession(
 	return session, nil
 }
 
+func (s *ExecutionStore) ListSessions(
+	ctx context.Context,
+	runID string,
+) ([]execution.Session, error) {
+	rows, err := s.db.QueryContext(
+		ctx,
+		`SELECT id, run_id, agent_id, role, status, provider_session_id,
+		        started_at, updated_at, ended_at
+		 FROM sessions WHERE run_id = ? ORDER BY started_at, id`,
+		runID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list sessions for run %q: %w", runID, err)
+	}
+	defer rows.Close()
+
+	sessions := make([]execution.Session, 0)
+	for rows.Next() {
+		session, err := scanExecutionSession(rows)
+		if err != nil {
+			return nil, err
+		}
+		sessions = append(sessions, session)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate sessions for run %q: %w", runID, err)
+	}
+	return sessions, nil
+}
+
 func (s *ExecutionStore) TransitionSession(
 	ctx context.Context,
 	transition execution.SessionTransition,

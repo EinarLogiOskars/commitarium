@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"time"
 
 	coordinatordatabase "github.com/EinarLogiOskars/commitarium/internal/database"
 	"github.com/EinarLogiOskars/commitarium/internal/execution"
@@ -52,12 +53,22 @@ func run(ctx context.Context) error {
 	executionService := execution.NewService(executionStore)
 	activeSessions := orchestration.NewActiveSessions()
 	sessionController := orchestration.NewController(executionService, activeSessions)
+	runner := orchestration.NewRunner(workflowService, executionService, activeSessions)
+	runStarter := orchestration.NewStarter(
+		runner,
+		func() orchestration.Assignment {
+			return orchestration.NewSimulatedAssignment(250 * time.Millisecond)
+		},
+		2,
+		3,
+	)
 	handler := httpapi.New(
 		projectService,
 		featureService,
 		workflowService,
 		executionService,
 		sessionController,
+		runStarter,
 	)
 
 	log.Print("Listening...")

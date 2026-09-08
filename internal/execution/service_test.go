@@ -19,6 +19,7 @@ type recordingStore struct {
 	createSessionErr    error
 	getSessionResult    Session
 	getSessionErr       error
+	listedSessions      []Session
 	appendedEvent       PendingEvent
 	appendEventResult   Event
 	appendEventCreated  bool
@@ -44,6 +45,10 @@ func (s *recordingStore) CreateSession(_ context.Context, session Session) error
 
 func (s *recordingStore) GetSession(_ context.Context, _ string) (Session, error) {
 	return s.getSessionResult, s.getSessionErr
+}
+
+func (s *recordingStore) ListSessions(_ context.Context, _ string) ([]Session, error) {
+	return s.listedSessions, nil
 }
 
 func (s *recordingStore) AppendEvent(
@@ -103,6 +108,20 @@ func TestServiceCreatesRunAndSessionWithCoordinatorTime(t *testing.T) {
 		session.Status != SessionStatusStarting ||
 		session.StartedAt != fixedTime {
 		t.Errorf("unexpected session %+v", session)
+	}
+}
+
+func TestServiceListsSessionsForRun(t *testing.T) {
+	expected := []Session{{ID: "ses_test", RunID: "run_test"}}
+	store := &recordingStore{listedSessions: expected}
+	service := testService(store, time.Now())
+
+	actual, err := service.SessionsForRun(t.Context(), "run_test")
+	if err != nil {
+		t.Fatalf("list sessions: %v", err)
+	}
+	if len(actual) != 1 || actual[0] != expected[0] {
+		t.Errorf("expected %+v, got %+v", expected, actual)
 	}
 }
 

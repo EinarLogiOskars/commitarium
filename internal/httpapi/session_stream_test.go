@@ -30,7 +30,7 @@ func TestStreamSessionEventsResumesAfterLastEventID(t *testing.T) {
 	request = request.WithContext(cancelledContext)
 	recorder := httptest.NewRecorder()
 
-	New(nil, nil, nil, executions, nil).ServeHTTP(recorder, request)
+	New(nil, nil, nil, executions, nil, nil).ServeHTTP(recorder, request)
 
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("expected status %d, got %d", http.StatusOK, recorder.Code)
@@ -70,7 +70,7 @@ func TestStreamSessionEventsDeliversLiveEvent(t *testing.T) {
 	request.Header.Set("Last-Event-ID", first.ID)
 	recorder := httptest.NewRecorder()
 
-	New(nil, nil, nil, executions, nil).ServeHTTP(recorder, request)
+	New(nil, nil, nil, executions, nil, nil).ServeHTTP(recorder, request)
 
 	body := recorder.Body.String()
 	if !strings.Contains(body, "id: "+second.ID) ||
@@ -91,7 +91,7 @@ func TestStreamSessionEventsRejectsUnknownLastEventID(t *testing.T) {
 	request.Header.Set("Last-Event-ID", "sev_unknown")
 	recorder := httptest.NewRecorder()
 
-	New(nil, nil, nil, executions, nil).ServeHTTP(recorder, request)
+	New(nil, nil, nil, executions, nil, nil).ServeHTTP(recorder, request)
 
 	if recorder.Code != http.StatusBadRequest {
 		t.Fatalf("expected status %d, got %d", http.StatusBadRequest, recorder.Code)

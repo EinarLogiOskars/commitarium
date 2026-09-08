@@ -47,6 +47,7 @@ type Store interface {
 	TransitionRun(ctx context.Context, transition RunTransition) (Run, error)
 	CreateSession(ctx context.Context, session Session) error
 	GetSession(ctx context.Context, id string) (Session, error)
+	ListSessions(ctx context.Context, runID string) ([]Session, error)
 	TransitionSession(ctx context.Context, transition SessionTransition) (Session, error)
 	AppendEvent(ctx context.Context, event PendingEvent) (Event, bool, error)
 	ListEvents(ctx context.Context, sessionID string) ([]Event, error)

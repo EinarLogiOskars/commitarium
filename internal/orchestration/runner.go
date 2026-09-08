@@ -131,7 +131,6 @@ func (r *Runner) Run(
 		return RunResult{}, err
 	}
 
-	result = RunResult{Sessions: make([]SessionSummary, 0)}
 	if r.executions != nil {
 		storedRun, created, err := r.executions.CreateRun(
 			ctx,
@@ -144,6 +143,45 @@ func (r *Runner) Run(
 		if !created {
 			return resultForStoredRun(storedRun)
 		}
+	}
+	return r.runStarted(ctx, request)
+}
+
+// Start durably admits a run before returning and then executes it outside the
+// caller's cancellation scope. Retrying the same run ID returns the existing
+// record without launching a second goroutine.
+func (r *Runner) Start(
+	ctx context.Context,
+	request RunRequest,
+) (execution.Run, bool, error) {
+	if err := request.Validate(); err != nil {
+		return execution.Run{}, false, err
+	}
+	if r.executions == nil {
+		return execution.Run{}, false, errors.New("asynchronous run requires durable execution storage")
+	}
+
+	storedRun, created, err := r.executions.CreateRun(
+		ctx,
+		request.ID,
+		request.FeatureID,
+	)
+	if err != nil || !created {
+		return storedRun, created, err
+	}
+
+	go func() {
+		_, _ = r.runStarted(context.WithoutCancel(ctx), request)
+	}()
+	return storedRun, true, nil
+}
+
+func (r *Runner) runStarted(
+	ctx context.Context,
+	request RunRequest,
+) (result RunResult, runErr error) {
+	result = RunResult{Sessions: make([]SessionSummary, 0)}
+	if r.executions != nil {
 		defer func() {
 			if err := r.finishRun(ctx, request.ID, result, runErr); err != nil {
 				if runErr != nil {

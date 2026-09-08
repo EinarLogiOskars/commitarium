@@ -125,6 +125,63 @@ func TestRunnerDrivesPlanningImplementationAndReviewLoop(t *testing.T) {
 	}
 }
 
+func TestRunnerStartsSimulatedWorkflowAsynchronously(t *testing.T) {
+	workflowService, featureStore, executionService := orchestrationDatabase(t)
+	runner := NewRunner(workflowService, executionService, NewActiveSessions())
+	request := RunRequest{
+		ID: "run_async", FeatureID: "fea_test", Goal: "Exercise the public workflow",
+		Assignment:        NewSimulatedAssignment(0),
+		MaxPlanningRounds: 2,
+		MaxReviewRounds:   3,
+	}
+
+	started, created, err := runner.Start(t.Context(), request)
+	if err != nil {
+		t.Fatalf("start asynchronous run: %v", err)
+	}
+	if !created || started.Status != execution.RunStatusRunning {
+		t.Fatalf("unexpected admitted run %+v, created=%t", started, created)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	var completed execution.Run
+	for time.Now().Before(deadline) {
+		completed, err = executionService.GetRun(t.Context(), request.ID)
+		if err != nil {
+			t.Fatalf("get asynchronous run: %v", err)
+		}
+		if completed.Status == execution.RunStatusSucceeded {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if completed.Status != execution.RunStatusSucceeded || completed.EndedAt == nil {
+		t.Fatalf("asynchronous run did not complete: %+v", completed)
+	}
+	sessions, err := executionService.SessionsForRun(t.Context(), request.ID)
+	if err != nil {
+		t.Fatalf("list asynchronous sessions: %v", err)
+	}
+	if len(sessions) != 6 {
+		t.Fatalf("expected six sessions, got %+v", sessions)
+	}
+	storedFeature, err := featureStore.GetByID(t.Context(), request.FeatureID)
+	if err != nil {
+		t.Fatalf("get completed feature: %v", err)
+	}
+	if storedFeature.State != feature.StateReadyToMerge {
+		t.Errorf("expected ready-to-merge feature, got %q", storedFeature.State)
+	}
+
+	retried, created, err := runner.Start(t.Context(), request)
+	if err != nil {
+		t.Fatalf("retry asynchronous run: %v", err)
+	}
+	if created || retried.Status != execution.RunStatusSucceeded {
+		t.Errorf("unexpected retry %+v, created=%t", retried, created)
+	}
+}
+
 func TestRunnerWaitsForUserWhenReviewLimitIsReached(t *testing.T) {
 	workflowService, featureStore, executionService := orchestrationDatabase(t)
 	codex := autoAdvance(newTestCodex())
