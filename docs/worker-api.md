@@ -155,11 +155,19 @@ after that transaction commits. An exact replay returns the existing activity;
 a gap, conflicting replay, or event from a different attempt is rejected
 without moving the checkpoint.
 
-The continuous stream supervisor remains future work. It will request the next
-event only after the current one is durable and reconnect from the last sequence
-SQLite confirms was stored. A normal end of the HTTP body returns `io.EOF`; the
-caller must inspect the attempt rather than assuming that EOF means the agent
-finished.
+The coordinator's single-attempt pump requests the next event only after the
+current one is durable. It opens the stream from the last sequence SQLite
+confirms was stored, so recreating the pump after a coordinator restart resumes
+without duplicate public activity. A normal end of the HTTP body returns
+`io.EOF`; the pump then inspects the attempt rather than assuming that EOF means
+the agent finished. It reports terminal completion only when the attempt is
+terminal and SQLite has accepted every event the worker says exists. Active,
+indeterminate, contradictory, and terminal-but-not-yet-caught-up states remain
+distinct results.
+
+Automatic reconnection and retry timing remain future supervisor policy. The
+pump handles one connection to one existing attempt and never starts or replaces
+an agent.
 
 A valid `protocol_error` frame becomes a typed stream-protocol error. Malformed
 frames, network failures, and normal HTTP worker rejections remain separate

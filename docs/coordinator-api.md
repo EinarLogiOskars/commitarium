@@ -102,7 +102,11 @@ source sequence in SQLite. The coordinator stores that event and advances the
 source checkpoint in the same transaction, then publishes it to this public
 stream. This internal source identity does not change the public event shape;
 it exists to prevent duplicate or skipped activity after a coordinator restart.
-Continuous worker-stream supervision is not connected to the runtime yet.
+The internal single-attempt pump can already reopen a worker stream from this
+durable checkpoint and copy events until that connection ends. It then inspects
+the worker's attempt state and treats an active or uncertain agent differently
+from a completed one. Automatic reconnection and runtime wiring remain future
+work.
 
 ## Session commands
 
