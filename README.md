@@ -9,9 +9,15 @@ session activity, and user control commands in SQLite. A deterministic pair of
 simulated agents can take a feature through planning, implementation, review
 feedback, a corrective implementation pass, and approval.
 
+If the coordinator is restarted during an active simulated session, it resumes
+the original provider session ID, publishes a durable recovery assessment, and
+reconciles the completed activity before doing more work. Projects default to
+requiring user approval for that continuation; consistent projects configured
+for automatic recovery can continue without intervention.
+
 This is not yet a production-ready release. Real Codex and Claude Code worker
-adapters, Forgejo pull-request automation, restart-time resumption of active
-runs, and the user interface remain to be built.
+adapters, Forgejo pull-request automation, and the user interface remain to be
+built.
 
 ## Architecture
 
@@ -50,7 +56,7 @@ Create a project and a draft feature, retaining the returned IDs:
 ```sh
 curl -X POST http://127.0.0.1:8080/api/v1/projects \
   -H 'Content-Type: application/json' \
-  -d '{"name":"Demo project"}'
+  -d '{"name":"Demo project","recovery_policy":"approval_required"}'
 
 curl -X POST http://127.0.0.1:8080/api/v1/projects/PROJECT_ID/features \
   -H 'Content-Type: application/json' \
@@ -92,3 +98,11 @@ go vet ./...
 
 The production image also runs the full test suite as part of its multi-stage
 build.
+
+The container recovery check uses an isolated Compose project and temporary
+volume. It interrupts a live session, restarts twice, approves the recovery,
+and verifies that completed work was not duplicated:
+
+```sh
+./scripts/test-compose-recovery.sh
+```

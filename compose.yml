@@ -7,10 +7,11 @@ services:
       dockerfile: docker/coordinator.Dockerfile
     environment:
       COMMITARIUM_DATABASE_PATH: /var/lib/commitarium/coordinator.db
+      COMMITARIUM_SIMULATED_STEP_DELAY: ${COMMITARIUM_SIMULATED_STEP_DELAY:-250ms}
     volumes:
       - coordinator-data:/var/lib/commitarium
     ports:
-      - "127.0.0.1:8080:8080"
+      - "127.0.0.1:${COMMITARIUM_COORDINATOR_PORT:-8080}:8080"
 
   forgejo:
     image: codeberg.org/forgejo/forgejo:16.0.3-rootless

@@ -26,6 +26,18 @@ type SessionRequest struct {
 type ResumeRequest struct {
 	SessionRequest
 	ProviderSessionID string
+	Recovery          RecoveryContext
+}
+
+// RecoveryContext is the durable state a resumed provider must reconcile
+// before it performs more work. Provider adapters may enrich this briefing
+// with repository and forge observations that are specific to their runtime.
+type RecoveryContext struct {
+	Briefing        string
+	CompletedEvents []Event
+	PendingCommands []Command
+	PreviousState   string
+	WorkflowPhase   string
 }
 
 type CommandType string
@@ -47,18 +59,25 @@ type Command struct {
 type EventType string
 
 const (
-	EventMessage           EventType = "message"
-	EventActivity          EventType = "activity"
-	EventInputRequired     EventType = "input_required"
-	EventPauseAcknowledged EventType = "pause_acknowledged"
-	EventContinued         EventType = "continued"
+	EventMessage            EventType = "message"
+	EventActivity           EventType = "activity"
+	EventInputRequired      EventType = "input_required"
+	EventPauseAcknowledged  EventType = "pause_acknowledged"
+	EventContinued          EventType = "continued"
+	EventRecoveryAssessment EventType = "recovery_assessment"
 )
+
+type RecoveryAssessment struct {
+	Consistent         bool
+	RequiresUserReview bool
+}
 
 // Event contains observable worker output, not private model reasoning.
 // The coordinator will add durable IDs, timestamps, and ordering when it records it.
 type Event struct {
-	Type EventType
-	Text string
+	Type               EventType
+	Text               string
+	RecoveryAssessment *RecoveryAssessment
 }
 
 type Outcome string
@@ -94,6 +113,7 @@ type Adapter interface {
 // Events must close when the session finishes so the coordinator can collect
 // the final result without guessing whether more observable output is coming.
 type Session interface {
+	ProviderSessionID() string
 	Events() <-chan Event
 	Send(ctx context.Context, command Command) error
 	Wait(ctx context.Context) (Result, error)

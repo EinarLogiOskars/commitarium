@@ -11,13 +11,15 @@ import (
 )
 
 type createProjectRequest struct {
-	Name string `json:"name"`
+	Name           string                 `json:"name"`
+	RecoveryPolicy project.RecoveryPolicy `json:"recovery_policy"`
 }
 
 type projectResponse struct {
-	ID        string    `json:"id"`
-	Name      string    `json:"name"`
-	CreatedAt time.Time `json:"created_at"`
+	ID             string                 `json:"id"`
+	Name           string                 `json:"name"`
+	RecoveryPolicy project.RecoveryPolicy `json:"recovery_policy"`
+	CreatedAt      time.Time              `json:"created_at"`
 }
 
 func (api *API) createProjectHandler(
@@ -38,6 +40,7 @@ func (api *API) createProjectHandler(
 	createdProject, err := api.projects.Create(
 		r.Context(),
 		request.Name,
+		request.RecoveryPolicy,
 	)
 	if err != nil {
 		if errors.Is(err, project.ErrNameRequired) {
@@ -46,6 +49,15 @@ func (api *API) createProjectHandler(
 				http.StatusBadRequest,
 				"project_name_required",
 				"project name is required",
+			)
+			return
+		}
+		if errors.Is(err, project.ErrInvalidRecoveryPolicy) {
+			writeError(
+				w,
+				http.StatusBadRequest,
+				"invalid_recovery_policy",
+				"recovery_policy must be approval_required or automatic",
 			)
 			return
 		}
@@ -60,9 +72,10 @@ func (api *API) createProjectHandler(
 	}
 
 	response := projectResponse{
-		ID:        createdProject.ID,
-		Name:      createdProject.Name,
-		CreatedAt: createdProject.CreatedAt,
+		ID:             createdProject.ID,
+		Name:           createdProject.Name,
+		RecoveryPolicy: createdProject.RecoveryPolicy,
+		CreatedAt:      createdProject.CreatedAt,
 	}
 
 	w.Header().Set(
@@ -106,9 +119,10 @@ func (api *API) getProjectByIDHandler(
 	}
 
 	response := projectResponse{
-		ID:        foundProject.ID,
-		Name:      foundProject.Name,
-		CreatedAt: foundProject.CreatedAt,
+		ID:             foundProject.ID,
+		Name:           foundProject.Name,
+		RecoveryPolicy: foundProject.RecoveryPolicy,
+		CreatedAt:      foundProject.CreatedAt,
 	}
 
 	w.Header().Set("Content-Type", "application/json")

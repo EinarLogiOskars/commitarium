@@ -15,10 +15,11 @@ import (
 )
 
 type recordingProjectService struct {
-	calls        int
-	receivedName string
-	result       project.Project
-	err          error
+	calls                  int
+	receivedName           string
+	receivedRecoveryPolicy project.RecoveryPolicy
+	result                 project.Project
+	err                    error
 
 	receivedID    string
 	getByIDResult project.Project
@@ -35,9 +36,11 @@ type testErrorResponse struct {
 func (s *recordingProjectService) Create(
 	_ context.Context,
 	name string,
+	recoveryPolicy project.RecoveryPolicy,
 ) (project.Project, error) {
 	s.calls++
 	s.receivedName = name
+	s.receivedRecoveryPolicy = recoveryPolicy
 	return s.result, s.err
 }
 
@@ -63,13 +66,14 @@ func TestCreateProject(t *testing.T) {
 
 	service := &recordingProjectService{
 		result: project.Project{
-			ID:        "prj_test",
-			Name:      "Commitarium",
-			CreatedAt: fixedTime,
+			ID:             "prj_test",
+			Name:           "Commitarium",
+			RecoveryPolicy: project.RecoveryPolicyAutomatic,
+			CreatedAt:      fixedTime,
 		},
 	}
 
-	body := strings.NewReader(`{"name":"Commitarium"}`)
+	body := strings.NewReader(`{"name":"Commitarium","recovery_policy":"automatic"}`)
 
 	req := httptest.NewRequest(
 		http.MethodPost,
@@ -82,9 +86,10 @@ func TestCreateProject(t *testing.T) {
 	New(service, nil, nil, nil, nil, nil).ServeHTTP(recorder, req)
 
 	var response struct {
-		ID        string    `json:"id"`
-		Name      string    `json:"name"`
-		CreatedAt time.Time `json:"created_at"`
+		ID             string                 `json:"id"`
+		Name           string                 `json:"name"`
+		RecoveryPolicy project.RecoveryPolicy `json:"recovery_policy"`
+		CreatedAt      time.Time              `json:"created_at"`
 	}
 
 	res := recorder.Result()
@@ -115,6 +120,9 @@ func TestCreateProject(t *testing.T) {
 	if service.receivedName != "Commitarium" {
 		t.Errorf("expected receivedName Commitarium, got %v", service.receivedName)
 	}
+	if service.receivedRecoveryPolicy != project.RecoveryPolicyAutomatic {
+		t.Errorf("expected service recovery policy %q, got %q", project.RecoveryPolicyAutomatic, service.receivedRecoveryPolicy)
+	}
 
 	if response.ID != service.result.ID {
 		t.Errorf("expected response ID %v, got %v", service.result.ID, response.ID)
@@ -122,6 +130,9 @@ func TestCreateProject(t *testing.T) {
 
 	if response.Name != service.result.Name {
 		t.Errorf("expected response Name %v, got %v", service.result.Name, response.Name)
+	}
+	if response.RecoveryPolicy != project.RecoveryPolicyAutomatic {
+		t.Errorf("expected recovery policy %q, got %q", project.RecoveryPolicyAutomatic, response.RecoveryPolicy)
 	}
 
 	if response.CreatedAt != service.result.CreatedAt {
@@ -237,6 +248,30 @@ func TestCreateProjectRejectsEmptyName(t *testing.T) {
 
 	if service.calls != 1 {
 		t.Fatalf("expected project service to be called once, got %d", service.calls)
+	}
+}
+
+func TestCreateProjectRejectsInvalidRecoveryPolicy(t *testing.T) {
+	service := &recordingProjectService{err: project.ErrInvalidRecoveryPolicy}
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/api/v1/projects",
+		strings.NewReader(`{"name":"Commitarium","recovery_policy":"reckless"}`),
+	)
+	recorder := httptest.NewRecorder()
+	New(service, nil, nil, nil, nil, nil).ServeHTTP(recorder, request)
+
+	response := recorder.Result()
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected status %d, got %d", http.StatusBadRequest, response.StatusCode)
+	}
+	var body errorResponse
+	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+		t.Fatalf("decode error response: %v", err)
+	}
+	if body.Error.Code != "invalid_recovery_policy" {
+		t.Fatalf("unexpected error response %+v", body)
 	}
 }
 

@@ -32,6 +32,7 @@ func NewService(store Store) *Service {
 func (s *Service) Create(
 	ctx context.Context,
 	name string,
+	recoveryPolicy RecoveryPolicy,
 ) (Project, error) {
 	sanitizedName := strings.TrimSpace(name)
 
@@ -39,10 +40,16 @@ func (s *Service) Create(
 		return Project{}, ErrNameRequired
 	}
 
+	policy, err := NormalizeRecoveryPolicy(recoveryPolicy)
+	if err != nil {
+		return Project{}, err
+	}
+
 	project := Project{
-		ID:        s.generateID(),
-		Name:      sanitizedName,
-		CreatedAt: s.now(),
+		ID:             s.generateID(),
+		Name:           sanitizedName,
+		RecoveryPolicy: policy,
+		CreatedAt:      s.now(),
 	}
 
 	if err := s.store.Create(ctx, project); err != nil {

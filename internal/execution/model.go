@@ -48,6 +48,10 @@ type Session struct {
 	Role              worker.Role
 	Status            SessionStatus
 	ProviderSessionID string
+	Outcome           worker.Outcome
+	Disposition       worker.Disposition
+	Summary           string
+	RecoveryAttempt   int
 	StartedAt         time.Time
 	UpdatedAt         time.Time
 	EndedAt           *time.Time
@@ -216,6 +220,17 @@ func (session Session) Validate() error {
 		return fmt.Errorf("%w: end time precedes start time", ErrInvalidSession)
 	case session.EndedAt != nil && session.UpdatedAt.Before(*session.EndedAt):
 		return fmt.Errorf("%w: update time precedes end time", ErrInvalidSession)
+	case session.RecoveryAttempt < 0:
+		return fmt.Errorf("%w: recovery attempt cannot be negative", ErrInvalidSession)
+	case !session.Status.IsTerminal() &&
+		(session.Outcome != "" || session.Disposition != "" || session.Summary != ""):
+		return fmt.Errorf("%w: active session cannot have a worker result", ErrInvalidSession)
+	case session.Status == SessionStatusCompleted && session.Outcome != "" &&
+		(session.Outcome != worker.OutcomeCompleted || !session.Disposition.IsValid()):
+		return fmt.Errorf("%w: completed session has an invalid worker result", ErrInvalidSession)
+	case session.Status == SessionStatusStopped && session.Outcome != "" &&
+		session.Outcome != worker.OutcomeStopped:
+		return fmt.Errorf("%w: stopped session has an invalid worker result", ErrInvalidSession)
 	default:
 		return nil
 	}

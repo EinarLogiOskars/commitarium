@@ -182,6 +182,201 @@ func TestRunnerStartsSimulatedWorkflowAsynchronously(t *testing.T) {
 	}
 }
 
+func TestRunnerRecoversInterruptedSessionAndWaitsForApproval(t *testing.T) {
+	workflowService, featureStore, executionService := orchestrationDatabase(t)
+	seedInterruptedConsultant(t, workflowService, executionService, "run_recovery_approval")
+
+	activeSessions := NewActiveSessions()
+	runner := NewRunner(workflowService, executionService, activeSessions)
+	request := recoveryRunRequest(
+		"run_recovery_approval",
+		project.RecoveryPolicyApprovalRequired,
+	)
+	if err := runner.Recover(t.Context(), request); err != nil {
+		t.Fatalf("recover run: %v", err)
+	}
+
+	sessionID := request.ID + ":plan-consultant-1"
+	waitForSessionStatus(t, executionService, sessionID, execution.SessionStatusPaused)
+	waitForRunStatus(t, executionService, request.ID, execution.RunStatusWaitingForUser)
+	session, err := executionService.GetSession(t.Context(), sessionID)
+	if err != nil {
+		t.Fatalf("get recovering session: %v", err)
+	}
+	if session.RecoveryAttempt != 1 {
+		t.Fatalf("expected one recovery attempt, got %+v", session)
+	}
+	events, err := executionService.EventsForSession(t.Context(), sessionID)
+	if err != nil {
+		t.Fatalf("list recovery activity: %v", err)
+	}
+	if len(events) != 1 || events[0].Type != worker.EventRecoveryAssessment {
+		t.Fatalf("expected one recovery assessment, got %+v", events)
+	}
+
+	controller := NewController(executionService, activeSessions)
+	if _, err := controller.SendCommand(t.Context(), sessionID, worker.Command{
+		ID: "approve-recovery", Type: worker.CommandContinue,
+	}); err != nil {
+		t.Fatalf("approve recovery: %v", err)
+	}
+	waitForRunStatus(t, executionService, request.ID, execution.RunStatusSucceeded)
+
+	storedFeature, err := featureStore.GetByID(t.Context(), request.FeatureID)
+	if err != nil {
+		t.Fatalf("get recovered feature: %v", err)
+	}
+	if storedFeature.State != feature.StateReadyToMerge {
+		t.Fatalf("expected recovered feature ready to merge, got %q", storedFeature.State)
+	}
+	sessions, err := executionService.SessionsForRun(t.Context(), request.ID)
+	if err != nil {
+		t.Fatalf("list recovered sessions: %v", err)
+	}
+	if len(sessions) != 6 {
+		t.Fatalf("expected six sessions without duplicated work, got %+v", sessions)
+	}
+}
+
+func TestRunnerAutomaticallyRecoversConsistentSession(t *testing.T) {
+	workflowService, _, executionService := orchestrationDatabase(t)
+	seedInterruptedConsultant(t, workflowService, executionService, "run_recovery_auto")
+	runner := NewRunner(workflowService, executionService, NewActiveSessions())
+	request := recoveryRunRequest("run_recovery_auto", project.RecoveryPolicyAutomatic)
+
+	if err := runner.Recover(t.Context(), request); err != nil {
+		t.Fatalf("recover run: %v", err)
+	}
+	waitForRunStatus(t, executionService, request.ID, execution.RunStatusSucceeded)
+
+	session, err := executionService.GetSession(t.Context(), request.ID+":plan-consultant-1")
+	if err != nil {
+		t.Fatalf("get recovered session: %v", err)
+	}
+	if session.RecoveryAttempt != 1 || session.Status != execution.SessionStatusCompleted {
+		t.Fatalf("unexpected automatically recovered session %+v", session)
+	}
+}
+
+func TestRunnerRecoversInterruptionBetweenSessionsWithoutApproval(t *testing.T) {
+	workflowService, _, executionService := orchestrationDatabase(t)
+	runID := "run_recovery_between_sessions"
+	if _, _, err := executionService.CreateRun(t.Context(), runID, "fea_test"); err != nil {
+		t.Fatalf("create interrupted run: %v", err)
+	}
+	runner := NewRunner(workflowService, executionService, NewActiveSessions())
+	request := recoveryRunRequest(runID, project.RecoveryPolicyApprovalRequired)
+	request.WorkflowPhase = feature.StateDraft
+
+	if err := runner.Recover(t.Context(), request); err != nil {
+		t.Fatalf("recover run between sessions: %v", err)
+	}
+	waitForRunStatus(t, executionService, runID, execution.RunStatusSucceeded)
+	sessions, err := executionService.SessionsForRun(t.Context(), runID)
+	if err != nil {
+		t.Fatalf("list recovered run sessions: %v", err)
+	}
+	if len(sessions) != 6 {
+		t.Fatalf("expected normal six-session workflow, got %+v", sessions)
+	}
+	for _, session := range sessions {
+		if session.RecoveryAttempt != 0 {
+			t.Fatalf("new session was incorrectly treated as resumed: %+v", session)
+		}
+	}
+}
+
+func TestAutomaticRecoveryStopsForUncertainCommandDelivery(t *testing.T) {
+	workflowService, _, executionService := orchestrationDatabase(t)
+	runID := "run_recovery_command"
+	seedInterruptedConsultant(t, workflowService, executionService, runID)
+	sessionID := runID + ":plan-consultant-1"
+	if _, created, err := executionService.CreateCommand(
+		t.Context(),
+		"cmd_interrupted",
+		sessionID,
+		worker.CommandMessage,
+		"Did the previous operation finish?",
+	); err != nil || !created {
+		t.Fatalf("create interrupted command: created=%t err=%v", created, err)
+	}
+	activeSessions := NewActiveSessions()
+	runner := NewRunner(workflowService, executionService, activeSessions)
+	request := recoveryRunRequest(runID, project.RecoveryPolicyAutomatic)
+
+	if err := runner.Recover(t.Context(), request); err != nil {
+		t.Fatalf("recover run: %v", err)
+	}
+	waitForSessionStatus(t, executionService, sessionID, execution.SessionStatusPaused)
+	waitForRunStatus(t, executionService, runID, execution.RunStatusWaitingForUser)
+	storedRun, err := executionService.GetRun(t.Context(), runID)
+	if err != nil {
+		t.Fatalf("get gated run: %v", err)
+	}
+	if !strings.Contains(storedRun.Reason, "uncertain command delivery") {
+		t.Fatalf("unexpected recovery reason %q", storedRun.Reason)
+	}
+	events, err := executionService.EventsForSession(t.Context(), sessionID)
+	if err != nil {
+		t.Fatalf("list recovery events: %v", err)
+	}
+	if len(events) != 1 || !strings.Contains(events[0].Text, "1 command delivery outcome is uncertain") {
+		t.Fatalf("pending command was not visible in recovery assessment: %+v", events)
+	}
+
+	controller := NewController(executionService, activeSessions)
+	if _, err := controller.SendCommand(t.Context(), sessionID, worker.Command{
+		ID: "approve-after-command-review", Type: worker.CommandContinue,
+	}); err != nil {
+		t.Fatalf("approve recovery after reviewing command: %v", err)
+	}
+	waitForRunStatus(t, executionService, runID, execution.RunStatusSucceeded)
+}
+
+func TestRecoveryDoesNotReplaceSessionWithUnconfirmedProviderIdentity(t *testing.T) {
+	workflowService, _, executionService := orchestrationDatabase(t)
+	runID := "run_recovery_missing_provider"
+	if _, _, err := executionService.CreateRun(t.Context(), runID, "fea_test"); err != nil {
+		t.Fatalf("create interrupted run: %v", err)
+	}
+	if _, err := workflowService.TransitionFeature(
+		t.Context(),
+		"fea_test",
+		feature.StatePlanning,
+		workflow.Actor{Kind: workflow.ActorKindCoordinator, ID: coordinatorActorID},
+		runID+":state:planning",
+	); err != nil {
+		t.Fatalf("move feature to planning: %v", err)
+	}
+	sessionID := runID + ":plan-lead-1"
+	if _, _, err := executionService.CreateSession(
+		t.Context(), sessionID, runID, "agt_fake_codex", worker.RoleLead,
+	); err != nil {
+		t.Fatalf("create ambiguous starting session: %v", err)
+	}
+	runner := NewRunner(workflowService, executionService, NewActiveSessions())
+	request := recoveryRunRequest(runID, project.RecoveryPolicyAutomatic)
+
+	if err := runner.Recover(t.Context(), request); err != nil {
+		t.Fatalf("admit recovery: %v", err)
+	}
+	waitForRunStatus(t, executionService, runID, execution.RunStatusWaitingForUser)
+	session, err := executionService.GetSession(t.Context(), sessionID)
+	if err != nil {
+		t.Fatalf("get blocked session: %v", err)
+	}
+	if session.Status != execution.SessionStatusFailed || session.ProviderSessionID != "" {
+		t.Fatalf("ambiguous session was replaced or left active: %+v", session)
+	}
+	events, err := executionService.EventsForSession(t.Context(), sessionID)
+	if err != nil {
+		t.Fatalf("list blocked recovery activity: %v", err)
+	}
+	if len(events) != 1 || !strings.Contains(events[0].Text, "no durably confirmed provider identity") {
+		t.Fatalf("missing provider identity was not observable: %+v", events)
+	}
+}
+
 func TestRunnerWaitsForUserWhenReviewLimitIsReached(t *testing.T) {
 	workflowService, featureStore, executionService := orchestrationDatabase(t)
 	codex := autoAdvance(newTestCodex())
@@ -334,6 +529,13 @@ func TestRunnerRoutesCommandsThroughActiveSessionRegistry(t *testing.T) {
 	}()
 
 	waitForActiveSession(t, activeSessions, "run_test:plan-lead-1")
+	startedSession, err := executionService.GetSession(t.Context(), "run_test:plan-lead-1")
+	if err != nil {
+		t.Fatalf("get newly started session: %v", err)
+	}
+	if startedSession.ProviderSessionID == "" {
+		t.Fatal("provider session ID was not persisted while the session was active")
+	}
 	if _, err := controller.SendCommand(t.Context(), "run_test:plan-lead-1", worker.Command{
 		ID: "cmd_pause", Type: worker.CommandPause,
 	}); err != nil {
@@ -449,6 +651,107 @@ func waitForSessionStatus(
 		status,
 		last,
 	)
+}
+
+func waitForRunStatus(
+	t *testing.T,
+	service *execution.Service,
+	runID string,
+	status execution.RunStatus,
+) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	var last execution.Run
+	for time.Now().Before(deadline) {
+		var err error
+		last, err = service.GetRun(t.Context(), runID)
+		if err != nil {
+			t.Fatalf("get run %q: %v", runID, err)
+		}
+		if last.Status == status {
+			return
+		}
+		if last.Status.IsTerminal() && last.Status != status {
+			t.Fatalf("run %q ended as %q while waiting for %q: %+v", runID, last.Status, status, last)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for run %q status %q; last run %+v", runID, status, last)
+}
+
+func seedInterruptedConsultant(
+	t *testing.T,
+	workflowService *workflow.Service,
+	executionService *execution.Service,
+	runID string,
+) {
+	t.Helper()
+	if _, _, err := executionService.CreateRun(t.Context(), runID, "fea_test"); err != nil {
+		t.Fatalf("create interrupted run: %v", err)
+	}
+	if _, err := workflowService.TransitionFeature(
+		t.Context(),
+		"fea_test",
+		feature.StatePlanning,
+		workflow.Actor{Kind: workflow.ActorKindCoordinator, ID: coordinatorActorID},
+		runID+":state:planning",
+	); err != nil {
+		t.Fatalf("move interrupted feature to planning: %v", err)
+	}
+	leadID := runID + ":plan-lead-1"
+	if _, _, err := executionService.CreateSession(
+		t.Context(), leadID, runID, "agt_fake_codex", worker.RoleLead,
+	); err != nil {
+		t.Fatalf("create completed lead session: %v", err)
+	}
+	leadProviderID := "fake-codex:lead:0:" + leadID
+	if _, err := executionService.TransitionSession(
+		t.Context(), leadID,
+		execution.SessionStatusStarting,
+		execution.SessionStatusRunning,
+		leadProviderID,
+	); err != nil {
+		t.Fatalf("start completed lead session: %v", err)
+	}
+	if _, err := executionService.CompleteSession(
+		t.Context(), leadID,
+		execution.SessionStatusRunning,
+		execution.SessionStatusCompleted,
+		worker.Result{
+			Outcome:           worker.OutcomeCompleted,
+			Disposition:       worker.DispositionSucceeded,
+			ProviderSessionID: leadProviderID,
+			Summary:           "proposed an accepted implementation plan",
+		},
+	); err != nil {
+		t.Fatalf("complete lead session: %v", err)
+	}
+
+	consultantID := runID + ":plan-consultant-1"
+	if _, _, err := executionService.CreateSession(
+		t.Context(), consultantID, runID, "agt_fake_claude", worker.RoleConsultant,
+	); err != nil {
+		t.Fatalf("create interrupted consultant session: %v", err)
+	}
+	if _, err := executionService.TransitionSession(
+		t.Context(), consultantID,
+		execution.SessionStatusStarting,
+		execution.SessionStatusRunning,
+		"fake-claude:consultant:0:"+consultantID,
+	); err != nil {
+		t.Fatalf("mark consultant session running: %v", err)
+	}
+}
+
+func recoveryRunRequest(runID string, policy project.RecoveryPolicy) RunRequest {
+	return RunRequest{
+		ID: runID, FeatureID: "fea_test", Goal: "Test: recover a simulated workflow",
+		Assignment:        NewSimulatedAssignment(time.Millisecond),
+		MaxPlanningRounds: 2,
+		MaxReviewRounds:   3,
+		RecoveryPolicy:    policy,
+		WorkflowPhase:     feature.StatePlanning,
+	}
 }
 
 func newTestCodex() *worker.ScriptedAdapter {

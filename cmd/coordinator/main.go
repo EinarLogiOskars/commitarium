@@ -54,14 +54,34 @@ func run(ctx context.Context) error {
 	activeSessions := orchestration.NewActiveSessions()
 	sessionController := orchestration.NewController(executionService, activeSessions)
 	runner := orchestration.NewRunner(workflowService, executionService, activeSessions)
+	simulatedStepDelay := 250 * time.Millisecond
+	if configuredDelay := os.Getenv("COMMITARIUM_SIMULATED_STEP_DELAY"); configuredDelay != "" {
+		simulatedStepDelay, err = time.ParseDuration(configuredDelay)
+		if err != nil {
+			return fmt.Errorf("parse COMMITARIUM_SIMULATED_STEP_DELAY: %w", err)
+		}
+	}
 	runStarter := orchestration.NewStarter(
 		runner,
 		func() orchestration.Assignment {
-			return orchestration.NewSimulatedAssignment(250 * time.Millisecond)
+			return orchestration.NewSimulatedAssignment(simulatedStepDelay)
 		},
 		2,
 		3,
 	)
+	recoverer := orchestration.NewRecoverer(
+		executionService,
+		featureStore,
+		projectService,
+		runStarter,
+	)
+	recoveredRuns, recoveryErr := recoverer.RecoverAll(ctx)
+	if recoveryErr != nil {
+		log.Printf("recover interrupted workflows: %v", recoveryErr)
+	}
+	if recoveredRuns > 0 {
+		log.Printf("recovering %d interrupted workflow(s)", recoveredRuns)
+	}
 	handler := httpapi.New(
 		projectService,
 		featureService,

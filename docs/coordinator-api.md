@@ -34,6 +34,18 @@ Run IDs are stable opaque values derived from the start request's idempotency
 key. Only a feature in `draft` can admit a new run, but a retry remains valid
 after that run has advanced the feature.
 
+## Project recovery policy
+
+`POST /api/v1/projects` accepts an optional `recovery_policy`:
+
+```json
+{"name":"Example","recovery_policy":"approval_required"}
+```
+
+Supported values are `approval_required` and `automatic`. Omitting the field
+uses `approval_required`. Project create and retrieval responses include the
+effective policy.
+
 ## Starting and observing a run
 
 Starting a run has no request body. The feature title and description are the
@@ -68,6 +80,12 @@ between scripted events so session activity is observable. The simulation
 includes one `changes_requested` review, one corrective coder session, and a
 final approving review.
 
+A session response exposes its provider session ID as soon as the provider has
+started, rather than only after completion. It also includes
+`recovery_attempt`; completed sessions include their durable `outcome`,
+`disposition`, and `summary`, which let orchestration replay completed
+checkpoints without relaunching agents.
+
 ## Server-sent event streams
 
 Both stream endpoints first replay durable SQLite history and then deliver new
@@ -98,8 +116,44 @@ Control commands must omit `message`. Every command requires an
 `Idempotency-Key` header. Forced termination is deliberately outside the worker
 protocol and will belong to the future worker supervisor.
 
-## Current recovery boundary
+During recovery, `continue` also acts as approval for a paused recovery
+assessment. Retrying the same approval key remains idempotent.
 
-Completed runs and all recorded history survive container restarts. Resuming a
-run that was active when the coordinator stopped is not implemented yet; that
-is the next headless-coordinator recovery milestone.
+## Restart recovery
+
+At coordinator startup, durable `running` runs are replayed from their stored
+session results. Runs that were already `waiting_for_user` are recovered only
+when they still own a nonterminal session. Completed sessions and idempotent
+feature transitions are reused; the coordinator resumes only the interrupted
+provider session and never starts a replacement when provider identity is
+uncertain.
+
+The resumed worker receives a concise recovery briefing and must inspect before
+modifying anything. The briefing requires reconciliation of conversation,
+repository/worktree and Git state, interrupted tests or commands, workflow
+phase, completed session activity, pending commands, and Forgejo plan/review
+state. Durable external state is authoritative over conversational memory.
+
+The worker publishes a durable `recovery_assessment` session event and pauses:
+
+- `approval_required` changes the run to `waiting_for_user`; send a `continue`
+  command to the paused session after reviewing its assessment.
+- `automatic` continues only when the assessment is consistent.
+- Both modes require user review for contradictory or missing state, uncertain
+  command delivery or external effects, ambiguous partial work, preserved
+  pre-restart pause intent, unavailable expected resources, or a goal/scope
+  change.
+
+Commands left `pending` by an interruption are not replayed. The coordinator
+marks them rejected with an explicit message that their delivery outcome is
+unknown, and the recovery assessment identifies the ambiguity. A user may
+reissue the intended command under a new idempotency key after inspection.
+
+The current simulated workers have no repository, worktree, test process, or
+Forgejo pull request, so their assessment records those checks as not
+applicable. Real provider recovery will require persistent provider data,
+authentication/configuration, and worktree volumes before those adapters are
+enabled.
+
+Run `./scripts/test-compose-recovery.sh` for the repeatable isolated
+container-level interruption test.

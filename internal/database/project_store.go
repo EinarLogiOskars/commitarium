@@ -24,15 +24,21 @@ func (s *ProjectStore) Create(
 	ctx context.Context,
 	createdProject project.Project,
 ) error {
+	recoveryPolicy, err := project.NormalizeRecoveryPolicy(createdProject.RecoveryPolicy)
+	if err != nil {
+		return err
+	}
+	createdProject.RecoveryPolicy = recoveryPolicy
 	result, err := s.db.ExecContext(
 		ctx,
 		`
-			INSERT INTO projects (id, name, created_at)
-			VALUES (?, ?, ?)
+			INSERT INTO projects (id, name, recovery_policy, created_at)
+			VALUES (?, ?, ?, ?)
 			ON CONFLICT(id) DO NOTHING
 		`,
 		createdProject.ID,
 		createdProject.Name,
+		createdProject.RecoveryPolicy,
 		createdProject.CreatedAt.UTC().Format(time.RFC3339Nano),
 	)
 	if err != nil {
@@ -77,7 +83,7 @@ func (s *ProjectStore) GetByID(
 	err := s.db.QueryRowContext(
 		ctx,
 		`
-			SELECT id, name, created_at
+			SELECT id, name, recovery_policy, created_at
 			FROM projects
 			WHERE id = ?
 		`,
@@ -85,6 +91,7 @@ func (s *ProjectStore) GetByID(
 	).Scan(
 		&storedProject.ID,
 		&storedProject.Name,
+		&storedProject.RecoveryPolicy,
 		&createdAt,
 	)
 	if err != nil {

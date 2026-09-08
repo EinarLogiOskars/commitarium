@@ -13,8 +13,9 @@ import (
 func TestProjectStoreCreateAndGetByID(t *testing.T) {
 	store := newTestProjectStore(t)
 	expected := project.Project{
-		ID:   "prj_test",
-		Name: "Commitarium",
+		ID:             "prj_test",
+		Name:           "Commitarium",
+		RecoveryPolicy: project.RecoveryPolicyApprovalRequired,
 		CreatedAt: time.Date(
 			2026,
 			time.September,
@@ -44,9 +45,10 @@ func TestProjectStoreCreateAndGetByID(t *testing.T) {
 func TestProjectStoreCreateRejectsDuplicateID(t *testing.T) {
 	store := newTestProjectStore(t)
 	original := project.Project{
-		ID:        "prj_same",
-		Name:      "Original",
-		CreatedAt: time.Date(2026, time.September, 8, 12, 0, 0, 0, time.UTC),
+		ID:             "prj_same",
+		Name:           "Original",
+		RecoveryPolicy: project.RecoveryPolicyApprovalRequired,
+		CreatedAt:      time.Date(2026, time.September, 8, 12, 0, 0, 0, time.UTC),
 	}
 
 	if err := store.Create(t.Context(), original); err != nil {

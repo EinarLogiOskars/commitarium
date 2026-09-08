@@ -141,8 +141,9 @@ func (s *ExecutionStore) CreateSession(
 		ctx,
 		`INSERT INTO sessions (
 			id, run_id, agent_id, role, status, provider_session_id,
+			outcome, disposition, summary, recovery_attempt,
 			started_at, updated_at, ended_at
-		 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(id) DO NOTHING`,
 		session.ID,
 		session.RunID,
@@ -150,6 +151,10 @@ func (s *ExecutionStore) CreateSession(
 		session.Role,
 		session.Status,
 		session.ProviderSessionID,
+		session.Outcome,
+		session.Disposition,
+		session.Summary,
+		session.RecoveryAttempt,
 		formatExecutionTime(session.StartedAt),
 		formatExecutionTime(session.UpdatedAt),
 		formatOptionalExecutionTime(session.EndedAt),
@@ -167,6 +172,7 @@ func (s *ExecutionStore) GetSession(
 	session, err := scanExecutionSession(s.db.QueryRowContext(
 		ctx,
 		`SELECT id, run_id, agent_id, role, status, provider_session_id,
+		        outcome, disposition, summary, recovery_attempt,
 		        started_at, updated_at, ended_at
 		 FROM sessions WHERE id = ?`,
 		id,
@@ -187,6 +193,7 @@ func (s *ExecutionStore) ListSessions(
 	rows, err := s.db.QueryContext(
 		ctx,
 		`SELECT id, run_id, agent_id, role, status, provider_session_id,
+		        outcome, disposition, summary, recovery_attempt,
 		        started_at, updated_at, ended_at
 		 FROM sessions WHERE run_id = ? ORDER BY started_at, id`,
 		runID,
@@ -210,6 +217,82 @@ func (s *ExecutionStore) ListSessions(
 	return sessions, nil
 }
 
+func (s *ExecutionStore) ListRecoverableRuns(
+	ctx context.Context,
+) ([]execution.Run, error) {
+	rows, err := s.db.QueryContext(
+		ctx,
+		`SELECT r.id, r.feature_id, r.status, r.reason,
+		        r.started_at, r.updated_at, r.ended_at
+		 FROM runs r
+		 WHERE r.status = ?
+		    OR (r.status = ? AND EXISTS (
+		       SELECT 1 FROM sessions s
+		       WHERE s.run_id = r.id
+		         AND s.status NOT IN (?, ?, ?)
+		   ))
+		 ORDER BY r.started_at, r.id`,
+		execution.RunStatusRunning,
+		execution.RunStatusWaitingForUser,
+		execution.SessionStatusCompleted,
+		execution.SessionStatusStopped,
+		execution.SessionStatusFailed,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list recoverable runs: %w", err)
+	}
+	defer rows.Close()
+
+	runs := make([]execution.Run, 0)
+	for rows.Next() {
+		run, err := scanExecutionRun(rows)
+		if err != nil {
+			return nil, err
+		}
+		runs = append(runs, run)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate recoverable runs: %w", err)
+	}
+	return runs, nil
+}
+
+func (s *ExecutionStore) ListActiveSessions(
+	ctx context.Context,
+	runID string,
+) ([]execution.Session, error) {
+	rows, err := s.db.QueryContext(
+		ctx,
+		`SELECT id, run_id, agent_id, role, status, provider_session_id,
+		        outcome, disposition, summary, recovery_attempt,
+		        started_at, updated_at, ended_at
+		 FROM sessions
+		 WHERE run_id = ? AND status NOT IN (?, ?, ?)
+		 ORDER BY started_at, id`,
+		runID,
+		execution.SessionStatusCompleted,
+		execution.SessionStatusStopped,
+		execution.SessionStatusFailed,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list active sessions for run %q: %w", runID, err)
+	}
+	defer rows.Close()
+
+	sessions := make([]execution.Session, 0)
+	for rows.Next() {
+		session, err := scanExecutionSession(rows)
+		if err != nil {
+			return nil, err
+		}
+		sessions = append(sessions, session)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate active sessions for run %q: %w", runID, err)
+	}
+	return sessions, nil
+}
+
 func (s *ExecutionStore) TransitionSession(
 	ctx context.Context,
 	transition execution.SessionTransition,
@@ -228,6 +311,7 @@ func (s *ExecutionStore) TransitionSession(
 	session, err := scanExecutionSession(tx.QueryRowContext(
 		ctx,
 		`SELECT id, run_id, agent_id, role, status, provider_session_id,
+		        outcome, disposition, summary, recovery_attempt,
 		        started_at, updated_at, ended_at
 		 FROM sessions WHERE id = ?`,
 		transition.SessionID,
@@ -252,6 +336,19 @@ func (s *ExecutionStore) TransitionSession(
 		}
 		session.ProviderSessionID = transition.ProviderSessionID
 	}
+	if transition.Result != nil {
+		if err := transition.Result.Validate(); err != nil {
+			return execution.Session{}, err
+		}
+		if session.ProviderSessionID != "" &&
+			session.ProviderSessionID != transition.Result.ProviderSessionID {
+			return execution.Session{}, execution.ErrStateConflict
+		}
+		session.ProviderSessionID = transition.Result.ProviderSessionID
+		session.Outcome = transition.Result.Outcome
+		session.Disposition = transition.Result.Disposition
+		session.Summary = transition.Result.Summary
+	}
 
 	session.Status = transition.Status
 	session.UpdatedAt = transition.OccurredAt.UTC()
@@ -266,10 +363,14 @@ func (s *ExecutionStore) TransitionSession(
 	result, err := tx.ExecContext(
 		ctx,
 		`UPDATE sessions
-		 SET status = ?, provider_session_id = ?, updated_at = ?, ended_at = ?
+		 SET status = ?, provider_session_id = ?, outcome = ?, disposition = ?,
+		     summary = ?, updated_at = ?, ended_at = ?
 		 WHERE id = ? AND status = ?`,
 		session.Status,
 		session.ProviderSessionID,
+		session.Outcome,
+		session.Disposition,
+		session.Summary,
 		formatExecutionTime(session.UpdatedAt),
 		formatOptionalExecutionTime(session.EndedAt),
 		session.ID,
@@ -283,6 +384,70 @@ func (s *ExecutionStore) TransitionSession(
 	}
 	if err := tx.Commit(); err != nil {
 		return execution.Session{}, fmt.Errorf("commit session %q transition: %w", session.ID, err)
+	}
+	return session, nil
+}
+
+func (s *ExecutionStore) BeginSessionRecovery(
+	ctx context.Context,
+	recovery execution.SessionRecovery,
+) (execution.Session, error) {
+	if err := recovery.Validate(); err != nil {
+		return execution.Session{}, err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return execution.Session{}, fmt.Errorf("begin session recovery: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	session, err := scanExecutionSession(tx.QueryRowContext(
+		ctx,
+		`SELECT id, run_id, agent_id, role, status, provider_session_id,
+		        outcome, disposition, summary, recovery_attempt,
+		        started_at, updated_at, ended_at
+		 FROM sessions WHERE id = ?`,
+		recovery.SessionID,
+	))
+	if errors.Is(err, sql.ErrNoRows) {
+		return execution.Session{}, execution.ErrNotFound
+	}
+	if err != nil {
+		return execution.Session{}, fmt.Errorf("select session %q for recovery: %w", recovery.SessionID, err)
+	}
+	if session.Status != recovery.Expected {
+		return execution.Session{}, execution.ErrStateConflict
+	}
+
+	status := session.Status
+	if status == execution.SessionStatusRunning {
+		status = execution.SessionStatusPauseRequested
+	}
+	session.Status = status
+	session.RecoveryAttempt++
+	session.UpdatedAt = recovery.OccurredAt.UTC()
+	if err := session.Validate(); err != nil {
+		return execution.Session{}, err
+	}
+	result, err := tx.ExecContext(
+		ctx,
+		`UPDATE sessions
+		 SET status = ?, recovery_attempt = ?, updated_at = ?
+		 WHERE id = ? AND status = ?`,
+		session.Status,
+		session.RecoveryAttempt,
+		formatExecutionTime(session.UpdatedAt),
+		session.ID,
+		recovery.Expected,
+	)
+	if err != nil {
+		return execution.Session{}, fmt.Errorf("update session %q recovery: %w", session.ID, err)
+	}
+	if err := requireExecutionUpdate(result, "session", session.ID); err != nil {
+		return execution.Session{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return execution.Session{}, fmt.Errorf("commit session %q recovery: %w", session.ID, err)
 	}
 	return session, nil
 }
@@ -464,6 +629,39 @@ func (s *ExecutionStore) GetCommand(
 	return command, nil
 }
 
+func (s *ExecutionStore) ListPendingCommands(
+	ctx context.Context,
+	sessionID string,
+) ([]execution.Command, error) {
+	rows, err := s.db.QueryContext(
+		ctx,
+		`SELECT id, session_id, command_type, message, status,
+		        requested_at, applied_at, error
+		 FROM session_commands
+		 WHERE session_id = ? AND status = ?
+		 ORDER BY requested_at, id`,
+		sessionID,
+		execution.CommandStatusPending,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list pending commands for session %q: %w", sessionID, err)
+	}
+	defer rows.Close()
+
+	commands := make([]execution.Command, 0)
+	for rows.Next() {
+		command, err := scanExecutionCommand(rows)
+		if err != nil {
+			return nil, err
+		}
+		commands = append(commands, command)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate pending commands for session %q: %w", sessionID, err)
+	}
+	return commands, nil
+}
+
 func (s *ExecutionStore) ResolveCommand(
 	ctx context.Context,
 	resolution execution.CommandResolution,
@@ -588,6 +786,10 @@ func scanExecutionSession(scanner executionScanner) (execution.Session, error) {
 		&role,
 		&status,
 		&session.ProviderSessionID,
+		&session.Outcome,
+		&session.Disposition,
+		&session.Summary,
+		&session.RecoveryAttempt,
 		&startedAt,
 		&updatedAt,
 		&endedAt,
