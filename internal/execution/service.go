@@ -12,13 +12,15 @@ import (
 
 type Service struct {
 	store      Store
+	broker     *eventBroker
 	generateID func() string
 	now        func() time.Time
 }
 
 func NewService(store Store) *Service {
 	return &Service{
-		store: store,
+		store:  store,
+		broker: newEventBroker(defaultSubscriberBuffer),
 		generateID: func() string {
 			return "sev_" + rand.Text()
 		},
@@ -134,12 +136,15 @@ func (s *Service) RecordSessionEventWithID(
 	sessionID string,
 	event worker.Event,
 ) (Event, error) {
-	recorded, err := s.store.AppendEvent(ctx, PendingEvent{
+	recorded, created, err := s.store.AppendEvent(ctx, PendingEvent{
 		ID: id, SessionID: sessionID,
 		Type: event.Type, Text: event.Text, OccurredAt: s.now().UTC(),
 	})
 	if err != nil {
 		return Event{}, fmt.Errorf("record event for session %q: %w", sessionID, err)
+	}
+	if created && s.broker != nil {
+		s.broker.publish(recorded)
 	}
 	return recorded, nil
 }
@@ -190,4 +195,10 @@ func (s *Service) EventsForSession(
 	sessionID string,
 ) ([]Event, error) {
 	return s.store.ListEvents(ctx, sessionID)
+}
+
+func (s *Service) SubscribeSessionEvents(
+	sessionID string,
+) (<-chan Event, func()) {
+	return s.broker.subscribe(sessionID)
 }
