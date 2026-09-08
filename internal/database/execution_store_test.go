@@ -28,7 +28,7 @@ func TestExecutionStorePersistsAcrossDatabaseReopen(t *testing.T) {
 		ID: "sev_one", SessionID: session.ID, Type: worker.EventActivity,
 		Text: "inspecting accepted plan", OccurredAt: run.StartedAt.Add(time.Second),
 	}
-	createdEvent, err := store.AppendEvent(t.Context(), pending)
+	createdEvent, _, err := store.AppendEvent(t.Context(), pending)
 	if err != nil {
 		t.Fatalf("append event: %v", err)
 	}
@@ -91,20 +91,26 @@ func TestExecutionStoreSequencesEventsAndRetriesByID(t *testing.T) {
 		ID: "sev_one", SessionID: session.ID, Type: worker.EventMessage,
 		Text: "first", OccurredAt: now,
 	}
-	first, err := store.AppendEvent(t.Context(), firstRequest)
+	first, created, err := store.AppendEvent(t.Context(), firstRequest)
 	if err != nil {
 		t.Fatalf("append first event: %v", err)
 	}
+	if !created {
+		t.Error("expected first event to be newly created")
+	}
 	retry := firstRequest
 	retry.OccurredAt = retry.OccurredAt.Add(time.Hour)
-	retried, err := store.AppendEvent(t.Context(), retry)
+	retried, created, err := store.AppendEvent(t.Context(), retry)
 	if err != nil {
 		t.Fatalf("retry first event: %v", err)
+	}
+	if created {
+		t.Error("expected retry to return the existing event")
 	}
 	if retried != first || first.Sequence != 1 {
 		t.Errorf("expected original first event %+v, got %+v", first, retried)
 	}
-	second, err := store.AppendEvent(t.Context(), execution.PendingEvent{
+	second, _, err := store.AppendEvent(t.Context(), execution.PendingEvent{
 		ID: "sev_two", SessionID: session.ID, Type: worker.EventMessage,
 		Text: "second", OccurredAt: now.Add(time.Second),
 	})
@@ -117,7 +123,7 @@ func TestExecutionStoreSequencesEventsAndRetriesByID(t *testing.T) {
 
 	conflict := firstRequest
 	conflict.Text = "different"
-	if _, err := store.AppendEvent(t.Context(), conflict); !errors.Is(err, execution.ErrEventConflict) {
+	if _, _, err := store.AppendEvent(t.Context(), conflict); !errors.Is(err, execution.ErrEventConflict) {
 		t.Fatalf("expected error %v, got %v", execution.ErrEventConflict, err)
 	}
 }

@@ -260,13 +260,13 @@ func (s *ExecutionStore) TransitionSession(
 func (s *ExecutionStore) AppendEvent(
 	ctx context.Context,
 	pending execution.PendingEvent,
-) (execution.Event, error) {
+) (execution.Event, bool, error) {
 	if err := pending.Validate(); err != nil {
-		return execution.Event{}, err
+		return execution.Event{}, false, err
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return execution.Event{}, fmt.Errorf("begin session event: %w", err)
+		return execution.Event{}, false, fmt.Errorf("begin session event: %w", err)
 	}
 	defer func() {
 		_ = tx.Rollback()
@@ -274,15 +274,15 @@ func (s *ExecutionStore) AppendEvent(
 
 	existing, found, err := findExecutionEvent(ctx, tx, pending.ID)
 	if err != nil {
-		return execution.Event{}, err
+		return execution.Event{}, false, err
 	}
 	if found {
 		if existing.SessionID != pending.SessionID ||
 			existing.Type != pending.Type ||
 			existing.Text != pending.Text {
-			return execution.Event{}, execution.ErrEventConflict
+			return execution.Event{}, false, execution.ErrEventConflict
 		}
-		return existing, nil
+		return existing, false, nil
 	}
 
 	var sequence int64
@@ -292,7 +292,7 @@ func (s *ExecutionStore) AppendEvent(
 		 FROM session_events WHERE session_id = ?`,
 		pending.SessionID,
 	).Scan(&sequence); err != nil {
-		return execution.Event{}, fmt.Errorf(
+		return execution.Event{}, false, fmt.Errorf(
 			"select next event sequence for session %q: %w",
 			pending.SessionID,
 			err,
@@ -307,7 +307,7 @@ func (s *ExecutionStore) AppendEvent(
 		OccurredAt: pending.OccurredAt.UTC(),
 	}
 	if err := event.Validate(); err != nil {
-		return execution.Event{}, err
+		return execution.Event{}, false, err
 	}
 	if _, err := tx.ExecContext(
 		ctx,
@@ -321,12 +321,12 @@ func (s *ExecutionStore) AppendEvent(
 		event.Text,
 		formatExecutionTime(event.OccurredAt),
 	); err != nil {
-		return execution.Event{}, fmt.Errorf("insert session event %q: %w", event.ID, err)
+		return execution.Event{}, false, fmt.Errorf("insert session event %q: %w", event.ID, err)
 	}
 	if err := tx.Commit(); err != nil {
-		return execution.Event{}, fmt.Errorf("commit session event %q: %w", event.ID, err)
+		return execution.Event{}, false, fmt.Errorf("commit session event %q: %w", event.ID, err)
 	}
-	return event, nil
+	return event, true, nil
 }
 
 func (s *ExecutionStore) ListEvents(

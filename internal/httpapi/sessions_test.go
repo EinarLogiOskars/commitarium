@@ -19,8 +19,19 @@ type recordingExecutionService struct {
 	sessionErr   error
 	events       []execution.Event
 	eventsErr    error
+	subscription <-chan execution.Event
+	unsubscribed int
 	requestedID  string
 	eventSession string
+}
+
+func (s *recordingExecutionService) SubscribeSessionEvents(
+	_ string,
+) (<-chan execution.Event, func()) {
+	if s.subscription == nil {
+		s.subscription = make(chan execution.Event)
+	}
+	return s.subscription, func() { s.unsubscribed++ }
 }
 
 func (s *recordingExecutionService) GetSession(

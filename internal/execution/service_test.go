@@ -21,6 +21,7 @@ type recordingStore struct {
 	getSessionErr       error
 	appendedEvent       PendingEvent
 	appendEventResult   Event
+	appendEventCreated  bool
 	createdCommand      Command
 	createCommandResult Command
 	resolvedCommand     CommandResolution
@@ -48,9 +49,9 @@ func (s *recordingStore) GetSession(_ context.Context, _ string) (Session, error
 func (s *recordingStore) AppendEvent(
 	_ context.Context,
 	event PendingEvent,
-) (Event, error) {
+) (Event, bool, error) {
 	s.appendedEvent = event
-	return s.appendEventResult, nil
+	return s.appendEventResult, s.appendEventCreated, nil
 }
 
 func (s *recordingStore) CreateCommand(
@@ -134,7 +135,7 @@ func TestServiceRecordsObservableEvent(t *testing.T) {
 		ID: "sev_generated", SessionID: "ses_test", Sequence: 1,
 		Type: worker.EventMessage, Text: "implementation started", OccurredAt: fixedTime,
 	}
-	store := &recordingStore{appendEventResult: expected}
+	store := &recordingStore{appendEventResult: expected, appendEventCreated: true}
 	service := testService(store, fixedTime)
 
 	actual, err := service.RecordSessionEvent(t.Context(), "ses_test", worker.Event{
@@ -151,6 +152,46 @@ func TestServiceRecordsObservableEvent(t *testing.T) {
 		store.appendedEvent.SessionID != "ses_test" ||
 		store.appendedEvent.OccurredAt != fixedTime {
 		t.Errorf("unexpected pending event %+v", store.appendedEvent)
+	}
+}
+
+func TestServicePublishesOnlyNewSessionEvent(t *testing.T) {
+	fixedTime := time.Date(2026, time.September, 9, 0, 0, 0, 0, time.UTC)
+	expected := Event{
+		ID: "sev_test", SessionID: "ses_test", Sequence: 1,
+		Type: worker.EventActivity, Text: "working", OccurredAt: fixedTime,
+	}
+	store := &recordingStore{appendEventResult: expected, appendEventCreated: true}
+	service := testService(store, fixedTime)
+	service.broker = newEventBroker(1)
+	events, cancel := service.SubscribeSessionEvents("ses_test")
+	defer cancel()
+
+	if _, err := service.RecordSessionEventWithID(
+		t.Context(),
+		expected.ID,
+		expected.SessionID,
+		worker.Event{Type: expected.Type, Text: expected.Text},
+	); err != nil {
+		t.Fatalf("record new event: %v", err)
+	}
+	if actual := <-events; actual != expected {
+		t.Errorf("expected published event %+v, got %+v", expected, actual)
+	}
+
+	store.appendEventCreated = false
+	if _, err := service.RecordSessionEventWithID(
+		t.Context(),
+		expected.ID,
+		expected.SessionID,
+		worker.Event{Type: expected.Type, Text: expected.Text},
+	); err != nil {
+		t.Fatalf("retry event: %v", err)
+	}
+	select {
+	case duplicate := <-events:
+		t.Fatalf("expected retry not to publish, got %+v", duplicate)
+	default:
 	}
 }
 

@@ -48,6 +48,7 @@ type WorkflowService interface {
 type ExecutionService interface {
 	GetSession(ctx context.Context, id string) (execution.Session, error)
 	EventsForSession(ctx context.Context, sessionID string) ([]execution.Event, error)
+	SubscribeSessionEvents(sessionID string) (<-chan execution.Event, func())
 }
 
 type SessionController interface {
@@ -113,6 +114,7 @@ func New(
 	)
 	mux.HandleFunc("GET /api/v1/sessions/{id}", api.getSessionHandler)
 	mux.HandleFunc("GET /api/v1/sessions/{id}/events", api.getSessionEventsHandler)
+	mux.HandleFunc("GET /api/v1/sessions/{id}/events/stream", api.streamSessionEventsHandler)
 	mux.HandleFunc("POST /api/v1/sessions/{id}/commands", api.sendSessionCommandHandler)
 
 	return mux
