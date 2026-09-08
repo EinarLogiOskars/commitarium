@@ -9,18 +9,20 @@ import (
 )
 
 type Script struct {
-	Events  []Event
-	Summary string
+	Events      []Event
+	Disposition Disposition
+	Summary     string
 }
 
 // ScriptedAdapter is a deterministic worker used to exercise orchestration
 // without starting a real provider CLI.
 type ScriptedAdapter struct {
 	provider string
-	scripts  map[Role]Script
+	scripts  map[Role][]Script
 
-	mu       sync.Mutex
-	sessions map[string]*scriptedSession
+	mu               sync.Mutex
+	sessions         map[string]*scriptedSession
+	nextScriptByRole map[Role]int
 }
 
 var ErrScriptNotFound = errors.New("worker script not found")
@@ -31,15 +33,30 @@ var ErrInvalidSessionState = errors.New("worker command is invalid for session s
 var ErrCommandConflict = errors.New("worker command ID reused for a different command")
 
 func NewScriptedAdapter(provider string, scripts map[Role]Script) *ScriptedAdapter {
-	copiedScripts := make(map[Role]Script, len(scripts))
+	queuedScripts := make(map[Role][]Script, len(scripts))
 	for role, script := range scripts {
-		script.Events = append([]Event(nil), script.Events...)
-		copiedScripts[role] = script
+		queuedScripts[role] = []Script{script}
+	}
+	return NewQueuedScriptedAdapter(provider, queuedScripts)
+}
+
+func NewQueuedScriptedAdapter(
+	provider string,
+	scripts map[Role][]Script,
+) *ScriptedAdapter {
+	copiedScripts := make(map[Role][]Script, len(scripts))
+	for role, roleScripts := range scripts {
+		copiedScripts[role] = make([]Script, len(roleScripts))
+		for index, script := range roleScripts {
+			script.Events = append([]Event(nil), script.Events...)
+			copiedScripts[role][index] = script
+		}
 	}
 	return &ScriptedAdapter{
-		provider: strings.TrimSpace(provider),
-		scripts:  copiedScripts,
-		sessions: make(map[string]*scriptedSession),
+		provider:         strings.TrimSpace(provider),
+		scripts:          copiedScripts,
+		sessions:         make(map[string]*scriptedSession),
+		nextScriptByRole: make(map[Role]int),
 	}
 }
 
@@ -63,10 +80,13 @@ func (a *ScriptedAdapter) Start(
 		return nil, ErrSessionConflict
 	}
 
-	script, ok := a.scripts[request.Role]
-	if !ok {
+	roleScripts := a.scripts[request.Role]
+	nextScript := a.nextScriptByRole[request.Role]
+	if nextScript >= len(roleScripts) {
 		return nil, fmt.Errorf("%w for role %q", ErrScriptNotFound, request.Role)
 	}
+	script := roleScripts[nextScript]
+	a.nextScriptByRole[request.Role]++
 	session := newScriptedSession(
 		request,
 		a.provider+":"+request.SessionID,
@@ -319,8 +339,13 @@ func (s *scriptedSession) finish(outcome Outcome) {
 		return
 	}
 	s.finished = true
+	disposition := s.script.Disposition
+	if outcome == OutcomeStopped {
+		disposition = ""
+	}
 	s.result = Result{
 		Outcome:           outcome,
+		Disposition:       disposition,
 		ProviderSessionID: s.providerSessionID,
 		Summary:           s.script.Summary,
 	}

@@ -68,8 +68,17 @@ const (
 	OutcomeStopped   Outcome = "stopped"
 )
 
+type Disposition string
+
+const (
+	DispositionSucceeded        Disposition = "succeeded"
+	DispositionChangesRequested Disposition = "changes_requested"
+	DispositionInputRequired    Disposition = "input_required"
+)
+
 type Result struct {
 	Outcome           Outcome
+	Disposition       Disposition
 	ProviderSessionID string
 	Summary           string
 }
@@ -90,6 +99,7 @@ type Session interface {
 
 var ErrInvalidSessionRequest = errors.New("invalid worker session request")
 var ErrInvalidCommand = errors.New("invalid worker command")
+var ErrInvalidResult = errors.New("invalid worker result")
 
 func (role Role) IsValid() bool {
 	switch role {
@@ -142,4 +152,34 @@ func (command Command) Validate() error {
 		return fmt.Errorf("%w: type %q is not recognized", ErrInvalidCommand, command.Type)
 	}
 	return nil
+}
+
+func (outcome Outcome) IsValid() bool {
+	return outcome == OutcomeCompleted || outcome == OutcomeStopped
+}
+
+func (disposition Disposition) IsValid() bool {
+	switch disposition {
+	case DispositionSucceeded,
+		DispositionChangesRequested,
+		DispositionInputRequired:
+		return true
+	default:
+		return false
+	}
+}
+
+func (result Result) Validate() error {
+	switch {
+	case !result.Outcome.IsValid():
+		return fmt.Errorf("%w: outcome %q is not recognized", ErrInvalidResult, result.Outcome)
+	case strings.TrimSpace(result.ProviderSessionID) == "":
+		return fmt.Errorf("%w: provider session ID is required", ErrInvalidResult)
+	case result.Outcome == OutcomeCompleted && !result.Disposition.IsValid():
+		return fmt.Errorf("%w: disposition %q is not recognized", ErrInvalidResult, result.Disposition)
+	case result.Outcome == OutcomeStopped && result.Disposition != "":
+		return fmt.Errorf("%w: stopped session cannot have a disposition", ErrInvalidResult)
+	default:
+		return nil
+	}
 }

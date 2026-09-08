@@ -87,3 +87,33 @@ func TestCommandValidate(t *testing.T) {
 		})
 	}
 }
+
+func TestResultValidate(t *testing.T) {
+	completed := Result{
+		Outcome:           OutcomeCompleted,
+		Disposition:       DispositionSucceeded,
+		ProviderSessionID: "provider_session_test",
+	}
+	if err := completed.Validate(); err != nil {
+		t.Fatalf("validate completed result: %v", err)
+	}
+	stopped := Result{
+		Outcome:           OutcomeStopped,
+		ProviderSessionID: "provider_session_test",
+	}
+	if err := stopped.Validate(); err != nil {
+		t.Fatalf("validate stopped result: %v", err)
+	}
+
+	invalid := []Result{
+		{Outcome: "unknown", ProviderSessionID: "provider_session_test"},
+		{Outcome: OutcomeCompleted, Disposition: DispositionSucceeded},
+		{Outcome: OutcomeCompleted, ProviderSessionID: "provider_session_test"},
+		{Outcome: OutcomeStopped, Disposition: DispositionSucceeded, ProviderSessionID: "provider_session_test"},
+	}
+	for _, result := range invalid {
+		if err := result.Validate(); !errors.Is(err, ErrInvalidResult) {
+			t.Errorf("expected error %v for %+v, got %v", ErrInvalidResult, result, err)
+		}
+	}
+}
