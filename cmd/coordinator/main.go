@@ -11,6 +11,7 @@ import (
 	"github.com/EinarLogiOskars/commitarium/internal/feature"
 	"github.com/EinarLogiOskars/commitarium/internal/httpapi"
 	"github.com/EinarLogiOskars/commitarium/internal/project"
+	"github.com/EinarLogiOskars/commitarium/internal/workflow"
 )
 
 func main() {
@@ -43,7 +44,9 @@ func run(ctx context.Context) error {
 	projectService := project.NewService(projectStore)
 	featureStore := coordinatordatabase.NewFeatureStore(db)
 	featureService := feature.NewService(featureStore, projectService)
-	handler := httpapi.New(projectService, featureService)
+	workflowStore := coordinatordatabase.NewWorkflowStore(db)
+	workflowService := workflow.NewService(workflowStore)
+	handler := httpapi.New(projectService, featureService, workflowService)
 
 	log.Print("Listening...")
 	if err := http.ListenAndServe(":8080", handler); err != nil {
