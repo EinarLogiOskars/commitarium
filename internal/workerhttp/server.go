@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 	"unicode"
 )
 
@@ -38,10 +39,13 @@ type Service interface {
 }
 
 type ServerConfig struct {
-	BearerToken           string
-	Provider              Provider
-	Capabilities          []Capability
-	MaxConcurrentAttempts int
+	BearerToken             string
+	Provider                Provider
+	Capabilities            []Capability
+	MaxConcurrentAttempts   int
+	EventSource             EventSource
+	EventStreamHeartbeat    time.Duration
+	EventStreamWriteTimeout time.Duration
 }
 
 // ServiceError lets process-control code select a stable protocol error
@@ -83,9 +87,12 @@ func (serviceError *ServiceError) Unwrap() error {
 
 type Server struct {
 	service      Service
+	eventSource  EventSource
 	capabilities CapabilitiesResponse
 	supported    map[Capability]struct{}
 	tokenDigest  [sha256.Size]byte
+	heartbeat    time.Duration
+	writeTimeout time.Duration
 	mux          *http.ServeMux
 }
 
@@ -111,11 +118,18 @@ func NewServer(config ServerConfig, service Service) (http.Handler, error) {
 	for _, capability := range capabilities.Capabilities {
 		supported[capability] = struct{}{}
 	}
+	heartbeat, writeTimeout, err := validateEventStreamConfig(config, supported)
+	if err != nil {
+		return nil, err
+	}
 	server := &Server{
 		service:      service,
+		eventSource:  config.EventSource,
 		capabilities: capabilities,
 		supported:    supported,
 		tokenDigest:  sha256.Sum256([]byte(config.BearerToken)),
+		heartbeat:    heartbeat,
+		writeTimeout: writeTimeout,
 		mux:          http.NewServeMux(),
 	}
 	server.routes()
@@ -140,6 +154,10 @@ func (server *Server) routes() {
 	server.mux.HandleFunc(
 		APIBasePath+"/sessions/{sessionID}/attempts/{attemptID}/force-stop",
 		server.authenticate(server.requireMethod(http.MethodPost, server.forceStop)),
+	)
+	server.mux.HandleFunc(
+		APIBasePath+"/sessions/{sessionID}/attempts/{attemptID}/events/stream",
+		server.authenticate(server.requireMethod(http.MethodGet, server.streamEvents)),
 	)
 	server.mux.HandleFunc("/", server.notFound)
 }

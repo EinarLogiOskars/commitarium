@@ -230,6 +230,7 @@ const (
 	ErrorConfigurationMismatch  ErrorCode = "configuration_mismatch"
 	ErrorIndeterminateState     ErrorCode = "indeterminate_state"
 	ErrorRedactionFailed        ErrorCode = "redaction_failed"
+	ErrorInvalidEventStream     ErrorCode = "invalid_event_stream"
 	ErrorInternal               ErrorCode = "internal_error"
 )
 
