@@ -1,0 +1,239 @@
+package execution
+
+import (
+	"errors"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/EinarLogiOskars/commitarium/internal/worker"
+)
+
+type RunStatus string
+
+const (
+	RunStatusRunning        RunStatus = "running"
+	RunStatusWaitingForUser RunStatus = "waiting_for_user"
+	RunStatusSucceeded      RunStatus = "succeeded"
+	RunStatusStopped        RunStatus = "stopped"
+	RunStatusFailed         RunStatus = "failed"
+)
+
+type Run struct {
+	ID        string
+	FeatureID string
+	Status    RunStatus
+	Reason    string
+	StartedAt time.Time
+	UpdatedAt time.Time
+	EndedAt   *time.Time
+}
+
+type SessionStatus string
+
+const (
+	SessionStatusStarting       SessionStatus = "starting"
+	SessionStatusRunning        SessionStatus = "running"
+	SessionStatusPauseRequested SessionStatus = "pause_requested"
+	SessionStatusPaused         SessionStatus = "paused"
+	SessionStatusCompleted      SessionStatus = "completed"
+	SessionStatusStopped        SessionStatus = "stopped"
+	SessionStatusFailed         SessionStatus = "failed"
+)
+
+type Session struct {
+	ID                string
+	RunID             string
+	AgentID           string
+	Role              worker.Role
+	Status            SessionStatus
+	ProviderSessionID string
+	StartedAt         time.Time
+	UpdatedAt         time.Time
+	EndedAt           *time.Time
+}
+
+type Event struct {
+	ID         string
+	SessionID  string
+	Sequence   int64
+	Type       worker.EventType
+	Text       string
+	OccurredAt time.Time
+}
+
+type CommandStatus string
+
+const (
+	CommandStatusPending  CommandStatus = "pending"
+	CommandStatusApplied  CommandStatus = "applied"
+	CommandStatusRejected CommandStatus = "rejected"
+)
+
+type Command struct {
+	ID          string
+	SessionID   string
+	Type        worker.CommandType
+	Message     string
+	Status      CommandStatus
+	RequestedAt time.Time
+	AppliedAt   *time.Time
+	Error       string
+}
+
+var ErrInvalidRun = errors.New("invalid execution run")
+var ErrInvalidSession = errors.New("invalid execution session")
+var ErrInvalidEvent = errors.New("invalid execution event")
+var ErrInvalidCommand = errors.New("invalid execution command")
+
+func (status RunStatus) IsValid() bool {
+	switch status {
+	case RunStatusRunning,
+		RunStatusWaitingForUser,
+		RunStatusSucceeded,
+		RunStatusStopped,
+		RunStatusFailed:
+		return true
+	default:
+		return false
+	}
+}
+
+func (status RunStatus) IsTerminal() bool {
+	return status == RunStatusSucceeded ||
+		status == RunStatusStopped ||
+		status == RunStatusFailed
+}
+
+func (run Run) Validate() error {
+	switch {
+	case strings.TrimSpace(run.ID) == "":
+		return fmt.Errorf("%w: ID is required", ErrInvalidRun)
+	case strings.TrimSpace(run.FeatureID) == "":
+		return fmt.Errorf("%w: feature ID is required", ErrInvalidRun)
+	case !run.Status.IsValid():
+		return fmt.Errorf("%w: status %q is not recognized", ErrInvalidRun, run.Status)
+	case run.StartedAt.IsZero():
+		return fmt.Errorf("%w: start time is required", ErrInvalidRun)
+	case run.UpdatedAt.Before(run.StartedAt):
+		return fmt.Errorf("%w: update time precedes start time", ErrInvalidRun)
+	case run.Status.IsTerminal() && run.EndedAt == nil:
+		return fmt.Errorf("%w: terminal run requires an end time", ErrInvalidRun)
+	case !run.Status.IsTerminal() && run.EndedAt != nil:
+		return fmt.Errorf("%w: active run cannot have an end time", ErrInvalidRun)
+	case run.EndedAt != nil && run.EndedAt.Before(run.StartedAt):
+		return fmt.Errorf("%w: end time precedes start time", ErrInvalidRun)
+	case run.EndedAt != nil && run.UpdatedAt.Before(*run.EndedAt):
+		return fmt.Errorf("%w: update time precedes end time", ErrInvalidRun)
+	default:
+		return nil
+	}
+}
+
+func (status SessionStatus) IsValid() bool {
+	switch status {
+	case SessionStatusStarting,
+		SessionStatusRunning,
+		SessionStatusPauseRequested,
+		SessionStatusPaused,
+		SessionStatusCompleted,
+		SessionStatusStopped,
+		SessionStatusFailed:
+		return true
+	default:
+		return false
+	}
+}
+
+func (status SessionStatus) IsTerminal() bool {
+	return status == SessionStatusCompleted ||
+		status == SessionStatusStopped ||
+		status == SessionStatusFailed
+}
+
+func (session Session) Validate() error {
+	switch {
+	case strings.TrimSpace(session.ID) == "":
+		return fmt.Errorf("%w: ID is required", ErrInvalidSession)
+	case strings.TrimSpace(session.RunID) == "":
+		return fmt.Errorf("%w: run ID is required", ErrInvalidSession)
+	case strings.TrimSpace(session.AgentID) == "":
+		return fmt.Errorf("%w: agent ID is required", ErrInvalidSession)
+	case !session.Role.IsValid():
+		return fmt.Errorf("%w: role %q is not recognized", ErrInvalidSession, session.Role)
+	case !session.Status.IsValid():
+		return fmt.Errorf("%w: status %q is not recognized", ErrInvalidSession, session.Status)
+	case session.StartedAt.IsZero():
+		return fmt.Errorf("%w: start time is required", ErrInvalidSession)
+	case session.UpdatedAt.Before(session.StartedAt):
+		return fmt.Errorf("%w: update time precedes start time", ErrInvalidSession)
+	case session.Status.IsTerminal() && session.EndedAt == nil:
+		return fmt.Errorf("%w: terminal session requires an end time", ErrInvalidSession)
+	case !session.Status.IsTerminal() && session.EndedAt != nil:
+		return fmt.Errorf("%w: active session cannot have an end time", ErrInvalidSession)
+	case session.EndedAt != nil && session.EndedAt.Before(session.StartedAt):
+		return fmt.Errorf("%w: end time precedes start time", ErrInvalidSession)
+	case session.EndedAt != nil && session.UpdatedAt.Before(*session.EndedAt):
+		return fmt.Errorf("%w: update time precedes end time", ErrInvalidSession)
+	default:
+		return nil
+	}
+}
+
+func (event Event) Validate() error {
+	switch {
+	case strings.TrimSpace(event.ID) == "":
+		return fmt.Errorf("%w: ID is required", ErrInvalidEvent)
+	case strings.TrimSpace(event.SessionID) == "":
+		return fmt.Errorf("%w: session ID is required", ErrInvalidEvent)
+	case event.Sequence < 1:
+		return fmt.Errorf("%w: sequence must be positive", ErrInvalidEvent)
+	case strings.TrimSpace(string(event.Type)) == "":
+		return fmt.Errorf("%w: type is required", ErrInvalidEvent)
+	case strings.TrimSpace(event.Text) == "":
+		return fmt.Errorf("%w: text is required", ErrInvalidEvent)
+	case event.OccurredAt.IsZero():
+		return fmt.Errorf("%w: occurrence time is required", ErrInvalidEvent)
+	default:
+		return nil
+	}
+}
+
+func (status CommandStatus) IsValid() bool {
+	return status == CommandStatusPending ||
+		status == CommandStatusApplied ||
+		status == CommandStatusRejected
+}
+
+func (command Command) Validate() error {
+	if strings.TrimSpace(command.SessionID) == "" {
+		return fmt.Errorf("%w: session ID is required", ErrInvalidCommand)
+	}
+	if err := (worker.Command{
+		ID:      command.ID,
+		Type:    command.Type,
+		Message: command.Message,
+	}).Validate(); err != nil {
+		return fmt.Errorf("%w: %v", ErrInvalidCommand, err)
+	}
+	switch {
+	case !command.Status.IsValid():
+		return fmt.Errorf("%w: status %q is not recognized", ErrInvalidCommand, command.Status)
+	case command.RequestedAt.IsZero():
+		return fmt.Errorf("%w: request time is required", ErrInvalidCommand)
+	case command.Status == CommandStatusPending && command.AppliedAt != nil:
+		return fmt.Errorf("%w: pending command cannot have an applied time", ErrInvalidCommand)
+	case command.Status == CommandStatusPending && command.Error != "":
+		return fmt.Errorf("%w: pending command cannot have an error", ErrInvalidCommand)
+	case command.Status != CommandStatusPending && command.AppliedAt == nil:
+		return fmt.Errorf("%w: resolved command requires an applied time", ErrInvalidCommand)
+	case command.AppliedAt != nil && command.AppliedAt.Before(command.RequestedAt):
+		return fmt.Errorf("%w: applied time precedes request time", ErrInvalidCommand)
+	case command.Status == CommandStatusApplied && command.Error != "":
+		return fmt.Errorf("%w: applied command cannot have an error", ErrInvalidCommand)
+	case command.Status == CommandStatusRejected && strings.TrimSpace(command.Error) == "":
+		return fmt.Errorf("%w: rejected command requires an error", ErrInvalidCommand)
+	default:
+		return nil
+	}
+}
