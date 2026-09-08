@@ -82,7 +82,7 @@ func TestCreateFeature(t *testing.T) {
 	)
 
 	recorder := httptest.NewRecorder()
-	New(nil, features).ServeHTTP(recorder, request)
+	New(nil, features, nil).ServeHTTP(recorder, request)
 
 	response := recorder.Result()
 	defer response.Body.Close()
@@ -142,7 +142,7 @@ func TestCreateFeatureRejectsMalformedJSON(t *testing.T) {
 	)
 
 	recorder := httptest.NewRecorder()
-	New(nil, features).ServeHTTP(recorder, request)
+	New(nil, features, nil).ServeHTTP(recorder, request)
 
 	response := recorder.Result()
 	defer response.Body.Close()
@@ -209,7 +209,7 @@ func TestCreateFeatureMapsServiceErrors(t *testing.T) {
 			)
 
 			recorder := httptest.NewRecorder()
-			New(nil, features).ServeHTTP(recorder, request)
+			New(nil, features, nil).ServeHTTP(recorder, request)
 
 			response := recorder.Result()
 			defer response.Body.Close()
@@ -264,7 +264,7 @@ func TestGetFeatureByID(t *testing.T) {
 	)
 
 	recorder := httptest.NewRecorder()
-	New(nil, features).ServeHTTP(recorder, request)
+	New(nil, features, nil).ServeHTTP(recorder, request)
 
 	response := recorder.Result()
 	defer response.Body.Close()
@@ -333,7 +333,7 @@ func TestGetFeatureByIDMapsServiceErrors(t *testing.T) {
 			)
 
 			recorder := httptest.NewRecorder()
-			New(nil, features).ServeHTTP(recorder, request)
+			New(nil, features, nil).ServeHTTP(recorder, request)
 
 			response := recorder.Result()
 			defer response.Body.Close()

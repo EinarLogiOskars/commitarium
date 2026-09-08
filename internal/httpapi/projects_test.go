@@ -79,7 +79,7 @@ func TestCreateProject(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 
 	recorder := httptest.NewRecorder()
-	New(service, nil).ServeHTTP(recorder, req)
+	New(service, nil, nil).ServeHTTP(recorder, req)
 
 	var response struct {
 		ID        string    `json:"id"`
@@ -141,7 +141,7 @@ func TestCreateProjectRejectsMalformedJSON(t *testing.T) {
 	request.Header.Set("Content-Type", "application/json")
 
 	recorder := httptest.NewRecorder()
-	New(service, nil).ServeHTTP(recorder, request)
+	New(service, nil, nil).ServeHTTP(recorder, request)
 
 	response := recorder.Result()
 	defer response.Body.Close()
@@ -200,7 +200,7 @@ func TestCreateProjectRejectsEmptyName(t *testing.T) {
 	)
 
 	recorder := httptest.NewRecorder()
-	New(service, nil).ServeHTTP(recorder, request)
+	New(service, nil, nil).ServeHTTP(recorder, request)
 
 	response := recorder.Result()
 	defer response.Body.Close()
@@ -253,7 +253,7 @@ func TestCreateProjectHandlesUnexpectedError(t *testing.T) {
 	)
 
 	recorder := httptest.NewRecorder()
-	New(service, nil).ServeHTTP(recorder, request)
+	New(service, nil, nil).ServeHTTP(recorder, request)
 
 	response := recorder.Result()
 	defer response.Body.Close()
@@ -316,7 +316,7 @@ func TestGetProjectByID(t *testing.T) {
 	)
 
 	recorder := httptest.NewRecorder()
-	New(projects, nil).ServeHTTP(recorder, request)
+	New(projects, nil, nil).ServeHTTP(recorder, request)
 
 	response := recorder.Result()
 	defer response.Body.Close()
@@ -375,7 +375,7 @@ func TestGetProjectByIDReturnsNotFound(t *testing.T) {
 	)
 
 	recorder := httptest.NewRecorder()
-	New(service, nil).ServeHTTP(recorder, request)
+	New(service, nil, nil).ServeHTTP(recorder, request)
 
 	response := recorder.Result()
 	defer response.Body.Close()
