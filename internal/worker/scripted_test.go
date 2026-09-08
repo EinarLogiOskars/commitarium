@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 )
 
 func TestScriptedAdapterRunsDeterministicSession(t *testing.T) {
@@ -42,6 +43,26 @@ func TestScriptedAdapterRunsDeterministicSession(t *testing.T) {
 	}
 	if _, ok := <-session.Events(); ok {
 		t.Fatal("expected event stream to close after completion")
+	}
+}
+
+func TestAutomaticScriptedAdapterAdvancesSession(t *testing.T) {
+	adapter := NewAutomaticScriptedAdapter(testScriptedAdapter(), time.Millisecond)
+	session, err := adapter.Start(t.Context(), testSessionRequest())
+	if err != nil {
+		t.Fatalf("start automatic session: %v", err)
+	}
+
+	events := make([]Event, 0, 2)
+	for event := range session.Events() {
+		events = append(events, event)
+	}
+	result, err := session.Wait(t.Context())
+	if err != nil {
+		t.Fatalf("wait for automatic session: %v", err)
+	}
+	if len(events) != 2 || result.Outcome != OutcomeCompleted {
+		t.Fatalf("unexpected automatic result %+v with events %+v", result, events)
 	}
 }
 

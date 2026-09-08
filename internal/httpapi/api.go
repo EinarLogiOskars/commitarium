@@ -46,9 +46,20 @@ type WorkflowService interface {
 }
 
 type ExecutionService interface {
+	GetRun(ctx context.Context, id string) (execution.Run, error)
+	SessionsForRun(ctx context.Context, runID string) ([]execution.Session, error)
 	GetSession(ctx context.Context, id string) (execution.Session, error)
 	EventsForSession(ctx context.Context, sessionID string) ([]execution.Event, error)
 	SubscribeSessionEvents(sessionID string) (<-chan execution.Event, func())
+}
+
+type RunStarter interface {
+	Start(
+		ctx context.Context,
+		runID string,
+		featureID string,
+		goal string,
+	) (execution.Run, bool, error)
 }
 
 type SessionController interface {
@@ -65,6 +76,7 @@ type API struct {
 	workflow   WorkflowService
 	execution  ExecutionService
 	controller SessionController
+	starter    RunStarter
 }
 
 func New(
@@ -73,6 +85,7 @@ func New(
 	workflow WorkflowService,
 	executionService ExecutionService,
 	controller SessionController,
+	starter RunStarter,
 ) http.Handler {
 	api := &API{
 		projects:   projects,
@@ -80,6 +93,7 @@ func New(
 		workflow:   workflow,
 		execution:  executionService,
 		controller: controller,
+		starter:    starter,
 	}
 
 	mux := http.NewServeMux()
@@ -112,6 +126,11 @@ func New(
 		"GET /api/v1/projects/{projectID}/features/{id}/events/stream",
 		api.streamFeatureEventsHandler,
 	)
+	mux.HandleFunc(
+		"POST /api/v1/projects/{projectID}/features/{id}/runs",
+		api.startRunHandler,
+	)
+	mux.HandleFunc("GET /api/v1/runs/{id}", api.getRunHandler)
 	mux.HandleFunc("GET /api/v1/sessions/{id}", api.getSessionHandler)
 	mux.HandleFunc("GET /api/v1/sessions/{id}/events", api.getSessionEventsHandler)
 	mux.HandleFunc("GET /api/v1/sessions/{id}/events/stream", api.streamSessionEventsHandler)

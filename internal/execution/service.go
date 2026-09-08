@@ -190,6 +190,13 @@ func (s *Service) GetSession(ctx context.Context, id string) (Session, error) {
 	return s.store.GetSession(ctx, id)
 }
 
+func (s *Service) SessionsForRun(
+	ctx context.Context,
+	runID string,
+) ([]Session, error) {
+	return s.store.ListSessions(ctx, runID)
+}
+
 func (s *Service) EventsForSession(
 	ctx context.Context,
 	sessionID string,

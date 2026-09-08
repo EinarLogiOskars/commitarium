@@ -67,6 +67,13 @@ func TestExecutionStorePersistsAcrossDatabaseReopen(t *testing.T) {
 	if storedSession != session {
 		t.Errorf("expected session %+v, got %+v", session, storedSession)
 	}
+	sessions, err := reopenedStore.ListSessions(t.Context(), run.ID)
+	if err != nil {
+		t.Fatalf("list persisted sessions: %v", err)
+	}
+	if len(sessions) != 1 || sessions[0] != session {
+		t.Errorf("expected session list [%+v], got %+v", session, sessions)
+	}
 	events, err := reopenedStore.ListEvents(t.Context(), session.ID)
 	if err != nil {
 		t.Fatalf("list persisted events: %v", err)

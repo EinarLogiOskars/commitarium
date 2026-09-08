@@ -15,6 +15,10 @@ import (
 )
 
 type recordingExecutionService struct {
+	run          execution.Run
+	runErr       error
+	sessions     []execution.Session
+	sessionsErr  error
 	session      execution.Session
 	sessionErr   error
 	events       []execution.Event
@@ -23,6 +27,20 @@ type recordingExecutionService struct {
 	unsubscribed int
 	requestedID  string
 	eventSession string
+}
+
+func (s *recordingExecutionService) GetRun(
+	_ context.Context,
+	_ string,
+) (execution.Run, error) {
+	return s.run, s.runErr
+}
+
+func (s *recordingExecutionService) SessionsForRun(
+	_ context.Context,
+	_ string,
+) ([]execution.Session, error) {
+	return s.sessions, s.sessionsErr
 }
 
 func (s *recordingExecutionService) SubscribeSessionEvents(
@@ -80,7 +98,7 @@ func TestGetSessionAndEvents(t *testing.T) {
 			Type: worker.EventActivity, Text: "editing files", OccurredAt: fixedTime,
 		}},
 	}
-	handler := New(nil, nil, nil, executions, nil)
+	handler := New(nil, nil, nil, executions, nil, nil)
 
 	sessionRecorder := httptest.NewRecorder()
 	handler.ServeHTTP(sessionRecorder, httptest.NewRequest(
@@ -136,7 +154,7 @@ func TestSendSessionCommand(t *testing.T) {
 	request.Header.Set("Idempotency-Key", "cmd_test")
 	recorder := httptest.NewRecorder()
 
-	New(nil, nil, nil, executions, controller).ServeHTTP(recorder, request)
+	New(nil, nil, nil, executions, controller, nil).ServeHTTP(recorder, request)
 
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("expected status %d, got %d", http.StatusOK, recorder.Code)
@@ -184,7 +202,7 @@ func TestSessionEndpointsMapExpectedErrors(t *testing.T) {
 			request := httptest.NewRequest(test.method, test.path, strings.NewReader(test.body))
 			request.Header.Set("Idempotency-Key", test.key)
 			recorder := httptest.NewRecorder()
-			New(nil, nil, nil, executions, controller).ServeHTTP(recorder, request)
+			New(nil, nil, nil, executions, controller, nil).ServeHTTP(recorder, request)
 
 			if recorder.Code != test.status {
 				t.Fatalf("expected status %d, got %d", test.status, recorder.Code)

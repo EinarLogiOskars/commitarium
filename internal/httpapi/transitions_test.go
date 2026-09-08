@@ -89,7 +89,7 @@ func TestTransitionFeature(t *testing.T) {
 	request.Header.Set("Idempotency-Key", "cmd_test")
 	recorder := httptest.NewRecorder()
 
-	New(nil, features, workflows, nil, nil).ServeHTTP(recorder, request)
+	New(nil, features, workflows, nil, nil, nil).ServeHTTP(recorder, request)
 
 	response := recorder.Result()
 	defer response.Body.Close()
@@ -140,7 +140,7 @@ func TestTransitionFeatureRejectsInvalidRequests(t *testing.T) {
 			request := httptest.NewRequest(http.MethodPost, "/api/v1/projects/prj_test/features/fea_test/transitions", strings.NewReader(test.body))
 			request.Header.Set("Idempotency-Key", test.key)
 			recorder := httptest.NewRecorder()
-			New(nil, features, workflows, nil, nil).ServeHTTP(recorder, request)
+			New(nil, features, workflows, nil, nil, nil).ServeHTTP(recorder, request)
 
 			response := recorder.Result()
 			defer response.Body.Close()
@@ -193,7 +193,7 @@ func TestGetFeatureEvents(t *testing.T) {
 	)
 	recorder := httptest.NewRecorder()
 
-	New(nil, features, workflows, nil, nil).ServeHTTP(recorder, request)
+	New(nil, features, workflows, nil, nil, nil).ServeHTTP(recorder, request)
 
 	response := recorder.Result()
 	defer response.Body.Close()
