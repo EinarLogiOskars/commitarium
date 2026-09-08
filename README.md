@@ -89,8 +89,11 @@ See [Coordinator API](docs/coordinator-api.md) for the complete route list,
 streaming endpoints, and session controls.
 
 The versioned [internal worker API](docs/worker-api.md) now has tested client and
-server components for authenticated attempt inspection and control. They are
-not yet connected to a real worker process or included in Docker Compose.
+server components for authenticated attempt inspection and control. Its worker
+server can also replay and stream safe, structured agent activity, providing the
+data foundation for timelines and future graphical agent views. Coordinator
+stream ingestion, a real worker process, and worker Compose services are not yet
+implemented.
 
 ## Development checks
 

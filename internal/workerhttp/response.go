@@ -117,7 +117,7 @@ func statusForErrorCode(code ErrorCode) int {
 		return http.StatusConflict
 	case ErrorProfileUnavailable, ErrorWorkspaceUnavailable:
 		return http.StatusServiceUnavailable
-	case ErrorRedactionFailed, ErrorInternal:
+	case ErrorRedactionFailed, ErrorInvalidEventStream, ErrorInternal:
 		return http.StatusInternalServerError
 	default:
 		return http.StatusInternalServerError

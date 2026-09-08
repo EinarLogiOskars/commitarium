@@ -44,11 +44,72 @@ are not cached.
 | `GET` | `/internal/v1/capabilities` | Report the provider and supported operations |
 | `PUT` | `/internal/v1/sessions/{sessionID}/attempts/{attemptID}` | Start or resume one exact provider attempt |
 | `GET` | `/internal/v1/sessions/{sessionID}/attempts/{attemptID}` | Inspect the current state of that attempt |
+| `GET` | `/internal/v1/sessions/{sessionID}/attempts/{attemptID}/events/stream` | Replay and follow the attempt's safe activity events |
 | `POST` | `/internal/v1/sessions/{sessionID}/attempts/{attemptID}/commands` | Send a message, pause, continue, or request a clean stop |
 | `POST` | `/internal/v1/sessions/{sessionID}/attempts/{attemptID}/force-stop` | Forcibly terminate that exact process through its supervisor |
 
-The event-history and SSE routes are deliberately deferred to a separate
-commit.
+The stream route is available only when the worker advertises the
+`event_replay` capability and has an event source. A separate JSON event-history
+route is not needed by the current protocol because reconnecting to the stream
+performs the durable replay before following live activity.
+
+## Live activity stream
+
+The event stream uses Server-Sent Events (SSE), a one-way HTTP stream from the
+worker to the coordinator. Agent controls remain separate authenticated `POST`
+requests; closing a stream releases only that subscription and does not stop or
+pause the provider process.
+
+Each event has a durable, attempt-local sequence number:
+
+```text
+id: 18
+event: activity
+data: {"session_id":"ses_123","attempt_id":"att_456","sequence":18,"type":"activity","text":"Running Go tests","occurred_at":"2026-09-08T14:00:18Z","redaction":{"count":0}}
+```
+
+The event name and JSON data describe safe normalized activity such as agent
+messages, work summaries, requests for input, pause/continue acknowledgements,
+recovery assessments, and terminal results. The attempt inspection route is
+still authoritative for whether the provider is currently starting, running,
+paused, stopping, indeterminate, or terminal. Stream silence is not evidence
+that the agent stopped working.
+
+To reconnect, the coordinator sends the last sequence it durably accepted:
+
+```http
+Last-Event-ID: 17
+```
+
+The worker replays sequence 18 onward and then follows new events. The event
+source opens durable replay and the live subscription as one operation. This
+prevents an event from being lost in a timing gap between reading stored history
+and beginning to listen for new activity.
+
+The HTTP layer validates that replay and live events:
+
+- belong to the session and attempt in the URL;
+- contain valid redacted event data; and
+- have consecutive sequence numbers without gaps or duplicates.
+
+Replay is completely checked before the `200 OK` stream begins. Invalid replay
+therefore returns a normal JSON `invalid_event_stream` error. If invalid data is
+encountered after live streaming has begun, the worker sends one final
+`protocol_error` SSE frame and closes the connection. The coordinator can then
+inspect the attempt and journal instead of treating questionable activity as
+valid.
+
+During quiet periods, `: keep-alive` comment frames keep intermediaries from
+closing an otherwise healthy connection. They confirm only that the stream is
+connected; they do not mean the agent performed work. Every event and heartbeat
+uses a bounded write deadline so a client that stops reading cannot hold worker
+resources forever.
+
+The stream transports already-normalized, already-redacted `Event` values. The
+provider-specific parser and fail-closed redaction pipeline remain the worker
+supervisor's responsibility and are not implemented yet. Provider-native
+transcripts, credentials, authentication data, and hidden model reasoning are
+never valid activity-stream payloads.
 
 ## Coordinator client
 
@@ -139,9 +200,12 @@ worker decision.
 
 ## Current boundary
 
-The HTTP handler depends on a small Go service interface, and the coordinator
-client implements that same interface over the network. A future worker
-supervisor and durable journal will implement the server side. Keeping this
-translation separate means process management, persistence, provider
-credentials, and Codex or Claude Code behavior can be added without changing
-how requests are authenticated and decoded.
+The HTTP handler depends on a small process-control service interface plus a
+separate event-source interface. Tests currently supply safe fake events; there
+is no durable worker journal yet. The coordinator client implements the
+non-streaming service interface over the network, while its SSE reader is the
+next transport slice. A future worker supervisor and durable journal will
+implement the server side. Keeping this translation separate means process
+management, persistence, provider credentials, and Codex or Claude Code
+behavior can be added without changing how requests are authenticated and
+decoded.

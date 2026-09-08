@@ -498,6 +498,7 @@ func TestStatusForErrorCode(t *testing.T) {
 		ErrorProfileUnavailable:     http.StatusServiceUnavailable,
 		ErrorWorkspaceUnavailable:   http.StatusServiceUnavailable,
 		ErrorRedactionFailed:        http.StatusInternalServerError,
+		ErrorInvalidEventStream:     http.StatusInternalServerError,
 		ErrorInternal:               http.StatusInternalServerError,
 	}
 	for code, want := range tests {

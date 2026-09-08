@@ -471,6 +471,7 @@ func (code ErrorCode) IsValid() bool {
 		ErrorConfigurationMismatch,
 		ErrorIndeterminateState,
 		ErrorRedactionFailed,
+		ErrorInvalidEventStream,
 		ErrorInternal:
 		return true
 	default:
