@@ -14,13 +14,13 @@ The first supported collaboration is between Codex CLI and Claude Code. The desi
 
 ## Core principles
 
-1. **Human-directed:** The user defines the feature, resolves genuine disagreements, approves sensitive actions, and performs the final review before merge.
+1. **Human-directed:** The user defines the feature, resolves genuine disagreements, chooses whether internal merges require explicit approval, and approves sensitive host actions.
 2. **Deliberate collaboration:** Agents challenge assumptions and work toward a plan they can both support. Neither agent should blindly agree with the other.
 3. **Independent review:** The agent acting as reviewer must critically evaluate the implementation rather than ratify the coder's work.
 4. **Context continuity:** The agreed plan, architectural reasoning, implementation history, and review history remain available throughout the feature lifecycle.
 5. **Auditable work:** Plans, commits, reviews, findings, responses, test results, and decisions are durable and inspectable.
 6. **Local-first isolation:** Agent execution and CI run inside controlled containers, protecting the host and the user's upstream repository.
-7. **Clean promotion:** Iterative agent activity stays in the internal forge. GitHub receives a clean pull request only when the feature is ready for human review.
+7. **Controlled handoff:** Iterative agent activity stays in the internal forge. Accepted work merges into Forgejo's default branch; any later GitHub action is an explicit user-controlled operation at the trusted host boundary.
 8. **Provider choice:** The user chooses which agent codes and which reviews, and can configure subscription-backed or API-backed authentication explicitly.
 9. **No silent billing changes:** The system never silently switches from subscription usage to API billing, or between billing profiles.
 10. **One workspace, many projects:** One Commitarium installation manages all projects imported by the user.
@@ -34,7 +34,7 @@ The initial product will provide:
 - A desktop application that manages one local Commitarium workspace.
 - A Docker Compose stack shared by all imported projects.
 - Project and feature conversations with the user, Codex, and Claude.
-- A structured feature workflow from discovery through final GitHub pull request.
+- A structured feature workflow from discovery through an approved merge into Forgejo's default branch.
 - An internal Forgejo instance with distinct agent identities.
 - Isolated implementation, review, and CI activity.
 - Configurable coder and reviewer assignments.
@@ -103,7 +103,7 @@ It is responsible for:
 - Starting and stopping known Commitarium services.
 - Reporting service health and versions.
 - Handling narrowly scoped host integrations.
-- Performing final GitHub promotion without spreading GitHub credentials throughout the stack.
+- Performing narrowly allowlisted host-side Git operations, including optional user-triggered GitHub handoff, without exposing host credentials to the Compose stack.
 
 ### Workflow coordinator
 
@@ -144,6 +144,7 @@ Forgejo is the internal Git server and durable collaboration record. Codex and C
 Forgejo stores:
 
 - Internal repositories and feature branches.
+- The accepted integration history on each repository's protected default branch.
 - The implementation commit history.
 - Internal pull requests.
 - Line comments and formal reviews.
@@ -167,20 +168,18 @@ CI workers should receive only:
 
 They must not receive the host Docker socket. A compromised test suite must not be able to control the host or steal agent credentials.
 
-### GitHub promotion
+### Host-side source handoff
 
-GitHub is the final human-facing destination, not the scratch space for agent iteration.
+Forgejo is the only forge used by the managed agent workflow. The coordinator, Forgejo, agent workers, and CI workers do not receive GitHub credentials or access to the user's GitHub repositories.
 
-After internal approval, a narrowly scoped host-side operation:
+After an approved internal pull request is merged into Forgejo's protected default branch, the user may handle the accepted revision with normal host-side Git tooling. Commitarium may optionally expose a narrowly scoped trusted-host workflow that:
 
-1. Verifies the approved internal revision and required CI evidence.
-2. Produces a clean branch for the upstream repository.
-3. Pushes that branch to GitHub.
-4. Opens a clean pull request summarizing the agreed plan, implementation, testing, and important internal review outcomes.
-5. Assigns or requests review from the user when supported.
-6. Triggers a GitHub notification so the pull request appears in normal GitHub and mobile workflows.
+1. Verifies the exact Forgejo merge revision and required CI evidence.
+2. Fetches that revision into a namespaced branch without changing or overwriting the user's current working tree.
+3. Shows the destination repository, branch, and commits to the user.
+4. Only after an explicit user action, invokes fixed `git` and `gh` operations to push the branch and open a GitHub pull request.
 
-The internal Forgejo pull request remains available as the detailed audit trail.
+This optional operation uses the user's host-side Git credential helper or GitHub CLI authentication. It does not pass credentials, arbitrary commands, or a writable host repository into a container. The user may instead perform every GitHub operation manually; GitHub activity is outside the coordinator state machine and does not affect whether the internal feature is complete.
 
 ## Multi-project workspace
 
@@ -192,7 +191,7 @@ Each imported project receives isolated logical resources:
 - Project settings and validation commands.
 - Feature branches and workspaces.
 - Agent permission policies.
-- Authentication and promotion configuration references.
+- Internal merge policy and optional host-handoff configuration references.
 - Audit events and artifacts.
 
 Project files may originate from a local clone of a GitHub repository. Importing a project must not modify its upstream default branch. The precise mirroring/worktree strategy will be decided before implementing project import.
@@ -270,17 +269,23 @@ The loop is bounded by configurable limits for rounds, time, and usage. A genuin
 
 ### 8. Internal approval
 
-A feature becomes eligible for promotion only when:
+A feature becomes eligible to merge into Forgejo's default branch only when:
 
 - Required CI checks pass.
 - All blocking findings are resolved or explicitly accepted by the user.
 - The reviewer approves.
 - The implemented behavior satisfies the accepted plan revision.
-- Promotion policy allows the action.
+- The project's internal merge policy allows the action.
 
-### 9. GitHub pull request
+Each project supports one of two internal merge policies. `require_user_approval` pauses at `ready_to_merge`, notifies the user, and merges only after explicit confirmation. `auto_after_gates` allows the coordinator to merge after it independently verifies every required gate, then notifies the user. Agents may satisfy review gates but never push directly to the protected default branch.
 
-Commitarium prepares and opens the clean upstream pull request. The user reviews and merges it through their normal GitHub workflow. Commitarium does not merge into the upstream default branch without an explicit future policy and explicit user authorization.
+### 9. Internal merge
+
+The coordinator merges the approved internal pull request into Forgejo's protected default branch according to the configured policy. The feature becomes complete only after the coordinator confirms the resulting Forgejo merge revision. Merge attempts must target an exact reviewed revision and be safe to retry after interruption.
+
+### 10. Optional external handoff
+
+The user may sync completed Forgejo history to any external repository using normal host-side Git tooling. A future trusted desktop workflow may assist with `git` and `gh`, but only after an explicit user action. The coordinator and containerized services neither perform nor track external pushes or pull requests.
 
 ## Workflow state model
 
@@ -298,9 +303,8 @@ draft
   -> changes_requested
   -> implementing             (review loop)
   -> approved
-  -> ready_to_publish
-  -> github_pr_open
-  -> completed
+  -> ready_to_merge
+  -> completed                (Forgejo PR merged into its default branch)
 ```
 
 Terminal and exceptional states must include cancellation and failure. Paused/waiting conditions should be represented separately from the durable business state where practical.
@@ -328,7 +332,7 @@ The coordinator will likely require these concepts:
 - **Workflow event:** An append-only record of a state change or meaningful action.
 - **Artifact:** A plan, message transcript, commit, diff, test result, review, or external link.
 - **Review finding:** A structured concern with severity and resolution state.
-- **Promotion:** The controlled mapping from an internally approved revision to an upstream pull request.
+- **Handoff:** An optional, explicit host-side operation that prepares or sends an accepted Forgejo revision to an external repository.
 
 ## Authentication and billing profiles
 
@@ -353,13 +357,13 @@ Required boundaries include:
 - Separate agent identities and credentials.
 - Least-privilege mounts for each container.
 - No agent credentials in test runners.
-- No GitHub credential in ordinary agent or CI containers.
+- No GitHub credentials or GitHub repository access in the coordinator, Forgejo, agent, or CI containers.
 - No host Docker socket in untrusted containers.
 - Explicit network policies where feasible.
 - Resource, time, and concurrency limits.
 - Secret redaction before logging.
 - User approval for privileged host actions.
-- Verifiable source revision and artifact hashes at promotion boundaries.
+- Verifiable source revisions and artifact hashes at internal merge and host-handoff boundaries.
 - Safe cancellation and cleanup without deleting user-owned repositories.
 
 The application must never claim that containers are a complete security boundary. The threat model and residual risks should be documented honestly as the implementation develops.
@@ -388,7 +392,7 @@ The initial information architecture may include:
 - **Features:** Conversations and active feature workflows.
 - **Review inbox:** Plans, disagreements, permission requests, and completed changes needing human attention.
 - **Agents:** Codex and Claude profiles, roles, status, usage mode, and limits.
-- **Settings:** Docker, Forgejo, GitHub, notifications, security, and workspace preferences.
+- **Settings:** Docker, Forgejo, internal merge policy, optional host Git/GitHub handoff, notifications, security, and workspace preferences.
 
 A feature screen should contain:
 
@@ -505,12 +509,12 @@ Phase 1 is complete when a simulated feature can move from discovery through app
 - Add desktop notifications and approval prompts.
 - Deep-link to Forgejo review surfaces.
 
-### Phase 6: GitHub promotion
+### Phase 6: Trusted host handoff
 
-- Add host-secured GitHub authentication.
-- Promote only internally approved revisions.
-- Open clean pull requests and request user review.
-- Preserve links to the detailed internal audit trail.
+- Prepare a namespaced host branch from an exact completed Forgejo revision without disturbing the user's working tree.
+- Add optional host-secured GitHub CLI integration.
+- Require explicit user action before every external push or pull-request creation.
+- Preserve links to the detailed internal Forgejo audit trail.
 
 ### Phase 7: Rich review and visualization
 
@@ -549,6 +553,7 @@ Real CLI authentication, repository mutation, and the desktop interface should w
 - Decide which events are stored in the coordinator versus referenced from Forgejo.
 - Define default time, round, concurrency, and usage limits.
 - Define backup, restore, and migration behavior for the shared workspace.
+- Define the supported host Git and GitHub CLI versions and exact allowlisted handoff operations.
 - Create a formal threat model before executing real repository code.
 
 ## Open-source posture
@@ -558,4 +563,3 @@ Commitarium is a public open-source personal workspace project under the Apache 
 The repository must not include provider credentials, generated secrets, private project data, or proprietary CLI binaries without redistribution permission. Documentation should clearly distinguish Commitarium from OpenAI, Anthropic, GitHub, Docker, and Forgejo; it is not affiliated with those projects unless that changes explicitly.
 
 Security-sensitive changes should receive particularly careful review, and the repository should gain a `SECURITY.md` before the first usable release.
-
