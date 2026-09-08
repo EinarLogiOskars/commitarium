@@ -161,6 +161,120 @@ func TestExecutionStoreRejectsDuplicateRunAndSessionIDs(t *testing.T) {
 	}
 }
 
+func TestExecutionStoreTransitionsRunAndSessionWithExpectedState(t *testing.T) {
+	db, store := newTestExecutionStore(t)
+	run, session := createExecutionRecords(t, db, store)
+	now := run.StartedAt.Add(time.Minute)
+
+	waiting, err := store.TransitionRun(t.Context(), execution.RunTransition{
+		RunID: run.ID, Expected: execution.RunStatusRunning,
+		Status: execution.RunStatusWaitingForUser,
+		Reason: "planning agents need a user decision", OccurredAt: now,
+	})
+	if err != nil {
+		t.Fatalf("pause run for user: %v", err)
+	}
+	if waiting.Status != execution.RunStatusWaitingForUser || waiting.EndedAt != nil {
+		t.Errorf("unexpected waiting run %+v", waiting)
+	}
+	if _, err := store.TransitionRun(t.Context(), execution.RunTransition{
+		RunID: run.ID, Expected: execution.RunStatusRunning,
+		Status: execution.RunStatusFailed, OccurredAt: now,
+	}); !errors.Is(err, execution.ErrStateConflict) {
+		t.Fatalf("expected error %v, got %v", execution.ErrStateConflict, err)
+	}
+	running, err := store.TransitionRun(t.Context(), execution.RunTransition{
+		RunID: run.ID, Expected: execution.RunStatusWaitingForUser,
+		Status: execution.RunStatusRunning, OccurredAt: now.Add(time.Second),
+	})
+	if err != nil {
+		t.Fatalf("resume run: %v", err)
+	}
+	completed, err := store.TransitionRun(t.Context(), execution.RunTransition{
+		RunID: run.ID, Expected: running.Status,
+		Status: execution.RunStatusSucceeded, OccurredAt: now.Add(2 * time.Second),
+	})
+	if err != nil {
+		t.Fatalf("complete run: %v", err)
+	}
+	if completed.EndedAt == nil || !completed.EndedAt.Equal(now.Add(2*time.Second)) {
+		t.Errorf("unexpected completed run %+v", completed)
+	}
+
+	pauseRequested, err := store.TransitionSession(t.Context(), execution.SessionTransition{
+		SessionID: session.ID, Expected: execution.SessionStatusRunning,
+		Status: execution.SessionStatusPauseRequested, OccurredAt: now,
+	})
+	if err != nil {
+		t.Fatalf("request session pause: %v", err)
+	}
+	paused, err := store.TransitionSession(t.Context(), execution.SessionTransition{
+		SessionID: session.ID, Expected: pauseRequested.Status,
+		Status: execution.SessionStatusPaused, OccurredAt: now.Add(time.Second),
+	})
+	if err != nil {
+		t.Fatalf("acknowledge session pause: %v", err)
+	}
+	resumed, err := store.TransitionSession(t.Context(), execution.SessionTransition{
+		SessionID: session.ID, Expected: paused.Status,
+		Status: execution.SessionStatusRunning, OccurredAt: now.Add(2 * time.Second),
+	})
+	if err != nil {
+		t.Fatalf("resume session: %v", err)
+	}
+	finished, err := store.TransitionSession(t.Context(), execution.SessionTransition{
+		SessionID: session.ID, Expected: resumed.Status,
+		Status:            execution.SessionStatusCompleted,
+		ProviderSessionID: session.ProviderSessionID,
+		OccurredAt:        now.Add(3 * time.Second),
+	})
+	if err != nil {
+		t.Fatalf("complete session: %v", err)
+	}
+	if finished.EndedAt == nil || finished.Status != execution.SessionStatusCompleted {
+		t.Errorf("unexpected completed session %+v", finished)
+	}
+}
+
+func TestExecutionStoreResolvesCommandsIdempotently(t *testing.T) {
+	db, store := newTestExecutionStore(t)
+	run, session := createExecutionRecords(t, db, store)
+	command, err := store.CreateCommand(t.Context(), execution.Command{
+		ID: "cmd_pause", SessionID: session.ID, Type: worker.CommandPause,
+		Status: execution.CommandStatusPending, RequestedAt: run.StartedAt,
+	})
+	if err != nil {
+		t.Fatalf("create command: %v", err)
+	}
+	resolution := execution.CommandResolution{
+		CommandID: command.ID, Status: execution.CommandStatusApplied,
+		AppliedAt: run.StartedAt.Add(time.Second),
+	}
+	resolved, err := store.ResolveCommand(t.Context(), resolution)
+	if err != nil {
+		t.Fatalf("resolve command: %v", err)
+	}
+	retry := resolution
+	retry.AppliedAt = retry.AppliedAt.Add(time.Hour)
+	retried, err := store.ResolveCommand(t.Context(), retry)
+	if err != nil {
+		t.Fatalf("retry command resolution: %v", err)
+	}
+	if retried.ID != resolved.ID ||
+		retried.Status != resolved.Status ||
+		retried.AppliedAt == nil ||
+		resolved.AppliedAt == nil ||
+		!retried.AppliedAt.Equal(*resolved.AppliedAt) {
+		t.Errorf("expected original resolution %+v, got %+v", resolved, retried)
+	}
+	if _, err := store.ResolveCommand(t.Context(), execution.CommandResolution{
+		CommandID: command.ID, Status: execution.CommandStatusRejected,
+		AppliedAt: run.StartedAt.Add(2 * time.Second), Error: "session already stopped",
+	}); !errors.Is(err, execution.ErrCommandConflict) {
+		t.Fatalf("expected error %v, got %v", execution.ErrCommandConflict, err)
+	}
+}
+
 func newTestExecutionStore(t *testing.T) (*sql.DB, *ExecutionStore) {
 	t.Helper()
 	db, err := OpenSQLite(t.Context(), filepath.Join(t.TempDir(), "coordinator.db"))

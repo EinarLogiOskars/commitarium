@@ -81,3 +81,49 @@ func TestCommandValidate(t *testing.T) {
 		t.Fatalf("expected error %v, got %v", ErrInvalidCommand, err)
 	}
 }
+
+func TestRunStatusTransitions(t *testing.T) {
+	allowed := [][2]RunStatus{
+		{RunStatusRunning, RunStatusWaitingForUser},
+		{RunStatusWaitingForUser, RunStatusRunning},
+		{RunStatusRunning, RunStatusSucceeded},
+		{RunStatusRunning, RunStatusStopped},
+		{RunStatusRunning, RunStatusFailed},
+		{RunStatusWaitingForUser, RunStatusStopped},
+		{RunStatusWaitingForUser, RunStatusFailed},
+	}
+	for _, transition := range allowed {
+		if !transition[0].CanTransitionTo(transition[1]) {
+			t.Errorf("expected %q to transition to %q", transition[0], transition[1])
+		}
+	}
+	if RunStatusSucceeded.CanTransitionTo(RunStatusRunning) {
+		t.Error("expected terminal run status to reject transitions")
+	}
+	if RunStatusRunning.CanTransitionTo(RunStatusRunning) {
+		t.Error("expected repeated run status to be rejected")
+	}
+}
+
+func TestSessionStatusTransitions(t *testing.T) {
+	allowed := [][2]SessionStatus{
+		{SessionStatusStarting, SessionStatusRunning},
+		{SessionStatusRunning, SessionStatusPauseRequested},
+		{SessionStatusPauseRequested, SessionStatusPaused},
+		{SessionStatusPauseRequested, SessionStatusRunning},
+		{SessionStatusPaused, SessionStatusRunning},
+		{SessionStatusRunning, SessionStatusCompleted},
+		{SessionStatusPaused, SessionStatusStopped},
+	}
+	for _, transition := range allowed {
+		if !transition[0].CanTransitionTo(transition[1]) {
+			t.Errorf("expected %q to transition to %q", transition[0], transition[1])
+		}
+	}
+	if SessionStatusCompleted.CanTransitionTo(SessionStatusRunning) {
+		t.Error("expected terminal session status to reject transitions")
+	}
+	if SessionStatusRunning.CanTransitionTo(SessionStatusRunning) {
+		t.Error("expected repeated session status to be rejected")
+	}
+}
