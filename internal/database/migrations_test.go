@@ -71,3 +71,47 @@ func TestMigrateReturnsCanceledContext(t *testing.T) {
 		)
 	}
 }
+
+func TestMigrateCreatesExecutionTables(t *testing.T) {
+	db, err := OpenSQLite(
+		t.Context(),
+		filepath.Join(t.TempDir(), "coordinator.db"),
+	)
+	if err != nil {
+		t.Fatalf("open SQLite database: %v", err)
+	}
+	defer db.Close()
+
+	if err := Migrate(t.Context(), db); err != nil {
+		t.Fatalf("migrate database: %v", err)
+	}
+
+	rows, err := db.QueryContext(
+		t.Context(),
+		`SELECT name
+		 FROM sqlite_schema
+		 WHERE type = 'table'
+		   AND name IN ('runs', 'sessions', 'session_events', 'session_commands')`,
+	)
+	if err != nil {
+		t.Fatalf("query execution tables: %v", err)
+	}
+	defer rows.Close()
+
+	found := make(map[string]bool)
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			t.Fatalf("scan table name: %v", err)
+		}
+		found[name] = true
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate table names: %v", err)
+	}
+	for _, name := range []string{"runs", "sessions", "session_events", "session_commands"} {
+		if !found[name] {
+			t.Errorf("expected table %q to exist", name)
+		}
+	}
+}
