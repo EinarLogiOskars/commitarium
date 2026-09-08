@@ -35,6 +35,7 @@ func TestScriptedAdapterRunsDeterministicSession(t *testing.T) {
 		t.Fatalf("wait for session: %v", err)
 	}
 	if result.Outcome != OutcomeCompleted ||
+		result.Disposition != DispositionSucceeded ||
 		result.ProviderSessionID != "fake-codex:ses_test" ||
 		result.Summary != "completed scripted coding work" {
 		t.Errorf("unexpected result %+v", result)
@@ -174,6 +175,39 @@ func TestScriptedAdapterStartAndResumeAreIdempotent(t *testing.T) {
 	}
 }
 
+func TestQueuedScriptedAdapterUsesScriptsInOrder(t *testing.T) {
+	adapter := NewQueuedScriptedAdapter("fake-claude", map[Role][]Script{
+		RoleReviewer: {
+			{Events: []Event{{Type: EventMessage, Text: "changes requested"}}, Disposition: DispositionChangesRequested, Summary: "one issue"},
+			{Events: []Event{{Type: EventMessage, Text: "approved"}}, Disposition: DispositionSucceeded, Summary: "approved"},
+		},
+	})
+
+	for index, expected := range []Disposition{DispositionChangesRequested, DispositionSucceeded} {
+		request := SessionRequest{
+			SessionID:    "ses_review_" + string(rune('1'+index)),
+			FeatureID:    "fea_test",
+			Role:         RoleReviewer,
+			Instructions: "Review the implementation.",
+		}
+		session, err := adapter.Start(t.Context(), request)
+		if err != nil {
+			t.Fatalf("start review session %d: %v", index+1, err)
+		}
+		if err := adapter.Advance(t.Context(), request.SessionID); err != nil {
+			t.Fatalf("advance review session %d: %v", index+1, err)
+		}
+		<-session.Events()
+		result, err := session.Wait(t.Context())
+		if err != nil {
+			t.Fatalf("wait for review session %d: %v", index+1, err)
+		}
+		if result.Disposition != expected {
+			t.Errorf("expected disposition %q, got %q", expected, result.Disposition)
+		}
+	}
+}
+
 func testScriptedAdapter() *ScriptedAdapter {
 	return NewScriptedAdapter("fake-codex", map[Role]Script{
 		RoleCoder: {
@@ -181,7 +215,8 @@ func testScriptedAdapter() *ScriptedAdapter {
 				{Type: EventActivity, Text: "inspect the accepted plan"},
 				{Type: EventMessage, Text: "implementation complete"},
 			},
-			Summary: "completed scripted coding work",
+			Disposition: DispositionSucceeded,
+			Summary:     "completed scripted coding work",
 		},
 	})
 }
