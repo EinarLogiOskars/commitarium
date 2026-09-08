@@ -40,6 +40,7 @@ type WorkflowService interface {
 		ctx context.Context,
 		featureID string,
 	) ([]workflow.Event, error)
+	SubscribeFeatureEvents(featureID string) (<-chan workflow.Event, func())
 }
 
 type API struct {
@@ -84,6 +85,10 @@ func New(
 	mux.HandleFunc(
 		"GET /api/v1/projects/{projectID}/features/{id}/events",
 		api.getFeatureEventsHandler,
+	)
+	mux.HandleFunc(
+		"GET /api/v1/projects/{projectID}/features/{id}/events/stream",
+		api.streamFeatureEventsHandler,
 	)
 
 	return mux

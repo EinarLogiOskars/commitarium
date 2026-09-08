@@ -24,6 +24,8 @@ type recordingWorkflowService struct {
 	calls          int
 	eventsResult   []workflow.Event
 	eventsErr      error
+	subscription   <-chan workflow.Event
+	unsubscribed   int
 }
 
 func (s *recordingWorkflowService) TransitionFeature(
@@ -47,6 +49,17 @@ func (s *recordingWorkflowService) EventsForFeature(
 ) ([]workflow.Event, error) {
 	s.featureID = featureID
 	return s.eventsResult, s.eventsErr
+}
+
+func (s *recordingWorkflowService) SubscribeFeatureEvents(
+	_ string,
+) (<-chan workflow.Event, func()) {
+	if s.subscription == nil {
+		s.subscription = make(chan workflow.Event)
+	}
+	return s.subscription, func() {
+		s.unsubscribed++
+	}
 }
 
 func TestTransitionFeature(t *testing.T) {

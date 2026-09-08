@@ -11,13 +11,15 @@ import (
 
 type Service struct {
 	store      Store
+	broker     *eventBroker
 	generateID func() string
 	now        func() time.Time
 }
 
 func NewService(store Store) *Service {
 	return &Service{
-		store: store,
+		store:  store,
+		broker: newEventBroker(defaultSubscriberBuffer),
 		generateID: func() string {
 			return "evt_" + rand.Text()
 		},
@@ -53,6 +55,9 @@ func (s *Service) TransitionFeature(
 			err,
 		)
 	}
+	if s.broker != nil {
+		s.broker.publish(event)
+	}
 	return event, nil
 }
 
@@ -65,4 +70,10 @@ func (s *Service) EventsForFeature(
 		return nil, fmt.Errorf("list events for feature %q: %w", featureID, err)
 	}
 	return events, nil
+}
+
+func (s *Service) SubscribeFeatureEvents(
+	featureID string,
+) (<-chan Event, func()) {
+	return s.broker.subscribe(featureID)
 }
