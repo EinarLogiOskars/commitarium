@@ -60,6 +60,7 @@ var ErrNotFound = errors.New("execution record not found")
 var ErrEventConflict = errors.New("execution event ID reused for different content")
 var ErrCommandConflict = errors.New("execution command ID reused for different content")
 var ErrStateConflict = errors.New("execution record is not in the expected state")
+var ErrRecordConflict = errors.New("execution record ID reused for different content")
 
 func (event PendingEvent) Validate() error {
 	switch {
