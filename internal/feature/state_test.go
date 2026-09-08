@@ -5,32 +5,31 @@ import (
 	"testing"
 )
 
+var workflowStates = []State{
+	StateDraft,
+	StatePlanning,
+	StateImplementing,
+	StateReviewing,
+	StateReadyToMerge,
+	StateCompleted,
+	StateCancelled,
+}
+
 func TestValidateTransitionAllowsWorkflowEdges(t *testing.T) {
 	tests := []struct {
 		name    string
 		current State
 		next    State
 	}{
-		{name: "start discovery", current: StateDraft, next: StateDiscovery},
-		{name: "begin planning", current: StateDiscovery, next: StatePlanning},
+		{name: "start planning", current: StateDraft, next: StatePlanning},
 		{
-			name:    "escalate planning disagreement",
+			name:    "return planning to goal drafting",
 			current: StatePlanning,
-			next:    StateAwaitingUserDecision,
-		},
-		{
-			name:    "resume planning after user decision",
-			current: StateAwaitingUserDecision,
-			next:    StatePlanning,
-		},
-		{
-			name:    "accept plan",
-			current: StatePlanning,
-			next:    StateReadyToImplement,
+			next:    StateDraft,
 		},
 		{
 			name:    "begin implementation",
-			current: StateReadyToImplement,
+			current: StatePlanning,
 			next:    StateImplementing,
 		},
 		{
@@ -39,39 +38,24 @@ func TestValidateTransitionAllowsWorkflowEdges(t *testing.T) {
 			next:    StatePlanning,
 		},
 		{
-			name:    "open internal pull request",
-			current: StateImplementing,
-			next:    StateInternalPROpen,
-		},
-		{
-			name:    "begin initial review",
-			current: StateInternalPROpen,
-			next:    StateReviewing,
-		},
-		{
-			name:    "request changes",
-			current: StateReviewing,
-			next:    StateChangesRequested,
-		},
-		{
-			name:    "address requested changes",
-			current: StateChangesRequested,
-			next:    StateImplementing,
-		},
-		{
-			name:    "resume review on existing pull request",
+			name:    "begin review",
 			current: StateImplementing,
 			next:    StateReviewing,
 		},
 		{
-			name:    "approve reviewed feature",
+			name:    "return review to planning",
 			current: StateReviewing,
-			next:    StateApproved,
+			next:    StatePlanning,
 		},
 		{
-			name:    "satisfy merge gates",
-			current: StateApproved,
+			name:    "satisfy review and merge gates",
+			current: StateReviewing,
 			next:    StateReadyToMerge,
+		},
+		{
+			name:    "invalidate merge readiness",
+			current: StateReadyToMerge,
+			next:    StateReviewing,
 		},
 		{
 			name:    "confirm Forgejo merge",
@@ -94,34 +78,26 @@ func TestValidateTransitionAllowsWorkflowEdges(t *testing.T) {
 	}
 }
 
-func TestValidateTransitionAllowsExceptionalTerminalStates(t *testing.T) {
-	nonTerminalStates := []State{
+func TestValidateTransitionAllowsCancellationFromEveryActivePhase(t *testing.T) {
+	activeStates := []State{
 		StateDraft,
-		StateDiscovery,
 		StatePlanning,
-		StateAwaitingUserDecision,
-		StateReadyToImplement,
 		StateImplementing,
-		StateInternalPROpen,
 		StateReviewing,
-		StateChangesRequested,
-		StateApproved,
 		StateReadyToMerge,
 	}
 
-	for _, current := range nonTerminalStates {
-		for _, terminal := range []State{StateCancelled, StateFailed} {
-			t.Run(string(current)+"_to_"+string(terminal), func(t *testing.T) {
-				if err := ValidateTransition(current, terminal); err != nil {
-					t.Fatalf(
-						"expected transition from %q to %q to be valid: %v",
-						current,
-						terminal,
-						err,
-					)
-				}
-			})
-		}
+	for _, current := range activeStates {
+		t.Run(string(current), func(t *testing.T) {
+			if err := ValidateTransition(current, StateCancelled); err != nil {
+				t.Fatalf(
+					"expected transition from %q to %q to be valid: %v",
+					current,
+					StateCancelled,
+					err,
+				)
+			}
+		})
 	}
 }
 
@@ -131,13 +107,12 @@ func TestValidateTransitionRejectsInvalidEdges(t *testing.T) {
 		current State
 		next    State
 	}{
-		{name: "skip discovery", current: StateDraft, next: StatePlanning},
-		{name: "skip planning", current: StateDiscovery, next: StateImplementing},
+		{name: "skip planning", current: StateDraft, next: StateImplementing},
 		{name: "skip implementation", current: StatePlanning, next: StateReviewing},
-		{name: "approve without review", current: StateImplementing, next: StateApproved},
-		{name: "merge before approval", current: StateReviewing, next: StateCompleted},
+		{name: "skip review", current: StateImplementing, next: StateReadyToMerge},
+		{name: "merge before ready", current: StateReviewing, next: StateCompleted},
 		{name: "repeat state", current: StatePlanning, next: StatePlanning},
-		{name: "unknown current state", current: State("unknown"), next: StateDiscovery},
+		{name: "unknown current state", current: State("unknown"), next: StatePlanning},
 		{name: "unknown next state", current: StateDraft, next: State("unknown")},
 	}
 
@@ -156,27 +131,10 @@ func TestTerminalStatesRejectAllTransitions(t *testing.T) {
 	terminalStates := []State{
 		StateCompleted,
 		StateCancelled,
-		StateFailed,
-	}
-	allStates := []State{
-		StateDraft,
-		StateDiscovery,
-		StatePlanning,
-		StateAwaitingUserDecision,
-		StateReadyToImplement,
-		StateImplementing,
-		StateInternalPROpen,
-		StateReviewing,
-		StateChangesRequested,
-		StateApproved,
-		StateReadyToMerge,
-		StateCompleted,
-		StateCancelled,
-		StateFailed,
 	}
 
 	for _, current := range terminalStates {
-		for _, next := range allStates {
+		for _, next := range workflowStates {
 			t.Run(string(current)+"_to_"+string(next), func(t *testing.T) {
 				err := ValidateTransition(current, next)
 
@@ -189,27 +147,29 @@ func TestTerminalStatesRejectAllTransitions(t *testing.T) {
 }
 
 func TestStateClassification(t *testing.T) {
-	tests := []struct {
-		state    State
-		valid    bool
-		terminal bool
-	}{
-		{state: StateDraft, valid: true},
-		{state: StateReadyToMerge, valid: true},
-		{state: StateCompleted, valid: true, terminal: true},
-		{state: StateCancelled, valid: true, terminal: true},
-		{state: StateFailed, valid: true, terminal: true},
-		{state: State("unknown")},
-	}
-
-	for _, test := range tests {
-		t.Run(string(test.state), func(t *testing.T) {
-			if actual := test.state.IsValid(); actual != test.valid {
-				t.Errorf("expected IsValid to be %t, got %t", test.valid, actual)
+	for _, state := range workflowStates {
+		t.Run(string(state), func(t *testing.T) {
+			if !state.IsValid() {
+				t.Errorf("expected state %q to be valid", state)
 			}
-			if actual := test.state.IsTerminal(); actual != test.terminal {
-				t.Errorf("expected IsTerminal to be %t, got %t", test.terminal, actual)
+
+			expectedTerminal := state == StateCompleted ||
+				state == StateCancelled
+			if actual := state.IsTerminal(); actual != expectedTerminal {
+				t.Errorf(
+					"expected IsTerminal to be %t, got %t",
+					expectedTerminal,
+					actual,
+				)
 			}
 		})
+	}
+
+	unknown := State("unknown")
+	if unknown.IsValid() {
+		t.Errorf("expected state %q to be invalid", unknown)
+	}
+	if unknown.IsTerminal() {
+		t.Errorf("expected state %q not to be terminal", unknown)
 	}
 }

@@ -198,9 +198,9 @@ Project files may originate from a local clone of a GitHub repository. Importing
 
 ## Feature workflow
 
-### 1. Discovery with the user
+### 1. Goal drafting with the user
 
-The user starts a feature through the Commitarium conversation UI. The agents ask enough questions to understand:
+The user starts a feature through the Commitarium conversation UI and drafts its goal with a lead agent. Discovery is an activity within this phase. The agent asks enough questions to establish:
 
 - The user-visible outcome.
 - Motivation and constraints.
@@ -209,11 +209,11 @@ The user starts a feature through the Commitarium conversation UI. The agents as
 - Relevant architecture and conventions.
 - Risk, migration, compatibility, and testing expectations.
 
-The system should not begin implementation while material ambiguity remains.
+The result is a user-accepted goal with explicit acceptance criteria. The system should not begin collaborative planning while material ambiguity remains.
 
 ### 2. Collaborative planning
 
-Codex and Claude inspect the project and propose a plan. They must challenge each other's assumptions, identify risks, and converge on a plan both consider acceptable.
+The lead agent takes the accepted goal to the consulting agent. They inspect the project and propose a plan together. They must challenge each other's assumptions, identify risks, and converge on a plan both consider acceptable.
 
 Consensus does not mean superficial agreement. Each agent must be instructed to:
 
@@ -225,7 +225,7 @@ Consensus does not mean superficial agreement. Each agent must be instructed to:
 
 Planning uses a bounded number of rounds. If a material disagreement remains after the limit, the coordinator pauses and presents the disagreement, evidence, and consequences to the user. The user is the final judge.
 
-The result is a versioned plan artifact with explicit acceptance criteria. Implementation is tied to that plan revision.
+The result is a versioned plan artifact tied to the accepted goal and its acceptance criteria. The agents may advance to implementation when both accept the plan. Implementation is tied to that plan revision.
 
 ### 3. Role assignment
 
@@ -242,9 +242,11 @@ The coder implements the agreed plan on an isolated internal feature branch. It 
 
 If implementation reveals that the agreed plan is materially wrong or incomplete, the feature returns to planning rather than silently changing scope.
 
+Agents have autonomy over implementation details that remain within the accepted goal. Work required to satisfy that goal or its acceptance criteria remains in scope and is handled in the current internal pull request. A genuinely optional or independent discovery becomes a linked follow-up request for the user to accept or reject as a separate feature; it does not silently expand or block the current feature. A prerequisite large enough to materially change the accepted scope, risk, or architecture is escalated to the user rather than being mislabeled as optional.
+
 ### 5. Internal pull request
 
-The coder opens an internal Forgejo pull request. Its description links the plan revision, acceptance criteria, implementation summary, tests, and known limitations.
+The coder opens an internal Forgejo pull request before review begins. The pull request is the canonical human-readable implementation and review record. Its description contains the accepted goal and acceptance criteria, the complete agreed plan with its revision identifier, an implementation summary, validation evidence, plan deviations, and known risks or limitations.
 
 ### 6. Agent review
 
@@ -259,11 +261,11 @@ The reviewer evaluates the internal pull request with access to:
 
 This preserves context while maintaining role independence. The reviewer is explicitly instructed not to defend the shared plan blindly; it must identify failures in either the implementation or the plan.
 
-Review findings are posted to the internal pull request with severity, evidence, and requested resolution. A later optional mode may add a fresh-session review as an additional independent check, not as a replacement for contextual review.
+Review findings are posted to the internal pull request with severity, evidence, and requested resolution. Inline comments are used when a finding concerns specific code. Agents may communicate directly for speed, but every material finding, response, disagreement, decision, plan amendment, and supporting rationale must also be recorded in Forgejo under the correct identity. This audit trail records explicit agent communication and decisions, not private model chain-of-thought or secrets. A later optional mode may add a fresh-session review as an additional independent check, not as a replacement for contextual review.
 
 ### 7. Resolution loop
 
-The coder addresses findings with additional commits and responds to each review thread. The reviewer verifies the resolutions and either approves or requests further changes.
+The feature remains in the `reviewing` lifecycle phase throughout the resolution loop. The coder addresses findings with additional commits and responds to each Forgejo review thread. The reviewer verifies every resolution and either approves or requests further changes. Threads are not considered resolved merely because code changed.
 
 The loop is bounded by configurable limits for rounds, time, and usage. A genuine impasse is escalated to the user with both positions preserved.
 
@@ -289,23 +291,21 @@ The user may sync completed Forgejo history to any external repository using nor
 
 ## Workflow state model
 
-The initial state machine is expected to include:
+The feature lifecycle uses a small set of durable phases:
 
 ```text
-draft -> discovery -> planning
-
-planning -> awaiting_user_decision -> planning
-planning -> ready_to_implement -> implementing
-
-implementing -> planning                       (material plan change)
-implementing -> internal_pr_open -> reviewing  (initial review)
-reviewing -> changes_requested -> implementing -> reviewing
-reviewing -> approved -> ready_to_merge -> completed
+draft          -> planning
+planning       -> draft | implementing
+implementing   -> planning | reviewing
+reviewing      -> planning | ready_to_merge
+ready_to_merge -> reviewing | completed
 ```
 
-`completed` means the Forgejo pull request was merged into its protected default branch. `implementing -> reviewing` is valid only during a review loop when an internal pull request already exists; this is enforced as a transition precondition rather than by the state pair alone.
+Planning may return to goal drafting when the accepted goal remains ambiguous. Implementation or review may return to planning when the agreed plan is materially wrong. Merge readiness may return to review if approval, CI evidence, or the reviewed revision is invalidated. These backward transitions do not require user involvement unless they change the accepted goal, exceed an autonomy boundary, or expose a material disagreement the agents cannot resolve.
 
-Any non-terminal state may transition to the terminal exceptional states `cancelled` or `failed`. Paused and operational waiting conditions should be represented separately from the durable business state where practical; `awaiting_user_decision` remains durable because resolving the recorded disagreement is part of the business workflow.
+`completed` means the exact reviewed Forgejo pull request revision was merged into its protected default branch. Any active phase may transition to the terminal state `cancelled`.
+
+Internal pull-request existence, review findings and approval, CI results, agent activity, blocked work, and waiting for the user are modeled as artifacts, events, or separate status dimensions rather than lifecycle phases. A failed run, agent invocation, or CI attempt does not make the feature terminal; the coordinator can retry or request attention while preserving the current lifecycle phase.
 
 Every transition must:
 
@@ -330,6 +330,7 @@ The coordinator will likely require these concepts:
 - **Workflow event:** An append-only record of a state change or meaningful action.
 - **Artifact:** A plan, message transcript, commit, diff, test result, review, or external link.
 - **Review finding:** A structured concern with severity and resolution state.
+- **Follow-up request:** An optional or independent discovery proposed to the user as a linked feature without expanding the active feature's scope.
 - **Handoff:** An optional, explicit host-side operation that prepares or sends an accepted Forgejo revision to an external repository.
 
 ## Authentication and billing profiles
