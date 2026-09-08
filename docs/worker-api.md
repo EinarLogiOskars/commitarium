@@ -139,6 +139,30 @@ The client refuses redirects so an authentication token cannot be forwarded to
 an unexpected address. Responses are limited to 256 KiB and must contain one
 valid JSON object with no unknown fields.
 
+The same client can open the worker's SSE activity stream from a caller-provided
+durable sequence. Its `EventReader` returns one validated event from each
+`Next` call while ignoring SSE retry advice and heartbeat comments. It limits
+each SSE frame to 128 KiB, rejects unsupported or duplicate fields, strictly
+decodes event JSON, and independently verifies the attempt identity, event
+name, and next consecutive sequence.
+
+The reader does not reconnect or acknowledge events automatically. The future
+coordinator ingestion loop must persist a returned event before requesting the
+next one, and it must reconnect from the last sequence that SQLite confirms was
+stored. A normal end of the HTTP body returns `io.EOF`; the caller must inspect
+the attempt rather than assuming that EOF means the agent finished.
+
+A valid `protocol_error` frame becomes a typed stream-protocol error. Malformed
+frames, network failures, and normal HTTP worker rejections remain separate
+error categories, allowing orchestration to choose recovery behavior without
+matching error-message text.
+
+The ordinary request timeout is not placed on a live stream because that would
+terminate healthy sessions after the timeout elapsed. The context passed to
+`OpenEventStream` controls the stream lifetime and can cancel a blocked read.
+Any timeout already configured on the supplied `http.Client` or its transport
+still applies.
+
 ## Mutating requests and safe retries
 
 `PUT` and `POST` requests require exactly one `Idempotency-Key` header. This
@@ -202,10 +226,10 @@ worker decision.
 
 The HTTP handler depends on a small process-control service interface plus a
 separate event-source interface. Tests currently supply safe fake events; there
-is no durable worker journal yet. The coordinator client implements the
-non-streaming service interface over the network, while its SSE reader is the
-next transport slice. A future worker supervisor and durable journal will
-implement the server side. Keeping this translation separate means process
-management, persistence, provider credentials, and Codex or Claude Code
-behavior can be added without changing how requests are authenticated and
-decoded.
+is no durable worker journal yet. The coordinator client implements both the
+non-streaming service operations and strict SSE reading over the network, but
+neither is wired into coordinator orchestration yet. A future worker supervisor
+and durable journal will implement the server side. Keeping this translation
+separate means process management, persistence, provider credentials, and Codex
+or Claude Code behavior can be added without changing how requests are
+authenticated and decoded.
