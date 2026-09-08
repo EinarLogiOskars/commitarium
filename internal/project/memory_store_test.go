@@ -30,9 +30,10 @@ func TestMemoryStoreGetByID(t *testing.T) {
 	store := NewMemoryStore()
 
 	expected := Project{
-		ID:        "prj_test",
-		Name:      "Test project",
-		CreatedAt: time.Date(2026, time.September, 7, 12, 0, 0, 0, time.UTC),
+		ID:             "prj_test",
+		Name:           "Test project",
+		RecoveryPolicy: RecoveryPolicyApprovalRequired,
+		CreatedAt:      time.Date(2026, time.September, 7, 12, 0, 0, 0, time.UTC),
 	}
 
 	if err := store.Create(t.Context(), expected); err != nil {

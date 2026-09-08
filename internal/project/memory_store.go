@@ -18,16 +18,21 @@ func NewMemoryStore() *MemoryStore {
 
 func (s *MemoryStore) Create(
 	_ context.Context,
-	project Project,
+	createdProject Project,
 ) error {
+	policy, err := NormalizeRecoveryPolicy(createdProject.RecoveryPolicy)
+	if err != nil {
+		return err
+	}
+	createdProject.RecoveryPolicy = policy
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if _, exists := s.projects[project.ID]; exists {
+	if _, exists := s.projects[createdProject.ID]; exists {
 		return ErrAlreadyExists
 	}
 
-	s.projects[project.ID] = project
+	s.projects[createdProject.ID] = createdProject
 	return nil
 }
 

@@ -31,7 +31,16 @@ type SessionTransition struct {
 	Expected          SessionStatus
 	Status            SessionStatus
 	ProviderSessionID string
+	Result            *worker.Result
 	OccurredAt        time.Time
+}
+
+// SessionRecovery atomically marks a nonterminal session as waiting at its
+// recovery boundary and allocates a durable attempt number.
+type SessionRecovery struct {
+	SessionID  string
+	Expected   SessionStatus
+	OccurredAt time.Time
 }
 
 type CommandResolution struct {
@@ -48,11 +57,15 @@ type Store interface {
 	CreateSession(ctx context.Context, session Session) error
 	GetSession(ctx context.Context, id string) (Session, error)
 	ListSessions(ctx context.Context, runID string) ([]Session, error)
+	ListRecoverableRuns(ctx context.Context) ([]Run, error)
+	ListActiveSessions(ctx context.Context, runID string) ([]Session, error)
 	TransitionSession(ctx context.Context, transition SessionTransition) (Session, error)
+	BeginSessionRecovery(ctx context.Context, recovery SessionRecovery) (Session, error)
 	AppendEvent(ctx context.Context, event PendingEvent) (Event, bool, error)
 	ListEvents(ctx context.Context, sessionID string) ([]Event, error)
 	CreateCommand(ctx context.Context, command Command) (Command, bool, error)
 	GetCommand(ctx context.Context, id string) (Command, error)
+	ListPendingCommands(ctx context.Context, sessionID string) ([]Command, error)
 	ResolveCommand(ctx context.Context, resolution CommandResolution) (Command, error)
 }
 
@@ -110,6 +123,21 @@ func (transition SessionTransition) Validate() error {
 			transition.Status,
 		)
 	case transition.OccurredAt.IsZero():
+		return fmt.Errorf("%w: occurrence time is required", ErrInvalidStatusTransition)
+	default:
+		return nil
+	}
+}
+
+func (recovery SessionRecovery) Validate() error {
+	switch {
+	case strings.TrimSpace(recovery.SessionID) == "":
+		return fmt.Errorf("%w: session ID is required", ErrInvalidStatusTransition)
+	case recovery.Expected != SessionStatusRunning &&
+		recovery.Expected != SessionStatusPauseRequested &&
+		recovery.Expected != SessionStatusPaused:
+		return fmt.Errorf("%w: session %q cannot begin recovery", ErrInvalidStatusTransition, recovery.Expected)
+	case recovery.OccurredAt.IsZero():
 		return fmt.Errorf("%w: occurrence time is required", ErrInvalidStatusTransition)
 	default:
 		return nil

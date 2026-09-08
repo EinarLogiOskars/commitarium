@@ -4,6 +4,8 @@ import (
 	"context"
 
 	"github.com/EinarLogiOskars/commitarium/internal/execution"
+	"github.com/EinarLogiOskars/commitarium/internal/feature"
+	"github.com/EinarLogiOskars/commitarium/internal/project"
 )
 
 type AssignmentFactory func() Assignment
@@ -16,6 +18,26 @@ type Starter struct {
 	assignmentFactory AssignmentFactory
 	maxPlanningRounds int
 	maxReviewRounds   int
+}
+
+func (s *Starter) Recover(
+	ctx context.Context,
+	run execution.Run,
+	storedFeature feature.Feature,
+	recoveryPolicy project.RecoveryPolicy,
+) error {
+	goal := storedFeature.Title
+	if storedFeature.Description != "" {
+		goal += ": " + storedFeature.Description
+	}
+	return s.runner.Recover(ctx, RunRequest{
+		ID: run.ID, FeatureID: run.FeatureID, Goal: goal,
+		Assignment:        s.assignmentFactory(),
+		MaxPlanningRounds: s.maxPlanningRounds,
+		MaxReviewRounds:   s.maxReviewRounds,
+		RecoveryPolicy:    recoveryPolicy,
+		WorkflowPhase:     storedFeature.State,
+	})
 }
 
 func NewStarter(

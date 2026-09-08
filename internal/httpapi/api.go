@@ -12,7 +12,7 @@ import (
 )
 
 type ProjectService interface {
-	Create(ctx context.Context, name string) (project.Project, error)
+	Create(ctx context.Context, name string, recoveryPolicy project.RecoveryPolicy) (project.Project, error)
 	GetByID(ctx context.Context, id string) (project.Project, error)
 }
 

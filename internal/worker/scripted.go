@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 )
@@ -87,10 +88,19 @@ func (a *ScriptedAdapter) Start(
 	}
 	script := roleScripts[nextScript]
 	a.nextScriptByRole[request.Role]++
+	providerSessionID := fmt.Sprintf(
+		"%s:%s:%d:%s",
+		a.provider,
+		request.Role,
+		nextScript,
+		request.SessionID,
+	)
 	session := newScriptedSession(
 		request,
-		a.provider+":"+request.SessionID,
+		providerSessionID,
 		script,
+		0,
+		nil,
 	)
 	a.sessions[request.SessionID] = session
 	go session.run()
@@ -108,15 +118,155 @@ func (a *ScriptedAdapter) Resume(
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	session, ok := a.sessions[request.SessionID]
-	if !ok {
-		return nil, ErrSessionNotFound
+	if ok {
+		if session.providerSessionID != request.ProviderSessionID ||
+			session.request.FeatureID != request.FeatureID ||
+			session.request.Role != request.Role {
+			return nil, ErrSessionConflict
+		}
+		return session, nil
 	}
-	if session.providerSessionID != request.ProviderSessionID ||
-		session.request.FeatureID != request.FeatureID ||
-		session.request.Role != request.Role {
-		return nil, ErrSessionConflict
+
+	scriptIndex, err := a.scriptIndex(request)
+	if err != nil {
+		return nil, err
 	}
+	roleScripts := a.scripts[request.Role]
+	if scriptIndex < 0 || scriptIndex >= len(roleScripts) {
+		return nil, fmt.Errorf("%w for role %q", ErrScriptNotFound, request.Role)
+	}
+	script := roleScripts[scriptIndex]
+	nextEvent, consistent := reconcileScriptEvents(script.Events, request.Recovery.CompletedEvents)
+	requiresReview := !consistent ||
+		len(request.Recovery.PendingCommands) > 0 ||
+		request.Recovery.PreviousState == "paused" ||
+		request.Recovery.PreviousState == "pause_requested"
+	assessment := &RecoveryAssessment{
+		Consistent: consistent, RequiresUserReview: requiresReview,
+	}
+	assessmentText := scriptedRecoveryAssessmentText(assessment, request.Recovery)
+	session = newScriptedSession(
+		request.SessionRequest,
+		request.ProviderSessionID,
+		script,
+		nextEvent,
+		&Event{
+			Type:               EventRecoveryAssessment,
+			Text:               assessmentText,
+			RecoveryAssessment: assessment,
+		},
+	)
+	a.sessions[request.SessionID] = session
+	if a.nextScriptByRole[request.Role] <= scriptIndex {
+		a.nextScriptByRole[request.Role] = scriptIndex + 1
+	}
+	go session.run()
 	return session, nil
+}
+
+func (a *ScriptedAdapter) scriptIndex(request ResumeRequest) (int, error) {
+	prefix := fmt.Sprintf("%s:%s:", a.provider, request.Role)
+	remainder, found := strings.CutPrefix(request.ProviderSessionID, prefix)
+	if found {
+		indexText, sessionID, ok := strings.Cut(remainder, ":")
+		if ok && sessionID == request.SessionID {
+			index, err := strconv.Atoi(indexText)
+			if err == nil {
+				return index, nil
+			}
+		}
+	}
+
+	// Provider IDs created before recovery support did not encode the script
+	// index. Recognize them only when the deterministic session suffix makes
+	// the original queue position unambiguous.
+	if request.ProviderSessionID == a.provider+":"+request.SessionID {
+		return inferScriptIndex(request.Role, request.SessionID)
+	}
+	return 0, ErrSessionConflict
+}
+
+func inferScriptIndex(role Role, sessionID string) (int, error) {
+	suffix := sessionID
+	if index := strings.LastIndex(sessionID, ":"); index >= 0 {
+		suffix = sessionID[index+1:]
+	}
+	switch role {
+	case RoleCoder:
+		if suffix == "implementation" {
+			return 0, nil
+		}
+		if round, err := parseNumberedSuffix(suffix, "review-fix-"); err == nil {
+			return round, nil
+		}
+	case RoleReviewer:
+		if round, err := parseNumberedSuffix(suffix, "review-"); err == nil {
+			return round - 1, nil
+		}
+	case RoleLead:
+		if round, err := parseNumberedSuffix(suffix, "plan-lead-"); err == nil {
+			return round - 1, nil
+		}
+	case RoleConsultant:
+		if round, err := parseNumberedSuffix(suffix, "plan-consultant-"); err == nil {
+			return round - 1, nil
+		}
+	}
+	return 0, ErrSessionConflict
+}
+
+func parseNumberedSuffix(value string, prefix string) (int, error) {
+	number, found := strings.CutPrefix(value, prefix)
+	if !found {
+		return 0, ErrSessionConflict
+	}
+	parsed, err := strconv.Atoi(number)
+	if err != nil || parsed < 1 {
+		return 0, ErrSessionConflict
+	}
+	return parsed, nil
+}
+
+func reconcileScriptEvents(script []Event, completed []Event) (int, bool) {
+	next := 0
+	for _, event := range completed {
+		if event.Type == EventRecoveryAssessment ||
+			event.Type == EventPauseAcknowledged ||
+			event.Type == EventContinued {
+			continue
+		}
+		if next >= len(script) ||
+			event.Type != script[next].Type ||
+			event.Text != script[next].Text {
+			return next, false
+		}
+		next++
+	}
+	return next, true
+}
+
+func scriptedRecoveryAssessmentText(
+	assessment *RecoveryAssessment,
+	recovery RecoveryContext,
+) string {
+	if !assessment.Consistent {
+		return "Recovery assessment blocked: durable session activity contradicts the simulated provider script; user review is required."
+	}
+	if len(recovery.PendingCommands) > 0 {
+		commands := make([]string, 0, len(recovery.PendingCommands))
+		for _, command := range recovery.PendingCommands {
+			commands = append(commands, command.ID+" ("+string(command.Type)+")")
+		}
+		return fmt.Sprintf(
+			"Recovery assessment: durable activity is consistent, but %d command delivery outcome is uncertain [%s]; user review is required before continuing. Repository, Git, tests, and Forgejo PR state are not applicable to this simulated worker.",
+			len(recovery.PendingCommands),
+			strings.Join(commands, ", "),
+		)
+	}
+	if recovery.PreviousState == "paused" || recovery.PreviousState == "pause_requested" {
+		return "Recovery assessment: durable activity is consistent and the pre-restart pause intent was preserved; user review is required before continuing. Repository, Git, tests, and Forgejo PR state are not applicable to this simulated worker."
+	}
+	return "Recovery assessment: durable activity matches the restored simulated conversation and workflow phase. Repository, worktree, Git HEAD/status/diff, interrupted tests, and Forgejo PR state are not applicable to this simulated worker."
 }
 
 // Advance releases one scripted action. It is intentionally outside Adapter:
@@ -143,10 +293,12 @@ type scriptedSession struct {
 	events            chan Event
 	done              chan struct{}
 
-	mu           sync.Mutex
-	finished     bool
-	result       Result
-	commandsByID map[string]*commandRecord
+	mu            sync.Mutex
+	finished      bool
+	result        Result
+	commandsByID  map[string]*commandRecord
+	nextEvent     int
+	recoveryEvent *Event
 }
 
 type commandDelivery struct {
@@ -164,6 +316,8 @@ func newScriptedSession(
 	request SessionRequest,
 	providerSessionID string,
 	script Script,
+	nextEvent int,
+	recoveryEvent *Event,
 ) *scriptedSession {
 	eventBuffer := len(script.Events) + 8
 	if eventBuffer < 16 {
@@ -178,7 +332,13 @@ func newScriptedSession(
 		events:            make(chan Event, eventBuffer),
 		done:              make(chan struct{}),
 		commandsByID:      make(map[string]*commandRecord),
+		nextEvent:         nextEvent,
+		recoveryEvent:     recoveryEvent,
 	}
+}
+
+func (s *scriptedSession) ProviderSessionID() string {
+	return s.providerSessionID
 }
 
 func (s *scriptedSession) Events() <-chan Event {
@@ -251,18 +411,24 @@ func (s *scriptedSession) advanceOne(ctx context.Context) error {
 }
 
 func (s *scriptedSession) run() {
-	if len(s.script.Events) == 0 {
+	if s.recoveryEvent != nil {
+		s.events <- *s.recoveryEvent
+	}
+	if len(s.script.Events) == 0 && s.recoveryEvent == nil {
 		s.finish(OutcomeCompleted)
 		return
 	}
 
-	paused := false
-	nextEvent := 0
+	paused := s.recoveryEvent != nil
 	for {
 		if paused {
 			delivery := <-s.commands
 			paused = s.handleCommand(delivery, paused)
 			if s.isFinished() {
+				return
+			}
+			if !paused && s.nextEvent == len(s.script.Events) {
+				s.finish(OutcomeCompleted)
 				return
 			}
 			continue
@@ -275,9 +441,9 @@ func (s *scriptedSession) run() {
 				return
 			}
 		case <-s.advance:
-			s.events <- s.script.Events[nextEvent]
-			nextEvent++
-			if nextEvent == len(s.script.Events) {
+			s.events <- s.script.Events[s.nextEvent]
+			s.nextEvent++
+			if s.nextEvent == len(s.script.Events) {
 				s.finish(OutcomeCompleted)
 				return
 			}

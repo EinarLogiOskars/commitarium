@@ -53,6 +53,8 @@ func TestActiveSessionsOldCleanupCannotRemoveNewRegistration(t *testing.T) {
 
 type stubWorkerSession struct{}
 
+func (*stubWorkerSession) ProviderSessionID() string { return "provider:session" }
+
 func (*stubWorkerSession) Events() <-chan worker.Event {
 	events := make(chan worker.Event)
 	close(events)

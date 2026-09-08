@@ -37,7 +37,7 @@ func TestScriptedAdapterRunsDeterministicSession(t *testing.T) {
 	}
 	if result.Outcome != OutcomeCompleted ||
 		result.Disposition != DispositionSucceeded ||
-		result.ProviderSessionID != "fake-codex:ses_test" ||
+		result.ProviderSessionID != "fake-codex:coder:0:ses_test" ||
 		result.Summary != "completed scripted coding work" {
 		t.Errorf("unexpected result %+v", result)
 	}
@@ -183,7 +183,7 @@ func TestScriptedAdapterStartAndResumeAreIdempotent(t *testing.T) {
 
 	resumed, err := adapter.Resume(t.Context(), ResumeRequest{
 		SessionRequest:    request,
-		ProviderSessionID: "fake-codex:ses_test",
+		ProviderSessionID: first.ProviderSessionID(),
 	})
 	if err != nil {
 		t.Fatalf("resume session: %v", err)
@@ -226,6 +226,61 @@ func TestQueuedScriptedAdapterUsesScriptsInOrder(t *testing.T) {
 		if result.Disposition != expected {
 			t.Errorf("expected disposition %q, got %q", expected, result.Disposition)
 		}
+	}
+}
+
+func TestScriptedAdapterReconstructsInterruptedSessionBeforeContinuing(t *testing.T) {
+	request := SessionRequest{
+		SessionID: "run_test:implementation", FeatureID: "fea_test",
+		Role: RoleCoder, Instructions: "Implement the plan.",
+	}
+	firstAdapter := testScriptedAdapter()
+	first, err := firstAdapter.Start(t.Context(), request)
+	if err != nil {
+		t.Fatalf("start original session: %v", err)
+	}
+	if err := firstAdapter.Advance(t.Context(), request.SessionID); err != nil {
+		t.Fatalf("advance original session: %v", err)
+	}
+	completed := <-first.Events()
+
+	replacement := testScriptedAdapter()
+	resumed, err := replacement.Resume(t.Context(), ResumeRequest{
+		SessionRequest: SessionRequest{
+			SessionID: request.SessionID, FeatureID: request.FeatureID,
+			Role: request.Role, Instructions: "Inspect and reconcile before continuing.",
+		},
+		ProviderSessionID: first.ProviderSessionID(),
+		Recovery: RecoveryContext{
+			CompletedEvents: []Event{completed},
+			PreviousState:   "running",
+			WorkflowPhase:   "implementing",
+		},
+	})
+	if err != nil {
+		t.Fatalf("resume replacement session: %v", err)
+	}
+	assessment := <-resumed.Events()
+	if assessment.Type != EventRecoveryAssessment ||
+		assessment.RecoveryAssessment == nil ||
+		!assessment.RecoveryAssessment.Consistent {
+		t.Fatalf("unexpected recovery assessment %+v", assessment)
+	}
+	if err := resumed.Send(t.Context(), Command{ID: "approve", Type: CommandContinue}); err != nil {
+		t.Fatalf("continue recovered session: %v", err)
+	}
+	if event := <-resumed.Events(); event.Type != EventContinued {
+		t.Fatalf("expected continued event, got %+v", event)
+	}
+	if err := replacement.Advance(t.Context(), request.SessionID); err != nil {
+		t.Fatalf("advance recovered session: %v", err)
+	}
+	if event := <-resumed.Events(); event.Text != "implementation complete" {
+		t.Fatalf("expected only unfinished script event, got %+v", event)
+	}
+	result, err := resumed.Wait(t.Context())
+	if err != nil || result.Outcome != OutcomeCompleted {
+		t.Fatalf("unexpected recovered result %+v, err=%v", result, err)
 	}
 }
 

@@ -348,3 +348,97 @@ func createExecutionRecords(
 	}
 	return run, session
 }
+
+func TestExecutionStoreDiscoversAndClaimsInterruptedSession(t *testing.T) {
+	db, store := newTestExecutionStore(t)
+	run, session := createExecutionRecords(t, db, store)
+	now := session.UpdatedAt.Add(time.Minute)
+	command := execution.Command{
+		ID: "cmd_pending", SessionID: session.ID,
+		Type: worker.CommandMessage, Message: "Check the interrupted test.",
+		Status: execution.CommandStatusPending, RequestedAt: now,
+	}
+	if _, created, err := store.CreateCommand(t.Context(), command); err != nil || !created {
+		t.Fatalf("create pending command: created=%t err=%v", created, err)
+	}
+	betweenSessions := run
+	betweenSessions.ID = "run_between_sessions"
+	if err := store.CreateRun(t.Context(), betweenSessions); err != nil {
+		t.Fatalf("create run interrupted between sessions: %v", err)
+	}
+
+	runs, err := store.ListRecoverableRuns(t.Context())
+	if err != nil {
+		t.Fatalf("list recoverable runs: %v", err)
+	}
+	if len(runs) != 2 || runs[0].ID != "run_between_sessions" || runs[1].ID != run.ID {
+		t.Fatalf("unexpected recoverable runs %+v", runs)
+	}
+	active, err := store.ListActiveSessions(t.Context(), run.ID)
+	if err != nil {
+		t.Fatalf("list active sessions: %v", err)
+	}
+	if len(active) != 1 || active[0].ID != session.ID {
+		t.Fatalf("unexpected active sessions %+v", active)
+	}
+	pending, err := store.ListPendingCommands(t.Context(), session.ID)
+	if err != nil {
+		t.Fatalf("list pending commands: %v", err)
+	}
+	if len(pending) != 1 || pending[0].ID != command.ID {
+		t.Fatalf("unexpected pending commands %+v", pending)
+	}
+
+	recovering, err := store.BeginSessionRecovery(t.Context(), execution.SessionRecovery{
+		SessionID: session.ID, Expected: execution.SessionStatusRunning, OccurredAt: now,
+	})
+	if err != nil {
+		t.Fatalf("begin session recovery: %v", err)
+	}
+	if recovering.Status != execution.SessionStatusPauseRequested ||
+		recovering.RecoveryAttempt != 1 ||
+		recovering.ProviderSessionID != session.ProviderSessionID {
+		t.Fatalf("unexpected recovering session %+v", recovering)
+	}
+	retried, err := store.BeginSessionRecovery(t.Context(), execution.SessionRecovery{
+		SessionID: session.ID, Expected: execution.SessionStatusPauseRequested,
+		OccurredAt: now.Add(time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("retry session recovery after restart: %v", err)
+	}
+	if retried.RecoveryAttempt != 2 {
+		t.Fatalf("expected second durable recovery attempt, got %+v", retried)
+	}
+}
+
+func TestExecutionStorePersistsReplayableSessionResult(t *testing.T) {
+	db, store := newTestExecutionStore(t)
+	_, session := createExecutionRecords(t, db, store)
+	result := worker.Result{
+		Outcome:           worker.OutcomeCompleted,
+		Disposition:       worker.DispositionChangesRequested,
+		ProviderSessionID: session.ProviderSessionID,
+		Summary:           "one blocking issue remains",
+	}
+	finished, err := store.TransitionSession(t.Context(), execution.SessionTransition{
+		SessionID: session.ID, Expected: execution.SessionStatusRunning,
+		Status: execution.SessionStatusCompleted, Result: &result,
+		OccurredAt: session.UpdatedAt.Add(time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("complete session with result: %v", err)
+	}
+	if finished.Outcome != result.Outcome ||
+		finished.Disposition != result.Disposition ||
+		finished.Summary != result.Summary {
+		t.Fatalf("unexpected persisted result %+v", finished)
+	}
+	stored, err := store.GetSession(t.Context(), session.ID)
+	if err != nil {
+		t.Fatalf("reload completed session: %v", err)
+	}
+	if stored.Outcome != result.Outcome || stored.Summary != result.Summary {
+		t.Fatalf("unexpected reloaded session %+v", stored)
+	}
+}

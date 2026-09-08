@@ -20,6 +20,10 @@ type sessionResponse struct {
 	Role              worker.Role             `json:"role"`
 	Status            execution.SessionStatus `json:"status"`
 	ProviderSessionID string                  `json:"provider_session_id"`
+	Outcome           worker.Outcome          `json:"outcome,omitempty"`
+	Disposition       worker.Disposition      `json:"disposition,omitempty"`
+	Summary           string                  `json:"summary,omitempty"`
+	RecoveryAttempt   int                     `json:"recovery_attempt"`
 	StartedAt         time.Time               `json:"started_at"`
 	UpdatedAt         time.Time               `json:"updated_at"`
 	EndedAt           *time.Time              `json:"ended_at,omitempty"`
@@ -139,7 +143,9 @@ func newSessionResponse(session execution.Session) sessionResponse {
 		ID: session.ID, RunID: session.RunID, AgentID: session.AgentID,
 		Role: session.Role, Status: session.Status,
 		ProviderSessionID: session.ProviderSessionID,
-		StartedAt:         session.StartedAt, UpdatedAt: session.UpdatedAt, EndedAt: session.EndedAt,
+		Outcome:           session.Outcome, Disposition: session.Disposition,
+		Summary: session.Summary, RecoveryAttempt: session.RecoveryAttempt,
+		StartedAt: session.StartedAt, UpdatedAt: session.UpdatedAt, EndedAt: session.EndedAt,
 	}
 }
 

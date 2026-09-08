@@ -46,7 +46,7 @@ func TestServiceCreate(t *testing.T) {
 		},
 	}
 
-	project, err := service.Create(t.Context(), "   Commitarium   ")
+	project, err := service.Create(t.Context(), "   Commitarium   ", "")
 
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -58,6 +58,9 @@ func TestServiceCreate(t *testing.T) {
 
 	if project.Name != "Commitarium" {
 		t.Errorf("expected trimmed name %q, got %q", "Commitarium", project.Name)
+	}
+	if project.RecoveryPolicy != RecoveryPolicyApprovalRequired {
+		t.Errorf("expected default recovery policy %q, got %q", RecoveryPolicyApprovalRequired, project.RecoveryPolicy)
 	}
 
 	if !project.CreatedAt.Equal(fixedTime) {
@@ -73,11 +76,37 @@ func TestServiceCreate(t *testing.T) {
 	}
 }
 
+func TestServiceCreateAcceptsAutomaticRecovery(t *testing.T) {
+	store := &recordingStore{}
+	service := NewService(store)
+
+	created, err := service.Create(t.Context(), "Commitarium", RecoveryPolicyAutomatic)
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	if created.RecoveryPolicy != RecoveryPolicyAutomatic {
+		t.Fatalf("expected automatic recovery, got %+v", created)
+	}
+}
+
+func TestServiceCreateRejectsInvalidRecoveryPolicy(t *testing.T) {
+	store := &recordingStore{}
+	service := NewService(store)
+
+	_, err := service.Create(t.Context(), "Commitarium", RecoveryPolicy("reckless"))
+	if !errors.Is(err, ErrInvalidRecoveryPolicy) {
+		t.Fatalf("expected error %v, got %v", ErrInvalidRecoveryPolicy, err)
+	}
+	if store.createdProject != (Project{}) {
+		t.Fatalf("invalid project reached storage: %+v", store.createdProject)
+	}
+}
+
 func TestServiceCreateRejectsBlankName(t *testing.T) {
 	store := &recordingStore{}
 	service := NewService(store)
 
-	_, err := service.Create(t.Context(), " ")
+	_, err := service.Create(t.Context(), " ", "")
 
 	if !errors.Is(err, ErrNameRequired) {
 		t.Fatalf("expected error %v, got %v", ErrNameRequired, err)
@@ -93,7 +122,7 @@ func TestServiceCreateReturnsStoreError(t *testing.T) {
 
 	service := NewService(store)
 
-	project, err := service.Create(t.Context(), "Commitarium")
+	project, err := service.Create(t.Context(), "Commitarium", "")
 
 	if !errors.Is(err, storeError) {
 		t.Fatalf("expected error %v, got %v", storeError, err)

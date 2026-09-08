@@ -120,6 +120,39 @@ func (s *Service) TransitionSession(
 	return session, nil
 }
 
+func (s *Service) CompleteSession(
+	ctx context.Context,
+	id string,
+	expected SessionStatus,
+	status SessionStatus,
+	result worker.Result,
+) (Session, error) {
+	session, err := s.store.TransitionSession(ctx, SessionTransition{
+		SessionID: id, Expected: expected, Status: status,
+		ProviderSessionID: result.ProviderSessionID,
+		Result:            &result,
+		OccurredAt:        s.now().UTC(),
+	})
+	if err != nil {
+		return Session{}, fmt.Errorf("complete session %q as %q: %w", id, status, err)
+	}
+	return session, nil
+}
+
+func (s *Service) BeginSessionRecovery(
+	ctx context.Context,
+	id string,
+	expected SessionStatus,
+) (Session, error) {
+	session, err := s.store.BeginSessionRecovery(ctx, SessionRecovery{
+		SessionID: id, Expected: expected, OccurredAt: s.now().UTC(),
+	})
+	if err != nil {
+		return Session{}, fmt.Errorf("begin recovery for session %q: %w", id, err)
+	}
+	return session, nil
+}
+
 func (s *Service) RecordSessionEvent(
 	ctx context.Context,
 	sessionID string,
@@ -197,11 +230,29 @@ func (s *Service) SessionsForRun(
 	return s.store.ListSessions(ctx, runID)
 }
 
+func (s *Service) RecoverableRuns(ctx context.Context) ([]Run, error) {
+	return s.store.ListRecoverableRuns(ctx)
+}
+
+func (s *Service) ActiveSessionsForRun(
+	ctx context.Context,
+	runID string,
+) ([]Session, error) {
+	return s.store.ListActiveSessions(ctx, runID)
+}
+
 func (s *Service) EventsForSession(
 	ctx context.Context,
 	sessionID string,
 ) ([]Event, error) {
 	return s.store.ListEvents(ctx, sessionID)
+}
+
+func (s *Service) PendingCommandsForSession(
+	ctx context.Context,
+	sessionID string,
+) ([]Command, error) {
+	return s.store.ListPendingCommands(ctx, sessionID)
 }
 
 func (s *Service) SubscribeSessionEvents(
