@@ -88,6 +88,10 @@ duplicate.
 See [Coordinator API](docs/coordinator-api.md) for the complete route list,
 streaming endpoints, and session controls.
 
+The versioned [internal worker API](docs/worker-api.md) now has a tested
+worker-side HTTP boundary for authenticated attempt inspection and control. It
+is not yet connected to a real worker process or included in Docker Compose.
+
 ## Development checks
 
 ```sh
