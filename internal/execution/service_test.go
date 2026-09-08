@@ -56,9 +56,9 @@ func (s *recordingStore) AppendEvent(
 func (s *recordingStore) CreateCommand(
 	_ context.Context,
 	command Command,
-) (Command, error) {
+) (Command, bool, error) {
 	s.createdCommand = command
-	return s.createCommandResult, nil
+	return s.createCommandResult, true, nil
 }
 
 func (s *recordingStore) ResolveCommand(
@@ -163,7 +163,7 @@ func TestServiceCreatesAndResolvesCommand(t *testing.T) {
 		Status: CommandStatusPending, RequestedAt: fixedTime,
 	}
 
-	created, err := service.CreateCommand(
+	created, wasCreated, err := service.CreateCommand(
 		t.Context(),
 		"cmd_test",
 		"ses_test",
@@ -172,6 +172,9 @@ func TestServiceCreatesAndResolvesCommand(t *testing.T) {
 	)
 	if err != nil {
 		t.Fatalf("create command: %v", err)
+	}
+	if !wasCreated {
+		t.Error("expected command to be newly created")
 	}
 	if created != store.createCommandResult || store.createdCommand.RequestedAt != fixedTime {
 		t.Errorf("unexpected created command %+v", created)

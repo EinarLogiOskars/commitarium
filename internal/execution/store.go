@@ -50,7 +50,7 @@ type Store interface {
 	TransitionSession(ctx context.Context, transition SessionTransition) (Session, error)
 	AppendEvent(ctx context.Context, event PendingEvent) (Event, error)
 	ListEvents(ctx context.Context, sessionID string) ([]Event, error)
-	CreateCommand(ctx context.Context, command Command) (Command, error)
+	CreateCommand(ctx context.Context, command Command) (Command, bool, error)
 	GetCommand(ctx context.Context, id string) (Command, error)
 	ResolveCommand(ctx context.Context, resolution CommandResolution) (Command, error)
 }
