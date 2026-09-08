@@ -113,8 +113,9 @@ Supported types are:
 - `stop`, requesting cooperative termination
 
 Control commands must omit `message`. Every command requires an
-`Idempotency-Key` header. Forced termination is deliberately outside the worker
-protocol and will belong to the future worker supervisor.
+`Idempotency-Key` header. Forced termination is deliberately outside this
+public coordinator API; the versioned internal worker API assigns it to the
+worker supervisor for one exact execution attempt.
 
 During recovery, `continue` also acts as approval for a paused recovery
 assessment. Retrying the same approval key remains idempotent.
