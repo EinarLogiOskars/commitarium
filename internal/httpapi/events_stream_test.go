@@ -30,7 +30,7 @@ func TestStreamFeatureEventsResumesAfterLastEventID(t *testing.T) {
 	request = request.WithContext(cancelledContext)
 	recorder := httptest.NewRecorder()
 
-	New(nil, features, workflows).ServeHTTP(recorder, request)
+	New(nil, features, workflows, nil, nil).ServeHTTP(recorder, request)
 
 	response := recorder.Result()
 	defer response.Body.Close()
@@ -66,7 +66,7 @@ func TestStreamFeatureEventsRejectsUnknownLastEventID(t *testing.T) {
 	request.Header.Set("Last-Event-ID", "evt_unknown")
 	recorder := httptest.NewRecorder()
 
-	New(nil, features, workflows).ServeHTTP(recorder, request)
+	New(nil, features, workflows, nil, nil).ServeHTTP(recorder, request)
 
 	if recorder.Code != http.StatusBadRequest {
 		t.Fatalf("expected status %d, got %d", http.StatusBadRequest, recorder.Code)
@@ -100,7 +100,7 @@ func TestStreamFeatureEventsDeliversLiveEvent(t *testing.T) {
 	request.Header.Set("Last-Event-ID", first.ID)
 	recorder := httptest.NewRecorder()
 
-	New(nil, features, workflows).ServeHTTP(recorder, request)
+	New(nil, features, workflows, nil, nil).ServeHTTP(recorder, request)
 
 	body := recorder.Body.String()
 	if !strings.Contains(body, "id: "+second.ID) ||
