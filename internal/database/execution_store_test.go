@@ -95,7 +95,9 @@ func TestExecutionStoreSequencesEventsAndRetriesByID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("append first event: %v", err)
 	}
-	retried, err := store.AppendEvent(t.Context(), firstRequest)
+	retry := firstRequest
+	retry.OccurredAt = retry.OccurredAt.Add(time.Hour)
+	retried, err := store.AppendEvent(t.Context(), retry)
 	if err != nil {
 		t.Fatalf("retry first event: %v", err)
 	}

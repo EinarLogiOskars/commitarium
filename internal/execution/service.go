@@ -32,7 +32,7 @@ func (s *Service) CreateRun(
 	ctx context.Context,
 	id string,
 	featureID string,
-) (Run, error) {
+) (Run, bool, error) {
 	now := s.now().UTC()
 	run := Run{
 		ID: id, FeatureID: featureID, Status: RunStatusRunning,
@@ -40,18 +40,18 @@ func (s *Service) CreateRun(
 	}
 	if err := s.store.CreateRun(ctx, run); err != nil {
 		if !errors.Is(err, ErrAlreadyExists) {
-			return Run{}, fmt.Errorf("create run %q: %w", id, err)
+			return Run{}, false, fmt.Errorf("create run %q: %w", id, err)
 		}
 		existing, getErr := s.store.GetRun(ctx, id)
 		if getErr != nil {
-			return Run{}, fmt.Errorf("get existing run %q: %w", id, getErr)
+			return Run{}, false, fmt.Errorf("get existing run %q: %w", id, getErr)
 		}
 		if existing.FeatureID != featureID {
-			return Run{}, ErrRecordConflict
+			return Run{}, false, ErrRecordConflict
 		}
-		return existing, nil
+		return existing, false, nil
 	}
-	return run, nil
+	return run, true, nil
 }
 
 func (s *Service) CreateSession(
@@ -60,7 +60,7 @@ func (s *Service) CreateSession(
 	runID string,
 	agentID string,
 	role worker.Role,
-) (Session, error) {
+) (Session, bool, error) {
 	now := s.now().UTC()
 	session := Session{
 		ID: id, RunID: runID, AgentID: agentID, Role: role,
@@ -68,20 +68,20 @@ func (s *Service) CreateSession(
 	}
 	if err := s.store.CreateSession(ctx, session); err != nil {
 		if !errors.Is(err, ErrAlreadyExists) {
-			return Session{}, fmt.Errorf("create session %q: %w", id, err)
+			return Session{}, false, fmt.Errorf("create session %q: %w", id, err)
 		}
 		existing, getErr := s.store.GetSession(ctx, id)
 		if getErr != nil {
-			return Session{}, fmt.Errorf("get existing session %q: %w", id, getErr)
+			return Session{}, false, fmt.Errorf("get existing session %q: %w", id, getErr)
 		}
 		if existing.RunID != runID ||
 			existing.AgentID != agentID ||
 			existing.Role != role {
-			return Session{}, ErrRecordConflict
+			return Session{}, false, ErrRecordConflict
 		}
-		return existing, nil
+		return existing, false, nil
 	}
-	return session, nil
+	return session, true, nil
 }
 
 func (s *Service) TransitionRun(
@@ -123,8 +123,19 @@ func (s *Service) RecordSessionEvent(
 	sessionID string,
 	event worker.Event,
 ) (Event, error) {
+	return s.RecordSessionEventWithID(ctx, s.generateID(), sessionID, event)
+}
+
+// RecordSessionEventWithID lets a replayable event source supply a stable ID.
+// Reusing that ID with the same content is an idempotent retry at the store.
+func (s *Service) RecordSessionEventWithID(
+	ctx context.Context,
+	id string,
+	sessionID string,
+	event worker.Event,
+) (Event, error) {
 	recorded, err := s.store.AppendEvent(ctx, PendingEvent{
-		ID: s.generateID(), SessionID: sessionID,
+		ID: id, SessionID: sessionID,
 		Type: event.Type, Text: event.Text, OccurredAt: s.now().UTC(),
 	})
 	if err != nil {

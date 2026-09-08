@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/EinarLogiOskars/commitarium/internal/database"
+	"github.com/EinarLogiOskars/commitarium/internal/execution"
 	"github.com/EinarLogiOskars/commitarium/internal/feature"
 	"github.com/EinarLogiOskars/commitarium/internal/project"
 	"github.com/EinarLogiOskars/commitarium/internal/worker"
@@ -16,14 +17,13 @@ import (
 )
 
 func TestRunnerDrivesPlanningImplementationAndReviewLoop(t *testing.T) {
-	workflowService, featureStore := orchestrationDatabase(t)
+	workflowService, featureStore, executionService := orchestrationDatabase(t)
 	codex := autoAdvance(newTestCodex())
 	claude := autoAdvance(newTestClaude(
 		worker.DispositionChangesRequested,
 		worker.DispositionSucceeded,
 	))
-	sink := &recordingEventSink{}
-	runner := NewRunner(workflowService, sink)
+	runner := NewRunner(workflowService, executionService)
 	request := testRunRequest(codex, claude, 2)
 
 	result, err := runner.Run(t.Context(), request)
@@ -38,9 +38,6 @@ func TestRunnerDrivesPlanningImplementationAndReviewLoop(t *testing.T) {
 	}
 	if len(result.Sessions) != 6 {
 		t.Errorf("expected six sessions, got %d", len(result.Sessions))
-	}
-	if len(sink.events) != 6 {
-		t.Errorf("expected six observable session events, got %d", len(sink.events))
 	}
 	if !strings.Contains(claude.requests[0].Instructions, "proposed an accepted plan") {
 		t.Errorf("consultant did not receive lead proposal: %q", claude.requests[0].Instructions)
@@ -62,11 +59,36 @@ func TestRunnerDrivesPlanningImplementationAndReviewLoop(t *testing.T) {
 	if storedFeature.State != feature.StateReadyToMerge {
 		t.Errorf("expected state %q, got %q", feature.StateReadyToMerge, storedFeature.State)
 	}
+	storedRun, err := executionService.GetRun(t.Context(), request.ID)
+	if err != nil {
+		t.Fatalf("get execution run: %v", err)
+	}
+	if storedRun.Status != execution.RunStatusSucceeded || storedRun.EndedAt == nil {
+		t.Errorf("unexpected stored run %+v", storedRun)
+	}
+	for _, summary := range result.Sessions {
+		storedSession, err := executionService.GetSession(t.Context(), summary.SessionID)
+		if err != nil {
+			t.Fatalf("get session %q: %v", summary.SessionID, err)
+		}
+		if storedSession.Status != execution.SessionStatusCompleted ||
+			storedSession.ProviderSessionID != summary.Result.ProviderSessionID ||
+			storedSession.EndedAt == nil {
+			t.Errorf("unexpected stored session %+v", storedSession)
+		}
+		events, err := executionService.EventsForSession(t.Context(), summary.SessionID)
+		if err != nil {
+			t.Fatalf("get events for session %q: %v", summary.SessionID, err)
+		}
+		if len(events) != 1 || events[0].Sequence != 1 {
+			t.Errorf("unexpected events for session %q: %+v", summary.SessionID, events)
+		}
+	}
 	retried, err := runner.Run(t.Context(), request)
 	if err != nil {
 		t.Fatalf("retry run: %v", err)
 	}
-	if retried.Status != RunStatusReadyToMerge || len(retried.Sessions) != 6 {
+	if retried.Status != RunStatusReadyToMerge || len(retried.Sessions) != 0 {
 		t.Errorf("unexpected retried result %+v", retried)
 	}
 	events, err := workflowService.EventsForFeature(t.Context(), "fea_test")
@@ -100,10 +122,10 @@ func TestRunnerDrivesPlanningImplementationAndReviewLoop(t *testing.T) {
 }
 
 func TestRunnerWaitsForUserWhenReviewLimitIsReached(t *testing.T) {
-	workflowService, featureStore := orchestrationDatabase(t)
+	workflowService, featureStore, executionService := orchestrationDatabase(t)
 	codex := autoAdvance(newTestCodex())
 	claude := autoAdvance(newTestClaude(worker.DispositionChangesRequested))
-	runner := NewRunner(workflowService, nil)
+	runner := NewRunner(workflowService, executionService)
 
 	result, err := runner.Run(t.Context(), testRunRequest(codex, claude, 1))
 	if err != nil {
@@ -120,10 +142,17 @@ func TestRunnerWaitsForUserWhenReviewLimitIsReached(t *testing.T) {
 	if storedFeature.State != feature.StateReviewing {
 		t.Errorf("expected state %q, got %q", feature.StateReviewing, storedFeature.State)
 	}
+	storedRun, err := executionService.GetRun(t.Context(), "run_test")
+	if err != nil {
+		t.Fatalf("get execution run: %v", err)
+	}
+	if storedRun.Status != execution.RunStatusWaitingForUser || storedRun.EndedAt != nil {
+		t.Errorf("unexpected stored run %+v", storedRun)
+	}
 }
 
 func TestRunnerWaitsForUserWhenPlanningLimitIsReached(t *testing.T) {
-	workflowService, featureStore := orchestrationDatabase(t)
+	workflowService, featureStore, executionService := orchestrationDatabase(t)
 	codex := autoAdvance(worker.NewQueuedScriptedAdapter("fake-codex", map[worker.Role][]worker.Script{
 		worker.RoleLead: {
 			{
@@ -134,7 +163,7 @@ func TestRunnerWaitsForUserWhenPlanningLimitIsReached(t *testing.T) {
 		},
 	}))
 	claude := autoAdvance(newTestClaude(worker.DispositionSucceeded))
-	runner := NewRunner(workflowService, nil)
+	runner := NewRunner(workflowService, executionService)
 	request := testRunRequest(codex, claude, 1)
 	request.MaxPlanningRounds = 1
 
@@ -152,6 +181,69 @@ func TestRunnerWaitsForUserWhenPlanningLimitIsReached(t *testing.T) {
 	}
 	if storedFeature.State != feature.StatePlanning {
 		t.Errorf("expected state %q, got %q", feature.StatePlanning, storedFeature.State)
+	}
+	storedRun, err := executionService.GetRun(t.Context(), "run_test")
+	if err != nil {
+		t.Fatalf("get execution run: %v", err)
+	}
+	if storedRun.Status != execution.RunStatusWaitingForUser || storedRun.EndedAt != nil {
+		t.Errorf("unexpected stored run %+v", storedRun)
+	}
+}
+
+func TestRunnerPersistsWorkerStartFailure(t *testing.T) {
+	workflowService, _, executionService := orchestrationDatabase(t)
+	codex := autoAdvance(worker.NewQueuedScriptedAdapter(
+		"fake-codex",
+		map[worker.Role][]worker.Script{},
+	))
+	claude := autoAdvance(newTestClaude(worker.DispositionSucceeded))
+	runner := NewRunner(workflowService, executionService)
+
+	_, err := runner.Run(t.Context(), testRunRequest(codex, claude, 1))
+	if !errors.Is(err, worker.ErrScriptNotFound) {
+		t.Fatalf("expected error %v, got %v", worker.ErrScriptNotFound, err)
+	}
+	storedSession, getErr := executionService.GetSession(
+		t.Context(),
+		"run_test:plan-lead-1",
+	)
+	if getErr != nil {
+		t.Fatalf("get failed session: %v", getErr)
+	}
+	if storedSession.Status != execution.SessionStatusFailed || storedSession.EndedAt == nil {
+		t.Errorf("unexpected failed session %+v", storedSession)
+	}
+	storedRun, getErr := executionService.GetRun(t.Context(), "run_test")
+	if getErr != nil {
+		t.Fatalf("get failed run: %v", getErr)
+	}
+	if storedRun.Status != execution.RunStatusFailed ||
+		storedRun.EndedAt == nil ||
+		!strings.Contains(storedRun.Reason, worker.ErrScriptNotFound.Error()) {
+		t.Errorf("unexpected failed run %+v", storedRun)
+	}
+}
+
+func TestRunnerRejectsDuplicateActiveRun(t *testing.T) {
+	workflowService, _, executionService := orchestrationDatabase(t)
+	if _, created, err := executionService.CreateRun(
+		t.Context(),
+		"run_test",
+		"fea_test",
+	); err != nil {
+		t.Fatalf("create active run: %v", err)
+	} else if !created {
+		t.Fatal("expected active run to be newly created")
+	}
+	runner := NewRunner(workflowService, executionService)
+
+	_, err := runner.Run(
+		t.Context(),
+		testRunRequest(autoAdvance(newTestCodex()), autoAdvance(newTestClaude()), 1),
+	)
+	if !errors.Is(err, ErrRunAlreadyActive) {
+		t.Fatalf("expected error %v, got %v", ErrRunAlreadyActive, err)
 	}
 }
 
@@ -225,18 +317,6 @@ func (a *autoAdvancingAdapter) advanceUntilFinished(sessionID string) {
 	}
 }
 
-type recordingEventSink struct {
-	events []SessionEvent
-}
-
-func (s *recordingEventSink) RecordSessionEvent(
-	_ context.Context,
-	event SessionEvent,
-) error {
-	s.events = append(s.events, event)
-	return nil
-}
-
 func completedScript(message string) worker.Script {
 	return worker.Script{
 		Events:      []worker.Event{{Type: worker.EventMessage, Text: message}},
@@ -267,7 +347,7 @@ func testRunRequest(
 
 func orchestrationDatabase(
 	t *testing.T,
-) (*workflow.Service, *database.FeatureStore) {
+) (*workflow.Service, *database.FeatureStore, *execution.Service) {
 	t.Helper()
 	db, err := database.OpenSQLite(
 		t.Context(),
@@ -298,5 +378,7 @@ func orchestrationDatabase(
 	}); err != nil {
 		t.Fatalf("create feature: %v", err)
 	}
-	return workflow.NewService(database.NewWorkflowStore(db)), featureStore
+	return workflow.NewService(database.NewWorkflowStore(db)),
+		featureStore,
+		execution.NewService(database.NewExecutionStore(db))
 }

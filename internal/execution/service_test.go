@@ -74,15 +74,18 @@ func TestServiceCreatesRunAndSessionWithCoordinatorTime(t *testing.T) {
 	store := &recordingStore{}
 	service := testService(store, fixedTime)
 
-	run, err := service.CreateRun(t.Context(), "run_test", "fea_test")
+	run, created, err := service.CreateRun(t.Context(), "run_test", "fea_test")
 	if err != nil {
 		t.Fatalf("create run: %v", err)
+	}
+	if !created {
+		t.Error("expected run to be newly created")
 	}
 	if run != store.createdRun || run.Status != RunStatusRunning || run.StartedAt != fixedTime {
 		t.Errorf("unexpected run %+v", run)
 	}
 
-	session, err := service.CreateSession(
+	session, created, err := service.CreateSession(
 		t.Context(),
 		"ses_test",
 		run.ID,
@@ -91,6 +94,9 @@ func TestServiceCreatesRunAndSessionWithCoordinatorTime(t *testing.T) {
 	)
 	if err != nil {
 		t.Fatalf("create session: %v", err)
+	}
+	if !created {
+		t.Error("expected session to be newly created")
 	}
 	if session != store.createdSession ||
 		session.Status != SessionStatusStarting ||
@@ -107,14 +113,17 @@ func TestServiceRetriesMatchingRunAndRejectsConflict(t *testing.T) {
 	}
 	service := testService(store, time.Now())
 
-	actual, err := service.CreateRun(t.Context(), existing.ID, existing.FeatureID)
+	actual, created, err := service.CreateRun(t.Context(), existing.ID, existing.FeatureID)
 	if err != nil {
 		t.Fatalf("retry run creation: %v", err)
+	}
+	if created {
+		t.Error("expected retry to return the existing run")
 	}
 	if actual != existing {
 		t.Errorf("expected existing run %+v, got %+v", existing, actual)
 	}
-	if _, err := service.CreateRun(t.Context(), existing.ID, "fea_other"); !errors.Is(err, ErrRecordConflict) {
+	if _, _, err := service.CreateRun(t.Context(), existing.ID, "fea_other"); !errors.Is(err, ErrRecordConflict) {
 		t.Fatalf("expected error %v, got %v", ErrRecordConflict, err)
 	}
 }

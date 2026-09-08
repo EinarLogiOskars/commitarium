@@ -279,8 +279,7 @@ func (s *ExecutionStore) AppendEvent(
 	if found {
 		if existing.SessionID != pending.SessionID ||
 			existing.Type != pending.Type ||
-			existing.Text != pending.Text ||
-			!existing.OccurredAt.Equal(pending.OccurredAt) {
+			existing.Text != pending.Text {
 			return execution.Event{}, execution.ErrEventConflict
 		}
 		return existing, nil

@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
+	"github.com/EinarLogiOskars/commitarium/internal/execution"
 	"github.com/EinarLogiOskars/commitarium/internal/feature"
 	"github.com/EinarLogiOskars/commitarium/internal/worker"
 	"github.com/EinarLogiOskars/commitarium/internal/workflow"
@@ -67,35 +69,84 @@ type RunResult struct {
 	Sessions       []SessionSummary
 }
 
-type SessionEvent struct {
-	SessionID string
-	AgentID   string
-	Role      worker.Role
-	Event     worker.Event
-}
-
-type EventSink interface {
-	RecordSessionEvent(ctx context.Context, event SessionEvent) error
+type Execution interface {
+	CreateRun(ctx context.Context, id string, featureID string) (execution.Run, bool, error)
+	TransitionRun(
+		ctx context.Context,
+		id string,
+		expected execution.RunStatus,
+		status execution.RunStatus,
+		reason string,
+	) (execution.Run, error)
+	CreateSession(
+		ctx context.Context,
+		id string,
+		runID string,
+		agentID string,
+		role worker.Role,
+	) (execution.Session, bool, error)
+	TransitionSession(
+		ctx context.Context,
+		id string,
+		expected execution.SessionStatus,
+		status execution.SessionStatus,
+		providerSessionID string,
+	) (execution.Session, error)
+	RecordSessionEventWithID(
+		ctx context.Context,
+		id string,
+		sessionID string,
+		event worker.Event,
+	) (execution.Event, error)
 }
 
 type Runner struct {
-	workflow Workflow
-	events   EventSink
+	workflow   Workflow
+	executions Execution
 }
 
 var ErrInvalidRunRequest = errors.New("invalid orchestration run request")
 var ErrUnexpectedDisposition = errors.New("unexpected worker disposition")
+var ErrRunAlreadyActive = errors.New("orchestration run is already active")
+var ErrStoredRunFailed = errors.New("orchestration run previously failed")
+var ErrSessionAlreadyExists = errors.New("orchestration session already exists")
 
-func NewRunner(workflowService Workflow, events EventSink) *Runner {
-	return &Runner{workflow: workflowService, events: events}
+func NewRunner(workflowService Workflow, executions Execution) *Runner {
+	return &Runner{workflow: workflowService, executions: executions}
 }
 
-func (r *Runner) Run(ctx context.Context, request RunRequest) (RunResult, error) {
+func (r *Runner) Run(
+	ctx context.Context,
+	request RunRequest,
+) (result RunResult, runErr error) {
 	if err := request.Validate(); err != nil {
 		return RunResult{}, err
 	}
 
-	result := RunResult{Sessions: make([]SessionSummary, 0)}
+	result = RunResult{Sessions: make([]SessionSummary, 0)}
+	if r.executions != nil {
+		storedRun, created, err := r.executions.CreateRun(
+			ctx,
+			request.ID,
+			request.FeatureID,
+		)
+		if err != nil {
+			return RunResult{}, fmt.Errorf("begin run %q: %w", request.ID, err)
+		}
+		if !created {
+			return resultForStoredRun(storedRun)
+		}
+		defer func() {
+			if err := r.finishRun(ctx, request.ID, result, runErr); err != nil {
+				if runErr != nil {
+					runErr = errors.Join(runErr, err)
+					return
+				}
+				result = RunResult{}
+				runErr = err
+			}
+		}()
+	}
 	if err := r.transition(ctx, request, feature.StatePlanning); err != nil {
 		return RunResult{}, err
 	}
@@ -270,6 +321,70 @@ func (r *Runner) Run(ctx context.Context, request RunRequest) (RunResult, error)
 	return RunResult{}, errors.New("review loop exhausted unexpectedly")
 }
 
+func resultForStoredRun(run execution.Run) (RunResult, error) {
+	result := RunResult{Reason: run.Reason, Sessions: make([]SessionSummary, 0)}
+	switch run.Status {
+	case execution.RunStatusWaitingForUser:
+		result.Status = RunStatusWaiting
+		return result, nil
+	case execution.RunStatusSucceeded:
+		result.Status = RunStatusReadyToMerge
+		return result, nil
+	case execution.RunStatusStopped:
+		result.Status = RunStatusStopped
+		return result, nil
+	case execution.RunStatusRunning:
+		return RunResult{}, fmt.Errorf("%w: %q", ErrRunAlreadyActive, run.ID)
+	case execution.RunStatusFailed:
+		return RunResult{}, fmt.Errorf("%w: %s", ErrStoredRunFailed, run.Reason)
+	default:
+		return RunResult{}, fmt.Errorf(
+			"restore run %q: unrecognized status %q",
+			run.ID,
+			run.Status,
+		)
+	}
+}
+
+func (r *Runner) finishRun(
+	ctx context.Context,
+	runID string,
+	result RunResult,
+	runErr error,
+) error {
+	status := execution.RunStatusFailed
+	reason := "orchestration failed"
+	if runErr != nil {
+		reason = runErr.Error()
+	} else {
+		switch result.Status {
+		case RunStatusReadyToMerge:
+			status = execution.RunStatusSucceeded
+			reason = ""
+		case RunStatusWaiting:
+			status = execution.RunStatusWaitingForUser
+			reason = result.Reason
+		case RunStatusStopped:
+			status = execution.RunStatusStopped
+			reason = result.Reason
+		default:
+			reason = "orchestration returned without a final status"
+		}
+	}
+
+	_, err := r.executions.TransitionRun(
+		context.WithoutCancel(ctx),
+		runID,
+		execution.RunStatusRunning,
+		status,
+		reason,
+	)
+	if err != nil {
+		return fmt.Errorf("finish run %q as %q: %w", runID, status, err)
+	}
+	return nil
+}
+
 func (request RunRequest) Validate() error {
 	switch {
 	case strings.TrimSpace(request.ID) == "":
@@ -323,6 +438,46 @@ func (r *Runner) runAgent(
 	sessionSuffix string,
 ) (SessionSummary, error) {
 	sessionID := request.ID + ":" + sessionSuffix
+	trackedStatus := execution.SessionStatusStarting
+	if r.executions != nil {
+		_, created, err := r.executions.CreateSession(
+			ctx,
+			sessionID,
+			request.ID,
+			agent.ID,
+			role,
+		)
+		if err != nil {
+			return SessionSummary{}, fmt.Errorf("create %s session record: %w", role, err)
+		}
+		if !created {
+			return SessionSummary{}, fmt.Errorf(
+				"%w: %q",
+				ErrSessionAlreadyExists,
+				sessionID,
+			)
+		}
+	}
+	fail := func(cause error) error {
+		if r.executions == nil {
+			return cause
+		}
+		_, transitionErr := r.executions.TransitionSession(
+			context.WithoutCancel(ctx),
+			sessionID,
+			trackedStatus,
+			execution.SessionStatusFailed,
+			"",
+		)
+		if transitionErr != nil {
+			return errors.Join(
+				cause,
+				fmt.Errorf("mark %s session failed: %w", role, transitionErr),
+			)
+		}
+		return cause
+	}
+
 	session, err := agent.Adapter.Start(ctx, worker.SessionRequest{
 		SessionID:    sessionID,
 		FeatureID:    request.FeatureID,
@@ -330,27 +485,73 @@ func (r *Runner) runAgent(
 		Instructions: instructions,
 	})
 	if err != nil {
-		return SessionSummary{}, fmt.Errorf("start %s session: %w", role, err)
+		return SessionSummary{}, fail(fmt.Errorf("start %s session: %w", role, err))
 	}
+	if r.executions != nil {
+		if _, err := r.executions.TransitionSession(
+			ctx,
+			sessionID,
+			trackedStatus,
+			execution.SessionStatusRunning,
+			"",
+		); err != nil {
+			return SessionSummary{}, fail(fmt.Errorf(
+				"mark %s session running: %w",
+				role,
+				err,
+			))
+		}
+		trackedStatus = execution.SessionStatusRunning
+	}
+	eventNumber := 0
 	for event := range session.Events() {
-		if r.events == nil {
+		if r.executions == nil {
 			continue
 		}
-		if err := r.events.RecordSessionEvent(ctx, SessionEvent{
-			SessionID: sessionID,
-			AgentID:   agent.ID,
-			Role:      role,
-			Event:     event,
-		}); err != nil {
-			return SessionSummary{}, fmt.Errorf("record %s session event: %w", role, err)
+		eventNumber++
+		eventID := sessionID + ":event:" + strconv.Itoa(eventNumber)
+		if _, err := r.executions.RecordSessionEventWithID(
+			ctx,
+			eventID,
+			sessionID,
+			event,
+		); err != nil {
+			return SessionSummary{}, fail(fmt.Errorf(
+				"record %s session event: %w",
+				role,
+				err,
+			))
 		}
 	}
 	workerResult, err := session.Wait(ctx)
 	if err != nil {
-		return SessionSummary{}, fmt.Errorf("wait for %s session: %w", role, err)
+		return SessionSummary{}, fail(fmt.Errorf("wait for %s session: %w", role, err))
 	}
 	if err := workerResult.Validate(); err != nil {
-		return SessionSummary{}, fmt.Errorf("validate %s session result: %w", role, err)
+		return SessionSummary{}, fail(fmt.Errorf(
+			"validate %s session result: %w",
+			role,
+			err,
+		))
+	}
+	if r.executions != nil {
+		status := execution.SessionStatusCompleted
+		if workerResult.Outcome == worker.OutcomeStopped {
+			status = execution.SessionStatusStopped
+		}
+		if _, err := r.executions.TransitionSession(
+			ctx,
+			sessionID,
+			trackedStatus,
+			status,
+			workerResult.ProviderSessionID,
+		); err != nil {
+			return SessionSummary{}, fail(fmt.Errorf(
+				"finish %s session: %w",
+				role,
+				err,
+			))
+		}
 	}
 	return SessionSummary{
 		SessionID: sessionID,
