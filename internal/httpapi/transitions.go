@@ -26,6 +26,22 @@ type transitionFeatureResponse struct {
 	OccurredAt time.Time     `json:"occurred_at"`
 }
 
+type featureEventResponse struct {
+	ID             string             `json:"id"`
+	Type           workflow.EventType `json:"type"`
+	Actor          eventActorResponse `json:"actor"`
+	OccurredAt     time.Time          `json:"occurred_at"`
+	Sequence       int64              `json:"sequence"`
+	PayloadVersion int                `json:"payload_version"`
+	PreviousState  feature.State      `json:"previous_state"`
+	State          feature.State      `json:"state"`
+}
+
+type eventActorResponse struct {
+	Kind workflow.ActorKind `json:"kind"`
+	ID   string             `json:"id"`
+}
+
 func (api *API) transitionFeatureHandler(w http.ResponseWriter, r *http.Request) {
 	request := transitionFeatureRequest{}
 	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
@@ -91,5 +107,57 @@ func (api *API) transitionFeatureHandler(w http.ResponseWriter, r *http.Request)
 		OccurredAt: event.OccurredAt,
 	}); err != nil {
 		log.Printf("encode feature transition response: %v", err)
+	}
+}
+
+func (api *API) getFeatureEventsHandler(w http.ResponseWriter, r *http.Request) {
+	projectID := r.PathValue("projectID")
+	featureID := r.PathValue("id")
+	if _, err := api.features.GetByID(r.Context(), projectID, featureID); err != nil {
+		if errors.Is(err, feature.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "feature_not_found", "feature not found")
+			return
+		}
+		log.Printf("verify feature %q for project %q: %v", featureID, projectID, err)
+		writeError(w, http.StatusInternalServerError, "internal_error", "internal server error")
+		return
+	}
+
+	events, err := api.workflow.EventsForFeature(r.Context(), featureID)
+	if err != nil {
+		log.Printf("list events for feature %q: %v", featureID, err)
+		writeError(w, http.StatusInternalServerError, "internal_error", "internal server error")
+		return
+	}
+
+	response := make([]featureEventResponse, 0, len(events))
+	for _, event := range events {
+		payload, err := workflow.DecodeFeatureStateChangedPayload(
+			event.PayloadVersion,
+			event.Payload,
+		)
+		if err != nil {
+			log.Printf("decode workflow event %q: %v", event.ID, err)
+			writeError(w, http.StatusInternalServerError, "internal_error", "internal server error")
+			return
+		}
+		response = append(response, featureEventResponse{
+			ID:   event.ID,
+			Type: event.Type,
+			Actor: eventActorResponse{
+				Kind: event.Actor.Kind,
+				ID:   event.Actor.ID,
+			},
+			OccurredAt:     event.OccurredAt,
+			Sequence:       event.Sequence,
+			PayloadVersion: event.PayloadVersion,
+			PreviousState:  payload.PreviousState,
+			State:          payload.State,
+		})
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		log.Printf("encode feature events response: %v", err)
 	}
 }
