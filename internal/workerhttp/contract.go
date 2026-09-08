@@ -1,7 +1,6 @@
-// Package workerhttp defines the versioned wire contract shared by the
-// coordinator and provider-worker HTTP services. It intentionally does not
-// contain handlers or clients; transport-neutral orchestration types remain in
-// internal/worker.
+// Package workerhttp defines the versioned wire contract and HTTP transport
+// shared by the coordinator and provider workers. Transport-neutral
+// orchestration types remain in internal/worker.
 package workerhttp
 
 import "time"

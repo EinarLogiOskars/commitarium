@@ -4,9 +4,10 @@ The internal worker API is the private boundary between the Commitarium
 coordinator and a provider worker that will supervise Codex or Claude Code.
 Protocol version 1 uses JSON over HTTP under `/internal/v1`.
 
-This boundary is implemented and tested as a Go HTTP handler, but there is no
-worker executable or worker service in Docker Compose yet. The current tests
-use an in-memory fake service and do not launch a provider CLI.
+This boundary is implemented and tested as a Go HTTP server and coordinator
+client, but there is no worker executable or worker service in Docker Compose
+yet. The current tests connect both sides through an in-memory transport and a
+fake process-control service; they do not launch a provider CLI.
 
 ## Session and attempt identity
 
@@ -29,7 +30,8 @@ Authorization: Bearer WORKER_TOKEN
 
 The server stores only a SHA-256 digest of its configured token and compares
 token digests in constant time. Token generation and delivery to future worker
-containers are not implemented in this slice.
+containers are not implemented in this slice. The coordinator client must keep
+the token in memory while it is needed to authenticate requests.
 
 Responses use `Cache-Control: no-store` so provider session and attempt data
 are not cached.
@@ -47,6 +49,34 @@ are not cached.
 
 The event-history and SSE routes are deliberately deferred to a separate
 commit.
+
+## Coordinator client
+
+The coordinator-side client turns normal Go method calls into requests to the
+routes above. It validates IDs, commands, and start or resume data before using
+the network. The client then validates the returned HTTP status, JSON fields,
+protocol version, attempt identity, and assignment before the coordinator can
+act on the response.
+
+Client configuration requires:
+
+- an `http` or `https` worker base URL without embedded credentials, paths,
+  queries, or fragments;
+- the worker bearer token; and
+- a positive request timeout.
+
+The timeout is a deadline for one complete request. A timeout means the result
+is unknown, not that the worker definitely did nothing. Orchestration must
+inspect the attempt or safely retry the same attempt and idempotency key before
+it considers starting anything else.
+
+The client does not allow Go's HTTP transport to replay a mutation body after
+a connection failure. Commitarium must make that retry decision explicitly
+after applying its recovery and duplicate-agent safety rules.
+
+The client refuses redirects so an authentication token cannot be forwarded to
+an unexpected address. Responses are limited to 256 KiB and must contain one
+valid JSON object with no unknown fields.
 
 ## Mutating requests and safe retries
 
@@ -101,10 +131,17 @@ advertised by the worker return `422 Unprocessable Content`.
 Unexpected service failures return a generic `500 Internal Server Error`.
 Internal error text is not sent to the coordinator.
 
+The coordinator client returns a typed remote error for a valid worker
+rejection. Coordinator code can inspect its protocol code and `retryable` flag
+without comparing human-readable messages. Connection failures and malformed
+responses use separate errors, so they cannot be mistaken for a deliberate
+worker decision.
+
 ## Current boundary
 
-The HTTP handler depends on a small Go service interface. That interface will
-later be implemented by the worker supervisor and durable journal. Keeping the
-HTTP translation separate means process management, persistence, provider
+The HTTP handler depends on a small Go service interface, and the coordinator
+client implements that same interface over the network. A future worker
+supervisor and durable journal will implement the server side. Keeping this
+translation separate means process management, persistence, provider
 credentials, and Codex or Claude Code behavior can be added without changing
 how requests are authenticated and decoded.
