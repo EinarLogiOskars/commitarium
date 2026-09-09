@@ -86,6 +86,7 @@ type Outcome string
 const (
 	OutcomeCompleted Outcome = "completed"
 	OutcomeStopped   Outcome = "stopped"
+	OutcomeFailed    Outcome = "failed"
 )
 
 type Disposition string
@@ -188,7 +189,7 @@ func (command Command) Validate() error {
 }
 
 func (outcome Outcome) IsValid() bool {
-	return outcome == OutcomeCompleted || outcome == OutcomeStopped
+	return outcome == OutcomeCompleted || outcome == OutcomeStopped || outcome == OutcomeFailed
 }
 
 func (disposition Disposition) IsValid() bool {
@@ -212,6 +213,8 @@ func (result Result) Validate() error {
 		return fmt.Errorf("%w: disposition %q is not recognized", ErrInvalidResult, result.Disposition)
 	case result.Outcome == OutcomeStopped && result.Disposition != "":
 		return fmt.Errorf("%w: stopped session cannot have a disposition", ErrInvalidResult)
+	case result.Outcome == OutcomeFailed && result.Disposition != "":
+		return fmt.Errorf("%w: failed session cannot have a disposition", ErrInvalidResult)
 	default:
 		return nil
 	}

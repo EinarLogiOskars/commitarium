@@ -44,6 +44,21 @@ func TestSessionValidate(t *testing.T) {
 	if err := valid.Validate(); !errors.Is(err, ErrInvalidSession) {
 		t.Fatalf("expected error %v, got %v", ErrInvalidSession, err)
 	}
+	ended := now.Add(time.Second)
+	failed := Session{
+		ID: "ses_failed", RunID: "run_test", AgentID: "agt_test",
+		Role: worker.RoleCoder, Status: SessionStatusFailed,
+		Outcome: worker.OutcomeFailed, Summary: "provider failed",
+		StartedAt: now, UpdatedAt: ended, EndedAt: &ended,
+	}
+	if err := failed.Validate(); err != nil {
+		t.Fatalf("validate provider-reported failure: %v", err)
+	}
+	failed.Outcome = worker.OutcomeCompleted
+	failed.Disposition = worker.DispositionSucceeded
+	if err := failed.Validate(); !errors.Is(err, ErrInvalidSession) {
+		t.Fatalf("expected invalid failed result, got %v", err)
+	}
 }
 
 func TestEventValidate(t *testing.T) {

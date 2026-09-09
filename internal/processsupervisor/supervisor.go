@@ -25,6 +25,7 @@ var (
 	ErrUnsupportedPlatform = errors.New("process supervision is unsupported on this platform")
 	ErrOutputBackpressure  = errors.New("process output consumer fell behind")
 	ErrAttemptExists       = errors.New("process attempt ID was already used")
+	ErrInputClosed         = errors.New("process input is closed")
 	attemptIDPattern       = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
 )
 
@@ -133,30 +134,41 @@ func (supervisor *Supervisor) Start(
 		_ = stdout.Close()
 		return nil, fmt.Errorf("open child stderr: %w", err)
 	}
+	stdin, err := command.StdinPipe()
+	if err != nil {
+		_ = stdout.Close()
+		_ = stderr.Close()
+		return nil, fmt.Errorf("open child stdin: %w", err)
+	}
 	if err := supervisor.reserve(request.AttemptID); err != nil {
 		_ = stdout.Close()
 		_ = stderr.Close()
+		_ = stdin.Close()
 		return nil, err
 	}
 	if err := ctx.Err(); err != nil {
 		supervisor.release(request.AttemptID)
 		_ = stdout.Close()
 		_ = stderr.Close()
+		_ = stdin.Close()
 		return nil, err
 	}
 	if err := command.Start(); err != nil {
 		supervisor.release(request.AttemptID)
 		_ = stdout.Close()
 		_ = stderr.Close()
+		_ = stdin.Close()
 		return nil, fmt.Errorf("start child process: %w", err)
 	}
 
 	process := &Process{
 		attemptID: request.AttemptID,
 		command:   command,
+		stdin:     stdin,
 		startedAt: time.Now().UTC(),
 		output:    make(chan Output, defaultOutputBuffer),
 		done:      make(chan struct{}),
+		inputGate: make(chan struct{}, 1),
 	}
 	process.collect(stdout, stderr)
 	return process, nil
@@ -186,6 +198,7 @@ func (supervisor *Supervisor) release(attemptID string) {
 type Process struct {
 	attemptID string
 	command   *exec.Cmd
+	stdin     io.WriteCloser
 	startedAt time.Time
 	output    chan Output
 	done      chan struct{}
@@ -194,6 +207,10 @@ type Process struct {
 	exited  bool
 	result  Result
 	waitErr error
+
+	inputGate    chan struct{}
+	inputStateMu sync.Mutex
+	inputClosed  bool
 }
 
 func (process *Process) AttemptID() string {
@@ -212,6 +229,84 @@ func (process *Process) Output() <-chan Output {
 		return nil
 	}
 	return process.output
+}
+
+// WriteInput writes one complete provider-protocol frame to the child's
+// standard input. Calls are serialized so concurrent control requests cannot
+// interleave their bytes. If the caller cancels while a write is blocked, the
+// input pipe is closed to unblock it; the protocol connection is no longer
+// safe to reuse after such uncertainty.
+func (process *Process) WriteInput(ctx context.Context, data []byte) error {
+	if process == nil {
+		return errors.New("process is required")
+	}
+	if ctx == nil {
+		return errors.New("context is required")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if len(data) == 0 {
+		return nil
+	}
+
+	select {
+	case process.inputGate <- struct{}{}:
+		defer func() { <-process.inputGate }()
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	process.inputStateMu.Lock()
+	if process.inputClosed {
+		process.inputStateMu.Unlock()
+		return ErrInputClosed
+	}
+	process.inputStateMu.Unlock()
+
+	written := make(chan error, 1)
+	go func() {
+		count, err := process.stdin.Write(data)
+		if err == nil && count != len(data) {
+			err = io.ErrShortWrite
+		}
+		written <- err
+	}()
+	select {
+	case err := <-written:
+		if err != nil {
+			return fmt.Errorf("write child stdin: %w", err)
+		}
+		return nil
+	case <-ctx.Done():
+		process.inputStateMu.Lock()
+		process.inputClosed = true
+		process.inputStateMu.Unlock()
+		_ = process.stdin.Close()
+		<-written
+		return ctx.Err()
+	}
+}
+
+// CloseInput sends EOF to the child. It is idempotent and waits for any active
+// write so a partially written provider-protocol frame is never followed by
+// another caller closing the pipe.
+func (process *Process) CloseInput() error {
+	if process == nil {
+		return errors.New("process is required")
+	}
+	process.inputGate <- struct{}{}
+	defer func() { <-process.inputGate }()
+	process.inputStateMu.Lock()
+	if process.inputClosed {
+		process.inputStateMu.Unlock()
+		return nil
+	}
+	process.inputClosed = true
+	process.inputStateMu.Unlock()
+	if err := process.stdin.Close(); err != nil {
+		return fmt.Errorf("close child stdin: %w", err)
+	}
+	return nil
 }
 
 func (process *Process) Wait(ctx context.Context) (Result, error) {
@@ -321,6 +416,7 @@ func (process *Process) collect(stdout io.ReadCloser, stderr io.ReadCloser) {
 		<-sequenced
 		waitErr := process.command.Wait()
 		endedAt := time.Now().UTC()
+		_ = process.CloseInput()
 
 		process.mu.Lock()
 		process.exited = true

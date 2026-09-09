@@ -121,9 +121,13 @@ identity before reporting an attempt as running, applies idempotent controls,
 and marks interrupted work uncertain on service startup. A standalone simulated
 Codex worker now serves this boundary as a long-running process. Its private
 SQLite journal survives container recreation and its compiled deterministic
-scripts can serve repeated logical sessions. Real provider processes,
-coordinator runtime wiring, and provider-specific output handling still remain
-to be built.
+scripts can serve repeated logical sessions. The codebase also contains the
+first real Codex App Server adapter: it can start or resume a Codex thread,
+capture its thread ID before work continues, stream a safe subset of observable
+activity, steer or interrupt the active turn, and force-stop its exact process
+tree. The standalone worker still selects deterministic scripts; credentials,
+persistent Codex profile state, project workspaces, and coordinator runtime
+wiring remain separate future slices.
 
 The worker also has a provider-neutral operating-system process-supervision
 foundation. It can start one exact child process group, expose bounded and
@@ -133,8 +137,9 @@ can now pass the immutable HTTP attempt ID into a process-backed provider
 session, durably record a force-stop request before delivery, terminate only
 that session's process tree, and wait for the normal session watcher to persist
 the terminal result. Exact retries return that stored result without sending a
-second signal. The simulated worker does not advertise this optional capability;
-the first real provider adapter will connect it to a provider CLI.
+second signal. The simulated worker does not advertise this optional capability.
+The Codex adapter implements it, but is not yet selected by the standalone
+worker.
 
 ## Development checks
 

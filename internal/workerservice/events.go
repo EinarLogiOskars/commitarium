@@ -267,6 +267,13 @@ func (service *Service) finishAttempt(
 		Disposition: workerhttp.Disposition(result.Disposition),
 		Summary:     result.Summary,
 	}
+	if result.Outcome == worker.OutcomeFailed {
+		terminalResult.Error = &workerhttp.ProtocolError{
+			Code:      workerhttp.ErrorInternal,
+			Message:   result.Summary,
+			Retryable: false,
+		}
+	}
 	validationTime := service.timestamp()
 	terminalCandidate := attempt
 	terminalCandidate.State = workerhttp.AttemptStateTerminal
