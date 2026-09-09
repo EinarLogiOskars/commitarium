@@ -23,6 +23,9 @@ this API beyond the host loopback interface is unsupported.
 | `GET` | `/api/v1/projects/{projectID}/features/{featureID}/workspace` | Retrieve the durable branch, checkout, and PR identity |
 | `GET` | `/api/v1/runs/{runID}` | Retrieve run state and its ordered sessions |
 | `POST` | `/api/v1/runs/{runID}/planning` | Resume the real lead in the managed workspace for its first plan proposal |
+| `POST` | `/api/v1/runs/{runID}/planning/reviewer` | Start the persistent reviewer with the lead's exact proposal |
+| `GET` | `/api/v1/runs/{runID}/planning/messages` | Retrieve the ordered lead/reviewer planning messages |
+| `GET` | `/api/v1/runs/{runID}/planning/messages/stream` | Replay and stream ordered planning messages with SSE |
 | `GET` | `/api/v1/sessions/{sessionID}` | Retrieve a session |
 | `GET` | `/api/v1/sessions/{sessionID}/events` | Retrieve durable observable session activity |
 | `GET` | `/api/v1/sessions/{sessionID}/events/stream` | Replay and stream observable session activity with SSE |
@@ -265,9 +268,74 @@ unready or contradictory workspace/PR state, an unsafe prior worker attempt, or
 the wrong run/session state returns `409 planning_not_ready`. This endpoint is
 currently registered only for the opt-in real-Codex runner.
 
-This slice deliberately stops after the lead proposal. A separate reviewer
-session, the combined lead/reviewer conversation stream, plan agreement, and
-the agreed-plan update to Forgejo are the next slice.
+## Starting the first planning review
+
+After the lead proposal is ready, start one separate reviewer conversation:
+
+```http
+POST /api/v1/runs/run_opaque/planning/reviewer
+Idempotency-Key: start-reviewer-1
+Content-Length: 0
+```
+
+The feature must be in `planning`; the run and lead must be waiting; the lead's
+planning attempt must be terminal and fully copied into coordinator history;
+and the managed checkout and draft PR must be ready. The coordinator selects
+the last completed `message` from that lead turn as its final proposal. Any
+earlier provider-authored preamble remains in the lead session activity but is
+not mistaken for the proposal.
+
+Reviewer session creation, its first deterministic worker attempt, and the run
+transition to `running` commit in one SQLite transaction. A coordinator restart
+therefore cannot leave a half-created session that might cause a duplicate
+launch. The reviewer starts a new provider conversation in the same managed
+workspace and receives the accepted goal, repository/branch/base/PR facts, and
+the lead proposal verbatim. It is instructed to inspect and critique without
+changing files, installing dependencies, committing, pushing, or implementing.
+
+Completion leaves both sessions and the run at `waiting_for_user`. Repeating
+the action returns the same reviewer session without another worker attempt.
+Missing or contradictory prerequisites return `409 reviewer_not_ready`.
+
+This endpoint does not interpret acceptance, route changes back to the lead,
+or update Forgejo. Those behaviors belong to the next bounded planning-loop
+slice.
+
+## Shared planning messages
+
+`GET /api/v1/runs/{runID}/planning/messages` returns final authored planning
+responses in their coordinator-assigned cross-session order:
+
+```json
+[
+  {
+    "id": "sev_lead_proposal",
+    "sequence": 1,
+    "session_id": "run_opaque:lead",
+    "agent_id": "codex-lead",
+    "role": "lead",
+    "type": "message",
+    "text": "Proposed implementation plan...",
+    "occurred_at": "2026-09-09T20:00:00Z"
+  },
+  {
+    "id": "sev_reviewer_response",
+    "sequence": 2,
+    "session_id": "run_opaque:reviewer",
+    "agent_id": "codex-reviewer",
+    "role": "reviewer",
+    "type": "message",
+    "text": "I require these changes...",
+    "occurred_at": "2026-09-09T20:01:00Z"
+  }
+]
+```
+
+The planning record references the existing session event instead of copying
+its text, so individual session history remains authoritative. The SSE variant
+uses event name `planning_message`, replays durable history first, and accepts
+the last planning message's `id` in `Last-Event-ID`. The normal per-session
+streams continue to expose activity, commands, preambles, and terminal status.
 
 A session response exposes its provider session ID as soon as the provider has
 started, rather than only after completion. It also includes
@@ -277,7 +345,7 @@ checkpoints without relaunching agents.
 
 ## Server-sent event streams
 
-Both stream endpoints first replay durable SQLite history and then deliver new
+All stream endpoints first replay durable SQLite history and then deliver new
 events live. An SSE `id` is the durable event ID. A reconnecting client can send
 that value in `Last-Event-ID` to resume after it without gaps or duplicate
 delivery.
@@ -384,7 +452,9 @@ run and session are both `waiting_for_user` is not mistaken for interrupted
 work.
 
 For the real-lead mode, recovery only performs a read-only lookup of the exact
-durable worker attempt, including an interrupted follow-up or planning turn. If
+durable worker attempt, including an interrupted lead, follow-up, planning, or
+first-reviewer turn. A waiting lead is not counted as concurrent active work
+while the reviewer is running. If
 it still exists and is consistent, the coordinator records a `recovery_assessment`
 event, marks its pending reply applied once the attempt is confirmed, and
 reattaches to the event stream without starting a process. If it is missing,

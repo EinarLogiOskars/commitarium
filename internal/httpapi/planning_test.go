@@ -30,6 +30,16 @@ func (stub *planningStarterStub) StartPlanning(
 	return stub.run, true, stub.err
 }
 
+func (stub *planningStarterStub) StartPlanningReview(
+	_ context.Context,
+	runID string,
+	idempotencyKey string,
+) (execution.Run, bool, error) {
+	stub.receivedRunID = runID
+	stub.receivedKey = idempotencyKey
+	return stub.run, true, stub.err
+}
+
 type planningExecutionStub struct {
 	ExecutionService
 	sessions []execution.Session
@@ -117,5 +127,30 @@ func TestStartPlanningHandlerRequiresReadyStateAndIdempotencyKey(t *testing.T) {
 	handler.ServeHTTP(internal, request)
 	if internal.Code != http.StatusInternalServerError {
 		t.Fatalf("expected unexpected failure to return 500, got %d", internal.Code)
+	}
+}
+
+func TestStartPlanningReviewHandlerStartsReviewer(t *testing.T) {
+	now := time.Date(2026, time.September, 9, 21, 0, 0, 0, time.UTC)
+	run := execution.Run{
+		ID: "run_review", FeatureID: "fea_planning", Status: execution.RunStatusRunning,
+		Reason:    "The reviewer is inspecting the lead's planning proposal.",
+		StartedAt: now, UpdatedAt: now,
+	}
+	starter := &planningStarterStub{run: run}
+	handler := NewWithWorkspaceAndPlanningService(
+		nil, nil, nil, planningExecutionStub{}, nil, nil, nil, starter,
+	)
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/runs/run_review/planning/reviewer", nil)
+	request.Header.Set("Idempotency-Key", "start-reviewer-1")
+	recorder := httptest.NewRecorder()
+
+	handler.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+	if starter.receivedRunID != run.ID || starter.receivedKey != "start-reviewer-1" {
+		t.Fatalf("unexpected reviewer request run=%q key=%q", starter.receivedRunID, starter.receivedKey)
 	}
 }

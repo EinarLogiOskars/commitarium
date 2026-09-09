@@ -728,6 +728,7 @@ func TestRemoteLeadStartsPlanningInManagedWorkspace(t *testing.T) {
 	runID := "run_remote_planning"
 	stub := newConversationalRemoteLeadWorker(runID, storedProject.ID, storedFeature.ID)
 	addCompletedPlanningAttempt(stub, runID, storedProject.ID, storedFeature.ID)
+	addCompletedReviewerPlanningAttempt(stub, runID, storedProject.ID, storedFeature.ID)
 	workflowService := workflow.NewService(database.NewWorkflowStore(db))
 	now := time.Date(2026, time.September, 9, 20, 0, 0, 0, time.UTC)
 	checkoutAt := now.Add(time.Second)
@@ -816,6 +817,52 @@ func TestRemoteLeadStartsPlanningInManagedWorkspace(t *testing.T) {
 	if requestCount != 2 {
 		t.Fatalf("planning retry launched another worker turn: %d requests", requestCount)
 	}
+
+	reviewRun, admitted, err := starter.StartPlanningReview(
+		t.Context(), runID, "start-reviewer",
+	)
+	if err != nil || !admitted || reviewRun.Status != execution.RunStatusRunning {
+		t.Fatalf("start reviewer: run=%+v admitted=%t err=%v", reviewRun, admitted, err)
+	}
+	waitForRemoteLeadStatus(t, executions, runID, execution.RunStatusWaitingForUser)
+
+	sessions, err := executions.SessionsForRun(t.Context(), runID)
+	if err != nil || len(sessions) != 2 {
+		t.Fatalf("expected lead and reviewer sessions: %+v err=%v", sessions, err)
+	}
+	reviewer, err := executions.GetSession(t.Context(), remoteReviewerSessionID(runID))
+	if err != nil || reviewer.Role != worker.RoleReviewer ||
+		reviewer.Status != execution.SessionStatusWaitingForUser ||
+		reviewer.ProviderSessionID != "codex-review-thread-test" {
+		t.Fatalf("unexpected reviewer session %+v err=%v", reviewer, err)
+	}
+	stub.mu.Lock()
+	requests = append([]workerhttp.PutAttemptRequest(nil), stub.putRequests...)
+	stub.mu.Unlock()
+	if len(requests) != 3 || requests[2].Mode != workerhttp.AttemptModeStart ||
+		requests[2].Assignment.Role != workerhttp.RoleReviewer ||
+		!strings.Contains(requests[2].Instructions, "Proposed implementation plan") ||
+		!strings.Contains(requests[2].Instructions, "Do not modify files") {
+		t.Fatalf("unexpected reviewer request %+v", requests)
+	}
+	messages, err := executions.PlanningMessagesForRun(t.Context(), runID)
+	if err != nil || len(messages) != 2 ||
+		messages[0].Role != worker.RoleLead || messages[0].Event.Text != "Proposed implementation plan" ||
+		messages[1].Role != worker.RoleReviewer || messages[1].Event.Text != "The plan needs stronger test coverage." {
+		t.Fatalf("unexpected shared planning history %+v err=%v", messages, err)
+	}
+	reviewRun, admitted, err = starter.StartPlanningReview(
+		t.Context(), runID, "start-reviewer",
+	)
+	if err != nil || admitted || reviewRun.ID != runID {
+		t.Fatalf("retry reviewer: run=%+v admitted=%t err=%v", reviewRun, admitted, err)
+	}
+	stub.mu.Lock()
+	requestCount = len(stub.putRequests)
+	stub.mu.Unlock()
+	if requestCount != 3 {
+		t.Fatalf("reviewer retry launched another worker turn: %d requests", requestCount)
+	}
 }
 
 func TestRemoteLeadRecoveryReattachesToPlanningAttempt(t *testing.T) {
@@ -901,6 +948,120 @@ func TestRemoteLeadRecoveryReattachesToPlanningAttempt(t *testing.T) {
 	}
 	if !foundAssessment || !foundPlan {
 		t.Fatalf("recovered planning was not fully observable: %+v", events)
+	}
+}
+
+func TestRemoteReviewerRecoveryReattachesAndPublishesItsResponse(t *testing.T) {
+	db, executions, storedProject, storedFeature := newRemoteLeadExecution(t)
+	runID := "run_remote_reviewer_recovery"
+	stub := newConversationalRemoteLeadWorker(runID, storedProject.ID, storedFeature.ID)
+	addCompletedPlanningAttempt(stub, runID, storedProject.ID, storedFeature.ID)
+	addCompletedReviewerPlanningAttempt(stub, runID, storedProject.ID, storedFeature.ID)
+	workflowService := workflow.NewService(database.NewWorkflowStore(db))
+	checkoutAt := time.Date(2026, time.September, 9, 22, 0, 0, 0, time.UTC)
+	prAt := checkoutAt.Add(time.Second)
+	workspaceStub := &remoteLeadWorkspaceStub{prepared: workspace.Workspace{
+		ID: "wsp_managed_feature", ProjectID: storedProject.ID, FeatureID: storedFeature.ID,
+		RepositoryOwner: "commitarium", RepositoryName: "planning-test",
+		BaseBranch: "main", Branch: "commitarium/" + storedFeature.ID,
+		BaseCommitID: "0123456789abcdef0123456789abcdef01234567",
+		Status:       workspace.StatusBranchReady, CheckoutRelativePath: "wsp_managed_feature",
+		CheckoutCreatedAt: &checkoutAt, PullRequestNumber: 7,
+		PullRequestURL: "http://forgejo.test/pulls/7", PullRequestRecordedAt: &prAt,
+	}}
+	newStarter := func(withWorkspace bool) *RemoteLeadStarter {
+		config := RemoteLeadConfig{
+			Executions: executions, Features: database.NewFeatureStore(db), Goals: workflowService,
+			Planning: workflowService, Worker: stub,
+			Pump:     &conversationalRemoteLeadPump{executions: executions, worker: stub},
+			Lifetime: t.Context(), AgentProfileID: "codex-default", WorkspaceID: "project-read-only",
+		}
+		if withWorkspace {
+			config.Workspaces = workspaceStub
+		}
+		starter, err := NewRemoteLeadStarter(config)
+		if err != nil {
+			t.Fatalf("create remote starter: %v", err)
+		}
+		return starter
+	}
+	starter := newStarter(true)
+	if _, _, err := starter.Start(
+		t.Context(), runID, storedProject.ID, storedFeature.ID, storedFeature.Title,
+	); err != nil {
+		t.Fatalf("start lead: %v", err)
+	}
+	waitForRemoteLeadStatus(t, executions, runID, execution.RunStatusWaitingForUser)
+	if _, err := starter.AcceptGoal(
+		t.Context(), remoteLeadSessionID(runID), "Export the report as CSV.",
+		workflow.Actor{Kind: workflow.ActorKindUser, ID: "local-user"}, "accept-reviewer-recovery",
+	); err != nil {
+		t.Fatalf("accept goal: %v", err)
+	}
+	if _, _, err := starter.StartPlanning(t.Context(), runID, "start-planning"); err != nil {
+		t.Fatalf("start lead planning: %v", err)
+	}
+	waitForRemoteLeadStatus(t, executions, runID, execution.RunStatusWaitingForUser)
+	leadMessage, err := starter.messageForAttempt(
+		t.Context(), remoteLeadSessionID(runID), planningAttemptID(remoteLeadSessionID(runID)),
+	)
+	if err != nil {
+		t.Fatalf("find lead proposal: %v", err)
+	}
+	if _, _, err := executions.LinkPlanningMessage(t.Context(), runID, leadMessage.ID); err != nil {
+		t.Fatalf("link lead proposal: %v", err)
+	}
+	reviewerID := remoteReviewerSessionID(runID)
+	if admitted, err := executions.BeginNewSessionTurn(
+		t.Context(), reviewerID, runID, remoteReviewerAgentID, worker.RoleReviewer,
+		planningAttemptID(reviewerID), "The reviewer is inspecting the lead's planning proposal.",
+	); err != nil || !admitted {
+		t.Fatalf("admit interrupted reviewer: admitted=%t err=%v", admitted, err)
+	}
+	interruptedRun, err := executions.GetRun(t.Context(), runID)
+	if err != nil {
+		t.Fatalf("load interrupted run: %v", err)
+	}
+	if err := newStarter(false).Recover(
+		t.Context(), interruptedRun, storedFeature, project.RecoveryPolicyApprovalRequired,
+	); err != nil {
+		t.Fatalf("recover reviewer: %v", err)
+	}
+	waitForRemoteLeadStatus(t, executions, runID, execution.RunStatusWaitingForUser)
+
+	messages, err := executions.PlanningMessagesForRun(t.Context(), runID)
+	if err != nil || len(messages) != 2 || messages[1].Role != worker.RoleReviewer {
+		t.Fatalf("reviewer response was not published after recovery: %+v err=%v", messages, err)
+	}
+	stub.mu.Lock()
+	putCount := len(stub.putRequests)
+	stub.mu.Unlock()
+	if putCount != 2 {
+		t.Fatalf("reviewer recovery launched a replacement attempt: %d PUTs", putCount)
+	}
+
+	// Simulate a stop after the reviewer response and waiting session were
+	// durable, but before the run itself returned to waiting.
+	completedRun, err := executions.GetRun(t.Context(), runID)
+	if err != nil {
+		t.Fatalf("load completed reviewer run: %v", err)
+	}
+	interruptedCompletion, err := executions.TransitionRun(
+		t.Context(), runID, completedRun.Status, execution.RunStatusRunning,
+		"Reviewer completion was interrupted.",
+	)
+	if err != nil {
+		t.Fatalf("simulate interrupted run completion: %v", err)
+	}
+	if err := newStarter(false).Recover(
+		t.Context(), interruptedCompletion, storedFeature, project.RecoveryPolicyApprovalRequired,
+	); err != nil {
+		t.Fatalf("finish interrupted reviewer completion: %v", err)
+	}
+	restoredRun, err := executions.GetRun(t.Context(), runID)
+	if err != nil || restoredRun.Status != execution.RunStatusWaitingForUser ||
+		restoredRun.Reason != "The reviewer's first planning response is ready." {
+		t.Fatalf("unexpected restored reviewer completion %+v err=%v", restoredRun, err)
 	}
 }
 
@@ -1047,7 +1208,7 @@ func addCompletedPlanningAttempt(
 	endedAt := now.Add(time.Second)
 	terminal := initial
 	terminal.State = workerhttp.AttemptStateTerminal
-	terminal.LatestEventSequence = 2
+	terminal.LatestEventSequence = 3
 	terminal.UpdatedAt = endedAt
 	terminal.EndedAt = &endedAt
 	terminal.Result = &workerhttp.TerminalResult{
@@ -1059,7 +1220,55 @@ func addCompletedPlanningAttempt(
 	stub.events[reference] = []workerhttp.Event{
 		{
 			AttemptReference: reference, Sequence: 1, Type: workerhttp.EventMessage,
-			Text: "Proposed implementation plan", OccurredAt: now,
+			Text: "I will inspect the repository before proposing the plan.", OccurredAt: now,
+		},
+		{
+			AttemptReference: reference, Sequence: 2, Type: workerhttp.EventMessage,
+			Text: "Proposed implementation plan", OccurredAt: now.Add(time.Millisecond),
+		},
+		{
+			AttemptReference: reference, Sequence: 3, Type: workerhttp.EventAttemptTerminal,
+			Text: terminal.Result.Summary, OccurredAt: endedAt,
+		},
+	}
+}
+
+func addCompletedReviewerPlanningAttempt(
+	stub *conversationalRemoteLeadWorker,
+	runID string,
+	projectID string,
+	featureID string,
+) {
+	sessionID := remoteReviewerSessionID(runID)
+	reference := workerhttp.AttemptReference{
+		SessionID: sessionID, AttemptID: planningAttemptID(sessionID),
+	}
+	now := time.Date(2026, time.September, 9, 20, 35, 0, 0, time.UTC)
+	initial := workerhttp.Attempt{
+		AttemptReference: reference, Mode: workerhttp.AttemptModeStart,
+		Assignment: workerhttp.Assignment{
+			AgentProfileID: "codex-default", ProjectID: projectID, FeatureID: featureID,
+			Role: workerhttp.RoleReviewer, WorkspaceID: "wsp_managed_feature",
+		},
+		ProviderSessionID: "codex-review-thread-test", State: workerhttp.AttemptStateRunning,
+		StartedAt: now, UpdatedAt: now,
+	}
+	endedAt := now.Add(time.Second)
+	terminal := initial
+	terminal.State = workerhttp.AttemptStateTerminal
+	terminal.LatestEventSequence = 2
+	terminal.UpdatedAt = endedAt
+	terminal.EndedAt = &endedAt
+	terminal.Result = &workerhttp.TerminalResult{
+		Outcome: workerhttp.OutcomeCompleted, Disposition: workerhttp.DispositionSucceeded,
+		Summary: "Reviewed the first planning proposal.",
+	}
+	stub.initial[reference] = initial
+	stub.terminal[reference] = terminal
+	stub.events[reference] = []workerhttp.Event{
+		{
+			AttemptReference: reference, Sequence: 1, Type: workerhttp.EventMessage,
+			Text: "The plan needs stronger test coverage.", OccurredAt: now,
 		},
 		{
 			AttemptReference: reference, Sequence: 2, Type: workerhttp.EventAttemptTerminal,

@@ -54,6 +54,8 @@ type ExecutionService interface {
 	GetSession(ctx context.Context, id string) (execution.Session, error)
 	EventsForSession(ctx context.Context, sessionID string) ([]execution.Event, error)
 	SubscribeSessionEvents(sessionID string) (<-chan execution.Event, func())
+	PlanningMessagesForRun(ctx context.Context, runID string) ([]execution.PlanningMessage, error)
+	SubscribePlanningMessages(runID string) (<-chan execution.PlanningMessage, func())
 }
 
 type RunStarter interface {
@@ -92,6 +94,11 @@ type WorkspaceService interface {
 
 type PlanningStarter interface {
 	StartPlanning(
+		ctx context.Context,
+		runID string,
+		idempotencyKey string,
+	) (execution.Run, bool, error)
+	StartPlanningReview(
 		ctx context.Context,
 		runID string,
 		idempotencyKey string,
@@ -225,8 +232,11 @@ func newAPI(
 	}
 	if planning != nil {
 		mux.HandleFunc("POST /api/v1/runs/{id}/planning", api.startPlanningHandler)
+		mux.HandleFunc("POST /api/v1/runs/{id}/planning/reviewer", api.startPlanningReviewHandler)
 	}
 	mux.HandleFunc("GET /api/v1/runs/{id}", api.getRunHandler)
+	mux.HandleFunc("GET /api/v1/runs/{id}/planning/messages", api.getPlanningMessagesHandler)
+	mux.HandleFunc("GET /api/v1/runs/{id}/planning/messages/stream", api.streamPlanningMessagesHandler)
 	mux.HandleFunc("GET /api/v1/sessions/{id}", api.getSessionHandler)
 	mux.HandleFunc("GET /api/v1/sessions/{id}/events", api.getSessionEventsHandler)
 	mux.HandleFunc("GET /api/v1/sessions/{id}/events/stream", api.streamSessionEventsHandler)

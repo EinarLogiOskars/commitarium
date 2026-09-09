@@ -28,6 +28,8 @@ type recordingExecutionService struct {
 	unsubscribed int
 	requestedID  string
 	eventSession string
+	planning     []execution.PlanningMessage
+	planningLive <-chan execution.PlanningMessage
 }
 
 func (s *recordingExecutionService) GetRun(
@@ -67,6 +69,22 @@ func (s *recordingExecutionService) EventsForSession(
 ) ([]execution.Event, error) {
 	s.eventSession = sessionID
 	return s.events, s.eventsErr
+}
+
+func (s *recordingExecutionService) PlanningMessagesForRun(
+	_ context.Context,
+	_ string,
+) ([]execution.PlanningMessage, error) {
+	return s.planning, nil
+}
+
+func (s *recordingExecutionService) SubscribePlanningMessages(
+	_ string,
+) (<-chan execution.PlanningMessage, func()) {
+	if s.planningLive == nil {
+		s.planningLive = make(chan execution.PlanningMessage)
+	}
+	return s.planningLive, func() {}
 }
 
 type recordingSessionController struct {
