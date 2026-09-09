@@ -364,8 +364,9 @@ a prepared workspace child by ID and supplies its project, feature, and role
 identity. It does not require a configuration manifest, revision, or digest.
 The worker passes only `CODEX_HOME`, `HOME`, `LANG`, and a fixed executable
 `PATH` to the Codex child. Project secrets are not accepted or delivered in
-this slice. The coordinator client and event pump are also not yet wired into
-runtime orchestration.
+this slice. The coordinator's opt-in `real_codex_lead` mode now uses the client
+and event pump for one read-only goal-clarification turn; later workflow phases
+are not wired yet.
 
 The real service is under the `real-codex` Compose profile and is not started by
 the normal development stack. `scripts/smoke-real-codex-worker.sh` provides the

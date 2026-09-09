@@ -57,6 +57,7 @@ type RunStarter interface {
 	Start(
 		ctx context.Context,
 		runID string,
+		projectID string,
 		featureID string,
 		goal string,
 	) (execution.Run, bool, error)

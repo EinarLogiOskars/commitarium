@@ -227,9 +227,9 @@ func (s *ExecutionStore) ListRecoverableRuns(
 		 FROM runs r
 		 WHERE r.status = ?
 		    OR (r.status = ? AND EXISTS (
-		       SELECT 1 FROM sessions s
-		       WHERE s.run_id = r.id
-		         AND s.status NOT IN (?, ?, ?)
+			   SELECT 1 FROM sessions s
+			   WHERE s.run_id = r.id
+			     AND s.status NOT IN (?, ?, ?, ?)
 		   ))
 		 ORDER BY r.started_at, r.id`,
 		execution.RunStatusRunning,
@@ -237,6 +237,7 @@ func (s *ExecutionStore) ListRecoverableRuns(
 		execution.SessionStatusCompleted,
 		execution.SessionStatusStopped,
 		execution.SessionStatusFailed,
+		execution.SessionStatusWaitingForUser,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("list recoverable runs: %w", err)

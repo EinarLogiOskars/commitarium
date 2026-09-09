@@ -55,9 +55,11 @@ func NewStarter(
 func (s *Starter) Start(
 	ctx context.Context,
 	runID string,
+	projectID string,
 	featureID string,
 	goal string,
 ) (execution.Run, bool, error) {
+	_ = projectID // Simulated assignments do not resolve a project workspace.
 	return s.runner.Start(ctx, RunRequest{
 		ID: runID, FeatureID: featureID, Goal: goal,
 		Assignment:        s.assignmentFactory(),

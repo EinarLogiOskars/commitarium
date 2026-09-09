@@ -16,7 +16,7 @@ this API beyond the host loopback interface is unsupported.
 | `POST` | `/api/v1/projects/{projectID}/features/{featureID}/transitions` | Apply an explicit feature transition |
 | `GET` | `/api/v1/projects/{projectID}/features/{featureID}/events` | Retrieve durable workflow history |
 | `GET` | `/api/v1/projects/{projectID}/features/{featureID}/events/stream` | Replay and stream workflow history with SSE |
-| `POST` | `/api/v1/projects/{projectID}/features/{featureID}/runs` | Start the simulated workflow asynchronously |
+| `POST` | `/api/v1/projects/{projectID}/features/{featureID}/runs` | Start the configured workflow asynchronously |
 | `GET` | `/api/v1/runs/{runID}` | Retrieve run state and its ordered sessions |
 | `GET` | `/api/v1/sessions/{sessionID}` | Retrieve a session |
 | `GET` | `/api/v1/sessions/{sessionID}/events` | Retrieve durable observable session activity |
@@ -75,10 +75,19 @@ created so far. Each session ID links to its detail, history, stream, and
 control endpoints. Terminal run statuses are `succeeded`, `stopped`, and
 `failed`; `waiting_for_user` is durable but resumable.
 
-The current runtime uses deterministic simulated agents. They pause briefly
+The default runtime uses deterministic simulated agents. They pause briefly
 between scripted events so session activity is observable. The simulation
 includes one `changes_requested` review, one corrective coder session, and a
 final approving review.
+
+Setting `COMMITARIUM_RUNNER_MODE=real_codex_lead` connects this endpoint to the
+real Codex worker configured by `COMMITARIUM_CODEX_WORKER_URL`,
+`COMMITARIUM_CODEX_WORKER_TOKEN`, `COMMITARIUM_CODEX_PROFILE_ID`, and
+`COMMITARIUM_CODEX_WORKSPACE_ID`. This opt-in mode currently runs exactly one
+read-only lead turn to clarify the goal. Its response is visible through the
+normal session history and SSE endpoints. On success, the run and session both
+become `waiting_for_user` and the feature remains `draft`; sending the user's
+next reply is not implemented yet.
 
 A session response exposes its provider session ID as soon as the provider has
 started, rather than only after completion. It also includes
@@ -105,8 +114,8 @@ it exists to prevent duplicate or skipped activity after a coordinator restart.
 The internal single-attempt pump can already reopen a worker stream from this
 durable checkpoint and copy events until that connection ends. It then inspects
 the worker's attempt state and treats an active or uncertain agent differently
-from a completed one. Automatic reconnection and runtime wiring remain future
-work.
+from a completed one. The real-lead runtime now uses that pump; broader
+multi-turn orchestration remains future work.
 
 ## Session commands
 
@@ -131,17 +140,30 @@ worker supervisor for one exact execution attempt.
 During recovery, `continue` also acts as approval for a paused recovery
 assessment. Retrying the same approval key remains idempotent.
 
+These controls currently target the in-process simulated sessions. The
+`real_codex_lead` mode exposes activity and state through the same read APIs,
+but its first-turn session is not yet connected to the public command endpoint.
+User replies will be added by the next multi-turn goal-drafting slice.
+
 ## Restart recovery
 
 At coordinator startup, durable `running` runs are replayed from their stored
 session results. Runs that were already `waiting_for_user` are recovered only
-when they still own a nonterminal session. Completed sessions and idempotent
-feature transitions are reused; the coordinator resumes only the interrupted
-provider session and never starts a replacement when provider identity is
-uncertain.
+when they still own an interrupted session. A stable real lead session whose
+run and session are both `waiting_for_user` is not mistaken for interrupted
+work.
 
-The resumed worker receives a concise recovery briefing and must inspect before
-modifying anything. The briefing requires reconciliation of conversation,
+For the real-lead mode, recovery only performs a read-only lookup of the exact
+durable worker attempt. If it still exists and is consistent, the coordinator
+records a `recovery_assessment` event and reattaches to its event stream without
+starting a process. If it is missing, unreachable, contradictory, or
+indeterminate, the run waits for user review and no replacement agent starts.
+The current real-worker restart behavior deliberately marks a previously active
+process indeterminate, so resuming that provider thread remains a later slice.
+
+In the simulated workflow, a resumed worker receives a concise recovery
+briefing and must inspect before modifying anything. The briefing requires
+reconciliation of conversation,
 repository/worktree and Git state, interrupted tests or commands, workflow
 phase, completed session activity, pending commands, and Forgejo plan/review
 state. Durable external state is authoritative over conversational memory.
@@ -161,11 +183,11 @@ marks them rejected with an explicit message that their delivery outcome is
 unknown, and the recovery assessment identifies the ambiguity. A user may
 reissue the intended command under a new idempotency key after inspection.
 
-The current simulated workers have no repository, worktree, test process, or
-Forgejo pull request, so their assessment records those checks as not
-applicable. Real provider recovery will require persistent provider data,
-authentication/configuration, and worktree volumes before those adapters are
-enabled.
+The simulated workers have no repository, worktree, test process, or Forgejo
+pull request, so their assessment records those checks as not applicable. The
+real Codex worker already keeps provider data and authentication on a private
+persistent volume and uses the configured workspace mount; full provider
+resume and repository/Forgejo reconciliation are not implemented yet.
 
 Run `./scripts/test-compose-recovery.sh` for the repeatable isolated
 container-level interruption test.

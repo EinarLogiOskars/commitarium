@@ -2,10 +2,12 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	coordinatordatabase "github.com/EinarLogiOskars/commitarium/internal/database"
@@ -14,22 +16,96 @@ import (
 	"github.com/EinarLogiOskars/commitarium/internal/httpapi"
 	"github.com/EinarLogiOskars/commitarium/internal/orchestration"
 	"github.com/EinarLogiOskars/commitarium/internal/project"
+	"github.com/EinarLogiOskars/commitarium/internal/workerhttp"
+	"github.com/EinarLogiOskars/commitarium/internal/workeringest"
 	"github.com/EinarLogiOskars/commitarium/internal/workflow"
 )
 
+const (
+	defaultRunnerMode           = "simulated"
+	realCodexLeadRunnerMode     = "real_codex_lead"
+	defaultWorkerRequestTimeout = 10 * time.Second
+)
+
+type config struct {
+	databasePath         string
+	runnerMode           string
+	simulatedStepDelay   time.Duration
+	codexWorkerURL       string
+	codexWorkerToken     string
+	codexAgentProfileID  string
+	codexWorkspaceID     string
+	workerRequestTimeout time.Duration
+}
+
 func main() {
-	if err := run(context.Background()); err != nil {
+	coordinatorConfig, err := loadConfig(os.Getenv)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if err := run(context.Background(), coordinatorConfig); err != nil {
 		log.Fatal(err)
 	}
 }
 
-func run(ctx context.Context) error {
-	databasePath := os.Getenv("COMMITARIUM_DATABASE_PATH")
+func loadConfig(getenv func(string) string) (config, error) {
+	databasePath := strings.TrimSpace(getenv("COMMITARIUM_DATABASE_PATH"))
 	if databasePath == "" {
-		return fmt.Errorf("COMMITARIUM_DATABASE_PATH is required")
+		return config{}, errors.New("COMMITARIUM_DATABASE_PATH is required")
 	}
+	runnerMode := strings.TrimSpace(getenv("COMMITARIUM_RUNNER_MODE"))
+	if runnerMode == "" {
+		runnerMode = defaultRunnerMode
+	}
+	if runnerMode != defaultRunnerMode && runnerMode != realCodexLeadRunnerMode {
+		return config{}, errors.New("COMMITARIUM_RUNNER_MODE must be simulated or real_codex_lead")
+	}
+	simulatedStepDelay := 250 * time.Millisecond
+	if configuredDelay := strings.TrimSpace(getenv("COMMITARIUM_SIMULATED_STEP_DELAY")); configuredDelay != "" {
+		parsed, err := time.ParseDuration(configuredDelay)
+		if err != nil || parsed < 0 {
+			return config{}, errors.New("COMMITARIUM_SIMULATED_STEP_DELAY must be a nonnegative duration")
+		}
+		simulatedStepDelay = parsed
+	}
+	loaded := config{
+		databasePath: databasePath, runnerMode: runnerMode,
+		simulatedStepDelay:   simulatedStepDelay,
+		workerRequestTimeout: defaultWorkerRequestTimeout,
+	}
+	if runnerMode == realCodexLeadRunnerMode {
+		required := func(name string) (string, error) {
+			value := strings.TrimSpace(getenv(name))
+			if value == "" {
+				return "", fmt.Errorf("%s is required in real_codex_lead mode", name)
+			}
+			return value, nil
+		}
+		var err error
+		if loaded.codexWorkerURL, err = required("COMMITARIUM_CODEX_WORKER_URL"); err != nil {
+			return config{}, err
+		}
+		if loaded.codexWorkerToken, err = required("COMMITARIUM_CODEX_WORKER_TOKEN"); err != nil {
+			return config{}, err
+		}
+		if loaded.codexAgentProfileID, err = required("COMMITARIUM_CODEX_PROFILE_ID"); err != nil {
+			return config{}, err
+		}
+		if loaded.codexWorkspaceID, err = required("COMMITARIUM_CODEX_WORKSPACE_ID"); err != nil {
+			return config{}, err
+		}
+		if value := strings.TrimSpace(getenv("COMMITARIUM_CODEX_WORKER_REQUEST_TIMEOUT")); value != "" {
+			loaded.workerRequestTimeout, err = time.ParseDuration(value)
+			if err != nil || loaded.workerRequestTimeout <= 0 {
+				return config{}, errors.New("COMMITARIUM_CODEX_WORKER_REQUEST_TIMEOUT must be a positive duration")
+			}
+		}
+	}
+	return loaded, nil
+}
 
-	db, err := coordinatordatabase.OpenSQLite(ctx, databasePath)
+func run(ctx context.Context, coordinatorConfig config) error {
+	db, err := coordinatordatabase.OpenSQLite(ctx, coordinatorConfig.databasePath)
 	if err != nil {
 		return fmt.Errorf("open coordinator database: %w", err)
 	}
@@ -53,27 +129,57 @@ func run(ctx context.Context) error {
 	executionService := execution.NewService(executionStore)
 	activeSessions := orchestration.NewActiveSessions()
 	sessionController := orchestration.NewController(executionService, activeSessions)
-	runner := orchestration.NewRunner(workflowService, executionService, activeSessions)
-	simulatedStepDelay := 250 * time.Millisecond
-	if configuredDelay := os.Getenv("COMMITARIUM_SIMULATED_STEP_DELAY"); configuredDelay != "" {
-		simulatedStepDelay, err = time.ParseDuration(configuredDelay)
+	var runStarter httpapi.RunStarter
+	var runRecoverer orchestration.RunRecoverer
+	switch coordinatorConfig.runnerMode {
+	case defaultRunnerMode:
+		runner := orchestration.NewRunner(workflowService, executionService, activeSessions)
+		simulatedStarter := orchestration.NewStarter(
+			runner,
+			func() orchestration.Assignment {
+				return orchestration.NewSimulatedAssignment(coordinatorConfig.simulatedStepDelay)
+			},
+			2,
+			3,
+		)
+		runStarter = simulatedStarter
+		runRecoverer = simulatedStarter
+	case realCodexLeadRunnerMode:
+		client, err := workerhttp.NewClient(workerhttp.ClientConfig{
+			BaseURL:        coordinatorConfig.codexWorkerURL,
+			BearerToken:    coordinatorConfig.codexWorkerToken,
+			RequestTimeout: coordinatorConfig.workerRequestTimeout,
+		})
 		if err != nil {
-			return fmt.Errorf("parse COMMITARIUM_SIMULATED_STEP_DELAY: %w", err)
+			return fmt.Errorf("create Codex worker client: %w", err)
 		}
+		ingestion := workeringest.NewService(executionService, workeringest.FilterFunc(
+			func(_ context.Context, event workerhttp.Event) (workerhttp.Event, error) {
+				return event, nil
+			},
+		))
+		remoteStarter, err := orchestration.NewRemoteLeadStarter(orchestration.RemoteLeadConfig{
+			Executions: executionService, Worker: client,
+			Pump: workeringest.NewPump(
+				executionService, ingestion, workeringest.NewHTTPAttemptSource(client),
+			),
+			Lifetime: ctx, AgentProfileID: coordinatorConfig.codexAgentProfileID,
+			WorkspaceID: coordinatorConfig.codexWorkspaceID,
+			ReportError: func(err error) { log.Printf("real Codex lead: %v", err) },
+		})
+		if err != nil {
+			return fmt.Errorf("create real Codex lead runner: %w", err)
+		}
+		runStarter = remoteStarter
+		runRecoverer = remoteStarter
+	default:
+		return fmt.Errorf("unsupported coordinator runner mode %q", coordinatorConfig.runnerMode)
 	}
-	runStarter := orchestration.NewStarter(
-		runner,
-		func() orchestration.Assignment {
-			return orchestration.NewSimulatedAssignment(simulatedStepDelay)
-		},
-		2,
-		3,
-	)
 	recoverer := orchestration.NewRecoverer(
 		executionService,
 		featureStore,
 		projectService,
-		runStarter,
+		runRecoverer,
 	)
 	recoveredRuns, recoveryErr := recoverer.RecoverAll(ctx)
 	if recoveryErr != nil {

@@ -16,6 +16,7 @@ import (
 
 type recordingRunStarter struct {
 	runID     string
+	projectID string
 	featureID string
 	goal      string
 	result    execution.Run
@@ -25,10 +26,12 @@ type recordingRunStarter struct {
 func (s *recordingRunStarter) Start(
 	_ context.Context,
 	runID string,
+	projectID string,
 	featureID string,
 	goal string,
 ) (execution.Run, bool, error) {
 	s.runID = runID
+	s.projectID = projectID
 	s.featureID = featureID
 	s.goal = goal
 	if s.result.ID == "" {
@@ -61,8 +64,11 @@ func TestStartRunReturnsDurableAcceptedRun(t *testing.T) {
 		t.Fatalf("expected status %d, got %d: %s", http.StatusAccepted, recorder.Code, recorder.Body.String())
 	}
 	expectedRunID := runIDForKey("start-demo")
-	if starter.runID != expectedRunID || starter.featureID != "fea_test" {
-		t.Errorf("unexpected start request run=%q feature=%q", starter.runID, starter.featureID)
+	if starter.runID != expectedRunID || starter.projectID != "prj_test" || starter.featureID != "fea_test" {
+		t.Errorf(
+			"unexpected start request run=%q project=%q feature=%q",
+			starter.runID, starter.projectID, starter.featureID,
+		)
 	}
 	if starter.goal != "Build coordinator: Exercise its deterministic workflow" {
 		t.Errorf("unexpected derived goal %q", starter.goal)
