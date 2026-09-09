@@ -83,7 +83,7 @@ type SessionController interface {
 
 type WorkspaceService interface {
 	Get(ctx context.Context, projectID, featureID string) (workspace.Workspace, error)
-	PrepareBranch(
+	Prepare(
 		ctx context.Context,
 		projectID string,
 		featureID string,

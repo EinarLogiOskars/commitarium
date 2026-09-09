@@ -13,11 +13,25 @@ import (
 const testCommitID = "0123456789abcdef0123456789abcdef01234567"
 
 type memoryStore struct {
-	stored     Workspace
-	reserve    []Workspace
-	markedAt   []time.Time
-	getErr     error
-	reserveErr error
+	stored           Workspace
+	reserve          []Workspace
+	markedAt         []time.Time
+	checkoutMarkedAt []time.Time
+	getErr           error
+	reserveErr       error
+}
+
+func (store *memoryStore) MarkCheckoutReady(
+	_ context.Context,
+	_ string,
+	relativePath string,
+	readyAt time.Time,
+) (Workspace, error) {
+	store.checkoutMarkedAt = append(store.checkoutMarkedAt, readyAt)
+	store.stored.CheckoutRelativePath = relativePath
+	store.stored.CheckoutCreatedAt = &readyAt
+	store.stored.UpdatedAt = readyAt
+	return store.stored, nil
 }
 
 func (store *memoryStore) GetByFeatureID(_ context.Context, _ string) (Workspace, error) {
@@ -76,6 +90,16 @@ type recordingBranches struct {
 	ensureErr   error
 }
 
+type recordingCheckout struct {
+	specs []CheckoutSpec
+	err   error
+}
+
+func (checkout *recordingCheckout) Ensure(_ context.Context, spec CheckoutSpec) error {
+	checkout.specs = append(checkout.specs, spec)
+	return checkout.err
+}
+
 func (branches *recordingBranches) GetBranch(context.Context, string, string, string) (Branch, error) {
 	branches.getCalls++
 	return branches.base, nil
@@ -104,7 +128,7 @@ func TestServicePreparesExactFeatureBranch(t *testing.T) {
 	branches := &recordingBranches{base: Branch{Name: "main", CommitID: testCommitID}}
 	service := newTestService(store, branches, now)
 
-	prepared, created, err := service.PrepareBranch(t.Context(), "prj_test", "fea_test")
+	prepared, created, err := service.Prepare(t.Context(), "prj_test", "fea_test")
 	if err != nil {
 		t.Fatalf("prepare branch: %v", err)
 	}
@@ -129,7 +153,7 @@ func TestServiceRetriesPreparingReservationWithoutReadingMovingDefaultBranch(t *
 	}}
 	service := newTestService(store, branches, now.Add(time.Minute))
 
-	prepared, created, err := service.PrepareBranch(t.Context(), "prj_test", "fea_test")
+	prepared, created, err := service.Prepare(t.Context(), "prj_test", "fea_test")
 	if err != nil {
 		t.Fatalf("retry branch preparation: %v", err)
 	}
@@ -155,12 +179,78 @@ func TestServiceReadyRetryDoesNotCallForgejo(t *testing.T) {
 	branches := &recordingBranches{}
 	service := newTestService(store, branches, readyAt.Add(time.Minute))
 
-	prepared, created, err := service.PrepareBranch(t.Context(), "prj_test", "fea_test")
+	prepared, created, err := service.Prepare(t.Context(), "prj_test", "fea_test")
 	if err != nil || created || prepared != stored {
 		t.Fatalf("unexpected ready retry result created=%t workspace=%+v err=%v", created, prepared, err)
 	}
 	if branches.getCalls != 0 || branches.ensureCalls != 0 || len(store.markedAt) != 0 {
 		t.Fatalf("ready retry contacted Forgejo or changed storage")
+	}
+}
+
+func TestServiceCreatesCheckoutAfterBranchIsReady(t *testing.T) {
+	now := time.Date(2026, time.September, 9, 20, 0, 0, 0, time.UTC)
+	stored := testWorkspace(now)
+	stored.Status = StatusBranchReady
+	branchReadyAt := now.Add(time.Minute)
+	stored.BranchCreatedAt = &branchReadyAt
+	stored.UpdatedAt = branchReadyAt
+	store := &memoryStore{stored: stored}
+	checkout := &recordingCheckout{}
+	service := NewServiceWithCheckout(
+		store,
+		fixedFeatureFinder{stored: acceptedTestFeature(now)},
+		fixedProjectFinder{stored: project.Project{
+			ID: "prj_test", ForgejoRepository: testRepository(now),
+		}},
+		&recordingBranches{},
+		checkout,
+	)
+	checkoutReadyAt := branchReadyAt.Add(time.Minute)
+	service.now = func() time.Time { return checkoutReadyAt }
+
+	prepared, created, err := service.Prepare(t.Context(), "prj_test", "fea_test")
+	if err != nil || created || !prepared.CheckoutReady() {
+		t.Fatalf("prepare checkout: created=%t workspace=%+v err=%v", created, prepared, err)
+	}
+	if len(checkout.specs) != 1 || checkout.specs[0].AlreadyReady ||
+		checkout.specs[0].WorkspaceID != stored.ID {
+		t.Fatalf("unexpected checkout request %+v", checkout.specs)
+	}
+	if prepared.CheckoutRelativePath != stored.ID || len(store.checkoutMarkedAt) != 1 {
+		t.Fatalf("checkout readiness was not persisted: %+v", prepared)
+	}
+}
+
+func TestServiceReconcilesReadyCheckoutWithoutChangingItsRecord(t *testing.T) {
+	now := time.Date(2026, time.September, 9, 20, 0, 0, 0, time.UTC)
+	stored := testWorkspace(now)
+	stored.Status = StatusBranchReady
+	branchReadyAt := now.Add(time.Minute)
+	checkoutReadyAt := branchReadyAt.Add(time.Minute)
+	stored.BranchCreatedAt = &branchReadyAt
+	stored.CheckoutRelativePath = stored.ID
+	stored.CheckoutCreatedAt = &checkoutReadyAt
+	stored.UpdatedAt = checkoutReadyAt
+	store := &memoryStore{stored: stored}
+	checkout := &recordingCheckout{}
+	service := NewServiceWithCheckout(
+		store,
+		fixedFeatureFinder{stored: acceptedTestFeature(now)},
+		fixedProjectFinder{stored: project.Project{
+			ID: "prj_test", ForgejoRepository: testRepository(now),
+		}},
+		&recordingBranches{},
+		checkout,
+	)
+
+	prepared, created, err := service.Prepare(t.Context(), "prj_test", "fea_test")
+	if err != nil || created || prepared != stored {
+		t.Fatalf("reconcile checkout: created=%t workspace=%+v err=%v", created, prepared, err)
+	}
+	if len(checkout.specs) != 1 || !checkout.specs[0].AlreadyReady ||
+		len(store.checkoutMarkedAt) != 0 {
+		t.Fatalf("ready checkout was not only reconciled: %+v", checkout.specs)
 	}
 }
 
@@ -187,7 +277,7 @@ func TestServiceRequiresAcceptedGoalAndRepositoryBinding(t *testing.T) {
 				fixedProjectFinder{stored: project.Project{ID: "prj_test", ForgejoRepository: test.repository}},
 				branches,
 			)
-			_, _, err := service.PrepareBranch(t.Context(), "prj_test", "fea_test")
+			_, _, err := service.Prepare(t.Context(), "prj_test", "fea_test")
 			if !errors.Is(err, test.want) {
 				t.Fatalf("expected %v, got %v", test.want, err)
 			}
@@ -207,7 +297,7 @@ func TestServiceLeavesReservationPreparingWhenBranchCreationIsUncertain(t *testi
 	}
 	service := newTestService(store, branches, now)
 
-	_, created, err := service.PrepareBranch(t.Context(), "prj_test", "fea_test")
+	_, created, err := service.Prepare(t.Context(), "prj_test", "fea_test")
 	if !errors.Is(err, project.ErrForgejoUnavailable) || created {
 		t.Fatalf("expected uncertain Forgejo error, created=%t err=%v", created, err)
 	}
@@ -222,7 +312,7 @@ func TestServiceRejectsWorkspaceOwnedByDifferentProject(t *testing.T) {
 	stored.ProjectID = "prj_other"
 	service := newTestService(&memoryStore{stored: stored}, &recordingBranches{}, now)
 
-	if _, _, err := service.PrepareBranch(
+	if _, _, err := service.Prepare(
 		t.Context(), "prj_test", "fea_test",
 	); !errors.Is(err, ErrConflict) {
 		t.Fatalf("expected %v, got %v", ErrConflict, err)
@@ -230,13 +320,9 @@ func TestServiceRejectsWorkspaceOwnedByDifferentProject(t *testing.T) {
 }
 
 func newTestService(store Store, branches BranchManager, now time.Time) *Service {
-	acceptedAt := now.Add(-time.Minute)
 	service := NewService(
 		store,
-		fixedFeatureFinder{stored: feature.Feature{
-			ID: "fea_test", ProjectID: "prj_test", State: feature.StateDraft,
-			AcceptedGoal: "Ship it", GoalAcceptedAt: &acceptedAt,
-		}},
+		fixedFeatureFinder{stored: acceptedTestFeature(now)},
 		fixedProjectFinder{stored: project.Project{
 			ID: "prj_test", ForgejoRepository: testRepository(now),
 		}},
@@ -244,6 +330,14 @@ func newTestService(store Store, branches BranchManager, now time.Time) *Service
 	)
 	service.now = func() time.Time { return now }
 	return service
+}
+
+func acceptedTestFeature(now time.Time) feature.Feature {
+	acceptedAt := now.Add(-time.Minute)
+	return feature.Feature{
+		ID: "fea_test", ProjectID: "prj_test", State: feature.StateDraft,
+		AcceptedGoal: "Ship it", GoalAcceptedAt: &acceptedAt,
+	}
 }
 
 func testRepository(now time.Time) *project.ForgejoRepository {

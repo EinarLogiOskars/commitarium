@@ -13,4 +13,10 @@ type Store interface {
 	GetByFeatureID(ctx context.Context, featureID string) (Workspace, error)
 	Reserve(ctx context.Context, workspace Workspace) (Workspace, bool, error)
 	MarkBranchReady(ctx context.Context, featureID string, readyAt time.Time) (Workspace, error)
+	MarkCheckoutReady(
+		ctx context.Context,
+		featureID string,
+		relativePath string,
+		readyAt time.Time,
+	) (Workspace, error)
 }

@@ -17,18 +17,20 @@ const (
 var safeCommitID = regexp.MustCompile(`^[0-9a-f]{40}([0-9a-f]{24})?$`)
 
 type Workspace struct {
-	ID              string
-	ProjectID       string
-	FeatureID       string
-	RepositoryOwner string
-	RepositoryName  string
-	BaseBranch      string
-	Branch          string
-	BaseCommitID    string
-	Status          Status
-	BranchCreatedAt *time.Time
-	CreatedAt       time.Time
-	UpdatedAt       time.Time
+	ID                   string
+	ProjectID            string
+	FeatureID            string
+	RepositoryOwner      string
+	RepositoryName       string
+	BaseBranch           string
+	Branch               string
+	BaseCommitID         string
+	Status               Status
+	BranchCreatedAt      *time.Time
+	CheckoutRelativePath string
+	CheckoutCreatedAt    *time.Time
+	CreatedAt            time.Time
+	UpdatedAt            time.Time
 }
 
 func (workspace Workspace) Validate() error {
@@ -63,6 +65,9 @@ func (workspace Workspace) Validate() error {
 		if workspace.BranchCreatedAt != nil {
 			return errors.New("preparing workspace cannot have a branch creation time")
 		}
+		if workspace.CheckoutRelativePath != "" || workspace.CheckoutCreatedAt != nil {
+			return errors.New("preparing workspace cannot have a checkout")
+		}
 	case StatusBranchReady:
 		if workspace.BranchCreatedAt == nil || workspace.BranchCreatedAt.IsZero() {
 			return errors.New("branch-ready workspace requires a branch creation time")
@@ -71,10 +76,46 @@ func (workspace Workspace) Validate() error {
 			workspace.BranchCreatedAt.After(workspace.UpdatedAt) {
 			return errors.New("branch creation time must be within the workspace lifetime")
 		}
+		if (workspace.CheckoutRelativePath == "") != (workspace.CheckoutCreatedAt == nil) {
+			return errors.New("checkout path and creation time must be set together")
+		}
+		if workspace.CheckoutRelativePath != "" {
+			if strings.TrimSpace(workspace.CheckoutRelativePath) != workspace.CheckoutRelativePath {
+				return errors.New("checkout path must be trimmed")
+			}
+			if workspace.CheckoutCreatedAt.IsZero() ||
+				workspace.CheckoutCreatedAt.Before(*workspace.BranchCreatedAt) ||
+				workspace.CheckoutCreatedAt.After(workspace.UpdatedAt) {
+				return errors.New("checkout creation time must follow branch creation")
+			}
+		}
 	default:
 		return errors.New("workspace status is not recognized")
 	}
 	return nil
+}
+
+func (workspace Workspace) CheckoutReady() bool {
+	return workspace.CheckoutRelativePath != "" && workspace.CheckoutCreatedAt != nil
+}
+
+type CheckoutSpec struct {
+	WorkspaceID     string
+	RepositoryOwner string
+	RepositoryName  string
+	Branch          string
+	BaseCommitID    string
+	AlreadyReady    bool
+}
+
+func (spec CheckoutSpec) Validate() error {
+	if strings.TrimSpace(spec.WorkspaceID) == "" || spec.WorkspaceID != strings.TrimSpace(spec.WorkspaceID) {
+		return errors.New("workspace ID is required and must be trimmed")
+	}
+	if strings.TrimSpace(spec.RepositoryOwner) == "" || strings.TrimSpace(spec.RepositoryName) == "" {
+		return errors.New("repository identity is required")
+	}
+	return (Branch{Name: spec.Branch, CommitID: spec.BaseCommitID}).Validate()
 }
 
 type Branch struct {

@@ -16,6 +16,8 @@ var ErrFeatureNotDraft = errors.New("feature is no longer a draft")
 var ErrProjectRepositoryNotBound = errors.New("project has no Forgejo repository binding")
 var ErrBranchNotFound = errors.New("Forgejo branch not found")
 var ErrBranchConflict = errors.New("Forgejo feature branch exists at a different commit")
+var ErrCheckoutConflict = errors.New("managed checkout conflicts with its durable workspace")
+var ErrCheckoutUnavailable = errors.New("managed checkout is unavailable")
 
 type FeatureFinder interface {
 	GetByID(ctx context.Context, projectID, featureID string) (feature.Feature, error)
@@ -36,12 +38,29 @@ type BranchManager interface {
 	) (Branch, error)
 }
 
+type CheckoutManager interface {
+	Ensure(ctx context.Context, spec CheckoutSpec) error
+}
+
 type Service struct {
-	store    Store
-	features FeatureFinder
-	projects ProjectFinder
-	branches BranchManager
-	now      func() time.Time
+	store     Store
+	features  FeatureFinder
+	projects  ProjectFinder
+	branches  BranchManager
+	checkouts CheckoutManager
+	now       func() time.Time
+}
+
+func NewServiceWithCheckout(
+	store Store,
+	features FeatureFinder,
+	projects ProjectFinder,
+	branches BranchManager,
+	checkouts CheckoutManager,
+) *Service {
+	service := NewService(store, features, projects, branches)
+	service.checkouts = checkouts
+	return service
 }
 
 func NewService(
@@ -74,7 +93,7 @@ func (service *Service) Get(
 	return stored, nil
 }
 
-func (service *Service) PrepareBranch(
+func (service *Service) Prepare(
 	ctx context.Context,
 	projectID string,
 	featureID string,
@@ -110,25 +129,51 @@ func (service *Service) PrepareBranch(
 	if reserved.ProjectID != projectID || reserved.FeatureID != featureID {
 		return Workspace{}, false, ErrConflict
 	}
-	if reserved.Status == StatusBranchReady {
+	if reserved.Status != StatusBranchReady {
+		branch, err := service.branches.EnsureBranch(
+			ctx,
+			reserved.RepositoryOwner,
+			reserved.RepositoryName,
+			reserved.Branch,
+			reserved.BaseCommitID,
+		)
+		if err != nil {
+			return Workspace{}, false, fmt.Errorf("ensure Forgejo feature branch: %w", err)
+		}
+		if branch.Name != reserved.Branch || branch.CommitID != reserved.BaseCommitID {
+			return Workspace{}, false, ErrBranchConflict
+		}
+		reserved, err = service.store.MarkBranchReady(ctx, featureID, service.now().UTC())
+		if err != nil {
+			return Workspace{}, false, fmt.Errorf("mark feature branch ready: %w", err)
+		}
+	}
+	if service.checkouts == nil {
+		return reserved, created, nil
+	}
+	if reserved.CheckoutReady() && reserved.CheckoutRelativePath != reserved.ID {
+		return Workspace{}, false, ErrConflict
+	}
+	relativePath := reserved.ID
+	err = service.checkouts.Ensure(ctx, CheckoutSpec{
+		WorkspaceID:     reserved.ID,
+		RepositoryOwner: reserved.RepositoryOwner,
+		RepositoryName:  reserved.RepositoryName,
+		Branch:          reserved.Branch,
+		BaseCommitID:    reserved.BaseCommitID,
+		AlreadyReady:    reserved.CheckoutReady(),
+	})
+	if err != nil {
+		return Workspace{}, false, fmt.Errorf("ensure managed checkout: %w", err)
+	}
+	if reserved.CheckoutReady() {
 		return reserved, false, nil
 	}
-	branch, err := service.branches.EnsureBranch(
-		ctx,
-		reserved.RepositoryOwner,
-		reserved.RepositoryName,
-		reserved.Branch,
-		reserved.BaseCommitID,
+	ready, err := service.store.MarkCheckoutReady(
+		ctx, featureID, relativePath, service.now().UTC(),
 	)
 	if err != nil {
-		return Workspace{}, false, fmt.Errorf("ensure Forgejo feature branch: %w", err)
-	}
-	if branch.Name != reserved.Branch || branch.CommitID != reserved.BaseCommitID {
-		return Workspace{}, false, ErrBranchConflict
-	}
-	ready, err := service.store.MarkBranchReady(ctx, featureID, service.now().UTC())
-	if err != nil {
-		return Workspace{}, false, fmt.Errorf("mark feature branch ready: %w", err)
+		return Workspace{}, false, fmt.Errorf("mark managed checkout ready: %w", err)
 	}
 	return ready, created, nil
 }
