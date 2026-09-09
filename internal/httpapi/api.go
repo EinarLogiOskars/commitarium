@@ -14,6 +14,8 @@ import (
 type ProjectService interface {
 	Create(ctx context.Context, name string, recoveryPolicy project.RecoveryPolicy) (project.Project, error)
 	GetByID(ctx context.Context, id string) (project.Project, error)
+	List(ctx context.Context) ([]project.Project, error)
+	BindForgejoRepository(ctx context.Context, projectID, owner, name string) (project.Project, error)
 }
 
 type FeatureService interface {
@@ -111,8 +113,16 @@ func New(
 		api.createProjectHandler,
 	)
 	mux.HandleFunc(
+		"GET /api/v1/projects",
+		api.listProjectsHandler,
+	)
+	mux.HandleFunc(
 		"GET /api/v1/projects/{id}",
 		api.getProjectByIDHandler,
+	)
+	mux.HandleFunc(
+		"PUT /api/v1/projects/{id}/forgejo-repository",
+		api.bindForgejoRepositoryHandler,
 	)
 	mux.HandleFunc(
 		"POST /api/v1/projects/{projectID}/features",

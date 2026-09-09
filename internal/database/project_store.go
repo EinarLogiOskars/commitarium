@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/EinarLogiOskars/commitarium/internal/project"
@@ -29,16 +30,37 @@ func (s *ProjectStore) Create(
 		return err
 	}
 	createdProject.RecoveryPolicy = recoveryPolicy
+	var forgejoOwner string
+	var forgejoRepository string
+	var forgejoDefaultBranch string
+	var forgejoBoundAt any
+	if createdProject.ForgejoRepository != nil {
+		if err := createdProject.ForgejoRepository.Validate(); err != nil {
+			return err
+		}
+		forgejoOwner = createdProject.ForgejoRepository.Owner
+		forgejoRepository = createdProject.ForgejoRepository.Name
+		forgejoDefaultBranch = createdProject.ForgejoRepository.DefaultBranch
+		forgejoBoundAt = createdProject.ForgejoRepository.BoundAt.UTC().Format(time.RFC3339Nano)
+	}
 	result, err := s.db.ExecContext(
 		ctx,
 		`
-			INSERT INTO projects (id, name, recovery_policy, created_at)
-			VALUES (?, ?, ?, ?)
+			INSERT INTO projects (
+				id, name, recovery_policy,
+				forgejo_owner, forgejo_repository, forgejo_default_branch, forgejo_bound_at,
+				created_at
+			)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT(id) DO NOTHING
 		`,
 		createdProject.ID,
 		createdProject.Name,
 		createdProject.RecoveryPolicy,
+		forgejoOwner,
+		forgejoRepository,
+		forgejoDefaultBranch,
+		forgejoBoundAt,
 		createdProject.CreatedAt.UTC().Format(time.RFC3339Nano),
 	)
 	if err != nil {
@@ -77,23 +99,17 @@ func (s *ProjectStore) GetByID(
 	ctx context.Context,
 	id string,
 ) (project.Project, error) {
-	storedProject := project.Project{}
-	var createdAt string
-
-	err := s.db.QueryRowContext(
+	storedProject, err := scanProject(s.db.QueryRowContext(
 		ctx,
 		`
-			SELECT id, name, recovery_policy, created_at
+			SELECT id, name, recovery_policy,
+			       forgejo_owner, forgejo_repository, forgejo_default_branch, forgejo_bound_at,
+			       created_at
 			FROM projects
 			WHERE id = ?
 		`,
 		id,
-	).Scan(
-		&storedProject.ID,
-		&storedProject.Name,
-		&storedProject.RecoveryPolicy,
-		&createdAt,
-	)
+	))
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return project.Project{}, project.ErrNotFound
@@ -106,17 +122,150 @@ func (s *ProjectStore) GetByID(
 		)
 	}
 
-	storedProject.CreatedAt, err = time.Parse(
-		time.RFC3339Nano,
-		createdAt,
+	return storedProject, nil
+}
+
+func (s *ProjectStore) List(ctx context.Context) ([]project.Project, error) {
+	rows, err := s.db.QueryContext(
+		ctx,
+		`SELECT id, name, recovery_policy,
+		        forgejo_owner, forgejo_repository, forgejo_default_branch, forgejo_bound_at,
+		        created_at
+		 FROM projects
+		 ORDER BY created_at, id`,
 	)
 	if err != nil {
-		return project.Project{}, fmt.Errorf(
-			"parse creation time for project %q: %w",
-			id,
-			err,
-		)
+		return nil, fmt.Errorf("list projects: %w", err)
+	}
+	defer rows.Close()
+
+	projects := make([]project.Project, 0)
+	for rows.Next() {
+		storedProject, err := scanProject(rows)
+		if err != nil {
+			return nil, err
+		}
+		projects = append(projects, storedProject)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate projects: %w", err)
+	}
+	return projects, nil
+}
+
+func (s *ProjectStore) BindForgejoRepository(
+	ctx context.Context,
+	projectID string,
+	repository project.ForgejoRepository,
+) (project.Project, error) {
+	if err := repository.Validate(); err != nil {
+		return project.Project{}, err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return project.Project{}, fmt.Errorf("begin Forgejo repository binding: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	storedProject, err := scanProject(tx.QueryRowContext(
+		ctx,
+		`SELECT id, name, recovery_policy,
+		        forgejo_owner, forgejo_repository, forgejo_default_branch, forgejo_bound_at,
+		        created_at
+		 FROM projects WHERE id = ?`,
+		projectID,
+	))
+	if errors.Is(err, sql.ErrNoRows) {
+		return project.Project{}, project.ErrNotFound
+	}
+	if err != nil {
+		return project.Project{}, fmt.Errorf("select project %q for Forgejo binding: %w", projectID, err)
+	}
+	if storedProject.ForgejoRepository != nil {
+		if sameRepository(*storedProject.ForgejoRepository, repository) {
+			return storedProject, nil
+		}
+		return project.Project{}, project.ErrForgejoRepositoryAlreadyBound
 	}
 
+	result, err := tx.ExecContext(
+		ctx,
+		`UPDATE projects
+		 SET forgejo_owner = ?, forgejo_repository = ?,
+		     forgejo_default_branch = ?, forgejo_bound_at = ?
+		 WHERE id = ? AND forgejo_bound_at IS NULL`,
+		repository.Owner,
+		repository.Name,
+		repository.DefaultBranch,
+		repository.BoundAt.UTC().Format(time.RFC3339Nano),
+		projectID,
+	)
+	if err != nil {
+		return project.Project{}, fmt.Errorf("bind Forgejo repository to project %q: %w", projectID, err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return project.Project{}, fmt.Errorf("read Forgejo repository binding row count for project %q: %w", projectID, err)
+	}
+	if rowsAffected != 1 {
+		return project.Project{}, fmt.Errorf(
+			"bind Forgejo repository to project %q: expected one affected row, got %d",
+			projectID,
+			rowsAffected,
+		)
+	}
+	if err := tx.Commit(); err != nil {
+		return project.Project{}, fmt.Errorf("commit Forgejo repository binding: %w", err)
+	}
+	storedProject.ForgejoRepository = &repository
 	return storedProject, nil
+}
+
+type projectScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanProject(scanner projectScanner) (project.Project, error) {
+	storedProject := project.Project{}
+	var forgejoOwner string
+	var forgejoRepository string
+	var forgejoDefaultBranch string
+	var forgejoBoundAt sql.NullString
+	var createdAt string
+	if err := scanner.Scan(
+		&storedProject.ID,
+		&storedProject.Name,
+		&storedProject.RecoveryPolicy,
+		&forgejoOwner,
+		&forgejoRepository,
+		&forgejoDefaultBranch,
+		&forgejoBoundAt,
+		&createdAt,
+	); err != nil {
+		return project.Project{}, err
+	}
+	parsedCreatedAt, err := time.Parse(time.RFC3339Nano, createdAt)
+	if err != nil {
+		return project.Project{}, fmt.Errorf(
+			"parse creation time for project %q: %w", storedProject.ID, err,
+		)
+	}
+	storedProject.CreatedAt = parsedCreatedAt
+	if forgejoBoundAt.Valid {
+		parsedBoundAt, err := time.Parse(time.RFC3339Nano, forgejoBoundAt.String)
+		if err != nil {
+			return project.Project{}, fmt.Errorf(
+				"parse Forgejo binding time for project %q: %w", storedProject.ID, err,
+			)
+		}
+		storedProject.ForgejoRepository = &project.ForgejoRepository{
+			Owner: forgejoOwner, Name: forgejoRepository,
+			DefaultBranch: forgejoDefaultBranch, BoundAt: parsedBoundAt,
+		}
+	}
+	return storedProject, nil
+}
+
+func sameRepository(left, right project.ForgejoRepository) bool {
+	return strings.EqualFold(left.Owner, right.Owner) && strings.EqualFold(left.Name, right.Name)
 }

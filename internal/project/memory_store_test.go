@@ -59,3 +59,48 @@ func TestMemoryStoreGetByIDReturnsNotFound(t *testing.T) {
 		t.Fatalf("expected error %v, got %v", ErrNotFound, err)
 	}
 }
+
+func TestMemoryStoreListsAndBindsForgejoRepository(t *testing.T) {
+	store := NewMemoryStore()
+	createdAt := time.Date(2026, time.September, 9, 12, 0, 0, 0, time.UTC)
+	for _, value := range []Project{
+		{ID: "prj_b", Name: "B", CreatedAt: createdAt},
+		{ID: "prj_a", Name: "A", CreatedAt: createdAt},
+	} {
+		if err := store.Create(t.Context(), value); err != nil {
+			t.Fatalf("create project: %v", err)
+		}
+	}
+	projects, err := store.List(t.Context())
+	if err != nil {
+		t.Fatalf("list projects: %v", err)
+	}
+	if len(projects) != 2 || projects[0].ID != "prj_a" || projects[1].ID != "prj_b" {
+		t.Fatalf("unexpected projects %+v", projects)
+	}
+	repository := ForgejoRepository{
+		Owner: "owner", Name: "repository", DefaultBranch: "main",
+		BoundAt: time.Date(2026, time.September, 9, 13, 0, 0, 0, time.UTC),
+	}
+	bound, err := store.BindForgejoRepository(t.Context(), "prj_a", repository)
+	if err != nil {
+		t.Fatalf("bind repository: %v", err)
+	}
+	if bound.ForgejoRepository == nil || *bound.ForgejoRepository != repository {
+		t.Fatalf("unexpected binding %+v", bound)
+	}
+	bound.ForgejoRepository.Name = "mutated copy"
+	loaded, err := store.GetByID(t.Context(), "prj_a")
+	if err != nil {
+		t.Fatalf("get project: %v", err)
+	}
+	if loaded.ForgejoRepository == nil || loaded.ForgejoRepository.Name != repository.Name {
+		t.Fatal("caller mutated repository stored in memory")
+	}
+	_, err = store.BindForgejoRepository(t.Context(), "prj_a", ForgejoRepository{
+		Owner: "owner", Name: "other", DefaultBranch: "main", BoundAt: repository.BoundAt,
+	})
+	if !errors.Is(err, ErrForgejoRepositoryAlreadyBound) {
+		t.Fatalf("expected %v, got %v", ErrForgejoRepositoryAlreadyBound, err)
+	}
+}

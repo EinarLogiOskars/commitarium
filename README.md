@@ -21,8 +21,9 @@ and session-command APIs to one persistent real Codex conversation for
 read-only goal clarification. The user can exchange multiple visible turns
 with the lead agent while the feature remains a draft, then explicitly accepts
 the final goal to close clarification. Real file changes, Claude Code
-execution, Forgejo pull-request automation, and the user interface remain to
-be built.
+execution, Forgejo branches and pull-request automation, and the user interface
+remain to be built. Projects can now be listed and permanently associated with
+one verified Forgejo repository, which is the first part of that workspace path.
 
 ## Architecture
 
@@ -64,6 +65,38 @@ API credential.
 The coordinator executes its original deterministic agents in-process unless
 `COMMITARIUM_RUNNER_MODE=real_codex_lead` is selected. That mode requires the
 opt-in real worker described below.
+
+### Configure repository verification
+
+Repository binding uses a Forgejo access token stored in the local, gitignored
+file `.commitarium/forgejo-token`. This directory is mounted read-only into the
+coordinator. The token is read only when a repository is verified; it is not
+placed in Compose environment variables, SQLite, API responses, or logs.
+
+Create a token for the local Forgejo user through **User settings → Applications**
+at `http://127.0.0.1:3001`, give it `write:repository` scope, and save only the
+token value in that file. Binding itself only reads repository metadata; the
+write scope is needed by the immediately following branch and pull-request
+workflow. The directory and file should be readable only by the current host
+user. `COMMITARIUM_CONFIG_DIR` can point Compose at a different private
+directory. Replacing the file rotates the credential without restarting the
+coordinator.
+
+Once a non-empty repository exists in Forgejo, associate it with a coordinator
+project:
+
+```sh
+curl -X PUT http://127.0.0.1:8080/api/v1/projects/PROJECT_ID/forgejo-repository \
+  -H 'Content-Type: application/json' \
+  -d '{"owner":"FORGEJO_OWNER","name":"REPOSITORY"}'
+
+curl http://127.0.0.1:8080/api/v1/projects
+```
+
+The coordinator asks Forgejo for the canonical owner, repository name, and
+default branch before saving the binding. Repeating the same binding is safe.
+Changing an existing binding is deliberately rejected because later feature
+branches and pull requests must never move silently to another repository.
 
 Stop the services without deleting their data:
 
@@ -231,9 +264,9 @@ same executable can now select the real Codex adapter. Its opt-in image pins the
 Codex CLI version, runs as a non-root user, and mounts one explicit read-only
 workspace plus separate persistent provider and journal volumes. It does not
 require a manifest, configuration revision, or materialization digest. Automatic
-credential provisioning and Forgejo workspace creation/import remain separate
-future slices. Coordinator wiring is currently limited to one read-only lead
-turn.
+provider-credential provisioning and Forgejo repository import remain separate
+future slices. Coordinator wiring is currently limited to the goal-clarification
+conversation plus verified project/repository association.
 
 The worker also has a provider-neutral operating-system process-supervision
 foundation. It can start one exact child process group, expose bounded and

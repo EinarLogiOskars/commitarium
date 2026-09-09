@@ -24,6 +24,15 @@ type recordingProjectService struct {
 	receivedID    string
 	getByIDResult project.Project
 	getByIDErr    error
+
+	listResult []project.Project
+	listErr    error
+
+	bindProjectID string
+	bindOwner     string
+	bindName      string
+	bindResult    project.Project
+	bindErr       error
 }
 
 type testErrorResponse struct {
@@ -50,6 +59,22 @@ func (s *recordingProjectService) GetByID(
 ) (project.Project, error) {
 	s.receivedID = id
 	return s.getByIDResult, s.getByIDErr
+}
+
+func (s *recordingProjectService) List(context.Context) ([]project.Project, error) {
+	return s.listResult, s.listErr
+}
+
+func (s *recordingProjectService) BindForgejoRepository(
+	_ context.Context,
+	projectID string,
+	owner string,
+	name string,
+) (project.Project, error) {
+	s.bindProjectID = projectID
+	s.bindOwner = owner
+	s.bindName = name
+	return s.bindResult, s.bindErr
 }
 
 func TestCreateProject(t *testing.T) {
@@ -454,5 +479,140 @@ func TestGetProjectByIDReturnsNotFound(t *testing.T) {
 			"prj_missing",
 			service.receivedID,
 		)
+	}
+}
+
+func TestListProjects(t *testing.T) {
+	boundAt := time.Date(2026, time.September, 9, 18, 0, 0, 0, time.UTC)
+	service := &recordingProjectService{listResult: []project.Project{
+		{ID: "prj_one", Name: "One", RecoveryPolicy: project.RecoveryPolicyApprovalRequired, CreatedAt: boundAt.Add(-time.Hour)},
+		{ID: "prj_two", Name: "Two", RecoveryPolicy: project.RecoveryPolicyAutomatic, CreatedAt: boundAt,
+			ForgejoRepository: &project.ForgejoRepository{Owner: "owner", Name: "repo", DefaultBranch: "main", BoundAt: boundAt}},
+	}}
+	recorder := httptest.NewRecorder()
+	New(service, nil, nil, nil, nil, nil).ServeHTTP(
+		recorder, httptest.NewRequest(http.MethodGet, "/api/v1/projects", nil),
+	)
+	response := recorder.Result()
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, response.StatusCode)
+	}
+	var body []projectResponse
+	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+		t.Fatalf("decode projects: %v", err)
+	}
+	if len(body) != 2 || body[0].ID != "prj_one" || body[0].ForgejoRepository != nil {
+		t.Fatalf("unexpected project list %+v", body)
+	}
+	if body[1].ForgejoRepository == nil || body[1].ForgejoRepository.DefaultBranch != "main" {
+		t.Fatalf("bound repository missing from project list %+v", body[1])
+	}
+}
+
+func TestListProjectsHandlesUnexpectedError(t *testing.T) {
+	service := &recordingProjectService{listErr: errors.New("database unavailable")}
+	recorder := httptest.NewRecorder()
+	New(service, nil, nil, nil, nil, nil).ServeHTTP(
+		recorder, httptest.NewRequest(http.MethodGet, "/api/v1/projects", nil),
+	)
+	response := recorder.Result()
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("expected status %d, got %d", http.StatusInternalServerError, response.StatusCode)
+	}
+	var body errorResponse
+	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+		t.Fatalf("decode error response: %v", err)
+	}
+	if body.Error.Code != "internal_error" {
+		t.Fatalf("unexpected error response %+v", body)
+	}
+}
+
+func TestBindForgejoRepository(t *testing.T) {
+	boundAt := time.Date(2026, time.September, 9, 18, 0, 0, 0, time.UTC)
+	service := &recordingProjectService{bindResult: project.Project{
+		ID: "prj_test", Name: "Test", ForgejoRepository: &project.ForgejoRepository{
+			Owner: "canonical", Name: "repository", DefaultBranch: "main", BoundAt: boundAt,
+		},
+	}}
+	recorder := httptest.NewRecorder()
+	New(service, nil, nil, nil, nil, nil).ServeHTTP(recorder, httptest.NewRequest(
+		http.MethodPut, "/api/v1/projects/prj_test/forgejo-repository",
+		strings.NewReader(`{"owner":"owner","name":"repo"}`),
+	))
+	response := recorder.Result()
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(response.Body)
+		t.Fatalf("expected status %d, got %d: %s", http.StatusOK, response.StatusCode, body)
+	}
+	if service.bindProjectID != "prj_test" || service.bindOwner != "owner" || service.bindName != "repo" {
+		t.Fatalf("unexpected bind request %q %q/%q", service.bindProjectID, service.bindOwner, service.bindName)
+	}
+	var body projectResponse
+	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+		t.Fatalf("decode bound project: %v", err)
+	}
+	if body.ForgejoRepository == nil || body.ForgejoRepository.Owner != "canonical" ||
+		body.ForgejoRepository.BoundAt != boundAt {
+		t.Fatalf("unexpected bound project response %+v", body)
+	}
+}
+
+func TestBindForgejoRepositoryRejectsMalformedJSON(t *testing.T) {
+	service := &recordingProjectService{}
+	recorder := httptest.NewRecorder()
+	New(service, nil, nil, nil, nil, nil).ServeHTTP(recorder, httptest.NewRequest(
+		http.MethodPut, "/api/v1/projects/prj_test/forgejo-repository", strings.NewReader(`{"owner":`),
+	))
+	response := recorder.Result()
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected status %d, got %d", http.StatusBadRequest, response.StatusCode)
+	}
+	if service.bindProjectID != "" {
+		t.Fatal("malformed request reached project service")
+	}
+}
+
+func TestBindForgejoRepositoryMapsExpectedErrors(t *testing.T) {
+	tests := []struct {
+		err    error
+		status int
+		code   string
+	}{
+		{project.ErrNotFound, http.StatusNotFound, "project_not_found"},
+		{project.ErrForgejoOwnerRequired, http.StatusBadRequest, "forgejo_owner_required"},
+		{project.ErrForgejoRepositoryNameRequired, http.StatusBadRequest, "forgejo_repository_name_required"},
+		{project.ErrInvalidForgejoRepositoryCoordinate, http.StatusBadRequest, "invalid_forgejo_repository"},
+		{project.ErrForgejoRepositoryNotFound, http.StatusNotFound, "forgejo_repository_not_found"},
+		{project.ErrForgejoRepositoryNotReady, http.StatusConflict, "forgejo_repository_not_ready"},
+		{project.ErrForgejoRepositoryAlreadyBound, http.StatusConflict, "forgejo_repository_already_bound"},
+		{project.ErrForgejoUnavailable, http.StatusServiceUnavailable, "forgejo_unavailable"},
+		{errors.New("unexpected"), http.StatusInternalServerError, "internal_error"},
+	}
+	for _, test := range tests {
+		t.Run(test.code, func(t *testing.T) {
+			service := &recordingProjectService{bindErr: test.err}
+			recorder := httptest.NewRecorder()
+			New(service, nil, nil, nil, nil, nil).ServeHTTP(recorder, httptest.NewRequest(
+				http.MethodPut, "/api/v1/projects/prj_test/forgejo-repository",
+				strings.NewReader(`{"owner":"owner","name":"repo"}`),
+			))
+			response := recorder.Result()
+			defer response.Body.Close()
+			if response.StatusCode != test.status {
+				t.Fatalf("expected status %d, got %d", test.status, response.StatusCode)
+			}
+			var body errorResponse
+			if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+				t.Fatalf("decode error response: %v", err)
+			}
+			if body.Error.Code != test.code {
+				t.Fatalf("expected code %q, got %+v", test.code, body)
+			}
+		})
 	}
 }

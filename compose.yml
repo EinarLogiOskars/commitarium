@@ -9,12 +9,15 @@ services:
       COMMITARIUM_DATABASE_PATH: /var/lib/commitarium/coordinator.db
       COMMITARIUM_RUNNER_MODE: ${COMMITARIUM_RUNNER_MODE:-simulated}
       COMMITARIUM_SIMULATED_STEP_DELAY: ${COMMITARIUM_SIMULATED_STEP_DELAY:-250ms}
+      COMMITARIUM_FORGEJO_URL: http://forgejo:3000
+      COMMITARIUM_FORGEJO_TOKEN_FILE: /run/commitarium-config/forgejo-token
       COMMITARIUM_CODEX_WORKER_URL: http://codex-worker:8081
       COMMITARIUM_CODEX_WORKER_TOKEN: ${COMMITARIUM_CODEX_WORKER_TOKEN:-commitarium-local-codex-worker}
       COMMITARIUM_CODEX_PROFILE_ID: ${COMMITARIUM_CODEX_PROFILE_ID:-profile_local_codex}
       COMMITARIUM_CODEX_WORKSPACE_ID: ${COMMITARIUM_CODEX_WORKSPACE_ID:-workspace_smoke}
     volumes:
       - coordinator-data:/var/lib/commitarium
+      - ${COMMITARIUM_CONFIG_DIR:-./.commitarium}:/run/commitarium-config:ro
     ports:
       - "127.0.0.1:${COMMITARIUM_COORDINATOR_PORT:-8080}:8080"
 

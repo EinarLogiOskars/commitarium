@@ -17,8 +17,28 @@ func TestLoadConfigDefaultsToSimulatedRunner(t *testing.T) {
 	}
 	if loaded.runnerMode != defaultRunnerMode ||
 		loaded.simulatedStepDelay != 250*time.Millisecond ||
-		loaded.workerRequestTimeout != defaultWorkerRequestTimeout {
+		loaded.workerRequestTimeout != defaultWorkerRequestTimeout ||
+		loaded.forgejoURL != defaultForgejoURL ||
+		loaded.forgejoTokenFile != defaultForgejoTokenFile ||
+		loaded.forgejoTimeout != defaultForgejoTimeout {
 		t.Fatalf("unexpected default config %+v", loaded)
+	}
+}
+
+func TestLoadConfigAcceptsForgejoOverrides(t *testing.T) {
+	values := map[string]string{
+		"COMMITARIUM_DATABASE_PATH":           "/state/coordinator.db",
+		"COMMITARIUM_FORGEJO_URL":             "http://forgejo-test:4000/",
+		"COMMITARIUM_FORGEJO_TOKEN_FILE":      "/private/forgejo-token",
+		"COMMITARIUM_FORGEJO_REQUEST_TIMEOUT": "3s",
+	}
+	loaded, err := loadConfig(func(name string) string { return values[name] })
+	if err != nil {
+		t.Fatalf("load Forgejo config: %v", err)
+	}
+	if loaded.forgejoURL != "http://forgejo-test:4000/" ||
+		loaded.forgejoTokenFile != "/private/forgejo-token" || loaded.forgejoTimeout != 3*time.Second {
+		t.Fatalf("unexpected Forgejo config %+v", loaded)
 	}
 }
 
@@ -65,6 +85,10 @@ func TestLoadConfigRejectsIncompleteOrUnknownRunner(t *testing.T) {
 			"COMMITARIUM_CODEX_PROFILE_ID":             "profile_test",
 			"COMMITARIUM_CODEX_WORKSPACE_ID":           "workspace_test",
 			"COMMITARIUM_CODEX_WORKER_REQUEST_TIMEOUT": "zero",
+		},
+		{
+			"COMMITARIUM_DATABASE_PATH":           "/state/coordinator.db",
+			"COMMITARIUM_FORGEJO_REQUEST_TIMEOUT": "zero",
 		},
 	}
 	for index, values := range tests {

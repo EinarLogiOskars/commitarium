@@ -12,14 +12,26 @@ import (
 var ErrNameRequired = errors.New("project name is required")
 
 type Service struct {
-	store      Store
-	generateID func() string
-	now        func() time.Time
+	store              Store
+	repositoryVerifier RepositoryVerifier
+	generateID         func() string
+	now                func() time.Time
 }
 
 func NewService(store Store) *Service {
+	return NewServiceWithRepositoryVerifier(store, unavailableRepositoryVerifier{})
+}
+
+func NewServiceWithRepositoryVerifier(
+	store Store,
+	verifier RepositoryVerifier,
+) *Service {
+	if verifier == nil {
+		verifier = unavailableRepositoryVerifier{}
+	}
 	return &Service{
-		store: store,
+		store:              store,
+		repositoryVerifier: verifier,
 		generateID: func() string {
 			return "prj_" + rand.Text()
 		},
@@ -27,6 +39,16 @@ func NewService(store Store) *Service {
 			return time.Now().UTC()
 		},
 	}
+}
+
+type unavailableRepositoryVerifier struct{}
+
+func (unavailableRepositoryVerifier) VerifyRepository(
+	context.Context,
+	string,
+	string,
+) (ForgejoRepository, error) {
+	return ForgejoRepository{}, ErrForgejoUnavailable
 }
 
 func (s *Service) Create(
@@ -73,4 +95,48 @@ func (s *Service) GetByID(
 	}
 
 	return project, nil
+}
+
+func (s *Service) List(ctx context.Context) ([]Project, error) {
+	projects, err := s.store.List(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list projects: %w", err)
+	}
+	return projects, nil
+}
+
+func (s *Service) BindForgejoRepository(
+	ctx context.Context,
+	projectID string,
+	owner string,
+	name string,
+) (Project, error) {
+	owner, name, err := NormalizeRepositoryCoordinate(owner, name)
+	if err != nil {
+		return Project{}, err
+	}
+	storedProject, err := s.store.GetByID(ctx, projectID)
+	if err != nil {
+		return Project{}, fmt.Errorf("get project %q before Forgejo binding: %w", projectID, err)
+	}
+	if storedProject.ForgejoRepository != nil {
+		if sameRepositoryCoordinate(*storedProject.ForgejoRepository, owner, name) {
+			return storedProject, nil
+		}
+		return Project{}, ErrForgejoRepositoryAlreadyBound
+	}
+
+	repository, err := s.repositoryVerifier.VerifyRepository(ctx, owner, name)
+	if err != nil {
+		return Project{}, fmt.Errorf("verify Forgejo repository %q/%q: %w", owner, name, err)
+	}
+	repository.BoundAt = s.now().UTC()
+	if err := repository.Validate(); err != nil {
+		return Project{}, fmt.Errorf("verify Forgejo repository %q/%q: %w", owner, name, err)
+	}
+	boundProject, err := s.store.BindForgejoRepository(ctx, projectID, repository)
+	if err != nil {
+		return Project{}, fmt.Errorf("bind Forgejo repository to project %q: %w", projectID, err)
+	}
+	return boundProject, nil
 }

@@ -253,6 +253,50 @@ func TestGoalAcceptanceMigrationPreservesExistingFeatures(t *testing.T) {
 	}
 }
 
+func TestForgejoRepositoryMigrationPreservesExistingProjects(t *testing.T) {
+	db, err := OpenSQLite(t.Context(), filepath.Join(t.TempDir(), "coordinator.db"))
+	if err != nil {
+		t.Fatalf("open SQLite database: %v", err)
+	}
+	defer db.Close()
+	migrations, err := fs.Sub(migrationFiles, "migrations")
+	if err != nil {
+		t.Fatalf("open embedded migrations: %v", err)
+	}
+	provider, err := goose.NewProvider(goose.DialectSQLite3, db, migrations)
+	if err != nil {
+		t.Fatalf("create migration provider: %v", err)
+	}
+	if _, err := provider.UpTo(t.Context(), 8); err != nil {
+		t.Fatalf("migrate version-eight schema: %v", err)
+	}
+	now := time.Date(2026, time.September, 9, 18, 0, 0, 0, time.UTC).Format(time.RFC3339Nano)
+	if _, err := db.ExecContext(
+		t.Context(),
+		`INSERT INTO projects (id, name, recovery_policy, created_at)
+		 VALUES ('prj_existing', 'Existing project', 'approval_required', ?)`,
+		now,
+	); err != nil {
+		t.Fatalf("insert existing project: %v", err)
+	}
+	if err := Migrate(t.Context(), db); err != nil {
+		t.Fatalf("apply Forgejo repository migration: %v", err)
+	}
+	stored, err := NewProjectStore(db).GetByID(t.Context(), "prj_existing")
+	if err != nil {
+		t.Fatalf("get migrated project: %v", err)
+	}
+	if stored.ForgejoRepository != nil {
+		t.Fatalf("existing project acquired a false repository binding: %+v", stored)
+	}
+	if _, err := db.ExecContext(
+		t.Context(),
+		`UPDATE projects SET forgejo_owner = 'owner' WHERE id = 'prj_existing'`,
+	); err == nil {
+		t.Fatal("schema accepted a partial Forgejo repository binding")
+	}
+}
+
 func TestMigrateReturnsCanceledContext(t *testing.T) {
 	db, err := OpenSQLite(
 		t.Context(),
