@@ -102,9 +102,13 @@ ends so a disconnect is not mistaken for agent completion. It deliberately
 leaves automatic reconnection and runtime wiring to future orchestration. A
 worker journal now durably stores attempt state, provider session identity,
 mutation-retry records, terminal results, and the redacted event spool. It does
-not store raw mutation bodies or provider transcripts. The journal is not yet
-wired to a worker process or Compose service; those pieces and the real provider
-processes still remain to be built.
+not store raw mutation bodies or provider transcripts. A journal-backed worker
+service now connects those records to the existing HTTP operations and SSE
+stream using the deterministic provider adapter. It captures resumable provider
+identity before reporting an attempt as running, applies idempotent controls,
+and marks interrupted work uncertain on service startup. A standalone worker
+process, Compose worker services, real provider processes, and the concrete
+redaction rules still remain to be built.
 
 ## Development checks
 

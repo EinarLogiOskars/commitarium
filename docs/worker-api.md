@@ -5,9 +5,10 @@ coordinator and a provider worker that will supervise Codex or Claude Code.
 Protocol version 1 uses JSON over HTTP under `/internal/v1`.
 
 This boundary is implemented and tested as a Go HTTP server and coordinator
-client, but there is no worker executable or worker service in Docker Compose
-yet. The current tests connect both sides through an in-memory transport and a
-fake process-control service; they do not launch a provider CLI.
+client. A journal-backed service connects the server to SQLite and the existing
+deterministic in-process provider adapter in end-to-end localhost tests. There
+is no worker executable or worker service in Docker Compose yet, and no test
+launches a real provider CLI.
 
 ## Session and attempt identity
 
@@ -105,11 +106,14 @@ connected; they do not mean the agent performed work. Every event and heartbeat
 uses a bounded write deadline so a client that stops reading cannot hold worker
 resources forever.
 
-The stream transports already-normalized, already-redacted `Event` values. The
-provider-specific parser and fail-closed redaction pipeline remain the worker
-supervisor's responsibility and are not implemented yet. Provider-native
-transcripts, credentials, authentication data, and hidden model reasoning are
-never valid activity-stream payloads.
+The journal-backed service accepts provider activity only through a required
+normalizer boundary. It assigns immutable identity, time, and sequence fields
+after normalization, then stores an event before publishing it. If
+normalization fails, it records only a generic `redaction_failure`, marks the
+attempt indeterminate, and closes live delivery; the unsafe provider text is
+not persisted. The provider-specific parser and concrete redaction rules are
+not implemented yet. Provider-native transcripts, credentials, authentication
+data, and hidden model reasoning are never valid activity-stream payloads.
 
 ## Coordinator client
 
@@ -189,9 +193,11 @@ journal record instead of performing the action twice.
 The durable worker-journal foundation stores the key with a SHA-256 digest of
 the validated request. It does not keep another copy of the raw request body.
 The same key and digest is an exact retry; reusing the key for different input
-is a conflict. A mutation is recorded as pending before a future supervisor
-delivers it. If the worker restarts while delivery is unfinished, the journal
-marks that mutation indeterminate so it cannot be silently repeated.
+is a conflict. The journal-backed service records a mutation as pending before
+delivering it to the deterministic provider, then records whether it was
+applied, rejected, or became uncertain. If the worker restarts while delivery
+is unfinished, the journal marks that mutation indeterminate so it cannot be
+silently repeated.
 
 A newly created attempt returns `201 Created` with a `Location` header. An
 existing attempt returned for a safe retry uses `200 OK`. Commands are accepted
@@ -246,11 +252,12 @@ worker decision.
 ## Current boundary
 
 The HTTP handler depends on a small process-control service interface plus a
-separate event-source interface. The worker journal now uses its own SQLite
-database and embedded migrations, intended for the private worker-journal
-volume. It persists immutable launch assignments, early provider session IDs,
-supervised attempt states, terminal results, idempotent mutation records, and
-the complete normalized/redacted event JSON needed for ordered replay.
+separate event-source interface. The journal-backed service now implements both
+interfaces using the existing deterministic provider adapter and the worker's
+separate SQLite database. It persists immutable launch assignments, early
+provider session IDs, supervised attempt states, terminal results, idempotent
+mutation records, and the complete normalized/redacted event JSON needed for
+ordered replay.
 
 Only one nonterminal attempt may exist for a coordinator session. A terminal
 attempt releases that fence, but an indeterminate attempt continues blocking a
@@ -259,8 +266,26 @@ marked indeterminate together in one transaction. Exact retries remain
 recognizable after database reopen, while changed retries, event gaps, and
 altered event replay are rejected.
 
-The journal is still a storage foundation, not the process-control service or
-live event source used by the HTTP handler. Tests continue to use controlled
-fakes at that boundary. The coordinator client and event pump are also not yet
-wired into runtime orchestration. A future worker supervisor will connect these
-pieces without changing how HTTP requests are authenticated and decoded.
+Provider events are stored before live publication. Opening an SSE stream reads
+history and registers the live subscriber under the same service lock, which
+prevents an event from being lost between replay and subscription. Provider
+completion adds a final durable `attempt_terminal` event before storing the
+terminal result and closing subscribers. A resumed deterministic session
+publishes its recovery assessment and waits at a durable paused boundary for a
+continue or stop command.
+
+Creating the service performs startup recovery before requests are served:
+leftover active attempts and pending commands become indeterminate. Retrying
+the original launch then returns that same uncertain record without starting a
+second provider, and the uncertain attempt keeps fencing replacements.
+The same fence is applied when a provider process appears to start but does not
+return the expected resumable provider session ID; the worker cannot safely
+assume that such a process is absent merely because its identity is unusable.
+
+This remains an in-process integration foundation. There is no standalone
+worker binary, Compose wiring, operating-system process supervision, real Codex
+or Claude Code integration, credential access, or project-secret delivery.
+Accordingly the service does not advertise force-stop in its integration
+configuration: true forced termination will require a real process handle and
+must not be simulated as a cooperative stop. The coordinator client and event
+pump are also not yet wired into runtime orchestration.
