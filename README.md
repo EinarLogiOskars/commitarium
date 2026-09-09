@@ -326,8 +326,28 @@ curl -N http://127.0.0.1:8080/api/v1/runs/RUN_ID/planning/messages/stream
 Each message text still has one authoritative copy in its agent session; the
 shared planning history stores only references and cross-session order. Earlier
 provider preambles, commands, and activity remain visible in the individual
-session streams. This bounded slice stops after the first reviewer response and
-does not update the draft PR.
+session streams.
+
+If the first reviewer asks for changes, run one bounded correction round:
+
+```sh
+curl -i -X POST \
+  http://127.0.0.1:8080/api/v1/runs/RUN_ID/planning/round \
+  -H 'Idempotency-Key: planning-round-1' \
+  -H 'Content-Length: 0'
+```
+
+The coordinator resumes the original lead conversation with the reviewer's
+exact response. After the lead publishes a complete revised plan, it
+automatically resumes the original reviewer conversation with that revision.
+Both responses appear in the same planning history and live stream. The
+reviewer ends with an explicit `ACCEPTED` or `CHANGES_REQUESTED` decision;
+missing or contradictory decisions stop for user input instead of being
+guessed. This action supports exactly one correction round and is safe to
+retry. A coordinator restart during either turn reattaches to the exact worker
+attempt, and a restart between turns continues the stored handoff without
+starting two agents. The agents remain read-only throughout this slice, and an
+accepted plan is not written to the draft PR yet.
 
 The versioned [internal worker API](docs/worker-api.md) now has tested client and
 server components for authenticated attempt inspection and control. Its worker
@@ -368,8 +388,8 @@ mounts its selected repository read-only. It does not
 require a manifest, configuration revision, or materialization digest. Automatic
 provider-credential provisioning and Forgejo repository import remain separate
 future slices. Coordinator wiring currently covers goal clarification, explicit
-goal acceptance, verified project/repository preparation, and the first
-read-only lead/reviewer planning exchange.
+goal acceptance, verified project/repository preparation, and a bounded
+read-only lead/reviewer planning discussion through an explicit decision.
 
 The worker also has a provider-neutral operating-system process-supervision
 foundation. It can start one exact child process group, expose bounded and

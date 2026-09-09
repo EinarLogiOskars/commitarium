@@ -67,9 +67,12 @@ func (s *ExecutionStore) BeginAutonomousTurn(
 	if checkpoint.AttemptID == admission.NextAttempt.AttemptID {
 		return false, nil
 	}
+	expectedRunStatus := execution.RunStatusWaitingForUser
+	if admission.RunAlreadyActive {
+		expectedRunStatus = execution.RunStatusRunning
+	}
 	if session.Status != execution.SessionStatusWaitingForUser ||
-		session.ProviderSessionID == "" ||
-		run.Status != execution.RunStatusWaitingForUser {
+		session.ProviderSessionID == "" || run.Status != expectedRunStatus {
 		return false, execution.ErrStateConflict
 	}
 	var state string
@@ -89,6 +92,24 @@ func (s *ExecutionStore) BeginAutonomousTurn(
 	if checkpoint.AttemptID != admission.PreviousAttemptID ||
 		checkpoint.LastEventSequence != admission.PreviousLastEventSequence {
 		return false, execution.ErrWorkerAttemptConflict
+	}
+	if admission.RunAlreadyActive {
+		var activeCount int
+		if err := tx.QueryRowContext(
+			ctx,
+			`SELECT COUNT(*) FROM sessions
+			 WHERE run_id = ? AND status NOT IN (?, ?, ?, ?)`,
+			run.ID,
+			execution.SessionStatusWaitingForUser,
+			execution.SessionStatusCompleted,
+			execution.SessionStatusStopped,
+			execution.SessionStatusFailed,
+		).Scan(&activeCount); err != nil {
+			return false, fmt.Errorf("count active sessions for chained turn: %w", err)
+		}
+		if activeCount != 0 {
+			return false, execution.ErrStateConflict
+		}
 	}
 
 	next := admission.NextAttempt
@@ -121,13 +142,11 @@ func (s *ExecutionStore) BeginAutonomousTurn(
 		return false, err
 	}
 
-	result, err = tx.ExecContext(
-		ctx,
+	result, err = tx.ExecContext(ctx,
 		`UPDATE runs SET status = ?, reason = ?, updated_at = ?
 		 WHERE id = ? AND status = ?`,
 		execution.RunStatusRunning, admission.RunReason,
-		formatExecutionTime(admission.OccurredAt), run.ID,
-		execution.RunStatusWaitingForUser,
+		formatExecutionTime(admission.OccurredAt), run.ID, expectedRunStatus,
 	)
 	if err != nil {
 		return false, fmt.Errorf("activate run for autonomous turn: %w", err)

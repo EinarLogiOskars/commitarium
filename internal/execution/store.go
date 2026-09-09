@@ -90,6 +90,7 @@ type AutonomousTurnAdmission struct {
 	NextAttempt               WorkerAttemptCheckpoint
 	RunReason                 string
 	OccurredAt                time.Time
+	RunAlreadyActive          bool
 }
 
 // NewSessionTurnAdmission creates a new durable logical conversation and its

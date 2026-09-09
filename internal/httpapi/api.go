@@ -103,6 +103,11 @@ type PlanningStarter interface {
 		runID string,
 		idempotencyKey string,
 	) (execution.Run, bool, error)
+	StartPlanningRound(
+		ctx context.Context,
+		runID string,
+		idempotencyKey string,
+	) (execution.Run, bool, error)
 }
 
 type API struct {
@@ -233,6 +238,7 @@ func newAPI(
 	if planning != nil {
 		mux.HandleFunc("POST /api/v1/runs/{id}/planning", api.startPlanningHandler)
 		mux.HandleFunc("POST /api/v1/runs/{id}/planning/reviewer", api.startPlanningReviewHandler)
+		mux.HandleFunc("POST /api/v1/runs/{id}/planning/round", api.startPlanningRoundHandler)
 	}
 	mux.HandleFunc("GET /api/v1/runs/{id}", api.getRunHandler)
 	mux.HandleFunc("GET /api/v1/runs/{id}/planning/messages", api.getPlanningMessagesHandler)

@@ -24,6 +24,7 @@ this API beyond the host loopback interface is unsupported.
 | `GET` | `/api/v1/runs/{runID}` | Retrieve run state and its ordered sessions |
 | `POST` | `/api/v1/runs/{runID}/planning` | Resume the real lead in the managed workspace for its first plan proposal |
 | `POST` | `/api/v1/runs/{runID}/planning/reviewer` | Start the persistent reviewer with the lead's exact proposal |
+| `POST` | `/api/v1/runs/{runID}/planning/round` | Run one lead revision and reviewer decision in their existing sessions |
 | `GET` | `/api/v1/runs/{runID}/planning/messages` | Retrieve the ordered lead/reviewer planning messages |
 | `GET` | `/api/v1/runs/{runID}/planning/messages/stream` | Replay and stream ordered planning messages with SSE |
 | `GET` | `/api/v1/sessions/{sessionID}` | Retrieve a session |
@@ -34,7 +35,7 @@ this API beyond the host loopback interface is unsupported.
 
 ## Idempotency
 
-Feature transitions, run starts, planning starts, session commands, and goal
+Feature transitions, run starts, planning actions, session commands, and goal
 acceptance require an `Idempotency-Key` header. Retrying the same operation with
 the same key returns the existing durable result. Reusing a key for a different
 operation returns `409 Conflict` with the `idempotency_conflict` error code.
@@ -297,9 +298,53 @@ Completion leaves both sessions and the run at `waiting_for_user`. Repeating
 the action returns the same reviewer session without another worker attempt.
 Missing or contradictory prerequisites return `409 reviewer_not_ready`.
 
-This endpoint does not interpret acceptance, route changes back to the lead,
-or update Forgejo. Those behaviors belong to the next bounded planning-loop
-slice.
+This endpoint stops after the first reviewer response. It does not route that
+response back to the lead or update Forgejo.
+
+## Running one planning correction round
+
+After the first reviewer response is ready, start one bounded correction round:
+
+```http
+POST /api/v1/runs/run_opaque/planning/round
+Idempotency-Key: planning-round-1
+Content-Length: 0
+```
+
+The run, lead, and reviewer must all be waiting; the feature must remain in
+`planning`; both provider session IDs must be present; both first planning
+attempts must be terminal and fully copied; shared planning history must contain
+exactly the lead proposal followed by the reviewer response; and the managed
+checkout and draft PR must remain ready. Missing or contradictory prerequisites
+return `409 planning_round_not_ready` or `409 planning_round_conflict`.
+
+The action first resumes the lead's existing provider conversation with the
+reviewer's exact response. The lead is required to reinspect the repository and
+provide a complete replacement plan without changing files. When that turn is
+durable, the coordinator keeps the overall run active, marks the lead waiting,
+and atomically rotates the existing reviewer conversation to its next attempt.
+The reviewer receives the exact revision and its previous response, reinspects
+the repository, and ends with exactly one decision marker:
+
+```text
+PLANNING_DECISION: ACCEPTED
+```
+
+or:
+
+```text
+PLANNING_DECISION: CHANGES_REQUESTED
+```
+
+One unambiguous marker controls only the run's waiting reason. Missing or
+contradictory markers require user input; the coordinator never guesses. An
+accepted decision means the plan is ready for the following Forgejo-publication
+slice, not that it has already been written to the PR.
+
+The attempt IDs are fixed for this one correction round, so an exact action
+retry returns the same run without another lead or reviewer turn. Additional
+autonomous rounds are deliberately unsupported. The two new authored responses
+become planning messages three and four in the existing history and SSE stream.
 
 ## Shared planning messages
 
@@ -359,11 +404,11 @@ source sequence in SQLite. The coordinator stores that event and advances the
 source checkpoint in the same transaction, then publishes it to this public
 stream. This internal source identity does not change the public event shape;
 it exists to prevent duplicate or skipped activity after a coordinator restart.
-The internal single-attempt pump can already reopen a worker stream from this
+The internal single-attempt pump can reopen a worker stream from this
 durable checkpoint and copy events until that connection ends. It then inspects
 the worker's attempt state and treats an active or uncertain agent differently
-from a completed one. The real-lead runtime now uses that pump; broader
-multi-turn orchestration remains future work.
+from a completed one. The real-lead runtime uses that pump for every bounded
+lead and reviewer turn implemented so far.
 
 ## Session commands
 
@@ -452,9 +497,9 @@ run and session are both `waiting_for_user` is not mistaken for interrupted
 work.
 
 For the real-lead mode, recovery only performs a read-only lookup of the exact
-durable worker attempt, including an interrupted lead, follow-up, planning, or
-first-reviewer turn. A waiting lead is not counted as concurrent active work
-while the reviewer is running. If
+durable worker attempt, including an interrupted lead, follow-up, initial
+planning, first-reviewer, lead-revision, or reviewer-decision turn. A waiting
+lead is not counted as concurrent active work while the reviewer is running. If
 it still exists and is consistent, the coordinator records a `recovery_assessment`
 event, marks its pending reply applied once the attempt is confirmed, and
 reattaches to the event stream without starting a process. If it is missing,
@@ -462,6 +507,15 @@ unreachable, contradictory, or indeterminate, the run waits for user review and
 no replacement agent starts. The current real-worker restart behavior
 deliberately marks a previously active process indeterminate, so resuming after
 the worker itself restarts remains a later slice.
+
+During the correction round, the run remains `running` across the internal
+lead-to-reviewer handoff. If the coordinator stops after the lead revision is
+durable but before the reviewer starts, startup recognizes the exact stored
+attempt pair and continues the reviewer turn. SQLite refuses that handoff while
+any other session is actively working. If the coordinator stops after the final
+reviewer message but before the run returns to its user gate, startup derives
+the same waiting reason from the durable decision marker. These cases never
+launch two agents concurrently.
 
 In the simulated workflow, a resumed worker receives a concise recovery
 briefing and must inspect before modifying anything. The briefing requires
