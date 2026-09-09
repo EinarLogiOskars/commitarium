@@ -70,6 +70,33 @@ func TestWorkspaceStoreReservationAndBranchReadyAreIdempotent(t *testing.T) {
 	); !errors.Is(err, workspace.ErrConflict) {
 		t.Fatalf("expected changed checkout path to conflict, got %v", err)
 	}
+	pullRequestAt := checkoutAt.Add(time.Minute)
+	pullRequestURL := "http://localhost:3001/owner/repository/pulls/7"
+	pullRequestReady, err := store.MarkPullRequestReady(
+		t.Context(), reservation.FeatureID, 7, pullRequestURL, pullRequestAt,
+	)
+	if err != nil || pullRequestReady.PullRequestNumber != 7 ||
+		pullRequestReady.PullRequestURL != pullRequestURL ||
+		pullRequestReady.PullRequestRecordedAt == nil ||
+		!pullRequestReady.PullRequestRecordedAt.Equal(pullRequestAt) {
+		t.Fatalf("mark pull request ready: workspace=%+v err=%v", pullRequestReady, err)
+	}
+	retriedPullRequest, err := store.MarkPullRequestReady(
+		t.Context(), reservation.FeatureID, 7, pullRequestURL, pullRequestAt.Add(time.Hour),
+	)
+	if err != nil || !reflect.DeepEqual(retriedPullRequest, pullRequestReady) {
+		t.Fatalf("retry pull request ready: workspace=%+v err=%v", retriedPullRequest, err)
+	}
+	if _, err := store.MarkPullRequestReady(
+		t.Context(), reservation.FeatureID, 8,
+		"http://localhost:3001/owner/repository/pulls/8", pullRequestAt,
+	); !errors.Is(err, workspace.ErrConflict) {
+		t.Fatalf("expected changed pull request identity to conflict, got %v", err)
+	}
+	loaded, err = store.GetByFeatureID(t.Context(), reservation.FeatureID)
+	if err != nil || !reflect.DeepEqual(loaded, pullRequestReady) {
+		t.Fatalf("reload pull-request-ready workspace: workspace=%+v err=%v", loaded, err)
+	}
 }
 
 func TestWorkspaceStoreRejectsChangedReservation(t *testing.T) {
@@ -102,6 +129,11 @@ func TestWorkspaceStoreReturnsNotFound(t *testing.T) {
 	}
 	if _, err := store.MarkCheckoutReady(
 		t.Context(), "fea_missing", "wsp_missing", time.Now().UTC(),
+	); !errors.Is(err, workspace.ErrNotFound) {
+		t.Fatalf("expected %v, got %v", workspace.ErrNotFound, err)
+	}
+	if _, err := store.MarkPullRequestReady(
+		t.Context(), "fea_missing", 1, "http://localhost/pulls/1", time.Now().UTC(),
 	); !errors.Is(err, workspace.ErrNotFound) {
 		t.Fatalf("expected %v, got %v", workspace.ErrNotFound, err)
 	}

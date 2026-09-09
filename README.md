@@ -21,12 +21,13 @@ and session-command APIs to one persistent real Codex conversation for
 read-only goal clarification. The user can exchange multiple visible turns
 with the lead agent while the feature remains a draft, then explicitly accepts
 the final goal to close clarification. After acceptance, the public API can now
-reserve a durable feature workspace identity and create its exact Forgejo branch
-from the repository's recorded default-branch commit. It also creates an ordinary
-host-visible checkout of that branch that the user and agent container can share.
-Agent-driven file changes, Claude Code execution, pull-request automation, and
-the user interface remain to be built. Projects can be listed and permanently
-associated with one verified Forgejo repository.
+reserve a durable feature workspace identity, create its exact Forgejo branch
+from the repository's recorded default-branch commit, and create the feature's
+draft pull request. It also creates an ordinary host-visible checkout of that
+branch that the user and agent container can share. Agent-driven file changes,
+collaborative planning and review, Claude Code execution, and the user interface
+remain to be built. Projects can be listed and permanently associated with one
+verified Forgejo repository.
 
 ## Architecture
 
@@ -252,8 +253,8 @@ replies are rejected so the next workspace/planning slice has one stable goal
 to use. Retrying the same acceptance is safe; changing an accepted goal will
 require a future explicit reopen operation.
 
-Once that project is bound to a Forgejo repository, prepare the feature's branch
-and shared checkout:
+Once that project is bound to a Forgejo repository, prepare the feature's branch,
+shared checkout, and draft pull request:
 
 ```sh
 curl -i -X PUT \
@@ -262,16 +263,21 @@ curl -i -X PUT \
 
 The coordinator first saves the repository identity, default branch, current
 base commit, and deterministic `commitarium/FEATURE_ID` branch name in SQLite.
-It then creates that branch from the saved commit and clones it into the feature's
-managed host directory. A retry uses the same saved commit even if the default
+It then creates that branch from the saved commit, clones it into the feature's
+managed host directory, and opens a Forgejo draft pull request titled with
+Forgejo's `WIP:` draft prefix. The PR body contains the accepted goal and a hidden
+stable feature marker. A retry uses the same saved commit even if the default
 branch has moved, and safely accepts an already-created branch only when it still
-points to that commit. Once the checkout is recorded as ready, retries verify its
-repository, branch, remotes, and ancestry while preserving later commits and
-uncommitted user edits. Missing or contradictory state returns a conflict for
-user review; Commitarium never resets or cleans the directory. The response is
-`201 Created` when the reservation is first created and `200 OK` for a retry.
-This operation does not yet assign the real lead to this checkout, provide its
-temporary Forgejo Git credential, or open the draft pull request.
+points to that commit. Once the checkout and PR are recorded as ready, retries
+preserve later commits and uncommitted user edits while checking the repository,
+branch, remotes, ancestry, and PR identity. This also recovers if Forgejo created
+the PR just before the coordinator stopped but SQLite had not recorded it yet.
+Missing or contradictory state returns a conflict for user review; Commitarium
+never resets or cleans the directory and never creates a replacement PR when
+ownership is uncertain. The response is `201 Created` when the reservation is
+first created and `200 OK` for a retry, with the PR number and browser URL
+included. This operation does not yet assign the real lead to this checkout,
+provide its temporary Forgejo Git credential, or begin collaborative planning.
 
 The versioned [internal worker API](docs/worker-api.md) now has tested client and
 server components for authenticated attempt inspection and control. Its worker

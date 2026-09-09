@@ -13,24 +13,32 @@ import (
 )
 
 type workspaceResponse struct {
-	ID              string            `json:"id"`
-	ProjectID       string            `json:"project_id"`
-	FeatureID       string            `json:"feature_id"`
-	Repository      repositoryRef     `json:"repository"`
-	BaseBranch      string            `json:"base_branch"`
-	Branch          string            `json:"branch"`
-	BaseCommitID    string            `json:"base_commit_id"`
-	Status          workspace.Status  `json:"status"`
-	BranchCreatedAt *time.Time        `json:"branch_created_at,omitempty"`
-	Checkout        *checkoutResponse `json:"checkout,omitempty"`
-	CreatedAt       time.Time         `json:"created_at"`
-	UpdatedAt       time.Time         `json:"updated_at"`
+	ID              string               `json:"id"`
+	ProjectID       string               `json:"project_id"`
+	FeatureID       string               `json:"feature_id"`
+	Repository      repositoryRef        `json:"repository"`
+	BaseBranch      string               `json:"base_branch"`
+	Branch          string               `json:"branch"`
+	BaseCommitID    string               `json:"base_commit_id"`
+	Status          workspace.Status     `json:"status"`
+	BranchCreatedAt *time.Time           `json:"branch_created_at,omitempty"`
+	Checkout        *checkoutResponse    `json:"checkout,omitempty"`
+	PullRequest     *pullRequestResponse `json:"pull_request,omitempty"`
+	CreatedAt       time.Time            `json:"created_at"`
+	UpdatedAt       time.Time            `json:"updated_at"`
 }
 
 type checkoutResponse struct {
 	WorkspaceID  string    `json:"workspace_id"`
 	RelativePath string    `json:"relative_path"`
 	CreatedAt    time.Time `json:"created_at"`
+}
+
+type pullRequestResponse struct {
+	Number     int64     `json:"number"`
+	URL        string    `json:"url"`
+	Draft      bool      `json:"draft"`
+	RecordedAt time.Time `json:"recorded_at"`
 }
 
 type repositoryRef struct {
@@ -74,8 +82,9 @@ func (api *API) prepareWorkspaceHandler(w http.ResponseWriter, r *http.Request) 
 		case errors.Is(err, workspace.ErrBranchNotFound), errors.Is(err, project.ErrForgejoRepositoryNotReady):
 			writeError(w, http.StatusConflict, "forgejo_repository_not_ready", "the bound Forgejo repository or its default branch is not ready")
 		case errors.Is(err, workspace.ErrConflict), errors.Is(err, workspace.ErrBranchConflict),
-			errors.Is(err, workspace.ErrCheckoutConflict):
-			writeError(w, http.StatusConflict, "workspace_conflict", "the stored workspace, Forgejo branch, or managed checkout disagrees; user review is required")
+			errors.Is(err, workspace.ErrCheckoutConflict),
+			errors.Is(err, workspace.ErrPullRequestConflict):
+			writeError(w, http.StatusConflict, "workspace_conflict", "the stored workspace, Forgejo branch, managed checkout, or draft pull request disagrees; user review is required")
 		case errors.Is(err, workspace.ErrCheckoutUnavailable):
 			writeError(w, http.StatusServiceUnavailable, "checkout_unavailable", "the managed checkout cannot be prepared right now")
 		case errors.Is(err, project.ErrForgejoUnavailable):
@@ -115,6 +124,12 @@ func newWorkspaceResponse(stored workspace.Workspace) workspaceResponse {
 		response.Checkout = &checkoutResponse{
 			WorkspaceID: stored.ID, RelativePath: stored.CheckoutRelativePath,
 			CreatedAt: *stored.CheckoutCreatedAt,
+		}
+	}
+	if stored.PullRequestReady() {
+		response.PullRequest = &pullRequestResponse{
+			Number: stored.PullRequestNumber, URL: stored.PullRequestURL,
+			Draft: true, RecordedAt: *stored.PullRequestRecordedAt,
 		}
 	}
 	return response

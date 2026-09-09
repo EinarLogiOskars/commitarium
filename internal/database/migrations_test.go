@@ -414,6 +414,70 @@ func TestCheckoutMigrationPreservesExistingWorkspace(t *testing.T) {
 	}
 }
 
+func TestPullRequestMigrationPreservesExistingCheckout(t *testing.T) {
+	db, err := OpenSQLite(t.Context(), filepath.Join(t.TempDir(), "coordinator.db"))
+	if err != nil {
+		t.Fatalf("open SQLite database: %v", err)
+	}
+	defer db.Close()
+	migrations, err := fs.Sub(migrationFiles, "migrations")
+	if err != nil {
+		t.Fatalf("open embedded migrations: %v", err)
+	}
+	provider, err := goose.NewProvider(goose.DialectSQLite3, db, migrations)
+	if err != nil {
+		t.Fatalf("create migration provider: %v", err)
+	}
+	if _, err := provider.UpTo(t.Context(), 11); err != nil {
+		t.Fatalf("migrate version-eleven schema: %v", err)
+	}
+	now := time.Date(2026, time.September, 9, 22, 0, 0, 0, time.UTC).Format(time.RFC3339Nano)
+	statements := []struct {
+		query string
+		args  []any
+	}{
+		{`INSERT INTO projects (id, name, recovery_policy, created_at)
+		  VALUES ('prj_pr', 'Pull request project', 'approval_required', ?)`, []any{now}},
+		{`INSERT INTO features (
+			id, project_id, title, description, state,
+			accepted_goal, goal_accepted_at, created_at, updated_at
+		  ) VALUES ('fea_pr', 'prj_pr', 'Pull request feature', '', 'draft',
+		            'Ship it', ?, ?, ?)`, []any{now, now, now}},
+		{`INSERT INTO feature_workspaces (
+			feature_id, id, project_id, repository_owner, repository_name,
+			base_branch, branch_name, base_commit_id, status, branch_created_at,
+			checkout_relative_path, checkout_created_at, created_at, updated_at
+		  ) VALUES ('fea_pr', 'wsp_fea_pr', 'prj_pr', 'owner', 'repository',
+		            'main', 'commitarium/fea_pr',
+		            '0123456789abcdef0123456789abcdef01234567', 'branch_ready', ?,
+		            'wsp_fea_pr', ?, ?, ?)`, []any{now, now, now, now}},
+	}
+	for index, statement := range statements {
+		if _, err := db.ExecContext(t.Context(), statement.query, statement.args...); err != nil {
+			t.Fatalf("insert version-eleven record %d: %v", index, err)
+		}
+	}
+	if err := Migrate(t.Context(), db); err != nil {
+		t.Fatalf("apply pull request migration: %v", err)
+	}
+	stored, err := NewWorkspaceStore(db).GetByFeatureID(t.Context(), "fea_pr")
+	if err != nil {
+		t.Fatalf("get preserved workspace: %v", err)
+	}
+	if stored.PullRequestReady() || stored.PullRequestNumber != 0 ||
+		stored.PullRequestURL != "" || stored.PullRequestRecordedAt != nil {
+		t.Fatalf("existing workspace acquired a false pull request: %+v", stored)
+	}
+	if _, err := db.ExecContext(
+		t.Context(),
+		`UPDATE feature_workspaces
+		 SET pull_request_number = 7
+		 WHERE feature_id = 'fea_pr'`,
+	); err == nil {
+		t.Fatal("schema accepted a pull request number without its URL and recording time")
+	}
+}
+
 func TestMigrateReturnsCanceledContext(t *testing.T) {
 	db, err := OpenSQLite(
 		t.Context(),

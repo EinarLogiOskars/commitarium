@@ -3,6 +3,7 @@ package workspace
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -13,12 +14,28 @@ import (
 const testCommitID = "0123456789abcdef0123456789abcdef01234567"
 
 type memoryStore struct {
-	stored           Workspace
-	reserve          []Workspace
-	markedAt         []time.Time
-	checkoutMarkedAt []time.Time
-	getErr           error
-	reserveErr       error
+	stored              Workspace
+	reserve             []Workspace
+	markedAt            []time.Time
+	checkoutMarkedAt    []time.Time
+	pullRequestMarkedAt []time.Time
+	getErr              error
+	reserveErr          error
+}
+
+func (store *memoryStore) MarkPullRequestReady(
+	_ context.Context,
+	_ string,
+	number int64,
+	pullRequestURL string,
+	readyAt time.Time,
+) (Workspace, error) {
+	store.pullRequestMarkedAt = append(store.pullRequestMarkedAt, readyAt)
+	store.stored.PullRequestNumber = number
+	store.stored.PullRequestURL = pullRequestURL
+	store.stored.PullRequestRecordedAt = &readyAt
+	store.stored.UpdatedAt = readyAt
+	return store.stored, nil
 }
 
 func (store *memoryStore) MarkCheckoutReady(
@@ -93,6 +110,22 @@ type recordingBranches struct {
 type recordingCheckout struct {
 	specs []CheckoutSpec
 	err   error
+}
+
+type recordingPullRequests struct {
+	specs  []PullRequestSpec
+	result PullRequest
+	err    error
+}
+
+func (pullRequests *recordingPullRequests) EnsureDraftPullRequest(
+	_ context.Context,
+	_ string,
+	_ string,
+	spec PullRequestSpec,
+) (PullRequest, error) {
+	pullRequests.specs = append(pullRequests.specs, spec)
+	return pullRequests.result, pullRequests.err
 }
 
 func (checkout *recordingCheckout) Ensure(_ context.Context, spec CheckoutSpec) error {
@@ -254,6 +287,113 @@ func TestServiceReconcilesReadyCheckoutWithoutChangingItsRecord(t *testing.T) {
 	}
 }
 
+func TestServiceCreatesDraftPullRequestAfterCheckoutIsReady(t *testing.T) {
+	now := time.Date(2026, time.September, 9, 20, 0, 0, 0, time.UTC)
+	stored := readyTestWorkspace(now)
+	store := &memoryStore{stored: stored}
+	pullRequest := PullRequest{
+		Number: 7, URL: "http://localhost:3001/owner/repository/pulls/7",
+		Title: "WIP: Test feature", Body: "<!-- commitarium-feature: fea_test -->",
+		State: "open", Draft: true,
+		BaseBranch: "main", HeadBranch: "commitarium/fea_test",
+		HeadCommitID: testCommitID, CreatedAt: now.Add(3 * time.Minute),
+	}
+	pullRequests := &recordingPullRequests{result: pullRequest}
+	service := NewServiceWithPreparation(
+		store,
+		fixedFeatureFinder{stored: acceptedTestFeature(now)},
+		fixedProjectFinder{stored: project.Project{
+			ID: "prj_test", ForgejoRepository: testRepository(now),
+		}},
+		&recordingBranches{},
+		&recordingCheckout{},
+		pullRequests,
+	)
+	readyAt := now.Add(4 * time.Minute)
+	service.now = func() time.Time { return readyAt }
+
+	prepared, created, err := service.Prepare(t.Context(), "prj_test", "fea_test")
+	if err != nil || created || !prepared.PullRequestReady() {
+		t.Fatalf("prepare pull request: created=%t workspace=%+v err=%v", created, prepared, err)
+	}
+	if prepared.PullRequestNumber != 7 || prepared.PullRequestURL != pullRequest.URL ||
+		prepared.PullRequestRecordedAt == nil || !prepared.PullRequestRecordedAt.Equal(readyAt) {
+		t.Fatalf("unexpected pull request readiness %+v", prepared)
+	}
+	if len(pullRequests.specs) != 1 {
+		t.Fatalf("expected one pull request request, got %+v", pullRequests.specs)
+	}
+	spec := pullRequests.specs[0]
+	if spec.Title != "WIP: Test feature" ||
+		!strings.Contains(spec.Body, "Ship it") ||
+		!strings.Contains(spec.Body, spec.FeatureMarker) || spec.ExistingNumber != 0 {
+		t.Fatalf("unexpected pull request request %+v", spec)
+	}
+}
+
+func TestServiceReconcilesRecordedPullRequest(t *testing.T) {
+	now := time.Date(2026, time.September, 9, 20, 0, 0, 0, time.UTC)
+	stored := readyTestWorkspace(now)
+	pullRequestReadyAt := now.Add(3 * time.Minute)
+	stored.PullRequestNumber = 7
+	stored.PullRequestURL = "http://localhost:3001/owner/repository/pulls/7"
+	stored.PullRequestRecordedAt = &pullRequestReadyAt
+	stored.UpdatedAt = pullRequestReadyAt
+	store := &memoryStore{stored: stored}
+	pullRequests := &recordingPullRequests{result: PullRequest{
+		Number: 7, URL: stored.PullRequestURL, Title: "Changed WIP title",
+		Body: "<!-- commitarium-feature: fea_test -->", State: "open", Draft: true,
+		BaseBranch: "main", HeadBranch: "commitarium/fea_test", HeadCommitID: testCommitID,
+		CreatedAt: pullRequestReadyAt,
+	}}
+	service := NewServiceWithPreparation(
+		store,
+		fixedFeatureFinder{stored: acceptedTestFeature(now)},
+		fixedProjectFinder{stored: project.Project{
+			ID: "prj_test", ForgejoRepository: testRepository(now),
+		}},
+		&recordingBranches{}, &recordingCheckout{}, pullRequests,
+	)
+
+	prepared, created, err := service.Prepare(t.Context(), "prj_test", "fea_test")
+	if err != nil || created || prepared != stored {
+		t.Fatalf("reconcile pull request: created=%t workspace=%+v err=%v", created, prepared, err)
+	}
+	if len(pullRequests.specs) != 1 || pullRequests.specs[0].ExistingNumber != 7 ||
+		len(store.pullRequestMarkedAt) != 0 {
+		t.Fatalf("recorded pull request was not only reconciled: %+v", pullRequests.specs)
+	}
+}
+
+func TestServiceRejectsPullRequestManagerResultForAnotherFeature(t *testing.T) {
+	now := time.Date(2026, time.September, 9, 20, 0, 0, 0, time.UTC)
+	stored := readyTestWorkspace(now)
+	pullRequests := &recordingPullRequests{result: PullRequest{
+		Number: 7, URL: "http://localhost:3001/owner/repository/pulls/7",
+		Title: "WIP: Test feature", Body: "<!-- commitarium-feature: fea_other -->",
+		State: "open", Draft: true, BaseBranch: "main",
+		HeadBranch: "commitarium/fea_test", HeadCommitID: testCommitID,
+		CreatedAt: now.Add(3 * time.Minute),
+	}}
+	store := &memoryStore{stored: stored}
+	service := NewServiceWithPreparation(
+		store,
+		fixedFeatureFinder{stored: acceptedTestFeature(now)},
+		fixedProjectFinder{stored: project.Project{
+			ID: "prj_test", ForgejoRepository: testRepository(now),
+		}},
+		&recordingBranches{}, &recordingCheckout{}, pullRequests,
+	)
+
+	_, _, err := service.Prepare(t.Context(), "prj_test", "fea_test")
+	if !errors.Is(err, ErrPullRequestConflict) {
+		t.Fatalf("expected %v, got %v", ErrPullRequestConflict, err)
+	}
+	if len(store.pullRequestMarkedAt) != 0 {
+		t.Fatal("conflicting pull request was recorded")
+	}
+}
+
 func TestServiceRequiresAcceptedGoalAndRepositoryBinding(t *testing.T) {
 	now := time.Date(2026, time.September, 9, 20, 0, 0, 0, time.UTC)
 	acceptedAt := now.Add(-time.Minute)
@@ -335,9 +475,22 @@ func newTestService(store Store, branches BranchManager, now time.Time) *Service
 func acceptedTestFeature(now time.Time) feature.Feature {
 	acceptedAt := now.Add(-time.Minute)
 	return feature.Feature{
-		ID: "fea_test", ProjectID: "prj_test", State: feature.StateDraft,
+		ID: "fea_test", ProjectID: "prj_test", Title: "Test feature",
+		State:        feature.StateDraft,
 		AcceptedGoal: "Ship it", GoalAcceptedAt: &acceptedAt,
 	}
+}
+
+func readyTestWorkspace(now time.Time) Workspace {
+	stored := testWorkspace(now)
+	branchReadyAt := now.Add(time.Minute)
+	checkoutReadyAt := now.Add(2 * time.Minute)
+	stored.Status = StatusBranchReady
+	stored.BranchCreatedAt = &branchReadyAt
+	stored.CheckoutRelativePath = stored.ID
+	stored.CheckoutCreatedAt = &checkoutReadyAt
+	stored.UpdatedAt = checkoutReadyAt
+	return stored
 }
 
 func testRepository(now time.Time) *project.ForgejoRepository {

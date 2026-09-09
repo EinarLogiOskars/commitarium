@@ -223,6 +223,129 @@ func TestClientRejectsConflictingExistingBranch(t *testing.T) {
 	}
 }
 
+func TestClientCreatesDraftPullRequest(t *testing.T) {
+	spec := testPullRequestSpec()
+	calls := 0
+	client := newBranchTestClient(t, func(request *http.Request) (*http.Response, error) {
+		calls++
+		switch calls {
+		case 1:
+			if request.Method != http.MethodGet || request.URL.Path != "/api/v1/repos/owner/repository/pulls" ||
+				request.URL.Query().Get("state") != "all" ||
+				request.URL.Query().Get("base") != spec.BaseBranch ||
+				request.URL.Query().Get("head") != spec.HeadBranch {
+				t.Fatalf("unexpected discovery request %s %s", request.Method, request.URL)
+			}
+			return jsonResponse(http.StatusOK, `[]`), nil
+		case 2:
+			if request.Method != http.MethodPost || request.URL.Path != "/api/v1/repos/owner/repository/pulls" {
+				t.Fatalf("unexpected creation request %s %s", request.Method, request.URL)
+			}
+			var body struct {
+				Base  string `json:"base"`
+				Head  string `json:"head"`
+				Title string `json:"title"`
+				Body  string `json:"body"`
+			}
+			if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+				t.Fatalf("decode pull request request: %v", err)
+			}
+			if body.Base != spec.BaseBranch || body.Head != spec.HeadBranch ||
+				body.Title != spec.Title || body.Body != spec.Body {
+				t.Fatalf("unexpected pull request request %+v", body)
+			}
+			return pullRequestJSONResponse(t, http.StatusCreated, managedPullRequest(spec)), nil
+		default:
+			t.Fatalf("unexpected request %d: %s %s", calls, request.Method, request.URL)
+			return nil, nil
+		}
+	})
+
+	created, err := client.EnsureDraftPullRequest(t.Context(), "owner", "repository", spec)
+	if err != nil || created.Number != 7 || !created.Draft || calls != 2 {
+		t.Fatalf("create pull request: pull_request=%+v calls=%d err=%v", created, calls, err)
+	}
+}
+
+func TestClientAdoptsDraftPullRequestAfterUncertainCreation(t *testing.T) {
+	spec := testPullRequestSpec()
+	client := newBranchTestClient(t, func(request *http.Request) (*http.Response, error) {
+		if request.Method != http.MethodGet {
+			t.Fatalf("adoption unexpectedly tried %s", request.Method)
+		}
+		body := pullRequestJSON(t, managedPullRequest(spec))
+		return jsonResponse(http.StatusOK, "["+body+"]"), nil
+	})
+
+	adopted, err := client.EnsureDraftPullRequest(t.Context(), "owner", "repository", spec)
+	if err != nil || adopted.Number != 7 {
+		t.Fatalf("adopt pull request: pull_request=%+v err=%v", adopted, err)
+	}
+}
+
+func TestClientAdoptsPullRequestCreatedByConcurrentRequest(t *testing.T) {
+	spec := testPullRequestSpec()
+	calls := 0
+	client := newBranchTestClient(t, func(request *http.Request) (*http.Response, error) {
+		calls++
+		switch calls {
+		case 1:
+			return jsonResponse(http.StatusOK, `[]`), nil
+		case 2:
+			if request.Method != http.MethodPost {
+				t.Fatalf("expected creation request, got %s", request.Method)
+			}
+			return jsonResponse(http.StatusUnprocessableEntity, `{"message":"already exists"}`), nil
+		case 3:
+			body := pullRequestJSON(t, managedPullRequest(spec))
+			return jsonResponse(http.StatusOK, "["+body+"]"), nil
+		default:
+			t.Fatalf("unexpected request %d", calls)
+			return nil, nil
+		}
+	})
+
+	adopted, err := client.EnsureDraftPullRequest(t.Context(), "owner", "repository", spec)
+	if err != nil || adopted.Number != 7 || calls != 3 {
+		t.Fatalf("adopt concurrent pull request: pull_request=%+v calls=%d err=%v", adopted, calls, err)
+	}
+}
+
+func TestClientReconcilesRecordedPullRequestAfterWorkAdvances(t *testing.T) {
+	spec := testPullRequestSpec()
+	spec.ExistingNumber = 7
+	advanced := managedPullRequest(spec)
+	advanced.Title = "WIP: User-adjusted title"
+	advanced.HeadCommitID = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	client := newBranchTestClient(t, func(request *http.Request) (*http.Response, error) {
+		if request.Method != http.MethodGet ||
+			request.URL.Path != "/api/v1/repos/owner/repository/pulls/7" {
+			t.Fatalf("unexpected reconciliation request %s %s", request.Method, request.URL)
+		}
+		return pullRequestJSONResponse(t, http.StatusOK, advanced), nil
+	})
+
+	stored, err := client.EnsureDraftPullRequest(t.Context(), "owner", "repository", spec)
+	if err != nil || stored.HeadCommitID != advanced.HeadCommitID {
+		t.Fatalf("reconcile pull request: pull_request=%+v err=%v", stored, err)
+	}
+}
+
+func TestClientRejectsPullRequestWithoutManagedIdentity(t *testing.T) {
+	spec := testPullRequestSpec()
+	conflicting := managedPullRequest(spec)
+	conflicting.Body = "unrelated pull request"
+	client := newBranchTestClient(t, func(*http.Request) (*http.Response, error) {
+		body := pullRequestJSON(t, conflicting)
+		return jsonResponse(http.StatusOK, "["+body+"]"), nil
+	})
+
+	_, err := client.EnsureDraftPullRequest(t.Context(), "owner", "repository", spec)
+	if !errors.Is(err, workspace.ErrPullRequestConflict) {
+		t.Fatalf("expected %v, got %v", workspace.ErrPullRequestConflict, err)
+	}
+}
+
 func TestNewClientRejectsUnsafeConfiguration(t *testing.T) {
 	for _, config := range []ClientConfig{
 		{},
@@ -256,6 +379,70 @@ func jsonResponse(status int, body string) *http.Response {
 
 func branchResponse(status int, name, commitID string) *http.Response {
 	return jsonResponse(status, `{"name":"`+name+`","commit":{"id":"`+commitID+`"}}`)
+}
+
+func testPullRequestSpec() workspace.PullRequestSpec {
+	marker := "<!-- commitarium-feature: fea_test -->"
+	return workspace.PullRequestSpec{
+		Title: "WIP: Test feature", Body: marker + "\n\n## Accepted goal\n\nShip it",
+		FeatureMarker: marker, BaseBranch: "main", HeadBranch: "commitarium/fea_test",
+		InitialHeadCommitID: forgejoTestCommitID,
+	}
+}
+
+func managedPullRequest(spec workspace.PullRequestSpec) workspace.PullRequest {
+	return workspace.PullRequest{
+		Number: 7, URL: "http://forgejo:3000/owner/repository/pulls/7",
+		Title: spec.Title, Body: spec.Body, State: "open", Draft: true,
+		BaseBranch: spec.BaseBranch, HeadBranch: spec.HeadBranch,
+		HeadCommitID: spec.InitialHeadCommitID,
+		CreatedAt:    time.Date(2026, time.September, 9, 20, 0, 0, 0, time.UTC),
+	}
+}
+
+func pullRequestJSONResponse(
+	t *testing.T,
+	status int,
+	pullRequest workspace.PullRequest,
+) *http.Response {
+	t.Helper()
+	return jsonResponse(status, pullRequestJSON(t, pullRequest))
+}
+
+func pullRequestJSON(t *testing.T, pullRequest workspace.PullRequest) string {
+	t.Helper()
+	body, err := json.Marshal(struct {
+		Number    int64  `json:"number"`
+		HTMLURL   string `json:"html_url"`
+		Title     string `json:"title"`
+		Body      string `json:"body"`
+		State     string `json:"state"`
+		Draft     bool   `json:"draft"`
+		CreatedAt string `json:"created_at"`
+		Base      struct {
+			Ref string `json:"ref"`
+		} `json:"base"`
+		Head struct {
+			Ref string `json:"ref"`
+			SHA string `json:"sha"`
+		} `json:"head"`
+	}{
+		Number: pullRequest.Number, HTMLURL: pullRequest.URL,
+		Title: pullRequest.Title, Body: pullRequest.Body,
+		State: pullRequest.State, Draft: pullRequest.Draft,
+		CreatedAt: pullRequest.CreatedAt.Format(time.RFC3339Nano),
+		Base: struct {
+			Ref string `json:"ref"`
+		}{Ref: pullRequest.BaseBranch},
+		Head: struct {
+			Ref string `json:"ref"`
+			SHA string `json:"sha"`
+		}{Ref: pullRequest.HeadBranch, SHA: pullRequest.HeadCommitID},
+	})
+	if err != nil {
+		t.Fatalf("encode pull request: %v", err)
+	}
+	return string(body)
 }
 
 func newBranchTestClient(
