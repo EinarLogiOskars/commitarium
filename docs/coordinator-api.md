@@ -19,6 +19,8 @@ this API beyond the host loopback interface is unsupported.
 | `GET` | `/api/v1/projects/{projectID}/features/{featureID}/events` | Retrieve durable workflow history |
 | `GET` | `/api/v1/projects/{projectID}/features/{featureID}/events/stream` | Replay and stream workflow history with SSE |
 | `POST` | `/api/v1/projects/{projectID}/features/{featureID}/runs` | Start the configured workflow asynchronously |
+| `PUT` | `/api/v1/projects/{projectID}/features/{featureID}/workspace` | Reserve the workspace and prepare its exact Forgejo feature branch |
+| `GET` | `/api/v1/projects/{projectID}/features/{featureID}/workspace` | Retrieve the durable workspace and branch identity |
 | `GET` | `/api/v1/runs/{runID}` | Retrieve run state and its ordered sessions |
 | `GET` | `/api/v1/sessions/{sessionID}` | Retrieve a session |
 | `GET` | `/api/v1/sessions/{sessionID}/events` | Retrieve durable observable session activity |
@@ -92,6 +94,53 @@ Attempting to bind a different repository returns `409 Conflict`. A missing
 repository returns `404`; an empty or archived repository returns `409`; and an
 unavailable Forgejo service or credential returns `503`. This operation does
 not create repositories, branches, workspaces, or pull requests.
+
+## Preparing a feature workspace branch
+
+After explicit goal acceptance, prepare the Forgejo branch with an empty-body
+request:
+
+```http
+PUT /api/v1/projects/prj_example/features/fea_example/workspace
+Content-Length: 0
+```
+
+The feature must still be in `draft`, its goal must be accepted, and its project
+must have a verified Forgejo repository binding. Before changing Forgejo, the
+coordinator reads the bound default branch and saves one immutable reservation
+in SQLite: the project and feature IDs, repository identity, default branch,
+exact base commit, and deterministic `commitarium/{featureID}` branch name. It
+then asks Forgejo to create the branch from that commit and marks the reservation
+`branch_ready` only after Forgejo confirms the exact result.
+
+The first completed request returns `201 Created`; later exact retries return
+`200 OK`. If a request was interrupted after the reservation or remote branch
+was created, retrying continues from the durable reservation. An existing branch
+is accepted only when its name and commit match. Any mismatch returns
+`409 workspace_conflict` and requires user review rather than silently moving or
+replacing work.
+
+```json
+{
+  "id": "wsp_fea_example",
+  "project_id": "prj_example",
+  "feature_id": "fea_example",
+  "repository": {"owner": "commitarium", "name": "example"},
+  "base_branch": "main",
+  "branch": "commitarium/fea_example",
+  "base_commit_id": "0123456789abcdef0123456789abcdef01234567",
+  "status": "branch_ready",
+  "branch_created_at": "2026-09-09T20:00:01Z",
+  "created_at": "2026-09-09T20:00:00Z",
+  "updated_at": "2026-09-09T20:00:01Z"
+}
+```
+
+`GET` on the same route returns the stored resource and does not contact
+Forgejo. Missing accepted goal or repository binding returns `409`; unavailable
+Forgejo returns `503`. This slice reserves and creates the branch only. A later
+slice will create its host-visible checkout, configure scoped Git credentials,
+and open the draft pull request.
 
 ## Starting and observing a run
 
@@ -238,7 +287,7 @@ conversation produced the goal. Feature event history and SSE represent this
 event with `goal` and `session_id`; state-change events continue to use
 `previous_state` and `state`.
 
-Acceptance does not invoke an agent, create a workspace, or start planning, so
+Acceptance itself does not invoke an agent, create a workspace, or start planning, so
 the feature remains `draft`. It closes the clarification boundary: later
 message commands and a new run-start request are rejected. An exact retry of
 the original run start or goal acceptance still returns its durable result. A

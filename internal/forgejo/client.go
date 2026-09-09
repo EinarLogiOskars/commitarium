@@ -1,6 +1,7 @@
 package forgejo
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -13,9 +14,10 @@ import (
 	"time"
 
 	"github.com/EinarLogiOskars/commitarium/internal/project"
+	"github.com/EinarLogiOskars/commitarium/internal/workspace"
 )
 
-const maxRepositoryResponseBytes = 512 * 1024
+const maxResponseBytes = 512 * 1024
 
 var ErrInvalidClientConfig = errors.New("invalid Forgejo client configuration")
 
@@ -70,50 +72,23 @@ func (client *Client) VerifyRepository(
 	if err != nil {
 		return project.ForgejoRepository{}, err
 	}
-	tokenBytes, err := os.ReadFile(client.tokenFile)
-	if err != nil {
-		return project.ForgejoRepository{}, fmt.Errorf("%w: access token file cannot be read", project.ErrForgejoUnavailable)
-	}
-	token := strings.TrimSpace(string(tokenBytes))
-	if token == "" {
-		return project.ForgejoRepository{}, fmt.Errorf("%w: access token file is empty", project.ErrForgejoUnavailable)
-	}
-
-	requestContext, cancel := context.WithTimeout(ctx, client.requestTimeout)
-	defer cancel()
-	request, err := http.NewRequestWithContext(
-		requestContext,
+	status, body, err := client.doJSON(
+		ctx,
 		http.MethodGet,
-		client.baseURL+"/api/v1/repos/"+url.PathEscape(owner)+"/"+url.PathEscape(name),
+		"/api/v1/repos/"+url.PathEscape(owner)+"/"+url.PathEscape(name),
 		nil,
 	)
 	if err != nil {
-		return project.ForgejoRepository{}, fmt.Errorf("create Forgejo repository request: %w", err)
+		return project.ForgejoRepository{}, err
 	}
-	request.Header.Set("Accept", "application/json")
-	request.Header.Set("Authorization", "token "+token)
-	response, err := client.httpClient.Do(request)
-	if err != nil {
-		return project.ForgejoRepository{}, fmt.Errorf("%w: repository request failed: %v", project.ErrForgejoUnavailable, err)
-	}
-	defer response.Body.Close()
-
-	switch response.StatusCode {
+	switch status {
 	case http.StatusOK:
 	case http.StatusNotFound:
 		return project.ForgejoRepository{}, project.ErrForgejoRepositoryNotFound
 	default:
 		return project.ForgejoRepository{}, fmt.Errorf(
-			"%w: repository request returned HTTP %d", project.ErrForgejoUnavailable, response.StatusCode,
+			"%w: repository request returned HTTP %d", project.ErrForgejoUnavailable, status,
 		)
-	}
-	limited := io.LimitReader(response.Body, maxRepositoryResponseBytes+1)
-	body, err := io.ReadAll(limited)
-	if err != nil {
-		return project.ForgejoRepository{}, fmt.Errorf("%w: read repository response", project.ErrForgejoUnavailable)
-	}
-	if len(body) > maxRepositoryResponseBytes {
-		return project.ForgejoRepository{}, fmt.Errorf("%w: repository response is too large", project.ErrForgejoUnavailable)
 	}
 	var decoded struct {
 		Name          string `json:"name"`
@@ -145,4 +120,164 @@ func (client *Client) VerifyRepository(
 	// BoundAt belongs to the coordinator command, not the remote lookup, so it
 	// is assigned by project.Service immediately before persistence.
 	return repository, nil
+}
+
+func (client *Client) GetBranch(
+	ctx context.Context,
+	owner string,
+	repository string,
+	branch string,
+) (workspace.Branch, error) {
+	var err error
+	owner, repository, err = project.NormalizeRepositoryCoordinate(owner, repository)
+	if err != nil {
+		return workspace.Branch{}, err
+	}
+	if strings.TrimSpace(branch) == "" || branch != strings.TrimSpace(branch) {
+		return workspace.Branch{}, errors.New("branch name is required and must be trimmed")
+	}
+	status, body, err := client.doJSON(
+		ctx,
+		http.MethodGet,
+		repositoryBranchPath(owner, repository, branch),
+		nil,
+	)
+	if err != nil {
+		return workspace.Branch{}, err
+	}
+	switch status {
+	case http.StatusOK:
+		return decodeBranch(body)
+	case http.StatusNotFound:
+		return workspace.Branch{}, workspace.ErrBranchNotFound
+	default:
+		return workspace.Branch{}, fmt.Errorf(
+			"%w: branch request returned HTTP %d", project.ErrForgejoUnavailable, status,
+		)
+	}
+}
+
+func (client *Client) EnsureBranch(
+	ctx context.Context,
+	owner string,
+	repository string,
+	branch string,
+	baseCommitID string,
+) (workspace.Branch, error) {
+	var err error
+	owner, repository, err = project.NormalizeRepositoryCoordinate(owner, repository)
+	if err != nil {
+		return workspace.Branch{}, err
+	}
+	if err := (workspace.Branch{Name: branch, CommitID: baseCommitID}).Validate(); err != nil {
+		return workspace.Branch{}, err
+	}
+	payload := struct {
+		NewBranchName string `json:"new_branch_name"`
+		OldRefName    string `json:"old_ref_name"`
+	}{NewBranchName: branch, OldRefName: baseCommitID}
+	status, body, err := client.doJSON(
+		ctx,
+		http.MethodPost,
+		"/api/v1/repos/"+url.PathEscape(owner)+"/"+url.PathEscape(repository)+"/branches",
+		payload,
+	)
+	if err != nil {
+		return workspace.Branch{}, err
+	}
+	var stored workspace.Branch
+	switch status {
+	case http.StatusCreated:
+		stored, err = decodeBranch(body)
+	case http.StatusConflict:
+		stored, err = client.GetBranch(ctx, owner, repository, branch)
+	case http.StatusNotFound, http.StatusForbidden, http.StatusLocked:
+		return workspace.Branch{}, project.ErrForgejoRepositoryNotReady
+	default:
+		return workspace.Branch{}, fmt.Errorf(
+			"%w: branch creation returned HTTP %d", project.ErrForgejoUnavailable, status,
+		)
+	}
+	if err != nil {
+		return workspace.Branch{}, err
+	}
+	if stored.Name != branch || stored.CommitID != baseCommitID {
+		return workspace.Branch{}, workspace.ErrBranchConflict
+	}
+	return stored, nil
+}
+
+func (client *Client) doJSON(
+	ctx context.Context,
+	method string,
+	path string,
+	body any,
+) (int, []byte, error) {
+	tokenBytes, err := os.ReadFile(client.tokenFile)
+	if err != nil {
+		return 0, nil, fmt.Errorf("%w: access token file cannot be read", project.ErrForgejoUnavailable)
+	}
+	token := strings.TrimSpace(string(tokenBytes))
+	if token == "" {
+		return 0, nil, fmt.Errorf("%w: access token file is empty", project.ErrForgejoUnavailable)
+	}
+	var requestBody io.Reader
+	if body != nil {
+		encoded, err := json.Marshal(body)
+		if err != nil {
+			return 0, nil, fmt.Errorf("encode Forgejo request: %w", err)
+		}
+		requestBody = bytes.NewReader(encoded)
+	}
+	requestContext, cancel := context.WithTimeout(ctx, client.requestTimeout)
+	defer cancel()
+	request, err := http.NewRequestWithContext(
+		requestContext, method, client.baseURL+path, requestBody,
+	)
+	if err != nil {
+		return 0, nil, fmt.Errorf("create Forgejo request: %w", err)
+	}
+	request.Header.Set("Accept", "application/json")
+	if body != nil {
+		request.Header.Set("Content-Type", "application/json")
+	}
+	request.Header.Set("Authorization", "token "+token)
+	response, err := client.httpClient.Do(request)
+	if err != nil {
+		return 0, nil, fmt.Errorf("%w: request failed: %v", project.ErrForgejoUnavailable, err)
+	}
+	defer response.Body.Close()
+	limited := io.LimitReader(response.Body, maxResponseBytes+1)
+	responseBody, err := io.ReadAll(limited)
+	if err != nil {
+		return 0, nil, fmt.Errorf("%w: response cannot be read", project.ErrForgejoUnavailable)
+	}
+	if len(responseBody) > maxResponseBytes {
+		return 0, nil, fmt.Errorf("%w: response is too large", project.ErrForgejoUnavailable)
+	}
+	return response.StatusCode, responseBody, nil
+}
+
+func repositoryBranchPath(owner, repository, branch string) string {
+	return "/api/v1/repos/" + url.PathEscape(owner) + "/" +
+		url.PathEscape(repository) + "/branches/" + url.PathEscape(branch)
+}
+
+func decodeBranch(body []byte) (workspace.Branch, error) {
+	var decoded struct {
+		Name   string `json:"name"`
+		Commit struct {
+			ID string `json:"id"`
+		} `json:"commit"`
+	}
+	if err := json.Unmarshal(body, &decoded); err != nil {
+		return workspace.Branch{}, fmt.Errorf("%w: branch response is invalid JSON", project.ErrForgejoUnavailable)
+	}
+	branch := workspace.Branch{
+		Name: strings.TrimSpace(decoded.Name), CommitID: strings.TrimSpace(decoded.Commit.ID),
+	}
+	if err := branch.Validate(); err != nil {
+		return workspace.Branch{}, fmt.Errorf("%w: branch response is invalid", project.ErrForgejoUnavailable)
+	}
+	return branch, nil
 }

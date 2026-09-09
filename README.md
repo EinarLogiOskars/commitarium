@@ -20,10 +20,12 @@ complete deterministic simulation. An opt-in mode now connects the public run
 and session-command APIs to one persistent real Codex conversation for
 read-only goal clarification. The user can exchange multiple visible turns
 with the lead agent while the feature remains a draft, then explicitly accepts
-the final goal to close clarification. Real file changes, Claude Code
-execution, Forgejo branches and pull-request automation, and the user interface
-remain to be built. Projects can now be listed and permanently associated with
-one verified Forgejo repository, which is the first part of that workspace path.
+the final goal to close clarification. After acceptance, the public API can now
+reserve a durable feature workspace identity and create its exact Forgejo branch
+from the repository's recorded default-branch commit. Real file changes, managed
+host checkouts, Claude Code execution, pull-request automation, and the user
+interface remain to be built. Projects can be listed and permanently associated
+with one verified Forgejo repository.
 
 ## Architecture
 
@@ -227,6 +229,22 @@ Codex or begin planning. The feature remains `draft`, but further clarification
 replies are rejected so the next workspace/planning slice has one stable goal
 to use. Retrying the same acceptance is safe; changing an accepted goal will
 require a future explicit reopen operation.
+
+Once that project is bound to a Forgejo repository, prepare the feature's branch:
+
+```sh
+curl -i -X PUT \
+  http://127.0.0.1:8080/api/v1/projects/PROJECT_ID/features/FEATURE_ID/workspace
+```
+
+The coordinator first saves the repository identity, default branch, current
+base commit, and deterministic `commitarium/FEATURE_ID` branch name in SQLite.
+It then creates that branch from the saved commit. A retry uses the same saved
+commit even if the default branch has moved, and safely accepts an already-created
+branch only when it still points to that commit. A disagreement returns a conflict
+for user review. The response is `201 Created` for the first completed preparation
+and `200 OK` for a retry. This operation does not yet clone the host-visible
+checkout or open the draft pull request.
 
 The versioned [internal worker API](docs/worker-api.md) now has tested client and
 server components for authenticated attempt inspection and control. Its worker

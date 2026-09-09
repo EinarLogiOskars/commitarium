@@ -297,6 +297,60 @@ func TestForgejoRepositoryMigrationPreservesExistingProjects(t *testing.T) {
 	}
 }
 
+func TestWorkspaceMigrationPreservesExistingFeatures(t *testing.T) {
+	db, err := OpenSQLite(t.Context(), filepath.Join(t.TempDir(), "coordinator.db"))
+	if err != nil {
+		t.Fatalf("open SQLite database: %v", err)
+	}
+	defer db.Close()
+	migrations, err := fs.Sub(migrationFiles, "migrations")
+	if err != nil {
+		t.Fatalf("open embedded migrations: %v", err)
+	}
+	provider, err := goose.NewProvider(goose.DialectSQLite3, db, migrations)
+	if err != nil {
+		t.Fatalf("create migration provider: %v", err)
+	}
+	if _, err := provider.UpTo(t.Context(), 9); err != nil {
+		t.Fatalf("migrate version-nine schema: %v", err)
+	}
+	now := time.Date(2026, time.September, 9, 20, 0, 0, 0, time.UTC).Format(time.RFC3339Nano)
+	if _, err := db.ExecContext(
+		t.Context(),
+		`INSERT INTO projects (id, name, recovery_policy, created_at)
+		 VALUES ('prj_workspace', 'Workspace project', 'approval_required', ?)`,
+		now,
+	); err != nil {
+		t.Fatalf("insert existing project: %v", err)
+	}
+	if _, err := db.ExecContext(
+		t.Context(),
+		`INSERT INTO features (
+			id, project_id, title, description, state,
+			accepted_goal, goal_accepted_at, created_at, updated_at
+		 ) VALUES (
+			'fea_workspace', 'prj_workspace', 'Workspace feature', '', 'draft',
+			'', NULL, ?, ?
+		 )`,
+		now, now,
+	); err != nil {
+		t.Fatalf("insert existing feature: %v", err)
+	}
+	if err := Migrate(t.Context(), db); err != nil {
+		t.Fatalf("apply workspace migration: %v", err)
+	}
+	if _, err := NewFeatureStore(db).GetByID(t.Context(), "fea_workspace"); err != nil {
+		t.Fatalf("get preserved feature: %v", err)
+	}
+	var workspaces int
+	if err := db.QueryRowContext(t.Context(), `SELECT count(*) FROM feature_workspaces`).Scan(&workspaces); err != nil {
+		t.Fatalf("count workspaces: %v", err)
+	}
+	if workspaces != 0 {
+		t.Fatalf("existing feature acquired a false workspace")
+	}
+}
+
 func TestMigrateReturnsCanceledContext(t *testing.T) {
 	db, err := OpenSQLite(
 		t.Context(),
