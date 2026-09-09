@@ -207,6 +207,165 @@ func (client *Client) EnsureBranch(
 	return stored, nil
 }
 
+func (client *Client) EnsureDraftPullRequest(
+	ctx context.Context,
+	owner string,
+	repository string,
+	spec workspace.PullRequestSpec,
+) (workspace.PullRequest, error) {
+	var err error
+	owner, repository, err = project.NormalizeRepositoryCoordinate(owner, repository)
+	if err != nil {
+		return workspace.PullRequest{}, err
+	}
+	if err := spec.Validate(); err != nil {
+		return workspace.PullRequest{}, err
+	}
+	if spec.ExistingNumber > 0 {
+		stored, err := client.getPullRequest(ctx, owner, repository, spec.ExistingNumber)
+		if err != nil {
+			return workspace.PullRequest{}, err
+		}
+		if err := validateManagedPullRequest(stored, spec, false); err != nil {
+			return workspace.PullRequest{}, err
+		}
+		return stored, nil
+	}
+
+	stored, found, err := client.findPullRequest(ctx, owner, repository, spec)
+	if err != nil || found {
+		return stored, err
+	}
+	payload := struct {
+		Base  string `json:"base"`
+		Head  string `json:"head"`
+		Title string `json:"title"`
+		Body  string `json:"body"`
+	}{Base: spec.BaseBranch, Head: spec.HeadBranch, Title: spec.Title, Body: spec.Body}
+	status, body, err := client.doJSON(
+		ctx,
+		http.MethodPost,
+		pullRequestsPath(owner, repository),
+		payload,
+	)
+	if err != nil {
+		return workspace.PullRequest{}, err
+	}
+	switch status {
+	case http.StatusCreated:
+		stored, err = decodePullRequest(body)
+		if err != nil {
+			return workspace.PullRequest{}, err
+		}
+		if err := validateManagedPullRequest(stored, spec, true); err != nil {
+			return workspace.PullRequest{}, err
+		}
+		return stored, nil
+	case http.StatusConflict, http.StatusUnprocessableEntity:
+		stored, found, err = client.findPullRequest(ctx, owner, repository, spec)
+		if err != nil {
+			return workspace.PullRequest{}, err
+		}
+		if found {
+			return stored, nil
+		}
+		return workspace.PullRequest{}, workspace.ErrPullRequestConflict
+	case http.StatusNotFound, http.StatusForbidden, http.StatusLocked:
+		return workspace.PullRequest{}, project.ErrForgejoRepositoryNotReady
+	default:
+		return workspace.PullRequest{}, fmt.Errorf(
+			"%w: pull request creation returned HTTP %d",
+			project.ErrForgejoUnavailable,
+			status,
+		)
+	}
+}
+
+func (client *Client) getPullRequest(
+	ctx context.Context,
+	owner string,
+	repository string,
+	number int64,
+) (workspace.PullRequest, error) {
+	status, body, err := client.doJSON(
+		ctx,
+		http.MethodGet,
+		fmt.Sprintf("%s/%d", pullRequestsPath(owner, repository), number),
+		nil,
+	)
+	if err != nil {
+		return workspace.PullRequest{}, err
+	}
+	switch status {
+	case http.StatusOK:
+		return decodePullRequest(body)
+	case http.StatusNotFound:
+		return workspace.PullRequest{}, workspace.ErrPullRequestConflict
+	default:
+		return workspace.PullRequest{}, fmt.Errorf(
+			"%w: pull request request returned HTTP %d",
+			project.ErrForgejoUnavailable,
+			status,
+		)
+	}
+}
+
+func (client *Client) findPullRequest(
+	ctx context.Context,
+	owner string,
+	repository string,
+	spec workspace.PullRequestSpec,
+) (workspace.PullRequest, bool, error) {
+	query := url.Values{}
+	query.Set("state", "all")
+	query.Set("base", spec.BaseBranch)
+	query.Set("head", spec.HeadBranch)
+	query.Set("limit", "20")
+	status, body, err := client.doJSON(
+		ctx,
+		http.MethodGet,
+		pullRequestsPath(owner, repository)+"?"+query.Encode(),
+		nil,
+	)
+	if err != nil {
+		return workspace.PullRequest{}, false, err
+	}
+	if status != http.StatusOK {
+		return workspace.PullRequest{}, false, fmt.Errorf(
+			"%w: pull request list returned HTTP %d",
+			project.ErrForgejoUnavailable,
+			status,
+		)
+	}
+	var decoded []json.RawMessage
+	if err := json.Unmarshal(body, &decoded); err != nil {
+		return workspace.PullRequest{}, false, fmt.Errorf(
+			"%w: pull request list is invalid JSON",
+			project.ErrForgejoUnavailable,
+		)
+	}
+	matches := make([]workspace.PullRequest, 0, 1)
+	for _, raw := range decoded {
+		candidate, err := decodePullRequest(raw)
+		if err != nil {
+			return workspace.PullRequest{}, false, err
+		}
+		if candidate.BaseBranch == spec.BaseBranch && candidate.HeadBranch == spec.HeadBranch {
+			matches = append(matches, candidate)
+		}
+	}
+	if len(matches) == 0 {
+		return workspace.PullRequest{}, false, nil
+	}
+	if len(matches) != 1 {
+		return workspace.PullRequest{}, false, workspace.ErrPullRequestConflict
+	}
+	if err := validateManagedPullRequest(matches[0], spec, true); err != nil {
+		return workspace.PullRequest{}, false, err
+	}
+	return matches[0], true, nil
+}
+
 func (client *Client) doJSON(
 	ctx context.Context,
 	method string,
@@ -263,6 +422,11 @@ func repositoryBranchPath(owner, repository, branch string) string {
 		url.PathEscape(repository) + "/branches/" + url.PathEscape(branch)
 }
 
+func pullRequestsPath(owner, repository string) string {
+	return "/api/v1/repos/" + url.PathEscape(owner) + "/" +
+		url.PathEscape(repository) + "/pulls"
+}
+
 func decodeBranch(body []byte) (workspace.Branch, error) {
 	var decoded struct {
 		Name   string `json:"name"`
@@ -280,4 +444,69 @@ func decodeBranch(body []byte) (workspace.Branch, error) {
 		return workspace.Branch{}, fmt.Errorf("%w: branch response is invalid", project.ErrForgejoUnavailable)
 	}
 	return branch, nil
+}
+
+func decodePullRequest(body []byte) (workspace.PullRequest, error) {
+	var decoded struct {
+		Number    int64  `json:"number"`
+		HTMLURL   string `json:"html_url"`
+		Title     string `json:"title"`
+		Body      string `json:"body"`
+		State     string `json:"state"`
+		Draft     bool   `json:"draft"`
+		CreatedAt string `json:"created_at"`
+		Base      struct {
+			Ref string `json:"ref"`
+		} `json:"base"`
+		Head struct {
+			Ref string `json:"ref"`
+			SHA string `json:"sha"`
+		} `json:"head"`
+	}
+	if err := json.Unmarshal(body, &decoded); err != nil {
+		return workspace.PullRequest{}, fmt.Errorf(
+			"%w: pull request response is invalid JSON",
+			project.ErrForgejoUnavailable,
+		)
+	}
+	createdAt, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(decoded.CreatedAt))
+	if err != nil {
+		return workspace.PullRequest{}, fmt.Errorf(
+			"%w: pull request response has an invalid creation time",
+			project.ErrForgejoUnavailable,
+		)
+	}
+	pullRequest := workspace.PullRequest{
+		Number: decoded.Number, URL: strings.TrimSpace(decoded.HTMLURL),
+		Title: strings.TrimSpace(decoded.Title), Body: decoded.Body,
+		State: strings.TrimSpace(decoded.State), Draft: decoded.Draft,
+		BaseBranch:   strings.TrimSpace(decoded.Base.Ref),
+		HeadBranch:   strings.TrimSpace(decoded.Head.Ref),
+		HeadCommitID: strings.TrimSpace(decoded.Head.SHA), CreatedAt: createdAt.UTC(),
+	}
+	if err := pullRequest.Validate(); err != nil {
+		return workspace.PullRequest{}, fmt.Errorf(
+			"%w: pull request response is invalid",
+			project.ErrForgejoUnavailable,
+		)
+	}
+	return pullRequest, nil
+}
+
+func validateManagedPullRequest(
+	pullRequest workspace.PullRequest,
+	spec workspace.PullRequestSpec,
+	requireInitial bool,
+) error {
+	if pullRequest.State != "open" || !pullRequest.Draft ||
+		pullRequest.BaseBranch != spec.BaseBranch ||
+		pullRequest.HeadBranch != spec.HeadBranch ||
+		!strings.Contains(pullRequest.Body, spec.FeatureMarker) {
+		return workspace.ErrPullRequestConflict
+	}
+	if requireInitial && (pullRequest.Title != spec.Title ||
+		pullRequest.HeadCommitID != spec.InitialHeadCommitID) {
+		return workspace.ErrPullRequestConflict
+	}
+	return nil
 }

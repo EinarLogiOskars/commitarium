@@ -19,4 +19,11 @@ type Store interface {
 		relativePath string,
 		readyAt time.Time,
 	) (Workspace, error)
+	MarkPullRequestReady(
+		ctx context.Context,
+		featureID string,
+		number int64,
+		url string,
+		createdAt time.Time,
+	) (Workspace, error)
 }

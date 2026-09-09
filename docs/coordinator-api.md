@@ -19,8 +19,8 @@ this API beyond the host loopback interface is unsupported.
 | `GET` | `/api/v1/projects/{projectID}/features/{featureID}/events` | Retrieve durable workflow history |
 | `GET` | `/api/v1/projects/{projectID}/features/{featureID}/events/stream` | Replay and stream workflow history with SSE |
 | `POST` | `/api/v1/projects/{projectID}/features/{featureID}/runs` | Start the configured workflow asynchronously |
-| `PUT` | `/api/v1/projects/{projectID}/features/{featureID}/workspace` | Prepare the exact Forgejo branch and managed shared checkout |
-| `GET` | `/api/v1/projects/{projectID}/features/{featureID}/workspace` | Retrieve the durable branch and checkout identity |
+| `PUT` | `/api/v1/projects/{projectID}/features/{featureID}/workspace` | Prepare the exact Forgejo branch, managed shared checkout, and draft PR |
+| `GET` | `/api/v1/projects/{projectID}/features/{featureID}/workspace` | Retrieve the durable branch, checkout, and PR identity |
 | `GET` | `/api/v1/runs/{runID}` | Retrieve run state and its ordered sessions |
 | `GET` | `/api/v1/sessions/{sessionID}` | Retrieve a session |
 | `GET` | `/api/v1/sessions/{sessionID}/events` | Retrieve durable observable session activity |
@@ -97,8 +97,8 @@ not create repositories, branches, workspaces, or pull requests.
 
 ## Preparing a feature workspace
 
-After explicit goal acceptance, prepare the Forgejo branch and shared checkout
-with an empty-body request:
+After explicit goal acceptance, prepare the Forgejo branch, shared checkout, and
+draft pull request with an empty-body request:
 
 ```http
 PUT /api/v1/projects/prj_example/features/fea_example/workspace
@@ -114,13 +114,25 @@ then asks Forgejo to create the branch from that commit and marks the reservatio
 `branch_ready` only after Forgejo confirms the exact result. It next clones that
 branch into one child directory beneath the configured managed-workspace root.
 The host and real agent container mount the same root, so both see the same files.
+After the checkout is ready, the coordinator creates a Forgejo pull request from
+the deterministic feature branch into the saved base branch. Its `WIP:` title
+makes it a Forgejo draft. Its body contains the accepted goal and a hidden stable
+feature marker; later planning and review slices will add the human-readable
+audit trail.
 
 The request that creates the durable reservation returns `201 Created`; later
 exact retries return `200 OK`. If a request was interrupted after the reservation
 or remote branch was created, retrying continues from the durable reservation.
-An existing branch is accepted only when its name and commit match. Any mismatch returns
-`409 workspace_conflict` and requires user review rather than silently moving or
-replacing work.
+An existing branch is accepted only when its name and commit match. Any mismatch
+returns `409 workspace_conflict` and requires user review rather than silently
+moving or replacing work. Pull-request creation has the same crash-safe behavior:
+before creating one, the coordinator searches for an exact matching branch pair
+and feature marker. This lets it adopt a PR that Forgejo created just before a
+coordinator crash, without opening a duplicate. After SQLite records the PR
+number, retries fetch that exact PR. It must remain open, draft, on the expected
+branches, and owned by the feature marker. Later feature commits and user-edited
+PR titles are allowed. Missing, closed, non-draft, ambiguous, or differently owned
+PR state returns `409 workspace_conflict` instead of creating a replacement.
 
 Before recording the checkout as ready, the coordinator requires a clean working
 tree at the saved base commit and configures credential-free remotes for the host
@@ -147,18 +159,26 @@ cleans, deletes, or silently repairs contradictory user work.
     "relative_path": "wsp_fea_example",
     "created_at": "2026-09-09T20:00:02Z"
   },
+  "pull_request": {
+    "number": 7,
+    "url": "http://localhost:3001/commitarium/example/pulls/7",
+    "draft": true,
+    "recorded_at": "2026-09-09T20:00:03Z"
+  },
   "created_at": "2026-09-09T20:00:00Z",
-  "updated_at": "2026-09-09T20:00:02Z"
+  "updated_at": "2026-09-09T20:00:03Z"
 }
 ```
 
 `GET` on the same route returns the stored resource and does not contact
 Forgejo. Missing accepted goal or repository binding returns `409`; unavailable
-Forgejo or Git checkout preparation returns `503`. A branch or checkout mismatch
-returns `409 workspace_conflict` for user review. The checkout response exposes
-only its stable workspace-relative identity, not a machine-specific absolute
-host path. A later slice will assign agent turns to this checkout, supply scoped
-Git credentials to those processes, and open the draft pull request.
+Forgejo or Git checkout preparation returns `503`. A branch, checkout, or
+pull-request mismatch returns `409 workspace_conflict` for user review. The
+checkout response exposes only its stable workspace-relative identity, not a
+machine-specific absolute host path. `pull_request.recorded_at` is the
+coordinator's durable recording time, not Forgejo's server-side creation time. A
+later slice will assign planning turns to this checkout and begin writing the
+visible planning audit trail to the draft PR.
 
 ## Starting and observing a run
 

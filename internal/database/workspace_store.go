@@ -30,6 +30,7 @@ func (store *WorkspaceStore) GetByFeatureID(
 		`SELECT id, project_id, feature_id, repository_owner, repository_name,
 		        base_branch, branch_name, base_commit_id, status,
 		        branch_created_at, checkout_relative_path, checkout_created_at,
+		        pull_request_number, pull_request_url, pull_request_recorded_at,
 		        created_at, updated_at
 		 FROM feature_workspaces WHERE feature_id = ?`,
 		featureID,
@@ -59,8 +60,9 @@ func (store *WorkspaceStore) Reserve(
 		    id, project_id, feature_id, repository_owner, repository_name,
 		    base_branch, branch_name, base_commit_id, status,
 		    branch_created_at, checkout_relative_path, checkout_created_at,
+		    pull_request_number, pull_request_url, pull_request_recorded_at,
 		    created_at, updated_at
-		 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, '', NULL, ?, ?)
+		 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, '', NULL, NULL, '', NULL, ?, ?)
 		 ON CONFLICT(feature_id) DO NOTHING`,
 		reservation.ID, reservation.ProjectID, reservation.FeatureID,
 		reservation.RepositoryOwner, reservation.RepositoryName,
@@ -106,6 +108,7 @@ func (store *WorkspaceStore) MarkBranchReady(
 		`SELECT id, project_id, feature_id, repository_owner, repository_name,
 		        base_branch, branch_name, base_commit_id, status,
 		        branch_created_at, checkout_relative_path, checkout_created_at,
+		        pull_request_number, pull_request_url, pull_request_recorded_at,
 		        created_at, updated_at
 		 FROM feature_workspaces WHERE feature_id = ?`,
 		featureID,
@@ -169,6 +172,7 @@ func (store *WorkspaceStore) MarkCheckoutReady(
 		`SELECT id, project_id, feature_id, repository_owner, repository_name,
 		        base_branch, branch_name, base_commit_id, status,
 		        branch_created_at, checkout_relative_path, checkout_created_at,
+		        pull_request_number, pull_request_url, pull_request_recorded_at,
 		        created_at, updated_at
 		 FROM feature_workspaces WHERE feature_id = ?`,
 		featureID,
@@ -220,6 +224,85 @@ func (store *WorkspaceStore) MarkCheckoutReady(
 	return stored, nil
 }
 
+func (store *WorkspaceStore) MarkPullRequestReady(
+	ctx context.Context,
+	featureID string,
+	number int64,
+	pullRequestURL string,
+	recordedAt time.Time,
+) (workspace.Workspace, error) {
+	if number < 1 || strings.TrimSpace(pullRequestURL) == "" ||
+		pullRequestURL != strings.TrimSpace(pullRequestURL) {
+		return workspace.Workspace{}, errors.New("pull request identity is invalid")
+	}
+	tx, err := store.db.BeginTx(ctx, nil)
+	if err != nil {
+		return workspace.Workspace{}, fmt.Errorf("begin pull-request-ready update: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	stored, err := scanWorkspace(tx.QueryRowContext(
+		ctx,
+		`SELECT id, project_id, feature_id, repository_owner, repository_name,
+		        base_branch, branch_name, base_commit_id, status,
+		        branch_created_at, checkout_relative_path, checkout_created_at,
+		        pull_request_number, pull_request_url, pull_request_recorded_at,
+		        created_at, updated_at
+		 FROM feature_workspaces WHERE feature_id = ?`,
+		featureID,
+	))
+	if errors.Is(err, sql.ErrNoRows) {
+		return workspace.Workspace{}, workspace.ErrNotFound
+	}
+	if err != nil {
+		return workspace.Workspace{}, fmt.Errorf("select workspace for pull-request-ready update: %w", err)
+	}
+	if stored.PullRequestReady() {
+		if stored.PullRequestNumber != number || stored.PullRequestURL != pullRequestURL {
+			return workspace.Workspace{}, workspace.ErrConflict
+		}
+		return stored, nil
+	}
+	if !stored.CheckoutReady() || recordedAt.IsZero() ||
+		recordedAt.Before(*stored.CheckoutCreatedAt) {
+		return workspace.Workspace{}, workspace.ErrConflict
+	}
+	recordedAt = recordedAt.UTC()
+	ready := stored
+	ready.PullRequestNumber = number
+	ready.PullRequestURL = pullRequestURL
+	ready.PullRequestRecordedAt = &recordedAt
+	ready.UpdatedAt = recordedAt
+	if err := ready.Validate(); err != nil {
+		return workspace.Workspace{}, err
+	}
+	result, err := tx.ExecContext(
+		ctx,
+		`UPDATE feature_workspaces
+		 SET pull_request_number = ?, pull_request_url = ?,
+		     pull_request_recorded_at = ?, updated_at = ?
+		 WHERE feature_id = ? AND status = ?
+		   AND checkout_relative_path != '' AND checkout_created_at IS NOT NULL
+		   AND pull_request_number IS NULL AND pull_request_url = ''
+		   AND pull_request_recorded_at IS NULL`,
+		number, pullRequestURL, formatWorkspaceTime(recordedAt),
+		formatWorkspaceTime(recordedAt), featureID, workspace.StatusBranchReady,
+	)
+	if err != nil {
+		return workspace.Workspace{}, fmt.Errorf("mark workspace pull request ready: %w", err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return workspace.Workspace{}, fmt.Errorf("read pull-request-ready update row count: %w", err)
+	}
+	if rowsAffected != 1 {
+		return workspace.Workspace{}, workspace.ErrConflict
+	}
+	if err := tx.Commit(); err != nil {
+		return workspace.Workspace{}, fmt.Errorf("commit pull-request-ready update: %w", err)
+	}
+	return ready, nil
+}
+
 type workspaceScanner interface {
 	Scan(dest ...any) error
 }
@@ -229,6 +312,8 @@ func scanWorkspace(scanner workspaceScanner) (workspace.Workspace, error) {
 	var status string
 	var branchCreatedAt sql.NullString
 	var checkoutCreatedAt sql.NullString
+	var pullRequestNumber sql.NullInt64
+	var pullRequestRecordedAt sql.NullString
 	var createdAt string
 	var updatedAt string
 	if err := scanner.Scan(
@@ -236,7 +321,8 @@ func scanWorkspace(scanner workspaceScanner) (workspace.Workspace, error) {
 		&stored.RepositoryOwner, &stored.RepositoryName,
 		&stored.BaseBranch, &stored.Branch, &stored.BaseCommitID,
 		&status, &branchCreatedAt, &stored.CheckoutRelativePath,
-		&checkoutCreatedAt, &createdAt, &updatedAt,
+		&checkoutCreatedAt, &pullRequestNumber, &stored.PullRequestURL,
+		&pullRequestRecordedAt, &createdAt, &updatedAt,
 	); err != nil {
 		return workspace.Workspace{}, err
 	}
@@ -263,6 +349,16 @@ func scanWorkspace(scanner workspaceScanner) (workspace.Workspace, error) {
 			return workspace.Workspace{}, fmt.Errorf("parse checkout creation time: %w", err)
 		}
 		stored.CheckoutCreatedAt = &parsed
+	}
+	if pullRequestNumber.Valid {
+		stored.PullRequestNumber = pullRequestNumber.Int64
+	}
+	if pullRequestRecordedAt.Valid {
+		parsed, err := time.Parse(time.RFC3339Nano, pullRequestRecordedAt.String)
+		if err != nil {
+			return workspace.Workspace{}, fmt.Errorf("parse pull request recording time: %w", err)
+		}
+		stored.PullRequestRecordedAt = &parsed
 	}
 	if err := stored.Validate(); err != nil {
 		return workspace.Workspace{}, fmt.Errorf("validate stored workspace: %w", err)

@@ -18,6 +18,7 @@ var ErrBranchNotFound = errors.New("Forgejo branch not found")
 var ErrBranchConflict = errors.New("Forgejo feature branch exists at a different commit")
 var ErrCheckoutConflict = errors.New("managed checkout conflicts with its durable workspace")
 var ErrCheckoutUnavailable = errors.New("managed checkout is unavailable")
+var ErrPullRequestConflict = errors.New("managed Forgejo pull request conflicts with its durable workspace")
 
 type FeatureFinder interface {
 	GetByID(ctx context.Context, projectID, featureID string) (feature.Feature, error)
@@ -42,13 +43,36 @@ type CheckoutManager interface {
 	Ensure(ctx context.Context, spec CheckoutSpec) error
 }
 
+type PullRequestManager interface {
+	EnsureDraftPullRequest(
+		ctx context.Context,
+		owner string,
+		repository string,
+		spec PullRequestSpec,
+	) (PullRequest, error)
+}
+
 type Service struct {
-	store     Store
-	features  FeatureFinder
-	projects  ProjectFinder
-	branches  BranchManager
-	checkouts CheckoutManager
-	now       func() time.Time
+	store        Store
+	features     FeatureFinder
+	projects     ProjectFinder
+	branches     BranchManager
+	checkouts    CheckoutManager
+	pullRequests PullRequestManager
+	now          func() time.Time
+}
+
+func NewServiceWithPreparation(
+	store Store,
+	features FeatureFinder,
+	projects ProjectFinder,
+	branches BranchManager,
+	checkouts CheckoutManager,
+	pullRequests PullRequestManager,
+) *Service {
+	service := NewServiceWithCheckout(store, features, projects, branches, checkouts)
+	service.pullRequests = pullRequests
+	return service
 }
 
 func NewServiceWithCheckout(
@@ -166,16 +190,75 @@ func (service *Service) Prepare(
 	if err != nil {
 		return Workspace{}, false, fmt.Errorf("ensure managed checkout: %w", err)
 	}
-	if reserved.CheckoutReady() {
-		return reserved, false, nil
+	if !reserved.CheckoutReady() {
+		reserved, err = service.store.MarkCheckoutReady(
+			ctx, featureID, relativePath, service.now().UTC(),
+		)
+		if err != nil {
+			return Workspace{}, false, fmt.Errorf("mark managed checkout ready: %w", err)
+		}
 	}
-	ready, err := service.store.MarkCheckoutReady(
-		ctx, featureID, relativePath, service.now().UTC(),
+	if service.pullRequests == nil {
+		return reserved, created, nil
+	}
+	spec := pullRequestSpec(storedFeature, reserved)
+	pullRequest, err := service.pullRequests.EnsureDraftPullRequest(
+		ctx,
+		reserved.RepositoryOwner,
+		reserved.RepositoryName,
+		spec,
 	)
 	if err != nil {
-		return Workspace{}, false, fmt.Errorf("mark managed checkout ready: %w", err)
+		return Workspace{}, false, fmt.Errorf("ensure draft Forgejo pull request: %w", err)
+	}
+	if err := validatePreparedPullRequest(pullRequest, spec, !reserved.PullRequestReady()); err != nil {
+		return Workspace{}, false, err
+	}
+	if reserved.PullRequestReady() {
+		if reserved.PullRequestNumber != pullRequest.Number ||
+			reserved.PullRequestURL != pullRequest.URL {
+			return Workspace{}, false, ErrPullRequestConflict
+		}
+		return reserved, false, nil
+	}
+	ready, err := service.store.MarkPullRequestReady(
+		ctx, featureID, pullRequest.Number, pullRequest.URL, service.now().UTC(),
+	)
+	if err != nil {
+		return Workspace{}, false, fmt.Errorf("mark draft pull request ready: %w", err)
 	}
 	return ready, created, nil
+}
+
+func validatePreparedPullRequest(
+	pullRequest PullRequest,
+	spec PullRequestSpec,
+	requireInitial bool,
+) error {
+	if err := pullRequest.Validate(); err != nil || pullRequest.State != "open" ||
+		!pullRequest.Draft || pullRequest.BaseBranch != spec.BaseBranch ||
+		pullRequest.HeadBranch != spec.HeadBranch ||
+		!strings.Contains(pullRequest.Body, spec.FeatureMarker) {
+		return ErrPullRequestConflict
+	}
+	if requireInitial && (pullRequest.Title != spec.Title ||
+		pullRequest.HeadCommitID != spec.InitialHeadCommitID) {
+		return ErrPullRequestConflict
+	}
+	return nil
+}
+
+func pullRequestSpec(storedFeature feature.Feature, reserved Workspace) PullRequestSpec {
+	marker := "<!-- commitarium-feature: " + storedFeature.ID + " -->"
+	return PullRequestSpec{
+		Title:               "WIP: " + storedFeature.Title,
+		Body:                marker + "\n\n## Accepted goal\n\n" + storedFeature.AcceptedGoal,
+		FeatureMarker:       marker,
+		BaseBranch:          reserved.BaseBranch,
+		HeadBranch:          reserved.Branch,
+		InitialHeadCommitID: reserved.BaseCommitID,
+		ExistingNumber:      reserved.PullRequestNumber,
+	}
 }
 
 func (service *Service) reserve(

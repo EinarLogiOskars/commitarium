@@ -2,6 +2,7 @@ package workspace
 
 import (
 	"errors"
+	"net/url"
 	"regexp"
 	"strings"
 	"time"
@@ -17,20 +18,23 @@ const (
 var safeCommitID = regexp.MustCompile(`^[0-9a-f]{40}([0-9a-f]{24})?$`)
 
 type Workspace struct {
-	ID                   string
-	ProjectID            string
-	FeatureID            string
-	RepositoryOwner      string
-	RepositoryName       string
-	BaseBranch           string
-	Branch               string
-	BaseCommitID         string
-	Status               Status
-	BranchCreatedAt      *time.Time
-	CheckoutRelativePath string
-	CheckoutCreatedAt    *time.Time
-	CreatedAt            time.Time
-	UpdatedAt            time.Time
+	ID                    string
+	ProjectID             string
+	FeatureID             string
+	RepositoryOwner       string
+	RepositoryName        string
+	BaseBranch            string
+	Branch                string
+	BaseCommitID          string
+	Status                Status
+	BranchCreatedAt       *time.Time
+	CheckoutRelativePath  string
+	CheckoutCreatedAt     *time.Time
+	PullRequestNumber     int64
+	PullRequestURL        string
+	PullRequestRecordedAt *time.Time
+	CreatedAt             time.Time
+	UpdatedAt             time.Time
 }
 
 func (workspace Workspace) Validate() error {
@@ -68,6 +72,10 @@ func (workspace Workspace) Validate() error {
 		if workspace.CheckoutRelativePath != "" || workspace.CheckoutCreatedAt != nil {
 			return errors.New("preparing workspace cannot have a checkout")
 		}
+		if workspace.PullRequestNumber != 0 || workspace.PullRequestURL != "" ||
+			workspace.PullRequestRecordedAt != nil {
+			return errors.New("preparing workspace cannot have a pull request")
+		}
 	case StatusBranchReady:
 		if workspace.BranchCreatedAt == nil || workspace.BranchCreatedAt.IsZero() {
 			return errors.New("branch-ready workspace requires a branch creation time")
@@ -89,6 +97,32 @@ func (workspace Workspace) Validate() error {
 				return errors.New("checkout creation time must follow branch creation")
 			}
 		}
+		pullRequestFieldsSet := 0
+		if workspace.PullRequestNumber != 0 {
+			pullRequestFieldsSet++
+		}
+		if workspace.PullRequestURL != "" {
+			pullRequestFieldsSet++
+		}
+		if workspace.PullRequestRecordedAt != nil {
+			pullRequestFieldsSet++
+		}
+		if pullRequestFieldsSet != 0 && pullRequestFieldsSet != 3 {
+			return errors.New("pull request number, URL, and recording time must be set together")
+		}
+		if pullRequestFieldsSet == 3 {
+			if !workspace.CheckoutReady() {
+				return errors.New("pull request requires a ready checkout")
+			}
+			if workspace.PullRequestNumber < 1 || !safePullRequestURL(workspace.PullRequestURL) {
+				return errors.New("pull request identity is invalid")
+			}
+			if workspace.PullRequestRecordedAt.IsZero() ||
+				workspace.PullRequestRecordedAt.Before(*workspace.CheckoutCreatedAt) ||
+				workspace.PullRequestRecordedAt.After(workspace.UpdatedAt) {
+				return errors.New("pull request recording time must follow checkout creation")
+			}
+		}
 	default:
 		return errors.New("workspace status is not recognized")
 	}
@@ -97,6 +131,89 @@ func (workspace Workspace) Validate() error {
 
 func (workspace Workspace) CheckoutReady() bool {
 	return workspace.CheckoutRelativePath != "" && workspace.CheckoutCreatedAt != nil
+}
+
+func (workspace Workspace) PullRequestReady() bool {
+	return workspace.PullRequestNumber > 0 && workspace.PullRequestURL != "" &&
+		workspace.PullRequestRecordedAt != nil
+}
+
+type PullRequestSpec struct {
+	Title               string
+	Body                string
+	FeatureMarker       string
+	BaseBranch          string
+	HeadBranch          string
+	InitialHeadCommitID string
+	ExistingNumber      int64
+}
+
+func (spec PullRequestSpec) Validate() error {
+	required := []string{
+		spec.Title, spec.Body, spec.FeatureMarker, spec.BaseBranch,
+		spec.HeadBranch,
+	}
+	for _, value := range required {
+		if strings.TrimSpace(value) == "" || value != strings.TrimSpace(value) {
+			return errors.New("pull request fields are required and must be trimmed")
+		}
+	}
+	if !strings.Contains(spec.Body, spec.FeatureMarker) {
+		return errors.New("pull request body must contain its feature marker")
+	}
+	if !safeCommitID.MatchString(spec.InitialHeadCommitID) {
+		return errors.New("pull request initial head must be a lowercase commit ID")
+	}
+	if spec.ExistingNumber < 0 {
+		return errors.New("pull request number cannot be negative")
+	}
+	return nil
+}
+
+type PullRequest struct {
+	Number       int64
+	URL          string
+	Title        string
+	Body         string
+	State        string
+	Draft        bool
+	BaseBranch   string
+	HeadBranch   string
+	HeadCommitID string
+	CreatedAt    time.Time
+}
+
+func (pullRequest PullRequest) Validate() error {
+	if pullRequest.Number < 1 || !safePullRequestURL(pullRequest.URL) {
+		return errors.New("pull request identity is invalid")
+	}
+	if strings.TrimSpace(pullRequest.Title) == "" ||
+		pullRequest.Title != strings.TrimSpace(pullRequest.Title) {
+		return errors.New("pull request title is required and must be trimmed")
+	}
+	if pullRequest.State != "open" && pullRequest.State != "closed" {
+		return errors.New("pull request state is invalid")
+	}
+	if strings.TrimSpace(pullRequest.BaseBranch) == "" ||
+		strings.TrimSpace(pullRequest.HeadBranch) == "" {
+		return errors.New("pull request branches are required")
+	}
+	if !safeCommitID.MatchString(pullRequest.HeadCommitID) {
+		return errors.New("pull request head must be a lowercase commit ID")
+	}
+	if pullRequest.CreatedAt.IsZero() {
+		return errors.New("pull request creation time is required")
+	}
+	return nil
+}
+
+func safePullRequestURL(value string) bool {
+	if strings.TrimSpace(value) == "" || value != strings.TrimSpace(value) {
+		return false
+	}
+	parsed, err := url.Parse(value)
+	return err == nil && (parsed.Scheme == "http" || parsed.Scheme == "https") &&
+		parsed.Host != "" && parsed.User == nil
 }
 
 type CheckoutSpec struct {

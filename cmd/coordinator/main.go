@@ -183,8 +183,9 @@ func run(ctx context.Context, coordinatorConfig config) error {
 	if err != nil {
 		return fmt.Errorf("create managed-checkout service: %w", err)
 	}
-	workspaceService := workspace.NewServiceWithCheckout(
-		workspaceStore, featureService, projectService, forgejoClient, checkoutManager,
+	workspaceService := workspace.NewServiceWithPreparation(
+		workspaceStore, featureService, projectService, forgejoClient,
+		checkoutManager, forgejoClient,
 	)
 	workflowStore := coordinatordatabase.NewWorkflowStore(db)
 	workflowService := workflow.NewService(workflowStore)
