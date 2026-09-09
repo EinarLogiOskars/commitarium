@@ -13,9 +13,20 @@ type recordingWorkflowStore struct {
 	receivedTransition FeatureTransition
 	transitionResult   Event
 	transitionErr      error
+	receivedAcceptance GoalAcceptance
+	acceptanceResult   Event
+	acceptanceErr      error
 	receivedAggregate  string
 	eventsResult       []Event
 	eventsErr          error
+}
+
+func (s *recordingWorkflowStore) AcceptGoal(
+	_ context.Context,
+	acceptance GoalAcceptance,
+) (Event, error) {
+	s.receivedAcceptance = acceptance
+	return s.acceptanceResult, s.acceptanceErr
 }
 
 func (s *recordingWorkflowStore) ApplyFeatureTransition(
@@ -77,6 +88,48 @@ func TestServiceTransitionFeature(t *testing.T) {
 			expectedTransition,
 			store.receivedTransition,
 		)
+	}
+}
+
+func TestServiceAcceptGoal(t *testing.T) {
+	fixedTime := time.Date(2026, time.September, 9, 14, 0, 0, 123456789, time.UTC)
+	expectedEvent := validTestEvent(t)
+	expectedEvent.Type = EventTypeGoalAccepted
+	store := &recordingWorkflowStore{acceptanceResult: expectedEvent}
+	service := &Service{
+		store:      store,
+		broker:     newEventBroker(defaultSubscriberBuffer),
+		generateID: func() string { return "evt_goal" },
+		now:        func() time.Time { return fixedTime },
+	}
+	actor := Actor{Kind: ActorKindUser, ID: "local-user"}
+	events, cancel := service.SubscribeFeatureEvents("fea_test")
+	defer cancel()
+
+	actual, err := service.AcceptGoal(
+		t.Context(), "fea_test", "ses_lead", "  Ship CSV export.  ", actor, "accept-1",
+	)
+	if err != nil {
+		t.Fatalf("accept goal: %v", err)
+	}
+	if actual != expectedEvent {
+		t.Fatalf("expected event %+v, got %+v", expectedEvent, actual)
+	}
+	expected := GoalAcceptance{
+		EventID: "evt_goal", FeatureID: "fea_test", SessionID: "ses_lead",
+		Goal: "Ship CSV export.", Actor: actor, OccurredAt: fixedTime,
+		IdempotencyKey: "accept-1",
+	}
+	if store.receivedAcceptance != expected {
+		t.Fatalf("expected acceptance %+v, got %+v", expected, store.receivedAcceptance)
+	}
+	select {
+	case published := <-events:
+		if published != expectedEvent {
+			t.Fatalf("expected published event %+v, got %+v", expectedEvent, published)
+		}
+	default:
+		t.Fatal("expected accepted-goal event to be published")
 	}
 }
 

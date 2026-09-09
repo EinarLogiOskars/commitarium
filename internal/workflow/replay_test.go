@@ -10,10 +10,11 @@ import (
 
 func TestReplayFeatureState(t *testing.T) {
 	events := []Event{
-		stateChangedTestEvent(t, 1, feature.StateDraft, feature.StatePlanning),
-		stateChangedTestEvent(t, 2, feature.StatePlanning, feature.StateImplementing),
-		stateChangedTestEvent(t, 3, feature.StateImplementing, feature.StateReviewing),
-		stateChangedTestEvent(t, 4, feature.StateReviewing, feature.StateReadyToMerge),
+		goalAcceptedTestEvent(t, 1),
+		stateChangedTestEvent(t, 2, feature.StateDraft, feature.StatePlanning),
+		stateChangedTestEvent(t, 3, feature.StatePlanning, feature.StateImplementing),
+		stateChangedTestEvent(t, 4, feature.StateImplementing, feature.StateReviewing),
+		stateChangedTestEvent(t, 5, feature.StateReviewing, feature.StateReadyToMerge),
 	}
 
 	state, err := ReplayFeatureState(events)
@@ -22,6 +23,37 @@ func TestReplayFeatureState(t *testing.T) {
 	}
 	if state != feature.StateReadyToMerge {
 		t.Errorf("expected state %q, got %q", feature.StateReadyToMerge, state)
+	}
+}
+
+func TestReplayFeatureStateRejectsDuplicateOrLateGoalAcceptance(t *testing.T) {
+	tests := []struct {
+		name   string
+		events []Event
+	}{
+		{
+			name: "duplicate acceptance",
+			events: []Event{
+				goalAcceptedTestEvent(t, 1),
+				goalAcceptedTestEvent(t, 2),
+			},
+		},
+		{
+			name: "acceptance after planning starts",
+			events: []Event{
+				stateChangedTestEvent(t, 1, feature.StateDraft, feature.StatePlanning),
+				goalAcceptedTestEvent(t, 2),
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := ReplayFeatureState(test.events)
+			if !errors.Is(err, ErrInvalidEventStream) {
+				t.Fatalf("expected error %v, got %v", ErrInvalidEventStream, err)
+			}
+		})
 	}
 }
 
@@ -103,6 +135,21 @@ func stateChangedTestEvent(
 	payload, err := EncodeFeatureStateChangedPayload(previousState, state)
 	if err != nil {
 		t.Fatalf("encode state-change payload: %v", err)
+	}
+	event.Payload = payload
+	return event
+}
+
+func goalAcceptedTestEvent(t *testing.T, sequence int64) Event {
+	t.Helper()
+	event := validTestEvent(t)
+	event.ID = fmt.Sprintf("evt_goal_%d", sequence)
+	event.Type = EventTypeGoalAccepted
+	event.Sequence = sequence
+	event.PayloadVersion = GoalAcceptedPayloadVersion
+	payload, err := EncodeGoalAcceptedPayload("Ship CSV export.", "ses_lead")
+	if err != nil {
+		t.Fatalf("encode goal acceptance payload: %v", err)
 	}
 	event.Payload = payload
 	return event

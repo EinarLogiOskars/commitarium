@@ -33,10 +33,12 @@ func (s *FeatureStore) Create(
 				title,
 				description,
 				state,
+				accepted_goal,
+				goal_accepted_at,
 				created_at,
 				updated_at
 			)
-			VALUES (?, ?, ?, ?, ?, ?, ?)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT(id) DO NOTHING
 		`,
 		createdFeature.ID,
@@ -44,6 +46,8 @@ func (s *FeatureStore) Create(
 		createdFeature.Title,
 		createdFeature.Description,
 		createdFeature.State,
+		createdFeature.AcceptedGoal,
+		formatOptionalExecutionTime(createdFeature.GoalAcceptedAt),
 		createdFeature.CreatedAt.UTC().Format(time.RFC3339Nano),
 		createdFeature.UpdatedAt.UTC().Format(time.RFC3339Nano),
 	)
@@ -85,6 +89,7 @@ func (s *FeatureStore) GetByID(
 ) (feature.Feature, error) {
 	storedFeature := feature.Feature{}
 	var storedState string
+	var goalAcceptedAt sql.NullString
 	var createdAt string
 	var updatedAt string
 
@@ -97,6 +102,8 @@ func (s *FeatureStore) GetByID(
 				title,
 				description,
 				state,
+				accepted_goal,
+				goal_accepted_at,
 				created_at,
 				updated_at
 			FROM features
@@ -109,6 +116,8 @@ func (s *FeatureStore) GetByID(
 		&storedFeature.Title,
 		&storedFeature.Description,
 		&storedState,
+		&storedFeature.AcceptedGoal,
+		&goalAcceptedAt,
 		&createdAt,
 		&updatedAt,
 	)
@@ -125,6 +134,15 @@ func (s *FeatureStore) GetByID(
 	}
 
 	storedFeature.State = feature.State(storedState)
+	if goalAcceptedAt.Valid {
+		parsed, parseErr := time.Parse(time.RFC3339Nano, goalAcceptedAt.String)
+		if parseErr != nil {
+			return feature.Feature{}, fmt.Errorf(
+				"parse goal acceptance time for feature %q: %w", id, parseErr,
+			)
+		}
+		storedFeature.GoalAcceptedAt = &parsed
+	}
 
 	storedFeature.CreatedAt, err = time.Parse(time.RFC3339Nano, createdAt)
 	if err != nil {

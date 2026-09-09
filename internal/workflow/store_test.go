@@ -71,3 +71,46 @@ func validFeatureTransition() FeatureTransition {
 		IdempotencyKey: "cmd_test",
 	}
 }
+
+func TestGoalAcceptanceValidate(t *testing.T) {
+	acceptance := validGoalAcceptance()
+	if err := acceptance.Validate(); err != nil {
+		t.Fatalf("validate goal acceptance: %v", err)
+	}
+}
+
+func TestGoalAcceptanceValidateRejectsInvalidRequest(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*GoalAcceptance)
+	}{
+		{name: "missing event ID", mutate: func(value *GoalAcceptance) { value.EventID = "" }},
+		{name: "missing feature ID", mutate: func(value *GoalAcceptance) { value.FeatureID = "" }},
+		{name: "missing session ID", mutate: func(value *GoalAcceptance) { value.SessionID = "" }},
+		{name: "blank goal", mutate: func(value *GoalAcceptance) { value.Goal = " " }},
+		{name: "untrimmed goal", mutate: func(value *GoalAcceptance) { value.Goal = " Ship it" }},
+		{name: "unknown actor kind", mutate: func(value *GoalAcceptance) { value.Actor.Kind = "unknown" }},
+		{name: "missing actor ID", mutate: func(value *GoalAcceptance) { value.Actor.ID = "" }},
+		{name: "missing occurrence time", mutate: func(value *GoalAcceptance) { value.OccurredAt = time.Time{} }},
+		{name: "missing idempotency key", mutate: func(value *GoalAcceptance) { value.IdempotencyKey = "" }},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			acceptance := validGoalAcceptance()
+			test.mutate(&acceptance)
+			if err := acceptance.Validate(); !errors.Is(err, ErrInvalidGoalAcceptance) {
+				t.Fatalf("expected error %v, got %v", ErrInvalidGoalAcceptance, err)
+			}
+		})
+	}
+}
+
+func validGoalAcceptance() GoalAcceptance {
+	return GoalAcceptance{
+		EventID: "evt_goal", FeatureID: "fea_test", SessionID: "ses_lead",
+		Goal: "Ship CSV export.", Actor: Actor{Kind: ActorKindUser, ID: "usr_test"},
+		OccurredAt:     time.Date(2026, time.September, 9, 16, 0, 0, 0, time.UTC),
+		IdempotencyKey: "accept-1",
+	}
+}

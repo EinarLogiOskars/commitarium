@@ -247,14 +247,17 @@ func TestCreateFeatureMapsServiceErrors(t *testing.T) {
 func TestGetFeatureByID(t *testing.T) {
 	createdAt := time.Date(2026, time.September, 8, 14, 0, 0, 0, time.UTC)
 	updatedAt := createdAt.Add(15 * time.Minute)
+	acceptedAt := createdAt.Add(10 * time.Minute)
 	expected := feature.Feature{
-		ID:          "fea_test",
-		ProjectID:   "prj_test",
-		Title:       "Persist workflow events",
-		Description: "Store each transition atomically.",
-		State:       feature.StateDraft,
-		CreatedAt:   createdAt,
-		UpdatedAt:   updatedAt,
+		ID:             "fea_test",
+		ProjectID:      "prj_test",
+		Title:          "Persist workflow events",
+		Description:    "Store each transition atomically.",
+		State:          feature.StateDraft,
+		AcceptedGoal:   "Persist each workflow transition and its event together.",
+		GoalAcceptedAt: &acceptedAt,
+		CreatedAt:      createdAt,
+		UpdatedAt:      updatedAt,
 	}
 	features := &recordingFeatureService{getResult: expected}
 	request := httptest.NewRequest(
@@ -382,6 +385,13 @@ func assertFeatureResponse(
 	}
 	if actual.State != expected.State {
 		t.Errorf("expected state %q, got %q", expected.State, actual.State)
+	}
+	if actual.AcceptedGoal != expected.AcceptedGoal {
+		t.Errorf("expected accepted goal %q, got %q", expected.AcceptedGoal, actual.AcceptedGoal)
+	}
+	if (actual.GoalAcceptedAt == nil) != (expected.GoalAcceptedAt == nil) ||
+		(actual.GoalAcceptedAt != nil && !actual.GoalAcceptedAt.Equal(*expected.GoalAcceptedAt)) {
+		t.Errorf("expected goal acceptance time %v, got %v", expected.GoalAcceptedAt, actual.GoalAcceptedAt)
 	}
 	if actual.CreatedAt != expected.CreatedAt {
 		t.Errorf("expected creation time %v, got %v", expected.CreatedAt, actual.CreatedAt)

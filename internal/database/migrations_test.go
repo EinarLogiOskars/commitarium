@@ -200,6 +200,59 @@ func TestWaitingSessionMigrationPreservesDependentRecords(t *testing.T) {
 	}
 }
 
+func TestGoalAcceptanceMigrationPreservesExistingFeatures(t *testing.T) {
+	db, err := OpenSQLite(t.Context(), filepath.Join(t.TempDir(), "coordinator.db"))
+	if err != nil {
+		t.Fatalf("open SQLite database: %v", err)
+	}
+	defer db.Close()
+	migrations, err := fs.Sub(migrationFiles, "migrations")
+	if err != nil {
+		t.Fatalf("open embedded migrations: %v", err)
+	}
+	provider, err := goose.NewProvider(goose.DialectSQLite3, db, migrations)
+	if err != nil {
+		t.Fatalf("create migration provider: %v", err)
+	}
+	if _, err := provider.UpTo(t.Context(), 7); err != nil {
+		t.Fatalf("migrate version-seven schema: %v", err)
+	}
+	now := time.Date(2026, time.September, 9, 17, 0, 0, 0, time.UTC).Format(time.RFC3339Nano)
+	if _, err := db.ExecContext(
+		t.Context(),
+		`INSERT INTO projects (id, name, recovery_policy, created_at)
+		 VALUES ('prj_goal', 'Goal project', 'approval_required', ?)`,
+		now,
+	); err != nil {
+		t.Fatalf("insert old project: %v", err)
+	}
+	if _, err := db.ExecContext(
+		t.Context(),
+		`INSERT INTO features (id, project_id, title, description, state, created_at, updated_at)
+		 VALUES ('fea_goal', 'prj_goal', 'Clarify goal', '', 'draft', ?, ?)`,
+		now, now,
+	); err != nil {
+		t.Fatalf("insert old feature: %v", err)
+	}
+	if err := Migrate(t.Context(), db); err != nil {
+		t.Fatalf("apply goal-acceptance migration: %v", err)
+	}
+
+	stored, err := NewFeatureStore(db).GetByID(t.Context(), "fea_goal")
+	if err != nil {
+		t.Fatalf("get migrated feature: %v", err)
+	}
+	if stored.AcceptedGoal != "" || stored.GoalAcceptedAt != nil {
+		t.Fatalf("old feature acquired a false acceptance: %+v", stored)
+	}
+	if _, err := db.ExecContext(
+		t.Context(),
+		`UPDATE features SET accepted_goal = 'Ship it' WHERE id = 'fea_goal'`,
+	); err == nil {
+		t.Fatal("schema accepted a goal without its acceptance time")
+	}
+}
+
 func TestMigrateReturnsCanceledContext(t *testing.T) {
 	db, err := OpenSQLite(
 		t.Context(),

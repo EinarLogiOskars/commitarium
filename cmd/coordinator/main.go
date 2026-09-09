@@ -160,7 +160,8 @@ func run(ctx context.Context, coordinatorConfig config) error {
 			},
 		))
 		remoteStarter, err := orchestration.NewRemoteLeadStarter(orchestration.RemoteLeadConfig{
-			Executions: executionService, Features: featureStore, Worker: client,
+			Executions: executionService, Features: featureStore, Goals: workflowService,
+			Worker: client,
 			Pump: workeringest.NewPump(
 				executionService, ingestion, workeringest.NewHTTPAttemptSource(client),
 			),

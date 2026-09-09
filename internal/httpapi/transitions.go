@@ -3,6 +3,7 @@ package httpapi
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"strings"
@@ -33,8 +34,10 @@ type featureEventResponse struct {
 	OccurredAt     time.Time          `json:"occurred_at"`
 	Sequence       int64              `json:"sequence"`
 	PayloadVersion int                `json:"payload_version"`
-	PreviousState  feature.State      `json:"previous_state"`
-	State          feature.State      `json:"state"`
+	PreviousState  feature.State      `json:"previous_state,omitempty"`
+	State          feature.State      `json:"state,omitempty"`
+	Goal           string             `json:"goal,omitempty"`
+	SessionID      string             `json:"session_id,omitempty"`
 }
 
 type eventActorResponse struct {
@@ -148,14 +151,7 @@ func (api *API) getFeatureEventsHandler(w http.ResponseWriter, r *http.Request) 
 }
 
 func newFeatureEventResponse(event workflow.Event) (featureEventResponse, error) {
-	payload, err := workflow.DecodeFeatureStateChangedPayload(
-		event.PayloadVersion,
-		event.Payload,
-	)
-	if err != nil {
-		return featureEventResponse{}, err
-	}
-	return featureEventResponse{
+	response := featureEventResponse{
 		ID:   event.ID,
 		Type: event.Type,
 		Actor: eventActorResponse{
@@ -165,7 +161,24 @@ func newFeatureEventResponse(event workflow.Event) (featureEventResponse, error)
 		OccurredAt:     event.OccurredAt,
 		Sequence:       event.Sequence,
 		PayloadVersion: event.PayloadVersion,
-		PreviousState:  payload.PreviousState,
-		State:          payload.State,
-	}, nil
+	}
+	switch event.Type {
+	case workflow.EventTypeFeatureStateChanged:
+		payload, err := workflow.DecodeFeatureStateChangedPayload(event.PayloadVersion, event.Payload)
+		if err != nil {
+			return featureEventResponse{}, err
+		}
+		response.PreviousState = payload.PreviousState
+		response.State = payload.State
+	case workflow.EventTypeGoalAccepted:
+		payload, err := workflow.DecodeGoalAcceptedPayload(event.PayloadVersion, event.Payload)
+		if err != nil {
+			return featureEventResponse{}, err
+		}
+		response.Goal = payload.Goal
+		response.SessionID = payload.SessionID
+	default:
+		return featureEventResponse{}, fmt.Errorf("unsupported workflow event type %q", event.Type)
+	}
+	return response, nil
 }
