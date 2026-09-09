@@ -90,9 +90,13 @@ func (service *Service) OpenEventStream(
 
 func (service *Service) supervise(
 	reference workerhttp.AttemptReference,
-	providerSession worker.Session,
+	live *activeProviderSession,
 ) {
-	defer service.removeActive(reference)
+	defer func() {
+		service.removeActive(reference, live)
+		close(live.finished)
+	}()
+	providerSession := live.session
 	for {
 		select {
 		case <-service.lifetime.Done():

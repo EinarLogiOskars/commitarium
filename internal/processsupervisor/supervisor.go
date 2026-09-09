@@ -313,6 +313,12 @@ func (process *Process) collect(stdout io.ReadCloser, stderr io.ReadCloser) {
 	}()
 
 	go func() {
+		// StdoutPipe and StderrPipe require their reads to finish before Wait;
+		// otherwise Wait may close a pipe while its reader is still draining the
+		// final bytes. EOF still arrives when the child closes its descriptors.
+		readers.Wait()
+		close(raw)
+		<-sequenced
 		waitErr := process.command.Wait()
 		endedAt := time.Now().UTC()
 
@@ -320,9 +326,6 @@ func (process *Process) collect(stdout io.ReadCloser, stderr io.ReadCloser) {
 		process.exited = true
 		process.mu.Unlock()
 
-		readers.Wait()
-		close(raw)
-		<-sequenced
 		close(collectionErrors)
 
 		var outputErrors []error

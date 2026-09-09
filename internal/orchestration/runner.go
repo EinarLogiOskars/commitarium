@@ -726,6 +726,7 @@ func (r *Runner) runAgent(
 
 	session, err := agent.Adapter.Start(ctx, worker.SessionRequest{
 		SessionID:    sessionID,
+		AttemptID:    sessionID, // The legacy in-process path has one attempt per session.
 		FeatureID:    request.FeatureID,
 		Role:         role,
 		Instructions: instructions,
@@ -837,8 +838,10 @@ func (r *Runner) resumeAgent(
 	)
 	session, err := agent.Adapter.Resume(ctx, worker.ResumeRequest{
 		SessionRequest: worker.SessionRequest{
-			SessionID: stored.ID, FeatureID: request.FeatureID,
-			Role: role, Instructions: briefing,
+			SessionID: stored.ID,
+			AttemptID: stored.ID, // Recovery resumes that same in-process attempt.
+			FeatureID: request.FeatureID,
+			Role:      role, Instructions: briefing,
 		},
 		ProviderSessionID: stored.ProviderSessionID,
 		Recovery: worker.RecoveryContext{

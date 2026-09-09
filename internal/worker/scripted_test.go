@@ -244,6 +244,7 @@ func TestQueuedScriptedAdapterUsesScriptsInOrder(t *testing.T) {
 	for index, expected := range []Disposition{DispositionChangesRequested, DispositionSucceeded} {
 		request := SessionRequest{
 			SessionID:    "ses_review_" + string(rune('1'+index)),
+			AttemptID:    "att_review_" + string(rune('1'+index)),
 			FeatureID:    "fea_test",
 			Role:         RoleReviewer,
 			Instructions: "Review the implementation.",
@@ -268,7 +269,7 @@ func TestQueuedScriptedAdapterUsesScriptsInOrder(t *testing.T) {
 
 func TestScriptedAdapterReconstructsInterruptedSessionBeforeContinuing(t *testing.T) {
 	request := SessionRequest{
-		SessionID: "run_test:implementation", FeatureID: "fea_test",
+		SessionID: "run_test:implementation", AttemptID: "att_implementation", FeatureID: "fea_test",
 		Role: RoleCoder, Instructions: "Implement the plan.",
 	}
 	firstAdapter := testScriptedAdapter()
@@ -284,7 +285,7 @@ func TestScriptedAdapterReconstructsInterruptedSessionBeforeContinuing(t *testin
 	replacement := testScriptedAdapter()
 	resumed, err := replacement.Resume(t.Context(), ResumeRequest{
 		SessionRequest: SessionRequest{
-			SessionID: request.SessionID, FeatureID: request.FeatureID,
+			SessionID: request.SessionID, AttemptID: request.AttemptID, FeatureID: request.FeatureID,
 			Role: request.Role, Instructions: "Inspect and reconcile before continuing.",
 		},
 		ProviderSessionID: first.ProviderSessionID(),
@@ -337,6 +338,7 @@ func testScriptedAdapter() *ScriptedAdapter {
 func testSessionRequest() SessionRequest {
 	return SessionRequest{
 		SessionID:    "ses_test",
+		AttemptID:    "att_test",
 		FeatureID:    "fea_test",
 		Role:         RoleCoder,
 		Instructions: "Implement the accepted plan.",

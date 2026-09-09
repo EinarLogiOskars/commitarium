@@ -15,7 +15,10 @@ import (
 	"github.com/EinarLogiOskars/commitarium/internal/workerjournal"
 )
 
-const defaultSubscriberBuffer = 32
+const (
+	defaultSubscriberBuffer = 32
+	defaultForceStopTimeout = 10 * time.Second
+)
 
 var ErrInvalidConfig = errors.New("invalid journal-backed worker service configuration")
 
@@ -53,6 +56,14 @@ type Config struct {
 	Lifetime         context.Context
 	Now              func() time.Time
 	SubscriberBuffer int
+	ForceStopTimeout time.Duration
+}
+
+type activeProviderSession struct {
+	session worker.Session
+	// finished closes only after the normal watcher has persisted the final
+	// attempt state, not merely after the operating-system process exits.
+	finished chan struct{}
 }
 
 // Service owns live provider-session handles while the journal remains the
@@ -65,12 +76,13 @@ type Service struct {
 	now        func() time.Time
 
 	activeMu sync.RWMutex
-	active   map[workerhttp.AttemptReference]worker.Session
+	active   map[workerhttp.AttemptReference]*activeProviderSession
 
-	eventMu     sync.Mutex
-	subscribers map[workerhttp.AttemptReference]map[uint64]chan workerhttp.Event
-	nextSubID   uint64
-	bufferSize  int
+	eventMu          sync.Mutex
+	subscribers      map[workerhttp.AttemptReference]map[uint64]chan workerhttp.Event
+	nextSubID        uint64
+	bufferSize       int
+	forceStopTimeout time.Duration
 }
 
 var _ workerhttp.Service = (*Service)(nil)
@@ -98,6 +110,9 @@ func New(
 	if config.SubscriberBuffer < 0 {
 		return nil, workerjournal.RecoveryResult{}, fmt.Errorf("%w: subscriber buffer cannot be negative", ErrInvalidConfig)
 	}
+	if config.ForceStopTimeout < 0 {
+		return nil, workerjournal.RecoveryResult{}, fmt.Errorf("%w: force-stop timeout cannot be negative", ErrInvalidConfig)
+	}
 	now := config.Now
 	if now == nil {
 		now = time.Now
@@ -106,15 +121,20 @@ func New(
 	if bufferSize == 0 {
 		bufferSize = defaultSubscriberBuffer
 	}
+	forceStopTimeout := config.ForceStopTimeout
+	if forceStopTimeout == 0 {
+		forceStopTimeout = defaultForceStopTimeout
+	}
 	service := &Service{
-		journal:     config.Journal,
-		provider:    config.Provider,
-		normalizer:  config.Normalizer,
-		lifetime:    config.Lifetime,
-		now:         now,
-		active:      make(map[workerhttp.AttemptReference]worker.Session),
-		subscribers: make(map[workerhttp.AttemptReference]map[uint64]chan workerhttp.Event),
-		bufferSize:  bufferSize,
+		journal:          config.Journal,
+		provider:         config.Provider,
+		normalizer:       config.Normalizer,
+		lifetime:         config.Lifetime,
+		now:              now,
+		active:           make(map[workerhttp.AttemptReference]*activeProviderSession),
+		subscribers:      make(map[workerhttp.AttemptReference]map[uint64]chan workerhttp.Event),
+		bufferSize:       bufferSize,
+		forceStopTimeout: forceStopTimeout,
 	}
 	recovery, err := service.journal.RecoverInterrupted(ctx, service.timestamp())
 	if err != nil {
@@ -159,7 +179,7 @@ func (service *Service) PutAttempt(
 		return attempt, false, nil
 	}
 
-	providerSession, launchErr := service.launchProvider(request, identity.SessionID)
+	providerSession, launchErr := service.launchProvider(request, identity.AttemptReference)
 	if launchErr != nil {
 		if providerSession != nil {
 			uncertain, transitionErr := service.uncertainLaunch(ctx, attempt, providerSession.ProviderSessionID())
@@ -200,10 +220,11 @@ func (service *Service) PutAttempt(
 	if err != nil {
 		return workerhttp.Attempt{}, false, service.journalError(err)
 	}
+	live := &activeProviderSession{session: providerSession, finished: make(chan struct{})}
 	service.activeMu.Lock()
-	service.active[running.AttemptReference] = providerSession
+	service.active[running.AttemptReference] = live
 	service.activeMu.Unlock()
-	go service.supervise(running.AttemptReference, providerSession)
+	go service.supervise(running.AttemptReference, live)
 	return running, true, nil
 }
 
@@ -272,7 +293,7 @@ func (service *Service) SendCommand(
 		_ = service.resolveMutation(ctx, identity, workerjournal.MutationIndeterminate)
 		return workerhttp.Attempt{}, indeterminateError(errors.New("attempt is indeterminate"))
 	}
-	providerSession, ok := service.activeSession(identity.AttemptReference)
+	live, ok := service.activeSession(identity.AttemptReference)
 	if !ok {
 		_ = service.resolveMutation(ctx, identity, workerjournal.MutationIndeterminate)
 		_ = service.markIndeterminate(ctx, attempt)
@@ -289,7 +310,7 @@ func (service *Service) SendCommand(
 		Type:    worker.CommandType(request.Type),
 		Message: request.Message,
 	}
-	if err := providerSession.Send(ctx, command); err != nil {
+	if err := live.session.Send(ctx, command); err != nil {
 		return workerhttp.Attempt{}, service.handleCommandFailure(ctx, identity, prepared, request.Type, err)
 	}
 	if err := service.resolveMutation(ctx, identity, workerjournal.MutationApplied); err != nil {
@@ -298,29 +319,97 @@ func (service *Service) SendCommand(
 	return service.GetAttempt(ctx, identity.AttemptReference)
 }
 
-// ForceStop intentionally remains unavailable in this slice. Real forced
-// termination requires an operating-system process handle owned by the future
-// provider supervisor; treating a cooperative simulated stop as equivalent
-// would give the coordinator a false safety guarantee.
 func (service *Service) ForceStop(
-	context.Context,
-	workerhttp.MutationIdentity,
-	workerhttp.ForceStopRequest,
+	ctx context.Context,
+	identity workerhttp.MutationIdentity,
+	request workerhttp.ForceStopRequest,
 ) (workerhttp.Attempt, error) {
-	return workerhttp.Attempt{}, workerhttp.NewServiceError(
-		workerhttp.ErrorUnsupportedOperation,
-		"forced termination is unavailable without a provider process supervisor",
-		false,
-		nil,
-	)
+	if err := request.Validate(identity); err != nil {
+		return workerhttp.Attempt{}, err
+	}
+	if err := ctx.Err(); err != nil {
+		return workerhttp.Attempt{}, err
+	}
+	digest, err := workerjournal.DigestRequest(request)
+	if err != nil {
+		return workerhttp.Attempt{}, fmt.Errorf("digest worker force-stop request: %w", err)
+	}
+	now := service.timestamp()
+	mutation, created, err := service.journal.ClaimMutation(ctx, workerjournal.Mutation{
+		MutationIdentity: identity,
+		Kind:             workerjournal.MutationForceStop,
+		RequestDigest:    digest,
+		Status:           workerjournal.MutationPending,
+		RequestedAt:      now,
+		UpdatedAt:        now,
+	})
+	if err != nil {
+		return workerhttp.Attempt{}, service.journalError(err)
+	}
+	if !created {
+		return service.replayForceStop(ctx, mutation)
+	}
+
+	attempt, err := service.journal.GetAttempt(ctx, identity.AttemptReference)
+	if err != nil {
+		return workerhttp.Attempt{}, service.journalError(err)
+	}
+	if attempt.State == workerhttp.AttemptStateIndeterminate {
+		_ = service.resolveMutation(context.WithoutCancel(ctx), identity, workerjournal.MutationIndeterminate)
+		return workerhttp.Attempt{}, indeterminateError(errors.New("attempt is indeterminate"))
+	}
+	live, ok := service.activeSession(identity.AttemptReference)
+	if !ok {
+		return workerhttp.Attempt{}, service.handleMissingForceStopSession(ctx, identity, attempt)
+	}
+	forceStoppable, ok := live.session.(worker.ForceStoppableSession)
+	if !ok {
+		_ = service.resolveMutation(context.WithoutCancel(ctx), identity, workerjournal.MutationRejected)
+		return workerhttp.Attempt{}, unsupportedForceStopError()
+	}
+	prepared, err := service.prepareForceStop(ctx, attempt)
+	if err != nil {
+		_ = service.resolveMutation(context.WithoutCancel(ctx), identity, workerjournal.MutationRejected)
+		return workerhttp.Attempt{}, err
+	}
+
+	// Once the pending mutation is durable, an HTTP disconnect must not abandon
+	// termination halfway through. The worker lifetime and this internal bound,
+	// rather than the request context, own delivery and final persistence.
+	operationCtx, cancel := context.WithTimeout(service.lifetime, service.forceStopTimeout)
+	defer cancel()
+	if err := forceStoppable.ForceStop(operationCtx, request.Reason); err != nil {
+		return workerhttp.Attempt{}, service.handleForceStopFailure(identity, prepared, err)
+	}
+	select {
+	case <-live.finished:
+	case <-operationCtx.Done():
+		return workerhttp.Attempt{}, service.handleForceStopFailure(identity, prepared, operationCtx.Err())
+	}
+	terminal, err := service.journal.GetAttempt(operationCtx, identity.AttemptReference)
+	if err != nil {
+		return workerhttp.Attempt{}, service.handleForceStopFailure(identity, prepared, err)
+	}
+	if terminal.State != workerhttp.AttemptStateTerminal {
+		return workerhttp.Attempt{}, service.handleForceStopFailure(
+			identity,
+			terminal,
+			errors.New("provider watcher did not record a terminal attempt"),
+		)
+	}
+	if err := service.resolveMutation(operationCtx, identity, workerjournal.MutationApplied); err != nil {
+		return workerhttp.Attempt{}, service.handleForceStopFailure(identity, terminal, err)
+	}
+	return terminal, nil
 }
 
 func (service *Service) launchProvider(
 	request workerhttp.PutAttemptRequest,
-	sessionID string,
+	reference workerhttp.AttemptReference,
 ) (worker.Session, error) {
 	sessionRequest := worker.SessionRequest{
-		SessionID:    sessionID,
+		SessionID:    reference.SessionID,
+		AttemptID:    reference.AttemptID,
 		FeatureID:    request.Assignment.FeatureID,
 		Role:         worker.Role(request.Assignment.Role),
 		Instructions: request.Instructions,
@@ -384,6 +473,88 @@ func (service *Service) replayMutation(
 	default:
 		return workerhttp.Attempt{}, fmt.Errorf("unsupported stored mutation status %q", mutation.Status)
 	}
+}
+
+func (service *Service) replayForceStop(
+	ctx context.Context,
+	mutation workerjournal.Mutation,
+) (workerhttp.Attempt, error) {
+	ticker := time.NewTicker(5 * time.Millisecond)
+	defer ticker.Stop()
+	for mutation.Status == workerjournal.MutationPending {
+		select {
+		case <-ctx.Done():
+			return workerhttp.Attempt{}, ctx.Err()
+		case <-ticker.C:
+		}
+		stored, err := service.journal.GetMutation(ctx, mutation.MutationIdentity)
+		if err != nil {
+			return workerhttp.Attempt{}, service.journalError(err)
+		}
+		mutation = stored
+	}
+	return service.replayMutation(ctx, mutation)
+}
+
+func (service *Service) prepareForceStop(
+	ctx context.Context,
+	attempt workerhttp.Attempt,
+) (workerhttp.Attempt, error) {
+	switch attempt.State {
+	case workerhttp.AttemptStateRunning,
+		workerhttp.AttemptStatePauseRequested,
+		workerhttp.AttemptStatePaused:
+		return service.transition(ctx, attempt, workerhttp.AttemptStateStopRequested)
+	case workerhttp.AttemptStateStopRequested:
+		return attempt, nil
+	default:
+		return workerhttp.Attempt{}, workerhttp.NewServiceError(
+			workerhttp.ErrorAttemptConflict,
+			fmt.Sprintf("forced termination is not valid while the attempt is %q", attempt.State),
+			false,
+			nil,
+		)
+	}
+}
+
+func (service *Service) handleMissingForceStopSession(
+	ctx context.Context,
+	identity workerhttp.MutationIdentity,
+	attempt workerhttp.Attempt,
+) error {
+	current, err := service.journal.GetAttempt(ctx, attempt.AttemptReference)
+	if err == nil && current.State == workerhttp.AttemptStateTerminal {
+		_ = service.resolveMutation(context.WithoutCancel(ctx), identity, workerjournal.MutationRejected)
+		return workerhttp.NewServiceError(
+			workerhttp.ErrorAttemptConflict,
+			"worker attempt finished before forced termination was delivered",
+			false,
+			nil,
+		)
+	}
+	_ = service.resolveMutation(context.WithoutCancel(ctx), identity, workerjournal.MutationIndeterminate)
+	_ = service.markIndeterminate(context.WithoutCancel(ctx), attempt)
+	return indeterminateError(errors.New("live provider process handle is unavailable"))
+}
+
+func (service *Service) handleForceStopFailure(
+	identity workerhttp.MutationIdentity,
+	attempt workerhttp.Attempt,
+	cause error,
+) error {
+	ctx := context.WithoutCancel(service.lifetime)
+	_ = service.resolveMutation(ctx, identity, workerjournal.MutationIndeterminate)
+	_ = service.markIndeterminate(ctx, attempt)
+	return indeterminateError(cause)
+}
+
+func unsupportedForceStopError() error {
+	return workerhttp.NewServiceError(
+		workerhttp.ErrorUnsupportedOperation,
+		"provider session does not own a force-stoppable process",
+		false,
+		nil,
+	)
 }
 
 func (service *Service) prepareCommand(
@@ -512,16 +683,21 @@ func (service *Service) markIndeterminateLocked(
 
 func (service *Service) activeSession(
 	reference workerhttp.AttemptReference,
-) (worker.Session, bool) {
+) (*activeProviderSession, bool) {
 	service.activeMu.RLock()
 	defer service.activeMu.RUnlock()
 	session, ok := service.active[reference]
 	return session, ok
 }
 
-func (service *Service) removeActive(reference workerhttp.AttemptReference) {
+func (service *Service) removeActive(
+	reference workerhttp.AttemptReference,
+	live *activeProviderSession,
+) {
 	service.activeMu.Lock()
-	delete(service.active, reference)
+	if service.active[reference] == live {
+		delete(service.active, reference)
+	}
 	service.activeMu.Unlock()
 }
 

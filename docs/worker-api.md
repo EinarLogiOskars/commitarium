@@ -206,6 +206,17 @@ A newly created attempt returns `201 Created` with a `Location` header. An
 existing attempt returned for a safe retry uses `200 OK`. Commands are accepted
 with `202 Accepted`; force-stop returns the inspected attempt with `200 OK`.
 
+For a worker that advertises `force_stop`, the journal-backed service records
+the request as pending before it contacts the provider session. The provider
+session must own a force-stoppable operating-system process handle for that
+exact attempt. The service moves the attempt to `stop_requested`, invokes that
+handle, and waits for the ordinary session watcher to store the terminal event
+and result before marking the mutation applied. An exact retry reads the same
+durable result and does not send another signal. A stale attempt cannot be used
+to stop a newer attempt for the same logical session. If the worker cannot
+prove whether termination occurred, both the attempt and mutation become
+`indeterminate`, preventing automatic replacement or redelivery.
+
 ## Request safety
 
 JSON request bodies:
@@ -300,11 +311,14 @@ localhost port, interrupts an active attempt, recreates the container twice,
 and verifies that the same provider session identity remains fenced against a
 replacement.
 
-There is still no operating-system provider process wired into the service, real
-Codex or Claude Code integration, credential access, or project-secret delivery.
-Accordingly the standalone service does not advertise force-stop: true forced
-termination must not be simulated as a cooperative stop. The coordinator client
-and event pump are also not yet wired into runtime orchestration.
+There is still no operating-system provider process wired into the standalone
+service, real Codex or Claude Code integration, credential access, or
+project-secret delivery. The journal-backed service now supports process-backed
+sessions through its optional force-stop interface, but the deterministic
+session does not implement that interface. Accordingly the standalone service
+does not advertise force-stop: true forced termination must not be simulated as
+a cooperative stop. The coordinator client and event pump are also not yet
+wired into runtime orchestration.
 
 ## Provider process supervision foundation
 
