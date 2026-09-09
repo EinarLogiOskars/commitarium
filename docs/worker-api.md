@@ -300,9 +300,41 @@ localhost port, interrupts an active attempt, recreates the container twice,
 and verifies that the same provider session identity remains fenced against a
 replacement.
 
-There is still no operating-system provider-process supervision, real Codex or
-Claude Code integration, credential access, or project-secret delivery.
+There is still no operating-system provider process wired into the service, real
+Codex or Claude Code integration, credential access, or project-secret delivery.
 Accordingly the standalone service does not advertise force-stop: true forced
-termination will require a real process handle and must not be simulated as a
-cooperative stop. The coordinator client and event pump are also not yet wired
-into runtime orchestration.
+termination must not be simulated as a cooperative stop. The coordinator client
+and event pump are also not yet wired into runtime orchestration.
+
+## Provider process supervision foundation
+
+The worker codebase now includes a provider-neutral operating-system process
+supervisor, although the deterministic worker service does not use it yet. A
+future Codex or Claude Code adapter can ask it to start a specific executable,
+argument list, working directory, and environment for one attempt. The
+supervisor does not interpret provider commands or output.
+
+Each child starts in a separate process group. Gentle termination and forced
+termination therefore target the supervised provider and the helper processes
+it spawned, without signaling the worker itself. The returned handle is tied to
+one attempt ID; there is no lookup by a possibly stale process ID in the public
+API.
+
+Standard output and standard error are read concurrently and published as
+immutable chunks with one supervisor-assigned sequence. That sequence is the
+order in which the worker observed the two pipes; operating systems do not
+provide an exact shared write order across separate stdout and stderr pipes.
+The channel is deliberately bounded. If an adapter stops consuming output, the
+supervisor force-stops that process tree and returns `ErrOutputBackpressure`
+instead of growing memory indefinitely or becoming unable to reap the process.
+
+The context supplied to process start is used only during startup. Canceling an
+HTTP launch request after the child has started does not kill the agent.
+Lifetime is controlled explicitly through wait, gentle termination, and forced
+termination operations. Exit results distinguish an ordinary nonzero exit code
+from termination by an operating-system signal.
+
+The separate-process-group implementation currently supports the Linux worker
+container and macOS development tests. Other native platforms fail explicitly
+with `ErrUnsupportedPlatform`; this does not prevent the worker container from
+running on Docker Desktop for Windows.

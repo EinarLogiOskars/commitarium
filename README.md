@@ -125,6 +125,13 @@ scripts can serve repeated logical sessions. Real provider processes,
 coordinator runtime wiring, and provider-specific output handling still remain
 to be built.
 
+The worker also has a provider-neutral operating-system process-supervision
+foundation. It can start one exact child process group, expose bounded and
+sequenced stdout/stderr chunks, report normal and signaled exits, request gentle
+termination, and force-stop the same process tree. The simulated worker does
+not use this component yet; the first real provider adapter will connect it to
+a provider CLI.
+
 ## Development checks
 
 ```sh
