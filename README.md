@@ -17,10 +17,11 @@ for automatic recovery can continue without intervention.
 
 This is not yet a production-ready release. The coordinator defaults to its
 complete deterministic simulation. An opt-in mode now connects the public run
-API to the real Codex worker for one read-only goal-clarification turn, streams
-that activity into the existing session API, and then waits for the user.
-Follow-up goal discussion, real file changes, Claude Code execution, Forgejo
-pull-request automation, and the user interface remain to be built.
+and session-command APIs to one persistent real Codex conversation for
+read-only goal clarification. The user can exchange multiple visible turns
+with the lead agent while the feature remains a draft. Explicit goal
+acceptance, real file changes, Claude Code execution, Forgejo pull-request
+automation, and the user interface remain to be built.
 
 ## Architecture
 
@@ -158,8 +159,24 @@ above. The coordinator durably creates a `lead` session, asks Codex to inspect
 and clarify the goal without changing files, copies the worker event stream to
 the public session history/SSE endpoints, and records the provider thread ID as
 soon as Codex starts. A successful turn leaves both run and session in
-`waiting_for_user`, while the feature remains `draft`. The mode deliberately
-does not accept a follow-up message yet.
+`waiting_for_user`, while the feature remains `draft`.
+
+Reply through the existing session command endpoint:
+
+```sh
+curl -X POST http://127.0.0.1:8080/api/v1/sessions/SESSION_ID/commands \
+  -H 'Content-Type: application/json' \
+  -H 'Idempotency-Key: goal-reply-1' \
+  -d '{"type":"message","message":"The command should accept an optional name."}'
+```
+
+The reply is stored before Codex is contacted and initially returns `pending`.
+The worker resumes the same provider thread in a new fenced attempt, and the
+command becomes `applied` once that attempt is confirmed. Agent output and
+`user_message` events appear in one ordered session history. Repeating the same
+request and idempotency key does not start another turn. If the coordinator is
+restarted mid-turn, it looks up and reattaches to that exact attempt rather than
+issuing another resume request.
 
 The versioned [internal worker API](docs/worker-api.md) now has tested client and
 server components for authenticated attempt inspection and control. Its worker

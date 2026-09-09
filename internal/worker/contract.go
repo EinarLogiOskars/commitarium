@@ -81,6 +81,7 @@ type Command struct {
 type EventType string
 
 const (
+	EventUserMessage        EventType = "user_message"
 	EventMessage            EventType = "message"
 	EventActivity           EventType = "activity"
 	EventInputRequired      EventType = "input_required"
@@ -94,8 +95,9 @@ type RecoveryAssessment struct {
 	RequiresUserReview bool
 }
 
-// Event contains observable worker output, not private model reasoning. The
-// transport or coordinator adds delivery identity, timestamps, and ordering.
+// Event contains public session activity, not private model reasoning. Most
+// events come from a worker; the coordinator also records user messages in the
+// same ordered conversation.
 type Event struct {
 	Type               EventType
 	Text               string

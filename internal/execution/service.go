@@ -290,6 +290,52 @@ func (s *Service) ResolveCommand(
 	return command, nil
 }
 
+func (s *Service) GetCommand(ctx context.Context, id string) (Command, error) {
+	return s.store.GetCommand(ctx, id)
+}
+
+// BeginWorkerTurn makes a user's reply and the coordinator state needed to
+// deliver it one atomic database operation. Publication happens only after
+// that operation commits, just as it does for ordinary session events.
+func (s *Service) BeginWorkerTurn(
+	ctx context.Context,
+	requested worker.Command,
+	sessionID string,
+	previous WorkerAttemptCheckpoint,
+	nextAttemptID string,
+	runReason string,
+) (WorkerTurnAdmissionResult, bool, error) {
+	now := s.now().UTC()
+	command := Command{
+		ID: requested.ID, SessionID: sessionID, Type: requested.Type,
+		Message: requested.Message, Status: CommandStatusPending, RequestedAt: now,
+	}
+	result, admitted, err := s.store.BeginWorkerTurn(ctx, WorkerTurnAdmission{
+		Command: command,
+		UserEvent: PendingEvent{
+			ID: command.ID + ":user-message", SessionID: command.SessionID,
+			Type: worker.EventUserMessage, Text: command.Message, OccurredAt: now,
+		},
+		PreviousAttemptID:         previous.AttemptID,
+		PreviousLastEventSequence: previous.LastEventSequence,
+		NextAttempt: WorkerAttemptCheckpoint{
+			SessionID: command.SessionID, AttemptID: nextAttemptID,
+			CreatedAt: now, UpdatedAt: now,
+		},
+		RunReason:  runReason,
+		OccurredAt: now,
+	})
+	if err != nil {
+		return WorkerTurnAdmissionResult{}, false, fmt.Errorf(
+			"begin worker turn for session %q: %w", command.SessionID, err,
+		)
+	}
+	if admitted && s.broker != nil {
+		s.broker.publish(result.UserEvent)
+	}
+	return result, admitted, nil
+}
+
 func (s *Service) GetRun(ctx context.Context, id string) (Run, error) {
 	return s.store.GetRun(ctx, id)
 }

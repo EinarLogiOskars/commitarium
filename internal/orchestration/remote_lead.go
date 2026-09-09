@@ -2,6 +2,8 @@ package orchestration
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
@@ -30,6 +32,14 @@ type RemoteLeadExecution interface {
 	TransitionRun(context.Context, string, execution.RunStatus, execution.RunStatus, string) (execution.Run, error)
 	TransitionSession(context.Context, string, execution.SessionStatus, execution.SessionStatus, string) (execution.Session, error)
 	RecordSessionEventWithID(context.Context, string, string, worker.Event) (execution.Event, error)
+	GetCommand(context.Context, string) (execution.Command, error)
+	PendingCommandsForSession(context.Context, string) ([]execution.Command, error)
+	ResolveCommand(context.Context, string, execution.CommandStatus, string) (execution.Command, error)
+	BeginWorkerTurn(context.Context, worker.Command, string, execution.WorkerAttemptCheckpoint, string, string) (execution.WorkerTurnAdmissionResult, bool, error)
+}
+
+type RemoteLeadFeatureFinder interface {
+	GetByID(context.Context, string) (feature.Feature, error)
 }
 
 type RemoteLeadWorker interface {
@@ -43,6 +53,7 @@ type RemoteLeadPump interface {
 
 type RemoteLeadConfig struct {
 	Executions     RemoteLeadExecution
+	Features       RemoteLeadFeatureFinder
 	Worker         RemoteLeadWorker
 	Pump           RemoteLeadPump
 	Lifetime       context.Context
@@ -57,6 +68,7 @@ type RemoteLeadConfig struct {
 // returns the existing attempt instead of launching a duplicate process.
 type RemoteLeadStarter struct {
 	executions     RemoteLeadExecution
+	features       RemoteLeadFeatureFinder
 	worker         RemoteLeadWorker
 	pump           RemoteLeadPump
 	lifetime       context.Context
@@ -69,8 +81,8 @@ type RemoteLeadStarter struct {
 }
 
 func NewRemoteLeadStarter(config RemoteLeadConfig) (*RemoteLeadStarter, error) {
-	if config.Executions == nil || config.Worker == nil || config.Pump == nil {
-		return nil, fmt.Errorf("%w: execution service, worker client, and event pump are required", ErrInvalidRunRequest)
+	if config.Executions == nil || config.Features == nil || config.Worker == nil || config.Pump == nil {
+		return nil, fmt.Errorf("%w: execution service, feature store, worker client, and event pump are required", ErrInvalidRunRequest)
 	}
 	if config.Lifetime == nil {
 		return nil, fmt.Errorf("%w: lifetime context is required", ErrInvalidRunRequest)
@@ -83,7 +95,8 @@ func NewRemoteLeadStarter(config RemoteLeadConfig) (*RemoteLeadStarter, error) {
 		reportError = func(error) {}
 	}
 	return &RemoteLeadStarter{
-		executions: config.Executions, worker: config.Worker, pump: config.Pump,
+		executions: config.Executions, features: config.Features,
+		worker: config.Worker, pump: config.Pump,
 		lifetime: config.Lifetime, agentProfileID: config.AgentProfileID,
 		workspaceID: config.WorkspaceID, reportError: reportError,
 		active: make(map[string]struct{}),
@@ -97,7 +110,7 @@ func (starter *RemoteLeadStarter) Start(
 	featureID string,
 	goal string,
 ) (execution.Run, bool, error) {
-	request, err := starter.request(runID, projectID, featureID, goal)
+	request, err := starter.startRequest(runID, projectID, featureID, goal)
 	if err != nil {
 		return execution.Run{}, false, err
 	}
@@ -128,18 +141,11 @@ func (starter *RemoteLeadStarter) Start(
 func (starter *RemoteLeadStarter) Recover(
 	ctx context.Context,
 	run execution.Run,
-	storedFeature feature.Feature,
+	_ feature.Feature,
 	_ project.RecoveryPolicy,
 ) error {
-	goal := storedFeature.Title
-	if storedFeature.Description != "" {
-		goal += ": " + storedFeature.Description
-	}
-	request, err := starter.request(run.ID, storedFeature.ProjectID, storedFeature.ID, goal)
-	if err != nil {
-		return err
-	}
-	session, err := starter.executions.GetSession(ctx, request.identity.SessionID)
+	sessionID := remoteLeadSessionID(run.ID)
+	session, err := starter.executions.GetSession(ctx, sessionID)
 	if err != nil {
 		return fmt.Errorf("load lead session: %w", err)
 	}
@@ -150,8 +156,25 @@ func (starter *RemoteLeadStarter) Recover(
 	if err != nil {
 		return fmt.Errorf("load lead worker attempt: %w", err)
 	}
-	if checkpoint.AttemptID != request.identity.AttemptID {
-		return fmt.Errorf("%w: stored lead attempt does not match run", ErrInvalidRunRequest)
+	request := remoteLeadRequest{
+		runID: run.ID,
+		identity: workerhttp.MutationIdentity{AttemptReference: workerhttp.AttemptReference{
+			SessionID: session.ID, AttemptID: checkpoint.AttemptID,
+		}},
+	}
+	pending, err := starter.executions.PendingCommandsForSession(ctx, session.ID)
+	if err != nil {
+		return fmt.Errorf("load pending lead commands: %w", err)
+	}
+	if len(pending) > 1 {
+		return fmt.Errorf("%w: lead session has multiple pending replies", ErrInvalidRunRequest)
+	}
+	if len(pending) == 1 {
+		if pending[0].Type != worker.CommandMessage ||
+			replyAttemptID(session.ID, pending[0].ID) != checkpoint.AttemptID {
+			return fmt.Errorf("%w: pending reply does not match the current worker attempt", ErrInvalidRunRequest)
+		}
+		request.commandID = pending[0].ID
 	}
 	if !starter.claim(run.ID) {
 		return fmt.Errorf("%w: %q", ErrRunAlreadyActive, run.ID)
@@ -161,12 +184,13 @@ func (starter *RemoteLeadStarter) Recover(
 }
 
 type remoteLeadRequest struct {
-	runID    string
-	identity workerhttp.MutationIdentity
-	request  workerhttp.PutAttemptRequest
+	runID     string
+	commandID string
+	identity  workerhttp.MutationIdentity
+	request   workerhttp.PutAttemptRequest
 }
 
-func (starter *RemoteLeadStarter) request(
+func (starter *RemoteLeadStarter) startRequest(
 	runID string,
 	projectID string,
 	featureID string,
@@ -200,6 +224,46 @@ func (starter *RemoteLeadStarter) request(
 	return request, nil
 }
 
+func (starter *RemoteLeadStarter) replyRequest(
+	run execution.Run,
+	storedFeature feature.Feature,
+	session execution.Session,
+	command worker.Command,
+) (remoteLeadRequest, error) {
+	attemptID := replyAttemptID(session.ID, command.ID)
+	request := remoteLeadRequest{
+		runID: run.ID, commandID: command.ID,
+		identity: workerhttp.MutationIdentity{
+			AttemptReference: workerhttp.AttemptReference{
+				SessionID: session.ID, AttemptID: attemptID,
+			},
+			IdempotencyKey: attemptID + ":resume",
+		},
+		request: workerhttp.PutAttemptRequest{
+			Mode: workerhttp.AttemptModeResume,
+			Assignment: workerhttp.Assignment{
+				AgentProfileID: starter.agentProfileID,
+				ProjectID:      storedFeature.ProjectID, FeatureID: storedFeature.ID,
+				Role: workerhttp.RoleLead, WorkspaceID: starter.workspaceID,
+			},
+			Instructions:      remoteLeadReplyInstructions(command.Message),
+			ProviderSessionID: session.ProviderSessionID,
+		},
+	}
+	if err := request.request.Validate(request.identity); err != nil {
+		return remoteLeadRequest{}, fmt.Errorf("%w: %v", ErrInvalidRunRequest, err)
+	}
+	return request, nil
+}
+
+func replyAttemptID(sessionID, commandID string) string {
+	// Public idempotency keys are free-form, while worker IDs are bounded to a
+	// small safe character set. A stable digest keeps the attempt ID valid and
+	// guarantees that retrying one reply addresses the same worker attempt.
+	digest := sha256.Sum256([]byte(commandID))
+	return sessionID + ":reply:" + hex.EncodeToString(digest[:16])
+}
+
 func remoteLeadSessionID(runID string) string { return runID + ":lead" }
 
 func remoteLeadInstructions(goal string) string {
@@ -209,6 +273,118 @@ func remoteLeadInstructions(goal string) string {
 		"when useful. Restate your understanding, identify important ambiguity or risk, and " +
 		"ask the user the smallest useful set of questions needed before planning. " +
 		"The user's current goal is:\n\n" + goal
+}
+
+func remoteLeadReplyInstructions(message string) string {
+	return "Continue the same goal-clarification conversation. This is still clarification only: " +
+		"do not modify files, run destructive commands, create commits, or begin implementation. " +
+		"Use the existing conversation context, incorporate the user's reply, and ask only the " +
+		"next questions genuinely needed before planning. The user replied:\n\n" + message
+}
+
+// SendCommand turns a public message command into a new resume attempt. It is
+// intentionally narrower than the simulated controller: this real-agent slice
+// does not claim that Codex can safely pause or accept messages mid-turn.
+func (starter *RemoteLeadStarter) SendCommand(
+	ctx context.Context,
+	sessionID string,
+	command worker.Command,
+) (execution.Command, error) {
+	if err := command.Validate(); err != nil {
+		return execution.Command{}, fmt.Errorf("%w: %v", execution.ErrInvalidCommand, err)
+	}
+	if command.Type != worker.CommandMessage {
+		return execution.Command{}, ErrCommandNotAllowed
+	}
+	if existing, err := starter.executions.GetCommand(ctx, command.ID); err == nil {
+		if existing.SessionID != sessionID || existing.Type != command.Type ||
+			existing.Message != command.Message {
+			return execution.Command{}, execution.ErrCommandConflict
+		}
+		return existing, nil
+	} else if !errors.Is(err, execution.ErrNotFound) {
+		return execution.Command{}, fmt.Errorf("look up lead reply: %w", err)
+	}
+
+	session, err := starter.executions.GetSession(ctx, sessionID)
+	if err != nil {
+		return execution.Command{}, err
+	}
+	if session.AgentID != remoteLeadAgentID || session.Role != worker.RoleLead ||
+		session.Status != execution.SessionStatusWaitingForUser ||
+		session.ProviderSessionID == "" {
+		return execution.Command{}, commandStateError(command.Type, session.Status)
+	}
+	run, err := starter.executions.GetRun(ctx, session.RunID)
+	if err != nil {
+		return execution.Command{}, err
+	}
+	if run.Status != execution.RunStatusWaitingForUser {
+		return execution.Command{}, ErrCommandNotAllowed
+	}
+	storedFeature, err := starter.features.GetByID(ctx, run.FeatureID)
+	if err != nil {
+		return execution.Command{}, fmt.Errorf("load lead feature: %w", err)
+	}
+	if storedFeature.State != feature.StateDraft {
+		return execution.Command{}, ErrCommandNotAllowed
+	}
+	checkpoint, err := starter.executions.GetWorkerAttempt(ctx, session.ID)
+	if err != nil {
+		return execution.Command{}, fmt.Errorf("load prior lead attempt: %w", err)
+	}
+	prior, err := starter.worker.GetAttempt(ctx, workerhttp.AttemptReference{
+		SessionID: session.ID, AttemptID: checkpoint.AttemptID,
+	})
+	if err != nil {
+		return execution.Command{}, fmt.Errorf("confirm prior lead attempt: %w", err)
+	}
+	if err := validateCompletedLeadTurn(session, checkpoint, prior); err != nil {
+		return execution.Command{}, err
+	}
+	request, err := starter.replyRequest(run, storedFeature, session, command)
+	if err != nil {
+		return execution.Command{}, err
+	}
+	if !starter.claim(run.ID) {
+		return execution.Command{}, ErrCommandNotAllowed
+	}
+	result, admitted, err := starter.executions.BeginWorkerTurn(
+		ctx, command, session.ID, checkpoint, request.identity.AttemptID,
+		"The lead agent is responding to the user's message.",
+	)
+	if err != nil {
+		starter.release(run.ID)
+		if errors.Is(err, execution.ErrStateConflict) ||
+			errors.Is(err, execution.ErrWorkerAttemptConflict) {
+			return execution.Command{}, ErrCommandNotAllowed
+		}
+		return execution.Command{}, err
+	}
+	if !admitted {
+		starter.release(run.ID)
+		return result.Command, nil
+	}
+	go starter.launch(request)
+	return result.Command, nil
+}
+
+func validateCompletedLeadTurn(
+	session execution.Session,
+	checkpoint execution.WorkerAttemptCheckpoint,
+	attempt workerhttp.Attempt,
+) error {
+	if err := attempt.Validate(); err != nil {
+		return fmt.Errorf("%w: prior worker attempt is invalid: %v", ErrCommandNotAllowed, err)
+	}
+	if attempt.SessionID != session.ID || attempt.AttemptID != checkpoint.AttemptID ||
+		attempt.State != workerhttp.AttemptStateTerminal || attempt.Result == nil ||
+		attempt.Result.Outcome != workerhttp.OutcomeCompleted ||
+		attempt.LatestEventSequence != checkpoint.LastEventSequence ||
+		attempt.ProviderSessionID != session.ProviderSessionID {
+		return fmt.Errorf("%w: prior lead turn is not safely completed and fully recorded", ErrCommandNotAllowed)
+	}
+	return nil
 }
 
 func (starter *RemoteLeadStarter) launch(request remoteLeadRequest) {
@@ -225,6 +401,10 @@ func (starter *RemoteLeadStarter) launch(request remoteLeadRequest) {
 		}
 		attempt = inspected
 	}
+	if err := starter.applyReply(ctx, request); err != nil {
+		starter.requireReview(ctx, request, err)
+		return
+	}
 	starter.observe(ctx, request, attempt)
 }
 
@@ -240,6 +420,10 @@ func (starter *RemoteLeadStarter) reattach(request remoteLeadRequest) {
 		starter.requireReview(ctx, request, errors.New("worker reports an indeterminate provider attempt"))
 		return
 	}
+	if err := starter.applyReply(ctx, request); err != nil {
+		starter.requireReview(ctx, request, err)
+		return
+	}
 	if err := starter.captureProviderSession(ctx, request.identity.SessionID, attempt); err != nil {
 		starter.requireReview(ctx, request, err)
 		return
@@ -249,7 +433,7 @@ func (starter *RemoteLeadStarter) reattach(request remoteLeadRequest) {
 	// both policy modes.
 	_, err = starter.executions.RecordSessionEventWithID(
 		ctx,
-		request.identity.SessionID+":recovery:existing-attempt",
+		request.identity.AttemptID+":recovery:existing-attempt",
 		request.identity.SessionID,
 		worker.Event{
 			Type: worker.EventRecoveryAssessment,
@@ -264,6 +448,19 @@ func (starter *RemoteLeadStarter) reattach(request remoteLeadRequest) {
 		return
 	}
 	starter.observe(ctx, request, attempt)
+}
+
+func (starter *RemoteLeadStarter) applyReply(ctx context.Context, request remoteLeadRequest) error {
+	if request.commandID == "" {
+		return nil
+	}
+	_, err := starter.executions.ResolveCommand(
+		ctx, request.commandID, execution.CommandStatusApplied, "",
+	)
+	if err != nil {
+		return fmt.Errorf("mark lead reply applied: %w", err)
+	}
+	return nil
 }
 
 func (starter *RemoteLeadStarter) observe(
@@ -402,7 +599,7 @@ func (starter *RemoteLeadStarter) requireReview(
 	text := "The coordinator could not safely confirm the real Codex turn's state. " +
 		"It did not start a replacement agent. Check the worker and approve recovery before continuing."
 	_, _ = starter.executions.RecordSessionEventWithID(
-		ctx, request.identity.SessionID+":recovery:review-required",
+		ctx, request.identity.AttemptID+":recovery:review-required",
 		request.identity.SessionID,
 		worker.Event{
 			Type: worker.EventRecoveryAssessment, Text: text,

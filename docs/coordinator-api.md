@@ -21,7 +21,7 @@ this API beyond the host loopback interface is unsupported.
 | `GET` | `/api/v1/sessions/{sessionID}` | Retrieve a session |
 | `GET` | `/api/v1/sessions/{sessionID}/events` | Retrieve durable observable session activity |
 | `GET` | `/api/v1/sessions/{sessionID}/events/stream` | Replay and stream observable session activity with SSE |
-| `POST` | `/api/v1/sessions/{sessionID}/commands` | Message, pause, continue, or cooperatively stop an active session |
+| `POST` | `/api/v1/sessions/{sessionID}/commands` | Send an idempotent message or supported control to a session |
 
 ## Idempotency
 
@@ -83,11 +83,11 @@ final approving review.
 Setting `COMMITARIUM_RUNNER_MODE=real_codex_lead` connects this endpoint to the
 real Codex worker configured by `COMMITARIUM_CODEX_WORKER_URL`,
 `COMMITARIUM_CODEX_WORKER_TOKEN`, `COMMITARIUM_CODEX_PROFILE_ID`, and
-`COMMITARIUM_CODEX_WORKSPACE_ID`. This opt-in mode currently runs exactly one
-read-only lead turn to clarify the goal. Its response is visible through the
+`COMMITARIUM_CODEX_WORKSPACE_ID`. This opt-in mode runs a persistent read-only
+lead conversation to clarify the goal. Each response is visible through the
 normal session history and SSE endpoints. On success, the run and session both
-become `waiting_for_user` and the feature remains `draft`; sending the user's
-next reply is not implemented yet.
+become `waiting_for_user` and the feature remains `draft` until a later explicit
+goal-acceptance operation is implemented.
 
 A session response exposes its provider session ID as soon as the provider has
 started, rather than only after completion. It also includes
@@ -132,6 +132,15 @@ Supported types are:
 - `continue`, continuing a paused session
 - `stop`, requesting cooperative termination
 
+In `real_codex_lead` mode, only `message` is currently supported, and only when
+the lead session is `waiting_for_user`. The coordinator records the command and
+a `user_message` session event, switches the same run and session back to
+`running`, and assigns a fresh worker attempt in one SQLite transaction. It
+then asks the worker to resume the session's existing provider thread. The API
+normally returns the new command as `pending`; it becomes `applied` after the
+worker confirms that exact resume attempt. Retrying the same body with the same
+idempotency key returns the existing command without another provider turn.
+
 Control commands must omit `message`. Every command requires an
 `Idempotency-Key` header. Forced termination is deliberately outside this
 public coordinator API; the versioned internal worker API assigns it to the
@@ -140,10 +149,9 @@ worker supervisor for one exact execution attempt.
 During recovery, `continue` also acts as approval for a paused recovery
 assessment. Retrying the same approval key remains idempotent.
 
-These controls currently target the in-process simulated sessions. The
-`real_codex_lead` mode exposes activity and state through the same read APIs,
-but its first-turn session is not yet connected to the public command endpoint.
-User replies will be added by the next multi-turn goal-drafting slice.
+Pause, continue, stop, and messages sent while a turn is already running still
+target only the in-process simulated sessions. Safe real-provider mid-turn
+controls remain outside the current lead-conversation slice.
 
 ## Restart recovery
 
@@ -154,12 +162,14 @@ run and session are both `waiting_for_user` is not mistaken for interrupted
 work.
 
 For the real-lead mode, recovery only performs a read-only lookup of the exact
-durable worker attempt. If it still exists and is consistent, the coordinator
-records a `recovery_assessment` event and reattaches to its event stream without
-starting a process. If it is missing, unreachable, contradictory, or
-indeterminate, the run waits for user review and no replacement agent starts.
-The current real-worker restart behavior deliberately marks a previously active
-process indeterminate, so resuming that provider thread remains a later slice.
+durable worker attempt, including an interrupted follow-up turn. If it still
+exists and is consistent, the coordinator records a `recovery_assessment`
+event, marks its pending reply applied once the attempt is confirmed, and
+reattaches to the event stream without starting a process. If it is missing,
+unreachable, contradictory, or indeterminate, the run waits for user review and
+no replacement agent starts. The current real-worker restart behavior
+deliberately marks a previously active process indeterminate, so resuming after
+the worker itself restarts remains a later slice.
 
 In the simulated workflow, a resumed worker receives a concise recovery
 briefing and must inspect before modifying anything. The briefing requires
@@ -178,10 +188,13 @@ The worker publishes a durable `recovery_assessment` session event and pauses:
   pre-restart pause intent, unavailable expected resources, or a goal/scope
   change.
 
-Commands left `pending` by an interruption are not replayed. The coordinator
-marks them rejected with an explicit message that their delivery outcome is
-unknown, and the recovery assessment identifies the ambiguity. A user may
-reissue the intended command under a new idempotency key after inspection.
+In the simulated workflow, commands left `pending` by an interruption are not
+replayed. The coordinator marks them rejected with an explicit message that
+their delivery outcome is unknown, and the recovery assessment identifies the
+ambiguity. A real-lead reply is instead tied to its own durable worker attempt;
+recovery may mark it applied only after that exact attempt is found. A user may
+reissue an uncertain rejected command under a new idempotency key after
+inspection.
 
 The simulated workers have no repository, worktree, test process, or Forgejo
 pull request, so their assessment records those checks as not applicable. The

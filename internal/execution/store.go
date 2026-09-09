@@ -61,6 +61,24 @@ type CommandResolution struct {
 	Error     string
 }
 
+// WorkerTurnAdmission is the complete durable boundary for another provider
+// turn in an existing session. The command, user-visible message, replacement
+// event cursor, and running states must either all commit or all roll back.
+type WorkerTurnAdmission struct {
+	Command                   Command
+	UserEvent                 PendingEvent
+	PreviousAttemptID         string
+	PreviousLastEventSequence int64
+	NextAttempt               WorkerAttemptCheckpoint
+	RunReason                 string
+	OccurredAt                time.Time
+}
+
+type WorkerTurnAdmissionResult struct {
+	Command   Command
+	UserEvent Event
+}
+
 type Store interface {
 	CreateRun(ctx context.Context, run Run) error
 	GetRun(ctx context.Context, id string) (Run, error)
@@ -81,6 +99,7 @@ type Store interface {
 	GetCommand(ctx context.Context, id string) (Command, error)
 	ListPendingCommands(ctx context.Context, sessionID string) ([]Command, error)
 	ResolveCommand(ctx context.Context, resolution CommandResolution) (Command, error)
+	BeginWorkerTurn(ctx context.Context, admission WorkerTurnAdmission) (WorkerTurnAdmissionResult, bool, error)
 }
 
 var ErrAlreadyExists = errors.New("execution record already exists")
