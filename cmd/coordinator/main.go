@@ -20,6 +20,7 @@ import (
 	"github.com/EinarLogiOskars/commitarium/internal/workerhttp"
 	"github.com/EinarLogiOskars/commitarium/internal/workeringest"
 	"github.com/EinarLogiOskars/commitarium/internal/workflow"
+	"github.com/EinarLogiOskars/commitarium/internal/workspace"
 )
 
 const (
@@ -153,6 +154,10 @@ func run(ctx context.Context, coordinatorConfig config) error {
 	projectService := project.NewServiceWithRepositoryVerifier(projectStore, forgejoClient)
 	featureStore := coordinatordatabase.NewFeatureStore(db)
 	featureService := feature.NewService(featureStore, projectService)
+	workspaceStore := coordinatordatabase.NewWorkspaceStore(db)
+	workspaceService := workspace.NewService(
+		workspaceStore, featureService, projectService, forgejoClient,
+	)
 	workflowStore := coordinatordatabase.NewWorkflowStore(db)
 	workflowService := workflow.NewService(workflowStore)
 	executionStore := coordinatordatabase.NewExecutionStore(db)
@@ -221,13 +226,14 @@ func run(ctx context.Context, coordinatorConfig config) error {
 	if recoveredRuns > 0 {
 		log.Printf("recovering %d interrupted workflow(s)", recoveredRuns)
 	}
-	handler := httpapi.New(
+	handler := httpapi.NewWithWorkspaceService(
 		projectService,
 		featureService,
 		workflowService,
 		executionService,
 		sessionController,
 		runStarter,
+		workspaceService,
 	)
 
 	log.Print("Listening...")

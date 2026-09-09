@@ -9,6 +9,7 @@ import (
 	"github.com/EinarLogiOskars/commitarium/internal/project"
 	"github.com/EinarLogiOskars/commitarium/internal/worker"
 	"github.com/EinarLogiOskars/commitarium/internal/workflow"
+	"github.com/EinarLogiOskars/commitarium/internal/workspace"
 )
 
 type ProjectService interface {
@@ -80,6 +81,15 @@ type SessionController interface {
 	) (workflow.Event, error)
 }
 
+type WorkspaceService interface {
+	Get(ctx context.Context, projectID, featureID string) (workspace.Workspace, error)
+	PrepareBranch(
+		ctx context.Context,
+		projectID string,
+		featureID string,
+	) (workspace.Workspace, bool, error)
+}
+
 type API struct {
 	projects   ProjectService
 	features   FeatureService
@@ -87,6 +97,7 @@ type API struct {
 	execution  ExecutionService
 	controller SessionController
 	starter    RunStarter
+	workspaces WorkspaceService
 }
 
 func New(
@@ -97,6 +108,32 @@ func New(
 	controller SessionController,
 	starter RunStarter,
 ) http.Handler {
+	return newAPI(projects, features, workflow, executionService, controller, starter, nil)
+}
+
+func NewWithWorkspaceService(
+	projects ProjectService,
+	features FeatureService,
+	workflow WorkflowService,
+	executionService ExecutionService,
+	controller SessionController,
+	starter RunStarter,
+	workspaces WorkspaceService,
+) http.Handler {
+	return newAPI(
+		projects, features, workflow, executionService, controller, starter, workspaces,
+	)
+}
+
+func newAPI(
+	projects ProjectService,
+	features FeatureService,
+	workflow WorkflowService,
+	executionService ExecutionService,
+	controller SessionController,
+	starter RunStarter,
+	workspaces WorkspaceService,
+) http.Handler {
 	api := &API{
 		projects:   projects,
 		features:   features,
@@ -104,6 +141,7 @@ func New(
 		execution:  executionService,
 		controller: controller,
 		starter:    starter,
+		workspaces: workspaces,
 	}
 
 	mux := http.NewServeMux()
@@ -148,6 +186,16 @@ func New(
 		"POST /api/v1/projects/{projectID}/features/{id}/runs",
 		api.startRunHandler,
 	)
+	if workspaces != nil {
+		mux.HandleFunc(
+			"GET /api/v1/projects/{projectID}/features/{id}/workspace",
+			api.getWorkspaceHandler,
+		)
+		mux.HandleFunc(
+			"PUT /api/v1/projects/{projectID}/features/{id}/workspace",
+			api.prepareWorkspaceHandler,
+		)
+	}
 	mux.HandleFunc("GET /api/v1/runs/{id}", api.getRunHandler)
 	mux.HandleFunc("GET /api/v1/sessions/{id}", api.getSessionHandler)
 	mux.HandleFunc("GET /api/v1/sessions/{id}/events", api.getSessionEventsHandler)
