@@ -22,10 +22,11 @@ read-only goal clarification. The user can exchange multiple visible turns
 with the lead agent while the feature remains a draft, then explicitly accepts
 the final goal to close clarification. After acceptance, the public API can now
 reserve a durable feature workspace identity and create its exact Forgejo branch
-from the repository's recorded default-branch commit. Real file changes, managed
-host checkouts, Claude Code execution, pull-request automation, and the user
-interface remain to be built. Projects can be listed and permanently associated
-with one verified Forgejo repository.
+from the repository's recorded default-branch commit. It also creates an ordinary
+host-visible checkout of that branch that the user and agent container can share.
+Agent-driven file changes, Claude Code execution, pull-request automation, and
+the user interface remain to be built. Projects can be listed and permanently
+associated with one verified Forgejo repository.
 
 ## Architecture
 
@@ -41,8 +42,9 @@ Docker Compose normally runs three local services:
 
 The optional `real-codex` Compose profile adds `codex-worker`. It packages the
 real Codex CLI with the same worker API and keeps its provider login/session
-state, worker journal, and assigned repository workspace in three separate
-mounts. It is intentionally not started by ordinary `docker compose up` yet.
+state and worker journal in separate private volumes. The coordinator and worker
+also share only Commitarium's managed workspace root. It is intentionally not
+started by ordinary `docker compose up` yet.
 
 Forgejo is the agent-managed source of truth for plans, review discussion, and
 the internal pull-request audit trail. The coordinator database stores only the
@@ -72,8 +74,9 @@ opt-in real worker described below.
 
 Repository binding uses a Forgejo access token stored in the local, gitignored
 file `.commitarium/forgejo-token`. This directory is mounted read-only into the
-coordinator. The token is read only when a repository is verified; it is not
-placed in Compose environment variables, SQLite, API responses, or logs.
+coordinator. The token is read when a repository is verified or a managed branch
+is cloned; for Git it is supplied only to that child process. It is not placed in
+Compose environment variables, Git configuration, SQLite, API responses, or logs.
 
 Create a token for the local Forgejo user through **User settings → Applications**
 at `http://127.0.0.1:3001`, give it `write:repository` scope, and save only the
@@ -83,6 +86,14 @@ workflow. The directory and file should be readable only by the current host
 user. `COMMITARIUM_CONFIG_DIR` can point Compose at a different private
 directory. Replacing the file rotates the credential without restarting the
 coordinator.
+
+Managed feature checkouts are written beneath
+`${COMMITARIUM_WORKSPACE_SOURCE:-./.commitarium/workspaces}` on the host. Compose
+mounts that same directory at `/workspaces` in both the coordinator and real
+Codex worker. This is a shared directory, not a copy: a file saved by the user
+is immediately visible to the agent container, and an eventual agent edit will
+be immediately visible to the user. Each feature receives one child directory;
+the user's original upstream checkout is not mounted or changed.
 
 Once a non-empty repository exists in Forgejo, associate it with a coordinator
 project:
@@ -230,7 +241,8 @@ replies are rejected so the next workspace/planning slice has one stable goal
 to use. Retrying the same acceptance is safe; changing an accepted goal will
 require a future explicit reopen operation.
 
-Once that project is bound to a Forgejo repository, prepare the feature's branch:
+Once that project is bound to a Forgejo repository, prepare the feature's branch
+and shared checkout:
 
 ```sh
 curl -i -X PUT \
@@ -239,12 +251,16 @@ curl -i -X PUT \
 
 The coordinator first saves the repository identity, default branch, current
 base commit, and deterministic `commitarium/FEATURE_ID` branch name in SQLite.
-It then creates that branch from the saved commit. A retry uses the same saved
-commit even if the default branch has moved, and safely accepts an already-created
-branch only when it still points to that commit. A disagreement returns a conflict
-for user review. The response is `201 Created` for the first completed preparation
-and `200 OK` for a retry. This operation does not yet clone the host-visible
-checkout or open the draft pull request.
+It then creates that branch from the saved commit and clones it into the feature's
+managed host directory. A retry uses the same saved commit even if the default
+branch has moved, and safely accepts an already-created branch only when it still
+points to that commit. Once the checkout is recorded as ready, retries verify its
+repository, branch, remotes, and ancestry while preserving later commits and
+uncommitted user edits. Missing or contradictory state returns a conflict for
+user review; Commitarium never resets or cleans the directory. The response is
+`201 Created` when the reservation is first created and `200 OK` for a retry.
+This operation does not yet assign the real lead to this checkout, provide its
+temporary Forgejo Git credential, or open the draft pull request.
 
 The versioned [internal worker API](docs/worker-api.md) now has tested client and
 server components for authenticated attempt inspection and control. Its worker
@@ -277,10 +293,11 @@ configured root into one validated, defensively copied launch environment
 before calling an adapter. A real adapter receives an explicit working
 directory and environment instead of inheriting the worker service's process
 variables. The resolved path and environment stay inside the worker and are
-never added to the worker HTTP request or journal. The
-same executable can now select the real Codex adapter. Its opt-in image pins the
-Codex CLI version, runs as a non-root user, and mounts one explicit read-only
-workspace plus separate persistent provider and journal volumes. It does not
+never added to the worker HTTP request or journal. The same executable can now
+select the real Codex adapter. Its opt-in image pins the Codex CLI version, runs
+as a non-root user, mounts the managed workspace root, and keeps separate
+persistent provider and journal volumes. The earlier standalone smoke path still
+mounts its selected repository read-only. It does not
 require a manifest, configuration revision, or materialization digest. Automatic
 provider-credential provisioning and Forgejo repository import remain separate
 future slices. Coordinator wiring is currently limited to the goal-clarification

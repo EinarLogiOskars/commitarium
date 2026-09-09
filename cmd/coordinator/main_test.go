@@ -19,8 +19,10 @@ func TestLoadConfigDefaultsToSimulatedRunner(t *testing.T) {
 		loaded.simulatedStepDelay != 250*time.Millisecond ||
 		loaded.workerRequestTimeout != defaultWorkerRequestTimeout ||
 		loaded.forgejoURL != defaultForgejoURL ||
+		loaded.forgejoHostURL != defaultForgejoHostURL ||
 		loaded.forgejoTokenFile != defaultForgejoTokenFile ||
-		loaded.forgejoTimeout != defaultForgejoTimeout {
+		loaded.forgejoTimeout != defaultForgejoTimeout ||
+		loaded.workspaceRoot != defaultWorkspaceRoot || loaded.gitExecutable != "git" {
 		t.Fatalf("unexpected default config %+v", loaded)
 	}
 }
@@ -31,13 +33,19 @@ func TestLoadConfigAcceptsForgejoOverrides(t *testing.T) {
 		"COMMITARIUM_FORGEJO_URL":             "http://forgejo-test:4000/",
 		"COMMITARIUM_FORGEJO_TOKEN_FILE":      "/private/forgejo-token",
 		"COMMITARIUM_FORGEJO_REQUEST_TIMEOUT": "3s",
+		"COMMITARIUM_FORGEJO_HOST_URL":        "http://localhost:4001",
+		"COMMITARIUM_WORKSPACE_ROOT":          "/managed-workspaces",
+		"COMMITARIUM_GIT_EXECUTABLE":          "/usr/bin/git",
 	}
 	loaded, err := loadConfig(func(name string) string { return values[name] })
 	if err != nil {
 		t.Fatalf("load Forgejo config: %v", err)
 	}
 	if loaded.forgejoURL != "http://forgejo-test:4000/" ||
-		loaded.forgejoTokenFile != "/private/forgejo-token" || loaded.forgejoTimeout != 3*time.Second {
+		loaded.forgejoHostURL != "http://localhost:4001" ||
+		loaded.forgejoTokenFile != "/private/forgejo-token" ||
+		loaded.forgejoTimeout != 3*time.Second ||
+		loaded.workspaceRoot != "/managed-workspaces" || loaded.gitExecutable != "/usr/bin/git" {
 		t.Fatalf("unexpected Forgejo config %+v", loaded)
 	}
 }

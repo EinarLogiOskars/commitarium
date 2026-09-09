@@ -351,6 +351,69 @@ func TestWorkspaceMigrationPreservesExistingFeatures(t *testing.T) {
 	}
 }
 
+func TestCheckoutMigrationPreservesExistingWorkspace(t *testing.T) {
+	db, err := OpenSQLite(t.Context(), filepath.Join(t.TempDir(), "coordinator.db"))
+	if err != nil {
+		t.Fatalf("open SQLite database: %v", err)
+	}
+	defer db.Close()
+	migrations, err := fs.Sub(migrationFiles, "migrations")
+	if err != nil {
+		t.Fatalf("open embedded migrations: %v", err)
+	}
+	provider, err := goose.NewProvider(goose.DialectSQLite3, db, migrations)
+	if err != nil {
+		t.Fatalf("create migration provider: %v", err)
+	}
+	if _, err := provider.UpTo(t.Context(), 10); err != nil {
+		t.Fatalf("migrate version-ten schema: %v", err)
+	}
+	now := time.Date(2026, time.September, 9, 21, 0, 0, 0, time.UTC).Format(time.RFC3339Nano)
+	statements := []string{
+		`INSERT INTO projects (id, name, recovery_policy, created_at)
+		 VALUES ('prj_checkout', 'Checkout project', 'approval_required', ?)`,
+		`INSERT INTO features (
+			id, project_id, title, description, state,
+			accepted_goal, goal_accepted_at, created_at, updated_at
+		 ) VALUES ('fea_checkout', 'prj_checkout', 'Checkout feature', '', 'draft',
+		           'Ship it', ?, ?, ?)`,
+		`INSERT INTO feature_workspaces (
+			feature_id, id, project_id, repository_owner, repository_name,
+			base_branch, branch_name, base_commit_id, status,
+			branch_created_at, created_at, updated_at
+		 ) VALUES ('fea_checkout', 'wsp_fea_checkout', 'prj_checkout', 'owner', 'repository',
+		           'main', 'commitarium/fea_checkout',
+		           '0123456789abcdef0123456789abcdef01234567', 'branch_ready', ?, ?, ?)`,
+	}
+	for index, statement := range statements {
+		arguments := []any{now}
+		if index > 0 {
+			arguments = []any{now, now, now}
+		}
+		if _, err := db.ExecContext(t.Context(), statement, arguments...); err != nil {
+			t.Fatalf("insert version-ten record %d: %v", index, err)
+		}
+	}
+	if err := Migrate(t.Context(), db); err != nil {
+		t.Fatalf("apply checkout migration: %v", err)
+	}
+	stored, err := NewWorkspaceStore(db).GetByFeatureID(t.Context(), "fea_checkout")
+	if err != nil {
+		t.Fatalf("get preserved workspace: %v", err)
+	}
+	if stored.CheckoutReady() || stored.CheckoutRelativePath != "" || stored.CheckoutCreatedAt != nil {
+		t.Fatalf("existing workspace acquired a false checkout: %+v", stored)
+	}
+	if _, err := db.ExecContext(
+		t.Context(),
+		`UPDATE feature_workspaces
+		 SET checkout_relative_path = 'wsp_fea_checkout'
+		 WHERE feature_id = 'fea_checkout'`,
+	); err == nil {
+		t.Fatal("schema accepted a checkout path without its creation time")
+	}
+}
+
 func TestMigrateReturnsCanceledContext(t *testing.T) {
 	db, err := OpenSQLite(
 		t.Context(),

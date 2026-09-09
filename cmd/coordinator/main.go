@@ -14,6 +14,7 @@ import (
 	"github.com/EinarLogiOskars/commitarium/internal/execution"
 	"github.com/EinarLogiOskars/commitarium/internal/feature"
 	"github.com/EinarLogiOskars/commitarium/internal/forgejo"
+	"github.com/EinarLogiOskars/commitarium/internal/gitworkspace"
 	"github.com/EinarLogiOskars/commitarium/internal/httpapi"
 	"github.com/EinarLogiOskars/commitarium/internal/orchestration"
 	"github.com/EinarLogiOskars/commitarium/internal/project"
@@ -28,8 +29,10 @@ const (
 	realCodexLeadRunnerMode     = "real_codex_lead"
 	defaultWorkerRequestTimeout = 10 * time.Second
 	defaultForgejoURL           = "http://forgejo:3000"
+	defaultForgejoHostURL       = "http://127.0.0.1:3001"
 	defaultForgejoTokenFile     = "/run/commitarium-config/forgejo-token"
 	defaultForgejoTimeout       = 10 * time.Second
+	defaultWorkspaceRoot        = "/workspaces"
 )
 
 type config struct {
@@ -42,8 +45,11 @@ type config struct {
 	codexWorkspaceID     string
 	workerRequestTimeout time.Duration
 	forgejoURL           string
+	forgejoHostURL       string
 	forgejoTokenFile     string
 	forgejoTimeout       time.Duration
+	workspaceRoot        string
+	gitExecutable        string
 }
 
 func main() {
@@ -81,11 +87,17 @@ func loadConfig(getenv func(string) string) (config, error) {
 		simulatedStepDelay:   simulatedStepDelay,
 		workerRequestTimeout: defaultWorkerRequestTimeout,
 		forgejoURL:           defaultForgejoURL,
+		forgejoHostURL:       defaultForgejoHostURL,
 		forgejoTokenFile:     defaultForgejoTokenFile,
 		forgejoTimeout:       defaultForgejoTimeout,
+		workspaceRoot:        defaultWorkspaceRoot,
+		gitExecutable:        "git",
 	}
 	if value := strings.TrimSpace(getenv("COMMITARIUM_FORGEJO_URL")); value != "" {
 		loaded.forgejoURL = value
+	}
+	if value := strings.TrimSpace(getenv("COMMITARIUM_FORGEJO_HOST_URL")); value != "" {
+		loaded.forgejoHostURL = value
 	}
 	if value := strings.TrimSpace(getenv("COMMITARIUM_FORGEJO_TOKEN_FILE")); value != "" {
 		loaded.forgejoTokenFile = value
@@ -96,6 +108,12 @@ func loadConfig(getenv func(string) string) (config, error) {
 			return config{}, errors.New("COMMITARIUM_FORGEJO_REQUEST_TIMEOUT must be a positive duration")
 		}
 		loaded.forgejoTimeout = parsed
+	}
+	if value := strings.TrimSpace(getenv("COMMITARIUM_WORKSPACE_ROOT")); value != "" {
+		loaded.workspaceRoot = value
+	}
+	if value := strings.TrimSpace(getenv("COMMITARIUM_GIT_EXECUTABLE")); value != "" {
+		loaded.gitExecutable = value
 	}
 	if runnerMode == realCodexLeadRunnerMode {
 		required := func(name string) (string, error) {
@@ -155,8 +173,18 @@ func run(ctx context.Context, coordinatorConfig config) error {
 	featureStore := coordinatordatabase.NewFeatureStore(db)
 	featureService := feature.NewService(featureStore, projectService)
 	workspaceStore := coordinatordatabase.NewWorkspaceStore(db)
-	workspaceService := workspace.NewService(
-		workspaceStore, featureService, projectService, forgejoClient,
+	checkoutManager, err := gitworkspace.NewManager(gitworkspace.Config{
+		Root:            coordinatorConfig.workspaceRoot,
+		InternalBaseURL: coordinatorConfig.forgejoURL,
+		HostBaseURL:     coordinatorConfig.forgejoHostURL,
+		TokenFile:       coordinatorConfig.forgejoTokenFile,
+		GitExecutable:   coordinatorConfig.gitExecutable,
+	})
+	if err != nil {
+		return fmt.Errorf("create managed-checkout service: %w", err)
+	}
+	workspaceService := workspace.NewServiceWithCheckout(
+		workspaceStore, featureService, projectService, forgejoClient, checkoutManager,
 	)
 	workflowStore := coordinatordatabase.NewWorkflowStore(db)
 	workflowService := workflow.NewService(workflowStore)

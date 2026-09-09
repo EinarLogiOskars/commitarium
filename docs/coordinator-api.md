@@ -19,8 +19,8 @@ this API beyond the host loopback interface is unsupported.
 | `GET` | `/api/v1/projects/{projectID}/features/{featureID}/events` | Retrieve durable workflow history |
 | `GET` | `/api/v1/projects/{projectID}/features/{featureID}/events/stream` | Replay and stream workflow history with SSE |
 | `POST` | `/api/v1/projects/{projectID}/features/{featureID}/runs` | Start the configured workflow asynchronously |
-| `PUT` | `/api/v1/projects/{projectID}/features/{featureID}/workspace` | Reserve the workspace and prepare its exact Forgejo feature branch |
-| `GET` | `/api/v1/projects/{projectID}/features/{featureID}/workspace` | Retrieve the durable workspace and branch identity |
+| `PUT` | `/api/v1/projects/{projectID}/features/{featureID}/workspace` | Prepare the exact Forgejo branch and managed shared checkout |
+| `GET` | `/api/v1/projects/{projectID}/features/{featureID}/workspace` | Retrieve the durable branch and checkout identity |
 | `GET` | `/api/v1/runs/{runID}` | Retrieve run state and its ordered sessions |
 | `GET` | `/api/v1/sessions/{sessionID}` | Retrieve a session |
 | `GET` | `/api/v1/sessions/{sessionID}/events` | Retrieve durable observable session activity |
@@ -95,10 +95,10 @@ repository returns `404`; an empty or archived repository returns `409`; and an
 unavailable Forgejo service or credential returns `503`. This operation does
 not create repositories, branches, workspaces, or pull requests.
 
-## Preparing a feature workspace branch
+## Preparing a feature workspace
 
-After explicit goal acceptance, prepare the Forgejo branch with an empty-body
-request:
+After explicit goal acceptance, prepare the Forgejo branch and shared checkout
+with an empty-body request:
 
 ```http
 PUT /api/v1/projects/prj_example/features/fea_example/workspace
@@ -111,14 +111,25 @@ coordinator reads the bound default branch and saves one immutable reservation
 in SQLite: the project and feature IDs, repository identity, default branch,
 exact base commit, and deterministic `commitarium/{featureID}` branch name. It
 then asks Forgejo to create the branch from that commit and marks the reservation
-`branch_ready` only after Forgejo confirms the exact result.
+`branch_ready` only after Forgejo confirms the exact result. It next clones that
+branch into one child directory beneath the configured managed-workspace root.
+The host and real agent container mount the same root, so both see the same files.
 
-The first completed request returns `201 Created`; later exact retries return
-`200 OK`. If a request was interrupted after the reservation or remote branch
-was created, retrying continues from the durable reservation. An existing branch
-is accepted only when its name and commit match. Any mismatch returns
+The request that creates the durable reservation returns `201 Created`; later
+exact retries return `200 OK`. If a request was interrupted after the reservation
+or remote branch was created, retrying continues from the durable reservation.
+An existing branch is accepted only when its name and commit match. Any mismatch returns
 `409 workspace_conflict` and requires user review rather than silently moving or
 replacing work.
+
+Before recording the checkout as ready, the coordinator requires a clean working
+tree at the saved base commit and configures credential-free remotes for the host
+and Compose network addresses. The Forgejo token is supplied to the clone as a
+temporary Git process setting; it is not written into `.git/config`, SQLite, the
+API response, or logs. After readiness, retries permit both newer commits that
+descend from the base and uncommitted edits. They still verify the exact working
+tree root, feature branch, remotes, and ancestry. Commitarium never resets,
+cleans, deletes, or silently repairs contradictory user work.
 
 ```json
 {
@@ -131,16 +142,23 @@ replacing work.
   "base_commit_id": "0123456789abcdef0123456789abcdef01234567",
   "status": "branch_ready",
   "branch_created_at": "2026-09-09T20:00:01Z",
+  "checkout": {
+    "workspace_id": "wsp_fea_example",
+    "relative_path": "wsp_fea_example",
+    "created_at": "2026-09-09T20:00:02Z"
+  },
   "created_at": "2026-09-09T20:00:00Z",
-  "updated_at": "2026-09-09T20:00:01Z"
+  "updated_at": "2026-09-09T20:00:02Z"
 }
 ```
 
 `GET` on the same route returns the stored resource and does not contact
 Forgejo. Missing accepted goal or repository binding returns `409`; unavailable
-Forgejo returns `503`. This slice reserves and creates the branch only. A later
-slice will create its host-visible checkout, configure scoped Git credentials,
-and open the draft pull request.
+Forgejo or Git checkout preparation returns `503`. A branch or checkout mismatch
+returns `409 workspace_conflict` for user review. The checkout response exposes
+only its stable workspace-relative identity, not a machine-specific absolute
+host path. A later slice will assign agent turns to this checkout, supply scoped
+Git credentials to those processes, and open the draft pull request.
 
 ## Starting and observing a run
 

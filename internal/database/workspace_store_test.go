@@ -51,6 +51,25 @@ func TestWorkspaceStoreReservationAndBranchReadyAreIdempotent(t *testing.T) {
 	if err != nil || !reflect.DeepEqual(loaded, ready) {
 		t.Fatalf("reload ready workspace: workspace=%+v err=%v", loaded, err)
 	}
+	checkoutAt := readyAt.Add(time.Minute)
+	checkout, err := store.MarkCheckoutReady(
+		t.Context(), reservation.FeatureID, reservation.ID, checkoutAt,
+	)
+	if err != nil || checkout.CheckoutRelativePath != reservation.ID ||
+		checkout.CheckoutCreatedAt == nil || !checkout.CheckoutCreatedAt.Equal(checkoutAt) {
+		t.Fatalf("mark checkout ready: workspace=%+v err=%v", checkout, err)
+	}
+	retriedCheckout, err := store.MarkCheckoutReady(
+		t.Context(), reservation.FeatureID, reservation.ID, checkoutAt.Add(time.Hour),
+	)
+	if err != nil || !reflect.DeepEqual(retriedCheckout, checkout) {
+		t.Fatalf("retry checkout ready: workspace=%+v err=%v", retriedCheckout, err)
+	}
+	if _, err := store.MarkCheckoutReady(
+		t.Context(), reservation.FeatureID, "wsp_other", checkoutAt,
+	); !errors.Is(err, workspace.ErrConflict) {
+		t.Fatalf("expected changed checkout path to conflict, got %v", err)
+	}
 }
 
 func TestWorkspaceStoreRejectsChangedReservation(t *testing.T) {
@@ -79,6 +98,11 @@ func TestWorkspaceStoreReturnsNotFound(t *testing.T) {
 		t.Fatalf("expected %v, got %v", workspace.ErrNotFound, err)
 	}
 	if _, err := store.MarkBranchReady(t.Context(), "fea_missing", time.Now().UTC()); !errors.Is(err, workspace.ErrNotFound) {
+		t.Fatalf("expected %v, got %v", workspace.ErrNotFound, err)
+	}
+	if _, err := store.MarkCheckoutReady(
+		t.Context(), "fea_missing", "wsp_missing", time.Now().UTC(),
+	); !errors.Is(err, workspace.ErrNotFound) {
 		t.Fatalf("expected %v, got %v", workspace.ErrNotFound, err)
 	}
 }

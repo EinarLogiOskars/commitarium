@@ -32,7 +32,7 @@ func (service *recordingWorkspaceService) Get(
 	return service.result, service.err
 }
 
-func (service *recordingWorkspaceService) PrepareBranch(
+func (service *recordingWorkspaceService) Prepare(
 	_ context.Context,
 	projectID string,
 	featureID string,
@@ -69,7 +69,8 @@ func TestPrepareWorkspaceCreatesBranchReservation(t *testing.T) {
 		t.Fatalf("decode workspace: %v", err)
 	}
 	if body.ID != stored.ID || body.Branch != stored.Branch ||
-		body.BaseCommitID != stored.BaseCommitID || body.Status != workspace.StatusBranchReady {
+		body.BaseCommitID != stored.BaseCommitID || body.Status != workspace.StatusBranchReady ||
+		body.Checkout == nil || body.Checkout.RelativePath != stored.CheckoutRelativePath {
 		t.Fatalf("unexpected workspace response %+v", body)
 	}
 }
@@ -114,6 +115,8 @@ func TestPrepareWorkspaceMapsSafeErrors(t *testing.T) {
 		{name: "feature already advanced", err: workspace.ErrFeatureNotDraft, status: http.StatusConflict, code: "workspace_preparation_not_allowed"},
 		{name: "unbound repository", err: workspace.ErrProjectRepositoryNotBound, status: http.StatusConflict, code: "forgejo_repository_not_bound"},
 		{name: "branch conflict", err: workspace.ErrBranchConflict, status: http.StatusConflict, code: "workspace_conflict"},
+		{name: "checkout conflict", err: workspace.ErrCheckoutConflict, status: http.StatusConflict, code: "workspace_conflict"},
+		{name: "checkout unavailable", err: workspace.ErrCheckoutUnavailable, status: http.StatusServiceUnavailable, code: "checkout_unavailable"},
 		{name: "Forgejo unavailable", err: project.ErrForgejoUnavailable, status: http.StatusServiceUnavailable, code: "forgejo_unavailable"},
 		{name: "internal", err: errors.New("boom"), status: http.StatusInternalServerError, code: "internal_error"},
 	}
@@ -144,12 +147,14 @@ func TestPrepareWorkspaceMapsSafeErrors(t *testing.T) {
 func testWorkspaceResponseValue() workspace.Workspace {
 	createdAt := time.Date(2026, time.September, 9, 20, 0, 0, 0, time.UTC)
 	readyAt := createdAt.Add(time.Second)
+	checkoutAt := readyAt.Add(time.Second)
 	return workspace.Workspace{
 		ID: "wsp_fea_test", ProjectID: "prj_test", FeatureID: "fea_test",
 		RepositoryOwner: "owner", RepositoryName: "repository",
 		BaseBranch: "main", Branch: "commitarium/fea_test",
 		BaseCommitID: "0123456789abcdef0123456789abcdef01234567",
 		Status:       workspace.StatusBranchReady, BranchCreatedAt: &readyAt,
-		CreatedAt: createdAt, UpdatedAt: readyAt,
+		CheckoutRelativePath: "wsp_fea_test", CheckoutCreatedAt: &checkoutAt,
+		CreatedAt: createdAt, UpdatedAt: checkoutAt,
 	}
 }

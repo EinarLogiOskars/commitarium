@@ -13,17 +13,24 @@ import (
 )
 
 type workspaceResponse struct {
-	ID              string           `json:"id"`
-	ProjectID       string           `json:"project_id"`
-	FeatureID       string           `json:"feature_id"`
-	Repository      repositoryRef    `json:"repository"`
-	BaseBranch      string           `json:"base_branch"`
-	Branch          string           `json:"branch"`
-	BaseCommitID    string           `json:"base_commit_id"`
-	Status          workspace.Status `json:"status"`
-	BranchCreatedAt *time.Time       `json:"branch_created_at,omitempty"`
-	CreatedAt       time.Time        `json:"created_at"`
-	UpdatedAt       time.Time        `json:"updated_at"`
+	ID              string            `json:"id"`
+	ProjectID       string            `json:"project_id"`
+	FeatureID       string            `json:"feature_id"`
+	Repository      repositoryRef     `json:"repository"`
+	BaseBranch      string            `json:"base_branch"`
+	Branch          string            `json:"branch"`
+	BaseCommitID    string            `json:"base_commit_id"`
+	Status          workspace.Status  `json:"status"`
+	BranchCreatedAt *time.Time        `json:"branch_created_at,omitempty"`
+	Checkout        *checkoutResponse `json:"checkout,omitempty"`
+	CreatedAt       time.Time         `json:"created_at"`
+	UpdatedAt       time.Time         `json:"updated_at"`
+}
+
+type checkoutResponse struct {
+	WorkspaceID  string    `json:"workspace_id"`
+	RelativePath string    `json:"relative_path"`
+	CreatedAt    time.Time `json:"created_at"`
 }
 
 type repositoryRef struct {
@@ -53,7 +60,7 @@ func (api *API) getWorkspaceHandler(w http.ResponseWriter, r *http.Request) {
 func (api *API) prepareWorkspaceHandler(w http.ResponseWriter, r *http.Request) {
 	projectID := r.PathValue("projectID")
 	featureID := r.PathValue("id")
-	prepared, created, err := api.workspaces.PrepareBranch(r.Context(), projectID, featureID)
+	prepared, created, err := api.workspaces.Prepare(r.Context(), projectID, featureID)
 	if err != nil {
 		switch {
 		case errors.Is(err, feature.ErrNotFound), errors.Is(err, project.ErrNotFound):
@@ -66,8 +73,11 @@ func (api *API) prepareWorkspaceHandler(w http.ResponseWriter, r *http.Request) 
 			writeError(w, http.StatusConflict, "forgejo_repository_not_bound", "project must be bound to a Forgejo repository before preparing its workspace")
 		case errors.Is(err, workspace.ErrBranchNotFound), errors.Is(err, project.ErrForgejoRepositoryNotReady):
 			writeError(w, http.StatusConflict, "forgejo_repository_not_ready", "the bound Forgejo repository or its default branch is not ready")
-		case errors.Is(err, workspace.ErrConflict), errors.Is(err, workspace.ErrBranchConflict):
-			writeError(w, http.StatusConflict, "workspace_conflict", "the stored workspace and Forgejo branch disagree; user review is required")
+		case errors.Is(err, workspace.ErrConflict), errors.Is(err, workspace.ErrBranchConflict),
+			errors.Is(err, workspace.ErrCheckoutConflict):
+			writeError(w, http.StatusConflict, "workspace_conflict", "the stored workspace, Forgejo branch, or managed checkout disagrees; user review is required")
+		case errors.Is(err, workspace.ErrCheckoutUnavailable):
+			writeError(w, http.StatusServiceUnavailable, "checkout_unavailable", "the managed checkout cannot be prepared right now")
 		case errors.Is(err, project.ErrForgejoUnavailable):
 			writeError(w, http.StatusServiceUnavailable, "forgejo_unavailable", "Forgejo workspace preparation is unavailable")
 		default:
@@ -93,7 +103,7 @@ func writeWorkspaceJSON(w http.ResponseWriter, status int, stored workspace.Work
 }
 
 func newWorkspaceResponse(stored workspace.Workspace) workspaceResponse {
-	return workspaceResponse{
+	response := workspaceResponse{
 		ID: stored.ID, ProjectID: stored.ProjectID, FeatureID: stored.FeatureID,
 		Repository: repositoryRef{Owner: stored.RepositoryOwner, Name: stored.RepositoryName},
 		BaseBranch: stored.BaseBranch, Branch: stored.Branch,
@@ -101,4 +111,11 @@ func newWorkspaceResponse(stored workspace.Workspace) workspaceResponse {
 		BranchCreatedAt: stored.BranchCreatedAt,
 		CreatedAt:       stored.CreatedAt, UpdatedAt: stored.UpdatedAt,
 	}
+	if stored.CheckoutReady() {
+		response.Checkout = &checkoutResponse{
+			WorkspaceID: stored.ID, RelativePath: stored.CheckoutRelativePath,
+			CreatedAt: *stored.CheckoutCreatedAt,
+		}
+	}
+	return response
 }

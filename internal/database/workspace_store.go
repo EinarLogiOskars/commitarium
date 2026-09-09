@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/EinarLogiOskars/commitarium/internal/workspace"
@@ -28,7 +29,8 @@ func (store *WorkspaceStore) GetByFeatureID(
 		ctx,
 		`SELECT id, project_id, feature_id, repository_owner, repository_name,
 		        base_branch, branch_name, base_commit_id, status,
-		        branch_created_at, created_at, updated_at
+		        branch_created_at, checkout_relative_path, checkout_created_at,
+		        created_at, updated_at
 		 FROM feature_workspaces WHERE feature_id = ?`,
 		featureID,
 	))
@@ -56,8 +58,9 @@ func (store *WorkspaceStore) Reserve(
 		`INSERT INTO feature_workspaces (
 		    id, project_id, feature_id, repository_owner, repository_name,
 		    base_branch, branch_name, base_commit_id, status,
-		    branch_created_at, created_at, updated_at
-		 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)
+		    branch_created_at, checkout_relative_path, checkout_created_at,
+		    created_at, updated_at
+		 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, '', NULL, ?, ?)
 		 ON CONFLICT(feature_id) DO NOTHING`,
 		reservation.ID, reservation.ProjectID, reservation.FeatureID,
 		reservation.RepositoryOwner, reservation.RepositoryName,
@@ -102,7 +105,8 @@ func (store *WorkspaceStore) MarkBranchReady(
 		ctx,
 		`SELECT id, project_id, feature_id, repository_owner, repository_name,
 		        base_branch, branch_name, base_commit_id, status,
-		        branch_created_at, created_at, updated_at
+		        branch_created_at, checkout_relative_path, checkout_created_at,
+		        created_at, updated_at
 		 FROM feature_workspaces WHERE feature_id = ?`,
 		featureID,
 	))
@@ -146,6 +150,76 @@ func (store *WorkspaceStore) MarkBranchReady(
 	return stored, nil
 }
 
+func (store *WorkspaceStore) MarkCheckoutReady(
+	ctx context.Context,
+	featureID string,
+	relativePath string,
+	readyAt time.Time,
+) (workspace.Workspace, error) {
+	if relativePath == "" || relativePath != strings.TrimSpace(relativePath) {
+		return workspace.Workspace{}, errors.New("checkout relative path is required and must be trimmed")
+	}
+	tx, err := store.db.BeginTx(ctx, nil)
+	if err != nil {
+		return workspace.Workspace{}, fmt.Errorf("begin checkout-ready update: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	stored, err := scanWorkspace(tx.QueryRowContext(
+		ctx,
+		`SELECT id, project_id, feature_id, repository_owner, repository_name,
+		        base_branch, branch_name, base_commit_id, status,
+		        branch_created_at, checkout_relative_path, checkout_created_at,
+		        created_at, updated_at
+		 FROM feature_workspaces WHERE feature_id = ?`,
+		featureID,
+	))
+	if errors.Is(err, sql.ErrNoRows) {
+		return workspace.Workspace{}, workspace.ErrNotFound
+	}
+	if err != nil {
+		return workspace.Workspace{}, fmt.Errorf("select workspace for checkout-ready update: %w", err)
+	}
+	if stored.CheckoutReady() {
+		if stored.CheckoutRelativePath != relativePath {
+			return workspace.Workspace{}, workspace.ErrConflict
+		}
+		return stored, nil
+	}
+	if stored.Status != workspace.StatusBranchReady {
+		return workspace.Workspace{}, workspace.ErrConflict
+	}
+	if readyAt.IsZero() || readyAt.Before(*stored.BranchCreatedAt) {
+		return workspace.Workspace{}, errors.New("checkout readiness cannot precede branch readiness")
+	}
+	result, err := tx.ExecContext(
+		ctx,
+		`UPDATE feature_workspaces
+		 SET checkout_relative_path = ?, checkout_created_at = ?, updated_at = ?
+		 WHERE feature_id = ? AND status = ?
+		   AND checkout_relative_path = '' AND checkout_created_at IS NULL`,
+		relativePath, formatWorkspaceTime(readyAt), formatWorkspaceTime(readyAt),
+		featureID, workspace.StatusBranchReady,
+	)
+	if err != nil {
+		return workspace.Workspace{}, fmt.Errorf("mark workspace checkout ready: %w", err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return workspace.Workspace{}, fmt.Errorf("read checkout-ready update row count: %w", err)
+	}
+	if rowsAffected != 1 {
+		return workspace.Workspace{}, workspace.ErrConflict
+	}
+	if err := tx.Commit(); err != nil {
+		return workspace.Workspace{}, fmt.Errorf("commit checkout-ready update: %w", err)
+	}
+	readyAt = readyAt.UTC()
+	stored.CheckoutRelativePath = relativePath
+	stored.CheckoutCreatedAt = &readyAt
+	stored.UpdatedAt = readyAt
+	return stored, nil
+}
+
 type workspaceScanner interface {
 	Scan(dest ...any) error
 }
@@ -154,13 +228,15 @@ func scanWorkspace(scanner workspaceScanner) (workspace.Workspace, error) {
 	stored := workspace.Workspace{}
 	var status string
 	var branchCreatedAt sql.NullString
+	var checkoutCreatedAt sql.NullString
 	var createdAt string
 	var updatedAt string
 	if err := scanner.Scan(
 		&stored.ID, &stored.ProjectID, &stored.FeatureID,
 		&stored.RepositoryOwner, &stored.RepositoryName,
 		&stored.BaseBranch, &stored.Branch, &stored.BaseCommitID,
-		&status, &branchCreatedAt, &createdAt, &updatedAt,
+		&status, &branchCreatedAt, &stored.CheckoutRelativePath,
+		&checkoutCreatedAt, &createdAt, &updatedAt,
 	); err != nil {
 		return workspace.Workspace{}, err
 	}
@@ -180,6 +256,13 @@ func scanWorkspace(scanner workspaceScanner) (workspace.Workspace, error) {
 			return workspace.Workspace{}, fmt.Errorf("parse branch creation time: %w", err)
 		}
 		stored.BranchCreatedAt = &parsed
+	}
+	if checkoutCreatedAt.Valid {
+		parsed, err := time.Parse(time.RFC3339Nano, checkoutCreatedAt.String)
+		if err != nil {
+			return workspace.Workspace{}, fmt.Errorf("parse checkout creation time: %w", err)
+		}
+		stored.CheckoutCreatedAt = &parsed
 	}
 	if err := stored.Validate(); err != nil {
 		return workspace.Workspace{}, fmt.Errorf("validate stored workspace: %w", err)

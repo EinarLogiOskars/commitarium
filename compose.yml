@@ -10,7 +10,9 @@ services:
       COMMITARIUM_RUNNER_MODE: ${COMMITARIUM_RUNNER_MODE:-simulated}
       COMMITARIUM_SIMULATED_STEP_DELAY: ${COMMITARIUM_SIMULATED_STEP_DELAY:-250ms}
       COMMITARIUM_FORGEJO_URL: http://forgejo:3000
+      COMMITARIUM_FORGEJO_HOST_URL: http://127.0.0.1:${COMMITARIUM_FORGEJO_PORT:-3001}
       COMMITARIUM_FORGEJO_TOKEN_FILE: /run/commitarium-config/forgejo-token
+      COMMITARIUM_WORKSPACE_ROOT: /workspaces
       COMMITARIUM_CODEX_WORKER_URL: http://codex-worker:8081
       COMMITARIUM_CODEX_WORKER_TOKEN: ${COMMITARIUM_CODEX_WORKER_TOKEN:-commitarium-local-codex-worker}
       COMMITARIUM_CODEX_PROFILE_ID: ${COMMITARIUM_CODEX_PROFILE_ID:-profile_local_codex}
@@ -18,6 +20,7 @@ services:
     volumes:
       - coordinator-data:/var/lib/commitarium
       - ${COMMITARIUM_CONFIG_DIR:-./.commitarium}:/run/commitarium-config:ro
+      - ${COMMITARIUM_WORKSPACE_SOURCE:-./.commitarium/workspaces}:/workspaces
     ports:
       - "127.0.0.1:${COMMITARIUM_COORDINATOR_PORT:-8080}:8080"
 
@@ -57,6 +60,7 @@ services:
     volumes:
       - codex-worker-journal:/var/lib/commitarium-worker
       - codex-profile:/var/lib/commitarium-provider
+      - ${COMMITARIUM_WORKSPACE_SOURCE:-./.commitarium/workspaces}:/workspaces
       - ${COMMITARIUM_CODEX_WORKSPACE_SOURCE:-.}:/workspaces/${COMMITARIUM_CODEX_WORKSPACE_ID:-workspace_smoke}:ro
     expose:
       - "8081"
@@ -72,7 +76,7 @@ services:
     volumes:
       - forgejo-data:/var/lib/gitea
     ports:
-      - "127.0.0.1:3001:3000"
+      - "127.0.0.1:${COMMITARIUM_FORGEJO_PORT:-3001}:3000"
 
 volumes:
   coordinator-data:
