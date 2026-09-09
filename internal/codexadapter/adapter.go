@@ -30,8 +30,6 @@ type Config struct {
 	Supervisor      *processsupervisor.Supervisor
 	Executable      string
 	Arguments       []string
-	Directory       string
-	Environment     []string
 	Model           string
 	ApprovalPolicy  string
 	Sandbox         string
@@ -44,8 +42,6 @@ type Adapter struct {
 	supervisor      *processsupervisor.Supervisor
 	executable      string
 	arguments       []string
-	directory       string
-	environment     []string
 	model           string
 	approvalPolicy  string
 	sandbox         string
@@ -109,8 +105,6 @@ func New(config Config) (*Adapter, error) {
 		supervisor:      config.Supervisor,
 		executable:      executable,
 		arguments:       arguments,
-		directory:       config.Directory,
-		environment:     append([]string(nil), config.Environment...),
 		model:           config.Model,
 		approvalPolicy:  approvalPolicy,
 		sandbox:         sandbox,
@@ -130,6 +124,9 @@ func (adapter *Adapter) Start(
 	if err := request.Validate(); err != nil {
 		return nil, err
 	}
+	if request.LaunchEnvironment.IsZero() {
+		return nil, fmt.Errorf("%w: launch environment is required", worker.ErrInvalidLaunchEnvironment)
+	}
 	return adapter.launch(ctx, request, "", request.Instructions)
 }
 
@@ -142,6 +139,9 @@ func (adapter *Adapter) Resume(
 	}
 	if err := request.Validate(); err != nil {
 		return nil, err
+	}
+	if request.LaunchEnvironment.IsZero() {
+		return nil, fmt.Errorf("%w: launch environment is required", worker.ErrInvalidLaunchEnvironment)
 	}
 	prompt := request.Recovery.Briefing
 	if strings.TrimSpace(prompt) == "" {
@@ -204,8 +204,8 @@ func (adapter *Adapter) launch(
 		AttemptID:   request.AttemptID,
 		Executable:  adapter.executable,
 		Arguments:   append([]string(nil), adapter.arguments...),
-		Directory:   adapter.directory,
-		Environment: append([]string(nil), adapter.environment...),
+		Directory:   request.LaunchEnvironment.WorkingDirectory,
+		Environment: request.LaunchEnvironment.Clone().Variables,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("start Codex app-server: %w", err)
@@ -236,7 +236,7 @@ func (adapter *Adapter) launch(
 	method := "thread/start"
 	params := threadParams{
 		Model:          adapter.model,
-		CWD:            adapter.directory,
+		CWD:            request.LaunchEnvironment.WorkingDirectory,
 		ApprovalPolicy: adapter.approvalPolicy,
 		Sandbox:        adapter.sandbox,
 		ServiceName:    "commitarium",

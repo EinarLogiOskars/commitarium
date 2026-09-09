@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -87,6 +89,35 @@ func TestNormalizeSimulatedEventPreservesRecoveryAssessment(t *testing.T) {
 	}
 	if _, err := normalizeSimulatedEvent(t.Context(), worker.Event{Type: "unknown", Text: "bad"}); err == nil {
 		t.Fatal("expected unknown simulated event type to fail")
+	}
+}
+
+func TestSimulatedEnvironmentResolverPreservesAssignmentWithoutInheritingVariables(t *testing.T) {
+	assignment := workerhttp.Assignment{
+		AgentProfileID: "profile_test", ProjectID: "prj_test", FeatureID: "fea_test",
+		Role: workerhttp.RoleCoder, WorkspaceID: "workspace_test", ConfigurationRevision: 1,
+		MaterializationDigest: "sha256:" + strings.Repeat("a", 64),
+	}
+	directory := t.TempDir()
+	resolved, err := simulatedEnvironmentResolver(directory).Resolve(t.Context(), assignment)
+	if err != nil {
+		t.Fatalf("resolve simulated environment: %v", err)
+	}
+	if resolved.AgentProfileID != assignment.AgentProfileID ||
+		resolved.ProjectID != assignment.ProjectID ||
+		resolved.FeatureID != assignment.FeatureID ||
+		resolved.Role != worker.RoleCoder ||
+		resolved.WorkspaceID != assignment.WorkspaceID ||
+		resolved.ConfigurationRevision != assignment.ConfigurationRevision ||
+		resolved.MaterializationDigest != assignment.MaterializationDigest ||
+		resolved.WorkingDirectory != directory || resolved.Variables == nil ||
+		len(resolved.Variables) != 0 {
+		t.Fatalf("simulated launch environment = %+v", resolved)
+	}
+	cancelled, cancel := context.WithCancel(t.Context())
+	cancel()
+	if _, err := simulatedEnvironmentResolver(directory).Resolve(cancelled, assignment); err == nil {
+		t.Fatal("expected cancelled simulated resolution to fail")
 	}
 }
 

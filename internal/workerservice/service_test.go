@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -131,6 +132,146 @@ func TestJournalBackedServiceRunsControlsAndReplaysThroughHTTP(t *testing.T) {
 	}
 	if err := reopenedProvider.Advance(t.Context(), identity.SessionID); !errors.Is(err, worker.ErrSessionNotFound) {
 		t.Fatalf("reopened retry launched a provider session: %v", err)
+	}
+}
+
+func TestJournalBackedServicePassesExactFrozenEnvironmentToProvider(t *testing.T) {
+	root := t.TempDir()
+	workspace := filepath.Join(root, "workspace")
+	if err := os.Mkdir(workspace, 0o700); err != nil {
+		t.Fatalf("create workspace: %v", err)
+	}
+	request := validPutRequest()
+	variables := []string{"PATH=/usr/bin:/bin", "CODEX_HOME=/var/lib/commitarium/provider"}
+	resolver, err := NewImmutableEnvironmentResolver(ImmutableEnvironmentResolverConfig{
+		AgentProfileID: request.Assignment.AgentProfileID,
+		WorkspaceRoot:  root,
+		Materializations: []MaterializedEnvironment{{
+			Assignment: request.Assignment, WorkingDirectory: workspace, Variables: variables,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("create environment resolver: %v", err)
+	}
+	variables[0] = "PATH=/changed-after-resolver-creation"
+	provider := &recordingAdapter{providerSessionID: "codex_thread_environment"}
+	db, journal := openJournal(t, filepath.Join(t.TempDir(), "worker.db"))
+	defer db.Close()
+	lifetime, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	service, _, err := New(t.Context(), Config{
+		Journal: journal, Provider: provider, EnvironmentResolver: resolver,
+		Normalizer: safeScriptNormalizer(), Lifetime: lifetime,
+	})
+	if err != nil {
+		t.Fatalf("create worker service: %v", err)
+	}
+	identity := validLaunchIdentity("ses_environment", "att_environment", "launch_environment")
+	if _, created, err := service.PutAttempt(t.Context(), identity, request); err != nil || !created {
+		t.Fatalf("launch provider: created=%t error=%v", created, err)
+	}
+
+	observed := provider.lastRequest(t)
+	want := launchEnvironment(request.Assignment, observed.LaunchEnvironment.WorkingDirectory, []string{
+		"PATH=/usr/bin:/bin", "CODEX_HOME=/var/lib/commitarium/provider",
+	})
+	if !observed.LaunchEnvironment.Equal(want) ||
+		observed.FeatureID != request.Assignment.FeatureID ||
+		observed.Role != worker.Role(request.Assignment.Role) {
+		t.Fatalf("provider request = %+v, want launch environment %+v", observed, want)
+	}
+	observed.LaunchEnvironment.Variables[0] = "PATH=/mutated-by-provider-test"
+	again, err := resolver.Resolve(t.Context(), request.Assignment)
+	if err != nil || again.Variables[0] != "PATH=/usr/bin:/bin" {
+		t.Fatalf("provider could mutate resolver state: environment=%+v error=%v", again, err)
+	}
+}
+
+func TestJournalBackedServiceRecordsEnvironmentResolutionFailuresBeforeProviderLaunch(t *testing.T) {
+	tests := []struct {
+		name       string
+		resolveErr error
+		code       workerhttp.ErrorCode
+		retryable  bool
+	}{
+		{name: "profile unavailable", resolveErr: ErrProfileUnavailable, code: workerhttp.ErrorProfileUnavailable, retryable: true},
+		{name: "workspace unavailable", resolveErr: ErrWorkspaceUnavailable, code: workerhttp.ErrorWorkspaceUnavailable, retryable: true},
+		{name: "configuration mismatch", resolveErr: ErrConfigurationMismatch, code: workerhttp.ErrorConfigurationMismatch},
+		{name: "unexpected resolver failure", resolveErr: errors.New("unexpected resolver failure"), code: workerhttp.ErrorInternal, retryable: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			provider := &recordingAdapter{providerSessionID: "must_not_start"}
+			resolveCalls := 0
+			resolver := EnvironmentResolverFunc(func(
+				context.Context,
+				workerhttp.Assignment,
+			) (worker.LaunchEnvironment, error) {
+				resolveCalls++
+				return worker.LaunchEnvironment{}, test.resolveErr
+			})
+			db, journal := openJournal(t, filepath.Join(t.TempDir(), "worker.db"))
+			defer db.Close()
+			lifetime, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			service, _, err := New(t.Context(), Config{
+				Journal: journal, Provider: provider, EnvironmentResolver: resolver,
+				Normalizer: safeScriptNormalizer(), Lifetime: lifetime,
+			})
+			if err != nil {
+				t.Fatalf("create worker service: %v", err)
+			}
+			identity := validLaunchIdentity("ses_environment_failure", "att_environment_failure", "launch_environment_failure")
+			request := validPutRequest()
+			attempt, created, err := service.PutAttempt(t.Context(), identity, request)
+			if err != nil || !created || attempt.State != workerhttp.AttemptStateTerminal ||
+				attempt.Result == nil || attempt.Result.Error == nil ||
+				attempt.Result.Error.Code != test.code ||
+				attempt.Result.Error.Retryable != test.retryable {
+				t.Fatalf("failed launch attempt=%+v created=%t error=%v", attempt, created, err)
+			}
+			if provider.callCount() != 0 || resolveCalls != 1 {
+				t.Fatalf("provider calls=%d resolver calls=%d", provider.callCount(), resolveCalls)
+			}
+			replayed, created, err := service.PutAttempt(t.Context(), identity, request)
+			if err != nil || created || !reflect.DeepEqual(replayed, attempt) || resolveCalls != 1 {
+				t.Fatalf("failure replay=%+v created=%t calls=%d error=%v", replayed, created, resolveCalls, err)
+			}
+		})
+	}
+}
+
+func TestJournalBackedServiceRejectsResolverThatReturnsDifferentAssignment(t *testing.T) {
+	request := validPutRequest()
+	directory := t.TempDir()
+	resolver := EnvironmentResolverFunc(func(
+		context.Context,
+		workerhttp.Assignment,
+	) (worker.LaunchEnvironment, error) {
+		different := request.Assignment
+		different.ConfigurationRevision++
+		return launchEnvironment(different, directory, []string{}), nil
+	})
+	provider := &recordingAdapter{providerSessionID: "must_not_start"}
+	db, journal := openJournal(t, filepath.Join(t.TempDir(), "worker.db"))
+	defer db.Close()
+	lifetime, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	service, _, err := New(t.Context(), Config{
+		Journal: journal, Provider: provider, EnvironmentResolver: resolver,
+		Normalizer: safeScriptNormalizer(), Lifetime: lifetime,
+	})
+	if err != nil {
+		t.Fatalf("create worker service: %v", err)
+	}
+	attempt, created, err := service.PutAttempt(
+		t.Context(),
+		validLaunchIdentity("ses_wrong_environment", "att_wrong_environment", "launch_wrong_environment"),
+		request,
+	)
+	if err != nil || !created || attempt.Result == nil || attempt.Result.Error == nil ||
+		attempt.Result.Error.Code != workerhttp.ErrorConfigurationMismatch || provider.callCount() != 0 {
+		t.Fatalf("mismatched resolver attempt=%+v created=%t provider calls=%d error=%v", attempt, created, provider.callCount(), err)
 	}
 }
 
@@ -316,7 +457,8 @@ func TestJournalBackedServiceFailsClosedWhenNormalizationFails(t *testing.T) {
 	lifetime, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	service, _, err := New(t.Context(), Config{
-		Journal: journal, Provider: provider, Lifetime: lifetime, Now: clock.Now,
+		Journal: journal, Provider: provider, EnvironmentResolver: testEnvironmentResolver(t),
+		Lifetime: lifetime, Now: clock.Now,
 		Normalizer: NormalizerFunc(func(context.Context, worker.Event) (NormalizedEvent, error) {
 			return NormalizedEvent{}, errors.New("redaction unavailable")
 		}),
@@ -365,8 +507,8 @@ func TestJournalBackedServiceFencesProviderStartedWithoutIdentity(t *testing.T) 
 	lifetime, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	service, _, err := New(t.Context(), Config{
-		Journal: journal, Provider: provider, Normalizer: safeScriptNormalizer(),
-		Lifetime: lifetime, Now: clock.Now,
+		Journal: journal, Provider: provider, EnvironmentResolver: testEnvironmentResolver(t),
+		Normalizer: safeScriptNormalizer(), Lifetime: lifetime, Now: clock.Now,
 	})
 	if err != nil {
 		t.Fatalf("create service: %v", err)
@@ -429,8 +571,8 @@ func newHTTPHarnessWithCapabilities(
 	db, journal := openJournal(t, path)
 	lifetime, cancel := context.WithCancel(context.Background())
 	service, recovery, err := New(t.Context(), Config{
-		Journal: journal, Provider: provider, Normalizer: safeScriptNormalizer(),
-		Lifetime: lifetime, Now: clock.Now,
+		Journal: journal, Provider: provider, EnvironmentResolver: testEnvironmentResolver(t),
+		Normalizer: safeScriptNormalizer(), Lifetime: lifetime, Now: clock.Now,
 	})
 	if err != nil {
 		cancel()
@@ -502,6 +644,20 @@ func safeScriptNormalizer() Normalizer {
 			}
 		}
 		return normalized, nil
+	})
+}
+
+func testEnvironmentResolver(t *testing.T) EnvironmentResolver {
+	t.Helper()
+	directory := t.TempDir()
+	return EnvironmentResolverFunc(func(
+		ctx context.Context,
+		assignment workerhttp.Assignment,
+	) (worker.LaunchEnvironment, error) {
+		if err := ctx.Err(); err != nil {
+			return worker.LaunchEnvironment{}, err
+		}
+		return launchEnvironment(assignment, directory, []string{"PATH=/usr/bin:/bin"}), nil
 	})
 }
 
@@ -639,6 +795,48 @@ type identityOverrideAdapter struct {
 
 type immediateResultAdapter struct {
 	result worker.Result
+}
+
+type recordingAdapter struct {
+	mu                sync.Mutex
+	requests          []worker.SessionRequest
+	providerSessionID string
+}
+
+func (adapter *recordingAdapter) Start(
+	_ context.Context,
+	request worker.SessionRequest,
+) (worker.Session, error) {
+	adapter.mu.Lock()
+	adapter.requests = append(adapter.requests, request.Clone())
+	adapter.mu.Unlock()
+	return newImmediateResultSession(worker.Result{
+		Outcome: worker.OutcomeCompleted, Disposition: worker.DispositionSucceeded,
+		ProviderSessionID: adapter.providerSessionID, Summary: "recording adapter completed",
+	}), nil
+}
+
+func (adapter *recordingAdapter) Resume(
+	_ context.Context,
+	request worker.ResumeRequest,
+) (worker.Session, error) {
+	return adapter.Start(context.Background(), request.SessionRequest)
+}
+
+func (adapter *recordingAdapter) callCount() int {
+	adapter.mu.Lock()
+	defer adapter.mu.Unlock()
+	return len(adapter.requests)
+}
+
+func (adapter *recordingAdapter) lastRequest(t *testing.T) worker.SessionRequest {
+	t.Helper()
+	adapter.mu.Lock()
+	defer adapter.mu.Unlock()
+	if len(adapter.requests) == 0 {
+		t.Fatal("provider adapter received no request")
+	}
+	return adapter.requests[len(adapter.requests)-1].Clone()
 }
 
 func (adapter immediateResultAdapter) Start(

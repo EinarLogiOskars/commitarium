@@ -97,11 +97,16 @@ func run(ctx context.Context, workerConfig config) error {
 
 	scripted := worker.NewRepeatingScriptedAdapter("codex-simulated", simulatedScripts())
 	provider := worker.NewAutomaticScriptedAdapter(scripted, workerConfig.stepDelay)
+	workingDirectory, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("resolve simulated worker directory: %w", err)
+	}
 	service, recovery, err := workerservice.New(ctx, workerservice.Config{
-		Journal:    workerjournal.NewStore(db),
-		Provider:   provider,
-		Normalizer: workerservice.NormalizerFunc(normalizeSimulatedEvent),
-		Lifetime:   ctx,
+		Journal:             workerjournal.NewStore(db),
+		Provider:            provider,
+		EnvironmentResolver: simulatedEnvironmentResolver(workingDirectory),
+		Normalizer:          workerservice.NormalizerFunc(normalizeSimulatedEvent),
+		Lifetime:            ctx,
 	})
 	if err != nil {
 		return fmt.Errorf("create worker service: %w", err)
@@ -159,6 +164,31 @@ func run(ctx context.Context, workerConfig config) error {
 		}
 		return nil
 	}
+}
+
+// The deterministic worker has no provider credentials or repository
+// processes. It still fills the same launch contract so the service boundary
+// is exercised without pretending that this is a real materialization lookup.
+func simulatedEnvironmentResolver(directory string) workerservice.EnvironmentResolver {
+	return workerservice.EnvironmentResolverFunc(func(
+		ctx context.Context,
+		assignment workerhttp.Assignment,
+	) (worker.LaunchEnvironment, error) {
+		if err := ctx.Err(); err != nil {
+			return worker.LaunchEnvironment{}, err
+		}
+		return worker.LaunchEnvironment{
+			AgentProfileID:        assignment.AgentProfileID,
+			ProjectID:             assignment.ProjectID,
+			FeatureID:             assignment.FeatureID,
+			Role:                  worker.Role(assignment.Role),
+			WorkspaceID:           assignment.WorkspaceID,
+			ConfigurationRevision: assignment.ConfigurationRevision,
+			MaterializationDigest: assignment.MaterializationDigest,
+			WorkingDirectory:      directory,
+			Variables:             []string{},
+		}, nil
+	})
 }
 
 func normalizeSimulatedEvent(

@@ -2,6 +2,7 @@ package worker
 
 import (
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -60,6 +61,90 @@ func TestResumeRequestRequiresProviderSessionID(t *testing.T) {
 	if err := request.Validate(); err != nil {
 		t.Fatalf("validate resume request: %v", err)
 	}
+}
+
+func TestLaunchEnvironmentValidationAndCopying(t *testing.T) {
+	environment := validLaunchEnvironment(t)
+	request := SessionRequest{
+		SessionID: "ses_test", AttemptID: "att_test", FeatureID: "fea_test",
+		Role: RoleCoder, Instructions: "Implement the plan.", LaunchEnvironment: environment,
+	}
+	if err := request.Validate(); err != nil {
+		t.Fatalf("validate materialized request: %v", err)
+	}
+
+	clone := request.Clone()
+	clone.LaunchEnvironment.Variables[0] = "PATH=/changed"
+	if request.LaunchEnvironment.Variables[0] != "PATH=/usr/bin:/bin" || request.Equal(clone) {
+		t.Fatalf("request clone shared or ignored environment variables: original=%+v clone=%+v", request, clone)
+	}
+	empty := environment
+	empty.Variables = []string{}
+	if cloned := empty.Clone(); cloned.Variables == nil {
+		t.Fatal("an explicit empty environment became nil and would inherit worker variables")
+	}
+
+	invalid := []LaunchEnvironment{
+		withLaunchProfile(environment, ""),
+		withLaunchRevision(environment, 0),
+		withLaunchDigest(environment, "sha256:not-a-digest"),
+		withLaunchDirectory(environment, "relative/workspace"),
+		withLaunchVariables(environment, nil),
+		withLaunchVariables(environment, []string{"NOT AN ENVIRONMENT ENTRY"}),
+		withLaunchVariables(environment, []string{"PATH=/one", "PATH=/two"}),
+	}
+	for _, candidate := range invalid {
+		if err := candidate.Validate(); !errors.Is(err, ErrInvalidLaunchEnvironment) {
+			t.Errorf("environment %+v error = %v, want ErrInvalidLaunchEnvironment", candidate, err)
+		}
+	}
+
+	mismatchedFeature := request
+	mismatchedFeature.LaunchEnvironment.FeatureID = "fea_other"
+	if err := mismatchedFeature.Validate(); !errors.Is(err, ErrInvalidSessionRequest) {
+		t.Fatalf("mismatched feature error = %v", err)
+	}
+	mismatchedRole := request
+	mismatchedRole.LaunchEnvironment.Role = RoleReviewer
+	if err := mismatchedRole.Validate(); !errors.Is(err, ErrInvalidSessionRequest) {
+		t.Fatalf("mismatched role error = %v", err)
+	}
+}
+
+func validLaunchEnvironment(t *testing.T) LaunchEnvironment {
+	t.Helper()
+	return LaunchEnvironment{
+		AgentProfileID: "profile_test", ProjectID: "prj_test", FeatureID: "fea_test",
+		Role: RoleCoder, WorkspaceID: "workspace_test", ConfigurationRevision: 1,
+		MaterializationDigest: "sha256:" + strings.Repeat("a", 64),
+		WorkingDirectory:      t.TempDir(),
+		Variables:             []string{"PATH=/usr/bin:/bin", "CODEX_HOME=/var/lib/commitarium/provider"},
+	}
+}
+
+func withLaunchProfile(environment LaunchEnvironment, profileID string) LaunchEnvironment {
+	environment.AgentProfileID = profileID
+	return environment
+}
+
+func withLaunchRevision(environment LaunchEnvironment, revision int64) LaunchEnvironment {
+	environment.ConfigurationRevision = revision
+	return environment
+}
+
+func withLaunchDigest(environment LaunchEnvironment, digest string) LaunchEnvironment {
+	environment.MaterializationDigest = digest
+	return environment
+}
+
+func withLaunchDirectory(environment LaunchEnvironment, directory string) LaunchEnvironment {
+	environment.WorkingDirectory = directory
+	return environment
+}
+
+func withLaunchVariables(environment LaunchEnvironment, variables []string) LaunchEnvironment {
+	environment.Variables = variables
+	return environment
 }
 
 func TestCommandValidate(t *testing.T) {
