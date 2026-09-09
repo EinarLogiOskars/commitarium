@@ -1,6 +1,8 @@
 # --- Build the Go worker service ---
 FROM golang:1.27-alpine AS build-stage
 
+RUN apk add --no-cache git
+
 WORKDIR /app
 
 COPY go.mod go.sum ./

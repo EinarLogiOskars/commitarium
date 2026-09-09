@@ -90,6 +90,14 @@ type WorkspaceService interface {
 	) (workspace.Workspace, bool, error)
 }
 
+type PlanningStarter interface {
+	StartPlanning(
+		ctx context.Context,
+		runID string,
+		idempotencyKey string,
+	) (execution.Run, bool, error)
+}
+
 type API struct {
 	projects   ProjectService
 	features   FeatureService
@@ -98,6 +106,7 @@ type API struct {
 	controller SessionController
 	starter    RunStarter
 	workspaces WorkspaceService
+	planning   PlanningStarter
 }
 
 func New(
@@ -108,7 +117,7 @@ func New(
 	controller SessionController,
 	starter RunStarter,
 ) http.Handler {
-	return newAPI(projects, features, workflow, executionService, controller, starter, nil)
+	return newAPI(projects, features, workflow, executionService, controller, starter, nil, nil)
 }
 
 func NewWithWorkspaceService(
@@ -121,7 +130,23 @@ func NewWithWorkspaceService(
 	workspaces WorkspaceService,
 ) http.Handler {
 	return newAPI(
-		projects, features, workflow, executionService, controller, starter, workspaces,
+		projects, features, workflow, executionService, controller, starter, workspaces, nil,
+	)
+}
+
+func NewWithWorkspaceAndPlanningService(
+	projects ProjectService,
+	features FeatureService,
+	workflow WorkflowService,
+	executionService ExecutionService,
+	controller SessionController,
+	starter RunStarter,
+	workspaces WorkspaceService,
+	planning PlanningStarter,
+) http.Handler {
+	return newAPI(
+		projects, features, workflow, executionService, controller, starter,
+		workspaces, planning,
 	)
 }
 
@@ -133,6 +158,7 @@ func newAPI(
 	controller SessionController,
 	starter RunStarter,
 	workspaces WorkspaceService,
+	planning PlanningStarter,
 ) http.Handler {
 	api := &API{
 		projects:   projects,
@@ -142,6 +168,7 @@ func newAPI(
 		controller: controller,
 		starter:    starter,
 		workspaces: workspaces,
+		planning:   planning,
 	}
 
 	mux := http.NewServeMux()
@@ -195,6 +222,9 @@ func newAPI(
 			"PUT /api/v1/projects/{projectID}/features/{id}/workspace",
 			api.prepareWorkspaceHandler,
 		)
+	}
+	if planning != nil {
+		mux.HandleFunc("POST /api/v1/runs/{id}/planning", api.startPlanningHandler)
 	}
 	mux.HandleFunc("GET /api/v1/runs/{id}", api.getRunHandler)
 	mux.HandleFunc("GET /api/v1/sessions/{id}", api.getSessionHandler)
