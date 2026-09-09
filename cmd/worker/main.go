@@ -10,11 +10,14 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
 	"unicode"
 
+	"github.com/EinarLogiOskars/commitarium/internal/codexadapter"
+	"github.com/EinarLogiOskars/commitarium/internal/processsupervisor"
 	"github.com/EinarLogiOskars/commitarium/internal/worker"
 	"github.com/EinarLogiOskars/commitarium/internal/workerhttp"
 	"github.com/EinarLogiOskars/commitarium/internal/workerjournal"
@@ -25,13 +28,34 @@ const (
 	defaultListenAddress = ":8081"
 	defaultStepDelay     = 250 * time.Millisecond
 	defaultHealthURL     = "http://127.0.0.1:8081/internal/v1/health"
+	defaultAdapter       = "simulated"
+	defaultCodexBinary   = "/usr/local/bin/codex"
+	defaultCodexSandbox  = "read-only"
 )
 
 type config struct {
 	databasePath  string
 	listenAddress string
 	bearerToken   string
+	adapter       string
 	stepDelay     time.Duration
+	codex         codexConfig
+}
+
+type codexConfig struct {
+	executable        string
+	model             string
+	sandbox           string
+	providerStatePath string
+	workspaceRoot     string
+	profileID         string
+}
+
+type runtime struct {
+	provider            worker.Adapter
+	environmentResolver workerservice.EnvironmentResolver
+	capabilities        []workerhttp.Capability
+	description         string
 }
 
 func main() {
@@ -65,6 +89,13 @@ func loadConfig(getenv func(string) string) (config, error) {
 	if listenAddress == "" {
 		listenAddress = defaultListenAddress
 	}
+	adapter := strings.TrimSpace(getenv("COMMITARIUM_WORKER_ADAPTER"))
+	if adapter == "" {
+		adapter = defaultAdapter
+	}
+	if adapter != "simulated" && adapter != "codex" {
+		return config{}, errors.New("COMMITARIUM_WORKER_ADAPTER must be simulated or codex")
+	}
 	stepDelay := defaultStepDelay
 	if value := strings.TrimSpace(getenv("COMMITARIUM_WORKER_STEP_DELAY")); value != "" {
 		parsed, err := time.ParseDuration(value)
@@ -73,12 +104,21 @@ func loadConfig(getenv func(string) string) (config, error) {
 		}
 		stepDelay = parsed
 	}
-	return config{
+	loaded := config{
 		databasePath:  databasePath,
 		listenAddress: listenAddress,
 		bearerToken:   bearerToken,
+		adapter:       adapter,
 		stepDelay:     stepDelay,
-	}, nil
+	}
+	if adapter == "codex" {
+		codex, err := loadCodexConfig(getenv)
+		if err != nil {
+			return config{}, err
+		}
+		loaded.codex = codex
+	}
+	return loaded, nil
 }
 
 func run(ctx context.Context, workerConfig config) error {
@@ -95,17 +135,15 @@ func run(ctx context.Context, workerConfig config) error {
 		return fmt.Errorf("migrate worker journal: %w", err)
 	}
 
-	scripted := worker.NewRepeatingScriptedAdapter("codex-simulated", simulatedScripts())
-	provider := worker.NewAutomaticScriptedAdapter(scripted, workerConfig.stepDelay)
-	workingDirectory, err := os.Getwd()
+	workerRuntime, err := newRuntime(workerConfig)
 	if err != nil {
-		return fmt.Errorf("resolve simulated worker directory: %w", err)
+		return err
 	}
 	service, recovery, err := workerservice.New(ctx, workerservice.Config{
 		Journal:             workerjournal.NewStore(db),
-		Provider:            provider,
-		EnvironmentResolver: simulatedEnvironmentResolver(workingDirectory),
-		Normalizer:          workerservice.NormalizerFunc(normalizeSimulatedEvent),
+		Provider:            workerRuntime.provider,
+		EnvironmentResolver: workerRuntime.environmentResolver,
+		Normalizer:          workerservice.NormalizerFunc(normalizeObservableEvent),
 		Lifetime:            ctx,
 	})
 	if err != nil {
@@ -119,17 +157,9 @@ func run(ctx context.Context, workerConfig config) error {
 		)
 	}
 	handler, err := workerhttp.NewServer(workerhttp.ServerConfig{
-		BearerToken: workerConfig.bearerToken,
-		Provider:    workerhttp.ProviderCodex,
-		Capabilities: []workerhttp.Capability{
-			workerhttp.CapabilityStart,
-			workerhttp.CapabilityResume,
-			workerhttp.CapabilityMessage,
-			workerhttp.CapabilityPause,
-			workerhttp.CapabilityContinue,
-			workerhttp.CapabilityCooperativeStop,
-			workerhttp.CapabilityEventReplay,
-		},
+		BearerToken:           workerConfig.bearerToken,
+		Provider:              workerhttp.ProviderCodex,
+		Capabilities:          workerRuntime.capabilities,
 		MaxConcurrentAttempts: 1,
 		EventSource:           service,
 	}, service)
@@ -144,7 +174,7 @@ func run(ctx context.Context, workerConfig config) error {
 	}
 	serveErrors := make(chan error, 1)
 	go func() {
-		log.Printf("simulated Codex worker listening on %s", workerConfig.listenAddress)
+		log.Printf("%s listening on %s", workerRuntime.description, workerConfig.listenAddress)
 		serveErrors <- httpServer.ListenAndServe()
 	}()
 	select {
@@ -166,9 +196,126 @@ func run(ctx context.Context, workerConfig config) error {
 	}
 }
 
+func newRuntime(workerConfig config) (runtime, error) {
+	switch workerConfig.adapter {
+	case "simulated":
+		workingDirectory, err := os.Getwd()
+		if err != nil {
+			return runtime{}, fmt.Errorf("resolve simulated worker directory: %w", err)
+		}
+		scripted := worker.NewRepeatingScriptedAdapter("codex-simulated", simulatedScripts())
+		return runtime{
+			provider:            worker.NewAutomaticScriptedAdapter(scripted, workerConfig.stepDelay),
+			environmentResolver: simulatedEnvironmentResolver(workingDirectory),
+			capabilities: []workerhttp.Capability{
+				workerhttp.CapabilityStart,
+				workerhttp.CapabilityResume,
+				workerhttp.CapabilityMessage,
+				workerhttp.CapabilityPause,
+				workerhttp.CapabilityContinue,
+				workerhttp.CapabilityCooperativeStop,
+				workerhttp.CapabilityEventReplay,
+			},
+			description: "simulated Codex worker",
+		}, nil
+	case "codex":
+		return newCodexRuntime(workerConfig.codex)
+	default:
+		return runtime{}, fmt.Errorf("unsupported worker adapter %q", workerConfig.adapter)
+	}
+}
+
+func loadCodexConfig(getenv func(string) string) (codexConfig, error) {
+	required := func(name string) (string, error) {
+		value := strings.TrimSpace(getenv(name))
+		if value == "" {
+			return "", fmt.Errorf("%s is required for the Codex adapter", name)
+		}
+		return value, nil
+	}
+	providerStatePath, err := required("COMMITARIUM_CODEX_PROVIDER_STATE_PATH")
+	if err != nil {
+		return codexConfig{}, err
+	}
+	if !filepath.IsAbs(providerStatePath) {
+		return codexConfig{}, errors.New("COMMITARIUM_CODEX_PROVIDER_STATE_PATH must be absolute")
+	}
+	workspaceRoot, err := required("COMMITARIUM_CODEX_WORKSPACE_ROOT")
+	if err != nil {
+		return codexConfig{}, err
+	}
+	profileID, err := required("COMMITARIUM_CODEX_PROFILE_ID")
+	if err != nil {
+		return codexConfig{}, err
+	}
+	executable := strings.TrimSpace(getenv("COMMITARIUM_CODEX_EXECUTABLE"))
+	if executable == "" {
+		executable = defaultCodexBinary
+	}
+	sandbox := strings.TrimSpace(getenv("COMMITARIUM_CODEX_SANDBOX"))
+	if sandbox == "" {
+		sandbox = defaultCodexSandbox
+	}
+	if sandbox != "read-only" && sandbox != "workspace-write" && sandbox != "danger-full-access" {
+		return codexConfig{}, errors.New(
+			"COMMITARIUM_CODEX_SANDBOX must be read-only, workspace-write, or danger-full-access",
+		)
+	}
+	return codexConfig{
+		executable: executable, model: strings.TrimSpace(getenv("COMMITARIUM_CODEX_MODEL")),
+		sandbox: sandbox, providerStatePath: providerStatePath,
+		workspaceRoot: workspaceRoot, profileID: profileID,
+	}, nil
+}
+
+func newCodexRuntime(config codexConfig) (runtime, error) {
+	providerState, err := os.Stat(config.providerStatePath)
+	if err != nil || !providerState.IsDir() {
+		return runtime{}, errors.New("Codex provider-state directory is unavailable")
+	}
+	resolver, err := workerservice.NewRootedEnvironmentResolver(
+		workerservice.RootedEnvironmentResolverConfig{
+			AgentProfileID: config.profileID,
+			WorkspaceRoot:  config.workspaceRoot,
+			Variables: []string{
+				"CODEX_HOME=" + config.providerStatePath,
+				"HOME=" + config.providerStatePath,
+				"LANG=C.UTF-8",
+				"PATH=/usr/local/bin:/usr/bin:/bin",
+			},
+		},
+	)
+	if err != nil {
+		return runtime{}, fmt.Errorf("create Codex launch environment: %w", err)
+	}
+	provider, err := codexadapter.New(codexadapter.Config{
+		Supervisor: processsupervisor.New(), Executable: config.executable,
+		Arguments: []string{
+			"app-server", "--listen", "stdio://",
+			"-c", `cli_auth_credentials_store="file"`,
+		},
+		Model: config.model, ApprovalPolicy: "never", Sandbox: config.sandbox,
+	})
+	if err != nil {
+		return runtime{}, fmt.Errorf("create Codex adapter: %w", err)
+	}
+	return runtime{
+		provider: provider, environmentResolver: resolver,
+		capabilities: []workerhttp.Capability{
+			workerhttp.CapabilityStart,
+			workerhttp.CapabilityResume,
+			workerhttp.CapabilityMessage,
+			workerhttp.CapabilityCooperativeStop,
+			workerhttp.CapabilityForceStop,
+			workerhttp.CapabilityEventReplay,
+		},
+		description: "Codex worker",
+	}, nil
+}
+
 // The deterministic worker has no provider credentials or repository
 // processes. It still fills the same launch contract so the service boundary
-// is exercised without pretending that this is a real materialization lookup.
+// is exercised without pretending that it owns a real workspace.
 func simulatedEnvironmentResolver(directory string) workerservice.EnvironmentResolver {
 	return workerservice.EnvironmentResolverFunc(func(
 		ctx context.Context,
@@ -178,20 +325,18 @@ func simulatedEnvironmentResolver(directory string) workerservice.EnvironmentRes
 			return worker.LaunchEnvironment{}, err
 		}
 		return worker.LaunchEnvironment{
-			AgentProfileID:        assignment.AgentProfileID,
-			ProjectID:             assignment.ProjectID,
-			FeatureID:             assignment.FeatureID,
-			Role:                  worker.Role(assignment.Role),
-			WorkspaceID:           assignment.WorkspaceID,
-			ConfigurationRevision: assignment.ConfigurationRevision,
-			MaterializationDigest: assignment.MaterializationDigest,
-			WorkingDirectory:      directory,
-			Variables:             []string{},
+			AgentProfileID:   assignment.AgentProfileID,
+			ProjectID:        assignment.ProjectID,
+			FeatureID:        assignment.FeatureID,
+			Role:             worker.Role(assignment.Role),
+			WorkspaceID:      assignment.WorkspaceID,
+			WorkingDirectory: directory,
+			Variables:        []string{},
 		}, nil
 	})
 }
 
-func normalizeSimulatedEvent(
+func normalizeObservableEvent(
 	_ context.Context,
 	event worker.Event,
 ) (workerservice.NormalizedEvent, error) {
@@ -203,7 +348,7 @@ func normalizeSimulatedEvent(
 		worker.EventContinued,
 		worker.EventRecoveryAssessment:
 	default:
-		return workerservice.NormalizedEvent{}, fmt.Errorf("unsupported simulated event type %q", event.Type)
+		return workerservice.NormalizedEvent{}, fmt.Errorf("unsupported observable event type %q", event.Type)
 	}
 	normalized := workerservice.NormalizedEvent{
 		Type:      workerhttp.EventType(event.Type),

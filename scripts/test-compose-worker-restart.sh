@@ -61,7 +61,7 @@ assert attempt["provider_session_id"] == sys.argv[1], attempt
 }
 
 attempt_url="$base_url/sessions/ses_container/attempts/att_original"
-launch_body='{"mode":"start","assignment":{"agent_profile_id":"profile_container","project_id":"prj_container","feature_id":"fea_container","role":"coder","workspace_id":"workspace_container","configuration_revision":1,"materialization_digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"instructions":"Run the deterministic container recovery test."}'
+launch_body='{"mode":"start","assignment":{"agent_profile_id":"profile_container","project_id":"prj_container","feature_id":"fea_container","role":"coder","workspace_id":"workspace_container"},"instructions":"Run the deterministic container recovery test."}'
 
 docker compose -f compose.yml -f "$compose_override" -p "$project_name" \
     up --build --detach simulated-codex-worker

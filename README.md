@@ -15,13 +15,15 @@ reconciles the completed activity before doing more work. Projects default to
 requiring user approval for that continuation; consistent projects configured
 for automatic recovery can continue without intervention.
 
-This is not yet a production-ready release. Real Codex and Claude Code worker
-adapters, Forgejo pull-request automation, and the user interface remain to be
-built.
+This is not yet a production-ready release. An opt-in Codex worker can now run
+the real Codex App Server against a selected read-only workspace,
+but the coordinator still uses simulated agents. Coordinator wiring, real
+Claude Code execution, Forgejo pull-request automation, and the user interface
+remain to be built.
 
 ## Architecture
 
-Docker Compose runs three local services:
+Docker Compose normally runs three local services:
 
 - `coordinator` exposes the Go API on `127.0.0.1:8080` and stores operational
   state in its SQLite volume.
@@ -30,6 +32,11 @@ Docker Compose runs three local services:
 - `simulated-codex-worker` runs the private worker HTTP API inside the Compose
   network and stores its execution journal in a worker-only volume. It does not
   publish a host port during normal use.
+
+The optional `real-codex` Compose profile adds `codex-worker`. It packages the
+real Codex CLI with the same worker API and keeps its provider login/session
+state, worker journal, and assigned repository workspace in three separate
+mounts. It is intentionally not started by ordinary `docker compose up` yet.
 
 Forgejo is the agent-managed source of truth for plans, review discussion, and
 the internal pull-request audit trail. The coordinator database stores only the
@@ -52,8 +59,8 @@ authenticates coordinator-to-worker HTTP requests; it is not a Codex account or
 API credential.
 
 The coordinator still executes its original deterministic agents in-process.
-The standalone worker is currently an independently testable deployment unit;
-wiring the coordinator runtime to it is a later slice.
+Both standalone workers are independently testable deployment units; wiring
+the coordinator runtime to the real worker is a later slice.
 
 Stop the services without deleting their data:
 
@@ -100,6 +107,43 @@ duplicate.
 See [Coordinator API](docs/coordinator-api.md) for the complete route list,
 streaming endpoints, and session controls.
 
+## Smoke-test the real Codex worker
+
+The real worker uses a dedicated `codex-profile` Docker volume. Connect that
+profile once with Codex's device-code login:
+
+```sh
+./scripts/smoke-real-codex-worker.sh login
+```
+
+This is the only step that changes provider authentication state. It does not
+copy or mount the host user's normal Codex profile. Check the isolated
+profile's status without printing credentials:
+
+```sh
+./scripts/smoke-real-codex-worker.sh status
+```
+
+Then run one real read-only prompt through the worker HTTP API and watch its
+normalized activity stream:
+
+```sh
+./scripts/smoke-real-codex-worker.sh run
+```
+
+The script fails unless it observes a successful repository command and the
+real Codex response contains its expected verification marker.
+
+By default the repository containing this Compose file is mounted read-only at
+`/workspaces/workspace_smoke`. Set `COMMITARIUM_CODEX_WORKSPACE_SOURCE` to
+another absolute host directory and optionally set
+`COMMITARIUM_CODEX_WORKSPACE_ID` to change its child-directory name. The script
+stops the worker afterward but preserves both its profile and journal volumes.
+Codex's own process sandbox is disabled inside this service because its Linux
+namespace sandbox cannot nest inside the unprivileged container. The container
+and its explicit mounts remain the outer security boundary; the smoke mount is
+read-only, so the agent cannot change the selected host repository.
+
 The versioned [internal worker API](docs/worker-api.md) now has tested client and
 server components for authenticated attempt inspection and control. Its worker
 server can also replay and stream safe, structured agent activity, providing the
@@ -125,15 +169,18 @@ scripts can serve repeated logical sessions. The codebase also contains the
 first real Codex App Server adapter: it can start or resume a Codex thread,
 capture its thread ID before work continues, stream a safe subset of observable
 activity, steer or interrupt the active turn, and force-stop its exact process
-tree. The worker service now resolves each new attempt's complete assignment
-into one validated, defensively copied launch environment before calling an
-adapter. A real adapter receives an explicit working directory and environment
-instead of inheriting the worker service's process variables. The assignment
-revision and digest remain in the journal, while the resolved environment stays
-inside the worker and is never added to the worker HTTP request or journal. The
-standalone worker still selects deterministic scripts; credential provisioning,
-persistent Codex profile state, real project-workspace materialization, and
-coordinator runtime wiring remain separate future slices.
+tree. The worker service now resolves each new attempt's workspace ID beneath a
+configured root into one validated, defensively copied launch environment
+before calling an adapter. A real adapter receives an explicit working
+directory and environment instead of inheriting the worker service's process
+variables. The resolved path and environment stay inside the worker and are
+never added to the worker HTTP request or journal. The
+same executable can now select the real Codex adapter. Its opt-in image pins the
+Codex CLI version, runs as a non-root user, and mounts one explicit read-only
+workspace plus separate persistent provider and journal volumes. It does not
+require a manifest, configuration revision, or materialization digest. Automatic
+credential provisioning, Forgejo workspace creation/import, and coordinator
+runtime wiring remain separate future slices.
 
 The worker also has a provider-neutral operating-system process-supervision
 foundation. It can start one exact child process group, expose bounded and
@@ -143,9 +190,9 @@ can now pass the immutable HTTP attempt ID into a process-backed provider
 session, durably record a force-stop request before delivery, terminate only
 that session's process tree, and wait for the normal session watcher to persist
 the terminal result. Exact retries return that stored result without sending a
-second signal. The simulated worker does not advertise this optional capability.
-The Codex adapter implements it, but is not yet selected by the standalone
-worker.
+second signal. The simulated worker does not advertise this optional
+capability. The real Codex worker does advertise it because each live session
+owns an exact operating-system process handle.
 
 ## Development checks
 

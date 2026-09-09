@@ -80,13 +80,11 @@ const (
 )
 
 type Assignment struct {
-	AgentProfileID        string `json:"agent_profile_id"`
-	ProjectID             string `json:"project_id"`
-	FeatureID             string `json:"feature_id"`
-	Role                  Role   `json:"role"`
-	WorkspaceID           string `json:"workspace_id"`
-	ConfigurationRevision int64  `json:"configuration_revision"`
-	MaterializationDigest string `json:"materialization_digest"`
+	AgentProfileID string `json:"agent_profile_id"`
+	ProjectID      string `json:"project_id"`
+	FeatureID      string `json:"feature_id"`
+	Role           Role   `json:"role"`
+	WorkspaceID    string `json:"workspace_id"`
 }
 
 type PutAttemptRequest struct {

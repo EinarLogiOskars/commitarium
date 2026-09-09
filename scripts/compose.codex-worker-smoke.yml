@@ -1,0 +1,4 @@
+services:
+  codex-worker:
+    ports:
+      - "127.0.0.1:${COMMITARIUM_CODEX_WORKER_PORT}:8081"

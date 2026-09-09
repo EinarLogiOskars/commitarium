@@ -2,7 +2,6 @@ package worker
 
 import (
 	"errors"
-	"strings"
 	"testing"
 )
 
@@ -70,7 +69,7 @@ func TestLaunchEnvironmentValidationAndCopying(t *testing.T) {
 		Role: RoleCoder, Instructions: "Implement the plan.", LaunchEnvironment: environment,
 	}
 	if err := request.Validate(); err != nil {
-		t.Fatalf("validate materialized request: %v", err)
+		t.Fatalf("validate request with launch environment: %v", err)
 	}
 
 	clone := request.Clone()
@@ -86,8 +85,6 @@ func TestLaunchEnvironmentValidationAndCopying(t *testing.T) {
 
 	invalid := []LaunchEnvironment{
 		withLaunchProfile(environment, ""),
-		withLaunchRevision(environment, 0),
-		withLaunchDigest(environment, "sha256:not-a-digest"),
 		withLaunchDirectory(environment, "relative/workspace"),
 		withLaunchVariables(environment, nil),
 		withLaunchVariables(environment, []string{"NOT AN ENVIRONMENT ENTRY"}),
@@ -115,25 +112,14 @@ func validLaunchEnvironment(t *testing.T) LaunchEnvironment {
 	t.Helper()
 	return LaunchEnvironment{
 		AgentProfileID: "profile_test", ProjectID: "prj_test", FeatureID: "fea_test",
-		Role: RoleCoder, WorkspaceID: "workspace_test", ConfigurationRevision: 1,
-		MaterializationDigest: "sha256:" + strings.Repeat("a", 64),
-		WorkingDirectory:      t.TempDir(),
-		Variables:             []string{"PATH=/usr/bin:/bin", "CODEX_HOME=/var/lib/commitarium/provider"},
+		Role: RoleCoder, WorkspaceID: "workspace_test",
+		WorkingDirectory: t.TempDir(),
+		Variables:        []string{"PATH=/usr/bin:/bin", "CODEX_HOME=/var/lib/commitarium/provider"},
 	}
 }
 
 func withLaunchProfile(environment LaunchEnvironment, profileID string) LaunchEnvironment {
 	environment.AgentProfileID = profileID
-	return environment
-}
-
-func withLaunchRevision(environment LaunchEnvironment, revision int64) LaunchEnvironment {
-	environment.ConfigurationRevision = revision
-	return environment
-}
-
-func withLaunchDigest(environment LaunchEnvironment, digest string) LaunchEnvironment {
-	environment.MaterializationDigest = digest
 	return environment
 }
 

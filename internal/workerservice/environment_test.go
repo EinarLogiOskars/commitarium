@@ -5,75 +5,92 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/EinarLogiOskars/commitarium/internal/workerhttp"
 )
 
-func TestImmutableEnvironmentResolverReturnsExactDefensiveSnapshot(t *testing.T) {
+func TestRootedEnvironmentResolverSelectsPreparedWorkspaces(t *testing.T) {
 	root := t.TempDir()
-	workspace := filepath.Join(root, "workspace")
-	if err := os.Mkdir(workspace, 0o700); err != nil {
-		t.Fatalf("create workspace: %v", err)
+	firstDirectory := filepath.Join(root, "workspace_one")
+	secondDirectory := filepath.Join(root, "workspace_two")
+	for _, directory := range []string{firstDirectory, secondDirectory} {
+		if err := os.Mkdir(directory, 0o700); err != nil {
+			t.Fatalf("create workspace: %v", err)
+		}
 	}
-	assignment := environmentTestAssignment()
 	variables := []string{
 		"PATH=/usr/bin:/bin",
 		"CODEX_HOME=/var/lib/commitarium/provider",
 	}
-	resolver, err := NewImmutableEnvironmentResolver(ImmutableEnvironmentResolverConfig{
-		AgentProfileID: assignment.AgentProfileID,
+	resolver, err := NewRootedEnvironmentResolver(RootedEnvironmentResolverConfig{
+		AgentProfileID: "profile_test",
 		WorkspaceRoot:  root,
-		Materializations: []MaterializedEnvironment{{
-			Assignment: assignment, WorkingDirectory: workspace, Variables: variables,
-		}},
+		Variables:      variables,
 	})
 	if err != nil {
-		t.Fatalf("create immutable resolver: %v", err)
+		t.Fatalf("create rooted resolver: %v", err)
 	}
 
-	variables[0] = "PATH=/mutated-before-resolve"
-	resolved, err := resolver.Resolve(t.Context(), assignment)
+	variables[0] = "PATH=/changed-after-resolver-creation"
+	first := environmentTestAssignment()
+	resolved, err := resolver.Resolve(t.Context(), first)
 	if err != nil {
-		t.Fatalf("resolve launch environment: %v", err)
+		t.Fatalf("resolve first workspace: %v", err)
 	}
-	if !launchEnvironmentMatches(resolved, assignment) ||
+	canonicalFirst, err := filepath.EvalSymlinks(firstDirectory)
+	if err != nil {
+		t.Fatalf("canonicalize first workspace: %v", err)
+	}
+	if !launchEnvironmentMatches(resolved, first) ||
+		resolved.WorkingDirectory != canonicalFirst ||
 		resolved.Variables[0] != "PATH=/usr/bin:/bin" {
-		t.Fatalf("resolved environment = %+v", resolved)
-	}
-	canonicalWorkspace, err := filepath.EvalSymlinks(workspace)
-	if err != nil {
-		t.Fatalf("resolve expected workspace: %v", err)
-	}
-	if resolved.WorkingDirectory != canonicalWorkspace {
-		t.Fatalf("working directory = %q, want %q", resolved.WorkingDirectory, canonicalWorkspace)
+		t.Fatalf("first resolved environment = %+v", resolved)
 	}
 
-	resolved.Variables[0] = "PATH=/mutated-after-resolve"
-	again, err := resolver.Resolve(t.Context(), assignment)
+	// Project, feature, and role identify the current work; they do not require
+	// a second predeclared environment record for the same workspace.
+	second := first
+	second.ProjectID = "prj_other"
+	second.FeatureID = "fea_other"
+	second.Role = workerhttp.RoleReviewer
+	second.WorkspaceID = "workspace_two"
+	resolved, err = resolver.Resolve(t.Context(), second)
+	if err != nil {
+		t.Fatalf("resolve second assignment: %v", err)
+	}
+	canonicalSecond, err := filepath.EvalSymlinks(secondDirectory)
+	if err != nil {
+		t.Fatalf("canonicalize second workspace: %v", err)
+	}
+	if !launchEnvironmentMatches(resolved, second) || resolved.WorkingDirectory != canonicalSecond {
+		t.Fatalf("second resolved environment = %+v", resolved)
+	}
+
+	resolved.Variables[0] = "PATH=/mutated-by-caller"
+	again, err := resolver.Resolve(t.Context(), first)
 	if err != nil || again.Variables[0] != "PATH=/usr/bin:/bin" {
-		t.Fatalf("second resolved environment = %+v, error=%v", again, err)
+		t.Fatalf("caller mutated resolver state: environment=%+v error=%v", again, err)
 	}
 }
 
-func TestImmutableEnvironmentResolverRejectsUnavailableOrChangedAssignments(t *testing.T) {
+func TestRootedEnvironmentResolverRejectsUnavailableOrEscapingWorkspaces(t *testing.T) {
 	root := t.TempDir()
-	workspace := filepath.Join(root, "workspace")
+	workspace := filepath.Join(root, "workspace_one")
 	if err := os.Mkdir(workspace, 0o700); err != nil {
 		t.Fatalf("create workspace: %v", err)
 	}
-	assignment := environmentTestAssignment()
-	resolver, err := NewImmutableEnvironmentResolver(ImmutableEnvironmentResolverConfig{
-		AgentProfileID: assignment.AgentProfileID,
+	outside := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(root, "workspace_link")); err != nil {
+		t.Fatalf("create escaping workspace symlink: %v", err)
+	}
+	resolver, err := NewRootedEnvironmentResolver(RootedEnvironmentResolverConfig{
+		AgentProfileID: "profile_test",
 		WorkspaceRoot:  root,
-		Materializations: []MaterializedEnvironment{{
-			Assignment: assignment, WorkingDirectory: workspace,
-			Variables: []string{"PATH=/usr/bin:/bin"},
-		}},
+		Variables:      []string{},
 	})
 	if err != nil {
-		t.Fatalf("create immutable resolver: %v", err)
+		t.Fatalf("create rooted resolver: %v", err)
 	}
 
 	tests := []struct {
@@ -81,13 +98,9 @@ func TestImmutableEnvironmentResolverRejectsUnavailableOrChangedAssignments(t *t
 		assignment workerhttp.Assignment
 		want       error
 	}{
-		{name: "different profile", assignment: withAssignmentProfile(assignment, "profile_other"), want: ErrProfileUnavailable},
-		{name: "unknown workspace", assignment: withAssignmentWorkspace(assignment, "workspace_other"), want: ErrWorkspaceUnavailable},
-		{name: "changed revision", assignment: withAssignmentRevision(assignment, 2), want: ErrConfigurationMismatch},
-		{name: "changed digest", assignment: withAssignmentDigest(assignment, "sha256:"+strings.Repeat("b", 64)), want: ErrConfigurationMismatch},
-		{name: "changed project", assignment: withAssignmentProject(assignment, "prj_other"), want: ErrConfigurationMismatch},
-		{name: "changed feature", assignment: withAssignmentFeature(assignment, "fea_other"), want: ErrConfigurationMismatch},
-		{name: "changed role", assignment: withAssignmentRole(assignment, workerhttp.RoleReviewer), want: ErrConfigurationMismatch},
+		{name: "different profile", assignment: withAssignmentProfile(environmentTestAssignment(), "profile_other"), want: ErrProfileUnavailable},
+		{name: "unknown workspace", assignment: withAssignmentWorkspace(environmentTestAssignment(), "workspace_missing"), want: ErrWorkspaceUnavailable},
+		{name: "escaping symlink", assignment: withAssignmentWorkspace(environmentTestAssignment(), "workspace_link"), want: ErrWorkspaceUnavailable},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -97,41 +110,23 @@ func TestImmutableEnvironmentResolverRejectsUnavailableOrChangedAssignments(t *t
 		})
 	}
 
-	if err := os.Remove(workspace); err != nil {
-		t.Fatalf("remove workspace: %v", err)
-	}
-	if _, err := resolver.Resolve(t.Context(), assignment); !errors.Is(err, ErrWorkspaceUnavailable) {
-		t.Fatalf("missing directory error = %v, want ErrWorkspaceUnavailable", err)
-	}
 	cancelled, cancel := context.WithCancel(t.Context())
 	cancel()
-	if _, err := resolver.Resolve(cancelled, assignment); !errors.Is(err, context.Canceled) {
+	if _, err := resolver.Resolve(cancelled, environmentTestAssignment()); !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancelled resolve error = %v", err)
 	}
 }
 
-func TestImmutableEnvironmentResolverRejectsUnsafeMaterializations(t *testing.T) {
+func TestRootedEnvironmentResolverRejectsInvalidConfiguration(t *testing.T) {
 	root := t.TempDir()
-	outside := t.TempDir()
-	assignment := environmentTestAssignment()
-	tests := []ImmutableEnvironmentResolverConfig{
+	tests := []RootedEnvironmentResolverConfig{
 		{},
-		{
-			AgentProfileID: assignment.AgentProfileID, WorkspaceRoot: root,
-			Materializations: []MaterializedEnvironment{{
-				Assignment: assignment, WorkingDirectory: outside,
-			}},
-		},
-		{
-			AgentProfileID: assignment.AgentProfileID, WorkspaceRoot: root,
-			Materializations: []MaterializedEnvironment{{
-				Assignment: assignment, WorkingDirectory: root,
-				Variables: []string{"PATH=/one", "PATH=/two"},
-			}},
-		},
+		{AgentProfileID: "profile_test", WorkspaceRoot: "relative", Variables: []string{}},
+		{AgentProfileID: "profile_test", WorkspaceRoot: root},
+		{AgentProfileID: "profile_test", WorkspaceRoot: root, Variables: []string{"PATH=/one", "PATH=/two"}},
 	}
 	for index, config := range tests {
-		if _, err := NewImmutableEnvironmentResolver(config); !errors.Is(err, ErrInvalidEnvironmentResolver) {
+		if _, err := NewRootedEnvironmentResolver(config); !errors.Is(err, ErrInvalidEnvironmentResolver) {
 			t.Errorf("case %d error = %v, want ErrInvalidEnvironmentResolver", index, err)
 		}
 	}
@@ -139,9 +134,11 @@ func TestImmutableEnvironmentResolverRejectsUnsafeMaterializations(t *testing.T)
 
 func environmentTestAssignment() workerhttp.Assignment {
 	return workerhttp.Assignment{
-		AgentProfileID: "profile_test", ProjectID: "prj_test", FeatureID: "fea_test",
-		Role: workerhttp.RoleCoder, WorkspaceID: "workspace_test", ConfigurationRevision: 1,
-		MaterializationDigest: "sha256:" + strings.Repeat("a", 64),
+		AgentProfileID: "profile_test",
+		ProjectID:      "prj_test",
+		FeatureID:      "fea_test",
+		Role:           workerhttp.RoleCoder,
+		WorkspaceID:    "workspace_one",
 	}
 }
 
@@ -152,30 +149,5 @@ func withAssignmentProfile(assignment workerhttp.Assignment, profileID string) w
 
 func withAssignmentWorkspace(assignment workerhttp.Assignment, workspaceID string) workerhttp.Assignment {
 	assignment.WorkspaceID = workspaceID
-	return assignment
-}
-
-func withAssignmentRevision(assignment workerhttp.Assignment, revision int64) workerhttp.Assignment {
-	assignment.ConfigurationRevision = revision
-	return assignment
-}
-
-func withAssignmentDigest(assignment workerhttp.Assignment, digest string) workerhttp.Assignment {
-	assignment.MaterializationDigest = digest
-	return assignment
-}
-
-func withAssignmentProject(assignment workerhttp.Assignment, projectID string) workerhttp.Assignment {
-	assignment.ProjectID = projectID
-	return assignment
-}
-
-func withAssignmentFeature(assignment workerhttp.Assignment, featureID string) workerhttp.Assignment {
-	assignment.FeatureID = featureID
-	return assignment
-}
-
-func withAssignmentRole(assignment workerhttp.Assignment, role workerhttp.Role) workerhttp.Assignment {
-	assignment.Role = role
 	return assignment
 }

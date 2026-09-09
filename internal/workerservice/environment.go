@@ -16,7 +16,7 @@ var (
 	ErrInvalidEnvironmentResolver = errors.New("invalid worker environment resolver")
 	ErrProfileUnavailable         = errors.New("worker agent profile is unavailable")
 	ErrWorkspaceUnavailable       = errors.New("worker workspace is unavailable")
-	ErrConfigurationMismatch      = errors.New("worker materialized configuration does not match the assignment")
+	ErrConfigurationMismatch      = errors.New("worker launch environment does not match the assignment")
 )
 
 // EnvironmentResolver turns the coordinator's non-secret assignment identity
@@ -37,88 +37,50 @@ func (function EnvironmentResolverFunc) Resolve(
 	return function(ctx, assignment)
 }
 
-// MaterializedEnvironment is one trusted-host-produced launch manifest. Its
-// assignment contains references and a digest, never secret values.
-type MaterializedEnvironment struct {
-	Assignment       workerhttp.Assignment
-	WorkingDirectory string
-	Variables        []string
-}
-
-type ImmutableEnvironmentResolverConfig struct {
-	AgentProfileID   string
-	WorkspaceRoot    string
-	Materializations []MaterializedEnvironment
-}
-
-// ImmutableEnvironmentResolver takes a defensive snapshot of already
-// materialized environments. A worker can therefore launch or recover only
-// the exact configuration revision and manifest digest it was given at setup.
-type ImmutableEnvironmentResolver struct {
+// RootedEnvironmentResolver maps a validated workspace ID directly to one
+// child directory of a worker-owned root. The coordinator can select any
+// prepared workspace without the worker maintaining a second project manifest.
+// Canonical path checks prevent a symlinked child from escaping the root.
+type RootedEnvironmentResolver struct {
 	agentProfileID string
-	byWorkspace    map[string]worker.LaunchEnvironment
+	workspaceRoot  string
+	variables      []string
 }
 
-func NewImmutableEnvironmentResolver(
-	config ImmutableEnvironmentResolverConfig,
-) (*ImmutableEnvironmentResolver, error) {
-	profileID := config.AgentProfileID
-	if len(config.Materializations) == 0 {
-		return nil, fmt.Errorf("%w: at least one materialization is required", ErrInvalidEnvironmentResolver)
-	}
+type RootedEnvironmentResolverConfig struct {
+	AgentProfileID string
+	WorkspaceRoot  string
+	Variables      []string
+}
+
+func NewRootedEnvironmentResolver(
+	config RootedEnvironmentResolverConfig,
+) (*RootedEnvironmentResolver, error) {
 	root, err := canonicalDirectory(config.WorkspaceRoot)
 	if err != nil {
 		return nil, fmt.Errorf("%w: workspace root: %v", ErrInvalidEnvironmentResolver, err)
 	}
-	resolved := &ImmutableEnvironmentResolver{
-		agentProfileID: profileID,
-		byWorkspace:    make(map[string]worker.LaunchEnvironment, len(config.Materializations)),
+	variables := cloneVariables(config.Variables)
+	probe := worker.LaunchEnvironment{
+		AgentProfileID:   config.AgentProfileID,
+		ProjectID:        "project_validation",
+		FeatureID:        "feature_validation",
+		Role:             worker.RoleCoder,
+		WorkspaceID:      "workspace_validation",
+		WorkingDirectory: root,
+		Variables:        variables,
 	}
-	for _, materialization := range config.Materializations {
-		if err := materialization.Assignment.Validate(); err != nil {
-			return nil, fmt.Errorf("%w: assignment: %v", ErrInvalidEnvironmentResolver, err)
-		}
-		if materialization.Assignment.AgentProfileID != profileID {
-			return nil, fmt.Errorf(
-				"%w: workspace %q belongs to a different agent profile",
-				ErrInvalidEnvironmentResolver,
-				materialization.Assignment.WorkspaceID,
-			)
-		}
-		directory, err := canonicalDirectory(materialization.WorkingDirectory)
-		if err != nil {
-			return nil, fmt.Errorf(
-				"%w: workspace %q: %v",
-				ErrInvalidEnvironmentResolver,
-				materialization.Assignment.WorkspaceID,
-				err,
-			)
-		}
-		if !directoryWithin(root, directory) {
-			return nil, fmt.Errorf(
-				"%w: workspace %q is outside the configured root",
-				ErrInvalidEnvironmentResolver,
-				materialization.Assignment.WorkspaceID,
-			)
-		}
-		environment := launchEnvironment(materialization.Assignment, directory, materialization.Variables)
-		if err := environment.Validate(); err != nil {
-			return nil, fmt.Errorf("%w: %v", ErrInvalidEnvironmentResolver, err)
-		}
-		workspaceID := materialization.Assignment.WorkspaceID
-		if _, exists := resolved.byWorkspace[workspaceID]; exists {
-			return nil, fmt.Errorf(
-				"%w: workspace %q is duplicated",
-				ErrInvalidEnvironmentResolver,
-				workspaceID,
-			)
-		}
-		resolved.byWorkspace[workspaceID] = environment.Clone()
+	if err := probe.Validate(); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrInvalidEnvironmentResolver, err)
 	}
-	return resolved, nil
+	return &RootedEnvironmentResolver{
+		agentProfileID: config.AgentProfileID,
+		workspaceRoot:  root,
+		variables:      variables,
+	}, nil
 }
 
-func (resolver *ImmutableEnvironmentResolver) Resolve(
+func (resolver *RootedEnvironmentResolver) Resolve(
 	ctx context.Context,
 	assignment workerhttp.Assignment,
 ) (worker.LaunchEnvironment, error) {
@@ -141,30 +103,20 @@ func (resolver *ImmutableEnvironmentResolver) Resolve(
 			assignment.AgentProfileID,
 		)
 	}
-	environment, exists := resolver.byWorkspace[assignment.WorkspaceID]
-	if !exists {
+
+	directory, err := canonicalDirectory(filepath.Join(resolver.workspaceRoot, assignment.WorkspaceID))
+	if err != nil || !directoryWithin(resolver.workspaceRoot, directory) {
 		return worker.LaunchEnvironment{}, fmt.Errorf(
-			"%w: workspace %q is not materialized",
+			"%w: workspace %q cannot be opened inside the configured root",
 			ErrWorkspaceUnavailable,
 			assignment.WorkspaceID,
 		)
 	}
-	if !launchEnvironmentMatches(environment, assignment) {
-		return worker.LaunchEnvironment{}, fmt.Errorf(
-			"%w: workspace %q revision or assignment changed",
-			ErrConfigurationMismatch,
-			assignment.WorkspaceID,
-		)
+	environment := launchEnvironment(assignment, directory, resolver.variables)
+	if err := environment.Validate(); err != nil {
+		return worker.LaunchEnvironment{}, fmt.Errorf("%w: %v", ErrConfigurationMismatch, err)
 	}
-	info, err := os.Stat(environment.WorkingDirectory)
-	if err != nil || !info.IsDir() {
-		return worker.LaunchEnvironment{}, fmt.Errorf(
-			"%w: workspace %q cannot be opened",
-			ErrWorkspaceUnavailable,
-			assignment.WorkspaceID,
-		)
-	}
-	return environment.Clone(), nil
+	return environment, nil
 }
 
 func launchEnvironment(
@@ -173,15 +125,13 @@ func launchEnvironment(
 	variables []string,
 ) worker.LaunchEnvironment {
 	return worker.LaunchEnvironment{
-		AgentProfileID:        assignment.AgentProfileID,
-		ProjectID:             assignment.ProjectID,
-		FeatureID:             assignment.FeatureID,
-		Role:                  worker.Role(assignment.Role),
-		WorkspaceID:           assignment.WorkspaceID,
-		ConfigurationRevision: assignment.ConfigurationRevision,
-		MaterializationDigest: assignment.MaterializationDigest,
-		WorkingDirectory:      directory,
-		Variables:             cloneVariables(variables),
+		AgentProfileID:   assignment.AgentProfileID,
+		ProjectID:        assignment.ProjectID,
+		FeatureID:        assignment.FeatureID,
+		Role:             worker.Role(assignment.Role),
+		WorkspaceID:      assignment.WorkspaceID,
+		WorkingDirectory: directory,
+		Variables:        cloneVariables(variables),
 	}
 }
 
@@ -193,9 +143,7 @@ func launchEnvironmentMatches(
 		environment.ProjectID == assignment.ProjectID &&
 		environment.FeatureID == assignment.FeatureID &&
 		environment.Role == worker.Role(assignment.Role) &&
-		environment.WorkspaceID == assignment.WorkspaceID &&
-		environment.ConfigurationRevision == assignment.ConfigurationRevision &&
-		environment.MaterializationDigest == assignment.MaterializationDigest
+		environment.WorkspaceID == assignment.WorkspaceID
 }
 
 func environmentFailure(err error) (workerhttp.ErrorCode, string, bool) {
@@ -205,7 +153,7 @@ func environmentFailure(err error) (workerhttp.ErrorCode, string, bool) {
 	case errors.Is(err, ErrWorkspaceUnavailable):
 		return workerhttp.ErrorWorkspaceUnavailable, "assigned workspace is unavailable", true
 	case errors.Is(err, ErrConfigurationMismatch):
-		return workerhttp.ErrorConfigurationMismatch, "materialized configuration does not match the requested assignment", false
+		return workerhttp.ErrorConfigurationMismatch, "launch environment does not match the requested assignment", false
 	default:
 		return workerhttp.ErrorInternal, "worker could not resolve the launch environment", true
 	}
