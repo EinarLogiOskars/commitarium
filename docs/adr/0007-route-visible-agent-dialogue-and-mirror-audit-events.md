@@ -1,4 +1,4 @@
-# ADR-007: Route visible agent dialogue and mirror material audit events
+# ADR-007: Route visible agent dialogue and mirror agreed engineering records
 
 - Status: Accepted
 - Date: 2026-09-09
@@ -63,10 +63,12 @@ live conversation and Forgejo audit trail have different purposes:
 
 - The coordinator conversation is the complete user-visible exchange needed
   to follow and control the active workflow.
-- Forgejo is the durable, human-readable engineering record. It receives every
-  material planning proposal, objection, resolution, accepted plan revision,
-  review finding, response, disagreement, decision, test result, approval, and
-  relevant commit reference under the correct identity.
+- Forgejo is the durable, human-readable engineering record. Intermediate
+  planning proposals and objections stay in the Commitarium conversation. Once
+  the agents agree, Forgejo receives the final plan and its important rationale.
+  During formal review it also receives findings, implementer responses,
+  disagreements and decisions, test results, approval, and relevant commit
+  references under the correct identity.
 
 Routine progress chatter and low-level tool activity need not become pull
 request comments. Forgejo audit entries link back to stable conversation or

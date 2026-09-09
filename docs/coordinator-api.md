@@ -22,6 +22,7 @@ this API beyond the host loopback interface is unsupported.
 | `PUT` | `/api/v1/projects/{projectID}/features/{featureID}/workspace` | Prepare the exact Forgejo branch, managed shared checkout, and draft PR |
 | `GET` | `/api/v1/projects/{projectID}/features/{featureID}/workspace` | Retrieve the durable branch, checkout, and PR identity |
 | `GET` | `/api/v1/runs/{runID}` | Retrieve run state and its ordered sessions |
+| `POST` | `/api/v1/runs/{runID}/planning` | Resume the real lead in the managed workspace for its first plan proposal |
 | `GET` | `/api/v1/sessions/{sessionID}` | Retrieve a session |
 | `GET` | `/api/v1/sessions/{sessionID}/events` | Retrieve durable observable session activity |
 | `GET` | `/api/v1/sessions/{sessionID}/events/stream` | Replay and stream observable session activity with SSE |
@@ -30,10 +31,10 @@ this API beyond the host loopback interface is unsupported.
 
 ## Idempotency
 
-Feature transitions, run starts, session commands, and goal acceptance require an
-`Idempotency-Key` header. Retrying the same operation with the same key returns
-the existing durable result. Reusing a key for a different operation returns
-`409 Conflict` with the `idempotency_conflict` error code.
+Feature transitions, run starts, planning starts, session commands, and goal
+acceptance require an `Idempotency-Key` header. Retrying the same operation with
+the same key returns the existing durable result. Reusing a key for a different
+operation returns `409 Conflict` with the `idempotency_conflict` error code.
 
 Run IDs are stable opaque values derived from the start request's idempotency
 key. Only a feature in `draft` can admit a new run, but a retry remains valid
@@ -117,8 +118,9 @@ The host and real agent container mount the same root, so both see the same file
 After the checkout is ready, the coordinator creates a Forgejo pull request from
 the deterministic feature branch into the saved base branch. Its `WIP:` title
 makes it a Forgejo draft. Its body contains the accepted goal and a hidden stable
-feature marker; later planning and review slices will add the human-readable
-audit trail.
+feature marker. The agreed plan and later formal review trail will be added in
+later slices; intermediate planning proposals and objections stay in the
+Commitarium conversation rather than cluttering the PR.
 
 The request that creates the durable reservation returns `201 Created`; later
 exact retries return `200 OK`. If a request was interrupted after the reservation
@@ -177,8 +179,7 @@ pull-request mismatch returns `409 workspace_conflict` for user review. The
 checkout response exposes only its stable workspace-relative identity, not a
 machine-specific absolute host path. `pull_request.recorded_at` is the
 coordinator's durable recording time, not Forgejo's server-side creation time. A
-later slice will assign planning turns to this checkout and begin writing the
-visible planning audit trail to the draft PR.
+separate planning action assigns the lead to this checkout.
 
 ## Starting and observing a run
 
@@ -227,6 +228,46 @@ the goal explicitly.
 
 Feature retrieval includes `accepted_goal` and `goal_accepted_at` after that
 acceptance. Both fields are omitted while clarification remains open.
+
+## Starting the lead planning proposal
+
+In `real_codex_lead` mode, planning begins only through an explicit action after
+the goal has been accepted and the managed checkout and draft pull request are
+ready:
+
+```http
+POST /api/v1/runs/run_opaque/planning
+Idempotency-Key: start-planning-1
+Content-Length: 0
+```
+
+The coordinator first reconciles the existing branch, checkout, and draft PR.
+It then records the feature transition from `draft` to `planning`, rotates the
+existing lead session to one deterministic planning attempt, and changes the
+run and session back to `running`. The attempt rotation and both operational
+status changes happen in one SQLite transaction, so a restart cannot observe
+only part of that admission.
+
+The worker resumes the lead's original provider thread but selects the managed
+feature workspace instead of the earlier read-only smoke workspace. Its prompt
+includes the accepted goal, repository and branches, exact base commit, and PR
+identity. It must inspect before proposing a concrete implementation plan and
+must not modify files, install dependencies, commit, push, or implement. Worker
+activity and the proposal remain available through the lead session history and
+SSE stream. On completion, the run and lead session return to
+`waiting_for_user` with a reason stating that the proposal is ready for reviewer
+consultation.
+
+The successful response is `202 Accepted`, contains the ordinary run resource,
+and points its `Location` header at `/api/v1/runs/{runID}`. The action is safe to
+retry and will not start a second planning attempt. Missing accepted goal,
+unready or contradictory workspace/PR state, an unsafe prior worker attempt, or
+the wrong run/session state returns `409 planning_not_ready`. This endpoint is
+currently registered only for the opt-in real-Codex runner.
+
+This slice deliberately stops after the lead proposal. A separate reviewer
+session, the combined lead/reviewer conversation stream, plan agreement, and
+the agreed-plan update to Forgejo are the next slice.
 
 A session response exposes its provider session ID as soon as the provider has
 started, rather than only after completion. It also includes
@@ -343,8 +384,8 @@ run and session are both `waiting_for_user` is not mistaken for interrupted
 work.
 
 For the real-lead mode, recovery only performs a read-only lookup of the exact
-durable worker attempt, including an interrupted follow-up turn. If it still
-exists and is consistent, the coordinator records a `recovery_assessment`
+durable worker attempt, including an interrupted follow-up or planning turn. If
+it still exists and is consistent, the coordinator records a `recovery_assessment`
 event, marks its pending reply applied once the attempt is confirmed, and
 reattaches to the event stream without starting a process. If it is missing,
 unreachable, contradictory, or indeterminate, the run waits for user review and

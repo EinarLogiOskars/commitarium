@@ -79,6 +79,19 @@ type WorkerTurnAdmissionResult struct {
 	UserEvent Event
 }
 
+// AutonomousTurnAdmission is the durable boundary for a coordinator-started
+// provider turn. Unlike WorkerTurnAdmission, it has no user command or user
+// message to record; it only replaces the worker attempt and marks the
+// existing session and run as active.
+type AutonomousTurnAdmission struct {
+	SessionID                 string
+	PreviousAttemptID         string
+	PreviousLastEventSequence int64
+	NextAttempt               WorkerAttemptCheckpoint
+	RunReason                 string
+	OccurredAt                time.Time
+}
+
 type Store interface {
 	CreateRun(ctx context.Context, run Run) error
 	GetRun(ctx context.Context, id string) (Run, error)
@@ -100,6 +113,7 @@ type Store interface {
 	ListPendingCommands(ctx context.Context, sessionID string) ([]Command, error)
 	ResolveCommand(ctx context.Context, resolution CommandResolution) (Command, error)
 	BeginWorkerTurn(ctx context.Context, admission WorkerTurnAdmission) (WorkerTurnAdmissionResult, bool, error)
+	BeginAutonomousTurn(ctx context.Context, admission AutonomousTurnAdmission) (bool, error)
 }
 
 var ErrAlreadyExists = errors.New("execution record already exists")

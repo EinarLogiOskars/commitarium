@@ -336,6 +336,34 @@ func (s *Service) BeginWorkerTurn(
 	return result, admitted, nil
 }
 
+// BeginAutonomousTurn admits a coordinator-started turn without inventing a
+// user command. It is used when workflow policy, rather than a new user
+// message, tells an existing provider conversation to continue.
+func (s *Service) BeginAutonomousTurn(
+	ctx context.Context,
+	sessionID string,
+	previous WorkerAttemptCheckpoint,
+	nextAttemptID string,
+	runReason string,
+) (bool, error) {
+	now := s.now().UTC()
+	admitted, err := s.store.BeginAutonomousTurn(ctx, AutonomousTurnAdmission{
+		SessionID:                 sessionID,
+		PreviousAttemptID:         previous.AttemptID,
+		PreviousLastEventSequence: previous.LastEventSequence,
+		NextAttempt: WorkerAttemptCheckpoint{
+			SessionID: sessionID, AttemptID: nextAttemptID,
+			CreatedAt: now, UpdatedAt: now,
+		},
+		RunReason:  runReason,
+		OccurredAt: now,
+	})
+	if err != nil {
+		return false, fmt.Errorf("begin autonomous turn for session %q: %w", sessionID, err)
+	}
+	return admitted, nil
+}
+
 func (s *Service) GetRun(ctx context.Context, id string) (Run, error) {
 	return s.store.GetRun(ctx, id)
 }

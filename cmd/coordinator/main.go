@@ -195,6 +195,7 @@ func run(ctx context.Context, coordinatorConfig config) error {
 	var sessionController httpapi.SessionController
 	var runStarter httpapi.RunStarter
 	var runRecoverer orchestration.RunRecoverer
+	var planningStarter httpapi.PlanningStarter
 	switch coordinatorConfig.runnerMode {
 	case defaultRunnerMode:
 		sessionController = orchestration.NewController(executionService, activeSessions)
@@ -225,6 +226,7 @@ func run(ctx context.Context, coordinatorConfig config) error {
 		))
 		remoteStarter, err := orchestration.NewRemoteLeadStarter(orchestration.RemoteLeadConfig{
 			Executions: executionService, Features: featureStore, Goals: workflowService,
+			Planning: workflowService, Workspaces: workspaceService,
 			Worker: client,
 			Pump: workeringest.NewPump(
 				executionService, ingestion, workeringest.NewHTTPAttemptSource(client),
@@ -239,6 +241,7 @@ func run(ctx context.Context, coordinatorConfig config) error {
 		runStarter = remoteStarter
 		runRecoverer = remoteStarter
 		sessionController = remoteStarter
+		planningStarter = remoteStarter
 	default:
 		return fmt.Errorf("unsupported coordinator runner mode %q", coordinatorConfig.runnerMode)
 	}
@@ -255,7 +258,7 @@ func run(ctx context.Context, coordinatorConfig config) error {
 	if recoveredRuns > 0 {
 		log.Printf("recovering %d interrupted workflow(s)", recoveredRuns)
 	}
-	handler := httpapi.NewWithWorkspaceService(
+	handler := httpapi.NewWithWorkspaceAndPlanningService(
 		projectService,
 		featureService,
 		workflowService,
@@ -263,6 +266,7 @@ func run(ctx context.Context, coordinatorConfig config) error {
 		sessionController,
 		runStarter,
 		workspaceService,
+		planningStarter,
 	)
 
 	log.Print("Listening...")

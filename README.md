@@ -24,10 +24,12 @@ the final goal to close clarification. After acceptance, the public API can now
 reserve a durable feature workspace identity, create its exact Forgejo branch
 from the repository's recorded default-branch commit, and create the feature's
 draft pull request. It also creates an ordinary host-visible checkout of that
-branch that the user and agent container can share. Agent-driven file changes,
-collaborative planning and review, Claude Code execution, and the user interface
-remain to be built. Projects can be listed and permanently associated with one
-verified Forgejo repository.
+branch that the user and agent container can share. An explicit planning action
+then resumes that same lead conversation inside the managed checkout and makes
+its read-only plan proposal visible in the existing session activity stream.
+The separate reviewer turn, agent-driven file changes, review, Claude Code
+execution, and the user interface remain to be built. Projects can be listed
+and permanently associated with one verified Forgejo repository.
 
 ## Architecture
 
@@ -276,8 +278,28 @@ Missing or contradictory state returns a conflict for user review; Commitarium
 never resets or cleans the directory and never creates a replacement PR when
 ownership is uncertain. The response is `201 Created` when the reservation is
 first created and `200 OK` for a retry, with the PR number and browser URL
-included. This operation does not yet assign the real lead to this checkout,
-provide its temporary Forgejo Git credential, or begin collaborative planning.
+included. This preparation operation does not invoke an agent; planning begins
+through the separate action below.
+
+Start the lead's first planning turn after the workspace is ready:
+
+```sh
+curl -i -X POST \
+  http://127.0.0.1:8080/api/v1/runs/RUN_ID/planning \
+  -H 'Idempotency-Key: start-planning-1' \
+  -H 'Content-Length: 0'
+```
+
+The coordinator rechecks the branch, shared checkout, and draft PR, moves the
+feature from `draft` to `planning`, and resumes the original Codex thread with
+the managed workspace selected. The lead is told to inspect the repository and
+produce a concrete proposal without editing files, installing dependencies,
+committing, pushing, or implementing. Its commands and final proposal appear in
+the same session history and SSE stream used during goal clarification. A
+coordinator restart reattaches to the exact planning attempt; it never launches
+a replacement merely because the connection was interrupted. This bounded
+slice stops after the lead proposal. The next slice supplies that exact proposal
+to a separate reviewer conversation.
 
 The versioned [internal worker API](docs/worker-api.md) now has tested client and
 server components for authenticated attempt inspection and control. Its worker
@@ -317,8 +339,9 @@ persistent provider and journal volumes. The earlier standalone smoke path still
 mounts its selected repository read-only. It does not
 require a manifest, configuration revision, or materialization digest. Automatic
 provider-credential provisioning and Forgejo repository import remain separate
-future slices. Coordinator wiring is currently limited to the goal-clarification
-conversation plus verified project/repository association.
+future slices. Coordinator wiring currently covers goal clarification, explicit
+goal acceptance, verified project/repository preparation, and the lead's first
+read-only planning proposal.
 
 The worker also has a provider-neutral operating-system process-supervision
 foundation. It can start one exact child process group, expose bounded and
