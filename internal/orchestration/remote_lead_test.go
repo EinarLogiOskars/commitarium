@@ -33,6 +33,82 @@ type remoteLeadWorkerStub struct {
 
 type unavailableRemoteLeadWorker struct{}
 
+type conversationalRemoteLeadWorker struct {
+	mu          sync.Mutex
+	putRequests []workerhttp.PutAttemptRequest
+	initial     map[workerhttp.AttemptReference]workerhttp.Attempt
+	terminal    map[workerhttp.AttemptReference]workerhttp.Attempt
+	events      map[workerhttp.AttemptReference][]workerhttp.Event
+}
+
+func (stub *conversationalRemoteLeadWorker) PutAttempt(
+	_ context.Context,
+	identity workerhttp.MutationIdentity,
+	request workerhttp.PutAttemptRequest,
+) (workerhttp.Attempt, bool, error) {
+	stub.mu.Lock()
+	defer stub.mu.Unlock()
+	attempt, ok := stub.initial[identity.AttemptReference]
+	if !ok {
+		return workerhttp.Attempt{}, false, errors.New("unexpected attempt identity")
+	}
+	stub.putRequests = append(stub.putRequests, request)
+	return attempt, true, nil
+}
+
+func (stub *conversationalRemoteLeadWorker) GetAttempt(
+	_ context.Context,
+	reference workerhttp.AttemptReference,
+) (workerhttp.Attempt, error) {
+	stub.mu.Lock()
+	defer stub.mu.Unlock()
+	attempt, ok := stub.terminal[reference]
+	if !ok {
+		return workerhttp.Attempt{}, errors.New("unexpected attempt identity")
+	}
+	return attempt, nil
+}
+
+func (*conversationalRemoteLeadWorker) SendCommand(
+	context.Context,
+	workerhttp.MutationIdentity,
+	workerhttp.CommandRequest,
+) (workerhttp.Attempt, error) {
+	return workerhttp.Attempt{}, errors.New("commands are not expected")
+}
+
+func (*conversationalRemoteLeadWorker) ForceStop(
+	context.Context,
+	workerhttp.MutationIdentity,
+	workerhttp.ForceStopRequest,
+) (workerhttp.Attempt, error) {
+	return workerhttp.Attempt{}, errors.New("force stop is not expected")
+}
+
+func (stub *conversationalRemoteLeadWorker) OpenEventStream(
+	_ context.Context,
+	reference workerhttp.AttemptReference,
+	afterSequence int64,
+) (workerhttp.EventStream, error) {
+	stub.mu.Lock()
+	defer stub.mu.Unlock()
+	all, ok := stub.events[reference]
+	if !ok {
+		return workerhttp.EventStream{}, errors.New("unexpected attempt identity")
+	}
+	replay := make([]workerhttp.Event, 0, len(all))
+	for _, event := range all {
+		if event.Sequence > afterSequence {
+			replay = append(replay, event)
+		}
+	}
+	closed := make(chan workerhttp.Event)
+	close(closed)
+	return workerhttp.EventStream{
+		Replay: replay, ReplayThrough: int64(len(all)), Live: closed, Close: func() {},
+	}, nil
+}
+
 func (unavailableRemoteLeadWorker) PutAttempt(
 	context.Context,
 	workerhttp.MutationIdentity,
@@ -147,7 +223,7 @@ func TestRemoteLeadStartsOneWorkerTurnAndWaitsForUser(t *testing.T) {
 		},
 	))
 	starter, err := NewRemoteLeadStarter(RemoteLeadConfig{
-		Executions: executions, Worker: client,
+		Executions: executions, Features: database.NewFeatureStore(db), Worker: client,
 		Pump:     workeringest.NewPump(executions, ingester, workeringest.NewHTTPAttemptSource(client)),
 		Lifetime: t.Context(), AgentProfileID: "codex-default", WorkspaceID: "project-read-only",
 	})
@@ -207,7 +283,7 @@ func TestRemoteLeadStartsOneWorkerTurnAndWaitsForUser(t *testing.T) {
 }
 
 func TestRemoteLeadRecoveryReusesDurableWorkerAttempt(t *testing.T) {
-	_, executions, storedProject, storedFeature := newRemoteLeadExecution(t)
+	db, executions, storedProject, storedFeature := newRemoteLeadExecution(t)
 	runID := "run_remote_recovery"
 	workerStub := newCompletedRemoteLeadWorker(runID, storedProject.ID, storedFeature.ID)
 	handler, err := workerhttp.NewServer(workerhttp.ServerConfig{
@@ -236,7 +312,8 @@ func TestRemoteLeadRecoveryReusesDurableWorkerAttempt(t *testing.T) {
 	))
 	pump := workeringest.NewPump(executions, ingester, workeringest.NewHTTPAttemptSource(client))
 	starter, err := NewRemoteLeadStarter(RemoteLeadConfig{
-		Executions: executions, Worker: client, Pump: pump, Lifetime: t.Context(),
+		Executions: executions, Features: database.NewFeatureStore(db),
+		Worker: client, Pump: pump, Lifetime: t.Context(),
 		AgentProfileID: "codex-default", WorkspaceID: "project-read-only",
 	})
 	if err != nil {
@@ -285,11 +362,12 @@ func TestRemoteLeadRecoveryReusesDurableWorkerAttempt(t *testing.T) {
 }
 
 func TestRemoteLeadRequiresReviewWhenWorkerStateCannotBeConfirmed(t *testing.T) {
-	_, executions, storedProject, storedFeature := newRemoteLeadExecution(t)
+	db, executions, storedProject, storedFeature := newRemoteLeadExecution(t)
 	pump := &unexpectedRemoteLeadPump{}
 	reported := make(chan error, 1)
 	starter, err := NewRemoteLeadStarter(RemoteLeadConfig{
-		Executions: executions, Worker: unavailableRemoteLeadWorker{}, Pump: pump,
+		Executions: executions, Features: database.NewFeatureStore(db),
+		Worker: unavailableRemoteLeadWorker{}, Pump: pump,
 		Lifetime: t.Context(), AgentProfileID: "codex-default", WorkspaceID: "project-read-only",
 		ReportError: func(err error) { reported <- err },
 	})
@@ -328,6 +406,215 @@ func TestRemoteLeadRequiresReviewWhenWorkerStateCannotBeConfirmed(t *testing.T) 
 	if len(events) != 1 || events[0].Type != worker.EventRecoveryAssessment ||
 		events[0].Text == "" {
 		t.Fatalf("uncertain worker state was not visible: %+v", events)
+	}
+}
+
+func TestRemoteLeadResumesSameConversationForRepeatedUserReplies(t *testing.T) {
+	db, executions, storedProject, storedFeature := newRemoteLeadExecution(t)
+	runID := "run_remote_replies"
+	stub := newConversationalRemoteLeadWorker(
+		runID, storedProject.ID, storedFeature.ID, "reply-one", "reply-two",
+	)
+	handler, err := workerhttp.NewServer(workerhttp.ServerConfig{
+		BearerToken: remoteLeadTestToken, Provider: workerhttp.ProviderCodex,
+		Capabilities: []workerhttp.Capability{
+			workerhttp.CapabilityStart, workerhttp.CapabilityResume,
+			workerhttp.CapabilityEventReplay,
+		},
+		MaxConcurrentAttempts: 1, EventSource: stub,
+	}, stub)
+	if err != nil {
+		t.Fatalf("create worker server: %v", err)
+	}
+	server := httptest.NewServer(handler)
+	t.Cleanup(server.Close)
+	client, err := workerhttp.NewClient(workerhttp.ClientConfig{
+		BaseURL: server.URL, BearerToken: remoteLeadTestToken,
+		RequestTimeout: time.Second, HTTPClient: server.Client(),
+	})
+	if err != nil {
+		t.Fatalf("create worker client: %v", err)
+	}
+	ingester := workeringest.NewService(executions, workeringest.FilterFunc(
+		func(_ context.Context, event workerhttp.Event) (workerhttp.Event, error) {
+			return event, nil
+		},
+	))
+	starter, err := NewRemoteLeadStarter(RemoteLeadConfig{
+		Executions: executions, Features: database.NewFeatureStore(db), Worker: client,
+		Pump:     workeringest.NewPump(executions, ingester, workeringest.NewHTTPAttemptSource(client)),
+		Lifetime: t.Context(), AgentProfileID: "codex-default", WorkspaceID: "project-read-only",
+	})
+	if err != nil {
+		t.Fatalf("create real lead starter: %v", err)
+	}
+	if _, _, err := starter.Start(
+		t.Context(), runID, storedProject.ID, storedFeature.ID, storedFeature.Title,
+	); err != nil {
+		t.Fatalf("start lead conversation: %v", err)
+	}
+	waitForRemoteLeadStatus(t, executions, runID, execution.RunStatusWaitingForUser)
+	sessionID := remoteLeadSessionID(runID)
+
+	firstReply := worker.Command{ID: "reply-one", Type: worker.CommandMessage, Message: "CSV export is enough."}
+	command, err := starter.SendCommand(t.Context(), sessionID, firstReply)
+	if err != nil {
+		t.Fatalf("send first reply: %v", err)
+	}
+	if command.Status != execution.CommandStatusPending {
+		t.Fatalf("new reply status = %q, want pending", command.Status)
+	}
+	waitForRemoteLeadStatus(t, executions, runID, execution.RunStatusWaitingForUser)
+	applied, err := executions.GetCommand(t.Context(), firstReply.ID)
+	if err != nil || applied.Status != execution.CommandStatusApplied {
+		t.Fatalf("first reply was not applied: %+v err=%v", applied, err)
+	}
+	if retried, err := starter.SendCommand(t.Context(), sessionID, firstReply); err != nil ||
+		retried.Status != execution.CommandStatusApplied {
+		t.Fatalf("idempotent reply retry failed: %+v err=%v", retried, err)
+	}
+
+	secondReply := worker.Command{ID: "reply-two", Type: worker.CommandMessage, Message: "Only administrators need access."}
+	if _, err := starter.SendCommand(t.Context(), sessionID, secondReply); err != nil {
+		t.Fatalf("send second reply: %v", err)
+	}
+	waitForRemoteLeadStatus(t, executions, runID, execution.RunStatusWaitingForUser)
+
+	session, err := executions.GetSession(t.Context(), sessionID)
+	if err != nil {
+		t.Fatalf("get continued lead session: %v", err)
+	}
+	if session.ProviderSessionID != "codex-thread-test" || session.Status != execution.SessionStatusWaitingForUser {
+		t.Fatalf("reply did not preserve the provider conversation: %+v", session)
+	}
+	events, err := executions.EventsForSession(t.Context(), sessionID)
+	if err != nil {
+		t.Fatalf("list continued conversation: %v", err)
+	}
+	if len(events) != 8 || events[2].Type != worker.EventUserMessage ||
+		events[2].Text != firstReply.Message || events[5].Type != worker.EventUserMessage ||
+		events[5].Text != secondReply.Message {
+		t.Fatalf("unexpected visible multi-turn conversation %+v", events)
+	}
+	stub.mu.Lock()
+	requests := append([]workerhttp.PutAttemptRequest(nil), stub.putRequests...)
+	stub.mu.Unlock()
+	if len(requests) != 3 || requests[0].Mode != workerhttp.AttemptModeStart {
+		t.Fatalf("unexpected worker launches %+v", requests)
+	}
+	for index, reply := range []worker.Command{firstReply, secondReply} {
+		request := requests[index+1]
+		if request.Mode != workerhttp.AttemptModeResume ||
+			request.ProviderSessionID != "codex-thread-test" ||
+			!strings.Contains(request.Instructions, reply.Message) {
+			t.Fatalf("reply %d did not resume the original thread: %+v", index+1, request)
+		}
+	}
+}
+
+func TestRemoteLeadRecoveryReattachesToCommittedReplyAttempt(t *testing.T) {
+	db, executions, storedProject, storedFeature := newRemoteLeadExecution(t)
+	runID := "run_remote_reply_recovery"
+	stub := newConversationalRemoteLeadWorker(
+		runID, storedProject.ID, storedFeature.ID, "reply-before-restart",
+	)
+	handler, err := workerhttp.NewServer(workerhttp.ServerConfig{
+		BearerToken: remoteLeadTestToken, Provider: workerhttp.ProviderCodex,
+		Capabilities: []workerhttp.Capability{
+			workerhttp.CapabilityStart, workerhttp.CapabilityResume,
+			workerhttp.CapabilityEventReplay,
+		},
+		MaxConcurrentAttempts: 1, EventSource: stub,
+	}, stub)
+	if err != nil {
+		t.Fatalf("create worker server: %v", err)
+	}
+	server := httptest.NewServer(handler)
+	t.Cleanup(server.Close)
+	client, err := workerhttp.NewClient(workerhttp.ClientConfig{
+		BaseURL: server.URL, BearerToken: remoteLeadTestToken,
+		RequestTimeout: time.Second, HTTPClient: server.Client(),
+	})
+	if err != nil {
+		t.Fatalf("create worker client: %v", err)
+	}
+	newStarter := func() *RemoteLeadStarter {
+		ingester := workeringest.NewService(executions, workeringest.FilterFunc(
+			func(_ context.Context, event workerhttp.Event) (workerhttp.Event, error) {
+				return event, nil
+			},
+		))
+		starter, createErr := NewRemoteLeadStarter(RemoteLeadConfig{
+			Executions: executions, Features: database.NewFeatureStore(db), Worker: client,
+			Pump:     workeringest.NewPump(executions, ingester, workeringest.NewHTTPAttemptSource(client)),
+			Lifetime: t.Context(), AgentProfileID: "codex-default", WorkspaceID: "project-read-only",
+		})
+		if createErr != nil {
+			t.Fatalf("create real lead starter: %v", createErr)
+		}
+		return starter
+	}
+	starter := newStarter()
+	if _, _, err := starter.Start(
+		t.Context(), runID, storedProject.ID, storedFeature.ID, storedFeature.Title,
+	); err != nil {
+		t.Fatalf("start lead conversation: %v", err)
+	}
+	waitForRemoteLeadStatus(t, executions, runID, execution.RunStatusWaitingForUser)
+
+	sessionID := remoteLeadSessionID(runID)
+	_, err = executions.GetSession(t.Context(), sessionID)
+	if err != nil {
+		t.Fatalf("load waiting lead session: %v", err)
+	}
+	checkpoint, err := executions.GetWorkerAttempt(t.Context(), sessionID)
+	if err != nil {
+		t.Fatalf("load first turn checkpoint: %v", err)
+	}
+	reply := worker.Command{
+		ID: "reply-before-restart", Type: worker.CommandMessage,
+		Message: "The export should include all visible columns.",
+	}
+	if _, admitted, err := executions.BeginWorkerTurn(
+		t.Context(), reply, sessionID, checkpoint, replyAttemptID(sessionID, reply.ID),
+		"The lead agent is responding to the user's message.",
+	); err != nil || !admitted {
+		t.Fatalf("commit reply before simulated restart: admitted=%t err=%v", admitted, err)
+	}
+	interruptedRun, err := executions.GetRun(t.Context(), runID)
+	if err != nil {
+		t.Fatalf("load interrupted run: %v", err)
+	}
+	if err := newStarter().Recover(
+		t.Context(), interruptedRun, storedFeature, project.RecoveryPolicyApprovalRequired,
+	); err != nil {
+		t.Fatalf("recover committed reply: %v", err)
+	}
+	waitForRemoteLeadStatus(t, executions, runID, execution.RunStatusWaitingForUser)
+
+	applied, err := executions.GetCommand(t.Context(), reply.ID)
+	if err != nil || applied.Status != execution.CommandStatusApplied {
+		t.Fatalf("recovered reply was not marked applied: %+v err=%v", applied, err)
+	}
+	stub.mu.Lock()
+	putCount := len(stub.putRequests)
+	stub.mu.Unlock()
+	if putCount != 1 {
+		t.Fatalf("recovery issued a replacement worker request: put count=%d, want only initial start", putCount)
+	}
+	events, err := executions.EventsForSession(t.Context(), sessionID)
+	if err != nil {
+		t.Fatalf("list recovered conversation: %v", err)
+	}
+	foundAssessment := false
+	for _, event := range events {
+		if event.Type == worker.EventRecoveryAssessment &&
+			strings.Contains(event.Text, "reattached") {
+			foundAssessment = true
+		}
+	}
+	if !foundAssessment {
+		t.Fatalf("recovery decision was not visible in session activity: %+v", events)
 	}
 }
 
@@ -390,6 +677,65 @@ func newCompletedRemoteLeadWorker(runID, projectID, featureID string) *remoteLea
 		}
 	}
 	return &remoteLeadWorkerStub{initial: initial, terminal: terminal, events: events}
+}
+
+func newConversationalRemoteLeadWorker(
+	runID string,
+	projectID string,
+	featureID string,
+	commandIDs ...string,
+) *conversationalRemoteLeadWorker {
+	stub := &conversationalRemoteLeadWorker{
+		initial:  make(map[workerhttp.AttemptReference]workerhttp.Attempt),
+		terminal: make(map[workerhttp.AttemptReference]workerhttp.Attempt),
+		events:   make(map[workerhttp.AttemptReference][]workerhttp.Event),
+	}
+	sessionID := remoteLeadSessionID(runID)
+	attemptIDs := []string{sessionID + ":turn:1"}
+	for _, commandID := range commandIDs {
+		attemptIDs = append(attemptIDs, replyAttemptID(sessionID, commandID))
+	}
+	now := time.Date(2026, time.September, 9, 18, 0, 0, 0, time.UTC)
+	for index, attemptID := range attemptIDs {
+		reference := workerhttp.AttemptReference{SessionID: sessionID, AttemptID: attemptID}
+		mode := workerhttp.AttemptModeStart
+		if index > 0 {
+			mode = workerhttp.AttemptModeResume
+		}
+		initial := workerhttp.Attempt{
+			AttemptReference: reference, Mode: mode,
+			Assignment: workerhttp.Assignment{
+				AgentProfileID: "codex-default", ProjectID: projectID, FeatureID: featureID,
+				Role: workerhttp.RoleLead, WorkspaceID: "project-read-only",
+			},
+			ProviderSessionID: "codex-thread-test", State: workerhttp.AttemptStateRunning,
+			StartedAt: now.Add(time.Duration(index) * time.Minute),
+			UpdatedAt: now.Add(time.Duration(index) * time.Minute),
+		}
+		endedAt := initial.StartedAt.Add(time.Second)
+		terminal := initial
+		terminal.State = workerhttp.AttemptStateTerminal
+		terminal.LatestEventSequence = 2
+		terminal.UpdatedAt = endedAt
+		terminal.EndedAt = &endedAt
+		terminal.Result = &workerhttp.TerminalResult{
+			Outcome: workerhttp.OutcomeCompleted, Disposition: workerhttp.DispositionInputRequired,
+			Summary: "Asked the next clarification question.",
+		}
+		stub.initial[reference] = initial
+		stub.terminal[reference] = terminal
+		stub.events[reference] = []workerhttp.Event{
+			{
+				AttemptReference: reference, Sequence: 1, Type: workerhttp.EventMessage,
+				Text: "Clarification response for turn", OccurredAt: initial.StartedAt,
+			},
+			{
+				AttemptReference: reference, Sequence: 2, Type: workerhttp.EventAttemptTerminal,
+				Text: terminal.Result.Summary, OccurredAt: endedAt,
+			},
+		}
+	}
+	return stub
 }
 
 func waitForRemoteLeadStatus(

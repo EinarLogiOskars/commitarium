@@ -128,11 +128,12 @@ func run(ctx context.Context, coordinatorConfig config) error {
 	executionStore := coordinatordatabase.NewExecutionStore(db)
 	executionService := execution.NewService(executionStore)
 	activeSessions := orchestration.NewActiveSessions()
-	sessionController := orchestration.NewController(executionService, activeSessions)
+	var sessionController httpapi.SessionController
 	var runStarter httpapi.RunStarter
 	var runRecoverer orchestration.RunRecoverer
 	switch coordinatorConfig.runnerMode {
 	case defaultRunnerMode:
+		sessionController = orchestration.NewController(executionService, activeSessions)
 		runner := orchestration.NewRunner(workflowService, executionService, activeSessions)
 		simulatedStarter := orchestration.NewStarter(
 			runner,
@@ -159,7 +160,7 @@ func run(ctx context.Context, coordinatorConfig config) error {
 			},
 		))
 		remoteStarter, err := orchestration.NewRemoteLeadStarter(orchestration.RemoteLeadConfig{
-			Executions: executionService, Worker: client,
+			Executions: executionService, Features: featureStore, Worker: client,
 			Pump: workeringest.NewPump(
 				executionService, ingestion, workeringest.NewHTTPAttemptSource(client),
 			),
@@ -172,6 +173,7 @@ func run(ctx context.Context, coordinatorConfig config) error {
 		}
 		runStarter = remoteStarter
 		runRecoverer = remoteStarter
+		sessionController = remoteStarter
 	default:
 		return fmt.Errorf("unsupported coordinator runner mode %q", coordinatorConfig.runnerMode)
 	}
