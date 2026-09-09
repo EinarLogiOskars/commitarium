@@ -21,12 +21,15 @@ built.
 
 ## Architecture
 
-Docker Compose runs two local-only services:
+Docker Compose runs three local services:
 
 - `coordinator` exposes the Go API on `127.0.0.1:8080` and stores operational
   state in its SQLite volume.
 - `forgejo` exposes the internal forge on `127.0.0.1:3001` and has its own
   separate volume.
+- `simulated-codex-worker` runs the private worker HTTP API inside the Compose
+  network and stores its execution journal in a worker-only volume. It does not
+  publish a host port during normal use.
 
 Forgejo is the agent-managed source of truth for plans, review discussion, and
 the internal pull-request audit trail. The coordinator database stores only the
@@ -41,7 +44,16 @@ curl http://127.0.0.1:8080/health
 ```
 
 The coordinator requires `COMMITARIUM_DATABASE_PATH`; Compose configures it to
-use the persistent coordinator volume.
+use the persistent coordinator volume. The simulated worker similarly uses
+`COMMITARIUM_WORKER_DATABASE_PATH` for its own journal volume. Its internal API
+token defaults to `commitarium-local-simulated-worker` for local development
+and can be overridden with `COMMITARIUM_SIMULATED_WORKER_TOKEN`. This token only
+authenticates coordinator-to-worker HTTP requests; it is not a Codex account or
+API credential.
+
+The coordinator still executes its original deterministic agents in-process.
+The standalone worker is currently an independently testable deployment unit;
+wiring the coordinator runtime to it is a later slice.
 
 Stop the services without deleting their data:
 
@@ -106,9 +118,12 @@ not store raw mutation bodies or provider transcripts. A journal-backed worker
 service now connects those records to the existing HTTP operations and SSE
 stream using the deterministic provider adapter. It captures resumable provider
 identity before reporting an attempt as running, applies idempotent controls,
-and marks interrupted work uncertain on service startup. A standalone worker
-process, Compose worker services, real provider processes, and the concrete
-redaction rules still remain to be built.
+and marks interrupted work uncertain on service startup. A standalone simulated
+Codex worker now serves this boundary as a long-running process. Its private
+SQLite journal survives container recreation and its compiled deterministic
+scripts can serve repeated logical sessions. Real provider processes,
+coordinator runtime wiring, and provider-specific output handling still remain
+to be built.
 
 ## Development checks
 
@@ -127,4 +142,14 @@ and verifies that completed work was not duplicated:
 
 ```sh
 ./scripts/test-compose-recovery.sh
+```
+
+The standalone-worker check uses a separate isolated Compose project. It starts
+a long-running attempt through the authenticated worker API, removes and
+recreates the worker container while preserving its journal volume, and proves
+that the original attempt becomes uncertain, exact retries remain idempotent,
+and replacement attempts stay blocked:
+
+```sh
+./scripts/test-compose-worker-restart.sh
 ```

@@ -24,6 +24,7 @@ type ScriptedAdapter struct {
 	mu               sync.Mutex
 	sessions         map[string]*scriptedSession
 	nextScriptByRole map[Role]int
+	repeatScript     bool
 }
 
 var ErrScriptNotFound = errors.New("worker script not found")
@@ -39,6 +40,18 @@ func NewScriptedAdapter(provider string, scripts map[Role]Script) *ScriptedAdapt
 		queuedScripts[role] = []Script{script}
 	}
 	return NewQueuedScriptedAdapter(provider, queuedScripts)
+}
+
+// NewRepeatingScriptedAdapter returns a deterministic provider suitable for a
+// long-running development worker. Every new logical session receives the
+// same role-specific script while keeping a unique provider session identity.
+func NewRepeatingScriptedAdapter(
+	provider string,
+	scripts map[Role]Script,
+) *ScriptedAdapter {
+	adapter := NewScriptedAdapter(provider, scripts)
+	adapter.repeatScript = true
+	return adapter
 }
 
 func NewQueuedScriptedAdapter(
@@ -83,11 +96,16 @@ func (a *ScriptedAdapter) Start(
 
 	roleScripts := a.scripts[request.Role]
 	nextScript := a.nextScriptByRole[request.Role]
+	if a.repeatScript {
+		nextScript = 0
+	}
 	if nextScript >= len(roleScripts) {
 		return nil, fmt.Errorf("%w for role %q", ErrScriptNotFound, request.Role)
 	}
 	script := roleScripts[nextScript]
-	a.nextScriptByRole[request.Role]++
+	if !a.repeatScript {
+		a.nextScriptByRole[request.Role]++
+	}
 	providerSessionID := fmt.Sprintf(
 		"%s:%s:%d:%s",
 		a.provider,
@@ -157,7 +175,7 @@ func (a *ScriptedAdapter) Resume(
 		},
 	)
 	a.sessions[request.SessionID] = session
-	if a.nextScriptByRole[request.Role] <= scriptIndex {
+	if !a.repeatScript && a.nextScriptByRole[request.Role] <= scriptIndex {
 		a.nextScriptByRole[request.Role] = scriptIndex + 1
 	}
 	go session.run()

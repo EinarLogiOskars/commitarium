@@ -46,6 +46,43 @@ func TestScriptedAdapterRunsDeterministicSession(t *testing.T) {
 	}
 }
 
+func TestRepeatingScriptedAdapterServesIndependentLogicalSessions(t *testing.T) {
+	script := Script{
+		Events:      []Event{{Type: EventActivity, Text: "deterministic work"}},
+		Disposition: DispositionSucceeded,
+		Summary:     "completed repeated script",
+	}
+	adapter := NewRepeatingScriptedAdapter("codex", map[Role]Script{RoleCoder: script})
+	request := testSessionRequest()
+	request.SessionID = "ses_first"
+	first, err := adapter.Start(t.Context(), request)
+	if err != nil {
+		t.Fatalf("start first repeated session: %v", err)
+	}
+	request.SessionID = "ses_second"
+	second, err := adapter.Start(t.Context(), request)
+	if err != nil {
+		t.Fatalf("start second repeated session: %v", err)
+	}
+	if first.ProviderSessionID() == second.ProviderSessionID() {
+		t.Fatalf("repeated sessions share provider identity %q", first.ProviderSessionID())
+	}
+	if err := adapter.Advance(t.Context(), "ses_first"); err != nil {
+		t.Fatalf("advance first repeated session: %v", err)
+	}
+	if err := adapter.Advance(t.Context(), "ses_second"); err != nil {
+		t.Fatalf("advance second repeated session: %v", err)
+	}
+	firstResult, err := first.Wait(t.Context())
+	if err != nil || firstResult.Summary != script.Summary {
+		t.Fatalf("first repeated result=%+v error=%v", firstResult, err)
+	}
+	secondResult, err := second.Wait(t.Context())
+	if err != nil || secondResult.Summary != script.Summary {
+		t.Fatalf("second repeated result=%+v error=%v", secondResult, err)
+	}
+}
+
 func TestAutomaticScriptedAdapterAdvancesSession(t *testing.T) {
 	adapter := NewAutomaticScriptedAdapter(testScriptedAdapter(), time.Millisecond)
 	session, err := adapter.Start(t.Context(), testSessionRequest())

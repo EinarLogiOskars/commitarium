@@ -13,6 +13,20 @@ services:
     ports:
       - "127.0.0.1:${COMMITARIUM_COORDINATOR_PORT:-8080}:8080"
 
+  simulated-codex-worker:
+    build:
+      context: .
+      dockerfile: docker/worker.Dockerfile
+    environment:
+      COMMITARIUM_WORKER_DATABASE_PATH: /var/lib/commitarium-worker/worker.db
+      COMMITARIUM_WORKER_LISTEN_ADDRESS: :8081
+      COMMITARIUM_WORKER_STEP_DELAY: ${COMMITARIUM_WORKER_STEP_DELAY:-250ms}
+      COMMITARIUM_WORKER_TOKEN: ${COMMITARIUM_SIMULATED_WORKER_TOKEN:-commitarium-local-simulated-worker}
+    volumes:
+      - simulated-codex-worker-journal:/var/lib/commitarium-worker
+    expose:
+      - "8081"
+
   forgejo:
     image: codeberg.org/forgejo/forgejo:16.0.3-rootless
     user: "1000:1000"
@@ -29,3 +43,4 @@ services:
 volumes:
   coordinator-data:
   forgejo-data:
+  simulated-codex-worker-journal:
