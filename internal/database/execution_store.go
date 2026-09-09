@@ -268,9 +268,10 @@ func (s *ExecutionStore) ListActiveSessions(
 		        outcome, disposition, summary, recovery_attempt,
 		        started_at, updated_at, ended_at
 		 FROM sessions
-		 WHERE run_id = ? AND status NOT IN (?, ?, ?)
+		 WHERE run_id = ? AND status NOT IN (?, ?, ?, ?)
 		 ORDER BY started_at, id`,
 		runID,
+		execution.SessionStatusWaitingForUser,
 		execution.SessionStatusCompleted,
 		execution.SessionStatusStopped,
 		execution.SessionStatusFailed,

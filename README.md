@@ -25,11 +25,14 @@ reserve a durable feature workspace identity, create its exact Forgejo branch
 from the repository's recorded default-branch commit, and create the feature's
 draft pull request. It also creates an ordinary host-visible checkout of that
 branch that the user and agent container can share. An explicit planning action
-then resumes that same lead conversation inside the managed checkout and makes
-its read-only plan proposal visible in the existing session activity stream.
-The separate reviewer turn, agent-driven file changes, review, Claude Code
-execution, and the user interface remain to be built. Projects can be listed
-and permanently associated with one verified Forgejo repository.
+resumes that same lead conversation inside the managed checkout. A second
+action starts a separate persistent reviewer Codex conversation, supplies the
+lead's exact final proposal, and exposes both final messages through one ordered
+planning history and SSE stream. This first exchange stops after the reviewer
+responds. The revision loop, agreed-plan Forgejo update, file changes,
+implementation review, Claude Code execution, and user interface remain to be
+built. Projects can be listed and permanently associated with one verified
+Forgejo repository.
 
 ## Architecture
 
@@ -297,9 +300,34 @@ produce a concrete proposal without editing files, installing dependencies,
 committing, pushing, or implementing. Its commands and final proposal appear in
 the same session history and SSE stream used during goal clarification. A
 coordinator restart reattaches to the exact planning attempt; it never launches
-a replacement merely because the connection was interrupted. This bounded
-slice stops after the lead proposal. The next slice supplies that exact proposal
-to a separate reviewer conversation.
+a replacement merely because the connection was interrupted.
+
+Start the first reviewer turn after the lead proposal is ready:
+
+```sh
+curl -i -X POST \
+  http://127.0.0.1:8080/api/v1/runs/RUN_ID/planning/reviewer \
+  -H 'Idempotency-Key: start-reviewer-1' \
+  -H 'Content-Length: 0'
+```
+
+The coordinator atomically creates a distinct durable `reviewer` session and
+its first worker attempt, then starts a new Codex conversation in the same
+managed checkout. The reviewer receives the accepted goal, repository and PR
+facts, and the lead's exact final proposal. It must inspect the repository,
+challenge the plan, and clearly accept it or request changes without modifying
+files. The two final authored responses are available together through:
+
+```sh
+curl http://127.0.0.1:8080/api/v1/runs/RUN_ID/planning/messages
+curl -N http://127.0.0.1:8080/api/v1/runs/RUN_ID/planning/messages/stream
+```
+
+Each message text still has one authoritative copy in its agent session; the
+shared planning history stores only references and cross-session order. Earlier
+provider preambles, commands, and activity remain visible in the individual
+session streams. This bounded slice stops after the first reviewer response and
+does not update the draft PR.
 
 The versioned [internal worker API](docs/worker-api.md) now has tested client and
 server components for authenticated attempt inspection and control. Its worker
@@ -340,8 +368,8 @@ mounts its selected repository read-only. It does not
 require a manifest, configuration revision, or materialization digest. Automatic
 provider-credential provisioning and Forgejo repository import remain separate
 future slices. Coordinator wiring currently covers goal clarification, explicit
-goal acceptance, verified project/repository preparation, and the lead's first
-read-only planning proposal.
+goal acceptance, verified project/repository preparation, and the first
+read-only lead/reviewer planning exchange.
 
 The worker also has a provider-neutral operating-system process-supervision
 foundation. It can start one exact child process group, expose bounded and

@@ -13,14 +13,16 @@ import (
 type Service struct {
 	store      Store
 	broker     *eventBroker
+	planning   *planningMessageBroker
 	generateID func() string
 	now        func() time.Time
 }
 
 func NewService(store Store) *Service {
 	return &Service{
-		store:  store,
-		broker: newEventBroker(defaultSubscriberBuffer),
+		store:    store,
+		broker:   newEventBroker(defaultSubscriberBuffer),
+		planning: newPlanningMessageBroker(defaultSubscriberBuffer),
 		generateID: func() string {
 			return "sev_" + rand.Text()
 		},
@@ -364,6 +366,52 @@ func (s *Service) BeginAutonomousTurn(
 	return admitted, nil
 }
 
+// BeginNewSessionTurn creates the first attempt of a second logical agent
+// conversation without leaving partially admitted work across a restart.
+func (s *Service) BeginNewSessionTurn(
+	ctx context.Context,
+	sessionID string,
+	runID string,
+	agentID string,
+	role worker.Role,
+	attemptID string,
+	runReason string,
+) (bool, error) {
+	now := s.now().UTC()
+	admitted, err := s.store.BeginNewSessionTurn(ctx, NewSessionTurnAdmission{
+		Session: Session{
+			ID: sessionID, RunID: runID, AgentID: agentID, Role: role,
+			Status: SessionStatusStarting, StartedAt: now, UpdatedAt: now,
+		},
+		Attempt: WorkerAttemptCheckpoint{
+			SessionID: sessionID, AttemptID: attemptID,
+			CreatedAt: now, UpdatedAt: now,
+		},
+		RunReason: runReason, OccurredAt: now,
+	})
+	if err != nil {
+		return false, fmt.Errorf("begin new session turn %q: %w", sessionID, err)
+	}
+	return admitted, nil
+}
+
+func (s *Service) LinkPlanningMessage(
+	ctx context.Context,
+	runID string,
+	eventID string,
+) (PlanningMessage, bool, error) {
+	message, created, err := s.store.LinkPlanningMessage(ctx, PendingPlanningMessage{
+		RunID: runID, EventID: eventID, LinkedAt: s.now().UTC(),
+	})
+	if err != nil {
+		return PlanningMessage{}, false, fmt.Errorf("link planning message %q: %w", eventID, err)
+	}
+	if created && s.planning != nil {
+		s.planning.publish(message)
+	}
+	return message, created, nil
+}
+
 func (s *Service) GetRun(ctx context.Context, id string) (Run, error) {
 	return s.store.GetRun(ctx, id)
 }
@@ -395,6 +443,19 @@ func (s *Service) EventsForSession(
 	sessionID string,
 ) ([]Event, error) {
 	return s.store.ListEvents(ctx, sessionID)
+}
+
+func (s *Service) PlanningMessagesForRun(
+	ctx context.Context,
+	runID string,
+) ([]PlanningMessage, error) {
+	return s.store.ListPlanningMessages(ctx, runID)
+}
+
+func (s *Service) SubscribePlanningMessages(
+	runID string,
+) (<-chan PlanningMessage, func()) {
+	return s.planning.subscribe(runID)
 }
 
 func (s *Service) PendingCommandsForSession(

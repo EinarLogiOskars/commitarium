@@ -69,6 +69,18 @@ type Event struct {
 	WorkerEventSequence int64
 }
 
+// PlanningMessage points at one existing session event in the shared,
+// run-level planning discussion. The text remains stored only once, in the
+// session event; this record adds the cross-session order seen by clients.
+type PlanningMessage struct {
+	RunID    string
+	Sequence int64
+	AgentID  string
+	Role     worker.Role
+	Event    Event
+	LinkedAt time.Time
+}
+
 // WorkerAttemptCheckpoint identifies the one worker process incarnation whose
 // events a coordinator session currently accepts. LastEventSequence is the
 // durable reconnect cursor and advances only in the same transaction that
@@ -103,6 +115,7 @@ type Command struct {
 var ErrInvalidRun = errors.New("invalid execution run")
 var ErrInvalidSession = errors.New("invalid execution session")
 var ErrInvalidEvent = errors.New("invalid execution event")
+var ErrInvalidPlanningMessage = errors.New("invalid planning message")
 var ErrInvalidWorkerAttempt = errors.New("invalid worker attempt checkpoint")
 var ErrInvalidCommand = errors.New("invalid execution command")
 var ErrInvalidStatusTransition = errors.New("invalid execution status transition")
@@ -285,6 +298,24 @@ func (event Event) Validate() error {
 	default:
 		return nil
 	}
+}
+
+func (message PlanningMessage) Validate() error {
+	switch {
+	case strings.TrimSpace(message.RunID) == "":
+		return fmt.Errorf("%w: run ID is required", ErrInvalidPlanningMessage)
+	case message.Sequence < 1:
+		return fmt.Errorf("%w: sequence must be positive", ErrInvalidPlanningMessage)
+	case strings.TrimSpace(message.AgentID) == "":
+		return fmt.Errorf("%w: agent ID is required", ErrInvalidPlanningMessage)
+	case !message.Role.IsValid():
+		return fmt.Errorf("%w: role %q is not recognized", ErrInvalidPlanningMessage, message.Role)
+	case message.Event.Type != worker.EventMessage:
+		return fmt.Errorf("%w: referenced event must be an agent message", ErrInvalidPlanningMessage)
+	case message.LinkedAt.IsZero():
+		return fmt.Errorf("%w: link time is required", ErrInvalidPlanningMessage)
+	}
+	return message.Event.Validate()
 }
 
 func (checkpoint WorkerAttemptCheckpoint) Validate() error {

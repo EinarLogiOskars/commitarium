@@ -19,7 +19,10 @@ import (
 	"github.com/EinarLogiOskars/commitarium/internal/workspace"
 )
 
-const remoteLeadAgentID = "codex-lead"
+const (
+	remoteLeadAgentID     = "codex-lead"
+	remoteReviewerAgentID = "codex-reviewer"
+)
 
 var ErrPlanningNotAllowed = errors.New("planning cannot start from the current workflow state")
 
@@ -32,6 +35,8 @@ type RemoteLeadExecution interface {
 	CreateWorkerAttempt(context.Context, string, string) (execution.WorkerAttemptCheckpoint, bool, error)
 	GetRun(context.Context, string) (execution.Run, error)
 	GetSession(context.Context, string) (execution.Session, error)
+	ActiveSessionsForRun(context.Context, string) ([]execution.Session, error)
+	EventsForSession(context.Context, string) ([]execution.Event, error)
 	GetWorkerAttempt(context.Context, string) (execution.WorkerAttemptCheckpoint, error)
 	TransitionRun(context.Context, string, execution.RunStatus, execution.RunStatus, string) (execution.Run, error)
 	TransitionSession(context.Context, string, execution.SessionStatus, execution.SessionStatus, string) (execution.Session, error)
@@ -41,6 +46,8 @@ type RemoteLeadExecution interface {
 	ResolveCommand(context.Context, string, execution.CommandStatus, string) (execution.Command, error)
 	BeginWorkerTurn(context.Context, worker.Command, string, execution.WorkerAttemptCheckpoint, string, string) (execution.WorkerTurnAdmissionResult, bool, error)
 	BeginAutonomousTurn(context.Context, string, execution.WorkerAttemptCheckpoint, string, string) (bool, error)
+	BeginNewSessionTurn(context.Context, string, string, string, worker.Role, string, string) (bool, error)
+	LinkPlanningMessage(context.Context, string, string) (execution.PlanningMessage, bool, error)
 }
 
 type RemoteLeadFeatureFinder interface {
@@ -170,13 +177,40 @@ func (starter *RemoteLeadStarter) Recover(
 	_ feature.Feature,
 	_ project.RecoveryPolicy,
 ) error {
-	sessionID := remoteLeadSessionID(run.ID)
-	session, err := starter.executions.GetSession(ctx, sessionID)
+	activeSessions, err := starter.executions.ActiveSessionsForRun(ctx, run.ID)
 	if err != nil {
-		return fmt.Errorf("load lead session: %w", err)
+		return fmt.Errorf("find active real-agent session: %w", err)
 	}
-	if session.RunID != run.ID || session.AgentID != remoteLeadAgentID || session.Role != worker.RoleLead {
-		return fmt.Errorf("%w: stored lead session does not match run", ErrInvalidRunRequest)
+	var session execution.Session
+	if len(activeSessions) == 1 {
+		session = activeSessions[0]
+	} else if len(activeSessions) == 0 {
+		// Reviewer completion publishes the planning message before moving the
+		// reviewer to waiting, then moves the run to waiting. If the coordinator
+		// stopped between those last two durable updates, no provider work is
+		// left to recover; finish the run-side update without contacting Codex.
+		reviewer, reviewerErr := starter.executions.GetSession(
+			ctx, remoteReviewerSessionID(run.ID),
+		)
+		if reviewerErr == nil && reviewer.Status == execution.SessionStatusWaitingForUser {
+			return starter.waitRun(ctx, run.ID, "The reviewer's first planning response is ready.")
+		}
+		if reviewerErr != nil && !errors.Is(reviewerErr, execution.ErrNotFound) {
+			return fmt.Errorf("load reviewer session: %w", reviewerErr)
+		}
+		// Older lead-only states may have a running run at the edge of a
+		// lifecycle update. Preserve their conservative recovery behavior.
+		session, err = starter.executions.GetSession(ctx, remoteLeadSessionID(run.ID))
+	} else {
+		return fmt.Errorf("%w: run has multiple active real-agent sessions", ErrInvalidRunRequest)
+	}
+	if err != nil {
+		return fmt.Errorf("load real-agent session: %w", err)
+	}
+	isLead := session.AgentID == remoteLeadAgentID && session.Role == worker.RoleLead
+	isReviewer := session.AgentID == remoteReviewerAgentID && session.Role == worker.RoleReviewer
+	if session.RunID != run.ID || (!isLead && !isReviewer) {
+		return fmt.Errorf("%w: stored real-agent session does not match run", ErrInvalidRunRequest)
 	}
 	checkpoint, err := starter.executions.GetWorkerAttempt(ctx, session.ID)
 	if err != nil {
@@ -184,10 +218,16 @@ func (starter *RemoteLeadStarter) Recover(
 	}
 	request := remoteLeadRequest{
 		runID:         run.ID,
+		agentName:     "lead agent",
 		waitingReason: waitingReasonForAttempt(session.ID, checkpoint.AttemptID),
 		identity: workerhttp.MutationIdentity{AttemptReference: workerhttp.AttemptReference{
 			SessionID: session.ID, AttemptID: checkpoint.AttemptID,
 		}},
+	}
+	if isReviewer {
+		request.agentName = "reviewer"
+		request.waitingReason = "The reviewer's first planning response is ready."
+		request.linkPlanningMessage = true
 	}
 	pending, err := starter.executions.PendingCommandsForSession(ctx, session.ID)
 	if err != nil {
@@ -196,7 +236,10 @@ func (starter *RemoteLeadStarter) Recover(
 	if len(pending) > 1 {
 		return fmt.Errorf("%w: lead session has multiple pending replies", ErrInvalidRunRequest)
 	}
-	if len(pending) == 1 {
+	if isReviewer && len(pending) != 0 {
+		return fmt.Errorf("%w: reviewer session has an unexpected pending command", ErrInvalidRunRequest)
+	}
+	if isLead && len(pending) == 1 {
 		if pending[0].Type != worker.CommandMessage ||
 			replyAttemptID(session.ID, pending[0].ID) != checkpoint.AttemptID {
 			return fmt.Errorf("%w: pending reply does not match the current worker attempt", ErrInvalidRunRequest)
@@ -211,11 +254,13 @@ func (starter *RemoteLeadStarter) Recover(
 }
 
 type remoteLeadRequest struct {
-	runID         string
-	commandID     string
-	waitingReason string
-	identity      workerhttp.MutationIdentity
-	request       workerhttp.PutAttemptRequest
+	runID               string
+	commandID           string
+	agentName           string
+	waitingReason       string
+	linkPlanningMessage bool
+	identity            workerhttp.MutationIdentity
+	request             workerhttp.PutAttemptRequest
 }
 
 func (starter *RemoteLeadStarter) startRequest(
@@ -232,6 +277,7 @@ func (starter *RemoteLeadStarter) startRequest(
 	attemptID := sessionID + ":turn:1"
 	request := remoteLeadRequest{
 		runID:         runID,
+		agentName:     "lead agent",
 		waitingReason: "The lead agent is waiting for the user's response.",
 		identity: workerhttp.MutationIdentity{
 			AttemptReference: workerhttp.AttemptReference{SessionID: sessionID, AttemptID: attemptID},
@@ -262,6 +308,7 @@ func (starter *RemoteLeadStarter) replyRequest(
 	attemptID := replyAttemptID(session.ID, command.ID)
 	request := remoteLeadRequest{
 		runID: run.ID, commandID: command.ID,
+		agentName:     "lead agent",
 		waitingReason: "The lead agent is waiting for the user's response.",
 		identity: workerhttp.MutationIdentity{
 			AttemptReference: workerhttp.AttemptReference{
@@ -295,6 +342,8 @@ func replyAttemptID(sessionID, commandID string) string {
 }
 
 func remoteLeadSessionID(runID string) string { return runID + ":lead" }
+
+func remoteReviewerSessionID(runID string) string { return runID + ":reviewer" }
 
 func planningAttemptID(sessionID string) string { return sessionID + ":planning:1" }
 
@@ -443,6 +492,7 @@ func (starter *RemoteLeadStarter) planningRequest(
 ) (remoteLeadRequest, error) {
 	request := remoteLeadRequest{
 		runID:         run.ID,
+		agentName:     "lead agent",
 		waitingReason: "The lead planning proposal is ready for reviewer consultation.",
 		identity: workerhttp.MutationIdentity{
 			AttemptReference: workerhttp.AttemptReference{
@@ -465,6 +515,184 @@ func (starter *RemoteLeadStarter) planningRequest(
 		return remoteLeadRequest{}, fmt.Errorf("%w: %v", ErrInvalidRunRequest, err)
 	}
 	return request, nil
+}
+
+// StartPlanningReview starts exactly one new reviewer conversation and passes
+// it the lead's exact, already persisted planning proposal.
+func (starter *RemoteLeadStarter) StartPlanningReview(
+	ctx context.Context,
+	runID string,
+	idempotencyKey string,
+) (execution.Run, bool, error) {
+	if strings.TrimSpace(runID) == "" || strings.TrimSpace(idempotencyKey) == "" ||
+		starter.workspaces == nil {
+		return execution.Run{}, false, ErrPlanningNotAllowed
+	}
+	run, err := starter.executions.GetRun(ctx, runID)
+	if err != nil {
+		return execution.Run{}, false, err
+	}
+	storedFeature, err := starter.features.GetByID(ctx, run.FeatureID)
+	if err != nil {
+		return execution.Run{}, false, err
+	}
+	if storedFeature.State != feature.StatePlanning ||
+		strings.TrimSpace(storedFeature.AcceptedGoal) == "" || storedFeature.GoalAcceptedAt == nil {
+		return execution.Run{}, false, ErrPlanningNotAllowed
+	}
+
+	reviewerID := remoteReviewerSessionID(run.ID)
+	if existing, getErr := starter.executions.GetSession(ctx, reviewerID); getErr == nil {
+		if existing.RunID != run.ID || existing.AgentID != remoteReviewerAgentID ||
+			existing.Role != worker.RoleReviewer {
+			return execution.Run{}, false, execution.ErrRecordConflict
+		}
+		checkpoint, checkpointErr := starter.executions.GetWorkerAttempt(ctx, existing.ID)
+		if checkpointErr != nil || checkpoint.AttemptID != planningAttemptID(existing.ID) {
+			return execution.Run{}, false, execution.ErrRecordConflict
+		}
+		return run, false, nil
+	} else if !errors.Is(getErr, execution.ErrNotFound) {
+		return execution.Run{}, false, getErr
+	}
+	if run.Status != execution.RunStatusWaitingForUser {
+		return execution.Run{}, false, ErrPlanningNotAllowed
+	}
+
+	lead, err := starter.executions.GetSession(ctx, remoteLeadSessionID(run.ID))
+	if err != nil {
+		return execution.Run{}, false, err
+	}
+	leadCheckpoint, err := starter.executions.GetWorkerAttempt(ctx, lead.ID)
+	if err != nil {
+		return execution.Run{}, false, err
+	}
+	if lead.AgentID != remoteLeadAgentID || lead.Role != worker.RoleLead ||
+		lead.Status != execution.SessionStatusWaitingForUser ||
+		leadCheckpoint.AttemptID != planningAttemptID(lead.ID) {
+		return execution.Run{}, false, ErrPlanningNotAllowed
+	}
+	prior, err := starter.worker.GetAttempt(ctx, workerhttp.AttemptReference{
+		SessionID: lead.ID, AttemptID: leadCheckpoint.AttemptID,
+	})
+	if err != nil || validateCompletedLeadTurn(lead, leadCheckpoint, prior) != nil {
+		return execution.Run{}, false, ErrPlanningNotAllowed
+	}
+	proposal, err := starter.messageForAttempt(ctx, lead.ID, leadCheckpoint.AttemptID)
+	if err != nil {
+		return execution.Run{}, false, ErrPlanningNotAllowed
+	}
+	if _, _, err := starter.executions.LinkPlanningMessage(ctx, run.ID, proposal.ID); err != nil {
+		return execution.Run{}, false, fmt.Errorf("publish lead planning proposal: %w", err)
+	}
+
+	prepared, err := starter.workspaces.Get(ctx, storedFeature.ProjectID, storedFeature.ID)
+	if err != nil || !prepared.CheckoutReady() || !prepared.PullRequestReady() {
+		return execution.Run{}, false, ErrPlanningNotAllowed
+	}
+	attemptID := planningAttemptID(reviewerID)
+	request, err := starter.reviewerPlanningRequest(run, storedFeature, prepared, proposal.Text, attemptID)
+	if err != nil {
+		return execution.Run{}, false, err
+	}
+	if !starter.claim(run.ID) {
+		return execution.Run{}, false, ErrPlanningNotAllowed
+	}
+	admitted, err := starter.executions.BeginNewSessionTurn(
+		ctx, reviewerID, run.ID, remoteReviewerAgentID, worker.RoleReviewer,
+		attemptID, "The reviewer is inspecting the lead's planning proposal.",
+	)
+	if err != nil {
+		starter.release(run.ID)
+		if errors.Is(err, execution.ErrStateConflict) {
+			return execution.Run{}, false, ErrPlanningNotAllowed
+		}
+		return execution.Run{}, false, err
+	}
+	if !admitted {
+		starter.release(run.ID)
+		storedRun, getErr := starter.executions.GetRun(ctx, run.ID)
+		return storedRun, false, getErr
+	}
+	go starter.launch(request)
+	startedRun, err := starter.executions.GetRun(ctx, run.ID)
+	return startedRun, true, err
+}
+
+func (starter *RemoteLeadStarter) reviewerPlanningRequest(
+	run execution.Run,
+	storedFeature feature.Feature,
+	prepared workspace.Workspace,
+	proposal string,
+	attemptID string,
+) (remoteLeadRequest, error) {
+	sessionID := remoteReviewerSessionID(run.ID)
+	request := remoteLeadRequest{
+		runID: run.ID, agentName: "reviewer",
+		waitingReason:       "The reviewer's first planning response is ready.",
+		linkPlanningMessage: true,
+		identity: workerhttp.MutationIdentity{
+			AttemptReference: workerhttp.AttemptReference{SessionID: sessionID, AttemptID: attemptID},
+			IdempotencyKey:   attemptID + ":start",
+		},
+		request: workerhttp.PutAttemptRequest{
+			Mode: workerhttp.AttemptModeStart,
+			Assignment: workerhttp.Assignment{
+				AgentProfileID: starter.agentProfileID,
+				ProjectID:      storedFeature.ProjectID, FeatureID: storedFeature.ID,
+				Role: workerhttp.RoleReviewer, WorkspaceID: prepared.ID,
+			},
+			Instructions: reviewerPlanningInstructions(storedFeature, prepared, proposal),
+		},
+	}
+	if err := request.request.Validate(request.identity); err != nil {
+		return remoteLeadRequest{}, fmt.Errorf("%w: %v", ErrInvalidRunRequest, err)
+	}
+	return request, nil
+}
+
+func reviewerPlanningInstructions(
+	storedFeature feature.Feature,
+	prepared workspace.Workspace,
+	proposal string,
+) string {
+	return "You are the independent reviewer in a collaborative planning discussion. " +
+		"Inspect the managed repository and current Git state before responding. Do not modify files, " +
+		"install dependencies, create commits, push, or begin implementation. Challenge the lead's " +
+		"proposal against the accepted goal and the actual repository. Identify missing steps, unsafe " +
+		"assumptions, scope problems, and weak test coverage. Finish by clearly saying whether you accept " +
+		"the proposal as written or what must change. Durable repository and workflow state are " +
+		"authoritative over the supplied proposal.\n\nAccepted goal:\n" + storedFeature.AcceptedGoal +
+		"\n\nRepository: " + prepared.RepositoryOwner + "/" + prepared.RepositoryName +
+		"\nBase branch: " + prepared.BaseBranch + "\nFeature branch: " + prepared.Branch +
+		"\nBase commit: " + prepared.BaseCommitID +
+		fmt.Sprintf("\nDraft pull request: #%d (%s)", prepared.PullRequestNumber, prepared.PullRequestURL) +
+		"\n\nLead's exact proposal:\n" + proposal
+}
+
+func (starter *RemoteLeadStarter) messageForAttempt(
+	ctx context.Context,
+	sessionID string,
+	attemptID string,
+) (execution.Event, error) {
+	events, err := starter.executions.EventsForSession(ctx, sessionID)
+	if err != nil {
+		return execution.Event{}, err
+	}
+	var message execution.Event
+	for _, event := range events {
+		if event.WorkerAttemptID != attemptID || event.Type != worker.EventMessage {
+			continue
+		}
+		// Providers may emit conversational preambles before their completed
+		// response. Session activity keeps every message; the planning exchange
+		// links the last completed message as the turn's final authored response.
+		message = event
+	}
+	if message.ID == "" {
+		return execution.Event{}, errors.New("provider turn has no final message")
+	}
+	return message, nil
 }
 
 func planningInstructions(storedFeature feature.Feature, prepared workspace.Workspace) string {
@@ -762,6 +990,21 @@ func (starter *RemoteLeadStarter) finish(
 
 	switch attempt.Result.Outcome {
 	case workerhttp.OutcomeCompleted:
+		if request.linkPlanningMessage {
+			message, messageErr := starter.messageForAttempt(
+				ctx, session.ID, request.identity.AttemptID,
+			)
+			if messageErr != nil {
+				starter.requireReview(ctx, request, messageErr)
+				return
+			}
+			if _, _, messageErr = starter.executions.LinkPlanningMessage(
+				ctx, request.runID, message.ID,
+			); messageErr != nil {
+				starter.requireReview(ctx, request, messageErr)
+				return
+			}
+		}
 		if session.Status == execution.SessionStatusPauseRequested {
 			_, err = starter.executions.TransitionSession(
 				ctx, session.ID, session.Status, execution.SessionStatusWaitingForUser, attempt.ProviderSessionID,
@@ -775,9 +1018,9 @@ func (starter *RemoteLeadStarter) finish(
 			err = starter.waitRun(ctx, request.runID, request.waitingReason)
 		}
 	case workerhttp.OutcomeStopped:
-		err = starter.failSession(ctx, session, execution.SessionStatusStopped, attempt, "The lead agent was stopped.")
+		err = starter.failSession(ctx, session, execution.SessionStatusStopped, attempt, "The "+request.agentName+" was stopped.")
 	case workerhttp.OutcomeFailed:
-		err = starter.failSession(ctx, session, execution.SessionStatusFailed, attempt, "The lead agent could not complete this turn.")
+		err = starter.failSession(ctx, session, execution.SessionStatusFailed, attempt, "The "+request.agentName+" could not complete this turn.")
 	default:
 		err = fmt.Errorf("unsupported worker outcome %q", attempt.Result.Outcome)
 	}

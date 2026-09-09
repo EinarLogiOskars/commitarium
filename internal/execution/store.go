@@ -92,6 +92,21 @@ type AutonomousTurnAdmission struct {
 	OccurredAt                time.Time
 }
 
+// NewSessionTurnAdmission creates a new durable logical conversation and its
+// first provider attempt while returning the existing run to active work.
+type NewSessionTurnAdmission struct {
+	Session    Session
+	Attempt    WorkerAttemptCheckpoint
+	RunReason  string
+	OccurredAt time.Time
+}
+
+type PendingPlanningMessage struct {
+	RunID    string
+	EventID  string
+	LinkedAt time.Time
+}
+
 type Store interface {
 	CreateRun(ctx context.Context, run Run) error
 	GetRun(ctx context.Context, id string) (Run, error)
@@ -114,6 +129,9 @@ type Store interface {
 	ResolveCommand(ctx context.Context, resolution CommandResolution) (Command, error)
 	BeginWorkerTurn(ctx context.Context, admission WorkerTurnAdmission) (WorkerTurnAdmissionResult, bool, error)
 	BeginAutonomousTurn(ctx context.Context, admission AutonomousTurnAdmission) (bool, error)
+	BeginNewSessionTurn(ctx context.Context, admission NewSessionTurnAdmission) (bool, error)
+	LinkPlanningMessage(ctx context.Context, message PendingPlanningMessage) (PlanningMessage, bool, error)
+	ListPlanningMessages(ctx context.Context, runID string) ([]PlanningMessage, error)
 }
 
 var ErrAlreadyExists = errors.New("execution record already exists")
@@ -125,6 +143,20 @@ var ErrWorkerEventSequence = errors.New("worker event sequence is not the next e
 var ErrCommandConflict = errors.New("execution command ID reused for different content")
 var ErrStateConflict = errors.New("execution record is not in the expected state")
 var ErrRecordConflict = errors.New("execution record ID reused for different content")
+var ErrPlanningMessageConflict = errors.New("session event is already linked to a different planning conversation")
+
+func (message PendingPlanningMessage) Validate() error {
+	switch {
+	case strings.TrimSpace(message.RunID) == "":
+		return fmt.Errorf("%w: run ID is required", ErrInvalidPlanningMessage)
+	case strings.TrimSpace(message.EventID) == "":
+		return fmt.Errorf("%w: event ID is required", ErrInvalidPlanningMessage)
+	case message.LinkedAt.IsZero():
+		return fmt.Errorf("%w: link time is required", ErrInvalidPlanningMessage)
+	default:
+		return nil
+	}
+}
 
 func (event PendingEvent) Validate() error {
 	switch {
