@@ -24,6 +24,7 @@ The first supported collaboration is between Codex CLI and Claude Code. The desi
 8. **Provider choice:** The user chooses which agent codes and which reviews, and can configure subscription-backed or API-backed authentication explicitly.
 9. **No silent billing changes:** The system never silently switches from subscription usage to API billing, or between billing profiles.
 10. **One workspace, many projects:** One Commitarium installation manages all projects imported by the user.
+11. **Visible collaboration:** The user can watch the explicit messages agents exchange, join the discussion, and correlate material decisions with the Forgejo audit trail.
 
 ## Initial scope
 
@@ -137,6 +138,14 @@ An adapter must support:
 
 The agent chosen as coder receives write access only to its feature workspace. The reviewer begins read-only and receives write capability only if the workflow explicitly delegates a fix.
 
+A feature normally keeps two durable logical provider conversations. The lead
+conversation continues from user-assisted goal drafting through planning,
+implementation, and review responses. The reviewer conversation continues from
+planning consultation through code review and resolution verification. These
+roles remain separate conversations and identities even when the user assigns
+the same provider to both. The coordinator routes their explicit messages; the
+workers do not contact or launch each other directly. See [ADR-007](docs/adr/0007-route-visible-agent-dialogue-and-mirror-audit-events.md).
+
 ### Forgejo
 
 Forgejo is the internal Git server and durable collaboration record. Codex and Claude receive separate Forgejo accounts or machine identities so authorship and review actions remain distinguishable.
@@ -196,6 +205,12 @@ Each imported project receives isolated logical resources:
 
 Project files may originate from a local clone of a GitHub repository. Importing a project must not modify its upstream default branch. The precise mirroring/worktree strategy will be decided before implementing project import.
 
+Managed feature workspaces live in container-controlled storage and use Forgejo
+as their Git remote. An agent receives only its scoped workspace rather than a
+read-write mount of the user's complete host projects directory. This keeps
+normal agent commits, review iterations, and mistakes away from both the host
+checkout and GitHub.
+
 ## Feature workflow
 
 ### 1. Goal drafting with the user
@@ -215,6 +230,14 @@ The result is a user-accepted goal with explicit acceptance criteria. The system
 
 The lead agent takes the accepted goal to the consulting agent. They inspect the project and propose a plan together. They must challenge each other's assumptions, identify risks, and converge on a plan both consider acceptable.
 
+The coordinator creates the internal feature branch and draft Forgejo pull
+request after goal acceptance and before this discussion begins. It routes the
+agents' authored messages between their existing provider sessions without
+summarizing them in transit. The user sees the same ordered conversation live
+and may address either agent, pause the exchange, or resolve a disagreement.
+Material proposals, objections, decisions, and the accepted plan are also
+recorded in the draft pull request under the appropriate identity.
+
 Consensus does not mean superficial agreement. Each agent must be instructed to:
 
 - State concerns concretely.
@@ -231,10 +254,15 @@ The result is a versioned plan artifact tied to the accepted goal and its accept
 
 For each feature, the user can choose:
 
-- Codex as coder and Claude as reviewer.
-- Claude as coder and Codex as reviewer.
+- Codex as lead and Claude as reviewer.
+- Claude as lead and Codex as reviewer.
+- Codex for both roles, using separate sessions and identities.
+- Claude for both roles, using separate sessions and identities.
 
-Defaults may be stored per project. Assignment can consider subscription capacity, API budgets, model availability, and user preference, but it must never silently change billing mode.
+The lead also performs the coder responsibilities after planning. Defaults may
+be stored per project. Assignment can consider subscription capacity, API
+budgets, model availability, and user preference, but it must never silently
+change billing mode.
 
 ### 4. Implementation
 
@@ -246,7 +274,12 @@ Agents have autonomy over implementation details that remain within the accepted
 
 ### 5. Internal pull request
 
-The coder opens an internal Forgejo pull request before review begins. The pull request is the canonical human-readable implementation and review record. Its description contains the accepted goal and acceptance criteria, the complete agreed plan with its revision identifier, an implementation summary, validation evidence, plan deviations, and known risks or limitations.
+The draft internal Forgejo pull request created before collaborative planning is
+updated throughout the workflow. It is the canonical human-readable
+engineering and review record. Its description contains the accepted goal and
+acceptance criteria, the complete agreed plan with its revision identifier, an
+implementation summary, validation evidence, plan deviations, and known risks
+or limitations.
 
 ### 6. Agent review
 
@@ -261,7 +294,16 @@ The reviewer evaluates the internal pull request with access to:
 
 This preserves context while maintaining role independence. The reviewer is explicitly instructed not to defend the shared plan blindly; it must identify failures in either the implementation or the plan.
 
-Review findings are posted to the internal pull request with severity, evidence, and requested resolution. Inline comments are used when a finding concerns specific code. Agents may communicate directly for speed, but every material finding, response, disagreement, decision, plan amendment, and supporting rationale must also be recorded in Forgejo under the correct identity. This audit trail records explicit agent communication and decisions, not private model chain-of-thought or secrets. A later optional mode may add a fresh-session review as an additional independent check, not as a replacement for contextual review.
+Review findings are posted to the internal pull request with severity, evidence,
+and requested resolution. Inline comments are used when a finding concerns
+specific code. The reviewer also sends the finding directly to the lead through
+their visible conversation, and the lead's response returns through that same
+channel. Every material finding, response, disagreement, decision, plan
+amendment, and supporting rationale is mirrored in Forgejo under the correct
+identity. The audit trail records explicit agent communication and decisions,
+not private model chain-of-thought or secrets. A later optional mode may add a
+fresh-session review as an additional independent check, not as a replacement
+for contextual review.
 
 ### 7. Resolution loop
 
@@ -325,6 +367,7 @@ The coordinator will likely require these concepts:
 - **Agent profile:** Provider, model, authentication mode, limits, and capabilities.
 - **Assignment:** Which profile is coder and which is reviewer.
 - **Session:** A resumable provider conversation scoped to a role and feature.
+- **Conversation message:** One durable user-to-agent or agent-to-agent message with sender, recipient, workflow phase, delivery state, and ordering information.
 - **Plan revision:** A versioned implementation agreement.
 - **Decision:** An agent consensus result or human ruling.
 - **Workflow event:** An append-only record of a state change or meaningful action.
