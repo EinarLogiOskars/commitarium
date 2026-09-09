@@ -1,6 +1,9 @@
 # Local working context
 COORDINATOR_PLAN.local.md
 
+# Local Commitarium credentials and settings
+.commitarium/
+
 # Logs
 logs
 *.log

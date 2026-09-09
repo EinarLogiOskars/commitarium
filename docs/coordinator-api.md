@@ -10,7 +10,9 @@ this API beyond the host loopback interface is unsupported.
 | --- | --- | --- |
 | `GET` | `/health` | Process health |
 | `POST` | `/api/v1/projects` | Create a project |
+| `GET` | `/api/v1/projects` | List projects for switching/selecting |
 | `GET` | `/api/v1/projects/{projectID}` | Retrieve a project |
+| `PUT` | `/api/v1/projects/{projectID}/forgejo-repository` | Verify and bind the project's internal repository |
 | `POST` | `/api/v1/projects/{projectID}/features` | Create a draft feature |
 | `GET` | `/api/v1/projects/{projectID}/features/{featureID}` | Retrieve a feature |
 | `POST` | `/api/v1/projects/{projectID}/features/{featureID}/transitions` | Apply an explicit feature transition |
@@ -46,6 +48,50 @@ after that run has advanced the feature.
 Supported values are `approval_required` and `automatic`. Omitting the field
 uses `approval_required`. Project create and retrieval responses include the
 effective policy.
+
+## Projects and Forgejo repositories
+
+`GET /api/v1/projects` returns all projects ordered by creation time and then
+ID. It returns `[]` when none exist. This is the discovery endpoint an eventual
+project switcher will use.
+
+A project may be permanently associated with one existing internal Forgejo
+repository:
+
+```http
+PUT /api/v1/projects/prj_example/forgejo-repository
+Content-Type: application/json
+
+{"owner":"commitarium","name":"example"}
+```
+
+Before saving anything, the coordinator uses its private file-backed Forgejo
+credential to confirm that the repository exists, is not archived or empty,
+and has a default branch. It stores Forgejo's canonical identity and default
+branch, but never stores or returns the credential or clone URL. A bound project
+includes:
+
+```json
+{
+  "id": "prj_example",
+  "name": "Example",
+  "recovery_policy": "approval_required",
+  "forgejo_repository": {
+    "owner": "commitarium",
+    "name": "example",
+    "default_branch": "main",
+    "bound_at": "2026-09-09T18:00:00Z"
+  },
+  "created_at": "2026-09-09T17:00:00Z"
+}
+```
+
+Repeating the request for the same owner and repository, including different
+letter casing, returns the original binding without another Forgejo call.
+Attempting to bind a different repository returns `409 Conflict`. A missing
+repository returns `404`; an empty or archived repository returns `409`; and an
+unavailable Forgejo service or credential returns `503`. This operation does
+not create repositories, branches, workspaces, or pull requests.
 
 ## Starting and observing a run
 

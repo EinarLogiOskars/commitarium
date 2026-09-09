@@ -13,6 +13,7 @@ import (
 	coordinatordatabase "github.com/EinarLogiOskars/commitarium/internal/database"
 	"github.com/EinarLogiOskars/commitarium/internal/execution"
 	"github.com/EinarLogiOskars/commitarium/internal/feature"
+	"github.com/EinarLogiOskars/commitarium/internal/forgejo"
 	"github.com/EinarLogiOskars/commitarium/internal/httpapi"
 	"github.com/EinarLogiOskars/commitarium/internal/orchestration"
 	"github.com/EinarLogiOskars/commitarium/internal/project"
@@ -25,6 +26,9 @@ const (
 	defaultRunnerMode           = "simulated"
 	realCodexLeadRunnerMode     = "real_codex_lead"
 	defaultWorkerRequestTimeout = 10 * time.Second
+	defaultForgejoURL           = "http://forgejo:3000"
+	defaultForgejoTokenFile     = "/run/commitarium-config/forgejo-token"
+	defaultForgejoTimeout       = 10 * time.Second
 )
 
 type config struct {
@@ -36,6 +40,9 @@ type config struct {
 	codexAgentProfileID  string
 	codexWorkspaceID     string
 	workerRequestTimeout time.Duration
+	forgejoURL           string
+	forgejoTokenFile     string
+	forgejoTimeout       time.Duration
 }
 
 func main() {
@@ -72,6 +79,22 @@ func loadConfig(getenv func(string) string) (config, error) {
 		databasePath: databasePath, runnerMode: runnerMode,
 		simulatedStepDelay:   simulatedStepDelay,
 		workerRequestTimeout: defaultWorkerRequestTimeout,
+		forgejoURL:           defaultForgejoURL,
+		forgejoTokenFile:     defaultForgejoTokenFile,
+		forgejoTimeout:       defaultForgejoTimeout,
+	}
+	if value := strings.TrimSpace(getenv("COMMITARIUM_FORGEJO_URL")); value != "" {
+		loaded.forgejoURL = value
+	}
+	if value := strings.TrimSpace(getenv("COMMITARIUM_FORGEJO_TOKEN_FILE")); value != "" {
+		loaded.forgejoTokenFile = value
+	}
+	if value := strings.TrimSpace(getenv("COMMITARIUM_FORGEJO_REQUEST_TIMEOUT")); value != "" {
+		parsed, err := time.ParseDuration(value)
+		if err != nil || parsed <= 0 {
+			return config{}, errors.New("COMMITARIUM_FORGEJO_REQUEST_TIMEOUT must be a positive duration")
+		}
+		loaded.forgejoTimeout = parsed
 	}
 	if runnerMode == realCodexLeadRunnerMode {
 		required := func(name string) (string, error) {
@@ -120,7 +143,14 @@ func run(ctx context.Context, coordinatorConfig config) error {
 	}
 
 	projectStore := coordinatordatabase.NewProjectStore(db)
-	projectService := project.NewService(projectStore)
+	forgejoClient, err := forgejo.NewClient(forgejo.ClientConfig{
+		BaseURL: coordinatorConfig.forgejoURL, TokenFile: coordinatorConfig.forgejoTokenFile,
+		RequestTimeout: coordinatorConfig.forgejoTimeout,
+	})
+	if err != nil {
+		return fmt.Errorf("create Forgejo client: %w", err)
+	}
+	projectService := project.NewServiceWithRepositoryVerifier(projectStore, forgejoClient)
 	featureStore := coordinatordatabase.NewFeatureStore(db)
 	featureService := feature.NewService(featureStore, projectService)
 	workflowStore := coordinatordatabase.NewWorkflowStore(db)

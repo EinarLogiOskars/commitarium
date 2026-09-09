@@ -14,6 +14,14 @@ type recordingStore struct {
 	receivedID    string
 	projectResult Project
 	getByIDErr    error
+
+	listResult []Project
+	listErr    error
+
+	boundProjectID  string
+	boundRepository ForgejoRepository
+	bindResult      Project
+	bindErr         error
 }
 
 func (s *recordingStore) Create(
@@ -30,6 +38,39 @@ func (s *recordingStore) GetByID(
 ) (Project, error) {
 	s.receivedID = id
 	return s.projectResult, s.getByIDErr
+}
+
+func (s *recordingStore) List(context.Context) ([]Project, error) {
+	return s.listResult, s.listErr
+}
+
+func (s *recordingStore) BindForgejoRepository(
+	_ context.Context,
+	projectID string,
+	repository ForgejoRepository,
+) (Project, error) {
+	s.boundProjectID = projectID
+	s.boundRepository = repository
+	return s.bindResult, s.bindErr
+}
+
+type recordingRepositoryVerifier struct {
+	owner  string
+	name   string
+	result ForgejoRepository
+	err    error
+	calls  int
+}
+
+func (v *recordingRepositoryVerifier) VerifyRepository(
+	_ context.Context,
+	owner string,
+	name string,
+) (ForgejoRepository, error) {
+	v.calls++
+	v.owner = owner
+	v.name = name
+	return v.result, v.err
 }
 
 func TestServiceCreate(t *testing.T) {
@@ -181,5 +222,111 @@ func TestServiceGetByIDReturnsStoreError(t *testing.T) {
 			"prj_missing",
 			store.receivedID,
 		)
+	}
+}
+
+func TestServiceList(t *testing.T) {
+	want := []Project{{ID: "prj_one"}, {ID: "prj_two"}}
+	store := &recordingStore{listResult: want}
+	got, err := NewService(store).List(t.Context())
+	if err != nil {
+		t.Fatalf("list projects: %v", err)
+	}
+	if len(got) != len(want) || got[0].ID != want[0].ID || got[1].ID != want[1].ID {
+		t.Fatalf("unexpected projects %+v", got)
+	}
+}
+
+func TestServiceBindForgejoRepository(t *testing.T) {
+	fixedTime := time.Date(2026, time.September, 9, 18, 0, 0, 0, time.UTC)
+	verifier := &recordingRepositoryVerifier{result: ForgejoRepository{
+		Owner: "canonical-owner", Name: "canonical-name", DefaultBranch: "main",
+	}}
+	want := Project{ID: "prj_test", ForgejoRepository: &ForgejoRepository{
+		Owner: "canonical-owner", Name: "canonical-name", DefaultBranch: "main", BoundAt: fixedTime,
+	}}
+	store := &recordingStore{projectResult: Project{ID: "prj_test"}, bindResult: want}
+	service := NewServiceWithRepositoryVerifier(store, verifier)
+	service.now = func() time.Time { return fixedTime }
+
+	got, err := service.BindForgejoRepository(t.Context(), "prj_test", " owner ", " repository ")
+	if err != nil {
+		t.Fatalf("bind repository: %v", err)
+	}
+	if verifier.calls != 1 || verifier.owner != "owner" || verifier.name != "repository" {
+		t.Fatalf("unexpected verifier call owner=%q name=%q calls=%d", verifier.owner, verifier.name, verifier.calls)
+	}
+	if store.boundProjectID != "prj_test" || store.boundRepository != *want.ForgejoRepository {
+		t.Fatalf("unexpected stored binding %q %+v", store.boundProjectID, store.boundRepository)
+	}
+	if got.ID != want.ID || got.ForgejoRepository == nil || *got.ForgejoRepository != *want.ForgejoRepository {
+		t.Fatalf("unexpected project %+v", got)
+	}
+}
+
+func TestServiceBindForgejoRepositoryIsIdempotentForSameCoordinate(t *testing.T) {
+	bound := ForgejoRepository{
+		Owner: "owner", Name: "repository", DefaultBranch: "main",
+		BoundAt: time.Date(2026, time.September, 9, 18, 0, 0, 0, time.UTC),
+	}
+	stored := Project{ID: "prj_test", ForgejoRepository: &bound}
+	store := &recordingStore{projectResult: stored}
+	verifier := &recordingRepositoryVerifier{err: errors.New("must not be called")}
+
+	got, err := NewServiceWithRepositoryVerifier(store, verifier).BindForgejoRepository(
+		t.Context(), "prj_test", "OWNER", "Repository",
+	)
+	if err != nil {
+		t.Fatalf("repeat binding: %v", err)
+	}
+	if verifier.calls != 0 || store.boundProjectID != "" {
+		t.Fatalf("repeat binding performed remote or storage work")
+	}
+	if got.ForgejoRepository == nil || *got.ForgejoRepository != bound {
+		t.Fatalf("repeat binding changed repository %+v", got)
+	}
+}
+
+func TestServiceBindForgejoRepositoryRejectsDifferentCoordinate(t *testing.T) {
+	store := &recordingStore{projectResult: Project{
+		ID: "prj_test", ForgejoRepository: &ForgejoRepository{Owner: "owner", Name: "one"},
+	}}
+	_, err := NewServiceWithRepositoryVerifier(store, &recordingRepositoryVerifier{}).
+		BindForgejoRepository(t.Context(), "prj_test", "owner", "two")
+	if !errors.Is(err, ErrForgejoRepositoryAlreadyBound) {
+		t.Fatalf("expected %v, got %v", ErrForgejoRepositoryAlreadyBound, err)
+	}
+}
+
+func TestServiceBindForgejoRepositoryReturnsVerificationError(t *testing.T) {
+	verifier := &recordingRepositoryVerifier{err: ErrForgejoRepositoryNotFound}
+	store := &recordingStore{projectResult: Project{ID: "prj_test"}}
+	_, err := NewServiceWithRepositoryVerifier(store, verifier).BindForgejoRepository(
+		t.Context(), "prj_test", "owner", "missing",
+	)
+	if !errors.Is(err, ErrForgejoRepositoryNotFound) {
+		t.Fatalf("expected %v, got %v", ErrForgejoRepositoryNotFound, err)
+	}
+	if store.boundProjectID != "" {
+		t.Fatal("failed verification reached storage")
+	}
+}
+
+func TestNormalizeRepositoryCoordinate(t *testing.T) {
+	tests := []struct {
+		owner string
+		name  string
+		want  error
+	}{
+		{name: "repository", want: ErrForgejoOwnerRequired},
+		{owner: "owner", want: ErrForgejoRepositoryNameRequired},
+		{owner: "bad/owner", name: "repository", want: ErrInvalidForgejoRepositoryCoordinate},
+		{owner: "owner", name: "bad\\repository", want: ErrInvalidForgejoRepositoryCoordinate},
+	}
+	for _, test := range tests {
+		_, _, err := NormalizeRepositoryCoordinate(test.owner, test.name)
+		if !errors.Is(err, test.want) {
+			t.Errorf("owner=%q name=%q: expected %v, got %v", test.owner, test.name, test.want, err)
+		}
 	}
 }
