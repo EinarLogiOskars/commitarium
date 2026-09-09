@@ -186,7 +186,7 @@ func activeControlSession(
 		},
 	})
 	session, err := adapter.Start(t.Context(), worker.SessionRequest{
-		SessionID: "ses_control", FeatureID: "fea_test", Role: worker.RoleCoder,
+		SessionID: "ses_control", AttemptID: "ses_control", FeatureID: "fea_test", Role: worker.RoleCoder,
 		Instructions: "Implement the accepted plan.",
 	})
 	if err != nil {

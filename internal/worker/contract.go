@@ -18,6 +18,7 @@ const (
 
 type SessionRequest struct {
 	SessionID    string
+	AttemptID    string
 	FeatureID    string
 	Role         Role
 	Instructions string
@@ -108,8 +109,7 @@ type Adapter interface {
 	Resume(ctx context.Context, request ResumeRequest) (Session, error)
 }
 
-// Session is a running or resumable provider conversation. Stop is cooperative;
-// forced termination belongs to the worker supervisor outside this interface.
+// Session is a running or resumable provider conversation. Stop is cooperative.
 // Events must close when the session finishes so the coordinator can collect
 // the final result without guessing whether more observable output is coming.
 type Session interface {
@@ -117,6 +117,15 @@ type Session interface {
 	Events() <-chan Event
 	Send(ctx context.Context, command Command) error
 	Wait(ctx context.Context) (Result, error)
+}
+
+// ForceStoppableSession is an optional extension implemented only when a
+// provider session owns an operating-system process handle. Keeping it separate
+// from Session prevents simulated or remotely managed providers from claiming a
+// safety guarantee they cannot provide.
+type ForceStoppableSession interface {
+	Session
+	ForceStop(ctx context.Context, reason string) error
 }
 
 var ErrInvalidSessionRequest = errors.New("invalid worker session request")
@@ -136,6 +145,8 @@ func (request SessionRequest) Validate() error {
 	switch {
 	case strings.TrimSpace(request.SessionID) == "":
 		return fmt.Errorf("%w: session ID is required", ErrInvalidSessionRequest)
+	case strings.TrimSpace(request.AttemptID) == "":
+		return fmt.Errorf("%w: attempt ID is required", ErrInvalidSessionRequest)
 	case strings.TrimSpace(request.FeatureID) == "":
 		return fmt.Errorf("%w: feature ID is required", ErrInvalidSessionRequest)
 	case !request.Role.IsValid():

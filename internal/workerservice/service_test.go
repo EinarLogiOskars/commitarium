@@ -383,6 +383,24 @@ func newHTTPHarness(
 	provider worker.Adapter,
 	clock *stepClock,
 ) *httpHarness {
+	return newHTTPHarnessWithCapabilities(t, path, provider, clock, []workerhttp.Capability{
+		workerhttp.CapabilityStart,
+		workerhttp.CapabilityResume,
+		workerhttp.CapabilityMessage,
+		workerhttp.CapabilityPause,
+		workerhttp.CapabilityContinue,
+		workerhttp.CapabilityCooperativeStop,
+		workerhttp.CapabilityEventReplay,
+	})
+}
+
+func newHTTPHarnessWithCapabilities(
+	t *testing.T,
+	path string,
+	provider worker.Adapter,
+	clock *stepClock,
+	capabilities []workerhttp.Capability,
+) *httpHarness {
 	t.Helper()
 	db, journal := openJournal(t, path)
 	lifetime, cancel := context.WithCancel(context.Background())
@@ -396,17 +414,9 @@ func newHTTPHarness(
 		t.Fatalf("create journal-backed service: %v", err)
 	}
 	handler, err := workerhttp.NewServer(workerhttp.ServerConfig{
-		BearerToken: "worker-test-token",
-		Provider:    workerhttp.ProviderCodex,
-		Capabilities: []workerhttp.Capability{
-			workerhttp.CapabilityStart,
-			workerhttp.CapabilityResume,
-			workerhttp.CapabilityMessage,
-			workerhttp.CapabilityPause,
-			workerhttp.CapabilityContinue,
-			workerhttp.CapabilityCooperativeStop,
-			workerhttp.CapabilityEventReplay,
-		},
+		BearerToken:           "worker-test-token",
+		Provider:              workerhttp.ProviderCodex,
+		Capabilities:          capabilities,
 		MaxConcurrentAttempts: 1,
 		EventSource:           service,
 		EventStreamHeartbeat:  time.Hour,
@@ -530,14 +540,24 @@ func waitForAttemptState(
 ) workerhttp.Attempt {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
+	var last workerhttp.Attempt
+	var lastErr error
 	for time.Now().Before(deadline) {
 		attempt, err := client.GetAttempt(t.Context(), reference)
+		last, lastErr = attempt, err
 		if err == nil && attempt.State == state {
 			return attempt
 		}
 		time.Sleep(time.Millisecond)
 	}
-	t.Fatalf("attempt %s/%s did not reach %q", reference.SessionID, reference.AttemptID, state)
+	t.Fatalf(
+		"attempt %s/%s did not reach %q; last attempt=%+v error=%v",
+		reference.SessionID,
+		reference.AttemptID,
+		state,
+		last,
+		lastErr,
+	)
 	return workerhttp.Attempt{}
 }
 

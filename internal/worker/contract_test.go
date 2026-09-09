@@ -19,6 +19,7 @@ func TestRoleIsValid(t *testing.T) {
 func TestSessionRequestValidate(t *testing.T) {
 	valid := SessionRequest{
 		SessionID:    "ses_test",
+		AttemptID:    "att_test",
 		FeatureID:    "fea_test",
 		Role:         RoleCoder,
 		Instructions: "Implement the accepted plan.",
@@ -28,10 +29,11 @@ func TestSessionRequestValidate(t *testing.T) {
 	}
 
 	tests := map[string]SessionRequest{
-		"missing session ID":   {FeatureID: "fea_test", Role: RoleCoder, Instructions: "work"},
-		"missing feature ID":   {SessionID: "ses_test", Role: RoleCoder, Instructions: "work"},
-		"unknown role":         {SessionID: "ses_test", FeatureID: "fea_test", Role: "unknown", Instructions: "work"},
-		"missing instructions": {SessionID: "ses_test", FeatureID: "fea_test", Role: RoleCoder},
+		"missing session ID":   {AttemptID: "att_test", FeatureID: "fea_test", Role: RoleCoder, Instructions: "work"},
+		"missing attempt ID":   {SessionID: "ses_test", FeatureID: "fea_test", Role: RoleCoder, Instructions: "work"},
+		"missing feature ID":   {SessionID: "ses_test", AttemptID: "att_test", Role: RoleCoder, Instructions: "work"},
+		"unknown role":         {SessionID: "ses_test", AttemptID: "att_test", FeatureID: "fea_test", Role: "unknown", Instructions: "work"},
+		"missing instructions": {SessionID: "ses_test", AttemptID: "att_test", FeatureID: "fea_test", Role: RoleCoder},
 	}
 	for name, request := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -45,6 +47,7 @@ func TestSessionRequestValidate(t *testing.T) {
 func TestResumeRequestRequiresProviderSessionID(t *testing.T) {
 	request := ResumeRequest{SessionRequest: SessionRequest{
 		SessionID:    "ses_test",
+		AttemptID:    "att_test",
 		FeatureID:    "fea_test",
 		Role:         RoleReviewer,
 		Instructions: "Resume the review.",

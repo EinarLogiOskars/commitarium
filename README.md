@@ -128,9 +128,13 @@ to be built.
 The worker also has a provider-neutral operating-system process-supervision
 foundation. It can start one exact child process group, expose bounded and
 sequenced stdout/stderr chunks, report normal and signaled exits, request gentle
-termination, and force-stop the same process tree. The simulated worker does
-not use this component yet; the first real provider adapter will connect it to
-a provider CLI.
+termination, and force-stop the same process tree. The journal-backed service
+can now pass the immutable HTTP attempt ID into a process-backed provider
+session, durably record a force-stop request before delivery, terminate only
+that session's process tree, and wait for the normal session watcher to persist
+the terminal result. Exact retries return that stored result without sending a
+second signal. The simulated worker does not advertise this optional capability;
+the first real provider adapter will connect it to a provider CLI.
 
 ## Development checks
 
