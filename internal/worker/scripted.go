@@ -88,7 +88,7 @@ func (a *ScriptedAdapter) Start(
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if existing, ok := a.sessions[request.SessionID]; ok {
-		if existing.request == request {
+		if existing.request.Equal(request) {
 			return existing, nil
 		}
 		return nil, ErrSessionConflict
@@ -342,7 +342,7 @@ func newScriptedSession(
 		eventBuffer = 16
 	}
 	return &scriptedSession{
-		request:           request,
+		request:           request.Clone(),
 		providerSessionID: providerSessionID,
 		script:            script,
 		commands:          make(chan commandDelivery),

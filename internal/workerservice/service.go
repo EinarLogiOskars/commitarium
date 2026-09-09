@@ -50,13 +50,14 @@ func (function NormalizerFunc) Normalize(
 }
 
 type Config struct {
-	Journal          *workerjournal.Store
-	Provider         worker.Adapter
-	Normalizer       Normalizer
-	Lifetime         context.Context
-	Now              func() time.Time
-	SubscriberBuffer int
-	ForceStopTimeout time.Duration
+	Journal             *workerjournal.Store
+	Provider            worker.Adapter
+	EnvironmentResolver EnvironmentResolver
+	Normalizer          Normalizer
+	Lifetime            context.Context
+	Now                 func() time.Time
+	SubscriberBuffer    int
+	ForceStopTimeout    time.Duration
 }
 
 type activeProviderSession struct {
@@ -69,11 +70,12 @@ type activeProviderSession struct {
 // Service owns live provider-session handles while the journal remains the
 // durable authority exposed through inspection and replay.
 type Service struct {
-	journal    *workerjournal.Store
-	provider   worker.Adapter
-	normalizer Normalizer
-	lifetime   context.Context
-	now        func() time.Time
+	journal             *workerjournal.Store
+	provider            worker.Adapter
+	environmentResolver EnvironmentResolver
+	normalizer          Normalizer
+	lifetime            context.Context
+	now                 func() time.Time
 
 	activeMu sync.RWMutex
 	active   map[workerhttp.AttemptReference]*activeProviderSession
@@ -101,6 +103,9 @@ func New(
 	if config.Provider == nil {
 		return nil, workerjournal.RecoveryResult{}, fmt.Errorf("%w: provider is required", ErrInvalidConfig)
 	}
+	if config.EnvironmentResolver == nil {
+		return nil, workerjournal.RecoveryResult{}, fmt.Errorf("%w: environment resolver is required", ErrInvalidConfig)
+	}
 	if config.Normalizer == nil {
 		return nil, workerjournal.RecoveryResult{}, fmt.Errorf("%w: normalizer is required", ErrInvalidConfig)
 	}
@@ -126,15 +131,16 @@ func New(
 		forceStopTimeout = defaultForceStopTimeout
 	}
 	service := &Service{
-		journal:          config.Journal,
-		provider:         config.Provider,
-		normalizer:       config.Normalizer,
-		lifetime:         config.Lifetime,
-		now:              now,
-		active:           make(map[workerhttp.AttemptReference]*activeProviderSession),
-		subscribers:      make(map[workerhttp.AttemptReference]map[uint64]chan workerhttp.Event),
-		bufferSize:       bufferSize,
-		forceStopTimeout: forceStopTimeout,
+		journal:             config.Journal,
+		provider:            config.Provider,
+		environmentResolver: config.EnvironmentResolver,
+		normalizer:          config.Normalizer,
+		lifetime:            config.Lifetime,
+		now:                 now,
+		active:              make(map[workerhttp.AttemptReference]*activeProviderSession),
+		subscribers:         make(map[workerhttp.AttemptReference]map[uint64]chan workerhttp.Event),
+		bufferSize:          bufferSize,
+		forceStopTimeout:    forceStopTimeout,
 	}
 	recovery, err := service.journal.RecoverInterrupted(ctx, service.timestamp())
 	if err != nil {
@@ -179,7 +185,50 @@ func (service *Service) PutAttempt(
 		return attempt, false, nil
 	}
 
-	providerSession, launchErr := service.launchProvider(request, identity.AttemptReference)
+	launchEnvironment, resolveErr := service.environmentResolver.Resolve(service.lifetime, request.Assignment)
+	if resolveErr != nil {
+		code, summary, retryable := environmentFailure(resolveErr)
+		failed, terminalErr := service.failLaunch(ctx, attempt, code, summary, retryable, resolveErr)
+		if terminalErr != nil {
+			return workerhttp.Attempt{}, false, terminalErr
+		}
+		return failed, true, nil
+	}
+	if !launchEnvironmentMatches(launchEnvironment, request.Assignment) {
+		resolveErr = fmt.Errorf("%w: resolver returned a different assignment", ErrConfigurationMismatch)
+		failed, terminalErr := service.failLaunch(
+			ctx,
+			attempt,
+			workerhttp.ErrorConfigurationMismatch,
+			"materialized configuration does not match the requested assignment",
+			false,
+			resolveErr,
+		)
+		if terminalErr != nil {
+			return workerhttp.Attempt{}, false, terminalErr
+		}
+		return failed, true, nil
+	}
+	if err := launchEnvironment.Validate(); err != nil {
+		resolveErr = fmt.Errorf("%w: %v", ErrConfigurationMismatch, err)
+		failed, terminalErr := service.failLaunch(
+			ctx,
+			attempt,
+			workerhttp.ErrorConfigurationMismatch,
+			"materialized configuration is invalid",
+			false,
+			resolveErr,
+		)
+		if terminalErr != nil {
+			return workerhttp.Attempt{}, false, terminalErr
+		}
+		return failed, true, nil
+	}
+	providerSession, launchErr := service.launchProvider(
+		request,
+		identity.AttemptReference,
+		launchEnvironment.Clone(),
+	)
 	if launchErr != nil {
 		if providerSession != nil {
 			uncertain, transitionErr := service.uncertainLaunch(ctx, attempt, providerSession.ProviderSessionID())
@@ -188,7 +237,14 @@ func (service *Service) PutAttempt(
 			}
 			return uncertain, true, nil
 		}
-		failed, terminalErr := service.failLaunch(ctx, attempt, workerhttp.ErrorInternal, "provider session could not be started", launchErr)
+		failed, terminalErr := service.failLaunch(
+			ctx,
+			attempt,
+			workerhttp.ErrorInternal,
+			"provider session could not be started",
+			true,
+			launchErr,
+		)
 		if terminalErr != nil {
 			return workerhttp.Attempt{}, false, terminalErr
 		}
@@ -406,13 +462,15 @@ func (service *Service) ForceStop(
 func (service *Service) launchProvider(
 	request workerhttp.PutAttemptRequest,
 	reference workerhttp.AttemptReference,
+	launchEnvironment worker.LaunchEnvironment,
 ) (worker.Session, error) {
 	sessionRequest := worker.SessionRequest{
-		SessionID:    reference.SessionID,
-		AttemptID:    reference.AttemptID,
-		FeatureID:    request.Assignment.FeatureID,
-		Role:         worker.Role(request.Assignment.Role),
-		Instructions: request.Instructions,
+		SessionID:         reference.SessionID,
+		AttemptID:         reference.AttemptID,
+		FeatureID:         request.Assignment.FeatureID,
+		Role:              worker.Role(request.Assignment.Role),
+		Instructions:      request.Instructions,
+		LaunchEnvironment: launchEnvironment.Clone(),
 	}
 	if request.Mode == workerhttp.AttemptModeResume {
 		return service.provider.Resume(service.lifetime, worker.ResumeRequest{
@@ -431,6 +489,7 @@ func (service *Service) failLaunch(
 	attempt workerhttp.Attempt,
 	code workerhttp.ErrorCode,
 	summary string,
+	retryable bool,
 	cause error,
 ) (workerhttp.Attempt, error) {
 	failed, err := service.journal.TransitionAttempt(ctx, workerjournal.AttemptTransition{
@@ -444,7 +503,7 @@ func (service *Service) failLaunch(
 			Error: &workerhttp.ProtocolError{
 				Code:      code,
 				Message:   summary,
-				Retryable: true,
+				Retryable: retryable,
 			},
 		},
 	})

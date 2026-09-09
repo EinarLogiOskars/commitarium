@@ -296,6 +296,39 @@ The same fence is applied when a provider process appears to start but does not
 return the expected resumable provider session ID; the worker cannot safely
 assume that such a process is absent merely because its identity is unusable.
 
+### Launch environment resolution
+
+For a newly created attempt, the journal-backed service passes the complete
+HTTP assignment to a worker-local environment resolver before it starts the
+provider. The resolver must return the same agent profile, project, feature,
+role, workspace, configuration revision, and materialization digest. The
+service rejects a resolver result that changes any of those values.
+
+The included immutable resolver is initialized from already materialized
+workspace records supplied inside the worker. It accepts only the profile
+mounted by that worker, requires an exact assignment match, resolves the
+working directory to a real directory inside the configured workspace root,
+validates explicit
+`NAME=VALUE` process entries, and takes defensive copies of those entries.
+Missing profiles and workspaces produce durable `profile_unavailable` or
+`workspace_unavailable` terminal results. A changed revision, digest, project,
+feature, or role produces a non-retryable `configuration_mismatch` result. No
+provider process is started in any of those cases.
+
+Resolution happens only after the immutable launch request has been stored and
+only when that request creates a new attempt. An exact idempotent retry returns
+the existing attempt, including a prior resolution failure, without resolving
+again or starting a different process. A caller can deliberately make a new
+attempt after correcting a terminal failure; it cannot silently change the
+configuration of the old one.
+
+Resolved working-directory and process-environment values exist only inside
+the worker process. They are not fields in the HTTP contract and are not stored
+in the worker journal or coordinator SQLite. The process environment is always
+explicit: even an intentionally empty environment remains distinct from Go's
+`nil` environment, which would inherit all variables from the worker service.
+This slice does not yet load or provision secret values.
+
 The simulated Codex worker is a standalone Go executable and Compose service.
 It serves the authenticated API on port 8081 inside the Compose network and
 stores `worker.db` in the private `simulated-codex-worker-journal` volume. Its
@@ -312,8 +345,8 @@ and verifies that the same provider session identity remains fenced against a
 replacement.
 
 There is still no operating-system provider process wired into the standalone
-service, credential access, persistent provider profile, workspace
-materialization, or project-secret delivery. The journal-backed service
+service, credential access, persistent provider profile, real workspace
+materialization source, or project-secret delivery. The journal-backed service
 supports process-backed sessions through its optional force-stop interface,
 but the deterministic session does not implement that interface. Accordingly
 the standalone service does not advertise force-stop: true forced termination
@@ -364,6 +397,13 @@ newline-delimited JSON over the child's standard input and output. It performs
 the required initialization handshake, starts a new thread or resumes the exact
 recorded thread, captures the Codex thread ID before returning the session, and
 then starts one turn with the assignment or recovery briefing.
+
+The working directory and complete child-process environment now come from the
+resolved launch environment attached to that individual session request. They
+are no longer adapter-wide configuration. The same directory is also sent as
+App Server's thread `cwd`, so the supervised process and Codex agree on the
+assigned workspace. The adapter refuses to start when this materialized launch
+environment is missing or invalid.
 
 The adapter converts completed agent messages and generic command, file-change,
 web-search, tool, plan, and delegated-agent lifecycle notices into the existing

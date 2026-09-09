@@ -125,9 +125,15 @@ scripts can serve repeated logical sessions. The codebase also contains the
 first real Codex App Server adapter: it can start or resume a Codex thread,
 capture its thread ID before work continues, stream a safe subset of observable
 activity, steer or interrupt the active turn, and force-stop its exact process
-tree. The standalone worker still selects deterministic scripts; credentials,
-persistent Codex profile state, project workspaces, and coordinator runtime
-wiring remain separate future slices.
+tree. The worker service now resolves each new attempt's complete assignment
+into one validated, defensively copied launch environment before calling an
+adapter. A real adapter receives an explicit working directory and environment
+instead of inheriting the worker service's process variables. The assignment
+revision and digest remain in the journal, while the resolved environment stays
+inside the worker and is never added to the worker HTTP request or journal. The
+standalone worker still selects deterministic scripts; credential provisioning,
+persistent Codex profile state, real project-workspace materialization, and
+coordinator runtime wiring remain separate future slices.
 
 The worker also has a provider-neutral operating-system process-supervision
 foundation. It can start one exact child process group, expose bounded and

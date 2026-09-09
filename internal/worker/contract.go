@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
+	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -17,11 +20,32 @@ const (
 )
 
 type SessionRequest struct {
-	SessionID    string
-	AttemptID    string
-	FeatureID    string
-	Role         Role
-	Instructions string
+	SessionID         string
+	AttemptID         string
+	FeatureID         string
+	Role              Role
+	Instructions      string
+	LaunchEnvironment LaunchEnvironment
+}
+
+// LaunchEnvironment is the worker-resolved, immutable view of the exact
+// profile, project, and workspace materialization assigned to one provider
+// attempt. Variables are explicit NAME=VALUE entries; a real adapter must not
+// inherit the worker service's environment implicitly.
+//
+// Secret values are deliberately not part of the coordinator-to-worker HTTP
+// request or worker journal. A future materializer may make narrowly scoped
+// secret values available here inside the worker immediately before launch.
+type LaunchEnvironment struct {
+	AgentProfileID        string
+	ProjectID             string
+	FeatureID             string
+	Role                  Role
+	WorkspaceID           string
+	ConfigurationRevision int64
+	MaterializationDigest string
+	WorkingDirectory      string
+	Variables             []string
 }
 
 type ResumeRequest struct {
@@ -130,8 +154,15 @@ type ForceStoppableSession interface {
 }
 
 var ErrInvalidSessionRequest = errors.New("invalid worker session request")
+var ErrInvalidLaunchEnvironment = errors.New("invalid worker launch environment")
 var ErrInvalidCommand = errors.New("invalid worker command")
 var ErrInvalidResult = errors.New("invalid worker result")
+
+var (
+	launchIDPattern        = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
+	launchDigestPattern    = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
+	environmentNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+)
 
 func (role Role) IsValid() bool {
 	switch role {
@@ -154,9 +185,112 @@ func (request SessionRequest) Validate() error {
 		return fmt.Errorf("%w: role %q is not recognized", ErrInvalidSessionRequest, request.Role)
 	case strings.TrimSpace(request.Instructions) == "":
 		return fmt.Errorf("%w: instructions are required", ErrInvalidSessionRequest)
-	default:
-		return nil
 	}
+	if !request.LaunchEnvironment.IsZero() {
+		if err := request.LaunchEnvironment.Validate(); err != nil {
+			return fmt.Errorf("%w: %v", ErrInvalidSessionRequest, err)
+		}
+		if request.LaunchEnvironment.FeatureID != request.FeatureID {
+			return fmt.Errorf("%w: launch feature does not match session feature", ErrInvalidSessionRequest)
+		}
+		if request.LaunchEnvironment.Role != request.Role {
+			return fmt.Errorf("%w: launch role does not match session role", ErrInvalidSessionRequest)
+		}
+	}
+	return nil
+}
+
+func (environment LaunchEnvironment) IsZero() bool {
+	return environment.AgentProfileID == "" &&
+		environment.ProjectID == "" &&
+		environment.FeatureID == "" &&
+		environment.Role == "" &&
+		environment.WorkspaceID == "" &&
+		environment.ConfigurationRevision == 0 &&
+		environment.MaterializationDigest == "" &&
+		environment.WorkingDirectory == "" &&
+		environment.Variables == nil
+}
+
+func (environment LaunchEnvironment) Validate() error {
+	for _, field := range []struct {
+		name  string
+		value string
+	}{
+		{name: "agent profile ID", value: environment.AgentProfileID},
+		{name: "project ID", value: environment.ProjectID},
+		{name: "feature ID", value: environment.FeatureID},
+		{name: "workspace ID", value: environment.WorkspaceID},
+	} {
+		if !launchIDPattern.MatchString(field.value) {
+			return fmt.Errorf("%w: %s is invalid", ErrInvalidLaunchEnvironment, field.name)
+		}
+	}
+	if !environment.Role.IsValid() {
+		return fmt.Errorf("%w: role %q is not recognized", ErrInvalidLaunchEnvironment, environment.Role)
+	}
+	if environment.ConfigurationRevision < 1 {
+		return fmt.Errorf("%w: configuration revision must be positive", ErrInvalidLaunchEnvironment)
+	}
+	if !launchDigestPattern.MatchString(environment.MaterializationDigest) {
+		return fmt.Errorf("%w: materialization digest must be a lowercase sha256 digest", ErrInvalidLaunchEnvironment)
+	}
+	if !filepath.IsAbs(environment.WorkingDirectory) || strings.ContainsRune(environment.WorkingDirectory, '\x00') {
+		return fmt.Errorf("%w: working directory must be absolute and cannot contain NUL", ErrInvalidLaunchEnvironment)
+	}
+	if environment.Variables == nil {
+		return fmt.Errorf("%w: explicit variables are required", ErrInvalidLaunchEnvironment)
+	}
+	seen := make(map[string]struct{}, len(environment.Variables))
+	for _, variable := range environment.Variables {
+		name, _, found := strings.Cut(variable, "=")
+		if !found || !environmentNamePattern.MatchString(name) || strings.ContainsRune(variable, '\x00') {
+			return fmt.Errorf("%w: variables must be NAME=VALUE entries without NUL", ErrInvalidLaunchEnvironment)
+		}
+		if _, exists := seen[name]; exists {
+			return fmt.Errorf("%w: variable %q is duplicated", ErrInvalidLaunchEnvironment, name)
+		}
+		seen[name] = struct{}{}
+	}
+	return nil
+}
+
+// Clone prevents callers from sharing the Variables backing array across
+// attempt boundaries.
+func (environment LaunchEnvironment) Clone() LaunchEnvironment {
+	if environment.Variables != nil {
+		variables := make([]string, len(environment.Variables))
+		copy(variables, environment.Variables)
+		environment.Variables = variables
+	}
+	return environment
+}
+
+func (environment LaunchEnvironment) Equal(other LaunchEnvironment) bool {
+	return environment.AgentProfileID == other.AgentProfileID &&
+		environment.ProjectID == other.ProjectID &&
+		environment.FeatureID == other.FeatureID &&
+		environment.Role == other.Role &&
+		environment.WorkspaceID == other.WorkspaceID &&
+		environment.ConfigurationRevision == other.ConfigurationRevision &&
+		environment.MaterializationDigest == other.MaterializationDigest &&
+		environment.WorkingDirectory == other.WorkingDirectory &&
+		(environment.Variables == nil) == (other.Variables == nil) &&
+		slices.Equal(environment.Variables, other.Variables)
+}
+
+func (request SessionRequest) Clone() SessionRequest {
+	request.LaunchEnvironment = request.LaunchEnvironment.Clone()
+	return request
+}
+
+func (request SessionRequest) Equal(other SessionRequest) bool {
+	return request.SessionID == other.SessionID &&
+		request.AttemptID == other.AttemptID &&
+		request.FeatureID == other.FeatureID &&
+		request.Role == other.Role &&
+		request.Instructions == other.Instructions &&
+		request.LaunchEnvironment.Equal(other.LaunchEnvironment)
 }
 
 func (request ResumeRequest) Validate() error {

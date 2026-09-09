@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"testing"
@@ -20,13 +21,15 @@ import (
 )
 
 const (
-	helperModeEnvironment   = "COMMITARIUM_CODEX_ADAPTER_HELPER"
-	helperPromptEnvironment = "COMMITARIUM_CODEX_ADAPTER_PROMPT"
+	helperModeEnvironment      = "COMMITARIUM_CODEX_ADAPTER_HELPER"
+	helperPromptEnvironment    = "COMMITARIUM_CODEX_ADAPTER_PROMPT"
+	helperDirectoryEnvironment = "COMMITARIUM_CODEX_ADAPTER_DIRECTORY"
+	helperVisibleEnvironment   = "COMMITARIUM_CODEX_ADAPTER_VISIBLE"
 )
 
 func TestAdapterStartsCodexAndTranslatesObservableActivity(t *testing.T) {
 	adapter := testAdapter(t, "success", "Implement the approved change")
-	session, err := adapter.Start(t.Context(), testRequest("att_codex_start", "Implement the approved change"))
+	session, err := adapter.Start(t.Context(), adapter.request("att_codex_start", "Implement the approved change"))
 	if err != nil {
 		t.Fatalf("start Codex adapter: %v", err)
 	}
@@ -59,7 +62,7 @@ func TestAdapterStartsCodexAndTranslatesObservableActivity(t *testing.T) {
 func TestAdapterResumesExactThreadWithRecoveryBriefing(t *testing.T) {
 	adapter := testAdapter(t, "resume", "Inspect durable state before continuing")
 	session, err := adapter.Resume(t.Context(), worker.ResumeRequest{
-		SessionRequest:    testRequest("att_codex_resume", "original instructions"),
+		SessionRequest:    adapter.request("att_codex_resume", "original instructions"),
 		ProviderSessionID: "thr_test",
 		Recovery: worker.RecoveryContext{
 			Briefing: "Inspect durable state before continuing",
@@ -81,7 +84,7 @@ func TestAdapterResumesExactThreadWithRecoveryBriefing(t *testing.T) {
 func TestAdapterRejectsMismatchedResumedThread(t *testing.T) {
 	adapter := testAdapter(t, "resume-mismatch", "recovery briefing")
 	session, err := adapter.Resume(t.Context(), worker.ResumeRequest{
-		SessionRequest:    testRequest("att_resume_mismatch", "original instructions"),
+		SessionRequest:    adapter.request("att_resume_mismatch", "original instructions"),
 		ProviderSessionID: "thr_test",
 		Recovery:          worker.RecoveryContext{Briefing: "recovery briefing"},
 	})
@@ -95,7 +98,7 @@ func TestAdapterRejectsMismatchedResumedThread(t *testing.T) {
 
 func TestAdapterSteersAndInterruptsActiveTurn(t *testing.T) {
 	adapter := testAdapter(t, "controls", "start work")
-	session, err := adapter.Start(t.Context(), testRequest("att_codex_controls", "start work"))
+	session, err := adapter.Start(t.Context(), adapter.request("att_codex_controls", "start work"))
 	if err != nil {
 		t.Fatalf("start controlled Codex adapter: %v", err)
 	}
@@ -128,7 +131,7 @@ func TestAdapterSteersAndInterruptsActiveTurn(t *testing.T) {
 
 func TestAdapterMapsExplicitTurnFailure(t *testing.T) {
 	adapter := testAdapter(t, "failed-turn", "fail deterministically")
-	session, err := adapter.Start(t.Context(), testRequest("att_codex_failed", "fail deterministically"))
+	session, err := adapter.Start(t.Context(), adapter.request("att_codex_failed", "fail deterministically"))
 	if err != nil {
 		t.Fatalf("start failing Codex adapter: %v", err)
 	}
@@ -147,7 +150,7 @@ func TestAdapterMapsExplicitTurnFailure(t *testing.T) {
 
 func TestAdapterReturnsEarlyIdentityWhenTurnStartFails(t *testing.T) {
 	adapter := testAdapter(t, "turn-start-error", "cannot start")
-	session, err := adapter.Start(t.Context(), testRequest("att_turn_start_error", "cannot start"))
+	session, err := adapter.Start(t.Context(), adapter.request("att_turn_start_error", "cannot start"))
 	if err == nil || session == nil {
 		t.Fatalf("turn-start failure session=%+v error=%v", session, err)
 	}
@@ -158,7 +161,7 @@ func TestAdapterReturnsEarlyIdentityWhenTurnStartFails(t *testing.T) {
 
 func TestAdapterReturnsPartialSessionWhenThreadIdentityIsMissing(t *testing.T) {
 	adapter := testAdapter(t, "missing-thread-id", "start cautiously")
-	session, err := adapter.Start(t.Context(), testRequest("att_missing_thread", "start cautiously"))
+	session, err := adapter.Start(t.Context(), adapter.request("att_missing_thread", "start cautiously"))
 	if err == nil || session == nil {
 		t.Fatalf("missing thread identity session=%+v error=%v", session, err)
 	}
@@ -172,7 +175,7 @@ func TestAdapterReturnsPartialSessionWhenThreadIdentityIsMissing(t *testing.T) {
 
 func TestAdapterFailsClosedOnMalformedProtocol(t *testing.T) {
 	adapter := testAdapter(t, "malformed", "observe malformed output")
-	session, err := adapter.Start(t.Context(), testRequest("att_codex_malformed", "observe malformed output"))
+	session, err := adapter.Start(t.Context(), adapter.request("att_codex_malformed", "observe malformed output"))
 	if err != nil {
 		t.Fatalf("start malformed Codex adapter: %v", err)
 	}
@@ -187,7 +190,7 @@ func TestAdapterFailsClosedOnMalformedProtocol(t *testing.T) {
 
 func TestAdapterForceStopsExactProcessSession(t *testing.T) {
 	adapter := testAdapter(t, "force-stop", "keep working")
-	providerSession, err := adapter.Start(t.Context(), testRequest("att_codex_force", "keep working"))
+	providerSession, err := adapter.Start(t.Context(), adapter.request("att_codex_force", "keep working"))
 	if err != nil {
 		t.Fatalf("start force-stop Codex adapter: %v", err)
 	}
@@ -231,8 +234,15 @@ func TestNewAdapterValidatesAndUsesSafeDefaults(t *testing.T) {
 		adapter.approvalPolicy != "never" || adapter.sandbox != "read-only" {
 		t.Fatalf("unsafe or unexpected defaults: %+v", adapter)
 	}
-	if _, err := adapter.Start(nil, testRequest("att_nil_context", "test")); err == nil {
+	request := worker.SessionRequest{
+		SessionID: "ses_codex_test", AttemptID: "att_nil_context", FeatureID: "fea_codex_test",
+		Role: worker.RoleCoder, Instructions: "test",
+	}
+	if _, err := adapter.Start(nil, request); err == nil {
 		t.Fatal("expected nil start context to fail")
+	}
+	if _, err := adapter.Start(t.Context(), request); !errors.Is(err, worker.ErrInvalidLaunchEnvironment) {
+		t.Fatalf("missing launch environment error = %v", err)
 	}
 }
 
@@ -243,6 +253,11 @@ func TestCodexAppServerHelper(t *testing.T) {
 	}
 	if mode == "force-stop" {
 		signal.Ignore(syscall.SIGTERM)
+	}
+	workingDirectory, err := os.Getwd()
+	if err != nil || workingDirectory != os.Getenv(helperDirectoryEnvironment) ||
+		os.Getenv(helperVisibleEnvironment) != "materialized" {
+		os.Exit(80)
 	}
 	scanner := bufio.NewScanner(os.Stdin)
 	writer := json.NewEncoder(os.Stdout)
@@ -423,17 +438,28 @@ func helperWaitForever() {
 	}
 }
 
-func testAdapter(t *testing.T, mode string, prompt string) *Adapter {
+type adapterHarness struct {
+	*Adapter
+	directory   string
+	environment []string
+}
+
+func testAdapter(t *testing.T, mode string, prompt string) *adapterHarness {
 	t.Helper()
+	directory, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatalf("resolve test workspace: %v", err)
+	}
+	environment := append(os.Environ(),
+		helperModeEnvironment+"="+mode,
+		helperPromptEnvironment+"="+prompt,
+		helperDirectoryEnvironment+"="+directory,
+		helperVisibleEnvironment+"=materialized",
+	)
 	adapter, err := New(Config{
-		Supervisor: processsupervisor.New(),
-		Executable: os.Args[0],
-		Arguments:  []string{"-test.run=^TestCodexAppServerHelper$"},
-		Directory:  t.TempDir(),
-		Environment: append(os.Environ(),
-			helperModeEnvironment+"="+mode,
-			helperPromptEnvironment+"="+prompt,
-		),
+		Supervisor:      processsupervisor.New(),
+		Executable:      os.Args[0],
+		Arguments:       []string{"-test.run=^TestCodexAppServerHelper$"},
 		Model:           "test-model",
 		RequestTimeout:  2 * time.Second,
 		ShutdownTimeout: time.Second,
@@ -441,16 +467,21 @@ func testAdapter(t *testing.T, mode string, prompt string) *Adapter {
 	if err != nil {
 		t.Fatalf("create test Codex adapter: %v", err)
 	}
-	return adapter
+	return &adapterHarness{Adapter: adapter, directory: directory, environment: environment}
 }
 
-func testRequest(attemptID string, instructions string) worker.SessionRequest {
+func (harness *adapterHarness) request(attemptID string, instructions string) worker.SessionRequest {
 	return worker.SessionRequest{
-		SessionID:    "ses_codex_test",
-		AttemptID:    attemptID,
-		FeatureID:    "fea_codex_test",
-		Role:         worker.RoleCoder,
-		Instructions: instructions,
+		SessionID: "ses_codex_test", AttemptID: attemptID, FeatureID: "fea_codex_test",
+		Role: worker.RoleCoder, Instructions: instructions,
+		LaunchEnvironment: worker.LaunchEnvironment{
+			AgentProfileID: "profile_codex_test", ProjectID: "prj_codex_test",
+			FeatureID: "fea_codex_test", Role: worker.RoleCoder, WorkspaceID: "workspace_codex_test",
+			ConfigurationRevision: 3,
+			MaterializationDigest: "sha256:" + strings.Repeat("a", 64),
+			WorkingDirectory:      harness.directory,
+			Variables:             append([]string(nil), harness.environment...),
+		},
 	}
 }
 
