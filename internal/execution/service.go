@@ -366,6 +366,33 @@ func (s *Service) BeginAutonomousTurn(
 	return admitted, nil
 }
 
+// BeginChainedTurn starts the next agent turn while the overall run remains
+// active. The store requires every other session to be waiting or terminal,
+// which prevents the handoff from creating two concurrently working agents.
+func (s *Service) BeginChainedTurn(
+	ctx context.Context,
+	sessionID string,
+	previous WorkerAttemptCheckpoint,
+	nextAttemptID string,
+	runReason string,
+) (bool, error) {
+	now := s.now().UTC()
+	admitted, err := s.store.BeginAutonomousTurn(ctx, AutonomousTurnAdmission{
+		SessionID:                 sessionID,
+		PreviousAttemptID:         previous.AttemptID,
+		PreviousLastEventSequence: previous.LastEventSequence,
+		NextAttempt: WorkerAttemptCheckpoint{
+			SessionID: sessionID, AttemptID: nextAttemptID,
+			CreatedAt: now, UpdatedAt: now,
+		},
+		RunReason: runReason, OccurredAt: now, RunAlreadyActive: true,
+	})
+	if err != nil {
+		return false, fmt.Errorf("begin chained turn for session %q: %w", sessionID, err)
+	}
+	return admitted, nil
+}
+
 // BeginNewSessionTurn creates the first attempt of a second logical agent
 // conversation without leaving partially admitted work across a restart.
 func (s *Service) BeginNewSessionTurn(
