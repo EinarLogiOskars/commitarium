@@ -51,6 +51,17 @@ the internal pull-request audit trail. The coordinator database stores only the
 operational state needed to run and recover workflows. GitHub credentials and
 actions stay outside the agent containers and remain user-controlled.
 
+The planned external handoff has two explicit trusted-host steps. First,
+Commitarium synchronizes an approved feature into the user's selected local
+repository as one clean commit using the user's configured Git identity. Second,
+the user may push that exact commit to GitHub, GitLab, or another Git remote.
+Users may later choose to chain the steps, but local synchronization never
+silently implies an external push. Agent authors, intermediate commits, and the
+private Forgejo audit trail remain in Forgejo rather than entering the clean
+upstream history. This handoff is documented in
+[ADR-008](docs/adr/0008-export-completed-work-as-clean-host-commits.md) but is
+not implemented yet.
+
 ## Run locally
 
 ```sh

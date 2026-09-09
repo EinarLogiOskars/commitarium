@@ -20,7 +20,7 @@ The first supported collaboration is between Codex CLI and Claude Code. The desi
 4. **Context continuity:** The agreed plan, architectural reasoning, implementation history, and review history remain available throughout the feature lifecycle.
 5. **Auditable work:** Plans, commits, reviews, findings, responses, test results, and decisions are durable and inspectable.
 6. **Local-first isolation:** Agent execution and CI run inside controlled containers, protecting the host and the user's upstream repository.
-7. **Controlled handoff:** Iterative agent activity stays in the internal forge. Accepted work merges into Forgejo's default branch; any later GitHub action is an explicit user-controlled operation at the trusted host boundary.
+7. **Controlled handoff:** Iterative agent activity stays in the internal forge. The trusted host converts accepted work into one clean local commit, and pushing that commit to any external Git provider is a separate user-controlled action; users may explicitly chain the two.
 8. **Provider choice:** The user chooses which agent codes and which reviews, and can configure subscription-backed or API-backed authentication explicitly.
 9. **No silent billing changes:** The system never silently switches from subscription usage to API billing, or between billing profiles.
 10. **One workspace, many projects:** One Commitarium installation manages all projects imported by the user.
@@ -193,14 +193,30 @@ They must not receive the host Docker socket. A compromised test suite must not 
 
 Forgejo is the only forge used by the managed agent workflow. The coordinator, Forgejo, agent workers, and CI workers do not receive GitHub credentials or access to the user's GitHub repositories.
 
-After an approved internal pull request is merged into Forgejo's protected default branch, the user may handle the accepted revision with normal host-side Git tooling. Commitarium may optionally expose a narrowly scoped trusted-host workflow that:
+After an approved internal pull request is merged into Forgejo's protected
+default branch, Commitarium offers two separate trusted-host actions:
 
-1. Verifies the exact Forgejo merge revision and required CI evidence.
-2. Fetches that revision into a namespaced branch without changing or overwriting the user's current working tree.
-3. Shows the destination repository, branch, and commits to the user.
-4. Only after an explicit user action, invokes fixed `git` and `gh` operations to push the branch and open a GitHub pull request.
+1. **Synchronize locally:** produce one clean commit for the exact approved net
+   feature change in the user's selected local repository. The commit uses the
+   user's configured Git identity and excludes agent commit authors, intermediate
+   commits, internal merge messages, Forgejo review data, and private audit links.
+2. **Push upstream:** verify and push only that recorded local commit to the
+   configured GitHub, GitLab, or other Git remote.
 
-This optional operation uses the user's host-side Git credential helper or GitHub CLI authentication. It does not pass credentials, arbitrary commands, or a writable host repository into a container. The user may instead perform every GitHub operation manually; GitHub activity is outside the coordinator state machine and does not affect whether the internal feature is complete.
+The user may run only the first action, run the second later, or configure both
+to execute as one sequence. Local synchronization uses a temporary host
+worktree and does not overwrite a dirty active checkout. Either action stops on
+missing or contradictory revisions, a changed expected base, ambiguous prior
+work, conflicts, or upstream divergence; neither action resets, cleans, or
+force-pushes automatically.
+
+Creating a clean commit intentionally gives it a different ID from the internal
+Forgejo revision. Trusted local state records the exact internal-to-local commit
+mapping so later synchronization does not assume the two histories share commit
+IDs. Forgejo remains the detailed audit source. The optional operation uses the
+user's host-side Git credential helper or provider integration and does not pass
+credentials, arbitrary commands, or a writable host repository into a container.
+See [ADR-008](docs/adr/0008-export-completed-work-as-clean-host-commits.md).
 
 ## Multi-project workspace
 
@@ -341,7 +357,13 @@ The coordinator merges the approved internal pull request into Forgejo's protect
 
 ### 10. Optional external handoff
 
-The user may sync completed Forgejo history to any external repository using normal host-side Git tooling. A future trusted desktop workflow may assist with `git` and `gh`, but only after an explicit user action. The coordinator and containerized services neither perform nor track external pushes or pull requests.
+The trusted host may first synchronize a completed feature into the user's local
+repository as one clean user-authored commit, then separately push that exact
+commit to any configured external Git repository. The user can request either
+step manually or opt into chaining them. Containerized services neither receive
+external credentials nor perform external pushes. Internal and clean commit IDs
+differ and are connected by a verified local handoff record; external activity
+does not change whether the internal feature is complete.
 
 ## Workflow state model
 
@@ -386,7 +408,9 @@ The coordinator will likely require these concepts:
 - **Artifact:** A plan, message transcript, commit, diff, test result, review, or external link.
 - **Review finding:** A structured concern with severity and resolution state.
 - **Follow-up request:** An optional or independent discovery proposed to the user as a linked feature without expanding the active feature's scope.
-- **Handoff:** An optional, explicit host-side operation that prepares or sends an accepted Forgejo revision to an external repository.
+- **Local synchronization:** A trusted-host operation that converts one exact approved internal feature change into one clean commit in the user's selected local repository.
+- **Upstream push:** A separate trusted-host operation that sends only a verified locally synchronized commit to the user's configured external Git remote.
+- **Handoff mapping:** Trusted local state connecting exact approved Forgejo revisions to the corresponding clean local commit and any confirmed upstream result.
 
 ## Authentication and billing profiles
 
@@ -565,10 +589,17 @@ Phase 1 is complete when a simulated feature can move from discovery through app
 
 ### Phase 6: Trusted host handoff
 
-- Prepare a namespaced host branch from an exact completed Forgejo revision without disturbing the user's working tree.
-- Add optional host-secured GitHub CLI integration.
-- Require explicit user action before every external push or pull-request creation.
-- Preserve links to the detailed internal Forgejo audit trail.
+- Synchronize an exact completed feature into a temporary host worktree as one
+  clean commit using the user's configured Git identity.
+- Record and verify the internal revision to clean local commit mapping.
+- Keep local synchronization and upstream push as separate actions, with an
+  option to chain them automatically.
+- Add provider-neutral host Git pushing and optional provider-specific pull
+  request integration.
+- Refuse dirty, diverged, contradictory, or ambiguous state and never
+  force-push automatically.
+- Keep the detailed audit trail in Forgejo rather than embedding it in the
+  exported commit by default.
 
 ### Phase 7: Rich review and visualization
 
