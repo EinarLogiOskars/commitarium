@@ -134,6 +134,30 @@ func TestJournalBackedServiceRunsControlsAndReplaysThroughHTTP(t *testing.T) {
 	}
 }
 
+func TestJournalBackedServiceRecordsProviderReportedFailure(t *testing.T) {
+	provider := immediateResultAdapter{result: worker.Result{
+		Outcome:           worker.OutcomeFailed,
+		ProviderSessionID: "codex_thread_failed",
+		Summary:           "Codex reported that the turn failed.",
+	}}
+	harness := newHTTPHarness(t, filepath.Join(t.TempDir(), "worker.db"), provider, newStepClock())
+	defer harness.close(t)
+	identity := validLaunchIdentity("ses_failed", "att_failed", "launch_failed")
+
+	attempt, created, err := harness.client.PutAttempt(t.Context(), identity, validPutRequest())
+	if err != nil || !created {
+		t.Fatalf("start provider-reported failure: attempt=%+v created=%t error=%v", attempt, created, err)
+	}
+	terminal := waitForAttemptState(t, harness.client, attempt.AttemptReference, workerhttp.AttemptStateTerminal)
+	if terminal.Result == nil || terminal.Result.Outcome != workerhttp.OutcomeFailed ||
+		terminal.Result.Disposition != "" || terminal.Result.Error == nil ||
+		terminal.Result.Error.Code != workerhttp.ErrorInternal ||
+		terminal.Result.Error.Retryable ||
+		terminal.Result.Summary != provider.result.Summary {
+		t.Fatalf("stored provider failure = %+v", terminal.Result)
+	}
+}
+
 func TestJournalBackedServiceMarksInterruptedWorkIndeterminateOnStartup(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "worker.db")
 	clock := newStepClock()
@@ -611,6 +635,51 @@ type stepClock struct {
 
 type identityOverrideAdapter struct {
 	inner worker.Adapter
+}
+
+type immediateResultAdapter struct {
+	result worker.Result
+}
+
+func (adapter immediateResultAdapter) Start(
+	context.Context,
+	worker.SessionRequest,
+) (worker.Session, error) {
+	return newImmediateResultSession(adapter.result), nil
+}
+
+func (adapter immediateResultAdapter) Resume(
+	context.Context,
+	worker.ResumeRequest,
+) (worker.Session, error) {
+	return newImmediateResultSession(adapter.result), nil
+}
+
+type immediateResultSession struct {
+	result worker.Result
+	events chan worker.Event
+}
+
+func newImmediateResultSession(result worker.Result) *immediateResultSession {
+	events := make(chan worker.Event)
+	close(events)
+	return &immediateResultSession{result: result, events: events}
+}
+
+func (session *immediateResultSession) ProviderSessionID() string {
+	return session.result.ProviderSessionID
+}
+
+func (session *immediateResultSession) Events() <-chan worker.Event {
+	return session.events
+}
+
+func (*immediateResultSession) Send(context.Context, worker.Command) error {
+	return nil
+}
+
+func (session *immediateResultSession) Wait(context.Context) (worker.Result, error) {
+	return session.result, nil
 }
 
 func (adapter *identityOverrideAdapter) Start(

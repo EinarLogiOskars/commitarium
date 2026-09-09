@@ -974,8 +974,11 @@ func (r *Runner) collectAgentSession(
 	}
 	if r.executions != nil {
 		status := execution.SessionStatusCompleted
-		if workerResult.Outcome == worker.OutcomeStopped {
+		switch workerResult.Outcome {
+		case worker.OutcomeStopped:
 			status = execution.SessionStatusStopped
+		case worker.OutcomeFailed:
+			status = execution.SessionStatusFailed
 		}
 		if err := r.finishSession(
 			ctx,

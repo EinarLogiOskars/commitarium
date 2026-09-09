@@ -312,21 +312,21 @@ and verifies that the same provider session identity remains fenced against a
 replacement.
 
 There is still no operating-system provider process wired into the standalone
-service, real Codex or Claude Code integration, credential access, or
-project-secret delivery. The journal-backed service now supports process-backed
-sessions through its optional force-stop interface, but the deterministic
-session does not implement that interface. Accordingly the standalone service
-does not advertise force-stop: true forced termination must not be simulated as
-a cooperative stop. The coordinator client and event pump are also not yet
-wired into runtime orchestration.
+service, credential access, persistent provider profile, workspace
+materialization, or project-secret delivery. The journal-backed service
+supports process-backed sessions through its optional force-stop interface,
+but the deterministic session does not implement that interface. Accordingly
+the standalone service does not advertise force-stop: true forced termination
+must not be simulated as a cooperative stop. The coordinator client and event
+pump are also not yet wired into runtime orchestration.
 
 ## Provider process supervision foundation
 
-The worker codebase now includes a provider-neutral operating-system process
+The worker codebase includes a provider-neutral operating-system process
 supervisor, although the deterministic worker service does not use it yet. A
-future Codex or Claude Code adapter can ask it to start a specific executable,
-argument list, working directory, and environment for one attempt. The
-supervisor does not interpret provider commands or output.
+provider adapter can ask it to start a specific executable, argument list,
+working directory, and environment for one attempt. The supervisor does not
+interpret provider commands or output.
 
 Each child starts in a separate process group. Gentle termination and forced
 termination therefore target the supervised provider and the helper processes
@@ -334,8 +334,11 @@ it spawned, without signaling the worker itself. The returned handle is tied to
 one attempt ID; there is no lookup by a possibly stale process ID in the public
 API.
 
-Standard output and standard error are read concurrently and published as
-immutable chunks with one supervisor-assigned sequence. That sequence is the
+Standard input accepts serialized, context-bounded protocol frames. If a write
+times out while blocked, the supervisor closes input because a partially sent
+command makes the connection unsafe to reuse. Standard output and standard
+error are read concurrently and published as immutable chunks with one
+supervisor-assigned sequence. That sequence is the
 order in which the worker observed the two pipes; operating systems do not
 provide an exact shared write order across separate stdout and stderr pipes.
 The channel is deliberately bounded. If an adapter stops consuming output, the
@@ -352,3 +355,34 @@ The separate-process-group implementation currently supports the Linux worker
 container and macOS development tests. Other native platforms fail explicitly
 with `ErrUnsupportedPlatform`; this does not prevent the worker container from
 running on Docker Desktop for Windows.
+
+## Codex App Server adapter foundation
+
+`internal/codexadapter` is the first real provider adapter. It launches
+`codex app-server --listen stdio://` through the process supervisor and speaks
+newline-delimited JSON over the child's standard input and output. It performs
+the required initialization handshake, starts a new thread or resumes the exact
+recorded thread, captures the Codex thread ID before returning the session, and
+then starts one turn with the assignment or recovery briefing.
+
+The adapter converts completed agent messages and generic command, file-change,
+web-search, tool, plan, and delegated-agent lifecycle notices into the existing
+provider-neutral activity model. It deliberately ignores private reasoning and
+incremental message deltas; the completed message is authoritative and later
+passes through the worker safety filter before persistence or publication.
+Unknown optional notifications are ignored, while malformed protocol messages,
+wrong thread or turn identity, missing required identity, and event
+backpressure fail closed.
+
+User messages use App Server's `turn/steer` operation. Cooperative stop uses
+`turn/interrupt`, and forced stop targets the exact supervised process tree.
+App Server does not currently expose Commitarium's safe-pause meaning, so this
+adapter rejects pause and continue. Approval forwarding is also deferred; the
+adapter currently requires the `never` approval policy and defaults to a
+read-only sandbox. A later runtime slice must advertise only the capabilities
+that this real adapter actually supports.
+
+Tests execute a deterministic fake App Server as a real child process. They do
+not log in, contact OpenAI, or consume model usage. The production worker still
+uses the simulated adapter, so adding this package does not activate Codex or
+change the current Compose runtime.

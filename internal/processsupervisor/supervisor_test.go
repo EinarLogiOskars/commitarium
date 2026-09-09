@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -111,6 +112,70 @@ func TestStartPassesWorkingDirectoryAndExplicitEnvironment(t *testing.T) {
 	}
 	if !os.SameFile(wantDirectory, actualDirectory) {
 		t.Fatalf("reported directory = %q, want same file as %q", lines[0], directory)
+	}
+}
+
+func TestProcessWritesSerializedInputAndClosesIt(t *testing.T) {
+	process := startHelper(t, helperRequest("att_input", "copy-input"))
+	outputs := collectOutputs(process)
+
+	if err := process.WriteInput(timeoutContext(t, time.Second), []byte("first\n")); err != nil {
+		t.Fatalf("write first input: %v", err)
+	}
+	if err := process.WriteInput(timeoutContext(t, time.Second), []byte("second\n")); err != nil {
+		t.Fatalf("write second input: %v", err)
+	}
+	if err := process.CloseInput(); err != nil {
+		t.Fatalf("close input: %v", err)
+	}
+	if err := process.CloseInput(); err != nil {
+		t.Fatalf("repeat close input: %v", err)
+	}
+	if err := process.WriteInput(timeoutContext(t, time.Second), []byte("late\n")); !errors.Is(err, ErrInputClosed) {
+		t.Fatalf("write after close error = %v, want ErrInputClosed", err)
+	}
+
+	result, err := process.Wait(timeoutContext(t, 2*time.Second))
+	if err != nil || result.ExitCode != 0 {
+		t.Fatalf("copy-input result=%+v error=%v", result, err)
+	}
+	var stdout strings.Builder
+	for _, output := range <-outputs {
+		if output.Stream == StreamStdout {
+			stdout.Write(output.Data)
+		}
+	}
+	if stdout.String() != "first\nsecond\n" {
+		t.Fatalf("copied input = %q", stdout.String())
+	}
+}
+
+func TestProcessWriteInputHonorsCanceledContext(t *testing.T) {
+	process := startHelper(t, helperRequest("att_input_context", "delay-exit", "100ms"))
+	go func() {
+		for range process.Output() {
+		}
+	}()
+	canceled, cancel := context.WithCancel(t.Context())
+	cancel()
+	if err := process.WriteInput(canceled, []byte("ignored")); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled input error = %v, want context.Canceled", err)
+	}
+}
+
+func TestProcessWriteInputClosesBlockedPipeOnDeadline(t *testing.T) {
+	process := startHelper(t, helperRequest("att_input_deadline", "delay-exit", "250ms"))
+	go func() {
+		for range process.Output() {
+		}
+	}()
+	ctx, cancel := context.WithTimeout(t.Context(), 25*time.Millisecond)
+	defer cancel()
+	if err := process.WriteInput(ctx, make([]byte, 4*1024*1024)); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("blocked input error = %v, want context deadline", err)
+	}
+	if err := process.WriteInput(timeoutContext(t, time.Second), []byte("late")); !errors.Is(err, ErrInputClosed) {
+		t.Fatalf("input after canceled write error = %v, want ErrInputClosed", err)
 	}
 }
 
@@ -290,6 +355,11 @@ func TestProcessSupervisorHelper(t *testing.T) {
 		}
 		fmt.Fprintln(os.Stdout, directory)
 		fmt.Fprintln(os.Stdout, os.Getenv("COMMITARIUM_PROCESS_SUPERVISOR_VALUE"))
+		os.Exit(0)
+	case "copy-input":
+		if _, err := io.Copy(os.Stdout, os.Stdin); err != nil {
+			os.Exit(88)
+		}
 		os.Exit(0)
 	case "flood-output":
 		block := make([]byte, 4*1024*1024)

@@ -107,12 +107,20 @@ func TestResultValidate(t *testing.T) {
 	if err := stopped.Validate(); err != nil {
 		t.Fatalf("validate stopped result: %v", err)
 	}
+	failed := Result{
+		Outcome:           OutcomeFailed,
+		ProviderSessionID: "provider_session_test",
+	}
+	if err := failed.Validate(); err != nil {
+		t.Fatalf("validate failed result: %v", err)
+	}
 
 	invalid := []Result{
 		{Outcome: "unknown", ProviderSessionID: "provider_session_test"},
 		{Outcome: OutcomeCompleted, Disposition: DispositionSucceeded},
 		{Outcome: OutcomeCompleted, ProviderSessionID: "provider_session_test"},
 		{Outcome: OutcomeStopped, Disposition: DispositionSucceeded, ProviderSessionID: "provider_session_test"},
+		{Outcome: OutcomeFailed, Disposition: DispositionSucceeded, ProviderSessionID: "provider_session_test"},
 	}
 	for _, result := range invalid {
 		if err := result.Validate(); !errors.Is(err, ErrInvalidResult) {

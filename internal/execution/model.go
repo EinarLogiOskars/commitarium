@@ -246,6 +246,9 @@ func (session Session) Validate() error {
 	case session.Status == SessionStatusStopped && session.Outcome != "" &&
 		session.Outcome != worker.OutcomeStopped:
 		return fmt.Errorf("%w: stopped session has an invalid worker result", ErrInvalidSession)
+	case session.Status == SessionStatusFailed && session.Outcome != "" &&
+		(session.Outcome != worker.OutcomeFailed || session.Disposition != ""):
+		return fmt.Errorf("%w: failed session has an invalid worker result", ErrInvalidSession)
 	default:
 		return nil
 	}
