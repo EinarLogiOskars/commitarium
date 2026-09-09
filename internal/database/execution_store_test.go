@@ -412,6 +412,31 @@ func TestExecutionStoreDiscoversAndClaimsInterruptedSession(t *testing.T) {
 	}
 }
 
+func TestExecutionStoreDoesNotRecoverStableUserWait(t *testing.T) {
+	db, store := newTestExecutionStore(t)
+	run, session := createExecutionRecords(t, db, store)
+	now := session.UpdatedAt.Add(time.Minute)
+	if _, err := store.TransitionSession(t.Context(), execution.SessionTransition{
+		SessionID: session.ID, Expected: execution.SessionStatusRunning,
+		Status: execution.SessionStatusWaitingForUser, OccurredAt: now,
+	}); err != nil {
+		t.Fatalf("wait for user in session: %v", err)
+	}
+	if _, err := store.TransitionRun(t.Context(), execution.RunTransition{
+		RunID: run.ID, Expected: execution.RunStatusRunning,
+		Status: execution.RunStatusWaitingForUser, OccurredAt: now,
+	}); err != nil {
+		t.Fatalf("wait for user in run: %v", err)
+	}
+	runs, err := store.ListRecoverableRuns(t.Context())
+	if err != nil {
+		t.Fatalf("list recoverable runs: %v", err)
+	}
+	if len(runs) != 0 {
+		t.Fatalf("stable user wait was treated as an interruption: %+v", runs)
+	}
+}
+
 func TestExecutionStorePersistsReplayableSessionResult(t *testing.T) {
 	db, store := newTestExecutionStore(t)
 	_, session := createExecutionRecords(t, db, store)

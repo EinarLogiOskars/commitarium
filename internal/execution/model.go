@@ -34,6 +34,7 @@ type SessionStatus string
 const (
 	SessionStatusStarting       SessionStatus = "starting"
 	SessionStatusRunning        SessionStatus = "running"
+	SessionStatusWaitingForUser SessionStatus = "waiting_for_user"
 	SessionStatusPauseRequested SessionStatus = "pause_requested"
 	SessionStatusPaused         SessionStatus = "paused"
 	SessionStatusCompleted      SessionStatus = "completed"
@@ -170,6 +171,7 @@ func (status SessionStatus) IsValid() bool {
 	switch status {
 	case SessionStatusStarting,
 		SessionStatusRunning,
+		SessionStatusWaitingForUser,
 		SessionStatusPauseRequested,
 		SessionStatusPaused,
 		SessionStatusCompleted,
@@ -197,9 +199,15 @@ func (status SessionStatus) CanTransitionTo(next SessionStatus) bool {
 			next == SessionStatusStopped ||
 			next == SessionStatusFailed
 	case SessionStatusRunning:
-		return next == SessionStatusPauseRequested || next.IsTerminal()
+		return next == SessionStatusWaitingForUser ||
+			next == SessionStatusPauseRequested || next.IsTerminal()
+	case SessionStatusWaitingForUser:
+		return next == SessionStatusRunning ||
+			next == SessionStatusStopped ||
+			next == SessionStatusFailed
 	case SessionStatusPauseRequested:
-		return next == SessionStatusPaused ||
+		return next == SessionStatusWaitingForUser ||
+			next == SessionStatusPaused ||
 			next == SessionStatusRunning ||
 			next.IsTerminal()
 	case SessionStatusPaused:

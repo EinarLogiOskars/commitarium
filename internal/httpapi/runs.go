@@ -68,7 +68,7 @@ func (api *API) startRunHandler(w http.ResponseWriter, r *http.Request) {
 	if storedFeature.Description != "" {
 		goal += ": " + storedFeature.Description
 	}
-	startedRun, _, err := api.starter.Start(r.Context(), runID, featureID, goal)
+	startedRun, _, err := api.starter.Start(r.Context(), runID, projectID, featureID, goal)
 	if err != nil {
 		switch {
 		case errors.Is(err, execution.ErrRecordConflict):

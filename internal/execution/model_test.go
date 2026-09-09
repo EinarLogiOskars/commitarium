@@ -147,8 +147,11 @@ func TestRunStatusTransitions(t *testing.T) {
 func TestSessionStatusTransitions(t *testing.T) {
 	allowed := [][2]SessionStatus{
 		{SessionStatusStarting, SessionStatusRunning},
+		{SessionStatusRunning, SessionStatusWaitingForUser},
+		{SessionStatusWaitingForUser, SessionStatusRunning},
 		{SessionStatusRunning, SessionStatusPauseRequested},
 		{SessionStatusPauseRequested, SessionStatusPaused},
+		{SessionStatusPauseRequested, SessionStatusWaitingForUser},
 		{SessionStatusPauseRequested, SessionStatusRunning},
 		{SessionStatusPaused, SessionStatusRunning},
 		{SessionStatusRunning, SessionStatusCompleted},
@@ -164,5 +167,8 @@ func TestSessionStatusTransitions(t *testing.T) {
 	}
 	if SessionStatusRunning.CanTransitionTo(SessionStatusRunning) {
 		t.Error("expected repeated session status to be rejected")
+	}
+	if SessionStatusWaitingForUser.IsTerminal() {
+		t.Error("expected waiting session to preserve the provider conversation")
 	}
 }

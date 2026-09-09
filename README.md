@@ -15,11 +15,12 @@ reconciles the completed activity before doing more work. Projects default to
 requiring user approval for that continuation; consistent projects configured
 for automatic recovery can continue without intervention.
 
-This is not yet a production-ready release. An opt-in Codex worker can now run
-the real Codex App Server against a selected read-only workspace,
-but the coordinator still uses simulated agents. Coordinator wiring, real
-Claude Code execution, Forgejo pull-request automation, and the user interface
-remain to be built.
+This is not yet a production-ready release. The coordinator defaults to its
+complete deterministic simulation. An opt-in mode now connects the public run
+API to the real Codex worker for one read-only goal-clarification turn, streams
+that activity into the existing session API, and then waits for the user.
+Follow-up goal discussion, real file changes, Claude Code execution, Forgejo
+pull-request automation, and the user interface remain to be built.
 
 ## Architecture
 
@@ -58,9 +59,9 @@ and can be overridden with `COMMITARIUM_SIMULATED_WORKER_TOKEN`. This token only
 authenticates coordinator-to-worker HTTP requests; it is not a Codex account or
 API credential.
 
-The coordinator still executes its original deterministic agents in-process.
-Both standalone workers are independently testable deployment units; wiring
-the coordinator runtime to the real worker is a later slice.
+The coordinator executes its original deterministic agents in-process unless
+`COMMITARIUM_RUNNER_MODE=real_codex_lead` is selected. That mode requires the
+opt-in real worker described below.
 
 Stop the services without deleting their data:
 
@@ -144,6 +145,22 @@ namespace sandbox cannot nest inside the unprivileged container. The container
 and its explicit mounts remain the outer security boundary; the smoke mount is
 read-only, so the agent cannot change the selected host repository.
 
+To exercise the first coordinator-to-Codex path instead of the standalone
+worker smoke test, start the real profile and select the opt-in runner:
+
+```sh
+COMMITARIUM_RUNNER_MODE=real_codex_lead \
+  docker compose --profile real-codex up --build -d coordinator codex-worker forgejo
+```
+
+Create a project and feature and start its run through the same public API shown
+above. The coordinator durably creates a `lead` session, asks Codex to inspect
+and clarify the goal without changing files, copies the worker event stream to
+the public session history/SSE endpoints, and records the provider thread ID as
+soon as Codex starts. A successful turn leaves both run and session in
+`waiting_for_user`, while the feature remains `draft`. The mode deliberately
+does not accept a follow-up message yet.
+
 The versioned [internal worker API](docs/worker-api.md) now has tested client and
 server components for authenticated attempt inspection and control. Its worker
 server can also replay and stream safe, structured agent activity, providing the
@@ -154,8 +171,9 @@ accepted activity event together with its durable worker replay position. This
 makes repeated delivery and coordinator restarts safe without duplicating public
 activity. A single-attempt pump can now open that stream from SQLite's saved
 cursor, copy events continuously, and inspect the worker when the connection
-ends so a disconnect is not mistaken for agent completion. It deliberately
-leaves automatic reconnection and runtime wiring to future orchestration. A
+ends so a disconnect is not mistaken for agent completion. The real-lead mode
+now uses this path for its first turn and for read-only reattachment after a
+coordinator restart. A
 worker journal now durably stores attempt state, provider session identity,
 mutation-retry records, terminal results, and the redacted event spool. It does
 not store raw mutation bodies or provider transcripts. A journal-backed worker
@@ -179,8 +197,9 @@ same executable can now select the real Codex adapter. Its opt-in image pins the
 Codex CLI version, runs as a non-root user, and mounts one explicit read-only
 workspace plus separate persistent provider and journal volumes. It does not
 require a manifest, configuration revision, or materialization digest. Automatic
-credential provisioning, Forgejo workspace creation/import, and coordinator
-runtime wiring remain separate future slices.
+credential provisioning and Forgejo workspace creation/import remain separate
+future slices. Coordinator wiring is currently limited to one read-only lead
+turn.
 
 The worker also has a provider-neutral operating-system process-supervision
 foundation. It can start one exact child process group, expose bounded and

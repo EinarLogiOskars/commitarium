@@ -138,6 +138,18 @@ An adapter must support:
 
 The agent chosen as coder receives write access only to its feature workspace. The reviewer begins read-only and receives write capability only if the workflow explicitly delegates a fix.
 
+For the MVP, that feature workspace will be a separate Commitarium-managed
+checkout in an ordinary host-visible directory. Only that selected directory
+is mounted into the assigned worker, but the user can open the same checkout in
+an IDE or terminal, run their normal development setup with hot reload, and
+make manual corrections. User changes are first-class external state: agents
+must inspect Git HEAD, status, and diff and must never silently reset or clean
+them. Directly attaching agents to the user's existing checkout is deferred as
+an explicit advanced mode because concurrent branch changes, dependency output,
+and uncommitted work need stronger safeguards. Future IDE-launch and local
+preview controls belong in the trusted host application; agent containers do
+not receive the host Docker socket or permission to launch host applications.
+
 A feature normally keeps two durable logical provider conversations. The lead
 conversation continues from user-assisted goal drafting through planning,
 implementation, and review responses. The reviewer conversation continues from

@@ -119,6 +119,87 @@ func TestRecoveryMigrationPreservesExistingExecutionRecords(t *testing.T) {
 	}
 }
 
+func TestWaitingSessionMigrationPreservesDependentRecords(t *testing.T) {
+	db, err := OpenSQLite(t.Context(), filepath.Join(t.TempDir(), "coordinator.db"))
+	if err != nil {
+		t.Fatalf("open SQLite database: %v", err)
+	}
+	defer db.Close()
+	migrations, err := fs.Sub(migrationFiles, "migrations")
+	if err != nil {
+		t.Fatalf("open embedded migrations: %v", err)
+	}
+	provider, err := goose.NewProvider(goose.DialectSQLite3, db, migrations)
+	if err != nil {
+		t.Fatalf("create migration provider: %v", err)
+	}
+	if _, err := provider.UpTo(t.Context(), 6); err != nil {
+		t.Fatalf("migrate version-six schema: %v", err)
+	}
+	now := time.Date(2026, time.September, 9, 16, 0, 0, 0, time.UTC).Format(time.RFC3339Nano)
+	statements := []struct {
+		query string
+		args  []any
+	}{
+		{`INSERT INTO projects (id, name, recovery_policy, created_at)
+		  VALUES ('prj_waiting', 'Waiting project', 'approval_required', ?)`, []any{now}},
+		{`INSERT INTO features (id, project_id, title, description, state, created_at, updated_at)
+		  VALUES ('fea_waiting', 'prj_waiting', 'Clarify goal', '', 'draft', ?, ?)`, []any{now, now}},
+		{`INSERT INTO runs (id, feature_id, status, reason, started_at, updated_at, ended_at)
+		  VALUES ('run_waiting', 'fea_waiting', 'running', '', ?, ?, NULL)`, []any{now, now}},
+		{`INSERT INTO sessions (
+			id, run_id, agent_id, role, status, provider_session_id,
+			started_at, updated_at, ended_at, outcome, disposition, summary, recovery_attempt
+		  ) VALUES ('ses_waiting', 'run_waiting', 'codex-lead', 'lead', 'running',
+		            'provider_waiting', ?, ?, NULL, '', '', '', 0)`, []any{now, now}},
+		{`INSERT INTO session_events (
+			id, session_id, sequence, event_type, text, occurred_at,
+			worker_attempt_id, worker_event_sequence
+		  ) VALUES ('sev_waiting', 'ses_waiting', 1, 'message', 'Please clarify', ?,
+		            'att_waiting', 1)`, []any{now}},
+		{`INSERT INTO session_commands (
+			id, session_id, command_type, message, status, requested_at, applied_at, error
+		  ) VALUES ('cmd_waiting', 'ses_waiting', 'message', 'More detail', 'pending', ?, NULL, '')`, []any{now}},
+		{`INSERT INTO worker_attempt_checkpoints (
+			session_id, attempt_id, last_event_sequence, created_at, updated_at
+		  ) VALUES ('ses_waiting', 'att_waiting', 1, ?, ?)`, []any{now, now}},
+	}
+	for index, statement := range statements {
+		if _, err := db.ExecContext(t.Context(), statement.query, statement.args...); err != nil {
+			t.Fatalf("insert version-six record %d: %v", index, err)
+		}
+	}
+	if err := Migrate(t.Context(), db); err != nil {
+		t.Fatalf("apply waiting-session migration: %v", err)
+	}
+	if _, err := db.ExecContext(
+		t.Context(),
+		`UPDATE sessions SET status = 'waiting_for_user' WHERE id = 'ses_waiting'`,
+	); err != nil {
+		t.Fatalf("store waiting session: %v", err)
+	}
+	for table, want := range map[string]int{
+		"sessions": 1, "session_events": 1, "session_commands": 1,
+		"worker_attempt_checkpoints": 1,
+	} {
+		var got int
+		if err := db.QueryRowContext(t.Context(), "SELECT count(*) FROM "+table).Scan(&got); err != nil {
+			t.Fatalf("count %s: %v", table, err)
+		}
+		if got != want {
+			t.Errorf("%s count=%d, want %d", table, got, want)
+		}
+	}
+	rows, err := db.QueryContext(t.Context(), "PRAGMA foreign_key_check")
+	if err != nil {
+		t.Fatalf("check foreign keys: %v", err)
+	}
+	defer rows.Close()
+	if rows.Next() {
+		t.Fatal("waiting-session migration left a broken foreign key")
+	}
+}
+
 func TestMigrateReturnsCanceledContext(t *testing.T) {
 	db, err := OpenSQLite(
 		t.Context(),
