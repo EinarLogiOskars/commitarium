@@ -219,7 +219,6 @@ func TestNewAdapterValidatesAndUsesSafeDefaults(t *testing.T) {
 		{Supervisor: processsupervisor.New(), ApprovalPolicy: "sometimes"},
 		{Supervisor: processsupervisor.New(), ApprovalPolicy: "on-request"},
 		{Supervisor: processsupervisor.New(), Sandbox: "host-write"},
-		{Supervisor: processsupervisor.New(), Sandbox: "danger-full-access"},
 	} {
 		if _, err := New(config); !errors.Is(err, ErrInvalidConfig) {
 			t.Errorf("config %+v error = %v, want ErrInvalidConfig", config, err)
@@ -233,6 +232,11 @@ func TestNewAdapterValidatesAndUsesSafeDefaults(t *testing.T) {
 		strings.Join(adapter.arguments, " ") != "app-server --listen stdio://" ||
 		adapter.approvalPolicy != "never" || adapter.sandbox != "read-only" {
 		t.Fatalf("unsafe or unexpected defaults: %+v", adapter)
+	}
+	if _, err := New(Config{
+		Supervisor: processsupervisor.New(), Sandbox: "danger-full-access",
+	}); err != nil {
+		t.Fatalf("container-isolated sandbox config: %v", err)
 	}
 	request := worker.SessionRequest{
 		SessionID: "ses_codex_test", AttemptID: "att_nil_context", FeatureID: "fea_codex_test",
@@ -256,7 +260,7 @@ func TestCodexAppServerHelper(t *testing.T) {
 	}
 	workingDirectory, err := os.Getwd()
 	if err != nil || workingDirectory != os.Getenv(helperDirectoryEnvironment) ||
-		os.Getenv(helperVisibleEnvironment) != "materialized" {
+		os.Getenv(helperVisibleEnvironment) != "assigned" {
 		os.Exit(80)
 	}
 	scanner := bufio.NewScanner(os.Stdin)
@@ -454,7 +458,7 @@ func testAdapter(t *testing.T, mode string, prompt string) *adapterHarness {
 		helperModeEnvironment+"="+mode,
 		helperPromptEnvironment+"="+prompt,
 		helperDirectoryEnvironment+"="+directory,
-		helperVisibleEnvironment+"=materialized",
+		helperVisibleEnvironment+"=assigned",
 	)
 	adapter, err := New(Config{
 		Supervisor:      processsupervisor.New(),
@@ -477,10 +481,8 @@ func (harness *adapterHarness) request(attemptID string, instructions string) wo
 		LaunchEnvironment: worker.LaunchEnvironment{
 			AgentProfileID: "profile_codex_test", ProjectID: "prj_codex_test",
 			FeatureID: "fea_codex_test", Role: worker.RoleCoder, WorkspaceID: "workspace_codex_test",
-			ConfigurationRevision: 3,
-			MaterializationDigest: "sha256:" + strings.Repeat("a", 64),
-			WorkingDirectory:      harness.directory,
-			Variables:             append([]string(nil), harness.environment...),
+			WorkingDirectory: harness.directory,
+			Variables:        append([]string(nil), harness.environment...),
 		},
 	}
 }

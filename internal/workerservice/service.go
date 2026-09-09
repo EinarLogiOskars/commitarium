@@ -200,7 +200,7 @@ func (service *Service) PutAttempt(
 			ctx,
 			attempt,
 			workerhttp.ErrorConfigurationMismatch,
-			"materialized configuration does not match the requested assignment",
+			"launch environment does not match the requested assignment",
 			false,
 			resolveErr,
 		)
@@ -215,7 +215,7 @@ func (service *Service) PutAttempt(
 			ctx,
 			attempt,
 			workerhttp.ErrorConfigurationMismatch,
-			"materialized configuration is invalid",
+			"launch environment is invalid",
 			false,
 			resolveErr,
 		)

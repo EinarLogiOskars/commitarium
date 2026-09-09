@@ -5,10 +5,11 @@ coordinator and a provider worker that will supervise Codex or Claude Code.
 Protocol version 1 uses JSON over HTTP under `/internal/v1`.
 
 This boundary is implemented and tested as a Go HTTP server and coordinator
-client. A journal-backed service connects the server to SQLite and a
-deterministic provider adapter. A standalone simulated Codex worker now runs
-that stack as a Compose service. It does not launch a real provider CLI yet,
-and the coordinator runtime is not connected to it yet.
+client. A journal-backed service connects the server to SQLite and a provider
+adapter. A standalone simulated Codex worker runs that stack as the default
+Compose service. An opt-in real Codex worker packages the same boundary with
+the Codex App Server adapter and process supervisor. The coordinator runtime is
+not connected to either standalone service yet.
 
 ## Session and attempt identity
 
@@ -31,11 +32,12 @@ Authorization: Bearer WORKER_TOKEN
 
 The server stores only a SHA-256 digest of its configured token and compares
 token digests in constant time. The standalone worker reads the token from
-`COMMITARIUM_WORKER_TOKEN`; Compose supplies it from
-`COMMITARIUM_SIMULATED_WORKER_TOKEN`, with a development-only default. This is
-an internal HTTP credential, not a provider account credential. Production
-token generation and delivery are not implemented yet. The coordinator client
-must keep the token in memory while it is needed to authenticate requests.
+`COMMITARIUM_WORKER_TOKEN`. Compose supplies it from
+`COMMITARIUM_SIMULATED_WORKER_TOKEN` or `COMMITARIUM_CODEX_WORKER_TOKEN`,
+depending on the service, with development-only defaults. These are internal
+HTTP credentials, not provider account credentials. Production token generation
+and delivery are not implemented yet. The coordinator client must keep the
+selected token in memory while it is needed to authenticate requests.
 
 Responses use `Cache-Control: no-store` so provider session and attempt data
 are not cached.
@@ -301,26 +303,26 @@ assume that such a process is absent merely because its identity is unusable.
 For a newly created attempt, the journal-backed service passes the complete
 HTTP assignment to a worker-local environment resolver before it starts the
 provider. The resolver must return the same agent profile, project, feature,
-role, workspace, configuration revision, and materialization digest. The
-service rejects a resolver result that changes any of those values.
+role, and workspace. The service rejects a resolver result that changes any of
+those values.
 
-The included immutable resolver is initialized from already materialized
-workspace records supplied inside the worker. It accepts only the profile
-mounted by that worker, requires an exact assignment match, resolves the
-working directory to a real directory inside the configured workspace root,
-validates explicit
-`NAME=VALUE` process entries, and takes defensive copies of those entries.
-Missing profiles and workspaces produce durable `profile_unavailable` or
-`workspace_unavailable` terminal results. A changed revision, digest, project,
-feature, or role produces a non-retryable `configuration_mismatch` result. No
-provider process is started in any of those cases.
+The included rooted resolver is configured with one provider profile, one
+workspace root, and the explicit process variables for that worker. A valid
+workspace ID selects the existing direct child at
+`WORKSPACE_ROOT/WORKSPACE_ID`; there is no second manifest or predeclared
+project/feature/role combination. The resolver canonicalizes both paths and
+rejects a symlink that escapes the configured root. It also validates and
+defensively copies the explicit `NAME=VALUE` process entries. Missing profiles
+and workspaces produce durable `profile_unavailable` or
+`workspace_unavailable` terminal results. No provider process starts in those
+cases.
 
-Resolution happens only after the immutable launch request has been stored and
+Resolution happens only after the launch request has been stored and
 only when that request creates a new attempt. An exact idempotent retry returns
 the existing attempt, including a prior resolution failure, without resolving
 again or starting a different process. A caller can deliberately make a new
-attempt after correcting a terminal failure; it cannot silently change the
-configuration of the old one.
+attempt after correcting a terminal failure; it cannot silently change the old
+attempt.
 
 Resolved working-directory and process-environment values exist only inside
 the worker process. They are not fields in the HTTP contract and are not stored
@@ -329,12 +331,13 @@ explicit: even an intentionally empty environment remains distinct from Go's
 `nil` environment, which would inherit all variables from the worker service.
 This slice does not yet load or provision secret values.
 
-The simulated Codex worker is a standalone Go executable and Compose service.
-It serves the authenticated API on port 8081 inside the Compose network and
-stores `worker.db` in the private `simulated-codex-worker-journal` volume. Its
-role scripts repeat deterministically, so separate logical sessions do not
-consume a finite test queue. The normal Compose configuration deliberately
-does not publish port 8081 to the host.
+The simulated and real Codex workers use the same standalone Go executable and
+select their provider adapter at startup. The simulated Compose service serves
+the authenticated API on port 8081 inside the Compose network and stores
+`worker.db` in the private `simulated-codex-worker-journal` volume. Its role
+scripts repeat deterministically, so separate logical sessions do not consume a
+finite test queue. The normal Compose configuration deliberately does not
+publish port 8081 to the host.
 
 On process startup, the journal-backed service performs recovery before the
 HTTP server begins listening. Therefore a recreated container exposes leftover
@@ -344,14 +347,33 @@ localhost port, interrupts an active attempt, recreates the container twice,
 and verifies that the same provider session identity remains fenced against a
 replacement.
 
-There is still no operating-system provider process wired into the standalone
-service, credential access, persistent provider profile, real workspace
-materialization source, or project-secret delivery. The journal-backed service
-supports process-backed sessions through its optional force-stop interface,
-but the deterministic session does not implement that interface. Accordingly
-the standalone service does not advertise force-stop: true forced termination
-must not be simulated as a cooperative stop. The coordinator client and event
-pump are also not yet wired into runtime orchestration.
+The opt-in `codex-worker` service wires an operating-system provider process
+into the standalone service. Its image
+contains a pinned Codex CLI, its `codex-profile` volume is used as `CODEX_HOME`,
+its journal has a different persistent volume, and its assigned host workspace
+is mounted read-only. The real worker advertises force-stop because the Codex
+session owns an exact supervised process handle; it does not advertise
+pause/continue because App Server cannot provide the required safe boundary.
+Codex runs with its internal process sandbox disabled in this service because
+the Linux namespace sandbox cannot start inside the unprivileged container.
+Docker and the service's explicit mounts are therefore the security boundary;
+the current smoke-test workspace mount remains read-only.
+
+The worker owns one configured profile and workspace root. Each attempt selects
+a prepared workspace child by ID and supplies its project, feature, and role
+identity. It does not require a configuration manifest, revision, or digest.
+The worker passes only `CODEX_HOME`, `HOME`, `LANG`, and a fixed executable
+`PATH` to the Codex child. Project secrets are not accepted or delivered in
+this slice. The coordinator client and event pump are also not yet wired into
+runtime orchestration.
+
+The real service is under the `real-codex` Compose profile and is not started by
+the normal development stack. `scripts/smoke-real-codex-worker.sh` provides the
+explicit device-login, login-status, and read-only live-run operations used to
+exercise it without exposing the worker port during normal operation. The live
+operation requires both a successful repository command event and an expected
+marker in Codex's terminal response, so a polite agent response after failed
+workspace access does not produce a false-positive smoke result.
 
 ## Provider process supervision foundation
 
@@ -402,7 +424,7 @@ The working directory and complete child-process environment now come from the
 resolved launch environment attached to that individual session request. They
 are no longer adapter-wide configuration. The same directory is also sent as
 App Server's thread `cwd`, so the supervised process and Codex agree on the
-assigned workspace. The adapter refuses to start when this materialized launch
+assigned workspace. The adapter refuses to start when this resolved launch
 environment is missing or invalid.
 
 The adapter converts completed agent messages and generic command, file-change,
@@ -418,11 +440,12 @@ User messages use App Server's `turn/steer` operation. Cooperative stop uses
 `turn/interrupt`, and forced stop targets the exact supervised process tree.
 App Server does not currently expose Commitarium's safe-pause meaning, so this
 adapter rejects pause and continue. Approval forwarding is also deferred; the
-adapter currently requires the `never` approval policy and defaults to a
-read-only sandbox. A later runtime slice must advertise only the capabilities
-that this real adapter actually supports.
+adapter currently requires the `never` approval policy. The adapter defaults to
+a read-only sandbox for native use, while the Compose worker explicitly uses
+`danger-full-access` inside its containing Docker boundary because nested Linux
+namespaces are unavailable there.
 
-Tests execute a deterministic fake App Server as a real child process. They do
-not log in, contact OpenAI, or consume model usage. The production worker still
-uses the simulated adapter, so adding this package does not activate Codex or
-change the current Compose runtime.
+Unit tests execute a deterministic fake App Server as a real child process.
+They do not log in, contact OpenAI, or consume model usage. The opt-in
+`real-codex` Compose profile selects this adapter; the normal development stack
+continues to use only the simulated worker.

@@ -389,7 +389,7 @@ func TestJSONContract(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal request: %v", err)
 	}
-	want := `{"mode":"resume","assignment":{"agent_profile_id":"apr_test","project_id":"prj_test","feature_id":"fea_test","role":"coder","workspace_id":"wsp_test","configuration_revision":2,"materialization_digest":"sha256:` + strings.Repeat("a", 64) + `"},"instructions":"Reconcile durable state.","provider_session_id":"provider_session_test"}`
+	want := `{"mode":"resume","assignment":{"agent_profile_id":"apr_test","project_id":"prj_test","feature_id":"fea_test","role":"coder","workspace_id":"wsp_test"},"instructions":"Reconcile durable state.","provider_session_id":"provider_session_test"}`
 	if string(encoded) != want {
 		t.Fatalf("request JSON\n got: %s\nwant: %s", encoded, want)
 	}
@@ -448,7 +448,7 @@ func TestJSONContract(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal attempt: %v", err)
 	}
-	want = `{"session_id":"ses_test","attempt_id":"att_test","mode":"start","assignment":{"agent_profile_id":"apr_test","project_id":"prj_test","feature_id":"fea_test","role":"coder","workspace_id":"wsp_test","configuration_revision":2,"materialization_digest":"sha256:` + strings.Repeat("a", 64) + `"},"provider_session_id":"provider_session_test","state":"terminal","latest_event_sequence":7,"started_at":"2026-09-08T12:00:00.123Z","updated_at":"2026-09-08T12:01:00.123Z","ended_at":"2026-09-08T12:01:00.123Z","result":{"outcome":"completed","disposition":"succeeded","summary":"done"}}`
+	want = `{"session_id":"ses_test","attempt_id":"att_test","mode":"start","assignment":{"agent_profile_id":"apr_test","project_id":"prj_test","feature_id":"fea_test","role":"coder","workspace_id":"wsp_test"},"provider_session_id":"provider_session_test","state":"terminal","latest_event_sequence":7,"started_at":"2026-09-08T12:00:00.123Z","updated_at":"2026-09-08T12:01:00.123Z","ended_at":"2026-09-08T12:01:00.123Z","result":{"outcome":"completed","disposition":"succeeded","summary":"done"}}`
 	if string(encoded) != want {
 		t.Fatalf("attempt JSON\n got: %s\nwant: %s", encoded, want)
 	}
@@ -504,13 +504,11 @@ func validMutationIdentity() MutationIdentity {
 
 func validAssignment() Assignment {
 	return Assignment{
-		AgentProfileID:        "apr_test",
-		ProjectID:             "prj_test",
-		FeatureID:             "fea_test",
-		Role:                  RoleCoder,
-		WorkspaceID:           "wsp_test",
-		ConfigurationRevision: 2,
-		MaterializationDigest: "sha256:" + strings.Repeat("a", 64),
+		AgentProfileID: "apr_test",
+		ProjectID:      "prj_test",
+		FeatureID:      "fea_test",
+		Role:           RoleCoder,
+		WorkspaceID:    "wsp_test",
 	}
 }
 

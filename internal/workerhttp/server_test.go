@@ -239,7 +239,7 @@ func TestPutAttemptReplayReturnsExistingAttempt(t *testing.T) {
 
 func TestPutAttemptRejectsMismatchedServiceResponse(t *testing.T) {
 	attempt := validServerAttempt()
-	attempt.Assignment.ConfigurationRevision++
+	attempt.Assignment.ProjectID = "prj_other"
 	service := &recordingService{attempt: attempt, created: true}
 	server := newTestServer(t, testServerConfig(), service)
 	request := authorizedJSONRequest(t, http.MethodPut, attemptPath(attempt.AttemptReference), validPutAttemptRequest())

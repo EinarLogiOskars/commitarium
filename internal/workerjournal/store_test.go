@@ -5,7 +5,6 @@ import (
 	"errors"
 	"path/filepath"
 	"reflect"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -422,7 +421,6 @@ func validAttemptCreation(sessionID string, attemptID string, key string) Attemp
 		Assignment: workerhttp.Assignment{
 			AgentProfileID: "profile_test", ProjectID: "prj_test", FeatureID: "fea_test",
 			Role: workerhttp.RoleCoder, WorkspaceID: "workspace_test",
-			ConfigurationRevision: 1, MaterializationDigest: "sha256:" + strings.Repeat("a", 64),
 		},
 		Instructions: "Implement the accepted plan.",
 	}

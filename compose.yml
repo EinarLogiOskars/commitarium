@@ -27,6 +27,32 @@ services:
     expose:
       - "8081"
 
+  codex-worker:
+    profiles: ["real-codex"]
+    build:
+      context: .
+      dockerfile: docker/codex-worker.Dockerfile
+      args:
+        CODEX_VERSION: ${COMMITARIUM_CODEX_VERSION:-0.153.4}
+    environment:
+      COMMITARIUM_WORKER_ADAPTER: codex
+      COMMITARIUM_WORKER_DATABASE_PATH: /var/lib/commitarium-worker/worker.db
+      COMMITARIUM_WORKER_LISTEN_ADDRESS: :8081
+      COMMITARIUM_WORKER_TOKEN: ${COMMITARIUM_CODEX_WORKER_TOKEN:-commitarium-local-codex-worker}
+      COMMITARIUM_CODEX_PROVIDER_STATE_PATH: /var/lib/commitarium-provider
+      COMMITARIUM_CODEX_WORKSPACE_ROOT: /workspaces
+      COMMITARIUM_CODEX_PROFILE_ID: ${COMMITARIUM_CODEX_PROFILE_ID:-profile_local_codex}
+      COMMITARIUM_CODEX_MODEL: ${COMMITARIUM_CODEX_MODEL:-}
+      # Docker is the security boundary. Codex's nested Linux sandbox cannot
+      # create namespaces inside this unprivileged container.
+      COMMITARIUM_CODEX_SANDBOX: danger-full-access
+    volumes:
+      - codex-worker-journal:/var/lib/commitarium-worker
+      - codex-profile:/var/lib/commitarium-provider
+      - ${COMMITARIUM_CODEX_WORKSPACE_SOURCE:-.}:/workspaces/${COMMITARIUM_CODEX_WORKSPACE_ID:-workspace_smoke}:ro
+    expose:
+      - "8081"
+
   forgejo:
     image: codeberg.org/forgejo/forgejo:16.0.3-rootless
     user: "1000:1000"
@@ -44,3 +70,5 @@ volumes:
   coordinator-data:
   forgejo-data:
   simulated-codex-worker-journal:
+  codex-worker-journal:
+  codex-profile:

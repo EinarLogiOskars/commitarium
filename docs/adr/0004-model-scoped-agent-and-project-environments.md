@@ -1,7 +1,16 @@
 # ADR-004: Model scoped agent and project environments
 
-- Status: Accepted
+- Status: Deferred beyond the MVP
 - Date: 08-09-2026
+
+This proposal is retained as design history, but its session-materialization
+model is not an MVP requirement. On 2026-09-09 the implementation direction was
+simplified: a provider worker owns its persistent provider profile and a
+container-controlled workspace root, while an attempt selects a prepared child
+workspace by ID. The worker protocol does not require a configuration revision,
+manifest, or materialization digest. Add project-variable and secret management
+incrementally when a demonstrated workflow requires it rather than making real
+agent execution depend on this complete design.
 
 ## Context
 

@@ -6,7 +6,6 @@ import (
 	"errors"
 	"io"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -306,7 +305,6 @@ func validPumpAttempt(
 		Assignment: workerhttp.Assignment{
 			AgentProfileID: "profile_test", ProjectID: "prj_test", FeatureID: "fea_test",
 			Role: workerhttp.RoleCoder, WorkspaceID: "workspace_test",
-			ConfigurationRevision: 1, MaterializationDigest: "sha256:" + strings.Repeat("a", 64),
 		},
 		ProviderSessionID: "provider_test", State: state,
 		LatestEventSequence: latestSequence, StartedAt: startedAt, UpdatedAt: startedAt,

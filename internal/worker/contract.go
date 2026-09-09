@@ -28,24 +28,21 @@ type SessionRequest struct {
 	LaunchEnvironment LaunchEnvironment
 }
 
-// LaunchEnvironment is the worker-resolved, immutable view of the exact
-// profile, project, and workspace materialization assigned to one provider
-// attempt. Variables are explicit NAME=VALUE entries; a real adapter must not
-// inherit the worker service's environment implicitly.
+// LaunchEnvironment is the worker-resolved view of the profile and workspace
+// assigned to one provider attempt. Variables are explicit NAME=VALUE entries;
+// a real adapter must not inherit the worker service's environment implicitly.
 //
 // Secret values are deliberately not part of the coordinator-to-worker HTTP
-// request or worker journal. A future materializer may make narrowly scoped
-// secret values available here inside the worker immediately before launch.
+// request or worker journal. Future secret provisioning may make narrowly
+// scoped values available here inside the worker immediately before launch.
 type LaunchEnvironment struct {
-	AgentProfileID        string
-	ProjectID             string
-	FeatureID             string
-	Role                  Role
-	WorkspaceID           string
-	ConfigurationRevision int64
-	MaterializationDigest string
-	WorkingDirectory      string
-	Variables             []string
+	AgentProfileID   string
+	ProjectID        string
+	FeatureID        string
+	Role             Role
+	WorkspaceID      string
+	WorkingDirectory string
+	Variables        []string
 }
 
 type ResumeRequest struct {
@@ -160,7 +157,6 @@ var ErrInvalidResult = errors.New("invalid worker result")
 
 var (
 	launchIDPattern        = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
-	launchDigestPattern    = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 	environmentNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 )
 
@@ -206,8 +202,6 @@ func (environment LaunchEnvironment) IsZero() bool {
 		environment.FeatureID == "" &&
 		environment.Role == "" &&
 		environment.WorkspaceID == "" &&
-		environment.ConfigurationRevision == 0 &&
-		environment.MaterializationDigest == "" &&
 		environment.WorkingDirectory == "" &&
 		environment.Variables == nil
 }
@@ -228,12 +222,6 @@ func (environment LaunchEnvironment) Validate() error {
 	}
 	if !environment.Role.IsValid() {
 		return fmt.Errorf("%w: role %q is not recognized", ErrInvalidLaunchEnvironment, environment.Role)
-	}
-	if environment.ConfigurationRevision < 1 {
-		return fmt.Errorf("%w: configuration revision must be positive", ErrInvalidLaunchEnvironment)
-	}
-	if !launchDigestPattern.MatchString(environment.MaterializationDigest) {
-		return fmt.Errorf("%w: materialization digest must be a lowercase sha256 digest", ErrInvalidLaunchEnvironment)
 	}
 	if !filepath.IsAbs(environment.WorkingDirectory) || strings.ContainsRune(environment.WorkingDirectory, '\x00') {
 		return fmt.Errorf("%w: working directory must be absolute and cannot contain NUL", ErrInvalidLaunchEnvironment)
@@ -272,8 +260,6 @@ func (environment LaunchEnvironment) Equal(other LaunchEnvironment) bool {
 		environment.FeatureID == other.FeatureID &&
 		environment.Role == other.Role &&
 		environment.WorkspaceID == other.WorkspaceID &&
-		environment.ConfigurationRevision == other.ConfigurationRevision &&
-		environment.MaterializationDigest == other.MaterializationDigest &&
 		environment.WorkingDirectory == other.WorkingDirectory &&
 		(environment.Variables == nil) == (other.Variables == nil) &&
 		slices.Equal(environment.Variables, other.Variables)

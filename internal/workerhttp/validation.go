@@ -18,7 +18,6 @@ const (
 var (
 	ErrInvalidContract = errors.New("invalid worker HTTP contract value")
 	safeIDPattern      = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
-	digestPattern      = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 )
 
 func (provider Provider) IsValid() bool {
@@ -117,12 +116,6 @@ func (assignment Assignment) Validate() error {
 	}
 	if !assignment.Role.IsValid() {
 		return invalid("role %q is not recognized", assignment.Role)
-	}
-	if assignment.ConfigurationRevision < 1 {
-		return invalid("configuration revision must be positive")
-	}
-	if !digestPattern.MatchString(assignment.MaterializationDigest) {
-		return invalid("materialization digest must be a lowercase sha256 digest")
 	}
 	return nil
 }

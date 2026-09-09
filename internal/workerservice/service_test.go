@@ -135,20 +135,18 @@ func TestJournalBackedServiceRunsControlsAndReplaysThroughHTTP(t *testing.T) {
 	}
 }
 
-func TestJournalBackedServicePassesExactFrozenEnvironmentToProvider(t *testing.T) {
+func TestJournalBackedServicePassesExactResolvedEnvironmentToProvider(t *testing.T) {
 	root := t.TempDir()
-	workspace := filepath.Join(root, "workspace")
+	request := validPutRequest()
+	workspace := filepath.Join(root, request.Assignment.WorkspaceID)
 	if err := os.Mkdir(workspace, 0o700); err != nil {
 		t.Fatalf("create workspace: %v", err)
 	}
-	request := validPutRequest()
 	variables := []string{"PATH=/usr/bin:/bin", "CODEX_HOME=/var/lib/commitarium/provider"}
-	resolver, err := NewImmutableEnvironmentResolver(ImmutableEnvironmentResolverConfig{
+	resolver, err := NewRootedEnvironmentResolver(RootedEnvironmentResolverConfig{
 		AgentProfileID: request.Assignment.AgentProfileID,
 		WorkspaceRoot:  root,
-		Materializations: []MaterializedEnvironment{{
-			Assignment: request.Assignment, WorkingDirectory: workspace, Variables: variables,
-		}},
+		Variables:      variables,
 	})
 	if err != nil {
 		t.Fatalf("create environment resolver: %v", err)
@@ -249,7 +247,7 @@ func TestJournalBackedServiceRejectsResolverThatReturnsDifferentAssignment(t *te
 		workerhttp.Assignment,
 	) (worker.LaunchEnvironment, error) {
 		different := request.Assignment
-		different.ConfigurationRevision++
+		different.ProjectID = "prj_other"
 		return launchEnvironment(different, directory, []string{}), nil
 	})
 	provider := &recordingAdapter{providerSessionID: "must_not_start"}
@@ -688,8 +686,6 @@ func validPutRequest() workerhttp.PutAttemptRequest {
 		Assignment: workerhttp.Assignment{
 			AgentProfileID: "profile_test", ProjectID: "prj_test", FeatureID: "fea_test",
 			Role: workerhttp.RoleCoder, WorkspaceID: "workspace_test",
-			ConfigurationRevision: 1,
-			MaterializationDigest: "sha256:" + strings.Repeat("a", 64),
 		},
 		Instructions: "Implement the accepted plan.",
 	}

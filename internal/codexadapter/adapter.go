@@ -22,10 +22,10 @@ const (
 
 var ErrInvalidConfig = errors.New("invalid Codex adapter configuration")
 
-// Config describes an already materialized provider process environment. The
-// future runtime wiring will resolve its directory and environment from a
-// profile plus workspace revision; this adapter deliberately does not read
-// coordinator secrets or choose project mounts itself.
+// Config describes the provider process itself. The worker resolves the
+// per-attempt directory and environment before calling this adapter; the
+// adapter deliberately does not read coordinator secrets or choose project
+// mounts itself.
 type Config struct {
 	Supervisor      *processsupervisor.Supervisor
 	Executable      string
@@ -302,5 +302,5 @@ func (adapter *Adapter) launch(
 }
 
 func validSandbox(value string) bool {
-	return value == "read-only" || value == "workspace-write"
+	return value == "read-only" || value == "workspace-write" || value == "danger-full-access"
 }
