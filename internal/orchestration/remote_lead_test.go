@@ -18,6 +18,7 @@ import (
 	"github.com/EinarLogiOskars/commitarium/internal/worker"
 	"github.com/EinarLogiOskars/commitarium/internal/workerhttp"
 	"github.com/EinarLogiOskars/commitarium/internal/workeringest"
+	"github.com/EinarLogiOskars/commitarium/internal/workflow"
 )
 
 const remoteLeadTestToken = "remote-lead-test-token"
@@ -223,7 +224,8 @@ func TestRemoteLeadStartsOneWorkerTurnAndWaitsForUser(t *testing.T) {
 		},
 	))
 	starter, err := NewRemoteLeadStarter(RemoteLeadConfig{
-		Executions: executions, Features: database.NewFeatureStore(db), Worker: client,
+		Executions: executions, Features: database.NewFeatureStore(db),
+		Goals: workflow.NewService(database.NewWorkflowStore(db)), Worker: client,
 		Pump:     workeringest.NewPump(executions, ingester, workeringest.NewHTTPAttemptSource(client)),
 		Lifetime: t.Context(), AgentProfileID: "codex-default", WorkspaceID: "project-read-only",
 	})
@@ -313,6 +315,7 @@ func TestRemoteLeadRecoveryReusesDurableWorkerAttempt(t *testing.T) {
 	pump := workeringest.NewPump(executions, ingester, workeringest.NewHTTPAttemptSource(client))
 	starter, err := NewRemoteLeadStarter(RemoteLeadConfig{
 		Executions: executions, Features: database.NewFeatureStore(db),
+		Goals:  workflow.NewService(database.NewWorkflowStore(db)),
 		Worker: client, Pump: pump, Lifetime: t.Context(),
 		AgentProfileID: "codex-default", WorkspaceID: "project-read-only",
 	})
@@ -367,6 +370,7 @@ func TestRemoteLeadRequiresReviewWhenWorkerStateCannotBeConfirmed(t *testing.T) 
 	reported := make(chan error, 1)
 	starter, err := NewRemoteLeadStarter(RemoteLeadConfig{
 		Executions: executions, Features: database.NewFeatureStore(db),
+		Goals:  workflow.NewService(database.NewWorkflowStore(db)),
 		Worker: unavailableRemoteLeadWorker{}, Pump: pump,
 		Lifetime: t.Context(), AgentProfileID: "codex-default", WorkspaceID: "project-read-only",
 		ReportError: func(err error) { reported <- err },
@@ -441,7 +445,8 @@ func TestRemoteLeadResumesSameConversationForRepeatedUserReplies(t *testing.T) {
 		},
 	))
 	starter, err := NewRemoteLeadStarter(RemoteLeadConfig{
-		Executions: executions, Features: database.NewFeatureStore(db), Worker: client,
+		Executions: executions, Features: database.NewFeatureStore(db),
+		Goals: workflow.NewService(database.NewWorkflowStore(db)), Worker: client,
 		Pump:     workeringest.NewPump(executions, ingester, workeringest.NewHTTPAttemptSource(client)),
 		Lifetime: t.Context(), AgentProfileID: "codex-default", WorkspaceID: "project-read-only",
 	})
@@ -510,6 +515,42 @@ func TestRemoteLeadResumesSameConversationForRepeatedUserReplies(t *testing.T) {
 			t.Fatalf("reply %d did not resume the original thread: %+v", index+1, request)
 		}
 	}
+
+	actor := workflow.Actor{Kind: workflow.ActorKindUser, ID: "local-user"}
+	accepted, err := starter.AcceptGoal(
+		t.Context(), sessionID,
+		"Export reports as CSV for administrators, including all visible columns.",
+		actor, "accept-goal-1",
+	)
+	if err != nil {
+		t.Fatalf("accept clarified goal: %v", err)
+	}
+	retried, err := starter.AcceptGoal(
+		t.Context(), sessionID,
+		"Export reports as CSV for administrators, including all visible columns.",
+		actor, "accept-goal-1",
+	)
+	if err != nil || retried != accepted {
+		t.Fatalf("retry accepted goal: event=%+v err=%v", retried, err)
+	}
+	acceptedFeature, err := database.NewFeatureStore(db).GetByID(t.Context(), storedFeature.ID)
+	if err != nil {
+		t.Fatalf("get accepted feature: %v", err)
+	}
+	if acceptedFeature.AcceptedGoal == "" || acceptedFeature.GoalAcceptedAt == nil ||
+		acceptedFeature.State != feature.StateDraft {
+		t.Fatalf("unexpected accepted feature %+v", acceptedFeature)
+	}
+	workflowEvents, err := database.NewWorkflowStore(db).ListEvents(t.Context(), storedFeature.ID)
+	if err != nil || len(workflowEvents) != 1 || workflowEvents[0] != accepted {
+		t.Fatalf("unexpected accepted-goal history %+v err=%v", workflowEvents, err)
+	}
+	if _, err := starter.SendCommand(t.Context(), sessionID, worker.Command{
+		ID: "reply-after-acceptance", Type: worker.CommandMessage,
+		Message: "Actually, change the scope.",
+	}); !errors.Is(err, ErrCommandNotAllowed) {
+		t.Fatalf("expected accepted goal to close clarification, got %v", err)
+	}
 }
 
 func TestRemoteLeadRecoveryReattachesToCommittedReplyAttempt(t *testing.T) {
@@ -545,7 +586,8 @@ func TestRemoteLeadRecoveryReattachesToCommittedReplyAttempt(t *testing.T) {
 			},
 		))
 		starter, createErr := NewRemoteLeadStarter(RemoteLeadConfig{
-			Executions: executions, Features: database.NewFeatureStore(db), Worker: client,
+			Executions: executions, Features: database.NewFeatureStore(db),
+			Goals: workflow.NewService(database.NewWorkflowStore(db)), Worker: client,
 			Pump:     workeringest.NewPump(executions, ingester, workeringest.NewHTTPAttemptSource(client)),
 			Lifetime: t.Context(), AgentProfileID: "codex-default", WorkspaceID: "project-read-only",
 		})

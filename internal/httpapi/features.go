@@ -17,13 +17,15 @@ type createFeatureRequest struct {
 }
 
 type featureResponse struct {
-	ID          string        `json:"id"`
-	ProjectID   string        `json:"project_id"`
-	Title       string        `json:"title"`
-	Description string        `json:"description"`
-	State       feature.State `json:"state"`
-	CreatedAt   time.Time     `json:"created_at"`
-	UpdatedAt   time.Time     `json:"updated_at"`
+	ID             string        `json:"id"`
+	ProjectID      string        `json:"project_id"`
+	Title          string        `json:"title"`
+	Description    string        `json:"description"`
+	State          feature.State `json:"state"`
+	AcceptedGoal   string        `json:"accepted_goal,omitempty"`
+	GoalAcceptedAt *time.Time    `json:"goal_accepted_at,omitempty"`
+	CreatedAt      time.Time     `json:"created_at"`
+	UpdatedAt      time.Time     `json:"updated_at"`
 }
 
 func (api *API) createFeatureHandler(
@@ -142,12 +144,14 @@ func (api *API) getFeatureByIDHandler(
 
 func newFeatureResponse(storedFeature feature.Feature) featureResponse {
 	return featureResponse{
-		ID:          storedFeature.ID,
-		ProjectID:   storedFeature.ProjectID,
-		Title:       storedFeature.Title,
-		Description: storedFeature.Description,
-		State:       storedFeature.State,
-		CreatedAt:   storedFeature.CreatedAt,
-		UpdatedAt:   storedFeature.UpdatedAt,
+		ID:             storedFeature.ID,
+		ProjectID:      storedFeature.ProjectID,
+		Title:          storedFeature.Title,
+		Description:    storedFeature.Description,
+		State:          storedFeature.State,
+		AcceptedGoal:   storedFeature.AcceptedGoal,
+		GoalAcceptedAt: storedFeature.GoalAcceptedAt,
+		CreatedAt:      storedFeature.CreatedAt,
+		UpdatedAt:      storedFeature.UpdatedAt,
 	}
 }

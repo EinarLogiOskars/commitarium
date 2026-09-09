@@ -15,6 +15,7 @@ import (
 	"github.com/EinarLogiOskars/commitarium/internal/worker"
 	"github.com/EinarLogiOskars/commitarium/internal/workerhttp"
 	"github.com/EinarLogiOskars/commitarium/internal/workeringest"
+	"github.com/EinarLogiOskars/commitarium/internal/workflow"
 )
 
 const remoteLeadAgentID = "codex-lead"
@@ -42,6 +43,10 @@ type RemoteLeadFeatureFinder interface {
 	GetByID(context.Context, string) (feature.Feature, error)
 }
 
+type RemoteLeadGoalService interface {
+	AcceptGoal(context.Context, string, string, string, workflow.Actor, string) (workflow.Event, error)
+}
+
 type RemoteLeadWorker interface {
 	PutAttempt(context.Context, workerhttp.MutationIdentity, workerhttp.PutAttemptRequest) (workerhttp.Attempt, bool, error)
 	GetAttempt(context.Context, workerhttp.AttemptReference) (workerhttp.Attempt, error)
@@ -54,6 +59,7 @@ type RemoteLeadPump interface {
 type RemoteLeadConfig struct {
 	Executions     RemoteLeadExecution
 	Features       RemoteLeadFeatureFinder
+	Goals          RemoteLeadGoalService
 	Worker         RemoteLeadWorker
 	Pump           RemoteLeadPump
 	Lifetime       context.Context
@@ -69,6 +75,7 @@ type RemoteLeadConfig struct {
 type RemoteLeadStarter struct {
 	executions     RemoteLeadExecution
 	features       RemoteLeadFeatureFinder
+	goals          RemoteLeadGoalService
 	worker         RemoteLeadWorker
 	pump           RemoteLeadPump
 	lifetime       context.Context
@@ -81,8 +88,9 @@ type RemoteLeadStarter struct {
 }
 
 func NewRemoteLeadStarter(config RemoteLeadConfig) (*RemoteLeadStarter, error) {
-	if config.Executions == nil || config.Features == nil || config.Worker == nil || config.Pump == nil {
-		return nil, fmt.Errorf("%w: execution service, feature store, worker client, and event pump are required", ErrInvalidRunRequest)
+	if config.Executions == nil || config.Features == nil || config.Goals == nil ||
+		config.Worker == nil || config.Pump == nil {
+		return nil, fmt.Errorf("%w: execution service, feature store, goal service, worker client, and event pump are required", ErrInvalidRunRequest)
 	}
 	if config.Lifetime == nil {
 		return nil, fmt.Errorf("%w: lifetime context is required", ErrInvalidRunRequest)
@@ -95,7 +103,7 @@ func NewRemoteLeadStarter(config RemoteLeadConfig) (*RemoteLeadStarter, error) {
 		reportError = func(error) {}
 	}
 	return &RemoteLeadStarter{
-		executions: config.Executions, features: config.Features,
+		executions: config.Executions, features: config.Features, goals: config.Goals,
 		worker: config.Worker, pump: config.Pump,
 		lifetime: config.Lifetime, agentProfileID: config.AgentProfileID,
 		workspaceID: config.WorkspaceID, reportError: reportError,
@@ -282,6 +290,33 @@ func remoteLeadReplyInstructions(message string) string {
 		"next questions genuinely needed before planning. The user replied:\n\n" + message
 }
 
+func (starter *RemoteLeadStarter) AcceptGoal(
+	ctx context.Context,
+	sessionID string,
+	goal string,
+	actor workflow.Actor,
+	idempotencyKey string,
+) (workflow.Event, error) {
+	session, err := starter.executions.GetSession(ctx, sessionID)
+	if err != nil {
+		return workflow.Event{}, err
+	}
+	if session.AgentID != remoteLeadAgentID || session.Role != worker.RoleLead {
+		return workflow.Event{}, workflow.ErrGoalAcceptanceNotAllowed
+	}
+	run, err := starter.executions.GetRun(ctx, session.RunID)
+	if err != nil {
+		return workflow.Event{}, err
+	}
+	storedFeature, err := starter.features.GetByID(ctx, run.FeatureID)
+	if err != nil {
+		return workflow.Event{}, err
+	}
+	return starter.goals.AcceptGoal(
+		ctx, storedFeature.ID, session.ID, goal, actor, idempotencyKey,
+	)
+}
+
 // SendCommand turns a public message command into a new resume attempt. It is
 // intentionally narrower than the simulated controller: this real-agent slice
 // does not claim that Codex can safely pause or accept messages mid-turn.
@@ -327,6 +362,9 @@ func (starter *RemoteLeadStarter) SendCommand(
 		return execution.Command{}, fmt.Errorf("load lead feature: %w", err)
 	}
 	if storedFeature.State != feature.StateDraft {
+		return execution.Command{}, ErrCommandNotAllowed
+	}
+	if storedFeature.AcceptedGoal != "" || storedFeature.GoalAcceptedAt != nil {
 		return execution.Command{}, ErrCommandNotAllowed
 	}
 	checkpoint, err := starter.executions.GetWorkerAttempt(ctx, session.ID)

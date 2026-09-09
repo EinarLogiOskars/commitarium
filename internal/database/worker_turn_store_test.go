@@ -7,6 +7,7 @@ import (
 
 	"github.com/EinarLogiOskars/commitarium/internal/execution"
 	"github.com/EinarLogiOskars/commitarium/internal/worker"
+	"github.com/EinarLogiOskars/commitarium/internal/workflow"
 )
 
 func TestExecutionStoreBeginsAnotherWorkerTurnAtomically(t *testing.T) {
@@ -87,6 +88,45 @@ func TestExecutionStoreBeginsAnotherWorkerTurnAtomically(t *testing.T) {
 	}
 	if len(events) != 2 || events[1].Text != admission.Command.Message {
 		t.Fatalf("user reply was not recorded exactly once: %+v", events)
+	}
+}
+
+func TestExecutionStoreRejectsReplyAfterGoalAcceptance(t *testing.T) {
+	db, store := newTestExecutionStore(t)
+	run, session := createExecutionRecords(t, db, store)
+	now := session.StartedAt.Add(time.Second)
+	createWorkerAttempt(t, store, session.ID, "att_first", now)
+	moveExecutionToUserWait(t, store, run, session, now)
+	if _, err := NewWorkflowStore(db).AcceptGoal(t.Context(), workflow.GoalAcceptance{
+		EventID: "evt_goal", FeatureID: run.FeatureID, SessionID: session.ID,
+		Goal: "Ship CSV export.", Actor: workflow.Actor{Kind: workflow.ActorKindUser, ID: "local-user"},
+		OccurredAt: now.Add(time.Second), IdempotencyKey: "accept-1",
+	}); err != nil {
+		t.Fatalf("accept goal: %v", err)
+	}
+
+	turnAt := now.Add(2 * time.Second)
+	admission := execution.WorkerTurnAdmission{
+		Command: execution.Command{
+			ID: "reply-too-late", SessionID: session.ID, Type: worker.CommandMessage,
+			Message: "Change the scope.", Status: execution.CommandStatusPending,
+			RequestedAt: turnAt,
+		},
+		UserEvent: execution.PendingEvent{
+			ID: "reply-too-late:user-message", SessionID: session.ID,
+			Type: worker.EventUserMessage, Text: "Change the scope.", OccurredAt: turnAt,
+		},
+		PreviousAttemptID: "att_first", PreviousLastEventSequence: 0,
+		NextAttempt: execution.WorkerAttemptCheckpoint{
+			SessionID: session.ID, AttemptID: "att_second", CreatedAt: turnAt, UpdatedAt: turnAt,
+		},
+		RunReason: "The lead agent is responding.", OccurredAt: turnAt,
+	}
+	if _, _, err := store.BeginWorkerTurn(t.Context(), admission); !errors.Is(err, execution.ErrStateConflict) {
+		t.Fatalf("expected error %v, got %v", execution.ErrStateConflict, err)
+	}
+	if _, err := store.GetCommand(t.Context(), admission.Command.ID); !errors.Is(err, execution.ErrNotFound) {
+		t.Fatalf("rejected reply left a command behind: %v", err)
 	}
 }
 

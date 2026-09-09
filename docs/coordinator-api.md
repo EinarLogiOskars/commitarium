@@ -22,10 +22,11 @@ this API beyond the host loopback interface is unsupported.
 | `GET` | `/api/v1/sessions/{sessionID}/events` | Retrieve durable observable session activity |
 | `GET` | `/api/v1/sessions/{sessionID}/events/stream` | Replay and stream observable session activity with SSE |
 | `POST` | `/api/v1/sessions/{sessionID}/commands` | Send an idempotent message or supported control to a session |
+| `POST` | `/api/v1/sessions/{sessionID}/goal-acceptance` | Accept the clarified goal from a waiting real lead session |
 
 ## Idempotency
 
-Feature transitions, run starts, and session commands require an
+Feature transitions, run starts, session commands, and goal acceptance require an
 `Idempotency-Key` header. Retrying the same operation with the same key returns
 the existing durable result. Reusing a key for a different operation returns
 `409 Conflict` with the `idempotency_conflict` error code.
@@ -48,8 +49,10 @@ effective policy.
 
 ## Starting and observing a run
 
-Starting a run has no request body. The feature title and description are the
-accepted goal, avoiding a second stored copy:
+Starting a run has no request body. In the default simulated workflow, the
+feature title and description still seed the complete scripted run. In
+`real_codex_lead` mode they seed the clarification conversation; the final goal
+is stored separately only when the user accepts it:
 
 ```http
 POST /api/v1/projects/prj_example/features/fea_example/runs
@@ -86,8 +89,11 @@ real Codex worker configured by `COMMITARIUM_CODEX_WORKER_URL`,
 `COMMITARIUM_CODEX_WORKSPACE_ID`. This opt-in mode runs a persistent read-only
 lead conversation to clarify the goal. Each response is visible through the
 normal session history and SSE endpoints. On success, the run and session both
-become `waiting_for_user` and the feature remains `draft` until a later explicit
-goal-acceptance operation is implemented.
+become `waiting_for_user` and the feature remains `draft` until the user accepts
+the goal explicitly.
+
+Feature retrieval includes `accepted_goal` and `goal_accepted_at` after that
+acceptance. Both fields are omitted while clarification remains open.
 
 A session response exposes its provider session ID as soon as the provider has
 started, rather than only after completion. It also includes
@@ -140,6 +146,7 @@ then asks the worker to resume the session's existing provider thread. The API
 normally returns the new command as `pending`; it becomes `applied` after the
 worker confirms that exact resume attempt. Retrying the same body with the same
 idempotency key returns the existing command without another provider turn.
+Once the goal has been accepted, new clarification messages are rejected.
 
 Control commands must omit `message`. Every command requires an
 `Idempotency-Key` header. Forced termination is deliberately outside this
@@ -152,6 +159,47 @@ assessment. Retrying the same approval key remains idempotent.
 Pause, continue, stop, and messages sent while a turn is already running still
 target only the in-process simulated sessions. Safe real-provider mid-turn
 controls remain outside the current lead-conversation slice.
+
+## Goal acceptance
+
+Only a waiting real lead session for a draft feature can accept a goal:
+
+```http
+POST /api/v1/sessions/ses_lead/goal-acceptance
+Idempotency-Key: accept-goal-1
+Content-Type: application/json
+
+{"goal":"Export reports as CSV for administrators, including all visible columns."}
+```
+
+A successful response is `200 OK`:
+
+```json
+{
+  "feature_id": "fea_example",
+  "session_id": "ses_lead",
+  "goal": "Export reports as CSV for administrators, including all visible columns.",
+  "event_id": "evt_opaque",
+  "sequence": 1,
+  "accepted_at": "2026-09-09T15:00:00Z"
+}
+```
+
+The coordinator stores the exact trimmed goal and timestamp on the feature and
+appends a `feature.goal_accepted` event to the existing workflow history in the
+same SQLite transaction. The event also identifies the lead session whose
+conversation produced the goal. Feature event history and SSE represent this
+event with `goal` and `session_id`; state-change events continue to use
+`previous_state` and `state`.
+
+Acceptance does not invoke an agent, create a workspace, or start planning, so
+the feature remains `draft`. It closes the clarification boundary: later
+message commands and a new run-start request are rejected. An exact retry of
+the original run start or goal acceptance still returns its durable result. A
+changed request using the same key returns `idempotency_conflict`, and another
+acceptance under a new key returns `goal_already_accepted`. Editing an accepted
+goal is intentionally unsupported until a later explicit reopen operation can
+return it to user-controlled clarification safely.
 
 ## Restart recovery
 

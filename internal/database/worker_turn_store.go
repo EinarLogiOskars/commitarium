@@ -69,6 +69,18 @@ func (s *ExecutionStore) BeginWorkerTurn(
 	if run.Status != execution.RunStatusWaitingForUser {
 		return execution.WorkerTurnAdmissionResult{}, false, execution.ErrStateConflict
 	}
+	var acceptedGoal string
+	var goalAcceptedAt sql.NullString
+	if err := tx.QueryRowContext(
+		ctx,
+		`SELECT accepted_goal, goal_accepted_at FROM features WHERE id = ?`,
+		run.FeatureID,
+	).Scan(&acceptedGoal, &goalAcceptedAt); err != nil {
+		return execution.WorkerTurnAdmissionResult{}, false, fmt.Errorf("select feature goal boundary: %w", err)
+	}
+	if acceptedGoal != "" || goalAcceptedAt.Valid {
+		return execution.WorkerTurnAdmissionResult{}, false, execution.ErrStateConflict
+	}
 	checkpoint, err := scanWorkerAttemptCheckpoint(tx.QueryRowContext(
 		ctx,
 		`SELECT session_id, attempt_id, last_event_sequence, created_at, updated_at

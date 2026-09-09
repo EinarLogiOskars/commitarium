@@ -88,7 +88,8 @@ func TestStartRunReturnsDurableAcceptedRun(t *testing.T) {
 func TestStartRunRetryReturnsExistingRunAfterFeatureAdvances(t *testing.T) {
 	runID := runIDForKey("same-request")
 	features := &recordingFeatureService{getResult: feature.Feature{
-		ID: "fea_test", ProjectID: "prj_test", State: feature.StateReviewing,
+		ID: "fea_test", ProjectID: "prj_test", State: feature.StateDraft,
+		AcceptedGoal: "Ship the clarified goal.",
 	}}
 	executions := &recordingExecutionService{
 		run: execution.Run{ID: runID, FeatureID: "fea_test", Status: execution.RunStatusRunning},
@@ -123,6 +124,7 @@ func TestStartRunValidatesAdmission(t *testing.T) {
 		{name: "missing key", feature: feature.Feature{State: feature.StateDraft}, status: http.StatusBadRequest, code: "idempotency_key_required"},
 		{name: "unknown feature", key: "new", featureErr: feature.ErrNotFound, status: http.StatusNotFound, code: "feature_not_found"},
 		{name: "feature already active", key: "new", feature: feature.Feature{State: feature.StatePlanning}, status: http.StatusConflict, code: "feature_not_startable"},
+		{name: "goal already accepted", key: "new", feature: feature.Feature{State: feature.StateDraft, AcceptedGoal: "Ship it"}, status: http.StatusConflict, code: "feature_not_startable"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

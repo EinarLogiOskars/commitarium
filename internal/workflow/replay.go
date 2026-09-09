@@ -11,6 +11,7 @@ var ErrInvalidEventStream = errors.New("invalid workflow event stream")
 
 func ReplayFeatureState(events []Event) (feature.State, error) {
 	state := feature.StateDraft
+	goalAccepted := false
 	var aggregateID string
 
 	for index, event := range events {
@@ -41,7 +42,20 @@ func ReplayFeatureState(events []Event) (feature.State, error) {
 				event.AggregateID,
 			)
 		}
-		if event.Type != EventTypeFeatureStateChanged {
+		switch event.Type {
+		case EventTypeGoalAccepted:
+			if state != feature.StateDraft || goalAccepted {
+				return "", fmt.Errorf(
+					"%w: goal acceptance event %q is out of order", ErrInvalidEventStream, event.ID,
+				)
+			}
+			if _, err := DecodeGoalAcceptedPayload(event.PayloadVersion, event.Payload); err != nil {
+				return "", fmt.Errorf("%w: event %q: %v", ErrInvalidEventStream, event.ID, err)
+			}
+			goalAccepted = true
+			continue
+		case EventTypeFeatureStateChanged:
+		default:
 			return "", fmt.Errorf(
 				"%w: unsupported event type %q",
 				ErrInvalidEventStream,

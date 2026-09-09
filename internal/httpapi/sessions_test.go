@@ -12,6 +12,7 @@ import (
 	"github.com/EinarLogiOskars/commitarium/internal/execution"
 	"github.com/EinarLogiOskars/commitarium/internal/orchestration"
 	"github.com/EinarLogiOskars/commitarium/internal/worker"
+	"github.com/EinarLogiOskars/commitarium/internal/workflow"
 )
 
 type recordingExecutionService struct {
@@ -69,10 +70,29 @@ func (s *recordingExecutionService) EventsForSession(
 }
 
 type recordingSessionController struct {
-	sessionID string
-	command   worker.Command
-	result    execution.Command
-	err       error
+	sessionID  string
+	command    worker.Command
+	result     execution.Command
+	err        error
+	goal       string
+	goalActor  workflow.Actor
+	goalKey    string
+	goalResult workflow.Event
+	goalErr    error
+}
+
+func (c *recordingSessionController) AcceptGoal(
+	_ context.Context,
+	sessionID string,
+	goal string,
+	actor workflow.Actor,
+	idempotencyKey string,
+) (workflow.Event, error) {
+	c.sessionID = sessionID
+	c.goal = goal
+	c.goalActor = actor
+	c.goalKey = idempotencyKey
+	return c.goalResult, c.goalErr
 }
 
 func (c *recordingSessionController) SendCommand(

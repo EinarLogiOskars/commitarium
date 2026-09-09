@@ -60,8 +60,9 @@ func (api *API) startRunHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if storedFeature.State != feature.StateDraft {
-		writeError(w, http.StatusConflict, "feature_not_startable", "only a draft feature can start a new run")
+	if storedFeature.State != feature.StateDraft ||
+		storedFeature.AcceptedGoal != "" || storedFeature.GoalAcceptedAt != nil {
+		writeError(w, http.StatusConflict, "feature_not_startable", "feature is not available to start a new run")
 		return
 	}
 	goal := storedFeature.Title

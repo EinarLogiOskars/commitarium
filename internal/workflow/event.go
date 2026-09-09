@@ -10,7 +10,10 @@ import (
 
 type EventType string
 
-const EventTypeFeatureStateChanged EventType = "feature.state_changed"
+const (
+	EventTypeFeatureStateChanged EventType = "feature.state_changed"
+	EventTypeGoalAccepted        EventType = "feature.goal_accepted"
+)
 
 type ActorKind string
 

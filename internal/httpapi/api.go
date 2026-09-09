@@ -69,6 +69,13 @@ type SessionController interface {
 		sessionID string,
 		command worker.Command,
 	) (execution.Command, error)
+	AcceptGoal(
+		ctx context.Context,
+		sessionID string,
+		goal string,
+		actor workflow.Actor,
+		idempotencyKey string,
+	) (workflow.Event, error)
 }
 
 type API struct {
@@ -136,6 +143,7 @@ func New(
 	mux.HandleFunc("GET /api/v1/sessions/{id}/events", api.getSessionEventsHandler)
 	mux.HandleFunc("GET /api/v1/sessions/{id}/events/stream", api.streamSessionEventsHandler)
 	mux.HandleFunc("POST /api/v1/sessions/{id}/commands", api.sendSessionCommandHandler)
+	mux.HandleFunc("POST /api/v1/sessions/{id}/goal-acceptance", api.acceptGoalHandler)
 
 	return mux
 }

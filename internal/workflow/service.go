@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/EinarLogiOskars/commitarium/internal/feature"
@@ -14,6 +15,28 @@ type Service struct {
 	broker     *eventBroker
 	generateID func() string
 	now        func() time.Time
+}
+
+func (s *Service) AcceptGoal(
+	ctx context.Context,
+	featureID string,
+	sessionID string,
+	goal string,
+	actor Actor,
+	idempotencyKey string,
+) (Event, error) {
+	event, err := s.store.AcceptGoal(ctx, GoalAcceptance{
+		EventID: s.generateID(), FeatureID: featureID, SessionID: sessionID,
+		Goal: strings.TrimSpace(goal), Actor: actor,
+		OccurredAt: s.now().UTC(), IdempotencyKey: idempotencyKey,
+	})
+	if err != nil {
+		return Event{}, fmt.Errorf("accept goal for feature %q: %w", featureID, err)
+	}
+	if s.broker != nil {
+		s.broker.publish(event)
+	}
+	return event, nil
 }
 
 func NewService(store Store) *Service {

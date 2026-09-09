@@ -19,9 +19,10 @@ This is not yet a production-ready release. The coordinator defaults to its
 complete deterministic simulation. An opt-in mode now connects the public run
 and session-command APIs to one persistent real Codex conversation for
 read-only goal clarification. The user can exchange multiple visible turns
-with the lead agent while the feature remains a draft. Explicit goal
-acceptance, real file changes, Claude Code execution, Forgejo pull-request
-automation, and the user interface remain to be built.
+with the lead agent while the feature remains a draft, then explicitly accepts
+the final goal to close clarification. Real file changes, Claude Code
+execution, Forgejo pull-request automation, and the user interface remain to
+be built.
 
 ## Architecture
 
@@ -177,6 +178,22 @@ command becomes `applied` once that attempt is confirmed. Agent output and
 request and idempotency key does not start another turn. If the coordinator is
 restarted mid-turn, it looks up and reattaches to that exact attempt rather than
 issuing another resume request.
+
+When the goal is clear, accept the final wording explicitly:
+
+```sh
+curl -X POST http://127.0.0.1:8080/api/v1/sessions/SESSION_ID/goal-acceptance \
+  -H 'Content-Type: application/json' \
+  -H 'Idempotency-Key: accept-goal-1' \
+  -d '{"goal":"Add the optional name argument, including validation and tests."}'
+```
+
+This stores the final Markdown-capable goal on the feature and appends a
+`feature.goal_accepted` workflow event in one transaction. It does not call
+Codex or begin planning. The feature remains `draft`, but further clarification
+replies are rejected so the next workspace/planning slice has one stable goal
+to use. Retrying the same acceptance is safe; changing an accepted goal will
+require a future explicit reopen operation.
 
 The versioned [internal worker API](docs/worker-api.md) now has tested client and
 server components for authenticated attempt inspection and control. Its worker

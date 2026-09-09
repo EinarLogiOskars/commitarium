@@ -162,7 +162,11 @@ func TestTransitionFeatureRejectsInvalidRequests(t *testing.T) {
 }
 
 func TestGetFeatureEvents(t *testing.T) {
-	payload, err := workflow.EncodeFeatureStateChangedPayload(
+	goalPayload, err := workflow.EncodeGoalAcceptedPayload("Ship CSV export.", "ses_lead")
+	if err != nil {
+		t.Fatalf("encode goal payload: %v", err)
+	}
+	statePayload, err := workflow.EncodeFeatureStateChangedPayload(
 		feature.StateDraft,
 		feature.StatePlanning,
 	)
@@ -172,20 +176,27 @@ func TestGetFeatureEvents(t *testing.T) {
 	features := &recordingFeatureService{
 		getResult: feature.Feature{ID: "fea_test", ProjectID: "prj_test"},
 	}
-	workflows := &recordingWorkflowService{eventsResult: []workflow.Event{{
-		ID:          "evt_test",
-		AggregateID: "fea_test",
-		Type:        workflow.EventTypeFeatureStateChanged,
-		Actor: workflow.Actor{
-			Kind: workflow.ActorKindAgent,
-			ID:   "agt_coder",
-		},
-		OccurredAt:     time.Date(2026, time.September, 8, 18, 0, 0, 0, time.UTC),
-		Sequence:       1,
-		PayloadVersion: workflow.FeatureStateChangedPayloadVersion,
-		IdempotencyKey: "cmd_test",
-		Payload:        payload,
-	}}}
+	workflows := &recordingWorkflowService{eventsResult: []workflow.Event{
+		{
+			ID: "evt_goal", AggregateID: "fea_test", Type: workflow.EventTypeGoalAccepted,
+			Actor:      workflow.Actor{Kind: workflow.ActorKindUser, ID: localUserID},
+			OccurredAt: time.Date(2026, time.September, 8, 17, 59, 0, 0, time.UTC),
+			Sequence:   1, PayloadVersion: workflow.GoalAcceptedPayloadVersion,
+			IdempotencyKey: "accept_test", Payload: goalPayload,
+		}, {
+			ID:          "evt_test",
+			AggregateID: "fea_test",
+			Type:        workflow.EventTypeFeatureStateChanged,
+			Actor: workflow.Actor{
+				Kind: workflow.ActorKindAgent,
+				ID:   "agt_coder",
+			},
+			OccurredAt:     time.Date(2026, time.September, 8, 18, 0, 0, 0, time.UTC),
+			Sequence:       2,
+			PayloadVersion: workflow.FeatureStateChangedPayloadVersion,
+			IdempotencyKey: "cmd_test",
+			Payload:        statePayload,
+		}}}
 	request := httptest.NewRequest(
 		http.MethodGet,
 		"/api/v1/projects/prj_test/features/fea_test/events",
@@ -204,12 +215,16 @@ func TestGetFeatureEvents(t *testing.T) {
 	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
 		t.Fatalf("decode events response: %v", err)
 	}
-	if len(body) != 1 {
-		t.Fatalf("expected one event, got %d", len(body))
+	if len(body) != 2 {
+		t.Fatalf("expected two events, got %d", len(body))
 	}
-	if body[0].PreviousState != feature.StateDraft ||
-		body[0].State != feature.StatePlanning ||
-		body[0].Actor.ID != "agt_coder" {
-		t.Errorf("unexpected event response %+v", body[0])
+	if body[0].Goal != "Ship CSV export." || body[0].SessionID != "ses_lead" ||
+		body[0].Type != workflow.EventTypeGoalAccepted {
+		t.Errorf("unexpected goal event response %+v", body[0])
+	}
+	if body[1].PreviousState != feature.StateDraft ||
+		body[1].State != feature.StatePlanning ||
+		body[1].Actor.ID != "agt_coder" {
+		t.Errorf("unexpected state event response %+v", body[1])
 	}
 }
