@@ -17,8 +17,8 @@ const IdempotencyKeyHeader = "Idempotency-Key"
 var ErrInvalidServerConfig = errors.New("invalid worker HTTP server configuration")
 
 // Service is the process-control boundary behind the worker HTTP API. The HTTP
-// layer only authenticates, validates, and translates requests; a later
-// supervisor implementation will own process and journal behavior.
+// layer only authenticates, validates, and translates requests; concrete
+// implementations own provider-session supervision and journal behavior.
 type Service interface {
 	PutAttempt(
 		ctx context.Context,
