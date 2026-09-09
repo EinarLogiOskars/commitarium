@@ -5,10 +5,10 @@ coordinator and a provider worker that will supervise Codex or Claude Code.
 Protocol version 1 uses JSON over HTTP under `/internal/v1`.
 
 This boundary is implemented and tested as a Go HTTP server and coordinator
-client. A journal-backed service connects the server to SQLite and the existing
-deterministic in-process provider adapter in end-to-end localhost tests. There
-is no worker executable or worker service in Docker Compose yet, and no test
-launches a real provider CLI.
+client. A journal-backed service connects the server to SQLite and a
+deterministic provider adapter. A standalone simulated Codex worker now runs
+that stack as a Compose service. It does not launch a real provider CLI yet,
+and the coordinator runtime is not connected to it yet.
 
 ## Session and attempt identity
 
@@ -30,9 +30,12 @@ Authorization: Bearer WORKER_TOKEN
 ```
 
 The server stores only a SHA-256 digest of its configured token and compares
-token digests in constant time. Token generation and delivery to future worker
-containers are not implemented in this slice. The coordinator client must keep
-the token in memory while it is needed to authenticate requests.
+token digests in constant time. The standalone worker reads the token from
+`COMMITARIUM_WORKER_TOKEN`; Compose supplies it from
+`COMMITARIUM_SIMULATED_WORKER_TOKEN`, with a development-only default. This is
+an internal HTTP credential, not a provider account credential. Production
+token generation and delivery are not implemented yet. The coordinator client
+must keep the token in memory while it is needed to authenticate requests.
 
 Responses use `Cache-Control: no-store` so provider session and attempt data
 are not cached.
@@ -282,10 +285,24 @@ The same fence is applied when a provider process appears to start but does not
 return the expected resumable provider session ID; the worker cannot safely
 assume that such a process is absent merely because its identity is unusable.
 
-This remains an in-process integration foundation. There is no standalone
-worker binary, Compose wiring, operating-system process supervision, real Codex
-or Claude Code integration, credential access, or project-secret delivery.
-Accordingly the service does not advertise force-stop in its integration
-configuration: true forced termination will require a real process handle and
-must not be simulated as a cooperative stop. The coordinator client and event
-pump are also not yet wired into runtime orchestration.
+The simulated Codex worker is a standalone Go executable and Compose service.
+It serves the authenticated API on port 8081 inside the Compose network and
+stores `worker.db` in the private `simulated-codex-worker-journal` volume. Its
+role scripts repeat deterministically, so separate logical sessions do not
+consume a finite test queue. The normal Compose configuration deliberately
+does not publish port 8081 to the host.
+
+On process startup, the journal-backed service performs recovery before the
+HTTP server begins listening. Therefore a recreated container exposes leftover
+active work only after it has been marked indeterminate. The repeatable
+`scripts/test-compose-worker-restart.sh` check temporarily publishes a random
+localhost port, interrupts an active attempt, recreates the container twice,
+and verifies that the same provider session identity remains fenced against a
+replacement.
+
+There is still no operating-system provider-process supervision, real Codex or
+Claude Code integration, credential access, or project-secret delivery.
+Accordingly the standalone service does not advertise force-stop: true forced
+termination will require a real process handle and must not be simulated as a
+cooperative stop. The coordinator client and event pump are also not yet wired
+into runtime orchestration.
