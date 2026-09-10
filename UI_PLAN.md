@@ -254,12 +254,16 @@ Compose stack — so the stack lifecycle must come before anything that talks to
 the coordinator. Building lifecycle first means every later slice can bring up
 the stack it needs instead of relying on a manually started one.
 
-1. **Slice 1 — Boot the system.** Tauri shell + privileged-command boundary +
-   Docker/Compose detect, health, start, stop, update. Depends only on host
-   Docker; touches no coordinator contract. (Detail below.)
-2. **Slice 2 — See your projects.** HTTP client to the coordinator over
-   loopback; project list / create / retrieve against the settled endpoints.
-   Stands on the now-runnable stack from Slice 1.
+1. **Slice 1 — Boot the system.** ✅ Built. Tauri shell + privileged-command
+   boundary + Docker/Compose detect, health, start, stop, update. Depends only
+   on host Docker; touches no coordinator contract. (Detail below.)
+2. **Slice 2 — See your projects.** ✅ Built. Frontend HTTP client reaching the
+   coordinator over loopback via Tauri's HTTP plugin, capability-scoped to
+   `http://127.0.0.1:8080/*` (the network trust seam); coordinator-reachable
+   health pill; project list / create / open against the settled endpoints.
+   Stands on the now-runnable stack from Slice 1. Note: `dialogue_limits` is
+   treated as optional (older coordinator binaries omit it), and a "rebuild
+   locally-built services" launcher action is a known gap (Update only pulls).
 3. **Slice 3 — Watch the agents.** View-agnostic event store + conversation
    renderer over the settled session-activity and planning-message SSE streams.
    Because the full observe-sequence is Settled, this renders the whole arc —

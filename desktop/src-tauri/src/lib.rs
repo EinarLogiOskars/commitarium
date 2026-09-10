@@ -5,6 +5,10 @@ mod store;
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        // HTTP client for the frontend to reach the local coordinator. The
+        // capability scope (see capabilities/default.json) restricts it to the
+        // coordinator's loopback origin — the network trust seam.
+        .plugin(tauri_plugin_http::init())
         // The renderer can invoke ONLY the commands listed here. This explicit
         // set is the trust boundary: no arbitrary shell, Docker, or filesystem
         // access reaches the untrusted UI.
