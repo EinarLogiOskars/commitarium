@@ -135,6 +135,183 @@ func TestClientReadsRotatedTokenWithoutRestart(t *testing.T) {
 	}
 }
 
+func TestClientCreatesPrivateImportRepository(t *testing.T) {
+	spec := project.RepositoryImportSpec{
+		ImportID: "desktop-1", Repository: "commitarium-aabbcc",
+		DefaultBranch: "main", BundleDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+	}
+	calls := 0
+	client := newBranchTestClient(t, func(request *http.Request) (*http.Response, error) {
+		calls++
+		switch calls {
+		case 1:
+			if request.Method != http.MethodGet || request.URL.Path != "/api/v1/user" {
+				t.Fatalf("unexpected user request %s %s", request.Method, request.URL)
+			}
+			return jsonResponse(http.StatusOK, `{"login":"coordinator"}`), nil
+		case 2:
+			if request.Method != http.MethodGet || request.URL.Path != "/api/v1/repos/coordinator/commitarium-aabbcc" {
+				t.Fatalf("unexpected repository lookup %s %s", request.Method, request.URL)
+			}
+			return jsonResponse(http.StatusNotFound, `{}`), nil
+		case 3:
+			if request.Method != http.MethodPost || request.URL.Path != "/api/v1/user/repos" {
+				t.Fatalf("unexpected repository creation %s %s", request.Method, request.URL)
+			}
+			var payload struct {
+				Name          string `json:"name"`
+				Description   string `json:"description"`
+				Private       bool   `json:"private"`
+				AutoInit      bool   `json:"auto_init"`
+				DefaultBranch string `json:"default_branch"`
+			}
+			if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+				t.Fatalf("decode repository creation: %v", err)
+			}
+			if payload.Name != spec.Repository || !payload.Private || payload.AutoInit ||
+				payload.DefaultBranch != "main" || payload.Description != importRepositoryDescription(spec) {
+				t.Fatalf("unexpected creation payload %+v", payload)
+			}
+			return jsonResponse(http.StatusCreated, `{
+				"name":"commitarium-aabbcc","description":"`+payload.Description+`",
+				"default_branch":"main","private":true,"empty":true,
+				"owner":{"login":"coordinator"}
+			}`), nil
+		default:
+			t.Fatalf("unexpected request %d", calls)
+			return nil, nil
+		}
+	})
+
+	repository, err := client.EnsureImportRepository(t.Context(), spec)
+	if err != nil {
+		t.Fatalf("ensure import repository: %v", err)
+	}
+	if repository.Owner != "coordinator" || repository.Name != spec.Repository ||
+		repository.DefaultBranch != "main" || calls != 3 {
+		t.Fatalf("unexpected repository %+v calls=%d", repository, calls)
+	}
+}
+
+func TestClientAdoptsMatchingRepositoryFromInterruptedImport(t *testing.T) {
+	spec := project.RepositoryImportSpec{
+		ImportID: "desktop-1", Repository: "commitarium-aabbcc", DefaultBranch: "main",
+		BundleDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+	}
+	calls := 0
+	client := newBranchTestClient(t, func(request *http.Request) (*http.Response, error) {
+		calls++
+		if request.URL.Path == "/api/v1/user" {
+			return jsonResponse(http.StatusOK, `{"login":"coordinator"}`), nil
+		}
+		if request.Method != http.MethodGet {
+			t.Fatalf("interrupted import should not create another repository: %s", request.Method)
+		}
+		return jsonResponse(http.StatusOK, `{
+			"name":"commitarium-aabbcc","description":"`+importRepositoryDescription(spec)+`",
+			"default_branch":"main","private":true,"empty":true,
+			"owner":{"login":"coordinator"}
+		}`), nil
+	})
+	repository, err := client.EnsureImportRepository(t.Context(), spec)
+	if err != nil {
+		t.Fatalf("adopt interrupted import: %v", err)
+	}
+	if repository.Owner != "coordinator" || calls != 2 {
+		t.Fatalf("unexpected repository %+v calls=%d", repository, calls)
+	}
+}
+
+func TestClientUsesConfiguredImportOwnerWithoutUserScope(t *testing.T) {
+	spec := project.RepositoryImportSpec{
+		ImportID: "desktop-1", Repository: "commitarium-aabbcc", DefaultBranch: "main",
+		BundleDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+	}
+	client, err := NewClient(ClientConfig{
+		BaseURL: "http://forgejo:3000", Owner: "configured-owner",
+		TokenFile: writeTestToken(t, "repository-only-token"), RequestTimeout: time.Second,
+		HTTPClient: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+			if request.URL.Path != "/api/v1/repos/configured-owner/commitarium-aabbcc" {
+				t.Fatalf("unexpected request requiring broader scope: %s", request.URL.Path)
+			}
+			return jsonResponse(http.StatusOK, `{
+				"name":"commitarium-aabbcc","description":"`+importRepositoryDescription(spec)+`",
+				"default_branch":"main","private":true,"empty":true,
+				"owner":{"login":"configured-owner"}
+			}`), nil
+		})},
+	})
+	if err != nil {
+		t.Fatalf("create client: %v", err)
+	}
+	if _, err := client.VerifyImportRepository(t.Context(), spec); err != nil {
+		t.Fatalf("verify with configured owner: %v", err)
+	}
+}
+
+func TestClientRejectsImportRepositoryWithDifferentMarker(t *testing.T) {
+	client := newBranchTestClient(t, func(request *http.Request) (*http.Response, error) {
+		if request.URL.Path == "/api/v1/user" {
+			return jsonResponse(http.StatusOK, `{"login":"coordinator"}`), nil
+		}
+		return jsonResponse(http.StatusOK, `{
+			"name":"commitarium-aabbcc","description":"belongs to something else",
+			"default_branch":"main","private":true,"empty":false,
+			"owner":{"login":"coordinator"}
+		}`), nil
+	})
+	_, err := client.VerifyImportRepository(t.Context(), project.RepositoryImportSpec{
+		ImportID: "desktop-1", Repository: "commitarium-aabbcc", DefaultBranch: "main",
+		BundleDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+	})
+	if !errors.Is(err, project.ErrImportConflict) {
+		t.Fatalf("expected %v, got %v", project.ErrImportConflict, err)
+	}
+}
+
+func TestClientFinalizesAndVerifiesImportedDefaultBranch(t *testing.T) {
+	spec := project.RepositoryImportSpec{
+		ImportID: "desktop-1", Repository: "commitarium-aabbcc", DefaultBranch: "main",
+		BundleDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+	}
+	calls := 0
+	client := newBranchTestClient(t, func(request *http.Request) (*http.Response, error) {
+		calls++
+		switch calls {
+		case 1:
+			if request.Method != http.MethodGet || request.URL.Path != "/api/v1/user" {
+				t.Fatalf("unexpected user request %s %s", request.Method, request.URL)
+			}
+			return jsonResponse(http.StatusOK, `{"login":"coordinator"}`), nil
+		case 2:
+			if request.Method != http.MethodPatch || request.URL.Path != "/api/v1/repos/coordinator/commitarium-aabbcc" {
+				t.Fatalf("unexpected default branch update %s %s", request.Method, request.URL)
+			}
+			var payload struct {
+				DefaultBranch string `json:"default_branch"`
+			}
+			if err := json.NewDecoder(request.Body).Decode(&payload); err != nil || payload.DefaultBranch != "main" {
+				t.Fatalf("unexpected default branch payload %+v err=%v", payload, err)
+			}
+			return jsonResponse(http.StatusOK, `{
+				"name":"commitarium-aabbcc","description":"`+importRepositoryDescription(spec)+`",
+				"default_branch":"main","private":true,"empty":true,
+				"owner":{"login":"coordinator"}
+			}`), nil
+		default:
+			t.Fatalf("unexpected request %d", calls)
+			return nil, nil
+		}
+	})
+	repository, err := client.FinalizeImportRepository(t.Context(), spec)
+	if err != nil {
+		t.Fatalf("finalize import: %v", err)
+	}
+	if repository.Owner != "coordinator" || repository.DefaultBranch != "main" || calls != 2 {
+		t.Fatalf("unexpected repository %+v calls=%d", repository, calls)
+	}
+}
+
 func TestClientGetsBranch(t *testing.T) {
 	client := newBranchTestClient(t, func(request *http.Request) (*http.Response, error) {
 		if request.Method != http.MethodGet ||

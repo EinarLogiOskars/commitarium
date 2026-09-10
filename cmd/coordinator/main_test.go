@@ -19,6 +19,7 @@ func TestLoadConfigDefaultsToSimulatedRunner(t *testing.T) {
 		loaded.simulatedStepDelay != 250*time.Millisecond ||
 		loaded.workerRequestTimeout != defaultWorkerRequestTimeout ||
 		loaded.forgejoURL != defaultForgejoURL ||
+		loaded.forgejoOwner != "commitarium_admin" ||
 		loaded.forgejoHostURL != defaultForgejoHostURL ||
 		loaded.forgejoTokenFile != defaultForgejoTokenFile ||
 		loaded.forgejoTimeout != defaultForgejoTimeout ||
@@ -31,6 +32,7 @@ func TestLoadConfigAcceptsForgejoOverrides(t *testing.T) {
 	values := map[string]string{
 		"COMMITARIUM_DATABASE_PATH":           "/state/coordinator.db",
 		"COMMITARIUM_FORGEJO_URL":             "http://forgejo-test:4000/",
+		"COMMITARIUM_FORGEJO_OWNER":           "coordinator-test",
 		"COMMITARIUM_FORGEJO_TOKEN_FILE":      "/private/forgejo-token",
 		"COMMITARIUM_FORGEJO_REQUEST_TIMEOUT": "3s",
 		"COMMITARIUM_FORGEJO_HOST_URL":        "http://localhost:4001",
@@ -42,6 +44,7 @@ func TestLoadConfigAcceptsForgejoOverrides(t *testing.T) {
 		t.Fatalf("load Forgejo config: %v", err)
 	}
 	if loaded.forgejoURL != "http://forgejo-test:4000/" ||
+		loaded.forgejoOwner != "coordinator-test" ||
 		loaded.forgejoHostURL != "http://localhost:4001" ||
 		loaded.forgejoTokenFile != "/private/forgejo-token" ||
 		loaded.forgejoTimeout != 3*time.Second ||

@@ -10,6 +10,7 @@ this API beyond the host loopback interface is unsupported.
 | --- | --- | --- |
 | `GET` | `/health` | Process health |
 | `POST` | `/api/v1/projects` | Create a project |
+| `PUT` | `/api/v1/project-imports/{importID}` | Import committed Git history into a new private Forgejo-backed project |
 | `GET` | `/api/v1/projects` | List projects for switching/selecting |
 | `GET` | `/api/v1/projects/{projectID}` | Retrieve a project |
 | `PUT` | `/api/v1/projects/{projectID}/dialogue-limits` | Replace planning and implementation-review round limits |
@@ -101,6 +102,67 @@ after a coordinator restart.
 ID. It returns `[]` when none exist. This is the discovery endpoint an eventual
 project switcher will use.
 
+### Importing an existing local repository
+
+The trusted desktop host can open an existing local Git repository without
+exposing its filesystem path to the coordinator or agent containers. It must
+first require a clean working tree, determine the default branch, and create a
+Git bundle containing the committed branches and tags. It then uploads that
+bundle with portable project settings:
+
+```http
+PUT /api/v1/project-imports/open-commitarium-20260910
+Content-Type: multipart/form-data; boundary=...
+
+metadata = {
+  "name": "Commitarium",
+  "default_branch": "main",
+  "recovery_policy": "approval_required",
+  "dialogue_limits": {
+    "planning_rounds": 6,
+    "implementation_review_rounds": 6
+  }
+}
+bundle = <Git bundle file>
+```
+
+The request must contain exactly one text field named `metadata` and one file
+field named `bundle`. `recovery_policy` and `dialogue_limits` have the same
+defaults and validation as ordinary project creation. `default_branch` is
+required and must exist in the bundle. The entire multipart request is limited
+to 512 MiB.
+
+On the first successful request, the coordinator creates a private repository
+owned by its Forgejo service account, imports only the bundle's committed branch
+and tag references, sets the requested default branch, and inserts an already-
+bound project. It returns `201 Created`, a project `Location`, and the same
+complete project representation used by the project detail/list routes. The
+source directory is not stored in SQLite, sent to Forgejo, or made visible to an
+agent. The desktop application should retain that path in trusted local app
+state for later local synchronization.
+
+`importID` identifies one import operation. The desktop must reuse the same ID,
+metadata, and exact bundle bytes when retrying an interrupted request. A
+completed exact retry verifies the marked private Forgejo repository and returns
+`200 OK` without pushing the bundle again, so later agent commits cannot be
+overwritten. If a crash occurred after creating or populating Forgejo but before
+the project was inserted, the retry safely finishes that same import. Reusing an
+ID with changed metadata or bundle bytes, or colliding with a differently owned
+repository, returns `409 project_import_conflict`.
+
+Malformed metadata, an unsafe ID or branch, and a bundle without the requested
+default branch return `400`. Forgejo or credential unavailability returns `503`.
+Because a Git bundle contains committed objects rather than working-tree state,
+the coordinator cannot detect uncommitted local files; the trusted desktop host
+must perform that check before it creates the bundle.
+
+Repository creation uses the configured `COMMITARIUM_FORGEJO_OWNER` account
+(default `commitarium_admin`) and the coordinator's existing file-backed token.
+The configured owner must be the token user. Forgejo requires that token to have
+`write:user` for creation of a repository owned by the signed-in user, in
+addition to Commitarium's existing `write:repository` and `read:issue` scopes.
+The explicit owner setting avoids a separate user-profile lookup.
+
 A project may be permanently associated with one existing internal Forgejo
 repository:
 
@@ -140,8 +202,10 @@ Repeating the request for the same owner and repository, including different
 letter casing, returns the original binding without another Forgejo call.
 Attempting to bind a different repository returns `409 Conflict`. A missing
 repository returns `404`; an empty or archived repository returns `409`; and an
-unavailable Forgejo service or credential returns `503`. This operation does
-not create repositories, branches, workspaces, or pull requests.
+unavailable Forgejo service or credential returns `503`. This manual binding
+operation does not create repositories, branches, workspaces, or pull requests.
+Use the project-import operation when starting from an existing local Git
+repository.
 
 ## Browsing features and run history
 

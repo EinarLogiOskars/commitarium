@@ -14,6 +14,7 @@ import (
 	"github.com/EinarLogiOskars/commitarium/internal/execution"
 	"github.com/EinarLogiOskars/commitarium/internal/feature"
 	"github.com/EinarLogiOskars/commitarium/internal/forgejo"
+	"github.com/EinarLogiOskars/commitarium/internal/gitimport"
 	"github.com/EinarLogiOskars/commitarium/internal/gitworkspace"
 	"github.com/EinarLogiOskars/commitarium/internal/httpapi"
 	"github.com/EinarLogiOskars/commitarium/internal/orchestration"
@@ -50,6 +51,7 @@ type config struct {
 	codexReviewerForgejoAuthor  string
 	workerRequestTimeout        time.Duration
 	forgejoURL                  string
+	forgejoOwner                string
 	forgejoHostURL              string
 	forgejoTokenFile            string
 	forgejoTimeout              time.Duration
@@ -92,6 +94,7 @@ func loadConfig(getenv func(string) string) (config, error) {
 		simulatedStepDelay:         simulatedStepDelay,
 		workerRequestTimeout:       defaultWorkerRequestTimeout,
 		forgejoURL:                 defaultForgejoURL,
+		forgejoOwner:               "commitarium_admin",
 		forgejoHostURL:             defaultForgejoHostURL,
 		forgejoTokenFile:           defaultForgejoTokenFile,
 		forgejoTimeout:             defaultForgejoTimeout,
@@ -102,6 +105,9 @@ func loadConfig(getenv func(string) string) (config, error) {
 	}
 	if value := strings.TrimSpace(getenv("COMMITARIUM_FORGEJO_URL")); value != "" {
 		loaded.forgejoURL = value
+	}
+	if value := strings.TrimSpace(getenv("COMMITARIUM_FORGEJO_OWNER")); value != "" {
+		loaded.forgejoOwner = value
 	}
 	if value := strings.TrimSpace(getenv("COMMITARIUM_FORGEJO_HOST_URL")); value != "" {
 		loaded.forgejoHostURL = value
@@ -185,13 +191,25 @@ func run(ctx context.Context, coordinatorConfig config) error {
 
 	projectStore := coordinatordatabase.NewProjectStore(db)
 	forgejoClient, err := forgejo.NewClient(forgejo.ClientConfig{
-		BaseURL: coordinatorConfig.forgejoURL, TokenFile: coordinatorConfig.forgejoTokenFile,
+		BaseURL: coordinatorConfig.forgejoURL, Owner: coordinatorConfig.forgejoOwner,
+		TokenFile:      coordinatorConfig.forgejoTokenFile,
 		RequestTimeout: coordinatorConfig.forgejoTimeout,
 	})
 	if err != nil {
 		return fmt.Errorf("create Forgejo client: %w", err)
 	}
-	projectService := project.NewServiceWithRepositoryVerifier(projectStore, forgejoClient)
+	projectImporter, err := gitimport.NewManager(gitimport.Config{
+		InternalBaseURL: coordinatorConfig.forgejoURL,
+		TokenFile:       coordinatorConfig.forgejoTokenFile,
+		GitExecutable:   coordinatorConfig.gitExecutable,
+		Provisioner:     forgejoClient,
+	})
+	if err != nil {
+		return fmt.Errorf("create project import service: %w", err)
+	}
+	projectService := project.NewServiceWithRepositoryVerifierAndImporter(
+		projectStore, forgejoClient, projectImporter,
+	)
 	featureStore := coordinatordatabase.NewFeatureStore(db)
 	featureService := feature.NewService(featureStore, projectService)
 	workspaceStore := coordinatordatabase.NewWorkspaceStore(db)

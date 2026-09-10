@@ -63,6 +63,12 @@ lead/reviewer provider selection and the user interface remain to be built.
 Projects and their features can be listed for switching, active-work views, and
 completed history. Opening a feature exposes its run and session history.
 Projects can also be permanently associated with one verified Forgejo repository.
+An existing clean local Git repository can now be opened through the backend's
+restart-safe project-import endpoint: the trusted desktop host uploads a Git
+bundle of committed branches and tags, and the coordinator creates a private
+Forgejo repository plus an already-bound project. Host paths and uncommitted
+files never cross into the coordinator; the desktop keeps the local path for
+the later explicit “sync local” workflow.
 
 ## Architecture
 
@@ -139,12 +145,16 @@ only to that child process. It is not placed in Compose environment variables,
 Git configuration, SQLite, API responses, or logs.
 
 Create a token for the local Forgejo user through **User settings → Applications**
-at `http://127.0.0.1:3001`, give it `write:repository` and `read:issue` scope,
-and save only the token value in that file. Repository write access is needed
-for branch and pull-request preparation; issue read access lets the coordinator
-confirm agent-authored PR comments without writing them. The directory and file
-should be readable only by the current host user.
+at `http://127.0.0.1:3001`, give it `write:user`, `write:repository`, and
+`read:issue` scope, and save only the token value in that file. Forgejo places
+creation of a repository owned by the signed-in user under `write:user`;
+repository write access is needed for branch and pull-request preparation, and
+issue read access lets the coordinator confirm agent-authored PR comments
+without writing them. The directory and file should be readable only by the
+current host user.
 `COMMITARIUM_FORGEJO_TOKEN_SOURCE` can select another private source file.
+`COMMITARIUM_FORGEJO_OWNER` identifies that token user's Forgejo login and
+defaults to `commitarium_admin`; set both together when using another account.
 Recreate the coordinator after replacing that file so Docker mounts the new
 file inode.
 
@@ -613,8 +623,10 @@ CLI version, run as a non-root user, mount the managed workspace root, and keep
 separate persistent provider and journal volumes. The earlier Codex standalone
 smoke path still mounts its selected repository read-only. It does not
 require a manifest, configuration revision, or materialization digest. Automatic
-provider-credential provisioning and Forgejo repository import remain separate
-future slices. Coordinator wiring currently covers goal clarification, explicit
+provider-credential provisioning remains a separate future slice. Existing
+repositories can be imported through the coordinator using a trusted-host-
+produced Git bundle; ongoing local synchronization remains separate.
+Coordinator wiring currently covers goal clarification, explicit
 goal acceptance, verified project/repository preparation, and a bounded
 read-only lead/reviewer planning discussion through an explicit decision.
 

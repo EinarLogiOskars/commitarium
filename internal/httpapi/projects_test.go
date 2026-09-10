@@ -1,10 +1,12 @@
 package httpapi
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -13,6 +15,26 @@ import (
 
 	"github.com/EinarLogiOskars/commitarium/internal/project"
 )
+
+type recordingProjectImporterService struct {
+	recordingProjectService
+	importSpec    project.ImportSpec
+	importBundle  string
+	importResult  project.Project
+	importCreated bool
+	importErr     error
+}
+
+func (service *recordingProjectImporterService) Import(
+	_ context.Context,
+	spec project.ImportSpec,
+	bundle io.Reader,
+) (project.Project, bool, error) {
+	service.importSpec = spec
+	contents, _ := io.ReadAll(bundle)
+	service.importBundle = string(contents)
+	return service.importResult, service.importCreated, service.importErr
+}
 
 type recordingProjectService struct {
 	calls                  int
@@ -93,6 +115,120 @@ func (s *recordingProjectService) BindForgejoRepository(
 	s.bindOwner = owner
 	s.bindName = name
 	return s.bindResult, s.bindErr
+}
+
+func projectImportRequest(t *testing.T, importID, metadata, bundle string) *http.Request {
+	t.Helper()
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	if err := writer.WriteField("metadata", metadata); err != nil {
+		t.Fatalf("write metadata: %v", err)
+	}
+	part, err := writer.CreateFormFile("bundle", "project.bundle")
+	if err != nil {
+		t.Fatalf("create bundle part: %v", err)
+	}
+	if _, err := io.WriteString(part, bundle); err != nil {
+		t.Fatalf("write bundle: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close multipart request: %v", err)
+	}
+	request := httptest.NewRequest(http.MethodPut, "/api/v1/project-imports/"+importID, &body)
+	request.Header.Set("Content-Type", writer.FormDataContentType())
+	return request
+}
+
+func TestImportProject(t *testing.T) {
+	fixedTime := time.Date(2026, time.September, 10, 12, 0, 0, 0, time.UTC)
+	service := &recordingProjectImporterService{
+		importResult: project.Project{
+			ID: "prj_imported", Name: "Commitarium",
+			RecoveryPolicy: project.RecoveryPolicyApprovalRequired,
+			DialogueLimits: project.DefaultDialogueLimits(),
+			ForgejoRepository: &project.ForgejoRepository{
+				Owner: "commitarium", Name: "commitarium-aabbcc", DefaultBranch: "main", BoundAt: fixedTime,
+			},
+			CreatedAt: fixedTime,
+		},
+		importCreated: true,
+	}
+	recorder := httptest.NewRecorder()
+	New(service, nil, nil, nil, nil, nil).ServeHTTP(recorder, projectImportRequest(
+		t, "desktop-1", `{"name":"Commitarium","default_branch":"main"}`, "git bundle bytes",
+	))
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusCreated, recorder.Code, recorder.Body.String())
+	}
+	if recorder.Header().Get("Location") != "/api/v1/projects/prj_imported" {
+		t.Fatalf("unexpected Location %q", recorder.Header().Get("Location"))
+	}
+	if service.importSpec.ImportID != "desktop-1" || service.importSpec.Name != "Commitarium" ||
+		service.importSpec.DefaultBranch != "main" || service.importSpec.DialogueLimits != project.DefaultDialogueLimits() ||
+		service.importBundle != "git bundle bytes" {
+		t.Fatalf("unexpected import request spec=%+v bundle=%q", service.importSpec, service.importBundle)
+	}
+	var response projectResponse
+	if err := json.NewDecoder(recorder.Body).Decode(&response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if response.ForgejoRepository == nil || response.ForgejoRepository.Owner != "commitarium" {
+		t.Fatalf("unexpected response %+v", response)
+	}
+}
+
+func TestImportProjectReturnsOKForExactRetry(t *testing.T) {
+	service := &recordingProjectImporterService{
+		importResult: project.Project{ID: "prj_imported", DialogueLimits: project.DefaultDialogueLimits()},
+	}
+	recorder := httptest.NewRecorder()
+	New(service, nil, nil, nil, nil, nil).ServeHTTP(recorder, projectImportRequest(
+		t, "desktop-1", `{"name":"Commitarium","default_branch":"main"}`, "git bundle bytes",
+	))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusOK, recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestImportProjectRejectsUnknownMetadataField(t *testing.T) {
+	service := &recordingProjectImporterService{}
+	recorder := httptest.NewRecorder()
+	New(service, nil, nil, nil, nil, nil).ServeHTTP(recorder, projectImportRequest(
+		t, "desktop-1", `{"name":"Commitarium","default_branch":"main","source_path":"/secret"}`, "bundle",
+	))
+	if recorder.Code != http.StatusBadRequest || service.importSpec.ImportID != "" {
+		t.Fatalf("unexpected response status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestImportProjectMapsExpectedErrors(t *testing.T) {
+	tests := []struct {
+		err    error
+		status int
+		code   string
+	}{
+		{project.ErrInvalidImportID, http.StatusBadRequest, "invalid_project_import_id"},
+		{project.ErrInvalidDefaultBranch, http.StatusBadRequest, "invalid_default_branch"},
+		{project.ErrInvalidGitBundle, http.StatusBadRequest, "invalid_git_bundle"},
+		{project.ErrImportConflict, http.StatusConflict, "project_import_conflict"},
+		{project.ErrImportUnavailable, http.StatusServiceUnavailable, "project_import_unavailable"},
+	}
+	for _, test := range tests {
+		t.Run(test.code, func(t *testing.T) {
+			service := &recordingProjectImporterService{importErr: test.err}
+			recorder := httptest.NewRecorder()
+			New(service, nil, nil, nil, nil, nil).ServeHTTP(recorder, projectImportRequest(
+				t, "desktop-1", `{"name":"Commitarium","default_branch":"main"}`, "bundle",
+			))
+			if recorder.Code != test.status {
+				t.Fatalf("expected status %d, got %d: %s", test.status, recorder.Code, recorder.Body.String())
+			}
+			var response testErrorResponse
+			if err := json.NewDecoder(recorder.Body).Decode(&response); err != nil || response.Error.Code != test.code {
+				t.Fatalf("unexpected error response %+v err=%v", response, err)
+			}
+		})
+	}
 }
 
 func TestCreateProject(t *testing.T) {
