@@ -45,6 +45,10 @@ Safe UI capabilities:
 - Create a project with `POST /api/v1/projects`.
 - Build a project switcher with `GET /api/v1/projects`.
 - Retrieve one project with `GET /api/v1/projects/{projectID}`.
+- Import an existing local Git repository with
+  `PUT /api/v1/project-imports/{importID}` after the trusted desktop host checks
+  that it is clean and produces a Git bundle. The response is the normal,
+  already-Forgejo-bound project representation and can be opened immediately.
 - Display the effective recovery policy returned on a project.
 - Display and edit the project's planning and implementation-review round
   limits through `PUT /api/v1/projects/{projectID}/dialogue-limits`.
@@ -54,6 +58,14 @@ Safe UI capabilities:
 
 The UI must not expect project deletion, general project editing, or changing a
 bound Forgejo repository. Those operations are not implemented.
+
+For “Open existing project,” the desktop/native layer—not browser JavaScript—
+owns the folder picker, clean-worktree check, default-branch discovery, Git
+bundle creation, and trusted local mapping from the returned project ID back to
+the source path. Send only the portable metadata and bundle documented in the
+Coordinator API. Keep one generated `importID` for exact retries; generate a new
+one for a genuinely new import. The coordinator never accepts or returns the
+host path and never imports uncommitted files.
 
 Project creation may omit `dialogue_limits` to receive the six-round defaults.
 If supplied, the object contains both `planning_rounds` and

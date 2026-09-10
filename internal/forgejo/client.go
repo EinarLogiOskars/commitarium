@@ -3,6 +3,8 @@ package forgejo
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -23,6 +25,7 @@ var ErrInvalidClientConfig = errors.New("invalid Forgejo client configuration")
 
 type ClientConfig struct {
 	BaseURL        string
+	Owner          string
 	TokenFile      string
 	RequestTimeout time.Duration
 	HTTPClient     *http.Client
@@ -30,6 +33,7 @@ type ClientConfig struct {
 
 type Client struct {
 	baseURL        string
+	owner          string
 	tokenFile      string
 	requestTimeout time.Duration
 	httpClient     *http.Client
@@ -49,6 +53,10 @@ func NewClient(config ClientConfig) (*Client, error) {
 	if config.RequestTimeout <= 0 {
 		return nil, fmt.Errorf("%w: request timeout must be positive", ErrInvalidClientConfig)
 	}
+	owner := strings.TrimSpace(config.Owner)
+	if owner != "" && strings.ContainsAny(owner, "/\\") {
+		return nil, fmt.Errorf("%w: owner must be a single path segment", ErrInvalidClientConfig)
+	}
 	httpClient := config.HTTPClient
 	if httpClient == nil {
 		httpClient = &http.Client{}
@@ -58,7 +66,7 @@ func NewClient(config ClientConfig) (*Client, error) {
 		return http.ErrUseLastResponse
 	}
 	return &Client{
-		baseURL: baseURL, tokenFile: tokenFile,
+		baseURL: baseURL, owner: owner, tokenFile: tokenFile,
 		requestTimeout: config.RequestTimeout, httpClient: &clientCopy,
 	}, nil
 }
@@ -120,6 +128,217 @@ func (client *Client) VerifyRepository(
 	// BoundAt belongs to the coordinator command, not the remote lookup, so it
 	// is assigned by project.Service immediately before persistence.
 	return repository, nil
+}
+
+func (client *Client) EnsureImportRepository(
+	ctx context.Context,
+	spec project.RepositoryImportSpec,
+) (project.ForgejoRepository, error) {
+	owner, err := client.importRepositoryOwner(ctx)
+	if err != nil {
+		return project.ForgejoRepository{}, err
+	}
+	stored, found, err := client.getImportRepository(ctx, owner, spec.Repository)
+	if err != nil {
+		return project.ForgejoRepository{}, err
+	}
+	if found {
+		return validateImportRepository(stored, owner, spec, true)
+	}
+	payload := struct {
+		Name          string `json:"name"`
+		Description   string `json:"description"`
+		Private       bool   `json:"private"`
+		AutoInit      bool   `json:"auto_init"`
+		DefaultBranch string `json:"default_branch"`
+	}{
+		Name: spec.Repository, Description: importRepositoryDescription(spec),
+		Private: true, AutoInit: false, DefaultBranch: spec.DefaultBranch,
+	}
+	status, body, err := client.doJSON(ctx, http.MethodPost, "/api/v1/user/repos", payload)
+	if err != nil {
+		return project.ForgejoRepository{}, err
+	}
+	switch status {
+	case http.StatusCreated:
+		stored, err = decodeImportRepository(body)
+		if err != nil {
+			return project.ForgejoRepository{}, err
+		}
+		return validateImportRepository(stored, owner, spec, true)
+	case http.StatusConflict, http.StatusUnprocessableEntity:
+		stored, found, err = client.getImportRepository(ctx, owner, spec.Repository)
+		if err != nil {
+			return project.ForgejoRepository{}, err
+		}
+		if !found {
+			return project.ForgejoRepository{}, project.ErrImportConflict
+		}
+		return validateImportRepository(stored, owner, spec, true)
+	default:
+		return project.ForgejoRepository{}, fmt.Errorf(
+			"%w: repository creation returned HTTP %d", project.ErrForgejoUnavailable, status,
+		)
+	}
+}
+
+func (client *Client) FinalizeImportRepository(
+	ctx context.Context,
+	spec project.RepositoryImportSpec,
+) (project.ForgejoRepository, error) {
+	owner, err := client.importRepositoryOwner(ctx)
+	if err != nil {
+		return project.ForgejoRepository{}, err
+	}
+	status, body, err := client.doJSON(
+		ctx, http.MethodPatch,
+		"/api/v1/repos/"+url.PathEscape(owner)+"/"+url.PathEscape(spec.Repository),
+		struct {
+			DefaultBranch string `json:"default_branch"`
+		}{DefaultBranch: spec.DefaultBranch},
+	)
+	if err != nil {
+		return project.ForgejoRepository{}, err
+	}
+	if status != http.StatusOK {
+		return project.ForgejoRepository{}, fmt.Errorf(
+			"%w: default branch update returned HTTP %d", project.ErrForgejoUnavailable, status,
+		)
+	}
+	// Forgejo returns the updated repository. Validate that mutation response
+	// directly instead of immediately issuing a read that can briefly lag the
+	// just-completed Git push.
+	stored, err := decodeImportRepository(body)
+	if err != nil {
+		return project.ForgejoRepository{}, err
+	}
+	return validateImportRepository(stored, owner, spec, false)
+}
+
+func (client *Client) VerifyImportRepository(
+	ctx context.Context,
+	spec project.RepositoryImportSpec,
+) (project.ForgejoRepository, error) {
+	owner, err := client.importRepositoryOwner(ctx)
+	if err != nil {
+		return project.ForgejoRepository{}, err
+	}
+	stored, found, err := client.getImportRepository(ctx, owner, spec.Repository)
+	if err != nil {
+		return project.ForgejoRepository{}, err
+	}
+	if !found {
+		return project.ForgejoRepository{}, project.ErrForgejoRepositoryNotFound
+	}
+	return validateImportRepository(stored, owner, spec, false)
+}
+
+type importRepository struct {
+	Owner         string
+	Name          string
+	Description   string
+	DefaultBranch string
+	Private       bool
+	Empty         bool
+	Archived      bool
+}
+
+func (client *Client) authenticatedUser(ctx context.Context) (string, error) {
+	status, body, err := client.doJSON(ctx, http.MethodGet, "/api/v1/user", nil)
+	if err != nil {
+		return "", err
+	}
+	if status != http.StatusOK {
+		return "", fmt.Errorf("%w: authenticated user request returned HTTP %d", project.ErrForgejoUnavailable, status)
+	}
+	var decoded struct {
+		Login string `json:"login"`
+	}
+	if err := json.Unmarshal(body, &decoded); err != nil || strings.TrimSpace(decoded.Login) == "" {
+		return "", fmt.Errorf("%w: authenticated user response is invalid", project.ErrForgejoUnavailable)
+	}
+	return strings.TrimSpace(decoded.Login), nil
+}
+
+func (client *Client) importRepositoryOwner(ctx context.Context) (string, error) {
+	if client.owner != "" {
+		return client.owner, nil
+	}
+	return client.authenticatedUser(ctx)
+}
+
+func (client *Client) getImportRepository(ctx context.Context, owner, name string) (importRepository, bool, error) {
+	status, body, err := client.doJSON(
+		ctx, http.MethodGet,
+		"/api/v1/repos/"+url.PathEscape(owner)+"/"+url.PathEscape(name), nil,
+	)
+	if err != nil {
+		return importRepository{}, false, err
+	}
+	switch status {
+	case http.StatusOK:
+		stored, err := decodeImportRepository(body)
+		return stored, true, err
+	case http.StatusNotFound:
+		return importRepository{}, false, nil
+	default:
+		return importRepository{}, false, fmt.Errorf(
+			"%w: repository request returned HTTP %d", project.ErrForgejoUnavailable, status,
+		)
+	}
+}
+
+func decodeImportRepository(body []byte) (importRepository, error) {
+	var decoded struct {
+		Name          string `json:"name"`
+		Description   string `json:"description"`
+		DefaultBranch string `json:"default_branch"`
+		Private       bool   `json:"private"`
+		Empty         bool   `json:"empty"`
+		Archived      bool   `json:"archived"`
+		Owner         struct {
+			Login string `json:"login"`
+		} `json:"owner"`
+	}
+	if err := json.Unmarshal(body, &decoded); err != nil {
+		return importRepository{}, fmt.Errorf("%w: repository response is invalid JSON", project.ErrForgejoUnavailable)
+	}
+	return importRepository{
+		Owner: strings.TrimSpace(decoded.Owner.Login), Name: strings.TrimSpace(decoded.Name),
+		Description: decoded.Description, DefaultBranch: strings.TrimSpace(decoded.DefaultBranch),
+		Private: decoded.Private, Empty: decoded.Empty, Archived: decoded.Archived,
+	}, nil
+}
+
+func validateImportRepository(
+	stored importRepository,
+	expectedOwner string,
+	spec project.RepositoryImportSpec,
+	allowIncomplete bool,
+) (project.ForgejoRepository, error) {
+	if !strings.EqualFold(stored.Owner, expectedOwner) ||
+		!strings.EqualFold(stored.Name, spec.Repository) ||
+		stored.Description != importRepositoryDescription(spec) || !stored.Private || stored.Archived {
+		return project.ForgejoRepository{}, project.ErrImportConflict
+	}
+	// Forgejo can briefly report an imported repository as empty after a
+	// successful synchronous Git push. The caller has already validated and
+	// pushed the required branch, so finalization relies on the exact default
+	// branch rather than this eventually consistent metadata bit.
+	if !allowIncomplete && stored.DefaultBranch != spec.DefaultBranch {
+		return project.ForgejoRepository{}, project.ErrImportConflict
+	}
+	if allowIncomplete && stored.DefaultBranch != "" && stored.DefaultBranch != spec.DefaultBranch {
+		return project.ForgejoRepository{}, project.ErrImportConflict
+	}
+	return project.ForgejoRepository{
+		Owner: stored.Owner, Name: stored.Name, DefaultBranch: spec.DefaultBranch,
+	}, nil
+}
+
+func importRepositoryDescription(spec project.RepositoryImportSpec) string {
+	digest := sha256.Sum256([]byte(spec.ImportID))
+	return "Commitarium managed import " + hex.EncodeToString(digest[:12]) + " " + spec.BundleDigest
 }
 
 func (client *Client) GetBranch(

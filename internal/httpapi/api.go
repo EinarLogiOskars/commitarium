@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"io"
 	"net/http"
 
 	"github.com/EinarLogiOskars/commitarium/internal/execution"
@@ -18,6 +19,10 @@ type ProjectService interface {
 	List(ctx context.Context) ([]project.Project, error)
 	UpdateDialogueLimits(ctx context.Context, projectID string, limits project.DialogueLimits) (project.Project, error)
 	BindForgejoRepository(ctx context.Context, projectID, owner, name string) (project.Project, error)
+}
+
+type ProjectImporter interface {
+	Import(ctx context.Context, spec project.ImportSpec, bundle io.Reader) (project.Project, bool, error)
 }
 
 type FeatureService interface {
@@ -120,14 +125,15 @@ type RealWorkflowStarter interface {
 }
 
 type API struct {
-	projects     ProjectService
-	features     FeatureService
-	workflow     WorkflowService
-	execution    ExecutionService
-	controller   SessionController
-	starter      RunStarter
-	workspaces   WorkspaceService
-	realWorkflow RealWorkflowStarter
+	projects        ProjectService
+	projectImporter ProjectImporter
+	features        FeatureService
+	workflow        WorkflowService
+	execution       ExecutionService
+	controller      SessionController
+	starter         RunStarter
+	workspaces      WorkspaceService
+	realWorkflow    RealWorkflowStarter
 }
 
 func New(
@@ -191,6 +197,7 @@ func newAPI(
 		workspaces:   workspaces,
 		realWorkflow: realWorkflow,
 	}
+	api.projectImporter, _ = projects.(ProjectImporter)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", api.healthHandler)
@@ -198,6 +205,12 @@ func newAPI(
 		"POST /api/v1/projects",
 		api.createProjectHandler,
 	)
+	if api.projectImporter != nil {
+		mux.HandleFunc(
+			"PUT /api/v1/project-imports/{importID}",
+			api.importProjectHandler,
+		)
+	}
 	mux.HandleFunc(
 		"GET /api/v1/projects",
 		api.listProjectsHandler,

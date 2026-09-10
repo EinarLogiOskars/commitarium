@@ -5,7 +5,10 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"io"
+	"os"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -14,6 +17,8 @@ var ErrNameRequired = errors.New("project name is required")
 type Service struct {
 	store              Store
 	repositoryVerifier RepositoryVerifier
+	repositoryImporter RepositoryImporter
+	importMu           sync.Mutex
 	generateID         func() string
 	now                func() time.Time
 }
@@ -29,9 +34,28 @@ func NewServiceWithRepositoryVerifier(
 	if verifier == nil {
 		verifier = unavailableRepositoryVerifier{}
 	}
+	return newService(store, verifier, unavailableRepositoryImporter{})
+}
+
+func NewServiceWithRepositoryVerifierAndImporter(
+	store Store,
+	verifier RepositoryVerifier,
+	importer RepositoryImporter,
+) *Service {
+	if importer == nil {
+		importer = unavailableRepositoryImporter{}
+	}
+	return newService(store, verifier, importer)
+}
+
+func newService(store Store, verifier RepositoryVerifier, importer RepositoryImporter) *Service {
+	if verifier == nil {
+		verifier = unavailableRepositoryVerifier{}
+	}
 	return &Service{
 		store:              store,
 		repositoryVerifier: verifier,
+		repositoryImporter: importer,
 		generateID: func() string {
 			return "prj_" + rand.Text()
 		},
@@ -39,6 +63,72 @@ func NewServiceWithRepositoryVerifier(
 			return time.Now().UTC()
 		},
 	}
+}
+
+func (s *Service) Import(ctx context.Context, spec ImportSpec, bundle io.Reader) (Project, bool, error) {
+	normalized, err := normalizeImportSpec(spec)
+	if err != nil {
+		return Project{}, false, err
+	}
+	if bundle == nil {
+		return Project{}, false, ErrInvalidGitBundle
+	}
+	bundlePath, digest, err := writeImportBundle(bundle)
+	if err != nil {
+		return Project{}, false, err
+	}
+	defer os.Remove(bundlePath)
+
+	s.importMu.Lock()
+	defer s.importMu.Unlock()
+	repositorySpec := RepositoryImportSpec{
+		ImportID:      normalized.ImportID,
+		Repository:    importRepositoryName(normalized.Name, normalized.ImportID),
+		DefaultBranch: normalized.DefaultBranch,
+		BundleDigest:  digest,
+	}
+	projectID := projectImportID(normalized.ImportID)
+	stored, err := s.store.GetByID(ctx, projectID)
+	if err == nil {
+		repository, verifyErr := s.repositoryImporter.Verify(ctx, repositorySpec)
+		if verifyErr != nil {
+			return Project{}, false, fmt.Errorf("verify completed project import: %w", verifyErr)
+		}
+		if !sameImportedProject(stored, normalized, repository) {
+			return Project{}, false, ErrImportConflict
+		}
+		return stored, false, nil
+	}
+	if !errors.Is(err, ErrNotFound) {
+		return Project{}, false, fmt.Errorf("find project import: %w", err)
+	}
+	repository, err := s.repositoryImporter.Import(ctx, repositorySpec, bundlePath)
+	if err != nil {
+		return Project{}, false, fmt.Errorf("import Forgejo repository: %w", err)
+	}
+	if !strings.EqualFold(repository.Name, repositorySpec.Repository) ||
+		repository.DefaultBranch != repositorySpec.DefaultBranch {
+		return Project{}, false, ErrImportConflict
+	}
+	repository.BoundAt = s.now().UTC()
+	if err := repository.Validate(); err != nil {
+		return Project{}, false, fmt.Errorf("validate imported repository: %w", ErrImportConflict)
+	}
+	created := Project{
+		ID: projectID, Name: normalized.Name, RecoveryPolicy: normalized.RecoveryPolicy,
+		DialogueLimits: normalized.DialogueLimits, ForgejoRepository: &repository, CreatedAt: s.now().UTC(),
+	}
+	if err := s.store.Create(ctx, created); err != nil {
+		if errors.Is(err, ErrAlreadyExists) {
+			stored, getErr := s.store.GetByID(ctx, projectID)
+			if getErr == nil && sameImportedProject(stored, normalized, repository) {
+				return stored, false, nil
+			}
+			return Project{}, false, ErrImportConflict
+		}
+		return Project{}, false, fmt.Errorf("store imported project: %w", err)
+	}
+	return created, true, nil
 }
 
 type unavailableRepositoryVerifier struct{}
