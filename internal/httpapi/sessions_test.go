@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -11,8 +12,10 @@ import (
 
 	"github.com/EinarLogiOskars/commitarium/internal/execution"
 	"github.com/EinarLogiOskars/commitarium/internal/orchestration"
+	"github.com/EinarLogiOskars/commitarium/internal/project"
 	"github.com/EinarLogiOskars/commitarium/internal/worker"
 	"github.com/EinarLogiOskars/commitarium/internal/workflow"
+	"github.com/EinarLogiOskars/commitarium/internal/workspace"
 )
 
 type recordingExecutionService struct {
@@ -228,6 +231,8 @@ func TestSessionEndpointsMapExpectedErrors(t *testing.T) {
 		{name: "missing command key", method: http.MethodPost, path: "/api/v1/sessions/ses_test/commands", body: `{"type":"pause"}`, status: 400, code: "idempotency_key_required"},
 		{name: "inactive session", method: http.MethodPost, path: "/api/v1/sessions/ses_test/commands", body: `{"type":"pause"}`, key: "cmd", controllerErr: orchestration.ErrSessionNotActive, status: 409, code: "session_not_active"},
 		{name: "invalid state", method: http.MethodPost, path: "/api/v1/sessions/ses_test/commands", body: `{"type":"pause"}`, key: "cmd", controllerErr: orchestration.ErrCommandNotAllowed, status: 409, code: "command_not_allowed"},
+		{name: "continuation workspace conflict", method: http.MethodPost, path: "/api/v1/sessions/ses_test/commands", body: `{"type":"message","message":"Continue"}`, key: "cmd", controllerErr: fmt.Errorf("verify continuation: %w", workspace.ErrCheckoutConflict), status: 409, code: "implementation_continuation_not_ready"},
+		{name: "continuation Forgejo unavailable", method: http.MethodPost, path: "/api/v1/sessions/ses_test/commands", body: `{"type":"message","message":"Continue"}`, key: "cmd", controllerErr: project.ErrForgejoUnavailable, status: 503, code: "forgejo_unavailable"},
 		{name: "key conflict", method: http.MethodPost, path: "/api/v1/sessions/ses_test/commands", body: `{"type":"pause"}`, key: "cmd", controllerErr: execution.ErrCommandConflict, status: 409, code: "idempotency_conflict"},
 	}
 	for _, test := range tests {

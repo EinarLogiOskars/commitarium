@@ -33,9 +33,13 @@ sessions alternate until the lead explicitly submits an agreed plan or the
 ten-message safety limit requires user input. A submitted plan is reconciled
 against the clean managed workspace and exact draft pull request, then appended
 once to the PR body. A final explicit action re-verifies that boundary and
-resumes the same lead to perform one write-capable implementation turn. The
-result remains uncommitted for inspection; committing, pushing, implementation
-review, Claude Code execution, and the user interface remain to be built.
+resumes the same lead to perform the first write-capable implementation turn.
+While implementation is waiting, the user may edit the shared checkout or
+describe a blocker resolution through the existing session-message API; each
+message safely resumes the same provider conversation for one more bounded
+turn. The result remains uncommitted for inspection; committing, pushing,
+implementation review, Claude Code execution, and the user interface remain to
+be built.
 Projects can be listed and permanently associated with one verified Forgejo
 repository.
 
@@ -392,6 +396,32 @@ An exact action retry does not start another attempt. If the coordinator stops
 while this turn is active, startup looks up and reattaches to that exact worker
 attempt without issuing another resume request. A worker-container restart still
 marks in-flight provider work indeterminate and requires user review.
+
+When the lead is waiting during `implementing`, continue the same implementation
+conversation through the ordinary session command endpoint:
+
+```sh
+curl -X POST http://127.0.0.1:8080/api/v1/sessions/SESSION_ID/commands \
+  -H 'Content-Type: application/json' \
+  -H 'Idempotency-Key: implementation-follow-up-1' \
+  -d '{"type":"message","message":"I supplied the missing configuration; preserve my local edits and rerun the focused tests."}'
+```
+
+Before admitting the turn, the coordinator rechecks the exact published plan,
+Forgejo feature branch, open draft PR, and managed checkout identity. Unlike the
+first implementation gate, the checkout may now contain uncommitted changes or
+local descendant commits: those are existing agent or user work and must be
+preserved. The resumed lead must inspect HEAD, branch, status, and diff before
+editing, avoid repeating completed work, and stop if the state is ambiguous or
+the message would change the accepted goal or plan. Each accepted message creates
+one numbered implementation attempt, remains forbidden from committing or
+pushing, and returns to `waiting_for_user` when it finishes.
+
+The command and its `user_message` activity are committed together before the
+worker is contacted. Retrying the same idempotency key creates no additional
+turn. If the coordinator restarts after admission, it reattaches to the exact
+numbered attempt and applies the pending command once without issuing a second
+worker request.
 
 The versioned [internal worker API](docs/worker-api.md) now has tested client and
 server components for authenticated attempt inspection and control. Its worker

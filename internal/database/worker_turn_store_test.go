@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/EinarLogiOskars/commitarium/internal/execution"
+	"github.com/EinarLogiOskars/commitarium/internal/feature"
 	"github.com/EinarLogiOskars/commitarium/internal/worker"
 	"github.com/EinarLogiOskars/commitarium/internal/workflow"
 )
@@ -51,7 +52,8 @@ func TestExecutionStoreBeginsAnotherWorkerTurnAtomically(t *testing.T) {
 		NextAttempt: execution.WorkerAttemptCheckpoint{
 			SessionID: session.ID, AttemptID: "att_second", CreatedAt: turnAt, UpdatedAt: turnAt,
 		},
-		RunReason: "The lead agent is responding.", OccurredAt: turnAt,
+		ExpectedFeatureState: feature.StateDraft,
+		RunReason:            "The lead agent is responding.", OccurredAt: turnAt,
 	}
 	result, admitted, err := store.BeginWorkerTurn(t.Context(), admission)
 	if err != nil {
@@ -120,13 +122,72 @@ func TestExecutionStoreRejectsReplyAfterGoalAcceptance(t *testing.T) {
 		NextAttempt: execution.WorkerAttemptCheckpoint{
 			SessionID: session.ID, AttemptID: "att_second", CreatedAt: turnAt, UpdatedAt: turnAt,
 		},
-		RunReason: "The lead agent is responding.", OccurredAt: turnAt,
+		ExpectedFeatureState: feature.StateDraft,
+		RunReason:            "The lead agent is responding.", OccurredAt: turnAt,
 	}
 	if _, _, err := store.BeginWorkerTurn(t.Context(), admission); !errors.Is(err, execution.ErrStateConflict) {
 		t.Fatalf("expected error %v, got %v", execution.ErrStateConflict, err)
 	}
 	if _, err := store.GetCommand(t.Context(), admission.Command.ID); !errors.Is(err, execution.ErrNotFound) {
 		t.Fatalf("rejected reply left a command behind: %v", err)
+	}
+}
+
+func TestExecutionStoreBeginsImplementationContinuationAtomically(t *testing.T) {
+	db, store := newTestExecutionStore(t)
+	run, session := createExecutionRecords(t, db, store)
+	now := session.StartedAt.Add(time.Second)
+	createWorkerAttempt(t, store, session.ID, "att_implementation_1", now)
+	moveExecutionToUserWait(t, store, run, session, now)
+	workflowService := workflow.NewService(NewWorkflowStore(db))
+	actor := workflow.Actor{Kind: workflow.ActorKindUser, ID: "local-user"}
+	if _, err := workflowService.AcceptGoal(
+		t.Context(), run.FeatureID, session.ID, "Ship CSV export.", actor, "accept-implementation-goal",
+	); err != nil {
+		t.Fatalf("accept goal: %v", err)
+	}
+	coordinator := workflow.Actor{Kind: workflow.ActorKindCoordinator, ID: "coordinator"}
+	if _, err := workflowService.TransitionFeature(
+		t.Context(), run.FeatureID, feature.StatePlanning, coordinator, "enter-planning",
+	); err != nil {
+		t.Fatalf("enter planning: %v", err)
+	}
+	if _, err := workflowService.TransitionFeature(
+		t.Context(), run.FeatureID, feature.StateImplementing, coordinator, "enter-implementation",
+	); err != nil {
+		t.Fatalf("enter implementation: %v", err)
+	}
+
+	turnAt := now.Add(time.Second)
+	admission := execution.WorkerTurnAdmission{
+		Command: execution.Command{
+			ID: "continue-implementation", SessionID: session.ID, Type: worker.CommandMessage,
+			Message: "Keep my manual error handling and finish the tests.",
+			Status:  execution.CommandStatusPending, RequestedAt: turnAt,
+		},
+		UserEvent: execution.PendingEvent{
+			ID: "continue-implementation:user-message", SessionID: session.ID,
+			Type: worker.EventUserMessage,
+			Text: "Keep my manual error handling and finish the tests.", OccurredAt: turnAt,
+		},
+		PreviousAttemptID: "att_implementation_1", PreviousLastEventSequence: 0,
+		NextAttempt: execution.WorkerAttemptCheckpoint{
+			SessionID: session.ID, AttemptID: "att_implementation_2",
+			CreatedAt: turnAt, UpdatedAt: turnAt,
+		},
+		ExpectedFeatureState: feature.StateImplementing,
+		RunReason:            "The lead is continuing implementation.", OccurredAt: turnAt,
+	}
+	result, admitted, err := store.BeginWorkerTurn(t.Context(), admission)
+	if err != nil || !admitted {
+		t.Fatalf("begin implementation continuation: result=%+v admitted=%t err=%v", result, admitted, err)
+	}
+	if result.UserEvent.Text != admission.Command.Message {
+		t.Fatalf("continuation guidance was not preserved: %+v", result.UserEvent)
+	}
+	checkpoint, err := store.GetWorkerAttempt(t.Context(), session.ID)
+	if err != nil || checkpoint.AttemptID != admission.NextAttempt.AttemptID {
+		t.Fatalf("continuation checkpoint was not installed: %+v err=%v", checkpoint, err)
 	}
 }
 
@@ -160,7 +221,8 @@ func TestExecutionStoreDoesNotPartiallyBeginWorkerTurn(t *testing.T) {
 		NextAttempt: execution.WorkerAttemptCheckpoint{
 			SessionID: session.ID, AttemptID: "att_second", CreatedAt: now, UpdatedAt: now,
 		},
-		RunReason: "Responding", OccurredAt: now,
+		ExpectedFeatureState: feature.StateDraft,
+		RunReason:            "Responding", OccurredAt: now,
 	}
 	if _, _, err := store.BeginWorkerTurn(t.Context(), admission); !errors.Is(err, execution.ErrWorkerAttemptConflict) {
 		t.Fatalf("expected fenced attempt error, got %v", err)
