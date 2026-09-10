@@ -18,6 +18,11 @@ type recordingStore struct {
 	listResult []Project
 	listErr    error
 
+	updatedProjectID string
+	updatedLimits    DialogueLimits
+	updateResult     Project
+	updateErr        error
+
 	boundProjectID  string
 	boundRepository ForgejoRepository
 	bindResult      Project
@@ -42,6 +47,16 @@ func (s *recordingStore) GetByID(
 
 func (s *recordingStore) List(context.Context) ([]Project, error) {
 	return s.listResult, s.listErr
+}
+
+func (s *recordingStore) UpdateDialogueLimits(
+	_ context.Context,
+	projectID string,
+	limits DialogueLimits,
+) (Project, error) {
+	s.updatedProjectID = projectID
+	s.updatedLimits = limits
+	return s.updateResult, s.updateErr
 }
 
 func (s *recordingStore) BindForgejoRepository(
@@ -87,7 +102,8 @@ func TestServiceCreate(t *testing.T) {
 		},
 	}
 
-	project, err := service.Create(t.Context(), "   Commitarium   ", "")
+	limits := DefaultDialogueLimits()
+	project, err := service.Create(t.Context(), "   Commitarium   ", "", limits)
 
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -102,6 +118,9 @@ func TestServiceCreate(t *testing.T) {
 	}
 	if project.RecoveryPolicy != RecoveryPolicyApprovalRequired {
 		t.Errorf("expected default recovery policy %q, got %q", RecoveryPolicyApprovalRequired, project.RecoveryPolicy)
+	}
+	if project.DialogueLimits != limits {
+		t.Errorf("expected dialogue limits %+v, got %+v", limits, project.DialogueLimits)
 	}
 
 	if !project.CreatedAt.Equal(fixedTime) {
@@ -121,7 +140,9 @@ func TestServiceCreateAcceptsAutomaticRecovery(t *testing.T) {
 	store := &recordingStore{}
 	service := NewService(store)
 
-	created, err := service.Create(t.Context(), "Commitarium", RecoveryPolicyAutomatic)
+	created, err := service.Create(
+		t.Context(), "Commitarium", RecoveryPolicyAutomatic, DefaultDialogueLimits(),
+	)
 	if err != nil {
 		t.Fatalf("create project: %v", err)
 	}
@@ -134,7 +155,9 @@ func TestServiceCreateRejectsInvalidRecoveryPolicy(t *testing.T) {
 	store := &recordingStore{}
 	service := NewService(store)
 
-	_, err := service.Create(t.Context(), "Commitarium", RecoveryPolicy("reckless"))
+	_, err := service.Create(
+		t.Context(), "Commitarium", RecoveryPolicy("reckless"), DefaultDialogueLimits(),
+	)
 	if !errors.Is(err, ErrInvalidRecoveryPolicy) {
 		t.Fatalf("expected error %v, got %v", ErrInvalidRecoveryPolicy, err)
 	}
@@ -147,7 +170,7 @@ func TestServiceCreateRejectsBlankName(t *testing.T) {
 	store := &recordingStore{}
 	service := NewService(store)
 
-	_, err := service.Create(t.Context(), " ", "")
+	_, err := service.Create(t.Context(), " ", "", DefaultDialogueLimits())
 
 	if !errors.Is(err, ErrNameRequired) {
 		t.Fatalf("expected error %v, got %v", ErrNameRequired, err)
@@ -163,7 +186,7 @@ func TestServiceCreateReturnsStoreError(t *testing.T) {
 
 	service := NewService(store)
 
-	project, err := service.Create(t.Context(), "Commitarium", "")
+	project, err := service.Create(t.Context(), "Commitarium", "", DefaultDialogueLimits())
 
 	if !errors.Is(err, storeError) {
 		t.Fatalf("expected error %v, got %v", storeError, err)
@@ -171,6 +194,34 @@ func TestServiceCreateReturnsStoreError(t *testing.T) {
 
 	if project != (Project{}) {
 		t.Errorf("expected empty project, got %+v", project)
+	}
+}
+
+func TestServiceUpdatesDialogueLimits(t *testing.T) {
+	limits := DialogueLimits{PlanningRounds: 0, ImplementationReviewRounds: 3}
+	store := &recordingStore{updateResult: Project{ID: "prj_test", DialogueLimits: limits}}
+
+	updated, err := NewService(store).UpdateDialogueLimits(t.Context(), "prj_test", limits)
+	if err != nil {
+		t.Fatalf("update dialogue limits: %v", err)
+	}
+	if store.updatedProjectID != "prj_test" || store.updatedLimits != limits || updated != store.updateResult {
+		t.Fatalf("unexpected update project=%q limits=%+v result=%+v", store.updatedProjectID, store.updatedLimits, updated)
+	}
+}
+
+func TestServiceRejectsNegativeDialogueLimits(t *testing.T) {
+	store := &recordingStore{}
+	_, err := NewService(store).UpdateDialogueLimits(
+		t.Context(),
+		"prj_test",
+		DialogueLimits{PlanningRounds: -1, ImplementationReviewRounds: 6},
+	)
+	if !errors.Is(err, ErrInvalidDialogueLimits) {
+		t.Fatalf("expected %v, got %v", ErrInvalidDialogueLimits, err)
+	}
+	if store.updatedProjectID != "" {
+		t.Fatal("invalid limits reached storage")
 	}
 }
 

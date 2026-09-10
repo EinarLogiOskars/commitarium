@@ -28,13 +28,17 @@ func (s *ExecutionStore) CreateRun(ctx context.Context, run execution.Run) error
 	result, err := s.db.ExecContext(
 		ctx,
 		`INSERT INTO runs (
-			id, feature_id, status, reason, started_at, updated_at, ended_at
-		 ) VALUES (?, ?, ?, ?, ?, ?, ?)
+			id, feature_id, status, reason,
+			planning_round_limit, implementation_review_round_limit,
+			started_at, updated_at, ended_at
+		 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(id) DO NOTHING`,
 		run.ID,
 		run.FeatureID,
 		run.Status,
 		run.Reason,
+		run.PlanningRoundLimit,
+		run.ImplementationReviewRoundLimit,
 		formatExecutionTime(run.StartedAt),
 		formatExecutionTime(run.UpdatedAt),
 		formatOptionalExecutionTime(run.EndedAt),
@@ -51,7 +55,9 @@ func (s *ExecutionStore) GetRun(
 ) (execution.Run, error) {
 	run, err := scanExecutionRun(s.db.QueryRowContext(
 		ctx,
-		`SELECT id, feature_id, status, reason, started_at, updated_at, ended_at
+		`SELECT id, feature_id, status, reason,
+		        planning_round_limit, implementation_review_round_limit,
+		        started_at, updated_at, ended_at
 		 FROM runs WHERE id = ?`,
 		id,
 	))
@@ -81,7 +87,9 @@ func (s *ExecutionStore) TransitionRun(
 
 	run, err := scanExecutionRun(tx.QueryRowContext(
 		ctx,
-		`SELECT id, feature_id, status, reason, started_at, updated_at, ended_at
+		`SELECT id, feature_id, status, reason,
+		        planning_round_limit, implementation_review_round_limit,
+		        started_at, updated_at, ended_at
 		 FROM runs WHERE id = ?`,
 		transition.RunID,
 	))
@@ -223,6 +231,7 @@ func (s *ExecutionStore) ListRecoverableRuns(
 	rows, err := s.db.QueryContext(
 		ctx,
 		`SELECT r.id, r.feature_id, r.status, r.reason,
+		        r.planning_round_limit, r.implementation_review_round_limit,
 		        r.started_at, r.updated_at, r.ended_at
 		 FROM runs r
 		 WHERE r.status = ?
@@ -750,6 +759,8 @@ func scanExecutionRun(scanner executionScanner) (execution.Run, error) {
 		&run.FeatureID,
 		&status,
 		&run.Reason,
+		&run.PlanningRoundLimit,
+		&run.ImplementationReviewRoundLimit,
 		&startedAt,
 		&updatedAt,
 		&endedAt,

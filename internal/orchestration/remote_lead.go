@@ -23,8 +23,6 @@ import (
 const (
 	remoteLeadAgentID                     = "codex-lead"
 	remoteReviewerAgentID                 = "codex-reviewer"
-	defaultPlanningRoundLimit             = 6
-	defaultImplementationReviewRoundLimit = 6
 	planningPlanSubmittedReason           = "The lead submitted the final plan after reaching agreement with the reviewer. It is ready to publish to Forgejo."
 	planningPlanPublishedReason           = "The agreed implementation plan was published to Forgejo. It is ready for implementation."
 	planningPublicationReviewReason       = "The coordinator could not safely confirm publication of the agreed plan to Forgejo. No agent or implementation work was started. Inspect the managed workspace and pull request before retrying."
@@ -64,7 +62,7 @@ var ErrImplementationNotAllowed = errors.New("implementation cannot start from t
 // lead turn. It deliberately contains no workflow transition: goal
 // clarification leaves the feature in draft.
 type RemoteLeadExecution interface {
-	CreateRun(context.Context, string, string) (execution.Run, bool, error)
+	CreateRun(context.Context, string, string, int, int) (execution.Run, bool, error)
 	CreateSession(context.Context, string, string, string, worker.Role) (execution.Session, bool, error)
 	CreateWorkerAttempt(context.Context, string, string) (execution.WorkerAttemptCheckpoint, bool, error)
 	GetRun(context.Context, string) (execution.Run, error)
@@ -207,12 +205,19 @@ func (starter *RemoteLeadStarter) Start(
 	projectID string,
 	featureID string,
 	goal string,
+	dialogueLimits project.DialogueLimits,
 ) (execution.Run, bool, error) {
 	request, err := starter.startRequest(runID, projectID, featureID, goal)
 	if err != nil {
 		return execution.Run{}, false, err
 	}
-	run, created, err := starter.executions.CreateRun(ctx, runID, featureID)
+	run, created, err := starter.executions.CreateRun(
+		ctx,
+		runID,
+		featureID,
+		dialogueLimits.PlanningRounds,
+		dialogueLimits.ImplementationReviewRounds,
+	)
 	if err != nil || !created {
 		return run, created, err
 	}
@@ -591,8 +596,8 @@ func (starter *RemoteLeadStarter) recoverIdlePlanningRun(
 		}
 		return true, nil
 	}
-	if planningRoundLimitReached(len(messages)) {
-		return true, starter.waitRun(ctx, run.ID, planningLimitReason())
+	if planningRoundLimitReached(run.PlanningRoundLimit, len(messages)) {
+		return true, starter.waitRun(ctx, run.ID, planningLimitReason(run.PlanningRoundLimit))
 	}
 	if len(messages) == 2 {
 		return true, starter.waitRun(ctx, run.ID, "The reviewer's first planning response is ready.")
@@ -1185,7 +1190,7 @@ func (starter *RemoteLeadStarter) StartPlanningRound(
 	if err != nil {
 		return execution.Run{}, false, err
 	}
-	if len(messages) > 0 && (planningRoundLimitReached(len(messages)) ||
+	if len(messages) > 0 && (planningRoundLimitReached(run.PlanningRoundLimit, len(messages)) ||
 		messages[len(messages)-1].Event.Type == worker.EventPlanSubmitted) {
 		if messages[len(messages)-1].Event.Type != worker.EventPlanSubmitted {
 			return run, false, nil
@@ -1575,7 +1580,7 @@ func (starter *RemoteLeadStarter) startLeadResponse(
 	messages []execution.PlanningMessage,
 	chained bool,
 ) (remoteLeadRequest, bool, error) {
-	if len(messages) < 2 || planningRoundLimitReached(len(messages)) ||
+	if len(messages) < 2 || planningRoundLimitReached(run.PlanningRoundLimit, len(messages)) ||
 		messages[len(messages)-1].Role != worker.RoleReviewer {
 		return remoteLeadRequest{}, false, ErrPlanningNotAllowed
 	}
@@ -1667,7 +1672,7 @@ func (starter *RemoteLeadStarter) startReviewerResponse(
 	storedFeature feature.Feature,
 	messages []execution.PlanningMessage,
 ) (remoteLeadRequest, bool, error) {
-	if len(messages) < 3 || planningRoundLimitReached(len(messages)) ||
+	if len(messages) < 3 || planningRoundLimitReached(run.PlanningRoundLimit, len(messages)) ||
 		messages[len(messages)-1].Role != worker.RoleLead ||
 		messages[len(messages)-1].Event.Type == worker.EventPlanSubmitted {
 		return remoteLeadRequest{}, false, ErrPlanningNotAllowed
@@ -2257,8 +2262,8 @@ func (starter *RemoteLeadStarter) finish(
 				err = listErr
 				break
 			}
-			if planningRoundLimitReached(len(messages)) {
-				err = starter.waitRun(ctx, request.runID, planningLimitReason())
+			if planningRoundLimitReached(run.PlanningRoundLimit, len(messages)) {
+				err = starter.waitRun(ctx, request.runID, planningLimitReason(run.PlanningRoundLimit))
 				break
 			}
 			next, admitted, startErr := starter.startReviewerResponse(ctx, run, storedFeature, messages)
@@ -2272,18 +2277,18 @@ func (starter *RemoteLeadStarter) finish(
 			return
 		}
 		if request.planningStage == planningStageReviewerResponse {
+			run, loadErr := starter.executions.GetRun(ctx, request.runID)
+			if loadErr != nil {
+				err = loadErr
+				break
+			}
 			messages, listErr := starter.executions.PlanningMessagesForRun(ctx, request.runID)
 			if listErr != nil {
 				err = listErr
 				break
 			}
-			if planningRoundLimitReached(len(messages)) {
-				err = starter.waitRun(ctx, request.runID, planningLimitReason())
-				break
-			}
-			run, loadErr := starter.executions.GetRun(ctx, request.runID)
-			if loadErr != nil {
-				err = loadErr
+			if planningRoundLimitReached(run.PlanningRoundLimit, len(messages)) {
+				err = starter.waitRun(ctx, request.runID, planningLimitReason(run.PlanningRoundLimit))
 				break
 			}
 			storedFeature, loadErr := starter.features.GetByID(ctx, run.FeatureID)
@@ -2738,8 +2743,8 @@ func (starter *RemoteLeadStarter) verifyImplementationCorrection(
 	); err != nil {
 		return fmt.Errorf("record verified implementation review response: %w", err)
 	}
-	if implementationReviewRoundLimitReached(round) {
-		return starter.waitRun(ctx, request.runID, implementationReviewLimitReason())
+	if implementationReviewRoundLimitReached(run.ImplementationReviewRoundLimit, round) {
+		return starter.waitRun(ctx, request.runID, implementationReviewLimitReason(run.ImplementationReviewRoundLimit))
 	}
 	next, admitted, err := starter.startImplementationReview(
 		ctx, run, storedFeature, plan, result.Summary, *result.Publication, round+1,
@@ -3061,8 +3066,8 @@ func (starter *RemoteLeadStarter) verifyImplementationReadiness(
 		}
 		return starter.waitRun(ctx, request.runID, implementationApprovedReason)
 	}
-	if implementationReviewRoundLimitReached(round) {
-		return starter.waitRun(ctx, request.runID, implementationReviewLimitReason())
+	if implementationReviewRoundLimitReached(run.ImplementationReviewRoundLimit, round) {
+		return starter.waitRun(ctx, request.runID, implementationReviewLimitReason(run.ImplementationReviewRoundLimit))
 	}
 	next, admitted, err := starter.startImplementationReview(
 		ctx, run, storedFeature, plan, result.Summary,
@@ -3088,36 +3093,31 @@ func implementationReadinessVerificationEventID(attemptID string) string {
 	return attemptID + ":readiness-verified"
 }
 
-func planningRoundLimitReached(messageCount int) bool {
-	return planningRoundLimitReachedAt(defaultPlanningRoundLimit, messageCount)
-}
-
-func planningRoundLimitReachedAt(limit int, messageCount int) bool {
+func planningRoundLimitReached(limit int, messageCount int) bool {
 	return dialogueRoundLimitReached(limit, messageCount/2)
 }
 
-func implementationReviewRoundLimitReached(completedRound int) bool {
-	return dialogueRoundLimitReached(defaultImplementationReviewRoundLimit, completedRound)
+func implementationReviewRoundLimitReached(limit int, completedRound int) bool {
+	return dialogueRoundLimitReached(limit, completedRound)
 }
 
-// A zero limit deliberately means unlimited. The public project setting can
-// therefore use an ordinary non-negative integer once it is added without
-// changing the workflow's counting rules.
+// A zero limit deliberately means unlimited, matching the public project
+// setting and the immutable copy stored on each run.
 func dialogueRoundLimitReached(limit int, completedRounds int) bool {
 	return limit > 0 && completedRounds >= limit
 }
 
-func planningLimitReason() string {
+func planningLimitReason(limit int) string {
 	return fmt.Sprintf(
 		"The planning discussion completed %d dialogue rounds without a submitted plan. User input is required.",
-		defaultPlanningRoundLimit,
+		limit,
 	)
 }
 
-func implementationReviewLimitReason() string {
+func implementationReviewLimitReason(limit int) string {
 	return fmt.Sprintf(
 		"The implementation completed %d review rounds without mutual agreement. User input is required before another round.",
-		defaultImplementationReviewRoundLimit,
+		limit,
 	)
 }
 

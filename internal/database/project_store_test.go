@@ -16,6 +16,7 @@ func TestProjectStoreCreateAndGetByID(t *testing.T) {
 		ID:             "prj_test",
 		Name:           "Commitarium",
 		RecoveryPolicy: project.RecoveryPolicyApprovalRequired,
+		DialogueLimits: project.DialogueLimits{PlanningRounds: 0, ImplementationReviewRounds: 4},
 		CreatedAt: time.Date(
 			2026,
 			time.September,
@@ -39,6 +40,38 @@ func TestProjectStoreCreateAndGetByID(t *testing.T) {
 
 	if actual != expected {
 		t.Errorf("expected project %+v, got %+v", expected, actual)
+	}
+}
+
+func TestProjectStoreUpdatesDialogueLimits(t *testing.T) {
+	store := newTestProjectStore(t)
+	created := project.Project{
+		ID: "prj_test", Name: "Commitarium",
+		RecoveryPolicy: project.RecoveryPolicyApprovalRequired,
+		DialogueLimits: project.DefaultDialogueLimits(),
+		CreatedAt:      time.Now().UTC(),
+	}
+	if err := store.Create(t.Context(), created); err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	limits := project.DialogueLimits{PlanningRounds: 2, ImplementationReviewRounds: 0}
+	updated, err := store.UpdateDialogueLimits(t.Context(), created.ID, limits)
+	if err != nil {
+		t.Fatalf("update dialogue limits: %v", err)
+	}
+	if updated.DialogueLimits != limits {
+		t.Fatalf("unexpected updated project %+v", updated)
+	}
+	repeated, err := store.UpdateDialogueLimits(t.Context(), created.ID, limits)
+	if err != nil || repeated.DialogueLimits != limits {
+		t.Fatalf("repeat update was not idempotent: project=%+v err=%v", repeated, err)
+	}
+	reloaded, err := store.GetByID(t.Context(), created.ID)
+	if err != nil || reloaded.DialogueLimits != limits {
+		t.Fatalf("dialogue limits did not persist: project=%+v err=%v", reloaded, err)
+	}
+	if _, err := store.UpdateDialogueLimits(t.Context(), "prj_missing", limits); !errors.Is(err, project.ErrNotFound) {
+		t.Fatalf("expected %v, got %v", project.ErrNotFound, err)
 	}
 }
 

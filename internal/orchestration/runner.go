@@ -74,7 +74,7 @@ type RunResult struct {
 }
 
 type Execution interface {
-	CreateRun(ctx context.Context, id string, featureID string) (execution.Run, bool, error)
+	CreateRun(ctx context.Context, id string, featureID string, planningRoundLimit int, implementationReviewRoundLimit int) (execution.Run, bool, error)
 	TransitionRun(
 		ctx context.Context,
 		id string,
@@ -165,6 +165,8 @@ func (r *Runner) Run(
 			ctx,
 			request.ID,
 			request.FeatureID,
+			request.MaxPlanningRounds,
+			request.MaxReviewRounds,
 		)
 		if err != nil {
 			return RunResult{}, fmt.Errorf("begin run %q: %w", request.ID, err)
@@ -194,6 +196,8 @@ func (r *Runner) Start(
 		ctx,
 		request.ID,
 		request.FeatureID,
+		request.MaxPlanningRounds,
+		request.MaxReviewRounds,
 	)
 	if err != nil || !created {
 		return storedRun, created, err
@@ -273,7 +277,7 @@ func (r *Runner) runStarted(
 	planningAccepted := false
 	planningFeedback := ""
 	acceptedPlanSummary := ""
-	for round := 1; round <= request.MaxPlanningRounds; round++ {
+	for round := 1; !dialogueRoundLimitReached(request.MaxPlanningRounds, round-1); round++ {
 		result.PlanningRounds = round
 		leadInstructions := fmt.Sprintf(
 			"%s: draft a planning proposal for the accepted goal",
@@ -362,7 +366,7 @@ func (r *Runner) runStarted(
 		return RunResult{}, err
 	}
 	reviewContext := implementation.Result.Summary
-	for round := 1; round <= request.MaxReviewRounds; round++ {
+	for round := 1; !dialogueRoundLimitReached(request.MaxReviewRounds, round-1); round++ {
 		result.ReviewRounds = round
 		review, err := r.runAgent(
 			ctx,
@@ -401,11 +405,6 @@ func (r *Runner) runStarted(
 			result.Reason = "reviewer requested user input"
 			return result, nil
 		case worker.DispositionChangesRequested:
-			if round == request.MaxReviewRounds {
-				result.Status = RunStatusWaiting
-				result.Reason = "review round limit reached with unresolved findings"
-				return result, nil
-			}
 		default:
 			return RunResult{}, fmt.Errorf(
 				"review session: %w %q",
@@ -435,6 +434,11 @@ func (r *Runner) runStarted(
 			return result, err
 		}
 		reviewContext = fix.Result.Summary
+		if dialogueRoundLimitReached(request.MaxReviewRounds, round) {
+			result.Status = RunStatusWaiting
+			result.Reason = "review round limit reached with unresolved findings"
+			return result, nil
+		}
 	}
 
 	return RunResult{}, errors.New("review loop exhausted unexpectedly")
@@ -525,10 +529,10 @@ func (request RunRequest) Validate() error {
 		return fmt.Errorf("%w: feature ID is required", ErrInvalidRunRequest)
 	case strings.TrimSpace(request.Goal) == "":
 		return fmt.Errorf("%w: goal is required", ErrInvalidRunRequest)
-	case request.MaxPlanningRounds < 1:
-		return fmt.Errorf("%w: planning round limit must be positive", ErrInvalidRunRequest)
-	case request.MaxReviewRounds < 1:
-		return fmt.Errorf("%w: review round limit must be positive", ErrInvalidRunRequest)
+	case request.MaxPlanningRounds < 0:
+		return fmt.Errorf("%w: planning round limit cannot be negative", ErrInvalidRunRequest)
+	case request.MaxReviewRounds < 0:
+		return fmt.Errorf("%w: review round limit cannot be negative", ErrInvalidRunRequest)
 	case request.WorkflowPhase != "" && !request.WorkflowPhase.IsValid():
 		return fmt.Errorf("%w: workflow phase %q is not recognized", ErrInvalidRunRequest, request.WorkflowPhase)
 	}

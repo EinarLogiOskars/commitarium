@@ -11,6 +11,7 @@ import (
 
 	"github.com/EinarLogiOskars/commitarium/internal/execution"
 	"github.com/EinarLogiOskars/commitarium/internal/feature"
+	"github.com/EinarLogiOskars/commitarium/internal/project"
 	"github.com/EinarLogiOskars/commitarium/internal/worker"
 )
 
@@ -19,6 +20,7 @@ type recordingRunStarter struct {
 	projectID string
 	featureID string
 	goal      string
+	limits    project.DialogueLimits
 	result    execution.Run
 	err       error
 }
@@ -29,15 +31,19 @@ func (s *recordingRunStarter) Start(
 	projectID string,
 	featureID string,
 	goal string,
+	dialogueLimits project.DialogueLimits,
 ) (execution.Run, bool, error) {
 	s.runID = runID
 	s.projectID = projectID
 	s.featureID = featureID
 	s.goal = goal
+	s.limits = dialogueLimits
 	if s.result.ID == "" {
 		s.result = execution.Run{
 			ID: runID, FeatureID: featureID, Status: execution.RunStatusRunning,
-			StartedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(),
+			PlanningRoundLimit:             dialogueLimits.PlanningRounds,
+			ImplementationReviewRoundLimit: dialogueLimits.ImplementationReviewRounds,
+			StartedAt:                      time.Now().UTC(), UpdatedAt: time.Now().UTC(),
 		}
 	}
 	return s.result, true, s.err
@@ -50,6 +56,10 @@ func TestStartRunReturnsDurableAcceptedRun(t *testing.T) {
 	}}
 	executions := &recordingExecutionService{runErr: execution.ErrNotFound}
 	starter := &recordingRunStarter{}
+	limits := project.DialogueLimits{PlanningRounds: 3, ImplementationReviewRounds: 0}
+	projects := &recordingProjectService{getByIDResult: project.Project{
+		ID: "prj_test", DialogueLimits: limits,
+	}}
 	request := httptest.NewRequest(
 		http.MethodPost,
 		"/api/v1/projects/prj_test/features/fea_test/runs",
@@ -58,7 +68,7 @@ func TestStartRunReturnsDurableAcceptedRun(t *testing.T) {
 	request.Header.Set("Idempotency-Key", "start-demo")
 	recorder := httptest.NewRecorder()
 
-	New(nil, features, nil, executions, nil, starter).ServeHTTP(recorder, request)
+	New(projects, features, nil, executions, nil, starter).ServeHTTP(recorder, request)
 
 	if recorder.Code != http.StatusAccepted {
 		t.Fatalf("expected status %d, got %d: %s", http.StatusAccepted, recorder.Code, recorder.Body.String())
@@ -73,6 +83,9 @@ func TestStartRunReturnsDurableAcceptedRun(t *testing.T) {
 	if starter.goal != "Build coordinator: Exercise its deterministic workflow" {
 		t.Errorf("unexpected derived goal %q", starter.goal)
 	}
+	if starter.limits != limits {
+		t.Errorf("expected run snapshot %+v, got %+v", limits, starter.limits)
+	}
 	if location := recorder.Header().Get("Location"); location != "/api/v1/runs/"+expectedRunID {
 		t.Errorf("unexpected Location %q", location)
 	}
@@ -80,7 +93,8 @@ func TestStartRunReturnsDurableAcceptedRun(t *testing.T) {
 	if err := json.NewDecoder(recorder.Body).Decode(&body); err != nil {
 		t.Fatalf("decode run response: %v", err)
 	}
-	if body.ID != expectedRunID || body.Status != execution.RunStatusRunning || body.Sessions == nil {
+	if body.ID != expectedRunID || body.Status != execution.RunStatusRunning || body.Sessions == nil ||
+		body.DialogueLimits.PlanningRounds != 3 || body.DialogueLimits.ImplementationReviewRounds != 0 {
 		t.Errorf("unexpected run response %+v", body)
 	}
 }
@@ -153,6 +167,7 @@ func TestGetRunIncludesSessions(t *testing.T) {
 	executions := &recordingExecutionService{
 		run: execution.Run{
 			ID: "run_test", FeatureID: "fea_test", Status: execution.RunStatusRunning,
+			PlanningRoundLimit: 6, ImplementationReviewRoundLimit: 4,
 			StartedAt: now, UpdatedAt: now,
 		},
 		sessions: []execution.Session{{
@@ -173,7 +188,8 @@ func TestGetRunIncludesSessions(t *testing.T) {
 	if err := json.NewDecoder(recorder.Body).Decode(&body); err != nil {
 		t.Fatalf("decode run response: %v", err)
 	}
-	if body.ID != "run_test" || len(body.Sessions) != 1 || body.Sessions[0].Role != worker.RoleCoder {
+	if body.ID != "run_test" || len(body.Sessions) != 1 || body.Sessions[0].Role != worker.RoleCoder ||
+		body.DialogueLimits.PlanningRounds != 6 || body.DialogueLimits.ImplementationReviewRounds != 4 {
 		t.Errorf("unexpected run response %+v", body)
 	}
 }

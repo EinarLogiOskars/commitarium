@@ -58,7 +58,9 @@ func (s *ExecutionStore) BeginNewSessionTurn(
 
 	run, err := scanExecutionRun(tx.QueryRowContext(
 		ctx,
-		`SELECT id, feature_id, status, reason, started_at, updated_at, ended_at
+		`SELECT id, feature_id, status, reason,
+		        planning_round_limit, implementation_review_round_limit,
+		        started_at, updated_at, ended_at
 		 FROM runs WHERE id = ?`,
 		admission.Session.RunID,
 	))

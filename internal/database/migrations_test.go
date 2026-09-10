@@ -142,6 +142,17 @@ func TestRecoveryMigrationPreservesExistingExecutionRecords(t *testing.T) {
 	if storedProject.RecoveryPolicy != project.RecoveryPolicyApprovalRequired {
 		t.Fatalf("unexpected migrated recovery policy %+v", storedProject)
 	}
+	if storedProject.DialogueLimits != project.DefaultDialogueLimits() {
+		t.Fatalf("unexpected migrated project dialogue limits %+v", storedProject.DialogueLimits)
+	}
+	storedRun, err := NewExecutionStore(db).GetRun(t.Context(), "run_old")
+	if err != nil {
+		t.Fatalf("get migrated run: %v", err)
+	}
+	if storedRun.PlanningRoundLimit != project.DefaultDialogueRoundLimit ||
+		storedRun.ImplementationReviewRoundLimit != project.DefaultDialogueRoundLimit {
+		t.Fatalf("unexpected migrated run dialogue limits %+v", storedRun)
+	}
 	storedSession, err := NewExecutionStore(db).GetSession(t.Context(), "ses_old")
 	if err != nil {
 		t.Fatalf("get migrated session: %v", err)

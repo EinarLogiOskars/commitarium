@@ -12,6 +12,7 @@ this API beyond the host loopback interface is unsupported.
 | `POST` | `/api/v1/projects` | Create a project |
 | `GET` | `/api/v1/projects` | List projects for switching/selecting |
 | `GET` | `/api/v1/projects/{projectID}` | Retrieve a project |
+| `PUT` | `/api/v1/projects/{projectID}/dialogue-limits` | Replace planning and implementation-review round limits |
 | `PUT` | `/api/v1/projects/{projectID}/forgejo-repository` | Verify and bind the project's internal repository |
 | `POST` | `/api/v1/projects/{projectID}/features` | Create a draft feature |
 | `GET` | `/api/v1/projects/{projectID}/features/{featureID}` | Retrieve a feature |
@@ -45,7 +46,7 @@ Run IDs are stable opaque values derived from the start request's idempotency
 key. Only a feature in `draft` can admit a new run, but a retry remains valid
 after that run has advanced the feature.
 
-## Project recovery policy
+## Project settings
 
 `POST /api/v1/projects` accepts an optional `recovery_policy`:
 
@@ -56,6 +57,41 @@ after that run has advanced the feature.
 Supported values are `approval_required` and `automatic`. Omitting the field
 uses `approval_required`. Project create and retrieval responses include the
 effective policy.
+
+Project creation also accepts an optional complete `dialogue_limits` object:
+
+```json
+{
+  "name": "Example",
+  "dialogue_limits": {
+    "planning_rounds": 6,
+    "implementation_review_rounds": 6
+  }
+}
+```
+
+Omitting the object defaults both fields to six complete two-agent rounds. If
+the object is present, both fields are required. Values must be non-negative;
+`0` means unlimited.
+
+Replace both settings for future runs with:
+
+```http
+PUT /api/v1/projects/prj_example/dialogue-limits
+Content-Type: application/json
+
+{"planning_rounds":3,"implementation_review_rounds":0}
+```
+
+The successful response is the complete updated project. The operation is an
+idempotent replacement: sending the same values again leaves the same settings.
+An unknown project returns `404 project_not_found`; missing or negative fields
+return `400 invalid_dialogue_limits`.
+
+Every run copies the project's current values into its own durable record when
+it starts. A later project update therefore affects only new runs. Run retrieval
+returns that immutable snapshot in the same `dialogue_limits` shape, including
+after a coordinator restart.
 
 ## Projects and Forgejo repositories
 
@@ -84,6 +120,10 @@ includes:
   "id": "prj_example",
   "name": "Example",
   "recovery_policy": "approval_required",
+  "dialogue_limits": {
+    "planning_rounds": 6,
+    "implementation_review_rounds": 6
+  },
   "forgejo_repository": {
     "owner": "commitarium",
     "name": "example",
@@ -206,6 +246,10 @@ A successful response is `202 Accepted` and points to the run resource:
   "id": "run_opaque",
   "feature_id": "fea_example",
   "status": "running",
+  "dialogue_limits": {
+    "planning_rounds": 6,
+    "implementation_review_rounds": 6
+  },
   "started_at": "2026-09-08T17:30:36Z",
   "updated_at": "2026-09-08T17:30:36Z",
   "sessions": []
@@ -353,9 +397,10 @@ implementation slice.
 
 If Forgejo publication cannot be confirmed, the coordinator publishes a
 `recovery_assessment`, starts no agent or implementation work, and waits for the
-user. Retrying this same action reconciles only the submitted plan. Reaching ten
-messages without submission likewise returns the run to `waiting_for_user` so
-the user can resolve the disagreement or ambiguity.
+user. Retrying this same action reconciles only the submitted plan. Reaching
+the run's planning-round limit without submission likewise returns the run to
+`waiting_for_user` so the user can resolve the disagreement or ambiguity. The
+default six rounds permit up to twelve agent messages; zero is unlimited.
 
 Each role's attempts are numbered deterministically from durable planning
 history. An exact action retry therefore returns the existing run without
@@ -476,13 +521,15 @@ or concern. A verified green light moves the feature to `ready_to_merge` and
 returns the run to `waiting_for_user`; a concern gives the reviewer another
 turn against the same commit.
 
-Planning and implementation review each default to six dialogue rounds. One
-round permits both agents to speak, so the default permits up to twelve agent
+Planning and implementation review each use the limits captured on the run when
+it starts and default to six dialogue rounds. One round permits both agents to
+speak, so the default permits up to twelve agent
 messages per phase. A requested-changes review is paired with its corrective
 lead response, including in the final allowed round; an approval is paired with
 the lead's readiness response. If mutual agreement is still absent after round
-six, the run waits for user input before another round. The internal limit rule
-treats zero as unlimited; durable project/API configuration is not exposed yet.
+six under the default, the run waits for user input before another round. Zero
+means unlimited. Editing the project affects only later runs because active and
+historical runs retain their original limit snapshot.
 
 Recovery is idempotent before either reviewer admission, during an active
 reviewer, correction, or readiness attempt, and after any terminal result.

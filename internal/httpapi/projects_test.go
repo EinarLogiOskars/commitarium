@@ -18,6 +18,7 @@ type recordingProjectService struct {
 	calls                  int
 	receivedName           string
 	receivedRecoveryPolicy project.RecoveryPolicy
+	receivedDialogueLimits project.DialogueLimits
 	result                 project.Project
 	err                    error
 
@@ -27,6 +28,11 @@ type recordingProjectService struct {
 
 	listResult []project.Project
 	listErr    error
+
+	updateProjectID string
+	updateLimits    project.DialogueLimits
+	updateResult    project.Project
+	updateErr       error
 
 	bindProjectID string
 	bindOwner     string
@@ -46,11 +52,23 @@ func (s *recordingProjectService) Create(
 	_ context.Context,
 	name string,
 	recoveryPolicy project.RecoveryPolicy,
+	dialogueLimits project.DialogueLimits,
 ) (project.Project, error) {
 	s.calls++
 	s.receivedName = name
 	s.receivedRecoveryPolicy = recoveryPolicy
+	s.receivedDialogueLimits = dialogueLimits
 	return s.result, s.err
+}
+
+func (s *recordingProjectService) UpdateDialogueLimits(
+	_ context.Context,
+	projectID string,
+	limits project.DialogueLimits,
+) (project.Project, error) {
+	s.updateProjectID = projectID
+	s.updateLimits = limits
+	return s.updateResult, s.updateErr
 }
 
 func (s *recordingProjectService) GetByID(
@@ -94,6 +112,7 @@ func TestCreateProject(t *testing.T) {
 			ID:             "prj_test",
 			Name:           "Commitarium",
 			RecoveryPolicy: project.RecoveryPolicyAutomatic,
+			DialogueLimits: project.DefaultDialogueLimits(),
 			CreatedAt:      fixedTime,
 		},
 	}
@@ -114,6 +133,7 @@ func TestCreateProject(t *testing.T) {
 		ID             string                 `json:"id"`
 		Name           string                 `json:"name"`
 		RecoveryPolicy project.RecoveryPolicy `json:"recovery_policy"`
+		DialogueLimits dialogueLimitsResponse `json:"dialogue_limits"`
 		CreatedAt      time.Time              `json:"created_at"`
 	}
 
@@ -148,6 +168,9 @@ func TestCreateProject(t *testing.T) {
 	if service.receivedRecoveryPolicy != project.RecoveryPolicyAutomatic {
 		t.Errorf("expected service recovery policy %q, got %q", project.RecoveryPolicyAutomatic, service.receivedRecoveryPolicy)
 	}
+	if service.receivedDialogueLimits != project.DefaultDialogueLimits() {
+		t.Errorf("expected default dialogue limits, got %+v", service.receivedDialogueLimits)
+	}
 
 	if response.ID != service.result.ID {
 		t.Errorf("expected response ID %v, got %v", service.result.ID, response.ID)
@@ -159,9 +182,100 @@ func TestCreateProject(t *testing.T) {
 	if response.RecoveryPolicy != project.RecoveryPolicyAutomatic {
 		t.Errorf("expected recovery policy %q, got %q", project.RecoveryPolicyAutomatic, response.RecoveryPolicy)
 	}
+	if response.DialogueLimits.PlanningRounds != 6 || response.DialogueLimits.ImplementationReviewRounds != 6 {
+		t.Errorf("unexpected dialogue limits %+v", response.DialogueLimits)
+	}
 
 	if response.CreatedAt != service.result.CreatedAt {
 		t.Errorf("expected response CreatedAt %v, got %v", service.result.CreatedAt, response.CreatedAt)
+	}
+}
+
+func TestCreateProjectAcceptsExplicitUnlimitedDialogueLimit(t *testing.T) {
+	limits := project.DialogueLimits{PlanningRounds: 0, ImplementationReviewRounds: 4}
+	service := &recordingProjectService{result: project.Project{
+		ID: "prj_test", Name: "Commitarium", DialogueLimits: limits, CreatedAt: time.Now().UTC(),
+	}}
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/api/v1/projects",
+		strings.NewReader(`{"name":"Commitarium","dialogue_limits":{"planning_rounds":0,"implementation_review_rounds":4}}`),
+	)
+	recorder := httptest.NewRecorder()
+	New(service, nil, nil, nil, nil, nil).ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusCreated, recorder.Code, recorder.Body.String())
+	}
+	if service.receivedDialogueLimits != limits {
+		t.Fatalf("expected limits %+v, got %+v", limits, service.receivedDialogueLimits)
+	}
+}
+
+func TestCreateProjectRejectsIncompleteDialogueLimits(t *testing.T) {
+	service := &recordingProjectService{}
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/api/v1/projects",
+		strings.NewReader(`{"name":"Commitarium","dialogue_limits":{"planning_rounds":3}}`),
+	)
+	recorder := httptest.NewRecorder()
+	New(service, nil, nil, nil, nil, nil).ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("expected status %d, got %d", http.StatusBadRequest, recorder.Code)
+	}
+	var body errorResponse
+	if err := json.NewDecoder(recorder.Body).Decode(&body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if body.Error.Code != "invalid_dialogue_limits" || service.calls != 0 {
+		t.Fatalf("unexpected response %+v or service calls %d", body, service.calls)
+	}
+}
+
+func TestUpdateProjectDialogueLimits(t *testing.T) {
+	limits := project.DialogueLimits{PlanningRounds: 3, ImplementationReviewRounds: 0}
+	service := &recordingProjectService{updateResult: project.Project{
+		ID: "prj_test", Name: "Commitarium", DialogueLimits: limits, CreatedAt: time.Now().UTC(),
+	}}
+	request := httptest.NewRequest(
+		http.MethodPut,
+		"/api/v1/projects/prj_test/dialogue-limits",
+		strings.NewReader(`{"planning_rounds":3,"implementation_review_rounds":0}`),
+	)
+	recorder := httptest.NewRecorder()
+	New(service, nil, nil, nil, nil, nil).ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusOK, recorder.Code, recorder.Body.String())
+	}
+	if service.updateProjectID != "prj_test" || service.updateLimits != limits {
+		t.Fatalf("unexpected update %q %+v", service.updateProjectID, service.updateLimits)
+	}
+	var body projectResponse
+	if err := json.NewDecoder(recorder.Body).Decode(&body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if body.DialogueLimits.PlanningRounds != 3 || body.DialogueLimits.ImplementationReviewRounds != 0 {
+		t.Fatalf("unexpected response %+v", body)
+	}
+}
+
+func TestUpdateProjectDialogueLimitsRejectsInvalidValues(t *testing.T) {
+	for _, body := range []string{
+		`{"planning_rounds":3}`,
+		`{"planning_rounds":-1,"implementation_review_rounds":2}`,
+	} {
+		service := &recordingProjectService{}
+		request := httptest.NewRequest(
+			http.MethodPut, "/api/v1/projects/prj_test/dialogue-limits", strings.NewReader(body),
+		)
+		recorder := httptest.NewRecorder()
+		New(service, nil, nil, nil, nil, nil).ServeHTTP(recorder, request)
+		if recorder.Code != http.StatusBadRequest {
+			t.Fatalf("body %s: expected status %d, got %d", body, http.StatusBadRequest, recorder.Code)
+		}
+		if service.updateProjectID != "" {
+			t.Fatalf("body %s reached service", body)
+		}
 	}
 }
 

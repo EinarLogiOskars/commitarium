@@ -17,6 +17,11 @@ func TestRunValidate(t *testing.T) {
 	if err := valid.Validate(); err != nil {
 		t.Fatalf("validate run: %v", err)
 	}
+	invalidLimits := valid
+	invalidLimits.PlanningRoundLimit = -1
+	if err := invalidLimits.Validate(); !errors.Is(err, ErrInvalidRun) {
+		t.Fatalf("expected negative planning limit error %v, got %v", ErrInvalidRun, err)
+	}
 	ended := now.Add(time.Minute)
 	valid.Status = RunStatusSucceeded
 	valid.UpdatedAt = ended

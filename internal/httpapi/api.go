@@ -13,9 +13,10 @@ import (
 )
 
 type ProjectService interface {
-	Create(ctx context.Context, name string, recoveryPolicy project.RecoveryPolicy) (project.Project, error)
+	Create(ctx context.Context, name string, recoveryPolicy project.RecoveryPolicy, dialogueLimits project.DialogueLimits) (project.Project, error)
 	GetByID(ctx context.Context, id string) (project.Project, error)
 	List(ctx context.Context) ([]project.Project, error)
+	UpdateDialogueLimits(ctx context.Context, projectID string, limits project.DialogueLimits) (project.Project, error)
 	BindForgejoRepository(ctx context.Context, projectID, owner, name string) (project.Project, error)
 }
 
@@ -65,6 +66,7 @@ type RunStarter interface {
 		projectID string,
 		featureID string,
 		goal string,
+		dialogueLimits project.DialogueLimits,
 	) (execution.Run, bool, error)
 }
 
@@ -201,6 +203,10 @@ func newAPI(
 	mux.HandleFunc(
 		"GET /api/v1/projects/{id}",
 		api.getProjectByIDHandler,
+	)
+	mux.HandleFunc(
+		"PUT /api/v1/projects/{id}/dialogue-limits",
+		api.updateProjectDialogueLimitsHandler,
 	)
 	mux.HandleFunc(
 		"PUT /api/v1/projects/{id}/forgejo-repository",

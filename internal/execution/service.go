@@ -37,11 +37,15 @@ func (s *Service) CreateRun(
 	ctx context.Context,
 	id string,
 	featureID string,
+	planningRoundLimit int,
+	implementationReviewRoundLimit int,
 ) (Run, bool, error) {
 	now := s.now().UTC()
 	run := Run{
 		ID: id, FeatureID: featureID, Status: RunStatusRunning,
-		StartedAt: now, UpdatedAt: now,
+		PlanningRoundLimit:             planningRoundLimit,
+		ImplementationReviewRoundLimit: implementationReviewRoundLimit,
+		StartedAt:                      now, UpdatedAt: now,
 	}
 	if err := s.store.CreateRun(ctx, run); err != nil {
 		if !errors.Is(err, ErrAlreadyExists) {
@@ -51,7 +55,9 @@ func (s *Service) CreateRun(
 		if getErr != nil {
 			return Run{}, false, fmt.Errorf("get existing run %q: %w", id, getErr)
 		}
-		if existing.FeatureID != featureID {
+		if existing.FeatureID != featureID ||
+			existing.PlanningRoundLimit != planningRoundLimit ||
+			existing.ImplementationReviewRoundLimit != implementationReviewRoundLimit {
 			return Run{}, false, ErrRecordConflict
 		}
 		return existing, false, nil

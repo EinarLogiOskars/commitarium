@@ -13,14 +13,26 @@ import (
 type createProjectRequest struct {
 	Name           string                 `json:"name"`
 	RecoveryPolicy project.RecoveryPolicy `json:"recovery_policy"`
+	DialogueLimits *dialogueLimitsRequest `json:"dialogue_limits"`
 }
 
 type projectResponse struct {
 	ID                string                     `json:"id"`
 	Name              string                     `json:"name"`
 	RecoveryPolicy    project.RecoveryPolicy     `json:"recovery_policy"`
+	DialogueLimits    dialogueLimitsResponse     `json:"dialogue_limits"`
 	ForgejoRepository *forgejoRepositoryResponse `json:"forgejo_repository,omitempty"`
 	CreatedAt         time.Time                  `json:"created_at"`
+}
+
+type dialogueLimitsRequest struct {
+	PlanningRounds             *int `json:"planning_rounds"`
+	ImplementationReviewRounds *int `json:"implementation_review_rounds"`
+}
+
+type dialogueLimitsResponse struct {
+	PlanningRounds             int `json:"planning_rounds"`
+	ImplementationReviewRounds int `json:"implementation_review_rounds"`
 }
 
 type forgejoRepositoryResponse struct {
@@ -49,11 +61,22 @@ func (api *API) createProjectHandler(
 		)
 		return
 	}
+	dialogueLimits, err := decodeDialogueLimits(request.DialogueLimits, true)
+	if err != nil {
+		writeError(
+			w,
+			http.StatusBadRequest,
+			"invalid_dialogue_limits",
+			"dialogue_limits must include non-negative planning_rounds and implementation_review_rounds; zero means unlimited",
+		)
+		return
+	}
 
 	createdProject, err := api.projects.Create(
 		r.Context(),
 		request.Name,
 		request.RecoveryPolicy,
+		dialogueLimits,
 	)
 	if err != nil {
 		if errors.Is(err, project.ErrNameRequired) {
@@ -71,6 +94,15 @@ func (api *API) createProjectHandler(
 				http.StatusBadRequest,
 				"invalid_recovery_policy",
 				"recovery_policy must be approval_required or automatic",
+			)
+			return
+		}
+		if errors.Is(err, project.ErrInvalidDialogueLimits) {
+			writeError(
+				w,
+				http.StatusBadRequest,
+				"invalid_dialogue_limits",
+				"dialogue limits must be non-negative; zero means unlimited",
 			)
 			return
 		}
@@ -94,6 +126,58 @@ func (api *API) createProjectHandler(
 	if err := json.NewEncoder(w).Encode(newProjectResponse(createdProject)); err != nil {
 		log.Printf("encode project response: %v", err)
 	}
+}
+
+func (api *API) updateProjectDialogueLimitsHandler(w http.ResponseWriter, r *http.Request) {
+	request := dialogueLimitsRequest{}
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_json", "request body must contain valid JSON")
+		return
+	}
+	limits, err := decodeDialogueLimits(&request, false)
+	if err != nil {
+		writeError(
+			w,
+			http.StatusBadRequest,
+			"invalid_dialogue_limits",
+			"request must include non-negative planning_rounds and implementation_review_rounds; zero means unlimited",
+		)
+		return
+	}
+	updated, err := api.projects.UpdateDialogueLimits(r.Context(), r.PathValue("id"), limits)
+	if err != nil {
+		switch {
+		case errors.Is(err, project.ErrNotFound):
+			writeError(w, http.StatusNotFound, "project_not_found", "project not found")
+		case errors.Is(err, project.ErrInvalidDialogueLimits):
+			writeError(w, http.StatusBadRequest, "invalid_dialogue_limits", "dialogue limits must be non-negative; zero means unlimited")
+		default:
+			log.Printf("update project dialogue limits %q: %v", r.PathValue("id"), err)
+			writeError(w, http.StatusInternalServerError, "internal_error", "internal server error")
+		}
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(newProjectResponse(updated)); err != nil {
+		log.Printf("encode project response: %v", err)
+	}
+}
+
+func decodeDialogueLimits(
+	request *dialogueLimitsRequest,
+	useDefaultsWhenOmitted bool,
+) (project.DialogueLimits, error) {
+	if request == nil && useDefaultsWhenOmitted {
+		return project.DefaultDialogueLimits(), nil
+	}
+	if request == nil || request.PlanningRounds == nil || request.ImplementationReviewRounds == nil {
+		return project.DialogueLimits{}, project.ErrInvalidDialogueLimits
+	}
+	limits := project.DialogueLimits{
+		PlanningRounds:             *request.PlanningRounds,
+		ImplementationReviewRounds: *request.ImplementationReviewRounds,
+	}
+	return limits, limits.Validate()
 }
 
 func (api *API) listProjectsHandler(w http.ResponseWriter, r *http.Request) {
@@ -192,7 +276,12 @@ func (api *API) bindForgejoRepositoryHandler(w http.ResponseWriter, r *http.Requ
 func newProjectResponse(storedProject project.Project) projectResponse {
 	response := projectResponse{
 		ID: storedProject.ID, Name: storedProject.Name,
-		RecoveryPolicy: storedProject.RecoveryPolicy, CreatedAt: storedProject.CreatedAt,
+		RecoveryPolicy: storedProject.RecoveryPolicy,
+		DialogueLimits: dialogueLimitsResponse{
+			PlanningRounds:             storedProject.DialogueLimits.PlanningRounds,
+			ImplementationReviewRounds: storedProject.DialogueLimits.ImplementationReviewRounds,
+		},
+		CreatedAt: storedProject.CreatedAt,
 	}
 	if storedProject.ForgejoRepository != nil {
 		response.ForgejoRepository = &forgejoRepositoryResponse{

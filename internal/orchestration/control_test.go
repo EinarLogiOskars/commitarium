@@ -152,6 +152,8 @@ func activeControlSession(
 		t.Context(),
 		"run_control",
 		"fea_test",
+		2,
+		3,
 	); err != nil {
 		t.Fatalf("create control run: %v", err)
 	} else if !created {

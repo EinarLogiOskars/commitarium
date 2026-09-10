@@ -6,6 +6,7 @@ type Project struct {
 	ID                string
 	Name              string
 	RecoveryPolicy    RecoveryPolicy
+	DialogueLimits    DialogueLimits
 	ForgejoRepository *ForgejoRepository
 	CreatedAt         time.Time
 }

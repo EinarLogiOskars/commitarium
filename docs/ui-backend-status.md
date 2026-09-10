@@ -21,7 +21,9 @@ An item moves to **Settled** only in the commit that finishes and documents it.
 If a settled contract must change, it moves back to **In progress** before the
 change is made. Backend commits that affect the UI must update this document.
 
-Last reconciled with backend commit: `2201ff1`
+To identify the exact backend boundary represented here, run
+`git log -1 -- docs/ui-backend-status.md`. Status changes are committed together
+with the implementation and public API documentation they describe.
 
 ## Settled — safe for UI work
 
@@ -44,11 +46,20 @@ Safe UI capabilities:
 - Build a project switcher with `GET /api/v1/projects`.
 - Retrieve one project with `GET /api/v1/projects/{projectID}`.
 - Display the effective recovery policy returned on a project.
+- Display and edit the project's planning and implementation-review round
+  limits through `PUT /api/v1/projects/{projectID}/dialogue-limits`.
+- Treat `0` as unlimited and positive values as complete two-agent rounds.
 - Bind and display one permanent internal Forgejo repository through
   `PUT /api/v1/projects/{projectID}/forgejo-repository`.
 
 The UI must not expect project deletion, general project editing, or changing a
 bound Forgejo repository. Those operations are not implemented.
+
+Project creation may omit `dialogue_limits` to receive the six-round defaults.
+If supplied, the object contains both `planning_rounds` and
+`implementation_review_rounds`. A run response contains its own immutable copy;
+the UI should display the run values when explaining why active work stopped,
+rather than rereading the project's possibly newer settings.
 
 ### Feature identity and lifecycle
 
@@ -121,20 +132,8 @@ not implemented yet.
 
 ## In progress — avoid for now
 
-### Project dialogue limits
-
-The backend is adding two project settings:
-
-- planning dialogue round limit;
-- implementation-review dialogue round limit.
-
-Both default to six complete two-agent rounds. `0` means unlimited. The active
-workflow will keep a snapshot of the values it started with, so later project
-edits affect only future workflows.
-
-Until this item moves to **Settled**, the UI should not hardcode an editable
-settings form, request fields, response fields, or update route. It may describe
-the current six-round behavior as a temporary backend default.
+No backend contract is marked in progress at this committed checkpoint. The
+next backend slice will be moved here before its public surface changes.
 
 ## Planned — do not depend on it yet
 

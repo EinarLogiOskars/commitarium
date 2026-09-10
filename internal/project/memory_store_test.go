@@ -104,3 +104,25 @@ func TestMemoryStoreListsAndBindsForgejoRepository(t *testing.T) {
 		t.Fatalf("expected %v, got %v", ErrForgejoRepositoryAlreadyBound, err)
 	}
 }
+
+func TestMemoryStoreUpdatesDialogueLimits(t *testing.T) {
+	store := NewMemoryStore()
+	created := Project{
+		ID: "prj_test", Name: "Test project",
+		DialogueLimits: DefaultDialogueLimits(), CreatedAt: time.Now(),
+	}
+	if err := store.Create(t.Context(), created); err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	limits := DialogueLimits{PlanningRounds: 0, ImplementationReviewRounds: 4}
+	updated, err := store.UpdateDialogueLimits(t.Context(), created.ID, limits)
+	if err != nil {
+		t.Fatalf("update dialogue limits: %v", err)
+	}
+	if updated.DialogueLimits != limits {
+		t.Fatalf("unexpected limits %+v", updated.DialogueLimits)
+	}
+	if _, err := store.UpdateDialogueLimits(t.Context(), "prj_missing", limits); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected %v, got %v", ErrNotFound, err)
+	}
+}

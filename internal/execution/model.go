@@ -20,13 +20,15 @@ const (
 )
 
 type Run struct {
-	ID        string
-	FeatureID string
-	Status    RunStatus
-	Reason    string
-	StartedAt time.Time
-	UpdatedAt time.Time
-	EndedAt   *time.Time
+	ID                             string
+	FeatureID                      string
+	Status                         RunStatus
+	Reason                         string
+	PlanningRoundLimit             int
+	ImplementationReviewRoundLimit int
+	StartedAt                      time.Time
+	UpdatedAt                      time.Time
+	EndedAt                        *time.Time
 }
 
 type SessionStatus string
@@ -163,6 +165,10 @@ func (run Run) Validate() error {
 		return fmt.Errorf("%w: feature ID is required", ErrInvalidRun)
 	case !run.Status.IsValid():
 		return fmt.Errorf("%w: status %q is not recognized", ErrInvalidRun, run.Status)
+	case run.PlanningRoundLimit < 0:
+		return fmt.Errorf("%w: planning round limit cannot be negative", ErrInvalidRun)
+	case run.ImplementationReviewRoundLimit < 0:
+		return fmt.Errorf("%w: implementation review round limit cannot be negative", ErrInvalidRun)
 	case run.StartedAt.IsZero():
 		return fmt.Errorf("%w: start time is required", ErrInvalidRun)
 	case run.UpdatedAt.Before(run.StartedAt):

@@ -55,8 +55,10 @@ structured `Review response` PR comment; the original reviewer then reviews
 that exact revision.
 Review and lead-response pairs repeat for at most six rounds by default. The
 round is completed before the workflow stops for user input, and a zero round
-limit is reserved to mean unlimited once project settings expose it. Claude
-Code execution and the user interface remain to be built.
+limit means unlimited. Projects expose separate planning and implementation-
+review limits, and every run snapshots both values when it starts so later
+settings changes affect only future workflows. Claude Code execution and the
+user interface remain to be built.
 Projects can be listed and permanently associated with one verified Forgejo
 repository.
 
