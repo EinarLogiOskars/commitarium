@@ -11,17 +11,13 @@ import (
 
 	"github.com/EinarLogiOskars/commitarium/internal/execution"
 	"github.com/EinarLogiOskars/commitarium/internal/orchestration"
-	"github.com/EinarLogiOskars/commitarium/internal/workspace"
 )
 
 type planningStarterStub struct {
-	run                   execution.Run
-	publication           workspace.Publication
-	publicationCreated    bool
-	err                   error
-	receivedRunID         string
-	receivedKey           string
-	receivedCommitMessage string
+	run           execution.Run
+	err           error
+	receivedRunID string
+	receivedKey   string
 }
 
 func (stub *planningStarterStub) StartPlanning(
@@ -62,18 +58,6 @@ func (stub *planningStarterStub) StartImplementation(
 	stub.receivedRunID = runID
 	stub.receivedKey = idempotencyKey
 	return stub.run, true, stub.err
-}
-
-func (stub *planningStarterStub) PublishImplementation(
-	_ context.Context,
-	runID string,
-	idempotencyKey string,
-	message string,
-) (workspace.Publication, bool, error) {
-	stub.receivedRunID = runID
-	stub.receivedKey = idempotencyKey
-	stub.receivedCommitMessage = message
-	return stub.publication, stub.publicationCreated, stub.err
 }
 
 type planningExecutionStub struct {

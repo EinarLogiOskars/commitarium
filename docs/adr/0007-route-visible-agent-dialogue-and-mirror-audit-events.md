@@ -71,9 +71,12 @@ live conversation and Forgejo audit trail have different purposes:
   references under the correct identity.
 
 Routine progress chatter and low-level tool activity need not become pull
-request comments. Forgejo audit entries link back to stable conversation or
-workflow-event identifiers where practical, so a user can correlate the concise
-record with the fuller conversation.
+request comments. As refined by ADR-009, the responsible agent writes each
+structured plan, finding, response, test result, or approval directly under its
+own Forgejo identity; the coordinator does not copy conversation prose into the
+pull request. Audit entries link back to stable conversation or workflow-event
+identifiers where practical, so a user can correlate the concise record with the
+fuller conversation.
 
 Feature work occurs on Forgejo-backed workspaces inside container-managed
 storage. Agent containers receive only the provider state, project workspace,

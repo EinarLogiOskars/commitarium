@@ -44,7 +44,6 @@ const (
 
 var ErrPlanningNotAllowed = errors.New("planning cannot start from the current workflow state")
 var ErrImplementationNotAllowed = errors.New("implementation cannot start from the current workflow state")
-var ErrImplementationPublicationNotAllowed = errors.New("implementation cannot be committed from the current workflow state")
 
 // RemoteLeadExecution is the durable coordinator state used by the first real
 // lead turn. It deliberately contains no workflow transition: goal
@@ -90,7 +89,6 @@ type RemoteLeadWorkspaceService interface {
 	PublishPlan(context.Context, string, string, string, string) (workspace.Workspace, bool, error)
 	VerifyPublishedPlan(context.Context, string, string, string, string) (workspace.Workspace, error)
 	VerifyImplementationContinuation(context.Context, string, string, string, string) (workspace.Workspace, error)
-	PublishImplementation(context.Context, string, string, string, string, string, string, string) (workspace.Publication, bool, error)
 }
 
 type RemoteLeadWorker interface {
@@ -1090,97 +1088,6 @@ func (starter *RemoteLeadStarter) StartImplementation(
 	go starter.launch(request)
 	startedRun, err := starter.executions.GetRun(ctx, run.ID)
 	return startedRun, true, err
-}
-
-// PublishImplementation is the explicit user gate between agent editing and
-// review. It runs synchronously because the API must return the exact durable
-// commit receipt, while the run claim fences agent starts in this process.
-func (starter *RemoteLeadStarter) PublishImplementation(
-	ctx context.Context,
-	runID string,
-	idempotencyKey string,
-	commitMessage string,
-) (workspace.Publication, bool, error) {
-	if strings.TrimSpace(runID) == "" || strings.TrimSpace(idempotencyKey) == "" ||
-		strings.TrimSpace(commitMessage) == "" || starter.workspaces == nil {
-		return workspace.Publication{}, false, ErrImplementationPublicationNotAllowed
-	}
-	run, err := starter.executions.GetRun(ctx, runID)
-	if err != nil {
-		return workspace.Publication{}, false, err
-	}
-	storedFeature, err := starter.features.GetByID(ctx, run.FeatureID)
-	if err != nil {
-		return workspace.Publication{}, false, err
-	}
-	lead, err := starter.executions.GetSession(ctx, remoteLeadSessionID(run.ID))
-	if err != nil {
-		return workspace.Publication{}, false, err
-	}
-	reviewer, err := starter.executions.GetSession(ctx, remoteReviewerSessionID(run.ID))
-	if err != nil {
-		return workspace.Publication{}, false, err
-	}
-	if storedFeature.State != feature.StateImplementing ||
-		run.Status != execution.RunStatusWaitingForUser ||
-		lead.Status != execution.SessionStatusWaitingForUser ||
-		reviewer.Status != execution.SessionStatusWaitingForUser ||
-		lead.AgentID != remoteLeadAgentID || lead.Role != worker.RoleLead ||
-		reviewer.AgentID != remoteReviewerAgentID || reviewer.Role != worker.RoleReviewer ||
-		lead.ProviderSessionID == "" || reviewer.ProviderSessionID == "" {
-		return workspace.Publication{}, false, ErrImplementationPublicationNotAllowed
-	}
-	messages, err := starter.executions.PlanningMessagesForRun(ctx, run.ID)
-	if err != nil {
-		return workspace.Publication{}, false, err
-	}
-	if len(messages) == 0 || messages[len(messages)-1].Role != worker.RoleLead ||
-		messages[len(messages)-1].Event.Type != worker.EventPlanSubmitted {
-		return workspace.Publication{}, false, ErrImplementationPublicationNotAllowed
-	}
-	plan := messages[len(messages)-1].Event
-	published, err := starter.planPublicationRecorded(ctx, plan)
-	if err != nil {
-		return workspace.Publication{}, false, err
-	}
-	if !published {
-		return workspace.Publication{}, false, ErrImplementationPublicationNotAllowed
-	}
-	checkpoint, err := starter.executions.GetWorkerAttempt(ctx, lead.ID)
-	if err != nil {
-		return workspace.Publication{}, false, err
-	}
-	if _, implementing := implementationTurnNumber(lead.ID, checkpoint.AttemptID); !implementing {
-		return workspace.Publication{}, false, ErrImplementationPublicationNotAllowed
-	}
-	if err := starter.confirmCompletedTurn(ctx, lead, checkpoint); err != nil {
-		return workspace.Publication{}, false, fmt.Errorf(
-			"%w: implementation turn is not complete: %v",
-			ErrImplementationPublicationNotAllowed, err,
-		)
-	}
-	if !starter.claim(run.ID) {
-		return workspace.Publication{}, false, ErrImplementationPublicationNotAllowed
-	}
-	defer starter.release(run.ID)
-	publication, created, err := starter.workspaces.PublishImplementation(
-		ctx, storedFeature.ProjectID, storedFeature.ID, plan.ID, plan.Text,
-		run.ID, idempotencyKey, commitMessage,
-	)
-	if err != nil {
-		return workspace.Publication{}, false, err
-	}
-	_, err = starter.executions.RecordSessionEventWithID(
-		ctx, publication.ID+":activity", lead.ID,
-		worker.Event{Type: worker.EventActivity, Text: fmt.Sprintf(
-			"The user-approved implementation was committed as %s and pushed to the internal Forgejo pull request.",
-			publication.CommitID,
-		)},
-	)
-	if err != nil {
-		return workspace.Publication{}, false, err
-	}
-	return publication, created, nil
 }
 
 func (starter *RemoteLeadStarter) implementationRequest(

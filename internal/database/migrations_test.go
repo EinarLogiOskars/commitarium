@@ -54,6 +54,45 @@ func TestMigrateCreatesProjectsTable(t *testing.T) {
 	}
 }
 
+func TestMigrateDropsCoordinatorOwnedWorkspacePublications(t *testing.T) {
+	db, err := OpenSQLite(t.Context(), filepath.Join(t.TempDir(), "coordinator.db"))
+	if err != nil {
+		t.Fatalf("open SQLite database: %v", err)
+	}
+	defer db.Close()
+	migrations, err := fs.Sub(migrationFiles, "migrations")
+	if err != nil {
+		t.Fatalf("open embedded migrations: %v", err)
+	}
+	provider, err := goose.NewProvider(goose.DialectSQLite3, db, migrations)
+	if err != nil {
+		t.Fatalf("create migration provider: %v", err)
+	}
+	if _, err := provider.UpTo(t.Context(), 14); err != nil {
+		t.Fatalf("migrate schema with workspace publications: %v", err)
+	}
+	var tableName string
+	if err := db.QueryRowContext(
+		t.Context(),
+		`SELECT name FROM sqlite_schema WHERE type = 'table' AND name = 'workspace_publications'`,
+	).Scan(&tableName); err != nil {
+		t.Fatalf("find pre-existing workspace publications table: %v", err)
+	}
+	if err := Migrate(t.Context(), db); err != nil {
+		t.Fatalf("apply publication-removal migration: %v", err)
+	}
+	var tableCount int
+	if err := db.QueryRowContext(
+		t.Context(),
+		`SELECT count(*) FROM sqlite_schema WHERE type = 'table' AND name = 'workspace_publications'`,
+	).Scan(&tableCount); err != nil {
+		t.Fatalf("inspect migrated schema: %v", err)
+	}
+	if tableCount != 0 {
+		t.Fatalf("workspace publications table still exists after migration")
+	}
+}
+
 func TestRecoveryMigrationPreservesExistingExecutionRecords(t *testing.T) {
 	db, err := OpenSQLite(t.Context(), filepath.Join(t.TempDir(), "coordinator.db"))
 	if err != nil {

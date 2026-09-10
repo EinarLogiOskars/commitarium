@@ -65,6 +65,10 @@ Forgejo is the agent-managed source of truth for plans, review discussion, and
 the internal pull-request audit trail. The coordinator database stores only the
 operational state needed to run and recover workflows. GitHub credentials and
 actions stay outside the agent containers and remain user-controlled.
+The intended responsibility split is recorded in
+[ADR-009](docs/adr/0009-let-agents-own-internal-forge-actions.md): each agent
+uses its own scoped Forgejo identity for commits and structured PR work, while
+the coordinator controls workflow and verifies important results.
 
 The planned external handoff has two explicit trusted-host steps. First,
 Commitarium synchronizes an approved feature into the user's selected local
@@ -414,8 +418,8 @@ local descendant commits: those are existing agent or user work and must be
 preserved. The resumed lead must inspect HEAD, branch, status, and diff before
 editing, avoid repeating completed work, and stop if the state is ambiguous or
 the message would change the accepted goal or plan. Each accepted message creates
-one numbered implementation attempt, remains forbidden from committing or
-pushing, and returns to `waiting_for_user` when it finishes.
+one numbered implementation attempt and returns to `waiting_for_user` when it
+finishes.
 
 The command and its `user_message` activity are committed together before the
 worker is contacted. Retrying the same idempotency key creates no additional
@@ -423,38 +427,13 @@ turn. If the coordinator restarts after admission, it reattaches to the exact
 numbered attempt and applies the pending command once without issuing a second
 worker request.
 
-After inspecting the lead activity and the host-visible managed workspace, the
-user can explicitly commit and push that implementation to the internal
-Forgejo feature branch:
-
-```sh
-curl -i -X POST \
-  http://127.0.0.1:8080/api/v1/runs/RUN_ID/implementation/commit \
-  -H 'Content-Type: application/json' \
-  -H 'Idempotency-Key: commit-implementation-1' \
-  -d '{"message":"feat: implement the agreed change"}'
-```
-
-This is deliberately a user action; the coordinator does not infer readiness
-from the agent's final prose. It snapshots every tracked, deleted, and untracked
-file in the managed checkout using a private Git index, creates an exact commit
-without exposing the Forgejo token to the worker, moves the local feature branch
-to that commit, and pushes only to its internal `commitarium` remote. The commit
-message is one line of at most 200 bytes.
-
-Before changing a visible Git ref, SQLite stores the old local and Forgejo
-commit IDs plus the exact intended commit. A retry can therefore finish a
-partly completed local operation or adopt an exact push that already reached
-Forgejo. If either branch moved to any other commit, it stops instead of
-resetting or force-pushing. Completion appends one marked `Implementation
-revision` entry to the existing draft PR and adds an activity event to the lead
-session. An exact completed retry returns the same receipt without repeating
-the Git push or PR update.
-
-This internal commit and its Commitarium service identity are part of the
-Forgejo audit history only. The later trusted-host handoff will synchronize the
-approved result into the user's local repository as a separate clean,
-user-authored commit before any optional GitHub or other upstream push.
+The temporary coordinator-owned implementation commit endpoint has been
+removed. At this checkpoint the real Codex worker does not yet receive a scoped
+Forgejo identity, so implementation turns still stop before commit and push.
+The next functional slice will let the lead commit, push, and update the draft
+PR under its own internal identity, then let the coordinator verify the exact
+result before review starts. This internal work remains separate from the later
+trusted-host synchronization and optional external push.
 
 The versioned [internal worker API](docs/worker-api.md) now has tested client and
 server components for authenticated attempt inspection and control. Its worker

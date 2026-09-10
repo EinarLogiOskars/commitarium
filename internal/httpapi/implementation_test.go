@@ -80,3 +80,17 @@ func TestStartImplementationHandlerMapsSafetyFailures(t *testing.T) {
 		t.Fatalf("expected unexpected failure to return 500, got %d", internal.Code)
 	}
 }
+
+func TestImplementationCommitProxyIsNotExposed(t *testing.T) {
+	handler := NewWithWorkspaceAndRealWorkflowService(
+		nil, nil, nil, planningExecutionStub{}, nil, nil, nil, &planningStarterStub{},
+	)
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(
+		http.MethodPost, "/api/v1/runs/run_implementation/implementation/commit", nil,
+	))
+
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("expected removed commit proxy to return 404, got %d", recorder.Code)
+	}
+}
