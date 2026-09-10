@@ -336,11 +336,25 @@ activity. `respond` becomes a normal `message`; `submit_plan` becomes a distinct
 searching prose. The lead is instructed to submit only after it concludes that
 both agents genuinely agree and the plan satisfies the accepted goal.
 
-The loop stops after `plan_submitted`, or after ten total shared planning
-messages without submission. Reaching ten messages returns the run to
-`waiting_for_user` so the user can resolve the disagreement or ambiguity. A
-submitted plan is ready for the following Forgejo-publication slice; it has not
-yet been written to the PR.
+After `plan_submitted`, the coordinator verifies that the stored repository,
+feature branch, host-visible checkout, and open draft PR still have their exact
+managed identities. The remote feature branch and local checkout must remain at
+the clean pre-implementation commit. A moved HEAD or uncommitted diff is
+preserved and treated as a conflict requiring user review.
+
+The coordinator preserves the existing PR body and appends one hidden
+publication marker followed by an `Agreed implementation plan` section. The
+marker is derived from the durable submitted-plan event. A retry reads Forgejo
+first: an exact marked section is accepted without another update, while the
+same marker with different content is a conflict. After confirmation, a public
+lead-session activity records the PR publication and the run waits for the next
+implementation slice.
+
+If Forgejo publication cannot be confirmed, the coordinator publishes a
+`recovery_assessment`, starts no agent or implementation work, and waits for the
+user. Retrying this same action reconciles only the submitted plan. Reaching ten
+messages without submission likewise returns the run to `waiting_for_user` so
+the user can resolve the disagreement or ambiguity.
 
 Each role's attempts are numbered deterministically from durable planning
 history. An exact action retry therefore returns the existing run without
@@ -519,13 +533,15 @@ no replacement agent starts. The current real-worker restart behavior
 deliberately marks a previously active process indeterminate, so resuming after
 the worker itself restarts remains a later slice.
 
-During the autonomous planning loop, the run remains `running` across every
+During the autonomous planning loop and agreed-plan publication, the run remains `running` across every
 internal handoff. If the coordinator stops after one response is durable but
 before the other agent starts, startup uses the ordered planning history to
 continue with the correct agent and next numbered attempt. SQLite refuses that
 handoff while any other session is actively working. If startup finds a durable
-`plan_submitted` event or ten planning messages, it restores the corresponding
-user gate instead of continuing. These cases never launch two agents
+`plan_submitted` event, it reconciles the marked PR update before recording
+publication and returning to the user gate. A crash after Forgejo accepted the
+update therefore does not duplicate the plan. Ten planning messages without a
+submission restore the user gate directly. These cases never launch two agents
 concurrently.
 
 In the simulated workflow, a resumed worker receives a concise recovery

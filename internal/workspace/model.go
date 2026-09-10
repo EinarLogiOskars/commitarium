@@ -183,6 +183,38 @@ type PullRequest struct {
 	CreatedAt    time.Time
 }
 
+// PlanPublicationSpec describes the one curated planning artifact that belongs
+// in the managed pull request. PublicationMarker is stable across retries, so
+// the remote pull request can prove that this exact submission was applied.
+type PlanPublicationSpec struct {
+	Number            int64
+	FeatureMarker     string
+	PublicationMarker string
+	Plan              string
+	BaseBranch        string
+	HeadBranch        string
+	HeadCommitID      string
+}
+
+func (spec PlanPublicationSpec) Validate() error {
+	if spec.Number < 1 {
+		return errors.New("pull request number is required")
+	}
+	required := []string{
+		spec.FeatureMarker, spec.PublicationMarker, spec.Plan,
+		spec.BaseBranch, spec.HeadBranch,
+	}
+	for _, value := range required {
+		if strings.TrimSpace(value) == "" || value != strings.TrimSpace(value) {
+			return errors.New("plan publication fields are required and must be trimmed")
+		}
+	}
+	if !safeCommitID.MatchString(spec.HeadCommitID) {
+		return errors.New("plan publication head must be a lowercase commit ID")
+	}
+	return nil
+}
+
 func (pullRequest PullRequest) Validate() error {
 	if pullRequest.Number < 1 || !safePullRequestURL(pullRequest.URL) {
 		return errors.New("pull request identity is invalid")
@@ -217,12 +249,13 @@ func safePullRequestURL(value string) bool {
 }
 
 type CheckoutSpec struct {
-	WorkspaceID     string
-	RepositoryOwner string
-	RepositoryName  string
-	Branch          string
-	BaseCommitID    string
-	AlreadyReady    bool
+	WorkspaceID          string
+	RepositoryOwner      string
+	RepositoryName       string
+	Branch               string
+	BaseCommitID         string
+	AlreadyReady         bool
+	RequireCleanBaseline bool
 }
 
 func (spec CheckoutSpec) Validate() error {
@@ -231,6 +264,9 @@ func (spec CheckoutSpec) Validate() error {
 	}
 	if strings.TrimSpace(spec.RepositoryOwner) == "" || strings.TrimSpace(spec.RepositoryName) == "" {
 		return errors.New("repository identity is required")
+	}
+	if spec.RequireCleanBaseline && !spec.AlreadyReady {
+		return errors.New("a clean baseline check requires an existing checkout")
 	}
 	return (Branch{Name: spec.Branch, CommitID: spec.BaseCommitID}).Validate()
 }

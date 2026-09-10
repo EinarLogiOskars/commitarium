@@ -346,6 +346,138 @@ func TestClientRejectsPullRequestWithoutManagedIdentity(t *testing.T) {
 	}
 }
 
+func TestClientPublishesPlanWithoutReplacingPullRequestBody(t *testing.T) {
+	spec := testPlanPublicationSpec()
+	stored := managedPullRequest(testPullRequestSpec())
+	stored.Body += "\n\nUser-added context"
+	calls := 0
+	client := newBranchTestClient(t, func(request *http.Request) (*http.Response, error) {
+		calls++
+		switch calls {
+		case 1:
+			return pullRequestJSONResponse(t, http.StatusOK, stored), nil
+		case 2:
+			if request.Method != http.MethodPatch ||
+				request.URL.Path != "/api/v1/repos/owner/repository/pulls/7" {
+				t.Fatalf("unexpected publication request %s %s", request.Method, request.URL)
+			}
+			var payload struct {
+				Body string `json:"body"`
+			}
+			if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+				t.Fatalf("decode publication request: %v", err)
+			}
+			if !strings.Contains(payload.Body, "User-added context") ||
+				!strings.Contains(payload.Body, spec.PublicationMarker) ||
+				!strings.Contains(payload.Body, "## Agreed implementation plan\n\n"+spec.Plan) {
+				t.Fatalf("publication replaced or omitted body content: %q", payload.Body)
+			}
+			stored.Body = payload.Body
+			// Forgejo 16 returns 201 for a successful pull-request edit.
+			return pullRequestJSONResponse(t, http.StatusCreated, stored), nil
+		default:
+			t.Fatalf("unexpected publication request %d", calls)
+			return nil, nil
+		}
+	})
+
+	updated, published, err := client.EnsurePullRequestPlan(
+		t.Context(), "owner", "repository", spec,
+	)
+	if err != nil || !published || calls != 2 ||
+		!strings.Contains(updated.Body, spec.PublicationMarker) {
+		t.Fatalf("publish plan: pull_request=%+v published=%t calls=%d err=%v", updated, published, calls, err)
+	}
+}
+
+func TestClientAdoptsPreviouslyPublishedPlan(t *testing.T) {
+	spec := testPlanPublicationSpec()
+	stored := managedPullRequest(testPullRequestSpec())
+	stored.Body += "\n\n" + spec.PublicationMarker +
+		"\n\n## Agreed implementation plan\n\n" + spec.Plan
+	calls := 0
+	client := newBranchTestClient(t, func(request *http.Request) (*http.Response, error) {
+		calls++
+		if request.Method != http.MethodGet {
+			t.Fatalf("adoption unexpectedly tried %s", request.Method)
+		}
+		return pullRequestJSONResponse(t, http.StatusOK, stored), nil
+	})
+
+	got, published, err := client.EnsurePullRequestPlan(
+		t.Context(), "owner", "repository", spec,
+	)
+	if err != nil || published || calls != 1 || got.Body != stored.Body {
+		t.Fatalf("adopt plan: pull_request=%+v published=%t calls=%d err=%v", got, published, calls, err)
+	}
+}
+
+func TestClientReconcilesPlanAfterUncertainUpdateResponse(t *testing.T) {
+	spec := testPlanPublicationSpec()
+	remote := managedPullRequest(testPullRequestSpec())
+	calls := 0
+	patches := 0
+	client := newBranchTestClient(t, func(request *http.Request) (*http.Response, error) {
+		calls++
+		if request.Method == http.MethodGet {
+			return pullRequestJSONResponse(t, http.StatusOK, remote), nil
+		}
+		patches++
+		var payload struct {
+			Body string `json:"body"`
+		}
+		if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode uncertain publication: %v", err)
+		}
+		remote.Body = payload.Body
+		return nil, errors.New("connection closed after Forgejo applied update")
+	})
+
+	if _, _, err := client.EnsurePullRequestPlan(
+		t.Context(), "owner", "repository", spec,
+	); !errors.Is(err, project.ErrForgejoUnavailable) {
+		t.Fatalf("expected uncertain Forgejo error, got %v", err)
+	}
+	got, published, err := client.EnsurePullRequestPlan(
+		t.Context(), "owner", "repository", spec,
+	)
+	if err != nil || published || patches != 1 || calls != 3 ||
+		!strings.Contains(got.Body, spec.PublicationMarker) {
+		t.Fatalf("reconcile uncertain update: pull_request=%+v published=%t calls=%d patches=%d err=%v", got, published, calls, patches, err)
+	}
+}
+
+func TestClientRejectsChangedPlanBehindPublicationMarker(t *testing.T) {
+	spec := testPlanPublicationSpec()
+	stored := managedPullRequest(testPullRequestSpec())
+	stored.Body += "\n\n" + spec.PublicationMarker +
+		"\n\n## Agreed implementation plan\n\nDifferent plan"
+	client := newBranchTestClient(t, func(*http.Request) (*http.Response, error) {
+		return pullRequestJSONResponse(t, http.StatusOK, stored), nil
+	})
+
+	_, _, err := client.EnsurePullRequestPlan(t.Context(), "owner", "repository", spec)
+	if !errors.Is(err, workspace.ErrPullRequestConflict) {
+		t.Fatalf("expected %v, got %v", workspace.ErrPullRequestConflict, err)
+	}
+}
+
+func TestClientRejectsDuplicatePlanPublicationMarker(t *testing.T) {
+	spec := testPlanPublicationSpec()
+	stored := managedPullRequest(testPullRequestSpec())
+	section := spec.PublicationMarker +
+		"\n\n## Agreed implementation plan\n\n" + spec.Plan
+	stored.Body += "\n\n" + section + "\n\n" + section
+	client := newBranchTestClient(t, func(*http.Request) (*http.Response, error) {
+		return pullRequestJSONResponse(t, http.StatusOK, stored), nil
+	})
+
+	_, _, err := client.EnsurePullRequestPlan(t.Context(), "owner", "repository", spec)
+	if !errors.Is(err, workspace.ErrPullRequestConflict) {
+		t.Fatalf("expected %v, got %v", workspace.ErrPullRequestConflict, err)
+	}
+}
+
 func TestNewClientRejectsUnsafeConfiguration(t *testing.T) {
 	for _, config := range []ClientConfig{
 		{},
@@ -387,6 +519,16 @@ func testPullRequestSpec() workspace.PullRequestSpec {
 		Title: "WIP: Test feature", Body: marker + "\n\n## Accepted goal\n\nShip it",
 		FeatureMarker: marker, BaseBranch: "main", HeadBranch: "commitarium/fea_test",
 		InitialHeadCommitID: forgejoTestCommitID,
+	}
+}
+
+func testPlanPublicationSpec() workspace.PlanPublicationSpec {
+	return workspace.PlanPublicationSpec{
+		Number: 7, FeatureMarker: "<!-- commitarium-feature: fea_test -->",
+		PublicationMarker: "<!-- commitarium-plan: stable-submission -->",
+		Plan:              "Implement the agreed behavior and verify it.",
+		BaseBranch:        "main", HeadBranch: "commitarium/fea_test",
+		HeadCommitID: forgejoTestCommitID,
 	}
 }
 

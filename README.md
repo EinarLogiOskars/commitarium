@@ -28,11 +28,13 @@ branch that the user and agent container can share. An explicit planning action
 resumes that same lead conversation inside the managed checkout. A second
 action starts a separate persistent reviewer Codex conversation, supplies the
 lead's exact final proposal, and exposes both final messages through one ordered
-planning history and SSE stream. This first exchange stops after the reviewer
-responds. The revision loop, agreed-plan Forgejo update, file changes,
-implementation review, Claude Code execution, and user interface remain to be
-built. Projects can be listed and permanently associated with one verified
-Forgejo repository.
+planning history and SSE stream. After the first review, the same two provider
+sessions alternate until the lead explicitly submits an agreed plan or the
+ten-message safety limit requires user input. A submitted plan is reconciled
+against the clean managed workspace and exact draft pull request, then appended
+once to the PR body. File changes, implementation review, Claude Code execution,
+and the user interface remain to be built. Projects can be listed and
+permanently associated with one verified Forgejo repository.
 
 ## Architecture
 
@@ -347,12 +349,19 @@ believes both agents genuinely agree. A submission appears as a distinct
 `plan_submitted` event, so the coordinator does not search conversational text
 for magic approval words.
 
-The loop stops when the lead submits the plan or when the shared discussion
-reaches ten messages, at which point it waits for user input. The action is safe
-to retry. A coordinator restart during either turn reattaches to the exact
-worker attempt, and a restart between turns continues the stored handoff
-without starting two agents. The agents remain read-only throughout this
-slice, and the submitted plan is not written to the draft PR yet.
+When the lead submits, the coordinator first requires the Forgejo feature branch
+and managed checkout to remain at their clean planning baseline and verifies the
+recorded open draft PR. It preserves the existing PR body and appends one marked
+`Agreed implementation plan` section. The same marker lets retries and restarts
+confirm a prior update without appending the plan twice. A conflict or uncertain
+Forgejo result produces a visible recovery assessment and waits for user review;
+retrying this action reconciles publication without another agent turn.
+
+The loop instead stops for user input if the shared discussion reaches ten
+messages. The action is safe to retry. A coordinator restart during either turn
+reattaches to the exact worker attempt, and a restart between turns continues
+the stored handoff without starting two agents. The agents remain read-only and
+implementation does not begin in this slice.
 
 The versioned [internal worker API](docs/worker-api.md) now has tested client and
 server components for authenticated attempt inspection and control. Its worker

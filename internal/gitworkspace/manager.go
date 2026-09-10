@@ -184,9 +184,18 @@ func (manager *Manager) reconcile(
 		if origin != hostURL || !internalRemoteExists {
 			return manager.localConflict(ctx, "ready checkout remotes were changed")
 		}
+		if spec.RequireCleanBaseline && head != spec.BaseCommitID {
+			return manager.localConflict(ctx, "checkout HEAD moved after the planning baseline was recorded")
+		}
 		if head != spec.BaseCommitID {
 			if _, err := run("merge-base", "--is-ancestor", spec.BaseCommitID, head); err != nil {
 				return manager.localConflict(ctx, "checkout HEAD no longer contains its recorded base commit")
+			}
+		}
+		if spec.RequireCleanBaseline {
+			status, err := run("status", "--porcelain=v1", "--untracked-files=all")
+			if err != nil || status != "" {
+				return manager.localConflict(ctx, "checkout has changes outside the agreed planning baseline")
 			}
 		}
 		// Deliberately do not reject a dirty ready checkout: it may contain
