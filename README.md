@@ -37,8 +37,12 @@ resumes the same lead to perform the first write-capable implementation turn.
 While implementation is waiting, the user may edit the shared checkout or
 describe a blocker resolution through the existing session-message API; each
 message safely resumes the same provider conversation for one more bounded
-turn. The result remains uncommitted for inspection; committing, pushing,
-implementation review, Claude Code execution, and the user interface remain to
+turn. When the lead decides the implementation is ready for review, it commits
+and pushes the feature branch under its own Forgejo identity and writes one
+structured implementation summary to the draft PR. The coordinator checks that
+the reported clean commit, remote branch, PR head, agreed plan, summary, and
+author all match before marking the revision ready for automated review.
+Implementation review, Claude Code execution, and the user interface remain to
 be built.
 Projects can be listed and permanently associated with one verified Forgejo
 repository.
@@ -102,20 +106,32 @@ opt-in real worker described below.
 
 ### Configure repository verification
 
-Repository binding uses a Forgejo access token stored in the local, gitignored
-file `.commitarium/forgejo-token`. This directory is mounted read-only into the
-coordinator. The token is read when a repository is verified or a managed branch
-is cloned; for Git it is supplied only to that child process. It is not placed in
-Compose environment variables, Git configuration, SQLite, API responses, or logs.
+Repository binding and coordinator verification use a Forgejo access token
+stored in the local, gitignored file `.commitarium/forgejo-token`. Only this file
+is mounted read-only into the coordinator. The token is read when a repository,
+branch, pull request, or agent publication is checked; for Git it is supplied
+only to that child process. It is not placed in Compose environment variables,
+Git configuration, SQLite, API responses, or logs.
 
 Create a token for the local Forgejo user through **User settings → Applications**
-at `http://127.0.0.1:3001`, give it `write:repository` scope, and save only the
-token value in that file. Binding itself only reads repository metadata; the
-write scope is needed by the immediately following branch and pull-request
-workflow. The directory and file should be readable only by the current host
-user. `COMMITARIUM_CONFIG_DIR` can point Compose at a different private
-directory. Replacing the file rotates the credential without restarting the
-coordinator.
+at `http://127.0.0.1:3001`, give it `write:repository` and `read:issue` scope,
+and save only the token value in that file. Repository write access is needed
+for branch and pull-request preparation; issue read access lets the coordinator
+confirm agent-authored PR comments without writing them. The directory and file
+should be readable only by the current host user.
+`COMMITARIUM_FORGEJO_TOKEN_SOURCE` can select another private source file.
+Recreate the coordinator after replacing that file so Docker mounts the new
+file inode.
+
+The real Codex lead has a separate Forgejo user and token. Give that user write
+access only to repositories it may implement, create a token with
+`write:repository` and `write:issue`, and save only its value at
+`.commitarium/agents/codex-lead/forgejo-token`. The optional
+`COMMITARIUM_CODEX_FORGEJO_TOKEN_SOURCE` selects another source file. Compose
+mounts it only into the Codex worker; the coordinator does not receive it.
+`COMMITARIUM_CODEX_FORGEJO_LOGIN`, `COMMITARIUM_CODEX_GIT_AUTHOR_NAME`, and
+`COMMITARIUM_CODEX_GIT_AUTHOR_EMAIL` must describe that account. Recreate the
+worker after rotating the file because it loads the credential at startup.
 
 Managed feature checkouts are written beneath
 `${COMMITARIUM_WORKSPACE_SOURCE:-./.commitarium/workspaces}` on the host. Compose
@@ -389,14 +405,26 @@ It then moves the feature to `implementing`, atomically rotates the lead to one
 deterministic implementation attempt, and resumes the same provider thread in
 the managed workspace. The lead must inspect Git HEAD, branch, status, and diff
 before editing; unexpected or ambiguous state must be reported without being
-reset or overwritten. The lead may modify files and run available tests, but is
-explicitly forbidden to commit or push in this turn. Its commands, edits, test
-activity, and final summary remain visible through the existing lead-session
-history and SSE stream. The final run reason is deliberately neutral: users
-inspect that activity and the workspace to distinguish completed changes from
-a safely reported blocker.
+reset or overwritten. The lead may modify files and run available tests. When it
+decides the result is ready for independent review, it commits under its
+configured Git identity, pushes the exact HEAD to the `commitarium` remote, and
+posts one marked `Implementation summary` comment to the draft PR. It then
+returns structured `published` facts containing that commit and PR number. If
+publication is unsafe or cannot be confirmed, it instead returns `blocked` with
+a concrete reason and does not claim a commit.
 
-An exact action retry does not start another attempt. If the coordinator stops
+The coordinator does not decide whether the work is complete. It mechanically
+confirms the lead's reported clean HEAD, its ancestry from the planning base,
+the exact Forgejo branch and PR head, the still-published plan, and one matching
+PR comment written by the configured lead account. A successful check records
+one visible verification activity and leaves the run ready for the forthcoming
+automatic reviewer. A contradiction or unavailable external check records a
+recovery assessment and waits without starting another agent.
+
+An exact action retry after successful verification does not start another
+attempt. If verification previously stopped because Forgejo was unavailable or
+misconfigured, repeating the action rechecks the terminal result only; it never
+resumes or replaces the lead. If the coordinator stops
 while this turn is active, startup looks up and reattaches to that exact worker
 attempt without issuing another resume request. A worker-container restart still
 marks in-flight provider work indeterminate and requires user review.
@@ -418,8 +446,9 @@ local descendant commits: those are existing agent or user work and must be
 preserved. The resumed lead must inspect HEAD, branch, status, and diff before
 editing, avoid repeating completed work, and stop if the state is ambiguous or
 the message would change the accepted goal or plan. Each accepted message creates
-one numbered implementation attempt and returns to `waiting_for_user` when it
-finishes.
+one numbered implementation attempt. It either reports a blocker or performs
+the same commit, push, structured PR update, and verification path described
+above.
 
 The command and its `user_message` activity are committed together before the
 worker is contacted. Retrying the same idempotency key creates no additional
@@ -427,13 +456,12 @@ turn. If the coordinator restarts after admission, it reattaches to the exact
 numbered attempt and applies the pending command once without issuing a second
 worker request.
 
-The temporary coordinator-owned implementation commit endpoint has been
-removed. At this checkpoint the real Codex worker does not yet receive a scoped
-Forgejo identity, so implementation turns still stop before commit and push.
-The next functional slice will let the lead commit, push, and update the draft
-PR under its own internal identity, then let the coordinator verify the exact
-result before review starts. This internal work remains separate from the later
-trusted-host synchronization and optional external push.
+The temporary coordinator-owned implementation commit endpoint remains
+removed. Commits, feature-branch pushes, and structured PR summaries are now
+owned by the lead's scoped Forgejo identity. This internal work remains separate
+from the later trusted-host synchronization and optional external push. The next
+functional slice starts the persistent reviewer against the exact verified
+revision under a separate reviewer identity.
 
 The versioned [internal worker API](docs/worker-api.md) now has tested client and
 server components for authenticated attempt inspection and control. Its worker

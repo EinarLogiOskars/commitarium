@@ -44,8 +44,9 @@ const (
 // a real adapter must not inherit the worker service's environment implicitly.
 //
 // Secret values are deliberately not part of the coordinator-to-worker HTTP
-// request or worker journal. Future secret provisioning may make narrowly
-// scoped values available here inside the worker immediately before launch.
+// request or worker journal. A trusted worker-local resolver may add narrowly
+// scoped values immediately before launch; callers must not persist or expose
+// the resolved environment.
 type LaunchEnvironment struct {
 	AgentProfileID   string
 	ProjectID        string

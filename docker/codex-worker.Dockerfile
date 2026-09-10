@@ -23,7 +23,7 @@ FROM node:22-bookworm-slim AS build-release-stage
 ARG CODEX_VERSION=0.153.4
 
 RUN apt-get update && \
-    apt-get install --yes --no-install-recommends ca-certificates git && \
+    apt-get install --yes --no-install-recommends ca-certificates curl git jq && \
     rm -rf /var/lib/apt/lists/* && \
     npm install --global --omit=dev "@openai/codex@${CODEX_VERSION}" && \
     codex --version && \
@@ -32,7 +32,7 @@ RUN apt-get update && \
 RUN groupadd --gid 65532 commitarium && \
     useradd --uid 65532 --gid 65532 --home-dir /var/lib/commitarium-provider \
         --no-create-home --shell /usr/sbin/nologin commitarium && \
-    mkdir -p /var/lib/commitarium-provider /var/lib/commitarium-worker /workspaces && \
+    mkdir -p /var/lib/commitarium-provider /var/lib/commitarium-worker /workspaces /run/commitarium-agent && \
     chown -R commitarium:commitarium \
         /var/lib/commitarium-provider /var/lib/commitarium-worker /workspaces && \
     chmod 0700 /var/lib/commitarium-provider /var/lib/commitarium-worker

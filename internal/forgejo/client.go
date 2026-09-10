@@ -302,6 +302,88 @@ func (client *Client) VerifyPullRequestPlan(
 	return pullRequest, err
 }
 
+func (client *Client) VerifyPullRequestImplementation(
+	ctx context.Context,
+	owner string,
+	repository string,
+	spec workspace.ImplementationPublicationSpec,
+) (workspace.PullRequest, error) {
+	var err error
+	owner, repository, err = project.NormalizeRepositoryCoordinate(owner, repository)
+	if err != nil {
+		return workspace.PullRequest{}, err
+	}
+	if err := spec.Validate(); err != nil {
+		return workspace.PullRequest{}, err
+	}
+	pullRequest, err := client.getPullRequest(ctx, owner, repository, spec.Number)
+	if err != nil {
+		return workspace.PullRequest{}, err
+	}
+	planSection := spec.PlanPublicationMarker + "\n\n## Agreed implementation plan\n\n" + spec.Plan
+	if pullRequest.State != "open" || !pullRequest.Draft ||
+		pullRequest.BaseBranch != spec.BaseBranch ||
+		pullRequest.HeadBranch != spec.HeadBranch ||
+		pullRequest.HeadCommitID != spec.HeadCommitID ||
+		strings.Count(pullRequest.Body, spec.FeatureMarker) != 1 ||
+		strings.Count(pullRequest.Body, spec.PlanPublicationMarker) != 1 ||
+		!strings.HasSuffix(pullRequest.Body, planSection) {
+		return workspace.PullRequest{}, workspace.ErrPullRequestConflict
+	}
+
+	status, body, err := client.doJSON(
+		ctx,
+		http.MethodGet,
+		fmt.Sprintf(
+			"/api/v1/repos/%s/%s/issues/%d/comments?limit=50",
+			url.PathEscape(owner), url.PathEscape(repository), spec.Number,
+		),
+		nil,
+	)
+	if err != nil {
+		return workspace.PullRequest{}, err
+	}
+	if status != http.StatusOK {
+		return workspace.PullRequest{}, fmt.Errorf(
+			"%w: pull request comments returned HTTP %d",
+			project.ErrForgejoUnavailable, status,
+		)
+	}
+	var comments []struct {
+		Body string `json:"body"`
+		User struct {
+			Login string `json:"login"`
+		} `json:"user"`
+	}
+	if err := json.Unmarshal(body, &comments); err != nil {
+		return workspace.PullRequest{}, fmt.Errorf(
+			"%w: pull request comments response is invalid JSON",
+			project.ErrForgejoUnavailable,
+		)
+	}
+	// Refuse to guess whether a marker exists beyond the bounded first page.
+	// Implementation runs precede review discussion, so reaching this limit is
+	// itself an unexpected state that should stop automatic routing.
+	if len(comments) >= 50 {
+		return workspace.PullRequest{}, workspace.ErrPullRequestConflict
+	}
+	wantBody := spec.PublicationMarker + "\n\n## Implementation summary\n\n" + spec.Summary
+	matches := 0
+	for _, comment := range comments {
+		if strings.Contains(comment.Body, spec.PublicationMarker) {
+			if comment.Body != wantBody ||
+				!strings.EqualFold(strings.TrimSpace(comment.User.Login), spec.ExpectedAuthor) {
+				return workspace.PullRequest{}, workspace.ErrPullRequestConflict
+			}
+			matches++
+		}
+	}
+	if matches != 1 {
+		return workspace.PullRequest{}, workspace.ErrPullRequestConflict
+	}
+	return pullRequest, nil
+}
+
 func (client *Client) reconcilePullRequestPlan(
 	ctx context.Context,
 	owner string,

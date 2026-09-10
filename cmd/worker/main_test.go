@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -164,6 +165,22 @@ func TestCodexRuntimeUsesPrivateProfileAndRealCapabilities(t *testing.T) {
 	) {
 		t.Fatalf("Codex launch environment = %+v", resolved)
 	}
+	for _, variable := range resolved.Variables {
+		if strings.HasPrefix(variable, "COMMITARIUM_FORGEJO_") ||
+			strings.Contains(variable, "Authorization: token") {
+			t.Fatalf("reviewer received lead Forgejo credential variable %q", variable)
+		}
+	}
+	assignment.Role = workerhttp.RoleLead
+	leadEnvironment, err := workerRuntime.environmentResolver.Resolve(t.Context(), assignment)
+	if err != nil {
+		t.Fatalf("resolve lead launch environment: %v", err)
+	}
+	if !slices.Contains(leadEnvironment.Variables, "COMMITARIUM_FORGEJO_LOGIN=codex-lead") ||
+		!slices.Contains(leadEnvironment.Variables, "GIT_AUTHOR_NAME=Commitarium Codex Lead") ||
+		!slices.Contains(leadEnvironment.Variables, "GIT_CONFIG_VALUE_0=Authorization: token codex-forgejo-test-token") {
+		t.Fatalf("lead launch environment omitted its scoped Forgejo identity: %+v", leadEnvironment)
+	}
 	if !slices.Contains(workerRuntime.capabilities, workerhttp.CapabilityForceStop) ||
 		slices.Contains(workerRuntime.capabilities, workerhttp.CapabilityPause) ||
 		slices.Contains(workerRuntime.capabilities, workerhttp.CapabilityContinue) {
@@ -219,6 +236,10 @@ func TestCheckHealthRejectsUnreachableWorker(t *testing.T) {
 }
 
 func validCodexConfig(workspace string) map[string]string {
+	tokenFile := filepath.Join(filepath.Dir(workspace), "codex-forgejo-token")
+	if err := os.WriteFile(tokenFile, []byte("codex-forgejo-test-token\n"), 0o600); err != nil {
+		panic(err)
+	}
 	return map[string]string{
 		"COMMITARIUM_WORKER_DATABASE_PATH":      "/state/worker.db",
 		"COMMITARIUM_WORKER_TOKEN":              "test-token",
@@ -227,5 +248,10 @@ func validCodexConfig(workspace string) map[string]string {
 		"COMMITARIUM_CODEX_WORKSPACE_ROOT":      filepath.Dir(workspace),
 		"COMMITARIUM_CODEX_PROFILE_ID":          "profile_test",
 		"COMMITARIUM_CODEX_SANDBOX":             "danger-full-access",
+		"COMMITARIUM_CODEX_FORGEJO_URL":         "http://forgejo:3000",
+		"COMMITARIUM_CODEX_FORGEJO_TOKEN_FILE":  tokenFile,
+		"COMMITARIUM_CODEX_FORGEJO_LOGIN":       "codex-lead",
+		"COMMITARIUM_CODEX_GIT_AUTHOR_NAME":     "Commitarium Codex Lead",
+		"COMMITARIUM_CODEX_GIT_AUTHOR_EMAIL":    "codex-lead@commitarium.local",
 	}
 }

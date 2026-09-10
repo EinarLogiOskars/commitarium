@@ -338,7 +338,13 @@ the worker process. They are not fields in the HTTP contract and are not stored
 in the worker journal or coordinator SQLite. The process environment is always
 explicit: even an intentionally empty environment remains distinct from Go's
 `nil` environment, which would inherit all variables from the worker service.
-This slice does not yet load or provision secret values.
+The worker may add trusted startup configuration for a specific role without
+putting it in an attempt request. The real Codex worker currently adds its
+Forgejo token file, Forgejo URL/login, Git author identity, and a URL-scoped Git
+authentication header only to lead attempts. Reviewer attempts in that worker
+do not receive the lead identity. The secret value is never stored in the
+worker journal or coordinator database and is never returned through the API.
+General project-secret provisioning is not implemented yet.
 
 The simulated and real Codex workers use the same standalone Go executable and
 select their provider adapter at startup. The simulated Compose service serves
@@ -372,13 +378,15 @@ prepared feature children may be selected for write-capable implementation.
 The worker owns one configured profile and workspace root. Each attempt selects
 a prepared workspace child by ID and supplies its project, feature, and role
 identity. It does not require a configuration manifest, revision, or digest.
-The worker passes only `CODEX_HOME`, `HOME`, `LANG`, and a fixed executable
-`PATH` to the Codex child. Project secrets are not accepted or delivered in
-this slice. The coordinator's opt-in `real_codex_lead` mode now uses the client
+The worker passes `CODEX_HOME`, `HOME`, `LANG`, and a fixed executable `PATH` to
+every Codex child. Lead attempts additionally receive the worker-private
+Forgejo/Git identity described above. Project secrets are not accepted through
+the worker API. The coordinator's opt-in `real_codex_lead` mode uses the client
 and event pump for goal clarification, read-only collaborative planning, and
-the first write-capable implementation turn. Write permission is controlled by
-the selected mounted workspace and the coordinator's phase-specific
-instructions; the worker HTTP contract itself does not infer workflow policy.
+write-capable implementation publication. Write permission is controlled by
+the selected mounted workspace, role-specific worker environment, and
+phase-specific instructions; the worker HTTP contract itself does not infer
+workflow policy.
 
 The real service is under the `real-codex` Compose profile and is not started by
 the normal development stack. `scripts/smoke-real-codex-worker.sh` provides the
@@ -454,6 +462,13 @@ with two actions: `respond` and `submit_plan`. It strictly decodes the completed
 assistant response, removes the private JSON wrapper, and publishes the content
 as `message` or `plan_submitted`. Invalid actions, empty content, extra fields,
 or trailing JSON fail the attempt instead of being interpreted as agreement.
+
+For `implementation_lead`, the output schema requires either `published` with a
+concise summary, lowercase commit ID, and positive pull-request number, or
+`blocked` with a summary, empty commit ID, and the known PR number. Strict
+decoding rejects extra fields, malformed object IDs, and contradictory action
+combinations. The worker stores valid publication facts in the terminal result
+for exact coordinator recovery; it does not derive them from prose.
 
 User messages use App Server's `turn/steer` operation. Cooperative stop uses
 `turn/interrupt`, and forced stop targets the exact supervised process tree.
