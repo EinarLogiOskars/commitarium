@@ -333,7 +333,9 @@ func createExecutionRecords(
 	}
 	run := execution.Run{
 		ID: "run_execution_test", FeatureID: "fea_execution_test",
-		Status: execution.RunStatusRunning, StartedAt: now, UpdatedAt: now,
+		Status:             execution.RunStatusRunning,
+		PlanningRoundLimit: 0, ImplementationReviewRoundLimit: 4,
+		StartedAt: now, UpdatedAt: now,
 	}
 	if err := store.CreateRun(t.Context(), run); err != nil {
 		t.Fatalf("create run: %v", err)

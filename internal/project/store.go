@@ -9,6 +9,11 @@ type Store interface {
 	Create(ctx context.Context, project Project) error
 	GetByID(ctx context.Context, id string) (Project, error)
 	List(ctx context.Context) ([]Project, error)
+	UpdateDialogueLimits(
+		ctx context.Context,
+		projectID string,
+		limits DialogueLimits,
+	) (Project, error)
 	BindForgejoRepository(
 		ctx context.Context,
 		projectID string,

@@ -16,8 +16,6 @@ type AssignmentFactory func() Assignment
 type Starter struct {
 	runner            *Runner
 	assignmentFactory AssignmentFactory
-	maxPlanningRounds int
-	maxReviewRounds   int
 }
 
 func (s *Starter) Recover(
@@ -33,8 +31,8 @@ func (s *Starter) Recover(
 	return s.runner.Recover(ctx, RunRequest{
 		ID: run.ID, FeatureID: run.FeatureID, Goal: goal,
 		Assignment:        s.assignmentFactory(),
-		MaxPlanningRounds: s.maxPlanningRounds,
-		MaxReviewRounds:   s.maxReviewRounds,
+		MaxPlanningRounds: run.PlanningRoundLimit,
+		MaxReviewRounds:   run.ImplementationReviewRoundLimit,
 		RecoveryPolicy:    recoveryPolicy,
 		WorkflowPhase:     storedFeature.State,
 	})
@@ -43,12 +41,9 @@ func (s *Starter) Recover(
 func NewStarter(
 	runner *Runner,
 	assignmentFactory AssignmentFactory,
-	maxPlanningRounds int,
-	maxReviewRounds int,
 ) *Starter {
 	return &Starter{
 		runner: runner, assignmentFactory: assignmentFactory,
-		maxPlanningRounds: maxPlanningRounds, maxReviewRounds: maxReviewRounds,
 	}
 }
 
@@ -58,12 +53,13 @@ func (s *Starter) Start(
 	projectID string,
 	featureID string,
 	goal string,
+	dialogueLimits project.DialogueLimits,
 ) (execution.Run, bool, error) {
 	_ = projectID // Simulated assignments do not resolve a project workspace.
 	return s.runner.Start(ctx, RunRequest{
 		ID: runID, FeatureID: featureID, Goal: goal,
 		Assignment:        s.assignmentFactory(),
-		MaxPlanningRounds: s.maxPlanningRounds,
-		MaxReviewRounds:   s.maxReviewRounds,
+		MaxPlanningRounds: dialogueLimits.PlanningRounds,
+		MaxReviewRounds:   dialogueLimits.ImplementationReviewRounds,
 	})
 }

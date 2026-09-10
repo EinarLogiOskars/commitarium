@@ -427,6 +427,7 @@ func TestRemoteLeadStartsOneWorkerTurnAndWaitsForUser(t *testing.T) {
 	run, created, err := starter.Start(
 		t.Context(), runID, storedProject.ID, storedFeature.ID,
 		storedFeature.Title+": "+storedFeature.Description,
+		storedProject.DialogueLimits,
 	)
 	if err != nil {
 		t.Fatalf("start real lead: %v", err)
@@ -513,7 +514,10 @@ func TestRemoteLeadRecoveryReusesDurableWorkerAttempt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create real lead starter: %v", err)
 	}
-	run, _, err := executions.CreateRun(t.Context(), runID, storedFeature.ID)
+	run, _, err := executions.CreateRun(
+		t.Context(), runID, storedFeature.ID,
+		project.DefaultDialogueRoundLimit, project.DefaultDialogueRoundLimit,
+	)
 	if err != nil {
 		t.Fatalf("create interrupted run: %v", err)
 	}
@@ -572,6 +576,7 @@ func TestRemoteLeadRequiresReviewWhenWorkerStateCannotBeConfirmed(t *testing.T) 
 	runID := "run_remote_unavailable"
 	if _, _, err := starter.Start(
 		t.Context(), runID, storedProject.ID, storedFeature.ID, storedFeature.Title,
+		storedProject.DialogueLimits,
 	); err != nil {
 		t.Fatalf("admit unavailable worker run: %v", err)
 	}
@@ -646,6 +651,7 @@ func TestRemoteLeadResumesSameConversationForRepeatedUserReplies(t *testing.T) {
 	}
 	if _, _, err := starter.Start(
 		t.Context(), runID, storedProject.ID, storedFeature.ID, storedFeature.Title,
+		storedProject.DialogueLimits,
 	); err != nil {
 		t.Fatalf("start lead conversation: %v", err)
 	}
@@ -790,6 +796,7 @@ func TestRemoteLeadRecoveryReattachesToCommittedReplyAttempt(t *testing.T) {
 	starter := newStarter()
 	if _, _, err := starter.Start(
 		t.Context(), runID, storedProject.ID, storedFeature.ID, storedFeature.Title,
+		storedProject.DialogueLimits,
 	); err != nil {
 		t.Fatalf("start lead conversation: %v", err)
 	}
@@ -924,6 +931,7 @@ func TestRemoteLeadStartsPlanningInManagedWorkspace(t *testing.T) {
 	}
 	if _, _, err := starter.Start(
 		t.Context(), runID, storedProject.ID, storedFeature.ID, storedFeature.Title,
+		storedProject.DialogueLimits,
 	); err != nil {
 		t.Fatalf("start lead conversation: %v", err)
 	}
@@ -1365,13 +1373,20 @@ func TestRemoteLeadStartsPlanningInManagedWorkspace(t *testing.T) {
 	}
 }
 
-func TestRemotePlanningLoopStopsAfterSixRounds(t *testing.T) {
+func TestRemotePlanningLoopUsesRunLimitSnapshot(t *testing.T) {
 	db, executions, storedProject, storedFeature := newRemoteLeadExecution(t)
+	limits := project.DialogueLimits{PlanningRounds: 3, ImplementationReviewRounds: 4}
+	storedProject, err := database.NewProjectStore(db).UpdateDialogueLimits(
+		t.Context(), storedProject.ID, limits,
+	)
+	if err != nil {
+		t.Fatalf("set project dialogue limits: %v", err)
+	}
 	runID := "run_remote_planning_limit"
 	stub := newConversationalRemoteLeadWorker(runID, storedProject.ID, storedFeature.ID)
 	addCompletedPlanningAttempt(stub, runID, storedProject.ID, storedFeature.ID)
 	addCompletedReviewerPlanningAttempt(stub, runID, storedProject.ID, storedFeature.ID)
-	for turn := 2; turn <= 6; turn++ {
+	for turn := 2; turn <= limits.PlanningRounds; turn++ {
 		addCompletedPlanningCorrectionAttempt(
 			stub, remoteLeadSessionID(runID), storedProject.ID, storedFeature.ID,
 			workerhttp.RoleLead, "codex-thread-test", turn,
@@ -1406,8 +1421,15 @@ func TestRemotePlanningLoopStopsAfterSixRounds(t *testing.T) {
 	}
 	if _, _, err := starter.Start(
 		t.Context(), runID, storedProject.ID, storedFeature.ID, storedFeature.Title,
+		storedProject.DialogueLimits,
 	); err != nil {
 		t.Fatalf("start lead: %v", err)
+	}
+	if _, err := database.NewProjectStore(db).UpdateDialogueLimits(
+		t.Context(), storedProject.ID,
+		project.DialogueLimits{PlanningRounds: 1, ImplementationReviewRounds: 1},
+	); err != nil {
+		t.Fatalf("change project limits after run admission: %v", err)
 	}
 	waitForRemoteLeadStatus(t, executions, runID, execution.RunStatusWaitingForUser)
 	if _, err := starter.AcceptGoal(
@@ -1432,19 +1454,21 @@ func TestRemotePlanningLoopStopsAfterSixRounds(t *testing.T) {
 	waitForRemoteLeadStatus(t, executions, runID, execution.RunStatusWaitingForUser)
 
 	messages, err := executions.PlanningMessagesForRun(t.Context(), runID)
-	if err != nil || len(messages) != defaultPlanningRoundLimit*2 ||
+	if err != nil || len(messages) != limits.PlanningRounds*2 ||
 		messages[len(messages)-1].Role != worker.RoleReviewer {
 		t.Fatalf("unexpected bounded planning history: len=%d err=%v messages=%+v", len(messages), err, messages)
 	}
 	run, err := executions.GetRun(t.Context(), runID)
-	if err != nil || run.Reason != planningLimitReason() {
+	if err != nil || run.Reason != planningLimitReason(limits.PlanningRounds) ||
+		run.PlanningRoundLimit != limits.PlanningRounds ||
+		run.ImplementationReviewRoundLimit != limits.ImplementationReviewRounds {
 		t.Fatalf("unexpected bounded planning run %+v err=%v", run, err)
 	}
 	stub.mu.Lock()
 	requestCount := len(stub.putRequests)
 	stub.mu.Unlock()
-	if requestCount != 13 {
-		t.Fatalf("expected clarification plus twelve planning turns, got %d requests", requestCount)
+	if requestCount != 7 {
+		t.Fatalf("expected clarification plus six planning turns, got %d requests", requestCount)
 	}
 	if _, admitted, err := starter.StartPlanningRound(
 		t.Context(), runID, "start-limited-loop",
@@ -1474,6 +1498,7 @@ func TestRemoteLeadRecoveryReattachesToPlanningAttempt(t *testing.T) {
 	starter := newStarter()
 	if _, _, err := starter.Start(
 		t.Context(), runID, storedProject.ID, storedFeature.ID, storedFeature.Title,
+		storedProject.DialogueLimits,
 	); err != nil {
 		t.Fatalf("start lead conversation: %v", err)
 	}
@@ -1578,6 +1603,7 @@ func TestRemoteReviewerRecoveryReattachesAndPublishesItsResponse(t *testing.T) {
 	starter := newStarter(true)
 	if _, _, err := starter.Start(
 		t.Context(), runID, storedProject.ID, storedFeature.ID, storedFeature.Title,
+		storedProject.DialogueLimits,
 	); err != nil {
 		t.Fatalf("start lead: %v", err)
 	}
@@ -1710,7 +1736,12 @@ func newRemoteLeadExecution(t *testing.T) (*sql.DB, *execution.Service, project.
 		t.Fatalf("migrate database: %v", err)
 	}
 	projectService := project.NewService(database.NewProjectStore(db))
-	storedProject, err := projectService.Create(t.Context(), "Remote lead test", project.RecoveryPolicyApprovalRequired)
+	storedProject, err := projectService.Create(
+		t.Context(),
+		"Remote lead test",
+		project.RecoveryPolicyApprovalRequired,
+		project.DefaultDialogueLimits(),
+	)
 	if err != nil {
 		t.Fatalf("create project: %v", err)
 	}
@@ -2320,17 +2351,23 @@ func TestDialogueRoundLimitsAndReviewRouting(t *testing.T) {
 	if dialogueRoundLimitReached(0, 1000) {
 		t.Fatal("zero round limit did not remain unlimited")
 	}
-	if planningRoundLimitReachedAt(0, 1000) {
+	if planningRoundLimitReached(0, 1000) {
 		t.Fatal("zero planning-round limit did not remain unlimited")
 	}
-	if planningRoundLimitReachedAt(3, 5) || !planningRoundLimitReachedAt(3, 6) {
+	if planningRoundLimitReached(3, 5) || !planningRoundLimitReached(3, 6) {
 		t.Fatal("three planning rounds did not mean six messages")
 	}
-	if planningRoundLimitReached(11) || !planningRoundLimitReached(12) {
+	if planningRoundLimitReached(6, 11) || !planningRoundLimitReached(6, 12) {
 		t.Fatal("planning did not treat six rounds as twelve messages")
 	}
-	if !strings.Contains(implementationReviewLimitReason(), "6 review rounds") {
-		t.Fatalf("review-limit reason does not reflect configured limit: %q", implementationReviewLimitReason())
+	if implementationReviewRoundLimitReached(0, 1000) {
+		t.Fatal("zero implementation-review limit did not remain unlimited")
+	}
+	if implementationReviewRoundLimitReached(3, 2) || !implementationReviewRoundLimitReached(3, 3) {
+		t.Fatal("implementation review did not use complete rounds")
+	}
+	if !strings.Contains(implementationReviewLimitReason(4), "4 review rounds") {
+		t.Fatalf("review-limit reason does not reflect configured limit: %q", implementationReviewLimitReason(4))
 	}
 }
 

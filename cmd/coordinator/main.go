@@ -227,8 +227,6 @@ func run(ctx context.Context, coordinatorConfig config) error {
 			func() orchestration.Assignment {
 				return orchestration.NewSimulatedAssignment(coordinatorConfig.simulatedStepDelay)
 			},
-			2,
-			3,
 		)
 		runStarter = simulatedStarter
 		runRecoverer = simulatedStarter

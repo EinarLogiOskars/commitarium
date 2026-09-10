@@ -55,6 +55,7 @@ func (s *Service) Create(
 	ctx context.Context,
 	name string,
 	recoveryPolicy RecoveryPolicy,
+	dialogueLimits DialogueLimits,
 ) (Project, error) {
 	sanitizedName := strings.TrimSpace(name)
 
@@ -66,11 +67,15 @@ func (s *Service) Create(
 	if err != nil {
 		return Project{}, err
 	}
+	if err := dialogueLimits.Validate(); err != nil {
+		return Project{}, err
+	}
 
 	project := Project{
 		ID:             s.generateID(),
 		Name:           sanitizedName,
 		RecoveryPolicy: policy,
+		DialogueLimits: dialogueLimits,
 		CreatedAt:      s.now(),
 	}
 
@@ -79,6 +84,21 @@ func (s *Service) Create(
 	}
 
 	return project, nil
+}
+
+func (s *Service) UpdateDialogueLimits(
+	ctx context.Context,
+	projectID string,
+	limits DialogueLimits,
+) (Project, error) {
+	if err := limits.Validate(); err != nil {
+		return Project{}, err
+	}
+	updated, err := s.store.UpdateDialogueLimits(ctx, projectID, limits)
+	if err != nil {
+		return Project{}, fmt.Errorf("update dialogue limits for project %q: %w", projectID, err)
+	}
+	return updated, nil
 }
 
 func (s *Service) GetByID(

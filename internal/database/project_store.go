@@ -30,6 +30,9 @@ func (s *ProjectStore) Create(
 		return err
 	}
 	createdProject.RecoveryPolicy = recoveryPolicy
+	if err := createdProject.DialogueLimits.Validate(); err != nil {
+		return err
+	}
 	var forgejoOwner string
 	var forgejoRepository string
 	var forgejoDefaultBranch string
@@ -48,15 +51,18 @@ func (s *ProjectStore) Create(
 		`
 			INSERT INTO projects (
 				id, name, recovery_policy,
+				planning_round_limit, implementation_review_round_limit,
 				forgejo_owner, forgejo_repository, forgejo_default_branch, forgejo_bound_at,
 				created_at
 			)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT(id) DO NOTHING
 		`,
 		createdProject.ID,
 		createdProject.Name,
 		createdProject.RecoveryPolicy,
+		createdProject.DialogueLimits.PlanningRounds,
+		createdProject.DialogueLimits.ImplementationReviewRounds,
 		forgejoOwner,
 		forgejoRepository,
 		forgejoDefaultBranch,
@@ -103,6 +109,7 @@ func (s *ProjectStore) GetByID(
 		ctx,
 		`
 			SELECT id, name, recovery_policy,
+			       planning_round_limit, implementation_review_round_limit,
 			       forgejo_owner, forgejo_repository, forgejo_default_branch, forgejo_bound_at,
 			       created_at
 			FROM projects
@@ -129,6 +136,7 @@ func (s *ProjectStore) List(ctx context.Context) ([]project.Project, error) {
 	rows, err := s.db.QueryContext(
 		ctx,
 		`SELECT id, name, recovery_policy,
+		        planning_round_limit, implementation_review_round_limit,
 		        forgejo_owner, forgejo_repository, forgejo_default_branch, forgejo_bound_at,
 		        created_at
 		 FROM projects
@@ -153,6 +161,43 @@ func (s *ProjectStore) List(ctx context.Context) ([]project.Project, error) {
 	return projects, nil
 }
 
+func (s *ProjectStore) UpdateDialogueLimits(
+	ctx context.Context,
+	projectID string,
+	limits project.DialogueLimits,
+) (project.Project, error) {
+	if err := limits.Validate(); err != nil {
+		return project.Project{}, err
+	}
+	result, err := s.db.ExecContext(
+		ctx,
+		`UPDATE projects
+		 SET planning_round_limit = ?, implementation_review_round_limit = ?
+		 WHERE id = ?`,
+		limits.PlanningRounds,
+		limits.ImplementationReviewRounds,
+		projectID,
+	)
+	if err != nil {
+		return project.Project{}, fmt.Errorf("update dialogue limits for project %q: %w", projectID, err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return project.Project{}, fmt.Errorf("read dialogue limit update count for project %q: %w", projectID, err)
+	}
+	if rowsAffected == 0 {
+		return project.Project{}, project.ErrNotFound
+	}
+	if rowsAffected != 1 {
+		return project.Project{}, fmt.Errorf(
+			"update dialogue limits for project %q: expected one affected row, got %d",
+			projectID,
+			rowsAffected,
+		)
+	}
+	return s.GetByID(ctx, projectID)
+}
+
 func (s *ProjectStore) BindForgejoRepository(
 	ctx context.Context,
 	projectID string,
@@ -170,6 +215,7 @@ func (s *ProjectStore) BindForgejoRepository(
 	storedProject, err := scanProject(tx.QueryRowContext(
 		ctx,
 		`SELECT id, name, recovery_policy,
+		        planning_round_limit, implementation_review_round_limit,
 		        forgejo_owner, forgejo_repository, forgejo_default_branch, forgejo_bound_at,
 		        created_at
 		 FROM projects WHERE id = ?`,
@@ -236,12 +282,17 @@ func scanProject(scanner projectScanner) (project.Project, error) {
 		&storedProject.ID,
 		&storedProject.Name,
 		&storedProject.RecoveryPolicy,
+		&storedProject.DialogueLimits.PlanningRounds,
+		&storedProject.DialogueLimits.ImplementationReviewRounds,
 		&forgejoOwner,
 		&forgejoRepository,
 		&forgejoDefaultBranch,
 		&forgejoBoundAt,
 		&createdAt,
 	); err != nil {
+		return project.Project{}, err
+	}
+	if err := storedProject.DialogueLimits.Validate(); err != nil {
 		return project.Project{}, err
 	}
 	parsedCreatedAt, err := time.Parse(time.RFC3339Nano, createdAt)

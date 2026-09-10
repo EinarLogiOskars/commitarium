@@ -25,6 +25,9 @@ func (s *MemoryStore) Create(
 	if err != nil {
 		return err
 	}
+	if err := createdProject.DialogueLimits.Validate(); err != nil {
+		return err
+	}
 	createdProject.RecoveryPolicy = policy
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -35,6 +38,26 @@ func (s *MemoryStore) Create(
 
 	s.projects[createdProject.ID] = cloneProject(createdProject)
 	return nil
+}
+
+func (s *MemoryStore) UpdateDialogueLimits(
+	_ context.Context,
+	projectID string,
+	limits DialogueLimits,
+) (Project, error) {
+	if err := limits.Validate(); err != nil {
+		return Project{}, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	storedProject, exists := s.projects[projectID]
+	if !exists {
+		return Project{}, ErrNotFound
+	}
+	storedProject.DialogueLimits = limits
+	s.projects[projectID] = cloneProject(storedProject)
+	return cloneProject(storedProject), nil
 }
 
 func (s *MemoryStore) GetByID(

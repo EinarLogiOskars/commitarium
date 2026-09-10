@@ -102,14 +102,15 @@ func TestServiceCreatesRunAndSessionWithCoordinatorTime(t *testing.T) {
 	store := &recordingStore{}
 	service := testService(store, fixedTime)
 
-	run, created, err := service.CreateRun(t.Context(), "run_test", "fea_test")
+	run, created, err := service.CreateRun(t.Context(), "run_test", "fea_test", 6, 4)
 	if err != nil {
 		t.Fatalf("create run: %v", err)
 	}
 	if !created {
 		t.Error("expected run to be newly created")
 	}
-	if run != store.createdRun || run.Status != RunStatusRunning || run.StartedAt != fixedTime {
+	if run != store.createdRun || run.Status != RunStatusRunning || run.StartedAt != fixedTime ||
+		run.PlanningRoundLimit != 6 || run.ImplementationReviewRoundLimit != 4 {
 		t.Errorf("unexpected run %+v", run)
 	}
 
@@ -148,14 +149,17 @@ func TestServiceListsSessionsForRun(t *testing.T) {
 }
 
 func TestServiceRetriesMatchingRunAndRejectsConflict(t *testing.T) {
-	existing := Run{ID: "run_test", FeatureID: "fea_test", Status: RunStatusSucceeded}
+	existing := Run{
+		ID: "run_test", FeatureID: "fea_test", Status: RunStatusSucceeded,
+		PlanningRoundLimit: 6, ImplementationReviewRoundLimit: 4,
+	}
 	store := &recordingStore{
 		createRunErr: ErrAlreadyExists,
 		getRunResult: existing,
 	}
 	service := testService(store, time.Now())
 
-	actual, created, err := service.CreateRun(t.Context(), existing.ID, existing.FeatureID)
+	actual, created, err := service.CreateRun(t.Context(), existing.ID, existing.FeatureID, 6, 4)
 	if err != nil {
 		t.Fatalf("retry run creation: %v", err)
 	}
@@ -165,8 +169,11 @@ func TestServiceRetriesMatchingRunAndRejectsConflict(t *testing.T) {
 	if actual != existing {
 		t.Errorf("expected existing run %+v, got %+v", existing, actual)
 	}
-	if _, _, err := service.CreateRun(t.Context(), existing.ID, "fea_other"); !errors.Is(err, ErrRecordConflict) {
+	if _, _, err := service.CreateRun(t.Context(), existing.ID, "fea_other", 6, 4); !errors.Is(err, ErrRecordConflict) {
 		t.Fatalf("expected error %v, got %v", ErrRecordConflict, err)
+	}
+	if _, _, err := service.CreateRun(t.Context(), existing.ID, existing.FeatureID, 0, 4); !errors.Is(err, ErrRecordConflict) {
+		t.Fatalf("expected changed snapshot error %v, got %v", ErrRecordConflict, err)
 	}
 }
 

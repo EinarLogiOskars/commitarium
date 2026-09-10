@@ -125,6 +125,32 @@ func TestRunnerDrivesPlanningImplementationAndReviewLoop(t *testing.T) {
 	}
 }
 
+func TestRunnerTreatsZeroDialogueLimitsAsUnlimited(t *testing.T) {
+	workflowService, _, executionService := orchestrationDatabase(t)
+	request := testRunRequest(
+		autoAdvance(newTestCodex()),
+		autoAdvance(newTestClaude(worker.DispositionChangesRequested, worker.DispositionSucceeded)),
+		0,
+	)
+	request.ID = "run_unlimited"
+	request.MaxPlanningRounds = 0
+
+	result, err := NewRunner(workflowService, executionService, NewActiveSessions()).Run(t.Context(), request)
+	if err != nil {
+		t.Fatalf("run unlimited workflow: %v", err)
+	}
+	if result.Status != RunStatusReadyToMerge || result.PlanningRounds != 1 || result.ReviewRounds != 2 {
+		t.Fatalf("unexpected unlimited workflow result %+v", result)
+	}
+	stored, err := executionService.GetRun(t.Context(), request.ID)
+	if err != nil {
+		t.Fatalf("get unlimited run: %v", err)
+	}
+	if stored.PlanningRoundLimit != 0 || stored.ImplementationReviewRoundLimit != 0 {
+		t.Fatalf("unlimited snapshot was not persisted: %+v", stored)
+	}
+}
+
 func TestRunnerStartsSimulatedWorkflowAsynchronously(t *testing.T) {
 	workflowService, featureStore, executionService := orchestrationDatabase(t)
 	runner := NewRunner(workflowService, executionService, NewActiveSessions())
@@ -261,7 +287,7 @@ func TestRunnerAutomaticallyRecoversConsistentSession(t *testing.T) {
 func TestRunnerRecoversInterruptionBetweenSessionsWithoutApproval(t *testing.T) {
 	workflowService, _, executionService := orchestrationDatabase(t)
 	runID := "run_recovery_between_sessions"
-	if _, _, err := executionService.CreateRun(t.Context(), runID, "fea_test"); err != nil {
+	if _, _, err := executionService.CreateRun(t.Context(), runID, "fea_test", 2, 3); err != nil {
 		t.Fatalf("create interrupted run: %v", err)
 	}
 	runner := NewRunner(workflowService, executionService, NewActiveSessions())
@@ -336,7 +362,7 @@ func TestAutomaticRecoveryStopsForUncertainCommandDelivery(t *testing.T) {
 func TestRecoveryDoesNotReplaceSessionWithUnconfirmedProviderIdentity(t *testing.T) {
 	workflowService, _, executionService := orchestrationDatabase(t)
 	runID := "run_recovery_missing_provider"
-	if _, _, err := executionService.CreateRun(t.Context(), runID, "fea_test"); err != nil {
+	if _, _, err := executionService.CreateRun(t.Context(), runID, "fea_test", 2, 3); err != nil {
 		t.Fatalf("create interrupted run: %v", err)
 	}
 	if _, err := workflowService.TransitionFeature(
@@ -487,6 +513,8 @@ func TestRunnerRejectsDuplicateActiveRun(t *testing.T) {
 		t.Context(),
 		"run_test",
 		"fea_test",
+		2,
+		1,
 	); err != nil {
 		t.Fatalf("create active run: %v", err)
 	} else if !created {
@@ -686,7 +714,7 @@ func seedInterruptedConsultant(
 	runID string,
 ) {
 	t.Helper()
-	if _, _, err := executionService.CreateRun(t.Context(), runID, "fea_test"); err != nil {
+	if _, _, err := executionService.CreateRun(t.Context(), runID, "fea_test", 2, 3); err != nil {
 		t.Fatalf("create interrupted run: %v", err)
 	}
 	if _, err := workflowService.TransitionFeature(
