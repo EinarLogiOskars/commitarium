@@ -130,8 +130,12 @@ func (unavailableRemoteLeadWorker) GetAttempt(
 type unexpectedRemoteLeadPump struct{ called bool }
 
 type remoteLeadWorkspaceStub struct {
-	prepared     workspace.Workspace
-	prepareCalls int
+	prepared         workspace.Workspace
+	prepareCalls     int
+	publishCalls     int
+	publishedEventID string
+	publishedPlan    string
+	publishErr       error
 }
 
 type conversationalRemoteLeadPump struct {
@@ -189,6 +193,19 @@ func (stub *remoteLeadWorkspaceStub) Prepare(
 ) (workspace.Workspace, bool, error) {
 	stub.prepareCalls++
 	return stub.prepared, false, nil
+}
+
+func (stub *remoteLeadWorkspaceStub) PublishPlan(
+	_ context.Context,
+	_ string,
+	_ string,
+	eventID string,
+	plan string,
+) (workspace.Workspace, bool, error) {
+	stub.publishCalls++
+	stub.publishedEventID = eventID
+	stub.publishedPlan = plan
+	return stub.prepared, stub.publishErr == nil, stub.publishErr
 }
 
 func (pump *unexpectedRemoteLeadPump) Run(
@@ -866,6 +883,7 @@ func TestRemoteLeadStartsPlanningInManagedWorkspace(t *testing.T) {
 		t.Fatalf("reviewer retry launched another worker turn: %d requests", requestCount)
 	}
 
+	workspaceStub.publishErr = errors.New("Forgejo temporarily unavailable")
 	roundRun, admitted, err := starter.StartPlanningRound(
 		t.Context(), runID, "planning-round-1",
 	)
@@ -883,8 +901,12 @@ func TestRemoteLeadStartsPlanningInManagedWorkspace(t *testing.T) {
 		t.Fatalf("unexpected completed planning round %+v err=%v", messages, err)
 	}
 	completedRound, err := executions.GetRun(t.Context(), runID)
-	if err != nil || completedRound.Reason != planningPlanSubmittedReason {
+	if err != nil || completedRound.Reason != planningPublicationReviewReason {
 		t.Fatalf("unexpected planning decision run %+v err=%v", completedRound, err)
+	}
+	if workspaceStub.publishCalls != 1 || workspaceStub.publishedEventID != messages[4].Event.ID ||
+		workspaceStub.publishedPlan != "Complete final implementation plan" {
+		t.Fatalf("submitted plan was not attempted once: %+v", workspaceStub)
 	}
 	stub.mu.Lock()
 	requests = append([]workerhttp.PutAttemptRequest(nil), stub.putRequests...)
@@ -904,17 +926,36 @@ func TestRemoteLeadStartsPlanningInManagedWorkspace(t *testing.T) {
 		!strings.Contains(requests[5].Instructions, "resolves my remaining concern") {
 		t.Fatalf("unexpected correction-round requests %+v", requests)
 	}
+	workspaceStub.publishErr = nil
+	roundRun, admitted, err = starter.StartPlanningRound(
+		t.Context(), runID, "planning-round-1",
+	)
+	if err != nil || !admitted || roundRun.Status != execution.RunStatusRunning {
+		t.Fatalf("retry plan publication: run=%+v admitted=%t err=%v", roundRun, admitted, err)
+	}
+	waitForRemoteLeadStatus(t, executions, runID, execution.RunStatusWaitingForUser)
+	completedRound, err = executions.GetRun(t.Context(), runID)
+	if err != nil || completedRound.Reason != planningPlanPublishedReason {
+		t.Fatalf("retried publication did not complete: run=%+v err=%v", completedRound, err)
+	}
+	leadEvents, err := executions.EventsForSession(t.Context(), remoteLeadSessionID(runID))
+	if err != nil || leadEvents[len(leadEvents)-1].ID != planPublicationEventID(messages[4].Event) {
+		t.Fatalf("plan publication was not visible in lead activity: %+v err=%v", leadEvents, err)
+	}
 	roundRun, admitted, err = starter.StartPlanningRound(
 		t.Context(), runID, "planning-round-1",
 	)
 	if err != nil || admitted || roundRun.ID != runID {
-		t.Fatalf("retry planning round: run=%+v admitted=%t err=%v", roundRun, admitted, err)
+		t.Fatalf("completed publication retry: run=%+v admitted=%t err=%v", roundRun, admitted, err)
 	}
 	stub.mu.Lock()
 	requestCount = len(stub.putRequests)
 	stub.mu.Unlock()
 	if requestCount != 6 {
 		t.Fatalf("planning round retry launched duplicate turns: %d requests", requestCount)
+	}
+	if workspaceStub.publishCalls != 2 {
+		t.Fatalf("publication retry count = %d, want one failed and one successful attempt", workspaceStub.publishCalls)
 	}
 }
 
@@ -1244,6 +1285,9 @@ func TestRemoteReviewerRecoveryReattachesAndPublishesItsResponse(t *testing.T) {
 	stub.mu.Unlock()
 	if putCount != 4 {
 		t.Fatalf("recovery should resume the loop without replaying the lead turn: %d PUTs", putCount)
+	}
+	if workspaceStub.publishCalls != 1 {
+		t.Fatalf("recovered planning loop did not publish exactly once: %d", workspaceStub.publishCalls)
 	}
 }
 

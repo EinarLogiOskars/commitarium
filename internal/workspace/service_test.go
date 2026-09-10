@@ -113,9 +113,13 @@ type recordingCheckout struct {
 }
 
 type recordingPullRequests struct {
-	specs  []PullRequestSpec
-	result PullRequest
-	err    error
+	specs         []PullRequestSpec
+	planSpecs     []PlanPublicationSpec
+	result        PullRequest
+	planResult    PullRequest
+	planPublished bool
+	err           error
+	planErr       error
 }
 
 func (pullRequests *recordingPullRequests) EnsureDraftPullRequest(
@@ -126,6 +130,16 @@ func (pullRequests *recordingPullRequests) EnsureDraftPullRequest(
 ) (PullRequest, error) {
 	pullRequests.specs = append(pullRequests.specs, spec)
 	return pullRequests.result, pullRequests.err
+}
+
+func (pullRequests *recordingPullRequests) EnsurePullRequestPlan(
+	_ context.Context,
+	_ string,
+	_ string,
+	spec PlanPublicationSpec,
+) (PullRequest, bool, error) {
+	pullRequests.planSpecs = append(pullRequests.planSpecs, spec)
+	return pullRequests.planResult, pullRequests.planPublished, pullRequests.planErr
 }
 
 func (checkout *recordingCheckout) Ensure(_ context.Context, spec CheckoutSpec) error {
@@ -391,6 +405,87 @@ func TestServiceRejectsPullRequestManagerResultForAnotherFeature(t *testing.T) {
 	}
 	if len(store.pullRequestMarkedAt) != 0 {
 		t.Fatal("conflicting pull request was recorded")
+	}
+}
+
+func TestServicePublishesPlanAfterReconcilingManagedWorkspace(t *testing.T) {
+	now := time.Date(2026, time.September, 10, 1, 0, 0, 0, time.UTC)
+	stored := readyTestWorkspace(now)
+	pullRequestReadyAt := now.Add(3 * time.Minute)
+	stored.PullRequestNumber = 7
+	stored.PullRequestURL = "http://localhost:3001/owner/repository/pulls/7"
+	stored.PullRequestRecordedAt = &pullRequestReadyAt
+	stored.UpdatedAt = pullRequestReadyAt
+	branches := &recordingBranches{base: Branch{
+		Name: stored.Branch, CommitID: stored.BaseCommitID,
+	}}
+	checkout := &recordingCheckout{}
+	pullRequests := &recordingPullRequests{
+		planPublished: true,
+		planResult: PullRequest{
+			Number: 7, URL: stored.PullRequestURL, Title: "WIP: Test feature",
+			Body: "<!-- commitarium-feature: fea_test -->", State: "open", Draft: true,
+			BaseBranch: stored.BaseBranch, HeadBranch: stored.Branch,
+			HeadCommitID: stored.BaseCommitID, CreatedAt: pullRequestReadyAt,
+		},
+	}
+	accepted := acceptedTestFeature(now)
+	accepted.State = feature.StatePlanning
+	service := NewServiceWithPreparation(
+		&memoryStore{stored: stored}, fixedFeatureFinder{stored: accepted},
+		fixedProjectFinder{stored: project.Project{
+			ID: "prj_test", ForgejoRepository: testRepository(now),
+		}}, branches, checkout, pullRequests,
+	)
+
+	got, published, err := service.PublishPlan(
+		t.Context(), "prj_test", "fea_test", "sev_final_plan", "Final plan",
+	)
+	if err != nil || !published || got != stored {
+		t.Fatalf("publish plan: workspace=%+v published=%t err=%v", got, published, err)
+	}
+	if branches.getCalls != 1 || len(checkout.specs) != 1 ||
+		!checkout.specs[0].AlreadyReady || !checkout.specs[0].RequireCleanBaseline ||
+		len(pullRequests.planSpecs) != 1 {
+		t.Fatalf("publication did not reconcile all state: branches=%+v checkout=%+v plans=%+v", branches, checkout.specs, pullRequests.planSpecs)
+	}
+	spec := pullRequests.planSpecs[0]
+	if spec.Number != stored.PullRequestNumber || spec.Plan != "Final plan" ||
+		spec.HeadCommitID != stored.BaseCommitID ||
+		!strings.HasPrefix(spec.PublicationMarker, "<!-- commitarium-plan: ") {
+		t.Fatalf("unexpected plan publication spec %+v", spec)
+	}
+}
+
+func TestServiceRejectsPlanPublicationAfterFeatureBranchMoves(t *testing.T) {
+	now := time.Date(2026, time.September, 10, 1, 0, 0, 0, time.UTC)
+	stored := readyTestWorkspace(now)
+	pullRequestReadyAt := now.Add(3 * time.Minute)
+	stored.PullRequestNumber = 7
+	stored.PullRequestURL = "http://localhost:3001/owner/repository/pulls/7"
+	stored.PullRequestRecordedAt = &pullRequestReadyAt
+	stored.UpdatedAt = pullRequestReadyAt
+	accepted := acceptedTestFeature(now)
+	accepted.State = feature.StatePlanning
+	checkout := &recordingCheckout{}
+	pullRequests := &recordingPullRequests{}
+	service := NewServiceWithPreparation(
+		&memoryStore{stored: stored}, fixedFeatureFinder{stored: accepted},
+		fixedProjectFinder{stored: project.Project{
+			ID: "prj_test", ForgejoRepository: testRepository(now),
+		}}, &recordingBranches{base: Branch{
+			Name: stored.Branch, CommitID: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		}}, checkout, pullRequests,
+	)
+
+	_, _, err := service.PublishPlan(
+		t.Context(), "prj_test", "fea_test", "sev_final_plan", "Final plan",
+	)
+	if !errors.Is(err, ErrBranchConflict) {
+		t.Fatalf("expected %v, got %v", ErrBranchConflict, err)
+	}
+	if len(checkout.specs) != 0 || len(pullRequests.planSpecs) != 0 {
+		t.Fatal("conflicting branch allowed a checkout or pull-request mutation")
 	}
 }
 

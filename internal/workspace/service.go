@@ -2,6 +2,8 @@ package workspace
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
@@ -13,6 +15,7 @@ import (
 
 var ErrGoalNotAccepted = errors.New("feature goal has not been accepted")
 var ErrFeatureNotDraft = errors.New("feature is no longer a draft")
+var ErrFeatureNotPlanning = errors.New("feature is not in planning")
 var ErrProjectRepositoryNotBound = errors.New("project has no Forgejo repository binding")
 var ErrBranchNotFound = errors.New("Forgejo branch not found")
 var ErrBranchConflict = errors.New("Forgejo feature branch exists at a different commit")
@@ -50,6 +53,12 @@ type PullRequestManager interface {
 		repository string,
 		spec PullRequestSpec,
 	) (PullRequest, error)
+	EnsurePullRequestPlan(
+		ctx context.Context,
+		owner string,
+		repository string,
+		spec PlanPublicationSpec,
+	) (PullRequest, bool, error)
 }
 
 type Service struct {
@@ -228,6 +237,84 @@ func (service *Service) Prepare(
 		return Workspace{}, false, fmt.Errorf("mark draft pull request ready: %w", err)
 	}
 	return ready, created, nil
+}
+
+// PublishPlan reconciles every durable identity used during planning before it
+// asks Forgejo to append the submitted plan. The publication marker is derived
+// from the immutable session-event ID, making the external update safe to
+// repeat after an uncertain response or coordinator restart.
+func (service *Service) PublishPlan(
+	ctx context.Context,
+	projectID string,
+	featureID string,
+	eventID string,
+	plan string,
+) (Workspace, bool, error) {
+	eventID = strings.TrimSpace(eventID)
+	plan = strings.TrimSpace(plan)
+	if eventID == "" || plan == "" {
+		return Workspace{}, false, errors.New("submitted plan identity and content are required")
+	}
+	storedFeature, err := service.features.GetByID(ctx, projectID, featureID)
+	if err != nil {
+		return Workspace{}, false, err
+	}
+	if storedFeature.State != feature.StatePlanning {
+		return Workspace{}, false, ErrFeatureNotPlanning
+	}
+	storedProject, err := service.projects.GetByID(ctx, projectID)
+	if err != nil {
+		return Workspace{}, false, err
+	}
+	if storedProject.ForgejoRepository == nil {
+		return Workspace{}, false, ErrProjectRepositoryNotBound
+	}
+	stored, err := service.Get(ctx, projectID, featureID)
+	if err != nil {
+		return Workspace{}, false, err
+	}
+	repository := storedProject.ForgejoRepository
+	if stored.RepositoryOwner != repository.Owner ||
+		stored.RepositoryName != repository.Name ||
+		stored.BaseBranch != repository.DefaultBranch ||
+		!stored.CheckoutReady() || !stored.PullRequestReady() ||
+		service.checkouts == nil || service.pullRequests == nil {
+		return Workspace{}, false, ErrConflict
+	}
+	branch, err := service.branches.GetBranch(
+		ctx, stored.RepositoryOwner, stored.RepositoryName, stored.Branch,
+	)
+	if err != nil {
+		return Workspace{}, false, fmt.Errorf("reconcile Forgejo feature branch: %w", err)
+	}
+	if branch.Name != stored.Branch || branch.CommitID != stored.BaseCommitID {
+		return Workspace{}, false, ErrBranchConflict
+	}
+	if err := service.checkouts.Ensure(ctx, CheckoutSpec{
+		WorkspaceID: stored.ID, RepositoryOwner: stored.RepositoryOwner,
+		RepositoryName: stored.RepositoryName, Branch: stored.Branch,
+		BaseCommitID: stored.BaseCommitID, AlreadyReady: true,
+		RequireCleanBaseline: true,
+	}); err != nil {
+		return Workspace{}, false, fmt.Errorf("reconcile managed checkout: %w", err)
+	}
+	digest := sha256.Sum256([]byte(eventID))
+	pullRequest, published, err := service.pullRequests.EnsurePullRequestPlan(
+		ctx, stored.RepositoryOwner, stored.RepositoryName, PlanPublicationSpec{
+			Number:            stored.PullRequestNumber,
+			FeatureMarker:     "<!-- commitarium-feature: " + storedFeature.ID + " -->",
+			PublicationMarker: "<!-- commitarium-plan: " + hex.EncodeToString(digest[:]) + " -->",
+			Plan:              plan, BaseBranch: stored.BaseBranch, HeadBranch: stored.Branch,
+			HeadCommitID: stored.BaseCommitID,
+		},
+	)
+	if err != nil {
+		return Workspace{}, false, fmt.Errorf("publish agreed plan to Forgejo: %w", err)
+	}
+	if pullRequest.Number != stored.PullRequestNumber || pullRequest.URL != stored.PullRequestURL {
+		return Workspace{}, false, ErrPullRequestConflict
+	}
+	return stored, published, nil
 }
 
 func validatePreparedPullRequest(

@@ -63,6 +63,27 @@ func TestManagerAllowsReadyCheckoutToAdvanceFromRecordedBase(t *testing.T) {
 	}
 }
 
+func TestManagerRequiresCleanPlanningBaselineWhenRequested(t *testing.T) {
+	manager, root := newTestManager(t, nil)
+	spec := initializeCheckout(t, root)
+	if err := manager.Ensure(t.Context(), spec); err != nil {
+		t.Fatalf("ensure new checkout: %v", err)
+	}
+	target := filepath.Join(root, spec.WorkspaceID)
+	if err := os.WriteFile(filepath.Join(target, "user-edit.txt"), []byte("preserve me\n"), 0o644); err != nil {
+		t.Fatalf("write user edit: %v", err)
+	}
+	spec.AlreadyReady = true
+	spec.RequireCleanBaseline = true
+	if err := manager.Ensure(t.Context(), spec); !errors.Is(err, workspace.ErrCheckoutConflict) {
+		t.Fatalf("expected %v for dirty planning baseline, got %v", workspace.ErrCheckoutConflict, err)
+	}
+	contents, err := os.ReadFile(filepath.Join(target, "user-edit.txt"))
+	if err != nil || string(contents) != "preserve me\n" {
+		t.Fatalf("strict reconciliation changed the user edit: %q err=%v", contents, err)
+	}
+}
+
 func TestManagerRejectsAmbiguousCheckoutWithoutChangingIt(t *testing.T) {
 	tests := []struct {
 		name   string

@@ -281,6 +281,65 @@ func (client *Client) EnsureDraftPullRequest(
 	}
 }
 
+func (client *Client) EnsurePullRequestPlan(
+	ctx context.Context,
+	owner string,
+	repository string,
+	spec workspace.PlanPublicationSpec,
+) (workspace.PullRequest, bool, error) {
+	var err error
+	owner, repository, err = project.NormalizeRepositoryCoordinate(owner, repository)
+	if err != nil {
+		return workspace.PullRequest{}, false, err
+	}
+	if err := spec.Validate(); err != nil {
+		return workspace.PullRequest{}, false, err
+	}
+	stored, err := client.getPullRequest(ctx, owner, repository, spec.Number)
+	if err != nil {
+		return workspace.PullRequest{}, false, err
+	}
+	if err := validatePlanPullRequest(stored, spec); err != nil {
+		return workspace.PullRequest{}, false, err
+	}
+	section := spec.PublicationMarker + "\n\n## Agreed implementation plan\n\n" + spec.Plan
+	if markerCount := strings.Count(stored.Body, spec.PublicationMarker); markerCount > 0 {
+		if markerCount != 1 || !strings.HasSuffix(stored.Body, section) {
+			return workspace.PullRequest{}, false, workspace.ErrPullRequestConflict
+		}
+		return stored, false, nil
+	}
+	payload := struct {
+		Body string `json:"body"`
+	}{Body: strings.TrimRight(stored.Body, "\n") + "\n\n" + section}
+	status, body, err := client.doJSON(
+		ctx, http.MethodPatch,
+		fmt.Sprintf("%s/%d", pullRequestsPath(owner, repository), spec.Number),
+		payload,
+	)
+	if err != nil {
+		return workspace.PullRequest{}, false, err
+	}
+	switch status {
+	case http.StatusOK, http.StatusCreated:
+	case http.StatusNotFound, http.StatusForbidden, http.StatusLocked:
+		return workspace.PullRequest{}, false, project.ErrForgejoRepositoryNotReady
+	default:
+		return workspace.PullRequest{}, false, fmt.Errorf(
+			"%w: pull request update returned HTTP %d",
+			project.ErrForgejoUnavailable, status,
+		)
+	}
+	updated, err := decodePullRequest(body)
+	if err != nil {
+		return workspace.PullRequest{}, false, err
+	}
+	if err := validatePlanPullRequest(updated, spec); err != nil || updated.Body != payload.Body {
+		return workspace.PullRequest{}, false, workspace.ErrPullRequestConflict
+	}
+	return updated, true, nil
+}
+
 func (client *Client) getPullRequest(
 	ctx context.Context,
 	owner string,
@@ -506,6 +565,20 @@ func validateManagedPullRequest(
 	}
 	if requireInitial && (pullRequest.Title != spec.Title ||
 		pullRequest.HeadCommitID != spec.InitialHeadCommitID) {
+		return workspace.ErrPullRequestConflict
+	}
+	return nil
+}
+
+func validatePlanPullRequest(
+	pullRequest workspace.PullRequest,
+	spec workspace.PlanPublicationSpec,
+) error {
+	if pullRequest.Number != spec.Number || pullRequest.State != "open" ||
+		!pullRequest.Draft || pullRequest.BaseBranch != spec.BaseBranch ||
+		pullRequest.HeadBranch != spec.HeadBranch ||
+		pullRequest.HeadCommitID != spec.HeadCommitID ||
+		!strings.Contains(pullRequest.Body, spec.FeatureMarker) {
 		return workspace.ErrPullRequestConflict
 	}
 	return nil

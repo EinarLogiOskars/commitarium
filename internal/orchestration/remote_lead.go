@@ -21,11 +21,13 @@ import (
 )
 
 const (
-	remoteLeadAgentID           = "codex-lead"
-	remoteReviewerAgentID       = "codex-reviewer"
-	maxPlanningMessages         = 10
-	planningPlanSubmittedReason = "The lead submitted the final plan after reaching agreement with the reviewer. It is ready to publish to Forgejo."
-	planningLimitReason         = "The planning discussion reached its ten-message limit without an agreed plan. User input is required."
+	remoteLeadAgentID               = "codex-lead"
+	remoteReviewerAgentID           = "codex-reviewer"
+	maxPlanningMessages             = 10
+	planningPlanSubmittedReason     = "The lead submitted the final plan after reaching agreement with the reviewer. It is ready to publish to Forgejo."
+	planningPlanPublishedReason     = "The agreed implementation plan was published to Forgejo. It is ready for implementation."
+	planningPublicationReviewReason = "The coordinator could not safely confirm publication of the agreed plan to Forgejo. No agent or implementation work was started. Inspect the managed workspace and pull request before retrying."
+	planningLimitReason             = "The planning discussion reached its ten-message limit without an agreed plan. User input is required."
 )
 
 type planningStage string
@@ -80,6 +82,7 @@ type RemoteLeadPlanningWorkflow interface {
 type RemoteLeadWorkspaceService interface {
 	Get(context.Context, string, string) (workspace.Workspace, error)
 	Prepare(context.Context, string, string) (workspace.Workspace, bool, error)
+	PublishPlan(context.Context, string, string, string, string) (workspace.Workspace, bool, error)
 }
 
 type RemoteLeadWorker interface {
@@ -290,7 +293,14 @@ func (starter *RemoteLeadStarter) recoverIdlePlanningRun(
 	}
 	last := messages[len(messages)-1]
 	if last.Event.Type == worker.EventPlanSubmitted {
-		return true, starter.waitRun(ctx, run.ID, planningPlanSubmittedReason)
+		if !starter.claim(run.ID) {
+			return true, fmt.Errorf("%w: %q", ErrRunAlreadyActive, run.ID)
+		}
+		defer starter.release(run.ID)
+		if err := starter.publishSubmittedPlan(ctx, run.ID, last.Event); err != nil {
+			starter.requirePlanPublicationReview(ctx, run.ID, last.Event, err)
+		}
+		return true, nil
 	}
 	if len(messages) >= maxPlanningMessages {
 		return true, starter.waitRun(ctx, run.ID, planningLimitReason)
@@ -823,7 +833,29 @@ func (starter *RemoteLeadStarter) StartPlanningRound(
 	}
 	if len(messages) > 0 && (len(messages) >= maxPlanningMessages ||
 		messages[len(messages)-1].Event.Type == worker.EventPlanSubmitted) {
-		return run, false, nil
+		if messages[len(messages)-1].Event.Type != worker.EventPlanSubmitted {
+			return run, false, nil
+		}
+		submitted := messages[len(messages)-1].Event
+		published, err := starter.planPublicationRecorded(ctx, submitted)
+		if err != nil {
+			return execution.Run{}, false, err
+		}
+		if published {
+			return run, false, nil
+		}
+		if !starter.claim(run.ID) {
+			return execution.Run{}, false, ErrPlanningNotAllowed
+		}
+		running, err := starter.executions.TransitionRun(
+			ctx, run.ID, run.Status, execution.RunStatusRunning, planningPlanSubmittedReason,
+		)
+		if err != nil {
+			starter.release(run.ID)
+			return execution.Run{}, false, err
+		}
+		go starter.launchPlanPublication(run.ID, submitted)
+		return running, true, nil
 	}
 	if len(messages) < 2 || messages[len(messages)-1].Role != worker.RoleReviewer {
 		return execution.Run{}, false, ErrPlanningNotAllowed
@@ -1423,8 +1455,14 @@ func (starter *RemoteLeadStarter) finish(
 		}
 		if request.planningStage == planningStageLeadResponse {
 			if planningMessage.Type == worker.EventPlanSubmitted {
-				err = starter.waitRun(ctx, request.runID, planningPlanSubmittedReason)
-				break
+				if publishErr := starter.publishSubmittedPlan(
+					ctx, request.runID, planningMessage,
+				); publishErr != nil {
+					starter.requirePlanPublicationReview(
+						ctx, request.runID, planningMessage, publishErr,
+					)
+				}
+				return
 			}
 			run, loadErr := starter.executions.GetRun(ctx, request.runID)
 			if loadErr != nil {
@@ -1496,6 +1534,95 @@ func (starter *RemoteLeadStarter) finish(
 	if err != nil {
 		starter.requireReview(ctx, request, err)
 	}
+}
+
+func (starter *RemoteLeadStarter) launchPlanPublication(
+	runID string,
+	plan execution.Event,
+) {
+	defer starter.release(runID)
+	ctx := starter.lifetime
+	if err := starter.publishSubmittedPlan(ctx, runID, plan); err != nil {
+		starter.requirePlanPublicationReview(ctx, runID, plan, err)
+	}
+}
+
+func (starter *RemoteLeadStarter) publishSubmittedPlan(
+	ctx context.Context,
+	runID string,
+	plan execution.Event,
+) error {
+	run, err := starter.executions.GetRun(ctx, runID)
+	if err != nil {
+		return err
+	}
+	storedFeature, err := starter.features.GetByID(ctx, run.FeatureID)
+	if err != nil {
+		return err
+	}
+	prepared, _, err := starter.workspaces.PublishPlan(
+		ctx, storedFeature.ProjectID, run.FeatureID, plan.ID, plan.Text,
+	)
+	if err != nil {
+		return err
+	}
+	_, err = starter.executions.RecordSessionEventWithID(
+		ctx, planPublicationEventID(plan), plan.SessionID,
+		worker.Event{
+			Type: worker.EventActivity,
+			Text: fmt.Sprintf(
+				"The agreed implementation plan was published to Forgejo pull request #%d.",
+				prepared.PullRequestNumber,
+			),
+		},
+	)
+	if err != nil {
+		return err
+	}
+	return starter.waitRun(ctx, runID, planningPlanPublishedReason)
+}
+
+func planPublicationEventID(plan execution.Event) string {
+	return plan.ID + ":forgejo-plan-published"
+}
+
+func (starter *RemoteLeadStarter) planPublicationRecorded(
+	ctx context.Context,
+	plan execution.Event,
+) (bool, error) {
+	events, err := starter.executions.EventsForSession(ctx, plan.SessionID)
+	if err != nil {
+		return false, err
+	}
+	for _, event := range events {
+		if event.ID != planPublicationEventID(plan) {
+			continue
+		}
+		if event.Type != worker.EventActivity {
+			return false, execution.ErrEventConflict
+		}
+		return true, nil
+	}
+	return false, nil
+}
+
+func (starter *RemoteLeadStarter) requirePlanPublicationReview(
+	ctx context.Context,
+	runID string,
+	plan execution.Event,
+	cause error,
+) {
+	starter.reportError(fmt.Errorf("publish agreed plan for run %q: %w", runID, cause))
+	_, _ = starter.executions.RecordSessionEventWithID(
+		ctx, plan.ID+":forgejo-plan-review-required", plan.SessionID,
+		worker.Event{
+			Type: worker.EventRecoveryAssessment, Text: planningPublicationReviewReason,
+			RecoveryAssessment: &worker.RecoveryAssessment{
+				Consistent: false, RequiresUserReview: true,
+			},
+		},
+	)
+	_ = starter.waitRun(ctx, runID, planningPublicationReviewReason)
 }
 
 func (starter *RemoteLeadStarter) failSession(
