@@ -843,8 +843,28 @@ func TestRemoteLeadStartsPlanningInManagedWorkspace(t *testing.T) {
 	addCompletedPlanningCorrectionAttempts(stub, runID, storedProject.ID, storedFeature.ID)
 	addCompletedImplementationAttempt(stub, runID, storedProject.ID, storedFeature.ID)
 	addCompletedImplementationReviewAttempt(stub, runID, storedProject.ID, storedFeature.ID)
-	addCompletedImplementationCorrectionAttempt(stub, runID, storedProject.ID, storedFeature.ID)
-	addCompletedSecondImplementationReviewAttempt(stub, runID, storedProject.ID, storedFeature.ID)
+	addCompletedImplementationCorrectionAttempt(
+		stub, runID, storedProject.ID, storedFeature.ID, 1,
+		"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+		"Published the corrected implementation and added the missing failure-path test.",
+	)
+	addCompletedLaterImplementationReviewAttempt(
+		stub, runID, storedProject.ID, storedFeature.ID, 2,
+		workerhttp.DispositionChangesRequested,
+		"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", 12,
+		"The failure path now works, but its returned error needs a clearer message.",
+	)
+	addCompletedImplementationCorrectionAttempt(
+		stub, runID, storedProject.ID, storedFeature.ID, 2,
+		"cccccccccccccccccccccccccccccccccccccccc",
+		"Clarified the returned error and passed the focused test suite.",
+	)
+	addCompletedLaterImplementationReviewAttempt(
+		stub, runID, storedProject.ID, storedFeature.ID, 3,
+		workerhttp.DispositionSucceeded,
+		"cccccccccccccccccccccccccccccccccccccccc", 13,
+		"The second correction addresses the remaining finding and passes the relevant tests.",
+	)
 	workflowService := workflow.NewService(database.NewWorkflowStore(db))
 	now := time.Date(2026, time.September, 9, 20, 0, 0, 0, time.UTC)
 	checkoutAt := now.Add(time.Second)
@@ -1172,15 +1192,19 @@ func TestRemoteLeadStartsPlanningInManagedWorkspace(t *testing.T) {
 	waitForRemoteLeadIdle(t, correctionRestart, runID)
 	completedReview, err := executions.GetRun(t.Context(), runID)
 	if err != nil || completedReview.Reason != implementationApprovedReason ||
-		workspaceStub.responseVerifyCalls != 2 || workspaceStub.reviewVerifyCalls != 2 ||
-		workspaceStub.responseReviewedCommit != "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" ||
-		workspaceStub.responseCommit != "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" {
+		workspaceStub.responseVerifyCalls != 3 || workspaceStub.reviewVerifyCalls != 3 ||
+		workspaceStub.responseReviewedCommit != "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" ||
+		workspaceStub.responseCommit != "cccccccccccccccccccccccccccccccccccccccc" {
 		t.Fatalf("unexpected corrective review checkpoint: run=%+v workspace=%+v err=%v", completedReview, workspaceStub, err)
+	}
+	approvedFeature, err := database.NewFeatureStore(db).GetByID(t.Context(), storedFeature.ID)
+	if err != nil || approvedFeature.State != feature.StateReadyToMerge {
+		t.Fatalf("approved feature did not become ready to merge: feature=%+v err=%v", approvedFeature, err)
 	}
 	stub.mu.Lock()
 	requests = append([]workerhttp.PutAttemptRequest(nil), stub.putRequests...)
 	stub.mu.Unlock()
-	if len(requests) != requestCount+3 {
+	if len(requests) != requestCount+5 {
 		t.Fatalf("correction recovery launched unexpected worker turns: %+v", requests[requestCount:])
 	}
 	secondReviewRequest := requests[requestCount+2]
@@ -1192,10 +1216,28 @@ func TestRemoteLeadStartsPlanningInManagedWorkspace(t *testing.T) {
 		!strings.Contains(secondReviewRequest.Instructions, "Published the corrected implementation") {
 		t.Fatalf("unexpected second implementation review request %+v", secondReviewRequest)
 	}
+	secondCorrectionRequest := requests[requestCount+3]
+	if secondCorrectionRequest.Mode != workerhttp.AttemptModeResume ||
+		secondCorrectionRequest.ProviderSessionID != "codex-thread-test" ||
+		secondCorrectionRequest.Assignment.Role != workerhttp.RoleLead ||
+		secondCorrectionRequest.OutputContract != workerhttp.OutputContractImplementationLead ||
+		!strings.Contains(secondCorrectionRequest.Instructions, "clearer message") ||
+		!strings.Contains(secondCorrectionRequest.Instructions, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb") {
+		t.Fatalf("unexpected second correction request %+v", secondCorrectionRequest)
+	}
+	thirdReviewRequest := requests[requestCount+4]
+	if thirdReviewRequest.Mode != workerhttp.AttemptModeResume ||
+		thirdReviewRequest.ProviderSessionID != "codex-review-thread-test" ||
+		thirdReviewRequest.Assignment.Role != workerhttp.RoleReviewer ||
+		thirdReviewRequest.OutputContract != workerhttp.OutputContractImplementationReview ||
+		!strings.Contains(thirdReviewRequest.Instructions, "cccccccccccccccccccccccccccccccccccccccc") ||
+		!strings.Contains(thirdReviewRequest.Instructions, "Clarified the returned error") {
+		t.Fatalf("unexpected third implementation review request %+v", thirdReviewRequest)
+	}
 
-	// Recreate a restart after review round two completed but before its
-	// verification checkpoint was trusted. Recovery re-verifies the same review
-	// without launching another worker turn.
+	// Recreate a restart after approval and the feature transition were durable,
+	// but before the run's user gate was trusted. Recovery restores the gate
+	// without re-verifying or launching another worker turn.
 	if _, err := executions.TransitionRun(
 		t.Context(), runID, execution.RunStatusWaitingForUser,
 		execution.RunStatusRunning, "Simulated coordinator interruption after review.",
@@ -1216,13 +1258,13 @@ func TestRemoteLeadStartsPlanningInManagedWorkspace(t *testing.T) {
 		t.Fatalf("load completed-review recovery run: %v", err)
 	}
 	if err := restarted.Recover(
-		t.Context(), interrupted, reviewedFeature, project.RecoveryPolicyApprovalRequired,
+		t.Context(), interrupted, approvedFeature, project.RecoveryPolicyApprovalRequired,
 	); err != nil {
 		t.Fatalf("recover completed implementation review: %v", err)
 	}
 	waitForRemoteLeadStatus(t, executions, runID, execution.RunStatusWaitingForUser)
 	if workspaceStub.reviewVerifyCalls != 3 {
-		t.Fatalf("completed review recovery verification count = %d", workspaceStub.reviewVerifyCalls)
+		t.Fatalf("ready-to-merge recovery repeated review verification: count=%d", workspaceStub.reviewVerifyCalls)
 	}
 	stub.mu.Lock()
 	defer stub.mu.Unlock()
@@ -1960,12 +2002,15 @@ func addCompletedImplementationCorrectionAttempt(
 	runID string,
 	projectID string,
 	featureID string,
+	round int,
+	commitID string,
+	summary string,
 ) {
 	sessionID := remoteLeadSessionID(runID)
 	reference := workerhttp.AttemptReference{
-		SessionID: sessionID, AttemptID: implementationCorrectionAttemptID(sessionID, 1),
+		SessionID: sessionID, AttemptID: implementationCorrectionAttemptID(sessionID, round),
 	}
-	now := time.Date(2026, time.September, 10, 3, 42, 0, 0, time.UTC)
+	now := time.Date(2026, time.September, 10, 3, 40+round*2, 0, 0, time.UTC)
 	initial := workerhttp.Attempt{
 		AttemptReference: reference, Mode: workerhttp.AttemptModeResume,
 		Assignment: workerhttp.Assignment{
@@ -1983,9 +2028,9 @@ func addCompletedImplementationCorrectionAttempt(
 	terminal.EndedAt = &endedAt
 	terminal.Result = &workerhttp.TerminalResult{
 		Outcome: workerhttp.OutcomeCompleted, Disposition: workerhttp.DispositionSucceeded,
-		Summary: "Published the corrected implementation and added the missing failure-path test.",
+		Summary: summary,
 		Publication: &workerhttp.ImplementationPublication{
-			CommitID: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", PullRequestNumber: 7,
+			CommitID: commitID, PullRequestNumber: 7,
 		},
 	}
 	stub.initial[reference] = initial
@@ -2006,17 +2051,22 @@ func addCompletedImplementationCorrectionAttempt(
 	}
 }
 
-func addCompletedSecondImplementationReviewAttempt(
+func addCompletedLaterImplementationReviewAttempt(
 	stub *conversationalRemoteLeadWorker,
 	runID string,
 	projectID string,
 	featureID string,
+	round int,
+	disposition workerhttp.Disposition,
+	commitID string,
+	reviewID int64,
+	summary string,
 ) {
 	sessionID := remoteReviewerSessionID(runID)
 	reference := workerhttp.AttemptReference{
-		SessionID: sessionID, AttemptID: implementationReviewAttemptID(sessionID, 2),
+		SessionID: sessionID, AttemptID: implementationReviewAttemptID(sessionID, round),
 	}
-	now := time.Date(2026, time.September, 10, 3, 44, 0, 0, time.UTC)
+	now := time.Date(2026, time.September, 10, 3, 41+round*2, 0, 0, time.UTC)
 	initial := workerhttp.Attempt{
 		AttemptReference: reference, Mode: workerhttp.AttemptModeResume,
 		Assignment: workerhttp.Assignment{
@@ -2033,11 +2083,10 @@ func addCompletedSecondImplementationReviewAttempt(
 	terminal.UpdatedAt = endedAt
 	terminal.EndedAt = &endedAt
 	terminal.Result = &workerhttp.TerminalResult{
-		Outcome: workerhttp.OutcomeCompleted, Disposition: workerhttp.DispositionSucceeded,
-		Summary: "The corrected implementation addresses the finding and passes the relevant tests.",
+		Outcome: workerhttp.OutcomeCompleted, Disposition: disposition,
+		Summary: summary,
 		Review: &workerhttp.ReviewPublication{
-			CommitID:          "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-			PullRequestNumber: 7, ReviewID: 12,
+			CommitID: commitID, PullRequestNumber: 7, ReviewID: reviewID,
 		},
 	}
 	stub.initial[reference] = initial
@@ -2107,6 +2156,31 @@ func addCompletedImplementationContinuationAttempt(
 			AttemptReference: reference, Sequence: 3, Type: workerhttp.EventAttemptTerminal,
 			Text: terminal.Result.Summary, OccurredAt: endedAt,
 		},
+	}
+}
+
+func TestImplementationReviewActionUsesSeparateFiveReviewLimit(t *testing.T) {
+	tests := []struct {
+		name        string
+		round       int
+		disposition workerhttp.Disposition
+		want        implementationReviewAction
+	}{
+		{name: "first requested change starts correction", round: 1, disposition: workerhttp.DispositionChangesRequested, want: implementationReviewActionCorrect},
+		{name: "fourth requested change starts final correction", round: 4, disposition: workerhttp.DispositionChangesRequested, want: implementationReviewActionCorrect},
+		{name: "fifth requested change stops", round: 5, disposition: workerhttp.DispositionChangesRequested, want: implementationReviewActionLimit},
+		{name: "early approval finishes", round: 1, disposition: workerhttp.DispositionSucceeded, want: implementationReviewActionApprove},
+		{name: "late approval finishes", round: 5, disposition: workerhttp.DispositionSucceeded, want: implementationReviewActionApprove},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := nextImplementationReviewAction(test.round, test.disposition); got != test.want {
+				t.Fatalf("review action = %q, want %q", got, test.want)
+			}
+		})
+	}
+	if !strings.Contains(implementationReviewLimitReason(), "5 formal reviews") {
+		t.Fatalf("review-limit reason does not reflect configured limit: %q", implementationReviewLimitReason())
 	}
 }
 

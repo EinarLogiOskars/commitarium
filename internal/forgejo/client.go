@@ -367,10 +367,11 @@ func (client *Client) VerifyPullRequestImplementation(
 	if len(comments) >= 50 {
 		return workspace.PullRequest{}, workspace.ErrPullRequestConflict
 	}
-	wantBody := spec.PublicationMarker + "\n\n## " + spec.CommentHeading + "\n\n" + spec.Summary
+	publicationMarker := spec.PublicationKind.Marker(spec.AttemptID)
+	wantBody := publicationMarker + "\n\n## " + spec.PublicationKind.CommentHeading() + "\n\n" + spec.Summary
 	matches := 0
 	for _, comment := range comments {
-		if strings.Contains(comment.Body, spec.PublicationMarker) {
+		if strings.Contains(comment.Body, publicationMarker) {
 			if comment.Body != wantBody ||
 				!strings.EqualFold(strings.TrimSpace(comment.User.Login), spec.ExpectedAuthor) {
 				return workspace.PullRequest{}, workspace.ErrPullRequestConflict

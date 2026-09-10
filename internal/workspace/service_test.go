@@ -13,6 +13,23 @@ import (
 
 const testCommitID = "0123456789abcdef0123456789abcdef01234567"
 
+func TestImplementationPublicationKindOwnsAuditFormat(t *testing.T) {
+	attemptID := "run_test:lead:correction:2"
+	initialMarker := ImplementationPublicationInitial.Marker(attemptID)
+	responseMarker := ImplementationPublicationReviewResponse.Marker(attemptID)
+	if ImplementationPublicationInitial.CommentHeading() != "Implementation summary" ||
+		ImplementationPublicationReviewResponse.CommentHeading() != "Review response" ||
+		!strings.HasPrefix(initialMarker, "<!-- commitarium-implementation: ") ||
+		!strings.HasPrefix(responseMarker, "<!-- commitarium-review-response: ") ||
+		initialMarker == responseMarker {
+		t.Fatalf("publication kinds did not derive distinct audit formats: initial=%q response=%q", initialMarker, responseMarker)
+	}
+	invalid := ImplementationPublicationKind("unknown")
+	if invalid.Validate() == nil || invalid.CommentHeading() != "" || invalid.Marker(attemptID) != "" {
+		t.Fatal("unknown publication kind produced a usable audit format")
+	}
+}
+
 type memoryStore struct {
 	stored              Workspace
 	reserve             []Workspace
@@ -646,8 +663,9 @@ func TestServiceVerifiesAgentImplementationPublicationWithoutWriting(t *testing.
 	spec := pullRequests.implementationSpecs[0]
 	if spec.Number != 8 || spec.HeadCommitID != implementationCommit ||
 		spec.ExpectedAuthor != "codex-lead" ||
-		spec.CommentHeading != "Implementation summary" ||
-		!strings.HasPrefix(spec.PublicationMarker, "<!-- commitarium-implementation: ") ||
+		spec.PublicationKind != ImplementationPublicationInitial ||
+		spec.AttemptID != "att_implementation_1" ||
+		!strings.HasPrefix(spec.PublicationKind.Marker(spec.AttemptID), "<!-- commitarium-implementation: ") ||
 		!strings.HasPrefix(spec.PlanPublicationMarker, "<!-- commitarium-plan: ") {
 		t.Fatalf("unexpected implementation publication spec %+v", spec)
 	}
@@ -706,9 +724,10 @@ func TestServiceVerifiesLeadReviewResponseAsNewDescendantCommit(t *testing.T) {
 		t.Fatalf("response verification did not reconcile every fact: branches=%d checkout=%+v pull_requests=%+v", branches.getCalls, checkout.specs, pullRequests.implementationSpecs)
 	}
 	spec := pullRequests.implementationSpecs[0]
-	if spec.CommentHeading != "Review response" || spec.HeadCommitID != correctedCommit ||
+	if spec.PublicationKind != ImplementationPublicationReviewResponse ||
+		spec.AttemptID != "att_correction_1" || spec.HeadCommitID != correctedCommit ||
 		spec.ExpectedAuthor != "codex-lead" ||
-		!strings.HasPrefix(spec.PublicationMarker, "<!-- commitarium-review-response: ") {
+		!strings.HasPrefix(spec.PublicationKind.Marker(spec.AttemptID), "<!-- commitarium-review-response: ") {
 		t.Fatalf("unexpected review response publication spec %+v", spec)
 	}
 	if _, err := service.VerifyImplementationReviewResponse(

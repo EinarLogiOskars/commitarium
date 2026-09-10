@@ -1,12 +1,50 @@
 package workspace
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"net/url"
 	"regexp"
 	"strings"
 	"time"
 )
+
+type ImplementationPublicationKind string
+
+const (
+	ImplementationPublicationInitial        ImplementationPublicationKind = "implementation"
+	ImplementationPublicationReviewResponse ImplementationPublicationKind = "review-response"
+)
+
+func (kind ImplementationPublicationKind) Validate() error {
+	switch kind {
+	case ImplementationPublicationInitial, ImplementationPublicationReviewResponse:
+		return nil
+	default:
+		return errors.New("implementation publication kind is not recognized")
+	}
+}
+
+func (kind ImplementationPublicationKind) CommentHeading() string {
+	switch kind {
+	case ImplementationPublicationInitial:
+		return "Implementation summary"
+	case ImplementationPublicationReviewResponse:
+		return "Review response"
+	default:
+		return ""
+	}
+}
+
+func (kind ImplementationPublicationKind) Marker(attemptID string) string {
+	if kind.Validate() != nil || strings.TrimSpace(attemptID) == "" ||
+		attemptID != strings.TrimSpace(attemptID) {
+		return ""
+	}
+	digest := sha256.Sum256([]byte(attemptID))
+	return "<!-- commitarium-" + string(kind) + ": " + hex.EncodeToString(digest[:]) + " -->"
+}
 
 type Status string
 
@@ -205,8 +243,8 @@ type ImplementationPublicationSpec struct {
 	FeatureMarker         string
 	PlanPublicationMarker string
 	Plan                  string
-	PublicationMarker     string
-	CommentHeading        string
+	PublicationKind       ImplementationPublicationKind
+	AttemptID             string
 	Summary               string
 	ExpectedAuthor        string
 	BaseBranch            string
@@ -259,15 +297,15 @@ func (spec ImplementationPublicationSpec) Validate() error {
 	}
 	for _, value := range []string{
 		spec.FeatureMarker, spec.PlanPublicationMarker, spec.Plan,
-		spec.PublicationMarker, spec.CommentHeading, spec.Summary, spec.ExpectedAuthor,
+		spec.AttemptID, spec.Summary, spec.ExpectedAuthor,
 		spec.BaseBranch, spec.HeadBranch,
 	} {
 		if strings.TrimSpace(value) == "" || value != strings.TrimSpace(value) {
 			return errors.New("implementation publication fields are required and must be trimmed")
 		}
 	}
-	if spec.CommentHeading != "Implementation summary" && spec.CommentHeading != "Review response" {
-		return errors.New("implementation publication comment heading is not recognized")
+	if err := spec.PublicationKind.Validate(); err != nil {
+		return err
 	}
 	if !safeCommitID.MatchString(spec.HeadCommitID) {
 		return errors.New("implementation publication head must be a lowercase commit ID")
