@@ -11,4 +11,5 @@ var ErrNotFound = errors.New("feature not found")
 type Store interface {
 	Create(ctx context.Context, feature Feature) error
 	GetByID(ctx context.Context, id string) (Feature, error)
+	ListByProjectID(ctx context.Context, projectID string) ([]Feature, error)
 }

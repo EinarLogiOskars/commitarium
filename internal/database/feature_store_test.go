@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
@@ -139,6 +140,51 @@ func TestFeatureStoreGetByIDReturnsNotFound(t *testing.T) {
 	}
 }
 
+func TestFeatureStoreListsProjectFeaturesByRecentActivity(t *testing.T) {
+	store, projects := newTestFeatureStore(t)
+	createFeatureTestProject(t, projects, "prj_test")
+	createFeatureTestProject(t, projects, "prj_other")
+	now := time.Date(2026, time.September, 10, 12, 0, 0, 0, time.UTC)
+	acceptedAt := now.Add(30 * time.Minute)
+	features := []feature.Feature{
+		{
+			ID: "fea_older", ProjectID: "prj_test", Title: "Older",
+			State: feature.StateDraft, CreatedAt: now, UpdatedAt: now,
+		},
+		{
+			ID: "fea_newer", ProjectID: "prj_test", Title: "Newer",
+			State: feature.StatePlanning, AcceptedGoal: "Ship it",
+			GoalAcceptedAt: &acceptedAt,
+			CreatedAt:      now.Add(time.Minute), UpdatedAt: now.Add(time.Hour),
+		},
+		{
+			ID: "fea_other", ProjectID: "prj_other", Title: "Other",
+			State:     feature.StateDraft,
+			CreatedAt: now.Add(2 * time.Minute), UpdatedAt: now.Add(2 * time.Hour),
+		},
+	}
+	for _, createdFeature := range features {
+		if err := store.Create(t.Context(), createdFeature); err != nil {
+			t.Fatalf("create feature %q: %v", createdFeature.ID, err)
+		}
+	}
+
+	listed, err := store.ListByProjectID(t.Context(), "prj_test")
+	if err != nil {
+		t.Fatalf("list features: %v", err)
+	}
+	if len(listed) != 2 || !reflect.DeepEqual(listed[0], features[1]) || listed[1] != features[0] {
+		t.Errorf("expected newer and older project features, got %+v", listed)
+	}
+	empty, err := store.ListByProjectID(t.Context(), "prj_empty")
+	if err != nil {
+		t.Fatalf("list empty project: %v", err)
+	}
+	if empty == nil || len(empty) != 0 {
+		t.Errorf("expected non-nil empty list, got %#v", empty)
+	}
+}
+
 func TestFeatureStoreHonorsCanceledContext(t *testing.T) {
 	t.Run("create", func(t *testing.T) {
 		store, _ := newTestFeatureStore(t)
@@ -174,6 +220,18 @@ func TestFeatureStoreHonorsCanceledContext(t *testing.T) {
 				"expected context cancellation, got %v",
 				err,
 			)
+		}
+	})
+
+	t.Run("list by project ID", func(t *testing.T) {
+		store, _ := newTestFeatureStore(t)
+		ctx, cancel := context.WithCancel(t.Context())
+		cancel()
+
+		_, err := store.ListByProjectID(ctx, "prj_test")
+
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("expected context cancellation, got %v", err)
 		}
 	})
 }

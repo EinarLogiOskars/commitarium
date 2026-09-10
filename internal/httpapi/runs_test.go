@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -210,5 +211,95 @@ func TestGetRunReturnsNotFound(t *testing.T) {
 	}
 	if !errors.Is(executions.runErr, execution.ErrNotFound) || body.Error.Code != "run_not_found" {
 		t.Errorf("unexpected error response %+v", body)
+	}
+}
+
+func TestListFeatureRunsIncludesSessions(t *testing.T) {
+	now := time.Date(2026, time.September, 10, 13, 0, 0, 0, time.UTC)
+	features := &recordingFeatureService{getResult: feature.Feature{
+		ID: "fea_test", ProjectID: "prj_test",
+	}}
+	executions := &recordingExecutionService{
+		runs: []execution.Run{{
+			ID: "run_test", FeatureID: "fea_test", Status: execution.RunStatusWaitingForUser,
+			PlanningRoundLimit: 6, ImplementationReviewRoundLimit: 6,
+			StartedAt: now, UpdatedAt: now,
+		}},
+		sessions: []execution.Session{{
+			ID: "ses_lead", RunID: "run_test", AgentID: "agt_codex",
+			Role: worker.RoleCoder, Status: execution.SessionStatusWaitingForUser,
+			StartedAt: now, UpdatedAt: now,
+		}},
+	}
+	recorder := httptest.NewRecorder()
+	New(nil, features, nil, executions, nil, nil).ServeHTTP(
+		recorder,
+		httptest.NewRequest(http.MethodGet, "/api/v1/projects/prj_test/features/fea_test/runs", nil),
+	)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusOK, recorder.Code, recorder.Body.String())
+	}
+	if executions.runsFeature != "fea_test" {
+		t.Errorf("expected run lookup for fea_test, got %q", executions.runsFeature)
+	}
+	var body []runResponse
+	if err := json.NewDecoder(recorder.Body).Decode(&body); err != nil {
+		t.Fatalf("decode run list: %v", err)
+	}
+	if len(body) != 1 || body[0].ID != "run_test" || len(body[0].Sessions) != 1 || body[0].Sessions[0].ID != "ses_lead" {
+		t.Errorf("unexpected run history %+v", body)
+	}
+}
+
+func TestListFeatureRunsReturnsEmptyArray(t *testing.T) {
+	features := &recordingFeatureService{getResult: feature.Feature{
+		ID: "fea_test", ProjectID: "prj_test",
+	}}
+	recorder := httptest.NewRecorder()
+	New(nil, features, nil, &recordingExecutionService{}, nil, nil).ServeHTTP(
+		recorder,
+		httptest.NewRequest(http.MethodGet, "/api/v1/projects/prj_test/features/fea_test/runs", nil),
+	)
+	if recorder.Code != http.StatusOK || strings.TrimSpace(recorder.Body.String()) != "[]" {
+		t.Errorf("expected 200 with empty array, got %d %q", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestListFeatureRunsMapsErrors(t *testing.T) {
+	tests := []struct {
+		name       string
+		featureErr error
+		runsErr    error
+		status     int
+		code       string
+	}{
+		{name: "unknown feature", featureErr: feature.ErrNotFound, status: http.StatusNotFound, code: "feature_not_found"},
+		{name: "feature lookup failure", featureErr: errors.New("feature database failed"), status: http.StatusInternalServerError, code: "internal_error"},
+		{name: "run lookup failure", runsErr: errors.New("run database failed"), status: http.StatusInternalServerError, code: "internal_error"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			features := &recordingFeatureService{
+				getResult: feature.Feature{ID: "fea_test", ProjectID: "prj_test"},
+				getErr:    test.featureErr,
+			}
+			executions := &recordingExecutionService{runsErr: test.runsErr}
+			recorder := httptest.NewRecorder()
+			New(nil, features, nil, executions, nil, nil).ServeHTTP(
+				recorder,
+				httptest.NewRequest(http.MethodGet, "/api/v1/projects/prj_test/features/fea_test/runs", nil),
+			)
+			if recorder.Code != test.status {
+				t.Fatalf("expected status %d, got %d", test.status, recorder.Code)
+			}
+			var body errorResponse
+			if err := json.NewDecoder(recorder.Body).Decode(&body); err != nil {
+				t.Fatalf("decode error response: %v", err)
+			}
+			if body.Error.Code != test.code {
+				t.Errorf("expected code %q, got %+v", test.code, body)
+			}
+		})
 	}
 }

@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -115,17 +116,60 @@ func (api *API) getRunHandler(w http.ResponseWriter, r *http.Request) {
 	api.writeRun(w, r, http.StatusOK, run)
 }
 
+func (api *API) listFeatureRunsHandler(w http.ResponseWriter, r *http.Request) {
+	projectID := r.PathValue("projectID")
+	featureID := r.PathValue("id")
+	if _, err := api.features.GetByID(r.Context(), projectID, featureID); err != nil {
+		if errors.Is(err, feature.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "feature_not_found", "feature not found")
+			return
+		}
+		log.Printf("verify feature %q for run history: %v", featureID, err)
+		writeError(w, http.StatusInternalServerError, "internal_error", "internal server error")
+		return
+	}
+
+	runs, err := api.execution.RunsForFeature(r.Context(), featureID)
+	if err != nil {
+		log.Printf("list runs for feature %q: %v", featureID, err)
+		writeError(w, http.StatusInternalServerError, "internal_error", "internal server error")
+		return
+	}
+	response := make([]runResponse, 0, len(runs))
+	for _, run := range runs {
+		runResponse, err := api.newRunResponse(r.Context(), run)
+		if err != nil {
+			log.Printf("build run %q for feature history: %v", run.ID, err)
+			writeError(w, http.StatusInternalServerError, "internal_error", "internal server error")
+			return
+		}
+		response = append(response, runResponse)
+	}
+	writeJSON(w, http.StatusOK, response, "feature run list")
+}
+
 func (api *API) writeRun(
 	w http.ResponseWriter,
 	r *http.Request,
 	status int,
 	run execution.Run,
 ) {
-	sessions, err := api.execution.SessionsForRun(r.Context(), run.ID)
+	response, err := api.newRunResponse(r.Context(), run)
 	if err != nil {
-		log.Printf("list sessions for run %q: %v", run.ID, err)
+		log.Printf("build run response for %q: %v", run.ID, err)
 		writeError(w, http.StatusInternalServerError, "internal_error", "internal server error")
 		return
+	}
+	writeJSON(w, status, response, "run")
+}
+
+func (api *API) newRunResponse(
+	ctx context.Context,
+	run execution.Run,
+) (runResponse, error) {
+	sessions, err := api.execution.SessionsForRun(ctx, run.ID)
+	if err != nil {
+		return runResponse{}, err
 	}
 	response := runResponse{
 		ID: run.ID, FeatureID: run.FeatureID, Status: run.Status,
@@ -140,7 +184,7 @@ func (api *API) writeRun(
 	for _, session := range sessions {
 		response.Sessions = append(response.Sessions, newSessionResponse(session))
 	}
-	writeJSON(w, status, response, "run")
+	return response, nil
 }
 
 func runIDForKey(idempotencyKey string) string {

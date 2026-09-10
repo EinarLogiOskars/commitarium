@@ -15,6 +15,7 @@ type recordingStore struct {
 	createRunErr        error
 	getRunResult        Run
 	getRunErr           error
+	listedRuns          []Run
 	createdSession      Session
 	createSessionErr    error
 	getSessionResult    Session
@@ -42,6 +43,10 @@ func (s *recordingStore) CreateRun(_ context.Context, run Run) error {
 
 func (s *recordingStore) GetRun(_ context.Context, _ string) (Run, error) {
 	return s.getRunResult, s.getRunErr
+}
+
+func (s *recordingStore) ListRunsByFeatureID(_ context.Context, _ string) ([]Run, error) {
+	return s.listedRuns, nil
 }
 
 func (s *recordingStore) CreateSession(_ context.Context, session Session) error {
@@ -142,6 +147,20 @@ func TestServiceListsSessionsForRun(t *testing.T) {
 	actual, err := service.SessionsForRun(t.Context(), "run_test")
 	if err != nil {
 		t.Fatalf("list sessions: %v", err)
+	}
+	if len(actual) != 1 || actual[0] != expected[0] {
+		t.Errorf("expected %+v, got %+v", expected, actual)
+	}
+}
+
+func TestServiceListsRunsForFeature(t *testing.T) {
+	expected := []Run{{ID: "run_test", FeatureID: "fea_test"}}
+	store := &recordingStore{listedRuns: expected}
+	service := testService(store, time.Now())
+
+	actual, err := service.RunsForFeature(t.Context(), "fea_test")
+	if err != nil {
+		t.Fatalf("list runs: %v", err)
 	}
 	if len(actual) != 1 || actual[0] != expected[0] {
 		t.Errorf("expected %+v, got %+v", expected, actual)

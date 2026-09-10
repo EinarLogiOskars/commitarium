@@ -32,6 +32,7 @@ type FeatureService interface {
 		projectID string,
 		id string,
 	) (feature.Feature, error)
+	List(ctx context.Context, projectID string) ([]feature.Feature, error)
 }
 
 type WorkflowService interface {
@@ -51,6 +52,7 @@ type WorkflowService interface {
 
 type ExecutionService interface {
 	GetRun(ctx context.Context, id string) (execution.Run, error)
+	RunsForFeature(ctx context.Context, featureID string) ([]execution.Run, error)
 	SessionsForRun(ctx context.Context, runID string) ([]execution.Session, error)
 	GetSession(ctx context.Context, id string) (execution.Session, error)
 	EventsForSession(ctx context.Context, sessionID string) ([]execution.Event, error)
@@ -217,6 +219,10 @@ func newAPI(
 		api.createFeatureHandler,
 	)
 	mux.HandleFunc(
+		"GET /api/v1/projects/{projectID}/features",
+		api.listFeaturesHandler,
+	)
+	mux.HandleFunc(
 		"GET /api/v1/projects/{projectID}/features/{id}",
 		api.getFeatureByIDHandler,
 	)
@@ -235,6 +241,10 @@ func newAPI(
 	mux.HandleFunc(
 		"POST /api/v1/projects/{projectID}/features/{id}/runs",
 		api.startRunHandler,
+	)
+	mux.HandleFunc(
+		"GET /api/v1/projects/{projectID}/features/{id}/runs",
+		api.listFeatureRunsHandler,
 	)
 	if workspaces != nil {
 		mux.HandleFunc(

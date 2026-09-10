@@ -90,6 +90,47 @@ func TestExecutionStorePersistsAcrossDatabaseReopen(t *testing.T) {
 	}
 }
 
+func TestExecutionStoreListsFeatureRunsNewestFirst(t *testing.T) {
+	db, store := newTestExecutionStore(t)
+	first, _ := createExecutionRecords(t, db, store)
+	second := first
+	second.ID = "run_newer"
+	second.StartedAt = first.StartedAt.Add(time.Hour)
+	second.UpdatedAt = second.StartedAt
+	if err := store.CreateRun(t.Context(), second); err != nil {
+		t.Fatalf("create newer run: %v", err)
+	}
+	if err := NewFeatureStore(db).Create(t.Context(), feature.Feature{
+		ID: "fea_other", ProjectID: "prj_execution_test", Title: "Other",
+		State: feature.StateDraft, CreatedAt: first.StartedAt, UpdatedAt: first.StartedAt,
+	}); err != nil {
+		t.Fatalf("create other feature: %v", err)
+	}
+	other := first
+	other.ID = "run_other"
+	other.FeatureID = "fea_other"
+	other.StartedAt = first.StartedAt.Add(2 * time.Hour)
+	other.UpdatedAt = other.StartedAt
+	if err := store.CreateRun(t.Context(), other); err != nil {
+		t.Fatalf("create other run: %v", err)
+	}
+
+	runs, err := store.ListRunsByFeatureID(t.Context(), first.FeatureID)
+	if err != nil {
+		t.Fatalf("list feature runs: %v", err)
+	}
+	if len(runs) != 2 || runs[0] != second || runs[1] != first {
+		t.Errorf("expected newer then older run, got %+v", runs)
+	}
+	empty, err := store.ListRunsByFeatureID(t.Context(), "fea_empty")
+	if err != nil {
+		t.Fatalf("list empty feature: %v", err)
+	}
+	if empty == nil || len(empty) != 0 {
+		t.Errorf("expected non-nil empty list, got %#v", empty)
+	}
+}
+
 func TestExecutionStoreSequencesEventsAndRetriesByID(t *testing.T) {
 	db, store := newTestExecutionStore(t)
 	_, session := createExecutionRecords(t, db, store)

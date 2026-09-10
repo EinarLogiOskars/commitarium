@@ -67,17 +67,22 @@ Safe UI capabilities:
 
 - Create a draft feature with
   `POST /api/v1/projects/{projectID}/features`.
+- List all features in a project, ordered by recent activity, with
+  `GET /api/v1/projects/{projectID}/features`.
 - Retrieve a known feature and its accepted goal with
   `GET /api/v1/projects/{projectID}/features/{featureID}`.
+- Open a feature's run history, including the sessions needed for historical
+  viewing or continuation, with
+  `GET /api/v1/projects/{projectID}/features/{featureID}/runs`.
 - Read durable lifecycle history or follow it live through the feature event
   history and SSE routes.
 - Render the settled lifecycle states:
   `draft`, `planning`, `implementing`, `reviewing`, `ready_to_merge`, and
   `completed`.
 
-There is no project-scoped feature-list endpoint yet. A UI may build the create
-and feature-detail screens, but should not invent local-only feature discovery
-as the permanent project-history solution.
+Both discovery routes return `[]` for an existing resource with no children.
+The UI may group features locally using their settled lifecycle states; search,
+pagination, and server-side state filtering are not part of the MVP contract.
 
 ### Runs, sessions, and observable agent activity
 
@@ -139,7 +144,6 @@ next backend slice will be moved here before its public surface changes.
 
 ### Near-term MVP backend
 
-- Project-scoped feature listing for in-progress and completed feature views.
 - Claude worker integration.
 - Lead and reviewer provider selection, including Codex/Codex,
   Codex/Claude, Claude/Codex, and Claude/Claude assignments.

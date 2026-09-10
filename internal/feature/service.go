@@ -102,3 +102,18 @@ func (s *Service) GetByID(
 
 	return storedFeature, nil
 }
+
+func (s *Service) List(
+	ctx context.Context,
+	projectID string,
+) ([]Feature, error) {
+	if _, err := s.projects.GetByID(ctx, projectID); err != nil {
+		return nil, fmt.Errorf("get project %q: %w", projectID, err)
+	}
+
+	features, err := s.store.ListByProjectID(ctx, projectID)
+	if err != nil {
+		return nil, fmt.Errorf("list features for project %q: %w", projectID, err)
+	}
+	return features, nil
+}

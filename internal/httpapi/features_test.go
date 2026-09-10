@@ -26,6 +26,10 @@ type recordingFeatureService struct {
 	receivedFeatureID    string
 	getResult            feature.Feature
 	getErr               error
+
+	listProjectID string
+	listResult    []feature.Feature
+	listErr       error
 }
 
 func (s *recordingFeatureService) Create(
@@ -49,6 +53,14 @@ func (s *recordingFeatureService) GetByID(
 	s.receivedGetProjectID = projectID
 	s.receivedFeatureID = id
 	return s.getResult, s.getErr
+}
+
+func (s *recordingFeatureService) List(
+	_ context.Context,
+	projectID string,
+) ([]feature.Feature, error) {
+	s.listProjectID = projectID
+	return s.listResult, s.listErr
 }
 
 func TestCreateFeature(t *testing.T) {
@@ -165,6 +177,78 @@ func TestCreateFeatureRejectsMalformedJSON(t *testing.T) {
 	}
 	if features.createCalls != 0 {
 		t.Errorf("expected feature service not to be called, got %d calls", features.createCalls)
+	}
+}
+
+func TestListFeaturesReturnsProjectFeatures(t *testing.T) {
+	now := time.Date(2026, time.September, 10, 12, 0, 0, 0, time.UTC)
+	expected := []feature.Feature{
+		{ID: "fea_recent", ProjectID: "prj_test", Title: "Recent", State: feature.StateReviewing, CreatedAt: now, UpdatedAt: now.Add(time.Hour)},
+		{ID: "fea_older", ProjectID: "prj_test", Title: "Older", State: feature.StateCompleted, CreatedAt: now, UpdatedAt: now},
+	}
+	features := &recordingFeatureService{listResult: expected}
+	recorder := httptest.NewRecorder()
+	New(nil, features, nil, nil, nil, nil).ServeHTTP(
+		recorder,
+		httptest.NewRequest(http.MethodGet, "/api/v1/projects/prj_test/features", nil),
+	)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusOK, recorder.Code, recorder.Body.String())
+	}
+	if features.listProjectID != "prj_test" {
+		t.Errorf("expected project ID prj_test, got %q", features.listProjectID)
+	}
+	var body []featureResponse
+	if err := json.NewDecoder(recorder.Body).Decode(&body); err != nil {
+		t.Fatalf("decode feature list: %v", err)
+	}
+	if len(body) != 2 {
+		t.Fatalf("expected two features, got %+v", body)
+	}
+	assertFeatureResponse(t, body[0], expected[0])
+	assertFeatureResponse(t, body[1], expected[1])
+}
+
+func TestListFeaturesReturnsEmptyArray(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	New(nil, &recordingFeatureService{}, nil, nil, nil, nil).ServeHTTP(
+		recorder,
+		httptest.NewRequest(http.MethodGet, "/api/v1/projects/prj_test/features", nil),
+	)
+	if recorder.Code != http.StatusOK || strings.TrimSpace(recorder.Body.String()) != "[]" {
+		t.Errorf("expected 200 with empty array, got %d %q", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestListFeaturesMapsServiceErrors(t *testing.T) {
+	tests := []struct {
+		name   string
+		err    error
+		status int
+		code   string
+	}{
+		{name: "unknown project", err: project.ErrNotFound, status: http.StatusNotFound, code: "project_not_found"},
+		{name: "unexpected error", err: errors.New("database failed"), status: http.StatusInternalServerError, code: "internal_error"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			New(nil, &recordingFeatureService{listErr: test.err}, nil, nil, nil, nil).ServeHTTP(
+				recorder,
+				httptest.NewRequest(http.MethodGet, "/api/v1/projects/prj_test/features", nil),
+			)
+			if recorder.Code != test.status {
+				t.Fatalf("expected status %d, got %d", test.status, recorder.Code)
+			}
+			var body errorResponse
+			if err := json.NewDecoder(recorder.Body).Decode(&body); err != nil {
+				t.Fatalf("decode error response: %v", err)
+			}
+			if body.Error.Code != test.code {
+				t.Errorf("expected code %q, got %+v", test.code, body)
+			}
+		})
 	}
 }
 

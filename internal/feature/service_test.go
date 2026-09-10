@@ -17,6 +17,10 @@ type recordingStore struct {
 	receivedID string
 	getResult  Feature
 	getByIDErr error
+
+	receivedProjectID string
+	listResult        []Feature
+	listErr           error
 }
 
 func (s *recordingStore) Create(
@@ -34,6 +38,14 @@ func (s *recordingStore) GetByID(
 ) (Feature, error) {
 	s.receivedID = id
 	return s.getResult, s.getByIDErr
+}
+
+func (s *recordingStore) ListByProjectID(
+	_ context.Context,
+	projectID string,
+) ([]Feature, error) {
+	s.receivedProjectID = projectID
+	return s.listResult, s.listErr
 }
 
 type recordingProjectFinder struct {
@@ -246,5 +258,66 @@ func TestServiceGetByIDReturnsStoreError(t *testing.T) {
 
 	if foundFeature != (Feature{}) {
 		t.Errorf("expected empty feature, got %+v", foundFeature)
+	}
+}
+
+func TestServiceListsFeaturesForExistingProject(t *testing.T) {
+	expected := []Feature{{ID: "fea_test", ProjectID: "prj_test"}}
+	store := &recordingStore{listResult: expected}
+	projects := &recordingProjectFinder{}
+	service := NewService(store, projects)
+
+	actual, err := service.List(t.Context(), "prj_test")
+	if err != nil {
+		t.Fatalf("list features: %v", err)
+	}
+	if projects.receivedID != "prj_test" || store.receivedProjectID != "prj_test" {
+		t.Errorf(
+			"expected project prj_test, project lookup=%q store lookup=%q",
+			projects.receivedID,
+			store.receivedProjectID,
+		)
+	}
+	if len(actual) != 1 || actual[0] != expected[0] {
+		t.Errorf("expected %+v, got %+v", expected, actual)
+	}
+}
+
+func TestServiceListReturnsProjectAndStoreErrors(t *testing.T) {
+	storeErr := errors.New("storage failed")
+	tests := []struct {
+		name     string
+		projects *recordingProjectFinder
+		store    *recordingStore
+		expected error
+	}{
+		{
+			name:     "unknown project",
+			projects: &recordingProjectFinder{err: project.ErrNotFound},
+			store:    &recordingStore{},
+			expected: project.ErrNotFound,
+		},
+		{
+			name:     "store failure",
+			projects: &recordingProjectFinder{},
+			store:    &recordingStore{listErr: storeErr},
+			expected: storeErr,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			service := NewService(test.store, test.projects)
+			features, err := service.List(t.Context(), "prj_test")
+			if !errors.Is(err, test.expected) {
+				t.Fatalf("expected error %v, got %v", test.expected, err)
+			}
+			if features != nil {
+				t.Errorf("expected nil features, got %+v", features)
+			}
+			if errors.Is(test.expected, project.ErrNotFound) && test.store.receivedProjectID != "" {
+				t.Errorf("store was called for missing project: %q", test.store.receivedProjectID)
+			}
+		})
 	}
 }

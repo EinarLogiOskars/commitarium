@@ -70,6 +70,39 @@ func (s *ExecutionStore) GetRun(
 	return run, nil
 }
 
+func (s *ExecutionStore) ListRunsByFeatureID(
+	ctx context.Context,
+	featureID string,
+) ([]execution.Run, error) {
+	rows, err := s.db.QueryContext(
+		ctx,
+		`SELECT id, feature_id, status, reason,
+		        planning_round_limit, implementation_review_round_limit,
+		        started_at, updated_at, ended_at
+		 FROM runs
+		 WHERE feature_id = ?
+		 ORDER BY started_at DESC, id`,
+		featureID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list runs for feature %q: %w", featureID, err)
+	}
+	defer rows.Close()
+
+	runs := make([]execution.Run, 0)
+	for rows.Next() {
+		run, err := scanExecutionRun(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan run for feature %q: %w", featureID, err)
+		}
+		runs = append(runs, run)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate runs for feature %q: %w", featureID, err)
+	}
+	return runs, nil
+}
+
 func (s *ExecutionStore) TransitionRun(
 	ctx context.Context,
 	transition execution.RunTransition,

@@ -488,6 +488,13 @@ func (s *Service) GetRun(ctx context.Context, id string) (Run, error) {
 	return s.store.GetRun(ctx, id)
 }
 
+func (s *Service) RunsForFeature(
+	ctx context.Context,
+	featureID string,
+) ([]Run, error) {
+	return s.store.ListRunsByFeatureID(ctx, featureID)
+}
+
 func (s *Service) GetSession(ctx context.Context, id string) (Session, error) {
 	return s.store.GetSession(ctx, id)
 }
