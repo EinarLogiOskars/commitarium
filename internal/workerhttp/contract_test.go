@@ -260,6 +260,8 @@ func TestTerminalResultValidate(t *testing.T) {
 		{Outcome: OutcomeCompleted, Disposition: DispositionSucceeded, Summary: "done"},
 		{Outcome: OutcomeCompleted, Disposition: DispositionSucceeded, Summary: "published", Publication: &ImplementationPublication{CommitID: "0123456789abcdef0123456789abcdef01234567", PullRequestNumber: 7}},
 		{Outcome: OutcomeCompleted, Disposition: DispositionChangesRequested, Summary: "changes requested"},
+		{Outcome: OutcomeCompleted, Disposition: DispositionSucceeded, Summary: "approved", Review: &ReviewPublication{CommitID: "0123456789abcdef0123456789abcdef01234567", PullRequestNumber: 7, ReviewID: 11}},
+		{Outcome: OutcomeCompleted, Disposition: DispositionChangesRequested, Summary: "changes requested", Review: &ReviewPublication{CommitID: "0123456789abcdef0123456789abcdef01234567", PullRequestNumber: 7, ReviewID: 11}},
 		{Outcome: OutcomeStopped, Summary: "stopped safely"},
 		{Outcome: OutcomeFailed, Summary: "provider unavailable", Error: &ProtocolError{Code: ErrorProfileUnavailable, Message: "profile is unavailable", Retryable: true}},
 	}
@@ -279,6 +281,10 @@ func TestTerminalResultValidate(t *testing.T) {
 		{Outcome: OutcomeFailed, Summary: "bad error", Error: &ProtocolError{Code: "unknown", Message: "unexpected"}},
 		{Outcome: OutcomeCompleted, Disposition: DispositionSucceeded, Summary: "bad publication", Publication: &ImplementationPublication{CommitID: "bad", PullRequestNumber: 7}},
 		{Outcome: OutcomeCompleted, Disposition: DispositionInputRequired, Summary: "blocked", Publication: &ImplementationPublication{CommitID: "0123456789abcdef0123456789abcdef01234567", PullRequestNumber: 7}},
+		{Outcome: OutcomeCompleted, Disposition: DispositionSucceeded, Summary: "bad review", Review: &ReviewPublication{CommitID: "bad", PullRequestNumber: 7, ReviewID: 11}},
+		{Outcome: OutcomeCompleted, Disposition: DispositionInputRequired, Summary: "blocked", Review: &ReviewPublication{CommitID: "0123456789abcdef0123456789abcdef01234567", PullRequestNumber: 7, ReviewID: 11}},
+		{Outcome: OutcomeStopped, Summary: "stopped", Review: &ReviewPublication{CommitID: "0123456789abcdef0123456789abcdef01234567", PullRequestNumber: 7, ReviewID: 11}},
+		{Outcome: OutcomeCompleted, Disposition: DispositionSucceeded, Summary: "both", Publication: &ImplementationPublication{CommitID: "0123456789abcdef0123456789abcdef01234567", PullRequestNumber: 7}, Review: &ReviewPublication{CommitID: "0123456789abcdef0123456789abcdef01234567", PullRequestNumber: 7, ReviewID: 11}},
 	}
 	for _, result := range invalid {
 		if err := result.Validate(); !errors.Is(err, ErrInvalidContract) {

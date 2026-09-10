@@ -98,8 +98,9 @@ type PutAttemptRequest struct {
 type OutputContract string
 
 const (
-	OutputContractPlanningLead       OutputContract = "planning_lead"
-	OutputContractImplementationLead OutputContract = "implementation_lead"
+	OutputContractPlanningLead         OutputContract = "planning_lead"
+	OutputContractImplementationLead   OutputContract = "implementation_lead"
+	OutputContractImplementationReview OutputContract = "implementation_reviewer"
 )
 
 type AttemptState string
@@ -135,12 +136,19 @@ type TerminalResult struct {
 	Disposition Disposition                `json:"disposition,omitempty"`
 	Summary     string                     `json:"summary"`
 	Publication *ImplementationPublication `json:"publication,omitempty"`
+	Review      *ReviewPublication         `json:"review,omitempty"`
 	Error       *ProtocolError             `json:"error,omitempty"`
 }
 
 type ImplementationPublication struct {
 	CommitID          string `json:"commit_id"`
 	PullRequestNumber int64  `json:"pull_request_number"`
+}
+
+type ReviewPublication struct {
+	CommitID          string `json:"commit_id"`
+	PullRequestNumber int64  `json:"pull_request_number"`
+	ReviewID          int64  `json:"review_id"`
 }
 
 type Attempt struct {

@@ -136,13 +136,18 @@ func (request PutAttemptRequest) Validate(identity MutationIdentity) error {
 	}
 	if request.OutputContract != "" &&
 		request.OutputContract != OutputContractPlanningLead &&
-		request.OutputContract != OutputContractImplementationLead {
+		request.OutputContract != OutputContractImplementationLead &&
+		request.OutputContract != OutputContractImplementationReview {
 		return invalid("output contract %q is not recognized", request.OutputContract)
 	}
 	if (request.OutputContract == OutputContractPlanningLead ||
 		request.OutputContract == OutputContractImplementationLead) &&
 		request.Assignment.Role != RoleLead {
 		return invalid("lead output contract requires the lead role")
+	}
+	if request.OutputContract == OutputContractImplementationReview &&
+		request.Assignment.Role != RoleReviewer {
+		return invalid("reviewer output contract requires the reviewer role")
 	}
 	providerSessionID := strings.TrimSpace(request.ProviderSessionID)
 	if len(providerSessionID) > maxProviderSessionIDBytes {
@@ -305,6 +310,13 @@ func (result TerminalResult) Validate() error {
 		if result.Publication != nil && result.Disposition != DispositionSucceeded {
 			return invalid("implementation publication requires a successful disposition")
 		}
+		if result.Review != nil && result.Disposition != DispositionSucceeded &&
+			result.Disposition != DispositionChangesRequested {
+			return invalid("review publication requires success or requested changes")
+		}
+		if result.Publication != nil && result.Review != nil {
+			return invalid("terminal result cannot contain implementation and review publications")
+		}
 	case OutcomeStopped:
 		if result.Disposition != "" {
 			return invalid("stopped outcome cannot include a disposition")
@@ -314,6 +326,9 @@ func (result TerminalResult) Validate() error {
 		}
 		if result.Publication != nil {
 			return invalid("stopped outcome cannot include an implementation publication")
+		}
+		if result.Review != nil {
+			return invalid("stopped outcome cannot include a review publication")
 		}
 	case OutcomeFailed:
 		if result.Disposition != "" {
@@ -328,9 +343,17 @@ func (result TerminalResult) Validate() error {
 		if result.Publication != nil {
 			return invalid("failed outcome cannot include an implementation publication")
 		}
+		if result.Review != nil {
+			return invalid("failed outcome cannot include a review publication")
+		}
 	}
 	if result.Publication != nil {
 		if err := result.Publication.Validate(); err != nil {
+			return err
+		}
+	}
+	if result.Review != nil {
+		if err := result.Review.Validate(); err != nil {
 			return err
 		}
 	}
@@ -343,6 +366,19 @@ func (publication ImplementationPublication) Validate() error {
 	}
 	if publication.PullRequestNumber < 1 {
 		return invalid("implementation pull request number must be positive")
+	}
+	return nil
+}
+
+func (review ReviewPublication) Validate() error {
+	if !safeCommitID.MatchString(review.CommitID) {
+		return invalid("review commit ID must be a lowercase SHA-1 or SHA-256 object ID")
+	}
+	if review.PullRequestNumber < 1 {
+		return invalid("review pull request number must be positive")
+	}
+	if review.ReviewID < 1 {
+		return invalid("review ID must be positive")
 	}
 	return nil
 }

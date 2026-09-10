@@ -53,6 +53,7 @@ type codexConfig struct {
 	forgejoURL        string
 	forgejoTokenFile  string
 	forgejoLogin      string
+	forgejoRole       worker.Role
 	gitAuthorName     string
 	gitAuthorEmail    string
 }
@@ -275,6 +276,10 @@ func loadCodexConfig(getenv func(string) string) (codexConfig, error) {
 	if err != nil {
 		return codexConfig{}, err
 	}
+	forgejoRole := worker.Role(strings.TrimSpace(getenv("COMMITARIUM_CODEX_FORGEJO_ROLE")))
+	if forgejoRole != worker.RoleLead && forgejoRole != worker.RoleReviewer {
+		return codexConfig{}, errors.New("COMMITARIUM_CODEX_FORGEJO_ROLE must be lead or reviewer")
+	}
 	gitAuthorName, err := required("COMMITARIUM_CODEX_GIT_AUTHOR_NAME")
 	if err != nil {
 		return codexConfig{}, err
@@ -306,7 +311,8 @@ func loadCodexConfig(getenv func(string) string) (codexConfig, error) {
 		sandbox: sandbox, providerStatePath: providerStatePath,
 		workspaceRoot: workspaceRoot, profileID: profileID,
 		forgejoURL: strings.TrimRight(forgejoURL, "/"), forgejoTokenFile: forgejoTokenFile,
-		forgejoLogin: forgejoLogin, gitAuthorName: gitAuthorName, gitAuthorEmail: gitAuthorEmail,
+		forgejoLogin: forgejoLogin, forgejoRole: forgejoRole,
+		gitAuthorName: gitAuthorName, gitAuthorEmail: gitAuthorEmail,
 	}, nil
 }
 
@@ -334,7 +340,7 @@ func newCodexRuntime(config codexConfig) (runtime, error) {
 				"PATH=/usr/local/bin:/usr/bin:/bin",
 			},
 			RoleVariables: map[worker.Role][]string{
-				worker.RoleLead: {
+				config.forgejoRole: {
 					"COMMITARIUM_FORGEJO_URL=" + config.forgejoURL,
 					"COMMITARIUM_FORGEJO_TOKEN_FILE=" + config.forgejoTokenFile,
 					"COMMITARIUM_FORGEJO_LOGIN=" + config.forgejoLogin,

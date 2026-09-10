@@ -273,6 +273,13 @@ func (service *Service) finishAttempt(
 			PullRequestNumber: result.Publication.PullRequestNumber,
 		}
 	}
+	if result.Review != nil {
+		terminalResult.Review = &workerhttp.ReviewPublication{
+			CommitID:          result.Review.CommitID,
+			PullRequestNumber: result.Review.PullRequestNumber,
+			ReviewID:          result.Review.ReviewID,
+		}
+	}
 	if result.Outcome == worker.OutcomeFailed {
 		terminalResult.Error = &workerhttp.ProtocolError{
 			Code:      workerhttp.ErrorInternal,

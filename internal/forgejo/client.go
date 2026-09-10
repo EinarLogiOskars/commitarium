@@ -384,6 +384,72 @@ func (client *Client) VerifyPullRequestImplementation(
 	return pullRequest, nil
 }
 
+func (client *Client) VerifyPullRequestReview(
+	ctx context.Context,
+	owner string,
+	repository string,
+	spec workspace.ReviewPublicationSpec,
+) (workspace.PullRequest, error) {
+	var err error
+	owner, repository, err = project.NormalizeRepositoryCoordinate(owner, repository)
+	if err != nil {
+		return workspace.PullRequest{}, err
+	}
+	if err := spec.Validate(); err != nil {
+		return workspace.PullRequest{}, err
+	}
+	pullRequest, err := client.getPullRequest(ctx, owner, repository, spec.Number)
+	if err != nil {
+		return workspace.PullRequest{}, err
+	}
+	planSection := spec.PlanPublicationMarker + "\n\n## Agreed implementation plan\n\n" + spec.Plan
+	if pullRequest.State != "open" || !pullRequest.Draft ||
+		pullRequest.BaseBranch != spec.BaseBranch || pullRequest.HeadBranch != spec.HeadBranch ||
+		pullRequest.HeadCommitID != spec.HeadCommitID ||
+		strings.Count(pullRequest.Body, spec.FeatureMarker) != 1 ||
+		strings.Count(pullRequest.Body, spec.PlanPublicationMarker) != 1 ||
+		!strings.HasSuffix(pullRequest.Body, planSection) {
+		return workspace.PullRequest{}, workspace.ErrPullRequestConflict
+	}
+	status, body, err := client.doJSON(
+		ctx, http.MethodGet,
+		fmt.Sprintf(
+			"/api/v1/repos/%s/%s/pulls/%d/reviews/%d",
+			url.PathEscape(owner), url.PathEscape(repository), spec.Number, spec.ReviewID,
+		), nil,
+	)
+	if err != nil {
+		return workspace.PullRequest{}, err
+	}
+	if status != http.StatusOK {
+		return workspace.PullRequest{}, fmt.Errorf(
+			"%w: pull request review returned HTTP %d", project.ErrForgejoUnavailable, status,
+		)
+	}
+	var review struct {
+		ID       int64  `json:"id"`
+		Body     string `json:"body"`
+		CommitID string `json:"commit_id"`
+		State    string `json:"state"`
+		Stale    bool   `json:"stale"`
+		User     struct {
+			Login string `json:"login"`
+		} `json:"user"`
+	}
+	if err := json.Unmarshal(body, &review); err != nil {
+		return workspace.PullRequest{}, fmt.Errorf(
+			"%w: pull request review response is invalid JSON", project.ErrForgejoUnavailable,
+		)
+	}
+	wantBody := spec.PublicationMarker + "\n\n## Review\n\n" + spec.Summary
+	if review.ID != spec.ReviewID || review.CommitID != spec.HeadCommitID ||
+		review.State != spec.ExpectedState || review.Stale || review.Body != wantBody ||
+		!strings.EqualFold(strings.TrimSpace(review.User.Login), spec.ExpectedAuthor) {
+		return workspace.PullRequest{}, workspace.ErrPullRequestConflict
+	}
+	return pullRequest, nil
+}
+
 func (client *Client) reconcilePullRequestPlan(
 	ctx context.Context,
 	owner string,

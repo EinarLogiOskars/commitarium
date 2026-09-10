@@ -41,9 +41,13 @@ turn. When the lead decides the implementation is ready for review, it commits
 and pushes the feature branch under its own Forgejo identity and writes one
 structured implementation summary to the draft PR. The coordinator checks that
 the reported clean commit, remote branch, PR head, agreed plan, summary, and
-author all match before marking the revision ready for automated review.
-Implementation review, Claude Code execution, and the user interface remain to
-be built.
+author all match, moves the feature to `reviewing`, and immediately resumes the
+persistent reviewer in its separate worker container. The reviewer inspects the
+exact commit, posts one formal Forgejo approval or changes-requested review, and
+returns its review ID. The coordinator verifies that exact review, commit,
+decision, body, and author before stopping at the first-review checkpoint. The
+lead/reviewer correction loop, Claude Code execution, and the user interface
+remain to be built.
 Projects can be listed and permanently associated with one verified Forgejo
 repository.
 
@@ -59,11 +63,12 @@ Docker Compose normally runs three local services:
   network and stores its execution journal in a worker-only volume. It does not
   publish a host port during normal use.
 
-The optional `real-codex` Compose profile adds `codex-worker`. It packages the
-real Codex CLI with the same worker API and keeps its provider login/session
-state and worker journal in separate private volumes. The coordinator and worker
-also share only Commitarium's managed workspace root. It is intentionally not
-started by ordinary `docker compose up` yet.
+The optional `real-codex` Compose profile adds `codex-worker` and
+`codex-reviewer-worker`. They package the same real Codex CLI and worker API,
+but keep separate provider login/session profiles, worker journals, worker API
+tokens, and Forgejo identities. Both share only Commitarium's managed workspace
+root with the coordinator. They are intentionally not started by ordinary
+`docker compose up` yet.
 
 Forgejo is the agent-managed source of truth for plans, review discussion, and
 the internal pull-request audit trail. The coordinator database stores only the
@@ -132,6 +137,22 @@ mounts it only into the Codex worker; the coordinator does not receive it.
 `COMMITARIUM_CODEX_FORGEJO_LOGIN`, `COMMITARIUM_CODEX_GIT_AUTHOR_NAME`, and
 `COMMITARIUM_CODEX_GIT_AUTHOR_EMAIL` must describe that account. Recreate the
 worker after rotating the file because it loads the credential at startup.
+
+The real reviewer uses another Forgejo account. Give it repository write access,
+create a token with `write:repository` and `write:issue`, and save the value at
+`.commitarium/agents/codex-reviewer/forgejo-token`. Its corresponding settings
+are prefixed `COMMITARIUM_CODEX_REVIEWER_`; its provider login and worker journal
+also live in reviewer-only named volumes. Forgejo groups formal-review API
+access under the repository-write token scope. The reviewer therefore has the
+internal forge capabilities needed for later review corrections, while its
+role instructions keep an ordinary review turn inspection-only.
+
+Authenticate that private reviewer provider profile independently:
+
+```sh
+docker compose --profile real-codex run --rm --no-deps --entrypoint codex \
+  codex-reviewer-worker -c 'cli_auth_credentials_store="file"' login --device-auth
+```
 
 Managed feature checkouts are written beneath
 `${COMMITARIUM_WORKSPACE_SOURCE:-./.commitarium/workspaces}` on the host. Compose
@@ -417,9 +438,10 @@ The coordinator does not decide whether the work is complete. It mechanically
 confirms the lead's reported clean HEAD, its ancestry from the planning base,
 the exact Forgejo branch and PR head, the still-published plan, and one matching
 PR comment written by the configured lead account. A successful check records
-one visible verification activity and leaves the run ready for the forthcoming
-automatic reviewer. A contradiction or unavailable external check records a
-recovery assessment and waits without starting another agent.
+one visible verification activity, moves the feature to `reviewing`, and
+automatically resumes the existing reviewer provider conversation in its own
+container. A contradiction or unavailable external check records a recovery
+assessment and waits without starting another agent.
 
 An exact action retry after successful verification does not start another
 attempt. If verification previously stopped because Forgejo was unavailable or
@@ -428,6 +450,18 @@ resumes or replaces the lead. If the coordinator stops
 while this turn is active, startup looks up and reattaches to that exact worker
 attempt without issuing another resume request. A worker-container restart still
 marks in-flight provider work indeterminate and requires user review.
+
+The reviewer receives the accepted goal, agreed plan, lead summary, exact
+implementation commit, branch, and PR. It must inspect the repository and diff
+before judging and must not modify, commit, push, or merge. It posts one formal
+Forgejo review whose body contains a retry-stable hidden marker and a concise
+`Review` section, using either `APPROVE` or `REQUEST_CHANGES`. Its structured
+result includes the exact commit, PR number, and Forgejo review ID. The
+coordinator fetches that exact review and verifies its author, commit, decision,
+body, current PR head, and clean checkout. It then waits with either an approved
+or changes-requested reason. Repeating startup at any boundary reuses or verifies
+the same attempt and review; it does not start a second reviewer or post a
+duplicate review.
 
 When the lead is waiting during `implementing`, continue the same implementation
 conversation through the ordinary session command endpoint:
@@ -460,8 +494,9 @@ The temporary coordinator-owned implementation commit endpoint remains
 removed. Commits, feature-branch pushes, and structured PR summaries are now
 owned by the lead's scoped Forgejo identity. This internal work remains separate
 from the later trusted-host synchronization and optional external push. The next
-functional slice starts the persistent reviewer against the exact verified
-revision under a separate reviewer identity.
+functional slice routes formal findings back to the lead, lets the two existing
+conversations correct and re-review subsequent commits, and stops on approval or
+the bounded user-intervention gate.
 
 The versioned [internal worker API](docs/worker-api.md) now has tested client and
 server components for authenticated attempt inspection and control. Its worker

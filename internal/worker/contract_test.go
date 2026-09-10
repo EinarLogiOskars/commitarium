@@ -180,6 +180,14 @@ func TestResultValidate(t *testing.T) {
 	if err := published.Validate(); err != nil {
 		t.Fatalf("validate published implementation result: %v", err)
 	}
+	reviewed := completed
+	reviewed.Disposition = DispositionChangesRequested
+	reviewed.Review = &ReviewPublication{
+		CommitID: "0123456789abcdef0123456789abcdef01234567", PullRequestNumber: 7, ReviewID: 11,
+	}
+	if err := reviewed.Validate(); err != nil {
+		t.Fatalf("validate published review result: %v", err)
+	}
 	stopped := Result{
 		Outcome:           OutcomeStopped,
 		ProviderSessionID: "provider_session_test",
@@ -203,6 +211,10 @@ func TestResultValidate(t *testing.T) {
 		{Outcome: OutcomeFailed, Disposition: DispositionSucceeded, ProviderSessionID: "provider_session_test"},
 		{Outcome: OutcomeCompleted, Disposition: DispositionSucceeded, ProviderSessionID: "provider_session_test", Publication: &ImplementationPublication{CommitID: "bad", PullRequestNumber: 7}},
 		{Outcome: OutcomeCompleted, Disposition: DispositionInputRequired, ProviderSessionID: "provider_session_test", Publication: &ImplementationPublication{CommitID: "0123456789abcdef0123456789abcdef01234567", PullRequestNumber: 7}},
+		{Outcome: OutcomeCompleted, Disposition: DispositionSucceeded, ProviderSessionID: "provider_session_test", Review: &ReviewPublication{CommitID: "bad", PullRequestNumber: 7, ReviewID: 11}},
+		{Outcome: OutcomeCompleted, Disposition: DispositionInputRequired, ProviderSessionID: "provider_session_test", Review: &ReviewPublication{CommitID: "0123456789abcdef0123456789abcdef01234567", PullRequestNumber: 7, ReviewID: 11}},
+		{Outcome: OutcomeStopped, ProviderSessionID: "provider_session_test", Review: &ReviewPublication{CommitID: "0123456789abcdef0123456789abcdef01234567", PullRequestNumber: 7, ReviewID: 11}},
+		{Outcome: OutcomeCompleted, Disposition: DispositionSucceeded, ProviderSessionID: "provider_session_test", Publication: &ImplementationPublication{CommitID: "0123456789abcdef0123456789abcdef01234567", PullRequestNumber: 7}, Review: &ReviewPublication{CommitID: "0123456789abcdef0123456789abcdef01234567", PullRequestNumber: 7, ReviewID: 11}},
 	}
 	for _, result := range invalid {
 		if err := result.Validate(); !errors.Is(err, ErrInvalidResult) {

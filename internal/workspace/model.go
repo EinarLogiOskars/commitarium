@@ -213,6 +213,45 @@ type ImplementationPublicationSpec struct {
 	HeadCommitID          string
 }
 
+// ReviewPublicationSpec describes the exact Forgejo review the coordinator
+// expects after an independent reviewer has inspected one immutable commit.
+type ReviewPublicationSpec struct {
+	Number                int64
+	ReviewID              int64
+	FeatureMarker         string
+	PlanPublicationMarker string
+	Plan                  string
+	PublicationMarker     string
+	Summary               string
+	ExpectedAuthor        string
+	ExpectedState         string
+	BaseBranch            string
+	HeadBranch            string
+	HeadCommitID          string
+}
+
+func (spec ReviewPublicationSpec) Validate() error {
+	if spec.Number < 1 || spec.ReviewID < 1 {
+		return errors.New("review pull request and review IDs are required")
+	}
+	for _, value := range []string{
+		spec.FeatureMarker, spec.PlanPublicationMarker, spec.Plan,
+		spec.PublicationMarker, spec.Summary, spec.ExpectedAuthor,
+		spec.ExpectedState, spec.BaseBranch, spec.HeadBranch,
+	} {
+		if strings.TrimSpace(value) == "" || value != strings.TrimSpace(value) {
+			return errors.New("review publication fields are required and must be trimmed")
+		}
+	}
+	if spec.ExpectedState != "APPROVED" && spec.ExpectedState != "REQUEST_CHANGES" {
+		return errors.New("review publication state is not recognized")
+	}
+	if !safeCommitID.MatchString(spec.HeadCommitID) {
+		return errors.New("reviewed head must be a lowercase commit ID")
+	}
+	return nil
+}
+
 func (spec ImplementationPublicationSpec) Validate() error {
 	if spec.Number < 1 {
 		return errors.New("implementation pull request number is required")

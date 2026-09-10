@@ -401,6 +401,37 @@ func (s *Service) BeginChainedTurn(
 	return admitted, nil
 }
 
+// BeginChainedTurnInState hands an already-running workflow to another agent
+// while requiring the durable feature phase chosen by the caller. It is used
+// for cross-phase handoffs such as implementation to independent review.
+func (s *Service) BeginChainedTurnInState(
+	ctx context.Context,
+	sessionID string,
+	previous WorkerAttemptCheckpoint,
+	nextAttemptID string,
+	expectedFeatureState feature.State,
+	runReason string,
+) (bool, error) {
+	now := s.now().UTC()
+	admitted, err := s.store.BeginAutonomousTurn(ctx, AutonomousTurnAdmission{
+		SessionID:                 sessionID,
+		PreviousAttemptID:         previous.AttemptID,
+		PreviousLastEventSequence: previous.LastEventSequence,
+		NextAttempt: WorkerAttemptCheckpoint{
+			SessionID: sessionID, AttemptID: nextAttemptID,
+			CreatedAt: now, UpdatedAt: now,
+		},
+		ExpectedFeatureState: expectedFeatureState,
+		RunReason:            runReason,
+		OccurredAt:           now,
+		RunAlreadyActive:     true,
+	})
+	if err != nil {
+		return false, fmt.Errorf("begin chained turn for session %q: %w", sessionID, err)
+	}
+	return admitted, nil
+}
+
 // BeginNewSessionTurn creates the first attempt of a second logical agent
 // conversation without leaving partially admitted work across a restart.
 func (s *Service) BeginNewSessionTurn(

@@ -16,6 +16,7 @@ import (
 var ErrGoalNotAccepted = errors.New("feature goal has not been accepted")
 var ErrFeatureNotDraft = errors.New("feature is no longer a draft")
 var ErrFeatureNotPlanning = errors.New("feature is not in planning")
+var ErrFeatureNotReviewing = errors.New("feature is not in review")
 var ErrProjectRepositoryNotBound = errors.New("project has no Forgejo repository binding")
 var ErrBranchNotFound = errors.New("Forgejo branch not found")
 var ErrBranchConflict = errors.New("Forgejo feature branch exists at a different commit")
@@ -70,6 +71,12 @@ type PullRequestManager interface {
 		owner string,
 		repository string,
 		spec ImplementationPublicationSpec,
+	) (PullRequest, error)
+	VerifyPullRequestReview(
+		ctx context.Context,
+		owner string,
+		repository string,
+		spec ReviewPublicationSpec,
 	) (PullRequest, error)
 }
 
@@ -326,7 +333,7 @@ func (service *Service) VerifyImplementationPublication(
 	if err != nil {
 		return Workspace{}, err
 	}
-	if storedFeature.State != feature.StateImplementing {
+	if storedFeature.State != feature.StateImplementing && storedFeature.State != feature.StateReviewing {
 		return Workspace{}, ErrFeatureNotPlanning
 	}
 	storedProject, err := service.projects.GetByID(ctx, projectID)
@@ -382,6 +389,93 @@ func (service *Service) VerifyImplementationPublication(
 	)
 	if err != nil {
 		return Workspace{}, fmt.Errorf("verify implementation pull request: %w", err)
+	}
+	if pullRequest.Number != stored.PullRequestNumber || pullRequest.URL != stored.PullRequestURL {
+		return Workspace{}, ErrPullRequestConflict
+	}
+	return stored, nil
+}
+
+// VerifyImplementationReview confirms the reviewer examined the same clean
+// commit that the lead published and that the claimed formal Forgejo review
+// exists with the expected author, decision, and exact audit body.
+func (service *Service) VerifyImplementationReview(
+	ctx context.Context,
+	projectID string,
+	featureID string,
+	planEventID string,
+	plan string,
+	attemptID string,
+	summary string,
+	commitID string,
+	pullRequestNumber int64,
+	reviewID int64,
+	expectedAuthor string,
+	expectedState string,
+) (Workspace, error) {
+	for _, value := range []string{
+		planEventID, plan, attemptID, summary, commitID, expectedAuthor, expectedState,
+	} {
+		if strings.TrimSpace(value) == "" || value != strings.TrimSpace(value) {
+			return Workspace{}, errors.New("review publication identities are required and must be trimmed")
+		}
+	}
+	storedFeature, err := service.features.GetByID(ctx, projectID, featureID)
+	if err != nil {
+		return Workspace{}, err
+	}
+	if storedFeature.State != feature.StateReviewing {
+		return Workspace{}, ErrFeatureNotReviewing
+	}
+	storedProject, err := service.projects.GetByID(ctx, projectID)
+	if err != nil {
+		return Workspace{}, err
+	}
+	if storedProject.ForgejoRepository == nil {
+		return Workspace{}, ErrProjectRepositoryNotBound
+	}
+	stored, err := service.Get(ctx, projectID, featureID)
+	if err != nil {
+		return Workspace{}, err
+	}
+	repository := storedProject.ForgejoRepository
+	if stored.RepositoryOwner != repository.Owner || stored.RepositoryName != repository.Name ||
+		stored.BaseBranch != repository.DefaultBranch || !stored.CheckoutReady() ||
+		!stored.PullRequestReady() || service.checkouts == nil || service.pullRequests == nil ||
+		stored.PullRequestNumber != pullRequestNumber {
+		return Workspace{}, ErrConflict
+	}
+	branch, err := service.branches.GetBranch(ctx, stored.RepositoryOwner, stored.RepositoryName, stored.Branch)
+	if err != nil {
+		return Workspace{}, fmt.Errorf("verify reviewed Forgejo branch: %w", err)
+	}
+	if branch.Name != stored.Branch || branch.CommitID != commitID {
+		return Workspace{}, ErrBranchConflict
+	}
+	if err := service.checkouts.Ensure(ctx, CheckoutSpec{
+		WorkspaceID: stored.ID, RepositoryOwner: stored.RepositoryOwner,
+		RepositoryName: stored.RepositoryName, Branch: stored.Branch,
+		BaseCommitID: stored.BaseCommitID, ExpectedHeadCommitID: commitID,
+		AlreadyReady: true, RequireClean: true,
+	}); err != nil {
+		return Workspace{}, fmt.Errorf("verify reviewed checkout: %w", err)
+	}
+	planDigest := sha256.Sum256([]byte(planEventID))
+	reviewDigest := sha256.Sum256([]byte(attemptID))
+	pullRequest, err := service.pullRequests.VerifyPullRequestReview(
+		ctx, stored.RepositoryOwner, stored.RepositoryName,
+		ReviewPublicationSpec{
+			Number: stored.PullRequestNumber, ReviewID: reviewID,
+			FeatureMarker:         "<!-- commitarium-feature: " + storedFeature.ID + " -->",
+			PlanPublicationMarker: "<!-- commitarium-plan: " + hex.EncodeToString(planDigest[:]) + " -->",
+			Plan:                  plan,
+			PublicationMarker:     "<!-- commitarium-review: " + hex.EncodeToString(reviewDigest[:]) + " -->",
+			Summary:               summary, ExpectedAuthor: expectedAuthor, ExpectedState: expectedState,
+			BaseBranch: stored.BaseBranch, HeadBranch: stored.Branch, HeadCommitID: commitID,
+		},
+	)
+	if err != nil {
+		return Workspace{}, fmt.Errorf("verify implementation review: %w", err)
 	}
 	if pullRequest.Number != stored.PullRequestNumber || pullRequest.URL != stored.PullRequestURL {
 		return Workspace{}, ErrPullRequestConflict
