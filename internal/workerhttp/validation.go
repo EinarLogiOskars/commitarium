@@ -137,11 +137,13 @@ func (request PutAttemptRequest) Validate(identity MutationIdentity) error {
 	if request.OutputContract != "" &&
 		request.OutputContract != OutputContractPlanningLead &&
 		request.OutputContract != OutputContractImplementationLead &&
-		request.OutputContract != OutputContractImplementationReview {
+		request.OutputContract != OutputContractImplementationReview &&
+		request.OutputContract != OutputContractImplementationReadiness {
 		return invalid("output contract %q is not recognized", request.OutputContract)
 	}
 	if (request.OutputContract == OutputContractPlanningLead ||
-		request.OutputContract == OutputContractImplementationLead) &&
+		request.OutputContract == OutputContractImplementationLead ||
+		request.OutputContract == OutputContractImplementationReadiness) &&
 		request.Assignment.Role != RoleLead {
 		return invalid("lead output contract requires the lead role")
 	}

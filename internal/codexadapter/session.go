@@ -376,7 +376,8 @@ func (session *session) completedItem(item threadItem) (*worker.Event, error) {
 		}
 		if session.outputContract == worker.OutputContractPlanningLead ||
 			session.outputContract == worker.OutputContractImplementationLead ||
-			session.outputContract == worker.OutputContractImplementationReview {
+			session.outputContract == worker.OutputContractImplementationReview ||
+			session.outputContract == worker.OutputContractImplementationReadiness {
 			session.mu.Lock()
 			session.pendingMessage = text
 			session.mu.Unlock()
@@ -426,6 +427,11 @@ type implementationReviewResponse struct {
 	CommitID          string `json:"commit_id"`
 	PullRequestNumber int64  `json:"pull_request_number"`
 	ReviewID          int64  `json:"review_id"`
+}
+
+type implementationReadinessResponse struct {
+	Action  string `json:"action"`
+	Summary string `json:"summary"`
 }
 
 func decodePlanningLeadResponse(text string) (planningLeadResponse, error) {
@@ -536,6 +542,36 @@ func decodeImplementationReviewResponse(text string) (implementationReviewRespon
 	return response, nil
 }
 
+func decodeImplementationReadinessResponse(text string) (implementationReadinessResponse, error) {
+	decoder := json.NewDecoder(bytes.NewBufferString(text))
+	decoder.DisallowUnknownFields()
+	var response implementationReadinessResponse
+	if err := decoder.Decode(&response); err != nil {
+		return implementationReadinessResponse{}, fmt.Errorf(
+			"%w: decode implementation readiness response: %v", ErrProtocol, err,
+		)
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return implementationReadinessResponse{}, fmt.Errorf(
+			"%w: implementation readiness response contains trailing JSON", ErrProtocol,
+		)
+	}
+	response.Summary = strings.TrimSpace(response.Summary)
+	if response.Summary == "" {
+		return implementationReadinessResponse{}, fmt.Errorf(
+			"%w: implementation readiness response is incomplete", ErrProtocol,
+		)
+	}
+	switch response.Action {
+	case "ready_to_merge", "concern", "blocked":
+		return response, nil
+	default:
+		return implementationReadinessResponse{}, fmt.Errorf(
+			"%w: implementation readiness response has an unknown action", ErrProtocol,
+		)
+	}
+}
+
 func (session *session) completedTurn(
 	turn turnRecord,
 ) (*worker.Event, bool, worker.Result, error) {
@@ -644,6 +680,22 @@ func (session *session) completeStructuredResponse() (
 				CommitID: response.CommitID, PullRequestNumber: response.PullRequestNumber,
 				ReviewID: response.ReviewID,
 			}, nil
+	case worker.OutputContractImplementationReadiness:
+		response, err := decodeImplementationReadinessResponse(raw)
+		if err != nil {
+			return nil, "", nil, nil, err
+		}
+		session.mu.Lock()
+		session.lastAgentMessage = response.Summary
+		session.mu.Unlock()
+		switch response.Action {
+		case "ready_to_merge":
+			return event(worker.EventMessage, response.Summary), worker.DispositionSucceeded, nil, nil, nil
+		case "concern":
+			return event(worker.EventMessage, response.Summary), worker.DispositionChangesRequested, nil, nil, nil
+		default:
+			return event(worker.EventInputRequired, response.Summary), worker.DispositionInputRequired, nil, nil, nil
+		}
 	default:
 		return nil, "", nil, nil, fmt.Errorf(
 			"%w: unsupported structured output contract %q", ErrProtocol, session.outputContract,

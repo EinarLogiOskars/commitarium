@@ -27,15 +27,22 @@ func TestSessionRequestValidate(t *testing.T) {
 	if err := valid.Validate(); err != nil {
 		t.Fatalf("validate request: %v", err)
 	}
+	readiness := valid
+	readiness.Role = RoleLead
+	readiness.OutputContract = OutputContractImplementationReadiness
+	if err := readiness.Validate(); err != nil {
+		t.Fatalf("validate lead readiness request: %v", err)
+	}
 
 	tests := map[string]SessionRequest{
-		"missing session ID":           {AttemptID: "att_test", FeatureID: "fea_test", Role: RoleCoder, Instructions: "work"},
-		"missing attempt ID":           {SessionID: "ses_test", FeatureID: "fea_test", Role: RoleCoder, Instructions: "work"},
-		"missing feature ID":           {SessionID: "ses_test", AttemptID: "att_test", Role: RoleCoder, Instructions: "work"},
-		"unknown role":                 {SessionID: "ses_test", AttemptID: "att_test", FeatureID: "fea_test", Role: "unknown", Instructions: "work"},
-		"missing instructions":         {SessionID: "ses_test", AttemptID: "att_test", FeatureID: "fea_test", Role: RoleCoder},
-		"unknown output contract":      {SessionID: "ses_test", AttemptID: "att_test", FeatureID: "fea_test", Role: RoleCoder, Instructions: "work", OutputContract: "unknown"},
-		"planning output for reviewer": {SessionID: "ses_test", AttemptID: "att_test", FeatureID: "fea_test", Role: RoleReviewer, Instructions: "work", OutputContract: OutputContractPlanningLead},
+		"missing session ID":            {AttemptID: "att_test", FeatureID: "fea_test", Role: RoleCoder, Instructions: "work"},
+		"missing attempt ID":            {SessionID: "ses_test", FeatureID: "fea_test", Role: RoleCoder, Instructions: "work"},
+		"missing feature ID":            {SessionID: "ses_test", AttemptID: "att_test", Role: RoleCoder, Instructions: "work"},
+		"unknown role":                  {SessionID: "ses_test", AttemptID: "att_test", FeatureID: "fea_test", Role: "unknown", Instructions: "work"},
+		"missing instructions":          {SessionID: "ses_test", AttemptID: "att_test", FeatureID: "fea_test", Role: RoleCoder},
+		"unknown output contract":       {SessionID: "ses_test", AttemptID: "att_test", FeatureID: "fea_test", Role: RoleCoder, Instructions: "work", OutputContract: "unknown"},
+		"planning output for reviewer":  {SessionID: "ses_test", AttemptID: "att_test", FeatureID: "fea_test", Role: RoleReviewer, Instructions: "work", OutputContract: OutputContractPlanningLead},
+		"readiness output for reviewer": {SessionID: "ses_test", AttemptID: "att_test", FeatureID: "fea_test", Role: RoleReviewer, Instructions: "work", OutputContract: OutputContractImplementationReadiness},
 	}
 	for name, request := range tests {
 		t.Run(name, func(t *testing.T) {

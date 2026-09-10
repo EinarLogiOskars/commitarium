@@ -30,9 +30,9 @@ action starts a separate persistent reviewer Codex conversation, supplies the
 lead's exact final proposal, and exposes both final messages through one ordered
 planning history and SSE stream. After the first review, the same two provider
 sessions alternate until the lead explicitly submits an agreed plan or the
-ten-message safety limit requires user input. A submitted plan is reconciled
-against the clean managed workspace and exact draft pull request, then appended
-once to the PR body. A final explicit action re-verifies that boundary and
+default six-round (twelve-message) safety limit requires user input. A submitted
+plan is reconciled against the clean managed workspace and exact draft pull
+request, then appended once to the PR body. A final explicit action re-verifies that boundary and
 resumes the same lead to perform the first write-capable implementation turn.
 While implementation is waiting, the user may edit the shared checkout or
 describe a blocker resolution through the existing session-message API; each
@@ -45,13 +45,18 @@ author all match, moves the feature to `reviewing`, and immediately resumes the
 persistent reviewer in its separate worker container. The reviewer inspects the
 exact commit, posts one formal Forgejo approval or changes-requested review, and
 returns its review ID. The coordinator verifies that exact review, commit,
-decision, body, and author. Approval advances the feature to `ready_to_merge`
-without merging. A changes-requested decision instead resumes the original lead
-conversation, which publishes a new descendant commit and a structured `Review
-response` PR comment; the original reviewer then reviews that exact revision.
-Numbered correction and review turns repeat until approval, while a fifth review
-that still requests changes stops for user input. Claude Code execution and the
-user interface remain to be built.
+decision, body, and author. Approval resumes the original lead for a final
+readiness decision against that exact revision. The lead posts a structured
+`Merge readiness` PR comment and either gives the green light or raises a
+remaining concern. Only a verified green light advances the feature to
+`ready_to_merge`, without merging. A changes-requested review instead resumes
+the original lead conversation, which publishes a new descendant commit and a
+structured `Review response` PR comment; the original reviewer then reviews
+that exact revision.
+Review and lead-response pairs repeat for at most six rounds by default. The
+round is completed before the workflow stops for user input, and a zero round
+limit is reserved to mean unlimited once project settings expose it. Claude
+Code execution and the user interface remain to be built.
 Projects can be listed and permanently associated with one verified Forgejo
 repository.
 
@@ -462,19 +467,23 @@ Forgejo review whose body contains a retry-stable hidden marker and a concise
 `Review` section, using either `APPROVE` or `REQUEST_CHANGES`. Its structured
 result includes the exact commit, PR number, and Forgejo review ID. The
 coordinator fetches that exact review and verifies its author, commit, decision,
-body, current PR head, and clean checkout. An approval advances the feature to
-`ready_to_merge` and waits immediately before the later merge gate.
+body, current PR head, and clean checkout. An approval resumes the lead, which
+inspects that exact revision and posts one marked `Merge readiness` comment.
+Only the lead's structured green light advances the feature to
+`ready_to_merge` and waits immediately before the later merge gate; a stated
+concern returns the same commit to the reviewer.
 If a review requests changes, the coordinator automatically resumes the
 same lead conversation with the exact review, commit, accepted goal, agreed
 plan, and PR identities. The lead inspects before editing, creates a new commit
 descended from the reviewed revision, pushes it, and posts one marked `Review
 response` comment describing the changes and tests. After the coordinator
 mechanically verifies those facts, it resumes the same reviewer conversation
-for the next numbered formal review. The loop permits at most five reviews; if
-the fifth still requests changes, it waits for the user instead of starting a
-fifth correction. Repeating startup at any boundary compares the durable review
-and correction numbers, then reuses or verifies the deterministic attempt for
-the later stage. It does not replace an agent or duplicate a PR audit entry.
+for the next numbered formal review. The default limit is six complete
+review/lead-response rounds, or up to twelve agent messages. The final allowed
+review is still paired with its lead response before the workflow waits for the
+user. Repeating startup at any boundary compares the durable review, correction,
+and readiness numbers, then reuses or verifies the deterministic attempt for the
+later stage. It does not replace an agent or duplicate a PR audit entry.
 
 When the lead is waiting during `implementing`, continue the same implementation
 conversation through the ordinary session command endpoint:

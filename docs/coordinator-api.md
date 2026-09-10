@@ -451,9 +451,9 @@ The `implementation_reviewer` output contract returns `approved`,
 `changes_requested`, or `blocked`. Successful review publication includes the
 exact commit ID, PR number, and Forgejo review ID. The coordinator fetches that
 exact review and verifies the open draft PR head, accepted plan, clean checkout,
-review author, commit, decision, non-stale state, and exact body. Approval moves
-the feature to `ready_to_merge` and returns the run to `waiting_for_user`; this
-does not merge the pull request.
+review author, commit, decision, non-stale state, and exact body. Approval does
+not finish the workflow by itself: it resumes the same lead provider
+conversation for an explicit readiness decision against that exact commit.
 
 When a review returns `changes_requested`, the run stays active and the
 coordinator automatically resumes the original lead provider conversation in
@@ -467,19 +467,29 @@ response` comment. The coordinator verifies the new clean PR head, ancestry
 from the reviewed commit, plan, author, marker, and exact response body without
 judging code quality.
 
-A verified response immediately resumes the same reviewer provider conversation
+A verified correction immediately resumes the same reviewer provider conversation
 as `{reviewer-session-id}:review:N+1`, supplying the corrected commit and
 response summary. The reviewer follows the same formal-review rules against
-that new immutable revision. Review numbers, rather than conversation-message
-counts, enforce a separate five-review maximum. If review five still requests
-changes, the run waits for user input and starts no further correction.
+that new immutable revision. When the reviewer approves, the lead posts one
+marker-owned `Merge readiness` PR comment and returns a structured green light
+or concern. A verified green light moves the feature to `ready_to_merge` and
+returns the run to `waiting_for_user`; a concern gives the reviewer another
+turn against the same commit.
+
+Planning and implementation review each default to six dialogue rounds. One
+round permits both agents to speak, so the default permits up to twelve agent
+messages per phase. A requested-changes review is paired with its corrective
+lead response, including in the final allowed round; an approval is paired with
+the lead's readiness response. If mutual agreement is still absent after round
+six, the run waits for user input before another round. The internal limit rule
+treats zero as unlimited; durable project/API configuration is not exposed yet.
 
 Recovery is idempotent before either reviewer admission, during an active
-reviewer or correction attempt, and after any terminal result. Startup orders
-the numbered deterministic checkpoints, reattaches to the one active attempt, or
-re-verifies the completed Forgejo review/response before starting only the next
-missing stage. It never substitutes worker profiles, starts both agents, or
-duplicates a review, commit, push, or audit comment.
+reviewer, correction, or readiness attempt, and after any terminal result.
+Startup orders the numbered deterministic checkpoints, reattaches to the one
+active attempt, or re-verifies the completed Forgejo review/lead response before
+starting only the next missing stage. It never substitutes worker profiles,
+starts both agents, or duplicates a review, commit, push, or audit comment.
 
 ## Continuing implementation
 
@@ -720,9 +730,9 @@ continue with the correct agent and next numbered attempt. SQLite refuses that
 handoff while any other session is actively working. If startup finds a durable
 `plan_submitted` event, it reconciles the marked PR update before recording
 publication and returning to the user gate. A crash after Forgejo accepted the
-update therefore does not duplicate the plan. Ten planning messages without a
-submission restore the user gate directly. These cases never launch two agents
-concurrently.
+update therefore does not duplicate the plan. Six complete planning rounds
+(twelve messages) without a submission restore the user gate directly. These
+cases never launch two agents concurrently.
 
 In the simulated workflow, a resumed worker receives a concise recovery
 briefing and must inspect before modifying anything. The briefing requires

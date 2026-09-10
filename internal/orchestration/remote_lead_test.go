@@ -138,6 +138,7 @@ type remoteLeadWorkspaceStub struct {
 	publicationVerifyCalls  int
 	responseVerifyCalls     int
 	reviewVerifyCalls       int
+	readinessVerifyCalls    int
 	responseReviewedCommit  string
 	responseCommit          string
 	publishedEventID        string
@@ -147,6 +148,7 @@ type remoteLeadWorkspaceStub struct {
 	publicationVerifyErr    error
 	responseVerifyErr       error
 	reviewVerifyErr         error
+	readinessVerifyErr      error
 }
 
 func (stub *remoteLeadWorkspaceStub) VerifyImplementationPublication(
@@ -202,6 +204,22 @@ func (stub *remoteLeadWorkspaceStub) VerifyImplementationReviewResponse(
 	stub.responseReviewedCommit = reviewedCommit
 	stub.responseCommit = commit
 	return stub.prepared, stub.responseVerifyErr
+}
+
+func (stub *remoteLeadWorkspaceStub) VerifyImplementationMergeReadiness(
+	context.Context,
+	string,
+	string,
+	string,
+	string,
+	string,
+	string,
+	string,
+	int64,
+	string,
+) (workspace.Workspace, error) {
+	stub.readinessVerifyCalls++
+	return stub.prepared, stub.readinessVerifyErr
 }
 
 func (stub *remoteLeadWorkspaceStub) VerifyPublishedPlan(
@@ -865,6 +883,22 @@ func TestRemoteLeadStartsPlanningInManagedWorkspace(t *testing.T) {
 		"cccccccccccccccccccccccccccccccccccccccc", 13,
 		"The second correction addresses the remaining finding and passes the relevant tests.",
 	)
+	addCompletedImplementationReadinessAttempt(
+		stub, runID, storedProject.ID, storedFeature.ID, 3,
+		workerhttp.DispositionChangesRequested,
+		"I am concerned that the approval does not address the deployment evidence.",
+	)
+	addCompletedLaterImplementationReviewAttempt(
+		stub, runID, storedProject.ID, storedFeature.ID, 4,
+		workerhttp.DispositionSucceeded,
+		"cccccccccccccccccccccccccccccccccccccccc", 14,
+		"The deployment evidence is present and the exact commit is ready to merge.",
+	)
+	addCompletedImplementationReadinessAttempt(
+		stub, runID, storedProject.ID, storedFeature.ID, 4,
+		workerhttp.DispositionSucceeded,
+		"I agree after reconciling the deployment evidence; this commit is ready to merge.",
+	)
 	workflowService := workflow.NewService(database.NewWorkflowStore(db))
 	now := time.Date(2026, time.September, 9, 20, 0, 0, 0, time.UTC)
 	checkoutAt := now.Add(time.Second)
@@ -1164,6 +1198,7 @@ func TestRemoteLeadStartsPlanningInManagedWorkspace(t *testing.T) {
 	// its Forgejo audit entry could be verified. Recovery rechecks the existing
 	// result and starts review round two without replacing the lead attempt.
 	workspaceStub.responseVerifyErr = nil
+	workspaceStub.readinessVerifyErr = errors.New("Forgejo readiness lookup unavailable")
 	if _, err := executions.TransitionRun(
 		t.Context(), runID, execution.RunStatusWaitingForUser,
 		execution.RunStatusRunning, "Simulated coordinator interruption after correction.",
@@ -1190,9 +1225,43 @@ func TestRemoteLeadStartsPlanningInManagedWorkspace(t *testing.T) {
 	}
 	waitForRemoteLeadStatus(t, executions, runID, execution.RunStatusWaitingForUser)
 	waitForRemoteLeadIdle(t, correctionRestart, runID)
+	interruptedReadiness, err := executions.GetRun(t.Context(), runID)
+	if err != nil || interruptedReadiness.Reason == implementationApprovedReason ||
+		workspaceStub.responseVerifyCalls != 3 || workspaceStub.reviewVerifyCalls != 3 ||
+		workspaceStub.readinessVerifyCalls != 1 {
+		t.Fatalf("unexpected interrupted readiness checkpoint: run=%+v workspace=%+v err=%v", interruptedReadiness, workspaceStub, err)
+	}
+	if _, err := executions.TransitionRun(
+		t.Context(), runID, execution.RunStatusWaitingForUser,
+		execution.RunStatusRunning, "Simulated coordinator interruption after lead readiness.",
+	); err != nil {
+		t.Fatalf("prepare completed-readiness recovery: %v", err)
+	}
+	workspaceStub.readinessVerifyErr = nil
+	readinessRestart, err := NewRemoteLeadStarter(RemoteLeadConfig{
+		Executions: executions, Features: database.NewFeatureStore(db), Goals: workflowService,
+		Planning: workflowService, Workspaces: workspaceStub, Worker: stub,
+		Pump:     &conversationalRemoteLeadPump{executions: executions, worker: stub},
+		Lifetime: t.Context(), AgentProfileID: "codex-default", WorkspaceID: "project-read-only",
+	})
+	if err != nil {
+		t.Fatalf("create completed-readiness recovery starter: %v", err)
+	}
+	interruptedReadiness, err = executions.GetRun(t.Context(), runID)
+	if err != nil {
+		t.Fatalf("load completed-readiness recovery run: %v", err)
+	}
+	if err := readinessRestart.Recover(
+		t.Context(), interruptedReadiness, reviewedFeature, project.RecoveryPolicyApprovalRequired,
+	); err != nil {
+		t.Fatalf("recover completed lead readiness: %v", err)
+	}
+	waitForRemoteLeadStatus(t, executions, runID, execution.RunStatusWaitingForUser)
+	waitForRemoteLeadIdle(t, readinessRestart, runID)
 	completedReview, err := executions.GetRun(t.Context(), runID)
 	if err != nil || completedReview.Reason != implementationApprovedReason ||
-		workspaceStub.responseVerifyCalls != 3 || workspaceStub.reviewVerifyCalls != 3 ||
+		workspaceStub.responseVerifyCalls != 3 || workspaceStub.reviewVerifyCalls != 4 ||
+		workspaceStub.readinessVerifyCalls != 3 ||
 		workspaceStub.responseReviewedCommit != "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" ||
 		workspaceStub.responseCommit != "cccccccccccccccccccccccccccccccccccccccc" {
 		t.Fatalf("unexpected corrective review checkpoint: run=%+v workspace=%+v err=%v", completedReview, workspaceStub, err)
@@ -1204,7 +1273,7 @@ func TestRemoteLeadStartsPlanningInManagedWorkspace(t *testing.T) {
 	stub.mu.Lock()
 	requests = append([]workerhttp.PutAttemptRequest(nil), stub.putRequests...)
 	stub.mu.Unlock()
-	if len(requests) != requestCount+5 {
+	if len(requests) != requestCount+8 {
 		t.Fatalf("correction recovery launched unexpected worker turns: %+v", requests[requestCount:])
 	}
 	secondReviewRequest := requests[requestCount+2]
@@ -1234,8 +1303,31 @@ func TestRemoteLeadStartsPlanningInManagedWorkspace(t *testing.T) {
 		!strings.Contains(thirdReviewRequest.Instructions, "Clarified the returned error") {
 		t.Fatalf("unexpected third implementation review request %+v", thirdReviewRequest)
 	}
+	readinessRequest := requests[requestCount+5]
+	if readinessRequest.Mode != workerhttp.AttemptModeResume ||
+		readinessRequest.ProviderSessionID != "codex-thread-test" ||
+		readinessRequest.Assignment.Role != workerhttp.RoleLead ||
+		readinessRequest.OutputContract != workerhttp.OutputContractImplementationReadiness ||
+		!strings.Contains(readinessRequest.Instructions, "cccccccccccccccccccccccccccccccccccccccc") ||
+		!strings.Contains(readinessRequest.Instructions, "ready to merge") {
+		t.Fatalf("unexpected lead merge-readiness request %+v", readinessRequest)
+	}
+	fourthReviewRequest := requests[requestCount+6]
+	if fourthReviewRequest.OutputContract != workerhttp.OutputContractImplementationReview ||
+		fourthReviewRequest.Assignment.Role != workerhttp.RoleReviewer ||
+		!strings.Contains(fourthReviewRequest.Instructions, "deployment evidence") ||
+		!strings.Contains(fourthReviewRequest.Instructions, "cccccccccccccccccccccccccccccccccccccccc") {
+		t.Fatalf("unexpected review after lead concern %+v", fourthReviewRequest)
+	}
+	finalReadinessRequest := requests[requestCount+7]
+	if finalReadinessRequest.OutputContract != workerhttp.OutputContractImplementationReadiness ||
+		finalReadinessRequest.Assignment.Role != workerhttp.RoleLead ||
+		!strings.Contains(finalReadinessRequest.Instructions, "deployment evidence") ||
+		!strings.Contains(finalReadinessRequest.Instructions, "cccccccccccccccccccccccccccccccccccccccc") {
+		t.Fatalf("unexpected final lead merge-readiness request %+v", finalReadinessRequest)
+	}
 
-	// Recreate a restart after approval and the feature transition were durable,
+	// Recreate a restart after mutual approval and the feature transition were durable,
 	// but before the run's user gate was trusted. Recovery restores the gate
 	// without re-verifying or launching another worker turn.
 	if _, err := executions.TransitionRun(
@@ -1263,8 +1355,8 @@ func TestRemoteLeadStartsPlanningInManagedWorkspace(t *testing.T) {
 		t.Fatalf("recover completed implementation review: %v", err)
 	}
 	waitForRemoteLeadStatus(t, executions, runID, execution.RunStatusWaitingForUser)
-	if workspaceStub.reviewVerifyCalls != 3 {
-		t.Fatalf("ready-to-merge recovery repeated review verification: count=%d", workspaceStub.reviewVerifyCalls)
+	if workspaceStub.readinessVerifyCalls != 3 {
+		t.Fatalf("ready-to-merge recovery repeated lead verification: count=%d", workspaceStub.readinessVerifyCalls)
 	}
 	stub.mu.Lock()
 	defer stub.mu.Unlock()
@@ -1273,13 +1365,13 @@ func TestRemoteLeadStartsPlanningInManagedWorkspace(t *testing.T) {
 	}
 }
 
-func TestRemotePlanningLoopStopsAtTenMessages(t *testing.T) {
+func TestRemotePlanningLoopStopsAfterSixRounds(t *testing.T) {
 	db, executions, storedProject, storedFeature := newRemoteLeadExecution(t)
 	runID := "run_remote_planning_limit"
 	stub := newConversationalRemoteLeadWorker(runID, storedProject.ID, storedFeature.ID)
 	addCompletedPlanningAttempt(stub, runID, storedProject.ID, storedFeature.ID)
 	addCompletedReviewerPlanningAttempt(stub, runID, storedProject.ID, storedFeature.ID)
-	for turn := 2; turn <= 5; turn++ {
+	for turn := 2; turn <= 6; turn++ {
 		addCompletedPlanningCorrectionAttempt(
 			stub, remoteLeadSessionID(runID), storedProject.ID, storedFeature.ID,
 			workerhttp.RoleLead, "codex-thread-test", turn,
@@ -1340,19 +1432,19 @@ func TestRemotePlanningLoopStopsAtTenMessages(t *testing.T) {
 	waitForRemoteLeadStatus(t, executions, runID, execution.RunStatusWaitingForUser)
 
 	messages, err := executions.PlanningMessagesForRun(t.Context(), runID)
-	if err != nil || len(messages) != maxPlanningMessages ||
+	if err != nil || len(messages) != defaultPlanningRoundLimit*2 ||
 		messages[len(messages)-1].Role != worker.RoleReviewer {
 		t.Fatalf("unexpected bounded planning history: len=%d err=%v messages=%+v", len(messages), err, messages)
 	}
 	run, err := executions.GetRun(t.Context(), runID)
-	if err != nil || run.Reason != planningLimitReason {
+	if err != nil || run.Reason != planningLimitReason() {
 		t.Fatalf("unexpected bounded planning run %+v err=%v", run, err)
 	}
 	stub.mu.Lock()
 	requestCount := len(stub.putRequests)
 	stub.mu.Unlock()
-	if requestCount != 11 {
-		t.Fatalf("expected clarification plus ten planning turns, got %d requests", requestCount)
+	if requestCount != 13 {
+		t.Fatalf("expected clarification plus twelve planning turns, got %d requests", requestCount)
 	}
 	if _, admitted, err := starter.StartPlanningRound(
 		t.Context(), runID, "start-limited-loop",
@@ -2107,6 +2199,56 @@ func addCompletedLaterImplementationReviewAttempt(
 	}
 }
 
+func addCompletedImplementationReadinessAttempt(
+	stub *conversationalRemoteLeadWorker,
+	runID string,
+	projectID string,
+	featureID string,
+	round int,
+	disposition workerhttp.Disposition,
+	summary string,
+) {
+	sessionID := remoteLeadSessionID(runID)
+	reference := workerhttp.AttemptReference{
+		SessionID: sessionID, AttemptID: implementationReadinessAttemptID(sessionID, round),
+	}
+	now := time.Date(2026, time.September, 10, 3, 50+round, 0, 0, time.UTC)
+	initial := workerhttp.Attempt{
+		AttemptReference: reference, Mode: workerhttp.AttemptModeResume,
+		Assignment: workerhttp.Assignment{
+			AgentProfileID: "codex-default", ProjectID: projectID, FeatureID: featureID,
+			Role: workerhttp.RoleLead, WorkspaceID: "wsp_managed_feature",
+		},
+		ProviderSessionID: "codex-thread-test", State: workerhttp.AttemptStateRunning,
+		StartedAt: now, UpdatedAt: now,
+	}
+	endedAt := now.Add(time.Second)
+	terminal := initial
+	terminal.State = workerhttp.AttemptStateTerminal
+	terminal.LatestEventSequence = 3
+	terminal.UpdatedAt = endedAt
+	terminal.EndedAt = &endedAt
+	terminal.Result = &workerhttp.TerminalResult{
+		Outcome: workerhttp.OutcomeCompleted, Disposition: disposition, Summary: summary,
+	}
+	stub.initial[reference] = initial
+	stub.terminal[reference] = terminal
+	stub.events[reference] = []workerhttp.Event{
+		{
+			AttemptReference: reference, Sequence: 1, Type: workerhttp.EventActivity,
+			Text: "Reconciled the exact approved commit and formal review.", OccurredAt: now,
+		},
+		{
+			AttemptReference: reference, Sequence: 2, Type: workerhttp.EventMessage,
+			Text: summary, OccurredAt: now.Add(time.Millisecond),
+		},
+		{
+			AttemptReference: reference, Sequence: 3, Type: workerhttp.EventAttemptTerminal,
+			Text: summary, OccurredAt: endedAt,
+		},
+	}
+}
+
 func addCompletedImplementationContinuationAttempt(
 	stub *conversationalRemoteLeadWorker,
 	runID string,
@@ -2159,27 +2301,35 @@ func addCompletedImplementationContinuationAttempt(
 	}
 }
 
-func TestImplementationReviewActionUsesSeparateFiveReviewLimit(t *testing.T) {
+func TestDialogueRoundLimitsAndReviewRouting(t *testing.T) {
 	tests := []struct {
 		name        string
-		round       int
 		disposition workerhttp.Disposition
 		want        implementationReviewAction
 	}{
-		{name: "first requested change starts correction", round: 1, disposition: workerhttp.DispositionChangesRequested, want: implementationReviewActionCorrect},
-		{name: "fourth requested change starts final correction", round: 4, disposition: workerhttp.DispositionChangesRequested, want: implementationReviewActionCorrect},
-		{name: "fifth requested change stops", round: 5, disposition: workerhttp.DispositionChangesRequested, want: implementationReviewActionLimit},
-		{name: "early approval finishes", round: 1, disposition: workerhttp.DispositionSucceeded, want: implementationReviewActionApprove},
-		{name: "late approval finishes", round: 5, disposition: workerhttp.DispositionSucceeded, want: implementationReviewActionApprove},
+		{name: "requested changes start correction", disposition: workerhttp.DispositionChangesRequested, want: implementationReviewActionCorrect},
+		{name: "approval starts lead acknowledgement", disposition: workerhttp.DispositionSucceeded, want: implementationReviewActionAcknowledge},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			if got := nextImplementationReviewAction(test.round, test.disposition); got != test.want {
+			if got := nextImplementationReviewAction(test.disposition); got != test.want {
 				t.Fatalf("review action = %q, want %q", got, test.want)
 			}
 		})
 	}
-	if !strings.Contains(implementationReviewLimitReason(), "5 formal reviews") {
+	if dialogueRoundLimitReached(0, 1000) {
+		t.Fatal("zero round limit did not remain unlimited")
+	}
+	if planningRoundLimitReachedAt(0, 1000) {
+		t.Fatal("zero planning-round limit did not remain unlimited")
+	}
+	if planningRoundLimitReachedAt(3, 5) || !planningRoundLimitReachedAt(3, 6) {
+		t.Fatal("three planning rounds did not mean six messages")
+	}
+	if planningRoundLimitReached(11) || !planningRoundLimitReached(12) {
+		t.Fatal("planning did not treat six rounds as twelve messages")
+	}
+	if !strings.Contains(implementationReviewLimitReason(), "6 review rounds") {
 		t.Fatalf("review-limit reason does not reflect configured limit: %q", implementationReviewLimitReason())
 	}
 }
