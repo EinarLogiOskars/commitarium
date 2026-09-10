@@ -65,6 +65,12 @@ type PullRequestManager interface {
 		repository string,
 		spec PlanPublicationSpec,
 	) (PullRequest, error)
+	VerifyPullRequestImplementation(
+		ctx context.Context,
+		owner string,
+		repository string,
+		spec ImplementationPublicationSpec,
+	) (PullRequest, error)
 }
 
 type Service struct {
@@ -290,6 +296,97 @@ func (service *Service) VerifyImplementationContinuation(
 		ctx, projectID, featureID, eventID, plan, false, false,
 	)
 	return stored, err
+}
+
+// VerifyImplementationPublication checks only objective external facts after
+// the lead has decided its implementation is ready for review. It does not
+// judge code quality: it confirms that the exact clean local commit is on the
+// assigned Forgejo branch, that the draft PR points to it, and that the lead's
+// own Forgejo account wrote the expected audit comment.
+func (service *Service) VerifyImplementationPublication(
+	ctx context.Context,
+	projectID string,
+	featureID string,
+	planEventID string,
+	plan string,
+	attemptID string,
+	summary string,
+	commitID string,
+	pullRequestNumber int64,
+	expectedAuthor string,
+) (Workspace, error) {
+	for _, value := range []string{
+		planEventID, plan, attemptID, summary, commitID, expectedAuthor,
+	} {
+		if strings.TrimSpace(value) == "" || value != strings.TrimSpace(value) {
+			return Workspace{}, errors.New("implementation publication identities are required and must be trimmed")
+		}
+	}
+	storedFeature, err := service.features.GetByID(ctx, projectID, featureID)
+	if err != nil {
+		return Workspace{}, err
+	}
+	if storedFeature.State != feature.StateImplementing {
+		return Workspace{}, ErrFeatureNotPlanning
+	}
+	storedProject, err := service.projects.GetByID(ctx, projectID)
+	if err != nil {
+		return Workspace{}, err
+	}
+	if storedProject.ForgejoRepository == nil {
+		return Workspace{}, ErrProjectRepositoryNotBound
+	}
+	stored, err := service.Get(ctx, projectID, featureID)
+	if err != nil {
+		return Workspace{}, err
+	}
+	repository := storedProject.ForgejoRepository
+	if stored.RepositoryOwner != repository.Owner ||
+		stored.RepositoryName != repository.Name ||
+		stored.BaseBranch != repository.DefaultBranch ||
+		!stored.CheckoutReady() || !stored.PullRequestReady() ||
+		service.checkouts == nil || service.pullRequests == nil ||
+		stored.PullRequestNumber != pullRequestNumber {
+		return Workspace{}, ErrConflict
+	}
+	branch, err := service.branches.GetBranch(
+		ctx, stored.RepositoryOwner, stored.RepositoryName, stored.Branch,
+	)
+	if err != nil {
+		return Workspace{}, fmt.Errorf("verify Forgejo feature branch: %w", err)
+	}
+	if branch.Name != stored.Branch || branch.CommitID != commitID {
+		return Workspace{}, ErrBranchConflict
+	}
+	if err := service.checkouts.Ensure(ctx, CheckoutSpec{
+		WorkspaceID: stored.ID, RepositoryOwner: stored.RepositoryOwner,
+		RepositoryName: stored.RepositoryName, Branch: stored.Branch,
+		BaseCommitID: stored.BaseCommitID, ExpectedHeadCommitID: commitID,
+		AlreadyReady: true, RequireClean: true,
+	}); err != nil {
+		return Workspace{}, fmt.Errorf("verify implemented checkout: %w", err)
+	}
+	planDigest := sha256.Sum256([]byte(planEventID))
+	implementationDigest := sha256.Sum256([]byte(attemptID))
+	pullRequest, err := service.pullRequests.VerifyPullRequestImplementation(
+		ctx, stored.RepositoryOwner, stored.RepositoryName,
+		ImplementationPublicationSpec{
+			Number:                stored.PullRequestNumber,
+			FeatureMarker:         "<!-- commitarium-feature: " + storedFeature.ID + " -->",
+			PlanPublicationMarker: "<!-- commitarium-plan: " + hex.EncodeToString(planDigest[:]) + " -->",
+			Plan:                  plan,
+			PublicationMarker:     "<!-- commitarium-implementation: " + hex.EncodeToString(implementationDigest[:]) + " -->",
+			Summary:               summary, ExpectedAuthor: expectedAuthor,
+			BaseBranch: stored.BaseBranch, HeadBranch: stored.Branch, HeadCommitID: commitID,
+		},
+	)
+	if err != nil {
+		return Workspace{}, fmt.Errorf("verify implementation pull request: %w", err)
+	}
+	if pullRequest.Number != stored.PullRequestNumber || pullRequest.URL != stored.PullRequestURL {
+		return Workspace{}, ErrPullRequestConflict
+	}
+	return stored, nil
 }
 
 func (service *Service) reconcileSubmittedPlan(

@@ -192,10 +192,13 @@ func (manager *Manager) reconcile(
 				return manager.localConflict(ctx, "checkout HEAD no longer contains its recorded base commit")
 			}
 		}
-		if spec.RequireCleanBaseline {
+		if spec.ExpectedHeadCommitID != "" && head != spec.ExpectedHeadCommitID {
+			return manager.localConflict(ctx, "checkout HEAD does not match the agent's reported commit")
+		}
+		if spec.RequireCleanBaseline || spec.RequireClean {
 			status, err := run("status", "--porcelain=v1", "--untracked-files=all")
 			if err != nil || status != "" {
-				return manager.localConflict(ctx, "checkout has changes outside the agreed planning baseline")
+				return manager.localConflict(ctx, "checkout has uncommitted changes")
 			}
 		}
 		// Deliberately do not reject a dirty ready checkout: it may contain

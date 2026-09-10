@@ -113,14 +113,25 @@ type recordingCheckout struct {
 }
 
 type recordingPullRequests struct {
-	specs             []PullRequestSpec
-	planSpecs         []PlanPublicationSpec
-	verifiedPlanSpecs []PlanPublicationSpec
-	result            PullRequest
-	planResult        PullRequest
-	planPublished     bool
-	err               error
-	planErr           error
+	specs               []PullRequestSpec
+	planSpecs           []PlanPublicationSpec
+	verifiedPlanSpecs   []PlanPublicationSpec
+	implementationSpecs []ImplementationPublicationSpec
+	result              PullRequest
+	planResult          PullRequest
+	planPublished       bool
+	err                 error
+	planErr             error
+}
+
+func (pullRequests *recordingPullRequests) VerifyPullRequestImplementation(
+	_ context.Context,
+	_ string,
+	_ string,
+	spec ImplementationPublicationSpec,
+) (PullRequest, error) {
+	pullRequests.implementationSpecs = append(pullRequests.implementationSpecs, spec)
+	return pullRequests.planResult, pullRequests.planErr
 }
 
 func (pullRequests *recordingPullRequests) VerifyPullRequestPlan(
@@ -577,6 +588,71 @@ func TestServiceVerifiesImplementationContinuationWithoutRequiringCleanCheckout(
 		checkout.specs[0].RequireCleanBaseline || len(pullRequests.planSpecs) != 0 ||
 		len(pullRequests.verifiedPlanSpecs) != 1 {
 		t.Fatalf("continuation verification did not preserve local work: branches=%d checkout=%+v published=%+v verified=%+v", branches.getCalls, checkout.specs, pullRequests.planSpecs, pullRequests.verifiedPlanSpecs)
+	}
+}
+
+func TestServiceVerifiesAgentImplementationPublicationWithoutWriting(t *testing.T) {
+	now := time.Date(2026, time.September, 10, 4, 0, 0, 0, time.UTC)
+	stored := readyTestWorkspace(now)
+	pullRequestReadyAt := now.Add(3 * time.Minute)
+	stored.PullRequestNumber = 8
+	stored.PullRequestURL = "http://localhost:3001/owner/repository/pulls/8"
+	stored.PullRequestRecordedAt = &pullRequestReadyAt
+	stored.UpdatedAt = pullRequestReadyAt
+	implementationCommit := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	branches := &recordingBranches{base: Branch{
+		Name: stored.Branch, CommitID: implementationCommit,
+	}}
+	checkout := &recordingCheckout{}
+	pullRequests := &recordingPullRequests{planResult: PullRequest{
+		Number: 8, URL: stored.PullRequestURL, Title: "WIP: Test feature",
+		Body: "published plan", State: "open", Draft: true,
+		BaseBranch: stored.BaseBranch, HeadBranch: stored.Branch,
+		HeadCommitID: implementationCommit, CreatedAt: pullRequestReadyAt,
+	}}
+	accepted := acceptedTestFeature(now)
+	accepted.State = feature.StateImplementing
+	service := NewServiceWithPreparation(
+		&memoryStore{stored: stored}, fixedFeatureFinder{stored: accepted},
+		fixedProjectFinder{stored: project.Project{
+			ID: "prj_test", ForgejoRepository: testRepository(now),
+		}}, branches, checkout, pullRequests,
+	)
+
+	got, err := service.VerifyImplementationPublication(
+		t.Context(), "prj_test", "fea_test", "sev_final_plan", "Final plan",
+		"att_implementation_1", "Changed the exporter and passed tests.",
+		implementationCommit, 8, "codex-lead",
+	)
+	if err != nil || got != stored {
+		t.Fatalf("verify implementation publication: workspace=%+v err=%v", got, err)
+	}
+	if branches.getCalls != 1 || len(checkout.specs) != 1 ||
+		checkout.specs[0].ExpectedHeadCommitID != implementationCommit ||
+		!checkout.specs[0].RequireClean || len(pullRequests.implementationSpecs) != 1 {
+		t.Fatalf("implementation verification did not reconcile every fact: branches=%d checkout=%+v pull_requests=%+v", branches.getCalls, checkout.specs, pullRequests.implementationSpecs)
+	}
+	spec := pullRequests.implementationSpecs[0]
+	if spec.Number != 8 || spec.HeadCommitID != implementationCommit ||
+		spec.ExpectedAuthor != "codex-lead" ||
+		!strings.HasPrefix(spec.PublicationMarker, "<!-- commitarium-implementation: ") ||
+		!strings.HasPrefix(spec.PlanPublicationMarker, "<!-- commitarium-plan: ") {
+		t.Fatalf("unexpected implementation publication spec %+v", spec)
+	}
+	mismatchedRepository := *testRepository(now)
+	mismatchedRepository.Owner = "different-owner"
+	mismatched := NewServiceWithPreparation(
+		&memoryStore{stored: stored}, fixedFeatureFinder{stored: accepted},
+		fixedProjectFinder{stored: project.Project{
+			ID: "prj_test", ForgejoRepository: &mismatchedRepository,
+		}}, branches, checkout, pullRequests,
+	)
+	if _, err := mismatched.VerifyImplementationPublication(
+		t.Context(), "prj_test", "fea_test", "sev_final_plan", "Final plan",
+		"att_implementation_1", "Changed the exporter and passed tests.",
+		implementationCommit, 8, "codex-lead",
+	); !errors.Is(err, ErrConflict) {
+		t.Fatalf("mismatched project repository verification error = %v, want %v", err, ErrConflict)
 	}
 }
 

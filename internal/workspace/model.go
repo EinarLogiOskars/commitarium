@@ -196,6 +196,42 @@ type PlanPublicationSpec struct {
 	HeadCommitID      string
 }
 
+// ImplementationPublicationSpec is the read-only proof the coordinator
+// expects after a lead agent publishes one implementation turn. The lead owns
+// the Git and Forgejo writes; this value only describes what must already be
+// visible before review can be routed to another agent.
+type ImplementationPublicationSpec struct {
+	Number                int64
+	FeatureMarker         string
+	PlanPublicationMarker string
+	Plan                  string
+	PublicationMarker     string
+	Summary               string
+	ExpectedAuthor        string
+	BaseBranch            string
+	HeadBranch            string
+	HeadCommitID          string
+}
+
+func (spec ImplementationPublicationSpec) Validate() error {
+	if spec.Number < 1 {
+		return errors.New("implementation pull request number is required")
+	}
+	for _, value := range []string{
+		spec.FeatureMarker, spec.PlanPublicationMarker, spec.Plan,
+		spec.PublicationMarker, spec.Summary, spec.ExpectedAuthor,
+		spec.BaseBranch, spec.HeadBranch,
+	} {
+		if strings.TrimSpace(value) == "" || value != strings.TrimSpace(value) {
+			return errors.New("implementation publication fields are required and must be trimmed")
+		}
+	}
+	if !safeCommitID.MatchString(spec.HeadCommitID) {
+		return errors.New("implementation publication head must be a lowercase commit ID")
+	}
+	return nil
+}
+
 func (spec PlanPublicationSpec) Validate() error {
 	if spec.Number < 1 {
 		return errors.New("pull request number is required")
@@ -254,8 +290,10 @@ type CheckoutSpec struct {
 	RepositoryName       string
 	Branch               string
 	BaseCommitID         string
+	ExpectedHeadCommitID string
 	AlreadyReady         bool
 	RequireCleanBaseline bool
+	RequireClean         bool
 }
 
 func (spec CheckoutSpec) Validate() error {
@@ -267,6 +305,12 @@ func (spec CheckoutSpec) Validate() error {
 	}
 	if spec.RequireCleanBaseline && !spec.AlreadyReady {
 		return errors.New("a clean baseline check requires an existing checkout")
+	}
+	if (spec.ExpectedHeadCommitID != "" || spec.RequireClean) && !spec.AlreadyReady {
+		return errors.New("head and clean checks require an existing checkout")
+	}
+	if spec.ExpectedHeadCommitID != "" && !safeCommitID.MatchString(spec.ExpectedHeadCommitID) {
+		return errors.New("expected checkout head must be a lowercase commit ID")
 	}
 	return (Branch{Name: spec.Branch, CommitID: spec.BaseCommitID}).Validate()
 }

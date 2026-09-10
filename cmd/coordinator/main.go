@@ -43,6 +43,7 @@ type config struct {
 	codexWorkerToken     string
 	codexAgentProfileID  string
 	codexWorkspaceID     string
+	codexForgejoAuthor   string
 	workerRequestTimeout time.Duration
 	forgejoURL           string
 	forgejoHostURL       string
@@ -92,6 +93,7 @@ func loadConfig(getenv func(string) string) (config, error) {
 		forgejoTimeout:       defaultForgejoTimeout,
 		workspaceRoot:        defaultWorkspaceRoot,
 		gitExecutable:        "git",
+		codexForgejoAuthor:   "codex-lead",
 	}
 	if value := strings.TrimSpace(getenv("COMMITARIUM_FORGEJO_URL")); value != "" {
 		loaded.forgejoURL = value
@@ -135,6 +137,9 @@ func loadConfig(getenv func(string) string) (config, error) {
 		}
 		if loaded.codexWorkspaceID, err = required("COMMITARIUM_CODEX_WORKSPACE_ID"); err != nil {
 			return config{}, err
+		}
+		if value := strings.TrimSpace(getenv("COMMITARIUM_CODEX_FORGEJO_LOGIN")); value != "" {
+			loaded.codexForgejoAuthor = value
 		}
 		if value := strings.TrimSpace(getenv("COMMITARIUM_CODEX_WORKER_REQUEST_TIMEOUT")); value != "" {
 			loaded.workerRequestTimeout, err = time.ParseDuration(value)
@@ -232,8 +237,9 @@ func run(ctx context.Context, coordinatorConfig config) error {
 				executionService, ingestion, workeringest.NewHTTPAttemptSource(client),
 			),
 			Lifetime: ctx, AgentProfileID: coordinatorConfig.codexAgentProfileID,
-			WorkspaceID: coordinatorConfig.codexWorkspaceID,
-			ReportError: func(err error) { log.Printf("real Codex lead: %v", err) },
+			WorkspaceID:   coordinatorConfig.codexWorkspaceID,
+			ForgejoAuthor: coordinatorConfig.codexForgejoAuthor,
+			ReportError:   func(err error) { log.Printf("real Codex lead: %v", err) },
 		})
 		if err != nil {
 			return fmt.Errorf("create real Codex lead runner: %w", err)

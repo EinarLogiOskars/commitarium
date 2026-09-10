@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -49,6 +50,11 @@ type codexConfig struct {
 	providerStatePath string
 	workspaceRoot     string
 	profileID         string
+	forgejoURL        string
+	forgejoTokenFile  string
+	forgejoLogin      string
+	gitAuthorName     string
+	gitAuthorEmail    string
 }
 
 type runtime struct {
@@ -248,6 +254,40 @@ func loadCodexConfig(getenv func(string) string) (codexConfig, error) {
 	if err != nil {
 		return codexConfig{}, err
 	}
+	forgejoURL, err := required("COMMITARIUM_CODEX_FORGEJO_URL")
+	if err != nil {
+		return codexConfig{}, err
+	}
+	parsedForgejoURL, err := url.Parse(strings.TrimRight(forgejoURL, "/"))
+	if err != nil || (parsedForgejoURL.Scheme != "http" && parsedForgejoURL.Scheme != "https") ||
+		parsedForgejoURL.Host == "" || parsedForgejoURL.User != nil ||
+		parsedForgejoURL.RawQuery != "" || parsedForgejoURL.Fragment != "" {
+		return codexConfig{}, errors.New("COMMITARIUM_CODEX_FORGEJO_URL must be an absolute HTTP URL without credentials, query, or fragment")
+	}
+	forgejoTokenFile, err := required("COMMITARIUM_CODEX_FORGEJO_TOKEN_FILE")
+	if err != nil {
+		return codexConfig{}, err
+	}
+	if !filepath.IsAbs(forgejoTokenFile) {
+		return codexConfig{}, errors.New("COMMITARIUM_CODEX_FORGEJO_TOKEN_FILE must be absolute")
+	}
+	forgejoLogin, err := required("COMMITARIUM_CODEX_FORGEJO_LOGIN")
+	if err != nil {
+		return codexConfig{}, err
+	}
+	gitAuthorName, err := required("COMMITARIUM_CODEX_GIT_AUTHOR_NAME")
+	if err != nil {
+		return codexConfig{}, err
+	}
+	gitAuthorEmail, err := required("COMMITARIUM_CODEX_GIT_AUTHOR_EMAIL")
+	if err != nil {
+		return codexConfig{}, err
+	}
+	for _, value := range []string{forgejoLogin, gitAuthorName, gitAuthorEmail} {
+		if strings.ContainsAny(value, "\r\n") {
+			return codexConfig{}, errors.New("Codex Forgejo and Git identity values cannot contain newlines")
+		}
+	}
 	executable := strings.TrimSpace(getenv("COMMITARIUM_CODEX_EXECUTABLE"))
 	if executable == "" {
 		executable = defaultCodexBinary
@@ -265,6 +305,8 @@ func loadCodexConfig(getenv func(string) string) (codexConfig, error) {
 		executable: executable, model: strings.TrimSpace(getenv("COMMITARIUM_CODEX_MODEL")),
 		sandbox: sandbox, providerStatePath: providerStatePath,
 		workspaceRoot: workspaceRoot, profileID: profileID,
+		forgejoURL: strings.TrimRight(forgejoURL, "/"), forgejoTokenFile: forgejoTokenFile,
+		forgejoLogin: forgejoLogin, gitAuthorName: gitAuthorName, gitAuthorEmail: gitAuthorEmail,
 	}, nil
 }
 
@@ -272,6 +314,14 @@ func newCodexRuntime(config codexConfig) (runtime, error) {
 	providerState, err := os.Stat(config.providerStatePath)
 	if err != nil || !providerState.IsDir() {
 		return runtime{}, errors.New("Codex provider-state directory is unavailable")
+	}
+	tokenBytes, err := os.ReadFile(config.forgejoTokenFile)
+	if err != nil {
+		return runtime{}, errors.New("Codex Forgejo token file is unavailable")
+	}
+	forgejoToken := strings.TrimSpace(string(tokenBytes))
+	if forgejoToken == "" || strings.IndexFunc(forgejoToken, unicode.IsSpace) >= 0 {
+		return runtime{}, errors.New("Codex Forgejo token is empty or contains whitespace")
 	}
 	resolver, err := workerservice.NewRootedEnvironmentResolver(
 		workerservice.RootedEnvironmentResolverConfig{
@@ -282,6 +332,21 @@ func newCodexRuntime(config codexConfig) (runtime, error) {
 				"HOME=" + config.providerStatePath,
 				"LANG=C.UTF-8",
 				"PATH=/usr/local/bin:/usr/bin:/bin",
+			},
+			RoleVariables: map[worker.Role][]string{
+				worker.RoleLead: {
+					"COMMITARIUM_FORGEJO_URL=" + config.forgejoURL,
+					"COMMITARIUM_FORGEJO_TOKEN_FILE=" + config.forgejoTokenFile,
+					"COMMITARIUM_FORGEJO_LOGIN=" + config.forgejoLogin,
+					"GIT_AUTHOR_NAME=" + config.gitAuthorName,
+					"GIT_AUTHOR_EMAIL=" + config.gitAuthorEmail,
+					"GIT_COMMITTER_NAME=" + config.gitAuthorName,
+					"GIT_COMMITTER_EMAIL=" + config.gitAuthorEmail,
+					"GIT_TERMINAL_PROMPT=0",
+					"GIT_CONFIG_COUNT=1",
+					"GIT_CONFIG_KEY_0=http." + config.forgejoURL + "/.extraHeader",
+					"GIT_CONFIG_VALUE_0=Authorization: token " + forgejoToken,
+				},
 			},
 		},
 	)

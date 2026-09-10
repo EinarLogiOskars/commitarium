@@ -63,6 +63,34 @@ func TestManagerAllowsReadyCheckoutToAdvanceFromRecordedBase(t *testing.T) {
 	}
 }
 
+func TestManagerVerifiesExactCleanPublishedHead(t *testing.T) {
+	manager, root := newTestManager(t, nil)
+	spec := initializeCheckout(t, root)
+	if err := manager.Ensure(t.Context(), spec); err != nil {
+		t.Fatalf("ensure new checkout: %v", err)
+	}
+	target := filepath.Join(root, spec.WorkspaceID)
+	if err := os.WriteFile(filepath.Join(target, "implemented.txt"), []byte("done\n"), 0o644); err != nil {
+		t.Fatalf("write implementation: %v", err)
+	}
+	testGit(t, target, "add", "implemented.txt")
+	testGit(t, target, "commit", "-m", "implement feature")
+	publishedHead := testGit(t, target, "rev-parse", "HEAD")
+
+	spec.AlreadyReady = true
+	spec.ExpectedHeadCommitID = publishedHead
+	spec.RequireClean = true
+	if err := manager.Ensure(t.Context(), spec); err != nil {
+		t.Fatalf("verify exact published head: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(target, "uncommitted.txt"), []byte("partial\n"), 0o644); err != nil {
+		t.Fatalf("write partial change: %v", err)
+	}
+	if err := manager.Ensure(t.Context(), spec); !errors.Is(err, workspace.ErrCheckoutConflict) {
+		t.Fatalf("expected dirty published checkout conflict, got %v", err)
+	}
+}
+
 func TestManagerRequiresCleanPlanningBaselineWhenRequested(t *testing.T) {
 	manager, root := newTestManager(t, nil)
 	spec := initializeCheckout(t, root)

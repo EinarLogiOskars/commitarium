@@ -25,7 +25,7 @@ this API beyond the host loopback interface is unsupported.
 | `POST` | `/api/v1/runs/{runID}/planning` | Resume the real lead in the managed workspace for its first plan proposal |
 | `POST` | `/api/v1/runs/{runID}/planning/reviewer` | Start the persistent reviewer with the lead's exact proposal |
 | `POST` | `/api/v1/runs/{runID}/planning/round` | Continue the lead/reviewer discussion until plan submission or its safety limit |
-| `POST` | `/api/v1/runs/{runID}/implementation` | Resume the same lead for one write-capable implementation turn after plan verification |
+| `POST` | `/api/v1/runs/{runID}/implementation` | Resume the same lead to implement and publish, or recheck its existing terminal publication |
 | `GET` | `/api/v1/runs/{runID}/planning/messages` | Retrieve the ordered lead/reviewer planning messages |
 | `GET` | `/api/v1/runs/{runID}/planning/messages/stream` | Replay and stream ordered planning messages with SSE |
 | `GET` | `/api/v1/sessions/{sessionID}` | Retrieve a session |
@@ -396,21 +396,35 @@ repository and branch identities, planning baseline, and draft PR identity. It
 must first inspect the working directory, Git HEAD, branch, status, and diff.
 Unexpected user work is preserved; missing, contradictory, or ambiguous state
 must stop the turn before modification. When consistent, the lead may edit the
-workspace and run available tests. It must finish with a changed-file,
-validation, and blocker summary, and it is explicitly prohibited from committing
-or pushing in this slice.
+workspace and run available tests. The lead decides when the result is ready
+for review. It then commits under its own configured Git identity, pushes exact
+HEAD to the `commitarium` remote, posts one marked `Implementation summary`
+comment to the draft PR, and returns the exact commit ID and PR number through
+the `implementation_lead` output contract. If it cannot safely publish, it
+returns a structured blocker without claiming a commit.
 
 The response is `202 Accepted`, contains the ordinary run resource, and points
 `Location` to `/api/v1/runs/{runID}`. Observable commands, file changes, tests,
-and final messages use the existing lead-session history and SSE endpoint. On a
-provider turn finishes, the feature remains `implementing` while the run and
-lead return to `waiting_for_user`; the neutral reason tells the user to inspect
-the activity and workspace before the future commit step. The coordinator does
-not infer whether implementation succeeded or was blocked from free-form agent
-prose.
+and final messages use the existing lead-session history and SSE endpoint. The
+coordinator does not infer success or readiness from free-form prose. For a
+`published` result it read-only verifies the clean exact local HEAD, its descent
+from the planning base, the Forgejo feature branch and draft PR head, the exact
+published plan, and exactly one matching implementation comment attributed to
+the configured lead login. These checks confirm identities and external side
+effects; they do not judge code quality or decide whether review should start.
+The lead already made that decision by returning `published`.
 
-The attempt ID is deterministic. An exact retry after admission returns the
-existing run without re-verifying Forgejo or contacting the worker again. A
+Successful verification records a stable session activity event and returns the
+run to `waiting_for_user` with a reason stating that the revision is ready for
+automated review. A structured blocker uses the lead's exact reason. Missing,
+contradictory, or unavailable publication state records a recovery assessment
+and waits without launching a replacement.
+
+The attempt ID is deterministic. A retry after successful verification returns
+the existing run without contacting Forgejo or the worker. If the worker result
+is terminal but verification previously failed, another implementation action
+temporarily marks the run as rechecking and verifies the same publication facts.
+It performs no worker mutation, provider resume, commit, push, or PR write. A
 coordinator restart during the active turn reattaches to this exact attempt and
 records the existing recovery assessment event; it never starts a replacement.
 If the worker itself restarts while Codex is active, its journal deliberately
@@ -452,8 +466,9 @@ Each continuation has the next deterministic identity
 command and visible `user_message`, rotates the attempt checkpoint, and marks the
 run and session active only if the feature is still `implementing`. The resumed
 lead is told to inspect Git state before changing anything, preserve manual edits,
-avoid repeating completed work, and run relevant available tests. Completion
-returns to the same neutral `waiting_for_user` inspection boundary.
+avoid repeating completed work, and run relevant available tests. It uses the
+same structured blocker or agent-owned commit, push, PR-summary, and
+coordinator-verification path as the first implementation attempt.
 
 An exact command retry does not re-verify or relaunch work. Recovery can adopt a
 committed continuation admission and reattach to that exact numbered worker
@@ -461,12 +476,12 @@ attempt, mark its pending command applied once, and consume its event stream
 without sending a second resume request. Missing, contradictory, unreachable, or
 indeterminate worker state stops for user review.
 
-There is currently no public implementation commit endpoint. The temporary
-coordinator-owned version was removed because the assigned lead should use its
-own scoped Forgejo identity for commits, pushes, and structured pull-request
-updates. Until that worker credential and completion contract are connected,
-the real implementation prompt still prevents these external actions and the
-run waits after editing and validation. See
+There is no public implementation commit endpoint. The temporary
+coordinator-owned version was removed because the assigned lead now uses its own
+scoped Forgejo identity for commits, feature-branch pushes, and structured
+pull-request updates. The worker credential is role-scoped and the structured
+completion facts are stored with the terminal worker result; neither secret nor
+GitHub access enters coordinator state. See
 [ADR-009](adr/0009-let-agents-own-internal-forge-actions.md).
 
 ## Shared planning messages

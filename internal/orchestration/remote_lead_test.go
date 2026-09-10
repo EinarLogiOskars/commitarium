@@ -135,10 +135,30 @@ type remoteLeadWorkspaceStub struct {
 	publishCalls            int
 	verifyCalls             int
 	continuationVerifyCalls int
+	publicationVerifyCalls  int
 	publishedEventID        string
 	publishedPlan           string
 	publishErr              error
 	verifyErr               error
+	publicationVerifyErr    error
+}
+
+func (stub *remoteLeadWorkspaceStub) VerifyImplementationPublication(
+	_ context.Context,
+	_ string,
+	_ string,
+	eventID string,
+	plan string,
+	_ string,
+	_ string,
+	_ string,
+	_ int64,
+	_ string,
+) (workspace.Workspace, error) {
+	stub.publicationVerifyCalls++
+	stub.publishedEventID = eventID
+	stub.publishedPlan = plan
+	return stub.prepared, stub.publicationVerifyErr
 }
 
 func (stub *remoteLeadWorkspaceStub) VerifyPublishedPlan(
@@ -992,6 +1012,7 @@ func TestRemoteLeadStartsPlanningInManagedWorkspace(t *testing.T) {
 		t.Fatalf("publication retry count = %d, want one failed and one successful attempt", workspaceStub.publishCalls)
 	}
 
+	workspaceStub.publicationVerifyErr = errors.New("Forgejo comment lookup unavailable")
 	implementationRun, admitted, err := starter.StartImplementation(
 		t.Context(), runID, "start-implementation-1",
 	)
@@ -1016,13 +1037,71 @@ func TestRemoteLeadStartsPlanningInManagedWorkspace(t *testing.T) {
 		requests[6].Assignment.WorkspaceID != workspaceStub.prepared.ID ||
 		!strings.Contains(requests[6].Instructions, implementedFeature.AcceptedGoal) ||
 		!strings.Contains(requests[6].Instructions, messages[4].Event.Text) ||
-		!strings.Contains(requests[6].Instructions, "Do not commit or push") ||
+		!strings.Contains(requests[6].Instructions, "push that exact HEAD") ||
+		requests[6].OutputContract != workerhttp.OutputContractImplementationLead ||
 		!strings.Contains(requests[6].Instructions, "Git HEAD") {
 		t.Fatalf("unexpected implementation request %+v", requests[6])
 	}
+	failedVerification, err := executions.GetRun(t.Context(), runID)
+	if err != nil || failedVerification.Reason == implementationPublishedReason ||
+		workspaceStub.publicationVerifyCalls != 1 {
+		t.Fatalf("unexpected failed publication verification: run=%+v err=%v", failedVerification, err)
+	}
+	stub.mu.Lock()
+	requestCount = len(stub.putRequests)
+	stub.mu.Unlock()
+	workspaceStub.publicationVerifyErr = nil
+	implementationRun, admitted, err = starter.StartImplementation(
+		t.Context(), runID, "retry-implementation-verification-1",
+	)
+	if err != nil || !admitted || implementationRun.Status != execution.RunStatusRunning {
+		t.Fatalf("retry implementation verification: run=%+v admitted=%t err=%v", implementationRun, admitted, err)
+	}
+	waitForRemoteLeadStatus(t, executions, runID, execution.RunStatusWaitingForUser)
+	waitForRemoteLeadIdle(t, starter, runID)
 	completedImplementation, err := executions.GetRun(t.Context(), runID)
-	if err != nil || completedImplementation.Reason != implementationReadyReason {
-		t.Fatalf("unexpected implementation completion: run=%+v err=%v", completedImplementation, err)
+	if err != nil || completedImplementation.Reason != implementationPublishedReason ||
+		workspaceStub.publicationVerifyCalls != 2 {
+		t.Fatalf("unexpected retried publication verification: run=%+v err=%v", completedImplementation, err)
+	}
+	stub.mu.Lock()
+	if len(stub.putRequests) != requestCount {
+		stub.mu.Unlock()
+		t.Fatalf("publication verification retry launched another worker attempt")
+	}
+	stub.mu.Unlock()
+	// Recreate the narrow restart boundary where the worker result and waiting
+	// sessions are durable but the coordinator had not yet finished routing the
+	// run. Recovery must verify the same publication, not launch another agent.
+	waitForRemoteLeadIdle(t, starter, runID)
+	if _, err := executions.TransitionRun(
+		t.Context(), runID, execution.RunStatusWaitingForUser,
+		execution.RunStatusRunning, "Simulated coordinator interruption after publication.",
+	); err != nil {
+		t.Fatalf("prepare completed-publication recovery: %v", err)
+	}
+	restartedAfterPublication, err := NewRemoteLeadStarter(RemoteLeadConfig{
+		Executions: executions, Features: database.NewFeatureStore(db), Goals: workflowService,
+		Planning: workflowService, Workspaces: workspaceStub, Worker: stub,
+		Pump:     &conversationalRemoteLeadPump{executions: executions, worker: stub},
+		Lifetime: t.Context(), AgentProfileID: "codex-default", WorkspaceID: "project-read-only",
+	})
+	if err != nil {
+		t.Fatalf("create completed-publication recovery starter: %v", err)
+	}
+	interruptedAfterPublication, err := executions.GetRun(t.Context(), runID)
+	if err != nil {
+		t.Fatalf("load completed-publication recovery run: %v", err)
+	}
+	if err := restartedAfterPublication.Recover(
+		t.Context(), interruptedAfterPublication, implementedFeature,
+		project.RecoveryPolicyApprovalRequired,
+	); err != nil {
+		t.Fatalf("recover completed implementation publication: %v", err)
+	}
+	waitForRemoteLeadStatus(t, executions, runID, execution.RunStatusWaitingForUser)
+	if workspaceStub.publicationVerifyCalls != 3 {
+		t.Fatalf("completed publication recovery verification count = %d", workspaceStub.publicationVerifyCalls)
 	}
 	implementationRun, admitted, err = starter.StartImplementation(
 		t.Context(), runID, "start-implementation-1",
@@ -1065,7 +1144,8 @@ func TestRemoteLeadStartsPlanningInManagedWorkspace(t *testing.T) {
 		requests[7].Assignment.WorkspaceID != workspaceStub.prepared.ID ||
 		!strings.Contains(requests[7].Instructions, continuation.Message) ||
 		!strings.Contains(requests[7].Instructions, "Preserve all existing changes") ||
-		!strings.Contains(requests[7].Instructions, "Do not commit or push") {
+		!strings.Contains(requests[7].Instructions, "push the exact HEAD") ||
+		requests[7].OutputContract != workerhttp.OutputContractImplementationLead {
 		t.Fatalf("unexpected implementation continuation request %+v", requests[7])
 	}
 	if retried, err := starter.SendCommand(
@@ -1095,7 +1175,7 @@ func TestRemoteLeadStartsPlanningInManagedWorkspace(t *testing.T) {
 	}
 	recoveryCommand := worker.Command{
 		ID: "continue-implementation-before-restart", Type: worker.CommandMessage,
-		Message: "Recheck the final focused test before we commit.",
+		Message: "Recheck the final focused test and publish the corrected revision.",
 	}
 	if _, admitted, err := executions.BeginWorkerTurn(
 		t.Context(), recoveryCommand, lead.ID, checkpoint,
@@ -1125,7 +1205,7 @@ func TestRemoteLeadStartsPlanningInManagedWorkspace(t *testing.T) {
 	}
 	waitForRemoteLeadStatus(t, executions, runID, execution.RunStatusWaitingForUser)
 	resumed, err := executions.GetRun(t.Context(), runID)
-	if err != nil || resumed.Reason != implementationReadyReason {
+	if err != nil || resumed.Reason != implementationPublishedReason {
 		t.Fatalf("unexpected recovered implementation run: %+v err=%v", resumed, err)
 	}
 	stub.mu.Lock()
@@ -1802,7 +1882,10 @@ func addCompletedImplementationAttempt(
 	terminal.EndedAt = &endedAt
 	terminal.Result = &workerhttp.TerminalResult{
 		Outcome: workerhttp.OutcomeCompleted, Disposition: workerhttp.DispositionSucceeded,
-		Summary: "Implemented the agreed plan without committing.",
+		Summary: "Implemented the agreed plan and passed focused tests.",
+		Publication: &workerhttp.ImplementationPublication{
+			CommitID: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", PullRequestNumber: 7,
+		},
 	}
 	stub.initial[reference] = initial
 	stub.terminal[reference] = terminal
@@ -1851,7 +1934,10 @@ func addCompletedImplementationContinuationAttempt(
 	terminal.EndedAt = &endedAt
 	terminal.Result = &workerhttp.TerminalResult{
 		Outcome: workerhttp.OutcomeCompleted, Disposition: workerhttp.DispositionSucceeded,
-		Summary: "Continued implementation without committing.",
+		Summary: "Published the corrected implementation and passed focused tests.",
+		Publication: &workerhttp.ImplementationPublication{
+			CommitID: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", PullRequestNumber: 7,
+		},
 	}
 	stub.initial[reference] = initial
 	stub.terminal[reference] = terminal

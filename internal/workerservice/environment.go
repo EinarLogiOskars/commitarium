@@ -45,12 +45,14 @@ type RootedEnvironmentResolver struct {
 	agentProfileID string
 	workspaceRoot  string
 	variables      []string
+	roleVariables  map[worker.Role][]string
 }
 
 type RootedEnvironmentResolverConfig struct {
 	AgentProfileID string
 	WorkspaceRoot  string
 	Variables      []string
+	RoleVariables  map[worker.Role][]string
 }
 
 func NewRootedEnvironmentResolver(
@@ -73,10 +75,27 @@ func NewRootedEnvironmentResolver(
 	if err := probe.Validate(); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrInvalidEnvironmentResolver, err)
 	}
+	roleVariables := make(map[worker.Role][]string, len(config.RoleVariables))
+	for role, configured := range config.RoleVariables {
+		if !role.IsValid() {
+			return nil, fmt.Errorf(
+				"%w: role %q is not recognized", ErrInvalidEnvironmentResolver, role,
+			)
+		}
+		combined := append(cloneVariables(variables), configured...)
+		roleProbe := probe
+		roleProbe.Role = role
+		roleProbe.Variables = combined
+		if err := roleProbe.Validate(); err != nil {
+			return nil, fmt.Errorf("%w: role %q: %v", ErrInvalidEnvironmentResolver, role, err)
+		}
+		roleVariables[role] = cloneVariables(configured)
+	}
 	return &RootedEnvironmentResolver{
 		agentProfileID: config.AgentProfileID,
 		workspaceRoot:  root,
 		variables:      variables,
+		roleVariables:  roleVariables,
 	}, nil
 }
 
@@ -112,7 +131,9 @@ func (resolver *RootedEnvironmentResolver) Resolve(
 			assignment.WorkspaceID,
 		)
 	}
-	environment := launchEnvironment(assignment, directory, resolver.variables)
+	variables := cloneVariables(resolver.variables)
+	variables = append(variables, resolver.roleVariables[worker.Role(assignment.Role)]...)
+	environment := launchEnvironment(assignment, directory, variables)
 	if err := environment.Validate(); err != nil {
 		return worker.LaunchEnvironment{}, fmt.Errorf("%w: %v", ErrConfigurationMismatch, err)
 	}
