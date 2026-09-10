@@ -423,6 +423,39 @@ turn. If the coordinator restarts after admission, it reattaches to the exact
 numbered attempt and applies the pending command once without issuing a second
 worker request.
 
+After inspecting the lead activity and the host-visible managed workspace, the
+user can explicitly commit and push that implementation to the internal
+Forgejo feature branch:
+
+```sh
+curl -i -X POST \
+  http://127.0.0.1:8080/api/v1/runs/RUN_ID/implementation/commit \
+  -H 'Content-Type: application/json' \
+  -H 'Idempotency-Key: commit-implementation-1' \
+  -d '{"message":"feat: implement the agreed change"}'
+```
+
+This is deliberately a user action; the coordinator does not infer readiness
+from the agent's final prose. It snapshots every tracked, deleted, and untracked
+file in the managed checkout using a private Git index, creates an exact commit
+without exposing the Forgejo token to the worker, moves the local feature branch
+to that commit, and pushes only to its internal `commitarium` remote. The commit
+message is one line of at most 200 bytes.
+
+Before changing a visible Git ref, SQLite stores the old local and Forgejo
+commit IDs plus the exact intended commit. A retry can therefore finish a
+partly completed local operation or adopt an exact push that already reached
+Forgejo. If either branch moved to any other commit, it stops instead of
+resetting or force-pushing. Completion appends one marked `Implementation
+revision` entry to the existing draft PR and adds an activity event to the lead
+session. An exact completed retry returns the same receipt without repeating
+the Git push or PR update.
+
+This internal commit and its Commitarium service identity are part of the
+Forgejo audit history only. The later trusted-host handoff will synchronize the
+approved result into the user's local repository as a separate clean,
+user-authored commit before any optional GitHub or other upstream push.
+
 The versioned [internal worker API](docs/worker-api.md) now has tested client and
 server components for authenticated attempt inspection and control. Its worker
 server can also replay and stream safe, structured agent activity, providing the

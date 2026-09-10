@@ -46,6 +46,12 @@ type CheckoutManager interface {
 	Ensure(ctx context.Context, spec CheckoutSpec) error
 }
 
+type CheckoutPublisher interface {
+	PreparePublication(context.Context, CheckoutSpec, string, time.Time) (CommitSnapshot, error)
+	ApplyPublication(context.Context, CheckoutSpec, CommitSnapshot) error
+	PushPublication(context.Context, CheckoutSpec, string) error
+}
+
 type PullRequestManager interface {
 	EnsureDraftPullRequest(
 		ctx context.Context,
@@ -65,6 +71,12 @@ type PullRequestManager interface {
 		repository string,
 		spec PlanPublicationSpec,
 	) (PullRequest, error)
+	EnsurePullRequestRevision(
+		ctx context.Context,
+		owner string,
+		repository string,
+		spec RevisionPublicationSpec,
+	) (PullRequest, bool, error)
 }
 
 type Service struct {
@@ -74,7 +86,27 @@ type Service struct {
 	branches     BranchManager
 	checkouts    CheckoutManager
 	pullRequests PullRequestManager
+	publications PublicationStore
+	publisher    CheckoutPublisher
 	now          func() time.Time
+}
+
+func NewServiceWithPublication(
+	store Store,
+	features FeatureFinder,
+	projects ProjectFinder,
+	branches BranchManager,
+	checkouts CheckoutManager,
+	pullRequests PullRequestManager,
+	publications PublicationStore,
+	publisher CheckoutPublisher,
+) *Service {
+	service := NewServiceWithPreparation(
+		store, features, projects, branches, checkouts, pullRequests,
+	)
+	service.publications = publications
+	service.publisher = publisher
+	return service
 }
 
 func NewServiceWithPreparation(
@@ -286,10 +318,188 @@ func (service *Service) VerifyImplementationContinuation(
 	eventID string,
 	plan string,
 ) (Workspace, error) {
+	if service.publications != nil {
+		stored, err := service.Get(ctx, projectID, featureID)
+		if err != nil {
+			return Workspace{}, err
+		}
+		if _, err := service.publications.ActivePublication(ctx, stored.ID); err == nil {
+			return Workspace{}, ErrPublicationConflict
+		} else if !errors.Is(err, ErrPublicationNotFound) {
+			return Workspace{}, err
+		}
+	}
 	stored, _, err := service.reconcileSubmittedPlan(
 		ctx, projectID, featureID, eventID, plan, false, false,
 	)
 	return stored, err
+}
+
+// PublishImplementation performs the user-approved commit-and-push step. The
+// prepared receipt is written before either visible Git ref moves, so every
+// later step can be reconciled from exact commit IDs after a restart.
+func (service *Service) PublishImplementation(
+	ctx context.Context,
+	projectID string,
+	featureID string,
+	planEventID string,
+	plan string,
+	runID string,
+	idempotencyKey string,
+	commitMessage string,
+) (Publication, bool, error) {
+	idempotencyKey = strings.TrimSpace(idempotencyKey)
+	commitMessage = strings.TrimSpace(commitMessage)
+	if strings.TrimSpace(runID) == "" || idempotencyKey == "" || commitMessage == "" ||
+		strings.ContainsAny(commitMessage, "\r\n") ||
+		len(commitMessage) > MaxCommitMessageBytes || service.publications == nil ||
+		service.publisher == nil {
+		return Publication{}, false, ErrPublicationConflict
+	}
+	existing, err := service.publications.GetPublication(ctx, runID, idempotencyKey)
+	if err == nil {
+		stored, getErr := service.Get(ctx, projectID, featureID)
+		if getErr != nil {
+			return Publication{}, false, getErr
+		}
+		if existing.WorkspaceID != stored.ID || existing.CommitMessage != commitMessage {
+			return Publication{}, false, ErrPublicationConflict
+		}
+		if existing.Status == PublicationStatusCompleted {
+			return existing, false, nil
+		}
+		return service.reconcilePublication(ctx, stored, existing, false)
+	}
+	if !errors.Is(err, ErrPublicationNotFound) {
+		return Publication{}, false, err
+	}
+	storedFeature, err := service.features.GetByID(ctx, projectID, featureID)
+	if err != nil {
+		return Publication{}, false, err
+	}
+	if storedFeature.State != feature.StateImplementing {
+		return Publication{}, false, ErrFeatureNotPlanning
+	}
+	stored, err := service.VerifyImplementationContinuation(
+		ctx, projectID, featureID, planEventID, plan,
+	)
+	if err != nil {
+		return Publication{}, false, err
+	}
+	remote, err := service.branches.GetBranch(
+		ctx, stored.RepositoryOwner, stored.RepositoryName, stored.Branch,
+	)
+	if err != nil {
+		return Publication{}, false, fmt.Errorf("inspect Forgejo feature branch: %w", err)
+	}
+	checkout := publicationCheckoutSpec(stored)
+	createdAt := service.now().UTC()
+	snapshot, err := service.publisher.PreparePublication(
+		ctx, checkout, commitMessage, createdAt,
+	)
+	if err != nil {
+		return Publication{}, false, err
+	}
+	if remote.CommitID != stored.BaseCommitID {
+		return Publication{}, false, ErrBranchConflict
+	}
+	digest := sha256.Sum256([]byte(runID + "\x00" + idempotencyKey))
+	candidate := Publication{
+		ID: "pub_" + hex.EncodeToString(digest[:]), RunID: runID,
+		WorkspaceID: stored.ID, IdempotencyKey: idempotencyKey,
+		CommitMessage: commitMessage, RemoteCommitIDBefore: remote.CommitID,
+		LocalCommitIDBefore: snapshot.LocalCommitIDBefore,
+		CommitID:            snapshot.CommitID, Status: PublicationStatusPrepared,
+		CreatedAt: createdAt,
+	}
+	reserved, created, err := service.publications.ReservePublication(ctx, candidate)
+	if err != nil {
+		return Publication{}, false, err
+	}
+	if !created && (reserved.WorkspaceID != stored.ID || reserved.CommitMessage != commitMessage) {
+		return Publication{}, false, ErrPublicationConflict
+	}
+	return service.reconcilePublication(ctx, stored, reserved, created)
+}
+
+func (service *Service) reconcilePublication(
+	ctx context.Context,
+	stored Workspace,
+	publication Publication,
+	created bool,
+) (Publication, bool, error) {
+	if publication.WorkspaceID != stored.ID || !stored.PullRequestReady() {
+		return Publication{}, false, ErrPublicationConflict
+	}
+	checkout := publicationCheckoutSpec(stored)
+	snapshot := CommitSnapshot{
+		LocalCommitIDBefore: publication.LocalCommitIDBefore,
+		CommitID:            publication.CommitID,
+	}
+	if err := service.publisher.ApplyPublication(ctx, checkout, snapshot); err != nil {
+		return Publication{}, false, err
+	}
+	remote, err := service.branches.GetBranch(
+		ctx, stored.RepositoryOwner, stored.RepositoryName, stored.Branch,
+	)
+	if err != nil {
+		return Publication{}, false, fmt.Errorf("inspect Forgejo publication: %w", err)
+	}
+	switch remote.CommitID {
+	case publication.RemoteCommitIDBefore:
+		if publication.Status == PublicationStatusCompleted {
+			return Publication{}, false, ErrBranchConflict
+		}
+		if err := service.publisher.PushPublication(ctx, checkout, publication.CommitID); err != nil {
+			return Publication{}, false, err
+		}
+		remote, err = service.branches.GetBranch(
+			ctx, stored.RepositoryOwner, stored.RepositoryName, stored.Branch,
+		)
+		if err != nil {
+			return Publication{}, false, fmt.Errorf("verify Forgejo publication: %w", err)
+		}
+	case publication.CommitID:
+		// The prior push may have succeeded even if its HTTP or process result
+		// was lost. Exact equality is safe to adopt and does not repeat it.
+	default:
+		return Publication{}, false, ErrBranchConflict
+	}
+	if remote.CommitID != publication.CommitID {
+		return Publication{}, false, ErrBranchConflict
+	}
+	markerDigest := sha256.Sum256([]byte(publication.ID))
+	pr, _, err := service.pullRequests.EnsurePullRequestRevision(
+		ctx, stored.RepositoryOwner, stored.RepositoryName,
+		RevisionPublicationSpec{
+			Number:            stored.PullRequestNumber,
+			FeatureMarker:     "<!-- commitarium-feature: " + stored.FeatureID + " -->",
+			PublicationMarker: "<!-- commitarium-revision: " + hex.EncodeToString(markerDigest[:]) + " -->",
+			CommitID:          publication.CommitID, CommitMessage: publication.CommitMessage,
+			BaseBranch: stored.BaseBranch, HeadBranch: stored.Branch,
+		},
+	)
+	if err != nil {
+		return Publication{}, false, fmt.Errorf("record implementation revision in Forgejo: %w", err)
+	}
+	if pr.Number != stored.PullRequestNumber || pr.URL != stored.PullRequestURL {
+		return Publication{}, false, ErrPullRequestConflict
+	}
+	if publication.Status == PublicationStatusCompleted {
+		return publication, false, nil
+	}
+	completed, err := service.publications.CompletePublication(
+		ctx, publication.ID, service.now().UTC(),
+	)
+	return completed, created, err
+}
+
+func publicationCheckoutSpec(stored Workspace) CheckoutSpec {
+	return CheckoutSpec{
+		WorkspaceID: stored.ID, RepositoryOwner: stored.RepositoryOwner,
+		RepositoryName: stored.RepositoryName, Branch: stored.Branch,
+		BaseCommitID: stored.BaseCommitID, AlreadyReady: true,
+	}
 }
 
 func (service *Service) reconcileSubmittedPlan(

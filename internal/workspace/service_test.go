@@ -123,6 +123,15 @@ type recordingPullRequests struct {
 	planErr           error
 }
 
+func (pullRequests *recordingPullRequests) EnsurePullRequestRevision(
+	_ context.Context,
+	_ string,
+	_ string,
+	_ RevisionPublicationSpec,
+) (PullRequest, bool, error) {
+	return pullRequests.planResult, false, pullRequests.err
+}
+
 func (pullRequests *recordingPullRequests) VerifyPullRequestPlan(
 	_ context.Context,
 	_ string,

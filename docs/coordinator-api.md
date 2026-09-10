@@ -26,6 +26,7 @@ this API beyond the host loopback interface is unsupported.
 | `POST` | `/api/v1/runs/{runID}/planning/reviewer` | Start the persistent reviewer with the lead's exact proposal |
 | `POST` | `/api/v1/runs/{runID}/planning/round` | Continue the lead/reviewer discussion until plan submission or its safety limit |
 | `POST` | `/api/v1/runs/{runID}/implementation` | Resume the same lead for one write-capable implementation turn after plan verification |
+| `POST` | `/api/v1/runs/{runID}/implementation/commit` | Explicitly commit the inspected managed workspace and push the exact revision to internal Forgejo |
 | `GET` | `/api/v1/runs/{runID}/planning/messages` | Retrieve the ordered lead/reviewer planning messages |
 | `GET` | `/api/v1/runs/{runID}/planning/messages/stream` | Replay and stream ordered planning messages with SSE |
 | `GET` | `/api/v1/sessions/{sessionID}` | Retrieve a session |
@@ -461,6 +462,63 @@ committed continuation admission and reattach to that exact numbered worker
 attempt, mark its pending command applied once, and consume its event stream
 without sending a second resume request. Missing, contradictory, unreachable, or
 indeterminate worker state stops for user review.
+
+## Committing implementation to internal Forgejo
+
+After a write-capable lead turn is complete and the run is waiting, the user
+may approve the inspected managed-workspace contents for internal publication:
+
+```http
+POST /api/v1/runs/run_opaque/implementation/commit
+Idempotency-Key: commit-implementation-1
+Content-Type: application/json
+
+{"message":"feat: implement the agreed change"}
+```
+
+The run and both logical agent sessions must be waiting, the feature must still
+be `implementing`, the latest lead attempt must be a completed implementation
+turn, and the same submitted plan and publication activity must remain durable.
+The commit message must be one non-empty line of at most 200 bytes. Missing or
+unsafe prerequisites return `409 implementation_commit_not_ready`; an unchanged
+planning baseline returns `409 implementation_has_no_changes`; unavailable Git
+or Forgejo returns `503 implementation_commit_unavailable`.
+
+The coordinator—not the agent—owns this operation. It verifies the exact
+managed repository, branch, checkout, draft PR, and plan, then snapshots all
+working-tree contents through a temporary Git index. The private index avoids
+changing the user's staging area while the exact commit object is prepared.
+The coordinator stores a durable publication receipt before moving the local
+branch, advances the branch only from its recorded old HEAD, updates the real
+index to the committed tree without rewriting working files, and pushes the
+exact commit only to the credential-free checkout's `commitarium` remote. The
+Forgejo token is read from the coordinator's mounted token file and supplied to
+that one Git process as an ephemeral HTTP header; it is never placed in Git
+arguments, remotes, SQLite, worker assignments, or the agent environment.
+
+The receipt records the run, workspace, request key, commit message, Forgejo
+head before the operation, local HEAD before the operation, intended commit,
+and prepared/completed state. This provides restart-safe reconciliation:
+
+- if the local branch is still at the old HEAD, the coordinator installs only
+  the recorded commit;
+- if the local or Forgejo branch already equals that exact commit, the
+  coordinator adopts the prior side effect;
+- any other local or remote revision is a conflict and is never reset,
+  overwritten, force-pushed, or silently merged.
+
+After the remote branch is verified at the intended commit, the coordinator
+appends one hidden marker and an `Implementation revision` section to the
+existing draft PR, then marks the receipt completed and records a public
+activity event on the lead session. A lost PR-update response is safe to retry
+because the exact marker is adopted instead of appended twice. A completed
+request replay returns `200 OK`; the first completed request returns `201
+Created`. The JSON receipt exposes all revision IDs and timestamps needed by a
+future reviewer and UI.
+
+This endpoint does not start the reviewer, change the feature out of
+`implementing`, merge, synchronize a host repository, or contact GitHub. Those
+remain separate deliberate workflow actions.
 
 ## Shared planning messages
 
