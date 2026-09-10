@@ -414,11 +414,11 @@ the configured lead login. These checks confirm identities and external side
 effects; they do not judge code quality or decide whether review should start.
 The lead already made that decision by returning `published`.
 
-Successful verification records a stable session activity event and returns the
-run to `waiting_for_user` with a reason stating that the revision is ready for
-automated review. A structured blocker uses the lead's exact reason. Missing,
-contradictory, or unavailable publication state records a recovery assessment
-and waits without launching a replacement.
+Successful verification records a stable session activity event, transitions
+the feature to `reviewing`, and atomically hands the still-running workflow to
+the existing reviewer session. A structured blocker uses the lead's exact
+reason. Missing, contradictory, or unavailable publication state records a
+recovery assessment and waits without launching a replacement.
 
 The attempt ID is deterministic. A retry after successful verification returns
 the existing run without contacting Forgejo or the worker. If the worker result
@@ -429,6 +429,37 @@ coordinator restart during the active turn reattaches to this exact attempt and
 records the existing recovery assessment event; it never starts a replacement.
 If the worker itself restarts while Codex is active, its journal deliberately
 marks the attempt indeterminate and the coordinator stops for user review.
+
+## Automatic first implementation review
+
+After lead publication verification, no user action is required to start the
+first review. The coordinator resumes the same reviewer provider conversation
+that participated in planning, but routes it to the separate reviewer worker,
+profile, journal, and Forgejo identity. Its deterministic attempt ID is
+`{reviewer-session-id}:review:1`; the run stays `running`, while SQLite prevents
+the waiting lead and reviewer from becoming active together.
+
+The reviewer receives the accepted goal, agreed plan, lead summary, exact
+commit and PR identities, and a retry-stable audit marker. It inspects Git HEAD,
+status, the baseline diff, and the exact PR head before deciding. It must not
+modify tracked files, commit, push, alter the PR body, or merge. It posts one
+formal Forgejo review using `APPROVE` or `REQUEST_CHANGES`, with the exact commit
+ID and a body consisting of the hidden marker followed by one concise `Review`
+section. Conversation messages are not copied to Forgejo.
+
+The `implementation_reviewer` output contract returns `approved`,
+`changes_requested`, or `blocked`. Successful review publication includes the
+exact commit ID, PR number, and Forgejo review ID. The coordinator fetches that
+exact review and verifies the open draft PR head, accepted plan, clean checkout,
+review author, commit, decision, non-stale state, and exact body. Approval and
+requested changes both return the run to `waiting_for_user` for this slice; the
+reason clearly identifies the result. The next slice will consume requested
+changes automatically and continue the lead/reviewer correction loop.
+
+Recovery is idempotent before reviewer admission, during the active reviewer
+attempt, and after its terminal result. Startup either starts the one missing
+deterministic attempt, reattaches to it, or re-verifies its exact Forgejo review.
+It never substitutes the lead worker/profile or starts a second reviewer.
 
 ## Continuing implementation
 
@@ -651,7 +682,8 @@ work.
 For the real-lead mode, recovery only performs a read-only lookup of the exact
 durable worker attempt, including an interrupted lead, clarification follow-up,
 initial planning, first-reviewer, later planning-discussion, initial
-implementation, or numbered implementation-continuation turn. A waiting
+implementation, numbered implementation-continuation, or first implementation
+review turn. A waiting
 lead is not counted as concurrent active work while the reviewer is running. If
 it still exists and is consistent, the coordinator records a `recovery_assessment`
 event, marks its pending reply applied once the attempt is confirmed, and
@@ -698,13 +730,15 @@ reissue an uncertain rejected command under a new idempotency key after
 inspection.
 
 The simulated workers have no repository, worktree, test process, or Forgejo
-pull request, so their assessment records those checks as not applicable. The
-real Codex worker already keeps provider data and authentication on a private
-persistent volume and uses the configured workspace mount. Coordinator-process
-recovery of the first implementation turn now verifies state before admission
-and reattaches to an admitted exact attempt. Provider resume after the worker
-container itself restarts, interrupted-command reconciliation, and recovery
-assessment mirroring to Forgejo are not implemented yet.
+pull request, so their assessment records those checks as not applicable. Each
+real Codex role keeps provider data, authentication, and its worker journal on
+separate private persistent volumes while sharing only the managed workspace
+root. Coordinator-process recovery covers the first implementation turn and
+first implementation-review turn: it verifies durable state before admission,
+reattaches to an admitted exact attempt, and re-verifies a terminal review
+instead of posting another one. Provider resume after the worker container
+itself restarts, interrupted-command reconciliation, and recovery assessment
+mirroring to Forgejo are not implemented yet.
 
 Run `./scripts/test-compose-recovery.sh` for the repeatable isolated
 container-level interruption test.

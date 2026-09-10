@@ -117,11 +117,22 @@ type recordingPullRequests struct {
 	planSpecs           []PlanPublicationSpec
 	verifiedPlanSpecs   []PlanPublicationSpec
 	implementationSpecs []ImplementationPublicationSpec
+	reviewSpecs         []ReviewPublicationSpec
 	result              PullRequest
 	planResult          PullRequest
 	planPublished       bool
 	err                 error
 	planErr             error
+}
+
+func (pullRequests *recordingPullRequests) VerifyPullRequestReview(
+	_ context.Context,
+	_ string,
+	_ string,
+	spec ReviewPublicationSpec,
+) (PullRequest, error) {
+	pullRequests.reviewSpecs = append(pullRequests.reviewSpecs, spec)
+	return pullRequests.planResult, pullRequests.planErr
 }
 
 func (pullRequests *recordingPullRequests) VerifyPullRequestImplementation(
@@ -653,6 +664,48 @@ func TestServiceVerifiesAgentImplementationPublicationWithoutWriting(t *testing.
 		implementationCommit, 8, "codex-lead",
 	); !errors.Is(err, ErrConflict) {
 		t.Fatalf("mismatched project repository verification error = %v, want %v", err, ErrConflict)
+	}
+}
+
+func TestServiceVerifiesReviewerPublicationWithoutWriting(t *testing.T) {
+	now := time.Date(2026, time.September, 10, 5, 0, 0, 0, time.UTC)
+	stored := readyTestWorkspace(now)
+	pullRequestReadyAt := now.Add(3 * time.Minute)
+	stored.PullRequestNumber = 8
+	stored.PullRequestURL = "http://localhost:3001/owner/repository/pulls/8"
+	stored.PullRequestRecordedAt = &pullRequestReadyAt
+	stored.UpdatedAt = pullRequestReadyAt
+	implementationCommit := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	branches := &recordingBranches{base: Branch{Name: stored.Branch, CommitID: implementationCommit}}
+	checkout := &recordingCheckout{}
+	pullRequests := &recordingPullRequests{planResult: PullRequest{
+		Number: 8, URL: stored.PullRequestURL, State: "open", Draft: true,
+		BaseBranch: stored.BaseBranch, HeadBranch: stored.Branch, HeadCommitID: implementationCommit,
+	}}
+	reviewing := acceptedTestFeature(now)
+	reviewing.State = feature.StateReviewing
+	service := NewServiceWithPreparation(
+		&memoryStore{stored: stored}, fixedFeatureFinder{stored: reviewing},
+		fixedProjectFinder{stored: project.Project{ID: "prj_test", ForgejoRepository: testRepository(now)}},
+		branches, checkout, pullRequests,
+	)
+	got, err := service.VerifyImplementationReview(
+		t.Context(), "prj_test", "fea_test", "sev_final_plan", "Final plan",
+		"att_review_1", "One edge case still fails.", implementationCommit, 8, 11,
+		"codex-reviewer", "REQUEST_CHANGES",
+	)
+	if err != nil || got != stored {
+		t.Fatalf("verify implementation review: workspace=%+v err=%v", got, err)
+	}
+	if branches.getCalls != 1 || len(checkout.specs) != 1 || !checkout.specs[0].RequireClean ||
+		checkout.specs[0].ExpectedHeadCommitID != implementationCommit || len(pullRequests.reviewSpecs) != 1 {
+		t.Fatalf("review verification did not reconcile every fact: branches=%d checkout=%+v pull_requests=%+v", branches.getCalls, checkout.specs, pullRequests.reviewSpecs)
+	}
+	spec := pullRequests.reviewSpecs[0]
+	if spec.ReviewID != 11 || spec.ExpectedAuthor != "codex-reviewer" ||
+		spec.ExpectedState != "REQUEST_CHANGES" ||
+		!strings.HasPrefix(spec.PublicationMarker, "<!-- commitarium-review: ") {
+		t.Fatalf("unexpected review publication spec %+v", spec)
 	}
 }
 

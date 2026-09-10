@@ -35,8 +35,9 @@ type SessionRequest struct {
 type OutputContract string
 
 const (
-	OutputContractPlanningLead       OutputContract = "planning_lead"
-	OutputContractImplementationLead OutputContract = "implementation_lead"
+	OutputContractPlanningLead         OutputContract = "planning_lead"
+	OutputContractImplementationLead   OutputContract = "implementation_lead"
+	OutputContractImplementationReview OutputContract = "implementation_reviewer"
 )
 
 // LaunchEnvironment is the worker-resolved view of the profile and workspace
@@ -139,6 +140,7 @@ type Result struct {
 	ProviderSessionID string
 	Summary           string
 	Publication       *ImplementationPublication
+	Review            *ReviewPublication
 }
 
 // ImplementationPublication contains only the external identities that the
@@ -147,6 +149,15 @@ type Result struct {
 type ImplementationPublication struct {
 	CommitID          string
 	PullRequestNumber int64
+}
+
+// ReviewPublication identifies the exact formal Forgejo review that a reviewer
+// says it submitted for one implementation commit. Result.Disposition carries
+// approval versus requested changes.
+type ReviewPublication struct {
+	CommitID          string
+	PullRequestNumber int64
+	ReviewID          int64
 }
 
 // Adapter translates the provider-neutral session protocol to a provider CLI.
@@ -208,11 +219,14 @@ func (request SessionRequest) Validate() error {
 		return fmt.Errorf("%w: instructions are required", ErrInvalidSessionRequest)
 	case request.OutputContract != "" &&
 		request.OutputContract != OutputContractPlanningLead &&
-		request.OutputContract != OutputContractImplementationLead:
+		request.OutputContract != OutputContractImplementationLead &&
+		request.OutputContract != OutputContractImplementationReview:
 		return fmt.Errorf("%w: output contract %q is not recognized", ErrInvalidSessionRequest, request.OutputContract)
 	case (request.OutputContract == OutputContractPlanningLead ||
 		request.OutputContract == OutputContractImplementationLead) && request.Role != RoleLead:
 		return fmt.Errorf("%w: lead output contract requires the lead role", ErrInvalidSessionRequest)
+	case request.OutputContract == OutputContractImplementationReview && request.Role != RoleReviewer:
+		return fmt.Errorf("%w: reviewer output contract requires the reviewer role", ErrInvalidSessionRequest)
 	}
 	if !request.LaunchEnvironment.IsZero() {
 		if err := request.LaunchEnvironment.Validate(); err != nil {
@@ -368,11 +382,22 @@ func (result Result) Validate() error {
 		return fmt.Errorf("%w: stopped session cannot have a disposition", ErrInvalidResult)
 	case result.Outcome == OutcomeFailed && result.Disposition != "":
 		return fmt.Errorf("%w: failed session cannot have a disposition", ErrInvalidResult)
+	case result.Publication != nil && result.Review != nil:
+		return fmt.Errorf("%w: result cannot contain implementation and review publications", ErrInvalidResult)
 	case result.Publication != nil &&
 		(result.Outcome != OutcomeCompleted || result.Disposition != DispositionSucceeded):
 		return fmt.Errorf("%w: implementation publication requires a successful completed session", ErrInvalidResult)
+	case result.Review != nil && result.Outcome != OutcomeCompleted:
+		return fmt.Errorf("%w: review publication requires a completed session", ErrInvalidResult)
+	case result.Review != nil && result.Disposition != DispositionSucceeded &&
+		result.Disposition != DispositionChangesRequested:
+		return fmt.Errorf("%w: review publication requires approval or requested changes", ErrInvalidResult)
 	case result.Publication != nil:
 		if err := result.Publication.Validate(); err != nil {
+			return fmt.Errorf("%w: %v", ErrInvalidResult, err)
+		}
+	case result.Review != nil:
+		if err := result.Review.Validate(); err != nil {
 			return fmt.Errorf("%w: %v", ErrInvalidResult, err)
 		}
 	default:
@@ -387,6 +412,19 @@ func (publication ImplementationPublication) Validate() error {
 	}
 	if publication.PullRequestNumber < 1 {
 		return errors.New("implementation pull request number must be positive")
+	}
+	return nil
+}
+
+func (review ReviewPublication) Validate() error {
+	if !commitIDPattern.MatchString(review.CommitID) {
+		return errors.New("review commit ID must be a lowercase SHA-1 or SHA-256 object ID")
+	}
+	if review.PullRequestNumber < 1 {
+		return errors.New("review pull request number must be positive")
+	}
+	if review.ReviewID < 1 {
+		return errors.New("review ID must be positive")
 	}
 	return nil
 }

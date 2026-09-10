@@ -21,19 +21,23 @@ import (
 )
 
 const (
-	remoteLeadAgentID                = "codex-lead"
-	remoteReviewerAgentID            = "codex-reviewer"
-	maxPlanningMessages              = 10
-	planningPlanSubmittedReason      = "The lead submitted the final plan after reaching agreement with the reviewer. It is ready to publish to Forgejo."
-	planningPlanPublishedReason      = "The agreed implementation plan was published to Forgejo. It is ready for implementation."
-	planningPublicationReviewReason  = "The coordinator could not safely confirm publication of the agreed plan to Forgejo. No agent or implementation work was started. Inspect the managed workspace and pull request before retrying."
-	planningLimitReason              = "The planning discussion reached its ten-message limit without an agreed plan. User input is required."
-	implementationRunningReason      = "The lead is implementing the agreed plan in the managed workspace."
-	implementationContinuationReason = "The lead is continuing implementation after the user's guidance."
-	implementationVerificationReason = "The coordinator is rechecking the implementation revision already published by the lead."
-	implementationReadyReason        = "The lead needs user input before it can publish the implementation for review."
-	implementationPublishedReason    = "The lead published its implementation commit and Forgejo audit entry. The verified revision is ready for automated review."
-	defaultLeadForgejoAuthor         = "codex-lead"
+	remoteLeadAgentID                    = "codex-lead"
+	remoteReviewerAgentID                = "codex-reviewer"
+	maxPlanningMessages                  = 10
+	planningPlanSubmittedReason          = "The lead submitted the final plan after reaching agreement with the reviewer. It is ready to publish to Forgejo."
+	planningPlanPublishedReason          = "The agreed implementation plan was published to Forgejo. It is ready for implementation."
+	planningPublicationReviewReason      = "The coordinator could not safely confirm publication of the agreed plan to Forgejo. No agent or implementation work was started. Inspect the managed workspace and pull request before retrying."
+	planningLimitReason                  = "The planning discussion reached its ten-message limit without an agreed plan. User input is required."
+	implementationRunningReason          = "The lead is implementing the agreed plan in the managed workspace."
+	implementationContinuationReason     = "The lead is continuing implementation after the user's guidance."
+	implementationVerificationReason     = "The coordinator is rechecking the implementation revision already published by the lead."
+	implementationReadyReason            = "The lead needs user input before it can publish the implementation for review."
+	implementationPublishedReason        = "The lead published its implementation commit and Forgejo audit entry. The verified revision is ready for automated review."
+	implementationReviewRunningReason    = "The reviewer is inspecting the lead's exact implementation commit and preparing a formal Forgejo review."
+	implementationChangesRequestedReason = "The first implementation review requested changes. Its verified findings are ready for the lead response loop."
+	implementationApprovedReason         = "The first implementation review approved the exact published commit. The verified revision is ready for the merge gate."
+	defaultLeadForgejoAuthor             = "codex-lead"
+	defaultReviewerForgejoAuthor         = "codex-reviewer"
 )
 
 type planningStage string
@@ -69,6 +73,7 @@ type RemoteLeadExecution interface {
 	BeginWorkerTurn(context.Context, worker.Command, string, execution.WorkerAttemptCheckpoint, string, feature.State, string) (execution.WorkerTurnAdmissionResult, bool, error)
 	BeginAutonomousTurn(context.Context, string, execution.WorkerAttemptCheckpoint, string, feature.State, string) (bool, error)
 	BeginChainedTurn(context.Context, string, execution.WorkerAttemptCheckpoint, string, string) (bool, error)
+	BeginChainedTurnInState(context.Context, string, execution.WorkerAttemptCheckpoint, string, feature.State, string) (bool, error)
 	BeginNewSessionTurn(context.Context, string, string, string, worker.Role, string, string) (bool, error)
 	LinkPlanningMessage(context.Context, string, string) (execution.PlanningMessage, bool, error)
 	PlanningMessagesForRun(context.Context, string) ([]execution.PlanningMessage, error)
@@ -93,6 +98,7 @@ type RemoteLeadWorkspaceService interface {
 	VerifyPublishedPlan(context.Context, string, string, string, string) (workspace.Workspace, error)
 	VerifyImplementationContinuation(context.Context, string, string, string, string) (workspace.Workspace, error)
 	VerifyImplementationPublication(context.Context, string, string, string, string, string, string, string, int64, string) (workspace.Workspace, error)
+	VerifyImplementationReview(context.Context, string, string, string, string, string, string, string, int64, int64, string, string) (workspace.Workspace, error)
 }
 
 type RemoteLeadWorker interface {
@@ -105,18 +111,20 @@ type RemoteLeadPump interface {
 }
 
 type RemoteLeadConfig struct {
-	Executions     RemoteLeadExecution
-	Features       RemoteLeadFeatureFinder
-	Goals          RemoteLeadGoalService
-	Planning       RemoteLeadPlanningWorkflow
-	Workspaces     RemoteLeadWorkspaceService
-	Worker         RemoteLeadWorker
-	Pump           RemoteLeadPump
-	Lifetime       context.Context
-	AgentProfileID string
-	WorkspaceID    string
-	ForgejoAuthor  string
-	ReportError    func(error)
+	Executions             RemoteLeadExecution
+	Features               RemoteLeadFeatureFinder
+	Goals                  RemoteLeadGoalService
+	Planning               RemoteLeadPlanningWorkflow
+	Workspaces             RemoteLeadWorkspaceService
+	Worker                 RemoteLeadWorker
+	Pump                   RemoteLeadPump
+	Lifetime               context.Context
+	AgentProfileID         string
+	ReviewerAgentProfileID string
+	WorkspaceID            string
+	ForgejoAuthor          string
+	ReviewerForgejoAuthor  string
+	ReportError            func(error)
 }
 
 // RemoteLeadStarter owns the deliberately small real-provider path used while
@@ -124,18 +132,20 @@ type RemoteLeadConfig struct {
 // attempt identity make replaying PutAttempt after a restart safe: the worker
 // returns the existing attempt instead of launching a duplicate process.
 type RemoteLeadStarter struct {
-	executions     RemoteLeadExecution
-	features       RemoteLeadFeatureFinder
-	goals          RemoteLeadGoalService
-	planning       RemoteLeadPlanningWorkflow
-	workspaces     RemoteLeadWorkspaceService
-	worker         RemoteLeadWorker
-	pump           RemoteLeadPump
-	lifetime       context.Context
-	agentProfileID string
-	workspaceID    string
-	forgejoAuthor  string
-	reportError    func(error)
+	executions             RemoteLeadExecution
+	features               RemoteLeadFeatureFinder
+	goals                  RemoteLeadGoalService
+	planning               RemoteLeadPlanningWorkflow
+	workspaces             RemoteLeadWorkspaceService
+	worker                 RemoteLeadWorker
+	pump                   RemoteLeadPump
+	lifetime               context.Context
+	agentProfileID         string
+	reviewerAgentProfileID string
+	workspaceID            string
+	forgejoAuthor          string
+	reviewerForgejoAuthor  string
+	reportError            func(error)
 
 	activeMu sync.Mutex
 	active   map[string]struct{}
@@ -160,14 +170,24 @@ func NewRemoteLeadStarter(config RemoteLeadConfig) (*RemoteLeadStarter, error) {
 	if forgejoAuthor == "" {
 		forgejoAuthor = defaultLeadForgejoAuthor
 	}
+	reviewerAgentProfileID := strings.TrimSpace(config.ReviewerAgentProfileID)
+	if reviewerAgentProfileID == "" {
+		reviewerAgentProfileID = config.AgentProfileID
+	}
+	reviewerForgejoAuthor := strings.TrimSpace(config.ReviewerForgejoAuthor)
+	if reviewerForgejoAuthor == "" {
+		reviewerForgejoAuthor = defaultReviewerForgejoAuthor
+	}
 	return &RemoteLeadStarter{
 		executions: config.Executions, features: config.Features, goals: config.Goals,
 		planning: config.Planning, workspaces: config.Workspaces,
 		worker: config.Worker, pump: config.Pump,
 		lifetime: config.Lifetime, agentProfileID: config.AgentProfileID,
-		workspaceID: config.WorkspaceID, forgejoAuthor: forgejoAuthor,
-		reportError: reportError,
-		active:      make(map[string]struct{}),
+		reviewerAgentProfileID: reviewerAgentProfileID,
+		workspaceID:            config.WorkspaceID, forgejoAuthor: forgejoAuthor,
+		reviewerForgejoAuthor: reviewerForgejoAuthor,
+		reportError:           reportError,
+		active:                make(map[string]struct{}),
 	}, nil
 }
 
@@ -223,6 +243,9 @@ func (starter *RemoteLeadStarter) Recover(
 		if storedFeature.State == feature.StateImplementing {
 			return starter.recoverIdleImplementationRun(ctx, run)
 		}
+		if storedFeature.State == feature.StateReviewing {
+			return starter.recoverIdleReviewingRun(ctx, run)
+		}
 		handled, idleErr := starter.recoverIdlePlanningRun(ctx, run, storedFeature)
 		if idleErr != nil || handled {
 			return idleErr
@@ -250,6 +273,11 @@ func (starter *RemoteLeadStarter) Recover(
 			return fmt.Errorf("%w: implementing feature has an unexpected active attempt", ErrInvalidRunRequest)
 		}
 	}
+	if storedFeature.State == feature.StateReviewing {
+		if _, reviewing := implementationReviewTurnNumber(session.ID, checkpoint.AttemptID); !isReviewer || !reviewing {
+			return fmt.Errorf("%w: reviewing feature has an unexpected active attempt", ErrInvalidRunRequest)
+		}
+	}
 	request := remoteLeadRequest{
 		runID:         run.ID,
 		agentName:     "lead agent",
@@ -266,6 +294,9 @@ func (starter *RemoteLeadStarter) Recover(
 	}
 	if isReviewer {
 		request.agentName = "reviewer"
+		if _, reviewing := implementationReviewTurnNumber(session.ID, checkpoint.AttemptID); reviewing {
+			request.request.OutputContract = workerhttp.OutputContractImplementationReview
+		}
 	}
 	pending, err := starter.executions.PendingCommandsForSession(ctx, session.ID)
 	if err != nil {
@@ -334,12 +365,88 @@ func (starter *RemoteLeadStarter) recoverIdleImplementationRun(
 	if attempt.Result.Disposition == workerhttp.DispositionInputRequired {
 		return starter.waitRun(ctx, run.ID, attempt.Result.Summary)
 	}
-	return starter.verifyImplementationPublication(ctx, remoteLeadRequest{
+	request := remoteLeadRequest{
 		runID: run.ID,
 		identity: workerhttp.MutationIdentity{AttemptReference: workerhttp.AttemptReference{
 			SessionID: lead.ID, AttemptID: checkpoint.AttemptID,
 		}},
-	}, *attempt.Result)
+	}
+	if !starter.claim(run.ID) {
+		return fmt.Errorf("%w: %q", ErrRunAlreadyActive, run.ID)
+	}
+	go starter.launchImplementationPublicationVerification(request, *attempt.Result)
+	return nil
+}
+
+func (starter *RemoteLeadStarter) recoverIdleReviewingRun(
+	ctx context.Context,
+	run execution.Run,
+) error {
+	reviewer, err := starter.executions.GetSession(ctx, remoteReviewerSessionID(run.ID))
+	if err != nil {
+		return fmt.Errorf("load reviewing session: %w", err)
+	}
+	if reviewer.Status != execution.SessionStatusWaitingForUser {
+		return fmt.Errorf("%w: idle review has a non-waiting reviewer", ErrInvalidRunRequest)
+	}
+	checkpoint, err := starter.executions.GetWorkerAttempt(ctx, reviewer.ID)
+	if err != nil {
+		return fmt.Errorf("load reviewer checkpoint: %w", err)
+	}
+	if _, reviewing := implementationReviewTurnNumber(reviewer.ID, checkpoint.AttemptID); reviewing {
+		if err := starter.confirmCompletedTurn(ctx, reviewer, checkpoint); err != nil {
+			return fmt.Errorf("confirm completed review: %w", err)
+		}
+		attempt, err := starter.worker.GetAttempt(ctx, workerhttp.AttemptReference{
+			SessionID: reviewer.ID, AttemptID: checkpoint.AttemptID,
+		})
+		if err != nil {
+			return fmt.Errorf("load completed review result: %w", err)
+		}
+		if attempt.Result == nil {
+			return errors.New("completed review attempt has no result")
+		}
+		if attempt.Result.Disposition == workerhttp.DispositionInputRequired {
+			return starter.waitRun(ctx, run.ID, attempt.Result.Summary)
+		}
+		request := remoteLeadRequest{runID: run.ID, agentName: "reviewer", identity: workerhttp.MutationIdentity{
+			AttemptReference: workerhttp.AttemptReference{SessionID: reviewer.ID, AttemptID: checkpoint.AttemptID},
+		}}
+		if !starter.claim(run.ID) {
+			return fmt.Errorf("%w: %q", ErrRunAlreadyActive, run.ID)
+		}
+		go starter.launchImplementationReviewVerification(request, *attempt.Result)
+		return nil
+	}
+
+	lead, err := starter.executions.GetSession(ctx, remoteLeadSessionID(run.ID))
+	if err != nil {
+		return fmt.Errorf("load reviewed lead session: %w", err)
+	}
+	leadCheckpoint, err := starter.executions.GetWorkerAttempt(ctx, lead.ID)
+	if err != nil {
+		return fmt.Errorf("load reviewed implementation checkpoint: %w", err)
+	}
+	if err := starter.confirmCompletedTurn(ctx, lead, leadCheckpoint); err != nil {
+		return fmt.Errorf("confirm reviewed implementation: %w", err)
+	}
+	attempt, err := starter.worker.GetAttempt(ctx, workerhttp.AttemptReference{
+		SessionID: lead.ID, AttemptID: leadCheckpoint.AttemptID,
+	})
+	if err != nil {
+		return fmt.Errorf("load reviewed implementation result: %w", err)
+	}
+	if attempt.Result == nil || attempt.Result.Publication == nil {
+		return errors.New("reviewed implementation attempt has no publication result")
+	}
+	request := remoteLeadRequest{runID: run.ID, identity: workerhttp.MutationIdentity{
+		AttemptReference: workerhttp.AttemptReference{SessionID: lead.ID, AttemptID: leadCheckpoint.AttemptID},
+	}}
+	if !starter.claim(run.ID) {
+		return fmt.Errorf("%w: %q", ErrRunAlreadyActive, run.ID)
+	}
+	go starter.launchImplementationPublicationVerification(request, *attempt.Result)
+	return nil
 }
 
 // recoverIdlePlanningRun handles the safe points between provider turns. The
@@ -511,6 +618,19 @@ func implementationAttemptID(sessionID string, turn int) string {
 	return sessionID + ":implementation:" + strconv.Itoa(turn)
 }
 
+func implementationReviewAttemptID(sessionID string, turn int) string {
+	return sessionID + ":review:" + strconv.Itoa(turn)
+}
+
+func implementationReviewTurnNumber(sessionID, attemptID string) (int, bool) {
+	value, found := strings.CutPrefix(attemptID, sessionID+":review:")
+	if !found {
+		return 0, false
+	}
+	turn, err := strconv.Atoi(value)
+	return turn, err == nil && turn > 0
+}
+
 func implementationTurnNumber(sessionID, attemptID string) (int, bool) {
 	value, found := strings.CutPrefix(attemptID, sessionID+":implementation:")
 	if !found {
@@ -548,6 +668,9 @@ func planningStageForAttempt(session execution.Session, attemptID string) planni
 func waitingReasonForAttempt(session execution.Session, attemptID string) string {
 	if _, implementing := implementationTurnNumber(session.ID, attemptID); session.Role == worker.RoleLead && implementing {
 		return implementationReadyReason
+	}
+	if _, reviewing := implementationReviewTurnNumber(session.ID, attemptID); session.Role == worker.RoleReviewer && reviewing {
+		return implementationReviewRunningReason
 	}
 	turn, planned := planningTurnNumber(session.ID, attemptID)
 	if session.Role == worker.RoleReviewer && planned && turn == 1 {
@@ -850,7 +973,7 @@ func (starter *RemoteLeadStarter) reviewerPlanningRequest(
 		request: workerhttp.PutAttemptRequest{
 			Mode: workerhttp.AttemptModeStart,
 			Assignment: workerhttp.Assignment{
-				AgentProfileID: starter.agentProfileID,
+				AgentProfileID: starter.reviewerAgentProfileID,
 				ProjectID:      storedFeature.ProjectID, FeatureID: storedFeature.ID,
 				Role: workerhttp.RoleReviewer, WorkspaceID: prepared.ID,
 			},
@@ -1471,7 +1594,7 @@ func (starter *RemoteLeadStarter) reviewerResponseRequest(
 		request: workerhttp.PutAttemptRequest{
 			Mode: workerhttp.AttemptModeResume,
 			Assignment: workerhttp.Assignment{
-				AgentProfileID: starter.agentProfileID,
+				AgentProfileID: starter.reviewerAgentProfileID,
 				ProjectID:      storedFeature.ProjectID, FeatureID: storedFeature.ID,
 				Role: workerhttp.RoleReviewer, WorkspaceID: prepared.ID,
 			},
@@ -2054,6 +2177,14 @@ func (starter *RemoteLeadStarter) finish(
 			err = starter.verifyImplementationPublication(ctx, request, *attempt.Result)
 			break
 		}
+		if request.request.OutputContract == workerhttp.OutputContractImplementationReview {
+			if attempt.Result.Disposition == workerhttp.DispositionInputRequired {
+				err = starter.waitRun(ctx, request.runID, attempt.Result.Summary)
+				break
+			}
+			err = starter.verifyImplementationReview(ctx, request, *attempt.Result)
+			break
+		}
 		err = starter.waitRun(ctx, request.runID, request.waitingReason)
 	case workerhttp.OutcomeStopped:
 		err = starter.failSession(ctx, session, execution.SessionStatusStopped, attempt, "The "+request.agentName+" was stopped.")
@@ -2123,7 +2254,188 @@ func (starter *RemoteLeadStarter) verifyImplementationPublication(
 	if err != nil {
 		return fmt.Errorf("record verified implementation publication: %w", err)
 	}
-	return starter.waitRun(ctx, request.runID, implementationPublishedReason)
+	next, admitted, err := starter.startImplementationReview(ctx, run, storedFeature, plan, result)
+	if err != nil {
+		return err
+	}
+	if admitted {
+		starter.launchAdmitted(next)
+	}
+	return nil
+}
+
+func (starter *RemoteLeadStarter) startImplementationReview(
+	ctx context.Context,
+	run execution.Run,
+	storedFeature feature.Feature,
+	plan execution.Event,
+	implementation workerhttp.TerminalResult,
+) (remoteLeadRequest, bool, error) {
+	if implementation.Publication == nil {
+		return remoteLeadRequest{}, false, errors.New("implementation publication facts are missing")
+	}
+	reviewer, err := starter.executions.GetSession(ctx, remoteReviewerSessionID(run.ID))
+	if err != nil {
+		return remoteLeadRequest{}, false, err
+	}
+	checkpoint, err := starter.executions.GetWorkerAttempt(ctx, reviewer.ID)
+	if err != nil {
+		return remoteLeadRequest{}, false, err
+	}
+	if reviewer.Status != execution.SessionStatusWaitingForUser ||
+		reviewer.AgentID != remoteReviewerAgentID || reviewer.Role != worker.RoleReviewer ||
+		reviewer.ProviderSessionID == "" {
+		return remoteLeadRequest{}, false, errors.New("reviewer planning conversation is not safely resumable")
+	}
+	if _, alreadyReviewing := implementationReviewTurnNumber(reviewer.ID, checkpoint.AttemptID); alreadyReviewing {
+		return remoteLeadRequest{}, false, nil
+	}
+	if err := starter.confirmCompletedTurn(ctx, reviewer, checkpoint); err != nil {
+		return remoteLeadRequest{}, false, fmt.Errorf("confirm reviewer planning turn: %w", err)
+	}
+	prepared, err := starter.workspaces.Get(ctx, storedFeature.ProjectID, storedFeature.ID)
+	if err != nil {
+		return remoteLeadRequest{}, false, err
+	}
+	attemptID := implementationReviewAttemptID(reviewer.ID, 1)
+	request := remoteLeadRequest{
+		runID: run.ID, agentName: "reviewer", waitingReason: implementationReviewRunningReason,
+		identity: workerhttp.MutationIdentity{
+			AttemptReference: workerhttp.AttemptReference{SessionID: reviewer.ID, AttemptID: attemptID},
+			IdempotencyKey:   attemptID + ":resume",
+		},
+		request: workerhttp.PutAttemptRequest{
+			Mode: workerhttp.AttemptModeResume,
+			Assignment: workerhttp.Assignment{
+				AgentProfileID: starter.reviewerAgentProfileID,
+				ProjectID:      storedFeature.ProjectID, FeatureID: storedFeature.ID,
+				Role: workerhttp.RoleReviewer, WorkspaceID: prepared.ID,
+			},
+			ProviderSessionID: reviewer.ProviderSessionID,
+			Instructions: implementationReviewInstructions(
+				storedFeature, prepared, plan.Text, implementation.Summary,
+				implementation.Publication.CommitID, attemptID,
+			),
+			OutputContract: workerhttp.OutputContractImplementationReview,
+		},
+	}
+	if err := request.request.Validate(request.identity); err != nil {
+		return remoteLeadRequest{}, false, fmt.Errorf("%w: %v", ErrInvalidRunRequest, err)
+	}
+	if storedFeature.State == feature.StateImplementing {
+		if _, err := starter.planning.TransitionFeature(
+			ctx, storedFeature.ID, feature.StateReviewing,
+			workflow.Actor{Kind: workflow.ActorKindCoordinator, ID: coordinatorActorID},
+			attemptID+":enter-review",
+		); err != nil {
+			return remoteLeadRequest{}, false, err
+		}
+	}
+	admitted, err := starter.executions.BeginChainedTurnInState(
+		ctx, reviewer.ID, checkpoint, attemptID, feature.StateReviewing,
+		implementationReviewRunningReason,
+	)
+	return request, admitted, err
+}
+
+func implementationReviewInstructions(
+	storedFeature feature.Feature,
+	prepared workspace.Workspace,
+	plan string,
+	implementationSummary string,
+	commitID string,
+	attemptID string,
+) string {
+	marker := implementationReviewMarker(attemptID)
+	return "Continue the same provider conversation as the independent reviewer. The lead has now " +
+		"published an implementation for review. Inspect before judging: confirm the current branch, " +
+		"Git HEAD, status, diff from the planning baseline, and the exact pull-request head. Review only " +
+		"the exact commit below against the accepted goal and agreed plan, and run relevant read-only tests " +
+		"when practical. Do not modify tracked files, commit, push, change the pull-request body, or merge. " +
+		"If you find material problems, submit one formal Forgejo review with event REQUEST_CHANGES. If the " +
+		"implementation is correct and sufficiently tested, submit one with event APPROVE. Use the worker-provided " +
+		"Forgejo URL and token-file environment variables; never print, log, commit, or put the token in a URL. " +
+		"Set commit_id on the review to the exact commit below. The review body must be exactly the marker below, " +
+		"a blank line, '## Review', another blank line, and your concise structured findings or approval summary. " +
+		"Check existing reviews for the marker before posting so recovery never duplicates it. Return action " +
+		"'approved' or 'changes_requested' with that same summary, exact commit ID, PR number, and returned review ID. " +
+		"If state is contradictory, the exact revision is unavailable, or you cannot safely establish whether a " +
+		"review was posted, return action 'blocked', leave commit_id empty and review_id zero, and explain why. " +
+		"Durable Git, Forgejo, and coordinator state are authoritative over conversational memory.\n\n" +
+		"Current workflow phase: reviewing\nAccepted goal:\n" + storedFeature.AcceptedGoal +
+		"\n\nAgreed implementation plan:\n" + plan +
+		"\n\nLead's implementation summary:\n" + implementationSummary +
+		"\n\nRepository: " + prepared.RepositoryOwner + "/" + prepared.RepositoryName +
+		"\nBase branch: " + prepared.BaseBranch + "\nFeature branch: " + prepared.Branch +
+		"\nPlanning baseline commit: " + prepared.BaseCommitID + "\nExact implementation commit: " + commitID +
+		fmt.Sprintf("\nDraft pull request: #%d (%s)", prepared.PullRequestNumber, prepared.PullRequestURL) +
+		"\nReview audit marker:\n" + marker
+}
+
+func implementationReviewMarker(attemptID string) string {
+	digest := sha256.Sum256([]byte(attemptID))
+	return "<!-- commitarium-review: " + hex.EncodeToString(digest[:]) + " -->"
+}
+
+func (starter *RemoteLeadStarter) launchImplementationReviewVerification(
+	request remoteLeadRequest,
+	result workerhttp.TerminalResult,
+) {
+	defer starter.release(request.runID)
+	if err := starter.verifyImplementationReview(starter.lifetime, request, result); err != nil {
+		starter.requireReview(starter.lifetime, request, err)
+	}
+}
+
+func (starter *RemoteLeadStarter) verifyImplementationReview(
+	ctx context.Context,
+	request remoteLeadRequest,
+	result workerhttp.TerminalResult,
+) error {
+	if result.Review == nil {
+		return errors.New("reviewer completed without structured review facts")
+	}
+	run, err := starter.executions.GetRun(ctx, request.runID)
+	if err != nil {
+		return err
+	}
+	storedFeature, err := starter.features.GetByID(ctx, run.FeatureID)
+	if err != nil {
+		return err
+	}
+	messages, err := starter.executions.PlanningMessagesForRun(ctx, run.ID)
+	if err != nil {
+		return err
+	}
+	if len(messages) == 0 || messages[len(messages)-1].Event.Type != worker.EventPlanSubmitted {
+		return errors.New("implementation review has no durable agreed plan")
+	}
+	expectedState := "APPROVED"
+	reason := implementationApprovedReason
+	if result.Disposition == workerhttp.DispositionChangesRequested {
+		expectedState = "REQUEST_CHANGES"
+		reason = implementationChangesRequestedReason
+	}
+	plan := messages[len(messages)-1].Event
+	if _, err := starter.workspaces.VerifyImplementationReview(
+		ctx, storedFeature.ProjectID, storedFeature.ID, plan.ID, plan.Text,
+		request.identity.AttemptID, result.Summary, result.Review.CommitID,
+		result.Review.PullRequestNumber, result.Review.ReviewID,
+		starter.reviewerForgejoAuthor, expectedState,
+	); err != nil {
+		return fmt.Errorf("verify reviewer publication: %w", err)
+	}
+	if _, err := starter.executions.RecordSessionEventWithID(
+		ctx, request.identity.AttemptID+":review-verified", request.identity.SessionID,
+		worker.Event{Type: worker.EventActivity, Text: fmt.Sprintf(
+			"Verified %s review #%d by %s for commit %s in Forgejo pull request #%d.",
+			strings.ToLower(expectedState), result.Review.ReviewID, starter.reviewerForgejoAuthor,
+			result.Review.CommitID, result.Review.PullRequestNumber,
+		)},
+	); err != nil {
+		return fmt.Errorf("record verified implementation review: %w", err)
+	}
+	return starter.waitRun(ctx, request.runID, reason)
 }
 
 func (starter *RemoteLeadStarter) launchPlanPublication(

@@ -36,21 +36,25 @@ const (
 )
 
 type config struct {
-	databasePath         string
-	runnerMode           string
-	simulatedStepDelay   time.Duration
-	codexWorkerURL       string
-	codexWorkerToken     string
-	codexAgentProfileID  string
-	codexWorkspaceID     string
-	codexForgejoAuthor   string
-	workerRequestTimeout time.Duration
-	forgejoURL           string
-	forgejoHostURL       string
-	forgejoTokenFile     string
-	forgejoTimeout       time.Duration
-	workspaceRoot        string
-	gitExecutable        string
+	databasePath                string
+	runnerMode                  string
+	simulatedStepDelay          time.Duration
+	codexWorkerURL              string
+	codexWorkerToken            string
+	codexAgentProfileID         string
+	codexReviewerWorkerURL      string
+	codexReviewerWorkerToken    string
+	codexReviewerAgentProfileID string
+	codexWorkspaceID            string
+	codexForgejoAuthor          string
+	codexReviewerForgejoAuthor  string
+	workerRequestTimeout        time.Duration
+	forgejoURL                  string
+	forgejoHostURL              string
+	forgejoTokenFile            string
+	forgejoTimeout              time.Duration
+	workspaceRoot               string
+	gitExecutable               string
 }
 
 func main() {
@@ -85,15 +89,16 @@ func loadConfig(getenv func(string) string) (config, error) {
 	}
 	loaded := config{
 		databasePath: databasePath, runnerMode: runnerMode,
-		simulatedStepDelay:   simulatedStepDelay,
-		workerRequestTimeout: defaultWorkerRequestTimeout,
-		forgejoURL:           defaultForgejoURL,
-		forgejoHostURL:       defaultForgejoHostURL,
-		forgejoTokenFile:     defaultForgejoTokenFile,
-		forgejoTimeout:       defaultForgejoTimeout,
-		workspaceRoot:        defaultWorkspaceRoot,
-		gitExecutable:        "git",
-		codexForgejoAuthor:   "codex-lead",
+		simulatedStepDelay:         simulatedStepDelay,
+		workerRequestTimeout:       defaultWorkerRequestTimeout,
+		forgejoURL:                 defaultForgejoURL,
+		forgejoHostURL:             defaultForgejoHostURL,
+		forgejoTokenFile:           defaultForgejoTokenFile,
+		forgejoTimeout:             defaultForgejoTimeout,
+		workspaceRoot:              defaultWorkspaceRoot,
+		gitExecutable:              "git",
+		codexForgejoAuthor:         "codex-lead",
+		codexReviewerForgejoAuthor: "codex-reviewer",
 	}
 	if value := strings.TrimSpace(getenv("COMMITARIUM_FORGEJO_URL")); value != "" {
 		loaded.forgejoURL = value
@@ -135,11 +140,23 @@ func loadConfig(getenv func(string) string) (config, error) {
 		if loaded.codexAgentProfileID, err = required("COMMITARIUM_CODEX_PROFILE_ID"); err != nil {
 			return config{}, err
 		}
+		if loaded.codexReviewerWorkerURL, err = required("COMMITARIUM_CODEX_REVIEWER_WORKER_URL"); err != nil {
+			return config{}, err
+		}
+		if loaded.codexReviewerWorkerToken, err = required("COMMITARIUM_CODEX_REVIEWER_WORKER_TOKEN"); err != nil {
+			return config{}, err
+		}
+		if loaded.codexReviewerAgentProfileID, err = required("COMMITARIUM_CODEX_REVIEWER_PROFILE_ID"); err != nil {
+			return config{}, err
+		}
 		if loaded.codexWorkspaceID, err = required("COMMITARIUM_CODEX_WORKSPACE_ID"); err != nil {
 			return config{}, err
 		}
 		if value := strings.TrimSpace(getenv("COMMITARIUM_CODEX_FORGEJO_LOGIN")); value != "" {
 			loaded.codexForgejoAuthor = value
+		}
+		if value := strings.TrimSpace(getenv("COMMITARIUM_CODEX_REVIEWER_FORGEJO_LOGIN")); value != "" {
+			loaded.codexReviewerForgejoAuthor = value
 		}
 		if value := strings.TrimSpace(getenv("COMMITARIUM_CODEX_WORKER_REQUEST_TIMEOUT")); value != "" {
 			loaded.workerRequestTimeout, err = time.ParseDuration(value)
@@ -216,30 +233,53 @@ func run(ctx context.Context, coordinatorConfig config) error {
 		runStarter = simulatedStarter
 		runRecoverer = simulatedStarter
 	case realCodexLeadRunnerMode:
-		client, err := workerhttp.NewClient(workerhttp.ClientConfig{
+		leadClient, err := workerhttp.NewClient(workerhttp.ClientConfig{
 			BaseURL:        coordinatorConfig.codexWorkerURL,
 			BearerToken:    coordinatorConfig.codexWorkerToken,
 			RequestTimeout: coordinatorConfig.workerRequestTimeout,
 		})
 		if err != nil {
-			return fmt.Errorf("create Codex worker client: %w", err)
+			return fmt.Errorf("create Codex lead worker client: %w", err)
+		}
+		reviewerClient, err := workerhttp.NewClient(workerhttp.ClientConfig{
+			BaseURL:        coordinatorConfig.codexReviewerWorkerURL,
+			BearerToken:    coordinatorConfig.codexReviewerWorkerToken,
+			RequestTimeout: coordinatorConfig.workerRequestTimeout,
+		})
+		if err != nil {
+			return fmt.Errorf("create Codex reviewer worker client: %w", err)
 		}
 		ingestion := workeringest.NewService(executionService, workeringest.FilterFunc(
 			func(_ context.Context, event workerhttp.Event) (workerhttp.Event, error) {
 				return event, nil
 			},
 		))
+		workerRouter, err := orchestration.NewRoleRoutedWorker(leadClient, reviewerClient)
+		if err != nil {
+			return fmt.Errorf("create Codex worker router: %w", err)
+		}
+		pumpRouter, err := orchestration.NewRoleRoutedPump(
+			workeringest.NewPump(
+				executionService, ingestion, workeringest.NewHTTPAttemptSource(leadClient),
+			),
+			workeringest.NewPump(
+				executionService, ingestion, workeringest.NewHTTPAttemptSource(reviewerClient),
+			),
+		)
+		if err != nil {
+			return fmt.Errorf("create Codex event-pump router: %w", err)
+		}
 		remoteStarter, err := orchestration.NewRemoteLeadStarter(orchestration.RemoteLeadConfig{
 			Executions: executionService, Features: featureStore, Goals: workflowService,
 			Planning: workflowService, Workspaces: workspaceService,
-			Worker: client,
-			Pump: workeringest.NewPump(
-				executionService, ingestion, workeringest.NewHTTPAttemptSource(client),
-			),
+			Worker:   workerRouter,
+			Pump:     pumpRouter,
 			Lifetime: ctx, AgentProfileID: coordinatorConfig.codexAgentProfileID,
-			WorkspaceID:   coordinatorConfig.codexWorkspaceID,
-			ForgejoAuthor: coordinatorConfig.codexForgejoAuthor,
-			ReportError:   func(err error) { log.Printf("real Codex lead: %v", err) },
+			ReviewerAgentProfileID: coordinatorConfig.codexReviewerAgentProfileID,
+			WorkspaceID:            coordinatorConfig.codexWorkspaceID,
+			ForgejoAuthor:          coordinatorConfig.codexForgejoAuthor,
+			ReviewerForgejoAuthor:  coordinatorConfig.codexReviewerForgejoAuthor,
+			ReportError:            func(err error) { log.Printf("real Codex lead: %v", err) },
 		})
 		if err != nil {
 			return fmt.Errorf("create real Codex lead runner: %w", err)

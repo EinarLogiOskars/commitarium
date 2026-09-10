@@ -375,7 +375,8 @@ func (session *session) completedItem(item threadItem) (*worker.Event, error) {
 			return nil, nil
 		}
 		if session.outputContract == worker.OutputContractPlanningLead ||
-			session.outputContract == worker.OutputContractImplementationLead {
+			session.outputContract == worker.OutputContractImplementationLead ||
+			session.outputContract == worker.OutputContractImplementationReview {
 			session.mu.Lock()
 			session.pendingMessage = text
 			session.mu.Unlock()
@@ -417,6 +418,14 @@ type implementationLeadResponse struct {
 	Summary           string `json:"summary"`
 	CommitID          string `json:"commit_id"`
 	PullRequestNumber int64  `json:"pull_request_number"`
+}
+
+type implementationReviewResponse struct {
+	Action            string `json:"action"`
+	Summary           string `json:"summary"`
+	CommitID          string `json:"commit_id"`
+	PullRequestNumber int64  `json:"pull_request_number"`
+	ReviewID          int64  `json:"review_id"`
 }
 
 func decodePlanningLeadResponse(text string) (planningLeadResponse, error) {
@@ -481,12 +490,58 @@ func decodeImplementationLeadResponse(text string) (implementationLeadResponse, 
 	return response, nil
 }
 
+func decodeImplementationReviewResponse(text string) (implementationReviewResponse, error) {
+	decoder := json.NewDecoder(bytes.NewBufferString(text))
+	decoder.DisallowUnknownFields()
+	var response implementationReviewResponse
+	if err := decoder.Decode(&response); err != nil {
+		return implementationReviewResponse{}, fmt.Errorf(
+			"%w: decode implementation review response: %v", ErrProtocol, err,
+		)
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return implementationReviewResponse{}, fmt.Errorf(
+			"%w: implementation review response contains trailing JSON", ErrProtocol,
+		)
+	}
+	response.Summary = strings.TrimSpace(response.Summary)
+	response.CommitID = strings.TrimSpace(response.CommitID)
+	if response.Summary == "" || response.PullRequestNumber < 1 {
+		return implementationReviewResponse{}, fmt.Errorf(
+			"%w: implementation review response is incomplete", ErrProtocol,
+		)
+	}
+	switch response.Action {
+	case "approved", "changes_requested":
+		review := worker.ReviewPublication{
+			CommitID: response.CommitID, PullRequestNumber: response.PullRequestNumber,
+			ReviewID: response.ReviewID,
+		}
+		if err := review.Validate(); err != nil {
+			return implementationReviewResponse{}, fmt.Errorf(
+				"%w: implementation review publication is invalid: %v", ErrProtocol, err,
+			)
+		}
+	case "blocked":
+		if response.CommitID != "" || response.ReviewID != 0 {
+			return implementationReviewResponse{}, fmt.Errorf(
+				"%w: blocked review cannot claim a commit or review", ErrProtocol,
+			)
+		}
+	default:
+		return implementationReviewResponse{}, fmt.Errorf(
+			"%w: implementation review response has an unknown action", ErrProtocol,
+		)
+	}
+	return response, nil
+}
+
 func (session *session) completedTurn(
 	turn turnRecord,
 ) (*worker.Event, bool, worker.Result, error) {
 	switch turn.Status {
 	case "completed":
-		structured, disposition, publication, err := session.completeStructuredResponse()
+		structured, disposition, publication, review, err := session.completeStructuredResponse()
 		if err != nil {
 			return nil, false, worker.Result{}, err
 		}
@@ -496,6 +551,7 @@ func (session *session) completedTurn(
 			ProviderSessionID: session.threadID,
 			Summary:           session.summary(),
 			Publication:       publication,
+			Review:            review,
 		}, nil
 	case "interrupted":
 		return nil, true, worker.Result{
@@ -522,16 +578,17 @@ func (session *session) completeStructuredResponse() (
 	*worker.Event,
 	worker.Disposition,
 	*worker.ImplementationPublication,
+	*worker.ReviewPublication,
 	error,
 ) {
 	if session.outputContract == "" {
-		return nil, worker.DispositionSucceeded, nil, nil
+		return nil, worker.DispositionSucceeded, nil, nil, nil
 	}
 	session.mu.Lock()
 	raw := session.pendingMessage
 	session.mu.Unlock()
 	if strings.TrimSpace(raw) == "" {
-		return nil, "", nil, fmt.Errorf(
+		return nil, "", nil, nil, fmt.Errorf(
 			"%w: structured turn omitted its final response", ErrProtocol,
 		)
 	}
@@ -539,7 +596,7 @@ func (session *session) completeStructuredResponse() (
 	case worker.OutputContractPlanningLead:
 		response, err := decodePlanningLeadResponse(raw)
 		if err != nil {
-			return nil, "", nil, err
+			return nil, "", nil, nil, err
 		}
 		eventType := worker.EventMessage
 		if response.Action == "submit_plan" {
@@ -548,26 +605,47 @@ func (session *session) completeStructuredResponse() (
 		session.mu.Lock()
 		session.lastAgentMessage = response.Content
 		session.mu.Unlock()
-		return event(eventType, response.Content), worker.DispositionSucceeded, nil, nil
+		return event(eventType, response.Content), worker.DispositionSucceeded, nil, nil, nil
 	case worker.OutputContractImplementationLead:
 		response, err := decodeImplementationLeadResponse(raw)
 		if err != nil {
-			return nil, "", nil, err
+			return nil, "", nil, nil, err
 		}
 		session.mu.Lock()
 		session.lastAgentMessage = response.Summary
 		session.mu.Unlock()
 		if response.Action == "blocked" {
 			return event(worker.EventInputRequired, response.Summary),
-				worker.DispositionInputRequired, nil, nil
+				worker.DispositionInputRequired, nil, nil, nil
 		}
 		return event(worker.EventMessage, response.Summary),
 			worker.DispositionSucceeded,
 			&worker.ImplementationPublication{
 				CommitID: response.CommitID, PullRequestNumber: response.PullRequestNumber,
+			}, nil, nil
+	case worker.OutputContractImplementationReview:
+		response, err := decodeImplementationReviewResponse(raw)
+		if err != nil {
+			return nil, "", nil, nil, err
+		}
+		session.mu.Lock()
+		session.lastAgentMessage = response.Summary
+		session.mu.Unlock()
+		if response.Action == "blocked" {
+			return event(worker.EventInputRequired, response.Summary),
+				worker.DispositionInputRequired, nil, nil, nil
+		}
+		disposition := worker.DispositionSucceeded
+		if response.Action == "changes_requested" {
+			disposition = worker.DispositionChangesRequested
+		}
+		return event(worker.EventMessage, response.Summary), disposition, nil,
+			&worker.ReviewPublication{
+				CommitID: response.CommitID, PullRequestNumber: response.PullRequestNumber,
+				ReviewID: response.ReviewID,
 			}, nil
 	default:
-		return nil, "", nil, fmt.Errorf(
+		return nil, "", nil, nil, fmt.Errorf(
 			"%w: unsupported structured output contract %q", ErrProtocol, session.outputContract,
 		)
 	}

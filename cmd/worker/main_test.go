@@ -110,6 +110,7 @@ func TestLoadConfigBuildsCodexRuntimeSettings(t *testing.T) {
 	}
 	if loaded.adapter != "codex" ||
 		loaded.codex.profileID != "profile_test" ||
+		loaded.codex.forgejoRole != worker.RoleLead ||
 		loaded.codex.sandbox != "danger-full-access" {
 		t.Fatalf("Codex worker config = %+v", loaded)
 	}
@@ -125,6 +126,11 @@ func TestLoadConfigRejectsIncompleteCodexConfiguration(t *testing.T) {
 	values["COMMITARIUM_CODEX_SANDBOX"] = "host-write"
 	if _, err := loadConfig(func(name string) string { return values[name] }); err == nil {
 		t.Fatal("expected unsupported Codex sandbox to fail")
+	}
+	values = validCodexConfig(t.TempDir())
+	values["COMMITARIUM_CODEX_FORGEJO_ROLE"] = "coder"
+	if _, err := loadConfig(func(name string) string { return values[name] }); err == nil {
+		t.Fatal("expected unsupported Codex Forgejo role to fail")
 	}
 }
 
@@ -148,7 +154,7 @@ func TestCodexRuntimeUsesPrivateProfileAndRealCapabilities(t *testing.T) {
 		AgentProfileID: "profile_test",
 		ProjectID:      "prj_test",
 		FeatureID:      "fea_test",
-		Role:           workerhttp.RoleReviewer,
+		Role:           workerhttp.RoleLead,
 		WorkspaceID:    "workspace_test",
 	}
 	resolved, err := workerRuntime.environmentResolver.Resolve(t.Context(), assignment)
@@ -165,21 +171,21 @@ func TestCodexRuntimeUsesPrivateProfileAndRealCapabilities(t *testing.T) {
 	) {
 		t.Fatalf("Codex launch environment = %+v", resolved)
 	}
-	for _, variable := range resolved.Variables {
+	if !slices.Contains(resolved.Variables, "COMMITARIUM_FORGEJO_LOGIN=codex-lead") ||
+		!slices.Contains(resolved.Variables, "GIT_AUTHOR_NAME=Commitarium Codex Lead") ||
+		!slices.Contains(resolved.Variables, "GIT_CONFIG_VALUE_0=Authorization: token codex-forgejo-test-token") {
+		t.Fatalf("lead launch environment omitted its scoped Forgejo identity: %+v", resolved)
+	}
+	assignment.Role = workerhttp.RoleReviewer
+	reviewerEnvironment, err := workerRuntime.environmentResolver.Resolve(t.Context(), assignment)
+	if err != nil {
+		t.Fatalf("resolve reviewer assignment through lead worker: %v", err)
+	}
+	for _, variable := range reviewerEnvironment.Variables {
 		if strings.HasPrefix(variable, "COMMITARIUM_FORGEJO_") ||
 			strings.Contains(variable, "Authorization: token") {
-			t.Fatalf("reviewer received lead Forgejo credential variable %q", variable)
+			t.Fatalf("wrong-role assignment received lead credential variable %q", variable)
 		}
-	}
-	assignment.Role = workerhttp.RoleLead
-	leadEnvironment, err := workerRuntime.environmentResolver.Resolve(t.Context(), assignment)
-	if err != nil {
-		t.Fatalf("resolve lead launch environment: %v", err)
-	}
-	if !slices.Contains(leadEnvironment.Variables, "COMMITARIUM_FORGEJO_LOGIN=codex-lead") ||
-		!slices.Contains(leadEnvironment.Variables, "GIT_AUTHOR_NAME=Commitarium Codex Lead") ||
-		!slices.Contains(leadEnvironment.Variables, "GIT_CONFIG_VALUE_0=Authorization: token codex-forgejo-test-token") {
-		t.Fatalf("lead launch environment omitted its scoped Forgejo identity: %+v", leadEnvironment)
 	}
 	if !slices.Contains(workerRuntime.capabilities, workerhttp.CapabilityForceStop) ||
 		slices.Contains(workerRuntime.capabilities, workerhttp.CapabilityPause) ||
@@ -251,6 +257,7 @@ func validCodexConfig(workspace string) map[string]string {
 		"COMMITARIUM_CODEX_FORGEJO_URL":         "http://forgejo:3000",
 		"COMMITARIUM_CODEX_FORGEJO_TOKEN_FILE":  tokenFile,
 		"COMMITARIUM_CODEX_FORGEJO_LOGIN":       "codex-lead",
+		"COMMITARIUM_CODEX_FORGEJO_ROLE":        "lead",
 		"COMMITARIUM_CODEX_GIT_AUTHOR_NAME":     "Commitarium Codex Lead",
 		"COMMITARIUM_CODEX_GIT_AUTHOR_EMAIL":    "codex-lead@commitarium.local",
 	}

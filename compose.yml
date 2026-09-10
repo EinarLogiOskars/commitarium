@@ -16,8 +16,12 @@ services:
       COMMITARIUM_CODEX_WORKER_URL: http://codex-worker:8081
       COMMITARIUM_CODEX_WORKER_TOKEN: ${COMMITARIUM_CODEX_WORKER_TOKEN:-commitarium-local-codex-worker}
       COMMITARIUM_CODEX_PROFILE_ID: ${COMMITARIUM_CODEX_PROFILE_ID:-profile_local_codex}
+      COMMITARIUM_CODEX_REVIEWER_WORKER_URL: http://codex-reviewer-worker:8081
+      COMMITARIUM_CODEX_REVIEWER_WORKER_TOKEN: ${COMMITARIUM_CODEX_REVIEWER_WORKER_TOKEN:-commitarium-local-codex-reviewer-worker}
+      COMMITARIUM_CODEX_REVIEWER_PROFILE_ID: ${COMMITARIUM_CODEX_REVIEWER_PROFILE_ID:-profile_local_codex_reviewer}
       COMMITARIUM_CODEX_WORKSPACE_ID: ${COMMITARIUM_CODEX_WORKSPACE_ID:-workspace_smoke}
       COMMITARIUM_CODEX_FORGEJO_LOGIN: ${COMMITARIUM_CODEX_FORGEJO_LOGIN:-codex-lead}
+      COMMITARIUM_CODEX_REVIEWER_FORGEJO_LOGIN: ${COMMITARIUM_CODEX_REVIEWER_FORGEJO_LOGIN:-codex-reviewer}
     volumes:
       - coordinator-data:/var/lib/commitarium
       - ${COMMITARIUM_FORGEJO_TOKEN_SOURCE:-./.commitarium/forgejo-token}:/run/commitarium-config/forgejo-token:ro
@@ -58,6 +62,7 @@ services:
       COMMITARIUM_CODEX_FORGEJO_URL: http://forgejo:3000
       COMMITARIUM_CODEX_FORGEJO_TOKEN_FILE: /run/commitarium-agent/forgejo-token
       COMMITARIUM_CODEX_FORGEJO_LOGIN: ${COMMITARIUM_CODEX_FORGEJO_LOGIN:-codex-lead}
+      COMMITARIUM_CODEX_FORGEJO_ROLE: lead
       COMMITARIUM_CODEX_GIT_AUTHOR_NAME: ${COMMITARIUM_CODEX_GIT_AUTHOR_NAME:-Commitarium Codex Lead}
       COMMITARIUM_CODEX_GIT_AUTHOR_EMAIL: ${COMMITARIUM_CODEX_GIT_AUTHOR_EMAIL:-codex-lead@commitarium.local}
       # Docker is the security boundary. Codex's nested Linux sandbox cannot
@@ -67,6 +72,40 @@ services:
       - codex-worker-journal:/var/lib/commitarium-worker
       - codex-profile:/var/lib/commitarium-provider
       - ${COMMITARIUM_CODEX_FORGEJO_TOKEN_SOURCE:-./.commitarium/agents/codex-lead/forgejo-token}:/run/commitarium-agent/forgejo-token:ro
+      - ${COMMITARIUM_WORKSPACE_SOURCE:-./.commitarium/workspaces}:/workspaces
+      - ${COMMITARIUM_CODEX_WORKSPACE_SOURCE:-.}:/workspaces/${COMMITARIUM_CODEX_WORKSPACE_ID:-workspace_smoke}:ro
+    expose:
+      - "8081"
+
+  codex-reviewer-worker:
+    profiles: ["real-codex"]
+    build:
+      context: .
+      dockerfile: docker/codex-worker.Dockerfile
+      args:
+        CODEX_VERSION: ${COMMITARIUM_CODEX_VERSION:-0.153.4}
+    environment:
+      COMMITARIUM_WORKER_ADAPTER: codex
+      COMMITARIUM_WORKER_DATABASE_PATH: /var/lib/commitarium-worker/worker.db
+      COMMITARIUM_WORKER_LISTEN_ADDRESS: :8081
+      COMMITARIUM_WORKER_TOKEN: ${COMMITARIUM_CODEX_REVIEWER_WORKER_TOKEN:-commitarium-local-codex-reviewer-worker}
+      COMMITARIUM_CODEX_PROVIDER_STATE_PATH: /var/lib/commitarium-provider
+      COMMITARIUM_CODEX_WORKSPACE_ROOT: /workspaces
+      COMMITARIUM_CODEX_PROFILE_ID: ${COMMITARIUM_CODEX_REVIEWER_PROFILE_ID:-profile_local_codex_reviewer}
+      COMMITARIUM_CODEX_MODEL: ${COMMITARIUM_CODEX_REVIEWER_MODEL:-}
+      COMMITARIUM_CODEX_FORGEJO_URL: http://forgejo:3000
+      COMMITARIUM_CODEX_FORGEJO_TOKEN_FILE: /run/commitarium-agent/forgejo-token
+      COMMITARIUM_CODEX_FORGEJO_LOGIN: ${COMMITARIUM_CODEX_REVIEWER_FORGEJO_LOGIN:-codex-reviewer}
+      COMMITARIUM_CODEX_FORGEJO_ROLE: reviewer
+      COMMITARIUM_CODEX_GIT_AUTHOR_NAME: ${COMMITARIUM_CODEX_REVIEWER_GIT_AUTHOR_NAME:-Commitarium Codex Reviewer}
+      COMMITARIUM_CODEX_GIT_AUTHOR_EMAIL: ${COMMITARIUM_CODEX_REVIEWER_GIT_AUTHOR_EMAIL:-codex-reviewer@commitarium.local}
+      # Docker and the internal Forgejo repository are the security boundary.
+      # Ordinary review-turn instructions still forbid Git writes.
+      COMMITARIUM_CODEX_SANDBOX: danger-full-access
+    volumes:
+      - codex-reviewer-worker-journal:/var/lib/commitarium-worker
+      - codex-reviewer-profile:/var/lib/commitarium-provider
+      - ${COMMITARIUM_CODEX_REVIEWER_FORGEJO_TOKEN_SOURCE:-./.commitarium/agents/codex-reviewer/forgejo-token}:/run/commitarium-agent/forgejo-token:ro
       - ${COMMITARIUM_WORKSPACE_SOURCE:-./.commitarium/workspaces}:/workspaces
       - ${COMMITARIUM_CODEX_WORKSPACE_SOURCE:-.}:/workspaces/${COMMITARIUM_CODEX_WORKSPACE_ID:-workspace_smoke}:ro
     expose:
@@ -91,3 +130,5 @@ volumes:
   simulated-codex-worker-journal:
   codex-worker-journal:
   codex-profile:
+  codex-reviewer-worker-journal:
+  codex-reviewer-profile:

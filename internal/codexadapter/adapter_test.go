@@ -155,6 +155,45 @@ func TestAdapterReturnsStructuredImplementationBlocker(t *testing.T) {
 	}
 }
 
+func TestAdapterReturnsStructuredImplementationReview(t *testing.T) {
+	adapter := testAdapter(t, "structured-review", "Review the exact implementation commit")
+	request := adapter.request("att_codex_review", "Review the exact implementation commit")
+	request.Role = worker.RoleReviewer
+	request.LaunchEnvironment.Role = worker.RoleReviewer
+	request.OutputContract = worker.OutputContractImplementationReview
+	session, err := adapter.Start(t.Context(), request)
+	if err != nil {
+		t.Fatalf("start structured review turn: %v", err)
+	}
+	events := collectEvents(session)
+	result, err := session.Wait(timeoutContext(t, 3*time.Second))
+	if err != nil || result.Summary != "The implementation misses the documented failure case." ||
+		result.Disposition != worker.DispositionChangesRequested || result.Review == nil ||
+		result.Review.CommitID != "0123456789abcdef0123456789abcdef01234567" ||
+		result.Review.PullRequestNumber != 7 || result.Review.ReviewID != 11 {
+		t.Fatalf("structured review result=%+v error=%v", result, err)
+	}
+	if observed := <-events; !equalEvents(observed, []worker.Event{
+		{Type: worker.EventActivity, Text: "Codex started working."},
+		{Type: worker.EventMessage, Text: "The implementation misses the documented failure case."},
+	}) {
+		t.Fatalf("structured review events = %+v", observed)
+	}
+}
+
+func TestImplementationReviewResponseFailsClosed(t *testing.T) {
+	for _, response := range []string{
+		`{"action":"approved","summary":"good","commit_id":"bad","pull_request_number":7,"review_id":11}`,
+		`{"action":"blocked","summary":"blocked","commit_id":"0123456789abcdef0123456789abcdef01234567","pull_request_number":7,"review_id":0}`,
+		`{"action":"changes_requested","summary":" ","commit_id":"0123456789abcdef0123456789abcdef01234567","pull_request_number":7,"review_id":11}`,
+		`{"action":"approved","summary":"good","commit_id":"0123456789abcdef0123456789abcdef01234567","pull_request_number":7,"review_id":11,"extra":true}`,
+	} {
+		if _, err := decodeImplementationReviewResponse(response); !errors.Is(err, ErrProtocol) {
+			t.Errorf("response %q error=%v, want ErrProtocol", response, err)
+		}
+	}
+}
+
 func TestPlanningLeadResponseFailsClosed(t *testing.T) {
 	for _, response := range []string{
 		`{"action":"unknown","content":"plan"}`,
@@ -422,6 +461,9 @@ func TestCodexAppServerHelper(t *testing.T) {
 		helperTurnHasImplementationSchema(turnRequest.Params) {
 		os.Exit(94)
 	}
+	if (mode == "structured-review") != helperTurnHasReviewSchema(turnRequest.Params) {
+		os.Exit(95)
+	}
 	if mode == "turn-start-error" {
 		helperWrite(writer, map[string]any{
 			"id":    turnRequest.ID,
@@ -472,6 +514,16 @@ func TestCodexAppServerHelper(t *testing.T) {
 			"threadId": "thr_test", "turnId": "turn_test",
 			"item": map[string]any{
 				"id": "item_message", "type": "agentMessage", "text": text,
+			},
+		})
+		helpWriteTurnCompleted(writer, "completed")
+		helperWaitForever()
+	case "structured-review":
+		helpNotify(writer, "item/completed", map[string]any{
+			"threadId": "thr_test", "turnId": "turn_test",
+			"item": map[string]any{
+				"id": "item_message", "type": "agentMessage",
+				"text": `{"action":"changes_requested","summary":"The implementation misses the documented failure case.","commit_id":"0123456789abcdef0123456789abcdef01234567","pull_request_number":7,"review_id":11}`,
 			},
 		})
 		helpWriteTurnCompleted(writer, "completed")
@@ -573,6 +625,18 @@ func helperTurnHasImplementationSchema(raw json.RawMessage) bool {
 	return json.Unmarshal(raw, &params) == nil && slices.Equal(
 		params.OutputSchema.Required,
 		[]string{"action", "summary", "commit_id", "pull_request_number"},
+	)
+}
+
+func helperTurnHasReviewSchema(raw json.RawMessage) bool {
+	var params struct {
+		OutputSchema struct {
+			Required []string `json:"required"`
+		} `json:"outputSchema"`
+	}
+	return json.Unmarshal(raw, &params) == nil && slices.Equal(
+		params.OutputSchema.Required,
+		[]string{"action", "summary", "commit_id", "pull_request_number", "review_id"},
 	)
 }
 

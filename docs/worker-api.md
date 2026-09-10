@@ -8,8 +8,10 @@ This boundary is implemented and tested as a Go HTTP server and coordinator
 client. A journal-backed service connects the server to SQLite and a provider
 adapter. A standalone simulated Codex worker runs that stack as the default
 Compose service. An opt-in real Codex worker packages the same boundary with
-the Codex App Server adapter and process supervisor. The coordinator runtime is
-not connected to either standalone service yet.
+the Codex App Server adapter and process supervisor. In opt-in
+`real_codex_lead` mode, the coordinator routes lead and reviewer assignments to
+separate instances of that real worker, each with its own profile, journal,
+worker token, and Forgejo identity.
 
 ## Session and attempt identity
 
@@ -59,13 +61,23 @@ The stream route is available only when the worker advertises the
 route is not needed by the current protocol because reconnecting to the stream
 performs the durable replay before following live activity.
 
-An attempt request may set `"output_contract":"planning_lead"`. This
-provider-neutral contract requires the lead's final result to choose between a
-normal planning response and submission of the complete agreed plan. A worker
-adapter must enforce that structure using its provider's supported mechanism;
-it must publish only the contained Markdown as either `message` or
-`plan_submitted`. Unknown output contracts are rejected. Omitting the field
-preserves ordinary conversational output.
+An attempt request may select one of three provider-neutral structured-output
+contracts:
+
+- `planning_lead` makes the lead return either a normal planning message or the
+  complete agreed plan as `plan_submitted`.
+- `implementation_lead` makes the lead return either a blocker or the exact
+  commit and pull-request identities it published.
+- `implementation_reviewer` makes the reviewer return either a blocker or the
+  exact commit, pull request, formal review ID, and approval/changes-requested
+  decision it published.
+
+The provider adapter enforces these shapes using the provider's structured
+output mechanism; the coordinator does not infer actions by matching words in
+agent prose. A review or implementation publication is valid only for the
+matching output contract and terminal disposition. Unknown contracts and
+contradictory result fields are rejected. Omitting the field preserves ordinary
+conversational output.
 
 ## Live activity stream
 

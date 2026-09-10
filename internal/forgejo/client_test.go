@@ -513,6 +513,74 @@ func TestClientRejectsImplementationAuditFromWrongAgent(t *testing.T) {
 	}
 }
 
+func TestClientVerifiesExactFormalReview(t *testing.T) {
+	implementation := testImplementationPublicationSpec()
+	spec := workspace.ReviewPublicationSpec{
+		Number: implementation.Number, ReviewID: 11,
+		FeatureMarker:         implementation.FeatureMarker,
+		PlanPublicationMarker: implementation.PlanPublicationMarker,
+		Plan:                  implementation.Plan,
+		PublicationMarker:     "<!-- commitarium-review: stable-attempt -->",
+		Summary:               "The implementation misses one required failure case.",
+		ExpectedAuthor:        "codex-reviewer", ExpectedState: "REQUEST_CHANGES",
+		BaseBranch: implementation.BaseBranch, HeadBranch: implementation.HeadBranch,
+		HeadCommitID: implementation.HeadCommitID,
+	}
+	stored := managedPullRequest(testPullRequestSpec())
+	stored.HeadCommitID = spec.HeadCommitID
+	stored.Body += "\n\n" + spec.PlanPublicationMarker +
+		"\n\n## Agreed implementation plan\n\n" + spec.Plan
+	calls := 0
+	client := newBranchTestClient(t, func(request *http.Request) (*http.Response, error) {
+		calls++
+		switch calls {
+		case 1:
+			return pullRequestJSONResponse(t, http.StatusOK, stored), nil
+		case 2:
+			if request.Method != http.MethodGet ||
+				request.URL.Path != "/api/v1/repos/owner/repository/pulls/7/reviews/11" {
+				t.Fatalf("unexpected review lookup %s %s", request.Method, request.URL)
+			}
+			body := spec.PublicationMarker + "\n\n## Review\n\n" + spec.Summary
+			return jsonResponse(http.StatusOK, `{"id":11,"body":`+strconv.Quote(body)+
+				`,"commit_id":"`+spec.HeadCommitID+`","state":"REQUEST_CHANGES","stale":false,"user":{"login":"codex-reviewer"}}`), nil
+		default:
+			t.Fatalf("unexpected request %d", calls)
+			return nil, nil
+		}
+	})
+	got, err := client.VerifyPullRequestReview(t.Context(), "owner", "repository", spec)
+	if err != nil || calls != 2 || got.HeadCommitID != spec.HeadCommitID {
+		t.Fatalf("verify review: pull_request=%+v calls=%d err=%v", got, calls, err)
+	}
+}
+
+func TestClientRejectsReviewForDifferentCommit(t *testing.T) {
+	implementation := testImplementationPublicationSpec()
+	spec := workspace.ReviewPublicationSpec{
+		Number: 7, ReviewID: 11, FeatureMarker: implementation.FeatureMarker,
+		PlanPublicationMarker: implementation.PlanPublicationMarker, Plan: implementation.Plan,
+		PublicationMarker: "<!-- commitarium-review: stable-attempt -->", Summary: "Approved.",
+		ExpectedAuthor: "codex-reviewer", ExpectedState: "APPROVED",
+		BaseBranch: implementation.BaseBranch, HeadBranch: implementation.HeadBranch,
+		HeadCommitID: implementation.HeadCommitID,
+	}
+	stored := managedPullRequest(testPullRequestSpec())
+	stored.HeadCommitID = spec.HeadCommitID
+	stored.Body += "\n\n" + spec.PlanPublicationMarker + "\n\n## Agreed implementation plan\n\n" + spec.Plan
+	client := newBranchTestClient(t, func(request *http.Request) (*http.Response, error) {
+		if request.URL.Path == "/api/v1/repos/owner/repository/pulls/7" {
+			return pullRequestJSONResponse(t, http.StatusOK, stored), nil
+		}
+		body := spec.PublicationMarker + "\n\n## Review\n\n" + spec.Summary
+		return jsonResponse(http.StatusOK, `{"id":11,"body":`+strconv.Quote(body)+
+			`,"commit_id":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","state":"APPROVED","stale":false,"user":{"login":"codex-reviewer"}}`), nil
+	})
+	if _, err := client.VerifyPullRequestReview(t.Context(), "owner", "repository", spec); !errors.Is(err, workspace.ErrPullRequestConflict) {
+		t.Fatalf("expected %v, got %v", workspace.ErrPullRequestConflict, err)
+	}
+}
+
 func TestClientReconcilesPlanAfterUncertainUpdateResponse(t *testing.T) {
 	spec := testPlanPublicationSpec()
 	remote := managedPullRequest(testPullRequestSpec())
