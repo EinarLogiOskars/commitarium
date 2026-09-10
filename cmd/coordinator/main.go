@@ -173,6 +173,7 @@ func run(ctx context.Context, coordinatorConfig config) error {
 	featureStore := coordinatordatabase.NewFeatureStore(db)
 	featureService := feature.NewService(featureStore, projectService)
 	workspaceStore := coordinatordatabase.NewWorkspaceStore(db)
+	publicationStore := coordinatordatabase.NewWorkspacePublicationStore(db)
 	checkoutManager, err := gitworkspace.NewManager(gitworkspace.Config{
 		Root:            coordinatorConfig.workspaceRoot,
 		InternalBaseURL: coordinatorConfig.forgejoURL,
@@ -183,9 +184,9 @@ func run(ctx context.Context, coordinatorConfig config) error {
 	if err != nil {
 		return fmt.Errorf("create managed-checkout service: %w", err)
 	}
-	workspaceService := workspace.NewServiceWithPreparation(
+	workspaceService := workspace.NewServiceWithPublication(
 		workspaceStore, featureService, projectService, forgejoClient,
-		checkoutManager, forgejoClient,
+		checkoutManager, forgejoClient, publicationStore, checkoutManager,
 	)
 	workflowStore := coordinatordatabase.NewWorkflowStore(db)
 	workflowService := workflow.NewService(workflowStore)

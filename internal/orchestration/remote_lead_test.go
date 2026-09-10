@@ -130,15 +130,33 @@ func (unavailableRemoteLeadWorker) GetAttempt(
 type unexpectedRemoteLeadPump struct{ called bool }
 
 type remoteLeadWorkspaceStub struct {
-	prepared                workspace.Workspace
-	prepareCalls            int
-	publishCalls            int
-	verifyCalls             int
-	continuationVerifyCalls int
-	publishedEventID        string
-	publishedPlan           string
-	publishErr              error
-	verifyErr               error
+	prepared                    workspace.Workspace
+	prepareCalls                int
+	publishCalls                int
+	verifyCalls                 int
+	continuationVerifyCalls     int
+	publishedEventID            string
+	publishedPlan               string
+	publishErr                  error
+	verifyErr                   error
+	implementationPublication   workspace.Publication
+	implementationPublishCalls  int
+	implementationCommitMessage string
+}
+
+func (stub *remoteLeadWorkspaceStub) PublishImplementation(
+	_ context.Context,
+	_ string,
+	_ string,
+	_ string,
+	_ string,
+	_ string,
+	_ string,
+	commitMessage string,
+) (workspace.Publication, bool, error) {
+	stub.implementationPublishCalls++
+	stub.implementationCommitMessage = commitMessage
+	return stub.implementationPublication, stub.implementationPublishCalls == 1, stub.publishErr
 }
 
 func (stub *remoteLeadWorkspaceStub) VerifyPublishedPlan(
@@ -1150,6 +1168,46 @@ func TestRemoteLeadStartsPlanningInManagedWorkspace(t *testing.T) {
 	}
 	if !foundRecovery {
 		t.Fatalf("implementation recovery assessment was not recorded: %+v", recoveredEvents)
+	}
+	publicationTime := time.Date(2026, time.September, 10, 12, 0, 0, 0, time.UTC)
+	publicationCompletedAt := publicationTime.Add(time.Second)
+	workspaceStub.implementationPublication = workspace.Publication{
+		ID: "pub_remote_implementation", RunID: runID,
+		WorkspaceID: workspaceStub.prepared.ID, IdempotencyKey: "commit-implementation-1",
+		CommitMessage:        "feat: publish implementation",
+		RemoteCommitIDBefore: workspaceStub.prepared.BaseCommitID,
+		LocalCommitIDBefore:  workspaceStub.prepared.BaseCommitID,
+		CommitID:             "abcdefabcdefabcdefabcdefabcdefabcdefabcd",
+		Status:               workspace.PublicationStatusCompleted, CreatedAt: publicationTime,
+		CompletedAt: &publicationCompletedAt,
+	}
+	publishedRevision, created, err := restarted.PublishImplementation(
+		t.Context(), runID, "commit-implementation-1", "feat: publish implementation",
+	)
+	if err != nil || !created || publishedRevision.ID != workspaceStub.implementationPublication.ID {
+		t.Fatalf("publish implementation: created=%t publication=%+v err=%v", created, publishedRevision, err)
+	}
+	if workspaceStub.implementationPublishCalls != 1 ||
+		workspaceStub.implementationCommitMessage != "feat: publish implementation" {
+		t.Fatalf("unexpected implementation publication call: %+v", workspaceStub)
+	}
+	if _, created, err := restarted.PublishImplementation(
+		t.Context(), runID, "commit-implementation-1", "feat: publish implementation",
+	); err != nil || created {
+		t.Fatalf("replay implementation publication: created=%t err=%v", created, err)
+	}
+	recoveredEvents, err = executions.EventsForSession(t.Context(), lead.ID)
+	if err != nil {
+		t.Fatalf("list published implementation activity: %v", err)
+	}
+	publicationEvents := 0
+	for _, event := range recoveredEvents {
+		if event.ID == workspaceStub.implementationPublication.ID+":activity" {
+			publicationEvents++
+		}
+	}
+	if publicationEvents != 1 {
+		t.Fatalf("implementation publication activity count = %d, want 1", publicationEvents)
 	}
 }
 

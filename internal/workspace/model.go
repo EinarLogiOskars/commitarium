@@ -258,6 +258,107 @@ type CheckoutSpec struct {
 	RequireCleanBaseline bool
 }
 
+type PublicationStatus string
+
+const MaxCommitMessageBytes = 200
+
+const (
+	PublicationStatusPrepared  PublicationStatus = "prepared"
+	PublicationStatusCompleted PublicationStatus = "completed"
+)
+
+// Publication is the durable receipt for one explicit coordinator-owned
+// commit and push. Keeping both the old local and remote revisions makes a
+// retry able to adopt its own completed side effects without force-pushing.
+type Publication struct {
+	ID                   string
+	RunID                string
+	WorkspaceID          string
+	IdempotencyKey       string
+	CommitMessage        string
+	RemoteCommitIDBefore string
+	LocalCommitIDBefore  string
+	CommitID             string
+	Status               PublicationStatus
+	CreatedAt            time.Time
+	CompletedAt          *time.Time
+}
+
+func (publication Publication) Validate() error {
+	required := []string{
+		publication.ID, publication.RunID, publication.WorkspaceID,
+		publication.IdempotencyKey, publication.CommitMessage,
+	}
+	for _, value := range required {
+		if strings.TrimSpace(value) == "" || strings.TrimSpace(value) != value {
+			return errors.New("publication identity and commit message are required and must be trimmed")
+		}
+	}
+	if len(publication.CommitMessage) > MaxCommitMessageBytes ||
+		strings.ContainsAny(publication.CommitMessage, "\r\n") {
+		return errors.New("publication commit message must be one line of at most 200 bytes")
+	}
+	for _, commitID := range []string{
+		publication.RemoteCommitIDBefore, publication.LocalCommitIDBefore,
+		publication.CommitID,
+	} {
+		if !safeCommitID.MatchString(commitID) {
+			return errors.New("publication revisions must be lowercase commit IDs")
+		}
+	}
+	if publication.CreatedAt.IsZero() {
+		return errors.New("publication creation time is required")
+	}
+	switch publication.Status {
+	case PublicationStatusPrepared:
+		if publication.CompletedAt != nil {
+			return errors.New("prepared publication cannot have a completion time")
+		}
+	case PublicationStatusCompleted:
+		if publication.CompletedAt == nil || publication.CompletedAt.IsZero() ||
+			publication.CompletedAt.Before(publication.CreatedAt) {
+			return errors.New("completed publication requires a valid completion time")
+		}
+	default:
+		return errors.New("publication status is not recognized")
+	}
+	return nil
+}
+
+type CommitSnapshot struct {
+	LocalCommitIDBefore string
+	CommitID            string
+}
+
+type RevisionPublicationSpec struct {
+	Number            int64
+	FeatureMarker     string
+	PublicationMarker string
+	CommitID          string
+	CommitMessage     string
+	BaseBranch        string
+	HeadBranch        string
+}
+
+func (spec RevisionPublicationSpec) Validate() error {
+	if spec.Number < 1 || !safeCommitID.MatchString(spec.CommitID) {
+		return errors.New("revision publication requires a pull request and commit ID")
+	}
+	if len(spec.CommitMessage) > MaxCommitMessageBytes ||
+		strings.ContainsAny(spec.CommitMessage, "\r\n") {
+		return errors.New("revision commit message must be one line of at most 200 bytes")
+	}
+	for _, value := range []string{
+		spec.FeatureMarker, spec.PublicationMarker, spec.CommitMessage,
+		spec.BaseBranch, spec.HeadBranch,
+	} {
+		if strings.TrimSpace(value) == "" || strings.TrimSpace(value) != value {
+			return errors.New("revision publication fields are required and must be trimmed")
+		}
+	}
+	return nil
+}
+
 func (spec CheckoutSpec) Validate() error {
 	if strings.TrimSpace(spec.WorkspaceID) == "" || spec.WorkspaceID != strings.TrimSpace(spec.WorkspaceID) {
 		return errors.New("workspace ID is required and must be trimmed")

@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/EinarLogiOskars/commitarium/internal/workspace"
 )
@@ -148,6 +149,90 @@ func TestManagerPassesCredentialOutsideGitArguments(t *testing.T) {
 	}
 	if !containsEnvironment(call.environment, "GIT_CONFIG_VALUE_0=Authorization: token secret-token") {
 		t.Fatalf("clone did not receive the ephemeral credential header")
+	}
+}
+
+func TestManagerPreparesAndAppliesExactPublicationCommit(t *testing.T) {
+	manager, root := newTestManager(t, nil)
+	spec := initializeCheckout(t, root)
+	if err := manager.Ensure(t.Context(), spec); err != nil {
+		t.Fatalf("ensure checkout: %v", err)
+	}
+	target := filepath.Join(root, spec.WorkspaceID)
+	if err := os.WriteFile(filepath.Join(target, "implemented.txt"), []byte("done\n"), 0o644); err != nil {
+		t.Fatalf("write implementation: %v", err)
+	}
+	spec.AlreadyReady = true
+	committedAt := time.Date(2026, time.September, 10, 12, 0, 0, 0, time.UTC)
+	snapshot, err := manager.PreparePublication(
+		t.Context(), spec, "feat: publish implementation", committedAt,
+	)
+	if err != nil {
+		t.Fatalf("prepare publication: %v", err)
+	}
+	if head := testGit(t, target, "rev-parse", "HEAD"); head != snapshot.LocalCommitIDBefore {
+		t.Fatalf("preparation moved HEAD to %q", head)
+	}
+	if err := manager.ApplyPublication(t.Context(), spec, snapshot); err != nil {
+		t.Fatalf("apply publication: %v", err)
+	}
+	if head := testGit(t, target, "rev-parse", "HEAD"); head != snapshot.CommitID {
+		t.Fatalf("expected exact publication head %q, got %q", snapshot.CommitID, head)
+	}
+	if status := testGit(t, target, "status", "--porcelain=v1", "--untracked-files=all"); status != "" {
+		t.Fatalf("publication left dirty checkout: %q", status)
+	}
+	if author := testGit(t, target, "show", "-s", "--format=%an <%ae>", snapshot.CommitID); author != "Commitarium <commitarium@local>" {
+		t.Fatalf("unexpected publication author %q", author)
+	}
+}
+
+func TestManagerRecoversAfterBranchMovedBeforeIndexUpdate(t *testing.T) {
+	manager, root := newTestManager(t, nil)
+	spec := initializeCheckout(t, root)
+	if err := manager.Ensure(t.Context(), spec); err != nil {
+		t.Fatalf("ensure checkout: %v", err)
+	}
+	target := filepath.Join(root, spec.WorkspaceID)
+	if err := os.WriteFile(filepath.Join(target, "implemented.txt"), []byte("done\n"), 0o644); err != nil {
+		t.Fatalf("write implementation: %v", err)
+	}
+	spec.AlreadyReady = true
+	snapshot, err := manager.PreparePublication(
+		t.Context(), spec, "feat: publish implementation", time.Now().UTC(),
+	)
+	if err != nil {
+		t.Fatalf("prepare publication: %v", err)
+	}
+	testGit(t, target, "update-ref", "refs/heads/"+spec.Branch, snapshot.CommitID, snapshot.LocalCommitIDBefore)
+	if err := manager.ApplyPublication(t.Context(), spec, snapshot); err != nil {
+		t.Fatalf("recover publication: %v", err)
+	}
+	if status := testGit(t, target, "status", "--porcelain=v1", "--untracked-files=all"); status != "" {
+		t.Fatalf("recovery left dirty checkout: %q", status)
+	}
+}
+
+func TestManagerPushUsesOnlyEphemeralForgejoCredential(t *testing.T) {
+	runner := &recordingRunner{}
+	manager, _ := newTestManager(t, runner)
+	err := manager.PushPublication(t.Context(), workspace.CheckoutSpec{
+		WorkspaceID: "wsp_fea_test", RepositoryOwner: "owner",
+		RepositoryName: "repository", Branch: "commitarium/fea_test",
+		BaseCommitID: "0123456789abcdef0123456789abcdef01234567",
+	}, "abcdefabcdefabcdefabcdefabcdefabcdefabcd")
+	if err != nil {
+		t.Fatalf("push publication: %v", err)
+	}
+	if len(runner.calls) != 1 {
+		t.Fatalf("expected one push, got %+v", runner.calls)
+	}
+	call := runner.calls[0]
+	if strings.Contains(strings.Join(call.arguments, " "), "secret-token") {
+		t.Fatal("push arguments exposed the token")
+	}
+	if !containsEnvironment(call.environment, "GIT_CONFIG_VALUE_0=Authorization: token secret-token") {
+		t.Fatal("push did not receive the ephemeral credential header")
 	}
 }
 
