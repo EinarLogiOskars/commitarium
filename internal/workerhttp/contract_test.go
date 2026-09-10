@@ -61,6 +61,12 @@ func TestPutAttemptRequestValidate(t *testing.T) {
 	if err := start.Validate(identity); err != nil {
 		t.Fatalf("validate start request: %v", err)
 	}
+	readiness := start
+	readiness.Assignment.Role = RoleLead
+	readiness.OutputContract = OutputContractImplementationReadiness
+	if err := readiness.Validate(identity); err != nil {
+		t.Fatalf("validate lead readiness request: %v", err)
+	}
 
 	resume := start
 	resume.Mode = AttemptModeResume
@@ -85,6 +91,12 @@ func TestPutAttemptRequestValidate(t *testing.T) {
 		{name: "planning output for reviewer", identity: identity, request: func() PutAttemptRequest {
 			invalid := start
 			invalid.OutputContract = OutputContractPlanningLead
+			invalid.Assignment.Role = RoleReviewer
+			return invalid
+		}()},
+		{name: "readiness output for reviewer", identity: identity, request: func() PutAttemptRequest {
+			invalid := start
+			invalid.OutputContract = OutputContractImplementationReadiness
 			invalid.Assignment.Role = RoleReviewer
 			return invalid
 		}()},

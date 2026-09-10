@@ -35,9 +35,10 @@ type SessionRequest struct {
 type OutputContract string
 
 const (
-	OutputContractPlanningLead         OutputContract = "planning_lead"
-	OutputContractImplementationLead   OutputContract = "implementation_lead"
-	OutputContractImplementationReview OutputContract = "implementation_reviewer"
+	OutputContractPlanningLead            OutputContract = "planning_lead"
+	OutputContractImplementationLead      OutputContract = "implementation_lead"
+	OutputContractImplementationReview    OutputContract = "implementation_reviewer"
+	OutputContractImplementationReadiness OutputContract = "implementation_lead_readiness"
 )
 
 // LaunchEnvironment is the worker-resolved view of the profile and workspace
@@ -220,10 +221,12 @@ func (request SessionRequest) Validate() error {
 	case request.OutputContract != "" &&
 		request.OutputContract != OutputContractPlanningLead &&
 		request.OutputContract != OutputContractImplementationLead &&
-		request.OutputContract != OutputContractImplementationReview:
+		request.OutputContract != OutputContractImplementationReview &&
+		request.OutputContract != OutputContractImplementationReadiness:
 		return fmt.Errorf("%w: output contract %q is not recognized", ErrInvalidSessionRequest, request.OutputContract)
 	case (request.OutputContract == OutputContractPlanningLead ||
-		request.OutputContract == OutputContractImplementationLead) && request.Role != RoleLead:
+		request.OutputContract == OutputContractImplementationLead ||
+		request.OutputContract == OutputContractImplementationReadiness) && request.Role != RoleLead:
 		return fmt.Errorf("%w: lead output contract requires the lead role", ErrInvalidSessionRequest)
 	case request.OutputContract == OutputContractImplementationReview && request.Role != RoleReviewer:
 		return fmt.Errorf("%w: reviewer output contract requires the reviewer role", ErrInvalidSessionRequest)

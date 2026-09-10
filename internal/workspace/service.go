@@ -336,64 +336,12 @@ func (service *Service) VerifyImplementationPublication(
 	if storedFeature.State != feature.StateImplementing && storedFeature.State != feature.StateReviewing {
 		return Workspace{}, ErrFeatureNotPlanning
 	}
-	storedProject, err := service.projects.GetByID(ctx, projectID)
-	if err != nil {
-		return Workspace{}, err
-	}
-	if storedProject.ForgejoRepository == nil {
-		return Workspace{}, ErrProjectRepositoryNotBound
-	}
-	stored, err := service.Get(ctx, projectID, featureID)
-	if err != nil {
-		return Workspace{}, err
-	}
-	repository := storedProject.ForgejoRepository
-	if stored.RepositoryOwner != repository.Owner ||
-		stored.RepositoryName != repository.Name ||
-		stored.BaseBranch != repository.DefaultBranch ||
-		!stored.CheckoutReady() || !stored.PullRequestReady() ||
-		service.checkouts == nil || service.pullRequests == nil ||
-		stored.PullRequestNumber != pullRequestNumber {
-		return Workspace{}, ErrConflict
-	}
-	branch, err := service.branches.GetBranch(
-		ctx, stored.RepositoryOwner, stored.RepositoryName, stored.Branch,
-	)
-	if err != nil {
-		return Workspace{}, fmt.Errorf("verify Forgejo feature branch: %w", err)
-	}
-	if branch.Name != stored.Branch || branch.CommitID != commitID {
-		return Workspace{}, ErrBranchConflict
-	}
-	if err := service.checkouts.Ensure(ctx, CheckoutSpec{
-		WorkspaceID: stored.ID, RepositoryOwner: stored.RepositoryOwner,
-		RepositoryName: stored.RepositoryName, Branch: stored.Branch,
-		BaseCommitID: stored.BaseCommitID, ExpectedHeadCommitID: commitID,
-		AlreadyReady: true, RequireClean: true,
-	}); err != nil {
-		return Workspace{}, fmt.Errorf("verify implemented checkout: %w", err)
-	}
-	planDigest := sha256.Sum256([]byte(planEventID))
-	pullRequest, err := service.pullRequests.VerifyPullRequestImplementation(
-		ctx, stored.RepositoryOwner, stored.RepositoryName,
-		ImplementationPublicationSpec{
-			Number:                stored.PullRequestNumber,
-			FeatureMarker:         "<!-- commitarium-feature: " + storedFeature.ID + " -->",
-			PlanPublicationMarker: "<!-- commitarium-plan: " + hex.EncodeToString(planDigest[:]) + " -->",
-			Plan:                  plan,
-			PublicationKind:       ImplementationPublicationInitial,
-			AttemptID:             attemptID,
-			Summary:               summary, ExpectedAuthor: expectedAuthor,
-			BaseBranch: stored.BaseBranch, HeadBranch: stored.Branch, HeadCommitID: commitID,
-		},
-	)
-	if err != nil {
-		return Workspace{}, fmt.Errorf("verify implementation pull request: %w", err)
-	}
-	if pullRequest.Number != stored.PullRequestNumber || pullRequest.URL != stored.PullRequestURL {
-		return Workspace{}, ErrPullRequestConflict
-	}
-	return stored, nil
+	return service.verifyImplementationAudit(ctx, storedFeature, implementationAuditVerification{
+		ProjectID: projectID, PlanEventID: planEventID, Plan: plan,
+		AttemptID: attemptID, Summary: summary, CommitID: commitID,
+		PullRequestNumber: pullRequestNumber, ExpectedAuthor: expectedAuthor,
+		PublicationKind: ImplementationPublicationInitial,
+	})
 }
 
 // VerifyImplementationReviewResponse confirms the lead answered a formal
@@ -430,14 +378,79 @@ func (service *Service) VerifyImplementationReviewResponse(
 	if storedFeature.State != feature.StateReviewing {
 		return Workspace{}, ErrFeatureNotReviewing
 	}
-	storedProject, err := service.projects.GetByID(ctx, projectID)
+	return service.verifyImplementationAudit(ctx, storedFeature, implementationAuditVerification{
+		ProjectID: projectID, PlanEventID: planEventID, Plan: plan,
+		AttemptID: attemptID, Summary: summary, CommitID: commitID,
+		PullRequestNumber: pullRequestNumber, ExpectedAuthor: expectedAuthor,
+		PublicationKind:      ImplementationPublicationReviewResponse,
+		CheckoutBaseCommitID: reviewedCommitID,
+	})
+}
+
+// VerifyImplementationMergeReadiness confirms the lead recorded its decision
+// about the reviewer's approval against the same clean commit. It does not
+// interpret the prose: the worker's structured disposition says whether this
+// comment is a green light or an unresolved concern.
+func (service *Service) VerifyImplementationMergeReadiness(
+	ctx context.Context,
+	projectID string,
+	featureID string,
+	planEventID string,
+	plan string,
+	attemptID string,
+	summary string,
+	commitID string,
+	pullRequestNumber int64,
+	expectedAuthor string,
+) (Workspace, error) {
+	for _, value := range []string{
+		planEventID, plan, attemptID, summary, commitID, expectedAuthor,
+	} {
+		if strings.TrimSpace(value) == "" || value != strings.TrimSpace(value) {
+			return Workspace{}, errors.New("merge-readiness identities are required and must be trimmed")
+		}
+	}
+	storedFeature, err := service.features.GetByID(ctx, projectID, featureID)
+	if err != nil {
+		return Workspace{}, err
+	}
+	if storedFeature.State != feature.StateReviewing {
+		return Workspace{}, ErrFeatureNotReviewing
+	}
+	return service.verifyImplementationAudit(ctx, storedFeature, implementationAuditVerification{
+		ProjectID: projectID, PlanEventID: planEventID, Plan: plan,
+		AttemptID: attemptID, Summary: summary, CommitID: commitID,
+		PullRequestNumber: pullRequestNumber, ExpectedAuthor: expectedAuthor,
+		PublicationKind: ImplementationPublicationMergeReadiness,
+	})
+}
+
+type implementationAuditVerification struct {
+	ProjectID            string
+	PlanEventID          string
+	Plan                 string
+	AttemptID            string
+	Summary              string
+	CommitID             string
+	PullRequestNumber    int64
+	ExpectedAuthor       string
+	PublicationKind      ImplementationPublicationKind
+	CheckoutBaseCommitID string
+}
+
+func (service *Service) verifyImplementationAudit(
+	ctx context.Context,
+	storedFeature feature.Feature,
+	verification implementationAuditVerification,
+) (Workspace, error) {
+	storedProject, err := service.projects.GetByID(ctx, verification.ProjectID)
 	if err != nil {
 		return Workspace{}, err
 	}
 	if storedProject.ForgejoRepository == nil {
 		return Workspace{}, ErrProjectRepositoryNotBound
 	}
-	stored, err := service.Get(ctx, projectID, featureID)
+	stored, err := service.Get(ctx, verification.ProjectID, storedFeature.ID)
 	if err != nil {
 		return Workspace{}, err
 	}
@@ -445,40 +458,44 @@ func (service *Service) VerifyImplementationReviewResponse(
 	if stored.RepositoryOwner != repository.Owner || stored.RepositoryName != repository.Name ||
 		stored.BaseBranch != repository.DefaultBranch || !stored.CheckoutReady() ||
 		!stored.PullRequestReady() || service.checkouts == nil || service.pullRequests == nil ||
-		stored.PullRequestNumber != pullRequestNumber {
+		stored.PullRequestNumber != verification.PullRequestNumber {
 		return Workspace{}, ErrConflict
 	}
 	branch, err := service.branches.GetBranch(ctx, stored.RepositoryOwner, stored.RepositoryName, stored.Branch)
 	if err != nil {
-		return Workspace{}, fmt.Errorf("verify corrected Forgejo branch: %w", err)
+		return Workspace{}, fmt.Errorf("verify Forgejo feature branch: %w", err)
 	}
-	if branch.Name != stored.Branch || branch.CommitID != commitID {
+	if branch.Name != stored.Branch || branch.CommitID != verification.CommitID {
 		return Workspace{}, ErrBranchConflict
+	}
+	checkoutBaseCommitID := verification.CheckoutBaseCommitID
+	if checkoutBaseCommitID == "" {
+		checkoutBaseCommitID = stored.BaseCommitID
 	}
 	if err := service.checkouts.Ensure(ctx, CheckoutSpec{
 		WorkspaceID: stored.ID, RepositoryOwner: stored.RepositoryOwner,
 		RepositoryName: stored.RepositoryName, Branch: stored.Branch,
-		BaseCommitID: reviewedCommitID, ExpectedHeadCommitID: commitID,
+		BaseCommitID: checkoutBaseCommitID, ExpectedHeadCommitID: verification.CommitID,
 		AlreadyReady: true, RequireClean: true,
 	}); err != nil {
-		return Workspace{}, fmt.Errorf("verify corrected checkout: %w", err)
+		return Workspace{}, fmt.Errorf("verify implementation audit checkout: %w", err)
 	}
-	planDigest := sha256.Sum256([]byte(planEventID))
+	planDigest := sha256.Sum256([]byte(verification.PlanEventID))
 	pullRequest, err := service.pullRequests.VerifyPullRequestImplementation(
 		ctx, stored.RepositoryOwner, stored.RepositoryName,
 		ImplementationPublicationSpec{
 			Number:                stored.PullRequestNumber,
 			FeatureMarker:         "<!-- commitarium-feature: " + storedFeature.ID + " -->",
 			PlanPublicationMarker: "<!-- commitarium-plan: " + hex.EncodeToString(planDigest[:]) + " -->",
-			Plan:                  plan,
-			PublicationKind:       ImplementationPublicationReviewResponse,
-			AttemptID:             attemptID,
-			Summary:               summary, ExpectedAuthor: expectedAuthor,
-			BaseBranch: stored.BaseBranch, HeadBranch: stored.Branch, HeadCommitID: commitID,
+			Plan:                  verification.Plan, PublicationKind: verification.PublicationKind,
+			AttemptID: verification.AttemptID, Summary: verification.Summary,
+			ExpectedAuthor: verification.ExpectedAuthor,
+			BaseBranch:     stored.BaseBranch, HeadBranch: stored.Branch,
+			HeadCommitID: verification.CommitID,
 		},
 	)
 	if err != nil {
-		return Workspace{}, fmt.Errorf("verify implementation review response: %w", err)
+		return Workspace{}, fmt.Errorf("verify implementation audit comment: %w", err)
 	}
 	if pullRequest.Number != stored.PullRequestNumber || pullRequest.URL != stored.PullRequestURL {
 		return Workspace{}, ErrPullRequestConflict

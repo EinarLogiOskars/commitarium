@@ -347,6 +347,18 @@ func outputSchema(contract worker.OutputContract) any {
 			},
 			"required": []string{"action", "summary", "commit_id", "pull_request_number", "review_id"},
 		}
+	case worker.OutputContractImplementationReadiness:
+		return map[string]any{
+			"type":                 "object",
+			"additionalProperties": false,
+			"properties": map[string]any{
+				"action": map[string]any{
+					"type": "string", "enum": []string{"ready_to_merge", "concern", "blocked"},
+				},
+				"summary": map[string]any{"type": "string"},
+			},
+			"required": []string{"action", "summary"},
+		}
 	default:
 		return nil
 	}

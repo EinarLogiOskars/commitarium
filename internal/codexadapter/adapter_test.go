@@ -181,6 +181,30 @@ func TestAdapterReturnsStructuredImplementationReview(t *testing.T) {
 	}
 }
 
+func TestAdapterReturnsStructuredLeadMergeReadiness(t *testing.T) {
+	adapter := testAdapter(t, "structured-readiness", "Decide whether the approved commit is ready")
+	request := adapter.request("att_codex_readiness", "Decide whether the approved commit is ready")
+	request.Role = worker.RoleLead
+	request.LaunchEnvironment.Role = worker.RoleLead
+	request.OutputContract = worker.OutputContractImplementationReadiness
+	session, err := adapter.Start(t.Context(), request)
+	if err != nil {
+		t.Fatalf("start structured readiness turn: %v", err)
+	}
+	events := collectEvents(session)
+	result, err := session.Wait(timeoutContext(t, 3*time.Second))
+	if err != nil || result.Summary != "I agree that the approved commit is ready to merge." ||
+		result.Disposition != worker.DispositionSucceeded || result.Publication != nil || result.Review != nil {
+		t.Fatalf("structured readiness result=%+v error=%v", result, err)
+	}
+	if observed := <-events; !equalEvents(observed, []worker.Event{
+		{Type: worker.EventActivity, Text: "Codex started working."},
+		{Type: worker.EventMessage, Text: "I agree that the approved commit is ready to merge."},
+	}) {
+		t.Fatalf("structured readiness events = %+v", observed)
+	}
+}
+
 func TestImplementationReviewResponseFailsClosed(t *testing.T) {
 	for _, response := range []string{
 		`{"action":"approved","summary":"good","commit_id":"bad","pull_request_number":7,"review_id":11}`,
@@ -189,6 +213,19 @@ func TestImplementationReviewResponseFailsClosed(t *testing.T) {
 		`{"action":"approved","summary":"good","commit_id":"0123456789abcdef0123456789abcdef01234567","pull_request_number":7,"review_id":11,"extra":true}`,
 	} {
 		if _, err := decodeImplementationReviewResponse(response); !errors.Is(err, ErrProtocol) {
+			t.Errorf("response %q error=%v, want ErrProtocol", response, err)
+		}
+	}
+}
+
+func TestImplementationReadinessResponseFailsClosed(t *testing.T) {
+	for _, response := range []string{
+		`{"action":"unknown","summary":"decision"}`,
+		`{"action":"ready_to_merge","summary":" "}`,
+		`{"action":"concern","summary":"The deployment evidence is missing.","extra":true}`,
+		`{"action":"blocked","summary":"Cannot inspect Forgejo."} {}`,
+	} {
+		if _, err := decodeImplementationReadinessResponse(response); !errors.Is(err, ErrProtocol) {
 			t.Errorf("response %q error=%v, want ErrProtocol", response, err)
 		}
 	}
@@ -457,12 +494,15 @@ func TestCodexAppServerHelper(t *testing.T) {
 	if (mode == "structured-plan") != helperTurnHasPlanningSchema(turnRequest.Params) {
 		os.Exit(93)
 	}
-	if strings.HasPrefix(mode, "structured-implementation") !=
+	if (mode == "structured-implementation" || mode == "structured-implementation-blocked") !=
 		helperTurnHasImplementationSchema(turnRequest.Params) {
 		os.Exit(94)
 	}
 	if (mode == "structured-review") != helperTurnHasReviewSchema(turnRequest.Params) {
 		os.Exit(95)
+	}
+	if (mode == "structured-readiness") != helperTurnHasReadinessSchema(turnRequest.Params) {
+		os.Exit(96)
 	}
 	if mode == "turn-start-error" {
 		helperWrite(writer, map[string]any{
@@ -524,6 +564,16 @@ func TestCodexAppServerHelper(t *testing.T) {
 			"item": map[string]any{
 				"id": "item_message", "type": "agentMessage",
 				"text": `{"action":"changes_requested","summary":"The implementation misses the documented failure case.","commit_id":"0123456789abcdef0123456789abcdef01234567","pull_request_number":7,"review_id":11}`,
+			},
+		})
+		helpWriteTurnCompleted(writer, "completed")
+		helperWaitForever()
+	case "structured-readiness":
+		helpNotify(writer, "item/completed", map[string]any{
+			"threadId": "thr_test", "turnId": "turn_test",
+			"item": map[string]any{
+				"id": "item_message", "type": "agentMessage",
+				"text": `{"action":"ready_to_merge","summary":"I agree that the approved commit is ready to merge."}`,
 			},
 		})
 		helpWriteTurnCompleted(writer, "completed")
@@ -637,6 +687,18 @@ func helperTurnHasReviewSchema(raw json.RawMessage) bool {
 	return json.Unmarshal(raw, &params) == nil && slices.Equal(
 		params.OutputSchema.Required,
 		[]string{"action", "summary", "commit_id", "pull_request_number", "review_id"},
+	)
+}
+
+func helperTurnHasReadinessSchema(raw json.RawMessage) bool {
+	var params struct {
+		OutputSchema struct {
+			Required []string `json:"required"`
+		} `json:"outputSchema"`
+	}
+	return json.Unmarshal(raw, &params) == nil && slices.Equal(
+		params.OutputSchema.Required,
+		[]string{"action", "summary"},
 	)
 }
 

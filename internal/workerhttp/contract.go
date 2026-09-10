@@ -98,9 +98,10 @@ type PutAttemptRequest struct {
 type OutputContract string
 
 const (
-	OutputContractPlanningLead         OutputContract = "planning_lead"
-	OutputContractImplementationLead   OutputContract = "implementation_lead"
-	OutputContractImplementationReview OutputContract = "implementation_reviewer"
+	OutputContractPlanningLead            OutputContract = "planning_lead"
+	OutputContractImplementationLead      OutputContract = "implementation_lead"
+	OutputContractImplementationReview    OutputContract = "implementation_reviewer"
+	OutputContractImplementationReadiness OutputContract = "implementation_lead_readiness"
 )
 
 type AttemptState string

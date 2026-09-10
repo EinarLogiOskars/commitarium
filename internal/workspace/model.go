@@ -15,11 +15,14 @@ type ImplementationPublicationKind string
 const (
 	ImplementationPublicationInitial        ImplementationPublicationKind = "implementation"
 	ImplementationPublicationReviewResponse ImplementationPublicationKind = "review-response"
+	ImplementationPublicationMergeReadiness ImplementationPublicationKind = "merge-readiness"
 )
 
 func (kind ImplementationPublicationKind) Validate() error {
 	switch kind {
-	case ImplementationPublicationInitial, ImplementationPublicationReviewResponse:
+	case ImplementationPublicationInitial,
+		ImplementationPublicationReviewResponse,
+		ImplementationPublicationMergeReadiness:
 		return nil
 	default:
 		return errors.New("implementation publication kind is not recognized")
@@ -32,6 +35,8 @@ func (kind ImplementationPublicationKind) CommentHeading() string {
 		return "Implementation summary"
 	case ImplementationPublicationReviewResponse:
 		return "Review response"
+	case ImplementationPublicationMergeReadiness:
+		return "Merge readiness"
 	default:
 		return ""
 	}

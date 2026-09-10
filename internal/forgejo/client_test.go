@@ -515,28 +515,39 @@ func TestClientRejectsImplementationAuditFromWrongAgent(t *testing.T) {
 	}
 }
 
-func TestClientVerifiesReviewResponseHeading(t *testing.T) {
-	spec := testImplementationPublicationSpec()
-	spec.PublicationKind = workspace.ImplementationPublicationReviewResponse
-	spec.AttemptID = "review-response-attempt"
-	spec.Summary = "Added and tested the missing failure path."
-	publicationMarker := spec.PublicationKind.Marker(spec.AttemptID)
-	stored := managedPullRequest(testPullRequestSpec())
-	stored.HeadCommitID = spec.HeadCommitID
-	stored.Body += "\n\n" + spec.PlanPublicationMarker +
-		"\n\n## Agreed implementation plan\n\n" + spec.Plan
-	client := newBranchTestClient(t, func(request *http.Request) (*http.Response, error) {
-		if request.URL.Path == "/api/v1/repos/owner/repository/pulls/7" {
-			return pullRequestJSONResponse(t, http.StatusOK, stored), nil
-		}
-		comment := publicationMarker + "\n\n## Review response\n\n" + spec.Summary
-		return jsonResponse(http.StatusOK, `[{"body":`+
-			strconv.Quote(comment)+`,"user":{"login":"codex-lead"}}]`), nil
-	})
-	if _, err := client.VerifyPullRequestImplementation(
-		t.Context(), "owner", "repository", spec,
-	); err != nil {
-		t.Fatalf("verify review response: %v", err)
+func TestClientVerifiesTypedLeadAuditHeadings(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		kind    workspace.ImplementationPublicationKind
+		summary string
+	}{
+		{name: "review response", kind: workspace.ImplementationPublicationReviewResponse, summary: "Added and tested the missing failure path."},
+		{name: "merge readiness", kind: workspace.ImplementationPublicationMergeReadiness, summary: "I agree that the approved commit is ready to merge."},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			spec := testImplementationPublicationSpec()
+			spec.PublicationKind = test.kind
+			spec.AttemptID = "typed-lead-audit-attempt"
+			spec.Summary = test.summary
+			publicationMarker := spec.PublicationKind.Marker(spec.AttemptID)
+			stored := managedPullRequest(testPullRequestSpec())
+			stored.HeadCommitID = spec.HeadCommitID
+			stored.Body += "\n\n" + spec.PlanPublicationMarker +
+				"\n\n## Agreed implementation plan\n\n" + spec.Plan
+			client := newBranchTestClient(t, func(request *http.Request) (*http.Response, error) {
+				if request.URL.Path == "/api/v1/repos/owner/repository/pulls/7" {
+					return pullRequestJSONResponse(t, http.StatusOK, stored), nil
+				}
+				comment := publicationMarker + "\n\n## " + spec.PublicationKind.CommentHeading() + "\n\n" + spec.Summary
+				return jsonResponse(http.StatusOK, `[{"body":`+
+					strconv.Quote(comment)+`,"user":{"login":"codex-lead"}}]`), nil
+			})
+			if _, err := client.VerifyPullRequestImplementation(
+				t.Context(), "owner", "repository", spec,
+			); err != nil {
+				t.Fatalf("verify typed lead audit: %v", err)
+			}
+		})
 	}
 }
 

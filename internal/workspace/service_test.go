@@ -17,12 +17,15 @@ func TestImplementationPublicationKindOwnsAuditFormat(t *testing.T) {
 	attemptID := "run_test:lead:correction:2"
 	initialMarker := ImplementationPublicationInitial.Marker(attemptID)
 	responseMarker := ImplementationPublicationReviewResponse.Marker(attemptID)
+	readinessMarker := ImplementationPublicationMergeReadiness.Marker(attemptID)
 	if ImplementationPublicationInitial.CommentHeading() != "Implementation summary" ||
 		ImplementationPublicationReviewResponse.CommentHeading() != "Review response" ||
+		ImplementationPublicationMergeReadiness.CommentHeading() != "Merge readiness" ||
 		!strings.HasPrefix(initialMarker, "<!-- commitarium-implementation: ") ||
 		!strings.HasPrefix(responseMarker, "<!-- commitarium-review-response: ") ||
-		initialMarker == responseMarker {
-		t.Fatalf("publication kinds did not derive distinct audit formats: initial=%q response=%q", initialMarker, responseMarker)
+		!strings.HasPrefix(readinessMarker, "<!-- commitarium-merge-readiness: ") ||
+		initialMarker == responseMarker || responseMarker == readinessMarker {
+		t.Fatalf("publication kinds did not derive distinct audit formats: initial=%q response=%q readiness=%q", initialMarker, responseMarker, readinessMarker)
 	}
 	invalid := ImplementationPublicationKind("unknown")
 	if invalid.Validate() == nil || invalid.CommentHeading() != "" || invalid.Marker(attemptID) != "" {
@@ -735,6 +738,49 @@ func TestServiceVerifiesLeadReviewResponseAsNewDescendantCommit(t *testing.T) {
 		"att_correction_1", "No new revision.", reviewedCommit, reviewedCommit, 8, "codex-lead",
 	); err == nil {
 		t.Fatal("review response accepted the already-reviewed commit")
+	}
+}
+
+func TestServiceVerifiesLeadMergeReadinessOnApprovedCommit(t *testing.T) {
+	now := time.Date(2026, time.September, 10, 5, 45, 0, 0, time.UTC)
+	stored := readyTestWorkspace(now)
+	pullRequestReadyAt := now.Add(3 * time.Minute)
+	stored.PullRequestNumber = 8
+	stored.PullRequestURL = "http://localhost:3001/owner/repository/pulls/8"
+	stored.PullRequestRecordedAt = &pullRequestReadyAt
+	stored.UpdatedAt = pullRequestReadyAt
+	approvedCommit := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	branches := &recordingBranches{base: Branch{Name: stored.Branch, CommitID: approvedCommit}}
+	checkout := &recordingCheckout{}
+	pullRequests := &recordingPullRequests{planResult: PullRequest{
+		Number: 8, URL: stored.PullRequestURL, State: "open", Draft: true,
+		BaseBranch: stored.BaseBranch, HeadBranch: stored.Branch, HeadCommitID: approvedCommit,
+	}}
+	reviewing := acceptedTestFeature(now)
+	reviewing.State = feature.StateReviewing
+	service := NewServiceWithPreparation(
+		&memoryStore{stored: stored}, fixedFeatureFinder{stored: reviewing},
+		fixedProjectFinder{stored: project.Project{ID: "prj_test", ForgejoRepository: testRepository(now)}},
+		branches, checkout, pullRequests,
+	)
+	got, err := service.VerifyImplementationMergeReadiness(
+		t.Context(), "prj_test", "fea_test", "sev_final_plan", "Final plan",
+		"att_readiness_2", "I agree this exact commit is ready to merge.",
+		approvedCommit, 8, "codex-lead",
+	)
+	if err != nil || got != stored {
+		t.Fatalf("verify merge readiness: workspace=%+v err=%v", got, err)
+	}
+	if branches.getCalls != 1 || len(checkout.specs) != 1 ||
+		checkout.specs[0].ExpectedHeadCommitID != approvedCommit ||
+		!checkout.specs[0].RequireClean || len(pullRequests.implementationSpecs) != 1 {
+		t.Fatalf("merge-readiness verification did not reconcile every fact: branches=%d checkout=%+v pull_requests=%+v", branches.getCalls, checkout.specs, pullRequests.implementationSpecs)
+	}
+	spec := pullRequests.implementationSpecs[0]
+	if spec.PublicationKind != ImplementationPublicationMergeReadiness ||
+		spec.AttemptID != "att_readiness_2" || spec.HeadCommitID != approvedCommit ||
+		spec.ExpectedAuthor != "codex-lead" {
+		t.Fatalf("unexpected merge-readiness publication spec %+v", spec)
 	}
 }
 
