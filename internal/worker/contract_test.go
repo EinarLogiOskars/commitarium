@@ -173,6 +173,13 @@ func TestResultValidate(t *testing.T) {
 	if err := completed.Validate(); err != nil {
 		t.Fatalf("validate completed result: %v", err)
 	}
+	published := completed
+	published.Publication = &ImplementationPublication{
+		CommitID: "0123456789abcdef0123456789abcdef01234567", PullRequestNumber: 7,
+	}
+	if err := published.Validate(); err != nil {
+		t.Fatalf("validate published implementation result: %v", err)
+	}
 	stopped := Result{
 		Outcome:           OutcomeStopped,
 		ProviderSessionID: "provider_session_test",
@@ -194,6 +201,8 @@ func TestResultValidate(t *testing.T) {
 		{Outcome: OutcomeCompleted, ProviderSessionID: "provider_session_test"},
 		{Outcome: OutcomeStopped, Disposition: DispositionSucceeded, ProviderSessionID: "provider_session_test"},
 		{Outcome: OutcomeFailed, Disposition: DispositionSucceeded, ProviderSessionID: "provider_session_test"},
+		{Outcome: OutcomeCompleted, Disposition: DispositionSucceeded, ProviderSessionID: "provider_session_test", Publication: &ImplementationPublication{CommitID: "bad", PullRequestNumber: 7}},
+		{Outcome: OutcomeCompleted, Disposition: DispositionInputRequired, ProviderSessionID: "provider_session_test", Publication: &ImplementationPublication{CommitID: "0123456789abcdef0123456789abcdef01234567", PullRequestNumber: 7}},
 	}
 	for _, result := range invalid {
 		if err := result.Validate(); !errors.Is(err, ErrInvalidResult) {

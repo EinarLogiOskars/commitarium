@@ -35,7 +35,8 @@ type SessionRequest struct {
 type OutputContract string
 
 const (
-	OutputContractPlanningLead OutputContract = "planning_lead"
+	OutputContractPlanningLead       OutputContract = "planning_lead"
+	OutputContractImplementationLead OutputContract = "implementation_lead"
 )
 
 // LaunchEnvironment is the worker-resolved view of the profile and workspace
@@ -136,6 +137,15 @@ type Result struct {
 	Disposition       Disposition
 	ProviderSessionID string
 	Summary           string
+	Publication       *ImplementationPublication
+}
+
+// ImplementationPublication contains only the external identities that the
+// coordinator must verify after an agent says it finished implementation. It
+// deliberately excludes credentials and mutable repository content.
+type ImplementationPublication struct {
+	CommitID          string
+	PullRequestNumber int64
 }
 
 // Adapter translates the provider-neutral session protocol to a provider CLI.
@@ -171,6 +181,7 @@ var ErrInvalidResult = errors.New("invalid worker result")
 var (
 	launchIDPattern        = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
 	environmentNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+	commitIDPattern        = regexp.MustCompile(`^[0-9a-f]{40}([0-9a-f]{24})?$`)
 )
 
 func (role Role) IsValid() bool {
@@ -194,10 +205,13 @@ func (request SessionRequest) Validate() error {
 		return fmt.Errorf("%w: role %q is not recognized", ErrInvalidSessionRequest, request.Role)
 	case strings.TrimSpace(request.Instructions) == "":
 		return fmt.Errorf("%w: instructions are required", ErrInvalidSessionRequest)
-	case request.OutputContract != "" && request.OutputContract != OutputContractPlanningLead:
+	case request.OutputContract != "" &&
+		request.OutputContract != OutputContractPlanningLead &&
+		request.OutputContract != OutputContractImplementationLead:
 		return fmt.Errorf("%w: output contract %q is not recognized", ErrInvalidSessionRequest, request.OutputContract)
-	case request.OutputContract == OutputContractPlanningLead && request.Role != RoleLead:
-		return fmt.Errorf("%w: planning lead output requires the lead role", ErrInvalidSessionRequest)
+	case (request.OutputContract == OutputContractPlanningLead ||
+		request.OutputContract == OutputContractImplementationLead) && request.Role != RoleLead:
+		return fmt.Errorf("%w: lead output contract requires the lead role", ErrInvalidSessionRequest)
 	}
 	if !request.LaunchEnvironment.IsZero() {
 		if err := request.LaunchEnvironment.Validate(); err != nil {
@@ -353,7 +367,25 @@ func (result Result) Validate() error {
 		return fmt.Errorf("%w: stopped session cannot have a disposition", ErrInvalidResult)
 	case result.Outcome == OutcomeFailed && result.Disposition != "":
 		return fmt.Errorf("%w: failed session cannot have a disposition", ErrInvalidResult)
+	case result.Publication != nil &&
+		(result.Outcome != OutcomeCompleted || result.Disposition != DispositionSucceeded):
+		return fmt.Errorf("%w: implementation publication requires a successful completed session", ErrInvalidResult)
+	case result.Publication != nil:
+		if err := result.Publication.Validate(); err != nil {
+			return fmt.Errorf("%w: %v", ErrInvalidResult, err)
+		}
 	default:
 		return nil
 	}
+	return nil
+}
+
+func (publication ImplementationPublication) Validate() error {
+	if !commitIDPattern.MatchString(publication.CommitID) {
+		return errors.New("implementation commit ID must be a lowercase SHA-1 or SHA-256 object ID")
+	}
+	if publication.PullRequestNumber < 1 {
+		return errors.New("implementation pull request number must be positive")
+	}
+	return nil
 }

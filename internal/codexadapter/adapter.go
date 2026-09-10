@@ -305,19 +305,35 @@ func (adapter *Adapter) launch(
 }
 
 func outputSchema(contract worker.OutputContract) any {
-	if contract != worker.OutputContractPlanningLead {
-		return nil
-	}
-	return map[string]any{
-		"type":                 "object",
-		"additionalProperties": false,
-		"properties": map[string]any{
-			"action": map[string]any{
-				"type": "string", "enum": []string{"respond", "submit_plan"},
+	switch contract {
+	case worker.OutputContractPlanningLead:
+		return map[string]any{
+			"type":                 "object",
+			"additionalProperties": false,
+			"properties": map[string]any{
+				"action": map[string]any{
+					"type": "string", "enum": []string{"respond", "submit_plan"},
+				},
+				"content": map[string]any{"type": "string"},
 			},
-			"content": map[string]any{"type": "string"},
-		},
-		"required": []string{"action", "content"},
+			"required": []string{"action", "content"},
+		}
+	case worker.OutputContractImplementationLead:
+		return map[string]any{
+			"type":                 "object",
+			"additionalProperties": false,
+			"properties": map[string]any{
+				"action": map[string]any{
+					"type": "string", "enum": []string{"published", "blocked"},
+				},
+				"summary":             map[string]any{"type": "string"},
+				"commit_id":           map[string]any{"type": "string"},
+				"pull_request_number": map[string]any{"type": "integer"},
+			},
+			"required": []string{"action", "summary", "commit_id", "pull_request_number"},
+		}
+	default:
+		return nil
 	}
 }
 

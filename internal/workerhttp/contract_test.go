@@ -258,6 +258,7 @@ func TestAttemptValidate(t *testing.T) {
 func TestTerminalResultValidate(t *testing.T) {
 	valid := []TerminalResult{
 		{Outcome: OutcomeCompleted, Disposition: DispositionSucceeded, Summary: "done"},
+		{Outcome: OutcomeCompleted, Disposition: DispositionSucceeded, Summary: "published", Publication: &ImplementationPublication{CommitID: "0123456789abcdef0123456789abcdef01234567", PullRequestNumber: 7}},
 		{Outcome: OutcomeCompleted, Disposition: DispositionChangesRequested, Summary: "changes requested"},
 		{Outcome: OutcomeStopped, Summary: "stopped safely"},
 		{Outcome: OutcomeFailed, Summary: "provider unavailable", Error: &ProtocolError{Code: ErrorProfileUnavailable, Message: "profile is unavailable", Retryable: true}},
@@ -276,6 +277,8 @@ func TestTerminalResultValidate(t *testing.T) {
 		{Outcome: OutcomeFailed, Disposition: DispositionSucceeded, Summary: "bad", Error: &ProtocolError{Code: ErrorInternal, Message: "unexpected", Retryable: true}},
 		{Outcome: OutcomeFailed, Summary: "missing error"},
 		{Outcome: OutcomeFailed, Summary: "bad error", Error: &ProtocolError{Code: "unknown", Message: "unexpected"}},
+		{Outcome: OutcomeCompleted, Disposition: DispositionSucceeded, Summary: "bad publication", Publication: &ImplementationPublication{CommitID: "bad", PullRequestNumber: 7}},
+		{Outcome: OutcomeCompleted, Disposition: DispositionInputRequired, Summary: "blocked", Publication: &ImplementationPublication{CommitID: "0123456789abcdef0123456789abcdef01234567", PullRequestNumber: 7}},
 	}
 	for _, result := range invalid {
 		if err := result.Validate(); !errors.Is(err, ErrInvalidContract) {

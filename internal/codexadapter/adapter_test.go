@@ -105,6 +105,56 @@ func TestAdapterPublishesStructuredPlanningSubmission(t *testing.T) {
 	}
 }
 
+func TestAdapterReturnsStructuredImplementationPublication(t *testing.T) {
+	adapter := testAdapter(t, "structured-implementation", "Implement and publish")
+	request := adapter.request("att_codex_implementation", "Implement and publish")
+	request.Role = worker.RoleLead
+	request.LaunchEnvironment.Role = worker.RoleLead
+	request.OutputContract = worker.OutputContractImplementationLead
+	session, err := adapter.Start(t.Context(), request)
+	if err != nil {
+		t.Fatalf("start structured implementation turn: %v", err)
+	}
+	events := collectEvents(session)
+	result, err := session.Wait(timeoutContext(t, 3*time.Second))
+	if err != nil || result.Summary != "Implemented the agreed change and passed tests." ||
+		result.Disposition != worker.DispositionSucceeded || result.Publication == nil ||
+		result.Publication.CommitID != "0123456789abcdef0123456789abcdef01234567" ||
+		result.Publication.PullRequestNumber != 7 {
+		t.Fatalf("structured implementation result=%+v error=%v", result, err)
+	}
+	if observed := <-events; !equalEvents(observed, []worker.Event{
+		{Type: worker.EventActivity, Text: "Codex started working."},
+		{Type: worker.EventMessage, Text: "Implemented the agreed change and passed tests."},
+	}) {
+		t.Fatalf("structured implementation events = %+v", observed)
+	}
+}
+
+func TestAdapterReturnsStructuredImplementationBlocker(t *testing.T) {
+	adapter := testAdapter(t, "structured-implementation-blocked", "Implement and publish")
+	request := adapter.request("att_codex_implementation_blocked", "Implement and publish")
+	request.Role = worker.RoleLead
+	request.LaunchEnvironment.Role = worker.RoleLead
+	request.OutputContract = worker.OutputContractImplementationLead
+	session, err := adapter.Start(t.Context(), request)
+	if err != nil {
+		t.Fatalf("start blocked implementation turn: %v", err)
+	}
+	events := collectEvents(session)
+	result, err := session.Wait(timeoutContext(t, 3*time.Second))
+	if err != nil || result.Disposition != worker.DispositionInputRequired ||
+		result.Publication != nil {
+		t.Fatalf("blocked implementation result=%+v error=%v", result, err)
+	}
+	if observed := <-events; !equalEvents(observed, []worker.Event{
+		{Type: worker.EventActivity, Text: "Codex started working."},
+		{Type: worker.EventInputRequired, Text: "Forgejo rejected the push."},
+	}) {
+		t.Fatalf("blocked implementation events = %+v", observed)
+	}
+}
+
 func TestPlanningLeadResponseFailsClosed(t *testing.T) {
 	for _, response := range []string{
 		`{"action":"unknown","content":"plan"}`,
@@ -113,6 +163,19 @@ func TestPlanningLeadResponseFailsClosed(t *testing.T) {
 		`{"action":"respond","content":"reply"} {}`,
 	} {
 		if _, err := decodePlanningLeadResponse(response); !errors.Is(err, ErrProtocol) {
+			t.Errorf("response %q error=%v, want ErrProtocol", response, err)
+		}
+	}
+}
+
+func TestImplementationLeadResponseFailsClosed(t *testing.T) {
+	for _, response := range []string{
+		`{"action":"published","summary":"done","commit_id":"bad","pull_request_number":7}`,
+		`{"action":"blocked","summary":"blocked","commit_id":"0123456789abcdef0123456789abcdef01234567","pull_request_number":7}`,
+		`{"action":"blocked","summary":" ","commit_id":"","pull_request_number":7}`,
+		`{"action":"published","summary":"done","commit_id":"0123456789abcdef0123456789abcdef01234567","pull_request_number":7,"extra":true}`,
+	} {
+		if _, err := decodeImplementationLeadResponse(response); !errors.Is(err, ErrProtocol) {
 			t.Errorf("response %q error=%v, want ErrProtocol", response, err)
 		}
 	}
@@ -355,6 +418,10 @@ func TestCodexAppServerHelper(t *testing.T) {
 	if (mode == "structured-plan") != helperTurnHasPlanningSchema(turnRequest.Params) {
 		os.Exit(93)
 	}
+	if strings.HasPrefix(mode, "structured-implementation") !=
+		helperTurnHasImplementationSchema(turnRequest.Params) {
+		os.Exit(94)
+	}
 	if mode == "turn-start-error" {
 		helperWrite(writer, map[string]any{
 			"id":    turnRequest.ID,
@@ -392,6 +459,19 @@ func TestCodexAppServerHelper(t *testing.T) {
 			"item": map[string]any{
 				"id": "item_message", "type": "agentMessage",
 				"text": `{"action":"submit_plan","content":"Final agreed plan"}`,
+			},
+		})
+		helpWriteTurnCompleted(writer, "completed")
+		helperWaitForever()
+	case "structured-implementation", "structured-implementation-blocked":
+		text := `{"action":"published","summary":"Implemented the agreed change and passed tests.","commit_id":"0123456789abcdef0123456789abcdef01234567","pull_request_number":7}`
+		if mode == "structured-implementation-blocked" {
+			text = `{"action":"blocked","summary":"Forgejo rejected the push.","commit_id":"","pull_request_number":7}`
+		}
+		helpNotify(writer, "item/completed", map[string]any{
+			"threadId": "thr_test", "turnId": "turn_test",
+			"item": map[string]any{
+				"id": "item_message", "type": "agentMessage", "text": text,
 			},
 		})
 		helpWriteTurnCompleted(writer, "completed")
@@ -482,6 +562,18 @@ func helperTurnHasPlanningSchema(raw json.RawMessage) bool {
 	}
 	return json.Unmarshal(raw, &params) == nil &&
 		slices.Equal(params.OutputSchema.Required, []string{"action", "content"})
+}
+
+func helperTurnHasImplementationSchema(raw json.RawMessage) bool {
+	var params struct {
+		OutputSchema struct {
+			Required []string `json:"required"`
+		} `json:"outputSchema"`
+	}
+	return json.Unmarshal(raw, &params) == nil && slices.Equal(
+		params.OutputSchema.Required,
+		[]string{"action", "summary", "commit_id", "pull_request_number"},
+	)
 }
 
 func helperSteerMatches(raw json.RawMessage) bool {

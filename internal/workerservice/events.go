@@ -267,6 +267,12 @@ func (service *Service) finishAttempt(
 		Disposition: workerhttp.Disposition(result.Disposition),
 		Summary:     result.Summary,
 	}
+	if result.Publication != nil {
+		terminalResult.Publication = &workerhttp.ImplementationPublication{
+			CommitID:          result.Publication.CommitID,
+			PullRequestNumber: result.Publication.PullRequestNumber,
+		}
+	}
 	if result.Outcome == worker.OutcomeFailed {
 		terminalResult.Error = &workerhttp.ProtocolError{
 			Code:      workerhttp.ErrorInternal,

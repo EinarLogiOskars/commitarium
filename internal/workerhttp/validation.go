@@ -18,6 +18,7 @@ const (
 var (
 	ErrInvalidContract = errors.New("invalid worker HTTP contract value")
 	safeIDPattern      = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
+	safeCommitID       = regexp.MustCompile(`^[0-9a-f]{40}([0-9a-f]{24})?$`)
 )
 
 func (provider Provider) IsValid() bool {
@@ -133,11 +134,15 @@ func (request PutAttemptRequest) Validate(identity MutationIdentity) error {
 	if err := validateRequiredText("instructions", request.Instructions, MaxInstructionsBytes); err != nil {
 		return err
 	}
-	if request.OutputContract != "" && request.OutputContract != OutputContractPlanningLead {
+	if request.OutputContract != "" &&
+		request.OutputContract != OutputContractPlanningLead &&
+		request.OutputContract != OutputContractImplementationLead {
 		return invalid("output contract %q is not recognized", request.OutputContract)
 	}
-	if request.OutputContract == OutputContractPlanningLead && request.Assignment.Role != RoleLead {
-		return invalid("planning lead output requires the lead role")
+	if (request.OutputContract == OutputContractPlanningLead ||
+		request.OutputContract == OutputContractImplementationLead) &&
+		request.Assignment.Role != RoleLead {
+		return invalid("lead output contract requires the lead role")
 	}
 	providerSessionID := strings.TrimSpace(request.ProviderSessionID)
 	if len(providerSessionID) > maxProviderSessionIDBytes {
@@ -297,12 +302,18 @@ func (result TerminalResult) Validate() error {
 		if result.Error != nil {
 			return invalid("completed outcome cannot include an error")
 		}
+		if result.Publication != nil && result.Disposition != DispositionSucceeded {
+			return invalid("implementation publication requires a successful disposition")
+		}
 	case OutcomeStopped:
 		if result.Disposition != "" {
 			return invalid("stopped outcome cannot include a disposition")
 		}
 		if result.Error != nil {
 			return invalid("stopped outcome cannot include an error")
+		}
+		if result.Publication != nil {
+			return invalid("stopped outcome cannot include an implementation publication")
 		}
 	case OutcomeFailed:
 		if result.Disposition != "" {
@@ -314,6 +325,24 @@ func (result TerminalResult) Validate() error {
 		if err := result.Error.Validate(); err != nil {
 			return err
 		}
+		if result.Publication != nil {
+			return invalid("failed outcome cannot include an implementation publication")
+		}
+	}
+	if result.Publication != nil {
+		if err := result.Publication.Validate(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (publication ImplementationPublication) Validate() error {
+	if !safeCommitID.MatchString(publication.CommitID) {
+		return invalid("implementation commit ID must be a lowercase SHA-1 or SHA-256 object ID")
+	}
+	if publication.PullRequestNumber < 1 {
+		return invalid("implementation pull request number must be positive")
 	}
 	return nil
 }
