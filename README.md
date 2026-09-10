@@ -59,8 +59,9 @@ limit means unlimited. Projects expose separate planning and implementation-
 review limits, and every run snapshots both values when it starts so later
 settings changes affect only future workflows. Claude Code execution and the
 user interface remain to be built.
-Projects can be listed and permanently associated with one verified Forgejo
-repository.
+Projects and their features can be listed for switching, active-work views, and
+completed history. Opening a feature exposes its run and session history.
+Projects can also be permanently associated with one verified Forgejo repository.
 
 ## Architecture
 

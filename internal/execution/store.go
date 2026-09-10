@@ -114,6 +114,7 @@ type PendingPlanningMessage struct {
 type Store interface {
 	CreateRun(ctx context.Context, run Run) error
 	GetRun(ctx context.Context, id string) (Run, error)
+	ListRunsByFeatureID(ctx context.Context, featureID string) ([]Run, error)
 	TransitionRun(ctx context.Context, transition RunTransition) (Run, error)
 	CreateSession(ctx context.Context, session Session) error
 	GetSession(ctx context.Context, id string) (Session, error)

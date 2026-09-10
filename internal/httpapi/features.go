@@ -95,6 +95,29 @@ func (api *API) createFeatureHandler(
 	}
 }
 
+func (api *API) listFeaturesHandler(w http.ResponseWriter, r *http.Request) {
+	projectID := r.PathValue("projectID")
+	features, err := api.features.List(r.Context(), projectID)
+	if err != nil {
+		if errors.Is(err, project.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "project_not_found", "project not found")
+			return
+		}
+		log.Printf("list features for project %q: %v", projectID, err)
+		writeError(w, http.StatusInternalServerError, "internal_error", "internal server error")
+		return
+	}
+
+	response := make([]featureResponse, 0, len(features))
+	for _, storedFeature := range features {
+		response = append(response, newFeatureResponse(storedFeature))
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		log.Printf("encode feature list response: %v", err)
+	}
+}
+
 func (api *API) getFeatureByIDHandler(
 	w http.ResponseWriter,
 	r *http.Request,

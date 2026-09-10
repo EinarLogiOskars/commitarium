@@ -21,6 +21,9 @@ import (
 type recordingExecutionService struct {
 	run          execution.Run
 	runErr       error
+	runs         []execution.Run
+	runsErr      error
+	runsFeature  string
 	sessions     []execution.Session
 	sessionsErr  error
 	session      execution.Session
@@ -40,6 +43,14 @@ func (s *recordingExecutionService) GetRun(
 	_ string,
 ) (execution.Run, error) {
 	return s.run, s.runErr
+}
+
+func (s *recordingExecutionService) RunsForFeature(
+	_ context.Context,
+	featureID string,
+) ([]execution.Run, error) {
+	s.runsFeature = featureID
+	return s.runs, s.runsErr
 }
 
 func (s *recordingExecutionService) SessionsForRun(

@@ -15,11 +15,13 @@ this API beyond the host loopback interface is unsupported.
 | `PUT` | `/api/v1/projects/{projectID}/dialogue-limits` | Replace planning and implementation-review round limits |
 | `PUT` | `/api/v1/projects/{projectID}/forgejo-repository` | Verify and bind the project's internal repository |
 | `POST` | `/api/v1/projects/{projectID}/features` | Create a draft feature |
+| `GET` | `/api/v1/projects/{projectID}/features` | List the project's features by recent activity |
 | `GET` | `/api/v1/projects/{projectID}/features/{featureID}` | Retrieve a feature |
 | `POST` | `/api/v1/projects/{projectID}/features/{featureID}/transitions` | Apply an explicit feature transition |
 | `GET` | `/api/v1/projects/{projectID}/features/{featureID}/events` | Retrieve durable workflow history |
 | `GET` | `/api/v1/projects/{projectID}/features/{featureID}/events/stream` | Replay and stream workflow history with SSE |
 | `POST` | `/api/v1/projects/{projectID}/features/{featureID}/runs` | Start the configured workflow asynchronously |
+| `GET` | `/api/v1/projects/{projectID}/features/{featureID}/runs` | List the feature's run history and sessions |
 | `PUT` | `/api/v1/projects/{projectID}/features/{featureID}/workspace` | Prepare the exact Forgejo branch, managed shared checkout, and draft PR |
 | `GET` | `/api/v1/projects/{projectID}/features/{featureID}/workspace` | Retrieve the durable branch, checkout, and PR identity |
 | `GET` | `/api/v1/runs/{runID}` | Retrieve run state and its ordered sessions |
@@ -140,6 +142,46 @@ Attempting to bind a different repository returns `409 Conflict`. A missing
 repository returns `404`; an empty or archived repository returns `409`; and an
 unavailable Forgejo service or credential returns `503`. This operation does
 not create repositories, branches, workspaces, or pull requests.
+
+## Browsing features and run history
+
+`GET /api/v1/projects/{projectID}/features` returns every feature in the
+project, ordered by `updated_at` newest first. Creation time and then feature ID
+provide deterministic ordering when update times are equal. Each item uses the
+same representation as the single-feature endpoint:
+
+```json
+[
+  {
+    "id": "fea_example",
+    "project_id": "prj_example",
+    "title": "Add a project switcher",
+    "description": "Let the user move between project histories.",
+    "state": "implementing",
+    "accepted_goal": "Add a project switcher with durable selection.",
+    "goal_accepted_at": "2026-09-10T12:30:00Z",
+    "created_at": "2026-09-10T12:00:00Z",
+    "updated_at": "2026-09-10T13:00:00Z"
+  }
+]
+```
+
+The UI can group this list using the existing feature lifecycle states. An
+unknown project returns `404 project_not_found`; an existing project with no
+features returns `[]`.
+
+After a user opens a feature,
+`GET /api/v1/projects/{projectID}/features/{featureID}/runs` returns its runs
+ordered by `started_at` newest first. Every item has the same shape as
+`GET /api/v1/runs/{runID}`, including its ordered `sessions` array. Session IDs
+therefore lead directly to the existing detail, history, stream, and control
+routes. An unknown feature, including a feature belonging to a different
+project, returns `404 feature_not_found`; a feature that has not started returns
+`[]`.
+
+These discovery endpoints intentionally have no pagination, search, or
+server-side state filtering in the MVP. Clients can group and filter the
+complete project list locally.
 
 ## Preparing a feature workspace
 

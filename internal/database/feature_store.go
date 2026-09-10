@@ -87,13 +87,7 @@ func (s *FeatureStore) GetByID(
 	ctx context.Context,
 	id string,
 ) (feature.Feature, error) {
-	storedFeature := feature.Feature{}
-	var storedState string
-	var goalAcceptedAt sql.NullString
-	var createdAt string
-	var updatedAt string
-
-	err := s.db.QueryRowContext(
+	storedFeature, err := scanFeature(s.db.QueryRowContext(
 		ctx,
 		`
 			SELECT
@@ -110,17 +104,7 @@ func (s *FeatureStore) GetByID(
 			WHERE id = ?
 		`,
 		id,
-	).Scan(
-		&storedFeature.ID,
-		&storedFeature.ProjectID,
-		&storedFeature.Title,
-		&storedFeature.Description,
-		&storedState,
-		&storedFeature.AcceptedGoal,
-		&goalAcceptedAt,
-		&createdAt,
-		&updatedAt,
-	)
+	))
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return feature.Feature{}, feature.ErrNotFound
@@ -133,34 +117,105 @@ func (s *FeatureStore) GetByID(
 		)
 	}
 
+	return storedFeature, nil
+}
+
+func (s *FeatureStore) ListByProjectID(
+	ctx context.Context,
+	projectID string,
+) ([]feature.Feature, error) {
+	rows, err := s.db.QueryContext(
+		ctx,
+		`
+			SELECT
+				id,
+				project_id,
+				title,
+				description,
+				state,
+				accepted_goal,
+				goal_accepted_at,
+				created_at,
+				updated_at
+			FROM features
+			WHERE project_id = ?
+			ORDER BY updated_at DESC, created_at DESC, id
+		`,
+		projectID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list features for project %q: %w", projectID, err)
+	}
+	defer rows.Close()
+
+	features := make([]feature.Feature, 0)
+	for rows.Next() {
+		storedFeature, err := scanFeature(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan feature for project %q: %w", projectID, err)
+		}
+		features = append(features, storedFeature)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate features for project %q: %w", projectID, err)
+	}
+	return features, nil
+}
+
+type featureScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanFeature(row featureScanner) (feature.Feature, error) {
+	storedFeature := feature.Feature{}
+	var storedState string
+	var goalAcceptedAt sql.NullString
+	var createdAt string
+	var updatedAt string
+
+	if err := row.Scan(
+		&storedFeature.ID,
+		&storedFeature.ProjectID,
+		&storedFeature.Title,
+		&storedFeature.Description,
+		&storedState,
+		&storedFeature.AcceptedGoal,
+		&goalAcceptedAt,
+		&createdAt,
+		&updatedAt,
+	); err != nil {
+		return feature.Feature{}, err
+	}
+
 	storedFeature.State = feature.State(storedState)
 	if goalAcceptedAt.Valid {
-		parsed, parseErr := time.Parse(time.RFC3339Nano, goalAcceptedAt.String)
-		if parseErr != nil {
+		parsed, err := time.Parse(time.RFC3339Nano, goalAcceptedAt.String)
+		if err != nil {
 			return feature.Feature{}, fmt.Errorf(
-				"parse goal acceptance time for feature %q: %w", id, parseErr,
+				"parse goal acceptance time for feature %q: %w",
+				storedFeature.ID,
+				err,
 			)
 		}
 		storedFeature.GoalAcceptedAt = &parsed
 	}
 
+	var err error
 	storedFeature.CreatedAt, err = time.Parse(time.RFC3339Nano, createdAt)
 	if err != nil {
 		return feature.Feature{}, fmt.Errorf(
 			"parse creation time for feature %q: %w",
-			id,
+			storedFeature.ID,
 			err,
 		)
 	}
-
 	storedFeature.UpdatedAt, err = time.Parse(time.RFC3339Nano, updatedAt)
 	if err != nil {
 		return feature.Feature{}, fmt.Errorf(
 			"parse update time for feature %q: %w",
-			id,
+			storedFeature.ID,
 			err,
 		)
 	}
-
 	return storedFeature, nil
 }
