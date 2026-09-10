@@ -138,6 +138,8 @@ func TestJournalBackedServiceRunsControlsAndReplaysThroughHTTP(t *testing.T) {
 func TestJournalBackedServicePassesExactResolvedEnvironmentToProvider(t *testing.T) {
 	root := t.TempDir()
 	request := validPutRequest()
+	request.Assignment.Role = workerhttp.RoleLead
+	request.OutputContract = workerhttp.OutputContractPlanningLead
 	workspace := filepath.Join(root, request.Assignment.WorkspaceID)
 	if err := os.Mkdir(workspace, 0o700); err != nil {
 		t.Fatalf("create workspace: %v", err)
@@ -175,7 +177,8 @@ func TestJournalBackedServicePassesExactResolvedEnvironmentToProvider(t *testing
 	})
 	if !observed.LaunchEnvironment.Equal(want) ||
 		observed.FeatureID != request.Assignment.FeatureID ||
-		observed.Role != worker.Role(request.Assignment.Role) {
+		observed.Role != worker.Role(request.Assignment.Role) ||
+		observed.OutputContract != worker.OutputContractPlanningLead {
 		t.Fatalf("provider request = %+v, want launch environment %+v", observed, want)
 	}
 	observed.LaunchEnvironment.Variables[0] = "PATH=/mutated-by-provider-test"

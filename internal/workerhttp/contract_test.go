@@ -81,6 +81,13 @@ func TestPutAttemptRequestValidate(t *testing.T) {
 		{name: "unknown mode", identity: identity, request: withAttemptMode(start, "unknown")},
 		{name: "invalid assignment", identity: identity, request: withAssignment(start, Assignment{})},
 		{name: "missing instructions", identity: identity, request: withInstructions(start, " ")},
+		{name: "unknown output contract", identity: identity, request: func() PutAttemptRequest { invalid := start; invalid.OutputContract = "unknown"; return invalid }()},
+		{name: "planning output for reviewer", identity: identity, request: func() PutAttemptRequest {
+			invalid := start
+			invalid.OutputContract = OutputContractPlanningLead
+			invalid.Assignment.Role = RoleReviewer
+			return invalid
+		}()},
 		{name: "instructions too large", identity: identity, request: withInstructions(start, strings.Repeat("x", MaxInstructionsBytes+1))},
 		{name: "start with provider session", identity: identity, request: withProviderSessionID(start, "provider_session_test")},
 		{name: "resume without provider session", identity: identity, request: withAttemptMode(start, AttemptModeResume)},
@@ -383,13 +390,15 @@ func TestJSONContract(t *testing.T) {
 		Mode:              AttemptModeResume,
 		Assignment:        validAssignment(),
 		Instructions:      "Reconcile durable state.",
+		OutputContract:    OutputContractPlanningLead,
 		ProviderSessionID: "provider_session_test",
 	}
+	request.Assignment.Role = RoleLead
 	encoded, err := json.Marshal(request)
 	if err != nil {
 		t.Fatalf("marshal request: %v", err)
 	}
-	want := `{"mode":"resume","assignment":{"agent_profile_id":"apr_test","project_id":"prj_test","feature_id":"fea_test","role":"coder","workspace_id":"wsp_test"},"instructions":"Reconcile durable state.","provider_session_id":"provider_session_test"}`
+	want := `{"mode":"resume","assignment":{"agent_profile_id":"apr_test","project_id":"prj_test","feature_id":"fea_test","role":"lead","workspace_id":"wsp_test"},"instructions":"Reconcile durable state.","output_contract":"planning_lead","provider_session_id":"provider_session_test"}`
 	if string(encoded) != want {
 		t.Fatalf("request JSON\n got: %s\nwant: %s", encoded, want)
 	}

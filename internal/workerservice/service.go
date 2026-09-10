@@ -470,6 +470,7 @@ func (service *Service) launchProvider(
 		FeatureID:         request.Assignment.FeatureID,
 		Role:              worker.Role(request.Assignment.Role),
 		Instructions:      request.Instructions,
+		OutputContract:    worker.OutputContract(request.OutputContract),
 		LaunchEnvironment: launchEnvironment.Clone(),
 	}
 	if request.Mode == workerhttp.AttemptModeResume {

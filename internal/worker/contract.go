@@ -25,8 +25,18 @@ type SessionRequest struct {
 	FeatureID         string
 	Role              Role
 	Instructions      string
+	OutputContract    OutputContract
 	LaunchEnvironment LaunchEnvironment
 }
+
+// OutputContract asks a provider adapter to return one small, workflow-owned
+// structured result instead of treating its final response as unconstrained
+// prose. The zero value preserves the normal conversational behavior.
+type OutputContract string
+
+const (
+	OutputContractPlanningLead OutputContract = "planning_lead"
+)
 
 // LaunchEnvironment is the worker-resolved view of the profile and workspace
 // assigned to one provider attempt. Variables are explicit NAME=VALUE entries;
@@ -83,6 +93,7 @@ type EventType string
 const (
 	EventUserMessage        EventType = "user_message"
 	EventMessage            EventType = "message"
+	EventPlanSubmitted      EventType = "plan_submitted"
 	EventActivity           EventType = "activity"
 	EventInputRequired      EventType = "input_required"
 	EventPauseAcknowledged  EventType = "pause_acknowledged"
@@ -183,6 +194,10 @@ func (request SessionRequest) Validate() error {
 		return fmt.Errorf("%w: role %q is not recognized", ErrInvalidSessionRequest, request.Role)
 	case strings.TrimSpace(request.Instructions) == "":
 		return fmt.Errorf("%w: instructions are required", ErrInvalidSessionRequest)
+	case request.OutputContract != "" && request.OutputContract != OutputContractPlanningLead:
+		return fmt.Errorf("%w: output contract %q is not recognized", ErrInvalidSessionRequest, request.OutputContract)
+	case request.OutputContract == OutputContractPlanningLead && request.Role != RoleLead:
+		return fmt.Errorf("%w: planning lead output requires the lead role", ErrInvalidSessionRequest)
 	}
 	if !request.LaunchEnvironment.IsZero() {
 		if err := request.LaunchEnvironment.Validate(); err != nil {
@@ -278,6 +293,7 @@ func (request SessionRequest) Equal(other SessionRequest) bool {
 		request.FeatureID == other.FeatureID &&
 		request.Role == other.Role &&
 		request.Instructions == other.Instructions &&
+		request.OutputContract == other.OutputContract &&
 		request.LaunchEnvironment.Equal(other.LaunchEnvironment)
 }
 

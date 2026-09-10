@@ -310,8 +310,8 @@ func (message PlanningMessage) Validate() error {
 		return fmt.Errorf("%w: agent ID is required", ErrInvalidPlanningMessage)
 	case !message.Role.IsValid():
 		return fmt.Errorf("%w: role %q is not recognized", ErrInvalidPlanningMessage, message.Role)
-	case message.Event.Type != worker.EventMessage:
-		return fmt.Errorf("%w: referenced event must be an agent message", ErrInvalidPlanningMessage)
+	case message.Event.Type != worker.EventMessage && message.Event.Type != worker.EventPlanSubmitted:
+		return fmt.Errorf("%w: referenced event must be an agent message or submitted plan", ErrInvalidPlanningMessage)
 	case message.LinkedAt.IsZero():
 		return fmt.Errorf("%w: link time is required", ErrInvalidPlanningMessage)
 	}

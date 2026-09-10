@@ -165,7 +165,7 @@ func TestStartPlanningReviewHandlerStartsReviewer(t *testing.T) {
 	}
 }
 
-func TestStartPlanningRoundHandlerStartsBoundedExchange(t *testing.T) {
+func TestStartPlanningRoundHandlerStartsBoundedPlanningLoop(t *testing.T) {
 	now := time.Date(2026, time.September, 9, 22, 0, 0, 0, time.UTC)
 	run := execution.Run{
 		ID: "run_round", FeatureID: "fea_planning", Status: execution.RunStatusRunning,

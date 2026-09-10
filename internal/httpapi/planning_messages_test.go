@@ -15,11 +15,17 @@ import (
 
 func TestPlanningMessagesExposeOneOrderedCrossSessionFeed(t *testing.T) {
 	now := time.Date(2026, time.September, 9, 21, 0, 0, 0, time.UTC)
+	submitted := planningMessage(
+		"run_plan", "sev_final", "ses_lead", "codex-lead", worker.RoleLead, 3,
+		"Final agreed plan", now.Add(2*time.Second),
+	)
+	submitted.Event.Type = worker.EventPlanSubmitted
 	executions := &recordingExecutionService{
 		run: execution.Run{ID: "run_plan"},
 		planning: []execution.PlanningMessage{
 			planningMessage("run_plan", "sev_lead", "ses_lead", "codex-lead", worker.RoleLead, 1, "Lead proposal", now),
 			planningMessage("run_plan", "sev_review", "ses_review", "codex-reviewer", worker.RoleReviewer, 2, "Reviewer response", now.Add(time.Second)),
+			submitted,
 		},
 	}
 	handler := New(nil, nil, nil, executions, nil, nil)
@@ -35,8 +41,9 @@ func TestPlanningMessagesExposeOneOrderedCrossSessionFeed(t *testing.T) {
 	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
 		t.Fatalf("decode planning messages: %v", err)
 	}
-	if len(response) != 2 || response[0].Role != worker.RoleLead ||
-		response[1].Role != worker.RoleReviewer || response[1].Sequence != 2 {
+	if len(response) != 3 || response[0].Role != worker.RoleLead ||
+		response[1].Role != worker.RoleReviewer || response[1].Sequence != 2 ||
+		response[2].Type != worker.EventPlanSubmitted || response[2].Text != "Final agreed plan" {
 		t.Fatalf("unexpected planning response %+v", response)
 	}
 }

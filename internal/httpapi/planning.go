@@ -88,7 +88,7 @@ func (api *API) startPlanningRoundHandler(w http.ResponseWriter, r *http.Request
 		case errors.Is(err, execution.ErrRecordConflict):
 			writeError(w, http.StatusConflict, "planning_round_conflict", "stored planning sessions conflict with this run")
 		case errors.Is(err, orchestration.ErrPlanningNotAllowed):
-			writeError(w, http.StatusConflict, "planning_round_not_ready", "a planning round requires the completed first lead and reviewer turns")
+			writeError(w, http.StatusConflict, "planning_round_not_ready", "the planning loop requires a completed reviewer response and fewer than ten shared messages")
 		default:
 			log.Printf("start planning round for run %q: %v", runID, err)
 			writeError(w, http.StatusInternalServerError, "internal_error", "internal server error")

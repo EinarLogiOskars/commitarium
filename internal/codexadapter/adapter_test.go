@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"testing"
@@ -78,6 +79,42 @@ func TestAdapterResumesExactThreadWithRecoveryBriefing(t *testing.T) {
 	result, err := session.Wait(timeoutContext(t, 3*time.Second))
 	if err != nil || result.ProviderSessionID != "thr_test" {
 		t.Fatalf("resumed result=%+v error=%v", result, err)
+	}
+}
+
+func TestAdapterPublishesStructuredPlanningSubmission(t *testing.T) {
+	adapter := testAdapter(t, "structured-plan", "Consider the reviewer's response")
+	request := adapter.request("att_codex_plan", "Consider the reviewer's response")
+	request.Role = worker.RoleLead
+	request.LaunchEnvironment.Role = worker.RoleLead
+	request.OutputContract = worker.OutputContractPlanningLead
+	session, err := adapter.Start(t.Context(), request)
+	if err != nil {
+		t.Fatalf("start structured planning turn: %v", err)
+	}
+	events := collectEvents(session)
+	result, err := session.Wait(timeoutContext(t, 3*time.Second))
+	if err != nil || result.Summary != "Final agreed plan" {
+		t.Fatalf("structured planning result=%+v error=%v", result, err)
+	}
+	if observed := <-events; !equalEvents(observed, []worker.Event{
+		{Type: worker.EventActivity, Text: "Codex started working."},
+		{Type: worker.EventPlanSubmitted, Text: "Final agreed plan"},
+	}) {
+		t.Fatalf("structured planning events = %+v", observed)
+	}
+}
+
+func TestPlanningLeadResponseFailsClosed(t *testing.T) {
+	for _, response := range []string{
+		`{"action":"unknown","content":"plan"}`,
+		`{"action":"submit_plan","content":" "}`,
+		`{"action":"respond","content":"reply","extra":true}`,
+		`{"action":"respond","content":"reply"} {}`,
+	} {
+		if _, err := decodePlanningLeadResponse(response); !errors.Is(err, ErrProtocol) {
+			t.Errorf("response %q error=%v, want ErrProtocol", response, err)
+		}
 	}
 }
 
@@ -315,6 +352,9 @@ func TestCodexAppServerHelper(t *testing.T) {
 		!helperTurnPromptMatches(turnRequest.Params, os.Getenv(helperPromptEnvironment)) {
 		os.Exit(86)
 	}
+	if (mode == "structured-plan") != helperTurnHasPlanningSchema(turnRequest.Params) {
+		os.Exit(93)
+	}
 	if mode == "turn-start-error" {
 		helperWrite(writer, map[string]any{
 			"id":    turnRequest.ID,
@@ -344,6 +384,16 @@ func TestCodexAppServerHelper(t *testing.T) {
 			"item": map[string]any{"id": "item_message", "type": "agentMessage", "text": "Implemented and verified the change."},
 		})
 		helpNotify(writer, "future/notification", map[string]any{"value": true})
+		helpWriteTurnCompleted(writer, "completed")
+		helperWaitForever()
+	case "structured-plan":
+		helpNotify(writer, "item/completed", map[string]any{
+			"threadId": "thr_test", "turnId": "turn_test",
+			"item": map[string]any{
+				"id": "item_message", "type": "agentMessage",
+				"text": `{"action":"submit_plan","content":"Final agreed plan"}`,
+			},
+		})
 		helpWriteTurnCompleted(writer, "completed")
 		helperWaitForever()
 	case "controls":
@@ -422,6 +472,16 @@ func helperTurnPromptMatches(raw json.RawMessage, want string) bool {
 	}
 	return json.Unmarshal(raw, &params) == nil && params.ThreadID == "thr_test" &&
 		len(params.Input) == 1 && params.Input[0].Type == "text" && params.Input[0].Text == want
+}
+
+func helperTurnHasPlanningSchema(raw json.RawMessage) bool {
+	var params struct {
+		OutputSchema struct {
+			Required []string `json:"required"`
+		} `json:"outputSchema"`
+	}
+	return json.Unmarshal(raw, &params) == nil &&
+		slices.Equal(params.OutputSchema.Required, []string{"action", "content"})
 }
 
 func helperSteerMatches(raw json.RawMessage) bool {

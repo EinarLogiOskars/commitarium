@@ -29,11 +29,13 @@ func TestSessionRequestValidate(t *testing.T) {
 	}
 
 	tests := map[string]SessionRequest{
-		"missing session ID":   {AttemptID: "att_test", FeatureID: "fea_test", Role: RoleCoder, Instructions: "work"},
-		"missing attempt ID":   {SessionID: "ses_test", FeatureID: "fea_test", Role: RoleCoder, Instructions: "work"},
-		"missing feature ID":   {SessionID: "ses_test", AttemptID: "att_test", Role: RoleCoder, Instructions: "work"},
-		"unknown role":         {SessionID: "ses_test", AttemptID: "att_test", FeatureID: "fea_test", Role: "unknown", Instructions: "work"},
-		"missing instructions": {SessionID: "ses_test", AttemptID: "att_test", FeatureID: "fea_test", Role: RoleCoder},
+		"missing session ID":           {AttemptID: "att_test", FeatureID: "fea_test", Role: RoleCoder, Instructions: "work"},
+		"missing attempt ID":           {SessionID: "ses_test", FeatureID: "fea_test", Role: RoleCoder, Instructions: "work"},
+		"missing feature ID":           {SessionID: "ses_test", AttemptID: "att_test", Role: RoleCoder, Instructions: "work"},
+		"unknown role":                 {SessionID: "ses_test", AttemptID: "att_test", FeatureID: "fea_test", Role: "unknown", Instructions: "work"},
+		"missing instructions":         {SessionID: "ses_test", AttemptID: "att_test", FeatureID: "fea_test", Role: RoleCoder},
+		"unknown output contract":      {SessionID: "ses_test", AttemptID: "att_test", FeatureID: "fea_test", Role: RoleCoder, Instructions: "work", OutputContract: "unknown"},
+		"planning output for reviewer": {SessionID: "ses_test", AttemptID: "att_test", FeatureID: "fea_test", Role: RoleReviewer, Instructions: "work", OutputContract: OutputContractPlanningLead},
 	}
 	for name, request := range tests {
 		t.Run(name, func(t *testing.T) {

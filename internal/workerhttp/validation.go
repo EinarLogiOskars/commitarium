@@ -133,6 +133,12 @@ func (request PutAttemptRequest) Validate(identity MutationIdentity) error {
 	if err := validateRequiredText("instructions", request.Instructions, MaxInstructionsBytes); err != nil {
 		return err
 	}
+	if request.OutputContract != "" && request.OutputContract != OutputContractPlanningLead {
+		return invalid("output contract %q is not recognized", request.OutputContract)
+	}
+	if request.OutputContract == OutputContractPlanningLead && request.Assignment.Role != RoleLead {
+		return invalid("planning lead output requires the lead role")
+	}
 	providerSessionID := strings.TrimSpace(request.ProviderSessionID)
 	if len(providerSessionID) > maxProviderSessionIDBytes {
 		return invalid("provider session ID exceeds %d bytes", maxProviderSessionIDBytes)
@@ -347,6 +353,7 @@ func (request ForceStopRequest) Validate(identity MutationIdentity) error {
 func (eventType EventType) IsValid() bool {
 	switch eventType {
 	case EventMessage,
+		EventPlanSubmitted,
 		EventActivity,
 		EventInputRequired,
 		EventPauseAcknowledged,

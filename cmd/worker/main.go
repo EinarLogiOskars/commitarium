@@ -342,6 +342,7 @@ func normalizeObservableEvent(
 ) (workerservice.NormalizedEvent, error) {
 	switch event.Type {
 	case worker.EventMessage,
+		worker.EventPlanSubmitted,
 		worker.EventActivity,
 		worker.EventInputRequired,
 		worker.EventPauseAcknowledged,
