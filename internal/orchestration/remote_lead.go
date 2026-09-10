@@ -21,15 +21,16 @@ import (
 )
 
 const (
-	remoteLeadAgentID               = "codex-lead"
-	remoteReviewerAgentID           = "codex-reviewer"
-	maxPlanningMessages             = 10
-	planningPlanSubmittedReason     = "The lead submitted the final plan after reaching agreement with the reviewer. It is ready to publish to Forgejo."
-	planningPlanPublishedReason     = "The agreed implementation plan was published to Forgejo. It is ready for implementation."
-	planningPublicationReviewReason = "The coordinator could not safely confirm publication of the agreed plan to Forgejo. No agent or implementation work was started. Inspect the managed workspace and pull request before retrying."
-	planningLimitReason             = "The planning discussion reached its ten-message limit without an agreed plan. User input is required."
-	implementationRunningReason     = "The lead is implementing the agreed plan in the managed workspace."
-	implementationReadyReason       = "The lead finished the first implementation turn. Inspect its activity and workspace before the commit step."
+	remoteLeadAgentID                = "codex-lead"
+	remoteReviewerAgentID            = "codex-reviewer"
+	maxPlanningMessages              = 10
+	planningPlanSubmittedReason      = "The lead submitted the final plan after reaching agreement with the reviewer. It is ready to publish to Forgejo."
+	planningPlanPublishedReason      = "The agreed implementation plan was published to Forgejo. It is ready for implementation."
+	planningPublicationReviewReason  = "The coordinator could not safely confirm publication of the agreed plan to Forgejo. No agent or implementation work was started. Inspect the managed workspace and pull request before retrying."
+	planningLimitReason              = "The planning discussion reached its ten-message limit without an agreed plan. User input is required."
+	implementationRunningReason      = "The lead is implementing the agreed plan in the managed workspace."
+	implementationContinuationReason = "The lead is continuing implementation after the user's guidance."
+	implementationReadyReason        = "The lead finished the latest implementation turn. Inspect its activity and workspace before the commit step."
 )
 
 type planningStage string
@@ -62,7 +63,7 @@ type RemoteLeadExecution interface {
 	GetCommand(context.Context, string) (execution.Command, error)
 	PendingCommandsForSession(context.Context, string) ([]execution.Command, error)
 	ResolveCommand(context.Context, string, execution.CommandStatus, string) (execution.Command, error)
-	BeginWorkerTurn(context.Context, worker.Command, string, execution.WorkerAttemptCheckpoint, string, string) (execution.WorkerTurnAdmissionResult, bool, error)
+	BeginWorkerTurn(context.Context, worker.Command, string, execution.WorkerAttemptCheckpoint, string, feature.State, string) (execution.WorkerTurnAdmissionResult, bool, error)
 	BeginAutonomousTurn(context.Context, string, execution.WorkerAttemptCheckpoint, string, feature.State, string) (bool, error)
 	BeginChainedTurn(context.Context, string, execution.WorkerAttemptCheckpoint, string, string) (bool, error)
 	BeginNewSessionTurn(context.Context, string, string, string, worker.Role, string, string) (bool, error)
@@ -87,6 +88,7 @@ type RemoteLeadWorkspaceService interface {
 	Prepare(context.Context, string, string) (workspace.Workspace, bool, error)
 	PublishPlan(context.Context, string, string, string, string) (workspace.Workspace, bool, error)
 	VerifyPublishedPlan(context.Context, string, string, string, string) (workspace.Workspace, error)
+	VerifyImplementationContinuation(context.Context, string, string, string, string) (workspace.Workspace, error)
 }
 
 type RemoteLeadWorker interface {
@@ -232,9 +234,10 @@ func (starter *RemoteLeadStarter) Recover(
 	if err != nil {
 		return fmt.Errorf("load lead worker attempt: %w", err)
 	}
-	if storedFeature.State == feature.StateImplementing &&
-		(!isLead || checkpoint.AttemptID != implementationAttemptID(session.ID)) {
-		return fmt.Errorf("%w: implementing feature has an unexpected active attempt", ErrInvalidRunRequest)
+	if storedFeature.State == feature.StateImplementing {
+		if _, implementing := implementationTurnNumber(session.ID, checkpoint.AttemptID); !isLead || !implementing {
+			return fmt.Errorf("%w: implementing feature has an unexpected active attempt", ErrInvalidRunRequest)
+		}
 	}
 	request := remoteLeadRequest{
 		runID:         run.ID,
@@ -259,8 +262,13 @@ func (starter *RemoteLeadStarter) Recover(
 		return fmt.Errorf("%w: reviewer session has an unexpected pending command", ErrInvalidRunRequest)
 	}
 	if isLead && len(pending) == 1 {
+		implementationTurn, implementing := implementationTurnNumber(session.ID, checkpoint.AttemptID)
+		matchesDraftReply := storedFeature.State == feature.StateDraft &&
+			replyAttemptID(session.ID, pending[0].ID) == checkpoint.AttemptID
+		matchesImplementationContinuation := storedFeature.State == feature.StateImplementing &&
+			implementing && implementationTurn > 1
 		if pending[0].Type != worker.CommandMessage ||
-			replyAttemptID(session.ID, pending[0].ID) != checkpoint.AttemptID {
+			(!matchesDraftReply && !matchesImplementationContinuation) {
 			return fmt.Errorf("%w: pending reply does not match the current worker attempt", ErrInvalidRunRequest)
 		}
 		request.commandID = pending[0].ID
@@ -292,7 +300,7 @@ func (starter *RemoteLeadStarter) recoverIdleImplementationRun(
 	if err != nil {
 		return fmt.Errorf("load implementation attempt: %w", err)
 	}
-	if checkpoint.AttemptID != implementationAttemptID(lead.ID) {
+	if _, ok := implementationTurnNumber(lead.ID, checkpoint.AttemptID); !ok {
 		return fmt.Errorf("%w: idle implementation attempt is incomplete", ErrInvalidRunRequest)
 	}
 	if err := starter.confirmCompletedTurn(ctx, lead, checkpoint); err != nil {
@@ -466,8 +474,17 @@ func planningTurnAttemptID(sessionID string, turn int) string {
 	return sessionID + ":planning:" + strconv.Itoa(turn)
 }
 
-func implementationAttemptID(sessionID string) string {
-	return sessionID + ":implementation:1"
+func implementationAttemptID(sessionID string, turn int) string {
+	return sessionID + ":implementation:" + strconv.Itoa(turn)
+}
+
+func implementationTurnNumber(sessionID, attemptID string) (int, bool) {
+	value, found := strings.CutPrefix(attemptID, sessionID+":implementation:")
+	if !found {
+		return 0, false
+	}
+	turn, err := strconv.Atoi(value)
+	return turn, err == nil && turn > 0
 }
 
 func planningTurnNumber(sessionID, attemptID string) (int, bool) {
@@ -496,7 +513,7 @@ func planningStageForAttempt(session execution.Session, attemptID string) planni
 }
 
 func waitingReasonForAttempt(session execution.Session, attemptID string) string {
-	if session.Role == worker.RoleLead && attemptID == implementationAttemptID(session.ID) {
+	if _, implementing := implementationTurnNumber(session.ID, attemptID); session.Role == worker.RoleLead && implementing {
 		return implementationReadyReason
 	}
 	turn, planned := planningTurnNumber(session.ID, attemptID)
@@ -993,7 +1010,7 @@ func (starter *RemoteLeadStarter) StartImplementation(
 	if err != nil {
 		return execution.Run{}, false, err
 	}
-	attemptID := implementationAttemptID(lead.ID)
+	attemptID := implementationAttemptID(lead.ID, 1)
 	if checkpoint.AttemptID == attemptID {
 		if storedFeature.State != feature.StateImplementing {
 			return execution.Run{}, false, fmt.Errorf(
@@ -1123,6 +1140,32 @@ func implementationInstructions(
 		"in this turn; those actions require the coordinator's next explicit workflow step. Durable " +
 		"repository and coordinator state are authoritative over conversational memory.\n\n" +
 		"Current workflow phase: implementing\nAccepted goal:\n" + storedFeature.AcceptedGoal +
+		"\n\nAgreed implementation plan:\n" + plan +
+		"\n\nRepository: " + prepared.RepositoryOwner + "/" + prepared.RepositoryName +
+		"\nBase branch: " + prepared.BaseBranch + "\nFeature branch: " + prepared.Branch +
+		"\nPlanning baseline commit: " + prepared.BaseCommitID +
+		fmt.Sprintf("\nDraft pull request: #%d (%s)", prepared.PullRequestNumber, prepared.PullRequestURL)
+}
+
+func implementationContinuationInstructions(
+	storedFeature feature.Feature,
+	prepared workspace.Workspace,
+	plan string,
+	userMessage string,
+) string {
+	return "Continue the same provider conversation and implementation work after the user's " +
+		"guidance below. Inspect before modifying anything: reconcile the current working directory, " +
+		"Git HEAD, branch, status, and diff with the durable facts below and with the work already " +
+		"completed in this conversation. Preserve all existing changes, including manual user edits; " +
+		"do not reset, clean, overwrite, or repeat completed work. If partial work is ambiguous, facts " +
+		"conflict, an external side effect may or may not have happened, or the guidance would change " +
+		"the accepted goal or agreed plan, stop and explain the problem without making further changes. " +
+		"Otherwise apply the user's guidance within the accepted plan, continue the implementation, run " +
+		"the relevant available tests, and finish with a concise summary of changed files, validation, " +
+		"and blockers. Do not commit or push in this turn. Durable repository, pull-request, and " +
+		"coordinator state are authoritative over conversational memory.\n\n" +
+		"User's continuation guidance:\n" + userMessage +
+		"\n\nCurrent workflow phase: implementing\nAccepted goal:\n" + storedFeature.AcceptedGoal +
 		"\n\nAgreed implementation plan:\n" + plan +
 		"\n\nRepository: " + prepared.RepositoryOwner + "/" + prepared.RepositoryName +
 		"\nBase branch: " + prepared.BaseBranch + "\nFeature branch: " + prepared.Branch +
@@ -1442,12 +1485,6 @@ func (starter *RemoteLeadStarter) SendCommand(
 	if err != nil {
 		return execution.Command{}, fmt.Errorf("load lead feature: %w", err)
 	}
-	if storedFeature.State != feature.StateDraft {
-		return execution.Command{}, ErrCommandNotAllowed
-	}
-	if storedFeature.AcceptedGoal != "" || storedFeature.GoalAcceptedAt != nil {
-		return execution.Command{}, ErrCommandNotAllowed
-	}
 	checkpoint, err := starter.executions.GetWorkerAttempt(ctx, session.ID)
 	if err != nil {
 		return execution.Command{}, fmt.Errorf("load prior lead attempt: %w", err)
@@ -1461,7 +1498,27 @@ func (starter *RemoteLeadStarter) SendCommand(
 	if err := validateCompletedTurn(session, checkpoint, prior); err != nil {
 		return execution.Command{}, err
 	}
-	request, err := starter.replyRequest(run, storedFeature, session, command)
+
+	var request remoteLeadRequest
+	var expectedState feature.State
+	var runReason string
+	switch storedFeature.State {
+	case feature.StateDraft:
+		if storedFeature.AcceptedGoal != "" || storedFeature.GoalAcceptedAt != nil {
+			return execution.Command{}, ErrCommandNotAllowed
+		}
+		request, err = starter.replyRequest(run, storedFeature, session, command)
+		expectedState = feature.StateDraft
+		runReason = "The lead agent is responding to the user's message."
+	case feature.StateImplementing:
+		request, err = starter.implementationContinuationRequest(
+			ctx, run, storedFeature, session, checkpoint, command,
+		)
+		expectedState = feature.StateImplementing
+		runReason = implementationContinuationReason
+	default:
+		return execution.Command{}, ErrCommandNotAllowed
+	}
 	if err != nil {
 		return execution.Command{}, err
 	}
@@ -1470,7 +1527,7 @@ func (starter *RemoteLeadStarter) SendCommand(
 	}
 	result, admitted, err := starter.executions.BeginWorkerTurn(
 		ctx, command, session.ID, checkpoint, request.identity.AttemptID,
-		"The lead agent is responding to the user's message.",
+		expectedState, runReason,
 	)
 	if err != nil {
 		starter.release(run.ID)
@@ -1486,6 +1543,82 @@ func (starter *RemoteLeadStarter) SendCommand(
 	}
 	go starter.launch(request)
 	return result.Command, nil
+}
+
+func (starter *RemoteLeadStarter) implementationContinuationRequest(
+	ctx context.Context,
+	run execution.Run,
+	storedFeature feature.Feature,
+	lead execution.Session,
+	checkpoint execution.WorkerAttemptCheckpoint,
+	command worker.Command,
+) (remoteLeadRequest, error) {
+	if strings.TrimSpace(storedFeature.AcceptedGoal) == "" ||
+		storedFeature.GoalAcceptedAt == nil || starter.workspaces == nil {
+		return remoteLeadRequest{}, ErrCommandNotAllowed
+	}
+	turn, implementing := implementationTurnNumber(lead.ID, checkpoint.AttemptID)
+	if !implementing {
+		return remoteLeadRequest{}, ErrCommandNotAllowed
+	}
+	reviewer, err := starter.executions.GetSession(ctx, remoteReviewerSessionID(run.ID))
+	if err != nil {
+		return remoteLeadRequest{}, err
+	}
+	if reviewer.Status != execution.SessionStatusWaitingForUser ||
+		reviewer.AgentID != remoteReviewerAgentID || reviewer.Role != worker.RoleReviewer ||
+		reviewer.ProviderSessionID == "" {
+		return remoteLeadRequest{}, ErrCommandNotAllowed
+	}
+	messages, err := starter.executions.PlanningMessagesForRun(ctx, run.ID)
+	if err != nil {
+		return remoteLeadRequest{}, err
+	}
+	if len(messages) == 0 || messages[len(messages)-1].Role != worker.RoleLead ||
+		messages[len(messages)-1].Event.Type != worker.EventPlanSubmitted {
+		return remoteLeadRequest{}, ErrCommandNotAllowed
+	}
+	plan := messages[len(messages)-1].Event
+	published, err := starter.planPublicationRecorded(ctx, plan)
+	if err != nil {
+		return remoteLeadRequest{}, err
+	}
+	if !published {
+		return remoteLeadRequest{}, ErrCommandNotAllowed
+	}
+	prepared, err := starter.workspaces.VerifyImplementationContinuation(
+		ctx, storedFeature.ProjectID, storedFeature.ID, plan.ID, plan.Text,
+	)
+	if err != nil {
+		return remoteLeadRequest{}, fmt.Errorf("verify implementation continuation workspace: %w", err)
+	}
+	attemptID := implementationAttemptID(lead.ID, turn+1)
+	request := remoteLeadRequest{
+		runID: run.ID, commandID: command.ID, agentName: "lead agent",
+		waitingReason: implementationReadyReason,
+		identity: workerhttp.MutationIdentity{
+			AttemptReference: workerhttp.AttemptReference{
+				SessionID: lead.ID, AttemptID: attemptID,
+			},
+			IdempotencyKey: attemptID + ":resume",
+		},
+		request: workerhttp.PutAttemptRequest{
+			Mode: workerhttp.AttemptModeResume,
+			Assignment: workerhttp.Assignment{
+				AgentProfileID: starter.agentProfileID,
+				ProjectID:      storedFeature.ProjectID, FeatureID: storedFeature.ID,
+				Role: workerhttp.RoleLead, WorkspaceID: prepared.ID,
+			},
+			ProviderSessionID: lead.ProviderSessionID,
+			Instructions: implementationContinuationInstructions(
+				storedFeature, prepared, plan.Text, command.Message,
+			),
+		},
+	}
+	if err := request.request.Validate(request.identity); err != nil {
+		return remoteLeadRequest{}, fmt.Errorf("%w: %v", ErrInvalidRunRequest, err)
+	}
+	return request, nil
 }
 
 func (starter *RemoteLeadStarter) confirmCompletedTurn(

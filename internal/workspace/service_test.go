@@ -540,6 +540,46 @@ func TestServiceVerifiesPublishedPlanWithoutRepublishing(t *testing.T) {
 	}
 }
 
+func TestServiceVerifiesImplementationContinuationWithoutRequiringCleanCheckout(t *testing.T) {
+	now := time.Date(2026, time.September, 10, 2, 30, 0, 0, time.UTC)
+	stored := readyTestWorkspace(now)
+	pullRequestReadyAt := now.Add(3 * time.Minute)
+	stored.PullRequestNumber = 8
+	stored.PullRequestURL = "http://localhost:3001/owner/repository/pulls/8"
+	stored.PullRequestRecordedAt = &pullRequestReadyAt
+	stored.UpdatedAt = pullRequestReadyAt
+	branches := &recordingBranches{base: Branch{
+		Name: stored.Branch, CommitID: stored.BaseCommitID,
+	}}
+	checkout := &recordingCheckout{}
+	pullRequests := &recordingPullRequests{planResult: PullRequest{
+		Number: 8, URL: stored.PullRequestURL, Title: "WIP: Test feature",
+		Body: "published plan", State: "open", Draft: true,
+		BaseBranch: stored.BaseBranch, HeadBranch: stored.Branch,
+		HeadCommitID: stored.BaseCommitID, CreatedAt: pullRequestReadyAt,
+	}}
+	accepted := acceptedTestFeature(now)
+	accepted.State = feature.StateImplementing
+	service := NewServiceWithPreparation(
+		&memoryStore{stored: stored}, fixedFeatureFinder{stored: accepted},
+		fixedProjectFinder{stored: project.Project{
+			ID: "prj_test", ForgejoRepository: testRepository(now),
+		}}, branches, checkout, pullRequests,
+	)
+
+	got, err := service.VerifyImplementationContinuation(
+		t.Context(), "prj_test", "fea_test", "sev_final_plan", "Final plan",
+	)
+	if err != nil || got != stored {
+		t.Fatalf("verify implementation continuation: workspace=%+v err=%v", got, err)
+	}
+	if branches.getCalls != 1 || len(checkout.specs) != 1 ||
+		checkout.specs[0].RequireCleanBaseline || len(pullRequests.planSpecs) != 0 ||
+		len(pullRequests.verifiedPlanSpecs) != 1 {
+		t.Fatalf("continuation verification did not preserve local work: branches=%d checkout=%+v published=%+v verified=%+v", branches.getCalls, checkout.specs, pullRequests.planSpecs, pullRequests.verifiedPlanSpecs)
+	}
+}
+
 func TestServiceRequiresAcceptedGoalAndRepositoryBinding(t *testing.T) {
 	now := time.Date(2026, time.September, 9, 20, 0, 0, 0, time.UTC)
 	acceptedAt := now.Add(-time.Minute)

@@ -130,14 +130,15 @@ func (unavailableRemoteLeadWorker) GetAttempt(
 type unexpectedRemoteLeadPump struct{ called bool }
 
 type remoteLeadWorkspaceStub struct {
-	prepared         workspace.Workspace
-	prepareCalls     int
-	publishCalls     int
-	verifyCalls      int
-	publishedEventID string
-	publishedPlan    string
-	publishErr       error
-	verifyErr        error
+	prepared                workspace.Workspace
+	prepareCalls            int
+	publishCalls            int
+	verifyCalls             int
+	continuationVerifyCalls int
+	publishedEventID        string
+	publishedPlan           string
+	publishErr              error
+	verifyErr               error
 }
 
 func (stub *remoteLeadWorkspaceStub) VerifyPublishedPlan(
@@ -148,6 +149,19 @@ func (stub *remoteLeadWorkspaceStub) VerifyPublishedPlan(
 	plan string,
 ) (workspace.Workspace, error) {
 	stub.verifyCalls++
+	stub.publishedEventID = eventID
+	stub.publishedPlan = plan
+	return stub.prepared, stub.verifyErr
+}
+
+func (stub *remoteLeadWorkspaceStub) VerifyImplementationContinuation(
+	_ context.Context,
+	_ string,
+	_ string,
+	eventID string,
+	plan string,
+) (workspace.Workspace, error) {
+	stub.continuationVerifyCalls++
 	stub.publishedEventID = eventID
 	stub.publishedPlan = plan
 	return stub.prepared, stub.verifyErr
@@ -715,6 +729,7 @@ func TestRemoteLeadRecoveryReattachesToCommittedReplyAttempt(t *testing.T) {
 	}
 	if _, admitted, err := executions.BeginWorkerTurn(
 		t.Context(), reply, sessionID, checkpoint, replyAttemptID(sessionID, reply.ID),
+		feature.StateDraft,
 		"The lead agent is responding to the user's message.",
 	); err != nil || !admitted {
 		t.Fatalf("commit reply before simulated restart: admitted=%t err=%v", admitted, err)
@@ -764,6 +779,8 @@ func TestRemoteLeadStartsPlanningInManagedWorkspace(t *testing.T) {
 	addCompletedReviewerPlanningAttempt(stub, runID, storedProject.ID, storedFeature.ID)
 	addCompletedPlanningCorrectionAttempts(stub, runID, storedProject.ID, storedFeature.ID)
 	addCompletedImplementationAttempt(stub, runID, storedProject.ID, storedFeature.ID)
+	addCompletedImplementationContinuationAttempt(stub, runID, storedProject.ID, storedFeature.ID, 2)
+	addCompletedImplementationContinuationAttempt(stub, runID, storedProject.ID, storedFeature.ID, 3)
 	workflowService := workflow.NewService(database.NewWorkflowStore(db))
 	now := time.Date(2026, time.September, 9, 20, 0, 0, 0, time.UTC)
 	checkoutAt := now.Add(time.Second)
@@ -1020,25 +1037,72 @@ func TestRemoteLeadStartsPlanningInManagedWorkspace(t *testing.T) {
 		t.Fatalf("implementation retry repeated work: requests=%d verifications=%d", requestCount, workspaceStub.verifyCalls)
 	}
 
-	// Simulate a coordinator stopping after the worker reached terminal state
-	// but before the coordinator finalized the durable waiting boundary. A new
-	// starter must inspect and reattach to this exact attempt, never PUT a new one.
+	continuation := worker.Command{
+		ID: "continue-implementation-1", Type: worker.CommandMessage,
+		Message: "Keep the manual error handling in the checkout and finish the focused tests.",
+	}
+	command, err := starter.SendCommand(
+		t.Context(), remoteLeadSessionID(runID), continuation,
+	)
+	if err != nil || command.Status != execution.CommandStatusPending {
+		t.Fatalf("continue implementation: command=%+v err=%v", command, err)
+	}
+	waitForRemoteLeadStatus(t, executions, runID, execution.RunStatusWaitingForUser)
+	applied, err := executions.GetCommand(t.Context(), continuation.ID)
+	if err != nil || applied.Status != execution.CommandStatusApplied {
+		t.Fatalf("continuation message was not applied: command=%+v err=%v", applied, err)
+	}
+	if workspaceStub.continuationVerifyCalls != 1 ||
+		workspaceStub.publishedEventID != messages[4].Event.ID ||
+		workspaceStub.publishedPlan != messages[4].Event.Text {
+		t.Fatalf("continuation did not verify the exact durable plan: %+v", workspaceStub)
+	}
+	stub.mu.Lock()
+	requests = append([]workerhttp.PutAttemptRequest(nil), stub.putRequests...)
+	stub.mu.Unlock()
+	if len(requests) != 8 || requests[7].Mode != workerhttp.AttemptModeResume ||
+		requests[7].ProviderSessionID != "codex-thread-test" ||
+		requests[7].Assignment.WorkspaceID != workspaceStub.prepared.ID ||
+		!strings.Contains(requests[7].Instructions, continuation.Message) ||
+		!strings.Contains(requests[7].Instructions, "Preserve all existing changes") ||
+		!strings.Contains(requests[7].Instructions, "Do not commit or push") {
+		t.Fatalf("unexpected implementation continuation request %+v", requests[7])
+	}
+	if retried, err := starter.SendCommand(
+		t.Context(), remoteLeadSessionID(runID), continuation,
+	); err != nil ||
+		retried.Status != execution.CommandStatusApplied {
+		t.Fatalf("retry implementation continuation: command=%+v err=%v", retried, err)
+	}
+	stub.mu.Lock()
+	requestCount = len(stub.putRequests)
+	stub.mu.Unlock()
+	if requestCount != 8 || workspaceStub.continuationVerifyCalls != 1 {
+		t.Fatalf("continuation retry repeated work: requests=%d verifications=%d", requestCount, workspaceStub.continuationVerifyCalls)
+	}
+
+	// Simulate a coordinator stopping after it atomically admitted a third
+	// implementation turn but before it contacted the worker. The worker already
+	// has that deterministic attempt, so recovery must reattach without another PUT.
 	waitForRemoteLeadIdle(t, starter, runID)
 	lead, err := executions.GetSession(t.Context(), remoteLeadSessionID(runID))
 	if err != nil {
 		t.Fatalf("load implementation lead before recovery: %v", err)
 	}
-	if _, err := executions.TransitionSession(
-		t.Context(), lead.ID, execution.SessionStatusWaitingForUser,
-		execution.SessionStatusRunning, lead.ProviderSessionID,
-	); err != nil {
-		t.Fatalf("restore interrupted implementation session: %v", err)
+	checkpoint, err := executions.GetWorkerAttempt(t.Context(), lead.ID)
+	if err != nil {
+		t.Fatalf("load implementation checkpoint before recovery: %v", err)
 	}
-	if _, err := executions.TransitionRun(
-		t.Context(), runID, execution.RunStatusWaitingForUser,
-		execution.RunStatusRunning, implementationRunningReason,
-	); err != nil {
-		t.Fatalf("restore interrupted implementation run: %v", err)
+	recoveryCommand := worker.Command{
+		ID: "continue-implementation-before-restart", Type: worker.CommandMessage,
+		Message: "Recheck the final focused test before we commit.",
+	}
+	if _, admitted, err := executions.BeginWorkerTurn(
+		t.Context(), recoveryCommand, lead.ID, checkpoint,
+		implementationAttemptID(lead.ID, 3), feature.StateImplementing,
+		implementationContinuationReason,
+	); err != nil || !admitted {
+		t.Fatalf("admit interrupted implementation continuation: admitted=%t err=%v", admitted, err)
 	}
 	interrupted, err := executions.GetRun(t.Context(), runID)
 	if err != nil {
@@ -1067,8 +1131,12 @@ func TestRemoteLeadStartsPlanningInManagedWorkspace(t *testing.T) {
 	stub.mu.Lock()
 	requestCount = len(stub.putRequests)
 	stub.mu.Unlock()
-	if requestCount != 7 {
+	if requestCount != 8 {
 		t.Fatalf("implementation recovery started a replacement worker turn: %d requests", requestCount)
+	}
+	recoveredCommand, err := executions.GetCommand(t.Context(), recoveryCommand.ID)
+	if err != nil || recoveredCommand.Status != execution.CommandStatusApplied {
+		t.Fatalf("recovered continuation command was not applied: %+v err=%v", recoveredCommand, err)
 	}
 	recoveredEvents, err := executions.EventsForSession(t.Context(), lead.ID)
 	if err != nil {
@@ -1714,7 +1782,7 @@ func addCompletedImplementationAttempt(
 ) {
 	sessionID := remoteLeadSessionID(runID)
 	reference := workerhttp.AttemptReference{
-		SessionID: sessionID, AttemptID: implementationAttemptID(sessionID),
+		SessionID: sessionID, AttemptID: implementationAttemptID(sessionID, 1),
 	}
 	now := time.Date(2026, time.September, 10, 3, 30, 0, 0, time.UTC)
 	initial := workerhttp.Attempt{
@@ -1746,6 +1814,55 @@ func addCompletedImplementationAttempt(
 		{
 			AttemptReference: reference, Sequence: 2, Type: workerhttp.EventMessage,
 			Text: "Implemented the agreed files and ran focused tests.", OccurredAt: now.Add(time.Millisecond),
+		},
+		{
+			AttemptReference: reference, Sequence: 3, Type: workerhttp.EventAttemptTerminal,
+			Text: terminal.Result.Summary, OccurredAt: endedAt,
+		},
+	}
+}
+
+func addCompletedImplementationContinuationAttempt(
+	stub *conversationalRemoteLeadWorker,
+	runID string,
+	projectID string,
+	featureID string,
+	turn int,
+) {
+	sessionID := remoteLeadSessionID(runID)
+	reference := workerhttp.AttemptReference{
+		SessionID: sessionID, AttemptID: implementationAttemptID(sessionID, turn),
+	}
+	now := time.Date(2026, time.September, 10, 4, turn, 0, 0, time.UTC)
+	initial := workerhttp.Attempt{
+		AttemptReference: reference, Mode: workerhttp.AttemptModeResume,
+		Assignment: workerhttp.Assignment{
+			AgentProfileID: "codex-default", ProjectID: projectID, FeatureID: featureID,
+			Role: workerhttp.RoleLead, WorkspaceID: "wsp_managed_feature",
+		},
+		ProviderSessionID: "codex-thread-test", State: workerhttp.AttemptStateRunning,
+		StartedAt: now, UpdatedAt: now,
+	}
+	endedAt := now.Add(time.Second)
+	terminal := initial
+	terminal.State = workerhttp.AttemptStateTerminal
+	terminal.LatestEventSequence = 3
+	terminal.UpdatedAt = endedAt
+	terminal.EndedAt = &endedAt
+	terminal.Result = &workerhttp.TerminalResult{
+		Outcome: workerhttp.OutcomeCompleted, Disposition: workerhttp.DispositionSucceeded,
+		Summary: "Continued implementation without committing.",
+	}
+	stub.initial[reference] = initial
+	stub.terminal[reference] = terminal
+	stub.events[reference] = []workerhttp.Event{
+		{
+			AttemptReference: reference, Sequence: 1, Type: workerhttp.EventActivity,
+			Text: "Reconciled existing user and agent changes before editing.", OccurredAt: now,
+		},
+		{
+			AttemptReference: reference, Sequence: 2, Type: workerhttp.EventMessage,
+			Text: "Preserved the manual edit and completed focused tests.", OccurredAt: now.Add(time.Millisecond),
 		},
 		{
 			AttemptReference: reference, Sequence: 3, Type: workerhttp.EventAttemptTerminal,

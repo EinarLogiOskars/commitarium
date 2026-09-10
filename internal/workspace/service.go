@@ -256,7 +256,7 @@ func (service *Service) PublishPlan(
 	eventID string,
 	plan string,
 ) (Workspace, bool, error) {
-	return service.reconcileSubmittedPlan(ctx, projectID, featureID, eventID, plan, true)
+	return service.reconcileSubmittedPlan(ctx, projectID, featureID, eventID, plan, true, true)
 }
 
 // VerifyPublishedPlan applies the same identity and clean-baseline checks as
@@ -270,7 +270,24 @@ func (service *Service) VerifyPublishedPlan(
 	plan string,
 ) (Workspace, error) {
 	stored, _, err := service.reconcileSubmittedPlan(
-		ctx, projectID, featureID, eventID, plan, false,
+		ctx, projectID, featureID, eventID, plan, false, true,
+	)
+	return stored, err
+}
+
+// VerifyImplementationContinuation confirms that the original branch, pull
+// request, and accepted plan are still intact without requiring the managed
+// checkout to be clean. Local edits and descendant commits are expected here:
+// they may be work from the previous agent turn or from the user.
+func (service *Service) VerifyImplementationContinuation(
+	ctx context.Context,
+	projectID string,
+	featureID string,
+	eventID string,
+	plan string,
+) (Workspace, error) {
+	stored, _, err := service.reconcileSubmittedPlan(
+		ctx, projectID, featureID, eventID, plan, false, false,
 	)
 	return stored, err
 }
@@ -282,6 +299,7 @@ func (service *Service) reconcileSubmittedPlan(
 	eventID string,
 	plan string,
 	publishMissing bool,
+	requireCleanBaseline bool,
 ) (Workspace, bool, error) {
 	eventID = strings.TrimSpace(eventID)
 	plan = strings.TrimSpace(plan)
@@ -328,7 +346,7 @@ func (service *Service) reconcileSubmittedPlan(
 		WorkspaceID: stored.ID, RepositoryOwner: stored.RepositoryOwner,
 		RepositoryName: stored.RepositoryName, Branch: stored.Branch,
 		BaseCommitID: stored.BaseCommitID, AlreadyReady: true,
-		RequireCleanBaseline: true,
+		RequireCleanBaseline: requireCleanBaseline,
 	}); err != nil {
 		return Workspace{}, false, fmt.Errorf("reconcile managed checkout: %w", err)
 	}

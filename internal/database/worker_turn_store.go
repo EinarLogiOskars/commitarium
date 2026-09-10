@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/EinarLogiOskars/commitarium/internal/execution"
+	"github.com/EinarLogiOskars/commitarium/internal/feature"
 	"github.com/EinarLogiOskars/commitarium/internal/worker"
 )
 
@@ -69,16 +70,24 @@ func (s *ExecutionStore) BeginWorkerTurn(
 	if run.Status != execution.RunStatusWaitingForUser {
 		return execution.WorkerTurnAdmissionResult{}, false, execution.ErrStateConflict
 	}
+	var featureState feature.State
 	var acceptedGoal string
 	var goalAcceptedAt sql.NullString
 	if err := tx.QueryRowContext(
 		ctx,
-		`SELECT accepted_goal, goal_accepted_at FROM features WHERE id = ?`,
+		`SELECT state, accepted_goal, goal_accepted_at FROM features WHERE id = ?`,
 		run.FeatureID,
-	).Scan(&acceptedGoal, &goalAcceptedAt); err != nil {
+	).Scan(&featureState, &acceptedGoal, &goalAcceptedAt); err != nil {
 		return execution.WorkerTurnAdmissionResult{}, false, fmt.Errorf("select feature goal boundary: %w", err)
 	}
-	if acceptedGoal != "" || goalAcceptedAt.Valid {
+	if featureState != admission.ExpectedFeatureState {
+		return execution.WorkerTurnAdmissionResult{}, false, execution.ErrStateConflict
+	}
+	validGoalBoundary := (featureState == feature.StateDraft &&
+		acceptedGoal == "" && !goalAcceptedAt.Valid) ||
+		(featureState == feature.StateImplementing &&
+			strings.TrimSpace(acceptedGoal) != "" && goalAcceptedAt.Valid)
+	if !validGoalBoundary {
 		return execution.WorkerTurnAdmissionResult{}, false, execution.ErrStateConflict
 	}
 	checkpoint, err := scanWorkerAttemptCheckpoint(tx.QueryRowContext(
@@ -218,6 +227,9 @@ func validateWorkerTurnAdmission(admission execution.WorkerTurnAdmission) error 
 		return fmt.Errorf("%w: previous event sequence cannot be negative", execution.ErrInvalidWorkerAttempt)
 	case admission.NextAttempt.AttemptID == admission.PreviousAttemptID:
 		return fmt.Errorf("%w: replacement attempt must be new", execution.ErrInvalidWorkerAttempt)
+	case admission.ExpectedFeatureState != feature.StateDraft &&
+		admission.ExpectedFeatureState != feature.StateImplementing:
+		return fmt.Errorf("%w: worker turn feature state must be draft or implementing", execution.ErrStateConflict)
 	case strings.TrimSpace(admission.RunReason) == "":
 		return fmt.Errorf("%w: run reason is required", execution.ErrInvalidRun)
 	case admission.OccurredAt.IsZero():

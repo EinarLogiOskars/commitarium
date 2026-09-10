@@ -10,7 +10,9 @@ import (
 
 	"github.com/EinarLogiOskars/commitarium/internal/execution"
 	"github.com/EinarLogiOskars/commitarium/internal/orchestration"
+	"github.com/EinarLogiOskars/commitarium/internal/project"
 	"github.com/EinarLogiOskars/commitarium/internal/worker"
+	"github.com/EinarLogiOskars/commitarium/internal/workspace"
 )
 
 type sessionResponse struct {
@@ -129,6 +131,15 @@ func (api *API) sendSessionCommandHandler(w http.ResponseWriter, r *http.Request
 			writeError(w, http.StatusConflict, "session_not_active", "session is not currently active")
 		case errors.Is(err, orchestration.ErrCommandNotAllowed):
 			writeError(w, http.StatusConflict, "command_not_allowed", "command is not allowed for the current session state")
+		case errors.Is(err, workspace.ErrConflict),
+			errors.Is(err, workspace.ErrBranchConflict),
+			errors.Is(err, workspace.ErrCheckoutConflict),
+			errors.Is(err, workspace.ErrCheckoutUnavailable),
+			errors.Is(err, workspace.ErrPullRequestConflict),
+			errors.Is(err, project.ErrForgejoRepositoryNotReady):
+			writeError(w, http.StatusConflict, "implementation_continuation_not_ready", "implementation continuation requires the original managed workspace, published plan, and draft pull request")
+		case errors.Is(err, project.ErrForgejoUnavailable):
+			writeError(w, http.StatusServiceUnavailable, "forgejo_unavailable", "Forgejo implementation verification is unavailable")
 		default:
 			log.Printf("send command %q to session %q: %v", idempotencyKey, sessionID, err)
 			writeError(w, http.StatusInternalServerError, "internal_error", "internal server error")

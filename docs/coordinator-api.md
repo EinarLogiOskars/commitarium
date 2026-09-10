@@ -416,6 +416,52 @@ records the existing recovery assessment event; it never starts a replacement.
 If the worker itself restarts while Codex is active, its journal deliberately
 marks the attempt indeterminate and the coordinator stops for user review.
 
+## Continuing implementation
+
+While a real lead session and its run are waiting and the feature remains
+`implementing`, an ordinary message command starts exactly one more implementation
+turn:
+
+```http
+POST /api/v1/sessions/run_opaque:lead/commands
+Idempotency-Key: implementation-follow-up-1
+Content-Type: application/json
+
+{"type":"message","message":"The missing service is available now; preserve my local edit and rerun the focused tests."}
+```
+
+The same lead provider session and managed workspace are reused. The reviewer
+session must still be present and waiting, the accepted goal must be unchanged,
+planning history must still end in the lead's submitted plan, and publication of
+that exact plan must be recorded. The coordinator read-only verifies the stored
+repository and feature-branch identities, the exact open draft PR, and its exact
+marked plan. It does not update Forgejo during this check.
+
+The managed checkout does not need to be clean or remain at the original local
+HEAD. Existing uncommitted changes and local commits descending from the planning
+baseline may come from the previous lead turn or from the user and are preserved.
+A missing checkout, wrong branch or remote, unrelated HEAD, moved Forgejo branch,
+changed PR identity, or changed plan rejects the command without starting an
+agent. User guidance that changes the accepted goal or agreed scope must be
+reported by the lead rather than silently implemented.
+Conflicting durable state returns `409 implementation_continuation_not_ready`;
+an unavailable Forgejo returns `503 forgejo_unavailable`.
+
+Each continuation has the next deterministic identity
+`{lead-session-id}:implementation:N`. The database atomically stores the pending
+command and visible `user_message`, rotates the attempt checkpoint, and marks the
+run and session active only if the feature is still `implementing`. The resumed
+lead is told to inspect Git state before changing anything, preserve manual edits,
+avoid repeating completed work, run relevant available tests, and neither commit
+nor push. Completion returns to the same neutral `waiting_for_user` inspection
+boundary.
+
+An exact command retry does not re-verify or relaunch work. Recovery can adopt a
+committed continuation admission and reattach to that exact numbered worker
+attempt, mark its pending command applied once, and consume its event stream
+without sending a second resume request. Missing, contradictory, unreachable, or
+indeterminate worker state stops for user review.
+
 ## Shared planning messages
 
 `GET /api/v1/runs/{runID}/planning/messages` returns final authored planning
@@ -506,14 +552,18 @@ Supported types are:
 - `stop`, requesting cooperative termination
 
 In `real_codex_lead` mode, only `message` is currently supported, and only when
-the lead session is `waiting_for_user`. The coordinator records the command and
+the lead session is `waiting_for_user` during draft goal clarification or active
+implementation. The coordinator records the command and
 a `user_message` session event, switches the same run and session back to
 `running`, and assigns a fresh worker attempt in one SQLite transaction. It
 then asks the worker to resume the session's existing provider thread. The API
 normally returns the new command as `pending`; it becomes `applied` after the
 worker confirms that exact resume attempt. Retrying the same body with the same
 idempotency key returns the existing command without another provider turn.
-Once the goal has been accepted, new clarification messages are rejected.
+Once the goal has been accepted, new clarification messages are rejected until
+the workflow reaches `implementing`; at that point a message means one bounded
+implementation continuation and is subject to the published-plan and workspace
+checks described above.
 
 Control commands must omit `message`. Every command requires an
 `Idempotency-Key` header. Forced termination is deliberately outside this
@@ -577,8 +627,9 @@ run and session are both `waiting_for_user` is not mistaken for interrupted
 work.
 
 For the real-lead mode, recovery only performs a read-only lookup of the exact
-durable worker attempt, including an interrupted lead, follow-up, initial
-planning, first-reviewer, later planning-discussion, or implementation turn. A waiting
+durable worker attempt, including an interrupted lead, clarification follow-up,
+initial planning, first-reviewer, later planning-discussion, initial
+implementation, or numbered implementation-continuation turn. A waiting
 lead is not counted as concurrent active work while the reviewer is running. If
 it still exists and is consistent, the coordinator records a `recovery_assessment`
 event, marks its pending reply applied once the attempt is confirmed, and

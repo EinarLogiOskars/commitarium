@@ -306,6 +306,7 @@ func (s *Service) BeginWorkerTurn(
 	sessionID string,
 	previous WorkerAttemptCheckpoint,
 	nextAttemptID string,
+	expectedFeatureState feature.State,
 	runReason string,
 ) (WorkerTurnAdmissionResult, bool, error) {
 	now := s.now().UTC()
@@ -325,8 +326,9 @@ func (s *Service) BeginWorkerTurn(
 			SessionID: command.SessionID, AttemptID: nextAttemptID,
 			CreatedAt: now, UpdatedAt: now,
 		},
-		RunReason:  runReason,
-		OccurredAt: now,
+		ExpectedFeatureState: expectedFeatureState,
+		RunReason:            runReason,
+		OccurredAt:           now,
 	})
 	if err != nil {
 		return WorkerTurnAdmissionResult{}, false, fmt.Errorf(

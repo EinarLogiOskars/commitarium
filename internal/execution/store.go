@@ -71,6 +71,7 @@ type WorkerTurnAdmission struct {
 	PreviousAttemptID         string
 	PreviousLastEventSequence int64
 	NextAttempt               WorkerAttemptCheckpoint
+	ExpectedFeatureState      feature.State
 	RunReason                 string
 	OccurredAt                time.Time
 }
