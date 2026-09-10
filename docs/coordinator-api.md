@@ -25,6 +25,7 @@ this API beyond the host loopback interface is unsupported.
 | `POST` | `/api/v1/runs/{runID}/planning` | Resume the real lead in the managed workspace for its first plan proposal |
 | `POST` | `/api/v1/runs/{runID}/planning/reviewer` | Start the persistent reviewer with the lead's exact proposal |
 | `POST` | `/api/v1/runs/{runID}/planning/round` | Continue the lead/reviewer discussion until plan submission or its safety limit |
+| `POST` | `/api/v1/runs/{runID}/implementation` | Resume the same lead for one write-capable implementation turn after plan verification |
 | `GET` | `/api/v1/runs/{runID}/planning/messages` | Retrieve the ordered lead/reviewer planning messages |
 | `GET` | `/api/v1/runs/{runID}/planning/messages/stream` | Replay and stream ordered planning messages with SSE |
 | `GET` | `/api/v1/sessions/{sessionID}` | Retrieve a session |
@@ -35,8 +36,8 @@ this API beyond the host loopback interface is unsupported.
 
 ## Idempotency
 
-Feature transitions, run starts, planning actions, session commands, and goal
-acceptance require an `Idempotency-Key` header. Retrying the same operation with
+Feature transitions, run starts, planning and implementation actions, session
+commands, and goal acceptance require an `Idempotency-Key` header. Retrying the same operation with
 the same key returns the existing durable result. Reusing a key for a different
 operation returns `409 Conflict` with the `idempotency_conflict` error code.
 
@@ -361,6 +362,60 @@ history. An exact action retry therefore returns the existing run without
 launching another loop. Recovery reattaches to an active exact attempt and can
 continue a durable handoff between turns without starting two agents.
 
+## Starting the first implementation turn
+
+After the lead has submitted the agreed plan and the coordinator has confirmed
+its exact marked section in Forgejo, start implementation explicitly:
+
+```http
+POST /api/v1/runs/run_opaque/implementation
+Idempotency-Key: start-implementation-1
+Content-Length: 0
+```
+
+The feature must be in `planning` at first admission; the run, lead, and
+reviewer must all be waiting; both provider session IDs must be present; the
+last shared planning message must be the lead's `plan_submitted` event; and its
+publication activity must already be durable. The coordinator then performs a
+read-only check of the recorded repository, feature branch, clean managed
+checkout, unchanged planning commit, exact open draft PR, and exact marked plan
+body. This verification cannot repair or update Forgejo. Missing, modified, or
+contradictory state returns `409 implementation_not_ready`; an unavailable
+Forgejo returns `503 forgejo_unavailable`. No provider turn starts in either
+case.
+
+Once verified, the coordinator transitions the feature to `implementing` and
+atomically changes the run and existing lead session to `running` while rotating
+the durable worker cursor to `{lead-session-id}:implementation:1`. The database
+transaction explicitly requires the feature to be `implementing`, so an
+unexpected concurrent lifecycle change rejects the entire worker admission.
+The worker resumes the same lead provider thread in the same managed workspace.
+
+The lead receives the accepted goal, exact agreed plan, current workflow phase,
+repository and branch identities, planning baseline, and draft PR identity. It
+must first inspect the working directory, Git HEAD, branch, status, and diff.
+Unexpected user work is preserved; missing, contradictory, or ambiguous state
+must stop the turn before modification. When consistent, the lead may edit the
+workspace and run available tests. It must finish with a changed-file,
+validation, and blocker summary, and it is explicitly prohibited from committing
+or pushing in this slice.
+
+The response is `202 Accepted`, contains the ordinary run resource, and points
+`Location` to `/api/v1/runs/{runID}`. Observable commands, file changes, tests,
+and final messages use the existing lead-session history and SSE endpoint. On a
+provider turn finishes, the feature remains `implementing` while the run and
+lead return to `waiting_for_user`; the neutral reason tells the user to inspect
+the activity and workspace before the future commit step. The coordinator does
+not infer whether implementation succeeded or was blocked from free-form agent
+prose.
+
+The attempt ID is deterministic. An exact retry after admission returns the
+existing run without re-verifying Forgejo or contacting the worker again. A
+coordinator restart during the active turn reattaches to this exact attempt and
+records the existing recovery assessment event; it never starts a replacement.
+If the worker itself restarts while Codex is active, its journal deliberately
+marks the attempt indeterminate and the coordinator stops for user review.
+
 ## Shared planning messages
 
 `GET /api/v1/runs/{runID}/planning/messages` returns final authored planning
@@ -523,7 +578,7 @@ work.
 
 For the real-lead mode, recovery only performs a read-only lookup of the exact
 durable worker attempt, including an interrupted lead, follow-up, initial
-planning, first-reviewer, or later planning-discussion turn. A waiting
+planning, first-reviewer, later planning-discussion, or implementation turn. A waiting
 lead is not counted as concurrent active work while the reviewer is running. If
 it still exists and is consistent, the coordinator records a `recovery_assessment`
 event, marks its pending reply applied once the attempt is confirmed, and
@@ -572,8 +627,11 @@ inspection.
 The simulated workers have no repository, worktree, test process, or Forgejo
 pull request, so their assessment records those checks as not applicable. The
 real Codex worker already keeps provider data and authentication on a private
-persistent volume and uses the configured workspace mount; full provider
-resume and repository/Forgejo reconciliation are not implemented yet.
+persistent volume and uses the configured workspace mount. Coordinator-process
+recovery of the first implementation turn now verifies state before admission
+and reattaches to an admitted exact attempt. Provider resume after the worker
+container itself restarts, interrupted-command reconciliation, and recovery
+assessment mirroring to Forgejo are not implemented yet.
 
 Run `./scripts/test-compose-recovery.sh` for the repeatable isolated
 container-level interruption test.

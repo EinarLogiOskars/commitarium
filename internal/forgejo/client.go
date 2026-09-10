@@ -287,6 +287,28 @@ func (client *Client) EnsurePullRequestPlan(
 	repository string,
 	spec workspace.PlanPublicationSpec,
 ) (workspace.PullRequest, bool, error) {
+	return client.reconcilePullRequestPlan(ctx, owner, repository, spec, true)
+}
+
+func (client *Client) VerifyPullRequestPlan(
+	ctx context.Context,
+	owner string,
+	repository string,
+	spec workspace.PlanPublicationSpec,
+) (workspace.PullRequest, error) {
+	pullRequest, _, err := client.reconcilePullRequestPlan(
+		ctx, owner, repository, spec, false,
+	)
+	return pullRequest, err
+}
+
+func (client *Client) reconcilePullRequestPlan(
+	ctx context.Context,
+	owner string,
+	repository string,
+	spec workspace.PlanPublicationSpec,
+	publishMissing bool,
+) (workspace.PullRequest, bool, error) {
 	var err error
 	owner, repository, err = project.NormalizeRepositoryCoordinate(owner, repository)
 	if err != nil {
@@ -308,6 +330,9 @@ func (client *Client) EnsurePullRequestPlan(
 			return workspace.PullRequest{}, false, workspace.ErrPullRequestConflict
 		}
 		return stored, false, nil
+	}
+	if !publishMissing {
+		return workspace.PullRequest{}, false, workspace.ErrPullRequestConflict
 	}
 	payload := struct {
 		Body string `json:"body"`

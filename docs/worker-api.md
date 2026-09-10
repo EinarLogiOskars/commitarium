@@ -360,13 +360,14 @@ The opt-in `codex-worker` service wires an operating-system provider process
 into the standalone service. Its image
 contains a pinned Codex CLI, its `codex-profile` volume is used as `CODEX_HOME`,
 its journal has a different persistent volume, and its assigned host workspace
-is mounted read-only. The real worker advertises force-stop because the Codex
+root is mounted read-write. The real worker advertises force-stop because the Codex
 session owns an exact supervised process handle; it does not advertise
 pause/continue because App Server cannot provide the required safe boundary.
 Codex runs with its internal process sandbox disabled in this service because
 the Linux namespace sandbox cannot start inside the unprivileged container.
-Docker and the service's explicit mounts are therefore the security boundary;
-the current smoke-test workspace mount remains read-only.
+Docker and the service's explicit mounts are therefore the security boundary.
+The dedicated smoke-test child remains overlaid read-only, while coordinator-
+prepared feature children may be selected for write-capable implementation.
 
 The worker owns one configured profile and workspace root. Each attempt selects
 a prepared workspace child by ID and supplies its project, feature, and role
@@ -374,8 +375,10 @@ identity. It does not require a configuration manifest, revision, or digest.
 The worker passes only `CODEX_HOME`, `HOME`, `LANG`, and a fixed executable
 `PATH` to the Codex child. Project secrets are not accepted or delivered in
 this slice. The coordinator's opt-in `real_codex_lead` mode now uses the client
-and event pump for one read-only goal-clarification turn; later workflow phases
-are not wired yet.
+and event pump for goal clarification, read-only collaborative planning, and
+the first write-capable implementation turn. Write permission is controlled by
+the selected mounted workspace and the coordinator's phase-specific
+instructions; the worker HTTP contract itself does not infer workflow policy.
 
 The real service is under the `real-codex` Compose profile and is not started by
 the normal development stack. `scripts/smoke-real-codex-worker.sh` provides the

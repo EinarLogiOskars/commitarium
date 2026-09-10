@@ -59,6 +59,12 @@ type PullRequestManager interface {
 		repository string,
 		spec PlanPublicationSpec,
 	) (PullRequest, bool, error)
+	VerifyPullRequestPlan(
+		ctx context.Context,
+		owner string,
+		repository string,
+		spec PlanPublicationSpec,
+	) (PullRequest, error)
 }
 
 type Service struct {
@@ -250,6 +256,33 @@ func (service *Service) PublishPlan(
 	eventID string,
 	plan string,
 ) (Workspace, bool, error) {
+	return service.reconcileSubmittedPlan(ctx, projectID, featureID, eventID, plan, true)
+}
+
+// VerifyPublishedPlan applies the same identity and clean-baseline checks as
+// publication, but never repairs or changes Forgejo. It is the read-only gate
+// used before implementation begins.
+func (service *Service) VerifyPublishedPlan(
+	ctx context.Context,
+	projectID string,
+	featureID string,
+	eventID string,
+	plan string,
+) (Workspace, error) {
+	stored, _, err := service.reconcileSubmittedPlan(
+		ctx, projectID, featureID, eventID, plan, false,
+	)
+	return stored, err
+}
+
+func (service *Service) reconcileSubmittedPlan(
+	ctx context.Context,
+	projectID string,
+	featureID string,
+	eventID string,
+	plan string,
+	publishMissing bool,
+) (Workspace, bool, error) {
 	eventID = strings.TrimSpace(eventID)
 	plan = strings.TrimSpace(plan)
 	if eventID == "" || plan == "" {
@@ -259,7 +292,8 @@ func (service *Service) PublishPlan(
 	if err != nil {
 		return Workspace{}, false, err
 	}
-	if storedFeature.State != feature.StatePlanning {
+	if storedFeature.State != feature.StatePlanning &&
+		(publishMissing || storedFeature.State != feature.StateImplementing) {
 		return Workspace{}, false, ErrFeatureNotPlanning
 	}
 	storedProject, err := service.projects.GetByID(ctx, projectID)
@@ -299,17 +333,30 @@ func (service *Service) PublishPlan(
 		return Workspace{}, false, fmt.Errorf("reconcile managed checkout: %w", err)
 	}
 	digest := sha256.Sum256([]byte(eventID))
-	pullRequest, published, err := service.pullRequests.EnsurePullRequestPlan(
-		ctx, stored.RepositoryOwner, stored.RepositoryName, PlanPublicationSpec{
-			Number:            stored.PullRequestNumber,
-			FeatureMarker:     "<!-- commitarium-feature: " + storedFeature.ID + " -->",
-			PublicationMarker: "<!-- commitarium-plan: " + hex.EncodeToString(digest[:]) + " -->",
-			Plan:              plan, BaseBranch: stored.BaseBranch, HeadBranch: stored.Branch,
-			HeadCommitID: stored.BaseCommitID,
-		},
-	)
+	spec := PlanPublicationSpec{
+		Number:            stored.PullRequestNumber,
+		FeatureMarker:     "<!-- commitarium-feature: " + storedFeature.ID + " -->",
+		PublicationMarker: "<!-- commitarium-plan: " + hex.EncodeToString(digest[:]) + " -->",
+		Plan:              plan, BaseBranch: stored.BaseBranch, HeadBranch: stored.Branch,
+		HeadCommitID: stored.BaseCommitID,
+	}
+	var pullRequest PullRequest
+	published := false
+	if publishMissing {
+		pullRequest, published, err = service.pullRequests.EnsurePullRequestPlan(
+			ctx, stored.RepositoryOwner, stored.RepositoryName, spec,
+		)
+	} else {
+		pullRequest, err = service.pullRequests.VerifyPullRequestPlan(
+			ctx, stored.RepositoryOwner, stored.RepositoryName, spec,
+		)
+	}
 	if err != nil {
-		return Workspace{}, false, fmt.Errorf("publish agreed plan to Forgejo: %w", err)
+		action := "publish agreed plan to Forgejo"
+		if !publishMissing {
+			action = "verify agreed plan in Forgejo"
+		}
+		return Workspace{}, false, fmt.Errorf("%s: %w", action, err)
 	}
 	if pullRequest.Number != stored.PullRequestNumber || pullRequest.URL != stored.PullRequestURL {
 		return Workspace{}, false, ErrPullRequestConflict

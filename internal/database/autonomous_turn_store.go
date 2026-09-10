@@ -85,7 +85,7 @@ func (s *ExecutionStore) BeginAutonomousTurn(
 	).Scan(&state, &acceptedGoal, &goalAcceptedAt); err != nil {
 		return false, fmt.Errorf("select feature planning boundary: %w", err)
 	}
-	if feature.State(state) != feature.StatePlanning ||
+	if feature.State(state) != admission.ExpectedFeatureState ||
 		strings.TrimSpace(acceptedGoal) == "" || !goalAcceptedAt.Valid {
 		return false, execution.ErrStateConflict
 	}
@@ -175,6 +175,8 @@ func validateAutonomousTurnAdmission(admission execution.AutonomousTurnAdmission
 		return fmt.Errorf("%w: replacement attempt must be new", execution.ErrInvalidWorkerAttempt)
 	case strings.TrimSpace(admission.RunReason) == "":
 		return fmt.Errorf("%w: run reason is required", execution.ErrInvalidRun)
+	case !admission.ExpectedFeatureState.IsValid():
+		return fmt.Errorf("%w: expected feature state is invalid", execution.ErrInvalidRun)
 	case admission.OccurredAt.IsZero():
 		return fmt.Errorf("%w: occurrence time is required", execution.ErrInvalidStatusTransition)
 	}

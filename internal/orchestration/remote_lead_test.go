@@ -133,9 +133,24 @@ type remoteLeadWorkspaceStub struct {
 	prepared         workspace.Workspace
 	prepareCalls     int
 	publishCalls     int
+	verifyCalls      int
 	publishedEventID string
 	publishedPlan    string
 	publishErr       error
+	verifyErr        error
+}
+
+func (stub *remoteLeadWorkspaceStub) VerifyPublishedPlan(
+	_ context.Context,
+	_ string,
+	_ string,
+	eventID string,
+	plan string,
+) (workspace.Workspace, error) {
+	stub.verifyCalls++
+	stub.publishedEventID = eventID
+	stub.publishedPlan = plan
+	return stub.prepared, stub.verifyErr
 }
 
 type conversationalRemoteLeadPump struct {
@@ -748,6 +763,7 @@ func TestRemoteLeadStartsPlanningInManagedWorkspace(t *testing.T) {
 	addCompletedPlanningAttempt(stub, runID, storedProject.ID, storedFeature.ID)
 	addCompletedReviewerPlanningAttempt(stub, runID, storedProject.ID, storedFeature.ID)
 	addCompletedPlanningCorrectionAttempts(stub, runID, storedProject.ID, storedFeature.ID)
+	addCompletedImplementationAttempt(stub, runID, storedProject.ID, storedFeature.ID)
 	workflowService := workflow.NewService(database.NewWorkflowStore(db))
 	now := time.Date(2026, time.September, 9, 20, 0, 0, 0, time.UTC)
 	checkoutAt := now.Add(time.Second)
@@ -934,6 +950,7 @@ func TestRemoteLeadStartsPlanningInManagedWorkspace(t *testing.T) {
 		t.Fatalf("retry plan publication: run=%+v admitted=%t err=%v", roundRun, admitted, err)
 	}
 	waitForRemoteLeadStatus(t, executions, runID, execution.RunStatusWaitingForUser)
+	waitForRemoteLeadIdle(t, starter, runID)
 	completedRound, err = executions.GetRun(t.Context(), runID)
 	if err != nil || completedRound.Reason != planningPlanPublishedReason {
 		t.Fatalf("retried publication did not complete: run=%+v err=%v", completedRound, err)
@@ -956,6 +973,115 @@ func TestRemoteLeadStartsPlanningInManagedWorkspace(t *testing.T) {
 	}
 	if workspaceStub.publishCalls != 2 {
 		t.Fatalf("publication retry count = %d, want one failed and one successful attempt", workspaceStub.publishCalls)
+	}
+
+	implementationRun, admitted, err := starter.StartImplementation(
+		t.Context(), runID, "start-implementation-1",
+	)
+	if err != nil || !admitted || implementationRun.Status != execution.RunStatusRunning {
+		t.Fatalf("start implementation: run=%+v admitted=%t err=%v", implementationRun, admitted, err)
+	}
+	waitForRemoteLeadStatus(t, executions, runID, execution.RunStatusWaitingForUser)
+	implementedFeature, err := database.NewFeatureStore(db).GetByID(t.Context(), storedFeature.ID)
+	if err != nil || implementedFeature.State != feature.StateImplementing {
+		t.Fatalf("feature did not enter implementation: %+v err=%v", implementedFeature, err)
+	}
+	if workspaceStub.verifyCalls != 1 || workspaceStub.publishedEventID != messages[4].Event.ID ||
+		workspaceStub.publishedPlan != messages[4].Event.Text {
+		t.Fatalf("implementation did not verify the exact published plan: %+v", workspaceStub)
+	}
+	stub.mu.Lock()
+	requests = append([]workerhttp.PutAttemptRequest(nil), stub.putRequests...)
+	stub.mu.Unlock()
+	if len(requests) != 7 || requests[6].Mode != workerhttp.AttemptModeResume ||
+		requests[6].ProviderSessionID != "codex-thread-test" ||
+		requests[6].Assignment.Role != workerhttp.RoleLead ||
+		requests[6].Assignment.WorkspaceID != workspaceStub.prepared.ID ||
+		!strings.Contains(requests[6].Instructions, implementedFeature.AcceptedGoal) ||
+		!strings.Contains(requests[6].Instructions, messages[4].Event.Text) ||
+		!strings.Contains(requests[6].Instructions, "Do not commit or push") ||
+		!strings.Contains(requests[6].Instructions, "Git HEAD") {
+		t.Fatalf("unexpected implementation request %+v", requests[6])
+	}
+	completedImplementation, err := executions.GetRun(t.Context(), runID)
+	if err != nil || completedImplementation.Reason != implementationReadyReason {
+		t.Fatalf("unexpected implementation completion: run=%+v err=%v", completedImplementation, err)
+	}
+	implementationRun, admitted, err = starter.StartImplementation(
+		t.Context(), runID, "start-implementation-1",
+	)
+	if err != nil || admitted || implementationRun.ID != runID {
+		t.Fatalf("retry implementation: run=%+v admitted=%t err=%v", implementationRun, admitted, err)
+	}
+	stub.mu.Lock()
+	requestCount = len(stub.putRequests)
+	stub.mu.Unlock()
+	if requestCount != 7 || workspaceStub.verifyCalls != 1 {
+		t.Fatalf("implementation retry repeated work: requests=%d verifications=%d", requestCount, workspaceStub.verifyCalls)
+	}
+
+	// Simulate a coordinator stopping after the worker reached terminal state
+	// but before the coordinator finalized the durable waiting boundary. A new
+	// starter must inspect and reattach to this exact attempt, never PUT a new one.
+	waitForRemoteLeadIdle(t, starter, runID)
+	lead, err := executions.GetSession(t.Context(), remoteLeadSessionID(runID))
+	if err != nil {
+		t.Fatalf("load implementation lead before recovery: %v", err)
+	}
+	if _, err := executions.TransitionSession(
+		t.Context(), lead.ID, execution.SessionStatusWaitingForUser,
+		execution.SessionStatusRunning, lead.ProviderSessionID,
+	); err != nil {
+		t.Fatalf("restore interrupted implementation session: %v", err)
+	}
+	if _, err := executions.TransitionRun(
+		t.Context(), runID, execution.RunStatusWaitingForUser,
+		execution.RunStatusRunning, implementationRunningReason,
+	); err != nil {
+		t.Fatalf("restore interrupted implementation run: %v", err)
+	}
+	interrupted, err := executions.GetRun(t.Context(), runID)
+	if err != nil {
+		t.Fatalf("load interrupted implementation run: %v", err)
+	}
+	restarted, err := NewRemoteLeadStarter(RemoteLeadConfig{
+		Executions: executions, Features: database.NewFeatureStore(db), Goals: workflowService,
+		Planning: workflowService, Workspaces: workspaceStub, Worker: stub,
+		Pump:     &conversationalRemoteLeadPump{executions: executions, worker: stub},
+		Lifetime: t.Context(), AgentProfileID: "codex-default", WorkspaceID: "project-read-only",
+	})
+	if err != nil {
+		t.Fatalf("create restarted implementation starter: %v", err)
+	}
+	if err := restarted.Recover(
+		t.Context(), interrupted, implementedFeature,
+		project.RecoveryPolicyApprovalRequired,
+	); err != nil {
+		t.Fatalf("recover interrupted implementation: %v", err)
+	}
+	waitForRemoteLeadStatus(t, executions, runID, execution.RunStatusWaitingForUser)
+	resumed, err := executions.GetRun(t.Context(), runID)
+	if err != nil || resumed.Reason != implementationReadyReason {
+		t.Fatalf("unexpected recovered implementation run: %+v err=%v", resumed, err)
+	}
+	stub.mu.Lock()
+	requestCount = len(stub.putRequests)
+	stub.mu.Unlock()
+	if requestCount != 7 {
+		t.Fatalf("implementation recovery started a replacement worker turn: %d requests", requestCount)
+	}
+	recoveredEvents, err := executions.EventsForSession(t.Context(), lead.ID)
+	if err != nil {
+		t.Fatalf("list recovered implementation activity: %v", err)
+	}
+	foundRecovery := false
+	for _, event := range recoveredEvents {
+		if event.Type == worker.EventRecoveryAssessment && strings.Contains(event.Text, "reattached") {
+			foundRecovery = true
+		}
+	}
+	if !foundRecovery {
+		t.Fatalf("implementation recovery assessment was not recorded: %+v", recoveredEvents)
 	}
 }
 
@@ -1092,6 +1218,7 @@ func TestRemoteLeadRecoveryReattachesToPlanningAttempt(t *testing.T) {
 	}
 	if admitted, err := executions.BeginAutonomousTurn(
 		t.Context(), sessionID, checkpoint, planningAttemptID(sessionID),
+		feature.StatePlanning,
 		"The lead agent is inspecting the managed workspace and preparing a plan.",
 	); err != nil || !admitted {
 		t.Fatalf("admit interrupted planning turn: admitted=%t err=%v", admitted, err)
@@ -1258,6 +1385,7 @@ func TestRemoteReviewerRecoveryReattachesAndPublishesItsResponse(t *testing.T) {
 	}
 	if admitted, err := executions.BeginAutonomousTurn(
 		t.Context(), leadID, leadCheckpoint, planningTurnAttemptID(leadID, 2),
+		feature.StatePlanning,
 		"The lead is revising the plan from the reviewer's response.",
 	); err != nil || !admitted {
 		t.Fatalf("admit interrupted lead revision: admitted=%t err=%v", admitted, err)
@@ -1578,6 +1706,54 @@ func addCompletedPlanningCorrectionAttempt(
 	}
 }
 
+func addCompletedImplementationAttempt(
+	stub *conversationalRemoteLeadWorker,
+	runID string,
+	projectID string,
+	featureID string,
+) {
+	sessionID := remoteLeadSessionID(runID)
+	reference := workerhttp.AttemptReference{
+		SessionID: sessionID, AttemptID: implementationAttemptID(sessionID),
+	}
+	now := time.Date(2026, time.September, 10, 3, 30, 0, 0, time.UTC)
+	initial := workerhttp.Attempt{
+		AttemptReference: reference, Mode: workerhttp.AttemptModeResume,
+		Assignment: workerhttp.Assignment{
+			AgentProfileID: "codex-default", ProjectID: projectID, FeatureID: featureID,
+			Role: workerhttp.RoleLead, WorkspaceID: "wsp_managed_feature",
+		},
+		ProviderSessionID: "codex-thread-test", State: workerhttp.AttemptStateRunning,
+		StartedAt: now, UpdatedAt: now,
+	}
+	endedAt := now.Add(time.Second)
+	terminal := initial
+	terminal.State = workerhttp.AttemptStateTerminal
+	terminal.LatestEventSequence = 3
+	terminal.UpdatedAt = endedAt
+	terminal.EndedAt = &endedAt
+	terminal.Result = &workerhttp.TerminalResult{
+		Outcome: workerhttp.OutcomeCompleted, Disposition: workerhttp.DispositionSucceeded,
+		Summary: "Implemented the agreed plan without committing.",
+	}
+	stub.initial[reference] = initial
+	stub.terminal[reference] = terminal
+	stub.events[reference] = []workerhttp.Event{
+		{
+			AttemptReference: reference, Sequence: 1, Type: workerhttp.EventActivity,
+			Text: "Inspected Git state before editing.", OccurredAt: now,
+		},
+		{
+			AttemptReference: reference, Sequence: 2, Type: workerhttp.EventMessage,
+			Text: "Implemented the agreed files and ran focused tests.", OccurredAt: now.Add(time.Millisecond),
+		},
+		{
+			AttemptReference: reference, Sequence: 3, Type: workerhttp.EventAttemptTerminal,
+			Text: terminal.Result.Summary, OccurredAt: endedAt,
+		},
+	}
+}
+
 func waitForRemoteLeadStatus(
 	t *testing.T,
 	executions *execution.Service,
@@ -1593,6 +1769,25 @@ func waitForRemoteLeadStatus(
 		}
 		if time.Now().After(deadline) {
 			t.Fatalf("run did not reach %q: run=%+v err=%v", want, run, err)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+func waitForRemoteLeadIdle(
+	t *testing.T,
+	starter *RemoteLeadStarter,
+	runID string,
+) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if starter.claim(runID) {
+			starter.release(runID)
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("run %q remained claimed after reaching its durable waiting state", runID)
 		}
 		time.Sleep(time.Millisecond)
 	}

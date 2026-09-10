@@ -412,6 +412,42 @@ func TestClientAdoptsPreviouslyPublishedPlan(t *testing.T) {
 	}
 }
 
+func TestClientVerifiesPublishedPlanWithoutUpdatingPullRequest(t *testing.T) {
+	spec := testPlanPublicationSpec()
+	stored := managedPullRequest(testPullRequestSpec())
+	stored.Body += "\n\n" + spec.PublicationMarker +
+		"\n\n## Agreed implementation plan\n\n" + spec.Plan
+	calls := 0
+	client := newBranchTestClient(t, func(request *http.Request) (*http.Response, error) {
+		calls++
+		if request.Method != http.MethodGet {
+			t.Fatalf("verification unexpectedly tried %s", request.Method)
+		}
+		return pullRequestJSONResponse(t, http.StatusOK, stored), nil
+	})
+
+	got, err := client.VerifyPullRequestPlan(t.Context(), "owner", "repository", spec)
+	if err != nil || calls != 1 || got.Body != stored.Body {
+		t.Fatalf("verify plan: pull_request=%+v calls=%d err=%v", got, calls, err)
+	}
+}
+
+func TestClientVerificationRejectsMissingPlanWithoutUpdatingPullRequest(t *testing.T) {
+	spec := testPlanPublicationSpec()
+	stored := managedPullRequest(testPullRequestSpec())
+	client := newBranchTestClient(t, func(request *http.Request) (*http.Response, error) {
+		if request.Method != http.MethodGet {
+			t.Fatalf("verification unexpectedly tried %s", request.Method)
+		}
+		return pullRequestJSONResponse(t, http.StatusOK, stored), nil
+	})
+
+	_, err := client.VerifyPullRequestPlan(t.Context(), "owner", "repository", spec)
+	if !errors.Is(err, workspace.ErrPullRequestConflict) {
+		t.Fatalf("expected %v, got %v", workspace.ErrPullRequestConflict, err)
+	}
+}
+
 func TestClientReconcilesPlanAfterUncertainUpdateResponse(t *testing.T) {
 	spec := testPlanPublicationSpec()
 	remote := managedPullRequest(testPullRequestSpec())

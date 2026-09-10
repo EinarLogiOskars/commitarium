@@ -36,7 +36,8 @@ func TestExecutionStoreBeginsAutonomousPlanningTurnAtomically(t *testing.T) {
 			SessionID: session.ID, AttemptID: "att_planning",
 			CreatedAt: turnAt, UpdatedAt: turnAt,
 		},
-		RunReason: "The lead agent is preparing a plan.", OccurredAt: turnAt,
+		ExpectedFeatureState: feature.StatePlanning,
+		RunReason:            "The lead agent is preparing a plan.", OccurredAt: turnAt,
 	}
 	admitted, err := store.BeginAutonomousTurn(t.Context(), admission)
 	if err != nil || !admitted {
@@ -78,7 +79,8 @@ func TestExecutionStoreRejectsAutonomousTurnOutsidePlanningWithoutChanges(t *tes
 			SessionID: session.ID, AttemptID: "att_planning",
 			CreatedAt: now, UpdatedAt: now,
 		},
-		RunReason: "The lead agent is preparing a plan.", OccurredAt: now,
+		ExpectedFeatureState: feature.StatePlanning,
+		RunReason:            "The lead agent is preparing a plan.", OccurredAt: now,
 	}
 	if _, err := store.BeginAutonomousTurn(t.Context(), admission); !errors.Is(err, execution.ErrStateConflict) {
 		t.Fatalf("expected planning-state conflict, got %v", err)
@@ -90,6 +92,46 @@ func TestExecutionStoreRejectsAutonomousTurnOutsidePlanningWithoutChanges(t *tes
 	storedRun, err := store.GetRun(t.Context(), run.ID)
 	if err != nil || storedRun.Status != execution.RunStatusWaitingForUser {
 		t.Fatalf("rejected turn changed run: %+v err=%v", storedRun, err)
+	}
+}
+
+func TestExecutionStoreBeginsAutonomousImplementationTurnInRequiredState(t *testing.T) {
+	db, store := newTestExecutionStore(t)
+	run, session := createExecutionRecords(t, db, store)
+	now := session.StartedAt.Add(time.Second)
+	checkpoint := createWorkerAttempt(t, store, session.ID, "att_plan", now)
+	moveExecutionToUserWait(t, store, run, session, now)
+	if _, err := db.ExecContext(
+		t.Context(),
+		`UPDATE features
+		 SET state = ?, accepted_goal = ?, goal_accepted_at = ?, updated_at = ?
+		 WHERE id = ?`,
+		feature.StateImplementing, "Export visible columns as CSV.",
+		formatExecutionTime(now), formatExecutionTime(now), run.FeatureID,
+	); err != nil {
+		t.Fatalf("prepare implementing feature: %v", err)
+	}
+
+	turnAt := now.Add(time.Second)
+	admission := execution.AutonomousTurnAdmission{
+		SessionID:                 session.ID,
+		PreviousAttemptID:         checkpoint.AttemptID,
+		PreviousLastEventSequence: checkpoint.LastEventSequence,
+		NextAttempt: execution.WorkerAttemptCheckpoint{
+			SessionID: session.ID, AttemptID: "att_implementation",
+			CreatedAt: turnAt, UpdatedAt: turnAt,
+		},
+		ExpectedFeatureState: feature.StateImplementing,
+		RunReason:            "The lead is implementing the agreed plan.",
+		OccurredAt:           turnAt,
+	}
+	admitted, err := store.BeginAutonomousTurn(t.Context(), admission)
+	if err != nil || !admitted {
+		t.Fatalf("begin implementation turn: admitted=%t err=%v", admitted, err)
+	}
+	storedCheckpoint, err := store.GetWorkerAttempt(t.Context(), session.ID)
+	if err != nil || storedCheckpoint.AttemptID != "att_implementation" {
+		t.Fatalf("implementation attempt was not admitted: %+v err=%v", storedCheckpoint, err)
 	}
 }
 
@@ -124,8 +166,9 @@ func TestExecutionStoreBeginsChainedTurnWhileRunStaysActive(t *testing.T) {
 			SessionID: session.ID, AttemptID: "att_second_agent_turn",
 			CreatedAt: turnAt, UpdatedAt: turnAt,
 		},
-		RunReason:  "The next agent is reviewing the revision.",
-		OccurredAt: turnAt, RunAlreadyActive: true,
+		ExpectedFeatureState: feature.StatePlanning,
+		RunReason:            "The next agent is reviewing the revision.",
+		OccurredAt:           turnAt, RunAlreadyActive: true,
 	}
 	blocker := session
 	blocker.ID = "ses_other_active_agent"

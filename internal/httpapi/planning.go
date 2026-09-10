@@ -20,7 +20,7 @@ func (api *API) startPlanningHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	runID := r.PathValue("id")
-	startedRun, _, err := api.planning.StartPlanning(r.Context(), runID, idempotencyKey)
+	startedRun, _, err := api.realWorkflow.StartPlanning(r.Context(), runID, idempotencyKey)
 	if err != nil {
 		switch {
 		case errors.Is(err, execution.ErrNotFound):
@@ -54,7 +54,7 @@ func (api *API) startPlanningReviewHandler(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	runID := r.PathValue("id")
-	startedRun, _, err := api.planning.StartPlanningReview(r.Context(), runID, idempotencyKey)
+	startedRun, _, err := api.realWorkflow.StartPlanningReview(r.Context(), runID, idempotencyKey)
 	if err != nil {
 		switch {
 		case errors.Is(err, execution.ErrNotFound):
@@ -80,7 +80,7 @@ func (api *API) startPlanningRoundHandler(w http.ResponseWriter, r *http.Request
 		return
 	}
 	runID := r.PathValue("id")
-	startedRun, _, err := api.planning.StartPlanningRound(r.Context(), runID, idempotencyKey)
+	startedRun, _, err := api.realWorkflow.StartPlanningRound(r.Context(), runID, idempotencyKey)
 	if err != nil {
 		switch {
 		case errors.Is(err, execution.ErrNotFound):
