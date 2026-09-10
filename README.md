@@ -57,8 +57,9 @@ Review and lead-response pairs repeat for at most six rounds by default. The
 round is completed before the workflow stops for user input, and a zero round
 limit means unlimited. Projects expose separate planning and implementation-
 review limits, and every run snapshots both values when it starts so later
-settings changes affect only future workflows. Claude Code execution and the
-user interface remain to be built.
+settings changes affect only future workflows. A standalone real Claude Code
+worker is now available behind the same private worker contract, but public
+lead/reviewer provider selection and the user interface remain to be built.
 Projects and their features can be listed for switching, active-work views, and
 completed history. Opening a feature exposes its run and session history.
 Projects can also be permanently associated with one verified Forgejo repository.
@@ -81,6 +82,13 @@ but keep separate provider login/session profiles, worker journals, worker API
 tokens, and Forgejo identities. Both share only Commitarium's managed workspace
 root with the coordinator. They are intentionally not started by ordinary
 `docker compose up` yet.
+
+The optional `real-claude` profile similarly adds `claude-worker` and
+`claude-reviewer-worker`. Each contains a pinned Claude Code CLI and has its own
+provider profile, durable attempt journal, worker token, and Forgejo identity.
+The coordinator does not route workflows to these services yet; this profile
+exists so Claude authentication and worker behavior can be exercised before
+provider selection is added.
 
 Forgejo is the agent-managed source of truth for plans, review discussion, and
 the internal pull-request audit trail. The coordinator database stores only the
@@ -158,6 +166,15 @@ also live in reviewer-only named volumes. Forgejo groups formal-review API
 access under the repository-write token scope. The reviewer therefore has the
 internal forge capabilities needed for later review corrections, while its
 role instructions keep an ordinary review turn inspection-only.
+
+Claude lead and reviewer workers follow the same isolation model. Store their
+separate Forgejo tokens at
+`.commitarium/agents/claude-lead/forgejo-token` and
+`.commitarium/agents/claude-reviewer/forgejo-token`. Settings for the reviewer
+use the `COMMITARIUM_CLAUDE_REVIEWER_` prefix; settings for the lead use
+`COMMITARIUM_CLAUDE_`. These credentials permit only internal Forgejo work and
+never give Claude access to the user's GitHub, GitLab, or other upstream
+account.
 
 Authenticate that private reviewer provider profile independently:
 
@@ -274,6 +291,42 @@ Codex's own process sandbox is disabled inside this service because its Linux
 namespace sandbox cannot nest inside the unprivileged container. The container
 and its explicit mounts remain the outer security boundary; the smoke mount is
 read-only, so the agent cannot change the selected host repository.
+
+## Configure the standalone Claude workers
+
+Claude uses a separate persistent profile volume for each worker role. After
+creating the role's Forgejo token file described above, authenticate the lead
+profile with Claude Code's normal login flow:
+
+```sh
+docker compose --profile real-claude run --rm --no-deps --entrypoint claude \
+  claude-worker auth login
+
+docker compose --profile real-claude run --rm --no-deps --entrypoint claude \
+  claude-worker auth status
+```
+
+Authenticate and inspect the reviewer independently by replacing
+`claude-worker` with `claude-reviewer-worker`. The profile volume is suitable
+for provider-managed subscription or API configuration, but Commitarium's
+trusted API-key provisioning UI is not implemented yet. Commitarium does not
+copy the host user's Claude profile or store provider credentials in
+coordinator SQLite. The two profiles must be configured separately even when
+they use the same Claude account.
+
+Start the standalone services with:
+
+```sh
+docker compose --profile real-claude up --build -d \
+  claude-worker claude-reviewer-worker
+```
+
+Each worker starts one bounded non-interactive Claude turn, returns its session
+UUID immediately, streams normalized messages and factual tool activity, and
+can later resume that exact conversation. The worker supports cooperative and
+forced stop, but not mid-turn message, pause, or continue controls. New guidance
+is supplied as the next bounded resume turn. Provider selection is the next
+backend slice, so these services are not yet part of a public coordinator run.
 
 To exercise the first coordinator-to-Codex path instead of the standalone
 worker smoke test, start the real profile and select the opt-in runner:
@@ -555,10 +608,10 @@ before calling an adapter. A real adapter receives an explicit working
 directory and environment instead of inheriting the worker service's process
 variables. The resolved path and environment stay inside the worker and are
 never added to the worker HTTP request or journal. The same executable can now
-select the real Codex adapter. Its opt-in image pins the Codex CLI version, runs
-as a non-root user, mounts the managed workspace root, and keeps separate
-persistent provider and journal volumes. The earlier standalone smoke path still
-mounts its selected repository read-only. It does not
+select the real Codex or Claude adapter. Their opt-in images pin the provider
+CLI version, run as a non-root user, mount the managed workspace root, and keep
+separate persistent provider and journal volumes. The earlier Codex standalone
+smoke path still mounts its selected repository read-only. It does not
 require a manifest, configuration revision, or materialization digest. Automatic
 provider-credential provisioning and Forgejo repository import remain separate
 future slices. Coordinator wiring currently covers goal clarification, explicit
@@ -574,8 +627,8 @@ session, durably record a force-stop request before delivery, terminate only
 that session's process tree, and wait for the normal session watcher to persist
 the terminal result. Exact retries return that stored result without sending a
 second signal. The simulated worker does not advertise this optional
-capability. The real Codex worker does advertise it because each live session
-owns an exact operating-system process handle.
+capability. Real Codex and Claude workers advertise it because each live
+session owns an exact operating-system process handle.
 
 ## Development checks
 

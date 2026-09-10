@@ -111,6 +111,73 @@ services:
     expose:
       - "8081"
 
+  claude-worker:
+    profiles: ["real-claude"]
+    build:
+      context: .
+      dockerfile: docker/claude-worker.Dockerfile
+      args:
+        CLAUDE_CODE_VERSION: ${COMMITARIUM_CLAUDE_CODE_VERSION:-2.1.228}
+    environment:
+      COMMITARIUM_WORKER_ADAPTER: claude_code
+      COMMITARIUM_WORKER_DATABASE_PATH: /var/lib/commitarium-worker/worker.db
+      COMMITARIUM_WORKER_LISTEN_ADDRESS: :8081
+      COMMITARIUM_WORKER_TOKEN: ${COMMITARIUM_CLAUDE_WORKER_TOKEN:-commitarium-local-claude-worker}
+      COMMITARIUM_CLAUDE_PROVIDER_STATE_PATH: /var/lib/commitarium-provider
+      COMMITARIUM_CLAUDE_WORKSPACE_ROOT: /workspaces
+      COMMITARIUM_CLAUDE_PROFILE_ID: ${COMMITARIUM_CLAUDE_PROFILE_ID:-profile_local_claude}
+      COMMITARIUM_CLAUDE_MODEL: ${COMMITARIUM_CLAUDE_MODEL:-}
+      COMMITARIUM_CLAUDE_FORGEJO_URL: http://forgejo:3000
+      COMMITARIUM_CLAUDE_FORGEJO_TOKEN_FILE: /run/commitarium-agent/forgejo-token
+      COMMITARIUM_CLAUDE_FORGEJO_LOGIN: ${COMMITARIUM_CLAUDE_FORGEJO_LOGIN:-claude-lead}
+      COMMITARIUM_CLAUDE_FORGEJO_ROLE: lead
+      COMMITARIUM_CLAUDE_GIT_AUTHOR_NAME: ${COMMITARIUM_CLAUDE_GIT_AUTHOR_NAME:-Commitarium Claude Lead}
+      COMMITARIUM_CLAUDE_GIT_AUTHOR_EMAIL: ${COMMITARIUM_CLAUDE_GIT_AUTHOR_EMAIL:-claude-lead@commitarium.local}
+      # Claude's permission prompts cannot be answered in a headless worker.
+      # The unprivileged container, scoped mounts, and internal forge are the
+      # security boundary for this profile.
+      COMMITARIUM_CLAUDE_PERMISSION_MODE: bypassPermissions
+    volumes:
+      - claude-worker-journal:/var/lib/commitarium-worker
+      - claude-profile:/var/lib/commitarium-provider
+      - ${COMMITARIUM_CLAUDE_FORGEJO_TOKEN_SOURCE:-./.commitarium/agents/claude-lead/forgejo-token}:/run/commitarium-agent/forgejo-token:ro
+      - ${COMMITARIUM_WORKSPACE_SOURCE:-./.commitarium/workspaces}:/workspaces
+      - ${COMMITARIUM_CLAUDE_WORKSPACE_SOURCE:-.}:/workspaces/${COMMITARIUM_CLAUDE_WORKSPACE_ID:-workspace_smoke}:ro
+    expose:
+      - "8081"
+
+  claude-reviewer-worker:
+    profiles: ["real-claude"]
+    build:
+      context: .
+      dockerfile: docker/claude-worker.Dockerfile
+      args:
+        CLAUDE_CODE_VERSION: ${COMMITARIUM_CLAUDE_CODE_VERSION:-2.1.228}
+    environment:
+      COMMITARIUM_WORKER_ADAPTER: claude_code
+      COMMITARIUM_WORKER_DATABASE_PATH: /var/lib/commitarium-worker/worker.db
+      COMMITARIUM_WORKER_LISTEN_ADDRESS: :8081
+      COMMITARIUM_WORKER_TOKEN: ${COMMITARIUM_CLAUDE_REVIEWER_WORKER_TOKEN:-commitarium-local-claude-reviewer-worker}
+      COMMITARIUM_CLAUDE_PROVIDER_STATE_PATH: /var/lib/commitarium-provider
+      COMMITARIUM_CLAUDE_WORKSPACE_ROOT: /workspaces
+      COMMITARIUM_CLAUDE_PROFILE_ID: ${COMMITARIUM_CLAUDE_REVIEWER_PROFILE_ID:-profile_local_claude_reviewer}
+      COMMITARIUM_CLAUDE_MODEL: ${COMMITARIUM_CLAUDE_REVIEWER_MODEL:-}
+      COMMITARIUM_CLAUDE_FORGEJO_URL: http://forgejo:3000
+      COMMITARIUM_CLAUDE_FORGEJO_TOKEN_FILE: /run/commitarium-agent/forgejo-token
+      COMMITARIUM_CLAUDE_FORGEJO_LOGIN: ${COMMITARIUM_CLAUDE_REVIEWER_FORGEJO_LOGIN:-claude-reviewer}
+      COMMITARIUM_CLAUDE_FORGEJO_ROLE: reviewer
+      COMMITARIUM_CLAUDE_GIT_AUTHOR_NAME: ${COMMITARIUM_CLAUDE_REVIEWER_GIT_AUTHOR_NAME:-Commitarium Claude Reviewer}
+      COMMITARIUM_CLAUDE_GIT_AUTHOR_EMAIL: ${COMMITARIUM_CLAUDE_REVIEWER_GIT_AUTHOR_EMAIL:-claude-reviewer@commitarium.local}
+      COMMITARIUM_CLAUDE_PERMISSION_MODE: bypassPermissions
+    volumes:
+      - claude-reviewer-worker-journal:/var/lib/commitarium-worker
+      - claude-reviewer-profile:/var/lib/commitarium-provider
+      - ${COMMITARIUM_CLAUDE_REVIEWER_FORGEJO_TOKEN_SOURCE:-./.commitarium/agents/claude-reviewer/forgejo-token}:/run/commitarium-agent/forgejo-token:ro
+      - ${COMMITARIUM_WORKSPACE_SOURCE:-./.commitarium/workspaces}:/workspaces
+      - ${COMMITARIUM_CLAUDE_WORKSPACE_SOURCE:-.}:/workspaces/${COMMITARIUM_CLAUDE_WORKSPACE_ID:-workspace_smoke}:ro
+    expose:
+      - "8081"
+
   forgejo:
     image: codeberg.org/forgejo/forgejo:16.0.3-rootless
     user: "1000:1000"
@@ -132,3 +199,7 @@ volumes:
   codex-profile:
   codex-reviewer-worker-journal:
   codex-reviewer-profile:
+  claude-worker-journal:
+  claude-profile:
+  claude-reviewer-worker-journal:
+  claude-reviewer-profile:
