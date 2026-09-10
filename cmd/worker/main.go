@@ -17,6 +17,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/EinarLogiOskars/commitarium/internal/claudeadapter"
 	"github.com/EinarLogiOskars/commitarium/internal/codexadapter"
 	"github.com/EinarLogiOskars/commitarium/internal/processsupervisor"
 	"github.com/EinarLogiOskars/commitarium/internal/worker"
@@ -32,6 +33,8 @@ const (
 	defaultAdapter       = "simulated"
 	defaultCodexBinary   = "/usr/local/bin/codex"
 	defaultCodexSandbox  = "read-only"
+	defaultClaudeBinary  = "/usr/local/bin/claude"
+	defaultClaudeMode    = "plan"
 )
 
 type config struct {
@@ -41,6 +44,7 @@ type config struct {
 	adapter       string
 	stepDelay     time.Duration
 	codex         codexConfig
+	claude        claudeConfig
 }
 
 type codexConfig struct {
@@ -58,8 +62,24 @@ type codexConfig struct {
 	gitAuthorEmail    string
 }
 
+type claudeConfig struct {
+	executable        string
+	model             string
+	permissionMode    string
+	providerStatePath string
+	workspaceRoot     string
+	profileID         string
+	forgejoURL        string
+	forgejoTokenFile  string
+	forgejoLogin      string
+	forgejoRole       worker.Role
+	gitAuthorName     string
+	gitAuthorEmail    string
+}
+
 type runtime struct {
 	provider            worker.Adapter
+	providerKind        workerhttp.Provider
 	environmentResolver workerservice.EnvironmentResolver
 	capabilities        []workerhttp.Capability
 	description         string
@@ -100,8 +120,8 @@ func loadConfig(getenv func(string) string) (config, error) {
 	if adapter == "" {
 		adapter = defaultAdapter
 	}
-	if adapter != "simulated" && adapter != "codex" {
-		return config{}, errors.New("COMMITARIUM_WORKER_ADAPTER must be simulated or codex")
+	if adapter != "simulated" && adapter != "codex" && adapter != "claude_code" {
+		return config{}, errors.New("COMMITARIUM_WORKER_ADAPTER must be simulated, codex, or claude_code")
 	}
 	stepDelay := defaultStepDelay
 	if value := strings.TrimSpace(getenv("COMMITARIUM_WORKER_STEP_DELAY")); value != "" {
@@ -124,6 +144,12 @@ func loadConfig(getenv func(string) string) (config, error) {
 			return config{}, err
 		}
 		loaded.codex = codex
+	} else if adapter == "claude_code" {
+		claude, err := loadClaudeConfig(getenv)
+		if err != nil {
+			return config{}, err
+		}
+		loaded.claude = claude
 	}
 	return loaded, nil
 }
@@ -165,7 +191,7 @@ func run(ctx context.Context, workerConfig config) error {
 	}
 	handler, err := workerhttp.NewServer(workerhttp.ServerConfig{
 		BearerToken:           workerConfig.bearerToken,
-		Provider:              workerhttp.ProviderCodex,
+		Provider:              workerRuntime.providerKind,
 		Capabilities:          workerRuntime.capabilities,
 		MaxConcurrentAttempts: 1,
 		EventSource:           service,
@@ -213,6 +239,7 @@ func newRuntime(workerConfig config) (runtime, error) {
 		scripted := worker.NewRepeatingScriptedAdapter("codex-simulated", simulatedScripts())
 		return runtime{
 			provider:            worker.NewAutomaticScriptedAdapter(scripted, workerConfig.stepDelay),
+			providerKind:        workerhttp.ProviderCodex,
 			environmentResolver: simulatedEnvironmentResolver(workingDirectory),
 			capabilities: []workerhttp.Capability{
 				workerhttp.CapabilityStart,
@@ -227,6 +254,8 @@ func newRuntime(workerConfig config) (runtime, error) {
 		}, nil
 	case "codex":
 		return newCodexRuntime(workerConfig.codex)
+	case "claude_code":
+		return newClaudeRuntime(workerConfig.claude)
 	default:
 		return runtime{}, fmt.Errorf("unsupported worker adapter %q", workerConfig.adapter)
 	}
@@ -316,6 +345,92 @@ func loadCodexConfig(getenv func(string) string) (codexConfig, error) {
 	}, nil
 }
 
+func loadClaudeConfig(getenv func(string) string) (claudeConfig, error) {
+	required := func(name string) (string, error) {
+		value := strings.TrimSpace(getenv(name))
+		if value == "" {
+			return "", fmt.Errorf("%s is required for the Claude adapter", name)
+		}
+		return value, nil
+	}
+	providerStatePath, err := required("COMMITARIUM_CLAUDE_PROVIDER_STATE_PATH")
+	if err != nil {
+		return claudeConfig{}, err
+	}
+	if !filepath.IsAbs(providerStatePath) {
+		return claudeConfig{}, errors.New("COMMITARIUM_CLAUDE_PROVIDER_STATE_PATH must be absolute")
+	}
+	workspaceRoot, err := required("COMMITARIUM_CLAUDE_WORKSPACE_ROOT")
+	if err != nil {
+		return claudeConfig{}, err
+	}
+	profileID, err := required("COMMITARIUM_CLAUDE_PROFILE_ID")
+	if err != nil {
+		return claudeConfig{}, err
+	}
+	forgejoURL, err := required("COMMITARIUM_CLAUDE_FORGEJO_URL")
+	if err != nil {
+		return claudeConfig{}, err
+	}
+	parsedForgejoURL, err := url.Parse(strings.TrimRight(forgejoURL, "/"))
+	if err != nil || (parsedForgejoURL.Scheme != "http" && parsedForgejoURL.Scheme != "https") ||
+		parsedForgejoURL.Host == "" || parsedForgejoURL.User != nil ||
+		parsedForgejoURL.RawQuery != "" || parsedForgejoURL.Fragment != "" {
+		return claudeConfig{}, errors.New("COMMITARIUM_CLAUDE_FORGEJO_URL must be an absolute HTTP URL without credentials, query, or fragment")
+	}
+	forgejoTokenFile, err := required("COMMITARIUM_CLAUDE_FORGEJO_TOKEN_FILE")
+	if err != nil {
+		return claudeConfig{}, err
+	}
+	if !filepath.IsAbs(forgejoTokenFile) {
+		return claudeConfig{}, errors.New("COMMITARIUM_CLAUDE_FORGEJO_TOKEN_FILE must be absolute")
+	}
+	forgejoLogin, err := required("COMMITARIUM_CLAUDE_FORGEJO_LOGIN")
+	if err != nil {
+		return claudeConfig{}, err
+	}
+	forgejoRole := worker.Role(strings.TrimSpace(getenv("COMMITARIUM_CLAUDE_FORGEJO_ROLE")))
+	if forgejoRole != worker.RoleLead && forgejoRole != worker.RoleReviewer {
+		return claudeConfig{}, errors.New("COMMITARIUM_CLAUDE_FORGEJO_ROLE must be lead or reviewer")
+	}
+	gitAuthorName, err := required("COMMITARIUM_CLAUDE_GIT_AUTHOR_NAME")
+	if err != nil {
+		return claudeConfig{}, err
+	}
+	gitAuthorEmail, err := required("COMMITARIUM_CLAUDE_GIT_AUTHOR_EMAIL")
+	if err != nil {
+		return claudeConfig{}, err
+	}
+	for _, value := range []string{forgejoLogin, gitAuthorName, gitAuthorEmail} {
+		if strings.ContainsAny(value, "\r\n") {
+			return claudeConfig{}, errors.New("Claude Forgejo and Git identity values cannot contain newlines")
+		}
+	}
+	executable := strings.TrimSpace(getenv("COMMITARIUM_CLAUDE_EXECUTABLE"))
+	if executable == "" {
+		executable = defaultClaudeBinary
+	}
+	permissionMode := strings.TrimSpace(getenv("COMMITARIUM_CLAUDE_PERMISSION_MODE"))
+	if permissionMode == "" {
+		permissionMode = defaultClaudeMode
+	}
+	if permissionMode != "plan" && permissionMode != "acceptEdits" &&
+		permissionMode != "bypassPermissions" && permissionMode != "dontAsk" &&
+		permissionMode != "auto" && permissionMode != "manual" {
+		return claudeConfig{}, errors.New(
+			"COMMITARIUM_CLAUDE_PERMISSION_MODE must be plan, acceptEdits, bypassPermissions, dontAsk, auto, or manual",
+		)
+	}
+	return claudeConfig{
+		executable: executable, model: strings.TrimSpace(getenv("COMMITARIUM_CLAUDE_MODEL")),
+		permissionMode: permissionMode, providerStatePath: providerStatePath,
+		workspaceRoot: workspaceRoot, profileID: profileID,
+		forgejoURL: strings.TrimRight(forgejoURL, "/"), forgejoTokenFile: forgejoTokenFile,
+		forgejoLogin: forgejoLogin, forgejoRole: forgejoRole,
+		gitAuthorName: gitAuthorName, gitAuthorEmail: gitAuthorEmail,
+	}, nil
+}
+
 func newCodexRuntime(config codexConfig) (runtime, error) {
 	providerState, err := os.Stat(config.providerStatePath)
 	if err != nil || !providerState.IsDir() {
@@ -371,7 +486,7 @@ func newCodexRuntime(config codexConfig) (runtime, error) {
 		return runtime{}, fmt.Errorf("create Codex adapter: %w", err)
 	}
 	return runtime{
-		provider: provider, environmentResolver: resolver,
+		provider: provider, providerKind: workerhttp.ProviderCodex, environmentResolver: resolver,
 		capabilities: []workerhttp.Capability{
 			workerhttp.CapabilityStart,
 			workerhttp.CapabilityResume,
@@ -381,6 +496,70 @@ func newCodexRuntime(config codexConfig) (runtime, error) {
 			workerhttp.CapabilityEventReplay,
 		},
 		description: "Codex worker",
+	}, nil
+}
+
+func newClaudeRuntime(config claudeConfig) (runtime, error) {
+	providerState, err := os.Stat(config.providerStatePath)
+	if err != nil || !providerState.IsDir() {
+		return runtime{}, errors.New("Claude provider-state directory is unavailable")
+	}
+	tokenBytes, err := os.ReadFile(config.forgejoTokenFile)
+	if err != nil {
+		return runtime{}, errors.New("Claude Forgejo token file is unavailable")
+	}
+	forgejoToken := strings.TrimSpace(string(tokenBytes))
+	if forgejoToken == "" || strings.IndexFunc(forgejoToken, unicode.IsSpace) >= 0 {
+		return runtime{}, errors.New("Claude Forgejo token is empty or contains whitespace")
+	}
+	resolver, err := workerservice.NewRootedEnvironmentResolver(
+		workerservice.RootedEnvironmentResolverConfig{
+			AgentProfileID: config.profileID,
+			WorkspaceRoot:  config.workspaceRoot,
+			Variables: []string{
+				"CLAUDE_CONFIG_DIR=" + config.providerStatePath,
+				"HOME=" + config.providerStatePath,
+				"LANG=C.UTF-8",
+				"PATH=/usr/local/bin:/usr/bin:/bin",
+			},
+			RoleVariables: map[worker.Role][]string{
+				config.forgejoRole: {
+					"COMMITARIUM_FORGEJO_URL=" + config.forgejoURL,
+					"COMMITARIUM_FORGEJO_TOKEN_FILE=" + config.forgejoTokenFile,
+					"COMMITARIUM_FORGEJO_LOGIN=" + config.forgejoLogin,
+					"GIT_AUTHOR_NAME=" + config.gitAuthorName,
+					"GIT_AUTHOR_EMAIL=" + config.gitAuthorEmail,
+					"GIT_COMMITTER_NAME=" + config.gitAuthorName,
+					"GIT_COMMITTER_EMAIL=" + config.gitAuthorEmail,
+					"GIT_TERMINAL_PROMPT=0",
+					"GIT_CONFIG_COUNT=1",
+					"GIT_CONFIG_KEY_0=http." + config.forgejoURL + "/.extraHeader",
+					"GIT_CONFIG_VALUE_0=Authorization: token " + forgejoToken,
+				},
+			},
+		},
+	)
+	if err != nil {
+		return runtime{}, fmt.Errorf("create Claude launch environment: %w", err)
+	}
+	provider, err := claudeadapter.New(claudeadapter.Config{
+		Supervisor: processsupervisor.New(), Executable: config.executable,
+		Model: config.model, PermissionMode: config.permissionMode,
+	})
+	if err != nil {
+		return runtime{}, fmt.Errorf("create Claude adapter: %w", err)
+	}
+	return runtime{
+		provider: provider, providerKind: workerhttp.ProviderClaudeCode,
+		environmentResolver: resolver,
+		capabilities: []workerhttp.Capability{
+			workerhttp.CapabilityStart,
+			workerhttp.CapabilityResume,
+			workerhttp.CapabilityCooperativeStop,
+			workerhttp.CapabilityForceStop,
+			workerhttp.CapabilityEventReplay,
+		},
+		description: "Claude worker",
 	}, nil
 }
 

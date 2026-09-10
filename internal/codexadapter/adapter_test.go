@@ -212,8 +212,11 @@ func TestImplementationReviewResponseFailsClosed(t *testing.T) {
 		`{"action":"changes_requested","summary":" ","commit_id":"0123456789abcdef0123456789abcdef01234567","pull_request_number":7,"review_id":11}`,
 		`{"action":"approved","summary":"good","commit_id":"0123456789abcdef0123456789abcdef01234567","pull_request_number":7,"review_id":11,"extra":true}`,
 	} {
-		if _, err := decodeImplementationReviewResponse(response); !errors.Is(err, ErrProtocol) {
-			t.Errorf("response %q error=%v, want ErrProtocol", response, err)
+		if _, err := worker.ResolveStructuredOutput(
+			worker.OutputContractImplementationReview,
+			[]byte(response),
+		); !errors.Is(err, worker.ErrInvalidStructuredOutput) {
+			t.Errorf("response %q error=%v, want ErrInvalidStructuredOutput", response, err)
 		}
 	}
 }
@@ -225,8 +228,11 @@ func TestImplementationReadinessResponseFailsClosed(t *testing.T) {
 		`{"action":"concern","summary":"The deployment evidence is missing.","extra":true}`,
 		`{"action":"blocked","summary":"Cannot inspect Forgejo."} {}`,
 	} {
-		if _, err := decodeImplementationReadinessResponse(response); !errors.Is(err, ErrProtocol) {
-			t.Errorf("response %q error=%v, want ErrProtocol", response, err)
+		if _, err := worker.ResolveStructuredOutput(
+			worker.OutputContractImplementationReadiness,
+			[]byte(response),
+		); !errors.Is(err, worker.ErrInvalidStructuredOutput) {
+			t.Errorf("response %q error=%v, want ErrInvalidStructuredOutput", response, err)
 		}
 	}
 }
@@ -238,8 +244,11 @@ func TestPlanningLeadResponseFailsClosed(t *testing.T) {
 		`{"action":"respond","content":"reply","extra":true}`,
 		`{"action":"respond","content":"reply"} {}`,
 	} {
-		if _, err := decodePlanningLeadResponse(response); !errors.Is(err, ErrProtocol) {
-			t.Errorf("response %q error=%v, want ErrProtocol", response, err)
+		if _, err := worker.ResolveStructuredOutput(
+			worker.OutputContractPlanningLead,
+			[]byte(response),
+		); !errors.Is(err, worker.ErrInvalidStructuredOutput) {
+			t.Errorf("response %q error=%v, want ErrInvalidStructuredOutput", response, err)
 		}
 	}
 }
@@ -251,8 +260,11 @@ func TestImplementationLeadResponseFailsClosed(t *testing.T) {
 		`{"action":"blocked","summary":" ","commit_id":"","pull_request_number":7}`,
 		`{"action":"published","summary":"done","commit_id":"0123456789abcdef0123456789abcdef01234567","pull_request_number":7,"extra":true}`,
 	} {
-		if _, err := decodeImplementationLeadResponse(response); !errors.Is(err, ErrProtocol) {
-			t.Errorf("response %q error=%v, want ErrProtocol", response, err)
+		if _, err := worker.ResolveStructuredOutput(
+			worker.OutputContractImplementationLead,
+			[]byte(response),
+		); !errors.Is(err, worker.ErrInvalidStructuredOutput) {
+			t.Errorf("response %q error=%v, want ErrInvalidStructuredOutput", response, err)
 		}
 	}
 }

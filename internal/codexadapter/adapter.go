@@ -285,7 +285,7 @@ func (adapter *Adapter) launch(
 	if err := client.request(operationCtx, "turn/start", turnStartParams{
 		ThreadID:     threadID,
 		Input:        []textInput{{Type: "text", Text: prompt}},
-		OutputSchema: outputSchema(request.OutputContract),
+		OutputSchema: worker.OutputJSONSchema(request.OutputContract),
 	}, &turnStarted); err != nil {
 		providerSession.stopAfterFailedLaunch()
 		return providerSession, fmt.Errorf("start Codex turn: %w", err)
@@ -302,66 +302,6 @@ func (adapter *Adapter) launch(
 	}
 	providerSession.start(turnID)
 	return providerSession, nil
-}
-
-func outputSchema(contract worker.OutputContract) any {
-	switch contract {
-	case worker.OutputContractPlanningLead:
-		return map[string]any{
-			"type":                 "object",
-			"additionalProperties": false,
-			"properties": map[string]any{
-				"action": map[string]any{
-					"type": "string", "enum": []string{"respond", "submit_plan"},
-				},
-				"content": map[string]any{"type": "string"},
-			},
-			"required": []string{"action", "content"},
-		}
-	case worker.OutputContractImplementationLead:
-		return map[string]any{
-			"type":                 "object",
-			"additionalProperties": false,
-			"properties": map[string]any{
-				"action": map[string]any{
-					"type": "string", "enum": []string{"published", "blocked"},
-				},
-				"summary":             map[string]any{"type": "string"},
-				"commit_id":           map[string]any{"type": "string"},
-				"pull_request_number": map[string]any{"type": "integer"},
-			},
-			"required": []string{"action", "summary", "commit_id", "pull_request_number"},
-		}
-	case worker.OutputContractImplementationReview:
-		return map[string]any{
-			"type":                 "object",
-			"additionalProperties": false,
-			"properties": map[string]any{
-				"action": map[string]any{
-					"type": "string", "enum": []string{"approved", "changes_requested", "blocked"},
-				},
-				"summary":             map[string]any{"type": "string"},
-				"commit_id":           map[string]any{"type": "string"},
-				"pull_request_number": map[string]any{"type": "integer"},
-				"review_id":           map[string]any{"type": "integer"},
-			},
-			"required": []string{"action", "summary", "commit_id", "pull_request_number", "review_id"},
-		}
-	case worker.OutputContractImplementationReadiness:
-		return map[string]any{
-			"type":                 "object",
-			"additionalProperties": false,
-			"properties": map[string]any{
-				"action": map[string]any{
-					"type": "string", "enum": []string{"ready_to_merge", "concern", "blocked"},
-				},
-				"summary": map[string]any{"type": "string"},
-			},
-			"required": []string{"action", "summary"},
-		}
-	default:
-		return nil
-	}
 }
 
 func validSandbox(value string) bool {

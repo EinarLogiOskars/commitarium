@@ -8,7 +8,9 @@ This boundary is implemented and tested as a Go HTTP server and coordinator
 client. A journal-backed service connects the server to SQLite and a provider
 adapter. A standalone simulated Codex worker runs that stack as the default
 Compose service. An opt-in real Codex worker packages the same boundary with
-the Codex App Server adapter and process supervisor. In opt-in
+the Codex App Server adapter and process supervisor. A separate opt-in Claude
+profile packages a pinned Claude Code CLI behind the same boundary, but is not
+yet selected by coordinator workflows. In opt-in
 `real_codex_lead` mode, the coordinator routes lead and reviewer assignments to
 separate instances of that real worker, each with its own profile, journal,
 worker token, and Forgejo identity.
@@ -360,10 +362,10 @@ do not receive the lead identity. The secret value is never stored in the
 worker journal or coordinator database and is never returned through the API.
 General project-secret provisioning is not implemented yet.
 
-The simulated and real Codex workers use the same standalone Go executable and
-select their provider adapter at startup. The simulated Compose service serves
-the authenticated API on port 8081 inside the Compose network and stores
-`worker.db` in the private `simulated-codex-worker-journal` volume. Its role
+The simulated, real Codex, and real Claude workers use the same standalone Go
+executable and select their provider adapter at startup. The simulated Compose
+service serves the authenticated API on port 8081 inside the Compose network
+and stores `worker.db` in the private `simulated-codex-worker-journal` volume. Its role
 scripts repeat deterministically, so separate logical sessions do not consume a
 finite test queue. The normal Compose configuration deliberately does not
 publish port 8081 to the host.
@@ -497,3 +499,50 @@ Unit tests execute a deterministic fake App Server as a real child process.
 They do not log in, contact OpenAI, or consume model usage. The opt-in
 `real-codex` Compose profile selects this adapter; the normal development stack
 continues to use only the simulated worker.
+
+## Claude Code stream adapter foundation
+
+`internal/claudeadapter` runs one Claude Code non-interactive process for each
+worker attempt using `--print --output-format stream-json`. A new attempt gets a
+coordinator-independent UUID before process launch and supplies it through
+`--session-id`, which lets the worker durably record provider identity as soon
+as the process starts. A later attempt uses `--resume` with that exact UUID and
+the recovery or follow-up briefing, preserving one logical Claude conversation
+across bounded turns.
+
+The adapter checks that Claude's initialization record reports both the
+expected session UUID and assigned working directory. It converts completed
+assistant text and tool start/finish records into provider-neutral message and
+activity events. Private thinking, raw tool inputs/results, stderr, and
+provider-specific metadata are not published. Unknown optional records are
+ignored for forward compatibility, while malformed JSON, wrong identity,
+wrong working directory, output after the terminal result, oversized records,
+and event backpressure fail the attempt closed.
+
+Commitarium's structured planning, implementation, review, and merge-readiness
+schemas now live in `internal/worker`, because they describe workflow meaning
+rather than either provider's protocol. Claude receives the relevant schema via
+`--json-schema`; only the validated `structured_output` from its terminal result
+becomes an observable workflow event or publication fact. Codex uses the same
+schema and strict interpreter through App Server. This keeps provider behavior
+consistent without asking the coordinator to infer decisions from prose.
+
+Claude's print process cannot accept safe mid-turn steering. The adapter
+therefore advertises start, exact-session resume, cooperative stop, forced stop,
+and event replay, but not message, pause, or continue. User or peer-agent
+guidance becomes a new resume attempt after the current bounded turn ends.
+
+The opt-in `real-claude` Compose profile contains separate lead and reviewer
+services. Each has its own Claude configuration/session volume, worker journal,
+worker API token, and Forgejo/Git identity. `CLAUDE_CONFIG_DIR` and `HOME` point
+at that private provider-state mount. Only the configured role receives that
+service's Forgejo credential, and neither service receives an upstream Git
+credential. Claude runs with `bypassPermissions` because no human can answer a
+CLI permission prompt inside the headless worker; the unprivileged container,
+scoped mounts, role instructions, and internal Forgejo repository are the
+security boundary.
+
+The normal coordinator runtime does not select this adapter yet. The next
+slice will persist immutable lead/reviewer provider assignments and route each
+role to its configured worker. Until then, the Claude services are standalone
+internal-worker endpoints rather than a public coordinator capability.

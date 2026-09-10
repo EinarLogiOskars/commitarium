@@ -144,9 +144,8 @@ next backend slice will be moved here before its public surface changes.
 
 ### Near-term MVP backend
 
-- Claude worker integration.
-- Lead and reviewer provider selection, including Codex/Codex,
-  Codex/Claude, Claude/Codex, and Claude/Claude assignments.
+- Lead and reviewer provider selection and coordinator routing, including
+  Codex/Codex, Codex/Claude, Claude/Codex, and Claude/Claude assignments.
 - Final Forgejo merge policy and action: require user approval or merge
   automatically after every gate passes.
 - Clear notification data for a feature that merged automatically or is
@@ -170,8 +169,8 @@ repository credentials.
 
 - The normal runtime still defaults to deterministic simulated agents. The
   complete real workflow is opt-in through `real_codex_lead` configuration.
-- The real MVP currently uses Codex for both lead and reviewer; Claude is not
-  connected yet.
+- The standalone Claude lead/reviewer workers are implemented, but the public
+  workflow still uses Codex for both roles until provider selection is added.
 - A workflow can reach `ready_to_merge`, but no public merge operation exists.
 - Real-provider recovery can reattach after a coordinator restart, but a worker
   container restart during an active provider process still becomes an

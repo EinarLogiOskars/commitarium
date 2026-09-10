@@ -192,6 +192,101 @@ func TestCodexRuntimeUsesPrivateProfileAndRealCapabilities(t *testing.T) {
 		slices.Contains(workerRuntime.capabilities, workerhttp.CapabilityContinue) {
 		t.Fatalf("Codex capabilities = %v", workerRuntime.capabilities)
 	}
+	if workerRuntime.providerKind != workerhttp.ProviderCodex {
+		t.Fatalf("Codex provider kind = %q", workerRuntime.providerKind)
+	}
+}
+
+func TestLoadConfigBuildsClaudeRuntimeSettings(t *testing.T) {
+	values := validClaudeConfig(t.TempDir())
+	loaded, err := loadConfig(func(name string) string { return values[name] })
+	if err != nil {
+		t.Fatalf("load Claude worker config: %v", err)
+	}
+	if loaded.adapter != "claude_code" ||
+		loaded.claude.profileID != "profile_claude_test" ||
+		loaded.claude.forgejoRole != worker.RoleReviewer ||
+		loaded.claude.permissionMode != "bypassPermissions" {
+		t.Fatalf("Claude worker config = %+v", loaded)
+	}
+}
+
+func TestLoadConfigRejectsIncompleteClaudeConfiguration(t *testing.T) {
+	values := validClaudeConfig(t.TempDir())
+	delete(values, "COMMITARIUM_CLAUDE_PROFILE_ID")
+	if _, err := loadConfig(func(name string) string { return values[name] }); err == nil {
+		t.Fatal("expected incomplete Claude configuration to fail")
+	}
+	values = validClaudeConfig(t.TempDir())
+	values["COMMITARIUM_CLAUDE_PERMISSION_MODE"] = "host-write"
+	if _, err := loadConfig(func(name string) string { return values[name] }); err == nil {
+		t.Fatal("expected unsupported Claude permission mode to fail")
+	}
+	values = validClaudeConfig(t.TempDir())
+	values["COMMITARIUM_CLAUDE_FORGEJO_ROLE"] = "consultant"
+	if _, err := loadConfig(func(name string) string { return values[name] }); err == nil {
+		t.Fatal("expected unsupported Claude Forgejo role to fail")
+	}
+}
+
+func TestClaudeRuntimeUsesPrivateProfileAndBoundedTurnCapabilities(t *testing.T) {
+	root := t.TempDir()
+	workspace := filepath.Join(root, "workspace_claude_test")
+	if err := os.Mkdir(workspace, 0o700); err != nil {
+		t.Fatalf("create workspace: %v", err)
+	}
+	values := validClaudeConfig(workspace)
+	values["COMMITARIUM_CLAUDE_WORKSPACE_ROOT"] = root
+	loaded, err := loadConfig(func(name string) string { return values[name] })
+	if err != nil {
+		t.Fatalf("load Claude worker config: %v", err)
+	}
+	workerRuntime, err := newRuntime(loaded)
+	if err != nil {
+		t.Fatalf("create Claude runtime: %v", err)
+	}
+	assignment := workerhttp.Assignment{
+		AgentProfileID: "profile_claude_test",
+		ProjectID:      "prj_test",
+		FeatureID:      "fea_test",
+		Role:           workerhttp.RoleReviewer,
+		WorkspaceID:    "workspace_claude_test",
+	}
+	resolved, err := workerRuntime.environmentResolver.Resolve(t.Context(), assignment)
+	if err != nil {
+		t.Fatalf("resolve Claude launch environment: %v", err)
+	}
+	canonicalWorkspace, err := filepath.EvalSymlinks(workspace)
+	if err != nil {
+		t.Fatalf("canonicalize workspace: %v", err)
+	}
+	if resolved.WorkingDirectory != canonicalWorkspace ||
+		!slices.Contains(resolved.Variables, "CLAUDE_CONFIG_DIR="+root) ||
+		!slices.Contains(resolved.Variables, "HOME="+root) ||
+		!slices.Contains(resolved.Variables, "COMMITARIUM_FORGEJO_LOGIN=claude-reviewer") ||
+		!slices.Contains(resolved.Variables, "GIT_AUTHOR_NAME=Commitarium Claude Reviewer") ||
+		!slices.Contains(resolved.Variables, "GIT_CONFIG_VALUE_0=Authorization: token claude-forgejo-test-token") {
+		t.Fatalf("Claude launch environment = %+v", resolved)
+	}
+	assignment.Role = workerhttp.RoleLead
+	leadEnvironment, err := workerRuntime.environmentResolver.Resolve(t.Context(), assignment)
+	if err != nil {
+		t.Fatalf("resolve lead assignment through reviewer worker: %v", err)
+	}
+	for _, variable := range leadEnvironment.Variables {
+		if strings.HasPrefix(variable, "COMMITARIUM_FORGEJO_") ||
+			strings.Contains(variable, "Authorization: token") {
+			t.Fatalf("wrong-role assignment received reviewer credential variable %q", variable)
+		}
+	}
+	if workerRuntime.providerKind != workerhttp.ProviderClaudeCode ||
+		!slices.Contains(workerRuntime.capabilities, workerhttp.CapabilityResume) ||
+		!slices.Contains(workerRuntime.capabilities, workerhttp.CapabilityForceStop) ||
+		slices.Contains(workerRuntime.capabilities, workerhttp.CapabilityMessage) ||
+		slices.Contains(workerRuntime.capabilities, workerhttp.CapabilityPause) ||
+		slices.Contains(workerRuntime.capabilities, workerhttp.CapabilityContinue) {
+		t.Fatalf("Claude provider/capabilities = %q %v", workerRuntime.providerKind, workerRuntime.capabilities)
+	}
 }
 
 func TestSimulatedEnvironmentResolverPreservesAssignmentWithoutInheritingVariables(t *testing.T) {
@@ -260,5 +355,28 @@ func validCodexConfig(workspace string) map[string]string {
 		"COMMITARIUM_CODEX_FORGEJO_ROLE":        "lead",
 		"COMMITARIUM_CODEX_GIT_AUTHOR_NAME":     "Commitarium Codex Lead",
 		"COMMITARIUM_CODEX_GIT_AUTHOR_EMAIL":    "codex-lead@commitarium.local",
+	}
+}
+
+func validClaudeConfig(workspace string) map[string]string {
+	tokenFile := filepath.Join(filepath.Dir(workspace), "claude-forgejo-token")
+	if err := os.WriteFile(tokenFile, []byte("claude-forgejo-test-token\n"), 0o600); err != nil {
+		panic(err)
+	}
+	return map[string]string{
+		"COMMITARIUM_WORKER_DATABASE_PATH":       "/state/worker.db",
+		"COMMITARIUM_WORKER_TOKEN":               "test-token",
+		"COMMITARIUM_WORKER_ADAPTER":             "claude_code",
+		"COMMITARIUM_CLAUDE_PROVIDER_STATE_PATH": filepath.Dir(workspace),
+		"COMMITARIUM_CLAUDE_WORKSPACE_ROOT":      filepath.Dir(workspace),
+		"COMMITARIUM_CLAUDE_PROFILE_ID":          "profile_claude_test",
+		"COMMITARIUM_CLAUDE_MODEL":               "test-model",
+		"COMMITARIUM_CLAUDE_PERMISSION_MODE":     "bypassPermissions",
+		"COMMITARIUM_CLAUDE_FORGEJO_URL":         "http://forgejo:3000",
+		"COMMITARIUM_CLAUDE_FORGEJO_TOKEN_FILE":  tokenFile,
+		"COMMITARIUM_CLAUDE_FORGEJO_LOGIN":       "claude-reviewer",
+		"COMMITARIUM_CLAUDE_FORGEJO_ROLE":        "reviewer",
+		"COMMITARIUM_CLAUDE_GIT_AUTHOR_NAME":     "Commitarium Claude Reviewer",
+		"COMMITARIUM_CLAUDE_GIT_AUTHOR_EMAIL":    "claude-reviewer@commitarium.local",
 	}
 }
