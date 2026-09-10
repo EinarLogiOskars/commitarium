@@ -472,7 +472,7 @@ func TestClientVerifiesLeadImplementationCommitAndAuditComment(t *testing.T) {
 				t.Fatalf("unexpected comment verification %s %s", request.Method, request.URL)
 			}
 			comment := spec.PublicationMarker +
-				"\n\n## Implementation summary\n\n" + spec.Summary
+				"\n\n## " + spec.CommentHeading + "\n\n" + spec.Summary
 			return jsonResponse(http.StatusOK, `[{"body":`+
 				strconv.Quote(comment)+`,"user":{"login":"codex-lead"}}]`), nil
 		default:
@@ -500,7 +500,7 @@ func TestClientRejectsImplementationAuditFromWrongAgent(t *testing.T) {
 			return pullRequestJSONResponse(t, http.StatusOK, stored), nil
 		}
 		comment := spec.PublicationMarker +
-			"\n\n## Implementation summary\n\n" + spec.Summary
+			"\n\n## " + spec.CommentHeading + "\n\n" + spec.Summary
 		return jsonResponse(http.StatusOK, `[{"body":`+
 			strconv.Quote(comment)+`,"user":{"login":"coordinator"}}]`), nil
 	})
@@ -510,6 +510,30 @@ func TestClientRejectsImplementationAuditFromWrongAgent(t *testing.T) {
 	)
 	if !errors.Is(err, workspace.ErrPullRequestConflict) {
 		t.Fatalf("expected %v, got %v", workspace.ErrPullRequestConflict, err)
+	}
+}
+
+func TestClientVerifiesReviewResponseHeading(t *testing.T) {
+	spec := testImplementationPublicationSpec()
+	spec.PublicationMarker = "<!-- commitarium-review-response: stable-attempt -->"
+	spec.CommentHeading = "Review response"
+	spec.Summary = "Added and tested the missing failure path."
+	stored := managedPullRequest(testPullRequestSpec())
+	stored.HeadCommitID = spec.HeadCommitID
+	stored.Body += "\n\n" + spec.PlanPublicationMarker +
+		"\n\n## Agreed implementation plan\n\n" + spec.Plan
+	client := newBranchTestClient(t, func(request *http.Request) (*http.Response, error) {
+		if request.URL.Path == "/api/v1/repos/owner/repository/pulls/7" {
+			return pullRequestJSONResponse(t, http.StatusOK, stored), nil
+		}
+		comment := spec.PublicationMarker + "\n\n## Review response\n\n" + spec.Summary
+		return jsonResponse(http.StatusOK, `[{"body":`+
+			strconv.Quote(comment)+`,"user":{"login":"codex-lead"}}]`), nil
+	})
+	if _, err := client.VerifyPullRequestImplementation(
+		t.Context(), "owner", "repository", spec,
+	); err != nil {
+		t.Fatalf("verify review response: %v", err)
 	}
 }
 
@@ -707,6 +731,7 @@ func testImplementationPublicationSpec() workspace.ImplementationPublicationSpec
 		Number: 7, FeatureMarker: plan.FeatureMarker,
 		PlanPublicationMarker: plan.PublicationMarker, Plan: plan.Plan,
 		PublicationMarker: "<!-- commitarium-implementation: stable-attempt -->",
+		CommentHeading:    "Implementation summary",
 		Summary:           "Implemented the agreed behavior and passed tests.",
 		ExpectedAuthor:    "codex-lead",
 		BaseBranch:        plan.BaseBranch, HeadBranch: plan.HeadBranch,

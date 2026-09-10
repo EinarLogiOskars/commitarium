@@ -136,12 +136,16 @@ type remoteLeadWorkspaceStub struct {
 	verifyCalls             int
 	continuationVerifyCalls int
 	publicationVerifyCalls  int
+	responseVerifyCalls     int
 	reviewVerifyCalls       int
+	responseReviewedCommit  string
+	responseCommit          string
 	publishedEventID        string
 	publishedPlan           string
 	publishErr              error
 	verifyErr               error
 	publicationVerifyErr    error
+	responseVerifyErr       error
 	reviewVerifyErr         error
 }
 
@@ -179,6 +183,25 @@ func (stub *remoteLeadWorkspaceStub) VerifyImplementationReview(
 ) (workspace.Workspace, error) {
 	stub.reviewVerifyCalls++
 	return stub.prepared, stub.reviewVerifyErr
+}
+
+func (stub *remoteLeadWorkspaceStub) VerifyImplementationReviewResponse(
+	_ context.Context,
+	_ string,
+	_ string,
+	_ string,
+	_ string,
+	_ string,
+	_ string,
+	reviewedCommit string,
+	commit string,
+	_ int64,
+	_ string,
+) (workspace.Workspace, error) {
+	stub.responseVerifyCalls++
+	stub.responseReviewedCommit = reviewedCommit
+	stub.responseCommit = commit
+	return stub.prepared, stub.responseVerifyErr
 }
 
 func (stub *remoteLeadWorkspaceStub) VerifyPublishedPlan(
@@ -820,6 +843,8 @@ func TestRemoteLeadStartsPlanningInManagedWorkspace(t *testing.T) {
 	addCompletedPlanningCorrectionAttempts(stub, runID, storedProject.ID, storedFeature.ID)
 	addCompletedImplementationAttempt(stub, runID, storedProject.ID, storedFeature.ID)
 	addCompletedImplementationReviewAttempt(stub, runID, storedProject.ID, storedFeature.ID)
+	addCompletedImplementationCorrectionAttempt(stub, runID, storedProject.ID, storedFeature.ID)
+	addCompletedSecondImplementationReviewAttempt(stub, runID, storedProject.ID, storedFeature.ID)
 	workflowService := workflow.NewService(database.NewWorkflowStore(db))
 	now := time.Date(2026, time.September, 9, 20, 0, 0, 0, time.UTC)
 	checkoutAt := now.Add(time.Second)
@@ -1070,6 +1095,7 @@ func TestRemoteLeadStartsPlanningInManagedWorkspace(t *testing.T) {
 	requestCount = len(stub.putRequests)
 	stub.mu.Unlock()
 	workspaceStub.publicationVerifyErr = nil
+	workspaceStub.responseVerifyErr = errors.New("Forgejo response lookup unavailable")
 	implementationRun, admitted, err = starter.StartImplementation(
 		t.Context(), runID, "retry-implementation-verification-1",
 	)
@@ -1078,10 +1104,11 @@ func TestRemoteLeadStartsPlanningInManagedWorkspace(t *testing.T) {
 	}
 	waitForRemoteLeadStatus(t, executions, runID, execution.RunStatusWaitingForUser)
 	waitForRemoteLeadIdle(t, starter, runID)
-	completedReview, err := executions.GetRun(t.Context(), runID)
-	if err != nil || completedReview.Reason != implementationChangesRequestedReason ||
-		workspaceStub.publicationVerifyCalls != 2 || workspaceStub.reviewVerifyCalls != 1 {
-		t.Fatalf("unexpected first review checkpoint: run=%+v workspace=%+v err=%v", completedReview, workspaceStub, err)
+	interruptedCorrection, err := executions.GetRun(t.Context(), runID)
+	if err != nil || interruptedCorrection.Reason == implementationApprovedReason ||
+		workspaceStub.publicationVerifyCalls != 2 || workspaceStub.responseVerifyCalls != 1 ||
+		workspaceStub.reviewVerifyCalls != 1 {
+		t.Fatalf("unexpected interrupted correction checkpoint: run=%+v workspace=%+v err=%v", interruptedCorrection, workspaceStub, err)
 	}
 	reviewedFeature, err := database.NewFeatureStore(db).GetByID(t.Context(), storedFeature.ID)
 	if err != nil || reviewedFeature.State != feature.StateReviewing {
@@ -1090,17 +1117,85 @@ func TestRemoteLeadStartsPlanningInManagedWorkspace(t *testing.T) {
 	stub.mu.Lock()
 	requests = append([]workerhttp.PutAttemptRequest(nil), stub.putRequests...)
 	stub.mu.Unlock()
-	if len(requests) != requestCount+1 || requests[len(requests)-1].Mode != workerhttp.AttemptModeResume ||
-		requests[len(requests)-1].ProviderSessionID != "codex-review-thread-test" ||
-		requests[len(requests)-1].Assignment.Role != workerhttp.RoleReviewer ||
-		requests[len(requests)-1].OutputContract != workerhttp.OutputContractImplementationReview ||
-		!strings.Contains(requests[len(requests)-1].Instructions, "Exact implementation commit") ||
-		!strings.Contains(requests[len(requests)-1].Instructions, "formal Forgejo review") {
-		t.Fatalf("unexpected implementation review request %+v", requests[len(requests)-1])
+	if len(requests) != requestCount+2 {
+		t.Fatalf("expected review and correction requests before recovery, got %+v", requests[requestCount:])
+	}
+	firstReviewRequest := requests[requestCount]
+	correctionRequest := requests[requestCount+1]
+	if firstReviewRequest.Mode != workerhttp.AttemptModeResume ||
+		firstReviewRequest.ProviderSessionID != "codex-review-thread-test" ||
+		firstReviewRequest.Assignment.Role != workerhttp.RoleReviewer ||
+		firstReviewRequest.OutputContract != workerhttp.OutputContractImplementationReview ||
+		!strings.Contains(firstReviewRequest.Instructions, "Exact implementation commit") ||
+		!strings.Contains(firstReviewRequest.Instructions, "formal Forgejo review") {
+		t.Fatalf("unexpected first implementation review request %+v", firstReviewRequest)
+	}
+	if correctionRequest.Mode != workerhttp.AttemptModeResume ||
+		correctionRequest.ProviderSessionID != "codex-thread-test" ||
+		correctionRequest.Assignment.Role != workerhttp.RoleLead ||
+		correctionRequest.OutputContract != workerhttp.OutputContractImplementationLead ||
+		!strings.Contains(correctionRequest.Instructions, "## Review response") ||
+		!strings.Contains(correctionRequest.Instructions, "one additional failure-path test") ||
+		!strings.Contains(correctionRequest.Instructions, "Exact reviewed commit") {
+		t.Fatalf("unexpected correction request %+v", correctionRequest)
 	}
 
-	// Recreate a restart after the review completed but before its verification
-	// checkpoint was trusted. Recovery re-verifies the same review without a PUT.
+	// Simulate a coordinator restart after the correction finished but before
+	// its Forgejo audit entry could be verified. Recovery rechecks the existing
+	// result and starts review round two without replacing the lead attempt.
+	workspaceStub.responseVerifyErr = nil
+	if _, err := executions.TransitionRun(
+		t.Context(), runID, execution.RunStatusWaitingForUser,
+		execution.RunStatusRunning, "Simulated coordinator interruption after correction.",
+	); err != nil {
+		t.Fatalf("prepare completed-correction recovery: %v", err)
+	}
+	correctionRestart, err := NewRemoteLeadStarter(RemoteLeadConfig{
+		Executions: executions, Features: database.NewFeatureStore(db), Goals: workflowService,
+		Planning: workflowService, Workspaces: workspaceStub, Worker: stub,
+		Pump:     &conversationalRemoteLeadPump{executions: executions, worker: stub},
+		Lifetime: t.Context(), AgentProfileID: "codex-default", WorkspaceID: "project-read-only",
+	})
+	if err != nil {
+		t.Fatalf("create completed-correction recovery starter: %v", err)
+	}
+	interruptedCorrection, err = executions.GetRun(t.Context(), runID)
+	if err != nil {
+		t.Fatalf("load completed-correction recovery run: %v", err)
+	}
+	if err := correctionRestart.Recover(
+		t.Context(), interruptedCorrection, reviewedFeature, project.RecoveryPolicyApprovalRequired,
+	); err != nil {
+		t.Fatalf("recover completed implementation correction: %v", err)
+	}
+	waitForRemoteLeadStatus(t, executions, runID, execution.RunStatusWaitingForUser)
+	waitForRemoteLeadIdle(t, correctionRestart, runID)
+	completedReview, err := executions.GetRun(t.Context(), runID)
+	if err != nil || completedReview.Reason != implementationApprovedReason ||
+		workspaceStub.responseVerifyCalls != 2 || workspaceStub.reviewVerifyCalls != 2 ||
+		workspaceStub.responseReviewedCommit != "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" ||
+		workspaceStub.responseCommit != "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" {
+		t.Fatalf("unexpected corrective review checkpoint: run=%+v workspace=%+v err=%v", completedReview, workspaceStub, err)
+	}
+	stub.mu.Lock()
+	requests = append([]workerhttp.PutAttemptRequest(nil), stub.putRequests...)
+	stub.mu.Unlock()
+	if len(requests) != requestCount+3 {
+		t.Fatalf("correction recovery launched unexpected worker turns: %+v", requests[requestCount:])
+	}
+	secondReviewRequest := requests[requestCount+2]
+	if secondReviewRequest.Mode != workerhttp.AttemptModeResume ||
+		secondReviewRequest.ProviderSessionID != "codex-review-thread-test" ||
+		secondReviewRequest.Assignment.Role != workerhttp.RoleReviewer ||
+		secondReviewRequest.OutputContract != workerhttp.OutputContractImplementationReview ||
+		!strings.Contains(secondReviewRequest.Instructions, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb") ||
+		!strings.Contains(secondReviewRequest.Instructions, "Published the corrected implementation") {
+		t.Fatalf("unexpected second implementation review request %+v", secondReviewRequest)
+	}
+
+	// Recreate a restart after review round two completed but before its
+	// verification checkpoint was trusted. Recovery re-verifies the same review
+	// without launching another worker turn.
 	if _, err := executions.TransitionRun(
 		t.Context(), runID, execution.RunStatusWaitingForUser,
 		execution.RunStatusRunning, "Simulated coordinator interruption after review.",
@@ -1126,7 +1221,7 @@ func TestRemoteLeadStartsPlanningInManagedWorkspace(t *testing.T) {
 		t.Fatalf("recover completed implementation review: %v", err)
 	}
 	waitForRemoteLeadStatus(t, executions, runID, execution.RunStatusWaitingForUser)
-	if workspaceStub.reviewVerifyCalls != 2 {
+	if workspaceStub.reviewVerifyCalls != 3 {
 		t.Fatalf("completed review recovery verification count = %d", workspaceStub.reviewVerifyCalls)
 	}
 	stub.mu.Lock()
@@ -1848,6 +1943,109 @@ func addCompletedImplementationReviewAttempt(
 		{
 			AttemptReference: reference, Sequence: 1, Type: workerhttp.EventActivity,
 			Text: "Inspected the exact implementation commit.", OccurredAt: now,
+		},
+		{
+			AttemptReference: reference, Sequence: 2, Type: workerhttp.EventMessage,
+			Text: terminal.Result.Summary, OccurredAt: now.Add(time.Millisecond),
+		},
+		{
+			AttemptReference: reference, Sequence: 3, Type: workerhttp.EventAttemptTerminal,
+			Text: terminal.Result.Summary, OccurredAt: endedAt,
+		},
+	}
+}
+
+func addCompletedImplementationCorrectionAttempt(
+	stub *conversationalRemoteLeadWorker,
+	runID string,
+	projectID string,
+	featureID string,
+) {
+	sessionID := remoteLeadSessionID(runID)
+	reference := workerhttp.AttemptReference{
+		SessionID: sessionID, AttemptID: implementationCorrectionAttemptID(sessionID, 1),
+	}
+	now := time.Date(2026, time.September, 10, 3, 42, 0, 0, time.UTC)
+	initial := workerhttp.Attempt{
+		AttemptReference: reference, Mode: workerhttp.AttemptModeResume,
+		Assignment: workerhttp.Assignment{
+			AgentProfileID: "codex-default", ProjectID: projectID, FeatureID: featureID,
+			Role: workerhttp.RoleLead, WorkspaceID: "wsp_managed_feature",
+		},
+		ProviderSessionID: "codex-thread-test", State: workerhttp.AttemptStateRunning,
+		StartedAt: now, UpdatedAt: now,
+	}
+	endedAt := now.Add(time.Second)
+	terminal := initial
+	terminal.State = workerhttp.AttemptStateTerminal
+	terminal.LatestEventSequence = 3
+	terminal.UpdatedAt = endedAt
+	terminal.EndedAt = &endedAt
+	terminal.Result = &workerhttp.TerminalResult{
+		Outcome: workerhttp.OutcomeCompleted, Disposition: workerhttp.DispositionSucceeded,
+		Summary: "Published the corrected implementation and added the missing failure-path test.",
+		Publication: &workerhttp.ImplementationPublication{
+			CommitID: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", PullRequestNumber: 7,
+		},
+	}
+	stub.initial[reference] = initial
+	stub.terminal[reference] = terminal
+	stub.events[reference] = []workerhttp.Event{
+		{
+			AttemptReference: reference, Sequence: 1, Type: workerhttp.EventActivity,
+			Text: "Reconciled the exact reviewed commit and formal review before editing.", OccurredAt: now,
+		},
+		{
+			AttemptReference: reference, Sequence: 2, Type: workerhttp.EventMessage,
+			Text: terminal.Result.Summary, OccurredAt: now.Add(time.Millisecond),
+		},
+		{
+			AttemptReference: reference, Sequence: 3, Type: workerhttp.EventAttemptTerminal,
+			Text: terminal.Result.Summary, OccurredAt: endedAt,
+		},
+	}
+}
+
+func addCompletedSecondImplementationReviewAttempt(
+	stub *conversationalRemoteLeadWorker,
+	runID string,
+	projectID string,
+	featureID string,
+) {
+	sessionID := remoteReviewerSessionID(runID)
+	reference := workerhttp.AttemptReference{
+		SessionID: sessionID, AttemptID: implementationReviewAttemptID(sessionID, 2),
+	}
+	now := time.Date(2026, time.September, 10, 3, 44, 0, 0, time.UTC)
+	initial := workerhttp.Attempt{
+		AttemptReference: reference, Mode: workerhttp.AttemptModeResume,
+		Assignment: workerhttp.Assignment{
+			AgentProfileID: "codex-default", ProjectID: projectID, FeatureID: featureID,
+			Role: workerhttp.RoleReviewer, WorkspaceID: "wsp_managed_feature",
+		},
+		ProviderSessionID: "codex-review-thread-test", State: workerhttp.AttemptStateRunning,
+		StartedAt: now, UpdatedAt: now,
+	}
+	endedAt := now.Add(time.Second)
+	terminal := initial
+	terminal.State = workerhttp.AttemptStateTerminal
+	terminal.LatestEventSequence = 3
+	terminal.UpdatedAt = endedAt
+	terminal.EndedAt = &endedAt
+	terminal.Result = &workerhttp.TerminalResult{
+		Outcome: workerhttp.OutcomeCompleted, Disposition: workerhttp.DispositionSucceeded,
+		Summary: "The corrected implementation addresses the finding and passes the relevant tests.",
+		Review: &workerhttp.ReviewPublication{
+			CommitID:          "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+			PullRequestNumber: 7, ReviewID: 12,
+		},
+	}
+	stub.initial[reference] = initial
+	stub.terminal[reference] = terminal
+	stub.events[reference] = []workerhttp.Event{
+		{
+			AttemptReference: reference, Sequence: 1, Type: workerhttp.EventActivity,
+			Text: "Inspected the corrected commit and reran the focused tests.", OccurredAt: now,
 		},
 		{
 			AttemptReference: reference, Sequence: 2, Type: workerhttp.EventMessage,
