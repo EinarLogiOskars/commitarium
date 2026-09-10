@@ -451,6 +451,7 @@ func TestClientVerificationRejectsMissingPlanWithoutUpdatingPullRequest(t *testi
 
 func TestClientVerifiesLeadImplementationCommitAndAuditComment(t *testing.T) {
 	spec := testImplementationPublicationSpec()
+	publicationMarker := spec.PublicationKind.Marker(spec.AttemptID)
 	stored := managedPullRequest(testPullRequestSpec())
 	stored.HeadCommitID = spec.HeadCommitID
 	stored.Body += "\n\n" + spec.PlanPublicationMarker +
@@ -471,8 +472,8 @@ func TestClientVerifiesLeadImplementationCommitAndAuditComment(t *testing.T) {
 				request.URL.Query().Get("limit") != "50" {
 				t.Fatalf("unexpected comment verification %s %s", request.Method, request.URL)
 			}
-			comment := spec.PublicationMarker +
-				"\n\n## " + spec.CommentHeading + "\n\n" + spec.Summary
+			comment := publicationMarker +
+				"\n\n## " + spec.PublicationKind.CommentHeading() + "\n\n" + spec.Summary
 			return jsonResponse(http.StatusOK, `[{"body":`+
 				strconv.Quote(comment)+`,"user":{"login":"codex-lead"}}]`), nil
 		default:
@@ -491,6 +492,7 @@ func TestClientVerifiesLeadImplementationCommitAndAuditComment(t *testing.T) {
 
 func TestClientRejectsImplementationAuditFromWrongAgent(t *testing.T) {
 	spec := testImplementationPublicationSpec()
+	publicationMarker := spec.PublicationKind.Marker(spec.AttemptID)
 	stored := managedPullRequest(testPullRequestSpec())
 	stored.HeadCommitID = spec.HeadCommitID
 	stored.Body += "\n\n" + spec.PlanPublicationMarker +
@@ -499,8 +501,8 @@ func TestClientRejectsImplementationAuditFromWrongAgent(t *testing.T) {
 		if request.URL.Path == "/api/v1/repos/owner/repository/pulls/7" {
 			return pullRequestJSONResponse(t, http.StatusOK, stored), nil
 		}
-		comment := spec.PublicationMarker +
-			"\n\n## " + spec.CommentHeading + "\n\n" + spec.Summary
+		comment := publicationMarker +
+			"\n\n## " + spec.PublicationKind.CommentHeading() + "\n\n" + spec.Summary
 		return jsonResponse(http.StatusOK, `[{"body":`+
 			strconv.Quote(comment)+`,"user":{"login":"coordinator"}}]`), nil
 	})
@@ -515,9 +517,10 @@ func TestClientRejectsImplementationAuditFromWrongAgent(t *testing.T) {
 
 func TestClientVerifiesReviewResponseHeading(t *testing.T) {
 	spec := testImplementationPublicationSpec()
-	spec.PublicationMarker = "<!-- commitarium-review-response: stable-attempt -->"
-	spec.CommentHeading = "Review response"
+	spec.PublicationKind = workspace.ImplementationPublicationReviewResponse
+	spec.AttemptID = "review-response-attempt"
 	spec.Summary = "Added and tested the missing failure path."
+	publicationMarker := spec.PublicationKind.Marker(spec.AttemptID)
 	stored := managedPullRequest(testPullRequestSpec())
 	stored.HeadCommitID = spec.HeadCommitID
 	stored.Body += "\n\n" + spec.PlanPublicationMarker +
@@ -526,7 +529,7 @@ func TestClientVerifiesReviewResponseHeading(t *testing.T) {
 		if request.URL.Path == "/api/v1/repos/owner/repository/pulls/7" {
 			return pullRequestJSONResponse(t, http.StatusOK, stored), nil
 		}
-		comment := spec.PublicationMarker + "\n\n## Review response\n\n" + spec.Summary
+		comment := publicationMarker + "\n\n## Review response\n\n" + spec.Summary
 		return jsonResponse(http.StatusOK, `[{"body":`+
 			strconv.Quote(comment)+`,"user":{"login":"codex-lead"}}]`), nil
 	})
@@ -730,11 +733,11 @@ func testImplementationPublicationSpec() workspace.ImplementationPublicationSpec
 	return workspace.ImplementationPublicationSpec{
 		Number: 7, FeatureMarker: plan.FeatureMarker,
 		PlanPublicationMarker: plan.PublicationMarker, Plan: plan.Plan,
-		PublicationMarker: "<!-- commitarium-implementation: stable-attempt -->",
-		CommentHeading:    "Implementation summary",
-		Summary:           "Implemented the agreed behavior and passed tests.",
-		ExpectedAuthor:    "codex-lead",
-		BaseBranch:        plan.BaseBranch, HeadBranch: plan.HeadBranch,
+		PublicationKind: workspace.ImplementationPublicationInitial,
+		AttemptID:       "implementation-attempt",
+		Summary:         "Implemented the agreed behavior and passed tests.",
+		ExpectedAuthor:  "codex-lead",
+		BaseBranch:      plan.BaseBranch, HeadBranch: plan.HeadBranch,
 		HeadCommitID: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 	}
 }

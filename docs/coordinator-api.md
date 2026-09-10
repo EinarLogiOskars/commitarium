@@ -430,7 +430,7 @@ records the existing recovery assessment event; it never starts a replacement.
 If the worker itself restarts while Codex is active, its journal deliberately
 marks the attempt indeterminate and the coordinator stops for user review.
 
-## Automatic implementation review and first correction
+## Automatic bounded implementation-review loop
 
 After lead publication verification, no user action is required to start the
 first review. The coordinator resumes the same reviewer provider conversation
@@ -451,31 +451,32 @@ The `implementation_reviewer` output contract returns `approved`,
 `changes_requested`, or `blocked`. Successful review publication includes the
 exact commit ID, PR number, and Forgejo review ID. The coordinator fetches that
 exact review and verifies the open draft PR head, accepted plan, clean checkout,
-review author, commit, decision, non-stale state, and exact body. Approval
-returns the run to `waiting_for_user`; the feature remains `reviewing` until the
-next slice implements the `ready_to_merge` transition.
+review author, commit, decision, non-stale state, and exact body. Approval moves
+the feature to `ready_to_merge` and returns the run to `waiting_for_user`; this
+does not merge the pull request.
 
-When review round one returns `changes_requested`, the run stays active and the
+When a review returns `changes_requested`, the run stays active and the
 coordinator automatically resumes the original lead provider conversation in
-its lead worker. The deterministic attempt ID is
-`{lead-session-id}:correction:1`. Its briefing includes the exact formal review,
-reviewed commit, accepted goal, agreed plan, current PR, and durable workflow
-phase. The lead must inspect Git and Forgejo before editing, address the
-findings, test the correction, create a new descendant commit, push that exact
-HEAD, and post one marker-owned `Review response` comment. The coordinator
-verifies the new clean PR head, ancestry from the reviewed commit, plan, author,
-marker, and exact response body without judging code quality.
+its lead worker. Correction attempt IDs are
+`{lead-session-id}:correction:N`, where `N` is the review number being answered.
+Its briefing includes the exact formal review, reviewed commit, accepted goal,
+agreed plan, current PR, and durable workflow phase. The lead must inspect Git
+and Forgejo before editing, address the findings, test the correction, create a
+new descendant commit, push that exact HEAD, and post one marker-owned `Review
+response` comment. The coordinator verifies the new clean PR head, ancestry
+from the reviewed commit, plan, author, marker, and exact response body without
+judging code quality.
 
 A verified response immediately resumes the same reviewer provider conversation
-as `{reviewer-session-id}:review:2`, supplying the corrected commit and response
-summary. The reviewer follows the same formal-review rules against that new
-immutable revision. This slice stops after review round two with either an
-approved or further-changes reason. Additional corrective rounds and the final
-workflow-state transition are intentionally left to the next bounded slice.
+as `{reviewer-session-id}:review:N+1`, supplying the corrected commit and
+response summary. The reviewer follows the same formal-review rules against
+that new immutable revision. Review numbers, rather than conversation-message
+counts, enforce a separate five-review maximum. If review five still requests
+changes, the run waits for user input and starts no further correction.
 
 Recovery is idempotent before either reviewer admission, during an active
 reviewer or correction attempt, and after any terminal result. Startup orders
-the deterministic checkpoints, reattaches to the one active attempt, or
+the numbered deterministic checkpoints, reattaches to the one active attempt, or
 re-verifies the completed Forgejo review/response before starting only the next
 missing stage. It never substitutes worker profiles, starts both agents, or
 duplicates a review, commit, push, or audit comment.

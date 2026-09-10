@@ -374,7 +374,6 @@ func (service *Service) VerifyImplementationPublication(
 		return Workspace{}, fmt.Errorf("verify implemented checkout: %w", err)
 	}
 	planDigest := sha256.Sum256([]byte(planEventID))
-	implementationDigest := sha256.Sum256([]byte(attemptID))
 	pullRequest, err := service.pullRequests.VerifyPullRequestImplementation(
 		ctx, stored.RepositoryOwner, stored.RepositoryName,
 		ImplementationPublicationSpec{
@@ -382,8 +381,8 @@ func (service *Service) VerifyImplementationPublication(
 			FeatureMarker:         "<!-- commitarium-feature: " + storedFeature.ID + " -->",
 			PlanPublicationMarker: "<!-- commitarium-plan: " + hex.EncodeToString(planDigest[:]) + " -->",
 			Plan:                  plan,
-			PublicationMarker:     "<!-- commitarium-implementation: " + hex.EncodeToString(implementationDigest[:]) + " -->",
-			CommentHeading:        "Implementation summary",
+			PublicationKind:       ImplementationPublicationInitial,
+			AttemptID:             attemptID,
 			Summary:               summary, ExpectedAuthor: expectedAuthor,
 			BaseBranch: stored.BaseBranch, HeadBranch: stored.Branch, HeadCommitID: commitID,
 		},
@@ -465,7 +464,6 @@ func (service *Service) VerifyImplementationReviewResponse(
 		return Workspace{}, fmt.Errorf("verify corrected checkout: %w", err)
 	}
 	planDigest := sha256.Sum256([]byte(planEventID))
-	responseDigest := sha256.Sum256([]byte(attemptID))
 	pullRequest, err := service.pullRequests.VerifyPullRequestImplementation(
 		ctx, stored.RepositoryOwner, stored.RepositoryName,
 		ImplementationPublicationSpec{
@@ -473,8 +471,8 @@ func (service *Service) VerifyImplementationReviewResponse(
 			FeatureMarker:         "<!-- commitarium-feature: " + storedFeature.ID + " -->",
 			PlanPublicationMarker: "<!-- commitarium-plan: " + hex.EncodeToString(planDigest[:]) + " -->",
 			Plan:                  plan,
-			PublicationMarker:     "<!-- commitarium-review-response: " + hex.EncodeToString(responseDigest[:]) + " -->",
-			CommentHeading:        "Review response",
+			PublicationKind:       ImplementationPublicationReviewResponse,
+			AttemptID:             attemptID,
 			Summary:               summary, ExpectedAuthor: expectedAuthor,
 			BaseBranch: stored.BaseBranch, HeadBranch: stored.Branch, HeadCommitID: commitID,
 		},
