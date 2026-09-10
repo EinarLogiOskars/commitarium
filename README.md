@@ -328,7 +328,8 @@ shared planning history stores only references and cross-session order. Earlier
 provider preambles, commands, and activity remain visible in the individual
 session streams.
 
-If the first reviewer asks for changes, run one bounded correction round:
+When the first reviewer response is ready, start the bounded autonomous
+planning discussion:
 
 ```sh
 curl -i -X POST \
@@ -338,16 +339,20 @@ curl -i -X POST \
 ```
 
 The coordinator resumes the original lead conversation with the reviewer's
-exact response. After the lead publishes a complete revised plan, it
-automatically resumes the original reviewer conversation with that revision.
-Both responses appear in the same planning history and live stream. The
-reviewer ends with an explicit `ACCEPTED` or `CHANGES_REQUESTED` decision;
-missing or contradictory decisions stop for user input instead of being
-guessed. This action supports exactly one correction round and is safe to
-retry. A coordinator restart during either turn reattaches to the exact worker
-attempt, and a restart between turns continues the stored handoff without
-starting two agents. The agents remain read-only throughout this slice, and an
-accepted plan is not written to the draft PR yet.
+exact response, then keeps alternating between the same lead and reviewer
+provider sessions. Their natural Markdown replies appear in the shared history
+and live stream. The lead receives a schema-constrained choice on each of its
+turns: continue the discussion, or submit the complete final plan once it
+believes both agents genuinely agree. A submission appears as a distinct
+`plan_submitted` event, so the coordinator does not search conversational text
+for magic approval words.
+
+The loop stops when the lead submits the plan or when the shared discussion
+reaches ten messages, at which point it waits for user input. The action is safe
+to retry. A coordinator restart during either turn reattaches to the exact
+worker attempt, and a restart between turns continues the stored handoff
+without starting two agents. The agents remain read-only throughout this
+slice, and the submitted plan is not written to the draft PR yet.
 
 The versioned [internal worker API](docs/worker-api.md) now has tested client and
 server components for authenticated attempt inspection and control. Its worker

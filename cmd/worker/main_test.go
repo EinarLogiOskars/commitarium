@@ -92,6 +92,13 @@ func TestNormalizeObservableEventPreservesRecoveryAssessment(t *testing.T) {
 	if _, err := normalizeObservableEvent(t.Context(), worker.Event{Type: "unknown", Text: "bad"}); err == nil {
 		t.Fatal("expected unknown simulated event type to fail")
 	}
+	submitted, err := normalizeObservableEvent(t.Context(), worker.Event{
+		Type: worker.EventPlanSubmitted, Text: "Final agreed plan",
+	})
+	if err != nil || submitted.Type != workerhttp.EventPlanSubmitted ||
+		submitted.Text != "Final agreed plan" {
+		t.Fatalf("normalized plan submission = %+v, error=%v", submitted, err)
+	}
 }
 
 func TestLoadConfigBuildsCodexRuntimeSettings(t *testing.T) {

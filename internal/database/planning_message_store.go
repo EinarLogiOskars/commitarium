@@ -41,7 +41,7 @@ func (s *ExecutionStore) LinkPlanningMessage(
 	if !found {
 		return execution.PlanningMessage{}, false, execution.ErrNotFound
 	}
-	if event.Type != worker.EventMessage {
+	if event.Type != worker.EventMessage && event.Type != worker.EventPlanSubmitted {
 		return execution.PlanningMessage{}, false, execution.ErrInvalidPlanningMessage
 	}
 	var agentID string

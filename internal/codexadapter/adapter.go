@@ -181,8 +181,9 @@ type textInput struct {
 }
 
 type turnStartParams struct {
-	ThreadID string      `json:"threadId"`
-	Input    []textInput `json:"input"`
+	ThreadID     string      `json:"threadId"`
+	Input        []textInput `json:"input"`
+	OutputSchema any         `json:"outputSchema,omitempty"`
 }
 
 type turnResponse struct {
@@ -249,7 +250,7 @@ func (adapter *Adapter) launch(
 	if err := client.request(operationCtx, method, params, &threadStarted); err != nil {
 		var rejected *protocolError
 		if !errors.As(err, &rejected) {
-			partial := newSession(client, process, "", adapter.shutdownTimeout, adapter.eventBuffer)
+			partial := newSession(client, process, "", adapter.shutdownTimeout, adapter.eventBuffer, request.OutputContract)
 			partial.stopAfterFailedLaunch()
 			return partial, fmt.Errorf("%s Codex thread: %w", strings.TrimPrefix(method, "thread/"), err)
 		}
@@ -258,7 +259,7 @@ func (adapter *Adapter) launch(
 	}
 	threadID := strings.TrimSpace(threadStarted.Thread.ID)
 	if threadID == "" {
-		partial := newSession(client, process, "", adapter.shutdownTimeout, adapter.eventBuffer)
+		partial := newSession(client, process, "", adapter.shutdownTimeout, adapter.eventBuffer, request.OutputContract)
 		partial.stopAfterFailedLaunch()
 		return partial, fmt.Errorf("%w: %s response omitted the thread ID", ErrProtocol, method)
 	}
@@ -278,11 +279,13 @@ func (adapter *Adapter) launch(
 		threadID,
 		adapter.shutdownTimeout,
 		adapter.eventBuffer,
+		request.OutputContract,
 	)
 	var turnStarted turnResponse
 	if err := client.request(operationCtx, "turn/start", turnStartParams{
-		ThreadID: threadID,
-		Input:    []textInput{{Type: "text", Text: prompt}},
+		ThreadID:     threadID,
+		Input:        []textInput{{Type: "text", Text: prompt}},
+		OutputSchema: outputSchema(request.OutputContract),
 	}, &turnStarted); err != nil {
 		providerSession.stopAfterFailedLaunch()
 		return providerSession, fmt.Errorf("start Codex turn: %w", err)
@@ -299,6 +302,23 @@ func (adapter *Adapter) launch(
 	}
 	providerSession.start(turnID)
 	return providerSession, nil
+}
+
+func outputSchema(contract worker.OutputContract) any {
+	if contract != worker.OutputContractPlanningLead {
+		return nil
+	}
+	return map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"properties": map[string]any{
+			"action": map[string]any{
+				"type": "string", "enum": []string{"respond", "submit_plan"},
+			},
+			"content": map[string]any{"type": "string"},
+		},
+		"required": []string{"action", "content"},
+	}
 }
 
 func validSandbox(value string) bool {

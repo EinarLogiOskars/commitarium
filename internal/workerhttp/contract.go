@@ -88,11 +88,18 @@ type Assignment struct {
 }
 
 type PutAttemptRequest struct {
-	Mode              AttemptMode `json:"mode"`
-	Assignment        Assignment  `json:"assignment"`
-	Instructions      string      `json:"instructions"`
-	ProviderSessionID string      `json:"provider_session_id,omitempty"`
+	Mode              AttemptMode    `json:"mode"`
+	Assignment        Assignment     `json:"assignment"`
+	Instructions      string         `json:"instructions"`
+	OutputContract    OutputContract `json:"output_contract,omitempty"`
+	ProviderSessionID string         `json:"provider_session_id,omitempty"`
 }
+
+type OutputContract string
+
+const (
+	OutputContractPlanningLead OutputContract = "planning_lead"
+)
 
 type AttemptState string
 
@@ -164,6 +171,7 @@ type EventType string
 
 const (
 	EventMessage            EventType = "message"
+	EventPlanSubmitted      EventType = "plan_submitted"
 	EventActivity           EventType = "activity"
 	EventInputRequired      EventType = "input_required"
 	EventPauseAcknowledged  EventType = "pause_acknowledged"

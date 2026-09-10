@@ -59,6 +59,14 @@ The stream route is available only when the worker advertises the
 route is not needed by the current protocol because reconnecting to the stream
 performs the durable replay before following live activity.
 
+An attempt request may set `"output_contract":"planning_lead"`. This
+provider-neutral contract requires the lead's final result to choose between a
+normal planning response and submission of the complete agreed plan. A worker
+adapter must enforce that structure using its provider's supported mechanism;
+it must publish only the contained Markdown as either `message` or
+`plan_submitted`. Unknown output contracts are rejected. Omitting the field
+preserves ordinary conversational output.
+
 ## Live activity stream
 
 The event stream uses Server-Sent Events (SSE), a one-way HTTP stream from the
@@ -75,8 +83,9 @@ data: {"session_id":"ses_123","attempt_id":"att_456","sequence":18,"type":"activ
 ```
 
 The event name and JSON data describe safe normalized activity such as agent
-messages, work summaries, requests for input, pause/continue acknowledgements,
-recovery assessments, and terminal results. The attempt inspection route is
+messages, an explicitly submitted final plan, work summaries, requests for
+input, pause/continue acknowledgements, recovery assessments, and terminal
+results. The attempt inspection route is
 still authoritative for whether the provider is currently starting, running,
 paused, stopping, indeterminate, or terminal. Stream silence is not evidence
 that the agent stopped working.
@@ -436,6 +445,12 @@ passes through the worker safety filter before persistence or publication.
 Unknown optional notifications are ignored, while malformed protocol messages,
 wrong thread or turn identity, missing required identity, and event
 backpressure fail closed.
+
+For `planning_lead`, the adapter supplies App Server's per-turn `outputSchema`
+with two actions: `respond` and `submit_plan`. It strictly decodes the completed
+assistant response, removes the private JSON wrapper, and publishes the content
+as `message` or `plan_submitted`. Invalid actions, empty content, extra fields,
+or trailing JSON fail the attempt instead of being interpreted as agreement.
 
 User messages use App Server's `turn/steer` operation. Cooperative stop uses
 `turn/interrupt`, and forced stop targets the exact supervised process tree.

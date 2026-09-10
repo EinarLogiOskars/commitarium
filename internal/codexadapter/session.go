@@ -1,10 +1,12 @@
 package codexadapter
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"sync"
 	"time"
@@ -24,12 +26,14 @@ type session struct {
 	process         *processsupervisor.Process
 	threadID        string
 	shutdownTimeout time.Duration
+	outputContract  worker.OutputContract
 	events          chan worker.Event
 	done            chan struct{}
 
 	mu               sync.Mutex
 	turnID           string
 	lastAgentMessage string
+	pendingMessage   string
 	forced           bool
 	result           worker.Result
 	waitErr          error
@@ -44,12 +48,14 @@ func newSession(
 	threadID string,
 	shutdownTimeout time.Duration,
 	eventBuffer int,
+	outputContract worker.OutputContract,
 ) *session {
 	return &session{
 		client:          client,
 		process:         process,
 		threadID:        threadID,
 		shutdownTimeout: shutdownTimeout,
+		outputContract:  outputContract,
 		events:          make(chan worker.Event, eventBuffer),
 		done:            make(chan struct{}),
 	}
@@ -321,7 +327,8 @@ func (session *session) translate(
 			if strings.TrimSpace(params.Item.ID) == "" || strings.TrimSpace(params.Item.Type) == "" {
 				return nil, false, worker.Result{}, fmt.Errorf("%w: item/completed omitted item identity or type", ErrProtocol)
 			}
-			return session.completedItem(params.Item), false, worker.Result{}, nil
+			completed, err := session.completedItem(params.Item)
+			return completed, false, worker.Result{}, err
 		case "error":
 			text := "Codex reported an error."
 			if params.WillRetry {
@@ -360,50 +367,81 @@ func (session *session) startedItem(item threadItem) *worker.Event {
 	}
 }
 
-func (session *session) completedItem(item threadItem) *worker.Event {
+func (session *session) completedItem(item threadItem) (*worker.Event, error) {
 	switch item.Type {
 	case "agentMessage":
 		text := strings.TrimSpace(item.Text)
 		if text == "" {
-			return nil
+			return nil, nil
+		}
+		if session.outputContract == worker.OutputContractPlanningLead {
+			session.mu.Lock()
+			session.pendingMessage = text
+			session.mu.Unlock()
+			return nil, nil
 		}
 		session.mu.Lock()
 		session.lastAgentMessage = text
 		session.mu.Unlock()
-		return event(worker.EventMessage, text)
+		return event(worker.EventMessage, text), nil
 	case "commandExecution":
 		if item.ExitCode != nil {
-			return event(worker.EventActivity, fmt.Sprintf("Codex finished a command with exit code %d.", *item.ExitCode))
+			return event(worker.EventActivity, fmt.Sprintf("Codex finished a command with exit code %d.", *item.ExitCode)), nil
 		}
-		return event(worker.EventActivity, "Codex finished a command.")
+		return event(worker.EventActivity, "Codex finished a command."), nil
 	case "fileChange":
-		return event(worker.EventActivity, "Codex finished a file change.")
+		return event(worker.EventActivity, "Codex finished a file change."), nil
 	case "webSearch":
-		return event(worker.EventActivity, "Codex finished a web search.")
+		return event(worker.EventActivity, "Codex finished a web search."), nil
 	case "mcpToolCall", "dynamicToolCall":
-		return event(worker.EventActivity, "Codex finished a tool call.")
+		return event(worker.EventActivity, "Codex finished a tool call."), nil
 	case "plan":
-		return event(worker.EventActivity, "Codex updated its plan.")
+		return event(worker.EventActivity, "Codex updated its plan."), nil
 	case "subAgentActivity", "collabAgentToolCall":
-		return event(worker.EventActivity, "Codex finished delegated agent work.")
+		return event(worker.EventActivity, "Codex finished delegated agent work."), nil
 	case "reasoning":
-		return nil
+		return nil, nil
 	default:
-		return nil
+		return nil, nil
 	}
+}
+
+type planningLeadResponse struct {
+	Action  string `json:"action"`
+	Content string `json:"content"`
+}
+
+func decodePlanningLeadResponse(text string) (planningLeadResponse, error) {
+	decoder := json.NewDecoder(bytes.NewBufferString(text))
+	decoder.DisallowUnknownFields()
+	var response planningLeadResponse
+	if err := decoder.Decode(&response); err != nil {
+		return planningLeadResponse{}, fmt.Errorf("%w: decode planning lead response: %v", ErrProtocol, err)
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return planningLeadResponse{}, fmt.Errorf("%w: planning lead response contains trailing JSON", ErrProtocol)
+	}
+	response.Content = strings.TrimSpace(response.Content)
+	if response.Content == "" || (response.Action != "respond" && response.Action != "submit_plan") {
+		return planningLeadResponse{}, fmt.Errorf("%w: planning lead response is incomplete", ErrProtocol)
+	}
+	return response, nil
 }
 
 func (session *session) completedTurn(
 	turn turnRecord,
 ) (*worker.Event, bool, worker.Result, error) {
-	summary := session.summary()
 	switch turn.Status {
 	case "completed":
-		return nil, true, worker.Result{
+		structured, err := session.completeStructuredResponse()
+		if err != nil {
+			return nil, false, worker.Result{}, err
+		}
+		return structured, true, worker.Result{
 			Outcome:           worker.OutcomeCompleted,
 			Disposition:       worker.DispositionSucceeded,
 			ProviderSessionID: session.threadID,
-			Summary:           summary,
+			Summary:           session.summary(),
 		}, nil
 	case "interrupted":
 		return nil, true, worker.Result{
@@ -424,6 +462,30 @@ func (session *session) completedTurn(
 			turn.Status,
 		)
 	}
+}
+
+func (session *session) completeStructuredResponse() (*worker.Event, error) {
+	if session.outputContract != worker.OutputContractPlanningLead {
+		return nil, nil
+	}
+	session.mu.Lock()
+	raw := session.pendingMessage
+	session.mu.Unlock()
+	if strings.TrimSpace(raw) == "" {
+		return nil, fmt.Errorf("%w: planning lead turn omitted its structured response", ErrProtocol)
+	}
+	response, err := decodePlanningLeadResponse(raw)
+	if err != nil {
+		return nil, err
+	}
+	eventType := worker.EventMessage
+	if response.Action == "submit_plan" {
+		eventType = worker.EventPlanSubmitted
+	}
+	session.mu.Lock()
+	session.lastAgentMessage = response.Content
+	session.mu.Unlock()
+	return event(eventType, response.Content), nil
 }
 
 func (session *session) summary() string {

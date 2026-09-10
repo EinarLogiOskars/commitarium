@@ -35,6 +35,13 @@ func TestExecutionStoreOrdersPlanningMessagesAcrossSessionsWithoutCopyingText(t 
 	if err != nil {
 		t.Fatalf("append reviewer response: %v", err)
 	}
+	submittedEvent, _, err := store.AppendEvent(t.Context(), execution.PendingEvent{
+		ID: "sev_final_plan", SessionID: lead.ID, Type: worker.EventPlanSubmitted,
+		Text: "Final agreed plan", OccurredAt: now.Add(2 * time.Second),
+	})
+	if err != nil {
+		t.Fatalf("append submitted plan: %v", err)
+	}
 
 	first, created, err := store.LinkPlanningMessage(t.Context(), execution.PendingPlanningMessage{
 		RunID: run.ID, EventID: leadEvent.ID, LinkedAt: now.Add(2 * time.Second),
@@ -48,6 +55,13 @@ func TestExecutionStoreOrdersPlanningMessagesAcrossSessionsWithoutCopyingText(t 
 	if err != nil || !created || second.Sequence != 2 || second.Role != worker.RoleReviewer {
 		t.Fatalf("link reviewer response: message=%+v created=%t err=%v", second, created, err)
 	}
+	third, created, err := store.LinkPlanningMessage(t.Context(), execution.PendingPlanningMessage{
+		RunID: run.ID, EventID: submittedEvent.ID, LinkedAt: now.Add(4 * time.Second),
+	})
+	if err != nil || !created || third.Sequence != 3 ||
+		third.Event.Type != worker.EventPlanSubmitted {
+		t.Fatalf("link submitted plan: message=%+v created=%t err=%v", third, created, err)
+	}
 	retried, created, err := store.LinkPlanningMessage(t.Context(), execution.PendingPlanningMessage{
 		RunID: run.ID, EventID: leadEvent.ID, LinkedAt: now.Add(time.Hour),
 	})
@@ -59,7 +73,7 @@ func TestExecutionStoreOrdersPlanningMessagesAcrossSessionsWithoutCopyingText(t 
 	if err != nil {
 		t.Fatalf("list planning messages: %v", err)
 	}
-	if len(messages) != 2 || messages[0] != first || messages[1] != second {
+	if len(messages) != 3 || messages[0] != first || messages[1] != second || messages[2] != third {
 		t.Fatalf("unexpected planning history %+v", messages)
 	}
 	var storedText string

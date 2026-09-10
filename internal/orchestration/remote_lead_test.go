@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
@@ -874,29 +875,33 @@ func TestRemoteLeadStartsPlanningInManagedWorkspace(t *testing.T) {
 	waitForRemoteLeadStatus(t, executions, runID, execution.RunStatusWaitingForUser)
 
 	messages, err = executions.PlanningMessagesForRun(t.Context(), runID)
-	if err != nil || len(messages) != 4 ||
-		messages[2].Role != worker.RoleLead || messages[2].Event.Text != "Complete revised implementation plan" ||
+	if err != nil || len(messages) != 5 ||
+		messages[2].Role != worker.RoleLead || messages[2].Event.Type != worker.EventMessage ||
 		messages[3].Role != worker.RoleReviewer ||
-		!strings.Contains(messages[3].Event.Text, "PLANNING_DECISION: ACCEPTED") {
+		messages[4].Role != worker.RoleLead || messages[4].Event.Type != worker.EventPlanSubmitted ||
+		messages[4].Event.Text != "Complete final implementation plan" {
 		t.Fatalf("unexpected completed planning round %+v err=%v", messages, err)
 	}
 	completedRound, err := executions.GetRun(t.Context(), runID)
-	if err != nil || completedRound.Reason !=
-		"The reviewer accepted the revised plan. It is ready to publish to Forgejo." {
+	if err != nil || completedRound.Reason != planningPlanSubmittedReason {
 		t.Fatalf("unexpected planning decision run %+v err=%v", completedRound, err)
 	}
 	stub.mu.Lock()
 	requests = append([]workerhttp.PutAttemptRequest(nil), stub.putRequests...)
 	stub.mu.Unlock()
-	if len(requests) != 5 || requests[3].Mode != workerhttp.AttemptModeResume ||
+	if len(requests) != 6 || requests[3].Mode != workerhttp.AttemptModeResume ||
 		requests[3].ProviderSessionID != "codex-thread-test" ||
 		requests[3].Assignment.Role != workerhttp.RoleLead ||
+		requests[3].OutputContract != workerhttp.OutputContractPlanningLead ||
 		!strings.Contains(requests[3].Instructions, "The plan needs stronger test coverage.") ||
 		requests[4].Mode != workerhttp.AttemptModeResume ||
 		requests[4].ProviderSessionID != "codex-review-thread-test" ||
 		requests[4].Assignment.Role != workerhttp.RoleReviewer ||
-		!strings.Contains(requests[4].Instructions, "Complete revised implementation plan") ||
-		!strings.Contains(requests[4].Instructions, "PLANNING_DECISION: ACCEPTED") {
+		requests[4].OutputContract != "" ||
+		!strings.Contains(requests[4].Instructions, "deployment question remains") ||
+		requests[5].Assignment.Role != workerhttp.RoleLead ||
+		requests[5].OutputContract != workerhttp.OutputContractPlanningLead ||
+		!strings.Contains(requests[5].Instructions, "resolves my remaining concern") {
 		t.Fatalf("unexpected correction-round requests %+v", requests)
 	}
 	roundRun, admitted, err = starter.StartPlanningRound(
@@ -908,8 +913,96 @@ func TestRemoteLeadStartsPlanningInManagedWorkspace(t *testing.T) {
 	stub.mu.Lock()
 	requestCount = len(stub.putRequests)
 	stub.mu.Unlock()
-	if requestCount != 5 {
+	if requestCount != 6 {
 		t.Fatalf("planning round retry launched duplicate turns: %d requests", requestCount)
+	}
+}
+
+func TestRemotePlanningLoopStopsAtTenMessages(t *testing.T) {
+	db, executions, storedProject, storedFeature := newRemoteLeadExecution(t)
+	runID := "run_remote_planning_limit"
+	stub := newConversationalRemoteLeadWorker(runID, storedProject.ID, storedFeature.ID)
+	addCompletedPlanningAttempt(stub, runID, storedProject.ID, storedFeature.ID)
+	addCompletedReviewerPlanningAttempt(stub, runID, storedProject.ID, storedFeature.ID)
+	for turn := 2; turn <= 5; turn++ {
+		addCompletedPlanningCorrectionAttempt(
+			stub, remoteLeadSessionID(runID), storedProject.ID, storedFeature.ID,
+			workerhttp.RoleLead, "codex-thread-test", turn,
+			workerhttp.EventMessage, fmt.Sprintf("Lead planning response %d", turn),
+		)
+		addCompletedPlanningCorrectionAttempt(
+			stub, remoteReviewerSessionID(runID), storedProject.ID, storedFeature.ID,
+			workerhttp.RoleReviewer, "codex-review-thread-test", turn,
+			workerhttp.EventMessage, fmt.Sprintf("Reviewer planning response %d", turn),
+		)
+	}
+	workflowService := workflow.NewService(database.NewWorkflowStore(db))
+	checkoutAt := time.Date(2026, time.September, 9, 23, 0, 0, 0, time.UTC)
+	prAt := checkoutAt.Add(time.Second)
+	workspaceStub := &remoteLeadWorkspaceStub{prepared: workspace.Workspace{
+		ID: "wsp_managed_feature", ProjectID: storedProject.ID, FeatureID: storedFeature.ID,
+		RepositoryOwner: "commitarium", RepositoryName: "planning-limit-test",
+		BaseBranch: "main", Branch: "commitarium/" + storedFeature.ID,
+		BaseCommitID: "0123456789abcdef0123456789abcdef01234567",
+		Status:       workspace.StatusBranchReady, CheckoutRelativePath: "wsp_managed_feature",
+		CheckoutCreatedAt: &checkoutAt, PullRequestNumber: 8,
+		PullRequestURL: "http://forgejo.test/pulls/8", PullRequestRecordedAt: &prAt,
+	}}
+	starter, err := NewRemoteLeadStarter(RemoteLeadConfig{
+		Executions: executions, Features: database.NewFeatureStore(db), Goals: workflowService,
+		Planning: workflowService, Workspaces: workspaceStub, Worker: stub,
+		Pump:     &conversationalRemoteLeadPump{executions: executions, worker: stub},
+		Lifetime: t.Context(), AgentProfileID: "codex-default", WorkspaceID: "project-read-only",
+	})
+	if err != nil {
+		t.Fatalf("create planning starter: %v", err)
+	}
+	if _, _, err := starter.Start(
+		t.Context(), runID, storedProject.ID, storedFeature.ID, storedFeature.Title,
+	); err != nil {
+		t.Fatalf("start lead: %v", err)
+	}
+	waitForRemoteLeadStatus(t, executions, runID, execution.RunStatusWaitingForUser)
+	if _, err := starter.AcceptGoal(
+		t.Context(), remoteLeadSessionID(runID), "Export the report as CSV.",
+		workflow.Actor{Kind: workflow.ActorKindUser, ID: "local-user"}, "accept-limit-goal",
+	); err != nil {
+		t.Fatalf("accept goal: %v", err)
+	}
+	if _, _, err := starter.StartPlanning(t.Context(), runID, "start-limit-planning"); err != nil {
+		t.Fatalf("start planning: %v", err)
+	}
+	waitForRemoteLeadStatus(t, executions, runID, execution.RunStatusWaitingForUser)
+	if _, _, err := starter.StartPlanningReview(t.Context(), runID, "start-limit-reviewer"); err != nil {
+		t.Fatalf("start reviewer: %v", err)
+	}
+	waitForRemoteLeadStatus(t, executions, runID, execution.RunStatusWaitingForUser)
+	if _, admitted, err := starter.StartPlanningRound(
+		t.Context(), runID, "start-limited-loop",
+	); err != nil || !admitted {
+		t.Fatalf("start planning loop: admitted=%t err=%v", admitted, err)
+	}
+	waitForRemoteLeadStatus(t, executions, runID, execution.RunStatusWaitingForUser)
+
+	messages, err := executions.PlanningMessagesForRun(t.Context(), runID)
+	if err != nil || len(messages) != maxPlanningMessages ||
+		messages[len(messages)-1].Role != worker.RoleReviewer {
+		t.Fatalf("unexpected bounded planning history: len=%d err=%v messages=%+v", len(messages), err, messages)
+	}
+	run, err := executions.GetRun(t.Context(), runID)
+	if err != nil || run.Reason != planningLimitReason {
+		t.Fatalf("unexpected bounded planning run %+v err=%v", run, err)
+	}
+	stub.mu.Lock()
+	requestCount := len(stub.putRequests)
+	stub.mu.Unlock()
+	if requestCount != 11 {
+		t.Fatalf("expected clarification plus ten planning turns, got %d requests", requestCount)
+	}
+	if _, admitted, err := starter.StartPlanningRound(
+		t.Context(), runID, "start-limited-loop",
+	); err != nil || admitted {
+		t.Fatalf("bounded loop retry: admitted=%t err=%v", admitted, err)
 	}
 }
 
@@ -1123,7 +1216,7 @@ func TestRemoteReviewerRecoveryReattachesAndPublishesItsResponse(t *testing.T) {
 		t.Fatalf("load lead checkpoint before correction recovery: %v", err)
 	}
 	if admitted, err := executions.BeginAutonomousTurn(
-		t.Context(), leadID, leadCheckpoint, planningRevisionAttemptID(leadID),
+		t.Context(), leadID, leadCheckpoint, planningTurnAttemptID(leadID, 2),
 		"The lead is revising the plan from the reviewer's response.",
 	); err != nil || !admitted {
 		t.Fatalf("admit interrupted lead revision: admitted=%t err=%v", admitted, err)
@@ -1140,49 +1233,17 @@ func TestRemoteReviewerRecoveryReattachesAndPublishesItsResponse(t *testing.T) {
 	}
 	waitForRemoteLeadStatus(t, executions, runID, execution.RunStatusWaitingForUser)
 	messages, err = executions.PlanningMessagesForRun(t.Context(), runID)
-	if err != nil || len(messages) != 4 ||
-		messages[2].Event.Text != "Complete revised implementation plan" ||
-		!strings.Contains(messages[3].Event.Text, "PLANNING_DECISION: ACCEPTED") {
+	if err != nil || len(messages) != 5 ||
+		messages[2].Event.Text != "I addressed the test concern but one deployment question remains." ||
+		messages[4].Event.Type != worker.EventPlanSubmitted ||
+		messages[4].Event.Text != "Complete final implementation plan" {
 		t.Fatalf("recovered planning round was incomplete: %+v err=%v", messages, err)
 	}
 	stub.mu.Lock()
 	putCount = len(stub.putRequests)
 	stub.mu.Unlock()
-	if putCount != 3 {
-		t.Fatalf("recovery should launch only the reviewer decision: %d PUTs", putCount)
-	}
-}
-
-func TestPlanningDecisionReasonRequiresOneUnambiguousMarker(t *testing.T) {
-	tests := []struct {
-		name     string
-		response string
-		want     string
-	}{
-		{
-			name: "accepted", response: "All concerns are resolved.\nPLANNING_DECISION: ACCEPTED",
-			want: "The reviewer accepted the revised plan. It is ready to publish to Forgejo.",
-		},
-		{
-			name: "changes requested", response: "One risk remains.\nPLANNING_DECISION: CHANGES_REQUESTED",
-			want: "The reviewer still requests planning changes. User input is required before another round.",
-		},
-		{
-			name: "missing marker", response: "This looks fine to me.",
-			want: "The reviewer did not provide one clear planning decision. User input is required.",
-		},
-		{
-			name:     "contradictory markers",
-			response: "PLANNING_DECISION: ACCEPTED\nPLANNING_DECISION: CHANGES_REQUESTED",
-			want:     "The reviewer did not provide one clear planning decision. User input is required.",
-		},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			if got := planningDecisionReason(test.response); got != test.want {
-				t.Fatalf("unexpected decision reason %q", got)
-			}
-		})
+	if putCount != 4 {
+		t.Fatalf("recovery should resume the loop without replaying the lead turn: %d PUTs", putCount)
 	}
 }
 
@@ -1406,12 +1467,18 @@ func addCompletedPlanningCorrectionAttempts(
 ) {
 	addCompletedPlanningCorrectionAttempt(
 		stub, remoteLeadSessionID(runID), projectID, featureID,
-		workerhttp.RoleLead, "codex-thread-test", "Complete revised implementation plan",
+		workerhttp.RoleLead, "codex-thread-test", 2,
+		workerhttp.EventMessage, "I addressed the test concern but one deployment question remains.",
 	)
 	addCompletedPlanningCorrectionAttempt(
 		stub, remoteReviewerSessionID(runID), projectID, featureID,
-		workerhttp.RoleReviewer, "codex-review-thread-test",
-		"The revised plan resolves my concerns.\nPLANNING_DECISION: ACCEPTED",
+		workerhttp.RoleReviewer, "codex-review-thread-test", 2,
+		workerhttp.EventMessage, "The deployment answer resolves my remaining concern.",
+	)
+	addCompletedPlanningCorrectionAttempt(
+		stub, remoteLeadSessionID(runID), projectID, featureID,
+		workerhttp.RoleLead, "codex-thread-test", 3,
+		workerhttp.EventPlanSubmitted, "Complete final implementation plan",
 	)
 }
 
@@ -1422,10 +1489,12 @@ func addCompletedPlanningCorrectionAttempt(
 	featureID string,
 	role workerhttp.Role,
 	providerSessionID string,
+	turn int,
+	eventType workerhttp.EventType,
 	response string,
 ) {
 	reference := workerhttp.AttemptReference{
-		SessionID: sessionID, AttemptID: planningRevisionAttemptID(sessionID),
+		SessionID: sessionID, AttemptID: planningTurnAttemptID(sessionID, turn),
 	}
 	now := time.Date(2026, time.September, 9, 20, 40, 0, 0, time.UTC)
 	initial := workerhttp.Attempt{
@@ -1455,7 +1524,7 @@ func addCompletedPlanningCorrectionAttempt(
 			Text: "I will reconcile the repository state before responding.", OccurredAt: now,
 		},
 		{
-			AttemptReference: reference, Sequence: 2, Type: workerhttp.EventMessage,
+			AttemptReference: reference, Sequence: 2, Type: eventType,
 			Text: response, OccurredAt: now.Add(time.Millisecond),
 		},
 		{

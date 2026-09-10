@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -20,8 +21,11 @@ import (
 )
 
 const (
-	remoteLeadAgentID     = "codex-lead"
-	remoteReviewerAgentID = "codex-reviewer"
+	remoteLeadAgentID           = "codex-lead"
+	remoteReviewerAgentID       = "codex-reviewer"
+	maxPlanningMessages         = 10
+	planningPlanSubmittedReason = "The lead submitted the final plan after reaching agreement with the reviewer. It is ready to publish to Forgejo."
+	planningLimitReason         = "The planning discussion reached its ten-message limit without an agreed plan. User input is required."
 )
 
 type planningStage string
@@ -29,8 +33,8 @@ type planningStage string
 const (
 	planningStageNone             planningStage = ""
 	planningStageFirstReview      planningStage = "first_review"
-	planningStageLeadRevision     planningStage = "lead_revision"
-	planningStageReviewerDecision planningStage = "reviewer_decision"
+	planningStageLeadResponse     planningStage = "lead_response"
+	planningStageReviewerResponse planningStage = "reviewer_response"
 )
 
 var ErrPlanningNotAllowed = errors.New("planning cannot start from the current workflow state")
@@ -273,59 +277,45 @@ func (starter *RemoteLeadStarter) recoverIdlePlanningRun(
 	if err != nil {
 		return true, fmt.Errorf("load lead session: %w", err)
 	}
-	leadCheckpoint, err := starter.executions.GetWorkerAttempt(ctx, lead.ID)
-	if err != nil {
-		return true, fmt.Errorf("load lead planning checkpoint: %w", err)
-	}
-	reviewerCheckpoint, err := starter.executions.GetWorkerAttempt(ctx, reviewer.ID)
-	if err != nil {
-		return true, fmt.Errorf("load reviewer planning checkpoint: %w", err)
-	}
 	if lead.Status != execution.SessionStatusWaitingForUser ||
 		reviewer.Status != execution.SessionStatusWaitingForUser {
 		return true, fmt.Errorf("%w: idle planning run has a non-waiting session", ErrInvalidRunRequest)
 	}
-
-	switch {
-	case leadCheckpoint.AttemptID == planningAttemptID(lead.ID) &&
-		reviewerCheckpoint.AttemptID == planningAttemptID(reviewer.ID):
-		// The first reviewer response is durable and no automatic correction
-		// round has been requested yet.
-		return true, starter.waitRun(
-			ctx, run.ID, "The reviewer's first planning response is ready.",
-		)
-	case leadCheckpoint.AttemptID == planningRevisionAttemptID(lead.ID) &&
-		reviewerCheckpoint.AttemptID == planningAttemptID(reviewer.ID):
-		if !starter.claim(run.ID) {
-			return true, fmt.Errorf("%w: %q", ErrRunAlreadyActive, run.ID)
-		}
-		request, admitted, startErr := starter.startReviewerDecision(ctx, run, storedFeature)
-		if startErr != nil {
-			starter.release(run.ID)
-			return true, startErr
-		}
-		if !admitted {
-			starter.release(run.ID)
-			return true, nil
-		}
-		go starter.launch(request)
-		return true, nil
-	case leadCheckpoint.AttemptID == planningRevisionAttemptID(lead.ID) &&
-		reviewerCheckpoint.AttemptID == planningRevisionAttemptID(reviewer.ID):
-		messages, listErr := starter.executions.PlanningMessagesForRun(ctx, run.ID)
-		if listErr != nil {
-			return true, listErr
-		}
-		if len(messages) != 4 || messages[3].Role != worker.RoleReviewer ||
-			messages[3].Event.WorkerAttemptID != reviewerCheckpoint.AttemptID {
-			return true, fmt.Errorf("%w: reviewer decision is not durably published", ErrInvalidRunRequest)
-		}
-		return true, starter.waitRun(
-			ctx, run.ID, planningDecisionReason(messages[3].Event.Text),
-		)
-	default:
-		return true, fmt.Errorf("%w: unsupported idle planning checkpoint pair", ErrInvalidRunRequest)
+	messages, err := starter.executions.PlanningMessagesForRun(ctx, run.ID)
+	if err != nil {
+		return true, err
 	}
+	if len(messages) < 2 {
+		return true, fmt.Errorf("%w: idle planning run has incomplete shared history", ErrInvalidRunRequest)
+	}
+	last := messages[len(messages)-1]
+	if last.Event.Type == worker.EventPlanSubmitted {
+		return true, starter.waitRun(ctx, run.ID, planningPlanSubmittedReason)
+	}
+	if len(messages) >= maxPlanningMessages {
+		return true, starter.waitRun(ctx, run.ID, planningLimitReason)
+	}
+	if len(messages) == 2 {
+		return true, starter.waitRun(ctx, run.ID, "The reviewer's first planning response is ready.")
+	}
+	if !starter.claim(run.ID) {
+		return true, fmt.Errorf("%w: %q", ErrRunAlreadyActive, run.ID)
+	}
+	var request remoteLeadRequest
+	var admitted bool
+	if last.Role == worker.RoleLead {
+		request, admitted, err = starter.startReviewerResponse(ctx, run, storedFeature, messages)
+	} else if last.Role == worker.RoleReviewer {
+		request, admitted, err = starter.startLeadResponse(ctx, run, storedFeature, messages, true)
+	} else {
+		err = ErrPlanningNotAllowed
+	}
+	if err != nil || !admitted {
+		starter.release(run.ID)
+		return true, err
+	}
+	go starter.launch(request)
+	return true, nil
 }
 
 type remoteLeadRequest struct {
@@ -422,33 +412,48 @@ func remoteReviewerSessionID(runID string) string { return runID + ":reviewer" }
 
 func planningAttemptID(sessionID string) string { return sessionID + ":planning:1" }
 
-func planningRevisionAttemptID(sessionID string) string { return sessionID + ":planning:2" }
+func planningTurnAttemptID(sessionID string, turn int) string {
+	return sessionID + ":planning:" + strconv.Itoa(turn)
+}
+
+func planningTurnNumber(sessionID, attemptID string) (int, bool) {
+	value, found := strings.CutPrefix(attemptID, sessionID+":planning:")
+	if !found {
+		return 0, false
+	}
+	turn, err := strconv.Atoi(value)
+	return turn, err == nil && turn > 0
+}
 
 func planningStageForAttempt(session execution.Session, attemptID string) planningStage {
+	turn, planned := planningTurnNumber(session.ID, attemptID)
 	switch {
-	case session.Role == worker.RoleReviewer && attemptID == planningAttemptID(session.ID):
+	case !planned:
+		return planningStageNone
+	case session.Role == worker.RoleReviewer && turn == 1:
 		return planningStageFirstReview
-	case session.Role == worker.RoleLead && attemptID == planningRevisionAttemptID(session.ID):
-		return planningStageLeadRevision
-	case session.Role == worker.RoleReviewer && attemptID == planningRevisionAttemptID(session.ID):
-		return planningStageReviewerDecision
+	case session.Role == worker.RoleLead && turn >= 2:
+		return planningStageLeadResponse
+	case session.Role == worker.RoleReviewer && turn >= 2:
+		return planningStageReviewerResponse
 	default:
 		return planningStageNone
 	}
 }
 
 func waitingReasonForAttempt(session execution.Session, attemptID string) string {
-	if session.Role == worker.RoleReviewer && attemptID == planningAttemptID(session.ID) {
+	turn, planned := planningTurnNumber(session.ID, attemptID)
+	if session.Role == worker.RoleReviewer && planned && turn == 1 {
 		return "The reviewer's first planning response is ready."
 	}
-	if attemptID == planningAttemptID(session.ID) {
+	if session.Role == worker.RoleLead && planned && turn == 1 {
 		return "The lead planning proposal is ready for reviewer consultation."
 	}
-	if session.Role == worker.RoleReviewer && attemptID == planningRevisionAttemptID(session.ID) {
-		return "The reviewer has decided whether to accept the revised plan."
+	if session.Role == worker.RoleReviewer && planned {
+		return "The reviewer has responded to the lead's plan."
 	}
-	if attemptID == planningRevisionAttemptID(session.ID) {
-		return "The revised plan is ready."
+	if session.Role == worker.RoleLead && planned {
+		return "The lead has responded in the planning discussion."
 	}
 	return "The lead agent is waiting for the user's response."
 }
@@ -769,9 +774,9 @@ func reviewerPlanningInstructions(
 		"\n\nLead's exact proposal:\n" + proposal
 }
 
-// StartPlanningRound runs one bounded correction round: the existing lead
-// revises its proposal from the reviewer's response, then the existing
-// reviewer decides whether that revision is acceptable.
+// StartPlanningRound begins the autonomous part of the planning discussion.
+// The existing lead and reviewer conversations then alternate until the lead
+// submits an agreed plan or the durable shared history reaches its safety cap.
 func (starter *RemoteLeadStarter) StartPlanningRound(
 	ctx context.Context,
 	runID string,
@@ -801,69 +806,32 @@ func (starter *RemoteLeadStarter) StartPlanningRound(
 	if err != nil {
 		return execution.Run{}, false, err
 	}
-	leadCheckpoint, err := starter.executions.GetWorkerAttempt(ctx, lead.ID)
-	if err != nil {
-		return execution.Run{}, false, err
-	}
-	reviewerCheckpoint, err := starter.executions.GetWorkerAttempt(ctx, reviewer.ID)
-	if err != nil {
-		return execution.Run{}, false, err
-	}
-	nextLeadAttemptID := planningRevisionAttemptID(lead.ID)
-	nextReviewerAttemptID := planningRevisionAttemptID(reviewer.ID)
-	if leadCheckpoint.AttemptID == nextLeadAttemptID {
-		if reviewerCheckpoint.AttemptID != planningAttemptID(reviewer.ID) &&
-			reviewerCheckpoint.AttemptID != nextReviewerAttemptID {
-			return execution.Run{}, false, execution.ErrRecordConflict
-		}
+	if run.Status == execution.RunStatusRunning {
 		return run, false, nil
-	}
-	if reviewerCheckpoint.AttemptID == nextReviewerAttemptID {
-		return execution.Run{}, false, execution.ErrRecordConflict
 	}
 	if run.Status != execution.RunStatusWaitingForUser ||
 		lead.Status != execution.SessionStatusWaitingForUser ||
 		reviewer.Status != execution.SessionStatusWaitingForUser ||
 		lead.ProviderSessionID == "" || reviewer.ProviderSessionID == "" ||
 		lead.AgentID != remoteLeadAgentID || lead.Role != worker.RoleLead ||
-		reviewer.AgentID != remoteReviewerAgentID || reviewer.Role != worker.RoleReviewer ||
-		leadCheckpoint.AttemptID != planningAttemptID(lead.ID) ||
-		reviewerCheckpoint.AttemptID != planningAttemptID(reviewer.ID) {
-		return execution.Run{}, false, ErrPlanningNotAllowed
-	}
-	if err := starter.confirmCompletedTurn(ctx, lead, leadCheckpoint); err != nil {
-		return execution.Run{}, false, ErrPlanningNotAllowed
-	}
-	if err := starter.confirmCompletedTurn(ctx, reviewer, reviewerCheckpoint); err != nil {
+		reviewer.AgentID != remoteReviewerAgentID || reviewer.Role != worker.RoleReviewer {
 		return execution.Run{}, false, ErrPlanningNotAllowed
 	}
 	messages, err := starter.executions.PlanningMessagesForRun(ctx, run.ID)
 	if err != nil {
 		return execution.Run{}, false, err
 	}
-	if len(messages) != 2 || messages[0].Role != worker.RoleLead ||
-		messages[0].Event.WorkerAttemptID != leadCheckpoint.AttemptID ||
-		messages[1].Role != worker.RoleReviewer ||
-		messages[1].Event.WorkerAttemptID != reviewerCheckpoint.AttemptID {
-		return execution.Run{}, false, ErrPlanningNotAllowed
+	if len(messages) > 0 && (len(messages) >= maxPlanningMessages ||
+		messages[len(messages)-1].Event.Type == worker.EventPlanSubmitted) {
+		return run, false, nil
 	}
-	prepared, err := starter.workspaces.Get(ctx, storedFeature.ProjectID, storedFeature.ID)
-	if err != nil || !prepared.CheckoutReady() || !prepared.PullRequestReady() {
+	if len(messages) < 2 || messages[len(messages)-1].Role != worker.RoleReviewer {
 		return execution.Run{}, false, ErrPlanningNotAllowed
-	}
-	request, err := starter.leadRevisionRequest(
-		run, storedFeature, lead, prepared, messages[1].Event.Text, nextLeadAttemptID,
-	)
-	if err != nil {
-		return execution.Run{}, false, err
 	}
 	if !starter.claim(run.ID) {
 		return execution.Run{}, false, ErrPlanningNotAllowed
 	}
-	admitted, err := starter.executions.BeginAutonomousTurn(
-		ctx, lead.ID, leadCheckpoint, nextLeadAttemptID,
-		"The lead is revising the plan from the reviewer's response.",
-	)
+	request, admitted, err := starter.startLeadResponse(ctx, run, storedFeature, messages, false)
 	if err != nil {
 		starter.release(run.ID)
 		if errors.Is(err, execution.ErrStateConflict) ||
@@ -882,17 +850,43 @@ func (starter *RemoteLeadStarter) StartPlanningRound(
 	return startedRun, true, err
 }
 
-func (starter *RemoteLeadStarter) leadRevisionRequest(
+func (starter *RemoteLeadStarter) startLeadResponse(
+	ctx context.Context,
 	run execution.Run,
 	storedFeature feature.Feature,
-	lead execution.Session,
-	prepared workspace.Workspace,
-	reviewerResponse string,
-	attemptID string,
-) (remoteLeadRequest, error) {
+	messages []execution.PlanningMessage,
+	chained bool,
+) (remoteLeadRequest, bool, error) {
+	if len(messages) < 2 || len(messages) >= maxPlanningMessages ||
+		messages[len(messages)-1].Role != worker.RoleReviewer {
+		return remoteLeadRequest{}, false, ErrPlanningNotAllowed
+	}
+	lead, err := starter.executions.GetSession(ctx, remoteLeadSessionID(run.ID))
+	if err != nil {
+		return remoteLeadRequest{}, false, err
+	}
+	checkpoint, err := starter.executions.GetWorkerAttempt(ctx, lead.ID)
+	if err != nil {
+		return remoteLeadRequest{}, false, err
+	}
+	if lead.Status != execution.SessionStatusWaitingForUser ||
+		lead.AgentID != remoteLeadAgentID || lead.Role != worker.RoleLead ||
+		lead.ProviderSessionID == "" {
+		return remoteLeadRequest{}, false, ErrPlanningNotAllowed
+	}
+	if err := starter.confirmCompletedTurn(ctx, lead, checkpoint); err != nil {
+		return remoteLeadRequest{}, false, ErrPlanningNotAllowed
+	}
+	turn := planningRoleMessageCount(messages, worker.RoleLead) + 1
+	attemptID := planningTurnAttemptID(lead.ID, turn)
+	prepared, err := starter.workspaces.Get(ctx, storedFeature.ProjectID, storedFeature.ID)
+	if err != nil || !prepared.CheckoutReady() || !prepared.PullRequestReady() {
+		return remoteLeadRequest{}, false, ErrPlanningNotAllowed
+	}
 	request := remoteLeadRequest{
 		runID: run.ID, agentName: "lead agent",
-		waitingReason: "The revised plan is ready.", planningStage: planningStageLeadRevision,
+		waitingReason: "The lead has responded in the planning discussion.",
+		planningStage: planningStageLeadResponse,
 		identity: workerhttp.MutationIdentity{
 			AttemptReference: workerhttp.AttemptReference{SessionID: lead.ID, AttemptID: attemptID},
 			IdempotencyKey:   attemptID + ":resume",
@@ -905,16 +899,28 @@ func (starter *RemoteLeadStarter) leadRevisionRequest(
 				Role: workerhttp.RoleLead, WorkspaceID: prepared.ID,
 			},
 			ProviderSessionID: lead.ProviderSessionID,
-			Instructions:      leadRevisionInstructions(storedFeature, prepared, reviewerResponse),
+			Instructions:      leadPlanningResponseInstructions(storedFeature, prepared, messages[len(messages)-1].Event.Text),
+			OutputContract:    workerhttp.OutputContractPlanningLead,
 		},
 	}
 	if err := request.request.Validate(request.identity); err != nil {
-		return remoteLeadRequest{}, fmt.Errorf("%w: %v", ErrInvalidRunRequest, err)
+		return remoteLeadRequest{}, false, fmt.Errorf("%w: %v", ErrInvalidRunRequest, err)
 	}
-	return request, nil
+	if chained {
+		admitted, err := starter.executions.BeginChainedTurn(
+			ctx, lead.ID, checkpoint, attemptID,
+			"The lead is considering the reviewer's response.",
+		)
+		return request, admitted, err
+	}
+	admitted, err := starter.executions.BeginAutonomousTurn(
+		ctx, lead.ID, checkpoint, attemptID,
+		"The lead is considering the reviewer's response.",
+	)
+	return request, admitted, err
 }
 
-func leadRevisionInstructions(
+func leadPlanningResponseInstructions(
 	storedFeature feature.Feature,
 	prepared workspace.Workspace,
 	reviewerResponse string,
@@ -922,8 +928,11 @@ func leadRevisionInstructions(
 	return "Continue the same planning conversation as the lead. The independent reviewer has " +
 		"responded to your proposal. Inspect the managed repository and current Git state again before " +
 		"answering. Do not modify files, install dependencies, commit, push, or begin implementation. " +
-		"Address every material reviewer concern and provide a complete revised plan that can replace " +
-		"the earlier proposal. If you disagree with a concern, explain why using repository evidence. " +
+		"Address every material concern. If useful work or disagreement remains, respond to the reviewer " +
+		"with action 'respond' and put your natural Markdown reply in content. If, and only if, you conclude " +
+		"that both you and the reviewer genuinely agree and the plan completely satisfies the accepted " +
+		"goal, use action 'submit_plan' and put the complete final implementation plan in content. " +
+		"Do not submit merely to end the discussion. If you disagree, explain why with repository evidence. " +
 		"Durable repository and workflow state are authoritative over conversational memory.\n\n" +
 		"Accepted goal:\n" + storedFeature.AcceptedGoal +
 		"\n\nRepository: " + prepared.RepositoryOwner + "/" + prepared.RepositoryName +
@@ -933,11 +942,17 @@ func leadRevisionInstructions(
 		"\n\nReviewer's exact response:\n" + reviewerResponse
 }
 
-func (starter *RemoteLeadStarter) startReviewerDecision(
+func (starter *RemoteLeadStarter) startReviewerResponse(
 	ctx context.Context,
 	run execution.Run,
 	storedFeature feature.Feature,
+	messages []execution.PlanningMessage,
 ) (remoteLeadRequest, bool, error) {
+	if len(messages) < 3 || len(messages) >= maxPlanningMessages ||
+		messages[len(messages)-1].Role != worker.RoleLead ||
+		messages[len(messages)-1].Event.Type == worker.EventPlanSubmitted {
+		return remoteLeadRequest{}, false, ErrPlanningNotAllowed
+	}
 	reviewer, err := starter.executions.GetSession(ctx, remoteReviewerSessionID(run.ID))
 	if err != nil {
 		return remoteLeadRequest{}, false, err
@@ -946,58 +961,45 @@ func (starter *RemoteLeadStarter) startReviewerDecision(
 	if err != nil {
 		return remoteLeadRequest{}, false, err
 	}
-	nextAttemptID := planningRevisionAttemptID(reviewer.ID)
-	if checkpoint.AttemptID == nextAttemptID {
-		return remoteLeadRequest{}, false, nil
-	}
 	if reviewer.Status != execution.SessionStatusWaitingForUser ||
 		reviewer.AgentID != remoteReviewerAgentID || reviewer.Role != worker.RoleReviewer ||
-		reviewer.ProviderSessionID == "" || checkpoint.AttemptID != planningAttemptID(reviewer.ID) {
+		reviewer.ProviderSessionID == "" {
 		return remoteLeadRequest{}, false, ErrPlanningNotAllowed
 	}
 	if err := starter.confirmCompletedTurn(ctx, reviewer, checkpoint); err != nil {
-		return remoteLeadRequest{}, false, ErrPlanningNotAllowed
-	}
-	messages, err := starter.executions.PlanningMessagesForRun(ctx, run.ID)
-	if err != nil {
-		return remoteLeadRequest{}, false, err
-	}
-	if len(messages) != 3 || messages[1].Role != worker.RoleReviewer ||
-		messages[2].Role != worker.RoleLead ||
-		messages[2].Event.WorkerAttemptID != planningRevisionAttemptID(remoteLeadSessionID(run.ID)) {
 		return remoteLeadRequest{}, false, ErrPlanningNotAllowed
 	}
 	prepared, err := starter.workspaces.Get(ctx, storedFeature.ProjectID, storedFeature.ID)
 	if err != nil || !prepared.CheckoutReady() || !prepared.PullRequestReady() {
 		return remoteLeadRequest{}, false, ErrPlanningNotAllowed
 	}
-	request, err := starter.reviewerDecisionRequest(
-		run, storedFeature, reviewer, prepared,
-		messages[1].Event.Text, messages[2].Event.Text, nextAttemptID,
+	turn := planningRoleMessageCount(messages, worker.RoleReviewer) + 1
+	nextAttemptID := planningTurnAttemptID(reviewer.ID, turn)
+	request, err := starter.reviewerResponseRequest(
+		run, storedFeature, reviewer, prepared, messages[len(messages)-1].Event.Text, nextAttemptID,
 	)
 	if err != nil {
 		return remoteLeadRequest{}, false, err
 	}
 	admitted, err := starter.executions.BeginChainedTurn(
 		ctx, reviewer.ID, checkpoint, nextAttemptID,
-		"The reviewer is deciding whether to accept the revised plan.",
+		"The reviewer is evaluating the lead's latest planning response.",
 	)
 	return request, admitted, err
 }
 
-func (starter *RemoteLeadStarter) reviewerDecisionRequest(
+func (starter *RemoteLeadStarter) reviewerResponseRequest(
 	run execution.Run,
 	storedFeature feature.Feature,
 	reviewer execution.Session,
 	prepared workspace.Workspace,
-	previousResponse string,
-	revisedPlan string,
+	leadResponse string,
 	attemptID string,
 ) (remoteLeadRequest, error) {
 	request := remoteLeadRequest{
 		runID: run.ID, agentName: "reviewer",
-		waitingReason: "The reviewer has decided whether to accept the revised plan.",
-		planningStage: planningStageReviewerDecision,
+		waitingReason: "The reviewer has responded to the lead's plan.",
+		planningStage: planningStageReviewerResponse,
 		identity: workerhttp.MutationIdentity{
 			AttemptReference: workerhttp.AttemptReference{SessionID: reviewer.ID, AttemptID: attemptID},
 			IdempotencyKey:   attemptID + ":resume",
@@ -1010,9 +1012,7 @@ func (starter *RemoteLeadStarter) reviewerDecisionRequest(
 				Role: workerhttp.RoleReviewer, WorkspaceID: prepared.ID,
 			},
 			ProviderSessionID: reviewer.ProviderSessionID,
-			Instructions: reviewerDecisionInstructions(
-				storedFeature, prepared, previousResponse, revisedPlan,
-			),
+			Instructions:      reviewerResponseInstructions(storedFeature, prepared, leadResponse),
 		},
 	}
 	if err := request.request.Validate(request.identity); err != nil {
@@ -1021,47 +1021,34 @@ func (starter *RemoteLeadStarter) reviewerDecisionRequest(
 	return request, nil
 }
 
-func reviewerDecisionInstructions(
+func reviewerResponseInstructions(
 	storedFeature feature.Feature,
 	prepared workspace.Workspace,
-	previousResponse string,
-	revisedPlan string,
+	leadResponse string,
 ) string {
 	return "Continue the same planning conversation as the independent reviewer. Inspect the managed " +
 		"repository and current Git state again. Do not modify files, install dependencies, commit, push, " +
-		"or begin implementation. Decide whether the lead's complete revised plan now satisfies the accepted " +
-		"goal and resolves every material concern. Explain your decision, then finish with exactly one of " +
-		"these lines: PLANNING_DECISION: ACCEPTED or PLANNING_DECISION: CHANGES_REQUESTED. Use the second " +
-		"line if any material ambiguity, missing validation, unsafe assumption, or scope disagreement remains. " +
+		"or begin implementation. Evaluate whether the lead's response and current plan satisfy the accepted " +
+		"goal and resolve every material concern. Respond naturally: clearly explain remaining concerns, or " +
+		"clearly explain why you are satisfied. Do not use a special approval marker; the lead owns the later " +
+		"structured plan-submission action after considering your response. " +
 		"Durable repository and workflow state are authoritative over conversational memory.\n\n" +
 		"Accepted goal:\n" + storedFeature.AcceptedGoal +
 		"\n\nRepository: " + prepared.RepositoryOwner + "/" + prepared.RepositoryName +
 		"\nBase branch: " + prepared.BaseBranch + "\nFeature branch: " + prepared.Branch +
 		"\nBase commit: " + prepared.BaseCommitID +
 		fmt.Sprintf("\nDraft pull request: #%d (%s)", prepared.PullRequestNumber, prepared.PullRequestURL) +
-		"\n\nYour previous response:\n" + previousResponse +
-		"\n\nLead's exact revised plan:\n" + revisedPlan
+		"\n\nLead's exact latest response:\n" + leadResponse
 }
 
-func planningDecisionReason(response string) string {
-	accepted := false
-	changesRequested := false
-	for _, line := range strings.Split(response, "\n") {
-		switch strings.TrimSpace(line) {
-		case "PLANNING_DECISION: ACCEPTED":
-			accepted = true
-		case "PLANNING_DECISION: CHANGES_REQUESTED":
-			changesRequested = true
+func planningRoleMessageCount(messages []execution.PlanningMessage, role worker.Role) int {
+	count := 0
+	for _, message := range messages {
+		if message.Role == role {
+			count++
 		}
 	}
-	switch {
-	case accepted && !changesRequested:
-		return "The reviewer accepted the revised plan. It is ready to publish to Forgejo."
-	case changesRequested && !accepted:
-		return "The reviewer still requests planning changes. User input is required before another round."
-	default:
-		return "The reviewer did not provide one clear planning decision. User input is required."
-	}
+	return count
 }
 
 func (starter *RemoteLeadStarter) messageForAttempt(
@@ -1075,7 +1062,8 @@ func (starter *RemoteLeadStarter) messageForAttempt(
 	}
 	var message execution.Event
 	for _, event := range events {
-		if event.WorkerAttemptID != attemptID || event.Type != worker.EventMessage {
+		if event.WorkerAttemptID != attemptID ||
+			(event.Type != worker.EventMessage && event.Type != worker.EventPlanSubmitted) {
 			continue
 		}
 		// Providers may emit conversational preambles before their completed
@@ -1433,7 +1421,11 @@ func (starter *RemoteLeadStarter) finish(
 		if err != nil {
 			break
 		}
-		if request.planningStage == planningStageLeadRevision {
+		if request.planningStage == planningStageLeadResponse {
+			if planningMessage.Type == worker.EventPlanSubmitted {
+				err = starter.waitRun(ctx, request.runID, planningPlanSubmittedReason)
+				break
+			}
 			run, loadErr := starter.executions.GetRun(ctx, request.runID)
 			if loadErr != nil {
 				err = loadErr
@@ -1444,7 +1436,16 @@ func (starter *RemoteLeadStarter) finish(
 				err = loadErr
 				break
 			}
-			next, admitted, startErr := starter.startReviewerDecision(ctx, run, storedFeature)
+			messages, listErr := starter.executions.PlanningMessagesForRun(ctx, request.runID)
+			if listErr != nil {
+				err = listErr
+				break
+			}
+			if len(messages) >= maxPlanningMessages {
+				err = starter.waitRun(ctx, request.runID, planningLimitReason)
+				break
+			}
+			next, admitted, startErr := starter.startReviewerResponse(ctx, run, storedFeature, messages)
 			if startErr != nil {
 				err = startErr
 				break
@@ -1454,11 +1455,37 @@ func (starter *RemoteLeadStarter) finish(
 			}
 			return
 		}
-		waitingReason := request.waitingReason
-		if request.planningStage == planningStageReviewerDecision {
-			waitingReason = planningDecisionReason(planningMessage.Text)
+		if request.planningStage == planningStageReviewerResponse {
+			messages, listErr := starter.executions.PlanningMessagesForRun(ctx, request.runID)
+			if listErr != nil {
+				err = listErr
+				break
+			}
+			if len(messages) >= maxPlanningMessages {
+				err = starter.waitRun(ctx, request.runID, planningLimitReason)
+				break
+			}
+			run, loadErr := starter.executions.GetRun(ctx, request.runID)
+			if loadErr != nil {
+				err = loadErr
+				break
+			}
+			storedFeature, loadErr := starter.features.GetByID(ctx, run.FeatureID)
+			if loadErr != nil {
+				err = loadErr
+				break
+			}
+			next, admitted, startErr := starter.startLeadResponse(ctx, run, storedFeature, messages, true)
+			if startErr != nil {
+				err = startErr
+				break
+			}
+			if admitted {
+				starter.launchAdmitted(next)
+			}
+			return
 		}
-		err = starter.waitRun(ctx, request.runID, waitingReason)
+		err = starter.waitRun(ctx, request.runID, request.waitingReason)
 	case workerhttp.OutcomeStopped:
 		err = starter.failSession(ctx, session, execution.SessionStatusStopped, attempt, "The "+request.agentName+" was stopped.")
 	case workerhttp.OutcomeFailed:
