@@ -206,6 +206,7 @@ type ImplementationPublicationSpec struct {
 	PlanPublicationMarker string
 	Plan                  string
 	PublicationMarker     string
+	CommentHeading        string
 	Summary               string
 	ExpectedAuthor        string
 	BaseBranch            string
@@ -258,12 +259,15 @@ func (spec ImplementationPublicationSpec) Validate() error {
 	}
 	for _, value := range []string{
 		spec.FeatureMarker, spec.PlanPublicationMarker, spec.Plan,
-		spec.PublicationMarker, spec.Summary, spec.ExpectedAuthor,
+		spec.PublicationMarker, spec.CommentHeading, spec.Summary, spec.ExpectedAuthor,
 		spec.BaseBranch, spec.HeadBranch,
 	} {
 		if strings.TrimSpace(value) == "" || value != strings.TrimSpace(value) {
 			return errors.New("implementation publication fields are required and must be trimmed")
 		}
+	}
+	if spec.CommentHeading != "Implementation summary" && spec.CommentHeading != "Review response" {
+		return errors.New("implementation publication comment heading is not recognized")
 	}
 	if !safeCommitID.MatchString(spec.HeadCommitID) {
 		return errors.New("implementation publication head must be a lowercase commit ID")

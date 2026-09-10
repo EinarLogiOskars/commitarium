@@ -646,6 +646,7 @@ func TestServiceVerifiesAgentImplementationPublicationWithoutWriting(t *testing.
 	spec := pullRequests.implementationSpecs[0]
 	if spec.Number != 8 || spec.HeadCommitID != implementationCommit ||
 		spec.ExpectedAuthor != "codex-lead" ||
+		spec.CommentHeading != "Implementation summary" ||
 		!strings.HasPrefix(spec.PublicationMarker, "<!-- commitarium-implementation: ") ||
 		!strings.HasPrefix(spec.PlanPublicationMarker, "<!-- commitarium-plan: ") {
 		t.Fatalf("unexpected implementation publication spec %+v", spec)
@@ -664,6 +665,57 @@ func TestServiceVerifiesAgentImplementationPublicationWithoutWriting(t *testing.
 		implementationCommit, 8, "codex-lead",
 	); !errors.Is(err, ErrConflict) {
 		t.Fatalf("mismatched project repository verification error = %v, want %v", err, ErrConflict)
+	}
+}
+
+func TestServiceVerifiesLeadReviewResponseAsNewDescendantCommit(t *testing.T) {
+	now := time.Date(2026, time.September, 10, 5, 30, 0, 0, time.UTC)
+	stored := readyTestWorkspace(now)
+	pullRequestReadyAt := now.Add(3 * time.Minute)
+	stored.PullRequestNumber = 8
+	stored.PullRequestURL = "http://localhost:3001/owner/repository/pulls/8"
+	stored.PullRequestRecordedAt = &pullRequestReadyAt
+	stored.UpdatedAt = pullRequestReadyAt
+	reviewedCommit := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	correctedCommit := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	branches := &recordingBranches{base: Branch{Name: stored.Branch, CommitID: correctedCommit}}
+	checkout := &recordingCheckout{}
+	pullRequests := &recordingPullRequests{planResult: PullRequest{
+		Number: 8, URL: stored.PullRequestURL, State: "open", Draft: true,
+		BaseBranch: stored.BaseBranch, HeadBranch: stored.Branch, HeadCommitID: correctedCommit,
+	}}
+	reviewing := acceptedTestFeature(now)
+	reviewing.State = feature.StateReviewing
+	service := NewServiceWithPreparation(
+		&memoryStore{stored: stored}, fixedFeatureFinder{stored: reviewing},
+		fixedProjectFinder{stored: project.Project{ID: "prj_test", ForgejoRepository: testRepository(now)}},
+		branches, checkout, pullRequests,
+	)
+	got, err := service.VerifyImplementationReviewResponse(
+		t.Context(), "prj_test", "fea_test", "sev_final_plan", "Final plan",
+		"att_correction_1", "Added the missing failure-path test.", reviewedCommit,
+		correctedCommit, 8, "codex-lead",
+	)
+	if err != nil || got != stored {
+		t.Fatalf("verify review response: workspace=%+v err=%v", got, err)
+	}
+	if branches.getCalls != 1 || len(checkout.specs) != 1 ||
+		checkout.specs[0].BaseCommitID != reviewedCommit ||
+		checkout.specs[0].ExpectedHeadCommitID != correctedCommit ||
+		!checkout.specs[0].RequireClean || len(pullRequests.implementationSpecs) != 1 {
+		t.Fatalf("response verification did not reconcile every fact: branches=%d checkout=%+v pull_requests=%+v", branches.getCalls, checkout.specs, pullRequests.implementationSpecs)
+	}
+	spec := pullRequests.implementationSpecs[0]
+	if spec.CommentHeading != "Review response" || spec.HeadCommitID != correctedCommit ||
+		spec.ExpectedAuthor != "codex-lead" ||
+		!strings.HasPrefix(spec.PublicationMarker, "<!-- commitarium-review-response: ") {
+		t.Fatalf("unexpected review response publication spec %+v", spec)
+	}
+	if _, err := service.VerifyImplementationReviewResponse(
+		t.Context(), "prj_test", "fea_test", "sev_final_plan", "Final plan",
+		"att_correction_1", "No new revision.", reviewedCommit, reviewedCommit, 8, "codex-lead",
+	); err == nil {
+		t.Fatal("review response accepted the already-reviewed commit")
 	}
 }
 

@@ -430,7 +430,7 @@ records the existing recovery assessment event; it never starts a replacement.
 If the worker itself restarts while Codex is active, its journal deliberately
 marks the attempt indeterminate and the coordinator stops for user review.
 
-## Automatic first implementation review
+## Automatic implementation review and first correction
 
 After lead publication verification, no user action is required to start the
 first review. The coordinator resumes the same reviewer provider conversation
@@ -451,15 +451,34 @@ The `implementation_reviewer` output contract returns `approved`,
 `changes_requested`, or `blocked`. Successful review publication includes the
 exact commit ID, PR number, and Forgejo review ID. The coordinator fetches that
 exact review and verifies the open draft PR head, accepted plan, clean checkout,
-review author, commit, decision, non-stale state, and exact body. Approval and
-requested changes both return the run to `waiting_for_user` for this slice; the
-reason clearly identifies the result. The next slice will consume requested
-changes automatically and continue the lead/reviewer correction loop.
+review author, commit, decision, non-stale state, and exact body. Approval
+returns the run to `waiting_for_user`; the feature remains `reviewing` until the
+next slice implements the `ready_to_merge` transition.
 
-Recovery is idempotent before reviewer admission, during the active reviewer
-attempt, and after its terminal result. Startup either starts the one missing
-deterministic attempt, reattaches to it, or re-verifies its exact Forgejo review.
-It never substitutes the lead worker/profile or starts a second reviewer.
+When review round one returns `changes_requested`, the run stays active and the
+coordinator automatically resumes the original lead provider conversation in
+its lead worker. The deterministic attempt ID is
+`{lead-session-id}:correction:1`. Its briefing includes the exact formal review,
+reviewed commit, accepted goal, agreed plan, current PR, and durable workflow
+phase. The lead must inspect Git and Forgejo before editing, address the
+findings, test the correction, create a new descendant commit, push that exact
+HEAD, and post one marker-owned `Review response` comment. The coordinator
+verifies the new clean PR head, ancestry from the reviewed commit, plan, author,
+marker, and exact response body without judging code quality.
+
+A verified response immediately resumes the same reviewer provider conversation
+as `{reviewer-session-id}:review:2`, supplying the corrected commit and response
+summary. The reviewer follows the same formal-review rules against that new
+immutable revision. This slice stops after review round two with either an
+approved or further-changes reason. Additional corrective rounds and the final
+workflow-state transition are intentionally left to the next bounded slice.
+
+Recovery is idempotent before either reviewer admission, during an active
+reviewer or correction attempt, and after any terminal result. Startup orders
+the deterministic checkpoints, reattaches to the one active attempt, or
+re-verifies the completed Forgejo review/response before starting only the next
+missing stage. It never substitutes worker profiles, starts both agents, or
+duplicates a review, commit, push, or audit comment.
 
 ## Continuing implementation
 
@@ -682,8 +701,8 @@ work.
 For the real-lead mode, recovery only performs a read-only lookup of the exact
 durable worker attempt, including an interrupted lead, clarification follow-up,
 initial planning, first-reviewer, later planning-discussion, initial
-implementation, numbered implementation-continuation, or first implementation
-review turn. A waiting
+implementation, numbered implementation-continuation, implementation review,
+or first corrective implementation turn. A waiting
 lead is not counted as concurrent active work while the reviewer is running. If
 it still exists and is consistent, the coordinator records a `recovery_assessment`
 event, marks its pending reply applied once the attempt is confirmed, and

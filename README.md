@@ -45,9 +45,13 @@ author all match, moves the feature to `reviewing`, and immediately resumes the
 persistent reviewer in its separate worker container. The reviewer inspects the
 exact commit, posts one formal Forgejo approval or changes-requested review, and
 returns its review ID. The coordinator verifies that exact review, commit,
-decision, body, and author before stopping at the first-review checkpoint. The
-lead/reviewer correction loop, Claude Code execution, and the user interface
-remain to be built.
+decision, body, and author. Approval stops at the checkpoint immediately before
+the later `ready_to_merge` transition. A
+first changes-requested decision instead resumes the original lead conversation,
+which publishes a new descendant commit and a structured `Review response` PR
+comment; the original reviewer then performs a second verified review. Further
+corrective rounds, Claude Code execution, and the user interface remain to be
+built.
 Projects can be listed and permanently associated with one verified Forgejo
 repository.
 
@@ -458,10 +462,18 @@ Forgejo review whose body contains a retry-stable hidden marker and a concise
 `Review` section, using either `APPROVE` or `REQUEST_CHANGES`. Its structured
 result includes the exact commit, PR number, and Forgejo review ID. The
 coordinator fetches that exact review and verifies its author, commit, decision,
-body, current PR head, and clean checkout. It then waits with either an approved
-or changes-requested reason. Repeating startup at any boundary reuses or verifies
-the same attempt and review; it does not start a second reviewer or post a
-duplicate review.
+body, current PR head, and clean checkout. An approval waits immediately before
+the later merge gate.
+If the first review requests changes, the coordinator automatically resumes the
+same lead conversation with the exact review, commit, accepted goal, agreed
+plan, and PR identities. The lead inspects before editing, creates a new commit
+descended from the reviewed revision, pushes it, and posts one marked `Review
+response` comment describing the changes and tests. After the coordinator
+mechanically verifies those facts, it resumes the same reviewer conversation
+for review round two. This slice stops after that second verified decision;
+later work will generalize the bounded loop. Repeating startup at any boundary
+reuses or verifies the deterministic attempt for that stage, so it does not
+replace an agent or duplicate a PR audit entry.
 
 When the lead is waiting during `implementing`, continue the same implementation
 conversation through the ordinary session command endpoint:
@@ -494,9 +506,8 @@ The temporary coordinator-owned implementation commit endpoint remains
 removed. Commits, feature-branch pushes, and structured PR summaries are now
 owned by the lead's scoped Forgejo identity. This internal work remains separate
 from the later trusted-host synchronization and optional external push. The next
-functional slice routes formal findings back to the lead, lets the two existing
-conversations correct and re-review subsequent commits, and stops on approval or
-the bounded user-intervention gate.
+functional slice generalizes the implemented first correction into a bounded
+lead/reviewer loop and advances an approved revision to `ready_to_merge`.
 
 The versioned [internal worker API](docs/worker-api.md) now has tested client and
 server components for authenticated attempt inspection and control. Its worker

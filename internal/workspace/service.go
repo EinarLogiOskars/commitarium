@@ -383,12 +383,104 @@ func (service *Service) VerifyImplementationPublication(
 			PlanPublicationMarker: "<!-- commitarium-plan: " + hex.EncodeToString(planDigest[:]) + " -->",
 			Plan:                  plan,
 			PublicationMarker:     "<!-- commitarium-implementation: " + hex.EncodeToString(implementationDigest[:]) + " -->",
+			CommentHeading:        "Implementation summary",
 			Summary:               summary, ExpectedAuthor: expectedAuthor,
 			BaseBranch: stored.BaseBranch, HeadBranch: stored.Branch, HeadCommitID: commitID,
 		},
 	)
 	if err != nil {
 		return Workspace{}, fmt.Errorf("verify implementation pull request: %w", err)
+	}
+	if pullRequest.Number != stored.PullRequestNumber || pullRequest.URL != stored.PullRequestURL {
+		return Workspace{}, ErrPullRequestConflict
+	}
+	return stored, nil
+}
+
+// VerifyImplementationReviewResponse confirms the lead answered a formal
+// review with a new clean commit and a marker-owned Forgejo audit comment. The
+// reviewed commit is used as the required Git ancestor, so a correction cannot
+// silently replace or discard the exact revision the reviewer inspected.
+func (service *Service) VerifyImplementationReviewResponse(
+	ctx context.Context,
+	projectID string,
+	featureID string,
+	planEventID string,
+	plan string,
+	attemptID string,
+	summary string,
+	reviewedCommitID string,
+	commitID string,
+	pullRequestNumber int64,
+	expectedAuthor string,
+) (Workspace, error) {
+	for _, value := range []string{
+		planEventID, plan, attemptID, summary, reviewedCommitID, commitID, expectedAuthor,
+	} {
+		if strings.TrimSpace(value) == "" || value != strings.TrimSpace(value) {
+			return Workspace{}, errors.New("review response identities are required and must be trimmed")
+		}
+	}
+	if reviewedCommitID == commitID {
+		return Workspace{}, errors.New("review response must publish a new commit")
+	}
+	storedFeature, err := service.features.GetByID(ctx, projectID, featureID)
+	if err != nil {
+		return Workspace{}, err
+	}
+	if storedFeature.State != feature.StateReviewing {
+		return Workspace{}, ErrFeatureNotReviewing
+	}
+	storedProject, err := service.projects.GetByID(ctx, projectID)
+	if err != nil {
+		return Workspace{}, err
+	}
+	if storedProject.ForgejoRepository == nil {
+		return Workspace{}, ErrProjectRepositoryNotBound
+	}
+	stored, err := service.Get(ctx, projectID, featureID)
+	if err != nil {
+		return Workspace{}, err
+	}
+	repository := storedProject.ForgejoRepository
+	if stored.RepositoryOwner != repository.Owner || stored.RepositoryName != repository.Name ||
+		stored.BaseBranch != repository.DefaultBranch || !stored.CheckoutReady() ||
+		!stored.PullRequestReady() || service.checkouts == nil || service.pullRequests == nil ||
+		stored.PullRequestNumber != pullRequestNumber {
+		return Workspace{}, ErrConflict
+	}
+	branch, err := service.branches.GetBranch(ctx, stored.RepositoryOwner, stored.RepositoryName, stored.Branch)
+	if err != nil {
+		return Workspace{}, fmt.Errorf("verify corrected Forgejo branch: %w", err)
+	}
+	if branch.Name != stored.Branch || branch.CommitID != commitID {
+		return Workspace{}, ErrBranchConflict
+	}
+	if err := service.checkouts.Ensure(ctx, CheckoutSpec{
+		WorkspaceID: stored.ID, RepositoryOwner: stored.RepositoryOwner,
+		RepositoryName: stored.RepositoryName, Branch: stored.Branch,
+		BaseCommitID: reviewedCommitID, ExpectedHeadCommitID: commitID,
+		AlreadyReady: true, RequireClean: true,
+	}); err != nil {
+		return Workspace{}, fmt.Errorf("verify corrected checkout: %w", err)
+	}
+	planDigest := sha256.Sum256([]byte(planEventID))
+	responseDigest := sha256.Sum256([]byte(attemptID))
+	pullRequest, err := service.pullRequests.VerifyPullRequestImplementation(
+		ctx, stored.RepositoryOwner, stored.RepositoryName,
+		ImplementationPublicationSpec{
+			Number:                stored.PullRequestNumber,
+			FeatureMarker:         "<!-- commitarium-feature: " + storedFeature.ID + " -->",
+			PlanPublicationMarker: "<!-- commitarium-plan: " + hex.EncodeToString(planDigest[:]) + " -->",
+			Plan:                  plan,
+			PublicationMarker:     "<!-- commitarium-review-response: " + hex.EncodeToString(responseDigest[:]) + " -->",
+			CommentHeading:        "Review response",
+			Summary:               summary, ExpectedAuthor: expectedAuthor,
+			BaseBranch: stored.BaseBranch, HeadBranch: stored.Branch, HeadCommitID: commitID,
+		},
+	)
+	if err != nil {
+		return Workspace{}, fmt.Errorf("verify implementation review response: %w", err)
 	}
 	if pullRequest.Number != stored.PullRequestNumber || pullRequest.URL != stored.PullRequestURL {
 		return Workspace{}, ErrPullRequestConflict
