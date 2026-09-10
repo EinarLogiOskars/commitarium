@@ -374,7 +374,8 @@ func (session *session) completedItem(item threadItem) (*worker.Event, error) {
 		if text == "" {
 			return nil, nil
 		}
-		if session.outputContract == worker.OutputContractPlanningLead {
+		if session.outputContract == worker.OutputContractPlanningLead ||
+			session.outputContract == worker.OutputContractImplementationLead {
 			session.mu.Lock()
 			session.pendingMessage = text
 			session.mu.Unlock()
@@ -411,6 +412,13 @@ type planningLeadResponse struct {
 	Content string `json:"content"`
 }
 
+type implementationLeadResponse struct {
+	Action            string `json:"action"`
+	Summary           string `json:"summary"`
+	CommitID          string `json:"commit_id"`
+	PullRequestNumber int64  `json:"pull_request_number"`
+}
+
 func decodePlanningLeadResponse(text string) (planningLeadResponse, error) {
 	decoder := json.NewDecoder(bytes.NewBufferString(text))
 	decoder.DisallowUnknownFields()
@@ -428,20 +436,66 @@ func decodePlanningLeadResponse(text string) (planningLeadResponse, error) {
 	return response, nil
 }
 
+func decodeImplementationLeadResponse(text string) (implementationLeadResponse, error) {
+	decoder := json.NewDecoder(bytes.NewBufferString(text))
+	decoder.DisallowUnknownFields()
+	var response implementationLeadResponse
+	if err := decoder.Decode(&response); err != nil {
+		return implementationLeadResponse{}, fmt.Errorf(
+			"%w: decode implementation lead response: %v", ErrProtocol, err,
+		)
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return implementationLeadResponse{}, fmt.Errorf(
+			"%w: implementation lead response contains trailing JSON", ErrProtocol,
+		)
+	}
+	response.Summary = strings.TrimSpace(response.Summary)
+	response.CommitID = strings.TrimSpace(response.CommitID)
+	if response.Summary == "" || response.PullRequestNumber < 1 {
+		return implementationLeadResponse{}, fmt.Errorf(
+			"%w: implementation lead response is incomplete", ErrProtocol,
+		)
+	}
+	switch response.Action {
+	case "published":
+		publication := worker.ImplementationPublication{
+			CommitID: response.CommitID, PullRequestNumber: response.PullRequestNumber,
+		}
+		if err := publication.Validate(); err != nil {
+			return implementationLeadResponse{}, fmt.Errorf(
+				"%w: implementation lead publication is invalid: %v", ErrProtocol, err,
+			)
+		}
+	case "blocked":
+		if response.CommitID != "" {
+			return implementationLeadResponse{}, fmt.Errorf(
+				"%w: blocked implementation cannot claim a commit", ErrProtocol,
+			)
+		}
+	default:
+		return implementationLeadResponse{}, fmt.Errorf(
+			"%w: implementation lead response has an unknown action", ErrProtocol,
+		)
+	}
+	return response, nil
+}
+
 func (session *session) completedTurn(
 	turn turnRecord,
 ) (*worker.Event, bool, worker.Result, error) {
 	switch turn.Status {
 	case "completed":
-		structured, err := session.completeStructuredResponse()
+		structured, disposition, publication, err := session.completeStructuredResponse()
 		if err != nil {
 			return nil, false, worker.Result{}, err
 		}
 		return structured, true, worker.Result{
 			Outcome:           worker.OutcomeCompleted,
-			Disposition:       worker.DispositionSucceeded,
+			Disposition:       disposition,
 			ProviderSessionID: session.threadID,
 			Summary:           session.summary(),
+			Publication:       publication,
 		}, nil
 	case "interrupted":
 		return nil, true, worker.Result{
@@ -464,28 +518,59 @@ func (session *session) completedTurn(
 	}
 }
 
-func (session *session) completeStructuredResponse() (*worker.Event, error) {
-	if session.outputContract != worker.OutputContractPlanningLead {
-		return nil, nil
+func (session *session) completeStructuredResponse() (
+	*worker.Event,
+	worker.Disposition,
+	*worker.ImplementationPublication,
+	error,
+) {
+	if session.outputContract == "" {
+		return nil, worker.DispositionSucceeded, nil, nil
 	}
 	session.mu.Lock()
 	raw := session.pendingMessage
 	session.mu.Unlock()
 	if strings.TrimSpace(raw) == "" {
-		return nil, fmt.Errorf("%w: planning lead turn omitted its structured response", ErrProtocol)
+		return nil, "", nil, fmt.Errorf(
+			"%w: structured turn omitted its final response", ErrProtocol,
+		)
 	}
-	response, err := decodePlanningLeadResponse(raw)
-	if err != nil {
-		return nil, err
+	switch session.outputContract {
+	case worker.OutputContractPlanningLead:
+		response, err := decodePlanningLeadResponse(raw)
+		if err != nil {
+			return nil, "", nil, err
+		}
+		eventType := worker.EventMessage
+		if response.Action == "submit_plan" {
+			eventType = worker.EventPlanSubmitted
+		}
+		session.mu.Lock()
+		session.lastAgentMessage = response.Content
+		session.mu.Unlock()
+		return event(eventType, response.Content), worker.DispositionSucceeded, nil, nil
+	case worker.OutputContractImplementationLead:
+		response, err := decodeImplementationLeadResponse(raw)
+		if err != nil {
+			return nil, "", nil, err
+		}
+		session.mu.Lock()
+		session.lastAgentMessage = response.Summary
+		session.mu.Unlock()
+		if response.Action == "blocked" {
+			return event(worker.EventInputRequired, response.Summary),
+				worker.DispositionInputRequired, nil, nil
+		}
+		return event(worker.EventMessage, response.Summary),
+			worker.DispositionSucceeded,
+			&worker.ImplementationPublication{
+				CommitID: response.CommitID, PullRequestNumber: response.PullRequestNumber,
+			}, nil
+	default:
+		return nil, "", nil, fmt.Errorf(
+			"%w: unsupported structured output contract %q", ErrProtocol, session.outputContract,
+		)
 	}
-	eventType := worker.EventMessage
-	if response.Action == "submit_plan" {
-		eventType = worker.EventPlanSubmitted
-	}
-	session.mu.Lock()
-	session.lastAgentMessage = response.Content
-	session.mu.Unlock()
-	return event(eventType, response.Content), nil
 }
 
 func (session *session) summary() string {

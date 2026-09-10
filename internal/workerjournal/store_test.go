@@ -74,6 +74,9 @@ func TestStorePersistsAttemptMutationResultAndEventsAcrossReopen(t *testing.T) {
 		Result: &workerhttp.TerminalResult{
 			Outcome: workerhttp.OutcomeCompleted, Disposition: workerhttp.DispositionSucceeded,
 			Summary: "Implementation completed",
+			Publication: &workerhttp.ImplementationPublication{
+				CommitID: "0123456789abcdef0123456789abcdef01234567", PullRequestNumber: 7,
+			},
 		},
 	})
 	if err != nil {
