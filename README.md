@@ -17,10 +17,10 @@ for automatic recovery can continue without intervention.
 
 This is not yet a production-ready release. The coordinator defaults to its
 complete deterministic simulation. An opt-in mode now connects the public run
-and session-command APIs to one persistent real Codex conversation for
-read-only goal clarification. The user can exchange multiple visible turns
+and session-command APIs to persistent real Codex lead and reviewer
+conversations. The user can exchange multiple visible goal-clarification turns
 with the lead agent while the feature remains a draft, then explicitly accepts
-the final goal to close clarification. After acceptance, the public API can now
+the final goal to close clarification. After acceptance, the public API can
 reserve a durable feature workspace identity, create its exact Forgejo branch
 from the repository's recorded default-branch commit, and create the feature's
 draft pull request. It also creates an ordinary host-visible checkout of that
@@ -32,9 +32,12 @@ planning history and SSE stream. After the first review, the same two provider
 sessions alternate until the lead explicitly submits an agreed plan or the
 ten-message safety limit requires user input. A submitted plan is reconciled
 against the clean managed workspace and exact draft pull request, then appended
-once to the PR body. File changes, implementation review, Claude Code execution,
-and the user interface remain to be built. Projects can be listed and
-permanently associated with one verified Forgejo repository.
+once to the PR body. A final explicit action re-verifies that boundary and
+resumes the same lead to perform one write-capable implementation turn. The
+result remains uncommitted for inspection; committing, pushing, implementation
+review, Claude Code execution, and the user interface remain to be built.
+Projects can be listed and permanently associated with one verified Forgejo
+repository.
 
 ## Architecture
 
@@ -360,8 +363,35 @@ retrying this action reconciles publication without another agent turn.
 The loop instead stops for user input if the shared discussion reaches ten
 messages. The action is safe to retry. A coordinator restart during either turn
 reattaches to the exact worker attempt, and a restart between turns continues
-the stored handoff without starting two agents. The agents remain read-only and
-implementation does not begin in this slice.
+the stored handoff without starting two agents. The planning agents remain
+read-only.
+
+Once the agreed plan is visibly published, start the first implementation turn:
+
+```sh
+curl -i -X POST \
+  http://127.0.0.1:8080/api/v1/runs/RUN_ID/implementation \
+  -H 'Idempotency-Key: start-implementation-1' \
+  -H 'Content-Length: 0'
+```
+
+The coordinator performs a read-only verification of the exact marked plan,
+feature branch, clean checkout, unchanged baseline commit, and open draft PR.
+It then moves the feature to `implementing`, atomically rotates the lead to one
+deterministic implementation attempt, and resumes the same provider thread in
+the managed workspace. The lead must inspect Git HEAD, branch, status, and diff
+before editing; unexpected or ambiguous state must be reported without being
+reset or overwritten. The lead may modify files and run available tests, but is
+explicitly forbidden to commit or push in this turn. Its commands, edits, test
+activity, and final summary remain visible through the existing lead-session
+history and SSE stream. The final run reason is deliberately neutral: users
+inspect that activity and the workspace to distinguish completed changes from
+a safely reported blocker.
+
+An exact action retry does not start another attempt. If the coordinator stops
+while this turn is active, startup looks up and reattaches to that exact worker
+attempt without issuing another resume request. A worker-container restart still
+marks in-flight provider work indeterminate and requires user review.
 
 The versioned [internal worker API](docs/worker-api.md) now has tested client and
 server components for authenticated attempt inspection and control. Its worker

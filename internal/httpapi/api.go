@@ -92,7 +92,7 @@ type WorkspaceService interface {
 	) (workspace.Workspace, bool, error)
 }
 
-type PlanningStarter interface {
+type RealWorkflowStarter interface {
 	StartPlanning(
 		ctx context.Context,
 		runID string,
@@ -108,17 +108,22 @@ type PlanningStarter interface {
 		runID string,
 		idempotencyKey string,
 	) (execution.Run, bool, error)
+	StartImplementation(
+		ctx context.Context,
+		runID string,
+		idempotencyKey string,
+	) (execution.Run, bool, error)
 }
 
 type API struct {
-	projects   ProjectService
-	features   FeatureService
-	workflow   WorkflowService
-	execution  ExecutionService
-	controller SessionController
-	starter    RunStarter
-	workspaces WorkspaceService
-	planning   PlanningStarter
+	projects     ProjectService
+	features     FeatureService
+	workflow     WorkflowService
+	execution    ExecutionService
+	controller   SessionController
+	starter      RunStarter
+	workspaces   WorkspaceService
+	realWorkflow RealWorkflowStarter
 }
 
 func New(
@@ -146,7 +151,7 @@ func NewWithWorkspaceService(
 	)
 }
 
-func NewWithWorkspaceAndPlanningService(
+func NewWithWorkspaceAndRealWorkflowService(
 	projects ProjectService,
 	features FeatureService,
 	workflow WorkflowService,
@@ -154,11 +159,11 @@ func NewWithWorkspaceAndPlanningService(
 	controller SessionController,
 	starter RunStarter,
 	workspaces WorkspaceService,
-	planning PlanningStarter,
+	realWorkflow RealWorkflowStarter,
 ) http.Handler {
 	return newAPI(
 		projects, features, workflow, executionService, controller, starter,
-		workspaces, planning,
+		workspaces, realWorkflow,
 	)
 }
 
@@ -170,17 +175,17 @@ func newAPI(
 	controller SessionController,
 	starter RunStarter,
 	workspaces WorkspaceService,
-	planning PlanningStarter,
+	realWorkflow RealWorkflowStarter,
 ) http.Handler {
 	api := &API{
-		projects:   projects,
-		features:   features,
-		workflow:   workflow,
-		execution:  executionService,
-		controller: controller,
-		starter:    starter,
-		workspaces: workspaces,
-		planning:   planning,
+		projects:     projects,
+		features:     features,
+		workflow:     workflow,
+		execution:    executionService,
+		controller:   controller,
+		starter:      starter,
+		workspaces:   workspaces,
+		realWorkflow: realWorkflow,
 	}
 
 	mux := http.NewServeMux()
@@ -235,10 +240,11 @@ func newAPI(
 			api.prepareWorkspaceHandler,
 		)
 	}
-	if planning != nil {
+	if realWorkflow != nil {
 		mux.HandleFunc("POST /api/v1/runs/{id}/planning", api.startPlanningHandler)
 		mux.HandleFunc("POST /api/v1/runs/{id}/planning/reviewer", api.startPlanningReviewHandler)
 		mux.HandleFunc("POST /api/v1/runs/{id}/planning/round", api.startPlanningRoundHandler)
+		mux.HandleFunc("POST /api/v1/runs/{id}/implementation", api.startImplementationHandler)
 	}
 	mux.HandleFunc("GET /api/v1/runs/{id}", api.getRunHandler)
 	mux.HandleFunc("GET /api/v1/runs/{id}/planning/messages", api.getPlanningMessagesHandler)

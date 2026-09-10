@@ -113,13 +113,24 @@ type recordingCheckout struct {
 }
 
 type recordingPullRequests struct {
-	specs         []PullRequestSpec
-	planSpecs     []PlanPublicationSpec
-	result        PullRequest
-	planResult    PullRequest
-	planPublished bool
-	err           error
-	planErr       error
+	specs             []PullRequestSpec
+	planSpecs         []PlanPublicationSpec
+	verifiedPlanSpecs []PlanPublicationSpec
+	result            PullRequest
+	planResult        PullRequest
+	planPublished     bool
+	err               error
+	planErr           error
+}
+
+func (pullRequests *recordingPullRequests) VerifyPullRequestPlan(
+	_ context.Context,
+	_ string,
+	_ string,
+	spec PlanPublicationSpec,
+) (PullRequest, error) {
+	pullRequests.verifiedPlanSpecs = append(pullRequests.verifiedPlanSpecs, spec)
+	return pullRequests.planResult, pullRequests.planErr
 }
 
 func (pullRequests *recordingPullRequests) EnsureDraftPullRequest(
@@ -486,6 +497,46 @@ func TestServiceRejectsPlanPublicationAfterFeatureBranchMoves(t *testing.T) {
 	}
 	if len(checkout.specs) != 0 || len(pullRequests.planSpecs) != 0 {
 		t.Fatal("conflicting branch allowed a checkout or pull-request mutation")
+	}
+}
+
+func TestServiceVerifiesPublishedPlanWithoutRepublishing(t *testing.T) {
+	now := time.Date(2026, time.September, 10, 2, 0, 0, 0, time.UTC)
+	stored := readyTestWorkspace(now)
+	pullRequestReadyAt := now.Add(3 * time.Minute)
+	stored.PullRequestNumber = 7
+	stored.PullRequestURL = "http://localhost:3001/owner/repository/pulls/7"
+	stored.PullRequestRecordedAt = &pullRequestReadyAt
+	stored.UpdatedAt = pullRequestReadyAt
+	branches := &recordingBranches{base: Branch{
+		Name: stored.Branch, CommitID: stored.BaseCommitID,
+	}}
+	checkout := &recordingCheckout{}
+	pullRequests := &recordingPullRequests{planResult: PullRequest{
+		Number: 7, URL: stored.PullRequestURL, Title: "WIP: Test feature",
+		Body: "published plan", State: "open", Draft: true,
+		BaseBranch: stored.BaseBranch, HeadBranch: stored.Branch,
+		HeadCommitID: stored.BaseCommitID, CreatedAt: pullRequestReadyAt,
+	}}
+	accepted := acceptedTestFeature(now)
+	accepted.State = feature.StateImplementing
+	service := NewServiceWithPreparation(
+		&memoryStore{stored: stored}, fixedFeatureFinder{stored: accepted},
+		fixedProjectFinder{stored: project.Project{
+			ID: "prj_test", ForgejoRepository: testRepository(now),
+		}}, branches, checkout, pullRequests,
+	)
+
+	got, err := service.VerifyPublishedPlan(
+		t.Context(), "prj_test", "fea_test", "sev_final_plan", "Final plan",
+	)
+	if err != nil || got != stored {
+		t.Fatalf("verify plan: workspace=%+v err=%v", got, err)
+	}
+	if branches.getCalls != 1 || len(checkout.specs) != 1 ||
+		!checkout.specs[0].RequireCleanBaseline || len(pullRequests.planSpecs) != 0 ||
+		len(pullRequests.verifiedPlanSpecs) != 1 {
+		t.Fatalf("verification mutated publication state: branches=%d checkout=%+v published=%+v verified=%+v", branches.getCalls, checkout.specs, pullRequests.planSpecs, pullRequests.verifiedPlanSpecs)
 	}
 }
 

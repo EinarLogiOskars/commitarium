@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/EinarLogiOskars/commitarium/internal/feature"
 	"github.com/EinarLogiOskars/commitarium/internal/worker"
 )
 
@@ -88,6 +89,7 @@ type AutonomousTurnAdmission struct {
 	PreviousAttemptID         string
 	PreviousLastEventSequence int64
 	NextAttempt               WorkerAttemptCheckpoint
+	ExpectedFeatureState      feature.State
 	RunReason                 string
 	OccurredAt                time.Time
 	RunAlreadyActive          bool

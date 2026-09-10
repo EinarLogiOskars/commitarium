@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/EinarLogiOskars/commitarium/internal/feature"
 	"github.com/EinarLogiOskars/commitarium/internal/worker"
 )
 
@@ -346,6 +347,7 @@ func (s *Service) BeginAutonomousTurn(
 	sessionID string,
 	previous WorkerAttemptCheckpoint,
 	nextAttemptID string,
+	expectedFeatureState feature.State,
 	runReason string,
 ) (bool, error) {
 	now := s.now().UTC()
@@ -357,8 +359,9 @@ func (s *Service) BeginAutonomousTurn(
 			SessionID: sessionID, AttemptID: nextAttemptID,
 			CreatedAt: now, UpdatedAt: now,
 		},
-		RunReason:  runReason,
-		OccurredAt: now,
+		ExpectedFeatureState: expectedFeatureState,
+		RunReason:            runReason,
+		OccurredAt:           now,
 	})
 	if err != nil {
 		return false, fmt.Errorf("begin autonomous turn for session %q: %w", sessionID, err)
@@ -385,7 +388,10 @@ func (s *Service) BeginChainedTurn(
 			SessionID: sessionID, AttemptID: nextAttemptID,
 			CreatedAt: now, UpdatedAt: now,
 		},
-		RunReason: runReason, OccurredAt: now, RunAlreadyActive: true,
+		ExpectedFeatureState: feature.StatePlanning,
+		RunReason:            runReason,
+		OccurredAt:           now,
+		RunAlreadyActive:     true,
 	})
 	if err != nil {
 		return false, fmt.Errorf("begin chained turn for session %q: %w", sessionID, err)

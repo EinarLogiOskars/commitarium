@@ -50,6 +50,16 @@ func (stub *planningStarterStub) StartPlanningRound(
 	return stub.run, true, stub.err
 }
 
+func (stub *planningStarterStub) StartImplementation(
+	_ context.Context,
+	runID string,
+	idempotencyKey string,
+) (execution.Run, bool, error) {
+	stub.receivedRunID = runID
+	stub.receivedKey = idempotencyKey
+	return stub.run, true, stub.err
+}
+
 type planningExecutionStub struct {
 	ExecutionService
 	sessions []execution.Session
@@ -70,7 +80,7 @@ func TestStartPlanningHandlerStartsAsynchronously(t *testing.T) {
 		StartedAt: now, UpdatedAt: now,
 	}
 	starter := &planningStarterStub{run: run}
-	handler := NewWithWorkspaceAndPlanningService(
+	handler := NewWithWorkspaceAndRealWorkflowService(
 		nil, nil, nil,
 		planningExecutionStub{sessions: []execution.Session{}},
 		nil, nil, nil, starter,
@@ -101,7 +111,7 @@ func TestStartPlanningHandlerStartsAsynchronously(t *testing.T) {
 
 func TestStartPlanningHandlerRequiresReadyStateAndIdempotencyKey(t *testing.T) {
 	starter := &planningStarterStub{err: orchestration.ErrPlanningNotAllowed}
-	handler := NewWithWorkspaceAndPlanningService(
+	handler := NewWithWorkspaceAndRealWorkflowService(
 		nil, nil, nil, planningExecutionStub{}, nil, nil, nil, starter,
 	)
 
@@ -148,7 +158,7 @@ func TestStartPlanningReviewHandlerStartsReviewer(t *testing.T) {
 		StartedAt: now, UpdatedAt: now,
 	}
 	starter := &planningStarterStub{run: run}
-	handler := NewWithWorkspaceAndPlanningService(
+	handler := NewWithWorkspaceAndRealWorkflowService(
 		nil, nil, nil, planningExecutionStub{}, nil, nil, nil, starter,
 	)
 	request := httptest.NewRequest(http.MethodPost, "/api/v1/runs/run_review/planning/reviewer", nil)
@@ -172,7 +182,7 @@ func TestStartPlanningRoundHandlerStartsBoundedPlanningLoop(t *testing.T) {
 		Reason: "The lead is revising the plan.", StartedAt: now, UpdatedAt: now,
 	}
 	starter := &planningStarterStub{run: run}
-	handler := NewWithWorkspaceAndPlanningService(
+	handler := NewWithWorkspaceAndRealWorkflowService(
 		nil, nil, nil, planningExecutionStub{}, nil, nil, nil, starter,
 	)
 	request := httptest.NewRequest(http.MethodPost, "/api/v1/runs/run_round/planning/round", nil)
@@ -191,7 +201,7 @@ func TestStartPlanningRoundHandlerStartsBoundedPlanningLoop(t *testing.T) {
 
 func TestStartPlanningRoundHandlerRequiresReadyStateAndIdempotencyKey(t *testing.T) {
 	starter := &planningStarterStub{err: orchestration.ErrPlanningNotAllowed}
-	handler := NewWithWorkspaceAndPlanningService(
+	handler := NewWithWorkspaceAndRealWorkflowService(
 		nil, nil, nil, planningExecutionStub{}, nil, nil, nil, starter,
 	)
 
