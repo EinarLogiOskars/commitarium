@@ -309,6 +309,12 @@ acceptance criteria, the complete agreed plan with its revision identifier, an
 implementation summary, validation evidence, plan deviations, and known risks
 or limitations.
 
+Assigned agents write these structured engineering records directly using
+their separate scoped Forgejo identities. Commitarium shows their full explicit
+conversation in its own interface, but neither the agents nor the coordinator
+copy that conversation into the pull request. The coordinator verifies the
+resulting branch, revision, and review state before advancing the workflow.
+
 ### 6. Agent review
 
 The reviewer evaluates the internal pull request with access to:

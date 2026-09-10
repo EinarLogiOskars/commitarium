@@ -412,64 +412,6 @@ func TestClientAdoptsPreviouslyPublishedPlan(t *testing.T) {
 	}
 }
 
-func TestClientPublishesAndAdoptsImplementationRevision(t *testing.T) {
-	commitID := "abcdefabcdefabcdefabcdefabcdefabcdefabcd"
-	spec := workspace.RevisionPublicationSpec{
-		Number: 7, FeatureMarker: "<!-- commitarium-feature: fea_test -->",
-		PublicationMarker: "<!-- commitarium-revision: stable-revision -->",
-		CommitID:          commitID, CommitMessage: "feat: publish implementation",
-		BaseBranch: "main", HeadBranch: "commitarium/fea_test",
-	}
-	stored := managedPullRequest(testPullRequestSpec())
-	stored.HeadCommitID = commitID
-	calls := 0
-	client := newBranchTestClient(t, func(request *http.Request) (*http.Response, error) {
-		calls++
-		switch calls {
-		case 1:
-			return pullRequestJSONResponse(t, http.StatusOK, stored), nil
-		case 2:
-			if request.Method != http.MethodPatch {
-				t.Fatalf("expected revision PATCH, got %s", request.Method)
-			}
-			var payload struct {
-				Body string `json:"body"`
-			}
-			if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
-				t.Fatalf("decode revision body: %v", err)
-			}
-			if !strings.Contains(payload.Body, spec.PublicationMarker) ||
-				!strings.Contains(payload.Body, "## Implementation revision") ||
-				!strings.Contains(payload.Body, commitID) {
-				t.Fatalf("revision audit entry is incomplete: %q", payload.Body)
-			}
-			stored.Body = payload.Body
-			return pullRequestJSONResponse(t, http.StatusCreated, stored), nil
-		case 3:
-			if request.Method != http.MethodGet {
-				t.Fatalf("retry unexpectedly used %s", request.Method)
-			}
-			return pullRequestJSONResponse(t, http.StatusOK, stored), nil
-		default:
-			t.Fatalf("unexpected revision request %d", calls)
-			return nil, nil
-		}
-	})
-
-	updated, published, err := client.EnsurePullRequestRevision(
-		t.Context(), "owner", "repository", spec,
-	)
-	if err != nil || !published || !strings.Contains(updated.Body, spec.PublicationMarker) {
-		t.Fatalf("publish revision: published=%t pull_request=%+v err=%v", published, updated, err)
-	}
-	replayed, published, err := client.EnsurePullRequestRevision(
-		t.Context(), "owner", "repository", spec,
-	)
-	if err != nil || published || replayed.Body != stored.Body || calls != 3 {
-		t.Fatalf("adopt revision: published=%t calls=%d pull_request=%+v err=%v", published, calls, replayed, err)
-	}
-}
-
 func TestClientVerifiesPublishedPlanWithoutUpdatingPullRequest(t *testing.T) {
 	spec := testPlanPublicationSpec()
 	stored := managedPullRequest(testPullRequestSpec())

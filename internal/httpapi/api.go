@@ -113,12 +113,6 @@ type RealWorkflowStarter interface {
 		runID string,
 		idempotencyKey string,
 	) (execution.Run, bool, error)
-	PublishImplementation(
-		ctx context.Context,
-		runID string,
-		idempotencyKey string,
-		commitMessage string,
-	) (workspace.Publication, bool, error)
 }
 
 type API struct {
@@ -251,7 +245,6 @@ func newAPI(
 		mux.HandleFunc("POST /api/v1/runs/{id}/planning/reviewer", api.startPlanningReviewHandler)
 		mux.HandleFunc("POST /api/v1/runs/{id}/planning/round", api.startPlanningRoundHandler)
 		mux.HandleFunc("POST /api/v1/runs/{id}/implementation", api.startImplementationHandler)
-		mux.HandleFunc("POST /api/v1/runs/{id}/implementation/commit", api.publishImplementationHandler)
 	}
 	mux.HandleFunc("GET /api/v1/runs/{id}", api.getRunHandler)
 	mux.HandleFunc("GET /api/v1/runs/{id}/planning/messages", api.getPlanningMessagesHandler)
