@@ -230,7 +230,10 @@ with the same idempotency key returns the original run without launching a
 duplicate.
 
 See [Coordinator API](docs/coordinator-api.md) for the complete route list,
-streaming endpoints, and session controls.
+streaming endpoints, and session controls. UI work should also follow the
+[UI/backend implementation status](docs/ui-backend-status.md), which separates
+settled public behavior from backend work that is still changing or only
+planned.
 
 ## Smoke-test the real Codex worker
 
