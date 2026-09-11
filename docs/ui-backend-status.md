@@ -52,6 +52,8 @@ Safe UI capabilities:
 - Display the effective recovery policy returned on a project.
 - Display and edit the project's planning and implementation-review round
   limits through `PUT /api/v1/projects/{projectID}/dialogue-limits`.
+- Display and edit independent `codex` or `claude` lead/reviewer choices through
+  `PUT /api/v1/projects/{projectID}/agent-providers`.
 - Treat `0` as unlimited and positive values as complete two-agent rounds.
 - Bind and display one permanent internal Forgejo repository through
   `PUT /api/v1/projects/{projectID}/forgejo-repository`.
@@ -66,6 +68,12 @@ the source path. Send only the portable metadata and bundle documented in the
 Coordinator API. Keep one generated `importID` for exact retries; generate a new
 one for a genuinely new import. The coordinator never accepts or returns the
 host path and never imports uncommitted files.
+
+Project creation and import may omit `agent_providers` to receive the
+Codex/Codex default. When present, both `lead` and `reviewer` are required and
+each accepts `codex` or `claude`. Project and run responses always expose the
+effective pair. An active run uses its immutable copy even after project
+settings change.
 
 Project creation may omit `dialogue_limits` to receive the six-round defaults.
 If supplied, the object contains both `planning_rounds` and
@@ -156,8 +164,6 @@ next backend slice will be moved here before its public surface changes.
 
 ### Near-term MVP backend
 
-- Lead and reviewer provider selection and coordinator routing, including
-  Codex/Codex, Codex/Claude, Claude/Codex, and Claude/Claude assignments.
 - Final Forgejo merge policy and action: require user approval or merge
   automatically after every gate passes.
 - Clear notification data for a feature that merged automatically or is

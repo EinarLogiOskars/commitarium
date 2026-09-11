@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/EinarLogiOskars/commitarium/internal/project"
 	"github.com/EinarLogiOskars/commitarium/internal/worker"
 )
 
@@ -26,6 +27,7 @@ type Run struct {
 	Reason                         string
 	PlanningRoundLimit             int
 	ImplementationReviewRoundLimit int
+	AgentProviders                 project.AgentProviders
 	StartedAt                      time.Time
 	UpdatedAt                      time.Time
 	EndedAt                        *time.Time
@@ -169,6 +171,8 @@ func (run Run) Validate() error {
 		return fmt.Errorf("%w: planning round limit cannot be negative", ErrInvalidRun)
 	case run.ImplementationReviewRoundLimit < 0:
 		return fmt.Errorf("%w: implementation review round limit cannot be negative", ErrInvalidRun)
+	case run.AgentProviders.Validate() != nil:
+		return fmt.Errorf("%w: agent providers are invalid", ErrInvalidRun)
 	case run.StartedAt.IsZero():
 		return fmt.Errorf("%w: start time is required", ErrInvalidRun)
 	case run.UpdatedAt.Before(run.StartedAt):

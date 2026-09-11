@@ -14,6 +14,7 @@ this API beyond the host loopback interface is unsupported.
 | `GET` | `/api/v1/projects` | List projects for switching/selecting |
 | `GET` | `/api/v1/projects/{projectID}` | Retrieve a project |
 | `PUT` | `/api/v1/projects/{projectID}/dialogue-limits` | Replace planning and implementation-review round limits |
+| `PUT` | `/api/v1/projects/{projectID}/agent-providers` | Select the lead and reviewer providers for future runs |
 | `PUT` | `/api/v1/projects/{projectID}/forgejo-repository` | Verify and bind the project's internal repository |
 | `POST` | `/api/v1/projects/{projectID}/features` | Create a draft feature |
 | `GET` | `/api/v1/projects/{projectID}/features` | List the project's features by recent activity |
@@ -96,6 +97,37 @@ it starts. A later project update therefore affects only new runs. Run retrieval
 returns that immutable snapshot in the same `dialogue_limits` shape, including
 after a coordinator restart.
 
+Projects also choose the provider for each independent role. Both fields are
+required when `agent_providers` is supplied; omitting the object defaults both
+roles to Codex:
+
+```json
+{
+  "name": "Example",
+  "agent_providers": {
+    "lead": "codex",
+    "reviewer": "claude"
+  }
+}
+```
+
+Each value is either `codex` or `claude`, and any combination is valid. Replace
+both choices for future runs with:
+
+```http
+PUT /api/v1/projects/prj_example/agent-providers
+Content-Type: application/json
+
+{"lead":"claude","reviewer":"codex"}
+```
+
+The response is the complete updated project. Missing or unknown values return
+`400 invalid_agent_providers`; an unknown project returns
+`404 project_not_found`. Every run copies both choices when it starts, just as
+it copies the dialogue limits. Later project edits therefore cannot move an
+active or recovering conversation to another provider, profile, or billing
+mode. Run and project responses expose the effective `agent_providers` object.
+
 ## Projects and Forgejo repositories
 
 `GET /api/v1/projects` returns all projects ordered by creation time and then
@@ -121,14 +153,19 @@ metadata = {
   "dialogue_limits": {
     "planning_rounds": 6,
     "implementation_review_rounds": 6
+  },
+  "agent_providers": {
+    "lead": "codex",
+    "reviewer": "claude"
   }
 }
 bundle = <Git bundle file>
 ```
 
 The request must contain exactly one text field named `metadata` and one file
-field named `bundle`. `recovery_policy` and `dialogue_limits` have the same
-defaults and validation as ordinary project creation. `default_branch` is
+field named `bundle`. `recovery_policy`, `dialogue_limits`, and
+`agent_providers` have the same defaults and validation as ordinary project
+creation. `default_branch` is
 required and must exist in the bundle. The entire multipart request is limited
 to 512 MiB.
 
@@ -187,6 +224,10 @@ includes:
   "dialogue_limits": {
     "planning_rounds": 6,
     "implementation_review_rounds": 6
+  },
+  "agent_providers": {
+    "lead": "codex",
+    "reviewer": "claude"
   },
   "forgejo_repository": {
     "owner": "commitarium",
@@ -374,6 +415,10 @@ A successful response is `202 Accepted` and points to the run resource:
     "planning_rounds": 6,
     "implementation_review_rounds": 6
   },
+  "agent_providers": {
+    "lead": "codex",
+    "reviewer": "claude"
+  },
   "started_at": "2026-09-08T17:30:36Z",
   "updated_at": "2026-09-08T17:30:36Z",
   "sessions": []
@@ -391,8 +436,9 @@ includes one `changes_requested` review, one corrective coder session, and a
 final approving review.
 
 Setting `COMMITARIUM_RUNNER_MODE=real_codex_lead` connects this endpoint to the
-real Codex worker configured by `COMMITARIUM_CODEX_WORKER_URL`,
-`COMMITARIUM_CODEX_WORKER_TOKEN`, and `COMMITARIUM_CODEX_PROFILE_ID`. The project
+real worker path. The historical mode name remains for compatibility, but each
+role is routed to the Codex or Claude worker selected in the run snapshot. Start
+both real Compose profiles when projects may select either provider. The project
 must already have a Forgejo repository binding. This opt-in mode prepares the
 feature's selected-project checkout and runs a persistent read-only lead
 conversation there to clarify the goal. Each response is visible through the

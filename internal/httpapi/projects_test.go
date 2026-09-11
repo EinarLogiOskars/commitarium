@@ -41,6 +41,7 @@ type recordingProjectService struct {
 	receivedName           string
 	receivedRecoveryPolicy project.RecoveryPolicy
 	receivedDialogueLimits project.DialogueLimits
+	receivedAgentProviders project.AgentProviders
 	result                 project.Project
 	err                    error
 
@@ -75,12 +76,24 @@ func (s *recordingProjectService) Create(
 	name string,
 	recoveryPolicy project.RecoveryPolicy,
 	dialogueLimits project.DialogueLimits,
+	agentProviders project.AgentProviders,
 ) (project.Project, error) {
 	s.calls++
 	s.receivedName = name
 	s.receivedRecoveryPolicy = recoveryPolicy
 	s.receivedDialogueLimits = dialogueLimits
+	s.receivedAgentProviders = agentProviders
 	return s.result, s.err
+}
+
+func (s *recordingProjectService) UpdateAgentProviders(
+	_ context.Context,
+	projectID string,
+	providers project.AgentProviders,
+) (project.Project, error) {
+	s.updateProjectID = projectID
+	s.receivedAgentProviders = providers
+	return s.updateResult, s.updateErr
 }
 
 func (s *recordingProjectService) UpdateDialogueLimits(
@@ -165,6 +178,7 @@ func TestImportProject(t *testing.T) {
 	}
 	if service.importSpec.ImportID != "desktop-1" || service.importSpec.Name != "Commitarium" ||
 		service.importSpec.DefaultBranch != "main" || service.importSpec.DialogueLimits != project.DefaultDialogueLimits() ||
+		service.importSpec.AgentProviders != project.DefaultAgentProviders() ||
 		service.importBundle != "git bundle bytes" {
 		t.Fatalf("unexpected import request spec=%+v bundle=%q", service.importSpec, service.importBundle)
 	}
@@ -307,6 +321,9 @@ func TestCreateProject(t *testing.T) {
 	if service.receivedDialogueLimits != project.DefaultDialogueLimits() {
 		t.Errorf("expected default dialogue limits, got %+v", service.receivedDialogueLimits)
 	}
+	if service.receivedAgentProviders != project.DefaultAgentProviders() {
+		t.Errorf("expected default agent providers, got %+v", service.receivedAgentProviders)
+	}
 
 	if response.ID != service.result.ID {
 		t.Errorf("expected response ID %v, got %v", service.result.ID, response.ID)
@@ -324,6 +341,35 @@ func TestCreateProject(t *testing.T) {
 
 	if response.CreatedAt != service.result.CreatedAt {
 		t.Errorf("expected response CreatedAt %v, got %v", service.result.CreatedAt, response.CreatedAt)
+	}
+}
+
+func TestCreateProjectAcceptsIndependentAgentProviders(t *testing.T) {
+	want := project.AgentProviders{
+		Lead: project.AgentProviderClaude, Reviewer: project.AgentProviderCodex,
+	}
+	service := &recordingProjectService{result: project.Project{
+		ID: "prj_test", Name: "Commitarium", AgentProviders: want, CreatedAt: time.Now().UTC(),
+	}}
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/api/v1/projects",
+		strings.NewReader(`{"name":"Commitarium","agent_providers":{"lead":"claude","reviewer":"codex"}}`),
+	)
+	recorder := httptest.NewRecorder()
+	New(service, nil, nil, nil, nil, nil).ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("status = %d: %s", recorder.Code, recorder.Body.String())
+	}
+	if service.receivedAgentProviders != want {
+		t.Fatalf("received providers = %+v, want %+v", service.receivedAgentProviders, want)
+	}
+	var response projectResponse
+	if err := json.NewDecoder(recorder.Body).Decode(&response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if response.AgentProviders.Lead != want.Lead || response.AgentProviders.Reviewer != want.Reviewer {
+		t.Fatalf("response providers = %+v", response.AgentProviders)
 	}
 }
 
@@ -412,6 +458,42 @@ func TestUpdateProjectDialogueLimitsRejectsInvalidValues(t *testing.T) {
 		if service.updateProjectID != "" {
 			t.Fatalf("body %s reached service", body)
 		}
+	}
+}
+
+func TestUpdateProjectAgentProviders(t *testing.T) {
+	want := project.AgentProviders{
+		Lead: project.AgentProviderCodex, Reviewer: project.AgentProviderClaude,
+	}
+	service := &recordingProjectService{updateResult: project.Project{
+		ID: "prj_test", Name: "Commitarium", AgentProviders: want, CreatedAt: time.Now().UTC(),
+	}}
+	request := httptest.NewRequest(
+		http.MethodPut,
+		"/api/v1/projects/prj_test/agent-providers",
+		strings.NewReader(`{"lead":"codex","reviewer":"claude"}`),
+	)
+	recorder := httptest.NewRecorder()
+	New(service, nil, nil, nil, nil, nil).ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", recorder.Code, recorder.Body.String())
+	}
+	if service.updateProjectID != "prj_test" || service.receivedAgentProviders != want {
+		t.Fatalf("updated project=%q providers=%+v", service.updateProjectID, service.receivedAgentProviders)
+	}
+}
+
+func TestUpdateProjectAgentProvidersRejectsIncompleteAssignment(t *testing.T) {
+	service := &recordingProjectService{}
+	request := httptest.NewRequest(
+		http.MethodPut,
+		"/api/v1/projects/prj_test/agent-providers",
+		strings.NewReader(`{"lead":"codex"}`),
+	)
+	recorder := httptest.NewRecorder()
+	New(service, nil, nil, nil, nil, nil).ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d: %s", recorder.Code, recorder.Body.String())
 	}
 }
 

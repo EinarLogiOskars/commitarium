@@ -7,6 +7,7 @@ type Project struct {
 	Name              string
 	RecoveryPolicy    RecoveryPolicy
 	DialogueLimits    DialogueLimits
+	AgentProviders    AgentProviders
 	ForgejoRepository *ForgejoRepository
 	CreatedAt         time.Time
 }

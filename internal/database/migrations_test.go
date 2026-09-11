@@ -145,6 +145,9 @@ func TestRecoveryMigrationPreservesExistingExecutionRecords(t *testing.T) {
 	if storedProject.DialogueLimits != project.DefaultDialogueLimits() {
 		t.Fatalf("unexpected migrated project dialogue limits %+v", storedProject.DialogueLimits)
 	}
+	if storedProject.AgentProviders != project.DefaultAgentProviders() {
+		t.Fatalf("unexpected migrated project agent providers %+v", storedProject.AgentProviders)
+	}
 	storedRun, err := NewExecutionStore(db).GetRun(t.Context(), "run_old")
 	if err != nil {
 		t.Fatalf("get migrated run: %v", err)
@@ -152,6 +155,9 @@ func TestRecoveryMigrationPreservesExistingExecutionRecords(t *testing.T) {
 	if storedRun.PlanningRoundLimit != project.DefaultDialogueRoundLimit ||
 		storedRun.ImplementationReviewRoundLimit != project.DefaultDialogueRoundLimit {
 		t.Fatalf("unexpected migrated run dialogue limits %+v", storedRun)
+	}
+	if storedRun.AgentProviders != project.DefaultAgentProviders() {
+		t.Fatalf("unexpected migrated run agent providers %+v", storedRun.AgentProviders)
 	}
 	storedSession, err := NewExecutionStore(db).GetSession(t.Context(), "ses_old")
 	if err != nil {

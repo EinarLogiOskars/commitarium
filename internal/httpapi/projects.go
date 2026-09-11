@@ -18,6 +18,7 @@ type createProjectRequest struct {
 	Name           string                 `json:"name"`
 	RecoveryPolicy project.RecoveryPolicy `json:"recovery_policy"`
 	DialogueLimits *dialogueLimitsRequest `json:"dialogue_limits"`
+	AgentProviders *agentProvidersRequest `json:"agent_providers"`
 }
 
 type projectResponse struct {
@@ -25,6 +26,7 @@ type projectResponse struct {
 	Name              string                     `json:"name"`
 	RecoveryPolicy    project.RecoveryPolicy     `json:"recovery_policy"`
 	DialogueLimits    dialogueLimitsResponse     `json:"dialogue_limits"`
+	AgentProviders    agentProvidersResponse     `json:"agent_providers"`
 	ForgejoRepository *forgejoRepositoryResponse `json:"forgejo_repository,omitempty"`
 	CreatedAt         time.Time                  `json:"created_at"`
 }
@@ -37,6 +39,16 @@ type dialogueLimitsRequest struct {
 type dialogueLimitsResponse struct {
 	PlanningRounds             int `json:"planning_rounds"`
 	ImplementationReviewRounds int `json:"implementation_review_rounds"`
+}
+
+type agentProvidersRequest struct {
+	Lead     *project.AgentProvider `json:"lead"`
+	Reviewer *project.AgentProvider `json:"reviewer"`
+}
+
+type agentProvidersResponse struct {
+	Lead     project.AgentProvider `json:"lead"`
+	Reviewer project.AgentProvider `json:"reviewer"`
 }
 
 type forgejoRepositoryResponse struct {
@@ -55,6 +67,7 @@ type importProjectMetadata struct {
 	Name           string                 `json:"name"`
 	RecoveryPolicy project.RecoveryPolicy `json:"recovery_policy"`
 	DialogueLimits *dialogueLimitsRequest `json:"dialogue_limits"`
+	AgentProviders *agentProvidersRequest `json:"agent_providers"`
 	DefaultBranch  string                 `json:"default_branch"`
 }
 
@@ -91,6 +104,11 @@ func (api *API) importProjectHandler(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_dialogue_limits", "dialogue_limits must include non-negative planning_rounds and implementation_review_rounds; zero means unlimited")
 		return
 	}
+	agentProviders, err := decodeAgentProviders(metadata.AgentProviders, true)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_agent_providers", "agent_providers must include lead and reviewer set to codex or claude")
+		return
+	}
 	bundle, err := r.MultipartForm.File["bundle"][0].Open()
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_git_bundle", "Git bundle cannot be read")
@@ -100,7 +118,8 @@ func (api *API) importProjectHandler(w http.ResponseWriter, r *http.Request) {
 	imported, created, err := api.projectImporter.Import(r.Context(), project.ImportSpec{
 		ImportID: r.PathValue("importID"), Name: metadata.Name,
 		RecoveryPolicy: metadata.RecoveryPolicy, DialogueLimits: limits,
-		DefaultBranch: metadata.DefaultBranch,
+		AgentProviders: agentProviders,
+		DefaultBranch:  metadata.DefaultBranch,
 	}, bundle)
 	if err != nil {
 		switch {
@@ -112,6 +131,8 @@ func (api *API) importProjectHandler(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "invalid_recovery_policy", "recovery_policy must be approval_required or automatic")
 		case errors.Is(err, project.ErrInvalidDialogueLimits):
 			writeError(w, http.StatusBadRequest, "invalid_dialogue_limits", "dialogue limits must be non-negative; zero means unlimited")
+		case errors.Is(err, project.ErrInvalidAgentProviders):
+			writeError(w, http.StatusBadRequest, "invalid_agent_providers", "lead and reviewer providers must be codex or claude")
 		case errors.Is(err, project.ErrInvalidDefaultBranch):
 			writeError(w, http.StatusBadRequest, "invalid_default_branch", "default_branch must be a valid Git branch name")
 		case errors.Is(err, project.ErrInvalidGitBundle):
@@ -170,12 +191,18 @@ func (api *API) createProjectHandler(
 		)
 		return
 	}
+	agentProviders, err := decodeAgentProviders(request.AgentProviders, true)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_agent_providers", "agent_providers must include lead and reviewer set to codex or claude")
+		return
+	}
 
 	createdProject, err := api.projects.Create(
 		r.Context(),
 		request.Name,
 		request.RecoveryPolicy,
 		dialogueLimits,
+		agentProviders,
 	)
 	if err != nil {
 		if errors.Is(err, project.ErrNameRequired) {
@@ -205,6 +232,10 @@ func (api *API) createProjectHandler(
 			)
 			return
 		}
+		if errors.Is(err, project.ErrInvalidAgentProviders) {
+			writeError(w, http.StatusBadRequest, "invalid_agent_providers", "lead and reviewer providers must be codex or claude")
+			return
+		}
 		log.Printf("create project: %v", err)
 		writeError(
 			w,
@@ -225,6 +256,51 @@ func (api *API) createProjectHandler(
 	if err := json.NewEncoder(w).Encode(newProjectResponse(createdProject)); err != nil {
 		log.Printf("encode project response: %v", err)
 	}
+}
+
+func (api *API) updateProjectAgentProvidersHandler(w http.ResponseWriter, r *http.Request) {
+	request := agentProvidersRequest{}
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&request); err != nil || ensureJSONEOF(decoder) != nil {
+		writeError(w, http.StatusBadRequest, "invalid_json", "request body must contain exactly one valid JSON object with no unknown fields")
+		return
+	}
+	providers, err := decodeAgentProviders(&request, false)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_agent_providers", "request must include lead and reviewer set to codex or claude")
+		return
+	}
+	updated, err := api.projects.UpdateAgentProviders(r.Context(), r.PathValue("id"), providers)
+	if err != nil {
+		switch {
+		case errors.Is(err, project.ErrNotFound):
+			writeError(w, http.StatusNotFound, "project_not_found", "project not found")
+		case errors.Is(err, project.ErrInvalidAgentProviders):
+			writeError(w, http.StatusBadRequest, "invalid_agent_providers", "lead and reviewer providers must be codex or claude")
+		default:
+			log.Printf("update project agent providers %q: %v", r.PathValue("id"), err)
+			writeError(w, http.StatusInternalServerError, "internal_error", "internal server error")
+		}
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(newProjectResponse(updated)); err != nil {
+		log.Printf("encode project response: %v", err)
+	}
+}
+
+func decodeAgentProviders(
+	request *agentProvidersRequest,
+	useDefaultsWhenOmitted bool,
+) (project.AgentProviders, error) {
+	if request == nil && useDefaultsWhenOmitted {
+		return project.DefaultAgentProviders(), nil
+	}
+	if request == nil || request.Lead == nil || request.Reviewer == nil {
+		return project.AgentProviders{}, project.ErrInvalidAgentProviders
+	}
+	return project.AgentProviders{Lead: *request.Lead, Reviewer: *request.Reviewer}.Normalize()
 }
 
 func (api *API) updateProjectDialogueLimitsHandler(w http.ResponseWriter, r *http.Request) {
@@ -373,12 +449,19 @@ func (api *API) bindForgejoRepositoryHandler(w http.ResponseWriter, r *http.Requ
 }
 
 func newProjectResponse(storedProject project.Project) projectResponse {
+	agentProviders, err := storedProject.AgentProviders.Normalize()
+	if err != nil {
+		agentProviders = storedProject.AgentProviders
+	}
 	response := projectResponse{
 		ID: storedProject.ID, Name: storedProject.Name,
 		RecoveryPolicy: storedProject.RecoveryPolicy,
 		DialogueLimits: dialogueLimitsResponse{
 			PlanningRounds:             storedProject.DialogueLimits.PlanningRounds,
 			ImplementationReviewRounds: storedProject.DialogueLimits.ImplementationReviewRounds,
+		},
+		AgentProviders: agentProvidersResponse{
+			Lead: agentProviders.Lead, Reviewer: agentProviders.Reviewer,
 		},
 		CreatedAt: storedProject.CreatedAt,
 	}

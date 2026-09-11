@@ -287,7 +287,9 @@ func TestRunnerAutomaticallyRecoversConsistentSession(t *testing.T) {
 func TestRunnerRecoversInterruptionBetweenSessionsWithoutApproval(t *testing.T) {
 	workflowService, _, executionService := orchestrationDatabase(t)
 	runID := "run_recovery_between_sessions"
-	if _, _, err := executionService.CreateRun(t.Context(), runID, "fea_test", 2, 3); err != nil {
+	if _, _, err := executionService.CreateRun(
+		t.Context(), runID, "fea_test", 2, 3, project.DefaultAgentProviders(),
+	); err != nil {
 		t.Fatalf("create interrupted run: %v", err)
 	}
 	runner := NewRunner(workflowService, executionService, NewActiveSessions())
@@ -362,7 +364,9 @@ func TestAutomaticRecoveryStopsForUncertainCommandDelivery(t *testing.T) {
 func TestRecoveryDoesNotReplaceSessionWithUnconfirmedProviderIdentity(t *testing.T) {
 	workflowService, _, executionService := orchestrationDatabase(t)
 	runID := "run_recovery_missing_provider"
-	if _, _, err := executionService.CreateRun(t.Context(), runID, "fea_test", 2, 3); err != nil {
+	if _, _, err := executionService.CreateRun(
+		t.Context(), runID, "fea_test", 2, 3, project.DefaultAgentProviders(),
+	); err != nil {
 		t.Fatalf("create interrupted run: %v", err)
 	}
 	if _, err := workflowService.TransitionFeature(
@@ -515,6 +519,7 @@ func TestRunnerRejectsDuplicateActiveRun(t *testing.T) {
 		"fea_test",
 		2,
 		1,
+		project.DefaultAgentProviders(),
 	); err != nil {
 		t.Fatalf("create active run: %v", err)
 	} else if !created {
@@ -714,7 +719,9 @@ func seedInterruptedConsultant(
 	runID string,
 ) {
 	t.Helper()
-	if _, _, err := executionService.CreateRun(t.Context(), runID, "fea_test", 2, 3); err != nil {
+	if _, _, err := executionService.CreateRun(
+		t.Context(), runID, "fea_test", 2, 3, project.DefaultAgentProviders(),
+	); err != nil {
 		t.Fatalf("create interrupted run: %v", err)
 	}
 	if _, err := workflowService.TransitionFeature(

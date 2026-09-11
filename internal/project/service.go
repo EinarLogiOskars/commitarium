@@ -116,7 +116,8 @@ func (s *Service) Import(ctx context.Context, spec ImportSpec, bundle io.Reader)
 	}
 	created := Project{
 		ID: projectID, Name: normalized.Name, RecoveryPolicy: normalized.RecoveryPolicy,
-		DialogueLimits: normalized.DialogueLimits, ForgejoRepository: &repository, CreatedAt: s.now().UTC(),
+		DialogueLimits: normalized.DialogueLimits, AgentProviders: normalized.AgentProviders,
+		ForgejoRepository: &repository, CreatedAt: s.now().UTC(),
 	}
 	if err := s.store.Create(ctx, created); err != nil {
 		if errors.Is(err, ErrAlreadyExists) {
@@ -146,6 +147,7 @@ func (s *Service) Create(
 	name string,
 	recoveryPolicy RecoveryPolicy,
 	dialogueLimits DialogueLimits,
+	agentProviders AgentProviders,
 ) (Project, error) {
 	sanitizedName := strings.TrimSpace(name)
 
@@ -160,12 +162,17 @@ func (s *Service) Create(
 	if err := dialogueLimits.Validate(); err != nil {
 		return Project{}, err
 	}
+	agentProviders, err = agentProviders.Normalize()
+	if err != nil {
+		return Project{}, err
+	}
 
 	project := Project{
 		ID:             s.generateID(),
 		Name:           sanitizedName,
 		RecoveryPolicy: policy,
 		DialogueLimits: dialogueLimits,
+		AgentProviders: agentProviders,
 		CreatedAt:      s.now(),
 	}
 
@@ -174,6 +181,22 @@ func (s *Service) Create(
 	}
 
 	return project, nil
+}
+
+func (s *Service) UpdateAgentProviders(
+	ctx context.Context,
+	projectID string,
+	providers AgentProviders,
+) (Project, error) {
+	normalized, err := providers.Normalize()
+	if err != nil {
+		return Project{}, err
+	}
+	updated, err := s.store.UpdateAgentProviders(ctx, projectID, normalized)
+	if err != nil {
+		return Project{}, fmt.Errorf("update agent providers for project %q: %w", projectID, err)
+	}
+	return updated, nil
 }
 
 func (s *Service) UpdateDialogueLimits(

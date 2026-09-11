@@ -22,11 +22,22 @@ type recordingStore struct {
 	updatedLimits    DialogueLimits
 	updateResult     Project
 	updateErr        error
+	updatedProviders AgentProviders
 
 	boundProjectID  string
 	boundRepository ForgejoRepository
 	bindResult      Project
 	bindErr         error
+}
+
+func (s *recordingStore) UpdateAgentProviders(
+	_ context.Context,
+	projectID string,
+	providers AgentProviders,
+) (Project, error) {
+	s.updatedProjectID = projectID
+	s.updatedProviders = providers
+	return s.updateResult, s.updateErr
 }
 
 func (s *recordingStore) Create(
@@ -103,7 +114,7 @@ func TestServiceCreate(t *testing.T) {
 	}
 
 	limits := DefaultDialogueLimits()
-	project, err := service.Create(t.Context(), "   Commitarium   ", "", limits)
+	project, err := service.Create(t.Context(), "   Commitarium   ", "", limits, DefaultAgentProviders())
 
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -121,6 +132,9 @@ func TestServiceCreate(t *testing.T) {
 	}
 	if project.DialogueLimits != limits {
 		t.Errorf("expected dialogue limits %+v, got %+v", limits, project.DialogueLimits)
+	}
+	if project.AgentProviders != DefaultAgentProviders() {
+		t.Errorf("expected default agent providers, got %+v", project.AgentProviders)
 	}
 
 	if !project.CreatedAt.Equal(fixedTime) {
@@ -142,6 +156,7 @@ func TestServiceCreateAcceptsAutomaticRecovery(t *testing.T) {
 
 	created, err := service.Create(
 		t.Context(), "Commitarium", RecoveryPolicyAutomatic, DefaultDialogueLimits(),
+		DefaultAgentProviders(),
 	)
 	if err != nil {
 		t.Fatalf("create project: %v", err)
@@ -157,6 +172,7 @@ func TestServiceCreateRejectsInvalidRecoveryPolicy(t *testing.T) {
 
 	_, err := service.Create(
 		t.Context(), "Commitarium", RecoveryPolicy("reckless"), DefaultDialogueLimits(),
+		DefaultAgentProviders(),
 	)
 	if !errors.Is(err, ErrInvalidRecoveryPolicy) {
 		t.Fatalf("expected error %v, got %v", ErrInvalidRecoveryPolicy, err)
@@ -170,7 +186,7 @@ func TestServiceCreateRejectsBlankName(t *testing.T) {
 	store := &recordingStore{}
 	service := NewService(store)
 
-	_, err := service.Create(t.Context(), " ", "", DefaultDialogueLimits())
+	_, err := service.Create(t.Context(), " ", "", DefaultDialogueLimits(), DefaultAgentProviders())
 
 	if !errors.Is(err, ErrNameRequired) {
 		t.Fatalf("expected error %v, got %v", ErrNameRequired, err)
@@ -186,7 +202,7 @@ func TestServiceCreateReturnsStoreError(t *testing.T) {
 
 	service := NewService(store)
 
-	project, err := service.Create(t.Context(), "Commitarium", "", DefaultDialogueLimits())
+	project, err := service.Create(t.Context(), "Commitarium", "", DefaultDialogueLimits(), DefaultAgentProviders())
 
 	if !errors.Is(err, storeError) {
 		t.Fatalf("expected error %v, got %v", storeError, err)

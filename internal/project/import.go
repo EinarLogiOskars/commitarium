@@ -30,6 +30,7 @@ type ImportSpec struct {
 	Name           string
 	RecoveryPolicy RecoveryPolicy
 	DialogueLimits DialogueLimits
+	AgentProviders AgentProviders
 	DefaultBranch  string
 }
 
@@ -73,6 +74,11 @@ func normalizeImportSpec(spec ImportSpec) (ImportSpec, error) {
 	if err := spec.DialogueLimits.Validate(); err != nil {
 		return ImportSpec{}, err
 	}
+	providers, err := spec.AgentProviders.Normalize()
+	if err != nil {
+		return ImportSpec{}, err
+	}
+	spec.AgentProviders = providers
 	if spec.DefaultBranch == "" || strings.ContainsAny(spec.DefaultBranch, " ~^:?*[\\") ||
 		strings.HasPrefix(spec.DefaultBranch, "-") || strings.HasPrefix(spec.DefaultBranch, ".") ||
 		strings.HasSuffix(spec.DefaultBranch, "/") || strings.HasSuffix(spec.DefaultBranch, ".") ||
@@ -139,6 +145,7 @@ func writeImportBundle(bundle io.Reader) (string, string, error) {
 func sameImportedProject(stored Project, spec ImportSpec, repository ForgejoRepository) bool {
 	return stored.ID == projectImportID(spec.ImportID) && stored.Name == spec.Name &&
 		stored.RecoveryPolicy == spec.RecoveryPolicy && stored.DialogueLimits == spec.DialogueLimits &&
+		stored.AgentProviders == spec.AgentProviders &&
 		stored.ForgejoRepository != nil &&
 		sameRepositoryCoordinate(*stored.ForgejoRepository, repository.Owner, repository.Name) &&
 		stored.ForgejoRepository.DefaultBranch == repository.DefaultBranch

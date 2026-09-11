@@ -17,6 +17,7 @@ func TestProjectStoreCreateAndGetByID(t *testing.T) {
 		Name:           "Commitarium",
 		RecoveryPolicy: project.RecoveryPolicyApprovalRequired,
 		DialogueLimits: project.DialogueLimits{PlanningRounds: 0, ImplementationReviewRounds: 4},
+		AgentProviders: project.DefaultAgentProviders(),
 		CreatedAt: time.Date(
 			2026,
 			time.September,
@@ -48,6 +49,7 @@ func TestProjectStoreUpdatesDialogueLimits(t *testing.T) {
 	created := project.Project{
 		ID: "prj_test", Name: "Commitarium",
 		RecoveryPolicy: project.RecoveryPolicyApprovalRequired,
+		AgentProviders: project.DefaultAgentProviders(),
 		DialogueLimits: project.DefaultDialogueLimits(),
 		CreatedAt:      time.Now().UTC(),
 	}
@@ -75,12 +77,37 @@ func TestProjectStoreUpdatesDialogueLimits(t *testing.T) {
 	}
 }
 
+func TestProjectStoreUpdatesAgentProviders(t *testing.T) {
+	store := newTestProjectStore(t)
+	created := project.Project{
+		ID: "prj_agents", Name: "Agent choices", CreatedAt: time.Now().UTC(),
+		AgentProviders: project.DefaultAgentProviders(),
+	}
+	if err := store.Create(t.Context(), created); err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	want := project.AgentProviders{
+		Lead: project.AgentProviderClaude, Reviewer: project.AgentProviderCodex,
+	}
+	updated, err := store.UpdateAgentProviders(t.Context(), created.ID, want)
+	if err != nil {
+		t.Fatalf("update agent providers: %v", err)
+	}
+	if updated.AgentProviders != want {
+		t.Fatalf("agent providers = %+v, want %+v", updated.AgentProviders, want)
+	}
+	if _, err := store.UpdateAgentProviders(t.Context(), "prj_missing", want); !errors.Is(err, project.ErrNotFound) {
+		t.Fatalf("missing project error = %v", err)
+	}
+}
+
 func TestProjectStoreCreateRejectsDuplicateID(t *testing.T) {
 	store := newTestProjectStore(t)
 	original := project.Project{
 		ID:             "prj_same",
 		Name:           "Original",
 		RecoveryPolicy: project.RecoveryPolicyApprovalRequired,
+		AgentProviders: project.DefaultAgentProviders(),
 		CreatedAt:      time.Date(2026, time.September, 8, 12, 0, 0, 0, time.UTC),
 	}
 

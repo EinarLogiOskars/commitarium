@@ -28,6 +28,11 @@ func (s *MemoryStore) Create(
 	if err := createdProject.DialogueLimits.Validate(); err != nil {
 		return err
 	}
+	providers, err := createdProject.AgentProviders.Normalize()
+	if err != nil {
+		return err
+	}
+	createdProject.AgentProviders = providers
 	createdProject.RecoveryPolicy = policy
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -38,6 +43,27 @@ func (s *MemoryStore) Create(
 
 	s.projects[createdProject.ID] = cloneProject(createdProject)
 	return nil
+}
+
+func (s *MemoryStore) UpdateAgentProviders(
+	_ context.Context,
+	projectID string,
+	providers AgentProviders,
+) (Project, error) {
+	normalized, err := providers.Normalize()
+	if err != nil {
+		return Project{}, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	storedProject, exists := s.projects[projectID]
+	if !exists {
+		return Project{}, ErrNotFound
+	}
+	storedProject.AgentProviders = normalized
+	s.projects[projectID] = cloneProject(storedProject)
+	return cloneProject(storedProject), nil
 }
 
 func (s *MemoryStore) UpdateDialogueLimits(

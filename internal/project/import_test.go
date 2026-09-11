@@ -64,6 +64,7 @@ func TestServiceImportsAndAtomicallyBindsProject(t *testing.T) {
 	}
 	if created.ID != projectImportID(spec.ImportID) || created.Name != "Commitarium" ||
 		created.RecoveryPolicy != RecoveryPolicyApprovalRequired || created.ForgejoRepository == nil ||
+		created.AgentProviders != DefaultAgentProviders() ||
 		created.ForgejoRepository.BoundAt != fixedTime {
 		t.Fatalf("unexpected imported project %+v", created)
 	}

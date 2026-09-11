@@ -450,6 +450,7 @@ func TestRemoteLeadStartsOneWorkerTurnAndWaitsForUser(t *testing.T) {
 		t.Context(), runID, storedProject.ID, storedFeature.ID,
 		storedFeature.Title+": "+storedFeature.Description,
 		storedProject.DialogueLimits,
+		storedProject.AgentProviders,
 	)
 	if err != nil {
 		t.Fatalf("start real lead: %v", err)
@@ -545,6 +546,7 @@ func TestRemoteLeadRecoveryReusesDurableWorkerAttempt(t *testing.T) {
 	run, _, err := executions.CreateRun(
 		t.Context(), runID, storedFeature.ID,
 		project.DefaultDialogueRoundLimit, project.DefaultDialogueRoundLimit,
+		project.DefaultAgentProviders(),
 	)
 	if err != nil {
 		t.Fatalf("create interrupted run: %v", err)
@@ -605,6 +607,7 @@ func TestRemoteLeadRequiresReviewWhenWorkerStateCannotBeConfirmed(t *testing.T) 
 	if _, _, err := starter.Start(
 		t.Context(), runID, storedProject.ID, storedFeature.ID, storedFeature.Title,
 		storedProject.DialogueLimits,
+		storedProject.AgentProviders,
 	); err != nil {
 		t.Fatalf("admit unavailable worker run: %v", err)
 	}
@@ -682,6 +685,7 @@ func TestRemoteLeadResumesSameConversationForRepeatedUserReplies(t *testing.T) {
 	if _, _, err := starter.Start(
 		t.Context(), runID, storedProject.ID, storedFeature.ID, storedFeature.Title,
 		storedProject.DialogueLimits,
+		storedProject.AgentProviders,
 	); err != nil {
 		t.Fatalf("start lead conversation: %v", err)
 	}
@@ -834,6 +838,7 @@ func TestRemoteLeadRecoveryReattachesToCommittedReplyAttempt(t *testing.T) {
 	if _, _, err := starter.Start(
 		t.Context(), runID, storedProject.ID, storedFeature.ID, storedFeature.Title,
 		storedProject.DialogueLimits,
+		storedProject.AgentProviders,
 	); err != nil {
 		t.Fatalf("start lead conversation: %v", err)
 	}
@@ -967,6 +972,7 @@ func TestRemoteLeadStartsPlanningInManagedWorkspace(t *testing.T) {
 	if _, _, err := starter.Start(
 		t.Context(), runID, storedProject.ID, storedFeature.ID, storedFeature.Title,
 		storedProject.DialogueLimits,
+		storedProject.AgentProviders,
 	); err != nil {
 		t.Fatalf("start lead conversation: %v", err)
 	}
@@ -1462,6 +1468,7 @@ func TestRemotePlanningLoopUsesRunLimitSnapshot(t *testing.T) {
 	if _, _, err := starter.Start(
 		t.Context(), runID, storedProject.ID, storedFeature.ID, storedFeature.Title,
 		storedProject.DialogueLimits,
+		storedProject.AgentProviders,
 	); err != nil {
 		t.Fatalf("start lead: %v", err)
 	}
@@ -1539,6 +1546,7 @@ func TestRemoteLeadRecoveryReattachesToPlanningAttempt(t *testing.T) {
 	if _, _, err := starter.Start(
 		t.Context(), runID, storedProject.ID, storedFeature.ID, storedFeature.Title,
 		storedProject.DialogueLimits,
+		storedProject.AgentProviders,
 	); err != nil {
 		t.Fatalf("start lead conversation: %v", err)
 	}
@@ -1644,6 +1652,7 @@ func TestRemoteReviewerRecoveryReattachesAndPublishesItsResponse(t *testing.T) {
 	if _, _, err := starter.Start(
 		t.Context(), runID, storedProject.ID, storedFeature.ID, storedFeature.Title,
 		storedProject.DialogueLimits,
+		storedProject.AgentProviders,
 	); err != nil {
 		t.Fatalf("start lead: %v", err)
 	}
@@ -1781,6 +1790,7 @@ func newRemoteLeadExecution(t *testing.T) (*sql.DB, *execution.Service, project.
 		"Remote lead test",
 		project.RecoveryPolicyApprovalRequired,
 		project.DefaultDialogueLimits(),
+		project.DefaultAgentProviders(),
 	)
 	if err != nil {
 		t.Fatalf("create project: %v", err)

@@ -33,6 +33,7 @@ func (s *Starter) Recover(
 		Assignment:        s.assignmentFactory(),
 		MaxPlanningRounds: run.PlanningRoundLimit,
 		MaxReviewRounds:   run.ImplementationReviewRoundLimit,
+		AgentProviders:    run.AgentProviders,
 		RecoveryPolicy:    recoveryPolicy,
 		WorkflowPhase:     storedFeature.State,
 	})
@@ -54,6 +55,7 @@ func (s *Starter) Start(
 	featureID string,
 	goal string,
 	dialogueLimits project.DialogueLimits,
+	agentProviders project.AgentProviders,
 ) (execution.Run, bool, error) {
 	_ = projectID // Simulated assignments do not resolve a project workspace.
 	return s.runner.Start(ctx, RunRequest{
@@ -61,5 +63,6 @@ func (s *Starter) Start(
 		Assignment:        s.assignmentFactory(),
 		MaxPlanningRounds: dialogueLimits.PlanningRounds,
 		MaxReviewRounds:   dialogueLimits.ImplementationReviewRounds,
+		AgentProviders:    agentProviders,
 	})
 }
