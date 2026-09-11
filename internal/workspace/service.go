@@ -17,6 +17,7 @@ var ErrGoalNotAccepted = errors.New("feature goal has not been accepted")
 var ErrFeatureNotDraft = errors.New("feature is no longer a draft")
 var ErrFeatureNotPlanning = errors.New("feature is not in planning")
 var ErrFeatureNotReviewing = errors.New("feature is not in review")
+var ErrFeatureNotReadyToMerge = errors.New("feature is not ready to merge")
 var ErrProjectRepositoryNotBound = errors.New("project has no Forgejo repository binding")
 var ErrBranchNotFound = errors.New("Forgejo branch not found")
 var ErrBranchConflict = errors.New("Forgejo feature branch exists at a different commit")
@@ -79,6 +80,130 @@ type PullRequestManager interface {
 		repository string,
 		spec ReviewPublicationSpec,
 	) (PullRequest, error)
+	MergePullRequest(
+		ctx context.Context,
+		owner string,
+		repository string,
+		spec PullRequestMergeSpec,
+	) (PullRequest, error)
+}
+
+// RecordMergeReady durably pins the exact commit approved by both agents.
+// It runs before the feature lifecycle advances, so a ready-to-merge feature
+// can never exist without an immutable merge target.
+func (service *Service) RecordMergeReady(
+	ctx context.Context,
+	projectID string,
+	featureID string,
+	commitID string,
+	pullRequestNumber int64,
+) (Workspace, error) {
+	storedFeature, err := service.features.GetByID(ctx, projectID, featureID)
+	if err != nil {
+		return Workspace{}, err
+	}
+	if storedFeature.State != feature.StateReviewing && storedFeature.State != feature.StateReadyToMerge {
+		return Workspace{}, ErrFeatureNotReviewing
+	}
+	stored, err := service.Get(ctx, projectID, featureID)
+	if err != nil {
+		return Workspace{}, err
+	}
+	if stored.PullRequestNumber != pullRequestNumber || !stored.PullRequestReady() ||
+		!stored.CheckoutReady() || service.checkouts == nil || service.pullRequests == nil {
+		return Workspace{}, ErrConflict
+	}
+	branch, err := service.branches.GetBranch(ctx, stored.RepositoryOwner, stored.RepositoryName, stored.Branch)
+	if err != nil {
+		return Workspace{}, fmt.Errorf("verify merge-ready Forgejo branch: %w", err)
+	}
+	if branch.Name != stored.Branch || branch.CommitID != commitID {
+		return Workspace{}, ErrBranchConflict
+	}
+	if err := service.checkouts.Ensure(ctx, CheckoutSpec{
+		WorkspaceID: stored.ID, RepositoryOwner: stored.RepositoryOwner,
+		RepositoryName: stored.RepositoryName, Branch: stored.Branch,
+		BaseCommitID: stored.BaseCommitID, ExpectedHeadCommitID: commitID,
+		AlreadyReady: true, RequireClean: true,
+	}); err != nil {
+		return Workspace{}, fmt.Errorf("verify merge-ready checkout: %w", err)
+	}
+	return service.store.MarkMergeReady(ctx, featureID, commitID, service.now().UTC())
+}
+
+// MergeApproved reconciles and merges only the commit previously pinned by
+// RecordMergeReady. Forgejo receives the same head SHA as a compare-and-swap
+// guard, and its resulting merge commit is recorded for restart recovery.
+func (service *Service) MergeApproved(
+	ctx context.Context,
+	projectID string,
+	featureID string,
+) (Workspace, bool, error) {
+	storedFeature, err := service.features.GetByID(ctx, projectID, featureID)
+	if err != nil {
+		return Workspace{}, false, err
+	}
+	if storedFeature.State != feature.StateReadyToMerge && storedFeature.State != feature.StateCompleted {
+		return Workspace{}, false, ErrFeatureNotReadyToMerge
+	}
+	storedProject, err := service.projects.GetByID(ctx, projectID)
+	if err != nil {
+		return Workspace{}, false, err
+	}
+	stored, err := service.Get(ctx, projectID, featureID)
+	if err != nil {
+		return Workspace{}, false, err
+	}
+	if storedProject.ForgejoRepository == nil || service.checkouts == nil || service.pullRequests == nil ||
+		stored.ApprovedCommitID == "" || stored.MergeReadyAt == nil || !stored.PullRequestReady() {
+		return Workspace{}, false, ErrConflict
+	}
+	repository := storedProject.ForgejoRepository
+	if stored.RepositoryOwner != repository.Owner || stored.RepositoryName != repository.Name ||
+		stored.BaseBranch != repository.DefaultBranch {
+		return Workspace{}, false, ErrConflict
+	}
+	if stored.MergeCommitID != "" {
+		return stored, false, nil
+	}
+	if err := service.checkouts.Ensure(ctx, CheckoutSpec{
+		WorkspaceID: stored.ID, RepositoryOwner: stored.RepositoryOwner,
+		RepositoryName: stored.RepositoryName, Branch: stored.Branch,
+		BaseCommitID: stored.BaseCommitID, ExpectedHeadCommitID: stored.ApprovedCommitID,
+		AlreadyReady: true, RequireClean: true,
+	}); err != nil {
+		return Workspace{}, false, fmt.Errorf("verify approved checkout before merge: %w", err)
+	}
+	branch, err := service.branches.GetBranch(ctx, stored.RepositoryOwner, stored.RepositoryName, stored.Branch)
+	if err != nil {
+		return Workspace{}, false, fmt.Errorf("verify approved Forgejo branch before merge: %w", err)
+	}
+	if branch.Name != stored.Branch || branch.CommitID != stored.ApprovedCommitID {
+		return Workspace{}, false, ErrBranchConflict
+	}
+	merged, err := service.pullRequests.MergePullRequest(
+		ctx, stored.RepositoryOwner, stored.RepositoryName,
+		PullRequestMergeSpec{
+			Number:        stored.PullRequestNumber,
+			FeatureMarker: "<!-- commitarium-feature: " + storedFeature.ID + " -->",
+			BaseBranch:    stored.BaseBranch, HeadBranch: stored.Branch,
+			HeadCommitID: stored.ApprovedCommitID,
+		},
+	)
+	if err != nil {
+		return Workspace{}, false, fmt.Errorf("merge approved Forgejo pull request: %w", err)
+	}
+	if !merged.Merged || merged.MergeCommitID == "" || merged.MergedAt == nil {
+		return Workspace{}, false, ErrPullRequestConflict
+	}
+	updated, err := service.store.MarkMerged(
+		ctx, featureID, stored.ApprovedCommitID, merged.MergeCommitID,
+		*merged.MergedAt, service.now().UTC(),
+	)
+	if err != nil {
+		return Workspace{}, false, fmt.Errorf("record merged Forgejo pull request: %w", err)
+	}
+	return updated, true, nil
 }
 
 type Service struct {

@@ -288,7 +288,7 @@ func TestRunnerRecoversInterruptionBetweenSessionsWithoutApproval(t *testing.T) 
 	workflowService, _, executionService := orchestrationDatabase(t)
 	runID := "run_recovery_between_sessions"
 	if _, _, err := executionService.CreateRun(
-		t.Context(), runID, "fea_test", 2, 3, project.DefaultAgentProviders(),
+		t.Context(), runID, "fea_test", 2, 3, project.DefaultAgentProviders(), project.DefaultMergePolicy(),
 	); err != nil {
 		t.Fatalf("create interrupted run: %v", err)
 	}
@@ -365,7 +365,7 @@ func TestRecoveryDoesNotReplaceSessionWithUnconfirmedProviderIdentity(t *testing
 	workflowService, _, executionService := orchestrationDatabase(t)
 	runID := "run_recovery_missing_provider"
 	if _, _, err := executionService.CreateRun(
-		t.Context(), runID, "fea_test", 2, 3, project.DefaultAgentProviders(),
+		t.Context(), runID, "fea_test", 2, 3, project.DefaultAgentProviders(), project.DefaultMergePolicy(),
 	); err != nil {
 		t.Fatalf("create interrupted run: %v", err)
 	}
@@ -520,6 +520,7 @@ func TestRunnerRejectsDuplicateActiveRun(t *testing.T) {
 		2,
 		1,
 		project.DefaultAgentProviders(),
+		project.DefaultMergePolicy(),
 	); err != nil {
 		t.Fatalf("create active run: %v", err)
 	} else if !created {
@@ -720,7 +721,7 @@ func seedInterruptedConsultant(
 ) {
 	t.Helper()
 	if _, _, err := executionService.CreateRun(
-		t.Context(), runID, "fea_test", 2, 3, project.DefaultAgentProviders(),
+		t.Context(), runID, "fea_test", 2, 3, project.DefaultAgentProviders(), project.DefaultMergePolicy(),
 	); err != nil {
 		t.Fatalf("create interrupted run: %v", err)
 	}

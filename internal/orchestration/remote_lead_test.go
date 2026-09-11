@@ -141,6 +141,8 @@ type remoteLeadWorkspaceStub struct {
 	responseVerifyCalls     int
 	reviewVerifyCalls       int
 	readinessVerifyCalls    int
+	mergeReadyCalls         int
+	mergeCalls              int
 	responseReviewedCommit  string
 	responseCommit          string
 	publishedEventID        string
@@ -151,6 +153,35 @@ type remoteLeadWorkspaceStub struct {
 	responseVerifyErr       error
 	reviewVerifyErr         error
 	readinessVerifyErr      error
+}
+
+func (stub *remoteLeadWorkspaceStub) RecordMergeReady(
+	_ context.Context,
+	_ string,
+	_ string,
+	commitID string,
+	pullRequestNumber int64,
+) (workspace.Workspace, error) {
+	stub.mergeReadyCalls++
+	stub.prepared.ApprovedCommitID = commitID
+	readyAt := time.Now().UTC()
+	stub.prepared.MergeReadyAt = &readyAt
+	stub.prepared.PullRequestNumber = pullRequestNumber
+	return stub.prepared, nil
+}
+
+func (stub *remoteLeadWorkspaceStub) MergeApproved(
+	_ context.Context,
+	_ string,
+	_ string,
+) (workspace.Workspace, bool, error) {
+	stub.mergeCalls++
+	if stub.prepared.MergeCommitID == "" {
+		stub.prepared.MergeCommitID = "dddddddddddddddddddddddddddddddddddddddd"
+		mergedAt := time.Now().UTC()
+		stub.prepared.MergedAt = &mergedAt
+	}
+	return stub.prepared, true, nil
 }
 
 func (stub *remoteLeadWorkspaceStub) PrepareForClarification(
@@ -451,6 +482,7 @@ func TestRemoteLeadStartsOneWorkerTurnAndWaitsForUser(t *testing.T) {
 		storedFeature.Title+": "+storedFeature.Description,
 		storedProject.DialogueLimits,
 		storedProject.AgentProviders,
+		storedProject.MergePolicy,
 	)
 	if err != nil {
 		t.Fatalf("start real lead: %v", err)
@@ -547,6 +579,7 @@ func TestRemoteLeadRecoveryReusesDurableWorkerAttempt(t *testing.T) {
 		t.Context(), runID, storedFeature.ID,
 		project.DefaultDialogueRoundLimit, project.DefaultDialogueRoundLimit,
 		project.DefaultAgentProviders(),
+		project.DefaultMergePolicy(),
 	)
 	if err != nil {
 		t.Fatalf("create interrupted run: %v", err)
@@ -608,6 +641,7 @@ func TestRemoteLeadRequiresReviewWhenWorkerStateCannotBeConfirmed(t *testing.T) 
 		t.Context(), runID, storedProject.ID, storedFeature.ID, storedFeature.Title,
 		storedProject.DialogueLimits,
 		storedProject.AgentProviders,
+		storedProject.MergePolicy,
 	); err != nil {
 		t.Fatalf("admit unavailable worker run: %v", err)
 	}
@@ -686,6 +720,7 @@ func TestRemoteLeadResumesSameConversationForRepeatedUserReplies(t *testing.T) {
 		t.Context(), runID, storedProject.ID, storedFeature.ID, storedFeature.Title,
 		storedProject.DialogueLimits,
 		storedProject.AgentProviders,
+		storedProject.MergePolicy,
 	); err != nil {
 		t.Fatalf("start lead conversation: %v", err)
 	}
@@ -839,6 +874,7 @@ func TestRemoteLeadRecoveryReattachesToCommittedReplyAttempt(t *testing.T) {
 		t.Context(), runID, storedProject.ID, storedFeature.ID, storedFeature.Title,
 		storedProject.DialogueLimits,
 		storedProject.AgentProviders,
+		storedProject.MergePolicy,
 	); err != nil {
 		t.Fatalf("start lead conversation: %v", err)
 	}
@@ -973,6 +1009,7 @@ func TestRemoteLeadStartsPlanningInManagedWorkspace(t *testing.T) {
 		t.Context(), runID, storedProject.ID, storedFeature.ID, storedFeature.Title,
 		storedProject.DialogueLimits,
 		storedProject.AgentProviders,
+		storedProject.MergePolicy,
 	); err != nil {
 		t.Fatalf("start lead conversation: %v", err)
 	}
@@ -1413,9 +1450,135 @@ func TestRemoteLeadStartsPlanningInManagedWorkspace(t *testing.T) {
 		t.Fatalf("ready-to-merge recovery repeated lead verification: count=%d", workspaceStub.readinessVerifyCalls)
 	}
 	stub.mu.Lock()
-	defer stub.mu.Unlock()
-	if len(stub.putRequests) != len(requests) {
+	requestCountAfterRecovery := len(stub.putRequests)
+	stub.mu.Unlock()
+	if requestCountAfterRecovery != len(requests) {
 		t.Fatalf("completed review recovery launched a replacement worker attempt")
+	}
+
+	mergedRun, mergedNow, err := restarted.Merge(t.Context(), runID, "user-approved-merge")
+	if err != nil || !mergedNow || mergedRun.Status != execution.RunStatusSucceeded ||
+		workspaceStub.mergeCalls != 1 {
+		t.Fatalf("merge approved run: run=%+v merged_now=%t calls=%d err=%v", mergedRun, mergedNow, workspaceStub.mergeCalls, err)
+	}
+	completedFeature, err := database.NewFeatureStore(db).GetByID(t.Context(), storedFeature.ID)
+	if err != nil || completedFeature.State != feature.StateCompleted {
+		t.Fatalf("merged feature was not completed: feature=%+v err=%v", completedFeature, err)
+	}
+	retriedMerge, mergedNow, err := restarted.Merge(t.Context(), runID, "user-approved-merge")
+	if err != nil || mergedNow || retriedMerge.Status != execution.RunStatusSucceeded ||
+		workspaceStub.mergeCalls != 1 {
+		t.Fatalf("merge retry was not idempotent: run=%+v merged_now=%t calls=%d err=%v", retriedMerge, mergedNow, workspaceStub.mergeCalls, err)
+	}
+}
+
+func TestRemoteLeadRecoveryAutomaticallyMergesApprovedRevision(t *testing.T) {
+	db, executions, storedProject, storedFeature := newRemoteLeadExecution(t)
+	runID := "run_automatic_merge_recovery"
+	run, _, err := executions.CreateRun(
+		t.Context(), runID, storedFeature.ID,
+		project.DefaultDialogueRoundLimit, project.DefaultDialogueRoundLimit,
+		project.DefaultAgentProviders(), project.MergePolicyAutoAfterGates,
+	)
+	if err != nil {
+		t.Fatalf("create automatic-merge run: %v", err)
+	}
+
+	leadID := remoteLeadSessionID(runID)
+	if _, _, err := executions.CreateSession(
+		t.Context(), leadID, runID, remoteLeadAgentID, worker.RoleLead,
+	); err != nil {
+		t.Fatalf("create approved lead session: %v", err)
+	}
+	if _, err := executions.TransitionSession(
+		t.Context(), leadID, execution.SessionStatusStarting,
+		execution.SessionStatusRunning, "codex-lead-thread",
+	); err != nil {
+		t.Fatalf("start approved lead session: %v", err)
+	}
+	readinessAttemptID := implementationReadinessAttemptID(leadID, 1)
+	if _, _, err := executions.CreateWorkerAttempt(
+		t.Context(), leadID, readinessAttemptID,
+	); err != nil {
+		t.Fatalf("record lead readiness attempt: %v", err)
+	}
+	if _, err := executions.RecordSessionEventWithID(
+		t.Context(), implementationReadinessVerificationEventID(readinessAttemptID), leadID,
+		worker.Event{Type: worker.EventActivity, Text: "Verified the lead's green light."},
+	); err != nil {
+		t.Fatalf("record verified lead readiness: %v", err)
+	}
+	if _, err := executions.TransitionSession(
+		t.Context(), leadID, execution.SessionStatusRunning,
+		execution.SessionStatusWaitingForUser, "codex-lead-thread",
+	); err != nil {
+		t.Fatalf("park approved lead session: %v", err)
+	}
+
+	reviewerID := remoteReviewerSessionID(runID)
+	if _, _, err := executions.CreateSession(
+		t.Context(), reviewerID, runID, remoteReviewerAgentID, worker.RoleReviewer,
+	); err != nil {
+		t.Fatalf("create approved reviewer session: %v", err)
+	}
+	if _, err := executions.TransitionSession(
+		t.Context(), reviewerID, execution.SessionStatusStarting,
+		execution.SessionStatusRunning, "codex-reviewer-thread",
+	); err != nil {
+		t.Fatalf("start approved reviewer session: %v", err)
+	}
+	if _, err := executions.TransitionSession(
+		t.Context(), reviewerID, execution.SessionStatusRunning,
+		execution.SessionStatusWaitingForUser, "codex-reviewer-thread",
+	); err != nil {
+		t.Fatalf("park approved reviewer session: %v", err)
+	}
+
+	workflowService := workflow.NewService(database.NewWorkflowStore(db))
+	actor := workflow.Actor{Kind: workflow.ActorKindCoordinator, ID: coordinatorActorID}
+	for index, state := range []feature.State{
+		feature.StatePlanning, feature.StateImplementing,
+		feature.StateReviewing, feature.StateReadyToMerge,
+	} {
+		if _, err := workflowService.TransitionFeature(
+			t.Context(), storedFeature.ID, state, actor,
+			fmt.Sprintf("automatic-merge-setup-%d", index),
+		); err != nil {
+			t.Fatalf("advance automatic-merge feature to %q: %v", state, err)
+		}
+	}
+	readyFeature, err := database.NewFeatureStore(db).GetByID(t.Context(), storedFeature.ID)
+	if err != nil {
+		t.Fatalf("load merge-ready feature: %v", err)
+	}
+	workspaceStub := &remoteLeadWorkspaceStub{prepared: workspace.Workspace{
+		ApprovedCommitID:  "cccccccccccccccccccccccccccccccccccccccc",
+		PullRequestNumber: 7,
+	}}
+	pump := &unexpectedRemoteLeadPump{}
+	starter, err := NewRemoteLeadStarter(RemoteLeadConfig{
+		Executions: executions, Features: database.NewFeatureStore(db),
+		Goals: workflowService, Planning: workflowService, Workspaces: workspaceStub,
+		Worker: unavailableRemoteLeadWorker{}, Pump: pump,
+		Lifetime: t.Context(), AgentProfileID: "codex-default",
+	})
+	if err != nil {
+		t.Fatalf("create automatic-merge recovery starter: %v", err)
+	}
+	if err := starter.Recover(
+		t.Context(), run, readyFeature, storedProject.RecoveryPolicy,
+	); err != nil {
+		t.Fatalf("recover automatic merge: %v", err)
+	}
+
+	mergedRun, err := executions.GetRun(t.Context(), runID)
+	if err != nil || mergedRun.Status != execution.RunStatusSucceeded ||
+		workspaceStub.mergeCalls != 1 || pump.called {
+		t.Fatalf("automatic merge did not complete exactly once: run=%+v workspace=%+v pump=%+v err=%v", mergedRun, workspaceStub, pump, err)
+	}
+	completedFeature, err := database.NewFeatureStore(db).GetByID(t.Context(), storedFeature.ID)
+	if err != nil || completedFeature.State != feature.StateCompleted {
+		t.Fatalf("automatic merge did not complete feature: feature=%+v err=%v", completedFeature, err)
 	}
 }
 
@@ -1469,6 +1632,7 @@ func TestRemotePlanningLoopUsesRunLimitSnapshot(t *testing.T) {
 		t.Context(), runID, storedProject.ID, storedFeature.ID, storedFeature.Title,
 		storedProject.DialogueLimits,
 		storedProject.AgentProviders,
+		storedProject.MergePolicy,
 	); err != nil {
 		t.Fatalf("start lead: %v", err)
 	}
@@ -1547,6 +1711,7 @@ func TestRemoteLeadRecoveryReattachesToPlanningAttempt(t *testing.T) {
 		t.Context(), runID, storedProject.ID, storedFeature.ID, storedFeature.Title,
 		storedProject.DialogueLimits,
 		storedProject.AgentProviders,
+		storedProject.MergePolicy,
 	); err != nil {
 		t.Fatalf("start lead conversation: %v", err)
 	}
@@ -1653,6 +1818,7 @@ func TestRemoteReviewerRecoveryReattachesAndPublishesItsResponse(t *testing.T) {
 		t.Context(), runID, storedProject.ID, storedFeature.ID, storedFeature.Title,
 		storedProject.DialogueLimits,
 		storedProject.AgentProviders,
+		storedProject.MergePolicy,
 	); err != nil {
 		t.Fatalf("start lead: %v", err)
 	}
@@ -1791,6 +1957,7 @@ func newRemoteLeadExecution(t *testing.T) (*sql.DB, *execution.Service, project.
 		project.RecoveryPolicyApprovalRequired,
 		project.DefaultDialogueLimits(),
 		project.DefaultAgentProviders(),
+		project.DefaultMergePolicy(),
 	)
 	if err != nil {
 		t.Fatalf("create project: %v", err)

@@ -41,8 +41,13 @@ func (s *Service) CreateRun(
 	planningRoundLimit int,
 	implementationReviewRoundLimit int,
 	agentProviders project.AgentProviders,
+	mergePolicy project.MergePolicy,
 ) (Run, bool, error) {
 	agentProviders, err := agentProviders.Normalize()
+	if err != nil {
+		return Run{}, false, err
+	}
+	mergePolicy, err = project.NormalizeMergePolicy(mergePolicy)
 	if err != nil {
 		return Run{}, false, err
 	}
@@ -52,6 +57,7 @@ func (s *Service) CreateRun(
 		PlanningRoundLimit:             planningRoundLimit,
 		ImplementationReviewRoundLimit: implementationReviewRoundLimit,
 		AgentProviders:                 agentProviders,
+		MergePolicy:                    mergePolicy,
 		StartedAt:                      now, UpdatedAt: now,
 	}
 	if err := s.store.CreateRun(ctx, run); err != nil {
@@ -66,10 +72,15 @@ func (s *Service) CreateRun(
 		if providerErr != nil {
 			return Run{}, false, providerErr
 		}
+		existingMergePolicy, mergePolicyErr := project.NormalizeMergePolicy(existing.MergePolicy)
+		if mergePolicyErr != nil {
+			return Run{}, false, mergePolicyErr
+		}
 		if existing.FeatureID != featureID ||
 			existing.PlanningRoundLimit != planningRoundLimit ||
 			existing.ImplementationReviewRoundLimit != implementationReviewRoundLimit ||
-			existingProviders != agentProviders {
+			existingProviders != agentProviders ||
+			existingMergePolicy != mergePolicy {
 			return Run{}, false, ErrRecordConflict
 		}
 		return existing, false, nil

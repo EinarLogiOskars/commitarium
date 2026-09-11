@@ -109,7 +109,7 @@ func TestServiceCreatesRunAndSessionWithCoordinatorTime(t *testing.T) {
 	service := testService(store, fixedTime)
 
 	run, created, err := service.CreateRun(
-		t.Context(), "run_test", "fea_test", 6, 4, project.DefaultAgentProviders(),
+		t.Context(), "run_test", "fea_test", 6, 4, project.DefaultAgentProviders(), project.DefaultMergePolicy(),
 	)
 	if err != nil {
 		t.Fatalf("create run: %v", err)
@@ -123,6 +123,9 @@ func TestServiceCreatesRunAndSessionWithCoordinatorTime(t *testing.T) {
 	}
 	if run.AgentProviders != project.DefaultAgentProviders() {
 		t.Fatalf("default agent providers = %+v", run.AgentProviders)
+	}
+	if run.MergePolicy != project.DefaultMergePolicy() {
+		t.Fatalf("default merge policy = %q", run.MergePolicy)
 	}
 
 	session, created, err := service.CreateSession(
@@ -185,7 +188,7 @@ func TestServiceRetriesMatchingRunAndRejectsConflict(t *testing.T) {
 	service := testService(store, time.Now())
 
 	actual, created, err := service.CreateRun(
-		t.Context(), existing.ID, existing.FeatureID, 6, 4, project.DefaultAgentProviders(),
+		t.Context(), existing.ID, existing.FeatureID, 6, 4, project.DefaultAgentProviders(), project.DefaultMergePolicy(),
 	)
 	if err != nil {
 		t.Fatalf("retry run creation: %v", err)
@@ -197,20 +200,27 @@ func TestServiceRetriesMatchingRunAndRejectsConflict(t *testing.T) {
 		t.Errorf("expected existing run %+v, got %+v", existing, actual)
 	}
 	if _, _, err := service.CreateRun(
-		t.Context(), existing.ID, "fea_other", 6, 4, project.DefaultAgentProviders(),
+		t.Context(), existing.ID, "fea_other", 6, 4, project.DefaultAgentProviders(), project.DefaultMergePolicy(),
 	); !errors.Is(err, ErrRecordConflict) {
 		t.Fatalf("expected error %v, got %v", ErrRecordConflict, err)
 	}
 	if _, _, err := service.CreateRun(
-		t.Context(), existing.ID, existing.FeatureID, 0, 4, project.DefaultAgentProviders(),
+		t.Context(), existing.ID, existing.FeatureID, 0, 4, project.DefaultAgentProviders(), project.DefaultMergePolicy(),
 	); !errors.Is(err, ErrRecordConflict) {
 		t.Fatalf("expected changed snapshot error %v, got %v", ErrRecordConflict, err)
 	}
 	if _, _, err := service.CreateRun(
 		t.Context(), existing.ID, existing.FeatureID, 6, 4,
 		project.AgentProviders{Lead: project.AgentProviderClaude, Reviewer: project.AgentProviderCodex},
+		project.DefaultMergePolicy(),
 	); !errors.Is(err, ErrRecordConflict) {
 		t.Fatalf("expected changed provider snapshot error %v, got %v", ErrRecordConflict, err)
+	}
+	if _, _, err := service.CreateRun(
+		t.Context(), existing.ID, existing.FeatureID, 6, 4,
+		project.DefaultAgentProviders(), project.MergePolicyAutoAfterGates,
+	); !errors.Is(err, ErrRecordConflict) {
+		t.Fatalf("expected changed merge-policy snapshot error %v, got %v", ErrRecordConflict, err)
 	}
 }
 

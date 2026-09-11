@@ -796,6 +796,125 @@ func TestClientRejectsReviewForDifferentCommit(t *testing.T) {
 	}
 }
 
+func TestClientMergesExactApprovedPullRequest(t *testing.T) {
+	spec := workspace.PullRequestMergeSpec{
+		Number: 7, FeatureMarker: "<!-- commitarium-feature: fea_test -->",
+		BaseBranch: "main", HeadBranch: "commitarium/fea_test",
+		HeadCommitID: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+	}
+	remote := managedPullRequest(testPullRequestSpec())
+	remote.HeadCommitID = spec.HeadCommitID
+	mergeCommit := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	mergedAt := remote.CreatedAt.Add(time.Hour)
+	calls := 0
+	client := newBranchTestClient(t, func(request *http.Request) (*http.Response, error) {
+		calls++
+		switch calls {
+		case 1:
+			return pullRequestJSONResponse(t, http.StatusOK, remote), nil
+		case 2:
+			if request.Method != http.MethodPatch || request.URL.Path != "/api/v1/repos/owner/repository/pulls/7" {
+				t.Fatalf("unexpected draft-ready request %s %s", request.Method, request.URL)
+			}
+			var payload struct {
+				Title string `json:"title"`
+			}
+			if err := json.NewDecoder(request.Body).Decode(&payload); err != nil || payload.Title != "Test feature" {
+				t.Fatalf("unexpected draft-ready payload %+v err=%v", payload, err)
+			}
+			remote.Title = payload.Title
+			remote.Draft = false
+			return pullRequestJSONResponse(t, http.StatusOK, remote), nil
+		case 3:
+			return pullRequestJSONResponse(t, http.StatusOK, remote), nil
+		case 4:
+			if request.Method != http.MethodPost || request.URL.Path != "/api/v1/repos/owner/repository/pulls/7/merge" {
+				t.Fatalf("unexpected merge request %s %s", request.Method, request.URL)
+			}
+			var payload struct {
+				Do           string `json:"Do"`
+				HeadCommitID string `json:"head_commit_id"`
+			}
+			if err := json.NewDecoder(request.Body).Decode(&payload); err != nil ||
+				payload.Do != "merge" || payload.HeadCommitID != spec.HeadCommitID {
+				t.Fatalf("unexpected merge payload %+v err=%v", payload, err)
+			}
+			remote.State = "closed"
+			remote.Merged = true
+			remote.MergeCommitID = mergeCommit
+			remote.MergedAt = &mergedAt
+			return jsonResponse(http.StatusOK, `{}`), nil
+		case 5:
+			return pullRequestJSONResponse(t, http.StatusOK, remote), nil
+		default:
+			t.Fatalf("unexpected request %d", calls)
+			return nil, nil
+		}
+	})
+
+	merged, err := client.MergePullRequest(t.Context(), "owner", "repository", spec)
+	if err != nil || calls != 5 || !merged.Merged || merged.MergeCommitID != mergeCommit {
+		t.Fatalf("merge exact pull request: pull_request=%+v calls=%d err=%v", merged, calls, err)
+	}
+}
+
+func TestClientAdoptsMergeAfterResponseIsLost(t *testing.T) {
+	spec := workspace.PullRequestMergeSpec{
+		Number: 7, FeatureMarker: "<!-- commitarium-feature: fea_test -->",
+		BaseBranch: "main", HeadBranch: "commitarium/fea_test",
+		HeadCommitID: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+	}
+	remote := managedPullRequest(testPullRequestSpec())
+	remote.Title = "Test feature"
+	remote.Draft = false
+	remote.HeadCommitID = spec.HeadCommitID
+	mergedAt := remote.CreatedAt.Add(time.Hour)
+	calls := 0
+	client := newBranchTestClient(t, func(request *http.Request) (*http.Response, error) {
+		calls++
+		switch calls {
+		case 1:
+			return pullRequestJSONResponse(t, http.StatusOK, remote), nil
+		case 2:
+			remote.State = "closed"
+			remote.Merged = true
+			remote.MergeCommitID = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+			remote.MergedAt = &mergedAt
+			return nil, errors.New("connection closed after Forgejo merged")
+		case 3:
+			return pullRequestJSONResponse(t, http.StatusOK, remote), nil
+		default:
+			t.Fatalf("unexpected request %d", calls)
+			return nil, nil
+		}
+	})
+
+	merged, err := client.MergePullRequest(t.Context(), "owner", "repository", spec)
+	if err != nil || calls != 3 || !merged.Merged {
+		t.Fatalf("adopt uncertain merge: pull_request=%+v calls=%d err=%v", merged, calls, err)
+	}
+}
+
+func TestClientRefusesMergeAfterFeatureBranchMoves(t *testing.T) {
+	spec := workspace.PullRequestMergeSpec{
+		Number: 7, FeatureMarker: "<!-- commitarium-feature: fea_test -->",
+		BaseBranch: "main", HeadBranch: "commitarium/fea_test",
+		HeadCommitID: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+	}
+	remote := managedPullRequest(testPullRequestSpec())
+	remote.HeadCommitID = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	calls := 0
+	client := newBranchTestClient(t, func(*http.Request) (*http.Response, error) {
+		calls++
+		return pullRequestJSONResponse(t, http.StatusOK, remote), nil
+	})
+
+	_, err := client.MergePullRequest(t.Context(), "owner", "repository", spec)
+	if !errors.Is(err, workspace.ErrPullRequestConflict) || calls != 1 {
+		t.Fatalf("expected changed head conflict before mutation, calls=%d err=%v", calls, err)
+	}
+}
+
 func TestClientReconcilesPlanAfterUncertainUpdateResponse(t *testing.T) {
 	spec := testPlanPublicationSpec()
 	remote := managedPullRequest(testPullRequestSpec())
@@ -951,15 +1070,23 @@ func pullRequestJSONResponse(
 
 func pullRequestJSON(t *testing.T, pullRequest workspace.PullRequest) string {
 	t.Helper()
+	var mergedAt *string
+	if pullRequest.MergedAt != nil {
+		formatted := pullRequest.MergedAt.Format(time.RFC3339Nano)
+		mergedAt = &formatted
+	}
 	body, err := json.Marshal(struct {
-		Number    int64  `json:"number"`
-		HTMLURL   string `json:"html_url"`
-		Title     string `json:"title"`
-		Body      string `json:"body"`
-		State     string `json:"state"`
-		Draft     bool   `json:"draft"`
-		CreatedAt string `json:"created_at"`
-		Base      struct {
+		Number        int64   `json:"number"`
+		HTMLURL       string  `json:"html_url"`
+		Title         string  `json:"title"`
+		Body          string  `json:"body"`
+		State         string  `json:"state"`
+		Draft         bool    `json:"draft"`
+		CreatedAt     string  `json:"created_at"`
+		Merged        bool    `json:"merged"`
+		MergedAt      *string `json:"merged_at"`
+		MergeCommitID string  `json:"merge_commit_sha"`
+		Base          struct {
 			Ref string `json:"ref"`
 		} `json:"base"`
 		Head struct {
@@ -971,6 +1098,8 @@ func pullRequestJSON(t *testing.T, pullRequest workspace.PullRequest) string {
 		Title: pullRequest.Title, Body: pullRequest.Body,
 		State: pullRequest.State, Draft: pullRequest.Draft,
 		CreatedAt: pullRequest.CreatedAt.Format(time.RFC3339Nano),
+		Merged:    pullRequest.Merged, MergedAt: mergedAt,
+		MergeCommitID: pullRequest.MergeCommitID,
 		Base: struct {
 			Ref string `json:"ref"`
 		}{Ref: pullRequest.BaseBranch},

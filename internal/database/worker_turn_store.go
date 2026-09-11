@@ -62,7 +62,7 @@ func (s *ExecutionStore) BeginWorkerTurn(
 		ctx,
 		`SELECT id, feature_id, status, reason,
 		        planning_round_limit, implementation_review_round_limit,
-		        lead_provider, reviewer_provider,
+		        lead_provider, reviewer_provider, merge_policy,
 		        started_at, updated_at, ended_at
 		 FROM runs WHERE id = ?`,
 		session.RunID,

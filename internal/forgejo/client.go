@@ -762,6 +762,138 @@ func (client *Client) getPullRequest(
 	}
 }
 
+// MergePullRequest always reconciles the remote pull request before mutating
+// it. The exact approved head is also sent to Forgejo's merge endpoint, so a
+// push between our read and write is rejected by Forgejo rather than merged.
+func (client *Client) MergePullRequest(
+	ctx context.Context,
+	owner string,
+	repository string,
+	spec workspace.PullRequestMergeSpec,
+) (workspace.PullRequest, error) {
+	var err error
+	owner, repository, err = project.NormalizeRepositoryCoordinate(owner, repository)
+	if err != nil {
+		return workspace.PullRequest{}, err
+	}
+	if err := spec.Validate(); err != nil {
+		return workspace.PullRequest{}, err
+	}
+	stored, err := client.getPullRequest(ctx, owner, repository, spec.Number)
+	if err != nil {
+		return workspace.PullRequest{}, err
+	}
+	if err := validateMergePullRequest(stored, spec); err != nil {
+		return workspace.PullRequest{}, err
+	}
+	if stored.Merged {
+		return stored, nil
+	}
+	if stored.Draft {
+		readyTitle, found := strings.CutPrefix(stored.Title, "WIP:")
+		readyTitle = strings.TrimSpace(readyTitle)
+		if !found || readyTitle == "" {
+			return workspace.PullRequest{}, workspace.ErrPullRequestConflict
+		}
+		updateStatus, _, updateErr := client.doJSON(
+			ctx,
+			http.MethodPatch,
+			fmt.Sprintf("%s/%d", pullRequestsPath(owner, repository), spec.Number),
+			struct {
+				Title string `json:"title"`
+			}{Title: readyTitle},
+		)
+		stored, err = client.getPullRequest(ctx, owner, repository, spec.Number)
+		if err != nil {
+			if updateErr != nil {
+				return workspace.PullRequest{}, updateErr
+			}
+			return workspace.PullRequest{}, err
+		}
+		if err := validateMergePullRequest(stored, spec); err != nil {
+			return workspace.PullRequest{}, err
+		}
+		if stored.Merged {
+			return stored, nil
+		}
+		if updateErr != nil {
+			return workspace.PullRequest{}, updateErr
+		}
+		if stored.Draft {
+			if updateStatus == http.StatusNotFound {
+				return workspace.PullRequest{}, workspace.ErrPullRequestConflict
+			}
+			return workspace.PullRequest{}, fmt.Errorf(
+				"%w: pull request draft update returned HTTP %d",
+				project.ErrForgejoUnavailable, updateStatus,
+			)
+		}
+	}
+
+	status, _, mergeErr := client.doJSON(
+		ctx,
+		http.MethodPost,
+		fmt.Sprintf("%s/%d/merge", pullRequestsPath(owner, repository), spec.Number),
+		struct {
+			Do                     string `json:"Do"`
+			HeadCommitID           string `json:"head_commit_id"`
+			MergeWhenChecksSucceed bool   `json:"merge_when_checks_succeed"`
+			DeleteBranchAfterMerge bool   `json:"delete_branch_after_merge"`
+		}{
+			Do: "merge", HeadCommitID: spec.HeadCommitID,
+			MergeWhenChecksSucceed: false, DeleteBranchAfterMerge: false,
+		},
+	)
+	// A request can succeed remotely while its response is lost. Read the PR
+	// after every outcome and trust that durable Forgejo state over the response.
+	stored, reconcileErr := client.getPullRequest(ctx, owner, repository, spec.Number)
+	if reconcileErr == nil {
+		if err := validateMergePullRequest(stored, spec); err != nil {
+			return workspace.PullRequest{}, err
+		}
+		if stored.Merged {
+			return stored, nil
+		}
+	}
+	if mergeErr != nil {
+		return workspace.PullRequest{}, mergeErr
+	}
+	if reconcileErr != nil {
+		return workspace.PullRequest{}, reconcileErr
+	}
+	switch status {
+	case http.StatusConflict, http.StatusMethodNotAllowed, http.StatusNotFound:
+		return workspace.PullRequest{}, workspace.ErrPullRequestConflict
+	default:
+		return workspace.PullRequest{}, fmt.Errorf(
+			"%w: pull request merge returned HTTP %d without a merged result",
+			project.ErrForgejoUnavailable,
+			status,
+		)
+	}
+}
+
+func validateMergePullRequest(
+	pullRequest workspace.PullRequest,
+	spec workspace.PullRequestMergeSpec,
+) error {
+	if pullRequest.Number != spec.Number || pullRequest.BaseBranch != spec.BaseBranch ||
+		pullRequest.HeadBranch != spec.HeadBranch || pullRequest.HeadCommitID != spec.HeadCommitID ||
+		strings.Count(pullRequest.Body, spec.FeatureMarker) != 1 {
+		return workspace.ErrPullRequestConflict
+	}
+	if pullRequest.Merged {
+		if pullRequest.State != "closed" || pullRequest.MergeCommitID == "" || pullRequest.MergedAt == nil {
+			return workspace.ErrPullRequestConflict
+		}
+		return nil
+	}
+	if pullRequest.State != "open" {
+		return workspace.ErrPullRequestConflict
+	}
+	return nil
+}
+
 func (client *Client) findPullRequest(
 	ctx context.Context,
 	owner string,
@@ -900,14 +1032,17 @@ func decodeBranch(body []byte) (workspace.Branch, error) {
 
 func decodePullRequest(body []byte) (workspace.PullRequest, error) {
 	var decoded struct {
-		Number    int64  `json:"number"`
-		HTMLURL   string `json:"html_url"`
-		Title     string `json:"title"`
-		Body      string `json:"body"`
-		State     string `json:"state"`
-		Draft     bool   `json:"draft"`
-		CreatedAt string `json:"created_at"`
-		Base      struct {
+		Number        int64   `json:"number"`
+		HTMLURL       string  `json:"html_url"`
+		Title         string  `json:"title"`
+		Body          string  `json:"body"`
+		State         string  `json:"state"`
+		Draft         bool    `json:"draft"`
+		CreatedAt     string  `json:"created_at"`
+		Merged        bool    `json:"merged"`
+		MergedAt      *string `json:"merged_at"`
+		MergeCommitID string  `json:"merge_commit_sha"`
+		Base          struct {
 			Ref string `json:"ref"`
 		} `json:"base"`
 		Head struct {
@@ -935,6 +1070,17 @@ func decodePullRequest(body []byte) (workspace.PullRequest, error) {
 		BaseBranch:   strings.TrimSpace(decoded.Base.Ref),
 		HeadBranch:   strings.TrimSpace(decoded.Head.Ref),
 		HeadCommitID: strings.TrimSpace(decoded.Head.SHA), CreatedAt: createdAt.UTC(),
+		Merged: decoded.Merged, MergeCommitID: strings.TrimSpace(decoded.MergeCommitID),
+	}
+	if decoded.MergedAt != nil {
+		mergedAt, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(*decoded.MergedAt))
+		if err != nil {
+			return workspace.PullRequest{}, fmt.Errorf(
+				"%w: pull request response has an invalid merged time",
+				project.ErrForgejoUnavailable,
+			)
+		}
+		pullRequest.MergedAt = &mergedAt
 	}
 	if err := pullRequest.Validate(); err != nil {
 		return workspace.PullRequest{}, fmt.Errorf(

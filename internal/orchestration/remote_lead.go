@@ -35,6 +35,8 @@ const (
 	implementationCorrectionRunningReason = "The lead is addressing the verified review findings and publishing a corrected commit."
 	implementationReadinessRunningReason  = "The lead is deciding whether it agrees with the reviewer's approval of the exact commit."
 	implementationApprovedReason          = "The reviewer and lead agreed that the exact verified revision is ready for the merge gate."
+	implementationMergedReason            = "Forgejo merged the exact commit approved by the reviewer and lead."
+	implementationMergeBlockedReason      = "The exact approved revision could not be merged safely. Inspect the merge activity and Forgejo pull request before retrying."
 	defaultLeadForgejoAuthor              = "codex-lead"
 	defaultReviewerForgejoAuthor          = "codex-reviewer"
 )
@@ -62,7 +64,7 @@ var ErrImplementationNotAllowed = errors.New("implementation cannot start from t
 // lead turn. It deliberately contains no workflow transition: goal
 // clarification leaves the feature in draft.
 type RemoteLeadExecution interface {
-	CreateRun(context.Context, string, string, int, int, project.AgentProviders) (execution.Run, bool, error)
+	CreateRun(context.Context, string, string, int, int, project.AgentProviders, project.MergePolicy) (execution.Run, bool, error)
 	CreateSession(context.Context, string, string, string, worker.Role) (execution.Session, bool, error)
 	CreateWorkerAttempt(context.Context, string, string) (execution.WorkerAttemptCheckpoint, bool, error)
 	GetRun(context.Context, string) (execution.Run, error)
@@ -107,6 +109,8 @@ type RemoteLeadWorkspaceService interface {
 	VerifyImplementationReviewResponse(context.Context, string, string, string, string, string, string, string, string, int64, string) (workspace.Workspace, error)
 	VerifyImplementationMergeReadiness(context.Context, string, string, string, string, string, string, string, int64, string) (workspace.Workspace, error)
 	VerifyImplementationReview(context.Context, string, string, string, string, string, string, string, int64, int64, string, string) (workspace.Workspace, error)
+	RecordMergeReady(context.Context, string, string, string, int64) (workspace.Workspace, error)
+	MergeApproved(context.Context, string, string) (workspace.Workspace, bool, error)
 }
 
 type RemoteLeadWorker interface {
@@ -163,6 +167,7 @@ type RemoteLeadStarter struct {
 
 	activeMu sync.Mutex
 	active   map[string]struct{}
+	mergeMu  sync.Mutex
 }
 
 func NewRemoteLeadStarter(config RemoteLeadConfig) (*RemoteLeadStarter, error) {
@@ -263,7 +268,13 @@ func (starter *RemoteLeadStarter) Start(
 	goal string,
 	dialogueLimits project.DialogueLimits,
 	agentProviders project.AgentProviders,
+	mergePolicy project.MergePolicy,
 ) (execution.Run, bool, error) {
+	var err error
+	mergePolicy, err = project.NormalizeMergePolicy(mergePolicy)
+	if err != nil {
+		return execution.Run{}, false, ErrInvalidRunRequest
+	}
 	if strings.TrimSpace(runID) == "" || strings.TrimSpace(projectID) == "" ||
 		strings.TrimSpace(featureID) == "" || strings.TrimSpace(goal) == "" {
 		return execution.Run{}, false, ErrInvalidRunRequest
@@ -293,6 +304,7 @@ func (starter *RemoteLeadStarter) Start(
 		dialogueLimits.PlanningRounds,
 		dialogueLimits.ImplementationReviewRounds,
 		agentProviders,
+		mergePolicy,
 	)
 	if err != nil || !created {
 		return run, created, err
@@ -323,6 +335,10 @@ func (starter *RemoteLeadStarter) Recover(
 	storedFeature feature.Feature,
 	_ project.RecoveryPolicy,
 ) error {
+	if storedFeature.State == feature.StateCompleted {
+		_, _, err := starter.Merge(ctx, run.ID, run.ID+":recovery-merge")
+		return err
+	}
 	activeSessions, err := starter.executions.ActiveSessionsForRun(ctx, run.ID)
 	if err != nil {
 		return fmt.Errorf("find active real-agent session: %w", err)
@@ -465,7 +481,91 @@ func (starter *RemoteLeadStarter) recoverIdleReadyToMergeRun(
 	if !recorded {
 		return fmt.Errorf("%w: ready-to-merge run has no verified lead acknowledgement", ErrInvalidRunRequest)
 	}
+	if run.MergePolicy == project.MergePolicyAutoAfterGates {
+		if _, _, err := starter.Merge(ctx, run.ID, run.ID+":automatic-merge"); err != nil {
+			starter.recordMergeBlocked(ctx, run.ID, err)
+			return starter.waitRun(ctx, run.ID, implementationMergeBlockedReason)
+		}
+		return nil
+	}
 	return starter.waitRun(ctx, run.ID, implementationApprovedReason)
+}
+
+// Merge performs the one final coordinator-owned external action. Both user
+// approval and automatic policy call this same method, so neither path can
+// bypass the exact approved-commit checks in the workspace service.
+func (starter *RemoteLeadStarter) Merge(
+	ctx context.Context,
+	runID string,
+	idempotencyKey string,
+) (execution.Run, bool, error) {
+	if strings.TrimSpace(runID) == "" || strings.TrimSpace(idempotencyKey) == "" {
+		return execution.Run{}, false, ErrInvalidRunRequest
+	}
+	starter.mergeMu.Lock()
+	defer starter.mergeMu.Unlock()
+
+	run, err := starter.executions.GetRun(ctx, runID)
+	if err != nil {
+		return execution.Run{}, false, err
+	}
+	if run.Status.IsTerminal() {
+		if run.Status == execution.RunStatusSucceeded {
+			return run, false, nil
+		}
+		return execution.Run{}, false, ErrImplementationNotAllowed
+	}
+	storedFeature, err := starter.features.GetByID(ctx, run.FeatureID)
+	if err != nil {
+		return execution.Run{}, false, err
+	}
+	mergedWorkspace, mergedNow, err := starter.workspaces.MergeApproved(
+		ctx, storedFeature.ProjectID, storedFeature.ID,
+	)
+	if err != nil {
+		return execution.Run{}, false, err
+	}
+	if storedFeature.State == feature.StateReadyToMerge {
+		if _, err := starter.planning.TransitionFeature(
+			ctx, storedFeature.ID, feature.StateCompleted,
+			workflow.Actor{Kind: workflow.ActorKindCoordinator, ID: coordinatorActorID},
+			run.ID+":merged",
+		); err != nil {
+			return execution.Run{}, false, fmt.Errorf("complete merged feature: %w", err)
+		}
+	}
+	leadSessionID := remoteLeadSessionID(run.ID)
+	if _, err := starter.executions.RecordSessionEventWithID(
+		ctx, run.ID+":merge-completed", leadSessionID,
+		worker.Event{Type: worker.EventActivity, Text: fmt.Sprintf(
+			"Forgejo merged approved commit %s as %s in pull request #%d.",
+			mergedWorkspace.ApprovedCommitID, mergedWorkspace.MergeCommitID,
+			mergedWorkspace.PullRequestNumber,
+		)},
+	); err != nil {
+		return execution.Run{}, false, fmt.Errorf("record completed merge activity: %w", err)
+	}
+	completed, err := starter.executions.TransitionRun(
+		ctx, run.ID, run.Status, execution.RunStatusSucceeded, implementationMergedReason,
+	)
+	if errors.Is(err, execution.ErrStateConflict) {
+		stored, getErr := starter.executions.GetRun(ctx, run.ID)
+		if getErr == nil && stored.Status == execution.RunStatusSucceeded {
+			return stored, false, nil
+		}
+	}
+	if err != nil {
+		return execution.Run{}, false, fmt.Errorf("complete merged run: %w", err)
+	}
+	return completed, mergedNow, nil
+}
+
+func (starter *RemoteLeadStarter) recordMergeBlocked(ctx context.Context, runID string, cause error) {
+	digest := sha256.Sum256([]byte(cause.Error()))
+	_, _ = starter.executions.RecordSessionEventWithID(
+		ctx, runID+":merge-blocked:"+hex.EncodeToString(digest[:8]), remoteLeadSessionID(runID),
+		worker.Event{Type: worker.EventActivity, Text: "Merge blocked: " + cause.Error()},
+	)
 }
 
 func (starter *RemoteLeadStarter) recoverIdleImplementationRun(
@@ -3146,12 +3246,25 @@ func (starter *RemoteLeadStarter) verifyImplementationReadiness(
 		return fmt.Errorf("record verified merge-readiness decision: %w", err)
 	}
 	if result.Disposition == workerhttp.DispositionSucceeded {
+		if _, err := starter.workspaces.RecordMergeReady(
+			ctx, storedFeature.ProjectID, storedFeature.ID,
+			approved.CommitID, approved.PullRequestNumber,
+		); err != nil {
+			return fmt.Errorf("record exact merge target: %w", err)
+		}
 		if _, err := starter.planning.TransitionFeature(
 			ctx, storedFeature.ID, feature.StateReadyToMerge,
 			workflow.Actor{Kind: workflow.ActorKindCoordinator, ID: coordinatorActorID},
 			request.identity.AttemptID+":ready-to-merge",
 		); err != nil {
 			return fmt.Errorf("advance mutually approved implementation to ready to merge: %w", err)
+		}
+		if run.MergePolicy == project.MergePolicyAutoAfterGates {
+			if _, _, err := starter.Merge(ctx, run.ID, run.ID+":automatic-merge"); err != nil {
+				starter.recordMergeBlocked(ctx, run.ID, err)
+				return starter.waitRun(ctx, request.runID, implementationMergeBlockedReason)
+			}
+			return nil
 		}
 		return starter.waitRun(ctx, request.runID, implementationApprovedReason)
 	}

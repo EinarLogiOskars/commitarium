@@ -116,6 +116,7 @@ func (s *Service) Import(ctx context.Context, spec ImportSpec, bundle io.Reader)
 	}
 	created := Project{
 		ID: projectID, Name: normalized.Name, RecoveryPolicy: normalized.RecoveryPolicy,
+		MergePolicy:    normalized.MergePolicy,
 		DialogueLimits: normalized.DialogueLimits, AgentProviders: normalized.AgentProviders,
 		ForgejoRepository: &repository, CreatedAt: s.now().UTC(),
 	}
@@ -148,6 +149,7 @@ func (s *Service) Create(
 	recoveryPolicy RecoveryPolicy,
 	dialogueLimits DialogueLimits,
 	agentProviders AgentProviders,
+	mergePolicy MergePolicy,
 ) (Project, error) {
 	sanitizedName := strings.TrimSpace(name)
 
@@ -156,6 +158,10 @@ func (s *Service) Create(
 	}
 
 	policy, err := NormalizeRecoveryPolicy(recoveryPolicy)
+	if err != nil {
+		return Project{}, err
+	}
+	mergePolicy, err = NormalizeMergePolicy(mergePolicy)
 	if err != nil {
 		return Project{}, err
 	}
@@ -171,6 +177,7 @@ func (s *Service) Create(
 		ID:             s.generateID(),
 		Name:           sanitizedName,
 		RecoveryPolicy: policy,
+		MergePolicy:    mergePolicy,
 		DialogueLimits: dialogueLimits,
 		AgentProviders: agentProviders,
 		CreatedAt:      s.now(),
@@ -181,6 +188,22 @@ func (s *Service) Create(
 	}
 
 	return project, nil
+}
+
+func (s *Service) UpdateMergePolicy(
+	ctx context.Context,
+	projectID string,
+	policy MergePolicy,
+) (Project, error) {
+	normalized, err := NormalizeMergePolicy(policy)
+	if err != nil {
+		return Project{}, err
+	}
+	updated, err := s.store.UpdateMergePolicy(ctx, projectID, normalized)
+	if err != nil {
+		return Project{}, fmt.Errorf("update merge policy for project %q: %w", projectID, err)
+	}
+	return updated, nil
 }
 
 func (s *Service) UpdateAgentProviders(

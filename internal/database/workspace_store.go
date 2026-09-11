@@ -31,6 +31,7 @@ func (store *WorkspaceStore) GetByFeatureID(
 		        base_branch, branch_name, base_commit_id, status,
 		        branch_created_at, checkout_relative_path, checkout_created_at,
 		        pull_request_number, pull_request_url, pull_request_recorded_at,
+		        approved_commit_id, merge_ready_at, merge_commit_id, merged_at,
 		        created_at, updated_at
 		 FROM feature_workspaces WHERE feature_id = ?`,
 		featureID,
@@ -61,8 +62,9 @@ func (store *WorkspaceStore) Reserve(
 		    base_branch, branch_name, base_commit_id, status,
 		    branch_created_at, checkout_relative_path, checkout_created_at,
 		    pull_request_number, pull_request_url, pull_request_recorded_at,
+		    approved_commit_id, merge_ready_at, merge_commit_id, merged_at,
 		    created_at, updated_at
-		 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, '', NULL, NULL, '', NULL, ?, ?)
+		 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, '', NULL, NULL, '', NULL, '', NULL, '', NULL, ?, ?)
 		 ON CONFLICT(feature_id) DO NOTHING`,
 		reservation.ID, reservation.ProjectID, reservation.FeatureID,
 		reservation.RepositoryOwner, reservation.RepositoryName,
@@ -109,6 +111,7 @@ func (store *WorkspaceStore) MarkBranchReady(
 		        base_branch, branch_name, base_commit_id, status,
 		        branch_created_at, checkout_relative_path, checkout_created_at,
 		        pull_request_number, pull_request_url, pull_request_recorded_at,
+		        approved_commit_id, merge_ready_at, merge_commit_id, merged_at,
 		        created_at, updated_at
 		 FROM feature_workspaces WHERE feature_id = ?`,
 		featureID,
@@ -173,6 +176,7 @@ func (store *WorkspaceStore) MarkCheckoutReady(
 		        base_branch, branch_name, base_commit_id, status,
 		        branch_created_at, checkout_relative_path, checkout_created_at,
 		        pull_request_number, pull_request_url, pull_request_recorded_at,
+		        approved_commit_id, merge_ready_at, merge_commit_id, merged_at,
 		        created_at, updated_at
 		 FROM feature_workspaces WHERE feature_id = ?`,
 		featureID,
@@ -246,6 +250,7 @@ func (store *WorkspaceStore) MarkPullRequestReady(
 		        base_branch, branch_name, base_commit_id, status,
 		        branch_created_at, checkout_relative_path, checkout_created_at,
 		        pull_request_number, pull_request_url, pull_request_recorded_at,
+		        approved_commit_id, merge_ready_at, merge_commit_id, merged_at,
 		        created_at, updated_at
 		 FROM feature_workspaces WHERE feature_id = ?`,
 		featureID,
@@ -303,6 +308,117 @@ func (store *WorkspaceStore) MarkPullRequestReady(
 	return ready, nil
 }
 
+func (store *WorkspaceStore) MarkMergeReady(
+	ctx context.Context,
+	featureID string,
+	approvedCommitID string,
+	readyAt time.Time,
+) (workspace.Workspace, error) {
+	if !workspace.ValidCommitID(approvedCommitID) || readyAt.IsZero() {
+		return workspace.Workspace{}, errors.New("approved merge commit and time are required")
+	}
+	stored, err := store.GetByFeatureID(ctx, featureID)
+	if err != nil {
+		return workspace.Workspace{}, err
+	}
+	if stored.ApprovedCommitID != "" {
+		if stored.ApprovedCommitID != approvedCommitID {
+			return workspace.Workspace{}, workspace.ErrConflict
+		}
+		return stored, nil
+	}
+	if !stored.PullRequestReady() || readyAt.Before(*stored.PullRequestRecordedAt) {
+		return workspace.Workspace{}, workspace.ErrConflict
+	}
+	readyAt = readyAt.UTC()
+	result, err := store.db.ExecContext(
+		ctx,
+		`UPDATE feature_workspaces
+		 SET approved_commit_id = ?, merge_ready_at = ?, updated_at = ?
+		 WHERE feature_id = ? AND approved_commit_id = '' AND merge_ready_at IS NULL`,
+		approvedCommitID, formatWorkspaceTime(readyAt), formatWorkspaceTime(readyAt), featureID,
+	)
+	if err != nil {
+		return workspace.Workspace{}, fmt.Errorf("mark workspace merge ready: %w", err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return workspace.Workspace{}, fmt.Errorf("read workspace merge readiness update count for feature %q: %w", featureID, err)
+	}
+	if rowsAffected != 1 {
+		current, getErr := store.GetByFeatureID(ctx, featureID)
+		if getErr == nil && current.ApprovedCommitID == approvedCommitID && current.MergeReadyAt != nil {
+			return current, nil
+		}
+		return workspace.Workspace{}, workspace.ErrConflict
+	}
+	stored.ApprovedCommitID = approvedCommitID
+	stored.MergeReadyAt = &readyAt
+	stored.UpdatedAt = readyAt
+	return stored, stored.Validate()
+}
+
+func (store *WorkspaceStore) MarkMerged(
+	ctx context.Context,
+	featureID string,
+	approvedCommitID string,
+	mergeCommitID string,
+	mergedAt time.Time,
+	recordedAt time.Time,
+) (workspace.Workspace, error) {
+	if !workspace.ValidCommitID(approvedCommitID) || !workspace.ValidCommitID(mergeCommitID) ||
+		mergedAt.IsZero() || recordedAt.IsZero() {
+		return workspace.Workspace{}, errors.New("approved commit, merge commit, merged time, and recording time are required")
+	}
+	stored, err := store.GetByFeatureID(ctx, featureID)
+	if err != nil {
+		return workspace.Workspace{}, err
+	}
+	if stored.ApprovedCommitID != approvedCommitID || stored.MergeReadyAt == nil {
+		return workspace.Workspace{}, workspace.ErrConflict
+	}
+	if stored.MergeCommitID != "" {
+		if stored.MergeCommitID != mergeCommitID || stored.MergedAt == nil || !stored.MergedAt.Equal(mergedAt) {
+			return workspace.Workspace{}, workspace.ErrConflict
+		}
+		return stored, nil
+	}
+	if recordedAt.Before(*stored.MergeReadyAt) {
+		return workspace.Workspace{}, workspace.ErrConflict
+	}
+	mergedAt = mergedAt.UTC()
+	recordedAt = recordedAt.UTC()
+	result, err := store.db.ExecContext(
+		ctx,
+		`UPDATE feature_workspaces
+		 SET merge_commit_id = ?, merged_at = ?, updated_at = ?
+		 WHERE feature_id = ? AND approved_commit_id = ?
+		   AND merge_commit_id = '' AND merged_at IS NULL`,
+		mergeCommitID, formatWorkspaceTime(mergedAt), formatWorkspaceTime(recordedAt),
+		featureID, approvedCommitID,
+	)
+	if err != nil {
+		return workspace.Workspace{}, fmt.Errorf("mark workspace merged: %w", err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return workspace.Workspace{}, fmt.Errorf("read workspace merge result update count for feature %q: %w", featureID, err)
+	}
+	if rowsAffected != 1 {
+		current, getErr := store.GetByFeatureID(ctx, featureID)
+		if getErr == nil && current.ApprovedCommitID == approvedCommitID &&
+			current.MergeCommitID == mergeCommitID && current.MergedAt != nil &&
+			current.MergedAt.Equal(mergedAt) {
+			return current, nil
+		}
+		return workspace.Workspace{}, workspace.ErrConflict
+	}
+	stored.MergeCommitID = mergeCommitID
+	stored.MergedAt = &mergedAt
+	stored.UpdatedAt = recordedAt
+	return stored, stored.Validate()
+}
+
 type workspaceScanner interface {
 	Scan(dest ...any) error
 }
@@ -314,6 +430,8 @@ func scanWorkspace(scanner workspaceScanner) (workspace.Workspace, error) {
 	var checkoutCreatedAt sql.NullString
 	var pullRequestNumber sql.NullInt64
 	var pullRequestRecordedAt sql.NullString
+	var mergeReadyAt sql.NullString
+	var mergedAt sql.NullString
 	var createdAt string
 	var updatedAt string
 	if err := scanner.Scan(
@@ -322,7 +440,9 @@ func scanWorkspace(scanner workspaceScanner) (workspace.Workspace, error) {
 		&stored.BaseBranch, &stored.Branch, &stored.BaseCommitID,
 		&status, &branchCreatedAt, &stored.CheckoutRelativePath,
 		&checkoutCreatedAt, &pullRequestNumber, &stored.PullRequestURL,
-		&pullRequestRecordedAt, &createdAt, &updatedAt,
+		&pullRequestRecordedAt,
+		&stored.ApprovedCommitID, &mergeReadyAt, &stored.MergeCommitID, &mergedAt,
+		&createdAt, &updatedAt,
 	); err != nil {
 		return workspace.Workspace{}, err
 	}
@@ -359,6 +479,20 @@ func scanWorkspace(scanner workspaceScanner) (workspace.Workspace, error) {
 			return workspace.Workspace{}, fmt.Errorf("parse pull request recording time: %w", err)
 		}
 		stored.PullRequestRecordedAt = &parsed
+	}
+	if mergeReadyAt.Valid {
+		parsed, err := time.Parse(time.RFC3339Nano, mergeReadyAt.String)
+		if err != nil {
+			return workspace.Workspace{}, fmt.Errorf("parse merge-ready time: %w", err)
+		}
+		stored.MergeReadyAt = &parsed
+	}
+	if mergedAt.Valid {
+		parsed, err := time.Parse(time.RFC3339Nano, mergedAt.String)
+		if err != nil {
+			return workspace.Workspace{}, fmt.Errorf("parse merged time: %w", err)
+		}
+		stored.MergedAt = &parsed
 	}
 	if err := stored.Validate(); err != nil {
 		return workspace.Workspace{}, fmt.Errorf("validate stored workspace: %w", err)
