@@ -1,4 +1,5 @@
 mod docker;
+mod handoff;
 mod import;
 mod store;
 
@@ -26,6 +27,7 @@ pub fn run() {
             import::inspect_folder,
             import::import_project,
             import::get_project_source,
+            handoff::synchronize_feature_locally,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -188,7 +188,19 @@ in backend event payloads; the UI maps factual activity to presentation.
   merge. `409 handoff_conflict` means durable identities disagree and must be
   shown for user review.
 - This route does not write the user's local repository or push upstream. Those
-  remain trusted-desktop capabilities and are still planned.
+  are separate trusted-desktop capabilities.
+- The native `synchronize_feature_locally` command now accepts `projectId`,
+  `featureId`, and a non-empty `commitMessage`. It returns `project_id`,
+  `feature_id`, `repository_path`, `target_branch`, `local_commit_id`, and
+  `created`.
+- The command supports projects imported from an existing Git repository. It
+  requires the recorded checkout to be clean and on the internal default
+  branch, uses the effective host `user.name` and `user.email`, verifies the
+  exact internal history and resulting source tree, and fast-forwards one clean
+  local commit. Exact retries return `created: false`.
+- Local synchronization never pushes. Errors describing dirty, advanced,
+  missing, or contradictory state must be shown to the user without offering a
+  reset, clean, force, or automatic conflict resolution.
 
 Opening the managed directory in an IDE and starting a development preview are
 not implemented yet.
@@ -205,11 +217,10 @@ not implemented yet.
 - Open the managed workspace in VS Code or another configured editor.
 - Start, observe, and stop a project-defined development environment and open
   its local browser preview.
-- Synchronize one completed Forgejo feature into the user's local repository as
-  a clean user-authored commit, using the settled completed-handoff source
-  endpoint.
 - Separately push that exact local commit to the user's GitHub, GitLab, or other
   upstream remote; optionally allow the user to chain sync and push.
+- Synchronize completed work back into projects originally imported from plain
+  folders; the current clean-commit command requires an existing Git repository.
 
 These trusted-host operations must remain outside agent containers. Agent
 containers receive scoped Forgejo credentials, never the user's GitHub or host
