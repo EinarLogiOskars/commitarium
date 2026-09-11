@@ -1,4 +1,5 @@
 mod docker;
+mod import;
 mod store;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -9,6 +10,8 @@ pub fn run() {
         // capability scope (see capabilities/default.json) restricts it to the
         // coordinator's loopback origin — the network trust seam.
         .plugin(tauri_plugin_http::init())
+        // Native folder picker for project import.
+        .plugin(tauri_plugin_dialog::init())
         // The renderer can invoke ONLY the commands listed here. This explicit
         // set is the trust boundary: no arbitrary shell, Docker, or filesystem
         // access reaches the untrusted UI.
@@ -20,6 +23,9 @@ pub fn run() {
             docker::stack_status,
             store::load_ui_state,
             store::save_ui_state,
+            import::inspect_folder,
+            import::import_project,
+            import::get_project_source,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { getFeature, listFeatureRuns } from "../api/features";
 import { ApiError } from "../api/client";
 import { GoalClarification } from "./GoalClarification";
+import { WORK } from "../vocab";
 import type { Feature, Run } from "../api/types";
 
 // A first feature view: metadata plus run/session history from settled
@@ -10,11 +11,13 @@ import type { Feature, Run } from "../api/types";
 export function FeatureView({
   projectId,
   featureId,
+  hasRepo,
   onBack,
 }: {
   projectId: string;
   featureId: string;
-  onBack: () => void;
+  hasRepo?: boolean;
+  onBack?: () => void;
 }) {
   const [feature, setFeature] = useState<Feature | null>(null);
   const [runs, setRuns] = useState<Run[] | null>(null);
@@ -42,7 +45,7 @@ export function FeatureView({
 
   return (
     <>
-      <button className="back" onClick={onBack}>← Features</button>
+      {onBack && <button className="back" onClick={onBack}>← {WORK.Plural}</button>}
       {error && <div className="banner banner--error">{error}</div>}
       {!feature && !error && <p className="muted">Loading…</p>}
 
@@ -73,14 +76,19 @@ export function FeatureView({
           </section>
 
           {feature.state === "draft" ? (
-            <GoalClarification projectId={projectId} feature={feature} onAccepted={load} />
+            <GoalClarification
+              projectId={projectId}
+              feature={feature}
+              hasRepo={hasRepo}
+              onAccepted={load}
+            />
           ) : (
             <section className="panel">
               <h2>Runs</h2>
               {runs === null ? (
                 <p className="muted">Loading…</p>
               ) : runs.length === 0 ? (
-                <p className="muted">No runs yet — this feature has not started.</p>
+                <p className="muted">No runs yet — this {WORK.short} has not started.</p>
               ) : (
                 runs.map((run) => (
                   <div key={run.id} className="run">

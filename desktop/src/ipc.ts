@@ -4,6 +4,8 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { open } from "@tauri-apps/plugin-dialog";
+import type { Project } from "./api/types";
 
 export interface DockerProbe {
   docker_installed: boolean;
@@ -34,3 +36,41 @@ export const saveUiState = (state: unknown): Promise<void> =>
 
 // Open a URL in the user's default browser (used for the Docker install link).
 export const openExternal = (url: string): Promise<void> => openUrl(url);
+
+// --- Project import (host-side) ---
+
+export interface FolderInfo {
+  path: string;
+  suggested_name: string;
+  is_git_repo: boolean;
+  has_commits: boolean;
+  dirty: boolean;
+  current_branch: string | null;
+  estimated_files: number | null;
+  estimated_bytes: number | null;
+}
+
+/** Native folder picker; returns the chosen path or null if cancelled. */
+export const pickFolder = async (): Promise<string | null> => {
+  const result = await open({ directory: true, multiple: false });
+  return typeof result === "string" ? result : null;
+};
+
+export const inspectFolder = (path: string): Promise<FolderInfo> =>
+  invoke("inspect_folder", { path });
+
+export const importProject = (
+  path: string,
+  name: string,
+  defaultBranch: string,
+  recoveryPolicy: string,
+): Promise<Project> =>
+  invoke("import_project", {
+    path,
+    name,
+    defaultBranch,
+    recoveryPolicy,
+  });
+
+export const getProjectSource = (projectId: string): Promise<string | null> =>
+  invoke("get_project_source", { projectId });

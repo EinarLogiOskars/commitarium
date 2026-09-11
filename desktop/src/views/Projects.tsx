@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { listProjects, createProject } from "../api/projects";
 import { ApiError } from "../api/client";
+import { ImportProject } from "./ImportProject";
 import type { Project, RecoveryPolicy } from "../api/types";
 
 /** Project chooser: list existing projects and create new ones. */
@@ -16,6 +17,7 @@ export function Projects({
   const [name, setName] = useState("");
   const [policy, setPolicy] = useState<RecoveryPolicy>("approval_required");
   const [creating, setCreating] = useState(false);
+  const [importing, setImporting] = useState(false);
 
   const load = useCallback(async () => {
     if (!reachable) return;
@@ -61,8 +63,22 @@ export function Projects({
 
   return (
     <section className="panel">
-      <h2>Projects</h2>
+      <div className="panel__head">
+        <h2>Projects</h2>
+        <button onClick={() => setImporting(true)}>Import project…</button>
+      </div>
       {error && <div className="banner banner--error">{error}</div>}
+
+      {importing && (
+        <ImportProject
+          onClose={() => setImporting(false)}
+          onImported={(id) => {
+            setImporting(false);
+            void load();
+            onSelect(id);
+          }}
+        />
+      )}
 
       {projects === null ? (
         <p className="muted">Loading…</p>

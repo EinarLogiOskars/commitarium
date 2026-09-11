@@ -1,28 +1,29 @@
+/* Warm neutral palette — workshop identity (kraft/wood/clay), light default. */
 :root {
-  --bg: #f6f7f9;
-  --panel: #ffffff;
-  --border: #e2e5ea;
-  --text: #1c2330;
-  --muted: #6b7686;
-  --accent: #3b5bdb;
-  --accent-text: #ffffff;
-  --ok: #2f9e44;
-  --bad: #e03131;
-  --warn: #f08c00;
+  --bg: #f4efe7;
+  --panel: #fdfbf6;
+  --border: #e6ddcf;
+  --text: #2a231b;
+  --muted: #877c6c;
+  --accent: #b5552e;
+  --accent-text: #fff7f0;
+  --ok: #5c8a49;
+  --bad: #b64f36;
+  --warn: #b07d1e;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #14171c;
-    --panel: #1c2027;
-    --border: #2a2f38;
-    --text: #e6e9ef;
-    --muted: #8b95a5;
-    --accent: #5c7cfa;
-    --accent-text: #0b0d10;
-    --ok: #51cf66;
-    --bad: #ff6b6b;
-    --warn: #ffa94d;
+    --bg: #17130f;
+    --panel: #201b15;
+    --border: #322a22;
+    --text: #ece4d8;
+    --muted: #a49685;
+    --accent: #d0764a;
+    --accent-text: #1a140f;
+    --ok: #7fae6a;
+    --bad: #d47159;
+    --warn: #d6a24a;
   }
 }
 
@@ -62,6 +63,117 @@ body {
 
 .app__spacer {
   flex: 1;
+}
+
+/* --- Desktop app shell (full window: top bar + rail + main) --- */
+.shell {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 18px;
+  border-bottom: 1px solid var(--border);
+  flex: none;
+}
+.topbar__brand {
+  font-weight: 700;
+  font-size: 15px;
+}
+.topbar__project {
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.topbar__sep {
+  color: var(--border);
+}
+.topbar__spacer {
+  flex: 1;
+}
+.shell__body {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+.rail {
+  width: 264px;
+  flex: none;
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  padding: 12px 12px 16px;
+  gap: 4px;
+}
+.rail__spacer {
+  flex: 1;
+}
+.rail__section {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  font-weight: 600;
+  margin: 12px 6px 4px;
+}
+.rail__item {
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: 1px solid transparent;
+  padding: 8px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  color: var(--text);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  font: inherit;
+}
+.rail__item:hover {
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+}
+.rail__item--active {
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 35%, transparent);
+}
+.rail__back {
+  color: var(--muted);
+  font-size: 13px;
+  padding: 6px 8px;
+  align-self: flex-start;
+}
+.main {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+  padding: 24px 28px;
+}
+.main__inner {
+  max-width: 860px;
+}
+.main__empty {
+  color: var(--muted);
+  display: flex;
+  height: 100%;
+  align-items: center;
+  justify-content: center;
+}
+
+.ghost {
+  background: transparent;
+  border-color: transparent;
+  color: var(--muted);
+}
+.ghost:hover:not(:disabled) {
+  border-color: var(--border);
+  color: var(--text);
 }
 
 .pill--button {
@@ -399,6 +511,77 @@ select {
   margin: 0 0 14px;
   font-size: 15px;
   font-weight: 600;
+}
+.panel__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+.panel__head h2 {
+  margin: 0;
+}
+
+.modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  z-index: 50;
+}
+.modal__card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 22px 24px;
+  width: 100%;
+  max-width: 560px;
+  max-height: 85vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.modal__card h2 {
+  margin: 0;
+  font-size: 17px;
+}
+.modal__footer {
+  display: flex;
+  justify-content: flex-end;
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+}
+
+.import-src {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.import-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.import-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.import-form input,
+.import-form select {
+  font-size: 14px;
+  color: var(--text);
 }
 
 .checks {

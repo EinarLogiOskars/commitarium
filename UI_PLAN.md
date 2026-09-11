@@ -8,6 +8,87 @@ side effect. When a screen needs a contract change, that is a conversation with
 the backend and an update to [`docs/coordinator-api.md`](docs/coordinator-api.md)
 — not a quiet edit to Go.
 
+## Desktop app shell & boot sequence (redesign in progress)
+
+The functional UI works but reads as a *website / dev tool*, not a desktop
+application. The cause is structural, not cosmetic: a centered max-width column
+of stacked cards with drill-down page navigation. This redesign moves it to a
+**desktop app shell**. (Warm palette already applied — see Visual identity.)
+
+**What makes it a desktop app, not a web page:**
+
+- **Fill the window with persistent regions** — no centered max-width column.
+  A top bar, a left rail, and a main pane that stay put while content changes
+  inside them.
+- **Master/detail, not drill-down pages** — show the list *and* the selected
+  item together; select in the rail, main pane updates in place. No "← back".
+- **Higher, deliberate density** — more on screen, tighter spacing, less scroll.
+- **Persistent chrome** — top bar always holds identity + coordinator status +
+  global actions; the rail is always navigation.
+
+**Layout:**
+
+```
+top bar: Commitarium · <project> · ● reachable
+────────────────┬──────────────────────────────
+ LEFT RAIL      │  MAIN PANE
+ Work orders    │   selected work order (overview /
+  • …           │   clarification / planning / review)
+ + New order    │   or project overview when none selected
+ Project / Settings
+```
+
+- **Projects screen** (top level): full-window chooser (list/grid + Import /
+  New), top bar, no rail. Entering a project opens the workspace shell above.
+- **Project workspace**: rail (work orders + project nav) + main pane. Re-hosts
+  the existing components (project info, work-order list, work-order detail with
+  clarification/runs) — a re-hosting, not a rewrite. Leaves an obvious home for
+  the future agent-world view as a main-pane mode.
+
+**Boot sequence** (replaces the manual system/health front door):
+
+1. On launch, auto-boot: check Docker → if the daemon is down, launch Docker
+   Desktop (`open -a Docker` on macOS) and poll → bring the stack up → wait for
+   coordinator-reachable → slide into the project chooser.
+2. A themed **loading animation** during boot (workshop "opening up" — a small
+   first taste of the Phase-2b world).
+3. **Diagnostics only on failure** — Docker missing, daemon won't start, or a
+   service unhealthy surfaces the detail + install link. The manual
+   Stop/Update/status controls move into a **System** view reached from the
+   status pill. Boot needs a graceful "waiting for Docker…" state with a timeout
+   that falls back to diagnostics (first Docker Desktop start is slow / may
+   prompt for permission).
+
+**Decisions:**
+
+- **Custom (frameless) titlebar: deferred.** Not low-cost — per-OS window
+  controls, drag regions, macOS traffic-light positioning. Build the shell with
+  the OS titlebar first; revisit later, likely via the lower-risk macOS
+  `titleBarStyle: Overlay` rather than full frameless.
+- **Sequencing:** app shell first (the structural win), boot sequence +
+  animation second (polish on top).
+
+**Status — done / left:**
+
+- [x] Warm palette applied (tokens in `App.css`).
+- [ ] App shell: full-window, top bar + left rail + main pane; remove centered
+      max-width column.
+- [ ] Project chooser as a full-window top-level screen.
+- [ ] Project workspace: rail + main master/detail, re-hosting existing views.
+- [ ] Boot sequence: auto Docker + stack, diagnostics-on-failure, System view.
+- [ ] Boot loading animation (workshop theme).
+- [ ] (Later) macOS overlay titlebar.
+
+## Visual identity
+
+Warm neutral palette — the workshop identity (kraft / wood / clay), replacing
+the earlier cool blue-grey "GitHub" look. Light default + dark, both with a
+low-chroma warm undertone (no pure black/white). Single primary accent
+**terracotta** (`#b5552e` light / `#d0764a` dark); status colors warm-leaning
+(sage / amber / brick) so they read as status, not competing accents. All tokens
+live in `desktop/src/App.css` `:root` + the dark media block — re-theming is a
+one-file swap.
+
 ## Working method: follow-the-settled-backend
 
 The backend is implemented in coherent slices and settles layer by layer. The
@@ -151,6 +232,24 @@ payoff of the store-first decision.
 - **Axis 2 — which renderer** (conversation vs. agent world): the view toggle.
 
 Any phase must be viewable in either renderer. Do not entangle the axes.
+
+## Naming: "work order" (display) vs "feature" (code)
+
+The unit of work is displayed as a **work order** (short form: **order**), not a
+"feature". Rationale: not all work is a new feature — bugs, refactors, chores
+are equally valid — so the label must be type-neutral; and "order" makes the
+workshop metaphor literal (a customer brings an order to the shop, the craftsmen
+fulfill it, it is delivered). This unifies the functional vocabulary with the
+game vocabulary.
+
+- The **code and backend contract keep `feature`/`features`** unchanged (the API
+  is `.../features`, state machine, etc.). This is a **presentation-layer
+  relabel only**, driven by a single display-vocabulary module
+  (`src/vocab.ts`), so it stays swappable and consistent.
+- Consistency is the whole job: every surface moves together (list header,
+  create button, empty states, state badges, back links, view titles, prose).
+  Backend-sourced wording (errors, logs saying "feature") must not leak the old
+  term beside the new one.
 
 ## Gamification & progression — the workshop
 
