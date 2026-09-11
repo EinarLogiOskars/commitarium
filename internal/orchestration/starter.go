@@ -34,6 +34,7 @@ func (s *Starter) Recover(
 		MaxPlanningRounds: run.PlanningRoundLimit,
 		MaxReviewRounds:   run.ImplementationReviewRoundLimit,
 		AgentProviders:    run.AgentProviders,
+		MergePolicy:       run.MergePolicy,
 		RecoveryPolicy:    recoveryPolicy,
 		WorkflowPhase:     storedFeature.State,
 	})
@@ -56,7 +57,13 @@ func (s *Starter) Start(
 	goal string,
 	dialogueLimits project.DialogueLimits,
 	agentProviders project.AgentProviders,
+	mergePolicy project.MergePolicy,
 ) (execution.Run, bool, error) {
+	var err error
+	mergePolicy, err = project.NormalizeMergePolicy(mergePolicy)
+	if err != nil {
+		return execution.Run{}, false, err
+	}
 	_ = projectID // Simulated assignments do not resolve a project workspace.
 	return s.runner.Start(ctx, RunRequest{
 		ID: runID, FeatureID: featureID, Goal: goal,
@@ -64,5 +71,6 @@ func (s *Starter) Start(
 		MaxPlanningRounds: dialogueLimits.PlanningRounds,
 		MaxReviewRounds:   dialogueLimits.ImplementationReviewRounds,
 		AgentProviders:    agentProviders,
+		MergePolicy:       mergePolicy,
 	})
 }

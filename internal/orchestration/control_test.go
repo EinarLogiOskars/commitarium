@@ -156,6 +156,7 @@ func activeControlSession(
 		2,
 		3,
 		project.DefaultAgentProviders(),
+		project.DefaultMergePolicy(),
 	); err != nil {
 		t.Fatalf("create control run: %v", err)
 	} else if !created {

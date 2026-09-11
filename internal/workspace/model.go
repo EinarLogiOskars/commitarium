@@ -60,6 +60,10 @@ const (
 
 var safeCommitID = regexp.MustCompile(`^[0-9a-f]{40}([0-9a-f]{24})?$`)
 
+func ValidCommitID(value string) bool {
+	return safeCommitID.MatchString(value)
+}
+
 type Workspace struct {
 	ID                    string
 	ProjectID             string
@@ -76,6 +80,10 @@ type Workspace struct {
 	PullRequestNumber     int64
 	PullRequestURL        string
 	PullRequestRecordedAt *time.Time
+	ApprovedCommitID      string
+	MergeReadyAt          *time.Time
+	MergeCommitID         string
+	MergedAt              *time.Time
 	CreatedAt             time.Time
 	UpdatedAt             time.Time
 }
@@ -166,6 +174,32 @@ func (workspace Workspace) Validate() error {
 			return errors.New("checkout creation time must be within the workspace lifetime")
 		}
 	}
+	if (workspace.ApprovedCommitID == "") != (workspace.MergeReadyAt == nil) {
+		return errors.New("approved commit and merge-ready time must be set together")
+	}
+	if workspace.ApprovedCommitID != "" {
+		if !safeCommitID.MatchString(workspace.ApprovedCommitID) || !workspace.PullRequestReady() {
+			return errors.New("merge readiness requires a valid approved commit and pull request")
+		}
+		if workspace.MergeReadyAt.IsZero() ||
+			workspace.MergeReadyAt.Before(*workspace.PullRequestRecordedAt) ||
+			workspace.MergeReadyAt.After(workspace.UpdatedAt) {
+			return errors.New("merge-ready time must follow pull-request recording")
+		}
+	}
+	if (workspace.MergeCommitID == "") != (workspace.MergedAt == nil) {
+		return errors.New("merge commit and merged time must be set together")
+	}
+	if workspace.MergeCommitID != "" {
+		if !safeCommitID.MatchString(workspace.MergeCommitID) || workspace.ApprovedCommitID == "" {
+			return errors.New("merged workspace requires valid approved and merge commits")
+		}
+		// MergedAt comes from Forgejo while UpdatedAt comes from the coordinator.
+		// Their clocks and timestamp precision cannot be safely ordered.
+		if workspace.MergedAt.IsZero() || workspace.UpdatedAt.Before(*workspace.MergeReadyAt) {
+			return errors.New("merged workspace must be recorded after merge readiness")
+		}
+	}
 	return nil
 }
 
@@ -211,16 +245,42 @@ func (spec PullRequestSpec) Validate() error {
 }
 
 type PullRequest struct {
-	Number       int64
-	URL          string
-	Title        string
-	Body         string
-	State        string
-	Draft        bool
-	BaseBranch   string
-	HeadBranch   string
-	HeadCommitID string
-	CreatedAt    time.Time
+	Number        int64
+	URL           string
+	Title         string
+	Body          string
+	State         string
+	Draft         bool
+	BaseBranch    string
+	HeadBranch    string
+	HeadCommitID  string
+	CreatedAt     time.Time
+	Merged        bool
+	MergeCommitID string
+	MergedAt      *time.Time
+}
+
+type PullRequestMergeSpec struct {
+	Number        int64
+	FeatureMarker string
+	BaseBranch    string
+	HeadBranch    string
+	HeadCommitID  string
+}
+
+func (spec PullRequestMergeSpec) Validate() error {
+	if spec.Number < 1 {
+		return errors.New("merge pull request number is required")
+	}
+	for _, value := range []string{spec.FeatureMarker, spec.BaseBranch, spec.HeadBranch} {
+		if strings.TrimSpace(value) == "" || value != strings.TrimSpace(value) {
+			return errors.New("merge pull request fields are required and must be trimmed")
+		}
+	}
+	if !safeCommitID.MatchString(spec.HeadCommitID) {
+		return errors.New("merge head must be a lowercase commit ID")
+	}
+	return nil
 }
 
 // PlanPublicationSpec describes the one curated planning artifact that belongs
@@ -354,6 +414,15 @@ func (pullRequest PullRequest) Validate() error {
 	}
 	if pullRequest.CreatedAt.IsZero() {
 		return errors.New("pull request creation time is required")
+	}
+	if pullRequest.Merged {
+		if pullRequest.State != "closed" || !safeCommitID.MatchString(pullRequest.MergeCommitID) ||
+			pullRequest.MergedAt == nil || pullRequest.MergedAt.IsZero() ||
+			pullRequest.MergedAt.Before(pullRequest.CreatedAt) {
+			return errors.New("merged pull request state is invalid")
+		}
+	} else if pullRequest.MergeCommitID != "" || pullRequest.MergedAt != nil {
+		return errors.New("unmerged pull request cannot contain merge result fields")
 	}
 	return nil
 }

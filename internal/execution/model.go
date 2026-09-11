@@ -28,6 +28,7 @@ type Run struct {
 	PlanningRoundLimit             int
 	ImplementationReviewRoundLimit int
 	AgentProviders                 project.AgentProviders
+	MergePolicy                    project.MergePolicy
 	StartedAt                      time.Time
 	UpdatedAt                      time.Time
 	EndedAt                        *time.Time
@@ -151,7 +152,7 @@ func (status RunStatus) CanTransitionTo(next RunStatus) bool {
 	case RunStatusRunning:
 		return next == RunStatusWaitingForUser || next.IsTerminal()
 	case RunStatusWaitingForUser:
-		return next == RunStatusRunning ||
+		return next == RunStatusRunning || next == RunStatusSucceeded ||
 			next == RunStatusStopped ||
 			next == RunStatusFailed
 	default:
@@ -160,6 +161,9 @@ func (status RunStatus) CanTransitionTo(next RunStatus) bool {
 }
 
 func (run Run) Validate() error {
+	if _, err := project.NormalizeMergePolicy(run.MergePolicy); err != nil {
+		return fmt.Errorf("%w: merge policy is invalid", ErrInvalidRun)
+	}
 	switch {
 	case strings.TrimSpace(run.ID) == "":
 		return fmt.Errorf("%w: ID is required", ErrInvalidRun)

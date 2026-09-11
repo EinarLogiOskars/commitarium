@@ -16,6 +16,7 @@ func TestProjectStoreCreateAndGetByID(t *testing.T) {
 		ID:             "prj_test",
 		Name:           "Commitarium",
 		RecoveryPolicy: project.RecoveryPolicyApprovalRequired,
+		MergePolicy:    project.DefaultMergePolicy(),
 		DialogueLimits: project.DialogueLimits{PlanningRounds: 0, ImplementationReviewRounds: 4},
 		AgentProviders: project.DefaultAgentProviders(),
 		CreatedAt: time.Date(
@@ -49,6 +50,7 @@ func TestProjectStoreUpdatesDialogueLimits(t *testing.T) {
 	created := project.Project{
 		ID: "prj_test", Name: "Commitarium",
 		RecoveryPolicy: project.RecoveryPolicyApprovalRequired,
+		MergePolicy:    project.DefaultMergePolicy(),
 		AgentProviders: project.DefaultAgentProviders(),
 		DialogueLimits: project.DefaultDialogueLimits(),
 		CreatedAt:      time.Now().UTC(),
@@ -101,12 +103,39 @@ func TestProjectStoreUpdatesAgentProviders(t *testing.T) {
 	}
 }
 
+func TestProjectStoreUpdatesMergePolicy(t *testing.T) {
+	store := newTestProjectStore(t)
+	created := project.Project{
+		ID: "prj_merge", Name: "Merge policy", CreatedAt: time.Now().UTC(),
+		MergePolicy: project.MergePolicyRequireUserApproval,
+	}
+	if err := store.Create(t.Context(), created); err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	updated, err := store.UpdateMergePolicy(
+		t.Context(), created.ID, project.MergePolicyAutoAfterGates,
+	)
+	if err != nil || updated.MergePolicy != project.MergePolicyAutoAfterGates {
+		t.Fatalf("update merge policy: project=%+v err=%v", updated, err)
+	}
+	reloaded, err := store.GetByID(t.Context(), created.ID)
+	if err != nil || reloaded.MergePolicy != project.MergePolicyAutoAfterGates {
+		t.Fatalf("reload merge policy: project=%+v err=%v", reloaded, err)
+	}
+	if _, err := store.UpdateMergePolicy(
+		t.Context(), "prj_missing", project.MergePolicyAutoAfterGates,
+	); !errors.Is(err, project.ErrNotFound) {
+		t.Fatalf("missing project error = %v", err)
+	}
+}
+
 func TestProjectStoreCreateRejectsDuplicateID(t *testing.T) {
 	store := newTestProjectStore(t)
 	original := project.Project{
 		ID:             "prj_same",
 		Name:           "Original",
 		RecoveryPolicy: project.RecoveryPolicyApprovalRequired,
+		MergePolicy:    project.DefaultMergePolicy(),
 		AgentProviders: project.DefaultAgentProviders(),
 		CreatedAt:      time.Date(2026, time.September, 8, 12, 0, 0, 0, time.UTC),
 	}

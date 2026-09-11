@@ -29,6 +29,7 @@ type ImportSpec struct {
 	ImportID       string
 	Name           string
 	RecoveryPolicy RecoveryPolicy
+	MergePolicy    MergePolicy
 	DialogueLimits DialogueLimits
 	AgentProviders AgentProviders
 	DefaultBranch  string
@@ -71,6 +72,11 @@ func normalizeImportSpec(spec ImportSpec) (ImportSpec, error) {
 		return ImportSpec{}, err
 	}
 	spec.RecoveryPolicy = policy
+	mergePolicy, err := NormalizeMergePolicy(spec.MergePolicy)
+	if err != nil {
+		return ImportSpec{}, err
+	}
+	spec.MergePolicy = mergePolicy
 	if err := spec.DialogueLimits.Validate(); err != nil {
 		return ImportSpec{}, err
 	}
@@ -145,6 +151,7 @@ func writeImportBundle(bundle io.Reader) (string, string, error) {
 func sameImportedProject(stored Project, spec ImportSpec, repository ForgejoRepository) bool {
 	return stored.ID == projectImportID(spec.ImportID) && stored.Name == spec.Name &&
 		stored.RecoveryPolicy == spec.RecoveryPolicy && stored.DialogueLimits == spec.DialogueLimits &&
+		stored.MergePolicy == spec.MergePolicy &&
 		stored.AgentProviders == spec.AgentProviders &&
 		stored.ForgejoRepository != nil &&
 		sameRepositoryCoordinate(*stored.ForgejoRepository, repository.Owner, repository.Name) &&

@@ -24,6 +24,7 @@ type workspaceResponse struct {
 	BranchCreatedAt *time.Time           `json:"branch_created_at,omitempty"`
 	Checkout        *checkoutResponse    `json:"checkout,omitempty"`
 	PullRequest     *pullRequestResponse `json:"pull_request,omitempty"`
+	Merge           *mergeResponse       `json:"merge,omitempty"`
 	CreatedAt       time.Time            `json:"created_at"`
 	UpdatedAt       time.Time            `json:"updated_at"`
 }
@@ -39,6 +40,13 @@ type pullRequestResponse struct {
 	URL        string    `json:"url"`
 	Draft      bool      `json:"draft"`
 	RecordedAt time.Time `json:"recorded_at"`
+}
+
+type mergeResponse struct {
+	ApprovedCommitID string     `json:"approved_commit_id"`
+	ReadyAt          time.Time  `json:"ready_at"`
+	MergeCommitID    string     `json:"merge_commit_id,omitempty"`
+	MergedAt         *time.Time `json:"merged_at,omitempty"`
 }
 
 type repositoryRef struct {
@@ -129,7 +137,13 @@ func newWorkspaceResponse(stored workspace.Workspace) workspaceResponse {
 	if stored.PullRequestReady() {
 		response.PullRequest = &pullRequestResponse{
 			Number: stored.PullRequestNumber, URL: stored.PullRequestURL,
-			Draft: true, RecordedAt: *stored.PullRequestRecordedAt,
+			Draft: stored.MergeCommitID == "", RecordedAt: *stored.PullRequestRecordedAt,
+		}
+	}
+	if stored.MergeReadyAt != nil {
+		response.Merge = &mergeResponse{
+			ApprovedCommitID: stored.ApprovedCommitID, ReadyAt: *stored.MergeReadyAt,
+			MergeCommitID: stored.MergeCommitID, MergedAt: stored.MergedAt,
 		}
 	}
 	return response

@@ -14,11 +14,12 @@ import (
 )
 
 type ProjectService interface {
-	Create(ctx context.Context, name string, recoveryPolicy project.RecoveryPolicy, dialogueLimits project.DialogueLimits, agentProviders project.AgentProviders) (project.Project, error)
+	Create(ctx context.Context, name string, recoveryPolicy project.RecoveryPolicy, dialogueLimits project.DialogueLimits, agentProviders project.AgentProviders, mergePolicy project.MergePolicy) (project.Project, error)
 	GetByID(ctx context.Context, id string) (project.Project, error)
 	List(ctx context.Context) ([]project.Project, error)
 	UpdateDialogueLimits(ctx context.Context, projectID string, limits project.DialogueLimits) (project.Project, error)
 	UpdateAgentProviders(ctx context.Context, projectID string, providers project.AgentProviders) (project.Project, error)
+	UpdateMergePolicy(ctx context.Context, projectID string, policy project.MergePolicy) (project.Project, error)
 	BindForgejoRepository(ctx context.Context, projectID, owner, name string) (project.Project, error)
 }
 
@@ -76,6 +77,7 @@ type RunStarter interface {
 		goal string,
 		dialogueLimits project.DialogueLimits,
 		agentProviders project.AgentProviders,
+		mergePolicy project.MergePolicy,
 	) (execution.Run, bool, error)
 }
 
@@ -124,6 +126,7 @@ type RealWorkflowStarter interface {
 		runID string,
 		idempotencyKey string,
 	) (execution.Run, bool, error)
+	Merge(ctx context.Context, runID string, idempotencyKey string) (execution.Run, bool, error)
 }
 
 type API struct {
@@ -230,6 +233,10 @@ func newAPI(
 		api.updateProjectAgentProvidersHandler,
 	)
 	mux.HandleFunc(
+		"PUT /api/v1/projects/{id}/merge-policy",
+		api.updateProjectMergePolicyHandler,
+	)
+	mux.HandleFunc(
 		"PUT /api/v1/projects/{id}/forgejo-repository",
 		api.bindForgejoRepositoryHandler,
 	)
@@ -280,6 +287,7 @@ func newAPI(
 		mux.HandleFunc("POST /api/v1/runs/{id}/planning/reviewer", api.startPlanningReviewHandler)
 		mux.HandleFunc("POST /api/v1/runs/{id}/planning/round", api.startPlanningRoundHandler)
 		mux.HandleFunc("POST /api/v1/runs/{id}/implementation", api.startImplementationHandler)
+		mux.HandleFunc("POST /api/v1/runs/{id}/merge", api.mergeRunHandler)
 	}
 	mux.HandleFunc("GET /api/v1/runs/{id}", api.getRunHandler)
 	mux.HandleFunc("GET /api/v1/runs/{id}/planning/messages", api.getPlanningMessagesHandler)

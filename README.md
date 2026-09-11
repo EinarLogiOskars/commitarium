@@ -54,10 +54,16 @@ decision, body, and author. Approval resumes the original lead for a final
 readiness decision against that exact revision. The lead posts a structured
 `Merge readiness` PR comment and either gives the green light or raises a
 remaining concern. Only a verified green light advances the feature to
-`ready_to_merge`, without merging. A changes-requested review instead resumes
-the original lead conversation, which publishes a new descendant commit and a
-structured `Review response` PR comment; the original reviewer then reviews
-that exact revision.
+`ready_to_merge` and pins that exact commit as the only allowed merge target.
+Projects default to waiting for user approval; they can instead snapshot an
+automatic policy onto new runs. Both paths use the same guarded Forgejo merge,
+which rechecks the clean checkout, branch, PR, and exact approved head before
+advancing the feature to `completed`. This merge behavior belongs to the
+opt-in real, Forgejo-backed workflow; the default deterministic simulation does
+not fabricate an external merge. A changes-requested review instead
+resumes the original lead conversation, which publishes a new descendant
+commit and a structured `Review response` PR comment; the original reviewer
+then reviews that exact revision.
 Review and lead-response pairs repeat for at most six rounds by default. The
 round is completed before the workflow stops for user input, and a zero round
 limit means unlimited. Projects expose separate planning and implementation-
@@ -66,6 +72,9 @@ settings changes affect only future workflows. Projects now also choose Codex
 or Claude independently for the lead and reviewer. Each run snapshots those
 choices and uses them for routing and restart recovery, so later project edits
 cannot move an active conversation to another provider.
+Each project also chooses whether a mutually approved implementation waits for
+user merge approval or merges automatically after the same safety checks. A run
+keeps the choice it had when it started, and defaults to user approval.
 Projects and their features can be listed for switching, active-work views, and
 completed history. Opening a feature exposes its run and session history.
 Projects can also be permanently associated with one verified Forgejo repository.
@@ -552,6 +561,16 @@ review is still paired with its lead response before the workflow waits for the
 user. Repeating startup at any boundary compares the durable review, correction,
 and readiness numbers, then reuses or verifies the deterministic attempt for the
 later stage. It does not replace an agent or duplicate a PR audit entry.
+
+At mutual approval, the coordinator durably records the exact approved commit
+before the feature becomes `ready_to_merge`. The default project policy leaves
+the run waiting for `POST /api/v1/runs/RUN_ID/merge`; projects may instead use
+`auto_after_gates` for new runs. Both paths call the same operation: it verifies
+the clean checkout, Forgejo branch, marked PR, and exact head again, removes the
+managed `WIP:` draft marker, and sends that head SHA to Forgejo's merge endpoint.
+Only a confirmed Forgejo merge advances the feature to `completed` and the run
+to `succeeded`. If the merge response is lost, a retry or coordinator restart
+adopts the already-merged PR instead of issuing a blind replacement action.
 
 When the lead is waiting during `implementing`, continue the same implementation
 conversation through the ordinary session command endpoint:

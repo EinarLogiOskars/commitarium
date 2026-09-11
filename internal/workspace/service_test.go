@@ -41,6 +41,36 @@ type memoryStore struct {
 	pullRequestMarkedAt []time.Time
 	getErr              error
 	reserveErr          error
+	mergeReadyCalls     int
+	mergedCalls         int
+}
+
+func (store *memoryStore) MarkMergeReady(
+	_ context.Context,
+	_ string,
+	approvedCommitID string,
+	readyAt time.Time,
+) (Workspace, error) {
+	store.mergeReadyCalls++
+	store.stored.ApprovedCommitID = approvedCommitID
+	store.stored.MergeReadyAt = &readyAt
+	store.stored.UpdatedAt = readyAt
+	return store.stored, nil
+}
+
+func (store *memoryStore) MarkMerged(
+	_ context.Context,
+	_ string,
+	_ string,
+	mergeCommitID string,
+	mergedAt time.Time,
+	recordedAt time.Time,
+) (Workspace, error) {
+	store.mergedCalls++
+	store.stored.MergeCommitID = mergeCommitID
+	store.stored.MergedAt = &mergedAt
+	store.stored.UpdatedAt = recordedAt
+	return store.stored, nil
 }
 
 func (store *memoryStore) MarkPullRequestReady(
@@ -148,11 +178,22 @@ type recordingPullRequests struct {
 	verifiedPlanSpecs   []PlanPublicationSpec
 	implementationSpecs []ImplementationPublicationSpec
 	reviewSpecs         []ReviewPublicationSpec
+	mergeSpecs          []PullRequestMergeSpec
 	result              PullRequest
 	planResult          PullRequest
 	planPublished       bool
 	err                 error
 	planErr             error
+}
+
+func (pullRequests *recordingPullRequests) MergePullRequest(
+	_ context.Context,
+	_ string,
+	_ string,
+	spec PullRequestMergeSpec,
+) (PullRequest, error) {
+	pullRequests.mergeSpecs = append(pullRequests.mergeSpecs, spec)
+	return pullRequests.planResult, pullRequests.planErr
 }
 
 func (pullRequests *recordingPullRequests) VerifyPullRequestReview(
@@ -1019,6 +1060,93 @@ func TestServiceVerifiesLeadMergeReadinessOnApprovedCommit(t *testing.T) {
 		spec.AttemptID != "att_readiness_2" || spec.HeadCommitID != approvedCommit ||
 		spec.ExpectedAuthor != "codex-lead" {
 		t.Fatalf("unexpected merge-readiness publication spec %+v", spec)
+	}
+}
+
+func TestServicePinsExactMergeTargetBeforeLifecycleAdvance(t *testing.T) {
+	now := time.Date(2026, time.September, 11, 15, 0, 0, 0, time.UTC)
+	stored := readyTestWorkspace(now)
+	pullRequestAt := now.Add(3 * time.Minute)
+	stored.PullRequestNumber = 8
+	stored.PullRequestURL = "http://localhost:3001/owner/repository/pulls/8"
+	stored.PullRequestRecordedAt = &pullRequestAt
+	stored.UpdatedAt = pullRequestAt
+	approvedCommit := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	store := &memoryStore{stored: stored}
+	branches := &recordingBranches{base: Branch{Name: stored.Branch, CommitID: approvedCommit}}
+	checkout := &recordingCheckout{}
+	reviewing := acceptedTestFeature(now)
+	reviewing.State = feature.StateReviewing
+	service := NewServiceWithPreparation(
+		store, fixedFeatureFinder{stored: reviewing},
+		fixedProjectFinder{stored: project.Project{ID: "prj_test", ForgejoRepository: testRepository(now)}},
+		branches, checkout, &recordingPullRequests{},
+	)
+	mergeReadyAt := now.Add(4 * time.Minute)
+	service.now = func() time.Time { return mergeReadyAt }
+
+	ready, err := service.RecordMergeReady(
+		t.Context(), "prj_test", "fea_test", approvedCommit, 8,
+	)
+	if err != nil || ready.ApprovedCommitID != approvedCommit ||
+		ready.MergeReadyAt == nil || !ready.MergeReadyAt.Equal(mergeReadyAt) {
+		t.Fatalf("record merge readiness: workspace=%+v err=%v", ready, err)
+	}
+	if branches.getCalls != 1 || len(checkout.specs) != 1 ||
+		checkout.specs[0].ExpectedHeadCommitID != approvedCommit ||
+		!checkout.specs[0].RequireClean || store.mergeReadyCalls != 1 {
+		t.Fatalf("merge target was not fully reconciled: branches=%d checkout=%+v store_calls=%d", branches.getCalls, checkout.specs, store.mergeReadyCalls)
+	}
+}
+
+func TestServiceMergesOnlyPinnedRevisionAndAdoptsRecordedResult(t *testing.T) {
+	now := time.Date(2026, time.September, 11, 16, 0, 0, 0, time.UTC)
+	stored := readyTestWorkspace(now)
+	pullRequestAt := now.Add(3 * time.Minute)
+	mergeReadyAt := now.Add(4 * time.Minute)
+	// Forgejo may report a coarser or slightly earlier timestamp than the
+	// coordinator's merge-ready record even though the merge happened later.
+	mergedAt := pullRequestAt
+	approvedCommit := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	mergeCommit := "cccccccccccccccccccccccccccccccccccccccc"
+	stored.PullRequestNumber = 8
+	stored.PullRequestURL = "http://localhost:3001/owner/repository/pulls/8"
+	stored.PullRequestRecordedAt = &pullRequestAt
+	stored.ApprovedCommitID = approvedCommit
+	stored.MergeReadyAt = &mergeReadyAt
+	stored.UpdatedAt = mergeReadyAt
+	store := &memoryStore{stored: stored}
+	branches := &recordingBranches{base: Branch{Name: stored.Branch, CommitID: approvedCommit}}
+	checkout := &recordingCheckout{}
+	pullRequests := &recordingPullRequests{planResult: PullRequest{
+		Number: 8, URL: stored.PullRequestURL, Title: "Test feature",
+		Body: "<!-- commitarium-feature: fea_test -->", State: "closed", Draft: false,
+		BaseBranch: stored.BaseBranch, HeadBranch: stored.Branch,
+		HeadCommitID: approvedCommit, CreatedAt: pullRequestAt,
+		Merged: true, MergeCommitID: mergeCommit, MergedAt: &mergedAt,
+	}}
+	ready := acceptedTestFeature(now)
+	ready.State = feature.StateReadyToMerge
+	service := NewServiceWithPreparation(
+		store, fixedFeatureFinder{stored: ready},
+		fixedProjectFinder{stored: project.Project{ID: "prj_test", ForgejoRepository: testRepository(now)}},
+		branches, checkout, pullRequests,
+	)
+	service.now = func() time.Time { return now.Add(5 * time.Minute) }
+
+	merged, changed, err := service.MergeApproved(t.Context(), "prj_test", "fea_test")
+	if err != nil || !changed || merged.MergeCommitID != mergeCommit {
+		t.Fatalf("merge approved revision: changed=%t workspace=%+v err=%v", changed, merged, err)
+	}
+	if branches.getCalls != 1 || len(checkout.specs) != 1 ||
+		checkout.specs[0].ExpectedHeadCommitID != approvedCommit ||
+		len(pullRequests.mergeSpecs) != 1 ||
+		pullRequests.mergeSpecs[0].HeadCommitID != approvedCommit || store.mergedCalls != 1 {
+		t.Fatalf("merge did not use the pinned revision: branches=%d checkout=%+v merge=%+v store_calls=%d", branches.getCalls, checkout.specs, pullRequests.mergeSpecs, store.mergedCalls)
+	}
+	retried, changed, err := service.MergeApproved(t.Context(), "prj_test", "fea_test")
+	if err != nil || changed || retried.MergeCommitID != mergeCommit || len(pullRequests.mergeSpecs) != 1 {
+		t.Fatalf("retry should adopt durable merge result: changed=%t workspace=%+v err=%v calls=%d", changed, retried, err, len(pullRequests.mergeSpecs))
 	}
 }
 

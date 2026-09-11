@@ -15,6 +15,7 @@ this API beyond the host loopback interface is unsupported.
 | `GET` | `/api/v1/projects/{projectID}` | Retrieve a project |
 | `PUT` | `/api/v1/projects/{projectID}/dialogue-limits` | Replace planning and implementation-review round limits |
 | `PUT` | `/api/v1/projects/{projectID}/agent-providers` | Select the lead and reviewer providers for future runs |
+| `PUT` | `/api/v1/projects/{projectID}/merge-policy` | Select user-approved or automatic merge for future runs |
 | `PUT` | `/api/v1/projects/{projectID}/forgejo-repository` | Verify and bind the project's internal repository |
 | `POST` | `/api/v1/projects/{projectID}/features` | Create a draft feature |
 | `GET` | `/api/v1/projects/{projectID}/features` | List the project's features by recent activity |
@@ -31,6 +32,7 @@ this API beyond the host loopback interface is unsupported.
 | `POST` | `/api/v1/runs/{runID}/planning/reviewer` | Start the persistent reviewer with the lead's exact proposal |
 | `POST` | `/api/v1/runs/{runID}/planning/round` | Continue the lead/reviewer discussion until plan submission or its safety limit |
 | `POST` | `/api/v1/runs/{runID}/implementation` | Resume the same lead to implement and publish, or recheck its existing terminal publication |
+| `POST` | `/api/v1/runs/{runID}/merge` | Merge the exact revision approved by both agents |
 | `GET` | `/api/v1/runs/{runID}/planning/messages` | Retrieve the ordered lead/reviewer planning messages |
 | `GET` | `/api/v1/runs/{runID}/planning/messages/stream` | Replay and stream ordered planning messages with SSE |
 | `GET` | `/api/v1/sessions/{sessionID}` | Retrieve a session |
@@ -61,6 +63,21 @@ after that run has advanced the feature.
 Supported values are `approval_required` and `automatic`. Omitting the field
 uses `approval_required`. Project create and retrieval responses include the
 effective policy.
+
+Project creation also accepts an optional `merge_policy`. Supported values are
+`require_user_approval` and `auto_after_gates`; omission uses
+`require_user_approval`. Replace the setting for future runs with:
+
+```http
+PUT /api/v1/projects/prj_example/merge-policy
+Content-Type: application/json
+
+{"merge_policy":"auto_after_gates"}
+```
+
+Every run snapshots this value. Changing the project never changes whether an
+already-running or recovering workflow will merge automatically. Project and
+run responses always expose the effective `merge_policy`.
 
 Project creation also accepts an optional complete `dialogue_limits` object:
 
@@ -150,6 +167,7 @@ metadata = {
   "name": "Commitarium",
   "default_branch": "main",
   "recovery_policy": "approval_required",
+  "merge_policy": "require_user_approval",
   "dialogue_limits": {
     "planning_rounds": 6,
     "implementation_review_rounds": 6
@@ -163,8 +181,8 @@ bundle = <Git bundle file>
 ```
 
 The request must contain exactly one text field named `metadata` and one file
-field named `bundle`. `recovery_policy`, `dialogue_limits`, and
-`agent_providers` have the same defaults and validation as ordinary project
+field named `bundle`. `recovery_policy`, `dialogue_limits`, `agent_providers`,
+and `merge_policy` have the same defaults and validation as ordinary project
 creation. `default_branch` is
 required and must exist in the bundle. The entire multipart request is limited
 to 512 MiB.
@@ -221,6 +239,7 @@ includes:
   "id": "prj_example",
   "name": "Example",
   "recovery_policy": "approval_required",
+  "merge_policy": "require_user_approval",
   "dialogue_limits": {
     "planning_rounds": 6,
     "implementation_review_rounds": 6
@@ -373,14 +392,22 @@ cleans, deletes, or silently repairs contradictory user work.
     "draft": true,
     "recorded_at": "2026-09-09T20:00:03Z"
   },
+  "merge": {
+    "approved_commit_id": "89abcdef0123456789abcdef0123456789abcdef",
+    "ready_at": "2026-09-09T21:00:00Z"
+  },
   "created_at": "2026-09-09T20:00:00Z",
-  "updated_at": "2026-09-09T20:00:03Z"
+  "updated_at": "2026-09-09T21:00:00Z"
 }
 ```
 
 The example above is the `branch_ready` representation returned after plan
-agreement. Before agreement, `status` is `preparing`, `branch_created_at` and
-`pull_request` are absent, and `checkout` is present.
+agreement and mutual implementation approval. The `merge` object appears only
+after both agents have approved one exact commit. After Forgejo merges it, the
+same object also includes `merge_commit_id` and `merged_at`, while
+`pull_request.draft` becomes `false`. Before planning agreement, `status` is
+`preparing`, `branch_created_at`, `pull_request`, and `merge` are absent, and
+`checkout` is present.
 
 `GET` on the same route returns the stored resource and does not contact
 Forgejo. For `PUT`, a missing accepted goal or repository binding returns `409`;
@@ -419,6 +446,7 @@ A successful response is `202 Accepted` and points to the run resource:
     "lead": "codex",
     "reviewer": "claude"
   },
+  "merge_policy": "require_user_approval",
   "started_at": "2026-09-08T17:30:36Z",
   "updated_at": "2026-09-08T17:30:36Z",
   "sessions": []
@@ -693,8 +721,10 @@ response summary. The reviewer follows the same formal-review rules against
 that new immutable revision. When the reviewer approves, the lead posts one
 marker-owned `Merge readiness` PR comment and returns a structured green light
 or concern. A verified green light moves the feature to `ready_to_merge` and
-returns the run to `waiting_for_user`; a concern gives the reviewer another
-turn against the same commit.
+pins that exact commit as the only allowed merge target. The default policy
+returns the run to `waiting_for_user`; automatic policy immediately enters the
+same guarded merge action documented below. A concern gives the reviewer
+another turn against the same commit.
 
 Planning and implementation review each use the limits captured on the run when
 it starts and default to six dialogue rounds. One round permits both agents to
@@ -712,6 +742,46 @@ Startup orders the numbered deterministic checkpoints, reattaches to the one
 active attempt, or re-verifies the completed Forgejo review/lead response before
 starting only the next missing stage. It never substitutes worker profiles,
 starts both agents, or duplicates a review, commit, push, or audit comment.
+
+## Merging an approved revision
+
+This endpoint and automatic merge execution are available in the opt-in
+`real_codex_lead` runtime, where runs have a managed Forgejo checkout and pull
+request. The default deterministic simulation still ends at its scripted
+approval result and does not simulate an external Forgejo merge.
+
+Before a feature enters `ready_to_merge`, the coordinator records the exact
+commit and pull request approved by both agents. With the default
+`require_user_approval` run policy, the run then waits for this action:
+
+```http
+POST /api/v1/runs/run_opaque/merge
+Idempotency-Key: merge-approved-revision-1
+Content-Length: 0
+```
+
+The action does not accept a commit, branch, or PR from the caller. It reloads
+the identities pinned by the workflow, requires the managed checkout to be
+clean at that exact commit, and requires the Forgejo feature branch and PR head
+to still match. It removes the managed PR's `WIP:` draft marker and asks
+Forgejo to merge using the approved head SHA as a compare-and-swap guard. A
+branch push racing with this request is therefore rejected rather than merged.
+The feature advances to `completed` and the run to `succeeded` only after the
+merged PR and resulting merge commit are visible in Forgejo and recorded in
+SQLite.
+
+With `auto_after_gates`, the coordinator invokes this same operation as soon as
+the verified lead green light is durable. Automatic mode has no weaker path or
+different checks. A conflict or unavailable dependency records visible merge-
+blocked activity and leaves the run waiting for user review.
+
+Retries and coordinator restarts reconcile before writing. In particular, if
+Forgejo completed a merge but its HTTP response was lost, the next attempt
+adopts the already-merged PR and records its merge commit instead of issuing a
+second merge. `409 merge_not_ready` means the approved identity is absent or
+changed; `503 merge_unavailable` means the unchanged approved revision cannot
+currently be reached. A successful exact retry returns the already-succeeded
+run.
 
 ## Continuing implementation
 

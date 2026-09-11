@@ -24,6 +24,7 @@ type runResponse struct {
 	Reason         string                 `json:"reason,omitempty"`
 	DialogueLimits dialogueLimitsResponse `json:"dialogue_limits"`
 	AgentProviders agentProvidersResponse `json:"agent_providers"`
+	MergePolicy    project.MergePolicy    `json:"merge_policy"`
 	StartedAt      time.Time              `json:"started_at"`
 	UpdatedAt      time.Time              `json:"updated_at"`
 	EndedAt        *time.Time             `json:"ended_at,omitempty"`
@@ -87,6 +88,7 @@ func (api *API) startRunHandler(w http.ResponseWriter, r *http.Request) {
 	startedRun, _, err := api.starter.Start(
 		r.Context(), runID, projectID, featureID, goal, storedProject.DialogueLimits,
 		storedProject.AgentProviders,
+		storedProject.MergePolicy,
 	)
 	if err != nil {
 		switch {
@@ -199,7 +201,8 @@ func (api *API) newRunResponse(
 		AgentProviders: agentProvidersResponse{
 			Lead: agentProviders.Lead, Reviewer: agentProviders.Reviewer,
 		},
-		StartedAt: run.StartedAt, UpdatedAt: run.UpdatedAt,
+		MergePolicy: run.MergePolicy,
+		StartedAt:   run.StartedAt, UpdatedAt: run.UpdatedAt,
 		EndedAt: run.EndedAt, Sessions: make([]sessionResponse, 0, len(sessions)),
 	}
 	for _, session := range sessions {

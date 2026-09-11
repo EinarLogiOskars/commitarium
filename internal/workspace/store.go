@@ -26,4 +26,6 @@ type Store interface {
 		url string,
 		createdAt time.Time,
 	) (Workspace, error)
+	MarkMergeReady(ctx context.Context, featureID, approvedCommitID string, readyAt time.Time) (Workspace, error)
+	MarkMerged(ctx context.Context, featureID, approvedCommitID, mergeCommitID string, mergedAt, recordedAt time.Time) (Workspace, error)
 }

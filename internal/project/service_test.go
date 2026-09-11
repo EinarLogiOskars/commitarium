@@ -18,16 +18,27 @@ type recordingStore struct {
 	listResult []Project
 	listErr    error
 
-	updatedProjectID string
-	updatedLimits    DialogueLimits
-	updateResult     Project
-	updateErr        error
-	updatedProviders AgentProviders
+	updatedProjectID   string
+	updatedLimits      DialogueLimits
+	updateResult       Project
+	updateErr          error
+	updatedProviders   AgentProviders
+	updatedMergePolicy MergePolicy
 
 	boundProjectID  string
 	boundRepository ForgejoRepository
 	bindResult      Project
 	bindErr         error
+}
+
+func (s *recordingStore) UpdateMergePolicy(
+	_ context.Context,
+	projectID string,
+	policy MergePolicy,
+) (Project, error) {
+	s.updatedProjectID = projectID
+	s.updatedMergePolicy = policy
+	return s.updateResult, s.updateErr
 }
 
 func (s *recordingStore) UpdateAgentProviders(
@@ -114,7 +125,7 @@ func TestServiceCreate(t *testing.T) {
 	}
 
 	limits := DefaultDialogueLimits()
-	project, err := service.Create(t.Context(), "   Commitarium   ", "", limits, DefaultAgentProviders())
+	project, err := service.Create(t.Context(), "   Commitarium   ", "", limits, DefaultAgentProviders(), "")
 
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -135,6 +146,9 @@ func TestServiceCreate(t *testing.T) {
 	}
 	if project.AgentProviders != DefaultAgentProviders() {
 		t.Errorf("expected default agent providers, got %+v", project.AgentProviders)
+	}
+	if project.MergePolicy != DefaultMergePolicy() {
+		t.Errorf("expected default merge policy %q, got %q", DefaultMergePolicy(), project.MergePolicy)
 	}
 
 	if !project.CreatedAt.Equal(fixedTime) {
@@ -157,6 +171,7 @@ func TestServiceCreateAcceptsAutomaticRecovery(t *testing.T) {
 	created, err := service.Create(
 		t.Context(), "Commitarium", RecoveryPolicyAutomatic, DefaultDialogueLimits(),
 		DefaultAgentProviders(),
+		DefaultMergePolicy(),
 	)
 	if err != nil {
 		t.Fatalf("create project: %v", err)
@@ -166,13 +181,57 @@ func TestServiceCreateAcceptsAutomaticRecovery(t *testing.T) {
 	}
 }
 
+func TestServiceCreatesAndUpdatesMergePolicy(t *testing.T) {
+	store := &recordingStore{}
+	service := NewService(store)
+	created, err := service.Create(
+		t.Context(), "Commitarium", "", DefaultDialogueLimits(),
+		DefaultAgentProviders(), MergePolicyAutoAfterGates,
+	)
+	if err != nil || created.MergePolicy != MergePolicyAutoAfterGates {
+		t.Fatalf("create automatic merge project: project=%+v err=%v", created, err)
+	}
+	store.updateResult = created
+	store.updateResult.MergePolicy = MergePolicyRequireUserApproval
+	updated, err := service.UpdateMergePolicy(
+		t.Context(), created.ID, MergePolicyRequireUserApproval,
+	)
+	if err != nil || updated.MergePolicy != MergePolicyRequireUserApproval ||
+		store.updatedProjectID != created.ID ||
+		store.updatedMergePolicy != MergePolicyRequireUserApproval {
+		t.Fatalf("update merge policy: project=%+v store=%+v err=%v", updated, store, err)
+	}
+}
+
+func TestServiceRejectsInvalidMergePolicy(t *testing.T) {
+	store := &recordingStore{}
+	service := NewService(store)
+	if _, err := service.Create(
+		t.Context(), "Commitarium", "", DefaultDialogueLimits(),
+		DefaultAgentProviders(), MergePolicy("surprise_me"),
+	); !errors.Is(err, ErrInvalidMergePolicy) {
+		t.Fatalf("expected %v, got %v", ErrInvalidMergePolicy, err)
+	}
+	if store.createdProject != (Project{}) {
+		t.Fatalf("invalid merge policy reached storage: %+v", store.createdProject)
+	}
+	if _, err := service.UpdateMergePolicy(
+		t.Context(), "prj_test", MergePolicy("surprise_me"),
+	); !errors.Is(err, ErrInvalidMergePolicy) {
+		t.Fatalf("expected update error %v, got %v", ErrInvalidMergePolicy, err)
+	}
+	if store.updatedProjectID != "" {
+		t.Fatal("invalid merge policy update reached storage")
+	}
+}
+
 func TestServiceCreateRejectsInvalidRecoveryPolicy(t *testing.T) {
 	store := &recordingStore{}
 	service := NewService(store)
 
 	_, err := service.Create(
 		t.Context(), "Commitarium", RecoveryPolicy("reckless"), DefaultDialogueLimits(),
-		DefaultAgentProviders(),
+		DefaultAgentProviders(), DefaultMergePolicy(),
 	)
 	if !errors.Is(err, ErrInvalidRecoveryPolicy) {
 		t.Fatalf("expected error %v, got %v", ErrInvalidRecoveryPolicy, err)
@@ -186,7 +245,7 @@ func TestServiceCreateRejectsBlankName(t *testing.T) {
 	store := &recordingStore{}
 	service := NewService(store)
 
-	_, err := service.Create(t.Context(), " ", "", DefaultDialogueLimits(), DefaultAgentProviders())
+	_, err := service.Create(t.Context(), " ", "", DefaultDialogueLimits(), DefaultAgentProviders(), DefaultMergePolicy())
 
 	if !errors.Is(err, ErrNameRequired) {
 		t.Fatalf("expected error %v, got %v", ErrNameRequired, err)
@@ -202,7 +261,7 @@ func TestServiceCreateReturnsStoreError(t *testing.T) {
 
 	service := NewService(store)
 
-	project, err := service.Create(t.Context(), "Commitarium", "", DefaultDialogueLimits(), DefaultAgentProviders())
+	project, err := service.Create(t.Context(), "Commitarium", "", DefaultDialogueLimits(), DefaultAgentProviders(), DefaultMergePolicy())
 
 	if !errors.Is(err, storeError) {
 		t.Fatalf("expected error %v, got %v", storeError, err)

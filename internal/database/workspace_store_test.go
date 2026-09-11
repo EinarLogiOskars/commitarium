@@ -13,6 +13,7 @@ import (
 )
 
 const workspaceTestCommitID = "0123456789abcdef0123456789abcdef01234567"
+const workspaceTestMergeCommitID = "89abcdef0123456789abcdef0123456789abcdef"
 
 func TestWorkspaceStoreReservationAndBranchReadyAreIdempotent(t *testing.T) {
 	store := newTestWorkspaceStore(t)
@@ -97,6 +98,51 @@ func TestWorkspaceStoreReservationAndBranchReadyAreIdempotent(t *testing.T) {
 	if err != nil || !reflect.DeepEqual(loaded, pullRequestReady) {
 		t.Fatalf("reload pull-request-ready workspace: workspace=%+v err=%v", loaded, err)
 	}
+	mergeReadyAt := pullRequestAt.Add(time.Minute)
+	mergeReady, err := store.MarkMergeReady(
+		t.Context(), reservation.FeatureID, workspaceTestCommitID, mergeReadyAt,
+	)
+	if err != nil || mergeReady.ApprovedCommitID != workspaceTestCommitID ||
+		mergeReady.MergeReadyAt == nil || !mergeReady.MergeReadyAt.Equal(mergeReadyAt) {
+		t.Fatalf("mark workspace merge ready: workspace=%+v err=%v", mergeReady, err)
+	}
+	retriedMergeReady, err := store.MarkMergeReady(
+		t.Context(), reservation.FeatureID, workspaceTestCommitID, mergeReadyAt.Add(time.Hour),
+	)
+	if err != nil || !reflect.DeepEqual(retriedMergeReady, mergeReady) {
+		t.Fatalf("retry merge readiness: workspace=%+v err=%v", retriedMergeReady, err)
+	}
+	if _, err := store.MarkMergeReady(
+		t.Context(), reservation.FeatureID, workspaceTestMergeCommitID, mergeReadyAt,
+	); !errors.Is(err, workspace.ErrConflict) {
+		t.Fatalf("expected changed approved commit to conflict, got %v", err)
+	}
+	mergedAt := mergeReadyAt.Add(time.Minute)
+	merged, err := store.MarkMerged(
+		t.Context(), reservation.FeatureID, workspaceTestCommitID,
+		workspaceTestMergeCommitID, mergedAt, mergedAt,
+	)
+	if err != nil || merged.MergeCommitID != workspaceTestMergeCommitID ||
+		merged.MergedAt == nil || !merged.MergedAt.Equal(mergedAt) {
+		t.Fatalf("mark workspace merged: workspace=%+v err=%v", merged, err)
+	}
+	retriedMerged, err := store.MarkMerged(
+		t.Context(), reservation.FeatureID, workspaceTestCommitID,
+		workspaceTestMergeCommitID, mergedAt, mergedAt.Add(time.Hour),
+	)
+	if err != nil || !reflect.DeepEqual(retriedMerged, merged) {
+		t.Fatalf("retry merged result: workspace=%+v err=%v", retriedMerged, err)
+	}
+	if _, err := store.MarkMerged(
+		t.Context(), reservation.FeatureID, workspaceTestCommitID,
+		"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", mergedAt, mergedAt,
+	); !errors.Is(err, workspace.ErrConflict) {
+		t.Fatalf("expected changed merge result to conflict, got %v", err)
+	}
+	loaded, err = store.GetByFeatureID(t.Context(), reservation.FeatureID)
+	if err != nil || !reflect.DeepEqual(loaded, merged) {
+		t.Fatalf("reload merged workspace: workspace=%+v err=%v", loaded, err)
+	}
 }
 
 func TestWorkspaceStorePersistsCheckoutBeforeFeatureBranch(t *testing.T) {
@@ -168,6 +214,17 @@ func TestWorkspaceStoreReturnsNotFound(t *testing.T) {
 	}
 	if _, err := store.MarkPullRequestReady(
 		t.Context(), "fea_missing", 1, "http://localhost/pulls/1", time.Now().UTC(),
+	); !errors.Is(err, workspace.ErrNotFound) {
+		t.Fatalf("expected %v, got %v", workspace.ErrNotFound, err)
+	}
+	if _, err := store.MarkMergeReady(
+		t.Context(), "fea_missing", workspaceTestCommitID, time.Now().UTC(),
+	); !errors.Is(err, workspace.ErrNotFound) {
+		t.Fatalf("expected %v, got %v", workspace.ErrNotFound, err)
+	}
+	if _, err := store.MarkMerged(
+		t.Context(), "fea_missing", workspaceTestCommitID,
+		workspaceTestMergeCommitID, time.Now().UTC(), time.Now().UTC(),
 	); !errors.Is(err, workspace.ErrNotFound) {
 		t.Fatalf("expected %v, got %v", workspace.ErrNotFound, err)
 	}

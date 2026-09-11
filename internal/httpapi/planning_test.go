@@ -60,6 +60,16 @@ func (stub *planningStarterStub) StartImplementation(
 	return stub.run, true, stub.err
 }
 
+func (stub *planningStarterStub) Merge(
+	_ context.Context,
+	runID string,
+	idempotencyKey string,
+) (execution.Run, bool, error) {
+	stub.receivedRunID = runID
+	stub.receivedKey = idempotencyKey
+	return stub.run, true, stub.err
+}
+
 type planningExecutionStub struct {
 	ExecutionService
 	sessions []execution.Session

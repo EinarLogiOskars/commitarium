@@ -42,6 +42,7 @@ type recordingProjectService struct {
 	receivedRecoveryPolicy project.RecoveryPolicy
 	receivedDialogueLimits project.DialogueLimits
 	receivedAgentProviders project.AgentProviders
+	receivedMergePolicy    project.MergePolicy
 	result                 project.Project
 	err                    error
 
@@ -77,13 +78,25 @@ func (s *recordingProjectService) Create(
 	recoveryPolicy project.RecoveryPolicy,
 	dialogueLimits project.DialogueLimits,
 	agentProviders project.AgentProviders,
+	mergePolicy project.MergePolicy,
 ) (project.Project, error) {
 	s.calls++
 	s.receivedName = name
 	s.receivedRecoveryPolicy = recoveryPolicy
 	s.receivedDialogueLimits = dialogueLimits
 	s.receivedAgentProviders = agentProviders
+	s.receivedMergePolicy = mergePolicy
 	return s.result, s.err
+}
+
+func (s *recordingProjectService) UpdateMergePolicy(
+	_ context.Context,
+	projectID string,
+	policy project.MergePolicy,
+) (project.Project, error) {
+	s.updateProjectID = projectID
+	s.receivedMergePolicy = policy
+	return s.updateResult, s.updateErr
 }
 
 func (s *recordingProjectService) UpdateAgentProviders(
@@ -158,6 +171,7 @@ func TestImportProject(t *testing.T) {
 		importResult: project.Project{
 			ID: "prj_imported", Name: "Commitarium",
 			RecoveryPolicy: project.RecoveryPolicyApprovalRequired,
+			MergePolicy:    project.DefaultMergePolicy(),
 			DialogueLimits: project.DefaultDialogueLimits(),
 			ForgejoRepository: &project.ForgejoRepository{
 				Owner: "commitarium", Name: "commitarium-aabbcc", DefaultBranch: "main", BoundAt: fixedTime,
@@ -179,6 +193,7 @@ func TestImportProject(t *testing.T) {
 	if service.importSpec.ImportID != "desktop-1" || service.importSpec.Name != "Commitarium" ||
 		service.importSpec.DefaultBranch != "main" || service.importSpec.DialogueLimits != project.DefaultDialogueLimits() ||
 		service.importSpec.AgentProviders != project.DefaultAgentProviders() ||
+		service.importSpec.MergePolicy != "" ||
 		service.importBundle != "git bundle bytes" {
 		t.Fatalf("unexpected import request spec=%+v bundle=%q", service.importSpec, service.importBundle)
 	}
@@ -263,6 +278,7 @@ func TestCreateProject(t *testing.T) {
 			Name:           "Commitarium",
 			RecoveryPolicy: project.RecoveryPolicyAutomatic,
 			DialogueLimits: project.DefaultDialogueLimits(),
+			MergePolicy:    project.DefaultMergePolicy(),
 			CreatedAt:      fixedTime,
 		},
 	}
@@ -284,6 +300,7 @@ func TestCreateProject(t *testing.T) {
 		Name           string                 `json:"name"`
 		RecoveryPolicy project.RecoveryPolicy `json:"recovery_policy"`
 		DialogueLimits dialogueLimitsResponse `json:"dialogue_limits"`
+		MergePolicy    project.MergePolicy    `json:"merge_policy"`
 		CreatedAt      time.Time              `json:"created_at"`
 	}
 
@@ -324,6 +341,9 @@ func TestCreateProject(t *testing.T) {
 	if service.receivedAgentProviders != project.DefaultAgentProviders() {
 		t.Errorf("expected default agent providers, got %+v", service.receivedAgentProviders)
 	}
+	if service.receivedMergePolicy != "" {
+		t.Errorf("expected blank policy to be normalized by the service, got %q", service.receivedMergePolicy)
+	}
 
 	if response.ID != service.result.ID {
 		t.Errorf("expected response ID %v, got %v", service.result.ID, response.ID)
@@ -337,6 +357,9 @@ func TestCreateProject(t *testing.T) {
 	}
 	if response.DialogueLimits.PlanningRounds != 6 || response.DialogueLimits.ImplementationReviewRounds != 6 {
 		t.Errorf("unexpected dialogue limits %+v", response.DialogueLimits)
+	}
+	if response.MergePolicy != project.DefaultMergePolicy() {
+		t.Errorf("unexpected merge policy %q", response.MergePolicy)
 	}
 
 	if response.CreatedAt != service.result.CreatedAt {
@@ -370,6 +393,56 @@ func TestCreateProjectAcceptsIndependentAgentProviders(t *testing.T) {
 	}
 	if response.AgentProviders.Lead != want.Lead || response.AgentProviders.Reviewer != want.Reviewer {
 		t.Fatalf("response providers = %+v", response.AgentProviders)
+	}
+}
+
+func TestCreateAndUpdateProjectMergePolicy(t *testing.T) {
+	service := &recordingProjectService{result: project.Project{
+		ID: "prj_test", Name: "Commitarium",
+		MergePolicy: project.MergePolicyAutoAfterGates, CreatedAt: time.Now().UTC(),
+	}}
+	create := httptest.NewRecorder()
+	New(service, nil, nil, nil, nil, nil).ServeHTTP(create, httptest.NewRequest(
+		http.MethodPost, "/api/v1/projects",
+		strings.NewReader(`{"name":"Commitarium","merge_policy":"auto_after_gates"}`),
+	))
+	if create.Code != http.StatusCreated || service.receivedMergePolicy != project.MergePolicyAutoAfterGates {
+		t.Fatalf("create policy status=%d received=%q body=%s", create.Code, service.receivedMergePolicy, create.Body.String())
+	}
+	service.updateResult = project.Project{
+		ID: "prj_test", Name: "Commitarium",
+		MergePolicy: project.MergePolicyRequireUserApproval, CreatedAt: time.Now().UTC(),
+	}
+	update := httptest.NewRecorder()
+	New(service, nil, nil, nil, nil, nil).ServeHTTP(update, httptest.NewRequest(
+		http.MethodPut, "/api/v1/projects/prj_test/merge-policy",
+		strings.NewReader(`{"merge_policy":"require_user_approval"}`),
+	))
+	if update.Code != http.StatusOK || service.updateProjectID != "prj_test" ||
+		service.receivedMergePolicy != project.MergePolicyRequireUserApproval {
+		t.Fatalf("update policy status=%d project=%q policy=%q body=%s", update.Code, service.updateProjectID, service.receivedMergePolicy, update.Body.String())
+	}
+	var response projectResponse
+	if err := json.NewDecoder(update.Body).Decode(&response); err != nil ||
+		response.MergePolicy != project.MergePolicyRequireUserApproval {
+		t.Fatalf("decode policy response: response=%+v err=%v", response, err)
+	}
+}
+
+func TestUpdateProjectMergePolicyRejectsUnknownValue(t *testing.T) {
+	service := &recordingProjectService{updateErr: project.ErrInvalidMergePolicy}
+	recorder := httptest.NewRecorder()
+	New(service, nil, nil, nil, nil, nil).ServeHTTP(recorder, httptest.NewRequest(
+		http.MethodPut, "/api/v1/projects/prj_test/merge-policy",
+		strings.NewReader(`{"merge_policy":"surprise_me"}`),
+	))
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var response testErrorResponse
+	if err := json.NewDecoder(recorder.Body).Decode(&response); err != nil ||
+		response.Error.Code != "invalid_merge_policy" {
+		t.Fatalf("unexpected response %+v err=%v", response, err)
 	}
 }
 

@@ -54,6 +54,8 @@ Safe UI capabilities:
   limits through `PUT /api/v1/projects/{projectID}/dialogue-limits`.
 - Display and edit independent `codex` or `claude` lead/reviewer choices through
   `PUT /api/v1/projects/{projectID}/agent-providers`.
+- Display and edit `require_user_approval` or `auto_after_gates` for future runs
+  through `PUT /api/v1/projects/{projectID}/merge-policy`.
 - Treat `0` as unlimited and positive values as complete two-agent rounds.
 - Bind and display one permanent internal Forgejo repository through
   `PUT /api/v1/projects/{projectID}/forgejo-repository`.
@@ -74,6 +76,11 @@ Codex/Codex default. When present, both `lead` and `reviewer` are required and
 each accepts `codex` or `claude`. Project and run responses always expose the
 effective pair. An active run uses its immutable copy even after project
 settings change.
+
+Project creation and import may omit `merge_policy` to receive
+`require_user_approval`. Project and run responses always expose the effective
+value. As with providers and dialogue limits, an active run uses its immutable
+snapshot even after the project setting changes.
 
 Project creation may omit `dialogue_limits` to receive the six-round defaults.
 If supplied, the object contains both `planning_rounds` and
@@ -151,23 +158,34 @@ in backend event payloads; the UI maps factual activity to presentation.
   the workspace remains `preparing`. The final submitted plan triggers
   restart-safe feature-branch promotion, draft-PR creation, and plan
   publication; a successful workspace response then becomes `branch_ready`.
+- Once both agents approve one revision, the workspace response includes a
+  `merge` object with its exact `approved_commit_id` and `ready_at`. After merge,
+  it also includes `merge_commit_id` and `merged_at`, and the PR is no longer
+  draft.
+
+### Approved merge gate
+
+- With `require_user_approval`, show a merge action only when the feature is
+  `ready_to_merge`; call `POST /api/v1/runs/{runID}/merge` with a stable
+  `Idempotency-Key`.
+- With `auto_after_gates`, the backend invokes the same guarded action without a
+  UI request. Observe the run, feature, workspace, and activity streams for its
+  result.
+- A successful merge changes the feature to `completed` and the run to
+  `succeeded`. `409 merge_not_ready` means the approved revision changed or is
+  incomplete; `503 merge_unavailable` means it cannot currently be reached.
+- The UI never supplies a commit or PR identity to merge. The backend uses the
+  exact revision pinned by mutual agent approval.
 
 Opening the managed directory in an IDE and starting a development preview are
 not implemented yet.
-
-## In progress — avoid for now
-
-No backend contract is marked in progress at this committed checkpoint. The
-next backend slice will be moved here before its public surface changes.
 
 ## Planned — do not depend on it yet
 
 ### Near-term MVP backend
 
-- Final Forgejo merge policy and action: require user approval or merge
-  automatically after every gate passes.
-- Clear notification data for a feature that merged automatically or is
-  waiting for merge approval.
+- Clear notification presentation for a feature that merged automatically or
+  is waiting for merge approval.
 
 ### Trusted-host and desktop capabilities
 
@@ -187,9 +205,12 @@ repository credentials.
 
 - The normal runtime still defaults to deterministic simulated agents. The
   complete real workflow is opt-in through `real_codex_lead` configuration.
-- The standalone Claude lead/reviewer workers are implemented, but the public
-  workflow still uses Codex for both roles until provider selection is added.
-- A workflow can reach `ready_to_merge`, but no public merge operation exists.
+- The guarded merge endpoint and automatic merge policy operate in that real
+  Forgejo-backed mode. The deterministic simulation does not invent a remote
+  merge result.
+- The standalone Codex and Claude lead/reviewer workers are implemented, and
+  real-provider mode routes each role from the run's project-level provider
+  snapshot.
 - Real-provider recovery can reattach after a coordinator restart, but a worker
   container restart during an active provider process still becomes an
   indeterminate state requiring user review.

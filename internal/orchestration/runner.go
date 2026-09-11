@@ -47,6 +47,7 @@ type RunRequest struct {
 	MaxPlanningRounds int
 	MaxReviewRounds   int
 	AgentProviders    project.AgentProviders
+	MergePolicy       project.MergePolicy
 	RecoveryPolicy    project.RecoveryPolicy
 	WorkflowPhase     feature.State
 }
@@ -75,7 +76,7 @@ type RunResult struct {
 }
 
 type Execution interface {
-	CreateRun(ctx context.Context, id string, featureID string, planningRoundLimit int, implementationReviewRoundLimit int, agentProviders project.AgentProviders) (execution.Run, bool, error)
+	CreateRun(ctx context.Context, id string, featureID string, planningRoundLimit int, implementationReviewRoundLimit int, agentProviders project.AgentProviders, mergePolicy project.MergePolicy) (execution.Run, bool, error)
 	TransitionRun(
 		ctx context.Context,
 		id string,
@@ -169,6 +170,7 @@ func (r *Runner) Run(
 			request.MaxPlanningRounds,
 			request.MaxReviewRounds,
 			request.AgentProviders,
+			request.MergePolicy,
 		)
 		if err != nil {
 			return RunResult{}, fmt.Errorf("begin run %q: %w", request.ID, err)
@@ -201,6 +203,7 @@ func (r *Runner) Start(
 		request.MaxPlanningRounds,
 		request.MaxReviewRounds,
 		request.AgentProviders,
+		request.MergePolicy,
 	)
 	if err != nil || !created {
 		return storedRun, created, err
@@ -542,6 +545,9 @@ func (request RunRequest) Validate() error {
 		return fmt.Errorf("%w: workflow phase %q is not recognized", ErrInvalidRunRequest, request.WorkflowPhase)
 	}
 	if _, err := project.NormalizeRecoveryPolicy(request.RecoveryPolicy); err != nil {
+		return fmt.Errorf("%w: %v", ErrInvalidRunRequest, err)
+	}
+	if _, err := project.NormalizeMergePolicy(request.MergePolicy); err != nil {
 		return fmt.Errorf("%w: %v", ErrInvalidRunRequest, err)
 	}
 	for role, agent := range map[worker.Role]Agent{
