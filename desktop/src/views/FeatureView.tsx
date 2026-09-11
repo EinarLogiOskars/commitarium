@@ -4,6 +4,7 @@ import { ApiError } from "../api/client";
 import { GoalClarification } from "./GoalClarification";
 import { PlanningView } from "./PlanningView";
 import { ImplementationView } from "./ImplementationView";
+import { ReviewView } from "./ReviewView";
 import { WORK } from "../vocab";
 import type { Feature, Run } from "../api/types";
 
@@ -121,8 +122,18 @@ function phaseView(
   if (feature.state === "planning") {
     return <PlanningView runId={activeRunId} onAdvanced={reload} />;
   }
-  // implementing / reviewing / ready_to_merge / completed
-  return <ImplementationView runId={activeRunId} state={feature.state} />;
+  if (feature.state === "implementing") {
+    return <ImplementationView runId={activeRunId} state={feature.state} />;
+  }
+  // reviewing / ready_to_merge / completed → the review + correction loop
+  return (
+    <ReviewView
+      projectId={projectId}
+      featureId={feature.id}
+      runId={activeRunId}
+      state={feature.state}
+    />
+  );
 }
 
 function describe(e: unknown): string {
