@@ -215,6 +215,13 @@ is immediately visible to the agent container, and an eventual agent edit will
 be immediately visible to the user. Each feature receives one child directory;
 the user's original upstream checkout is not mounted or changed.
 
+After an approved feature has been merged in Forgejo, its read-only handoff
+source is available at
+`GET /api/v1/projects/{projectID}/features/{featureID}/handoff`. The response
+pins the original base, exact reviewed head, Forgejo merge, and PR identity for
+the trusted desktop's future local synchronization. This endpoint does not yet
+modify the user's original checkout or push to an upstream remote.
+
 Once a non-empty repository exists in Forgejo, associate it with a coordinator
 project:
 

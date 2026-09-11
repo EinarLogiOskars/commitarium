@@ -98,6 +98,7 @@ type SessionController interface {
 
 type WorkspaceService interface {
 	Get(ctx context.Context, projectID, featureID string) (workspace.Workspace, error)
+	GetCompletedHandoff(ctx context.Context, projectID, featureID string) (workspace.Workspace, error)
 	Prepare(
 		ctx context.Context,
 		projectID string,
@@ -276,6 +277,10 @@ func newAPI(
 		mux.HandleFunc(
 			"GET /api/v1/projects/{projectID}/features/{id}/workspace",
 			api.getWorkspaceHandler,
+		)
+		mux.HandleFunc(
+			"GET /api/v1/projects/{projectID}/features/{id}/handoff",
+			api.getCompletedHandoffHandler,
 		)
 		mux.HandleFunc(
 			"PUT /api/v1/projects/{projectID}/features/{id}/workspace",

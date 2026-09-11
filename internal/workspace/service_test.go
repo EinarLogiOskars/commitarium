@@ -1226,6 +1226,106 @@ func TestServiceRequiresAcceptedGoalAndRepositoryBinding(t *testing.T) {
 	}
 }
 
+func TestGetCompletedHandoffReturnsRecordedReviewedAndMergedCommits(t *testing.T) {
+	now := time.Date(2026, time.September, 11, 14, 0, 0, 0, time.UTC)
+	stored := readyTestWorkspace(now)
+	pullRequestAt := stored.UpdatedAt.Add(time.Minute)
+	mergeReadyAt := pullRequestAt.Add(time.Minute)
+	mergedAt := mergeReadyAt.Add(time.Minute)
+	stored.PullRequestNumber = 14
+	stored.PullRequestURL = "http://localhost:3001/owner/repository/pulls/14"
+	stored.PullRequestRecordedAt = &pullRequestAt
+	stored.ApprovedCommitID = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	stored.MergeReadyAt = &mergeReadyAt
+	stored.MergeCommitID = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	stored.MergedAt = &mergedAt
+	stored.UpdatedAt = mergedAt
+	completed := acceptedTestFeature(now)
+	completed.State = feature.StateCompleted
+	service := NewService(
+		&memoryStore{stored: stored},
+		fixedFeatureFinder{stored: completed},
+		fixedProjectFinder{stored: project.Project{
+			ID: "prj_test", ForgejoRepository: testRepository(now),
+		}},
+		&recordingBranches{},
+	)
+
+	got, err := service.GetCompletedHandoff(t.Context(), "prj_test", "fea_test")
+	if err != nil {
+		t.Fatalf("get completed handoff: %v", err)
+	}
+	if got != stored {
+		t.Fatalf("unexpected completed handoff %+v", got)
+	}
+}
+
+func TestGetCompletedHandoffRequiresCompletedFeatureAndRecordedMerge(t *testing.T) {
+	now := time.Date(2026, time.September, 11, 14, 0, 0, 0, time.UTC)
+	completed := acceptedTestFeature(now)
+	completed.State = feature.StateCompleted
+	tests := []struct {
+		name    string
+		feature feature.Feature
+		stored  Workspace
+		project project.Project
+		want    error
+	}{
+		{
+			name: "feature still ready to merge",
+			feature: func() feature.Feature {
+				value := completed
+				value.State = feature.StateReadyToMerge
+				return value
+			}(),
+			stored:  readyTestWorkspace(now),
+			project: project.Project{ID: "prj_test", ForgejoRepository: testRepository(now)},
+			want:    ErrHandoffNotReady,
+		},
+		{
+			name:    "merge identity missing",
+			feature: completed,
+			stored:  readyTestWorkspace(now),
+			project: project.Project{ID: "prj_test", ForgejoRepository: testRepository(now)},
+			want:    ErrHandoffNotReady,
+		},
+		{
+			name:    "repository identity changed",
+			feature: completed,
+			stored:  readyTestWorkspace(now),
+			project: project.Project{ID: "prj_test", ForgejoRepository: &project.ForgejoRepository{
+				Owner: "other", Name: "repository", DefaultBranch: "main", BoundAt: now,
+			}},
+			want: ErrConflict,
+		},
+		{
+			name:    "invalid durable commit identity",
+			feature: completed,
+			stored: func() Workspace {
+				value := readyTestWorkspace(now)
+				value.BaseCommitID = "not-a-commit"
+				return value
+			}(),
+			project: project.Project{ID: "prj_test", ForgejoRepository: testRepository(now)},
+			want:    ErrConflict,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			service := NewService(
+				&memoryStore{stored: test.stored},
+				fixedFeatureFinder{stored: test.feature},
+				fixedProjectFinder{stored: test.project},
+				&recordingBranches{},
+			)
+			_, err := service.GetCompletedHandoff(t.Context(), "prj_test", "fea_test")
+			if !errors.Is(err, test.want) {
+				t.Fatalf("expected %v, got %v", test.want, err)
+			}
+		})
+	}
+}
+
 func TestServiceLeavesReservationPreparingWhenBranchCreationIsUncertain(t *testing.T) {
 	now := time.Date(2026, time.September, 9, 20, 0, 0, 0, time.UTC)
 	stored := testWorkspace(now)
