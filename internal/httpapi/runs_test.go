@@ -23,6 +23,7 @@ type recordingRunStarter struct {
 	featureID string
 	goal      string
 	limits    project.DialogueLimits
+	providers project.AgentProviders
 	result    execution.Run
 	err       error
 }
@@ -34,17 +35,20 @@ func (s *recordingRunStarter) Start(
 	featureID string,
 	goal string,
 	dialogueLimits project.DialogueLimits,
+	agentProviders project.AgentProviders,
 ) (execution.Run, bool, error) {
 	s.runID = runID
 	s.projectID = projectID
 	s.featureID = featureID
 	s.goal = goal
 	s.limits = dialogueLimits
+	s.providers = agentProviders
 	if s.result.ID == "" {
 		s.result = execution.Run{
 			ID: runID, FeatureID: featureID, Status: execution.RunStatusRunning,
 			PlanningRoundLimit:             dialogueLimits.PlanningRounds,
 			ImplementationReviewRoundLimit: dialogueLimits.ImplementationReviewRounds,
+			AgentProviders:                 s.providers,
 			StartedAt:                      time.Now().UTC(), UpdatedAt: time.Now().UTC(),
 		}
 	}
@@ -59,8 +63,11 @@ func TestStartRunReturnsDurableAcceptedRun(t *testing.T) {
 	executions := &recordingExecutionService{runErr: execution.ErrNotFound}
 	starter := &recordingRunStarter{}
 	limits := project.DialogueLimits{PlanningRounds: 3, ImplementationReviewRounds: 0}
+	providers := project.AgentProviders{
+		Lead: project.AgentProviderClaude, Reviewer: project.AgentProviderCodex,
+	}
 	projects := &recordingProjectService{getByIDResult: project.Project{
-		ID: "prj_test", DialogueLimits: limits,
+		ID: "prj_test", DialogueLimits: limits, AgentProviders: providers,
 	}}
 	request := httptest.NewRequest(
 		http.MethodPost,
@@ -88,6 +95,9 @@ func TestStartRunReturnsDurableAcceptedRun(t *testing.T) {
 	if starter.limits != limits {
 		t.Errorf("expected run snapshot %+v, got %+v", limits, starter.limits)
 	}
+	if starter.providers != providers {
+		t.Errorf("expected provider snapshot %+v, got %+v", providers, starter.providers)
+	}
 	if location := recorder.Header().Get("Location"); location != "/api/v1/runs/"+expectedRunID {
 		t.Errorf("unexpected Location %q", location)
 	}
@@ -98,6 +108,9 @@ func TestStartRunReturnsDurableAcceptedRun(t *testing.T) {
 	if body.ID != expectedRunID || body.Status != execution.RunStatusRunning || body.Sessions == nil ||
 		body.DialogueLimits.PlanningRounds != 3 || body.DialogueLimits.ImplementationReviewRounds != 0 {
 		t.Errorf("unexpected run response %+v", body)
+	}
+	if body.AgentProviders.Lead != providers.Lead || body.AgentProviders.Reviewer != providers.Reviewer {
+		t.Errorf("unexpected run provider response %+v", body.AgentProviders)
 	}
 }
 

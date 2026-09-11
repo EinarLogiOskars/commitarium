@@ -14,6 +14,11 @@ type Store interface {
 		projectID string,
 		limits DialogueLimits,
 	) (Project, error)
+	UpdateAgentProviders(
+		ctx context.Context,
+		projectID string,
+		providers AgentProviders,
+	) (Project, error)
 	BindForgejoRepository(
 		ctx context.Context,
 		projectID string,

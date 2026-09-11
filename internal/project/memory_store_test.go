@@ -33,6 +33,7 @@ func TestMemoryStoreGetByID(t *testing.T) {
 		ID:             "prj_test",
 		Name:           "Test project",
 		RecoveryPolicy: RecoveryPolicyApprovalRequired,
+		AgentProviders: DefaultAgentProviders(),
 		CreatedAt:      time.Date(2026, time.September, 7, 12, 0, 0, 0, time.UTC),
 	}
 

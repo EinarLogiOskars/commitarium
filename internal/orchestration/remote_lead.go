@@ -62,7 +62,7 @@ var ErrImplementationNotAllowed = errors.New("implementation cannot start from t
 // lead turn. It deliberately contains no workflow transition: goal
 // clarification leaves the feature in draft.
 type RemoteLeadExecution interface {
-	CreateRun(context.Context, string, string, int, int) (execution.Run, bool, error)
+	CreateRun(context.Context, string, string, int, int, project.AgentProviders) (execution.Run, bool, error)
 	CreateSession(context.Context, string, string, string, worker.Role) (execution.Session, bool, error)
 	CreateWorkerAttempt(context.Context, string, string) (execution.WorkerAttemptCheckpoint, bool, error)
 	GetRun(context.Context, string) (execution.Run, error)
@@ -119,19 +119,23 @@ type RemoteLeadPump interface {
 }
 
 type RemoteLeadConfig struct {
-	Executions             RemoteLeadExecution
-	Features               RemoteLeadFeatureFinder
-	Goals                  RemoteLeadGoalService
-	Planning               RemoteLeadPlanningWorkflow
-	Workspaces             RemoteLeadWorkspaceService
-	Worker                 RemoteLeadWorker
-	Pump                   RemoteLeadPump
-	Lifetime               context.Context
-	AgentProfileID         string
-	ReviewerAgentProfileID string
-	ForgejoAuthor          string
-	ReviewerForgejoAuthor  string
-	ReportError            func(error)
+	Executions                   RemoteLeadExecution
+	Features                     RemoteLeadFeatureFinder
+	Goals                        RemoteLeadGoalService
+	Planning                     RemoteLeadPlanningWorkflow
+	Workspaces                   RemoteLeadWorkspaceService
+	Worker                       RemoteLeadWorker
+	Pump                         RemoteLeadPump
+	Lifetime                     context.Context
+	AgentProfileID               string
+	ReviewerAgentProfileID       string
+	ClaudeAgentProfileID         string
+	ClaudeReviewerAgentProfileID string
+	ForgejoAuthor                string
+	ReviewerForgejoAuthor        string
+	ClaudeForgejoAuthor          string
+	ClaudeReviewerForgejoAuthor  string
+	ReportError                  func(error)
 }
 
 // RemoteLeadStarter owns the deliberately small real-provider path used while
@@ -139,19 +143,23 @@ type RemoteLeadConfig struct {
 // attempt identity make replaying PutAttempt after a restart safe: the worker
 // returns the existing attempt instead of launching a duplicate process.
 type RemoteLeadStarter struct {
-	executions             RemoteLeadExecution
-	features               RemoteLeadFeatureFinder
-	goals                  RemoteLeadGoalService
-	planning               RemoteLeadPlanningWorkflow
-	workspaces             RemoteLeadWorkspaceService
-	worker                 RemoteLeadWorker
-	pump                   RemoteLeadPump
-	lifetime               context.Context
-	agentProfileID         string
-	reviewerAgentProfileID string
-	forgejoAuthor          string
-	reviewerForgejoAuthor  string
-	reportError            func(error)
+	executions                   RemoteLeadExecution
+	features                     RemoteLeadFeatureFinder
+	goals                        RemoteLeadGoalService
+	planning                     RemoteLeadPlanningWorkflow
+	workspaces                   RemoteLeadWorkspaceService
+	worker                       RemoteLeadWorker
+	pump                         RemoteLeadPump
+	lifetime                     context.Context
+	agentProfileID               string
+	reviewerAgentProfileID       string
+	claudeAgentProfileID         string
+	claudeReviewerAgentProfileID string
+	forgejoAuthor                string
+	reviewerForgejoAuthor        string
+	claudeForgejoAuthor          string
+	claudeReviewerForgejoAuthor  string
+	reportError                  func(error)
 
 	activeMu sync.Mutex
 	active   map[string]struct{}
@@ -184,17 +192,67 @@ func NewRemoteLeadStarter(config RemoteLeadConfig) (*RemoteLeadStarter, error) {
 	if reviewerForgejoAuthor == "" {
 		reviewerForgejoAuthor = defaultReviewerForgejoAuthor
 	}
+	claudeForgejoAuthor := strings.TrimSpace(config.ClaudeForgejoAuthor)
+	if claudeForgejoAuthor == "" {
+		claudeForgejoAuthor = "claude-lead"
+	}
+	claudeReviewerForgejoAuthor := strings.TrimSpace(config.ClaudeReviewerForgejoAuthor)
+	if claudeReviewerForgejoAuthor == "" {
+		claudeReviewerForgejoAuthor = "claude-reviewer"
+	}
 	return &RemoteLeadStarter{
 		executions: config.Executions, features: config.Features, goals: config.Goals,
 		planning: config.Planning, workspaces: config.Workspaces,
 		worker: config.Worker, pump: config.Pump,
 		lifetime: config.Lifetime, agentProfileID: config.AgentProfileID,
-		reviewerAgentProfileID: reviewerAgentProfileID,
-		forgejoAuthor:          forgejoAuthor,
-		reviewerForgejoAuthor:  reviewerForgejoAuthor,
-		reportError:            reportError,
-		active:                 make(map[string]struct{}),
+		reviewerAgentProfileID:       reviewerAgentProfileID,
+		claudeAgentProfileID:         strings.TrimSpace(config.ClaudeAgentProfileID),
+		claudeReviewerAgentProfileID: strings.TrimSpace(config.ClaudeReviewerAgentProfileID),
+		forgejoAuthor:                forgejoAuthor,
+		reviewerForgejoAuthor:        reviewerForgejoAuthor,
+		claudeForgejoAuthor:          claudeForgejoAuthor,
+		claudeReviewerForgejoAuthor:  claudeReviewerForgejoAuthor,
+		reportError:                  reportError,
+		active:                       make(map[string]struct{}),
 	}, nil
+}
+
+func agentID(provider project.AgentProvider, role worker.Role) string {
+	return string(provider) + "-" + string(role)
+}
+
+func (starter *RemoteLeadStarter) profileID(provider project.AgentProvider, role worker.Role) string {
+	switch {
+	case provider == project.AgentProviderCodex && role == worker.RoleLead:
+		return starter.agentProfileID
+	case provider == project.AgentProviderCodex && role == worker.RoleReviewer:
+		return starter.reviewerAgentProfileID
+	case provider == project.AgentProviderClaude && role == worker.RoleLead:
+		return starter.claudeAgentProfileID
+	case provider == project.AgentProviderClaude && role == worker.RoleReviewer:
+		return starter.claudeReviewerAgentProfileID
+	default:
+		return ""
+	}
+}
+
+func (starter *RemoteLeadStarter) forgejoAuthorFor(run execution.Run, role worker.Role) string {
+	provider := run.AgentProviders.Lead
+	if role == worker.RoleReviewer {
+		provider = run.AgentProviders.Reviewer
+	}
+	switch {
+	case provider == project.AgentProviderCodex && role == worker.RoleLead:
+		return starter.forgejoAuthor
+	case provider == project.AgentProviderCodex && role == worker.RoleReviewer:
+		return starter.reviewerForgejoAuthor
+	case provider == project.AgentProviderClaude && role == worker.RoleLead:
+		return starter.claudeForgejoAuthor
+	case provider == project.AgentProviderClaude && role == worker.RoleReviewer:
+		return starter.claudeReviewerForgejoAuthor
+	default:
+		return ""
+	}
 }
 
 func (starter *RemoteLeadStarter) Start(
@@ -204,6 +262,7 @@ func (starter *RemoteLeadStarter) Start(
 	featureID string,
 	goal string,
 	dialogueLimits project.DialogueLimits,
+	agentProviders project.AgentProviders,
 ) (execution.Run, bool, error) {
 	if strings.TrimSpace(runID) == "" || strings.TrimSpace(projectID) == "" ||
 		strings.TrimSpace(featureID) == "" || strings.TrimSpace(goal) == "" {
@@ -219,7 +278,11 @@ func (starter *RemoteLeadStarter) Start(
 	if !prepared.CheckoutReady() {
 		return execution.Run{}, false, fmt.Errorf("%w: goal-clarification checkout is not ready", ErrInvalidRunRequest)
 	}
-	request, err := starter.startRequest(runID, projectID, featureID, prepared.ID, goal)
+	agentProviders, err = agentProviders.Normalize()
+	if err != nil {
+		return execution.Run{}, false, ErrInvalidRunRequest
+	}
+	request, err := starter.startRequest(runID, projectID, featureID, prepared.ID, goal, agentProviders)
 	if err != nil {
 		return execution.Run{}, false, err
 	}
@@ -229,13 +292,14 @@ func (starter *RemoteLeadStarter) Start(
 		featureID,
 		dialogueLimits.PlanningRounds,
 		dialogueLimits.ImplementationReviewRounds,
+		agentProviders,
 	)
 	if err != nil || !created {
 		return run, created, err
 	}
 	sessionID := remoteLeadSessionID(runID)
 	if _, _, err := starter.executions.CreateSession(
-		ctx, sessionID, runID, remoteLeadAgentID, worker.RoleLead,
+		ctx, sessionID, runID, agentID(agentProviders.Lead, worker.RoleLead), worker.RoleLead,
 	); err != nil {
 		starter.failAdmission(ctx, run, sessionID, fmt.Errorf("create lead session: %w", err))
 		return execution.Run{}, false, err
@@ -289,8 +353,8 @@ func (starter *RemoteLeadStarter) Recover(
 	if err != nil {
 		return fmt.Errorf("load real-agent session: %w", err)
 	}
-	isLead := session.AgentID == remoteLeadAgentID && session.Role == worker.RoleLead
-	isReviewer := session.AgentID == remoteReviewerAgentID && session.Role == worker.RoleReviewer
+	isLead := session.AgentID == agentID(run.AgentProviders.Lead, worker.RoleLead) && session.Role == worker.RoleLead
+	isReviewer := session.AgentID == agentID(run.AgentProviders.Reviewer, worker.RoleReviewer) && session.Role == worker.RoleReviewer
 	if session.RunID != run.ID || (!isLead && !isReviewer) {
 		return fmt.Errorf("%w: stored real-agent session does not match run", ErrInvalidRunRequest)
 	}
@@ -650,6 +714,7 @@ func (starter *RemoteLeadStarter) startRequest(
 	featureID string,
 	workspaceID string,
 	goal string,
+	agentProviders project.AgentProviders,
 ) (remoteLeadRequest, error) {
 	if strings.TrimSpace(runID) == "" || strings.TrimSpace(projectID) == "" ||
 		strings.TrimSpace(featureID) == "" || strings.TrimSpace(workspaceID) == "" ||
@@ -669,7 +734,7 @@ func (starter *RemoteLeadStarter) startRequest(
 		request: workerhttp.PutAttemptRequest{
 			Mode: workerhttp.AttemptModeStart,
 			Assignment: workerhttp.Assignment{
-				AgentProfileID: starter.agentProfileID,
+				AgentProfileID: starter.profileID(agentProviders.Lead, worker.RoleLead),
 				ProjectID:      projectID, FeatureID: featureID,
 				Role: workerhttp.RoleLead, WorkspaceID: workspaceID,
 			},
@@ -715,7 +780,7 @@ func (starter *RemoteLeadStarter) replyRequest(
 		request: workerhttp.PutAttemptRequest{
 			Mode: workerhttp.AttemptModeResume,
 			Assignment: workerhttp.Assignment{
-				AgentProfileID: starter.agentProfileID,
+				AgentProfileID: starter.profileID(run.AgentProviders.Lead, worker.RoleLead),
 				ProjectID:      storedFeature.ProjectID, FeatureID: storedFeature.ID,
 				Role: workerhttp.RoleLead, WorkspaceID: prepared.ID,
 			},
@@ -889,7 +954,7 @@ func (starter *RemoteLeadStarter) StartPlanning(
 	if err != nil {
 		return execution.Run{}, false, err
 	}
-	if session.RunID != run.ID || session.AgentID != remoteLeadAgentID ||
+	if session.RunID != run.ID || session.AgentID != agentID(run.AgentProviders.Lead, worker.RoleLead) ||
 		session.Role != worker.RoleLead || session.ProviderSessionID == "" {
 		return execution.Run{}, false, ErrPlanningNotAllowed
 	}
@@ -1003,7 +1068,7 @@ func (starter *RemoteLeadStarter) planningRequest(
 		request: workerhttp.PutAttemptRequest{
 			Mode: workerhttp.AttemptModeResume,
 			Assignment: workerhttp.Assignment{
-				AgentProfileID: starter.agentProfileID,
+				AgentProfileID: starter.profileID(run.AgentProviders.Lead, worker.RoleLead),
 				ProjectID:      storedFeature.ProjectID, FeatureID: storedFeature.ID,
 				Role: workerhttp.RoleLead, WorkspaceID: prepared.ID,
 			},
@@ -1043,7 +1108,7 @@ func (starter *RemoteLeadStarter) StartPlanningReview(
 
 	reviewerID := remoteReviewerSessionID(run.ID)
 	if existing, getErr := starter.executions.GetSession(ctx, reviewerID); getErr == nil {
-		if existing.RunID != run.ID || existing.AgentID != remoteReviewerAgentID ||
+		if existing.RunID != run.ID || existing.AgentID != agentID(run.AgentProviders.Reviewer, worker.RoleReviewer) ||
 			existing.Role != worker.RoleReviewer {
 			return execution.Run{}, false, execution.ErrRecordConflict
 		}
@@ -1067,7 +1132,7 @@ func (starter *RemoteLeadStarter) StartPlanningReview(
 	if err != nil {
 		return execution.Run{}, false, err
 	}
-	if lead.AgentID != remoteLeadAgentID || lead.Role != worker.RoleLead ||
+	if lead.AgentID != agentID(run.AgentProviders.Lead, worker.RoleLead) || lead.Role != worker.RoleLead ||
 		lead.Status != execution.SessionStatusWaitingForUser ||
 		leadCheckpoint.AttemptID != planningAttemptID(lead.ID) {
 		return execution.Run{}, false, ErrPlanningNotAllowed
@@ -1099,7 +1164,7 @@ func (starter *RemoteLeadStarter) StartPlanningReview(
 		return execution.Run{}, false, ErrPlanningNotAllowed
 	}
 	admitted, err := starter.executions.BeginNewSessionTurn(
-		ctx, reviewerID, run.ID, remoteReviewerAgentID, worker.RoleReviewer,
+		ctx, reviewerID, run.ID, agentID(run.AgentProviders.Reviewer, worker.RoleReviewer), worker.RoleReviewer,
 		attemptID, "The reviewer is inspecting the lead's planning proposal.",
 	)
 	if err != nil {
@@ -1138,7 +1203,7 @@ func (starter *RemoteLeadStarter) reviewerPlanningRequest(
 		request: workerhttp.PutAttemptRequest{
 			Mode: workerhttp.AttemptModeStart,
 			Assignment: workerhttp.Assignment{
-				AgentProfileID: starter.reviewerAgentProfileID,
+				AgentProfileID: starter.profileID(run.AgentProviders.Reviewer, worker.RoleReviewer),
 				ProjectID:      storedFeature.ProjectID, FeatureID: storedFeature.ID,
 				Role: workerhttp.RoleReviewer, WorkspaceID: prepared.ID,
 			},
@@ -1206,8 +1271,8 @@ func (starter *RemoteLeadStarter) StartPlanningRound(
 		lead.Status != execution.SessionStatusWaitingForUser ||
 		reviewer.Status != execution.SessionStatusWaitingForUser ||
 		lead.ProviderSessionID == "" || reviewer.ProviderSessionID == "" ||
-		lead.AgentID != remoteLeadAgentID || lead.Role != worker.RoleLead ||
-		reviewer.AgentID != remoteReviewerAgentID || reviewer.Role != worker.RoleReviewer {
+		lead.AgentID != agentID(run.AgentProviders.Lead, worker.RoleLead) || lead.Role != worker.RoleLead ||
+		reviewer.AgentID != agentID(run.AgentProviders.Reviewer, worker.RoleReviewer) || reviewer.Role != worker.RoleReviewer {
 		return execution.Run{}, false, ErrPlanningNotAllowed
 	}
 	messages, err := starter.executions.PlanningMessagesForRun(ctx, run.ID)
@@ -1343,8 +1408,8 @@ func (starter *RemoteLeadStarter) StartImplementation(
 	if run.Status != execution.RunStatusWaitingForUser ||
 		lead.Status != execution.SessionStatusWaitingForUser ||
 		reviewer.Status != execution.SessionStatusWaitingForUser ||
-		lead.AgentID != remoteLeadAgentID || lead.Role != worker.RoleLead ||
-		reviewer.AgentID != remoteReviewerAgentID || reviewer.Role != worker.RoleReviewer ||
+		lead.AgentID != agentID(run.AgentProviders.Lead, worker.RoleLead) || lead.Role != worker.RoleLead ||
+		reviewer.AgentID != agentID(run.AgentProviders.Reviewer, worker.RoleReviewer) || reviewer.Role != worker.RoleReviewer ||
 		lead.ProviderSessionID == "" || reviewer.ProviderSessionID == "" {
 		return execution.Run{}, false, fmt.Errorf(
 			"%w: run and planning sessions are not at the completed-plan checkpoint",
@@ -1506,7 +1571,7 @@ func (starter *RemoteLeadStarter) implementationRequest(
 		request: workerhttp.PutAttemptRequest{
 			Mode: workerhttp.AttemptModeResume,
 			Assignment: workerhttp.Assignment{
-				AgentProfileID: starter.agentProfileID,
+				AgentProfileID: starter.profileID(run.AgentProviders.Lead, worker.RoleLead),
 				ProjectID:      storedFeature.ProjectID, FeatureID: storedFeature.ID,
 				Role: workerhttp.RoleLead, WorkspaceID: prepared.ID,
 			},
@@ -1617,7 +1682,7 @@ func (starter *RemoteLeadStarter) startLeadResponse(
 		return remoteLeadRequest{}, false, err
 	}
 	if lead.Status != execution.SessionStatusWaitingForUser ||
-		lead.AgentID != remoteLeadAgentID || lead.Role != worker.RoleLead ||
+		lead.AgentID != agentID(run.AgentProviders.Lead, worker.RoleLead) || lead.Role != worker.RoleLead ||
 		lead.ProviderSessionID == "" {
 		return remoteLeadRequest{}, false, ErrPlanningNotAllowed
 	}
@@ -1641,7 +1706,7 @@ func (starter *RemoteLeadStarter) startLeadResponse(
 		request: workerhttp.PutAttemptRequest{
 			Mode: workerhttp.AttemptModeResume,
 			Assignment: workerhttp.Assignment{
-				AgentProfileID: starter.agentProfileID,
+				AgentProfileID: starter.profileID(run.AgentProviders.Lead, worker.RoleLead),
 				ProjectID:      storedFeature.ProjectID, FeatureID: storedFeature.ID,
 				Role: workerhttp.RoleLead, WorkspaceID: prepared.ID,
 			},
@@ -1707,7 +1772,7 @@ func (starter *RemoteLeadStarter) startReviewerResponse(
 		return remoteLeadRequest{}, false, err
 	}
 	if reviewer.Status != execution.SessionStatusWaitingForUser ||
-		reviewer.AgentID != remoteReviewerAgentID || reviewer.Role != worker.RoleReviewer ||
+		reviewer.AgentID != agentID(run.AgentProviders.Reviewer, worker.RoleReviewer) || reviewer.Role != worker.RoleReviewer ||
 		reviewer.ProviderSessionID == "" {
 		return remoteLeadRequest{}, false, ErrPlanningNotAllowed
 	}
@@ -1752,7 +1817,7 @@ func (starter *RemoteLeadStarter) reviewerResponseRequest(
 		request: workerhttp.PutAttemptRequest{
 			Mode: workerhttp.AttemptModeResume,
 			Assignment: workerhttp.Assignment{
-				AgentProfileID: starter.reviewerAgentProfileID,
+				AgentProfileID: starter.profileID(run.AgentProviders.Reviewer, worker.RoleReviewer),
 				ProjectID:      storedFeature.ProjectID, FeatureID: storedFeature.ID,
 				Role: workerhttp.RoleReviewer, WorkspaceID: prepared.ID,
 			},
@@ -1849,12 +1914,12 @@ func (starter *RemoteLeadStarter) AcceptGoal(
 	if err != nil {
 		return workflow.Event{}, err
 	}
-	if session.AgentID != remoteLeadAgentID || session.Role != worker.RoleLead {
-		return workflow.Event{}, workflow.ErrGoalAcceptanceNotAllowed
-	}
 	run, err := starter.executions.GetRun(ctx, session.RunID)
 	if err != nil {
 		return workflow.Event{}, err
+	}
+	if session.AgentID != agentID(run.AgentProviders.Lead, worker.RoleLead) || session.Role != worker.RoleLead {
+		return workflow.Event{}, workflow.ErrGoalAcceptanceNotAllowed
 	}
 	storedFeature, err := starter.features.GetByID(ctx, run.FeatureID)
 	if err != nil {
@@ -1893,14 +1958,14 @@ func (starter *RemoteLeadStarter) SendCommand(
 	if err != nil {
 		return execution.Command{}, err
 	}
-	if session.AgentID != remoteLeadAgentID || session.Role != worker.RoleLead ||
-		session.Status != execution.SessionStatusWaitingForUser ||
-		session.ProviderSessionID == "" {
-		return execution.Command{}, commandStateError(command.Type, session.Status)
-	}
 	run, err := starter.executions.GetRun(ctx, session.RunID)
 	if err != nil {
 		return execution.Command{}, err
+	}
+	if session.AgentID != agentID(run.AgentProviders.Lead, worker.RoleLead) || session.Role != worker.RoleLead ||
+		session.Status != execution.SessionStatusWaitingForUser ||
+		session.ProviderSessionID == "" {
+		return execution.Command{}, commandStateError(command.Type, session.Status)
 	}
 	if run.Status != execution.RunStatusWaitingForUser {
 		return execution.Command{}, ErrCommandNotAllowed
@@ -1990,7 +2055,7 @@ func (starter *RemoteLeadStarter) implementationContinuationRequest(
 		return remoteLeadRequest{}, err
 	}
 	if reviewer.Status != execution.SessionStatusWaitingForUser ||
-		reviewer.AgentID != remoteReviewerAgentID || reviewer.Role != worker.RoleReviewer ||
+		reviewer.AgentID != agentID(run.AgentProviders.Reviewer, worker.RoleReviewer) || reviewer.Role != worker.RoleReviewer ||
 		reviewer.ProviderSessionID == "" {
 		return remoteLeadRequest{}, ErrCommandNotAllowed
 	}
@@ -2029,7 +2094,7 @@ func (starter *RemoteLeadStarter) implementationContinuationRequest(
 		request: workerhttp.PutAttemptRequest{
 			Mode: workerhttp.AttemptModeResume,
 			Assignment: workerhttp.Assignment{
-				AgentProfileID: starter.agentProfileID,
+				AgentProfileID: starter.profileID(run.AgentProviders.Lead, worker.RoleLead),
 				ProjectID:      storedFeature.ProjectID, FeatureID: storedFeature.ID,
 				Role: workerhttp.RoleLead, WorkspaceID: prepared.ID,
 			},
@@ -2408,7 +2473,7 @@ func (starter *RemoteLeadStarter) verifyImplementationPublication(
 		result.Summary,
 		result.Publication.CommitID,
 		result.Publication.PullRequestNumber,
-		starter.forgejoAuthor,
+		starter.forgejoAuthorFor(run, worker.RoleLead),
 	); err != nil {
 		return fmt.Errorf("verify lead publication before review: %w", err)
 	}
@@ -2422,7 +2487,7 @@ func (starter *RemoteLeadStarter) verifyImplementationPublication(
 				"Verified lead publication: commit %s is the head of Forgejo pull request #%d and its audit comment is attributed to %s.",
 				result.Publication.CommitID,
 				result.Publication.PullRequestNumber,
-				starter.forgejoAuthor,
+				starter.forgejoAuthorFor(run, worker.RoleLead),
 			),
 		},
 	)
@@ -2462,7 +2527,7 @@ func (starter *RemoteLeadStarter) startImplementationReview(
 		return remoteLeadRequest{}, false, err
 	}
 	if reviewer.Status != execution.SessionStatusWaitingForUser ||
-		reviewer.AgentID != remoteReviewerAgentID || reviewer.Role != worker.RoleReviewer ||
+		reviewer.AgentID != agentID(run.AgentProviders.Reviewer, worker.RoleReviewer) || reviewer.Role != worker.RoleReviewer ||
 		reviewer.ProviderSessionID == "" {
 		return remoteLeadRequest{}, false, errors.New("reviewer planning conversation is not safely resumable")
 	}
@@ -2494,7 +2559,7 @@ func (starter *RemoteLeadStarter) startImplementationReview(
 		request: workerhttp.PutAttemptRequest{
 			Mode: workerhttp.AttemptModeResume,
 			Assignment: workerhttp.Assignment{
-				AgentProfileID: starter.reviewerAgentProfileID,
+				AgentProfileID: starter.profileID(run.AgentProviders.Reviewer, worker.RoleReviewer),
 				ProjectID:      storedFeature.ProjectID, FeatureID: storedFeature.ID,
 				Role: workerhttp.RoleReviewer, WorkspaceID: prepared.ID,
 			},
@@ -2585,7 +2650,7 @@ func (starter *RemoteLeadStarter) startImplementationCorrection(
 		return remoteLeadRequest{}, false, err
 	}
 	if lead.Status != execution.SessionStatusWaitingForUser ||
-		lead.AgentID != remoteLeadAgentID || lead.Role != worker.RoleLead ||
+		lead.AgentID != agentID(run.AgentProviders.Lead, worker.RoleLead) || lead.Role != worker.RoleLead ||
 		lead.ProviderSessionID == "" {
 		return remoteLeadRequest{}, false, errors.New("lead implementation conversation is not safely resumable")
 	}
@@ -2623,7 +2688,7 @@ func (starter *RemoteLeadStarter) startImplementationCorrection(
 		request: workerhttp.PutAttemptRequest{
 			Mode: workerhttp.AttemptModeResume,
 			Assignment: workerhttp.Assignment{
-				AgentProfileID: starter.agentProfileID,
+				AgentProfileID: starter.profileID(run.AgentProviders.Lead, worker.RoleLead),
 				ProjectID:      storedFeature.ProjectID, FeatureID: storedFeature.ID,
 				Role: workerhttp.RoleLead, WorkspaceID: prepared.ID,
 			},
@@ -2753,7 +2818,7 @@ func (starter *RemoteLeadStarter) verifyImplementationCorrection(
 	if _, err := starter.workspaces.VerifyImplementationReviewResponse(
 		ctx, storedFeature.ProjectID, storedFeature.ID, plan.ID, plan.Text,
 		request.identity.AttemptID, result.Summary, reviewAttempt.Result.Review.CommitID,
-		result.Publication.CommitID, result.Publication.PullRequestNumber, starter.forgejoAuthor,
+		result.Publication.CommitID, result.Publication.PullRequestNumber, starter.forgejoAuthorFor(run, worker.RoleLead),
 	); err != nil {
 		return fmt.Errorf("verify lead review response: %w", err)
 	}
@@ -2762,7 +2827,7 @@ func (starter *RemoteLeadStarter) verifyImplementationCorrection(
 		worker.Event{Type: worker.EventActivity, Text: fmt.Sprintf(
 			"Verified lead response to review #%d: corrected commit %s is the head of Forgejo pull request #%d and its audit comment is attributed to %s.",
 			reviewAttempt.Result.Review.ReviewID, result.Publication.CommitID,
-			result.Publication.PullRequestNumber, starter.forgejoAuthor,
+			result.Publication.PullRequestNumber, starter.forgejoAuthorFor(run, worker.RoleLead),
 		)},
 	); err != nil {
 		return fmt.Errorf("record verified implementation review response: %w", err)
@@ -2830,7 +2895,7 @@ func (starter *RemoteLeadStarter) verifyImplementationReview(
 		ctx, storedFeature.ProjectID, storedFeature.ID, plan.ID, plan.Text,
 		request.identity.AttemptID, result.Summary, result.Review.CommitID,
 		result.Review.PullRequestNumber, result.Review.ReviewID,
-		starter.reviewerForgejoAuthor, expectedState,
+		starter.forgejoAuthorFor(run, worker.RoleReviewer), expectedState,
 	); err != nil {
 		return fmt.Errorf("verify reviewer publication: %w", err)
 	}
@@ -2838,7 +2903,7 @@ func (starter *RemoteLeadStarter) verifyImplementationReview(
 		ctx, implementationReviewVerificationEventID(request.identity.AttemptID), request.identity.SessionID,
 		worker.Event{Type: worker.EventActivity, Text: fmt.Sprintf(
 			"Verified %s review #%d by %s for commit %s in Forgejo pull request #%d.",
-			strings.ToLower(expectedState), result.Review.ReviewID, starter.reviewerForgejoAuthor,
+			strings.ToLower(expectedState), result.Review.ReviewID, starter.forgejoAuthorFor(run, worker.RoleReviewer),
 			result.Review.CommitID, result.Review.PullRequestNumber,
 		)},
 	); err != nil {
@@ -2892,7 +2957,7 @@ func (starter *RemoteLeadStarter) startImplementationReadiness(
 		return remoteLeadRequest{}, false, err
 	}
 	if lead.Status != execution.SessionStatusWaitingForUser ||
-		lead.AgentID != remoteLeadAgentID || lead.Role != worker.RoleLead ||
+		lead.AgentID != agentID(run.AgentProviders.Lead, worker.RoleLead) || lead.Role != worker.RoleLead ||
 		lead.ProviderSessionID == "" {
 		return remoteLeadRequest{}, false, errors.New("lead conversation is not safely resumable for merge readiness")
 	}
@@ -2927,7 +2992,7 @@ func (starter *RemoteLeadStarter) startImplementationReadiness(
 		request: workerhttp.PutAttemptRequest{
 			Mode: workerhttp.AttemptModeResume,
 			Assignment: workerhttp.Assignment{
-				AgentProfileID: starter.agentProfileID,
+				AgentProfileID: starter.profileID(run.AgentProviders.Lead, worker.RoleLead),
 				ProjectID:      storedFeature.ProjectID, FeatureID: storedFeature.ID,
 				Role: workerhttp.RoleLead, WorkspaceID: prepared.ID,
 			},
@@ -3063,7 +3128,7 @@ func (starter *RemoteLeadStarter) verifyImplementationReadiness(
 	if _, err := starter.workspaces.VerifyImplementationMergeReadiness(
 		ctx, storedFeature.ProjectID, storedFeature.ID, plan.ID, plan.Text,
 		request.identity.AttemptID, result.Summary, approved.CommitID,
-		approved.PullRequestNumber, starter.forgejoAuthor,
+		approved.PullRequestNumber, starter.forgejoAuthorFor(run, worker.RoleLead),
 	); err != nil {
 		return fmt.Errorf("verify lead merge-readiness decision: %w", err)
 	}

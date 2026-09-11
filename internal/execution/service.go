@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/EinarLogiOskars/commitarium/internal/feature"
+	"github.com/EinarLogiOskars/commitarium/internal/project"
 	"github.com/EinarLogiOskars/commitarium/internal/worker"
 )
 
@@ -39,12 +40,18 @@ func (s *Service) CreateRun(
 	featureID string,
 	planningRoundLimit int,
 	implementationReviewRoundLimit int,
+	agentProviders project.AgentProviders,
 ) (Run, bool, error) {
+	agentProviders, err := agentProviders.Normalize()
+	if err != nil {
+		return Run{}, false, err
+	}
 	now := s.now().UTC()
 	run := Run{
 		ID: id, FeatureID: featureID, Status: RunStatusRunning,
 		PlanningRoundLimit:             planningRoundLimit,
 		ImplementationReviewRoundLimit: implementationReviewRoundLimit,
+		AgentProviders:                 agentProviders,
 		StartedAt:                      now, UpdatedAt: now,
 	}
 	if err := s.store.CreateRun(ctx, run); err != nil {
@@ -55,9 +62,14 @@ func (s *Service) CreateRun(
 		if getErr != nil {
 			return Run{}, false, fmt.Errorf("get existing run %q: %w", id, getErr)
 		}
+		existingProviders, providerErr := existing.AgentProviders.Normalize()
+		if providerErr != nil {
+			return Run{}, false, providerErr
+		}
 		if existing.FeatureID != featureID ||
 			existing.PlanningRoundLimit != planningRoundLimit ||
-			existing.ImplementationReviewRoundLimit != implementationReviewRoundLimit {
+			existing.ImplementationReviewRoundLimit != implementationReviewRoundLimit ||
+			existingProviders != agentProviders {
 			return Run{}, false, ErrRecordConflict
 		}
 		return existing, false, nil

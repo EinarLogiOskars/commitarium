@@ -17,9 +17,10 @@ for automatic recovery can continue without intervention.
 
 This is not yet a production-ready release. The coordinator defaults to its
 complete deterministic simulation. An opt-in mode now connects the public run
-and session-command APIs to persistent real Codex lead and reviewer
-conversations. The user can exchange multiple visible goal-clarification turns
-with the lead agent while the feature remains a draft. Before the first turn,
+and session-command APIs to persistent real Codex or Claude lead and reviewer
+conversations, selected independently per project. The user can exchange
+multiple visible goal-clarification turns with the lead agent while the feature
+remains a draft. Before the first turn,
 the coordinator pins the selected project's exact Forgejo default-branch commit
 and creates a dedicated host-visible checkout for that work order. Every reply
 resumes the lead in that same selected-project directory; no global active
@@ -27,9 +28,10 @@ project or smoke-test checkout participates in routing. The user then explicitly
 accepts the final goal to close clarification. An explicit planning action
 resumes that same lead conversation in the clean pinned checkout without first
 creating a feature branch or PR. A second
-action starts a separate persistent reviewer Codex conversation, supplies the
-lead's exact final proposal, and exposes both final messages through one ordered
-planning history and SSE stream. After the first review, the same two provider
+action starts a separate persistent reviewer conversation with the selected
+provider, supplies the lead's exact final proposal, and exposes both final
+messages through one ordered planning history and SSE stream. After the first
+review, the same two provider
 sessions alternate until the lead explicitly submits an agreed plan or the
 default six-round (twelve-message) safety limit requires user input. A submitted
 plan submission promotes the clean checkout to the reserved feature branch,
@@ -60,9 +62,10 @@ Review and lead-response pairs repeat for at most six rounds by default. The
 round is completed before the workflow stops for user input, and a zero round
 limit means unlimited. Projects expose separate planning and implementation-
 review limits, and every run snapshots both values when it starts so later
-settings changes affect only future workflows. A standalone real Claude Code
-worker is now available behind the same private worker contract, but public
-lead/reviewer provider selection and the user interface remain to be built.
+settings changes affect only future workflows. Projects now also choose Codex
+or Claude independently for the lead and reviewer. Each run snapshots those
+choices and uses them for routing and restart recovery, so later project edits
+cannot move an active conversation to another provider.
 Projects and their features can be listed for switching, active-work views, and
 completed history. Opening a feature exposes its run and session history.
 Projects can also be permanently associated with one verified Forgejo repository.
@@ -95,9 +98,8 @@ root with the coordinator. They are intentionally not started by ordinary
 The optional `real-claude` profile similarly adds `claude-worker` and
 `claude-reviewer-worker`. Each contains a pinned Claude Code CLI and has its own
 provider profile, durable attempt journal, worker token, and Forgejo identity.
-The coordinator does not route workflows to these services yet; this profile
-exists so Claude authentication and worker behavior can be exercised before
-provider selection is added.
+The coordinator routes a selected Claude role to the corresponding service.
+Start both real profiles when projects may use either provider.
 
 Forgejo is the agent-managed source of truth for plans, review discussion, and
 the internal pull-request audit trail. The coordinator database stores only the
@@ -198,8 +200,8 @@ docker compose --profile real-codex run --rm --no-deps --entrypoint codex \
 
 Managed feature checkouts are written beneath
 `${COMMITARIUM_WORKSPACE_SOURCE:-./.commitarium/workspaces}` on the host. Compose
-mounts that same directory at `/workspaces` in both the coordinator and real
-Codex worker. This is a shared directory, not a copy: a file saved by the user
+mounts that same directory at `/workspaces` in the coordinator and every real
+agent worker. This is a shared directory, not a copy: a file saved by the user
 is immediately visible to the agent container, and an eventual agent edit will
 be immediately visible to the user. Each feature receives one child directory;
 the user's original upstream checkout is not mounted or changed.
@@ -338,23 +340,25 @@ Each worker starts one bounded non-interactive Claude turn, returns its session
 UUID immediately, streams normalized messages and factual tool activity, and
 can later resume that exact conversation. The worker supports cooperative and
 forced stop, but not mid-turn message, pause, or continue controls. New guidance
-is supplied as the next bounded resume turn. Provider selection is the next
-backend slice, so these services are not yet part of a public coordinator run.
+is supplied as the next bounded resume turn. A public run now reaches this
+worker whenever its immutable project/run assignment selects Claude for the
+corresponding role.
 
-To exercise the first coordinator-to-Codex path instead of the standalone
-worker smoke test, start the real profile and select the opt-in runner:
+To exercise the real coordinator path, start both provider profiles and select
+the opt-in runner. The `real_codex_lead` name is retained for compatibility even
+though the run may assign either provider to either role:
 
 ```sh
 COMMITARIUM_RUNNER_MODE=real_codex_lead \
-  docker compose --profile real-codex up --build -d coordinator codex-worker forgejo
+  docker compose --profile real-codex --profile real-claude up --build -d
 ```
 
 Create a project and feature and start its run through the same public API shown
-above. The coordinator durably creates a `lead` session, asks Codex to inspect
-and clarify the goal without changing files, copies the worker event stream to
-the public session history/SSE endpoints, and records the provider thread ID as
-soon as Codex starts. A successful turn leaves both run and session in
-`waiting_for_user`, while the feature remains `draft`.
+above. The coordinator durably creates a `lead` session, asks the selected lead
+provider to inspect and clarify the goal without changing files, copies the
+worker event stream to the public session history/SSE endpoints, and records the
+provider session ID as soon as the agent starts. A successful turn leaves both
+run and session in `waiting_for_user`, while the feature remains `draft`.
 
 Reply through the existing session command endpoint:
 

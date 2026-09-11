@@ -46,6 +46,7 @@ type RunRequest struct {
 	Assignment        Assignment
 	MaxPlanningRounds int
 	MaxReviewRounds   int
+	AgentProviders    project.AgentProviders
 	RecoveryPolicy    project.RecoveryPolicy
 	WorkflowPhase     feature.State
 }
@@ -74,7 +75,7 @@ type RunResult struct {
 }
 
 type Execution interface {
-	CreateRun(ctx context.Context, id string, featureID string, planningRoundLimit int, implementationReviewRoundLimit int) (execution.Run, bool, error)
+	CreateRun(ctx context.Context, id string, featureID string, planningRoundLimit int, implementationReviewRoundLimit int, agentProviders project.AgentProviders) (execution.Run, bool, error)
 	TransitionRun(
 		ctx context.Context,
 		id string,
@@ -167,6 +168,7 @@ func (r *Runner) Run(
 			request.FeatureID,
 			request.MaxPlanningRounds,
 			request.MaxReviewRounds,
+			request.AgentProviders,
 		)
 		if err != nil {
 			return RunResult{}, fmt.Errorf("begin run %q: %w", request.ID, err)
@@ -198,6 +200,7 @@ func (r *Runner) Start(
 		request.FeatureID,
 		request.MaxPlanningRounds,
 		request.MaxReviewRounds,
+		request.AgentProviders,
 	)
 	if err != nil || !created {
 		return storedRun, created, err
@@ -533,6 +536,8 @@ func (request RunRequest) Validate() error {
 		return fmt.Errorf("%w: planning round limit cannot be negative", ErrInvalidRunRequest)
 	case request.MaxReviewRounds < 0:
 		return fmt.Errorf("%w: review round limit cannot be negative", ErrInvalidRunRequest)
+	case request.AgentProviders.Validate() != nil:
+		return fmt.Errorf("%w: agent providers are invalid", ErrInvalidRunRequest)
 	case request.WorkflowPhase != "" && !request.WorkflowPhase.IsValid():
 		return fmt.Errorf("%w: workflow phase %q is not recognized", ErrInvalidRunRequest, request.WorkflowPhase)
 	}

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/EinarLogiOskars/commitarium/internal/execution"
+	"github.com/EinarLogiOskars/commitarium/internal/project"
 	"github.com/EinarLogiOskars/commitarium/internal/worker"
 )
 
@@ -154,6 +155,7 @@ func activeControlSession(
 		"fea_test",
 		2,
 		3,
+		project.DefaultAgentProviders(),
 	); err != nil {
 		t.Fatalf("create control run: %v", err)
 	} else if !created {

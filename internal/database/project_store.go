@@ -33,6 +33,11 @@ func (s *ProjectStore) Create(
 	if err := createdProject.DialogueLimits.Validate(); err != nil {
 		return err
 	}
+	agentProviders, err := createdProject.AgentProviders.Normalize()
+	if err != nil {
+		return err
+	}
+	createdProject.AgentProviders = agentProviders
 	var forgejoOwner string
 	var forgejoRepository string
 	var forgejoDefaultBranch string
@@ -52,10 +57,11 @@ func (s *ProjectStore) Create(
 			INSERT INTO projects (
 				id, name, recovery_policy,
 				planning_round_limit, implementation_review_round_limit,
+				lead_provider, reviewer_provider,
 				forgejo_owner, forgejo_repository, forgejo_default_branch, forgejo_bound_at,
 				created_at
 			)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT(id) DO NOTHING
 		`,
 		createdProject.ID,
@@ -63,6 +69,8 @@ func (s *ProjectStore) Create(
 		createdProject.RecoveryPolicy,
 		createdProject.DialogueLimits.PlanningRounds,
 		createdProject.DialogueLimits.ImplementationReviewRounds,
+		createdProject.AgentProviders.Lead,
+		createdProject.AgentProviders.Reviewer,
 		forgejoOwner,
 		forgejoRepository,
 		forgejoDefaultBranch,
@@ -110,6 +118,7 @@ func (s *ProjectStore) GetByID(
 		`
 			SELECT id, name, recovery_policy,
 			       planning_round_limit, implementation_review_round_limit,
+			       lead_provider, reviewer_provider,
 			       forgejo_owner, forgejo_repository, forgejo_default_branch, forgejo_bound_at,
 			       created_at
 			FROM projects
@@ -137,6 +146,7 @@ func (s *ProjectStore) List(ctx context.Context) ([]project.Project, error) {
 		ctx,
 		`SELECT id, name, recovery_policy,
 		        planning_round_limit, implementation_review_round_limit,
+		        lead_provider, reviewer_provider,
 		        forgejo_owner, forgejo_repository, forgejo_default_branch, forgejo_bound_at,
 		        created_at
 		 FROM projects
@@ -159,6 +169,42 @@ func (s *ProjectStore) List(ctx context.Context) ([]project.Project, error) {
 		return nil, fmt.Errorf("iterate projects: %w", err)
 	}
 	return projects, nil
+}
+
+func (s *ProjectStore) UpdateAgentProviders(
+	ctx context.Context,
+	projectID string,
+	providers project.AgentProviders,
+) (project.Project, error) {
+	normalized, err := providers.Normalize()
+	if err != nil {
+		return project.Project{}, err
+	}
+	result, err := s.db.ExecContext(
+		ctx,
+		`UPDATE projects SET lead_provider = ?, reviewer_provider = ? WHERE id = ?`,
+		normalized.Lead,
+		normalized.Reviewer,
+		projectID,
+	)
+	if err != nil {
+		return project.Project{}, fmt.Errorf("update agent providers for project %q: %w", projectID, err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return project.Project{}, fmt.Errorf("read agent provider update count for project %q: %w", projectID, err)
+	}
+	if rowsAffected == 0 {
+		return project.Project{}, project.ErrNotFound
+	}
+	if rowsAffected != 1 {
+		return project.Project{}, fmt.Errorf(
+			"update agent providers for project %q: expected one affected row, got %d",
+			projectID,
+			rowsAffected,
+		)
+	}
+	return s.GetByID(ctx, projectID)
 }
 
 func (s *ProjectStore) UpdateDialogueLimits(
@@ -216,6 +262,7 @@ func (s *ProjectStore) BindForgejoRepository(
 		ctx,
 		`SELECT id, name, recovery_policy,
 		        planning_round_limit, implementation_review_round_limit,
+		        lead_provider, reviewer_provider,
 		        forgejo_owner, forgejo_repository, forgejo_default_branch, forgejo_bound_at,
 		        created_at
 		 FROM projects WHERE id = ?`,
@@ -284,6 +331,8 @@ func scanProject(scanner projectScanner) (project.Project, error) {
 		&storedProject.RecoveryPolicy,
 		&storedProject.DialogueLimits.PlanningRounds,
 		&storedProject.DialogueLimits.ImplementationReviewRounds,
+		&storedProject.AgentProviders.Lead,
+		&storedProject.AgentProviders.Reviewer,
 		&forgejoOwner,
 		&forgejoRepository,
 		&forgejoDefaultBranch,
@@ -295,6 +344,11 @@ func scanProject(scanner projectScanner) (project.Project, error) {
 	if err := storedProject.DialogueLimits.Validate(); err != nil {
 		return project.Project{}, err
 	}
+	providers, err := storedProject.AgentProviders.Normalize()
+	if err != nil {
+		return project.Project{}, err
+	}
+	storedProject.AgentProviders = providers
 	parsedCreatedAt, err := time.Parse(time.RFC3339Nano, createdAt)
 	if err != nil {
 		return project.Project{}, fmt.Errorf(
