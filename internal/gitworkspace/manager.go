@@ -105,6 +105,78 @@ func (manager *Manager) Ensure(ctx context.Context, spec workspace.CheckoutSpec)
 	return manager.reconcile(ctx, spec, target)
 }
 
+// Promote moves a clean clarification checkout from the pinned default branch
+// onto its feature branch. It also accepts the already-promoted state so a
+// coordinator crash after Git switched branches can be retried safely.
+func (manager *Manager) Promote(
+	ctx context.Context,
+	spec workspace.CheckoutPromotionSpec,
+) error {
+	if err := spec.Validate(); err != nil {
+		return fmt.Errorf("%w: %v", workspace.ErrCheckoutConflict, err)
+	}
+	if !safeWorkspaceID.MatchString(spec.WorkspaceID) ||
+		strings.Contains(spec.RepositoryOwner, "/") || strings.Contains(spec.RepositoryName, "/") {
+		return fmt.Errorf("%w: workspace or repository identity is unsafe", workspace.ErrCheckoutConflict)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	target := filepath.Join(manager.root, spec.WorkspaceID)
+	canonicalTarget, err := canonicalDirectory(target)
+	if err != nil || canonicalTarget != target {
+		return fmt.Errorf("%w: checkout directory resolves outside its assigned path", workspace.ErrCheckoutConflict)
+	}
+	run := func(arguments ...string) (string, error) {
+		return manager.runner.Run(ctx, target, gitEnvironment(""), arguments...)
+	}
+	currentBranch, err := run("symbolic-ref", "--quiet", "--short", "HEAD")
+	if err != nil {
+		return manager.localConflict(ctx, "checkout branch is unavailable")
+	}
+	final := workspace.CheckoutSpec{
+		WorkspaceID: spec.WorkspaceID, RepositoryOwner: spec.RepositoryOwner,
+		RepositoryName: spec.RepositoryName, Branch: spec.FeatureBranch,
+		BaseCommitID: spec.BaseCommitID, AlreadyReady: true,
+		RequireCleanBaseline: true,
+	}
+	if currentBranch == spec.FeatureBranch {
+		return manager.reconcile(ctx, final, target)
+	}
+	if currentBranch != spec.BaseBranch {
+		return manager.localConflict(ctx, "checkout is not on its pinned base or feature branch")
+	}
+	baseline := workspace.CheckoutSpec{
+		WorkspaceID: spec.WorkspaceID, RepositoryOwner: spec.RepositoryOwner,
+		RepositoryName: spec.RepositoryName, Branch: spec.BaseBranch,
+		BaseCommitID: spec.BaseCommitID, AlreadyReady: true,
+		RequireCleanBaseline: true,
+	}
+	if err := manager.reconcile(ctx, baseline, target); err != nil {
+		return err
+	}
+	localRef := "refs/heads/" + spec.FeatureBranch
+	_, localBranchErr := run("show-ref", "--verify", "--quiet", "--", localRef)
+	switch localBranchErr {
+	case nil:
+		commitID, resolveErr := run("rev-parse", localRef)
+		if resolveErr != nil || commitID != spec.BaseCommitID {
+			return manager.localConflict(ctx, "existing local feature branch has an unexpected commit")
+		}
+		_, err = run("switch", "--", spec.FeatureBranch)
+	default:
+		var exitError interface{ ExitCode() int }
+		if !errors.As(localBranchErr, &exitError) || exitError.ExitCode() != 1 {
+			return manager.localUnavailable(ctx, "Git could not inspect the local feature branch")
+		}
+		_, err = run("switch", "--create", spec.FeatureBranch, "--", spec.BaseCommitID)
+	}
+	if err != nil {
+		return manager.localUnavailable(ctx, "Git could not enter the feature branch")
+	}
+	return manager.reconcile(ctx, final, target)
+}
+
 func (manager *Manager) clone(
 	ctx context.Context,
 	spec workspace.CheckoutSpec,

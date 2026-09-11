@@ -63,7 +63,6 @@ func TestLoadConfigAcceptsRealCodexLeadRunner(t *testing.T) {
 		"COMMITARIUM_CODEX_REVIEWER_WORKER_URL":    "http://codex-reviewer-worker:8081",
 		"COMMITARIUM_CODEX_REVIEWER_WORKER_TOKEN":  "reviewer-test-token",
 		"COMMITARIUM_CODEX_REVIEWER_PROFILE_ID":    "reviewer_profile_test",
-		"COMMITARIUM_CODEX_WORKSPACE_ID":           "workspace_test",
 		"COMMITARIUM_CODEX_WORKER_REQUEST_TIMEOUT": "4s",
 	}
 	loaded, err := loadConfig(func(name string) string { return values[name] })
@@ -77,7 +76,6 @@ func TestLoadConfigAcceptsRealCodexLeadRunner(t *testing.T) {
 		loaded.codexReviewerWorkerURL != "http://codex-reviewer-worker:8081" ||
 		loaded.codexReviewerWorkerToken != "reviewer-test-token" ||
 		loaded.codexReviewerAgentProfileID != "reviewer_profile_test" ||
-		loaded.codexWorkspaceID != "workspace_test" ||
 		loaded.workerRequestTimeout != 4*time.Second {
 		t.Fatalf("unexpected real Codex config %+v", loaded)
 	}
@@ -103,7 +101,6 @@ func TestLoadConfigRejectsIncompleteOrUnknownRunner(t *testing.T) {
 			"COMMITARIUM_CODEX_REVIEWER_WORKER_URL":    "http://codex-reviewer-worker:8081",
 			"COMMITARIUM_CODEX_REVIEWER_WORKER_TOKEN":  "reviewer-test-token",
 			"COMMITARIUM_CODEX_REVIEWER_PROFILE_ID":    "reviewer_profile_test",
-			"COMMITARIUM_CODEX_WORKSPACE_ID":           "workspace_test",
 			"COMMITARIUM_CODEX_WORKER_REQUEST_TIMEOUT": "zero",
 		},
 		{

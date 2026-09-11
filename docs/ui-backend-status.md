@@ -115,24 +115,19 @@ categories are the stable input for both a conventional activity view and the
 future graphical agent-world view. Avatar or animation concepts do not belong
 in backend event payloads; the UI maps factual activity to presentation.
 
-### Goal clarification, planning, and implementation observation
+### Goal clarification and selected-project routing
 
-The current opt-in real-Codex workflow supports this committed sequence:
-
-1. Exchange goal-clarification messages with the persistent lead session.
-2. Explicitly accept the goal through the goal-acceptance endpoint.
-3. Prepare the managed Forgejo branch, host-visible checkout, and draft PR.
-4. Start the lead's proposal, the first reviewer response, and the continuing
-   planning dialogue through the documented run actions.
-5. Read or stream the combined ordered planning messages.
-6. Start implementation and observe the lead through session activity.
-7. Observe automatic formal review, correction, re-review, and mutual merge
-   readiness until the workflow waits at `ready_to_merge`.
-
-The lead and reviewer remain separate persistent conversations. Their live
-discussion is visible in Commitarium, while Forgejo receives only the agreed
-plan and structured implementation/review audit trail. The current action
-routes and response shapes are documented in [Coordinator API](coordinator-api.md).
+- Starting an opt-in real-provider run reserves the selected project's exact
+  Forgejo default-branch commit and creates a dedicated checkout for that work
+  order before the first provider turn.
+- The initial lead turn and every clarification reply use that same durable
+  workspace ID. There is no coordinator-wide active project or fixed smoke
+  workspace involved in workflow routing.
+- Existing goal-clarification request and response shapes are unchanged.
+- Repository and checkout failures at run start use the same specific conflict
+  and temporary-unavailability error categories as workspace preparation.
+- Opening the workspace resource during clarification may return `preparing`
+  with `checkout` present while `branch_created_at` and `pull_request` are absent.
 
 ### Managed workspace and Forgejo links
 
@@ -156,6 +151,9 @@ next backend slice will be moved here before its public surface changes.
 
 ### Near-term MVP backend
 
+- Move feature-branch and draft-PR creation from goal acceptance to final
+  planning agreement. UI code may show these resources when present, but should
+  not depend on their current creation timing.
 - Lead and reviewer provider selection and coordinator routing, including
   Codex/Codex, Codex/Claude, Claude/Codex, and Claude/Claude assignments.
 - Final Forgejo merge policy and action: require user approval or merge

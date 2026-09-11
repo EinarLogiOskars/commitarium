@@ -189,20 +189,20 @@ func (store *WorkspaceStore) MarkCheckoutReady(
 		}
 		return stored, nil
 	}
-	if stored.Status != workspace.StatusBranchReady {
+	if stored.Status != workspace.StatusPreparing && stored.Status != workspace.StatusBranchReady {
 		return workspace.Workspace{}, workspace.ErrConflict
 	}
-	if readyAt.IsZero() || readyAt.Before(*stored.BranchCreatedAt) {
-		return workspace.Workspace{}, errors.New("checkout readiness cannot precede branch readiness")
+	if readyAt.IsZero() || readyAt.Before(stored.CreatedAt) {
+		return workspace.Workspace{}, errors.New("checkout readiness cannot precede workspace creation")
 	}
 	result, err := tx.ExecContext(
 		ctx,
 		`UPDATE feature_workspaces
 		 SET checkout_relative_path = ?, checkout_created_at = ?, updated_at = ?
-		 WHERE feature_id = ? AND status = ?
+		 WHERE feature_id = ? AND status IN (?, ?)
 		   AND checkout_relative_path = '' AND checkout_created_at IS NULL`,
 		relativePath, formatWorkspaceTime(readyAt), formatWorkspaceTime(readyAt),
-		featureID, workspace.StatusBranchReady,
+		featureID, workspace.StatusPreparing, workspace.StatusBranchReady,
 	)
 	if err != nil {
 		return workspace.Workspace{}, fmt.Errorf("mark workspace checkout ready: %w", err)

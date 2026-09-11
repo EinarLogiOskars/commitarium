@@ -131,6 +131,9 @@ type unexpectedRemoteLeadPump struct{ called bool }
 
 type remoteLeadWorkspaceStub struct {
 	prepared                workspace.Workspace
+	clarificationCalls      int
+	clarificationProjectID  string
+	clarificationFeatureID  string
 	prepareCalls            int
 	publishCalls            int
 	verifyCalls             int
@@ -149,6 +152,25 @@ type remoteLeadWorkspaceStub struct {
 	responseVerifyErr       error
 	reviewVerifyErr         error
 	readinessVerifyErr      error
+}
+
+func (stub *remoteLeadWorkspaceStub) PrepareForClarification(
+	_ context.Context,
+	projectID string,
+	featureID string,
+) (workspace.Workspace, bool, error) {
+	stub.clarificationCalls++
+	stub.clarificationProjectID = projectID
+	stub.clarificationFeatureID = featureID
+	if stub.prepared.ID == "" {
+		stub.prepared.ID = "wsp_managed_feature"
+	}
+	if !stub.prepared.CheckoutReady() {
+		createdAt := time.Now().UTC()
+		stub.prepared.CheckoutRelativePath = stub.prepared.ID
+		stub.prepared.CheckoutCreatedAt = &createdAt
+	}
+	return stub.prepared, false, nil
 }
 
 func (stub *remoteLeadWorkspaceStub) VerifyImplementationPublication(
@@ -414,11 +436,13 @@ func TestRemoteLeadStartsOneWorkerTurnAndWaitsForUser(t *testing.T) {
 			return event, nil
 		},
 	))
+	workspaceStub := &remoteLeadWorkspaceStub{}
 	starter, err := NewRemoteLeadStarter(RemoteLeadConfig{
 		Executions: executions, Features: database.NewFeatureStore(db),
-		Goals: workflow.NewService(database.NewWorkflowStore(db)), Worker: client,
+		Goals:      workflow.NewService(database.NewWorkflowStore(db)),
+		Workspaces: workspaceStub, Worker: client,
 		Pump:     workeringest.NewPump(executions, ingester, workeringest.NewHTTPAttemptSource(client)),
-		Lifetime: t.Context(), AgentProfileID: "codex-default", WorkspaceID: "project-read-only",
+		Lifetime: t.Context(), AgentProfileID: "codex-default",
 	})
 	if err != nil {
 		t.Fatalf("create real lead starter: %v", err)
@@ -460,8 +484,14 @@ func TestRemoteLeadStartsOneWorkerTurnAndWaitsForUser(t *testing.T) {
 	putCalls, putRequest := workerStub.putCalls, workerStub.putRequest
 	workerStub.mu.Unlock()
 	if putCalls != 1 || putRequest.Assignment.ProjectID != storedProject.ID ||
-		putRequest.Assignment.FeatureID != storedFeature.ID || putRequest.Assignment.Role != workerhttp.RoleLead {
+		putRequest.Assignment.FeatureID != storedFeature.ID || putRequest.Assignment.Role != workerhttp.RoleLead ||
+		putRequest.Assignment.WorkspaceID != "wsp_managed_feature" {
 		t.Fatalf("unexpected worker launch calls=%d request=%+v", putCalls, putRequest)
+	}
+	if workspaceStub.clarificationCalls != 1 ||
+		workspaceStub.clarificationProjectID != storedProject.ID ||
+		workspaceStub.clarificationFeatureID != storedFeature.ID {
+		t.Fatalf("selected project was not used to prepare clarification: %+v", workspaceStub)
 	}
 	if !strings.Contains(putRequest.Instructions, "do not modify files") ||
 		!strings.Contains(putRequest.Instructions, storedFeature.Title) {
@@ -509,7 +539,7 @@ func TestRemoteLeadRecoveryReusesDurableWorkerAttempt(t *testing.T) {
 		Executions: executions, Features: database.NewFeatureStore(db),
 		Goals:  workflow.NewService(database.NewWorkflowStore(db)),
 		Worker: client, Pump: pump, Lifetime: t.Context(),
-		AgentProfileID: "codex-default", WorkspaceID: "project-read-only",
+		AgentProfileID: "codex-default",
 	})
 	if err != nil {
 		t.Fatalf("create real lead starter: %v", err)
@@ -565,9 +595,9 @@ func TestRemoteLeadRequiresReviewWhenWorkerStateCannotBeConfirmed(t *testing.T) 
 	reported := make(chan error, 1)
 	starter, err := NewRemoteLeadStarter(RemoteLeadConfig{
 		Executions: executions, Features: database.NewFeatureStore(db),
-		Goals:  workflow.NewService(database.NewWorkflowStore(db)),
-		Worker: unavailableRemoteLeadWorker{}, Pump: pump,
-		Lifetime: t.Context(), AgentProfileID: "codex-default", WorkspaceID: "project-read-only",
+		Goals:      workflow.NewService(database.NewWorkflowStore(db)),
+		Workspaces: &remoteLeadWorkspaceStub{}, Worker: unavailableRemoteLeadWorker{}, Pump: pump,
+		Lifetime: t.Context(), AgentProfileID: "codex-default",
 		ReportError: func(err error) { reported <- err },
 	})
 	if err != nil {
@@ -640,11 +670,13 @@ func TestRemoteLeadResumesSameConversationForRepeatedUserReplies(t *testing.T) {
 			return event, nil
 		},
 	))
+	workspaceStub := &remoteLeadWorkspaceStub{}
 	starter, err := NewRemoteLeadStarter(RemoteLeadConfig{
 		Executions: executions, Features: database.NewFeatureStore(db),
-		Goals: workflow.NewService(database.NewWorkflowStore(db)), Worker: client,
+		Goals:      workflow.NewService(database.NewWorkflowStore(db)),
+		Workspaces: workspaceStub, Worker: client,
 		Pump:     workeringest.NewPump(executions, ingester, workeringest.NewHTTPAttemptSource(client)),
-		Lifetime: t.Context(), AgentProfileID: "codex-default", WorkspaceID: "project-read-only",
+		Lifetime: t.Context(), AgentProfileID: "codex-default",
 	})
 	if err != nil {
 		t.Fatalf("create real lead starter: %v", err)
@@ -708,9 +740,15 @@ func TestRemoteLeadResumesSameConversationForRepeatedUserReplies(t *testing.T) {
 		request := requests[index+1]
 		if request.Mode != workerhttp.AttemptModeResume ||
 			request.ProviderSessionID != "codex-thread-test" ||
+			request.Assignment.WorkspaceID != "wsp_managed_feature" ||
 			!strings.Contains(request.Instructions, reply.Message) {
 			t.Fatalf("reply %d did not resume the original thread: %+v", index+1, request)
 		}
+	}
+	if workspaceStub.clarificationCalls != 3 ||
+		workspaceStub.clarificationProjectID != storedProject.ID ||
+		workspaceStub.clarificationFeatureID != storedFeature.ID {
+		t.Fatalf("clarification replies were not reconciled against the selected project: %+v", workspaceStub)
 	}
 
 	actor := workflow.Actor{Kind: workflow.ActorKindUser, ID: "local-user"}
@@ -784,9 +822,10 @@ func TestRemoteLeadRecoveryReattachesToCommittedReplyAttempt(t *testing.T) {
 		))
 		starter, createErr := NewRemoteLeadStarter(RemoteLeadConfig{
 			Executions: executions, Features: database.NewFeatureStore(db),
-			Goals: workflow.NewService(database.NewWorkflowStore(db)), Worker: client,
+			Goals:      workflow.NewService(database.NewWorkflowStore(db)),
+			Workspaces: &remoteLeadWorkspaceStub{}, Worker: client,
 			Pump:     workeringest.NewPump(executions, ingester, workeringest.NewHTTPAttemptSource(client)),
-			Lifetime: t.Context(), AgentProfileID: "codex-default", WorkspaceID: "project-read-only",
+			Lifetime: t.Context(), AgentProfileID: "codex-default",
 		})
 		if createErr != nil {
 			t.Fatalf("create real lead starter: %v", createErr)
@@ -924,7 +963,7 @@ func TestRemoteLeadStartsPlanningInManagedWorkspace(t *testing.T) {
 		Executions: executions, Features: database.NewFeatureStore(db), Goals: workflowService,
 		Planning: workflowService, Workspaces: workspaceStub, Worker: stub,
 		Pump:     &conversationalRemoteLeadPump{executions: executions, worker: stub},
-		Lifetime: t.Context(), AgentProfileID: "codex-default", WorkspaceID: "project-read-only",
+		Lifetime: t.Context(), AgentProfileID: "codex-default",
 	})
 	if err != nil {
 		t.Fatalf("create real lead starter: %v", err)
@@ -1217,7 +1256,7 @@ func TestRemoteLeadStartsPlanningInManagedWorkspace(t *testing.T) {
 		Executions: executions, Features: database.NewFeatureStore(db), Goals: workflowService,
 		Planning: workflowService, Workspaces: workspaceStub, Worker: stub,
 		Pump:     &conversationalRemoteLeadPump{executions: executions, worker: stub},
-		Lifetime: t.Context(), AgentProfileID: "codex-default", WorkspaceID: "project-read-only",
+		Lifetime: t.Context(), AgentProfileID: "codex-default",
 	})
 	if err != nil {
 		t.Fatalf("create completed-correction recovery starter: %v", err)
@@ -1250,7 +1289,7 @@ func TestRemoteLeadStartsPlanningInManagedWorkspace(t *testing.T) {
 		Executions: executions, Features: database.NewFeatureStore(db), Goals: workflowService,
 		Planning: workflowService, Workspaces: workspaceStub, Worker: stub,
 		Pump:     &conversationalRemoteLeadPump{executions: executions, worker: stub},
-		Lifetime: t.Context(), AgentProfileID: "codex-default", WorkspaceID: "project-read-only",
+		Lifetime: t.Context(), AgentProfileID: "codex-default",
 	})
 	if err != nil {
 		t.Fatalf("create completed-readiness recovery starter: %v", err)
@@ -1348,7 +1387,7 @@ func TestRemoteLeadStartsPlanningInManagedWorkspace(t *testing.T) {
 		Executions: executions, Features: database.NewFeatureStore(db), Goals: workflowService,
 		Planning: workflowService, Workspaces: workspaceStub, Worker: stub,
 		Pump:     &conversationalRemoteLeadPump{executions: executions, worker: stub},
-		Lifetime: t.Context(), AgentProfileID: "codex-default", WorkspaceID: "project-read-only",
+		Lifetime: t.Context(), AgentProfileID: "codex-default",
 	})
 	if err != nil {
 		t.Fatalf("create completed-review recovery starter: %v", err)
@@ -1414,7 +1453,7 @@ func TestRemotePlanningLoopUsesRunLimitSnapshot(t *testing.T) {
 		Executions: executions, Features: database.NewFeatureStore(db), Goals: workflowService,
 		Planning: workflowService, Workspaces: workspaceStub, Worker: stub,
 		Pump:     &conversationalRemoteLeadPump{executions: executions, worker: stub},
-		Lifetime: t.Context(), AgentProfileID: "codex-default", WorkspaceID: "project-read-only",
+		Lifetime: t.Context(), AgentProfileID: "codex-default",
 	})
 	if err != nil {
 		t.Fatalf("create planning starter: %v", err)
@@ -1486,9 +1525,9 @@ func TestRemoteLeadRecoveryReattachesToPlanningAttempt(t *testing.T) {
 	newStarter := func() *RemoteLeadStarter {
 		starter, err := NewRemoteLeadStarter(RemoteLeadConfig{
 			Executions: executions, Features: database.NewFeatureStore(db), Goals: workflowService,
-			Worker:   stub,
+			Workspaces: &remoteLeadWorkspaceStub{}, Worker: stub,
 			Pump:     &conversationalRemoteLeadPump{executions: executions, worker: stub},
-			Lifetime: t.Context(), AgentProfileID: "codex-default", WorkspaceID: "project-read-only",
+			Lifetime: t.Context(), AgentProfileID: "codex-default",
 		})
 		if err != nil {
 			t.Fatalf("create real lead starter: %v", err)
@@ -1589,7 +1628,7 @@ func TestRemoteReviewerRecoveryReattachesAndPublishesItsResponse(t *testing.T) {
 			Executions: executions, Features: database.NewFeatureStore(db), Goals: workflowService,
 			Planning: workflowService, Worker: stub,
 			Pump:     &conversationalRemoteLeadPump{executions: executions, worker: stub},
-			Lifetime: t.Context(), AgentProfileID: "codex-default", WorkspaceID: "project-read-only",
+			Lifetime: t.Context(), AgentProfileID: "codex-default",
 		}
 		if withWorkspace {
 			config.Workspaces = workspaceStub
@@ -1761,7 +1800,7 @@ func newCompletedRemoteLeadWorker(runID, projectID, featureID string) *remoteLea
 	}
 	assignment := workerhttp.Assignment{
 		AgentProfileID: "codex-default", ProjectID: projectID, FeatureID: featureID,
-		Role: workerhttp.RoleLead, WorkspaceID: "project-read-only",
+		Role: workerhttp.RoleLead, WorkspaceID: "wsp_managed_feature",
 	}
 	initial := workerhttp.Attempt{
 		AttemptReference: reference, Mode: workerhttp.AttemptModeStart, Assignment: assignment,
@@ -1818,7 +1857,7 @@ func newConversationalRemoteLeadWorker(
 			AttemptReference: reference, Mode: mode,
 			Assignment: workerhttp.Assignment{
 				AgentProfileID: "codex-default", ProjectID: projectID, FeatureID: featureID,
-				Role: workerhttp.RoleLead, WorkspaceID: "project-read-only",
+				Role: workerhttp.RoleLead, WorkspaceID: "wsp_managed_feature",
 			},
 			ProviderSessionID: "codex-thread-test", State: workerhttp.AttemptStateRunning,
 			StartedAt: now.Add(time.Duration(index) * time.Minute),

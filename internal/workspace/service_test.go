@@ -128,8 +128,17 @@ type recordingBranches struct {
 }
 
 type recordingCheckout struct {
-	specs []CheckoutSpec
-	err   error
+	specs      []CheckoutSpec
+	promotions []CheckoutPromotionSpec
+	err        error
+}
+
+func (checkout *recordingCheckout) Promote(
+	_ context.Context,
+	spec CheckoutPromotionSpec,
+) error {
+	checkout.promotions = append(checkout.promotions, spec)
+	return checkout.err
 }
 
 type recordingPullRequests struct {
@@ -241,6 +250,128 @@ func TestServicePreparesExactFeatureBranch(t *testing.T) {
 	}
 	if branches.getCalls != 1 || branches.ensureCalls != 1 || len(store.markedAt) != 1 {
 		t.Fatalf("unexpected calls: branches=%+v marked=%+v", branches, store.markedAt)
+	}
+}
+
+func TestServicePreparesSelectedProjectCheckoutForClarification(t *testing.T) {
+	now := time.Date(2026, time.September, 11, 14, 0, 0, 0, time.UTC)
+	store := &memoryStore{}
+	branches := &recordingBranches{base: Branch{Name: "main", CommitID: testCommitID}}
+	checkout := &recordingCheckout{}
+	service := NewServiceWithCheckout(
+		store,
+		fixedFeatureFinder{stored: feature.Feature{
+			ID: "fea_test", ProjectID: "prj_test", State: feature.StateDraft,
+		}},
+		fixedProjectFinder{stored: project.Project{
+			ID: "prj_test", ForgejoRepository: testRepository(now),
+		}},
+		branches,
+		checkout,
+	)
+	service.now = func() time.Time { return now }
+
+	prepared, created, err := service.PrepareForClarification(
+		t.Context(), "prj_test", "fea_test",
+	)
+	if err != nil {
+		t.Fatalf("prepare clarification checkout: %v", err)
+	}
+	if !created || prepared.Status != StatusPreparing || !prepared.CheckoutReady() {
+		t.Fatalf("unexpected clarification preparation created=%t workspace=%+v", created, prepared)
+	}
+	if branches.getCalls != 1 || branches.ensureCalls != 0 {
+		t.Fatalf("clarification should pin the base without creating a feature branch: %+v", branches)
+	}
+	if len(checkout.specs) != 1 {
+		t.Fatalf("expected one checkout request, got %+v", checkout.specs)
+	}
+	spec := checkout.specs[0]
+	if spec.WorkspaceID != "wsp_fea_test" || spec.RepositoryOwner != "owner" ||
+		spec.RepositoryName != "repository" || spec.Branch != "main" ||
+		spec.BaseCommitID != testCommitID || spec.AlreadyReady {
+		t.Fatalf("clarification was routed to the wrong checkout: %+v", spec)
+	}
+	if len(store.checkoutMarkedAt) != 1 || len(store.markedAt) != 0 {
+		t.Fatalf("clarification persisted the wrong readiness state: %+v", store.stored)
+	}
+}
+
+func TestServiceRetriesClarificationAgainstPinnedProjectCheckout(t *testing.T) {
+	now := time.Date(2026, time.September, 11, 14, 0, 0, 0, time.UTC)
+	stored := testWorkspace(now)
+	checkoutAt := now.Add(time.Minute)
+	stored.CheckoutRelativePath = stored.ID
+	stored.CheckoutCreatedAt = &checkoutAt
+	stored.UpdatedAt = checkoutAt
+	store := &memoryStore{stored: stored}
+	branches := &recordingBranches{base: Branch{
+		Name: "main", CommitID: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+	}}
+	checkout := &recordingCheckout{}
+	service := NewServiceWithCheckout(
+		store,
+		fixedFeatureFinder{stored: feature.Feature{
+			ID: "fea_test", ProjectID: "prj_test", State: feature.StateDraft,
+		}},
+		fixedProjectFinder{stored: project.Project{
+			ID: "prj_test", ForgejoRepository: testRepository(now),
+		}},
+		branches,
+		checkout,
+	)
+
+	prepared, created, err := service.PrepareForClarification(
+		t.Context(), "prj_test", "fea_test",
+	)
+	if err != nil || created || prepared != stored {
+		t.Fatalf("retry clarification: created=%t workspace=%+v err=%v", created, prepared, err)
+	}
+	if branches.getCalls != 0 || len(checkout.specs) != 1 ||
+		!checkout.specs[0].AlreadyReady || checkout.specs[0].Branch != stored.BaseBranch ||
+		checkout.specs[0].BaseCommitID != testCommitID || len(store.checkoutMarkedAt) != 0 {
+		t.Fatalf("retry did not reconcile the pinned checkout: branches=%+v checkout=%+v", branches, checkout.specs)
+	}
+}
+
+func TestServicePromotesClarificationCheckoutBeforeBranchReadiness(t *testing.T) {
+	now := time.Date(2026, time.September, 11, 14, 0, 0, 0, time.UTC)
+	stored := testWorkspace(now)
+	checkoutAt := now.Add(time.Minute)
+	stored.CheckoutRelativePath = stored.ID
+	stored.CheckoutCreatedAt = &checkoutAt
+	stored.UpdatedAt = checkoutAt
+	store := &memoryStore{stored: stored}
+	branches := &recordingBranches{}
+	checkout := &recordingCheckout{}
+	service := NewServiceWithCheckout(
+		store,
+		fixedFeatureFinder{stored: acceptedTestFeature(now)},
+		fixedProjectFinder{stored: project.Project{
+			ID: "prj_test", ForgejoRepository: testRepository(now),
+		}},
+		branches,
+		checkout,
+	)
+	branchReadyAt := checkoutAt.Add(time.Minute)
+	service.now = func() time.Time { return branchReadyAt }
+
+	prepared, created, err := service.Prepare(t.Context(), "prj_test", "fea_test")
+	if err != nil || created || prepared.Status != StatusBranchReady {
+		t.Fatalf("promote clarification checkout: created=%t workspace=%+v err=%v", created, prepared, err)
+	}
+	if branches.ensureCalls != 1 || len(checkout.promotions) != 1 {
+		t.Fatalf("expected remote and local branch promotion: branches=%+v promotions=%+v", branches, checkout.promotions)
+	}
+	promotion := checkout.promotions[0]
+	if promotion.WorkspaceID != stored.ID || promotion.RepositoryOwner != stored.RepositoryOwner ||
+		promotion.RepositoryName != stored.RepositoryName || promotion.BaseBranch != stored.BaseBranch ||
+		promotion.FeatureBranch != stored.Branch || promotion.BaseCommitID != stored.BaseCommitID {
+		t.Fatalf("unexpected checkout promotion %+v", promotion)
+	}
+	if len(checkout.specs) != 1 || !checkout.specs[0].AlreadyReady ||
+		checkout.specs[0].Branch != stored.Branch || len(store.markedAt) != 1 {
+		t.Fatalf("promoted checkout was not reconciled and recorded: specs=%+v workspace=%+v", checkout.specs, store.stored)
 	}
 }
 

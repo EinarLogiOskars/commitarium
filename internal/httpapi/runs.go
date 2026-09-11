@@ -14,6 +14,7 @@ import (
 	"github.com/EinarLogiOskars/commitarium/internal/feature"
 	"github.com/EinarLogiOskars/commitarium/internal/orchestration"
 	"github.com/EinarLogiOskars/commitarium/internal/project"
+	"github.com/EinarLogiOskars/commitarium/internal/workspace"
 )
 
 type runResponse struct {
@@ -91,6 +92,17 @@ func (api *API) startRunHandler(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusConflict, "idempotency_conflict", "Idempotency-Key was already used for a different run")
 		case errors.Is(err, orchestration.ErrInvalidRunRequest):
 			writeError(w, http.StatusBadRequest, "invalid_run", "run request is invalid")
+		case errors.Is(err, workspace.ErrProjectRepositoryNotBound):
+			writeError(w, http.StatusConflict, "forgejo_repository_not_bound", "project must be bound to a Forgejo repository before starting a real-provider run")
+		case errors.Is(err, workspace.ErrBranchNotFound), errors.Is(err, project.ErrForgejoRepositoryNotReady):
+			writeError(w, http.StatusConflict, "forgejo_repository_not_ready", "the bound Forgejo repository or its default branch is not ready")
+		case errors.Is(err, workspace.ErrConflict), errors.Is(err, workspace.ErrBranchConflict),
+			errors.Is(err, workspace.ErrCheckoutConflict):
+			writeError(w, http.StatusConflict, "workspace_conflict", "the selected project's managed checkout disagrees with its durable workspace; user review is required")
+		case errors.Is(err, workspace.ErrCheckoutUnavailable):
+			writeError(w, http.StatusServiceUnavailable, "checkout_unavailable", "the selected project's managed checkout cannot be prepared right now")
+		case errors.Is(err, project.ErrForgejoUnavailable):
+			writeError(w, http.StatusServiceUnavailable, "forgejo_unavailable", "Forgejo workspace preparation is unavailable")
 		default:
 			log.Printf("start run %q for feature %q: %v", runID, featureID, err)
 			writeError(w, http.StatusInternalServerError, "internal_error", "internal server error")

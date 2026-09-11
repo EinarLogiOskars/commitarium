@@ -14,6 +14,7 @@ import (
 	"github.com/EinarLogiOskars/commitarium/internal/feature"
 	"github.com/EinarLogiOskars/commitarium/internal/project"
 	"github.com/EinarLogiOskars/commitarium/internal/worker"
+	"github.com/EinarLogiOskars/commitarium/internal/workspace"
 )
 
 type recordingRunStarter struct {
@@ -158,6 +159,49 @@ func TestStartRunValidatesAdmission(t *testing.T) {
 			}
 			if body.Error.Code != test.code {
 				t.Errorf("expected code %q, got %+v", test.code, body)
+			}
+		})
+	}
+}
+
+func TestStartRunMapsSelectedProjectWorkspaceErrors(t *testing.T) {
+	tests := []struct {
+		name   string
+		err    error
+		status int
+		code   string
+	}{
+		{name: "unbound repository", err: workspace.ErrProjectRepositoryNotBound, status: http.StatusConflict, code: "forgejo_repository_not_bound"},
+		{name: "repository not ready", err: project.ErrForgejoRepositoryNotReady, status: http.StatusConflict, code: "forgejo_repository_not_ready"},
+		{name: "checkout conflict", err: workspace.ErrCheckoutConflict, status: http.StatusConflict, code: "workspace_conflict"},
+		{name: "checkout unavailable", err: workspace.ErrCheckoutUnavailable, status: http.StatusServiceUnavailable, code: "checkout_unavailable"},
+		{name: "Forgejo unavailable", err: project.ErrForgejoUnavailable, status: http.StatusServiceUnavailable, code: "forgejo_unavailable"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			features := &recordingFeatureService{getResult: feature.Feature{
+				ID: "fea_test", ProjectID: "prj_test", Title: "Test", State: feature.StateDraft,
+			}}
+			executions := &recordingExecutionService{runErr: execution.ErrNotFound}
+			projects := &recordingProjectService{getByIDResult: project.Project{ID: "prj_test"}}
+			starter := &recordingRunStarter{err: test.err}
+			request := httptest.NewRequest(
+				http.MethodPost, "/api/v1/projects/prj_test/features/fea_test/runs", nil,
+			)
+			request.Header.Set("Idempotency-Key", "start-with-workspace")
+			recorder := httptest.NewRecorder()
+
+			New(projects, features, nil, executions, nil, starter).ServeHTTP(recorder, request)
+
+			if recorder.Code != test.status {
+				t.Fatalf("expected status %d, got %d: %s", test.status, recorder.Code, recorder.Body.String())
+			}
+			var body errorResponse
+			if err := json.NewDecoder(recorder.Body).Decode(&body); err != nil {
+				t.Fatalf("decode error: %v", err)
+			}
+			if body.Error.Code != test.code {
+				t.Fatalf("expected code %q, got %+v", test.code, body)
 			}
 		})
 	}

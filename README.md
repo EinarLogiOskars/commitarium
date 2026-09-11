@@ -19,21 +19,24 @@ This is not yet a production-ready release. The coordinator defaults to its
 complete deterministic simulation. An opt-in mode now connects the public run
 and session-command APIs to persistent real Codex lead and reviewer
 conversations. The user can exchange multiple visible goal-clarification turns
-with the lead agent while the feature remains a draft, then explicitly accepts
-the final goal to close clarification. After acceptance, the public API can
-reserve a durable feature workspace identity, create its exact Forgejo branch
-from the repository's recorded default-branch commit, and create the feature's
-draft pull request. It also creates an ordinary host-visible checkout of that
-branch that the user and agent container can share. An explicit planning action
-resumes that same lead conversation inside the managed checkout. A second
+with the lead agent while the feature remains a draft. Before the first turn,
+the coordinator pins the selected project's exact Forgejo default-branch commit
+and creates a dedicated host-visible checkout for that work order. Every reply
+resumes the lead in that same selected-project directory; no global active
+project or smoke-test checkout participates in routing. The user then explicitly
+accepts the final goal to close clarification. After acceptance, the existing
+workspace action creates the exact Forgejo feature branch, safely moves the
+clean checkout onto it, and creates the draft pull request. An explicit planning
+action resumes that same lead conversation inside the managed checkout. A second
 action starts a separate persistent reviewer Codex conversation, supplies the
 lead's exact final proposal, and exposes both final messages through one ordered
 planning history and SSE stream. After the first review, the same two provider
 sessions alternate until the lead explicitly submits an agreed plan or the
 default six-round (twelve-message) safety limit requires user input. A submitted
 plan is reconciled against the clean managed workspace and exact draft pull
-request, then appended once to the PR body. A final explicit action re-verifies that boundary and
-resumes the same lead to perform the first write-capable implementation turn.
+request, then appended once to the PR body. A final explicit action re-verifies
+that boundary and resumes the same lead to perform the first write-capable
+implementation turn.
 While implementation is waiting, the user may edit the shared checkout or
 describe a blocker resolution through the existing session-message API; each
 message safely resumes the same provider conversation for one more bounded
@@ -382,27 +385,30 @@ curl -X POST http://127.0.0.1:8080/api/v1/sessions/SESSION_ID/goal-acceptance \
 This stores the final Markdown-capable goal on the feature and appends a
 `feature.goal_accepted` workflow event in one transaction. It does not call
 Codex or begin planning. The feature remains `draft`, but further clarification
-replies are rejected so the next workspace/planning slice has one stable goal
-to use. Retrying the same acceptance is safe; changing an accepted goal will
+replies are rejected so branch preparation and planning have one stable goal to
+use. Retrying the same acceptance is safe; changing an accepted goal will
 require a future explicit reopen operation.
 
-Once that project is bound to a Forgejo repository, prepare the feature's branch,
-shared checkout, and draft pull request:
+In the real-provider workflow, starting the clarification run has already
+reserved the selected project's exact default-branch commit and cloned it into
+the work order's dedicated managed checkout. Once the goal is accepted, prepare
+the feature branch and draft pull request:
 
 ```sh
 curl -i -X PUT \
   http://127.0.0.1:8080/api/v1/projects/PROJECT_ID/features/FEATURE_ID/workspace
 ```
 
-The coordinator first saves the repository identity, default branch, current
-base commit, and deterministic `commitarium/FEATURE_ID` branch name in SQLite.
-It then creates that branch from the saved commit, clones it into the feature's
-managed host directory, and opens a Forgejo draft pull request titled with
-Forgejo's `WIP:` draft prefix. The PR body contains the accepted goal and a hidden
-stable feature marker. A retry uses the same saved commit even if the default
-branch has moved, and safely accepts an already-created branch only when it still
-points to that commit. Once the checkout and PR are recorded as ready, retries
-preserve later commits and uncommitted user edits while checking the repository,
+The coordinator uses the repository identity, default branch, exact base commit,
+and deterministic `commitarium/FEATURE_ID` branch name that were saved before
+clarification. It creates that branch from the saved commit, requires the
+clarification checkout to still be clean and at that exact commit, switches the
+checkout onto the feature branch, and opens a Forgejo draft pull request titled
+with Forgejo's `WIP:` draft prefix. The PR body contains the accepted goal and a
+hidden stable feature marker. A retry uses the same saved commit even if the
+default branch has moved, and safely accepts an already-created branch only when
+it still points to that commit. Once the branch and PR are recorded as ready,
+retries preserve later commits and uncommitted user edits while checking the repository,
 branch, remotes, ancestry, and PR identity. This also recovers if Forgejo created
 the PR just before the coordinator stopped but SQLite had not recorded it yet.
 Missing or contradictory state returns a conflict for user review; Commitarium
@@ -626,9 +632,10 @@ require a manifest, configuration revision, or materialization digest. Automatic
 provider-credential provisioning remains a separate future slice. Existing
 repositories can be imported through the coordinator using a trusted-host-
 produced Git bundle; ongoing local synchronization remains separate.
-Coordinator wiring currently covers goal clarification, explicit
-goal acceptance, verified project/repository preparation, and a bounded
-read-only lead/reviewer planning discussion through an explicit decision.
+Coordinator wiring currently covers selected-project goal clarification,
+explicit goal acceptance, verified project/repository preparation, and a
+bounded read-only lead/reviewer planning discussion through an explicit
+decision.
 
 The worker also has a provider-neutral operating-system process-supervision
 foundation. It can start one exact child process group, expose bounded and

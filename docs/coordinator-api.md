@@ -249,8 +249,22 @@ complete project list locally.
 
 ## Preparing a feature workspace
 
-After explicit goal acceptance, prepare the Forgejo branch, shared checkout, and
-draft pull request with an empty-body request:
+For the real-provider workflow, starting a run performs the first half of
+workspace preparation before the provider session starts. The coordinator
+reserves the selected project's repository identity, default branch, exact
+current commit, and deterministic `commitarium/{featureID}` branch name in
+SQLite. It then clones that default branch into the feature's dedicated managed
+checkout and passes that checkout's workspace ID to the worker. The initial lead
+turn and every clarification reply therefore run in the selected project, even
+when several projects or work orders are active concurrently.
+
+This early workspace remains `preparing`: it has a checkout, but no feature
+branch or pull request yet. `GET` on the workspace route can return that state
+while goal clarification is open.
+
+After explicit goal acceptance, create the Forgejo feature branch, promote the
+shared checkout onto it, and create the draft pull request with an empty-body
+request:
 
 ```http
 PUT /api/v1/projects/prj_example/features/fea_example/workspace
@@ -258,16 +272,15 @@ Content-Length: 0
 ```
 
 The feature must still be in `draft`, its goal must be accepted, and its project
-must have a verified Forgejo repository binding. Before changing Forgejo, the
-coordinator reads the bound default branch and saves one immutable reservation
-in SQLite: the project and feature IDs, repository identity, default branch,
-exact base commit, and deterministic `commitarium/{featureID}` branch name. It
-then asks Forgejo to create the branch from that commit and marks the reservation
-`branch_ready` only after Forgejo confirms the exact result. It next clones that
-branch into one child directory beneath the configured managed-workspace root.
-The host and real agent container mount the same root, so both see the same files.
-After the checkout is ready, the coordinator creates a Forgejo pull request from
-the deterministic feature branch into the saved base branch. Its `WIP:` title
+must have a verified Forgejo repository binding. The coordinator asks Forgejo
+to create the feature branch from the already-pinned commit. It then requires
+the clarification checkout to remain clean, on the pinned default branch, and
+at that exact commit before switching it onto the feature branch. It marks the
+reservation `branch_ready` only after Forgejo and the local checkout both match.
+The host and real agent containers mount the same managed-workspace root, so the
+user and the assigned agents see the same work-order checkout. The coordinator
+then creates a Forgejo pull request from the deterministic feature branch into
+the saved base branch. Its `WIP:` title
 makes it a Forgejo draft. Its body contains the accepted goal and a hidden stable
 feature marker. The agreed plan and later formal review trail will be added in
 later slices; intermediate planning proposals and objections stay in the
@@ -287,11 +300,13 @@ branches, and owned by the feature marker. Later feature commits and user-edited
 PR titles are allowed. Missing, closed, non-draft, ambiguous, or differently owned
 PR state returns `409 workspace_conflict` instead of creating a replacement.
 
-Before recording the checkout as ready, the coordinator requires a clean working
-tree at the saved base commit and configures credential-free remotes for the host
-and Compose network addresses. The Forgejo token is supplied to the clone as a
-temporary Git process setting; it is not written into `.git/config`, SQLite, the
-API response, or logs. After readiness, retries permit both newer commits that
+Before recording the early checkout as ready, the coordinator requires a clean
+working tree at the saved base commit and configures credential-free remotes for
+the host and Compose network addresses. The Forgejo token is supplied to the
+clone as a temporary Git process setting; it is not written into `.git/config`,
+SQLite, the API response, or logs. Before branch promotion, any file change or
+unexpected commit stops preparation for user review; Commitarium does not
+discard clarification-time writes. After branch readiness, retries permit both newer commits that
 descend from the base and uncommitted edits. They still verify the exact working
 tree root, feature branch, remotes, and ancestry. Commitarium never resets,
 cleans, deletes, or silently repairs contradictory user work.
@@ -374,12 +389,15 @@ final approving review.
 
 Setting `COMMITARIUM_RUNNER_MODE=real_codex_lead` connects this endpoint to the
 real Codex worker configured by `COMMITARIUM_CODEX_WORKER_URL`,
-`COMMITARIUM_CODEX_WORKER_TOKEN`, `COMMITARIUM_CODEX_PROFILE_ID`, and
-`COMMITARIUM_CODEX_WORKSPACE_ID`. This opt-in mode runs a persistent read-only
-lead conversation to clarify the goal. Each response is visible through the
+`COMMITARIUM_CODEX_WORKER_TOKEN`, and `COMMITARIUM_CODEX_PROFILE_ID`. The project
+must already have a Forgejo repository binding. This opt-in mode prepares the
+feature's selected-project checkout and runs a persistent read-only lead
+conversation there to clarify the goal. Each response is visible through the
 normal session history and SSE endpoints. On success, the run and session both
 become `waiting_for_user` and the feature remains `draft` until the user accepts
-the goal explicitly.
+the goal explicitly. Repository or checkout conflicts return a specific `409`
+error; temporary Forgejo or checkout failures return `503` rather than being
+reported as generic internal errors.
 
 Feature retrieval includes `accepted_goal` and `goal_accepted_at` after that
 acceptance. Both fields are omitted while clarification remains open.
@@ -403,8 +421,8 @@ run and session back to `running`. The attempt rotation and both operational
 status changes happen in one SQLite transaction, so a restart cannot observe
 only part of that admission.
 
-The worker resumes the lead's original provider thread but selects the managed
-feature workspace instead of the earlier read-only smoke workspace. Its prompt
+The worker resumes the lead's original provider thread in the same managed
+feature workspace used during clarification. Its prompt
 includes the accepted goal, repository and branches, exact base commit, and PR
 identity. It must inspect before proposing a concrete implementation plan and
 must not modify files, install dependencies, commit, push, or implement. Worker
