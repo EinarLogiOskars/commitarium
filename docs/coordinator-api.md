@@ -23,8 +23,8 @@ this API beyond the host loopback interface is unsupported.
 | `GET` | `/api/v1/projects/{projectID}/features/{featureID}/events/stream` | Replay and stream workflow history with SSE |
 | `POST` | `/api/v1/projects/{projectID}/features/{featureID}/runs` | Start the configured workflow asynchronously |
 | `GET` | `/api/v1/projects/{projectID}/features/{featureID}/runs` | List the feature's run history and sessions |
-| `PUT` | `/api/v1/projects/{projectID}/features/{featureID}/workspace` | Prepare the exact Forgejo branch, managed shared checkout, and draft PR |
-| `GET` | `/api/v1/projects/{projectID}/features/{featureID}/workspace` | Retrieve the durable branch, checkout, and PR identity |
+| `PUT` | `/api/v1/projects/{projectID}/features/{featureID}/workspace` | Reconcile the pinned planning checkout after goal acceptance |
+| `GET` | `/api/v1/projects/{projectID}/features/{featureID}/workspace` | Retrieve the durable checkout, reserved branch, and optional PR identity |
 | `GET` | `/api/v1/runs/{runID}` | Retrieve run state and its ordered sessions |
 | `POST` | `/api/v1/runs/{runID}/planning` | Resume the real lead in the managed workspace for its first plan proposal |
 | `POST` | `/api/v1/runs/{runID}/planning/reviewer` | Start the persistent reviewer with the lead's exact proposal |
@@ -262,9 +262,8 @@ This early workspace remains `preparing`: it has a checkout, but no feature
 branch or pull request yet. `GET` on the workspace route can return that state
 while goal clarification is open.
 
-After explicit goal acceptance, create the Forgejo feature branch, promote the
-shared checkout onto it, and create the draft pull request with an empty-body
-request:
+After explicit goal acceptance, the same empty-body workspace action may be
+used to reconcile the pinned checkout without starting an agent:
 
 ```http
 PUT /api/v1/projects/prj_example/features/fea_example/workspace
@@ -272,41 +271,41 @@ Content-Length: 0
 ```
 
 The feature must still be in `draft`, its goal must be accepted, and its project
-must have a verified Forgejo repository binding. The coordinator asks Forgejo
-to create the feature branch from the already-pinned commit. It then requires
-the clarification checkout to remain clean, on the pinned default branch, and
-at that exact commit before switching it onto the feature branch. It marks the
-reservation `branch_ready` only after Forgejo and the local checkout both match.
-The host and real agent containers mount the same managed-workspace root, so the
-user and the assigned agents see the same work-order checkout. The coordinator
-then creates a Forgejo pull request from the deterministic feature branch into
-the saved base branch. Its `WIP:` title
-makes it a Forgejo draft. Its body contains the accepted goal and a hidden stable
-feature marker. The agreed plan and later formal review trail will be added in
-later slices; intermediate planning proposals and objections stay in the
-Commitarium conversation rather than cluttering the PR.
+must have a verified Forgejo repository binding. The checkout stays on the
+saved default branch and the workspace stays `preparing`; this operation does
+not create the reserved feature branch or a pull request. The normal planning
+action performs the same reconciliation itself, so clients do not have to call
+this route separately. The host and real agent containers mount the same
+managed-workspace root, so the user and assigned agents see the same work-order
+checkout.
 
 The request that creates the durable reservation returns `201 Created`; later
-exact retries return `200 OK`. If a request was interrupted after the reservation
-or remote branch was created, retrying continues from the durable reservation.
-An existing branch is accepted only when its name and commit match. Any mismatch
-returns `409 workspace_conflict` and requires user review rather than silently
-moving or replacing work. Pull-request creation has the same crash-safe behavior:
-before creating one, the coordinator searches for an exact matching branch pair
-and feature marker. This lets it adopt a PR that Forgejo created just before a
-coordinator crash, without opening a duplicate. After SQLite records the PR
-number, retries fetch that exact PR. It must remain open, draft, on the expected
-branches, and owned by the feature marker. Later feature commits and user-edited
-PR titles are allowed. Missing, closed, non-draft, ambiguous, or differently owned
-PR state returns `409 workspace_conflict` instead of creating a replacement.
+exact retries return `200 OK`.
+
+Only a durable `plan_submitted` event triggers promotion. The coordinator first
+requires the planning checkout to remain clean, on the pinned default branch,
+and at the exact saved commit. It then switches that checkout to the reserved
+feature branch, creates the matching Forgejo branch from the saved commit, and
+opens a draft PR into the saved base branch. Its `WIP:` title makes it a Forgejo
+draft. The body contains the accepted goal and a hidden stable feature marker;
+the agreed plan is then appended with its own idempotency marker. Intermediate
+proposals and objections stay in Commitarium.
+
+Promotion is restart-safe at every boundary. An already-switched local branch,
+already-created exact remote branch, or already-created marker-owned PR is
+adopted on retry. A branch at another commit, dirty planning checkout, missing
+recorded resource, closed or non-draft PR, ambiguous matching PRs, or different
+marker ownership stops for user review instead of resetting work or creating a
+replacement.
 
 Before recording the early checkout as ready, the coordinator requires a clean
 working tree at the saved base commit and configures credential-free remotes for
 the host and Compose network addresses. The Forgejo token is supplied to the
 clone as a temporary Git process setting; it is not written into `.git/config`,
-SQLite, the API response, or logs. Before branch promotion, any file change or
-unexpected commit stops preparation for user review; Commitarium does not
-discard clarification-time writes. After branch readiness, retries permit both newer commits that
+SQLite, the API response, or logs. Before agreement-time branch promotion, any
+file change or unexpected commit stops publication for user review;
+Commitarium does not discard planning-time writes. After branch readiness,
+retries permit both newer commits that
 descend from the base and uncommitted edits. They still verify the exact working
 tree root, feature branch, remotes, and ancestry. Commitarium never resets,
 cleans, deletes, or silently repairs contradictory user work.
@@ -338,10 +337,14 @@ cleans, deletes, or silently repairs contradictory user work.
 }
 ```
 
+The example above is the `branch_ready` representation returned after plan
+agreement. Before agreement, `status` is `preparing`, `branch_created_at` and
+`pull_request` are absent, and `checkout` is present.
+
 `GET` on the same route returns the stored resource and does not contact
-Forgejo. Missing accepted goal or repository binding returns `409`; unavailable
-Forgejo or Git checkout preparation returns `503`. A branch, checkout, or
-pull-request mismatch returns `409 workspace_conflict` for user review. The
+Forgejo. For `PUT`, a missing accepted goal or repository binding returns `409`;
+unavailable Forgejo or Git checkout preparation returns `503`. A workspace
+mismatch returns `409 workspace_conflict` for user review. The
 checkout response exposes only its stable workspace-relative identity, not a
 machine-specific absolute host path. `pull_request.recorded_at` is the
 coordinator's durable recording time, not Forgejo's server-side creation time. A
@@ -405,8 +408,7 @@ acceptance. Both fields are omitted while clarification remains open.
 ## Starting the lead planning proposal
 
 In `real_codex_lead` mode, planning begins only through an explicit action after
-the goal has been accepted and the managed checkout and draft pull request are
-ready:
+the goal has been accepted and the pinned managed checkout is ready:
 
 ```http
 POST /api/v1/runs/run_opaque/planning
@@ -414,7 +416,8 @@ Idempotency-Key: start-planning-1
 Content-Length: 0
 ```
 
-The coordinator first reconciles the existing branch, checkout, and draft PR.
+The coordinator first reconciles the clean checkout against the reserved base
+commit without creating a feature branch or PR.
 It then records the feature transition from `draft` to `planning`, rotates the
 existing lead session to one deterministic planning attempt, and changes the
 run and session back to `running`. The attempt rotation and both operational
@@ -422,9 +425,10 @@ status changes happen in one SQLite transaction, so a restart cannot observe
 only part of that admission.
 
 The worker resumes the lead's original provider thread in the same managed
-feature workspace used during clarification. Its prompt
-includes the accepted goal, repository and branches, exact base commit, and PR
-identity. It must inspect before proposing a concrete implementation plan and
+feature workspace used during clarification. Its prompt includes the accepted
+goal, repository identity, exact base branch and commit, and reserved future
+branch name. It explicitly says no PR is required during planning. It must
+inspect before proposing a concrete implementation plan and
 must not modify files, install dependencies, commit, push, or implement. Worker
 activity and the proposal remain available through the lead session history and
 SSE stream. On completion, the run and lead session return to
@@ -434,7 +438,7 @@ consultation.
 The successful response is `202 Accepted`, contains the ordinary run resource,
 and points its `Location` header at `/api/v1/runs/{runID}`. The action is safe to
 retry and will not start a second planning attempt. Missing accepted goal,
-unready or contradictory workspace/PR state, an unsafe prior worker attempt, or
+unready or contradictory checkout state, an unsafe prior worker attempt, or
 the wrong run/session state returns `409 planning_not_ready`. This endpoint is
 currently registered only for the opt-in real-Codex runner.
 
@@ -450,7 +454,7 @@ Content-Length: 0
 
 The feature must be in `planning`; the run and lead must be waiting; the lead's
 planning attempt must be terminal and fully copied into coordinator history;
-and the managed checkout and draft PR must be ready. The coordinator selects
+and the pinned managed checkout must be ready. The coordinator selects
 the last completed `message` from that lead turn as its final proposal. Any
 earlier provider-authored preamble remains in the lead session activity but is
 not mistaken for the proposal.
@@ -459,8 +463,8 @@ Reviewer session creation, its first deterministic worker attempt, and the run
 transition to `running` commit in one SQLite transaction. A coordinator restart
 therefore cannot leave a half-created session that might cause a duplicate
 launch. The reviewer starts a new provider conversation in the same managed
-workspace and receives the accepted goal, repository/branch/base/PR facts, and
-the lead proposal verbatim. It is instructed to inspect and critique without
+workspace and receives the accepted goal, repository/base facts, reserved
+branch name, and the lead proposal verbatim. It is instructed to inspect and critique without
 changing files, installing dependencies, committing, pushing, or implementing.
 
 Completion leaves both sessions and the run at `waiting_for_user`. Repeating
@@ -482,8 +486,8 @@ Content-Length: 0
 
 The run, lead, and reviewer must all be waiting; the feature must remain in
 `planning`; both provider session IDs must be present; planning history must end
-with a reviewer response; and the managed checkout and draft PR must remain
-ready. Missing or contradictory prerequisites return
+with a reviewer response; and the pinned managed checkout must remain ready.
+Missing or contradictory prerequisites return
 `409 planning_round_not_ready` or `409 planning_round_conflict`.
 
 The action first resumes the lead's existing provider conversation with the
@@ -505,11 +509,12 @@ activity. `respond` becomes a normal `message`; `submit_plan` becomes a distinct
 searching prose. The lead is instructed to submit only after it concludes that
 both agents genuinely agree and the plan satisfies the accepted goal.
 
-After `plan_submitted`, the coordinator verifies that the stored repository,
-feature branch, host-visible checkout, and open draft PR still have their exact
-managed identities. The remote feature branch and local checkout must remain at
-the clean pre-implementation commit. A moved HEAD or uncommitted diff is
-preserved and treated as a conflict requiring user review.
+After `plan_submitted`, the coordinator verifies that the stored repository and
+host-visible checkout still have their exact managed identities and clean
+pinned baseline. It then promotes the checkout, creates the exact feature
+branch and open draft PR, and records those identities before publishing the
+plan. A moved HEAD or uncommitted diff is preserved and treated as a conflict
+requiring user review.
 
 The coordinator preserves the existing PR body and appends one hidden
 publication marker followed by an `Agreed implementation plan` section. The

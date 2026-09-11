@@ -24,17 +24,17 @@ the coordinator pins the selected project's exact Forgejo default-branch commit
 and creates a dedicated host-visible checkout for that work order. Every reply
 resumes the lead in that same selected-project directory; no global active
 project or smoke-test checkout participates in routing. The user then explicitly
-accepts the final goal to close clarification. After acceptance, the existing
-workspace action creates the exact Forgejo feature branch, safely moves the
-clean checkout onto it, and creates the draft pull request. An explicit planning
-action resumes that same lead conversation inside the managed checkout. A second
+accepts the final goal to close clarification. An explicit planning action
+resumes that same lead conversation in the clean pinned checkout without first
+creating a feature branch or PR. A second
 action starts a separate persistent reviewer Codex conversation, supplies the
 lead's exact final proposal, and exposes both final messages through one ordered
 planning history and SSE stream. After the first review, the same two provider
 sessions alternate until the lead explicitly submits an agreed plan or the
 default six-round (twelve-message) safety limit requires user input. A submitted
-plan is reconciled against the clean managed workspace and exact draft pull
-request, then appended once to the PR body. A final explicit action re-verifies
+plan submission promotes the clean checkout to the reserved feature branch,
+creates the matching Forgejo branch and draft PR, and appends the goal and plan
+once. A final explicit action re-verifies
 that boundary and resumes the same lead to perform the first write-capable
 implementation turn.
 While implementation is waiting, the user may edit the shared checkout or
@@ -391,8 +391,8 @@ require a future explicit reopen operation.
 
 In the real-provider workflow, starting the clarification run has already
 reserved the selected project's exact default-branch commit and cloned it into
-the work order's dedicated managed checkout. Once the goal is accepted, prepare
-the feature branch and draft pull request:
+the work order's dedicated managed checkout. Once the goal is accepted, this
+optional action reconciles that pinned checkout without creating a branch or PR:
 
 ```sh
 curl -i -X PUT \
@@ -400,23 +400,11 @@ curl -i -X PUT \
 ```
 
 The coordinator uses the repository identity, default branch, exact base commit,
-and deterministic `commitarium/FEATURE_ID` branch name that were saved before
-clarification. It creates that branch from the saved commit, requires the
-clarification checkout to still be clean and at that exact commit, switches the
-checkout onto the feature branch, and opens a Forgejo draft pull request titled
-with Forgejo's `WIP:` draft prefix. The PR body contains the accepted goal and a
-hidden stable feature marker. A retry uses the same saved commit even if the
-default branch has moved, and safely accepts an already-created branch only when
-it still points to that commit. Once the branch and PR are recorded as ready,
-retries preserve later commits and uncommitted user edits while checking the repository,
-branch, remotes, ancestry, and PR identity. This also recovers if Forgejo created
-the PR just before the coordinator stopped but SQLite had not recorded it yet.
-Missing or contradictory state returns a conflict for user review; Commitarium
-never resets or cleans the directory and never creates a replacement PR when
-ownership is uncertain. The response is `201 Created` when the reservation is
-first created and `200 OK` for a retry, with the PR number and browser URL
-included. This preparation operation does not invoke an agent; planning begins
-through the separate action below.
+and deterministic `commitarium/FEATURE_ID` branch name saved before
+clarification. The workspace remains `preparing`, with no branch or PR. A retry
+uses the same saved commit even if the default branch has moved. This operation
+does not invoke an agent and is not required before the planning action below,
+which performs the same checkout reconciliation itself.
 
 Start the lead's first planning turn after the workspace is ready:
 
@@ -427,7 +415,7 @@ curl -i -X POST \
   -H 'Content-Length: 0'
 ```
 
-The coordinator rechecks the branch, shared checkout, and draft PR, moves the
+The coordinator rechecks the clean pinned checkout, moves the
 feature from `draft` to `planning`, and resumes the original Codex thread with
 the managed workspace selected. The lead is told to inspect the repository and
 produce a concrete proposal without editing files, installing dependencies,
@@ -447,8 +435,8 @@ curl -i -X POST \
 
 The coordinator atomically creates a distinct durable `reviewer` session and
 its first worker attempt, then starts a new Codex conversation in the same
-managed checkout. The reviewer receives the accepted goal, repository and PR
-facts, and the lead's exact final proposal. It must inspect the repository,
+managed checkout. The reviewer receives the accepted goal, pinned repository
+facts, reserved branch name, and the lead's exact final proposal. It must inspect the repository,
 challenge the plan, and clearly accept it or request changes without modifying
 files. The two final authored responses are available together through:
 
@@ -481,15 +469,16 @@ believes both agents genuinely agree. A submission appears as a distinct
 `plan_submitted` event, so the coordinator does not search conversational text
 for magic approval words.
 
-When the lead submits, the coordinator first requires the Forgejo feature branch
-and managed checkout to remain at their clean planning baseline and verifies the
-recorded open draft PR. It preserves the existing PR body and appends one marked
-`Agreed implementation plan` section. The same marker lets retries and restarts
-confirm a prior update without appending the plan twice. A conflict or uncertain
+When the lead submits, the coordinator first requires the managed checkout to
+remain clean at its pinned planning baseline. It switches that checkout to the
+reserved feature branch, creates the exact matching Forgejo branch and draft
+PR, and appends the accepted goal plus one marked `Agreed implementation plan`
+section. Each boundary is restart-safe: retries adopt exact already-created
+state without duplicating a branch, PR, or plan. A conflict or uncertain
 Forgejo result produces a visible recovery assessment and waits for user review;
 retrying this action reconciles publication without another agent turn.
 
-The loop instead stops for user input if the shared discussion reaches ten
+The loop instead stops for user input if the shared discussion reaches twelve
 messages. The action is safe to retry. A coordinator restart during either turn
 reattaches to the exact worker attempt, and a restart between turns continues
 the stored handoff without starting two agents. The planning agents remain

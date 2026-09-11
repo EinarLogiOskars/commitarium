@@ -131,13 +131,18 @@ in backend event payloads; the UI maps factual activity to presentation.
 
 ### Managed workspace and Forgejo links
 
-- `PUT` and `GET` on the feature workspace route expose the durable branch,
-  checkout identity, and draft PR link.
+- `PUT` and `GET` on the feature workspace route expose the durable reserved
+  branch identity and checkout. A draft PR link is exposed after planning
+  agreement creates it.
 - The checkout's `relative_path` is stable. The API intentionally does not
   expose a machine-specific absolute host path.
 - The UI may link to the returned Forgejo pull-request URL.
 - The UI must preserve unexpected workspace state and surface conflicts; it
   must not offer an automatic reset, clean, or force-repair operation.
+- Goal acceptance and every planning turn use the pinned base checkout while
+  the workspace remains `preparing`. The final submitted plan triggers
+  restart-safe feature-branch promotion, draft-PR creation, and plan
+  publication; a successful workspace response then becomes `branch_ready`.
 
 Opening the managed directory in an IDE and starting a development preview are
 not implemented yet.
@@ -151,9 +156,6 @@ next backend slice will be moved here before its public surface changes.
 
 ### Near-term MVP backend
 
-- Move feature-branch and draft-PR creation from goal acceptance to final
-  planning agreement. UI code may show these resources when present, but should
-  not depend on their current creation timing.
 - Lead and reviewer provider selection and coordinator routing, including
   Codex/Codex, Codex/Claude, Claude/Codex, and Claude/Claude assignments.
 - Final Forgejo merge policy and action: require user approval or merge

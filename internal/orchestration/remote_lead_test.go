@@ -134,7 +134,6 @@ type remoteLeadWorkspaceStub struct {
 	clarificationCalls      int
 	clarificationProjectID  string
 	clarificationFeatureID  string
-	prepareCalls            int
 	publishCalls            int
 	verifyCalls             int
 	continuationVerifyCalls int
@@ -318,15 +317,6 @@ func (stub *remoteLeadWorkspaceStub) Get(
 	return stub.prepared, nil
 }
 
-func (stub *remoteLeadWorkspaceStub) Prepare(
-	context.Context,
-	string,
-	string,
-) (workspace.Workspace, bool, error) {
-	stub.prepareCalls++
-	return stub.prepared, false, nil
-}
-
 func (stub *remoteLeadWorkspaceStub) PublishPlan(
 	_ context.Context,
 	_ string,
@@ -337,6 +327,14 @@ func (stub *remoteLeadWorkspaceStub) PublishPlan(
 	stub.publishCalls++
 	stub.publishedEventID = eventID
 	stub.publishedPlan = plan
+	if stub.publishErr == nil && !stub.prepared.PullRequestReady() {
+		createdAt := time.Now().UTC()
+		stub.prepared.Status = workspace.StatusBranchReady
+		stub.prepared.BranchCreatedAt = &createdAt
+		stub.prepared.PullRequestNumber = 7
+		stub.prepared.PullRequestURL = "http://forgejo.test/commitarium/planning-test/pulls/7"
+		stub.prepared.PullRequestRecordedAt = &createdAt
+	}
 	return stub.prepared, stub.publishErr == nil, stub.publishErr
 }
 
@@ -948,16 +946,14 @@ func TestRemoteLeadStartsPlanningInManagedWorkspace(t *testing.T) {
 	workflowService := workflow.NewService(database.NewWorkflowStore(db))
 	now := time.Date(2026, time.September, 9, 20, 0, 0, 0, time.UTC)
 	checkoutAt := now.Add(time.Second)
-	prAt := checkoutAt.Add(time.Second)
 	workspaceStub := &remoteLeadWorkspaceStub{prepared: workspace.Workspace{
 		ID: "wsp_managed_feature", ProjectID: storedProject.ID, FeatureID: storedFeature.ID,
 		RepositoryOwner: "commitarium", RepositoryName: "planning-test",
 		BaseBranch: "main", Branch: "commitarium/" + storedFeature.ID,
-		BaseCommitID: "0123456789abcdef0123456789abcdef01234567",
-		Status:       workspace.StatusBranchReady, CheckoutRelativePath: "wsp_managed_feature",
-		CheckoutCreatedAt: &checkoutAt, PullRequestNumber: 7,
-		PullRequestURL:        "http://forgejo.test/commitarium/planning-test/pulls/7",
-		PullRequestRecordedAt: &prAt,
+		BaseCommitID:         "0123456789abcdef0123456789abcdef01234567",
+		Status:               workspace.StatusPreparing,
+		CheckoutRelativePath: "wsp_managed_feature",
+		CheckoutCreatedAt:    &checkoutAt,
 	}}
 	starter, err := NewRemoteLeadStarter(RemoteLeadConfig{
 		Executions: executions, Features: database.NewFeatureStore(db), Goals: workflowService,
@@ -996,8 +992,8 @@ func TestRemoteLeadStartsPlanningInManagedWorkspace(t *testing.T) {
 	if err != nil || plannedFeature.State != feature.StatePlanning {
 		t.Fatalf("feature did not enter planning: %+v err=%v", plannedFeature, err)
 	}
-	if workspaceStub.prepareCalls != 1 {
-		t.Fatalf("expected one workspace reconciliation, got %d", workspaceStub.prepareCalls)
+	if workspaceStub.clarificationCalls != 2 {
+		t.Fatalf("expected start and planning to reconcile the pinned checkout, got %d", workspaceStub.clarificationCalls)
 	}
 	stub.mu.Lock()
 	requests := append([]workerhttp.PutAttemptRequest(nil), stub.putRequests...)
@@ -1011,7 +1007,8 @@ func TestRemoteLeadStartsPlanningInManagedWorkspace(t *testing.T) {
 		planningRequest.Assignment.WorkspaceID != workspaceStub.prepared.ID ||
 		planningRequest.Assignment.Role != workerhttp.RoleLead ||
 		!strings.Contains(planningRequest.Instructions, plannedFeature.AcceptedGoal) ||
-		!strings.Contains(planningRequest.Instructions, "Do not modify files") {
+		!strings.Contains(planningRequest.Instructions, "Do not modify files") ||
+		strings.Contains(planningRequest.Instructions, "Draft pull request: #") {
 		t.Fatalf("unexpected planning request %+v", planningRequest)
 	}
 	events, err := executions.EventsForSession(t.Context(), remoteLeadSessionID(runID))
@@ -1059,7 +1056,8 @@ func TestRemoteLeadStartsPlanningInManagedWorkspace(t *testing.T) {
 	if len(requests) != 3 || requests[2].Mode != workerhttp.AttemptModeStart ||
 		requests[2].Assignment.Role != workerhttp.RoleReviewer ||
 		!strings.Contains(requests[2].Instructions, "Proposed implementation plan") ||
-		!strings.Contains(requests[2].Instructions, "Do not modify files") {
+		!strings.Contains(requests[2].Instructions, "Do not modify files") ||
+		strings.Contains(requests[2].Instructions, "Draft pull request: #") {
 		t.Fatalf("unexpected reviewer request %+v", requests)
 	}
 	messages, err := executions.PlanningMessagesForRun(t.Context(), runID)
@@ -1114,14 +1112,17 @@ func TestRemoteLeadStartsPlanningInManagedWorkspace(t *testing.T) {
 		requests[3].Assignment.Role != workerhttp.RoleLead ||
 		requests[3].OutputContract != workerhttp.OutputContractPlanningLead ||
 		!strings.Contains(requests[3].Instructions, "The plan needs stronger test coverage.") ||
+		strings.Contains(requests[3].Instructions, "Draft pull request: #") ||
 		requests[4].Mode != workerhttp.AttemptModeResume ||
 		requests[4].ProviderSessionID != "codex-review-thread-test" ||
 		requests[4].Assignment.Role != workerhttp.RoleReviewer ||
 		requests[4].OutputContract != "" ||
 		!strings.Contains(requests[4].Instructions, "deployment question remains") ||
+		strings.Contains(requests[4].Instructions, "Draft pull request: #") ||
 		requests[5].Assignment.Role != workerhttp.RoleLead ||
 		requests[5].OutputContract != workerhttp.OutputContractPlanningLead ||
-		!strings.Contains(requests[5].Instructions, "resolves my remaining concern") {
+		!strings.Contains(requests[5].Instructions, "resolves my remaining concern") ||
+		strings.Contains(requests[5].Instructions, "Draft pull request: #") {
 		t.Fatalf("unexpected correction-round requests %+v", requests)
 	}
 	workspaceStub.publishErr = nil

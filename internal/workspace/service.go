@@ -148,8 +148,8 @@ func (service *Service) Get(
 
 // PrepareForClarification reserves the feature's exact Forgejo base commit and
 // makes that project available before the first provider conversation starts.
-// It does not create the feature branch or pull request; those remain behind
-// the existing accepted-goal preparation boundary for this slice.
+// It does not create the feature branch or pull request; those are created only
+// after the lead submits the final agreed plan.
 func (service *Service) PrepareForClarification(
 	ctx context.Context,
 	projectID string,
@@ -225,111 +225,9 @@ func (service *Service) Prepare(
 	if storedFeature.State != feature.StateDraft {
 		return Workspace{}, false, ErrFeatureNotDraft
 	}
-	storedProject, err := service.projects.GetByID(ctx, projectID)
-	if err != nil {
-		return Workspace{}, false, err
-	}
-	if storedProject.ForgejoRepository == nil {
-		return Workspace{}, false, ErrProjectRepositoryNotBound
-	}
-
-	reserved, err := service.store.GetByFeatureID(ctx, featureID)
-	created := false
-	if errors.Is(err, ErrNotFound) {
-		reserved, created, err = service.reserve(
-			ctx, storedProject, storedFeature,
-		)
-	}
-	if err != nil {
-		return Workspace{}, false, err
-	}
-	if reserved.ProjectID != projectID || reserved.FeatureID != featureID {
-		return Workspace{}, false, ErrConflict
-	}
-	if reserved.Status != StatusBranchReady {
-		branch, err := service.branches.EnsureBranch(
-			ctx,
-			reserved.RepositoryOwner,
-			reserved.RepositoryName,
-			reserved.Branch,
-			reserved.BaseCommitID,
-		)
-		if err != nil {
-			return Workspace{}, false, fmt.Errorf("ensure Forgejo feature branch: %w", err)
-		}
-		if branch.Name != reserved.Branch || branch.CommitID != reserved.BaseCommitID {
-			return Workspace{}, false, ErrBranchConflict
-		}
-		if reserved.CheckoutReady() && service.checkouts != nil {
-			if err := service.checkouts.Promote(ctx, CheckoutPromotionSpec{
-				WorkspaceID: reserved.ID, RepositoryOwner: reserved.RepositoryOwner,
-				RepositoryName: reserved.RepositoryName, BaseBranch: reserved.BaseBranch,
-				FeatureBranch: reserved.Branch, BaseCommitID: reserved.BaseCommitID,
-			}); err != nil {
-				return Workspace{}, false, fmt.Errorf("promote clarification checkout: %w", err)
-			}
-		}
-		reserved, err = service.store.MarkBranchReady(ctx, featureID, service.now().UTC())
-		if err != nil {
-			return Workspace{}, false, fmt.Errorf("mark feature branch ready: %w", err)
-		}
-	}
-	if service.checkouts == nil {
-		return reserved, created, nil
-	}
-	if reserved.CheckoutReady() && reserved.CheckoutRelativePath != reserved.ID {
-		return Workspace{}, false, ErrConflict
-	}
-	relativePath := reserved.ID
-	err = service.checkouts.Ensure(ctx, CheckoutSpec{
-		WorkspaceID:     reserved.ID,
-		RepositoryOwner: reserved.RepositoryOwner,
-		RepositoryName:  reserved.RepositoryName,
-		Branch:          reserved.Branch,
-		BaseCommitID:    reserved.BaseCommitID,
-		AlreadyReady:    reserved.CheckoutReady(),
-	})
-	if err != nil {
-		return Workspace{}, false, fmt.Errorf("ensure managed checkout: %w", err)
-	}
-	if !reserved.CheckoutReady() {
-		reserved, err = service.store.MarkCheckoutReady(
-			ctx, featureID, relativePath, service.now().UTC(),
-		)
-		if err != nil {
-			return Workspace{}, false, fmt.Errorf("mark managed checkout ready: %w", err)
-		}
-	}
-	if service.pullRequests == nil {
-		return reserved, created, nil
-	}
-	spec := pullRequestSpec(storedFeature, reserved)
-	pullRequest, err := service.pullRequests.EnsureDraftPullRequest(
-		ctx,
-		reserved.RepositoryOwner,
-		reserved.RepositoryName,
-		spec,
-	)
-	if err != nil {
-		return Workspace{}, false, fmt.Errorf("ensure draft Forgejo pull request: %w", err)
-	}
-	if err := validatePreparedPullRequest(pullRequest, spec, !reserved.PullRequestReady()); err != nil {
-		return Workspace{}, false, err
-	}
-	if reserved.PullRequestReady() {
-		if reserved.PullRequestNumber != pullRequest.Number ||
-			reserved.PullRequestURL != pullRequest.URL {
-			return Workspace{}, false, ErrPullRequestConflict
-		}
-		return reserved, false, nil
-	}
-	ready, err := service.store.MarkPullRequestReady(
-		ctx, featureID, pullRequest.Number, pullRequest.URL, service.now().UTC(),
-	)
-	if err != nil {
-		return Workspace{}, false, fmt.Errorf("mark draft pull request ready: %w", err)
-	}
-	return ready, created, nil
+	// The public preparation action now reconciles only the pinned base checkout.
+	// Branch and PR side effects belong to PublishPlan, after agent agreement.
+	return service.PrepareForClarification(ctx, projectID, featureID)
 }
 
 // PublishPlan reconciles every durable identity used during planning before it
@@ -343,7 +241,122 @@ func (service *Service) PublishPlan(
 	eventID string,
 	plan string,
 ) (Workspace, bool, error) {
+	if strings.TrimSpace(eventID) == "" || strings.TrimSpace(plan) == "" {
+		return Workspace{}, false, errors.New("submitted plan identity and content are required")
+	}
+	if _, err := service.prepareAgreedPlanWorkspace(ctx, projectID, featureID); err != nil {
+		return Workspace{}, false, err
+	}
 	return service.reconcileSubmittedPlan(ctx, projectID, featureID, eventID, plan, true, true)
+}
+
+// prepareAgreedPlanWorkspace performs the first Git and Forgejo mutations in a
+// real workflow. Promotion is deliberately local-first: it proves the planning
+// checkout is still clean and pinned before creating anything in Forgejo. Every
+// step accepts its already-completed state so a coordinator restart can safely
+// finish the same promotion instead of creating replacements.
+func (service *Service) prepareAgreedPlanWorkspace(
+	ctx context.Context,
+	projectID string,
+	featureID string,
+) (Workspace, error) {
+	storedFeature, err := service.features.GetByID(ctx, projectID, featureID)
+	if err != nil {
+		return Workspace{}, err
+	}
+	if storedFeature.State != feature.StatePlanning {
+		return Workspace{}, ErrFeatureNotPlanning
+	}
+	storedProject, err := service.projects.GetByID(ctx, projectID)
+	if err != nil {
+		return Workspace{}, err
+	}
+	if storedProject.ForgejoRepository == nil {
+		return Workspace{}, ErrProjectRepositoryNotBound
+	}
+	stored, err := service.Get(ctx, projectID, featureID)
+	if err != nil {
+		return Workspace{}, err
+	}
+	repository := storedProject.ForgejoRepository
+	if stored.RepositoryOwner != repository.Owner ||
+		stored.RepositoryName != repository.Name ||
+		stored.BaseBranch != repository.DefaultBranch ||
+		!stored.CheckoutReady() || stored.CheckoutRelativePath != stored.ID ||
+		service.checkouts == nil || service.pullRequests == nil {
+		return Workspace{}, ErrConflict
+	}
+	// A fully recorded workspace is verified by reconcileSubmittedPlan below.
+	// Avoid doing the same remote and checkout reads twice on ordinary retries.
+	if stored.Status == StatusBranchReady && stored.PullRequestReady() {
+		return stored, nil
+	}
+
+	switch stored.Status {
+	case StatusPreparing:
+		if err := service.checkouts.Promote(ctx, CheckoutPromotionSpec{
+			WorkspaceID: stored.ID, RepositoryOwner: stored.RepositoryOwner,
+			RepositoryName: stored.RepositoryName, BaseBranch: stored.BaseBranch,
+			FeatureBranch: stored.Branch, BaseCommitID: stored.BaseCommitID,
+		}); err != nil {
+			return Workspace{}, fmt.Errorf("promote agreed-plan checkout: %w", err)
+		}
+		branch, err := service.branches.EnsureBranch(
+			ctx, stored.RepositoryOwner, stored.RepositoryName,
+			stored.Branch, stored.BaseCommitID,
+		)
+		if err != nil {
+			return Workspace{}, fmt.Errorf("ensure Forgejo feature branch: %w", err)
+		}
+		if branch.Name != stored.Branch || branch.CommitID != stored.BaseCommitID {
+			return Workspace{}, ErrBranchConflict
+		}
+		stored, err = service.store.MarkBranchReady(ctx, featureID, service.now().UTC())
+		if err != nil {
+			return Workspace{}, fmt.Errorf("mark feature branch ready: %w", err)
+		}
+	case StatusBranchReady:
+		branch, err := service.branches.GetBranch(
+			ctx, stored.RepositoryOwner, stored.RepositoryName, stored.Branch,
+		)
+		if err != nil {
+			return Workspace{}, fmt.Errorf("reconcile Forgejo feature branch: %w", err)
+		}
+		if branch.Name != stored.Branch || branch.CommitID != stored.BaseCommitID {
+			return Workspace{}, ErrBranchConflict
+		}
+	default:
+		return Workspace{}, ErrConflict
+	}
+
+	if err := service.checkouts.Ensure(ctx, CheckoutSpec{
+		WorkspaceID: stored.ID, RepositoryOwner: stored.RepositoryOwner,
+		RepositoryName: stored.RepositoryName, Branch: stored.Branch,
+		BaseCommitID: stored.BaseCommitID, AlreadyReady: true,
+		RequireCleanBaseline: true,
+	}); err != nil {
+		return Workspace{}, fmt.Errorf("reconcile agreed-plan checkout: %w", err)
+	}
+	if stored.PullRequestReady() {
+		return stored, nil
+	}
+	spec := pullRequestSpec(storedFeature, stored)
+	pullRequest, err := service.pullRequests.EnsureDraftPullRequest(
+		ctx, stored.RepositoryOwner, stored.RepositoryName, spec,
+	)
+	if err != nil {
+		return Workspace{}, fmt.Errorf("ensure draft Forgejo pull request: %w", err)
+	}
+	if err := validatePreparedPullRequest(pullRequest, spec, !stored.PullRequestReady()); err != nil {
+		return Workspace{}, err
+	}
+	ready, err := service.store.MarkPullRequestReady(
+		ctx, featureID, pullRequest.Number, pullRequest.URL, service.now().UTC(),
+	)
+	if err != nil {
+		return Workspace{}, fmt.Errorf("mark draft pull request ready: %w", err)
+	}
+	return ready, nil
 }
 
 // VerifyPublishedPlan applies the same identity and clean-baseline checks as
