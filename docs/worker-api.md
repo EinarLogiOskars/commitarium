@@ -35,13 +35,14 @@ Authorization: Bearer WORKER_TOKEN
 ```
 
 The server stores only a SHA-256 digest of its configured token and compares
-token digests in constant time. The standalone worker reads the token from
-`COMMITARIUM_WORKER_TOKEN`. Compose supplies it from
-`COMMITARIUM_SIMULATED_WORKER_TOKEN` or `COMMITARIUM_CODEX_WORKER_TOKEN`,
-depending on the service, with development-only defaults. These are internal
-HTTP credentials, not provider account credentials. Production token generation
-and delivery are not implemented yet. The coordinator client must keep the
-selected token in memory while it is needed to authenticate requests.
+token digests in constant time. The standalone worker reads the token from the
+private file named by `COMMITARIUM_WORKER_TOKEN_FILE`. The trusted desktop
+backend generates a different random token for every worker role before
+Compose starts the application services; Compose mounts each file read-only
+into that worker and the coordinator. There are no committed or environment
+variable token values. These are internal HTTP credentials, not provider
+account credentials. The coordinator client keeps the selected token in memory
+only while it is needed to authenticate requests.
 
 Responses use `Cache-Control: no-store` so provider session and attempt data
 are not cached.

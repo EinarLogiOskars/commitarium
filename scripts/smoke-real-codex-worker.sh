@@ -3,7 +3,12 @@ set -eu
 
 action="${1:-run}"
 compose_override="scripts/compose.codex-worker-smoke.yml"
-worker_token="${COMMITARIUM_CODEX_WORKER_TOKEN:-commitarium-local-codex-worker}"
+worker_token_file="${COMMITARIUM_CODEX_WORKER_TOKEN_SOURCE:-.commitarium/internal/codex-lead-worker-token}"
+if [ ! -f "$worker_token_file" ]; then
+    echo "Codex worker token file is missing; start Commitarium once through the desktop launcher" >&2
+    exit 1
+fi
+worker_token=$(tr -d '[:space:]' <"$worker_token_file")
 
 run_codex_login() {
     docker compose --profile real-codex run --rm --no-deps --entrypoint codex \

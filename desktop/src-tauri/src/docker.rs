@@ -10,6 +10,8 @@ use serde::Serialize;
 use std::path::PathBuf;
 use std::process::Command;
 
+use crate::bootstrap;
+
 /// Fixed Compose project name. Scoping every command to this project keeps the
 /// launcher from touching any other Compose stack on the host.
 const PROJECT_NAME: &str = "commitarium";
@@ -83,7 +85,9 @@ fn compose_file() -> Result<PathBuf, String> {
 /// project regardless.
 fn compose(profiled: bool, args: &[&str]) -> Result<String, String> {
     let file = compose_file()?;
-    let file = file.to_str().ok_or("Compose file path is not valid UTF-8")?;
+    let file = file
+        .to_str()
+        .ok_or("Compose file path is not valid UTF-8")?;
 
     let mut command = Command::new("docker");
     command.arg("compose");
@@ -100,7 +104,11 @@ fn compose(profiled: bool, args: &[&str]) -> Result<String, String> {
         Ok(String::from_utf8_lossy(&output.stdout).into_owned())
     } else {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        Err(format!("docker compose {}: {}", args.join(" "), stderr.trim()))
+        Err(format!(
+            "docker compose {}: {}",
+            args.join(" "),
+            stderr.trim()
+        ))
     }
 }
 
@@ -137,6 +145,12 @@ pub fn docker_probe() -> DockerProbe {
 /// worker profile.
 #[tauri::command]
 pub fn stack_up() -> Result<(), String> {
+    let file = compose_file()?;
+    bootstrap::prepare_transport_secrets(&file)?;
+    // Forgejo must exist before its own admin CLI can create the internal
+    // identities and tokens required by the other services.
+    compose(false, &["up", "-d", "forgejo"])?;
+    bootstrap::provision_forgejo(&file, PROJECT_NAME)?;
     compose(true, &["up", "-d"]).map(|_| ())
 }
 
@@ -149,7 +163,11 @@ pub fn stack_down() -> Result<(), String> {
 /// Update the stack: pull the latest images, then recreate in the background.
 #[tauri::command]
 pub fn stack_update() -> Result<(), String> {
+    let file = compose_file()?;
+    bootstrap::prepare_transport_secrets(&file)?;
     compose(true, &["pull"])?;
+    compose(false, &["up", "-d", "forgejo"])?;
+    bootstrap::provision_forgejo(&file, PROJECT_NAME)?;
     compose(true, &["up", "-d"]).map(|_| ())
 }
 

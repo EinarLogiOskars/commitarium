@@ -1,3 +1,4 @@
+mod bootstrap;
 mod docker;
 mod handoff;
 mod import;

@@ -135,6 +135,43 @@ func TestClientReadsRotatedTokenWithoutRestart(t *testing.T) {
 	}
 }
 
+func TestClientEnsuresConfiguredRepositoryCollaborators(t *testing.T) {
+	var collaborators []string
+	client, err := NewClient(ClientConfig{
+		BaseURL: "http://forgejo:3000", TokenFile: writeTestToken(t, "admin-token"),
+		Collaborators:  []string{"codex-lead", "claude-reviewer", "CODEX-LEAD"},
+		RequestTimeout: time.Second,
+		HTTPClient: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+			if request.Method != http.MethodPut ||
+				!strings.HasPrefix(request.URL.Path, "/api/v1/repos/owner/repository/collaborators/") {
+				t.Fatalf("unexpected collaborator request %s %s", request.Method, request.URL)
+			}
+			if request.Header.Get("Authorization") != "token admin-token" {
+				t.Fatal("collaborator request did not use the coordinator token file")
+			}
+			var payload struct {
+				Permission string `json:"permission"`
+			}
+			if err := json.NewDecoder(request.Body).Decode(&payload); err != nil || payload.Permission != "write" {
+				t.Fatalf("unexpected collaborator payload %+v err=%v", payload, err)
+			}
+			collaborators = append(collaborators, strings.TrimPrefix(
+				request.URL.Path, "/api/v1/repos/owner/repository/collaborators/",
+			))
+			return jsonResponse(http.StatusNoContent, ""), nil
+		})},
+	})
+	if err != nil {
+		t.Fatalf("create client: %v", err)
+	}
+	if err := client.EnsureRepositoryCollaborators(t.Context(), "owner", "repository"); err != nil {
+		t.Fatalf("ensure collaborators: %v", err)
+	}
+	if got, want := strings.Join(collaborators, ","), "codex-lead,claude-reviewer"; got != want {
+		t.Fatalf("collaborators = %q, want %q", got, want)
+	}
+}
+
 func TestClientCreatesPrivateImportRepository(t *testing.T) {
 	spec := project.RepositoryImportSpec{
 		ImportID: "desktop-1", Repository: "commitarium-aabbcc",
@@ -988,6 +1025,7 @@ func TestNewClientRejectsUnsafeConfiguration(t *testing.T) {
 		{BaseURL: "http://user:password@forgejo", TokenFile: "/token", RequestTimeout: time.Second},
 		{BaseURL: "http://forgejo", RequestTimeout: time.Second},
 		{BaseURL: "http://forgejo", TokenFile: "/token"},
+		{BaseURL: "http://forgejo", TokenFile: "/token", Collaborators: []string{"unsafe/name"}, RequestTimeout: time.Second},
 	} {
 		if _, err := NewClient(config); !errors.Is(err, ErrInvalidClientConfig) {
 			t.Fatalf("expected error %v for %+v, got %v", ErrInvalidClientConfig, config, err)
