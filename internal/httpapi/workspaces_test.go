@@ -42,8 +42,13 @@ func (service *recordingWorkspaceService) Prepare(
 	return service.result, service.created, service.err
 }
 
-func TestPrepareWorkspaceCreatesBranchReservation(t *testing.T) {
+func TestPrepareWorkspaceReturnsPinnedCheckoutWithoutPullRequest(t *testing.T) {
 	stored := testWorkspaceResponseValue()
+	stored.Status = workspace.StatusPreparing
+	stored.BranchCreatedAt = nil
+	stored.PullRequestNumber = 0
+	stored.PullRequestURL = ""
+	stored.PullRequestRecordedAt = nil
 	service := &recordingWorkspaceService{result: stored, created: true}
 	request := httptest.NewRequest(
 		http.MethodPut,
@@ -69,11 +74,9 @@ func TestPrepareWorkspaceCreatesBranchReservation(t *testing.T) {
 		t.Fatalf("decode workspace: %v", err)
 	}
 	if body.ID != stored.ID || body.Branch != stored.Branch ||
-		body.BaseCommitID != stored.BaseCommitID || body.Status != workspace.StatusBranchReady ||
+		body.BaseCommitID != stored.BaseCommitID || body.Status != workspace.StatusPreparing ||
 		body.Checkout == nil || body.Checkout.RelativePath != stored.CheckoutRelativePath ||
-		body.PullRequest == nil || body.PullRequest.Number != stored.PullRequestNumber ||
-		body.PullRequest.URL != stored.PullRequestURL || !body.PullRequest.Draft ||
-		!body.PullRequest.RecordedAt.Equal(*stored.PullRequestRecordedAt) {
+		body.PullRequest != nil || body.BranchCreatedAt != nil {
 		t.Fatalf("unexpected workspace response %+v", body)
 	}
 }

@@ -130,7 +130,8 @@ type recordingBranches struct {
 type recordingCheckout struct {
 	specs      []CheckoutSpec
 	promotions []CheckoutPromotionSpec
-	err        error
+	ensureErr  error
+	promoteErr error
 }
 
 func (checkout *recordingCheckout) Promote(
@@ -138,7 +139,7 @@ func (checkout *recordingCheckout) Promote(
 	spec CheckoutPromotionSpec,
 ) error {
 	checkout.promotions = append(checkout.promotions, spec)
-	return checkout.err
+	return checkout.promoteErr
 }
 
 type recordingPullRequests struct {
@@ -206,7 +207,7 @@ func (pullRequests *recordingPullRequests) EnsurePullRequestPlan(
 
 func (checkout *recordingCheckout) Ensure(_ context.Context, spec CheckoutSpec) error {
 	checkout.specs = append(checkout.specs, spec)
-	return checkout.err
+	return checkout.ensureErr
 }
 
 func (branches *recordingBranches) GetBranch(context.Context, string, string, string) (Branch, error) {
@@ -231,25 +232,33 @@ func (branches *recordingBranches) EnsureBranch(
 	return Branch{Name: branch, CommitID: commitID}, nil
 }
 
-func TestServicePreparesExactFeatureBranch(t *testing.T) {
+func TestServicePrepareKeepsAcceptedGoalOnPinnedBaseCheckout(t *testing.T) {
 	now := time.Date(2026, time.September, 9, 20, 0, 0, 0, time.UTC)
 	store := &memoryStore{}
 	branches := &recordingBranches{base: Branch{Name: "main", CommitID: testCommitID}}
-	service := newTestService(store, branches, now)
+	checkout := &recordingCheckout{}
+	service := NewServiceWithCheckout(
+		store, fixedFeatureFinder{stored: acceptedTestFeature(now)},
+		fixedProjectFinder{stored: project.Project{
+			ID: "prj_test", ForgejoRepository: testRepository(now),
+		}}, branches, checkout,
+	)
+	service.now = func() time.Time { return now }
 
 	prepared, created, err := service.Prepare(t.Context(), "prj_test", "fea_test")
 	if err != nil {
-		t.Fatalf("prepare branch: %v", err)
+		t.Fatalf("prepare accepted-goal checkout: %v", err)
 	}
-	if !created || prepared.Status != StatusBranchReady {
+	if !created || prepared.Status != StatusPreparing || !prepared.CheckoutReady() {
 		t.Fatalf("unexpected preparation result created=%t workspace=%+v", created, prepared)
 	}
 	if len(store.reserve) != 1 || store.reserve[0].BaseCommitID != testCommitID ||
 		store.reserve[0].Branch != "commitarium/fea_test" {
 		t.Fatalf("unexpected durable reservation %+v", store.reserve)
 	}
-	if branches.getCalls != 1 || branches.ensureCalls != 1 || len(store.markedAt) != 1 {
-		t.Fatalf("unexpected calls: branches=%+v marked=%+v", branches, store.markedAt)
+	if branches.getCalls != 1 || branches.ensureCalls != 0 || len(store.markedAt) != 0 ||
+		len(checkout.specs) != 1 || checkout.specs[0].Branch != "main" {
+		t.Fatalf("accepted goal created remote artifacts: branches=%+v checkout=%+v", branches, checkout.specs)
 	}
 }
 
@@ -342,23 +351,39 @@ func TestServicePromotesClarificationCheckoutBeforeBranchReadiness(t *testing.T)
 	stored.CheckoutCreatedAt = &checkoutAt
 	stored.UpdatedAt = checkoutAt
 	store := &memoryStore{stored: stored}
-	branches := &recordingBranches{}
+	branches := &recordingBranches{base: Branch{Name: stored.Branch, CommitID: stored.BaseCommitID}}
 	checkout := &recordingCheckout{}
-	service := NewServiceWithCheckout(
+	pullRequest := PullRequest{
+		Number: 7, URL: "http://localhost:3001/owner/repository/pulls/7",
+		Title: "WIP: Test feature", Body: "<!-- commitarium-feature: fea_test -->",
+		State: "open", Draft: true, BaseBranch: "main",
+		HeadBranch: stored.Branch, HeadCommitID: stored.BaseCommitID,
+		CreatedAt: checkoutAt.Add(2 * time.Minute),
+	}
+	pullRequests := &recordingPullRequests{
+		result: pullRequest, planResult: pullRequest, planPublished: true,
+	}
+	planningFeature := acceptedTestFeature(now)
+	planningFeature.State = feature.StatePlanning
+	service := NewServiceWithPreparation(
 		store,
-		fixedFeatureFinder{stored: acceptedTestFeature(now)},
+		fixedFeatureFinder{stored: planningFeature},
 		fixedProjectFinder{stored: project.Project{
 			ID: "prj_test", ForgejoRepository: testRepository(now),
 		}},
 		branches,
 		checkout,
+		pullRequests,
 	)
 	branchReadyAt := checkoutAt.Add(time.Minute)
 	service.now = func() time.Time { return branchReadyAt }
 
-	prepared, created, err := service.Prepare(t.Context(), "prj_test", "fea_test")
-	if err != nil || created || prepared.Status != StatusBranchReady {
-		t.Fatalf("promote clarification checkout: created=%t workspace=%+v err=%v", created, prepared, err)
+	prepared, published, err := service.PublishPlan(
+		t.Context(), "prj_test", "fea_test", "sev_plan", "Final plan",
+	)
+	if err != nil || !published || prepared.Status != StatusBranchReady ||
+		!prepared.PullRequestReady() {
+		t.Fatalf("promote clarification checkout: published=%t workspace=%+v err=%v", published, prepared, err)
 	}
 	if branches.ensureCalls != 1 || len(checkout.promotions) != 1 {
 		t.Fatalf("expected remote and local branch promotion: branches=%+v promotions=%+v", branches, checkout.promotions)
@@ -369,29 +394,85 @@ func TestServicePromotesClarificationCheckoutBeforeBranchReadiness(t *testing.T)
 		promotion.FeatureBranch != stored.Branch || promotion.BaseCommitID != stored.BaseCommitID {
 		t.Fatalf("unexpected checkout promotion %+v", promotion)
 	}
-	if len(checkout.specs) != 1 || !checkout.specs[0].AlreadyReady ||
-		checkout.specs[0].Branch != stored.Branch || len(store.markedAt) != 1 {
+	if len(checkout.specs) != 2 || !checkout.specs[0].AlreadyReady ||
+		checkout.specs[0].Branch != stored.Branch ||
+		!checkout.specs[0].RequireCleanBaseline ||
+		!checkout.specs[1].RequireCleanBaseline || len(store.markedAt) != 1 {
 		t.Fatalf("promoted checkout was not reconciled and recorded: specs=%+v workspace=%+v", checkout.specs, store.stored)
 	}
 }
 
-func TestServiceRetriesPreparingReservationWithoutReadingMovingDefaultBranch(t *testing.T) {
+func TestServiceDoesNotCreateForgejoArtifactsWhenPlanningCheckoutIsDirty(t *testing.T) {
+	now := time.Date(2026, time.September, 11, 14, 0, 0, 0, time.UTC)
+	stored := testWorkspace(now)
+	checkoutAt := now.Add(time.Minute)
+	stored.CheckoutRelativePath = stored.ID
+	stored.CheckoutCreatedAt = &checkoutAt
+	stored.UpdatedAt = checkoutAt
+	store := &memoryStore{stored: stored}
+	planningFeature := acceptedTestFeature(now)
+	planningFeature.State = feature.StatePlanning
+	branches := &recordingBranches{}
+	checkout := &recordingCheckout{promoteErr: ErrCheckoutConflict}
+	pullRequests := &recordingPullRequests{}
+	service := NewServiceWithPreparation(
+		store, fixedFeatureFinder{stored: planningFeature},
+		fixedProjectFinder{stored: project.Project{
+			ID: "prj_test", ForgejoRepository: testRepository(now),
+		}}, branches, checkout, pullRequests,
+	)
+
+	_, published, err := service.PublishPlan(
+		t.Context(), "prj_test", "fea_test", "sev_plan", "Final plan",
+	)
+	if !errors.Is(err, ErrCheckoutConflict) || published {
+		t.Fatalf("expected dirty-checkout conflict, published=%t err=%v", published, err)
+	}
+	if len(checkout.promotions) != 1 || branches.ensureCalls != 0 ||
+		len(pullRequests.specs) != 0 || store.stored.Status != StatusPreparing {
+		t.Fatalf("dirty checkout allowed external mutation: workspace=%+v branches=%+v pull_requests=%+v", store.stored, branches, pullRequests.specs)
+	}
+}
+
+func TestServiceRetriesPreparingPlanPromotionWithoutReadingMovingDefaultBranch(t *testing.T) {
 	now := time.Date(2026, time.September, 9, 20, 0, 0, 0, time.UTC)
 	stored := testWorkspace(now)
+	checkoutAt := now.Add(time.Minute)
+	stored.CheckoutRelativePath = stored.ID
+	stored.CheckoutCreatedAt = &checkoutAt
+	stored.UpdatedAt = checkoutAt
 	store := &memoryStore{stored: stored}
 	branches := &recordingBranches{base: Branch{
-		Name: "main", CommitID: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		Name: stored.Branch, CommitID: stored.BaseCommitID,
 	}}
-	service := newTestService(store, branches, now.Add(time.Minute))
+	checkout := &recordingCheckout{}
+	pullRequest := PullRequest{
+		Number: 7, URL: "http://localhost:3001/owner/repository/pulls/7",
+		Title: "WIP: Test feature", Body: "<!-- commitarium-feature: fea_test -->",
+		State: "open", Draft: true, BaseBranch: stored.BaseBranch,
+		HeadBranch: stored.Branch, HeadCommitID: stored.BaseCommitID, CreatedAt: now,
+	}
+	planningFeature := acceptedTestFeature(now)
+	planningFeature.State = feature.StatePlanning
+	service := NewServiceWithPreparation(
+		store, fixedFeatureFinder{stored: planningFeature},
+		fixedProjectFinder{stored: project.Project{ID: "prj_test", ForgejoRepository: testRepository(now)}},
+		branches, checkout, &recordingPullRequests{
+			result: pullRequest, planResult: pullRequest, planPublished: true,
+		},
+	)
+	service.now = func() time.Time { return now.Add(2 * time.Minute) }
 
-	prepared, created, err := service.Prepare(t.Context(), "prj_test", "fea_test")
+	prepared, published, err := service.PublishPlan(
+		t.Context(), "prj_test", "fea_test", "sev_plan", "Final plan",
+	)
 	if err != nil {
-		t.Fatalf("retry branch preparation: %v", err)
+		t.Fatalf("retry plan promotion: %v", err)
 	}
-	if created || prepared.Status != StatusBranchReady {
-		t.Fatalf("unexpected retry result created=%t workspace=%+v", created, prepared)
+	if !published || prepared.Status != StatusBranchReady {
+		t.Fatalf("unexpected retry result published=%t workspace=%+v", published, prepared)
 	}
-	if branches.getCalls != 0 || branches.ensureCalls != 1 {
+	if branches.getCalls != 1 || branches.ensureCalls != 1 {
 		t.Fatalf("retry did not use reservation: %+v", branches)
 	}
 	if prepared.BaseCommitID != testCommitID {
@@ -399,23 +480,31 @@ func TestServiceRetriesPreparingReservationWithoutReadingMovingDefaultBranch(t *
 	}
 }
 
-func TestServiceReadyRetryDoesNotCallForgejo(t *testing.T) {
+func TestServicePrepareReconcilesLegacyBranchReadyCheckout(t *testing.T) {
 	now := time.Date(2026, time.September, 9, 20, 0, 0, 0, time.UTC)
 	stored := testWorkspace(now)
 	stored.Status = StatusBranchReady
 	readyAt := now.Add(time.Minute)
 	stored.BranchCreatedAt = &readyAt
+	stored.CheckoutRelativePath = stored.ID
+	stored.CheckoutCreatedAt = &readyAt
 	stored.UpdatedAt = readyAt
 	store := &memoryStore{stored: stored}
 	branches := &recordingBranches{}
-	service := newTestService(store, branches, readyAt.Add(time.Minute))
+	checkout := &recordingCheckout{}
+	service := NewServiceWithCheckout(
+		store, fixedFeatureFinder{stored: acceptedTestFeature(now)},
+		fixedProjectFinder{stored: project.Project{ID: "prj_test", ForgejoRepository: testRepository(now)}},
+		branches, checkout,
+	)
 
 	prepared, created, err := service.Prepare(t.Context(), "prj_test", "fea_test")
 	if err != nil || created || prepared != stored {
 		t.Fatalf("unexpected ready retry result created=%t workspace=%+v err=%v", created, prepared, err)
 	}
-	if branches.getCalls != 0 || branches.ensureCalls != 0 || len(store.markedAt) != 0 {
-		t.Fatalf("ready retry contacted Forgejo or changed storage")
+	if branches.getCalls != 0 || branches.ensureCalls != 0 || len(store.markedAt) != 0 ||
+		len(checkout.specs) != 1 || checkout.specs[0].Branch != stored.Branch {
+		t.Fatalf("ready retry did not only reconcile its checkout")
 	}
 }
 
@@ -485,7 +574,7 @@ func TestServiceReconcilesReadyCheckoutWithoutChangingItsRecord(t *testing.T) {
 	}
 }
 
-func TestServiceCreatesDraftPullRequestAfterCheckoutIsReady(t *testing.T) {
+func TestServiceCreatesDraftPullRequestWhenPlanIsSubmitted(t *testing.T) {
 	now := time.Date(2026, time.September, 9, 20, 0, 0, 0, time.UTC)
 	stored := readyTestWorkspace(now)
 	store := &memoryStore{stored: stored}
@@ -497,22 +586,29 @@ func TestServiceCreatesDraftPullRequestAfterCheckoutIsReady(t *testing.T) {
 		HeadCommitID: testCommitID, CreatedAt: now.Add(3 * time.Minute),
 	}
 	pullRequests := &recordingPullRequests{result: pullRequest}
+	planningFeature := acceptedTestFeature(now)
+	planningFeature.State = feature.StatePlanning
+	branches := &recordingBranches{base: Branch{Name: stored.Branch, CommitID: stored.BaseCommitID}}
+	pullRequests.planResult = pullRequest
+	pullRequests.planPublished = true
 	service := NewServiceWithPreparation(
 		store,
-		fixedFeatureFinder{stored: acceptedTestFeature(now)},
+		fixedFeatureFinder{stored: planningFeature},
 		fixedProjectFinder{stored: project.Project{
 			ID: "prj_test", ForgejoRepository: testRepository(now),
 		}},
-		&recordingBranches{},
+		branches,
 		&recordingCheckout{},
 		pullRequests,
 	)
 	readyAt := now.Add(4 * time.Minute)
 	service.now = func() time.Time { return readyAt }
 
-	prepared, created, err := service.Prepare(t.Context(), "prj_test", "fea_test")
-	if err != nil || created || !prepared.PullRequestReady() {
-		t.Fatalf("prepare pull request: created=%t workspace=%+v err=%v", created, prepared, err)
+	prepared, published, err := service.PublishPlan(
+		t.Context(), "prj_test", "fea_test", "sev_plan", "Final plan",
+	)
+	if err != nil || !published || !prepared.PullRequestReady() {
+		t.Fatalf("publish plan: published=%t workspace=%+v err=%v", published, prepared, err)
 	}
 	if prepared.PullRequestNumber != 7 || prepared.PullRequestURL != pullRequest.URL ||
 		prepared.PullRequestRecordedAt == nil || !prepared.PullRequestRecordedAt.Equal(readyAt) {
@@ -529,7 +625,7 @@ func TestServiceCreatesDraftPullRequestAfterCheckoutIsReady(t *testing.T) {
 	}
 }
 
-func TestServiceReconcilesRecordedPullRequest(t *testing.T) {
+func TestServicePublishesPlanThroughRecordedPullRequestWithoutRecreatingIt(t *testing.T) {
 	now := time.Date(2026, time.September, 9, 20, 0, 0, 0, time.UTC)
 	stored := readyTestWorkspace(now)
 	pullRequestReadyAt := now.Add(3 * time.Minute)
@@ -538,28 +634,34 @@ func TestServiceReconcilesRecordedPullRequest(t *testing.T) {
 	stored.PullRequestRecordedAt = &pullRequestReadyAt
 	stored.UpdatedAt = pullRequestReadyAt
 	store := &memoryStore{stored: stored}
-	pullRequests := &recordingPullRequests{result: PullRequest{
+	existing := PullRequest{
 		Number: 7, URL: stored.PullRequestURL, Title: "Changed WIP title",
 		Body: "<!-- commitarium-feature: fea_test -->", State: "open", Draft: true,
 		BaseBranch: "main", HeadBranch: "commitarium/fea_test", HeadCommitID: testCommitID,
 		CreatedAt: pullRequestReadyAt,
-	}}
+	}
+	pullRequests := &recordingPullRequests{planResult: existing, planPublished: true}
+	planningFeature := acceptedTestFeature(now)
+	planningFeature.State = feature.StatePlanning
 	service := NewServiceWithPreparation(
 		store,
-		fixedFeatureFinder{stored: acceptedTestFeature(now)},
+		fixedFeatureFinder{stored: planningFeature},
 		fixedProjectFinder{stored: project.Project{
 			ID: "prj_test", ForgejoRepository: testRepository(now),
 		}},
-		&recordingBranches{}, &recordingCheckout{}, pullRequests,
+		&recordingBranches{base: Branch{Name: stored.Branch, CommitID: stored.BaseCommitID}},
+		&recordingCheckout{}, pullRequests,
 	)
 
-	prepared, created, err := service.Prepare(t.Context(), "prj_test", "fea_test")
-	if err != nil || created || prepared != stored {
-		t.Fatalf("reconcile pull request: created=%t workspace=%+v err=%v", created, prepared, err)
+	prepared, published, err := service.PublishPlan(
+		t.Context(), "prj_test", "fea_test", "sev_plan", "Final plan",
+	)
+	if err != nil || !published || prepared != stored {
+		t.Fatalf("publish through recorded pull request: published=%t workspace=%+v err=%v", published, prepared, err)
 	}
-	if len(pullRequests.specs) != 1 || pullRequests.specs[0].ExistingNumber != 7 ||
+	if len(pullRequests.specs) != 0 || len(pullRequests.planSpecs) != 1 ||
 		len(store.pullRequestMarkedAt) != 0 {
-		t.Fatalf("recorded pull request was not only reconciled: %+v", pullRequests.specs)
+		t.Fatalf("recorded pull request was recreated: drafts=%+v plans=%+v", pullRequests.specs, pullRequests.planSpecs)
 	}
 }
 
@@ -574,16 +676,21 @@ func TestServiceRejectsPullRequestManagerResultForAnotherFeature(t *testing.T) {
 		CreatedAt: now.Add(3 * time.Minute),
 	}}
 	store := &memoryStore{stored: stored}
+	planningFeature := acceptedTestFeature(now)
+	planningFeature.State = feature.StatePlanning
 	service := NewServiceWithPreparation(
 		store,
-		fixedFeatureFinder{stored: acceptedTestFeature(now)},
+		fixedFeatureFinder{stored: planningFeature},
 		fixedProjectFinder{stored: project.Project{
 			ID: "prj_test", ForgejoRepository: testRepository(now),
 		}},
-		&recordingBranches{}, &recordingCheckout{}, pullRequests,
+		&recordingBranches{base: Branch{Name: stored.Branch, CommitID: stored.BaseCommitID}},
+		&recordingCheckout{}, pullRequests,
 	)
 
-	_, _, err := service.Prepare(t.Context(), "prj_test", "fea_test")
+	_, _, err := service.PublishPlan(
+		t.Context(), "prj_test", "fea_test", "sev_plan", "Final plan",
+	)
 	if !errors.Is(err, ErrPullRequestConflict) {
 		t.Fatalf("expected %v, got %v", ErrPullRequestConflict, err)
 	}
@@ -993,16 +1100,28 @@ func TestServiceRequiresAcceptedGoalAndRepositoryBinding(t *testing.T) {
 
 func TestServiceLeavesReservationPreparingWhenBranchCreationIsUncertain(t *testing.T) {
 	now := time.Date(2026, time.September, 9, 20, 0, 0, 0, time.UTC)
-	store := &memoryStore{}
+	stored := testWorkspace(now)
+	checkoutAt := now.Add(time.Minute)
+	stored.CheckoutRelativePath = stored.ID
+	stored.CheckoutCreatedAt = &checkoutAt
+	stored.UpdatedAt = checkoutAt
+	store := &memoryStore{stored: stored}
 	branches := &recordingBranches{
-		base:      Branch{Name: "main", CommitID: testCommitID},
 		ensureErr: project.ErrForgejoUnavailable,
 	}
-	service := newTestService(store, branches, now)
+	planningFeature := acceptedTestFeature(now)
+	planningFeature.State = feature.StatePlanning
+	service := NewServiceWithPreparation(
+		store, fixedFeatureFinder{stored: planningFeature},
+		fixedProjectFinder{stored: project.Project{ID: "prj_test", ForgejoRepository: testRepository(now)}},
+		branches, &recordingCheckout{}, &recordingPullRequests{},
+	)
 
-	_, created, err := service.Prepare(t.Context(), "prj_test", "fea_test")
-	if !errors.Is(err, project.ErrForgejoUnavailable) || created {
-		t.Fatalf("expected uncertain Forgejo error, created=%t err=%v", created, err)
+	_, published, err := service.PublishPlan(
+		t.Context(), "prj_test", "fea_test", "sev_plan", "Final plan",
+	)
+	if !errors.Is(err, project.ErrForgejoUnavailable) || published {
+		t.Fatalf("expected uncertain Forgejo error, published=%t err=%v", published, err)
 	}
 	if store.stored.Status != StatusPreparing || len(store.markedAt) != 0 {
 		t.Fatalf("uncertain creation was marked ready: %+v", store.stored)
@@ -1013,26 +1132,17 @@ func TestServiceRejectsWorkspaceOwnedByDifferentProject(t *testing.T) {
 	now := time.Date(2026, time.September, 9, 20, 0, 0, 0, time.UTC)
 	stored := testWorkspace(now)
 	stored.ProjectID = "prj_other"
-	service := newTestService(&memoryStore{stored: stored}, &recordingBranches{}, now)
+	service := NewServiceWithCheckout(
+		&memoryStore{stored: stored}, fixedFeatureFinder{stored: acceptedTestFeature(now)},
+		fixedProjectFinder{stored: project.Project{ID: "prj_test", ForgejoRepository: testRepository(now)}},
+		&recordingBranches{}, &recordingCheckout{},
+	)
 
 	if _, _, err := service.Prepare(
 		t.Context(), "prj_test", "fea_test",
 	); !errors.Is(err, ErrConflict) {
 		t.Fatalf("expected %v, got %v", ErrConflict, err)
 	}
-}
-
-func newTestService(store Store, branches BranchManager, now time.Time) *Service {
-	service := NewService(
-		store,
-		fixedFeatureFinder{stored: acceptedTestFeature(now)},
-		fixedProjectFinder{stored: project.Project{
-			ID: "prj_test", ForgejoRepository: testRepository(now),
-		}},
-		branches,
-	)
-	service.now = func() time.Time { return now }
-	return service
 }
 
 func acceptedTestFeature(now time.Time) feature.Feature {

@@ -100,7 +100,6 @@ type RemoteLeadPlanningWorkflow interface {
 type RemoteLeadWorkspaceService interface {
 	Get(context.Context, string, string) (workspace.Workspace, error)
 	PrepareForClarification(context.Context, string, string) (workspace.Workspace, bool, error)
-	Prepare(context.Context, string, string) (workspace.Workspace, bool, error)
 	PublishPlan(context.Context, string, string, string, string) (workspace.Workspace, bool, error)
 	VerifyPublishedPlan(context.Context, string, string, string, string) (workspace.Workspace, error)
 	VerifyImplementationContinuation(context.Context, string, string, string, string) (workspace.Workspace, error)
@@ -921,7 +920,7 @@ func (starter *RemoteLeadStarter) StartPlanning(
 
 	var prepared workspace.Workspace
 	if storedFeature.State == feature.StateDraft {
-		prepared, _, err = starter.workspaces.Prepare(
+		prepared, _, err = starter.workspaces.PrepareForClarification(
 			ctx, storedFeature.ProjectID, storedFeature.ID,
 		)
 	} else {
@@ -932,7 +931,7 @@ func (starter *RemoteLeadStarter) StartPlanning(
 	if err != nil {
 		return execution.Run{}, false, fmt.Errorf("prepare planning workspace: %w", err)
 	}
-	if !prepared.CheckoutReady() || !prepared.PullRequestReady() {
+	if !prepared.CheckoutReady() {
 		return execution.Run{}, false, ErrPlanningNotAllowed
 	}
 	prior, err := starter.worker.GetAttempt(ctx, workerhttp.AttemptReference{
@@ -1088,7 +1087,7 @@ func (starter *RemoteLeadStarter) StartPlanningReview(
 	}
 
 	prepared, err := starter.workspaces.Get(ctx, storedFeature.ProjectID, storedFeature.ID)
-	if err != nil || !prepared.CheckoutReady() || !prepared.PullRequestReady() {
+	if err != nil || !prepared.CheckoutReady() {
 		return execution.Run{}, false, ErrPlanningNotAllowed
 	}
 	attemptID := planningAttemptID(reviewerID)
@@ -1164,10 +1163,7 @@ func reviewerPlanningInstructions(
 		"assumptions, scope problems, and weak test coverage. Finish by clearly saying whether you accept " +
 		"the proposal as written or what must change. Durable repository and workflow state are " +
 		"authoritative over the supplied proposal.\n\nAccepted goal:\n" + storedFeature.AcceptedGoal +
-		"\n\nRepository: " + prepared.RepositoryOwner + "/" + prepared.RepositoryName +
-		"\nBase branch: " + prepared.BaseBranch + "\nFeature branch: " + prepared.Branch +
-		"\nBase commit: " + prepared.BaseCommitID +
-		fmt.Sprintf("\nDraft pull request: #%d (%s)", prepared.PullRequestNumber, prepared.PullRequestURL) +
+		"\n\n" + planningWorkspaceFacts(prepared) +
 		"\n\nLead's exact proposal:\n" + proposal
 }
 
@@ -1631,7 +1627,7 @@ func (starter *RemoteLeadStarter) startLeadResponse(
 	turn := planningRoleMessageCount(messages, worker.RoleLead) + 1
 	attemptID := planningTurnAttemptID(lead.ID, turn)
 	prepared, err := starter.workspaces.Get(ctx, storedFeature.ProjectID, storedFeature.ID)
-	if err != nil || !prepared.CheckoutReady() || !prepared.PullRequestReady() {
+	if err != nil || !prepared.CheckoutReady() {
 		return remoteLeadRequest{}, false, ErrPlanningNotAllowed
 	}
 	request := remoteLeadRequest{
@@ -1687,10 +1683,7 @@ func leadPlanningResponseInstructions(
 		"Do not submit merely to end the discussion. If you disagree, explain why with repository evidence. " +
 		"Durable repository and workflow state are authoritative over conversational memory.\n\n" +
 		"Accepted goal:\n" + storedFeature.AcceptedGoal +
-		"\n\nRepository: " + prepared.RepositoryOwner + "/" + prepared.RepositoryName +
-		"\nBase branch: " + prepared.BaseBranch + "\nFeature branch: " + prepared.Branch +
-		"\nBase commit: " + prepared.BaseCommitID +
-		fmt.Sprintf("\nDraft pull request: #%d (%s)", prepared.PullRequestNumber, prepared.PullRequestURL) +
+		"\n\n" + planningWorkspaceFacts(prepared) +
 		"\n\nReviewer's exact response:\n" + reviewerResponse
 }
 
@@ -1722,7 +1715,7 @@ func (starter *RemoteLeadStarter) startReviewerResponse(
 		return remoteLeadRequest{}, false, ErrPlanningNotAllowed
 	}
 	prepared, err := starter.workspaces.Get(ctx, storedFeature.ProjectID, storedFeature.ID)
-	if err != nil || !prepared.CheckoutReady() || !prepared.PullRequestReady() {
+	if err != nil || !prepared.CheckoutReady() {
 		return remoteLeadRequest{}, false, ErrPlanningNotAllowed
 	}
 	turn := planningRoleMessageCount(messages, worker.RoleReviewer) + 1
@@ -1786,10 +1779,7 @@ func reviewerResponseInstructions(
 		"structured plan-submission action after considering your response. " +
 		"Durable repository and workflow state are authoritative over conversational memory.\n\n" +
 		"Accepted goal:\n" + storedFeature.AcceptedGoal +
-		"\n\nRepository: " + prepared.RepositoryOwner + "/" + prepared.RepositoryName +
-		"\nBase branch: " + prepared.BaseBranch + "\nFeature branch: " + prepared.Branch +
-		"\nBase commit: " + prepared.BaseCommitID +
-		fmt.Sprintf("\nDraft pull request: #%d (%s)", prepared.PullRequestNumber, prepared.PullRequestURL) +
+		"\n\n" + planningWorkspaceFacts(prepared) +
 		"\n\nLead's exact latest response:\n" + leadResponse
 }
 
@@ -1836,10 +1826,16 @@ func planningInstructions(storedFeature feature.Feature, prepared workspace.Work
 		"implementation plan for a separate reviewer agent to challenge. Call out assumptions, risks, " +
 		"likely files or components, and how the result should be tested. Durable repository and " +
 		"workflow state are authoritative over conversational memory.\n\nAccepted goal:\n" +
-		storedFeature.AcceptedGoal + "\n\nRepository: " + prepared.RepositoryOwner + "/" +
-		prepared.RepositoryName + "\nBase branch: " + prepared.BaseBranch +
-		"\nFeature branch: " + prepared.Branch + "\nBase commit: " + prepared.BaseCommitID +
-		fmt.Sprintf("\nDraft pull request: #%d (%s)", prepared.PullRequestNumber, prepared.PullRequestURL)
+		storedFeature.AcceptedGoal + "\n\n" + planningWorkspaceFacts(prepared)
+}
+
+func planningWorkspaceFacts(prepared workspace.Workspace) string {
+	return "Repository: " + prepared.RepositoryOwner + "/" + prepared.RepositoryName +
+		"\nBase branch: " + prepared.BaseBranch +
+		"\nBase commit: " + prepared.BaseCommitID +
+		"\nReserved feature branch name: " + prepared.Branch +
+		"\nThe coordinator creates the feature branch and draft pull request only after " +
+		"the final agreed plan is submitted. Do not require either resource during planning."
 }
 
 func (starter *RemoteLeadStarter) AcceptGoal(
