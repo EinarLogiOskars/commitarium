@@ -109,6 +109,17 @@ struct ProfileSpec {
     login_container: &'static str,
 }
 
+/// The small part of a provider profile that the stack launcher needs.
+///
+/// Authentication remains owned by this module. The launcher receives only a
+/// yes/no decision plus fixed Compose identifiers, never provider credentials
+/// or provider command output.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct WorkerConnection {
+    pub(crate) service: &'static str,
+    pub(crate) connected: bool,
+}
+
 const PROFILES: &[ProfileSpec] = &[
     ProfileSpec {
         id: "codex-lead",
@@ -372,37 +383,54 @@ fn paired_spec(spec: ProfileSpec) -> ProfileSpec {
 #[tauri::command]
 pub async fn list_profiles(manager: State<'_, ProfileManager>) -> Result<Vec<Profile>, String> {
     let manager = manager.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        let checks: Vec<_> = PROFILES
-            .iter()
-            .copied()
-            .map(|spec| {
-                let manager = manager.clone();
-                thread::spawn(move || {
-                    if manager.is_active(spec.id) {
-                        manager.snapshot(spec)
-                    } else {
-                        probe_profile(spec)
-                    }
-                })
+    tauri::async_runtime::spawn_blocking(move || inspect_profiles(&manager))
+        .await
+        .map_err(|_| "could not inspect provider profiles".to_string())
+}
+
+/// Verify all role profiles and return only the fixed routing facts needed by
+/// stack startup. Active login sessions are deliberately not re-probed: their
+/// private volume is already owned by the login helper, and their in-memory
+/// non-connected state keeps the long-lived worker stopped.
+pub(crate) fn worker_connections(manager: &ProfileManager) -> Vec<WorkerConnection> {
+    inspect_profiles(manager)
+        .into_iter()
+        .zip(PROFILES.iter().copied())
+        .map(|(profile, spec)| WorkerConnection {
+            service: spec.service,
+            connected: profile.status == ProfileStatus::Connected,
+        })
+        .collect()
+}
+
+fn inspect_profiles(manager: &ProfileManager) -> Vec<Profile> {
+    let checks: Vec<_> = PROFILES
+        .iter()
+        .copied()
+        .map(|spec| {
+            let manager = manager.clone();
+            thread::spawn(move || {
+                if manager.is_active(spec.id) {
+                    manager.snapshot(spec)
+                } else {
+                    probe_profile(spec)
+                }
             })
-            .collect();
-        checks
-            .into_iter()
-            .zip(PROFILES.iter().copied())
-            .map(|(check, spec)| {
-                check.join().unwrap_or_else(|_| {
-                    profile(
-                        spec,
-                        ProfileStatus::Failed,
-                        Some(detail("The provider profile could not be inspected.")),
-                    )
-                })
+        })
+        .collect();
+    checks
+        .into_iter()
+        .zip(PROFILES.iter().copied())
+        .map(|(check, spec)| {
+            check.join().unwrap_or_else(|_| {
+                profile(
+                    spec,
+                    ProfileStatus::Failed,
+                    Some(detail("The provider profile could not be inspected.")),
+                )
             })
-            .collect()
-    })
-    .await
-    .map_err(|_| "could not inspect provider profiles".to_string())
+        })
+        .collect()
 }
 
 #[tauri::command]

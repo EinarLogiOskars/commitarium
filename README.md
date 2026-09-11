@@ -97,18 +97,19 @@ Docker Compose normally runs three local services:
   network and stores its execution journal in a worker-only volume. It does not
   publish a host port during normal use.
 
-The optional `real-codex` Compose profile adds `codex-worker` and
+The optional `real-codex` Compose profile defines `codex-worker` and
 `codex-reviewer-worker`. They package the same real Codex CLI and worker API,
 but keep separate provider login/session profiles, worker journals, worker API
 tokens, and Forgejo identities. Both share only Commitarium's managed workspace
-root with the coordinator. They are intentionally not started by ordinary
-`docker compose up` yet.
+root with the coordinator. The desktop launcher checks both role profiles and
+starts each worker independently only when its own Codex login is connected.
 
 The optional `real-claude` profile similarly adds `claude-worker` and
 `claude-reviewer-worker`. Each contains a pinned Claude Code CLI and has its own
 provider profile, durable attempt journal, worker token, and Forgejo identity.
 The coordinator routes a selected Claude role to the corresponding service.
-Start both real profiles when projects may use either provider.
+The desktop launcher applies the same independent login check to these roles;
+direct Compose development may still enable both profiles explicitly.
 
 Forgejo is the agent-managed source of truth for plans, review discussion, and
 the internal pull-request audit trail. The coordinator database stores only the
@@ -138,7 +139,11 @@ Forgejo instance when necessary, creates the internal Forgejo identities and
 their scoped access tokens, and creates independent random bearer tokens for
 each coordinator-to-worker connection. These credentials are stored only in
 gitignored files beneath `.commitarium/`, mounted read-only into the service
-that needs them, and reused on later launches.
+that needs them, and reused on later launches. Forgejo, the coordinator, and
+the simulated worker start regardless of provider login. Each real Codex or
+Claude role worker starts only if its exact isolated profile passes a real
+provider status check; other role workers remain stopped. Stack status contains
+one stable row per service even while Compose replaces containers.
 
 Direct `docker compose` startup is a developer path. Run the desktop launcher
 once first so those private files exist, then:
@@ -166,9 +171,9 @@ the resulting provider login, cancel it, or disconnect it. Browser-login URLs
 and Codex device codes are returned as structured transient progress; raw CLI
 output and credentials are not. The TypeScript connect screen is intentionally
 being built separately against the exact command/event contract in
-[`docs/desktop-ipc.md`](docs/desktop-ipc.md). Until the following
-provider-aware launcher slice lands, stop the stack before changing or removing
-a profile so its private writable volume has only one owner.
+[`docs/desktop-ipc.md`](docs/desktop-ipc.md). Stop a running role worker before
+changing or removing its profile so its private writable volume has only one
+owner; the next Start automatically leaves disconnected roles stopped.
 
 ### Internal Forgejo setup
 

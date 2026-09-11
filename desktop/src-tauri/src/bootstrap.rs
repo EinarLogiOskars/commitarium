@@ -122,9 +122,12 @@ fn secret_path(root: &Path, location: &SecretLocation) -> PathBuf {
 }
 
 /// Ensure all coordinator-to-worker bearer tokens exist before Compose can
-/// turn a missing bind-mount source into a directory.
-pub(crate) fn prepare_transport_secrets(compose_file: &Path) -> Result<(), String> {
+/// turn a missing bind-mount source into a directory. The result says whether
+/// any source changed, so the launcher can recreate containers whose old mount
+/// was created while that source had the wrong type.
+pub(crate) fn prepare_transport_secrets(compose_file: &Path) -> Result<bool, String> {
     let root = compose_root(compose_file)?;
+    let mut changed = false;
     for location in TRANSPORT_SECRETS {
         let path = secret_path(root, location);
         if secret_is_ready(&path)? {
@@ -140,14 +143,15 @@ pub(crate) fn prepare_transport_secrets(compose_file: &Path) -> Result<(), Strin
                 .map_err(|_| "could not encode an internal credential".to_string())?;
         }
         write_secret(&path, token.as_bytes())?;
+        changed = true;
     }
-    Ok(())
+    Ok(changed)
 }
 
 /// Create any missing Forgejo identities and scoped credentials after Forgejo
 /// itself is running. Credential values are written directly to private files
 /// and are never returned across Tauri IPC.
-pub(crate) fn provision_forgejo(compose_file: &Path, project_name: &str) -> Result<(), String> {
+pub(crate) fn provision_forgejo(compose_file: &Path, project_name: &str) -> Result<bool, String> {
     let root = compose_root(compose_file)?;
     let mut admin = DockerForgejoAdmin::new(compose_file, project_name);
     let users = wait_for_users(&mut admin)?;
@@ -180,7 +184,8 @@ fn ensure_forgejo_credentials(
     root: &Path,
     admin: &mut impl ForgejoAdmin,
     mut users: HashSet<String>,
-) -> Result<(), String> {
+) -> Result<bool, String> {
+    let mut changed = false;
     for identity in FORGEJO_IDENTITIES {
         let created = if users.contains(identity.username) {
             false
@@ -196,8 +201,9 @@ fn ensure_forgejo_credentials(
         let token = admin.generate_token(identity.username, identity.scopes)?;
         validate_secret_bytes(&token)?;
         write_secret(&path, &token)?;
+        changed = true;
     }
-    Ok(())
+    Ok(changed)
 }
 
 struct DockerForgejoAdmin {
@@ -497,12 +503,12 @@ mod tests {
         let compose_file = root.path().join("compose.yml");
         fs::write(&compose_file, "services: {}").expect("compose file");
 
-        prepare_transport_secrets(&compose_file).expect("first bootstrap");
+        assert!(prepare_transport_secrets(&compose_file).expect("first bootstrap"));
         let first: Vec<Vec<u8>> = TRANSPORT_SECRETS
             .iter()
             .map(|location| fs::read(secret_path(root.path(), location)).expect("token"))
             .collect();
-        prepare_transport_secrets(&compose_file).expect("second bootstrap");
+        assert!(!prepare_transport_secrets(&compose_file).expect("second bootstrap"));
 
         for (index, location) in TRANSPORT_SECRETS.iter().enumerate() {
             let path = secret_path(root.path(), location);
@@ -534,7 +540,9 @@ mod tests {
         let mut admin = FakeAdmin::default();
         admin.users.insert(existing.username.to_string());
         let users = admin.users.clone();
-        ensure_forgejo_credentials(root.path(), &mut admin, users).expect("first bootstrap");
+        assert!(
+            ensure_forgejo_credentials(root.path(), &mut admin, users).expect("first bootstrap")
+        );
 
         assert_eq!(
             fs::read(existing_path).expect("existing token"),
@@ -551,7 +559,9 @@ mod tests {
         let created = admin.created.len();
         let generated = admin.generated.len();
         let users = admin.users.clone();
-        ensure_forgejo_credentials(root.path(), &mut admin, users).expect("second bootstrap");
+        assert!(
+            !ensure_forgejo_credentials(root.path(), &mut admin, users).expect("second bootstrap")
+        );
         assert_eq!(admin.created.len(), created);
         assert_eq!(admin.generated.len(), generated);
     }
