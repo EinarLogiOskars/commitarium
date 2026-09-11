@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -54,22 +56,23 @@ func TestLoadConfigAcceptsForgejoOverrides(t *testing.T) {
 }
 
 func TestLoadConfigAcceptsRealCodexLeadRunner(t *testing.T) {
+	tokenFiles := coordinatorWorkerTokenFiles(t)
 	values := map[string]string{
-		"COMMITARIUM_DATABASE_PATH":                "/state/coordinator.db",
-		"COMMITARIUM_RUNNER_MODE":                  realCodexLeadRunnerMode,
-		"COMMITARIUM_CODEX_WORKER_URL":             "http://codex-worker:8081",
-		"COMMITARIUM_CODEX_WORKER_TOKEN":           "test-token",
-		"COMMITARIUM_CODEX_PROFILE_ID":             "profile_test",
-		"COMMITARIUM_CODEX_REVIEWER_WORKER_URL":    "http://codex-reviewer-worker:8081",
-		"COMMITARIUM_CODEX_REVIEWER_WORKER_TOKEN":  "reviewer-test-token",
-		"COMMITARIUM_CODEX_REVIEWER_PROFILE_ID":    "reviewer_profile_test",
-		"COMMITARIUM_CLAUDE_WORKER_URL":            "http://claude-worker:8081",
-		"COMMITARIUM_CLAUDE_WORKER_TOKEN":          "claude-test-token",
-		"COMMITARIUM_CLAUDE_PROFILE_ID":            "claude_profile_test",
-		"COMMITARIUM_CLAUDE_REVIEWER_WORKER_URL":   "http://claude-reviewer-worker:8081",
-		"COMMITARIUM_CLAUDE_REVIEWER_WORKER_TOKEN": "claude-reviewer-test-token",
-		"COMMITARIUM_CLAUDE_REVIEWER_PROFILE_ID":   "claude_reviewer_profile_test",
-		"COMMITARIUM_CODEX_WORKER_REQUEST_TIMEOUT": "4s",
+		"COMMITARIUM_DATABASE_PATH":                     "/state/coordinator.db",
+		"COMMITARIUM_RUNNER_MODE":                       realCodexLeadRunnerMode,
+		"COMMITARIUM_CODEX_WORKER_URL":                  "http://codex-worker:8081",
+		"COMMITARIUM_CODEX_WORKER_TOKEN_FILE":           tokenFiles[0],
+		"COMMITARIUM_CODEX_PROFILE_ID":                  "profile_test",
+		"COMMITARIUM_CODEX_REVIEWER_WORKER_URL":         "http://codex-reviewer-worker:8081",
+		"COMMITARIUM_CODEX_REVIEWER_WORKER_TOKEN_FILE":  tokenFiles[1],
+		"COMMITARIUM_CODEX_REVIEWER_PROFILE_ID":         "reviewer_profile_test",
+		"COMMITARIUM_CLAUDE_WORKER_URL":                 "http://claude-worker:8081",
+		"COMMITARIUM_CLAUDE_WORKER_TOKEN_FILE":          tokenFiles[2],
+		"COMMITARIUM_CLAUDE_PROFILE_ID":                 "claude_profile_test",
+		"COMMITARIUM_CLAUDE_REVIEWER_WORKER_URL":        "http://claude-reviewer-worker:8081",
+		"COMMITARIUM_CLAUDE_REVIEWER_WORKER_TOKEN_FILE": tokenFiles[3],
+		"COMMITARIUM_CLAUDE_REVIEWER_PROFILE_ID":        "claude_reviewer_profile_test",
+		"COMMITARIUM_CODEX_WORKER_REQUEST_TIMEOUT":      "4s",
 	}
 	loaded, err := loadConfig(func(name string) string { return values[name] })
 	if err != nil {
@@ -94,6 +97,7 @@ func TestLoadConfigAcceptsRealCodexLeadRunner(t *testing.T) {
 }
 
 func TestLoadConfigRejectsIncompleteOrUnknownRunner(t *testing.T) {
+	tokenFiles := coordinatorWorkerTokenFiles(t)
 	tests := []map[string]string{
 		{},
 		{
@@ -105,15 +109,15 @@ func TestLoadConfigRejectsIncompleteOrUnknownRunner(t *testing.T) {
 			"COMMITARIUM_RUNNER_MODE":   realCodexLeadRunnerMode,
 		},
 		{
-			"COMMITARIUM_DATABASE_PATH":                "/state/coordinator.db",
-			"COMMITARIUM_RUNNER_MODE":                  realCodexLeadRunnerMode,
-			"COMMITARIUM_CODEX_WORKER_URL":             "http://codex-worker:8081",
-			"COMMITARIUM_CODEX_WORKER_TOKEN":           "test-token",
-			"COMMITARIUM_CODEX_PROFILE_ID":             "profile_test",
-			"COMMITARIUM_CODEX_REVIEWER_WORKER_URL":    "http://codex-reviewer-worker:8081",
-			"COMMITARIUM_CODEX_REVIEWER_WORKER_TOKEN":  "reviewer-test-token",
-			"COMMITARIUM_CODEX_REVIEWER_PROFILE_ID":    "reviewer_profile_test",
-			"COMMITARIUM_CODEX_WORKER_REQUEST_TIMEOUT": "zero",
+			"COMMITARIUM_DATABASE_PATH":                    "/state/coordinator.db",
+			"COMMITARIUM_RUNNER_MODE":                      realCodexLeadRunnerMode,
+			"COMMITARIUM_CODEX_WORKER_URL":                 "http://codex-worker:8081",
+			"COMMITARIUM_CODEX_WORKER_TOKEN_FILE":          tokenFiles[0],
+			"COMMITARIUM_CODEX_PROFILE_ID":                 "profile_test",
+			"COMMITARIUM_CODEX_REVIEWER_WORKER_URL":        "http://codex-reviewer-worker:8081",
+			"COMMITARIUM_CODEX_REVIEWER_WORKER_TOKEN_FILE": tokenFiles[1],
+			"COMMITARIUM_CODEX_REVIEWER_PROFILE_ID":        "reviewer_profile_test",
+			"COMMITARIUM_CODEX_WORKER_REQUEST_TIMEOUT":     "zero",
 		},
 		{
 			"COMMITARIUM_DATABASE_PATH":           "/state/coordinator.db",
@@ -125,4 +129,18 @@ func TestLoadConfigRejectsIncompleteOrUnknownRunner(t *testing.T) {
 			t.Errorf("case %d accepted invalid config %+v", index, values)
 		}
 	}
+}
+
+func coordinatorWorkerTokenFiles(t *testing.T) [4]string {
+	t.Helper()
+	root := t.TempDir()
+	values := [...]string{"test-token", "reviewer-test-token", "claude-test-token", "claude-reviewer-test-token"}
+	var paths [4]string
+	for index, value := range values {
+		paths[index] = filepath.Join(root, value)
+		if err := os.WriteFile(paths[index], []byte(value), 0o600); err != nil {
+			t.Fatalf("write worker token: %v", err)
+		}
+	}
+	return paths
 }

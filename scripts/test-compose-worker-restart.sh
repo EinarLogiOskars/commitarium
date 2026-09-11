@@ -5,13 +5,19 @@ project_name="commitarium-worker-restart-test-$$"
 COMMITARIUM_WORKER_TEST_PORT=$(python3 -c 'import socket; sock=socket.socket(); sock.bind(("127.0.0.1", 0)); print(sock.getsockname()[1]); sock.close()')
 export COMMITARIUM_WORKER_TEST_PORT
 export COMMITARIUM_WORKER_STEP_DELAY="30s"
-export COMMITARIUM_SIMULATED_WORKER_TOKEN="container-test-token"
+worker_token="container-test-token"
+worker_token_file=$(mktemp "${TMPDIR:-/tmp}/commitarium-worker-token.XXXXXX")
+chmod 600 "$worker_token_file"
+printf '%s' "$worker_token" >"$worker_token_file"
+COMMITARIUM_SIMULATED_WORKER_TOKEN_SOURCE="$worker_token_file"
+export COMMITARIUM_SIMULATED_WORKER_TOKEN_SOURCE
 base_url="http://127.0.0.1:$COMMITARIUM_WORKER_TEST_PORT/internal/v1"
 compose_override="scripts/compose.worker-test.yml"
 
 cleanup() {
     docker compose -f compose.yml -f "$compose_override" -p "$project_name" \
         down --volumes --remove-orphans >/dev/null 2>&1 || true
+    rm -f "$worker_token_file"
 }
 trap cleanup EXIT INT TERM
 
@@ -68,7 +74,7 @@ docker compose -f compose.yml -f "$compose_override" -p "$project_name" \
 wait_for_health
 
 launch_json=$(curl --fail --silent --request PUT "$attempt_url" \
-    --header "Authorization: Bearer $COMMITARIUM_SIMULATED_WORKER_TOKEN" \
+    --header "Authorization: Bearer $worker_token" \
     --header 'Content-Type: application/json' \
     --header 'Idempotency-Key: launch-container' \
     --data "$launch_body")
@@ -77,11 +83,11 @@ provider_session_id=$(printf '%s' "$launch_json" | assert_running_attempt)
 recreate_worker
 
 recovered_json=$(curl --fail --silent "$attempt_url" \
-    --header "Authorization: Bearer $COMMITARIUM_SIMULATED_WORKER_TOKEN")
+    --header "Authorization: Bearer $worker_token")
 printf '%s' "$recovered_json" | assert_recovered_attempt "$provider_session_id"
 
 retry_output=$(curl --silent --request PUT "$attempt_url" \
-    --header "Authorization: Bearer $COMMITARIUM_SIMULATED_WORKER_TOKEN" \
+    --header "Authorization: Bearer $worker_token" \
     --header 'Content-Type: application/json' \
     --header 'Idempotency-Key: launch-container' \
     --data "$launch_body" \
@@ -96,7 +102,7 @@ printf '%s' "$retry_json" | assert_recovered_attempt "$provider_session_id"
 
 replacement_output=$(curl --silent --request PUT \
     "$base_url/sessions/ses_container/attempts/att_replacement" \
-    --header "Authorization: Bearer $COMMITARIUM_SIMULATED_WORKER_TOKEN" \
+    --header "Authorization: Bearer $worker_token" \
     --header 'Content-Type: application/json' \
     --header 'Idempotency-Key: replacement-container' \
     --data "$launch_body" \
@@ -115,7 +121,7 @@ assert response["error"]["code"] == "attempt_active", response
 
 recreate_worker
 recovered_again_json=$(curl --fail --silent "$attempt_url" \
-    --header "Authorization: Bearer $COMMITARIUM_SIMULATED_WORKER_TOKEN")
+    --header "Authorization: Bearer $worker_token")
 printf '%s' "$recovered_again_json" | assert_recovered_attempt "$provider_session_id"
 
 echo "standalone worker container restart test passed"

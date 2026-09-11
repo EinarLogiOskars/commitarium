@@ -27,6 +27,7 @@ type ClientConfig struct {
 	BaseURL        string
 	Owner          string
 	TokenFile      string
+	Collaborators  []string
 	RequestTimeout time.Duration
 	HTTPClient     *http.Client
 }
@@ -35,6 +36,7 @@ type Client struct {
 	baseURL        string
 	owner          string
 	tokenFile      string
+	collaborators  []string
 	requestTimeout time.Duration
 	httpClient     *http.Client
 }
@@ -57,6 +59,21 @@ func NewClient(config ClientConfig) (*Client, error) {
 	if owner != "" && strings.ContainsAny(owner, "/\\") {
 		return nil, fmt.Errorf("%w: owner must be a single path segment", ErrInvalidClientConfig)
 	}
+	collaborators := make([]string, 0, len(config.Collaborators))
+	seenCollaborators := make(map[string]struct{}, len(config.Collaborators))
+	for _, configured := range config.Collaborators {
+		collaborator := strings.TrimSpace(configured)
+		if collaborator == "" || strings.ContainsAny(collaborator, "/\\") ||
+			strings.IndexFunc(collaborator, func(r rune) bool { return r <= ' ' }) >= 0 {
+			return nil, fmt.Errorf("%w: collaborator must be a non-empty single path segment", ErrInvalidClientConfig)
+		}
+		key := strings.ToLower(collaborator)
+		if _, exists := seenCollaborators[key]; exists {
+			continue
+		}
+		seenCollaborators[key] = struct{}{}
+		collaborators = append(collaborators, collaborator)
+	}
 	httpClient := config.HTTPClient
 	if httpClient == nil {
 		httpClient = &http.Client{}
@@ -67,8 +84,47 @@ func NewClient(config ClientConfig) (*Client, error) {
 	}
 	return &Client{
 		baseURL: baseURL, owner: owner, tokenFile: tokenFile,
-		requestTimeout: config.RequestTimeout, httpClient: &clientCopy,
+		collaborators: collaborators, requestTimeout: config.RequestTimeout, httpClient: &clientCopy,
 	}, nil
+}
+
+// EnsureRepositoryCollaborators gives Commitarium's fixed agent identities
+// write access to one internal repository. It is safe to repeat before every
+// work order and does not grant access to any host or upstream repository.
+func (client *Client) EnsureRepositoryCollaborators(
+	ctx context.Context,
+	owner string,
+	name string,
+) error {
+	owner, name, err := project.NormalizeRepositoryCoordinate(owner, name)
+	if err != nil {
+		return err
+	}
+	for _, collaborator := range client.collaborators {
+		status, _, err := client.doJSON(
+			ctx,
+			http.MethodPut,
+			"/api/v1/repos/"+url.PathEscape(owner)+"/"+url.PathEscape(name)+
+				"/collaborators/"+url.PathEscape(collaborator),
+			struct {
+				Permission string `json:"permission"`
+			}{Permission: "write"},
+		)
+		if err != nil {
+			return err
+		}
+		switch status {
+		case http.StatusOK, http.StatusCreated, http.StatusNoContent:
+		default:
+			return fmt.Errorf(
+				"%w: collaborator setup for %q returned HTTP %d",
+				project.ErrForgejoUnavailable,
+				collaborator,
+				status,
+			)
+		}
+	}
+	return nil
 }
 
 func (client *Client) VerifyRepository(

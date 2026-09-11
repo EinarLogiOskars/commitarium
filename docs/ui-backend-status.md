@@ -27,6 +27,21 @@ with the implementation and public API documentation they describe.
 
 ## Settled — safe for UI work
 
+### Internal service bootstrap
+
+- `stack_up` and `stack_update` initialize Forgejo on a new persistent volume,
+  disable public registration, and automatically provision the internal admin,
+  Codex lead/reviewer, and Claude lead/reviewer identities with scoped token
+  files.
+- Before a selected project checkout is prepared, the coordinator idempotently
+  gives those internal identities write access to that project's private
+  Forgejo repository. A failure stops the work order before checkout creation.
+- The same launcher path creates separate random coordinator-to-worker bearer
+  tokens. No internal or Forgejo secret crosses Tauri IPC, and the UI does not
+  need setup fields or commands for them.
+- Provider login remains separate. The profile-status and login commands in
+  `desktop-ipc.md` are still in progress and must not yet be used by the UI.
+
 ### Public API conventions
 
 - The coordinator is local-only at `http://127.0.0.1:8080` in Compose.
@@ -217,6 +232,9 @@ not implemented yet.
 
 ### Near-term MVP backend
 
+- Provider profile status and login commands/events described in
+  `desktop-ipc.md`, followed by provider-aware worker startup and service-row
+  deduplication.
 - Clear notification presentation for a feature that merged automatically or
   is waiting for merge approval.
 

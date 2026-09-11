@@ -15,24 +15,28 @@ services:
       COMMITARIUM_FORGEJO_TOKEN_FILE: /run/commitarium-config/forgejo-token
       COMMITARIUM_WORKSPACE_ROOT: /workspaces
       COMMITARIUM_CODEX_WORKER_URL: http://codex-worker:8081
-      COMMITARIUM_CODEX_WORKER_TOKEN: ${COMMITARIUM_CODEX_WORKER_TOKEN:-commitarium-local-codex-worker}
+      COMMITARIUM_CODEX_WORKER_TOKEN_FILE: /run/commitarium-internal/codex-lead-worker-token
       COMMITARIUM_CODEX_PROFILE_ID: ${COMMITARIUM_CODEX_PROFILE_ID:-profile_local_codex}
       COMMITARIUM_CODEX_REVIEWER_WORKER_URL: http://codex-reviewer-worker:8081
-      COMMITARIUM_CODEX_REVIEWER_WORKER_TOKEN: ${COMMITARIUM_CODEX_REVIEWER_WORKER_TOKEN:-commitarium-local-codex-reviewer-worker}
+      COMMITARIUM_CODEX_REVIEWER_WORKER_TOKEN_FILE: /run/commitarium-internal/codex-reviewer-worker-token
       COMMITARIUM_CODEX_REVIEWER_PROFILE_ID: ${COMMITARIUM_CODEX_REVIEWER_PROFILE_ID:-profile_local_codex_reviewer}
       COMMITARIUM_CODEX_FORGEJO_LOGIN: ${COMMITARIUM_CODEX_FORGEJO_LOGIN:-codex-lead}
       COMMITARIUM_CODEX_REVIEWER_FORGEJO_LOGIN: ${COMMITARIUM_CODEX_REVIEWER_FORGEJO_LOGIN:-codex-reviewer}
       COMMITARIUM_CLAUDE_WORKER_URL: http://claude-worker:8081
-      COMMITARIUM_CLAUDE_WORKER_TOKEN: ${COMMITARIUM_CLAUDE_WORKER_TOKEN:-commitarium-local-claude-worker}
+      COMMITARIUM_CLAUDE_WORKER_TOKEN_FILE: /run/commitarium-internal/claude-lead-worker-token
       COMMITARIUM_CLAUDE_PROFILE_ID: ${COMMITARIUM_CLAUDE_PROFILE_ID:-profile_local_claude}
       COMMITARIUM_CLAUDE_REVIEWER_WORKER_URL: http://claude-reviewer-worker:8081
-      COMMITARIUM_CLAUDE_REVIEWER_WORKER_TOKEN: ${COMMITARIUM_CLAUDE_REVIEWER_WORKER_TOKEN:-commitarium-local-claude-reviewer-worker}
+      COMMITARIUM_CLAUDE_REVIEWER_WORKER_TOKEN_FILE: /run/commitarium-internal/claude-reviewer-worker-token
       COMMITARIUM_CLAUDE_REVIEWER_PROFILE_ID: ${COMMITARIUM_CLAUDE_REVIEWER_PROFILE_ID:-profile_local_claude_reviewer}
       COMMITARIUM_CLAUDE_FORGEJO_LOGIN: ${COMMITARIUM_CLAUDE_FORGEJO_LOGIN:-claude-lead}
       COMMITARIUM_CLAUDE_REVIEWER_FORGEJO_LOGIN: ${COMMITARIUM_CLAUDE_REVIEWER_FORGEJO_LOGIN:-claude-reviewer}
     volumes:
       - coordinator-data:/var/lib/commitarium
       - ${COMMITARIUM_FORGEJO_TOKEN_SOURCE:-./.commitarium/forgejo-token}:/run/commitarium-config/forgejo-token:ro
+      - ${COMMITARIUM_CODEX_WORKER_TOKEN_SOURCE:-./.commitarium/internal/codex-lead-worker-token}:/run/commitarium-internal/codex-lead-worker-token:ro
+      - ${COMMITARIUM_CODEX_REVIEWER_WORKER_TOKEN_SOURCE:-./.commitarium/internal/codex-reviewer-worker-token}:/run/commitarium-internal/codex-reviewer-worker-token:ro
+      - ${COMMITARIUM_CLAUDE_WORKER_TOKEN_SOURCE:-./.commitarium/internal/claude-lead-worker-token}:/run/commitarium-internal/claude-lead-worker-token:ro
+      - ${COMMITARIUM_CLAUDE_REVIEWER_WORKER_TOKEN_SOURCE:-./.commitarium/internal/claude-reviewer-worker-token}:/run/commitarium-internal/claude-reviewer-worker-token:ro
       - ${COMMITARIUM_WORKSPACE_SOURCE:-./.commitarium/workspaces}:/workspaces
     ports:
       - "127.0.0.1:${COMMITARIUM_COORDINATOR_PORT:-8080}:8080"
@@ -45,9 +49,10 @@ services:
       COMMITARIUM_WORKER_DATABASE_PATH: /var/lib/commitarium-worker/worker.db
       COMMITARIUM_WORKER_LISTEN_ADDRESS: :8081
       COMMITARIUM_WORKER_STEP_DELAY: ${COMMITARIUM_WORKER_STEP_DELAY:-250ms}
-      COMMITARIUM_WORKER_TOKEN: ${COMMITARIUM_SIMULATED_WORKER_TOKEN:-commitarium-local-simulated-worker}
+      COMMITARIUM_WORKER_TOKEN_FILE: /run/commitarium-internal/worker-token
     volumes:
       - simulated-codex-worker-journal:/var/lib/commitarium-worker
+      - ${COMMITARIUM_SIMULATED_WORKER_TOKEN_SOURCE:-./.commitarium/internal/simulated-worker-token}:/run/commitarium-internal/worker-token:ro
     expose:
       - "8081"
 
@@ -62,7 +67,7 @@ services:
       COMMITARIUM_WORKER_ADAPTER: codex
       COMMITARIUM_WORKER_DATABASE_PATH: /var/lib/commitarium-worker/worker.db
       COMMITARIUM_WORKER_LISTEN_ADDRESS: :8081
-      COMMITARIUM_WORKER_TOKEN: ${COMMITARIUM_CODEX_WORKER_TOKEN:-commitarium-local-codex-worker}
+      COMMITARIUM_WORKER_TOKEN_FILE: /run/commitarium-internal/worker-token
       COMMITARIUM_CODEX_PROVIDER_STATE_PATH: /var/lib/commitarium-provider
       COMMITARIUM_CODEX_WORKSPACE_ROOT: /workspaces
       COMMITARIUM_CODEX_PROFILE_ID: ${COMMITARIUM_CODEX_PROFILE_ID:-profile_local_codex}
@@ -79,6 +84,7 @@ services:
     volumes:
       - codex-worker-journal:/var/lib/commitarium-worker
       - codex-profile:/var/lib/commitarium-provider
+      - ${COMMITARIUM_CODEX_WORKER_TOKEN_SOURCE:-./.commitarium/internal/codex-lead-worker-token}:/run/commitarium-internal/worker-token:ro
       - ${COMMITARIUM_CODEX_FORGEJO_TOKEN_SOURCE:-./.commitarium/agents/codex-lead/forgejo-token}:/run/commitarium-agent/forgejo-token:ro
       - ${COMMITARIUM_WORKSPACE_SOURCE:-./.commitarium/workspaces}:/workspaces
       - ${COMMITARIUM_CODEX_WORKSPACE_SOURCE:-.}:/workspaces/${COMMITARIUM_CODEX_WORKSPACE_ID:-workspace_smoke}:ro
@@ -96,7 +102,7 @@ services:
       COMMITARIUM_WORKER_ADAPTER: codex
       COMMITARIUM_WORKER_DATABASE_PATH: /var/lib/commitarium-worker/worker.db
       COMMITARIUM_WORKER_LISTEN_ADDRESS: :8081
-      COMMITARIUM_WORKER_TOKEN: ${COMMITARIUM_CODEX_REVIEWER_WORKER_TOKEN:-commitarium-local-codex-reviewer-worker}
+      COMMITARIUM_WORKER_TOKEN_FILE: /run/commitarium-internal/worker-token
       COMMITARIUM_CODEX_PROVIDER_STATE_PATH: /var/lib/commitarium-provider
       COMMITARIUM_CODEX_WORKSPACE_ROOT: /workspaces
       COMMITARIUM_CODEX_PROFILE_ID: ${COMMITARIUM_CODEX_REVIEWER_PROFILE_ID:-profile_local_codex_reviewer}
@@ -113,6 +119,7 @@ services:
     volumes:
       - codex-reviewer-worker-journal:/var/lib/commitarium-worker
       - codex-reviewer-profile:/var/lib/commitarium-provider
+      - ${COMMITARIUM_CODEX_REVIEWER_WORKER_TOKEN_SOURCE:-./.commitarium/internal/codex-reviewer-worker-token}:/run/commitarium-internal/worker-token:ro
       - ${COMMITARIUM_CODEX_REVIEWER_FORGEJO_TOKEN_SOURCE:-./.commitarium/agents/codex-reviewer/forgejo-token}:/run/commitarium-agent/forgejo-token:ro
       - ${COMMITARIUM_WORKSPACE_SOURCE:-./.commitarium/workspaces}:/workspaces
       - ${COMMITARIUM_CODEX_WORKSPACE_SOURCE:-.}:/workspaces/${COMMITARIUM_CODEX_WORKSPACE_ID:-workspace_smoke}:ro
@@ -130,7 +137,7 @@ services:
       COMMITARIUM_WORKER_ADAPTER: claude_code
       COMMITARIUM_WORKER_DATABASE_PATH: /var/lib/commitarium-worker/worker.db
       COMMITARIUM_WORKER_LISTEN_ADDRESS: :8081
-      COMMITARIUM_WORKER_TOKEN: ${COMMITARIUM_CLAUDE_WORKER_TOKEN:-commitarium-local-claude-worker}
+      COMMITARIUM_WORKER_TOKEN_FILE: /run/commitarium-internal/worker-token
       COMMITARIUM_CLAUDE_PROVIDER_STATE_PATH: /var/lib/commitarium-provider
       COMMITARIUM_CLAUDE_WORKSPACE_ROOT: /workspaces
       COMMITARIUM_CLAUDE_PROFILE_ID: ${COMMITARIUM_CLAUDE_PROFILE_ID:-profile_local_claude}
@@ -148,6 +155,7 @@ services:
     volumes:
       - claude-worker-journal:/var/lib/commitarium-worker
       - claude-profile:/var/lib/commitarium-provider
+      - ${COMMITARIUM_CLAUDE_WORKER_TOKEN_SOURCE:-./.commitarium/internal/claude-lead-worker-token}:/run/commitarium-internal/worker-token:ro
       - ${COMMITARIUM_CLAUDE_FORGEJO_TOKEN_SOURCE:-./.commitarium/agents/claude-lead/forgejo-token}:/run/commitarium-agent/forgejo-token:ro
       - ${COMMITARIUM_WORKSPACE_SOURCE:-./.commitarium/workspaces}:/workspaces
       - ${COMMITARIUM_CLAUDE_WORKSPACE_SOURCE:-.}:/workspaces/${COMMITARIUM_CLAUDE_WORKSPACE_ID:-workspace_smoke}:ro
@@ -165,7 +173,7 @@ services:
       COMMITARIUM_WORKER_ADAPTER: claude_code
       COMMITARIUM_WORKER_DATABASE_PATH: /var/lib/commitarium-worker/worker.db
       COMMITARIUM_WORKER_LISTEN_ADDRESS: :8081
-      COMMITARIUM_WORKER_TOKEN: ${COMMITARIUM_CLAUDE_REVIEWER_WORKER_TOKEN:-commitarium-local-claude-reviewer-worker}
+      COMMITARIUM_WORKER_TOKEN_FILE: /run/commitarium-internal/worker-token
       COMMITARIUM_CLAUDE_PROVIDER_STATE_PATH: /var/lib/commitarium-provider
       COMMITARIUM_CLAUDE_WORKSPACE_ROOT: /workspaces
       COMMITARIUM_CLAUDE_PROFILE_ID: ${COMMITARIUM_CLAUDE_REVIEWER_PROFILE_ID:-profile_local_claude_reviewer}
@@ -180,6 +188,7 @@ services:
     volumes:
       - claude-reviewer-worker-journal:/var/lib/commitarium-worker
       - claude-reviewer-profile:/var/lib/commitarium-provider
+      - ${COMMITARIUM_CLAUDE_REVIEWER_WORKER_TOKEN_SOURCE:-./.commitarium/internal/claude-reviewer-worker-token}:/run/commitarium-internal/worker-token:ro
       - ${COMMITARIUM_CLAUDE_REVIEWER_FORGEJO_TOKEN_SOURCE:-./.commitarium/agents/claude-reviewer/forgejo-token}:/run/commitarium-agent/forgejo-token:ro
       - ${COMMITARIUM_WORKSPACE_SOURCE:-./.commitarium/workspaces}:/workspaces
       - ${COMMITARIUM_CLAUDE_WORKSPACE_SOURCE:-.}:/workspaces/${COMMITARIUM_CLAUDE_WORKSPACE_ID:-workspace_smoke}:ro
@@ -194,6 +203,8 @@ services:
       FORGEJO__server__DOMAIN: localhost
       FORGEJO__server__ROOT_URL: http://localhost:3001/
       FORGEJO__server__DISABLE_SSH: "true"
+      FORGEJO__security__INSTALL_LOCK: "true"
+      FORGEJO__service__DISABLE_REGISTRATION: "true"
     volumes:
       - forgejo-data:/var/lib/gitea
     ports:

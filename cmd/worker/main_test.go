@@ -14,9 +14,10 @@ import (
 )
 
 func TestLoadConfigUsesRequiredValuesAndDefaults(t *testing.T) {
+	tokenFile := writeWorkerToken(t, "test-token")
 	values := map[string]string{
 		"COMMITARIUM_WORKER_DATABASE_PATH": "/state/worker.db",
-		"COMMITARIUM_WORKER_TOKEN":         "test-token",
+		"COMMITARIUM_WORKER_TOKEN_FILE":    tokenFile,
 	}
 	loaded, err := loadConfig(func(name string) string { return values[name] })
 	if err != nil {
@@ -31,9 +32,10 @@ func TestLoadConfigUsesRequiredValuesAndDefaults(t *testing.T) {
 }
 
 func TestLoadConfigAcceptsRuntimeOverrides(t *testing.T) {
+	tokenFile := writeWorkerToken(t, "test-token")
 	values := map[string]string{
 		"COMMITARIUM_WORKER_DATABASE_PATH":  "/state/worker.db",
-		"COMMITARIUM_WORKER_TOKEN":          "test-token",
+		"COMMITARIUM_WORKER_TOKEN_FILE":     tokenFile,
 		"COMMITARIUM_WORKER_LISTEN_ADDRESS": "127.0.0.1:9090",
 		"COMMITARIUM_WORKER_STEP_DELAY":     "3s",
 	}
@@ -47,21 +49,23 @@ func TestLoadConfigAcceptsRuntimeOverrides(t *testing.T) {
 }
 
 func TestLoadConfigRejectsUnsafeOrMissingValues(t *testing.T) {
+	validToken := writeWorkerToken(t, "test-token")
+	unsafeToken := writeWorkerToken(t, "token with spaces")
 	tests := []map[string]string{
-		{"COMMITARIUM_WORKER_TOKEN": "test-token"},
+		{"COMMITARIUM_WORKER_TOKEN_FILE": validToken},
 		{"COMMITARIUM_WORKER_DATABASE_PATH": "/state/worker.db"},
 		{
 			"COMMITARIUM_WORKER_DATABASE_PATH": "/state/worker.db",
-			"COMMITARIUM_WORKER_TOKEN":         "token with spaces",
+			"COMMITARIUM_WORKER_TOKEN_FILE":    unsafeToken,
 		},
 		{
 			"COMMITARIUM_WORKER_DATABASE_PATH": "/state/worker.db",
-			"COMMITARIUM_WORKER_TOKEN":         "test-token",
+			"COMMITARIUM_WORKER_TOKEN_FILE":    validToken,
 			"COMMITARIUM_WORKER_STEP_DELAY":    "not-a-duration",
 		},
 		{
 			"COMMITARIUM_WORKER_DATABASE_PATH": "/state/worker.db",
-			"COMMITARIUM_WORKER_TOKEN":         "test-token",
+			"COMMITARIUM_WORKER_TOKEN_FILE":    validToken,
 			"COMMITARIUM_WORKER_STEP_DELAY":    "-1s",
 		},
 	}
@@ -343,7 +347,7 @@ func validCodexConfig(workspace string) map[string]string {
 	}
 	return map[string]string{
 		"COMMITARIUM_WORKER_DATABASE_PATH":      "/state/worker.db",
-		"COMMITARIUM_WORKER_TOKEN":              "test-token",
+		"COMMITARIUM_WORKER_TOKEN_FILE":         writeTokenBesideWorkspace(workspace, "worker-api-token", "test-token"),
 		"COMMITARIUM_WORKER_ADAPTER":            "codex",
 		"COMMITARIUM_CODEX_PROVIDER_STATE_PATH": filepath.Dir(workspace),
 		"COMMITARIUM_CODEX_WORKSPACE_ROOT":      filepath.Dir(workspace),
@@ -365,7 +369,7 @@ func validClaudeConfig(workspace string) map[string]string {
 	}
 	return map[string]string{
 		"COMMITARIUM_WORKER_DATABASE_PATH":       "/state/worker.db",
-		"COMMITARIUM_WORKER_TOKEN":               "test-token",
+		"COMMITARIUM_WORKER_TOKEN_FILE":          writeTokenBesideWorkspace(workspace, "worker-api-token", "test-token"),
 		"COMMITARIUM_WORKER_ADAPTER":             "claude_code",
 		"COMMITARIUM_CLAUDE_PROVIDER_STATE_PATH": filepath.Dir(workspace),
 		"COMMITARIUM_CLAUDE_WORKSPACE_ROOT":      filepath.Dir(workspace),
@@ -379,4 +383,21 @@ func validClaudeConfig(workspace string) map[string]string {
 		"COMMITARIUM_CLAUDE_GIT_AUTHOR_NAME":     "Commitarium Claude Reviewer",
 		"COMMITARIUM_CLAUDE_GIT_AUTHOR_EMAIL":    "claude-reviewer@commitarium.local",
 	}
+}
+
+func writeWorkerToken(t *testing.T, value string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "worker-token")
+	if err := os.WriteFile(path, []byte(value), 0o600); err != nil {
+		t.Fatalf("write worker token: %v", err)
+	}
+	return path
+}
+
+func writeTokenBesideWorkspace(workspace string, name string, value string) string {
+	path := filepath.Join(workspace, name)
+	if err := os.WriteFile(path, []byte(value), 0o600); err != nil {
+		panic(err)
+	}
+	return path
 }

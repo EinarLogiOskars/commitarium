@@ -89,6 +89,10 @@ type PullRequestManager interface {
 	) (PullRequest, error)
 }
 
+type RepositoryAccessManager interface {
+	EnsureRepositoryCollaborators(ctx context.Context, owner, repository string) error
+}
+
 // RecordMergeReady durably pins the exact commit approved by both agents.
 // It runs before the feature lifecycle advances, so a ready-to-merge feature
 // can never exist without an immutable merge target.
@@ -208,13 +212,30 @@ func (service *Service) MergeApproved(
 }
 
 type Service struct {
-	store        Store
-	features     FeatureFinder
-	projects     ProjectFinder
-	branches     BranchManager
-	checkouts    CheckoutManager
-	pullRequests PullRequestManager
-	now          func() time.Time
+	store            Store
+	features         FeatureFinder
+	projects         ProjectFinder
+	branches         BranchManager
+	checkouts        CheckoutManager
+	pullRequests     PullRequestManager
+	repositoryAccess RepositoryAccessManager
+	now              func() time.Time
+}
+
+func NewServiceWithPreparationAndAccess(
+	store Store,
+	features FeatureFinder,
+	projects ProjectFinder,
+	branches BranchManager,
+	checkouts CheckoutManager,
+	pullRequests PullRequestManager,
+	repositoryAccess RepositoryAccessManager,
+) *Service {
+	service := NewServiceWithPreparation(
+		store, features, projects, branches, checkouts, pullRequests,
+	)
+	service.repositoryAccess = repositoryAccess
+	return service
 }
 
 func NewServiceWithPreparation(
@@ -340,6 +361,14 @@ func (service *Service) PrepareForClarification(
 	}
 	if service.checkouts == nil {
 		return Workspace{}, false, ErrCheckoutUnavailable
+	}
+	if service.repositoryAccess != nil {
+		repository := storedProject.ForgejoRepository
+		if err := service.repositoryAccess.EnsureRepositoryCollaborators(
+			ctx, repository.Owner, repository.Name,
+		); err != nil {
+			return Workspace{}, false, fmt.Errorf("ensure agent repository access: %w", err)
+		}
 	}
 
 	reserved, err := service.store.GetByFeatureID(ctx, featureID)

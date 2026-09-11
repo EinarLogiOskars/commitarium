@@ -20,6 +20,7 @@ import (
 	"github.com/EinarLogiOskars/commitarium/internal/claudeadapter"
 	"github.com/EinarLogiOskars/commitarium/internal/codexadapter"
 	"github.com/EinarLogiOskars/commitarium/internal/processsupervisor"
+	"github.com/EinarLogiOskars/commitarium/internal/secretfile"
 	"github.com/EinarLogiOskars/commitarium/internal/worker"
 	"github.com/EinarLogiOskars/commitarium/internal/workerhttp"
 	"github.com/EinarLogiOskars/commitarium/internal/workerjournal"
@@ -108,9 +109,13 @@ func loadConfig(getenv func(string) string) (config, error) {
 	if databasePath == "" {
 		return config{}, errors.New("COMMITARIUM_WORKER_DATABASE_PATH is required")
 	}
-	bearerToken := getenv("COMMITARIUM_WORKER_TOKEN")
-	if bearerToken == "" || strings.IndexFunc(bearerToken, unicode.IsSpace) >= 0 {
-		return config{}, errors.New("COMMITARIUM_WORKER_TOKEN is required and cannot contain whitespace")
+	bearerToken, err := secretfile.RequiredPath(
+		getenv,
+		"COMMITARIUM_WORKER_TOKEN_FILE",
+		"worker API token",
+	)
+	if err != nil {
+		return config{}, err
 	}
 	listenAddress := strings.TrimSpace(getenv("COMMITARIUM_WORKER_LISTEN_ADDRESS"))
 	if listenAddress == "" {

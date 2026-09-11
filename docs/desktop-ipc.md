@@ -96,5 +96,7 @@ The URL to open for a browser login is surfaced either in `detail` on a
 ## Out of scope for this surface
 
 - Forgejo agent identities and their scoped tokens, and internal
-  coordinator↔worker tokens: **auto-provisioned by the backend**, never exposed
-  to the frontend or the user.
+  coordinator↔worker tokens are **auto-provisioned inside `stack_up` and
+  `stack_update`**, never exposed to the frontend or the user. Forgejo starts
+  first; the backend then adopts or creates the fixed internal identities and
+  private token files before starting the remaining services.

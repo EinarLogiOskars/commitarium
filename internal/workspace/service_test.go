@@ -149,6 +149,22 @@ func (finder fixedProjectFinder) GetByID(context.Context, string) (project.Proje
 	return finder.stored, finder.err
 }
 
+type recordingRepositoryAccess struct {
+	owner      string
+	repository string
+	err        error
+}
+
+func (access *recordingRepositoryAccess) EnsureRepositoryCollaborators(
+	_ context.Context,
+	owner string,
+	repository string,
+) error {
+	access.owner = owner
+	access.repository = repository
+	return access.err
+}
+
 type recordingBranches struct {
 	base        Branch
 	getCalls    int
@@ -344,6 +360,53 @@ func TestServicePreparesSelectedProjectCheckoutForClarification(t *testing.T) {
 	}
 	if len(store.checkoutMarkedAt) != 1 || len(store.markedAt) != 0 {
 		t.Fatalf("clarification persisted the wrong readiness state: %+v", store.stored)
+	}
+}
+
+func TestServiceEnsuresAgentRepositoryAccessBeforeClarificationCheckout(t *testing.T) {
+	now := time.Date(2026, time.September, 11, 14, 0, 0, 0, time.UTC)
+	newService := func(
+		store *memoryStore,
+		checkout *recordingCheckout,
+		access *recordingRepositoryAccess,
+	) *Service {
+		return NewServiceWithPreparationAndAccess(
+			store,
+			fixedFeatureFinder{stored: feature.Feature{
+				ID: "fea_test", ProjectID: "prj_test", State: feature.StateDraft,
+			}},
+			fixedProjectFinder{stored: project.Project{
+				ID: "prj_test", ForgejoRepository: testRepository(now),
+			}},
+			&recordingBranches{base: Branch{Name: "main", CommitID: testCommitID}},
+			checkout,
+			&recordingPullRequests{},
+			access,
+		)
+	}
+
+	store := &memoryStore{}
+	checkout := &recordingCheckout{}
+	access := &recordingRepositoryAccess{}
+	if _, _, err := newService(store, checkout, access).PrepareForClarification(
+		t.Context(), "prj_test", "fea_test",
+	); err != nil {
+		t.Fatalf("prepare with collaborator access: %v", err)
+	}
+	if access.owner != "owner" || access.repository != "repository" {
+		t.Fatalf("access prepared for wrong repository: %+v", access)
+	}
+
+	store = &memoryStore{}
+	checkout = &recordingCheckout{}
+	access = &recordingRepositoryAccess{err: project.ErrForgejoUnavailable}
+	if _, _, err := newService(store, checkout, access).PrepareForClarification(
+		t.Context(), "prj_test", "fea_test",
+	); !errors.Is(err, project.ErrForgejoUnavailable) {
+		t.Fatalf("expected collaborator failure, got %v", err)
+	}
+	if len(store.reserve) != 0 || len(checkout.specs) != 0 {
+		t.Fatal("workspace changed before collaborator access was established")
 	}
 }
 

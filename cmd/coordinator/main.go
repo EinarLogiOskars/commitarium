@@ -19,6 +19,7 @@ import (
 	"github.com/EinarLogiOskars/commitarium/internal/httpapi"
 	"github.com/EinarLogiOskars/commitarium/internal/orchestration"
 	"github.com/EinarLogiOskars/commitarium/internal/project"
+	"github.com/EinarLogiOskars/commitarium/internal/secretfile"
 	"github.com/EinarLogiOskars/commitarium/internal/workerhttp"
 	"github.com/EinarLogiOskars/commitarium/internal/workeringest"
 	"github.com/EinarLogiOskars/commitarium/internal/workflow"
@@ -149,7 +150,9 @@ func loadConfig(getenv func(string) string) (config, error) {
 		if loaded.codexWorkerURL, err = required("COMMITARIUM_CODEX_WORKER_URL"); err != nil {
 			return config{}, err
 		}
-		if loaded.codexWorkerToken, err = required("COMMITARIUM_CODEX_WORKER_TOKEN"); err != nil {
+		if loaded.codexWorkerToken, err = secretfile.RequiredPath(
+			getenv, "COMMITARIUM_CODEX_WORKER_TOKEN_FILE", "Codex lead worker API token",
+		); err != nil {
 			return config{}, err
 		}
 		if loaded.codexAgentProfileID, err = required("COMMITARIUM_CODEX_PROFILE_ID"); err != nil {
@@ -158,7 +161,9 @@ func loadConfig(getenv func(string) string) (config, error) {
 		if loaded.codexReviewerWorkerURL, err = required("COMMITARIUM_CODEX_REVIEWER_WORKER_URL"); err != nil {
 			return config{}, err
 		}
-		if loaded.codexReviewerWorkerToken, err = required("COMMITARIUM_CODEX_REVIEWER_WORKER_TOKEN"); err != nil {
+		if loaded.codexReviewerWorkerToken, err = secretfile.RequiredPath(
+			getenv, "COMMITARIUM_CODEX_REVIEWER_WORKER_TOKEN_FILE", "Codex reviewer worker API token",
+		); err != nil {
 			return config{}, err
 		}
 		if loaded.codexReviewerAgentProfileID, err = required("COMMITARIUM_CODEX_REVIEWER_PROFILE_ID"); err != nil {
@@ -167,7 +172,9 @@ func loadConfig(getenv func(string) string) (config, error) {
 		if loaded.claudeWorkerURL, err = required("COMMITARIUM_CLAUDE_WORKER_URL"); err != nil {
 			return config{}, err
 		}
-		if loaded.claudeWorkerToken, err = required("COMMITARIUM_CLAUDE_WORKER_TOKEN"); err != nil {
+		if loaded.claudeWorkerToken, err = secretfile.RequiredPath(
+			getenv, "COMMITARIUM_CLAUDE_WORKER_TOKEN_FILE", "Claude lead worker API token",
+		); err != nil {
 			return config{}, err
 		}
 		if loaded.claudeAgentProfileID, err = required("COMMITARIUM_CLAUDE_PROFILE_ID"); err != nil {
@@ -176,7 +183,9 @@ func loadConfig(getenv func(string) string) (config, error) {
 		if loaded.claudeReviewerWorkerURL, err = required("COMMITARIUM_CLAUDE_REVIEWER_WORKER_URL"); err != nil {
 			return config{}, err
 		}
-		if loaded.claudeReviewerWorkerToken, err = required("COMMITARIUM_CLAUDE_REVIEWER_WORKER_TOKEN"); err != nil {
+		if loaded.claudeReviewerWorkerToken, err = secretfile.RequiredPath(
+			getenv, "COMMITARIUM_CLAUDE_REVIEWER_WORKER_TOKEN_FILE", "Claude reviewer worker API token",
+		); err != nil {
 			return config{}, err
 		}
 		if loaded.claudeReviewerAgentProfileID, err = required("COMMITARIUM_CLAUDE_REVIEWER_PROFILE_ID"); err != nil {
@@ -222,7 +231,13 @@ func run(ctx context.Context, coordinatorConfig config) error {
 	projectStore := coordinatordatabase.NewProjectStore(db)
 	forgejoClient, err := forgejo.NewClient(forgejo.ClientConfig{
 		BaseURL: coordinatorConfig.forgejoURL, Owner: coordinatorConfig.forgejoOwner,
-		TokenFile:      coordinatorConfig.forgejoTokenFile,
+		TokenFile: coordinatorConfig.forgejoTokenFile,
+		Collaborators: []string{
+			coordinatorConfig.codexForgejoAuthor,
+			coordinatorConfig.codexReviewerForgejoAuthor,
+			coordinatorConfig.claudeForgejoAuthor,
+			coordinatorConfig.claudeReviewerForgejoAuthor,
+		},
 		RequestTimeout: coordinatorConfig.forgejoTimeout,
 	})
 	if err != nil {
@@ -253,9 +268,9 @@ func run(ctx context.Context, coordinatorConfig config) error {
 	if err != nil {
 		return fmt.Errorf("create managed-checkout service: %w", err)
 	}
-	workspaceService := workspace.NewServiceWithPreparation(
+	workspaceService := workspace.NewServiceWithPreparationAndAccess(
 		workspaceStore, featureService, projectService, forgejoClient,
-		checkoutManager, forgejoClient,
+		checkoutManager, forgejoClient, forgejoClient,
 	)
 	workflowStore := coordinatordatabase.NewWorkflowStore(db)
 	workflowService := workflow.NewService(workflowStore)
