@@ -73,7 +73,7 @@ export function Launcher({ onStackChanged }: { onStackChanged?: () => void }) {
       {probing && <p className="muted">Checking Docker…</p>}
 
       {!probing && probe && (
-        <>
+        <div className="launcher-grid">
           <section className="panel">
             <h2>Host</h2>
             <ul className="checks">
@@ -94,7 +94,7 @@ export function Launcher({ onStackChanged }: { onStackChanged?: () => void }) {
           </section>
 
           {ready && (
-            <section className="panel">
+            <section className="panel panel--stack">
               <h2>Commitarium stack</h2>
               <div className="row">
                 <button className="primary" onClick={() => void act("up", stackUp)} disabled={busy !== null}>
@@ -130,7 +130,7 @@ export function Launcher({ onStackChanged }: { onStackChanged?: () => void }) {
               )}
             </section>
           )}
-        </>
+        </div>
       )}
     </>
   );
