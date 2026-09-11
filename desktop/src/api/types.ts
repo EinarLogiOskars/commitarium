@@ -2,6 +2,14 @@
 
 export type RecoveryPolicy = "approval_required" | "automatic";
 
+export type AgentProvider = "codex" | "claude";
+export interface AgentProviders {
+  lead: AgentProvider;
+  reviewer: AgentProvider;
+}
+
+export type MergePolicy = "require_user_approval" | "auto_after_gates";
+
 export interface DialogueLimits {
   planning_rounds: number;
   implementation_review_rounds: number;
@@ -18,8 +26,10 @@ export interface Project {
   id: string;
   name: string;
   recovery_policy: RecoveryPolicy;
-  // Absent on coordinators built before dialogue limits existed; guard on read.
+  // Absent on coordinators built before these fields existed; guard on read.
   dialogue_limits?: DialogueLimits;
+  agent_providers?: AgentProviders;
+  merge_policy?: MergePolicy;
   forgejo_repository?: ForgejoRepository;
   created_at: string;
 }

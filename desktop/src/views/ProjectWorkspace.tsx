@@ -4,10 +4,11 @@ import { ApiError } from "../api/client";
 import { FeatureView } from "./FeatureView";
 import { WorkOrderRail } from "./WorkOrderRail";
 import { NewWorkOrder } from "./NewWorkOrder";
+import { ProjectSettings } from "./ProjectSettings";
 import { WORK } from "../vocab";
 import type { Project } from "../api/types";
 
-type Mode = "overview" | "new" | "order";
+type Mode = "overview" | "new" | "order" | "settings";
 
 /** Project workspace shell: work-order rail + master/detail main pane. */
 export function ProjectWorkspace({
@@ -79,6 +80,15 @@ export function ProjectWorkspace({
         >
           Project overview
         </button>
+        <button
+          className={`rail__item ${mode === "settings" ? "rail__item--active" : ""}`}
+          onClick={() => {
+            setMode("settings");
+            setOrderId(null);
+          }}
+        >
+          Settings
+        </button>
       </nav>
 
       <main className="main">
@@ -99,6 +109,10 @@ export function ProjectWorkspace({
 
           {mode === "order" && orderId && (
             <FeatureView projectId={id} featureId={orderId} hasRepo={hasRepo} />
+          )}
+
+          {mode === "settings" && project && (
+            <ProjectSettings project={project} onUpdated={setProject} />
           )}
         </div>
       </main>

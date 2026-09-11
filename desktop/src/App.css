@@ -139,6 +139,16 @@ body {
 .rail__item:hover {
   background: color-mix(in srgb, var(--text) 6%, transparent);
 }
+.rail__item-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rail__item .dot {
+  flex: none;
+}
 .rail__item--active {
   background: color-mix(in srgb, var(--accent) 15%, transparent);
   border-color: color-mix(in srgb, var(--accent) 35%, transparent);
@@ -482,6 +492,29 @@ select {
 }
 .detail dd {
   margin: 0;
+}
+
+.settings-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin: 12px 0 16px;
+}
+.settings-row label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.settings-row input,
+.settings-row select {
+  font-size: 14px;
+  color: var(--text);
+  min-width: 200px;
+}
+.settings-row input[type="number"] {
+  min-width: 100px;
 }
 
 .panel {
