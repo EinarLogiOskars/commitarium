@@ -2,6 +2,8 @@ import { useCallback, useEffect, useState } from "react";
 import { getFeature, listFeatureRuns } from "../api/features";
 import { ApiError } from "../api/client";
 import { GoalClarification } from "./GoalClarification";
+import { PlanningView } from "./PlanningView";
+import { ImplementationView } from "./ImplementationView";
 import { WORK } from "../vocab";
 import type { Feature, Run } from "../api/types";
 
@@ -43,6 +45,8 @@ export function FeatureView({
     void load();
   }, [load]);
 
+  const activeRunId = runs && runs.length > 0 ? runs[0].id : null;
+
   return (
     <>
       {onBack && <button className="back" onClick={onBack}>← {WORK.Plural}</button>}
@@ -75,50 +79,50 @@ export function FeatureView({
             </dl>
           </section>
 
-          {feature.state === "draft" ? (
-            <GoalClarification
-              projectId={projectId}
-              feature={feature}
-              hasRepo={hasRepo}
-              onAccepted={load}
-            />
-          ) : (
-            <section className="panel">
-              <h2>Runs</h2>
-              {runs === null ? (
-                <p className="muted">Loading…</p>
-              ) : runs.length === 0 ? (
-                <p className="muted">No runs yet — this {WORK.short} has not started.</p>
-              ) : (
-                runs.map((run) => (
-                  <div key={run.id} className="run">
-                    <div className="run__head">
-                      <span className="mono">{run.id}</span>
-                      <span className="muted">{run.status}</span>
-                      <span className="muted">{new Date(run.started_at).toLocaleString()}</span>
-                    </div>
-                    {run.reason && <p className="muted run__reason">{run.reason}</p>}
-                    <ul className="list">
-                      {run.sessions.map((s) => (
-                        <li key={s.id} className="session">
-                          <span className="session__role">{s.role || s.agent_id}</span>
-                          <span className="muted">{s.status}</span>
-                          {s.summary && <span className="session__summary">{s.summary}</span>}
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                ))
-              )}
-              <p className="muted note">
-                Live phase views (planning, implementation, review) arrive in a later slice.
-              </p>
-            </section>
-          )}
+          {phaseView(feature, projectId, hasRepo, activeRunId, load)}
         </>
       )}
     </>
   );
+}
+
+function phaseView(
+  feature: Feature,
+  projectId: string,
+  hasRepo: boolean | undefined,
+  activeRunId: string | null,
+  reload: () => void,
+) {
+  if (feature.state === "draft") {
+    return (
+      <GoalClarification
+        projectId={projectId}
+        feature={feature}
+        hasRepo={hasRepo}
+        onAccepted={reload}
+      />
+    );
+  }
+  if (feature.state === "cancelled") {
+    return (
+      <section className="panel">
+        <h2>Cancelled</h2>
+        <p className="muted">This {WORK.short} was cancelled.</p>
+      </section>
+    );
+  }
+  if (!activeRunId) {
+    return (
+      <section className="panel">
+        <p className="muted">No run yet — this {WORK.short} has not started.</p>
+      </section>
+    );
+  }
+  if (feature.state === "planning") {
+    return <PlanningView runId={activeRunId} onAdvanced={reload} />;
+  }
+  // implementing / reviewing / ready_to_merge / completed
+  return <ImplementationView runId={activeRunId} state={feature.state} />;
 }
 
 function describe(e: unknown): string {
