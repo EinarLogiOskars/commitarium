@@ -46,7 +46,6 @@ type config struct {
 	codexReviewerWorkerURL      string
 	codexReviewerWorkerToken    string
 	codexReviewerAgentProfileID string
-	codexWorkspaceID            string
 	codexForgejoAuthor          string
 	codexReviewerForgejoAuthor  string
 	workerRequestTimeout        time.Duration
@@ -153,9 +152,6 @@ func loadConfig(getenv func(string) string) (config, error) {
 			return config{}, err
 		}
 		if loaded.codexReviewerAgentProfileID, err = required("COMMITARIUM_CODEX_REVIEWER_PROFILE_ID"); err != nil {
-			return config{}, err
-		}
-		if loaded.codexWorkspaceID, err = required("COMMITARIUM_CODEX_WORKSPACE_ID"); err != nil {
 			return config{}, err
 		}
 		if value := strings.TrimSpace(getenv("COMMITARIUM_CODEX_FORGEJO_LOGIN")); value != "" {
@@ -292,7 +288,6 @@ func run(ctx context.Context, coordinatorConfig config) error {
 			Pump:     pumpRouter,
 			Lifetime: ctx, AgentProfileID: coordinatorConfig.codexAgentProfileID,
 			ReviewerAgentProfileID: coordinatorConfig.codexReviewerAgentProfileID,
-			WorkspaceID:            coordinatorConfig.codexWorkspaceID,
 			ForgejoAuthor:          coordinatorConfig.codexForgejoAuthor,
 			ReviewerForgejoAuthor:  coordinatorConfig.codexReviewerForgejoAuthor,
 			ReportError:            func(err error) { log.Printf("real Codex lead: %v", err) },

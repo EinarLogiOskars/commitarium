@@ -112,6 +112,64 @@ func TestManagerRequiresCleanPlanningBaselineWhenRequested(t *testing.T) {
 	}
 }
 
+func TestManagerPromotesCleanClarificationCheckoutIdempotently(t *testing.T) {
+	manager, root := newTestManager(t, nil)
+	spec := initializeCheckout(t, root)
+	target := filepath.Join(root, spec.WorkspaceID)
+	testGit(t, target, "branch", "-m", "main")
+	spec.Branch = "main"
+	if err := manager.Ensure(t.Context(), spec); err != nil {
+		t.Fatalf("ensure clarification checkout: %v", err)
+	}
+	promotion := workspace.CheckoutPromotionSpec{
+		WorkspaceID: spec.WorkspaceID, RepositoryOwner: spec.RepositoryOwner,
+		RepositoryName: spec.RepositoryName, BaseBranch: "main",
+		FeatureBranch: "commitarium/fea_test", BaseCommitID: spec.BaseCommitID,
+	}
+	if err := manager.Promote(t.Context(), promotion); err != nil {
+		t.Fatalf("promote clarification checkout: %v", err)
+	}
+	if branch := testGit(t, target, "branch", "--show-current"); branch != promotion.FeatureBranch {
+		t.Fatalf("promoted branch = %q, want %q", branch, promotion.FeatureBranch)
+	}
+	if head := testGit(t, target, "rev-parse", "HEAD"); head != promotion.BaseCommitID {
+		t.Fatalf("promoted head = %q, want %q", head, promotion.BaseCommitID)
+	}
+	if err := manager.Promote(t.Context(), promotion); err != nil {
+		t.Fatalf("retry promoted checkout: %v", err)
+	}
+}
+
+func TestManagerRefusesToPromoteDirtyClarificationCheckout(t *testing.T) {
+	manager, root := newTestManager(t, nil)
+	spec := initializeCheckout(t, root)
+	target := filepath.Join(root, spec.WorkspaceID)
+	testGit(t, target, "branch", "-m", "main")
+	spec.Branch = "main"
+	if err := manager.Ensure(t.Context(), spec); err != nil {
+		t.Fatalf("ensure clarification checkout: %v", err)
+	}
+	partialPath := filepath.Join(target, "partial.txt")
+	if err := os.WriteFile(partialPath, []byte("preserve me\n"), 0o644); err != nil {
+		t.Fatalf("write partial clarification work: %v", err)
+	}
+	err := manager.Promote(t.Context(), workspace.CheckoutPromotionSpec{
+		WorkspaceID: spec.WorkspaceID, RepositoryOwner: spec.RepositoryOwner,
+		RepositoryName: spec.RepositoryName, BaseBranch: "main",
+		FeatureBranch: "commitarium/fea_test", BaseCommitID: spec.BaseCommitID,
+	})
+	if !errors.Is(err, workspace.ErrCheckoutConflict) {
+		t.Fatalf("expected dirty checkout conflict, got %v", err)
+	}
+	if branch := testGit(t, target, "branch", "--show-current"); branch != "main" {
+		t.Fatalf("dirty checkout moved to branch %q", branch)
+	}
+	contents, readErr := os.ReadFile(partialPath)
+	if readErr != nil || string(contents) != "preserve me\n" {
+		t.Fatalf("promotion changed partial work: %q err=%v", contents, readErr)
+	}
+}
+
 func TestManagerRejectsAmbiguousCheckoutWithoutChangingIt(t *testing.T) {
 	tests := []struct {
 		name   string

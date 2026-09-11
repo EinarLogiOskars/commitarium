@@ -45,6 +45,7 @@ type BranchManager interface {
 
 type CheckoutManager interface {
 	Ensure(ctx context.Context, spec CheckoutSpec) error
+	Promote(ctx context.Context, spec CheckoutPromotionSpec) error
 }
 
 type PullRequestManager interface {
@@ -145,6 +146,70 @@ func (service *Service) Get(
 	return stored, nil
 }
 
+// PrepareForClarification reserves the feature's exact Forgejo base commit and
+// makes that project available before the first provider conversation starts.
+// It does not create the feature branch or pull request; those remain behind
+// the existing accepted-goal preparation boundary for this slice.
+func (service *Service) PrepareForClarification(
+	ctx context.Context,
+	projectID string,
+	featureID string,
+) (Workspace, bool, error) {
+	storedFeature, err := service.features.GetByID(ctx, projectID, featureID)
+	if err != nil {
+		return Workspace{}, false, err
+	}
+	if storedFeature.State != feature.StateDraft {
+		return Workspace{}, false, ErrFeatureNotDraft
+	}
+	storedProject, err := service.projects.GetByID(ctx, projectID)
+	if err != nil {
+		return Workspace{}, false, err
+	}
+	if storedProject.ForgejoRepository == nil {
+		return Workspace{}, false, ErrProjectRepositoryNotBound
+	}
+	if service.checkouts == nil {
+		return Workspace{}, false, ErrCheckoutUnavailable
+	}
+
+	reserved, err := service.store.GetByFeatureID(ctx, featureID)
+	created := false
+	if errors.Is(err, ErrNotFound) {
+		reserved, created, err = service.reserve(ctx, storedProject, storedFeature)
+	}
+	if err != nil {
+		return Workspace{}, false, err
+	}
+	if reserved.ProjectID != projectID || reserved.FeatureID != featureID {
+		return Workspace{}, false, ErrConflict
+	}
+	checkoutBranch := reserved.BaseBranch
+	if reserved.Status == StatusBranchReady {
+		checkoutBranch = reserved.Branch
+	}
+	if reserved.CheckoutReady() && reserved.CheckoutRelativePath != reserved.ID {
+		return Workspace{}, false, ErrConflict
+	}
+	if err := service.checkouts.Ensure(ctx, CheckoutSpec{
+		WorkspaceID: reserved.ID, RepositoryOwner: reserved.RepositoryOwner,
+		RepositoryName: reserved.RepositoryName, Branch: checkoutBranch,
+		BaseCommitID: reserved.BaseCommitID, AlreadyReady: reserved.CheckoutReady(),
+	}); err != nil {
+		return Workspace{}, false, fmt.Errorf("ensure clarification checkout: %w", err)
+	}
+	if reserved.CheckoutReady() {
+		return reserved, false, nil
+	}
+	ready, err := service.store.MarkCheckoutReady(
+		ctx, featureID, reserved.ID, service.now().UTC(),
+	)
+	if err != nil {
+		return Workspace{}, false, fmt.Errorf("mark clarification checkout ready: %w", err)
+	}
+	return ready, created, nil
+}
+
 func (service *Service) Prepare(
 	ctx context.Context,
 	projectID string,
@@ -194,6 +259,15 @@ func (service *Service) Prepare(
 		}
 		if branch.Name != reserved.Branch || branch.CommitID != reserved.BaseCommitID {
 			return Workspace{}, false, ErrBranchConflict
+		}
+		if reserved.CheckoutReady() && service.checkouts != nil {
+			if err := service.checkouts.Promote(ctx, CheckoutPromotionSpec{
+				WorkspaceID: reserved.ID, RepositoryOwner: reserved.RepositoryOwner,
+				RepositoryName: reserved.RepositoryName, BaseBranch: reserved.BaseBranch,
+				FeatureBranch: reserved.Branch, BaseCommitID: reserved.BaseCommitID,
+			}); err != nil {
+				return Workspace{}, false, fmt.Errorf("promote clarification checkout: %w", err)
+			}
 		}
 		reserved, err = service.store.MarkBranchReady(ctx, featureID, service.now().UTC())
 		if err != nil {

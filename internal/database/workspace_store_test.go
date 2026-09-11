@@ -99,6 +99,40 @@ func TestWorkspaceStoreReservationAndBranchReadyAreIdempotent(t *testing.T) {
 	}
 }
 
+func TestWorkspaceStorePersistsCheckoutBeforeFeatureBranch(t *testing.T) {
+	store := newTestWorkspaceStore(t)
+	now := time.Date(2026, time.September, 11, 14, 0, 0, 0, time.UTC)
+	reservation := workspace.Workspace{
+		ID: "wsp_fea_test", ProjectID: "prj_test", FeatureID: "fea_test",
+		RepositoryOwner: "owner", RepositoryName: "repository",
+		BaseBranch: "main", Branch: "commitarium/fea_test",
+		BaseCommitID: workspaceTestCommitID, Status: workspace.StatusPreparing,
+		CreatedAt: now, UpdatedAt: now,
+	}
+	if _, _, err := store.Reserve(t.Context(), reservation); err != nil {
+		t.Fatalf("reserve workspace: %v", err)
+	}
+	checkoutAt := now.Add(time.Minute)
+	checkedOut, err := store.MarkCheckoutReady(
+		t.Context(), reservation.FeatureID, reservation.ID, checkoutAt,
+	)
+	if err != nil || checkedOut.Status != workspace.StatusPreparing || !checkedOut.CheckoutReady() {
+		t.Fatalf("mark early checkout ready: workspace=%+v err=%v", checkedOut, err)
+	}
+	loaded, err := store.GetByFeatureID(t.Context(), reservation.FeatureID)
+	if err != nil || !reflect.DeepEqual(loaded, checkedOut) {
+		t.Fatalf("reload early checkout: workspace=%+v err=%v", loaded, err)
+	}
+	branchAt := checkoutAt.Add(time.Minute)
+	ready, err := store.MarkBranchReady(t.Context(), reservation.FeatureID, branchAt)
+	if err != nil || ready.Status != workspace.StatusBranchReady ||
+		ready.BranchCreatedAt == nil || !ready.BranchCreatedAt.Equal(branchAt) ||
+		ready.CheckoutRelativePath != reservation.ID ||
+		ready.CheckoutCreatedAt == nil || !ready.CheckoutCreatedAt.Equal(checkoutAt) {
+		t.Fatalf("promote stored checkout to branch-ready: workspace=%+v err=%v", ready, err)
+	}
+}
+
 func TestWorkspaceStoreRejectsChangedReservation(t *testing.T) {
 	store := newTestWorkspaceStore(t)
 	now := time.Date(2026, time.September, 9, 20, 0, 0, 0, time.UTC)

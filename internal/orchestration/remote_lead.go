@@ -99,6 +99,7 @@ type RemoteLeadPlanningWorkflow interface {
 
 type RemoteLeadWorkspaceService interface {
 	Get(context.Context, string, string) (workspace.Workspace, error)
+	PrepareForClarification(context.Context, string, string) (workspace.Workspace, bool, error)
 	Prepare(context.Context, string, string) (workspace.Workspace, bool, error)
 	PublishPlan(context.Context, string, string, string, string) (workspace.Workspace, bool, error)
 	VerifyPublishedPlan(context.Context, string, string, string, string) (workspace.Workspace, error)
@@ -129,7 +130,6 @@ type RemoteLeadConfig struct {
 	Lifetime               context.Context
 	AgentProfileID         string
 	ReviewerAgentProfileID string
-	WorkspaceID            string
 	ForgejoAuthor          string
 	ReviewerForgejoAuthor  string
 	ReportError            func(error)
@@ -150,7 +150,6 @@ type RemoteLeadStarter struct {
 	lifetime               context.Context
 	agentProfileID         string
 	reviewerAgentProfileID string
-	workspaceID            string
 	forgejoAuthor          string
 	reviewerForgejoAuthor  string
 	reportError            func(error)
@@ -167,8 +166,8 @@ func NewRemoteLeadStarter(config RemoteLeadConfig) (*RemoteLeadStarter, error) {
 	if config.Lifetime == nil {
 		return nil, fmt.Errorf("%w: lifetime context is required", ErrInvalidRunRequest)
 	}
-	if strings.TrimSpace(config.AgentProfileID) == "" || strings.TrimSpace(config.WorkspaceID) == "" {
-		return nil, fmt.Errorf("%w: agent profile and workspace are required", ErrInvalidRunRequest)
+	if strings.TrimSpace(config.AgentProfileID) == "" {
+		return nil, fmt.Errorf("%w: agent profile is required", ErrInvalidRunRequest)
 	}
 	reportError := config.ReportError
 	if reportError == nil {
@@ -192,10 +191,10 @@ func NewRemoteLeadStarter(config RemoteLeadConfig) (*RemoteLeadStarter, error) {
 		worker: config.Worker, pump: config.Pump,
 		lifetime: config.Lifetime, agentProfileID: config.AgentProfileID,
 		reviewerAgentProfileID: reviewerAgentProfileID,
-		workspaceID:            config.WorkspaceID, forgejoAuthor: forgejoAuthor,
-		reviewerForgejoAuthor: reviewerForgejoAuthor,
-		reportError:           reportError,
-		active:                make(map[string]struct{}),
+		forgejoAuthor:          forgejoAuthor,
+		reviewerForgejoAuthor:  reviewerForgejoAuthor,
+		reportError:            reportError,
+		active:                 make(map[string]struct{}),
 	}, nil
 }
 
@@ -207,7 +206,21 @@ func (starter *RemoteLeadStarter) Start(
 	goal string,
 	dialogueLimits project.DialogueLimits,
 ) (execution.Run, bool, error) {
-	request, err := starter.startRequest(runID, projectID, featureID, goal)
+	if strings.TrimSpace(runID) == "" || strings.TrimSpace(projectID) == "" ||
+		strings.TrimSpace(featureID) == "" || strings.TrimSpace(goal) == "" {
+		return execution.Run{}, false, ErrInvalidRunRequest
+	}
+	if starter.workspaces == nil {
+		return execution.Run{}, false, fmt.Errorf("%w: workspace service is required", ErrInvalidRunRequest)
+	}
+	prepared, _, err := starter.workspaces.PrepareForClarification(ctx, projectID, featureID)
+	if err != nil {
+		return execution.Run{}, false, fmt.Errorf("prepare goal-clarification workspace: %w", err)
+	}
+	if !prepared.CheckoutReady() {
+		return execution.Run{}, false, fmt.Errorf("%w: goal-clarification checkout is not ready", ErrInvalidRunRequest)
+	}
+	request, err := starter.startRequest(runID, projectID, featureID, prepared.ID, goal)
 	if err != nil {
 		return execution.Run{}, false, err
 	}
@@ -636,10 +649,12 @@ func (starter *RemoteLeadStarter) startRequest(
 	runID string,
 	projectID string,
 	featureID string,
+	workspaceID string,
 	goal string,
 ) (remoteLeadRequest, error) {
 	if strings.TrimSpace(runID) == "" || strings.TrimSpace(projectID) == "" ||
-		strings.TrimSpace(featureID) == "" || strings.TrimSpace(goal) == "" {
+		strings.TrimSpace(featureID) == "" || strings.TrimSpace(workspaceID) == "" ||
+		strings.TrimSpace(goal) == "" {
 		return remoteLeadRequest{}, ErrInvalidRunRequest
 	}
 	sessionID := remoteLeadSessionID(runID)
@@ -657,7 +672,7 @@ func (starter *RemoteLeadStarter) startRequest(
 			Assignment: workerhttp.Assignment{
 				AgentProfileID: starter.agentProfileID,
 				ProjectID:      projectID, FeatureID: featureID,
-				Role: workerhttp.RoleLead, WorkspaceID: starter.workspaceID,
+				Role: workerhttp.RoleLead, WorkspaceID: workspaceID,
 			},
 			Instructions: remoteLeadInstructions(goal),
 		},
@@ -669,11 +684,24 @@ func (starter *RemoteLeadStarter) startRequest(
 }
 
 func (starter *RemoteLeadStarter) replyRequest(
+	ctx context.Context,
 	run execution.Run,
 	storedFeature feature.Feature,
 	session execution.Session,
 	command worker.Command,
 ) (remoteLeadRequest, error) {
+	if starter.workspaces == nil {
+		return remoteLeadRequest{}, fmt.Errorf("%w: workspace service is required", ErrInvalidRunRequest)
+	}
+	prepared, _, err := starter.workspaces.PrepareForClarification(
+		ctx, storedFeature.ProjectID, storedFeature.ID,
+	)
+	if err != nil {
+		return remoteLeadRequest{}, fmt.Errorf("prepare goal-clarification reply workspace: %w", err)
+	}
+	if !prepared.CheckoutReady() {
+		return remoteLeadRequest{}, fmt.Errorf("%w: goal-clarification checkout is not ready", ErrInvalidRunRequest)
+	}
 	attemptID := replyAttemptID(session.ID, command.ID)
 	request := remoteLeadRequest{
 		runID: run.ID, commandID: command.ID,
@@ -690,7 +718,7 @@ func (starter *RemoteLeadStarter) replyRequest(
 			Assignment: workerhttp.Assignment{
 				AgentProfileID: starter.agentProfileID,
 				ProjectID:      storedFeature.ProjectID, FeatureID: storedFeature.ID,
-				Role: workerhttp.RoleLead, WorkspaceID: starter.workspaceID,
+				Role: workerhttp.RoleLead, WorkspaceID: prepared.ID,
 			},
 			Instructions:      remoteLeadReplyInstructions(command.Message),
 			ProviderSessionID: session.ProviderSessionID,
@@ -1907,7 +1935,7 @@ func (starter *RemoteLeadStarter) SendCommand(
 		if storedFeature.AcceptedGoal != "" || storedFeature.GoalAcceptedAt != nil {
 			return execution.Command{}, ErrCommandNotAllowed
 		}
-		request, err = starter.replyRequest(run, storedFeature, session, command)
+		request, err = starter.replyRequest(ctx, run, storedFeature, session, command)
 		expectedState = feature.StateDraft
 		runReason = "The lead agent is responding to the user's message."
 	case feature.StateImplementing:

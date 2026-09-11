@@ -112,9 +112,6 @@ func (workspace Workspace) Validate() error {
 		if workspace.BranchCreatedAt != nil {
 			return errors.New("preparing workspace cannot have a branch creation time")
 		}
-		if workspace.CheckoutRelativePath != "" || workspace.CheckoutCreatedAt != nil {
-			return errors.New("preparing workspace cannot have a checkout")
-		}
 		if workspace.PullRequestNumber != 0 || workspace.PullRequestURL != "" ||
 			workspace.PullRequestRecordedAt != nil {
 			return errors.New("preparing workspace cannot have a pull request")
@@ -126,19 +123,6 @@ func (workspace Workspace) Validate() error {
 		if workspace.BranchCreatedAt.Before(workspace.CreatedAt) ||
 			workspace.BranchCreatedAt.After(workspace.UpdatedAt) {
 			return errors.New("branch creation time must be within the workspace lifetime")
-		}
-		if (workspace.CheckoutRelativePath == "") != (workspace.CheckoutCreatedAt == nil) {
-			return errors.New("checkout path and creation time must be set together")
-		}
-		if workspace.CheckoutRelativePath != "" {
-			if strings.TrimSpace(workspace.CheckoutRelativePath) != workspace.CheckoutRelativePath {
-				return errors.New("checkout path must be trimmed")
-			}
-			if workspace.CheckoutCreatedAt.IsZero() ||
-				workspace.CheckoutCreatedAt.Before(*workspace.BranchCreatedAt) ||
-				workspace.CheckoutCreatedAt.After(workspace.UpdatedAt) {
-				return errors.New("checkout creation time must follow branch creation")
-			}
 		}
 		pullRequestFieldsSet := 0
 		if workspace.PullRequestNumber != 0 {
@@ -168,6 +152,19 @@ func (workspace Workspace) Validate() error {
 		}
 	default:
 		return errors.New("workspace status is not recognized")
+	}
+	if (workspace.CheckoutRelativePath == "") != (workspace.CheckoutCreatedAt == nil) {
+		return errors.New("checkout path and creation time must be set together")
+	}
+	if workspace.CheckoutRelativePath != "" {
+		if strings.TrimSpace(workspace.CheckoutRelativePath) != workspace.CheckoutRelativePath {
+			return errors.New("checkout path must be trimmed")
+		}
+		if workspace.CheckoutCreatedAt.IsZero() ||
+			workspace.CheckoutCreatedAt.Before(workspace.CreatedAt) ||
+			workspace.CheckoutCreatedAt.After(workspace.UpdatedAt) {
+			return errors.New("checkout creation time must be within the workspace lifetime")
+		}
 	}
 	return nil
 }
@@ -380,6 +377,29 @@ type CheckoutSpec struct {
 	AlreadyReady         bool
 	RequireCleanBaseline bool
 	RequireClean         bool
+}
+
+// CheckoutPromotionSpec identifies one pre-branch checkout and the feature
+// branch it must enter without changing its pinned repository or base commit.
+type CheckoutPromotionSpec struct {
+	WorkspaceID     string
+	RepositoryOwner string
+	RepositoryName  string
+	BaseBranch      string
+	FeatureBranch   string
+	BaseCommitID    string
+}
+
+func (spec CheckoutPromotionSpec) Validate() error {
+	baseline := CheckoutSpec{
+		WorkspaceID: spec.WorkspaceID, RepositoryOwner: spec.RepositoryOwner,
+		RepositoryName: spec.RepositoryName, Branch: spec.BaseBranch,
+		BaseCommitID: spec.BaseCommitID,
+	}
+	if err := baseline.Validate(); err != nil {
+		return err
+	}
+	return (Branch{Name: spec.FeatureBranch, CommitID: spec.BaseCommitID}).Validate()
 }
 
 func (spec CheckoutSpec) Validate() error {
