@@ -44,8 +44,43 @@ different clean local commits, which permits later work orders to form a normal
 local chain and makes exact retries safe.
 
 This command never pushes. Upstream publication remains a separate future
-native command. The first implementation supports projects imported from Git;
-handoff into a project that was originally a plain folder is still pending.
+native command.
+
+Projects imported from a plain folder use a separate command because there is
+no local Git history in which to create a clean commit:
+
+```ts
+invoke("synchronize_feature_to_folder", {
+  projectId,
+  featureId,
+});
+```
+
+It returns:
+
+```ts
+{
+  project_id: string;
+  feature_id: string;
+  folder_path: string;
+  result_tree_id: string;
+  created: boolean;
+}
+```
+
+The command temporarily gives the folder a Git index stored outside the
+project; it never creates `.git` in the user's folder. Before writing, the
+current non-ignored content must exactly match the work order's internal base.
+The reviewed binary-safe patch is checked, a durable prepared receipt is saved,
+and the result must exactly match the approved Forgejo tree. Ignored files such
+as dependency caches and build output are left untouched. A changed or
+partially updated folder stops for user inspection instead of overwriting or
+retrying uncertain work.
+
+Plain-folder receipts are stored in the app data directory as
+`folder-handoff-receipts.json`. An exact retry reports `created: false`, as does
+recovery when the folder reached the approved tree before the completed receipt
+was saved.
 
 During repository development the internal token is discovered at
 `.commitarium/forgejo-token`. Packaged or relocated installations can set

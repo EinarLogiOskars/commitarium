@@ -82,6 +82,24 @@ Preserving the internal agent commit sequence may be offered later as an
 advanced export mode, but it is not the default and is outside the initial
 handoff implementation.
 
+Projects originally imported from a plain folder use the same trusted-host
+boundary but do not have a local Git branch on which to create the clean commit.
+For those projects, local synchronization temporarily indexes the original
+folder without creating `.git`. Its non-ignored content must exactly match the
+completed feature's internal base tree before any write. Commitarium verifies
+and dry-runs the exact base-to-approved patch, records a durable prepared
+receipt, applies it to the folder, and verifies the complete approved tree.
+Ignored dependencies and build outputs remain outside the handoff and are not
+removed.
+
+The prepared receipt distinguishes a safe unchanged retry from a result that
+was fully applied before the completion record was saved. If the current folder
+matches neither the base nor approved tree, synchronization stops for user
+inspection rather than overwriting or attempting to infer ownership of the
+changes. A plain-folder handoff produces no local commit and cannot use the
+separate upstream-push operation unless the user later makes that folder a Git
+repository through an explicit workflow.
+
 ## Consequences
 
 ### Positive

@@ -28,6 +28,7 @@ pub fn run() {
             import::import_project,
             import::get_project_source,
             handoff::synchronize_feature_locally,
+            handoff::plain_folder::synchronize_feature_to_folder,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

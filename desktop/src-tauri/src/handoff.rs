@@ -6,6 +6,8 @@
 //! fast-forwards the imported source repository. It never pushes upstream and
 //! never gives host Git credentials to a container.
 
+pub(crate) mod plain_folder;
+
 use serde::{Deserialize, Serialize};
 use std::fs::File;
 use std::io::Write;
