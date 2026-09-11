@@ -9,6 +9,7 @@ function App() {
   const [reachable, setReachable] = useState(false);
   const [entered, setEntered] = useState(false);
   const [projectId, setProjectId] = useState<string | null>(null);
+  const [projectName, setProjectName] = useState<string | null>(null);
 
   const checkHealth = useCallback(async () => {
     setReachable(await coordinatorReachable());
@@ -56,11 +57,22 @@ function App() {
     );
   }
 
+  const exitProject = () => {
+    setProjectId(null);
+    setProjectName(null);
+  };
+
   return (
-    <main className="app">
-      <header className="app__header">
-        <h1>Commitarium</h1>
-        <span className="app__spacer" />
+    <div className="shell">
+      <header className="topbar">
+        <span className="topbar__brand">Commitarium</span>
+        {projectId && (
+          <span className="topbar__project">
+            <span className="topbar__sep">/</span>
+            {projectName ?? "…"}
+          </span>
+        )}
+        <span className="topbar__spacer" />
         <button
           className={`${pillClass} pill--button`}
           onClick={() => setEntered(false)}
@@ -70,12 +82,18 @@ function App() {
         </button>
       </header>
 
-      {projectId ? (
-        <ProjectWorkspace id={projectId} onBack={() => setProjectId(null)} />
-      ) : (
-        <Projects reachable={reachable} onSelect={setProjectId} />
-      )}
-    </main>
+      <div className="shell__body">
+        {projectId ? (
+          <ProjectWorkspace id={projectId} onExit={exitProject} onLoaded={setProjectName} />
+        ) : (
+          <main className="main">
+            <div className="main__inner">
+              <Projects reachable={reachable} onSelect={setProjectId} />
+            </div>
+          </main>
+        )}
+      </div>
+    </div>
   );
 }
 

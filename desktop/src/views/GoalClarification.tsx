@@ -3,6 +3,7 @@ import { listFeatureRuns } from "../api/features";
 import { getRun, startRun } from "../api/runs";
 import { getSessionEvents, sendSessionMessage, acceptGoal } from "../api/sessions";
 import { ApiError } from "../api/client";
+import { WORK } from "../vocab";
 import type { Feature, SessionEvent, Session } from "../api/types";
 
 const POLL_MS = 1500;
@@ -13,10 +14,12 @@ const POLL_MS = 1500;
 export function GoalClarification({
   projectId,
   feature,
+  hasRepo,
   onAccepted,
 }: {
   projectId: string;
   feature: Feature;
+  hasRepo?: boolean;
   onAccepted: () => void;
 }) {
   const [leadSessionId, setLeadSessionId] = useState<string | null>(null);
@@ -166,6 +169,20 @@ export function GoalClarification({
     );
   }
 
+  // A run now prepares the selected project's checkout up front, so it needs a
+  // bound Forgejo repository. Bare projects must import or bind one first.
+  if (hasRepo === false && !started) {
+    return (
+      <section className="panel">
+        <h2>Goal clarification</h2>
+        <p className="muted">
+          This project has no internal repository yet, so work orders can't start. Import
+          a project or bind a repository first.
+        </p>
+      </section>
+    );
+  }
+
   const waiting = status === "waiting_for_user";
 
   return (
@@ -176,8 +193,8 @@ export function GoalClarification({
       {!started ? (
         <>
           <p className="muted">
-            Start a conversation with the lead to clarify what this feature should do. The
-            lead will ask questions; accept a final goal when you are satisfied.
+            Start a conversation with the lead to clarify what this {WORK.short} should do.
+            The lead will ask questions; accept a final goal when you are satisfied.
           </p>
           <button className="primary" onClick={() => void start()} disabled={busy !== null}>
             {busy === "start" ? "Starting…" : "Start goal clarification"}

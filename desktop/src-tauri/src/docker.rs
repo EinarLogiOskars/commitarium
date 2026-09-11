@@ -18,9 +18,10 @@ const PROJECT_NAME: &str = "commitarium";
 /// missing. A fixed, trusted URL — never sourced from runtime data.
 const DOCKER_INSTALL_URL: &str = "https://docs.docker.com/get-docker/";
 
-/// Services started by an ordinary `docker compose up` (the real-codex workers
-/// are behind an opt-in profile and are intentionally excluded here).
-const DEFAULT_SERVICES: &[&str] = &["coordinator", "forgejo", "simulated-codex-worker"];
+/// Compose profile that adds the real Codex lead/reviewer workers. The launcher
+/// enables it so real_codex_lead mode has its workers. (Provider-driven profile
+/// selection — e.g. real-claude — can follow once provider config exists.)
+const PROFILE: &str = "real-codex";
 
 /// Result of probing the host for Docker and Compose readiness.
 #[derive(Serialize)]
@@ -75,15 +76,23 @@ fn compose_file() -> Result<PathBuf, String> {
     }
 }
 
-/// Run `docker compose -f <file> -p commitarium <args...>` and return its
-/// stdout, or a combined error string on failure.
-fn compose(args: &[&str]) -> Result<String, String> {
+/// Run `docker compose [--profile real-codex] -f <file> -p commitarium <args…>`
+/// scoped to the Commitarium project and its Compose file — not a general
+/// Compose runner. `profiled` enables the real-codex worker profile (for up /
+/// update / status); `down` runs unprofiled since it tears down the whole
+/// project regardless.
+fn compose(profiled: bool, args: &[&str]) -> Result<String, String> {
     let file = compose_file()?;
     let file = file.to_str().ok_or("Compose file path is not valid UTF-8")?;
 
-    let output = Command::new("docker")
-        .args(["compose", "-f", file, "-p", PROJECT_NAME])
-        .args(args)
+    let mut command = Command::new("docker");
+    command.arg("compose");
+    if profiled {
+        command.args(["--profile", PROFILE]);
+    }
+    command.args(["-f", file, "-p", PROJECT_NAME]).args(args);
+
+    let output = command
         .output()
         .map_err(|e| format!("failed to run docker compose: {e}"))?;
 
@@ -124,32 +133,30 @@ pub fn docker_probe() -> DockerProbe {
     }
 }
 
-/// Bring the Commitarium stack up in the background (default services only).
+/// Bring the Commitarium stack up in the background, including the real-codex
+/// worker profile.
 #[tauri::command]
 pub fn stack_up() -> Result<(), String> {
-    compose(&["up", "-d"]).map(|_| ())
+    compose(true, &["up", "-d"]).map(|_| ())
 }
 
-/// Tear the Commitarium stack down.
+/// Tear the whole Commitarium stack down (project-wide, all profiles).
 #[tauri::command]
 pub fn stack_down() -> Result<(), String> {
-    compose(&["down"]).map(|_| ())
+    compose(false, &["down"]).map(|_| ())
 }
 
-/// Update the stack: pull the latest images for the default services, then
-/// recreate them in the background.
+/// Update the stack: pull the latest images, then recreate in the background.
 #[tauri::command]
 pub fn stack_update() -> Result<(), String> {
-    let mut pull = vec!["pull"];
-    pull.extend_from_slice(DEFAULT_SERVICES);
-    compose(&pull)?;
-    compose(&["up", "-d"]).map(|_| ())
+    compose(true, &["pull"])?;
+    compose(true, &["up", "-d"]).map(|_| ())
 }
 
 /// Report each Commitarium service's current Compose state.
 #[tauri::command]
 pub fn stack_status() -> Result<Vec<ServiceStatus>, String> {
-    let raw = compose(&["ps", "--all", "--format", "json"])?;
+    let raw = compose(true, &["ps", "--all", "--format", "json"])?;
     Ok(parse_ps(&raw))
 }
 

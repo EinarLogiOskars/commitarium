@@ -1,72 +1,133 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { getProject } from "../api/projects";
 import { ApiError } from "../api/client";
-import { Features } from "./Features";
 import { FeatureView } from "./FeatureView";
+import { WorkOrderRail } from "./WorkOrderRail";
+import { NewWorkOrder } from "./NewWorkOrder";
+import { WORK } from "../vocab";
 import type { Project } from "../api/types";
 
-/** Project workspace: project detail + features, drilling into one feature. */
-export function ProjectWorkspace({ id, onBack }: { id: string; onBack: () => void }) {
+type Mode = "overview" | "new" | "order";
+
+/** Project workspace shell: work-order rail + master/detail main pane. */
+export function ProjectWorkspace({
+  id,
+  onExit,
+  onLoaded,
+}: {
+  id: string;
+  onExit: () => void;
+  onLoaded?: (name: string) => void;
+}) {
   const [project, setProject] = useState<Project | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [featureId, setFeatureId] = useState<string | null>(null);
+  const [mode, setMode] = useState<Mode>("overview");
+  const [orderId, setOrderId] = useState<string | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
+
+  const load = useCallback(async () => {
+    setError(null);
+    try {
+      const p = await getProject(id);
+      setProject(p);
+      onLoaded?.(p.name);
+    } catch (e) {
+      setError(e instanceof ApiError ? `${e.message} (${e.code})` : String(e));
+    }
+  }, [id, onLoaded]);
 
   useEffect(() => {
-    let active = true;
     setProject(null);
-    setError(null);
-    setFeatureId(null);
-    getProject(id)
-      .then((p) => active && setProject(p))
-      .catch((e) => active && setError(e instanceof ApiError ? `${e.message} (${e.code})` : String(e)));
-    return () => {
-      active = false;
-    };
-  }, [id]);
+    setMode("overview");
+    setOrderId(null);
+    void load();
+  }, [load]);
 
-  if (featureId) {
-    return (
-      <FeatureView projectId={id} featureId={featureId} onBack={() => setFeatureId(null)} />
-    );
-  }
+  const openOrder = (featureId: string) => {
+    setOrderId(featureId);
+    setMode("order");
+  };
+
+  const hasRepo = project ? !!project.forgejo_repository : undefined;
 
   return (
     <>
-      <button className="back" onClick={onBack}>← Projects</button>
+      <nav className="rail">
+        <button className="rail__back" onClick={onExit}>‹ Projects</button>
+        <WorkOrderRail
+          projectId={id}
+          selectedId={mode === "order" ? orderId : null}
+          reloadKey={reloadKey}
+          onSelect={openOrder}
+        />
+        <button
+          className="rail__item"
+          onClick={() => {
+            setMode("new");
+            setOrderId(null);
+          }}
+        >
+          + {WORK.newAction}
+        </button>
+        <div className="rail__spacer" />
+        <button
+          className={`rail__item ${mode === "overview" ? "rail__item--active" : ""}`}
+          onClick={() => {
+            setMode("overview");
+            setOrderId(null);
+          }}
+        >
+          Project overview
+        </button>
+      </nav>
 
-      {error && <div className="banner banner--error">{error}</div>}
-      {!project && !error && <p className="muted">Loading…</p>}
+      <main className="main">
+        <div className="main__inner">
+          {error && <div className="banner banner--error">{error}</div>}
 
-      {project && (
-        <>
-          <section className="panel">
-            <h2>{project.name}</h2>
-            <dl className="detail">
-              <dt>Recovery policy</dt>
-              <dd>{project.recovery_policy === "automatic" ? "Automatic recovery" : "Approval required"}</dd>
+          {mode === "overview" && project && <Overview project={project} />}
 
-              <dt>Forgejo repository</dt>
-              <dd>
-                {project.forgejo_repository
-                  ? `${project.forgejo_repository.owner}/${project.forgejo_repository.name} (default: ${project.forgejo_repository.default_branch})`
-                  : "not bound"}
-              </dd>
+          {mode === "new" && (
+            <NewWorkOrder
+              projectId={id}
+              onCreated={(fid) => {
+                setReloadKey((k) => k + 1);
+                openOrder(fid);
+              }}
+            />
+          )}
 
-              <dt>Dialogue rounds</dt>
-              <dd className="muted">
-                {project.dialogue_limits
-                  ? `planning ${project.dialogue_limits.planning_rounds}, review ${project.dialogue_limits.implementation_review_rounds} — current backend default`
-                  : "not reported by this coordinator"}
-              </dd>
-
-              <dt>Created</dt>
-              <dd className="muted">{new Date(project.created_at).toLocaleString()}</dd>
-            </dl>
-          </section>
-
-          <Features projectId={project.id} onSelect={setFeatureId} />
-        </>
-      )}
+          {mode === "order" && orderId && (
+            <FeatureView projectId={id} featureId={orderId} hasRepo={hasRepo} />
+          )}
+        </div>
+      </main>
     </>
+  );
+}
+
+function Overview({ project }: { project: Project }) {
+  return (
+    <section className="panel">
+      <h2>{project.name}</h2>
+      <dl className="detail">
+        <dt>Recovery policy</dt>
+        <dd>{project.recovery_policy === "automatic" ? "Automatic recovery" : "Approval required"}</dd>
+        <dt>Forgejo repository</dt>
+        <dd>
+          {project.forgejo_repository
+            ? `${project.forgejo_repository.owner}/${project.forgejo_repository.name} (default: ${project.forgejo_repository.default_branch})`
+            : "not bound"}
+        </dd>
+        <dt>Dialogue rounds</dt>
+        <dd className="muted">
+          {project.dialogue_limits
+            ? `planning ${project.dialogue_limits.planning_rounds}, review ${project.dialogue_limits.implementation_review_rounds} — current backend default`
+            : "not reported by this coordinator"}
+        </dd>
+        <dt>Created</dt>
+        <dd className="muted">{new Date(project.created_at).toLocaleString()}</dd>
+      </dl>
+    </section>
   );
 }
