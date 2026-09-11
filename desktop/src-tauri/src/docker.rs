@@ -14,7 +14,7 @@ use crate::bootstrap;
 
 /// Fixed Compose project name. Scoping every command to this project keeps the
 /// launcher from touching any other Compose stack on the host.
-const PROJECT_NAME: &str = "commitarium";
+pub(crate) const PROJECT_NAME: &str = "commitarium";
 
 /// Official Docker installation page, surfaced to the user when Docker is
 /// missing. A fixed, trusted URL — never sourced from runtime data.
@@ -52,7 +52,7 @@ pub struct ServiceStatus {
 ///   1. `COMMITARIUM_COMPOSE_FILE` environment override, if set.
 ///   2. Otherwise walk up from the current directory to the first `compose.yml`
 ///      (finds the repo root during development).
-fn compose_file() -> Result<PathBuf, String> {
+pub(crate) fn compose_file() -> Result<PathBuf, String> {
     if let Ok(path) = std::env::var("COMMITARIUM_COMPOSE_FILE") {
         let path = PathBuf::from(path);
         if path.exists() {

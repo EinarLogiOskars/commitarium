@@ -159,6 +159,17 @@ The coordinator executes its original deterministic agents in-process unless
 `COMMITARIUM_RUNNER_MODE=real_codex_lead` is selected. That mode requires the
 opt-in real worker described below.
 
+The trusted desktop backend now exposes four isolated provider profiles:
+Codex lead/reviewer and Claude lead/reviewer. It can report real login status,
+run subscription login, accept an API key through child-process stdin, verify
+the resulting provider login, cancel it, or disconnect it. Browser-login URLs
+and Codex device codes are returned as structured transient progress; raw CLI
+output and credentials are not. The TypeScript connect screen is intentionally
+being built separately against the exact command/event contract in
+[`docs/desktop-ipc.md`](docs/desktop-ipc.md). Until the following
+provider-aware launcher slice lands, stop the stack before changing or removing
+a profile so its private writable volume has only one owner.
+
 ### Internal Forgejo setup
 
 Repository binding and coordinator verification use a Forgejo access token

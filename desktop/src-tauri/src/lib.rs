@@ -2,11 +2,15 @@ mod bootstrap;
 mod docker;
 mod handoff;
 mod import;
+mod profiles;
 mod store;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let profiles = profiles::ProfileManager::new();
+    let shutdown_profiles = profiles.clone();
     tauri::Builder::default()
+        .manage(profiles)
         .plugin(tauri_plugin_opener::init())
         // HTTP client for the frontend to reach the local coordinator. The
         // capability scope (see capabilities/default.json) restricts it to the
@@ -30,7 +34,22 @@ pub fn run() {
             import::get_project_source,
             handoff::synchronize_feature_locally,
             handoff::plain_folder::synchronize_feature_to_folder,
+            profiles::list_profiles,
+            profiles::begin_login,
+            profiles::submit_login_code,
+            profiles::submit_api_key,
+            profiles::cancel_login,
+            profiles::verify_profile,
+            profiles::disconnect_profile,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(move |_, event| {
+            if matches!(
+                event,
+                tauri::RunEvent::Exit | tauri::RunEvent::ExitRequested { .. }
+            ) {
+                shutdown_profiles.shutdown();
+            }
+        });
 }
