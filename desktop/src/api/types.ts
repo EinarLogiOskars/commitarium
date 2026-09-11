@@ -116,6 +116,27 @@ export interface SessionEvent {
   occurred_at: string;
 }
 
+export interface Workspace {
+  id: string;
+  project_id: string;
+  feature_id: string;
+  base_branch: string;
+  branch: string;
+  base_commit_id: string;
+  status: string;
+  branch_created_at?: string;
+  checkout?: { workspace_id: string; relative_path: string; created_at: string };
+  pull_request?: { number: number; url: string; draft: boolean; recorded_at: string };
+  merge?: {
+    approved_commit_id: string;
+    ready_at: string;
+    merge_commit_id?: string;
+    merged_at?: string;
+  };
+  created_at: string;
+  updated_at: string;
+}
+
 /** One ordered lead/reviewer message in the planning discussion. */
 export interface PlanningMessage {
   id: string;
