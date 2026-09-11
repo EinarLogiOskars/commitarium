@@ -201,6 +201,14 @@ in backend event payloads; the UI maps factual activity to presentation.
 - Local synchronization never pushes. Errors describing dirty, advanced,
   missing, or contradictory state must be shown to the user without offering a
   reset, clean, force, or automatic conflict resolution.
+- The native `synchronize_feature_to_folder` command supports projects imported
+  from ordinary folders. It accepts `projectId` and `featureId`, and returns
+  `project_id`, `feature_id`, `folder_path`, `result_tree_id`, and `created`.
+- Before writing, non-ignored folder content must exactly match the completed
+  work order's internal base. The command never creates `.git`, preserves
+  ignored local files, verifies the complete approved result, and uses a
+  durable prepared receipt for retries and restart adoption. Partial,
+  contradictory, or user-modified state must be shown for inspection.
 
 Opening the managed directory in an IDE and starting a development preview are
 not implemented yet.
@@ -219,8 +227,6 @@ not implemented yet.
   its local browser preview.
 - Separately push that exact local commit to the user's GitHub, GitLab, or other
   upstream remote; optionally allow the user to chain sync and push.
-- Synchronize completed work back into projects originally imported from plain
-  folders; the current clean-commit command requires an existing Git repository.
 
 These trusted-host operations must remain outside agent containers. Agent
 containers receive scoped Forgejo credentials, never the user's GitHub or host

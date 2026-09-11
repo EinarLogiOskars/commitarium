@@ -224,9 +224,14 @@ which the project was imported. It uses the user's effective host Git identity,
 persists the internal-to-local commit mapping, and refuses dirty or diverged
 state. It does not copy agent commits or authors and never pushes upstream.
 
-Local synchronization currently requires a project imported from an existing
-Git repository. Plain-folder handoff and the separate upstream-push action are
-still pending.
+For projects imported from ordinary folders, the trusted desktop can apply the
+same exact approved change back to the original folder without creating a Git
+repository there. It first requires the non-ignored folder content to match the
+internal base, leaves ignored dependencies and build output untouched, and uses
+a durable prepared receipt so an interruption can be retried or recognized as
+already complete. Ambiguous or user-modified content is never overwritten.
+
+The separate upstream-push action is still pending.
 
 Once a non-empty repository exists in Forgejo, associate it with a coordinator
 project:
