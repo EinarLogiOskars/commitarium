@@ -22,9 +22,10 @@ which the frontend reaches directly over loopback.
   string. No secret material ever appears in an error, log, or event.
 - **Async progress:** anything with intermediate states (logins) reports via a
   Tauri **event**, not a blocking command — backend emits, frontend subscribes.
-- **Secrets:** never travel as command args that get logged. A secret goes
-  `UI field → command → child-process stdin → private volume`, never into args,
-  env, the coordinator, SQLite, logs, events, Forgejo, or git.
+- **Secrets:** never travel as operating-system command arguments that can be
+  inspected or logged. A secret goes `UI field → Tauri command memory →
+  child-process stdin → private volume`, never into child args, environment
+  values, the coordinator, SQLite, logs, events, Forgejo, or git.
 
 ## Implemented commands
 
@@ -56,7 +57,7 @@ Handoff (completed work → host):
 > frontend integration is not built yet. Fill these in when the handoff UI is
 > designed.
 
-## Proposed — provider authentication / profiles
+## Implemented — provider authentication / profiles
 
 Drives the connect-your-providers flow. The frontend needs:
 
@@ -67,22 +68,68 @@ Profiles are the four agent roles: `codex-lead`, `codex-reviewer`,
 
 ```
 not_configured | starting | waiting_for_browser | waiting_for_code
-              | verifying | connected | expired | failed
+              | waiting_for_api_key | verifying | connected | expired | failed
 ```
 
-- `list_profiles() -> Profile[]` — `{ id, provider, role, status, detail? }`.
+- `list_profiles() -> Profile[]`
 
-**Login operations** (secrets via stdin inside the Rust backend, never here):
+```ts
+type ProfileStatus =
+  | "not_configured"
+  | "starting"
+  | "waiting_for_browser"
+  | "waiting_for_code"
+  | "waiting_for_api_key"
+  | "verifying"
+  | "connected"
+  | "expired"
+  | "failed";
 
-- `begin_login(profileId, method)` — `method`: `"subscription"` | `"api_key"`.
-  Starts the containerized login; returns immediately, progress via events.
-- `submit_login_code(profileId, code)` — the device/paste-back code.
+type Profile = {
+  id: "codex-lead" | "codex-reviewer" | "claude-lead" | "claude-reviewer";
+  provider: "codex" | "claude";
+  role: "lead" | "reviewer";
+  status: ProfileStatus;
+  detail?: ProfileDetail;
+};
+
+type ProfileDetail = {
+  message?: string;
+  browserUrl?: string;
+  deviceCode?: string;
+};
+```
+
+For an idle profile, listing runs the provider's real status command inside
+the exact role container/volume. A failed status with a credential file is
+`expired`; no credential is `not_configured`; an unavailable Docker/profile
+command is `failed`. While a login is active, listing returns its in-memory
+progress without starting a second process.
+
+**Login operations** (secrets never become child arguments, logs, or events):
+
+- `begin_login(profileId, method) -> void` — `method`: `"subscription"` |
+  `"api_key"`. Subscription starts the containerized provider flow. API-key
+  login transitions to `waiting_for_api_key`; the key is supplied separately.
+  The command returns after process launch and later progress arrives by event.
+- `submit_login_code(profileId, code) -> void` — sends Claude's browser
+  paste-back code to the still-running login process over stdin. A Codex device
+  code is entered on the provider page and this command rejects it.
 - `submit_api_key(profileId, key, useForBothRoles?)` — key handed to the child
-  over stdin; optionally provisioned into the paired role's volume too.
-- `cancel_login(profileId)`
+  over stdin; optionally provisioned independently into the paired role's
+  private volume too. Codex writes its own file-backed login. Claude uses the
+  image's fixed `apiKeyHelper`, whose private key file is not returned.
+- `cancel_login(profileId) -> void`
 - `verify_profile(profileId) -> Profile` — real provider status check (not just
   "login exited 0"); a stale/invalid token must resolve to `expired`/`failed`.
-- `disconnect_profile(profileId)`
+- `disconnect_profile(profileId) -> Profile`
+
+Changing or disconnecting a profile is rejected while that role's long-lived
+worker is running. This prevents two containers from mounting one writable
+provider-state volume at once and prevents credentials from being removed
+under an active agent. With the current launcher the user can stop the stack,
+change the profile, and start it again. Provider-aware startup is the next
+backend slice and will normally leave disconnected workers stopped.
 
 **Progress event**
 
@@ -90,8 +137,12 @@ not_configured | starting | waiting_for_browser | waiting_for_code
   state transition so the UI can render `waiting_for_browser` → `waiting_for_code`
   → `verifying` → `connected` without polling.
 
-The URL to open for a browser login is surfaced either in `detail` on a
-`waiting_for_browser` event or via `opener` — TBD with the Rust side.
+The trusted Rust side extracts only an expected provider HTTPS URL and Codex
+device-code shape from CLI output; it never forwards raw output. The URL is
+returned as `detail.browserUrl` and the Codex code as `detail.deviceCode`.
+The frontend decides whether to open/copy them. These short-lived values exist
+only in transient IPC events/in-memory status and are not written to UI state
+or any backend database.
 
 ## Out of scope for this surface
 

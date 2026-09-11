@@ -39,8 +39,22 @@ with the implementation and public API documentation they describe.
 - The same launcher path creates separate random coordinator-to-worker bearer
   tokens. No internal or Forgejo secret crosses Tauri IPC, and the UI does not
   need setup fields or commands for them.
-- Provider login remains separate. The profile-status and login commands in
-  `desktop-ipc.md` are still in progress and must not yet be used by the UI.
+
+### Provider connection profiles
+
+- The trusted Rust backend exposes the four fixed role profiles through
+  `list_profiles`, with real provider status checks for idle profiles.
+- The settled login commands are `begin_login`, `submit_login_code`,
+  `submit_api_key`, `cancel_login`, `verify_profile`, and
+  `disconnect_profile`. Exact args, result shapes, and status values are in
+  `desktop-ipc.md`.
+- `login_progress` emits structured messages, trusted browser URLs, and Codex
+  device codes. Raw provider output and credentials are never emitted.
+- Subscription and API-key setup both write only to the selected role's private
+  provider-state volume. One API key may explicitly be provisioned to both
+  roles, but those remain separate copies in separate volumes.
+- A running role worker must be stopped before its login is changed or removed.
+  This is an intentional volume-ownership and active-work safety rule.
 
 ### Public API conventions
 
@@ -232,9 +246,9 @@ not implemented yet.
 
 ### Near-term MVP backend
 
-- Provider profile status and login commands/events described in
-  `desktop-ipc.md`, followed by provider-aware worker startup and service-row
-  deduplication.
+- Provider-aware worker startup and service-row deduplication. Core services
+  should start independently, and only connected role workers should be
+  started.
 - Clear notification presentation for a feature that merged automatically or
   is waiting for merge approval.
 

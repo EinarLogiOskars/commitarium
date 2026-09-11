@@ -38,6 +38,7 @@ RUN groupadd --gid 65532 commitarium && \
     chmod 0700 /var/lib/commitarium-provider /var/lib/commitarium-worker
 
 COPY --from=run-test-stage /worker /worker
+COPY --chmod=0755 docker/claude-api-key-helper.sh /usr/local/bin/commitarium-claude-api-key
 
 ENV CLAUDE_CONFIG_DIR=/var/lib/commitarium-provider
 
