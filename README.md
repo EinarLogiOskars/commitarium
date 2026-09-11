@@ -217,10 +217,16 @@ the user's original upstream checkout is not mounted or changed.
 
 After an approved feature has been merged in Forgejo, its read-only handoff
 source is available at
-`GET /api/v1/projects/{projectID}/features/{featureID}/handoff`. The response
-pins the original base, exact reviewed head, Forgejo merge, and PR identity for
-the trusted desktop's future local synchronization. This endpoint does not yet
-modify the user's original checkout or push to an upstream remote.
+`GET /api/v1/projects/{projectID}/features/{featureID}/handoff`. The trusted
+desktop's `synchronize_feature_locally` command uses those exact identities to
+recreate the reviewed net change as one clean commit in the Git repository from
+which the project was imported. It uses the user's effective host Git identity,
+persists the internal-to-local commit mapping, and refuses dirty or diverged
+state. It does not copy agent commits or authors and never pushes upstream.
+
+Local synchronization currently requires a project imported from an existing
+Git repository. Plain-folder handoff and the separate upstream-push action are
+still pending.
 
 Once a non-empty repository exists in Forgejo, associate it with a coordinator
 project:

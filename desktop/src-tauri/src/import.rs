@@ -62,7 +62,7 @@ fn git_line(dir: &Path, args: &[&str]) -> Option<String> {
     }
 }
 
-fn is_repo_root(dir: &Path) -> bool {
+pub(crate) fn is_repo_root(dir: &Path) -> bool {
     // Inside a work tree, and this folder is that work tree's top level (not a
     // parent repo the folder happens to sit under).
     if !git_ok(dir, &["rev-parse", "--is-inside-work-tree"]) {
