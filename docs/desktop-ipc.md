@@ -32,10 +32,15 @@ which the frontend reaches directly over loopback.
 Docker / stack lifecycle:
 
 - `docker_probe() -> DockerProbe` — installed / daemon-running / compose-available.
-- `stack_up()` / `stack_down()` / `stack_update()` — lifecycle. **Note:** the
-  auth work changes `stack_up` to start core services only and bring up a
-  provider worker only after its profile is connected (see Proposed).
-- `stack_status() -> ServiceStatus[]` — per-service state.
+- `stack_up()` / `stack_down()` / `stack_update()` — lifecycle. Start and
+  update always bring up Forgejo, the coordinator, and the simulated worker.
+  They verify all four provider profiles and start each real role worker only
+  when that exact profile is `connected`; disconnected, expired, failed, or
+  actively authenticating role workers remain stopped. One role's state does
+  not prevent another connected role from starting.
+- `stack_status() -> ServiceStatus[]` — one current row per Compose service,
+  ordered by service name. If Compose briefly exposes both sides of a
+  container replacement, the running/healthy row wins.
 
 UI-local persistence:
 
@@ -127,9 +132,9 @@ progress without starting a second process.
 Changing or disconnecting a profile is rejected while that role's long-lived
 worker is running. This prevents two containers from mounting one writable
 provider-state volume at once and prevents credentials from being removed
-under an active agent. With the current launcher the user can stop the stack,
-change the profile, and start it again. Provider-aware startup is the next
-backend slice and will normally leave disconnected workers stopped.
+under an active agent. The user can stop the stack, change the profile, and
+start it again; subsequent starts leave that worker stopped until the new login
+passes its real provider status check.
 
 **Progress event**
 

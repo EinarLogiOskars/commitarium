@@ -56,6 +56,18 @@ with the implementation and public API documentation they describe.
 - A running role worker must be stopped before its login is changed or removed.
   This is an intentional volume-ownership and active-work safety rule.
 
+### Profile-aware stack lifecycle
+
+- `stack_up` and `stack_update` always start Forgejo, the coordinator, and the
+  simulated worker, so the app remains usable without paid-provider logins.
+- Each Codex or Claude lead/reviewer worker starts independently only after its
+  exact profile passes the real provider status check. Disconnected, expired,
+  failed, and actively authenticating profiles leave only their corresponding
+  role workers stopped.
+- `stack_status` includes both real-provider profiles and returns at most one
+  row per service in stable name order. During a Compose container replacement,
+  an available running/healthy row takes precedence over a stale row.
+
 ### Public API conventions
 
 - The coordinator is local-only at `http://127.0.0.1:8080` in Compose.
@@ -246,9 +258,6 @@ not implemented yet.
 
 ### Near-term MVP backend
 
-- Provider-aware worker startup and service-row deduplication. Core services
-  should start independently, and only connected role workers should be
-  started.
 - Clear notification presentation for a feature that merged automatically or
   is waiting for merge approval.
 
