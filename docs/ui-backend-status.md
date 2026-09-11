@@ -177,6 +177,19 @@ in backend event payloads; the UI maps factual activity to presentation.
 - The UI never supplies a commit or PR identity to merge. The backend uses the
   exact revision pinned by mutual agent approval.
 
+### Completed handoff source
+
+- For a `completed` feature, retrieve the exact internal source identities with
+  `GET /api/v1/projects/{projectID}/features/{featureID}/handoff`.
+- The response identifies the internal repository, original base, exact
+  approved head, resulting Forgejo merge, and PR audit record. It is safe to use
+  for a handoff preview and as input to the future trusted-host sync.
+- `409 handoff_not_ready` means the work order has not completed its recorded
+  merge. `409 handoff_conflict` means durable identities disagree and must be
+  shown for user review.
+- This route does not write the user's local repository or push upstream. Those
+  remain trusted-desktop capabilities and are still planned.
+
 Opening the managed directory in an IDE and starting a development preview are
 not implemented yet.
 
@@ -193,7 +206,8 @@ not implemented yet.
 - Start, observe, and stop a project-defined development environment and open
   its local browser preview.
 - Synchronize one completed Forgejo feature into the user's local repository as
-  a clean user-authored commit.
+  a clean user-authored commit, using the settled completed-handoff source
+  endpoint.
 - Separately push that exact local commit to the user's GitHub, GitLab, or other
   upstream remote; optionally allow the user to chain sync and push.
 

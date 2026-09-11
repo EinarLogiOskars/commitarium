@@ -18,6 +18,7 @@ var ErrFeatureNotDraft = errors.New("feature is no longer a draft")
 var ErrFeatureNotPlanning = errors.New("feature is not in planning")
 var ErrFeatureNotReviewing = errors.New("feature is not in review")
 var ErrFeatureNotReadyToMerge = errors.New("feature is not ready to merge")
+var ErrHandoffNotReady = errors.New("completed feature handoff is not ready")
 var ErrProjectRepositoryNotBound = errors.New("project has no Forgejo repository binding")
 var ErrBranchNotFound = errors.New("Forgejo branch not found")
 var ErrBranchConflict = errors.New("Forgejo feature branch exists at a different commit")
@@ -267,6 +268,49 @@ func (service *Service) Get(
 	}
 	if stored.ProjectID != projectID || stored.FeatureID != featureID {
 		return Workspace{}, ErrConflict
+	}
+	return stored, nil
+}
+
+// GetCompletedHandoff returns the durable Git identities needed by the trusted
+// host to reproduce one completed feature as a clean local commit. It does not
+// contact Forgejo or touch a host repository: the later host-side sync must
+// fetch and verify these exact object IDs before making any local change.
+func (service *Service) GetCompletedHandoff(
+	ctx context.Context,
+	projectID string,
+	featureID string,
+) (Workspace, error) {
+	storedFeature, err := service.features.GetByID(ctx, projectID, featureID)
+	if err != nil {
+		return Workspace{}, err
+	}
+	if storedFeature.State != feature.StateCompleted {
+		return Workspace{}, ErrHandoffNotReady
+	}
+	storedProject, err := service.projects.GetByID(ctx, projectID)
+	if err != nil {
+		return Workspace{}, err
+	}
+	stored, err := service.store.GetByFeatureID(ctx, featureID)
+	if err != nil {
+		return Workspace{}, fmt.Errorf("get completed handoff for feature %q: %w", featureID, err)
+	}
+	if stored.ProjectID != projectID || stored.FeatureID != featureID {
+		return Workspace{}, ErrConflict
+	}
+	if err := stored.Validate(); err != nil {
+		return Workspace{}, ErrConflict
+	}
+	repository := storedProject.ForgejoRepository
+	if repository == nil || stored.RepositoryOwner != repository.Owner ||
+		stored.RepositoryName != repository.Name || stored.BaseBranch != repository.DefaultBranch {
+		return Workspace{}, ErrConflict
+	}
+	if stored.Status != StatusBranchReady || !stored.PullRequestReady() ||
+		stored.ApprovedCommitID == "" || stored.MergeReadyAt == nil ||
+		stored.MergeCommitID == "" || stored.MergedAt == nil {
+		return Workspace{}, ErrHandoffNotReady
 	}
 	return stored, nil
 }

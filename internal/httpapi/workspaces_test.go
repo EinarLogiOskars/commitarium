@@ -32,6 +32,16 @@ func (service *recordingWorkspaceService) Get(
 	return service.result, service.err
 }
 
+func (service *recordingWorkspaceService) GetCompletedHandoff(
+	_ context.Context,
+	projectID string,
+	featureID string,
+) (workspace.Workspace, error) {
+	service.projectID = projectID
+	service.featureID = featureID
+	return service.result, service.err
+}
+
 func (service *recordingWorkspaceService) Prepare(
 	_ context.Context,
 	projectID string,
@@ -106,6 +116,83 @@ func TestGetWorkspace(t *testing.T) {
 	NewWithWorkspaceService(nil, nil, nil, nil, nil, nil, service).ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("expected %d, got %d", http.StatusOK, recorder.Code)
+	}
+}
+
+func TestGetCompletedHandoffReturnsExactGitIdentities(t *testing.T) {
+	stored := testWorkspaceResponseValue()
+	readyAt := stored.UpdatedAt.Add(time.Second)
+	mergedAt := readyAt.Add(time.Second)
+	stored.ApprovedCommitID = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	stored.MergeReadyAt = &readyAt
+	stored.MergeCommitID = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	stored.MergedAt = &mergedAt
+	stored.UpdatedAt = mergedAt
+	service := &recordingWorkspaceService{result: stored}
+	request := httptest.NewRequest(
+		http.MethodGet,
+		"/api/v1/projects/prj_test/features/fea_test/handoff",
+		nil,
+	)
+	recorder := httptest.NewRecorder()
+	NewWithWorkspaceService(nil, nil, nil, nil, nil, nil, service).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected %d, got %d: %s", http.StatusOK, recorder.Code, recorder.Body.String())
+	}
+	if service.projectID != "prj_test" || service.featureID != "fea_test" {
+		t.Fatalf("unexpected service arguments %q %q", service.projectID, service.featureID)
+	}
+	var body completedHandoffResponse
+	if err := json.NewDecoder(recorder.Body).Decode(&body); err != nil {
+		t.Fatalf("decode handoff: %v", err)
+	}
+	if body.ProjectID != stored.ProjectID || body.FeatureID != stored.FeatureID ||
+		body.Source.Repository.Owner != stored.RepositoryOwner ||
+		body.Source.Repository.Name != stored.RepositoryName ||
+		body.Source.BaseCommitID != stored.BaseCommitID ||
+		body.Source.ApprovedCommitID != stored.ApprovedCommitID ||
+		body.Source.MergeCommitID != stored.MergeCommitID ||
+		body.PullRequest.Number != stored.PullRequestNumber ||
+		body.PullRequest.URL != stored.PullRequestURL || !body.MergedAt.Equal(mergedAt) {
+		t.Fatalf("unexpected handoff response %+v", body)
+	}
+}
+
+func TestGetCompletedHandoffMapsSafeErrors(t *testing.T) {
+	tests := []struct {
+		name   string
+		err    error
+		status int
+		code   string
+	}{
+		{name: "missing feature", err: feature.ErrNotFound, status: http.StatusNotFound, code: "feature_not_found"},
+		{name: "missing workspace", err: workspace.ErrNotFound, status: http.StatusNotFound, code: "workspace_not_found"},
+		{name: "not ready", err: workspace.ErrHandoffNotReady, status: http.StatusConflict, code: "handoff_not_ready"},
+		{name: "conflict", err: workspace.ErrConflict, status: http.StatusConflict, code: "handoff_conflict"},
+		{name: "internal", err: errors.New("boom"), status: http.StatusInternalServerError, code: "internal_error"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			service := &recordingWorkspaceService{err: test.err}
+			request := httptest.NewRequest(
+				http.MethodGet,
+				"/api/v1/projects/prj_test/features/fea_test/handoff",
+				nil,
+			)
+			recorder := httptest.NewRecorder()
+			NewWithWorkspaceService(nil, nil, nil, nil, nil, nil, service).ServeHTTP(recorder, request)
+			if recorder.Code != test.status {
+				t.Fatalf("expected %d, got %d", test.status, recorder.Code)
+			}
+			var body errorResponse
+			if err := json.NewDecoder(recorder.Body).Decode(&body); err != nil {
+				t.Fatalf("decode error: %v", err)
+			}
+			if body.Error.Code != test.code {
+				t.Fatalf("expected code %q, got %+v", test.code, body)
+			}
+		})
 	}
 }
 

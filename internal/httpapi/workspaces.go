@@ -54,6 +54,28 @@ type repositoryRef struct {
 	Name  string `json:"name"`
 }
 
+type completedHandoffResponse struct {
+	ProjectID   string                              `json:"project_id"`
+	FeatureID   string                              `json:"feature_id"`
+	Source      completedHandoffSourceResponse      `json:"source"`
+	PullRequest completedHandoffPullRequestResponse `json:"pull_request"`
+	MergedAt    time.Time                           `json:"merged_at"`
+}
+
+type completedHandoffSourceResponse struct {
+	Repository       repositoryRef `json:"repository"`
+	BaseBranch       string        `json:"base_branch"`
+	FeatureBranch    string        `json:"feature_branch"`
+	BaseCommitID     string        `json:"base_commit_id"`
+	ApprovedCommitID string        `json:"approved_commit_id"`
+	MergeCommitID    string        `json:"merge_commit_id"`
+}
+
+type completedHandoffPullRequestResponse struct {
+	Number int64  `json:"number"`
+	URL    string `json:"url"`
+}
+
 func (api *API) getWorkspaceHandler(w http.ResponseWriter, r *http.Request) {
 	projectID := r.PathValue("projectID")
 	featureID := r.PathValue("id")
@@ -71,6 +93,47 @@ func (api *API) getWorkspaceHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeWorkspaceJSON(w, http.StatusOK, stored)
+}
+
+func (api *API) getCompletedHandoffHandler(w http.ResponseWriter, r *http.Request) {
+	projectID := r.PathValue("projectID")
+	featureID := r.PathValue("id")
+	stored, err := api.workspaces.GetCompletedHandoff(r.Context(), projectID, featureID)
+	if err != nil {
+		switch {
+		case errors.Is(err, feature.ErrNotFound), errors.Is(err, project.ErrNotFound):
+			writeError(w, http.StatusNotFound, "feature_not_found", "feature or project not found")
+		case errors.Is(err, workspace.ErrNotFound):
+			writeError(w, http.StatusNotFound, "workspace_not_found", "feature workspace not found")
+		case errors.Is(err, workspace.ErrHandoffNotReady):
+			writeError(w, http.StatusConflict, "handoff_not_ready", "handoff requires a completed feature and its recorded exact Forgejo merge")
+		case errors.Is(err, workspace.ErrConflict):
+			writeError(w, http.StatusConflict, "handoff_conflict", "the completed feature and its durable Forgejo identities disagree; user review is required")
+		default:
+			log.Printf("get completed handoff for feature %q: %v", featureID, err)
+			writeError(w, http.StatusInternalServerError, "internal_error", "internal server error")
+		}
+		return
+	}
+	response := completedHandoffResponse{
+		ProjectID: stored.ProjectID,
+		FeatureID: stored.FeatureID,
+		Source: completedHandoffSourceResponse{
+			Repository: repositoryRef{Owner: stored.RepositoryOwner, Name: stored.RepositoryName},
+			BaseBranch: stored.BaseBranch, FeatureBranch: stored.Branch,
+			BaseCommitID: stored.BaseCommitID, ApprovedCommitID: stored.ApprovedCommitID,
+			MergeCommitID: stored.MergeCommitID,
+		},
+		PullRequest: completedHandoffPullRequestResponse{
+			Number: stored.PullRequestNumber,
+			URL:    stored.PullRequestURL,
+		},
+		MergedAt: *stored.MergedAt,
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		log.Printf("encode completed handoff response: %v", err)
+	}
 }
 
 func (api *API) prepareWorkspaceHandler(w http.ResponseWriter, r *http.Request) {

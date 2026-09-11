@@ -27,6 +27,7 @@ this API beyond the host loopback interface is unsupported.
 | `GET` | `/api/v1/projects/{projectID}/features/{featureID}/runs` | List the feature's run history and sessions |
 | `PUT` | `/api/v1/projects/{projectID}/features/{featureID}/workspace` | Reconcile the pinned planning checkout after goal acceptance |
 | `GET` | `/api/v1/projects/{projectID}/features/{featureID}/workspace` | Retrieve the durable checkout, reserved branch, and optional PR identity |
+| `GET` | `/api/v1/projects/{projectID}/features/{featureID}/handoff` | Retrieve exact completed Git identities for trusted-host synchronization |
 | `GET` | `/api/v1/runs/{runID}` | Retrieve run state and its ordered sessions |
 | `POST` | `/api/v1/runs/{runID}/planning` | Resume the real lead in the managed workspace for its first plan proposal |
 | `POST` | `/api/v1/runs/{runID}/planning/reviewer` | Start the persistent reviewer with the lead's exact proposal |
@@ -417,6 +418,49 @@ checkout response exposes only its stable workspace-relative identity, not a
 machine-specific absolute host path. `pull_request.recorded_at` is the
 coordinator's durable recording time, not Forgejo's server-side creation time. A
 separate planning action assigns the lead to this checkout.
+
+## Reading a completed handoff source
+
+After the approved Forgejo revision has been merged and the feature is
+`completed`, the trusted desktop can retrieve the exact source identities for a
+future local synchronization:
+
+```http
+GET /api/v1/projects/prj_example/features/fea_example/handoff
+```
+
+```json
+{
+  "project_id": "prj_example",
+  "feature_id": "fea_example",
+  "source": {
+    "repository": {"owner": "commitarium", "name": "example"},
+    "base_branch": "main",
+    "feature_branch": "commitarium/fea_example",
+    "base_commit_id": "0123456789abcdef0123456789abcdef01234567",
+    "approved_commit_id": "89abcdef0123456789abcdef0123456789abcdef",
+    "merge_commit_id": "fedcba9876543210fedcba9876543210fedcba98"
+  },
+  "pull_request": {
+    "number": 7,
+    "url": "http://localhost:3001/commitarium/example/pulls/7"
+  },
+  "merged_at": "2026-09-11T14:00:00Z"
+}
+```
+
+`base_commit_id` and `approved_commit_id` define the reviewed net change that
+the trusted host will eventually reproduce as one clean user-authored commit.
+`merge_commit_id` proves which internal Forgejo merge completed the work order;
+it is not an instruction to copy Forgejo's merge history or agent authors into
+the user's repository.
+
+This route is read-only and uses Commitarium's durable accepted result. It does
+not inspect or change the user's repository, contact an upstream provider, or
+claim that the internal Git objects still exist. The later trusted-host sync
+must fetch and verify every returned object ID before changing local Git state.
+An incomplete or unmerged feature returns `409 handoff_not_ready`; contradictory
+project/workspace identities return `409 handoff_conflict` for user review.
 
 ## Starting and observing a run
 
