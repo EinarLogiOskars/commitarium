@@ -115,3 +115,15 @@ export interface SessionEvent {
   text: string;
   occurred_at: string;
 }
+
+/** One ordered lead/reviewer message in the planning discussion. */
+export interface PlanningMessage {
+  id: string;
+  sequence: number;
+  session_id: string;
+  agent_id: string;
+  role: string; // "lead" | "reviewer"
+  type: SessionEventType; // "message" | "plan_submitted" | ...
+  text: string;
+  occurred_at: string;
+}
