@@ -264,17 +264,20 @@ the stack it needs instead of relying on a manually started one.
    Stands on the now-runnable stack from Slice 1. Note: `dialogue_limits` is
    treated as optional (older coordinator binaries omit it), and a "rebuild
    locally-built services" launcher action is a known gap (Update only pulls).
-3. **Slice 3 — Watch the agents.** View-agnostic event store + conversation
-   renderer over the settled session-activity and planning-message SSE streams.
-   Because the full observe-sequence is Settled, this renders the whole arc —
-   goal clarification, planning dialogue, implementation, and automatic review /
-   correction / re-review through `ready_to_merge` — not just planning. The
-   centerpiece; the spine the agent world later reuses unchanged.
-4. **Slice 4 — Define the work.** Feature create / retrieve / **list** and the
-   multi-turn goal-clarification loop with explicit goal acceptance. Feature
-   browse is now Settled (`GET .../features`, grouped locally by lifecycle
-   state) plus run history (`GET .../features/{id}/runs`, same run shape as
-   `GET /runs/{id}`), so the full nav path is buildable.
+3. **Slice 3 — Watch the agents.** Conversation rendering over the settled
+   session activity. ◑ In progress: the **goal-clarification** conversation is
+   built (see Slice 4) using **polling** of `GET /sessions/{id}/events` (turn-
+   based, low-frequency — SSE deferred to the busier phases). Still to come:
+   the planning (lead ↔ reviewer) and implementation/review conversations, and
+   whether to graduate the transport to SSE for those.
+4. **Slice 4 — Define the work.** ✅ Built. Feature create / list (grouped by
+   lifecycle state) / open, a feature view with run + session history, and the
+   full **goal-clarification loop**: start a run, converse with the real Codex
+   lead (polled transcript, Enter-to-send composer, auto-scroll), and accept a
+   proposed goal. Requires the coordinator in `real_codex_lead` mode for a real
+   interactive lead. **Next up:** workspace preparation
+   (`PUT .../features/{id}/workspace` → branch / checkout / draft PR) then the
+   planning conversation with the round cap.
 5. **Slice 5 — Workspace identity.** Branch, shared checkout, draft PR panel.
 
 Phase 2 (correction-loop views, cap controls, `ready_to_merge`) and Phase 2b

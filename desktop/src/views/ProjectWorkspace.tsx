@@ -1,17 +1,21 @@
 import { useEffect, useState } from "react";
 import { getProject } from "../api/projects";
 import { ApiError } from "../api/client";
+import { Features } from "./Features";
+import { FeatureView } from "./FeatureView";
 import type { Project } from "../api/types";
 
-/** Project workspace detail. Feature browsing arrives in a later slice. */
+/** Project workspace: project detail + features, drilling into one feature. */
 export function ProjectWorkspace({ id, onBack }: { id: string; onBack: () => void }) {
   const [project, setProject] = useState<Project | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [featureId, setFeatureId] = useState<string | null>(null);
 
   useEffect(() => {
     let active = true;
     setProject(null);
     setError(null);
+    setFeatureId(null);
     getProject(id)
       .then((p) => active && setProject(p))
       .catch((e) => active && setError(e instanceof ApiError ? `${e.message} (${e.code})` : String(e)));
@@ -19,6 +23,12 @@ export function ProjectWorkspace({ id, onBack }: { id: string; onBack: () => voi
       active = false;
     };
   }, [id]);
+
+  if (featureId) {
+    return (
+      <FeatureView projectId={id} featureId={featureId} onBack={() => setFeatureId(null)} />
+    );
+  }
 
   return (
     <>
@@ -54,10 +64,7 @@ export function ProjectWorkspace({ id, onBack }: { id: string; onBack: () => voi
             </dl>
           </section>
 
-          <section className="panel">
-            <h2>Features</h2>
-            <p className="muted">Feature browsing and creation arrive in a later slice.</p>
-          </section>
+          <Features projectId={project.id} onSelect={setFeatureId} />
         </>
       )}
     </>

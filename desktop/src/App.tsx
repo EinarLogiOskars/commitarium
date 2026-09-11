@@ -7,6 +7,7 @@ import "./App.css";
 
 function App() {
   const [reachable, setReachable] = useState(false);
+  const [entered, setEntered] = useState(false);
   const [projectId, setProjectId] = useState<string | null>(null);
 
   const checkHealth = useCallback(async () => {
@@ -19,24 +20,60 @@ function App() {
     return () => clearInterval(id);
   }, [checkHealth]);
 
+  const pillClass = `pill pill--${reachable ? "ok" : "bad"}`;
+  const pillInner = (
+    <>
+      <span className={`dot dot--${reachable ? "ok" : "bad"}`} />
+      coordinator {reachable ? "reachable" : "unreachable"}
+    </>
+  );
+  // On the system screen the pill is a plain status badge. In the workspace it
+  // doubles as the way back to the system screen (to stop/update the stack, or
+  // when the coordinator has dropped) — the only affordance the workspace needs,
+  // and one that draws attention only when it turns "unreachable".
+  const statusPill = <span className={pillClass}>{pillInner}</span>;
+
+  if (!entered) {
+    return (
+      <main className="app">
+        <header className="app__header">
+          <h1>Commitarium</h1>
+          <span className="app__subtitle">Local workspace launcher</span>
+          {statusPill}
+        </header>
+
+        <section className="panel launch">
+          <button className="primary" disabled={!reachable} onClick={() => setEntered(true)}>
+            Launch Commitarium →
+          </button>
+          {!reachable && (
+            <span className="muted">Start the stack below and wait for the coordinator.</span>
+          )}
+        </section>
+
+        <Launcher onStackChanged={() => void checkHealth()} />
+      </main>
+    );
+  }
+
   return (
     <main className="app">
       <header className="app__header">
         <h1>Commitarium</h1>
-        <span className="app__subtitle">Local workspace launcher</span>
-        <span className={`pill pill--${reachable ? "ok" : "bad"}`}>
-          <span className={`dot dot--${reachable ? "ok" : "bad"}`} />
-          coordinator {reachable ? "reachable" : "unreachable"}
-        </span>
+        <span className="app__spacer" />
+        <button
+          className={`${pillClass} pill--button`}
+          onClick={() => setEntered(false)}
+          title="Back to the system screen"
+        >
+          {pillInner}
+        </button>
       </header>
 
       {projectId ? (
         <ProjectWorkspace id={projectId} onBack={() => setProjectId(null)} />
       ) : (
-        <>
-          <Launcher onStackChanged={() => void checkHealth()} />
-          <Projects reachable={reachable} onSelect={setProjectId} />
-        </>
+        <Projects reachable={reachable} onSelect={setProjectId} />
       )}
     </main>
   );
