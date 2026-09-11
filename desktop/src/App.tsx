@@ -3,6 +3,7 @@ import { coordinatorReachable } from "./api/health";
 import { Launcher } from "./views/Launcher";
 import { Projects } from "./views/Projects";
 import { ProjectWorkspace } from "./views/ProjectWorkspace";
+import { Providers } from "./views/Providers";
 import "./App.css";
 
 function App() {
@@ -10,6 +11,7 @@ function App() {
   const [entered, setEntered] = useState(false);
   const [projectId, setProjectId] = useState<string | null>(null);
   const [projectName, setProjectName] = useState<string | null>(null);
+  const [showProviders, setShowProviders] = useState(false);
 
   const checkHealth = useCallback(async () => {
     setReachable(await coordinatorReachable());
@@ -73,6 +75,7 @@ function App() {
           </span>
         )}
         <span className="topbar__spacer" />
+        <button className="ghost" onClick={() => setShowProviders(true)}>Providers</button>
         <button
           className={`${pillClass} pill--button`}
           onClick={() => setEntered(false)}
@@ -81,6 +84,8 @@ function App() {
           {pillInner}
         </button>
       </header>
+
+      {showProviders && <Providers onClose={() => setShowProviders(false)} />}
 
       <div className="shell__body">
         {projectId ? (

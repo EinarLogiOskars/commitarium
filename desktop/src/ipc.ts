@@ -3,6 +3,7 @@
 // commands registered in src-tauri/src/lib.rs.
 
 import { invoke } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { open } from "@tauri-apps/plugin-dialog";
 import type { Project } from "./api/types";
@@ -74,3 +75,66 @@ export const importProject = (
 
 export const getProjectSource = (projectId: string): Promise<string | null> =>
   invoke("get_project_source", { projectId });
+
+// --- Provider authentication / profiles (see docs/desktop-ipc.md) ---
+
+export type ProfileStatus =
+  | "not_configured"
+  | "starting"
+  | "waiting_for_browser"
+  | "waiting_for_code"
+  | "waiting_for_api_key"
+  | "verifying"
+  | "connected"
+  | "expired"
+  | "failed";
+
+export type ProfileId = "codex-lead" | "codex-reviewer" | "claude-lead" | "claude-reviewer";
+
+export interface ProfileDetail {
+  message?: string;
+  browserUrl?: string;
+  deviceCode?: string;
+}
+
+export interface Profile {
+  id: ProfileId;
+  provider: "codex" | "claude";
+  role: "lead" | "reviewer";
+  status: ProfileStatus;
+  detail?: ProfileDetail;
+}
+
+export type LoginMethod = "subscription" | "api_key";
+
+export const listProfiles = (): Promise<Profile[]> => invoke("list_profiles");
+
+export const beginLogin = (profileId: ProfileId, method: LoginMethod): Promise<void> =>
+  invoke("begin_login", { profileId, method });
+
+export const submitLoginCode = (profileId: ProfileId, code: string): Promise<void> =>
+  invoke("submit_login_code", { profileId, code });
+
+export const submitApiKey = (
+  profileId: ProfileId,
+  key: string,
+  useForBothRoles?: boolean,
+): Promise<void> => invoke("submit_api_key", { profileId, key, useForBothRoles });
+
+export const cancelLogin = (profileId: ProfileId): Promise<void> =>
+  invoke("cancel_login", { profileId });
+
+export const verifyProfile = (profileId: ProfileId): Promise<Profile> =>
+  invoke("verify_profile", { profileId });
+
+export const disconnectProfile = (profileId: ProfileId): Promise<Profile> =>
+  invoke("disconnect_profile", { profileId });
+
+/** Subscribe to login-progress transitions. Returns an unlisten function. */
+export const onLoginProgress = (
+  handler: (p: { profileId: ProfileId; status: ProfileStatus; detail?: ProfileDetail }) => void,
+): Promise<UnlistenFn> =>
+  listen<{ profileId: ProfileId; status: ProfileStatus; detail?: ProfileDetail }>(
+    "login_progress",
+    (event) => handler(event.payload),
+  );
