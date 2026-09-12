@@ -149,6 +149,9 @@ export interface Run {
   paused?: boolean;
   wait_kind?: WaitKind;
   autonomy_policy?: AutonomyPolicy;
+  // Agreement cycle: 1 for the original plan; advances when a scope-changing
+  // intervention is admitted into a revised plan.
+  plan_version?: number;
   // Non-terminal lead/reviewer sessions a message may target (empty on terminal
   // runs). `intervention` describes the latest request once one has been made.
   intervention_targets?: InterventionTarget[];
@@ -201,6 +204,9 @@ export interface Workspace {
 /** One ordered lead/reviewer message in the planning discussion. */
 export interface PlanningMessage {
   id: string;
+  // Which agreement cycle authored this message; sequence stays monotonic across
+  // versions so cursors don't restart when replanning begins.
+  plan_version?: number;
   sequence: number;
   session_id: string;
   agent_id: string;

@@ -191,6 +191,7 @@ function body(
         runId={run.id}
         featureState={feature.state}
         live={live}
+        planVersion={run.plan_version}
         onAdvanced={reload}
       />
     );

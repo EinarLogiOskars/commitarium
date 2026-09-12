@@ -41,7 +41,10 @@ export function InterveneBar({ run, onChanged }: { run: Run; onChanged: () => vo
   const pendingEffect = answered && !iv?.resolved_at ? iv?.effect : undefined;
   const clarification = pendingEffect === "clarification_required";
   const replanning = pendingEffect === "replanning_required";
-  const continueBlocked = delivering || clarification || replanning;
+  // Continue is blocked only while a delivery is in flight or the agent needs
+  // another exchange. A replanning answer no longer blocks: Continue workflow is
+  // the action that admits the revised plan (resume returns 202 and re-plans).
+  const continueBlocked = delivering || clarification;
 
   const send = async () => {
     if (!text.trim() || delivering) return;
@@ -92,7 +95,7 @@ export function InterveneBar({ run, onChanged }: { run: Run; onChanged: () => vo
               className={pausedWaiting ? "primary" : "ghost"}
               onClick={() => void control(resumeRun)}
               disabled={busy != null || continueBlocked}
-              title={continueTitle(delivering, clarification, replanning)}
+              title={continueTitle(delivering, clarification)}
             >
               {pausedWaiting ? "Continue workflow" : "Cancel pause"}
             </button>
@@ -162,7 +165,7 @@ export function InterveneBar({ run, onChanged }: { run: Run; onChanged: () => vo
           : clarification
             ? "The agent needs more from you — send another message above to continue."
             : replanning
-              ? "This changed the accepted scope. Safe replanning isn't available yet, so the run stays paused."
+              ? "This changed the accepted scope. Continue workflow starts a revised plan — the lead proposes again on a new version."
               : pendingEffect === "guidance_applied"
                 ? "The agent replied above. Continue workflow applies your guidance and proceeds."
                 : running
@@ -187,7 +190,7 @@ function EffectNote({ effect }: { effect: NonNullable<Intervention["effect"]> })
     },
     replanning_required: {
       label: "Replanning required",
-      text: "This changes the accepted scope. Safe replanning isn't available yet, so the run stays paused.",
+      text: "This changes the accepted scope. Continue workflow starts a revised plan (a new version); the lead will propose again.",
       tone: "warn",
     },
   };
@@ -239,7 +242,9 @@ function controlError(e: unknown): string {
       case "intervention_clarification_required":
         return "The agent needs another exchange — send a message before continuing.";
       case "intervention_replanning_required":
-        return "This changed the accepted scope. Safe replanning isn't available yet, so the run stays paused.";
+        return "Couldn't safely start replanning — the branch, checkout, PR, or prior plan couldn't be confirmed. The run stays paused.";
+      case "replanning_unavailable":
+        return "Replanning is temporarily unavailable (checkout or Forgejo). Try Continue workflow again shortly.";
       default:
         return `${e.message} (${e.code})`;
     }
@@ -247,9 +252,8 @@ function controlError(e: unknown): string {
   return String(e);
 }
 
-function continueTitle(delivering: boolean, clarification: boolean, replanning: boolean): string | undefined {
+function continueTitle(delivering: boolean, clarification: boolean): string | undefined {
   if (delivering) return "Wait for the agent to answer before continuing";
   if (clarification) return "Send another message to the agent to continue";
-  if (replanning) return "Scope changed — safe replanning isn't available yet";
   return undefined;
 }
