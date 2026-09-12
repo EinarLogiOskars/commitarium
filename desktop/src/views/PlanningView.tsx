@@ -9,17 +9,15 @@ import {
 } from "../api/runs";
 import { getSessionEvents } from "../api/sessions";
 import { ApiError } from "../api/client";
+import { Transcript, type TranscriptEntry } from "./Transcript";
+import { scopeToPhase, type Interval } from "./phaseWindows";
 import type { PlanningMessage, SessionEvent } from "../api/types";
 
 const POLL_MS = 2000;
 
-interface Entry {
-  key: string;
-  role: string;
-  type: string;
-  text: string;
-  at: string;
-}
+// Types that belong in a transcript; skip control markers (attempt_terminal
+// duplicates message text, input_required is conveyed by the status line).
+const SHOWN = new Set(["message", "plan_submitted", "activity", "user_message"]);
 
 // The lead ↔ reviewer planning discussion. The transcript is built from the
 // sessions' activity (the lead's first proposal lives there before it reaches
@@ -33,6 +31,7 @@ export function PlanningView({
   featureState,
   live = true,
   planVersion = 1,
+  intervals = [],
   onAdvanced,
 }: {
   runId: string;
@@ -43,9 +42,11 @@ export function PlanningView({
   // The agreement cycle. Revised plans (>1) use the same reviewer/round/
   // implementation controls; it only labels the phase and scopes plan state.
   planVersion?: number;
+  // The planning phase's time window(s); events outside are shown by other phases.
+  intervals?: Interval[];
   onAdvanced: () => void;
 }) {
-  const [entries, setEntries] = useState<Entry[]>([]);
+  const [entries, setEntries] = useState<TranscriptEntry[]>([]);
   const [planMsgs, setPlanMsgs] = useState<PlanningMessage[]>([]);
   const [status, setStatus] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -63,10 +64,10 @@ export function PlanningView({
           events: await getSessionEvents(s.id),
         })),
       );
-      const merged: Entry[] = [];
+      const merged: TranscriptEntry[] = [];
       for (const { role, events } of perSession) {
         for (const e of events as SessionEvent[]) {
-          if (!e.text) continue;
+          if (!e.text || !SHOWN.has(e.type)) continue;
           merged.push({ key: e.id, role, type: e.type, text: e.text, at: e.occurred_at });
         }
       }
@@ -122,6 +123,7 @@ export function PlanningView({
   }
 
   const revised = planVersion > 1;
+  const scoped = scopeToPhase(entries, intervals);
 
   return (
     <section className="panel">
@@ -141,11 +143,7 @@ export function PlanningView({
           pinned.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
         }}
       >
-        {entries.length === 0 ? (
-          <p className="muted">No planning discussion yet.</p>
-        ) : (
-          entries.map((e) => <PlanEntry key={e.key} e={e} />)
-        )}
+        <Transcript entries={scoped} empty="No planning discussion yet." />
       </div>
 
       {live && (
@@ -164,33 +162,4 @@ export function PlanningView({
       )}
     </section>
   );
-}
-
-function PlanEntry({ e }: { e: Entry }) {
-  if (e.type === "plan_submitted") {
-    return (
-      <div className="plan-submitted">
-        <span className="plan-submitted__label">📌 Plan submitted</span>
-        <span className="msg__text">{e.text}</span>
-      </div>
-    );
-  }
-  if (e.type === "message") {
-    const reviewer = e.role === "reviewer";
-    return (
-      <div className={`msg ${reviewer ? "msg--reviewer" : "msg--lead"}`}>
-        <span className="msg__who">{reviewer ? "Reviewer" : "Lead"}</span>
-        <span className="msg__text">{e.text}</span>
-      </div>
-    );
-  }
-  if (e.type === "activity") {
-    const who = e.role === "reviewer" ? "Reviewer" : "Lead";
-    return (
-      <div className="msg msg--note">
-        {who} · {e.text}
-      </div>
-    );
-  }
-  return null;
 }

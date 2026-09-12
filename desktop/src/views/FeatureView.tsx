@@ -1,15 +1,17 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { getFeature, listFeatureRuns } from "../api/features";
+import { getFeature, getFeatureEvents, listFeatureRuns } from "../api/features";
 import { getRun } from "../api/runs";
 import { ApiError } from "../api/client";
 import { GoalClarification } from "./GoalClarification";
 import { PlanningView } from "./PlanningView";
 import { ImplementationView } from "./ImplementationView";
 import { ReviewView } from "./ReviewView";
+import { MergeView } from "./MergeView";
 import { InterveneBar } from "./InterveneBar";
 import { PhaseStepper, currentPhaseIndex } from "./PhaseStepper";
+import { phaseIntervals, type Interval } from "./phaseWindows";
 import { WORK } from "../vocab";
-import type { Feature, Run, WaitKind } from "../api/types";
+import type { Feature, Run, WaitKind, WorkflowEvent } from "../api/types";
 
 const POLL_MS = 2500;
 
@@ -31,6 +33,7 @@ export function FeatureView({
 }) {
   const [feature, setFeature] = useState<Feature | null>(null);
   const [run, setRun] = useState<Run | null>(null);
+  const [events, setEvents] = useState<WorkflowEvent[]>([]);
   const [error, setError] = useState<string | null>(null);
   // null = follow the current phase; a number = the user pinned that phase.
   const [pinnedIndex, setPinnedIndex] = useState<number | null>(null);
@@ -47,6 +50,12 @@ export function FeatureView({
       } else {
         setRun(null);
       }
+      try {
+        setEvents(await getFeatureEvents(projectId, featureId));
+      } catch {
+        // Older coordinators lack the events endpoint; views fall back to
+        // showing all activity unscoped.
+      }
       setError(null);
       // Refresh the rail grouping only when the phase actually changed.
       if (lastState.current !== null && lastState.current !== f.state) onChanged?.();
@@ -59,6 +68,7 @@ export function FeatureView({
   useEffect(() => {
     setFeature(null);
     setRun(null);
+    setEvents([]);
     setPinnedIndex(null);
     lastState.current = null;
     void load();
@@ -79,6 +89,9 @@ export function FeatureView({
   const live = viewed === current && !finished;
 
   const select = (i: number) => setPinnedIndex(i === current ? null : i);
+
+  // The viewed phase's time window(s) — used to scope its transcript.
+  const intervals = phaseIntervals(events, viewed);
 
   return (
     <>
@@ -104,7 +117,7 @@ export function FeatureView({
         {error && <div className="banner banner--error">{error}</div>}
       </section>
 
-      {body(viewed, feature, projectId, hasRepo, run, live, load)}
+      {body(viewed, feature, projectId, hasRepo, run, live, intervals, load)}
     </>
   );
 }
@@ -153,6 +166,7 @@ function body(
   hasRepo: boolean | undefined,
   run: Run | null,
   live: boolean,
+  intervals: Interval[],
   reload: () => void,
 ) {
   if (feature.state === "cancelled") {
@@ -192,18 +206,31 @@ function body(
         featureState={feature.state}
         live={live}
         planVersion={run.plan_version}
+        intervals={intervals}
         onAdvanced={reload}
       />
     );
   }
   // Implement
   if (viewed === 2) {
-    return <ImplementationView runId={run.id} live={live} />;
+    return <ImplementationView runId={run.id} live={live} intervals={intervals} />;
   }
-  // Review + Merge share the review panel; the merge gate appears only when live
-  // at ready_to_merge.
+  // Review — the reviewer/lead discussion, scoped to the reviewing window.
+  if (viewed === 3) {
+    return (
+      <ReviewView
+        projectId={projectId}
+        featureId={feature.id}
+        runId={run.id}
+        state={feature.state}
+        live={live}
+        intervals={intervals}
+      />
+    );
+  }
+  // Merge — PR status + the human merge gate.
   return (
-    <ReviewView
+    <MergeView
       projectId={projectId}
       featureId={feature.id}
       runId={run.id}
