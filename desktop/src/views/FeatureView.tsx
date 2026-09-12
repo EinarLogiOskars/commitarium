@@ -109,11 +109,8 @@ export function FeatureView({
 
         <PhaseStepper feature={feature} viewedIndex={viewed} onSelect={select} paused={run?.paused} />
 
-        {/* Clarify has its own reply + accept-goal composer; the generic
-            intervene bar only applies once the agents run autonomously. */}
-        {run && !terminal && !finished && current > 0 && (
-          <InterveneBar run={run} onChanged={load} />
-        )}
+        {/* The top orients: what phase, and why the run is waiting. Actions —
+            the message composer and pause/continue — live below the transcript. */}
         {run && !terminal && current > 0 && waitBanner(run, feature.state)}
         {pinnedIndex !== null && pinnedIndex !== current && (
           <button className="linkish" onClick={() => setPinnedIndex(null)}>
@@ -124,6 +121,13 @@ export function FeatureView({
       </section>
 
       {body(viewed, feature, projectId, hasRepo, run, live, intervals, scoped, load)}
+
+      {/* Intervene composer sits below the conversation, not above it. Clarify
+          has its own reply + accept-goal composer, so only show this once the
+          agents run autonomously (Plan onward). */}
+      {run && !terminal && !finished && current > 0 && (
+        <InterveneBar run={run} onChanged={load} />
+      )}
     </>
   );
 }
