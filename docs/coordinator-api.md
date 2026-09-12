@@ -727,11 +727,25 @@ returns `409 intervention_replanning_required` and keeps the run paused. A
 temporarily unavailable checkout or Forgejo returns `503
 replanning_unavailable`.
 
-The first revised lead proposal settles at `waiting_for_user` with
-`wait_kind: "phase_checkpoint"`, including under `run_to_completion`. Resuming
-the existing reviewer, completing the versioned discussion, and appending the
-newly agreed plan to the same PR are the next backend slice; clients should not
-offer the ordinary first-review action for a revised proposal yet.
+Under `review_each_phase`, the first revised lead proposal settles at
+`waiting_for_user` with `wait_kind: "phase_checkpoint"`; the existing
+`POST /api/v1/runs/{id}/planning/reviewer` action resumes the original reviewer
+conversation rather than creating another session. The normal planning-round
+action then alternates those same conversations until the lead submits the
+complete revised plan or the run's snapshotted round cap is reached. Only
+messages from the current `plan_version` count toward that cap.
+
+The submitted revision is appended as a new marked `Agreed implementation
+plan` section in the existing Forgejo pull request. Earlier plan sections remain
+as audit history and no conversational messages are copied into Forgejo. The
+coordinator requires the branch and checkout to remain at the recorded
+replanning baseline while allowing preserved uncommitted edits. The first
+published implementation must descend from that exact baseline, so preserved
+committed work cannot be discarded. Implementation then uses the revised
+effective goal and plan and has versioned worker-attempt IDs, so it cannot
+collide with work performed under an earlier plan. Under
+`run_to_completion`, reviewer consultation, agreement, publication, and the
+implementation handoff advance automatically through these same operations.
 
 These gates prevent “Continue workflow” from silently discarding, bypassing, or
 misapplying user guidance.

@@ -325,20 +325,19 @@ not implemented yet.
   readiness; and resumes the same lead conversation for a revised proposal.
   Run responses and every planning message now include integer `plan_version`
   (starting at `1`). Shared-message `sequence` remains monotonic across versions.
-  The revised proposal returns to `waiting_for_user` with
-  `wait_kind: "phase_checkpoint"`, even under `run_to_completion` for now.
+  Under `review_each_phase`, the revised proposal returns to
+  `waiting_for_user` with `wait_kind: "phase_checkpoint"`; the existing
+  planning-review action resumes the same reviewer. The existing planning-round
+  action then completes the discussion using only current-version messages.
+  The final revised plan is appended to the same PR and implementation uses the
+  accumulated effective goal plus versioned worker attempts. Under
+  `run_to_completion`, all of those handoffs advance automatically. The
+  frontend may wire the normal reviewer and planning-round controls for revised
+  proposals without introducing new endpoints.
 
 ## In progress — avoid for now
 
-### Scope-changing intervention replanning
-
-The safe entry and first revised lead proposal are settled above. The reviewer
-continuation and remaining agreement loop are not yet available for plan
-versions greater than one. The next backend slice must resume the same reviewer
-conversation, keep both agents on the new plan version, enforce the configured
-round limit against only that version, and append only the newly agreed revised
-plan to the existing Forgejo PR before implementation resumes. Do not wire a
-revised-proposal Continue action until that slice is settled.
+No current backend contract area is reserved by the versioned-replanning work.
 
 ## Planned — do not depend on it yet
 

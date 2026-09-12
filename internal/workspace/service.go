@@ -446,7 +446,23 @@ func (service *Service) PublishPlan(
 	if _, err := service.prepareAgreedPlanWorkspace(ctx, projectID, featureID); err != nil {
 		return Workspace{}, false, err
 	}
-	return service.reconcileSubmittedPlan(ctx, projectID, featureID, eventID, plan, true, true)
+	return service.reconcileSubmittedPlan(ctx, projectID, featureID, eventID, plan, "", true, true)
+}
+
+// PublishRevisedPlan appends a later agreed plan to the existing pull request.
+// Unlike initial publication it neither creates a branch nor requires the
+// feature branch to remain at the project's original base commit.
+func (service *Service) PublishRevisedPlan(
+	ctx context.Context,
+	projectID string,
+	featureID string,
+	eventID string,
+	plan string,
+	baselineCommitID string,
+) (Workspace, bool, error) {
+	return service.reconcileSubmittedPlan(
+		ctx, projectID, featureID, eventID, plan, baselineCommitID, true, false,
+	)
 }
 
 // prepareAgreedPlanWorkspace performs the first Git and Forgejo mutations in a
@@ -569,7 +585,21 @@ func (service *Service) VerifyPublishedPlan(
 	plan string,
 ) (Workspace, error) {
 	stored, _, err := service.reconcileSubmittedPlan(
-		ctx, projectID, featureID, eventID, plan, false, true,
+		ctx, projectID, featureID, eventID, plan, "", false, true,
+	)
+	return stored, err
+}
+
+func (service *Service) VerifyRevisedPublishedPlan(
+	ctx context.Context,
+	projectID string,
+	featureID string,
+	eventID string,
+	plan string,
+	baselineCommitID string,
+) (Workspace, error) {
+	stored, _, err := service.reconcileSubmittedPlan(
+		ctx, projectID, featureID, eventID, plan, baselineCommitID, false, false,
 	)
 	return stored, err
 }
@@ -586,7 +616,7 @@ func (service *Service) VerifyImplementationContinuation(
 	plan string,
 ) (Workspace, error) {
 	stored, _, err := service.reconcileSubmittedPlan(
-		ctx, projectID, featureID, eventID, plan, false, false,
+		ctx, projectID, featureID, eventID, plan, "", false, false,
 	)
 	return stored, err
 }
@@ -684,6 +714,50 @@ func (service *Service) VerifyImplementationPublication(
 	pullRequestNumber int64,
 	expectedAuthor string,
 ) (Workspace, error) {
+	return service.verifyImplementationPublication(
+		ctx, projectID, featureID, planEventID, plan, attemptID, summary,
+		commitID, pullRequestNumber, expectedAuthor, "",
+	)
+}
+
+// VerifyRevisedImplementationPublication additionally pins ancestry to the
+// exact feature-branch commit recorded when the current plan version began.
+// That prevents implementation from discarding work preserved by replanning.
+func (service *Service) VerifyRevisedImplementationPublication(
+	ctx context.Context,
+	projectID string,
+	featureID string,
+	planEventID string,
+	plan string,
+	attemptID string,
+	summary string,
+	commitID string,
+	pullRequestNumber int64,
+	expectedAuthor string,
+	replanningBaselineCommitID string,
+) (Workspace, error) {
+	if !ValidCommitID(replanningBaselineCommitID) {
+		return Workspace{}, errors.New("replanning baseline commit is required")
+	}
+	return service.verifyImplementationPublication(
+		ctx, projectID, featureID, planEventID, plan, attemptID, summary,
+		commitID, pullRequestNumber, expectedAuthor, replanningBaselineCommitID,
+	)
+}
+
+func (service *Service) verifyImplementationPublication(
+	ctx context.Context,
+	projectID string,
+	featureID string,
+	planEventID string,
+	plan string,
+	attemptID string,
+	summary string,
+	commitID string,
+	pullRequestNumber int64,
+	expectedAuthor string,
+	checkoutBaseCommitID string,
+) (Workspace, error) {
 	for _, value := range []string{
 		planEventID, plan, attemptID, summary, commitID, expectedAuthor,
 	} {
@@ -702,7 +776,8 @@ func (service *Service) VerifyImplementationPublication(
 		ProjectID: projectID, PlanEventID: planEventID, Plan: plan,
 		AttemptID: attemptID, Summary: summary, CommitID: commitID,
 		PullRequestNumber: pullRequestNumber, ExpectedAuthor: expectedAuthor,
-		PublicationKind: ImplementationPublicationInitial,
+		PublicationKind:      ImplementationPublicationInitial,
+		CheckoutBaseCommitID: checkoutBaseCommitID,
 	})
 }
 
@@ -958,6 +1033,7 @@ func (service *Service) reconcileSubmittedPlan(
 	featureID string,
 	eventID string,
 	plan string,
+	expectedHeadCommitID string,
 	publishMissing bool,
 	requireCleanBaseline bool,
 ) (Workspace, bool, error) {
@@ -999,13 +1075,18 @@ func (service *Service) reconcileSubmittedPlan(
 	if err != nil {
 		return Workspace{}, false, fmt.Errorf("reconcile Forgejo feature branch: %w", err)
 	}
-	if branch.Name != stored.Branch || branch.CommitID != stored.BaseCommitID {
+	if expectedHeadCommitID == "" {
+		expectedHeadCommitID = stored.BaseCommitID
+	}
+	if !ValidCommitID(expectedHeadCommitID) || branch.Name != stored.Branch ||
+		branch.CommitID != expectedHeadCommitID {
 		return Workspace{}, false, ErrBranchConflict
 	}
 	if err := service.checkouts.Ensure(ctx, CheckoutSpec{
 		WorkspaceID: stored.ID, RepositoryOwner: stored.RepositoryOwner,
 		RepositoryName: stored.RepositoryName, Branch: stored.Branch,
-		BaseCommitID: stored.BaseCommitID, AlreadyReady: true,
+		BaseCommitID: stored.BaseCommitID, ExpectedHeadCommitID: expectedHeadCommitID,
+		AlreadyReady:         true,
 		RequireCleanBaseline: requireCleanBaseline,
 	}); err != nil {
 		return Workspace{}, false, fmt.Errorf("reconcile managed checkout: %w", err)
@@ -1016,7 +1097,7 @@ func (service *Service) reconcileSubmittedPlan(
 		FeatureMarker:     "<!-- commitarium-feature: " + storedFeature.ID + " -->",
 		PublicationMarker: "<!-- commitarium-plan: " + hex.EncodeToString(digest[:]) + " -->",
 		Plan:              plan, BaseBranch: stored.BaseBranch, HeadBranch: stored.Branch,
-		HeadCommitID: stored.BaseCommitID,
+		HeadCommitID: expectedHeadCommitID,
 	}
 	var pullRequest PullRequest
 	published := false

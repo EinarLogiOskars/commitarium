@@ -130,32 +130,36 @@ func (unavailableRemoteLeadWorker) GetAttempt(
 type unexpectedRemoteLeadPump struct{ called bool }
 
 type remoteLeadWorkspaceStub struct {
-	prepared                workspace.Workspace
-	clarificationCalls      int
-	clarificationProjectID  string
-	clarificationFeatureID  string
-	publishCalls            int
-	verifyCalls             int
-	continuationVerifyCalls int
-	publicationVerifyCalls  int
-	responseVerifyCalls     int
-	replanningCalls         int
-	replanningEventID       string
-	replanningPlan          string
-	reviewVerifyCalls       int
-	readinessVerifyCalls    int
-	mergeReadyCalls         int
-	mergeCalls              int
-	responseReviewedCommit  string
-	responseCommit          string
-	publishedEventID        string
-	publishedPlan           string
-	publishErr              error
-	verifyErr               error
-	publicationVerifyErr    error
-	responseVerifyErr       error
-	reviewVerifyErr         error
-	readinessVerifyErr      error
+	prepared                      workspace.Workspace
+	clarificationCalls            int
+	clarificationProjectID        string
+	clarificationFeatureID        string
+	publishCalls                  int
+	revisedPublishCalls           int
+	verifyCalls                   int
+	revisedVerifyCalls            int
+	continuationVerifyCalls       int
+	publicationVerifyCalls        int
+	revisedPublicationVerifyCalls int
+	responseVerifyCalls           int
+	replanningCalls               int
+	replanningEventID             string
+	replanningPlan                string
+	reviewVerifyCalls             int
+	readinessVerifyCalls          int
+	mergeReadyCalls               int
+	mergeCalls                    int
+	responseReviewedCommit        string
+	responseCommit                string
+	publishedEventID              string
+	publishedPlan                 string
+	publishedBaseline             string
+	publishErr                    error
+	verifyErr                     error
+	publicationVerifyErr          error
+	responseVerifyErr             error
+	reviewVerifyErr               error
+	readinessVerifyErr            error
 }
 
 func (stub *remoteLeadWorkspaceStub) PrepareReplanningBaseline(
@@ -237,6 +241,26 @@ func (stub *remoteLeadWorkspaceStub) VerifyImplementationPublication(
 	return stub.prepared, stub.publicationVerifyErr
 }
 
+func (stub *remoteLeadWorkspaceStub) VerifyRevisedImplementationPublication(
+	_ context.Context,
+	_ string,
+	_ string,
+	eventID string,
+	plan string,
+	_ string,
+	_ string,
+	_ string,
+	_ int64,
+	_ string,
+	baselineCommitID string,
+) (workspace.Workspace, error) {
+	stub.revisedPublicationVerifyCalls++
+	stub.publishedEventID = eventID
+	stub.publishedPlan = plan
+	stub.publishedBaseline = baselineCommitID
+	return stub.prepared, stub.publicationVerifyErr
+}
+
 func (stub *remoteLeadWorkspaceStub) VerifyImplementationReview(
 	context.Context,
 	string,
@@ -300,6 +324,21 @@ func (stub *remoteLeadWorkspaceStub) VerifyPublishedPlan(
 	stub.verifyCalls++
 	stub.publishedEventID = eventID
 	stub.publishedPlan = plan
+	return stub.prepared, stub.verifyErr
+}
+
+func (stub *remoteLeadWorkspaceStub) VerifyRevisedPublishedPlan(
+	_ context.Context,
+	_ string,
+	_ string,
+	eventID string,
+	plan string,
+	baselineCommitID string,
+) (workspace.Workspace, error) {
+	stub.revisedVerifyCalls++
+	stub.publishedEventID = eventID
+	stub.publishedPlan = plan
+	stub.publishedBaseline = baselineCommitID
 	return stub.prepared, stub.verifyErr
 }
 
@@ -382,6 +421,21 @@ func (stub *remoteLeadWorkspaceStub) PublishPlan(
 		stub.prepared.PullRequestURL = "http://forgejo.test/commitarium/planning-test/pulls/7"
 		stub.prepared.PullRequestRecordedAt = &createdAt
 	}
+	return stub.prepared, stub.publishErr == nil, stub.publishErr
+}
+
+func (stub *remoteLeadWorkspaceStub) PublishRevisedPlan(
+	_ context.Context,
+	_ string,
+	_ string,
+	eventID string,
+	plan string,
+	baselineCommitID string,
+) (workspace.Workspace, bool, error) {
+	stub.revisedPublishCalls++
+	stub.publishedEventID = eventID
+	stub.publishedPlan = plan
+	stub.publishedBaseline = baselineCommitID
 	return stub.prepared, stub.publishErr == nil, stub.publishErr
 }
 

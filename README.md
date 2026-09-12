@@ -90,8 +90,13 @@ from conversational wording. Restart recovery reconnects to the same durable
 delivery attempt instead of sending the message twice. When the result is
 ordinary guidance, an explicit Continue records that it was consumed, restores
 the exact saved checkpoint, and honors the run's autonomy policy. Clarification
-keeps the composer and pause active. Scope-changing requests remain safely
-paused until versioned-plan replanning can preserve any existing branch work.
+keeps the composer and pause active. For a scope change, Continue verifies and
+preserves the existing branch, checkout, PR, commits, and local edits, then
+starts a new plan version in the same lead and reviewer conversations. Only the
+final revised agreed plan is appended to the existing PR; earlier plans remain
+as audit history. The revised implementation uses distinct versioned worker
+attempts, preventing collisions with work performed before replanning, and its
+first published commit must descend from the exact preserved replanning base.
 
 Projects now also choose Codex
 or Claude independently for the lead and reviewer. Each run snapshots those
