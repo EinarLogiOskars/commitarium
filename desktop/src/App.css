@@ -1163,6 +1163,63 @@ button.primary {
   font-size: 12px;
   color: var(--muted);
 }
+.activity-item {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--muted);
+  flex-wrap: wrap;
+}
+.activity-item--note {
+  color: var(--muted);
+}
+.activity-item__cmd {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--text);
+  word-break: break-all;
+}
+.activity-item__prompt {
+  color: var(--muted);
+}
+.activity-item__dur {
+  color: var(--muted);
+}
+.activity-item__op {
+  text-transform: uppercase;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+}
+.activity-item__op--created { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 45%, transparent); }
+.activity-item__op--modified { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 45%, transparent); }
+.activity-item__op--deleted { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 45%, transparent); }
+.activity-item__op--renamed { color: var(--muted); }
+.activity-item__path {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--text);
+  word-break: break-all;
+}
+.activity-item__diff {
+  display: inline-flex;
+  gap: 6px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.diff--add { color: var(--ok); }
+.diff--del { color: var(--bad); }
+
+.chip {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+}
+.chip--ok { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 45%, transparent); }
+.chip--bad { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 45%, transparent); }
 
 /* Segmented lead/reviewer selector. */
 .seg {

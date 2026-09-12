@@ -172,11 +172,27 @@ export type SessionEventType =
   | "continued"
   | "recovery_assessment";
 
+// Optional structured detail on an `activity` event. `text` stays the
+// human-readable fallback; render this when present.
+export type FileChangeOp = "created" | "modified" | "deleted" | "renamed";
+
+export type ActivityDetail =
+  | { kind: "command"; command: string; exit_code?: number; duration_ms?: number }
+  | {
+      kind: "file_change";
+      op: FileChangeOp;
+      path: string;
+      old_path?: string;
+      additions?: number;
+      deletions?: number;
+    };
+
 export interface SessionEvent {
   id: string;
   sequence: number;
   type: SessionEventType;
   text: string;
+  activity?: ActivityDetail;
   occurred_at: string;
 }
 
