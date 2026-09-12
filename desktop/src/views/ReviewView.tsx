@@ -63,7 +63,9 @@ export function ReviewView({
       const merged: TimelineEntry[] = [];
       for (const { role, events } of perSession) {
         for (const e of events as SessionEvent[]) {
-          if (!e.text) continue;
+          // Only real content — skip markers like attempt_terminal that repeat
+          // the message text.
+          if (!e.text || (e.type !== "message" && e.type !== "activity")) continue;
           merged.push({ key: e.id, role, type: e.type, text: e.text, at: e.occurred_at });
         }
       }
@@ -119,10 +121,17 @@ export function ReviewView({
           <p className="muted">No review activity yet.</p>
         ) : (
           timeline.map((t) => {
-            const reviewer = t.role === "reviewer";
+            const who = t.role === "reviewer" ? "Reviewer" : "Lead";
+            if (t.type === "activity") {
+              return (
+                <div key={t.key} className="msg msg--note">
+                  {who} · {t.text}
+                </div>
+              );
+            }
             return (
-              <div key={t.key} className={`msg ${reviewer ? "msg--reviewer" : "msg--lead"}`}>
-                <span className="msg__who">{reviewer ? "Reviewer" : "Lead"}</span>
+              <div key={t.key} className={`msg ${t.role === "reviewer" ? "msg--reviewer" : "msg--lead"}`}>
+                <span className="msg__who">{who}</span>
                 <span className="msg__text">{t.text}</span>
               </div>
             );

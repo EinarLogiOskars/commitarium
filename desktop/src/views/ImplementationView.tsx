@@ -56,11 +56,11 @@ export function ImplementationView({ runId }: { runId: string; state: string }) 
           pinned.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
         }}
       >
-        {events.filter((e) => e.text).length === 0 ? (
+        {events.filter((e) => e.text && (e.type === "message" || e.type === "activity")).length === 0 ? (
           <p className="muted">Waiting for the lead to start…</p>
         ) : (
           events
-            .filter((e) => e.text)
+            .filter((e) => e.text && (e.type === "message" || e.type === "activity"))
             .map((e) =>
               e.type === "message" ? (
                 <div key={e.id} className="msg msg--lead">
