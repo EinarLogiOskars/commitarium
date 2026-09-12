@@ -7,6 +7,7 @@
 //! never gives host Git credentials to a container.
 
 pub(crate) mod plain_folder;
+pub(crate) mod upstream;
 
 use serde::{Deserialize, Serialize};
 use std::fs::File;

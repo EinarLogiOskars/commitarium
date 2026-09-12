@@ -498,6 +498,12 @@ must fetch and verify every returned object ID before changing local Git state.
 An incomplete or unmerged feature returns `409 handoff_not_ready`; contradictory
 project/workspace identities return `409 handoff_conflict` for user review.
 
+After the trusted desktop has reproduced this handoff as one clean local commit,
+its separate native upstream command may publish that recorded commit as a new
+`commitarium/` branch through the user's system Git configuration. That action
+does not add an HTTP mutation here: the coordinator remains unaware of upstream
+credentials and never pushes to the user's remote.
+
 ## Starting and observing a run
 
 Starting a run has no request body. In the default simulated workflow, the

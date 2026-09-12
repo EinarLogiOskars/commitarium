@@ -43,8 +43,40 @@ Trusted receipts are stored in the app data directory as
 different clean local commits, which permits later work orders to form a normal
 local chain and makes exact retries safe.
 
-This command never pushes. Upstream publication remains a separate future
-native command.
+This command never pushes. Upstream publication is a separate explicit native
+operation. First preview the configured remotes and protected branch name:
+
+```ts
+invoke("preview_upstream_branch", {
+  projectId,
+  featureId,
+  workOrderName,
+  remoteName: null,
+  branchName: null,
+});
+```
+
+The preview suggests `commitarium/<work-order-slug>`. The frontend may send an
+edited branch name, but the backend accepts only valid names beneath the
+`commitarium/` prefix. Publish after explicit user confirmation:
+
+```ts
+invoke("publish_upstream_branch", {
+  projectId,
+  featureId,
+  remoteName,
+  branchName,
+});
+```
+
+Both commands return camel-cased fields including the configured `remotes`,
+`selectedRemote`, `branchName`, exact `localCommitId`, and a structured
+`status`. Publication uses the system Git CLI and existing host credentials,
+does not require a clean checkout, never changes a local branch, and creates
+the remote branch only if it is absent. An identical existing branch is an
+idempotent success; a different existing branch is `branch_conflict` and is
+never modified. Durable records live in
+`upstream-publication-receipts.json`. Pull-request creation is still manual.
 
 Projects imported from a plain folder use a separate command because there is
 no local Git history in which to create a clean commit:

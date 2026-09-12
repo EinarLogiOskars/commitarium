@@ -54,13 +54,57 @@ Project import (host-side git):
 
 Handoff (completed work → host):
 
-- `synchronize_feature_locally(...)` — sync an approved feature into the user's
-  local repo as one clean commit.
-- `synchronize_feature_to_folder(...)` — sync into a non-git folder.
+- `synchronize_feature_locally(projectId, featureId, commitMessage) ->
+  SynchronizeResult` — sync an approved feature into the user's local repo as
+  one clean commit.
+- `synchronize_feature_to_folder(projectId, featureId) -> FolderSynchronizeResult`
+  — sync into a non-git folder.
+- `preview_upstream_branch(projectId, featureId, workOrderName, remoteName?,
+  branchName?) -> UpstreamBranchResult` — list configured remotes, suggest a
+  new `commitarium/<work-order-slug>` branch, and read-only probe the selected
+  branch.
+- `publish_upstream_branch(projectId, featureId, remoteName, branchName) ->
+  UpstreamBranchResult` — recheck and push the exact clean local handoff commit
+  to a new remote branch. It never checks out a branch, changes the worktree,
+  updates an existing remote branch, or force-pushes over one.
 
-> The exact arg/return shapes for handoff are owned by the Rust side; the
-> frontend integration is not built yet. Fill these in when the handoff UI is
-> designed.
+```ts
+type UpstreamBranchStatus =
+  | "selection_required"
+  | "ready"
+  | "published"
+  | "already_published"
+  | "branch_conflict"
+  | "authentication_required"
+  | "remote_unavailable";
+
+type UpstreamRemote = {
+  name: string;
+  displayLocation: string; // credentials removed
+};
+
+type UpstreamBranchResult = {
+  projectId: string;
+  featureId: string;
+  repositoryPath: string;
+  localCommitId: string;
+  remotes: UpstreamRemote[];
+  selectedRemote?: string;
+  branchName: string;
+  status: UpstreamBranchStatus;
+  created: boolean;
+  detail?: string;
+};
+```
+
+Omitting `remoteName` lets preview choose the current target branch's configured
+remote, then `origin`, then the only configured remote. If no unambiguous choice
+exists, it returns `selection_required`. Omitting `branchName` uses the generated
+suggestion. A conflicting existing branch is never modified. An existing branch
+at the exact recorded commit is `already_published`, which also makes a retry
+after an interrupted receipt write safe. Remote credentials remain owned by the
+system Git credential helper or SSH setup; neither command accepts or returns a
+credential.
 
 ## Implemented — provider authentication / profiles
 

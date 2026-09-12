@@ -34,6 +34,8 @@ pub fn run() {
             import::get_project_source,
             handoff::synchronize_feature_locally,
             handoff::plain_folder::synchronize_feature_to_folder,
+            handoff::upstream::preview_upstream_branch,
+            handoff::upstream::publish_upstream_branch,
             profiles::list_profiles,
             profiles::begin_login,
             profiles::submit_login_code,
