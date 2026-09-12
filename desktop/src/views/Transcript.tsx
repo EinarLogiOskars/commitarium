@@ -77,8 +77,9 @@ function ActivityGroup({ items }: { items: TranscriptEntry[] }) {
   return (
     <div className="activity-group">
       <button className="activity-group__head" onClick={() => setOpen((o) => !o)}>
-        <span className="activity-group__chevron">{open ? "▾" : "▸"}</span>
-        {summarize(items)}
+        <span className="activity-group__chevron">{open ? "▼" : "▶"}</span>
+        <span className="activity-group__summary">{summarize(items)}</span>
+        <span className="activity-group__toggle">{open ? "Hide" : "Show"}</span>
       </button>
       {open && (
         <div className="activity-group__items">
