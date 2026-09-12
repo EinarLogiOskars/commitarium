@@ -1128,6 +1128,30 @@ button.primary {
   color: var(--ok);
 }
 
+/* Agent narration — presentation-safe reasoning/preamble, shown inline as a
+   light "thinking" note between tool calls and messages. */
+.narration {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 2px 0 2px 10px;
+  border-left: 2px solid color-mix(in srgb, var(--accent) 30%, var(--border));
+  margin: 2px 0;
+}
+.narration__who {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  font-weight: 600;
+}
+.narration__text {
+  font-size: 13px;
+  font-style: italic;
+  color: color-mix(in srgb, var(--text) 78%, var(--muted));
+  white-space: pre-wrap;
+}
+
 /* Collapsible activity summary in a phase transcript. */
 .activity-group {
   margin: 6px 0;
