@@ -107,8 +107,12 @@ export function FeatureView({
 
         <PhaseStepper feature={feature} viewedIndex={viewed} onSelect={select} paused={run?.paused} />
 
-        {run && !terminal && !finished && <InterveneBar run={run} onChanged={load} />}
-        {run && !terminal && waitBanner(run, feature.state)}
+        {/* Clarify has its own reply + accept-goal composer; the generic
+            intervene bar only applies once the agents run autonomously. */}
+        {run && !terminal && !finished && current > 0 && (
+          <InterveneBar run={run} onChanged={load} />
+        )}
+        {run && !terminal && current > 0 && waitBanner(run, feature.state)}
         {pinnedIndex !== null && pinnedIndex !== current && (
           <button className="linkish" onClick={() => setPinnedIndex(null)}>
             Viewing an earlier phase — jump to the current phase →
