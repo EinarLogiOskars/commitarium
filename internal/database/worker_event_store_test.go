@@ -3,6 +3,7 @@ package database
 import (
 	"errors"
 	"path/filepath"
+	"reflect"
 	"sync"
 	"testing"
 	"time"
@@ -89,6 +90,10 @@ func TestExecutionStorePersistsWorkerEventAndCheckpointAtomically(t *testing.T) 
 	pending := execution.PendingWorkerEvent{
 		ID: "sev_worker_one", SessionID: session.ID, AttemptID: checkpoint.AttemptID,
 		SourceSequence: 1, Type: worker.EventActivity, Text: "running tests",
+		Activity: &worker.Activity{
+			Kind: worker.ActivityKindFileChange, Operation: worker.FileOperationModified,
+			Path: "README.md", Additions: databaseIntPointer(4), Deletions: databaseIntPointer(1),
+		},
 		OccurredAt: now.Add(time.Second), AcceptedAt: now.Add(2 * time.Second),
 	}
 	recorded, created, err := store.AppendWorkerEvent(t.Context(), pending)
@@ -111,7 +116,7 @@ func TestExecutionStorePersistsWorkerEventAndCheckpointAtomically(t *testing.T) 
 	if err != nil {
 		t.Fatalf("list events: %v", err)
 	}
-	if len(events) != 2 || events[0] != ordinary || events[1] != recorded {
+	if len(events) != 2 || events[0] != ordinary || !reflect.DeepEqual(events[1], recorded) {
 		t.Fatalf("unexpected event history %+v", events)
 	}
 }

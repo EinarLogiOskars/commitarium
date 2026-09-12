@@ -178,6 +178,7 @@ func (s *ExecutionStore) AppendWorkerEvent(
 		Sequence:            sequence,
 		Type:                pending.Type,
 		Text:                pending.Text,
+		Activity:            pending.Activity,
 		OccurredAt:          pending.OccurredAt.UTC(),
 		WorkerAttemptID:     pending.AttemptID,
 		WorkerEventSequence: pending.SourceSequence,
@@ -185,12 +186,16 @@ func (s *ExecutionStore) AppendWorkerEvent(
 	if err := event.Validate(); err != nil {
 		return execution.Event{}, false, err
 	}
+	activityJSON, err := encodeSessionActivity(event.Activity)
+	if err != nil {
+		return execution.Event{}, false, err
+	}
 	if _, err := tx.ExecContext(
 		ctx,
 		`INSERT INTO session_events (
 			id, session_id, sequence, event_type, text, occurred_at,
-			worker_attempt_id, worker_event_sequence
-		 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+			worker_attempt_id, worker_event_sequence, activity_json
+		 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		event.ID,
 		event.SessionID,
 		event.Sequence,
@@ -199,6 +204,7 @@ func (s *ExecutionStore) AppendWorkerEvent(
 		formatExecutionTime(event.OccurredAt),
 		event.WorkerAttemptID,
 		event.WorkerEventSequence,
+		activityJSON,
 	); err != nil {
 		return execution.Event{}, false, fmt.Errorf("insert worker session event %q: %w", event.ID, err)
 	}
@@ -239,7 +245,7 @@ func findWorkerSourceEvent(
 	event, err := scanExecutionEvent(tx.QueryRowContext(
 		ctx,
 		`SELECT id, session_id, sequence, event_type, text, occurred_at,
-		        worker_attempt_id, worker_event_sequence
+		        worker_attempt_id, worker_event_sequence, activity_json
 		 FROM session_events
 		 WHERE session_id = ? AND worker_attempt_id = ? AND worker_event_sequence = ?`,
 		sessionID,
@@ -266,6 +272,7 @@ func sameWorkerEvent(existing execution.Event, pending execution.PendingWorkerEv
 		existing.WorkerEventSequence == pending.SourceSequence &&
 		existing.Type == pending.Type &&
 		existing.Text == pending.Text &&
+		activitiesEqual(existing.Activity, pending.Activity) &&
 		existing.OccurredAt.Equal(pending.OccurredAt)
 }
 

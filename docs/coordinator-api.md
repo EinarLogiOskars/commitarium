@@ -1211,6 +1211,70 @@ started, rather than only after completion. It also includes
 `disposition`, and `summary`, which let orchestration replay completed
 checkpoints without relaunching agents.
 
+### Structured session activity
+
+Session history and SSE keep the existing event envelope and event type. Every
+event still contains `id`, monotonic per-session `sequence`, `type`, `text`, and
+`occurred_at`. The `text` field remains a human-readable fallback for older
+clients and for activity that a provider does not classify.
+
+An `activity` event may additionally contain one structured `activity` object.
+A completed command is represented once, after its final execution facts are
+known:
+
+```json
+{
+  "id": "sev_opaque",
+  "sequence": 17,
+  "type": "activity",
+  "text": "Codex ran command with exit code 0: pnpm test",
+  "activity": {
+    "kind": "command",
+    "command": "pnpm test",
+    "exit_code": 0,
+    "duration_ms": 4213
+  },
+  "occurred_at": "2026-09-12T19:00:00Z"
+}
+```
+
+`exit_code` and `duration_ms` are omitted when the provider protocol does not
+report those facts. Command stdout and stderr are never included in session
+events.
+
+Each provider-reported file change is a separate event, including when one
+provider item changed several files:
+
+```json
+{
+  "id": "sev_opaque_2",
+  "sequence": 18,
+  "type": "activity",
+  "text": "Codex modified README.md (+42/-8).",
+  "activity": {
+    "kind": "file_change",
+    "op": "modified",
+    "path": "README.md",
+    "additions": 42,
+    "deletions": 8
+  },
+  "occurred_at": "2026-09-12T19:00:04Z"
+}
+```
+
+`op` is `created`, `modified`, `deleted`, or `renamed`. Paths are normalized
+workspace-relative paths; a rename also includes `old_path`. Addition and
+deletion counts are omitted when the provider supplies a file operation but
+not reliable line-level data. Full diffs and file contents are not retained in
+these events.
+
+Codex App Server command and file-change items and Claude Code Bash/Edit/Write/
+NotebookEdit tool records use this shared shape in clarification, planning,
+implementation, and review sessions. Other observable provider actions retain
+their existing unstructured `activity` event and `text`. Intervention-only
+turns are instructed not to run commands or edit files; if they comply, their
+answer has no command or file-change activity.
+
 ## Server-sent event streams
 
 All stream endpoints first replay durable SQLite history and then deliver new

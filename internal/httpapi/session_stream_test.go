@@ -15,6 +15,9 @@ import (
 func TestStreamSessionEventsResumesAfterLastEventID(t *testing.T) {
 	first := testSessionEvent("sev_one", 1, "starting")
 	second := testSessionEvent("sev_two", 2, "editing files")
+	second.Activity = &worker.Activity{
+		Kind: worker.ActivityKindCommand, Command: "pnpm test", ExitCode: httpIntPointer(0),
+	}
 	executions := &recordingExecutionService{
 		session: execution.Session{ID: "ses_test"},
 		events:  []execution.Event{first, second},
@@ -43,7 +46,8 @@ func TestStreamSessionEventsResumesAfterLastEventID(t *testing.T) {
 		t.Errorf("expected first event to be skipped, got %q", body)
 	}
 	if !strings.Contains(body, "id: "+second.ID) ||
-		!strings.Contains(body, `"text":"editing files"`) {
+		!strings.Contains(body, `"text":"editing files"`) ||
+		!strings.Contains(body, `"activity":{"kind":"command","command":"pnpm test","exit_code":0}`) {
 		t.Errorf("expected second event in stream, got %q", body)
 	}
 	if executions.unsubscribed != 1 {

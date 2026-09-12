@@ -77,7 +77,10 @@ func TestIngestNextFiltersAndRecordsOneEvent(t *testing.T) {
 		recorder.sequence != source.Sequence ||
 		!recorder.occurred.Equal(source.OccurredAt) ||
 		recorder.event.Type != worker.EventActivity ||
-		recorder.event.Text != "using [REDACTED]" {
+		recorder.event.Text != "using [REDACTED]" ||
+		recorder.event.Activity == nil ||
+		recorder.event.Activity.Command != "go test ./..." ||
+		recorder.event.Activity.ExitCode == nil || *recorder.event.Activity.ExitCode != 0 {
 		t.Fatalf("unexpected recorder call %+v", recorder)
 	}
 }
@@ -85,6 +88,7 @@ func TestIngestNextFiltersAndRecordsOneEvent(t *testing.T) {
 func TestIngestNextPreservesRecoveryAssessment(t *testing.T) {
 	source := validEvent()
 	source.Type = workerhttp.EventRecoveryAssessment
+	source.Activity = nil
 	source.RecoveryAssessment = &workerhttp.RecoveryAssessment{
 		Consistent: true, RequiresUserReview: false,
 	}
@@ -166,8 +170,14 @@ func validEvent() workerhttp.Event {
 		Text:       "using token_test",
 		OccurredAt: time.Date(2026, time.September, 9, 1, 0, 1, 0, time.UTC),
 		Redaction:  workerhttp.RedactionMetadata{},
+		Activity: &workerhttp.Activity{
+			Kind: workerhttp.ActivityKindCommand, Command: "go test ./...",
+			ExitCode: ingestIntPointer(0),
+		},
 	}
 }
+
+func ingestIntPointer(value int) *int { return &value }
 
 func unchangedFilter() Filter {
 	return FilterFunc(func(_ context.Context, event workerhttp.Event) (workerhttp.Event, error) {

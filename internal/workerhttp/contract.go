@@ -232,6 +232,36 @@ type RecoveryAssessment struct {
 	RequiresUserReview bool `json:"requires_user_review"`
 }
 
+type ActivityKind string
+
+const (
+	ActivityKindCommand    ActivityKind = "command"
+	ActivityKindFileChange ActivityKind = "file_change"
+)
+
+type FileOperation string
+
+const (
+	FileOperationCreated  FileOperation = "created"
+	FileOperationModified FileOperation = "modified"
+	FileOperationDeleted  FileOperation = "deleted"
+	FileOperationRenamed  FileOperation = "renamed"
+)
+
+// Activity is structured observable metadata. Provider output and file
+// contents are intentionally absent from this transport object.
+type Activity struct {
+	Kind       ActivityKind  `json:"kind"`
+	Command    string        `json:"command,omitempty"`
+	ExitCode   *int          `json:"exit_code,omitempty"`
+	DurationMS *int64        `json:"duration_ms,omitempty"`
+	Operation  FileOperation `json:"op,omitempty"`
+	Path       string        `json:"path,omitempty"`
+	OldPath    string        `json:"old_path,omitempty"`
+	Additions  *int          `json:"additions,omitempty"`
+	Deletions  *int          `json:"deletions,omitempty"`
+}
+
 type Event struct {
 	AttemptReference
 	Sequence           int64               `json:"sequence"`
@@ -240,6 +270,7 @@ type Event struct {
 	OccurredAt         time.Time           `json:"occurred_at"`
 	Redaction          RedactionMetadata   `json:"redaction"`
 	Truncation         *TruncationMetadata `json:"truncation,omitempty"`
+	Activity           *Activity           `json:"activity,omitempty"`
 	RecoveryAssessment *RecoveryAssessment `json:"recovery_assessment,omitempty"`
 }
 

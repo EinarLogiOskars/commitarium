@@ -611,6 +611,19 @@ func normalizeObservableEvent(
 		Text:      event.Text,
 		Redaction: workerhttp.RedactionMetadata{},
 	}
+	if event.Activity != nil {
+		normalized.Activity = &workerhttp.Activity{
+			Kind:       workerhttp.ActivityKind(event.Activity.Kind),
+			Command:    event.Activity.Command,
+			ExitCode:   event.Activity.ExitCode,
+			DurationMS: event.Activity.DurationMS,
+			Operation:  workerhttp.FileOperation(event.Activity.Operation),
+			Path:       event.Activity.Path,
+			OldPath:    event.Activity.OldPath,
+			Additions:  event.Activity.Additions,
+			Deletions:  event.Activity.Deletions,
+		}
+	}
 	if event.RecoveryAssessment != nil {
 		normalized.RecoveryAssessment = &workerhttp.RecoveryAssessment{
 			Consistent:         event.RecoveryAssessment.Consistent,

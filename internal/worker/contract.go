@@ -117,6 +117,7 @@ type RecoveryAssessment struct {
 type Event struct {
 	Type               EventType
 	Text               string
+	Activity           *Activity
 	RecoveryAssessment *RecoveryAssessment
 }
 
