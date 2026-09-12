@@ -2,15 +2,27 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { getRun } from "../api/runs";
 import { getSessionEvents } from "../api/sessions";
 import { ApiError } from "../api/client";
+import { Transcript, type TranscriptEntry } from "./Transcript";
+import { scopeToPhase, type Interval } from "./phaseWindows";
 import type { SessionEvent } from "../api/types";
 
 const POLL_MS = 2000;
 
+const SHOWN = new Set(["message", "activity"]);
+
 // Implementation phase: the lead writes the code per the agreed plan. Only the
 // lead acts here (the reviewer's code review comes next), so this shows the lead
-// session's activity as a live feed, auto-scrolled to the newest.
-export function ImplementationView({ runId, live = true }: { runId: string; live?: boolean }) {
-  const [events, setEvents] = useState<SessionEvent[]>([]);
+// session's activity for the implementation window, auto-scrolled to the newest.
+export function ImplementationView({
+  runId,
+  live = true,
+  intervals = [],
+}: {
+  runId: string;
+  live?: boolean;
+  intervals?: Interval[];
+}) {
+  const [entries, setEntries] = useState<TranscriptEntry[]>([]);
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const feedRef = useRef<HTMLDivElement | null>(null);
@@ -22,7 +34,12 @@ export function ImplementationView({ runId, live = true }: { runId: string; live
       const lead = run.sessions.find((s) => s.role === "lead") ?? run.sessions[0];
       if (!lead) return;
       setStatus(lead.status);
-      setEvents(await getSessionEvents(lead.id));
+      const events = (await getSessionEvents(lead.id)) as SessionEvent[];
+      setEntries(
+        events
+          .filter((e) => e.text && SHOWN.has(e.type))
+          .map((e) => ({ key: e.id, role: "lead", type: e.type, text: e.text, at: e.occurred_at })),
+      );
     } catch (e) {
       setError(e instanceof ApiError ? `${e.message} (${e.code})` : String(e));
     }
@@ -37,7 +54,9 @@ export function ImplementationView({ runId, live = true }: { runId: string; live
   useEffect(() => {
     const el = feedRef.current;
     if (el && pinned.current) el.scrollTop = el.scrollHeight;
-  }, [events]);
+  }, [entries]);
+
+  const scoped = scopeToPhase(entries, intervals);
 
   return (
     <section className="panel">
@@ -56,24 +75,7 @@ export function ImplementationView({ runId, live = true }: { runId: string; live
           pinned.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
         }}
       >
-        {events.filter((e) => e.text && (e.type === "message" || e.type === "activity")).length === 0 ? (
-          <p className="muted">Waiting for the lead to start…</p>
-        ) : (
-          events
-            .filter((e) => e.text && (e.type === "message" || e.type === "activity"))
-            .map((e) =>
-              e.type === "message" ? (
-                <div key={e.id} className="msg msg--lead">
-                  <span className="msg__who">Lead</span>
-                  <span className="msg__text">{e.text}</span>
-                </div>
-              ) : (
-                <div key={e.id} className="msg msg--note">
-                  {e.text}
-                </div>
-              ),
-            )
-        )}
+        <Transcript entries={scoped} empty="Waiting for the lead to start…" />
       </div>
 
       {live && (

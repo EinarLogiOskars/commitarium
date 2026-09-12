@@ -201,6 +201,18 @@ export interface Workspace {
   updated_at: string;
 }
 
+// A durable workflow-history event. State-change events carry previous_state
+// and state; they give the phase-boundary timestamps used to scope each phase's
+// activity. Other event types (e.g. feature.goal_accepted) are ignored for that.
+export interface WorkflowEvent {
+  id: string;
+  type: string; // "feature.state_changed" | "feature.goal_accepted" | ...
+  sequence: number;
+  occurred_at: string;
+  previous_state?: FeatureState;
+  state?: FeatureState;
+}
+
 /** One ordered lead/reviewer message in the planning discussion. */
 export interface PlanningMessage {
   id: string;
