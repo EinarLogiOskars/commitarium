@@ -1032,6 +1032,19 @@ button.primary {
   flex: 1 1 auto;
   resize: vertical;
   min-height: 40px;
+  font: inherit;
+  padding: 8px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
+}
+.intervene__text:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.intervene__text:disabled {
+  opacity: 0.6;
 }
 .intervene__hint {
   margin: 8px 0 0;
