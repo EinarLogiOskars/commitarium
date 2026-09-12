@@ -16,11 +16,13 @@ export function FeatureView({
   featureId,
   hasRepo,
   onBack,
+  onChanged,
 }: {
   projectId: string;
   featureId: string;
   hasRepo?: boolean;
   onBack?: () => void;
+  onChanged?: () => void;
 }) {
   const [feature, setFeature] = useState<Feature | null>(null);
   const [runs, setRuns] = useState<Run[] | null>(null);
@@ -35,10 +37,11 @@ export function FeatureView({
       ]);
       setFeature(f);
       setRuns(r);
+      onChanged?.();
     } catch (e) {
       setError(describe(e));
     }
-  }, [projectId, featureId]);
+  }, [projectId, featureId, onChanged]);
 
   useEffect(() => {
     setFeature(null);
