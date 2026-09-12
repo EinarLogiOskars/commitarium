@@ -246,6 +246,7 @@ func TestStartRunMapsSelectedProjectWorkspaceErrors(t *testing.T) {
 
 func TestGetRunIncludesSessions(t *testing.T) {
 	now := time.Date(2026, time.September, 9, 3, 0, 0, 0, time.UTC)
+	resolvedAt := now.Add(time.Second)
 	executions := &recordingExecutionService{
 		run: execution.Run{
 			ID: "run_test", FeatureID: "fea_test", Status: execution.RunStatusRunning,
@@ -263,7 +264,8 @@ func TestGetRunIncludesSessions(t *testing.T) {
 			Status:      execution.InterventionStatusAnswered,
 			AttemptID:   "run_test:lead:intervention:test",
 			Effect:      worker.InterventionEffectGuidanceApplied,
-			RequestedAt: now, UpdatedAt: now, AnsweredAt: &now,
+			RequestedAt: now, UpdatedAt: resolvedAt, AnsweredAt: &now,
+			ResolvedAt: &resolvedAt, ResolutionActionID: "resume_test",
 		},
 	}
 	recorder := httptest.NewRecorder()
@@ -280,7 +282,8 @@ func TestGetRunIncludesSessions(t *testing.T) {
 	}
 	if body.ID != "run_test" || len(body.Sessions) != 1 || body.Sessions[0].Role != worker.RoleCoder ||
 		body.DialogueLimits.PlanningRounds != 6 || body.DialogueLimits.ImplementationReviewRounds != 4 ||
-		body.Intervention == nil || body.Intervention.Effect != worker.InterventionEffectGuidanceApplied {
+		body.Intervention == nil || body.Intervention.Effect != worker.InterventionEffectGuidanceApplied ||
+		body.Intervention.ResolvedAt == nil || !body.Intervention.ResolvedAt.Equal(resolvedAt) {
 		t.Errorf("unexpected run response %+v", body)
 	}
 }

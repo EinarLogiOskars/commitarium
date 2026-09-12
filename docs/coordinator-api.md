@@ -613,6 +613,10 @@ it is answered. An answered intervention also contains `effect`, for example:
 }
 ```
 
+After ordinary guidance is consumed by an explicit successful `/resume`, the
+same object also contains `resolved_at`. This timestamp is omitted while the
+answer still requires clarification or a safe replanning decision.
+
 The intervention statuses are:
 
 - `waiting_for_boundary`: the current bounded agent turn is still finishing;
@@ -691,11 +695,23 @@ action for that phase. Resuming before an already-running provider turn ends
 simply cancels the armed gate.
 
 Resume returns `409 intervention_pending` while the latest intervention is not
-`answered`. It currently returns `409 intervention_resolution_pending` after
-the answer is durable, until the following backend slice applies the structured
-effect to the saved checkpoint. This prevents “Continue workflow” from silently
-discarding, bypassing, or misapplying user guidance. The run stays paused in
-both cases.
+`answered`. Once it is answered, behavior follows the structured effect:
+
+- `guidance_applied`: `/resume` atomically records `resolved_at`, restores the
+  exact saved wait kind and human-readable reason, removes the pause, and then
+  honors the run's autonomy policy. An exact retry cannot consume the guidance
+  twice or launch a duplicate turn.
+- `clarification_required`: `/resume` returns
+  `409 intervention_clarification_required`; the run stays paused so the user
+  can send another intervention message to the agent.
+- `replanning_required`: `/resume` returns
+  `409 intervention_replanning_required`; the run stays paused until the
+  versioned-plan/workspace replanning path is available. This deliberately does
+  not pretend that changing the feature state alone would safely reconcile
+  partial code and the existing Forgejo plan.
+
+These gates prevent “Continue workflow” from silently discarding, bypassing, or
+misapplying user guidance.
 
 Both endpoints require an empty body and reject terminal runs. Reusing one
 `Idempotency-Key` for the opposite action returns `409 idempotency_conflict`.

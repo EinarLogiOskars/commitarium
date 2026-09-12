@@ -185,8 +185,9 @@ Safe UI capabilities:
   terminal runs return an empty array.
 - Read the optional latest `intervention` from a run. Its settled fields are
   `id`, `session_id`, `target`, `message`, `status`, `requested_at`,
-  `updated_at`, optional `effect`, and optional `answered_at`. Settled status
-  values are `waiting_for_boundary`, `queued`, `being_answered`, and `answered`.
+  `updated_at`, optional `effect`, optional `answered_at`, and optional
+  `resolved_at`. Settled status values are `waiting_for_boundary`, `queued`,
+  `being_answered`, and `answered`.
 - Queue an idempotent intervention with
   `POST /api/v1/runs/{runID}/interventions`, a stable `Idempotency-Key`, and
   `{"target":"lead|reviewer","message":"..."}`. The request records the
@@ -196,10 +197,14 @@ Safe UI capabilities:
   session's existing history/SSE surface. Only one unfinished request is allowed.
 - Treat intervention delivery and workflow continuation as separate controls.
   `POST /resume` returns `409 intervention_pending` until the intervention is
-  answered, and the agent answer does not remove the run pause. For this
-  checkpoint, an answered intervention returns
-  `409 intervention_resolution_pending` from `/resume`; keep Continue disabled
-  until the effect-handling slice below settles.
+  answered, and the agent answer does not remove the run pause. For
+  `guidance_applied`, Continue may now call `/resume`: the backend records
+  `resolved_at`, restores the saved checkpoint, and honors `autonomy_policy`
+  exactly once. For `clarification_required`, keep the composer active and
+  handle `409 intervention_clarification_required`. For
+  `replanning_required`, show that replanning is required and handle
+  `409 intervention_replanning_required`; the safe plan-version transition is
+  still in progress below.
 
 The session/event identities, roles, timestamps, lifecycle state, and activity
 categories are the stable input for both a conventional activity view and the
@@ -316,14 +321,14 @@ not implemented yet.
 
 ## In progress — avoid for now
 
-### Returning from an intervention
+### Scope-changing intervention replanning
 
-The coordinator records the agent's structured effect but does not yet apply it
-to the saved workflow checkpoint. Until this lands, `/resume` returns
-`409 intervention_resolution_pending` for an answered intervention. The next
-slice will continue normally for `guidance_applied`, preserve a user dialogue
-for `clarification_required`, and return changed scope to planning for
-`replanning_required`, always through the user's explicit Continue action.
+Ordinary guidance resolution and clarification follow-up are settled. A
+`replanning_required` answer remains paused with a typed conflict because an
+implementation or review may already have changed the feature branch. The next
+backend slice must preserve that work, establish a new durable plan version and
+Git baseline, update the existing Forgejo PR audit trail, and restart the
+planning dialogue without treating the old submitted plan as current.
 
 ## Planned — do not depend on it yet
 

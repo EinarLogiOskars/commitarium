@@ -2,6 +2,7 @@ package database
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"io/fs"
 	"path/filepath"
@@ -601,6 +602,33 @@ func TestMigrateCreatesExecutionTables(t *testing.T) {
 	} {
 		if !found[name] {
 			t.Errorf("expected table %q to exist", name)
+		}
+	}
+
+	columns, err := db.QueryContext(t.Context(), `PRAGMA table_info(run_interventions)`)
+	if err != nil {
+		t.Fatalf("query intervention columns: %v", err)
+	}
+	defer columns.Close()
+	foundColumns := make(map[string]bool)
+	for columns.Next() {
+		var cid int
+		var name string
+		var columnType string
+		var notNull int
+		var defaultValue sql.NullString
+		var primaryKey int
+		if err := columns.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+			t.Fatalf("scan intervention column: %v", err)
+		}
+		foundColumns[name] = true
+	}
+	if err := columns.Err(); err != nil {
+		t.Fatalf("iterate intervention columns: %v", err)
+	}
+	for _, name := range []string{"resolved_at", "resume_reason", "resolution_action_id"} {
+		if !foundColumns[name] {
+			t.Errorf("expected run_interventions column %q to exist", name)
 		}
 	}
 }

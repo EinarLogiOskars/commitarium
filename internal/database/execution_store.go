@@ -215,9 +215,10 @@ func (s *ExecutionStore) TransitionRun(
 		if _, err := tx.ExecContext(
 			ctx,
 			`UPDATE run_interventions
-			 SET status = ?, updated_at = ?
+			 SET status = ?, resume_reason = ?, updated_at = ?
 			 WHERE run_id = ? AND status = ?`,
 			execution.InterventionStatusQueued,
+			transition.Reason,
 			formatExecutionTime(run.UpdatedAt),
 			run.ID,
 			execution.InterventionStatusWaitingForBoundary,

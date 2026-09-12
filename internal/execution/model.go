@@ -62,17 +62,22 @@ type Run struct {
 // lead or reviewer conversation. The message is queued separately from an
 // ordinary session command because queueing must not start a provider turn.
 type Intervention struct {
-	ID          string
-	RunID       string
-	SessionID   string
-	Target      worker.Role
-	Message     string
-	Status      InterventionStatus
-	AttemptID   string
-	Effect      worker.InterventionEffect
-	RequestedAt time.Time
-	UpdatedAt   time.Time
-	AnsweredAt  *time.Time
+	ID           string
+	RunID        string
+	SessionID    string
+	Target       worker.Role
+	Message      string
+	Status       InterventionStatus
+	AttemptID    string
+	Effect       worker.InterventionEffect
+	ResumeReason string
+	// ResolutionActionID binds the run resume idempotency key to this exact
+	// intervention. It is internal bookkeeping and is not exposed by the API.
+	ResolutionActionID string
+	RequestedAt        time.Time
+	UpdatedAt          time.Time
+	AnsweredAt         *time.Time
+	ResolvedAt         *time.Time
 }
 
 type InterventionTarget struct {
@@ -219,6 +224,14 @@ func (intervention Intervention) Validate() error {
 		return fmt.Errorf("%w: unfinished intervention cannot have an answer time", ErrInvalidIntervention)
 	case intervention.AnsweredAt != nil && intervention.AnsweredAt.Before(intervention.RequestedAt):
 		return fmt.Errorf("%w: answer time precedes request time", ErrInvalidIntervention)
+	case intervention.ResolvedAt != nil && intervention.Status != InterventionStatusAnswered:
+		return fmt.Errorf("%w: only an answered intervention can be resolved", ErrInvalidIntervention)
+	case intervention.ResolvedAt != nil && intervention.ResolvedAt.Before(*intervention.AnsweredAt):
+		return fmt.Errorf("%w: resolution time precedes answer time", ErrInvalidIntervention)
+	case intervention.ResolvedAt != nil && intervention.UpdatedAt.Before(*intervention.ResolvedAt):
+		return fmt.Errorf("%w: update time precedes resolution time", ErrInvalidIntervention)
+	case (intervention.ResolvedAt == nil) != (strings.TrimSpace(intervention.ResolutionActionID) == ""):
+		return fmt.Errorf("%w: resolution time and action ID must be recorded together", ErrInvalidIntervention)
 	case (intervention.Status == InterventionStatusWaitingForBoundary ||
 		intervention.Status == InterventionStatusQueued) && intervention.AttemptID != "":
 		return fmt.Errorf("%w: undelivered intervention cannot have an attempt ID", ErrInvalidIntervention)

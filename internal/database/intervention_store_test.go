@@ -124,7 +124,8 @@ func TestExecutionStoreQueuesInterventionAndArmsPauseAtomically(t *testing.T) {
 	}
 	queued, err := store.GetLatestIntervention(t.Context(), run.ID)
 	if err != nil || queued.Status != execution.InterventionStatusQueued ||
-		queued.UpdatedAt != waiting.UpdatedAt {
+		queued.UpdatedAt != waiting.UpdatedAt ||
+		queued.ResumeReason != "The current turn finished." {
 		t.Fatalf("intervention did not become queued: intervention=%+v err=%v", queued, err)
 	}
 }
@@ -215,9 +216,38 @@ func TestExecutionStoreQueuesAtExistingWaitingCheckpoint(t *testing.T) {
 	if err != nil || result.Intervention.Status != execution.InterventionStatusQueued {
 		t.Fatalf("queue waiting intervention: result=%+v err=%v", result, err)
 	}
+	if result.Intervention.ResumeReason != "Review is ready." {
+		t.Fatalf("waiting reason was not retained: %+v", result.Intervention)
+	}
 	paused, err := store.GetRun(t.Context(), run.ID)
 	if err != nil || !paused.Paused || paused.PausedFromWaitKind != execution.RunWaitKindRoundCap {
 		t.Fatalf("waiting checkpoint was not retained: run=%+v err=%v", paused, err)
+	}
+
+	answeredAt := waitingAt.Add(2 * time.Second)
+	if _, err := db.ExecContext(
+		t.Context(),
+		`UPDATE run_interventions
+		 SET status = 'answered', attempt_id = 'clarification-attempt',
+		     effect = 'clarification_required', updated_at = ?, answered_at = ?
+		 WHERE id = ?`,
+		formatExecutionTime(answeredAt), formatExecutionTime(answeredAt), result.Intervention.ID,
+	); err != nil {
+		t.Fatalf("record clarification fixture: %v", err)
+	}
+	if _, err := db.ExecContext(
+		t.Context(),
+		`UPDATE runs SET reason = ?, updated_at = ? WHERE id = ?`,
+		"The lead answered the intervention.", formatExecutionTime(answeredAt), run.ID,
+	); err != nil {
+		t.Fatalf("record answered run fixture: %v", err)
+	}
+	followUp, _, err := store.QueueIntervention(t.Context(), execution.InterventionRequest{
+		ID: "int_follow_up", RunID: run.ID, Target: worker.RoleLead,
+		Message: "Here is the missing detail.", OccurredAt: answeredAt.Add(time.Second),
+	})
+	if err != nil || followUp.Intervention.ResumeReason != "Review is ready." {
+		t.Fatalf("clarification follow-up lost original checkpoint: result=%+v err=%v", followUp, err)
 	}
 }
 
@@ -321,5 +351,32 @@ func TestExecutionStoreDeliversAndCompletesInterventionWithoutUnpausingRun(t *te
 	if err != nil || !stillPaused.Paused || stillPaused.Status != execution.RunStatusWaitingForUser ||
 		stillPaused.WaitKind != execution.RunWaitKindPaused {
 		t.Fatalf("completion resumed workflow: run=%+v err=%v", stillPaused, err)
+	}
+
+	resolution := execution.InterventionGuidanceResolution{
+		ID: "resume-guidance", RunID: run.ID, InterventionID: answered.ID,
+		OccurredAt: now.Add(5 * time.Second),
+	}
+	resumed, resolved, err := store.ResolveInterventionGuidance(t.Context(), resolution)
+	if err != nil || !resolved || resumed.Paused ||
+		resumed.Status != execution.RunStatusWaitingForUser ||
+		resumed.WaitKind != execution.RunWaitKindClarification ||
+		resumed.Reason != "Waiting for the user." {
+		t.Fatalf("resolve guidance: run=%+v resolved=%t err=%v", resumed, resolved, err)
+	}
+	storedIntervention, err := store.GetLatestIntervention(t.Context(), run.ID)
+	if err != nil || storedIntervention.ResolvedAt == nil ||
+		!storedIntervention.ResolvedAt.Equal(resolution.OccurredAt) ||
+		storedIntervention.ResolutionActionID != resolution.ID {
+		t.Fatalf("guidance resolution was not recorded: intervention=%+v err=%v", storedIntervention, err)
+	}
+	retriedRun, resolved, err := store.ResolveInterventionGuidance(t.Context(), resolution)
+	if err != nil || resolved || retriedRun != resumed {
+		t.Fatalf("exact resolution retry changed state: run=%+v resolved=%t err=%v", retriedRun, resolved, err)
+	}
+	conflictingResolution := resolution
+	conflictingResolution.InterventionID = "int_other"
+	if _, _, err := store.ResolveInterventionGuidance(t.Context(), conflictingResolution); !errors.Is(err, execution.ErrRunActionConflict) {
+		t.Fatalf("expected reused action ID to conflict, got %v", err)
 	}
 }

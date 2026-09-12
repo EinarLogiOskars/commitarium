@@ -148,17 +148,29 @@ func TestResumeRunHandlerReportsPendingIntervention(t *testing.T) {
 	}
 }
 
-func TestResumeRunHandlerReportsUnresolvedInterventionEffect(t *testing.T) {
-	workflow := &planningStarterStub{err: orchestration.ErrInterventionResolutionPending}
-	handler := NewWithWorkspaceAndRealWorkflowService(
-		nil, nil, nil, &recordingExecutionService{}, nil, nil, nil, workflow,
-	)
-	request := httptest.NewRequest(http.MethodPost, "/api/v1/runs/run_test/resume", nil)
-	request.Header.Set("Idempotency-Key", "resume-with-unresolved-intervention")
-	response := httptest.NewRecorder()
-	handler.ServeHTTP(response, request)
-	if response.Code != http.StatusConflict ||
-		!strings.Contains(response.Body.String(), `"code":"intervention_resolution_pending"`) {
-		t.Fatalf("unexpected unresolved-intervention response %d: %s", response.Code, response.Body.String())
+func TestResumeRunHandlerReportsInterventionEffectGate(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		err  error
+		code string
+	}{
+		{name: "clarification", err: orchestration.ErrInterventionClarificationRequired, code: "intervention_clarification_required"},
+		{name: "replanning", err: orchestration.ErrInterventionReplanningRequired, code: "intervention_replanning_required"},
+		{name: "concurrent state change", err: execution.ErrStateConflict, code: "run_control_not_allowed"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			workflow := &planningStarterStub{err: test.err}
+			handler := NewWithWorkspaceAndRealWorkflowService(
+				nil, nil, nil, &recordingExecutionService{}, nil, nil, nil, workflow,
+			)
+			request := httptest.NewRequest(http.MethodPost, "/api/v1/runs/run_test/resume", nil)
+			request.Header.Set("Idempotency-Key", "resume-with-"+test.name)
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			if response.Code != http.StatusConflict ||
+				!strings.Contains(response.Body.String(), `"code":"`+test.code+`"`) {
+				t.Fatalf("unexpected intervention response %d: %s", response.Code, response.Body.String())
+			}
+		})
 	}
 }

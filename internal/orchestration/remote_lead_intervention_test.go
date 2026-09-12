@@ -21,8 +21,27 @@ import (
 
 type interventionResumeExecutionStub struct {
 	RemoteLeadExecution
-	intervention execution.Intervention
-	pauseCalled  bool
+	intervention     execution.Intervention
+	run              execution.Run
+	pauseCalled      bool
+	resolutionCalled bool
+}
+
+func (stub *interventionResumeExecutionStub) GetRun(
+	context.Context,
+	string,
+) (execution.Run, error) {
+	return stub.run, nil
+}
+
+func (stub *interventionResumeExecutionStub) ResolveInterventionGuidance(
+	_ context.Context,
+	_ string,
+	_ string,
+	_ string,
+) (execution.Run, bool, error) {
+	stub.resolutionCalled = true
+	return stub.run, true, nil
 }
 
 func (stub *interventionResumeExecutionStub) GetLatestIntervention(
@@ -56,18 +75,51 @@ func TestRemoteLeadResumeCannotBypassUnansweredIntervention(t *testing.T) {
 	}
 }
 
-func TestRemoteLeadResumeCannotBypassUnresolvedInterventionEffect(t *testing.T) {
-	executions := &interventionResumeExecutionStub{intervention: execution.Intervention{
-		ID: "int_answered", Status: execution.InterventionStatusAnswered,
-		Effect: worker.InterventionEffectReplanningRequired,
-	}}
+func TestRemoteLeadResumeConsumesGuidanceBeforeContinuing(t *testing.T) {
+	executions := &interventionResumeExecutionStub{
+		intervention: execution.Intervention{
+			ID: "int_answered", Status: execution.InterventionStatusAnswered,
+			Effect: worker.InterventionEffectGuidanceApplied,
+		},
+		run: execution.Run{
+			ID: "run_test", Status: execution.RunStatusWaitingForUser,
+			WaitKind:       execution.RunWaitKindPhaseCheckpoint,
+			AutonomyPolicy: project.AutonomyPolicyReviewEachPhase,
+		},
+	}
 	starter := &RemoteLeadStarter{executions: executions}
 
-	if _, _, err := starter.Resume(t.Context(), "run_test", "resume_test"); !errors.Is(err, ErrInterventionResolutionPending) {
-		t.Fatalf("expected unresolved intervention error, got %v", err)
+	if _, applied, err := starter.Resume(t.Context(), "run_test", "resume_test"); err != nil || !applied {
+		t.Fatalf("resume guidance: applied=%t err=%v", applied, err)
 	}
-	if executions.pauseCalled {
-		t.Fatal("resume changed pause state before the intervention effect was resolved")
+	if !executions.resolutionCalled || executions.pauseCalled {
+		t.Fatalf("resume did not use atomic guidance resolution: %+v", executions)
+	}
+}
+
+func TestRemoteLeadResumeKeepsClarificationAndReplanningPaused(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		effect worker.InterventionEffect
+		want   error
+	}{
+		{name: "clarification", effect: worker.InterventionEffectClarificationRequired, want: ErrInterventionClarificationRequired},
+		{name: "replanning", effect: worker.InterventionEffectReplanningRequired, want: ErrInterventionReplanningRequired},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			executions := &interventionResumeExecutionStub{intervention: execution.Intervention{
+				ID: "int_answered", Status: execution.InterventionStatusAnswered,
+				Effect: test.effect,
+			}}
+			starter := &RemoteLeadStarter{executions: executions}
+
+			if _, _, err := starter.Resume(t.Context(), "run_test", "resume_test"); !errors.Is(err, test.want) {
+				t.Fatalf("expected %v, got %v", test.want, err)
+			}
+			if executions.pauseCalled || executions.resolutionCalled {
+				t.Fatal("resume changed state before the non-guidance effect was safely handled")
+			}
+		})
 	}
 }
 

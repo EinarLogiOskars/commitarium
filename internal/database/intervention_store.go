@@ -82,6 +82,16 @@ func (s *ExecutionStore) QueueIntervention(
 		Target: request.Target, Message: request.Message, Status: status,
 		RequestedAt: now, UpdatedAt: now,
 	}
+	if run.Status == execution.RunStatusWaitingForUser {
+		intervention.ResumeReason = run.Reason
+		priorReason, inherited, err := unresolvedInterventionResumeReason(ctx, tx, run.ID)
+		if err != nil {
+			return execution.InterventionRequestResult{}, false, err
+		}
+		if inherited && priorReason != "" {
+			intervention.ResumeReason = priorReason
+		}
+	}
 	if err := intervention.Validate(); err != nil {
 		return execution.InterventionRequestResult{}, false, err
 	}
@@ -111,10 +121,12 @@ func (s *ExecutionStore) QueueIntervention(
 		ctx,
 		`INSERT INTO run_interventions (
 			id, run_id, session_id, target_role, message, status,
-			requested_at, updated_at, answered_at
-		 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
+			attempt_id, effect, resume_reason, resolution_action_id,
+			requested_at, updated_at, answered_at, resolved_at
+		 ) VALUES (?, ?, ?, ?, ?, ?, '', '', ?, '', ?, ?, NULL, NULL)`,
 		intervention.ID, intervention.RunID, intervention.SessionID,
 		intervention.Target, intervention.Message, intervention.Status,
+		intervention.ResumeReason,
 		formatExecutionTime(intervention.RequestedAt), formatExecutionTime(intervention.UpdatedAt),
 	); err != nil {
 		return execution.InterventionRequestResult{}, false, fmt.Errorf("insert intervention %q: %w", intervention.ID, err)
@@ -162,7 +174,8 @@ func (s *ExecutionStore) GetLatestIntervention(
 	intervention, err := scanIntervention(s.db.QueryRowContext(
 		ctx,
 		`SELECT id, run_id, session_id, target_role, message, status,
-		        attempt_id, effect, requested_at, updated_at, answered_at
+		        attempt_id, effect, resume_reason, resolution_action_id,
+		        requested_at, updated_at, answered_at, resolved_at
 		 FROM run_interventions
 		 WHERE run_id = ?
 		 ORDER BY requested_at DESC, id DESC
@@ -261,7 +274,8 @@ func findIntervention(
 	intervention, err := scanIntervention(tx.QueryRowContext(
 		ctx,
 		`SELECT id, run_id, session_id, target_role, message, status,
-		        attempt_id, effect, requested_at, updated_at, answered_at
+		        attempt_id, effect, resume_reason, resolution_action_id,
+		        requested_at, updated_at, answered_at, resolved_at
 		 FROM run_interventions WHERE id = ?`,
 		id,
 	))
@@ -282,7 +296,8 @@ func findUnfinishedIntervention(
 	intervention, err := scanIntervention(tx.QueryRowContext(
 		ctx,
 		`SELECT id, run_id, session_id, target_role, message, status,
-		        attempt_id, effect, requested_at, updated_at, answered_at
+		        attempt_id, effect, resume_reason, resolution_action_id,
+		        requested_at, updated_at, answered_at, resolved_at
 		 FROM run_interventions
 		 WHERE run_id = ? AND status != 'answered'
 		 LIMIT 1`,
@@ -297,6 +312,36 @@ func findUnfinishedIntervention(
 	return intervention, true, nil
 }
 
+// unresolvedInterventionResumeReason carries the original workflow checkpoint
+// through a multi-message intervention conversation. Only the newest request
+// matters: once that request is resolved, older unanswered classifications must
+// not pull a later independent intervention back to a stale checkpoint.
+func unresolvedInterventionResumeReason(
+	ctx context.Context,
+	tx *sql.Tx,
+	runID string,
+) (string, bool, error) {
+	var status execution.InterventionStatus
+	var reason string
+	var resolvedAt sql.NullString
+	err := tx.QueryRowContext(
+		ctx,
+		`SELECT status, resume_reason, resolved_at
+		 FROM run_interventions
+		 WHERE run_id = ?
+		 ORDER BY requested_at DESC, id DESC
+		 LIMIT 1`,
+		runID,
+	).Scan(&status, &reason, &resolvedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, fmt.Errorf("select prior intervention checkpoint for run %q: %w", runID, err)
+	}
+	return reason, status == execution.InterventionStatusAnswered && !resolvedAt.Valid, nil
+}
+
 func scanIntervention(scanner executionScanner) (execution.Intervention, error) {
 	intervention := execution.Intervention{}
 	var target string
@@ -304,11 +349,13 @@ func scanIntervention(scanner executionScanner) (execution.Intervention, error) 
 	var requestedAt string
 	var updatedAt string
 	var answeredAt sql.NullString
+	var resolvedAt sql.NullString
 	if err := scanner.Scan(
 		&intervention.ID, &intervention.RunID, &intervention.SessionID,
 		&target, &intervention.Message, &status,
-		&intervention.AttemptID, &intervention.Effect,
-		&requestedAt, &updatedAt, &answeredAt,
+		&intervention.AttemptID, &intervention.Effect, &intervention.ResumeReason,
+		&intervention.ResolutionActionID,
+		&requestedAt, &updatedAt, &answeredAt, &resolvedAt,
 	); err != nil {
 		return execution.Intervention{}, err
 	}
@@ -326,6 +373,10 @@ func scanIntervention(scanner executionScanner) (execution.Intervention, error) 
 	intervention.AnsweredAt, err = parseOptionalExecutionTime(answeredAt)
 	if err != nil {
 		return execution.Intervention{}, fmt.Errorf("parse intervention %q answer time: %w", intervention.ID, err)
+	}
+	intervention.ResolvedAt, err = parseOptionalExecutionTime(resolvedAt)
+	if err != nil {
+		return execution.Intervention{}, fmt.Errorf("parse intervention %q resolution time: %w", intervention.ID, err)
 	}
 	if err := intervention.Validate(); err != nil {
 		return execution.Intervention{}, err
