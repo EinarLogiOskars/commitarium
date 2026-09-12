@@ -1152,9 +1152,16 @@ button.primary {
   border-color: color-mix(in srgb, var(--accent) 35%, var(--border));
 }
 .activity-group__chevron {
-  font-size: 9px;
-  width: 9px;
+  font-size: 8px;
+  width: 8px;
   color: var(--accent);
+}
+.activity-group__toggle {
+  color: var(--accent);
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  margin-left: 2px;
 }
 .activity-group__items {
   margin: 4px 0 4px 16px;
