@@ -1,5 +1,5 @@
 import { request } from "./client";
-import type { PlanningMessage, Run } from "./types";
+import type { InterventionTargetRole, PlanningMessage, Run } from "./types";
 
 /** Start the configured workflow for a draft feature. Idempotent by key. */
 export const startRun = (
@@ -47,3 +47,19 @@ export const pauseRun = (runId: string, key: string): Promise<Run> =>
 
 export const resumeRun = (runId: string, key: string): Promise<Run> =>
   request(`${runPath(runId)}/resume`, { method: "POST", idempotencyKey: key });
+
+// Queue a user message for the lead or reviewer and arm the pause gate. Delivery
+// happens at the next safe boundary (a following backend slice); until then the
+// queue state is observable but Send stays disabled. Only one unfinished
+// intervention may exist per run; resume is rejected until it is answered.
+export const queueIntervention = (
+  runId: string,
+  target: InterventionTargetRole,
+  message: string,
+  key: string,
+): Promise<Run> =>
+  request(`${runPath(runId)}/interventions`, {
+    method: "POST",
+    idempotencyKey: key,
+    body: { target, message },
+  });

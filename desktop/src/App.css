@@ -1037,6 +1037,26 @@ button.primary {
   margin: 8px 0 0;
   font-size: 12px;
 }
+.intervene__queued {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 8px;
+  margin-top: 10px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid color-mix(in srgb, var(--warn) 40%, transparent);
+  background: color-mix(in srgb, var(--warn) 10%, transparent);
+  font-size: 13px;
+}
+.intervene__queued-badge {
+  font-weight: 600;
+  color: var(--warn);
+}
+.intervene__queued-to {
+  color: var(--muted);
+  text-transform: capitalize;
+}
 
 /* Segmented lead/reviewer selector. */
 .seg {
