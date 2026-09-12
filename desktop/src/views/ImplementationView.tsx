@@ -9,7 +9,7 @@ const POLL_MS = 2000;
 // Implementation phase: the lead writes the code per the agreed plan. Only the
 // lead acts here (the reviewer's code review comes next), so this shows the lead
 // session's activity as a live feed, auto-scrolled to the newest.
-export function ImplementationView({ runId }: { runId: string; state: string }) {
+export function ImplementationView({ runId, live = true }: { runId: string; live?: boolean }) {
   const [events, setEvents] = useState<SessionEvent[]>([]);
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -76,9 +76,11 @@ export function ImplementationView({ runId }: { runId: string; state: string }) 
         )}
       </div>
 
-      <p className="muted status-line">
-        {status === "waiting_for_user" ? "Waiting…" : "Lead is working…"}
-      </p>
+      {live && (
+        <p className="muted status-line">
+          {status === "waiting_for_user" ? "Waiting…" : "Lead is working…"}
+        </p>
+      )}
     </section>
   );
 }

@@ -135,6 +135,12 @@ function Overview({ project }: { project: Project }) {
       <dl className="detail">
         <dt>Recovery policy</dt>
         <dd>{project.recovery_policy === "automatic" ? "Automatic recovery" : "Approval required"}</dd>
+        <dt>Autonomy</dt>
+        <dd className="muted">
+          {project.autonomy_policy === "run_to_completion"
+            ? "Runs all phases through to the merge gate"
+            : "Stops at each phase for review"}
+        </dd>
         <dt>Forgejo repository</dt>
         <dd>
           {project.forgejo_repository

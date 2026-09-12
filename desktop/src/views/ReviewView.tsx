@@ -25,12 +25,15 @@ export function ReviewView({
   featureId,
   runId,
   state,
+  live = true,
   onAdvanced,
 }: {
   projectId: string;
   featureId: string;
   runId: string;
   state: string;
+  // When false, the review is history — timeline only, no merge action.
+  live?: boolean;
   onAdvanced: () => void;
 }) {
   const [timeline, setTimeline] = useState<TimelineEntry[]>([]);
@@ -141,7 +144,7 @@ export function ReviewView({
 
       {merged || state === "completed" ? (
         <p className="muted note">Merged into the default branch — work order complete. ✓</p>
-      ) : state === "ready_to_merge" ? (
+      ) : live && state === "ready_to_merge" ? (
         <div className="merge-gate">
           <p className="muted">
             Both agents approved this revision. Merge PR #{pr?.number} into the default

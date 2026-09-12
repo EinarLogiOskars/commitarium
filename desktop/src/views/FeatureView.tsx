@@ -1,16 +1,20 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { getFeature, listFeatureRuns } from "../api/features";
+import { getRun, pauseRun, resumeRun } from "../api/runs";
 import { ApiError } from "../api/client";
 import { GoalClarification } from "./GoalClarification";
 import { PlanningView } from "./PlanningView";
 import { ImplementationView } from "./ImplementationView";
 import { ReviewView } from "./ReviewView";
+import { PhaseStepper, currentPhaseIndex } from "./PhaseStepper";
 import { WORK } from "../vocab";
-import type { Feature, Run } from "../api/types";
+import type { Feature, Run, WaitKind } from "../api/types";
 
-// A first feature view: metadata plus run/session history from settled
-// endpoints. The rich phase conversation (the full feature workspace) lands in
-// a later slice and will mount into this shell.
+const POLL_MS = 2500;
+
+// The work-order shell: a phase timeline on top, one phase's own view below.
+// The body follows the run as the backend auto-advances; the user can click any
+// reached phase to inspect only that phase's activity, then jump back to live.
 export function FeatureView({
   projectId,
   featureId,
@@ -25,19 +29,28 @@ export function FeatureView({
   onChanged?: () => void;
 }) {
   const [feature, setFeature] = useState<Feature | null>(null);
-  const [runs, setRuns] = useState<Run[] | null>(null);
+  const [run, setRun] = useState<Run | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // null = follow the current phase; a number = the user pinned that phase.
+  const [pinnedIndex, setPinnedIndex] = useState<number | null>(null);
+  const [busy, setBusy] = useState(false);
+  const lastState = useRef<string | null>(null);
 
   const load = useCallback(async () => {
-    setError(null);
     try {
-      const [f, r] = await Promise.all([
-        getFeature(projectId, featureId),
-        listFeatureRuns(projectId, featureId),
-      ]);
+      const f = await getFeature(projectId, featureId);
       setFeature(f);
-      setRuns(r);
-      onChanged?.();
+      const runs = await listFeatureRuns(projectId, featureId);
+      if (runs.length > 0) {
+        // The list entry may omit pause/wait detail; fetch the full run.
+        setRun(await getRun(runs[0].id));
+      } else {
+        setRun(null);
+      }
+      setError(null);
+      // Refresh the rail grouping only when the phase actually changed.
+      if (lastState.current !== null && lastState.current !== f.state) onChanged?.();
+      lastState.current = f.state;
     } catch (e) {
       setError(describe(e));
     }
@@ -45,60 +58,132 @@ export function FeatureView({
 
   useEffect(() => {
     setFeature(null);
-    setRuns(null);
+    setRun(null);
+    setPinnedIndex(null);
+    lastState.current = null;
     void load();
+    const id = setInterval(() => void load(), POLL_MS);
+    return () => clearInterval(id);
   }, [load]);
 
-  const activeRunId = runs && runs.length > 0 ? runs[0].id : null;
+  if (error && !feature) return <div className="banner banner--error">{error}</div>;
+  if (!feature) return <p className="muted">Loading…</p>;
+
+  const current = currentPhaseIndex(feature);
+  const viewed = pinnedIndex ?? current;
+  const terminal =
+    !run || run.status === "succeeded" || run.status === "stopped" || run.status === "failed";
+  const finished = feature.state === "completed" || feature.state === "cancelled";
+  // The viewed phase is "live" (interactive) only when it is the phase the run
+  // is actually in and the order is still going.
+  const live = viewed === current && !finished;
+
+  const select = (i: number) => setPinnedIndex(i === current ? null : i);
+
+  const togglePause = async () => {
+    if (!run) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const next = run.paused
+        ? await resumeRun(run.id, crypto.randomUUID())
+        : await pauseRun(run.id, crypto.randomUUID());
+      setRun(next);
+    } catch (e) {
+      setError(describe(e));
+    } finally {
+      setBusy(false);
+    }
+  };
 
   return (
     <>
       {onBack && <button className="back" onClick={onBack}>← {WORK.Plural}</button>}
-      {error && <div className="banner banner--error">{error}</div>}
-      {!feature && !error && <p className="muted">Loading…</p>}
 
-      {feature && (
-        <>
-          <section className="panel">
+      <section className="panel order-head">
+        <div className="panel__head">
+          <div>
             <h2>{feature.title}</h2>
-            <dl className="detail">
-              <dt>State</dt>
-              <dd>{feature.state}</dd>
-              {feature.description && (
-                <>
-                  <dt>Description</dt>
-                  <dd>{feature.description}</dd>
-                </>
-              )}
-              {feature.accepted_goal && (
-                <>
-                  <dt>Accepted goal</dt>
-                  <dd>{feature.accepted_goal}</dd>
-                </>
-              )}
-              <dt>Created</dt>
-              <dd className="muted">{new Date(feature.created_at).toLocaleString()}</dd>
-              <dt>Updated</dt>
-              <dd className="muted">{new Date(feature.updated_at).toLocaleString()}</dd>
-            </dl>
-          </section>
+            {feature.description && <p className="muted order-head__desc">{feature.description}</p>}
+          </div>
+          {run && !terminal && !finished && (
+            <button className="ghost" onClick={() => void togglePause()} disabled={busy}>
+              {busy ? "…" : run.paused ? "Resume" : "Pause / intervene"}
+            </button>
+          )}
+        </div>
 
-          {phaseView(feature, projectId, hasRepo, activeRunId, load)}
-        </>
-      )}
+        <PhaseStepper feature={feature} viewedIndex={viewed} onSelect={select} paused={run?.paused} />
+
+        {run && !terminal && waitBanner(run, feature.state)}
+        {pinnedIndex !== null && pinnedIndex !== current && (
+          <button className="linkish" onClick={() => setPinnedIndex(null)}>
+            Viewing an earlier phase — jump to the current phase →
+          </button>
+        )}
+        {error && <div className="banner banner--error">{error}</div>}
+      </section>
+
+      {body(viewed, feature, projectId, hasRepo, run, live, load)}
     </>
   );
 }
 
-function phaseView(
+function waitBanner(run: Run, state: string) {
+  if (run.status !== "waiting_for_user" && !run.paused) return null;
+  const kind: WaitKind = run.paused ? "paused" : run.wait_kind ?? "";
+  const label = WAIT_LABELS[kind];
+  if (!label && !run.reason) return null;
+  const tone = kind === "paused" ? "warn" : kind === "merge_gate" ? "ok" : "warn";
+  return (
+    <div className={`wait-banner wait-banner--${tone}`}>
+      <span className="wait-banner__kind">{label ?? "Waiting"}</span>
+      {run.reason && <span className="wait-banner__reason">{run.reason}</span>}
+      {!run.reason && kind === "phase_checkpoint" && (
+        <span className="wait-banner__reason">
+          Paused at a phase checkpoint — {phaseHint(state)}
+        </span>
+      )}
+    </div>
+  );
+}
+
+const WAIT_LABELS: Record<WaitKind, string | undefined> = {
+  "": undefined,
+  phase_checkpoint: "Phase checkpoint",
+  round_cap: "Round limit reached",
+  blocker: "Needs your review",
+  merge_gate: "Ready to merge",
+  clarification: "Needs your input",
+  paused: "Paused",
+};
+
+function phaseHint(state: string): string {
+  if (state === "draft" || state === "planning") return "continue when ready.";
+  if (state === "implementing") return "start implementation when ready.";
+  return "continue when ready.";
+}
+
+function body(
+  viewed: number,
   feature: Feature,
   projectId: string,
   hasRepo: boolean | undefined,
-  activeRunId: string | null,
+  run: Run | null,
+  live: boolean,
   reload: () => void,
 ) {
-  // Draft, no accepted goal yet → still clarifying.
-  if (feature.state === "draft" && !feature.accepted_goal) {
+  if (feature.state === "cancelled") {
+    return (
+      <section className="panel">
+        <h2>Cancelled</h2>
+        <p className="muted">This {WORK.short} was cancelled.</p>
+      </section>
+    );
+  }
+
+  // Clarify
+  if (viewed === 0) {
     return (
       <GoalClarification
         projectId={projectId}
@@ -108,36 +193,39 @@ function phaseView(
       />
     );
   }
-  if (feature.state === "cancelled") {
-    return (
-      <section className="panel">
-        <h2>Cancelled</h2>
-        <p className="muted">This {WORK.short} was cancelled.</p>
-      </section>
-    );
-  }
-  if (!activeRunId) {
+
+  if (!run) {
     return (
       <section className="panel">
         <p className="muted">No run yet — this {WORK.short} has not started.</p>
       </section>
     );
   }
-  // Goal accepted (still draft) or planning → the planning view. Its first
-  // action, "Start planning", is what transitions draft → planning.
-  if (feature.state === "planning" || (feature.state === "draft" && feature.accepted_goal)) {
-    return <PlanningView runId={activeRunId} featureState={feature.state} onAdvanced={reload} />;
+
+  // Plan
+  if (viewed === 1) {
+    return (
+      <PlanningView
+        runId={run.id}
+        featureState={feature.state}
+        live={live}
+        onAdvanced={reload}
+      />
+    );
   }
-  if (feature.state === "implementing") {
-    return <ImplementationView runId={activeRunId} state={feature.state} />;
+  // Implement
+  if (viewed === 2) {
+    return <ImplementationView runId={run.id} live={live} />;
   }
-  // reviewing / ready_to_merge / completed → the review + correction loop
+  // Review + Merge share the review panel; the merge gate appears only when live
+  // at ready_to_merge.
   return (
     <ReviewView
       projectId={projectId}
       featureId={feature.id}
-      runId={activeRunId}
+      runId={run.id}
       state={feature.state}
+      live={live}
       onAdvanced={reload}
     />
   );

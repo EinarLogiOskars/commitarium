@@ -37,3 +37,13 @@ export const startImplementation = (runId: string, key: string): Promise<Run> =>
 /** Merge the approved revision (the ready_to_merge gate). */
 export const mergeRun = (runId: string, key: string): Promise<Run> =>
   request(`${runPath(runId)}/merge`, { method: "POST", idempotencyKey: key });
+
+// Run-level pause/resume: a coordinator handoff gate, not an OS freeze. Pause
+// stops automatic handoffs at the next safe boundary; resume clears it (and,
+// under run_to_completion, dispatches any retained checkpoint). Reusing a key
+// for the opposite action returns 409 idempotency_conflict, so keys differ.
+export const pauseRun = (runId: string, key: string): Promise<Run> =>
+  request(`${runPath(runId)}/pause`, { method: "POST", idempotencyKey: key });
+
+export const resumeRun = (runId: string, key: string): Promise<Run> =>
+  request(`${runPath(runId)}/resume`, { method: "POST", idempotencyKey: key });

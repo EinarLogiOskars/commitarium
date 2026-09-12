@@ -164,7 +164,7 @@ export function GoalClarification({
       <section className="panel">
         <h2>Goal accepted</h2>
         <p>{feature.accepted_goal}</p>
-        <p className="muted note">Planning is the next step (a later slice).</p>
+        <p className="muted note">Planning is the next phase — open it in the timeline above.</p>
       </section>
     );
   }

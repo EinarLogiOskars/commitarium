@@ -29,10 +29,14 @@ interface Entry {
 export function PlanningView({
   runId,
   featureState,
+  live = true,
   onAdvanced,
 }: {
   runId: string;
   featureState: string;
+  // When false, the phase is being viewed as history — transcript only, no
+  // advance action (the run has moved past planning, or is auto-driven).
+  live?: boolean;
   onAdvanced: () => void;
 }) {
   const [entries, setEntries] = useState<Entry[]>([]);
@@ -135,10 +139,14 @@ export function PlanningView({
         )}
       </div>
 
-      <p className="muted status-line">{idle ? "Waiting for you." : "Agents working…"}</p>
-      <button className="primary" onClick={action.run} disabled={busy || !idle}>
-        {busy ? "Working…" : action.label}
-      </button>
+      {live && (
+        <>
+          <p className="muted status-line">{idle ? "Waiting for you." : "Agents working…"}</p>
+          <button className="primary" onClick={action.run} disabled={busy || !idle}>
+            {busy ? "Working…" : action.label}
+          </button>
+        </>
+      )}
     </section>
   );
 }

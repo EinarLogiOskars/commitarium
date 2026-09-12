@@ -10,6 +10,11 @@ export interface AgentProviders {
 
 export type MergePolicy = "require_user_approval" | "auto_after_gates";
 
+// Whether the coordinator stops at each phase checkpoint for the user, or runs
+// the phases through on its own. Mandatory waits (round cap, blocker, merge gate,
+// clarification) still stop in both modes.
+export type AutonomyPolicy = "review_each_phase" | "run_to_completion";
+
 export interface DialogueLimits {
   planning_rounds: number;
   implementation_review_rounds: number;
@@ -30,6 +35,7 @@ export interface Project {
   dialogue_limits?: DialogueLimits;
   agent_providers?: AgentProviders;
   merge_policy?: MergePolicy;
+  autonomy_policy?: AutonomyPolicy;
   forgejo_repository?: ForgejoRepository;
   created_at: string;
 }
@@ -72,6 +78,17 @@ export type RunStatus =
   | "stopped"
   | "failed";
 
+// Machine-readable reason a run is waiting or paused. Empty when running.
+// Clients pick controls/labels from this — never from parsing `reason` text.
+export type WaitKind =
+  | ""
+  | "phase_checkpoint"
+  | "round_cap"
+  | "blocker"
+  | "merge_gate"
+  | "clarification"
+  | "paused";
+
 export interface Session {
   id: string;
   run_id: string;
@@ -92,6 +109,11 @@ export interface Run {
   feature_id: string;
   status: RunStatus;
   reason?: string;
+  // Present on newer coordinators; guard on read. `wait_kind` is meaningful only
+  // while waiting or paused.
+  paused?: boolean;
+  wait_kind?: WaitKind;
+  autonomy_policy?: AutonomyPolicy;
   started_at: string;
   updated_at: string;
   ended_at?: string;
