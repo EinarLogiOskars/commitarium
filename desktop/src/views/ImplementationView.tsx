@@ -1,27 +1,28 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { getRun } from "../api/runs";
 import { getSessionEvents } from "../api/sessions";
 import { ApiError } from "../api/client";
-import type { Session, SessionEvent } from "../api/types";
+import type { SessionEvent } from "../api/types";
 
 const POLL_MS = 2000;
 
-// Read-only observation of the working agents during implementation and review.
-// Each session's activity is polled; the automatic review/correction loop plays
-// out here. Untested against a live run — a first pass.
-export function ImplementationView({ runId, state }: { runId: string; state: string }) {
-  const [sessions, setSessions] = useState<Session[]>([]);
-  const [events, setEvents] = useState<Record<string, SessionEvent[]>>({});
+// Implementation phase: the lead writes the code per the agreed plan. Only the
+// lead acts here (the reviewer's code review comes next), so this shows the lead
+// session's activity as a live feed, auto-scrolled to the newest.
+export function ImplementationView({ runId }: { runId: string; state: string }) {
+  const [events, setEvents] = useState<SessionEvent[]>([]);
+  const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const feedRef = useRef<HTMLDivElement | null>(null);
+  const pinned = useRef(true);
 
   const poll = useCallback(async () => {
     try {
       const run = await getRun(runId);
-      setSessions(run.sessions);
-      const pairs = await Promise.all(
-        run.sessions.map(async (s) => [s.id, await getSessionEvents(s.id)] as const),
-      );
-      setEvents(Object.fromEntries(pairs));
+      const lead = run.sessions.find((s) => s.role === "lead") ?? run.sessions[0];
+      if (!lead) return;
+      setStatus(lead.status);
+      setEvents(await getSessionEvents(lead.id));
     } catch (e) {
       setError(e instanceof ApiError ? `${e.message} (${e.code})` : String(e));
     }
@@ -33,47 +34,51 @@ export function ImplementationView({ runId, state }: { runId: string; state: str
     return () => clearInterval(id);
   }, [poll]);
 
-  const label =
-    state === "implementing"
-      ? "Implementation"
-      : state === "reviewing"
-        ? "Review"
-        : state === "ready_to_merge"
-          ? "Ready to merge"
-          : "Workflow";
+  useEffect(() => {
+    const el = feedRef.current;
+    if (el && pinned.current) el.scrollTop = el.scrollHeight;
+  }, [events]);
 
   return (
     <section className="panel">
-      <h2>{label}</h2>
+      <h2>Implementation</h2>
+      <p className="muted">
+        The lead is writing the code for the agreed plan — editing files, running tests,
+        then committing and pushing to the PR. The reviewer's code review runs next.
+      </p>
       {error && <div className="banner banner--error">{error}</div>}
 
-      {sessions.length === 0 ? (
-        <p className="muted">No agent activity yet.</p>
-      ) : (
-        sessions.map((s) => (
-          <div key={s.id} className="agent-block">
-            <div className="agent-block__head">
-              <span className="session__role">{s.role || s.agent_id}</span>
-              <span className="muted">{s.status}</span>
-            </div>
-            <div className="activity">
-              {(events[s.id] ?? [])
-                .filter((e) => e.text)
-                .map((e) => (
-                  <div key={e.id} className={`activity__line activity__line--${e.type}`}>
-                    {e.text}
-                  </div>
-                ))}
-            </div>
-          </div>
-        ))
-      )}
+      <div
+        className="chat"
+        ref={feedRef}
+        onScroll={(e) => {
+          const el = e.currentTarget;
+          pinned.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+        }}
+      >
+        {events.filter((e) => e.text).length === 0 ? (
+          <p className="muted">Waiting for the lead to start…</p>
+        ) : (
+          events
+            .filter((e) => e.text)
+            .map((e) =>
+              e.type === "message" ? (
+                <div key={e.id} className="msg msg--lead">
+                  <span className="msg__who">Lead</span>
+                  <span className="msg__text">{e.text}</span>
+                </div>
+              ) : (
+                <div key={e.id} className="msg msg--note">
+                  {e.text}
+                </div>
+              ),
+            )
+        )}
+      </div>
 
-      {state === "ready_to_merge" && (
-        <p className="muted note">
-          Ready to merge. The merge action and approval gate arrive in a later slice.
-        </p>
-      )}
+      <p className="muted status-line">
+        {status === "waiting_for_user" ? "Waiting…" : "Lead is working…"}
+      </p>
     </section>
   );
 }
