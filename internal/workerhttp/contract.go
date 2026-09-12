@@ -237,6 +237,7 @@ type ActivityKind string
 const (
 	ActivityKindCommand    ActivityKind = "command"
 	ActivityKindFileChange ActivityKind = "file_change"
+	ActivityKindNarration  ActivityKind = "narration"
 )
 
 type FileOperation string

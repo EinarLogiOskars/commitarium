@@ -52,12 +52,20 @@ func TestAdapterStartsClaudeAndTranslatesObservableActivity(t *testing.T) {
 	wantEvents := []worker.Event{
 		{Type: worker.EventActivity, Text: "Claude started working."},
 		{
+			Type: worker.EventActivity, Text: "I’ll run the test suite before editing.",
+			Activity: &worker.Activity{Kind: worker.ActivityKindNarration},
+		},
+		{
 			Type: worker.EventActivity,
 			Text: "Claude ran command with exit code 0: go test ./...",
 			Activity: &worker.Activity{
 				Kind: worker.ActivityKindCommand, Command: "go test ./...",
 				ExitCode: intPointer(0), DurationMS: int64Pointer(3210),
 			},
+		},
+		{
+			Type: worker.EventActivity, Text: "The tests pass, so I’ll update the README.",
+			Activity: &worker.Activity{Kind: worker.ActivityKindNarration},
 		},
 		{
 			Type: worker.EventActivity,
@@ -71,6 +79,22 @@ func TestAdapterStartsClaudeAndTranslatesObservableActivity(t *testing.T) {
 	}
 	if observed := <-events; !reflect.DeepEqual(observed, wantEvents) {
 		t.Fatalf("observable events = %+v, want %+v", observed, wantEvents)
+	}
+}
+
+func TestAssistantNarrationRemainsSuppressedForInterventionTurns(t *testing.T) {
+	session := &session{
+		outputContract: worker.OutputContractIntervention,
+		tools:          make(map[string]pendingTool),
+	}
+	events := session.assistantEvents([]contentBlock{
+		{Type: "text", Text: "I’ll inspect the project first."},
+		{Type: "tool_use", ID: "tool_read", Name: "Read", Input: json.RawMessage(`{"file_path":"README.md"}`)},
+	})
+	for _, event := range events {
+		if event.Activity != nil && event.Activity.Kind == worker.ActivityKindNarration {
+			t.Fatalf("intervention assistant events include narration: %+v", events)
+		}
 	}
 }
 
@@ -395,6 +419,7 @@ func TestClaudeCLIHelper(t *testing.T) {
 			"type": "assistant", "session_id": sessionID,
 			"message": map[string]any{"role": "assistant", "content": []any{
 				map[string]any{"type": "thinking", "thinking": "must stay private"},
+				map[string]any{"type": "text", "text": "I’ll run the test suite before editing."},
 				map[string]any{"type": "tool_use", "id": "tool_test", "name": "Bash", "input": map[string]any{"command": "go test ./..."}},
 			}},
 		})
@@ -408,6 +433,7 @@ func TestClaudeCLIHelper(t *testing.T) {
 		helperWrite(writer, map[string]any{
 			"type": "assistant", "session_id": sessionID,
 			"message": map[string]any{"role": "assistant", "content": []any{
+				map[string]any{"type": "text", "text": "The tests pass, so I’ll update the README."},
 				map[string]any{
 					"type": "tool_use", "id": "tool_edit", "name": "Edit",
 					"input": map[string]any{

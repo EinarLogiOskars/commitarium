@@ -371,6 +371,11 @@ func TestEventValidate(t *testing.T) {
 	if err := structured.Validate(); err != nil {
 		t.Fatalf("validate structured event: %v", err)
 	}
+	narration := valid
+	narration.Activity = &Activity{Kind: ActivityKindNarration}
+	if err := narration.Validate(); err != nil {
+		t.Fatalf("validate narration event: %v", err)
+	}
 
 	redacted := valid
 	redacted.Sequence = 2
@@ -420,6 +425,11 @@ func TestEventValidate(t *testing.T) {
 		{name: "invalid command activity", event: Event{
 			AttemptReference: valid.AttemptReference, Sequence: 2, Type: EventActivity,
 			Text: "command", OccurredAt: now, Activity: &Activity{Kind: ActivityKindCommand},
+		}},
+		{name: "invalid narration activity", event: Event{
+			AttemptReference: valid.AttemptReference, Sequence: 2, Type: EventActivity,
+			Text: "narration", OccurredAt: now,
+			Activity: &Activity{Kind: ActivityKindNarration, Command: "unexpected"},
 		}},
 		{name: "invalid rename activity", event: Event{
 			AttemptReference: valid.AttemptReference, Sequence: 2, Type: EventActivity,
@@ -506,6 +516,20 @@ func TestJSONContract(t *testing.T) {
 	want = `{"session_id":"ses_test","attempt_id":"att_test","sequence":8,"type":"activity","text":"ran tests","occurred_at":"2026-09-08T12:00:00.123Z","redaction":{"count":0},"activity":{"kind":"command","command":"pnpm test","exit_code":0,"duration_ms":4213}}`
 	if string(encoded) != want {
 		t.Fatalf("structured event JSON\n got: %s\nwant: %s", encoded, want)
+	}
+
+	narrationEvent := Event{
+		AttemptReference: validAttemptReference(), Sequence: 9, Type: EventActivity,
+		Text: "I’ll inspect the project first.", OccurredAt: now, Redaction: RedactionMetadata{},
+		Activity: &Activity{Kind: ActivityKindNarration},
+	}
+	encoded, err = json.Marshal(narrationEvent)
+	if err != nil {
+		t.Fatalf("marshal narration event: %v", err)
+	}
+	want = `{"session_id":"ses_test","attempt_id":"att_test","sequence":9,"type":"activity","text":"I’ll inspect the project first.","occurred_at":"2026-09-08T12:00:00.123Z","redaction":{"count":0},"activity":{"kind":"narration"}}`
+	if string(encoded) != want {
+		t.Fatalf("narration event JSON\n got: %s\nwant: %s", encoded, want)
 	}
 
 	endedAt := now.Add(time.Minute)

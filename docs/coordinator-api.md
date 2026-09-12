@@ -1219,6 +1219,30 @@ event still contains `id`, monotonic per-session `sequence`, `type`, `text`, and
 clients and for activity that a provider does not classify.
 
 An `activity` event may additionally contain one structured `activity` object.
+A user-visible agent preamble or completed provider reasoning summary uses
+`kind: "narration"`:
+
+```json
+{
+  "id": "sev_opaque",
+  "sequence": 16,
+  "type": "activity",
+  "text": "I’ll inspect the current implementation, then run the focused tests.",
+  "activity": {
+    "kind": "narration"
+  },
+  "occurred_at": "2026-09-12T18:59:58Z"
+}
+```
+
+Narration is presentation-safe text that the provider exposes to the user. For
+Codex this is a completed `agentMessage` with phase `commentary`, or the
+completed summary of a reasoning item. For Claude Code it is assistant text
+emitted alongside a tool use. It never contains private chain-of-thought,
+provider reasoning content, or raw incremental reasoning deltas. Turn-final
+messages keep their existing `message` event type and are not duplicated as
+narration. Intervention-only turns also keep their existing answer behavior.
+
 A completed command is represented once, after its final execution facts are
 known:
 
@@ -1268,8 +1292,8 @@ deletion counts are omitted when the provider supplies a file operation but
 not reliable line-level data. Full diffs and file contents are not retained in
 these events.
 
-Codex App Server command and file-change items and Claude Code Bash/Edit/Write/
-NotebookEdit tool records use this shared shape in clarification, planning,
+Codex App Server narration, command, and file-change items and Claude Code
+assistant/tool records use this shared shape in clarification, planning,
 implementation, and review sessions. Other observable provider actions retain
 their existing unstructured `activity` event and `text`. Intervention-only
 turns are instructed not to run commands or edit files; if they comply, their

@@ -53,6 +53,10 @@ func TestAdapterStartsCodexAndTranslatesObservableActivity(t *testing.T) {
 	wantEvents := []worker.Event{
 		{Type: worker.EventActivity, Text: "Codex started working."},
 		{
+			Type: worker.EventActivity, Text: "I’ll inspect the project and run its tests.",
+			Activity: &worker.Activity{Kind: worker.ActivityKindNarration},
+		},
+		{
 			Type: worker.EventActivity,
 			Text: "Codex ran command with exit code 0: go test ./...",
 			Activity: &worker.Activity{
@@ -67,6 +71,10 @@ func TestAdapterStartsCodexAndTranslatesObservableActivity(t *testing.T) {
 				Kind: worker.ActivityKindFileChange, Operation: worker.FileOperationModified,
 				Path: "README.md", Additions: intPointer(2), Deletions: intPointer(1),
 			},
+		},
+		{
+			Type: worker.EventActivity, Text: "The requested change is complete and tests pass.",
+			Activity: &worker.Activity{Kind: worker.ActivityKindNarration},
 		},
 		{Type: worker.EventMessage, Text: "Implemented and verified the change."},
 	}
@@ -182,9 +190,20 @@ func TestAdapterReturnsStructuredImplementationPublication(t *testing.T) {
 	}
 	if observed := <-events; !equalEvents(observed, []worker.Event{
 		{Type: worker.EventActivity, Text: "Codex started working."},
+		{
+			Type: worker.EventActivity, Text: "I’ll update the implementation and verify it.",
+			Activity: &worker.Activity{Kind: worker.ActivityKindNarration},
+		},
 		{Type: worker.EventMessage, Text: "Implemented the agreed change and passed tests."},
 	}) {
 		t.Fatalf("structured implementation events = %+v", observed)
+	}
+}
+
+func TestNarrationEventsRemainSuppressedForInterventionTurns(t *testing.T) {
+	session := &session{outputContract: worker.OutputContractIntervention}
+	if events := session.narrationEvents("I’ll inspect the project first."); len(events) != 0 {
+		t.Fatalf("intervention narration events = %+v, want none", events)
 	}
 }
 
@@ -584,6 +603,13 @@ func TestCodexAppServerHelper(t *testing.T) {
 
 	switch mode {
 	case "success", "resume":
+		helpNotify(writer, "item/completed", map[string]any{
+			"threadId": "thr_test", "turnId": "turn_test",
+			"item": map[string]any{
+				"id": "item_preamble", "type": "agentMessage", "phase": "commentary",
+				"text": "I’ll inspect the project and run its tests.",
+			},
+		})
 		helpNotify(writer, "item/started", map[string]any{
 			"threadId": "thr_test", "turnId": "turn_test",
 			"item": map[string]any{"id": "item_command", "type": "commandExecution", "status": "inProgress"},
@@ -608,11 +634,18 @@ func TestCodexAppServerHelper(t *testing.T) {
 		})
 		helpNotify(writer, "item/completed", map[string]any{
 			"threadId": "thr_test", "turnId": "turn_test",
-			"item": map[string]any{"id": "item_reasoning", "type": "reasoning", "text": "must stay private"},
+			"item": map[string]any{
+				"id": "item_reasoning", "type": "reasoning",
+				"summary": []string{"The requested change is complete and tests pass."},
+				"content": []string{"must stay private"},
+			},
 		})
 		helpNotify(writer, "item/completed", map[string]any{
 			"threadId": "thr_test", "turnId": "turn_test",
-			"item": map[string]any{"id": "item_message", "type": "agentMessage", "text": "Implemented and verified the change."},
+			"item": map[string]any{
+				"id": "item_message", "type": "agentMessage", "phase": "final_answer",
+				"text": "Implemented and verified the change.",
+			},
 		})
 		helpNotify(writer, "future/notification", map[string]any{"value": true})
 		helpWriteTurnCompleted(writer, "completed")
@@ -628,6 +661,15 @@ func TestCodexAppServerHelper(t *testing.T) {
 		helpWriteTurnCompleted(writer, "completed")
 		helperWaitForever()
 	case "structured-implementation", "structured-implementation-blocked":
+		if mode == "structured-implementation" {
+			helpNotify(writer, "item/completed", map[string]any{
+				"threadId": "thr_test", "turnId": "turn_test",
+				"item": map[string]any{
+					"id": "item_preamble", "type": "agentMessage", "phase": "commentary",
+					"text": "I’ll update the implementation and verify it.",
+				},
+			})
+		}
 		text := `{"action":"published","summary":"Implemented the agreed change and passed tests.","commit_id":"0123456789abcdef0123456789abcdef01234567","pull_request_number":7}`
 		if mode == "structured-implementation-blocked" {
 			text = `{"action":"blocked","summary":"Forgejo rejected the push.","commit_id":"","pull_request_number":7}`

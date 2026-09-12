@@ -277,6 +277,8 @@ type threadItem struct {
 	ID         string             `json:"id"`
 	Type       string             `json:"type"`
 	Text       string             `json:"text"`
+	Phase      string             `json:"phase"`
+	Summary    []string           `json:"summary"`
 	Status     string             `json:"status"`
 	Command    string             `json:"command"`
 	ExitCode   *int               `json:"exitCode"`
@@ -390,6 +392,15 @@ func (session *session) completedItem(item threadItem) ([]worker.Event, error) {
 		if text == "" {
 			return nil, nil
 		}
+		switch item.Phase {
+		case "commentary":
+			return session.narrationEvents(text), nil
+		case "", "final_answer":
+			// Older App Server versions do not classify messages. Preserve the
+			// existing final-message behavior when phase is absent.
+		default:
+			return nil, fmt.Errorf("%w: agent message used phase %q", ErrProtocol, item.Phase)
+		}
 		if session.outputContract == worker.OutputContractPlanningLead ||
 			session.outputContract == worker.OutputContractImplementationLead ||
 			session.outputContract == worker.OutputContractImplementationReview ||
@@ -417,10 +428,29 @@ func (session *session) completedItem(item threadItem) ([]worker.Event, error) {
 	case "subAgentActivity", "collabAgentToolCall":
 		return events(event(worker.EventActivity, "Codex finished delegated agent work.")), nil
 	case "reasoning":
-		return nil, nil
+		return session.narrationEvents(item.Summary...), nil
 	default:
 		return nil, nil
 	}
+}
+
+func (session *session) narrationEvents(texts ...string) []worker.Event {
+	if session.outputContract == worker.OutputContractIntervention {
+		return nil
+	}
+	result := make([]worker.Event, 0, len(texts))
+	for _, value := range texts {
+		text := strings.TrimSpace(value)
+		if text == "" {
+			continue
+		}
+		result = append(result, worker.Event{
+			Type:     worker.EventActivity,
+			Text:     text,
+			Activity: &worker.Activity{Kind: worker.ActivityKindNarration},
+		})
+	}
+	return result
 }
 
 func (session *session) commandEvents(item threadItem) []worker.Event {

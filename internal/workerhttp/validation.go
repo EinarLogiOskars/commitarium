@@ -510,6 +510,12 @@ func (metadata TruncationMetadata) Validate() error {
 
 func (activity Activity) Validate() error {
 	switch activity.Kind {
+	case ActivityKindNarration:
+		if activity.Command != "" || activity.ExitCode != nil || activity.DurationMS != nil ||
+			activity.Operation != "" || activity.Path != "" || activity.OldPath != "" ||
+			activity.Additions != nil || activity.Deletions != nil {
+			return invalid("narration activity cannot include command or file-change fields")
+		}
 	case ActivityKindCommand:
 		if err := validateRequiredText("activity command", activity.Command, MaxEventTextBytes); err != nil {
 			return err

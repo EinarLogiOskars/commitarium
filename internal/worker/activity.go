@@ -14,6 +14,7 @@ type ActivityKind string
 const (
 	ActivityKindCommand    ActivityKind = "command"
 	ActivityKindFileChange ActivityKind = "file_change"
+	ActivityKindNarration  ActivityKind = "narration"
 )
 
 type FileOperation string
@@ -42,6 +43,12 @@ type Activity struct {
 
 func (activity Activity) Validate() error {
 	switch activity.Kind {
+	case ActivityKindNarration:
+		if activity.Command != "" || activity.ExitCode != nil || activity.DurationMS != nil ||
+			activity.Operation != "" || activity.Path != "" || activity.OldPath != "" ||
+			activity.Additions != nil || activity.Deletions != nil {
+			return fmt.Errorf("%w: narration cannot include command or file-change fields", ErrInvalidActivity)
+		}
 	case ActivityKindCommand:
 		if strings.TrimSpace(activity.Command) == "" {
 			return fmt.Errorf("%w: command is required", ErrInvalidActivity)
