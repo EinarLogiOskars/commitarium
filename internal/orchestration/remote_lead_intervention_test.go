@@ -500,6 +500,239 @@ func TestRemoteLeadContinuesScopeChangeIntoVersionedReplanning(t *testing.T) {
 	if recoveredPutCount != 1 {
 		t.Fatalf("recovery launched the versioned attempt again: PUTs=%d", recoveredPutCount)
 	}
+
+	reviewer := prepareRestingReviewerForReplanning(
+		t, executions, workerStub, run, storedProject, storedFeature,
+	)
+	addVersionedPlanningAttempt(
+		workerStub, run.ID, storedProject.ID, storedFeature.ID,
+		reviewer.ID, reviewer.ProviderSessionID, workerhttp.RoleReviewer,
+		2, 1, workerhttp.EventMessage,
+		"The revised proposal needs one compatibility test.",
+	)
+	addVersionedPlanningAttempt(
+		workerStub, run.ID, storedProject.ID, storedFeature.ID,
+		lead.ID, lead.ProviderSessionID, workerhttp.RoleLead,
+		2, 2, workerhttp.EventPlanSubmitted,
+		"Revised agreed implementation plan with compatibility coverage.",
+	)
+	addVersionedImplementationBlocker(
+		workerStub, run.ID, storedProject.ID, storedFeature.ID,
+		lead.ID, lead.ProviderSessionID, 2,
+	)
+	if _, err := db.ExecContext(
+		t.Context(), `UPDATE runs SET autonomy_policy = ? WHERE id = ?`,
+		project.AutonomyPolicyRunToCompletion, run.ID,
+	); err != nil {
+		t.Fatalf("enable automatic revised workflow: %v", err)
+	}
+	if _, started, err := starter.StartPlanningReview(
+		t.Context(), run.ID, "start_replanning_review",
+	); err != nil || !started {
+		t.Fatalf("start existing reviewer for revised plan: started=%t err=%v", started, err)
+	}
+	deadline = time.Now().Add(2 * time.Second)
+	for {
+		current, getErr := executions.GetRun(t.Context(), run.ID)
+		implementationCheckpoint, checkpointErr := executions.GetWorkerAttempt(t.Context(), lead.ID)
+		if getErr == nil && checkpointErr == nil &&
+			current.Status == execution.RunStatusWaitingForUser &&
+			current.WaitKind == execution.RunWaitKindBlocker &&
+			implementationCheckpoint.AttemptID == implementationAttemptForVersion(lead.ID, 2, 1) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("automatic revised workflow did not reach implementation blocker: run=%+v checkpoint=%+v run_err=%v checkpoint_err=%v", current, implementationCheckpoint, getErr, checkpointErr)
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	versionedMessages, err := executions.PlanningMessagesForRun(t.Context(), run.ID)
+	if err != nil || len(versionedMessages) != 4 ||
+		versionedMessages[2].PlanVersion != 2 ||
+		versionedMessages[2].Role != worker.RoleReviewer ||
+		versionedMessages[3].PlanVersion != 2 ||
+		versionedMessages[3].Event.Type != worker.EventPlanSubmitted {
+		t.Fatalf("revised agreement history is incomplete: messages=%+v err=%v", versionedMessages, err)
+	}
+	if workspaceStub.revisedPublishCalls != 1 ||
+		workspaceStub.publishedBaseline != baseline ||
+		workspaceStub.publishedPlan != versionedMessages[3].Event.Text ||
+		workspaceStub.publishCalls != 0 {
+		t.Fatalf("revised plan was not appended to the existing PR: %+v", workspaceStub)
+	}
+
+	implementationCheckpoint, err := executions.GetWorkerAttempt(t.Context(), lead.ID)
+	if err != nil || implementationCheckpoint.AttemptID !=
+		implementationAttemptForVersion(lead.ID, 2, 1) {
+		t.Fatalf("revised implementation reused an old attempt: checkpoint=%+v err=%v", implementationCheckpoint, err)
+	}
+	workerStub.mu.Lock()
+	requests = append([]workerhttp.PutAttemptRequest(nil), workerStub.putRequests...)
+	workerStub.mu.Unlock()
+	if len(requests) != 4 || requests[1].Mode != workerhttp.AttemptModeResume ||
+		requests[1].ProviderSessionID != reviewer.ProviderSessionID ||
+		requests[2].Mode != workerhttp.AttemptModeResume ||
+		requests[3].OutputContract != workerhttp.OutputContractImplementationLead ||
+		!strings.Contains(requests[3].Instructions, amendment) {
+		t.Fatalf("unexpected versioned reviewer/lead/implementation requests: %+v", requests)
+	}
+	if workspaceStub.revisedVerifyCalls != 1 || workspaceStub.publishedBaseline != baseline {
+		t.Fatalf("implementation did not verify the revised PR plan: %+v", workspaceStub)
+	}
+}
+
+func prepareRestingReviewerForReplanning(
+	t *testing.T,
+	executions *execution.Service,
+	stub *conversationalRemoteLeadWorker,
+	run execution.Run,
+	storedProject project.Project,
+	storedFeature feature.Feature,
+) execution.Session {
+	t.Helper()
+	reviewerID := remoteReviewerSessionID(run.ID)
+	reviewer, _, err := executions.CreateSession(
+		t.Context(), reviewerID, run.ID,
+		agentID(storedProject.AgentProviders.Reviewer, worker.RoleReviewer), worker.RoleReviewer,
+	)
+	if err != nil {
+		t.Fatalf("create prior reviewer conversation: %v", err)
+	}
+	reviewer, err = executions.TransitionSession(
+		t.Context(), reviewer.ID, execution.SessionStatusStarting,
+		execution.SessionStatusRunning, "provider-reviewer-thread",
+	)
+	if err != nil {
+		t.Fatalf("capture prior reviewer conversation: %v", err)
+	}
+	reviewer, err = executions.TransitionSession(
+		t.Context(), reviewer.ID, execution.SessionStatusRunning,
+		execution.SessionStatusWaitingForUser, reviewer.ProviderSessionID,
+	)
+	if err != nil {
+		t.Fatalf("rest prior reviewer conversation: %v", err)
+	}
+	priorAttemptID := reviewer.ID + ":review:1"
+	if _, _, err := executions.CreateWorkerAttempt(
+		t.Context(), reviewer.ID, priorAttemptID,
+	); err != nil {
+		t.Fatalf("create prior reviewer checkpoint: %v", err)
+	}
+	now := time.Now().UTC()
+	endedAt := now.Add(time.Second)
+	reference := workerhttp.AttemptReference{SessionID: reviewer.ID, AttemptID: priorAttemptID}
+	stub.mu.Lock()
+	stub.terminal[reference] = workerhttp.Attempt{
+		AttemptReference: reference, Mode: workerhttp.AttemptModeResume,
+		Assignment: workerhttp.Assignment{
+			AgentProfileID: "codex-default", ProjectID: storedProject.ID,
+			FeatureID: storedFeature.ID, Role: workerhttp.RoleReviewer,
+			WorkspaceID: "wsp_replanning",
+		},
+		ProviderSessionID: reviewer.ProviderSessionID,
+		State:             workerhttp.AttemptStateTerminal,
+		Result: &workerhttp.TerminalResult{
+			Outcome: workerhttp.OutcomeCompleted, Disposition: workerhttp.DispositionSucceeded,
+			Summary: "Prior review completed.",
+		},
+		StartedAt: now, UpdatedAt: endedAt, EndedAt: &endedAt,
+	}
+	stub.mu.Unlock()
+	return reviewer
+}
+
+func addVersionedPlanningAttempt(
+	stub *conversationalRemoteLeadWorker,
+	runID string,
+	projectID string,
+	featureID string,
+	sessionID string,
+	providerSessionID string,
+	role workerhttp.Role,
+	version int,
+	turn int,
+	eventType workerhttp.EventType,
+	text string,
+) {
+	reference := workerhttp.AttemptReference{
+		SessionID: sessionID,
+		AttemptID: planningAttemptForVersion(sessionID, version, turn),
+	}
+	now := time.Now().UTC()
+	initial := workerhttp.Attempt{
+		AttemptReference: reference, Mode: workerhttp.AttemptModeResume,
+		Assignment: workerhttp.Assignment{
+			AgentProfileID: "codex-default", ProjectID: projectID,
+			FeatureID: featureID, Role: role, WorkspaceID: "wsp_replanning",
+		},
+		ProviderSessionID: providerSessionID,
+		State:             workerhttp.AttemptStateRunning, StartedAt: now, UpdatedAt: now,
+	}
+	endedAt := now.Add(time.Second)
+	terminal := initial
+	terminal.State = workerhttp.AttemptStateTerminal
+	terminal.LatestEventSequence = 2
+	terminal.UpdatedAt = endedAt
+	terminal.EndedAt = &endedAt
+	terminal.Result = &workerhttp.TerminalResult{
+		Outcome: workerhttp.OutcomeCompleted, Disposition: workerhttp.DispositionSucceeded,
+		Summary: "Completed a versioned planning turn.",
+	}
+	stub.mu.Lock()
+	defer stub.mu.Unlock()
+	stub.initial[reference] = initial
+	stub.terminal[reference] = terminal
+	stub.events[reference] = []workerhttp.Event{
+		{AttemptReference: reference, Sequence: 1, Type: eventType, Text: text, OccurredAt: now},
+		{AttemptReference: reference, Sequence: 2, Type: workerhttp.EventAttemptTerminal,
+			Text: terminal.Result.Summary, OccurredAt: endedAt},
+	}
+}
+
+func addVersionedImplementationBlocker(
+	stub *conversationalRemoteLeadWorker,
+	runID string,
+	projectID string,
+	featureID string,
+	sessionID string,
+	providerSessionID string,
+	version int,
+) {
+	reference := workerhttp.AttemptReference{
+		SessionID: sessionID,
+		AttemptID: implementationAttemptForVersion(sessionID, version, 1),
+	}
+	now := time.Now().UTC()
+	initial := workerhttp.Attempt{
+		AttemptReference: reference, Mode: workerhttp.AttemptModeResume,
+		Assignment: workerhttp.Assignment{
+			AgentProfileID: "codex-default", ProjectID: projectID,
+			FeatureID: featureID, Role: workerhttp.RoleLead, WorkspaceID: "wsp_replanning",
+		},
+		ProviderSessionID: providerSessionID,
+		State:             workerhttp.AttemptStateRunning, StartedAt: now, UpdatedAt: now,
+	}
+	endedAt := now.Add(time.Second)
+	terminal := initial
+	terminal.State = workerhttp.AttemptStateTerminal
+	terminal.LatestEventSequence = 2
+	terminal.UpdatedAt = endedAt
+	terminal.EndedAt = &endedAt
+	terminal.Result = &workerhttp.TerminalResult{
+		Outcome: workerhttp.OutcomeCompleted, Disposition: workerhttp.DispositionInputRequired,
+		Summary: "Implementation paused for a test fixture.",
+	}
+	stub.mu.Lock()
+	defer stub.mu.Unlock()
+	stub.initial[reference] = initial
+	stub.terminal[reference] = terminal
+	stub.events[reference] = []workerhttp.Event{
+		{AttemptReference: reference, Sequence: 1, Type: workerhttp.EventMessage,
+			Text: "I need the missing test fixture.", OccurredAt: now},
+		{AttemptReference: reference, Sequence: 2, Type: workerhttp.EventAttemptTerminal,
+			Text: terminal.Result.Summary, OccurredAt: endedAt},
+	}
 }
 
 func prepareInterventionBoundary(

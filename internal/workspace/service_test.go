@@ -924,6 +924,65 @@ func TestServiceVerifiesPublishedPlanWithoutRepublishing(t *testing.T) {
 	}
 }
 
+func TestServicePublishesAndVerifiesRevisedPlanAtRecordedBaseline(t *testing.T) {
+	now := time.Date(2026, time.September, 12, 14, 0, 0, 0, time.UTC)
+	stored := readyTestWorkspace(now)
+	pullRequestReadyAt := now.Add(time.Minute)
+	stored.PullRequestNumber = 12
+	stored.PullRequestURL = "http://localhost:3001/owner/repository/pulls/12"
+	stored.PullRequestRecordedAt = &pullRequestReadyAt
+	stored.UpdatedAt = pullRequestReadyAt
+	baseline := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	branches := &recordingBranches{base: Branch{Name: stored.Branch, CommitID: baseline}}
+	checkout := &recordingCheckout{}
+	pullRequests := &recordingPullRequests{
+		planPublished: true,
+		planResult: PullRequest{
+			Number: 12, URL: stored.PullRequestURL, Title: "WIP: Test feature",
+			Body: "existing plan history", State: "open", Draft: true,
+			BaseBranch: stored.BaseBranch, HeadBranch: stored.Branch,
+			HeadCommitID: baseline, CreatedAt: pullRequestReadyAt,
+		},
+	}
+	planningFeature := acceptedTestFeature(now)
+	planningFeature.State = feature.StatePlanning
+	service := NewServiceWithPreparation(
+		&memoryStore{stored: stored}, fixedFeatureFinder{stored: planningFeature},
+		fixedProjectFinder{stored: project.Project{
+			ID: "prj_test", ForgejoRepository: testRepository(now),
+		}}, branches, checkout, pullRequests,
+	)
+
+	got, published, err := service.PublishRevisedPlan(
+		t.Context(), "prj_test", "fea_test", "sev_revised_plan",
+		"Revised final plan", baseline,
+	)
+	if err != nil || !published || got != stored {
+		t.Fatalf("publish revised plan: workspace=%+v published=%t err=%v", got, published, err)
+	}
+	if len(pullRequests.specs) != 0 || len(pullRequests.planSpecs) != 1 ||
+		len(checkout.promotions) != 0 || len(checkout.specs) != 1 {
+		t.Fatalf("revised publication recreated workspace state: drafts=%+v plans=%+v checkout=%+v", pullRequests.specs, pullRequests.planSpecs, checkout)
+	}
+	if spec := pullRequests.planSpecs[0]; spec.HeadCommitID != baseline ||
+		spec.Plan != "Revised final plan" ||
+		checkout.specs[0].ExpectedHeadCommitID != baseline ||
+		checkout.specs[0].RequireCleanBaseline {
+		t.Fatalf("revised plan was not pinned to the preserved baseline: plan=%+v checkout=%+v", spec, checkout.specs[0])
+	}
+
+	if _, err := service.VerifyRevisedPublishedPlan(
+		t.Context(), "prj_test", "fea_test", "sev_revised_plan",
+		"Revised final plan", baseline,
+	); err != nil {
+		t.Fatalf("verify revised plan: %v", err)
+	}
+	if len(pullRequests.verifiedPlanSpecs) != 1 ||
+		pullRequests.verifiedPlanSpecs[0].HeadCommitID != baseline {
+		t.Fatalf("revised plan verification used the wrong head: %+v", pullRequests.verifiedPlanSpecs)
+	}
+}
+
 func TestServiceVerifiesImplementationContinuationWithoutRequiringCleanCheckout(t *testing.T) {
 	now := time.Date(2026, time.September, 10, 2, 30, 0, 0, time.UTC)
 	stored := readyTestWorkspace(now)
@@ -1064,6 +1123,17 @@ func TestServiceVerifiesAgentImplementationPublicationWithoutWriting(t *testing.
 		!strings.HasPrefix(spec.PublicationKind.Marker(spec.AttemptID), "<!-- commitarium-implementation: ") ||
 		!strings.HasPrefix(spec.PlanPublicationMarker, "<!-- commitarium-plan: ") {
 		t.Fatalf("unexpected implementation publication spec %+v", spec)
+	}
+	replanningBaseline := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	if _, err := service.VerifyRevisedImplementationPublication(
+		t.Context(), "prj_test", "fea_test", "sev_revised_plan", "Revised plan",
+		"att_implementation_v2_1", "Preserved earlier work and completed the revision.",
+		implementationCommit, 8, "codex-lead", replanningBaseline,
+	); err != nil {
+		t.Fatalf("verify revised implementation publication: %v", err)
+	}
+	if len(checkout.specs) != 2 || checkout.specs[1].BaseCommitID != replanningBaseline {
+		t.Fatalf("revised implementation did not pin the replanning baseline: %+v", checkout.specs)
 	}
 	mismatchedRepository := *testRepository(now)
 	mismatchedRepository.Owner = "different-owner"
