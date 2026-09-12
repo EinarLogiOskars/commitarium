@@ -35,6 +35,11 @@ func (s *ProjectStore) Create(
 		return err
 	}
 	createdProject.MergePolicy = mergePolicy
+	autonomyPolicy, err := project.NormalizeAutonomyPolicy(createdProject.AutonomyPolicy)
+	if err != nil {
+		return err
+	}
+	createdProject.AutonomyPolicy = autonomyPolicy
 	if err := createdProject.DialogueLimits.Validate(); err != nil {
 		return err
 	}
@@ -60,19 +65,20 @@ func (s *ProjectStore) Create(
 		ctx,
 		`
 			INSERT INTO projects (
-				id, name, recovery_policy, merge_policy,
+				id, name, recovery_policy, merge_policy, autonomy_policy,
 				planning_round_limit, implementation_review_round_limit,
 				lead_provider, reviewer_provider,
 				forgejo_owner, forgejo_repository, forgejo_default_branch, forgejo_bound_at,
 				created_at
 			)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT(id) DO NOTHING
 		`,
 		createdProject.ID,
 		createdProject.Name,
 		createdProject.RecoveryPolicy,
 		createdProject.MergePolicy,
+		createdProject.AutonomyPolicy,
 		createdProject.DialogueLimits.PlanningRounds,
 		createdProject.DialogueLimits.ImplementationReviewRounds,
 		createdProject.AgentProviders.Lead,
@@ -122,7 +128,7 @@ func (s *ProjectStore) GetByID(
 	storedProject, err := scanProject(s.db.QueryRowContext(
 		ctx,
 		`
-			SELECT id, name, recovery_policy, merge_policy,
+			SELECT id, name, recovery_policy, merge_policy, autonomy_policy,
 			       planning_round_limit, implementation_review_round_limit,
 			       lead_provider, reviewer_provider,
 			       forgejo_owner, forgejo_repository, forgejo_default_branch, forgejo_bound_at,
@@ -150,7 +156,7 @@ func (s *ProjectStore) GetByID(
 func (s *ProjectStore) List(ctx context.Context) ([]project.Project, error) {
 	rows, err := s.db.QueryContext(
 		ctx,
-		`SELECT id, name, recovery_policy, merge_policy,
+		`SELECT id, name, recovery_policy, merge_policy, autonomy_policy,
 		        planning_round_limit, implementation_review_round_limit,
 		        lead_provider, reviewer_provider,
 		        forgejo_owner, forgejo_repository, forgejo_default_branch, forgejo_bound_at,
@@ -175,6 +181,41 @@ func (s *ProjectStore) List(ctx context.Context) ([]project.Project, error) {
 		return nil, fmt.Errorf("iterate projects: %w", err)
 	}
 	return projects, nil
+}
+
+func (s *ProjectStore) UpdateAutonomyPolicy(
+	ctx context.Context,
+	projectID string,
+	policy project.AutonomyPolicy,
+) (project.Project, error) {
+	normalized, err := project.NormalizeAutonomyPolicy(policy)
+	if err != nil {
+		return project.Project{}, err
+	}
+	result, err := s.db.ExecContext(
+		ctx,
+		`UPDATE projects SET autonomy_policy = ? WHERE id = ?`,
+		normalized,
+		projectID,
+	)
+	if err != nil {
+		return project.Project{}, fmt.Errorf("update autonomy policy for project %q: %w", projectID, err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return project.Project{}, fmt.Errorf("read autonomy policy update count for project %q: %w", projectID, err)
+	}
+	if rowsAffected == 0 {
+		return project.Project{}, project.ErrNotFound
+	}
+	if rowsAffected != 1 {
+		return project.Project{}, fmt.Errorf(
+			"update autonomy policy for project %q: expected one affected row, got %d",
+			projectID,
+			rowsAffected,
+		)
+	}
+	return s.GetByID(ctx, projectID)
 }
 
 func (s *ProjectStore) UpdateMergePolicy(
@@ -301,7 +342,7 @@ func (s *ProjectStore) BindForgejoRepository(
 
 	storedProject, err := scanProject(tx.QueryRowContext(
 		ctx,
-		`SELECT id, name, recovery_policy, merge_policy,
+		`SELECT id, name, recovery_policy, merge_policy, autonomy_policy,
 		        planning_round_limit, implementation_review_round_limit,
 		        lead_provider, reviewer_provider,
 		        forgejo_owner, forgejo_repository, forgejo_default_branch, forgejo_bound_at,
@@ -371,6 +412,7 @@ func scanProject(scanner projectScanner) (project.Project, error) {
 		&storedProject.Name,
 		&storedProject.RecoveryPolicy,
 		&storedProject.MergePolicy,
+		&storedProject.AutonomyPolicy,
 		&storedProject.DialogueLimits.PlanningRounds,
 		&storedProject.DialogueLimits.ImplementationReviewRounds,
 		&storedProject.AgentProviders.Lead,
@@ -391,6 +433,11 @@ func scanProject(scanner projectScanner) (project.Project, error) {
 		return project.Project{}, err
 	}
 	storedProject.MergePolicy = mergePolicy
+	autonomyPolicy, err := project.NormalizeAutonomyPolicy(storedProject.AutonomyPolicy)
+	if err != nil {
+		return project.Project{}, err
+	}
+	storedProject.AutonomyPolicy = autonomyPolicy
 	providers, err := storedProject.AgentProviders.Normalize()
 	if err != nil {
 		return project.Project{}, err

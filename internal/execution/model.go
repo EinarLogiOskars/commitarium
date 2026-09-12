@@ -29,6 +29,7 @@ type Run struct {
 	ImplementationReviewRoundLimit int
 	AgentProviders                 project.AgentProviders
 	MergePolicy                    project.MergePolicy
+	AutonomyPolicy                 project.AutonomyPolicy
 	StartedAt                      time.Time
 	UpdatedAt                      time.Time
 	EndedAt                        *time.Time
@@ -163,6 +164,9 @@ func (status RunStatus) CanTransitionTo(next RunStatus) bool {
 func (run Run) Validate() error {
 	if _, err := project.NormalizeMergePolicy(run.MergePolicy); err != nil {
 		return fmt.Errorf("%w: merge policy is invalid", ErrInvalidRun)
+	}
+	if _, err := project.NormalizeAutonomyPolicy(run.AutonomyPolicy); err != nil {
+		return fmt.Errorf("%w: autonomy policy is invalid", ErrInvalidRun)
 	}
 	switch {
 	case strings.TrimSpace(run.ID) == "":

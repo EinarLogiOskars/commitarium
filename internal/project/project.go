@@ -7,6 +7,7 @@ type Project struct {
 	Name              string
 	RecoveryPolicy    RecoveryPolicy
 	MergePolicy       MergePolicy
+	AutonomyPolicy    AutonomyPolicy
 	DialogueLimits    DialogueLimits
 	AgentProviders    AgentProviders
 	ForgejoRepository *ForgejoRepository

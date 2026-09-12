@@ -10,6 +10,7 @@ type Store interface {
 	GetByID(ctx context.Context, id string) (Project, error)
 	List(ctx context.Context) ([]Project, error)
 	UpdateMergePolicy(ctx context.Context, projectID string, policy MergePolicy) (Project, error)
+	UpdateAutonomyPolicy(ctx context.Context, projectID string, policy AutonomyPolicy) (Project, error)
 	UpdateDialogueLimits(
 		ctx context.Context,
 		projectID string,

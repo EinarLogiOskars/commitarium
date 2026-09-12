@@ -17,6 +17,7 @@ func TestProjectStoreCreateAndGetByID(t *testing.T) {
 		Name:           "Commitarium",
 		RecoveryPolicy: project.RecoveryPolicyApprovalRequired,
 		MergePolicy:    project.DefaultMergePolicy(),
+		AutonomyPolicy: project.DefaultAutonomyPolicy(),
 		DialogueLimits: project.DialogueLimits{PlanningRounds: 0, ImplementationReviewRounds: 4},
 		AgentProviders: project.DefaultAgentProviders(),
 		CreatedAt: time.Date(
@@ -51,6 +52,7 @@ func TestProjectStoreUpdatesDialogueLimits(t *testing.T) {
 		ID: "prj_test", Name: "Commitarium",
 		RecoveryPolicy: project.RecoveryPolicyApprovalRequired,
 		MergePolicy:    project.DefaultMergePolicy(),
+		AutonomyPolicy: project.DefaultAutonomyPolicy(),
 		AgentProviders: project.DefaultAgentProviders(),
 		DialogueLimits: project.DefaultDialogueLimits(),
 		CreatedAt:      time.Now().UTC(),
@@ -129,6 +131,32 @@ func TestProjectStoreUpdatesMergePolicy(t *testing.T) {
 	}
 }
 
+func TestProjectStoreUpdatesAutonomyPolicy(t *testing.T) {
+	store := newTestProjectStore(t)
+	created := project.Project{
+		ID: "prj_autonomy", Name: "Autonomy policy", CreatedAt: time.Now().UTC(),
+		AutonomyPolicy: project.AutonomyPolicyReviewEachPhase,
+	}
+	if err := store.Create(t.Context(), created); err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	updated, err := store.UpdateAutonomyPolicy(
+		t.Context(), created.ID, project.AutonomyPolicyRunToCompletion,
+	)
+	if err != nil || updated.AutonomyPolicy != project.AutonomyPolicyRunToCompletion {
+		t.Fatalf("update autonomy policy: project=%+v err=%v", updated, err)
+	}
+	reloaded, err := store.GetByID(t.Context(), created.ID)
+	if err != nil || reloaded.AutonomyPolicy != project.AutonomyPolicyRunToCompletion {
+		t.Fatalf("reload autonomy policy: project=%+v err=%v", reloaded, err)
+	}
+	if _, err := store.UpdateAutonomyPolicy(
+		t.Context(), "prj_missing", project.AutonomyPolicyRunToCompletion,
+	); !errors.Is(err, project.ErrNotFound) {
+		t.Fatalf("missing project error = %v", err)
+	}
+}
+
 func TestProjectStoreCreateRejectsDuplicateID(t *testing.T) {
 	store := newTestProjectStore(t)
 	original := project.Project{
@@ -136,6 +164,7 @@ func TestProjectStoreCreateRejectsDuplicateID(t *testing.T) {
 		Name:           "Original",
 		RecoveryPolicy: project.RecoveryPolicyApprovalRequired,
 		MergePolicy:    project.DefaultMergePolicy(),
+		AutonomyPolicy: project.DefaultAutonomyPolicy(),
 		AgentProviders: project.DefaultAgentProviders(),
 		CreatedAt:      time.Date(2026, time.September, 8, 12, 0, 0, 0, time.UTC),
 	}

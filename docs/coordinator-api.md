@@ -16,6 +16,7 @@ this API beyond the host loopback interface is unsupported.
 | `PUT` | `/api/v1/projects/{projectID}/dialogue-limits` | Replace planning and implementation-review round limits |
 | `PUT` | `/api/v1/projects/{projectID}/agent-providers` | Select the lead and reviewer providers for future runs |
 | `PUT` | `/api/v1/projects/{projectID}/merge-policy` | Select user-approved or automatic merge for future runs |
+| `PUT` | `/api/v1/projects/{projectID}/autonomy-policy` | Select phase checkpoints or continuous execution for future runs |
 | `PUT` | `/api/v1/projects/{projectID}/forgejo-repository` | Verify and bind the project's internal repository |
 | `POST` | `/api/v1/projects/{projectID}/features` | Create a draft feature |
 | `GET` | `/api/v1/projects/{projectID}/features` | List the project's features by recent activity |
@@ -79,6 +80,23 @@ Content-Type: application/json
 Every run snapshots this value. Changing the project never changes whether an
 already-running or recovering workflow will merge automatically. Project and
 run responses always expose the effective `merge_policy`.
+
+Project creation also accepts an optional `autonomy_policy`. Supported values
+are `review_each_phase` and `run_to_completion`; omission uses the safer
+`review_each_phase` default. Replace the setting for future runs with:
+
+```http
+PUT /api/v1/projects/prj_example/autonomy-policy
+Content-Type: application/json
+
+{"autonomy_policy":"run_to_completion"}
+```
+
+Every run snapshots this value. Changing the project does not alter an active
+or historical run. Project and run responses always expose the effective
+`autonomy_policy`. The automatic phase-transition behavior governed by this
+snapshot is currently being completed; clients should follow
+`ui-backend-status.md` before exposing the control.
 
 Project creation also accepts an optional complete `dialogue_limits` object:
 
@@ -169,6 +187,7 @@ metadata = {
   "default_branch": "main",
   "recovery_policy": "approval_required",
   "merge_policy": "require_user_approval",
+  "autonomy_policy": "review_each_phase",
   "dialogue_limits": {
     "planning_rounds": 6,
     "implementation_review_rounds": 6
@@ -183,7 +202,7 @@ bundle = <Git bundle file>
 
 The request must contain exactly one text field named `metadata` and one file
 field named `bundle`. `recovery_policy`, `dialogue_limits`, `agent_providers`,
-and `merge_policy` have the same defaults and validation as ordinary project
+`merge_policy`, and `autonomy_policy` have the same defaults and validation as ordinary project
 creation. `default_branch` is
 required and must exist in the bundle. The entire multipart request is limited
 to 512 MiB.
@@ -241,6 +260,7 @@ includes:
   "name": "Example",
   "recovery_policy": "approval_required",
   "merge_policy": "require_user_approval",
+  "autonomy_policy": "review_each_phase",
   "dialogue_limits": {
     "planning_rounds": 6,
     "implementation_review_rounds": 6
@@ -491,6 +511,7 @@ A successful response is `202 Accepted` and points to the run resource:
     "reviewer": "claude"
   },
   "merge_policy": "require_user_approval",
+  "autonomy_policy": "review_each_phase",
   "started_at": "2026-09-08T17:30:36Z",
   "updated_at": "2026-09-08T17:30:36Z",
   "sessions": []

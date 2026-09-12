@@ -34,6 +34,7 @@ func TestMemoryStoreGetByID(t *testing.T) {
 		Name:           "Test project",
 		RecoveryPolicy: RecoveryPolicyApprovalRequired,
 		MergePolicy:    DefaultMergePolicy(),
+		AutonomyPolicy: DefaultAutonomyPolicy(),
 		AgentProviders: DefaultAgentProviders(),
 		CreatedAt:      time.Date(2026, time.September, 7, 12, 0, 0, 0, time.UTC),
 	}

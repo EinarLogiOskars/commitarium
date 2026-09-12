@@ -64,7 +64,7 @@ var ErrImplementationNotAllowed = errors.New("implementation cannot start from t
 // lead turn. It deliberately contains no workflow transition: goal
 // clarification leaves the feature in draft.
 type RemoteLeadExecution interface {
-	CreateRun(context.Context, string, string, int, int, project.AgentProviders, project.MergePolicy) (execution.Run, bool, error)
+	CreateRun(context.Context, string, string, int, int, project.AgentProviders, project.MergePolicy, ...project.AutonomyPolicy) (execution.Run, bool, error)
 	CreateSession(context.Context, string, string, string, worker.Role) (execution.Session, bool, error)
 	CreateWorkerAttempt(context.Context, string, string) (execution.WorkerAttemptCheckpoint, bool, error)
 	GetRun(context.Context, string) (execution.Run, error)
@@ -269,9 +269,21 @@ func (starter *RemoteLeadStarter) Start(
 	dialogueLimits project.DialogueLimits,
 	agentProviders project.AgentProviders,
 	mergePolicy project.MergePolicy,
+	autonomyPolicies ...project.AutonomyPolicy,
 ) (execution.Run, bool, error) {
 	var err error
 	mergePolicy, err = project.NormalizeMergePolicy(mergePolicy)
+	if err != nil {
+		return execution.Run{}, false, ErrInvalidRunRequest
+	}
+	if len(autonomyPolicies) > 1 {
+		return execution.Run{}, false, ErrInvalidRunRequest
+	}
+	var autonomyPolicy project.AutonomyPolicy
+	if len(autonomyPolicies) == 1 {
+		autonomyPolicy = autonomyPolicies[0]
+	}
+	autonomyPolicy, err = project.NormalizeAutonomyPolicy(autonomyPolicy)
 	if err != nil {
 		return execution.Run{}, false, ErrInvalidRunRequest
 	}
@@ -305,6 +317,7 @@ func (starter *RemoteLeadStarter) Start(
 		dialogueLimits.ImplementationReviewRounds,
 		agentProviders,
 		mergePolicy,
+		autonomyPolicy,
 	)
 	if err != nil || !created {
 		return run, created, err

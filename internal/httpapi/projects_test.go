@@ -43,6 +43,7 @@ type recordingProjectService struct {
 	receivedDialogueLimits project.DialogueLimits
 	receivedAgentProviders project.AgentProviders
 	receivedMergePolicy    project.MergePolicy
+	receivedAutonomyPolicy project.AutonomyPolicy
 	result                 project.Project
 	err                    error
 
@@ -79,6 +80,7 @@ func (s *recordingProjectService) Create(
 	dialogueLimits project.DialogueLimits,
 	agentProviders project.AgentProviders,
 	mergePolicy project.MergePolicy,
+	autonomyPolicies ...project.AutonomyPolicy,
 ) (project.Project, error) {
 	s.calls++
 	s.receivedName = name
@@ -86,7 +88,20 @@ func (s *recordingProjectService) Create(
 	s.receivedDialogueLimits = dialogueLimits
 	s.receivedAgentProviders = agentProviders
 	s.receivedMergePolicy = mergePolicy
+	if len(autonomyPolicies) == 1 {
+		s.receivedAutonomyPolicy = autonomyPolicies[0]
+	}
 	return s.result, s.err
+}
+
+func (s *recordingProjectService) UpdateAutonomyPolicy(
+	_ context.Context,
+	projectID string,
+	policy project.AutonomyPolicy,
+) (project.Project, error) {
+	s.updateProjectID = projectID
+	s.receivedAutonomyPolicy = policy
+	return s.updateResult, s.updateErr
 }
 
 func (s *recordingProjectService) UpdateMergePolicy(
@@ -279,6 +294,7 @@ func TestCreateProject(t *testing.T) {
 			RecoveryPolicy: project.RecoveryPolicyAutomatic,
 			DialogueLimits: project.DefaultDialogueLimits(),
 			MergePolicy:    project.DefaultMergePolicy(),
+			AutonomyPolicy: project.DefaultAutonomyPolicy(),
 			CreatedAt:      fixedTime,
 		},
 	}
@@ -301,6 +317,7 @@ func TestCreateProject(t *testing.T) {
 		RecoveryPolicy project.RecoveryPolicy `json:"recovery_policy"`
 		DialogueLimits dialogueLimitsResponse `json:"dialogue_limits"`
 		MergePolicy    project.MergePolicy    `json:"merge_policy"`
+		AutonomyPolicy project.AutonomyPolicy `json:"autonomy_policy"`
 		CreatedAt      time.Time              `json:"created_at"`
 	}
 
@@ -344,6 +361,9 @@ func TestCreateProject(t *testing.T) {
 	if service.receivedMergePolicy != "" {
 		t.Errorf("expected blank policy to be normalized by the service, got %q", service.receivedMergePolicy)
 	}
+	if service.receivedAutonomyPolicy != "" {
+		t.Errorf("expected blank autonomy policy to be normalized by the service, got %q", service.receivedAutonomyPolicy)
+	}
 
 	if response.ID != service.result.ID {
 		t.Errorf("expected response ID %v, got %v", service.result.ID, response.ID)
@@ -360,6 +380,9 @@ func TestCreateProject(t *testing.T) {
 	}
 	if response.MergePolicy != project.DefaultMergePolicy() {
 		t.Errorf("unexpected merge policy %q", response.MergePolicy)
+	}
+	if response.AutonomyPolicy != project.DefaultAutonomyPolicy() {
+		t.Errorf("unexpected autonomy policy %q", response.AutonomyPolicy)
 	}
 
 	if response.CreatedAt != service.result.CreatedAt {
@@ -567,6 +590,26 @@ func TestUpdateProjectAgentProvidersRejectsIncompleteAssignment(t *testing.T) {
 	New(service, nil, nil, nil, nil, nil).ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d: %s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestUpdateProjectAutonomyPolicy(t *testing.T) {
+	want := project.AutonomyPolicyRunToCompletion
+	service := &recordingProjectService{updateResult: project.Project{
+		ID: "prj_test", AutonomyPolicy: want, CreatedAt: time.Now().UTC(),
+	}}
+	request := httptest.NewRequest(
+		http.MethodPut,
+		"/api/v1/projects/prj_test/autonomy-policy",
+		strings.NewReader(`{"autonomy_policy":"run_to_completion"}`),
+	)
+	recorder := httptest.NewRecorder()
+	New(service, nil, nil, nil, nil, nil).ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", recorder.Code, recorder.Body.String())
+	}
+	if service.updateProjectID != "prj_test" || service.receivedAutonomyPolicy != want {
+		t.Fatalf("updated project=%q policy=%q", service.updateProjectID, service.receivedAutonomyPolicy)
 	}
 }
 

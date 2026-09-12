@@ -42,8 +42,20 @@ func (s *Service) CreateRun(
 	implementationReviewRoundLimit int,
 	agentProviders project.AgentProviders,
 	mergePolicy project.MergePolicy,
+	autonomyPolicies ...project.AutonomyPolicy,
 ) (Run, bool, error) {
 	agentProviders, err := agentProviders.Normalize()
+	if err != nil {
+		return Run{}, false, err
+	}
+	if len(autonomyPolicies) > 1 {
+		return Run{}, false, project.ErrInvalidAutonomyPolicy
+	}
+	var autonomyPolicy project.AutonomyPolicy
+	if len(autonomyPolicies) == 1 {
+		autonomyPolicy = autonomyPolicies[0]
+	}
+	autonomyPolicy, err = project.NormalizeAutonomyPolicy(autonomyPolicy)
 	if err != nil {
 		return Run{}, false, err
 	}
@@ -58,6 +70,7 @@ func (s *Service) CreateRun(
 		ImplementationReviewRoundLimit: implementationReviewRoundLimit,
 		AgentProviders:                 agentProviders,
 		MergePolicy:                    mergePolicy,
+		AutonomyPolicy:                 autonomyPolicy,
 		StartedAt:                      now, UpdatedAt: now,
 	}
 	if err := s.store.CreateRun(ctx, run); err != nil {
@@ -76,11 +89,16 @@ func (s *Service) CreateRun(
 		if mergePolicyErr != nil {
 			return Run{}, false, mergePolicyErr
 		}
+		existingAutonomyPolicy, autonomyPolicyErr := project.NormalizeAutonomyPolicy(existing.AutonomyPolicy)
+		if autonomyPolicyErr != nil {
+			return Run{}, false, autonomyPolicyErr
+		}
 		if existing.FeatureID != featureID ||
 			existing.PlanningRoundLimit != planningRoundLimit ||
 			existing.ImplementationReviewRoundLimit != implementationReviewRoundLimit ||
 			existingProviders != agentProviders ||
-			existingMergePolicy != mergePolicy {
+			existingMergePolicy != mergePolicy ||
+			existingAutonomyPolicy != autonomyPolicy {
 			return Run{}, false, ErrRecordConflict
 		}
 		return existing, false, nil
