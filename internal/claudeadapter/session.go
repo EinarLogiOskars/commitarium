@@ -352,11 +352,31 @@ func (session *session) translate(raw []byte) ([]worker.Event, *worker.Result, e
 
 func (session *session) assistantEvents(blocks []contentBlock) []worker.Event {
 	events := make([]worker.Event, 0)
+	hasToolUse := false
+	for _, block := range blocks {
+		if block.Type == "tool_use" || block.Type == "server_tool_use" {
+			hasToolUse = true
+			break
+		}
+	}
 	for _, block := range blocks {
 		switch block.Type {
 		case "text":
 			text := strings.TrimSpace(block.Text)
-			if text == "" || session.outputContract != "" {
+			if text == "" || session.outputContract == worker.OutputContractIntervention {
+				continue
+			}
+			if hasToolUse {
+				events = append(events, worker.Event{
+					Type: worker.EventActivity, Text: text,
+					Activity: &worker.Activity{Kind: worker.ActivityKindNarration},
+				})
+				continue
+			}
+			if session.outputContract != "" {
+				// Structured turns publish their final user-facing message from
+				// structured_output. A text-only block may contain that private JSON
+				// wrapper, so it is not safe to present as narration.
 				continue
 			}
 			session.mu.Lock()

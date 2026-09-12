@@ -166,14 +166,21 @@ func TestGetSessionAndEvents(t *testing.T) {
 			Role: worker.RoleCoder, Status: execution.SessionStatusRunning,
 			StartedAt: fixedTime, UpdatedAt: fixedTime,
 		},
-		events: []execution.Event{{
-			ID: "sev_test", SessionID: "ses_test", Sequence: 1,
-			Type: worker.EventActivity, Text: "editing files", OccurredAt: fixedTime,
-			Activity: &worker.Activity{
-				Kind: worker.ActivityKindFileChange, Operation: worker.FileOperationModified,
-				Path: "README.md", Additions: httpIntPointer(42), Deletions: httpIntPointer(8),
+		events: []execution.Event{
+			{
+				ID: "sev_narration", SessionID: "ses_test", Sequence: 1,
+				Type: worker.EventActivity, Text: "I’ll inspect the README first.", OccurredAt: fixedTime,
+				Activity: &worker.Activity{Kind: worker.ActivityKindNarration},
 			},
-		}},
+			{
+				ID: "sev_file", SessionID: "ses_test", Sequence: 2,
+				Type: worker.EventActivity, Text: "editing files", OccurredAt: fixedTime.Add(time.Second),
+				Activity: &worker.Activity{
+					Kind: worker.ActivityKindFileChange, Operation: worker.FileOperationModified,
+					Path: "README.md", Additions: httpIntPointer(42), Deletions: httpIntPointer(8),
+				},
+			},
+		},
 	}
 	handler := New(nil, nil, nil, executions, nil, nil)
 
@@ -207,13 +214,16 @@ func TestGetSessionAndEvents(t *testing.T) {
 	if err := json.NewDecoder(eventsRecorder.Body).Decode(&eventBody); err != nil {
 		t.Fatalf("decode events response: %v", err)
 	}
-	if len(eventBody) != 1 ||
+	if len(eventBody) != 2 ||
 		eventBody[0].Sequence != 1 ||
-		eventBody[0].Text != "editing files" ||
+		eventBody[0].Text != "I’ll inspect the README first." ||
 		eventBody[0].Activity == nil ||
-		eventBody[0].Activity.Kind != worker.ActivityKindFileChange ||
-		eventBody[0].Activity.Path != "README.md" ||
-		eventBody[0].Activity.Additions == nil || *eventBody[0].Activity.Additions != 42 {
+		eventBody[0].Activity.Kind != worker.ActivityKindNarration ||
+		eventBody[1].Sequence != 2 ||
+		eventBody[1].Activity == nil ||
+		eventBody[1].Activity.Kind != worker.ActivityKindFileChange ||
+		eventBody[1].Activity.Path != "README.md" ||
+		eventBody[1].Activity.Additions == nil || *eventBody[1].Activity.Additions != 42 {
 		t.Errorf("unexpected event response %+v", eventBody)
 	}
 }

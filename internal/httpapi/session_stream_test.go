@@ -14,13 +14,15 @@ import (
 
 func TestStreamSessionEventsResumesAfterLastEventID(t *testing.T) {
 	first := testSessionEvent("sev_one", 1, "starting")
-	second := testSessionEvent("sev_two", 2, "editing files")
-	second.Activity = &worker.Activity{
+	second := testSessionEvent("sev_two", 2, "I’ll inspect the project first.")
+	second.Activity = &worker.Activity{Kind: worker.ActivityKindNarration}
+	third := testSessionEvent("sev_three", 3, "editing files")
+	third.Activity = &worker.Activity{
 		Kind: worker.ActivityKindCommand, Command: "pnpm test", ExitCode: httpIntPointer(0),
 	}
 	executions := &recordingExecutionService{
 		session: execution.Session{ID: "ses_test"},
-		events:  []execution.Event{first, second},
+		events:  []execution.Event{first, second, third},
 	}
 	request := httptest.NewRequest(
 		http.MethodGet,
@@ -46,9 +48,12 @@ func TestStreamSessionEventsResumesAfterLastEventID(t *testing.T) {
 		t.Errorf("expected first event to be skipped, got %q", body)
 	}
 	if !strings.Contains(body, "id: "+second.ID) ||
+		!strings.Contains(body, `"text":"I’ll inspect the project first."`) ||
+		!strings.Contains(body, `"activity":{"kind":"narration"}`) ||
+		!strings.Contains(body, "id: "+third.ID) ||
 		!strings.Contains(body, `"text":"editing files"`) ||
 		!strings.Contains(body, `"activity":{"kind":"command","command":"pnpm test","exit_code":0}`) {
-		t.Errorf("expected second event in stream, got %q", body)
+		t.Errorf("expected structured events in stream, got %q", body)
 	}
 	if executions.unsubscribed != 1 {
 		t.Errorf("expected subscription cleanup, got %d calls", executions.unsubscribed)

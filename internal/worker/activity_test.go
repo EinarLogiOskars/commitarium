@@ -11,6 +11,7 @@ func TestActivityValidate(t *testing.T) {
 	additions := 4
 	deletions := 1
 	valid := []Activity{
+		{Kind: ActivityKindNarration},
 		{
 			Kind: ActivityKindCommand, Command: "go test ./...",
 			ExitCode: &exitCode, DurationMS: &duration,
@@ -31,6 +32,7 @@ func TestActivityValidate(t *testing.T) {
 	}
 
 	invalid := []Activity{
+		{Kind: ActivityKindNarration, Command: "unexpected"},
 		{Kind: ActivityKindCommand},
 		{Kind: ActivityKindCommand, Command: "test", Path: "unexpected"},
 		{Kind: ActivityKindFileChange, Operation: "unknown", Path: "file.go"},

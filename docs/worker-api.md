@@ -470,12 +470,13 @@ environment is missing or invalid.
 
 The adapter converts completed agent messages and generic command, file-change,
 web-search, tool, plan, and delegated-agent lifecycle notices into the existing
-provider-neutral activity model. It deliberately ignores private reasoning and
-incremental message deltas; the completed message is authoritative and later
-passes through the worker safety filter before persistence or publication.
-Unknown optional notifications are ignored, while malformed protocol messages,
-wrong thread or turn identity, missing required identity, and event
-backpressure fail closed.
+provider-neutral activity model. Completed user-visible commentary and
+provider-approved reasoning summaries become narration activity. Private
+reasoning content and incremental message or reasoning deltas remain excluded;
+the completed final message is still authoritative and later passes through the
+worker safety filter before persistence or publication. Unknown optional
+notifications are ignored, while malformed protocol messages, wrong thread or
+turn identity, missing required identity, and event backpressure fail closed.
 
 For `planning_lead`, the adapter supplies App Server's per-turn `outputSchema`
 with two actions: `respond` and `submit_plan`. It strictly decodes the completed
