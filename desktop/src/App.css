@@ -395,7 +395,9 @@ body {
   flex-direction: column;
   gap: 10px;
   overflow-y: auto;
-  padding: 4px 2px;
+  /* Extra right padding so the scrollbar doesn't clip right-aligned (user)
+     bubbles. */
+  padding: 4px 12px 4px 2px;
 }
 .msg {
   display: flex;
