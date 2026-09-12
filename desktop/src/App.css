@@ -1057,6 +1057,13 @@ button.primary {
   color: var(--muted);
   text-transform: capitalize;
 }
+.intervene__queued--done {
+  border-color: color-mix(in srgb, var(--ok) 40%, transparent);
+  background: color-mix(in srgb, var(--ok) 10%, transparent);
+}
+.intervene__queued--done .intervene__queued-badge {
+  color: var(--ok);
+}
 
 /* Segmented lead/reviewer selector. */
 .seg {
