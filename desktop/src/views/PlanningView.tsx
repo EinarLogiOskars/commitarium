@@ -162,7 +162,12 @@ function PlanEntry({ e }: { e: Entry }) {
     );
   }
   if (e.type === "activity") {
-    return <div className="msg msg--note">{e.text}</div>;
+    const who = e.role === "reviewer" ? "Reviewer" : "Lead";
+    return (
+      <div className="msg msg--note">
+        {who} · {e.text}
+      </div>
+    );
   }
   return null;
 }
