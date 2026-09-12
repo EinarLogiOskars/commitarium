@@ -33,6 +33,11 @@ func (s *ExecutionStore) CreateRun(ctx context.Context, run execution.Run) error
 		return err
 	}
 	run.MergePolicy = mergePolicy
+	autonomyPolicy, err := project.NormalizeAutonomyPolicy(run.AutonomyPolicy)
+	if err != nil {
+		return err
+	}
+	run.AutonomyPolicy = autonomyPolicy
 	if err := run.Validate(); err != nil {
 		return err
 	}
@@ -41,9 +46,9 @@ func (s *ExecutionStore) CreateRun(ctx context.Context, run execution.Run) error
 		`INSERT INTO runs (
 			id, feature_id, status, reason,
 			planning_round_limit, implementation_review_round_limit,
-			lead_provider, reviewer_provider, merge_policy,
+			lead_provider, reviewer_provider, merge_policy, autonomy_policy,
 			started_at, updated_at, ended_at
-		 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(id) DO NOTHING`,
 		run.ID,
 		run.FeatureID,
@@ -54,6 +59,7 @@ func (s *ExecutionStore) CreateRun(ctx context.Context, run execution.Run) error
 		run.AgentProviders.Lead,
 		run.AgentProviders.Reviewer,
 		run.MergePolicy,
+		run.AutonomyPolicy,
 		formatExecutionTime(run.StartedAt),
 		formatExecutionTime(run.UpdatedAt),
 		formatOptionalExecutionTime(run.EndedAt),
@@ -72,7 +78,7 @@ func (s *ExecutionStore) GetRun(
 		ctx,
 		`SELECT id, feature_id, status, reason,
 		        planning_round_limit, implementation_review_round_limit,
-		        lead_provider, reviewer_provider, merge_policy,
+		        lead_provider, reviewer_provider, merge_policy, autonomy_policy,
 		        started_at, updated_at, ended_at
 		 FROM runs WHERE id = ?`,
 		id,
@@ -94,7 +100,7 @@ func (s *ExecutionStore) ListRunsByFeatureID(
 		ctx,
 		`SELECT id, feature_id, status, reason,
 		        planning_round_limit, implementation_review_round_limit,
-		        lead_provider, reviewer_provider, merge_policy,
+		        lead_provider, reviewer_provider, merge_policy, autonomy_policy,
 		        started_at, updated_at, ended_at
 		 FROM runs
 		 WHERE feature_id = ?
@@ -139,7 +145,7 @@ func (s *ExecutionStore) TransitionRun(
 		ctx,
 		`SELECT id, feature_id, status, reason,
 		        planning_round_limit, implementation_review_round_limit,
-		        lead_provider, reviewer_provider, merge_policy,
+		        lead_provider, reviewer_provider, merge_policy, autonomy_policy,
 		        started_at, updated_at, ended_at
 		 FROM runs WHERE id = ?`,
 		transition.RunID,
@@ -283,7 +289,7 @@ func (s *ExecutionStore) ListRecoverableRuns(
 		ctx,
 		`SELECT r.id, r.feature_id, r.status, r.reason,
 		        r.planning_round_limit, r.implementation_review_round_limit,
-		        r.lead_provider, r.reviewer_provider, r.merge_policy,
+		        r.lead_provider, r.reviewer_provider, r.merge_policy, r.autonomy_policy,
 		        r.started_at, r.updated_at, r.ended_at
 		 FROM runs r
 		 WHERE r.status = ?
@@ -816,6 +822,7 @@ func scanExecutionRun(scanner executionScanner) (execution.Run, error) {
 		&run.AgentProviders.Lead,
 		&run.AgentProviders.Reviewer,
 		&run.MergePolicy,
+		&run.AutonomyPolicy,
 		&startedAt,
 		&updatedAt,
 		&endedAt,
@@ -833,6 +840,11 @@ func scanExecutionRun(scanner executionScanner) (execution.Run, error) {
 		return execution.Run{}, err
 	}
 	run.MergePolicy = mergePolicy
+	autonomyPolicy, err := project.NormalizeAutonomyPolicy(run.AutonomyPolicy)
+	if err != nil {
+		return execution.Run{}, err
+	}
+	run.AutonomyPolicy = autonomyPolicy
 	err = nil
 	run.StartedAt, err = parseExecutionTime(startedAt)
 	if err != nil {

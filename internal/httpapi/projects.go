@@ -18,6 +18,7 @@ type createProjectRequest struct {
 	Name           string                 `json:"name"`
 	RecoveryPolicy project.RecoveryPolicy `json:"recovery_policy"`
 	MergePolicy    project.MergePolicy    `json:"merge_policy"`
+	AutonomyPolicy project.AutonomyPolicy `json:"autonomy_policy"`
 	DialogueLimits *dialogueLimitsRequest `json:"dialogue_limits"`
 	AgentProviders *agentProvidersRequest `json:"agent_providers"`
 }
@@ -27,6 +28,7 @@ type projectResponse struct {
 	Name              string                     `json:"name"`
 	RecoveryPolicy    project.RecoveryPolicy     `json:"recovery_policy"`
 	MergePolicy       project.MergePolicy        `json:"merge_policy"`
+	AutonomyPolicy    project.AutonomyPolicy     `json:"autonomy_policy"`
 	DialogueLimits    dialogueLimitsResponse     `json:"dialogue_limits"`
 	AgentProviders    agentProvidersResponse     `json:"agent_providers"`
 	ForgejoRepository *forgejoRepositoryResponse `json:"forgejo_repository,omitempty"`
@@ -69,6 +71,7 @@ type importProjectMetadata struct {
 	Name           string                 `json:"name"`
 	RecoveryPolicy project.RecoveryPolicy `json:"recovery_policy"`
 	MergePolicy    project.MergePolicy    `json:"merge_policy"`
+	AutonomyPolicy project.AutonomyPolicy `json:"autonomy_policy"`
 	DialogueLimits *dialogueLimitsRequest `json:"dialogue_limits"`
 	AgentProviders *agentProvidersRequest `json:"agent_providers"`
 	DefaultBranch  string                 `json:"default_branch"`
@@ -121,6 +124,7 @@ func (api *API) importProjectHandler(w http.ResponseWriter, r *http.Request) {
 	imported, created, err := api.projectImporter.Import(r.Context(), project.ImportSpec{
 		ImportID: r.PathValue("importID"), Name: metadata.Name,
 		RecoveryPolicy: metadata.RecoveryPolicy, MergePolicy: metadata.MergePolicy,
+		AutonomyPolicy: metadata.AutonomyPolicy,
 		DialogueLimits: limits,
 		AgentProviders: agentProviders,
 		DefaultBranch:  metadata.DefaultBranch,
@@ -135,6 +139,8 @@ func (api *API) importProjectHandler(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "invalid_recovery_policy", "recovery_policy must be approval_required or automatic")
 		case errors.Is(err, project.ErrInvalidMergePolicy):
 			writeError(w, http.StatusBadRequest, "invalid_merge_policy", "merge_policy must be require_user_approval or auto_after_gates")
+		case errors.Is(err, project.ErrInvalidAutonomyPolicy):
+			writeError(w, http.StatusBadRequest, "invalid_autonomy_policy", "autonomy_policy must be review_each_phase or run_to_completion")
 		case errors.Is(err, project.ErrInvalidDialogueLimits):
 			writeError(w, http.StatusBadRequest, "invalid_dialogue_limits", "dialogue limits must be non-negative; zero means unlimited")
 		case errors.Is(err, project.ErrInvalidAgentProviders):
@@ -210,6 +216,7 @@ func (api *API) createProjectHandler(
 		dialogueLimits,
 		agentProviders,
 		request.MergePolicy,
+		request.AutonomyPolicy,
 	)
 	if err != nil {
 		if errors.Is(err, project.ErrNameRequired) {
@@ -232,6 +239,10 @@ func (api *API) createProjectHandler(
 		}
 		if errors.Is(err, project.ErrInvalidMergePolicy) {
 			writeError(w, http.StatusBadRequest, "invalid_merge_policy", "merge_policy must be require_user_approval or auto_after_gates")
+			return
+		}
+		if errors.Is(err, project.ErrInvalidAutonomyPolicy) {
+			writeError(w, http.StatusBadRequest, "invalid_autonomy_policy", "autonomy_policy must be review_each_phase or run_to_completion")
 			return
 		}
 		if errors.Is(err, project.ErrInvalidDialogueLimits) {
@@ -271,6 +282,34 @@ func (api *API) createProjectHandler(
 
 type mergePolicyRequest struct {
 	MergePolicy project.MergePolicy `json:"merge_policy"`
+}
+
+type autonomyPolicyRequest struct {
+	AutonomyPolicy project.AutonomyPolicy `json:"autonomy_policy"`
+}
+
+func (api *API) updateProjectAutonomyPolicyHandler(w http.ResponseWriter, r *http.Request) {
+	request := autonomyPolicyRequest{}
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&request); err != nil || ensureJSONEOF(decoder) != nil {
+		writeError(w, http.StatusBadRequest, "invalid_json", "request body must contain exactly one valid JSON object with no unknown fields")
+		return
+	}
+	updated, err := api.projects.UpdateAutonomyPolicy(r.Context(), r.PathValue("id"), request.AutonomyPolicy)
+	if err != nil {
+		switch {
+		case errors.Is(err, project.ErrNotFound):
+			writeError(w, http.StatusNotFound, "project_not_found", "project not found")
+		case errors.Is(err, project.ErrInvalidAutonomyPolicy):
+			writeError(w, http.StatusBadRequest, "invalid_autonomy_policy", "autonomy_policy must be review_each_phase or run_to_completion")
+		default:
+			log.Printf("update project autonomy policy %q: %v", r.PathValue("id"), err)
+			writeError(w, http.StatusInternalServerError, "internal_error", "internal server error")
+		}
+		return
+	}
+	writeJSON(w, http.StatusOK, newProjectResponse(updated), "project")
 }
 
 func (api *API) updateProjectMergePolicyHandler(w http.ResponseWriter, r *http.Request) {
@@ -496,6 +535,7 @@ func newProjectResponse(storedProject project.Project) projectResponse {
 		ID: storedProject.ID, Name: storedProject.Name,
 		RecoveryPolicy: storedProject.RecoveryPolicy,
 		MergePolicy:    storedProject.MergePolicy,
+		AutonomyPolicy: storedProject.AutonomyPolicy,
 		DialogueLimits: dialogueLimitsResponse{
 			PlanningRounds:             storedProject.DialogueLimits.PlanningRounds,
 			ImplementationReviewRounds: storedProject.DialogueLimits.ImplementationReviewRounds,

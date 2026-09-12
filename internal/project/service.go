@@ -116,7 +116,7 @@ func (s *Service) Import(ctx context.Context, spec ImportSpec, bundle io.Reader)
 	}
 	created := Project{
 		ID: projectID, Name: normalized.Name, RecoveryPolicy: normalized.RecoveryPolicy,
-		MergePolicy:    normalized.MergePolicy,
+		MergePolicy: normalized.MergePolicy, AutonomyPolicy: normalized.AutonomyPolicy,
 		DialogueLimits: normalized.DialogueLimits, AgentProviders: normalized.AgentProviders,
 		ForgejoRepository: &repository, CreatedAt: s.now().UTC(),
 	}
@@ -150,6 +150,7 @@ func (s *Service) Create(
 	dialogueLimits DialogueLimits,
 	agentProviders AgentProviders,
 	mergePolicy MergePolicy,
+	autonomyPolicies ...AutonomyPolicy,
 ) (Project, error) {
 	sanitizedName := strings.TrimSpace(name)
 
@@ -162,6 +163,17 @@ func (s *Service) Create(
 		return Project{}, err
 	}
 	mergePolicy, err = NormalizeMergePolicy(mergePolicy)
+	if err != nil {
+		return Project{}, err
+	}
+	if len(autonomyPolicies) > 1 {
+		return Project{}, ErrInvalidAutonomyPolicy
+	}
+	var autonomyPolicy AutonomyPolicy
+	if len(autonomyPolicies) == 1 {
+		autonomyPolicy = autonomyPolicies[0]
+	}
+	autonomyPolicy, err = NormalizeAutonomyPolicy(autonomyPolicy)
 	if err != nil {
 		return Project{}, err
 	}
@@ -178,6 +190,7 @@ func (s *Service) Create(
 		Name:           sanitizedName,
 		RecoveryPolicy: policy,
 		MergePolicy:    mergePolicy,
+		AutonomyPolicy: autonomyPolicy,
 		DialogueLimits: dialogueLimits,
 		AgentProviders: agentProviders,
 		CreatedAt:      s.now(),
@@ -188,6 +201,22 @@ func (s *Service) Create(
 	}
 
 	return project, nil
+}
+
+func (s *Service) UpdateAutonomyPolicy(
+	ctx context.Context,
+	projectID string,
+	policy AutonomyPolicy,
+) (Project, error) {
+	normalized, err := NormalizeAutonomyPolicy(policy)
+	if err != nil {
+		return Project{}, err
+	}
+	updated, err := s.store.UpdateAutonomyPolicy(ctx, projectID, normalized)
+	if err != nil {
+		return Project{}, fmt.Errorf("update autonomy policy for project %q: %w", projectID, err)
+	}
+	return updated, nil
 }
 
 func (s *Service) UpdateMergePolicy(

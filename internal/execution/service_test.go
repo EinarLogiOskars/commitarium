@@ -127,6 +127,9 @@ func TestServiceCreatesRunAndSessionWithCoordinatorTime(t *testing.T) {
 	if run.MergePolicy != project.DefaultMergePolicy() {
 		t.Fatalf("default merge policy = %q", run.MergePolicy)
 	}
+	if run.AutonomyPolicy != project.DefaultAutonomyPolicy() {
+		t.Fatalf("default autonomy policy = %q", run.AutonomyPolicy)
+	}
 
 	session, created, err := service.CreateSession(
 		t.Context(),

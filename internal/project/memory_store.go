@@ -38,6 +38,11 @@ func (s *MemoryStore) Create(
 		return err
 	}
 	createdProject.MergePolicy = mergePolicy
+	autonomyPolicy, err := NormalizeAutonomyPolicy(createdProject.AutonomyPolicy)
+	if err != nil {
+		return err
+	}
+	createdProject.AutonomyPolicy = autonomyPolicy
 	createdProject.RecoveryPolicy = policy
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -48,6 +53,26 @@ func (s *MemoryStore) Create(
 
 	s.projects[createdProject.ID] = cloneProject(createdProject)
 	return nil
+}
+
+func (s *MemoryStore) UpdateAutonomyPolicy(
+	_ context.Context,
+	projectID string,
+	policy AutonomyPolicy,
+) (Project, error) {
+	normalized, err := NormalizeAutonomyPolicy(policy)
+	if err != nil {
+		return Project{}, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	storedProject, exists := s.projects[projectID]
+	if !exists {
+		return Project{}, ErrNotFound
+	}
+	storedProject.AutonomyPolicy = normalized
+	s.projects[projectID] = cloneProject(storedProject)
+	return cloneProject(storedProject), nil
 }
 
 func (s *MemoryStore) UpdateMergePolicy(

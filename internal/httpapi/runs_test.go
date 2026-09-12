@@ -18,15 +18,16 @@ import (
 )
 
 type recordingRunStarter struct {
-	runID       string
-	projectID   string
-	featureID   string
-	goal        string
-	limits      project.DialogueLimits
-	providers   project.AgentProviders
-	mergePolicy project.MergePolicy
-	result      execution.Run
-	err         error
+	runID          string
+	projectID      string
+	featureID      string
+	goal           string
+	limits         project.DialogueLimits
+	providers      project.AgentProviders
+	mergePolicy    project.MergePolicy
+	autonomyPolicy project.AutonomyPolicy
+	result         execution.Run
+	err            error
 }
 
 func (s *recordingRunStarter) Start(
@@ -38,6 +39,7 @@ func (s *recordingRunStarter) Start(
 	dialogueLimits project.DialogueLimits,
 	agentProviders project.AgentProviders,
 	mergePolicy project.MergePolicy,
+	autonomyPolicies ...project.AutonomyPolicy,
 ) (execution.Run, bool, error) {
 	s.runID = runID
 	s.projectID = projectID
@@ -46,6 +48,9 @@ func (s *recordingRunStarter) Start(
 	s.limits = dialogueLimits
 	s.providers = agentProviders
 	s.mergePolicy = mergePolicy
+	if len(autonomyPolicies) == 1 {
+		s.autonomyPolicy = autonomyPolicies[0]
+	}
 	if s.result.ID == "" {
 		s.result = execution.Run{
 			ID: runID, FeatureID: featureID, Status: execution.RunStatusRunning,
@@ -53,6 +58,7 @@ func (s *recordingRunStarter) Start(
 			ImplementationReviewRoundLimit: dialogueLimits.ImplementationReviewRounds,
 			AgentProviders:                 s.providers,
 			MergePolicy:                    s.mergePolicy,
+			AutonomyPolicy:                 s.autonomyPolicy,
 			StartedAt:                      time.Now().UTC(), UpdatedAt: time.Now().UTC(),
 		}
 	}
@@ -72,7 +78,8 @@ func TestStartRunReturnsDurableAcceptedRun(t *testing.T) {
 	}
 	projects := &recordingProjectService{getByIDResult: project.Project{
 		ID: "prj_test", DialogueLimits: limits, AgentProviders: providers,
-		MergePolicy: project.MergePolicyAutoAfterGates,
+		MergePolicy:    project.MergePolicyAutoAfterGates,
+		AutonomyPolicy: project.AutonomyPolicyRunToCompletion,
 	}}
 	request := httptest.NewRequest(
 		http.MethodPost,
@@ -106,6 +113,9 @@ func TestStartRunReturnsDurableAcceptedRun(t *testing.T) {
 	if starter.mergePolicy != project.MergePolicyAutoAfterGates {
 		t.Errorf("expected merge-policy snapshot %q, got %q", project.MergePolicyAutoAfterGates, starter.mergePolicy)
 	}
+	if starter.autonomyPolicy != project.AutonomyPolicyRunToCompletion {
+		t.Errorf("expected autonomy-policy snapshot %q, got %q", project.AutonomyPolicyRunToCompletion, starter.autonomyPolicy)
+	}
 	if location := recorder.Header().Get("Location"); location != "/api/v1/runs/"+expectedRunID {
 		t.Errorf("unexpected Location %q", location)
 	}
@@ -122,6 +132,9 @@ func TestStartRunReturnsDurableAcceptedRun(t *testing.T) {
 	}
 	if body.MergePolicy != project.MergePolicyAutoAfterGates {
 		t.Errorf("unexpected run merge policy %q", body.MergePolicy)
+	}
+	if body.AutonomyPolicy != project.AutonomyPolicyRunToCompletion {
+		t.Errorf("unexpected run autonomy policy %q", body.AutonomyPolicy)
 	}
 }
 

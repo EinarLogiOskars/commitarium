@@ -123,6 +123,12 @@ Project creation and import may omit `merge_policy` to receive
 value. As with providers and dialogue limits, an active run uses its immutable
 snapshot even after the project setting changes.
 
+Project creation and import now accept `autonomy_policy`, and project/run
+responses expose its effective snapshot. The update route is
+`PUT /api/v1/projects/{projectID}/autonomy-policy`. Do not expose this setting
+in the UI yet: the durable contract is present, but the phase-advancement and
+pause behavior it controls is still in progress below.
+
 Project creation may omit `dialogue_limits` to receive the six-round defaults.
 If supplied, the object contains both `planning_rounds` and
 `implementation_review_rounds`. A run response contains its own immutable copy;
@@ -253,6 +259,16 @@ in backend event payloads; the UI maps factual activity to presentation.
 
 Opening the managed directory in an IDE and starting a development preview are
 not implemented yet.
+
+## In progress — avoid for now
+
+### Run autonomy and intervention
+
+- `autonomy_policy` persistence, project updates, and immutable run snapshots
+  are implemented. Server-side phase advancement, structured `wait_kind`, and
+  run-level pause/resume are being built in the next backend commit.
+- The existing manual phase endpoints remain authoritative until this item
+  moves to Settled.
 
 ## Planned — do not depend on it yet
 

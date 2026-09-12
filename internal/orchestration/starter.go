@@ -35,6 +35,7 @@ func (s *Starter) Recover(
 		MaxReviewRounds:   run.ImplementationReviewRoundLimit,
 		AgentProviders:    run.AgentProviders,
 		MergePolicy:       run.MergePolicy,
+		AutonomyPolicy:    run.AutonomyPolicy,
 		RecoveryPolicy:    recoveryPolicy,
 		WorkflowPhase:     storedFeature.State,
 	})
@@ -58,9 +59,21 @@ func (s *Starter) Start(
 	dialogueLimits project.DialogueLimits,
 	agentProviders project.AgentProviders,
 	mergePolicy project.MergePolicy,
+	autonomyPolicies ...project.AutonomyPolicy,
 ) (execution.Run, bool, error) {
 	var err error
 	mergePolicy, err = project.NormalizeMergePolicy(mergePolicy)
+	if err != nil {
+		return execution.Run{}, false, err
+	}
+	if len(autonomyPolicies) > 1 {
+		return execution.Run{}, false, project.ErrInvalidAutonomyPolicy
+	}
+	var autonomyPolicy project.AutonomyPolicy
+	if len(autonomyPolicies) == 1 {
+		autonomyPolicy = autonomyPolicies[0]
+	}
+	autonomyPolicy, err = project.NormalizeAutonomyPolicy(autonomyPolicy)
 	if err != nil {
 		return execution.Run{}, false, err
 	}
@@ -72,5 +85,6 @@ func (s *Starter) Start(
 		MaxReviewRounds:   dialogueLimits.ImplementationReviewRounds,
 		AgentProviders:    agentProviders,
 		MergePolicy:       mergePolicy,
+		AutonomyPolicy:    autonomyPolicy,
 	})
 }

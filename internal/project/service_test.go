@@ -18,17 +18,28 @@ type recordingStore struct {
 	listResult []Project
 	listErr    error
 
-	updatedProjectID   string
-	updatedLimits      DialogueLimits
-	updateResult       Project
-	updateErr          error
-	updatedProviders   AgentProviders
-	updatedMergePolicy MergePolicy
+	updatedProjectID      string
+	updatedLimits         DialogueLimits
+	updateResult          Project
+	updateErr             error
+	updatedProviders      AgentProviders
+	updatedMergePolicy    MergePolicy
+	updatedAutonomyPolicy AutonomyPolicy
 
 	boundProjectID  string
 	boundRepository ForgejoRepository
 	bindResult      Project
 	bindErr         error
+}
+
+func (s *recordingStore) UpdateAutonomyPolicy(
+	_ context.Context,
+	projectID string,
+	policy AutonomyPolicy,
+) (Project, error) {
+	s.updatedProjectID = projectID
+	s.updatedAutonomyPolicy = policy
+	return s.updateResult, s.updateErr
 }
 
 func (s *recordingStore) UpdateMergePolicy(

@@ -14,12 +14,13 @@ import (
 )
 
 type ProjectService interface {
-	Create(ctx context.Context, name string, recoveryPolicy project.RecoveryPolicy, dialogueLimits project.DialogueLimits, agentProviders project.AgentProviders, mergePolicy project.MergePolicy) (project.Project, error)
+	Create(ctx context.Context, name string, recoveryPolicy project.RecoveryPolicy, dialogueLimits project.DialogueLimits, agentProviders project.AgentProviders, mergePolicy project.MergePolicy, autonomyPolicy ...project.AutonomyPolicy) (project.Project, error)
 	GetByID(ctx context.Context, id string) (project.Project, error)
 	List(ctx context.Context) ([]project.Project, error)
 	UpdateDialogueLimits(ctx context.Context, projectID string, limits project.DialogueLimits) (project.Project, error)
 	UpdateAgentProviders(ctx context.Context, projectID string, providers project.AgentProviders) (project.Project, error)
 	UpdateMergePolicy(ctx context.Context, projectID string, policy project.MergePolicy) (project.Project, error)
+	UpdateAutonomyPolicy(ctx context.Context, projectID string, policy project.AutonomyPolicy) (project.Project, error)
 	BindForgejoRepository(ctx context.Context, projectID, owner, name string) (project.Project, error)
 }
 
@@ -78,6 +79,7 @@ type RunStarter interface {
 		dialogueLimits project.DialogueLimits,
 		agentProviders project.AgentProviders,
 		mergePolicy project.MergePolicy,
+		autonomyPolicy ...project.AutonomyPolicy,
 	) (execution.Run, bool, error)
 }
 
@@ -236,6 +238,10 @@ func newAPI(
 	mux.HandleFunc(
 		"PUT /api/v1/projects/{id}/merge-policy",
 		api.updateProjectMergePolicyHandler,
+	)
+	mux.HandleFunc(
+		"PUT /api/v1/projects/{id}/autonomy-policy",
+		api.updateProjectAutonomyPolicyHandler,
 	)
 	mux.HandleFunc(
 		"PUT /api/v1/projects/{id}/forgejo-repository",
