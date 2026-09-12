@@ -104,6 +104,30 @@ export interface Session {
   ended_at?: string;
 }
 
+// A user message addressed to one long-lived agent conversation.
+export type InterventionTargetRole = "lead" | "reviewer";
+
+export interface InterventionTarget {
+  role: InterventionTargetRole;
+  session_id: string;
+}
+
+export type InterventionStatus =
+  | "waiting_for_boundary" // current bounded turn still finishing
+  | "queued" // run paused + waiting, delivery may begin
+  | "being_answered" // delivery slice: agent answering
+  | "answered"; // delivery slice: answer + effect durable
+
+export interface Intervention {
+  id: string;
+  session_id: string;
+  target: InterventionTargetRole;
+  message: string;
+  status: InterventionStatus;
+  requested_at: string;
+  updated_at: string;
+}
+
 export interface Run {
   id: string;
   feature_id: string;
@@ -114,6 +138,10 @@ export interface Run {
   paused?: boolean;
   wait_kind?: WaitKind;
   autonomy_policy?: AutonomyPolicy;
+  // Non-terminal lead/reviewer sessions a message may target (empty on terminal
+  // runs). `intervention` describes the latest request once one has been made.
+  intervention_targets?: InterventionTarget[];
+  intervention?: Intervention;
   started_at: string;
   updated_at: string;
   ended_at?: string;
