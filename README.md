@@ -68,7 +68,19 @@ Review and lead-response pairs repeat for at most six rounds by default. The
 round is completed before the workflow stops for user input, and a zero round
 limit means unlimited. Projects expose separate planning and implementation-
 review limits, and every run snapshots both values when it starts so later
-settings changes affect only future workflows. Projects now also choose Codex
+settings changes affect only future workflows. Projects also choose whether the
+normal planning checkpoints require explicit user actions or whether the
+coordinator runs from accepted-goal planning through implementation and review
+without those pauses. The safer `review_each_phase` policy is the default;
+`run_to_completion` dispatches the same restart-safe actions automatically.
+Goal clarification, safety limits, blockers, recovery assessments, and required
+merge approval always stop for the user. A run-level pause can arm a durable
+gate while an agent is working: the current bounded turn may finish, but no next
+agent turn or automatic merge starts until resume. Runs expose a structured wait
+kind so clients never need to interpret human prose to decide what control to
+show.
+
+Projects now also choose Codex
 or Claude independently for the lead and reviewer. Each run snapshots those
 choices and uses them for routing and restart recovery, so later project edits
 cannot move an active conversation to another provider.

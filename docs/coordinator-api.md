@@ -35,6 +35,8 @@ this API beyond the host loopback interface is unsupported.
 | `POST` | `/api/v1/runs/{runID}/planning/round` | Continue the lead/reviewer discussion until plan submission or its safety limit |
 | `POST` | `/api/v1/runs/{runID}/implementation` | Resume the same lead to implement and publish, or recheck its existing terminal publication |
 | `POST` | `/api/v1/runs/{runID}/merge` | Merge the exact revision approved by both agents |
+| `POST` | `/api/v1/runs/{runID}/pause` | Stop automatic handoffs at the next safe provider-turn boundary |
+| `POST` | `/api/v1/runs/{runID}/resume` | Remove a run pause and dispatch its retained automatic checkpoint when applicable |
 | `GET` | `/api/v1/runs/{runID}/planning/messages` | Retrieve the ordered lead/reviewer planning messages |
 | `GET` | `/api/v1/runs/{runID}/planning/messages/stream` | Replay and stream ordered planning messages with SSE |
 | `GET` | `/api/v1/sessions/{sessionID}` | Retrieve a session |
@@ -45,8 +47,8 @@ this API beyond the host loopback interface is unsupported.
 
 ## Idempotency
 
-Feature transitions, run starts, planning and implementation actions, session
-commands, and goal acceptance require an `Idempotency-Key` header. Retrying the same operation with
+Feature transitions, run starts, planning, implementation, merge, and run-control actions,
+session commands, and goal acceptance require an `Idempotency-Key` header. Retrying the same operation with
 the same key returns the existing durable result. Reusing a key for a different
 operation returns `409 Conflict` with the `idempotency_conflict` error code.
 
@@ -94,9 +96,21 @@ Content-Type: application/json
 
 Every run snapshots this value. Changing the project does not alter an active
 or historical run. Project and run responses always expose the effective
-`autonomy_policy`. The automatic phase-transition behavior governed by this
-snapshot is currently being completed; clients should follow
-`ui-backend-status.md` before exposing the control.
+`autonomy_policy`.
+
+With `review_each_phase`, the run waits after the lead's first planning
+proposal, after the reviewer's first planning response, and after publication
+of the agreed plan. The user continues those phases with the existing planning,
+reviewer, round, and implementation actions.
+
+With `run_to_completion`, the coordinator calls those same durable actions
+itself: it starts the reviewer after the proposal, begins the alternating
+planning loop after the first review response, and starts implementation after
+the agreed plan is safely published. The existing implementation/review loop
+then continues automatically. Goal clarification and acceptance always remain
+user-driven. Both modes always wait for a round limit, blocker, recovery
+assessment, or required merge approval. Final merge behavior remains governed
+only by `merge_policy`.
 
 Project creation also accepts an optional complete `dialogue_limits` object:
 
@@ -502,6 +516,7 @@ A successful response is `202 Accepted` and points to the run resource:
   "id": "run_opaque",
   "feature_id": "fea_example",
   "status": "running",
+  "paused": false,
   "dialogue_limits": {
     "planning_rounds": 6,
     "implementation_review_rounds": 6
@@ -522,6 +537,62 @@ A successful response is `202 Accepted` and points to the run resource:
 created so far. Each session ID links to its detail, history, stream, and
 control endpoints. Terminal run statuses are `succeeded`, `stopped`, and
 `failed`; `waiting_for_user` is durable but resumable.
+
+Run responses also contain `paused` and, while waiting or paused, a machine-readable
+`wait_kind`:
+
+- `clarification`: the lead needs user input or explicit goal acceptance;
+- `phase_checkpoint`: a normal boundary that `run_to_completion` may dispatch;
+- `round_cap`: the configured planning or review limit was reached;
+- `blocker`: contradictory, ambiguous, unavailable, or recovery-sensitive state
+  requires user review;
+- `merge_gate`: both agents are ready, but `merge_policy` requires the user;
+- `paused`: the user armed the run-level pause gate.
+
+Clients should use `wait_kind` to choose controls and labels, and show `reason`
+as the human-readable explanation. They must not infer control state by parsing
+the reason text.
+
+## Pausing and resuming a run
+
+Run-level pause is a coordinator handoff gate, not an operating-system freeze
+of a provider process. If a lead or reviewer turn is already admitted, that
+turn may finish and its messages and verified side effects remain durable, but
+the coordinator will not admit the following agent turn or perform an automatic
+merge. It stops at the next safe boundary instead.
+
+```http
+POST /api/v1/runs/run_opaque/pause
+Idempotency-Key: pause-run-1
+Content-Length: 0
+```
+
+The response is `202 Accepted`. `paused` becomes `true` and `wait_kind` is
+`paused`. If the run was already waiting at a checkpoint, the coordinator
+retains that exact checkpoint internally. If it was running, the gate remains
+armed until the current provider turn reaches its boundary.
+
+Resume with a different stable key:
+
+```http
+POST /api/v1/runs/run_opaque/resume
+Idempotency-Key: resume-run-1
+Content-Length: 0
+```
+
+Resume is also `202 Accepted` and idempotent. For `run_to_completion`, a retained
+`phase_checkpoint` is dispatched through the same deterministic planning or
+implementation operation used before the pause; retries and coordinator
+restarts therefore cannot start a second provider attempt. For
+`review_each_phase`, resume removes the pause but does not skip the normal user
+action for that phase. Resuming before an already-running provider turn ends
+simply cancels the armed gate.
+
+Both endpoints require an empty body and reject terminal runs. Reusing one
+`Idempotency-Key` for the opposite action returns `409 idempotency_conflict`.
+These run controls are distinct from session `pause`/`continue` commands: the
+session commands express worker/provider capabilities, while run pause governs
+coordinator admission between bounded turns.
 
 The default runtime uses deterministic simulated agents. They pause briefly
 between scripted events so session activity is observable. The simulation
@@ -572,7 +643,9 @@ must not modify files, install dependencies, commit, push, or implement. Worker
 activity and the proposal remain available through the lead session history and
 SSE stream. On completion, the run and lead session return to
 `waiting_for_user` with a reason stating that the proposal is ready for reviewer
-consultation.
+consultation. Under `review_each_phase`, the user starts the reviewer with the
+endpoint below. Under `run_to_completion`, that same idempotent reviewer action
+is dispatched server-side as soon as the proposal checkpoint is durable.
 
 The successful response is `202 Accepted`, contains the ordinary run resource,
 and points its `Location` header at `/api/v1/runs/{runID}`. The action is safe to
@@ -610,8 +683,10 @@ Completion leaves both sessions and the run at `waiting_for_user`. Repeating
 the action returns the same reviewer session without another worker attempt.
 Missing or contradictory prerequisites return `409 reviewer_not_ready`.
 
-This endpoint stops after the first reviewer response. It does not route that
-response back to the lead or update Forgejo.
+With `review_each_phase`, this endpoint stops after the first reviewer response;
+the user explicitly begins the discussion round below. With
+`run_to_completion`, the coordinator begins that same bounded action
+server-side. The first-review step itself does not update Forgejo.
 
 ## Continuing the planning discussion
 
@@ -660,8 +735,9 @@ publication marker followed by an `Agreed implementation plan` section. The
 marker is derived from the durable submitted-plan event. A retry reads Forgejo
 first: an exact marked section is accepted without another update, while the
 same marker with different content is a conflict. After confirmation, a public
-lead-session activity records the PR publication and the run waits for the next
-implementation slice.
+lead-session activity records the PR publication. `review_each_phase` waits for
+the user to start implementation; `run_to_completion` dispatches that same
+idempotent implementation action server-side.
 
 If Forgejo publication cannot be confirmed, the coordinator publishes a
 `recovery_assessment`, starts no agent or implementation work, and waits for the
@@ -678,13 +754,18 @@ continue a durable handoff between turns without starting two agents.
 ## Starting the first implementation turn
 
 After the lead has submitted the agreed plan and the coordinator has confirmed
-its exact marked section in Forgejo, start implementation explicitly:
+its exact marked section in Forgejo, `review_each_phase` starts implementation
+explicitly with:
 
 ```http
 POST /api/v1/runs/run_opaque/implementation
 Idempotency-Key: start-implementation-1
 Content-Length: 0
 ```
+
+`run_to_completion` invokes this same action internally at the published-plan
+checkpoint. The validation, deterministic attempt identity, API-visible state,
+and retry behavior are identical in both modes.
 
 The feature must be in `planning` at first admission; the run, lead, and
 reviewer must all be waiting; both provider session IDs must be present; the
@@ -1061,16 +1142,17 @@ return it to user-controlled clarification safely.
 ## Restart recovery
 
 At coordinator startup, durable `running` runs are replayed from their stored
-session results. Runs that were already `waiting_for_user` are recovered only
-when they still own an interrupted session. A stable real lead session whose
-run and session are both `waiting_for_user` is not mistaken for interrupted
-work.
+session results. A `run_to_completion` run waiting unpaused at
+`phase_checkpoint` is also recovered so startup can retry the missing automatic
+handoff. Other `waiting_for_user` runs are recovered only when they still own an
+interrupted session. A stable clarification, round-cap, blocker, merge-gate, or
+paused wait is not mistaken for interrupted work.
 
 For the real-lead mode, recovery only performs a read-only lookup of the exact
 durable worker attempt, including an interrupted lead, clarification follow-up,
 initial planning, first-reviewer, later planning-discussion, initial
 implementation, numbered implementation-continuation, implementation review,
-or first corrective implementation turn. A waiting
+corrective implementation, repeated review, or merge-readiness turn. A waiting
 lead is not counted as concurrent active work while the reviewer is running. If
 it still exists and is consistent, the coordinator records a `recovery_assessment`
 event, marks its pending reply applied once the attempt is confirmed, and
@@ -1086,7 +1168,8 @@ before the other agent starts, startup uses the ordered planning history to
 continue with the correct agent and next numbered attempt. SQLite refuses that
 handoff while any other session is actively working. If startup finds a durable
 `plan_submitted` event, it reconciles the marked PR update before recording
-publication and returning to the user gate. A crash after Forgejo accepted the
+publication. It then either returns to the user gate or starts implementation
+from the run's immutable autonomy snapshot. A crash after Forgejo accepted the
 update therefore does not duplicate the plan. Six complete planning rounds
 (twelve messages) without a submission restore the user gate directly. These
 cases never launch two agents concurrently.

@@ -14,10 +14,11 @@ import (
 )
 
 type planningStarterStub struct {
-	run           execution.Run
-	err           error
-	receivedRunID string
-	receivedKey   string
+	run            execution.Run
+	err            error
+	receivedRunID  string
+	receivedKey    string
+	receivedAction string
 }
 
 func (stub *planningStarterStub) StartPlanning(
@@ -67,6 +68,28 @@ func (stub *planningStarterStub) Merge(
 ) (execution.Run, bool, error) {
 	stub.receivedRunID = runID
 	stub.receivedKey = idempotencyKey
+	return stub.run, true, stub.err
+}
+
+func (stub *planningStarterStub) Pause(
+	_ context.Context,
+	runID string,
+	actionID string,
+) (execution.Run, bool, error) {
+	stub.receivedRunID = runID
+	stub.receivedKey = actionID
+	stub.receivedAction = "pause"
+	return stub.run, true, stub.err
+}
+
+func (stub *planningStarterStub) Resume(
+	_ context.Context,
+	runID string,
+	actionID string,
+) (execution.Run, bool, error) {
+	stub.receivedRunID = runID
+	stub.receivedKey = actionID
+	stub.receivedAction = "resume"
 	return stub.run, true, stub.err
 }
 

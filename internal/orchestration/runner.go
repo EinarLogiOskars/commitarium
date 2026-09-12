@@ -71,6 +71,7 @@ type SessionSummary struct {
 type RunResult struct {
 	Status         RunStatus
 	Reason         string
+	WaitKind       execution.RunWaitKind
 	PlanningRounds int
 	ReviewRounds   int
 	Sessions       []SessionSummary
@@ -84,6 +85,7 @@ type Execution interface {
 		expected execution.RunStatus,
 		status execution.RunStatus,
 		reason string,
+		waitKind ...execution.RunWaitKind,
 	) (execution.Run, error)
 	CreateSession(
 		ctx context.Context,
@@ -344,6 +346,7 @@ func (r *Runner) runStarted(
 	if !planningAccepted {
 		result.Status = RunStatusWaiting
 		result.Reason = "planning round limit reached without agent agreement"
+		result.WaitKind = execution.RunWaitKindRoundCap
 		return result, nil
 	}
 
@@ -412,6 +415,7 @@ func (r *Runner) runStarted(
 		case worker.DispositionInputRequired:
 			result.Status = RunStatusWaiting
 			result.Reason = "reviewer requested user input"
+			result.WaitKind = execution.RunWaitKindBlocker
 			return result, nil
 		case worker.DispositionChangesRequested:
 		default:
@@ -446,6 +450,7 @@ func (r *Runner) runStarted(
 		if dialogueRoundLimitReached(request.MaxReviewRounds, round) {
 			result.Status = RunStatusWaiting
 			result.Reason = "review round limit reached with unresolved findings"
+			result.WaitKind = execution.RunWaitKindRoundCap
 			return result, nil
 		}
 	}
@@ -454,7 +459,7 @@ func (r *Runner) runStarted(
 }
 
 func resultForStoredRun(run execution.Run) (RunResult, error) {
-	result := RunResult{Reason: run.Reason, Sessions: make([]SessionSummary, 0)}
+	result := RunResult{Reason: run.Reason, WaitKind: run.WaitKind, Sessions: make([]SessionSummary, 0)}
 	switch run.Status {
 	case execution.RunStatusWaitingForUser:
 		result.Status = RunStatusWaiting
@@ -523,6 +528,7 @@ func (r *Runner) finishRun(
 		storedRun.Status,
 		status,
 		reason,
+		result.WaitKind,
 	)
 	if err != nil {
 		return fmt.Errorf("finish run %q as %q: %w", runID, status, err)
@@ -1134,6 +1140,7 @@ func (r *Runner) ensureRunWaiting(
 		execution.RunStatusRunning,
 		execution.RunStatusWaitingForUser,
 		reason,
+		execution.RunWaitKindBlocker,
 	); err != nil {
 		return fmt.Errorf("gate recovered run for user: %w", err)
 	}

@@ -125,9 +125,9 @@ snapshot even after the project setting changes.
 
 Project creation and import now accept `autonomy_policy`, and project/run
 responses expose its effective snapshot. The update route is
-`PUT /api/v1/projects/{projectID}/autonomy-policy`. Do not expose this setting
-in the UI yet: the durable contract is present, but the phase-advancement and
-pause behavior it controls is still in progress below.
+`PUT /api/v1/projects/{projectID}/autonomy-policy`. Supported values are
+`review_each_phase` (default) and `run_to_completion`. This setting is settled
+and safe to expose in project preferences; updates affect only future runs.
 
 Project creation may omit `dialogue_limits` to receive the six-round defaults.
 If supplied, the object contains both `planning_rounds` and
@@ -171,6 +171,14 @@ Safe UI capabilities:
   reasoning or provider-native transcript formats.
 - Display durable run states including `running`, `waiting_for_user`,
   `succeeded`, `stopped`, and `failed`.
+- Read `paused` and `wait_kind` from run responses. Settled wait kinds are
+  `clarification`, `phase_checkpoint`, `round_cap`, `blocker`, `merge_gate`, and
+  `paused`. Use these values to choose UI controls; display `reason` as prose,
+  but never parse it to infer state.
+- Pause and resume a non-terminal run with
+  `POST /api/v1/runs/{runID}/pause` and
+  `POST /api/v1/runs/{runID}/resume`. Both require an empty body and a stable
+  `Idempotency-Key`, and return the ordinary run resource with `202 Accepted`.
 
 The session/event identities, roles, timestamps, lifecycle state, and activity
 categories are the stable input for both a conventional activity view and the
@@ -260,15 +268,26 @@ in backend event payloads; the UI maps factual activity to presentation.
 Opening the managed directory in an IDE and starting a development preview are
 not implemented yet.
 
-## In progress — avoid for now
-
 ### Run autonomy and intervention
 
-- `autonomy_policy` persistence, project updates, and immutable run snapshots
-  are implemented. Server-side phase advancement, structured `wait_kind`, and
-  run-level pause/resume are being built in the next backend commit.
-- The existing manual phase endpoints remain authoritative until this item
-  moves to Settled.
+- `review_each_phase` keeps the existing explicit planning proposal → reviewer,
+  first reviewer response → planning loop, and published plan → implementation
+  controls.
+- `run_to_completion` invokes those same deterministic backend actions
+  automatically and continues through the existing implementation/review loop.
+  It still stops at clarification, round caps, blockers, recovery assessments,
+  and any merge approval required by `merge_policy`.
+- Pausing does not freeze a provider process mid-command. The current bounded
+  turn may finish and be recorded, while the coordinator prevents the next
+  agent turn or automatic merge. Resume restores and dispatches the exact
+  retained `phase_checkpoint` only for `run_to_completion`; in
+  `review_each_phase`, the normal explicit phase action remains required.
+
+## In progress — avoid for now
+
+There is currently no unsettled coordinator HTTP behavior required by the
+existing project, work-order, conversation, implementation, review, or merge
+screens.
 
 ## Planned — do not depend on it yet
 

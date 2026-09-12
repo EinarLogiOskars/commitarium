@@ -12,6 +12,8 @@ import (
 
 type RunStatus string
 
+type RunWaitKind string
+
 const (
 	RunStatusRunning        RunStatus = "running"
 	RunStatusWaitingForUser RunStatus = "waiting_for_user"
@@ -20,11 +22,23 @@ const (
 	RunStatusFailed         RunStatus = "failed"
 )
 
+const (
+	RunWaitKindPhaseCheckpoint RunWaitKind = "phase_checkpoint"
+	RunWaitKindRoundCap        RunWaitKind = "round_cap"
+	RunWaitKindBlocker         RunWaitKind = "blocker"
+	RunWaitKindMergeGate       RunWaitKind = "merge_gate"
+	RunWaitKindClarification   RunWaitKind = "clarification"
+	RunWaitKindPaused          RunWaitKind = "paused"
+)
+
 type Run struct {
 	ID                             string
 	FeatureID                      string
 	Status                         RunStatus
 	Reason                         string
+	WaitKind                       RunWaitKind
+	Paused                         bool
+	PausedFromWaitKind             RunWaitKind
 	PlanningRoundLimit             int
 	ImplementationReviewRoundLimit int
 	AgentProviders                 project.AgentProviders
@@ -139,6 +153,16 @@ func (status RunStatus) IsValid() bool {
 	}
 }
 
+func (kind RunWaitKind) IsValid() bool {
+	switch kind {
+	case RunWaitKindPhaseCheckpoint, RunWaitKindRoundCap, RunWaitKindBlocker,
+		RunWaitKindMergeGate, RunWaitKindClarification, RunWaitKindPaused:
+		return true
+	default:
+		return false
+	}
+}
+
 func (status RunStatus) IsTerminal() bool {
 	return status == RunStatusSucceeded ||
 		status == RunStatusStopped ||
@@ -181,6 +205,17 @@ func (run Run) Validate() error {
 		return fmt.Errorf("%w: implementation review round limit cannot be negative", ErrInvalidRun)
 	case run.AgentProviders.Validate() != nil:
 		return fmt.Errorf("%w: agent providers are invalid", ErrInvalidRun)
+	case run.Paused && run.WaitKind != RunWaitKindPaused:
+		return fmt.Errorf("%w: paused run requires paused wait kind", ErrInvalidRun)
+	case !run.Paused && run.WaitKind == RunWaitKindPaused:
+		return fmt.Errorf("%w: paused wait kind requires paused run", ErrInvalidRun)
+	case run.Status == RunStatusWaitingForUser && !run.WaitKind.IsValid():
+		return fmt.Errorf("%w: waiting run requires a wait kind", ErrInvalidRun)
+	case run.Status != RunStatusWaitingForUser && !run.Paused && run.WaitKind != "":
+		return fmt.Errorf("%w: active run cannot have a wait kind", ErrInvalidRun)
+	case run.PausedFromWaitKind != "" &&
+		(!run.Paused || !run.PausedFromWaitKind.IsValid() || run.PausedFromWaitKind == RunWaitKindPaused):
+		return fmt.Errorf("%w: paused return wait kind is invalid", ErrInvalidRun)
 	case run.StartedAt.IsZero():
 		return fmt.Errorf("%w: start time is required", ErrInvalidRun)
 	case run.UpdatedAt.Before(run.StartedAt):

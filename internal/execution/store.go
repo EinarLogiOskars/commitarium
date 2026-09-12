@@ -35,6 +35,21 @@ type RunTransition struct {
 	Expected   RunStatus
 	Status     RunStatus
 	Reason     string
+	WaitKind   RunWaitKind
+	OccurredAt time.Time
+}
+
+type RunPauseAction string
+
+const (
+	RunPauseActionPause  RunPauseAction = "pause"
+	RunPauseActionResume RunPauseAction = "resume"
+)
+
+type RunPauseMutation struct {
+	ID         string
+	RunID      string
+	Action     RunPauseAction
 	OccurredAt time.Time
 }
 
@@ -116,6 +131,7 @@ type Store interface {
 	GetRun(ctx context.Context, id string) (Run, error)
 	ListRunsByFeatureID(ctx context.Context, featureID string) ([]Run, error)
 	TransitionRun(ctx context.Context, transition RunTransition) (Run, error)
+	ApplyRunPause(ctx context.Context, mutation RunPauseMutation) (Run, bool, error)
 	CreateSession(ctx context.Context, session Session) error
 	GetSession(ctx context.Context, id string) (Session, error)
 	ListSessions(ctx context.Context, runID string) ([]Session, error)
@@ -149,6 +165,7 @@ var ErrCommandConflict = errors.New("execution command ID reused for different c
 var ErrStateConflict = errors.New("execution record is not in the expected state")
 var ErrRecordConflict = errors.New("execution record ID reused for different content")
 var ErrPlanningMessageConflict = errors.New("session event is already linked to a different planning conversation")
+var ErrRunActionConflict = errors.New("run action ID reused for a different operation")
 
 func (message PendingPlanningMessage) Validate() error {
 	switch {
@@ -204,10 +221,12 @@ func (event PendingWorkerEvent) Validate() error {
 }
 
 func (transition RunTransition) Validate() error {
+	reclassifiesWait := transition.Expected == RunStatusWaitingForUser &&
+		transition.Status == RunStatusWaitingForUser
 	switch {
 	case strings.TrimSpace(transition.RunID) == "":
 		return fmt.Errorf("%w: run ID is required", ErrInvalidStatusTransition)
-	case !transition.Expected.CanTransitionTo(transition.Status):
+	case !reclassifiesWait && !transition.Expected.CanTransitionTo(transition.Status):
 		return fmt.Errorf(
 			"%w: run %q to %q",
 			ErrInvalidStatusTransition,
@@ -216,6 +235,21 @@ func (transition RunTransition) Validate() error {
 		)
 	case transition.OccurredAt.IsZero():
 		return fmt.Errorf("%w: occurrence time is required", ErrInvalidStatusTransition)
+	default:
+		return nil
+	}
+}
+
+func (mutation RunPauseMutation) Validate() error {
+	switch {
+	case strings.TrimSpace(mutation.ID) == "":
+		return fmt.Errorf("%w: action ID is required", ErrInvalidCommand)
+	case strings.TrimSpace(mutation.RunID) == "":
+		return fmt.Errorf("%w: run ID is required", ErrInvalidCommand)
+	case mutation.Action != RunPauseActionPause && mutation.Action != RunPauseActionResume:
+		return fmt.Errorf("%w: run pause action is invalid", ErrInvalidCommand)
+	case mutation.OccurredAt.IsZero():
+		return fmt.Errorf("%w: occurrence time is required", ErrInvalidCommand)
 	default:
 		return nil
 	}

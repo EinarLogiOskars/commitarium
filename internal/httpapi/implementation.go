@@ -30,6 +30,8 @@ func (api *API) startImplementationHandler(w http.ResponseWriter, r *http.Reques
 			writeError(w, http.StatusNotFound, "run_not_found", "run not found")
 		case errors.Is(err, workflow.ErrIdempotencyConflict):
 			writeError(w, http.StatusConflict, "idempotency_conflict", "Idempotency-Key was already used for a different operation")
+		case errors.Is(err, orchestration.ErrRunControlNotAllowed):
+			writeError(w, http.StatusConflict, "run_paused", "resume the run before starting another workflow phase")
 		case errors.Is(err, orchestration.ErrImplementationNotAllowed),
 			errors.Is(err, feature.ErrInvalidTransition),
 			errors.Is(err, workspace.ErrFeatureNotPlanning),

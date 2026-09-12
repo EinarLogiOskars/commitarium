@@ -130,6 +130,8 @@ type RealWorkflowStarter interface {
 		idempotencyKey string,
 	) (execution.Run, bool, error)
 	Merge(ctx context.Context, runID string, idempotencyKey string) (execution.Run, bool, error)
+	Pause(ctx context.Context, runID string, actionID string) (execution.Run, bool, error)
+	Resume(ctx context.Context, runID string, actionID string) (execution.Run, bool, error)
 }
 
 type API struct {
@@ -299,6 +301,8 @@ func newAPI(
 		mux.HandleFunc("POST /api/v1/runs/{id}/planning/round", api.startPlanningRoundHandler)
 		mux.HandleFunc("POST /api/v1/runs/{id}/implementation", api.startImplementationHandler)
 		mux.HandleFunc("POST /api/v1/runs/{id}/merge", api.mergeRunHandler)
+		mux.HandleFunc("POST /api/v1/runs/{id}/pause", api.pauseRunHandler)
+		mux.HandleFunc("POST /api/v1/runs/{id}/resume", api.resumeRunHandler)
 	}
 	mux.HandleFunc("GET /api/v1/runs/{id}", api.getRunHandler)
 	mux.HandleFunc("GET /api/v1/runs/{id}/planning/messages", api.getPlanningMessagesHandler)

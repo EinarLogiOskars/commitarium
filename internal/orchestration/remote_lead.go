@@ -47,6 +47,7 @@ type implementationReviewAction string
 
 const (
 	planningStageNone             planningStage = ""
+	planningStageLeadProposal     planningStage = "lead_proposal"
 	planningStageFirstReview      planningStage = "first_review"
 	planningStageLeadResponse     planningStage = "lead_response"
 	planningStageReviewerResponse planningStage = "reviewer_response"
@@ -59,6 +60,7 @@ const (
 
 var ErrPlanningNotAllowed = errors.New("planning cannot start from the current workflow state")
 var ErrImplementationNotAllowed = errors.New("implementation cannot start from the current workflow state")
+var ErrRunControlNotAllowed = errors.New("run control is not allowed from the current workflow state")
 
 // RemoteLeadExecution is the durable coordinator state used by the first real
 // lead turn. It deliberately contains no workflow transition: goal
@@ -72,7 +74,8 @@ type RemoteLeadExecution interface {
 	ActiveSessionsForRun(context.Context, string) ([]execution.Session, error)
 	EventsForSession(context.Context, string) ([]execution.Event, error)
 	GetWorkerAttempt(context.Context, string) (execution.WorkerAttemptCheckpoint, error)
-	TransitionRun(context.Context, string, execution.RunStatus, execution.RunStatus, string) (execution.Run, error)
+	TransitionRun(context.Context, string, execution.RunStatus, execution.RunStatus, string, ...execution.RunWaitKind) (execution.Run, error)
+	ApplyRunPause(context.Context, string, string, execution.RunPauseAction) (execution.Run, bool, error)
 	TransitionSession(context.Context, string, execution.SessionStatus, execution.SessionStatus, string) (execution.Session, error)
 	RecordSessionEventWithID(context.Context, string, string, worker.Event) (execution.Event, error)
 	GetCommand(context.Context, string) (execution.Command, error)
@@ -352,9 +355,21 @@ func (starter *RemoteLeadStarter) Recover(
 		_, _, err := starter.Merge(ctx, run.ID, run.ID+":recovery-merge")
 		return err
 	}
+	if run.Status == execution.RunStatusWaitingForUser && !run.Paused &&
+		run.WaitKind == execution.RunWaitKindPhaseCheckpoint &&
+		run.AutonomyPolicy == project.AutonomyPolicyRunToCompletion {
+		return starter.advanceWaitingRun(ctx, run.ID)
+	}
 	activeSessions, err := starter.executions.ActiveSessionsForRun(ctx, run.ID)
 	if err != nil {
 		return fmt.Errorf("find active real-agent session: %w", err)
+	}
+	if len(activeSessions) == 0 && run.Paused {
+		return starter.waitRun(
+			ctx, run.ID,
+			"The run was paused before its next provider turn could start.",
+			execution.RunWaitKindPhaseCheckpoint,
+		)
 	}
 	var session execution.Session
 	if len(activeSessions) == 1 {
@@ -408,6 +423,7 @@ func (starter *RemoteLeadStarter) Recover(
 		runID:         run.ID,
 		agentName:     "lead agent",
 		waitingReason: waitingReasonForAttempt(session, checkpoint.AttemptID),
+		waitKind:      waitKindForAttempt(session, checkpoint.AttemptID),
 		planningStage: planningStageForAttempt(session, checkpoint.AttemptID),
 		identity: workerhttp.MutationIdentity{AttemptReference: workerhttp.AttemptReference{
 			SessionID: session.ID, AttemptID: checkpoint.AttemptID,
@@ -497,11 +513,11 @@ func (starter *RemoteLeadStarter) recoverIdleReadyToMergeRun(
 	if run.MergePolicy == project.MergePolicyAutoAfterGates {
 		if _, _, err := starter.Merge(ctx, run.ID, run.ID+":automatic-merge"); err != nil {
 			starter.recordMergeBlocked(ctx, run.ID, err)
-			return starter.waitRun(ctx, run.ID, implementationMergeBlockedReason)
+			return starter.waitRun(ctx, run.ID, implementationMergeBlockedReason, execution.RunWaitKindBlocker)
 		}
 		return nil
 	}
-	return starter.waitRun(ctx, run.ID, implementationApprovedReason)
+	return starter.waitRun(ctx, run.ID, implementationApprovedReason, execution.RunWaitKindMergeGate)
 }
 
 // Merge performs the one final coordinator-owned external action. Both user
@@ -527,6 +543,9 @@ func (starter *RemoteLeadStarter) Merge(
 			return run, false, nil
 		}
 		return execution.Run{}, false, ErrImplementationNotAllowed
+	}
+	if run.Paused {
+		return execution.Run{}, false, ErrRunControlNotAllowed
 	}
 	storedFeature, err := starter.features.GetByID(ctx, run.FeatureID)
 	if err != nil {
@@ -571,6 +590,117 @@ func (starter *RemoteLeadStarter) Merge(
 		return execution.Run{}, false, fmt.Errorf("complete merged run: %w", err)
 	}
 	return completed, mergedNow, nil
+}
+
+// Pause arms a durable coordinator gate. It does not claim that a provider
+// process can be frozen mid-command; an already admitted turn may finish, but
+// every following admission observes Run.Paused and stops at the next boundary.
+func (starter *RemoteLeadStarter) Pause(
+	ctx context.Context,
+	runID string,
+	actionID string,
+) (execution.Run, bool, error) {
+	return starter.executions.ApplyRunPause(
+		ctx, actionID, runID, execution.RunPauseActionPause,
+	)
+}
+
+func (starter *RemoteLeadStarter) Resume(
+	ctx context.Context,
+	runID string,
+	actionID string,
+) (execution.Run, bool, error) {
+	run, applied, err := starter.executions.ApplyRunPause(
+		ctx, actionID, runID, execution.RunPauseActionResume,
+	)
+	if err != nil {
+		return execution.Run{}, false, err
+	}
+	if err := starter.advanceWaitingRun(context.WithoutCancel(ctx), run.ID); err != nil {
+		return execution.Run{}, false, err
+	}
+	current, err := starter.executions.GetRun(ctx, run.ID)
+	if err != nil {
+		return execution.Run{}, false, err
+	}
+	return current, applied, nil
+}
+
+func (starter *RemoteLeadStarter) advanceWaitingRun(ctx context.Context, runID string) error {
+	run, err := starter.executions.GetRun(ctx, runID)
+	if err != nil {
+		return err
+	}
+	if run.Paused || run.Status != execution.RunStatusWaitingForUser ||
+		run.WaitKind != execution.RunWaitKindPhaseCheckpoint ||
+		run.AutonomyPolicy != project.AutonomyPolicyRunToCompletion {
+		return nil
+	}
+	storedFeature, err := starter.features.GetByID(ctx, run.FeatureID)
+	if err != nil {
+		return err
+	}
+	switch storedFeature.State {
+	case feature.StatePlanning:
+		messages, err := starter.executions.PlanningMessagesForRun(ctx, run.ID)
+		if err != nil {
+			return err
+		}
+		if len(messages) == 0 {
+			return fmt.Errorf("%w: planning checkpoint has no durable message", ErrPlanningNotAllowed)
+		}
+		if messages[len(messages)-1].Event.Type == worker.EventPlanSubmitted {
+			published, err := starter.planPublicationRecorded(ctx, messages[len(messages)-1].Event)
+			if err != nil {
+				return err
+			}
+			if published {
+				_, _, err = starter.StartImplementation(ctx, run.ID, run.ID+":autonomy:implementation")
+				return err
+			}
+		}
+		if _, err := starter.executions.GetSession(ctx, remoteReviewerSessionID(run.ID)); errors.Is(err, execution.ErrNotFound) {
+			_, _, err = starter.StartPlanningReview(ctx, run.ID, run.ID+":autonomy:first-review")
+			return err
+		} else if err != nil {
+			return err
+		}
+		if len(messages) == 2 && messages[len(messages)-1].Role == worker.RoleReviewer {
+			_, _, err = starter.StartPlanningRound(ctx, run.ID, run.ID+":autonomy:planning-loop")
+			return err
+		}
+		_, err = starter.recoverIdlePlanningRun(ctx, run, storedFeature)
+		return err
+	case feature.StateImplementing:
+		return starter.recoverIdleImplementationRun(ctx, run)
+	case feature.StateReviewing:
+		return starter.recoverIdleReviewingRun(ctx, run)
+	case feature.StateReadyToMerge:
+		return starter.recoverIdleReadyToMergeRun(ctx, run)
+	default:
+		return nil
+	}
+}
+
+// stopAtPauseBoundary turns an armed pause into a durable user-visible wait
+// before the coordinator admits the next provider turn or performs an
+// automatic merge. The intended next step is retained privately so Resume can
+// dispatch exactly that checkpoint without inferring it from prose.
+func (starter *RemoteLeadStarter) stopAtPauseBoundary(
+	ctx context.Context,
+	runID string,
+	reason string,
+) (bool, error) {
+	run, err := starter.executions.GetRun(ctx, runID)
+	if err != nil {
+		return false, err
+	}
+	if !run.Paused {
+		return false, nil
+	}
+	return true, starter.waitRun(
+		ctx, runID, reason, execution.RunWaitKindPhaseCheckpoint,
+	)
 }
 
 func (starter *RemoteLeadStarter) recordMergeBlocked(ctx context.Context, runID string, cause error) {
@@ -786,10 +916,10 @@ func (starter *RemoteLeadStarter) recoverIdlePlanningRun(
 		return true, nil
 	}
 	if planningRoundLimitReached(run.PlanningRoundLimit, len(messages)) {
-		return true, starter.waitRun(ctx, run.ID, planningLimitReason(run.PlanningRoundLimit))
+		return true, starter.waitRun(ctx, run.ID, planningLimitReason(run.PlanningRoundLimit), execution.RunWaitKindRoundCap)
 	}
 	if len(messages) == 2 {
-		return true, starter.waitRun(ctx, run.ID, "The reviewer's first planning response is ready.")
+		return true, starter.waitRun(ctx, run.ID, "The reviewer's first planning response is ready.", execution.RunWaitKindPhaseCheckpoint)
 	}
 	if !starter.claim(run.ID) {
 		return true, fmt.Errorf("%w: %q", ErrRunAlreadyActive, run.ID)
@@ -816,6 +946,7 @@ type remoteLeadRequest struct {
 	commandID     string
 	agentName     string
 	waitingReason string
+	waitKind      execution.RunWaitKind
 	planningStage planningStage
 	identity      workerhttp.MutationIdentity
 	request       workerhttp.PutAttemptRequest
@@ -840,6 +971,7 @@ func (starter *RemoteLeadStarter) startRequest(
 		runID:         runID,
 		agentName:     "lead agent",
 		waitingReason: "The lead agent is waiting for the user's response.",
+		waitKind:      execution.RunWaitKindClarification,
 		identity: workerhttp.MutationIdentity{
 			AttemptReference: workerhttp.AttemptReference{SessionID: sessionID, AttemptID: attemptID},
 			IdempotencyKey:   attemptID + ":start",
@@ -884,6 +1016,7 @@ func (starter *RemoteLeadStarter) replyRequest(
 		runID: run.ID, commandID: command.ID,
 		agentName:     "lead agent",
 		waitingReason: "The lead agent is waiting for the user's response.",
+		waitKind:      execution.RunWaitKindClarification,
 		identity: workerhttp.MutationIdentity{
 			AttemptReference: workerhttp.AttemptReference{
 				SessionID: session.ID, AttemptID: attemptID,
@@ -991,6 +1124,8 @@ func planningStageForAttempt(session execution.Session, attemptID string) planni
 	switch {
 	case !planned:
 		return planningStageNone
+	case session.Role == worker.RoleLead && turn == 1:
+		return planningStageLeadProposal
 	case session.Role == worker.RoleReviewer && turn == 1:
 		return planningStageFirstReview
 	case session.Role == worker.RoleLead && turn >= 2:
@@ -1000,6 +1135,25 @@ func planningStageForAttempt(session execution.Session, attemptID string) planni
 	default:
 		return planningStageNone
 	}
+}
+
+func waitKindForAttempt(session execution.Session, attemptID string) execution.RunWaitKind {
+	if _, planned := planningTurnNumber(session.ID, attemptID); planned {
+		return execution.RunWaitKindPhaseCheckpoint
+	}
+	if _, implementing := implementationTurnNumber(session.ID, attemptID); implementing {
+		return execution.RunWaitKindPhaseCheckpoint
+	}
+	if _, correcting := implementationCorrectionTurnNumber(session.ID, attemptID); correcting {
+		return execution.RunWaitKindPhaseCheckpoint
+	}
+	if _, acknowledging := implementationReadinessTurnNumber(session.ID, attemptID); acknowledging {
+		return execution.RunWaitKindPhaseCheckpoint
+	}
+	if _, reviewing := implementationReviewTurnNumber(session.ID, attemptID); reviewing {
+		return execution.RunWaitKindPhaseCheckpoint
+	}
+	return execution.RunWaitKindClarification
 }
 
 func waitingReasonForAttempt(session execution.Session, attemptID string) string {
@@ -1062,6 +1216,9 @@ func (starter *RemoteLeadStarter) StartPlanning(
 	run, err := starter.executions.GetRun(ctx, runID)
 	if err != nil {
 		return execution.Run{}, false, err
+	}
+	if run.Paused {
+		return execution.Run{}, false, ErrRunControlNotAllowed
 	}
 	session, err := starter.executions.GetSession(ctx, remoteLeadSessionID(run.ID))
 	if err != nil {
@@ -1172,6 +1329,8 @@ func (starter *RemoteLeadStarter) planningRequest(
 		runID:         run.ID,
 		agentName:     "lead agent",
 		waitingReason: "The lead planning proposal is ready for reviewer consultation.",
+		waitKind:      execution.RunWaitKindPhaseCheckpoint,
+		planningStage: planningStageLeadProposal,
 		identity: workerhttp.MutationIdentity{
 			AttemptReference: workerhttp.AttemptReference{
 				SessionID: session.ID, AttemptID: attemptID,
@@ -1209,6 +1368,9 @@ func (starter *RemoteLeadStarter) StartPlanningReview(
 	run, err := starter.executions.GetRun(ctx, runID)
 	if err != nil {
 		return execution.Run{}, false, err
+	}
+	if run.Paused {
+		return execution.Run{}, false, ErrRunControlNotAllowed
 	}
 	storedFeature, err := starter.features.GetByID(ctx, run.FeatureID)
 	if err != nil {
@@ -1308,6 +1470,7 @@ func (starter *RemoteLeadStarter) reviewerPlanningRequest(
 	request := remoteLeadRequest{
 		runID: run.ID, agentName: "reviewer",
 		waitingReason: "The reviewer's first planning response is ready.",
+		waitKind:      execution.RunWaitKindPhaseCheckpoint,
 		planningStage: planningStageFirstReview,
 		identity: workerhttp.MutationIdentity{
 			AttemptReference: workerhttp.AttemptReference{SessionID: sessionID, AttemptID: attemptID},
@@ -1361,6 +1524,9 @@ func (starter *RemoteLeadStarter) StartPlanningRound(
 	if err != nil {
 		return execution.Run{}, false, err
 	}
+	if run.Paused {
+		return execution.Run{}, false, ErrRunControlNotAllowed
+	}
 	storedFeature, err := starter.features.GetByID(ctx, run.FeatureID)
 	if err != nil {
 		return execution.Run{}, false, err
@@ -1395,7 +1561,13 @@ func (starter *RemoteLeadStarter) StartPlanningRound(
 	if len(messages) > 0 && (planningRoundLimitReached(run.PlanningRoundLimit, len(messages)) ||
 		messages[len(messages)-1].Event.Type == worker.EventPlanSubmitted) {
 		if messages[len(messages)-1].Event.Type != worker.EventPlanSubmitted {
-			return run, false, nil
+			if err := starter.waitRun(
+				ctx, run.ID, planningLimitReason(run.PlanningRoundLimit), execution.RunWaitKindRoundCap,
+			); err != nil {
+				return execution.Run{}, false, err
+			}
+			updated, err := starter.executions.GetRun(ctx, run.ID)
+			return updated, false, err
 		}
 		submitted := messages[len(messages)-1].Event
 		published, err := starter.planPublicationRecorded(ctx, submitted)
@@ -1461,6 +1633,9 @@ func (starter *RemoteLeadStarter) StartImplementation(
 	run, err := starter.executions.GetRun(ctx, runID)
 	if err != nil {
 		return execution.Run{}, false, err
+	}
+	if run.Paused {
+		return execution.Run{}, false, ErrRunControlNotAllowed
 	}
 	storedFeature, err := starter.features.GetByID(ctx, run.FeatureID)
 	if err != nil {
@@ -2257,8 +2432,11 @@ func validateCompletedTurn(
 }
 
 func (starter *RemoteLeadStarter) launch(request remoteLeadRequest) {
-	defer starter.release(request.runID)
 	starter.launchAdmitted(request)
+	starter.release(request.runID)
+	if err := starter.advanceWaitingRun(starter.lifetime, request.runID); err != nil {
+		starter.requireReview(starter.lifetime, request, err)
+	}
 }
 
 // launchAdmitted runs a turn whose coordinator admission is already durable.
@@ -2285,7 +2463,12 @@ func (starter *RemoteLeadStarter) launchAdmitted(request remoteLeadRequest) {
 }
 
 func (starter *RemoteLeadStarter) reattach(request remoteLeadRequest) {
-	defer starter.release(request.runID)
+	defer func() {
+		starter.release(request.runID)
+		if err := starter.advanceWaitingRun(starter.lifetime, request.runID); err != nil {
+			starter.requireReview(starter.lifetime, request, err)
+		}
+	}()
 	ctx := starter.lifetime
 	attempt, err := starter.worker.GetAttempt(ctx, request.identity.AttemptReference)
 	if err != nil {
@@ -2454,6 +2637,10 @@ func (starter *RemoteLeadStarter) finish(
 				err = loadErr
 				break
 			}
+			if run.Paused {
+				err = starter.waitRun(ctx, request.runID, request.waitingReason, execution.RunWaitKindPhaseCheckpoint)
+				break
+			}
 			storedFeature, loadErr := starter.features.GetByID(ctx, run.FeatureID)
 			if loadErr != nil {
 				err = loadErr
@@ -2465,7 +2652,7 @@ func (starter *RemoteLeadStarter) finish(
 				break
 			}
 			if planningRoundLimitReached(run.PlanningRoundLimit, len(messages)) {
-				err = starter.waitRun(ctx, request.runID, planningLimitReason(run.PlanningRoundLimit))
+				err = starter.waitRun(ctx, request.runID, planningLimitReason(run.PlanningRoundLimit), execution.RunWaitKindRoundCap)
 				break
 			}
 			next, admitted, startErr := starter.startReviewerResponse(ctx, run, storedFeature, messages)
@@ -2484,13 +2671,17 @@ func (starter *RemoteLeadStarter) finish(
 				err = loadErr
 				break
 			}
+			if run.Paused {
+				err = starter.waitRun(ctx, request.runID, request.waitingReason, execution.RunWaitKindPhaseCheckpoint)
+				break
+			}
 			messages, listErr := starter.executions.PlanningMessagesForRun(ctx, request.runID)
 			if listErr != nil {
 				err = listErr
 				break
 			}
 			if planningRoundLimitReached(run.PlanningRoundLimit, len(messages)) {
-				err = starter.waitRun(ctx, request.runID, planningLimitReason(run.PlanningRoundLimit))
+				err = starter.waitRun(ctx, request.runID, planningLimitReason(run.PlanningRoundLimit), execution.RunWaitKindRoundCap)
 				break
 			}
 			storedFeature, loadErr := starter.features.GetByID(ctx, run.FeatureID)
@@ -2510,7 +2701,7 @@ func (starter *RemoteLeadStarter) finish(
 		}
 		if request.request.OutputContract == workerhttp.OutputContractImplementationLead {
 			if attempt.Result.Disposition == workerhttp.DispositionInputRequired {
-				err = starter.waitRun(ctx, request.runID, attempt.Result.Summary)
+				err = starter.waitRun(ctx, request.runID, attempt.Result.Summary, execution.RunWaitKindBlocker)
 				break
 			}
 			if _, correcting := implementationCorrectionTurnNumber(
@@ -2524,7 +2715,7 @@ func (starter *RemoteLeadStarter) finish(
 		}
 		if request.request.OutputContract == workerhttp.OutputContractImplementationReview {
 			if attempt.Result.Disposition == workerhttp.DispositionInputRequired {
-				err = starter.waitRun(ctx, request.runID, attempt.Result.Summary)
+				err = starter.waitRun(ctx, request.runID, attempt.Result.Summary, execution.RunWaitKindBlocker)
 				break
 			}
 			err = starter.verifyImplementationReview(ctx, request, *attempt.Result)
@@ -2532,13 +2723,13 @@ func (starter *RemoteLeadStarter) finish(
 		}
 		if request.request.OutputContract == workerhttp.OutputContractImplementationReadiness {
 			if attempt.Result.Disposition == workerhttp.DispositionInputRequired {
-				err = starter.waitRun(ctx, request.runID, attempt.Result.Summary)
+				err = starter.waitRun(ctx, request.runID, attempt.Result.Summary, execution.RunWaitKindBlocker)
 				break
 			}
 			err = starter.verifyImplementationReadiness(ctx, request, *attempt.Result)
 			break
 		}
-		err = starter.waitRun(ctx, request.runID, request.waitingReason)
+		err = starter.waitRun(ctx, request.runID, request.waitingReason, request.waitKind)
 	case workerhttp.OutcomeStopped:
 		err = starter.failSession(ctx, session, execution.SessionStatusStopped, attempt, "The "+request.agentName+" was stopped.")
 	case workerhttp.OutcomeFailed:
@@ -2606,6 +2797,11 @@ func (starter *RemoteLeadStarter) verifyImplementationPublication(
 	)
 	if err != nil {
 		return fmt.Errorf("record verified implementation publication: %w", err)
+	}
+	if paused, err := starter.stopAtPauseBoundary(
+		ctx, run.ID, "Implementation is published and ready for independent review.",
+	); err != nil || paused {
+		return err
 	}
 	next, admitted, err := starter.startImplementationReview(
 		ctx, run, storedFeature, plan, result.Summary, *result.Publication, 1,
@@ -2946,7 +3142,12 @@ func (starter *RemoteLeadStarter) verifyImplementationCorrection(
 		return fmt.Errorf("record verified implementation review response: %w", err)
 	}
 	if implementationReviewRoundLimitReached(run.ImplementationReviewRoundLimit, round) {
-		return starter.waitRun(ctx, request.runID, implementationReviewLimitReason(run.ImplementationReviewRoundLimit))
+		return starter.waitRun(ctx, request.runID, implementationReviewLimitReason(run.ImplementationReviewRoundLimit), execution.RunWaitKindRoundCap)
+	}
+	if paused, err := starter.stopAtPauseBoundary(
+		ctx, run.ID, "The correction is published and ready for another independent review.",
+	); err != nil || paused {
+		return err
 	}
 	next, admitted, err := starter.startImplementationReview(
 		ctx, run, storedFeature, plan, result.Summary, *result.Publication, round+1,
@@ -3021,6 +3222,11 @@ func (starter *RemoteLeadStarter) verifyImplementationReview(
 		)},
 	); err != nil {
 		return fmt.Errorf("record verified implementation review: %w", err)
+	}
+	if paused, err := starter.stopAtPauseBoundary(
+		ctx, run.ID, "The independent review is complete and the lead's response is pending.",
+	); err != nil || paused {
+		return err
 	}
 	switch nextImplementationReviewAction(result.Disposition) {
 	case implementationReviewActionCorrect:
@@ -3272,17 +3478,27 @@ func (starter *RemoteLeadStarter) verifyImplementationReadiness(
 		); err != nil {
 			return fmt.Errorf("advance mutually approved implementation to ready to merge: %w", err)
 		}
+		if paused, err := starter.stopAtPauseBoundary(
+			ctx, run.ID, implementationApprovedReason,
+		); err != nil || paused {
+			return err
+		}
 		if run.MergePolicy == project.MergePolicyAutoAfterGates {
 			if _, _, err := starter.Merge(ctx, run.ID, run.ID+":automatic-merge"); err != nil {
 				starter.recordMergeBlocked(ctx, run.ID, err)
-				return starter.waitRun(ctx, request.runID, implementationMergeBlockedReason)
+				return starter.waitRun(ctx, request.runID, implementationMergeBlockedReason, execution.RunWaitKindBlocker)
 			}
 			return nil
 		}
-		return starter.waitRun(ctx, request.runID, implementationApprovedReason)
+		return starter.waitRun(ctx, request.runID, implementationApprovedReason, execution.RunWaitKindMergeGate)
 	}
 	if implementationReviewRoundLimitReached(run.ImplementationReviewRoundLimit, round) {
-		return starter.waitRun(ctx, request.runID, implementationReviewLimitReason(run.ImplementationReviewRoundLimit))
+		return starter.waitRun(ctx, request.runID, implementationReviewLimitReason(run.ImplementationReviewRoundLimit), execution.RunWaitKindRoundCap)
+	}
+	if paused, err := starter.stopAtPauseBoundary(
+		ctx, run.ID, "The lead still has a concern and another independent review is pending.",
+	); err != nil || paused {
+		return err
 	}
 	next, admitted, err := starter.startImplementationReview(
 		ctx, run, storedFeature, plan, result.Summary,
@@ -3382,10 +3598,19 @@ func (starter *RemoteLeadStarter) launchPlanPublication(
 	runID string,
 	plan execution.Event,
 ) {
-	defer starter.release(runID)
 	ctx := starter.lifetime
 	if err := starter.publishSubmittedPlan(ctx, runID, plan); err != nil {
 		starter.requirePlanPublicationReview(ctx, runID, plan, err)
+	}
+	starter.release(runID)
+	request := remoteLeadRequest{
+		runID: runID,
+		identity: workerhttp.MutationIdentity{AttemptReference: workerhttp.AttemptReference{
+			SessionID: plan.SessionID,
+		}},
+	}
+	if err := starter.advanceWaitingRun(ctx, runID); err != nil {
+		starter.requireReview(ctx, request, err)
 	}
 }
 
@@ -3421,7 +3646,7 @@ func (starter *RemoteLeadStarter) publishSubmittedPlan(
 	if err != nil {
 		return err
 	}
-	return starter.waitRun(ctx, runID, planningPlanPublishedReason)
+	return starter.waitRun(ctx, runID, planningPlanPublishedReason, execution.RunWaitKindPhaseCheckpoint)
 }
 
 func planPublicationEventID(plan execution.Event) string {
@@ -3464,7 +3689,7 @@ func (starter *RemoteLeadStarter) requirePlanPublicationReview(
 			},
 		},
 	)
-	_ = starter.waitRun(ctx, runID, planningPublicationReviewReason)
+	_ = starter.waitRun(ctx, runID, planningPublicationReviewReason, execution.RunWaitKindBlocker)
 }
 
 func (starter *RemoteLeadStarter) failSession(
@@ -3521,16 +3746,40 @@ func (starter *RemoteLeadStarter) requireReview(
 			ctx, session.ID, session.Status, execution.SessionStatusPauseRequested, session.ProviderSessionID,
 		)
 	}
-	_ = starter.waitRun(ctx, request.runID, text)
+	_ = starter.waitRun(ctx, request.runID, text, execution.RunWaitKindBlocker)
 }
 
-func (starter *RemoteLeadStarter) waitRun(ctx context.Context, runID string, reason string) error {
+func (starter *RemoteLeadStarter) waitRun(
+	ctx context.Context,
+	runID string,
+	reason string,
+	waitKinds ...execution.RunWaitKind,
+) error {
+	if len(waitKinds) > 1 {
+		return execution.ErrInvalidStatusTransition
+	}
 	run, err := starter.executions.GetRun(ctx, runID)
-	if err != nil || run.Status == execution.RunStatusWaitingForUser || run.Status.IsTerminal() {
+	if err != nil || run.Status.IsTerminal() {
 		return err
 	}
+	var waitKind execution.RunWaitKind
+	if len(waitKinds) > 0 {
+		waitKind = waitKinds[0]
+	}
+	if waitKind == "" {
+		waitKind = execution.RunWaitKindBlocker
+	}
+	if run.Status == execution.RunStatusWaitingForUser {
+		storedKind := run.WaitKind
+		if run.Paused {
+			storedKind = run.PausedFromWaitKind
+		}
+		if run.Reason == reason && storedKind == waitKind {
+			return nil
+		}
+	}
 	_, err = starter.executions.TransitionRun(
-		ctx, run.ID, run.Status, execution.RunStatusWaitingForUser, reason,
+		ctx, run.ID, run.Status, execution.RunStatusWaitingForUser, reason, waitKind,
 	)
 	return err
 }

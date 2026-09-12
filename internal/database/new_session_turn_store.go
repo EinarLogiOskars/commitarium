@@ -58,7 +58,7 @@ func (s *ExecutionStore) BeginNewSessionTurn(
 
 	run, err := scanExecutionRun(tx.QueryRowContext(
 		ctx,
-		`SELECT id, feature_id, status, reason,
+		`SELECT id, feature_id, status, reason, wait_kind, paused, paused_from_wait_kind,
 		        planning_round_limit, implementation_review_round_limit,
 		        lead_provider, reviewer_provider, merge_policy, autonomy_policy,
 		        started_at, updated_at, ended_at
@@ -71,7 +71,7 @@ func (s *ExecutionStore) BeginNewSessionTurn(
 	if err != nil {
 		return false, fmt.Errorf("select run for new session: %w", err)
 	}
-	if run.Status != execution.RunStatusWaitingForUser {
+	if run.Paused || run.Status != execution.RunStatusWaitingForUser {
 		return false, execution.ErrStateConflict
 	}
 
@@ -135,7 +135,7 @@ func (s *ExecutionStore) BeginNewSessionTurn(
 
 	result, err := tx.ExecContext(
 		ctx,
-		`UPDATE runs SET status = ?, reason = ?, updated_at = ?
+		`UPDATE runs SET status = ?, reason = ?, wait_kind = '', paused_from_wait_kind = '', updated_at = ?
 		 WHERE id = ? AND status = ?`,
 		execution.RunStatusRunning, admission.RunReason,
 		formatExecutionTime(admission.OccurredAt), run.ID,

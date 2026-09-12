@@ -32,6 +32,7 @@ func (s recoveryDiscoveryStub) TransitionRun(
 	execution.RunStatus,
 	execution.RunStatus,
 	string,
+	...execution.RunWaitKind,
 ) (execution.Run, error) {
 	return s.transitioned, nil
 }

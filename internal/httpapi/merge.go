@@ -25,6 +25,8 @@ func (api *API) mergeRunHandler(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case errors.Is(err, execution.ErrNotFound):
 			writeError(w, http.StatusNotFound, "run_not_found", "run not found")
+		case errors.Is(err, orchestration.ErrRunControlNotAllowed):
+			writeError(w, http.StatusConflict, "run_paused", "resume the run before merging")
 		case errors.Is(err, orchestration.ErrImplementationNotAllowed),
 			errors.Is(err, workspace.ErrFeatureNotReadyToMerge),
 			errors.Is(err, workspace.ErrConflict),
