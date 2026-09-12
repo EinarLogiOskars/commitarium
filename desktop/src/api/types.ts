@@ -135,6 +135,8 @@ export interface Intervention {
   requested_at: string;
   updated_at: string;
   answered_at?: string;
+  // Set once `guidance_applied` has been consumed by a successful /resume.
+  resolved_at?: string;
 }
 
 export interface Run {
