@@ -51,6 +51,28 @@ func TestRunValidate(t *testing.T) {
 	}
 }
 
+func TestInterventionValidate(t *testing.T) {
+	now := time.Date(2026, time.September, 12, 12, 0, 0, 0, time.UTC)
+	valid := Intervention{
+		ID: "int_test", RunID: "run_test", SessionID: "ses_lead",
+		Target: worker.RoleLead, Message: "Please explain this choice.",
+		Status: InterventionStatusQueued, RequestedAt: now, UpdatedAt: now,
+	}
+	if err := valid.Validate(); err != nil {
+		t.Fatalf("validate intervention: %v", err)
+	}
+	invalidTarget := valid
+	invalidTarget.Target = worker.RoleCoder
+	if err := invalidTarget.Validate(); !errors.Is(err, ErrInvalidIntervention) {
+		t.Fatalf("expected invalid target error, got %v", err)
+	}
+	answeredWithoutTime := valid
+	answeredWithoutTime.Status = InterventionStatusAnswered
+	if err := answeredWithoutTime.Validate(); !errors.Is(err, ErrInvalidIntervention) {
+		t.Fatalf("expected missing answer time error, got %v", err)
+	}
+}
+
 func TestSessionValidate(t *testing.T) {
 	now := time.Date(2026, time.September, 8, 22, 0, 0, 0, time.UTC)
 	valid := Session{

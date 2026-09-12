@@ -179,6 +179,40 @@ func (s *Service) ApplyRunPause(
 	return run, applied, nil
 }
 
+// QueueIntervention persists the user's message and arms the run pause in one
+// store transaction. It deliberately does not contact a worker; delivery is a
+// later safe-boundary operation.
+func (s *Service) QueueIntervention(
+	ctx context.Context,
+	id string,
+	runID string,
+	target worker.Role,
+	message string,
+) (Intervention, bool, error) {
+	result, created, err := s.store.QueueIntervention(ctx, InterventionRequest{
+		ID: id, RunID: runID, Target: target, Message: message,
+		OccurredAt: s.now().UTC(),
+	})
+	if err != nil {
+		return Intervention{}, false, fmt.Errorf("queue intervention %q: %w", id, err)
+	}
+	if created && s.broker != nil {
+		s.broker.publish(result.UserEvent)
+	}
+	return result.Intervention, created, nil
+}
+
+func (s *Service) GetLatestIntervention(ctx context.Context, runID string) (Intervention, error) {
+	return s.store.GetLatestIntervention(ctx, runID)
+}
+
+func (s *Service) InterventionTargetsForRun(
+	ctx context.Context,
+	runID string,
+) ([]InterventionTarget, error) {
+	return s.store.ListInterventionTargets(ctx, runID)
+}
+
 func (s *Service) TransitionSession(
 	ctx context.Context,
 	id string,

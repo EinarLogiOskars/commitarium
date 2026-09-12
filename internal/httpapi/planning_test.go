@@ -11,14 +11,18 @@ import (
 
 	"github.com/EinarLogiOskars/commitarium/internal/execution"
 	"github.com/EinarLogiOskars/commitarium/internal/orchestration"
+	"github.com/EinarLogiOskars/commitarium/internal/worker"
 )
 
 type planningStarterStub struct {
-	run            execution.Run
-	err            error
-	receivedRunID  string
-	receivedKey    string
-	receivedAction string
+	run             execution.Run
+	err             error
+	receivedRunID   string
+	receivedKey     string
+	receivedAction  string
+	receivedTarget  worker.Role
+	receivedMessage string
+	intervention    execution.Intervention
 }
 
 func (stub *planningStarterStub) StartPlanning(
@@ -93,6 +97,21 @@ func (stub *planningStarterStub) Resume(
 	return stub.run, true, stub.err
 }
 
+func (stub *planningStarterStub) QueueIntervention(
+	_ context.Context,
+	runID string,
+	interventionID string,
+	target worker.Role,
+	message string,
+) (execution.Intervention, bool, error) {
+	stub.receivedRunID = runID
+	stub.receivedKey = interventionID
+	stub.receivedAction = "intervention"
+	stub.receivedTarget = target
+	stub.receivedMessage = message
+	return stub.intervention, true, stub.err
+}
+
 type planningExecutionStub struct {
 	ExecutionService
 	sessions []execution.Session
@@ -103,6 +122,20 @@ func (stub planningExecutionStub) SessionsForRun(
 	string,
 ) ([]execution.Session, error) {
 	return stub.sessions, nil
+}
+
+func (stub planningExecutionStub) GetLatestIntervention(
+	context.Context,
+	string,
+) (execution.Intervention, error) {
+	return execution.Intervention{}, execution.ErrNotFound
+}
+
+func (stub planningExecutionStub) InterventionTargetsForRun(
+	context.Context,
+	string,
+) ([]execution.InterventionTarget, error) {
+	return []execution.InterventionTarget{}, nil
 }
 
 func TestStartPlanningHandlerStartsAsynchronously(t *testing.T) {

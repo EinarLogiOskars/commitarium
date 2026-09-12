@@ -35,6 +35,10 @@ type recordingStore struct {
 	createCommandResult Command
 	resolvedCommand     CommandResolution
 	resolveResult       Command
+	queuedIntervention  InterventionRequest
+	interventionResult  InterventionRequestResult
+	interventionCreated bool
+	interventionErr     error
 }
 
 func (s *recordingStore) CreateRun(_ context.Context, run Run) error {
@@ -101,6 +105,14 @@ func (s *recordingStore) ResolveCommand(
 ) (Command, error) {
 	s.resolvedCommand = resolution
 	return s.resolveResult, nil
+}
+
+func (s *recordingStore) QueueIntervention(
+	_ context.Context,
+	request InterventionRequest,
+) (InterventionRequestResult, bool, error) {
+	s.queuedIntervention = request
+	return s.interventionResult, s.interventionCreated, s.interventionErr
 }
 
 func TestServiceCreatesRunAndSessionWithCoordinatorTime(t *testing.T) {
@@ -362,6 +374,54 @@ func TestServicePublishesOnlyNewWorkerEventAfterStoreAcceptance(t *testing.T) {
 		worker.Event{Type: expected.Type, Text: expected.Text},
 	); err != nil || created {
 		t.Fatalf("retry worker event: created %t, error %v", created, err)
+	}
+	select {
+	case duplicate := <-events:
+		t.Fatalf("expected retry not to publish, got %+v", duplicate)
+	default:
+	}
+}
+
+func TestServiceQueuesInterventionAndPublishesOnlyNewUserEvent(t *testing.T) {
+	fixedTime := time.Date(2026, time.September, 12, 12, 0, 0, 0, time.UTC)
+	expected := Intervention{
+		ID: "int_test", RunID: "run_test", SessionID: "ses_lead",
+		Target: worker.RoleLead, Message: "Please explain the tradeoff.",
+		Status:      InterventionStatusWaitingForBoundary,
+		RequestedAt: fixedTime, UpdatedAt: fixedTime,
+	}
+	event := Event{
+		ID: "int_test:user-message", SessionID: expected.SessionID, Sequence: 3,
+		Type: worker.EventUserMessage, Text: expected.Message, OccurredAt: fixedTime,
+	}
+	store := &recordingStore{
+		interventionResult:  InterventionRequestResult{Intervention: expected, UserEvent: event},
+		interventionCreated: true,
+	}
+	service := testService(store, fixedTime)
+	service.broker = newEventBroker(1)
+	events, cancel := service.SubscribeSessionEvents(expected.SessionID)
+	defer cancel()
+
+	actual, created, err := service.QueueIntervention(
+		t.Context(), expected.ID, expected.RunID, expected.Target, expected.Message,
+	)
+	if err != nil || !created || actual != expected {
+		t.Fatalf("queue intervention: actual=%+v created=%t err=%v", actual, created, err)
+	}
+	if store.queuedIntervention.ID != expected.ID ||
+		store.queuedIntervention.OccurredAt != fixedTime {
+		t.Fatalf("unexpected store request %+v", store.queuedIntervention)
+	}
+	if published := <-events; published != event {
+		t.Fatalf("expected published event %+v, got %+v", event, published)
+	}
+
+	store.interventionCreated = false
+	if _, created, err := service.QueueIntervention(
+		t.Context(), expected.ID, expected.RunID, expected.Target, expected.Message,
+	); err != nil || created {
+		t.Fatalf("retry intervention: created=%t err=%v", created, err)
 	}
 	select {
 	case duplicate := <-events:

@@ -14,24 +14,43 @@ import (
 	"github.com/EinarLogiOskars/commitarium/internal/feature"
 	"github.com/EinarLogiOskars/commitarium/internal/orchestration"
 	"github.com/EinarLogiOskars/commitarium/internal/project"
+	"github.com/EinarLogiOskars/commitarium/internal/worker"
 	"github.com/EinarLogiOskars/commitarium/internal/workspace"
 )
 
 type runResponse struct {
-	ID             string                 `json:"id"`
-	FeatureID      string                 `json:"feature_id"`
-	Status         execution.RunStatus    `json:"status"`
-	Reason         string                 `json:"reason,omitempty"`
-	WaitKind       execution.RunWaitKind  `json:"wait_kind,omitempty"`
-	Paused         bool                   `json:"paused"`
-	DialogueLimits dialogueLimitsResponse `json:"dialogue_limits"`
-	AgentProviders agentProvidersResponse `json:"agent_providers"`
-	MergePolicy    project.MergePolicy    `json:"merge_policy"`
-	AutonomyPolicy project.AutonomyPolicy `json:"autonomy_policy"`
-	StartedAt      time.Time              `json:"started_at"`
-	UpdatedAt      time.Time              `json:"updated_at"`
-	EndedAt        *time.Time             `json:"ended_at,omitempty"`
-	Sessions       []sessionResponse      `json:"sessions"`
+	ID                  string                       `json:"id"`
+	FeatureID           string                       `json:"feature_id"`
+	Status              execution.RunStatus          `json:"status"`
+	Reason              string                       `json:"reason,omitempty"`
+	WaitKind            execution.RunWaitKind        `json:"wait_kind,omitempty"`
+	Paused              bool                         `json:"paused"`
+	DialogueLimits      dialogueLimitsResponse       `json:"dialogue_limits"`
+	AgentProviders      agentProvidersResponse       `json:"agent_providers"`
+	MergePolicy         project.MergePolicy          `json:"merge_policy"`
+	AutonomyPolicy      project.AutonomyPolicy       `json:"autonomy_policy"`
+	StartedAt           time.Time                    `json:"started_at"`
+	UpdatedAt           time.Time                    `json:"updated_at"`
+	EndedAt             *time.Time                   `json:"ended_at,omitempty"`
+	Sessions            []sessionResponse            `json:"sessions"`
+	InterventionTargets []interventionTargetResponse `json:"intervention_targets"`
+	Intervention        *interventionResponse        `json:"intervention,omitempty"`
+}
+
+type interventionTargetResponse struct {
+	Role      worker.Role `json:"role"`
+	SessionID string      `json:"session_id"`
+}
+
+type interventionResponse struct {
+	ID          string                       `json:"id"`
+	SessionID   string                       `json:"session_id"`
+	Target      worker.Role                  `json:"target"`
+	Message     string                       `json:"message"`
+	Status      execution.InterventionStatus `json:"status"`
+	RequestedAt time.Time                    `json:"requested_at"`
+	UpdatedAt   time.Time                    `json:"updated_at"`
+	AnsweredAt  *time.Time                   `json:"answered_at,omitempty"`
 }
 
 func (api *API) startRunHandler(w http.ResponseWriter, r *http.Request) {
@@ -208,9 +227,30 @@ func (api *API) newRunResponse(
 		MergePolicy: run.MergePolicy, AutonomyPolicy: run.AutonomyPolicy,
 		StartedAt: run.StartedAt, UpdatedAt: run.UpdatedAt,
 		EndedAt: run.EndedAt, Sessions: make([]sessionResponse, 0, len(sessions)),
+		InterventionTargets: make([]interventionTargetResponse, 0),
 	}
 	for _, session := range sessions {
 		response.Sessions = append(response.Sessions, newSessionResponse(session))
+	}
+	targets, err := api.execution.InterventionTargetsForRun(ctx, run.ID)
+	if err != nil {
+		return runResponse{}, err
+	}
+	for _, target := range targets {
+		response.InterventionTargets = append(response.InterventionTargets, interventionTargetResponse{
+			Role: target.Role, SessionID: target.SessionID,
+		})
+	}
+	intervention, err := api.execution.GetLatestIntervention(ctx, run.ID)
+	if err == nil {
+		response.Intervention = &interventionResponse{
+			ID: intervention.ID, SessionID: intervention.SessionID,
+			Target: intervention.Target, Message: intervention.Message,
+			Status: intervention.Status, RequestedAt: intervention.RequestedAt,
+			UpdatedAt: intervention.UpdatedAt, AnsweredAt: intervention.AnsweredAt,
+		}
+	} else if !errors.Is(err, execution.ErrNotFound) {
+		return runResponse{}, err
 	}
 	return response, nil
 }

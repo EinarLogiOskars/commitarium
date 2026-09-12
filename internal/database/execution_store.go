@@ -211,6 +211,20 @@ func (s *ExecutionStore) TransitionRun(
 	if err := requireExecutionUpdate(result, "run", run.ID); err != nil {
 		return execution.Run{}, err
 	}
+	if run.Status == execution.RunStatusWaitingForUser && run.Paused {
+		if _, err := tx.ExecContext(
+			ctx,
+			`UPDATE run_interventions
+			 SET status = ?, updated_at = ?
+			 WHERE run_id = ? AND status = ?`,
+			execution.InterventionStatusQueued,
+			formatExecutionTime(run.UpdatedAt),
+			run.ID,
+			execution.InterventionStatusWaitingForBoundary,
+		); err != nil {
+			return execution.Run{}, fmt.Errorf("queue intervention at run %q boundary: %w", run.ID, err)
+		}
+	}
 	if err := tx.Commit(); err != nil {
 		return execution.Run{}, fmt.Errorf("commit run %q transition: %w", run.ID, err)
 	}

@@ -14,12 +14,21 @@ type RunStatus string
 
 type RunWaitKind string
 
+type InterventionStatus string
+
 const (
 	RunStatusRunning        RunStatus = "running"
 	RunStatusWaitingForUser RunStatus = "waiting_for_user"
 	RunStatusSucceeded      RunStatus = "succeeded"
 	RunStatusStopped        RunStatus = "stopped"
 	RunStatusFailed         RunStatus = "failed"
+)
+
+const (
+	InterventionStatusWaitingForBoundary InterventionStatus = "waiting_for_boundary"
+	InterventionStatusQueued             InterventionStatus = "queued"
+	InterventionStatusBeingAnswered      InterventionStatus = "being_answered"
+	InterventionStatusAnswered           InterventionStatus = "answered"
 )
 
 const (
@@ -47,6 +56,26 @@ type Run struct {
 	StartedAt                      time.Time
 	UpdatedAt                      time.Time
 	EndedAt                        *time.Time
+}
+
+// Intervention is one user message waiting to be handled by a run's durable
+// lead or reviewer conversation. The message is queued separately from an
+// ordinary session command because queueing must not start a provider turn.
+type Intervention struct {
+	ID          string
+	RunID       string
+	SessionID   string
+	Target      worker.Role
+	Message     string
+	Status      InterventionStatus
+	RequestedAt time.Time
+	UpdatedAt   time.Time
+	AnsweredAt  *time.Time
+}
+
+type InterventionTarget struct {
+	Role      worker.Role
+	SessionID string
 }
 
 type SessionStatus string
@@ -133,6 +162,7 @@ type Command struct {
 }
 
 var ErrInvalidRun = errors.New("invalid execution run")
+var ErrInvalidIntervention = errors.New("invalid run intervention")
 var ErrInvalidSession = errors.New("invalid execution session")
 var ErrInvalidEvent = errors.New("invalid execution event")
 var ErrInvalidPlanningMessage = errors.New("invalid planning message")
@@ -150,6 +180,45 @@ func (status RunStatus) IsValid() bool {
 		return true
 	default:
 		return false
+	}
+}
+
+func (status InterventionStatus) IsValid() bool {
+	switch status {
+	case InterventionStatusWaitingForBoundary, InterventionStatusQueued,
+		InterventionStatusBeingAnswered, InterventionStatusAnswered:
+		return true
+	default:
+		return false
+	}
+}
+
+func (intervention Intervention) Validate() error {
+	switch {
+	case strings.TrimSpace(intervention.ID) == "":
+		return fmt.Errorf("%w: ID is required", ErrInvalidIntervention)
+	case strings.TrimSpace(intervention.RunID) == "":
+		return fmt.Errorf("%w: run ID is required", ErrInvalidIntervention)
+	case strings.TrimSpace(intervention.SessionID) == "":
+		return fmt.Errorf("%w: session ID is required", ErrInvalidIntervention)
+	case intervention.Target != worker.RoleLead && intervention.Target != worker.RoleReviewer:
+		return fmt.Errorf("%w: target must be lead or reviewer", ErrInvalidIntervention)
+	case strings.TrimSpace(intervention.Message) == "":
+		return fmt.Errorf("%w: message is required", ErrInvalidIntervention)
+	case !intervention.Status.IsValid():
+		return fmt.Errorf("%w: status %q is not recognized", ErrInvalidIntervention, intervention.Status)
+	case intervention.RequestedAt.IsZero():
+		return fmt.Errorf("%w: request time is required", ErrInvalidIntervention)
+	case intervention.UpdatedAt.Before(intervention.RequestedAt):
+		return fmt.Errorf("%w: update time precedes request time", ErrInvalidIntervention)
+	case intervention.Status == InterventionStatusAnswered && intervention.AnsweredAt == nil:
+		return fmt.Errorf("%w: answered intervention requires an answer time", ErrInvalidIntervention)
+	case intervention.Status != InterventionStatusAnswered && intervention.AnsweredAt != nil:
+		return fmt.Errorf("%w: unfinished intervention cannot have an answer time", ErrInvalidIntervention)
+	case intervention.AnsweredAt != nil && intervention.AnsweredAt.Before(intervention.RequestedAt):
+		return fmt.Errorf("%w: answer time precedes request time", ErrInvalidIntervention)
+	default:
+		return nil
 	}
 }
 

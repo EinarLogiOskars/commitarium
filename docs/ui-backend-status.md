@@ -179,6 +179,22 @@ Safe UI capabilities:
   `POST /api/v1/runs/{runID}/pause` and
   `POST /api/v1/runs/{runID}/resume`. Both require an empty body and a stable
   `Idempotency-Key`, and return the ordinary run resource with `202 Accepted`.
+- Read `intervention_targets` from every run. Each entry contains the stable
+  `role` (`lead` or `reviewer`) and `session_id` for a non-terminal persistent
+  agent conversation. The reviewer appears only after its session exists;
+  terminal runs return an empty array.
+- Read the optional latest `intervention` from a run. Its settled fields are
+  `id`, `session_id`, `target`, `message`, `status`, `requested_at`,
+  `updated_at`, and optional `answered_at`. Settled status values are
+  `waiting_for_boundary`, `queued`, `being_answered`, and `answered`.
+- Queue an idempotent intervention with
+  `POST /api/v1/runs/{runID}/interventions`, a stable `Idempotency-Key`, and
+  `{"target":"lead|reviewer","message":"..."}`. The request records the
+  target session's `user_message` event and arms the run pause; it does not
+  inject into an active provider turn. Only one unfinished request is allowed.
+- Treat intervention delivery and workflow continuation as separate controls.
+  `POST /resume` returns `409 intervention_pending` until the intervention is
+  answered, and the later agent answer will not remove the run pause.
 
 The session/event identities, roles, timestamps, lifecycle state, and activity
 categories are the stable input for both a conventional activity view and the
@@ -282,12 +298,23 @@ not implemented yet.
   agent turn or automatic merge. Resume restores and dispatches the exact
   retained `phase_checkpoint` only for `run_to_completion`; in
   `review_each_phase`, the normal explicit phase action remains required.
+- Intervention queueing is durable and safe to render. A request submitted
+  during an active agent turn reports `waiting_for_boundary`; the coordinator
+  changes it to `queued` in the same transaction that records the paused
+  waiting boundary. Exact retries do not append another user message.
+- Agent delivery is not implemented in this slice. The frontend may wire and
+  display the settled request/status shape, but should keep Send disabled in a
+  user-facing build until the delivery item below moves to Settled.
 
 ## In progress — avoid for now
 
-There is currently no unsettled coordinator HTTP behavior required by the
-existing project, work-order, conversation, implementation, review, or merge
-screens.
+### Intervention delivery
+
+The coordinator does not yet resume the selected lead/reviewer provider thread
+to answer a queued intervention. The next slice will make the durable status
+progress through `being_answered` to `answered`, stream the ordinary agent
+response events, keep the workflow paused, and persist the structured effect:
+`guidance_applied`, `clarification_required`, or `replanning_required`.
 
 ## Planned — do not depend on it yet
 

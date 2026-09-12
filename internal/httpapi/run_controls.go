@@ -47,6 +47,8 @@ func (api *API) changeRunPause(w http.ResponseWriter, r *http.Request, pause boo
 			writeError(w, http.StatusConflict, "idempotency_conflict", "Idempotency-Key was already used for a different operation")
 		case errors.Is(err, execution.ErrInvalidStatusTransition), errors.Is(err, orchestration.ErrRunControlNotAllowed):
 			writeError(w, http.StatusConflict, "run_control_not_allowed", "the run cannot be paused or resumed from its current state")
+		case errors.Is(err, orchestration.ErrInterventionPending):
+			writeError(w, http.StatusConflict, "intervention_pending", "the queued intervention must be answered before the workflow can continue")
 		default:
 			log.Printf("change pause state for run %q: %v", runID, err)
 			writeError(w, http.StatusInternalServerError, "internal_error", "internal server error")
