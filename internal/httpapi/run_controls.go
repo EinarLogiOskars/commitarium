@@ -45,12 +45,15 @@ func (api *API) changeRunPause(w http.ResponseWriter, r *http.Request, pause boo
 			writeError(w, http.StatusNotFound, "run_not_found", "run not found")
 		case errors.Is(err, execution.ErrRunActionConflict):
 			writeError(w, http.StatusConflict, "idempotency_conflict", "Idempotency-Key was already used for a different operation")
-		case errors.Is(err, execution.ErrInvalidStatusTransition), errors.Is(err, orchestration.ErrRunControlNotAllowed):
+		case errors.Is(err, execution.ErrInvalidStatusTransition), errors.Is(err, execution.ErrStateConflict),
+			errors.Is(err, orchestration.ErrRunControlNotAllowed):
 			writeError(w, http.StatusConflict, "run_control_not_allowed", "the run cannot be paused or resumed from its current state")
 		case errors.Is(err, orchestration.ErrInterventionPending):
 			writeError(w, http.StatusConflict, "intervention_pending", "the queued intervention must be answered before the workflow can continue")
-		case errors.Is(err, orchestration.ErrInterventionResolutionPending):
-			writeError(w, http.StatusConflict, "intervention_resolution_pending", "the answered intervention must be resolved before the workflow can continue")
+		case errors.Is(err, orchestration.ErrInterventionClarificationRequired):
+			writeError(w, http.StatusConflict, "intervention_clarification_required", "the selected agent needs another user message before the workflow can continue")
+		case errors.Is(err, orchestration.ErrInterventionReplanningRequired):
+			writeError(w, http.StatusConflict, "intervention_replanning_required", "the requested scope change needs a safe replanning decision before the workflow can continue")
 		default:
 			log.Printf("change pause state for run %q: %v", runID, err)
 			writeError(w, http.StatusInternalServerError, "internal_error", "internal server error")

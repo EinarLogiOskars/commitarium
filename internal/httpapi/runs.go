@@ -52,6 +52,7 @@ type interventionResponse struct {
 	RequestedAt time.Time                    `json:"requested_at"`
 	UpdatedAt   time.Time                    `json:"updated_at"`
 	AnsweredAt  *time.Time                   `json:"answered_at,omitempty"`
+	ResolvedAt  *time.Time                   `json:"resolved_at,omitempty"`
 }
 
 func (api *API) startRunHandler(w http.ResponseWriter, r *http.Request) {
@@ -250,6 +251,7 @@ func (api *API) newRunResponse(
 			Status: intervention.Status, Effect: intervention.Effect,
 			RequestedAt: intervention.RequestedAt,
 			UpdatedAt:   intervention.UpdatedAt, AnsweredAt: intervention.AnsweredAt,
+			ResolvedAt: intervention.ResolvedAt,
 		}
 	} else if !errors.Is(err, execution.ErrNotFound) {
 		return runResponse{}, err

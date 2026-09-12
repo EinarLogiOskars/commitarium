@@ -71,6 +71,30 @@ func TestInterventionValidate(t *testing.T) {
 	if err := answeredWithoutTime.Validate(); !errors.Is(err, ErrInvalidIntervention) {
 		t.Fatalf("expected missing answer time error, got %v", err)
 	}
+	answeredAt := now.Add(time.Second)
+	resolvedAt := answeredAt.Add(time.Second)
+	answered := valid
+	answered.Status = InterventionStatusAnswered
+	answered.AttemptID = "ses_lead:intervention:test"
+	answered.Effect = worker.InterventionEffectGuidanceApplied
+	answered.AnsweredAt = &answeredAt
+	answered.ResolvedAt = &resolvedAt
+	answered.ResolutionActionID = "resume_test"
+	answered.UpdatedAt = resolvedAt
+	if err := answered.Validate(); err != nil {
+		t.Fatalf("validate resolved intervention: %v", err)
+	}
+	resolvedBeforeAnswer := answered
+	tooEarly := now
+	resolvedBeforeAnswer.ResolvedAt = &tooEarly
+	if err := resolvedBeforeAnswer.Validate(); !errors.Is(err, ErrInvalidIntervention) {
+		t.Fatalf("expected invalid resolution time, got %v", err)
+	}
+	resolvedWithoutAction := answered
+	resolvedWithoutAction.ResolutionActionID = ""
+	if err := resolvedWithoutAction.Validate(); !errors.Is(err, ErrInvalidIntervention) {
+		t.Fatalf("expected missing resolution action error, got %v", err)
+	}
 }
 
 func TestSessionValidate(t *testing.T) {

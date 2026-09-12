@@ -64,7 +64,8 @@ var ErrPlanningNotAllowed = errors.New("planning cannot start from the current w
 var ErrImplementationNotAllowed = errors.New("implementation cannot start from the current workflow state")
 var ErrRunControlNotAllowed = errors.New("run control is not allowed from the current workflow state")
 var ErrInterventionPending = errors.New("an intervention must be answered before the workflow can resume")
-var ErrInterventionResolutionPending = errors.New("an answered intervention must be resolved before the workflow can resume")
+var ErrInterventionClarificationRequired = errors.New("the intervention answer requires more user clarification")
+var ErrInterventionReplanningRequired = errors.New("the intervention answer requires a safe replanning decision")
 
 // RemoteLeadExecution is the durable coordinator state used by the first real
 // lead turn. It deliberately contains no workflow transition: goal
@@ -84,6 +85,7 @@ type RemoteLeadExecution interface {
 	GetLatestIntervention(context.Context, string) (execution.Intervention, error)
 	BeginInterventionTurn(context.Context, string, execution.WorkerAttemptCheckpoint, string, string) (bool, error)
 	CompleteIntervention(context.Context, string, string, string, worker.InterventionEffect, string) (execution.Intervention, bool, error)
+	ResolveInterventionGuidance(context.Context, string, string, string) (execution.Run, bool, error)
 	TransitionSession(context.Context, string, execution.SessionStatus, execution.SessionStatus, string) (execution.Session, error)
 	RecordSessionEventWithID(context.Context, string, string, worker.Event) (execution.Event, error)
 	GetCommand(context.Context, string) (execution.Command, error)
@@ -802,8 +804,27 @@ func (starter *RemoteLeadStarter) Resume(
 	if err == nil && intervention.Status != execution.InterventionStatusAnswered {
 		return execution.Run{}, false, ErrInterventionPending
 	}
-	if err == nil && intervention.Status == execution.InterventionStatusAnswered && intervention.Effect != "" {
-		return execution.Run{}, false, ErrInterventionResolutionPending
+	if err == nil && intervention.Status == execution.InterventionStatusAnswered && intervention.ResolvedAt == nil {
+		switch intervention.Effect {
+		case worker.InterventionEffectGuidanceApplied:
+			run, applied, resolveErr := starter.executions.ResolveInterventionGuidance(
+				ctx, actionID, runID, intervention.ID,
+			)
+			if resolveErr != nil {
+				return execution.Run{}, false, resolveErr
+			}
+			if err := starter.advanceWaitingRun(context.WithoutCancel(ctx), run.ID); err != nil {
+				return execution.Run{}, false, err
+			}
+			current, getErr := starter.executions.GetRun(ctx, run.ID)
+			return current, applied, getErr
+		case worker.InterventionEffectClarificationRequired:
+			return execution.Run{}, false, ErrInterventionClarificationRequired
+		case worker.InterventionEffectReplanningRequired:
+			return execution.Run{}, false, ErrInterventionReplanningRequired
+		default:
+			return execution.Run{}, false, execution.ErrInvalidIntervention
+		}
 	}
 	if err != nil && !errors.Is(err, execution.ErrNotFound) {
 		return execution.Run{}, false, err

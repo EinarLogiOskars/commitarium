@@ -256,6 +256,26 @@ func (s *Service) CompleteIntervention(
 	return intervention, completed, nil
 }
 
+func (s *Service) ResolveInterventionGuidance(
+	ctx context.Context,
+	id string,
+	runID string,
+	interventionID string,
+) (Run, bool, error) {
+	run, resolved, err := s.store.ResolveInterventionGuidance(
+		ctx, InterventionGuidanceResolution{
+			ID: id, RunID: runID, InterventionID: interventionID,
+			OccurredAt: s.now().UTC(),
+		},
+	)
+	if err != nil {
+		return Run{}, false, fmt.Errorf(
+			"resolve intervention guidance %q: %w", interventionID, err,
+		)
+	}
+	return run, resolved, nil
+}
+
 func (s *Service) TransitionSession(
 	ctx context.Context,
 	id string,

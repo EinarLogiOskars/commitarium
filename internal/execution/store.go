@@ -90,6 +90,16 @@ type InterventionCompletion struct {
 	OccurredAt        time.Time
 }
 
+// InterventionGuidanceResolution consumes one answered guidance result and
+// releases the run's pause gate in the same transaction. The ordinary run
+// pause action ID provides the public idempotency boundary.
+type InterventionGuidanceResolution struct {
+	ID             string
+	RunID          string
+	InterventionID string
+	OccurredAt     time.Time
+}
+
 type SessionTransition struct {
 	SessionID         string
 	Expected          SessionStatus
@@ -192,6 +202,7 @@ type Store interface {
 	BeginAutonomousTurn(ctx context.Context, admission AutonomousTurnAdmission) (bool, error)
 	BeginInterventionTurn(ctx context.Context, admission InterventionTurnAdmission) (bool, error)
 	CompleteIntervention(ctx context.Context, completion InterventionCompletion) (Intervention, bool, error)
+	ResolveInterventionGuidance(ctx context.Context, resolution InterventionGuidanceResolution) (Run, bool, error)
 	BeginNewSessionTurn(ctx context.Context, admission NewSessionTurnAdmission) (bool, error)
 	LinkPlanningMessage(ctx context.Context, message PendingPlanningMessage) (PlanningMessage, bool, error)
 	ListPlanningMessages(ctx context.Context, runID string) ([]PlanningMessage, error)
@@ -349,6 +360,21 @@ func (completion InterventionCompletion) Validate() error {
 	case strings.TrimSpace(completion.RunReason) == "":
 		return fmt.Errorf("%w: run reason is required", ErrInvalidRun)
 	case completion.OccurredAt.IsZero():
+		return fmt.Errorf("%w: occurrence time is required", ErrInvalidStatusTransition)
+	default:
+		return nil
+	}
+}
+
+func (resolution InterventionGuidanceResolution) Validate() error {
+	switch {
+	case strings.TrimSpace(resolution.ID) == "":
+		return fmt.Errorf("%w: action ID is required", ErrInvalidCommand)
+	case strings.TrimSpace(resolution.RunID) == "":
+		return fmt.Errorf("%w: run ID is required", ErrInvalidIntervention)
+	case strings.TrimSpace(resolution.InterventionID) == "":
+		return fmt.Errorf("%w: intervention ID is required", ErrInvalidIntervention)
+	case resolution.OccurredAt.IsZero():
 		return fmt.Errorf("%w: occurrence time is required", ErrInvalidStatusTransition)
 	default:
 		return nil

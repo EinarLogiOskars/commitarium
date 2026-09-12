@@ -87,8 +87,11 @@ the answer through the ordinary session activity feed, and leaves the workflow
 paused. The agent explicitly classifies whether the message is guidance, needs
 clarification, or changes the accepted scope, so the coordinator never guesses
 from conversational wording. Restart recovery reconnects to the same durable
-delivery attempt instead of sending the message twice. Applying that
-classification when the user continues is the next backend slice.
+delivery attempt instead of sending the message twice. When the result is
+ordinary guidance, an explicit Continue records that it was consumed, restores
+the exact saved checkpoint, and honors the run's autonomy policy. Clarification
+keeps the composer and pause active. Scope-changing requests remain safely
+paused until versioned-plan replanning can preserve any existing branch work.
 
 Projects now also choose Codex
 or Claude independently for the lead and reviewer. Each run snapshots those
