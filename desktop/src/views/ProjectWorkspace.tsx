@@ -95,7 +95,7 @@ export function ProjectWorkspace({
       </nav>
 
       <main className="main">
-        <div className="main__inner">
+        <div className={`main__inner ${mode === "order" ? "main__inner--fill" : ""}`}>
           {error && <div className="banner banner--error">{error}</div>}
 
           {mode === "overview" && project && <Overview project={project} />}

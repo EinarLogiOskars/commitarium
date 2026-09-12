@@ -61,7 +61,7 @@ export function ImplementationView({
   const shown = scopeToPhase(entries, intervals, scoped);
 
   return (
-    <section className="panel">
+    <section className="panel panel--phase">
       <h2>Implementation</h2>
       <p className="muted">
         The lead is writing the code for the agreed plan — editing files, running tests,
