@@ -34,6 +34,14 @@ export function InterveneBar({ run, onChanged }: { run: Run; onChanged: () => vo
   // Delivery in flight — no new message and no continue until it is answered.
   const delivering = iv != null && iv.status !== "answered";
   const answered = iv != null && iv.status === "answered";
+  // An answered intervention that has NOT been consumed by resume yet still
+  // gates Continue workflow according to its effect (see coordinator-api.md):
+  // guidance is consumable now, clarification needs another message, and safe
+  // replanning is not wired up yet.
+  const pendingEffect = answered && !iv?.resolved_at ? iv?.effect : undefined;
+  const clarification = pendingEffect === "clarification_required";
+  const replanning = pendingEffect === "replanning_required";
+  const continueBlocked = delivering || clarification || replanning;
 
   const send = async () => {
     if (!text.trim() || delivering) return;
@@ -83,8 +91,8 @@ export function InterveneBar({ run, onChanged }: { run: Run; onChanged: () => vo
             <button
               className={pausedWaiting ? "primary" : "ghost"}
               onClick={() => void control(resumeRun)}
-              disabled={busy != null || delivering}
-              title={delivering ? "Wait for the agent to answer before continuing" : undefined}
+              disabled={busy != null || continueBlocked}
+              title={continueTitle(delivering, clarification, replanning)}
             >
               {pausedWaiting ? "Continue workflow" : "Cancel pause"}
             </button>
@@ -98,14 +106,14 @@ export function InterveneBar({ run, onChanged }: { run: Run; onChanged: () => vo
 
       {error && <div className="banner banner--error">{error}</div>}
 
-      {iv && (
+      {iv && !iv.resolved_at && (
         <div className={`intervene__queued ${answered ? "intervene__queued--done" : ""}`}>
           <span className="intervene__queued-badge">{queueLabel(iv)}</span>
           <span className="intervene__queued-to">to {iv.target}</span>
           <span className="msg__text">{iv.message}</span>
         </div>
       )}
-      {answered && iv?.effect && <EffectNote effect={iv.effect} />}
+      {pendingEffect && <EffectNote effect={pendingEffect} />}
 
       <div className="intervene__composer">
         <div className="seg">
@@ -151,11 +159,15 @@ export function InterveneBar({ run, onChanged }: { run: Run; onChanged: () => vo
       <p className="muted intervene__hint">
         {delivering
           ? "Your message is being delivered at the next safe boundary; the agent's reply appears below. The run stays paused."
-          : answered
-            ? "The agent replied above. Send another message to keep talking, or use Continue workflow when you're done."
-            : running
-              ? "Sending pauses at the next safe boundary, then delivers your message — the run stays paused so you can keep talking."
-              : "The agents are at rest. Send a message to talk (the run stays paused), or Continue workflow to move on."}
+          : clarification
+            ? "The agent needs more from you — send another message above to continue."
+            : replanning
+              ? "This changed the accepted scope. Safe replanning isn't available yet, so the run stays paused."
+              : pendingEffect === "guidance_applied"
+                ? "The agent replied above. Continue workflow applies your guidance and proceeds."
+                : running
+                  ? "Sending pauses at the next safe boundary, then delivers your message — the run stays paused so you can keep talking."
+                  : "The agents are at rest. Send a message to talk (the run stays paused), or Continue workflow to move on."}
       </p>
     </div>
   );
@@ -170,12 +182,12 @@ function EffectNote({ effect }: { effect: NonNullable<Intervention["effect"]> })
     },
     clarification_required: {
       label: "Needs another exchange",
-      text: "The agent needs more from you — reply above to continue the conversation.",
+      text: "The agent needs more from you — send another message to continue.",
       tone: "warn",
     },
     replanning_required: {
       label: "Replanning required",
-      text: "This changes the accepted scope, so the order returns to planning.",
+      text: "This changes the accepted scope. Safe replanning isn't available yet, so the run stays paused.",
       tone: "warn",
     },
   };
@@ -224,11 +236,20 @@ function controlError(e: unknown): string {
     switch (e.code) {
       case "intervention_pending":
         return "Wait for the agent to answer before continuing.";
-      case "intervention_resolution_pending":
-        return "The agent answered. Applying your guidance and continuing arrives in the next backend slice.";
+      case "intervention_clarification_required":
+        return "The agent needs another exchange — send a message before continuing.";
+      case "intervention_replanning_required":
+        return "This changed the accepted scope. Safe replanning isn't available yet, so the run stays paused.";
       default:
         return `${e.message} (${e.code})`;
     }
   }
   return String(e);
+}
+
+function continueTitle(delivering: boolean, clarification: boolean, replanning: boolean): string | undefined {
+  if (delivering) return "Wait for the agent to answer before continuing";
+  if (clarification) return "Send another message to the agent to continue";
+  if (replanning) return "Scope changed — safe replanning isn't available yet";
+  return undefined;
 }
