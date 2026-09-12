@@ -182,24 +182,25 @@ function ProfileRow({ profile, onChanged }: { profile: Profile; onChanged: () =>
         </div>
       )}
 
-      {s === "waiting_for_code" && profile.provider === "claude" && (
-        <div className="row">
-          <input
-            type="text"
-            placeholder="Paste the code from the browser"
-            value={code}
-            onChange={(e) => setCode(e.target.value)}
-            disabled={busy}
-          />
-          <button
-            className="primary"
-            onClick={() => run(() => submitLoginCode(profile.id, code.trim())).then(() => setCode(""))}
-            disabled={busy || !code.trim()}
-          >
-            Submit code
-          </button>
-        </div>
-      )}
+      {profile.provider === "claude" &&
+        ["starting", "waiting_for_browser", "waiting_for_code"].includes(s) && (
+          <div className="row">
+            <input
+              type="text"
+              placeholder="Paste the code from the browser"
+              value={code}
+              onChange={(e) => setCode(e.target.value)}
+              disabled={busy}
+            />
+            <button
+              className="primary"
+              onClick={() => run(() => submitLoginCode(profile.id, code.trim())).then(() => setCode(""))}
+              disabled={busy || !code.trim()}
+            >
+              Submit code
+            </button>
+          </div>
+        )}
 
       {s === "waiting_for_api_key" && (
         <div className="api-key">
