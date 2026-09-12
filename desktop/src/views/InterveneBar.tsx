@@ -98,37 +98,43 @@ export function InterveneBar({
         ? "Agents are working."
         : "Waiting for you.";
 
+  // Sending a message already arms the pause, so there's no separate pause
+  // button while agents work: the composer's own button pauses (empty) or
+  // pauses-and-sends (with text). The right-hand button only carries the
+  // "proceed" actions — the phase advance CTA, or resume after a pause.
+  const submitLabel =
+    busy === "send" ? "Sending…" : busy === "control" ? "…" : running ? (text.trim() ? "Pause & send" : "Pause") : "Send";
+  const submit = () => {
+    if (text.trim()) void send();
+    else if (running) void control(pauseRun);
+  };
+
   return (
     <div className="intervene">
-      {action && (
-        <button
-          className="primary intervene__advance"
-          onClick={action.onClick}
-          disabled={busy != null || action.busy}
-        >
-          {action.busy ? "Working…" : action.label}
-        </button>
-      )}
       <div className="intervene__row">
         <span className={`intervene__state intervene__state--${pausing ? "pausing" : paused ? "paused" : "run"}`}>
           {(pausing || delivering || busy != null) && <span className="spinner" aria-hidden />}
           {stateLabel}
         </span>
         <span className="intervene__actions">
-          {pausedWaiting || pausing ? (
+          {pausedWaiting ? (
             <button
-              className={pausedWaiting ? "primary" : "ghost"}
+              className="primary"
               onClick={() => void control(resumeRun)}
               disabled={busy != null || continueBlocked}
               title={continueTitle(delivering, clarification)}
             >
-              {pausedWaiting ? "Continue workflow" : "Cancel pause"}
+              Continue workflow
             </button>
-          ) : (
-            <button className="ghost" onClick={() => void control(pauseRun)} disabled={busy != null}>
-              Pause / intervene
+          ) : pausing ? (
+            <button className="ghost" onClick={() => void control(resumeRun)} disabled={busy != null}>
+              Cancel pause
             </button>
-          )}
+          ) : action ? (
+            <button className="primary" onClick={action.onClick} disabled={busy != null || action.busy}>
+              {action.busy ? "Working…" : action.label}
+            </button>
+          ) : null}
         </span>
       </div>
 
@@ -177,11 +183,11 @@ export function InterveneBar({
         />
         <button
           className="primary"
-          onClick={() => void send()}
-          disabled={busy != null || delivering || !text.trim()}
-          title={running ? "Pauses at the next safe boundary, then delivers your message" : undefined}
+          onClick={submit}
+          disabled={busy != null || delivering || (!text.trim() && !running)}
+          title={running ? "Pauses at the next safe boundary" : undefined}
         >
-          {busy === "send" ? "Sending…" : running ? "Pause & send" : "Send"}
+          {submitLabel}
         </button>
       </div>
       <p className="muted intervene__hint">
@@ -194,8 +200,8 @@ export function InterveneBar({
               : pendingEffect === "guidance_applied"
                 ? "The agent replied above. Continue workflow applies your guidance and proceeds."
                 : running
-                  ? "Sending pauses at the next safe boundary, then delivers your message — the run stays paused so you can keep talking."
-                  : "The agents are at rest. Send a message to talk (the run stays paused), or Continue workflow to move on."}
+                  ? "Type to message an agent — it pauses at the next safe boundary and stays paused so you can keep talking. Or Pause to just halt."
+                  : "The agents are at rest. Send a message to talk (the run stays paused)."}
       </p>
     </div>
   );

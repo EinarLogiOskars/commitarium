@@ -1046,10 +1046,6 @@ button.primary {
   padding-top: 12px;
   border-top: 1px solid var(--border);
 }
-.intervene__advance {
-  width: 100%;
-  margin-bottom: 10px;
-}
 .intervene__row {
   display: flex;
   align-items: center;
