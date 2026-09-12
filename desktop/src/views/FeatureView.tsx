@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getFeature, listFeatureRuns } from "../api/features";
-import { getRun, pauseRun, resumeRun } from "../api/runs";
+import { getRun } from "../api/runs";
 import { ApiError } from "../api/client";
 import { GoalClarification } from "./GoalClarification";
 import { PlanningView } from "./PlanningView";
 import { ImplementationView } from "./ImplementationView";
 import { ReviewView } from "./ReviewView";
+import { InterveneBar } from "./InterveneBar";
 import { PhaseStepper, currentPhaseIndex } from "./PhaseStepper";
 import { WORK } from "../vocab";
 import type { Feature, Run, WaitKind } from "../api/types";
@@ -33,7 +34,6 @@ export function FeatureView({
   const [error, setError] = useState<string | null>(null);
   // null = follow the current phase; a number = the user pinned that phase.
   const [pinnedIndex, setPinnedIndex] = useState<number | null>(null);
-  const [busy, setBusy] = useState(false);
   const lastState = useRef<string | null>(null);
 
   const load = useCallback(async () => {
@@ -80,22 +80,6 @@ export function FeatureView({
 
   const select = (i: number) => setPinnedIndex(i === current ? null : i);
 
-  const togglePause = async () => {
-    if (!run) return;
-    setBusy(true);
-    setError(null);
-    try {
-      const next = run.paused
-        ? await resumeRun(run.id, crypto.randomUUID())
-        : await pauseRun(run.id, crypto.randomUUID());
-      setRun(next);
-    } catch (e) {
-      setError(describe(e));
-    } finally {
-      setBusy(false);
-    }
-  };
-
   return (
     <>
       {onBack && <button className="back" onClick={onBack}>← {WORK.Plural}</button>}
@@ -106,15 +90,11 @@ export function FeatureView({
             <h2>{feature.title}</h2>
             {feature.description && <p className="muted order-head__desc">{feature.description}</p>}
           </div>
-          {run && !terminal && !finished && (
-            <button className="ghost" onClick={() => void togglePause()} disabled={busy}>
-              {busy ? "…" : run.paused ? "Resume" : "Pause / intervene"}
-            </button>
-          )}
         </div>
 
         <PhaseStepper feature={feature} viewedIndex={viewed} onSelect={select} paused={run?.paused} />
 
+        {run && !terminal && !finished && <InterveneBar run={run} onChanged={load} />}
         {run && !terminal && waitBanner(run, feature.state)}
         {pinnedIndex !== null && pinnedIndex !== current && (
           <button className="linkish" onClick={() => setPinnedIndex(null)}>
@@ -130,8 +110,10 @@ export function FeatureView({
 }
 
 function waitBanner(run: Run, state: string) {
-  if (run.status !== "waiting_for_user" && !run.paused) return null;
-  const kind: WaitKind = run.paused ? "paused" : run.wait_kind ?? "";
+  // Pause state is shown by the InterveneBar; this banner covers the checkpoint
+  // reasons the user must resolve (round cap, blocker, merge gate, clarification).
+  if (run.paused || run.status !== "waiting_for_user") return null;
+  const kind: WaitKind = run.wait_kind ?? "";
   const label = WAIT_LABELS[kind];
   if (!label && !run.reason) return null;
   const tone = kind === "paused" ? "warn" : kind === "merge_gate" ? "ok" : "warn";
