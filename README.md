@@ -150,16 +150,16 @@ The intended responsibility split is recorded in
 uses its own scoped Forgejo identity for commits and structured PR work, while
 the coordinator controls workflow and verifies important results.
 
-The planned external handoff has two explicit trusted-host steps. First,
+The external handoff has two explicit trusted-host steps. First,
 Commitarium synchronizes an approved feature into the user's selected local
 repository as one clean commit using the user's configured Git identity. Second,
-the user may push that exact commit to GitHub, GitLab, or another Git remote.
+the user may explicitly publish that exact commit to GitHub, GitLab, or another
+configured Git remote as a new `commitarium/<work-order-slug>` branch.
 Users may later choose to chain the steps, but local synchronization never
 silently implies an external push. Agent authors, intermediate commits, and the
 private Forgejo audit trail remain in Forgejo rather than entering the clean
 upstream history. This handoff is documented in
-[ADR-008](docs/adr/0008-export-completed-work-as-clean-host-commits.md) but is
-not implemented yet.
+[ADR-008](docs/adr/0008-export-completed-work-as-clean-host-commits.md).
 
 ## Run locally
 
@@ -296,7 +296,11 @@ internal base, leaves ignored dependencies and build output untouched, and uses
 a durable prepared receipt so an interruption can be retried or recognized as
 already complete. Ambiguous or user-modified content is never overwritten.
 
-The separate upstream-push action is still pending.
+The trusted desktop can now preview configured remotes and publish the exact
+recorded local handoff commit as a new `commitarium/` branch. It uses the
+system Git CLI and the user's existing credential helper or SSH setup, never
+checks out another branch, and atomically refuses to overwrite any existing
+remote branch. Pull-request creation remains a manual user action for now.
 
 Once a non-empty repository exists in Forgejo, associate it with a coordinator
 project:

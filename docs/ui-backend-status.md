@@ -290,6 +290,16 @@ in backend event payloads; the UI maps factual activity to presentation.
   ignored local files, verifies the complete approved result, and uses a
   durable prepared receipt for retries and restart adoption. Partial,
   contradictory, or user-modified state must be shown for inspection.
+- The trusted native upstream handoff is settled for Git-backed imports.
+  `preview_upstream_branch` lists the repository's configured remotes, suggests
+  `commitarium/<work-order-slug>`, and returns a structured availability or
+  authentication state. `publish_upstream_branch` pushes only the exact local
+  commit recorded by `synchronize_feature_locally`, and only as a new
+  `commitarium/` branch. It never changes the checkout, updates an existing
+  remote branch, or sends credentials through IPC. `published` and
+  `already_published` are success states; `branch_conflict`,
+  `authentication_required`, and `remote_unavailable` need distinct UI
+  treatment. Pull-request creation remains manual for this MVP slice.
 
 Opening the managed directory in an IDE and starting a development preview are
 not implemented yet.
@@ -351,8 +361,9 @@ No current backend contract area is reserved by the versioned-replanning work.
 - Open the managed workspace in VS Code or another configured editor.
 - Start, observe, and stop a project-defined development environment and open
   its local browser preview.
-- Separately push that exact local commit to the user's GitHub, GitLab, or other
-  upstream remote; optionally allow the user to chain sync and push.
+- Provider-specific pull-request creation after publishing a protected
+  `commitarium/` branch; optionally allow the user to chain sync, branch
+  publication, and PR creation later.
 
 These trusted-host operations must remain outside agent containers. Agent
 containers receive scoped Forgejo credentials, never the user's GitHub or host
