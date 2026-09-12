@@ -114,9 +114,16 @@ export interface InterventionTarget {
 
 export type InterventionStatus =
   | "waiting_for_boundary" // current bounded turn still finishing
-  | "queued" // run paused + waiting, delivery may begin
-  | "being_answered" // delivery slice: agent answering
-  | "answered"; // delivery slice: answer + effect durable
+  | "queued" // run paused + waiting, coordinator not yet admitted delivery
+  | "being_answered" // agent is answering
+  | "answered"; // visible answer + structured effect are durable
+
+// The agent's explicit classification of what the message means, returned with
+// an answered intervention (never inferred from prose).
+export type InterventionEffect =
+  | "guidance_applied" // honored without changing the accepted goal or plan
+  | "clarification_required" // the agent needs another user exchange
+  | "replanning_required"; // scope/plan changed → the order returns to planning
 
 export interface Intervention {
   id: string;
@@ -124,8 +131,10 @@ export interface Intervention {
   target: InterventionTargetRole;
   message: string;
   status: InterventionStatus;
+  effect?: InterventionEffect;
   requested_at: string;
   updated_at: string;
+  answered_at?: string;
 }
 
 export interface Run {
