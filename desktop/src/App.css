@@ -166,7 +166,7 @@ body {
   padding: 24px 28px;
 }
 .main__inner {
-  max-width: 860px;
+  max-width: 1200px;
 }
 .main__empty {
   color: var(--muted);
@@ -365,11 +365,17 @@ body {
   flex-direction: column;
 }
 .clarify__side {
-  width: 300px;
+  width: 360px;
   flex: none;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
+  /* A distinct recessed card so the proposed goal reads as its own thing,
+     separate from the conversation on the left. */
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 14px;
 }
 .clarify__side textarea {
   flex: 1;
