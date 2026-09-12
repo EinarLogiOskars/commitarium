@@ -30,6 +30,7 @@ export function PlanningView({
   runId,
   featureState,
   live = true,
+  planVersion = 1,
   onAdvanced,
 }: {
   runId: string;
@@ -37,6 +38,9 @@ export function PlanningView({
   // When false, the phase is being viewed as history — transcript only, no
   // advance action (the run has moved past planning, or is auto-driven).
   live?: boolean;
+  // The agreement cycle. On a revised plan (>1) the reviewer-continuation path
+  // is not built yet, so no advance action is offered.
+  planVersion?: number;
   onAdvanced: () => void;
 }) {
   const [entries, setEntries] = useState<Entry[]>([]);
@@ -114,9 +118,11 @@ export function PlanningView({
     action = { label: "Send plan to reviewer", run: () => void act(startPlanningReviewer) };
   }
 
+  const revised = planVersion > 1;
+
   return (
     <section className="panel">
-      <h2>Planning</h2>
+      <h2>Planning{revised ? ` · revised v${planVersion}` : ""}</h2>
       <p className="muted">
         The lead proposes a plan and the reviewer critiques it; they iterate until they
         agree, then the plan is submitted and implementation can begin. No code is written
@@ -139,14 +145,19 @@ export function PlanningView({
         )}
       </div>
 
-      {live && (
+      {live && revised ? (
+        <p className="muted status-line note">
+          Revised proposal (v{planVersion}) from your scope change. The reviewer
+          continuation for revised plans lands in a later backend slice — no action yet.
+        </p>
+      ) : live ? (
         <>
           <p className="muted status-line">{idle ? "Waiting for you." : "Agents working…"}</p>
           <button className="primary" onClick={action.run} disabled={busy || !idle}>
             {busy ? "Working…" : action.label}
           </button>
         </>
-      )}
+      ) : null}
     </section>
   );
 }
