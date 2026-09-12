@@ -61,6 +61,7 @@ const (
 var ErrPlanningNotAllowed = errors.New("planning cannot start from the current workflow state")
 var ErrImplementationNotAllowed = errors.New("implementation cannot start from the current workflow state")
 var ErrRunControlNotAllowed = errors.New("run control is not allowed from the current workflow state")
+var ErrInterventionPending = errors.New("an intervention must be answered before the workflow can resume")
 
 // RemoteLeadExecution is the durable coordinator state used by the first real
 // lead turn. It deliberately contains no workflow transition: goal
@@ -76,6 +77,8 @@ type RemoteLeadExecution interface {
 	GetWorkerAttempt(context.Context, string) (execution.WorkerAttemptCheckpoint, error)
 	TransitionRun(context.Context, string, execution.RunStatus, execution.RunStatus, string, ...execution.RunWaitKind) (execution.Run, error)
 	ApplyRunPause(context.Context, string, string, execution.RunPauseAction) (execution.Run, bool, error)
+	QueueIntervention(context.Context, string, string, worker.Role, string) (execution.Intervention, bool, error)
+	GetLatestIntervention(context.Context, string) (execution.Intervention, error)
 	TransitionSession(context.Context, string, execution.SessionStatus, execution.SessionStatus, string) (execution.Session, error)
 	RecordSessionEventWithID(context.Context, string, string, worker.Event) (execution.Event, error)
 	GetCommand(context.Context, string) (execution.Command, error)
@@ -605,11 +608,28 @@ func (starter *RemoteLeadStarter) Pause(
 	)
 }
 
+func (starter *RemoteLeadStarter) QueueIntervention(
+	ctx context.Context,
+	runID string,
+	interventionID string,
+	target worker.Role,
+	message string,
+) (execution.Intervention, bool, error) {
+	return starter.executions.QueueIntervention(ctx, interventionID, runID, target, message)
+}
+
 func (starter *RemoteLeadStarter) Resume(
 	ctx context.Context,
 	runID string,
 	actionID string,
 ) (execution.Run, bool, error) {
+	intervention, err := starter.executions.GetLatestIntervention(ctx, runID)
+	if err == nil && intervention.Status != execution.InterventionStatusAnswered {
+		return execution.Run{}, false, ErrInterventionPending
+	}
+	if err != nil && !errors.Is(err, execution.ErrNotFound) {
+		return execution.Run{}, false, err
+	}
 	run, applied, err := starter.executions.ApplyRunPause(
 		ctx, actionID, runID, execution.RunPauseActionResume,
 	)

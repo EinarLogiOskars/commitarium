@@ -53,6 +53,22 @@ type RunPauseMutation struct {
 	OccurredAt time.Time
 }
 
+// InterventionRequest is the atomic user action that records a message and
+// arms the existing run pause gate. SessionID is resolved by the store from
+// Target so callers cannot accidentally address a session from another run.
+type InterventionRequest struct {
+	ID         string
+	RunID      string
+	Target     worker.Role
+	Message    string
+	OccurredAt time.Time
+}
+
+type InterventionRequestResult struct {
+	Intervention Intervention
+	UserEvent    Event
+}
+
 type SessionTransition struct {
 	SessionID         string
 	Expected          SessionStatus
@@ -132,6 +148,9 @@ type Store interface {
 	ListRunsByFeatureID(ctx context.Context, featureID string) ([]Run, error)
 	TransitionRun(ctx context.Context, transition RunTransition) (Run, error)
 	ApplyRunPause(ctx context.Context, mutation RunPauseMutation) (Run, bool, error)
+	QueueIntervention(ctx context.Context, request InterventionRequest) (InterventionRequestResult, bool, error)
+	GetLatestIntervention(ctx context.Context, runID string) (Intervention, error)
+	ListInterventionTargets(ctx context.Context, runID string) ([]InterventionTarget, error)
 	CreateSession(ctx context.Context, session Session) error
 	GetSession(ctx context.Context, id string) (Session, error)
 	ListSessions(ctx context.Context, runID string) ([]Session, error)
@@ -166,6 +185,10 @@ var ErrStateConflict = errors.New("execution record is not in the expected state
 var ErrRecordConflict = errors.New("execution record ID reused for different content")
 var ErrPlanningMessageConflict = errors.New("session event is already linked to a different planning conversation")
 var ErrRunActionConflict = errors.New("run action ID reused for a different operation")
+var ErrInterventionConflict = errors.New("intervention ID reused for different content")
+var ErrInterventionInProgress = errors.New("run already has an unfinished intervention")
+var ErrInterventionNotAllowed = errors.New("run does not allow an intervention")
+var ErrInterventionTargetUnavailable = errors.New("intervention target is unavailable")
 
 func (message PendingPlanningMessage) Validate() error {
 	switch {
@@ -250,6 +273,23 @@ func (mutation RunPauseMutation) Validate() error {
 		return fmt.Errorf("%w: run pause action is invalid", ErrInvalidCommand)
 	case mutation.OccurredAt.IsZero():
 		return fmt.Errorf("%w: occurrence time is required", ErrInvalidCommand)
+	default:
+		return nil
+	}
+}
+
+func (request InterventionRequest) Validate() error {
+	switch {
+	case strings.TrimSpace(request.ID) == "":
+		return fmt.Errorf("%w: intervention ID is required", ErrInvalidIntervention)
+	case strings.TrimSpace(request.RunID) == "":
+		return fmt.Errorf("%w: run ID is required", ErrInvalidIntervention)
+	case request.Target != worker.RoleLead && request.Target != worker.RoleReviewer:
+		return fmt.Errorf("%w: target must be lead or reviewer", ErrInvalidIntervention)
+	case strings.TrimSpace(request.Message) == "":
+		return fmt.Errorf("%w: message is required", ErrInvalidIntervention)
+	case request.OccurredAt.IsZero():
+		return fmt.Errorf("%w: occurrence time is required", ErrInvalidIntervention)
 	default:
 		return nil
 	}

@@ -37,6 +37,7 @@ this API beyond the host loopback interface is unsupported.
 | `POST` | `/api/v1/runs/{runID}/merge` | Merge the exact revision approved by both agents |
 | `POST` | `/api/v1/runs/{runID}/pause` | Stop automatic handoffs at the next safe provider-turn boundary |
 | `POST` | `/api/v1/runs/{runID}/resume` | Remove a run pause and dispatch its retained automatic checkpoint when applicable |
+| `POST` | `/api/v1/runs/{runID}/interventions` | Queue a user message for the lead or reviewer and stop at the next safe boundary |
 | `GET` | `/api/v1/runs/{runID}/planning/messages` | Retrieve the ordered lead/reviewer planning messages |
 | `GET` | `/api/v1/runs/{runID}/planning/messages/stream` | Replay and stream ordered planning messages with SSE |
 | `GET` | `/api/v1/sessions/{sessionID}` | Retrieve a session |
@@ -47,10 +48,11 @@ this API beyond the host loopback interface is unsupported.
 
 ## Idempotency
 
-Feature transitions, run starts, planning, implementation, merge, and run-control actions,
-session commands, and goal acceptance require an `Idempotency-Key` header. Retrying the same operation with
-the same key returns the existing durable result. Reusing a key for a different
-operation returns `409 Conflict` with the `idempotency_conflict` error code.
+Feature transitions, run starts, planning, implementation, merge, run-control
+actions, run interventions, session commands, and goal acceptance require an
+`Idempotency-Key` header. Retrying the same operation with the same key returns
+the existing durable result. Reusing a key for a different operation returns
+`409 Conflict` with the `idempotency_conflict` error code.
 
 Run IDs are stable opaque values derived from the start request's idempotency
 key. Only a feature in `draft` can admit a new run, but a retry remains valid
@@ -529,7 +531,8 @@ A successful response is `202 Accepted` and points to the run resource:
   "autonomy_policy": "review_each_phase",
   "started_at": "2026-09-08T17:30:36Z",
   "updated_at": "2026-09-08T17:30:36Z",
-  "sessions": []
+  "sessions": [],
+  "intervention_targets": []
 }
 ```
 
@@ -552,6 +555,79 @@ Run responses also contain `paused` and, while waiting or paused, a machine-read
 Clients should use `wait_kind` to choose controls and labels, and show `reason`
 as the human-readable explanation. They must not infer control state by parsing
 the reason text.
+
+## Queuing a user intervention
+
+An intervention is a message addressed to one of the run's two long-lived agent
+conversations. It is different from an ordinary session command because the
+coordinator must never send new text into a provider turn that is already
+running. Submitting one atomically stores the message, records it as a
+`user_message` event on the target session, and arms the run-level pause gate:
+
+```http
+POST /api/v1/runs/run_opaque/interventions
+Idempotency-Key: intervene-storage-choice-1
+Content-Type: application/json
+
+{
+  "target": "lead",
+  "message": "Please reconsider whether SQLite is appropriate for this feature."
+}
+```
+
+`target` must be `lead` or `reviewer`, and `message` must not be blank. The
+reviewer becomes available only after its persistent reviewer session exists.
+The response is the ordinary run resource with `202 Accepted`; its additive
+fields have this shape:
+
+```json
+{
+  "paused": true,
+  "wait_kind": "paused",
+  "intervention_targets": [
+    {"role": "lead", "session_id": "run_opaque:lead"},
+    {"role": "reviewer", "session_id": "run_opaque:reviewer"}
+  ],
+  "intervention": {
+    "id": "int_opaque",
+    "session_id": "run_opaque:lead",
+    "target": "lead",
+    "message": "Please reconsider whether SQLite is appropriate for this feature.",
+    "status": "waiting_for_boundary",
+    "requested_at": "2026-09-12T12:30:00Z",
+    "updated_at": "2026-09-12T12:30:00Z"
+  }
+}
+```
+
+`intervention_targets` is always an array and contains only non-terminal lead
+or reviewer sessions. It is empty for a terminal run. `intervention` is omitted
+until the first request and then identifies the latest request, including after
+it is answered.
+
+The intervention statuses are:
+
+- `waiting_for_boundary`: the current bounded agent turn is still finishing;
+- `queued`: the run is both paused and waiting, so delivery may safely begin;
+- `being_answered`: reserved for the delivery slice while the selected agent is
+  answering;
+- `answered`: reserved for the delivery slice after its answer and structured
+  effect are durable.
+
+Only one unfinished intervention may exist for a run. An exact retry with the
+same key and body returns the same request without another event. Reusing the
+key with a different run, target, or message returns
+`409 idempotency_conflict`; another key while one is unfinished returns
+`409 intervention_in_progress`. Selecting a conversation that does not exist
+or cannot be resumed returns `409 intervention_target_unavailable`, and a
+terminal run returns `409 intervention_not_allowed`.
+
+This first queueing slice deliberately does not contact a worker. Delivery at
+the safe boundary, the agent's normal streamed response events, and the final
+structured effect (`guidance_applied`, `clarification_required`, or
+`replanning_required`) are the immediately following backend slice. Until that
+lands, clients may display the queue state but should keep the Send action
+disabled in user-facing builds.
 
 ## Pausing and resuming a run
 
@@ -587,6 +663,12 @@ restarts therefore cannot start a second provider attempt. For
 `review_each_phase`, resume removes the pause but does not skip the normal user
 action for that phase. Resuming before an already-running provider turn ends
 simply cancels the armed gate.
+
+Resume returns `409 intervention_pending` while the latest intervention is not
+`answered`. This prevents “Continue workflow” from silently discarding or
+bypassing a queued user message. Answering the agent and continuing the workflow
+remain separate actions: future intervention delivery keeps the run paused,
+and only an explicit resume continues normal orchestration.
 
 Both endpoints require an empty body and reject terminal runs. Reusing one
 `Idempotency-Key` for the opposite action returns `409 idempotency_conflict`.

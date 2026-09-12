@@ -19,23 +19,27 @@ import (
 )
 
 type recordingExecutionService struct {
-	run          execution.Run
-	runErr       error
-	runs         []execution.Run
-	runsErr      error
-	runsFeature  string
-	sessions     []execution.Session
-	sessionsErr  error
-	session      execution.Session
-	sessionErr   error
-	events       []execution.Event
-	eventsErr    error
-	subscription <-chan execution.Event
-	unsubscribed int
-	requestedID  string
-	eventSession string
-	planning     []execution.PlanningMessage
-	planningLive <-chan execution.PlanningMessage
+	run                    execution.Run
+	runErr                 error
+	runs                   []execution.Run
+	runsErr                error
+	runsFeature            string
+	sessions               []execution.Session
+	sessionsErr            error
+	session                execution.Session
+	sessionErr             error
+	events                 []execution.Event
+	eventsErr              error
+	subscription           <-chan execution.Event
+	unsubscribed           int
+	requestedID            string
+	eventSession           string
+	planning               []execution.PlanningMessage
+	planningLive           <-chan execution.PlanningMessage
+	intervention           execution.Intervention
+	interventionErr        error
+	interventionTargets    []execution.InterventionTarget
+	interventionTargetsErr error
 }
 
 func (s *recordingExecutionService) GetRun(
@@ -99,6 +103,23 @@ func (s *recordingExecutionService) SubscribePlanningMessages(
 		s.planningLive = make(chan execution.PlanningMessage)
 	}
 	return s.planningLive, func() {}
+}
+
+func (s *recordingExecutionService) GetLatestIntervention(
+	_ context.Context,
+	_ string,
+) (execution.Intervention, error) {
+	if s.intervention.ID == "" && s.interventionErr == nil {
+		return execution.Intervention{}, execution.ErrNotFound
+	}
+	return s.intervention, s.interventionErr
+}
+
+func (s *recordingExecutionService) InterventionTargetsForRun(
+	_ context.Context,
+	_ string,
+) ([]execution.InterventionTarget, error) {
+	return s.interventionTargets, s.interventionTargetsErr
 }
 
 type recordingSessionController struct {
