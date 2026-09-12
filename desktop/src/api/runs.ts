@@ -33,3 +33,7 @@ export const startPlanningRound = (runId: string, key: string): Promise<Run> =>
 
 export const startImplementation = (runId: string, key: string): Promise<Run> =>
   request(`${runPath(runId)}/implementation`, { method: "POST", idempotencyKey: key });
+
+/** Merge the approved revision (the ready_to_merge gate). */
+export const mergeRun = (runId: string, key: string): Promise<Run> =>
+  request(`${runPath(runId)}/merge`, { method: "POST", idempotencyKey: key });

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { getRun } from "../api/runs";
+import { getRun, mergeRun } from "../api/runs";
 import { getSessionEvents } from "../api/sessions";
 import { getWorkspace } from "../api/features";
 import { openExternal } from "../ipc";
@@ -25,16 +25,34 @@ export function ReviewView({
   featureId,
   runId,
   state,
+  onAdvanced,
 }: {
   projectId: string;
   featureId: string;
   runId: string;
   state: string;
+  onAdvanced: () => void;
 }) {
   const [timeline, setTimeline] = useState<TimelineEntry[]>([]);
   const [decisions, setDecisions] = useState<{ role: string; status: string; outcome?: string }[]>([]);
   const [workspace, setWorkspace] = useState<Workspace | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [confirmMerge, setConfirmMerge] = useState(false);
+  const [merging, setMerging] = useState(false);
+
+  const merge = async () => {
+    setMerging(true);
+    setError(null);
+    try {
+      await mergeRun(runId, crypto.randomUUID());
+      setConfirmMerge(false);
+      onAdvanced();
+    } catch (e) {
+      setError(e instanceof ApiError ? `${e.message} (${e.code})` : String(e));
+    } finally {
+      setMerging(false);
+    }
+  };
 
   const poll = useCallback(async () => {
     try {
@@ -113,11 +131,30 @@ export function ReviewView({
       </div>
 
       {state === "ready_to_merge" && (
-        <p className="muted note">
-          {merged
-            ? "Merged."
-            : "Approved and ready to merge. The merge action / approval gate arrives in a later slice."}
-        </p>
+        merged ? (
+          <p className="muted note">Merged into the default branch. ✓</p>
+        ) : (
+          <div className="merge-gate">
+            <p className="muted">
+              Both agents approved this revision. Merge PR #{pr?.number} into the default
+              branch to complete the work order.
+            </p>
+            {!confirmMerge ? (
+              <button className="primary" onClick={() => setConfirmMerge(true)} disabled={merging}>
+                Merge
+              </button>
+            ) : (
+              <div className="row">
+                <button className="primary" onClick={() => void merge()} disabled={merging}>
+                  {merging ? "Merging…" : "Confirm merge"}
+                </button>
+                <button className="ghost" onClick={() => setConfirmMerge(false)} disabled={merging}>
+                  Cancel
+                </button>
+              </div>
+            )}
+          </div>
+        )
       )}
     </section>
   );
