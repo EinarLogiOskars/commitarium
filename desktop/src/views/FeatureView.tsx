@@ -96,7 +96,7 @@ export function FeatureView({
   const intervals = phaseIntervals(events, viewed);
 
   return (
-    <>
+    <div className="order">
       {onBack && <button className="back" onClick={onBack}>← {WORK.Plural}</button>}
 
       <section className="panel order-head">
@@ -128,7 +128,7 @@ export function FeatureView({
       {run && !terminal && !finished && current > 0 && (
         <InterveneBar run={run} onChanged={load} />
       )}
-    </>
+    </div>
   );
 }
 

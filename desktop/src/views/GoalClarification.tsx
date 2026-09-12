@@ -186,7 +186,7 @@ export function GoalClarification({
   const waiting = status === "waiting_for_user";
 
   return (
-    <section className="panel">
+    <section className="panel panel--phase">
       <h2>Goal clarification</h2>
       {error && <div className="banner banner--error">{error}</div>}
 

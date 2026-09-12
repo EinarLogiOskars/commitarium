@@ -164,9 +164,43 @@ body {
   min-width: 0;
   overflow-y: auto;
   padding: 24px 28px;
+  display: flex;
+  flex-direction: column;
 }
 .main__inner {
   max-width: 1200px;
+  width: 100%;
+}
+/* Order mode: fill the pane so the work-order view manages its own internal
+   scroll (transcript scrolls, header + composer stay pinned). */
+.main__inner--fill {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* The work-order fixed frame: pinned head, scrolling body, pinned composer. */
+.order {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.order > * {
+  margin: 0;
+}
+/* A phase panel inside the frame: its chat scrolls, its header/footer stay put. */
+.panel--phase {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.panel--phase .chat {
+  flex: 1;
+  min-height: 0;
 }
 .main__empty {
   color: var(--muted);
@@ -355,8 +389,8 @@ body {
   display: flex;
   gap: 16px;
   align-items: stretch;
-  height: calc(100vh - 340px);
-  min-height: 420px;
+  flex: 1;
+  min-height: 320px;
 }
 .clarify__main {
   flex: 1;

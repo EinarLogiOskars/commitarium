@@ -76,7 +76,7 @@ export function ReviewView({
   const shown = scopeToPhase(entries, intervals, scoped);
 
   return (
-    <section className="panel">
+    <section className="panel panel--phase">
       <div className="panel__head">
         <h2>Review</h2>
         {pr && (

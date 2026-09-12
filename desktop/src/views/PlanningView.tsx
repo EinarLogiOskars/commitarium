@@ -129,7 +129,7 @@ export function PlanningView({
   const shown = scopeToPhase(entries, intervals, scoped);
 
   return (
-    <section className="panel">
+    <section className="panel panel--phase">
       <h2>Planning{revised ? ` · revised v${planVersion}` : ""}</h2>
       <p className="muted">
         The lead proposes a plan and the reviewer critiques it; they iterate until they
