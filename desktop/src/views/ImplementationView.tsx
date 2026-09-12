@@ -17,10 +17,12 @@ export function ImplementationView({
   runId,
   live = true,
   intervals = [],
+  scoped = false,
 }: {
   runId: string;
   live?: boolean;
   intervals?: Interval[];
+  scoped?: boolean;
 }) {
   const [entries, setEntries] = useState<TranscriptEntry[]>([]);
   const [status, setStatus] = useState<string | null>(null);
@@ -56,7 +58,7 @@ export function ImplementationView({
     if (el && pinned.current) el.scrollTop = el.scrollHeight;
   }, [entries]);
 
-  const scoped = scopeToPhase(entries, intervals);
+  const shown = scopeToPhase(entries, intervals, scoped);
 
   return (
     <section className="panel">
@@ -75,7 +77,7 @@ export function ImplementationView({
           pinned.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
         }}
       >
-        <Transcript entries={scoped} empty="Waiting for the lead to start…" />
+        <Transcript entries={shown} empty="Waiting for the lead to start…" />
       </div>
 
       {live && (

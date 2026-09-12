@@ -32,6 +32,7 @@ export function PlanningView({
   live = true,
   planVersion = 1,
   intervals = [],
+  scoped = false,
   onAdvanced,
 }: {
   runId: string;
@@ -44,6 +45,8 @@ export function PlanningView({
   planVersion?: number;
   // The planning phase's time window(s); events outside are shown by other phases.
   intervals?: Interval[];
+  // Whether workflow history is available to scope by (false ⇒ show all).
+  scoped?: boolean;
   onAdvanced: () => void;
 }) {
   const [entries, setEntries] = useState<TranscriptEntry[]>([]);
@@ -123,7 +126,7 @@ export function PlanningView({
   }
 
   const revised = planVersion > 1;
-  const scoped = scopeToPhase(entries, intervals);
+  const shown = scopeToPhase(entries, intervals, scoped);
 
   return (
     <section className="panel">
@@ -143,7 +146,7 @@ export function PlanningView({
           pinned.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
         }}
       >
-        <Transcript entries={scoped} empty="No planning discussion yet." />
+        <Transcript entries={shown} empty="No planning discussion yet." />
       </div>
 
       {live && (

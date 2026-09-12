@@ -65,11 +65,19 @@ export function inAnyInterval(at: string, intervals: Interval[]): boolean {
 }
 
 /**
- * Filter timestamped items to a phase's window. When there are no intervals yet
- * (e.g. a coordinator that predates the events endpoint), pass everything
- * through rather than hiding all activity.
+ * Filter timestamped items to a phase's window.
+ *
+ * `scoped` is true once we have workflow history to slice by. Then an empty
+ * interval set means the phase simply has not been entered yet, so nothing
+ * shows — a phase's transcript never borrows another phase's events. When
+ * `scoped` is false (a coordinator that predates the events endpoint, or history
+ * not loaded yet) we can't scope, so everything passes through.
  */
-export function scopeToPhase<T extends { at: string }>(items: T[], intervals: Interval[]): T[] {
-  if (intervals.length === 0) return items;
+export function scopeToPhase<T extends { at: string }>(
+  items: T[],
+  intervals: Interval[],
+  scoped: boolean,
+): T[] {
+  if (!scoped) return items;
   return items.filter((i) => inAnyInterval(i.at, intervals));
 }
