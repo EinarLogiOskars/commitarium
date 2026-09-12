@@ -102,6 +102,7 @@ const (
 	OutputContractImplementationLead      OutputContract = "implementation_lead"
 	OutputContractImplementationReview    OutputContract = "implementation_reviewer"
 	OutputContractImplementationReadiness OutputContract = "implementation_lead_readiness"
+	OutputContractIntervention            OutputContract = "intervention"
 )
 
 type AttemptState string
@@ -126,19 +127,28 @@ const (
 
 type Disposition string
 
+type InterventionEffect string
+
 const (
 	DispositionSucceeded        Disposition = "succeeded"
 	DispositionChangesRequested Disposition = "changes_requested"
 	DispositionInputRequired    Disposition = "input_required"
 )
 
+const (
+	InterventionEffectGuidanceApplied       InterventionEffect = "guidance_applied"
+	InterventionEffectClarificationRequired InterventionEffect = "clarification_required"
+	InterventionEffectReplanningRequired    InterventionEffect = "replanning_required"
+)
+
 type TerminalResult struct {
-	Outcome     Outcome                    `json:"outcome"`
-	Disposition Disposition                `json:"disposition,omitempty"`
-	Summary     string                     `json:"summary"`
-	Publication *ImplementationPublication `json:"publication,omitempty"`
-	Review      *ReviewPublication         `json:"review,omitempty"`
-	Error       *ProtocolError             `json:"error,omitempty"`
+	Outcome            Outcome                    `json:"outcome"`
+	Disposition        Disposition                `json:"disposition,omitempty"`
+	Summary            string                     `json:"summary"`
+	Publication        *ImplementationPublication `json:"publication,omitempty"`
+	Review             *ReviewPublication         `json:"review,omitempty"`
+	InterventionEffect InterventionEffect         `json:"intervention_effect,omitempty"`
+	Error              *ProtocolError             `json:"error,omitempty"`
 }
 
 type ImplementationPublication struct {

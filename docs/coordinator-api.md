@@ -603,16 +603,44 @@ fields have this shape:
 `intervention_targets` is always an array and contains only non-terminal lead
 or reviewer sessions. It is empty for a terminal run. `intervention` is omitted
 until the first request and then identifies the latest request, including after
-it is answered.
+it is answered. An answered intervention also contains `effect`, for example:
+
+```json
+{
+  "status": "answered",
+  "effect": "replanning_required",
+  "answered_at": "2026-09-12T12:31:00Z"
+}
+```
 
 The intervention statuses are:
 
 - `waiting_for_boundary`: the current bounded agent turn is still finishing;
-- `queued`: the run is both paused and waiting, so delivery may safely begin;
-- `being_answered`: reserved for the delivery slice while the selected agent is
-  answering;
-- `answered`: reserved for the delivery slice after its answer and structured
-  effect are durable.
+- `queued`: the run is both paused and waiting, and the coordinator has not yet
+  admitted the delivery attempt;
+- `being_answered`: the coordinator resumed the exact selected provider
+  conversation and the agent is answering;
+- `answered`: the visible answer and its structured effect are durable.
+
+At a safe boundary the coordinator resumes the target's existing provider
+session in the same managed workspace. It never injects the text into an
+already-running provider turn. Factual activity and the final answer use the
+ordinary target-session event history and SSE stream. The intervention-only
+turn is instructed not to edit files, commit, push, modify a pull request,
+submit a formal review, or continue the saved workflow.
+
+The agent returns one explicit effect rather than requiring the coordinator or
+frontend to infer intent from prose:
+
+- `guidance_applied`: later work can honor the message without changing the
+  accepted goal or agreed plan;
+- `clarification_required`: the agent needs another user exchange;
+- `replanning_required`: following the message changes the accepted goal,
+  scope, or agreed plan.
+
+Completion returns the target session to `waiting_for_user`, but leaves the run
+`paused` and `waiting_for_user`. Talking to an agent and continuing the workflow
+are deliberately separate actions.
 
 Only one unfinished intervention may exist for a run. An exact retry with the
 same key and body returns the same request without another event. Reusing the
@@ -622,12 +650,10 @@ key with a different run, target, or message returns
 or cannot be resumed returns `409 intervention_target_unavailable`, and a
 terminal run returns `409 intervention_not_allowed`.
 
-This first queueing slice deliberately does not contact a worker. Delivery at
-the safe boundary, the agent's normal streamed response events, and the final
-structured effect (`guidance_applied`, `clarification_required`, or
-`replanning_required`) are the immediately following backend slice. Until that
-lands, clients may display the queue state but should keep the Send action
-disabled in user-facing builds.
+Admission and completion are transactional and use a deterministic worker
+attempt identity. If the coordinator restarts while the answer is running, it
+reattaches to that exact attempt and consumes its durable/live events without
+sending the intervention a second time.
 
 ## Pausing and resuming a run
 
@@ -665,10 +691,11 @@ action for that phase. Resuming before an already-running provider turn ends
 simply cancels the armed gate.
 
 Resume returns `409 intervention_pending` while the latest intervention is not
-`answered`. This prevents “Continue workflow” from silently discarding or
-bypassing a queued user message. Answering the agent and continuing the workflow
-remain separate actions: future intervention delivery keeps the run paused,
-and only an explicit resume continues normal orchestration.
+`answered`. It currently returns `409 intervention_resolution_pending` after
+the answer is durable, until the following backend slice applies the structured
+effect to the saved checkpoint. This prevents “Continue workflow” from silently
+discarding, bypassing, or misapplying user guidance. The run stays paused in
+both cases.
 
 Both endpoints require an empty body and reject terminal runs. Reusing one
 `Idempotency-Key` for the opposite action returns `409 idempotency_conflict`.

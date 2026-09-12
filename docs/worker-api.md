@@ -64,7 +64,7 @@ The stream route is available only when the worker advertises the
 route is not needed by the current protocol because reconnecting to the stream
 performs the durable replay before following live activity.
 
-An attempt request may select one of four provider-neutral structured-output
+An attempt request may select one of five provider-neutral structured-output
 contracts:
 
 - `planning_lead` makes the lead return either a normal planning message or the
@@ -76,6 +76,9 @@ contracts:
   decision it published.
 - `implementation_lead_readiness` makes the lead explicitly return a merge
   green light, an unresolved concern, or a blocker after an approved review.
+- `intervention` lets either the lead or reviewer answer a user at a safe
+  paused boundary and explicitly classify the message as `guidance_applied`,
+  `clarification_required`, or `replanning_required`.
 
 The provider adapter enforces these shapes using the provider's structured
 output mechanism; the coordinator does not infer actions by matching words in

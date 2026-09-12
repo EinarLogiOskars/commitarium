@@ -263,9 +263,10 @@ func (service *Service) finishAttempt(
 		return
 	}
 	terminalResult := workerhttp.TerminalResult{
-		Outcome:     workerhttp.Outcome(result.Outcome),
-		Disposition: workerhttp.Disposition(result.Disposition),
-		Summary:     result.Summary,
+		Outcome:            workerhttp.Outcome(result.Outcome),
+		Disposition:        workerhttp.Disposition(result.Disposition),
+		Summary:            result.Summary,
+		InterventionEffect: workerhttp.InterventionEffect(result.InterventionEffect),
 	}
 	if result.Publication != nil {
 		terminalResult.Publication = &workerhttp.ImplementationPublication{

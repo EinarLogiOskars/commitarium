@@ -15,10 +15,11 @@ var ErrInvalidStructuredOutput = errors.New("invalid structured worker output")
 // response. Provider adapters supply JSON; this package owns what that JSON
 // means to Commitarium's workflow.
 type StructuredOutput struct {
-	Event       Event
-	Disposition Disposition
-	Publication *ImplementationPublication
-	Review      *ReviewPublication
+	Event              Event
+	Disposition        Disposition
+	Publication        *ImplementationPublication
+	Review             *ReviewPublication
+	InterventionEffect InterventionEffect
 }
 
 func OutputJSONSchema(contract OutputContract) any {
@@ -59,6 +60,18 @@ func OutputJSONSchema(contract OutputContract) any {
 				"summary": map[string]any{"type": "string"},
 			},
 			[]string{"action", "summary"},
+		)
+	case OutputContractIntervention:
+		return objectSchema(
+			map[string]any{
+				"effect": map[string]any{"type": "string", "enum": []string{
+					string(InterventionEffectGuidanceApplied),
+					string(InterventionEffectClarificationRequired),
+					string(InterventionEffectReplanningRequired),
+				}},
+				"response": map[string]any{"type": "string"},
+			},
+			[]string{"effect", "response"},
 		)
 	default:
 		return nil
@@ -202,6 +215,24 @@ func ResolveStructuredOutput(
 			return StructuredOutput{}, invalidStructuredOutput("implementation readiness response has an unknown action")
 		}
 		return resolved, nil
+
+	case OutputContractIntervention:
+		var response struct {
+			Effect   InterventionEffect `json:"effect"`
+			Response string             `json:"response"`
+		}
+		if err := decodeStructuredOutput(raw, &response); err != nil {
+			return StructuredOutput{}, err
+		}
+		response.Response = strings.TrimSpace(response.Response)
+		if response.Response == "" || !response.Effect.IsValid() {
+			return StructuredOutput{}, invalidStructuredOutput("intervention response is incomplete")
+		}
+		return StructuredOutput{
+			Event:              Event{Type: EventMessage, Text: response.Response},
+			Disposition:        DispositionSucceeded,
+			InterventionEffect: response.Effect,
+		}, nil
 	default:
 		return StructuredOutput{}, invalidStructuredOutput("output contract %q is unsupported", contract)
 	}

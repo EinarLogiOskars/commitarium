@@ -147,3 +147,18 @@ func TestResumeRunHandlerReportsPendingIntervention(t *testing.T) {
 		t.Fatalf("unexpected pending-intervention response %d: %s", response.Code, response.Body.String())
 	}
 }
+
+func TestResumeRunHandlerReportsUnresolvedInterventionEffect(t *testing.T) {
+	workflow := &planningStarterStub{err: orchestration.ErrInterventionResolutionPending}
+	handler := NewWithWorkspaceAndRealWorkflowService(
+		nil, nil, nil, &recordingExecutionService{}, nil, nil, nil, workflow,
+	)
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/runs/run_test/resume", nil)
+	request.Header.Set("Idempotency-Key", "resume-with-unresolved-intervention")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusConflict ||
+		!strings.Contains(response.Body.String(), `"code":"intervention_resolution_pending"`) {
+		t.Fatalf("unexpected unresolved-intervention response %d: %s", response.Code, response.Body.String())
+	}
+}

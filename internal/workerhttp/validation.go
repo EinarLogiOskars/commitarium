@@ -138,7 +138,8 @@ func (request PutAttemptRequest) Validate(identity MutationIdentity) error {
 		request.OutputContract != OutputContractPlanningLead &&
 		request.OutputContract != OutputContractImplementationLead &&
 		request.OutputContract != OutputContractImplementationReview &&
-		request.OutputContract != OutputContractImplementationReadiness {
+		request.OutputContract != OutputContractImplementationReadiness &&
+		request.OutputContract != OutputContractIntervention {
 		return invalid("output contract %q is not recognized", request.OutputContract)
 	}
 	if (request.OutputContract == OutputContractPlanningLead ||
@@ -319,6 +320,12 @@ func (result TerminalResult) Validate() error {
 		if result.Publication != nil && result.Review != nil {
 			return invalid("terminal result cannot contain implementation and review publications")
 		}
+		if result.InterventionEffect != "" && !result.InterventionEffect.IsValid() {
+			return invalid("intervention effect %q is not recognized", result.InterventionEffect)
+		}
+		if result.InterventionEffect != "" && (result.Publication != nil || result.Review != nil) {
+			return invalid("intervention result cannot contain a publication")
+		}
 	case OutcomeStopped:
 		if result.Disposition != "" {
 			return invalid("stopped outcome cannot include a disposition")
@@ -331,6 +338,9 @@ func (result TerminalResult) Validate() error {
 		}
 		if result.Review != nil {
 			return invalid("stopped outcome cannot include a review publication")
+		}
+		if result.InterventionEffect != "" {
+			return invalid("stopped outcome cannot include an intervention effect")
 		}
 	case OutcomeFailed:
 		if result.Disposition != "" {
@@ -348,6 +358,9 @@ func (result TerminalResult) Validate() error {
 		if result.Review != nil {
 			return invalid("failed outcome cannot include a review publication")
 		}
+		if result.InterventionEffect != "" {
+			return invalid("failed outcome cannot include an intervention effect")
+		}
 	}
 	if result.Publication != nil {
 		if err := result.Publication.Validate(); err != nil {
@@ -360,6 +373,17 @@ func (result TerminalResult) Validate() error {
 		}
 	}
 	return nil
+}
+
+func (effect InterventionEffect) IsValid() bool {
+	switch effect {
+	case InterventionEffectGuidanceApplied,
+		InterventionEffectClarificationRequired,
+		InterventionEffectReplanningRequired:
+		return true
+	default:
+		return false
+	}
 }
 
 func (publication ImplementationPublication) Validate() error {

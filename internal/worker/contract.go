@@ -39,6 +39,7 @@ const (
 	OutputContractImplementationLead      OutputContract = "implementation_lead"
 	OutputContractImplementationReview    OutputContract = "implementation_reviewer"
 	OutputContractImplementationReadiness OutputContract = "implementation_lead_readiness"
+	OutputContractIntervention            OutputContract = "intervention"
 )
 
 // LaunchEnvironment is the worker-resolved view of the profile and workspace
@@ -129,19 +130,31 @@ const (
 
 type Disposition string
 
+// InterventionEffect is the provider's explicit assessment of how a user's
+// intervention relates to the saved workflow checkpoint. The coordinator
+// records this value without interpreting the agent's prose.
+type InterventionEffect string
+
 const (
 	DispositionSucceeded        Disposition = "succeeded"
 	DispositionChangesRequested Disposition = "changes_requested"
 	DispositionInputRequired    Disposition = "input_required"
 )
 
+const (
+	InterventionEffectGuidanceApplied       InterventionEffect = "guidance_applied"
+	InterventionEffectClarificationRequired InterventionEffect = "clarification_required"
+	InterventionEffectReplanningRequired    InterventionEffect = "replanning_required"
+)
+
 type Result struct {
-	Outcome           Outcome
-	Disposition       Disposition
-	ProviderSessionID string
-	Summary           string
-	Publication       *ImplementationPublication
-	Review            *ReviewPublication
+	Outcome            Outcome
+	Disposition        Disposition
+	ProviderSessionID  string
+	Summary            string
+	Publication        *ImplementationPublication
+	Review             *ReviewPublication
+	InterventionEffect InterventionEffect
 }
 
 // ImplementationPublication contains only the external identities that the
@@ -222,7 +235,8 @@ func (request SessionRequest) Validate() error {
 		request.OutputContract != OutputContractPlanningLead &&
 		request.OutputContract != OutputContractImplementationLead &&
 		request.OutputContract != OutputContractImplementationReview &&
-		request.OutputContract != OutputContractImplementationReadiness:
+		request.OutputContract != OutputContractImplementationReadiness &&
+		request.OutputContract != OutputContractIntervention:
 		return fmt.Errorf("%w: output contract %q is not recognized", ErrInvalidSessionRequest, request.OutputContract)
 	case (request.OutputContract == OutputContractPlanningLead ||
 		request.OutputContract == OutputContractImplementationLead ||
@@ -373,6 +387,17 @@ func (disposition Disposition) IsValid() bool {
 	}
 }
 
+func (effect InterventionEffect) IsValid() bool {
+	switch effect {
+	case InterventionEffectGuidanceApplied,
+		InterventionEffectClarificationRequired,
+		InterventionEffectReplanningRequired:
+		return true
+	default:
+		return false
+	}
+}
+
 func (result Result) Validate() error {
 	switch {
 	case !result.Outcome.IsValid():
@@ -395,6 +420,12 @@ func (result Result) Validate() error {
 	case result.Review != nil && result.Disposition != DispositionSucceeded &&
 		result.Disposition != DispositionChangesRequested:
 		return fmt.Errorf("%w: review publication requires approval or requested changes", ErrInvalidResult)
+	case result.InterventionEffect != "" && result.Outcome != OutcomeCompleted:
+		return fmt.Errorf("%w: intervention effect requires a completed session", ErrInvalidResult)
+	case result.InterventionEffect != "" && !result.InterventionEffect.IsValid():
+		return fmt.Errorf("%w: intervention effect %q is not recognized", ErrInvalidResult, result.InterventionEffect)
+	case result.InterventionEffect != "" && (result.Publication != nil || result.Review != nil):
+		return fmt.Errorf("%w: intervention result cannot contain a publication", ErrInvalidResult)
 	case result.Publication != nil:
 		if err := result.Publication.Validate(); err != nil {
 			return fmt.Errorf("%w: %v", ErrInvalidResult, err)

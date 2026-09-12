@@ -69,6 +69,27 @@ type InterventionRequestResult struct {
 	UserEvent    Event
 }
 
+// InterventionTurnAdmission binds one queued message to one deterministic
+// resume attempt. Unlike an autonomous workflow turn, the run deliberately
+// remains paused and waiting while the selected conversation answers.
+type InterventionTurnAdmission struct {
+	InterventionID            string
+	PreviousAttemptID         string
+	PreviousLastEventSequence int64
+	NextAttempt               WorkerAttemptCheckpoint
+	RunReason                 string
+	OccurredAt                time.Time
+}
+
+type InterventionCompletion struct {
+	InterventionID    string
+	AttemptID         string
+	ProviderSessionID string
+	Effect            worker.InterventionEffect
+	RunReason         string
+	OccurredAt        time.Time
+}
+
 type SessionTransition struct {
 	SessionID         string
 	Expected          SessionStatus
@@ -169,6 +190,8 @@ type Store interface {
 	ResolveCommand(ctx context.Context, resolution CommandResolution) (Command, error)
 	BeginWorkerTurn(ctx context.Context, admission WorkerTurnAdmission) (WorkerTurnAdmissionResult, bool, error)
 	BeginAutonomousTurn(ctx context.Context, admission AutonomousTurnAdmission) (bool, error)
+	BeginInterventionTurn(ctx context.Context, admission InterventionTurnAdmission) (bool, error)
+	CompleteIntervention(ctx context.Context, completion InterventionCompletion) (Intervention, bool, error)
 	BeginNewSessionTurn(ctx context.Context, admission NewSessionTurnAdmission) (bool, error)
 	LinkPlanningMessage(ctx context.Context, message PendingPlanningMessage) (PlanningMessage, bool, error)
 	ListPlanningMessages(ctx context.Context, runID string) ([]PlanningMessage, error)
@@ -290,6 +313,43 @@ func (request InterventionRequest) Validate() error {
 		return fmt.Errorf("%w: message is required", ErrInvalidIntervention)
 	case request.OccurredAt.IsZero():
 		return fmt.Errorf("%w: occurrence time is required", ErrInvalidIntervention)
+	default:
+		return nil
+	}
+}
+
+func (admission InterventionTurnAdmission) Validate() error {
+	switch {
+	case strings.TrimSpace(admission.InterventionID) == "":
+		return fmt.Errorf("%w: intervention ID is required", ErrInvalidIntervention)
+	case strings.TrimSpace(admission.PreviousAttemptID) == "":
+		return fmt.Errorf("%w: previous attempt ID is required", ErrInvalidWorkerAttempt)
+	case admission.PreviousLastEventSequence < 0:
+		return fmt.Errorf("%w: previous event sequence cannot be negative", ErrInvalidWorkerAttempt)
+	case admission.NextAttempt.AttemptID == admission.PreviousAttemptID:
+		return fmt.Errorf("%w: replacement attempt must be new", ErrInvalidWorkerAttempt)
+	case strings.TrimSpace(admission.RunReason) == "":
+		return fmt.Errorf("%w: run reason is required", ErrInvalidRun)
+	case admission.OccurredAt.IsZero():
+		return fmt.Errorf("%w: occurrence time is required", ErrInvalidStatusTransition)
+	}
+	return admission.NextAttempt.Validate()
+}
+
+func (completion InterventionCompletion) Validate() error {
+	switch {
+	case strings.TrimSpace(completion.InterventionID) == "":
+		return fmt.Errorf("%w: intervention ID is required", ErrInvalidIntervention)
+	case strings.TrimSpace(completion.AttemptID) == "":
+		return fmt.Errorf("%w: attempt ID is required", ErrInvalidWorkerAttempt)
+	case strings.TrimSpace(completion.ProviderSessionID) == "":
+		return fmt.Errorf("%w: provider session ID is required", ErrInvalidSession)
+	case !completion.Effect.IsValid():
+		return fmt.Errorf("%w: intervention effect is invalid", ErrInvalidIntervention)
+	case strings.TrimSpace(completion.RunReason) == "":
+		return fmt.Errorf("%w: run reason is required", ErrInvalidRun)
+	case completion.OccurredAt.IsZero():
+		return fmt.Errorf("%w: occurrence time is required", ErrInvalidStatusTransition)
 	default:
 		return nil
 	}

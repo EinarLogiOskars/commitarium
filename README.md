@@ -80,6 +80,16 @@ agent turn or automatic merge starts until resume. Runs expose a structured wait
 kind so clients never need to interpret human prose to decide what control to
 show.
 
+While a run is paused, the user can address its existing lead or reviewer
+conversation. A message submitted during active work waits for the next safe
+boundary; the coordinator then resumes exactly that provider session, streams
+the answer through the ordinary session activity feed, and leaves the workflow
+paused. The agent explicitly classifies whether the message is guidance, needs
+clarification, or changes the accepted scope, so the coordinator never guesses
+from conversational wording. Restart recovery reconnects to the same durable
+delivery attempt instead of sending the message twice. Applying that
+classification when the user continues is the next backend slice.
+
 Projects now also choose Codex
 or Claude independently for the lead and reviewer. Each run snapshots those
 choices and uses them for routing and restart recovery, so later project edits
