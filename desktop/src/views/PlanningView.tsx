@@ -9,7 +9,7 @@ import {
 } from "../api/runs";
 import { getSessionEvents } from "../api/sessions";
 import { ApiError } from "../api/client";
-import type { Session, SessionEvent } from "../api/types";
+import type { PlanningMessage, SessionEvent } from "../api/types";
 
 const POLL_MS = 2000;
 
@@ -24,8 +24,10 @@ interface Entry {
 // The lead ↔ reviewer planning discussion. The transcript is built from the
 // sessions' activity (the lead's first proposal lives there before it reaches
 // the curated planning-messages feed). The single advance action is derived
-// from real state — feature phase + which sessions exist + whether a plan was
-// submitted — not from message counts.
+// from real state — feature phase + whether the reviewer has responded to the
+// CURRENT plan version + whether the current version's plan was submitted — not
+// from message counts. Scoping to plan_version matters for revised plans (>1):
+// a v1 plan_submitted must not make a fresh v2 proposal skip its reviewer loop.
 export function PlanningView({
   runId,
   featureState,
@@ -38,15 +40,14 @@ export function PlanningView({
   // When false, the phase is being viewed as history — transcript only, no
   // advance action (the run has moved past planning, or is auto-driven).
   live?: boolean;
-  // The agreement cycle. On a revised plan (>1) the reviewer-continuation path
-  // is not built yet, so no advance action is offered.
+  // The agreement cycle. Revised plans (>1) use the same reviewer/round/
+  // implementation controls; it only labels the phase and scopes plan state.
   planVersion?: number;
   onAdvanced: () => void;
 }) {
   const [entries, setEntries] = useState<Entry[]>([]);
-  const [sessions, setSessions] = useState<Session[]>([]);
+  const [planMsgs, setPlanMsgs] = useState<PlanningMessage[]>([]);
   const [status, setStatus] = useState<string | null>(null);
-  const [submitted, setSubmitted] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const chatRef = useRef<HTMLDivElement | null>(null);
@@ -55,7 +56,6 @@ export function PlanningView({
   const poll = useCallback(async () => {
     try {
       const run = await getRun(runId);
-      setSessions(run.sessions);
       setStatus(run.status);
       const perSession = await Promise.all(
         run.sessions.map(async (s) => ({
@@ -72,8 +72,7 @@ export function PlanningView({
       }
       merged.sort((a, b) => a.at.localeCompare(b.at));
       setEntries(merged);
-      const msgs = await getPlanningMessages(runId);
-      setSubmitted(msgs.some((m) => m.type === "plan_submitted"));
+      setPlanMsgs(await getPlanningMessages(runId));
     } catch (e) {
       setError(e instanceof ApiError ? `${e.message} (${e.code})` : String(e));
     }
@@ -91,7 +90,11 @@ export function PlanningView({
   }, [entries]);
 
   const idle = status === "waiting_for_user";
-  const hasReviewer = sessions.some((s) => s.role === "reviewer");
+  // Scope plan state to the current version so a prior version's plan_submitted
+  // or reviewer replies don't drive the revised discussion.
+  const currentMsgs = planMsgs.filter((m) => (m.plan_version ?? 1) === planVersion);
+  const submittedCurrent = currentMsgs.some((m) => m.type === "plan_submitted");
+  const reviewerRespondedCurrent = currentMsgs.some((m) => m.role === "reviewer");
 
   const act = async (fn: (runId: string, key: string) => Promise<unknown>, advance = false) => {
     setBusy(true);
@@ -110,9 +113,9 @@ export function PlanningView({
   let action: { label: string; run: () => void };
   if (featureState === "draft") {
     action = { label: "Start planning", run: () => void act(startPlanning, true) };
-  } else if (submitted) {
+  } else if (submittedCurrent) {
     action = { label: "Start implementation", run: () => void act(startImplementation, true) };
-  } else if (hasReviewer) {
+  } else if (reviewerRespondedCurrent) {
     action = { label: "Continue planning", run: () => void act(startPlanningRound) };
   } else {
     action = { label: "Send plan to reviewer", run: () => void act(startPlanningReviewer) };
@@ -145,19 +148,20 @@ export function PlanningView({
         )}
       </div>
 
-      {live && revised ? (
-        <p className="muted status-line note">
-          Revised proposal (v{planVersion}) from your scope change. The reviewer
-          continuation for revised plans lands in a later backend slice — no action yet.
-        </p>
-      ) : live ? (
+      {live && (
         <>
+          {revised && (
+            <p className="muted note">
+              Revised plan (v{planVersion}) from your scope change — the lead and reviewer
+              agree on the revision, then it's appended to the same PR.
+            </p>
+          )}
           <p className="muted status-line">{idle ? "Waiting for you." : "Agents working…"}</p>
           <button className="primary" onClick={action.run} disabled={busy || !idle}>
             {busy ? "Working…" : action.label}
           </button>
         </>
-      ) : null}
+      )}
     </section>
   );
 }
