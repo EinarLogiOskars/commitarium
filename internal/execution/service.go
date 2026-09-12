@@ -71,6 +71,7 @@ func (s *Service) CreateRun(
 		AgentProviders:                 agentProviders,
 		MergePolicy:                    mergePolicy,
 		AutonomyPolicy:                 autonomyPolicy,
+		PlanVersion:                    1,
 		StartedAt:                      now, UpdatedAt: now,
 	}
 	if err := s.store.CreateRun(ctx, run); err != nil {
@@ -274,6 +275,48 @@ func (s *Service) ResolveInterventionGuidance(
 		)
 	}
 	return run, resolved, nil
+}
+
+func (s *Service) BeginReplanningTurn(
+	ctx context.Context,
+	id string,
+	runID string,
+	interventionID string,
+	planVersion int,
+	previousPlanEventID string,
+	effectiveGoal string,
+	baselineCommitID string,
+	previous WorkerAttemptCheckpoint,
+	nextAttemptID string,
+	runReason string,
+) (Run, PlanRevision, bool, error) {
+	now := s.now().UTC()
+	run, revision, admitted, err := s.store.BeginReplanningTurn(ctx, ReplanningTurnAdmission{
+		ID: id, RunID: runID, InterventionID: interventionID,
+		PlanVersion: planVersion, PreviousPlanEventID: previousPlanEventID,
+		EffectiveGoal: effectiveGoal, BaselineCommitID: baselineCommitID,
+		PreviousAttemptID:         previous.AttemptID,
+		PreviousLastEventSequence: previous.LastEventSequence,
+		NextAttempt: WorkerAttemptCheckpoint{
+			SessionID: previous.SessionID, AttemptID: nextAttemptID,
+			CreatedAt: now, UpdatedAt: now,
+		},
+		RunReason: runReason, OccurredAt: now,
+	})
+	if err != nil {
+		return Run{}, PlanRevision{}, false, fmt.Errorf(
+			"begin plan version %d for run %q: %w", planVersion, runID, err,
+		)
+	}
+	return run, revision, admitted, nil
+}
+
+func (s *Service) GetPlanRevision(
+	ctx context.Context,
+	runID string,
+	version int,
+) (PlanRevision, error) {
+	return s.store.GetPlanRevision(ctx, runID, version)
 }
 
 func (s *Service) TransitionSession(

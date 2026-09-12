@@ -139,6 +139,9 @@ type remoteLeadWorkspaceStub struct {
 	continuationVerifyCalls int
 	publicationVerifyCalls  int
 	responseVerifyCalls     int
+	replanningCalls         int
+	replanningEventID       string
+	replanningPlan          string
 	reviewVerifyCalls       int
 	readinessVerifyCalls    int
 	mergeReadyCalls         int
@@ -153,6 +156,19 @@ type remoteLeadWorkspaceStub struct {
 	responseVerifyErr       error
 	reviewVerifyErr         error
 	readinessVerifyErr      error
+}
+
+func (stub *remoteLeadWorkspaceStub) PrepareReplanningBaseline(
+	_ context.Context,
+	_ string,
+	_ string,
+	eventID string,
+	plan string,
+) (workspace.Workspace, string, error) {
+	stub.replanningCalls++
+	stub.replanningEventID = eventID
+	stub.replanningPlan = plan
+	return stub.prepared, stub.prepared.BaseCommitID, nil
 }
 
 func (stub *remoteLeadWorkspaceStub) RecordMergeReady(

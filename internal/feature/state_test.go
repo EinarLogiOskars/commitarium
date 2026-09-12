@@ -58,6 +58,11 @@ func TestValidateTransitionAllowsWorkflowEdges(t *testing.T) {
 			next:    StateReviewing,
 		},
 		{
+			name:    "replan after merge readiness",
+			current: StateReadyToMerge,
+			next:    StatePlanning,
+		},
+		{
 			name:    "confirm Forgejo merge",
 			current: StateReadyToMerge,
 			next:    StateCompleted,

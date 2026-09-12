@@ -379,6 +379,7 @@ func createExecutionRecords(
 		AgentProviders: project.DefaultAgentProviders(),
 		MergePolicy:    project.DefaultMergePolicy(),
 		AutonomyPolicy: project.DefaultAutonomyPolicy(),
+		PlanVersion:    1,
 		StartedAt:      now, UpdatedAt: now,
 	}
 	if err := store.CreateRun(t.Context(), run); err != nil {

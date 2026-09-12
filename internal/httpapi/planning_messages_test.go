@@ -43,7 +43,8 @@ func TestPlanningMessagesExposeOneOrderedCrossSessionFeed(t *testing.T) {
 	}
 	if len(response) != 3 || response[0].Role != worker.RoleLead ||
 		response[1].Role != worker.RoleReviewer || response[1].Sequence != 2 ||
-		response[2].Type != worker.EventPlanSubmitted || response[2].Text != "Final agreed plan" {
+		response[2].Type != worker.EventPlanSubmitted || response[2].Text != "Final agreed plan" ||
+		response[2].PlanVersion != 1 {
 		t.Fatalf("unexpected planning response %+v", response)
 	}
 }
@@ -79,7 +80,7 @@ func planningMessage(
 	occurredAt time.Time,
 ) execution.PlanningMessage {
 	return execution.PlanningMessage{
-		RunID: runID, Sequence: sequence, AgentID: agentID, Role: role,
+		RunID: runID, PlanVersion: 1, Sequence: sequence, AgentID: agentID, Role: role,
 		Event: execution.Event{
 			ID: eventID, SessionID: sessionID, Sequence: 1,
 			Type: worker.EventMessage, Text: text, OccurredAt: occurredAt,

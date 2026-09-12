@@ -964,6 +964,57 @@ func TestServiceVerifiesImplementationContinuationWithoutRequiringCleanCheckout(
 	}
 }
 
+func TestServicePreparesReplanningFromCurrentFeatureBranchWithoutChangingIt(t *testing.T) {
+	now := time.Date(2026, time.September, 12, 15, 30, 0, 0, time.UTC)
+	stored := readyTestWorkspace(now)
+	pullRequestReadyAt := now.Add(3 * time.Minute)
+	stored.PullRequestNumber = 8
+	stored.PullRequestURL = "http://localhost:3001/owner/repository/pulls/8"
+	stored.PullRequestRecordedAt = &pullRequestReadyAt
+	stored.ApprovedCommitID = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	stored.MergeReadyAt = &pullRequestReadyAt
+	stored.UpdatedAt = pullRequestReadyAt
+	currentCommit := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	branches := &recordingBranches{base: Branch{Name: stored.Branch, CommitID: currentCommit}}
+	checkout := &recordingCheckout{}
+	pullRequests := &recordingPullRequests{planResult: PullRequest{
+		Number: 8, URL: stored.PullRequestURL, Title: "WIP: Test feature",
+		Body: "published plan", State: "open", Draft: true,
+		BaseBranch: stored.BaseBranch, HeadBranch: stored.Branch,
+		HeadCommitID: currentCommit, CreatedAt: pullRequestReadyAt,
+	}}
+	accepted := acceptedTestFeature(now)
+	accepted.State = feature.StateReadyToMerge
+	service := NewServiceWithPreparation(
+		&memoryStore{stored: stored}, fixedFeatureFinder{stored: accepted},
+		fixedProjectFinder{stored: project.Project{
+			ID: "prj_test", ForgejoRepository: testRepository(now),
+		}}, branches, checkout, pullRequests,
+	)
+
+	got, baseline, err := service.PrepareReplanningBaseline(
+		t.Context(), "prj_test", "fea_test", "sev_plan_v1", "Original plan",
+	)
+	if err != nil || got != stored || baseline != currentCommit {
+		t.Fatalf("prepare replanning: workspace=%+v baseline=%q err=%v", got, baseline, err)
+	}
+	if branches.getCalls != 1 || branches.ensureCalls != 0 || len(checkout.specs) != 1 ||
+		len(pullRequests.verifiedPlanSpecs) != 1 || len(pullRequests.planSpecs) != 0 {
+		t.Fatalf("replanning changed external state: branches=%+v checkout=%+v verify=%+v publish=%+v", branches, checkout.specs, pullRequests.verifiedPlanSpecs, pullRequests.planSpecs)
+	}
+	checkoutSpec := checkout.specs[0]
+	if checkoutSpec.Branch != stored.Branch || checkoutSpec.ExpectedHeadCommitID != currentCommit ||
+		!checkoutSpec.AlreadyReady || checkoutSpec.RequireClean || checkoutSpec.RequireCleanBaseline {
+		t.Fatalf("replanning did not preserve the current checkout: %+v", checkoutSpec)
+	}
+	planSpec := pullRequests.verifiedPlanSpecs[0]
+	if planSpec.Number != stored.PullRequestNumber || planSpec.Plan != "Original plan" ||
+		planSpec.HeadCommitID != currentCommit ||
+		!strings.HasPrefix(planSpec.PublicationMarker, "<!-- commitarium-plan: ") {
+		t.Fatalf("unexpected previous-plan verification %+v", planSpec)
+	}
+}
+
 func TestServiceVerifiesAgentImplementationPublicationWithoutWriting(t *testing.T) {
 	now := time.Date(2026, time.September, 10, 4, 0, 0, 0, time.UTC)
 	stored := readyTestWorkspace(now)

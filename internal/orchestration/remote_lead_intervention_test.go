@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -262,6 +263,242 @@ func TestRemoteLeadRoutesInterventionToReviewerConversation(t *testing.T) {
 	if len(requests) != 1 || requests[0].Assignment.Role != workerhttp.RoleReviewer ||
 		requests[0].ProviderSessionID != session.ProviderSessionID {
 		t.Fatalf("intervention was not routed to reviewer: %+v", requests)
+	}
+}
+
+func TestRemoteLeadContinuesScopeChangeIntoVersionedReplanning(t *testing.T) {
+	db, executions, storedProject, storedFeature := newRemoteLeadExecution(t)
+	run, lead, checkpoint := prepareInterventionBoundary(
+		t, executions, "run_replanning", storedFeature.ID,
+		storedProject.AgentProviders, worker.RoleLead,
+	)
+	now := run.UpdatedAt.Add(time.Second)
+	acceptedGoal := "Update the export workflow."
+	if _, err := db.ExecContext(
+		t.Context(),
+		`UPDATE features
+		 SET state = ?, accepted_goal = ?, goal_accepted_at = ?, updated_at = ?
+		 WHERE id = ?`,
+		feature.StateReviewing, acceptedGoal, now.Format(time.RFC3339Nano),
+		now.Format(time.RFC3339Nano), storedFeature.ID,
+	); err != nil {
+		t.Fatalf("prepare accepted feature: %v", err)
+	}
+	plan, err := executions.RecordSessionEventWithID(
+		t.Context(), "sev_replanning_v1", lead.ID,
+		worker.Event{Type: worker.EventPlanSubmitted, Text: "Original agreed plan"},
+	)
+	if err != nil {
+		t.Fatalf("record original plan: %v", err)
+	}
+	if _, _, err := executions.LinkPlanningMessage(t.Context(), run.ID, plan.ID); err != nil {
+		t.Fatalf("link original plan: %v", err)
+	}
+	baseline := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	if _, err := db.ExecContext(
+		t.Context(),
+		`INSERT INTO feature_workspaces (
+		    feature_id, id, project_id, repository_owner, repository_name,
+		    base_branch, branch_name, base_commit_id, status, branch_created_at,
+		    checkout_relative_path, checkout_created_at,
+		    pull_request_number, pull_request_url, pull_request_recorded_at,
+		    approved_commit_id, merge_ready_at, merge_commit_id, merged_at,
+		    created_at, updated_at
+		 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', NULL, ?, ?)`,
+		storedFeature.ID, "wsp_replanning", storedProject.ID, "owner", "repository",
+		"main", "commitarium/"+storedFeature.ID, baseline, "branch_ready",
+		now.Format(time.RFC3339Nano), "wsp_replanning", now.Format(time.RFC3339Nano),
+		9, "http://forgejo/owner/repository/pulls/9", now.Format(time.RFC3339Nano),
+		baseline, now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano),
+		now.Format(time.RFC3339Nano),
+	); err != nil {
+		t.Fatalf("create managed workspace: %v", err)
+	}
+	amendment := "Include a CSV export in the accepted scope."
+	intervention, _, err := executions.QueueIntervention(
+		t.Context(), "int_replanning", run.ID, worker.RoleLead, amendment,
+	)
+	if err != nil {
+		t.Fatalf("queue scope change: %v", err)
+	}
+	answeredAt := time.Now().UTC()
+	if _, err := db.ExecContext(
+		t.Context(),
+		`UPDATE run_interventions
+		 SET status = ?, attempt_id = ?, effect = ?, answered_at = ?, updated_at = ?
+		 WHERE id = ?`,
+		execution.InterventionStatusAnswered, "att_scope_change",
+		worker.InterventionEffectReplanningRequired,
+		answeredAt.Format(time.RFC3339Nano), answeredAt.Format(time.RFC3339Nano), intervention.ID,
+	); err != nil {
+		t.Fatalf("answer scope change: %v", err)
+	}
+	version := 2
+	nextAttemptID := replanningAttemptID(lead.ID, version, 1)
+	oldReference := workerhttp.AttemptReference{
+		SessionID: lead.ID, AttemptID: checkpoint.AttemptID,
+	}
+	newReference := workerhttp.AttemptReference{
+		SessionID: lead.ID, AttemptID: nextAttemptID,
+	}
+	assignment := workerhttp.Assignment{
+		AgentProfileID: "codex-default", ProjectID: storedProject.ID,
+		FeatureID: storedFeature.ID, Role: workerhttp.RoleLead,
+		WorkspaceID: "wsp_replanning",
+	}
+	oldEndedAt := now
+	oldTerminal := workerhttp.Attempt{
+		AttemptReference: oldReference, Mode: workerhttp.AttemptModeResume,
+		Assignment: assignment, ProviderSessionID: lead.ProviderSessionID,
+		State: workerhttp.AttemptStateTerminal, LatestEventSequence: checkpoint.LastEventSequence,
+		StartedAt: lead.StartedAt, UpdatedAt: oldEndedAt, EndedAt: &oldEndedAt,
+		Result: &workerhttp.TerminalResult{
+			Outcome: workerhttp.OutcomeCompleted, Disposition: workerhttp.DispositionSucceeded,
+			Summary: "Original planning finished.",
+		},
+	}
+	startedAt := now.Add(2 * time.Second)
+	endedAt := startedAt.Add(time.Second)
+	initial := workerhttp.Attempt{
+		AttemptReference: newReference, Mode: workerhttp.AttemptModeResume,
+		Assignment: assignment, ProviderSessionID: lead.ProviderSessionID,
+		State: workerhttp.AttemptStateRunning, StartedAt: startedAt, UpdatedAt: startedAt,
+	}
+	terminal := initial
+	terminal.State = workerhttp.AttemptStateTerminal
+	terminal.LatestEventSequence = 2
+	terminal.UpdatedAt = endedAt
+	terminal.EndedAt = &endedAt
+	terminal.Result = &workerhttp.TerminalResult{
+		Outcome: workerhttp.OutcomeCompleted, Disposition: workerhttp.DispositionInputRequired,
+		Summary: "Revised proposal is ready for review.",
+	}
+	workerStub := &conversationalRemoteLeadWorker{
+		initial: map[workerhttp.AttemptReference]workerhttp.Attempt{newReference: initial},
+		terminal: map[workerhttp.AttemptReference]workerhttp.Attempt{
+			oldReference: oldTerminal, newReference: terminal,
+		},
+		events: map[workerhttp.AttemptReference][]workerhttp.Event{
+			newReference: {
+				{AttemptReference: newReference, Sequence: 1, Type: workerhttp.EventMessage,
+					Text: "Revised plan proposal", OccurredAt: startedAt},
+				{AttemptReference: newReference, Sequence: 2, Type: workerhttp.EventAttemptTerminal,
+					Text: terminal.Result.Summary, OccurredAt: endedAt},
+			},
+		},
+	}
+	pullRequestAt := now
+	workspaceStub := &remoteLeadWorkspaceStub{prepared: workspace.Workspace{
+		ID: "wsp_replanning", ProjectID: storedProject.ID, FeatureID: storedFeature.ID,
+		RepositoryOwner: "owner", RepositoryName: "repository", BaseBranch: "main",
+		Branch: "commitarium/" + storedFeature.ID, BaseCommitID: baseline,
+		Status: workspace.StatusBranchReady, BranchCreatedAt: &pullRequestAt,
+		CheckoutRelativePath: "wsp_replanning", CheckoutCreatedAt: &pullRequestAt,
+		PullRequestNumber: 9, PullRequestURL: "http://forgejo/owner/repository/pulls/9",
+		PullRequestRecordedAt: &pullRequestAt, CreatedAt: now, UpdatedAt: now,
+	}}
+	workflowService := workflow.NewService(database.NewWorkflowStore(db))
+	starter, err := NewRemoteLeadStarter(RemoteLeadConfig{
+		Executions: executions, Features: database.NewFeatureStore(db),
+		Goals: workflowService, Planning: workflowService, Workspaces: workspaceStub,
+		Worker: workerStub, Pump: &conversationalRemoteLeadPump{
+			executions: executions, worker: workerStub,
+		},
+		Lifetime: t.Context(), AgentProfileID: "codex-default",
+	})
+	if err != nil {
+		t.Fatalf("create replanning starter: %v", err)
+	}
+
+	active, applied, err := starter.Resume(t.Context(), run.ID, "resume_replanning")
+	if err != nil || !applied || active.PlanVersion != 2 || active.Paused {
+		t.Fatalf("continue into replanning: run=%+v applied=%t err=%v", active, applied, err)
+	}
+	var revisedEventID string
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		current, getErr := executions.GetRun(t.Context(), run.ID)
+		messages, messagesErr := executions.PlanningMessagesForRun(t.Context(), run.ID)
+		if getErr == nil && messagesErr == nil && current.Status == execution.RunStatusWaitingForUser &&
+			current.PlanVersion == 2 && len(messages) == 2 {
+			if messages[0].PlanVersion != 1 || messages[1].PlanVersion != 2 ||
+				messages[1].Event.Text != "Revised plan proposal" {
+				t.Fatalf("unexpected versioned planning history %+v", messages)
+			}
+			revisedEventID = messages[1].Event.ID
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("replanning proposal did not settle: run=%+v messages=%+v run_err=%v messages_err=%v", current, messages, getErr, messagesErr)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	workerStub.mu.Lock()
+	requests := append([]workerhttp.PutAttemptRequest(nil), workerStub.putRequests...)
+	workerStub.mu.Unlock()
+	if len(requests) != 1 || requests[0].Mode != workerhttp.AttemptModeResume ||
+		requests[0].ProviderSessionID != lead.ProviderSessionID ||
+		!strings.Contains(requests[0].Instructions, amendment) ||
+		!strings.Contains(requests[0].Instructions, "Replanning baseline commit: "+baseline) {
+		t.Fatalf("unexpected replanning request %+v", requests)
+	}
+	if workspaceStub.replanningCalls != 1 || workspaceStub.replanningEventID != plan.ID ||
+		workspaceStub.replanningPlan != plan.Text || workspaceStub.publishCalls != 0 {
+		t.Fatalf("replanning mutated the existing PR: %+v", workspaceStub)
+	}
+
+	// Model a coordinator stop after the worker event and terminal checkpoint
+	// were durable, but before the revised proposal was linked into the shared
+	// planning history and the run returned to its user checkpoint.
+	if _, err := db.ExecContext(
+		t.Context(), `DELETE FROM planning_messages WHERE session_event_id = ?`, revisedEventID,
+	); err != nil {
+		t.Fatalf("remove interrupted planning link: %v", err)
+	}
+	if _, err := db.ExecContext(
+		t.Context(),
+		`UPDATE sessions SET status = ?, updated_at = ? WHERE id = ?`,
+		execution.SessionStatusRunning, time.Now().UTC().Format(time.RFC3339Nano), lead.ID,
+	); err != nil {
+		t.Fatalf("restore interrupted lead state: %v", err)
+	}
+	if _, err := db.ExecContext(
+		t.Context(),
+		`UPDATE runs SET status = ?, reason = ?, wait_kind = '', updated_at = ? WHERE id = ?`,
+		execution.RunStatusRunning, replanningRunningReason,
+		time.Now().UTC().Format(time.RFC3339Nano), run.ID,
+	); err != nil {
+		t.Fatalf("restore interrupted run state: %v", err)
+	}
+	recoverable, err := executions.GetRun(t.Context(), run.ID)
+	if err != nil {
+		t.Fatalf("load interrupted replanning run: %v", err)
+	}
+	if err := starter.Recover(
+		t.Context(), recoverable, feature.Feature{
+			ID: storedFeature.ID, ProjectID: storedFeature.ProjectID,
+			State: feature.StatePlanning,
+		}, project.RecoveryPolicyApprovalRequired,
+	); err != nil {
+		t.Fatalf("recover revised proposal: %v", err)
+	}
+	waitForRemoteLeadStatus(t, executions, run.ID, execution.RunStatusWaitingForUser)
+	recoveredRun, err := executions.GetRun(t.Context(), run.ID)
+	if err != nil || recoveredRun.PlanVersion != 2 ||
+		recoveredRun.Reason != replanningProposalReason {
+		t.Fatalf("unexpected recovered replanning checkpoint: run=%+v err=%v", recoveredRun, err)
+	}
+	recoveredMessages, err := executions.PlanningMessagesForRun(t.Context(), run.ID)
+	if err != nil || len(recoveredMessages) != 2 ||
+		recoveredMessages[1].PlanVersion != 2 ||
+		recoveredMessages[1].Event.ID != revisedEventID {
+		t.Fatalf("revised proposal was not safely relinked: messages=%+v err=%v", recoveredMessages, err)
+	}
+	workerStub.mu.Lock()
+	recoveredPutCount := len(workerStub.putRequests)
+	workerStub.mu.Unlock()
+	if recoveredPutCount != 1 {
+		t.Fatalf("recovery launched the versioned attempt again: PUTs=%d", recoveredPutCount)
 	}
 }
 

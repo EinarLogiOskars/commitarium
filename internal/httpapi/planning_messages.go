@@ -14,14 +14,15 @@ import (
 )
 
 type planningMessageResponse struct {
-	ID         string           `json:"id"`
-	Sequence   int64            `json:"sequence"`
-	SessionID  string           `json:"session_id"`
-	AgentID    string           `json:"agent_id"`
-	Role       worker.Role      `json:"role"`
-	Type       worker.EventType `json:"type"`
-	Text       string           `json:"text"`
-	OccurredAt time.Time        `json:"occurred_at"`
+	ID          string           `json:"id"`
+	PlanVersion int              `json:"plan_version"`
+	Sequence    int64            `json:"sequence"`
+	SessionID   string           `json:"session_id"`
+	AgentID     string           `json:"agent_id"`
+	Role        worker.Role      `json:"role"`
+	Type        worker.EventType `json:"type"`
+	Text        string           `json:"text"`
+	OccurredAt  time.Time        `json:"occurred_at"`
 }
 
 func (api *API) getPlanningMessagesHandler(w http.ResponseWriter, r *http.Request) {
@@ -159,7 +160,7 @@ func writePlanningMessage(w http.ResponseWriter, message execution.PlanningMessa
 
 func newPlanningMessageResponse(message execution.PlanningMessage) planningMessageResponse {
 	return planningMessageResponse{
-		ID: message.Event.ID, Sequence: message.Sequence,
+		ID: message.Event.ID, PlanVersion: message.PlanVersion, Sequence: message.Sequence,
 		SessionID: message.Event.SessionID, AgentID: message.AgentID,
 		Role: message.Role, Type: message.Event.Type,
 		Text: message.Event.Text, OccurredAt: message.Event.OccurredAt,

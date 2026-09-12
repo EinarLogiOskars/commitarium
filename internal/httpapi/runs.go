@@ -29,6 +29,7 @@ type runResponse struct {
 	AgentProviders      agentProvidersResponse       `json:"agent_providers"`
 	MergePolicy         project.MergePolicy          `json:"merge_policy"`
 	AutonomyPolicy      project.AutonomyPolicy       `json:"autonomy_policy"`
+	PlanVersion         int                          `json:"plan_version"`
 	StartedAt           time.Time                    `json:"started_at"`
 	UpdatedAt           time.Time                    `json:"updated_at"`
 	EndedAt             *time.Time                   `json:"ended_at,omitempty"`
@@ -227,7 +228,8 @@ func (api *API) newRunResponse(
 			Lead: agentProviders.Lead, Reviewer: agentProviders.Reviewer,
 		},
 		MergePolicy: run.MergePolicy, AutonomyPolicy: run.AutonomyPolicy,
-		StartedAt: run.StartedAt, UpdatedAt: run.UpdatedAt,
+		PlanVersion: run.PlanVersion,
+		StartedAt:   run.StartedAt, UpdatedAt: run.UpdatedAt,
 		EndedAt: run.EndedAt, Sessions: make([]sessionResponse, 0, len(sessions)),
 		InterventionTargets: make([]interventionTargetResponse, 0),
 	}
