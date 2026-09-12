@@ -25,6 +25,9 @@ export function ProjectWorkspace({
   const [mode, setMode] = useState<Mode>("overview");
   const [orderId, setOrderId] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
+  // Stable so it doesn't re-trigger FeatureView's load effect; refreshes the
+  // rail's work-order grouping when a feature's state changes.
+  const bumpRail = useCallback(() => setReloadKey((k) => k + 1), []);
 
   const load = useCallback(async () => {
     setError(null);
@@ -108,7 +111,12 @@ export function ProjectWorkspace({
           )}
 
           {mode === "order" && orderId && (
-            <FeatureView projectId={id} featureId={orderId} hasRepo={hasRepo} />
+            <FeatureView
+              projectId={id}
+              featureId={orderId}
+              hasRepo={hasRepo}
+              onChanged={bumpRail}
+            />
           )}
 
           {mode === "settings" && project && (

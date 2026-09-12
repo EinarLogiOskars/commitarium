@@ -139,32 +139,30 @@ export function ReviewView({
         )}
       </div>
 
-      {state === "ready_to_merge" && (
-        merged ? (
-          <p className="muted note">Merged into the default branch. ✓</p>
-        ) : (
-          <div className="merge-gate">
-            <p className="muted">
-              Both agents approved this revision. Merge PR #{pr?.number} into the default
-              branch to complete the work order.
-            </p>
-            {!confirmMerge ? (
-              <button className="primary" onClick={() => setConfirmMerge(true)} disabled={merging}>
-                Merge
+      {merged || state === "completed" ? (
+        <p className="muted note">Merged into the default branch — work order complete. ✓</p>
+      ) : state === "ready_to_merge" ? (
+        <div className="merge-gate">
+          <p className="muted">
+            Both agents approved this revision. Merge PR #{pr?.number} into the default
+            branch to complete the work order.
+          </p>
+          {!confirmMerge ? (
+            <button className="primary" onClick={() => setConfirmMerge(true)} disabled={merging}>
+              Merge
+            </button>
+          ) : (
+            <div className="row">
+              <button className="primary" onClick={() => void merge()} disabled={merging}>
+                {merging ? "Merging…" : "Confirm merge"}
               </button>
-            ) : (
-              <div className="row">
-                <button className="primary" onClick={() => void merge()} disabled={merging}>
-                  {merging ? "Merging…" : "Confirm merge"}
-                </button>
-                <button className="ghost" onClick={() => setConfirmMerge(false)} disabled={merging}>
-                  Cancel
-                </button>
-              </div>
-            )}
-          </div>
-        )
-      )}
+              <button className="ghost" onClick={() => setConfirmMerge(false)} disabled={merging}>
+                Cancel
+              </button>
+            </div>
+          )}
+        </div>
+      ) : null}
     </section>
   );
 }
