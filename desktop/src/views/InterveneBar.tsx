@@ -13,7 +13,23 @@ import type { Intervention, InterventionTargetRole, Run } from "../api/types";
 // the phase view below. The run stays paused afterward so the user can keep
 // talking; "Continue workflow" (resume) is a separate action and is refused
 // while an intervention is still being handled.
-export function InterveneBar({ run, onChanged }: { run: Run; onChanged: () => void }) {
+// The phase's advance/checkpoint action (e.g. "Send plan to reviewer"), rendered
+// as the dock's primary CTA. Provided only when it's the user's turn.
+export interface AdvanceAction {
+  label: string;
+  onClick: () => void;
+  busy?: boolean;
+}
+
+export function InterveneBar({
+  run,
+  onChanged,
+  action,
+}: {
+  run: Run;
+  onChanged: () => void;
+  action?: AdvanceAction;
+}) {
   const [agent, setAgent] = useState<InterventionTargetRole>("lead");
   const [text, setText] = useState("");
   const [busy, setBusy] = useState<null | "send" | "control">(null);
@@ -84,6 +100,15 @@ export function InterveneBar({ run, onChanged }: { run: Run; onChanged: () => vo
 
   return (
     <div className="intervene">
+      {action && (
+        <button
+          className="primary intervene__advance"
+          onClick={action.onClick}
+          disabled={busy != null || action.busy}
+        >
+          {action.busy ? "Working…" : action.label}
+        </button>
+      )}
       <div className="intervene__row">
         <span className={`intervene__state intervene__state--${pausing ? "pausing" : paused ? "paused" : "run"}`}>
           {(pausing || delivering || busy != null) && <span className="spinner" aria-hidden />}

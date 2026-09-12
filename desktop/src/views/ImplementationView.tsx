@@ -3,8 +3,9 @@ import { getRun } from "../api/runs";
 import { getSessionEvents } from "../api/sessions";
 import { ApiError } from "../api/client";
 import { Transcript, type TranscriptEntry } from "./Transcript";
+import { InterveneBar } from "./InterveneBar";
 import { scopeToPhase, type Interval } from "./phaseWindows";
-import type { SessionEvent } from "../api/types";
+import type { Run, SessionEvent } from "../api/types";
 
 const POLL_MS = 2000;
 
@@ -15,17 +16,20 @@ const SHOWN = new Set(["message", "activity"]);
 // session's activity for the implementation window, auto-scrolled to the newest.
 export function ImplementationView({
   runId,
+  run,
   live = true,
   intervals = [],
   scoped = false,
+  onChanged,
 }: {
   runId: string;
+  run: Run | null;
   live?: boolean;
   intervals?: Interval[];
   scoped?: boolean;
+  onChanged: () => void;
 }) {
   const [entries, setEntries] = useState<TranscriptEntry[]>([]);
-  const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const feedRef = useRef<HTMLDivElement | null>(null);
   const pinned = useRef(true);
@@ -35,7 +39,6 @@ export function ImplementationView({
       const run = await getRun(runId);
       const lead = run.sessions.find((s) => s.role === "lead") ?? run.sessions[0];
       if (!lead) return;
-      setStatus(lead.status);
       const events = (await getSessionEvents(lead.id)) as SessionEvent[];
       setEntries(
         events
@@ -63,10 +66,6 @@ export function ImplementationView({
   return (
     <section className="panel panel--phase">
       <h2>Implementation</h2>
-      <p className="muted">
-        The lead is writing the code for the agreed plan — editing files, running tests,
-        then committing and pushing to the PR. The reviewer's code review runs next.
-      </p>
       {error && <div className="banner banner--error">{error}</div>}
 
       <div
@@ -80,11 +79,7 @@ export function ImplementationView({
         <Transcript entries={shown} empty="Waiting for the lead to start…" />
       </div>
 
-      {live && (
-        <p className="muted status-line">
-          {status === "waiting_for_user" ? "Waiting…" : "Lead is working…"}
-        </p>
-      )}
+      {live && run && <InterveneBar run={run} onChanged={onChanged} />}
     </section>
   );
 }

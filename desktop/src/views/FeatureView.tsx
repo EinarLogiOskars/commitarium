@@ -7,7 +7,6 @@ import { PlanningView } from "./PlanningView";
 import { ImplementationView } from "./ImplementationView";
 import { ReviewView } from "./ReviewView";
 import { MergeView } from "./MergeView";
-import { InterveneBar } from "./InterveneBar";
 import { PhaseStepper, currentPhaseIndex } from "./PhaseStepper";
 import { phaseIntervals, type Interval } from "./phaseWindows";
 import { WORK } from "../vocab";
@@ -121,13 +120,6 @@ export function FeatureView({
       </section>
 
       {body(viewed, feature, projectId, hasRepo, run, live, intervals, scoped, load)}
-
-      {/* Intervene composer sits below the conversation, not above it. Clarify
-          has its own reply + accept-goal composer, so only show this once the
-          agents run autonomously (Plan onward). */}
-      {run && !terminal && !finished && current > 0 && (
-        <InterveneBar run={run} onChanged={load} />
-      )}
     </div>
   );
 }
@@ -214,6 +206,7 @@ function body(
     return (
       <PlanningView
         runId={run.id}
+        run={run}
         featureState={feature.state}
         live={live}
         planVersion={run.plan_version}
@@ -225,7 +218,16 @@ function body(
   }
   // Implement
   if (viewed === 2) {
-    return <ImplementationView runId={run.id} live={live} intervals={intervals} scoped={scoped} />;
+    return (
+      <ImplementationView
+        runId={run.id}
+        run={run}
+        live={live}
+        intervals={intervals}
+        scoped={scoped}
+        onChanged={reload}
+      />
+    );
   }
   // Review — the reviewer/lead discussion, scoped to the reviewing window.
   if (viewed === 3) {
@@ -234,10 +236,12 @@ function body(
         projectId={projectId}
         featureId={feature.id}
         runId={run.id}
+        run={run}
         state={feature.state}
         live={live}
         intervals={intervals}
         scoped={scoped}
+        onChanged={reload}
       />
     );
   }
