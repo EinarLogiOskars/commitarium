@@ -22,6 +22,8 @@ type runResponse struct {
 	FeatureID      string                 `json:"feature_id"`
 	Status         execution.RunStatus    `json:"status"`
 	Reason         string                 `json:"reason,omitempty"`
+	WaitKind       execution.RunWaitKind  `json:"wait_kind,omitempty"`
+	Paused         bool                   `json:"paused"`
 	DialogueLimits dialogueLimitsResponse `json:"dialogue_limits"`
 	AgentProviders agentProvidersResponse `json:"agent_providers"`
 	MergePolicy    project.MergePolicy    `json:"merge_policy"`
@@ -195,7 +197,7 @@ func (api *API) newRunResponse(
 	}
 	response := runResponse{
 		ID: run.ID, FeatureID: run.FeatureID, Status: run.Status,
-		Reason: run.Reason,
+		Reason: run.Reason, WaitKind: run.WaitKind, Paused: run.Paused,
 		DialogueLimits: dialogueLimitsResponse{
 			PlanningRounds:             run.PlanningRoundLimit,
 			ImplementationReviewRounds: run.ImplementationReviewRoundLimit,

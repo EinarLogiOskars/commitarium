@@ -483,6 +483,54 @@ func TestExecutionStoreDoesNotRecoverStableUserWait(t *testing.T) {
 	}
 }
 
+func TestExecutionStoreRecoversOnlyUnpausedAutomaticPhaseCheckpoint(t *testing.T) {
+	db, store := newTestExecutionStore(t)
+	run, session := createExecutionRecords(t, db, store)
+	now := session.UpdatedAt.Add(time.Minute)
+	if _, err := store.TransitionSession(t.Context(), execution.SessionTransition{
+		SessionID: session.ID, Expected: execution.SessionStatusRunning,
+		Status: execution.SessionStatusWaitingForUser, OccurredAt: now,
+	}); err != nil {
+		t.Fatalf("park existing session: %v", err)
+	}
+	if _, err := store.TransitionRun(t.Context(), execution.RunTransition{
+		RunID: run.ID, Expected: execution.RunStatusRunning,
+		Status:   execution.RunStatusWaitingForUser,
+		Reason:   "Automatic handoff is pending.",
+		WaitKind: execution.RunWaitKindPhaseCheckpoint, OccurredAt: now,
+	}); err != nil {
+		t.Fatalf("create automatic checkpoint: %v", err)
+	}
+	if _, err := db.ExecContext(
+		t.Context(), `UPDATE runs SET autonomy_policy = ? WHERE id = ?`,
+		project.AutonomyPolicyRunToCompletion, run.ID,
+	); err != nil {
+		t.Fatalf("set automatic run snapshot: %v", err)
+	}
+
+	paused := run
+	paused.ID = "run_paused_checkpoint"
+	paused.Status = execution.RunStatusWaitingForUser
+	paused.Reason = "Automatic handoff was paused."
+	paused.AutonomyPolicy = project.AutonomyPolicyRunToCompletion
+	paused.Paused = true
+	paused.WaitKind = execution.RunWaitKindPaused
+	paused.PausedFromWaitKind = execution.RunWaitKindPhaseCheckpoint
+	paused.UpdatedAt = now.Add(time.Second)
+	if err := store.CreateRun(t.Context(), paused); err != nil {
+		t.Fatalf("create paused automatic checkpoint: %v", err)
+	}
+
+	runs, err := store.ListRecoverableRuns(t.Context())
+	if err != nil {
+		t.Fatalf("list automatic checkpoints: %v", err)
+	}
+	if len(runs) != 1 || runs[0].ID != run.ID || runs[0].Paused ||
+		runs[0].WaitKind != execution.RunWaitKindPhaseCheckpoint {
+		t.Fatalf("unexpected automatic recovery candidates: %+v", runs)
+	}
+}
+
 func TestExecutionStorePersistsReplayableSessionResult(t *testing.T) {
 	db, store := newTestExecutionStore(t)
 	_, session := createExecutionRecords(t, db, store)

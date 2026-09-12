@@ -44,16 +44,19 @@ func (s *ExecutionStore) CreateRun(ctx context.Context, run execution.Run) error
 	result, err := s.db.ExecContext(
 		ctx,
 		`INSERT INTO runs (
-			id, feature_id, status, reason,
+			id, feature_id, status, reason, wait_kind, paused, paused_from_wait_kind,
 			planning_round_limit, implementation_review_round_limit,
 			lead_provider, reviewer_provider, merge_policy, autonomy_policy,
 			started_at, updated_at, ended_at
-		 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(id) DO NOTHING`,
 		run.ID,
 		run.FeatureID,
 		run.Status,
 		run.Reason,
+		run.WaitKind,
+		run.Paused,
+		run.PausedFromWaitKind,
 		run.PlanningRoundLimit,
 		run.ImplementationReviewRoundLimit,
 		run.AgentProviders.Lead,
@@ -76,7 +79,7 @@ func (s *ExecutionStore) GetRun(
 ) (execution.Run, error) {
 	run, err := scanExecutionRun(s.db.QueryRowContext(
 		ctx,
-		`SELECT id, feature_id, status, reason,
+		`SELECT id, feature_id, status, reason, wait_kind, paused, paused_from_wait_kind,
 		        planning_round_limit, implementation_review_round_limit,
 		        lead_provider, reviewer_provider, merge_policy, autonomy_policy,
 		        started_at, updated_at, ended_at
@@ -98,7 +101,7 @@ func (s *ExecutionStore) ListRunsByFeatureID(
 ) ([]execution.Run, error) {
 	rows, err := s.db.QueryContext(
 		ctx,
-		`SELECT id, feature_id, status, reason,
+		`SELECT id, feature_id, status, reason, wait_kind, paused, paused_from_wait_kind,
 		        planning_round_limit, implementation_review_round_limit,
 		        lead_provider, reviewer_provider, merge_policy, autonomy_policy,
 		        started_at, updated_at, ended_at
@@ -130,6 +133,9 @@ func (s *ExecutionStore) TransitionRun(
 	ctx context.Context,
 	transition execution.RunTransition,
 ) (execution.Run, error) {
+	if transition.Status == execution.RunStatusWaitingForUser && transition.WaitKind == "" {
+		transition.WaitKind = execution.RunWaitKindBlocker
+	}
 	if err := transition.Validate(); err != nil {
 		return execution.Run{}, err
 	}
@@ -143,7 +149,7 @@ func (s *ExecutionStore) TransitionRun(
 
 	run, err := scanExecutionRun(tx.QueryRowContext(
 		ctx,
-		`SELECT id, feature_id, status, reason,
+		`SELECT id, feature_id, status, reason, wait_kind, paused, paused_from_wait_kind,
 		        planning_round_limit, implementation_review_round_limit,
 		        lead_provider, reviewer_provider, merge_policy, autonomy_policy,
 		        started_at, updated_at, ended_at
@@ -162,6 +168,19 @@ func (s *ExecutionStore) TransitionRun(
 
 	run.Status = transition.Status
 	run.Reason = transition.Reason
+	if transition.Status.IsTerminal() {
+		run.Paused = false
+		run.WaitKind = ""
+		run.PausedFromWaitKind = ""
+	} else if run.Paused {
+		run.WaitKind = execution.RunWaitKindPaused
+		if transition.WaitKind != "" && transition.WaitKind != execution.RunWaitKindPaused {
+			run.PausedFromWaitKind = transition.WaitKind
+		}
+	} else {
+		run.WaitKind = transition.WaitKind
+		run.PausedFromWaitKind = ""
+	}
 	run.UpdatedAt = transition.OccurredAt.UTC()
 	run.EndedAt = nil
 	if transition.Status.IsTerminal() {
@@ -174,10 +193,13 @@ func (s *ExecutionStore) TransitionRun(
 	result, err := tx.ExecContext(
 		ctx,
 		`UPDATE runs
-		 SET status = ?, reason = ?, updated_at = ?, ended_at = ?
+		 SET status = ?, reason = ?, wait_kind = ?, paused = ?, paused_from_wait_kind = ?, updated_at = ?, ended_at = ?
 		 WHERE id = ? AND status = ?`,
 		run.Status,
 		run.Reason,
+		run.WaitKind,
+		run.Paused,
+		run.PausedFromWaitKind,
 		formatExecutionTime(run.UpdatedAt),
 		formatOptionalExecutionTime(run.EndedAt),
 		run.ID,
@@ -287,16 +309,20 @@ func (s *ExecutionStore) ListRecoverableRuns(
 ) ([]execution.Run, error) {
 	rows, err := s.db.QueryContext(
 		ctx,
-		`SELECT r.id, r.feature_id, r.status, r.reason,
+		`SELECT r.id, r.feature_id, r.status, r.reason, r.wait_kind, r.paused, r.paused_from_wait_kind,
 		        r.planning_round_limit, r.implementation_review_round_limit,
 		        r.lead_provider, r.reviewer_provider, r.merge_policy, r.autonomy_policy,
 		        r.started_at, r.updated_at, r.ended_at
 		 FROM runs r
 		 WHERE r.status = ?
-		    OR (r.status = ? AND EXISTS (
-			   SELECT 1 FROM sessions s
-			   WHERE s.run_id = r.id
-			     AND s.status NOT IN (?, ?, ?, ?)
+		    OR (r.status = ? AND (
+			   EXISTS (
+			     SELECT 1 FROM sessions s
+			     WHERE s.run_id = r.id
+			       AND s.status NOT IN (?, ?, ?, ?)
+			   )
+			   OR (r.autonomy_policy = 'run_to_completion'
+			       AND r.wait_kind = 'phase_checkpoint' AND r.paused = 0)
 		   ))
 		 ORDER BY r.started_at, r.id`,
 		execution.RunStatusRunning,
@@ -817,6 +843,9 @@ func scanExecutionRun(scanner executionScanner) (execution.Run, error) {
 		&run.FeatureID,
 		&status,
 		&run.Reason,
+		&run.WaitKind,
+		&run.Paused,
+		&run.PausedFromWaitKind,
 		&run.PlanningRoundLimit,
 		&run.ImplementationReviewRoundLimit,
 		&run.AgentProviders.Lead,

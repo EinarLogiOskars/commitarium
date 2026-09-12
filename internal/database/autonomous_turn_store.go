@@ -44,7 +44,7 @@ func (s *ExecutionStore) BeginAutonomousTurn(
 	}
 	run, err := scanExecutionRun(tx.QueryRowContext(
 		ctx,
-		`SELECT id, feature_id, status, reason,
+		`SELECT id, feature_id, status, reason, wait_kind, paused, paused_from_wait_kind,
 		        planning_round_limit, implementation_review_round_limit,
 		        lead_provider, reviewer_provider, merge_policy, autonomy_policy,
 		        started_at, updated_at, ended_at
@@ -74,7 +74,7 @@ func (s *ExecutionStore) BeginAutonomousTurn(
 	if admission.RunAlreadyActive {
 		expectedRunStatus = execution.RunStatusRunning
 	}
-	if session.Status != execution.SessionStatusWaitingForUser ||
+	if run.Paused || session.Status != execution.SessionStatusWaitingForUser ||
 		session.ProviderSessionID == "" || run.Status != expectedRunStatus {
 		return false, execution.ErrStateConflict
 	}
@@ -146,7 +146,7 @@ func (s *ExecutionStore) BeginAutonomousTurn(
 	}
 
 	result, err = tx.ExecContext(ctx,
-		`UPDATE runs SET status = ?, reason = ?, updated_at = ?
+		`UPDATE runs SET status = ?, reason = ?, wait_kind = '', paused_from_wait_kind = '', updated_at = ?
 		 WHERE id = ? AND status = ?`,
 		execution.RunStatusRunning, admission.RunReason,
 		formatExecutionTime(admission.OccurredAt), run.ID, expectedRunStatus,

@@ -1582,6 +1582,113 @@ func TestRemoteLeadRecoveryAutomaticallyMergesApprovedRevision(t *testing.T) {
 	}
 }
 
+func TestRemoteLeadRunToCompletionAdvancesFromPlanningToMergeGate(t *testing.T) {
+	db, executions, storedProject, storedFeature := newRemoteLeadExecution(t)
+	storedProject, err := database.NewProjectStore(db).UpdateAutonomyPolicy(
+		t.Context(), storedProject.ID, project.AutonomyPolicyRunToCompletion,
+	)
+	if err != nil {
+		t.Fatalf("enable run-to-completion: %v", err)
+	}
+	runID := "run_autonomous_workflow"
+	stub := newConversationalRemoteLeadWorker(runID, storedProject.ID, storedFeature.ID)
+	addCompletedPlanningAttempt(stub, runID, storedProject.ID, storedFeature.ID)
+	addCompletedReviewerPlanningAttempt(stub, runID, storedProject.ID, storedFeature.ID)
+	addCompletedPlanningCorrectionAttempts(stub, runID, storedProject.ID, storedFeature.ID)
+	addCompletedImplementationAttempt(stub, runID, storedProject.ID, storedFeature.ID)
+	addCompletedImplementationReviewAttempt(stub, runID, storedProject.ID, storedFeature.ID)
+	addCompletedImplementationCorrectionAttempt(
+		stub, runID, storedProject.ID, storedFeature.ID, 1,
+		"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+		"Published the corrected implementation and added the missing failure-path test.",
+	)
+	addCompletedLaterImplementationReviewAttempt(
+		stub, runID, storedProject.ID, storedFeature.ID, 2,
+		workerhttp.DispositionSucceeded,
+		"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", 12,
+		"The correction addresses every finding and passes the relevant tests.",
+	)
+	addCompletedImplementationReadinessAttempt(
+		stub, runID, storedProject.ID, storedFeature.ID, 2,
+		workerhttp.DispositionSucceeded,
+		"I agree with the reviewer; this exact commit is ready to merge.",
+	)
+
+	workflowService := workflow.NewService(database.NewWorkflowStore(db))
+	checkoutAt := time.Date(2026, time.September, 12, 11, 0, 0, 0, time.UTC)
+	workspaceStub := &remoteLeadWorkspaceStub{prepared: workspace.Workspace{
+		ID: "wsp_autonomous", ProjectID: storedProject.ID, FeatureID: storedFeature.ID,
+		RepositoryOwner: "commitarium", RepositoryName: "autonomous-test",
+		BaseBranch: "main", Branch: "commitarium/" + storedFeature.ID,
+		BaseCommitID:         "0123456789abcdef0123456789abcdef01234567",
+		Status:               workspace.StatusPreparing,
+		CheckoutRelativePath: "wsp_autonomous",
+		CheckoutCreatedAt:    &checkoutAt,
+	}}
+	starter, err := NewRemoteLeadStarter(RemoteLeadConfig{
+		Executions: executions, Features: database.NewFeatureStore(db), Goals: workflowService,
+		Planning: workflowService, Workspaces: workspaceStub, Worker: stub,
+		Pump:     &conversationalRemoteLeadPump{executions: executions, worker: stub},
+		Lifetime: t.Context(), AgentProfileID: "codex-default",
+	})
+	if err != nil {
+		t.Fatalf("create autonomous starter: %v", err)
+	}
+	if _, _, err := starter.Start(
+		t.Context(), runID, storedProject.ID, storedFeature.ID, storedFeature.Title,
+		storedProject.DialogueLimits, storedProject.AgentProviders,
+		storedProject.MergePolicy, storedProject.AutonomyPolicy,
+	); err != nil {
+		t.Fatalf("start goal clarification: %v", err)
+	}
+	waitForRemoteLeadStatus(t, executions, runID, execution.RunStatusWaitingForUser)
+	if _, err := starter.AcceptGoal(
+		t.Context(), remoteLeadSessionID(runID), "Export the visible report columns as CSV.",
+		workflow.Actor{Kind: workflow.ActorKindUser, ID: "local-user"}, "accept-autonomous-goal",
+	); err != nil {
+		t.Fatalf("accept autonomous goal: %v", err)
+	}
+	if _, _, err := starter.StartPlanning(t.Context(), runID, "start-autonomous-planning"); err != nil {
+		t.Fatalf("start autonomous planning: %v", err)
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	var completedRun execution.Run
+	for time.Now().Before(deadline) {
+		completedRun, err = executions.GetRun(t.Context(), runID)
+		if err != nil {
+			t.Fatalf("load autonomous run: %v", err)
+		}
+		currentFeature, featureErr := database.NewFeatureStore(db).GetByID(t.Context(), storedFeature.ID)
+		if featureErr != nil {
+			t.Fatalf("load autonomous feature: %v", featureErr)
+		}
+		if currentFeature.State == feature.StateReadyToMerge &&
+			completedRun.Status == execution.RunStatusWaitingForUser {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if completedRun.Status != execution.RunStatusWaitingForUser ||
+		completedRun.WaitKind != execution.RunWaitKindMergeGate || completedRun.Paused {
+		t.Fatalf("autonomous workflow did not stop at merge policy gate: %+v", completedRun)
+	}
+	if completedRun.AutonomyPolicy != project.AutonomyPolicyRunToCompletion {
+		t.Fatalf("run did not retain autonomy snapshot: %+v", completedRun)
+	}
+	stub.mu.Lock()
+	requestCount := len(stub.putRequests)
+	stub.mu.Unlock()
+	if requestCount != 11 {
+		t.Fatalf("expected complete autonomous conversation with 11 turns, got %d", requestCount)
+	}
+	if workspaceStub.publishCalls != 1 || workspaceStub.publicationVerifyCalls != 1 ||
+		workspaceStub.reviewVerifyCalls != 2 || workspaceStub.responseVerifyCalls != 1 ||
+		workspaceStub.readinessVerifyCalls != 1 || workspaceStub.mergeCalls != 0 {
+		t.Fatalf("unexpected autonomous publication/review calls: %+v", workspaceStub)
+	}
+}
+
 func TestRemotePlanningLoopUsesRunLimitSnapshot(t *testing.T) {
 	db, executions, storedProject, storedFeature := newRemoteLeadExecution(t)
 	limits := project.DialogueLimits{PlanningRounds: 3, ImplementationReviewRounds: 4}
@@ -1775,6 +1882,121 @@ func TestRemoteLeadRecoveryReattachesToPlanningAttempt(t *testing.T) {
 	}
 	if !foundAssessment || !foundPlan {
 		t.Fatalf("recovered planning was not fully observable: %+v", events)
+	}
+}
+
+func TestRemoteLeadRecoveryContinuesAutomaticPlanningWithoutReplacingAttempt(t *testing.T) {
+	db, executions, storedProject, storedFeature := newRemoteLeadExecution(t)
+	store := database.NewProjectStore(db)
+	storedProject, err := store.UpdateDialogueLimits(t.Context(), storedProject.ID, project.DialogueLimits{
+		PlanningRounds: 1, ImplementationReviewRounds: 6,
+	})
+	if err != nil {
+		t.Fatalf("set one-round planning limit: %v", err)
+	}
+	storedProject, err = store.UpdateAutonomyPolicy(
+		t.Context(), storedProject.ID, project.AutonomyPolicyRunToCompletion,
+	)
+	if err != nil {
+		t.Fatalf("enable automatic planning: %v", err)
+	}
+	runID := "run_automatic_planning_recovery"
+	stub := newConversationalRemoteLeadWorker(runID, storedProject.ID, storedFeature.ID)
+	addCompletedPlanningAttempt(stub, runID, storedProject.ID, storedFeature.ID)
+	addCompletedReviewerPlanningAttempt(stub, runID, storedProject.ID, storedFeature.ID)
+	workflowService := workflow.NewService(database.NewWorkflowStore(db))
+	checkoutAt := time.Date(2026, time.September, 12, 12, 0, 0, 0, time.UTC)
+	workspaceStub := &remoteLeadWorkspaceStub{prepared: workspace.Workspace{
+		ID: "wsp_automatic_recovery", ProjectID: storedProject.ID, FeatureID: storedFeature.ID,
+		RepositoryOwner: "commitarium", RepositoryName: "automatic-recovery-test",
+		BaseBranch: "main", Branch: "commitarium/" + storedFeature.ID,
+		BaseCommitID:         "0123456789abcdef0123456789abcdef01234567",
+		Status:               workspace.StatusPreparing,
+		CheckoutRelativePath: "wsp_automatic_recovery",
+		CheckoutCreatedAt:    &checkoutAt,
+	}}
+	newStarter := func() *RemoteLeadStarter {
+		starter, err := NewRemoteLeadStarter(RemoteLeadConfig{
+			Executions: executions, Features: database.NewFeatureStore(db), Goals: workflowService,
+			Planning: workflowService, Workspaces: workspaceStub, Worker: stub,
+			Pump:     &conversationalRemoteLeadPump{executions: executions, worker: stub},
+			Lifetime: t.Context(), AgentProfileID: "codex-default",
+		})
+		if err != nil {
+			t.Fatalf("create automatic recovery starter: %v", err)
+		}
+		return starter
+	}
+	starter := newStarter()
+	if _, _, err := starter.Start(
+		t.Context(), runID, storedProject.ID, storedFeature.ID, storedFeature.Title,
+		storedProject.DialogueLimits, storedProject.AgentProviders,
+		storedProject.MergePolicy, storedProject.AutonomyPolicy,
+	); err != nil {
+		t.Fatalf("start automatic lead: %v", err)
+	}
+	waitForRemoteLeadStatus(t, executions, runID, execution.RunStatusWaitingForUser)
+	if _, err := starter.AcceptGoal(
+		t.Context(), remoteLeadSessionID(runID), "Export the report as CSV.",
+		workflow.Actor{Kind: workflow.ActorKindUser, ID: "local-user"}, "accept-automatic-recovery-goal",
+	); err != nil {
+		t.Fatalf("accept automatic recovery goal: %v", err)
+	}
+	if _, err := workflowService.TransitionFeature(
+		t.Context(), storedFeature.ID, feature.StatePlanning,
+		workflow.Actor{Kind: workflow.ActorKindCoordinator, ID: coordinatorActorID},
+		"enter-automatic-recovery-planning",
+	); err != nil {
+		t.Fatalf("enter automatic planning: %v", err)
+	}
+	sessionID := remoteLeadSessionID(runID)
+	checkpoint, err := executions.GetWorkerAttempt(t.Context(), sessionID)
+	if err != nil {
+		t.Fatalf("load clarification checkpoint: %v", err)
+	}
+	if admitted, err := executions.BeginAutonomousTurn(
+		t.Context(), sessionID, checkpoint, planningAttemptID(sessionID),
+		feature.StatePlanning, "The lead is preparing the first plan.",
+	); err != nil || !admitted {
+		t.Fatalf("admit interrupted automatic plan: admitted=%t err=%v", admitted, err)
+	}
+	interrupted, err := executions.GetRun(t.Context(), runID)
+	if err != nil {
+		t.Fatalf("load interrupted automatic run: %v", err)
+	}
+	if err := newStarter().Recover(
+		t.Context(), interrupted, storedFeature, storedProject.RecoveryPolicy,
+	); err != nil {
+		t.Fatalf("recover automatic plan: %v", err)
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	var recovered execution.Run
+	var messages []execution.PlanningMessage
+	for time.Now().Before(deadline) {
+		recovered, err = executions.GetRun(t.Context(), runID)
+		if err != nil {
+			t.Fatalf("load recovered automatic run: %v", err)
+		}
+		messages, err = executions.PlanningMessagesForRun(t.Context(), runID)
+		if err != nil {
+			t.Fatalf("load recovered planning messages: %v", err)
+		}
+		if recovered.WaitKind == execution.RunWaitKindRoundCap && len(messages) == 2 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if recovered.Status != execution.RunStatusWaitingForUser ||
+		recovered.WaitKind != execution.RunWaitKindRoundCap || len(messages) != 2 ||
+		messages[0].Role != worker.RoleLead || messages[1].Role != worker.RoleReviewer {
+		t.Fatalf("automatic recovery did not complete the safe handoff: run=%+v messages=%+v", recovered, messages)
+	}
+	stub.mu.Lock()
+	putCount := len(stub.putRequests)
+	stub.mu.Unlock()
+	if putCount != 2 {
+		t.Fatalf("recovery replaced the lead or duplicated the reviewer: put count=%d", putCount)
 	}
 }
 

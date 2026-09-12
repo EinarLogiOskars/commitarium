@@ -22,6 +22,22 @@ func TestRunValidate(t *testing.T) {
 	if err := invalidLimits.Validate(); !errors.Is(err, ErrInvalidRun) {
 		t.Fatalf("expected negative planning limit error %v, got %v", ErrInvalidRun, err)
 	}
+	waiting := valid
+	waiting.Status = RunStatusWaitingForUser
+	waiting.WaitKind = RunWaitKindPhaseCheckpoint
+	if err := waiting.Validate(); err != nil {
+		t.Fatalf("validate waiting checkpoint: %v", err)
+	}
+	waiting.Paused = true
+	waiting.WaitKind = RunWaitKindPaused
+	waiting.PausedFromWaitKind = RunWaitKindPhaseCheckpoint
+	if err := waiting.Validate(); err != nil {
+		t.Fatalf("validate paused checkpoint: %v", err)
+	}
+	waiting.PausedFromWaitKind = RunWaitKindPaused
+	if err := waiting.Validate(); !errors.Is(err, ErrInvalidRun) {
+		t.Fatalf("expected invalid paused return kind, got %v", err)
+	}
 	ended := now.Add(time.Minute)
 	valid.Status = RunStatusSucceeded
 	valid.UpdatedAt = ended

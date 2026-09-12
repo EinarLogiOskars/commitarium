@@ -142,15 +142,41 @@ func (s *Service) TransitionRun(
 	expected RunStatus,
 	status RunStatus,
 	reason string,
+	waitKinds ...RunWaitKind,
 ) (Run, error) {
+	if len(waitKinds) > 1 {
+		return Run{}, ErrInvalidStatusTransition
+	}
+	var waitKind RunWaitKind
+	if len(waitKinds) == 1 {
+		waitKind = waitKinds[0]
+	}
+	if status == RunStatusWaitingForUser && waitKind == "" {
+		waitKind = RunWaitKindBlocker
+	}
 	run, err := s.store.TransitionRun(ctx, RunTransition{
 		RunID: id, Expected: expected, Status: status,
-		Reason: reason, OccurredAt: s.now().UTC(),
+		Reason: reason, WaitKind: waitKind, OccurredAt: s.now().UTC(),
 	})
 	if err != nil {
 		return Run{}, fmt.Errorf("transition run %q to %q: %w", id, status, err)
 	}
 	return run, nil
+}
+
+func (s *Service) ApplyRunPause(
+	ctx context.Context,
+	id string,
+	runID string,
+	action RunPauseAction,
+) (Run, bool, error) {
+	run, applied, err := s.store.ApplyRunPause(ctx, RunPauseMutation{
+		ID: id, RunID: runID, Action: action, OccurredAt: s.now().UTC(),
+	})
+	if err != nil {
+		return Run{}, false, fmt.Errorf("apply %s to run %q: %w", action, runID, err)
+	}
+	return run, applied, nil
 }
 
 func (s *Service) TransitionSession(

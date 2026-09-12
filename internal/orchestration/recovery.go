@@ -20,6 +20,7 @@ type RecoveryDiscovery interface {
 		expected execution.RunStatus,
 		status execution.RunStatus,
 		reason string,
+		waitKind ...execution.RunWaitKind,
 	) (execution.Run, error)
 	RecordSessionEventWithID(
 		ctx context.Context,
@@ -135,6 +136,7 @@ func (r *Recoverer) blockContradictoryRun(
 			execution.RunStatusRunning,
 			execution.RunStatusWaitingForUser,
 			reason,
+			execution.RunWaitKindBlocker,
 		); err != nil {
 			blockErrors = append(blockErrors, err)
 		}
