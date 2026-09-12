@@ -107,12 +107,17 @@ export function PlanningView({
   } else if (hasReviewer) {
     action = { label: "Continue planning", run: () => void act(startPlanningRound) };
   } else {
-    action = { label: "Get reviewer response", run: () => void act(startPlanningReviewer) };
+    action = { label: "Send plan to reviewer", run: () => void act(startPlanningReviewer) };
   }
 
   return (
     <section className="panel">
       <h2>Planning</h2>
+      <p className="muted">
+        The lead proposes a plan and the reviewer critiques it; they iterate until they
+        agree, then the plan is submitted and implementation can begin. No code is written
+        yet — this decides the approach.
+      </p>
       {error && <div className="banner banner--error">{error}</div>}
 
       <div
