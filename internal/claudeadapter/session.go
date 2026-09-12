@@ -1,11 +1,14 @@
 package claudeadapter
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -38,7 +41,7 @@ type session struct {
 	initialized      bool
 	lastAgentMessage string
 	agentMessages    int
-	toolNames        map[string]string
+	tools            map[string]pendingTool
 	result           worker.Result
 	waitErr          error
 }
@@ -58,7 +61,7 @@ func newSession(
 		workingDirectory: workingDirectory, outputContract: outputContract,
 		shutdownTimeout: shutdownTimeout,
 		events:          make(chan worker.Event, eventBuffer), done: make(chan struct{}),
-		toolNames: make(map[string]string),
+		tools: make(map[string]pendingTool),
 	}
 }
 
@@ -257,6 +260,7 @@ type streamMessage struct {
 	StructuredOutput json.RawMessage `json:"structured_output"`
 	CWD              string          `json:"cwd"`
 	Message          json.RawMessage `json:"message"`
+	ToolUseResult    json.RawMessage `json:"tool_use_result"`
 }
 
 type messageBody struct {
@@ -272,6 +276,16 @@ type contentBlock struct {
 	ToolUseID string          `json:"tool_use_id"`
 	IsError   bool            `json:"is_error"`
 	Content   json.RawMessage `json:"content"`
+	Input     json.RawMessage `json:"input"`
+}
+
+type pendingTool struct {
+	Name      string
+	Command   string
+	Path      string
+	Operation worker.FileOperation
+	Additions *int
+	Deletions *int
 }
 
 func (session *session) translate(raw []byte) ([]worker.Event, *worker.Result, error) {
@@ -319,7 +333,7 @@ func (session *session) translate(raw []byte) ([]worker.Event, *worker.Result, e
 		if message.Type == "assistant" {
 			return session.assistantEvents(body.Content), nil, nil
 		}
-		return session.userEvents(body.Content), nil, nil
+		return session.userEvents(body.Content, message.ToolUseResult), nil, nil
 
 	case "result":
 		if err := session.requireInitialized(message.SessionID); err != nil {
@@ -356,29 +370,199 @@ func (session *session) assistantEvents(blocks []contentBlock) []worker.Event {
 			if name == "" || id == "" {
 				continue
 			}
+			tool := session.describeTool(name, block.Input)
 			session.mu.Lock()
-			session.toolNames[id] = name
+			session.tools[id] = tool
 			session.mu.Unlock()
-			events = append(events, worker.Event{Type: worker.EventActivity, Text: startedToolText(name)})
+			if tool.Command == "" && tool.Path == "" {
+				events = append(events, worker.Event{Type: worker.EventActivity, Text: startedToolText(name)})
+			}
 		}
 	}
 	return events
 }
 
-func (session *session) userEvents(blocks []contentBlock) []worker.Event {
+func (session *session) userEvents(blocks []contentBlock, toolUseResult json.RawMessage) []worker.Event {
 	events := make([]worker.Event, 0)
+	if len(blocks) != 1 {
+		// Claude's top-level tool_use_result describes one tool. Do not attach
+		// ambiguous execution facts when several results share a message.
+		toolUseResult = nil
+	}
 	for _, block := range blocks {
 		if block.Type != "tool_result" || strings.TrimSpace(block.ToolUseID) == "" {
 			continue
 		}
 		session.mu.Lock()
-		name := session.toolNames[block.ToolUseID]
-		delete(session.toolNames, block.ToolUseID)
+		tool := session.tools[block.ToolUseID]
+		delete(session.tools, block.ToolUseID)
 		session.mu.Unlock()
-		text := finishedToolText(name, block.IsError)
+		if tool.Command != "" {
+			events = append(events, commandToolEvent(tool, block.IsError, toolUseResult))
+			continue
+		}
+		if tool.Path != "" && !block.IsError {
+			events = append(events, fileToolEvent(tool))
+			continue
+		}
+		text := finishedToolText(tool.Name, block.IsError)
 		events = append(events, worker.Event{Type: worker.EventActivity, Text: text})
 	}
 	return events
+}
+
+func (session *session) describeTool(name string, input json.RawMessage) pendingTool {
+	tool := pendingTool{Name: name}
+	var fields struct {
+		Command   string `json:"command"`
+		FilePath  string `json:"file_path"`
+		Path      string `json:"path"`
+		OldString string `json:"old_string"`
+		NewString string `json:"new_string"`
+		Content   string `json:"content"`
+	}
+	if json.Unmarshal(input, &fields) != nil {
+		return tool
+	}
+	if name == "Bash" && strings.TrimSpace(fields.Command) != "" {
+		tool.Command = strings.TrimSpace(fields.Command)
+		return tool
+	}
+	if name != "Edit" && name != "Write" && name != "NotebookEdit" {
+		return tool
+	}
+	path := fields.FilePath
+	if path == "" {
+		path = fields.Path
+	}
+	publicPath, fullPath, err := session.resolveFilePath(path)
+	if err != nil {
+		return tool
+	}
+	tool.Path = publicPath
+	tool.Operation = worker.FileOperationModified
+	if name == "Write" {
+		if _, err := os.Lstat(fullPath); os.IsNotExist(err) {
+			tool.Operation = worker.FileOperationCreated
+		}
+		additions := textLineCount(fields.Content)
+		tool.Additions = &additions
+		if tool.Operation == worker.FileOperationModified {
+			if deletions, err := fileLineCount(fullPath); err == nil {
+				tool.Deletions = &deletions
+			}
+		} else {
+			deletions := 0
+			tool.Deletions = &deletions
+		}
+	} else if name == "Edit" {
+		additions := textLineCount(fields.NewString)
+		deletions := textLineCount(fields.OldString)
+		tool.Additions = &additions
+		tool.Deletions = &deletions
+	}
+	return tool
+}
+
+func (session *session) resolveFilePath(path string) (string, string, error) {
+	cleaned := filepath.Clean(strings.TrimSpace(path))
+	if cleaned == "." || cleaned == "" {
+		return "", "", errors.New("file path is required")
+	}
+	fullPath := cleaned
+	if !filepath.IsAbs(fullPath) {
+		fullPath = filepath.Join(session.workingDirectory, fullPath)
+	}
+	relative, err := filepath.Rel(session.workingDirectory, fullPath)
+	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) || filepath.IsAbs(relative) {
+		return "", "", errors.New("file path is outside the workspace")
+	}
+	return filepath.ToSlash(relative), fullPath, nil
+}
+
+func commandToolEvent(tool pendingTool, failed bool, rawResult json.RawMessage) worker.Event {
+	exitCode, durationMS := commandResultFacts(rawResult)
+	text := "Claude ran command: " + tool.Command
+	if exitCode != nil {
+		text = fmt.Sprintf("Claude ran command with exit code %d: %s", *exitCode, tool.Command)
+	} else if failed {
+		text = "Claude reported a failed command: " + tool.Command
+	}
+	return worker.Event{
+		Type: worker.EventActivity, Text: text,
+		Activity: &worker.Activity{
+			Kind: worker.ActivityKindCommand, Command: tool.Command,
+			ExitCode: exitCode, DurationMS: durationMS,
+		},
+	}
+}
+
+func commandResultFacts(raw json.RawMessage) (*int, *int64) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	var result struct {
+		ExitCode      *int   `json:"exit_code"`
+		CamelExitCode *int   `json:"exitCode"`
+		DurationMS    *int64 `json:"duration_ms"`
+		CamelDuration *int64 `json:"durationMs"`
+	}
+	if json.Unmarshal(raw, &result) != nil {
+		return nil, nil
+	}
+	if result.ExitCode == nil {
+		result.ExitCode = result.CamelExitCode
+	}
+	if result.DurationMS == nil {
+		result.DurationMS = result.CamelDuration
+	}
+	return result.ExitCode, result.DurationMS
+}
+
+func fileToolEvent(tool pendingTool) worker.Event {
+	stats := ""
+	if tool.Additions != nil && tool.Deletions != nil {
+		stats = fmt.Sprintf(" (+%d/-%d)", *tool.Additions, *tool.Deletions)
+	}
+	return worker.Event{
+		Type: worker.EventActivity,
+		Text: fmt.Sprintf("Claude %s %s%s.", tool.Operation, tool.Path, stats),
+		Activity: &worker.Activity{
+			Kind: worker.ActivityKindFileChange, Operation: tool.Operation,
+			Path: tool.Path, Additions: tool.Additions, Deletions: tool.Deletions,
+		},
+	}
+}
+
+func textLineCount(text string) int {
+	if text == "" {
+		return 0
+	}
+	lines := strings.Count(text, "\n")
+	if !strings.HasSuffix(text, "\n") {
+		lines++
+	}
+	return lines
+}
+
+func fileLineCount(path string) (int, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return 0, err
+	}
+	defer file.Close()
+	scanner := bufio.NewScanner(file)
+	// Counting lines does not need to retain their content, and SplitLines
+	// handles a final line without a trailing newline.
+	scanner.Split(bufio.ScanLines)
+	lines := 0
+	for scanner.Scan() {
+		lines++
+	}
+	if err := scanner.Err(); err != nil {
+		return 0, err
+	}
+	return lines, nil
 }
 
 func (session *session) translateResult(

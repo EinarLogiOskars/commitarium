@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
@@ -27,6 +28,10 @@ func TestExecutionStorePersistsAcrossDatabaseReopen(t *testing.T) {
 	pending := execution.PendingEvent{
 		ID: "sev_one", SessionID: session.ID, Type: worker.EventActivity,
 		Text: "inspecting accepted plan", OccurredAt: run.StartedAt.Add(time.Second),
+		Activity: &worker.Activity{
+			Kind: worker.ActivityKindCommand, Command: "go test ./...",
+			ExitCode: databaseIntPointer(0), DurationMS: databaseInt64Pointer(4213),
+		},
 	}
 	createdEvent, _, err := store.AppendEvent(t.Context(), pending)
 	if err != nil {
@@ -78,7 +83,7 @@ func TestExecutionStorePersistsAcrossDatabaseReopen(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list persisted events: %v", err)
 	}
-	if len(events) != 1 || events[0] != createdEvent {
+	if len(events) != 1 || !reflect.DeepEqual(events[0], createdEvent) {
 		t.Errorf("expected event %+v, got %+v", createdEvent, events)
 	}
 	storedCommand, err := reopenedStore.GetCommand(t.Context(), command.ID)
@@ -89,6 +94,10 @@ func TestExecutionStorePersistsAcrossDatabaseReopen(t *testing.T) {
 		t.Errorf("expected command %+v, got %+v", command, storedCommand)
 	}
 }
+
+func databaseIntPointer(value int) *int { return &value }
+
+func databaseInt64Pointer(value int64) *int64 { return &value }
 
 func TestExecutionStoreListsFeatureRunsNewestFirst(t *testing.T) {
 	db, store := newTestExecutionStore(t)

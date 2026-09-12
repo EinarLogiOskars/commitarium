@@ -3,6 +3,7 @@ package workerhttp
 import (
 	"errors"
 	"fmt"
+	"path"
 	"regexp"
 	"strings"
 	"time"
@@ -507,6 +508,69 @@ func (metadata TruncationMetadata) Validate() error {
 	return nil
 }
 
+func (activity Activity) Validate() error {
+	switch activity.Kind {
+	case ActivityKindCommand:
+		if err := validateRequiredText("activity command", activity.Command, MaxEventTextBytes); err != nil {
+			return err
+		}
+		if activity.DurationMS != nil && *activity.DurationMS < 0 {
+			return invalid("activity command duration cannot be negative")
+		}
+		if activity.Operation != "" || activity.Path != "" || activity.OldPath != "" ||
+			activity.Additions != nil || activity.Deletions != nil {
+			return invalid("command activity cannot include file-change fields")
+		}
+	case ActivityKindFileChange:
+		if !activity.Operation.IsValid() {
+			return invalid("file operation %q is not recognized", activity.Operation)
+		}
+		if err := validateRequiredText("activity file path", activity.Path, MaxEventTextBytes); err != nil {
+			return err
+		}
+		if !validActivityPath(activity.Path) {
+			return invalid("activity file path must be workspace-relative")
+		}
+		if activity.Operation == FileOperationRenamed {
+			if err := validateRequiredText("activity old file path", activity.OldPath, MaxEventTextBytes); err != nil {
+				return err
+			}
+			if !validActivityPath(activity.OldPath) {
+				return invalid("activity old file path must be workspace-relative")
+			}
+		} else if activity.OldPath != "" {
+			return invalid("activity old file path is valid only for a rename")
+		}
+		if activity.Additions != nil && *activity.Additions < 0 {
+			return invalid("activity additions cannot be negative")
+		}
+		if activity.Deletions != nil && *activity.Deletions < 0 {
+			return invalid("activity deletions cannot be negative")
+		}
+		if activity.Command != "" || activity.ExitCode != nil || activity.DurationMS != nil {
+			return invalid("file-change activity cannot include command fields")
+		}
+	default:
+		return invalid("activity kind %q is not recognized", activity.Kind)
+	}
+	return nil
+}
+
+func validActivityPath(value string) bool {
+	cleaned := path.Clean(value)
+	return strings.TrimSpace(value) == value && cleaned == value && cleaned != "." && cleaned != ".." &&
+		!path.IsAbs(cleaned) && !strings.HasPrefix(cleaned, "../")
+}
+
+func (operation FileOperation) IsValid() bool {
+	switch operation {
+	case FileOperationCreated, FileOperationModified, FileOperationDeleted, FileOperationRenamed:
+		return true
+	default:
+		return false
+	}
+}
+
 func (event Event) Validate() error {
 	if err := event.AttemptReference.Validate(); err != nil {
 		return err
@@ -531,6 +595,14 @@ func (event Event) Validate() error {
 	}
 	if event.Truncation != nil {
 		if err := event.Truncation.Validate(); err != nil {
+			return err
+		}
+	}
+	if event.Activity != nil {
+		if event.Type != EventActivity {
+			return invalid("event type %q cannot include structured activity", event.Type)
+		}
+		if err := event.Activity.Validate(); err != nil {
 			return err
 		}
 	}

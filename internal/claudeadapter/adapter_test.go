@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"syscall"
@@ -50,12 +51,45 @@ func TestAdapterStartsClaudeAndTranslatesObservableActivity(t *testing.T) {
 	}
 	wantEvents := []worker.Event{
 		{Type: worker.EventActivity, Text: "Claude started working."},
-		{Type: worker.EventActivity, Text: "Claude started a command or tool."},
-		{Type: worker.EventActivity, Text: "Claude finished a command or tool."},
+		{
+			Type: worker.EventActivity,
+			Text: "Claude ran command with exit code 0: go test ./...",
+			Activity: &worker.Activity{
+				Kind: worker.ActivityKindCommand, Command: "go test ./...",
+				ExitCode: intPointer(0), DurationMS: int64Pointer(3210),
+			},
+		},
+		{
+			Type: worker.EventActivity,
+			Text: "Claude modified README.md (+2/-1).",
+			Activity: &worker.Activity{
+				Kind: worker.ActivityKindFileChange, Operation: worker.FileOperationModified,
+				Path: "README.md", Additions: intPointer(2), Deletions: intPointer(1),
+			},
+		},
 		{Type: worker.EventMessage, Text: "Implemented and verified the change."},
 	}
-	if observed := <-events; !slices.Equal(observed, wantEvents) {
+	if observed := <-events; !reflect.DeepEqual(observed, wantEvents) {
 		t.Fatalf("observable events = %+v, want %+v", observed, wantEvents)
+	}
+}
+
+func TestDescribeToolKeepsFilePathsInsideWorkspace(t *testing.T) {
+	workspace := t.TempDir()
+	session := &session{workingDirectory: workspace}
+	created := session.describeTool("Write", json.RawMessage(
+		`{"file_path":"docs/new.md","content":"one\ntwo\n"}`,
+	))
+	if created.Path != "docs/new.md" || created.Operation != worker.FileOperationCreated ||
+		created.Additions == nil || *created.Additions != 2 ||
+		created.Deletions == nil || *created.Deletions != 0 {
+		t.Fatalf("created-file tool = %+v", created)
+	}
+	outside := session.describeTool("Write", json.RawMessage(
+		`{"file_path":"../outside.md","content":"no"}`,
+	))
+	if outside.Path != "" {
+		t.Fatalf("outside tool exposed path %+v", outside)
 	}
 }
 
@@ -366,8 +400,26 @@ func TestClaudeCLIHelper(t *testing.T) {
 		})
 		helperWrite(writer, map[string]any{
 			"type": "user", "session_id": sessionID,
+			"tool_use_result": map[string]any{"exitCode": 0, "durationMs": 3210},
 			"message": map[string]any{"role": "user", "content": []any{
 				map[string]any{"type": "tool_result", "tool_use_id": "tool_test", "content": "ok", "is_error": false},
+			}},
+		})
+		helperWrite(writer, map[string]any{
+			"type": "assistant", "session_id": sessionID,
+			"message": map[string]any{"role": "assistant", "content": []any{
+				map[string]any{
+					"type": "tool_use", "id": "tool_edit", "name": "Edit",
+					"input": map[string]any{
+						"file_path": "README.md", "old_string": "old", "new_string": "new\nmore",
+					},
+				},
+			}},
+		})
+		helperWrite(writer, map[string]any{
+			"type": "user", "session_id": sessionID,
+			"message": map[string]any{"role": "user", "content": []any{
+				map[string]any{"type": "tool_result", "tool_use_id": "tool_edit", "content": "updated", "is_error": false},
 			}},
 		})
 		helperWrite(writer, map[string]any{
@@ -479,6 +531,10 @@ func collectEvents(session worker.Session) <-chan []worker.Event {
 	}()
 	return collected
 }
+
+func intPointer(value int) *int { return &value }
+
+func int64Pointer(value int64) *int64 { return &value }
 
 func timeoutContext(t *testing.T, duration time.Duration) context.Context {
 	t.Helper()

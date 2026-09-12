@@ -169,6 +169,10 @@ func TestGetSessionAndEvents(t *testing.T) {
 		events: []execution.Event{{
 			ID: "sev_test", SessionID: "ses_test", Sequence: 1,
 			Type: worker.EventActivity, Text: "editing files", OccurredAt: fixedTime,
+			Activity: &worker.Activity{
+				Kind: worker.ActivityKindFileChange, Operation: worker.FileOperationModified,
+				Path: "README.md", Additions: httpIntPointer(42), Deletions: httpIntPointer(8),
+			},
 		}},
 	}
 	handler := New(nil, nil, nil, executions, nil, nil)
@@ -205,10 +209,16 @@ func TestGetSessionAndEvents(t *testing.T) {
 	}
 	if len(eventBody) != 1 ||
 		eventBody[0].Sequence != 1 ||
-		eventBody[0].Text != "editing files" {
+		eventBody[0].Text != "editing files" ||
+		eventBody[0].Activity == nil ||
+		eventBody[0].Activity.Kind != worker.ActivityKindFileChange ||
+		eventBody[0].Activity.Path != "README.md" ||
+		eventBody[0].Activity.Additions == nil || *eventBody[0].Activity.Additions != 42 {
 		t.Errorf("unexpected event response %+v", eventBody)
 	}
 }
+
+func httpIntPointer(value int) *int { return &value }
 
 func TestSendSessionCommand(t *testing.T) {
 	fixedTime := time.Date(2026, time.September, 9, 1, 0, 0, 0, time.UTC)

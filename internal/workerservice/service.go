@@ -30,6 +30,7 @@ type NormalizedEvent struct {
 	Text               string
 	Redaction          workerhttp.RedactionMetadata
 	Truncation         *workerhttp.TruncationMetadata
+	Activity           *workerhttp.Activity
 	RecoveryAssessment *workerhttp.RecoveryAssessment
 }
 

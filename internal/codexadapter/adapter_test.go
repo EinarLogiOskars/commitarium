@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"syscall"
@@ -51,12 +52,68 @@ func TestAdapterStartsCodexAndTranslatesObservableActivity(t *testing.T) {
 	}
 	wantEvents := []worker.Event{
 		{Type: worker.EventActivity, Text: "Codex started working."},
-		{Type: worker.EventActivity, Text: "Codex started a command."},
-		{Type: worker.EventActivity, Text: "Codex finished a command with exit code 0."},
+		{
+			Type: worker.EventActivity,
+			Text: "Codex ran command with exit code 0: go test ./...",
+			Activity: &worker.Activity{
+				Kind: worker.ActivityKindCommand, Command: "go test ./...",
+				ExitCode: intPointer(0), DurationMS: int64Pointer(4213),
+			},
+		},
+		{
+			Type: worker.EventActivity,
+			Text: "Codex modified README.md (+2/-1).",
+			Activity: &worker.Activity{
+				Kind: worker.ActivityKindFileChange, Operation: worker.FileOperationModified,
+				Path: "README.md", Additions: intPointer(2), Deletions: intPointer(1),
+			},
+		},
 		{Type: worker.EventMessage, Text: "Implemented and verified the change."},
 	}
 	if observed := <-events; !equalEvents(observed, wantEvents) {
 		t.Fatalf("observable events = %+v, want %+v", observed, wantEvents)
+	}
+}
+
+func TestFileChangeEventsClassifyEveryChangedFile(t *testing.T) {
+	workspace := t.TempDir()
+	session := &session{workingDirectory: workspace}
+	movePath := filepath.Join(workspace, "new.go")
+	events, err := session.fileChangeEvents(threadItem{Changes: []fileUpdateChange{
+		{Path: filepath.Join(workspace, "created.go"), Diff: "+line\n", Kind: fileUpdateKind{Type: "add"}},
+		{Path: filepath.Join(workspace, "deleted.go"), Diff: "-line\n", Kind: fileUpdateKind{Type: "delete"}},
+		{Path: filepath.Join(workspace, "edited.go"), Diff: "-old\n+new\n", Kind: fileUpdateKind{Type: "update"}},
+		{Path: filepath.Join(workspace, "old.go"), Diff: "", Kind: fileUpdateKind{Type: "update", MovePath: &movePath}},
+	}})
+	if err != nil {
+		t.Fatalf("translate file changes: %v", err)
+	}
+	if len(events) != 4 {
+		t.Fatalf("file-change event count = %d, want 4", len(events))
+	}
+	wantOperations := []worker.FileOperation{
+		worker.FileOperationCreated,
+		worker.FileOperationDeleted,
+		worker.FileOperationModified,
+		worker.FileOperationRenamed,
+	}
+	for index, event := range events {
+		if event.Activity == nil || event.Activity.Operation != wantOperations[index] {
+			t.Fatalf("file-change event %d = %+v", index, event)
+		}
+	}
+	if events[3].Activity.Path != "new.go" || events[3].Activity.OldPath != "old.go" {
+		t.Fatalf("rename activity = %+v", events[3].Activity)
+	}
+}
+
+func TestFileChangeEventsRejectPathOutsideWorkspace(t *testing.T) {
+	session := &session{workingDirectory: t.TempDir()}
+	_, err := session.fileChangeEvents(threadItem{Changes: []fileUpdateChange{{
+		Path: "/private/elsewhere.txt", Kind: fileUpdateKind{Type: "update"},
+	}}})
+	if !errors.Is(err, ErrProtocol) {
+		t.Fatalf("outside path error = %v, want ErrProtocol", err)
 	}
 }
 
@@ -531,10 +588,23 @@ func TestCodexAppServerHelper(t *testing.T) {
 			"threadId": "thr_test", "turnId": "turn_test",
 			"item": map[string]any{"id": "item_command", "type": "commandExecution", "status": "inProgress"},
 		})
-		zero := 0
 		helpNotify(writer, "item/completed", map[string]any{
 			"threadId": "thr_test", "turnId": "turn_test",
-			"item": map[string]any{"id": "item_command", "type": "commandExecution", "status": "completed", "exitCode": zero},
+			"item": map[string]any{
+				"id": "item_command", "type": "commandExecution", "status": "completed",
+				"command": "go test ./...", "exitCode": 0, "durationMs": 4213,
+			},
+		})
+		helpNotify(writer, "item/completed", map[string]any{
+			"threadId": "thr_test", "turnId": "turn_test",
+			"item": map[string]any{
+				"id": "item_file", "type": "fileChange", "status": "completed",
+				"changes": []any{map[string]any{
+					"path": filepath.Join(workingDirectory, "README.md"),
+					"diff": "--- a/README.md\n+++ b/README.md\n-old\n+new\n+more\n",
+					"kind": map[string]any{"type": "update", "move_path": nil},
+				}},
+			},
 		})
 		helpNotify(writer, "item/completed", map[string]any{
 			"threadId": "thr_test", "turnId": "turn_test",
@@ -615,6 +685,10 @@ func TestCodexAppServerHelper(t *testing.T) {
 		os.Exit(89)
 	}
 }
+
+func intPointer(value int) *int { return &value }
+
+func int64Pointer(value int64) *int64 { return &value }
 
 type helperMessage struct {
 	ID     int64           `json:"id"`
@@ -794,7 +868,7 @@ func equalEvents(left []worker.Event, right []worker.Event) bool {
 		return false
 	}
 	for index := range left {
-		if left[index].Type != right[index].Type || left[index].Text != right[index].Text {
+		if !reflect.DeepEqual(left[index], right[index]) {
 			return false
 		}
 	}

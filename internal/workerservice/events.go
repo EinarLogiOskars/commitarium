@@ -150,6 +150,7 @@ func (service *Service) recordProviderEvent(
 		OccurredAt:         service.timestamp(),
 		Redaction:          normalized.Redaction,
 		Truncation:         normalized.Truncation,
+		Activity:           normalized.Activity,
 		RecoveryAssessment: normalized.RecoveryAssessment,
 	}
 	if err := event.Validate(); err != nil {

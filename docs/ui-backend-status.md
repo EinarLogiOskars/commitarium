@@ -169,6 +169,12 @@ Safe UI capabilities:
 - Follow session activity with SSE and reconnect using `Last-Event-ID`.
 - Render factual provider-neutral activity without depending on private model
   reasoning or provider-native transcript formats.
+- Prefer the optional structured `activity` object on `type: "activity"`
+  events. `kind: "command"` exposes the command plus optional `exit_code` and
+  `duration_ms`; `kind: "file_change"` exposes `op`, workspace-relative `path`,
+  optional rename `old_path`, and optional `additions`/`deletions`. Every event
+  retains `text` for fallback. REST history and SSE use the identical shape,
+  and neither includes command output, full diffs, or file contents.
 - Display durable run states including `running`, `waiting_for_user`,
   `succeeded`, `stopped`, and `failed`.
 - Read `paused` and `wait_kind` from run responses. Settled wait kinds are

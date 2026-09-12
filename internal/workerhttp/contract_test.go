@@ -363,6 +363,14 @@ func TestEventValidate(t *testing.T) {
 	if err := valid.Validate(); err != nil {
 		t.Fatalf("validate event: %v", err)
 	}
+	structured := valid
+	structured.Activity = &Activity{
+		Kind: ActivityKindCommand, Command: "go test ./...",
+		ExitCode: intPointer(0), DurationMS: int64Pointer(4213),
+	}
+	if err := structured.Validate(); err != nil {
+		t.Fatalf("validate structured event: %v", err)
+	}
 
 	redacted := valid
 	redacted.Sequence = 2
@@ -405,6 +413,19 @@ func TestEventValidate(t *testing.T) {
 		{name: "invalid truncation", event: withTruncation(valid, &TruncationMetadata{OriginalBytes: 10, RetainedBytes: 10})},
 		{name: "missing recovery assessment", event: withEventType(valid, EventRecoveryAssessment)},
 		{name: "assessment on wrong event", event: withRecoveryAssessment(valid, &RecoveryAssessment{Consistent: true})},
+		{name: "activity on wrong event", event: Event{
+			AttemptReference: valid.AttemptReference, Sequence: 2, Type: EventMessage,
+			Text: "message", OccurredAt: now, Activity: structured.Activity,
+		}},
+		{name: "invalid command activity", event: Event{
+			AttemptReference: valid.AttemptReference, Sequence: 2, Type: EventActivity,
+			Text: "command", OccurredAt: now, Activity: &Activity{Kind: ActivityKindCommand},
+		}},
+		{name: "invalid rename activity", event: Event{
+			AttemptReference: valid.AttemptReference, Sequence: 2, Type: EventActivity,
+			Text: "rename", OccurredAt: now,
+			Activity: &Activity{Kind: ActivityKindFileChange, Operation: FileOperationRenamed, Path: "new.go"},
+		}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -414,6 +435,10 @@ func TestEventValidate(t *testing.T) {
 		})
 	}
 }
+
+func intPointer(value int) *int { return &value }
+
+func int64Pointer(value int64) *int64 { return &value }
 
 func TestJSONContract(t *testing.T) {
 	request := PutAttemptRequest{
@@ -464,6 +489,23 @@ func TestJSONContract(t *testing.T) {
 	want = `{"session_id":"ses_test","attempt_id":"att_test","sequence":7,"type":"recovery_assessment","text":"durable state is consistent","occurred_at":"2026-09-08T12:00:00.123Z","redaction":{"count":1,"categories":["internal_path"]},"recovery_assessment":{"consistent":true,"requires_user_review":false}}`
 	if string(encoded) != want {
 		t.Fatalf("event JSON\n got: %s\nwant: %s", encoded, want)
+	}
+
+	structuredEvent := Event{
+		AttemptReference: validAttemptReference(), Sequence: 8, Type: EventActivity,
+		Text: "ran tests", OccurredAt: now, Redaction: RedactionMetadata{},
+		Activity: &Activity{
+			Kind: ActivityKindCommand, Command: "pnpm test",
+			ExitCode: intPointer(0), DurationMS: int64Pointer(4213),
+		},
+	}
+	encoded, err = json.Marshal(structuredEvent)
+	if err != nil {
+		t.Fatalf("marshal structured event: %v", err)
+	}
+	want = `{"session_id":"ses_test","attempt_id":"att_test","sequence":8,"type":"activity","text":"ran tests","occurred_at":"2026-09-08T12:00:00.123Z","redaction":{"count":0},"activity":{"kind":"command","command":"pnpm test","exit_code":0,"duration_ms":4213}}`
+	if string(encoded) != want {
+		t.Fatalf("structured event JSON\n got: %s\nwant: %s", encoded, want)
 	}
 
 	endedAt := now.Add(time.Minute)

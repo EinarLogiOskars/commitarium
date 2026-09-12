@@ -16,6 +16,7 @@ type PendingEvent struct {
 	SessionID  string
 	Type       worker.EventType
 	Text       string
+	Activity   *worker.Activity
 	OccurredAt time.Time
 }
 
@@ -26,6 +27,7 @@ type PendingWorkerEvent struct {
 	SourceSequence int64
 	Type           worker.EventType
 	Text           string
+	Activity       *worker.Activity
 	OccurredAt     time.Time
 	AcceptedAt     time.Time
 }
@@ -268,6 +270,10 @@ func (event PendingEvent) Validate() error {
 		return fmt.Errorf("%w: text is required", ErrInvalidEvent)
 	case event.OccurredAt.IsZero():
 		return fmt.Errorf("%w: occurrence time is required", ErrInvalidEvent)
+	case event.Activity != nil && event.Type != worker.EventActivity:
+		return fmt.Errorf("%w: structured activity requires activity event type", ErrInvalidEvent)
+	case event.Activity != nil && event.Activity.Validate() != nil:
+		return fmt.Errorf("%w: structured activity is invalid", ErrInvalidEvent)
 	default:
 		return nil
 	}
@@ -291,6 +297,10 @@ func (event PendingWorkerEvent) Validate() error {
 		return fmt.Errorf("%w: occurrence time is required", ErrInvalidEvent)
 	case event.AcceptedAt.IsZero():
 		return fmt.Errorf("%w: acceptance time is required", ErrInvalidEvent)
+	case event.Activity != nil && event.Type != worker.EventActivity:
+		return fmt.Errorf("%w: structured activity requires activity event type", ErrInvalidEvent)
+	case event.Activity != nil && event.Activity.Validate() != nil:
+		return fmt.Errorf("%w: structured activity is invalid", ErrInvalidEvent)
 	default:
 		return nil
 	}

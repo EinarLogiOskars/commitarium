@@ -32,11 +32,24 @@ type sessionResponse struct {
 }
 
 type sessionEventResponse struct {
-	ID         string           `json:"id"`
-	Sequence   int64            `json:"sequence"`
-	Type       worker.EventType `json:"type"`
-	Text       string           `json:"text"`
-	OccurredAt time.Time        `json:"occurred_at"`
+	ID         string            `json:"id"`
+	Sequence   int64             `json:"sequence"`
+	Type       worker.EventType  `json:"type"`
+	Text       string            `json:"text"`
+	Activity   *activityResponse `json:"activity,omitempty"`
+	OccurredAt time.Time         `json:"occurred_at"`
+}
+
+type activityResponse struct {
+	Kind       worker.ActivityKind  `json:"kind"`
+	Command    string               `json:"command,omitempty"`
+	ExitCode   *int                 `json:"exit_code,omitempty"`
+	DurationMS *int64               `json:"duration_ms,omitempty"`
+	Operation  worker.FileOperation `json:"op,omitempty"`
+	Path       string               `json:"path,omitempty"`
+	OldPath    string               `json:"old_path,omitempty"`
+	Additions  *int                 `json:"additions,omitempty"`
+	Deletions  *int                 `json:"deletions,omitempty"`
 }
 
 type sessionCommandRequest struct {
@@ -88,12 +101,26 @@ func (api *API) getSessionEventsHandler(w http.ResponseWriter, r *http.Request) 
 	}
 	response := make([]sessionEventResponse, 0, len(events))
 	for _, event := range events {
-		response = append(response, sessionEventResponse{
-			ID: event.ID, Sequence: event.Sequence, Type: event.Type,
-			Text: event.Text, OccurredAt: event.OccurredAt,
-		})
+		response = append(response, newSessionEventResponse(event))
 	}
 	writeJSON(w, http.StatusOK, response, "session events")
+}
+
+func newSessionEventResponse(event execution.Event) sessionEventResponse {
+	response := sessionEventResponse{
+		ID: event.ID, Sequence: event.Sequence, Type: event.Type,
+		Text: event.Text, OccurredAt: event.OccurredAt,
+	}
+	if event.Activity != nil {
+		response.Activity = &activityResponse{
+			Kind: event.Activity.Kind, Command: event.Activity.Command,
+			ExitCode: event.Activity.ExitCode, DurationMS: event.Activity.DurationMS,
+			Operation: event.Activity.Operation, Path: event.Activity.Path,
+			OldPath: event.Activity.OldPath, Additions: event.Activity.Additions,
+			Deletions: event.Activity.Deletions,
+		}
+	}
+	return response
 }
 
 func (api *API) sendSessionCommandHandler(w http.ResponseWriter, r *http.Request) {

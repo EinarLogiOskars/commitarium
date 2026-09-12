@@ -250,7 +250,7 @@ func (adapter *Adapter) launch(
 	if err := client.request(operationCtx, method, params, &threadStarted); err != nil {
 		var rejected *protocolError
 		if !errors.As(err, &rejected) {
-			partial := newSession(client, process, "", adapter.shutdownTimeout, adapter.eventBuffer, request.OutputContract)
+			partial := newSession(client, process, "", request.LaunchEnvironment.WorkingDirectory, adapter.shutdownTimeout, adapter.eventBuffer, request.OutputContract)
 			partial.stopAfterFailedLaunch()
 			return partial, fmt.Errorf("%s Codex thread: %w", strings.TrimPrefix(method, "thread/"), err)
 		}
@@ -259,7 +259,7 @@ func (adapter *Adapter) launch(
 	}
 	threadID := strings.TrimSpace(threadStarted.Thread.ID)
 	if threadID == "" {
-		partial := newSession(client, process, "", adapter.shutdownTimeout, adapter.eventBuffer, request.OutputContract)
+		partial := newSession(client, process, "", request.LaunchEnvironment.WorkingDirectory, adapter.shutdownTimeout, adapter.eventBuffer, request.OutputContract)
 		partial.stopAfterFailedLaunch()
 		return partial, fmt.Errorf("%w: %s response omitted the thread ID", ErrProtocol, method)
 	}
@@ -277,6 +277,7 @@ func (adapter *Adapter) launch(
 		client,
 		process,
 		threadID,
+		request.LaunchEnvironment.WorkingDirectory,
 		adapter.shutdownTimeout,
 		adapter.eventBuffer,
 		request.OutputContract,

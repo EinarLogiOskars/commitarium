@@ -88,6 +88,19 @@ func (s *Service) IngestNext(
 		Type: worker.EventType(filtered.Type),
 		Text: filtered.Text,
 	}
+	if filtered.Activity != nil {
+		visibleEvent.Activity = &worker.Activity{
+			Kind:       worker.ActivityKind(filtered.Activity.Kind),
+			Command:    filtered.Activity.Command,
+			ExitCode:   filtered.Activity.ExitCode,
+			DurationMS: filtered.Activity.DurationMS,
+			Operation:  worker.FileOperation(filtered.Activity.Operation),
+			Path:       filtered.Activity.Path,
+			OldPath:    filtered.Activity.OldPath,
+			Additions:  filtered.Activity.Additions,
+			Deletions:  filtered.Activity.Deletions,
+		}
+	}
 	if filtered.RecoveryAssessment != nil {
 		visibleEvent.RecoveryAssessment = &worker.RecoveryAssessment{
 			Consistent:         filtered.RecoveryAssessment.Consistent,

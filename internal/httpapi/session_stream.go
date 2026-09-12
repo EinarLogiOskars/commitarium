@@ -109,10 +109,7 @@ func sequenceForLastSessionEvent(
 }
 
 func writeSessionEvent(w http.ResponseWriter, event execution.Event) error {
-	data, err := json.Marshal(sessionEventResponse{
-		ID: event.ID, Sequence: event.Sequence, Type: event.Type,
-		Text: event.Text, OccurredAt: event.OccurredAt,
-	})
+	data, err := json.Marshal(newSessionEventResponse(event))
 	if err != nil {
 		return fmt.Errorf("encode session event response: %w", err)
 	}

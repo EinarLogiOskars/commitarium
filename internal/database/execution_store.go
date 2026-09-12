@@ -3,6 +3,7 @@ package database
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -588,7 +589,8 @@ func (s *ExecutionStore) AppendEvent(
 	if found {
 		if existing.SessionID != pending.SessionID ||
 			existing.Type != pending.Type ||
-			existing.Text != pending.Text {
+			existing.Text != pending.Text ||
+			!activitiesEqual(existing.Activity, pending.Activity) {
 			return execution.Event{}, false, execution.ErrEventConflict
 		}
 		return existing, false, nil
@@ -613,23 +615,29 @@ func (s *ExecutionStore) AppendEvent(
 		Sequence:   sequence,
 		Type:       pending.Type,
 		Text:       pending.Text,
+		Activity:   pending.Activity,
 		OccurredAt: pending.OccurredAt.UTC(),
 	}
 	if err := event.Validate(); err != nil {
+		return execution.Event{}, false, err
+	}
+	activityJSON, err := encodeSessionActivity(event.Activity)
+	if err != nil {
 		return execution.Event{}, false, err
 	}
 	if _, err := tx.ExecContext(
 		ctx,
 		`INSERT INTO session_events (
 			id, session_id, sequence, event_type, text, occurred_at,
-			worker_attempt_id, worker_event_sequence
-		 ) VALUES (?, ?, ?, ?, ?, ?, NULL, NULL)`,
+			worker_attempt_id, worker_event_sequence, activity_json
+		 ) VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?)`,
 		event.ID,
 		event.SessionID,
 		event.Sequence,
 		event.Type,
 		event.Text,
 		formatExecutionTime(event.OccurredAt),
+		activityJSON,
 	); err != nil {
 		return execution.Event{}, false, fmt.Errorf("insert session event %q: %w", event.ID, err)
 	}
@@ -646,7 +654,7 @@ func (s *ExecutionStore) ListEvents(
 	rows, err := s.db.QueryContext(
 		ctx,
 		`SELECT id, session_id, sequence, event_type, text, occurred_at,
-		        worker_attempt_id, worker_event_sequence
+		        worker_attempt_id, worker_event_sequence, activity_json
 		 FROM session_events WHERE session_id = ? ORDER BY sequence`,
 		sessionID,
 	)
@@ -966,7 +974,7 @@ func findExecutionEvent(
 	event, err := scanExecutionEvent(tx.QueryRowContext(
 		ctx,
 		`SELECT id, session_id, sequence, event_type, text, occurred_at,
-		        worker_attempt_id, worker_event_sequence
+		        worker_attempt_id, worker_event_sequence, activity_json
 		 FROM session_events WHERE id = ?`,
 		id,
 	))
@@ -985,6 +993,7 @@ func scanExecutionEvent(scanner executionScanner) (execution.Event, error) {
 	var occurredAt string
 	var workerAttemptID sql.NullString
 	var workerEventSequence sql.NullInt64
+	var activityJSON sql.NullString
 	if err := scanner.Scan(
 		&event.ID,
 		&event.SessionID,
@@ -994,6 +1003,7 @@ func scanExecutionEvent(scanner executionScanner) (execution.Event, error) {
 		&occurredAt,
 		&workerAttemptID,
 		&workerEventSequence,
+		&activityJSON,
 	); err != nil {
 		return execution.Event{}, err
 	}
@@ -1004,6 +1014,12 @@ func scanExecutionEvent(scanner executionScanner) (execution.Event, error) {
 	if workerEventSequence.Valid {
 		event.WorkerEventSequence = workerEventSequence.Int64
 	}
+	if activityJSON.Valid {
+		event.Activity = &worker.Activity{}
+		if err := json.Unmarshal([]byte(activityJSON.String), event.Activity); err != nil {
+			return execution.Event{}, fmt.Errorf("decode session event %q activity: %w", event.ID, err)
+		}
+	}
 	var err error
 	event.OccurredAt, err = parseExecutionTime(occurredAt)
 	if err != nil {
@@ -1013,6 +1029,23 @@ func scanExecutionEvent(scanner executionScanner) (execution.Event, error) {
 		return execution.Event{}, err
 	}
 	return event, nil
+}
+
+func encodeSessionActivity(activity *worker.Activity) (any, error) {
+	if activity == nil {
+		return nil, nil
+	}
+	encoded, err := json.Marshal(activity)
+	if err != nil {
+		return nil, fmt.Errorf("encode session activity: %w", err)
+	}
+	return string(encoded), nil
+}
+
+func activitiesEqual(left *worker.Activity, right *worker.Activity) bool {
+	leftJSON, leftErr := json.Marshal(left)
+	rightJSON, rightErr := json.Marshal(right)
+	return leftErr == nil && rightErr == nil && string(leftJSON) == string(rightJSON)
 }
 
 func scanExecutionCommand(scanner executionScanner) (execution.Command, error) {

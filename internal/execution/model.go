@@ -134,6 +134,7 @@ type Event struct {
 	Sequence            int64
 	Type                worker.EventType
 	Text                string
+	Activity            *worker.Activity
 	OccurredAt          time.Time
 	WorkerAttemptID     string
 	WorkerEventSequence int64
@@ -453,6 +454,10 @@ func (event Event) Validate() error {
 		return fmt.Errorf("%w: type is required", ErrInvalidEvent)
 	case strings.TrimSpace(event.Text) == "":
 		return fmt.Errorf("%w: text is required", ErrInvalidEvent)
+	case event.Activity != nil && event.Type != worker.EventActivity:
+		return fmt.Errorf("%w: structured activity requires activity event type", ErrInvalidEvent)
+	case event.Activity != nil && event.Activity.Validate() != nil:
+		return fmt.Errorf("%w: structured activity is invalid", ErrInvalidEvent)
 	case event.OccurredAt.IsZero():
 		return fmt.Errorf("%w: occurrence time is required", ErrInvalidEvent)
 	case event.WorkerEventSequence < 0:

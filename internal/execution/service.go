@@ -387,7 +387,7 @@ func (s *Service) RecordSessionEventWithID(
 ) (Event, error) {
 	recorded, created, err := s.store.AppendEvent(ctx, PendingEvent{
 		ID: id, SessionID: sessionID,
-		Type: event.Type, Text: event.Text, OccurredAt: s.now().UTC(),
+		Type: event.Type, Text: event.Text, Activity: event.Activity, OccurredAt: s.now().UTC(),
 	})
 	if err != nil {
 		return Event{}, fmt.Errorf("record event for session %q: %w", sessionID, err)
@@ -456,6 +456,7 @@ func (s *Service) RecordWorkerEvent(
 		SourceSequence: sourceSequence,
 		Type:           event.Type,
 		Text:           event.Text,
+		Activity:       event.Activity,
 		OccurredAt:     occurredAt,
 		AcceptedAt:     s.now().UTC(),
 	})
