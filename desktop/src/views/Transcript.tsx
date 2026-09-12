@@ -1,4 +1,5 @@
 import { useState } from "react";
+import type { ActivityDetail } from "../api/types";
 
 // A phase transcript. Messages render as attributed bubbles; runs of low-signal
 // "activity" events collapse into one expandable summary so the wall of "started
@@ -14,6 +15,7 @@ export interface TranscriptEntry {
   role: string; // "lead" | "reviewer" | "user" | agent id
   type: string; // "message" | "plan_submitted" | "activity" | ...
   text: string;
+  activity?: ActivityDetail; // structured command / file-change detail
   at: string;
 }
 
@@ -81,9 +83,7 @@ function ActivityGroup({ items }: { items: TranscriptEntry[] }) {
       {open && (
         <div className="activity-group__items">
           {items.map((e) => (
-            <div key={e.key} className="activity-group__item">
-              {e.text}
-            </div>
+            <ActivityItem key={e.key} e={e} />
           ))}
         </div>
       )}
@@ -91,12 +91,57 @@ function ActivityGroup({ items }: { items: TranscriptEntry[] }) {
   );
 }
 
+function ActivityItem({ e }: { e: TranscriptEntry }) {
+  const a = e.activity;
+  if (a?.kind === "command") {
+    return (
+      <div className="activity-item">
+        <span className="activity-item__cmd">
+          <span className="activity-item__prompt">$</span> {a.command}
+        </span>
+        {a.exit_code !== undefined && (
+          <span className={`chip chip--${a.exit_code === 0 ? "ok" : "bad"}`}>exit {a.exit_code}</span>
+        )}
+        {a.duration_ms !== undefined && <span className="activity-item__dur">{fmtMs(a.duration_ms)}</span>}
+      </div>
+    );
+  }
+  if (a?.kind === "file_change") {
+    return (
+      <div className="activity-item">
+        <span className={`activity-item__op activity-item__op--${a.op}`}>{a.op}</span>
+        <span className="activity-item__path">{a.op === "renamed" && a.old_path ? `${a.old_path} → ${a.path}` : a.path}</span>
+        {(a.additions !== undefined || a.deletions !== undefined) && (
+          <span className="activity-item__diff">
+            {a.additions !== undefined && <span className="diff--add">+{a.additions}</span>}
+            {a.deletions !== undefined && <span className="diff--del">−{a.deletions}</span>}
+          </span>
+        )}
+      </div>
+    );
+  }
+  return <div className="activity-item activity-item--note">{e.text}</div>;
+}
+
 function summarize(items: TranscriptEntry[]): string {
-  const commands = items.filter((e) => /started a command/i.test(e.text)).length;
+  const commands = items.filter((e) => e.activity?.kind === "command").length;
+  const files = items.filter((e) => e.activity?.kind === "file_change").length;
   const role = items.every((e) => e.role === items[0].role) ? attributed(items[0].role) : null;
   const prefix = role ? `${role} · ` : "";
-  if (commands > 0) return `${prefix}ran ${commands} command${commands === 1 ? "" : "s"}`;
-  return `${prefix}${items.length} step${items.length === 1 ? "" : "s"}`;
+  const parts: string[] = [];
+  if (commands) parts.push(`ran ${commands} command${commands === 1 ? "" : "s"}`);
+  if (files) parts.push(`${files} file${files === 1 ? "" : "s"} changed`);
+  if (parts.length === 0) {
+    // Fall back to generic prose (pre-structured events).
+    const cmds = items.filter((e) => /started a command/i.test(e.text)).length;
+    if (cmds) parts.push(`ran ${cmds} command${cmds === 1 ? "" : "s"}`);
+    else parts.push(`${items.length} step${items.length === 1 ? "" : "s"}`);
+  }
+  return prefix + parts.join(" · ");
+}
+
+function fmtMs(ms: number): string {
+  return ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`;
 }
 
 function attributed(role: string): string {

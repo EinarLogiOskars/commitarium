@@ -53,7 +53,7 @@ export function ReviewView({
       for (const { role, events } of perSession) {
         for (const e of events as SessionEvent[]) {
           if (!e.text || !SHOWN.has(e.type)) continue;
-          merged.push({ key: e.id, role, type: e.type, text: e.text, at: e.occurred_at });
+          merged.push({ key: e.id, role, type: e.type, text: e.text, activity: e.activity, at: e.occurred_at });
         }
       }
       merged.sort((a, b) => a.at.localeCompare(b.at));

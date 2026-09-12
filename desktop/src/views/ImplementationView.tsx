@@ -43,7 +43,7 @@ export function ImplementationView({
       setEntries(
         events
           .filter((e) => e.text && SHOWN.has(e.type))
-          .map((e) => ({ key: e.id, role: "lead", type: e.type, text: e.text, at: e.occurred_at })),
+          .map((e) => ({ key: e.id, role: "lead", type: e.type, text: e.text, activity: e.activity, at: e.occurred_at })),
       );
     } catch (e) {
       setError(e instanceof ApiError ? `${e.message} (${e.code})` : String(e));
