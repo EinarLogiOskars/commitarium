@@ -53,6 +53,12 @@ func TestMigrateCreatesProjectsTable(t *testing.T) {
 			tableName,
 		)
 	}
+	if err := db.QueryRowContext(
+		t.Context(),
+		`SELECT name FROM sqlite_schema WHERE type = 'table' AND name = 'run_plan_revisions'`,
+	).Scan(&tableName); err != nil {
+		t.Fatalf("find run plan revisions table: %v", err)
+	}
 }
 
 func TestMigrateDropsCoordinatorOwnedWorkspacePublications(t *testing.T) {
@@ -159,6 +165,9 @@ func TestRecoveryMigrationPreservesExistingExecutionRecords(t *testing.T) {
 	}
 	if storedRun.AgentProviders != project.DefaultAgentProviders() {
 		t.Fatalf("unexpected migrated run agent providers %+v", storedRun.AgentProviders)
+	}
+	if storedRun.PlanVersion != 1 {
+		t.Fatalf("unexpected migrated plan version %d", storedRun.PlanVersion)
 	}
 	storedSession, err := NewExecutionStore(db).GetSession(t.Context(), "ses_old")
 	if err != nil {

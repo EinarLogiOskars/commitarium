@@ -18,6 +18,7 @@ var ErrFeatureNotDraft = errors.New("feature is no longer a draft")
 var ErrFeatureNotPlanning = errors.New("feature is not in planning")
 var ErrFeatureNotReviewing = errors.New("feature is not in review")
 var ErrFeatureNotReadyToMerge = errors.New("feature is not ready to merge")
+var ErrFeatureNotReplannable = errors.New("feature cannot be replanned from its current state")
 var ErrHandoffNotReady = errors.New("completed feature handoff is not ready")
 var ErrProjectRepositoryNotBound = errors.New("project has no Forgejo repository binding")
 var ErrBranchNotFound = errors.New("Forgejo branch not found")
@@ -588,6 +589,82 @@ func (service *Service) VerifyImplementationContinuation(
 		ctx, projectID, featureID, eventID, plan, false, false,
 	)
 	return stored, err
+}
+
+// PrepareReplanningBaseline verifies the existing feature branch and pull
+// request without changing them. The remote branch head becomes the next
+// plan's committed baseline; uncommitted user or agent edits are preserved and
+// left for the planning agents to inspect explicitly.
+func (service *Service) PrepareReplanningBaseline(
+	ctx context.Context,
+	projectID string,
+	featureID string,
+	previousPlanEventID string,
+	previousPlan string,
+) (Workspace, string, error) {
+	if strings.TrimSpace(previousPlanEventID) == "" || strings.TrimSpace(previousPlan) == "" {
+		return Workspace{}, "", errors.New("previous submitted plan is required")
+	}
+	storedFeature, err := service.features.GetByID(ctx, projectID, featureID)
+	if err != nil {
+		return Workspace{}, "", err
+	}
+	switch storedFeature.State {
+	case feature.StatePlanning, feature.StateImplementing, feature.StateReviewing, feature.StateReadyToMerge:
+	default:
+		return Workspace{}, "", ErrFeatureNotReplannable
+	}
+	storedProject, err := service.projects.GetByID(ctx, projectID)
+	if err != nil {
+		return Workspace{}, "", err
+	}
+	stored, err := service.Get(ctx, projectID, featureID)
+	if err != nil {
+		return Workspace{}, "", err
+	}
+	repository := storedProject.ForgejoRepository
+	if repository == nil || stored.RepositoryOwner != repository.Owner ||
+		stored.RepositoryName != repository.Name || stored.BaseBranch != repository.DefaultBranch ||
+		stored.Status != StatusBranchReady || !stored.CheckoutReady() ||
+		!stored.PullRequestReady() || stored.MergeCommitID != "" || stored.MergedAt != nil ||
+		service.checkouts == nil || service.pullRequests == nil {
+		return Workspace{}, "", ErrConflict
+	}
+	branch, err := service.branches.GetBranch(
+		ctx, stored.RepositoryOwner, stored.RepositoryName, stored.Branch,
+	)
+	if err != nil {
+		return Workspace{}, "", fmt.Errorf("verify Forgejo branch before replanning: %w", err)
+	}
+	if branch.Name != stored.Branch || !ValidCommitID(branch.CommitID) {
+		return Workspace{}, "", ErrBranchConflict
+	}
+	if err := service.checkouts.Ensure(ctx, CheckoutSpec{
+		WorkspaceID: stored.ID, RepositoryOwner: stored.RepositoryOwner,
+		RepositoryName: stored.RepositoryName, Branch: stored.Branch,
+		BaseCommitID: stored.BaseCommitID, ExpectedHeadCommitID: branch.CommitID,
+		AlreadyReady: true, RequireClean: false,
+	}); err != nil {
+		return Workspace{}, "", fmt.Errorf("verify checkout before replanning: %w", err)
+	}
+	digest := sha256.Sum256([]byte(previousPlanEventID))
+	pullRequest, err := service.pullRequests.VerifyPullRequestPlan(
+		ctx, stored.RepositoryOwner, stored.RepositoryName,
+		PlanPublicationSpec{
+			Number:            stored.PullRequestNumber,
+			FeatureMarker:     "<!-- commitarium-feature: " + storedFeature.ID + " -->",
+			PublicationMarker: "<!-- commitarium-plan: " + hex.EncodeToString(digest[:]) + " -->",
+			Plan:              previousPlan, BaseBranch: stored.BaseBranch, HeadBranch: stored.Branch,
+			HeadCommitID: branch.CommitID,
+		},
+	)
+	if err != nil {
+		return Workspace{}, "", fmt.Errorf("verify existing plan before replanning: %w", err)
+	}
+	if pullRequest.Number != stored.PullRequestNumber || pullRequest.URL != stored.PullRequestURL {
+		return Workspace{}, "", ErrPullRequestConflict
+	}
+	return stored, branch.CommitID, nil
 }
 
 // VerifyImplementationPublication checks only objective external facts after

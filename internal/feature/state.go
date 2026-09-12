@@ -61,7 +61,8 @@ func (state State) CanTransitionTo(next State) bool {
 		return next == StatePlanning ||
 			next == StateReadyToMerge
 	case StateReadyToMerge:
-		return next == StateReviewing ||
+		return next == StatePlanning ||
+			next == StateReviewing ||
 			next == StateCompleted
 	default:
 		return false

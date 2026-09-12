@@ -100,6 +100,23 @@ type InterventionGuidanceResolution struct {
 	OccurredAt     time.Time
 }
 
+// ReplanningTurnAdmission is the durable handoff from an answered material
+// intervention to the lead's first turn for the next plan version.
+type ReplanningTurnAdmission struct {
+	ID                        string
+	RunID                     string
+	InterventionID            string
+	PlanVersion               int
+	PreviousPlanEventID       string
+	EffectiveGoal             string
+	BaselineCommitID          string
+	PreviousAttemptID         string
+	PreviousLastEventSequence int64
+	NextAttempt               WorkerAttemptCheckpoint
+	RunReason                 string
+	OccurredAt                time.Time
+}
+
 type SessionTransition struct {
 	SessionID         string
 	Expected          SessionStatus
@@ -203,6 +220,8 @@ type Store interface {
 	BeginInterventionTurn(ctx context.Context, admission InterventionTurnAdmission) (bool, error)
 	CompleteIntervention(ctx context.Context, completion InterventionCompletion) (Intervention, bool, error)
 	ResolveInterventionGuidance(ctx context.Context, resolution InterventionGuidanceResolution) (Run, bool, error)
+	BeginReplanningTurn(ctx context.Context, admission ReplanningTurnAdmission) (Run, PlanRevision, bool, error)
+	GetPlanRevision(ctx context.Context, runID string, version int) (PlanRevision, error)
 	BeginNewSessionTurn(ctx context.Context, admission NewSessionTurnAdmission) (bool, error)
 	LinkPlanningMessage(ctx context.Context, message PendingPlanningMessage) (PlanningMessage, bool, error)
 	ListPlanningMessages(ctx context.Context, runID string) ([]PlanningMessage, error)
@@ -379,6 +398,33 @@ func (resolution InterventionGuidanceResolution) Validate() error {
 	default:
 		return nil
 	}
+}
+
+func (admission ReplanningTurnAdmission) Validate() error {
+	revision := PlanRevision{
+		RunID: admission.RunID, Version: admission.PlanVersion, InterventionID: admission.InterventionID,
+		PreviousPlanEventID: admission.PreviousPlanEventID,
+		EffectiveGoal:       admission.EffectiveGoal, BaselineCommitID: admission.BaselineCommitID,
+		CreatedAt: admission.OccurredAt,
+	}
+	if err := revision.Validate(); err != nil {
+		return err
+	}
+	switch {
+	case strings.TrimSpace(admission.ID) == "":
+		return fmt.Errorf("%w: action ID is required", ErrInvalidCommand)
+	case strings.TrimSpace(admission.PreviousAttemptID) == "":
+		return fmt.Errorf("%w: previous attempt ID is required", ErrInvalidWorkerAttempt)
+	case admission.PreviousLastEventSequence < 0:
+		return fmt.Errorf("%w: previous event sequence cannot be negative", ErrInvalidWorkerAttempt)
+	case admission.NextAttempt.SessionID == "":
+		return fmt.Errorf("%w: next attempt session is required", ErrInvalidWorkerAttempt)
+	case admission.NextAttempt.AttemptID == admission.PreviousAttemptID:
+		return fmt.Errorf("%w: replacement attempt must be new", ErrInvalidWorkerAttempt)
+	case strings.TrimSpace(admission.RunReason) == "":
+		return fmt.Errorf("%w: run reason is required", ErrInvalidRun)
+	}
+	return admission.NextAttempt.Validate()
 }
 
 func (transition SessionTransition) Validate() error {

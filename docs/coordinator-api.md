@@ -529,6 +529,7 @@ A successful response is `202 Accepted` and points to the run resource:
   },
   "merge_policy": "require_user_approval",
   "autonomy_policy": "review_each_phase",
+  "plan_version": 1,
   "started_at": "2026-09-08T17:30:36Z",
   "updated_at": "2026-09-08T17:30:36Z",
   "sessions": [],
@@ -555,6 +556,11 @@ Run responses also contain `paused` and, while waiting or paused, a machine-read
 Clients should use `wait_kind` to choose controls and labels, and show `reason`
 as the human-readable explanation. They must not infer control state by parsing
 the reason text.
+
+Every run also exposes `plan_version`. It begins at `1` for the original
+lead/reviewer agreement. A user-approved scope-changing intervention advances
+the same run to the next version; earlier planning messages remain available
+for history but are no longer used as the current implementation plan.
 
 ## Queuing a user intervention
 
@@ -613,9 +619,10 @@ it is answered. An answered intervention also contains `effect`, for example:
 }
 ```
 
-After ordinary guidance is consumed by an explicit successful `/resume`, the
-same object also contains `resolved_at`. This timestamp is omitted while the
-answer still requires clarification or a safe replanning decision.
+After ordinary guidance is consumed, or a scope-changing answer is admitted
+into a new plan version, the same object also contains `resolved_at`. This
+timestamp is omitted while clarification or another safe decision is still
+required.
 
 The intervention statuses are:
 
@@ -705,10 +712,26 @@ Resume returns `409 intervention_pending` while the latest intervention is not
   `409 intervention_clarification_required`; the run stays paused so the user
   can send another intervention message to the agent.
 - `replanning_required`: `/resume` returns
-  `409 intervention_replanning_required`; the run stays paused until the
-  versioned-plan/workspace replanning path is available. This deliberately does
-  not pretend that changing the feature state alone would safely reconcile
-  partial code and the existing Forgejo plan.
+  `202 Accepted` after read-only verification of the existing feature branch,
+  managed checkout, draft pull request, and previously published plan. The
+  coordinator records the current Forgejo branch head as the new committed Git
+  baseline, preserves local edits, clears stale merge readiness, advances
+  `plan_version`, returns the feature to `planning`, and resumes the same lead
+  conversation for a revised proposal. The user's exact intervention is the
+  approved scope amendment; `features.accepted_goal` remains the original
+  accepted goal, while the durable plan revision stores the combined effective
+  goal. Exact retries reuse the same plan version and worker attempt.
+
+If the branch, checkout, pull request, or old plan cannot be confirmed, resume
+returns `409 intervention_replanning_required` and keeps the run paused. A
+temporarily unavailable checkout or Forgejo returns `503
+replanning_unavailable`.
+
+The first revised lead proposal settles at `waiting_for_user` with
+`wait_kind: "phase_checkpoint"`, including under `run_to_completion`. Resuming
+the existing reviewer, completing the versioned discussion, and appending the
+newly agreed plan to the same PR are the next backend slice; clients should not
+offer the ordinary first-review action for a revised proposal yet.
 
 These gates prevent “Continue workflow” from silently discarding, bypassing, or
 misapplying user guidance.
@@ -1117,6 +1140,7 @@ responses in their coordinator-assigned cross-session order:
 [
   {
     "id": "sev_lead_proposal",
+    "plan_version": 1,
     "sequence": 1,
     "session_id": "run_opaque:lead",
     "agent_id": "codex-lead",
@@ -1127,6 +1151,7 @@ responses in their coordinator-assigned cross-session order:
   },
   {
     "id": "sev_reviewer_response",
+    "plan_version": 1,
     "sequence": 2,
     "session_id": "run_opaque:reviewer",
     "agent_id": "codex-reviewer",
@@ -1137,6 +1162,7 @@ responses in their coordinator-assigned cross-session order:
   },
   {
     "id": "sev_final_plan",
+    "plan_version": 1,
     "sequence": 3,
     "session_id": "run_opaque:lead",
     "agent_id": "codex-lead",
@@ -1147,6 +1173,11 @@ responses in their coordinator-assigned cross-session order:
   }
 ]
 ```
+
+`plan_version` identifies which agreement cycle authored the message. Sequence
+numbers remain monotonic across the whole run, so history and SSE cursors do not
+restart when replanning begins. Orchestration reads only the current version;
+clients may display all versions as one audit history or group them by version.
 
 The planning record references the existing session event instead of copying
 its text, so individual session history remains authoritative. The SSE variant

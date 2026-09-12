@@ -12,7 +12,7 @@ func TestRunValidate(t *testing.T) {
 	now := time.Date(2026, time.September, 8, 22, 0, 0, 0, time.UTC)
 	valid := Run{
 		ID: "run_test", FeatureID: "fea_test", Status: RunStatusRunning,
-		StartedAt: now, UpdatedAt: now,
+		PlanVersion: 1, StartedAt: now, UpdatedAt: now,
 	}
 	if err := valid.Validate(); err != nil {
 		t.Fatalf("validate run: %v", err)
@@ -21,6 +21,11 @@ func TestRunValidate(t *testing.T) {
 	invalidLimits.PlanningRoundLimit = -1
 	if err := invalidLimits.Validate(); !errors.Is(err, ErrInvalidRun) {
 		t.Fatalf("expected negative planning limit error %v, got %v", ErrInvalidRun, err)
+	}
+	invalidVersion := valid
+	invalidVersion.PlanVersion = 0
+	if err := invalidVersion.Validate(); !errors.Is(err, ErrInvalidRun) {
+		t.Fatalf("expected invalid plan version error %v, got %v", ErrInvalidRun, err)
 	}
 	waiting := valid
 	waiting.Status = RunStatusWaitingForUser
@@ -48,6 +53,30 @@ func TestRunValidate(t *testing.T) {
 	valid.EndedAt = nil
 	if err := valid.Validate(); !errors.Is(err, ErrInvalidRun) {
 		t.Fatalf("expected error %v, got %v", ErrInvalidRun, err)
+	}
+}
+
+func TestPlanRevisionValidate(t *testing.T) {
+	now := time.Date(2026, time.September, 12, 15, 0, 0, 0, time.UTC)
+	valid := PlanRevision{
+		RunID: "run_test", Version: 2, InterventionID: "int_scope_change",
+		PreviousPlanEventID: "sev_plan_v1",
+		EffectiveGoal:       "Original accepted goal\n\nApproved scope amendment for plan version 2:\nAdd export support.",
+		BaselineCommitID:    "0123456789abcdef0123456789abcdef01234567",
+		CreatedAt:           now,
+	}
+	if err := valid.Validate(); err != nil {
+		t.Fatalf("validate plan revision: %v", err)
+	}
+	invalidVersion := valid
+	invalidVersion.Version = 1
+	if err := invalidVersion.Validate(); !errors.Is(err, ErrInvalidPlanningMessage) {
+		t.Fatalf("expected revised-version error, got %v", err)
+	}
+	invalidCommit := valid
+	invalidCommit.BaselineCommitID = "not-a-commit"
+	if err := invalidCommit.Validate(); !errors.Is(err, ErrInvalidPlanningMessage) {
+		t.Fatalf("expected baseline commit error, got %v", err)
 	}
 }
 

@@ -39,6 +39,8 @@ const (
 	implementationMergeBlockedReason      = "The exact approved revision could not be merged safely. Inspect the merge activity and Forgejo pull request before retrying."
 	interventionAnsweringReason           = "The selected agent is answering the user's intervention while the workflow remains paused."
 	interventionAnsweredReason            = "The selected agent answered the intervention. The workflow remains paused until the user explicitly continues it."
+	replanningRunningReason               = "The lead is reconciling the preserved feature branch and proposing a revised plan."
+	replanningProposalReason              = "The lead's revised planning proposal is ready for reviewer consultation."
 	defaultLeadForgejoAuthor              = "codex-lead"
 	defaultReviewerForgejoAuthor          = "codex-reviewer"
 )
@@ -86,6 +88,8 @@ type RemoteLeadExecution interface {
 	BeginInterventionTurn(context.Context, string, execution.WorkerAttemptCheckpoint, string, string) (bool, error)
 	CompleteIntervention(context.Context, string, string, string, worker.InterventionEffect, string) (execution.Intervention, bool, error)
 	ResolveInterventionGuidance(context.Context, string, string, string) (execution.Run, bool, error)
+	BeginReplanningTurn(context.Context, string, string, string, int, string, string, string, execution.WorkerAttemptCheckpoint, string, string) (execution.Run, execution.PlanRevision, bool, error)
+	GetPlanRevision(context.Context, string, int) (execution.PlanRevision, error)
 	TransitionSession(context.Context, string, execution.SessionStatus, execution.SessionStatus, string) (execution.Session, error)
 	RecordSessionEventWithID(context.Context, string, string, worker.Event) (execution.Event, error)
 	GetCommand(context.Context, string) (execution.Command, error)
@@ -118,6 +122,7 @@ type RemoteLeadWorkspaceService interface {
 	PublishPlan(context.Context, string, string, string, string) (workspace.Workspace, bool, error)
 	VerifyPublishedPlan(context.Context, string, string, string, string) (workspace.Workspace, error)
 	VerifyImplementationContinuation(context.Context, string, string, string, string) (workspace.Workspace, error)
+	PrepareReplanningBaseline(context.Context, string, string, string, string) (workspace.Workspace, string, error)
 	VerifyImplementationPublication(context.Context, string, string, string, string, string, string, string, int64, string) (workspace.Workspace, error)
 	VerifyImplementationReviewResponse(context.Context, string, string, string, string, string, string, string, string, int64, string) (workspace.Workspace, error)
 	VerifyImplementationMergeReadiness(context.Context, string, string, string, string, string, string, string, int64, string) (workspace.Workspace, error)
@@ -453,6 +458,17 @@ func (starter *RemoteLeadStarter) Recover(
 			return fmt.Errorf("%w: reviewing feature has an unexpected active attempt", ErrInvalidRunRequest)
 		}
 	}
+	if !isIntervention && storedFeature.State == feature.StatePlanning {
+		attemptVersion, _, planning := planningAttemptVersionAndTurn(session.ID, checkpoint.AttemptID)
+		if !planning || attemptVersion != run.PlanVersion {
+			return fmt.Errorf("%w: planning attempt does not match the run's current plan version", ErrInvalidRunRequest)
+		}
+		if attemptVersion > 1 {
+			if _, err := starter.executions.GetPlanRevision(ctx, run.ID, attemptVersion); err != nil {
+				return fmt.Errorf("load active plan revision: %w", err)
+			}
+		}
+	}
 	request := remoteLeadRequest{
 		runID:         run.ID,
 		agentName:     "lead agent",
@@ -462,6 +478,9 @@ func (starter *RemoteLeadStarter) Recover(
 		identity: workerhttp.MutationIdentity{AttemptReference: workerhttp.AttemptReference{
 			SessionID: session.ID, AttemptID: checkpoint.AttemptID,
 		}},
+	}
+	if run.PlanVersion > 1 && isLead && request.planningStage == planningStageLeadProposal {
+		request.waitingReason = replanningProposalReason
 	}
 	if isIntervention {
 		request.interventionID = unfinished.ID
@@ -821,7 +840,7 @@ func (starter *RemoteLeadStarter) Resume(
 		case worker.InterventionEffectClarificationRequired:
 			return execution.Run{}, false, ErrInterventionClarificationRequired
 		case worker.InterventionEffectReplanningRequired:
-			return execution.Run{}, false, ErrInterventionReplanningRequired
+			return starter.resumeIntoReplanning(ctx, runID, actionID, intervention)
 		default:
 			return execution.Run{}, false, execution.ErrInvalidIntervention
 		}
@@ -845,6 +864,213 @@ func (starter *RemoteLeadStarter) Resume(
 	return current, applied, nil
 }
 
+func (starter *RemoteLeadStarter) resumeIntoReplanning(
+	ctx context.Context,
+	runID string,
+	actionID string,
+	intervention execution.Intervention,
+) (execution.Run, bool, error) {
+	if starter.planning == nil || starter.workspaces == nil {
+		return execution.Run{}, false, ErrInterventionReplanningRequired
+	}
+	run, err := starter.executions.GetRun(ctx, runID)
+	if err != nil {
+		return execution.Run{}, false, err
+	}
+	if run.Status != execution.RunStatusWaitingForUser || !run.Paused ||
+		run.WaitKind != execution.RunWaitKindPaused {
+		return execution.Run{}, false, ErrRunControlNotAllowed
+	}
+	storedFeature, err := starter.features.GetByID(ctx, run.FeatureID)
+	if err != nil {
+		return execution.Run{}, false, err
+	}
+	switch storedFeature.State {
+	case feature.StatePlanning, feature.StateImplementing, feature.StateReviewing, feature.StateReadyToMerge:
+	default:
+		return execution.Run{}, false, ErrInterventionReplanningRequired
+	}
+	messages, err := starter.currentPlanningMessages(ctx, run)
+	if err != nil {
+		return execution.Run{}, false, err
+	}
+	if len(messages) == 0 || messages[len(messages)-1].Role != worker.RoleLead ||
+		messages[len(messages)-1].Event.Type != worker.EventPlanSubmitted {
+		return execution.Run{}, false, ErrInterventionReplanningRequired
+	}
+	previousPlan := messages[len(messages)-1].Event
+	lead, err := starter.executions.GetSession(ctx, remoteLeadSessionID(run.ID))
+	if err != nil {
+		return execution.Run{}, false, err
+	}
+	checkpoint, err := starter.executions.GetWorkerAttempt(ctx, lead.ID)
+	if err != nil {
+		return execution.Run{}, false, err
+	}
+	if lead.Status != execution.SessionStatusWaitingForUser || lead.ProviderSessionID == "" ||
+		lead.Role != worker.RoleLead || lead.AgentID != agentID(run.AgentProviders.Lead, worker.RoleLead) {
+		return execution.Run{}, false, ErrInterventionReplanningRequired
+	}
+	if err := starter.confirmCompletedTurn(ctx, lead, checkpoint); err != nil {
+		return execution.Run{}, false, ErrInterventionReplanningRequired
+	}
+	if !starter.claim(run.ID) {
+		return execution.Run{}, false, ErrRunControlNotAllowed
+	}
+	prepared, baselineCommitID, err := starter.workspaces.PrepareReplanningBaseline(
+		ctx, storedFeature.ProjectID, storedFeature.ID, previousPlan.ID, previousPlan.Text,
+	)
+	if err != nil {
+		starter.release(run.ID)
+		return execution.Run{}, false, fmt.Errorf("prepare replanning baseline: %w", err)
+	}
+	effectiveGoal, err := starter.replanningEffectiveGoal(ctx, run, storedFeature, intervention.Message)
+	if err != nil {
+		starter.release(run.ID)
+		return execution.Run{}, false, err
+	}
+	nextVersion := run.PlanVersion + 1
+	attemptID := replanningAttemptID(lead.ID, nextVersion, 1)
+	request, err := starter.replanningRequest(
+		run, storedFeature, lead, prepared, nextVersion, baselineCommitID,
+		effectiveGoal, previousPlan.Text, intervention.Message, attemptID,
+	)
+	if err != nil {
+		starter.release(run.ID)
+		return execution.Run{}, false, err
+	}
+	if storedFeature.State != feature.StatePlanning {
+		if _, err := starter.planning.TransitionFeature(
+			ctx, storedFeature.ID, feature.StatePlanning,
+			workflow.Actor{Kind: workflow.ActorKindCoordinator, ID: coordinatorActorID},
+			actionID+":replanning",
+		); err != nil {
+			starter.release(run.ID)
+			return execution.Run{}, false, err
+		}
+	}
+	started, _, admitted, err := starter.executions.BeginReplanningTurn(
+		ctx, actionID, run.ID, intervention.ID, nextVersion, previousPlan.ID,
+		effectiveGoal, baselineCommitID, checkpoint, attemptID, replanningRunningReason,
+	)
+	if err != nil {
+		starter.release(run.ID)
+		if errors.Is(err, execution.ErrStateConflict) ||
+			errors.Is(err, execution.ErrWorkerAttemptConflict) {
+			return execution.Run{}, false, ErrInterventionReplanningRequired
+		}
+		return execution.Run{}, false, err
+	}
+	if !admitted {
+		starter.release(run.ID)
+		return started, false, nil
+	}
+	go starter.launch(request)
+	return started, true, nil
+}
+
+func (starter *RemoteLeadStarter) replanningEffectiveGoal(
+	ctx context.Context,
+	run execution.Run,
+	storedFeature feature.Feature,
+	amendment string,
+) (string, error) {
+	goal := strings.TrimSpace(storedFeature.AcceptedGoal)
+	if run.PlanVersion > 1 {
+		revision, err := starter.executions.GetPlanRevision(ctx, run.ID, run.PlanVersion)
+		if err != nil {
+			return "", err
+		}
+		goal = revision.EffectiveGoal
+	}
+	return goal + "\n\nUser-approved scope amendment for plan version " +
+		strconv.Itoa(run.PlanVersion+1) + ":\n" + strings.TrimSpace(amendment), nil
+}
+
+func (starter *RemoteLeadStarter) currentPlanningMessages(
+	ctx context.Context,
+	run execution.Run,
+) ([]execution.PlanningMessage, error) {
+	messages, err := starter.executions.PlanningMessagesForRun(ctx, run.ID)
+	if err != nil {
+		return nil, err
+	}
+	current := make([]execution.PlanningMessage, 0, len(messages))
+	for _, message := range messages {
+		if message.PlanVersion == run.PlanVersion {
+			current = append(current, message)
+		}
+	}
+	return current, nil
+}
+
+func (starter *RemoteLeadStarter) replanningRequest(
+	run execution.Run,
+	storedFeature feature.Feature,
+	lead execution.Session,
+	prepared workspace.Workspace,
+	planVersion int,
+	baselineCommitID string,
+	effectiveGoal string,
+	previousPlan string,
+	userAmendment string,
+	attemptID string,
+) (remoteLeadRequest, error) {
+	request := remoteLeadRequest{
+		runID: run.ID, agentName: "lead agent",
+		waitingReason: replanningProposalReason,
+		waitKind:      execution.RunWaitKindPhaseCheckpoint,
+		planningStage: planningStageLeadProposal,
+		identity: workerhttp.MutationIdentity{
+			AttemptReference: workerhttp.AttemptReference{SessionID: lead.ID, AttemptID: attemptID},
+			IdempotencyKey:   attemptID + ":resume",
+		},
+		request: workerhttp.PutAttemptRequest{
+			Mode: workerhttp.AttemptModeResume,
+			Assignment: workerhttp.Assignment{
+				AgentProfileID: starter.profileID(run.AgentProviders.Lead, worker.RoleLead),
+				ProjectID:      storedFeature.ProjectID, FeatureID: storedFeature.ID,
+				Role: workerhttp.RoleLead, WorkspaceID: prepared.ID,
+			},
+			ProviderSessionID: lead.ProviderSessionID,
+			Instructions: replanningInstructions(
+				planVersion, effectiveGoal, previousPlan, userAmendment,
+				prepared, baselineCommitID,
+			),
+		},
+	}
+	if err := request.request.Validate(request.identity); err != nil {
+		return remoteLeadRequest{}, fmt.Errorf("%w: %v", ErrInvalidRunRequest, err)
+	}
+	return request, nil
+}
+
+func replanningInstructions(
+	planVersion int,
+	effectiveGoal string,
+	previousPlan string,
+	userAmendment string,
+	prepared workspace.Workspace,
+	baselineCommitID string,
+) string {
+	return "Continue as the same lead agent and begin plan version " + strconv.Itoa(planVersion) +
+		" after the user's scope-changing intervention. Inspect the managed repository, current Git " +
+		"HEAD, branch, status, and diff before proposing anything. Existing branch commits and " +
+		"uncommitted user or agent edits are intentional external state: preserve them, do not reset, " +
+		"clean, overwrite, commit, push, or modify the pull request during this planning turn. Compare " +
+		"the prior plan and work already present against the amended goal, identify what remains useful, " +
+		"and propose a complete revised implementation plan for the same reviewer to challenge. Durable " +
+		"Git, Forgejo, and coordinator state are authoritative over conversational memory.\n\n" +
+		"Effective amended goal:\n" + effectiveGoal +
+		"\n\nUser's exact scope amendment:\n" + strings.TrimSpace(userAmendment) +
+		"\n\nPrevious agreed plan:\n" + previousPlan +
+		"\n\nRepository: " + prepared.RepositoryOwner + "/" + prepared.RepositoryName +
+		"\nBase branch: " + prepared.BaseBranch +
+		"\nExisting feature branch: " + prepared.Branch +
+		"\nReplanning baseline commit: " + baselineCommitID +
+		fmt.Sprintf("\nExisting draft pull request: #%d (%s)", prepared.PullRequestNumber, prepared.PullRequestURL)
+}
+
 func (starter *RemoteLeadStarter) advanceWaitingRun(ctx context.Context, runID string) error {
 	if handled, err := starter.advanceIntervention(ctx, runID); err != nil || handled {
 		return err
@@ -864,12 +1090,18 @@ func (starter *RemoteLeadStarter) advanceWaitingRun(ctx context.Context, runID s
 	}
 	switch storedFeature.State {
 	case feature.StatePlanning:
-		messages, err := starter.executions.PlanningMessagesForRun(ctx, run.ID)
+		messages, err := starter.currentPlanningMessages(ctx, run)
 		if err != nil {
 			return err
 		}
 		if len(messages) == 0 {
 			return fmt.Errorf("%w: planning checkpoint has no durable message", ErrPlanningNotAllowed)
+		}
+		// The next slice resumes the existing reviewer for versioned plans.
+		// Until then the first revised proposal is a stable, observable boundary,
+		// including for run-to-completion projects.
+		if run.PlanVersion > 1 && len(messages) == 1 {
+			return nil
 		}
 		if messages[len(messages)-1].Event.Type == worker.EventPlanSubmitted {
 			published, err := starter.planPublicationRecorded(ctx, messages[len(messages)-1].Event)
@@ -1119,11 +1351,14 @@ func (starter *RemoteLeadStarter) recoverIdlePlanningRun(
 		reviewer.Status != execution.SessionStatusWaitingForUser {
 		return true, fmt.Errorf("%w: idle planning run has a non-waiting session", ErrInvalidRunRequest)
 	}
-	messages, err := starter.executions.PlanningMessagesForRun(ctx, run.ID)
+	messages, err := starter.currentPlanningMessages(ctx, run)
 	if err != nil {
 		return true, err
 	}
 	if len(messages) < 2 {
+		if run.PlanVersion > 1 && len(messages) == 1 {
+			return true, nil
+		}
 		return true, fmt.Errorf("%w: idle planning run has incomplete shared history", ErrInvalidRunRequest)
 	}
 	last := messages[len(messages)-1]
@@ -1286,6 +1521,10 @@ func planningTurnAttemptID(sessionID string, turn int) string {
 	return sessionID + ":planning:" + strconv.Itoa(turn)
 }
 
+func replanningAttemptID(sessionID string, version int, turn int) string {
+	return sessionID + ":planning:v" + strconv.Itoa(version) + ":" + strconv.Itoa(turn)
+}
+
 func implementationAttemptID(sessionID string, turn int) string {
 	return sessionID + ":implementation:" + strconv.Itoa(turn)
 }
@@ -1339,12 +1578,30 @@ func implementationTurnNumber(sessionID, attemptID string) (int, bool) {
 }
 
 func planningTurnNumber(sessionID, attemptID string) (int, bool) {
+	_, turn, found := planningAttemptVersionAndTurn(sessionID, attemptID)
+	return turn, found
+}
+
+// planningAttemptVersionAndTurn understands both the original unversioned
+// attempt IDs (which belong to plan version 1) and the explicit IDs used by
+// replanning. Recovery uses both coordinates so an old attempt cannot be
+// mistaken for work on the run's current plan.
+func planningAttemptVersionAndTurn(sessionID, attemptID string) (int, int, bool) {
 	value, found := strings.CutPrefix(attemptID, sessionID+":planning:")
 	if !found {
-		return 0, false
+		return 0, 0, false
+	}
+	if strings.HasPrefix(value, "v") {
+		parts := strings.Split(value, ":")
+		if len(parts) != 2 {
+			return 0, 0, false
+		}
+		version, versionErr := strconv.Atoi(strings.TrimPrefix(parts[0], "v"))
+		turn, turnErr := strconv.Atoi(parts[1])
+		return version, turn, versionErr == nil && version > 1 && turnErr == nil && turn > 0
 	}
 	turn, err := strconv.Atoi(value)
-	return turn, err == nil && turn > 0
+	return 1, turn, err == nil && turn > 0
 }
 
 func planningStageForAttempt(session execution.Session, attemptID string) planningStage {
@@ -1782,7 +2039,7 @@ func (starter *RemoteLeadStarter) StartPlanningRound(
 		reviewer.AgentID != agentID(run.AgentProviders.Reviewer, worker.RoleReviewer) || reviewer.Role != worker.RoleReviewer {
 		return execution.Run{}, false, ErrPlanningNotAllowed
 	}
-	messages, err := starter.executions.PlanningMessagesForRun(ctx, run.ID)
+	messages, err := starter.currentPlanningMessages(ctx, run)
 	if err != nil {
 		return execution.Run{}, false, err
 	}
@@ -1883,7 +2140,7 @@ func (starter *RemoteLeadStarter) StartImplementation(
 	if err != nil {
 		return execution.Run{}, false, err
 	}
-	messages, err := starter.executions.PlanningMessagesForRun(ctx, run.ID)
+	messages, err := starter.currentPlanningMessages(ctx, run)
 	if err != nil {
 		return execution.Run{}, false, err
 	}
@@ -2575,7 +2832,7 @@ func (starter *RemoteLeadStarter) implementationContinuationRequest(
 		reviewer.ProviderSessionID == "" {
 		return remoteLeadRequest{}, ErrCommandNotAllowed
 	}
-	messages, err := starter.executions.PlanningMessagesForRun(ctx, run.ID)
+	messages, err := starter.currentPlanningMessages(ctx, run)
 	if err != nil {
 		return remoteLeadRequest{}, err
 	}
@@ -2890,7 +3147,7 @@ func (starter *RemoteLeadStarter) finish(
 				err = loadErr
 				break
 			}
-			messages, listErr := starter.executions.PlanningMessagesForRun(ctx, request.runID)
+			messages, listErr := starter.currentPlanningMessages(ctx, run)
 			if listErr != nil {
 				err = listErr
 				break
@@ -2919,7 +3176,7 @@ func (starter *RemoteLeadStarter) finish(
 				err = starter.waitRun(ctx, request.runID, request.waitingReason, execution.RunWaitKindPhaseCheckpoint)
 				break
 			}
-			messages, listErr := starter.executions.PlanningMessagesForRun(ctx, request.runID)
+			messages, listErr := starter.currentPlanningMessages(ctx, run)
 			if listErr != nil {
 				err = listErr
 				break
@@ -3002,7 +3259,7 @@ func (starter *RemoteLeadStarter) verifyImplementationPublication(
 	if err != nil {
 		return err
 	}
-	messages, err := starter.executions.PlanningMessagesForRun(ctx, run.ID)
+	messages, err := starter.currentPlanningMessages(ctx, run)
 	if err != nil {
 		return err
 	}
@@ -3335,7 +3592,7 @@ func (starter *RemoteLeadStarter) verifyImplementationCorrection(
 	if err != nil {
 		return err
 	}
-	messages, err := starter.executions.PlanningMessagesForRun(ctx, run.ID)
+	messages, err := starter.currentPlanningMessages(ctx, run)
 	if err != nil {
 		return err
 	}
@@ -3437,7 +3694,7 @@ func (starter *RemoteLeadStarter) verifyImplementationReview(
 	if err != nil {
 		return err
 	}
-	messages, err := starter.executions.PlanningMessagesForRun(ctx, run.ID)
+	messages, err := starter.currentPlanningMessages(ctx, run)
 	if err != nil {
 		return err
 	}
@@ -3645,7 +3902,7 @@ func (starter *RemoteLeadStarter) verifyImplementationReadiness(
 	if err != nil {
 		return err
 	}
-	messages, err := starter.executions.PlanningMessagesForRun(ctx, run.ID)
+	messages, err := starter.currentPlanningMessages(ctx, run)
 	if err != nil {
 		return err
 	}

@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -8,6 +9,7 @@ import (
 	"time"
 
 	"github.com/EinarLogiOskars/commitarium/internal/execution"
+	"github.com/EinarLogiOskars/commitarium/internal/workspace"
 )
 
 func TestPauseAndResumeRunHandlersRequireIdempotencyAndReturnState(t *testing.T) {
@@ -51,6 +53,29 @@ func TestPauseAndResumeRunHandlersRequireIdempotencyAndReturnState(t *testing.T)
 	if resumeResponse.Code != http.StatusAccepted || workflow.receivedAction != "resume" ||
 		workflow.receivedKey != runActionIDForKey("resume-control") {
 		t.Fatalf("unexpected resume response/status: code=%d workflow=%+v body=%s", resumeResponse.Code, workflow, resumeResponse.Body.String())
+	}
+}
+
+func TestResumeRunReportsUnconfirmedReplanningState(t *testing.T) {
+	workflow := &planningStarterStub{err: workspace.ErrBranchConflict}
+	handler := NewWithWorkspaceAndRealWorkflowService(
+		nil, nil, nil, planningExecutionStub{}, nil, nil, nil, workflow,
+	)
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/runs/run_control/resume", nil)
+	request.Header.Set("Idempotency-Key", "resume-replanning")
+	recorder := httptest.NewRecorder()
+
+	handler.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusConflict {
+		t.Fatalf("expected 409, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+	var body errorResponse
+	if err := json.NewDecoder(recorder.Body).Decode(&body); err != nil {
+		t.Fatalf("decode error response: %v", err)
+	}
+	if body.Error.Code != "intervention_replanning_required" {
+		t.Fatalf("unexpected error response %+v", body)
 	}
 }
 

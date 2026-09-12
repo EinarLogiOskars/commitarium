@@ -318,17 +318,27 @@ not implemented yet.
   `guidance_applied`, `clarification_required`, or `replanning_required`, and
   keeps the workflow paused. Recovery reattaches to the admitted deterministic
   attempt without sending the message twice. The frontend may enable Send.
+- Entry into scope-changing replanning is settled. An explicit Continue after
+  an answered `replanning_required` intervention verifies and preserves the
+  existing feature branch, checkout, pull request, prior plan, commits, and
+  local edits; records a new version and committed baseline; clears stale merge
+  readiness; and resumes the same lead conversation for a revised proposal.
+  Run responses and every planning message now include integer `plan_version`
+  (starting at `1`). Shared-message `sequence` remains monotonic across versions.
+  The revised proposal returns to `waiting_for_user` with
+  `wait_kind: "phase_checkpoint"`, even under `run_to_completion` for now.
 
 ## In progress — avoid for now
 
 ### Scope-changing intervention replanning
 
-Ordinary guidance resolution and clarification follow-up are settled. A
-`replanning_required` answer remains paused with a typed conflict because an
-implementation or review may already have changed the feature branch. The next
-backend slice must preserve that work, establish a new durable plan version and
-Git baseline, update the existing Forgejo PR audit trail, and restart the
-planning dialogue without treating the old submitted plan as current.
+The safe entry and first revised lead proposal are settled above. The reviewer
+continuation and remaining agreement loop are not yet available for plan
+versions greater than one. The next backend slice must resume the same reviewer
+conversation, keep both agents on the new plan version, enforce the configured
+round limit against only that version, and append only the newly agreed revised
+plan to the existing Forgejo PR before implementation resumes. Do not wire a
+revised-proposal Continue action until that slice is settled.
 
 ## Planned — do not depend on it yet
 

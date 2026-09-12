@@ -49,6 +49,9 @@ func TestExecutionStoreOrdersPlanningMessagesAcrossSessionsWithoutCopyingText(t 
 	if err != nil || !created || first.Sequence != 1 || first.AgentID != lead.AgentID {
 		t.Fatalf("link lead proposal: message=%+v created=%t err=%v", first, created, err)
 	}
+	if first.PlanVersion != 1 {
+		t.Fatalf("initial planning message version=%d, want 1", first.PlanVersion)
+	}
 	second, created, err := store.LinkPlanningMessage(t.Context(), execution.PendingPlanningMessage{
 		RunID: run.ID, EventID: reviewerEvent.ID, LinkedAt: now.Add(3 * time.Second),
 	})
@@ -81,6 +84,48 @@ func TestExecutionStoreOrdersPlanningMessagesAcrossSessionsWithoutCopyingText(t 
 		t.Context(), `SELECT text FROM session_events WHERE id = ?`, reviewerEvent.ID,
 	).Scan(&storedText); err != nil || storedText != reviewerEvent.Text {
 		t.Fatalf("authoritative session text changed: text=%q err=%v", storedText, err)
+	}
+}
+
+func TestExecutionStoreLinksPlanningMessagesToCurrentPlanVersion(t *testing.T) {
+	db, store := newTestExecutionStore(t)
+	run, lead := createExecutionRecords(t, db, store)
+	now := lead.StartedAt.Add(time.Second)
+	firstEvent, _, err := store.AppendEvent(t.Context(), execution.PendingEvent{
+		ID: "sev_plan_v1", SessionID: lead.ID, Type: worker.EventPlanSubmitted,
+		Text: "Original plan", OccurredAt: now,
+	})
+	if err != nil {
+		t.Fatalf("append original plan: %v", err)
+	}
+	first, _, err := store.LinkPlanningMessage(t.Context(), execution.PendingPlanningMessage{
+		RunID: run.ID, EventID: firstEvent.ID, LinkedAt: now,
+	})
+	if err != nil || first.PlanVersion != 1 {
+		t.Fatalf("link original plan: message=%+v err=%v", first, err)
+	}
+	if _, err := db.ExecContext(
+		t.Context(), `UPDATE runs SET plan_version = 2 WHERE id = ?`, run.ID,
+	); err != nil {
+		t.Fatalf("advance plan version fixture: %v", err)
+	}
+	secondEvent, _, err := store.AppendEvent(t.Context(), execution.PendingEvent{
+		ID: "sev_plan_v2", SessionID: lead.ID, Type: worker.EventMessage,
+		Text: "Revised proposal", OccurredAt: now.Add(time.Second),
+	})
+	if err != nil {
+		t.Fatalf("append revised proposal: %v", err)
+	}
+	second, _, err := store.LinkPlanningMessage(t.Context(), execution.PendingPlanningMessage{
+		RunID: run.ID, EventID: secondEvent.ID, LinkedAt: now.Add(time.Second),
+	})
+	if err != nil || second.PlanVersion != 2 || second.Sequence != 2 {
+		t.Fatalf("link revised proposal: message=%+v err=%v", second, err)
+	}
+	messages, err := store.ListPlanningMessages(t.Context(), run.ID)
+	if err != nil || len(messages) != 2 || messages[0].PlanVersion != 1 ||
+		messages[1].PlanVersion != 2 {
+		t.Fatalf("versioned planning history=%+v err=%v", messages, err)
 	}
 }
 

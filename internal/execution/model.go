@@ -53,9 +53,23 @@ type Run struct {
 	AgentProviders                 project.AgentProviders
 	MergePolicy                    project.MergePolicy
 	AutonomyPolicy                 project.AutonomyPolicy
+	PlanVersion                    int
 	StartedAt                      time.Time
 	UpdatedAt                      time.Time
 	EndedAt                        *time.Time
+}
+
+// PlanRevision records why a later planning cycle exists and the exact Git
+// commit from which it must reason. Version one is the original accepted plan;
+// rows are needed only for later versions created by a user intervention.
+type PlanRevision struct {
+	RunID               string
+	Version             int
+	InterventionID      string
+	PreviousPlanEventID string
+	EffectiveGoal       string
+	BaselineCommitID    string
+	CreatedAt           time.Time
 }
 
 // Intervention is one user message waiting to be handled by a run's durable
@@ -129,12 +143,13 @@ type Event struct {
 // run-level planning discussion. The text remains stored only once, in the
 // session event; this record adds the cross-session order seen by clients.
 type PlanningMessage struct {
-	RunID    string
-	Sequence int64
-	AgentID  string
-	Role     worker.Role
-	Event    Event
-	LinkedAt time.Time
+	RunID       string
+	PlanVersion int
+	Sequence    int64
+	AgentID     string
+	Role        worker.Role
+	Event       Event
+	LinkedAt    time.Time
 }
 
 // WorkerAttemptCheckpoint identifies the one worker process incarnation whose
@@ -297,6 +312,8 @@ func (run Run) Validate() error {
 		return fmt.Errorf("%w: planning round limit cannot be negative", ErrInvalidRun)
 	case run.ImplementationReviewRoundLimit < 0:
 		return fmt.Errorf("%w: implementation review round limit cannot be negative", ErrInvalidRun)
+	case run.PlanVersion < 1:
+		return fmt.Errorf("%w: plan version must be positive", ErrInvalidRun)
 	case run.AgentProviders.Validate() != nil:
 		return fmt.Errorf("%w: agent providers are invalid", ErrInvalidRun)
 	case run.Paused && run.WaitKind != RunWaitKindPaused:
@@ -453,6 +470,8 @@ func (message PlanningMessage) Validate() error {
 		return fmt.Errorf("%w: run ID is required", ErrInvalidPlanningMessage)
 	case message.Sequence < 1:
 		return fmt.Errorf("%w: sequence must be positive", ErrInvalidPlanningMessage)
+	case message.PlanVersion < 1:
+		return fmt.Errorf("%w: plan version must be positive", ErrInvalidPlanningMessage)
 	case strings.TrimSpace(message.AgentID) == "":
 		return fmt.Errorf("%w: agent ID is required", ErrInvalidPlanningMessage)
 	case !message.Role.IsValid():
@@ -463,6 +482,39 @@ func (message PlanningMessage) Validate() error {
 		return fmt.Errorf("%w: link time is required", ErrInvalidPlanningMessage)
 	}
 	return message.Event.Validate()
+}
+
+func (revision PlanRevision) Validate() error {
+	switch {
+	case strings.TrimSpace(revision.RunID) == "":
+		return fmt.Errorf("%w: run ID is required", ErrInvalidPlanningMessage)
+	case revision.Version < 2:
+		return fmt.Errorf("%w: revised plan version must be at least two", ErrInvalidPlanningMessage)
+	case strings.TrimSpace(revision.InterventionID) == "":
+		return fmt.Errorf("%w: intervention ID is required", ErrInvalidPlanningMessage)
+	case strings.TrimSpace(revision.PreviousPlanEventID) == "":
+		return fmt.Errorf("%w: previous plan event ID is required", ErrInvalidPlanningMessage)
+	case strings.TrimSpace(revision.EffectiveGoal) == "" || revision.EffectiveGoal != strings.TrimSpace(revision.EffectiveGoal):
+		return fmt.Errorf("%w: effective goal is required and must be trimmed", ErrInvalidPlanningMessage)
+	case !validCommitID(revision.BaselineCommitID):
+		return fmt.Errorf("%w: baseline commit ID is invalid", ErrInvalidPlanningMessage)
+	case revision.CreatedAt.IsZero():
+		return fmt.Errorf("%w: creation time is required", ErrInvalidPlanningMessage)
+	default:
+		return nil
+	}
+}
+
+func validCommitID(value string) bool {
+	if len(value) != 40 && len(value) != 64 {
+		return false
+	}
+	for _, char := range value {
+		if (char < '0' || char > '9') && (char < 'a' || char > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 func (checkpoint WorkerAttemptCheckpoint) Validate() error {

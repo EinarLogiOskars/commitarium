@@ -91,6 +91,27 @@ func TestManagerVerifiesExactCleanPublishedHead(t *testing.T) {
 	}
 }
 
+func TestManagerVerifiesExactReplanningHeadWithoutCleaningLocalEdits(t *testing.T) {
+	manager, root := newTestManager(t, nil)
+	spec := initializeCheckout(t, root)
+	if err := manager.Ensure(t.Context(), spec); err != nil {
+		t.Fatalf("ensure new checkout: %v", err)
+	}
+	target := filepath.Join(root, spec.WorkspaceID)
+	if err := os.WriteFile(filepath.Join(target, "partial.txt"), []byte("preserve me\n"), 0o644); err != nil {
+		t.Fatalf("write partial change: %v", err)
+	}
+	spec.AlreadyReady = true
+	spec.ExpectedHeadCommitID = spec.BaseCommitID
+	if err := manager.Ensure(t.Context(), spec); err != nil {
+		t.Fatalf("verify dirty replanning checkout: %v", err)
+	}
+	contents, err := os.ReadFile(filepath.Join(target, "partial.txt"))
+	if err != nil || string(contents) != "preserve me\n" {
+		t.Fatalf("replanning verification changed partial work: %q err=%v", contents, err)
+	}
+}
+
 func TestManagerRequiresCleanPlanningBaselineWhenRequested(t *testing.T) {
 	manager, root := newTestManager(t, nil)
 	spec := initializeCheckout(t, root)

@@ -59,7 +59,7 @@ func (s *ExecutionStore) BeginInterventionTurn(
 		ctx,
 		`SELECT id, feature_id, status, reason, wait_kind, paused, paused_from_wait_kind,
 		        planning_round_limit, implementation_review_round_limit,
-		        lead_provider, reviewer_provider, merge_policy, autonomy_policy,
+		        lead_provider, reviewer_provider, merge_policy, autonomy_policy, plan_version,
 		        started_at, updated_at, ended_at
 		 FROM runs WHERE id = ?`,
 		intervention.RunID,
@@ -213,7 +213,7 @@ func (s *ExecutionStore) CompleteIntervention(
 		ctx,
 		`SELECT id, feature_id, status, reason, wait_kind, paused, paused_from_wait_kind,
 		        planning_round_limit, implementation_review_round_limit,
-		        lead_provider, reviewer_provider, merge_policy, autonomy_policy,
+		        lead_provider, reviewer_provider, merge_policy, autonomy_policy, plan_version,
 		        started_at, updated_at, ended_at
 		 FROM runs WHERE id = ?`,
 		intervention.RunID,

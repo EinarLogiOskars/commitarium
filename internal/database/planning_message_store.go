@@ -57,15 +57,22 @@ func (s *ExecutionStore) LinkPlanningMessage(
 	}
 
 	var sequence int64
+	var planVersion int
 	if err := tx.QueryRowContext(
 		ctx,
-		`SELECT COALESCE(MAX(sequence), 0) + 1 FROM planning_messages WHERE run_id = ?`,
+		`SELECT COALESCE(MAX(pm.sequence), 0) + 1, r.plan_version
+		 FROM runs r
+		 LEFT JOIN planning_messages pm ON pm.run_id = r.id
+		 WHERE r.id = ?
+		 GROUP BY r.id, r.plan_version`,
 		pending.RunID,
-	).Scan(&sequence); err != nil {
+	).Scan(&sequence, &planVersion); errors.Is(err, sql.ErrNoRows) {
+		return execution.PlanningMessage{}, false, execution.ErrNotFound
+	} else if err != nil {
 		return execution.PlanningMessage{}, false, fmt.Errorf("select next planning message sequence: %w", err)
 	}
 	message := execution.PlanningMessage{
-		RunID: pending.RunID, Sequence: sequence, AgentID: agentID, Role: role,
+		RunID: pending.RunID, PlanVersion: planVersion, Sequence: sequence, AgentID: agentID, Role: role,
 		Event: event, LinkedAt: pending.LinkedAt.UTC(),
 	}
 	if err := message.Validate(); err != nil {
@@ -73,9 +80,9 @@ func (s *ExecutionStore) LinkPlanningMessage(
 	}
 	if _, err := tx.ExecContext(
 		ctx,
-		`INSERT INTO planning_messages (run_id, sequence, session_event_id, linked_at)
-		 VALUES (?, ?, ?, ?)`,
-		message.RunID, message.Sequence, message.Event.ID,
+		`INSERT INTO planning_messages (run_id, plan_version, sequence, session_event_id, linked_at)
+		 VALUES (?, ?, ?, ?, ?)`,
+		message.RunID, message.PlanVersion, message.Sequence, message.Event.ID,
 		formatExecutionTime(message.LinkedAt),
 	); err != nil {
 		return execution.PlanningMessage{}, false, fmt.Errorf("insert planning message: %w", err)
@@ -92,7 +99,7 @@ func (s *ExecutionStore) ListPlanningMessages(
 ) ([]execution.PlanningMessage, error) {
 	rows, err := s.db.QueryContext(
 		ctx,
-		`SELECT pm.run_id, pm.sequence, s.agent_id, s.role,
+		`SELECT pm.run_id, pm.plan_version, pm.sequence, s.agent_id, s.role,
 		        se.id, se.session_id, se.sequence, se.event_type, se.text,
 		        se.occurred_at, se.worker_attempt_id, se.worker_event_sequence,
 		        pm.linked_at
@@ -129,7 +136,7 @@ func findPlanningMessageByEvent(
 ) (execution.PlanningMessage, bool, error) {
 	message, err := scanPlanningMessage(tx.QueryRowContext(
 		ctx,
-		`SELECT pm.run_id, pm.sequence, s.agent_id, s.role,
+		`SELECT pm.run_id, pm.plan_version, pm.sequence, s.agent_id, s.role,
 		        se.id, se.session_id, se.sequence, se.event_type, se.text,
 		        se.occurred_at, se.worker_attempt_id, se.worker_event_sequence,
 		        pm.linked_at
@@ -157,7 +164,7 @@ func scanPlanningMessage(scanner executionScanner) (execution.PlanningMessage, e
 	var workerEventSequence sql.NullInt64
 	var linkedAt string
 	if err := scanner.Scan(
-		&message.RunID, &message.Sequence, &message.AgentID, &role,
+		&message.RunID, &message.PlanVersion, &message.Sequence, &message.AgentID, &role,
 		&message.Event.ID, &message.Event.SessionID, &message.Event.Sequence,
 		&eventType, &message.Event.Text, &occurredAt,
 		&workerAttemptID, &workerEventSequence, &linkedAt,
