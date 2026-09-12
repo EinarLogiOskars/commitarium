@@ -135,6 +135,7 @@ function phaseView(
       featureId={feature.id}
       runId={activeRunId}
       state={feature.state}
+      onAdvanced={reload}
     />
   );
 }

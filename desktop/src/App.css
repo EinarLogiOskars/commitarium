@@ -341,6 +341,16 @@ body {
   font-size: 12px;
 }
 
+.merge-gate {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  align-items: flex-start;
+}
+
 .clarify {
   display: flex;
   gap: 16px;
