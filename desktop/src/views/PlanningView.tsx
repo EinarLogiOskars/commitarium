@@ -7,23 +7,38 @@ import {
   startPlanningRound,
   startImplementation,
 } from "../api/runs";
+import { getSessionEvents } from "../api/sessions";
 import { ApiError } from "../api/client";
-import type { PlanningMessage } from "../api/types";
+import type { Session, SessionEvent } from "../api/types";
 
 const POLL_MS = 2000;
 
-// The lead ↔ reviewer planning discussion. Explicit phase actions advance it;
-// the transcript is polled. Untested against a live run — a first pass to
-// validate once the coordinator is rebuilt.
+interface Entry {
+  key: string;
+  role: string;
+  type: string;
+  text: string;
+  at: string;
+}
+
+// The lead ↔ reviewer planning discussion. The transcript is built from the
+// sessions' activity (the lead's first proposal lives there before it reaches
+// the curated planning-messages feed). The single advance action is derived
+// from real state — feature phase + which sessions exist + whether a plan was
+// submitted — not from message counts.
 export function PlanningView({
   runId,
+  featureState,
   onAdvanced,
 }: {
   runId: string;
+  featureState: string;
   onAdvanced: () => void;
 }) {
-  const [messages, setMessages] = useState<PlanningMessage[]>([]);
+  const [entries, setEntries] = useState<Entry[]>([]);
+  const [sessions, setSessions] = useState<Session[]>([]);
   const [status, setStatus] = useState<string | null>(null);
+  const [submitted, setSubmitted] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const chatRef = useRef<HTMLDivElement | null>(null);
@@ -31,9 +46,26 @@ export function PlanningView({
 
   const poll = useCallback(async () => {
     try {
-      const [msgs, run] = await Promise.all([getPlanningMessages(runId), getRun(runId)]);
-      setMessages(msgs);
+      const run = await getRun(runId);
+      setSessions(run.sessions);
       setStatus(run.status);
+      const perSession = await Promise.all(
+        run.sessions.map(async (s) => ({
+          role: s.role || s.agent_id,
+          events: await getSessionEvents(s.id),
+        })),
+      );
+      const merged: Entry[] = [];
+      for (const { role, events } of perSession) {
+        for (const e of events as SessionEvent[]) {
+          if (!e.text) continue;
+          merged.push({ key: e.id, role, type: e.type, text: e.text, at: e.occurred_at });
+        }
+      }
+      merged.sort((a, b) => a.at.localeCompare(b.at));
+      setEntries(merged);
+      const msgs = await getPlanningMessages(runId);
+      setSubmitted(msgs.some((m) => m.type === "plan_submitted"));
     } catch (e) {
       setError(e instanceof ApiError ? `${e.message} (${e.code})` : String(e));
     }
@@ -48,12 +80,10 @@ export function PlanningView({
   useEffect(() => {
     const el = chatRef.current;
     if (el && pinned.current) el.scrollTop = el.scrollHeight;
-  }, [messages]);
+  }, [entries]);
 
-  const hasLead = messages.some((m) => m.role === "lead" && m.type !== "plan_submitted");
-  const hasReviewer = messages.some((m) => m.role === "reviewer");
-  const submitted = messages.some((m) => m.type === "plan_submitted");
   const idle = status === "waiting_for_user";
+  const hasReviewer = sessions.some((s) => s.role === "reviewer");
 
   const act = async (fn: (runId: string, key: string) => Promise<unknown>, advance = false) => {
     setBusy(true);
@@ -69,16 +99,15 @@ export function PlanningView({
     }
   };
 
-  // Which single action is next, given the transcript state.
-  let action: { label: string; run: () => void } | null = null;
-  if (submitted) {
+  let action: { label: string; run: () => void };
+  if (featureState === "draft") {
+    action = { label: "Start planning", run: () => void act(startPlanning, true) };
+  } else if (submitted) {
     action = { label: "Start implementation", run: () => void act(startImplementation, true) };
-  } else if (!hasLead) {
-    action = { label: "Start planning", run: () => void act(startPlanning) };
-  } else if (!hasReviewer) {
-    action = { label: "Get reviewer response", run: () => void act(startPlanningReviewer) };
-  } else {
+  } else if (hasReviewer) {
     action = { label: "Continue planning", run: () => void act(startPlanningRound) };
+  } else {
+    action = { label: "Get reviewer response", run: () => void act(startPlanningReviewer) };
   }
 
   return (
@@ -94,16 +123,14 @@ export function PlanningView({
           pinned.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
         }}
       >
-        {messages.length === 0 ? (
+        {entries.length === 0 ? (
           <p className="muted">No planning discussion yet.</p>
         ) : (
-          messages.map((m) => <PlanMsg key={m.id} m={m} />)
+          entries.map((e) => <PlanEntry key={e.key} e={e} />)
         )}
       </div>
 
-      <p className="muted status-line">
-        {idle ? "Waiting for you." : "Agents working…"}
-      </p>
+      <p className="muted status-line">{idle ? "Waiting for you." : "Agents working…"}</p>
       <button className="primary" onClick={action.run} disabled={busy || !idle}>
         {busy ? "Working…" : action.label}
       </button>
@@ -111,20 +138,26 @@ export function PlanningView({
   );
 }
 
-function PlanMsg({ m }: { m: PlanningMessage }) {
-  if (m.type === "plan_submitted") {
+function PlanEntry({ e }: { e: Entry }) {
+  if (e.type === "plan_submitted") {
     return (
       <div className="plan-submitted">
         <span className="plan-submitted__label">📌 Plan submitted</span>
-        <span className="msg__text">{m.text}</span>
+        <span className="msg__text">{e.text}</span>
       </div>
     );
   }
-  const reviewer = m.role === "reviewer";
-  return (
-    <div className={`msg ${reviewer ? "msg--reviewer" : "msg--lead"}`}>
-      <span className="msg__who">{reviewer ? "Reviewer" : "Lead"}</span>
-      <span className="msg__text">{m.text}</span>
-    </div>
-  );
+  if (e.type === "message") {
+    const reviewer = e.role === "reviewer";
+    return (
+      <div className={`msg ${reviewer ? "msg--reviewer" : "msg--lead"}`}>
+        <span className="msg__who">{reviewer ? "Reviewer" : "Lead"}</span>
+        <span className="msg__text">{e.text}</span>
+      </div>
+    );
+  }
+  if (e.type === "activity") {
+    return <div className="msg msg--note">{e.text}</div>;
+  }
+  return null;
 }

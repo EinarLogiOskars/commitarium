@@ -123,7 +123,7 @@ function phaseView(
   // Goal accepted (still draft) or planning → the planning view. Its first
   // action, "Start planning", is what transitions draft → planning.
   if (feature.state === "planning" || (feature.state === "draft" && feature.accepted_goal)) {
-    return <PlanningView runId={activeRunId} onAdvanced={reload} />;
+    return <PlanningView runId={activeRunId} featureState={feature.state} onAdvanced={reload} />;
   }
   if (feature.state === "implementing") {
     return <ImplementationView runId={activeRunId} state={feature.state} />;
