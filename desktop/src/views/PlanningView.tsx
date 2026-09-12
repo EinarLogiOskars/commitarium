@@ -10,8 +10,9 @@ import {
 import { getSessionEvents } from "../api/sessions";
 import { ApiError } from "../api/client";
 import { Transcript, type TranscriptEntry } from "./Transcript";
+import { InterveneBar } from "./InterveneBar";
 import { scopeToPhase, type Interval } from "./phaseWindows";
-import type { PlanningMessage, SessionEvent } from "../api/types";
+import type { PlanningMessage, Run, SessionEvent } from "../api/types";
 
 const POLL_MS = 2000;
 
@@ -28,6 +29,7 @@ const SHOWN = new Set(["message", "plan_submitted", "activity", "user_message"])
 // a v1 plan_submitted must not make a fresh v2 proposal skip its reviewer loop.
 export function PlanningView({
   runId,
+  run,
   featureState,
   live = true,
   planVersion = 1,
@@ -36,9 +38,11 @@ export function PlanningView({
   onAdvanced,
 }: {
   runId: string;
+  // Full run (for the docked composer/pause); may be null very briefly.
+  run: Run | null;
   featureState: string;
   // When false, the phase is being viewed as history — transcript only, no
-  // advance action (the run has moved past planning, or is auto-driven).
+  // action dock (the run has moved past planning, or is auto-driven).
   live?: boolean;
   // The agreement cycle. Revised plans (>1) use the same reviewer/round/
   // implementation controls; it only labels the phase and scopes plan state.
@@ -114,28 +118,30 @@ export function PlanningView({
     }
   };
 
-  let action: { label: string; run: () => void };
+  let label: string;
+  let run_: () => void;
   if (featureState === "draft") {
-    action = { label: "Start planning", run: () => void act(startPlanning, true) };
+    label = "Start planning";
+    run_ = () => void act(startPlanning, true);
   } else if (submittedCurrent) {
-    action = { label: "Start implementation", run: () => void act(startImplementation, true) };
+    label = "Start implementation";
+    run_ = () => void act(startImplementation, true);
   } else if (reviewerRespondedCurrent) {
-    action = { label: "Continue planning", run: () => void act(startPlanningRound) };
+    label = "Continue planning";
+    run_ = () => void act(startPlanningRound);
   } else {
-    action = { label: "Send plan to reviewer", run: () => void act(startPlanningReviewer) };
+    label = "Send plan to reviewer";
+    run_ = () => void act(startPlanningReviewer);
   }
 
   const revised = planVersion > 1;
   const shown = scopeToPhase(entries, intervals, scoped);
+  // The dock's advance CTA only appears when it's the user's turn.
+  const advance = idle ? { label, onClick: run_, busy } : undefined;
 
   return (
     <section className="panel panel--phase">
       <h2>Planning{revised ? ` · revised v${planVersion}` : ""}</h2>
-      <p className="muted">
-        The lead proposes a plan and the reviewer critiques it; they iterate until they
-        agree, then the plan is submitted and implementation can begin. No code is written
-        yet — this decides the approach.
-      </p>
       {error && <div className="banner banner--error">{error}</div>}
 
       <div
@@ -149,20 +155,7 @@ export function PlanningView({
         <Transcript entries={shown} empty="No planning discussion yet." />
       </div>
 
-      {live && (
-        <>
-          {revised && (
-            <p className="muted note">
-              Revised plan (v{planVersion}) from your scope change — the lead and reviewer
-              agree on the revision, then it's appended to the same PR.
-            </p>
-          )}
-          <p className="muted status-line">{idle ? "Waiting for you." : "Agents working…"}</p>
-          <button className="primary" onClick={action.run} disabled={busy || !idle}>
-            {busy ? "Working…" : action.label}
-          </button>
-        </>
-      )}
+      {live && run && <InterveneBar run={run} onChanged={onAdvanced} action={advance} />}
     </section>
   );
 }

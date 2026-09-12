@@ -5,8 +5,9 @@ import { getWorkspace } from "../api/features";
 import { openExternal } from "../ipc";
 import { ApiError } from "../api/client";
 import { Transcript, type TranscriptEntry } from "./Transcript";
+import { InterveneBar } from "./InterveneBar";
 import { scopeToPhase, type Interval } from "./phaseWindows";
-import type { SessionEvent, Workspace } from "../api/types";
+import type { Run, SessionEvent, Workspace } from "../api/types";
 
 const POLL_MS = 2000;
 
@@ -21,17 +22,21 @@ export function ReviewView({
   projectId,
   featureId,
   runId,
+  run,
   live = true,
   intervals = [],
   scoped = false,
+  onChanged,
 }: {
   projectId: string;
   featureId: string;
   runId: string;
+  run: Run | null;
   state: string;
   live?: boolean;
   intervals?: Interval[];
   scoped?: boolean;
+  onChanged: () => void;
 }) {
   const [entries, setEntries] = useState<TranscriptEntry[]>([]);
   const [decisions, setDecisions] = useState<{ role: string; status: string; outcome?: string }[]>([]);
@@ -101,6 +106,8 @@ export function ReviewView({
       <div className="chat">
         <Transcript entries={shown} empty="No review activity yet." />
       </div>
+
+      {live && run && <InterveneBar run={run} onChanged={onChanged} />}
     </section>
   );
 }

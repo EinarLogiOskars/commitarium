@@ -883,21 +883,29 @@ button.primary {
   color: var(--bad);
 }
 
-/* Work-order head: title/description + pause control, then the phase timeline. */
+/* Work-order head: title/description, then the phase timeline. Kept compact so
+   the transcript gets the vertical space. */
+.order-head {
+  padding: 14px 18px;
+}
 .order-head .panel__head {
   align-items: flex-start;
+  margin-bottom: 10px;
+}
+.order-head h2 {
+  font-size: 15px;
 }
 .order-head__desc {
-  margin: 4px 0 0;
-  font-size: 13px;
+  margin: 3px 0 0;
+  font-size: 12px;
 }
 
-/* Phase timeline (stepper). */
+/* Phase timeline (stepper) — compact. */
 .stepper {
   display: flex;
   align-items: stretch;
   gap: 0;
-  margin: 4px 0 2px;
+  margin: 2px 0 0;
 }
 .stepper__cell {
   display: flex;
@@ -911,16 +919,16 @@ button.primary {
   background: var(--border);
   margin: 0 6px;
   align-self: center;
-  margin-top: -18px;
+  margin-top: -13px;
 }
 .stepper__step {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
   background: none;
   border: none;
-  padding: 4px 6px;
+  padding: 2px 4px;
   cursor: pointer;
   color: var(--muted);
   font: inherit;
@@ -932,18 +940,18 @@ button.primary {
 .stepper__marker {
   display: grid;
   place-items: center;
-  width: 30px;
-  height: 30px;
+  width: 22px;
+  height: 22px;
   border-radius: 50%;
   border: 2px solid var(--border);
   background: var(--panel);
-  font-size: 13px;
+  font-size: 11px;
   font-weight: 600;
   line-height: 1;
   transition: border-color 0.15s, background 0.15s, color 0.15s;
 }
 .stepper__label {
-  font-size: 12px;
+  font-size: 11px;
   white-space: nowrap;
 }
 .stepper__step--done {
@@ -977,7 +985,7 @@ button.primary {
   color: var(--text);
 }
 .stepper__step--viewed .stepper__marker {
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 22%, transparent);
 }
 .stepper__step:not(:disabled):hover .stepper__marker {
   border-color: var(--accent);
@@ -1030,13 +1038,17 @@ button.primary {
   text-decoration: underline;
 }
 
-/* Intervention surface: run state machine + agent composer. */
+/* Intervention dock: the pinned footer of a phase card — advance CTA + run
+   state + agent composer. Styled as a footer (top divider), not a nested card. */
 .intervene {
-  margin-top: 16px;
-  padding: 12px 14px;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: color-mix(in srgb, var(--text) 3%, var(--panel));
+  flex: none;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+.intervene__advance {
+  width: 100%;
+  margin-bottom: 10px;
 }
 .intervene__row {
   display: flex;
