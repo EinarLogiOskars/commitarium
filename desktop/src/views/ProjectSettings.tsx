@@ -1,7 +1,12 @@
 import { useState } from "react";
-import { updateAgentProviders, updateDialogueLimits, updateMergePolicy } from "../api/projects";
+import {
+  updateAgentProviders,
+  updateAutonomyPolicy,
+  updateDialogueLimits,
+  updateMergePolicy,
+} from "../api/projects";
 import { ApiError } from "../api/client";
-import type { AgentProvider, MergePolicy, Project } from "../api/types";
+import type { AgentProvider, AutonomyPolicy, MergePolicy, Project } from "../api/types";
 
 // Project preferences. Each section maps to its own PUT endpoint and saves
 // independently. Recovery policy is create-only (no update endpoint), so it is
@@ -18,6 +23,7 @@ export function ProjectSettings({
     <>
       <Agents project={project} onUpdated={onUpdated} />
       <Rounds project={project} onUpdated={onUpdated} />
+      <Autonomy project={project} onUpdated={onUpdated} />
       <Merge project={project} onUpdated={onUpdated} />
       <Recovery project={project} />
     </>
@@ -123,6 +129,53 @@ function Rounds({ project, onUpdated }: { project: Project; onUpdated: (p: Proje
       </div>
       <button className="primary" onClick={() => void save()} disabled={busy}>
         {busy ? "Saving…" : "Save rounds"}
+      </button>
+    </section>
+  );
+}
+
+function Autonomy({ project, onUpdated }: { project: Project; onUpdated: (p: Project) => void }) {
+  const [policy, setPolicy] = useState<AutonomyPolicy>(
+    project.autonomy_policy ?? "review_each_phase",
+  );
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const save = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      onUpdated(await updateAutonomyPolicy(project.id, policy));
+    } catch (e) {
+      setError(describe(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <section className="panel">
+      <h2>Autonomy</h2>
+      {error && <div className="banner banner--error">{error}</div>}
+      <p className="muted">
+        How far a run advances on its own. Round limits, blockers, goal acceptance, and the
+        merge gate always stop for you regardless of this setting.
+      </p>
+      <div className="settings-row">
+        <label>
+          Between phases
+          <select
+            value={policy}
+            onChange={(e) => setPolicy(e.target.value as AutonomyPolicy)}
+            disabled={busy}
+          >
+            <option value="review_each_phase">Stop at each phase for me to review</option>
+            <option value="run_to_completion">Run all phases through to the merge gate</option>
+          </select>
+        </label>
+      </div>
+      <button className="primary" onClick={() => void save()} disabled={busy}>
+        {busy ? "Saving…" : "Save autonomy"}
       </button>
     </section>
   );

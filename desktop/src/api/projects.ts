@@ -1,6 +1,7 @@
 import { request } from "./client";
 import type {
   AgentProvider,
+  AutonomyPolicy,
   CreateProjectInput,
   MergePolicy,
   Project,
@@ -40,4 +41,13 @@ export const updateMergePolicy = (id: string, merge_policy: MergePolicy): Promis
   request(`${projectPath(id)}/merge-policy`, {
     method: "PUT",
     body: { merge_policy },
+  });
+
+export const updateAutonomyPolicy = (
+  id: string,
+  autonomy_policy: AutonomyPolicy,
+): Promise<Project> =>
+  request(`${projectPath(id)}/autonomy-policy`, {
+    method: "PUT",
+    body: { autonomy_policy },
   });

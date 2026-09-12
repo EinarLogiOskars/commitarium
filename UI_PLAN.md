@@ -71,10 +71,17 @@ top bar: Commitarium · <project> · ● reachable
 **Status — done / left:**
 
 - [x] Warm palette applied (tokens in `App.css`).
-- [ ] App shell: full-window, top bar + left rail + main pane; remove centered
-      max-width column.
-- [ ] Project chooser as a full-window top-level screen.
-- [ ] Project workspace: rail + main master/detail, re-hosting existing views.
+- [x] App shell: full-window, top bar + left rail + main pane; centered
+      max-width column removed.
+- [x] Project chooser as a full-window top-level screen.
+- [x] Project workspace: rail + main master/detail, hosting the phase views.
+- [x] Work-order phase timeline: stepper (Clarify · Plan · Implement · Review ·
+      Merge) with done/active/paused/viewed states; click a reached phase to see
+      only it; body auto-follows the current phase as the run advances, with a
+      "jump to current" affordance (`PhaseStepper.tsx`, `FeatureView.tsx`).
+- [x] Autonomy setting mirroring merge policy (`review_each_phase` /
+      `run_to_completion`) in Project Settings; run-level Pause / intervene +
+      `wait_kind`-driven wait banner on the work-order head.
 - [ ] Boot sequence: auto Docker + stack, diagnostics-on-failure, System view.
 - [ ] Boot loading animation (workshop theme).
 - [ ] (Later) macOS overlay titlebar.

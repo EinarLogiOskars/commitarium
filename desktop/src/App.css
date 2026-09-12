@@ -840,3 +840,150 @@ button.primary {
   border: 1px solid var(--bad);
   color: var(--bad);
 }
+
+/* Work-order head: title/description + pause control, then the phase timeline. */
+.order-head .panel__head {
+  align-items: flex-start;
+}
+.order-head__desc {
+  margin: 4px 0 0;
+  font-size: 13px;
+}
+
+/* Phase timeline (stepper). */
+.stepper {
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+  margin: 4px 0 2px;
+}
+.stepper__cell {
+  display: flex;
+  align-items: center;
+  flex: 1 1 0;
+  min-width: 0;
+}
+.stepper__line {
+  flex: 1 1 auto;
+  height: 2px;
+  background: var(--border);
+  margin: 0 6px;
+  align-self: center;
+  margin-top: -18px;
+}
+.stepper__step {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  background: none;
+  border: none;
+  padding: 4px 6px;
+  cursor: pointer;
+  color: var(--muted);
+  font: inherit;
+  border-radius: 8px;
+}
+.stepper__step:disabled {
+  cursor: default;
+}
+.stepper__marker {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  border: 2px solid var(--border);
+  background: var(--panel);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1;
+  transition: border-color 0.15s, background 0.15s, color 0.15s;
+}
+.stepper__label {
+  font-size: 12px;
+  white-space: nowrap;
+}
+.stepper__step--done {
+  color: var(--text);
+}
+.stepper__step--done .stepper__marker {
+  border-color: var(--ok);
+  background: color-mix(in srgb, var(--ok) 18%, var(--panel));
+  color: var(--ok);
+}
+.stepper__step--active {
+  color: var(--text);
+}
+.stepper__step--active .stepper__marker {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, var(--panel));
+  color: var(--accent);
+}
+.stepper__step--paused .stepper__marker {
+  border-color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 16%, var(--panel));
+  color: var(--warn);
+}
+.stepper__step--cancelled .stepper__marker {
+  border-color: var(--bad);
+  color: var(--bad);
+}
+/* The phase currently shown in the body gets a ring under its marker. */
+.stepper__step--viewed .stepper__label {
+  font-weight: 600;
+  color: var(--text);
+}
+.stepper__step--viewed .stepper__marker {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+.stepper__step:not(:disabled):hover .stepper__marker {
+  border-color: var(--accent);
+}
+
+/* Why the run is waiting, chosen from wait_kind (not parsed from text). */
+.wait-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  border-radius: 8px;
+  padding: 9px 12px;
+  margin-top: 14px;
+  font-size: 13px;
+  border: 1px solid var(--border);
+}
+.wait-banner__kind {
+  font-weight: 600;
+}
+.wait-banner__reason {
+  color: var(--muted);
+}
+.wait-banner--warn {
+  background: color-mix(in srgb, var(--warn) 12%, transparent);
+  border-color: color-mix(in srgb, var(--warn) 45%, transparent);
+}
+.wait-banner--warn .wait-banner__kind {
+  color: var(--warn);
+}
+.wait-banner--ok {
+  background: color-mix(in srgb, var(--ok) 12%, transparent);
+  border-color: color-mix(in srgb, var(--ok) 45%, transparent);
+}
+.wait-banner--ok .wait-banner__kind {
+  color: var(--ok);
+}
+
+.linkish {
+  display: inline-block;
+  margin-top: 12px;
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--accent);
+  font: inherit;
+  cursor: pointer;
+}
+.linkish:hover {
+  text-decoration: underline;
+}
