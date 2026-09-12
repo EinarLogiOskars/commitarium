@@ -37,6 +37,8 @@ const (
 	implementationApprovedReason          = "The reviewer and lead agreed that the exact verified revision is ready for the merge gate."
 	implementationMergedReason            = "Forgejo merged the exact commit approved by the reviewer and lead."
 	implementationMergeBlockedReason      = "The exact approved revision could not be merged safely. Inspect the merge activity and Forgejo pull request before retrying."
+	interventionAnsweringReason           = "The selected agent is answering the user's intervention while the workflow remains paused."
+	interventionAnsweredReason            = "The selected agent answered the intervention. The workflow remains paused until the user explicitly continues it."
 	defaultLeadForgejoAuthor              = "codex-lead"
 	defaultReviewerForgejoAuthor          = "codex-reviewer"
 )
@@ -62,6 +64,7 @@ var ErrPlanningNotAllowed = errors.New("planning cannot start from the current w
 var ErrImplementationNotAllowed = errors.New("implementation cannot start from the current workflow state")
 var ErrRunControlNotAllowed = errors.New("run control is not allowed from the current workflow state")
 var ErrInterventionPending = errors.New("an intervention must be answered before the workflow can resume")
+var ErrInterventionResolutionPending = errors.New("an answered intervention must be resolved before the workflow can resume")
 
 // RemoteLeadExecution is the durable coordinator state used by the first real
 // lead turn. It deliberately contains no workflow transition: goal
@@ -79,6 +82,8 @@ type RemoteLeadExecution interface {
 	ApplyRunPause(context.Context, string, string, execution.RunPauseAction) (execution.Run, bool, error)
 	QueueIntervention(context.Context, string, string, worker.Role, string) (execution.Intervention, bool, error)
 	GetLatestIntervention(context.Context, string) (execution.Intervention, error)
+	BeginInterventionTurn(context.Context, string, execution.WorkerAttemptCheckpoint, string, string) (bool, error)
+	CompleteIntervention(context.Context, string, string, string, worker.InterventionEffect, string) (execution.Intervention, bool, error)
 	TransitionSession(context.Context, string, execution.SessionStatus, execution.SessionStatus, string) (execution.Session, error)
 	RecordSessionEventWithID(context.Context, string, string, worker.Event) (execution.Event, error)
 	GetCommand(context.Context, string) (execution.Command, error)
@@ -358,6 +363,17 @@ func (starter *RemoteLeadStarter) Recover(
 		_, _, err := starter.Merge(ctx, run.ID, run.ID+":recovery-merge")
 		return err
 	}
+	var unfinished *execution.Intervention
+	intervention, interventionErr := starter.executions.GetLatestIntervention(ctx, run.ID)
+	if interventionErr == nil && intervention.Status != execution.InterventionStatusAnswered {
+		unfinished = &intervention
+	} else if interventionErr != nil && !errors.Is(interventionErr, execution.ErrNotFound) {
+		return fmt.Errorf("load unfinished intervention: %w", interventionErr)
+	}
+	if unfinished != nil && unfinished.Status == execution.InterventionStatusQueued {
+		_, err := starter.advanceIntervention(ctx, run.ID)
+		return err
+	}
 	if run.Status == execution.RunStatusWaitingForUser && !run.Paused &&
 		run.WaitKind == execution.RunWaitKindPhaseCheckpoint &&
 		run.AutonomyPolicy == project.AutonomyPolicyRunToCompletion {
@@ -368,11 +384,18 @@ func (starter *RemoteLeadStarter) Recover(
 		return fmt.Errorf("find active real-agent session: %w", err)
 	}
 	if len(activeSessions) == 0 && run.Paused {
-		return starter.waitRun(
+		if unfinished != nil && unfinished.Status == execution.InterventionStatusBeingAnswered {
+			return fmt.Errorf("%w: answering intervention has no active session", ErrInvalidRunRequest)
+		}
+		if err := starter.waitRun(
 			ctx, run.ID,
 			"The run was paused before its next provider turn could start.",
 			execution.RunWaitKindPhaseCheckpoint,
-		)
+		); err != nil {
+			return err
+		}
+		_, err = starter.advanceIntervention(ctx, run.ID)
+		return err
 	}
 	var session execution.Session
 	if len(activeSessions) == 1 {
@@ -409,12 +432,18 @@ func (starter *RemoteLeadStarter) Recover(
 	if err != nil {
 		return fmt.Errorf("load lead worker attempt: %w", err)
 	}
-	if storedFeature.State == feature.StateImplementing {
+	isIntervention := unfinished != nil &&
+		unfinished.Status == execution.InterventionStatusBeingAnswered
+	if isIntervention && (unfinished.SessionID != session.ID ||
+		unfinished.AttemptID != checkpoint.AttemptID || unfinished.Target != session.Role) {
+		return fmt.Errorf("%w: intervention does not match its active worker attempt", ErrInvalidRunRequest)
+	}
+	if !isIntervention && storedFeature.State == feature.StateImplementing {
 		if _, implementing := implementationTurnNumber(session.ID, checkpoint.AttemptID); !isLead || !implementing {
 			return fmt.Errorf("%w: implementing feature has an unexpected active attempt", ErrInvalidRunRequest)
 		}
 	}
-	if storedFeature.State == feature.StateReviewing {
+	if !isIntervention && storedFeature.State == feature.StateReviewing {
 		_, reviewing := implementationReviewTurnNumber(session.ID, checkpoint.AttemptID)
 		_, correcting := implementationCorrectionTurnNumber(session.ID, checkpoint.AttemptID)
 		_, acknowledging := implementationReadinessTurnNumber(session.ID, checkpoint.AttemptID)
@@ -432,7 +461,14 @@ func (starter *RemoteLeadStarter) Recover(
 			SessionID: session.ID, AttemptID: checkpoint.AttemptID,
 		}},
 	}
-	if isLead {
+	if isIntervention {
+		request.interventionID = unfinished.ID
+		request.agentName = string(unfinished.Target)
+		request.waitingReason = interventionAnsweredReason
+		request.waitKind = execution.RunWaitKindPaused
+		request.request.OutputContract = workerhttp.OutputContractIntervention
+	}
+	if isLead && !isIntervention {
 		if _, implementing := implementationTurnNumber(session.ID, checkpoint.AttemptID); implementing {
 			request.request.OutputContract = workerhttp.OutputContractImplementationLead
 		}
@@ -443,7 +479,7 @@ func (starter *RemoteLeadStarter) Recover(
 			request.request.OutputContract = workerhttp.OutputContractImplementationReadiness
 		}
 	}
-	if isReviewer {
+	if isReviewer && !isIntervention {
 		request.agentName = "reviewer"
 		if _, reviewing := implementationReviewTurnNumber(session.ID, checkpoint.AttemptID); reviewing {
 			request.request.OutputContract = workerhttp.OutputContractImplementationReview
@@ -455,6 +491,9 @@ func (starter *RemoteLeadStarter) Recover(
 	}
 	if len(pending) > 1 {
 		return fmt.Errorf("%w: lead session has multiple pending replies", ErrInvalidRunRequest)
+	}
+	if isIntervention && len(pending) != 0 {
+		return fmt.Errorf("%w: intervention session has an unexpected pending command", ErrInvalidRunRequest)
 	}
 	if isReviewer && len(pending) != 0 {
 		return fmt.Errorf("%w: reviewer session has an unexpected pending command", ErrInvalidRunRequest)
@@ -615,7 +654,143 @@ func (starter *RemoteLeadStarter) QueueIntervention(
 	target worker.Role,
 	message string,
 ) (execution.Intervention, bool, error) {
-	return starter.executions.QueueIntervention(ctx, interventionID, runID, target, message)
+	intervention, created, err := starter.executions.QueueIntervention(
+		ctx, interventionID, runID, target, message,
+	)
+	if err != nil {
+		return execution.Intervention{}, false, err
+	}
+	if _, err := starter.advanceIntervention(context.WithoutCancel(ctx), runID); err != nil {
+		return intervention, created, err
+	}
+	current, err := starter.executions.GetLatestIntervention(ctx, runID)
+	if err != nil {
+		return execution.Intervention{}, false, err
+	}
+	return current, created, nil
+}
+
+// advanceIntervention starts delivery only after the run is durably paused at
+// a waiting boundary. Admission changes the selected session and intervention
+// together, while deliberately leaving the run paused and waiting.
+func (starter *RemoteLeadStarter) advanceIntervention(
+	ctx context.Context,
+	runID string,
+) (bool, error) {
+	intervention, err := starter.executions.GetLatestIntervention(ctx, runID)
+	if errors.Is(err, execution.ErrNotFound) ||
+		(err == nil && intervention.Status == execution.InterventionStatusAnswered) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if intervention.Status != execution.InterventionStatusQueued {
+		return false, nil
+	}
+	run, err := starter.executions.GetRun(ctx, runID)
+	if err != nil {
+		return false, err
+	}
+	if !run.Paused || run.Status != execution.RunStatusWaitingForUser ||
+		run.WaitKind != execution.RunWaitKindPaused {
+		return false, nil
+	}
+	storedFeature, err := starter.features.GetByID(ctx, run.FeatureID)
+	if err != nil {
+		return false, err
+	}
+	session, err := starter.executions.GetSession(ctx, intervention.SessionID)
+	if err != nil {
+		return false, err
+	}
+	checkpoint, err := starter.executions.GetWorkerAttempt(ctx, session.ID)
+	if err != nil {
+		return false, err
+	}
+	prepared, err := starter.workspaces.Get(ctx, storedFeature.ProjectID, storedFeature.ID)
+	if err != nil {
+		return false, fmt.Errorf("load intervention workspace: %w", err)
+	}
+	if !prepared.CheckoutReady() {
+		return false, fmt.Errorf("%w: intervention workspace is not ready", ErrInvalidRunRequest)
+	}
+	attemptID := interventionAttemptID(session.ID, intervention.ID)
+	request, err := starter.interventionRequest(
+		run, storedFeature, session, prepared, intervention, attemptID,
+	)
+	if err != nil {
+		return false, err
+	}
+	if !starter.claim(run.ID) {
+		// The goroutine that currently owns the run will call
+		// advanceWaitingRun after it releases the active turn. The durable queue
+		// is therefore enough; competing here must not turn a successful user
+		// request into a transient HTTP failure.
+		return true, nil
+	}
+	admitted, err := starter.executions.BeginInterventionTurn(
+		ctx, intervention.ID, checkpoint, attemptID, interventionAnsweringReason,
+	)
+	if err != nil {
+		starter.release(run.ID)
+		return true, err
+	}
+	if !admitted {
+		starter.release(run.ID)
+		return true, nil
+	}
+	go starter.launch(request)
+	return true, nil
+}
+
+func (starter *RemoteLeadStarter) interventionRequest(
+	run execution.Run,
+	storedFeature feature.Feature,
+	session execution.Session,
+	prepared workspace.Workspace,
+	intervention execution.Intervention,
+	attemptID string,
+) (remoteLeadRequest, error) {
+	provider := run.AgentProviders.Lead
+	if intervention.Target == worker.RoleReviewer {
+		provider = run.AgentProviders.Reviewer
+	}
+	request := remoteLeadRequest{
+		runID: run.ID, interventionID: intervention.ID,
+		agentName:     string(intervention.Target),
+		waitingReason: interventionAnsweredReason,
+		waitKind:      execution.RunWaitKindPaused,
+		identity: workerhttp.MutationIdentity{
+			AttemptReference: workerhttp.AttemptReference{
+				SessionID: session.ID, AttemptID: attemptID,
+			},
+			IdempotencyKey: attemptID + ":resume",
+		},
+		request: workerhttp.PutAttemptRequest{
+			Mode: workerhttp.AttemptModeResume,
+			Assignment: workerhttp.Assignment{
+				AgentProfileID: starter.profileID(provider, intervention.Target),
+				ProjectID:      storedFeature.ProjectID, FeatureID: storedFeature.ID,
+				Role: workerhttp.Role(intervention.Target), WorkspaceID: prepared.ID,
+			},
+			ProviderSessionID: session.ProviderSessionID,
+			Instructions:      interventionInstructions(storedFeature.State, intervention.Message),
+			OutputContract:    workerhttp.OutputContractIntervention,
+		},
+	}
+	if err := request.request.Validate(request.identity); err != nil {
+		return remoteLeadRequest{}, fmt.Errorf("%w: %v", ErrInvalidRunRequest, err)
+	}
+	return request, nil
+}
+
+func interventionInstructions(state feature.State, message string) string {
+	return fmt.Sprintf(`The user paused the Commitarium workflow during the %s phase and sent this intervention:
+
+%s
+
+Answer the user directly using the restored conversation and current project context. This is an intervention-only turn: do not edit files, run implementation work, commit, push, publish or update a pull request, submit a formal review, or continue the workflow. Return "guidance_applied" when the message can guide later work without changing the accepted goal or agreed plan; return "clarification_required" when you need more information before classifying or applying it; return "replanning_required" when following it would change the accepted goal, scope, or agreed plan.`, state, strings.TrimSpace(message))
 }
 
 func (starter *RemoteLeadStarter) Resume(
@@ -626,6 +801,9 @@ func (starter *RemoteLeadStarter) Resume(
 	intervention, err := starter.executions.GetLatestIntervention(ctx, runID)
 	if err == nil && intervention.Status != execution.InterventionStatusAnswered {
 		return execution.Run{}, false, ErrInterventionPending
+	}
+	if err == nil && intervention.Status == execution.InterventionStatusAnswered && intervention.Effect != "" {
+		return execution.Run{}, false, ErrInterventionResolutionPending
 	}
 	if err != nil && !errors.Is(err, execution.ErrNotFound) {
 		return execution.Run{}, false, err
@@ -647,6 +825,9 @@ func (starter *RemoteLeadStarter) Resume(
 }
 
 func (starter *RemoteLeadStarter) advanceWaitingRun(ctx context.Context, runID string) error {
+	if handled, err := starter.advanceIntervention(ctx, runID); err != nil || handled {
+		return err
+	}
 	run, err := starter.executions.GetRun(ctx, runID)
 	if err != nil {
 		return err
@@ -962,14 +1143,20 @@ func (starter *RemoteLeadStarter) recoverIdlePlanningRun(
 }
 
 type remoteLeadRequest struct {
-	runID         string
-	commandID     string
-	agentName     string
-	waitingReason string
-	waitKind      execution.RunWaitKind
-	planningStage planningStage
-	identity      workerhttp.MutationIdentity
-	request       workerhttp.PutAttemptRequest
+	runID          string
+	commandID      string
+	interventionID string
+	agentName      string
+	waitingReason  string
+	waitKind       execution.RunWaitKind
+	planningStage  planningStage
+	identity       workerhttp.MutationIdentity
+	request        workerhttp.PutAttemptRequest
+}
+
+func interventionAttemptID(sessionID, interventionID string) string {
+	digest := sha256.Sum256([]byte(interventionID))
+	return sessionID + ":intervention:" + hex.EncodeToString(digest[:16])
 }
 
 func (starter *RemoteLeadStarter) startRequest(
@@ -2613,6 +2800,22 @@ func (starter *RemoteLeadStarter) finish(
 
 	switch attempt.Result.Outcome {
 	case workerhttp.OutcomeCompleted:
+		if request.interventionID != "" {
+			if !worker.InterventionEffect(attempt.Result.InterventionEffect).IsValid() {
+				starter.requireReview(ctx, request, errors.New("completed intervention omitted its structured effect"))
+				return
+			}
+			_, _, err = starter.executions.CompleteIntervention(
+				ctx, request.interventionID, request.identity.AttemptID,
+				attempt.ProviderSessionID,
+				worker.InterventionEffect(attempt.Result.InterventionEffect),
+				interventionAnsweredReason,
+			)
+			if err != nil {
+				starter.requireReview(ctx, request, err)
+			}
+			return
+		}
 		var planningMessage execution.Event
 		if request.planningStage != planningStageNone {
 			planningMessage, err = starter.messageForAttempt(

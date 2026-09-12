@@ -67,6 +67,12 @@ func TestPutAttemptRequestValidate(t *testing.T) {
 	if err := readiness.Validate(identity); err != nil {
 		t.Fatalf("validate lead readiness request: %v", err)
 	}
+	intervention := start
+	intervention.Assignment.Role = RoleReviewer
+	intervention.OutputContract = OutputContractIntervention
+	if err := intervention.Validate(identity); err != nil {
+		t.Fatalf("validate reviewer intervention request: %v", err)
+	}
 
 	resume := start
 	resume.Mode = AttemptModeResume
@@ -274,6 +280,7 @@ func TestTerminalResultValidate(t *testing.T) {
 		{Outcome: OutcomeCompleted, Disposition: DispositionChangesRequested, Summary: "changes requested"},
 		{Outcome: OutcomeCompleted, Disposition: DispositionSucceeded, Summary: "approved", Review: &ReviewPublication{CommitID: "0123456789abcdef0123456789abcdef01234567", PullRequestNumber: 7, ReviewID: 11}},
 		{Outcome: OutcomeCompleted, Disposition: DispositionChangesRequested, Summary: "changes requested", Review: &ReviewPublication{CommitID: "0123456789abcdef0123456789abcdef01234567", PullRequestNumber: 7, ReviewID: 11}},
+		{Outcome: OutcomeCompleted, Disposition: DispositionSucceeded, Summary: "answered", InterventionEffect: InterventionEffectGuidanceApplied},
 		{Outcome: OutcomeStopped, Summary: "stopped safely"},
 		{Outcome: OutcomeFailed, Summary: "provider unavailable", Error: &ProtocolError{Code: ErrorProfileUnavailable, Message: "profile is unavailable", Retryable: true}},
 	}
@@ -297,6 +304,8 @@ func TestTerminalResultValidate(t *testing.T) {
 		{Outcome: OutcomeCompleted, Disposition: DispositionInputRequired, Summary: "blocked", Review: &ReviewPublication{CommitID: "0123456789abcdef0123456789abcdef01234567", PullRequestNumber: 7, ReviewID: 11}},
 		{Outcome: OutcomeStopped, Summary: "stopped", Review: &ReviewPublication{CommitID: "0123456789abcdef0123456789abcdef01234567", PullRequestNumber: 7, ReviewID: 11}},
 		{Outcome: OutcomeCompleted, Disposition: DispositionSucceeded, Summary: "both", Publication: &ImplementationPublication{CommitID: "0123456789abcdef0123456789abcdef01234567", PullRequestNumber: 7}, Review: &ReviewPublication{CommitID: "0123456789abcdef0123456789abcdef01234567", PullRequestNumber: 7, ReviewID: 11}},
+		{Outcome: OutcomeCompleted, Disposition: DispositionSucceeded, Summary: "unknown effect", InterventionEffect: "unknown"},
+		{Outcome: OutcomeStopped, Summary: "stopped", InterventionEffect: InterventionEffectGuidanceApplied},
 	}
 	for _, result := range invalid {
 		if err := result.Validate(); !errors.Is(err, ErrInvalidContract) {

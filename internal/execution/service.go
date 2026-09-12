@@ -180,8 +180,8 @@ func (s *Service) ApplyRunPause(
 }
 
 // QueueIntervention persists the user's message and arms the run pause in one
-// store transaction. It deliberately does not contact a worker; delivery is a
-// later safe-boundary operation.
+// store transaction. Orchestration may then deliver it once the durable run is
+// at a safe boundary.
 func (s *Service) QueueIntervention(
 	ctx context.Context,
 	id string,
@@ -211,6 +211,49 @@ func (s *Service) InterventionTargetsForRun(
 	runID string,
 ) ([]InterventionTarget, error) {
 	return s.store.ListInterventionTargets(ctx, runID)
+}
+
+func (s *Service) BeginInterventionTurn(
+	ctx context.Context,
+	interventionID string,
+	previous WorkerAttemptCheckpoint,
+	nextAttemptID string,
+	runReason string,
+) (bool, error) {
+	now := s.now().UTC()
+	admitted, err := s.store.BeginInterventionTurn(ctx, InterventionTurnAdmission{
+		InterventionID:            interventionID,
+		PreviousAttemptID:         previous.AttemptID,
+		PreviousLastEventSequence: previous.LastEventSequence,
+		NextAttempt: WorkerAttemptCheckpoint{
+			SessionID: previous.SessionID, AttemptID: nextAttemptID,
+			CreatedAt: now, UpdatedAt: now,
+		},
+		RunReason: runReason, OccurredAt: now,
+	})
+	if err != nil {
+		return false, fmt.Errorf("begin intervention turn %q: %w", interventionID, err)
+	}
+	return admitted, nil
+}
+
+func (s *Service) CompleteIntervention(
+	ctx context.Context,
+	interventionID string,
+	attemptID string,
+	providerSessionID string,
+	effect worker.InterventionEffect,
+	runReason string,
+) (Intervention, bool, error) {
+	intervention, completed, err := s.store.CompleteIntervention(ctx, InterventionCompletion{
+		InterventionID: interventionID, AttemptID: attemptID,
+		ProviderSessionID: providerSessionID, Effect: effect,
+		RunReason: runReason, OccurredAt: s.now().UTC(),
+	})
+	if err != nil {
+		return Intervention{}, false, fmt.Errorf("complete intervention %q: %w", interventionID, err)
+	}
+	return intervention, completed, nil
 }
 
 func (s *Service) TransitionSession(

@@ -185,16 +185,21 @@ Safe UI capabilities:
   terminal runs return an empty array.
 - Read the optional latest `intervention` from a run. Its settled fields are
   `id`, `session_id`, `target`, `message`, `status`, `requested_at`,
-  `updated_at`, and optional `answered_at`. Settled status values are
-  `waiting_for_boundary`, `queued`, `being_answered`, and `answered`.
+  `updated_at`, optional `effect`, and optional `answered_at`. Settled status
+  values are `waiting_for_boundary`, `queued`, `being_answered`, and `answered`.
 - Queue an idempotent intervention with
   `POST /api/v1/runs/{runID}/interventions`, a stable `Idempotency-Key`, and
   `{"target":"lead|reviewer","message":"..."}`. The request records the
-  target session's `user_message` event and arms the run pause; it does not
-  inject into an active provider turn. Only one unfinished request is allowed.
+  target session's `user_message` event and arms the run pause; it never
+  injects into an active provider turn. At the safe paused boundary the backend
+  resumes the exact target conversation and publishes its answer through that
+  session's existing history/SSE surface. Only one unfinished request is allowed.
 - Treat intervention delivery and workflow continuation as separate controls.
   `POST /resume` returns `409 intervention_pending` until the intervention is
-  answered, and the later agent answer will not remove the run pause.
+  answered, and the agent answer does not remove the run pause. For this
+  checkpoint, an answered intervention returns
+  `409 intervention_resolution_pending` from `/resume`; keep Continue disabled
+  until the effect-handling slice below settles.
 
 The session/event identities, roles, timestamps, lifecycle state, and activity
 categories are the stable input for both a conventional activity view and the
@@ -302,19 +307,23 @@ not implemented yet.
   during an active agent turn reports `waiting_for_boundary`; the coordinator
   changes it to `queued` in the same transaction that records the paused
   waiting boundary. Exact retries do not append another user message.
-- Agent delivery is not implemented in this slice. The frontend may wire and
-  display the settled request/status shape, but should keep Send disabled in a
-  user-facing build until the delivery item below moves to Settled.
+- Intervention delivery is settled. The coordinator resumes exactly the chosen
+  lead or reviewer provider session only at the safe paused boundary, streams
+  ordinary activity and the answer through the target session, records one of
+  `guidance_applied`, `clarification_required`, or `replanning_required`, and
+  keeps the workflow paused. Recovery reattaches to the admitted deterministic
+  attempt without sending the message twice. The frontend may enable Send.
 
 ## In progress — avoid for now
 
-### Intervention delivery
+### Returning from an intervention
 
-The coordinator does not yet resume the selected lead/reviewer provider thread
-to answer a queued intervention. The next slice will make the durable status
-progress through `being_answered` to `answered`, stream the ordinary agent
-response events, keep the workflow paused, and persist the structured effect:
-`guidance_applied`, `clarification_required`, or `replanning_required`.
+The coordinator records the agent's structured effect but does not yet apply it
+to the saved workflow checkpoint. Until this lands, `/resume` returns
+`409 intervention_resolution_pending` for an answered intervention. The next
+slice will continue normally for `guidance_applied`, preserve a user dialogue
+for `clarification_required`, and return changed scope to planning for
+`replanning_required`, always through the user's explicit Continue action.
 
 ## Planned — do not depend on it yet
 

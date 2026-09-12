@@ -48,6 +48,7 @@ type interventionResponse struct {
 	Target      worker.Role                  `json:"target"`
 	Message     string                       `json:"message"`
 	Status      execution.InterventionStatus `json:"status"`
+	Effect      worker.InterventionEffect    `json:"effect,omitempty"`
 	RequestedAt time.Time                    `json:"requested_at"`
 	UpdatedAt   time.Time                    `json:"updated_at"`
 	AnsweredAt  *time.Time                   `json:"answered_at,omitempty"`
@@ -246,8 +247,9 @@ func (api *API) newRunResponse(
 		response.Intervention = &interventionResponse{
 			ID: intervention.ID, SessionID: intervention.SessionID,
 			Target: intervention.Target, Message: intervention.Message,
-			Status: intervention.Status, RequestedAt: intervention.RequestedAt,
-			UpdatedAt: intervention.UpdatedAt, AnsweredAt: intervention.AnsweredAt,
+			Status: intervention.Status, Effect: intervention.Effect,
+			RequestedAt: intervention.RequestedAt,
+			UpdatedAt:   intervention.UpdatedAt, AnsweredAt: intervention.AnsweredAt,
 		}
 	} else if !errors.Is(err, execution.ErrNotFound) {
 		return runResponse{}, err

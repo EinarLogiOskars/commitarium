@@ -15,6 +15,7 @@ func TestOutputJSONSchemaCoversStructuredContracts(t *testing.T) {
 		{OutputContractImplementationLead, []string{"action", "summary", "commit_id", "pull_request_number"}},
 		{OutputContractImplementationReview, []string{"action", "summary", "commit_id", "pull_request_number", "review_id"}},
 		{OutputContractImplementationReadiness, []string{"action", "summary"}},
+		{OutputContractIntervention, []string{"effect", "response"}},
 	}
 	for _, test := range tests {
 		t.Run(string(test.contract), func(t *testing.T) {
@@ -38,6 +39,7 @@ func TestResolveStructuredOutput(t *testing.T) {
 		disposition Disposition
 		publication *ImplementationPublication
 		review      *ReviewPublication
+		effect      InterventionEffect
 	}{
 		{
 			name: "planning response", contract: OutputContractPlanningLead,
@@ -71,6 +73,12 @@ func TestResolveStructuredOutput(t *testing.T) {
 			raw:   `{"action":"ready_to_merge","summary":"Ready"}`,
 			event: Event{Type: EventMessage, Text: "Ready"}, disposition: DispositionSucceeded,
 		},
+		{
+			name: "intervention guidance", contract: OutputContractIntervention,
+			raw:         `{"effect":"guidance_applied","response":"I will preserve that preference."}`,
+			event:       Event{Type: EventMessage, Text: "I will preserve that preference."},
+			disposition: DispositionSucceeded, effect: InterventionEffectGuidanceApplied,
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -79,7 +87,8 @@ func TestResolveStructuredOutput(t *testing.T) {
 				t.Fatalf("resolve structured output: %v", err)
 			}
 			if resolved.Event != test.event || resolved.Disposition != test.disposition ||
-				!reflect.DeepEqual(resolved.Publication, test.publication) || !reflect.DeepEqual(resolved.Review, test.review) {
+				!reflect.DeepEqual(resolved.Publication, test.publication) ||
+				!reflect.DeepEqual(resolved.Review, test.review) || resolved.InterventionEffect != test.effect {
 				t.Fatalf("resolved output = %+v", resolved)
 			}
 		})
@@ -99,6 +108,8 @@ func TestResolveStructuredOutputFailsClosed(t *testing.T) {
 		{OutputContractImplementationReview, `{"action":"blocked","summary":"blocked","commit_id":"0123456789abcdef0123456789abcdef01234567","pull_request_number":7,"review_id":0}`},
 		{OutputContractImplementationReadiness, `{"action":"unknown","summary":"decision"}`},
 		{OutputContractImplementationReadiness, `{"action":"blocked","summary":"Cannot inspect"} {}`},
+		{OutputContractIntervention, `{"effect":"unknown","response":"Noted"}`},
+		{OutputContractIntervention, `{"effect":"replanning_required","response":""}`},
 		{"unknown", `{}`},
 	}
 	for _, test := range tests {

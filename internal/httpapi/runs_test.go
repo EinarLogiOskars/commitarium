@@ -257,6 +257,14 @@ func TestGetRunIncludesSessions(t *testing.T) {
 			Role: worker.RoleCoder, Status: execution.SessionStatusRunning,
 			StartedAt: now, UpdatedAt: now,
 		}},
+		intervention: execution.Intervention{
+			ID: "int_answered", RunID: "run_test", SessionID: "run_test:lead",
+			Target: worker.RoleLead, Message: "Keep this concise.",
+			Status:      execution.InterventionStatusAnswered,
+			AttemptID:   "run_test:lead:intervention:test",
+			Effect:      worker.InterventionEffectGuidanceApplied,
+			RequestedAt: now, UpdatedAt: now, AnsweredAt: &now,
+		},
 	}
 	recorder := httptest.NewRecorder()
 	New(nil, nil, nil, executions, nil, nil).ServeHTTP(
@@ -271,7 +279,8 @@ func TestGetRunIncludesSessions(t *testing.T) {
 		t.Fatalf("decode run response: %v", err)
 	}
 	if body.ID != "run_test" || len(body.Sessions) != 1 || body.Sessions[0].Role != worker.RoleCoder ||
-		body.DialogueLimits.PlanningRounds != 6 || body.DialogueLimits.ImplementationReviewRounds != 4 {
+		body.DialogueLimits.PlanningRounds != 6 || body.DialogueLimits.ImplementationReviewRounds != 4 ||
+		body.Intervention == nil || body.Intervention.Effect != worker.InterventionEffectGuidanceApplied {
 		t.Errorf("unexpected run response %+v", body)
 	}
 }

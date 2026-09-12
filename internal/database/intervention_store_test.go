@@ -220,3 +220,106 @@ func TestExecutionStoreQueuesAtExistingWaitingCheckpoint(t *testing.T) {
 		t.Fatalf("waiting checkpoint was not retained: run=%+v err=%v", paused, err)
 	}
 }
+
+func TestExecutionStoreDeliversAndCompletesInterventionWithoutUnpausingRun(t *testing.T) {
+	db, store := newTestExecutionStore(t)
+	run, original := createExecutionRecords(t, db, store)
+	now := run.UpdatedAt.Add(time.Second)
+	if _, err := store.TransitionSession(t.Context(), execution.SessionTransition{
+		SessionID: original.ID, Expected: execution.SessionStatusRunning,
+		Status: execution.SessionStatusCompleted, OccurredAt: now,
+	}); err != nil {
+		t.Fatalf("complete fixture session: %v", err)
+	}
+	lead := original
+	lead.ID = run.ID + ":lead"
+	lead.AgentID = "codex-lead"
+	lead.Role = worker.RoleLead
+	lead.Status = execution.SessionStatusWaitingForUser
+	lead.StartedAt = now
+	lead.UpdatedAt = now
+	lead.EndedAt = nil
+	if err := store.CreateSession(t.Context(), lead); err != nil {
+		t.Fatalf("create intervention lead: %v", err)
+	}
+	previous := execution.WorkerAttemptCheckpoint{
+		SessionID: lead.ID, AttemptID: lead.ID + ":turn:1",
+		CreatedAt: now, UpdatedAt: now,
+	}
+	if _, _, err := store.CreateWorkerAttempt(t.Context(), previous); err != nil {
+		t.Fatalf("create prior worker attempt: %v", err)
+	}
+	if _, err := store.TransitionRun(t.Context(), execution.RunTransition{
+		RunID: run.ID, Expected: execution.RunStatusRunning,
+		Status: execution.RunStatusWaitingForUser, Reason: "Waiting for the user.",
+		WaitKind: execution.RunWaitKindClarification, OccurredAt: now.Add(time.Second),
+	}); err != nil {
+		t.Fatalf("create safe boundary: %v", err)
+	}
+	queued, _, err := store.QueueIntervention(t.Context(), execution.InterventionRequest{
+		ID: "int_delivery", RunID: run.ID, Target: worker.RoleLead,
+		Message: "Keep the explanation concise.", OccurredAt: now.Add(2 * time.Second),
+	})
+	if err != nil || queued.Intervention.Status != execution.InterventionStatusQueued {
+		t.Fatalf("queue intervention: result=%+v err=%v", queued, err)
+	}
+
+	attemptID := lead.ID + ":intervention:delivery"
+	admission := execution.InterventionTurnAdmission{
+		InterventionID:            queued.Intervention.ID,
+		PreviousAttemptID:         previous.AttemptID,
+		PreviousLastEventSequence: previous.LastEventSequence,
+		NextAttempt: execution.WorkerAttemptCheckpoint{
+			SessionID: lead.ID, AttemptID: attemptID,
+			CreatedAt: now.Add(3 * time.Second), UpdatedAt: now.Add(3 * time.Second),
+		},
+		RunReason: "The lead is answering.", OccurredAt: now.Add(3 * time.Second),
+	}
+	admitted, err := store.BeginInterventionTurn(t.Context(), admission)
+	if err != nil || !admitted {
+		t.Fatalf("begin intervention turn: admitted=%t err=%v", admitted, err)
+	}
+	if admitted, err = store.BeginInterventionTurn(t.Context(), admission); err != nil || admitted {
+		t.Fatalf("exact admission retry: admitted=%t err=%v", admitted, err)
+	}
+	answering, err := store.GetLatestIntervention(t.Context(), run.ID)
+	if err != nil || answering.Status != execution.InterventionStatusBeingAnswered ||
+		answering.AttemptID != attemptID {
+		t.Fatalf("unexpected answering intervention=%+v err=%v", answering, err)
+	}
+	activeLead, err := store.GetSession(t.Context(), lead.ID)
+	if err != nil || activeLead.Status != execution.SessionStatusRunning {
+		t.Fatalf("lead was not activated: session=%+v err=%v", activeLead, err)
+	}
+	paused, err := store.GetRun(t.Context(), run.ID)
+	if err != nil || !paused.Paused || paused.Status != execution.RunStatusWaitingForUser ||
+		paused.WaitKind != execution.RunWaitKindPaused {
+		t.Fatalf("delivery changed pause boundary: run=%+v err=%v", paused, err)
+	}
+
+	completion := execution.InterventionCompletion{
+		InterventionID: queued.Intervention.ID, AttemptID: attemptID,
+		ProviderSessionID: lead.ProviderSessionID,
+		Effect:            worker.InterventionEffectGuidanceApplied,
+		RunReason:         "The lead answered.", OccurredAt: now.Add(4 * time.Second),
+	}
+	answered, completed, err := store.CompleteIntervention(t.Context(), completion)
+	if err != nil || !completed || answered.Status != execution.InterventionStatusAnswered ||
+		answered.Effect != worker.InterventionEffectGuidanceApplied || answered.AnsweredAt == nil {
+		t.Fatalf("complete intervention: intervention=%+v completed=%t err=%v", answered, completed, err)
+	}
+	if retried, completed, err := store.CompleteIntervention(t.Context(), completion); err != nil || completed ||
+		retried.ID != answered.ID || retried.Status != answered.Status || retried.Effect != answered.Effect ||
+		retried.AnsweredAt == nil || !retried.AnsweredAt.Equal(*answered.AnsweredAt) {
+		t.Fatalf("exact completion retry: intervention=%+v completed=%t err=%v", retried, completed, err)
+	}
+	restingLead, err := store.GetSession(t.Context(), lead.ID)
+	if err != nil || restingLead.Status != execution.SessionStatusWaitingForUser {
+		t.Fatalf("lead did not return to rest: session=%+v err=%v", restingLead, err)
+	}
+	stillPaused, err := store.GetRun(t.Context(), run.ID)
+	if err != nil || !stillPaused.Paused || stillPaused.Status != execution.RunStatusWaitingForUser ||
+		stillPaused.WaitKind != execution.RunWaitKindPaused {
+		t.Fatalf("completion resumed workflow: run=%+v err=%v", stillPaused, err)
+	}
+}

@@ -68,6 +68,8 @@ type Intervention struct {
 	Target      worker.Role
 	Message     string
 	Status      InterventionStatus
+	AttemptID   string
+	Effect      worker.InterventionEffect
 	RequestedAt time.Time
 	UpdatedAt   time.Time
 	AnsweredAt  *time.Time
@@ -217,6 +219,16 @@ func (intervention Intervention) Validate() error {
 		return fmt.Errorf("%w: unfinished intervention cannot have an answer time", ErrInvalidIntervention)
 	case intervention.AnsweredAt != nil && intervention.AnsweredAt.Before(intervention.RequestedAt):
 		return fmt.Errorf("%w: answer time precedes request time", ErrInvalidIntervention)
+	case (intervention.Status == InterventionStatusWaitingForBoundary ||
+		intervention.Status == InterventionStatusQueued) && intervention.AttemptID != "":
+		return fmt.Errorf("%w: undelivered intervention cannot have an attempt ID", ErrInvalidIntervention)
+	case (intervention.Status == InterventionStatusBeingAnswered ||
+		intervention.Status == InterventionStatusAnswered) && strings.TrimSpace(intervention.AttemptID) == "":
+		return fmt.Errorf("%w: delivered intervention requires an attempt ID", ErrInvalidIntervention)
+	case intervention.Status == InterventionStatusAnswered && !intervention.Effect.IsValid():
+		return fmt.Errorf("%w: answered intervention requires a valid effect", ErrInvalidIntervention)
+	case intervention.Status != InterventionStatusAnswered && intervention.Effect != "":
+		return fmt.Errorf("%w: unfinished intervention cannot have an effect", ErrInvalidIntervention)
 	default:
 		return nil
 	}

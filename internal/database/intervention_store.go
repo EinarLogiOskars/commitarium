@@ -162,7 +162,7 @@ func (s *ExecutionStore) GetLatestIntervention(
 	intervention, err := scanIntervention(s.db.QueryRowContext(
 		ctx,
 		`SELECT id, run_id, session_id, target_role, message, status,
-		        requested_at, updated_at, answered_at
+		        attempt_id, effect, requested_at, updated_at, answered_at
 		 FROM run_interventions
 		 WHERE run_id = ?
 		 ORDER BY requested_at DESC, id DESC
@@ -261,7 +261,7 @@ func findIntervention(
 	intervention, err := scanIntervention(tx.QueryRowContext(
 		ctx,
 		`SELECT id, run_id, session_id, target_role, message, status,
-		        requested_at, updated_at, answered_at
+		        attempt_id, effect, requested_at, updated_at, answered_at
 		 FROM run_interventions WHERE id = ?`,
 		id,
 	))
@@ -282,7 +282,7 @@ func findUnfinishedIntervention(
 	intervention, err := scanIntervention(tx.QueryRowContext(
 		ctx,
 		`SELECT id, run_id, session_id, target_role, message, status,
-		        requested_at, updated_at, answered_at
+		        attempt_id, effect, requested_at, updated_at, answered_at
 		 FROM run_interventions
 		 WHERE run_id = ? AND status != 'answered'
 		 LIMIT 1`,
@@ -307,6 +307,7 @@ func scanIntervention(scanner executionScanner) (execution.Intervention, error) 
 	if err := scanner.Scan(
 		&intervention.ID, &intervention.RunID, &intervention.SessionID,
 		&target, &intervention.Message, &status,
+		&intervention.AttemptID, &intervention.Effect,
 		&requestedAt, &updatedAt, &answeredAt,
 	); err != nil {
 		return execution.Intervention{}, err

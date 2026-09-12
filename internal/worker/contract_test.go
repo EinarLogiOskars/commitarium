@@ -33,6 +33,16 @@ func TestSessionRequestValidate(t *testing.T) {
 	if err := readiness.Validate(); err != nil {
 		t.Fatalf("validate lead readiness request: %v", err)
 	}
+	intervention := valid
+	intervention.Role = RoleLead
+	intervention.OutputContract = OutputContractIntervention
+	if err := intervention.Validate(); err != nil {
+		t.Fatalf("validate lead intervention request: %v", err)
+	}
+	intervention.Role = RoleReviewer
+	if err := intervention.Validate(); err != nil {
+		t.Fatalf("validate reviewer intervention request: %v", err)
+	}
 
 	tests := map[string]SessionRequest{
 		"missing session ID":            {AttemptID: "att_test", FeatureID: "fea_test", Role: RoleCoder, Instructions: "work"},
@@ -195,6 +205,11 @@ func TestResultValidate(t *testing.T) {
 	if err := reviewed.Validate(); err != nil {
 		t.Fatalf("validate published review result: %v", err)
 	}
+	answered := completed
+	answered.InterventionEffect = InterventionEffectGuidanceApplied
+	if err := answered.Validate(); err != nil {
+		t.Fatalf("validate intervention result: %v", err)
+	}
 	stopped := Result{
 		Outcome:           OutcomeStopped,
 		ProviderSessionID: "provider_session_test",
@@ -222,6 +237,9 @@ func TestResultValidate(t *testing.T) {
 		{Outcome: OutcomeCompleted, Disposition: DispositionInputRequired, ProviderSessionID: "provider_session_test", Review: &ReviewPublication{CommitID: "0123456789abcdef0123456789abcdef01234567", PullRequestNumber: 7, ReviewID: 11}},
 		{Outcome: OutcomeStopped, ProviderSessionID: "provider_session_test", Review: &ReviewPublication{CommitID: "0123456789abcdef0123456789abcdef01234567", PullRequestNumber: 7, ReviewID: 11}},
 		{Outcome: OutcomeCompleted, Disposition: DispositionSucceeded, ProviderSessionID: "provider_session_test", Publication: &ImplementationPublication{CommitID: "0123456789abcdef0123456789abcdef01234567", PullRequestNumber: 7}, Review: &ReviewPublication{CommitID: "0123456789abcdef0123456789abcdef01234567", PullRequestNumber: 7, ReviewID: 11}},
+		{Outcome: OutcomeCompleted, Disposition: DispositionSucceeded, ProviderSessionID: "provider_session_test", InterventionEffect: "unknown"},
+		{Outcome: OutcomeStopped, ProviderSessionID: "provider_session_test", InterventionEffect: InterventionEffectGuidanceApplied},
+		{Outcome: OutcomeCompleted, Disposition: DispositionSucceeded, ProviderSessionID: "provider_session_test", InterventionEffect: InterventionEffectGuidanceApplied, Publication: &ImplementationPublication{CommitID: "0123456789abcdef0123456789abcdef01234567", PullRequestNumber: 7}},
 	}
 	for _, result := range invalid {
 		if err := result.Validate(); !errors.Is(err, ErrInvalidResult) {

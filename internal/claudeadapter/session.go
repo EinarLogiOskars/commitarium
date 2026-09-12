@@ -410,6 +410,7 @@ func (session *session) translateResult(
 			Outcome: worker.OutcomeCompleted, Disposition: resolved.Disposition,
 			ProviderSessionID: session.providerSessionID, Summary: resolved.Event.Text,
 			Publication: resolved.Publication, Review: resolved.Review,
+			InterventionEffect: resolved.InterventionEffect,
 		}, nil
 	}
 
