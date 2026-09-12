@@ -90,7 +90,9 @@ export function FeatureView({
 
   const select = (i: number) => setPinnedIndex(i === current ? null : i);
 
-  // The viewed phase's time window(s) — used to scope its transcript.
+  // The viewed phase's time window(s) — used to scope its transcript. We can
+  // only scope once workflow history exists; until then, don't hide anything.
+  const scoped = events.length > 0;
   const intervals = phaseIntervals(events, viewed);
 
   return (
@@ -121,7 +123,7 @@ export function FeatureView({
         {error && <div className="banner banner--error">{error}</div>}
       </section>
 
-      {body(viewed, feature, projectId, hasRepo, run, live, intervals, load)}
+      {body(viewed, feature, projectId, hasRepo, run, live, intervals, scoped, load)}
     </>
   );
 }
@@ -171,6 +173,7 @@ function body(
   run: Run | null,
   live: boolean,
   intervals: Interval[],
+  scoped: boolean,
   reload: () => void,
 ) {
   if (feature.state === "cancelled") {
@@ -211,13 +214,14 @@ function body(
         live={live}
         planVersion={run.plan_version}
         intervals={intervals}
+        scoped={scoped}
         onAdvanced={reload}
       />
     );
   }
   // Implement
   if (viewed === 2) {
-    return <ImplementationView runId={run.id} live={live} intervals={intervals} />;
+    return <ImplementationView runId={run.id} live={live} intervals={intervals} scoped={scoped} />;
   }
   // Review — the reviewer/lead discussion, scoped to the reviewing window.
   if (viewed === 3) {
@@ -229,6 +233,7 @@ function body(
         state={feature.state}
         live={live}
         intervals={intervals}
+        scoped={scoped}
       />
     );
   }

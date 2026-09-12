@@ -23,6 +23,7 @@ export function ReviewView({
   runId,
   live = true,
   intervals = [],
+  scoped = false,
 }: {
   projectId: string;
   featureId: string;
@@ -30,6 +31,7 @@ export function ReviewView({
   state: string;
   live?: boolean;
   intervals?: Interval[];
+  scoped?: boolean;
 }) {
   const [entries, setEntries] = useState<TranscriptEntry[]>([]);
   const [decisions, setDecisions] = useState<{ role: string; status: string; outcome?: string }[]>([]);
@@ -71,7 +73,7 @@ export function ReviewView({
   }, [poll]);
 
   const pr = workspace?.pull_request;
-  const scoped = scopeToPhase(entries, intervals);
+  const shown = scopeToPhase(entries, intervals, scoped);
 
   return (
     <section className="panel">
@@ -97,7 +99,7 @@ export function ReviewView({
       )}
 
       <div className="chat">
-        <Transcript entries={scoped} empty="No review activity yet." />
+        <Transcript entries={shown} empty="No review activity yet." />
       </div>
     </section>
   );
