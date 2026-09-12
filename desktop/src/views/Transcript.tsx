@@ -28,10 +28,13 @@ export function Transcript({
 }) {
   if (entries.length === 0) return <p className="muted">{empty}</p>;
 
-  // Fold consecutive activity entries into groups; everything else passes through.
+  // Fold consecutive tool activity (commands/files) into collapsible groups.
+  // Narration is presentation text — it stays inline like a message, so the
+  // feed reads as the agent explaining itself between tool calls.
+  const isTool = (e: TranscriptEntry) => e.type === "activity" && e.activity?.kind !== "narration";
   const blocks: ({ kind: "entry"; e: TranscriptEntry } | { kind: "activity"; items: TranscriptEntry[] })[] = [];
   for (const e of entries) {
-    if (e.type === "activity") {
+    if (isTool(e)) {
       const last = blocks[blocks.length - 1];
       if (last && last.kind === "activity") last.items.push(e);
       else blocks.push({ kind: "activity", items: [e] });
@@ -54,6 +57,15 @@ export function Transcript({
 }
 
 function MessageEntry({ e }: { e: TranscriptEntry }) {
+  if (e.type === "activity" && e.activity?.kind === "narration") {
+    const who = e.role === "reviewer" ? "Reviewer" : "Lead";
+    return (
+      <div className="narration">
+        <span className="narration__who">{who}</span>
+        <span className="narration__text">{e.text}</span>
+      </div>
+    );
+  }
   if (e.type === "plan_submitted") {
     return (
       <div className="plan-submitted">

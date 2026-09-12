@@ -177,6 +177,7 @@ export type SessionEventType =
 export type FileChangeOp = "created" | "modified" | "deleted" | "renamed";
 
 export type ActivityDetail =
+  | { kind: "narration" } // presentation-safe agent preamble / reasoning summary (text carries it)
   | { kind: "command"; command: string; exit_code?: number; duration_ms?: number }
   | {
       kind: "file_change";
