@@ -42,6 +42,7 @@ function App() {
         <header className="app__header">
           <h1>Commitarium</h1>
           <span className="app__subtitle">Local workspace launcher</span>
+          <button className="ghost" onClick={() => setShowProviders(true)}>Providers</button>
           {statusPill}
         </header>
 
@@ -50,11 +51,15 @@ function App() {
             Launch Commitarium →
           </button>
           {!reachable && (
-            <span className="muted">Start the stack below and wait for the coordinator.</span>
+            <span className="muted">
+              Connect your providers, then start the stack below and wait for the coordinator.
+            </span>
           )}
         </section>
 
         <Launcher onStackChanged={() => void checkHealth()} />
+
+        {showProviders && <Providers onClose={() => setShowProviders(false)} />}
       </main>
     );
   }
