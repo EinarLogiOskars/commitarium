@@ -883,6 +883,15 @@ func TestRemoteLeadResumesSameConversationForRepeatedUserReplies(t *testing.T) {
 		acceptedFeature.State != feature.StateDraft {
 		t.Fatalf("unexpected accepted feature %+v", acceptedFeature)
 	}
+	acceptedRun, err := executions.GetRun(t.Context(), runID)
+	if err != nil {
+		t.Fatalf("get accepted-goal run: %v", err)
+	}
+	if acceptedRun.Status != execution.RunStatusWaitingForUser || acceptedRun.Paused ||
+		acceptedRun.WaitKind != execution.RunWaitKindPhaseCheckpoint ||
+		acceptedRun.Reason != workflow.GoalAcceptedPlanningReason {
+		t.Fatalf("default autonomy did not stop at planning checkpoint: %+v", acceptedRun)
+	}
 	workflowEvents, err := database.NewWorkflowStore(db).ListEvents(t.Context(), storedFeature.ID)
 	if err != nil || len(workflowEvents) != 1 || workflowEvents[0] != accepted {
 		t.Fatalf("unexpected accepted-goal history %+v err=%v", workflowEvents, err)
@@ -1718,10 +1727,6 @@ func TestRemoteLeadRunToCompletionAdvancesFromPlanningToMergeGate(t *testing.T) 
 	); err != nil {
 		t.Fatalf("accept autonomous goal: %v", err)
 	}
-	if _, _, err := starter.StartPlanning(t.Context(), runID, "start-autonomous-planning"); err != nil {
-		t.Fatalf("start autonomous planning: %v", err)
-	}
-
 	deadline := time.Now().Add(5 * time.Second)
 	var completedRun execution.Run
 	for time.Now().Before(deadline) {
@@ -1955,7 +1960,7 @@ func TestRemoteLeadRecoveryReattachesToPlanningAttempt(t *testing.T) {
 	}
 }
 
-func TestRemoteLeadRecoveryContinuesAutomaticPlanningWithoutReplacingAttempt(t *testing.T) {
+func TestRemoteLeadRecoveryStartsAcceptedGoalPlanningExactlyOnce(t *testing.T) {
 	db, executions, storedProject, storedFeature := newRemoteLeadExecution(t)
 	store := database.NewProjectStore(db)
 	storedProject, err := store.UpdateDialogueLimits(t.Context(), storedProject.ID, project.DialogueLimits{
@@ -2006,38 +2011,27 @@ func TestRemoteLeadRecoveryContinuesAutomaticPlanningWithoutReplacingAttempt(t *
 		t.Fatalf("start automatic lead: %v", err)
 	}
 	waitForRemoteLeadStatus(t, executions, runID, execution.RunStatusWaitingForUser)
-	if _, err := starter.AcceptGoal(
-		t.Context(), remoteLeadSessionID(runID), "Export the report as CSV.",
+	// Store the acceptance through the durable workflow boundary without calling
+	// the starter's immediate dispatcher. This is the exact state left if the
+	// coordinator exits after committing acceptance but before starting planning.
+	if _, err := workflowService.AcceptGoal(
+		t.Context(), storedFeature.ID, remoteLeadSessionID(runID), "Export the report as CSV.",
 		workflow.Actor{Kind: workflow.ActorKindUser, ID: "local-user"}, "accept-automatic-recovery-goal",
 	); err != nil {
 		t.Fatalf("accept automatic recovery goal: %v", err)
-	}
-	if _, err := workflowService.TransitionFeature(
-		t.Context(), storedFeature.ID, feature.StatePlanning,
-		workflow.Actor{Kind: workflow.ActorKindCoordinator, ID: coordinatorActorID},
-		"enter-automatic-recovery-planning",
-	); err != nil {
-		t.Fatalf("enter automatic planning: %v", err)
-	}
-	sessionID := remoteLeadSessionID(runID)
-	checkpoint, err := executions.GetWorkerAttempt(t.Context(), sessionID)
-	if err != nil {
-		t.Fatalf("load clarification checkpoint: %v", err)
-	}
-	if admitted, err := executions.BeginAutonomousTurn(
-		t.Context(), sessionID, checkpoint, planningAttemptID(sessionID),
-		feature.StatePlanning, "The lead is preparing the first plan.",
-	); err != nil || !admitted {
-		t.Fatalf("admit interrupted automatic plan: admitted=%t err=%v", admitted, err)
 	}
 	interrupted, err := executions.GetRun(t.Context(), runID)
 	if err != nil {
 		t.Fatalf("load interrupted automatic run: %v", err)
 	}
+	acceptedFeature, err := database.NewFeatureStore(db).GetByID(t.Context(), storedFeature.ID)
+	if err != nil {
+		t.Fatalf("load accepted feature: %v", err)
+	}
 	if err := newStarter().Recover(
-		t.Context(), interrupted, storedFeature, storedProject.RecoveryPolicy,
+		t.Context(), interrupted, acceptedFeature, storedProject.RecoveryPolicy,
 	); err != nil {
-		t.Fatalf("recover automatic plan: %v", err)
+		t.Fatalf("recover accepted-goal planning checkpoint: %v", err)
 	}
 
 	deadline := time.Now().Add(5 * time.Second)
@@ -2065,8 +2059,8 @@ func TestRemoteLeadRecoveryContinuesAutomaticPlanningWithoutReplacingAttempt(t *
 	stub.mu.Lock()
 	putCount := len(stub.putRequests)
 	stub.mu.Unlock()
-	if putCount != 2 {
-		t.Fatalf("recovery replaced the lead or duplicated the reviewer: put count=%d", putCount)
+	if putCount != 3 {
+		t.Fatalf("recovery duplicated the first plan or reviewer: put count=%d", putCount)
 	}
 }
 

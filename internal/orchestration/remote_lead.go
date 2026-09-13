@@ -384,6 +384,27 @@ func (starter *RemoteLeadStarter) Recover(
 		_, err := starter.advanceIntervention(ctx, run.ID)
 		return err
 	}
+	// Versions before accepted-goal auto-planning left this durable boundary
+	// labeled as clarification. Repair that label before dispatching so an
+	// upgraded coordinator can resume the same run without another user click.
+	if run.Status == execution.RunStatusWaitingForUser && !run.Paused &&
+		run.WaitKind == execution.RunWaitKindClarification &&
+		run.AutonomyPolicy == project.AutonomyPolicyRunToCompletion &&
+		storedFeature.State == feature.StateDraft &&
+		strings.TrimSpace(storedFeature.AcceptedGoal) != "" &&
+		storedFeature.GoalAcceptedAt != nil {
+		if err := starter.waitRun(
+			ctx, run.ID, workflow.GoalAcceptedPlanningReason,
+			execution.RunWaitKindPhaseCheckpoint,
+		); err != nil {
+			return err
+		}
+		refreshedRun, err := starter.executions.GetRun(ctx, run.ID)
+		if err != nil {
+			return err
+		}
+		run = refreshedRun
+	}
 	if run.Status == execution.RunStatusWaitingForUser && !run.Paused &&
 		run.WaitKind == execution.RunWaitKindPhaseCheckpoint &&
 		run.AutonomyPolicy == project.AutonomyPolicyRunToCompletion {
@@ -1141,6 +1162,13 @@ func (starter *RemoteLeadStarter) advanceWaitingRun(ctx context.Context, runID s
 		return err
 	}
 	switch storedFeature.State {
+	case feature.StateDraft:
+		if strings.TrimSpace(storedFeature.AcceptedGoal) == "" ||
+			storedFeature.GoalAcceptedAt == nil {
+			return fmt.Errorf("%w: draft checkpoint has no accepted goal", ErrPlanningNotAllowed)
+		}
+		_, _, err = starter.StartPlanning(ctx, run.ID, run.ID+":autonomy:planning")
+		return err
 	case feature.StatePlanning:
 		messages, err := starter.currentPlanningMessages(ctx, run)
 		if err != nil {
@@ -2990,9 +3018,44 @@ func (starter *RemoteLeadStarter) AcceptGoal(
 	if err != nil {
 		return workflow.Event{}, err
 	}
-	return starter.goals.AcceptGoal(
+	event, err := starter.goals.AcceptGoal(
 		ctx, storedFeature.ID, session.ID, goal, actor, idempotencyKey,
 	)
+	if err != nil {
+		return workflow.Event{}, err
+	}
+
+	// Idempotent retries can encounter an acceptance written by an older
+	// coordinator, before acceptance also stored the planning checkpoint.
+	// Normalize that durable state before considering automatic dispatch.
+	run, err = starter.executions.GetRun(ctx, run.ID)
+	if err != nil {
+		return workflow.Event{}, err
+	}
+	if run.Status == execution.RunStatusWaitingForUser && !run.Paused &&
+		run.WaitKind == execution.RunWaitKindClarification {
+		if err := starter.waitRun(
+			ctx, run.ID, workflow.GoalAcceptedPlanningReason,
+			execution.RunWaitKindPhaseCheckpoint,
+		); err != nil {
+			return workflow.Event{}, err
+		}
+		run, err = starter.executions.GetRun(ctx, run.ID)
+		if err != nil {
+			return workflow.Event{}, err
+		}
+	}
+	if run.AutonomyPolicy == project.AutonomyPolicyRunToCompletion && !run.Paused {
+		if err := starter.advanceWaitingRun(context.WithoutCancel(ctx), run.ID); err != nil {
+			starter.requireReview(context.WithoutCancel(ctx), remoteLeadRequest{
+				runID: run.ID,
+				identity: workerhttp.MutationIdentity{AttemptReference: workerhttp.AttemptReference{
+					SessionID: session.ID,
+				}},
+			}, err)
+		}
+	}
+	return event, nil
 }
 
 // SendCommand turns a public message command into a new resume attempt. It is

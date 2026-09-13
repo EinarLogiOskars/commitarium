@@ -343,6 +343,13 @@ func (s *ExecutionStore) ListRecoverableRuns(
 			   )
 			   OR (r.autonomy_policy = 'run_to_completion'
 			       AND r.wait_kind = 'phase_checkpoint' AND r.paused = 0)
+			   OR (r.autonomy_policy = 'run_to_completion'
+			       AND r.wait_kind = 'clarification' AND r.paused = 0
+			       AND EXISTS (
+			         SELECT 1 FROM features f
+			         WHERE f.id = r.feature_id AND f.state = 'draft'
+			           AND f.accepted_goal != '' AND f.goal_accepted_at IS NOT NULL
+			       ))
 		   ))
 		 ORDER BY r.started_at, r.id`,
 		execution.RunStatusRunning,

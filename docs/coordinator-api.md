@@ -100,19 +100,20 @@ Every run snapshots this value. Changing the project does not alter an active
 or historical run. Project and run responses always expose the effective
 `autonomy_policy`.
 
-With `review_each_phase`, the run waits after the lead's first planning
-proposal, after the reviewer's first planning response, and after publication
-of the agreed plan. The user continues those phases with the existing planning,
-reviewer, round, and implementation actions.
+With `review_each_phase`, the run waits after goal acceptance, after the lead's
+first planning proposal, after the reviewer's first planning response, and
+after publication of the agreed plan. The user continues those phases with the
+existing planning, reviewer, round, and implementation actions.
 
 With `run_to_completion`, the coordinator calls those same durable actions
-itself: it starts the reviewer after the proposal, begins the alternating
-planning loop after the first review response, and starts implementation after
-the agreed plan is safely published. The existing implementation/review loop
-then continues automatically. Goal clarification and acceptance always remain
-user-driven. Both modes always wait for a round limit, blocker, recovery
-assessment, or required merge approval. Final merge behavior remains governed
-only by `merge_policy`.
+itself: after the user accepts the goal, it starts the lead's first planning
+turn, starts the reviewer after the proposal, begins the alternating planning
+loop after the first review response, and starts implementation after the
+agreed plan is safely published. The existing implementation/review loop then
+continues automatically. Goal clarification and the acceptance decision itself
+always remain user-driven. Both modes always wait for a round limit, blocker,
+recovery assessment, or required merge approval. Final merge behavior remains
+governed only by `merge_policy`.
 
 Project creation also accepts an optional complete `dialogue_limits` object:
 
@@ -785,8 +786,8 @@ acceptance. Both fields are omitted while clarification remains open.
 
 ## Starting the lead planning proposal
 
-In `real_codex_lead` mode, planning begins only through an explicit action after
-the goal has been accepted and the pinned managed checkout is ready:
+In `real_codex_lead` mode, this action starts planning after the goal has been
+accepted and the pinned managed checkout is ready:
 
 ```http
 POST /api/v1/runs/run_opaque/planning
@@ -820,7 +821,10 @@ and points its `Location` header at `/api/v1/runs/{runID}`. The action is safe t
 retry and will not start a second planning attempt. Missing accepted goal,
 unready or contradictory checkout state, an unsafe prior worker attempt, or
 the wrong run/session state returns `409 planning_not_ready`. This endpoint is
-currently registered only for the opt-in real-Codex runner.
+currently registered only for the opt-in real-Codex runner. Under
+`review_each_phase`, the user invokes it explicitly. Under `run_to_completion`,
+goal acceptance invokes this same deterministic action server-side; clients do
+not need to send another request.
 
 ## Starting the first planning review
 
@@ -1387,30 +1391,39 @@ A successful response is `200 OK`:
 }
 ```
 
-The coordinator stores the exact trimmed goal and timestamp on the feature and
-appends a `feature.goal_accepted` event to the existing workflow history in the
-same SQLite transaction. The event also identifies the lead session whose
-conversation produced the goal. Feature event history and SSE represent this
-event with `goal` and `session_id`; state-change events continue to use
-`previous_state` and `state`.
+The coordinator stores the exact trimmed goal and timestamp on the feature,
+appends a `feature.goal_accepted` event to the existing workflow history, and
+changes the run's next wait to `phase_checkpoint` in the same SQLite
+transaction. The event also identifies the lead session whose conversation
+produced the goal. Feature event history and SSE represent this event with
+`goal` and `session_id`; state-change events continue to use `previous_state`
+and `state`.
 
-Acceptance itself does not invoke an agent, create a workspace, or start planning, so
-the feature remains `draft`. It closes the clarification boundary: later
-message commands and a new run-start request are rejected. An exact retry of
-the original run start or goal acceptance still returns its durable result. A
-changed request using the same key returns `idempotency_conflict`, and another
-acceptance under a new key returns `goal_already_accepted`. Editing an accepted
-goal is intentionally unsupported until a later explicit reopen operation can
-return it to user-controlled clarification safely.
+The acceptance transaction reaches this durable boundary before another
+provider turn can start, and the feature is still `draft` there. Under
+`review_each_phase`, the run remains `waiting_for_user` at the planning
+checkpoint until the user calls the planning action. Under `run_to_completion`,
+the coordinator immediately dispatches that same deterministic planning action,
+moving the feature to `planning` without another click. Acceptance closes the
+clarification boundary: later message commands and a new run-start request are
+rejected. An exact retry of the original run start or goal acceptance still
+returns its durable result. A changed request using the same key returns
+`idempotency_conflict`, and another acceptance under a new key returns
+`goal_already_accepted`. Editing an accepted goal is intentionally unsupported
+until a later explicit reopen operation can return it to user-controlled
+clarification safely.
 
 ## Restart recovery
 
 At coordinator startup, durable `running` runs are replayed from their stored
 session results. A `run_to_completion` run waiting unpaused at
 `phase_checkpoint` is also recovered so startup can retry the missing automatic
-handoff. Other `waiting_for_user` runs are recovered only when they still own an
-interrupted session. A stable clarification, round-cap, blocker, merge-gate, or
-paused wait is not mistaken for interrupted work.
+handoff. For upgrade compatibility, an autonomous draft with an accepted goal
+that an older coordinator left at `clarification` is reclassified to the same
+planning checkpoint and dispatched once. Other `waiting_for_user` runs are
+recovered only when they still own an interrupted session. A stable
+clarification, round-cap, blocker, merge-gate, or paused wait is not mistaken
+for interrupted work.
 
 For the real-lead mode, recovery only performs a read-only lookup of the exact
 durable worker attempt, including an interrupted lead, clarification follow-up,

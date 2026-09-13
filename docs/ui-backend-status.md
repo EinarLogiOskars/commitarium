@@ -319,9 +319,13 @@ not implemented yet.
   first reviewer response → planning loop, and published plan → implementation
   controls.
 - `run_to_completion` invokes those same deterministic backend actions
-  automatically and continues through the existing implementation/review loop.
-  It still stops at clarification, round caps, blockers, recovery assessments,
-  and any merge approval required by `merge_policy`.
+  automatically. The user still clarifies and explicitly accepts the goal, but
+  acceptance then starts the first lead planning turn without a separate click
+  and continues through the existing planning and implementation/review loops.
+  `review_each_phase` instead leaves the accepted draft at a
+  `phase_checkpoint` for the existing Start planning control. Automatic mode
+  still stops at unresolved clarification, round caps, blockers, recovery
+  assessments, and any merge approval required by `merge_policy`.
 - Pausing does not freeze a provider process mid-command. The current bounded
   turn may finish and be recorded, while the coordinator prevents the next
   agent turn or automatic merge. Resume restores and dispatches the exact
