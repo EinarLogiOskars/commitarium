@@ -4,6 +4,7 @@ import { Launcher } from "./views/Launcher";
 import { Projects } from "./views/Projects";
 import { ProjectWorkspace } from "./views/ProjectWorkspace";
 import { Providers } from "./views/Providers";
+import { PixelWorld } from "./views/PixelWorld";
 import "./App.css";
 
 function App() {
@@ -12,6 +13,7 @@ function App() {
   const [projectId, setProjectId] = useState<string | null>(null);
   const [projectName, setProjectName] = useState<string | null>(null);
   const [showProviders, setShowProviders] = useState(false);
+  const [showWorld, setShowWorld] = useState(false);
 
   const checkHealth = useCallback(async () => {
     setReachable(await coordinatorReachable());
@@ -43,6 +45,7 @@ function App() {
           <h1>Commitarium</h1>
           <span className="app__subtitle">Local workspace launcher</span>
           <button className="ghost" onClick={() => setShowProviders(true)}>Providers</button>
+          <button className="ghost" onClick={() => setShowWorld(true)}>World</button>
           {statusPill}
         </header>
 
@@ -60,6 +63,7 @@ function App() {
         <Launcher onStackChanged={() => void checkHealth()} />
 
         {showProviders && <Providers onClose={() => setShowProviders(false)} />}
+        {showWorld && <PixelWorld onClose={() => setShowWorld(false)} />}
       </main>
     );
   }
@@ -81,6 +85,7 @@ function App() {
         )}
         <span className="topbar__spacer" />
         <button className="ghost" onClick={() => setShowProviders(true)}>Providers</button>
+        <button className="ghost" onClick={() => setShowWorld(true)}>World</button>
         <button
           className={`${pillClass} pill--button`}
           onClick={() => setEntered(false)}
@@ -91,6 +96,7 @@ function App() {
       </header>
 
       {showProviders && <Providers onClose={() => setShowProviders(false)} />}
+      {showWorld && <PixelWorld onClose={() => setShowWorld(false)} />}
 
       <div className="shell__body">
         {projectId ? (
