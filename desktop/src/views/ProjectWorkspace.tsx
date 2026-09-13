@@ -130,6 +130,11 @@ export function ProjectWorkspace({
               featureId={orderId}
               hasRepo={hasRepo}
               onChanged={bumpRail}
+              onDeleted={() => {
+                setMode("overview");
+                setOrderId(null);
+                bumpRail();
+              }}
             />
           )}
 

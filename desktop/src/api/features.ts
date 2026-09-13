@@ -36,3 +36,21 @@ export const createFeature = (
     method: "POST",
     body: input,
   });
+
+export interface DeleteFeatureResult {
+  project_id: string;
+  feature_id: string;
+  deleted: boolean;
+  merged_changes_remain: boolean;
+}
+
+/** Delete a work order and its isolated internal artifacts. Never touches the
+ * default branch. Refuses (409 feature_active) while a run is active. */
+export const deleteFeature = (
+  projectId: string,
+  featureId: string,
+): Promise<DeleteFeatureResult> =>
+  request(
+    `/api/v1/projects/${encodeURIComponent(projectId)}/features/${encodeURIComponent(featureId)}`,
+    { method: "DELETE" },
+  );
