@@ -3,8 +3,11 @@ import { listFeatureRuns } from "../api/features";
 import { getRun, startRun } from "../api/runs";
 import { getSessionEvents, sendSessionMessage, acceptGoal } from "../api/sessions";
 import { ApiError } from "../api/client";
+import { Transcript, type TranscriptEntry } from "./Transcript";
 import { WORK } from "../vocab";
 import type { Feature, SessionEvent, Session } from "../api/types";
+
+const SHOWN = new Set(["message", "activity", "user_message"]);
 
 const POLL_MS = 1500;
 
@@ -204,11 +207,7 @@ export function GoalClarification({
         <div className="clarify">
           <div className="clarify__main">
             <div className="chat" ref={chatRef} onScroll={onChatScroll}>
-              {events.length === 0 ? (
-                <p className="muted">Waiting for the lead to respond…</p>
-              ) : (
-                events.map((e) => <ChatItem key={e.id} event={e} />)
-              )}
+              <Transcript entries={toEntries(events)} empty="Waiting for the lead to respond…" />
             </div>
 
             <div className="composer">
@@ -258,31 +257,20 @@ export function GoalClarification({
   );
 }
 
-function ChatItem({ event }: { event: SessionEvent }) {
-  if (event.type === "user_message") {
-    return (
-      <div className="msg msg--user">
-        <span className="msg__who">You</span>
-        <span className="msg__text">{event.text}</span>
-      </div>
-    );
-  }
-  if (event.type === "message") {
-    return (
-      <div className="msg msg--lead">
-        <span className="msg__who">Lead</span>
-        <span className="msg__text">{event.text}</span>
-      </div>
-    );
-  }
-  // Only progress activity shows as a subtle note. Control signals
-  // (input_required, pause/continue, plan_submitted) carry text that repeats or
-  // duplicates the message, so they are not rendered here — the status line
-  // already conveys whether the lead is waiting.
-  if (event.type === "activity" && event.text) {
-    return <div className="msg msg--note">{event.text}</div>;
-  }
-  return null;
+// Map lead/user session events into the shared transcript (bubbles for
+// messages, grouped commands, inline narration) — the same rendering the other
+// phases use.
+function toEntries(events: SessionEvent[]): TranscriptEntry[] {
+  return events
+    .filter((e) => e.text && SHOWN.has(e.type))
+    .map((e) => ({
+      key: e.id,
+      role: e.type === "user_message" ? "user" : "lead",
+      type: e.type,
+      text: e.text,
+      activity: e.activity,
+      at: e.occurred_at,
+    }));
 }
 
 function describe(e: unknown): string {
