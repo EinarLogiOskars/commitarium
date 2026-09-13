@@ -2,9 +2,9 @@
 //!
 //! The coordinator identifies the exact internal base, reviewed head, and
 //! Forgejo merge. This module fetches those objects into a temporary repository,
-//! recreates only their net tree change as one user-authored commit, and then
-//! fast-forwards the imported source repository. It never pushes upstream and
-//! never gives host Git credentials to a container.
+//! recreates only their net tree change on the user's current clean HEAD as one
+//! user-authored commit, and then fast-forwards the imported source repository.
+//! It never pushes upstream and never gives host Git credentials to a container.
 
 pub(crate) mod plain_folder;
 pub(crate) mod upstream;
@@ -182,7 +182,7 @@ fn synchronize_repository(
                 .into(),
         );
     }
-    require_clean_target(&source_path, &handoff.source.base_branch)?;
+    let (target_branch, local_base) = inspect_clean_target(&source_path)?;
 
     let mut receipts = load_receipts(receipts_path)?;
     let existing: Vec<&HandoffReceipt> = receipts
@@ -200,8 +200,6 @@ fn synchronize_repository(
         return Ok(result_from_receipt(receipt, false));
     }
 
-    let identity = read_git_identity(&source_path)?;
-    let local_base = resolve_local_base(&receipts, &source_path, handoff)?;
     let temporary = tempfile::tempdir().map_err(|e| format!("create handoff temp dir: {e}"))?;
     let internal_repo = temporary.path().join("internal.git");
     let local_clone = temporary.path().join("local");
@@ -216,26 +214,58 @@ fn synchronize_repository(
             &format!("{}^{{tree}}", handoff.source.approved_commit_id),
         ],
     )?;
+    let base_tree = git_dir_line(
+        &internal_repo,
+        &[
+            "rev-parse",
+            &format!("{}^{{tree}}", handoff.source.base_commit_id),
+        ],
+    )?;
+    require_target_head(&source_path, &target_branch, &local_base)?;
+    let local_tree = git_line(
+        &source_path,
+        &["rev-parse", &format!("{local_base}^{{tree}}")],
+    )?;
+    if local_tree == approved_tree {
+        require_target_head(&source_path, &target_branch, &local_base)?;
+        let identity = read_commit_identity(&source_path, &local_base)?;
+        let receipt = HandoffReceipt {
+            project_id: handoff.project_id.clone(),
+            feature_id: handoff.feature_id.clone(),
+            internal_repository_owner: handoff.source.repository.owner.clone(),
+            internal_repository_name: handoff.source.repository.name.clone(),
+            internal_base_commit_id: handoff.source.base_commit_id.clone(),
+            internal_approved_commit_id: handoff.source.approved_commit_id.clone(),
+            internal_merge_commit_id: handoff.source.merge_commit_id.clone(),
+            destination_repository_path: source_path.to_string_lossy().into_owned(),
+            target_branch,
+            local_base_commit_id: local_base.clone(),
+            local_commit_id: local_base,
+            commit_message: commit_message.to_string(),
+            author_name: identity.name,
+            author_email: identity.email,
+        };
+        receipts.receipts.push(receipt.clone());
+        save_receipts(receipts_path, &receipts)?;
+        return Ok(result_from_receipt(&receipt, false));
+    }
+    let identity = read_git_identity(&source_path)?;
     prepare_local_clone(&source_path, &local_clone, &local_base)?;
-    verify_matching_base_trees(&source_path, &internal_repo, &local_base, handoff)?;
+    import_internal_patch_objects(&local_clone, &internal_repo, handoff)?;
     write_approved_patch(&internal_repo, handoff, &patch_path)?;
     apply_patch(&local_clone, &patch_path)?;
+    let expected_tree = (local_tree == base_tree).then_some(approved_tree.as_str());
     let local_commit = create_clean_commit(
         &local_clone,
         &local_base,
         handoff,
         commit_message,
         &identity,
-        &approved_tree,
+        expected_tree,
     )?;
 
     import_clean_commit(&source_path, &local_clone, &local_commit)?;
-    let moved = install_clean_commit(
-        &source_path,
-        &handoff.source.base_branch,
-        &local_base,
-        &local_commit,
-    )?;
+    let moved = install_clean_commit(&source_path, &target_branch, &local_base, &local_commit)?;
 
     let receipt = HandoffReceipt {
         project_id: handoff.project_id.clone(),
@@ -246,7 +276,7 @@ fn synchronize_repository(
         internal_approved_commit_id: handoff.source.approved_commit_id.clone(),
         internal_merge_commit_id: handoff.source.merge_commit_id.clone(),
         destination_repository_path: source_path.to_string_lossy().into_owned(),
-        target_branch: handoff.source.base_branch.clone(),
+        target_branch,
         local_base_commit_id: local_base,
         local_commit_id: local_commit,
         commit_message: commit_message.to_string(),
@@ -324,8 +354,7 @@ fn valid_object_id(value: &str) -> bool {
             .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
 }
 
-fn require_clean_target(repository: &Path, branch: &str) -> Result<(), String> {
-    check_branch_name(repository, branch)?;
+fn inspect_clean_target(repository: &Path) -> Result<(String, String), String> {
     let root = git_line(repository, &["rev-parse", "--show-toplevel"])?;
     let canonical_root =
         std::fs::canonicalize(&root).map_err(|e| format!("resolve local repository root: {e}"))?;
@@ -333,17 +362,33 @@ fn require_clean_target(repository: &Path, branch: &str) -> Result<(), String> {
         return Err("the recorded source is no longer the repository root".into());
     }
     let current = git_line(repository, &["symbolic-ref", "--quiet", "--short", "HEAD"])?;
-    if current != branch {
-        return Err(format!(
-            "check out the local {branch} branch before synchronizing this work order"
-        ));
-    }
+    check_branch_name(repository, &current)?;
     let status = git_line_allow_empty(
         repository,
         &["status", "--porcelain=v1", "--untracked-files=all"],
     )?;
     if !status.is_empty() {
         return Err("the local repository has uncommitted or untracked files".into());
+    }
+    let head = git_line(repository, &["rev-parse", "HEAD"])?;
+    Ok((current, head))
+}
+
+fn require_clean_target(repository: &Path, branch: &str) -> Result<(), String> {
+    let (current, _) = inspect_clean_target(repository)?;
+    if current != branch {
+        return Err(format!(
+            "check out the recorded local {branch} branch before continuing this handoff"
+        ));
+    }
+    Ok(())
+}
+
+fn require_target_head(repository: &Path, branch: &str, expected_head: &str) -> Result<(), String> {
+    require_clean_target(repository, branch)?;
+    let head = git_line(repository, &["rev-parse", "HEAD"])?;
+    if head != expected_head {
+        return Err("the local target branch advanced while synchronization was prepared".into());
     }
     Ok(())
 }
@@ -358,42 +403,20 @@ fn read_git_identity(repository: &Path) -> Result<GitIdentity, String> {
     Ok(GitIdentity { name, email })
 }
 
+fn read_commit_identity(repository: &Path, commit: &str) -> Result<GitIdentity, String> {
+    let name = git_line(repository, &["show", "-s", "--format=%an", commit])?;
+    let email = git_line(repository, &["show", "-s", "--format=%ae", commit])?;
+    validate_identity("existing commit author name", &name)?;
+    validate_identity("existing commit author email", &email)?;
+    Ok(GitIdentity { name, email })
+}
+
 fn validate_identity(name: &str, value: &str) -> Result<(), String> {
     validate_text(name, value, 512)?;
     if value.contains(['\r', '\n']) {
         return Err(format!("{name} cannot contain a line break"));
     }
     Ok(())
-}
-
-fn resolve_local_base(
-    receipts: &HandoffReceipts,
-    repository: &Path,
-    handoff: &CompletedHandoff,
-) -> Result<String, String> {
-    let candidates: Vec<&HandoffReceipt> = receipts
-        .receipts
-        .iter()
-        .filter(|receipt| {
-            receipt.project_id == handoff.project_id
-                && receipt.internal_merge_commit_id == handoff.source.base_commit_id
-        })
-        .collect();
-    if candidates.len() > 1 {
-        return Err("more than one prior handoff claims this internal base".into());
-    }
-    let local_base = if let Some(prior) = candidates.first() {
-        if prior.destination_repository_path != repository.to_string_lossy()
-            || prior.target_branch != handoff.source.base_branch
-        {
-            return Err("the prior handoff maps this base to another destination".into());
-        }
-        prior.local_commit_id.clone()
-    } else {
-        handoff.source.base_commit_id.clone()
-    };
-    require_commit(repository, &local_base, "expected local base")?;
-    Ok(local_base)
 }
 
 fn prepare_internal_repository(
@@ -516,24 +539,35 @@ fn prepare_local_clone(source: &Path, clone: &Path, base: &str) -> Result<(), St
     Ok(())
 }
 
-fn verify_matching_base_trees(
-    source: &Path,
+fn import_internal_patch_objects(
+    local_clone: &Path,
     internal: &Path,
-    local_base: &str,
     handoff: &CompletedHandoff,
 ) -> Result<(), String> {
-    let local_tree = git_line(source, &["rev-parse", &format!("{local_base}^{{tree}}")])?;
-    let internal_tree = git_dir_line(
-        internal,
-        &[
-            "rev-parse",
-            &format!("{}^{{tree}}", handoff.source.base_commit_id),
-        ],
-    )?;
-    if local_tree != internal_tree {
-        return Err("the mapped local base content differs from the internal feature base".into());
-    }
-    Ok(())
+    let base_ref = format!(
+        "+{}:refs/commitarium/handoff-base",
+        handoff.source.base_commit_id
+    );
+    let approved_ref = format!(
+        "+{}:refs/commitarium/handoff-approved",
+        handoff.source.approved_commit_id
+    );
+    run_checked(
+        Command::new("git")
+            .arg("-C")
+            .arg(local_clone)
+            .args([
+                "fetch",
+                "--quiet",
+                "--no-tags",
+                "--no-write-fetch-head",
+                "--",
+            ])
+            .arg(internal)
+            .arg(base_ref)
+            .arg(approved_ref),
+        "load reviewed patch objects into temporary checkout",
+    )
 }
 
 fn write_approved_patch(
@@ -563,14 +597,28 @@ fn write_approved_patch(
 }
 
 fn apply_patch(repository: &Path, patch_path: &Path) -> Result<(), String> {
-    run_checked(
-        Command::new("git")
-            .arg("-C")
-            .arg(repository)
-            .args(["apply", "--index", "--binary", "--whitespace=nowarn", "--"])
-            .arg(patch_path),
-        "apply reviewed source change to temporary checkout",
-    )
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(repository)
+        .args([
+            "apply",
+            "--3way",
+            "--index",
+            "--binary",
+            "--whitespace=nowarn",
+            "--",
+        ])
+        .arg(patch_path)
+        .output()
+        .map_err(|e| format!("apply reviewed source change to temporary checkout: {e}"))?;
+    if output.status.success() {
+        return Ok(());
+    }
+    let detail = String::from_utf8_lossy(&output.stderr);
+    Err(format!(
+        "the completed work order conflicts with the current local HEAD; the local repository was not changed: {}",
+        detail.trim()
+    ))
 }
 
 fn create_clean_commit(
@@ -579,14 +627,14 @@ fn create_clean_commit(
     handoff: &CompletedHandoff,
     message: &str,
     identity: &GitIdentity,
-    expected_tree: &str,
+    expected_tree: Option<&str>,
 ) -> Result<String, String> {
     let approved_tree = git_line(repository, &["write-tree"])?;
     let base_tree = git_line(repository, &["rev-parse", "HEAD^{tree}"])?;
     if approved_tree == base_tree {
         return Err("the reviewed source change produced an empty local commit".into());
     }
-    if approved_tree != expected_tree {
+    if expected_tree.is_some_and(|expected| approved_tree != expected) {
         return Err(
             "the recreated local source tree differs from the approved Forgejo tree".into(),
         );
@@ -622,7 +670,7 @@ fn create_clean_commit(
         return Err("the clean handoff commit has an unexpected parent".into());
     }
     let committed_tree = git_line(repository, &["rev-parse", "HEAD^{tree}"])?;
-    if committed_tree != expected_tree {
+    if committed_tree != approved_tree {
         return Err("the clean handoff commit changed after staging".into());
     }
     Ok(commit)
@@ -652,14 +700,7 @@ fn install_clean_commit(
     expected_base: &str,
     commit: &str,
 ) -> Result<bool, String> {
-    require_clean_target(repository, branch)?;
-    let head = git_line(repository, &["rev-parse", "HEAD"])?;
-    if head == commit {
-        return Ok(false);
-    }
-    if head != expected_base {
-        return Err("the local target branch advanced while synchronization was prepared".into());
-    }
+    require_target_head(repository, branch, expected_base)?;
     run_checked(
         Command::new("git")
             .arg("-C")
@@ -682,6 +723,7 @@ fn verify_existing_receipt(
     handoff: &CompletedHandoff,
     commit_message: &str,
 ) -> Result<(), String> {
+    require_clean_target(repository, &receipt.target_branch)?;
     let exact = receipt.project_id == handoff.project_id
         && receipt.internal_repository_owner == handoff.source.repository.owner
         && receipt.internal_repository_name == handoff.source.repository.name
@@ -689,23 +731,11 @@ fn verify_existing_receipt(
         && receipt.internal_approved_commit_id == handoff.source.approved_commit_id
         && receipt.internal_merge_commit_id == handoff.source.merge_commit_id
         && receipt.destination_repository_path == repository.to_string_lossy()
-        && receipt.target_branch == handoff.source.base_branch
         && receipt.commit_message == commit_message;
     if !exact {
         return Err("an existing local handoff record disagrees with this request".into());
     }
-    require_commit(
-        repository,
-        &receipt.local_commit_id,
-        "recorded local handoff",
-    )?;
-    let parent = git_line(
-        repository,
-        &["rev-parse", &format!("{}^", receipt.local_commit_id)],
-    )?;
-    if parent != receipt.local_base_commit_id {
-        return Err("the recorded local handoff has an unexpected parent".into());
-    }
+    verify_receipt_commit(repository, receipt)?;
     let branch_head = git_line(repository, &["rev-parse", "HEAD"])?;
     let status = Command::new("git")
         .arg("-C")
@@ -722,6 +752,24 @@ fn verify_existing_receipt(
         return Err(
             "the local target branch no longer contains the recorded handoff commit".into(),
         );
+    }
+    Ok(())
+}
+
+fn verify_receipt_commit(repository: &Path, receipt: &HandoffReceipt) -> Result<(), String> {
+    require_commit(
+        repository,
+        &receipt.local_commit_id,
+        "recorded local handoff",
+    )?;
+    if receipt.local_commit_id != receipt.local_base_commit_id {
+        let parent = git_line(
+            repository,
+            &["rev-parse", &format!("{}^", receipt.local_commit_id)],
+        )?;
+        if parent != receipt.local_base_commit_id {
+            return Err("the recorded local handoff has an unexpected parent".into());
+        }
     }
     Ok(())
 }
@@ -1195,6 +1243,8 @@ mod tests {
         )
         .expect("first sync");
         std::fs::remove_file(&fixture.receipts).expect("remove receipt to simulate interruption");
+        command(&fixture.source, &["config", "--unset", "user.name"]);
+        command(&fixture.source, &["config", "--unset", "user.email"]);
 
         let adopted = synchronize_repository(
             &fixture.source,
@@ -1208,10 +1258,22 @@ mod tests {
         assert!(!adopted.created);
         assert_eq!(adopted.local_commit_id, first.local_commit_id);
         assert!(fixture.receipts.is_file());
+
+        let retried = synchronize_repository(
+            &fixture.source,
+            &fixture.receipts,
+            &handoff,
+            "Recover handoff",
+            &internal_url,
+            None,
+        )
+        .expect("retry adopted matching tree");
+        assert!(!retried.created);
+        assert_eq!(retried.local_commit_id, first.local_commit_id);
     }
 
     #[test]
-    fn maps_next_internal_merge_to_previous_clean_local_commit() {
+    fn synchronizes_chained_work_when_internal_base_is_not_a_local_commit() {
         let fixture = fixture();
         let first = add_internal_feature(&fixture, "commitarium/one", "one.txt", "one\n");
         let internal_url = fixture.internal.to_string_lossy();
@@ -1226,6 +1288,18 @@ mod tests {
         .expect("first sync");
         let second = add_internal_feature(&fixture, "commitarium/two", "two.txt", "two\n");
         assert_eq!(second.source.base_commit_id, first.source.merge_commit_id);
+        assert!(!Command::new("git")
+            .arg("-C")
+            .arg(&fixture.source)
+            .args([
+                "cat-file",
+                "-e",
+                &format!("{}^{{commit}}", second.source.base_commit_id)
+            ])
+            .output()
+            .expect("inspect internal base")
+            .status
+            .success());
 
         let second_result = synchronize_repository(
             &fixture.source,
@@ -1247,7 +1321,86 @@ mod tests {
     }
 
     #[test]
-    fn refuses_dirty_or_diverged_local_target() {
+    fn synchronizes_when_first_internal_base_commit_is_not_local() {
+        let fixture = fixture();
+        command(&fixture.internal_work, &["checkout", "--quiet", "main"]);
+        command(
+            &fixture.internal_work,
+            &["commit", "--amend", "-m", "Internal import identity"],
+        );
+        command(
+            &fixture.internal_work,
+            &["push", "--quiet", "--force", "origin", "main"],
+        );
+        let handoff =
+            add_internal_feature(&fixture, "commitarium/unrelated-base", "work.txt", "work\n");
+        assert!(!Command::new("git")
+            .arg("-C")
+            .arg(&fixture.source)
+            .args([
+                "cat-file",
+                "-e",
+                &format!("{}^{{commit}}", handoff.source.base_commit_id)
+            ])
+            .output()
+            .expect("inspect internal base")
+            .status
+            .success());
+
+        let result = synchronize_repository(
+            &fixture.source,
+            &fixture.receipts,
+            &handoff,
+            "Apply unrelated-base handoff",
+            &fixture.internal.to_string_lossy(),
+            None,
+        )
+        .expect("synchronize without local internal base");
+        assert!(result.created);
+        assert_eq!(
+            line(&fixture.source, &["rev-parse", "HEAD^"]),
+            fixture.initial
+        );
+        assert_eq!(
+            std::fs::read_to_string(fixture.source.join("work.txt")).expect("work file"),
+            "work\n"
+        );
+    }
+
+    #[test]
+    fn applies_onto_clean_advanced_head_and_current_branch() {
+        let fixture = fixture();
+        let handoff = add_internal_feature(&fixture, "commitarium/advanced", "work.txt", "work\n");
+        command(&fixture.source, &["checkout", "-b", "release/test"]);
+        std::fs::write(fixture.source.join("local.txt"), "local\n").expect("local file");
+        command(&fixture.source, &["add", "local.txt"]);
+        command(&fixture.source, &["commit", "-m", "Local work"]);
+        let local_head = line(&fixture.source, &["rev-parse", "HEAD"]);
+
+        let result = synchronize_repository(
+            &fixture.source,
+            &fixture.receipts,
+            &handoff,
+            "Advanced target",
+            &fixture.internal.to_string_lossy(),
+            None,
+        )
+        .expect("advanced repository should merge a non-conflicting patch");
+        assert!(result.created);
+        assert_eq!(result.target_branch, "release/test");
+        assert_eq!(line(&fixture.source, &["rev-parse", "HEAD^"]), local_head);
+        assert_eq!(
+            std::fs::read_to_string(fixture.source.join("local.txt")).expect("local change"),
+            "local\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(fixture.source.join("work.txt")).expect("handoff change"),
+            "work\n"
+        );
+    }
+
+    #[test]
+    fn refuses_dirty_or_conflicting_local_target_without_partial_changes() {
         let dirty = fixture();
         let dirty_handoff = add_internal_feature(&dirty, "commitarium/dirty", "work.txt", "work\n");
         std::fs::write(dirty.source.join("untracked.txt"), "mine\n").expect("dirty file");
@@ -1262,24 +1415,44 @@ mod tests {
         .expect_err("dirty repository must fail");
         assert!(error.contains("uncommitted or untracked"), "{error}");
 
-        let diverged = fixture();
-        let diverged_handoff =
-            add_internal_feature(&diverged, "commitarium/diverged", "work.txt", "work\n");
-        std::fs::write(diverged.source.join("local.txt"), "local\n").expect("local file");
-        command(&diverged.source, &["add", "local.txt"]);
-        command(&diverged.source, &["commit", "-m", "Local divergence"]);
-        let local_head = line(&diverged.source, &["rev-parse", "HEAD"]);
+        let conflict = fixture();
+        let conflict_handoff = add_internal_feature(
+            &conflict,
+            "commitarium/conflict",
+            "README.md",
+            "agent edit\n",
+        );
+        std::fs::write(conflict.source.join("README.md"), "user edit\n").expect("local file");
+        command(&conflict.source, &["add", "README.md"]);
+        command(&conflict.source, &["commit", "-m", "Local conflict"]);
+        let local_head = line(&conflict.source, &["rev-parse", "HEAD"]);
         let error = synchronize_repository(
-            &diverged.source,
-            &diverged.receipts,
-            &diverged_handoff,
-            "Diverged target",
-            &diverged.internal.to_string_lossy(),
+            &conflict.source,
+            &conflict.receipts,
+            &conflict_handoff,
+            "Conflicting target",
+            &conflict.internal.to_string_lossy(),
             None,
         )
-        .expect_err("diverged repository must fail");
-        assert!(error.contains("advanced while synchronization"), "{error}");
-        assert_eq!(line(&diverged.source, &["rev-parse", "HEAD"]), local_head);
+        .expect_err("conflicting repository must fail");
+        assert!(
+            error.contains("conflicts with the current local HEAD"),
+            "{error}"
+        );
+        assert_eq!(line(&conflict.source, &["rev-parse", "HEAD"]), local_head);
+        assert_eq!(
+            git_line_allow_empty(
+                &conflict.source,
+                &["status", "--porcelain=v1", "--untracked-files=all"]
+            )
+            .expect("clean status"),
+            ""
+        );
+        assert_eq!(
+            std::fs::read_to_string(conflict.source.join("README.md"))
+                .expect("unchanged local file"),
+            "user edit\n"
+        );
     }
 
     fn command(repository: &Path, args: &[&str]) {

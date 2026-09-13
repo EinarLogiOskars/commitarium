@@ -62,7 +62,7 @@ IDs. The handoff record must bind at least:
 - generated clean local commit ID; and
 - upstream remote and pushed commit ID when a push occurs.
 
-The first MVP implementation should require an unambiguous base relationship.
+The initial MVP design called for an unambiguous base relationship.
 It prepares the clean commit in a temporary host worktree so the user's active
 working tree is not used as scratch space. It may update the selected local
 branch only when the repository, expected base, checked-out worktree state, and
@@ -70,6 +70,16 @@ result are all safe and consistent. Dirty worktrees, diverged branches, missing
 commits, ambiguous prior synchronization, patch conflicts, or changed reviewed
 content stop for user review. It never resets, cleans, force-pushes, or silently
 resolves a conflict.
+
+The Git-backed implementation was refined after exercising chained work orders:
+the internal base commit ID is not required to exist in the user's repository.
+Commitarium verifies the internal base and approved objects in temporary
+storage, applies their exact net patch with Git's three-way machinery to a
+disposable clone of the user's current clean `HEAD`, and makes that local `HEAD`
+the sole parent of the clean export commit. This permits clean, non-overlapping
+local commits while preserving local history. A patch conflict stops before the
+real checkout is changed. If the current local tree already equals the approved
+tree, the existing `HEAD` is recorded instead of creating an empty commit.
 
 Before pushing, the trusted host verifies that the selected local commit is the
 recorded synchronization result and that the upstream branch has not advanced

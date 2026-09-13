@@ -204,18 +204,7 @@ fn publication_source(
 
 fn verify_recorded_local_commit(repository: &Path, receipt: &HandoffReceipt) -> Result<(), String> {
     super::check_branch_name(repository, &receipt.target_branch)?;
-    super::require_commit(
-        repository,
-        &receipt.local_commit_id,
-        "recorded local handoff",
-    )?;
-    let parent = super::git_line(
-        repository,
-        &["rev-parse", &format!("{}^", receipt.local_commit_id)],
-    )?;
-    if parent != receipt.local_base_commit_id {
-        return Err("the recorded local handoff has an unexpected parent".into());
-    }
+    super::verify_receipt_commit(repository, receipt)?;
     let target_ref = format!("refs/heads/{}", receipt.target_branch);
     let target = super::git_line(repository, &["rev-parse", "--verify", &target_ref])?;
     let status = Command::new("git")
@@ -1010,6 +999,22 @@ mod tests {
         assert_eq!(retried.status, UpstreamBranchStatus::AlreadyPublished);
         assert!(!retried.created);
         assert!(fixture.receipts.is_file());
+    }
+
+    #[test]
+    fn previews_a_matching_head_recorded_without_a_new_commit() {
+        let mut fixture = fixture();
+        fixture.handoff.local_base_commit_id = fixture.handoff.local_commit_id.clone();
+
+        let preview = preview_repository(
+            &fixture.repository,
+            &fixture.handoff,
+            Some("origin"),
+            "commitarium/already-matched",
+        )
+        .expect("preview matching HEAD");
+        assert_eq!(preview.status, UpstreamBranchStatus::Ready);
+        assert_eq!(preview.local_commit_id, fixture.handoff.local_commit_id);
     }
 
     #[test]

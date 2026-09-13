@@ -56,7 +56,8 @@ Handoff (completed work → host):
 
 - `synchronize_feature_locally(projectId, featureId, commitMessage) ->
   SynchronizeResult` — sync an approved feature into the user's local repo as
-  one clean commit.
+  one clean commit on its currently checked-out branch. The repository must be
+  clean, but it does not need to contain the internal Forgejo base commit.
 - `synchronize_feature_to_folder(projectId, featureId) -> FolderSynchronizeResult`
   — sync into a non-git folder.
 - `preview_upstream_branch(projectId, featureId, workOrderName, remoteName?,
@@ -96,6 +97,32 @@ type UpstreamBranchResult = {
   detail?: string;
 };
 ```
+
+```ts
+type SynchronizeResult = {
+  project_id: string;
+  feature_id: string;
+  repository_path: string;
+  target_branch: string; // branch that was checked out for synchronization
+  local_commit_id: string;
+  created: boolean;
+};
+```
+
+Git-backed synchronization verifies the exact internal base, approved head,
+merge, and base-to-approved patch in temporary storage. It then applies that
+net patch with Git's three-way machinery to a disposable clone of the user's
+current clean `HEAD`. A successful change becomes one user-authored commit whose
+only parent is that original local `HEAD`; internal agent commits and merge
+history are not copied into the visible local history. The real checkout moves
+only through a final fast-forward after all checks succeed.
+
+If the current local tree already equals the approved tree, synchronization
+records the current commit and returns `created: false`. If local commits overlap
+the approved patch and Git cannot combine them cleanly, the command returns a
+conflict error and leaves the real repository's branch, index, and worktree
+unchanged. Preview and upstream publication continue to use the exact
+`local_commit_id` recorded by this operation.
 
 Omitting `remoteName` lets preview choose the current target branch's configured
 remote, then `origin`, then the only configured remote. If no unambiguous choice
