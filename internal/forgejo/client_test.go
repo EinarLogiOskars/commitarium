@@ -136,6 +136,70 @@ func TestClientReadsRotatedTokenWithoutRestart(t *testing.T) {
 	}
 }
 
+func TestClientClosesManagedPullRequestAndDeletesFeatureBranch(t *testing.T) {
+	pullRequest := managedPullRequest(testPullRequestSpec())
+	calls := 0
+	client := newBranchTestClient(t, func(request *http.Request) (*http.Response, error) {
+		calls++
+		switch calls {
+		case 1:
+			if request.Method != http.MethodGet || request.URL.Path != "/api/v1/repos/owner/repository/pulls/7" {
+				t.Fatalf("unexpected pull request lookup %s %s", request.Method, request.URL)
+			}
+			return pullRequestJSONResponse(t, http.StatusOK, pullRequest), nil
+		case 2:
+			if request.Method != http.MethodPatch || request.URL.Path != "/api/v1/repos/owner/repository/pulls/7" {
+				t.Fatalf("unexpected pull request close %s %s", request.Method, request.URL)
+			}
+			body, err := io.ReadAll(request.Body)
+			if err != nil || string(body) != `{"state":"closed"}` {
+				t.Fatalf("unexpected close body %q err=%v", body, err)
+			}
+			pullRequest.State = "closed"
+			return pullRequestJSONResponse(t, http.StatusOK, pullRequest), nil
+		case 3:
+			if request.Method != http.MethodDelete || request.URL.Path != "/api/v1/repos/owner/repository/branches/commitarium/fea_test" {
+				t.Fatalf("unexpected branch deletion %s %s", request.Method, request.URL)
+			}
+			return jsonResponse(http.StatusNoContent, ``), nil
+		default:
+			t.Fatalf("unexpected request %d", calls)
+			return nil, nil
+		}
+	})
+	if err := client.ClosePullRequest(
+		t.Context(), "owner", "repository", pullRequest.Number,
+		pullRequest.BaseBranch, pullRequest.HeadBranch, testPullRequestSpec().FeatureMarker,
+	); err != nil {
+		t.Fatalf("close pull request: %v", err)
+	}
+	if err := client.DeleteBranch(t.Context(), "owner", "repository", pullRequest.HeadBranch); err != nil {
+		t.Fatalf("delete branch: %v", err)
+	}
+	if calls != 3 {
+		t.Fatalf("unexpected request count %d", calls)
+	}
+}
+
+func TestClientRejectsMergedPullRequestDeletion(t *testing.T) {
+	pullRequest := managedPullRequest(testPullRequestSpec())
+	pullRequest.State = "closed"
+	pullRequest.Draft = false
+	pullRequest.Merged = true
+	pullRequest.MergeCommitID = "dddddddddddddddddddddddddddddddddddddddd"
+	mergedAt := pullRequest.CreatedAt.Add(time.Minute)
+	pullRequest.MergedAt = &mergedAt
+	client := newBranchTestClient(t, func(*http.Request) (*http.Response, error) {
+		return pullRequestJSONResponse(t, http.StatusOK, pullRequest), nil
+	})
+	if err := client.ClosePullRequest(
+		t.Context(), "owner", "repository", pullRequest.Number,
+		pullRequest.BaseBranch, pullRequest.HeadBranch, testPullRequestSpec().FeatureMarker,
+	); !errors.Is(err, workspace.ErrPullRequestConflict) {
+		t.Fatalf("expected pull request conflict, got %v", err)
+	}
+}
+
 func TestClientReadsRepositoryOverviewFromDefaultBranch(t *testing.T) {
 	readme := "# Demo\n\nThis is the internal repository.\n"
 	readmeID := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"

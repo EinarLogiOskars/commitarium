@@ -105,6 +105,34 @@ func (manager *Manager) Ensure(ctx context.Context, spec workspace.CheckoutSpec)
 	return manager.reconcile(ctx, spec, target)
 }
 
+// Remove deletes one exact managed checkout without running Git or resolving
+// any branch. It is safe to repeat after a partial work-order deletion.
+func (manager *Manager) Remove(ctx context.Context, workspaceID string) error {
+	if !safeWorkspaceID.MatchString(workspaceID) {
+		return fmt.Errorf("%w: workspace identity is unsafe", workspace.ErrCheckoutConflict)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	target := filepath.Join(manager.root, workspaceID)
+	if filepath.Dir(target) != manager.root || target == manager.root {
+		return fmt.Errorf("%w: checkout path is outside the managed root", workspace.ErrCheckoutConflict)
+	}
+	info, err := os.Lstat(target)
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		return nil
+	case err != nil:
+		return fmt.Errorf("%w: checkout directory cannot be inspected", workspace.ErrCheckoutUnavailable)
+	case info.Mode()&os.ModeSymlink != 0 || !info.IsDir():
+		return fmt.Errorf("%w: checkout path is not an ordinary directory", workspace.ErrCheckoutConflict)
+	}
+	if err := os.RemoveAll(target); err != nil {
+		return fmt.Errorf("%w: checkout directory cannot be removed", workspace.ErrCheckoutUnavailable)
+	}
+	return nil
+}
+
 // Promote moves a clean clarification checkout from the pinned default branch
 // onto its feature branch. It also accepts the already-promoted state so a
 // coordinator crash after Git switched branches can be retried safely.

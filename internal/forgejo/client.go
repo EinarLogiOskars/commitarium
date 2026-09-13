@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -482,6 +483,40 @@ func (client *Client) EnsureBranch(
 	return stored, nil
 }
 
+// DeleteBranch removes one explicitly named feature branch. A missing branch
+// is accepted so coordinator retries after a lost response remain safe.
+func (client *Client) DeleteBranch(
+	ctx context.Context,
+	owner string,
+	repository string,
+	branch string,
+) error {
+	var err error
+	owner, repository, err = project.NormalizeRepositoryCoordinate(owner, repository)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(branch) == "" || branch != strings.TrimSpace(branch) {
+		return errors.New("branch name is required and must be trimmed")
+	}
+	status, _, err := client.doJSON(
+		ctx, http.MethodDelete, repositoryBranchPath(owner, repository, branch), nil,
+	)
+	if err != nil {
+		return err
+	}
+	switch status {
+	case http.StatusOK, http.StatusNoContent, http.StatusNotFound:
+		return nil
+	case http.StatusForbidden, http.StatusLocked:
+		return project.ErrForgejoRepositoryNotReady
+	default:
+		return fmt.Errorf(
+			"%w: branch deletion returned HTTP %d", project.ErrForgejoUnavailable, status,
+		)
+	}
+}
+
 func (client *Client) EnsureDraftPullRequest(
 	ctx context.Context,
 	owner string,
@@ -554,6 +589,72 @@ func (client *Client) EnsureDraftPullRequest(
 			status,
 		)
 	}
+}
+
+// ClosePullRequest closes the exact unmerged managed pull request. It verifies
+// the stable feature marker and both branch identities before mutation, and
+// accepts an already-closed exact match on retry.
+func (client *Client) ClosePullRequest(
+	ctx context.Context,
+	owner string,
+	repository string,
+	number int64,
+	baseBranch string,
+	headBranch string,
+	featureMarker string,
+) error {
+	var err error
+	owner, repository, err = project.NormalizeRepositoryCoordinate(owner, repository)
+	if err != nil {
+		return err
+	}
+	if number < 1 {
+		return errors.New("pull request number is required")
+	}
+	for _, value := range []string{baseBranch, headBranch, featureMarker} {
+		if strings.TrimSpace(value) == "" || value != strings.TrimSpace(value) {
+			return errors.New("pull request deletion identities are required and must be trimmed")
+		}
+	}
+	stored, err := client.getPullRequest(ctx, owner, repository, number)
+	if err != nil {
+		return err
+	}
+	if stored.Number != number || stored.BaseBranch != baseBranch ||
+		stored.HeadBranch != headBranch || strings.Count(stored.Body, featureMarker) != 1 ||
+		stored.Merged {
+		return workspace.ErrPullRequestConflict
+	}
+	if stored.State == "closed" {
+		return nil
+	}
+	if stored.State != "open" || !stored.Draft {
+		return workspace.ErrPullRequestConflict
+	}
+	status, body, err := client.doJSON(
+		ctx, http.MethodPatch, pullRequestsPath(owner, repository)+"/"+strconv.FormatInt(number, 10),
+		struct {
+			State string `json:"state"`
+		}{State: "closed"},
+	)
+	if err != nil {
+		return err
+	}
+	if status != http.StatusOK {
+		return fmt.Errorf(
+			"%w: pull request close returned HTTP %d", project.ErrForgejoUnavailable, status,
+		)
+	}
+	closed, err := decodePullRequest(body)
+	if err != nil {
+		return err
+	}
+	if closed.Number != number || closed.State != "closed" || closed.Merged ||
+		closed.BaseBranch != baseBranch || closed.HeadBranch != headBranch ||
+		strings.Count(closed.Body, featureMarker) != 1 {
+		return workspace.ErrPullRequestConflict
+	}
+	return nil
 }
 
 func (client *Client) EnsurePullRequestPlan(

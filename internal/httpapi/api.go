@@ -10,6 +10,7 @@ import (
 	"github.com/EinarLogiOskars/commitarium/internal/project"
 	"github.com/EinarLogiOskars/commitarium/internal/worker"
 	"github.com/EinarLogiOskars/commitarium/internal/workflow"
+	"github.com/EinarLogiOskars/commitarium/internal/workorder"
 	"github.com/EinarLogiOskars/commitarium/internal/workspace"
 )
 
@@ -112,6 +113,10 @@ type WorkspaceService interface {
 	) (workspace.Workspace, bool, error)
 }
 
+type FeatureDeletionService interface {
+	Delete(ctx context.Context, projectID, featureID string) (workorder.Result, error)
+}
+
 type RealWorkflowStarter interface {
 	StartPlanning(
 		ctx context.Context,
@@ -150,6 +155,7 @@ type API struct {
 	starter         RunStarter
 	workspaces      WorkspaceService
 	realWorkflow    RealWorkflowStarter
+	featureDeletion FeatureDeletionService
 }
 
 func New(
@@ -160,7 +166,7 @@ func New(
 	controller SessionController,
 	starter RunStarter,
 ) http.Handler {
-	return newAPI(projects, features, workflow, executionService, controller, starter, nil, nil)
+	return newAPI(projects, features, workflow, executionService, controller, starter, nil, nil, nil)
 }
 
 func NewWithWorkspaceService(
@@ -173,7 +179,7 @@ func NewWithWorkspaceService(
 	workspaces WorkspaceService,
 ) http.Handler {
 	return newAPI(
-		projects, features, workflow, executionService, controller, starter, workspaces, nil,
+		projects, features, workflow, executionService, controller, starter, workspaces, nil, nil,
 	)
 }
 
@@ -189,7 +195,24 @@ func NewWithWorkspaceAndRealWorkflowService(
 ) http.Handler {
 	return newAPI(
 		projects, features, workflow, executionService, controller, starter,
-		workspaces, realWorkflow,
+		workspaces, realWorkflow, nil,
+	)
+}
+
+func NewWithWorkspaceRealWorkflowAndDeletionService(
+	projects ProjectService,
+	features FeatureService,
+	workflow WorkflowService,
+	executionService ExecutionService,
+	controller SessionController,
+	starter RunStarter,
+	workspaces WorkspaceService,
+	realWorkflow RealWorkflowStarter,
+	featureDeletion FeatureDeletionService,
+) http.Handler {
+	return newAPI(
+		projects, features, workflow, executionService, controller, starter,
+		workspaces, realWorkflow, featureDeletion,
 	)
 }
 
@@ -202,16 +225,18 @@ func newAPI(
 	starter RunStarter,
 	workspaces WorkspaceService,
 	realWorkflow RealWorkflowStarter,
+	featureDeletion FeatureDeletionService,
 ) http.Handler {
 	api := &API{
-		projects:     projects,
-		features:     features,
-		workflow:     workflow,
-		execution:    executionService,
-		controller:   controller,
-		starter:      starter,
-		workspaces:   workspaces,
-		realWorkflow: realWorkflow,
+		projects:        projects,
+		features:        features,
+		workflow:        workflow,
+		execution:       executionService,
+		controller:      controller,
+		starter:         starter,
+		workspaces:      workspaces,
+		realWorkflow:    realWorkflow,
+		featureDeletion: featureDeletion,
 	}
 	api.projectImporter, _ = projects.(ProjectImporter)
 
@@ -271,6 +296,12 @@ func newAPI(
 		"GET /api/v1/projects/{projectID}/features/{id}",
 		api.getFeatureByIDHandler,
 	)
+	if featureDeletion != nil {
+		mux.HandleFunc(
+			"DELETE /api/v1/projects/{projectID}/features/{id}",
+			api.deleteFeatureHandler,
+		)
+	}
 	mux.HandleFunc(
 		"POST /api/v1/projects/{projectID}/features/{id}/transitions",
 		api.transitionFeatureHandler,

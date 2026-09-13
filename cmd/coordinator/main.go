@@ -23,6 +23,7 @@ import (
 	"github.com/EinarLogiOskars/commitarium/internal/workerhttp"
 	"github.com/EinarLogiOskars/commitarium/internal/workeringest"
 	"github.com/EinarLogiOskars/commitarium/internal/workflow"
+	"github.com/EinarLogiOskars/commitarium/internal/workorder"
 	"github.com/EinarLogiOskars/commitarium/internal/workspace"
 )
 
@@ -399,7 +400,10 @@ func run(ctx context.Context, coordinatorConfig config) error {
 	if recoveredRuns > 0 {
 		log.Printf("recovering %d interrupted workflow(s)", recoveredRuns)
 	}
-	handler := httpapi.NewWithWorkspaceAndRealWorkflowService(
+	featureDeletionService := workorder.NewService(
+		coordinatordatabase.NewFeatureDeletionStore(db), forgejoClient, checkoutManager,
+	)
+	handler := httpapi.NewWithWorkspaceRealWorkflowAndDeletionService(
 		projectService,
 		featureService,
 		workflowService,
@@ -408,6 +412,7 @@ func run(ctx context.Context, coordinatorConfig config) error {
 		runStarter,
 		workspaceService,
 		realWorkflowStarter,
+		featureDeletionService,
 	)
 
 	log.Print("Listening...")
