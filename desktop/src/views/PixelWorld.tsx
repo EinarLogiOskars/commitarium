@@ -1,71 +1,66 @@
 import { useEffect, useRef } from "react";
-import { Application, Container, Graphics } from "pixi.js";
+import {
+  Application,
+  Container,
+  Assets,
+  Texture,
+  TextureSource,
+  Sprite,
+  AnimatedSprite,
+} from "pixi.js";
 
-// Low internal resolution, then upscaled with nearest-neighbour (CSS
-// image-rendering: pixelated) to get the chunky pixel-art look. When we drop in
-// a real itch.io sprite pack, only the tile/agent draw functions change.
+// Art: "32x32 Pixel Isometric Tiles" + "critters" by scrabling (itch.io).
+// Tiles are 32x32 iso cubes; the top diamond face is 32 wide x 16 tall.
+
 const VIEW_W = 480;
 const VIEW_H = 270;
 
-// Isometric tile footprint (2:1 diamond).
-const TILE_W = 40;
-const TILE_H = 20;
-const GRID = 6; // GRID x GRID floor
+const TILE_W = 32; // top-diamond width
+const TILE_H = 16; // top-diamond height
+const GRID = 6;
 
-// Grid cell -> screen position (top-centre of the diamond).
+// Resolve pack files to bundled URLs (paths contain spaces, so glob them).
+const tileUrls = import.meta.glob(
+  "../assets/pixel/tiles/separated images/*.png",
+  { eager: true, query: "?url", import: "default" }
+) as Record<string, string>;
+const boarUrls = import.meta.glob("../assets/pixel/critters/boar/*.png", {
+  eager: true,
+  query: "?url",
+  import: "default",
+}) as Record<string, string>;
+
+const urlEnding = (map: Record<string, string>, name: string): string => {
+  const key = Object.keys(map).find((k) => k.endsWith("/" + name));
+  if (!key) throw new Error("asset not found: " + name);
+  return map[key];
+};
+
+type Dir = "NE" | "NW" | "SE" | "SW";
+
+// Grid cell -> screen position of the diamond centre.
 function isoToScreen(col: number, row: number) {
-  return {
-    x: (col - row) * (TILE_W / 2),
-    y: (col + row) * (TILE_H / 2),
-  };
+  return { x: (col - row) * (TILE_W / 2), y: (col + row) * (TILE_H / 2) };
 }
 
-// One diamond floor tile.
-function makeTile(col: number, row: number): Graphics {
-  const dark = (col + row) % 2 === 0;
-  const top = dark ? 0x3a4a63 : 0x44557a;
-  const g = new Graphics();
-  g.moveTo(0, -TILE_H / 2)
-    .lineTo(TILE_W / 2, 0)
-    .lineTo(0, TILE_H / 2)
-    .lineTo(-TILE_W / 2, 0)
-    .lineTo(0, -TILE_H / 2)
-    .fill(top)
-    .stroke({ color: 0x27324a, width: 1 });
-  const { x, y } = isoToScreen(col, row);
-  g.x = x;
-  g.y = y;
-  return g;
-}
-
-// Placeholder "agent" — a tiny blocky bot. Swap for a real sprite later.
-function makeAgent(body: number): Container {
-  const c = new Container();
-  const g = new Graphics();
-  // shadow
-  g.ellipse(0, 0, 8, 4).fill({ color: 0x000000, alpha: 0.25 });
-  // legs
-  g.rect(-4, -10, 3, 6).rect(1, -10, 3, 6).fill(0x2b2b2b);
-  // body
-  g.rect(-5, -20, 10, 11).fill(body);
-  // head
-  g.rect(-4, -28, 8, 8).fill(0xf2ede4);
-  // visor
-  g.rect(-3, -26, 6, 3).fill(0x1a1f2b);
-  // eyes
-  g.rect(-2, -25.5, 1, 2).rect(1, -25.5, 1, 2).fill(0x8fe3ff);
-  c.addChild(g);
-  return c;
+// Which of the 4 iso directions a (dcol,drow) step faces.
+function faceDir(dcol: number, drow: number): Dir {
+  if (dcol > 0) return "SE";
+  if (dcol < 0) return "NW";
+  if (drow > 0) return "SW";
+  return "NE";
 }
 
 type Agent = {
-  node: Container;
+  sprite: AnimatedSprite;
+  anims: Record<Dir, { idle: Texture[]; run: Texture[] }>;
   col: number;
   row: number;
-  phase: number; // bob offset
   path: Array<[number, number]>;
   step: number;
-  t: number; // 0..1 progress to next tile
+  t: number;
+  dir: Dir;
+  moving: boolean;
 };
 
 export function PixelWorld({ onClose }: { onClose: () => void }) {
@@ -76,6 +71,9 @@ export function PixelWorld({ onClose }: { onClose: () => void }) {
     let cancelled = false;
 
     (async () => {
+      // Crisp pixels: nearest-neighbour sampling on every texture.
+      TextureSource.defaultOptions.scaleMode = "nearest";
+
       const instance = new Application();
       await instance.init({
         width: VIEW_W,
@@ -95,74 +93,104 @@ export function PixelWorld({ onClose }: { onClose: () => void }) {
       app.canvas.style.imageRendering = "pixelated";
       app.canvas.style.objectFit = "contain";
 
-      // World container, centred.
+      // --- Load textures ---
+      const grassTex = await Assets.load<Texture>(
+        urlEnding(tileUrls, "tile_022.png")
+      );
+
+      const dirs: Dir[] = ["NE", "NW", "SE", "SW"];
+      const loadFrames = async (dir: Dir, action: "idle" | "run") => {
+        const count = action === "idle" ? 7 : 4;
+        const frames: Texture[] = [];
+        for (let i = 0; i < count; i++) {
+          frames.push(
+            await Assets.load<Texture>(
+              urlEnding(boarUrls, `boar_${dir}_${action}_${i}.png`)
+            )
+          );
+        }
+        return frames;
+      };
+      const boarAnims = {} as Record<
+        Dir,
+        { idle: Texture[]; run: Texture[] }
+      >;
+      for (const d of dirs) {
+        boarAnims[d] = {
+          idle: await loadFrames(d, "idle"),
+          run: await loadFrames(d, "run"),
+        };
+      }
+      if (cancelled) return;
+
+      // --- Scene ---
       const world = new Container();
+      world.sortableChildren = true;
       world.x = VIEW_W / 2;
-      world.y = VIEW_H / 2 - (GRID * TILE_H) / 2 + 30;
+      world.y = VIEW_H / 2 - (GRID * TILE_H) / 2;
       app.stage.addChild(world);
 
-      // Floor (add tiles back-to-front so overlap is correct).
+      // Floor
       for (let row = 0; row < GRID; row++) {
         for (let col = 0; col < GRID; col++) {
-          world.addChild(makeTile(col, row));
+          const t = new Sprite(grassTex);
+          t.anchor.set(0.5, 0.25); // top-diamond centre in a 32x32 cube
+          const { x, y } = isoToScreen(col, row);
+          t.x = x;
+          t.y = y;
+          t.zIndex = col + row;
+          world.addChild(t);
         }
       }
 
-      // A few agents on the floor.
-      const colors = [0xb5552e, 0x5c8a49, 0x4a6fb0, 0xb07d1e];
-      const agents: Agent[] = [];
-      const spots: Array<[number, number]> = [
-        [1, 1],
-        [4, 2],
-        [2, 4],
-      ];
-      spots.forEach(([col, row], i) => {
-        const node = makeAgent(colors[i % colors.length]);
-        world.addChild(node);
-        agents.push({
-          node,
+      // Boar agents
+      const makeAgent = (
+        col: number,
+        row: number,
+        path: Array<[number, number]>
+      ): Agent => {
+        const dir: Dir = "SE";
+        const sprite = new AnimatedSprite(boarAnims[dir].idle);
+        sprite.anchor.set(0.5, 0.85);
+        sprite.animationSpeed = 0.15;
+        sprite.play();
+        world.addChild(sprite);
+        return {
+          sprite,
+          anims: boarAnims,
           col,
           row,
-          phase: i * 1.7,
+          path,
           step: 0,
           t: 0,
-          // one agent walks a little loop; others idle in place
-          path:
-            i === 0
-              ? [
-                  [1, 1],
-                  [2, 1],
-                  [3, 1],
-                  [3, 2],
-                  [3, 3],
-                  [2, 3],
-                  [1, 3],
-                  [1, 2],
-                ]
-              : [[col, row]],
-        });
-      });
-
-      const place = (a: Agent, col: number, row: number) => {
-        const { x, y } = isoToScreen(col, row);
-        a.node.x = x;
-        a.node.y = y;
-        // depth sort: further-back tiles drawn first
-        a.node.zIndex = col + row + 1000;
+          dir,
+          moving: path.length > 1,
+        };
       };
-      world.sortableChildren = true;
+
+      const agents: Agent[] = [
+        makeAgent(1, 1, [
+          [1, 1],
+          [3, 1],
+          [3, 3],
+          [1, 3],
+        ]),
+        makeAgent(4, 2, [[4, 2]]),
+        makeAgent(2, 4, [[2, 4]]),
+      ];
+
+      const setAnim = (a: Agent, dir: Dir, action: "idle" | "run") => {
+        const frames = a.anims[dir][action];
+        if (a.sprite.textures === frames) return;
+        a.sprite.textures = frames;
+        a.sprite.animationSpeed = action === "run" ? 0.2 : 0.12;
+        a.sprite.play();
+      };
 
       app.ticker.add((ticker) => {
-        const time = performance.now() / 1000;
         for (const a of agents) {
-          // idle bob
-          const bob = Math.sin(time * 4 + a.phase) * 1;
-          if (a.path.length > 1) {
-            // walk toward next tile
-            a.t += ticker.deltaMS / 700;
-            // Advance the segment FIRST, carrying the remainder, then read the
-            // current segment's endpoints — otherwise the frame we cross a tile
-            // renders against the previous segment and snaps back for one frame.
+          if (a.moving) {
+            a.t += ticker.deltaMS / 900;
             while (a.t >= 1) {
               a.t -= 1;
               a.step = (a.step + 1) % a.path.length;
@@ -171,13 +199,18 @@ export function PixelWorld({ onClose }: { onClose: () => void }) {
             const [c1, r1] = a.path[(a.step + 1) % a.path.length];
             const col = c0 + (c1 - c0) * a.t;
             const row = r0 + (r1 - r0) * a.t;
+            const dir = faceDir(c1 - c0, r1 - r0);
+            setAnim(a, dir, "run");
             const { x, y } = isoToScreen(col, row);
-            a.node.x = x;
-            a.node.y = y + bob;
-            a.node.zIndex = Math.round(col + row) + 1000;
+            a.sprite.x = x;
+            a.sprite.y = y;
+            a.sprite.zIndex = col + row + 0.5;
           } else {
-            place(a, a.col, a.row);
-            a.node.y += bob;
+            setAnim(a, a.dir, "idle");
+            const { x, y } = isoToScreen(a.col, a.row);
+            a.sprite.x = x;
+            a.sprite.y = y;
+            a.sprite.zIndex = a.col + a.row + 0.5;
           }
         }
       });
@@ -212,7 +245,7 @@ export function PixelWorld({ onClose }: { onClose: () => void }) {
       >
         <strong style={{ color: "var(--text)" }}>Pixel world</strong>
         <span style={{ color: "var(--muted)", fontSize: 12 }}>
-          placeholder tiles + agents — isometric prototype
+          isometric — tiles &amp; critters by scrabling
         </span>
         <span style={{ flex: 1 }} />
         <button className="ghost" onClick={onClose}>
