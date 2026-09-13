@@ -5,6 +5,7 @@ import { FeatureView } from "./FeatureView";
 import { WorkOrderRail } from "./WorkOrderRail";
 import { NewWorkOrder } from "./NewWorkOrder";
 import { ProjectSettings } from "./ProjectSettings";
+import { ProjectDashboard } from "./ProjectDashboard";
 import { WORK } from "../vocab";
 import type { Project } from "../api/types";
 
@@ -98,7 +99,20 @@ export function ProjectWorkspace({
         <div className={`main__inner ${mode === "order" ? "main__inner--fill" : ""}`}>
           {error && <div className="banner banner--error">{error}</div>}
 
-          {mode === "overview" && project && <Overview project={project} />}
+          {mode === "overview" && project && (
+            <ProjectDashboard
+              project={project}
+              onOpenOrder={openOrder}
+              onNewOrder={() => {
+                setMode("new");
+                setOrderId(null);
+              }}
+              onSettings={() => {
+                setMode("settings");
+                setOrderId(null);
+              }}
+            />
+          )}
 
           {mode === "new" && (
             <NewWorkOrder
@@ -125,37 +139,5 @@ export function ProjectWorkspace({
         </div>
       </main>
     </>
-  );
-}
-
-function Overview({ project }: { project: Project }) {
-  return (
-    <section className="panel">
-      <h2>{project.name}</h2>
-      <dl className="detail">
-        <dt>Recovery policy</dt>
-        <dd>{project.recovery_policy === "automatic" ? "Automatic recovery" : "Approval required"}</dd>
-        <dt>Autonomy</dt>
-        <dd className="muted">
-          {project.autonomy_policy === "run_to_completion"
-            ? "Runs all phases through to the merge gate"
-            : "Stops at each phase for review"}
-        </dd>
-        <dt>Forgejo repository</dt>
-        <dd>
-          {project.forgejo_repository
-            ? `${project.forgejo_repository.owner}/${project.forgejo_repository.name} (default: ${project.forgejo_repository.default_branch})`
-            : "not bound"}
-        </dd>
-        <dt>Dialogue rounds</dt>
-        <dd className="muted">
-          {project.dialogue_limits
-            ? `planning ${project.dialogue_limits.planning_rounds}, review ${project.dialogue_limits.implementation_review_rounds} — current backend default`
-            : "not reported by this coordinator"}
-        </dd>
-        <dt>Created</dt>
-        <dd className="muted">{new Date(project.created_at).toLocaleString()}</dd>
-      </dl>
-    </section>
   );
 }

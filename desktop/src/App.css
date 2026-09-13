@@ -921,6 +921,84 @@ button.primary {
   color: var(--bad);
 }
 
+/* Project dashboard (workspace overview). */
+.dash {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.dash__repo {
+  margin: 3px 0 0;
+  font-size: 12px;
+}
+.dash__facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 24px;
+  margin-top: 4px;
+}
+.dash__fact {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.dash__fact-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  font-weight: 600;
+}
+.dash__fact-value {
+  font-size: 13px;
+}
+.dash__list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.dash__row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  text-align: left;
+  background: color-mix(in srgb, var(--text) 2%, transparent);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 9px 12px;
+  cursor: pointer;
+  font: inherit;
+  color: var(--text);
+}
+.dash__row:hover {
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--border));
+  background: color-mix(in srgb, var(--text) 5%, transparent);
+}
+.dash__row--attn {
+  border-color: color-mix(in srgb, var(--warn) 35%, var(--border));
+}
+.dash__row .state {
+  flex: none;
+  min-width: 168px;
+}
+.dash__row-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dash__row-phase {
+  flex: none;
+  font-size: 12px;
+  color: var(--muted);
+}
+.dash__soon {
+  background: none;
+  border-style: dashed;
+}
+
 /* Handoff panel — post-completion sync/push to the user's machine. */
 .handoff__section {
   margin-top: 16px;
