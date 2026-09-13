@@ -187,6 +187,9 @@ body {
   display: flex;
   flex-direction: column;
   gap: 16px;
+  /* Phase views scroll internally (panel--phase); this is the fallback scroll
+     for views without a scrolling transcript (e.g. completed + handoff). */
+  overflow-y: auto;
 }
 .order > * {
   margin: 0;
@@ -916,6 +919,28 @@ button.primary {
   background: color-mix(in srgb, var(--bad) 14%, transparent);
   border: 1px solid var(--bad);
   color: var(--bad);
+}
+
+/* Handoff panel — post-completion sync/push to the user's machine. */
+.handoff__section {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+.handoff h3 {
+  margin: 0 0 4px;
+  font-size: 13px;
+}
+.handoff__folder {
+  margin-top: 16px;
+}
+.handoff__folder summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 13px;
+}
+.handoff__folder > * {
+  margin-top: 8px;
 }
 
 /* Work-order head: title/description, then the phase timeline. Kept compact so
