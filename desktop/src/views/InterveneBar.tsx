@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { pauseRun, queueIntervention, resumeRun } from "../api/runs";
+import { pauseRun, queueIntervention, recoverRun, resumeRun } from "../api/runs";
 import { ApiError } from "../api/client";
 import type { Intervention, InterventionTargetRole, Run } from "../api/types";
 
@@ -39,6 +39,9 @@ export function InterveneBar({
   const pausing = paused && run.status === "running";
   const pausedWaiting = paused && run.status === "waiting_for_user";
   const running = !paused && run.status === "running";
+  // A recovery blocker: the coordinator couldn't confirm the last agent turn's
+  // state. Re-check reconciles the durable attempt without a new agent.
+  const blocked = !paused && run.status === "waiting_for_user" && run.wait_kind === "blocker";
 
   // Prefer the backend's authoritative target list; fall back to the sessions.
   const targets = run.intervention_targets;
@@ -117,7 +120,16 @@ export function InterveneBar({
           {stateLabel}
         </span>
         <span className="intervene__actions">
-          {pausedWaiting ? (
+          {blocked ? (
+            <button
+              className="primary"
+              onClick={() => void control(recoverRun)}
+              disabled={busy != null}
+              title="Re-check the durable state; continues if the last turn is confirmable"
+            >
+              Re-check / approve recovery
+            </button>
+          ) : pausedWaiting ? (
             <button
               className="primary"
               onClick={() => void control(resumeRun)}

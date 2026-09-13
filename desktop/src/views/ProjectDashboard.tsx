@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { listFeatures, listFeatureRuns } from "../api/features";
-import { getRun } from "../api/runs";
+import { getRun, recoverRun } from "../api/runs";
 import { currentPhaseIndex, PHASE_LABELS, PHASES } from "./PhaseStepper";
 import { RepositoryCard } from "./RepositoryCard";
 import { ProjectSyncCard } from "./ProjectSyncCard";
@@ -27,6 +27,7 @@ export function ProjectDashboard({
   const [features, setFeatures] = useState<Feature[] | null>(null);
   const [runs, setRuns] = useState<Record<string, Run>>({});
   const [error, setError] = useState<string | null>(null);
+  const [recovering, setRecovering] = useState<string | null>(null);
 
   const poll = useCallback(async () => {
     try {
@@ -60,6 +61,19 @@ export function ProjectDashboard({
     const id = setInterval(() => void poll(), POLL_MS);
     return () => clearInterval(id);
   }, [poll]);
+
+  const recover = async (runId: string) => {
+    setRecovering(runId);
+    setError(null);
+    try {
+      await recoverRun(runId, crypto.randomUUID());
+      await poll();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setRecovering(null);
+    }
+  };
 
   const items = (features ?? []).map((f) => describe(f, runs[f.id]));
   const attention = items.filter((i) => i.attention);
@@ -98,16 +112,31 @@ export function ProjectDashboard({
         <section className="panel">
           <h2>Needs your attention</h2>
           <div className="dash__list">
-            {attention.map((i) => (
-              <button key={i.feature.id} className="dash__row dash__row--attn" onClick={() => onOpenOrder(i.feature.id)}>
-                <span className={`state state--${i.attention!.tone}`}>
-                  <span className={`dot dot--${i.attention!.tone}`} />
-                  {i.attention!.label}
-                </span>
-                <span className="dash__row-title">{i.feature.title}</span>
-                <span className="dash__row-phase">{i.phase}</span>
-              </button>
-            ))}
+            {attention.map((i) => {
+              const r = runs[i.feature.id];
+              const blocked = !r?.paused && r?.status === "waiting_for_user" && r?.wait_kind === "blocker";
+              return (
+                <div key={i.feature.id} className="dash__attn-item">
+                  <button className="dash__row dash__row--attn" onClick={() => onOpenOrder(i.feature.id)}>
+                    <span className={`state state--${i.attention!.tone}`}>
+                      <span className={`dot dot--${i.attention!.tone}`} />
+                      {i.attention!.label}
+                    </span>
+                    <span className="dash__row-title">{i.feature.title}</span>
+                    <span className="dash__row-phase">{i.phase}</span>
+                  </button>
+                  {blocked && r && (
+                    <button
+                      className="ghost dash__recheck"
+                      onClick={() => void recover(r.id)}
+                      disabled={recovering != null}
+                    >
+                      {recovering === r.id ? "Re-checking…" : "Re-check"}
+                    </button>
+                  )}
+                </div>
+              );
+            })}
           </div>
         </section>
       )}

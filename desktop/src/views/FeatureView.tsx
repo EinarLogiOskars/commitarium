@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { getFeature, getFeatureEvents, listFeatureRuns } from "../api/features";
+import { deleteFeature, getFeature, getFeatureEvents, listFeatureRuns } from "../api/features";
 import { getRun } from "../api/runs";
 import { ApiError } from "../api/client";
 import { GoalClarification } from "./GoalClarification";
@@ -23,12 +23,14 @@ export function FeatureView({
   hasRepo,
   onBack,
   onChanged,
+  onDeleted,
 }: {
   projectId: string;
   featureId: string;
   hasRepo?: boolean;
   onBack?: () => void;
   onChanged?: () => void;
+  onDeleted?: () => void;
 }) {
   const [feature, setFeature] = useState<Feature | null>(null);
   const [run, setRun] = useState<Run | null>(null);
@@ -36,6 +38,8 @@ export function FeatureView({
   const [error, setError] = useState<string | null>(null);
   // null = follow the current phase; a number = the user pinned that phase.
   const [pinnedIndex, setPinnedIndex] = useState<number | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const lastState = useRef<string | null>(null);
 
   const load = useCallback(async () => {
@@ -89,6 +93,24 @@ export function FeatureView({
 
   const select = (i: number) => setPinnedIndex(i === current ? null : i);
 
+  const runDelete = async () => {
+    setDeleting(true);
+    setError(null);
+    try {
+      await deleteFeature(projectId, featureId);
+      onDeleted?.();
+    } catch (e) {
+      setError(
+        e instanceof ApiError && e.code === "feature_active"
+          ? "Stop the run first — agents may still be working on this order."
+          : describe(e),
+      );
+      setConfirmDelete(false);
+    } finally {
+      setDeleting(false);
+    }
+  };
+
   // The viewed phase's time window(s) — used to scope its transcript. We can
   // only scope once workflow history exists; until then, don't hide anything.
   const scoped = events.length > 0;
@@ -104,7 +126,30 @@ export function FeatureView({
             <h2>{feature.title}</h2>
             {feature.description && <p className="muted order-head__desc">{feature.description}</p>}
           </div>
+          {onDeleted && !confirmDelete && (
+            <button className="ghost danger" onClick={() => setConfirmDelete(true)} disabled={deleting}>
+              Delete
+            </button>
+          )}
         </div>
+
+        {confirmDelete && (
+          <div className="delete-confirm">
+            <span className="muted">
+              {feature.state === "completed"
+                ? "This order was merged — deleting removes it from the list, but its changes stay in the project (not a revert)."
+                : "Delete this work order? Its branch, checkout, and history are dropped; nothing reaches the default branch."}
+            </span>
+            <div className="row">
+              <button className="danger" onClick={() => void runDelete()} disabled={deleting}>
+                {deleting ? "Deleting…" : "Confirm delete"}
+              </button>
+              <button className="ghost" onClick={() => setConfirmDelete(false)} disabled={deleting}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
 
         <PhaseStepper feature={feature} viewedIndex={viewed} onSelect={select} paused={run?.paused} />
 

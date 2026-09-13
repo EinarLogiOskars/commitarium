@@ -921,6 +921,31 @@ button.primary {
   color: var(--bad);
 }
 
+/* Destructive actions. */
+.danger {
+  color: var(--bad);
+}
+button.danger:not(.ghost) {
+  background: color-mix(in srgb, var(--bad) 16%, transparent);
+  border: 1px solid color-mix(in srgb, var(--bad) 45%, transparent);
+  color: var(--bad);
+}
+.ghost.danger:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--bad) 45%, transparent);
+  color: var(--bad);
+}
+.delete-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 10px 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid color-mix(in srgb, var(--bad) 40%, transparent);
+  background: color-mix(in srgb, var(--bad) 8%, transparent);
+  font-size: 13px;
+}
+
 /* Project dashboard (workspace overview). */
 .dash {
   display: flex;
@@ -977,6 +1002,18 @@ button.primary {
 }
 .dash__row--attn {
   border-color: color-mix(in srgb, var(--warn) 35%, var(--border));
+}
+.dash__attn-item {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+}
+.dash__attn-item .dash__row {
+  flex: 1;
+}
+.dash__recheck {
+  flex: none;
+  white-space: nowrap;
 }
 .dash__row .state {
   flex: none;

@@ -48,6 +48,12 @@ export const pauseRun = (runId: string, key: string): Promise<Run> =>
 export const resumeRun = (runId: string, key: string): Promise<Run> =>
   request(`${runPath(runId)}/resume`, { method: "POST", idempotencyKey: key });
 
+// Re-check and reconcile the exact durable attempt behind a recovery blocker
+// (wait_kind === "blocker"). Never starts a replacement agent; advances the
+// workflow if the attempt is now confirmable, otherwise stays blocked.
+export const recoverRun = (runId: string, key: string): Promise<Run> =>
+  request(`${runPath(runId)}/recover`, { method: "POST", idempotencyKey: key });
+
 // Queue a user message for the lead or reviewer and arm the pause gate. Delivery
 // happens at the next safe boundary (a following backend slice); until then the
 // queue state is observable but Send stays disabled. Only one unfinished
