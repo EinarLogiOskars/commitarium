@@ -60,7 +60,7 @@ function MessageEntry({ e }: { e: TranscriptEntry }) {
   if (e.type === "activity" && e.activity?.kind === "narration") {
     const who = e.role === "reviewer" ? "Reviewer" : "Lead";
     return (
-      <div className="narration">
+      <div className={`narration ${e.role === "reviewer" ? "narration--reviewer" : ""}`}>
         <span className="narration__who">{who}</span>
         <span className="narration__text">{e.text}</span>
       </div>
@@ -86,8 +86,10 @@ function MessageEntry({ e }: { e: TranscriptEntry }) {
 
 function ActivityGroup({ items }: { items: TranscriptEntry[] }) {
   const [open, setOpen] = useState(false);
+  // Put a role's tool activity in the same lane as its chat bubbles.
+  const sameRole = items.every((e) => e.role === items[0].role) ? items[0].role : null;
   return (
-    <div className="activity-group">
+    <div className={`activity-group ${sameRole === "reviewer" ? "activity-group--reviewer" : ""}`}>
       <button className="activity-group__head" onClick={() => setOpen((o) => !o)}>
         <span className="activity-group__chevron">{open ? "▼" : "▶"}</span>
         <span className="activity-group__summary">{summarize(items)}</span>
