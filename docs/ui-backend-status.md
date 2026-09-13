@@ -284,13 +284,17 @@ in backend event payloads; the UI maps factual activity to presentation.
   `feature_id`, `repository_path`, `target_branch`, `local_commit_id`, and
   `created`.
 - The command supports projects imported from an existing Git repository. It
-  requires the recorded checkout to be clean and on the internal default
-  branch, uses the effective host `user.name` and `user.email`, verifies the
-  exact internal history and resulting source tree, and fast-forwards one clean
-  local commit. Exact retries return `created: false`.
-- Local synchronization never pushes. Errors describing dirty, advanced,
-  missing, or contradictory state must be shown to the user without offering a
-  reset, clean, force, or automatic conflict resolution.
+  requires the recorded checkout to be clean and attached to a local branch,
+  uses the effective host `user.name` and `user.email`, verifies the exact
+  internal history, and applies only the internal base-to-approved patch onto
+  the current local `HEAD` in a disposable clone. The internal base commit does
+  not need to exist locally. The checked-out branch advances only by one clean
+  user-authored commit whose parent is the prior local `HEAD`; exact retries or
+  an already-matching approved tree return `created: false`.
+- Local synchronization never pushes. A patch conflict leaves the local branch,
+  index, and worktree unchanged. Errors describing dirty, concurrently advanced,
+  conflicting, missing, or contradictory state must be shown to the user without
+  offering a reset, clean, force, or automatic conflict resolution.
 - The native `synchronize_feature_to_folder` command supports projects imported
   from ordinary folders. It accepts `projectId` and `featureId`, and returns
   `project_id`, `feature_id`, `folder_path`, `result_tree_id`, and `created`.
