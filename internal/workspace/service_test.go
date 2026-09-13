@@ -133,11 +133,19 @@ func (store *memoryStore) MarkBranchReady(_ context.Context, _ string, readyAt t
 
 type fixedFeatureFinder struct {
 	stored feature.Feature
+	listed []feature.Feature
 	err    error
 }
 
 func (finder fixedFeatureFinder) GetByID(context.Context, string, string) (feature.Feature, error) {
 	return finder.stored, finder.err
+}
+
+func (finder fixedFeatureFinder) List(context.Context, string) ([]feature.Feature, error) {
+	if finder.err != nil {
+		return nil, finder.err
+	}
+	return finder.listed, nil
 }
 
 type fixedProjectFinder struct {
@@ -1507,6 +1515,66 @@ func TestGetCompletedHandoffRequiresCompletedFeatureAndRecordedMerge(t *testing.
 				t.Fatalf("expected %v, got %v", test.want, err)
 			}
 		})
+	}
+}
+
+func TestGetProjectHandoffReturnsCanonicalHeadAndCompletedWork(t *testing.T) {
+	now := time.Date(2026, time.September, 13, 10, 0, 0, 0, time.UTC)
+	completed := acceptedTestFeature(now)
+	completed.State = feature.StateCompleted
+	completed.Title = "Completed order"
+	stored := readyTestWorkspace(now)
+	pullRequestAt := now.Add(3 * time.Minute)
+	mergeReadyAt := now.Add(4 * time.Minute)
+	mergedAt := now.Add(5 * time.Minute)
+	stored.PullRequestNumber = 14
+	stored.PullRequestURL = "http://localhost:3001/owner/repository/pulls/14"
+	stored.PullRequestRecordedAt = &pullRequestAt
+	stored.ApprovedCommitID = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	stored.MergeReadyAt = &mergeReadyAt
+	stored.MergeCommitID = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	stored.MergedAt = &mergedAt
+	stored.UpdatedAt = mergedAt
+	branches := &recordingBranches{base: Branch{
+		Name: "main", CommitID: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+	}}
+	service := NewService(
+		&memoryStore{stored: stored},
+		fixedFeatureFinder{listed: []feature.Feature{completed}},
+		fixedProjectFinder{stored: project.Project{
+			ID: "prj_test", ForgejoRepository: testRepository(now),
+		}},
+		branches,
+	)
+
+	got, err := service.GetProjectHandoff(t.Context(), "prj_test")
+	if err != nil {
+		t.Fatalf("get project handoff: %v", err)
+	}
+	if got.ProjectID != "prj_test" || got.HeadCommitID != branches.base.CommitID ||
+		len(got.Completed) != 1 || got.Completed[0].FeatureID != completed.ID ||
+		got.Completed[0].Title != completed.Title || got.Completed[0].MergeCommitID != stored.MergeCommitID {
+		t.Fatalf("unexpected project handoff %+v", got)
+	}
+}
+
+func TestCompletedProjectHandoffsFollowGitChainRatherThanTimestamps(t *testing.T) {
+	a := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	b := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	c := "cccccccccccccccccccccccccccccccccccccccc"
+	now := time.Date(2026, time.September, 13, 10, 0, 0, 0, time.UTC)
+	second := CompletedProjectHandoff{FeatureID: "fea_two", BaseCommitID: b, MergeCommitID: c, MergedAt: now}
+	first := CompletedProjectHandoff{FeatureID: "fea_one", BaseCommitID: a, MergeCommitID: b, MergedAt: now}
+
+	ordered, err := orderCompletedProjectHandoffs([]CompletedProjectHandoff{second, first}, c)
+	if err != nil {
+		t.Fatalf("order completed handoffs: %v", err)
+	}
+	if len(ordered) != 2 || ordered[0].FeatureID != "fea_one" || ordered[1].FeatureID != "fea_two" {
+		t.Fatalf("unexpected order %+v", ordered)
+	}
+	if _, err := orderCompletedProjectHandoffs([]CompletedProjectHandoff{first}, c); !errors.Is(err, ErrConflict) {
+		t.Fatalf("expected conflict for disconnected head, got %v", err)
 	}
 }
 

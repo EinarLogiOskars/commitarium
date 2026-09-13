@@ -88,6 +88,25 @@ type Workspace struct {
 	UpdatedAt             time.Time
 }
 
+// ProjectHandoff is the coordinator-owned part of project synchronization.
+// Destination paths and watermarks belong to the trusted desktop instead.
+type ProjectHandoff struct {
+	ProjectID       string
+	RepositoryOwner string
+	RepositoryName  string
+	DefaultBranch   string
+	HeadCommitID    string
+	Completed       []CompletedProjectHandoff
+}
+
+type CompletedProjectHandoff struct {
+	FeatureID     string
+	Title         string
+	BaseCommitID  string
+	MergeCommitID string
+	MergedAt      time.Time
+}
+
 func (workspace Workspace) Validate() error {
 	required := []struct {
 		name  string

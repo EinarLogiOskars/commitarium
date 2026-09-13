@@ -29,6 +29,7 @@ var ErrPullRequestConflict = errors.New("managed Forgejo pull request conflicts 
 
 type FeatureFinder interface {
 	GetByID(ctx context.Context, projectID, featureID string) (feature.Feature, error)
+	List(ctx context.Context, projectID string) ([]feature.Feature, error)
 }
 
 type ProjectFinder interface {
@@ -335,6 +336,109 @@ func (service *Service) GetCompletedHandoff(
 		return Workspace{}, ErrHandoffNotReady
 	}
 	return stored, nil
+}
+
+// GetProjectHandoff returns the canonical default-branch head plus every
+// completed work order that contributed to it. The trusted desktop combines
+// this provider-neutral description with its private local source mapping and
+// sync receipts; host paths and upstream credentials never enter coordinator
+// storage.
+func (service *Service) GetProjectHandoff(
+	ctx context.Context,
+	projectID string,
+) (ProjectHandoff, error) {
+	storedProject, err := service.projects.GetByID(ctx, projectID)
+	if err != nil {
+		return ProjectHandoff{}, err
+	}
+	repository := storedProject.ForgejoRepository
+	if repository == nil {
+		return ProjectHandoff{}, ErrProjectRepositoryNotBound
+	}
+	if service.branches == nil {
+		return ProjectHandoff{}, project.ErrForgejoUnavailable
+	}
+	head, err := service.branches.GetBranch(
+		ctx, repository.Owner, repository.Name, repository.DefaultBranch,
+	)
+	if err != nil {
+		return ProjectHandoff{}, err
+	}
+	if err := head.Validate(); err != nil || head.Name != repository.DefaultBranch {
+		return ProjectHandoff{}, ErrConflict
+	}
+	features, err := service.features.List(ctx, projectID)
+	if err != nil {
+		return ProjectHandoff{}, err
+	}
+	completed := make([]CompletedProjectHandoff, 0)
+	for _, storedFeature := range features {
+		if storedFeature.State != feature.StateCompleted {
+			continue
+		}
+		stored, err := service.store.GetByFeatureID(ctx, storedFeature.ID)
+		if err != nil {
+			return ProjectHandoff{}, fmt.Errorf(
+				"get completed project handoff for feature %q: %w", storedFeature.ID, err,
+			)
+		}
+		if err := stored.Validate(); err != nil {
+			return ProjectHandoff{}, ErrConflict
+		}
+		if storedFeature.ProjectID != projectID || stored.ProjectID != projectID || stored.FeatureID != storedFeature.ID ||
+			stored.RepositoryOwner != repository.Owner || stored.RepositoryName != repository.Name ||
+			stored.BaseBranch != repository.DefaultBranch || stored.Status != StatusBranchReady ||
+			!stored.PullRequestReady() || stored.ApprovedCommitID == "" || stored.MergeReadyAt == nil ||
+			stored.MergeCommitID == "" || stored.MergedAt == nil {
+			return ProjectHandoff{}, ErrConflict
+		}
+		completed = append(completed, CompletedProjectHandoff{
+			FeatureID:     storedFeature.ID,
+			Title:         storedFeature.Title,
+			BaseCommitID:  stored.BaseCommitID,
+			MergeCommitID: stored.MergeCommitID,
+			MergedAt:      *stored.MergedAt,
+		})
+	}
+	ordered, err := orderCompletedProjectHandoffs(completed, head.CommitID)
+	if err != nil {
+		return ProjectHandoff{}, err
+	}
+	return ProjectHandoff{
+		ProjectID:       projectID,
+		RepositoryOwner: repository.Owner,
+		RepositoryName:  repository.Name,
+		DefaultBranch:   repository.DefaultBranch,
+		HeadCommitID:    head.CommitID,
+		Completed:       ordered,
+	}, nil
+}
+
+func orderCompletedProjectHandoffs(
+	completed []CompletedProjectHandoff,
+	headCommitID string,
+) ([]CompletedProjectHandoff, error) {
+	remaining := append([]CompletedProjectHandoff(nil), completed...)
+	ordered := make([]CompletedProjectHandoff, len(remaining))
+	cursor := headCommitID
+	for index := len(ordered) - 1; index >= 0; index-- {
+		match := -1
+		for candidate := range remaining {
+			if remaining[candidate].MergeCommitID == cursor {
+				if match != -1 {
+					return nil, ErrConflict
+				}
+				match = candidate
+			}
+		}
+		if match == -1 {
+			return nil, ErrConflict
+		}
+		ordered[index] = remaining[match]
+		cursor = remaining[match].BaseCommitID
+		remaining = append(remaining[:match], remaining[match+1:]...)
+	}
+	return ordered, nil
 }
 
 // PrepareForClarification reserves the feature's exact Forgejo base commit and

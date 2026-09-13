@@ -31,8 +31,8 @@ pub enum UpstreamBranchStatus {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UpstreamRemote {
-    name: String,
-    display_location: String,
+    pub(super) name: String,
+    pub(super) display_location: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -53,10 +53,10 @@ pub struct UpstreamBranchResult {
 }
 
 #[derive(Clone, Debug)]
-struct RemoteIdentity {
-    name: String,
-    display_location: String,
-    fingerprint: String,
+pub(super) struct RemoteIdentity {
+    pub(super) name: String,
+    pub(super) display_location: String,
+    pub(super) fingerprint: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -76,7 +76,7 @@ struct UpstreamPublicationReceipts {
     receipts: Vec<UpstreamPublicationReceipt>,
 }
 
-enum RemoteProbe {
+pub(super) enum RemoteProbe {
     Missing,
     Commit(String),
     Failed(UpstreamBranchStatus),
@@ -457,7 +457,7 @@ fn publish_repository(
     ))
 }
 
-fn configured_remotes(repository: &Path) -> Result<Vec<RemoteIdentity>, String> {
+pub(super) fn configured_remotes(repository: &Path) -> Result<Vec<RemoteIdentity>, String> {
     let output = Command::new("git")
         .arg("-C")
         .arg(repository)
@@ -527,7 +527,7 @@ fn choose_remote(
     Ok(None)
 }
 
-fn probe_remote_branch(repository: &Path, remote: &str, branch: &str) -> RemoteProbe {
+pub(super) fn probe_remote_branch(repository: &Path, remote: &str, branch: &str) -> RemoteProbe {
     let reference = format!("refs/heads/{branch}");
     let output = match Command::new("git")
         .arg("-C")
@@ -659,7 +659,7 @@ fn branch_result(
     }
 }
 
-fn remote_failure_detail(status: UpstreamBranchStatus) -> &'static str {
+pub(super) fn remote_failure_detail(status: UpstreamBranchStatus) -> &'static str {
     match status {
         UpstreamBranchStatus::AuthenticationRequired => {
             "System Git could not authenticate with the selected remote."
@@ -668,7 +668,7 @@ fn remote_failure_detail(status: UpstreamBranchStatus) -> &'static str {
     }
 }
 
-fn validate_remote_name(name: &str) -> Result<(), String> {
+pub(super) fn validate_remote_name(name: &str) -> Result<(), String> {
     super::validate_text("remote name", name, 256)?;
     if name.starts_with('-')
         || !name
@@ -680,7 +680,7 @@ fn validate_remote_name(name: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn validate_protected_branch(repository: &Path, branch: &str) -> Result<(), String> {
+pub(super) fn validate_protected_branch(repository: &Path, branch: &str) -> Result<(), String> {
     super::validate_text("upstream branch", branch, 256)?;
     if !branch.starts_with(BRANCH_PREFIX) || branch.len() == BRANCH_PREFIX.len() {
         return Err("upstream branch must start with commitarium/".into());

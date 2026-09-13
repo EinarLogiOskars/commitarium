@@ -52,7 +52,108 @@ Project import (host-side git):
 - `import_project(path, name, defaultBranch, recoveryPolicy) -> Project`
 - `get_project_source(projectId) -> string | null`
 
-Handoff (completed work → host):
+The trusted source record also retains whether the import came from a Git
+repository or plain folder and the exact imported default-branch commit. Those
+extra values remain native-only; the existing `get_project_source` response is
+unchanged.
+
+Project handoff (canonical project → host):
+
+- `get_project_sync_state(projectId) -> ProjectSyncState` — combine the live
+  internal default-branch head with native-only destination watermarks.
+- `synchronize_project_locally(projectId, commitMessage) ->
+  ProjectSynchronizeResult` — bring the imported Git repository or plain folder
+  to the current canonical project state.
+- `preview_project_upstream_branch(projectId, remoteName?, branchName?) ->
+  ProjectUpstreamResult` — inspect a new protected branch for the latest local
+  project sync. The default suggestion is
+  `commitarium/project-<canonical-head-prefix>`.
+- `publish_project_upstream_branch(projectId, remoteName, branchName) ->
+  ProjectUpstreamResult` — publish the exact current project-sync commit using
+  system Git and record that remote target's canonical watermark.
+
+```ts
+type CompletedProjectSyncItem = {
+  featureId: string;
+  title: string;
+  baseCommitId: string;
+  mergeCommitId: string;
+  mergedAt: string;
+};
+
+type ProjectTargetState = {
+  watermarkCommitId: string | null;
+  localCommitId: string | null;
+  unsyncedFeatures: CompletedProjectSyncItem[];
+};
+
+type ProjectSyncState = {
+  projectId: string;
+  source: { sourceType: "git" | "plain_folder"; path: string } | null;
+  canonical: { defaultBranch: string; headCommitId: string };
+  local: ProjectTargetState;
+  upstreams: Array<{
+    remoteName: string;
+    displayLocation: string; // credentials removed
+    branchName: string | null;
+    watermarkCommitId: string | null;
+    unsyncedFeatures: CompletedProjectSyncItem[];
+  }>;
+};
+
+type ProjectSynchronizeResult = {
+  projectId: string;
+  sourceType: "git" | "plain_folder";
+  sourcePath: string;
+  canonicalCommitId: string;
+  targetBranch: string | null; // Git only
+  localCommitId: string | null; // Git only
+  resultTreeId: string;
+  created: boolean;
+};
+
+type ProjectUpstreamResult = {
+  projectId: string;
+  repositoryPath: string;
+  canonicalCommitId: string;
+  localCommitId: string;
+  remotes: UpstreamRemote[];
+  selectedRemote: string | null;
+  branchName: string;
+  status: UpstreamBranchStatus;
+  created: boolean;
+  detail: string | null;
+};
+```
+
+The local watermark is the exact internal commit whose changes have reached
+that source. A fresh import starts at its recorded import commit. Each later
+sync computes only `previous watermark → current canonical head`, applies it in
+temporary storage, verifies the result, and advances the watermark only after
+success. Legacy feature-level receipts are recognized so moving to this API
+does not replay work already handed off.
+
+For a Git source, the repository must be clean and on a branch. The canonical
+change is applied with Git's three-way machinery to a disposable clone of its
+current `HEAD`, then installed as one user-authored commit without copying
+Forgejo's agent/merge history. A conflict leaves the real branch, index, and
+worktree unchanged. For a plain folder, non-ignored content must match the
+previous canonical tree; a prepared receipt is written before files change,
+the final tree is verified, ignored files are preserved, and `.git` is never
+created.
+
+Upstream preview/publication is available only for Git sources after the
+current canonical head has been synchronized locally. It uses configured
+system-Git remotes and credentials and the same creation-only `commitarium/`
+branch protection as the feature path. It never changes the checkout or updates
+an existing remote branch. Each remote receipt records its own canonical
+watermark, so the state response can show which completed work orders that
+destination has not received.
+
+The feature-level commands below remain available during frontend migration;
+new project-workspace UI should use the project-level commands.
+
+Feature handoff compatibility (one completed work order → host):
 
 - `synchronize_feature_locally(projectId, featureId, commitMessage) ->
   SynchronizeResult` — sync an approved feature into the user's local repo as

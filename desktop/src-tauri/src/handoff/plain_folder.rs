@@ -289,7 +289,7 @@ fn reject_gitlinks(repository: &Path, commit: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn initialize_folder_index(
+pub(super) fn initialize_folder_index(
     git_dir: &Path,
     folder: &Path,
     expected_tree: &str,
@@ -307,7 +307,7 @@ fn initialize_folder_index(
     )
 }
 
-fn stage_folder(git_dir: &Path, folder: &Path) -> Result<String, String> {
+pub(super) fn stage_folder(git_dir: &Path, folder: &Path) -> Result<String, String> {
     run_plain_git_checked(
         git_dir,
         folder,
@@ -317,14 +317,14 @@ fn stage_folder(git_dir: &Path, folder: &Path) -> Result<String, String> {
     plain_git_line(git_dir, folder, &["write-tree"])
 }
 
-fn snapshot_folder(folder: &Path, expected_tree: &str) -> Result<String, String> {
+pub(super) fn snapshot_folder(folder: &Path, expected_tree: &str) -> Result<String, String> {
     let temporary = tempfile::tempdir().map_err(|e| format!("create folder snapshot: {e}"))?;
     let git_dir = temporary.path().join("metadata.git");
     initialize_folder_index(&git_dir, folder, expected_tree)?;
     stage_folder(&git_dir, folder)
 }
 
-fn check_patch(git_dir: &Path, folder: &Path, patch: &Path) -> Result<(), String> {
+pub(super) fn check_patch(git_dir: &Path, folder: &Path, patch: &Path) -> Result<(), String> {
     run_checked(
         plain_git_command(git_dir, folder)
             .args(["apply", "--check", "--binary", "--whitespace=nowarn", "--"])
@@ -333,7 +333,11 @@ fn check_patch(git_dir: &Path, folder: &Path, patch: &Path) -> Result<(), String
     )
 }
 
-fn apply_folder_patch(git_dir: &Path, folder: &Path, patch: &Path) -> Result<(), String> {
+pub(super) fn apply_folder_patch(
+    git_dir: &Path,
+    folder: &Path,
+    patch: &Path,
+) -> Result<(), String> {
     run_checked(
         plain_git_command(git_dir, folder)
             .args(["apply", "--binary", "--whitespace=nowarn", "--"])
@@ -422,12 +426,32 @@ fn result_from_receipt(receipt: &FolderReceipt, created: bool) -> FolderSynchron
     }
 }
 
-fn folder_receipts_path(app: &AppHandle) -> Result<PathBuf, String> {
+pub(super) fn folder_receipts_path(app: &AppHandle) -> Result<PathBuf, String> {
     let directory = app
         .path()
         .app_data_dir()
         .map_err(|e| format!("resolve app data directory: {e}"))?;
     Ok(directory.join(FOLDER_RECEIPTS_FILE))
+}
+
+pub(super) fn completed_feature_watermark(
+    receipts_path: &Path,
+    project_id: &str,
+    feature_id: &str,
+    source_path: &Path,
+    merge_commit_id: &str,
+) -> Result<Option<String>, String> {
+    let canonical = std::fs::canonicalize(source_path)
+        .map_err(|error| format!("resolve imported source folder: {error}"))?;
+    let receipts = load_folder_receipts(receipts_path)?;
+    Ok(receipts.receipts.iter().rev().find_map(|receipt| {
+        (receipt.project_id == project_id
+            && receipt.feature_id == feature_id
+            && receipt.destination_folder_path == canonical.to_string_lossy()
+            && receipt.internal_merge_commit_id == merge_commit_id
+            && receipt.status == FolderReceiptStatus::Completed)
+            .then(|| receipt.internal_merge_commit_id.clone())
+    }))
 }
 
 fn load_folder_receipts(path: &Path) -> Result<FolderReceipts, String> {

@@ -15,11 +15,12 @@ import (
 )
 
 type recordingWorkspaceService struct {
-	projectID string
-	featureID string
-	result    workspace.Workspace
-	created   bool
-	err       error
+	projectID      string
+	featureID      string
+	result         workspace.Workspace
+	projectHandoff workspace.ProjectHandoff
+	created        bool
+	err            error
 }
 
 func (service *recordingWorkspaceService) Get(
@@ -40,6 +41,43 @@ func (service *recordingWorkspaceService) GetCompletedHandoff(
 	service.projectID = projectID
 	service.featureID = featureID
 	return service.result, service.err
+}
+
+func (service *recordingWorkspaceService) GetProjectHandoff(
+	_ context.Context,
+	projectID string,
+) (workspace.ProjectHandoff, error) {
+	service.projectID = projectID
+	return service.projectHandoff, service.err
+}
+
+func TestGetProjectHandoffReturnsCanonicalHeadAndCompletedFeatures(t *testing.T) {
+	mergedAt := time.Date(2026, time.September, 13, 10, 0, 0, 0, time.UTC)
+	service := &recordingWorkspaceService{projectHandoff: workspace.ProjectHandoff{
+		ProjectID: "prj_test", RepositoryOwner: "owner", RepositoryName: "repository",
+		DefaultBranch: "main", HeadCommitID: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+		Completed: []workspace.CompletedProjectHandoff{{
+			FeatureID: "fea_test", Title: "Completed order",
+			BaseCommitID:  "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			MergeCommitID: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", MergedAt: mergedAt,
+		}},
+	}}
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/projects/prj_test/handoff", nil)
+	recorder := httptest.NewRecorder()
+	NewWithWorkspaceService(nil, nil, nil, nil, nil, nil, service).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected %d, got %d: %s", http.StatusOK, recorder.Code, recorder.Body.String())
+	}
+	var body projectHandoffResponse
+	if err := json.NewDecoder(recorder.Body).Decode(&body); err != nil {
+		t.Fatalf("decode project handoff: %v", err)
+	}
+	if body.ProjectID != "prj_test" || body.Source.HeadCommitID != service.projectHandoff.HeadCommitID ||
+		len(body.Completed) != 1 || body.Completed[0].FeatureID != "fea_test" ||
+		!body.Completed[0].MergedAt.Equal(mergedAt) {
+		t.Fatalf("unexpected project handoff response %+v", body)
+	}
 }
 
 func (service *recordingWorkspaceService) Prepare(

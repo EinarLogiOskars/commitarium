@@ -151,10 +151,10 @@ uses its own scoped Forgejo identity for commits and structured PR work, while
 the coordinator controls workflow and verifies important results.
 
 The external handoff has two explicit trusted-host steps. First,
-Commitarium synchronizes an approved feature into the user's selected local
-repository as one clean commit using the user's configured Git identity. Second,
-the user may explicitly publish that exact commit to GitHub, GitLab, or another
-configured Git remote as a new `commitarium/<work-order-slug>` branch.
+Commitarium synchronizes the current canonical Forgejo default branch into the
+user's selected local project as one clean commit using the user's configured
+Git identity. Second, the user may explicitly publish that exact commit to
+GitHub, GitLab, or another configured Git remote as a new `commitarium/` branch.
 Users may later choose to chain the steps, but local synchronization never
 silently implies an external push. Agent authors, intermediate commits, and the
 private Forgejo audit trail remain in Forgejo rather than entering the clean
@@ -280,27 +280,30 @@ is immediately visible to the agent container, and an eventual agent edit will
 be immediately visible to the user. Each feature receives one child directory;
 the user's original upstream checkout is not mounted or changed.
 
-After an approved feature has been merged in Forgejo, its read-only handoff
-source is available at
-`GET /api/v1/projects/{projectID}/features/{featureID}/handoff`. The trusted
-desktop's `synchronize_feature_locally` command uses those exact identities to
-recreate the reviewed net change as one clean commit in the Git repository from
-which the project was imported. It uses the user's effective host Git identity,
-persists the internal-to-local commit mapping, and refuses dirty or diverged
-state. It does not copy agent commits or authors and never pushes upstream.
+After work has been merged in Forgejo, the canonical project handoff source is
+available at `GET /api/v1/projects/{projectID}/handoff`. The trusted desktop's
+`get_project_sync_state` command combines that source with private per-target
+watermarks so the UI can show which completed work orders have not reached the
+user's machine or each configured remote. `synchronize_project_locally` applies
+only the canonical change since the previous watermark to the Git repository
+from which the project was imported. It uses the user's effective host Git
+identity, produces one clean commit, and refuses dirty or conflicting state. It
+does not copy agent commits or authors and never pushes upstream.
 
-For projects imported from ordinary folders, the trusted desktop can apply the
-same exact approved change back to the original folder without creating a Git
-repository there. It first requires the non-ignored folder content to match the
-internal base, leaves ignored dependencies and build output untouched, and uses
-a durable prepared receipt so an interruption can be retried or recognized as
+For projects imported from ordinary folders, the same project-level command
+applies the accumulated canonical change without creating a Git repository
+there. It requires non-ignored content to match the previous canonical
+watermark, leaves ignored dependencies and build output untouched, and uses a
+durable prepared receipt so an interruption can be retried or recognized as
 already complete. Ambiguous or user-modified content is never overwritten.
 
-The trusted desktop can now preview configured remotes and publish the exact
-recorded local handoff commit as a new `commitarium/` branch. It uses the
+The trusted desktop can preview configured remotes and publish the exact current
+project-sync commit as a new `commitarium/` branch. It uses the
 system Git CLI and the user's existing credential helper or SSH setup, never
 checks out another branch, and atomically refuses to overwrite any existing
-remote branch. Pull-request creation remains a manual user action for now.
+remote branch. Each local/remote destination advances its own durable canonical
+watermark. Pull-request creation remains a manual user action for now. The older
+per-feature synchronization commands remain available while the UI migrates.
 
 Once a non-empty repository exists in Forgejo, associate it with a coordinator
 project:
