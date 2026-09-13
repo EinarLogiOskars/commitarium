@@ -1046,7 +1046,9 @@ func (service *Service) verifyImplementationAudit(
 
 // VerifyImplementationReview confirms the reviewer examined the same clean
 // commit that the lead published and that the claimed formal Forgejo review
-// exists with the expected author, decision, and exact audit body.
+// exists with the expected author, decision, attempt-owned marker, and review
+// section. The Forgejo audit may be more detailed than the concise session
+// summary returned to the coordinator.
 func (service *Service) VerifyImplementationReview(
 	ctx context.Context,
 	projectID string,

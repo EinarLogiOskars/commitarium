@@ -818,9 +818,12 @@ func (client *Client) VerifyPullRequestReview(
 			"%w: pull request review response is invalid JSON", project.ErrForgejoUnavailable,
 		)
 	}
-	wantBody := spec.PublicationMarker + "\n\n## Review\n\n" + spec.Summary
+	reviewPrefix := spec.PublicationMarker + "\n\n## Review\n\n"
 	if review.ID != spec.ReviewID || review.CommitID != spec.HeadCommitID ||
-		review.State != spec.ExpectedState || review.Stale || review.Body != wantBody ||
+		review.State != spec.ExpectedState || review.Stale ||
+		strings.Count(review.Body, spec.PublicationMarker) != 1 ||
+		!strings.HasPrefix(review.Body, reviewPrefix) ||
+		strings.TrimSpace(strings.TrimPrefix(review.Body, reviewPrefix)) == "" ||
 		!strings.EqualFold(strings.TrimSpace(review.User.Login), spec.ExpectedAuthor) {
 		return workspace.PullRequest{}, workspace.ErrPullRequestConflict
 	}

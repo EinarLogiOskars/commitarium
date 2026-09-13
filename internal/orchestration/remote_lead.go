@@ -3854,10 +3854,10 @@ func implementationReviewInstructions(
 		"implementation is correct and sufficiently tested, tell the lead that you think the exact revision is " +
 		"ready to merge and submit one review with event APPROVE. Use the worker-provided " +
 		"Forgejo URL and token-file environment variables; never print, log, commit, or put the token in a URL. " +
-		"Set commit_id on the review to the exact commit below. The review body must be exactly the marker below, " +
-		"a blank line, '## Review', another blank line, and your concise structured findings or approval summary. " +
+		"Set commit_id on the review to the exact commit below. The review body must begin with exactly the marker below, " +
+		"a blank line, '## Review', and another blank line, followed by your structured findings or approval. " +
 		"Check existing reviews for the marker before posting so recovery never duplicates it. Return action " +
-		"'approved' or 'changes_requested' with that same summary, exact commit ID, PR number, and returned review ID. " +
+		"'approved' or 'changes_requested' with a concise session summary, exact commit ID, PR number, and returned review ID. " +
 		"If state is contradictory, the exact revision is unavailable, or you cannot safely establish whether a " +
 		"review was posted, return action 'blocked', leave commit_id empty and review_id zero, and explain why. " +
 		"Durable Git, Forgejo, and coordinator state are authoritative over conversational memory.\n\n" +

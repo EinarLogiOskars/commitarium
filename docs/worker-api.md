@@ -73,7 +73,8 @@ contracts:
   commit and pull-request identities it published.
 - `implementation_reviewer` makes the reviewer return either a blocker or the
   exact commit, pull request, formal review ID, and approval/changes-requested
-  decision it published.
+  decision it published. Its `summary` is the concise session result and may be
+  shorter than the structured findings in the marker-owned Forgejo review.
 - `implementation_lead_readiness` makes the lead explicitly return a merge
   green light, an unresolved concern, or a blocker after an approved review.
 - `intervention` lets either the lead or reviewer answer a user at a safe

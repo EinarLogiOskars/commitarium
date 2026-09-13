@@ -80,11 +80,19 @@ export function InterveneBar({
     }
   };
 
-  const control = async (fn: (id: string, key: string) => Promise<Run>) => {
+  const control = async (
+    fn: (id: string, key: string) => Promise<Run>,
+    reportPersistentBlocker = false,
+  ) => {
     setBusy("control");
     setError(null);
     try {
-      await fn(run.id, crypto.randomUUID());
+      const changed = await fn(run.id, crypto.randomUUID());
+      if (reportPersistentBlocker && changed.wait_kind === "blocker") {
+        setError(
+          `Re-check completed, but the run is still blocked. ${changed.reason ?? "The durable state is still inconsistent."}`,
+        );
+      }
       onChanged();
     } catch (e) {
       setError(controlError(e));
@@ -123,7 +131,7 @@ export function InterveneBar({
           {blocked ? (
             <button
               className="primary"
-              onClick={() => void control(recoverRun)}
+              onClick={() => void control(recoverRun, true)}
               disabled={busy != null}
               title="Re-check the durable state; continues if the last turn is confirmable"
             >
