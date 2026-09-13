@@ -76,6 +76,88 @@ export const importProject = (
 export const getProjectSource = (projectId: string): Promise<string | null> =>
   invoke("get_project_source", { projectId });
 
+// --- Handoff: completed work → host (see docs/desktop-ipc.md) ---
+// NOTE: SynchronizeResult / FolderSynchronizeResult serialize snake_case
+// (no serde rename on the Rust structs); the upstream types are camelCase.
+
+export interface SynchronizeResult {
+  project_id: string;
+  feature_id: string;
+  repository_path: string;
+  target_branch: string;
+  local_commit_id: string;
+  created: boolean;
+}
+
+export interface FolderSynchronizeResult {
+  project_id: string;
+  feature_id: string;
+  folder_path: string;
+  result_tree_id: string;
+  created: boolean;
+}
+
+export type UpstreamBranchStatus =
+  | "selection_required"
+  | "ready"
+  | "published"
+  | "already_published"
+  | "branch_conflict"
+  | "authentication_required"
+  | "remote_unavailable";
+
+export interface UpstreamRemote {
+  name: string;
+  displayLocation: string; // credentials removed
+}
+
+export interface UpstreamBranchResult {
+  projectId: string;
+  featureId: string;
+  repositoryPath: string;
+  localCommitId: string;
+  remotes: UpstreamRemote[];
+  selectedRemote?: string;
+  branchName: string;
+  status: UpstreamBranchStatus;
+  created: boolean;
+  detail?: string;
+}
+
+/** Sync an approved feature into the user's local git repo as one clean commit. */
+export const synchronizeFeatureLocally = (
+  projectId: string,
+  featureId: string,
+  commitMessage: string,
+): Promise<SynchronizeResult> =>
+  invoke("synchronize_feature_locally", { projectId, featureId, commitMessage });
+
+/** Sync an approved feature into a non-git folder. */
+export const synchronizeFeatureToFolder = (
+  projectId: string,
+  featureId: string,
+): Promise<FolderSynchronizeResult> =>
+  invoke("synchronize_feature_to_folder", { projectId, featureId });
+
+/** Read-only probe: list remotes, suggest a branch, check the selected branch. */
+export const previewUpstreamBranch = (
+  projectId: string,
+  featureId: string,
+  workOrderName: string,
+  remoteName?: string,
+  branchName?: string,
+): Promise<UpstreamBranchResult> =>
+  invoke("preview_upstream_branch", { projectId, featureId, workOrderName, remoteName, branchName });
+
+/** Push the exact clean local handoff commit to a new remote branch. */
+export const publishUpstreamBranch = (
+  projectId: string,
+  featureId: string,
+  remoteName: string,
+  branchName: string,
+): Promise<UpstreamBranchResult> =>
+  invoke("publish_upstream_branch", { projectId, featureId, remoteName, branchName });
+
 // --- Provider authentication / profiles (see docs/desktop-ipc.md) ---
 
 export type ProfileStatus =
