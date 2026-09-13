@@ -2,6 +2,8 @@ import { useCallback, useEffect, useState } from "react";
 import { listFeatures, listFeatureRuns } from "../api/features";
 import { getRun } from "../api/runs";
 import { currentPhaseIndex, PHASE_LABELS, PHASES } from "./PhaseStepper";
+import { RepositoryCard } from "./RepositoryCard";
+import { ProjectSyncCard } from "./ProjectSyncCard";
 import { WORK } from "../vocab";
 import type { Feature, Project, Run, WaitKind } from "../api/types";
 
@@ -154,13 +156,8 @@ export function ProjectDashboard({
         </section>
       )}
 
-      <section className="panel dash__soon">
-        <p className="muted note">
-          Repository overview and machine-sync status are coming here — they need
-          the matching backend slices. Handoff will move to this workspace as a
-          project-level sync once that lands.
-        </p>
-      </section>
+      {repo && <ProjectSyncCard projectId={project.id} />}
+      {repo && <RepositoryCard projectId={project.id} />}
     </div>
   );
 }

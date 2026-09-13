@@ -7,7 +7,6 @@ import { PlanningView } from "./PlanningView";
 import { ImplementationView } from "./ImplementationView";
 import { ReviewView } from "./ReviewView";
 import { MergeView } from "./MergeView";
-import { HandoffPanel } from "./HandoffPanel";
 import { PhaseStepper, currentPhaseIndex } from "./PhaseStepper";
 import { phaseIntervals, type Interval } from "./phaseWindows";
 import { WORK } from "../vocab";
@@ -121,10 +120,6 @@ export function FeatureView({
       </section>
 
       {body(viewed, feature, projectId, hasRepo, run, live, intervals, scoped, load)}
-
-      {feature.state === "completed" && (
-        <HandoffPanel projectId={projectId} featureId={feature.id} featureTitle={feature.title} />
-      )}
     </div>
   );
 }
