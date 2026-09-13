@@ -1,5 +1,7 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
+  getProjectSource,
+  inspectFolder,
   synchronizeFeatureLocally,
   synchronizeFeatureToFolder,
   previewUpstreamBranch,
@@ -8,6 +10,8 @@ import {
   type FolderSynchronizeResult,
   type UpstreamBranchResult,
 } from "../ipc";
+
+type SourceKind = "loading" | "git" | "folder" | "none";
 
 // Post-completion handoff: bring the merged work order out of the internal
 // forge onto the user's machine — as a clean commit in their local repo, a
@@ -22,15 +26,51 @@ export function HandoffPanel({
   featureId: string;
   featureTitle: string;
 }) {
+  // Probe the mapped local source so we only offer the actions that apply:
+  // git repo → sync + push; plain folder → write into the folder.
+  const [kind, setKind] = useState<SourceKind>("loading");
+  useEffect(() => {
+    let active = true;
+    setKind("loading");
+    void getProjectSource(projectId)
+      .then(async (src) => {
+        if (!active) return;
+        if (!src) {
+          setKind("none");
+          return;
+        }
+        try {
+          const info = await inspectFolder(src);
+          if (active) setKind(info.is_git_repo ? "git" : "folder");
+        } catch {
+          if (active) setKind("git"); // default to the git path if the probe fails
+        }
+      })
+      .catch(() => active && setKind("git"));
+    return () => {
+      active = false;
+    };
+  }, [projectId]);
+
   return (
     <section className="panel handoff">
       <h2>Hand off to your machine</h2>
       <p className="muted">
         The work order is merged in the internal forge. Bring it onto your computer.
       </p>
-      <LocalSync projectId={projectId} featureId={featureId} defaultMessage={featureTitle} />
-      <Push projectId={projectId} featureId={featureId} workOrderName={featureTitle} />
-      <FolderSync projectId={projectId} featureId={featureId} />
+      {kind === "loading" && <p className="muted">Checking your local source…</p>}
+      {kind === "none" && (
+        <p className="muted note">
+          No local source is mapped for this project, so it can't be synced to your machine.
+        </p>
+      )}
+      {kind === "git" && (
+        <>
+          <LocalSync projectId={projectId} featureId={featureId} defaultMessage={featureTitle} />
+          <Push projectId={projectId} featureId={featureId} workOrderName={featureTitle} />
+        </>
+      )}
+      {kind === "folder" && <FolderSync projectId={projectId} featureId={featureId} />}
     </section>
   );
 }
@@ -217,11 +257,13 @@ function FolderSync({ projectId, featureId }: { projectId: string; featureId: st
   };
 
   return (
-    <details className="handoff__folder">
-      <summary>This project is a plain folder (not a git repo)</summary>
-      <p className="muted">Write the result straight into the folder instead.</p>
+    <div className="handoff__section">
+      <h3>Sync to your folder</h3>
+      <p className="muted">
+        This project's source is a plain folder (not a git repo). Write the result straight into it.
+      </p>
       {error && <div className="banner banner--error">{error}</div>}
-      <button className="ghost" onClick={() => void run()} disabled={busy}>
+      <button className="primary" onClick={() => void run()} disabled={busy}>
         {busy ? "Writing…" : "Sync to folder"}
       </button>
       {result && (
@@ -229,6 +271,6 @@ function FolderSync({ projectId, featureId }: { projectId: string; featureId: st
           {result.created ? `✓ Wrote to ${result.folder_path}.` : `Already in sync — ${result.folder_path}.`}
         </p>
       )}
-    </details>
+    </div>
   );
 }
