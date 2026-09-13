@@ -9,7 +9,7 @@
 //! into the internal forge. The user's folder is never touched, and nothing is
 //! pushed to any external remote.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -69,7 +69,11 @@ pub(crate) fn is_repo_root(dir: &Path) -> bool {
         return false;
     }
     match git_line(dir, &["rev-parse", "--show-toplevel"]) {
-        Some(top) => Path::new(&top) == dir,
+        Some(top) => {
+            let expected = std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
+            let actual = std::fs::canonicalize(&top).unwrap_or_else(|_| PathBuf::from(top));
+            actual == expected
+        }
         None => false,
     }
 }
@@ -147,7 +151,7 @@ pub fn inspect_folder(path: String) -> Result<FolderInfo, String> {
 
 /// Produce a Git bundle for `dir` at `bundle_path`, choosing repo vs snapshot.
 /// Returns the default branch the bundle should declare.
-fn build_bundle(dir: &Path, default_branch: &str, bundle_path: &Path) -> Result<(), String> {
+fn build_bundle(dir: &Path, default_branch: &str, bundle_path: &Path) -> Result<String, String> {
     let bundle_str = bundle_path.to_str().ok_or("bundle path not UTF-8")?;
 
     if is_repo_root(dir) {
@@ -169,7 +173,8 @@ fn build_bundle(dir: &Path, default_branch: &str, bundle_path: &Path) -> Result<
                 String::from_utf8_lossy(&out.stderr).trim()
             ));
         }
-        return Ok(());
+        return git_line(dir, &["rev-parse", &format!("{default_branch}^{{commit}}")])
+            .ok_or_else(|| format!("default branch {default_branch} does not exist locally"));
     }
 
     // Plain folder: snapshot into a temp repo without touching the folder.
@@ -186,12 +191,19 @@ fn build_bundle(dir: &Path, default_branch: &str, bundle_path: &Path) -> Result<
         if out.status.success() {
             Ok(())
         } else {
-            Err(format!("{what}: {}", String::from_utf8_lossy(&out.stderr).trim()))
+            Err(format!(
+                "{what}: {}",
+                String::from_utf8_lossy(&out.stderr).trim()
+            ))
         }
     };
 
     check(
-        run(&["-c", &format!("init.defaultBranch={default_branch}"), "init"])?,
+        run(&[
+            "-c",
+            &format!("init.defaultBranch={default_branch}"),
+            "init",
+        ])?,
         "git init",
     )?;
     check(run(&["add", "-A"])?, "git add")?;
@@ -208,8 +220,19 @@ fn build_bundle(dir: &Path, default_branch: &str, bundle_path: &Path) -> Result<
         ])?,
         "git commit",
     )?;
-    check(run(&["bundle", "create", bundle_str, "--all"])?, "git bundle")?;
-    Ok(())
+    check(
+        run(&["bundle", "create", bundle_str, "--all"])?,
+        "git bundle",
+    )?;
+    let head = run(&["rev-parse", "HEAD"])?;
+    if !head.status.success() {
+        return Err(format!(
+            "resolve plain-folder import commit: {}",
+            String::from_utf8_lossy(&head.stderr).trim()
+        ));
+    }
+    let commit = String::from_utf8_lossy(&head.stdout).trim().to_string();
+    Ok(commit)
 }
 
 fn slugify(input: &str) -> String {
@@ -240,7 +263,11 @@ fn import_id(name: &str, abs_path: &Path) -> String {
     abs_path.hash(&mut h);
     nanos.hash(&mut h);
     let slug = slugify(name);
-    let slug = if slug.is_empty() { "project".into() } else { slug };
+    let slug = if slug.is_empty() {
+        "project".into()
+    } else {
+        slug
+    };
     format!("{slug}-{:016x}", h.finish())
 }
 
@@ -261,7 +288,12 @@ pub async fn import_project(
 
     let bundle_dir = tempfile::tempdir().map_err(|e| format!("temp dir: {e}"))?;
     let bundle_path = bundle_dir.path().join("project.bundle");
-    build_bundle(&dir, &default_branch, &bundle_path)?;
+    let import_commit_id = build_bundle(&dir, &default_branch, &bundle_path)?;
+    let source_kind = if is_repo_root(&dir) {
+        "git"
+    } else {
+        "plain_folder"
+    };
 
     let bytes = std::fs::read(&bundle_path).map_err(|e| format!("read bundle: {e}"))?;
     let metadata = json!({
@@ -272,10 +304,12 @@ pub async fn import_project(
     .to_string();
 
     let id = import_id(&name, &abs);
-    let form = reqwest::multipart::Form::new().text("metadata", metadata).part(
-        "bundle",
-        reqwest::multipart::Part::bytes(bytes).file_name("project.bundle"),
-    );
+    let form = reqwest::multipart::Form::new()
+        .text("metadata", metadata)
+        .part(
+            "bundle",
+            reqwest::multipart::Part::bytes(bytes).file_name("project.bundle"),
+        );
 
     let client = reqwest::Client::new();
     let resp = client
@@ -294,7 +328,11 @@ pub async fn import_project(
                 return Err(msg.to_string());
             }
         }
-        return Err(format!("import failed (HTTP {}): {}", status.as_u16(), body));
+        return Err(format!(
+            "import failed (HTTP {}): {}",
+            status.as_u16(),
+            body
+        ));
     }
 
     let project: serde_json::Value =
@@ -302,7 +340,15 @@ pub async fn import_project(
 
     // Retain the source path in trusted local state for the future handoff.
     if let Some(pid) = project.get("id").and_then(|v| v.as_str()) {
-        if let Err(e) = record_source(&app, pid, abs.to_string_lossy().as_ref()) {
+        if let Err(e) = record_source(
+            &app,
+            pid,
+            ProjectSource {
+                path: abs.to_string_lossy().into_owned(),
+                source_type: source_kind.to_string(),
+                import_commit_id: Some(import_commit_id),
+            },
+        ) {
             eprintln!("warning: could not record project source path: {e}");
         }
     }
@@ -319,13 +365,24 @@ fn sources_path(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(dir.join("project-sources.json"))
 }
 
-fn record_source(app: &AppHandle, project_id: &str, source_path: &str) -> Result<(), String> {
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+pub(crate) struct ProjectSource {
+    pub(crate) path: String,
+    pub(crate) source_type: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) import_commit_id: Option<String>,
+}
+
+fn record_source(app: &AppHandle, project_id: &str, source: ProjectSource) -> Result<(), String> {
     let path = sources_path(app)?;
     let mut map: serde_json::Map<String, serde_json::Value> = match std::fs::read_to_string(&path) {
         Ok(s) => serde_json::from_str(&s).unwrap_or_default(),
         Err(_) => serde_json::Map::new(),
     };
-    map.insert(project_id.to_string(), json!(source_path));
+    map.insert(
+        project_id.to_string(),
+        serde_json::to_value(source).map_err(|e| format!("encode project source: {e}"))?,
+    );
     std::fs::write(
         &path,
         serde_json::to_string_pretty(&serde_json::Value::Object(map)).unwrap_or_default(),
@@ -336,13 +393,82 @@ fn record_source(app: &AppHandle, project_id: &str, source_path: &str) -> Result
 /// Look up the on-disk source path recorded for a project, if any.
 #[tauri::command]
 pub fn get_project_source(app: AppHandle, project_id: String) -> Result<Option<String>, String> {
-    let path = sources_path(&app)?;
+    Ok(get_project_source_record(&app, &project_id)?.map(|source| source.path))
+}
+
+pub(crate) fn get_project_source_record(
+    app: &AppHandle,
+    project_id: &str,
+) -> Result<Option<ProjectSource>, String> {
+    let path = sources_path(app)?;
     let map: serde_json::Map<String, serde_json::Value> = match std::fs::read_to_string(&path) {
         Ok(s) => serde_json::from_str(&s).unwrap_or_default(),
         Err(_) => return Ok(None),
     };
-    Ok(map
-        .get(&project_id)
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string()))
+    let Some(value) = map.get(project_id) else {
+        return Ok(None);
+    };
+    if let Some(path) = value.as_str() {
+        let source_type = if is_repo_root(Path::new(path)) {
+            "git"
+        } else {
+            "plain_folder"
+        };
+        return Ok(Some(ProjectSource {
+            path: path.to_string(),
+            source_type: source_type.to_string(),
+            import_commit_id: None,
+        }));
+    }
+    let source: ProjectSource = serde_json::from_value(value.clone())
+        .map_err(|e| format!("parse trusted project source: {e}"))?;
+    if source.source_type != "git" && source.source_type != "plain_folder" {
+        return Err("trusted project source has an unsupported type".into());
+    }
+    Ok(Some(source))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn checked(dir: &Path, args: &[&str]) {
+        let output = git(dir, args).expect("run Git");
+        assert!(
+            output.status.success(),
+            "Git failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[test]
+    fn bundles_report_the_exact_import_commit() {
+        let root = tempfile::tempdir().expect("temp root");
+        let repository = root.path().join("repository");
+        std::fs::create_dir(&repository).expect("repository dir");
+        checked(&repository, &["init", "--initial-branch=main"]);
+        checked(&repository, &["config", "user.name", "Importer"]);
+        checked(
+            &repository,
+            &["config", "user.email", "import@example.test"],
+        );
+        std::fs::write(repository.join("README.md"), "repo\n").expect("repo file");
+        checked(&repository, &["add", "README.md"]);
+        checked(&repository, &["commit", "-m", "Initial"]);
+        let expected = git_line(&repository, &["rev-parse", "HEAD"]).unwrap();
+        let bundle = root.path().join("repository.bundle");
+        assert_eq!(
+            build_bundle(&repository, "main", &bundle).unwrap(),
+            expected
+        );
+
+        let folder = root.path().join("folder");
+        std::fs::create_dir(&folder).expect("folder dir");
+        std::fs::write(folder.join("README.md"), "folder\n").expect("folder file");
+        let folder_bundle = root.path().join("folder.bundle");
+        let commit = build_bundle(&folder, "main", &folder_bundle).unwrap();
+        assert!(matches!(commit.len(), 40 | 64));
+        assert!(commit.bytes().all(|byte| byte.is_ascii_hexdigit()));
+        assert!(!folder.join(".git").exists());
+    }
 }

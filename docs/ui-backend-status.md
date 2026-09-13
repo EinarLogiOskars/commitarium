@@ -272,6 +272,30 @@ in backend event payloads; the UI maps factual activity to presentation.
 - The UI never supplies a commit or PR identity to merge. The backend uses the
   exact revision pinned by mutual agent approval.
 
+### Project-level synchronization
+
+- `GET /api/v1/projects/{projectID}/handoff` is settled for retrieving the live
+  canonical default-branch head and the ordered completed work orders that
+  contributed to it. It is read-only and contains no host path or upstream
+  identity.
+- `get_project_sync_state` is settled for the project workspace. It returns the
+  trusted source type/path, canonical head, local watermark, configured Git
+  remote watermarks, and an `unsyncedFeatures` list for each destination.
+- `synchronize_project_locally` is the preferred handoff action. A Git import
+  receives the accumulated canonical change as one clean commit on its current
+  clean branch; a plain-folder import receives the verified canonical files
+  without gaining `.git`. Exact retries are no-ops and conflicts leave the real
+  destination unchanged.
+- `preview_project_upstream_branch` and
+  `publish_project_upstream_branch` expose the same protected new-branch states
+  as the settled feature path, but publish the current project-level local
+  commit and advance only that remote's watermark.
+- The UI can calculate “N work orders behind” as `unsyncedFeatures.length` and
+  show those returned titles directly. It should never compare or parse commit
+  IDs itself.
+- Existing feature-level sync commands remain settled compatibility surfaces
+  until the UI has moved over; do not remove them yet.
+
 ### Completed handoff source
 
 - For a `completed` feature, retrieve the exact internal source identities with

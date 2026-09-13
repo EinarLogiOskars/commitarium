@@ -14,6 +14,7 @@ this API beyond the host loopback interface is unsupported.
 | `GET` | `/api/v1/projects` | List projects for switching/selecting |
 | `GET` | `/api/v1/projects/{projectID}` | Retrieve a project |
 | `GET` | `/api/v1/projects/{projectID}/repository-overview` | Read the internal repository's default-branch head, root tree, and optional README |
+| `GET` | `/api/v1/projects/{projectID}/handoff` | Describe the canonical project head and ordered completed work for trusted-host synchronization |
 | `PUT` | `/api/v1/projects/{projectID}/dialogue-limits` | Replace planning and implementation-review round limits |
 | `PUT` | `/api/v1/projects/{projectID}/agent-providers` | Select the lead and reviewer providers for future runs |
 | `PUT` | `/api/v1/projects/{projectID}/merge-policy` | Select user-approved or automatic merge for future runs |
@@ -509,6 +510,49 @@ coordinator's durable recording time, not Forgejo's server-side creation time. A
 separate planning action assigns the lead to this checkout.
 
 ## Reading a completed handoff source
+
+### Project-level canonical handoff
+
+`GET /api/v1/projects/{projectID}/handoff` is the project-level source used by
+the trusted desktop to bring the original local project up to the current
+internal default branch:
+
+```json
+{
+  "project_id": "prj_example",
+  "source": {
+    "repository": {"owner": "commitarium", "name": "example"},
+    "default_branch": "main",
+    "head_commit_id": "fedcba9876543210fedcba9876543210fedcba98"
+  },
+  "completed_features": [
+    {
+      "feature_id": "fea_example",
+      "title": "Document local setup",
+      "base_commit_id": "0123456789abcdef0123456789abcdef01234567",
+      "merge_commit_id": "fedcba9876543210fedcba9876543210fedcba98",
+      "merged_at": "2026-09-13T14:00:00Z"
+    }
+  ]
+}
+```
+
+Completed work orders are ordered by their exact base-to-merge Git chain ending
+at the current default-branch head. Missing, duplicated, or disconnected links
+are treated as contradictory state. The ordered identities let the desktop list
+the work orders after a destination's private sync watermark. The current head
+is read from Forgejo on every request; completed feature identities come from
+durable coordinator state. The desktop must fetch and verify the named Git
+objects before writing locally because the HTTP response alone does not prove
+that Forgejo still contains them.
+
+This read-only route never receives a host path, local commit, remote URL, or
+credential. An unknown project returns `404 project_not_found`; an unbound
+project returns `409 forgejo_repository_not_bound`; contradictory completed
+state returns `409 handoff_conflict`; and an unreadable Forgejo default branch
+returns `503 repository_unavailable`.
+
+### Feature-level compatibility handoff
 
 After the approved Forgejo revision has been merged and the feature is
 `completed`, the trusted desktop can retrieve the exact source identities for a

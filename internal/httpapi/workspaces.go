@@ -76,6 +76,68 @@ type completedHandoffPullRequestResponse struct {
 	URL    string `json:"url"`
 }
 
+type projectHandoffResponse struct {
+	ProjectID string                       `json:"project_id"`
+	Source    projectHandoffSourceResponse `json:"source"`
+	Completed []projectHandoffItemResponse `json:"completed_features"`
+}
+
+type projectHandoffSourceResponse struct {
+	Repository    repositoryRef `json:"repository"`
+	DefaultBranch string        `json:"default_branch"`
+	HeadCommitID  string        `json:"head_commit_id"`
+}
+
+type projectHandoffItemResponse struct {
+	FeatureID     string    `json:"feature_id"`
+	Title         string    `json:"title"`
+	BaseCommitID  string    `json:"base_commit_id"`
+	MergeCommitID string    `json:"merge_commit_id"`
+	MergedAt      time.Time `json:"merged_at"`
+}
+
+func (api *API) getProjectHandoffHandler(w http.ResponseWriter, r *http.Request) {
+	projectID := r.PathValue("projectID")
+	handoff, err := api.workspaces.GetProjectHandoff(r.Context(), projectID)
+	if err != nil {
+		switch {
+		case errors.Is(err, project.ErrNotFound):
+			writeError(w, http.StatusNotFound, "project_not_found", "project not found")
+		case errors.Is(err, workspace.ErrProjectRepositoryNotBound):
+			writeError(w, http.StatusConflict, "forgejo_repository_not_bound", "project has no internal Forgejo repository")
+		case errors.Is(err, workspace.ErrConflict), errors.Is(err, workspace.ErrNotFound):
+			writeError(w, http.StatusConflict, "handoff_conflict", "completed work and its durable Forgejo identities disagree; user review is required")
+		case errors.Is(err, workspace.ErrBranchNotFound), errors.Is(err, project.ErrForgejoRepositoryNotReady),
+			errors.Is(err, project.ErrForgejoUnavailable):
+			writeError(w, http.StatusServiceUnavailable, "repository_unavailable", "the internal repository default branch is unavailable")
+		default:
+			log.Printf("get project handoff for %q: %v", projectID, err)
+			writeError(w, http.StatusInternalServerError, "internal_error", "internal server error")
+		}
+		return
+	}
+	completed := make([]projectHandoffItemResponse, 0, len(handoff.Completed))
+	for _, item := range handoff.Completed {
+		completed = append(completed, projectHandoffItemResponse{
+			FeatureID: item.FeatureID, Title: item.Title,
+			BaseCommitID: item.BaseCommitID, MergeCommitID: item.MergeCommitID,
+			MergedAt: item.MergedAt,
+		})
+	}
+	response := projectHandoffResponse{
+		ProjectID: handoff.ProjectID,
+		Source: projectHandoffSourceResponse{
+			Repository:    repositoryRef{Owner: handoff.RepositoryOwner, Name: handoff.RepositoryName},
+			DefaultBranch: handoff.DefaultBranch, HeadCommitID: handoff.HeadCommitID,
+		},
+		Completed: completed,
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		log.Printf("encode project handoff response: %v", err)
+	}
+}
+
 func (api *API) getWorkspaceHandler(w http.ResponseWriter, r *http.Request) {
 	projectID := r.PathValue("projectID")
 	featureID := r.PathValue("id")

@@ -7,6 +7,7 @@
 //! It never pushes upstream and never gives host Git credentials to a container.
 
 pub(crate) mod plain_folder;
+pub(crate) mod project;
 pub(crate) mod upstream;
 
 use serde::{Deserialize, Serialize};
