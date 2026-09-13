@@ -206,7 +206,9 @@ Safe UI capabilities:
   `Idempotency-Key`, re-checks only the exact durable attempt for the run's
   current phase, and never launches a replacement provider attempt. A
   successful reconciliation follows the run's autonomy and merge policies; an
-  unconfirmable attempt remains a blocker with its existing `reason`.
+  unconfirmable attempt remains a blocker with its existing `reason`. Because
+  that is a successful HTTP response with unchanged run state, the UI should
+  explicitly report that the re-check completed but the blocker remains.
 - Read `intervention_targets` from every run. Each entry contains the stable
   `role` (`lead` or `reviewer`) and `session_id` for a non-terminal persistent
   agent conversation. The reviewer appears only after its session exists;

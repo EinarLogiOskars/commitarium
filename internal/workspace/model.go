@@ -333,8 +333,10 @@ type ImplementationPublicationSpec struct {
 	HeadCommitID          string
 }
 
-// ReviewPublicationSpec describes the exact Forgejo review the coordinator
-// expects after an independent reviewer has inspected one immutable commit.
+// ReviewPublicationSpec describes the exact Forgejo review identity and
+// structure expected after an independent reviewer inspects one immutable
+// commit. Summary is the concise provider/session result; the review's audit
+// body may contain more detailed findings after the marker and heading.
 type ReviewPublicationSpec struct {
 	Number                int64
 	ReviewID              int64

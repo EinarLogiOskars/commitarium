@@ -1195,14 +1195,17 @@ commit and PR identities, and a retry-stable audit marker. It inspects Git HEAD,
 status, the baseline diff, and the exact PR head before deciding. It must not
 modify tracked files, commit, push, alter the PR body, or merge. It posts one
 formal Forgejo review using `APPROVE` or `REQUEST_CHANGES`, with the exact commit
-ID and a body consisting of the hidden marker followed by one concise `Review`
-section. Conversation messages are not copied to Forgejo.
+ID and a body beginning with the hidden attempt marker followed by one non-empty
+`Review` section. The review may contain detailed audit findings; conversation
+messages are not copied to Forgejo.
 
 The `implementation_reviewer` output contract returns `approved`,
 `changes_requested`, or `blocked`. Successful review publication includes the
 exact commit ID, PR number, and Forgejo review ID. The coordinator fetches that
 exact review and verifies the open draft PR head, accepted plan, clean checkout,
-review author, commit, decision, non-stale state, and exact body. Approval does
+review author, commit, decision, non-stale state, unique attempt marker, and
+required review-section structure. The concise session summary may differ from
+the richer Forgejo audit body. Approval does
 not finish the workflow by itself: it resumes the same lead provider
 conversation for an explicit readiness decision against that exact commit.
 

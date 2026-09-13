@@ -27,6 +27,7 @@ export function ProjectDashboard({
   const [features, setFeatures] = useState<Feature[] | null>(null);
   const [runs, setRuns] = useState<Record<string, Run>>({});
   const [error, setError] = useState<string | null>(null);
+  const [recoveryNotice, setRecoveryNotice] = useState<string | null>(null);
   const [recovering, setRecovering] = useState<string | null>(null);
 
   const poll = useCallback(async () => {
@@ -65,8 +66,12 @@ export function ProjectDashboard({
   const recover = async (runId: string) => {
     setRecovering(runId);
     setError(null);
+    setRecoveryNotice(null);
     try {
-      await recoverRun(runId, crypto.randomUUID());
+      const recovered = await recoverRun(runId, crypto.randomUUID());
+      if (recovered.wait_kind === "blocker") {
+        setRecoveryNotice(`Re-check completed, but the run is still blocked. ${recovered.reason ?? "The durable state is still inconsistent."}`);
+      }
       await poll();
     } catch (e) {
       setError(String(e));
@@ -107,6 +112,7 @@ export function ProjectDashboard({
       </section>
 
       {error && <div className="banner banner--error">{error}</div>}
+      {recoveryNotice && <div className="banner">{recoveryNotice}</div>}
 
       {attention.length > 0 && (
         <section className="panel">

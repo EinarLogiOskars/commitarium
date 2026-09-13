@@ -49,8 +49,10 @@ the reported clean commit, remote branch, PR head, agreed plan, summary, and
 author all match, moves the feature to `reviewing`, and immediately resumes the
 persistent reviewer in its separate worker container. The reviewer inspects the
 exact commit, posts one formal Forgejo approval or changes-requested review, and
-returns its review ID. The coordinator verifies that exact review, commit,
-decision, body, and author. Approval resumes the original lead for a final
+returns its review ID and a concise session summary. The coordinator verifies
+that exact review, commit, decision, author, unique attempt marker, and required
+review-section structure; the Forgejo audit may contain richer findings than
+the session summary. Approval resumes the original lead for a final
 readiness decision against that exact revision. The lead posts a structured
 `Merge readiness` PR comment and either gives the green light or raises a
 remaining concern. Only a verified green light advances the feature to
@@ -634,7 +636,8 @@ Forgejo review whose body contains a retry-stable hidden marker and a concise
 `Review` section, using either `APPROVE` or `REQUEST_CHANGES`. Its structured
 result includes the exact commit, PR number, and Forgejo review ID. The
 coordinator fetches that exact review and verifies its author, commit, decision,
-body, current PR head, and clean checkout. An approval resumes the lead, which
+attempt-owned marker, review-section structure, current PR head, and clean
+checkout. An approval resumes the lead, which
 inspects that exact revision and posts one marked `Merge readiness` comment.
 Only the lead's structured green light advances the feature to
 `ready_to_merge` and waits immediately before the later merge gate; a stated
