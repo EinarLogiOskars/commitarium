@@ -1137,6 +1137,15 @@ button.primary {
   padding: 2px 0 2px 10px;
   border-left: 2px solid color-mix(in srgb, var(--accent) 30%, var(--border));
   margin: 2px 0;
+  align-self: flex-start;
+  max-width: 85%;
+}
+.narration--reviewer {
+  align-self: flex-end;
+  border-left: none;
+  border-right: 2px solid color-mix(in srgb, var(--accent) 30%, var(--border));
+  padding: 2px 10px 2px 0;
+  text-align: right;
 }
 .narration__who {
   font-size: 10px;
@@ -1155,6 +1164,22 @@ button.primary {
 /* Collapsible activity summary in a phase transcript. */
 .activity-group {
   margin: 6px 0;
+  align-self: flex-start;
+  max-width: 85%;
+}
+.activity-group--reviewer {
+  align-self: flex-end;
+}
+.activity-group--reviewer .activity-group__head {
+  flex-direction: row-reverse;
+}
+.activity-group--reviewer .activity-group__items {
+  margin-left: 0;
+  margin-right: 16px;
+  padding-left: 0;
+  padding-right: 10px;
+  border-left: none;
+  border-right: 2px solid var(--border);
 }
 .activity-group__head {
   display: inline-flex;
