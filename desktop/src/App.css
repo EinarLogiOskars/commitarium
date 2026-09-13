@@ -1161,14 +1161,22 @@ button.primary {
   white-space: pre-wrap;
 }
 
-/* Collapsible activity summary in a phase transcript. */
+/* Collapsible activity summary in a phase transcript. The group spans the full
+   width and pins its header to the lane edge (left = lead, right = reviewer),
+   so the header — and its Show/Hide toggle — never moves when the group expands;
+   only the items appear below. */
 .activity-group {
   margin: 6px 0;
-  align-self: flex-start;
-  max-width: 85%;
+  align-self: stretch;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
 }
 .activity-group--reviewer {
-  align-self: flex-end;
+  align-items: flex-end;
+}
+.activity-group__items {
+  max-width: 85%;
 }
 .activity-group--reviewer .activity-group__items {
   margin-left: 0;
@@ -1177,6 +1185,7 @@ button.primary {
   padding-right: 10px;
   border-left: none;
   border-right: 2px solid var(--border);
+  text-align: left;
 }
 .activity-group__head {
   display: inline-flex;
