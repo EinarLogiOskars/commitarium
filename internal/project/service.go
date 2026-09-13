@@ -15,12 +15,13 @@ import (
 var ErrNameRequired = errors.New("project name is required")
 
 type Service struct {
-	store              Store
-	repositoryVerifier RepositoryVerifier
-	repositoryImporter RepositoryImporter
-	importMu           sync.Mutex
-	generateID         func() string
-	now                func() time.Time
+	store                    Store
+	repositoryVerifier       RepositoryVerifier
+	repositoryImporter       RepositoryImporter
+	repositoryOverviewReader RepositoryOverviewReader
+	importMu                 sync.Mutex
+	generateID               func() string
+	now                      func() time.Time
 }
 
 func NewService(store Store) *Service {
@@ -34,7 +35,12 @@ func NewServiceWithRepositoryVerifier(
 	if verifier == nil {
 		verifier = unavailableRepositoryVerifier{}
 	}
-	return newService(store, verifier, unavailableRepositoryImporter{})
+	return newService(
+		store,
+		verifier,
+		unavailableRepositoryImporter{},
+		unavailableRepositoryOverviewReader{},
+	)
 }
 
 func NewServiceWithRepositoryVerifierAndImporter(
@@ -45,17 +51,43 @@ func NewServiceWithRepositoryVerifierAndImporter(
 	if importer == nil {
 		importer = unavailableRepositoryImporter{}
 	}
-	return newService(store, verifier, importer)
+	return newService(
+		store,
+		verifier,
+		importer,
+		unavailableRepositoryOverviewReader{},
+	)
 }
 
-func newService(store Store, verifier RepositoryVerifier, importer RepositoryImporter) *Service {
+func NewServiceWithRepositoryServices(
+	store Store,
+	verifier RepositoryVerifier,
+	importer RepositoryImporter,
+	overviewReader RepositoryOverviewReader,
+) *Service {
+	if importer == nil {
+		importer = unavailableRepositoryImporter{}
+	}
+	if overviewReader == nil {
+		overviewReader = unavailableRepositoryOverviewReader{}
+	}
+	return newService(store, verifier, importer, overviewReader)
+}
+
+func newService(
+	store Store,
+	verifier RepositoryVerifier,
+	importer RepositoryImporter,
+	overviewReader RepositoryOverviewReader,
+) *Service {
 	if verifier == nil {
 		verifier = unavailableRepositoryVerifier{}
 	}
 	return &Service{
-		store:              store,
-		repositoryVerifier: verifier,
-		repositoryImporter: importer,
+		store:                    store,
+		repositoryVerifier:       verifier,
+		repositoryImporter:       importer,
+		repositoryOverviewReader: overviewReader,
 		generateID: func() string {
 			return "prj_" + rand.Text()
 		},
@@ -63,6 +95,38 @@ func newService(store Store, verifier RepositoryVerifier, importer RepositoryImp
 			return time.Now().UTC()
 		},
 	}
+}
+
+func (s *Service) GetRepositoryOverview(
+	ctx context.Context,
+	projectID string,
+) (RepositoryOverview, error) {
+	storedProject, err := s.store.GetByID(ctx, projectID)
+	if err != nil {
+		return RepositoryOverview{}, fmt.Errorf(
+			"get project %q for repository overview: %w",
+			projectID,
+			err,
+		)
+	}
+	if storedProject.ForgejoRepository == nil {
+		return RepositoryOverview{}, ErrForgejoRepositoryNotReady
+	}
+	repository := *storedProject.ForgejoRepository
+	overview, err := s.repositoryOverviewReader.ReadRepositoryOverview(
+		ctx,
+		repository.Owner,
+		repository.Name,
+		repository.DefaultBranch,
+	)
+	if err != nil {
+		return RepositoryOverview{}, fmt.Errorf(
+			"read Forgejo repository overview for project %q: %w",
+			projectID,
+			err,
+		)
+	}
+	return overview, nil
 }
 
 func (s *Service) Import(ctx context.Context, spec ImportSpec, bundle io.Reader) (Project, bool, error) {

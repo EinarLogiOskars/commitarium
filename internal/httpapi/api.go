@@ -22,6 +22,7 @@ type ProjectService interface {
 	UpdateMergePolicy(ctx context.Context, projectID string, policy project.MergePolicy) (project.Project, error)
 	UpdateAutonomyPolicy(ctx context.Context, projectID string, policy project.AutonomyPolicy) (project.Project, error)
 	BindForgejoRepository(ctx context.Context, projectID, owner, name string) (project.Project, error)
+	GetRepositoryOverview(ctx context.Context, projectID string) (project.RepositoryOverview, error)
 }
 
 type ProjectImporter interface {
@@ -231,6 +232,10 @@ func newAPI(
 	mux.HandleFunc(
 		"GET /api/v1/projects/{id}",
 		api.getProjectByIDHandler,
+	)
+	mux.HandleFunc(
+		"GET /api/v1/projects/{id}/repository-overview",
+		api.getProjectRepositoryOverviewHandler,
 	)
 	mux.HandleFunc(
 		"PUT /api/v1/projects/{id}/dialogue-limits",
