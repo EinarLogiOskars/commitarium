@@ -44,6 +44,11 @@ var ErrGoalAlreadyAccepted = errors.New("feature goal is already accepted")
 var ErrGoalAcceptanceNotAllowed = errors.New("goal acceptance is not allowed")
 var ErrIdempotencyConflict = errors.New("idempotency key reused for a different command")
 
+// GoalAcceptedPlanningReason is the durable operational checkpoint created by
+// goal acceptance. The goal itself remains workflow history; this reason tells
+// the coordinator that the next safe action is the first planning turn.
+const GoalAcceptedPlanningReason = "The accepted goal is ready for planning."
+
 func (transition FeatureTransition) Validate() error {
 	switch {
 	case strings.TrimSpace(transition.EventID) == "":

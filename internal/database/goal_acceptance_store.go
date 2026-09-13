@@ -11,9 +11,10 @@ import (
 	"github.com/EinarLogiOskars/commitarium/internal/workflow"
 )
 
-// AcceptGoal stores the immutable goal snapshot and its workflow event in one
-// transaction. The waiting run/session checks make acceptance a boundary
-// between completed clarification work and later workspace/planning work.
+// AcceptGoal stores the immutable goal snapshot, its workflow event, and the
+// run's next planning checkpoint in one transaction. The waiting run/session
+// checks make acceptance a boundary between completed clarification work and
+// later workspace/planning work.
 func (s *WorkflowStore) AcceptGoal(
 	ctx context.Context,
 	acceptance workflow.GoalAcceptance,
@@ -120,6 +121,30 @@ func (s *WorkflowStore) AcceptGoal(
 		return workflow.Event{}, fmt.Errorf("store accepted goal: %w", err)
 	}
 	if err := requireExecutionUpdate(result, "feature goal", acceptance.FeatureID); err != nil {
+		return workflow.Event{}, workflow.ErrGoalAcceptanceNotAllowed
+	}
+	result, err = tx.ExecContext(
+		ctx,
+		`UPDATE runs
+		 SET reason = ?,
+		     wait_kind = CASE WHEN paused = 0 THEN ? ELSE ? END,
+		     paused_from_wait_kind = CASE WHEN paused = 0 THEN '' ELSE ? END,
+		     updated_at = ?
+		 WHERE id = (SELECT run_id FROM sessions WHERE id = ?)
+		   AND feature_id = ? AND status = ?`,
+		workflow.GoalAcceptedPlanningReason,
+		execution.RunWaitKindPhaseCheckpoint,
+		execution.RunWaitKindPaused,
+		execution.RunWaitKindPhaseCheckpoint,
+		formatExecutionTime(event.OccurredAt),
+		acceptance.SessionID,
+		acceptance.FeatureID,
+		execution.RunStatusWaitingForUser,
+	)
+	if err != nil {
+		return workflow.Event{}, fmt.Errorf("store accepted-goal planning checkpoint: %w", err)
+	}
+	if err := requireExecutionUpdate(result, "accepted-goal run", acceptance.FeatureID); err != nil {
 		return workflow.Event{}, workflow.ErrGoalAcceptanceNotAllowed
 	}
 	if err := insertWorkflowEvent(ctx, tx, event); err != nil {

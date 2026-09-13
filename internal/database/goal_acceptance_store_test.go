@@ -48,6 +48,15 @@ func TestWorkflowStoreAcceptsGoalAtomicallyAndIdempotently(t *testing.T) {
 		storedFeature.UpdatedAt != acceptance.OccurredAt {
 		t.Fatalf("unexpected accepted feature %+v", storedFeature)
 	}
+	storedRun, err := executions.GetRun(t.Context(), run.ID)
+	if err != nil {
+		t.Fatalf("get accepted-goal run: %v", err)
+	}
+	if storedRun.Status != execution.RunStatusWaitingForUser || storedRun.Paused ||
+		storedRun.WaitKind != execution.RunWaitKindPhaseCheckpoint ||
+		storedRun.Reason != workflow.GoalAcceptedPlanningReason {
+		t.Fatalf("goal acceptance did not create planning checkpoint: %+v", storedRun)
+	}
 
 	retry := acceptance
 	retry.EventID = "evt_retry_ignored"

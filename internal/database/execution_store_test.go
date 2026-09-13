@@ -493,7 +493,7 @@ func TestExecutionStoreDoesNotRecoverStableUserWait(t *testing.T) {
 	}
 }
 
-func TestExecutionStoreRecoversOnlyUnpausedAutomaticPhaseCheckpoint(t *testing.T) {
+func TestExecutionStoreRecoversUnpausedAutomaticCheckpointsAndLegacyAcceptedGoals(t *testing.T) {
 	db, store := newTestExecutionStore(t)
 	run, session := createExecutionRecords(t, db, store)
 	now := session.UpdatedAt.Add(time.Minute)
@@ -531,12 +531,34 @@ func TestExecutionStoreRecoversOnlyUnpausedAutomaticPhaseCheckpoint(t *testing.T
 		t.Fatalf("create paused automatic checkpoint: %v", err)
 	}
 
+	acceptedAt := now.Add(2 * time.Second)
+	if _, err := db.ExecContext(
+		t.Context(),
+		`UPDATE features SET accepted_goal = ?, goal_accepted_at = ?, updated_at = ? WHERE id = ?`,
+		"Accepted goal from an older coordinator.", formatExecutionTime(acceptedAt),
+		formatExecutionTime(acceptedAt), run.FeatureID,
+	); err != nil {
+		t.Fatalf("store legacy accepted goal: %v", err)
+	}
+	legacy := run
+	legacy.ID = "run_legacy_accepted_goal"
+	legacy.Status = execution.RunStatusWaitingForUser
+	legacy.Reason = "The clarified goal is ready for explicit acceptance."
+	legacy.AutonomyPolicy = project.AutonomyPolicyRunToCompletion
+	legacy.WaitKind = execution.RunWaitKindClarification
+	legacy.StartedAt = now.Add(2 * time.Second)
+	legacy.UpdatedAt = legacy.StartedAt
+	if err := store.CreateRun(t.Context(), legacy); err != nil {
+		t.Fatalf("create legacy accepted-goal wait: %v", err)
+	}
+
 	runs, err := store.ListRecoverableRuns(t.Context())
 	if err != nil {
 		t.Fatalf("list automatic checkpoints: %v", err)
 	}
-	if len(runs) != 1 || runs[0].ID != run.ID || runs[0].Paused ||
-		runs[0].WaitKind != execution.RunWaitKindPhaseCheckpoint {
+	if len(runs) != 2 || runs[0].ID != run.ID || runs[0].Paused ||
+		runs[0].WaitKind != execution.RunWaitKindPhaseCheckpoint ||
+		runs[1].ID != legacy.ID || runs[1].WaitKind != execution.RunWaitKindClarification {
 		t.Fatalf("unexpected automatic recovery candidates: %+v", runs)
 	}
 }
