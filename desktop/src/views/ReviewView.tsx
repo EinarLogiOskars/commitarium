@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { getRun } from "../api/runs";
 import { getSessionEvents } from "../api/sessions";
 import { getWorkspace } from "../api/features";
@@ -42,6 +42,8 @@ export function ReviewView({
   const [decisions, setDecisions] = useState<{ role: string; status: string; outcome?: string }[]>([]);
   const [workspace, setWorkspace] = useState<Workspace | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const chatRef = useRef<HTMLDivElement | null>(null);
+  const pinned = useRef(true);
 
   const poll = useCallback(async () => {
     try {
@@ -77,6 +79,11 @@ export function ReviewView({
     return () => clearInterval(id);
   }, [poll]);
 
+  useEffect(() => {
+    const el = chatRef.current;
+    if (el && pinned.current) el.scrollTop = el.scrollHeight;
+  }, [entries]);
+
   const pr = workspace?.pull_request;
   const shown = scopeToPhase(entries, intervals, scoped);
 
@@ -103,7 +110,14 @@ export function ReviewView({
         </div>
       )}
 
-      <div className="chat">
+      <div
+        className="chat"
+        ref={chatRef}
+        onScroll={(e) => {
+          const el = e.currentTarget;
+          pinned.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+        }}
+      >
         <Transcript entries={shown} empty="No review activity yet." />
       </div>
 

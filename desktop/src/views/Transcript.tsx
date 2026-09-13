@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { Markdown } from "./Markdown";
 import type { ActivityDetail } from "../api/types";
 
 // A phase transcript. Messages render as attributed bubbles; runs of low-signal
@@ -62,7 +63,9 @@ function MessageEntry({ e }: { e: TranscriptEntry }) {
     return (
       <div className={`narration ${e.role === "reviewer" ? "narration--reviewer" : ""}`}>
         <span className="narration__who">{who}</span>
-        <span className="narration__text">{e.text}</span>
+        <div className="narration__text">
+          <Markdown text={e.text} />
+        </div>
       </div>
     );
   }
@@ -70,7 +73,9 @@ function MessageEntry({ e }: { e: TranscriptEntry }) {
     return (
       <div className="plan-submitted">
         <span className="plan-submitted__label">📌 Plan submitted</span>
-        <span className="msg__text">{e.text}</span>
+        <div className="msg__text">
+          <Markdown text={e.text} />
+        </div>
       </div>
     );
   }
@@ -79,15 +84,25 @@ function MessageEntry({ e }: { e: TranscriptEntry }) {
   return (
     <div className={`msg ${cls}`}>
       <span className="msg__who">{who}</span>
-      <span className="msg__text">{e.text}</span>
+      <div className="msg__text">
+        <Markdown text={e.text} />
+      </div>
     </div>
   );
 }
 
 function ActivityGroup({ items }: { items: TranscriptEntry[] }) {
   const [open, setOpen] = useState(false);
+  const itemsRef = useRef<HTMLDivElement | null>(null);
   // Put a role's tool activity in the same lane as its chat bubbles.
   const sameRole = items.every((e) => e.role === items[0].role) ? items[0].role : null;
+
+  // When expanded near the bottom of the scroll area, bring the revealed
+  // content into view so it isn't hidden below the fold.
+  useEffect(() => {
+    if (open) itemsRef.current?.scrollIntoView({ block: "nearest" });
+  }, [open]);
+
   return (
     <div className={`activity-group ${sameRole === "reviewer" ? "activity-group--reviewer" : ""}`}>
       <button className="activity-group__head" onClick={() => setOpen((o) => !o)}>
@@ -96,7 +111,7 @@ function ActivityGroup({ items }: { items: TranscriptEntry[] }) {
         <span className="activity-group__toggle">{open ? "Hide" : "Show"}</span>
       </button>
       {open && (
-        <div className="activity-group__items">
+        <div className="activity-group__items" ref={itemsRef}>
           {items.map((e) => (
             <ActivityItem key={e.key} e={e} />
           ))}
