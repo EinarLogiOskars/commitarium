@@ -13,5 +13,5 @@ export const WORK = {
   /** short inline form — "the order's goal" */
   short: "order",
   /** create-button label */
-  newAction: "New order",
+  newAction: "New work order",
 } as const;

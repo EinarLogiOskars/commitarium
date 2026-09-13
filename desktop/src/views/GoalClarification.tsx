@@ -51,12 +51,23 @@ export function GoalClarification({
 
   const findLead = (sessions: Session[]) => sessions.find((s) => s.role === "lead") ?? null;
 
-  // Discover an existing clarification run on mount.
+  // Discover an existing clarification run on mount — or, for a fresh draft with
+  // a bound repo, start one automatically so creating a work order drops the
+  // user straight into the conversation (no separate "start" click).
   useEffect(() => {
     let active = true;
     listFeatureRuns(projectId, feature.id)
       .then((runs) => {
-        if (!active || runs.length === 0) return;
+        if (!active) return;
+        if (runs.length === 0) {
+          if (!feature.accepted_goal && hasRepo !== false) {
+            setStarted(true);
+            startRun(projectId, feature.id, `clarify-${feature.id}`).catch(
+              (e) => active && setError(describe(e)),
+            );
+          }
+          return;
+        }
         const lead = findLead(runs[0].sessions);
         if (lead) {
           setStarted(true);
@@ -70,7 +81,7 @@ export function GoalClarification({
     return () => {
       active = false;
     };
-  }, [projectId, feature.id]);
+  }, [projectId, feature.id, feature.accepted_goal, hasRepo]);
 
   // Poll the run (for the lead session + status) and the lead's events.
   const poll = useCallback(async () => {
