@@ -97,6 +97,17 @@ func (stub *planningStarterStub) Resume(
 	return stub.run, true, stub.err
 }
 
+func (stub *planningStarterStub) RecoverBlocker(
+	_ context.Context,
+	runID string,
+	actionID string,
+) (execution.Run, bool, error) {
+	stub.receivedRunID = runID
+	stub.receivedKey = actionID
+	stub.receivedAction = "recover"
+	return stub.run, true, stub.err
+}
+
 func (stub *planningStarterStub) QueueIntervention(
 	_ context.Context,
 	runID string,

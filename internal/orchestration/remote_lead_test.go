@@ -1497,12 +1497,15 @@ func TestRemoteLeadStartsPlanningInManagedWorkspace(t *testing.T) {
 		t.Fatalf("unexpected final lead merge-readiness request %+v", finalReadinessRequest)
 	}
 
-	// Recreate a restart after mutual approval and the feature transition were durable,
-	// but before the run's user gate was trusted. Recovery restores the gate
-	// without re-verifying or launching another worker turn.
+	// Recreate a recovery blocker after mutual approval and the feature transition
+	// were durable, but before the run's user gate was trusted. The explicit
+	// recovery action restores the gate without re-verifying or launching another
+	// worker turn.
 	if _, err := executions.TransitionRun(
 		t.Context(), runID, execution.RunStatusWaitingForUser,
-		execution.RunStatusRunning, "Simulated coordinator interruption after review.",
+		execution.RunStatusWaitingForUser,
+		"The coordinator could not safely confirm the real Codex turn's state.",
+		execution.RunWaitKindBlocker,
 	); err != nil {
 		t.Fatalf("prepare completed-review recovery: %v", err)
 	}
@@ -1515,16 +1518,17 @@ func TestRemoteLeadStartsPlanningInManagedWorkspace(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create completed-review recovery starter: %v", err)
 	}
-	interrupted, err := executions.GetRun(t.Context(), runID)
-	if err != nil {
-		t.Fatalf("load completed-review recovery run: %v", err)
-	}
-	if err := restarted.Recover(
-		t.Context(), interrupted, approvedFeature, project.RecoveryPolicyApprovalRequired,
-	); err != nil {
-		t.Fatalf("recover completed implementation review: %v", err)
+	rechecking, admitted, err := restarted.RecoverBlocker(
+		t.Context(), runID, "recover-completed-review",
+	)
+	if err != nil || !admitted || rechecking.ID != runID {
+		t.Fatalf("recover completed implementation review: run=%+v admitted=%t err=%v", rechecking, admitted, err)
 	}
 	waitForRemoteLeadStatus(t, executions, runID, execution.RunStatusWaitingForUser)
+	recovered, err := executions.GetRun(t.Context(), runID)
+	if err != nil || recovered.WaitKind != execution.RunWaitKindMergeGate {
+		t.Fatalf("explicit recovery did not restore merge gate: run=%+v err=%v", recovered, err)
+	}
 	if workspaceStub.readinessVerifyCalls != 3 {
 		t.Fatalf("ready-to-merge recovery repeated lead verification: count=%d", workspaceStub.readinessVerifyCalls)
 	}

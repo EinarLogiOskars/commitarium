@@ -136,6 +136,7 @@ type RealWorkflowStarter interface {
 	Merge(ctx context.Context, runID string, idempotencyKey string) (execution.Run, bool, error)
 	Pause(ctx context.Context, runID string, actionID string) (execution.Run, bool, error)
 	Resume(ctx context.Context, runID string, actionID string) (execution.Run, bool, error)
+	RecoverBlocker(ctx context.Context, runID string, actionID string) (execution.Run, bool, error)
 	QueueIntervention(ctx context.Context, runID, interventionID string, target worker.Role, message string) (execution.Intervention, bool, error)
 }
 
@@ -316,6 +317,7 @@ func newAPI(
 		mux.HandleFunc("POST /api/v1/runs/{id}/merge", api.mergeRunHandler)
 		mux.HandleFunc("POST /api/v1/runs/{id}/pause", api.pauseRunHandler)
 		mux.HandleFunc("POST /api/v1/runs/{id}/resume", api.resumeRunHandler)
+		mux.HandleFunc("POST /api/v1/runs/{id}/recover", api.recoverRunHandler)
 		mux.HandleFunc("POST /api/v1/runs/{id}/interventions", api.queueInterventionHandler)
 	}
 	mux.HandleFunc("GET /api/v1/runs/{id}", api.getRunHandler)
