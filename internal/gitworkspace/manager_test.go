@@ -44,6 +44,43 @@ func TestManagerAdoptsCleanCheckoutAndPreservesLaterUserChanges(t *testing.T) {
 	}
 }
 
+func TestManagerRemovesOnlyExactManagedCheckoutIdempotently(t *testing.T) {
+	manager, root := newTestManager(t, nil)
+	target := filepath.Join(root, "wsp_delete")
+	sibling := filepath.Join(root, "wsp_keep")
+	if err := os.MkdirAll(filepath.Join(target, "nested"), 0o700); err != nil {
+		t.Fatalf("create target: %v", err)
+	}
+	if err := os.Mkdir(sibling, 0o700); err != nil {
+		t.Fatalf("create sibling: %v", err)
+	}
+	if err := manager.Remove(t.Context(), "wsp_delete"); err != nil {
+		t.Fatalf("remove checkout: %v", err)
+	}
+	if _, err := os.Stat(target); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("target still exists: %v", err)
+	}
+	if _, err := os.Stat(sibling); err != nil {
+		t.Fatalf("sibling was changed: %v", err)
+	}
+	if err := manager.Remove(t.Context(), "wsp_delete"); err != nil {
+		t.Fatalf("repeat checkout removal: %v", err)
+	}
+}
+
+func TestManagerRefusesUnsafeCheckoutRemoval(t *testing.T) {
+	manager, root := newTestManager(t, nil)
+	outside := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(root, "wsp_link")); err != nil {
+		t.Fatalf("create symlink: %v", err)
+	}
+	for _, workspaceID := range []string{"../outside", "wsp_link"} {
+		if err := manager.Remove(t.Context(), workspaceID); !errors.Is(err, workspace.ErrCheckoutConflict) {
+			t.Fatalf("expected checkout conflict for %q, got %v", workspaceID, err)
+		}
+	}
+}
+
 func TestManagerAllowsReadyCheckoutToAdvanceFromRecordedBase(t *testing.T) {
 	manager, root := newTestManager(t, nil)
 	spec := initializeCheckout(t, root)

@@ -150,6 +150,13 @@ Safe UI capabilities:
   `GET /api/v1/projects/{projectID}/features`.
 - Retrieve a known feature and its accepted goal with
   `GET /api/v1/projects/{projectID}/features/{featureID}`.
+- Delete a stopped work order with
+  `DELETE /api/v1/projects/{projectID}/features/{featureID}`. The backend
+  removes only its isolated branch, managed checkout, draft PR, and internal
+  records. It refuses live agent work with `409 feature_active`. A completed
+  work order may be deleted, but the response sets
+  `merged_changes_remain: true` because deletion is never a revert and never
+  writes the default branch.
 - Open a feature's run history, including the sessions needed for historical
   viewing or continuation, with
   `GET /api/v1/projects/{projectID}/features/{featureID}/runs`.
@@ -440,5 +447,5 @@ repository credentials.
 - Pause, continue, and stop are complete for simulated sessions. The real Codex
   path currently supports bounded messages at safe waiting points, not every
   mid-turn control.
-- Project deletion, feature deletion, accepted-goal editing, and automatic
-  repair of contradictory Git or Forgejo state are intentionally unavailable.
+- Project deletion, accepted-goal editing, and automatic repair of
+  contradictory Git or Forgejo state are intentionally unavailable.

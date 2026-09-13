@@ -23,6 +23,7 @@ this API beyond the host loopback interface is unsupported.
 | `POST` | `/api/v1/projects/{projectID}/features` | Create a draft feature |
 | `GET` | `/api/v1/projects/{projectID}/features` | List the project's features by recent activity |
 | `GET` | `/api/v1/projects/{projectID}/features/{featureID}` | Retrieve a feature |
+| `DELETE` | `/api/v1/projects/{projectID}/features/{featureID}` | Delete a work order and its isolated internal artifacts |
 | `POST` | `/api/v1/projects/{projectID}/features/{featureID}/transitions` | Apply an explicit feature transition |
 | `GET` | `/api/v1/projects/{projectID}/features/{featureID}/events` | Retrieve durable workflow history |
 | `GET` | `/api/v1/projects/{projectID}/features/{featureID}/events/stream` | Replay and stream workflow history with SSE |
@@ -398,6 +399,58 @@ project, returns `404 feature_not_found`; a feature that has not started returns
 These discovery endpoints intentionally have no pagination, search, or
 server-side state filtering in the MVP. Clients can group and filter the
 complete project list locally.
+
+## Deleting a work order
+
+Delete a work order and its isolated internal artifacts with an empty request:
+
+```http
+DELETE /api/v1/projects/prj_example/features/fea_example
+Content-Length: 0
+```
+
+A successful response is `200 OK`:
+
+```json
+{
+  "project_id": "prj_example",
+  "feature_id": "fea_example",
+  "deleted": true,
+  "merged_changes_remain": false
+}
+```
+
+For an unmerged work order in `draft`, `planning`, `implementing`, `reviewing`,
+`ready_to_merge`, or `cancelled`, deletion closes its exact managed draft pull
+request when present, deletes its exact Forgejo feature branch, removes its
+managed checkout, and transactionally deletes the feature record plus its
+runs, sessions, commands, session events, planning messages, interventions,
+workflow events, recovery checkpoints, plan revisions, and run-control
+records. A durable deletion claim is stored before external cleanup and fences
+new run admission. If cleanup or the coordinator is interrupted, retrying the
+same request adopts already-closed or missing isolated artifacts and finishes
+the retained claim.
+
+Deletion never checks out, updates, resets, merges, reverts, pushes, or deletes
+the repository's recorded default branch. Before any external mutation, the
+coordinator verifies that the stored feature branch is distinct from the base
+branch; contradictory identities return `409 feature_deletion_conflict`.
+Because the default branch is unchanged, project synchronization heads and
+destination watermarks remain valid and require no adjustment.
+
+Completed work orders may also be deleted. Their feature branch, managed
+checkout, and coordinator records are removed, but their already-merged pull
+request is not mutated and their merged changes remain on the default branch.
+The response states this explicitly as `"merged_changes_remain": true`.
+Deletion is not a revert.
+
+The coordinator refuses deletion with `409 feature_active` while a run is
+active or any session may still own a live provider turn. Stop the work first,
+then retry. Temporarily unavailable Forgejo or checkout cleanup returns
+`503 feature_deletion_unavailable` while retaining the durable deletion claim.
+A missing feature, including a repeat after successful deletion, returns
+`404 feature_not_found`. The cleanup effects themselves are idempotent even
+though the now-missing resource has the required `404` response.
 
 ## Preparing a feature workspace
 
