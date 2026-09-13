@@ -25,6 +25,36 @@ func (api *API) resumeRunHandler(w http.ResponseWriter, r *http.Request) {
 	api.changeRunPause(w, r, false)
 }
 
+func (api *API) recoverRunHandler(w http.ResponseWriter, r *http.Request) {
+	key := strings.TrimSpace(r.Header.Get("Idempotency-Key"))
+	if key == "" {
+		writeError(w, http.StatusBadRequest, "idempotency_key_required", "Idempotency-Key header is required")
+		return
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, 1))
+	if err != nil || len(body) != 0 {
+		writeError(w, http.StatusBadRequest, "invalid_body", "request body must be empty")
+		return
+	}
+	runID := r.PathValue("id")
+	recovered, _, err := api.realWorkflow.RecoverBlocker(
+		r.Context(), runID, runActionIDForKey(key),
+	)
+	if err != nil {
+		switch {
+		case errors.Is(err, execution.ErrNotFound):
+			writeError(w, http.StatusNotFound, "run_not_found", "run not found")
+		case errors.Is(err, orchestration.ErrRecoveryNotAllowed):
+			writeError(w, http.StatusConflict, "recovery_not_allowed", "the run is not waiting on a recovery blocker")
+		default:
+			log.Printf("recover blocked run %q: %v", runID, err)
+			writeError(w, http.StatusInternalServerError, "internal_error", "internal server error")
+		}
+		return
+	}
+	api.writeRun(w, r, http.StatusAccepted, recovered)
+}
+
 func (api *API) changeRunPause(w http.ResponseWriter, r *http.Request, pause bool) {
 	key := strings.TrimSpace(r.Header.Get("Idempotency-Key"))
 	if key == "" {

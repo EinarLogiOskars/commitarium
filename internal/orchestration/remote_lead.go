@@ -65,6 +65,7 @@ const (
 var ErrPlanningNotAllowed = errors.New("planning cannot start from the current workflow state")
 var ErrImplementationNotAllowed = errors.New("implementation cannot start from the current workflow state")
 var ErrRunControlNotAllowed = errors.New("run control is not allowed from the current workflow state")
+var ErrRecoveryNotAllowed = errors.New("run is not waiting on a recovery blocker")
 var ErrInterventionPending = errors.New("an intervention must be answered before the workflow can resume")
 var ErrInterventionClarificationRequired = errors.New("the intervention answer requires more user clarification")
 var ErrInterventionReplanningRequired = errors.New("the intervention answer requires a safe replanning decision")
@@ -566,6 +567,50 @@ func (starter *RemoteLeadStarter) Recover(
 	}
 	go starter.reattach(request)
 	return nil
+}
+
+// RecoverBlocker lets a user explicitly retry reconciliation of the exact
+// durable checkpoint that produced a blocker. Recover performs only worker
+// lookups, event reattachment, and already-admitted result verification; it
+// never calls PutAttempt for a replacement provider turn. The per-run claim
+// folds concurrent retries onto the same in-flight reconciliation.
+func (starter *RemoteLeadStarter) RecoverBlocker(
+	ctx context.Context,
+	runID string,
+	actionID string,
+) (execution.Run, bool, error) {
+	if strings.TrimSpace(runID) == "" || strings.TrimSpace(actionID) == "" {
+		return execution.Run{}, false, ErrInvalidRunRequest
+	}
+	run, err := starter.executions.GetRun(ctx, runID)
+	if err != nil {
+		return execution.Run{}, false, err
+	}
+	if run.Status != execution.RunStatusWaitingForUser || run.Paused ||
+		run.WaitKind != execution.RunWaitKindBlocker {
+		return execution.Run{}, false, ErrRecoveryNotAllowed
+	}
+	storedFeature, err := starter.features.GetByID(ctx, run.FeatureID)
+	if err != nil {
+		return execution.Run{}, false, err
+	}
+
+	err = starter.Recover(context.WithoutCancel(ctx), run, storedFeature, project.RecoveryPolicyAutomatic)
+	if err != nil && !errors.Is(err, ErrRunAlreadyActive) {
+		// A failed re-check is itself a safe outcome: retain the existing blocker
+		// and its user-facing reason so another explicit request can try again.
+		starter.reportError(fmt.Errorf("re-check recovery blocker for run %q: %w", run.ID, err))
+		current, getErr := starter.executions.GetRun(ctx, run.ID)
+		if getErr != nil {
+			return execution.Run{}, false, errors.Join(err, getErr)
+		}
+		return current, false, nil
+	}
+	current, err := starter.executions.GetRun(ctx, run.ID)
+	if err != nil {
+		return execution.Run{}, false, err
+	}
+	return current, true, nil
 }
 
 func (starter *RemoteLeadStarter) recoverIdleReadyToMergeRun(

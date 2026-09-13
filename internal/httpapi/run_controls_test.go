@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/EinarLogiOskars/commitarium/internal/execution"
+	"github.com/EinarLogiOskars/commitarium/internal/orchestration"
 	"github.com/EinarLogiOskars/commitarium/internal/workspace"
 )
 
@@ -75,6 +76,66 @@ func TestResumeRunReportsUnconfirmedReplanningState(t *testing.T) {
 		t.Fatalf("decode error response: %v", err)
 	}
 	if body.Error.Code != "intervention_replanning_required" {
+		t.Fatalf("unexpected error response %+v", body)
+	}
+}
+
+func TestRecoverRunHandlerRequiresBlockerControlAndReturnsState(t *testing.T) {
+	now := time.Date(2026, time.September, 13, 10, 0, 0, 0, time.UTC)
+	workflow := &planningStarterStub{run: execution.Run{
+		ID: "run_recovery", FeatureID: "fea_recovery",
+		Status:    execution.RunStatusWaitingForUser,
+		Reason:    "The coordinator could not safely confirm the real Codex turn's state.",
+		WaitKind:  execution.RunWaitKindBlocker,
+		StartedAt: now, UpdatedAt: now,
+	}}
+	handler := NewWithWorkspaceAndRealWorkflowService(
+		nil, nil, nil, planningExecutionStub{}, nil, nil, nil, workflow,
+	)
+
+	missingKey := httptest.NewRecorder()
+	handler.ServeHTTP(missingKey, httptest.NewRequest(
+		http.MethodPost, "/api/v1/runs/run_recovery/recover", nil,
+	))
+	if missingKey.Code != http.StatusBadRequest {
+		t.Fatalf("expected missing key to return 400, got %d", missingKey.Code)
+	}
+
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/runs/run_recovery/recover", nil)
+	request.Header.Set("Idempotency-Key", "recover-control")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusAccepted || workflow.receivedAction != "recover" ||
+		workflow.receivedRunID != "run_recovery" ||
+		workflow.receivedKey != runActionIDForKey("recover-control") {
+		t.Fatalf("unexpected recovery response/status: code=%d workflow=%+v body=%s", response.Code, workflow, response.Body.String())
+	}
+	if body := response.Body.String(); !containsAll(
+		body, `"wait_kind":"blocker"`, `"reason":"The coordinator could not safely confirm`,
+	) {
+		t.Fatalf("recovery response omitted blocker state: %s", body)
+	}
+}
+
+func TestRecoverRunHandlerRejectsNonBlocker(t *testing.T) {
+	workflow := &planningStarterStub{err: orchestration.ErrRecoveryNotAllowed}
+	handler := NewWithWorkspaceAndRealWorkflowService(
+		nil, nil, nil, planningExecutionStub{}, nil, nil, nil, workflow,
+	)
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/runs/run_control/recover", nil)
+	request.Header.Set("Idempotency-Key", "recover-not-blocked")
+	recorder := httptest.NewRecorder()
+
+	handler.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusConflict {
+		t.Fatalf("expected 409, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+	var body errorResponse
+	if err := json.NewDecoder(recorder.Body).Decode(&body); err != nil {
+		t.Fatalf("decode error response: %v", err)
+	}
+	if body.Error.Code != "recovery_not_allowed" {
 		t.Fatalf("unexpected error response %+v", body)
 	}
 }

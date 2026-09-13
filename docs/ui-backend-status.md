@@ -193,6 +193,13 @@ Safe UI capabilities:
   `POST /api/v1/runs/{runID}/pause` and
   `POST /api/v1/runs/{runID}/resume`. Both require an empty body and a stable
   `Idempotency-Key`, and return the ordinary run resource with `202 Accepted`.
+- When a run is `waiting_for_user` with `wait_kind: "blocker"`, show a
+  **Re-check / approve recovery** action backed by
+  `POST /api/v1/runs/{runID}/recover`. It requires an empty body and stable
+  `Idempotency-Key`, re-checks only the exact durable attempt for the run's
+  current phase, and never launches a replacement provider attempt. A
+  successful reconciliation follows the run's autonomy and merge policies; an
+  unconfirmable attempt remains a blocker with its existing `reason`.
 - Read `intervention_targets` from every run. Each entry contains the stable
   `role` (`lead` or `reviewer`) and `session_id` for a non-terminal persistent
   agent conversation. The reviewer appears only after its session exists;
@@ -425,9 +432,11 @@ repository credentials.
 - The standalone Codex and Claude lead/reviewer workers are implemented, and
   real-provider mode routes each role from the run's project-level provider
   snapshot.
-- Real-provider recovery can reattach after a coordinator restart, but a worker
+- Real-provider recovery can reattach after a coordinator restart. A worker
   container restart during an active provider process still becomes an
-  indeterminate state requiring user review.
+  indeterminate state requiring user review, but the user can invoke the
+  blocker recovery action later to re-check that same durable attempt; the
+  coordinator never substitutes a replacement attempt.
 - Pause, continue, and stop are complete for simulated sessions. The real Codex
   path currently supports bounded messages at safe waiting points, not every
   mid-turn control.

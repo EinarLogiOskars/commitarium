@@ -39,6 +39,7 @@ this API beyond the host loopback interface is unsupported.
 | `POST` | `/api/v1/runs/{runID}/merge` | Merge the exact revision approved by both agents |
 | `POST` | `/api/v1/runs/{runID}/pause` | Stop automatic handoffs at the next safe provider-turn boundary |
 | `POST` | `/api/v1/runs/{runID}/resume` | Remove a run pause and dispatch its retained automatic checkpoint when applicable |
+| `POST` | `/api/v1/runs/{runID}/recover` | Re-check and reconcile the exact durable attempt behind a recovery blocker |
 | `POST` | `/api/v1/runs/{runID}/interventions` | Queue a user message for the lead or reviewer and stop at the next safe boundary |
 | `GET` | `/api/v1/runs/{runID}/planning/messages` | Retrieve the ordered lead/reviewer planning messages |
 | `GET` | `/api/v1/runs/{runID}/planning/messages/stream` | Replay and stream ordered planning messages with SSE |
@@ -50,7 +51,7 @@ this API beyond the host loopback interface is unsupported.
 
 ## Idempotency
 
-Feature transitions, run starts, planning, implementation, merge, run-control
+Feature transitions, run starts, planning, implementation, merge, recovery, run-control
 actions, run interventions, session commands, and goal acceptance require an
 `Idempotency-Key` header. Retrying the same operation with the same key returns
 the existing durable result. Reusing a key for a different operation returns
@@ -664,6 +665,41 @@ Every run also exposes `plan_version`. It begins at `1` for the original
 lead/reviewer agreement. A user-approved scope-changing intervention advances
 the same run to the next version; earlier planning messages remain available
 for history but are no longer used as the current implementation plan.
+
+### Re-checking a recovery blocker
+
+When a run is `waiting_for_user` with `wait_kind: "blocker"`, the user may ask
+the coordinator to re-check the exact durable checkpoint that caused the wait:
+
+```http
+POST /api/v1/runs/run_opaque/recover
+Idempotency-Key: recover-run-1
+Content-Length: 0
+```
+
+The response is the ordinary run resource with `202 Accepted`. The action
+reconstructs the current phase from durable feature, run, session, planning,
+and worker-attempt identities. It looks up and consumes only that exact
+attempt, or re-verifies its already-durable result and Forgejo effects. It never
+starts a replacement provider attempt. This applies to clarification,
+planning, agreed-plan publication, implementation, review, correction,
+readiness, and merge reconciliation blockers.
+
+If the attempt and its effects are now confirmable, the workflow advances from
+that checkpoint and follows the run's snapshotted `autonomy_policy` and
+`merge_policy`. For example, a durable verified approval can advance review to
+the lead readiness decision and then `ready_to_merge`. If confirmation still
+fails, the response retains `wait_kind: "blocker"` and the existing `reason`;
+no replacement agent or speculative state change occurs. The frontend should
+render a **Re-check / approve recovery** action only for that wait kind.
+
+The request body must be empty and `Idempotency-Key` is required. Repeated or
+concurrent requests are safe across coordinator restarts: the exact durable
+attempt IDs, event cursors, verification markers, per-run admission claim, and
+idempotent external reconciliation prevent duplicate provider attempts or
+effects. An unknown run returns `404 run_not_found`; a run that is paused,
+terminal, running, or waiting for another reason returns
+`409 recovery_not_allowed`.
 
 ## Queuing a user intervention
 
