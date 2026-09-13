@@ -13,6 +13,7 @@ this API beyond the host loopback interface is unsupported.
 | `PUT` | `/api/v1/project-imports/{importID}` | Import committed Git history into a new private Forgejo-backed project |
 | `GET` | `/api/v1/projects` | List projects for switching/selecting |
 | `GET` | `/api/v1/projects/{projectID}` | Retrieve a project |
+| `GET` | `/api/v1/projects/{projectID}/repository-overview` | Read the internal repository's default-branch head, root tree, and optional README |
 | `PUT` | `/api/v1/projects/{projectID}/dialogue-limits` | Replace planning and implementation-review round limits |
 | `PUT` | `/api/v1/projects/{projectID}/agent-providers` | Select the lead and reviewer providers for future runs |
 | `PUT` | `/api/v1/projects/{projectID}/merge-policy` | Select user-approved or automatic merge for future runs |
@@ -304,6 +305,57 @@ unavailable Forgejo service or credential returns `503`. This manual binding
 operation does not create repositories, branches, workspaces, or pull requests.
 Use the project-import operation when starting from an existing local Git
 repository.
+
+### Repository overview
+
+`GET /api/v1/projects/{projectID}/repository-overview` reads the project's
+bound internal Forgejo repository at request time. This is the authoritative
+version that agents work on; the endpoint never reads or modifies the original
+host directory retained by the desktop application.
+
+```json
+{
+  "default_branch": "main",
+  "head": {
+    "commit_id": "0123456789abcdef0123456789abcdef01234567",
+    "message": "Document the project",
+    "author": "Codex",
+    "committed_at": "2026-09-13T12:30:00Z"
+  },
+  "readme_markdown": "# Example\n\nProject documentation.\n",
+  "tree": [
+    {"path": "README.md", "type": "file"},
+    {"path": "src", "type": "dir"}
+  ]
+}
+```
+
+`tree` is a path-sorted, top-level-only view. Git trees become `dir`; blobs,
+symlinks, and submodule entries are represented as `file`. This is deliberately
+not a recursive file-browser API. `readme_markdown` is omitted when no root
+README exists. The deterministic preference order is `README.md`,
+`README.markdown`, `README`, `README.txt`, then `README.rst`, matched without
+regard to letter casing.
+
+README content is capped at 131072 bytes. When Forgejo reports or returns a
+larger README, the whole request fails with `413 Request Entity Too Large`; the
+content is omitted and the response reports the usable cap:
+
+```json
+{
+  "error": {
+    "code": "content_too_large",
+    "message": "repository README exceeds the size limit",
+    "max_bytes": 131072
+  }
+}
+```
+
+An unknown project returns `404 project_not_found`. A project without a bound
+repository, an unavailable repository/default branch, incomplete Forgejo tree
+data, or an unreadable response returns `503 repository_unavailable`. The
+endpoint performs no language or framework detection and exposes no file
+contents other than the capped root README.
 
 ## Browsing features and run history
 

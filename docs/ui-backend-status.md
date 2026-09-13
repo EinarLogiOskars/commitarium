@@ -86,6 +86,11 @@ Safe UI capabilities:
 - Create a project with `POST /api/v1/projects`.
 - Build a project switcher with `GET /api/v1/projects`.
 - Retrieve one project with `GET /api/v1/projects/{projectID}`.
+- Render the authoritative internal repository's current default-branch head,
+  optional root README, and shallow top-level tree with
+  `GET /api/v1/projects/{projectID}/repository-overview`. The README is capped
+  at 128 KiB; `413 content_too_large` includes `error.max_bytes`, while missing
+  or unreadable repository state returns `503 repository_unavailable`.
 - Import an existing local Git repository with
   `PUT /api/v1/project-imports/{importID}` after the trusted desktop host checks
   that it is clean and produces a Git bundle. The response is the normal,

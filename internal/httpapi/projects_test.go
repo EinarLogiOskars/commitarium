@@ -64,6 +64,10 @@ type recordingProjectService struct {
 	bindName      string
 	bindResult    project.Project
 	bindErr       error
+
+	overviewProjectID string
+	overviewResult    project.RepositoryOverview
+	overviewErr       error
 }
 
 type testErrorResponse struct {
@@ -156,6 +160,14 @@ func (s *recordingProjectService) BindForgejoRepository(
 	s.bindOwner = owner
 	s.bindName = name
 	return s.bindResult, s.bindErr
+}
+
+func (s *recordingProjectService) GetRepositoryOverview(
+	_ context.Context,
+	projectID string,
+) (project.RepositoryOverview, error) {
+	s.overviewProjectID = projectID
+	return s.overviewResult, s.overviewErr
 }
 
 func projectImportRequest(t *testing.T, importID, metadata, bundle string) *http.Request {
@@ -975,6 +987,95 @@ func TestListProjectsHandlesUnexpectedError(t *testing.T) {
 	}
 	if body.Error.Code != "internal_error" {
 		t.Fatalf("unexpected error response %+v", body)
+	}
+}
+
+func TestGetProjectRepositoryOverview(t *testing.T) {
+	fixedTime := time.Date(2026, time.September, 13, 12, 30, 0, 0, time.UTC)
+	readme := "# Demo\n\nInternal repository overview.\n"
+	service := &recordingProjectService{overviewResult: project.RepositoryOverview{
+		DefaultBranch: "main",
+		Head: project.RepositoryHead{
+			CommitID: "0123456789abcdef0123456789abcdef01234567",
+			Message:  "Document the project", Author: "Codex", CommittedAt: fixedTime,
+		},
+		ReadmeMarkdown: &readme,
+		Tree: []project.RepositoryTreeEntry{
+			{Path: "README.md", Type: "file"},
+			{Path: "src", Type: "dir"},
+		},
+	}}
+	recorder := httptest.NewRecorder()
+	New(service, nil, nil, nil, nil, nil).ServeHTTP(
+		recorder,
+		httptest.NewRequest(http.MethodGet, "/api/v1/projects/prj_test/repository-overview", nil),
+	)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusOK, recorder.Code, recorder.Body.String())
+	}
+	if service.overviewProjectID != "prj_test" {
+		t.Fatalf("unexpected project ID %q", service.overviewProjectID)
+	}
+	var response repositoryOverviewResponse
+	if err := json.NewDecoder(recorder.Body).Decode(&response); err != nil {
+		t.Fatalf("decode repository overview: %v", err)
+	}
+	if response.DefaultBranch != "main" || response.Head.Author != "Codex" ||
+		response.Head.CommittedAt != fixedTime || response.ReadmeMarkdown == nil ||
+		*response.ReadmeMarkdown != readme || len(response.Tree) != 2 ||
+		response.Tree[1].Path != "src" || response.Tree[1].Type != "dir" {
+		t.Fatalf("unexpected repository overview %+v", response)
+	}
+}
+
+func TestGetProjectRepositoryOverviewOmitsMissingReadme(t *testing.T) {
+	service := &recordingProjectService{overviewResult: project.RepositoryOverview{
+		DefaultBranch: "main", Tree: []project.RepositoryTreeEntry{},
+	}}
+	recorder := httptest.NewRecorder()
+	New(service, nil, nil, nil, nil, nil).ServeHTTP(
+		recorder,
+		httptest.NewRequest(http.MethodGet, "/api/v1/projects/prj_test/repository-overview", nil),
+	)
+	if strings.Contains(recorder.Body.String(), "readme_markdown") {
+		t.Fatalf("missing README was not omitted: %s", recorder.Body.String())
+	}
+}
+
+func TestGetProjectRepositoryOverviewMapsExpectedErrors(t *testing.T) {
+	tests := []struct {
+		name     string
+		err      error
+		status   int
+		code     string
+		maxBytes int64
+	}{
+		{name: "project missing", err: project.ErrNotFound, status: http.StatusNotFound, code: "project_not_found"},
+		{name: "repository missing", err: project.ErrForgejoRepositoryNotFound, status: http.StatusServiceUnavailable, code: "repository_unavailable"},
+		{name: "branch missing", err: project.ErrForgejoRepositoryNotReady, status: http.StatusServiceUnavailable, code: "repository_unavailable"},
+		{name: "Forgejo unavailable", err: project.ErrForgejoUnavailable, status: http.StatusServiceUnavailable, code: "repository_unavailable"},
+		{name: "README too large", err: project.ErrRepositoryContentTooLarge, status: http.StatusRequestEntityTooLarge, code: "content_too_large", maxBytes: project.RepositoryReadmeMaxBytes},
+		{name: "unexpected", err: errors.New("database unavailable"), status: http.StatusInternalServerError, code: "internal_error"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			service := &recordingProjectService{overviewErr: test.err}
+			recorder := httptest.NewRecorder()
+			New(service, nil, nil, nil, nil, nil).ServeHTTP(
+				recorder,
+				httptest.NewRequest(http.MethodGet, "/api/v1/projects/prj_test/repository-overview", nil),
+			)
+			if recorder.Code != test.status {
+				t.Fatalf("expected status %d, got %d: %s", test.status, recorder.Code, recorder.Body.String())
+			}
+			var response errorResponse
+			if err := json.NewDecoder(recorder.Body).Decode(&response); err != nil {
+				t.Fatalf("decode error response: %v", err)
+			}
+			if response.Error.Code != test.code || response.Error.MaxBytes != test.maxBytes {
+				t.Fatalf("unexpected error response %+v", response)
+			}
+		})
 	}
 }
 

@@ -62,6 +62,25 @@ type forgejoRepositoryResponse struct {
 	BoundAt       time.Time `json:"bound_at"`
 }
 
+type repositoryOverviewResponse struct {
+	DefaultBranch  string                         `json:"default_branch"`
+	Head           repositoryOverviewHeadResponse `json:"head"`
+	ReadmeMarkdown *string                        `json:"readme_markdown,omitempty"`
+	Tree           []repositoryTreeEntryResponse  `json:"tree"`
+}
+
+type repositoryOverviewHeadResponse struct {
+	CommitID    string    `json:"commit_id"`
+	Message     string    `json:"message"`
+	Author      string    `json:"author"`
+	CommittedAt time.Time `json:"committed_at"`
+}
+
+type repositoryTreeEntryResponse struct {
+	Path string `json:"path"`
+	Type string `json:"type"`
+}
+
 type bindForgejoRepositoryRequest struct {
 	Owner string `json:"owner"`
 	Name  string `json:"name"`
@@ -278,6 +297,39 @@ func (api *API) createProjectHandler(
 	if err := json.NewEncoder(w).Encode(newProjectResponse(createdProject)); err != nil {
 		log.Printf("encode project response: %v", err)
 	}
+}
+
+func (api *API) getProjectRepositoryOverviewHandler(w http.ResponseWriter, r *http.Request) {
+	overview, err := api.projects.GetRepositoryOverview(r.Context(), r.PathValue("id"))
+	if err != nil {
+		switch {
+		case errors.Is(err, project.ErrNotFound):
+			writeError(w, http.StatusNotFound, "project_not_found", "project not found")
+		case errors.Is(err, project.ErrRepositoryContentTooLarge):
+			writeContentTooLargeError(w, project.RepositoryReadmeMaxBytes)
+		case errors.Is(err, project.ErrForgejoRepositoryNotFound),
+			errors.Is(err, project.ErrForgejoRepositoryNotReady),
+			errors.Is(err, project.ErrForgejoUnavailable):
+			writeError(w, http.StatusServiceUnavailable, "repository_unavailable", "the internal repository or its default branch cannot be read")
+		default:
+			log.Printf("read repository overview for project %q: %v", r.PathValue("id"), err)
+			writeError(w, http.StatusInternalServerError, "internal_error", "internal server error")
+		}
+		return
+	}
+	tree := make([]repositoryTreeEntryResponse, len(overview.Tree))
+	for index, entry := range overview.Tree {
+		tree[index] = repositoryTreeEntryResponse{Path: entry.Path, Type: entry.Type}
+	}
+	writeJSON(w, http.StatusOK, repositoryOverviewResponse{
+		DefaultBranch: overview.DefaultBranch,
+		Head: repositoryOverviewHeadResponse{
+			CommitID: overview.Head.CommitID, Message: overview.Head.Message,
+			Author: overview.Head.Author, CommittedAt: overview.Head.CommittedAt,
+		},
+		ReadmeMarkdown: overview.ReadmeMarkdown,
+		Tree:           tree,
+	}, "repository overview")
 }
 
 type mergePolicyRequest struct {

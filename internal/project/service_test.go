@@ -110,6 +110,28 @@ type recordingRepositoryVerifier struct {
 	calls  int
 }
 
+type recordingRepositoryOverviewReader struct {
+	owner         string
+	name          string
+	defaultBranch string
+	result        RepositoryOverview
+	err           error
+	calls         int
+}
+
+func (reader *recordingRepositoryOverviewReader) ReadRepositoryOverview(
+	_ context.Context,
+	owner string,
+	name string,
+	defaultBranch string,
+) (RepositoryOverview, error) {
+	reader.calls++
+	reader.owner = owner
+	reader.name = name
+	reader.defaultBranch = defaultBranch
+	return reader.result, reader.err
+}
+
 func (v *recordingRepositoryVerifier) VerifyRepository(
 	_ context.Context,
 	owner string,
@@ -446,6 +468,65 @@ func TestServiceBindForgejoRepositoryReturnsVerificationError(t *testing.T) {
 	}
 	if store.boundProjectID != "" {
 		t.Fatal("failed verification reached storage")
+	}
+}
+
+func TestServiceReadsBoundRepositoryOverview(t *testing.T) {
+	repository := ForgejoRepository{Owner: "owner", Name: "repository", DefaultBranch: "main"}
+	store := &recordingStore{projectResult: Project{ID: "prj_test", ForgejoRepository: &repository}}
+	want := RepositoryOverview{DefaultBranch: "main", Head: RepositoryHead{CommitID: "abc"}}
+	reader := &recordingRepositoryOverviewReader{result: want}
+	service := NewServiceWithRepositoryServices(
+		store,
+		&recordingRepositoryVerifier{},
+		unavailableRepositoryImporter{},
+		reader,
+	)
+
+	got, err := service.GetRepositoryOverview(t.Context(), "prj_test")
+	if err != nil {
+		t.Fatalf("get repository overview: %v", err)
+	}
+	if got.DefaultBranch != want.DefaultBranch || got.Head.CommitID != want.Head.CommitID {
+		t.Fatalf("unexpected overview %+v", got)
+	}
+	if store.receivedID != "prj_test" || reader.calls != 1 || reader.owner != "owner" ||
+		reader.name != "repository" || reader.defaultBranch != "main" {
+		t.Fatalf("unexpected overview lookup store=%q reader=%+v", store.receivedID, reader)
+	}
+}
+
+func TestServiceRepositoryOverviewRequiresBoundProject(t *testing.T) {
+	reader := &recordingRepositoryOverviewReader{}
+	service := NewServiceWithRepositoryServices(
+		&recordingStore{projectResult: Project{ID: "prj_test"}},
+		&recordingRepositoryVerifier{},
+		unavailableRepositoryImporter{},
+		reader,
+	)
+
+	_, err := service.GetRepositoryOverview(t.Context(), "prj_test")
+	if !errors.Is(err, ErrForgejoRepositoryNotReady) {
+		t.Fatalf("expected %v, got %v", ErrForgejoRepositoryNotReady, err)
+	}
+	if reader.calls != 0 {
+		t.Fatal("unbound project reached repository reader")
+	}
+}
+
+func TestServiceRepositoryOverviewPreservesReaderError(t *testing.T) {
+	repository := ForgejoRepository{Owner: "owner", Name: "repository", DefaultBranch: "main"}
+	reader := &recordingRepositoryOverviewReader{err: ErrRepositoryContentTooLarge}
+	service := NewServiceWithRepositoryServices(
+		&recordingStore{projectResult: Project{ID: "prj_test", ForgejoRepository: &repository}},
+		&recordingRepositoryVerifier{},
+		unavailableRepositoryImporter{},
+		reader,
+	)
+
+	_, err := service.GetRepositoryOverview(t.Context(), "prj_test")
+	if !errors.Is(err, ErrRepositoryContentTooLarge) {
+		t.Fatalf("expected %v, got %v", ErrRepositoryContentTooLarge, err)
 	}
 }
 

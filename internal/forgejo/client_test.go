@@ -1,6 +1,7 @@
 package forgejo
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
@@ -132,6 +133,166 @@ func TestClientReadsRotatedTokenWithoutRestart(t *testing.T) {
 	}
 	if call != 2 {
 		t.Fatalf("expected two repository calls, got %d", call)
+	}
+}
+
+func TestClientReadsRepositoryOverviewFromDefaultBranch(t *testing.T) {
+	readme := "# Demo\n\nThis is the internal repository.\n"
+	readmeID := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	calls := 0
+	client := newBranchTestClient(t, func(request *http.Request) (*http.Response, error) {
+		calls++
+		switch calls {
+		case 1:
+			if request.Method != http.MethodGet ||
+				request.URL.Path != "/api/v1/repos/owner/repository/branches/main" {
+				t.Fatalf("unexpected branch request %s %s", request.Method, request.URL)
+			}
+			return jsonResponse(http.StatusOK, `{
+				"name":"main",
+				"commit":{
+					"id":"`+forgejoTestCommitID+`",
+					"message":"Update README",
+					"timestamp":"2026-09-13T12:30:00Z",
+					"author":{"name":"Codex","username":"codex-lead"}
+				}
+			}`), nil
+		case 2:
+			if request.Method != http.MethodGet ||
+				request.URL.Path != "/api/v1/repos/owner/repository/git/trees/"+forgejoTestCommitID ||
+				request.URL.Query().Get("recursive") != "false" {
+				t.Fatalf("unexpected tree request %s %s", request.Method, request.URL)
+			}
+			return jsonResponse(http.StatusOK, `{
+				"sha":"`+forgejoTestCommitID+`",
+				"tree":[
+					{"path":"src","type":"tree","sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","size":0},
+					{"path":"README.md","type":"blob","sha":"`+readmeID+`","size":`+strconv.Itoa(len(readme))+`}
+				],
+				"truncated":false
+			}`), nil
+		case 3:
+			if request.Method != http.MethodGet ||
+				request.URL.Path != "/api/v1/repos/owner/repository/git/blobs/"+readmeID {
+				t.Fatalf("unexpected blob request %s %s", request.Method, request.URL)
+			}
+			return jsonResponse(http.StatusOK, `{
+				"content":"`+base64.StdEncoding.EncodeToString([]byte(readme))+`",
+				"encoding":"base64",
+				"sha":"`+readmeID+`",
+				"size":`+strconv.Itoa(len(readme))+`
+			}`), nil
+		default:
+			t.Fatalf("unexpected request %d", calls)
+			return nil, nil
+		}
+	})
+
+	overview, err := client.ReadRepositoryOverview(t.Context(), "owner", "repository", "main")
+	if err != nil {
+		t.Fatalf("read repository overview: %v", err)
+	}
+	if overview.DefaultBranch != "main" || overview.Head.CommitID != forgejoTestCommitID ||
+		overview.Head.Message != "Update README" || overview.Head.Author != "Codex" ||
+		!overview.Head.CommittedAt.Equal(time.Date(2026, time.September, 13, 12, 30, 0, 0, time.UTC)) ||
+		overview.ReadmeMarkdown == nil || *overview.ReadmeMarkdown != readme || calls != 3 {
+		t.Fatalf("unexpected overview %+v calls=%d", overview, calls)
+	}
+	if len(overview.Tree) != 2 || overview.Tree[0].Path != "README.md" ||
+		overview.Tree[0].Type != "file" || overview.Tree[1].Path != "src" ||
+		overview.Tree[1].Type != "dir" {
+		t.Fatalf("unexpected tree %+v", overview.Tree)
+	}
+}
+
+func TestClientRepositoryOverviewOmitsAbsentReadme(t *testing.T) {
+	calls := 0
+	client := newBranchTestClient(t, func(request *http.Request) (*http.Response, error) {
+		calls++
+		if calls == 1 {
+			return jsonResponse(http.StatusOK, `{
+				"name":"main",
+				"commit":{
+					"id":"`+forgejoTestCommitID+`","message":"Initial commit",
+					"timestamp":"2026-09-13T12:30:00Z","author":{"username":"owner"}
+				}
+			}`), nil
+		}
+		if calls == 2 {
+			return jsonResponse(http.StatusOK, `{
+				"tree":[{"path":"src","type":"tree","sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}]
+			}`), nil
+		}
+		t.Fatal("README absence should not trigger a blob request")
+		return nil, nil
+	})
+
+	overview, err := client.ReadRepositoryOverview(t.Context(), "owner", "repository", "main")
+	if err != nil {
+		t.Fatalf("read repository overview: %v", err)
+	}
+	if overview.ReadmeMarkdown != nil || calls != 2 {
+		t.Fatalf("unexpected README or calls overview=%+v calls=%d", overview, calls)
+	}
+}
+
+func TestClientRepositoryOverviewRejectsOversizedReadmeBeforeFetchingBlob(t *testing.T) {
+	calls := 0
+	client := newBranchTestClient(t, func(request *http.Request) (*http.Response, error) {
+		calls++
+		if calls == 1 {
+			return jsonResponse(http.StatusOK, `{
+				"name":"main",
+				"commit":{
+					"id":"`+forgejoTestCommitID+`","message":"Initial commit",
+					"timestamp":"2026-09-13T12:30:00Z","author":{"name":"Owner"}
+				}
+			}`), nil
+		}
+		if calls == 2 {
+			return jsonResponse(http.StatusOK, `{
+				"tree":[{
+					"path":"README.md","type":"blob",
+					"sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+					"size":`+strconv.FormatInt(project.RepositoryReadmeMaxBytes+1, 10)+`
+				}]
+			}`), nil
+		}
+		t.Fatal("oversized README should not be downloaded")
+		return nil, nil
+	})
+
+	_, err := client.ReadRepositoryOverview(t.Context(), "owner", "repository", "main")
+	if !errors.Is(err, project.ErrRepositoryContentTooLarge) {
+		t.Fatalf("expected %v, got %v", project.ErrRepositoryContentTooLarge, err)
+	}
+	if calls != 2 {
+		t.Fatalf("expected two requests, got %d", calls)
+	}
+}
+
+func TestClientRepositoryOverviewMapsUnavailableBranchAndInvalidData(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want error
+	}{
+		{name: "missing branch", want: project.ErrForgejoRepositoryNotReady},
+		{name: "invalid metadata", body: `{"name":"main","commit":{"id":"abc"}}`, want: project.ErrForgejoUnavailable},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			client := newBranchTestClient(t, func(*http.Request) (*http.Response, error) {
+				if test.body == "" {
+					return jsonResponse(http.StatusNotFound, `{}`), nil
+				}
+				return jsonResponse(http.StatusOK, test.body), nil
+			})
+			_, err := client.ReadRepositoryOverview(t.Context(), "owner", "repository", "main")
+			if !errors.Is(err, test.want) {
+				t.Fatalf("expected %v, got %v", test.want, err)
+			}
+		})
 	}
 }
 
