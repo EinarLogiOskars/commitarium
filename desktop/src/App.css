@@ -1170,9 +1170,6 @@ button.primary {
 .activity-group--reviewer {
   align-self: flex-end;
 }
-.activity-group--reviewer .activity-group__head {
-  flex-direction: row-reverse;
-}
 .activity-group--reviewer .activity-group__items {
   margin-left: 0;
   margin-right: 16px;
