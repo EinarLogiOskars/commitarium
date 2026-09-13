@@ -124,6 +124,84 @@ export interface UpstreamBranchResult {
   detail?: string;
 }
 
+// --- Project-level handoff: canonical project → host (see docs/desktop-ipc.md) ---
+// These are camelCase (unlike the feature-level Synchronize results).
+
+export interface CompletedProjectSyncItem {
+  featureId: string;
+  title: string;
+  baseCommitId: string;
+  mergeCommitId: string;
+  mergedAt: string;
+}
+
+export interface ProjectTargetState {
+  watermarkCommitId: string | null;
+  localCommitId: string | null;
+  unsyncedFeatures: CompletedProjectSyncItem[];
+}
+
+export interface ProjectSyncState {
+  projectId: string;
+  source: { sourceType: "git" | "plain_folder"; path: string } | null;
+  canonical: { defaultBranch: string; headCommitId: string };
+  local: ProjectTargetState;
+  upstreams: Array<{
+    remoteName: string;
+    displayLocation: string;
+    branchName: string | null;
+    watermarkCommitId: string | null;
+    unsyncedFeatures: CompletedProjectSyncItem[];
+  }>;
+}
+
+export interface ProjectSynchronizeResult {
+  projectId: string;
+  sourceType: "git" | "plain_folder";
+  sourcePath: string;
+  canonicalCommitId: string;
+  targetBranch: string | null;
+  localCommitId: string | null;
+  resultTreeId: string;
+  created: boolean;
+}
+
+export interface ProjectUpstreamResult {
+  projectId: string;
+  repositoryPath: string;
+  canonicalCommitId: string;
+  localCommitId: string;
+  remotes: UpstreamRemote[];
+  selectedRemote: string | null;
+  branchName: string;
+  status: UpstreamBranchStatus;
+  created: boolean;
+  detail: string | null;
+}
+
+export const getProjectSyncState = (projectId: string): Promise<ProjectSyncState> =>
+  invoke("get_project_sync_state", { projectId });
+
+export const synchronizeProjectLocally = (
+  projectId: string,
+  commitMessage: string,
+): Promise<ProjectSynchronizeResult> =>
+  invoke("synchronize_project_locally", { projectId, commitMessage });
+
+export const previewProjectUpstreamBranch = (
+  projectId: string,
+  remoteName?: string,
+  branchName?: string,
+): Promise<ProjectUpstreamResult> =>
+  invoke("preview_project_upstream_branch", { projectId, remoteName, branchName });
+
+export const publishProjectUpstreamBranch = (
+  projectId: string,
+  remoteName: string,
+  branchName: string,
+): Promise<ProjectUpstreamResult> =>
+  invoke("publish_project_upstream_branch", { projectId, remoteName, branchName });
+
 /** Sync an approved feature into the user's local git repo as one clean commit. */
 export const synchronizeFeatureLocally = (
   projectId: string,

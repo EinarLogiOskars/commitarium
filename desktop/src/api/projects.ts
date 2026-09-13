@@ -9,6 +9,28 @@ import type {
 
 export const listProjects = (): Promise<Project[]> => request("/api/v1/projects");
 
+// Read-only view of the internal repository (default-branch head, root tree,
+// optional capped README). Throws ApiError with code repository_unavailable |
+// content_too_large | project_not_found on failure.
+export interface RepoOverviewHead {
+  commit_id: string;
+  message: string;
+  author: string;
+  committed_at: string;
+}
+export interface RepoTreeEntry {
+  path: string;
+  type: "file" | "dir";
+}
+export interface RepositoryOverview {
+  default_branch: string;
+  head: RepoOverviewHead;
+  readme_markdown?: string;
+  tree: RepoTreeEntry[];
+}
+export const getRepositoryOverview = (id: string): Promise<RepositoryOverview> =>
+  request(`/api/v1/projects/${encodeURIComponent(id)}/repository-overview`);
+
 export const getProject = (id: string): Promise<Project> =>
   request(`/api/v1/projects/${encodeURIComponent(id)}`);
 
