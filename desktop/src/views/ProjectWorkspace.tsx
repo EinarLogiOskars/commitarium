@@ -131,9 +131,9 @@ export function ProjectWorkspace({
 
           {mode === "repository" && project && <RepositoryCard projectId={id} />}
 
-          {mode === "new" && (
+          {mode === "new" && project && (
             <NewWorkOrder
-              projectId={id}
+              project={project}
               onCreated={(fid) => {
                 setReloadKey((k) => k + 1);
                 openOrder(fid);
