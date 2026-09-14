@@ -163,21 +163,51 @@ private Forgejo audit trail remain in Forgejo rather than entering the clean
 upstream history. This handoff is documented in
 [ADR-008](docs/adr/0008-export-completed-work-as-clean-host-commits.md).
 
-## Run locally
+## Install a release
 
-The normal desktop path is to open Commitarium and press **Start**. Before the
-application services start, the trusted Rust backend initializes a fresh
-Forgejo instance when necessary, creates the internal Forgejo identities and
-their scoped access tokens, and creates independent random bearer tokens for
-each coordinator-to-worker connection. These credentials are stored only in
-gitignored files beneath `.commitarium/`, mounted read-only into the service
+Commitarium is distributed as a native desktop application backed by a local
+Docker Compose stack. Download the installer for your operating system from the
+repository's GitHub Releases page:
+
+- macOS: one universal DMG that runs natively on both Apple Silicon and Intel
+- Windows: an x86-64 NSIS installer
+- Linux: an x86-64 AppImage
+
+Docker Desktop, including Docker Compose, must be installed and running on
+macOS and Windows. On Linux, Docker Engine and the Compose v2 plugin are
+required. When Commitarium opens, its loading screen checks Docker, explains
+what is missing when Docker is unavailable, pulls the matching versioned
+service images from GHCR when needed, starts the local stack, waits for its core
+services to become healthy, and then opens the Projects screen. There is no
+separate launcher step during a healthy startup.
+
+Container images are published for both `linux/amd64` and `linux/arm64`, so an
+Apple Silicon Mac uses native ARM containers rather than emulating Intel
+containers. The application and its managed Compose files are installed
+together; users do not need to clone this repository or build an image.
+
+Current builds are prereleases. The macOS application is ad-hoc signed but not
+notarized, and the Windows installer is unsigned, so the operating system may
+show a first-run security warning. Production signing and notarization are
+tracked as release prerequisites in [the release guide](docs/releasing.md).
+
+## Run from source
+
+The development path continues to use `compose.yml` and local Docker builds;
+it does not pull the release images. Open the desktop application from this
+checkout. Before the application services start, the trusted Rust backend
+initializes a fresh Forgejo instance when necessary, creates the internal
+Forgejo identities and their scoped access tokens, and creates independent
+random bearer tokens for each coordinator-to-worker connection. These
+credentials are stored only in gitignored files beneath `.commitarium/`,
+mounted read-only into the service
 that needs them, and reused on later launches. Forgejo, the coordinator, and
 the simulated worker start regardless of provider login. Each real Codex or
 Claude role worker starts only if its exact isolated profile passes a real
 provider status check; other role workers remain stopped. Stack status contains
 one stable row per service even while Compose replaces containers.
 
-Direct `docker compose` startup is a developer path. Run the desktop launcher
+Direct `docker compose` startup is a developer path. Run the desktop application
 once first so those private files exist, then:
 
 ```sh

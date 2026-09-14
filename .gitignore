@@ -1,5 +1,6 @@
 # Local working context
 COORDINATOR_PLAN.local.md
+.DS_Store
 
 # Local Commitarium credentials and settings
 .commitarium/
