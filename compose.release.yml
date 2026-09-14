@@ -7,26 +7,26 @@
 services:
   coordinator:
     build: !reset null
-    image: ghcr.io/einarlogioskars/commitarium-coordinator:${COMMITARIUM_IMAGE_TAG:-0.1.0}
+    image: ghcr.io/einarlogioskars/commitarium-coordinator:${COMMITARIUM_IMAGE_TAG:-0.1.1}
     environment:
       COMMITARIUM_RUNNER_MODE: real_agents
 
   simulated-codex-worker:
     build: !reset null
-    image: ghcr.io/einarlogioskars/commitarium-worker:${COMMITARIUM_IMAGE_TAG:-0.1.0}
+    image: ghcr.io/einarlogioskars/commitarium-worker:${COMMITARIUM_IMAGE_TAG:-0.1.1}
 
   codex-worker:
     build: !reset null
-    image: ghcr.io/einarlogioskars/commitarium-codex-worker:${COMMITARIUM_IMAGE_TAG:-0.1.0}
+    image: ghcr.io/einarlogioskars/commitarium-codex-worker:${COMMITARIUM_IMAGE_TAG:-0.1.1}
 
   codex-reviewer-worker:
     build: !reset null
-    image: ghcr.io/einarlogioskars/commitarium-codex-worker:${COMMITARIUM_IMAGE_TAG:-0.1.0}
+    image: ghcr.io/einarlogioskars/commitarium-codex-worker:${COMMITARIUM_IMAGE_TAG:-0.1.1}
 
   claude-worker:
     build: !reset null
-    image: ghcr.io/einarlogioskars/commitarium-claude-worker:${COMMITARIUM_IMAGE_TAG:-0.1.0}
+    image: ghcr.io/einarlogioskars/commitarium-claude-worker:${COMMITARIUM_IMAGE_TAG:-0.1.1}
 
   claude-reviewer-worker:
     build: !reset null
-    image: ghcr.io/einarlogioskars/commitarium-claude-worker:${COMMITARIUM_IMAGE_TAG:-0.1.0}
+    image: ghcr.io/einarlogioskars/commitarium-claude-worker:${COMMITARIUM_IMAGE_TAG:-0.1.1}
