@@ -7,11 +7,10 @@ Protocol version 1 uses JSON over HTTP under `/internal/v1`.
 This boundary is implemented and tested as a Go HTTP server and coordinator
 client. A journal-backed service connects the server to SQLite and a provider
 adapter. A standalone simulated Codex worker runs that stack as the default
-Compose service. An opt-in real Codex worker packages the same boundary with
+Compose service. A real Codex worker packages the same boundary with
 the Codex App Server adapter and process supervisor. A separate opt-in Claude
-profile packages a pinned Claude Code CLI behind the same boundary, but is not
-yet selected by coordinator workflows. In opt-in
-`real_codex_lead` mode, the coordinator routes lead and reviewer assignments to
+profile packages a pinned Claude Code CLI behind the same boundary. In
+`real_agents` mode, the coordinator routes lead and reviewer assignments to
 separate instances of that real worker, each with its own profile, journal,
 worker token, and Forgejo identity.
 
@@ -402,7 +401,7 @@ identity. It does not require a configuration manifest, revision, or digest.
 The worker passes `CODEX_HOME`, `HOME`, `LANG`, and a fixed executable `PATH` to
 every Codex child. Lead attempts additionally receive the worker-private
 Forgejo/Git identity described above. Project secrets are not accepted through
-the worker API. The coordinator's opt-in `real_codex_lead` mode uses the client
+the worker API. The coordinator's `real_agents` mode uses the client
 and event pump for goal clarification, read-only collaborative planning, and
 write-capable implementation publication. Write permission is controlled by
 the selected mounted workspace, role-specific worker environment, and

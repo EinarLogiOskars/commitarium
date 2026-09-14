@@ -8,6 +8,8 @@ services:
   coordinator:
     build: !reset null
     image: ghcr.io/einarlogioskars/commitarium-coordinator:${COMMITARIUM_IMAGE_TAG:-0.1.0}
+    environment:
+      COMMITARIUM_RUNNER_MODE: real_agents
 
   simulated-codex-worker:
     build: !reset null

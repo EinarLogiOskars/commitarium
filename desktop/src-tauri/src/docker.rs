@@ -423,6 +423,7 @@ mod tests {
         );
         assert!(EMBEDDED_RELEASE_COMPOSE.contains("build: !reset null"));
         assert!(EMBEDDED_RELEASE_COMPOSE.contains("ghcr.io/einarlogioskars"));
+        assert!(EMBEDDED_RELEASE_COMPOSE.contains("COMMITARIUM_RUNNER_MODE: real_agents"));
     }
 
     #[test]

@@ -659,7 +659,7 @@ credentials and never pushes to the user's remote.
 
 Starting a run has no request body. In the default simulated workflow, the
 feature title and description still seed the complete scripted run. In
-`real_codex_lead` mode they seed the clarification conversation; the final goal
+`real_agents` mode they seed the clarification conversation; the final goal
 is stored separately only when the user accepts it:
 
 ```http
@@ -953,8 +953,9 @@ between scripted events so session activity is observable. The simulation
 includes one `changes_requested` review, one corrective coder session, and a
 final approving review.
 
-Setting `COMMITARIUM_RUNNER_MODE=real_codex_lead` connects this endpoint to the
-real worker path. The historical mode name remains for compatibility, but each
+Setting `COMMITARIUM_RUNNER_MODE=real_agents` connects this endpoint to the
+real worker path. The historical `real_codex_lead` value remains as an alias,
+but each
 role is routed to the Codex or Claude worker selected in the run snapshot. Start
 both real Compose profiles when projects may select either provider. The project
 must already have a Forgejo repository binding. This opt-in mode prepares the
@@ -971,7 +972,7 @@ acceptance. Both fields are omitted while clarification remains open.
 
 ## Starting the lead planning proposal
 
-In `real_codex_lead` mode, this action starts planning after the goal has been
+In `real_agents` mode, this action starts planning after the goal has been
 accepted and the pinned managed checkout is ready:
 
 ```http
@@ -1252,7 +1253,7 @@ starts both agents, or duplicates a review, commit, push, or audit comment.
 ## Merging an approved revision
 
 This endpoint and automatic merge execution are available in the opt-in
-`real_codex_lead` runtime, where runs have a managed Forgejo checkout and pull
+`real_agents` runtime, where runs have a managed Forgejo checkout and pull
 request. The default deterministic simulation still ends at its scripted
 approval result and does not simulate an external Forgejo merge.
 
@@ -1528,7 +1529,7 @@ Supported types are:
 - `continue`, continuing a paused session
 - `stop`, requesting cooperative termination
 
-In `real_codex_lead` mode, only `message` is currently supported, and only when
+In `real_agents` mode, only `message` is currently supported, and only when
 the lead session is `waiting_for_user` during draft goal clarification or active
 implementation. The coordinator records the command and
 a `user_message` session event, switches the same run and session back to

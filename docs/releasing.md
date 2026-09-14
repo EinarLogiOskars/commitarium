@@ -7,6 +7,9 @@ Commitarium releases have two coordinated outputs:
 
 The desktop embeds the release Compose configuration and uses its own package
 version as the service-image tag. Those versions must remain synchronized.
+The release override also fixes `COMMITARIUM_RUNNER_MODE` to `real_agents`;
+simulation remains a development default and must never leak into an installed
+release.
 
 ## One-time repository setup
 
@@ -80,8 +83,9 @@ version after correcting the cause.
 
 Each image receives the release-version tag and a commit-SHA tag. The workflow
 also publishes provenance and an SBOM. The release Compose override removes all
-local `build` sections, so an installed app can only pull these published
-images.
+local `build` sections and selects the real-agent coordinator, so an installed
+app can only pull these published images and routes work to its connected Codex
+or Claude lead/reviewer profiles.
 
 `publish-desktop.yml` builds and uploads:
 

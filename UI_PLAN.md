@@ -380,7 +380,7 @@ the stack it needs instead of relying on a manually started one.
    lifecycle state) / open, a feature view with run + session history, and the
    full **goal-clarification loop**: start a run, converse with the real Codex
    lead (polled transcript, Enter-to-send composer, auto-scroll), and accept a
-   proposed goal. Requires the coordinator in `real_codex_lead` mode for a real
+   proposed goal. Requires the coordinator in `real_agents` mode for a real
    interactive lead. **Next up:** workspace preparation
    (`PUT .../features/{id}/workspace` → branch / checkout / draft PR) then the
    planning conversation with the round cap.
