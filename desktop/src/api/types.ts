@@ -69,6 +69,13 @@ export interface Feature {
 export interface CreateFeatureInput {
   title: string;
   description?: string;
+  // Optional per-order overrides. Each omitted field falls back to the project
+  // default; the run snapshots the effective values. (Backend handling lands
+  // with the per-order-overrides slice; the coordinator ignores these until.)
+  agent_providers?: AgentProviders;
+  autonomy_policy?: AutonomyPolicy;
+  merge_policy?: MergePolicy;
+  dialogue_limits?: DialogueLimits;
 }
 
 export type RunStatus =
