@@ -33,6 +33,7 @@ type ImportSpec struct {
 	AutonomyPolicy AutonomyPolicy
 	DialogueLimits DialogueLimits
 	AgentProviders AgentProviders
+	AgentModels    AgentModels
 	DefaultBranch  string
 }
 
@@ -91,6 +92,11 @@ func normalizeImportSpec(spec ImportSpec) (ImportSpec, error) {
 		return ImportSpec{}, err
 	}
 	spec.AgentProviders = providers
+	models, err := spec.AgentModels.Normalize()
+	if err != nil {
+		return ImportSpec{}, err
+	}
+	spec.AgentModels = models
 	if spec.DefaultBranch == "" || strings.ContainsAny(spec.DefaultBranch, " ~^:?*[\\") ||
 		strings.HasPrefix(spec.DefaultBranch, "-") || strings.HasPrefix(spec.DefaultBranch, ".") ||
 		strings.HasSuffix(spec.DefaultBranch, "/") || strings.HasSuffix(spec.DefaultBranch, ".") ||
@@ -160,6 +166,7 @@ func sameImportedProject(stored Project, spec ImportSpec, repository ForgejoRepo
 		stored.MergePolicy == spec.MergePolicy &&
 		stored.AutonomyPolicy == spec.AutonomyPolicy &&
 		stored.AgentProviders == spec.AgentProviders &&
+		stored.AgentModels == spec.AgentModels &&
 		stored.ForgejoRepository != nil &&
 		sameRepositoryCoordinate(*stored.ForgejoRepository, repository.Owner, repository.Name) &&
 		stored.ForgejoRepository.DefaultBranch == repository.DefaultBranch

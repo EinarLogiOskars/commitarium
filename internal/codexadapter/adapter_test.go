@@ -29,6 +29,19 @@ const (
 	helperVisibleEnvironment   = "COMMITARIUM_CODEX_ADAPTER_VISIBLE"
 )
 
+func TestAdapterDiscoversCodexModelsWithoutStartingAThread(t *testing.T) {
+	adapter := testAdapter(t, "models", "")
+	models, err := adapter.Models(t.Context(), adapter.directory, adapter.environment)
+	if err != nil {
+		t.Fatalf("discover Codex models: %v", err)
+	}
+	if len(models) != 1 || models[0].ID != "gpt-pinned-1" ||
+		models[0].DisplayName != "GPT Pinned" || models[0].DefaultReasoningEffort != "medium" ||
+		!reflect.DeepEqual(models[0].SupportedReasoningEfforts, []string{"low", "medium"}) {
+		t.Fatalf("models = %#v", models)
+	}
+}
+
 func TestAdapterStartsCodexAndTranslatesObservableActivity(t *testing.T) {
 	adapter := testAdapter(t, "success", "Implement the approved change")
 	session, err := adapter.Start(t.Context(), adapter.request("att_codex_start", "Implement the approved change"))
@@ -539,6 +552,22 @@ func TestCodexAppServerHelper(t *testing.T) {
 	if initialized.Method != "initialized" || initialized.ID != 0 {
 		os.Exit(82)
 	}
+	if mode == "models" {
+		request := helperRead(scanner)
+		if request.Method != "model/list" || request.ID != 2 {
+			os.Exit(97)
+		}
+		helperWrite(writer, map[string]any{"id": request.ID, "result": map[string]any{
+			"data": []any{map[string]any{
+				"id": "gpt-pinned-1", "model": "gpt-pinned-1", "displayName": "GPT Pinned",
+				"hidden": false, "defaultReasoningEffort": "medium",
+				"supportedReasoningEfforts": []any{
+					map[string]any{"reasoningEffort": "low"}, map[string]any{"reasoningEffort": "medium"},
+				},
+			}}, "nextCursor": nil,
+		}})
+		helperWaitForever()
+	}
 
 	threadRequest := helperRead(scanner)
 	wantMethod := "thread/start"
@@ -883,7 +912,7 @@ func testAdapter(t *testing.T, mode string, prompt string) *adapterHarness {
 func (harness *adapterHarness) request(attemptID string, instructions string) worker.SessionRequest {
 	return worker.SessionRequest{
 		SessionID: "ses_codex_test", AttemptID: attemptID, FeatureID: "fea_codex_test",
-		Role: worker.RoleCoder, Instructions: instructions,
+		Role: worker.RoleCoder, Model: "test-model", Instructions: instructions,
 		LaunchEnvironment: worker.LaunchEnvironment{
 			AgentProfileID: "profile_codex_test", ProjectID: "prj_codex_test",
 			FeatureID: "fea_codex_test", Role: worker.RoleCoder, WorkspaceID: "workspace_codex_test",

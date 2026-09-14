@@ -17,6 +17,7 @@ import (
 	"github.com/EinarLogiOskars/commitarium/internal/gitimport"
 	"github.com/EinarLogiOskars/commitarium/internal/gitworkspace"
 	"github.com/EinarLogiOskars/commitarium/internal/httpapi"
+	"github.com/EinarLogiOskars/commitarium/internal/modelcatalog"
 	"github.com/EinarLogiOskars/commitarium/internal/orchestration"
 	"github.com/EinarLogiOskars/commitarium/internal/project"
 	"github.com/EinarLogiOskars/commitarium/internal/secretfile"
@@ -289,6 +290,7 @@ func run(ctx context.Context, coordinatorConfig config) error {
 	var runStarter httpapi.RunStarter
 	var runRecoverer orchestration.RunRecoverer
 	var realWorkflowStarter httpapi.RealWorkflowStarter
+	var modelCatalogService httpapi.ModelCatalogService
 	switch coordinatorConfig.runnerMode {
 	case defaultRunnerMode:
 		sessionController = orchestration.NewController(executionService, activeSessions)
@@ -334,6 +336,23 @@ func run(ctx context.Context, coordinatorConfig config) error {
 		if err != nil {
 			return fmt.Errorf("create Claude reviewer worker client: %w", err)
 		}
+		catalog, err := modelcatalog.New(
+			coordinatordatabase.NewModelCatalogStore(db),
+			map[modelcatalog.SourceKey]modelcatalog.Source{
+				{Provider: project.AgentProviderCodex, Role: modelcatalog.RoleLead}:      leadClient,
+				{Provider: project.AgentProviderCodex, Role: modelcatalog.RoleReviewer}:  reviewerClient,
+				{Provider: project.AgentProviderClaude, Role: modelcatalog.RoleLead}:     claudeLeadClient,
+				{Provider: project.AgentProviderClaude, Role: modelcatalog.RoleReviewer}: claudeReviewerClient,
+			},
+		)
+		if err != nil {
+			return fmt.Errorf("create model catalog: %w", err)
+		}
+		if err := catalog.Load(ctx); err != nil {
+			return fmt.Errorf("load cached model catalog: %w", err)
+		}
+		go catalog.Run(ctx, 30*time.Minute, func(err error) { log.Printf("refresh model catalog: %v", err) })
+		modelCatalogService = catalog
 		ingestion := workeringest.NewService(executionService, workeringest.FilterFunc(
 			func(_ context.Context, event workerhttp.Event) (workerhttp.Event, error) {
 				return event, nil
@@ -410,7 +429,7 @@ func run(ctx context.Context, coordinatorConfig config) error {
 	featureDeletionService := workorder.NewService(
 		coordinatordatabase.NewFeatureDeletionStore(db), forgejoClient, checkoutManager,
 	)
-	handler := httpapi.NewWithWorkspaceRealWorkflowAndDeletionService(
+	handler := httpapi.NewWithWorkspaceRealWorkflowDeletionAndModels(
 		projectService,
 		featureService,
 		workflowService,
@@ -420,6 +439,7 @@ func run(ctx context.Context, coordinatorConfig config) error {
 		workspaceService,
 		realWorkflowStarter,
 		featureDeletionService,
+		modelCatalogService,
 	)
 
 	log.Print("Listening...")

@@ -29,6 +29,7 @@ type session struct {
 	process           *processsupervisor.Process
 	providerSessionID string
 	workingDirectory  string
+	expectedModel     string
 	outputContract    worker.OutputContract
 	shutdownTimeout   time.Duration
 	events            chan worker.Event
@@ -52,13 +53,14 @@ func newSession(
 	process *processsupervisor.Process,
 	providerSessionID string,
 	workingDirectory string,
+	expectedModel string,
 	outputContract worker.OutputContract,
 	shutdownTimeout time.Duration,
 	eventBuffer int,
 ) *session {
 	return &session{
 		process: process, providerSessionID: providerSessionID,
-		workingDirectory: workingDirectory, outputContract: outputContract,
+		workingDirectory: workingDirectory, expectedModel: expectedModel, outputContract: outputContract,
 		shutdownTimeout: shutdownTimeout,
 		events:          make(chan worker.Event, eventBuffer), done: make(chan struct{}),
 		tools: make(map[string]pendingTool),
@@ -259,6 +261,7 @@ type streamMessage struct {
 	Result           string          `json:"result"`
 	StructuredOutput json.RawMessage `json:"structured_output"`
 	CWD              string          `json:"cwd"`
+	Model            string          `json:"model"`
 	Message          json.RawMessage `json:"message"`
 	ToolUseResult    json.RawMessage `json:"tool_use_result"`
 }
@@ -308,6 +311,12 @@ func (session *session) translate(raw []byte) ([]worker.Event, *worker.Result, e
 			return nil, nil, fmt.Errorf(
 				"%w: init working directory %q does not match %q",
 				ErrProtocol, message.CWD, session.workingDirectory,
+			)
+		}
+		if strings.TrimSpace(message.Model) != session.expectedModel {
+			return nil, nil, fmt.Errorf(
+				"%w: initialized model %q does not match requested model %q",
+				ErrProtocol, message.Model, session.expectedModel,
 			)
 		}
 		session.mu.Lock()

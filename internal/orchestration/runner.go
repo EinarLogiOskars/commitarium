@@ -47,6 +47,7 @@ type RunRequest struct {
 	MaxPlanningRounds int
 	MaxReviewRounds   int
 	AgentProviders    project.AgentProviders
+	AgentModels       project.AgentModels
 	MergePolicy       project.MergePolicy
 	AutonomyPolicy    project.AutonomyPolicy
 	RecoveryPolicy    project.RecoveryPolicy
@@ -78,7 +79,7 @@ type RunResult struct {
 }
 
 type Execution interface {
-	CreateRun(ctx context.Context, id string, featureID string, planningRoundLimit int, implementationReviewRoundLimit int, agentProviders project.AgentProviders, mergePolicy project.MergePolicy, autonomyPolicy ...project.AutonomyPolicy) (execution.Run, bool, error)
+	CreateRunWithModels(ctx context.Context, id string, featureID string, planningRoundLimit int, implementationReviewRoundLimit int, agentProviders project.AgentProviders, agentModels project.AgentModels, mergePolicy project.MergePolicy, autonomyPolicy ...project.AutonomyPolicy) (execution.Run, bool, error)
 	TransitionRun(
 		ctx context.Context,
 		id string,
@@ -166,13 +167,14 @@ func (r *Runner) Run(
 	}
 
 	if r.executions != nil {
-		storedRun, created, err := r.executions.CreateRun(
+		storedRun, created, err := r.executions.CreateRunWithModels(
 			ctx,
 			request.ID,
 			request.FeatureID,
 			request.MaxPlanningRounds,
 			request.MaxReviewRounds,
 			request.AgentProviders,
+			request.AgentModels,
 			request.MergePolicy,
 			request.AutonomyPolicy,
 		)
@@ -200,13 +202,14 @@ func (r *Runner) Start(
 		return execution.Run{}, false, errors.New("asynchronous run requires durable execution storage")
 	}
 
-	storedRun, created, err := r.executions.CreateRun(
+	storedRun, created, err := r.executions.CreateRunWithModels(
 		ctx,
 		request.ID,
 		request.FeatureID,
 		request.MaxPlanningRounds,
 		request.MaxReviewRounds,
 		request.AgentProviders,
+		request.AgentModels,
 		request.MergePolicy,
 		request.AutonomyPolicy,
 	)
@@ -756,6 +759,7 @@ func (r *Runner) runAgent(
 		AttemptID:    sessionID, // The legacy in-process path has one attempt per session.
 		FeatureID:    request.FeatureID,
 		Role:         role,
+		Model:        modelForRole(request.AgentModels, role),
 		Instructions: instructions,
 	})
 	if err != nil {
@@ -868,7 +872,7 @@ func (r *Runner) resumeAgent(
 			SessionID: stored.ID,
 			AttemptID: stored.ID, // Recovery resumes that same in-process attempt.
 			FeatureID: request.FeatureID,
-			Role:      role, Instructions: briefing,
+			Role:      role, Model: modelForRole(request.AgentModels, role), Instructions: briefing,
 		},
 		ProviderSessionID: stored.ProviderSessionID,
 		Recovery: worker.RecoveryContext{
@@ -893,6 +897,13 @@ func (r *Runner) resumeAgent(
 		attempt: recovering.RecoveryAttempt, previousStatus: stored.Status,
 		pendingCommands: len(pending),
 	})
+}
+
+func modelForRole(models project.AgentModels, role worker.Role) string {
+	if role == worker.RoleReviewer || role == worker.RoleConsultant {
+		return models.Reviewer
+	}
+	return models.Lead
 }
 
 func (r *Runner) collectAgentSession(

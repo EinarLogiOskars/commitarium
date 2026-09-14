@@ -2253,7 +2253,10 @@ func newRemoteLeadExecution(t *testing.T) (*sql.DB, *execution.Service, project.
 		t.Fatalf("create project: %v", err)
 	}
 	featureService := feature.NewService(database.NewFeatureStore(db), projectService)
-	storedFeature, err := featureService.Create(t.Context(), storedProject.ID, "Clarify export", "Choose the supported formats")
+	storedFeature, err := featureService.Create(
+		t.Context(), storedProject.ID, "Clarify export", "Choose the supported formats",
+		feature.SettingsOverrides{},
+	)
 	if err != nil {
 		t.Fatalf("create feature: %v", err)
 	}

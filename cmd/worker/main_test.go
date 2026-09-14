@@ -215,6 +215,31 @@ func TestLoadConfigBuildsClaudeRuntimeSettings(t *testing.T) {
 	}
 }
 
+func TestStaticModelSourceUsesFriendlyClaudeNames(t *testing.T) {
+	models, err := staticModelSource(
+		"claude-opus-4-8",
+		"claude-sonnet-5",
+		"custom-private-model",
+	).Models(t.Context())
+	if err != nil {
+		t.Fatalf("list static models: %v", err)
+	}
+	want := []workerhttp.Model{
+		{ID: "claude-opus-4-8", DisplayName: "Claude Opus 4.8"},
+		{ID: "claude-sonnet-5", DisplayName: "Claude Sonnet 5"},
+		{ID: "custom-private-model", DisplayName: "custom-private-model"},
+	}
+	if len(models) != len(want) {
+		t.Fatalf("static models = %+v, want %+v", models, want)
+	}
+	for index := range want {
+		if models[index].ID != want[index].ID ||
+			models[index].DisplayName != want[index].DisplayName {
+			t.Fatalf("static models = %+v, want %+v", models, want)
+		}
+	}
+}
+
 func TestLoadConfigRejectsIncompleteClaudeConfiguration(t *testing.T) {
 	values := validClaudeConfig(t.TempDir())
 	delete(values, "COMMITARIUM_CLAUDE_PROFILE_ID")

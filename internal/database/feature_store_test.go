@@ -17,11 +17,15 @@ func TestFeatureStoreCreateAndGetByID(t *testing.T) {
 	createFeatureTestProject(t, projects, "prj_test")
 
 	expected := feature.Feature{
-		ID:          "fea_test",
-		ProjectID:   "prj_test",
-		Title:       "Durable features",
-		Description: "Persist feature data",
-		State:       feature.StateDraft,
+		ID:             "fea_test",
+		ProjectID:      "prj_test",
+		Title:          "Durable features",
+		Description:    "Persist feature data",
+		State:          feature.StateDraft,
+		DialogueLimits: project.DialogueLimits{PlanningRounds: 0, ImplementationReviewRounds: 4},
+		AgentProviders: project.AgentProviders{Lead: project.AgentProviderClaude, Reviewer: project.AgentProviderCodex},
+		MergePolicy:    project.MergePolicyAutoAfterGates,
+		AutonomyPolicy: project.AutonomyPolicyRunToCompletion,
 		CreatedAt: time.Date(
 			2026,
 			time.September,
@@ -63,13 +67,17 @@ func TestFeatureStoreCreateRejectsDuplicateID(t *testing.T) {
 	createFeatureTestProject(t, projects, "prj_test")
 
 	original := feature.Feature{
-		ID:          "fea_same",
-		ProjectID:   "prj_test",
-		Title:       "Original",
-		Description: "Original description",
-		State:       feature.StateDraft,
-		CreatedAt:   time.Date(2026, time.September, 8, 12, 0, 0, 0, time.UTC),
-		UpdatedAt:   time.Date(2026, time.September, 8, 12, 0, 0, 0, time.UTC),
+		ID:             "fea_same",
+		ProjectID:      "prj_test",
+		Title:          "Original",
+		Description:    "Original description",
+		State:          feature.StateDraft,
+		DialogueLimits: project.DefaultDialogueLimits(),
+		AgentProviders: project.DefaultAgentProviders(),
+		MergePolicy:    project.DefaultMergePolicy(),
+		AutonomyPolicy: project.DefaultAutonomyPolicy(),
+		CreatedAt:      time.Date(2026, time.September, 8, 12, 0, 0, 0, time.UTC),
+		UpdatedAt:      time.Date(2026, time.September, 8, 12, 0, 0, 0, time.UTC),
 	}
 
 	if err := store.Create(t.Context(), original); err != nil {
@@ -162,6 +170,12 @@ func TestFeatureStoreListsProjectFeaturesByRecentActivity(t *testing.T) {
 			State:     feature.StateDraft,
 			CreatedAt: now.Add(2 * time.Minute), UpdatedAt: now.Add(2 * time.Hour),
 		},
+	}
+	for index := range features {
+		features[index].DialogueLimits = project.DefaultDialogueLimits()
+		features[index].AgentProviders = project.DefaultAgentProviders()
+		features[index].MergePolicy = project.DefaultMergePolicy()
+		features[index].AutonomyPolicy = project.DefaultAutonomyPolicy()
 	}
 	for _, createdFeature := range features {
 		if err := store.Create(t.Context(), createdFeature); err != nil {

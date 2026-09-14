@@ -21,7 +21,7 @@ RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -o /worker ./cmd/wo
 # underneath the tested Go adapter.
 FROM node:22-bookworm-slim AS build-release-stage
 
-ARG CLAUDE_CODE_VERSION=2.1.228
+ARG CLAUDE_CODE_VERSION=2.1.270
 
 RUN apt-get update && \
     apt-get install --yes --no-install-recommends ca-certificates curl git jq && \

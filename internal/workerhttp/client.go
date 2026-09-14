@@ -127,6 +127,21 @@ func (client *Client) Capabilities(ctx context.Context) (CapabilitiesResponse, e
 	return response, nil
 }
 
+func (client *Client) Models(ctx context.Context) (ModelsResponse, error) {
+	var response ModelsResponse
+	status, _, err := client.do(ctx, http.MethodGet, APIBasePath+"/models", true, "", nil, &response)
+	if err != nil {
+		return ModelsResponse{}, err
+	}
+	if status != http.StatusOK {
+		return ModelsResponse{}, invalidClientResponse("models status", nil)
+	}
+	if err := response.Validate(); err != nil {
+		return ModelsResponse{}, invalidClientResponse("models response", err)
+	}
+	return response, nil
+}
+
 func (client *Client) PutAttempt(
 	ctx context.Context,
 	identity MutationIdentity,

@@ -36,7 +36,11 @@ func (store *FeatureDeletionStore) BeginDeletion(
 
 	storedFeature, err := scanFeature(tx.QueryRowContext(ctx, `
 		SELECT id, project_id, title, description, state, accepted_goal,
-		       goal_accepted_at, created_at, updated_at
+		       goal_accepted_at,
+		       planning_round_limit, implementation_review_round_limit,
+		       lead_provider, reviewer_provider, lead_model, reviewer_model,
+		       merge_policy, autonomy_policy,
+		       created_at, updated_at
 		FROM features WHERE id = ?`, featureID))
 	if errors.Is(err, sql.ErrNoRows) || (err == nil && storedFeature.ProjectID != projectID) {
 		return workorder.Deletion{}, feature.ErrNotFound

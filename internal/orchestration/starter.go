@@ -34,6 +34,7 @@ func (s *Starter) Recover(
 		MaxPlanningRounds: run.PlanningRoundLimit,
 		MaxReviewRounds:   run.ImplementationReviewRoundLimit,
 		AgentProviders:    run.AgentProviders,
+		AgentModels:       run.AgentModels,
 		MergePolicy:       run.MergePolicy,
 		AutonomyPolicy:    run.AutonomyPolicy,
 		RecoveryPolicy:    recoveryPolicy,
@@ -61,6 +62,24 @@ func (s *Starter) Start(
 	mergePolicy project.MergePolicy,
 	autonomyPolicies ...project.AutonomyPolicy,
 ) (execution.Run, bool, error) {
+	return s.StartWithModels(
+		ctx, runID, projectID, featureID, goal, dialogueLimits, agentProviders,
+		project.AgentModels{}, mergePolicy, autonomyPolicies...,
+	)
+}
+
+func (s *Starter) StartWithModels(
+	ctx context.Context,
+	runID string,
+	projectID string,
+	featureID string,
+	goal string,
+	dialogueLimits project.DialogueLimits,
+	agentProviders project.AgentProviders,
+	agentModels project.AgentModels,
+	mergePolicy project.MergePolicy,
+	autonomyPolicies ...project.AutonomyPolicy,
+) (execution.Run, bool, error) {
 	var err error
 	mergePolicy, err = project.NormalizeMergePolicy(mergePolicy)
 	if err != nil {
@@ -84,6 +103,7 @@ func (s *Starter) Start(
 		MaxPlanningRounds: dialogueLimits.PlanningRounds,
 		MaxReviewRounds:   dialogueLimits.ImplementationReviewRounds,
 		AgentProviders:    agentProviders,
+		AgentModels:       agentModels,
 		MergePolicy:       mergePolicy,
 		AutonomyPolicy:    autonomyPolicy,
 	})

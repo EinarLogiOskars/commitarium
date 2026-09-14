@@ -8,6 +8,23 @@ import (
 	"time"
 )
 
+func TestModelsResponseRequiresExactUniqueModelIDs(t *testing.T) {
+	valid := ModelsResponse{
+		ProtocolVersion: ProtocolVersion, Provider: ProviderCodex, FetchedAt: time.Now().UTC(),
+		Models: []Model{{ID: "gpt-pinned-1", DisplayName: "GPT Pinned"}},
+	}
+	if err := valid.Validate(); err != nil {
+		t.Fatalf("validate models response: %v", err)
+	}
+	for _, modelID := range []string{"latest", "gpt-pinned-latest"} {
+		invalid := valid
+		invalid.Models = []Model{{ID: modelID, DisplayName: "Floating"}}
+		if err := invalid.Validate(); !errors.Is(err, ErrInvalidContract) {
+			t.Fatalf("model %q error = %v", modelID, err)
+		}
+	}
+}
+
 func TestHealthAndCapabilitiesValidate(t *testing.T) {
 	health := HealthResponse{Status: HealthStatusOK, ProtocolVersion: ProtocolVersion}
 	if err := health.Validate(); err != nil {

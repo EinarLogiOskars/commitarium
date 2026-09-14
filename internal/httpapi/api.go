@@ -7,6 +7,7 @@ import (
 
 	"github.com/EinarLogiOskars/commitarium/internal/execution"
 	"github.com/EinarLogiOskars/commitarium/internal/feature"
+	"github.com/EinarLogiOskars/commitarium/internal/modelcatalog"
 	"github.com/EinarLogiOskars/commitarium/internal/project"
 	"github.com/EinarLogiOskars/commitarium/internal/worker"
 	"github.com/EinarLogiOskars/commitarium/internal/workflow"
@@ -26,6 +27,14 @@ type ProjectService interface {
 	GetRepositoryOverview(ctx context.Context, projectID string) (project.RepositoryOverview, error)
 }
 
+type ProjectAgentModelCreator interface {
+	CreateWithAgentModels(ctx context.Context, name string, recoveryPolicy project.RecoveryPolicy, dialogueLimits project.DialogueLimits, agentProviders project.AgentProviders, agentModels project.AgentModels, mergePolicy project.MergePolicy, autonomyPolicy ...project.AutonomyPolicy) (project.Project, error)
+}
+
+type ProjectAgentSettingsUpdater interface {
+	UpdateAgentSettings(ctx context.Context, projectID string, providers project.AgentProviders, models project.AgentModels) (project.Project, error)
+}
+
 type ProjectImporter interface {
 	Import(ctx context.Context, spec project.ImportSpec, bundle io.Reader) (project.Project, bool, error)
 }
@@ -36,6 +45,7 @@ type FeatureService interface {
 		projectID string,
 		title string,
 		description string,
+		overrides feature.SettingsOverrides,
 	) (feature.Feature, error)
 	GetByID(
 		ctx context.Context,
@@ -87,6 +97,21 @@ type RunStarter interface {
 	) (execution.Run, bool, error)
 }
 
+type ModelRunStarter interface {
+	StartWithModels(
+		ctx context.Context,
+		runID string,
+		projectID string,
+		featureID string,
+		goal string,
+		dialogueLimits project.DialogueLimits,
+		agentProviders project.AgentProviders,
+		agentModels project.AgentModels,
+		mergePolicy project.MergePolicy,
+		autonomyPolicy ...project.AutonomyPolicy,
+	) (execution.Run, bool, error)
+}
+
 type SessionController interface {
 	SendCommand(
 		ctx context.Context,
@@ -115,6 +140,12 @@ type WorkspaceService interface {
 
 type FeatureDeletionService interface {
 	Delete(ctx context.Context, projectID, featureID string) (workorder.Result, error)
+}
+
+type ModelCatalogService interface {
+	List(context.Context) []modelcatalog.Catalog
+	Refresh(context.Context) ([]modelcatalog.Catalog, error)
+	ValidateSelection(context.Context, project.AgentProviders, project.AgentModels) error
 }
 
 type RealWorkflowStarter interface {
@@ -156,6 +187,7 @@ type API struct {
 	workspaces      WorkspaceService
 	realWorkflow    RealWorkflowStarter
 	featureDeletion FeatureDeletionService
+	modelCatalog    ModelCatalogService
 }
 
 func New(
@@ -166,7 +198,7 @@ func New(
 	controller SessionController,
 	starter RunStarter,
 ) http.Handler {
-	return newAPI(projects, features, workflow, executionService, controller, starter, nil, nil, nil)
+	return newAPI(projects, features, workflow, executionService, controller, starter, nil, nil, nil, nil)
 }
 
 func NewWithWorkspaceService(
@@ -179,7 +211,7 @@ func NewWithWorkspaceService(
 	workspaces WorkspaceService,
 ) http.Handler {
 	return newAPI(
-		projects, features, workflow, executionService, controller, starter, workspaces, nil, nil,
+		projects, features, workflow, executionService, controller, starter, workspaces, nil, nil, nil,
 	)
 }
 
@@ -195,7 +227,7 @@ func NewWithWorkspaceAndRealWorkflowService(
 ) http.Handler {
 	return newAPI(
 		projects, features, workflow, executionService, controller, starter,
-		workspaces, realWorkflow, nil,
+		workspaces, realWorkflow, nil, nil,
 	)
 }
 
@@ -212,7 +244,25 @@ func NewWithWorkspaceRealWorkflowAndDeletionService(
 ) http.Handler {
 	return newAPI(
 		projects, features, workflow, executionService, controller, starter,
-		workspaces, realWorkflow, featureDeletion,
+		workspaces, realWorkflow, featureDeletion, nil,
+	)
+}
+
+func NewWithWorkspaceRealWorkflowDeletionAndModels(
+	projects ProjectService,
+	features FeatureService,
+	workflow WorkflowService,
+	executionService ExecutionService,
+	controller SessionController,
+	starter RunStarter,
+	workspaces WorkspaceService,
+	realWorkflow RealWorkflowStarter,
+	featureDeletion FeatureDeletionService,
+	modelCatalog ModelCatalogService,
+) http.Handler {
+	return newAPI(
+		projects, features, workflow, executionService, controller, starter,
+		workspaces, realWorkflow, featureDeletion, modelCatalog,
 	)
 }
 
@@ -226,6 +276,7 @@ func newAPI(
 	workspaces WorkspaceService,
 	realWorkflow RealWorkflowStarter,
 	featureDeletion FeatureDeletionService,
+	modelCatalog ModelCatalogService,
 ) http.Handler {
 	api := &API{
 		projects:        projects,
@@ -237,11 +288,16 @@ func newAPI(
 		workspaces:      workspaces,
 		realWorkflow:    realWorkflow,
 		featureDeletion: featureDeletion,
+		modelCatalog:    modelCatalog,
 	}
 	api.projectImporter, _ = projects.(ProjectImporter)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", api.healthHandler)
+	if modelCatalog != nil {
+		mux.HandleFunc("GET /api/v1/models", api.listModelsHandler)
+		mux.HandleFunc("POST /api/v1/models/refresh", api.refreshModelsHandler)
+	}
 	mux.HandleFunc(
 		"POST /api/v1/projects",
 		api.createProjectHandler,
@@ -271,6 +327,10 @@ func newAPI(
 	mux.HandleFunc(
 		"PUT /api/v1/projects/{id}/agent-providers",
 		api.updateProjectAgentProvidersHandler,
+	)
+	mux.HandleFunc(
+		"PUT /api/v1/projects/{id}/agent-settings",
+		api.updateProjectAgentSettingsHandler,
 	)
 	mux.HandleFunc(
 		"PUT /api/v1/projects/{id}/merge-policy",

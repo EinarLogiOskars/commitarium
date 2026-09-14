@@ -24,6 +24,7 @@ type SessionRequest struct {
 	AttemptID         string
 	FeatureID         string
 	Role              Role
+	Model             string
 	Instructions      string
 	OutputContract    OutputContract
 	LaunchEnvironment LaunchEnvironment
@@ -209,6 +210,7 @@ var (
 	launchIDPattern        = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
 	environmentNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 	commitIDPattern        = regexp.MustCompile(`^[0-9a-f]{40}([0-9a-f]{24})?$`)
+	exactModelIDPattern    = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
 )
 
 func (role Role) IsValid() bool {
@@ -230,6 +232,10 @@ func (request SessionRequest) Validate() error {
 		return fmt.Errorf("%w: feature ID is required", ErrInvalidSessionRequest)
 	case !request.Role.IsValid():
 		return fmt.Errorf("%w: role %q is not recognized", ErrInvalidSessionRequest, request.Role)
+	case strings.TrimSpace(request.Model) != "" && !exactModelIDPattern.MatchString(strings.TrimSpace(request.Model)):
+		return fmt.Errorf("%w: model ID is invalid", ErrInvalidSessionRequest)
+	case strings.TrimSpace(request.Model) != "" && isFloatingModelAlias(request.Model):
+		return fmt.Errorf("%w: model %q is a floating alias", ErrInvalidSessionRequest, request.Model)
 	case strings.TrimSpace(request.Instructions) == "":
 		return fmt.Errorf("%w: instructions are required", ErrInvalidSessionRequest)
 	case request.OutputContract != "" &&
@@ -258,6 +264,16 @@ func (request SessionRequest) Validate() error {
 		}
 	}
 	return nil
+}
+
+func isFloatingModelAlias(model string) bool {
+	lower := strings.ToLower(strings.TrimSpace(model))
+	switch lower {
+	case "default", "latest", "best", "sonnet", "opus", "haiku", "fable", "opusplan":
+		return true
+	default:
+		return strings.HasSuffix(lower, "-latest")
+	}
 }
 
 func (environment LaunchEnvironment) IsZero() bool {

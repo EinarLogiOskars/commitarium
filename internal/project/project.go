@@ -10,6 +10,7 @@ type Project struct {
 	AutonomyPolicy    AutonomyPolicy
 	DialogueLimits    DialogueLimits
 	AgentProviders    AgentProviders
+	AgentModels       AgentModels
 	ForgejoRepository *ForgejoRepository
 	CreatedAt         time.Time
 }
