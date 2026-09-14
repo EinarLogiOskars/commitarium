@@ -8,9 +8,10 @@
 
 use serde::Serialize;
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::process::Command;
-use tauri::State;
+use tauri::{AppHandle, Manager, State};
 
 use crate::{bootstrap, profiles};
 
@@ -30,6 +31,11 @@ const PROVIDER_PROFILES: &[&str] = &["real-codex", "real-claude"];
 /// Services that do not contain provider credentials and are useful even when
 /// no real agent profile has been connected yet.
 const CORE_SERVICES: &[&str] = &["coordinator", "simulated-codex-worker"];
+
+const COMPOSE_OVERRIDE_ENV: &str = "COMMITARIUM_COMPOSE_OVERRIDE_FILE";
+const RELEASE_MODE_ENV: &str = "COMMITARIUM_RELEASE_MODE";
+const EMBEDDED_COMPOSE: &str = include_str!("../../../compose.yml");
+const EMBEDDED_RELEASE_COMPOSE: &str = include_str!("../../../compose.release.yml");
 
 /// Result of probing the host for Docker and Compose readiness.
 #[derive(Serialize)]
@@ -51,7 +57,40 @@ pub struct ServiceStatus {
     status: String,
 }
 
-/// Resolve the Commitarium Compose file.
+/// Install the release Compose definitions into the per-user data directory.
+/// Development builds keep resolving the repository Compose file, and an
+/// explicit environment override always wins for tests and advanced use.
+pub(crate) fn prepare_runtime(app: &AppHandle) -> Result<(), String> {
+    if std::env::var_os("COMMITARIUM_COMPOSE_FILE").is_some() || cfg!(debug_assertions) {
+        return Ok(());
+    }
+
+    let runtime_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("resolve app data directory: {e}"))?
+        .join("runtime");
+    let (compose_file, release_file) = materialize_release_compose(&runtime_dir)?;
+
+    std::env::set_var("COMMITARIUM_COMPOSE_FILE", compose_file);
+    std::env::set_var(COMPOSE_OVERRIDE_ENV, release_file);
+    std::env::set_var("COMMITARIUM_IMAGE_TAG", env!("CARGO_PKG_VERSION"));
+    std::env::set_var(RELEASE_MODE_ENV, "1");
+    Ok(())
+}
+
+fn materialize_release_compose(runtime_dir: &Path) -> Result<(PathBuf, PathBuf), String> {
+    fs::create_dir_all(runtime_dir).map_err(|e| format!("create Docker runtime directory: {e}"))?;
+    let compose_file = runtime_dir.join("compose.yml");
+    let release_file = runtime_dir.join("compose.release.yml");
+    fs::write(&compose_file, EMBEDDED_COMPOSE)
+        .map_err(|e| format!("write embedded Compose definition: {e}"))?;
+    fs::write(&release_file, EMBEDDED_RELEASE_COMPOSE)
+        .map_err(|e| format!("write embedded release Compose definition: {e}"))?;
+    Ok((compose_file, release_file))
+}
+
+/// Resolve the primary Commitarium Compose file.
 ///
 /// Resolution order (this is the open "where do the Compose definitions live"
 /// decision, implemented pragmatically for development):
@@ -84,23 +123,47 @@ pub(crate) fn compose_file() -> Result<PathBuf, String> {
     }
 }
 
+/// Resolve the complete Compose file set. Installed releases add the embedded
+/// release overlay, while development and tests normally use only compose.yml.
+pub(crate) fn compose_files() -> Result<Vec<PathBuf>, String> {
+    let mut files = vec![compose_file()?];
+    if let Some(path) = std::env::var_os(COMPOSE_OVERRIDE_ENV) {
+        let path = PathBuf::from(path);
+        if !path.exists() {
+            return Err(format!(
+                "{COMPOSE_OVERRIDE_ENV} points at a missing file: {}",
+                path.display()
+            ));
+        }
+        files.push(path);
+    }
+    Ok(files)
+}
+
+pub(crate) fn append_compose_files(command: &mut Command) -> Result<(), String> {
+    for file in compose_files()? {
+        command.arg("-f").arg(file);
+    }
+    Ok(())
+}
+
+pub(crate) fn release_mode() -> bool {
+    std::env::var(RELEASE_MODE_ENV).as_deref() == Ok("1")
+}
+
 /// Run `docker compose [--profile <fixed profile>...] -f <file> -p
 /// commitarium <args…>`
 /// scoped to the Commitarium project and its Compose file — not a general
 /// Compose runner. Both profile names and service names come only from trusted
 /// constants or the fixed provider-profile table, never from the renderer.
 fn compose(profiles: &[&str], args: &[&str]) -> Result<String, String> {
-    let file = compose_file()?;
-    let file = file
-        .to_str()
-        .ok_or("Compose file path is not valid UTF-8")?;
-
     let mut command = Command::new("docker");
     command.arg("compose");
     for profile in profiles {
         command.args(["--profile", profile]);
     }
-    command.args(["-f", file, "-p", PROJECT_NAME]).args(args);
+    append_compose_files(&mut command)?;
+    command.args(["-p", PROJECT_NAME]).args(args);
 
     let output = command
         .output()
@@ -158,9 +221,12 @@ pub fn stack_up(manager: State<'_, profiles::ProfileManager>) -> Result<(), Stri
 fn stack_up_with_manager(manager: &profiles::ProfileManager) -> Result<(), String> {
     let file = compose_file()?;
     let transport_changed = bootstrap::prepare_transport_secrets(&file)?;
+    if release_mode() {
+        compose(PROVIDER_PROFILES, &["pull", "--policy", "missing"])?;
+    }
     // Forgejo must exist before its own admin CLI can create the internal
     // identities and tokens required by the other services.
-    compose(&[], &["up", "-d", "forgejo"])?;
+    start_forgejo()?;
     let forgejo_changed = bootstrap::provision_forgejo(&file, PROJECT_NAME)?;
     let credentials_changed = transport_changed || forgejo_changed;
     start_core_services(credentials_changed)?;
@@ -183,15 +249,27 @@ fn stack_update_with_manager(manager: &profiles::ProfileManager) -> Result<(), S
     let file = compose_file()?;
     let transport_changed = bootstrap::prepare_transport_secrets(&file)?;
     compose(PROVIDER_PROFILES, &["pull"])?;
-    compose(&[], &["up", "-d", "forgejo"])?;
+    start_forgejo()?;
     let forgejo_changed = bootstrap::provision_forgejo(&file, PROJECT_NAME)?;
     let credentials_changed = transport_changed || forgejo_changed;
     start_core_services(credentials_changed)?;
     reconcile_provider_workers(manager, credentials_changed)
 }
 
+fn start_forgejo() -> Result<(), String> {
+    let mut args = vec!["up", "-d"];
+    if release_mode() {
+        args.push("--no-build");
+    }
+    args.push("forgejo");
+    compose(&[], &args).map(|_| ())
+}
+
 fn start_core_services(force_recreate: bool) -> Result<(), String> {
     let mut args = vec!["up", "-d"];
+    if release_mode() {
+        args.push("--no-build");
+    }
     if force_recreate {
         args.push("--force-recreate");
     }
@@ -215,6 +293,9 @@ fn reconcile_provider_workers(
         compose(PROVIDER_PROFILES, &args)?;
         if force_recreate {
             let mut args = vec!["create", "--force-recreate"];
+            if release_mode() {
+                args.push("--no-build");
+            }
             args.extend(stopped);
             compose(PROVIDER_PROFILES, &args)?;
         }
@@ -227,6 +308,9 @@ fn reconcile_provider_workers(
         .collect();
     if !connected.is_empty() {
         let mut args = vec!["up", "-d"];
+        if release_mode() {
+            args.push("--no-build");
+        }
         if force_recreate {
             args.push("--force-recreate");
         }
@@ -326,6 +410,20 @@ fn service_status_rank(status: &ServiceStatus) -> (u8, u8) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn materializes_embedded_release_compose_files() {
+        let root = tempfile::tempdir().unwrap();
+        let (base, release) = materialize_release_compose(root.path()).unwrap();
+
+        assert_eq!(fs::read_to_string(base).unwrap(), EMBEDDED_COMPOSE);
+        assert_eq!(
+            fs::read_to_string(release).unwrap(),
+            EMBEDDED_RELEASE_COMPOSE
+        );
+        assert!(EMBEDDED_RELEASE_COMPOSE.contains("build: !reset null"));
+        assert!(EMBEDDED_RELEASE_COMPOSE.contains("ghcr.io/einarlogioskars"));
+    }
 
     #[test]
     fn compose_json_lines_are_sorted_and_deduplicated_by_service() {

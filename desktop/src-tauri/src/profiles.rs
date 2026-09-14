@@ -1183,10 +1183,10 @@ fn profile_has_credentials(spec: ProfileSpec) -> Result<bool, String> {
 }
 
 fn service_is_running(spec: ProfileSpec) -> Result<bool, String> {
-    let compose_file = docker::compose_file()?;
-    let output = Command::new("docker")
-        .args(["compose", "--profile", spec.compose_profile, "-f"])
-        .arg(compose_file)
+    let mut command = Command::new("docker");
+    command.args(["compose", "--profile", spec.compose_profile]);
+    docker::append_compose_files(&mut command)?;
+    let output = command
         .args([
             "-p",
             docker::PROJECT_NAME,
@@ -1212,16 +1212,17 @@ fn compose_command(
     running_service: bool,
     login_container: Option<&str>,
 ) -> Result<Command, String> {
-    let compose_file = docker::compose_file()?;
     let mut command = Command::new("docker");
-    command
-        .args(["compose", "--profile", spec.compose_profile, "-f"])
-        .arg(compose_file)
-        .args(["-p", docker::PROJECT_NAME]);
+    command.args(["compose", "--profile", spec.compose_profile]);
+    docker::append_compose_files(&mut command)?;
+    command.args(["-p", docker::PROJECT_NAME]);
     if running_service {
         command.args(["exec", "-T", spec.service, executable]);
     } else {
         command.args(["run", "--rm", "--no-deps"]);
+        if docker::release_mode() {
+            command.args(["--pull", "missing"]);
+        }
         if let Some(container) = login_container {
             command.args(["--name", container]);
         }

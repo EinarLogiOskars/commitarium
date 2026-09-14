@@ -18,6 +18,10 @@ pub fn run() {
         .plugin(tauri_plugin_http::init())
         // Native folder picker for project import.
         .plugin(tauri_plugin_dialog::init())
+        .setup(|app| {
+            docker::prepare_runtime(app.handle()).map_err(std::io::Error::other)?;
+            Ok(())
+        })
         // The renderer can invoke ONLY the commands listed here. This explicit
         // set is the trust boundary: no arbitrary shell, Docker, or filesystem
         // access reaches the untrusted UI.
