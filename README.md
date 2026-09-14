@@ -1,814 +1,245 @@
 # Commitarium
 
-Commitarium is a local-first workspace where coding agents plan, build, review,
-and ship software together while the user keeps control of the process.
+**A local-first desktop workspace where coding agents plan, implement, review,
+and ship software together—without taking control away from you.**
 
-The coordinator currently provides a tested headless vertical slice. It stores
-projects, features, workflow transitions, runs, agent sessions, observable
-session activity, and user control commands in SQLite. A deterministic pair of
-simulated agents can take a feature through planning, implementation, review
-feedback, a corrective implementation pass, and approval.
+[![CI](https://github.com/EinarLogiOskars/commitarium/actions/workflows/ci.yml/badge.svg)](https://github.com/EinarLogiOskars/commitarium/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/EinarLogiOskars/commitarium?include_prereleases&label=release)](https://github.com/EinarLogiOskars/commitarium/releases)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-If the coordinator is restarted during an active simulated session, it resumes
-the original provider session ID, publishes a durable recovery assessment, and
-reconciles the completed activity before doing more work. Projects default to
-requiring user approval for that continuation; consistent projects configured
-for automatic recovery can continue without intervention.
+![Commitarium workshop](desktop/src/assets/loading/workshop.png)
 
-This is not yet a production-ready release. The coordinator defaults to its
-complete deterministic simulation. An opt-in mode now connects the public run
-and session-command APIs to persistent real Codex or Claude lead and reviewer
-conversations, selected independently per project. The user can exchange
-multiple visible goal-clarification turns with the lead agent while the feature
-remains a draft. Before the first turn,
-the coordinator pins the selected project's exact Forgejo default-branch commit
-and creates a dedicated host-visible checkout for that work order. Every reply
-resumes the lead in that same selected-project directory; no global active
-project or smoke-test checkout participates in routing. The user then explicitly
-accepts the final goal to close clarification. An explicit planning action
-resumes that same lead conversation in the clean pinned checkout without first
-creating a feature branch or PR. A second
-action starts a separate persistent reviewer conversation with the selected
-provider, supplies the lead's exact final proposal, and exposes both final
-messages through one ordered planning history and SSE stream. After the first
-review, the same two provider
-sessions alternate until the lead explicitly submits an agreed plan or the
-default six-round (twelve-message) safety limit requires user input. A submitted
-plan submission promotes the clean checkout to the reserved feature branch,
-creates the matching Forgejo branch and draft PR, and appends the goal and plan
-once. A final explicit action re-verifies
-that boundary and resumes the same lead to perform the first write-capable
-implementation turn.
-While implementation is waiting, the user may edit the shared checkout or
-describe a blocker resolution through the existing session-message API; each
-message safely resumes the same provider conversation for one more bounded
-turn. When the lead decides the implementation is ready for review, it commits
-and pushes the feature branch under its own Forgejo identity and writes one
-structured implementation summary to the draft PR. The coordinator checks that
-the reported clean commit, remote branch, PR head, agreed plan, summary, and
-author all match, moves the feature to `reviewing`, and immediately resumes the
-persistent reviewer in its separate worker container. The reviewer inspects the
-exact commit, posts one formal Forgejo approval or changes-requested review, and
-returns its review ID and a concise session summary. The coordinator verifies
-that exact review, commit, decision, author, unique attempt marker, and required
-review-section structure; the Forgejo audit may contain richer findings than
-the session summary. Approval resumes the original lead for a final
-readiness decision against that exact revision. The lead posts a structured
-`Merge readiness` PR comment and either gives the green light or raises a
-remaining concern. Only a verified green light advances the feature to
-`ready_to_merge` and pins that exact commit as the only allowed merge target.
-Projects default to waiting for user approval; they can instead snapshot an
-automatic policy onto new runs. Both paths use the same guarded Forgejo merge,
-which rechecks the clean checkout, branch, PR, and exact approved head before
-advancing the feature to `completed`. This merge behavior belongs to the
-opt-in real, Forgejo-backed workflow; the default deterministic simulation does
-not fabricate an external merge. A changes-requested review instead
-resumes the original lead conversation, which publishes a new descendant
-commit and a structured `Review response` PR comment; the original reviewer
-then reviews that exact revision.
-Review and lead-response pairs repeat for at most six rounds by default. The
-round is completed before the workflow stops for user input, and a zero round
-limit means unlimited. Projects expose separate planning and implementation-
-review limits, and every run snapshots both values when it starts so later
-settings changes affect only future workflows. Projects also choose whether the
-normal planning checkpoints require explicit user actions or whether the
-coordinator runs from accepted-goal planning through implementation and review
-without those pauses. The safer `review_each_phase` policy is the default;
-`run_to_completion` dispatches the same restart-safe actions automatically.
-Goal clarification, safety limits, blockers, recovery assessments, and required
-merge approval always stop for the user. A run-level pause can arm a durable
-gate while an agent is working: the current bounded turn may finish, but no next
-agent turn or automatic merge starts until resume. Runs expose a structured wait
-kind so clients never need to interpret human prose to decide what control to
-show.
+Commitarium turns multi-agent coding into a visible, durable workflow. A lead
+agent helps refine the goal and implement it, a separate reviewer challenges
+the plan and code, and you choose where human approval is required. Work stays
+on your machine inside a Docker-managed environment with an internal Forgejo
+instance for branches, pull requests, reviews, and audit history.
 
-While a run is paused, the user can address its existing lead or reviewer
-conversation. A message submitted during active work waits for the next safe
-boundary; the coordinator then resumes exactly that provider session, streams
-the answer through the ordinary session activity feed, and leaves the workflow
-paused. The agent explicitly classifies whether the message is guidance, needs
-clarification, or changes the accepted scope, so the coordinator never guesses
-from conversational wording. Restart recovery reconnects to the same durable
-delivery attempt instead of sending the message twice. When the result is
-ordinary guidance, an explicit Continue records that it was consumed, restores
-the exact saved checkpoint, and honors the run's autonomy policy. Clarification
-keeps the composer and pause active. For a scope change, Continue verifies and
-preserves the existing branch, checkout, PR, commits, and local edits, then
-starts a new plan version in the same lead and reviewer conversations. Only the
-final revised agreed plan is appended to the existing PR; earlier plans remain
-as audit history. The revised implementation uses distinct versioned worker
-attempts, preventing collisions with work performed before replanning, and its
-first published commit must descend from the exact preserved replanning base.
+> [!IMPORTANT]
+> Commitarium is currently an early prerelease. The workflow is functional and
+> tested, but installer signing, broader platform testing, and some product
+> polish are still in progress. Use it on repositories you can recover.
 
-Projects now also choose Codex
-or Claude independently for the lead and reviewer. Each run snapshots those
-choices and uses them for routing and restart recovery, so later project edits
-cannot move an active conversation to another provider.
-Each project also chooses whether a mutually approved implementation waits for
-user merge approval or merges automatically after the same safety checks. A run
-keeps the choice it had when it started, and defaults to user approval.
-Projects and their features can be listed for switching, active-work views, and
-completed history. Opening a feature exposes its run and session history.
-Projects can also be permanently associated with one verified Forgejo repository.
-An existing clean local Git repository can now be opened through the backend's
-restart-safe project-import endpoint: the trusted desktop host uploads a Git
-bundle of committed branches and tags, and the coordinator creates a private
-Forgejo repository plus an already-bound project. Host paths and uncommitted
-files never cross into the coordinator; the desktop keeps the local path for
-the later explicit “sync local” workflow.
+## What it does
+
+- **Structured agent collaboration** — move work from goal clarification
+  through planning, implementation, independent review, and merge.
+- **Codex and Claude support** — choose either provider independently for the
+  lead and reviewer roles.
+- **Human control** — pause a run, intervene in an existing agent conversation,
+  require review at each phase, or opt into bounded run-to-completion behavior.
+- **Independent review** — reviewer sessions, credentials, worker state, and
+  Forgejo identities stay separate from the implementing agent.
+- **Durable recovery** — sessions, workflow transitions, and delivery attempts
+  survive application and container restarts.
+- **Local audit trail** — an internal Forgejo instance records branches, pull
+  requests, review decisions, comments, and agent authorship.
+- **Controlled handoff** — accepted work can be synchronized into your local
+  repository as one clean commit; publishing it upstream remains an explicit
+  action.
+- **Local-first runtime** — the desktop app manages a versioned Docker Compose
+  stack without giving agent containers your Docker socket or upstream Git
+  credentials.
+
+## The workflow
+
+```text
+Describe the work
+       ↓
+Clarify the goal with the lead
+       ↓
+Lead proposal ↔ independent reviewer
+       ↓
+Approve the plan
+       ↓
+Implementation → code review → corrections
+       ↓
+Human-approved or policy-approved merge
+       ↓
+Sync one clean commit to your local repository
+```
+
+Every important transition is explicit and persisted. Commitarium can automate
+routine handoffs, but goal changes, safety limits, blockers, and required merge
+approval always return control to you.
+
+## Install
+
+### Requirements
+
+- Docker Desktop with Docker Compose on macOS or Windows
+- Docker Engine with the Compose v2 plugin on Linux
+- A Codex or Claude account only when using the corresponding real agent
+  provider; the built-in simulated workflow needs neither
+
+### Download
+
+Download the latest prerelease from
+[GitHub Releases](https://github.com/EinarLogiOskars/commitarium/releases):
+
+| Platform | Download | Architecture |
+| --- | --- | --- |
+| macOS | `.dmg` | Universal: Apple Silicon and Intel |
+| Windows | NSIS `.exe` | x86-64 |
+| Linux | `.AppImage` | x86-64 |
+
+Start Docker, then open Commitarium. On launch, the app:
+
+1. checks that Docker and Compose are available;
+2. explains what to install or start when they are unavailable;
+3. pulls the matching versioned service images from GHCR;
+4. initializes the private local services and credentials;
+5. waits for the core stack to become healthy; and
+6. opens directly into Projects.
+
+Service images are available for both `linux/amd64` and `linux/arm64`. Apple
+Silicon therefore runs native ARM containers rather than emulating Intel
+containers.
+
+### Prerelease security prompts
+
+The current macOS build is ad-hoc signed but not notarized, and the Windows
+installer is not yet code-signed. macOS Gatekeeper or Windows SmartScreen may
+therefore ask for confirmation or require you to approve the app in system
+security settings. Production signing and notarization are planned before a
+stable release.
+
+## Getting started
+
+1. Open **Providers** and connect the lead and reviewer profiles you want to
+   use, or explore the built-in simulated workflow without connecting one.
+2. Import an existing clean Git repository.
+3. Create a work order and describe the outcome you want.
+4. Refine and accept the goal, then follow the planning and implementation
+   checkpoints.
+5. After an approved merge, synchronize the result to your local repository.
+
+Commitarium keeps agent-side iteration in its internal forge. Your ordinary
+repository receives the accepted result only through the explicit sync flow,
+and pushing that result to GitHub, GitLab, or another remote is separate.
 
 ## Architecture
 
-Docker Compose normally runs three local services:
+```text
+┌────────────────────────────────────────────────────────────┐
+│ Native desktop app (Tauri + React)                         │
+│ Docker lifecycle · provider login · approvals · local Git  │
+└───────────────────────────┬────────────────────────────────┘
+                            │ narrow local APIs
+┌───────────────────────────▼────────────────────────────────┐
+│ Docker Compose                                             │
+│                                                            │
+│  ┌─────────────┐     ┌───────────┐     ┌─────────────────┐ │
+│  │ Coordinator │────▶│  Forgejo  │◀────│ Agent workers   │ │
+│  │ Go + SQLite │     │ local Git │     │ Codex / Claude  │ │
+│  └─────────────┘     └───────────┘     └─────────────────┘ │
+└────────────────────────────────────────────────────────────┘
+```
 
-- `coordinator` exposes the Go API on `127.0.0.1:8080` and stores operational
-  state in its SQLite volume.
-- `forgejo` exposes the internal forge on `127.0.0.1:3001` and has its own
-  separate volume.
-- `simulated-codex-worker` runs the private worker HTTP API inside the Compose
-  network and stores its execution journal in a worker-only volume. It does not
-  publish a host port during normal use.
+The Go coordinator owns the workflow state machine and restart recovery.
+Forgejo is the durable collaboration record. Provider workers supervise exact
+CLI sessions and expose a narrow authenticated API to the coordinator. The
+Tauri backend is the trusted boundary for Docker, provider authentication, and
+explicit host-side Git operations.
 
-The optional `real-codex` Compose profile defines `codex-worker` and
-`codex-reviewer-worker`. They package the same real Codex CLI and worker API,
-but keep separate provider login/session profiles, worker journals, worker API
-tokens, and Forgejo identities. Both share only Commitarium's managed workspace
-root with the coordinator. The desktop launcher checks both role profiles and
-starts each worker independently only when its own Codex login is connected.
+See the [product and architecture plan](PROJECT_PLAN.md) and the
+[architecture decision records](docs/adr) for the reasoning behind these
+boundaries.
 
-The optional `real-claude` profile similarly adds `claude-worker` and
-`claude-reviewer-worker`. Each contains a pinned Claude Code CLI and has its own
-provider profile, durable attempt journal, worker token, and Forgejo identity.
-The coordinator routes a selected Claude role to the corresponding service.
-The desktop launcher applies the same independent login check to these roles;
-direct Compose development may still enable both profiles explicitly.
+## Security and data boundaries
 
-Forgejo is the agent-managed source of truth for plans, review discussion, and
-the internal pull-request audit trail. The coordinator database stores only the
-operational state needed to run and recover workflows. GitHub credentials and
-actions stay outside the agent containers and remain user-controlled.
-The intended responsibility split is recorded in
-[ADR-009](docs/adr/0009-let-agents-own-internal-forge-actions.md): each agent
-uses its own scoped Forgejo identity for commits and structured PR work, while
-the coordinator controls workflow and verifies important results.
+Commitarium is local-first, not an offline AI system. Its coordinator,
+database, Forgejo instance, credentials, and managed workspaces live locally.
+When you choose a real provider, that provider's CLI may send prompts and
+relevant repository context to the provider under your account and its terms.
 
-The external handoff has two explicit trusted-host steps. First,
-Commitarium synchronizes the current canonical Forgejo default branch into the
-user's selected local project as one clean commit using the user's configured
-Git identity. Second, the user may explicitly publish that exact commit to
-GitHub, GitLab, or another configured Git remote as a new `commitarium/` branch.
-Users may later choose to chain the steps, but local synchronization never
-silently implies an external push. Agent authors, intermediate commits, and the
-private Forgejo audit trail remain in Forgejo rather than entering the clean
-upstream history. This handoff is documented in
-[ADR-008](docs/adr/0008-export-completed-work-as-clean-host-commits.md).
-
-## Install a release
-
-Commitarium is distributed as a native desktop application backed by a local
-Docker Compose stack. Download the installer for your operating system from the
-repository's GitHub Releases page:
-
-- macOS: one universal DMG that runs natively on both Apple Silicon and Intel
-- Windows: an x86-64 NSIS installer
-- Linux: an x86-64 AppImage
-
-Docker Desktop, including Docker Compose, must be installed and running on
-macOS and Windows. On Linux, Docker Engine and the Compose v2 plugin are
-required. When Commitarium opens, its loading screen checks Docker, explains
-what is missing when Docker is unavailable, pulls the matching versioned
-service images from GHCR when needed, starts the local stack, waits for its core
-services to become healthy, and then opens the Projects screen. There is no
-separate launcher step during a healthy startup.
-
-Container images are published for both `linux/amd64` and `linux/arm64`, so an
-Apple Silicon Mac uses native ARM containers rather than emulating Intel
-containers. The application and its managed Compose files are installed
-together; users do not need to clone this repository or build an image.
-
-Current builds are prereleases. The macOS application is ad-hoc signed but not
-notarized, and the Windows installer is unsigned, so the operating system may
-show a first-run security warning. Production signing and notarization are
-tracked as release prerequisites in [the release guide](docs/releasing.md).
+Provider workers receive only their own login profile, internal Forgejo
+identity, and managed workspace access. They do not receive your upstream Git
+credentials or the host Docker socket. Host-side repository synchronization
+and upstream publication remain separate, explicit actions.
 
 ## Run from source
 
-The development path continues to use `compose.yml` and local Docker builds;
-it does not pull the release images. Open the desktop application from this
-checkout. Before the application services start, the trusted Rust backend
-initializes a fresh Forgejo instance when necessary, creates the internal
-Forgejo identities and their scoped access tokens, and creates independent
-random bearer tokens for each coordinator-to-worker connection. These
-credentials are stored only in gitignored files beneath `.commitarium/`,
-mounted read-only into the service
-that needs them, and reused on later launches. Forgejo, the coordinator, and
-the simulated worker start regardless of provider login. Each real Codex or
-Claude role worker starts only if its exact isolated profile passes a real
-provider status check; other role workers remain stopped. Stack status contains
-one stable row per service even while Compose replaces containers.
+### Prerequisites
 
-Direct `docker compose` startup is a developer path. Run the desktop application
-once first so those private files exist, then:
+- Go 1.27.1 or newer
+- Node.js 24 and pnpm 10
+- Stable Rust with the platform prerequisites required by Tauri 2
+- Docker with Compose v2
+
+Clone the repository, install the frontend dependencies, and start the desktop
+development build:
+
+```sh
+git clone https://github.com/EinarLogiOskars/commitarium.git
+cd commitarium/desktop
+pnpm install --frozen-lockfile
+pnpm tauri dev
+```
+
+Development builds use [`compose.yml`](compose.yml) directly and build service
+images from the local Dockerfiles. Installed releases combine that file with
+[`compose.release.yml`](compose.release.yml), pull versioned GHCR images, and
+disable local builds.
+
+To work on the stack without the desktop UI, first run the desktop app once so
+it can create the private local credentials, then run from the repository root:
 
 ```sh
 docker compose up --build -d
 curl http://127.0.0.1:8080/health
 ```
 
-The coordinator requires `COMMITARIUM_DATABASE_PATH`; Compose configures it to
-use the persistent coordinator volume. The simulated worker similarly uses
-`COMMITARIUM_WORKER_DATABASE_PATH` for its own journal volume. Internal worker
-API tokens are random file-backed credentials generated by the trusted desktop
-backend. They authenticate only coordinator-to-worker HTTP requests; they are
-not Codex or Claude account credentials.
-
-The coordinator executes its original deterministic agents in-process unless
-`COMMITARIUM_RUNNER_MODE=real_codex_lead` is selected. That mode requires the
-opt-in real worker described below.
-
-The trusted desktop backend now exposes four isolated provider profiles:
-Codex lead/reviewer and Claude lead/reviewer. It can report real login status,
-run subscription login, accept an API key through child-process stdin, verify
-the resulting provider login, cancel it, or disconnect it. Browser-login URLs
-and Codex device codes are returned as structured transient progress; raw CLI
-output and credentials are not. The TypeScript connect screen is intentionally
-being built separately against the exact command/event contract in
-[`docs/desktop-ipc.md`](docs/desktop-ipc.md). Stop a running role worker before
-changing or removing its profile so its private writable volume has only one
-owner; the next Start automatically leaves disconnected roles stopped.
-
-### Internal Forgejo setup
-
-Repository binding and coordinator verification use a Forgejo access token
-stored in the local, gitignored file `.commitarium/forgejo-token`. Only this file
-is mounted read-only into the coordinator. The token is read when a repository,
-branch, pull request, or agent publication is checked; for Git it is supplied
-only to that child process. It is not placed in Compose environment variables,
-Git configuration, SQLite, API responses, or logs. The desktop launcher creates
-the `commitarium_admin` identity and this token automatically with
-`write:user`, `write:repository`, and `read:issue` scope. Existing valid users
-and token files are adopted rather than replaced.
-
-The same bootstrap creates separate `codex-lead`, `codex-reviewer`,
-`claude-lead`, and `claude-reviewer` Forgejo identities. Each receives only a
-`write:repository` and `write:issue` token in its own private file beneath
-`.commitarium/agents/`. Provider workers receive only their matching identity.
-When a work order first prepares its managed checkout, the coordinator
-idempotently grants these identities write access to that one internal project
-repository before an agent can start. This setup is internal and has no
-frontend command or secret field.
-
-The directory and files are restricted to the current host user. A missing
-Docker bind source may previously have become an empty directory; the launcher
-safely repairs that exact empty path. It refuses to replace a non-empty
-directory or a symbolic link.
-
-Custom development installations may supply existing private files through the
-`*_TOKEN_SOURCE` variables used in `compose.yml`. The normal app path does not
-require a user to create or paste Forgejo tokens.
-`COMMITARIUM_FORGEJO_TOKEN_SOURCE` can select another private source file.
-`COMMITARIUM_FORGEJO_OWNER` identifies that token user's Forgejo login and
-defaults to `commitarium_admin`; set both together when using another account.
-Recreate the coordinator after replacing that file so Docker mounts the new
-file inode.
-
-The real Codex lead uses
-`.commitarium/agents/codex-lead/forgejo-token`. The optional
-`COMMITARIUM_CODEX_FORGEJO_TOKEN_SOURCE` selects another source file. Compose
-mounts it only into the Codex worker; the coordinator does not receive it.
-`COMMITARIUM_CODEX_FORGEJO_LOGIN`, `COMMITARIUM_CODEX_GIT_AUTHOR_NAME`, and
-`COMMITARIUM_CODEX_GIT_AUTHOR_EMAIL` must describe that account. Recreate the
-worker after rotating the file because it loads the credential at startup.
-
-The real reviewer uses another Forgejo account and token at
-`.commitarium/agents/codex-reviewer/forgejo-token`. Its corresponding settings
-are prefixed `COMMITARIUM_CODEX_REVIEWER_`; its provider login and worker journal
-also live in reviewer-only named volumes. Forgejo groups formal-review API
-access under the repository-write token scope. The reviewer therefore has the
-internal forge capabilities needed for later review corrections, while its
-role instructions keep an ordinary review turn inspection-only.
-
-Claude lead and reviewer workers follow the same isolation model. Their
-separate Forgejo tokens live at
-`.commitarium/agents/claude-lead/forgejo-token` and
-`.commitarium/agents/claude-reviewer/forgejo-token`. Settings for the reviewer
-use the `COMMITARIUM_CLAUDE_REVIEWER_` prefix; settings for the lead use
-`COMMITARIUM_CLAUDE_`. These credentials permit only internal Forgejo work and
-never give Claude access to the user's GitHub, GitLab, or other upstream
-account.
-
-Authenticate that private reviewer provider profile independently:
-
-```sh
-docker compose --profile real-codex run --rm --no-deps --entrypoint codex \
-  codex-reviewer-worker -c 'cli_auth_credentials_store="file"' login --device-auth
-```
-
-Managed feature checkouts are written beneath
-`${COMMITARIUM_WORKSPACE_SOURCE:-./.commitarium/workspaces}` on the host. Compose
-mounts that same directory at `/workspaces` in the coordinator and every real
-agent worker. This is a shared directory, not a copy: a file saved by the user
-is immediately visible to the agent container, and an eventual agent edit will
-be immediately visible to the user. Each feature receives one child directory;
-the user's original upstream checkout is not mounted or changed.
-
-After work has been merged in Forgejo, the canonical project handoff source is
-available at `GET /api/v1/projects/{projectID}/handoff`. The trusted desktop's
-`get_project_sync_state` command combines that source with private per-target
-watermarks so the UI can show which completed work orders have not reached the
-user's machine or each configured remote. `synchronize_project_locally` applies
-only the canonical change since the previous watermark to the Git repository
-from which the project was imported. It uses the user's effective host Git
-identity, produces one clean commit, and refuses dirty or conflicting state. It
-does not copy agent commits or authors and never pushes upstream.
-
-For projects imported from ordinary folders, the same project-level command
-applies the accumulated canonical change without creating a Git repository
-there. It requires non-ignored content to match the previous canonical
-watermark, leaves ignored dependencies and build output untouched, and uses a
-durable prepared receipt so an interruption can be retried or recognized as
-already complete. Ambiguous or user-modified content is never overwritten.
-
-The trusted desktop can preview configured remotes and publish the exact current
-project-sync commit as a new `commitarium/` branch. It uses the
-system Git CLI and the user's existing credential helper or SSH setup, never
-checks out another branch, and atomically refuses to overwrite any existing
-remote branch. Each local/remote destination advances its own durable canonical
-watermark. Pull-request creation remains a manual user action for now. The older
-per-feature synchronization commands remain available while the UI migrates.
-
-Once a non-empty repository exists in Forgejo, associate it with a coordinator
-project:
-
-```sh
-curl -X PUT http://127.0.0.1:8080/api/v1/projects/PROJECT_ID/forgejo-repository \
-  -H 'Content-Type: application/json' \
-  -d '{"owner":"FORGEJO_OWNER","name":"REPOSITORY"}'
-
-curl http://127.0.0.1:8080/api/v1/projects
-```
-
-The coordinator asks Forgejo for the canonical owner, repository name, and
-default branch before saving the binding. Repeating the same binding is safe.
-Changing an existing binding is deliberately rejected because later feature
-branches and pull requests must never move silently to another repository.
-
-Stop the services without deleting their data:
-
-```sh
-docker compose down
-```
-
-## Exercise the simulated workflow
-
-Create a project and a draft feature, retaining the returned IDs:
-
-```sh
-curl -X POST http://127.0.0.1:8080/api/v1/projects \
-  -H 'Content-Type: application/json' \
-  -d '{"name":"Demo project","recovery_policy":"approval_required"}'
-
-curl -X POST http://127.0.0.1:8080/api/v1/projects/PROJECT_ID/features \
-  -H 'Content-Type: application/json' \
-  -d '{"title":"Demo feature","description":"Exercise the coordinator workflow."}'
-```
-
-Start the workflow. The accepted goal is derived from the feature rather than
-stored a second time on the run:
-
-```sh
-curl -i -X POST \
-  http://127.0.0.1:8080/api/v1/projects/PROJECT_ID/features/FEATURE_ID/runs \
-  -H 'Idempotency-Key: demo-run-1' \
-  -H 'Content-Length: 0'
-```
-
-The response is `202 Accepted` and includes a `Location` header. Follow that
-location to inspect the durable run and discover its sessions:
-
-```sh
-curl http://127.0.0.1:8080/api/v1/runs/RUN_ID
-curl http://127.0.0.1:8080/api/v1/sessions/SESSION_ID/events
-```
-
-The simulated workflow takes roughly two seconds. Repeating the start request
-with the same idempotency key returns the original run without launching a
-duplicate.
-
-See [Coordinator API](docs/coordinator-api.md) for the complete route list,
-streaming endpoints, and session controls. UI work should also follow the
-[UI/backend implementation status](docs/ui-backend-status.md), which separates
-settled public behavior from backend work that is still changing or only
-planned.
-
-## Smoke-test the real Codex worker
-
-The real worker uses a dedicated `codex-profile` Docker volume. Connect that
-profile once with Codex's device-code login:
-
-```sh
-./scripts/smoke-real-codex-worker.sh login
-```
-
-This is the only step that changes provider authentication state. It does not
-copy or mount the host user's normal Codex profile. Check the isolated
-profile's status without printing credentials:
-
-```sh
-./scripts/smoke-real-codex-worker.sh status
-```
-
-Then run one real read-only prompt through the worker HTTP API and watch its
-normalized activity stream:
-
-```sh
-./scripts/smoke-real-codex-worker.sh run
-```
-
-The script fails unless it observes a successful repository command and the
-real Codex response contains its expected verification marker.
-
-By default the repository containing this Compose file is mounted read-only at
-`/workspaces/workspace_smoke`. Set `COMMITARIUM_CODEX_WORKSPACE_SOURCE` to
-another absolute host directory and optionally set
-`COMMITARIUM_CODEX_WORKSPACE_ID` to change its child-directory name. The script
-stops the worker afterward but preserves both its profile and journal volumes.
-Codex's own process sandbox is disabled inside this service because its Linux
-namespace sandbox cannot nest inside the unprivileged container. The container
-and its explicit mounts remain the outer security boundary; the smoke mount is
-read-only, so the agent cannot change the selected host repository.
-
-## Configure the standalone Claude workers
-
-Claude uses a separate persistent profile volume for each worker role. After
-creating the role's Forgejo token file described above, authenticate the lead
-profile with Claude Code's normal login flow:
-
-```sh
-docker compose --profile real-claude run --rm --no-deps --entrypoint claude \
-  claude-worker auth login
-
-docker compose --profile real-claude run --rm --no-deps --entrypoint claude \
-  claude-worker auth status
-```
-
-Authenticate and inspect the reviewer independently by replacing
-`claude-worker` with `claude-reviewer-worker`. The profile volume is suitable
-for provider-managed subscription or API configuration, but Commitarium's
-trusted API-key provisioning UI is not implemented yet. Commitarium does not
-copy the host user's Claude profile or store provider credentials in
-coordinator SQLite. The two profiles must be configured separately even when
-they use the same Claude account.
-
-Start the standalone services with:
-
-```sh
-docker compose --profile real-claude up --build -d \
-  claude-worker claude-reviewer-worker
-```
-
-Each worker starts one bounded non-interactive Claude turn, returns its session
-UUID immediately, streams normalized messages and factual tool activity, and
-can later resume that exact conversation. The worker supports cooperative and
-forced stop, but not mid-turn message, pause, or continue controls. New guidance
-is supplied as the next bounded resume turn. A public run now reaches this
-worker whenever its immutable project/run assignment selects Claude for the
-corresponding role.
-
-To exercise the real coordinator path, start both provider profiles and select
-the opt-in runner. The `real_codex_lead` name is retained for compatibility even
-though the run may assign either provider to either role:
-
-```sh
-COMMITARIUM_RUNNER_MODE=real_codex_lead \
-  docker compose --profile real-codex --profile real-claude up --build -d
-```
-
-Create a project and feature and start its run through the same public API shown
-above. The coordinator durably creates a `lead` session, asks the selected lead
-provider to inspect and clarify the goal without changing files, copies the
-worker event stream to the public session history/SSE endpoints, and records the
-provider session ID as soon as the agent starts. A successful turn leaves both
-run and session in `waiting_for_user`, while the feature remains `draft`.
-
-Reply through the existing session command endpoint:
-
-```sh
-curl -X POST http://127.0.0.1:8080/api/v1/sessions/SESSION_ID/commands \
-  -H 'Content-Type: application/json' \
-  -H 'Idempotency-Key: goal-reply-1' \
-  -d '{"type":"message","message":"The command should accept an optional name."}'
-```
-
-The reply is stored before Codex is contacted and initially returns `pending`.
-The worker resumes the same provider thread in a new fenced attempt, and the
-command becomes `applied` once that attempt is confirmed. Agent output and
-`user_message` events appear in one ordered session history. Repeating the same
-request and idempotency key does not start another turn. If the coordinator is
-restarted mid-turn, it looks up and reattaches to that exact attempt rather than
-issuing another resume request.
-
-When the goal is clear, accept the final wording explicitly:
-
-```sh
-curl -X POST http://127.0.0.1:8080/api/v1/sessions/SESSION_ID/goal-acceptance \
-  -H 'Content-Type: application/json' \
-  -H 'Idempotency-Key: accept-goal-1' \
-  -d '{"goal":"Add the optional name argument, including validation and tests."}'
-```
-
-This stores the final Markdown-capable goal on the feature and appends a
-`feature.goal_accepted` workflow event in one transaction. It does not call
-Codex or begin planning. The feature remains `draft`, but further clarification
-replies are rejected so branch preparation and planning have one stable goal to
-use. Retrying the same acceptance is safe; changing an accepted goal will
-require a future explicit reopen operation.
-
-In the real-provider workflow, starting the clarification run has already
-reserved the selected project's exact default-branch commit and cloned it into
-the work order's dedicated managed checkout. Once the goal is accepted, this
-optional action reconciles that pinned checkout without creating a branch or PR:
-
-```sh
-curl -i -X PUT \
-  http://127.0.0.1:8080/api/v1/projects/PROJECT_ID/features/FEATURE_ID/workspace
-```
-
-The coordinator uses the repository identity, default branch, exact base commit,
-and deterministic `commitarium/FEATURE_ID` branch name saved before
-clarification. The workspace remains `preparing`, with no branch or PR. A retry
-uses the same saved commit even if the default branch has moved. This operation
-does not invoke an agent and is not required before the planning action below,
-which performs the same checkout reconciliation itself.
-
-Start the lead's first planning turn after the workspace is ready:
-
-```sh
-curl -i -X POST \
-  http://127.0.0.1:8080/api/v1/runs/RUN_ID/planning \
-  -H 'Idempotency-Key: start-planning-1' \
-  -H 'Content-Length: 0'
-```
-
-The coordinator rechecks the clean pinned checkout, moves the
-feature from `draft` to `planning`, and resumes the original Codex thread with
-the managed workspace selected. The lead is told to inspect the repository and
-produce a concrete proposal without editing files, installing dependencies,
-committing, pushing, or implementing. Its commands and final proposal appear in
-the same session history and SSE stream used during goal clarification. A
-coordinator restart reattaches to the exact planning attempt; it never launches
-a replacement merely because the connection was interrupted.
-
-Start the first reviewer turn after the lead proposal is ready:
-
-```sh
-curl -i -X POST \
-  http://127.0.0.1:8080/api/v1/runs/RUN_ID/planning/reviewer \
-  -H 'Idempotency-Key: start-reviewer-1' \
-  -H 'Content-Length: 0'
-```
-
-The coordinator atomically creates a distinct durable `reviewer` session and
-its first worker attempt, then starts a new Codex conversation in the same
-managed checkout. The reviewer receives the accepted goal, pinned repository
-facts, reserved branch name, and the lead's exact final proposal. It must inspect the repository,
-challenge the plan, and clearly accept it or request changes without modifying
-files. The two final authored responses are available together through:
-
-```sh
-curl http://127.0.0.1:8080/api/v1/runs/RUN_ID/planning/messages
-curl -N http://127.0.0.1:8080/api/v1/runs/RUN_ID/planning/messages/stream
-```
-
-Each message text still has one authoritative copy in its agent session; the
-shared planning history stores only references and cross-session order. Earlier
-provider preambles, commands, and activity remain visible in the individual
-session streams.
-
-When the first reviewer response is ready, start the bounded autonomous
-planning discussion:
-
-```sh
-curl -i -X POST \
-  http://127.0.0.1:8080/api/v1/runs/RUN_ID/planning/round \
-  -H 'Idempotency-Key: planning-round-1' \
-  -H 'Content-Length: 0'
-```
-
-The coordinator resumes the original lead conversation with the reviewer's
-exact response, then keeps alternating between the same lead and reviewer
-provider sessions. Their natural Markdown replies appear in the shared history
-and live stream. The lead receives a schema-constrained choice on each of its
-turns: continue the discussion, or submit the complete final plan once it
-believes both agents genuinely agree. A submission appears as a distinct
-`plan_submitted` event, so the coordinator does not search conversational text
-for magic approval words.
-
-When the lead submits, the coordinator first requires the managed checkout to
-remain clean at its pinned planning baseline. It switches that checkout to the
-reserved feature branch, creates the exact matching Forgejo branch and draft
-PR, and appends the accepted goal plus one marked `Agreed implementation plan`
-section. Each boundary is restart-safe: retries adopt exact already-created
-state without duplicating a branch, PR, or plan. A conflict or uncertain
-Forgejo result produces a visible recovery assessment and waits for user review;
-retrying this action reconciles publication without another agent turn.
-
-The loop instead stops for user input if the shared discussion reaches twelve
-messages. The action is safe to retry. A coordinator restart during either turn
-reattaches to the exact worker attempt, and a restart between turns continues
-the stored handoff without starting two agents. The planning agents remain
-read-only.
-
-Once the agreed plan is visibly published, start the first implementation turn:
-
-```sh
-curl -i -X POST \
-  http://127.0.0.1:8080/api/v1/runs/RUN_ID/implementation \
-  -H 'Idempotency-Key: start-implementation-1' \
-  -H 'Content-Length: 0'
-```
-
-The coordinator performs a read-only verification of the exact marked plan,
-feature branch, clean checkout, unchanged baseline commit, and open draft PR.
-It then moves the feature to `implementing`, atomically rotates the lead to one
-deterministic implementation attempt, and resumes the same provider thread in
-the managed workspace. The lead must inspect Git HEAD, branch, status, and diff
-before editing; unexpected or ambiguous state must be reported without being
-reset or overwritten. The lead may modify files and run available tests. When it
-decides the result is ready for independent review, it commits under its
-configured Git identity, pushes the exact HEAD to the `commitarium` remote, and
-posts one marked `Implementation summary` comment to the draft PR. It then
-returns structured `published` facts containing that commit and PR number. If
-publication is unsafe or cannot be confirmed, it instead returns `blocked` with
-a concrete reason and does not claim a commit.
-
-The coordinator does not decide whether the work is complete. It mechanically
-confirms the lead's reported clean HEAD, its ancestry from the planning base,
-the exact Forgejo branch and PR head, the still-published plan, and one matching
-PR comment written by the configured lead account. A successful check records
-one visible verification activity, moves the feature to `reviewing`, and
-automatically resumes the existing reviewer provider conversation in its own
-container. A contradiction or unavailable external check records a recovery
-assessment and waits without starting another agent.
-
-An exact action retry after successful verification does not start another
-attempt. If verification previously stopped because Forgejo was unavailable or
-misconfigured, repeating the action rechecks the terminal result only; it never
-resumes or replaces the lead. If the coordinator stops
-while this turn is active, startup looks up and reattaches to that exact worker
-attempt without issuing another resume request. A worker-container restart still
-marks in-flight provider work indeterminate and requires user review.
-
-The reviewer receives the accepted goal, agreed plan, lead summary, exact
-implementation commit, branch, and PR. It must inspect the repository and diff
-before judging and must not modify, commit, push, or merge. It posts one formal
-Forgejo review whose body contains a retry-stable hidden marker and a concise
-`Review` section, using either `APPROVE` or `REQUEST_CHANGES`. Its structured
-result includes the exact commit, PR number, and Forgejo review ID. The
-coordinator fetches that exact review and verifies its author, commit, decision,
-attempt-owned marker, review-section structure, current PR head, and clean
-checkout. An approval resumes the lead, which
-inspects that exact revision and posts one marked `Merge readiness` comment.
-Only the lead's structured green light advances the feature to
-`ready_to_merge` and waits immediately before the later merge gate; a stated
-concern returns the same commit to the reviewer.
-If a review requests changes, the coordinator automatically resumes the
-same lead conversation with the exact review, commit, accepted goal, agreed
-plan, and PR identities. The lead inspects before editing, creates a new commit
-descended from the reviewed revision, pushes it, and posts one marked `Review
-response` comment describing the changes and tests. After the coordinator
-mechanically verifies those facts, it resumes the same reviewer conversation
-for the next numbered formal review. The default limit is six complete
-review/lead-response rounds, or up to twelve agent messages. The final allowed
-review is still paired with its lead response before the workflow waits for the
-user. Repeating startup at any boundary compares the durable review, correction,
-and readiness numbers, then reuses or verifies the deterministic attempt for the
-later stage. It does not replace an agent or duplicate a PR audit entry.
-
-At mutual approval, the coordinator durably records the exact approved commit
-before the feature becomes `ready_to_merge`. The default project policy leaves
-the run waiting for `POST /api/v1/runs/RUN_ID/merge`; projects may instead use
-`auto_after_gates` for new runs. Both paths call the same operation: it verifies
-the clean checkout, Forgejo branch, marked PR, and exact head again, removes the
-managed `WIP:` draft marker, and sends that head SHA to Forgejo's merge endpoint.
-Only a confirmed Forgejo merge advances the feature to `completed` and the run
-to `succeeded`. If the merge response is lost, a retry or coordinator restart
-adopts the already-merged PR instead of issuing a blind replacement action.
-
-When the lead is waiting during `implementing`, continue the same implementation
-conversation through the ordinary session command endpoint:
-
-```sh
-curl -X POST http://127.0.0.1:8080/api/v1/sessions/SESSION_ID/commands \
-  -H 'Content-Type: application/json' \
-  -H 'Idempotency-Key: implementation-follow-up-1' \
-  -d '{"type":"message","message":"I supplied the missing configuration; preserve my local edits and rerun the focused tests."}'
-```
-
-Before admitting the turn, the coordinator rechecks the exact published plan,
-Forgejo feature branch, open draft PR, and managed checkout identity. Unlike the
-first implementation gate, the checkout may now contain uncommitted changes or
-local descendant commits: those are existing agent or user work and must be
-preserved. The resumed lead must inspect HEAD, branch, status, and diff before
-editing, avoid repeating completed work, and stop if the state is ambiguous or
-the message would change the accepted goal or plan. Each accepted message creates
-one numbered implementation attempt. It either reports a blocker or performs
-the same commit, push, structured PR update, and verification path described
-above.
-
-The command and its `user_message` activity are committed together before the
-worker is contacted. Retrying the same idempotency key creates no additional
-turn. If the coordinator restarts after admission, it reattaches to the exact
-numbered attempt and applies the pending command once without issuing a second
-worker request.
-
-The temporary coordinator-owned implementation commit endpoint remains
-removed. Commits, feature-branch pushes, and structured PR summaries are now
-owned by the lead's scoped Forgejo identity. This internal work remains separate
-from the later trusted-host synchronization and optional external push.
-
-The versioned [internal worker API](docs/worker-api.md) now has tested client and
-server components for authenticated attempt inspection and control. Its worker
-server can also replay and stream safe, structured agent activity, providing the
-data foundation for timelines and future graphical agent views. The coordinator
-client can securely read and validate that stream. A narrow ingestion service
-now applies the coordinator's second safety filter and atomically stores each
-accepted activity event together with its durable worker replay position. This
-makes repeated delivery and coordinator restarts safe without duplicating public
-activity. A single-attempt pump can now open that stream from SQLite's saved
-cursor, copy events continuously, and inspect the worker when the connection
-ends so a disconnect is not mistaken for agent completion. The real-lead mode
-now uses this path for its first turn and for read-only reattachment after a
-coordinator restart. A
-worker journal now durably stores attempt state, provider session identity,
-mutation-retry records, terminal results, and the redacted event spool. It does
-not store raw mutation bodies or provider transcripts. A journal-backed worker
-service now connects those records to the existing HTTP operations and SSE
-stream using the deterministic provider adapter. It captures resumable provider
-identity before reporting an attempt as running, applies idempotent controls,
-and marks interrupted work uncertain on service startup. A standalone simulated
-Codex worker now serves this boundary as a long-running process. Its private
-SQLite journal survives container recreation and its compiled deterministic
-scripts can serve repeated logical sessions. The codebase also contains the
-first real Codex App Server adapter: it can start or resume a Codex thread,
-capture its thread ID before work continues, stream a safe subset of observable
-activity, steer or interrupt the active turn, and force-stop its exact process
-tree. The worker service now resolves each new attempt's workspace ID beneath a
-configured root into one validated, defensively copied launch environment
-before calling an adapter. A real adapter receives an explicit working
-directory and environment instead of inheriting the worker service's process
-variables. The resolved path and environment stay inside the worker and are
-never added to the worker HTTP request or journal. The same executable can now
-select the real Codex or Claude adapter. Their opt-in images pin the provider
-CLI version, run as a non-root user, mount the managed workspace root, and keep
-separate persistent provider and journal volumes. The earlier Codex standalone
-smoke path still mounts its selected repository read-only. It does not
-require a manifest, configuration revision, or materialization digest. Automatic
-provider-credential provisioning remains a separate future slice. Existing
-repositories can be imported through the coordinator using a trusted-host-
-produced Git bundle; ongoing local synchronization remains separate.
-Coordinator wiring currently covers selected-project goal clarification,
-explicit goal acceptance, verified project/repository preparation, and a
-bounded read-only lead/reviewer planning discussion through an explicit
-decision.
-
-The worker also has a provider-neutral operating-system process-supervision
-foundation. It can start one exact child process group, expose bounded and
-sequenced stdout/stderr chunks, report normal and signaled exits, request gentle
-termination, and force-stop the same process tree. The journal-backed service
-can now pass the immutable HTTP attempt ID into a process-backed provider
-session, durably record a force-stop request before delivery, terminate only
-that session's process tree, and wait for the normal session watcher to persist
-the terminal result. Exact retries return that stored result without sending a
-second signal. The simulated worker does not advertise this optional
-capability. Real Codex and Claude workers advertise it because each live
-session owns an exact operating-system process handle.
-
 ## Development checks
+
+Run the core checks locally:
 
 ```sh
 go test ./...
 go test -race ./...
 go vet ./...
+
+cd desktop
+pnpm build
+cargo test --locked --manifest-path src-tauri/Cargo.toml
 ```
 
-The production image also runs the full test suite as part of its multi-stage
-build.
+Additional container recovery and real-provider smoke tests live in
+[`scripts/`](scripts). GitHub Actions runs version validation, Compose release
+rendering, Go tests, the frontend production build, and native Rust tests for
+every pull request and push to `main`.
 
-The container recovery check uses an isolated Compose project and temporary
-volume. It interrupts a live session, restarts twice, approves the recovery,
-and verifies that completed work was not duplicated:
+## Documentation
 
-```sh
-./scripts/test-compose-recovery.sh
-```
+| Document | Purpose |
+| --- | --- |
+| [Product and architecture plan](PROJECT_PLAN.md) | Product principles, scope, and system design |
+| [Release guide](docs/releasing.md) | Versioning, image publication, installers, and release verification |
+| [Desktop IPC](docs/desktop-ipc.md) | Trusted Tauri command and event contract |
+| [Coordinator API](docs/coordinator-api.md) | Coordinator HTTP API and event stream |
+| [Worker API](docs/worker-api.md) | Authenticated worker protocol |
+| [UI/backend status](docs/ui-backend-status.md) | Current integration status and ownership boundaries |
+| [Architecture decisions](docs/adr) | Accepted architectural decisions and rationale |
 
-The standalone-worker check uses a separate isolated Compose project. It starts
-a long-running attempt through the authenticated worker API, removes and
-recreates the worker container while preserving its journal volume, and proves
-that the original attempt becomes uncertain, exact retries remain idempotent,
-and replacement attempts stay blocked:
+## Release model
 
-```sh
-./scripts/test-compose-worker-restart.sh
-```
+A `v*` Git tag starts two release workflows:
+
+- multi-platform service images are published to GHCR with version and commit
+  tags, provenance, and an SBOM;
+- native macOS, Windows, and Linux packages are attached to a draft GitHub
+  prerelease for final clean-machine verification.
+
+The desktop version and service-image version are intentionally locked
+together. See [the release guide](docs/releasing.md) before creating a tag.
+
+## Contributing
+
+Issues and focused pull requests are welcome. For substantial behavioral or
+architectural changes, open an issue first so the proposed direction can be
+discussed. Please include tests for changed behavior and keep privileged host
+operations narrow and explicit.
+
+## License
+
+Commitarium is available under the [Apache License 2.0](LICENSE).
