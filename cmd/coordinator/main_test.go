@@ -55,11 +55,49 @@ func TestLoadConfigAcceptsForgejoOverrides(t *testing.T) {
 	}
 }
 
-func TestLoadConfigAcceptsRealCodexLeadRunner(t *testing.T) {
+func TestLoadConfigAcceptsRealAgentRunner(t *testing.T) {
+	values := realAgentConfigValues(t)
+	loaded, err := loadConfig(func(name string) string { return values[name] })
+	if err != nil {
+		t.Fatalf("load real-agent coordinator config: %v", err)
+	}
+	if loaded.runnerMode != realAgentsRunnerMode ||
+		loaded.codexWorkerURL != "http://codex-worker:8081" ||
+		loaded.codexWorkerToken != "test-token" ||
+		loaded.codexAgentProfileID != "profile_test" ||
+		loaded.codexReviewerWorkerURL != "http://codex-reviewer-worker:8081" ||
+		loaded.codexReviewerWorkerToken != "reviewer-test-token" ||
+		loaded.codexReviewerAgentProfileID != "reviewer_profile_test" ||
+		loaded.claudeWorkerURL != "http://claude-worker:8081" ||
+		loaded.claudeWorkerToken != "claude-test-token" ||
+		loaded.claudeAgentProfileID != "claude_profile_test" ||
+		loaded.claudeReviewerWorkerURL != "http://claude-reviewer-worker:8081" ||
+		loaded.claudeReviewerWorkerToken != "claude-reviewer-test-token" ||
+		loaded.claudeReviewerAgentProfileID != "claude_reviewer_profile_test" ||
+		loaded.workerRequestTimeout != 4*time.Second {
+		t.Fatalf("unexpected real-agent config %+v", loaded)
+	}
+}
+
+func TestLoadConfigNormalizesLegacyRealCodexLeadRunner(t *testing.T) {
+	values := realAgentConfigValues(t)
+	values["COMMITARIUM_RUNNER_MODE"] = legacyRealCodexLeadRunnerMode
+
+	loaded, err := loadConfig(func(name string) string { return values[name] })
+	if err != nil {
+		t.Fatalf("load legacy real-agent coordinator config: %v", err)
+	}
+	if loaded.runnerMode != realAgentsRunnerMode {
+		t.Fatalf("legacy runner mode normalized to %q; expected %q", loaded.runnerMode, realAgentsRunnerMode)
+	}
+}
+
+func realAgentConfigValues(t *testing.T) map[string]string {
+	t.Helper()
 	tokenFiles := coordinatorWorkerTokenFiles(t)
-	values := map[string]string{
+	return map[string]string{
 		"COMMITARIUM_DATABASE_PATH":                     "/state/coordinator.db",
-		"COMMITARIUM_RUNNER_MODE":                       realCodexLeadRunnerMode,
+		"COMMITARIUM_RUNNER_MODE":                       realAgentsRunnerMode,
 		"COMMITARIUM_CODEX_WORKER_URL":                  "http://codex-worker:8081",
 		"COMMITARIUM_CODEX_WORKER_TOKEN_FILE":           tokenFiles[0],
 		"COMMITARIUM_CODEX_PROFILE_ID":                  "profile_test",
@@ -74,26 +112,6 @@ func TestLoadConfigAcceptsRealCodexLeadRunner(t *testing.T) {
 		"COMMITARIUM_CLAUDE_REVIEWER_PROFILE_ID":        "claude_reviewer_profile_test",
 		"COMMITARIUM_CODEX_WORKER_REQUEST_TIMEOUT":      "4s",
 	}
-	loaded, err := loadConfig(func(name string) string { return values[name] })
-	if err != nil {
-		t.Fatalf("load real Codex coordinator config: %v", err)
-	}
-	if loaded.runnerMode != realCodexLeadRunnerMode ||
-		loaded.codexWorkerURL != "http://codex-worker:8081" ||
-		loaded.codexWorkerToken != "test-token" ||
-		loaded.codexAgentProfileID != "profile_test" ||
-		loaded.codexReviewerWorkerURL != "http://codex-reviewer-worker:8081" ||
-		loaded.codexReviewerWorkerToken != "reviewer-test-token" ||
-		loaded.codexReviewerAgentProfileID != "reviewer_profile_test" ||
-		loaded.claudeWorkerURL != "http://claude-worker:8081" ||
-		loaded.claudeWorkerToken != "claude-test-token" ||
-		loaded.claudeAgentProfileID != "claude_profile_test" ||
-		loaded.claudeReviewerWorkerURL != "http://claude-reviewer-worker:8081" ||
-		loaded.claudeReviewerWorkerToken != "claude-reviewer-test-token" ||
-		loaded.claudeReviewerAgentProfileID != "claude_reviewer_profile_test" ||
-		loaded.workerRequestTimeout != 4*time.Second {
-		t.Fatalf("unexpected real Codex config %+v", loaded)
-	}
 }
 
 func TestLoadConfigRejectsIncompleteOrUnknownRunner(t *testing.T) {
@@ -106,11 +124,11 @@ func TestLoadConfigRejectsIncompleteOrUnknownRunner(t *testing.T) {
 		},
 		{
 			"COMMITARIUM_DATABASE_PATH": "/state/coordinator.db",
-			"COMMITARIUM_RUNNER_MODE":   realCodexLeadRunnerMode,
+			"COMMITARIUM_RUNNER_MODE":   realAgentsRunnerMode,
 		},
 		{
 			"COMMITARIUM_DATABASE_PATH":                    "/state/coordinator.db",
-			"COMMITARIUM_RUNNER_MODE":                      realCodexLeadRunnerMode,
+			"COMMITARIUM_RUNNER_MODE":                      realAgentsRunnerMode,
 			"COMMITARIUM_CODEX_WORKER_URL":                 "http://codex-worker:8081",
 			"COMMITARIUM_CODEX_WORKER_TOKEN_FILE":          tokenFiles[0],
 			"COMMITARIUM_CODEX_PROFILE_ID":                 "profile_test",

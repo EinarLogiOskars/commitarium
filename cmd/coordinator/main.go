@@ -28,14 +28,15 @@ import (
 )
 
 const (
-	defaultRunnerMode           = "simulated"
-	realCodexLeadRunnerMode     = "real_codex_lead"
-	defaultWorkerRequestTimeout = 10 * time.Second
-	defaultForgejoURL           = "http://forgejo:3000"
-	defaultForgejoHostURL       = "http://127.0.0.1:3001"
-	defaultForgejoTokenFile     = "/run/commitarium-config/forgejo-token"
-	defaultForgejoTimeout       = 10 * time.Second
-	defaultWorkspaceRoot        = "/workspaces"
+	defaultRunnerMode             = "simulated"
+	realAgentsRunnerMode          = "real_agents"
+	legacyRealCodexLeadRunnerMode = "real_codex_lead"
+	defaultWorkerRequestTimeout   = 10 * time.Second
+	defaultForgejoURL             = "http://forgejo:3000"
+	defaultForgejoHostURL         = "http://127.0.0.1:3001"
+	defaultForgejoTokenFile       = "/run/commitarium-config/forgejo-token"
+	defaultForgejoTimeout         = 10 * time.Second
+	defaultWorkspaceRoot          = "/workspaces"
 )
 
 type config struct {
@@ -87,8 +88,14 @@ func loadConfig(getenv func(string) string) (config, error) {
 	if runnerMode == "" {
 		runnerMode = defaultRunnerMode
 	}
-	if runnerMode != defaultRunnerMode && runnerMode != realCodexLeadRunnerMode {
-		return config{}, errors.New("COMMITARIUM_RUNNER_MODE must be simulated or real_codex_lead")
+	switch runnerMode {
+	case defaultRunnerMode, realAgentsRunnerMode:
+	case legacyRealCodexLeadRunnerMode:
+		// Backward compatibility for development environments created before the
+		// real workflow gained independent reviewer and Claude routing.
+		runnerMode = realAgentsRunnerMode
+	default:
+		return config{}, errors.New("COMMITARIUM_RUNNER_MODE must be simulated or real_agents")
 	}
 	simulatedStepDelay := 250 * time.Millisecond
 	if configuredDelay := strings.TrimSpace(getenv("COMMITARIUM_SIMULATED_STEP_DELAY")); configuredDelay != "" {
@@ -139,11 +146,11 @@ func loadConfig(getenv func(string) string) (config, error) {
 	if value := strings.TrimSpace(getenv("COMMITARIUM_GIT_EXECUTABLE")); value != "" {
 		loaded.gitExecutable = value
 	}
-	if runnerMode == realCodexLeadRunnerMode {
+	if runnerMode == realAgentsRunnerMode {
 		required := func(name string) (string, error) {
 			value := strings.TrimSpace(getenv(name))
 			if value == "" {
-				return "", fmt.Errorf("%s is required in real_codex_lead mode", name)
+				return "", fmt.Errorf("%s is required in real_agents mode", name)
 			}
 			return value, nil
 		}
@@ -294,7 +301,7 @@ func run(ctx context.Context, coordinatorConfig config) error {
 		)
 		runStarter = simulatedStarter
 		runRecoverer = simulatedStarter
-	case realCodexLeadRunnerMode:
+	case realAgentsRunnerMode:
 		leadClient, err := workerhttp.NewClient(workerhttp.ClientConfig{
 			BaseURL:        coordinatorConfig.codexWorkerURL,
 			BearerToken:    coordinatorConfig.codexWorkerToken,
