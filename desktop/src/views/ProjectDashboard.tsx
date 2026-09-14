@@ -2,7 +2,6 @@ import { useCallback, useEffect, useState } from "react";
 import { listFeatures, listFeatureRuns } from "../api/features";
 import { getRun, recoverRun } from "../api/runs";
 import { currentPhaseIndex, PHASE_LABELS, PHASES } from "./PhaseStepper";
-import { RepositoryCard } from "./RepositoryCard";
 import { ProjectSyncCard } from "./ProjectSyncCard";
 import { WORK } from "../vocab";
 import type { Feature, Project, Run, WaitKind } from "../api/types";
@@ -192,7 +191,6 @@ export function ProjectDashboard({
       )}
 
       {repo && <ProjectSyncCard projectId={project.id} />}
-      {repo && <RepositoryCard projectId={project.id} />}
     </div>
   );
 }
