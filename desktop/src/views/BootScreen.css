@@ -1,0 +1,126 @@
+.boot {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  background: #000;
+  overflow: hidden;
+}
+
+/* Pixel-art backdrop: 480x270 source. Always fill the full window width; height
+   scales proportionally, and the black background shows as letterbox bars above
+   and below when the window isn't 16:9. No smoothing. */
+.boot__art {
+  position: absolute;
+  inset: 0;
+  background-color: #000;
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: 100% auto;
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+}
+
+/* Bottom band mirrors the dark floor in the art so the UI sits on it. */
+.boot__band {
+  position: relative;
+  margin-top: auto;
+  width: 100%;
+  padding: 2.5rem 2rem 3rem;
+  background: linear-gradient(
+    to bottom,
+    rgba(0, 0, 0, 0) 0%,
+    rgba(0, 0, 0, 0.82) 45%,
+    rgba(0, 0, 0, 0.94) 100%
+  );
+}
+
+.boot__inner {
+  max-width: 640px;
+  margin: 0 auto;
+  text-align: center;
+}
+
+.boot__title {
+  margin: 0 0 0.75rem;
+  font-size: 1.9rem;
+  letter-spacing: 0.08em;
+  color: #f4f0e6;
+  text-shadow: 0 2px 0 rgba(0, 0, 0, 0.5);
+}
+
+.boot__status {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.boot__detail {
+  margin: 0;
+  color: #c7c3d6;
+  font-size: 0.95rem;
+}
+
+.boot__detail--error {
+  color: #ff9d9d;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.85rem;
+  word-break: break-word;
+}
+
+.boot__message {
+  margin: 0;
+  color: #f4f0e6;
+  font-size: 1.05rem;
+}
+
+.boot__actions {
+  display: flex;
+  gap: 0.75rem;
+  margin-top: 0.25rem;
+}
+
+/* Pixel-art progress bar: hard-edged track + chunky segmented amber fill. */
+.boot__bar {
+  width: 320px;
+  height: 20px;
+  padding: 3px;
+  background: #17142a;
+  border: 2px solid #05040c;
+  box-shadow: inset 0 0 0 2px #3a3358;
+  image-rendering: pixelated;
+}
+
+.boot__bar-fill {
+  height: 100%;
+  min-width: 4px;
+  /* Chunky 6px segments read as pixels; two ambers give a forged sheen. */
+  background: repeating-linear-gradient(
+    90deg,
+    #ffc061 0,
+    #ffc061 6px,
+    #ff9a3c 6px,
+    #ff9a3c 12px
+  );
+  box-shadow:
+    inset 0 2px 0 rgba(255, 255, 255, 0.35),
+    inset 0 -3px 0 rgba(120, 40, 0, 0.35);
+  transition: width 140ms linear;
+}
+
+.boot__spinner {
+  width: 22px;
+  height: 22px;
+  border: 3px solid rgba(255, 255, 255, 0.18);
+  border-top-color: #ffb454;
+  border-radius: 50%;
+  animation: boot-spin 0.8s linear infinite;
+}
+
+@keyframes boot-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
