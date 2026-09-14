@@ -1,0 +1,97 @@
+name: Publish desktop installers
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-desktop-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Validate release version
+        run: ./scripts/verify-release-version.sh "${GITHUB_REF_NAME}"
+
+  publish:
+    needs: validate
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-latest
+            rust_targets: aarch64-apple-darwin,x86_64-apple-darwin
+            args: --target universal-apple-darwin --bundles dmg
+          - platform: windows-latest
+            rust_targets: ""
+            args: --bundles nsis
+          - platform: ubuntu-22.04
+            rust_targets: ""
+            args: --bundles appimage
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Linux system dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xdg-utils
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 10.23.0
+          run_install: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: desktop/pnpm-lock.yaml
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_targets }}
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/src-tauri -> target
+
+      - name: Install frontend dependencies
+        working-directory: desktop
+        run: pnpm install --frozen-lockfile
+
+      - name: Build and upload installer
+        uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Until Developer ID credentials are configured, ad-hoc signing keeps
+          # downloaded Apple Silicon builds from being treated as damaged.
+          APPLE_SIGNING_IDENTITY: ${{ runner.os == 'macOS' && '-' || '' }}
+        with:
+          projectPath: desktop
+          tauriScript: pnpm tauri
+          tagName: v__VERSION__
+          releaseName: Commitarium v__VERSION__
+          releaseBody: |
+            Download the installer for your operating system below.
+
+            Docker Desktop (with Docker Compose) is required. Commitarium will guide you through setup on first launch.
+          releaseDraft: true
+          prerelease: true
+          generateReleaseNotes: true
+          uploadUpdaterJson: false
+          retryAttempts: 2
+          releaseAssetNamePattern: Commitarium_[version]_[platform]_[arch][setup].[ext]
+          args: ${{ matrix.args }}
