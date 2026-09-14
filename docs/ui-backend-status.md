@@ -433,8 +433,9 @@ repository credentials.
 
 ## Current limitations the UI should show honestly
 
-- The normal runtime still defaults to deterministic simulated agents. The
-  complete real workflow is opt-in through `real_codex_lead` configuration.
+- Source-development Compose still defaults to deterministic simulated agents.
+  Installed releases override this with `real_agents`; the legacy
+  `real_codex_lead` value remains a backward-compatible alias.
 - The guarded merge endpoint and automatic merge policy operate in that real
   Forgejo-backed mode. The deterministic simulation does not invent a remote
   merge result.

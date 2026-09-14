@@ -69,8 +69,8 @@ approval always return control to you.
 
 - Docker Desktop with Docker Compose on macOS or Windows
 - Docker Engine with the Compose v2 plugin on Linux
-- A Codex or Claude account only when using the corresponding real agent
-  provider; the built-in simulated workflow needs neither
+- A Codex or Claude account for each provider assigned to a lead or reviewer
+  role
 
 ### Download
 
@@ -107,7 +107,8 @@ stable release.
 ## Getting started
 
 1. Open **Providers** and connect the lead and reviewer profiles you want to
-   use, or explore the built-in simulated workflow without connecting one.
+   use. Lead and reviewer profiles remain separate even when both use the same
+   provider account.
 2. Import an existing clean Git repository.
 3. Create a work order and describe the outcome you want.
 4. Refine and accept the goal, then follow the planning and implementation
@@ -178,9 +179,11 @@ pnpm tauri dev
 ```
 
 Development builds use [`compose.yml`](compose.yml) directly and build service
-images from the local Dockerfiles. Installed releases combine that file with
-[`compose.release.yml`](compose.release.yml), pull versioned GHCR images, and
-disable local builds.
+images from the local Dockerfiles; their coordinator defaults to the
+deterministic simulation unless configured otherwise. Installed releases
+combine that file with [`compose.release.yml`](compose.release.yml), enable the
+real Codex/Claude workflow, pull versioned GHCR images, and disable local
+builds.
 
 To work on the stack without the desktop UI, first run the desktop app once so
 it can create the private local credentials, then run from the repository root:

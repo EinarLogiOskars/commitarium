@@ -39,4 +39,9 @@ if ! grep -Fq "COMMITARIUM_IMAGE_TAG:-$version" compose.release.yml; then
     exit 1
 fi
 
+if ! grep -Eq '^[[:space:]]*COMMITARIUM_RUNNER_MODE:[[:space:]]*real_agents[[:space:]]*$' compose.release.yml; then
+    echo "compose.release.yml does not enable the real-agent runner" >&2
+    exit 1
+fi
+
 echo "release version $version is consistent"
