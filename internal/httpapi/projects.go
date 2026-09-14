@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/EinarLogiOskars/commitarium/internal/modelcatalog"
 	"github.com/EinarLogiOskars/commitarium/internal/project"
 )
 
@@ -21,6 +22,7 @@ type createProjectRequest struct {
 	AutonomyPolicy project.AutonomyPolicy `json:"autonomy_policy"`
 	DialogueLimits *dialogueLimitsRequest `json:"dialogue_limits"`
 	AgentProviders *agentProvidersRequest `json:"agent_providers"`
+	AgentModels    *agentModelsRequest    `json:"agent_models"`
 }
 
 type projectResponse struct {
@@ -31,6 +33,7 @@ type projectResponse struct {
 	AutonomyPolicy    project.AutonomyPolicy     `json:"autonomy_policy"`
 	DialogueLimits    dialogueLimitsResponse     `json:"dialogue_limits"`
 	AgentProviders    agentProvidersResponse     `json:"agent_providers"`
+	AgentModels       agentModelsResponse        `json:"agent_models"`
 	ForgejoRepository *forgejoRepositoryResponse `json:"forgejo_repository,omitempty"`
 	CreatedAt         time.Time                  `json:"created_at"`
 }
@@ -53,6 +56,16 @@ type agentProvidersRequest struct {
 type agentProvidersResponse struct {
 	Lead     project.AgentProvider `json:"lead"`
 	Reviewer project.AgentProvider `json:"reviewer"`
+}
+
+type agentModelsRequest struct {
+	Lead     *string `json:"lead"`
+	Reviewer *string `json:"reviewer"`
+}
+
+type agentModelsResponse struct {
+	Lead     string `json:"lead"`
+	Reviewer string `json:"reviewer"`
 }
 
 type forgejoRepositoryResponse struct {
@@ -93,6 +106,7 @@ type importProjectMetadata struct {
 	AutonomyPolicy project.AutonomyPolicy `json:"autonomy_policy"`
 	DialogueLimits *dialogueLimitsRequest `json:"dialogue_limits"`
 	AgentProviders *agentProvidersRequest `json:"agent_providers"`
+	AgentModels    *agentModelsRequest    `json:"agent_models"`
 	DefaultBranch  string                 `json:"default_branch"`
 }
 
@@ -134,6 +148,17 @@ func (api *API) importProjectHandler(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_agent_providers", "agent_providers must include lead and reviewer set to codex or claude")
 		return
 	}
+	agentModels, err := decodeAgentModels(metadata.AgentModels, true)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_agent_models", "agent_models must include explicit lead and reviewer model IDs")
+		return
+	}
+	if metadata.AgentModels != nil && api.modelCatalog != nil {
+		if err := api.modelCatalog.ValidateSelection(r.Context(), agentProviders, agentModels); err != nil {
+			writeModelSelectionError(w, err)
+			return
+		}
+	}
 	bundle, err := r.MultipartForm.File["bundle"][0].Open()
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_git_bundle", "Git bundle cannot be read")
@@ -146,6 +171,7 @@ func (api *API) importProjectHandler(w http.ResponseWriter, r *http.Request) {
 		AutonomyPolicy: metadata.AutonomyPolicy,
 		DialogueLimits: limits,
 		AgentProviders: agentProviders,
+		AgentModels:    agentModels,
 		DefaultBranch:  metadata.DefaultBranch,
 	}, bundle)
 	if err != nil {
@@ -164,6 +190,8 @@ func (api *API) importProjectHandler(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "invalid_dialogue_limits", "dialogue limits must be non-negative; zero means unlimited")
 		case errors.Is(err, project.ErrInvalidAgentProviders):
 			writeError(w, http.StatusBadRequest, "invalid_agent_providers", "lead and reviewer providers must be codex or claude")
+		case errors.Is(err, project.ErrInvalidAgentModels):
+			writeError(w, http.StatusBadRequest, "invalid_agent_models", "lead and reviewer models must be explicit model IDs")
 		case errors.Is(err, project.ErrInvalidDefaultBranch):
 			writeError(w, http.StatusBadRequest, "invalid_default_branch", "default_branch must be a valid Git branch name")
 		case errors.Is(err, project.ErrInvalidGitBundle):
@@ -227,16 +255,35 @@ func (api *API) createProjectHandler(
 		writeError(w, http.StatusBadRequest, "invalid_agent_providers", "agent_providers must include lead and reviewer set to codex or claude")
 		return
 	}
+	agentModels, err := decodeAgentModels(request.AgentModels, true)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_agent_models", "agent_models must include explicit lead and reviewer model IDs")
+		return
+	}
+	if request.AgentModels != nil && api.modelCatalog != nil {
+		if err := api.modelCatalog.ValidateSelection(r.Context(), agentProviders, agentModels); err != nil {
+			writeModelSelectionError(w, err)
+			return
+		}
+	}
 
-	createdProject, err := api.projects.Create(
-		r.Context(),
-		request.Name,
-		request.RecoveryPolicy,
-		dialogueLimits,
-		agentProviders,
-		request.MergePolicy,
-		request.AutonomyPolicy,
-	)
+	var createdProject project.Project
+	if request.AgentModels != nil {
+		creator, ok := api.projects.(ProjectAgentModelCreator)
+		if !ok {
+			writeError(w, http.StatusServiceUnavailable, "agent_models_unavailable", "project model settings are unavailable")
+			return
+		}
+		createdProject, err = creator.CreateWithAgentModels(
+			r.Context(), request.Name, request.RecoveryPolicy, dialogueLimits,
+			agentProviders, agentModels, request.MergePolicy, request.AutonomyPolicy,
+		)
+	} else {
+		createdProject, err = api.projects.Create(
+			r.Context(), request.Name, request.RecoveryPolicy, dialogueLimits,
+			agentProviders, request.MergePolicy, request.AutonomyPolicy,
+		)
+	}
 	if err != nil {
 		if errors.Is(err, project.ErrNameRequired) {
 			writeError(
@@ -275,6 +322,10 @@ func (api *API) createProjectHandler(
 		}
 		if errors.Is(err, project.ErrInvalidAgentProviders) {
 			writeError(w, http.StatusBadRequest, "invalid_agent_providers", "lead and reviewer providers must be codex or claude")
+			return
+		}
+		if errors.Is(err, project.ErrInvalidAgentModels) {
+			writeError(w, http.StatusBadRequest, "invalid_agent_models", "lead and reviewer models must be explicit model IDs")
 			return
 		}
 		log.Printf("create project: %v", err)
@@ -401,6 +452,21 @@ func (api *API) updateProjectAgentProvidersHandler(w http.ResponseWriter, r *htt
 		writeError(w, http.StatusBadRequest, "invalid_agent_providers", "request must include lead and reviewer set to codex or claude")
 		return
 	}
+	if api.modelCatalog != nil {
+		storedProject, err := api.projects.GetByID(r.Context(), r.PathValue("id"))
+		if err != nil {
+			if errors.Is(err, project.ErrNotFound) {
+				writeError(w, http.StatusNotFound, "project_not_found", "project not found")
+			} else {
+				writeError(w, http.StatusInternalServerError, "internal_error", "internal server error")
+			}
+			return
+		}
+		if err := api.modelCatalog.ValidateSelection(r.Context(), providers, storedProject.AgentModels); err != nil {
+			writeModelSelectionError(w, err)
+			return
+		}
+	}
 	updated, err := api.projects.UpdateAgentProviders(r.Context(), r.PathValue("id"), providers)
 	if err != nil {
 		switch {
@@ -431,6 +497,83 @@ func decodeAgentProviders(
 		return project.AgentProviders{}, project.ErrInvalidAgentProviders
 	}
 	return project.AgentProviders{Lead: *request.Lead, Reviewer: *request.Reviewer}.Normalize()
+}
+
+func decodeAgentModels(request *agentModelsRequest, useEmptyWhenOmitted bool) (project.AgentModels, error) {
+	if request == nil && useEmptyWhenOmitted {
+		return project.AgentModels{}, nil
+	}
+	if request == nil || request.Lead == nil || request.Reviewer == nil {
+		return project.AgentModels{}, project.ErrInvalidAgentModels
+	}
+	models, err := (project.AgentModels{Lead: *request.Lead, Reviewer: *request.Reviewer}).Normalize()
+	if err != nil || models.ValidateRequired() != nil {
+		return project.AgentModels{}, project.ErrInvalidAgentModels
+	}
+	return models, nil
+}
+
+type agentSettingsRequest struct {
+	AgentProviders agentProvidersRequest `json:"agent_providers"`
+	AgentModels    agentModelsRequest    `json:"agent_models"`
+}
+
+func (api *API) updateProjectAgentSettingsHandler(w http.ResponseWriter, r *http.Request) {
+	request := agentSettingsRequest{}
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&request); err != nil || ensureJSONEOF(decoder) != nil {
+		writeError(w, http.StatusBadRequest, "invalid_json", "request body must contain exactly one valid JSON object with no unknown fields")
+		return
+	}
+	providers, err := decodeAgentProviders(&request.AgentProviders, false)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_agent_providers", "agent_providers must include lead and reviewer set to codex or claude")
+		return
+	}
+	models, err := decodeAgentModels(&request.AgentModels, false)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_agent_models", "agent_models must include explicit lead and reviewer model IDs")
+		return
+	}
+	if api.modelCatalog != nil {
+		if err := api.modelCatalog.ValidateSelection(r.Context(), providers, models); err != nil {
+			writeModelSelectionError(w, err)
+			return
+		}
+	}
+	updater, ok := api.projects.(ProjectAgentSettingsUpdater)
+	if !ok {
+		writeError(w, http.StatusServiceUnavailable, "agent_models_unavailable", "project model settings are unavailable")
+		return
+	}
+	updated, err := updater.UpdateAgentSettings(r.Context(), r.PathValue("id"), providers, models)
+	if err != nil {
+		switch {
+		case errors.Is(err, project.ErrNotFound):
+			writeError(w, http.StatusNotFound, "project_not_found", "project not found")
+		case errors.Is(err, project.ErrInvalidAgentProviders):
+			writeError(w, http.StatusBadRequest, "invalid_agent_providers", "lead and reviewer providers must be codex or claude")
+		case errors.Is(err, project.ErrInvalidAgentModels):
+			writeError(w, http.StatusBadRequest, "invalid_agent_models", "lead and reviewer models must be explicit model IDs")
+		default:
+			log.Printf("update project agent settings %q: %v", r.PathValue("id"), err)
+			writeError(w, http.StatusInternalServerError, "internal_error", "internal server error")
+		}
+		return
+	}
+	writeJSON(w, http.StatusOK, newProjectResponse(updated), "project")
+}
+
+func writeModelSelectionError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, modelcatalog.ErrCatalogUnavailable):
+		writeError(w, http.StatusServiceUnavailable, "model_catalog_unavailable", "the selected worker model catalog is unavailable; refresh it and try again")
+	case errors.Is(err, modelcatalog.ErrModelUnavailable):
+		writeError(w, http.StatusBadRequest, "model_unavailable", "the selected exact model is not available from that role's worker")
+	default:
+		writeError(w, http.StatusBadRequest, "invalid_agent_models", "lead and reviewer models must be explicit model IDs")
+	}
 }
 
 func (api *API) updateProjectDialogueLimitsHandler(w http.ResponseWriter, r *http.Request) {
@@ -594,6 +737,9 @@ func newProjectResponse(storedProject project.Project) projectResponse {
 		},
 		AgentProviders: agentProvidersResponse{
 			Lead: agentProviders.Lead, Reviewer: agentProviders.Reviewer,
+		},
+		AgentModels: agentModelsResponse{
+			Lead: storedProject.AgentModels.Lead, Reviewer: storedProject.AgentModels.Reviewer,
 		},
 		CreatedAt: storedProject.CreatedAt,
 	}

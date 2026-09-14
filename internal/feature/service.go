@@ -42,13 +42,15 @@ func (s *Service) Create(
 	projectID string,
 	title string,
 	description string,
+	overrides SettingsOverrides,
 ) (Feature, error) {
 	sanitizedTitle := strings.TrimSpace(title)
 	if sanitizedTitle == "" {
 		return Feature{}, ErrTitleRequired
 	}
 
-	if _, err := s.projects.GetByID(ctx, projectID); err != nil {
+	storedProject, err := s.projects.GetByID(ctx, projectID)
+	if err != nil {
 		return Feature{}, fmt.Errorf(
 			"get project %q: %w",
 			projectID,
@@ -56,15 +58,73 @@ func (s *Service) Create(
 		)
 	}
 
+	dialogueLimits := storedProject.DialogueLimits
+	if overrides.DialogueLimits != nil {
+		dialogueLimits = *overrides.DialogueLimits
+	}
+	if err := dialogueLimits.Validate(); err != nil {
+		return Feature{}, err
+	}
+
+	agentProviders := storedProject.AgentProviders
+	if overrides.AgentProviders != nil {
+		agentProviders = *overrides.AgentProviders
+		if !agentProviders.Lead.IsValid() || !agentProviders.Reviewer.IsValid() {
+			return Feature{}, project.ErrInvalidAgentProviders
+		}
+	}
+	agentProviders, err = agentProviders.Normalize()
+	if err != nil {
+		return Feature{}, err
+	}
+
+	agentModels := storedProject.AgentModels
+	if overrides.AgentModels != nil {
+		agentModels = *overrides.AgentModels
+	}
+	agentModels, err = agentModels.Normalize()
+	if err != nil {
+		return Feature{}, project.ErrInvalidAgentModels
+	}
+
+	mergePolicy := storedProject.MergePolicy
+	if overrides.MergePolicy != nil {
+		if *overrides.MergePolicy == "" {
+			return Feature{}, project.ErrInvalidMergePolicy
+		}
+		mergePolicy = *overrides.MergePolicy
+	}
+	mergePolicy, err = project.NormalizeMergePolicy(mergePolicy)
+	if err != nil {
+		return Feature{}, err
+	}
+
+	autonomyPolicy := storedProject.AutonomyPolicy
+	if overrides.AutonomyPolicy != nil {
+		if *overrides.AutonomyPolicy == "" {
+			return Feature{}, project.ErrInvalidAutonomyPolicy
+		}
+		autonomyPolicy = *overrides.AutonomyPolicy
+	}
+	autonomyPolicy, err = project.NormalizeAutonomyPolicy(autonomyPolicy)
+	if err != nil {
+		return Feature{}, err
+	}
+
 	now := s.now()
 	createdFeature := Feature{
-		ID:          s.generateID(),
-		ProjectID:   projectID,
-		Title:       sanitizedTitle,
-		Description: strings.TrimSpace(description),
-		State:       StateDraft,
-		CreatedAt:   now,
-		UpdatedAt:   now,
+		ID:             s.generateID(),
+		ProjectID:      projectID,
+		Title:          sanitizedTitle,
+		Description:    strings.TrimSpace(description),
+		State:          StateDraft,
+		DialogueLimits: dialogueLimits,
+		AgentProviders: agentProviders,
+		AgentModels:    agentModels,
+		MergePolicy:    mergePolicy,
+		AutonomyPolicy: autonomyPolicy,
+		CreatedAt:      now,
+		UpdatedAt:      now,
 	}
 
 	if err := s.store.Create(ctx, createdFeature); err != nil {

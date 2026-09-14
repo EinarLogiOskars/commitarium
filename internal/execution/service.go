@@ -44,7 +44,28 @@ func (s *Service) CreateRun(
 	mergePolicy project.MergePolicy,
 	autonomyPolicies ...project.AutonomyPolicy,
 ) (Run, bool, error) {
+	return s.CreateRunWithModels(
+		ctx, id, featureID, planningRoundLimit, implementationReviewRoundLimit,
+		agentProviders, project.AgentModels{}, mergePolicy, autonomyPolicies...,
+	)
+}
+
+func (s *Service) CreateRunWithModels(
+	ctx context.Context,
+	id string,
+	featureID string,
+	planningRoundLimit int,
+	implementationReviewRoundLimit int,
+	agentProviders project.AgentProviders,
+	agentModels project.AgentModels,
+	mergePolicy project.MergePolicy,
+	autonomyPolicies ...project.AutonomyPolicy,
+) (Run, bool, error) {
 	agentProviders, err := agentProviders.Normalize()
+	if err != nil {
+		return Run{}, false, err
+	}
+	agentModels, err = agentModels.Normalize()
 	if err != nil {
 		return Run{}, false, err
 	}
@@ -69,6 +90,7 @@ func (s *Service) CreateRun(
 		PlanningRoundLimit:             planningRoundLimit,
 		ImplementationReviewRoundLimit: implementationReviewRoundLimit,
 		AgentProviders:                 agentProviders,
+		AgentModels:                    agentModels,
 		MergePolicy:                    mergePolicy,
 		AutonomyPolicy:                 autonomyPolicy,
 		PlanVersion:                    1,
@@ -98,6 +120,7 @@ func (s *Service) CreateRun(
 			existing.PlanningRoundLimit != planningRoundLimit ||
 			existing.ImplementationReviewRoundLimit != implementationReviewRoundLimit ||
 			existingProviders != agentProviders ||
+			existing.AgentModels != agentModels ||
 			existingMergePolicy != mergePolicy ||
 			existingAutonomyPolicy != autonomyPolicy {
 			return Run{}, false, ErrRecordConflict

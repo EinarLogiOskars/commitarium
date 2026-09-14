@@ -53,6 +53,16 @@ func (router *ProviderRoutedWorker) PutAttempt(
 	if request.Assignment.Role != role {
 		return workerhttp.Attempt{}, false, errors.New("assignment role does not match session identity")
 	}
+	model := run.AgentModels.Lead
+	if role == workerhttp.RoleReviewer {
+		model = run.AgentModels.Reviewer
+	}
+	if model != "" && request.Assignment.Model != "" && request.Assignment.Model != model {
+		return workerhttp.Attempt{}, false, errors.New("assignment model does not match run snapshot")
+	}
+	if model != "" {
+		request.Assignment.Model = model
+	}
 	client, err := router.routes.forAssignment(run.AgentProviders, role)
 	if err != nil {
 		return workerhttp.Attempt{}, false, err

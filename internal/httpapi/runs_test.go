@@ -67,20 +67,25 @@ func (s *recordingRunStarter) Start(
 }
 
 func TestStartRunReturnsDurableAcceptedRun(t *testing.T) {
-	features := &recordingFeatureService{getResult: feature.Feature{
-		ID: "fea_test", ProjectID: "prj_test", Title: "Build coordinator",
-		Description: "Exercise its deterministic workflow", State: feature.StateDraft,
-	}}
-	executions := &recordingExecutionService{runErr: execution.ErrNotFound}
-	starter := &recordingRunStarter{}
 	limits := project.DialogueLimits{PlanningRounds: 3, ImplementationReviewRounds: 0}
 	providers := project.AgentProviders{
 		Lead: project.AgentProviderClaude, Reviewer: project.AgentProviderCodex,
 	}
-	projects := &recordingProjectService{getByIDResult: project.Project{
-		ID: "prj_test", DialogueLimits: limits, AgentProviders: providers,
+	features := &recordingFeatureService{getResult: feature.Feature{
+		ID: "fea_test", ProjectID: "prj_test", Title: "Build coordinator",
+		Description: "Exercise its deterministic workflow", State: feature.StateDraft,
+		DialogueLimits: limits, AgentProviders: providers,
 		MergePolicy:    project.MergePolicyAutoAfterGates,
 		AutonomyPolicy: project.AutonomyPolicyRunToCompletion,
+	}}
+	executions := &recordingExecutionService{runErr: execution.ErrNotFound}
+	starter := &recordingRunStarter{}
+	projects := &recordingProjectService{getByIDResult: project.Project{
+		ID:             "prj_test",
+		DialogueLimits: project.DialogueLimits{PlanningRounds: 99, ImplementationReviewRounds: 99},
+		AgentProviders: project.DefaultAgentProviders(),
+		MergePolicy:    project.MergePolicyRequireUserApproval,
+		AutonomyPolicy: project.AutonomyPolicyReviewEachPhase,
 	}}
 	request := httptest.NewRequest(
 		http.MethodPost,
@@ -116,6 +121,9 @@ func TestStartRunReturnsDurableAcceptedRun(t *testing.T) {
 	}
 	if starter.autonomyPolicy != project.AutonomyPolicyRunToCompletion {
 		t.Errorf("expected autonomy-policy snapshot %q, got %q", project.AutonomyPolicyRunToCompletion, starter.autonomyPolicy)
+	}
+	if projects.receivedID != "" {
+		t.Errorf("run start reloaded mutable project settings for %q", projects.receivedID)
 	}
 	if location := recorder.Header().Get("Location"); location != "/api/v1/runs/"+expectedRunID {
 		t.Errorf("unexpected Location %q", location)

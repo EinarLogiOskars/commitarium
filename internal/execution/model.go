@@ -51,6 +51,7 @@ type Run struct {
 	PlanningRoundLimit             int
 	ImplementationReviewRoundLimit int
 	AgentProviders                 project.AgentProviders
+	AgentModels                    project.AgentModels
 	MergePolicy                    project.MergePolicy
 	AutonomyPolicy                 project.AutonomyPolicy
 	PlanVersion                    int
@@ -317,6 +318,8 @@ func (run Run) Validate() error {
 		return fmt.Errorf("%w: plan version must be positive", ErrInvalidRun)
 	case run.AgentProviders.Validate() != nil:
 		return fmt.Errorf("%w: agent providers are invalid", ErrInvalidRun)
+	case run.AgentModels.Validate() != nil:
+		return fmt.Errorf("%w: agent models are invalid", ErrInvalidRun)
 	case run.Paused && run.WaitKind != RunWaitKindPaused:
 		return fmt.Errorf("%w: paused run requires paused wait kind", ErrInvalidRun)
 	case !run.Paused && run.WaitKind == RunWaitKindPaused:

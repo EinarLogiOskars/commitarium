@@ -74,7 +74,7 @@ var ErrInterventionReplanningRequired = errors.New("the intervention answer requ
 // lead turn. It deliberately contains no workflow transition: goal
 // clarification leaves the feature in draft.
 type RemoteLeadExecution interface {
-	CreateRun(context.Context, string, string, int, int, project.AgentProviders, project.MergePolicy, ...project.AutonomyPolicy) (execution.Run, bool, error)
+	CreateRunWithModels(context.Context, string, string, int, int, project.AgentProviders, project.AgentModels, project.MergePolicy, ...project.AutonomyPolicy) (execution.Run, bool, error)
 	CreateSession(context.Context, string, string, string, worker.Role) (execution.Session, bool, error)
 	CreateWorkerAttempt(context.Context, string, string) (execution.WorkerAttemptCheckpoint, bool, error)
 	GetRun(context.Context, string) (execution.Run, error)
@@ -293,6 +293,24 @@ func (starter *RemoteLeadStarter) Start(
 	mergePolicy project.MergePolicy,
 	autonomyPolicies ...project.AutonomyPolicy,
 ) (execution.Run, bool, error) {
+	return starter.StartWithModels(
+		ctx, runID, projectID, featureID, goal, dialogueLimits, agentProviders,
+		project.AgentModels{}, mergePolicy, autonomyPolicies...,
+	)
+}
+
+func (starter *RemoteLeadStarter) StartWithModels(
+	ctx context.Context,
+	runID string,
+	projectID string,
+	featureID string,
+	goal string,
+	dialogueLimits project.DialogueLimits,
+	agentProviders project.AgentProviders,
+	agentModels project.AgentModels,
+	mergePolicy project.MergePolicy,
+	autonomyPolicies ...project.AutonomyPolicy,
+) (execution.Run, bool, error) {
 	var err error
 	mergePolicy, err = project.NormalizeMergePolicy(mergePolicy)
 	if err != nil {
@@ -327,17 +345,22 @@ func (starter *RemoteLeadStarter) Start(
 	if err != nil {
 		return execution.Run{}, false, ErrInvalidRunRequest
 	}
+	agentModels, err = agentModels.Normalize()
+	if err != nil {
+		return execution.Run{}, false, ErrInvalidRunRequest
+	}
 	request, err := starter.startRequest(runID, projectID, featureID, prepared.ID, goal, agentProviders)
 	if err != nil {
 		return execution.Run{}, false, err
 	}
-	run, created, err := starter.executions.CreateRun(
+	run, created, err := starter.executions.CreateRunWithModels(
 		ctx,
 		runID,
 		featureID,
 		dialogueLimits.PlanningRounds,
 		dialogueLimits.ImplementationReviewRounds,
 		agentProviders,
+		agentModels,
 		mergePolicy,
 		autonomyPolicy,
 	)

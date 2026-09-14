@@ -51,6 +51,7 @@ func (s *recordingStore) ListByProjectID(
 type recordingProjectFinder struct {
 	receivedID string
 	calls      int
+	result     project.Project
 	err        error
 }
 
@@ -60,7 +61,16 @@ func (f *recordingProjectFinder) GetByID(
 ) (project.Project, error) {
 	f.calls++
 	f.receivedID = id
-	return project.Project{ID: id}, f.err
+	if f.result.ID == "" {
+		f.result = project.Project{
+			ID:             id,
+			DialogueLimits: project.DefaultDialogueLimits(),
+			AgentProviders: project.DefaultAgentProviders(),
+			MergePolicy:    project.DefaultMergePolicy(),
+			AutonomyPolicy: project.DefaultAutonomyPolicy(),
+		}
+	}
+	return f.result, f.err
 }
 
 func TestServiceCreate(t *testing.T) {
@@ -92,19 +102,24 @@ func TestServiceCreate(t *testing.T) {
 		"prj_test",
 		"  Durable features  ",
 		"  Persist feature data  ",
+		SettingsOverrides{},
 	)
 	if err != nil {
 		t.Fatalf("create feature: %v", err)
 	}
 
 	expected := Feature{
-		ID:          "fea_test",
-		ProjectID:   "prj_test",
-		Title:       "Durable features",
-		Description: "Persist feature data",
-		State:       StateDraft,
-		CreatedAt:   fixedTime,
-		UpdatedAt:   fixedTime,
+		ID:             "fea_test",
+		ProjectID:      "prj_test",
+		Title:          "Durable features",
+		Description:    "Persist feature data",
+		State:          StateDraft,
+		DialogueLimits: project.DefaultDialogueLimits(),
+		AgentProviders: project.DefaultAgentProviders(),
+		MergePolicy:    project.DefaultMergePolicy(),
+		AutonomyPolicy: project.DefaultAutonomyPolicy(),
+		CreatedAt:      fixedTime,
+		UpdatedAt:      fixedTime,
 	}
 
 	if projects.receivedID != expected.ProjectID {
@@ -133,7 +148,7 @@ func TestServiceCreateRejectsBlankTitle(t *testing.T) {
 	projects := &recordingProjectFinder{}
 	service := NewService(store, projects)
 
-	_, err := service.Create(t.Context(), "prj_test", "  ", "description")
+	_, err := service.Create(t.Context(), "prj_test", "  ", "description", SettingsOverrides{})
 
 	if !errors.Is(err, ErrTitleRequired) {
 		t.Fatalf("expected error %v, got %v", ErrTitleRequired, err)
@@ -158,6 +173,7 @@ func TestServiceCreateReturnsProjectError(t *testing.T) {
 		"prj_missing",
 		"Feature",
 		"Description",
+		SettingsOverrides{},
 	)
 
 	if !errors.Is(err, project.ErrNotFound) {
@@ -179,6 +195,7 @@ func TestServiceCreateReturnsStoreError(t *testing.T) {
 		"prj_test",
 		"Feature",
 		"Description",
+		SettingsOverrides{},
 	)
 
 	if !errors.Is(err, storeErr) {
@@ -187,6 +204,64 @@ func TestServiceCreateReturnsStoreError(t *testing.T) {
 
 	if createdFeature != (Feature{}) {
 		t.Errorf("expected empty feature, got %+v", createdFeature)
+	}
+}
+
+func TestServiceCreateResolvesPerOrderOverrides(t *testing.T) {
+	defaults := project.Project{
+		ID:             "prj_test",
+		DialogueLimits: project.DialogueLimits{PlanningRounds: 4, ImplementationReviewRounds: 5},
+		AgentProviders: project.AgentProviders{Lead: project.AgentProviderCodex, Reviewer: project.AgentProviderClaude},
+		MergePolicy:    project.MergePolicyRequireUserApproval,
+		AutonomyPolicy: project.AutonomyPolicyReviewEachPhase,
+	}
+	overrideProviders := project.AgentProviders{Lead: project.AgentProviderClaude, Reviewer: project.AgentProviderCodex}
+	overrideAutonomy := project.AutonomyPolicyRunToCompletion
+	store := &recordingStore{}
+	service := NewService(store, &recordingProjectFinder{result: defaults})
+
+	created, err := service.Create(t.Context(), defaults.ID, "Override", "", SettingsOverrides{
+		AgentProviders: &overrideProviders,
+		AutonomyPolicy: &overrideAutonomy,
+	})
+	if err != nil {
+		t.Fatalf("create feature: %v", err)
+	}
+	if created.AgentProviders != overrideProviders || created.AutonomyPolicy != overrideAutonomy {
+		t.Fatalf("overrides not captured: %+v", created)
+	}
+	if created.DialogueLimits != defaults.DialogueLimits || created.MergePolicy != defaults.MergePolicy {
+		t.Fatalf("omitted settings did not inherit project values: %+v", created)
+	}
+}
+
+func TestServiceCreateRejectsInvalidOverrides(t *testing.T) {
+	negative := project.DialogueLimits{PlanningRounds: -1}
+	providers := project.AgentProviders{Lead: project.AgentProviderCodex}
+	badMerge := project.MergePolicy("surprise")
+	badAutonomy := project.AutonomyPolicy("surprise")
+	tests := []struct {
+		name      string
+		overrides SettingsOverrides
+		want      error
+	}{
+		{name: "dialogue limits", overrides: SettingsOverrides{DialogueLimits: &negative}, want: project.ErrInvalidDialogueLimits},
+		{name: "agent providers", overrides: SettingsOverrides{AgentProviders: &providers}, want: project.ErrInvalidAgentProviders},
+		{name: "merge policy", overrides: SettingsOverrides{MergePolicy: &badMerge}, want: project.ErrInvalidMergePolicy},
+		{name: "autonomy policy", overrides: SettingsOverrides{AutonomyPolicy: &badAutonomy}, want: project.ErrInvalidAutonomyPolicy},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			store := &recordingStore{}
+			service := NewService(store, &recordingProjectFinder{})
+			_, err := service.Create(t.Context(), "prj_test", "Feature", "", test.overrides)
+			if !errors.Is(err, test.want) {
+				t.Fatalf("expected %v, got %v", test.want, err)
+			}
+			if store.createCalls != 0 {
+				t.Fatalf("invalid override reached feature store")
+			}
+		})
 	}
 }
 

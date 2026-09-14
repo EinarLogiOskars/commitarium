@@ -470,6 +470,7 @@ func (service *Service) launchProvider(
 		AttemptID:         reference.AttemptID,
 		FeatureID:         request.Assignment.FeatureID,
 		Role:              worker.Role(request.Assignment.Role),
+		Model:             request.Assignment.Model,
 		Instructions:      request.Instructions,
 		OutputContract:    worker.OutputContract(request.OutputContract),
 		LaunchEnvironment: launchEnvironment.Clone(),

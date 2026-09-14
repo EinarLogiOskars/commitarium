@@ -47,7 +47,6 @@ type Adapter struct {
 	supervisor        *processsupervisor.Supervisor
 	executable        string
 	arguments         []string
-	model             string
 	permissionMode    string
 	startTimeout      time.Duration
 	shutdownTimeout   time.Duration
@@ -96,9 +95,9 @@ func New(config Config) (*Adapter, error) {
 	}
 	return &Adapter{
 		supervisor: config.Supervisor, executable: executable,
-		arguments: append([]string(nil), config.Arguments...),
-		model:     strings.TrimSpace(config.Model), permissionMode: permissionMode,
-		startTimeout: startTimeout, shutdownTimeout: shutdownTimeout,
+		arguments:      append([]string(nil), config.Arguments...),
+		permissionMode: permissionMode,
+		startTimeout:   startTimeout, shutdownTimeout: shutdownTimeout,
 		eventBuffer: eventBuffer, generateSessionID: generateSessionID,
 	}, nil
 }
@@ -156,7 +155,11 @@ func (adapter *Adapter) launch(
 	resume bool,
 	prompt string,
 ) (worker.Session, error) {
-	arguments, err := adapter.commandArguments(request.OutputContract, providerSessionID, resume, prompt)
+	model := strings.TrimSpace(request.Model)
+	if model == "" {
+		return nil, fmt.Errorf("%w: exact model ID is required", worker.ErrInvalidSessionRequest)
+	}
+	arguments, err := adapter.commandArguments(model, request.OutputContract, providerSessionID, resume, prompt)
 	if err != nil {
 		return nil, err
 	}
@@ -176,6 +179,7 @@ func (adapter *Adapter) launch(
 		process,
 		providerSessionID,
 		request.LaunchEnvironment.WorkingDirectory,
+		model,
 		request.OutputContract,
 		adapter.shutdownTimeout,
 		adapter.eventBuffer,
@@ -185,6 +189,7 @@ func (adapter *Adapter) launch(
 }
 
 func (adapter *Adapter) commandArguments(
+	model string,
 	contract worker.OutputContract,
 	providerSessionID string,
 	resume bool,
@@ -204,8 +209,8 @@ func (adapter *Adapter) commandArguments(
 	} else {
 		arguments = append(arguments, "--session-id", providerSessionID)
 	}
-	if adapter.model != "" {
-		arguments = append(arguments, "--model", adapter.model)
+	if model != "" {
+		arguments = append(arguments, "--model", model)
 	}
 	if schema := worker.OutputJSONSchema(contract); schema != nil {
 		encoded, err := json.Marshal(schema)

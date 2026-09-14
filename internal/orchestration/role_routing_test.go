@@ -11,12 +11,16 @@ import (
 	"github.com/EinarLogiOskars/commitarium/internal/workeringest"
 )
 
-type routingWorkerStub struct{ puts, gets int }
+type routingWorkerStub struct {
+	puts, gets int
+	lastPut    workerhttp.PutAttemptRequest
+}
 
 func (stub *routingWorkerStub) PutAttempt(
-	context.Context, workerhttp.MutationIdentity, workerhttp.PutAttemptRequest,
+	_ context.Context, _ workerhttp.MutationIdentity, request workerhttp.PutAttemptRequest,
 ) (workerhttp.Attempt, bool, error) {
 	stub.puts++
+	stub.lastPut = request
 	return workerhttp.Attempt{}, true, nil
 }
 
@@ -50,10 +54,10 @@ func TestProviderRoutersUseTheDurableRunAssignment(t *testing.T) {
 	finder := routingRunFinder{runs: map[string]execution.Run{
 		"run_mixed": {AgentProviders: project.AgentProviders{
 			Lead: project.AgentProviderClaude, Reviewer: project.AgentProviderCodex,
-		}},
+		}, AgentModels: project.AgentModels{Lead: "claude-lead-pinned-1", Reviewer: "gpt-review-pinned-1"}},
 		"run_reverse": {AgentProviders: project.AgentProviders{
 			Lead: project.AgentProviderCodex, Reviewer: project.AgentProviderClaude,
-		}},
+		}, AgentModels: project.AgentModels{Lead: "gpt-lead-pinned-1", Reviewer: "claude-review-pinned-1"}},
 	}}
 	workerRouter, err := NewProviderRoutedWorker(finder, ProviderWorkerRoutes{
 		CodexLead: codexLead, CodexReviewer: codexReviewer,
@@ -89,6 +93,12 @@ func TestProviderRoutersUseTheDurableRunAssignment(t *testing.T) {
 		claudeReviewer.puts != 1 || claudeReviewer.gets != 1 {
 		t.Fatalf("unexpected provider routing codexLead=%+v codexReviewer=%+v claudeLead=%+v claudeReviewer=%+v",
 			codexLead, codexReviewer, claudeLead, claudeReviewer)
+	}
+	if claudeLead.lastPut.Assignment.Model != "claude-lead-pinned-1" ||
+		codexReviewer.lastPut.Assignment.Model != "gpt-review-pinned-1" ||
+		codexLead.lastPut.Assignment.Model != "gpt-lead-pinned-1" ||
+		claudeReviewer.lastPut.Assignment.Model != "claude-review-pinned-1" {
+		t.Fatalf("router did not inject exact run model snapshots")
 	}
 
 	codexLeadPump, codexReviewerPump := &routingPumpStub{}, &routingPumpStub{}

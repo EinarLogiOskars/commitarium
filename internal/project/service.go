@@ -182,6 +182,7 @@ func (s *Service) Import(ctx context.Context, spec ImportSpec, bundle io.Reader)
 		ID: projectID, Name: normalized.Name, RecoveryPolicy: normalized.RecoveryPolicy,
 		MergePolicy: normalized.MergePolicy, AutonomyPolicy: normalized.AutonomyPolicy,
 		DialogueLimits: normalized.DialogueLimits, AgentProviders: normalized.AgentProviders,
+		AgentModels:       normalized.AgentModels,
 		ForgejoRepository: &repository, CreatedAt: s.now().UTC(),
 	}
 	if err := s.store.Create(ctx, created); err != nil {
@@ -213,6 +214,22 @@ func (s *Service) Create(
 	recoveryPolicy RecoveryPolicy,
 	dialogueLimits DialogueLimits,
 	agentProviders AgentProviders,
+	mergePolicy MergePolicy,
+	autonomyPolicies ...AutonomyPolicy,
+) (Project, error) {
+	return s.CreateWithAgentModels(
+		ctx, name, recoveryPolicy, dialogueLimits, agentProviders, AgentModels{},
+		mergePolicy, autonomyPolicies...,
+	)
+}
+
+func (s *Service) CreateWithAgentModels(
+	ctx context.Context,
+	name string,
+	recoveryPolicy RecoveryPolicy,
+	dialogueLimits DialogueLimits,
+	agentProviders AgentProviders,
+	agentModels AgentModels,
 	mergePolicy MergePolicy,
 	autonomyPolicies ...AutonomyPolicy,
 ) (Project, error) {
@@ -248,6 +265,10 @@ func (s *Service) Create(
 	if err != nil {
 		return Project{}, err
 	}
+	agentModels, err = agentModels.Normalize()
+	if err != nil {
+		return Project{}, err
+	}
 
 	project := Project{
 		ID:             s.generateID(),
@@ -257,6 +278,7 @@ func (s *Service) Create(
 		AutonomyPolicy: autonomyPolicy,
 		DialogueLimits: dialogueLimits,
 		AgentProviders: agentProviders,
+		AgentModels:    agentModels,
 		CreatedAt:      s.now(),
 	}
 
@@ -311,6 +333,33 @@ func (s *Service) UpdateAgentProviders(
 	updated, err := s.store.UpdateAgentProviders(ctx, projectID, normalized)
 	if err != nil {
 		return Project{}, fmt.Errorf("update agent providers for project %q: %w", projectID, err)
+	}
+	return updated, nil
+}
+
+func (s *Service) UpdateAgentSettings(
+	ctx context.Context,
+	projectID string,
+	providers AgentProviders,
+	models AgentModels,
+) (Project, error) {
+	normalizedProviders, err := providers.Normalize()
+	if err != nil {
+		return Project{}, err
+	}
+	normalizedModels, err := models.Normalize()
+	if err != nil || normalizedModels.ValidateRequired() != nil {
+		return Project{}, ErrInvalidAgentModels
+	}
+	updater, ok := s.store.(interface {
+		UpdateAgentSettings(context.Context, string, AgentProviders, AgentModels) (Project, error)
+	})
+	if !ok {
+		return Project{}, errors.New("project store does not support agent model settings")
+	}
+	updated, err := updater.UpdateAgentSettings(ctx, projectID, normalizedProviders, normalizedModels)
+	if err != nil {
+		return Project{}, fmt.Errorf("update agent settings for project %q: %w", projectID, err)
 	}
 	return updated, nil
 }

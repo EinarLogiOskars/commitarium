@@ -550,6 +550,82 @@ func TestPullRequestMigrationPreservesExistingCheckout(t *testing.T) {
 	}
 }
 
+func TestFeatureSettingsMigrationBackfillsEffectiveValues(t *testing.T) {
+	db, err := OpenSQLite(t.Context(), filepath.Join(t.TempDir(), "coordinator.db"))
+	if err != nil {
+		t.Fatalf("open SQLite database: %v", err)
+	}
+	defer db.Close()
+	migrations, err := fs.Sub(migrationFiles, "migrations")
+	if err != nil {
+		t.Fatalf("open embedded migrations: %v", err)
+	}
+	provider, err := goose.NewProvider(goose.DialectSQLite3, db, migrations)
+	if err != nil {
+		t.Fatalf("create migration provider: %v", err)
+	}
+	if _, err := provider.UpTo(t.Context(), 26); err != nil {
+		t.Fatalf("migrate version-twenty-six schema: %v", err)
+	}
+	now := time.Date(2026, time.September, 14, 12, 0, 0, 0, time.UTC).Format(time.RFC3339Nano)
+	if _, err := db.ExecContext(t.Context(), `
+		INSERT INTO projects (
+			id, name, recovery_policy, merge_policy, autonomy_policy,
+			planning_round_limit, implementation_review_round_limit,
+			lead_provider, reviewer_provider, created_at
+		) VALUES (
+			'prj_settings', 'Settings', 'approval_required', 'auto_after_gates', 'run_to_completion',
+			2, 3, 'claude', 'codex', ?
+		)`, now); err != nil {
+		t.Fatalf("insert old project: %v", err)
+	}
+	for _, id := range []string{"fea_not_started", "fea_started"} {
+		if _, err := db.ExecContext(t.Context(), `
+			INSERT INTO features (id, project_id, title, description, state, created_at, updated_at)
+			VALUES (?, 'prj_settings', 'Settings feature', '', 'draft', ?, ?)`, id, now, now); err != nil {
+			t.Fatalf("insert old feature %q: %v", id, err)
+		}
+	}
+	if _, err := db.ExecContext(t.Context(), `
+		INSERT INTO runs (
+			id, feature_id, status, reason,
+			planning_round_limit, implementation_review_round_limit,
+			lead_provider, reviewer_provider, merge_policy, autonomy_policy,
+			started_at, updated_at
+		) VALUES (
+			'run_started', 'fea_started', 'running', '',
+			7, 0, 'codex', 'claude', 'require_user_approval', 'review_each_phase',
+			?, ?
+		)`, now, now); err != nil {
+		t.Fatalf("insert old run: %v", err)
+	}
+	if err := Migrate(t.Context(), db); err != nil {
+		t.Fatalf("apply feature-settings migration: %v", err)
+	}
+
+	store := NewFeatureStore(db)
+	notStarted, err := store.GetByID(t.Context(), "fea_not_started")
+	if err != nil {
+		t.Fatalf("get unstarted feature: %v", err)
+	}
+	if notStarted.DialogueLimits != (project.DialogueLimits{PlanningRounds: 2, ImplementationReviewRounds: 3}) ||
+		notStarted.AgentProviders != (project.AgentProviders{Lead: project.AgentProviderClaude, Reviewer: project.AgentProviderCodex}) ||
+		notStarted.MergePolicy != project.MergePolicyAutoAfterGates ||
+		notStarted.AutonomyPolicy != project.AutonomyPolicyRunToCompletion {
+		t.Fatalf("unstarted feature did not inherit project settings: %+v", notStarted)
+	}
+	started, err := store.GetByID(t.Context(), "fea_started")
+	if err != nil {
+		t.Fatalf("get started feature: %v", err)
+	}
+	if started.DialogueLimits != (project.DialogueLimits{PlanningRounds: 7, ImplementationReviewRounds: 0}) ||
+		started.AgentProviders != (project.AgentProviders{Lead: project.AgentProviderCodex, Reviewer: project.AgentProviderClaude}) ||
+		started.MergePolicy != project.MergePolicyRequireUserApproval ||
+		started.AutonomyPolicy != project.AutonomyPolicyReviewEachPhase {
+		t.Fatalf("started feature did not preserve run settings: %+v", started)
+	}
+}
+
 func TestMigrateReturnsCanceledContext(t *testing.T) {
 	db, err := OpenSQLite(
 		t.Context(),

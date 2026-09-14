@@ -29,6 +29,21 @@ const (
 	helperVisibleEnvironment   = "COMMITARIUM_CLAUDE_ADAPTER_VISIBLE"
 )
 
+func TestSessionRejectsClaudeModelSubstitution(t *testing.T) {
+	directory := t.TempDir()
+	session := newSession(nil, testSessionID, directory, "claude-pinned-20260914", "", time.Second, 1)
+	encoded, err := json.Marshal(map[string]any{
+		"type": "system", "subtype": "init", "session_id": testSessionID,
+		"cwd": directory, "model": "claude-different-20260914",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := session.translate(encoded); !errors.Is(err, ErrProtocol) {
+		t.Fatalf("model substitution error = %v, want ErrProtocol", err)
+	}
+}
+
 func TestAdapterStartsClaudeAndTranslatesObservableActivity(t *testing.T) {
 	adapter := testAdapter(t, "success", "Implement the approved change")
 	session, err := adapter.Start(t.Context(), adapter.request("att_claude_start", "Implement the approved change"))
@@ -405,6 +420,7 @@ func TestClaudeCLIHelper(t *testing.T) {
 	}
 	helperWrite(writer, map[string]any{
 		"type": "system", "subtype": "init", "session_id": sessionID, "cwd": directory,
+		"model": "test-model",
 	})
 	if mode == "malformed" || mode == "mismatch" {
 		if mode == "malformed" {
@@ -536,7 +552,7 @@ func testAdapter(t *testing.T, mode, prompt string) *adapterHarness {
 func (harness *adapterHarness) request(attemptID, instructions string) worker.SessionRequest {
 	return worker.SessionRequest{
 		SessionID: "ses_claude_test", AttemptID: attemptID, FeatureID: "fea_claude_test",
-		Role: worker.RoleReviewer, Instructions: instructions,
+		Role: worker.RoleReviewer, Model: "test-model", Instructions: instructions,
 		LaunchEnvironment: worker.LaunchEnvironment{
 			AgentProfileID: "profile_claude_test", ProjectID: "prj_claude_test",
 			FeatureID: "fea_claude_test", Role: worker.RoleReviewer,

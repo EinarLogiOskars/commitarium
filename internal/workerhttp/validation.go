@@ -75,6 +75,32 @@ func (response CapabilitiesResponse) Validate() error {
 	return nil
 }
 
+func (response ModelsResponse) Validate() error {
+	if err := validateProtocolVersion(response.ProtocolVersion); err != nil {
+		return err
+	}
+	if !response.Provider.IsValid() {
+		return invalid("provider %q is not recognized", response.Provider)
+	}
+	if response.FetchedAt.IsZero() {
+		return invalid("model fetch time is required")
+	}
+	seen := make(map[string]struct{}, len(response.Models))
+	for _, model := range response.Models {
+		if err := validateExplicitModelID(model.ID); err != nil {
+			return err
+		}
+		if strings.TrimSpace(model.DisplayName) == "" {
+			return invalid("model %q has no display name", model.ID)
+		}
+		if _, exists := seen[model.ID]; exists {
+			return invalid("model %q is duplicated", model.ID)
+		}
+		seen[model.ID] = struct{}{}
+	}
+	return nil
+}
+
 func (reference AttemptReference) Validate() error {
 	if err := validateID("session ID", reference.SessionID); err != nil {
 		return err
@@ -118,6 +144,27 @@ func (assignment Assignment) Validate() error {
 	}
 	if !assignment.Role.IsValid() {
 		return invalid("role %q is not recognized", assignment.Role)
+	}
+	if strings.TrimSpace(assignment.Model) != "" {
+		if err := validateExplicitModelID(assignment.Model); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateExplicitModelID(model string) error {
+	model = strings.TrimSpace(model)
+	if !safeIDPattern.MatchString(model) {
+		return invalid("model %q is not a safe explicit identifier", model)
+	}
+	lower := strings.ToLower(model)
+	switch lower {
+	case "default", "latest", "best", "sonnet", "opus", "haiku", "fable", "opusplan":
+		return invalid("model %q is a floating alias", model)
+	}
+	if strings.HasSuffix(lower, "-latest") {
+		return invalid("model %q is a floating alias", model)
 	}
 	return nil
 }
@@ -637,6 +684,7 @@ func (code ErrorCode) IsValid() bool {
 		ErrorProviderSessionMissing,
 		ErrorProfileUnavailable,
 		ErrorWorkspaceUnavailable,
+		ErrorModelCatalogUnavailable,
 		ErrorConfigurationMismatch,
 		ErrorIndeterminateState,
 		ErrorRedactionFailed,

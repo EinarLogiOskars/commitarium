@@ -46,6 +46,17 @@ type ServerConfig struct {
 	EventSource             EventSource
 	EventStreamHeartbeat    time.Duration
 	EventStreamWriteTimeout time.Duration
+	ModelSource             ModelSource
+}
+
+type ModelSource interface {
+	Models(context.Context) ([]Model, error)
+}
+
+type ModelSourceFunc func(context.Context) ([]Model, error)
+
+func (source ModelSourceFunc) Models(ctx context.Context) ([]Model, error) {
+	return source(ctx)
 }
 
 // ServiceError lets process-control code select a stable protocol error
@@ -93,6 +104,7 @@ type Server struct {
 	tokenDigest  [sha256.Size]byte
 	heartbeat    time.Duration
 	writeTimeout time.Duration
+	modelSource  ModelSource
 	mux          *http.ServeMux
 }
 
@@ -130,6 +142,7 @@ func NewServer(config ServerConfig, service Service) (http.Handler, error) {
 		tokenDigest:  sha256.Sum256([]byte(config.BearerToken)),
 		heartbeat:    heartbeat,
 		writeTimeout: writeTimeout,
+		modelSource:  config.ModelSource,
 		mux:          http.NewServeMux(),
 	}
 	server.routes()
@@ -143,6 +156,9 @@ func (server *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (server *Server) routes() {
 	server.mux.HandleFunc(APIBasePath+"/health", server.requireMethod(http.MethodGet, server.health))
 	server.mux.HandleFunc(APIBasePath+"/capabilities", server.authenticate(server.requireMethod(http.MethodGet, server.getCapabilities)))
+	if server.modelSource != nil {
+		server.mux.HandleFunc(APIBasePath+"/models", server.authenticate(server.requireMethod(http.MethodGet, server.getModels)))
+	}
 	server.mux.HandleFunc(
 		APIBasePath+"/sessions/{sessionID}/attempts/{attemptID}",
 		server.authenticate(server.attempt),
@@ -171,6 +187,27 @@ func (server *Server) health(w http.ResponseWriter, _ *http.Request) {
 
 func (server *Server) getCapabilities(w http.ResponseWriter, _ *http.Request) {
 	server.writeResponse(w, http.StatusOK, server.capabilities)
+}
+
+func (server *Server) getModels(w http.ResponseWriter, r *http.Request) {
+	models, err := server.modelSource.Models(r.Context())
+	if err != nil {
+		server.writeProtocolError(w, http.StatusServiceUnavailable, ProtocolError{
+			Code: ErrorModelCatalogUnavailable, Message: "provider model discovery is unavailable", Retryable: true,
+		})
+		return
+	}
+	response := ModelsResponse{
+		ProtocolVersion: ProtocolVersion, Provider: server.capabilities.Provider,
+		Models: append([]Model(nil), models...), FetchedAt: time.Now().UTC(),
+	}
+	if err := response.Validate(); err != nil {
+		server.writeProtocolError(w, http.StatusInternalServerError, ProtocolError{
+			Code: ErrorInternal, Message: "provider returned an invalid model catalog", Retryable: true,
+		})
+		return
+	}
+	server.writeResponse(w, http.StatusOK, response)
 }
 
 func (server *Server) attempt(w http.ResponseWriter, r *http.Request) {

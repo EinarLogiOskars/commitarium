@@ -20,6 +20,7 @@ import (
 	"github.com/EinarLogiOskars/commitarium/internal/claudeadapter"
 	"github.com/EinarLogiOskars/commitarium/internal/codexadapter"
 	"github.com/EinarLogiOskars/commitarium/internal/processsupervisor"
+	"github.com/EinarLogiOskars/commitarium/internal/project"
 	"github.com/EinarLogiOskars/commitarium/internal/secretfile"
 	"github.com/EinarLogiOskars/commitarium/internal/worker"
 	"github.com/EinarLogiOskars/commitarium/internal/workerhttp"
@@ -51,6 +52,7 @@ type config struct {
 type codexConfig struct {
 	executable        string
 	model             string
+	availableModels   []string
 	sandbox           string
 	providerStatePath string
 	workspaceRoot     string
@@ -66,6 +68,7 @@ type codexConfig struct {
 type claudeConfig struct {
 	executable        string
 	model             string
+	availableModels   []string
 	permissionMode    string
 	providerStatePath string
 	workspaceRoot     string
@@ -83,6 +86,7 @@ type runtime struct {
 	providerKind        workerhttp.Provider
 	environmentResolver workerservice.EnvironmentResolver
 	capabilities        []workerhttp.Capability
+	modelSource         workerhttp.ModelSource
 	description         string
 }
 
@@ -200,6 +204,7 @@ func run(ctx context.Context, workerConfig config) error {
 		Capabilities:          workerRuntime.capabilities,
 		MaxConcurrentAttempts: 1,
 		EventSource:           service,
+		ModelSource:           workerRuntime.modelSource,
 	}, service)
 	if err != nil {
 		return fmt.Errorf("create worker HTTP server: %w", err)
@@ -256,6 +261,7 @@ func newRuntime(workerConfig config) (runtime, error) {
 				workerhttp.CapabilityEventReplay,
 			},
 			description: "simulated Codex worker",
+			modelSource: staticModelSource("codex-simulated-v1"),
 		}, nil
 	case "codex":
 		return newCodexRuntime(workerConfig.codex)
@@ -340,9 +346,17 @@ func loadCodexConfig(getenv func(string) string) (codexConfig, error) {
 			"COMMITARIUM_CODEX_SANDBOX must be read-only, workspace-write, or danger-full-access",
 		)
 	}
+	availableModels, err := parseAvailableModels(
+		getenv("COMMITARIUM_CODEX_AVAILABLE_MODELS"),
+		strings.TrimSpace(getenv("COMMITARIUM_CODEX_MODEL")),
+	)
+	if err != nil {
+		return codexConfig{}, fmt.Errorf("COMMITARIUM_CODEX_AVAILABLE_MODELS: %w", err)
+	}
 	return codexConfig{
 		executable: executable, model: strings.TrimSpace(getenv("COMMITARIUM_CODEX_MODEL")),
-		sandbox: sandbox, providerStatePath: providerStatePath,
+		availableModels: availableModels,
+		sandbox:         sandbox, providerStatePath: providerStatePath,
 		workspaceRoot: workspaceRoot, profileID: profileID,
 		forgejoURL: strings.TrimRight(forgejoURL, "/"), forgejoTokenFile: forgejoTokenFile,
 		forgejoLogin: forgejoLogin, forgejoRole: forgejoRole,
@@ -426,9 +440,17 @@ func loadClaudeConfig(getenv func(string) string) (claudeConfig, error) {
 			"COMMITARIUM_CLAUDE_PERMISSION_MODE must be plan, acceptEdits, bypassPermissions, dontAsk, auto, or manual",
 		)
 	}
+	availableModels, err := parseAvailableModels(
+		getenv("COMMITARIUM_CLAUDE_AVAILABLE_MODELS"),
+		strings.TrimSpace(getenv("COMMITARIUM_CLAUDE_MODEL")),
+	)
+	if err != nil {
+		return claudeConfig{}, fmt.Errorf("COMMITARIUM_CLAUDE_AVAILABLE_MODELS: %w", err)
+	}
 	return claudeConfig{
 		executable: executable, model: strings.TrimSpace(getenv("COMMITARIUM_CLAUDE_MODEL")),
-		permissionMode: permissionMode, providerStatePath: providerStatePath,
+		availableModels: availableModels,
+		permissionMode:  permissionMode, providerStatePath: providerStatePath,
 		workspaceRoot: workspaceRoot, profileID: profileID,
 		forgejoURL: strings.TrimRight(forgejoURL, "/"), forgejoTokenFile: forgejoTokenFile,
 		forgejoLogin: forgejoLogin, forgejoRole: forgejoRole,
@@ -490,6 +512,37 @@ func newCodexRuntime(config codexConfig) (runtime, error) {
 	if err != nil {
 		return runtime{}, fmt.Errorf("create Codex adapter: %w", err)
 	}
+	modelSource := workerhttp.ModelSourceFunc(func(ctx context.Context) ([]workerhttp.Model, error) {
+		discovered, err := provider.Models(ctx, config.providerStatePath, []string{
+			"CODEX_HOME=" + config.providerStatePath,
+			"HOME=" + config.providerStatePath,
+			"LANG=C.UTF-8",
+			"PATH=/usr/local/bin:/usr/bin:/bin",
+		})
+		if err != nil {
+			return nil, err
+		}
+		models := make([]workerhttp.Model, 0, len(discovered)+len(config.availableModels))
+		seen := make(map[string]struct{}, len(discovered)+len(config.availableModels))
+		appendModel := func(id, display, defaultEffort string, efforts []string) {
+			if project.ValidateExactModelID(id) != nil {
+				return
+			}
+			if _, exists := seen[id]; exists {
+				return
+			}
+			seen[id] = struct{}{}
+			models = append(models, workerhttp.Model{ID: id, DisplayName: display,
+				DefaultReasoningEffort: defaultEffort, SupportedReasoningEfforts: efforts})
+		}
+		for _, model := range discovered {
+			appendModel(model.ID, model.DisplayName, model.DefaultReasoningEffort, model.SupportedReasoningEfforts)
+		}
+		for _, id := range config.availableModels {
+			appendModel(id, id, "", nil)
+		}
+		return models, nil
+	})
 	return runtime{
 		provider: provider, providerKind: workerhttp.ProviderCodex, environmentResolver: resolver,
 		capabilities: []workerhttp.Capability{
@@ -501,6 +554,7 @@ func newCodexRuntime(config codexConfig) (runtime, error) {
 			workerhttp.CapabilityEventReplay,
 		},
 		description: "Codex worker",
+		modelSource: modelSource,
 	}, nil
 }
 
@@ -565,7 +619,58 @@ func newClaudeRuntime(config claudeConfig) (runtime, error) {
 			workerhttp.CapabilityEventReplay,
 		},
 		description: "Claude worker",
+		modelSource: staticModelSource(config.availableModels...),
 	}, nil
+}
+
+func parseAvailableModels(value string, configuredModel string) ([]string, error) {
+	parts := strings.Split(value, ",")
+	if strings.TrimSpace(value) == "" {
+		parts = nil
+	}
+	if configuredModel != "" {
+		parts = append(parts, configuredModel)
+	}
+	seen := make(map[string]struct{}, len(parts))
+	models := make([]string, 0, len(parts))
+	for _, part := range parts {
+		model := strings.TrimSpace(part)
+		if model == "" {
+			continue
+		}
+		if err := project.ValidateExactModelID(model); err != nil {
+			return nil, err
+		}
+		if _, exists := seen[model]; exists {
+			continue
+		}
+		seen[model] = struct{}{}
+		models = append(models, model)
+	}
+	return models, nil
+}
+
+func staticModelSource(ids ...string) workerhttp.ModelSource {
+	return workerhttp.ModelSourceFunc(func(context.Context) ([]workerhttp.Model, error) {
+		models := make([]workerhttp.Model, len(ids))
+		for index, id := range ids {
+			models[index] = workerhttp.Model{ID: id, DisplayName: staticModelDisplayName(id)}
+		}
+		return models, nil
+	})
+}
+
+func staticModelDisplayName(id string) string {
+	if displayName, ok := map[string]string{
+		"claude-fable-5-1":          "Claude Fable 5.1",
+		"claude-opus-5":             "Claude Opus 5",
+		"claude-opus-4-8":           "Claude Opus 4.8",
+		"claude-sonnet-5":           "Claude Sonnet 5",
+		"claude-haiku-4-5-20251001": "Claude Haiku 4.5",
+	}[id]; ok {
+		return displayName
+	}
+	return id
 }
 
 // The deterministic worker has no provider credentials or repository

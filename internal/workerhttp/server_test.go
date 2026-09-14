@@ -482,24 +482,25 @@ func TestInvalidServiceAttemptIsNotPublished(t *testing.T) {
 
 func TestStatusForErrorCode(t *testing.T) {
 	tests := map[ErrorCode]int{
-		ErrorInvalidRequest:         http.StatusBadRequest,
-		ErrorUnauthorized:           http.StatusUnauthorized,
-		ErrorNotFound:               http.StatusNotFound,
-		ErrorMethodNotAllowed:       http.StatusMethodNotAllowed,
-		ErrorUnsupportedMediaType:   http.StatusUnsupportedMediaType,
-		ErrorRequestTooLarge:        http.StatusRequestEntityTooLarge,
-		ErrorUnsupportedOperation:   http.StatusUnprocessableEntity,
-		ErrorAttemptActive:          http.StatusConflict,
-		ErrorAttemptConflict:        http.StatusConflict,
-		ErrorStaleAttempt:           http.StatusConflict,
-		ErrorProviderSessionMissing: http.StatusConflict,
-		ErrorConfigurationMismatch:  http.StatusConflict,
-		ErrorIndeterminateState:     http.StatusConflict,
-		ErrorProfileUnavailable:     http.StatusServiceUnavailable,
-		ErrorWorkspaceUnavailable:   http.StatusServiceUnavailable,
-		ErrorRedactionFailed:        http.StatusInternalServerError,
-		ErrorInvalidEventStream:     http.StatusInternalServerError,
-		ErrorInternal:               http.StatusInternalServerError,
+		ErrorInvalidRequest:          http.StatusBadRequest,
+		ErrorUnauthorized:            http.StatusUnauthorized,
+		ErrorNotFound:                http.StatusNotFound,
+		ErrorMethodNotAllowed:        http.StatusMethodNotAllowed,
+		ErrorUnsupportedMediaType:    http.StatusUnsupportedMediaType,
+		ErrorRequestTooLarge:         http.StatusRequestEntityTooLarge,
+		ErrorUnsupportedOperation:    http.StatusUnprocessableEntity,
+		ErrorAttemptActive:           http.StatusConflict,
+		ErrorAttemptConflict:         http.StatusConflict,
+		ErrorStaleAttempt:            http.StatusConflict,
+		ErrorProviderSessionMissing:  http.StatusConflict,
+		ErrorConfigurationMismatch:   http.StatusConflict,
+		ErrorIndeterminateState:      http.StatusConflict,
+		ErrorProfileUnavailable:      http.StatusServiceUnavailable,
+		ErrorWorkspaceUnavailable:    http.StatusServiceUnavailable,
+		ErrorModelCatalogUnavailable: http.StatusServiceUnavailable,
+		ErrorRedactionFailed:         http.StatusInternalServerError,
+		ErrorInvalidEventStream:      http.StatusInternalServerError,
+		ErrorInternal:                http.StatusInternalServerError,
 	}
 	for code, want := range tests {
 		if got := statusForErrorCode(code); got != want {
@@ -522,6 +523,28 @@ func testServerConfig() ServerConfig {
 			CapabilityForceStop,
 		},
 		MaxConcurrentAttempts: 1,
+	}
+}
+
+func TestModelsEndpointReturnsAuthenticatedExactCatalog(t *testing.T) {
+	config := testServerConfig()
+	config.ModelSource = ModelSourceFunc(func(context.Context) ([]Model, error) {
+		return []Model{{ID: "gpt-pinned-1", DisplayName: "GPT Pinned"}}, nil
+	})
+	handler := newTestServer(t, config, &recordingService{attempt: validServerAttempt()})
+	request := httptest.NewRequest(http.MethodGet, APIBasePath+"/models", nil)
+	request.Header.Set("Authorization", "Bearer "+testBearerToken)
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var response ModelsResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Models) != 1 || response.Models[0].ID != "gpt-pinned-1" || response.FetchedAt.IsZero() {
+		t.Fatalf("models response = %#v", response)
 	}
 }
 

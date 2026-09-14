@@ -9,6 +9,8 @@ this API beyond the host loopback interface is unsupported.
 | Method | Route | Purpose |
 | --- | --- | --- |
 | `GET` | `/health` | Process health |
+| `GET` | `/api/v1/models` | List persisted exact model catalogs for each provider role |
+| `POST` | `/api/v1/models/refresh` | Refresh model catalogs from provider workers now |
 | `POST` | `/api/v1/projects` | Create a project |
 | `PUT` | `/api/v1/project-imports/{importID}` | Import committed Git history into a new private Forgejo-backed project |
 | `GET` | `/api/v1/projects` | List projects for switching/selecting |
@@ -16,11 +18,12 @@ this API beyond the host loopback interface is unsupported.
 | `GET` | `/api/v1/projects/{projectID}/repository-overview` | Read the internal repository's default-branch head, root tree, and optional README |
 | `GET` | `/api/v1/projects/{projectID}/handoff` | Describe the canonical project head and ordered completed work for trusted-host synchronization |
 | `PUT` | `/api/v1/projects/{projectID}/dialogue-limits` | Replace planning and implementation-review round limits |
-| `PUT` | `/api/v1/projects/{projectID}/agent-providers` | Select the lead and reviewer providers for future runs |
-| `PUT` | `/api/v1/projects/{projectID}/merge-policy` | Select user-approved or automatic merge for future runs |
-| `PUT` | `/api/v1/projects/{projectID}/autonomy-policy` | Select phase checkpoints or continuous execution for future runs |
+| `PUT` | `/api/v1/projects/{projectID}/agent-providers` | Select the default lead and reviewer providers for future work orders |
+| `PUT` | `/api/v1/projects/{projectID}/agent-settings` | Atomically select default providers and exact models for future work orders |
+| `PUT` | `/api/v1/projects/{projectID}/merge-policy` | Select the default merge behavior for future work orders |
+| `PUT` | `/api/v1/projects/{projectID}/autonomy-policy` | Select the default phase checkpoint behavior for future work orders |
 | `PUT` | `/api/v1/projects/{projectID}/forgejo-repository` | Verify and bind the project's internal repository |
-| `POST` | `/api/v1/projects/{projectID}/features` | Create a draft feature |
+| `POST` | `/api/v1/projects/{projectID}/features` | Create a draft feature with optional per-order setting overrides |
 | `GET` | `/api/v1/projects/{projectID}/features` | List the project's features by recent activity |
 | `GET` | `/api/v1/projects/{projectID}/features/{featureID}` | Retrieve a feature |
 | `DELETE` | `/api/v1/projects/{projectID}/features/{featureID}` | Delete a work order and its isolated internal artifacts |
@@ -76,7 +79,7 @@ effective policy.
 
 Project creation also accepts an optional `merge_policy`. Supported values are
 `require_user_approval` and `auto_after_gates`; omission uses
-`require_user_approval`. Replace the setting for future runs with:
+`require_user_approval`. Replace the default for future work orders with:
 
 ```http
 PUT /api/v1/projects/prj_example/merge-policy
@@ -85,13 +88,15 @@ Content-Type: application/json
 {"merge_policy":"auto_after_gates"}
 ```
 
-Every run snapshots this value. Changing the project never changes whether an
-already-running or recovering workflow will merge automatically. Project and
-run responses always expose the effective `merge_policy`.
+Every new work order captures either its supplied override or this project
+default, and its run snapshots that captured effective value. Changing the
+project never changes an existing work order or whether its active or
+recovering workflow will merge automatically. Project, feature, and run
+responses expose their effective `merge_policy`.
 
 Project creation also accepts an optional `autonomy_policy`. Supported values
 are `review_each_phase` and `run_to_completion`; omission uses the safer
-`review_each_phase` default. Replace the setting for future runs with:
+`review_each_phase` default. Replace the default for future work orders with:
 
 ```http
 PUT /api/v1/projects/prj_example/autonomy-policy
@@ -100,9 +105,10 @@ Content-Type: application/json
 {"autonomy_policy":"run_to_completion"}
 ```
 
-Every run snapshots this value. Changing the project does not alter an active
-or historical run. Project and run responses always expose the effective
-`autonomy_policy`.
+Every new work order captures either its supplied override or this project
+default, and its run snapshots that captured effective value. Changing the
+project does not alter an existing work order or its active or historical run.
+Project, feature, and run responses expose their effective `autonomy_policy`.
 
 With `review_each_phase`, the run waits after goal acceptance, after the lead's
 first planning proposal, after the reviewer's first planning response, and
@@ -135,7 +141,7 @@ Omitting the object defaults both fields to six complete two-agent rounds. If
 the object is present, both fields are required. Values must be non-negative;
 `0` means unlimited.
 
-Replace both settings for future runs with:
+Replace both defaults for future work orders with:
 
 ```http
 PUT /api/v1/projects/prj_example/dialogue-limits
@@ -149,10 +155,12 @@ idempotent replacement: sending the same values again leaves the same settings.
 An unknown project returns `404 project_not_found`; missing or negative fields
 return `400 invalid_dialogue_limits`.
 
-Every run copies the project's current values into its own durable record when
-it starts. A later project update therefore affects only new runs. Run retrieval
-returns that immutable snapshot in the same `dialogue_limits` shape, including
-after a coordinator restart.
+Every new work order captures either its supplied complete override or the
+project's current values. Its run copies those effective feature values into
+its own durable record when it starts. A later project update therefore affects
+only work orders created afterward. Feature and run retrieval return their
+immutable snapshots in the same `dialogue_limits` shape, including after a
+coordinator restart.
 
 Projects also choose the provider for each independent role. Both fields are
 required when `agent_providers` is supplied; omitting the object defaults both
@@ -164,12 +172,16 @@ roles to Codex:
   "agent_providers": {
     "lead": "codex",
     "reviewer": "claude"
+  },
+  "agent_models": {
+    "lead": "gpt-5.6-sol",
+    "reviewer": "claude-sonnet-5"
   }
 }
 ```
 
 Each value is either `codex` or `claude`, and any combination is valid. Replace
-both choices for future runs with:
+both default choices for future work orders with:
 
 ```http
 PUT /api/v1/projects/prj_example/agent-providers
@@ -180,10 +192,68 @@ Content-Type: application/json
 
 The response is the complete updated project. Missing or unknown values return
 `400 invalid_agent_providers`; an unknown project returns
-`404 project_not_found`. Every run copies both choices when it starts, just as
-it copies the dialogue limits. Later project edits therefore cannot move an
-active or recovering conversation to another provider, profile, or billing
-mode. Run and project responses expose the effective `agent_providers` object.
+`404 project_not_found`. Every new work order captures either its supplied
+complete override or both project choices, and its run copies those effective
+feature choices when it starts. Later project edits therefore cannot move an
+existing order or an active or recovering conversation to another provider,
+profile, or billing mode. Project, feature, and run responses expose the
+effective `agent_providers` object.
+
+Provider selection is paired with an exact model ID for each role. Floating
+aliases such as `latest`, `default`, `sonnet`, `opus`, and IDs ending in
+`-latest` are rejected. Set both project defaults atomically with:
+
+```http
+PUT /api/v1/projects/prj_example/agent-settings
+Content-Type: application/json
+
+{
+  "agent_providers": {"lead":"codex","reviewer":"claude"},
+  "agent_models": {"lead":"gpt-5.6-sol","reviewer":"claude-sonnet-5"}
+}
+```
+
+Both objects are complete replacements. Each model must be in the latest
+successful catalog for that exact role worker. An unknown ID returns
+`400 model_unavailable`; a role without a successful catalog returns
+`503 model_catalog_unavailable`. Projects created before model selection may
+return empty strings until these settings are saved. The older
+`agent-providers` route remains compatible, but the combined route is the
+normal UI preference action because it validates each provider/model pair.
+
+### Available models
+
+`GET /api/v1/models` returns the persisted last-successful catalog for each
+provider and role. The coordinator refreshes all four worker catalogs on
+startup and every 30 minutes. A failed refresh preserves the last successful
+`models` and `fetched_at` and adds `last_error`.
+
+```json
+{
+  "catalogs": [{
+    "provider": "codex",
+    "role": "lead",
+    "models": [{
+      "id": "gpt-5.6-sol",
+      "display_name": "GPT-5.6-Sol",
+      "default_reasoning_effort": "low",
+      "supported_reasoning_efforts": ["low","medium","high"]
+    }],
+    "fetched_at": "2026-09-14T12:00:00Z"
+  }]
+}
+```
+
+`POST /api/v1/models/refresh` performs the same read-only refresh immediately
+and returns the complete catalog. It needs no body or idempotency key and starts
+no provider turn. Codex workers use authenticated App Server `model/list`.
+Claude Code has no supported headless list command, so each Claude worker
+exposes its explicit comma-separated
+`COMMITARIUM_CLAUDE_AVAILABLE_MODELS` configuration. The bundled exact catalog
+is `claude-fable-5-1`, `claude-opus-5`, `claude-opus-4-8`, `claude-sonnet-5`,
+and `claude-haiku-4-5-20251001`. Its entries include UI-friendly display names
+such as `Claude Opus 4.8`; custom configured IDs use the ID as their display
+name. No alias scraping, provider turn, or secret exposure is involved.
 
 ## Projects and Forgejo repositories
 
@@ -216,6 +286,10 @@ metadata = {
   "agent_providers": {
     "lead": "codex",
     "reviewer": "claude"
+  },
+  "agent_models": {
+    "lead": "gpt-5.6-sol",
+    "reviewer": "claude-sonnet-5"
   }
 }
 bundle = <Git bundle file>
@@ -223,8 +297,8 @@ bundle = <Git bundle file>
 
 The request must contain exactly one text field named `metadata` and one file
 field named `bundle`. `recovery_policy`, `dialogue_limits`, `agent_providers`,
-`merge_policy`, and `autonomy_policy` have the same defaults and validation as ordinary project
-creation. `default_branch` is
+`agent_models`, `merge_policy`, and `autonomy_policy` have the same defaults
+and validation as ordinary project creation. `default_branch` is
 required and must exist in the bundle. The entire multipart request is limited
 to 512 MiB.
 
@@ -289,6 +363,10 @@ includes:
   "agent_providers": {
     "lead": "codex",
     "reviewer": "claude"
+  },
+  "agent_models": {
+    "lead": "gpt-5.6-sol",
+    "reviewer": "claude-sonnet-5"
   },
   "forgejo_repository": {
     "owner": "commitarium",
@@ -362,6 +440,43 @@ contents other than the capped root README.
 
 ## Browsing features and run history
 
+Create a work order with a title and optional description. Each setting
+category is also optional:
+
+```http
+POST /api/v1/projects/prj_example/features
+Content-Type: application/json
+
+{
+  "title": "Add a project switcher",
+  "description": "Let the user move between project histories.",
+  "agent_providers": {"lead": "claude", "reviewer": "codex"},
+  "agent_models": {"lead": "claude-sonnet-5", "reviewer": "gpt-5.6-sol"},
+  "autonomy_policy": "run_to_completion",
+  "merge_policy": "require_user_approval",
+  "dialogue_limits": {
+    "planning_rounds": 4,
+    "implementation_review_rounds": 0
+  }
+}
+```
+
+Any omitted category falls back to the project's current value. When present,
+`agent_providers`, `agent_models`, and `dialogue_limits` must each be complete objects and use
+the same validation as project settings. Limits are non-negative and zero
+means unlimited. Invalid categories return `400` with
+`invalid_agent_providers`, `invalid_agent_models`, `model_unavailable`,
+`invalid_autonomy_policy`, `invalid_merge_policy`, or `invalid_dialogue_limits`
+as appropriate. Providers and models may be overridden independently;
+validation applies after resolving the complete effective pair.
+
+The coordinator stores the resulting effective values on the feature at
+creation. This is the immutable work-order configuration: project-setting
+changes made later do not affect it. A title/description-only request behaves
+as before and captures pure project defaults. The run admitted for the feature
+then snapshots these effective feature values, so automatic goal clarification
+cannot race a later settings update.
+
 `GET /api/v1/projects/{projectID}/features` returns every feature in the
 project, ordered by `updated_at` newest first. Creation time and then feature ID
 provide deterministic ordering when update times are equal. Each item uses the
@@ -377,6 +492,14 @@ same representation as the single-feature endpoint:
     "state": "implementing",
     "accepted_goal": "Add a project switcher with durable selection.",
     "goal_accepted_at": "2026-09-10T12:30:00Z",
+    "dialogue_limits": {
+      "planning_rounds": 4,
+      "implementation_review_rounds": 0
+    },
+    "agent_providers": {"lead": "claude", "reviewer": "codex"},
+    "agent_models": {"lead": "claude-sonnet-5", "reviewer": "gpt-5.6-sol"},
+    "merge_policy": "require_user_approval",
+    "autonomy_policy": "run_to_completion",
     "created_at": "2026-09-10T12:00:00Z",
     "updated_at": "2026-09-10T13:00:00Z"
   }
@@ -684,6 +807,10 @@ A successful response is `202 Accepted` and points to the run resource:
     "lead": "codex",
     "reviewer": "claude"
   },
+  "agent_models": {
+    "lead": "gpt-5.6-sol",
+    "reviewer": "claude-sonnet-5"
+  },
   "merge_policy": "require_user_approval",
   "autonomy_policy": "review_each_phase",
   "plan_version": 1,
@@ -693,6 +820,13 @@ A successful response is `202 Accepted` and points to the run resource:
   "intervention_targets": []
 }
 ```
+
+The run settings shown above are copied from the feature's immutable effective
+settings, not re-read from the project. They therefore remain the values chosen
+when the work order was created even if project defaults change before the run
+is admitted. Every real-provider start and resume carries the exact role model
+from this run snapshot. Workers never select a fallback; Claude also rejects an
+initialization event that reports a different model.
 
 `GET /api/v1/runs/{runID}` returns the current run status and every session
 created so far. Each session ID links to its detail, history, stream, and
@@ -1240,8 +1374,9 @@ messages per phase. A requested-changes review is paired with its corrective
 lead response, including in the final allowed round; an approval is paired with
 the lead's readiness response. If mutual agreement is still absent after round
 six under the default, the run waits for user input before another round. Zero
-means unlimited. Editing the project affects only later runs because active and
-historical runs retain their original limit snapshot.
+means unlimited. Editing the project affects only work orders created later;
+existing features and their active or historical runs retain their original
+effective snapshots.
 
 Recovery is idempotent before either reviewer admission, during an active
 reviewer, correction, or readiness attempt, and after any terminal result.

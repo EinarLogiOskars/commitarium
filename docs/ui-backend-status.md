@@ -98,8 +98,13 @@ Safe UI capabilities:
 - Display the effective recovery policy returned on a project.
 - Display and edit the project's planning and implementation-review round
   limits through `PUT /api/v1/projects/{projectID}/dialogue-limits`.
-- Display and edit independent `codex` or `claude` lead/reviewer choices through
-  `PUT /api/v1/projects/{projectID}/agent-providers`.
+- Display and edit independent provider/model lead/reviewer choices through
+  `PUT /api/v1/projects/{projectID}/agent-settings`.
+- Populate exact model selectors with `GET /api/v1/models`; use
+  `POST /api/v1/models/refresh` for a user-invoked refresh. Catalog entries
+  retain last-successful data and expose `fetched_at`/`last_error`. Render each
+  option's `display_name` and submit its exact `id`; for example, show
+  `Claude Opus 4.8` while sending `claude-opus-4-8`.
 - Display and edit `require_user_approval` or `auto_after_gates` for future runs
   through `PUT /api/v1/projects/{projectID}/merge-policy`.
 - Treat `0` as unlimited and positive values as complete two-agent rounds.
@@ -122,6 +127,12 @@ Codex/Codex default. When present, both `lead` and `reviewer` are required and
 each accepts `codex` or `claude`. Project and run responses always expose the
 effective pair. An active run uses its immutable copy even after project
 settings change.
+
+Project and work-order creation accept `agent_models` with complete `lead` and
+`reviewer` exact IDs. Work orders may override providers, models, or both; the
+backend validates the resulting pair against those role workers. Feature and
+run responses expose `agent_models`. Do not offer floating aliases such as
+`latest`; every provider turn uses the immutable run snapshot.
 
 Project creation and import may omit `merge_policy` to receive
 `require_user_approval`. Project and run responses always expose the effective

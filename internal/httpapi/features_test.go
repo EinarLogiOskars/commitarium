@@ -19,6 +19,7 @@ type recordingFeatureService struct {
 	receivedProjectID   string
 	receivedTitle       string
 	receivedDescription string
+	receivedOverrides   feature.SettingsOverrides
 	createResult        feature.Feature
 	createErr           error
 
@@ -37,11 +38,13 @@ func (s *recordingFeatureService) Create(
 	projectID string,
 	title string,
 	description string,
+	overrides feature.SettingsOverrides,
 ) (feature.Feature, error) {
 	s.createCalls++
 	s.receivedProjectID = projectID
 	s.receivedTitle = title
 	s.receivedDescription = description
+	s.receivedOverrides = overrides
 	return s.createResult, s.createErr
 }
 
@@ -75,13 +78,17 @@ func TestCreateFeature(t *testing.T) {
 		time.UTC,
 	)
 	expected := feature.Feature{
-		ID:          "fea_test",
-		ProjectID:   "prj_test",
-		Title:       "Persist workflow events",
-		Description: "Store each transition atomically.",
-		State:       feature.StateDraft,
-		CreatedAt:   createdAt,
-		UpdatedAt:   createdAt,
+		ID:             "fea_test",
+		ProjectID:      "prj_test",
+		Title:          "Persist workflow events",
+		Description:    "Store each transition atomically.",
+		State:          feature.StateDraft,
+		DialogueLimits: project.DialogueLimits{PlanningRounds: 0, ImplementationReviewRounds: 3},
+		AgentProviders: project.AgentProviders{Lead: project.AgentProviderClaude, Reviewer: project.AgentProviderCodex},
+		MergePolicy:    project.MergePolicyAutoAfterGates,
+		AutonomyPolicy: project.AutonomyPolicyRunToCompletion,
+		CreatedAt:      createdAt,
+		UpdatedAt:      createdAt,
 	}
 	features := &recordingFeatureService{createResult: expected}
 	request := httptest.NewRequest(
@@ -89,7 +96,11 @@ func TestCreateFeature(t *testing.T) {
 		"/api/v1/projects/prj_test/features",
 		strings.NewReader(`{
 			"title":"Persist workflow events",
-			"description":"Store each transition atomically."
+			"description":"Store each transition atomically.",
+			"agent_providers":{"lead":"claude","reviewer":"codex"},
+			"autonomy_policy":"run_to_completion",
+			"merge_policy":"auto_after_gates",
+			"dialogue_limits":{"planning_rounds":0,"implementation_review_rounds":3}
 		}`),
 	)
 
@@ -136,6 +147,22 @@ func TestCreateFeature(t *testing.T) {
 			features.receivedDescription,
 		)
 	}
+	if features.receivedOverrides.AgentProviders == nil ||
+		*features.receivedOverrides.AgentProviders != expected.AgentProviders {
+		t.Errorf("expected provider overrides %+v, got %+v", expected.AgentProviders, features.receivedOverrides.AgentProviders)
+	}
+	if features.receivedOverrides.DialogueLimits == nil ||
+		*features.receivedOverrides.DialogueLimits != expected.DialogueLimits {
+		t.Errorf("expected dialogue overrides %+v, got %+v", expected.DialogueLimits, features.receivedOverrides.DialogueLimits)
+	}
+	if features.receivedOverrides.MergePolicy == nil ||
+		*features.receivedOverrides.MergePolicy != expected.MergePolicy {
+		t.Errorf("expected merge override %q, got %v", expected.MergePolicy, features.receivedOverrides.MergePolicy)
+	}
+	if features.receivedOverrides.AutonomyPolicy == nil ||
+		*features.receivedOverrides.AutonomyPolicy != expected.AutonomyPolicy {
+		t.Errorf("expected autonomy override %q, got %v", expected.AutonomyPolicy, features.receivedOverrides.AutonomyPolicy)
+	}
 
 	var body featureResponse
 	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
@@ -143,6 +170,60 @@ func TestCreateFeature(t *testing.T) {
 	}
 
 	assertFeatureResponse(t, body, expected)
+}
+
+func TestCreateFeatureLeavesOmittedSettingsForProjectFallback(t *testing.T) {
+	features := &recordingFeatureService{createResult: feature.Feature{ID: "fea_test", ProjectID: "prj_test"}}
+	recorder := httptest.NewRecorder()
+	New(nil, features, nil, nil, nil, nil).ServeHTTP(recorder, httptest.NewRequest(
+		http.MethodPost,
+		"/api/v1/projects/prj_test/features",
+		strings.NewReader(`{"title":"Use defaults"}`),
+	))
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusCreated, recorder.Code, recorder.Body.String())
+	}
+	if features.receivedOverrides.AgentProviders != nil ||
+		features.receivedOverrides.DialogueLimits != nil ||
+		features.receivedOverrides.MergePolicy != nil ||
+		features.receivedOverrides.AutonomyPolicy != nil {
+		t.Fatalf("omitted settings became overrides: %+v", features.receivedOverrides)
+	}
+}
+
+func TestCreateFeatureRejectsInvalidStructuredOverrides(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		code string
+	}{
+		{name: "partial providers", body: `{"title":"Test","agent_providers":{"lead":"codex"}}`, code: "invalid_agent_providers"},
+		{name: "unknown provider", body: `{"title":"Test","agent_providers":{"lead":"codex","reviewer":"other"}}`, code: "invalid_agent_providers"},
+		{name: "partial limits", body: `{"title":"Test","dialogue_limits":{"planning_rounds":3}}`, code: "invalid_dialogue_limits"},
+		{name: "negative limits", body: `{"title":"Test","dialogue_limits":{"planning_rounds":-1,"implementation_review_rounds":3}}`, code: "invalid_dialogue_limits"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			features := &recordingFeatureService{}
+			recorder := httptest.NewRecorder()
+			New(nil, features, nil, nil, nil, nil).ServeHTTP(recorder, httptest.NewRequest(
+				http.MethodPost, "/api/v1/projects/prj_test/features", strings.NewReader(test.body),
+			))
+			if recorder.Code != http.StatusBadRequest {
+				t.Fatalf("expected status %d, got %d: %s", http.StatusBadRequest, recorder.Code, recorder.Body.String())
+			}
+			var body errorResponse
+			if err := json.NewDecoder(recorder.Body).Decode(&body); err != nil {
+				t.Fatalf("decode error: %v", err)
+			}
+			if body.Error.Code != test.code {
+				t.Fatalf("expected code %q, got %+v", test.code, body)
+			}
+			if features.createCalls != 0 {
+				t.Fatal("invalid structured override reached feature service")
+			}
+		})
+	}
 }
 
 func TestCreateFeatureRejectsMalformedJSON(t *testing.T) {
@@ -185,6 +266,12 @@ func TestListFeaturesReturnsProjectFeatures(t *testing.T) {
 	expected := []feature.Feature{
 		{ID: "fea_recent", ProjectID: "prj_test", Title: "Recent", State: feature.StateReviewing, CreatedAt: now, UpdatedAt: now.Add(time.Hour)},
 		{ID: "fea_older", ProjectID: "prj_test", Title: "Older", State: feature.StateCompleted, CreatedAt: now, UpdatedAt: now},
+	}
+	for index := range expected {
+		expected[index].DialogueLimits = project.DefaultDialogueLimits()
+		expected[index].AgentProviders = project.DefaultAgentProviders()
+		expected[index].MergePolicy = project.DefaultMergePolicy()
+		expected[index].AutonomyPolicy = project.DefaultAutonomyPolicy()
 	}
 	features := &recordingFeatureService{listResult: expected}
 	recorder := httptest.NewRecorder()
@@ -275,6 +362,34 @@ func TestCreateFeatureMapsServiceErrors(t *testing.T) {
 			expectedMessage: "project not found",
 		},
 		{
+			name:            "invalid providers",
+			serviceErr:      project.ErrInvalidAgentProviders,
+			expectedStatus:  http.StatusBadRequest,
+			expectedCode:    "invalid_agent_providers",
+			expectedMessage: "agent_providers must include lead and reviewer set to codex or claude",
+		},
+		{
+			name:            "invalid autonomy policy",
+			serviceErr:      project.ErrInvalidAutonomyPolicy,
+			expectedStatus:  http.StatusBadRequest,
+			expectedCode:    "invalid_autonomy_policy",
+			expectedMessage: "autonomy_policy must be review_each_phase or run_to_completion",
+		},
+		{
+			name:            "invalid merge policy",
+			serviceErr:      project.ErrInvalidMergePolicy,
+			expectedStatus:  http.StatusBadRequest,
+			expectedCode:    "invalid_merge_policy",
+			expectedMessage: "merge_policy must be require_user_approval or auto_after_gates",
+		},
+		{
+			name:            "invalid dialogue limits",
+			serviceErr:      project.ErrInvalidDialogueLimits,
+			expectedStatus:  http.StatusBadRequest,
+			expectedCode:    "invalid_dialogue_limits",
+			expectedMessage: "dialogue limits must be non-negative; zero means unlimited",
+		},
+		{
 			name:            "unexpected error",
 			serviceErr:      errors.New("database connection failed"),
 			expectedStatus:  http.StatusInternalServerError,
@@ -340,6 +455,10 @@ func TestGetFeatureByID(t *testing.T) {
 		State:          feature.StateDraft,
 		AcceptedGoal:   "Persist each workflow transition and its event together.",
 		GoalAcceptedAt: &acceptedAt,
+		DialogueLimits: project.DefaultDialogueLimits(),
+		AgentProviders: project.DefaultAgentProviders(),
+		MergePolicy:    project.DefaultMergePolicy(),
+		AutonomyPolicy: project.DefaultAutonomyPolicy(),
 		CreatedAt:      createdAt,
 		UpdatedAt:      updatedAt,
 	}
@@ -472,6 +591,19 @@ func assertFeatureResponse(
 	}
 	if actual.AcceptedGoal != expected.AcceptedGoal {
 		t.Errorf("expected accepted goal %q, got %q", expected.AcceptedGoal, actual.AcceptedGoal)
+	}
+	if actual.DialogueLimits.PlanningRounds != expected.DialogueLimits.PlanningRounds ||
+		actual.DialogueLimits.ImplementationReviewRounds != expected.DialogueLimits.ImplementationReviewRounds {
+		t.Errorf("expected dialogue limits %+v, got %+v", expected.DialogueLimits, actual.DialogueLimits)
+	}
+	if actual.AgentProviders.Lead != expected.AgentProviders.Lead || actual.AgentProviders.Reviewer != expected.AgentProviders.Reviewer {
+		t.Errorf("expected agent providers %+v, got %+v", expected.AgentProviders, actual.AgentProviders)
+	}
+	if actual.MergePolicy != expected.MergePolicy {
+		t.Errorf("expected merge policy %q, got %q", expected.MergePolicy, actual.MergePolicy)
+	}
+	if actual.AutonomyPolicy != expected.AutonomyPolicy {
+		t.Errorf("expected autonomy policy %q, got %q", expected.AutonomyPolicy, actual.AutonomyPolicy)
 	}
 	if (actual.GoalAcceptedAt == nil) != (expected.GoalAcceptedAt == nil) ||
 		(actual.GoalAcceptedAt != nil && !actual.GoalAcceptedAt.Equal(*expected.GoalAcceptedAt)) {

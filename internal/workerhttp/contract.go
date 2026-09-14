@@ -48,6 +48,20 @@ type CapabilitiesResponse struct {
 	MaxConcurrentAttempts int          `json:"max_concurrent_attempts"`
 }
 
+type Model struct {
+	ID                        string   `json:"id"`
+	DisplayName               string   `json:"display_name"`
+	DefaultReasoningEffort    string   `json:"default_reasoning_effort,omitempty"`
+	SupportedReasoningEfforts []string `json:"supported_reasoning_efforts,omitempty"`
+}
+
+type ModelsResponse struct {
+	ProtocolVersion string    `json:"protocol_version"`
+	Provider        Provider  `json:"provider"`
+	Models          []Model   `json:"models"`
+	FetchedAt       time.Time `json:"fetched_at"`
+}
+
 // AttemptReference identifies one supervised provider process. SessionID is
 // the durable coordinator conversation; AttemptID fences one concrete process
 // incarnation within that conversation.
@@ -81,6 +95,7 @@ const (
 
 type Assignment struct {
 	AgentProfileID string `json:"agent_profile_id"`
+	Model          string `json:"model,omitempty"`
 	ProjectID      string `json:"project_id"`
 	FeatureID      string `json:"feature_id"`
 	Role           Role   `json:"role"`
@@ -278,24 +293,25 @@ type Event struct {
 type ErrorCode string
 
 const (
-	ErrorInvalidRequest         ErrorCode = "invalid_request"
-	ErrorUnauthorized           ErrorCode = "unauthorized"
-	ErrorNotFound               ErrorCode = "not_found"
-	ErrorMethodNotAllowed       ErrorCode = "method_not_allowed"
-	ErrorUnsupportedMediaType   ErrorCode = "unsupported_media_type"
-	ErrorRequestTooLarge        ErrorCode = "request_too_large"
-	ErrorUnsupportedOperation   ErrorCode = "unsupported_operation"
-	ErrorAttemptActive          ErrorCode = "attempt_active"
-	ErrorAttemptConflict        ErrorCode = "attempt_conflict"
-	ErrorStaleAttempt           ErrorCode = "stale_attempt"
-	ErrorProviderSessionMissing ErrorCode = "provider_session_missing"
-	ErrorProfileUnavailable     ErrorCode = "profile_unavailable"
-	ErrorWorkspaceUnavailable   ErrorCode = "workspace_unavailable"
-	ErrorConfigurationMismatch  ErrorCode = "configuration_mismatch"
-	ErrorIndeterminateState     ErrorCode = "indeterminate_state"
-	ErrorRedactionFailed        ErrorCode = "redaction_failed"
-	ErrorInvalidEventStream     ErrorCode = "invalid_event_stream"
-	ErrorInternal               ErrorCode = "internal_error"
+	ErrorInvalidRequest          ErrorCode = "invalid_request"
+	ErrorUnauthorized            ErrorCode = "unauthorized"
+	ErrorNotFound                ErrorCode = "not_found"
+	ErrorMethodNotAllowed        ErrorCode = "method_not_allowed"
+	ErrorUnsupportedMediaType    ErrorCode = "unsupported_media_type"
+	ErrorRequestTooLarge         ErrorCode = "request_too_large"
+	ErrorUnsupportedOperation    ErrorCode = "unsupported_operation"
+	ErrorAttemptActive           ErrorCode = "attempt_active"
+	ErrorAttemptConflict         ErrorCode = "attempt_conflict"
+	ErrorStaleAttempt            ErrorCode = "stale_attempt"
+	ErrorProviderSessionMissing  ErrorCode = "provider_session_missing"
+	ErrorProfileUnavailable      ErrorCode = "profile_unavailable"
+	ErrorWorkspaceUnavailable    ErrorCode = "workspace_unavailable"
+	ErrorModelCatalogUnavailable ErrorCode = "model_catalog_unavailable"
+	ErrorConfigurationMismatch   ErrorCode = "configuration_mismatch"
+	ErrorIndeterminateState      ErrorCode = "indeterminate_state"
+	ErrorRedactionFailed         ErrorCode = "redaction_failed"
+	ErrorInvalidEventStream      ErrorCode = "invalid_event_stream"
+	ErrorInternal                ErrorCode = "internal_error"
 )
 
 type ProtocolError struct {

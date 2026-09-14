@@ -52,6 +52,7 @@ are not cached.
 | --- | --- | --- |
 | `GET` | `/internal/v1/health` | Report process health and protocol version |
 | `GET` | `/internal/v1/capabilities` | Report the provider and supported operations |
+| `GET` | `/internal/v1/models` | Discover exact model IDs available to this role worker |
 | `PUT` | `/internal/v1/sessions/{sessionID}/attempts/{attemptID}` | Start or resume one exact provider attempt |
 | `GET` | `/internal/v1/sessions/{sessionID}/attempts/{attemptID}` | Inspect the current state of that attempt |
 | `GET` | `/internal/v1/sessions/{sessionID}/attempts/{attemptID}/events/stream` | Replay and follow the attempt's safe activity events |
@@ -62,6 +63,22 @@ The stream route is available only when the worker advertises the
 `event_replay` capability and has an event source. A separate JSON event-history
 route is not needed by the current protocol because reconnecting to the stream
 performs the durable replay before following live activity.
+
+The authenticated model route starts no provider turn. Codex workers start an
+App Server discovery process and call `model/list`; Claude workers return the
+explicit `COMMITARIUM_CLAUDE_AVAILABLE_MODELS` configuration because Claude
+Code has no supported non-interactive list command. Results contain exact IDs
+and display names, plus Codex reasoning-effort metadata when available.
+The bundled Claude catalog uses friendly names such as `Claude Opus 4.8` while
+retaining exact IDs such as `claude-opus-4-8`; an operator-supplied custom ID
+falls back to displaying the ID unchanged. Floating aliases are rejected by
+the contract.
+
+Every start/resume assignment may include `assignment.model`. The coordinator
+fills it from the immutable run snapshot before routing, and the worker passes
+that exact value to Codex `thread/start`/`thread/resume` or Claude Code
+`--model`. There is no fallback. Claude verifies its `system/init` model and
+fails the attempt if it differs from the request.
 
 An attempt request may select one of five provider-neutral structured-output
 contracts:

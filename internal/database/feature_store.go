@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/EinarLogiOskars/commitarium/internal/feature"
+	"github.com/EinarLogiOskars/commitarium/internal/project"
 )
 
 type FeatureStore struct {
@@ -24,6 +25,29 @@ func (s *FeatureStore) Create(
 	ctx context.Context,
 	createdFeature feature.Feature,
 ) error {
+	if err := createdFeature.DialogueLimits.Validate(); err != nil {
+		return err
+	}
+	agentProviders, err := createdFeature.AgentProviders.Normalize()
+	if err != nil {
+		return err
+	}
+	createdFeature.AgentProviders = agentProviders
+	agentModels, err := createdFeature.AgentModels.Normalize()
+	if err != nil {
+		return err
+	}
+	createdFeature.AgentModels = agentModels
+	mergePolicy, err := project.NormalizeMergePolicy(createdFeature.MergePolicy)
+	if err != nil {
+		return err
+	}
+	createdFeature.MergePolicy = mergePolicy
+	autonomyPolicy, err := project.NormalizeAutonomyPolicy(createdFeature.AutonomyPolicy)
+	if err != nil {
+		return err
+	}
+	createdFeature.AutonomyPolicy = autonomyPolicy
 	result, err := s.db.ExecContext(
 		ctx,
 		`
@@ -35,10 +59,18 @@ func (s *FeatureStore) Create(
 				state,
 				accepted_goal,
 				goal_accepted_at,
+				planning_round_limit,
+				implementation_review_round_limit,
+				lead_provider,
+				reviewer_provider,
+				lead_model,
+				reviewer_model,
+				merge_policy,
+				autonomy_policy,
 				created_at,
 				updated_at
 			)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT(id) DO NOTHING
 		`,
 		createdFeature.ID,
@@ -48,6 +80,14 @@ func (s *FeatureStore) Create(
 		createdFeature.State,
 		createdFeature.AcceptedGoal,
 		formatOptionalExecutionTime(createdFeature.GoalAcceptedAt),
+		createdFeature.DialogueLimits.PlanningRounds,
+		createdFeature.DialogueLimits.ImplementationReviewRounds,
+		createdFeature.AgentProviders.Lead,
+		createdFeature.AgentProviders.Reviewer,
+		createdFeature.AgentModels.Lead,
+		createdFeature.AgentModels.Reviewer,
+		createdFeature.MergePolicy,
+		createdFeature.AutonomyPolicy,
 		createdFeature.CreatedAt.UTC().Format(time.RFC3339Nano),
 		createdFeature.UpdatedAt.UTC().Format(time.RFC3339Nano),
 	)
@@ -98,6 +138,14 @@ func (s *FeatureStore) GetByID(
 				state,
 				accepted_goal,
 				goal_accepted_at,
+				planning_round_limit,
+				implementation_review_round_limit,
+				lead_provider,
+				reviewer_provider,
+				lead_model,
+				reviewer_model,
+				merge_policy,
+				autonomy_policy,
 				created_at,
 				updated_at
 			FROM features
@@ -135,6 +183,14 @@ func (s *FeatureStore) ListByProjectID(
 				state,
 				accepted_goal,
 				goal_accepted_at,
+				planning_round_limit,
+				implementation_review_round_limit,
+				lead_provider,
+				reviewer_provider,
+				lead_model,
+				reviewer_model,
+				merge_policy,
+				autonomy_policy,
 				created_at,
 				updated_at
 			FROM features
@@ -181,6 +237,14 @@ func scanFeature(row featureScanner) (feature.Feature, error) {
 		&storedState,
 		&storedFeature.AcceptedGoal,
 		&goalAcceptedAt,
+		&storedFeature.DialogueLimits.PlanningRounds,
+		&storedFeature.DialogueLimits.ImplementationReviewRounds,
+		&storedFeature.AgentProviders.Lead,
+		&storedFeature.AgentProviders.Reviewer,
+		&storedFeature.AgentModels.Lead,
+		&storedFeature.AgentModels.Reviewer,
+		&storedFeature.MergePolicy,
+		&storedFeature.AutonomyPolicy,
 		&createdAt,
 		&updatedAt,
 	); err != nil {

@@ -48,6 +48,11 @@ func (s *ProjectStore) Create(
 		return err
 	}
 	createdProject.AgentProviders = agentProviders
+	agentModels, err := createdProject.AgentModels.Normalize()
+	if err != nil {
+		return err
+	}
+	createdProject.AgentModels = agentModels
 	var forgejoOwner string
 	var forgejoRepository string
 	var forgejoDefaultBranch string
@@ -67,11 +72,11 @@ func (s *ProjectStore) Create(
 			INSERT INTO projects (
 				id, name, recovery_policy, merge_policy, autonomy_policy,
 				planning_round_limit, implementation_review_round_limit,
-				lead_provider, reviewer_provider,
+				lead_provider, reviewer_provider, lead_model, reviewer_model,
 				forgejo_owner, forgejo_repository, forgejo_default_branch, forgejo_bound_at,
 				created_at
 			)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT(id) DO NOTHING
 		`,
 		createdProject.ID,
@@ -83,6 +88,8 @@ func (s *ProjectStore) Create(
 		createdProject.DialogueLimits.ImplementationReviewRounds,
 		createdProject.AgentProviders.Lead,
 		createdProject.AgentProviders.Reviewer,
+		createdProject.AgentModels.Lead,
+		createdProject.AgentModels.Reviewer,
 		forgejoOwner,
 		forgejoRepository,
 		forgejoDefaultBranch,
@@ -130,7 +137,7 @@ func (s *ProjectStore) GetByID(
 		`
 			SELECT id, name, recovery_policy, merge_policy, autonomy_policy,
 			       planning_round_limit, implementation_review_round_limit,
-			       lead_provider, reviewer_provider,
+			       lead_provider, reviewer_provider, lead_model, reviewer_model,
 			       forgejo_owner, forgejo_repository, forgejo_default_branch, forgejo_bound_at,
 			       created_at
 			FROM projects
@@ -158,7 +165,7 @@ func (s *ProjectStore) List(ctx context.Context) ([]project.Project, error) {
 		ctx,
 		`SELECT id, name, recovery_policy, merge_policy, autonomy_policy,
 		        planning_round_limit, implementation_review_round_limit,
-		        lead_provider, reviewer_provider,
+		        lead_provider, reviewer_provider, lead_model, reviewer_model,
 		        forgejo_owner, forgejo_repository, forgejo_default_branch, forgejo_bound_at,
 		        created_at
 		 FROM projects
@@ -289,6 +296,47 @@ func (s *ProjectStore) UpdateAgentProviders(
 	return s.GetByID(ctx, projectID)
 }
 
+func (s *ProjectStore) UpdateAgentSettings(
+	ctx context.Context,
+	projectID string,
+	providers project.AgentProviders,
+	models project.AgentModels,
+) (project.Project, error) {
+	normalizedProviders, err := providers.Normalize()
+	if err != nil {
+		return project.Project{}, err
+	}
+	normalizedModels, err := models.Normalize()
+	if err != nil || normalizedModels.ValidateRequired() != nil {
+		return project.Project{}, project.ErrInvalidAgentModels
+	}
+	result, err := s.db.ExecContext(
+		ctx,
+		`UPDATE projects
+		 SET lead_provider = ?, reviewer_provider = ?, lead_model = ?, reviewer_model = ?
+		 WHERE id = ?`,
+		normalizedProviders.Lead,
+		normalizedProviders.Reviewer,
+		normalizedModels.Lead,
+		normalizedModels.Reviewer,
+		projectID,
+	)
+	if err != nil {
+		return project.Project{}, fmt.Errorf("update agent settings for project %q: %w", projectID, err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return project.Project{}, fmt.Errorf("read agent settings update count for project %q: %w", projectID, err)
+	}
+	if rowsAffected == 0 {
+		return project.Project{}, project.ErrNotFound
+	}
+	if rowsAffected != 1 {
+		return project.Project{}, fmt.Errorf("update agent settings for project %q: expected one affected row, got %d", projectID, rowsAffected)
+	}
+	return s.GetByID(ctx, projectID)
+}
+
 func (s *ProjectStore) UpdateDialogueLimits(
 	ctx context.Context,
 	projectID string,
@@ -344,7 +392,7 @@ func (s *ProjectStore) BindForgejoRepository(
 		ctx,
 		`SELECT id, name, recovery_policy, merge_policy, autonomy_policy,
 		        planning_round_limit, implementation_review_round_limit,
-		        lead_provider, reviewer_provider,
+		        lead_provider, reviewer_provider, lead_model, reviewer_model,
 		        forgejo_owner, forgejo_repository, forgejo_default_branch, forgejo_bound_at,
 		        created_at
 		 FROM projects WHERE id = ?`,
@@ -417,6 +465,8 @@ func scanProject(scanner projectScanner) (project.Project, error) {
 		&storedProject.DialogueLimits.ImplementationReviewRounds,
 		&storedProject.AgentProviders.Lead,
 		&storedProject.AgentProviders.Reviewer,
+		&storedProject.AgentModels.Lead,
+		&storedProject.AgentModels.Reviewer,
 		&forgejoOwner,
 		&forgejoRepository,
 		&forgejoDefaultBranch,
@@ -443,6 +493,11 @@ func scanProject(scanner projectScanner) (project.Project, error) {
 		return project.Project{}, err
 	}
 	storedProject.AgentProviders = providers
+	models, err := storedProject.AgentModels.Normalize()
+	if err != nil {
+		return project.Project{}, err
+	}
+	storedProject.AgentModels = models
 	parsedCreatedAt, err := time.Parse(time.RFC3339Nano, createdAt)
 	if err != nil {
 		return project.Project{}, fmt.Errorf(

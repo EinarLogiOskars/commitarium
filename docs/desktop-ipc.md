@@ -238,6 +238,12 @@ credential.
 
 Drives the connect-your-providers flow. The frontend needs:
 
+Model discovery and selection do not add a desktop IPC command. Once the
+stack is running, the frontend reads `GET /api/v1/models`, requests an optional
+refresh with `POST /api/v1/models/refresh`, and saves provider/model choices
+through the coordinator API. Provider credentials remain inside each worker's
+private state volume and no model-catalog response contains a secret.
+
 **Profile status**
 
 Profiles are the four agent roles: `codex-lead`, `codex-reviewer`,

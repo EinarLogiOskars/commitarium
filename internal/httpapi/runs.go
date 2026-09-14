@@ -27,6 +27,7 @@ type runResponse struct {
 	Paused              bool                         `json:"paused"`
 	DialogueLimits      dialogueLimitsResponse       `json:"dialogue_limits"`
 	AgentProviders      agentProvidersResponse       `json:"agent_providers"`
+	AgentModels         agentModelsResponse          `json:"agent_models"`
 	MergePolicy         project.MergePolicy          `json:"merge_policy"`
 	AutonomyPolicy      project.AutonomyPolicy       `json:"autonomy_policy"`
 	PlanVersion         int                          `json:"plan_version"`
@@ -96,26 +97,28 @@ func (api *API) startRunHandler(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "feature_not_startable", "feature is not available to start a new run")
 		return
 	}
-	storedProject, err := api.projects.GetByID(r.Context(), projectID)
-	if err != nil {
-		if errors.Is(err, project.ErrNotFound) {
-			writeError(w, http.StatusNotFound, "project_not_found", "project not found")
-			return
-		}
-		log.Printf("load project %q for run start: %v", projectID, err)
-		writeError(w, http.StatusInternalServerError, "internal_error", "internal server error")
-		return
-	}
 	goal := storedFeature.Title
 	if storedFeature.Description != "" {
 		goal += ": " + storedFeature.Description
 	}
-	startedRun, _, err := api.starter.Start(
-		r.Context(), runID, projectID, featureID, goal, storedProject.DialogueLimits,
-		storedProject.AgentProviders,
-		storedProject.MergePolicy,
-		storedProject.AutonomyPolicy,
-	)
+	var startedRun execution.Run
+	if storedFeature.AgentModels.Lead != "" || storedFeature.AgentModels.Reviewer != "" {
+		modelStarter, ok := api.starter.(ModelRunStarter)
+		if !ok {
+			writeError(w, http.StatusServiceUnavailable, "agent_models_unavailable", "model-specific run admission is unavailable")
+			return
+		}
+		startedRun, _, err = modelStarter.StartWithModels(
+			r.Context(), runID, projectID, featureID, goal, storedFeature.DialogueLimits,
+			storedFeature.AgentProviders, storedFeature.AgentModels,
+			storedFeature.MergePolicy, storedFeature.AutonomyPolicy,
+		)
+	} else {
+		startedRun, _, err = api.starter.Start(
+			r.Context(), runID, projectID, featureID, goal, storedFeature.DialogueLimits,
+			storedFeature.AgentProviders, storedFeature.MergePolicy, storedFeature.AutonomyPolicy,
+		)
+	}
 	if err != nil {
 		switch {
 		case errors.Is(err, execution.ErrRecordConflict):
@@ -226,6 +229,9 @@ func (api *API) newRunResponse(
 		},
 		AgentProviders: agentProvidersResponse{
 			Lead: agentProviders.Lead, Reviewer: agentProviders.Reviewer,
+		},
+		AgentModels: agentModelsResponse{
+			Lead: run.AgentModels.Lead, Reviewer: run.AgentModels.Reviewer,
 		},
 		MergePolicy: run.MergePolicy, AutonomyPolicy: run.AutonomyPolicy,
 		PlanVersion: run.PlanVersion,

@@ -4,6 +4,7 @@ package codexadapter
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"strings"
@@ -42,7 +43,6 @@ type Adapter struct {
 	supervisor      *processsupervisor.Supervisor
 	executable      string
 	arguments       []string
-	model           string
 	approvalPolicy  string
 	sandbox         string
 	requestTimeout  time.Duration
@@ -105,7 +105,6 @@ func New(config Config) (*Adapter, error) {
 		supervisor:      config.Supervisor,
 		executable:      executable,
 		arguments:       arguments,
-		model:           config.Model,
 		approvalPolicy:  approvalPolicy,
 		sandbox:         sandbox,
 		requestTimeout:  requestTimeout,
@@ -175,6 +174,106 @@ type threadResponse struct {
 	} `json:"thread"`
 }
 
+type Model struct {
+	ID                        string
+	DisplayName               string
+	DefaultReasoningEffort    string
+	SupportedReasoningEfforts []string
+}
+
+type modelListParams struct {
+	Cursor        string `json:"cursor,omitempty"`
+	Limit         int    `json:"limit,omitempty"`
+	IncludeHidden bool   `json:"includeHidden"`
+}
+
+type modelListResponse struct {
+	Data []struct {
+		ID                        string `json:"id"`
+		Model                     string `json:"model"`
+		DisplayName               string `json:"displayName"`
+		Hidden                    bool   `json:"hidden"`
+		DefaultReasoningEffort    string `json:"defaultReasoningEffort"`
+		SupportedReasoningEfforts []struct {
+			ReasoningEffort string `json:"reasoningEffort"`
+		} `json:"supportedReasoningEfforts"`
+	} `json:"data"`
+	NextCursor string `json:"nextCursor"`
+}
+
+// Models asks the authenticated Codex App Server in this worker container for
+// its current exact model catalog. It starts no thread or turn.
+func (adapter *Adapter) Models(ctx context.Context, workingDirectory string, environment []string) ([]Model, error) {
+	operationCtx, cancel := context.WithTimeout(ctx, adapter.requestTimeout)
+	defer cancel()
+	process, err := adapter.supervisor.Start(operationCtx, processsupervisor.StartRequest{
+		AttemptID: "models_" + rand.Text(), Executable: adapter.executable,
+		Arguments: append([]string(nil), adapter.arguments...), Directory: workingDirectory,
+		Environment: append([]string(nil), environment...),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("start Codex app-server for model discovery: %w", err)
+	}
+	defer func() {
+		stopCtx, stopCancel := context.WithTimeout(context.Background(), adapter.shutdownTimeout)
+		defer stopCancel()
+		if _, stopErr := process.Terminate(stopCtx); stopErr != nil {
+			forceCtx, forceCancel := context.WithTimeout(context.Background(), adapter.shutdownTimeout)
+			defer forceCancel()
+			_, _ = process.ForceStop(forceCtx)
+		}
+	}()
+	client := newProtocolClient(process)
+	var initialized map[string]any
+	if err := client.request(operationCtx, "initialize", initializeParams{ClientInfo: clientInfo{
+		Name: "commitarium", Title: "Commitarium worker", Version: "0.1.1",
+	}}, &initialized); err != nil {
+		return nil, fmt.Errorf("initialize Codex app-server for model discovery: %w", err)
+	}
+	if err := client.notify(operationCtx, "initialized", struct{}{}); err != nil {
+		return nil, err
+	}
+	models := make([]Model, 0)
+	cursor := ""
+	for {
+		var response modelListResponse
+		if err := client.request(operationCtx, "model/list", modelListParams{
+			Cursor: cursor, Limit: 100, IncludeHidden: false,
+		}, &response); err != nil {
+			return nil, fmt.Errorf("list Codex models: %w", err)
+		}
+		for _, item := range response.Data {
+			if item.Hidden {
+				continue
+			}
+			id := strings.TrimSpace(item.ID)
+			if id == "" {
+				id = strings.TrimSpace(item.Model)
+			}
+			if id == "" {
+				continue
+			}
+			efforts := make([]string, 0, len(item.SupportedReasoningEfforts))
+			for _, effort := range item.SupportedReasoningEfforts {
+				if value := strings.TrimSpace(effort.ReasoningEffort); value != "" {
+					efforts = append(efforts, value)
+				}
+			}
+			displayName := strings.TrimSpace(item.DisplayName)
+			if displayName == "" {
+				displayName = id
+			}
+			models = append(models, Model{ID: id, DisplayName: displayName,
+				DefaultReasoningEffort: item.DefaultReasoningEffort, SupportedReasoningEfforts: efforts})
+		}
+		cursor = strings.TrimSpace(response.NextCursor)
+		if cursor == "" {
+			break
+		}
+	}
+	return models, nil
+}
+
 type textInput struct {
 	Type string `json:"type"`
 	Text string `json:"text"`
@@ -235,8 +334,13 @@ func (adapter *Adapter) launch(
 	}
 
 	method := "thread/start"
+	model := strings.TrimSpace(request.Model)
+	if model == "" {
+		cleanupWithoutSession()
+		return nil, fmt.Errorf("%w: exact model ID is required", worker.ErrInvalidSessionRequest)
+	}
 	params := threadParams{
-		Model:          adapter.model,
+		Model:          model,
 		CWD:            request.LaunchEnvironment.WorkingDirectory,
 		ApprovalPolicy: adapter.approvalPolicy,
 		Sandbox:        adapter.sandbox,
