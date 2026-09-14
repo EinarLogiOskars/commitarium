@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { coordinatorReachable } from "../api/health";
-import { dockerProbe, stackUp, type DockerProbe } from "../ipc";
+import { dockerProbe, stackStatus, stackUp, type DockerProbe } from "../ipc";
 
-export type BootPhase = "probing" | "starting" | "finishing" | "docker-down" | "ready";
+export type BootPhase = "probing" | "starting" | "finishing" | "docker-down" | "failed" | "ready";
 
 // Minimum time the loading screen stays up on a healthy start, so a fast boot
 // doesn't flash the detailed splash. Measured from boot start, so a slow start
@@ -13,6 +13,9 @@ const MIN_VISIBLE_MS = 6000;
 const FINISH_HOLD_MS = 1000;
 // How often we re-check the coordinator while the stack is coming up.
 const POLL_MS = 1500;
+// Once Compose has returned, bound readiness polling so a broken container or
+// occupied port becomes an actionable retry screen instead of an endless bar.
+const STACK_READY_TIMEOUT_MS = 120_000;
 // The bar eases toward this over MIN_VISIBLE_MS, then snaps to 100 once ready —
 // so a slow coordinator reads as "almost there" instead of a frozen bar.
 const PROGRESS_CREEP_CAP = 90;
@@ -30,6 +33,7 @@ const FLAVOR_MESSAGES = [
 ];
 const FLAVOR_ROTATE_MS = 1900;
 const FINISH_MESSAGE = "Forge lit — entering the workshop…";
+const REQUIRED_CORE_SERVICES = ["forgejo", "coordinator", "simulated-codex-worker"];
 
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -40,11 +44,23 @@ const smoothstep = (t: number) => {
   return x * x * (3 - 2 * x);
 };
 
+const stackReady = async () => {
+  if (!(await coordinatorReachable())) return false;
+  try {
+    const statuses = await stackStatus();
+    return REQUIRED_CORE_SERVICES.every((service) => {
+      const status = statuses.find((candidate) => candidate.service === service);
+      return status?.state === "running" && (!status.health || status.health === "healthy");
+    });
+  } catch {
+    return false;
+  }
+};
+
 /**
  * Startup gate: probe Docker, bring the stack up if needed, and hold a loading
- * screen until the coordinator answers. Only a down/missing Docker daemon drops
- * the loading screen early (into a "docker-down" status view the user can act
- * on and re-check). Everything else eases to a full bar, then "ready".
+ * screen until every core service is ready. Missing Docker and failed stack
+ * startup each become an actionable status view rather than an endless wait.
  */
 export function useBoot() {
   const [phase, setPhase] = useState<BootPhase>("probing");
@@ -52,7 +68,6 @@ export function useBoot() {
   const [probe, setProbe] = useState<DockerProbe | null>(null);
   const [progress, setProgress] = useState(0);
   const [attempt, setAttempt] = useState(0);
-  const errorRef = useRef<string | null>(null);
 
   // Re-run the whole sequence (used by the docker-down "Re-check" button).
   const retry = useCallback(() => setAttempt((a) => a + 1), []);
@@ -61,7 +76,6 @@ export function useBoot() {
     let cancelled = false;
     const startedAt = Date.now();
     setProgress(0);
-    errorRef.current = null;
 
     // Ease the bar toward the cap over the minimum visible window. Monotonic:
     // never walks backwards; the finish path below snaps it to 100.
@@ -101,27 +115,35 @@ export function useBoot() {
         return;
       }
 
-      // Docker is up. Bring the stack up unless the coordinator already answers.
-      // The visible status is the rotating flavour text; real errors are kept
-      // in errorRef and only surfaced if we end up in the docker-down view.
+      // Docker is up. Reconcile every core service and provider worker on each
+      // desktop launch; this is idempotent and also starts a provider that was
+      // connected after the previous stack run.
       setPhase("starting");
-      if (!(await coordinatorReachable())) {
+      let startupError: string | null = null;
+      try {
+        await stackUp();
+      } catch (e) {
         if (cancelled) return;
-        try {
-          await stackUp();
-        } catch (e) {
-          if (cancelled) return;
-          // Keep polling — the coordinator may still finish its own startup
-          // even if the compose call errored.
-          errorRef.current = String(e);
-        }
+        // Compose may report an error after creating some containers, so give
+        // the reconciled stack a short chance to become healthy before
+        // surfacing the exact failure.
+        startupError = String(e);
       }
 
-      while (!cancelled) {
-        if (await coordinatorReachable()) break;
+      const readyDeadline = Date.now() + (startupError ? 15_000 : STACK_READY_TIMEOUT_MS);
+      while (!cancelled && !(await stackReady()) && Date.now() < readyDeadline) {
         await wait(POLL_MS);
       }
       if (cancelled) return;
+      if (!(await stackReady())) {
+        clearInterval(creep);
+        setDetail(
+          startupError ??
+            "The local services did not become healthy in time. Check Docker and try again.",
+        );
+        setPhase("failed");
+        return;
+      }
 
       await holdMinVisible();
       if (cancelled) return;
@@ -145,8 +167,8 @@ export function useBoot() {
   }, [attempt]);
 
   // Rotate flavour text while the stack comes up. Runs across probing+starting
-  // (both are "loading") without resetting, and stops for finishing/ready so the
-  // finish message sticks and for docker-down so the real error shows.
+  // (both are "loading") without resetting, and stops for finishing/ready or an
+  // actionable failure so the final message sticks.
   const loading = phase === "probing" || phase === "starting";
   useEffect(() => {
     if (!loading) return;
