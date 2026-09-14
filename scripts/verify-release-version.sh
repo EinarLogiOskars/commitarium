@@ -19,12 +19,14 @@ lock_version=$(awk '
     $0 == "name = \"commitarium\"" { found = 1; next }
     found && /^version = / { gsub(/^version = \"|\"$/, ""); print; exit }
 ' desktop/src-tauri/Cargo.lock)
+worker_client_version=$(sed -n 's/.*Name: "commitarium".*Version: "\([^"]*\)".*/\1/p' internal/codexadapter/adapter.go | head -n 1)
 
 for entry in \
     "desktop/package.json:$package_version" \
     "desktop/src-tauri/tauri.conf.json:$tauri_version" \
     "desktop/src-tauri/Cargo.toml:$cargo_version" \
-    "desktop/src-tauri/Cargo.lock:$lock_version"
+    "desktop/src-tauri/Cargo.lock:$lock_version" \
+    "internal/codexadapter/adapter.go:$worker_client_version"
 do
     file=${entry%%:*}
     actual=${entry#*:}
