@@ -1,0 +1,24 @@
+# Release-only image selection.
+#
+# The desktop app combines this file with compose.yml, pulls these immutable
+# release tags, and starts the stack with builds disabled. Developers use
+# compose.yml by itself and continue to build from the local Dockerfiles.
+
+services:
+  coordinator:
+    image: ghcr.io/einarlogioskars/commitarium-coordinator:${COMMITARIUM_IMAGE_TAG:-0.1.0}
+
+  simulated-codex-worker:
+    image: ghcr.io/einarlogioskars/commitarium-worker:${COMMITARIUM_IMAGE_TAG:-0.1.0}
+
+  codex-worker:
+    image: ghcr.io/einarlogioskars/commitarium-codex-worker:${COMMITARIUM_IMAGE_TAG:-0.1.0}
+
+  codex-reviewer-worker:
+    image: ghcr.io/einarlogioskars/commitarium-codex-worker:${COMMITARIUM_IMAGE_TAG:-0.1.0}
+
+  claude-worker:
+    image: ghcr.io/einarlogioskars/commitarium-claude-worker:${COMMITARIUM_IMAGE_TAG:-0.1.0}
+
+  claude-reviewer-worker:
+    image: ghcr.io/einarlogioskars/commitarium-claude-worker:${COMMITARIUM_IMAGE_TAG:-0.1.0}
