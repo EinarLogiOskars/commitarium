@@ -5,9 +5,8 @@ import workshop from "../assets/loading/workshop.png";
 import "./BootScreen.css";
 
 /**
- * Full-screen startup splash. Doubles as the docker-down status view: same
- * pixel-art backdrop, but the bottom band swaps the spinner for an actionable
- * message + Re-check.
+ * Full-screen startup splash. Docker and stack failures keep the same pixel-art
+ * backdrop, but the bottom band swaps progress for an actionable retry.
  */
 export function BootScreen({
   phase,
@@ -23,6 +22,19 @@ export function BootScreen({
   onRetry: () => void;
 }) {
   const dockerDown = phase === "docker-down";
+  const failed = phase === "failed";
+  const needsAction = dockerDown || failed;
+
+  const actionMessage = (() => {
+    if (failed) return "Commitarium couldn't start its local services.";
+    if (probe && !probe.docker_installed) {
+      return "Docker isn't installed. Install Docker Desktop to run Commitarium.";
+    }
+    if (probe && !probe.docker_running) {
+      return "Docker isn't running. Start Docker Desktop, then re-check.";
+    }
+    return "Docker Compose isn't available. Update Docker Desktop, then re-check.";
+  })();
 
   return (
     <main className="boot">
@@ -31,13 +43,9 @@ export function BootScreen({
         <div className="boot__inner">
           <h1 className="boot__title">Commitarium</h1>
 
-          {dockerDown ? (
+          {needsAction ? (
             <div className="boot__status">
-              <p className="boot__message">
-                {probe && !probe.docker_installed
-                  ? "Docker isn't installed. Install Docker Desktop to run Commitarium."
-                  : "Docker isn't running. Start Docker Desktop, then re-check."}
-              </p>
+              <p className="boot__message">{actionMessage}</p>
               {detail && <p className="boot__detail boot__detail--error">{detail}</p>}
               <div className="boot__actions">
                 <button className="primary" onClick={onRetry}>Re-check</button>
