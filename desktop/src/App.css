@@ -89,6 +89,23 @@ body {
   align-items: center;
   gap: 8px;
 }
+.topbar__switch {
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  padding: 4px 8px;
+  font: inherit;
+  color: var(--text);
+  cursor: pointer;
+}
+.topbar__switch:hover {
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+  border-color: var(--border);
+}
+.topbar__caret {
+  color: var(--muted);
+  font-size: 10px;
+}
 .topbar__sep {
   color: var(--border);
 }
@@ -120,6 +137,34 @@ body {
   color: var(--muted);
   font-weight: 600;
   margin: 12px 6px 4px;
+}
+/* Section header inside the rail: label + inline action (e.g. Work orders + New). */
+.rail__section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 14px 6px 4px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  font-weight: 600;
+}
+.rail__new {
+  background: transparent;
+  border: none;
+  color: var(--accent);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 6px;
+}
+.rail__new:hover {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
 }
 .rail__item {
   width: 100%;

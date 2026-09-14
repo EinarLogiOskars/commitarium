@@ -14,11 +14,9 @@ type Mode = "overview" | "new" | "order" | "settings";
 /** Project workspace shell: work-order rail + master/detail main pane. */
 export function ProjectWorkspace({
   id,
-  onExit,
   onLoaded,
 }: {
   id: string;
-  onExit: () => void;
   onLoaded?: (name: string) => void;
 }) {
   const [project, setProject] = useState<Project | null>(null);
@@ -58,23 +56,6 @@ export function ProjectWorkspace({
   return (
     <>
       <nav className="rail">
-        <button className="rail__back" onClick={onExit}>‹ Projects</button>
-        <WorkOrderRail
-          projectId={id}
-          selectedId={mode === "order" ? orderId : null}
-          reloadKey={reloadKey}
-          onSelect={openOrder}
-        />
-        <button
-          className="rail__item"
-          onClick={() => {
-            setMode("new");
-            setOrderId(null);
-          }}
-        >
-          + {WORK.newAction}
-        </button>
-        <div className="rail__spacer" />
         <button
           className={`rail__item ${mode === "overview" ? "rail__item--active" : ""}`}
           onClick={() => {
@@ -82,8 +63,30 @@ export function ProjectWorkspace({
             setOrderId(null);
           }}
         >
-          Project overview
+          Overview
         </button>
+
+        <div className="rail__section-head">
+          <span>{WORK.Plural}</span>
+          <button
+            className="rail__new"
+            title={WORK.newAction}
+            onClick={() => {
+              setMode("new");
+              setOrderId(null);
+            }}
+          >
+            + New
+          </button>
+        </div>
+        <WorkOrderRail
+          projectId={id}
+          selectedId={mode === "order" ? orderId : null}
+          reloadKey={reloadKey}
+          onSelect={openOrder}
+        />
+
+        <div className="rail__spacer" />
         <button
           className={`rail__item ${mode === "settings" ? "rail__item--active" : ""}`}
           onClick={() => {
