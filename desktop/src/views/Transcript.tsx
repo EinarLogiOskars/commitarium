@@ -11,6 +11,21 @@ import type { ActivityDetail } from "../api/types";
 // slot into this same grouping — the summary can then read real command counts
 // and file-diff stats instead of counting generic lines.
 
+// Agents emit their turns as a JSON envelope `{"action":"respond","content":"…"}`.
+// The prose the user should read is `content`; unwrap it, falling back to the raw
+// string when it isn't that envelope (plain text, or a shape we don't recognize).
+function agentText(text: string): string {
+  const t = text.trimStart();
+  if (t[0] !== "{") return text;
+  try {
+    const v = JSON.parse(t);
+    if (v && typeof v === "object" && typeof v.content === "string") return v.content;
+  } catch {
+    /* not JSON — show as-is */
+  }
+  return text;
+}
+
 export interface TranscriptEntry {
   key: string;
   role: string; // "lead" | "reviewer" | "user" | agent id
@@ -64,7 +79,7 @@ function MessageEntry({ e }: { e: TranscriptEntry }) {
       <div className={`narration ${e.role === "reviewer" ? "narration--reviewer" : ""}`}>
         <span className="narration__who">{who}</span>
         <div className="narration__text">
-          <Markdown text={e.text} />
+          <Markdown text={agentText(e.text)} />
         </div>
       </div>
     );
@@ -74,7 +89,7 @@ function MessageEntry({ e }: { e: TranscriptEntry }) {
       <div className="plan-submitted">
         <span className="plan-submitted__label">📌 Plan submitted</span>
         <div className="msg__text">
-          <Markdown text={e.text} />
+          <Markdown text={agentText(e.text)} />
         </div>
       </div>
     );
@@ -85,7 +100,7 @@ function MessageEntry({ e }: { e: TranscriptEntry }) {
     <div className={`msg ${cls}`}>
       <span className="msg__who">{who}</span>
       <div className="msg__text">
-        <Markdown text={e.text} />
+        <Markdown text={agentText(e.text)} />
       </div>
     </div>
   );
@@ -150,7 +165,7 @@ function ActivityItem({ e }: { e: TranscriptEntry }) {
       </div>
     );
   }
-  return <div className="activity-item activity-item--note">{e.text}</div>;
+  return <div className="activity-item activity-item--note">{agentText(e.text)}</div>;
 }
 
 function summarize(items: TranscriptEntry[]): string {
