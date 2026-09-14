@@ -6,10 +6,11 @@ import { WorkOrderRail } from "./WorkOrderRail";
 import { NewWorkOrder } from "./NewWorkOrder";
 import { ProjectSettings } from "./ProjectSettings";
 import { ProjectDashboard } from "./ProjectDashboard";
+import { RepositoryCard } from "./RepositoryCard";
 import { WORK } from "../vocab";
 import type { Project } from "../api/types";
 
-type Mode = "overview" | "new" | "order" | "settings";
+type Mode = "overview" | "repository" | "new" | "order" | "settings";
 
 /** Project workspace shell: work-order rail + master/detail main pane. */
 export function ProjectWorkspace({
@@ -65,6 +66,17 @@ export function ProjectWorkspace({
         >
           Overview
         </button>
+        {project?.forgejo_repository && (
+          <button
+            className={`rail__item ${mode === "repository" ? "rail__item--active" : ""}`}
+            onClick={() => {
+              setMode("repository");
+              setOrderId(null);
+            }}
+          >
+            Repository
+          </button>
+        )}
 
         <div className="rail__section-head">
           <span>{WORK.Plural}</span>
@@ -116,6 +128,8 @@ export function ProjectWorkspace({
               }}
             />
           )}
+
+          {mode === "repository" && project && <RepositoryCard projectId={id} />}
 
           {mode === "new" && (
             <NewWorkOrder
