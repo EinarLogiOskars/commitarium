@@ -1,11 +1,21 @@
 import { request } from "./client";
 import type {
+  AgentModels,
+  AgentProviders,
   AgentProvider,
   AutonomyPolicy,
   CreateProjectInput,
   MergePolicy,
+  ModelsResponse,
   Project,
 } from "./types";
+
+// Model catalogs per provider+role (last-successful, refreshed on the backend).
+export const getModels = (): Promise<ModelsResponse> => request("/api/v1/models");
+
+/** User-invoked immediate refresh of all worker catalogs. */
+export const refreshModels = (): Promise<ModelsResponse> =>
+  request("/api/v1/models/refresh", { method: "POST" });
 
 export const listProjects = (): Promise<Project[]> => request("/api/v1/projects");
 
@@ -57,6 +67,18 @@ export const updateAgentProviders = (
   request(`${projectPath(id)}/agent-providers`, {
     method: "PUT",
     body: { lead, reviewer },
+  });
+
+/** Atomically set default providers AND exact models for future work orders.
+ * The combined route validates each provider/model pair. */
+export const updateAgentSettings = (
+  id: string,
+  agent_providers: AgentProviders,
+  agent_models: AgentModels,
+): Promise<Project> =>
+  request(`${projectPath(id)}/agent-settings`, {
+    method: "PUT",
+    body: { agent_providers, agent_models },
   });
 
 export const updateMergePolicy = (id: string, merge_policy: MergePolicy): Promise<Project> =>
