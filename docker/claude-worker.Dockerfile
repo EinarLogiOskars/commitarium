@@ -1,5 +1,8 @@
 # --- Build and verify the provider-neutral worker service ---
-FROM golang:1.27-alpine AS build-stage
+FROM --platform=$BUILDPLATFORM golang:1.27-alpine AS build-stage
+
+ARG TARGETOS
+ARG TARGETARCH
 
 RUN apk add --no-cache git
 
@@ -11,10 +14,8 @@ RUN go mod download
 COPY cmd ./cmd
 COPY internal ./internal
 
-RUN CGO_ENABLED=0 GOOS=linux go build -o /worker ./cmd/worker
-
-FROM build-stage AS run-test-stage
 RUN go test -v ./...
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -o /worker ./cmd/worker
 
 # Pin Claude Code so rebuilding cannot silently change the stream protocol
 # underneath the tested Go adapter.
@@ -37,7 +38,7 @@ RUN groupadd --gid 65532 commitarium && \
         /var/lib/commitarium-provider /var/lib/commitarium-worker /workspaces && \
     chmod 0700 /var/lib/commitarium-provider /var/lib/commitarium-worker
 
-COPY --from=run-test-stage /worker /worker
+COPY --from=build-stage /worker /worker
 COPY --chmod=0755 docker/claude-api-key-helper.sh /usr/local/bin/commitarium-claude-api-key
 
 ENV CLAUDE_CONFIG_DIR=/var/lib/commitarium-provider
