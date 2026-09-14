@@ -1,8 +1,10 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { createFeature } from "../api/features";
 import { ApiError } from "../api/client";
+import { AgentModelFields } from "./AgentModelFields";
+import { useModels, pickModel } from "./useModels";
 import { WORK } from "../vocab";
-import type { AgentProvider, AutonomyPolicy, MergePolicy, Project } from "../api/types";
+import type { AgentModels, AgentProviders, AutonomyPolicy, MergePolicy, Project } from "../api/types";
 
 /** Create-a-work-order form. Settings default to the project's, and can be
  * changed for this one order (backend applies the effective values). */
@@ -20,12 +22,27 @@ export function NewWorkOrder({
 
   // Per-order settings, seeded from the project defaults.
   const [showOptions, setShowOptions] = useState(false);
-  const [lead, setLead] = useState<AgentProvider>(project.agent_providers?.lead ?? "codex");
-  const [reviewer, setReviewer] = useState<AgentProvider>(project.agent_providers?.reviewer ?? "codex");
+  const { modelsFor, loading: modelsLoading } = useModels();
+  const [providers, setProviders] = useState<AgentProviders>({
+    lead: project.agent_providers?.lead ?? "codex",
+    reviewer: project.agent_providers?.reviewer ?? "codex",
+  });
+  const [models, setModels] = useState<AgentModels>({
+    lead: project.agent_models?.lead ?? "",
+    reviewer: project.agent_models?.reviewer ?? "",
+  });
   const [autonomy, setAutonomy] = useState<AutonomyPolicy>(project.autonomy_policy ?? "review_each_phase");
   const [merge, setMerge] = useState<MergePolicy>(project.merge_policy ?? "require_user_approval");
   const [planning, setPlanning] = useState(project.dialogue_limits?.planning_rounds ?? 6);
   const [review, setReview] = useState(project.dialogue_limits?.implementation_review_rounds ?? 6);
+
+  useEffect(() => {
+    if (modelsLoading) return;
+    setModels((m) => ({
+      lead: pickModel(modelsFor(providers.lead, "lead"), m.lead),
+      reviewer: pickModel(modelsFor(providers.reviewer, "reviewer"), m.reviewer),
+    }));
+  }, [modelsLoading, modelsFor, providers.lead, providers.reviewer]);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -36,7 +53,10 @@ export function NewWorkOrder({
       const created = await createFeature(project.id, {
         title: title.trim(),
         description: description.trim(),
-        agent_providers: { lead, reviewer },
+        agent_providers: providers,
+        // Only override models when both are resolved from the catalog; otherwise
+        // omit so the backend applies the project's model defaults.
+        ...(models.lead && models.reviewer ? { agent_models: models } : {}),
         autonomy_policy: autonomy,
         merge_policy: merge,
         dialogue_limits: { planning_rounds: planning, implementation_review_rounds: review },
@@ -50,7 +70,7 @@ export function NewWorkOrder({
   };
 
   const summary = [
-    `${cap(lead)} lead · ${cap(reviewer)} reviewer`,
+    `${cap(providers.lead)} lead · ${cap(providers.reviewer)} reviewer`,
     autonomy === "run_to_completion" ? "runs to merge gate" : "stops each phase",
     merge === "auto_after_gates" ? "auto-merge" : "approval to merge",
     `${planning}/${review} rounds`,
@@ -90,20 +110,16 @@ export function NewWorkOrder({
 
           {showOptions && (
             <div className="neworder__grid">
-              <label>
-                Lead
-                <select value={lead} onChange={(e) => setLead(e.target.value as AgentProvider)} disabled={busy}>
-                  <option value="codex">Codex</option>
-                  <option value="claude">Claude</option>
-                </select>
-              </label>
-              <label>
-                Reviewer
-                <select value={reviewer} onChange={(e) => setReviewer(e.target.value as AgentProvider)} disabled={busy}>
-                  <option value="codex">Codex</option>
-                  <option value="claude">Claude</option>
-                </select>
-              </label>
+              <AgentModelFields
+                providers={providers}
+                models={models}
+                modelsFor={modelsFor}
+                onChange={(p, m) => {
+                  setProviders(p);
+                  setModels(m);
+                }}
+                disabled={busy}
+              />
               <label>
                 Autonomy
                 <select value={autonomy} onChange={(e) => setAutonomy(e.target.value as AutonomyPolicy)} disabled={busy}>

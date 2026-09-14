@@ -705,6 +705,14 @@ select {
 .settings-row input[type="number"] {
   min-width: 100px;
 }
+/* Per-role provider + model fields flow into the surrounding grid/flow. */
+.agentrole {
+  display: contents;
+}
+.settings-row--agents select {
+  min-width: 190px;
+  max-width: 240px;
+}
 
 .panel {
   background: var(--panel);

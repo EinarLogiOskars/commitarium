@@ -8,6 +8,35 @@ export interface AgentProviders {
   reviewer: AgentProvider;
 }
 
+/** Exact model IDs per role (never floating aliases like "latest"). */
+export interface AgentModels {
+  lead: string;
+  reviewer: string;
+}
+
+export type AgentRole = "lead" | "reviewer";
+
+/** One selectable model from a provider+role catalog. */
+export interface ModelInfo {
+  id: string;
+  display_name: string;
+  default_reasoning_effort?: string;
+  supported_reasoning_efforts?: string[];
+}
+
+/** The persisted last-successful model list for a provider+role worker. */
+export interface ModelCatalog {
+  provider: AgentProvider;
+  role: AgentRole;
+  models: ModelInfo[];
+  fetched_at: string;
+  last_error?: string;
+}
+
+export interface ModelsResponse {
+  catalogs: ModelCatalog[];
+}
+
 export type MergePolicy = "require_user_approval" | "auto_after_gates";
 
 // Whether the coordinator stops at each phase checkpoint for the user, or runs
@@ -34,6 +63,7 @@ export interface Project {
   // Absent on coordinators built before these fields existed; guard on read.
   dialogue_limits?: DialogueLimits;
   agent_providers?: AgentProviders;
+  agent_models?: AgentModels;
   merge_policy?: MergePolicy;
   autonomy_policy?: AutonomyPolicy;
   forgejo_repository?: ForgejoRepository;
@@ -73,6 +103,9 @@ export interface CreateFeatureInput {
   // default; the run snapshots the effective values. (Backend handling lands
   // with the per-order-overrides slice; the coordinator ignores these until.)
   agent_providers?: AgentProviders;
+  // Exact model IDs per role. Complete object when present. Backend validates
+  // the resolved provider/model pair.
+  agent_models?: AgentModels;
   autonomy_policy?: AutonomyPolicy;
   merge_policy?: MergePolicy;
   dialogue_limits?: DialogueLimits;
@@ -156,6 +189,9 @@ export interface Run {
   paused?: boolean;
   wait_kind?: WaitKind;
   autonomy_policy?: AutonomyPolicy;
+  // Immutable per-run snapshots (effective provider/model per role).
+  agent_providers?: AgentProviders;
+  agent_models?: AgentModels;
   // Agreement cycle: 1 for the original plan; advances when a scope-changing
   // intervention is admitted into a revised plan.
   plan_version?: number;
