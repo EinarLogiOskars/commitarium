@@ -102,6 +102,36 @@ func TestManagerImportsValidatedBranchesAndTags(t *testing.T) {
 	}
 }
 
+func TestManagerInitializesCloneableEmptyDefaultBranch(t *testing.T) {
+	tokenFile := filepath.Join(t.TempDir(), "forgejo-token")
+	if err := os.WriteFile(tokenFile, []byte("secret-token\n"), 0o600); err != nil {
+		t.Fatalf("write token: %v", err)
+	}
+	provisioner := &recordingProvisioner{repository: project.ForgejoRepository{
+		Owner: "coordinator", Name: "empty-project", DefaultBranch: "main",
+	}}
+	runner := &localGitRunner{}
+	manager, err := NewManager(Config{
+		InternalBaseURL: "http://forgejo:3000", TokenFile: tokenFile,
+		Provisioner: provisioner, Runner: runner, TempRoot: t.TempDir(),
+	})
+	if err != nil {
+		t.Fatalf("create manager: %v", err)
+	}
+	repository, err := manager.InitializeRepository(t.Context(), project.RepositoryInitializationSpec{
+		ProjectID: "prj_empty", Repository: "empty-project", DefaultBranch: "main",
+	})
+	if err != nil {
+		t.Fatalf("initialize repository: %v", err)
+	}
+	if repository != provisioner.repository || provisioner.ensureCalls != 1 || provisioner.finalizeCalls != 1 {
+		t.Fatalf("unexpected provisioning result=%+v ensure=%d finalize=%d", repository, provisioner.ensureCalls, provisioner.finalizeCalls)
+	}
+	if !strings.Contains(strings.Join(runner.pushArguments, " "), "refs/heads/*:refs/heads/*") {
+		t.Fatalf("default branch was not pushed: %v", runner.pushArguments)
+	}
+}
+
 func TestManagerRejectsBundleWithoutRequestedDefaultBranch(t *testing.T) {
 	bundle := makeTestBundle(t, "trunk")
 	tokenFile := filepath.Join(t.TempDir(), "forgejo-token")

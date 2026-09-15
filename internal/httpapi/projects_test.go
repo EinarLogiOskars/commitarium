@@ -70,6 +70,42 @@ type recordingProjectService struct {
 	overviewErr       error
 }
 
+type recordingProvisionedProjectService struct {
+	recordingProjectService
+	requestKey          string
+	receivedAgentModels project.AgentModels
+	provisionProjectID  string
+	provisionResult     project.Project
+	provisionErr        error
+}
+
+func (service *recordingProvisionedProjectService) CreateProvisionedWithAgentModels(
+	_ context.Context,
+	requestKey string,
+	name string,
+	recoveryPolicy project.RecoveryPolicy,
+	dialogueLimits project.DialogueLimits,
+	agentProviders project.AgentProviders,
+	agentModels project.AgentModels,
+	mergePolicy project.MergePolicy,
+	autonomyPolicies ...project.AutonomyPolicy,
+) (project.Project, error) {
+	service.requestKey = requestKey
+	service.receivedAgentModels = agentModels
+	return service.recordingProjectService.Create(
+		context.Background(), name, recoveryPolicy, dialogueLimits,
+		agentProviders, mergePolicy, autonomyPolicies...,
+	)
+}
+
+func (service *recordingProvisionedProjectService) ProvisionForgejoRepository(
+	_ context.Context,
+	projectID string,
+) (project.Project, error) {
+	service.provisionProjectID = projectID
+	return service.provisionResult, service.provisionErr
+}
+
 type testErrorResponse struct {
 	Error struct {
 		Code    string `json:"code"`
@@ -399,6 +435,70 @@ func TestCreateProject(t *testing.T) {
 
 	if response.CreatedAt != service.result.CreatedAt {
 		t.Errorf("expected response CreatedAt %v, got %v", service.result.CreatedAt, response.CreatedAt)
+	}
+}
+
+func TestCreateProjectProvisionsRepositoryWithIdempotencyKey(t *testing.T) {
+	service := &recordingProvisionedProjectService{recordingProjectService: recordingProjectService{
+		result: project.Project{
+			ID: "prj_ready", Name: "Ready", DialogueLimits: project.DefaultDialogueLimits(),
+			ForgejoRepository: &project.ForgejoRepository{
+				Owner: "commitarium", Name: "ready", DefaultBranch: "main", BoundAt: time.Now().UTC(),
+			},
+		},
+	}}
+	request := httptest.NewRequest(
+		http.MethodPost, "/api/v1/projects",
+		strings.NewReader(`{"name":"Ready","agent_models":{"lead":"gpt-5.6-sol","reviewer":"claude-opus-4-8-20260901"}}`),
+	)
+	request.Header.Set("Idempotency-Key", "desktop-create-1")
+	recorder := httptest.NewRecorder()
+	New(service, nil, nil, nil, nil, nil).ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("status = %d: %s", recorder.Code, recorder.Body.String())
+	}
+	if service.requestKey != "desktop-create-1" || service.receivedAgentModels.Lead != "gpt-5.6-sol" {
+		t.Fatalf("unexpected provisioned create request key=%q models=%+v", service.requestKey, service.receivedAgentModels)
+	}
+	var response projectResponse
+	if err := json.NewDecoder(recorder.Body).Decode(&response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if response.RepositoryStatus != "ready" || response.ForgejoRepository == nil {
+		t.Fatalf("unexpected repository readiness response %+v", response)
+	}
+}
+
+func TestProvisionForgejoRepositoryRepairsUnboundProject(t *testing.T) {
+	service := &recordingProvisionedProjectService{provisionResult: project.Project{
+		ID: "prj_old", Name: "Old", DialogueLimits: project.DefaultDialogueLimits(),
+		ForgejoRepository: &project.ForgejoRepository{
+			Owner: "commitarium", Name: "old", DefaultBranch: "main", BoundAt: time.Now().UTC(),
+		},
+	}}
+	request := httptest.NewRequest(
+		http.MethodPost, "/api/v1/projects/prj_old/forgejo-repository", nil,
+	)
+	request.Header.Set("Idempotency-Key", "repair-1")
+	recorder := httptest.NewRecorder()
+	New(service, nil, nil, nil, nil, nil).ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK || service.provisionProjectID != "prj_old" {
+		t.Fatalf("status=%d project=%q body=%s", recorder.Code, service.provisionProjectID, recorder.Body.String())
+	}
+	var response projectResponse
+	if err := json.NewDecoder(recorder.Body).Decode(&response); err != nil || response.RepositoryStatus != "ready" {
+		t.Fatalf("unexpected response %+v err=%v", response, err)
+	}
+}
+
+func TestProvisionForgejoRepositoryRequiresIdempotencyKey(t *testing.T) {
+	service := &recordingProvisionedProjectService{}
+	recorder := httptest.NewRecorder()
+	New(service, nil, nil, nil, nil, nil).ServeHTTP(
+		recorder, httptest.NewRequest(http.MethodPost, "/api/v1/projects/prj_old/forgejo-repository", nil),
+	)
+	if recorder.Code != http.StatusBadRequest || service.provisionProjectID != "" {
+		t.Fatalf("status=%d project=%q body=%s", recorder.Code, service.provisionProjectID, recorder.Body.String())
 	}
 }
 
@@ -964,6 +1064,9 @@ func TestListProjects(t *testing.T) {
 	}
 	if len(body) != 2 || body[0].ID != "prj_one" || body[0].ForgejoRepository != nil {
 		t.Fatalf("unexpected project list %+v", body)
+	}
+	if body[0].RepositoryStatus != "needs_setup" || body[1].RepositoryStatus != "ready" {
+		t.Fatalf("unexpected repository statuses %+v", body)
 	}
 	if body[1].ForgejoRepository == nil || body[1].ForgejoRepository.DefaultBranch != "main" {
 		t.Fatalf("bound repository missing from project list %+v", body[1])

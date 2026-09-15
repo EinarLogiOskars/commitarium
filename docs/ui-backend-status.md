@@ -83,7 +83,14 @@ with the implementation and public API documentation they describe.
 
 Safe UI capabilities:
 
-- Create a project with `POST /api/v1/projects`.
+- Create a project with `POST /api/v1/projects`. Send a stable
+  `Idempotency-Key`; ordinary creation also prepares a private, cloneable
+  Forgejo repository with an empty `main` branch before returning.
+- Read `repository_status` on every project. `ready` has a bound repository and
+  may create work orders. `needs_setup` means repository provisioning was
+  interrupted or unavailable; retry the original create request with the same
+  key or call `POST /api/v1/projects/{projectID}/forgejo-repository` with an
+  empty body and a new `Idempotency-Key`. The repair action starts no agent.
 - Build a project switcher with `GET /api/v1/projects`.
 - Retrieve one project with `GET /api/v1/projects/{projectID}`.
 - Render the authoritative internal repository's current default-branch head,

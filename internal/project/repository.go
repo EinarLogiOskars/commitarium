@@ -12,9 +12,27 @@ var ErrInvalidForgejoRepositoryCoordinate = errors.New("Forgejo repository owner
 var ErrForgejoRepositoryNotFound = errors.New("Forgejo repository not found")
 var ErrForgejoRepositoryNotReady = errors.New("Forgejo repository has no usable default branch")
 var ErrForgejoUnavailable = errors.New("Forgejo repository verification is unavailable")
+var ErrRepositoryProvisioningUnavailable = errors.New("project repository provisioning is unavailable")
+var ErrProjectCreateConflict = errors.New("project create idempotency key conflicts with existing project")
 
 type RepositoryVerifier interface {
 	VerifyRepository(ctx context.Context, owner, name string) (ForgejoRepository, error)
+}
+
+// RepositoryInitializationSpec identifies the private, stack-neutral Git
+// repository created for an ordinary (non-imported) project. The initializer
+// must create a usable default branch and be safe to call repeatedly.
+type RepositoryInitializationSpec struct {
+	ProjectID     string
+	Repository    string
+	DefaultBranch string
+}
+
+type RepositoryInitializer interface {
+	InitializeRepository(
+		ctx context.Context,
+		spec RepositoryInitializationSpec,
+	) (ForgejoRepository, error)
 }
 
 func NormalizeRepositoryCoordinate(owner, name string) (string, string, error) {

@@ -22,6 +22,7 @@ this API beyond the host loopback interface is unsupported.
 | `PUT` | `/api/v1/projects/{projectID}/agent-settings` | Atomically select default providers and exact models for future work orders |
 | `PUT` | `/api/v1/projects/{projectID}/merge-policy` | Select the default merge behavior for future work orders |
 | `PUT` | `/api/v1/projects/{projectID}/autonomy-policy` | Select the default phase checkpoint behavior for future work orders |
+| `POST` | `/api/v1/projects/{projectID}/forgejo-repository` | Create or repair the project's private internal repository |
 | `PUT` | `/api/v1/projects/{projectID}/forgejo-repository` | Verify and bind the project's internal repository |
 | `POST` | `/api/v1/projects/{projectID}/features` | Create a draft feature with optional per-order setting overrides |
 | `GET` | `/api/v1/projects/{projectID}/features` | List the project's features by recent activity |
@@ -55,11 +56,18 @@ this API beyond the host loopback interface is unsupported.
 
 ## Idempotency
 
-Feature transitions, run starts, planning, implementation, merge, recovery, run-control
-actions, run interventions, session commands, and goal acceptance require an
-`Idempotency-Key` header. Retrying the same operation with the same key returns
-the existing durable result. Reusing a key for a different operation returns
-`409 Conflict` with the `idempotency_conflict` error code.
+Feature transitions, run starts, planning, implementation, merge, recovery,
+run-control actions, run interventions, project-repository repair, session
+commands, and goal acceptance require an `Idempotency-Key` header. Retrying the
+same operation with the same key returns the existing durable result. Reusing a
+key for a different operation returns `409 Conflict` with the
+`idempotency_conflict` error code.
+
+Project creation accepts an `Idempotency-Key` and clients should always send
+one. It derives a stable project identity from that key, so a retry after an
+interruption resumes creation of the same private repository. Reusing the key
+with different project settings returns `409 idempotency_conflict`. The header
+remains optional for compatibility with older clients.
 
 Run IDs are stable opaque values derived from the start request's idempotency
 key. Only a feature in `draft` can admit a new run, but a retry remains valid
@@ -261,6 +269,31 @@ name. No alias scraping, provider turn, or secret exposure is involved.
 ID. It returns `[]` when none exist. This is the discovery endpoint an eventual
 project switcher will use.
 
+Ordinary project creation prepares a private Forgejo repository before it
+returns. The repository starts with a deterministic empty root commit on
+`main`, which makes it immediately cloneable without choosing a language or
+adding a generated file to the user's source tree. A successful response has
+`repository_status: "ready"` and a `forgejo_repository` object. If Forgejo is
+temporarily unavailable, project creation returns
+`503 repository_provisioning_unavailable`; the durable project remains visible
+with `repository_status: "needs_setup"` and no repository object.
+
+Retry creation with the same `Idempotency-Key`, or repair a visible unbound
+project explicitly:
+
+```http
+POST /api/v1/projects/prj_example/forgejo-repository
+Idempotency-Key: repair-prj-example-1
+```
+
+The repair body must be empty. It creates or verifies the same private
+repository and empty default branch, atomically binds it, and returns the full
+project with `repository_status: "ready"`. Calling it again after success is a
+no-op. It never starts an agent or creates a work order. An unknown project
+returns `404 project_not_found`; transient Forgejo, credential, Git, or storage
+failure returns `503 repository_provisioning_unavailable` and leaves the
+project in `needs_setup` for another retry.
+
 ### Importing an existing local repository
 
 The trusted desktop host can open an existing local Git repository without
@@ -374,6 +407,7 @@ includes:
     "default_branch": "main",
     "bound_at": "2026-09-09T18:00:00Z"
   },
+  "repository_status": "ready",
   "created_at": "2026-09-09T17:00:00Z"
 }
 ```
