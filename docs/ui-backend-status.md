@@ -117,6 +117,21 @@ Safe UI capabilities:
 - Treat `0` as unlimited and positive values as complete two-agent rounds.
 - Bind and display one permanent internal Forgejo repository through
   `PUT /api/v1/projects/{projectID}/forgejo-repository`.
+- Offer the curated stack picker from `GET /api/v1/toolchain-presets`, read the
+  current project value from `GET /api/v1/projects/{projectID}/toolchain`, and
+  save an exact choice with `PUT` to that same project route. `needs_setup`
+  means no choice has been captured; `configured` includes the exact tools.
+- For an imported repository, call
+  `POST /api/v1/projects/{projectID}/toolchain/detect` with an empty body and
+  show its evidence before saving the reviewed suggestion with
+  `source: "detected"`. Detection is shallow and non-mutating.
+- Render `services` as requirements only. `services_runnable: false` means this
+  release does not provision PostgreSQL or other sidecars. Generated mise
+  configuration is internal runtime state, never a repository file and never a
+  diff the user needs to ignore.
+- Do not enable work-order creation until the project toolchain is
+  `configured`. The backend also enforces this and returns
+  `409 project_toolchain_required` without starting clarification.
 
 The UI must not expect project deletion, general project editing, or changing a
 bound Forgejo repository. Those operations are not implemented.

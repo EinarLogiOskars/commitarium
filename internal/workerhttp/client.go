@@ -26,10 +26,11 @@ var (
 )
 
 type ClientConfig struct {
-	BaseURL        string
-	BearerToken    string
-	RequestTimeout time.Duration
-	HTTPClient     *http.Client
+	BaseURL             string
+	BearerToken         string
+	RequestTimeout      time.Duration
+	AttemptStartTimeout time.Duration
+	HTTPClient          *http.Client
 }
 
 // RemoteError is a deliberate protocol error returned by a reachable worker.
@@ -56,10 +57,11 @@ func (remoteError *RemoteError) Unwrap() error {
 }
 
 type Client struct {
-	baseURL        string
-	bearerToken    string
-	requestTimeout time.Duration
-	httpClient     *http.Client
+	baseURL             string
+	bearerToken         string
+	requestTimeout      time.Duration
+	attemptStartTimeout time.Duration
+	httpClient          *http.Client
 }
 
 var _ Service = (*Client)(nil)
@@ -74,6 +76,13 @@ func NewClient(config ClientConfig) (*Client, error) {
 	}
 	if config.RequestTimeout <= 0 {
 		return nil, fmt.Errorf("%w: request timeout must be positive", ErrInvalidClientConfig)
+	}
+	attemptStartTimeout := config.AttemptStartTimeout
+	if attemptStartTimeout == 0 {
+		attemptStartTimeout = config.RequestTimeout
+	}
+	if attemptStartTimeout < 0 {
+		return nil, fmt.Errorf("%w: attempt start timeout must be positive", ErrInvalidClientConfig)
 	}
 
 	httpClient := config.HTTPClient
@@ -90,10 +99,11 @@ func NewClient(config ClientConfig) (*Client, error) {
 	}
 
 	return &Client{
-		baseURL:        baseURL,
-		bearerToken:    config.BearerToken,
-		requestTimeout: config.RequestTimeout,
-		httpClient:     clientCopy,
+		baseURL:             baseURL,
+		bearerToken:         config.BearerToken,
+		requestTimeout:      config.RequestTimeout,
+		attemptStartTimeout: attemptStartTimeout,
+		httpClient:          clientCopy,
 	}, nil
 }
 
@@ -152,8 +162,9 @@ func (client *Client) PutAttempt(
 	}
 	path := attemptPath(identity.AttemptReference)
 	var attempt Attempt
-	status, headers, err := client.do(
+	status, headers, err := client.doWithTimeout(
 		ctx,
+		client.attemptStartTimeout,
 		http.MethodPut,
 		path,
 		true,
@@ -280,7 +291,20 @@ func (client *Client) do(
 	body any,
 	destination any,
 ) (int, responseMetadata, error) {
-	request, cancel, err := client.newRequest(ctx, method, path, authenticated, idempotencyKey, body)
+	return client.doWithTimeout(ctx, client.requestTimeout, method, path, authenticated, idempotencyKey, body, destination)
+}
+
+func (client *Client) doWithTimeout(
+	ctx context.Context,
+	timeout time.Duration,
+	method string,
+	path string,
+	authenticated bool,
+	idempotencyKey string,
+	body any,
+	destination any,
+) (int, responseMetadata, error) {
+	request, cancel, err := client.newRequestWithTimeout(ctx, timeout, method, path, authenticated, idempotencyKey, body)
 	if err != nil {
 		return 0, responseMetadata{}, err
 	}
@@ -322,7 +346,19 @@ func (client *Client) newRequest(
 	idempotencyKey string,
 	body any,
 ) (*http.Request, context.CancelFunc, error) {
-	requestContext, cancel := context.WithTimeout(ctx, client.requestTimeout)
+	return client.newRequestWithTimeout(ctx, client.requestTimeout, method, path, authenticated, idempotencyKey, body)
+}
+
+func (client *Client) newRequestWithTimeout(
+	ctx context.Context,
+	timeout time.Duration,
+	method string,
+	path string,
+	authenticated bool,
+	idempotencyKey string,
+	body any,
+) (*http.Request, context.CancelFunc, error) {
+	requestContext, cancel := context.WithTimeout(ctx, timeout)
 	var requestBody io.Reader
 	if body != nil {
 		payload, err := json.Marshal(body)

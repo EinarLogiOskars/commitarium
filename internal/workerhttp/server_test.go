@@ -497,6 +497,7 @@ func TestStatusForErrorCode(t *testing.T) {
 		ErrorIndeterminateState:      http.StatusConflict,
 		ErrorProfileUnavailable:      http.StatusServiceUnavailable,
 		ErrorWorkspaceUnavailable:    http.StatusServiceUnavailable,
+		ErrorToolchainUnavailable:    http.StatusServiceUnavailable,
 		ErrorModelCatalogUnavailable: http.StatusServiceUnavailable,
 		ErrorRedactionFailed:         http.StatusInternalServerError,
 		ErrorInvalidEventStream:      http.StatusInternalServerError,

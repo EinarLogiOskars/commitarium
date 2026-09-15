@@ -20,6 +20,7 @@ func TestLoadConfigDefaultsToSimulatedRunner(t *testing.T) {
 	if loaded.runnerMode != defaultRunnerMode ||
 		loaded.simulatedStepDelay != 250*time.Millisecond ||
 		loaded.workerRequestTimeout != defaultWorkerRequestTimeout ||
+		loaded.attemptStartTimeout != defaultAttemptStartTimeout ||
 		loaded.forgejoURL != defaultForgejoURL ||
 		loaded.forgejoOwner != "commitarium_admin" ||
 		loaded.forgejoHostURL != defaultForgejoHostURL ||
@@ -74,7 +75,7 @@ func TestLoadConfigAcceptsRealAgentRunner(t *testing.T) {
 		loaded.claudeReviewerWorkerURL != "http://claude-reviewer-worker:8081" ||
 		loaded.claudeReviewerWorkerToken != "claude-reviewer-test-token" ||
 		loaded.claudeReviewerAgentProfileID != "claude_reviewer_profile_test" ||
-		loaded.workerRequestTimeout != 4*time.Second {
+		loaded.workerRequestTimeout != 4*time.Second || loaded.attemptStartTimeout != 5*time.Minute {
 		t.Fatalf("unexpected real-agent config %+v", loaded)
 	}
 }
@@ -89,6 +90,14 @@ func TestLoadConfigNormalizesLegacyRealCodexLeadRunner(t *testing.T) {
 	}
 	if loaded.runnerMode != realAgentsRunnerMode {
 		t.Fatalf("legacy runner mode normalized to %q; expected %q", loaded.runnerMode, realAgentsRunnerMode)
+	}
+}
+
+func TestLoadConfigRejectsInvalidAttemptStartTimeout(t *testing.T) {
+	values := realAgentConfigValues(t)
+	values["COMMITARIUM_WORKER_ATTEMPT_START_TIMEOUT"] = "zero"
+	if _, err := loadConfig(func(name string) string { return values[name] }); err == nil {
+		t.Fatal("accepted invalid worker attempt start timeout")
 	}
 }
 
@@ -111,6 +120,7 @@ func realAgentConfigValues(t *testing.T) map[string]string {
 		"COMMITARIUM_CLAUDE_REVIEWER_WORKER_TOKEN_FILE": tokenFiles[3],
 		"COMMITARIUM_CLAUDE_REVIEWER_PROFILE_ID":        "claude_reviewer_profile_test",
 		"COMMITARIUM_CODEX_WORKER_REQUEST_TIMEOUT":      "4s",
+		"COMMITARIUM_WORKER_ATTEMPT_START_TIMEOUT":      "5m",
 	}
 }
 

@@ -216,7 +216,9 @@ func decodeRepositoryOverviewTree(
 				project.ErrForgejoUnavailable,
 			)
 		}
-		tree = append(tree, project.RepositoryTreeEntry{Path: entry.Path, Type: entryType})
+		tree = append(tree, project.RepositoryTreeEntry{
+			Path: entry.Path, Type: entryType, BlobID: entry.SHA, Size: entry.Size,
+		})
 		if entry.Type == "blob" {
 			if rank := repositoryReadmeRank(entry.Path); rank < readmeRank {
 				candidate := entry
@@ -227,6 +229,53 @@ func decodeRepositoryOverviewTree(
 	}
 	sort.Slice(tree, func(i, j int) bool { return tree[i].Path < tree[j].Path })
 	return tree, readme, nil
+}
+
+func (client *Client) ReadRepositoryBlob(
+	ctx context.Context,
+	owner string,
+	repository string,
+	blobID string,
+	maxBytes int64,
+) ([]byte, error) {
+	owner, repository, err := project.NormalizeRepositoryCoordinate(owner, repository)
+	if err != nil {
+		return nil, err
+	}
+	blobID = strings.TrimSpace(blobID)
+	if blobID == "" || strings.ContainsAny(blobID, "/\\") || maxBytes <= 0 ||
+		maxBytes > project.RepositoryDetectionFileMaxBytes {
+		return nil, project.ErrForgejoUnavailable
+	}
+	status, body, err := client.doJSON(ctx, http.MethodGet, repositoryBlobPath(owner, repository, blobID), nil)
+	if err != nil {
+		return nil, err
+	}
+	if status != http.StatusOK {
+		return nil, fmt.Errorf("%w: repository blob request returned HTTP %d", project.ErrForgejoUnavailable, status)
+	}
+	return decodeRepositoryBlob(body, blobID, maxBytes)
+}
+
+func decodeRepositoryBlob(body []byte, expectedSHA string, maxBytes int64) ([]byte, error) {
+	var decoded struct {
+		Content  string `json:"content"`
+		Encoding string `json:"encoding"`
+		SHA      string `json:"sha"`
+		Size     int64  `json:"size"`
+	}
+	if err := json.Unmarshal(body, &decoded); err != nil || strings.TrimSpace(decoded.SHA) != expectedSHA ||
+		decoded.Encoding != "base64" || decoded.Size < 0 {
+		return nil, fmt.Errorf("%w: repository blob response is invalid", project.ErrForgejoUnavailable)
+	}
+	if decoded.Size > maxBytes {
+		return nil, project.ErrRepositoryContentTooLarge
+	}
+	contents, err := base64.StdEncoding.DecodeString(decoded.Content)
+	if err != nil || int64(len(contents)) != decoded.Size || int64(len(contents)) > maxBytes {
+		return nil, fmt.Errorf("%w: repository blob response has invalid content", project.ErrForgejoUnavailable)
+	}
+	return contents, nil
 }
 
 var repositoryReadmeNames = []string{

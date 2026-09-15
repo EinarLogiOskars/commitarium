@@ -9,6 +9,7 @@ import (
 
 	"github.com/EinarLogiOskars/commitarium/internal/feature"
 	"github.com/EinarLogiOskars/commitarium/internal/project"
+	"github.com/EinarLogiOskars/commitarium/internal/toolchain"
 )
 
 type createFeatureRequest struct {
@@ -81,6 +82,17 @@ func (api *API) createFeatureHandler(
 	}
 	overrides.MergePolicy = request.MergePolicy
 	overrides.AutonomyPolicy = request.AutonomyPolicy
+	if api.toolchains != nil {
+		manifest, err := api.toolchains.Get(r.Context(), projectID)
+		if err != nil {
+			api.writeToolchainError(w, projectID, "check before work-order creation", err)
+			return
+		}
+		if manifest.Status != toolchain.StatusConfigured {
+			writeError(w, http.StatusConflict, "project_toolchain_required", "choose or detect the project toolchain before creating a work order")
+			return
+		}
+	}
 	if api.modelCatalog != nil {
 		storedProject, err := api.projects.GetByID(r.Context(), projectID)
 		if err != nil {

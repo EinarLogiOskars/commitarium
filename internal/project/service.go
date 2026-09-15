@@ -143,6 +143,31 @@ func (s *Service) GetRepositoryOverview(
 	return overview, nil
 }
 
+func (s *Service) ReadRepositoryBlob(
+	ctx context.Context,
+	projectID string,
+	blobID string,
+	maxBytes int64,
+) ([]byte, error) {
+	storedProject, err := s.store.GetByID(ctx, projectID)
+	if err != nil {
+		return nil, fmt.Errorf("get project %q for repository blob: %w", projectID, err)
+	}
+	if storedProject.ForgejoRepository == nil {
+		return nil, ErrForgejoRepositoryNotReady
+	}
+	reader, ok := s.repositoryOverviewReader.(RepositoryBlobReader)
+	if !ok {
+		return nil, ErrForgejoUnavailable
+	}
+	repository := *storedProject.ForgejoRepository
+	contents, err := reader.ReadRepositoryBlob(ctx, repository.Owner, repository.Name, blobID, maxBytes)
+	if err != nil {
+		return nil, fmt.Errorf("read Forgejo repository blob for project %q: %w", projectID, err)
+	}
+	return contents, nil
+}
+
 func (s *Service) Import(ctx context.Context, spec ImportSpec, bundle io.Reader) (Project, bool, error) {
 	normalized, err := normalizeImportSpec(spec)
 	if err != nil {

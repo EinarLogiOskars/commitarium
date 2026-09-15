@@ -306,6 +306,7 @@ const (
 	ErrorProviderSessionMissing  ErrorCode = "provider_session_missing"
 	ErrorProfileUnavailable      ErrorCode = "profile_unavailable"
 	ErrorWorkspaceUnavailable    ErrorCode = "workspace_unavailable"
+	ErrorToolchainUnavailable    ErrorCode = "toolchain_unavailable"
 	ErrorModelCatalogUnavailable ErrorCode = "model_catalog_unavailable"
 	ErrorConfigurationMismatch   ErrorCode = "configuration_mismatch"
 	ErrorIndeterminateState      ErrorCode = "indeterminate_state"

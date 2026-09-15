@@ -24,6 +24,10 @@ this API beyond the host loopback interface is unsupported.
 | `PUT` | `/api/v1/projects/{projectID}/autonomy-policy` | Select the default phase checkpoint behavior for future work orders |
 | `POST` | `/api/v1/projects/{projectID}/forgejo-repository` | Create or repair the project's private internal repository |
 | `PUT` | `/api/v1/projects/{projectID}/forgejo-repository` | Verify and bind the project's internal repository |
+| `GET` | `/api/v1/toolchain-presets` | List curated stacks with explicit runtime versions |
+| `GET` | `/api/v1/projects/{projectID}/toolchain` | Read the project's effective runtime toolchain |
+| `PUT` | `/api/v1/projects/{projectID}/toolchain` | Replace the project's internal runtime toolchain |
+| `POST` | `/api/v1/projects/{projectID}/toolchain/detect` | Quickly suggest a toolchain from the repository root |
 | `POST` | `/api/v1/projects/{projectID}/features` | Create a draft feature with optional per-order setting overrides |
 | `GET` | `/api/v1/projects/{projectID}/features` | List the project's features by recent activity |
 | `GET` | `/api/v1/projects/{projectID}/features/{featureID}` | Retrieve a feature |
@@ -471,6 +475,101 @@ repository, an unavailable repository/default branch, incomplete Forgejo tree
 data, or an unreadable response returns `503 repository_unavailable`. The
 endpoint performs no language or framework detection and exposes no file
 contents other than the capped root README.
+
+## Project toolchains
+
+Commitarium stores project runtime choices outside the Git repository. A
+generated configuration lives only in the shared internal toolchain volume, so
+it is never committed and does not need a `.gitignore` entry. Workers explicitly
+ignore repository mise configuration and activate only this generated file in
+safe mode.
+
+`GET /api/v1/toolchain-presets` returns curated picker choices with explicit
+versions. The current presets are Python, Node.js LTS, Go, and Rust. The exact
+versions are part of the response rather than floating aliases.
+
+`GET /api/v1/projects/{projectID}/toolchain` returns either:
+
+```json
+{
+  "project_id": "prj_example",
+  "status": "needs_setup",
+  "tools": {},
+  "services": [],
+  "services_runnable": false
+}
+```
+
+or the effective configured values:
+
+```json
+{
+  "project_id": "prj_example",
+  "status": "configured",
+  "source": "picker",
+  "tools": {"python": "3.14.7"},
+  "services": ["postgresql"],
+  "services_runnable": false,
+  "updated_at": "2026-09-15T12:00:00Z"
+}
+```
+
+`services` is planning metadata only in this version. Commitarium does not
+start databases or other sidecars, and `services_runnable` is therefore always
+false. A UI must not imply that selecting PostgreSQL provisions a server.
+
+The picker saves an exact replacement with:
+
+```http
+PUT /api/v1/projects/prj_example/toolchain
+Content-Type: application/json
+
+{
+  "source": "picker",
+  "tools": {"python": "3.14.7"},
+  "services": ["postgresql"]
+}
+```
+
+Supported tool names are `bun`, `deno`, `go`, `java`, `node`, `php`, `python`,
+`ruby`, and `rust`. Every version must be explicit; `latest` and `system` are
+rejected. `source` must be `picker`, `detected`, `assistant`, or `runtime`.
+Invalid input returns `400 invalid_toolchain`; an unknown project returns
+`404 project_not_found`. `PUT` is an idempotent replacement.
+
+For an import, `POST /api/v1/projects/{projectID}/toolchain/detect` accepts an
+empty body and returns a quick, non-mutating suggestion:
+
+```json
+{
+  "tools": {"node": "24.21.0"},
+  "services": [],
+  "evidence": ["package.json"],
+  "confidence": "high"
+}
+```
+
+Detection reads only the top-level repository tree and small recognized files.
+A repository `mise.toml` or `.tool-versions` is parsed only as inert input for
+allowlisted `[tools]` entries with explicit versions. Its environment, tasks,
+hooks, and other sections are never activated. Detection does not save or
+install anything; the user reviews the suggestion and submits it through the
+`PUT` endpoint with `source: "detected"`.
+
+At provider-attempt admission, a worker installs any missing exact runtimes
+with pinned mise into the shared, version-keyed cache before launching the
+provider. Mise shims are first on the provider PATH, so an implementation agent
+can add a supported runtime during its turn with
+`commitarium-toolchain require <tool>@<exact-version>` and use it immediately.
+The command may take up to 30 minutes and must be allowed outbound access to the
+runtime's release host. Installation is serialized against coordinator updates.
+If it fails, the worker records a retryable terminal
+`toolchain_unavailable` result and does not start the provider turn.
+
+Work-order creation requires `status: "configured"`. Until the user saves a
+picker choice or a reviewed detection/assistant result,
+`POST /api/v1/projects/{projectID}/features` returns
+`409 project_toolchain_required`; no clarification run is started.
 
 ## Browsing features and run history
 

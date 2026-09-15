@@ -169,6 +169,7 @@ func TestNewClientValidatesConfigurationWithoutMutatingHTTPClient(t *testing.T) 
 		{name: "token containing whitespace", config: withClientBearerToken(valid, "bad token")},
 		{name: "zero timeout", config: withClientTimeout(valid, 0)},
 		{name: "negative timeout", config: withClientTimeout(valid, -time.Second)},
+		{name: "negative attempt start timeout", config: withClientAttemptStartTimeout(valid, -time.Second)},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -347,6 +348,32 @@ func TestClientTimeoutPreservesUncertainNetworkOutcome(t *testing.T) {
 	}
 }
 
+func TestClientUsesLongerTimeoutForAttemptStart(t *testing.T) {
+	attempt := validServerAttempt()
+	transport := roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		deadline, ok := request.Context().Deadline()
+		if !ok || time.Until(deadline) < 4*time.Minute {
+			t.Fatalf("attempt start deadline was not extended: %v, %t", deadline, ok)
+		}
+		return responseForHandler(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("Location", attemptPath(attempt.AttemptReference))
+			w.WriteHeader(http.StatusCreated)
+			_, _ = fmt.Fprintln(w, marshalTestJSON(t, attempt))
+		}), request), nil
+	})
+	config := testClientConfig("http://worker.test", time.Second)
+	config.AttemptStartTimeout = 5 * time.Minute
+	config.HTTPClient = &http.Client{Transport: transport}
+	client, err := NewClient(config)
+	if err != nil {
+		t.Fatalf("create worker HTTP client: %v", err)
+	}
+	if _, _, err := client.PutAttempt(context.Background(), validMutationIdentity(), validPutAttemptRequest()); err != nil {
+		t.Fatalf("put attempt: %v", err)
+	}
+}
+
 func TestClientReportsConnectionFailure(t *testing.T) {
 	connectionError := errors.New("connection refused")
 	transport := roundTripFunc(func(*http.Request) (*http.Response, error) {
@@ -453,5 +480,10 @@ func withClientBearerToken(config ClientConfig, bearerToken string) ClientConfig
 
 func withClientTimeout(config ClientConfig, timeout time.Duration) ClientConfig {
 	config.RequestTimeout = timeout
+	return config
+}
+
+func withClientAttemptStartTimeout(config ClientConfig, timeout time.Duration) ClientConfig {
+	config.AttemptStartTimeout = timeout
 	return config
 }

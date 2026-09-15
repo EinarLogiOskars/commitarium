@@ -7,6 +7,7 @@ import (
 )
 
 const RepositoryReadmeMaxBytes int64 = 128 * 1024
+const RepositoryDetectionFileMaxBytes int64 = 64 * 1024
 
 var ErrRepositoryContentTooLarge = errors.New("repository content is too large")
 
@@ -17,6 +18,10 @@ type RepositoryOverviewReader interface {
 		name string,
 		defaultBranch string,
 	) (RepositoryOverview, error)
+}
+
+type RepositoryBlobReader interface {
+	ReadRepositoryBlob(context.Context, string, string, string, int64) ([]byte, error)
 }
 
 type RepositoryOverview struct {
@@ -34,8 +39,10 @@ type RepositoryHead struct {
 }
 
 type RepositoryTreeEntry struct {
-	Path string
-	Type string
+	Path   string
+	Type   string
+	BlobID string
+	Size   int64
 }
 
 type unavailableRepositoryOverviewReader struct{}
