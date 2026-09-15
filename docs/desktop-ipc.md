@@ -49,8 +49,21 @@ UI-local persistence:
 Project import (host-side git):
 
 - `inspect_folder(path) -> FolderInfo`
-- `import_project(path, name, defaultBranch, recoveryPolicy) -> Project`
+- `import_project(path, name, defaultBranch, recoveryPolicy, agentProviders?,
+  agentModels?, autonomyPolicy?, mergePolicy?, dialogueLimits?) -> Project` —
+  imports may carry the same project defaults as project creation. Omitted
+  values use coordinator defaults; supplied values are validated by the
+  coordinator with the same rules and error codes as its HTTP project APIs.
 - `get_project_source(projectId) -> string | null`
+
+```ts
+type ImportAgentProviders = { lead: "codex" | "claude"; reviewer: "codex" | "claude" };
+type ImportAgentModels = { lead: string; reviewer: string };
+type ImportDialogueLimits = {
+  planning_rounds: number;
+  implementation_review_rounds: number;
+};
+```
 
 The trusted source record also retains whether the import came from a Git
 repository or plain folder and the exact imported default-branch commit. Those

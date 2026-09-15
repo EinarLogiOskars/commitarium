@@ -10,7 +10,6 @@
 //! pushed to any external remote.
 
 use serde::{Deserialize, Serialize};
-use serde_json::json;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use tauri::{AppHandle, Manager};
@@ -34,6 +33,48 @@ pub struct FolderInfo {
     estimated_files: Option<u64>,
     /// Estimated total bytes for a plain folder.
     estimated_bytes: Option<u64>,
+}
+
+/// Optional project defaults forwarded with a host-side import. These mirror
+/// the coordinator's project settings payload; validation remains centralized
+/// in the coordinator so imports return the same errors as project creation.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ImportAgentProviders {
+    lead: String,
+    reviewer: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ImportAgentModels {
+    lead: String,
+    reviewer: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ImportDialogueLimits {
+    planning_rounds: i64,
+    implementation_review_rounds: i64,
+}
+
+#[derive(Debug, Serialize)]
+struct ImportMetadata {
+    name: String,
+    default_branch: String,
+    recovery_policy: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    agent_providers: Option<ImportAgentProviders>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    agent_models: Option<ImportAgentModels>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    autonomy_policy: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    merge_policy: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    dialogue_limits: Option<ImportDialogueLimits>,
+}
+
+fn import_metadata_json(metadata: ImportMetadata) -> Result<String, String> {
+    serde_json::to_string(&metadata).map_err(|e| format!("encode import metadata: {e}"))
 }
 
 fn git(dir: &Path, args: &[&str]) -> Result<std::process::Output, String> {
@@ -279,6 +320,11 @@ pub async fn import_project(
     name: String,
     default_branch: String,
     recovery_policy: String,
+    agent_providers: Option<ImportAgentProviders>,
+    agent_models: Option<ImportAgentModels>,
+    autonomy_policy: Option<String>,
+    merge_policy: Option<String>,
+    dialogue_limits: Option<ImportDialogueLimits>,
 ) -> Result<serde_json::Value, String> {
     let dir = PathBuf::from(&path);
     if !dir.is_dir() {
@@ -296,12 +342,16 @@ pub async fn import_project(
     };
 
     let bytes = std::fs::read(&bundle_path).map_err(|e| format!("read bundle: {e}"))?;
-    let metadata = json!({
-        "name": name,
-        "default_branch": default_branch,
-        "recovery_policy": recovery_policy,
-    })
-    .to_string();
+    let metadata = import_metadata_json(ImportMetadata {
+        name: name.clone(),
+        default_branch,
+        recovery_policy,
+        agent_providers,
+        agent_models,
+        autonomy_policy,
+        merge_policy,
+        dialogue_limits,
+    })?;
 
     let id = import_id(&name, &abs);
     let form = reqwest::multipart::Form::new()
@@ -439,6 +489,63 @@ mod tests {
             "Git failed: {}",
             String::from_utf8_lossy(&output.stderr)
         );
+    }
+
+    #[test]
+    fn import_metadata_forwards_selected_project_defaults() {
+        let encoded = import_metadata_json(ImportMetadata {
+            name: "Example".into(),
+            default_branch: "main".into(),
+            recovery_policy: "automatic".into(),
+            agent_providers: Some(ImportAgentProviders {
+                lead: "codex".into(),
+                reviewer: "claude".into(),
+            }),
+            agent_models: Some(ImportAgentModels {
+                lead: "gpt-5.6-sol".into(),
+                reviewer: "claude-opus-4-8".into(),
+            }),
+            autonomy_policy: Some("run_to_completion".into()),
+            merge_policy: Some("auto_after_gates".into()),
+            dialogue_limits: Some(ImportDialogueLimits {
+                planning_rounds: 4,
+                implementation_review_rounds: 8,
+            }),
+        })
+        .expect("serialize metadata");
+
+        let value: serde_json::Value = serde_json::from_str(&encoded).expect("parse metadata");
+        assert_eq!(value["agent_providers"]["lead"], "codex");
+        assert_eq!(value["agent_providers"]["reviewer"], "claude");
+        assert_eq!(value["agent_models"]["lead"], "gpt-5.6-sol");
+        assert_eq!(value["agent_models"]["reviewer"], "claude-opus-4-8");
+        assert_eq!(value["autonomy_policy"], "run_to_completion");
+        assert_eq!(value["merge_policy"], "auto_after_gates");
+        assert_eq!(value["dialogue_limits"]["planning_rounds"], 4);
+        assert_eq!(value["dialogue_limits"]["implementation_review_rounds"], 8);
+    }
+
+    #[test]
+    fn import_metadata_omits_unspecified_project_defaults() {
+        let encoded = import_metadata_json(ImportMetadata {
+            name: "Example".into(),
+            default_branch: "main".into(),
+            recovery_policy: "approval_required".into(),
+            agent_providers: None,
+            agent_models: None,
+            autonomy_policy: None,
+            merge_policy: None,
+            dialogue_limits: None,
+        })
+        .expect("serialize metadata");
+
+        let value: serde_json::Value = serde_json::from_str(&encoded).expect("parse metadata");
+        assert_eq!(value["name"], "Example");
+        assert!(value.get("agent_providers").is_none());
+        assert!(value.get("agent_models").is_none());
+        assert!(value.get("autonomy_policy").is_none());
+        assert!(value.get("merge_policy").is_none());
+        assert!(value.get("dialogue_limits").is_none());
     }
 
     #[test]
