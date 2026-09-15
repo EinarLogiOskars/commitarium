@@ -2,7 +2,13 @@ import { useCallback, useEffect, useState } from "react";
 import { listProjects, createProject, repairRepository } from "../api/projects";
 import { ApiError } from "../api/client";
 import { ImportProject } from "./ImportProject";
-import type { Project, RecoveryPolicy } from "../api/types";
+import { useModels } from "./useModels";
+import {
+  ProjectDefaultsFields,
+  initialProjectDefaults,
+  projectDefaultsPayload,
+} from "./ProjectDefaultsFields";
+import type { Project } from "../api/types";
 
 // Absent repository_status means a pre-slice-1 coordinator that always bound a
 // repo on create — treat as ready.
@@ -19,10 +25,12 @@ export function Projects({
   const [projects, setProjects] = useState<Project[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [name, setName] = useState("");
-  const [policy, setPolicy] = useState<RecoveryPolicy>("approval_required");
+  const [defaults, setDefaults] = useState(initialProjectDefaults());
+  const [showDefaults, setShowDefaults] = useState(false);
   const [creating, setCreating] = useState(false);
   const [importing, setImporting] = useState(false);
   const [repairing, setRepairing] = useState<string | null>(null);
+  const { modelsFor, loading: modelsLoading } = useModels();
 
   const load = useCallback(async () => {
     if (!reachable) return;
@@ -45,7 +53,7 @@ export function Projects({
     setError(null);
     try {
       const created = await createProject(
-        { name: name.trim(), recovery_policy: policy },
+        { name: name.trim(), ...projectDefaultsPayload(defaults) },
         crypto.randomUUID(),
       );
       setName("");
@@ -147,23 +155,39 @@ export function Projects({
         </ul>
       )}
 
-      <form className="create" onSubmit={submit}>
+      <form className="create create--feature" onSubmit={submit}>
         <input
           type="text"
           placeholder="New project name"
           value={name}
           onChange={(e) => setName(e.target.value)}
           disabled={creating}
+          autoFocus
         />
-        <select
-          value={policy}
-          onChange={(e) => setPolicy(e.target.value as RecoveryPolicy)}
-          disabled={creating}
-          title="Recovery policy"
-        >
-          <option value="approval_required">Approval required</option>
-          <option value="automatic">Automatic recovery</option>
-        </select>
+
+        <div className="neworder__options">
+          <button
+            type="button"
+            className="neworder__options-head"
+            onClick={() => setShowDefaults((v) => !v)}
+          >
+            <span className="activity-group__chevron">{showDefaults ? "▼" : "▶"}</span>
+            Project defaults
+            {!showDefaults && (
+              <span className="neworder__summary">Agents, models, autonomy, merge, recovery, rounds</span>
+            )}
+          </button>
+          {showDefaults && (
+            <ProjectDefaultsFields
+              value={defaults}
+              onChange={setDefaults}
+              modelsFor={modelsFor}
+              modelsLoading={modelsLoading}
+              disabled={creating}
+            />
+          )}
+        </div>
+
         <button className="primary" type="submit" disabled={creating || !name.trim()}>
           {creating ? "Creating…" : "Create"}
         </button>

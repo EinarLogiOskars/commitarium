@@ -77,9 +77,17 @@ export interface Project {
   created_at: string;
 }
 
+// POST /projects accepts these project defaults; each also has a PUT endpoint to
+// change it later. agent_models requires agent_providers; omit models when they
+// can't be resolved from the catalog so the backend applies its own defaults.
 export interface CreateProjectInput {
   name: string;
   recovery_policy?: RecoveryPolicy;
+  agent_providers?: AgentProviders;
+  agent_models?: AgentModels;
+  autonomy_policy?: AutonomyPolicy;
+  merge_policy?: MergePolicy;
+  dialogue_limits?: DialogueLimits;
 }
 
 // Runtime toolchain a project's agents get, provisioned via mise into the shared
