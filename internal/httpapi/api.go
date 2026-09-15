@@ -31,6 +31,24 @@ type ProjectAgentModelCreator interface {
 	CreateWithAgentModels(ctx context.Context, name string, recoveryPolicy project.RecoveryPolicy, dialogueLimits project.DialogueLimits, agentProviders project.AgentProviders, agentModels project.AgentModels, mergePolicy project.MergePolicy, autonomyPolicy ...project.AutonomyPolicy) (project.Project, error)
 }
 
+type ProvisionedProjectCreator interface {
+	CreateProvisionedWithAgentModels(
+		ctx context.Context,
+		requestKey string,
+		name string,
+		recoveryPolicy project.RecoveryPolicy,
+		dialogueLimits project.DialogueLimits,
+		agentProviders project.AgentProviders,
+		agentModels project.AgentModels,
+		mergePolicy project.MergePolicy,
+		autonomyPolicy ...project.AutonomyPolicy,
+	) (project.Project, error)
+}
+
+type ProjectRepositoryProvisioner interface {
+	ProvisionForgejoRepository(ctx context.Context, projectID string) (project.Project, error)
+}
+
 type ProjectAgentSettingsUpdater interface {
 	UpdateAgentSettings(ctx context.Context, projectID string, providers project.AgentProviders, models project.AgentModels) (project.Project, error)
 }
@@ -344,6 +362,12 @@ func newAPI(
 		"PUT /api/v1/projects/{id}/forgejo-repository",
 		api.bindForgejoRepositoryHandler,
 	)
+	if _, ok := projects.(ProjectRepositoryProvisioner); ok {
+		mux.HandleFunc(
+			"POST /api/v1/projects/{id}/forgejo-repository",
+			api.provisionForgejoRepositoryHandler,
+		)
+	}
 	mux.HandleFunc(
 		"POST /api/v1/projects/{projectID}/features",
 		api.createFeatureHandler,

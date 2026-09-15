@@ -262,7 +262,7 @@ func run(ctx context.Context, coordinatorConfig config) error {
 		return fmt.Errorf("create project import service: %w", err)
 	}
 	projectService := project.NewServiceWithRepositoryServices(
-		projectStore, forgejoClient, projectImporter, forgejoClient,
+		projectStore, forgejoClient, projectImporter, forgejoClient, projectImporter,
 	)
 	featureStore := coordinatordatabase.NewFeatureStore(db)
 	featureService := feature.NewService(featureStore, projectService)

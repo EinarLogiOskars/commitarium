@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/EinarLogiOskars/commitarium/internal/modelcatalog"
@@ -35,6 +36,7 @@ type projectResponse struct {
 	AgentProviders    agentProvidersResponse     `json:"agent_providers"`
 	AgentModels       agentModelsResponse        `json:"agent_models"`
 	ForgejoRepository *forgejoRepositoryResponse `json:"forgejo_repository,omitempty"`
+	RepositoryStatus  string                     `json:"repository_status"`
 	CreatedAt         time.Time                  `json:"created_at"`
 }
 
@@ -268,7 +270,13 @@ func (api *API) createProjectHandler(
 	}
 
 	var createdProject project.Project
-	if request.AgentModels != nil {
+	if creator, ok := api.projects.(ProvisionedProjectCreator); ok {
+		createdProject, err = creator.CreateProvisionedWithAgentModels(
+			r.Context(), strings.TrimSpace(r.Header.Get("Idempotency-Key")),
+			request.Name, request.RecoveryPolicy, dialogueLimits, agentProviders,
+			agentModels, request.MergePolicy, request.AutonomyPolicy,
+		)
+	} else if request.AgentModels != nil {
 		creator, ok := api.projects.(ProjectAgentModelCreator)
 		if !ok {
 			writeError(w, http.StatusServiceUnavailable, "agent_models_unavailable", "project model settings are unavailable")
@@ -328,6 +336,14 @@ func (api *API) createProjectHandler(
 			writeError(w, http.StatusBadRequest, "invalid_agent_models", "lead and reviewer models must be explicit model IDs")
 			return
 		}
+		if errors.Is(err, project.ErrProjectCreateConflict) {
+			writeError(w, http.StatusConflict, "idempotency_conflict", "Idempotency-Key was already used for a different project")
+			return
+		}
+		if errors.Is(err, project.ErrRepositoryProvisioningUnavailable) {
+			writeError(w, http.StatusServiceUnavailable, "repository_provisioning_unavailable", "the private project repository could not be prepared; retry with the same Idempotency-Key")
+			return
+		}
 		log.Printf("create project: %v", err)
 		writeError(
 			w,
@@ -348,6 +364,33 @@ func (api *API) createProjectHandler(
 	if err := json.NewEncoder(w).Encode(newProjectResponse(createdProject)); err != nil {
 		log.Printf("encode project response: %v", err)
 	}
+}
+
+func (api *API) provisionForgejoRepositoryHandler(w http.ResponseWriter, r *http.Request) {
+	if strings.TrimSpace(r.Header.Get("Idempotency-Key")) == "" {
+		writeError(w, http.StatusBadRequest, "idempotency_key_required", "Idempotency-Key header is required")
+		return
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, 1))
+	if err != nil || len(body) != 0 {
+		writeError(w, http.StatusBadRequest, "invalid_body", "request body must be empty")
+		return
+	}
+	provisioner := api.projects.(ProjectRepositoryProvisioner)
+	prepared, err := provisioner.ProvisionForgejoRepository(r.Context(), r.PathValue("id"))
+	if err != nil {
+		switch {
+		case errors.Is(err, project.ErrNotFound):
+			writeError(w, http.StatusNotFound, "project_not_found", "project not found")
+		case errors.Is(err, project.ErrRepositoryProvisioningUnavailable):
+			writeError(w, http.StatusServiceUnavailable, "repository_provisioning_unavailable", "the private project repository could not be prepared; retry with the same Idempotency-Key")
+		default:
+			log.Printf("provision Forgejo repository for project %q: %v", r.PathValue("id"), err)
+			writeError(w, http.StatusInternalServerError, "internal_error", "internal server error")
+		}
+		return
+	}
+	writeJSON(w, http.StatusOK, newProjectResponse(prepared), "project repository provisioning")
 }
 
 func (api *API) getProjectRepositoryOverviewHandler(w http.ResponseWriter, r *http.Request) {
@@ -741,9 +784,11 @@ func newProjectResponse(storedProject project.Project) projectResponse {
 		AgentModels: agentModelsResponse{
 			Lead: storedProject.AgentModels.Lead, Reviewer: storedProject.AgentModels.Reviewer,
 		},
-		CreatedAt: storedProject.CreatedAt,
+		RepositoryStatus: "needs_setup",
+		CreatedAt:        storedProject.CreatedAt,
 	}
 	if storedProject.ForgejoRepository != nil {
+		response.RepositoryStatus = "ready"
 		response.ForgejoRepository = &forgejoRepositoryResponse{
 			Owner:         storedProject.ForgejoRepository.Owner,
 			Name:          storedProject.ForgejoRepository.Name,

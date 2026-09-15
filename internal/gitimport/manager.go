@@ -3,6 +3,7 @@ package gitimport
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -45,6 +46,7 @@ type Manager struct {
 }
 
 var _ project.RepositoryImporter = (*Manager)(nil)
+var _ project.RepositoryInitializer = (*Manager)(nil)
 
 func NewManager(config Config) (*Manager, error) {
 	baseURL, err := normalizeBaseURL(config.InternalBaseURL)
@@ -138,6 +140,79 @@ func (manager *Manager) Verify(
 	spec project.RepositoryImportSpec,
 ) (project.ForgejoRepository, error) {
 	return manager.provisioner.VerifyImportRepository(ctx, spec)
+}
+
+// InitializeRepository creates a deterministic empty root commit and imports
+// it through the same restart-safe Forgejo path used for desktop Git bundles.
+// The fixed commit metadata keeps retries byte-for-byte stable and establishes
+// a cloneable default branch without adding files to the user's project.
+func (manager *Manager) InitializeRepository(
+	ctx context.Context,
+	spec project.RepositoryInitializationSpec,
+) (project.ForgejoRepository, error) {
+	if strings.TrimSpace(spec.ProjectID) == "" || strings.TrimSpace(spec.Repository) == "" ||
+		strings.TrimSpace(spec.DefaultBranch) == "" {
+		return project.ForgejoRepository{}, fmt.Errorf(
+			"%w: project, repository, and default branch are required",
+			project.ErrRepositoryProvisioningUnavailable,
+		)
+	}
+	temporary, err := os.MkdirTemp(manager.tempRoot, "commitarium-git-initialize-*")
+	if err != nil {
+		return project.ForgejoRepository{}, fmt.Errorf(
+			"%w: create initialization checkout: %v",
+			project.ErrRepositoryProvisioningUnavailable,
+			err,
+		)
+	}
+	defer os.RemoveAll(temporary)
+	repository := filepath.Join(temporary, "repository")
+	if err := os.Mkdir(repository, 0o755); err != nil {
+		return project.ForgejoRepository{}, fmt.Errorf(
+			"%w: create initialization repository: %v",
+			project.ErrRepositoryProvisioningUnavailable,
+			err,
+		)
+	}
+	if _, err := manager.runner.Run(
+		ctx, repository, gitEnvironment("", ""), "init", "--initial-branch", spec.DefaultBranch,
+	); err != nil {
+		return project.ForgejoRepository{}, manager.provisioningGitError(ctx, "initialize empty Git repository")
+	}
+	commitEnvironment := append(gitEnvironment("", ""),
+		"GIT_AUTHOR_NAME=Commitarium",
+		"GIT_AUTHOR_EMAIL=commitarium@local.invalid",
+		"GIT_COMMITTER_NAME=Commitarium",
+		"GIT_COMMITTER_EMAIL=commitarium@local.invalid",
+		"GIT_AUTHOR_DATE=2000-01-01T00:00:00Z",
+		"GIT_COMMITTER_DATE=2000-01-01T00:00:00Z",
+	)
+	if _, err := manager.runner.Run(
+		ctx, repository, commitEnvironment, "commit", "--allow-empty", "-m", "Initialize project",
+	); err != nil {
+		return project.ForgejoRepository{}, manager.provisioningGitError(ctx, "create empty root commit")
+	}
+	bundlePath := filepath.Join(temporary, "repository.bundle")
+	if _, err := manager.runner.Run(
+		ctx, repository, gitEnvironment("", ""), "bundle", "create", bundlePath,
+		"refs/heads/"+spec.DefaultBranch,
+	); err != nil {
+		return project.ForgejoRepository{}, manager.provisioningGitError(ctx, "create initialization bundle")
+	}
+	return manager.Import(ctx, project.RepositoryImportSpec{
+		ImportID: "project:" + spec.ProjectID, Repository: spec.Repository,
+		DefaultBranch: spec.DefaultBranch,
+		BundleDigest: fmt.Sprintf(
+			"sha256:%x", sha256.Sum256([]byte("commitarium-empty-root-v1")),
+		),
+	}, bundlePath)
+}
+
+func (manager *Manager) provisioningGitError(ctx context.Context, message string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return fmt.Errorf("%w: %s", project.ErrRepositoryProvisioningUnavailable, message)
 }
 
 func (manager *Manager) gitError(ctx context.Context, message string) error {

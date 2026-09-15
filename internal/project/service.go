@@ -3,6 +3,8 @@ package project
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -19,7 +21,9 @@ type Service struct {
 	repositoryVerifier       RepositoryVerifier
 	repositoryImporter       RepositoryImporter
 	repositoryOverviewReader RepositoryOverviewReader
+	repositoryInitializer    RepositoryInitializer
 	importMu                 sync.Mutex
+	provisionMu              sync.Mutex
 	generateID               func() string
 	now                      func() time.Time
 }
@@ -64,6 +68,7 @@ func NewServiceWithRepositoryServices(
 	verifier RepositoryVerifier,
 	importer RepositoryImporter,
 	overviewReader RepositoryOverviewReader,
+	initializers ...RepositoryInitializer,
 ) *Service {
 	if importer == nil {
 		importer = unavailableRepositoryImporter{}
@@ -71,7 +76,16 @@ func NewServiceWithRepositoryServices(
 	if overviewReader == nil {
 		overviewReader = unavailableRepositoryOverviewReader{}
 	}
-	return newService(store, verifier, importer, overviewReader)
+	service := newService(store, verifier, importer, overviewReader)
+	if len(initializers) > 0 {
+		service.repositoryInitializer = initializers[0]
+	}
+	return service
+}
+
+func projectIDForCreateKey(key string) string {
+	digest := sha256.Sum256([]byte("project-create:" + strings.TrimSpace(key)))
+	return "prj_" + hex.EncodeToString(digest[:12])
 }
 
 func newService(
@@ -233,6 +247,71 @@ func (s *Service) CreateWithAgentModels(
 	mergePolicy MergePolicy,
 	autonomyPolicies ...AutonomyPolicy,
 ) (Project, error) {
+	project, err := s.newProject(
+		s.generateID(), name, recoveryPolicy, dialogueLimits, agentProviders,
+		agentModels, mergePolicy, autonomyPolicies...,
+	)
+	if err != nil {
+		return Project{}, err
+	}
+	if err := s.store.Create(ctx, project); err != nil {
+		return Project{}, fmt.Errorf("store project: %w", err)
+	}
+	return project, nil
+}
+
+// CreateProvisionedWithAgentModels creates an ordinary project and ensures it
+// has a cloneable private Forgejo repository with a real default branch before
+// returning. A non-empty request key makes retries converge on the same project
+// and repository identity after any interrupted external or database step.
+func (s *Service) CreateProvisionedWithAgentModels(
+	ctx context.Context,
+	requestKey string,
+	name string,
+	recoveryPolicy RecoveryPolicy,
+	dialogueLimits DialogueLimits,
+	agentProviders AgentProviders,
+	agentModels AgentModels,
+	mergePolicy MergePolicy,
+	autonomyPolicies ...AutonomyPolicy,
+) (Project, error) {
+	projectID := s.generateID()
+	if strings.TrimSpace(requestKey) != "" {
+		projectID = projectIDForCreateKey(requestKey)
+	}
+	desired, err := s.newProject(
+		projectID, name, recoveryPolicy, dialogueLimits, agentProviders,
+		agentModels, mergePolicy, autonomyPolicies...,
+	)
+	if err != nil {
+		return Project{}, err
+	}
+	stored := desired
+	if err := s.store.Create(ctx, desired); err != nil {
+		if !errors.Is(err, ErrAlreadyExists) || strings.TrimSpace(requestKey) == "" {
+			return Project{}, fmt.Errorf("store project: %w", err)
+		}
+		stored, err = s.store.GetByID(ctx, projectID)
+		if err != nil {
+			return Project{}, fmt.Errorf("get idempotent project create %q: %w", projectID, err)
+		}
+		if !sameProjectCreateRequest(stored, desired) {
+			return Project{}, ErrProjectCreateConflict
+		}
+	}
+	return s.provisionRepository(ctx, stored)
+}
+
+func (s *Service) newProject(
+	projectID string,
+	name string,
+	recoveryPolicy RecoveryPolicy,
+	dialogueLimits DialogueLimits,
+	agentProviders AgentProviders,
+	agentModels AgentModels,
+	mergePolicy MergePolicy,
+	autonomyPolicies ...AutonomyPolicy,
+) (Project, error) {
 	sanitizedName := strings.TrimSpace(name)
 
 	if sanitizedName == "" {
@@ -271,7 +350,7 @@ func (s *Service) CreateWithAgentModels(
 	}
 
 	project := Project{
-		ID:             s.generateID(),
+		ID:             projectID,
 		Name:           sanitizedName,
 		RecoveryPolicy: policy,
 		MergePolicy:    mergePolicy,
@@ -281,12 +360,64 @@ func (s *Service) CreateWithAgentModels(
 		AgentModels:    agentModels,
 		CreatedAt:      s.now(),
 	}
-
-	if err := s.store.Create(ctx, project); err != nil {
-		return Project{}, fmt.Errorf("store project: %w", err)
-	}
-
 	return project, nil
+}
+
+func sameProjectCreateRequest(stored, desired Project) bool {
+	return stored.ID == desired.ID && stored.Name == desired.Name &&
+		stored.RecoveryPolicy == desired.RecoveryPolicy &&
+		stored.MergePolicy == desired.MergePolicy &&
+		stored.AutonomyPolicy == desired.AutonomyPolicy &&
+		stored.DialogueLimits == desired.DialogueLimits &&
+		stored.AgentProviders == desired.AgentProviders &&
+		stored.AgentModels == desired.AgentModels
+}
+
+func (s *Service) ProvisionForgejoRepository(
+	ctx context.Context,
+	projectID string,
+) (Project, error) {
+	stored, err := s.store.GetByID(ctx, projectID)
+	if err != nil {
+		return Project{}, fmt.Errorf("get project %q for repository provisioning: %w", projectID, err)
+	}
+	return s.provisionRepository(ctx, stored)
+}
+
+func (s *Service) provisionRepository(ctx context.Context, stored Project) (Project, error) {
+	s.provisionMu.Lock()
+	defer s.provisionMu.Unlock()
+
+	current, err := s.store.GetByID(ctx, stored.ID)
+	if err != nil {
+		return Project{}, fmt.Errorf("refresh project %q for repository provisioning: %w", stored.ID, err)
+	}
+	stored = current
+	if stored.ForgejoRepository != nil {
+		return stored, nil
+	}
+	if s.repositoryInitializer == nil {
+		return Project{}, ErrRepositoryProvisioningUnavailable
+	}
+	repository, err := s.repositoryInitializer.InitializeRepository(
+		ctx,
+		RepositoryInitializationSpec{
+			ProjectID: stored.ID, Repository: importRepositoryName(stored.Name, stored.ID),
+			DefaultBranch: "main",
+		},
+	)
+	if err != nil {
+		return Project{}, fmt.Errorf("%w: %v", ErrRepositoryProvisioningUnavailable, err)
+	}
+	repository.BoundAt = s.now().UTC()
+	if err := repository.Validate(); err != nil {
+		return Project{}, fmt.Errorf("%w: invalid initialized repository: %v", ErrRepositoryProvisioningUnavailable, err)
+	}
+	bound, err := s.store.BindForgejoRepository(ctx, stored.ID, repository)
+	if err != nil {
+		return Project{}, fmt.Errorf("bind initialized repository to project %q: %w", stored.ID, err)
+	}
+	return bound, nil
 }
 
 func (s *Service) UpdateAutonomyPolicy(
