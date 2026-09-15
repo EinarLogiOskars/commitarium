@@ -440,6 +440,7 @@ host directory retained by the desktop application.
 
 ```json
 {
+  "url": "http://localhost:3001/commitarium_admin/example",
   "default_branch": "main",
   "head": {
     "commit_id": "0123456789abcdef0123456789abcdef01234567",
@@ -454,6 +455,10 @@ host directory retained by the desktop application.
   ]
 }
 ```
+
+`url` is the browser-facing Forgejo URL for the repository at its default
+branch. It is omitted when the coordinator has no resolvable external Forgejo
+base URL.
 
 `tree` is a path-sorted, top-level-only view. Git trees become `dir`; blobs,
 symlinks, and submodule entries are represented as `file`. This is deliberately

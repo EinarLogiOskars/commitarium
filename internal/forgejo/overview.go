@@ -58,6 +58,7 @@ func (client *Client) ReadRepositoryOverview(
 		return project.RepositoryOverview{}, err
 	}
 	overview := project.RepositoryOverview{
+		URL:           repositoryWebURL(client.hostBaseURL, owner, name),
 		DefaultBranch: defaultBranch,
 		Head:          head,
 		Tree:          tree,
@@ -91,6 +92,13 @@ func (client *Client) ReadRepositoryOverview(
 	}
 	overview.ReadmeMarkdown = &contents
 	return overview, nil
+}
+
+func repositoryWebURL(baseURL string, owner string, name string) string {
+	if baseURL == "" {
+		return ""
+	}
+	return baseURL + "/" + url.PathEscape(owner) + "/" + url.PathEscape(name)
 }
 
 func (client *Client) ReadRepositoryTree(

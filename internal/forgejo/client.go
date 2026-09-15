@@ -26,6 +26,7 @@ var ErrInvalidClientConfig = errors.New("invalid Forgejo client configuration")
 
 type ClientConfig struct {
 	BaseURL        string
+	HostBaseURL    string
 	Owner          string
 	TokenFile      string
 	Collaborators  []string
@@ -35,6 +36,7 @@ type ClientConfig struct {
 
 type Client struct {
 	baseURL        string
+	hostBaseURL    string
 	owner          string
 	tokenFile      string
 	collaborators  []string
@@ -48,6 +50,14 @@ func NewClient(config ClientConfig) (*Client, error) {
 	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") ||
 		parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
 		return nil, fmt.Errorf("%w: base URL must be an absolute HTTP URL without credentials, query, or fragment", ErrInvalidClientConfig)
+	}
+	hostBaseURL := strings.TrimRight(strings.TrimSpace(config.HostBaseURL), "/")
+	if hostBaseURL != "" {
+		parsed, err = url.Parse(hostBaseURL)
+		if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") ||
+			parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+			return nil, fmt.Errorf("%w: host base URL must be an absolute HTTP URL without credentials, query, or fragment", ErrInvalidClientConfig)
+		}
 	}
 	tokenFile := strings.TrimSpace(config.TokenFile)
 	if tokenFile == "" {
@@ -84,7 +94,7 @@ func NewClient(config ClientConfig) (*Client, error) {
 		return http.ErrUseLastResponse
 	}
 	return &Client{
-		baseURL: baseURL, owner: owner, tokenFile: tokenFile,
+		baseURL: baseURL, hostBaseURL: hostBaseURL, owner: owner, tokenFile: tokenFile,
 		collaborators: collaborators, requestTimeout: config.RequestTimeout, httpClient: &clientCopy,
 	}, nil
 }

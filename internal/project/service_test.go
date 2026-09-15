@@ -474,7 +474,10 @@ func TestServiceBindForgejoRepositoryReturnsVerificationError(t *testing.T) {
 func TestServiceReadsBoundRepositoryOverview(t *testing.T) {
 	repository := ForgejoRepository{Owner: "owner", Name: "repository", DefaultBranch: "main"}
 	store := &recordingStore{projectResult: Project{ID: "prj_test", ForgejoRepository: &repository}}
-	want := RepositoryOverview{DefaultBranch: "main", Head: RepositoryHead{CommitID: "abc"}}
+	want := RepositoryOverview{
+		URL: "http://localhost:3001/owner/repository", DefaultBranch: "main",
+		Head: RepositoryHead{CommitID: "abc"},
+	}
 	reader := &recordingRepositoryOverviewReader{result: want}
 	service := NewServiceWithRepositoryServices(
 		store,
@@ -487,7 +490,7 @@ func TestServiceReadsBoundRepositoryOverview(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get repository overview: %v", err)
 	}
-	if got.DefaultBranch != want.DefaultBranch || got.Head.CommitID != want.Head.CommitID {
+	if got.URL != want.URL || got.DefaultBranch != want.DefaultBranch || got.Head.CommitID != want.Head.CommitID {
 		t.Fatalf("unexpected overview %+v", got)
 	}
 	if store.receivedID != "prj_test" || reader.calls != 1 || reader.owner != "owner" ||

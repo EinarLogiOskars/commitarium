@@ -234,7 +234,7 @@ func TestClientReadsRepositoryOverviewFromDefaultBranch(t *testing.T) {
 	readme := "# Demo\n\nThis is the internal repository.\n"
 	readmeID := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	calls := 0
-	client := newBranchTestClient(t, func(request *http.Request) (*http.Response, error) {
+	client := newBranchTestClientWithHostURL(t, "http://localhost:3001/", func(request *http.Request) (*http.Response, error) {
 		calls++
 		switch calls {
 		case 1:
@@ -286,7 +286,8 @@ func TestClientReadsRepositoryOverviewFromDefaultBranch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read repository overview: %v", err)
 	}
-	if overview.DefaultBranch != "main" || overview.Head.CommitID != forgejoTestCommitID ||
+	if overview.URL != "http://localhost:3001/owner/repository" ||
+		overview.DefaultBranch != "main" || overview.Head.CommitID != forgejoTestCommitID ||
 		overview.Head.Message != "Update README" || overview.Head.Author != "Codex" ||
 		!overview.Head.CommittedAt.Equal(time.Date(2026, time.September, 13, 12, 30, 0, 0, time.UTC)) ||
 		overview.ReadmeMarkdown == nil || *overview.ReadmeMarkdown != readme || calls != 3 {
@@ -367,7 +368,7 @@ func TestClientRepositoryOverviewOmitsAbsentReadme(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read repository overview: %v", err)
 	}
-	if overview.ReadmeMarkdown != nil || calls != 2 {
+	if overview.URL != "" || overview.ReadmeMarkdown != nil || calls != 2 {
 		t.Fatalf("unexpected README or calls overview=%+v calls=%d", overview, calls)
 	}
 }
@@ -1355,6 +1356,8 @@ func TestNewClientRejectsUnsafeConfiguration(t *testing.T) {
 		{BaseURL: "http://user:password@forgejo", TokenFile: "/token", RequestTimeout: time.Second},
 		{BaseURL: "http://forgejo", RequestTimeout: time.Second},
 		{BaseURL: "http://forgejo", TokenFile: "/token"},
+		{BaseURL: "http://forgejo", HostBaseURL: "ftp://localhost", TokenFile: "/token", RequestTimeout: time.Second},
+		{BaseURL: "http://forgejo", HostBaseURL: "http://user:password@localhost", TokenFile: "/token", RequestTimeout: time.Second},
 		{BaseURL: "http://forgejo", TokenFile: "/token", Collaborators: []string{"unsafe/name"}, RequestTimeout: time.Second},
 	} {
 		if _, err := NewClient(config); !errors.Is(err, ErrInvalidClientConfig) {
@@ -1486,9 +1489,18 @@ func newBranchTestClient(
 	t *testing.T,
 	transport roundTripFunc,
 ) *Client {
+	return newBranchTestClientWithHostURL(t, "", transport)
+}
+
+func newBranchTestClientWithHostURL(
+	t *testing.T,
+	hostBaseURL string,
+	transport roundTripFunc,
+) *Client {
 	t.Helper()
 	client, err := NewClient(ClientConfig{
-		BaseURL: "http://forgejo:3000", TokenFile: writeTestToken(t, "test-token"),
+		BaseURL: "http://forgejo:3000", HostBaseURL: hostBaseURL,
+		TokenFile:      writeTestToken(t, "test-token"),
 		RequestTimeout: time.Second, HTTPClient: &http.Client{Transport: transport},
 	})
 	if err != nil {
