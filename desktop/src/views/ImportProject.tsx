@@ -5,7 +5,9 @@ import {
   importProject,
   type FolderInfo,
 } from "../ipc";
-import type { RecoveryPolicy } from "../api/types";
+import { detectProjectToolchain, updateProjectToolchain } from "../api/toolchains";
+import { ApiError } from "../api/client";
+import type { RecoveryPolicy, ToolchainSuggestion } from "../api/types";
 
 export function ImportProject({
   onClose,
@@ -20,6 +22,12 @@ export function ImportProject({
   const [policy, setPolicy] = useState<RecoveryPolicy>("approval_required");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // After import: run toolchain detection and let the user accept it before
+  // entering the workspace. `imported` holds the new project id; `detection`
+  // is null while detecting, then the (possibly empty) suggestion.
+  const [imported, setImported] = useState<string | null>(null);
+  const [detection, setDetection] = useState<ToolchainSuggestion | null>(null);
+  const [saving, setSaving] = useState(false);
 
   const choose = async () => {
     setError(null);
@@ -41,11 +49,37 @@ export function ImportProject({
     setError(null);
     try {
       const project = await importProject(info.path, name.trim(), branch.trim(), policy);
-      onImported(project.id);
+      setImported(project.id);
+      // Shallow, non-mutating scan of the imported repo. Failure isn't fatal —
+      // the user can still choose a stack in the workspace.
+      try {
+        setDetection(await detectProjectToolchain(project.id));
+      } catch {
+        setDetection({ tools: {}, services: [], evidence: [], confidence: "none" });
+      }
     } catch (e) {
       setError(String(e));
     } finally {
       setBusy(false);
+    }
+  };
+
+  // Accept the detected toolchain (source "detected"), then enter the workspace.
+  const useDetected = async () => {
+    if (!imported || !detection) return;
+    setSaving(true);
+    setError(null);
+    try {
+      await updateProjectToolchain(imported, {
+        source: "detected",
+        tools: detection.tools,
+        services: detection.services,
+      });
+      onImported(imported);
+    } catch (e) {
+      setError(e instanceof ApiError ? `${e.message} (${e.code})` : String(e));
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -67,7 +101,14 @@ export function ImportProject({
 
         {error && <div className="banner banner--error">{error}</div>}
 
-        {!info ? (
+        {imported ? (
+          <DetectionReview
+            detection={detection}
+            saving={saving}
+            onUse={() => void useDetected()}
+            onManual={() => onImported(imported)}
+          />
+        ) : !info ? (
           <button className="primary" onClick={() => void choose()}>
             Choose folder…
           </button>
@@ -140,6 +181,71 @@ export function ImportProject({
             Cancel
           </button>
         </div>
+      </div>
+    </div>
+  );
+}
+
+function DetectionReview({
+  detection,
+  saving,
+  onUse,
+  onManual,
+}: {
+  detection: ToolchainSuggestion | null;
+  saving: boolean;
+  onUse: () => void;
+  onManual: () => void;
+}) {
+  if (!detection) {
+    return (
+      <div className="detect">
+        <p className="muted">Project imported. Scanning the repository for a toolchain…</p>
+      </div>
+    );
+  }
+  const tools = Object.entries(detection.tools);
+  if (tools.length === 0) {
+    return (
+      <div className="detect">
+        <p>
+          No runtime toolchain was detected in this repository. You can choose one in the
+          workspace before creating work orders.
+        </p>
+        <div className="row">
+          <button className="primary" onClick={onManual} disabled={saving}>
+            Continue
+          </button>
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div className="detect">
+      <h3>Detected toolchain</h3>
+      <p className="muted note">
+        {detection.confidence} confidence
+        {detection.evidence.length > 0 && <> · from {detection.evidence.join(", ")}</>}
+      </p>
+      <div className="stack__chips">
+        {tools.map(([t, v]) => (
+          <span key={t} className="pill pill--ok">
+            {t} {v}
+          </span>
+        ))}
+      </div>
+      {detection.services.length > 0 && (
+        <p className="muted note">
+          External services (requirements only, not provisioned): {detection.services.join(", ")}
+        </p>
+      )}
+      <div className="row">
+        <button className="primary" onClick={onUse} disabled={saving}>
+          {saving ? "Saving…" : "Use detected stack"}
+        </button>
+        <button onClick={onManual} disabled={saving}>
+          Set up manually
+        </button>
       </div>
     </div>
   );
