@@ -11,15 +11,19 @@ import type { ActivityDetail } from "../api/types";
 // slot into this same grouping — the summary can then read real command counts
 // and file-diff stats instead of counting generic lines.
 
-// Agents emit their turns as a JSON envelope `{"action":"respond","content":"…"}`.
-// The prose the user should read is `content`; unwrap it, falling back to the raw
-// string when it isn't that envelope (plain text, or a shape we don't recognize).
+// Agents emit their turns as a JSON envelope keyed by `action`. The human-
+// readable prose lives in `content` (respond) or `summary` (blocked, plan
+// actions, etc.); unwrap whichever is present, falling back to the raw string
+// when it isn't a recognized envelope (plain text or an unknown shape).
 function agentText(text: string): string {
   const t = text.trimStart();
   if (t[0] !== "{") return text;
   try {
     const v = JSON.parse(t);
-    if (v && typeof v === "object" && typeof v.content === "string") return v.content;
+    if (v && typeof v === "object") {
+      if (typeof v.content === "string") return v.content;
+      if (typeof v.summary === "string") return v.summary;
+    }
   } catch {
     /* not JSON — show as-is */
   }
