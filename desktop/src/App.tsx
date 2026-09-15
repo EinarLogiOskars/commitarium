@@ -63,6 +63,7 @@ function App() {
         probe={boot.probe}
         progress={boot.progress}
         onRetry={boot.retry}
+        onLaunchDocker={boot.launchDocker}
       />
     );
   }

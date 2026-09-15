@@ -31,7 +31,14 @@ which the frontend reaches directly over loopback.
 
 Docker / stack lifecycle:
 
-- `docker_probe() -> DockerProbe` — installed / daemon-running / compose-available.
+- `docker_probe() -> DockerProbe` — installed / daemon-running /
+  compose-available, plus whether a detected Docker Desktop installation can
+  be launched. Native probing resolves standard platform installation paths as
+  well as `PATH`, because packaged desktop apps do not inherit a login shell.
+- `launch_docker_desktop()` — launches only a Docker Desktop installation
+  discovered in a trusted platform location; it accepts no executable or
+  arguments from the frontend. The UI polls `docker_probe` until the daemon is
+  ready before continuing startup.
 - `stack_up()` / `stack_down()` / `stack_update()` — lifecycle. Start and
   update always bring up Forgejo, the coordinator, and the simulated worker.
   They verify all four provider profiles and start each real role worker only
@@ -41,6 +48,11 @@ Docker / stack lifecycle:
 - `stack_status() -> ServiceStatus[]` — one current row per Compose service,
   ordered by service name. If Compose briefly exposes both sides of a
   container replacement, the running/healthy row wins.
+
+Docker probes and Compose lifecycle commands execute on blocking worker
+threads. Long daemon startup, image pulls, and container reconciliation must
+not block the desktop event loop; the frontend remains responsive and advances
+its startup display from observed Docker and service-health milestones.
 
 UI-local persistence:
 

@@ -27,6 +27,7 @@ pub fn run() {
         // access reaches the untrusted UI.
         .invoke_handler(tauri::generate_handler![
             docker::docker_probe,
+            docker::launch_docker_desktop,
             docker::stack_up,
             docker::stack_down,
             docker::stack_update,

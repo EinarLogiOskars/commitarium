@@ -1183,7 +1183,7 @@ fn profile_has_credentials(spec: ProfileSpec) -> Result<bool, String> {
 }
 
 fn service_is_running(spec: ProfileSpec) -> Result<bool, String> {
-    let mut command = Command::new("docker");
+    let mut command = docker::docker_command();
     command.args(["compose", "--profile", spec.compose_profile]);
     docker::append_compose_files(&mut command)?;
     let output = command
@@ -1212,7 +1212,7 @@ fn compose_command(
     running_service: bool,
     login_container: Option<&str>,
 ) -> Result<Command, String> {
-    let mut command = Command::new("docker");
+    let mut command = docker::docker_command();
     command.args(["compose", "--profile", spec.compose_profile]);
     docker::append_compose_files(&mut command)?;
     command.args(["-p", docker::PROJECT_NAME]);
@@ -1284,7 +1284,7 @@ fn profile_command_status(
 }
 
 fn remove_login_container(spec: ProfileSpec) {
-    let _ = Command::new("docker")
+    let _ = docker::docker_command()
         .args(["rm", "--force", spec.login_container])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
