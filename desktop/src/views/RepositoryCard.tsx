@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { getRepositoryOverview, type RepositoryOverview } from "../api/projects";
 import { ApiError } from "../api/client";
+import { openExternal } from "../ipc";
 import { Markdown } from "./Markdown";
 
 // Repository overview from the internal Forgejo repo (the authoritative version
@@ -51,7 +52,14 @@ export function RepositoryCard({ projectId }: { projectId: string }) {
 
   return (
     <section className="panel">
-      <h2>Repository</h2>
+      <div className="panel__head">
+        <h2>Repository</h2>
+        {overview?.url && (
+          <button className="ghost" onClick={() => void openExternal(overview.url!)}>
+            View repository ↗
+          </button>
+        )}
+      </div>
       {!overview && !error && <p className="muted">Loading repository…</p>}
       {error && (
         <p className="muted note">

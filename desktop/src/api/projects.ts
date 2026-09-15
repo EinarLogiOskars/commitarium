@@ -33,6 +33,7 @@ export interface RepoTreeEntry {
   type: "file" | "dir";
 }
 export interface RepositoryOverview {
+  url?: string; // browser-facing Forgejo URL at the default branch; omitted if unresolvable
   default_branch: string;
   head: RepoOverviewHead;
   readme_markdown?: string;
