@@ -130,6 +130,24 @@ export function SetupAssistant({
     }
   };
 
+  // Enter submits; Alt+Enter (or Shift+Enter) inserts a newline. Alt+Enter has no
+  // default newline in a textarea, so insert it by hand and sync React state.
+  const submitOnEnter =
+    (submit: () => void, set: (v: string) => void) =>
+    (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+      if (e.key !== "Enter" || e.nativeEvent.isComposing) return;
+      if (e.shiftKey) return; // default newline
+      if (e.altKey) {
+        e.preventDefault();
+        const el = e.currentTarget;
+        el.setRangeText("\n", el.selectionStart, el.selectionEnd, "end");
+        set(el.value);
+        return;
+      }
+      e.preventDefault();
+      if (!busy) submit();
+    };
+
   const apply = async () => {
     if (!session) return;
     setBusy(true);
@@ -215,10 +233,12 @@ export function SetupAssistant({
             placeholder="e.g. A small personal web app with a simple deployment story."
             value={description}
             onChange={(e) => setDescription(e.target.value)}
+            onKeyDown={submitOnEnter(() => void start(), setDescription)}
             disabled={busy}
             rows={3}
           />
         )}
+        {!verify && <p className="muted note">Enter to send · Alt+Enter for a new line</p>}
         <div className="assistant__actions">
           <button className="ghost" onClick={onCancel} disabled={busy}>
             Back to picker
@@ -281,9 +301,10 @@ export function SetupAssistant({
       {status === "waiting_for_user" && (
         <div className="assistant__reply">
           <textarea
-            placeholder="Your answer…"
+            placeholder="Your answer… (Enter to send · Alt+Enter for a new line)"
             value={reply}
             onChange={(e) => setReply(e.target.value)}
+            onKeyDown={submitOnEnter(() => void send(), setReply)}
             disabled={busy}
             rows={2}
           />
