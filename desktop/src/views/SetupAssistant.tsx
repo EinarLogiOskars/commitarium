@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   applyAssistantSession,
   getAssistantSession,
@@ -8,23 +8,45 @@ import {
 import { ApiError } from "../api/client";
 import { useModels, pickModel } from "./useModels";
 import { Markdown } from "./Markdown";
-import type { AgentProvider, AssistantSession, ProjectToolchain } from "../api/types";
+import type {
+  AgentProvider,
+  AssistantPurpose,
+  AssistantSession,
+  ProjectToolchain,
+} from "../api/types";
 
 const POLL_MS = 2000;
+const PROVIDERS: AgentProvider[] = ["claude", "codex"];
+const LABEL: Record<AgentProvider, string> = { claude: "Claude", codex: "Codex" };
 
-/** "Help me choose" — a bounded provider conversation that ends in an exact
- * toolchain proposal the user applies. The assistant never touches the repo. */
+/** "Ask an agent" — a bounded provider conversation that ends in an exact
+ * toolchain proposal the user applies. Two purposes: design_stack (describe a
+ * new project) and verify_repository (agent inspects an imported repo). Never
+ * touches the repository. The provider/model is pinned once a session starts. */
 export function SetupAssistant({
   projectId,
+  purpose = "design_stack",
+  preferred,
   onApplied,
   onCancel,
 }: {
   projectId: string;
+  purpose?: AssistantPurpose;
+  /** Project's configured lead provider/model — the first choice when connected. */
+  preferred?: { provider?: AgentProvider; model?: string };
   onApplied: (t: ProjectToolchain) => void;
   onCancel: () => void;
 }) {
   const { modelsFor, loading: modelsLoading } = useModels();
-  const [provider, setProvider] = useState<AgentProvider>("claude");
+  const verify = purpose === "verify_repository";
+
+  // A provider is usable only if its lead catalog has models (i.e. connected).
+  const available = useMemo(
+    () => PROVIDERS.filter((p) => modelsFor(p, "lead").length > 0),
+    [modelsFor],
+  );
+
+  const [provider, setProvider] = useState<AgentProvider | null>(null);
   const [model, setModel] = useState("");
   const [description, setDescription] = useState("");
   const [session, setSession] = useState<AssistantSession | null>(null);
@@ -33,11 +55,21 @@ export function SetupAssistant({
   const [error, setError] = useState<string | null>(null);
   const chatRef = useRef<HTMLDivElement | null>(null);
 
-  // Default the model to a valid choice for the chosen provider's lead catalog.
+  // Selection order: preferred (project lead) if connected, else first connected.
   useEffect(() => {
-    if (modelsLoading) return;
-    setModel((m) => pickModel(modelsFor(provider, "lead"), m));
-  }, [modelsLoading, modelsFor, provider]);
+    if (modelsLoading || session) return;
+    setProvider((cur) => {
+      if (cur && available.includes(cur)) return cur;
+      if (preferred?.provider && available.includes(preferred.provider)) return preferred.provider;
+      return available[0] ?? null;
+    });
+  }, [modelsLoading, available, preferred?.provider, session]);
+
+  // Keep the model valid for the chosen provider; seed from preferred when it fits.
+  useEffect(() => {
+    if (modelsLoading || !provider || session) return;
+    setModel((m) => pickModel(modelsFor(provider, "lead"), m || preferred?.model || ""));
+  }, [modelsLoading, provider, modelsFor, preferred?.model, session]);
 
   // Poll while the assistant's turn is running.
   useEffect(() => {
@@ -59,14 +91,20 @@ export function SetupAssistant({
   }, [session?.messages.length]);
 
   const start = async () => {
-    if (!description.trim() || !model) return;
+    if (!provider || !model) return;
+    if (!verify && !description.trim()) return;
     setBusy(true);
     setError(null);
     try {
       setSession(
         await startAssistantSession(
           projectId,
-          { provider, model, message: description.trim() },
+          {
+            provider,
+            model,
+            purpose,
+            ...(verify ? {} : { message: description.trim() }),
+          },
           crypto.randomUUID(),
         ),
       );
@@ -99,28 +137,62 @@ export function SetupAssistant({
     try {
       onApplied(await applyAssistantSession(projectId, session.id, crypto.randomUUID()));
     } catch (e) {
-      setError(describe(e));
+      // The repo moved under a verification — the pinned evidence is stale, so
+      // the proposal can't be trusted. Drop the session and let them re-verify.
+      if (e instanceof ApiError && e.code === "toolchain_assistant_stale") {
+        setSession(null);
+        setError("The repository changed since this check. Start the verification again.");
+      } else {
+        setError(describe(e));
+      }
     } finally {
       setBusy(false);
     }
   };
 
+  // No connected provider — agent assistance isn't possible.
+  if (!modelsLoading && available.length === 0 && !session) {
+    return (
+      <div className="assistant">
+        {error && <div className="banner banner--error">{error}</div>}
+        <p>
+          No agent provider is connected, so an agent can't {verify ? "verify this repository" : "help choose a stack"} yet.
+          Connect Codex or Claude under Providers, or choose a stack manually.
+        </p>
+        <div className="assistant__actions">
+          <button className="primary" onClick={onCancel} disabled={busy}>
+            Choose a stack manually
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   // Start form — before a session exists.
   if (!session) {
-    const leadModels = modelsFor(provider, "lead");
+    const leadModels = provider ? modelsFor(provider, "lead") : [];
     return (
       <div className="assistant">
         {error && <div className="banner banner--error">{error}</div>}
         <p className="muted">
-          Describe what you want to build. An agent will ask a few questions and propose an exact
-          runtime stack — it won't touch your repository or run anything.
+          {verify
+            ? "An agent reads this repository's committed files and proposes an exact runtime stack, explaining what it found. It won't modify or run anything."
+            : "Describe what you want to build. An agent asks a few questions and proposes an exact runtime stack — it won't touch your repository or run anything."}{" "}
+          This uses one provider turn.
         </p>
         <div className="assistant__setup">
           <label>
-            Provider
-            <select value={provider} onChange={(e) => setProvider(e.target.value as AgentProvider)} disabled={busy}>
-              <option value="claude">Claude</option>
-              <option value="codex">Codex</option>
+            Agent
+            <select
+              value={provider ?? ""}
+              onChange={(e) => setProvider(e.target.value as AgentProvider)}
+              disabled={busy}
+            >
+              {available.map((p) => (
+                <option key={p} value={p}>
+                  {LABEL[p]}
+                </option>
+              ))}
             </select>
           </label>
           <label>
@@ -138,19 +210,25 @@ export function SetupAssistant({
             </select>
           </label>
         </div>
-        <textarea
-          placeholder="e.g. A small personal web app with a simple deployment story."
-          value={description}
-          onChange={(e) => setDescription(e.target.value)}
-          disabled={busy}
-          rows={3}
-        />
+        {!verify && (
+          <textarea
+            placeholder="e.g. A small personal web app with a simple deployment story."
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            disabled={busy}
+            rows={3}
+          />
+        )}
         <div className="assistant__actions">
           <button className="ghost" onClick={onCancel} disabled={busy}>
             Back to picker
           </button>
-          <button className="primary" onClick={() => void start()} disabled={busy || !description.trim() || !model}>
-            {busy ? "Starting…" : "Start"}
+          <button
+            className="primary"
+            onClick={() => void start()}
+            disabled={busy || !provider || !model || (!verify && !description.trim())}
+          >
+            {busy ? "Starting…" : verify ? "Verify repository" : "Start"}
           </button>
         </div>
       </div>

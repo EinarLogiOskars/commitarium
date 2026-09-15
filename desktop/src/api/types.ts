@@ -163,14 +163,21 @@ export interface AssistantMessage {
   occurred_at: string;
 }
 
+// design_stack: describe a new project and get a proposal. verify_repository:
+// the agent inspects an imported repo's committed head and proposes/explains a
+// stack (no user description needed).
+export type AssistantPurpose = "design_stack" | "verify_repository";
+
 export interface AssistantSession {
   id: string;
   project_id: string;
   provider: AgentProvider;
   model: string;
+  purpose?: AssistantPurpose;
   status: AssistantStatus;
   message?: string; // current question, proposal note, or failure reason
   proposal?: ToolchainSuggestion; // present when status is proposal_ready
+  verified_commit_id?: string; // set for verify_repository responses
   messages: AssistantMessage[];
   created_at: string;
   updated_at: string;
@@ -179,7 +186,8 @@ export interface AssistantSession {
 export interface StartAssistantInput {
   provider: AgentProvider;
   model: string;
-  message: string;
+  purpose?: AssistantPurpose; // omitted preserves design_stack
+  message?: string; // required for design_stack; omitted for verify_repository
 }
 
 export type FeatureState =
