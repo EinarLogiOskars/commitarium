@@ -55,6 +55,10 @@ Project import (host-side git):
   values use coordinator defaults; supplied values are validated by the
   coordinator with the same rules and error codes as its HTTP project APIs.
 - `get_project_source(projectId) -> string | null`
+- `delete_project(projectId, idempotencyKey, force?) -> ProjectDeletionResult`
+  — invokes resumable coordinator deletion and then atomically removes only
+  this project's trusted local source mapping. Reuse the same key after any
+  error. `force` defaults to false and must be an explicit user choice.
 
 ```ts
 type ImportAgentProviders = { lead: "codex" | "claude"; reviewer: "codex" | "claude" };

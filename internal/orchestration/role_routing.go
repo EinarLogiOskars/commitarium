@@ -22,6 +22,10 @@ type ProviderWorkerRoutes struct {
 	ClaudeReviewer RemoteLeadWorker
 }
 
+type remoteLeadForceStopper interface {
+	ForceStop(context.Context, workerhttp.MutationIdentity, workerhttp.ForceStopRequest) (workerhttp.Attempt, error)
+}
+
 // ProviderRoutedWorker keeps workflow code provider-neutral. The selected
 // route comes from the run snapshot, not the project's current settings, so
 // recovery always returns to the provider that owns the original session.
@@ -83,6 +87,26 @@ func (router *ProviderRoutedWorker) GetAttempt(
 		return workerhttp.Attempt{}, err
 	}
 	return client.GetAttempt(ctx, reference)
+}
+
+func (router *ProviderRoutedWorker) ForceStop(
+	ctx context.Context,
+	identity workerhttp.MutationIdentity,
+	request workerhttp.ForceStopRequest,
+) (workerhttp.Attempt, error) {
+	run, role, err := router.runAndRole(ctx, identity.SessionID)
+	if err != nil {
+		return workerhttp.Attempt{}, err
+	}
+	client, err := router.routes.forAssignment(run.AgentProviders, role)
+	if err != nil {
+		return workerhttp.Attempt{}, err
+	}
+	stopper, ok := client.(remoteLeadForceStopper)
+	if !ok {
+		return workerhttp.Attempt{}, errors.New("selected provider worker does not support forced termination")
+	}
+	return stopper.ForceStop(ctx, identity, request)
 }
 
 func (router *ProviderRoutedWorker) runAndRole(

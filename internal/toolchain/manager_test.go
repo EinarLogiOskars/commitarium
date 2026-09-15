@@ -2,6 +2,7 @@ package toolchain
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"syscall"
@@ -12,10 +13,11 @@ import (
 )
 
 type projectReaderStub struct {
-	stored   project.Project
-	overview project.RepositoryOverview
-	evidence project.RepositoryToolchainEvidence
-	blobs    map[string][]byte
+	stored          project.Project
+	overview        project.RepositoryOverview
+	evidence        project.RepositoryToolchainEvidence
+	blobs           map[string][]byte
+	deletionPending bool
 }
 
 func (reader *projectReaderStub) GetByID(context.Context, string) (project.Project, error) {
@@ -32,6 +34,30 @@ func (reader *projectReaderStub) ReadRepositoryBlob(_ context.Context, _ string,
 
 func (reader *projectReaderStub) GetRepositoryToolchainEvidence(context.Context, string) (project.RepositoryToolchainEvidence, error) {
 	return reader.evidence, nil
+}
+
+func (reader *projectReaderStub) ProjectDeletionPending(context.Context, string) (bool, error) {
+	return reader.deletionPending, nil
+}
+
+func TestManagerDoesNotConfigureProjectWithPendingDeletion(t *testing.T) {
+	root := t.TempDir()
+	reader := &projectReaderStub{
+		stored: project.Project{ID: "prj_test"}, deletionPending: true,
+	}
+	manager, err := NewManager(root, reader)
+	if err != nil {
+		t.Fatalf("create manager: %v", err)
+	}
+	_, err = manager.Configure(t.Context(), "prj_test", Manifest{
+		Source: SourcePicker, Tools: map[string]string{"python": "3.14.7"},
+	})
+	if !errors.Is(err, project.ErrNotFound) {
+		t.Fatalf("configure deleting project error=%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "projects", "prj_test")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("deleting project gained toolchain artifacts: %v", err)
+	}
 }
 
 func TestManagerConfiguresRuntimeManifestOutsideRepository(t *testing.T) {
@@ -154,5 +180,48 @@ func TestManifestRejectsFloatingOrUnknownTools(t *testing.T) {
 		if _, err := NormalizeManifest(manifest); err == nil {
 			t.Fatalf("expected invalid manifest %+v", manifest)
 		}
+	}
+}
+
+func TestDeleteProjectRemovesOnlyPerProjectFilesAndKeepsSharedCache(t *testing.T) {
+	root := t.TempDir()
+	reader := &projectReaderStub{stored: project.Project{ID: "prj_one", Name: "One"}}
+	manager, err := NewManager(root, reader)
+	if err != nil {
+		t.Fatalf("create manager: %v", err)
+	}
+	if _, err := manager.Configure(t.Context(), "prj_one", Manifest{
+		Source: SourcePicker, Tools: map[string]string{"python": "3.14.7"}, Services: []string{},
+	}); err != nil {
+		t.Fatalf("configure first project: %v", err)
+	}
+	reader.stored = project.Project{ID: "prj_two", Name: "Two"}
+	if _, err := manager.Configure(t.Context(), "prj_two", Manifest{
+		Source: SourcePicker, Tools: map[string]string{"node": "24.21.0"}, Services: []string{},
+	}); err != nil {
+		t.Fatalf("configure second project: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "cache"), 0o700); err != nil {
+		t.Fatalf("create shared cache: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "cache", "shared"), []byte("keep"), 0o600); err != nil {
+		t.Fatalf("write shared cache marker: %v", err)
+	}
+	if err := manager.DeleteProject(t.Context(), "prj_one"); err != nil {
+		t.Fatalf("delete project toolchain: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "projects", "prj_one")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("deleted project directory remains: %v", err)
+	}
+	for _, path := range []string{
+		filepath.Join(root, "projects", "prj_two", "manifest.json"),
+		filepath.Join(root, "cache", "shared"),
+	} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("unrelated/shared file %s was removed: %v", path, err)
+		}
+	}
+	if err := manager.DeleteProject(t.Context(), "prj_one"); err != nil {
+		t.Fatalf("idempotent toolchain delete: %v", err)
 	}
 }

@@ -77,6 +77,11 @@ export interface Project {
   created_at: string;
 }
 
+export interface ProjectDeletionResult {
+  project_id: string;
+  deleted: boolean;
+}
+
 // POST /projects accepts these project defaults; each also has a PUT endpoint to
 // change it later. agent_models requires agent_providers; omit models when they
 // can't be resolved from the catalog so the backend applies its own defaults.

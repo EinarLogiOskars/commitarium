@@ -160,6 +160,18 @@ func (s *ProjectStore) GetByID(
 	return storedProject, nil
 }
 
+func (s *ProjectStore) ProjectDeletionPending(ctx context.Context, projectID string) (bool, error) {
+	var pending int
+	if err := s.db.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM project_deletions
+			WHERE project_id = ? AND status = 'pending'
+		)`, projectID).Scan(&pending); err != nil {
+		return false, fmt.Errorf("check project %q deletion state: %w", projectID, err)
+	}
+	return pending != 0, nil
+}
+
 func (s *ProjectStore) List(ctx context.Context) ([]project.Project, error) {
 	rows, err := s.db.QueryContext(
 		ctx,

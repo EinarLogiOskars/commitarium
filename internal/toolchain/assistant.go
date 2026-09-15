@@ -10,11 +10,13 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/EinarLogiOskars/commitarium/internal/project"
+	"github.com/EinarLogiOskars/commitarium/internal/projectdeletion"
 	"github.com/EinarLogiOskars/commitarium/internal/workerhttp"
 )
 
@@ -90,13 +92,14 @@ type assistantMutation struct {
 }
 
 type Assistant struct {
-	root          string
-	workspaceRoot string
-	projects      ProjectReader
-	toolchains    *Manager
-	workers       map[project.AgentProvider]AssistantWorker
-	now           func() time.Time
-	mu            sync.Mutex
+	root            string
+	workspaceRoot   string
+	projects        ProjectReader
+	toolchains      *Manager
+	workers         map[project.AgentProvider]AssistantWorker
+	now             func() time.Time
+	mu              sync.Mutex
+	deletedProjects map[string]struct{}
 }
 
 func NewAssistant(root, workspaceRoot string, projects ProjectReader, toolchains *Manager, workers map[project.AgentProvider]AssistantWorker) (*Assistant, error) {
@@ -114,7 +117,7 @@ func NewAssistant(root, workspaceRoot string, projects ProjectReader, toolchains
 		return nil, fmt.Errorf("%w: create assistant storage", ErrAssistantUnavailable)
 	}
 	return &Assistant{root: root, workspaceRoot: workspaceRoot, projects: projects, toolchains: toolchains,
-		workers: workers, now: func() time.Time { return time.Now().UTC() }}, nil
+		workers: workers, now: func() time.Time { return time.Now().UTC() }, deletedProjects: make(map[string]struct{})}, nil
 }
 
 func (assistant *Assistant) Start(
@@ -128,6 +131,12 @@ func (assistant *Assistant) Start(
 ) (AssistantSession, bool, error) {
 	assistant.mu.Lock()
 	defer assistant.mu.Unlock()
+	if _, deleting := assistant.deletedProjects[projectID]; deleting {
+		return AssistantSession{}, false, project.ErrNotFound
+	}
+	if err := ensureProjectNotDeleting(ctx, assistant.projects, projectID); err != nil {
+		return AssistantSession{}, false, err
+	}
 	stored, err := assistant.projects.GetByID(ctx, projectID)
 	if err != nil {
 		return AssistantSession{}, false, err
@@ -203,6 +212,109 @@ func (assistant *Assistant) Start(
 	return record.AssistantSession, created, nil
 }
 
+// DeleteProject removes every durable setup-assistant record and its isolated
+// consultant workspace. The non-force path checks all matching records before
+// changing any of them. Forced deletion terminates each exact worker attempt
+// before its durable record is removed.
+func (assistant *Assistant) DeleteProject(
+	ctx context.Context,
+	projectID string,
+	idempotencyKey string,
+	force bool,
+) error {
+	assistant.mu.Lock()
+	defer assistant.mu.Unlock()
+	records, err := assistant.projectRecords(projectID)
+	if err != nil {
+		return err
+	}
+	if !force {
+		for _, record := range records {
+			if record.Status == AssistantStatusRunning {
+				return projectdeletion.ErrActive
+			}
+		}
+	}
+	assistant.deletedProjects[projectID] = struct{}{}
+	for _, record := range records {
+		if record.Status == AssistantStatusRunning {
+			configured, ok := assistant.workers[record.Provider]
+			if !ok {
+				return ErrAssistantUnavailable
+			}
+			reference := workerhttp.AttemptReference{SessionID: record.ID, AttemptID: record.AttemptID}
+			attempt, getErr := configured.Service.GetAttempt(ctx, reference)
+			if getErr != nil {
+				return getErr
+			}
+			if attempt.State != workerhttp.AttemptStateTerminal {
+				attempt, getErr = configured.Service.ForceStop(ctx, workerhttp.MutationIdentity{
+					AttemptReference: reference,
+					IdempotencyKey:   assistantDeletionKey(projectID, idempotencyKey, record.ID),
+				}, workerhttp.ForceStopRequest{Reason: "The user forced deletion of this project."})
+				if getErr != nil {
+					return getErr
+				}
+				if attempt.State != workerhttp.AttemptStateTerminal {
+					return ErrAssistantUnavailable
+				}
+			}
+		}
+		workspacePath := filepath.Join(assistant.workspaceRoot, record.ID)
+		if filepath.Dir(workspacePath) != assistant.workspaceRoot {
+			return ErrAssistantUnavailable
+		}
+		if info, statErr := os.Lstat(workspacePath); statErr == nil {
+			if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+				return ErrAssistantUnavailable
+			}
+			if removeErr := os.RemoveAll(workspacePath); removeErr != nil {
+				return ErrAssistantUnavailable
+			}
+		} else if !errors.Is(statErr, os.ErrNotExist) {
+			return ErrAssistantUnavailable
+		}
+		recordPath := filepath.Join(assistant.root, "assistants", record.ID+".json")
+		if removeErr := os.Remove(recordPath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+			return ErrAssistantUnavailable
+		}
+	}
+	return nil
+}
+
+func (assistant *Assistant) projectRecords(projectID string) ([]assistantRecord, error) {
+	entries, err := os.ReadDir(filepath.Join(assistant.root, "assistants"))
+	if err != nil {
+		return nil, ErrAssistantUnavailable
+	}
+	records := make([]assistantRecord, 0)
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || filepath.Ext(name) != ".json" {
+			continue
+		}
+		contents, readErr := os.ReadFile(filepath.Join(assistant.root, "assistants", name))
+		if readErr != nil {
+			return nil, ErrAssistantUnavailable
+		}
+		var record assistantRecord
+		if json.Unmarshal(contents, &record) != nil || record.ID+".json" != name ||
+			!assistantIDPattern.MatchString(record.ID) {
+			return nil, ErrAssistantUnavailable
+		}
+		if record.ProjectID == projectID {
+			records = append(records, record)
+		}
+	}
+	sort.Slice(records, func(i, j int) bool { return records[i].ID < records[j].ID })
+	return records, nil
+}
+
+func assistantDeletionKey(projectID, requestKey, sessionID string) string {
+	digest := sha256.Sum256([]byte(projectID + "\x00" + requestKey + "\x00" + sessionID))
+	return "pdel_" + hex.EncodeToString(digest[:12])
+}
+
 func (assistant *Assistant) Get(ctx context.Context, projectID, sessionID string) (AssistantSession, error) {
 	assistant.mu.Lock()
 	defer assistant.mu.Unlock()
@@ -228,6 +340,9 @@ func (assistant *Assistant) Get(ctx context.Context, projectID, sessionID string
 func (assistant *Assistant) Reply(ctx context.Context, projectID, sessionID, message, idempotencyKey string) (AssistantSession, bool, error) {
 	assistant.mu.Lock()
 	defer assistant.mu.Unlock()
+	if err := ensureProjectNotDeleting(ctx, assistant.projects, projectID); err != nil {
+		return AssistantSession{}, false, err
+	}
 	if _, err := assistant.projects.GetByID(ctx, projectID); err != nil {
 		return AssistantSession{}, false, err
 	}
@@ -295,6 +410,9 @@ func (assistant *Assistant) Reply(ctx context.Context, projectID, sessionID, mes
 func (assistant *Assistant) Apply(ctx context.Context, projectID, sessionID string) (Manifest, error) {
 	assistant.mu.Lock()
 	defer assistant.mu.Unlock()
+	if err := ensureProjectNotDeleting(ctx, assistant.projects, projectID); err != nil {
+		return Manifest{}, err
+	}
 	record, err := assistant.readRecord(sessionID)
 	if err != nil || record.ProjectID != projectID {
 		if err == nil {

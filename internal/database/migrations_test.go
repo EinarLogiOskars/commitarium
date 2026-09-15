@@ -65,6 +65,12 @@ func TestMigrateCreatesProjectsTable(t *testing.T) {
 	).Scan(&tableName); err != nil {
 		t.Fatalf("find feature deletions table: %v", err)
 	}
+	if err := db.QueryRowContext(
+		t.Context(),
+		`SELECT name FROM sqlite_schema WHERE type = 'table' AND name = 'project_deletions'`,
+	).Scan(&tableName); err != nil {
+		t.Fatalf("find project deletions table: %v", err)
+	}
 }
 
 func TestMigrateDropsCoordinatorOwnedWorkspacePublications(t *testing.T) {

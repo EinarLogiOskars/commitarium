@@ -187,6 +187,32 @@ func (client *Client) VerifyRepository(
 	return repository, nil
 }
 
+// DeleteRepository removes one exact project-owned private repository. A 404
+// is success so a coordinator retry after a lost response safely resumes.
+func (client *Client) DeleteRepository(ctx context.Context, owner, name string) error {
+	owner, name, err := project.NormalizeRepositoryCoordinate(owner, name)
+	if err != nil {
+		return err
+	}
+	status, _, err := client.doJSON(
+		ctx, http.MethodDelete,
+		"/api/v1/repos/"+url.PathEscape(owner)+"/"+url.PathEscape(name), nil,
+	)
+	if err != nil {
+		return err
+	}
+	switch status {
+	case http.StatusOK, http.StatusNoContent, http.StatusNotFound:
+		return nil
+	case http.StatusForbidden, http.StatusLocked:
+		return project.ErrForgejoRepositoryNotReady
+	default:
+		return fmt.Errorf(
+			"%w: repository deletion returned HTTP %d", project.ErrForgejoUnavailable, status,
+		)
+	}
+}
+
 func (client *Client) EnsureImportRepository(
 	ctx context.Context,
 	spec project.RepositoryImportSpec,

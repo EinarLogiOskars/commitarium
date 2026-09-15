@@ -13,6 +13,7 @@ import type {
   DialogueLimits,
   MergePolicy,
   Project,
+  ProjectDeletionResult,
   RecoveryPolicy,
 } from "./api/types";
 
@@ -97,6 +98,15 @@ export const importProject = (
 
 export const getProjectSource = (projectId: string): Promise<string | null> =>
   invoke("get_project_source", { projectId });
+
+/** Delete coordinator-owned project state and its trusted local source mapping
+ * as one resumable native operation. Reuse idempotencyKey on retry. */
+export const deleteProject = (
+  projectId: string,
+  idempotencyKey: string,
+  force = false,
+): Promise<ProjectDeletionResult> =>
+  invoke("delete_project", { projectId, idempotencyKey, force });
 
 // --- Handoff: completed work → host (see docs/desktop-ipc.md) ---
 // NOTE: SynchronizeResult / FolderSynchronizeResult serialize snake_case

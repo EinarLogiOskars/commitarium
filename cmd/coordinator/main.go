@@ -20,6 +20,7 @@ import (
 	"github.com/EinarLogiOskars/commitarium/internal/modelcatalog"
 	"github.com/EinarLogiOskars/commitarium/internal/orchestration"
 	"github.com/EinarLogiOskars/commitarium/internal/project"
+	"github.com/EinarLogiOskars/commitarium/internal/projectdeletion"
 	"github.com/EinarLogiOskars/commitarium/internal/secretfile"
 	"github.com/EinarLogiOskars/commitarium/internal/toolchain"
 	"github.com/EinarLogiOskars/commitarium/internal/workerhttp"
@@ -312,8 +313,12 @@ func run(ctx context.Context, coordinatorConfig config) error {
 	var realWorkflowStarter httpapi.RealWorkflowStarter
 	var modelCatalogService httpapi.ModelCatalogService
 	var toolchainAssistantService httpapi.ToolchainAssistantService
+	var deletionWorker projectdeletion.WorkerStopper
+	var deletionLiveSessions projectdeletion.LiveSessionRegistry
+	var assistantCleaner projectdeletion.AssistantCleaner
 	switch coordinatorConfig.runnerMode {
 	case defaultRunnerMode:
+		deletionLiveSessions = activeSessions
 		sessionController = orchestration.NewController(executionService, activeSessions)
 		runner := orchestration.NewRunner(workflowService, executionService, activeSessions)
 		simulatedStarter := orchestration.NewStarter(
@@ -389,6 +394,7 @@ func run(ctx context.Context, coordinatorConfig config) error {
 			return fmt.Errorf("create project toolchain assistant: %w", err)
 		}
 		toolchainAssistantService = assistant
+		assistantCleaner = assistant
 		ingestion := workeringest.NewService(executionService, workeringest.FilterFunc(
 			func(_ context.Context, event workerhttp.Event) (workerhttp.Event, error) {
 				return event, nil
@@ -404,6 +410,7 @@ func run(ctx context.Context, coordinatorConfig config) error {
 		if err != nil {
 			return fmt.Errorf("create provider worker router: %w", err)
 		}
+		deletionWorker = workerRouter
 		pumpRouter, err := orchestration.NewProviderRoutedPump(
 			executionService,
 			orchestration.ProviderPumpRoutes{
@@ -465,6 +472,16 @@ func run(ctx context.Context, coordinatorConfig config) error {
 	featureDeletionService := workorder.NewService(
 		coordinatordatabase.NewFeatureDeletionStore(db), forgejoClient, checkoutManager,
 	)
+	projectDeletionService := projectdeletion.NewService(
+		coordinatordatabase.NewProjectDeletionStore(db),
+		featureDeletionService,
+		projectdeletion.NewRunStopper(
+			executionService, deletionWorker, sessionController, deletionLiveSessions,
+		),
+		toolchainService,
+		assistantCleaner,
+		forgejoClient,
+	)
 	handler := httpapi.NewWithWorkspaceRealWorkflowDeletionAndModels(
 		projectService,
 		featureService,
@@ -478,6 +495,7 @@ func run(ctx context.Context, coordinatorConfig config) error {
 		modelCatalogService,
 		toolchainService,
 		toolchainAssistantService,
+		projectDeletionService,
 	)
 
 	log.Print("Listening...")

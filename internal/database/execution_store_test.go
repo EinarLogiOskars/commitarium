@@ -493,6 +493,25 @@ func TestExecutionStoreDoesNotRecoverStableUserWait(t *testing.T) {
 	}
 }
 
+func TestExecutionStoreDoesNotRecoverRunDuringPendingProjectDeletion(t *testing.T) {
+	db, store := newTestExecutionStore(t)
+	run, _ := createExecutionRecords(t, db, store)
+	if _, err := db.ExecContext(t.Context(), `
+		INSERT INTO project_deletions (
+			project_id, idempotency_key, force, status, requested_at
+		) SELECT project_id, 'delete-project', 1, 'pending', ?
+		  FROM features WHERE id = ?`, formatExecutionTime(run.StartedAt), run.FeatureID); err != nil {
+		t.Fatalf("claim project deletion: %v", err)
+	}
+	runs, err := store.ListRecoverableRuns(t.Context())
+	if err != nil {
+		t.Fatalf("list recoverable runs: %v", err)
+	}
+	if len(runs) != 0 {
+		t.Fatalf("run under pending deletion was recoverable: %+v", runs)
+	}
+}
+
 func TestExecutionStoreRecoversUnpausedAutomaticCheckpointsAndLegacyAcceptedGoals(t *testing.T) {
 	db, store := newTestExecutionStore(t)
 	run, session := createExecutionRecords(t, db, store)
