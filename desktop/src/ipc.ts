@@ -6,7 +6,15 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { open } from "@tauri-apps/plugin-dialog";
-import type { Project } from "./api/types";
+import type {
+  AgentModels,
+  AgentProviders,
+  AutonomyPolicy,
+  DialogueLimits,
+  MergePolicy,
+  Project,
+  RecoveryPolicy,
+} from "./api/types";
 
 export interface DockerProbe {
   docker_installed: boolean;
@@ -60,17 +68,31 @@ export const pickFolder = async (): Promise<string | null> => {
 export const inspectFolder = (path: string): Promise<FolderInfo> =>
   invoke("inspect_folder", { path });
 
+export interface ImportProjectDefaults {
+  agent_providers?: AgentProviders;
+  agent_models?: AgentModels;
+  autonomy_policy?: AutonomyPolicy;
+  merge_policy?: MergePolicy;
+  dialogue_limits?: DialogueLimits;
+}
+
 export const importProject = (
   path: string,
   name: string,
   defaultBranch: string,
-  recoveryPolicy: string,
+  recoveryPolicy: RecoveryPolicy,
+  defaults: ImportProjectDefaults = {},
 ): Promise<Project> =>
   invoke("import_project", {
     path,
     name,
     defaultBranch,
     recoveryPolicy,
+    agentProviders: defaults.agent_providers,
+    agentModels: defaults.agent_models,
+    autonomyPolicy: defaults.autonomy_policy,
+    mergePolicy: defaults.merge_policy,
+    dialogueLimits: defaults.dialogue_limits,
   });
 
 export const getProjectSource = (projectId: string): Promise<string | null> =>
