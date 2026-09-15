@@ -1221,13 +1221,12 @@ button.danger:not(.ghost) {
 .repo__readme {
   border-top: 1px solid var(--border);
   padding-top: 12px;
-  position: relative;
 }
-.repo__readme--clamped {
+.repo__readme-body--clamped {
   max-height: 320px;
   overflow: hidden;
-  -webkit-mask-image: linear-gradient(to bottom, #000 70%, transparent);
-  mask-image: linear-gradient(to bottom, #000 70%, transparent);
+  -webkit-mask-image: linear-gradient(to bottom, #000 72%, transparent);
+  mask-image: linear-gradient(to bottom, #000 72%, transparent);
 }
 .repo__readme-toggle {
   margin-top: 8px;
