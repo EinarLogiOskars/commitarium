@@ -336,12 +336,15 @@ body {
 }
 .list__row .list__item {
   margin-bottom: 0;
+  flex: 1;
+  min-width: 0;
 }
 .list__item--static {
   cursor: default;
   background: transparent;
 }
-.list__row .primary {
+.list__row .primary,
+.list__row .danger {
   flex: none;
   white-space: nowrap;
 }
