@@ -515,6 +515,8 @@ or the effective configured values:
   "tools": {"python": "3.14.7"},
   "services": ["postgresql"],
   "services_runnable": false,
+  "provisioning_status": "pending",
+  "provisioning_message": "Runtime installation has not started.",
   "updated_at": "2026-09-15T12:00:00Z"
 }
 ```
@@ -541,6 +543,13 @@ Supported tool names are `bun`, `deno`, `go`, `java`, `node`, `php`, `python`,
 rejected. `source` must be `picker`, `detected`, `assistant`, or `runtime`.
 Invalid input returns `400 invalid_toolchain`; an unknown project returns
 `404 project_not_found`. `PUT` is an idempotent replacement.
+
+Every configured manifest exposes durable provisioning state. Saving a new
+toolchain sets `provisioning_status` to `pending`; the worker changes it to
+`installing` before downloading runtimes and then to `ready` or `failed`.
+`provisioning_message` is a bounded, non-secret explanation suitable for the
+UI. Poll the project toolchain endpoint while installation is active. This
+state is internal runtime data and survives coordinator restarts.
 
 For an import, `POST /api/v1/projects/{projectID}/toolchain/detect` accepts an
 empty body and returns a quick, non-mutating suggestion:
@@ -616,7 +625,8 @@ can add a supported runtime during its turn with
 The command may take up to 30 minutes and must be allowed outbound access to the
 runtime's release host. Installation is serialized against coordinator updates.
 If it fails, the worker records a retryable terminal
-`toolchain_unavailable` result and does not start the provider turn.
+`toolchain_unavailable` result, sets provisioning to `failed`, and does not
+start the provider turn.
 
 Work-order creation requires `status: "configured"`. Until the user saves a
 picker choice or a reviewed detection/assistant result,

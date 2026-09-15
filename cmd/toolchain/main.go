@@ -56,6 +56,11 @@ func run(arguments []string) error {
 	if err := writeGeneratedConfig(configPath, tools); err != nil {
 		return err
 	}
+	if err := toolchainconfig.WriteProvisioningState(configPath, toolchainconfig.ProvisioningState{
+		Status: toolchainconfig.ProvisioningInstalling, Message: "Installing an agent-requested exact runtime.",
+	}); err != nil {
+		return err
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), installTimeout)
 	defer cancel()
 	command := exec.CommandContext(ctx, "mise", "install", "--yes")
@@ -63,9 +68,20 @@ func run(arguments []string) error {
 	command.Stderr = os.Stderr
 	if err := command.Run(); err != nil {
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			_ = toolchainconfig.WriteProvisioningState(configPath, toolchainconfig.ProvisioningState{
+				Status: toolchainconfig.ProvisioningFailed, Message: "Agent-requested runtime installation exceeded 30 minutes.",
+			})
 			return errors.New("tool installation exceeded 30 minutes")
 		}
+		_ = toolchainconfig.WriteProvisioningState(configPath, toolchainconfig.ProvisioningState{
+			Status: toolchainconfig.ProvisioningFailed, Message: "Agent-requested runtime installation failed.",
+		})
 		return fmt.Errorf("install %s@%s: %w", tool, version, err)
+	}
+	if err := toolchainconfig.WriteProvisioningState(configPath, toolchainconfig.ProvisioningState{
+		Status: toolchainconfig.ProvisioningReady, Message: "Exact project runtimes are installed.",
+	}); err != nil {
+		return err
 	}
 	return nil
 }
