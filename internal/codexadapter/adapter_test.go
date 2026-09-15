@@ -294,6 +294,33 @@ func TestAdapterReturnsStructuredLeadMergeReadiness(t *testing.T) {
 	}
 }
 
+func TestAdapterReturnsStructuredToolchainProposal(t *testing.T) {
+	adapter := testAdapter(t, "structured-toolchain", "Help choose a project stack")
+	request := adapter.request("att_codex_toolchain", "Help choose a project stack")
+	request.Role = worker.RoleLead
+	request.LaunchEnvironment.Role = worker.RoleLead
+	request.OutputContract = worker.OutputContractToolchainSetup
+	session, err := adapter.Start(t.Context(), request)
+	if err != nil {
+		t.Fatalf("start structured toolchain turn: %v", err)
+	}
+	events := collectEvents(session)
+	result, err := session.Wait(timeoutContext(t, 3*time.Second))
+	if err != nil || result.Summary != "Use Python and Node." ||
+		result.Disposition != worker.DispositionSucceeded || result.ToolchainProposal == nil ||
+		!reflect.DeepEqual(result.ToolchainProposal.Tools, map[string]string{
+			"python": "3.14.7", "node": "24.21.0",
+		}) {
+		t.Fatalf("structured toolchain result=%+v error=%v", result, err)
+	}
+	if observed := <-events; !equalEvents(observed, []worker.Event{
+		{Type: worker.EventActivity, Text: "Codex started working."},
+		{Type: worker.EventMessage, Text: "Use Python and Node."},
+	}) {
+		t.Fatalf("structured toolchain events = %+v", observed)
+	}
+}
+
 func TestImplementationReviewResponseFailsClosed(t *testing.T) {
 	for _, response := range []string{
 		`{"action":"approved","summary":"good","commit_id":"bad","pull_request_number":7,"review_id":11}`,
@@ -621,6 +648,9 @@ func TestCodexAppServerHelper(t *testing.T) {
 	if (mode == "structured-readiness") != helperTurnHasReadinessSchema(turnRequest.Params) {
 		os.Exit(96)
 	}
+	if (mode == "structured-toolchain") != helperTurnHasToolchainSchema(turnRequest.Params) {
+		os.Exit(98)
+	}
 	if mode == "turn-start-error" {
 		helperWrite(writer, map[string]any{
 			"id":    turnRequest.ID,
@@ -727,6 +757,16 @@ func TestCodexAppServerHelper(t *testing.T) {
 			"item": map[string]any{
 				"id": "item_message", "type": "agentMessage",
 				"text": `{"action":"ready_to_merge","summary":"I agree that the approved commit is ready to merge."}`,
+			},
+		})
+		helpWriteTurnCompleted(writer, "completed")
+		helperWaitForever()
+	case "structured-toolchain":
+		helpNotify(writer, "item/completed", map[string]any{
+			"threadId": "thr_test", "turnId": "turn_test",
+			"item": map[string]any{
+				"id": "item_message", "type": "agentMessage",
+				"text": `{"action":"propose","message":"Use Python and Node.","tools":[{"name":"python","version":"3.14.7"},{"name":"node","version":"24.21.0"}],"services":[]}`,
 			},
 		})
 		helpWriteTurnCompleted(writer, "completed")
@@ -857,6 +897,30 @@ func helperTurnHasReadinessSchema(raw json.RawMessage) bool {
 		params.OutputSchema.Required,
 		[]string{"action", "summary"},
 	)
+}
+
+func helperTurnHasToolchainSchema(raw json.RawMessage) bool {
+	var params struct {
+		OutputSchema struct {
+			Required   []string `json:"required"`
+			Properties struct {
+				Tools struct {
+					Type  string `json:"type"`
+					Items struct {
+						AdditionalProperties bool     `json:"additionalProperties"`
+						Required             []string `json:"required"`
+					} `json:"items"`
+				} `json:"tools"`
+			} `json:"properties"`
+		} `json:"outputSchema"`
+	}
+	if json.Unmarshal(raw, &params) != nil {
+		return false
+	}
+	tools := params.OutputSchema.Properties.Tools
+	return slices.Equal(params.OutputSchema.Required, []string{"action", "message", "tools", "services"}) &&
+		tools.Type == "array" && !tools.Items.AdditionalProperties &&
+		slices.Equal(tools.Items.Required, []string{"name", "version"})
 }
 
 func helperSteerMatches(raw json.RawMessage) bool {

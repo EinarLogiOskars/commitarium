@@ -31,6 +31,17 @@ func TestOutputJSONSchemaCoversStructuredContracts(t *testing.T) {
 	}
 }
 
+func TestToolchainOutputSchemaUsesStrictToolEntries(t *testing.T) {
+	schema := OutputJSONSchema(OutputContractToolchainSetup).(map[string]any)
+	properties := schema["properties"].(map[string]any)
+	tools := properties["tools"].(map[string]any)
+	items := tools["items"].(map[string]any)
+	if tools["type"] != "array" || items["additionalProperties"] != false ||
+		!reflect.DeepEqual(items["required"], []string{"name", "version"}) {
+		t.Fatalf("toolchain tools schema = %#v", tools)
+	}
+}
+
 func TestResolveStructuredOutput(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -83,12 +94,12 @@ func TestResolveStructuredOutput(t *testing.T) {
 		},
 		{
 			name: "toolchain question", contract: OutputContractToolchainSetup,
-			raw:   `{"action":"ask","message":"Do you need a browser UI?","tools":{},"services":[]}`,
+			raw:   `{"action":"ask","message":"Do you need a browser UI?","tools":[],"services":[]}`,
 			event: Event{Type: EventInputRequired, Text: "Do you need a browser UI?"}, disposition: DispositionInputRequired,
 		},
 		{
 			name: "toolchain proposal", contract: OutputContractToolchainSetup,
-			raw:   `{"action":"propose","message":"Use Python.","tools":{"python":"3.14.7"},"services":[]}`,
+			raw:   `{"action":"propose","message":"Use Python.","tools":[{"name":"python","version":"3.14.7"}],"services":[]}`,
 			event: Event{Type: EventMessage, Text: "Use Python."}, disposition: DispositionSucceeded,
 			proposal: &ToolchainProposal{Tools: map[string]string{"python": "3.14.7"}, Services: []string{}},
 		},
@@ -124,8 +135,10 @@ func TestResolveStructuredOutputFailsClosed(t *testing.T) {
 		{OutputContractImplementationReadiness, `{"action":"blocked","summary":"Cannot inspect"} {}`},
 		{OutputContractIntervention, `{"effect":"unknown","response":"Noted"}`},
 		{OutputContractIntervention, `{"effect":"replanning_required","response":""}`},
-		{OutputContractToolchainSetup, `{"action":"ask","message":"Question","tools":{"python":"3.14.7"},"services":[]}`},
-		{OutputContractToolchainSetup, `{"action":"propose","message":"Use Python","tools":{},"services":[]}`},
+		{OutputContractToolchainSetup, `{"action":"ask","message":"Question","tools":[{"name":"python","version":"3.14.7"}],"services":[]}`},
+		{OutputContractToolchainSetup, `{"action":"propose","message":"Use Python","tools":[],"services":[]}`},
+		{OutputContractToolchainSetup, `{"action":"propose","message":"Use Python","tools":[{"name":"python","version":""}],"services":[]}`},
+		{OutputContractToolchainSetup, `{"action":"propose","message":"Use Python","tools":[{"name":"python","version":"3.14.7"},{"name":"python","version":"3.13.7"}],"services":[]}`},
 		{"unknown", `{}`},
 	}
 	for _, test := range tests {
