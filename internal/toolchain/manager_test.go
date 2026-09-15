@@ -168,7 +168,7 @@ func TestManagerDetectsExactRepositoryToolsWithoutExecutingConfig(t *testing.T) 
 	}
 	if suggestion.Confidence != "high" || suggestion.Tools["python"] != "3.13.7" ||
 		suggestion.Tools["node"] != "24.21.0" ||
-		suggestion.Tools["java"] != "temurin-25.0.4+7.0.LTS" ||
+		suggestion.Tools["java"] != "temurin-21.0.12+8.0.LTS" ||
 		suggestion.Tools["maven"] != "3.9.16" {
 		t.Fatalf("unexpected suggestion %+v", suggestion)
 	}

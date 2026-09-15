@@ -5,9 +5,15 @@ import "testing"
 func TestJavaPresetsUseExplicitWorkerAvailableToolchains(t *testing.T) {
 	want := map[string]map[string]string{
 		"java-gradle": {
-			"java": "temurin-25.0.4+7.0.LTS", "gradle": "9.7.1",
+			"java": "temurin-21.0.12+8.0.LTS", "gradle": "9.7.1",
 		},
 		"java-maven": {
+			"java": "temurin-21.0.12+8.0.LTS", "maven": "3.9.16",
+		},
+		"java25-gradle": {
+			"java": "temurin-25.0.4+7.0.LTS", "gradle": "9.7.1",
+		},
+		"java25-maven": {
 			"java": "temurin-25.0.4+7.0.LTS", "maven": "3.9.16",
 		},
 	}
