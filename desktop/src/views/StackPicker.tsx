@@ -9,6 +9,7 @@ import { ApiError } from "../api/client";
 import { TOOL_NAMES } from "../api/types";
 import { SetupAssistant } from "./SetupAssistant";
 import type {
+  AgentProvider,
   ProjectToolchain,
   ProvisioningStatus,
   ToolchainPreset,
@@ -29,9 +30,11 @@ function rowsFrom(tools: Record<string, string>): Row[] {
  * a project's toolchain "configured" — the gate for creating work orders. */
 export function StackPicker({
   projectId,
+  preferred,
   onSaved,
 }: {
   projectId: string;
+  preferred?: { provider?: AgentProvider; model?: string };
   onSaved: (t: ProjectToolchain) => void;
 }) {
   const [presets, setPresets] = useState<ToolchainPreset[]>([]);
@@ -152,9 +155,10 @@ export function StackPicker({
   if (helping) {
     return (
       <section className="panel">
-        <h2>Stack — help me choose</h2>
+        <h2>Stack — ask an agent</h2>
         <SetupAssistant
           projectId={projectId}
+          preferred={preferred}
           onApplied={(t) => {
             setHelping(false);
             onSaved(t);
@@ -170,7 +174,7 @@ export function StackPicker({
       <div className="panel__head">
         <h2>Stack</h2>
         <button className="ghost" onClick={() => setHelping(true)} disabled={busy}>
-          Help me choose
+          Ask an agent
         </button>
       </div>
       {current?.status === "needs_setup" && (

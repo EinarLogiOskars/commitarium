@@ -7,6 +7,7 @@ import {
 } from "../ipc";
 import { detectProjectToolchain, updateProjectToolchain } from "../api/toolchains";
 import { ApiError } from "../api/client";
+import { SetupAssistant } from "./SetupAssistant";
 import type { RecoveryPolicy, ToolchainSuggestion } from "../api/types";
 
 export function ImportProject({
@@ -28,6 +29,7 @@ export function ImportProject({
   const [imported, setImported] = useState<string | null>(null);
   const [detection, setDetection] = useState<ToolchainSuggestion | null>(null);
   const [saving, setSaving] = useState(false);
+  const [verifying, setVerifying] = useState(false);
 
   const choose = async () => {
     setError(null);
@@ -102,12 +104,22 @@ export function ImportProject({
         {error && <div className="banner banner--error">{error}</div>}
 
         {imported ? (
-          <DetectionReview
-            detection={detection}
-            saving={saving}
-            onUse={() => void useDetected()}
-            onManual={() => onImported(imported)}
-          />
+          verifying ? (
+            <SetupAssistant
+              projectId={imported}
+              purpose="verify_repository"
+              onApplied={() => onImported(imported)}
+              onCancel={() => setVerifying(false)}
+            />
+          ) : (
+            <DetectionReview
+              detection={detection}
+              saving={saving}
+              onUse={() => void useDetected()}
+              onVerify={() => setVerifying(true)}
+              onManual={() => onImported(imported)}
+            />
+          )
         ) : !info ? (
           <button className="primary" onClick={() => void choose()}>
             Choose folder…
@@ -190,11 +202,13 @@ function DetectionReview({
   detection,
   saving,
   onUse,
+  onVerify,
   onManual,
 }: {
   detection: ToolchainSuggestion | null;
   saving: boolean;
   onUse: () => void;
+  onVerify: () => void;
   onManual: () => void;
 }) {
   if (!detection) {
@@ -209,14 +223,18 @@ function DetectionReview({
     return (
       <div className="detect">
         <p>
-          No runtime toolchain was detected in this repository. You can choose one in the
-          workspace before creating work orders.
+          No runtime toolchain was detected in this repository. Let an agent read the repository and
+          propose one, or choose a stack yourself in the workspace.
         </p>
         <div className="row">
-          <button className="primary" onClick={onManual} disabled={saving}>
-            Continue
+          <button className="primary" onClick={onVerify} disabled={saving}>
+            Ask an agent
+          </button>
+          <button onClick={onManual} disabled={saving}>
+            Choose manually
           </button>
         </div>
+        <p className="muted note">Asking an agent uses one provider turn.</p>
       </div>
     );
   }
@@ -243,10 +261,14 @@ function DetectionReview({
         <button className="primary" onClick={onUse} disabled={saving}>
           {saving ? "Saving…" : "Use detected stack"}
         </button>
+        <button onClick={onVerify} disabled={saving}>
+          Have an agent verify
+        </button>
         <button onClick={onManual} disabled={saving}>
-          Set up manually
+          Choose manually
         </button>
       </div>
+      <p className="muted note">Verifying with an agent uses one provider turn.</p>
     </div>
   );
 }
