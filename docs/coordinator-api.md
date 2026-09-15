@@ -28,8 +28,8 @@ this API beyond the host loopback interface is unsupported.
 | `GET` | `/api/v1/projects/{projectID}/toolchain` | Read the project's effective runtime toolchain |
 | `PUT` | `/api/v1/projects/{projectID}/toolchain` | Replace the project's internal runtime toolchain |
 | `POST` | `/api/v1/projects/{projectID}/toolchain/detect` | Quickly suggest a toolchain from the repository root |
-| `POST` | `/api/v1/projects/{projectID}/toolchain/assistant-sessions` | Start a stack-planning conversation on a selected worker/model |
-| `GET` | `/api/v1/projects/{projectID}/toolchain/assistant-sessions/{sessionID}` | Poll a stack-planning conversation |
+| `POST` | `/api/v1/projects/{projectID}/toolchain/assistant-sessions` | Start a stack-design or repository-verification conversation on a selected worker/model |
+| `GET` | `/api/v1/projects/{projectID}/toolchain/assistant-sessions/{sessionID}` | Poll a stack assistant conversation |
 | `POST` | `/api/v1/projects/{projectID}/toolchain/assistant-sessions/{sessionID}/messages` | Answer the setup assistant's question |
 | `POST` | `/api/v1/projects/{projectID}/toolchain/assistant-sessions/{sessionID}/apply` | Apply the assistant's exact proposal as the project toolchain |
 | `POST` | `/api/v1/projects/{projectID}/features` | Create a draft feature with optional per-order setting overrides |
@@ -581,15 +581,18 @@ Content-Type: application/json
 {
   "provider": "claude",
   "model": "claude-opus-4-8",
+  "purpose": "design_stack",
   "message": "I want a small personal web app and prefer simple deployment."
 }
 ```
 
 `provider` is `codex` or `claude`; `model` must be an exact ID currently
-offered by that provider's lead worker catalog. The response is `202 Accepted`,
-has a session `Location`, and initially reports `status: "running"`. Poll that
-location. Every response includes the durable ordered `messages` transcript. A
-bounded turn eventually reports one of:
+offered by that provider's lead worker catalog. `purpose` is `design_stack` or
+`verify_repository`; omitting it preserves the existing `design_stack`
+behavior. The response is `202 Accepted`, has a session `Location`, and
+initially reports `status: "running"`. Poll that location. Every response
+includes `purpose`, the selected provider/model, and the durable ordered
+`messages` transcript. A bounded turn eventually reports one of:
 
 - `waiting_for_user` with `message`: show the question, then send one
   `{"message":"..."}` object to the session's `/messages` route with a new
@@ -604,6 +607,28 @@ repository, run commands, install tools, or implement the project. Its durable
 coordinator record and deterministic worker attempts make exact retries safe
 across restarts. The setup assignment uses the consultant role, so it receives
 no Forgejo token or Git publishing identity.
+
+For an imported repository, first call the fast detector and show its result.
+If the user asks an agent to verify it, start a session with
+`purpose: "verify_repository"`. The coordinator reads the exact committed
+default-branch head and builds a bounded evidence packet containing recognized
+runtime manifests, lockfiles, build configuration, the root README, and source
+language file counts. It searches recursively, ignores dependency/build
+directories, reads at most 32 allowlisted text files, caps each file at 64 KiB,
+and caps all file contents at 128 KiB. It never reads `.env` files or sends a
+writable checkout, Git metadata, Forgejo credentials, or arbitrary repository
+files to the worker. Repository contents are marked as untrusted data and are
+never executed.
+
+A verification response includes `verified_commit_id`. Its proposal's
+`evidence` lists the committed files supplied to the model and its `confidence`
+is `agent_verified`; the assistant's `message` is the plain-language
+explanation and may call out uncertainty or ask a necessary question. Applying
+a verified proposal rechecks the default-branch head. If it changed, the apply
+returns `409 toolchain_assistant_stale` and the client must start a new
+verification session. Unavailable, incomplete, or oversized repository
+evidence returns `503 toolchain_verification_unavailable`. Exact retries retain
+the original pinned evidence across coordinator restarts.
 
 After the user approves a `proposal_ready` response, apply it:
 

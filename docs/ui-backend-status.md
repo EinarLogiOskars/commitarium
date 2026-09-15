@@ -139,12 +139,30 @@ Safe UI capabilities:
   `409 project_toolchain_required` without starting clarification.
 - For guided setup, start a session with
   `POST /api/v1/projects/{projectID}/toolchain/assistant-sessions`, supplying a
-  selected lead provider, exact model, initial project description, and
-  `Idempotency-Key`. Poll the returned Location. Render `waiting_for_user` as a
+  selected lead provider, exact model, `purpose: "design_stack"`, initial
+  project description, and `Idempotency-Key`. Preselect the project's lead
+  provider/model but let the user change both for this consultation. Poll the
+  returned Location. Render `waiting_for_user` as a
   small chat, `proposal_ready` as a review card, and `failed` as a recoverable
   choice to return to the picker. Replies use the session `/messages` route;
   approval uses its empty-body `/apply` route. Every mutation needs a stable
   idempotency key. The assistant never edits the Git repository.
+- Both ordinary creation and import already accept the complete project-default
+  settings objects: lead/reviewer providers and exact models, autonomy, merge,
+  recovery, and dialogue limits. Expose these as a visible, prefilled “Project
+  defaults” step; no coordinator contract change is needed. The current Tauri
+  `import_project` command only forwards `recoveryPolicy`, so the desktop slice
+  must also extend that typed IPC command and its multipart metadata to carry
+  the other selected defaults.
+- After import, run the fast detector immediately and offer “Accept detected
+  stack,” “Have an agent verify,” and “Choose manually.” Verification uses the
+  same assistant routes with `purpose: "verify_repository"`, preselected from
+  the project lead provider/model. Show its plain-language message,
+  `verified_commit_id`, exact proposal, evidence paths, and uncertainty. A
+  `409 toolchain_assistant_stale` means the repository changed and verification
+  must restart; `503 toolchain_verification_unavailable` is a retryable evidence
+  read failure. The model receives bounded committed evidence, never a checkout
+  or repository credential.
 
 The UI must not expect project deletion, general project editing, or changing a
 bound Forgejo repository. Those operations are not implemented.

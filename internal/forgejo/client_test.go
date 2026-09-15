@@ -269,6 +269,48 @@ func TestClientReadsRepositoryOverviewFromDefaultBranch(t *testing.T) {
 	}
 }
 
+func TestClientReadsRecursiveRepositoryTreeAtPinnedHead(t *testing.T) {
+	calls := 0
+	client := newBranchTestClient(t, func(request *http.Request) (*http.Response, error) {
+		calls++
+		switch calls {
+		case 1:
+			return jsonResponse(http.StatusOK, `{
+				"name":"main",
+				"commit":{
+					"id":"`+forgejoTestCommitID+`","message":"Import",
+					"timestamp":"2026-09-15T12:30:00Z",
+					"author":{"name":"User","username":"user"}
+				}
+			}`), nil
+		case 2:
+			if request.URL.Path != "/api/v1/repos/owner/repository/git/trees/"+forgejoTestCommitID ||
+				request.URL.Query().Get("recursive") != "true" {
+				t.Fatalf("unexpected recursive tree request %s", request.URL)
+			}
+			return jsonResponse(http.StatusOK, `{
+				"tree":[
+					{"path":"backend","type":"tree","sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","size":0},
+					{"path":"backend/pyproject.toml","type":"blob","sha":"cccccccccccccccccccccccccccccccccccccccc","size":128}
+				],
+				"truncated":false
+			}`), nil
+		default:
+			t.Fatalf("unexpected request %d", calls)
+			return nil, nil
+		}
+	})
+
+	snapshot, err := client.ReadRepositoryTree(t.Context(), "owner", "repository", "main")
+	if err != nil {
+		t.Fatalf("read repository tree: %v", err)
+	}
+	if snapshot.Head.CommitID != forgejoTestCommitID || len(snapshot.Tree) != 2 ||
+		snapshot.Tree[1].Path != "backend/pyproject.toml" || calls != 2 {
+		t.Fatalf("unexpected snapshot %+v calls=%d", snapshot, calls)
+	}
+}
+
 func TestClientRepositoryOverviewOmitsAbsentReadme(t *testing.T) {
 	calls := 0
 	client := newBranchTestClient(t, func(request *http.Request) (*http.Response, error) {
