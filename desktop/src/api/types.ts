@@ -82,6 +82,57 @@ export interface CreateProjectInput {
   recovery_policy?: RecoveryPolicy;
 }
 
+// Runtime toolchain a project's agents get, provisioned via mise into the shared
+// internal cache — never a file in the user's repository. Work-order creation is
+// gated on status "configured" (backend returns 409 project_toolchain_required
+// otherwise). `services` is planning metadata only: services_runnable is always
+// false in this release — selecting a service does NOT start a server.
+export const TOOL_NAMES = [
+  "bun",
+  "deno",
+  "go",
+  "java",
+  "node",
+  "php",
+  "python",
+  "ruby",
+  "rust",
+] as const;
+export type ToolName = (typeof TOOL_NAMES)[number];
+export type ToolchainStatus = "needs_setup" | "configured";
+export type ToolchainSource = "picker" | "detected" | "assistant" | "runtime";
+
+export interface ProjectToolchain {
+  project_id: string;
+  status: ToolchainStatus;
+  source?: ToolchainSource;
+  tools: Record<string, string>; // tool name -> exact version
+  services: string[];
+  services_runnable: boolean;
+  updated_at?: string;
+}
+
+export interface ToolchainPreset {
+  id: string;
+  display_name: string;
+  description: string;
+  tools: Record<string, string>;
+  services?: string[];
+}
+
+export interface ToolchainSuggestion {
+  tools: Record<string, string>;
+  services: string[];
+  evidence: string[];
+  confidence: string;
+}
+
+export interface UpdateToolchainInput {
+  source: ToolchainSource;
+  tools: Record<string, string>;
+  services?: string[];
+}
+
 export type FeatureState =
   | "draft"
   | "planning"
