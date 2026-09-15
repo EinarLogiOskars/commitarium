@@ -256,7 +256,8 @@ func run(ctx context.Context, coordinatorConfig config) error {
 
 	projectStore := coordinatordatabase.NewProjectStore(db)
 	forgejoClient, err := forgejo.NewClient(forgejo.ClientConfig{
-		BaseURL: coordinatorConfig.forgejoURL, Owner: coordinatorConfig.forgejoOwner,
+		BaseURL: coordinatorConfig.forgejoURL, HostBaseURL: coordinatorConfig.forgejoHostURL,
+		Owner:     coordinatorConfig.forgejoOwner,
 		TokenFile: coordinatorConfig.forgejoTokenFile,
 		Collaborators: []string{
 			coordinatorConfig.codexForgejoAuthor,

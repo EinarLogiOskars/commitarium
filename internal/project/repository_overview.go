@@ -35,6 +35,7 @@ type RepositoryTreeReader interface {
 }
 
 type RepositoryOverview struct {
+	URL            string
 	DefaultBranch  string
 	Head           RepositoryHead
 	ReadmeMarkdown *string

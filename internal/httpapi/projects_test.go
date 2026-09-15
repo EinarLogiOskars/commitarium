@@ -1097,6 +1097,7 @@ func TestGetProjectRepositoryOverview(t *testing.T) {
 	fixedTime := time.Date(2026, time.September, 13, 12, 30, 0, 0, time.UTC)
 	readme := "# Demo\n\nInternal repository overview.\n"
 	service := &recordingProjectService{overviewResult: project.RepositoryOverview{
+		URL:           "http://localhost:3001/owner/repository",
 		DefaultBranch: "main",
 		Head: project.RepositoryHead{
 			CommitID: "0123456789abcdef0123456789abcdef01234567",
@@ -1123,7 +1124,8 @@ func TestGetProjectRepositoryOverview(t *testing.T) {
 	if err := json.NewDecoder(recorder.Body).Decode(&response); err != nil {
 		t.Fatalf("decode repository overview: %v", err)
 	}
-	if response.DefaultBranch != "main" || response.Head.Author != "Codex" ||
+	if response.URL != "http://localhost:3001/owner/repository" ||
+		response.DefaultBranch != "main" || response.Head.Author != "Codex" ||
 		response.Head.CommittedAt != fixedTime || response.ReadmeMarkdown == nil ||
 		*response.ReadmeMarkdown != readme || len(response.Tree) != 2 ||
 		response.Tree[1].Path != "src" || response.Tree[1].Type != "dir" {
@@ -1140,8 +1142,9 @@ func TestGetProjectRepositoryOverviewOmitsMissingReadme(t *testing.T) {
 		recorder,
 		httptest.NewRequest(http.MethodGet, "/api/v1/projects/prj_test/repository-overview", nil),
 	)
-	if strings.Contains(recorder.Body.String(), "readme_markdown") {
-		t.Fatalf("missing README was not omitted: %s", recorder.Body.String())
+	if strings.Contains(recorder.Body.String(), "readme_markdown") ||
+		strings.Contains(recorder.Body.String(), `"url"`) {
+		t.Fatalf("missing optional repository fields were not omitted: %s", recorder.Body.String())
 	}
 }
 

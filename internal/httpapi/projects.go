@@ -78,6 +78,7 @@ type forgejoRepositoryResponse struct {
 }
 
 type repositoryOverviewResponse struct {
+	URL            string                         `json:"url,omitempty"`
 	DefaultBranch  string                         `json:"default_branch"`
 	Head           repositoryOverviewHeadResponse `json:"head"`
 	ReadmeMarkdown *string                        `json:"readme_markdown,omitempty"`
@@ -416,6 +417,7 @@ func (api *API) getProjectRepositoryOverviewHandler(w http.ResponseWriter, r *ht
 		tree[index] = repositoryTreeEntryResponse{Path: entry.Path, Type: entry.Type}
 	}
 	writeJSON(w, http.StatusOK, repositoryOverviewResponse{
+		URL:           overview.URL,
 		DefaultBranch: overview.DefaultBranch,
 		Head: repositoryOverviewHeadResponse{
 			CommitID: overview.Head.CommitID, Message: overview.Head.Message,
