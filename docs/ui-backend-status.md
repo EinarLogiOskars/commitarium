@@ -132,6 +132,14 @@ Safe UI capabilities:
 - Do not enable work-order creation until the project toolchain is
   `configured`. The backend also enforces this and returns
   `409 project_toolchain_required` without starting clarification.
+- For guided setup, start a session with
+  `POST /api/v1/projects/{projectID}/toolchain/assistant-sessions`, supplying a
+  selected lead provider, exact model, initial project description, and
+  `Idempotency-Key`. Poll the returned Location. Render `waiting_for_user` as a
+  small chat, `proposal_ready` as a review card, and `failed` as a recoverable
+  choice to return to the picker. Replies use the session `/messages` route;
+  approval uses its empty-body `/apply` route. Every mutation needs a stable
+  idempotency key. The assistant never edits the Git repository.
 
 The UI must not expect project deletion, general project editing, or changing a
 bound Forgejo repository. Those operations are not implemented.
@@ -469,6 +477,9 @@ repository credentials.
 - Source-development Compose still defaults to deterministic simulated agents.
   Installed releases override this with `real_agents`; the legacy
   `real_codex_lead` value remains a backward-compatible alias.
+- Guided toolchain assistant routes are registered in `real_agents` mode. The
+  deterministic simulated mode still supports the stack picker and import
+  detection, but does not invent an assistant conversation.
 - The guarded merge endpoint and automatic merge policy operate in that real
   Forgejo-backed mode. The deterministic simulation does not invent a remote
   merge result.

@@ -624,6 +624,7 @@ func (session *session) translateResult(
 			ProviderSessionID: session.providerSessionID, Summary: resolved.Event.Text,
 			Publication: resolved.Publication, Review: resolved.Review,
 			InterventionEffect: resolved.InterventionEffect,
+			ToolchainProposal:  resolved.ToolchainProposal,
 		}, nil
 	}
 

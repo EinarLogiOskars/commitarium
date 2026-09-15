@@ -16,6 +16,7 @@ func TestOutputJSONSchemaCoversStructuredContracts(t *testing.T) {
 		{OutputContractImplementationReview, []string{"action", "summary", "commit_id", "pull_request_number", "review_id"}},
 		{OutputContractImplementationReadiness, []string{"action", "summary"}},
 		{OutputContractIntervention, []string{"effect", "response"}},
+		{OutputContractToolchainSetup, []string{"action", "message", "tools", "services"}},
 	}
 	for _, test := range tests {
 		t.Run(string(test.contract), func(t *testing.T) {
@@ -40,6 +41,7 @@ func TestResolveStructuredOutput(t *testing.T) {
 		publication *ImplementationPublication
 		review      *ReviewPublication
 		effect      InterventionEffect
+		proposal    *ToolchainProposal
 	}{
 		{
 			name: "planning response", contract: OutputContractPlanningLead,
@@ -79,6 +81,17 @@ func TestResolveStructuredOutput(t *testing.T) {
 			event:       Event{Type: EventMessage, Text: "I will preserve that preference."},
 			disposition: DispositionSucceeded, effect: InterventionEffectGuidanceApplied,
 		},
+		{
+			name: "toolchain question", contract: OutputContractToolchainSetup,
+			raw:   `{"action":"ask","message":"Do you need a browser UI?","tools":{},"services":[]}`,
+			event: Event{Type: EventInputRequired, Text: "Do you need a browser UI?"}, disposition: DispositionInputRequired,
+		},
+		{
+			name: "toolchain proposal", contract: OutputContractToolchainSetup,
+			raw:   `{"action":"propose","message":"Use Python.","tools":{"python":"3.14.7"},"services":[]}`,
+			event: Event{Type: EventMessage, Text: "Use Python."}, disposition: DispositionSucceeded,
+			proposal: &ToolchainProposal{Tools: map[string]string{"python": "3.14.7"}, Services: []string{}},
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -88,7 +101,8 @@ func TestResolveStructuredOutput(t *testing.T) {
 			}
 			if resolved.Event != test.event || resolved.Disposition != test.disposition ||
 				!reflect.DeepEqual(resolved.Publication, test.publication) ||
-				!reflect.DeepEqual(resolved.Review, test.review) || resolved.InterventionEffect != test.effect {
+				!reflect.DeepEqual(resolved.Review, test.review) || resolved.InterventionEffect != test.effect ||
+				!reflect.DeepEqual(resolved.ToolchainProposal, test.proposal) {
 				t.Fatalf("resolved output = %+v", resolved)
 			}
 		})
@@ -110,6 +124,8 @@ func TestResolveStructuredOutputFailsClosed(t *testing.T) {
 		{OutputContractImplementationReadiness, `{"action":"blocked","summary":"Cannot inspect"} {}`},
 		{OutputContractIntervention, `{"effect":"unknown","response":"Noted"}`},
 		{OutputContractIntervention, `{"effect":"replanning_required","response":""}`},
+		{OutputContractToolchainSetup, `{"action":"ask","message":"Question","tools":{"python":"3.14.7"},"services":[]}`},
+		{OutputContractToolchainSetup, `{"action":"propose","message":"Use Python","tools":{},"services":[]}`},
 		{"unknown", `{}`},
 	}
 	for _, test := range tests {

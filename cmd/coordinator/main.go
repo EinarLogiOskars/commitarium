@@ -311,6 +311,7 @@ func run(ctx context.Context, coordinatorConfig config) error {
 	var runRecoverer orchestration.RunRecoverer
 	var realWorkflowStarter httpapi.RealWorkflowStarter
 	var modelCatalogService httpapi.ModelCatalogService
+	var toolchainAssistantService httpapi.ToolchainAssistantService
 	switch coordinatorConfig.runnerMode {
 	case defaultRunnerMode:
 		sessionController = orchestration.NewController(executionService, activeSessions)
@@ -377,6 +378,17 @@ func run(ctx context.Context, coordinatorConfig config) error {
 		}
 		go catalog.Run(ctx, 30*time.Minute, func(err error) { log.Printf("refresh model catalog: %v", err) })
 		modelCatalogService = catalog
+		assistant, err := toolchain.NewAssistant(
+			coordinatorConfig.toolchainRoot, coordinatorConfig.workspaceRoot, projectService, toolchainService,
+			map[project.AgentProvider]toolchain.AssistantWorker{
+				project.AgentProviderCodex:  {Service: leadClient, AgentProfileID: coordinatorConfig.codexAgentProfileID},
+				project.AgentProviderClaude: {Service: claudeLeadClient, AgentProfileID: coordinatorConfig.claudeAgentProfileID},
+			},
+		)
+		if err != nil {
+			return fmt.Errorf("create project toolchain assistant: %w", err)
+		}
+		toolchainAssistantService = assistant
 		ingestion := workeringest.NewService(executionService, workeringest.FilterFunc(
 			func(_ context.Context, event workerhttp.Event) (workerhttp.Event, error) {
 				return event, nil
@@ -465,6 +477,7 @@ func run(ctx context.Context, coordinatorConfig config) error {
 		featureDeletionService,
 		modelCatalogService,
 		toolchainService,
+		toolchainAssistantService,
 	)
 
 	log.Print("Listening...")

@@ -173,6 +173,13 @@ type ToolchainService interface {
 	Detect(context.Context, string) (toolchain.Suggestion, error)
 }
 
+type ToolchainAssistantService interface {
+	Start(context.Context, string, project.AgentProvider, string, string, string) (toolchain.AssistantSession, bool, error)
+	Get(context.Context, string, string) (toolchain.AssistantSession, error)
+	Reply(context.Context, string, string, string, string) (toolchain.AssistantSession, bool, error)
+	Apply(context.Context, string, string) (toolchain.Manifest, error)
+}
+
 type RealWorkflowStarter interface {
 	StartPlanning(
 		ctx context.Context,
@@ -202,18 +209,19 @@ type RealWorkflowStarter interface {
 }
 
 type API struct {
-	projects        ProjectService
-	projectImporter ProjectImporter
-	features        FeatureService
-	workflow        WorkflowService
-	execution       ExecutionService
-	controller      SessionController
-	starter         RunStarter
-	workspaces      WorkspaceService
-	realWorkflow    RealWorkflowStarter
-	featureDeletion FeatureDeletionService
-	modelCatalog    ModelCatalogService
-	toolchains      ToolchainService
+	projects           ProjectService
+	projectImporter    ProjectImporter
+	features           FeatureService
+	workflow           WorkflowService
+	execution          ExecutionService
+	controller         SessionController
+	starter            RunStarter
+	workspaces         WorkspaceService
+	realWorkflow       RealWorkflowStarter
+	featureDeletion    FeatureDeletionService
+	modelCatalog       ModelCatalogService
+	toolchains         ToolchainService
+	toolchainAssistant ToolchainAssistantService
 }
 
 func New(
@@ -286,10 +294,11 @@ func NewWithWorkspaceRealWorkflowDeletionAndModels(
 	featureDeletion FeatureDeletionService,
 	modelCatalog ModelCatalogService,
 	toolchains ToolchainService,
+	toolchainAssistant ToolchainAssistantService,
 ) http.Handler {
 	return newAPI(
 		projects, features, workflow, executionService, controller, starter,
-		workspaces, realWorkflow, featureDeletion, modelCatalog, toolchains,
+		workspaces, realWorkflow, featureDeletion, modelCatalog, toolchains, toolchainAssistant,
 	)
 }
 
@@ -304,24 +313,31 @@ func newAPI(
 	realWorkflow RealWorkflowStarter,
 	featureDeletion FeatureDeletionService,
 	modelCatalog ModelCatalogService,
-	toolchains ...ToolchainService,
+	extras ...any,
 ) http.Handler {
 	var toolchainService ToolchainService
-	if len(toolchains) > 0 {
-		toolchainService = toolchains[0]
+	var toolchainAssistant ToolchainAssistantService
+	for _, extra := range extras {
+		switch typed := extra.(type) {
+		case ToolchainService:
+			toolchainService = typed
+		case ToolchainAssistantService:
+			toolchainAssistant = typed
+		}
 	}
 	api := &API{
-		projects:        projects,
-		features:        features,
-		workflow:        workflow,
-		execution:       executionService,
-		controller:      controller,
-		starter:         starter,
-		workspaces:      workspaces,
-		realWorkflow:    realWorkflow,
-		featureDeletion: featureDeletion,
-		modelCatalog:    modelCatalog,
-		toolchains:      toolchainService,
+		projects:           projects,
+		features:           features,
+		workflow:           workflow,
+		execution:          executionService,
+		controller:         controller,
+		starter:            starter,
+		workspaces:         workspaces,
+		realWorkflow:       realWorkflow,
+		featureDeletion:    featureDeletion,
+		modelCatalog:       modelCatalog,
+		toolchains:         toolchainService,
+		toolchainAssistant: toolchainAssistant,
 	}
 	api.projectImporter, _ = projects.(ProjectImporter)
 
@@ -336,6 +352,12 @@ func newAPI(
 		mux.HandleFunc("GET /api/v1/projects/{id}/toolchain", api.getProjectToolchainHandler)
 		mux.HandleFunc("PUT /api/v1/projects/{id}/toolchain", api.configureProjectToolchainHandler)
 		mux.HandleFunc("POST /api/v1/projects/{id}/toolchain/detect", api.detectProjectToolchainHandler)
+	}
+	if toolchainAssistant != nil {
+		mux.HandleFunc("POST /api/v1/projects/{id}/toolchain/assistant-sessions", api.startToolchainAssistantHandler)
+		mux.HandleFunc("GET /api/v1/projects/{id}/toolchain/assistant-sessions/{sessionID}", api.getToolchainAssistantHandler)
+		mux.HandleFunc("POST /api/v1/projects/{id}/toolchain/assistant-sessions/{sessionID}/messages", api.replyToolchainAssistantHandler)
+		mux.HandleFunc("POST /api/v1/projects/{id}/toolchain/assistant-sessions/{sessionID}/apply", api.applyToolchainAssistantHandler)
 	}
 	mux.HandleFunc(
 		"POST /api/v1/projects",
