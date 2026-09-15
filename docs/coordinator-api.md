@@ -773,6 +773,13 @@ project-owned private Forgejo repository is deleted last; only after Forgejo
 confirms deletion (or that an earlier attempt already deleted it) does the
 coordinator transactionally remove the project row and complete its tombstone.
 
+Legacy databases may contain more than one project bound to the same Forgejo
+repository. In that case the repository is not exclusively owned by the
+deleted project and is preserved while another project references it. The
+coordinator still deletes the selected project's uniquely identified feature
+branches and draft PRs, and refuses deletion if any branch or PR identity is
+shared. Deleting the final project referencing that repository removes it.
+
 An imported project's host filesystem path is intentionally unknown to the
 coordinator. The desktop `delete_project` command wraps this endpoint and,
 after coordinator success, atomically removes that project's entry from the

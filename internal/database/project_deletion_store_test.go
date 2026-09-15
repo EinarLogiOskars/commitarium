@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -11,6 +12,7 @@ import (
 	"github.com/EinarLogiOskars/commitarium/internal/project"
 	"github.com/EinarLogiOskars/commitarium/internal/projectdeletion"
 	"github.com/EinarLogiOskars/commitarium/internal/workorder"
+	"github.com/EinarLogiOskars/commitarium/internal/workspace"
 )
 
 func TestProjectDeletionStorePurgesOwnedDatabaseGraphAndKeepsOtherProject(t *testing.T) {
@@ -129,7 +131,7 @@ func TestProjectDeletionStoreRefusesActiveRunUnlessForcedAndFencesNewWork(t *tes
 	}
 }
 
-func TestProjectDeletionStoreRejectsRepositorySharedByAnotherProject(t *testing.T) {
+func TestProjectDeletionStorePreservesRepositorySharedByAnotherProject(t *testing.T) {
 	store, db := newProjectDeletionTestStore(t)
 	if _, err := db.ExecContext(t.Context(), `
 		INSERT INTO projects (
@@ -144,8 +146,53 @@ func TestProjectDeletionStoreRejectsRepositorySharedByAnotherProject(t *testing.
 		FROM projects WHERE id = 'prj_delete'`); err != nil {
 		t.Fatalf("create conflicting project: %v", err)
 	}
-	if _, err := store.BeginDeletion(t.Context(), "prj_delete", "delete-shared", false); !errors.Is(err, projectdeletion.ErrUnsafeArtifacts) {
-		t.Fatalf("expected shared repository conflict, got %v", err)
+	deletion, err := store.BeginDeletion(t.Context(), "prj_delete", "delete-shared", false)
+	if err != nil {
+		t.Fatalf("begin shared-repository deletion: %v", err)
+	}
+	if deletion.Repository != nil {
+		t.Fatalf("shared repository was scheduled for deletion: %+v", deletion.Repository)
+	}
+	featureDeletion := workorder.NewService(NewFeatureDeletionStore(db), nil, nil)
+	if _, err := featureDeletion.Delete(t.Context(), "prj_delete", "fea_delete"); err != nil {
+		t.Fatalf("delete project feature: %v", err)
+	}
+	if err := store.FinishDeletion(t.Context(), "prj_delete", "delete-shared"); err != nil {
+		t.Fatalf("finish shared-repository deletion: %v", err)
+	}
+	if _, err := NewProjectStore(db).GetByID(t.Context(), "prj_other"); err != nil {
+		t.Fatalf("project retaining repository was changed: %v", err)
+	}
+}
+
+func TestProjectDeletionStoreRejectsCrossProjectBranchIdentity(t *testing.T) {
+	store, db := newProjectDeletionTestStore(t)
+	now := time.Now().UTC()
+	projects := NewProjectStore(db)
+	createDeletionTestProject(t, projects, "prj_other", "delete-repo", now)
+	if err := NewFeatureStore(db).Create(t.Context(), feature.Feature{
+		ID: "fea_other", ProjectID: "prj_other", Title: "Other", State: feature.StateDraft,
+		CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("create other feature: %v", err)
+	}
+	workspaces := NewWorkspaceStore(db)
+	for _, item := range []workspace.Workspace{
+		{ID: "wsp_delete", ProjectID: "prj_delete", FeatureID: "fea_delete",
+			RepositoryOwner: "owner", RepositoryName: "delete-repo", BaseBranch: "main",
+			Branch: "commitarium/shared", BaseCommitID: strings.Repeat("a", 40),
+			Status: workspace.StatusPreparing, CreatedAt: now, UpdatedAt: now},
+		{ID: "wsp_other", ProjectID: "prj_other", FeatureID: "fea_other",
+			RepositoryOwner: "owner", RepositoryName: "delete-repo", BaseBranch: "main",
+			Branch: "COMMITARIUM/SHARED", BaseCommitID: strings.Repeat("a", 40),
+			Status: workspace.StatusPreparing, CreatedAt: now, UpdatedAt: now},
+	} {
+		if _, created, err := workspaces.Reserve(t.Context(), item); err != nil || !created {
+			t.Fatalf("reserve workspace %s: created=%t err=%v", item.ID, created, err)
+		}
+	}
+	if _, err := store.BeginDeletion(t.Context(), "prj_delete", "delete-collision", false); !errors.Is(err, projectdeletion.ErrUnsafeArtifacts) {
+		t.Fatalf("expected cross-project branch conflict, got %v", err)
 	}
 }
 
