@@ -1847,3 +1847,11 @@ button.danger:not(.ghost) {
 .detect .row {
   margin-top: 4px;
 }
+
+/* Create form: stack quick-pick */
+.create__stack {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+}
