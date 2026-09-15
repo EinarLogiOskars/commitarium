@@ -405,7 +405,8 @@ func (session *session) completedItem(item threadItem) ([]worker.Event, error) {
 			session.outputContract == worker.OutputContractImplementationLead ||
 			session.outputContract == worker.OutputContractImplementationReview ||
 			session.outputContract == worker.OutputContractImplementationReadiness ||
-			session.outputContract == worker.OutputContractIntervention {
+			session.outputContract == worker.OutputContractIntervention ||
+			session.outputContract == worker.OutputContractToolchainSetup {
 			session.mu.Lock()
 			session.pendingMessage = text
 			session.mu.Unlock()

@@ -80,7 +80,14 @@ func OutputJSONSchema(contract OutputContract) any {
 				"action":  map[string]any{"type": "string", "enum": []string{"ask", "propose"}},
 				"message": map[string]any{"type": "string"},
 				"tools": map[string]any{
-					"type": "object", "additionalProperties": map[string]any{"type": "string"},
+					"type": "array",
+					"items": objectSchema(
+						map[string]any{
+							"name":    map[string]any{"type": "string"},
+							"version": map[string]any{"type": "string"},
+						},
+						[]string{"name", "version"},
+					),
 				},
 				"services": map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
 			},
@@ -249,10 +256,13 @@ func ResolveStructuredOutput(
 
 	case OutputContractToolchainSetup:
 		var response struct {
-			Action   string            `json:"action"`
-			Message  string            `json:"message"`
-			Tools    map[string]string `json:"tools"`
-			Services []string          `json:"services"`
+			Action  string `json:"action"`
+			Message string `json:"message"`
+			Tools   []struct {
+				Name    string `json:"name"`
+				Version string `json:"version"`
+			} `json:"tools"`
+			Services []string `json:"services"`
 		}
 		if err := decodeStructuredOutput(raw, &response); err != nil {
 			return StructuredOutput{}, err
@@ -272,7 +282,19 @@ func ResolveStructuredOutput(
 		if response.Action != "propose" || len(response.Tools) == 0 {
 			return StructuredOutput{}, invalidStructuredOutput("toolchain setup proposal has no tools")
 		}
-		proposal := &ToolchainProposal{Tools: response.Tools, Services: response.Services}
+		tools := make(map[string]string, len(response.Tools))
+		for _, configured := range response.Tools {
+			name := strings.TrimSpace(configured.Name)
+			version := strings.TrimSpace(configured.Version)
+			if name == "" || version == "" {
+				return StructuredOutput{}, invalidStructuredOutput("toolchain setup proposal has an incomplete tool")
+			}
+			if _, exists := tools[name]; exists {
+				return StructuredOutput{}, invalidStructuredOutput("toolchain setup proposal repeats tool %q", name)
+			}
+			tools[name] = version
+		}
+		proposal := &ToolchainProposal{Tools: tools, Services: response.Services}
 		return StructuredOutput{
 			Event: Event{Type: EventMessage, Text: response.Message}, Disposition: DispositionSucceeded,
 			ToolchainProposal: proposal,

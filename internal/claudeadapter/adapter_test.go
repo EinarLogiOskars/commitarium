@@ -247,6 +247,33 @@ func TestAdapterReturnsStructuredImplementationReview(t *testing.T) {
 	}
 }
 
+func TestAdapterReturnsStructuredToolchainProposal(t *testing.T) {
+	adapter := testAdapter(t, "structured-toolchain", "Help choose a project stack")
+	request := adapter.request("att_claude_toolchain", "Help choose a project stack")
+	request.Role = worker.RoleLead
+	request.LaunchEnvironment.Role = worker.RoleLead
+	request.OutputContract = worker.OutputContractToolchainSetup
+	session, err := adapter.Start(t.Context(), request)
+	if err != nil {
+		t.Fatalf("start structured Claude toolchain turn: %v", err)
+	}
+	events := collectEvents(session)
+	result, err := session.Wait(timeoutContext(t, 3*time.Second))
+	if err != nil || result.Summary != "Use Python and Node." ||
+		result.Disposition != worker.DispositionSucceeded || result.ToolchainProposal == nil ||
+		!reflect.DeepEqual(result.ToolchainProposal.Tools, map[string]string{
+			"python": "3.14.7", "node": "24.21.0",
+		}) {
+		t.Fatalf("structured toolchain result=%+v error=%v", result, err)
+	}
+	if observed := <-events; !slices.Equal(observed, []worker.Event{
+		{Type: worker.EventActivity, Text: "Claude started working."},
+		{Type: worker.EventMessage, Text: "Use Python and Node."},
+	}) {
+		t.Fatalf("structured toolchain events = %+v", observed)
+	}
+}
+
 func TestAdapterMapsExplicitTurnFailure(t *testing.T) {
 	adapter := testAdapter(t, "failed", "Fail deterministically")
 	session, err := adapter.Start(t.Context(), adapter.request("att_claude_failed", "Fail deterministically"))
@@ -406,7 +433,7 @@ func TestClaudeCLIHelper(t *testing.T) {
 		os.Exit(83)
 	}
 	schemaPresent := slices.Contains(arguments, "--json-schema")
-	if (mode == "structured-plan" || mode == "structured-review" || mode == "missing-structured-output") != schemaPresent {
+	if (mode == "structured-plan" || mode == "structured-review" || mode == "structured-toolchain" || mode == "missing-structured-output") != schemaPresent {
 		os.Exit(84)
 	}
 	if mode == "identity-before-init" {
@@ -498,6 +525,19 @@ func TestClaudeCLIHelper(t *testing.T) {
 			"structured_output": map[string]any{
 				"action": "changes_requested", "summary": "The implementation misses the documented failure case.",
 				"commit_id": "0123456789abcdef0123456789abcdef01234567", "pull_request_number": 7, "review_id": 11,
+			},
+		})
+	case "structured-toolchain":
+		helperWrite(writer, map[string]any{
+			"type": "result", "subtype": "success", "session_id": sessionID,
+			"is_error": false,
+			"structured_output": map[string]any{
+				"action": "propose", "message": "Use Python and Node.",
+				"tools": []any{
+					map[string]any{"name": "python", "version": "3.14.7"},
+					map[string]any{"name": "node", "version": "24.21.0"},
+				},
+				"services": []any{},
 			},
 		})
 	case "failed":
