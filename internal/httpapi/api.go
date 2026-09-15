@@ -9,6 +9,7 @@ import (
 	"github.com/EinarLogiOskars/commitarium/internal/feature"
 	"github.com/EinarLogiOskars/commitarium/internal/modelcatalog"
 	"github.com/EinarLogiOskars/commitarium/internal/project"
+	"github.com/EinarLogiOskars/commitarium/internal/toolchain"
 	"github.com/EinarLogiOskars/commitarium/internal/worker"
 	"github.com/EinarLogiOskars/commitarium/internal/workflow"
 	"github.com/EinarLogiOskars/commitarium/internal/workorder"
@@ -166,6 +167,12 @@ type ModelCatalogService interface {
 	ValidateSelection(context.Context, project.AgentProviders, project.AgentModels) error
 }
 
+type ToolchainService interface {
+	Get(context.Context, string) (toolchain.Manifest, error)
+	Configure(context.Context, string, toolchain.Manifest) (toolchain.Manifest, error)
+	Detect(context.Context, string) (toolchain.Suggestion, error)
+}
+
 type RealWorkflowStarter interface {
 	StartPlanning(
 		ctx context.Context,
@@ -206,6 +213,7 @@ type API struct {
 	realWorkflow    RealWorkflowStarter
 	featureDeletion FeatureDeletionService
 	modelCatalog    ModelCatalogService
+	toolchains      ToolchainService
 }
 
 func New(
@@ -277,10 +285,11 @@ func NewWithWorkspaceRealWorkflowDeletionAndModels(
 	realWorkflow RealWorkflowStarter,
 	featureDeletion FeatureDeletionService,
 	modelCatalog ModelCatalogService,
+	toolchains ToolchainService,
 ) http.Handler {
 	return newAPI(
 		projects, features, workflow, executionService, controller, starter,
-		workspaces, realWorkflow, featureDeletion, modelCatalog,
+		workspaces, realWorkflow, featureDeletion, modelCatalog, toolchains,
 	)
 }
 
@@ -295,7 +304,12 @@ func newAPI(
 	realWorkflow RealWorkflowStarter,
 	featureDeletion FeatureDeletionService,
 	modelCatalog ModelCatalogService,
+	toolchains ...ToolchainService,
 ) http.Handler {
+	var toolchainService ToolchainService
+	if len(toolchains) > 0 {
+		toolchainService = toolchains[0]
+	}
 	api := &API{
 		projects:        projects,
 		features:        features,
@@ -307,6 +321,7 @@ func newAPI(
 		realWorkflow:    realWorkflow,
 		featureDeletion: featureDeletion,
 		modelCatalog:    modelCatalog,
+		toolchains:      toolchainService,
 	}
 	api.projectImporter, _ = projects.(ProjectImporter)
 
@@ -315,6 +330,12 @@ func newAPI(
 	if modelCatalog != nil {
 		mux.HandleFunc("GET /api/v1/models", api.listModelsHandler)
 		mux.HandleFunc("POST /api/v1/models/refresh", api.refreshModelsHandler)
+	}
+	if toolchainService != nil {
+		mux.HandleFunc("GET /api/v1/toolchain-presets", api.listToolchainPresetsHandler)
+		mux.HandleFunc("GET /api/v1/projects/{id}/toolchain", api.getProjectToolchainHandler)
+		mux.HandleFunc("PUT /api/v1/projects/{id}/toolchain", api.configureProjectToolchainHandler)
+		mux.HandleFunc("POST /api/v1/projects/{id}/toolchain/detect", api.detectProjectToolchainHandler)
 	}
 	mux.HandleFunc(
 		"POST /api/v1/projects",

@@ -5,9 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
+	"time"
 
+	"github.com/EinarLogiOskars/commitarium/internal/toolchain"
 	"github.com/EinarLogiOskars/commitarium/internal/worker"
 	"github.com/EinarLogiOskars/commitarium/internal/workerhttp"
 )
@@ -16,8 +20,11 @@ var (
 	ErrInvalidEnvironmentResolver = errors.New("invalid worker environment resolver")
 	ErrProfileUnavailable         = errors.New("worker agent profile is unavailable")
 	ErrWorkspaceUnavailable       = errors.New("worker workspace is unavailable")
+	ErrToolchainUnavailable       = errors.New("project toolchain is unavailable")
 	ErrConfigurationMismatch      = errors.New("worker launch environment does not match the assignment")
 )
+
+const defaultToolchainInstallTimeout = 30 * time.Minute
 
 // EnvironmentResolver turns the coordinator's non-secret assignment identity
 // into process launch data that exists only inside the worker trust boundary.
@@ -46,6 +53,9 @@ type RootedEnvironmentResolver struct {
 	workspaceRoot  string
 	variables      []string
 	roleVariables  map[worker.Role][]string
+	toolchainRoot  string
+	miseExecutable string
+	installTimeout time.Duration
 }
 
 type RootedEnvironmentResolverConfig struct {
@@ -53,6 +63,9 @@ type RootedEnvironmentResolverConfig struct {
 	WorkspaceRoot  string
 	Variables      []string
 	RoleVariables  map[worker.Role][]string
+	ToolchainRoot  string
+	MiseExecutable string
+	InstallTimeout time.Duration
 }
 
 func NewRootedEnvironmentResolver(
@@ -91,11 +104,29 @@ func NewRootedEnvironmentResolver(
 		}
 		roleVariables[role] = cloneVariables(configured)
 	}
+	toolchainRoot := strings.TrimSpace(config.ToolchainRoot)
+	if toolchainRoot != "" {
+		toolchainRoot, err = canonicalDirectory(toolchainRoot)
+		if err != nil {
+			return nil, fmt.Errorf("%w: toolchain root: %v", ErrInvalidEnvironmentResolver, err)
+		}
+	}
+	miseExecutable := strings.TrimSpace(config.MiseExecutable)
+	if miseExecutable == "" {
+		miseExecutable = "mise"
+	}
+	installTimeout := config.InstallTimeout
+	if installTimeout <= 0 {
+		installTimeout = defaultToolchainInstallTimeout
+	}
 	return &RootedEnvironmentResolver{
 		agentProfileID: config.AgentProfileID,
 		workspaceRoot:  root,
 		variables:      variables,
 		roleVariables:  roleVariables,
+		toolchainRoot:  toolchainRoot,
+		miseExecutable: miseExecutable,
+		installTimeout: installTimeout,
 	}, nil
 }
 
@@ -133,11 +164,94 @@ func (resolver *RootedEnvironmentResolver) Resolve(
 	}
 	variables := cloneVariables(resolver.variables)
 	variables = append(variables, resolver.roleVariables[worker.Role(assignment.Role)]...)
+	if resolver.toolchainRoot != "" {
+		variables, err = resolver.prepareToolchain(ctx, assignment.ProjectID, directory, variables)
+		if err != nil {
+			return worker.LaunchEnvironment{}, err
+		}
+	}
 	environment := launchEnvironment(assignment, directory, variables)
 	if err := environment.Validate(); err != nil {
 		return worker.LaunchEnvironment{}, fmt.Errorf("%w: %v", ErrConfigurationMismatch, err)
 	}
 	return environment, nil
+}
+
+func (resolver *RootedEnvironmentResolver) prepareToolchain(
+	ctx context.Context,
+	projectID string,
+	workingDirectory string,
+	variables []string,
+) ([]string, error) {
+	projectRoot := filepath.Join(resolver.toolchainRoot, "projects", projectID)
+	if !directoryWithin(resolver.toolchainRoot, projectRoot) {
+		return nil, fmt.Errorf("%w: project identity escapes the toolchain root", ErrConfigurationMismatch)
+	}
+	if err := os.MkdirAll(projectRoot, 0o700); err != nil {
+		return nil, fmt.Errorf("%w: project toolchain directory cannot be created", ErrToolchainUnavailable)
+	}
+	configPath := filepath.Join(projectRoot, "mise.toml")
+	dataPath := filepath.Join(resolver.toolchainRoot, "data")
+	variables = setVariable(variables, "PATH", filepath.Join(dataPath, "shims")+":/usr/local/bin:/usr/bin:/bin")
+	for name, value := range map[string]string{
+		"COMMITARIUM_TOOLCHAIN_CONFIG":          configPath,
+		"MISE_CACHE_DIR":                        filepath.Join(resolver.toolchainRoot, "cache"),
+		"MISE_DATA_DIR":                         dataPath,
+		"MISE_GLOBAL_CONFIG_FILE":               configPath,
+		"MISE_GLOBAL_CONFIG_ROOT":               projectRoot,
+		"MISE_IGNORED_CONFIG_PATHS":             workingDirectory,
+		"MISE_OVERRIDE_TOOL_VERSIONS_FILENAMES": "none",
+		"MISE_PYTHON_COMPILE":                   "0",
+		"MISE_SAFE":                             "1",
+		"MISE_STATE_DIR":                        filepath.Join(resolver.toolchainRoot, "state"),
+		"MISE_JOBS":                             "4",
+	} {
+		variables = setVariable(variables, name, value)
+	}
+	info, err := os.Stat(configPath)
+	if errors.Is(err, os.ErrNotExist) {
+		return variables, nil
+	}
+	if err != nil || !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("%w: generated mise config cannot be read", ErrToolchainUnavailable)
+	}
+	lock, err := os.OpenFile(configPath+".lock", os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("%w: project toolchain lock cannot be opened", ErrToolchainUnavailable)
+	}
+	defer lock.Close()
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
+		return nil, fmt.Errorf("%w: project toolchain cannot be locked", ErrToolchainUnavailable)
+	}
+	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
+	if configured, err := toolchain.ReadGeneratedConfig(configPath); err != nil || len(configured) == 0 {
+		return nil, fmt.Errorf("%w: generated mise config is unsafe or empty", ErrToolchainUnavailable)
+	}
+	installContext, cancel := context.WithTimeout(ctx, resolver.installTimeout)
+	defer cancel()
+	command := exec.CommandContext(installContext, resolver.miseExecutable, "install", "--yes")
+	command.Dir = workingDirectory
+	command.Env = variables
+	command.Stdout = os.Stdout
+	command.Stderr = os.Stderr
+	if err := command.Run(); err != nil {
+		if errors.Is(installContext.Err(), context.DeadlineExceeded) {
+			return nil, fmt.Errorf("%w: installation exceeded %s", ErrToolchainUnavailable, resolver.installTimeout)
+		}
+		return nil, fmt.Errorf("%w: mise install failed: %v", ErrToolchainUnavailable, err)
+	}
+	return variables, nil
+}
+
+func setVariable(variables []string, name string, value string) []string {
+	prefix := name + "="
+	for index, variable := range variables {
+		if strings.HasPrefix(variable, prefix) {
+			variables[index] = prefix + value
+			return variables
+		}
+	}
+	return append(variables, prefix+value)
 }
 
 func launchEnvironment(
@@ -173,6 +287,8 @@ func environmentFailure(err error) (workerhttp.ErrorCode, string, bool) {
 		return workerhttp.ErrorProfileUnavailable, "assigned agent profile is unavailable", true
 	case errors.Is(err, ErrWorkspaceUnavailable):
 		return workerhttp.ErrorWorkspaceUnavailable, "assigned workspace is unavailable", true
+	case errors.Is(err, ErrToolchainUnavailable):
+		return workerhttp.ErrorToolchainUnavailable, "assigned project toolchain is unavailable", true
 	case errors.Is(err, ErrConfigurationMismatch):
 		return workerhttp.ErrorConfigurationMismatch, "launch environment does not match the requested assignment", false
 	default:

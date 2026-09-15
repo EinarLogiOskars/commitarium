@@ -684,6 +684,7 @@ func (code ErrorCode) IsValid() bool {
 		ErrorProviderSessionMissing,
 		ErrorProfileUnavailable,
 		ErrorWorkspaceUnavailable,
+		ErrorToolchainUnavailable,
 		ErrorModelCatalogUnavailable,
 		ErrorConfigurationMismatch,
 		ErrorIndeterminateState,

@@ -63,6 +63,7 @@ type codexConfig struct {
 	forgejoRole       worker.Role
 	gitAuthorName     string
 	gitAuthorEmail    string
+	toolchainRoot     string
 }
 
 type claudeConfig struct {
@@ -79,6 +80,7 @@ type claudeConfig struct {
 	forgejoRole       worker.Role
 	gitAuthorName     string
 	gitAuthorEmail    string
+	toolchainRoot     string
 }
 
 type runtime struct {
@@ -353,6 +355,10 @@ func loadCodexConfig(getenv func(string) string) (codexConfig, error) {
 	if err != nil {
 		return codexConfig{}, fmt.Errorf("COMMITARIUM_CODEX_AVAILABLE_MODELS: %w", err)
 	}
+	toolchainRoot := strings.TrimSpace(getenv("COMMITARIUM_TOOLCHAIN_ROOT"))
+	if toolchainRoot != "" && !filepath.IsAbs(toolchainRoot) {
+		return codexConfig{}, errors.New("COMMITARIUM_TOOLCHAIN_ROOT must be absolute")
+	}
 	return codexConfig{
 		executable: executable, model: strings.TrimSpace(getenv("COMMITARIUM_CODEX_MODEL")),
 		availableModels: availableModels,
@@ -361,6 +367,7 @@ func loadCodexConfig(getenv func(string) string) (codexConfig, error) {
 		forgejoURL: strings.TrimRight(forgejoURL, "/"), forgejoTokenFile: forgejoTokenFile,
 		forgejoLogin: forgejoLogin, forgejoRole: forgejoRole,
 		gitAuthorName: gitAuthorName, gitAuthorEmail: gitAuthorEmail,
+		toolchainRoot: toolchainRoot,
 	}, nil
 }
 
@@ -447,6 +454,10 @@ func loadClaudeConfig(getenv func(string) string) (claudeConfig, error) {
 	if err != nil {
 		return claudeConfig{}, fmt.Errorf("COMMITARIUM_CLAUDE_AVAILABLE_MODELS: %w", err)
 	}
+	toolchainRoot := strings.TrimSpace(getenv("COMMITARIUM_TOOLCHAIN_ROOT"))
+	if toolchainRoot != "" && !filepath.IsAbs(toolchainRoot) {
+		return claudeConfig{}, errors.New("COMMITARIUM_TOOLCHAIN_ROOT must be absolute")
+	}
 	return claudeConfig{
 		executable: executable, model: strings.TrimSpace(getenv("COMMITARIUM_CLAUDE_MODEL")),
 		availableModels: availableModels,
@@ -455,6 +466,7 @@ func loadClaudeConfig(getenv func(string) string) (claudeConfig, error) {
 		forgejoURL: strings.TrimRight(forgejoURL, "/"), forgejoTokenFile: forgejoTokenFile,
 		forgejoLogin: forgejoLogin, forgejoRole: forgejoRole,
 		gitAuthorName: gitAuthorName, gitAuthorEmail: gitAuthorEmail,
+		toolchainRoot: toolchainRoot,
 	}, nil
 }
 
@@ -475,6 +487,7 @@ func newCodexRuntime(config codexConfig) (runtime, error) {
 		workerservice.RootedEnvironmentResolverConfig{
 			AgentProfileID: config.profileID,
 			WorkspaceRoot:  config.workspaceRoot,
+			ToolchainRoot:  config.toolchainRoot,
 			Variables: []string{
 				"CODEX_HOME=" + config.providerStatePath,
 				"HOME=" + config.providerStatePath,
@@ -575,6 +588,7 @@ func newClaudeRuntime(config claudeConfig) (runtime, error) {
 		workerservice.RootedEnvironmentResolverConfig{
 			AgentProfileID: config.profileID,
 			WorkspaceRoot:  config.workspaceRoot,
+			ToolchainRoot:  config.toolchainRoot,
 			Variables: []string{
 				"CLAUDE_CONFIG_DIR=" + config.providerStatePath,
 				"HOME=" + config.providerStatePath,

@@ -21,6 +21,7 @@ import (
 	"github.com/EinarLogiOskars/commitarium/internal/orchestration"
 	"github.com/EinarLogiOskars/commitarium/internal/project"
 	"github.com/EinarLogiOskars/commitarium/internal/secretfile"
+	"github.com/EinarLogiOskars/commitarium/internal/toolchain"
 	"github.com/EinarLogiOskars/commitarium/internal/workerhttp"
 	"github.com/EinarLogiOskars/commitarium/internal/workeringest"
 	"github.com/EinarLogiOskars/commitarium/internal/workflow"
@@ -33,11 +34,13 @@ const (
 	realAgentsRunnerMode          = "real_agents"
 	legacyRealCodexLeadRunnerMode = "real_codex_lead"
 	defaultWorkerRequestTimeout   = 10 * time.Second
+	defaultAttemptStartTimeout    = 35 * time.Minute
 	defaultForgejoURL             = "http://forgejo:3000"
 	defaultForgejoHostURL         = "http://127.0.0.1:3001"
 	defaultForgejoTokenFile       = "/run/commitarium-config/forgejo-token"
 	defaultForgejoTimeout         = 10 * time.Second
 	defaultWorkspaceRoot          = "/workspaces"
+	defaultToolchainRoot          = "/var/lib/commitarium-toolchains"
 )
 
 type config struct {
@@ -61,12 +64,14 @@ type config struct {
 	claudeForgejoAuthor          string
 	claudeReviewerForgejoAuthor  string
 	workerRequestTimeout         time.Duration
+	attemptStartTimeout          time.Duration
 	forgejoURL                   string
 	forgejoOwner                 string
 	forgejoHostURL               string
 	forgejoTokenFile             string
 	forgejoTimeout               time.Duration
 	workspaceRoot                string
+	toolchainRoot                string
 	gitExecutable                string
 }
 
@@ -110,12 +115,14 @@ func loadConfig(getenv func(string) string) (config, error) {
 		databasePath: databasePath, runnerMode: runnerMode,
 		simulatedStepDelay:          simulatedStepDelay,
 		workerRequestTimeout:        defaultWorkerRequestTimeout,
+		attemptStartTimeout:         defaultAttemptStartTimeout,
 		forgejoURL:                  defaultForgejoURL,
 		forgejoOwner:                "commitarium_admin",
 		forgejoHostURL:              defaultForgejoHostURL,
 		forgejoTokenFile:            defaultForgejoTokenFile,
 		forgejoTimeout:              defaultForgejoTimeout,
 		workspaceRoot:               defaultWorkspaceRoot,
+		toolchainRoot:               defaultToolchainRoot,
 		gitExecutable:               "git",
 		codexForgejoAuthor:          "codex-lead",
 		codexReviewerForgejoAuthor:  "codex-reviewer",
@@ -143,6 +150,9 @@ func loadConfig(getenv func(string) string) (config, error) {
 	}
 	if value := strings.TrimSpace(getenv("COMMITARIUM_WORKSPACE_ROOT")); value != "" {
 		loaded.workspaceRoot = value
+	}
+	if value := strings.TrimSpace(getenv("COMMITARIUM_TOOLCHAIN_ROOT")); value != "" {
+		loaded.toolchainRoot = value
 	}
 	if value := strings.TrimSpace(getenv("COMMITARIUM_GIT_EXECUTABLE")); value != "" {
 		loaded.gitExecutable = value
@@ -218,6 +228,12 @@ func loadConfig(getenv func(string) string) (config, error) {
 				return config{}, errors.New("COMMITARIUM_CODEX_WORKER_REQUEST_TIMEOUT must be a positive duration")
 			}
 		}
+		if value := strings.TrimSpace(getenv("COMMITARIUM_WORKER_ATTEMPT_START_TIMEOUT")); value != "" {
+			loaded.attemptStartTimeout, err = time.ParseDuration(value)
+			if err != nil || loaded.attemptStartTimeout <= 0 {
+				return config{}, errors.New("COMMITARIUM_WORKER_ATTEMPT_START_TIMEOUT must be a positive duration")
+			}
+		}
 	}
 	return loaded, nil
 }
@@ -264,6 +280,10 @@ func run(ctx context.Context, coordinatorConfig config) error {
 	projectService := project.NewServiceWithRepositoryServices(
 		projectStore, forgejoClient, projectImporter, forgejoClient, projectImporter,
 	)
+	toolchainService, err := toolchain.NewManager(coordinatorConfig.toolchainRoot, projectService)
+	if err != nil {
+		return fmt.Errorf("create project toolchain service: %w", err)
+	}
 	featureStore := coordinatordatabase.NewFeatureStore(db)
 	featureService := feature.NewService(featureStore, projectService)
 	workspaceStore := coordinatordatabase.NewWorkspaceStore(db)
@@ -305,33 +325,37 @@ func run(ctx context.Context, coordinatorConfig config) error {
 		runRecoverer = simulatedStarter
 	case realAgentsRunnerMode:
 		leadClient, err := workerhttp.NewClient(workerhttp.ClientConfig{
-			BaseURL:        coordinatorConfig.codexWorkerURL,
-			BearerToken:    coordinatorConfig.codexWorkerToken,
-			RequestTimeout: coordinatorConfig.workerRequestTimeout,
+			BaseURL:             coordinatorConfig.codexWorkerURL,
+			BearerToken:         coordinatorConfig.codexWorkerToken,
+			RequestTimeout:      coordinatorConfig.workerRequestTimeout,
+			AttemptStartTimeout: coordinatorConfig.attemptStartTimeout,
 		})
 		if err != nil {
 			return fmt.Errorf("create Codex lead worker client: %w", err)
 		}
 		reviewerClient, err := workerhttp.NewClient(workerhttp.ClientConfig{
-			BaseURL:        coordinatorConfig.codexReviewerWorkerURL,
-			BearerToken:    coordinatorConfig.codexReviewerWorkerToken,
-			RequestTimeout: coordinatorConfig.workerRequestTimeout,
+			BaseURL:             coordinatorConfig.codexReviewerWorkerURL,
+			BearerToken:         coordinatorConfig.codexReviewerWorkerToken,
+			RequestTimeout:      coordinatorConfig.workerRequestTimeout,
+			AttemptStartTimeout: coordinatorConfig.attemptStartTimeout,
 		})
 		if err != nil {
 			return fmt.Errorf("create Codex reviewer worker client: %w", err)
 		}
 		claudeLeadClient, err := workerhttp.NewClient(workerhttp.ClientConfig{
-			BaseURL:        coordinatorConfig.claudeWorkerURL,
-			BearerToken:    coordinatorConfig.claudeWorkerToken,
-			RequestTimeout: coordinatorConfig.workerRequestTimeout,
+			BaseURL:             coordinatorConfig.claudeWorkerURL,
+			BearerToken:         coordinatorConfig.claudeWorkerToken,
+			RequestTimeout:      coordinatorConfig.workerRequestTimeout,
+			AttemptStartTimeout: coordinatorConfig.attemptStartTimeout,
 		})
 		if err != nil {
 			return fmt.Errorf("create Claude lead worker client: %w", err)
 		}
 		claudeReviewerClient, err := workerhttp.NewClient(workerhttp.ClientConfig{
-			BaseURL:        coordinatorConfig.claudeReviewerWorkerURL,
-			BearerToken:    coordinatorConfig.claudeReviewerWorkerToken,
-			RequestTimeout: coordinatorConfig.workerRequestTimeout,
+			BaseURL:             coordinatorConfig.claudeReviewerWorkerURL,
+			BearerToken:         coordinatorConfig.claudeReviewerWorkerToken,
+			RequestTimeout:      coordinatorConfig.workerRequestTimeout,
+			AttemptStartTimeout: coordinatorConfig.attemptStartTimeout,
 		})
 		if err != nil {
 			return fmt.Errorf("create Claude reviewer worker client: %w", err)
@@ -440,6 +464,7 @@ func run(ctx context.Context, coordinatorConfig config) error {
 		realWorkflowStarter,
 		featureDeletionService,
 		modelCatalogService,
+		toolchainService,
 	)
 
 	log.Print("Listening...")

@@ -115,7 +115,7 @@ func statusForErrorCode(code ErrorCode) int {
 		ErrorConfigurationMismatch,
 		ErrorIndeterminateState:
 		return http.StatusConflict
-	case ErrorProfileUnavailable, ErrorWorkspaceUnavailable, ErrorModelCatalogUnavailable:
+	case ErrorProfileUnavailable, ErrorWorkspaceUnavailable, ErrorToolchainUnavailable, ErrorModelCatalogUnavailable:
 		return http.StatusServiceUnavailable
 	case ErrorRedactionFailed, ErrorInvalidEventStream, ErrorInternal:
 		return http.StatusInternalServerError

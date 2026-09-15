@@ -2750,6 +2750,7 @@ func implementationInstructions(
 		"unexpected user work: do not reset, clean, overwrite, or silently discard it. If the state " +
 		"is missing, contradictory, or ambiguous, stop and explain the problem without making changes. " +
 		"Otherwise implement the accepted goal and agreed plan and run the relevant available tests. " +
+		implementationToolchainInstructions +
 		"When you decide the implementation is ready for independent review, commit all intended work " +
 		"on the assigned feature branch, push that exact HEAD to the 'commitarium' remote, and post one " +
 		"Forgejo pull-request comment using the worker-provided Forgejo URL and token-file environment " +
@@ -2787,7 +2788,8 @@ func implementationContinuationInstructions(
 		"conflict, an external side effect may or may not have happened, or the guidance would change " +
 		"the accepted goal or agreed plan, stop and explain the problem without making further changes. " +
 		"Otherwise apply the user's guidance within the accepted plan, continue the implementation, and " +
-		"run the relevant available tests. When you decide the result is ready for independent review, " +
+		"run the relevant available tests. " + implementationToolchainInstructions +
+		"When you decide the result is ready for independent review, " +
 		"commit the intended work, push the exact HEAD to the 'commitarium' remote, and post one Forgejo " +
 		"PR comment using the worker-provided URL and token-file environment variables. Never print, log, " +
 		"commit, or include the token in a URL. The comment must contain exactly the audit " +
@@ -2810,6 +2812,11 @@ func implementationContinuationInstructions(
 func implementationPublicationMarker(attemptID string) string {
 	return workspace.ImplementationPublicationInitial.Marker(attemptID)
 }
+
+const implementationToolchainInstructions = "If an additional supported language runtime is required, " +
+	"run 'commitarium-toolchain require <tool>@<exact-version>' with a generous timeout and wait for it " +
+	"to finish; its shim becomes available on PATH immediately. Do not use apt, mise use, floating versions " +
+	"such as latest, or repository mise configuration to provision tools. "
 
 func (starter *RemoteLeadStarter) startLeadResponse(
 	ctx context.Context,
@@ -4006,7 +4013,8 @@ func implementationCorrectionInstructions(
 		"changes to the exact commit below. Inspect before modifying anything: reconcile the working " +
 		"directory, branch, Git HEAD, status, diff, pull-request head, and existing review with these durable " +
 		"facts. Do not repeat completed work or discard unexpected user changes. Address every material review " +
-		"finding while preserving the accepted goal and agreed plan, then run the relevant tests. When the " +
+		"finding while preserving the accepted goal and agreed plan, then run the relevant tests. " +
+		implementationToolchainInstructions + "When the " +
 		"correction is ready, create a new commit descended from the reviewed commit, push that exact HEAD to " +
 		"the 'commitarium' remote, and post one pull-request comment using the worker-provided Forgejo URL and " +
 		"token-file environment variables. Never print, log, commit, or include the token in a URL. The comment " +
