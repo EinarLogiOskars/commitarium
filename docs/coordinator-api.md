@@ -491,9 +491,11 @@ ignore repository mise configuration and activate only this generated file in
 safe mode.
 
 `GET /api/v1/toolchain-presets` returns curated picker choices with explicit
-versions. The current presets are Python, Node.js LTS, Java with Gradle, Java
-with Maven, Go, and Rust. The Java presets use an explicit Temurin 25 LTS JDK.
-All exact versions are part of the response rather than floating aliases.
+versions. The current presets are Python, Node.js LTS, Java 21 or Java 25 with
+Gradle or Maven, Go, and Rust. Java 21 is listed first and used by deterministic
+Java detection as the mature compatibility baseline; Java 25 remains available
+as the newer LTS. All exact versions are part of the response rather than
+floating aliases.
 
 `GET /api/v1/projects/{projectID}/toolchain` returns either:
 

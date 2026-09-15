@@ -73,8 +73,10 @@ func Presets() []Preset {
 	return []Preset{
 		{ID: "python", DisplayName: "Python", Description: "Current stable Python runtime", Tools: map[string]string{"python": "3.14.7"}},
 		{ID: "node-lts", DisplayName: "Node.js LTS", Description: "Current Node.js long-term support runtime", Tools: map[string]string{"node": "24.21.0"}},
-		{ID: "java-gradle", DisplayName: "Java + Gradle", Description: "Temurin 25 LTS with the Gradle build tool", Tools: map[string]string{"java": "temurin-25.0.4+7.0.LTS", "gradle": "9.7.1"}},
-		{ID: "java-maven", DisplayName: "Java + Maven", Description: "Temurin 25 LTS with the Maven build tool", Tools: map[string]string{"java": "temurin-25.0.4+7.0.LTS", "maven": "3.9.16"}},
+		{ID: "java-gradle", DisplayName: "Java 21 + Gradle", Description: "Mature Temurin 21 LTS with the Gradle build tool", Tools: map[string]string{"java": "temurin-21.0.12+8.0.LTS", "gradle": "9.7.1"}},
+		{ID: "java-maven", DisplayName: "Java 21 + Maven", Description: "Mature Temurin 21 LTS with the Maven build tool", Tools: map[string]string{"java": "temurin-21.0.12+8.0.LTS", "maven": "3.9.16"}},
+		{ID: "java25-gradle", DisplayName: "Java 25 + Gradle", Description: "Newer Temurin 25 LTS with the Gradle build tool", Tools: map[string]string{"java": "temurin-25.0.4+7.0.LTS", "gradle": "9.7.1"}},
+		{ID: "java25-maven", DisplayName: "Java 25 + Maven", Description: "Newer Temurin 25 LTS with the Maven build tool", Tools: map[string]string{"java": "temurin-25.0.4+7.0.LTS", "maven": "3.9.16"}},
 		{ID: "go", DisplayName: "Go", Description: "Current stable Go toolchain", Tools: map[string]string{"go": "1.27.1"}},
 		{ID: "rust", DisplayName: "Rust", Description: "Current stable Rust toolchain", Tools: map[string]string{"rust": "1.98.1"}},
 	}

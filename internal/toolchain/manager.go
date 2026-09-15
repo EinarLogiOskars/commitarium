@@ -213,7 +213,7 @@ func (manager *Manager) Detect(ctx context.Context, projectID string) (Suggestio
 	}
 	detect("python", "3.14.7", "pyproject.toml", "requirements.txt", "setup.py", "poetry.lock", "uv.lock")
 	detect("node", "24.21.0", "package.json", "package-lock.json", "pnpm-lock.yaml", "yarn.lock")
-	detect("java", "temurin-25.0.4+7.0.LTS", "pom.xml", "mvnw", "build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts", "gradlew")
+	detect("java", "temurin-21.0.12+8.0.LTS", "pom.xml", "mvnw", "build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts", "gradlew")
 	detect("maven", "3.9.16", "pom.xml", "mvnw")
 	detect("gradle", "9.7.1", "build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts", "gradlew")
 	detect("go", "1.27.1", "go.mod", "go.work")
