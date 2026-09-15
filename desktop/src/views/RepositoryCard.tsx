@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { getRepositoryOverview, type RepositoryOverview } from "../api/projects";
 import { ApiError } from "../api/client";
 import { Markdown } from "./Markdown";
@@ -10,22 +10,29 @@ export function RepositoryCard({ projectId }: { projectId: string }) {
   const [error, setError] = useState<{ code?: string; message: string } | null>(null);
   const [expanded, setExpanded] = useState(false);
   // Only offer the expand toggle when the clamped README actually overflows —
-  // a short README that fits shows in full with no toggle. Re-measured on resize
-  // so a wider window that gains room drops the toggle.
+  // a short README that fits shows in full with no toggle. A ResizeObserver
+  // re-measures once the markdown has real height (and on window resize), which
+  // a one-shot effect misses when it runs before layout settles.
   const [overflowing, setOverflowing] = useState(false);
   const bodyRef = useRef<HTMLDivElement | null>(null);
 
-  const measure = useCallback(() => {
+  useEffect(() => {
     const el = bodyRef.current;
-    if (!el || expanded) return;
-    setOverflowing(el.scrollHeight - el.clientHeight > 4);
-  }, [expanded]);
-
-  useLayoutEffect(() => {
-    measure();
-    window.addEventListener("resize", measure);
-    return () => window.removeEventListener("resize", measure);
-  }, [measure, overview]);
+    if (!el) return;
+    const check = () => {
+      // Don't remeasure while expanded (no clamp); the toggle is kept visible
+      // via `|| expanded` so "Show less" stays until the user collapses.
+      if (!expanded) setOverflowing(el.scrollHeight - el.clientHeight > 4);
+    };
+    check();
+    const ro = new ResizeObserver(check);
+    ro.observe(el);
+    window.addEventListener("resize", check);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener("resize", check);
+    };
+  }, [overview, expanded]);
 
   useEffect(() => {
     let active = true;
