@@ -1834,3 +1834,16 @@ button.danger:not(.ghost) {
   gap: 8px;
   justify-content: flex-end;
 }
+
+/* ---- Import: detected-toolchain review ---------------------------------- */
+.detect {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.detect h3 {
+  margin: 0;
+}
+.detect .row {
+  margin-top: 4px;
+}
