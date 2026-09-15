@@ -153,6 +153,7 @@ func TestManagerDetectsExactRepositoryToolsWithoutExecutingConfig(t *testing.T) 
 		stored: project.Project{ID: "prj_test"},
 		overview: project.RepositoryOverview{Tree: []project.RepositoryTreeEntry{
 			{Path: "pyproject.toml", Type: "file", BlobID: "python", Size: 10},
+			{Path: "pom.xml", Type: "file", BlobID: "maven", Size: 10},
 			{Path: "mise.toml", Type: "file", BlobID: "mise", Size: 100},
 		}},
 		blobs: map[string][]byte{"mise": []byte("[tools]\npython = \"3.13.7\"\nnode = \"24.21.0\"\n[env]\nSECRET = \"must-not-run\"\n[tasks.bad]\nrun = \"false\"\n")},
@@ -166,7 +167,9 @@ func TestManagerDetectsExactRepositoryToolsWithoutExecutingConfig(t *testing.T) 
 		t.Fatalf("detect toolchain: %v", err)
 	}
 	if suggestion.Confidence != "high" || suggestion.Tools["python"] != "3.13.7" ||
-		suggestion.Tools["node"] != "24.21.0" {
+		suggestion.Tools["node"] != "24.21.0" ||
+		suggestion.Tools["java"] != "temurin-25.0.4+7.0.LTS" ||
+		suggestion.Tools["maven"] != "3.9.16" {
 		t.Fatalf("unexpected suggestion %+v", suggestion)
 	}
 }

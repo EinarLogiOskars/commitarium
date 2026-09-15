@@ -12,6 +12,15 @@ func TestParseRequirementUsesNarrowAllowlistAndExactVersions(t *testing.T) {
 	if err != nil || tool != "python" || version != "3.13.7" {
 		t.Fatalf("parse requirement = %q %q err=%v", tool, version, err)
 	}
+	tool, version, err = parseRequirement("java@temurin-25.0.4+7.0.LTS")
+	if err != nil || tool != "java" || version != "temurin-25.0.4+7.0.LTS" {
+		t.Fatalf("parse Java requirement = %q %q err=%v", tool, version, err)
+	}
+	for _, value := range []string{"gradle@9.7.1", "maven@3.9.16"} {
+		if _, _, err := parseRequirement(value); err != nil {
+			t.Fatalf("expected %q to be accepted: %v", value, err)
+		}
+	}
 	for _, value := range []string{"python@latest", "terraform@1.2.3", "python", "node@20;bad"} {
 		if _, _, err := parseRequirement(value); err == nil {
 			t.Fatalf("expected %q to be rejected", value)
