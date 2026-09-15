@@ -20,6 +20,7 @@ type StructuredOutput struct {
 	Publication        *ImplementationPublication
 	Review             *ReviewPublication
 	InterventionEffect InterventionEffect
+	ToolchainProposal  *ToolchainProposal
 }
 
 func OutputJSONSchema(contract OutputContract) any {
@@ -72,6 +73,18 @@ func OutputJSONSchema(contract OutputContract) any {
 				"response": map[string]any{"type": "string"},
 			},
 			[]string{"effect", "response"},
+		)
+	case OutputContractToolchainSetup:
+		return objectSchema(
+			map[string]any{
+				"action":  map[string]any{"type": "string", "enum": []string{"ask", "propose"}},
+				"message": map[string]any{"type": "string"},
+				"tools": map[string]any{
+					"type": "object", "additionalProperties": map[string]any{"type": "string"},
+				},
+				"services": map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+			},
+			[]string{"action", "message", "tools", "services"},
 		)
 	default:
 		return nil
@@ -232,6 +245,37 @@ func ResolveStructuredOutput(
 			Event:              Event{Type: EventMessage, Text: response.Response},
 			Disposition:        DispositionSucceeded,
 			InterventionEffect: response.Effect,
+		}, nil
+
+	case OutputContractToolchainSetup:
+		var response struct {
+			Action   string            `json:"action"`
+			Message  string            `json:"message"`
+			Tools    map[string]string `json:"tools"`
+			Services []string          `json:"services"`
+		}
+		if err := decodeStructuredOutput(raw, &response); err != nil {
+			return StructuredOutput{}, err
+		}
+		response.Message = strings.TrimSpace(response.Message)
+		if response.Message == "" || response.Tools == nil || response.Services == nil {
+			return StructuredOutput{}, invalidStructuredOutput("toolchain setup response is incomplete")
+		}
+		if response.Action == "ask" {
+			if len(response.Tools) != 0 || len(response.Services) != 0 {
+				return StructuredOutput{}, invalidStructuredOutput("toolchain setup question cannot include a proposal")
+			}
+			return StructuredOutput{
+				Event: Event{Type: EventInputRequired, Text: response.Message}, Disposition: DispositionInputRequired,
+			}, nil
+		}
+		if response.Action != "propose" || len(response.Tools) == 0 {
+			return StructuredOutput{}, invalidStructuredOutput("toolchain setup proposal has no tools")
+		}
+		proposal := &ToolchainProposal{Tools: response.Tools, Services: response.Services}
+		return StructuredOutput{
+			Event: Event{Type: EventMessage, Text: response.Message}, Disposition: DispositionSucceeded,
+			ToolchainProposal: proposal,
 		}, nil
 	default:
 		return StructuredOutput{}, invalidStructuredOutput("output contract %q is unsupported", contract)

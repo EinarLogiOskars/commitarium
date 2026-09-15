@@ -28,6 +28,10 @@ this API beyond the host loopback interface is unsupported.
 | `GET` | `/api/v1/projects/{projectID}/toolchain` | Read the project's effective runtime toolchain |
 | `PUT` | `/api/v1/projects/{projectID}/toolchain` | Replace the project's internal runtime toolchain |
 | `POST` | `/api/v1/projects/{projectID}/toolchain/detect` | Quickly suggest a toolchain from the repository root |
+| `POST` | `/api/v1/projects/{projectID}/toolchain/assistant-sessions` | Start a stack-planning conversation on a selected worker/model |
+| `GET` | `/api/v1/projects/{projectID}/toolchain/assistant-sessions/{sessionID}` | Poll a stack-planning conversation |
+| `POST` | `/api/v1/projects/{projectID}/toolchain/assistant-sessions/{sessionID}/messages` | Answer the setup assistant's question |
+| `POST` | `/api/v1/projects/{projectID}/toolchain/assistant-sessions/{sessionID}/apply` | Apply the assistant's exact proposal as the project toolchain |
 | `POST` | `/api/v1/projects/{projectID}/features` | Create a draft feature with optional per-order setting overrides |
 | `GET` | `/api/v1/projects/{projectID}/features` | List the project's features by recent activity |
 | `GET` | `/api/v1/projects/{projectID}/features/{featureID}` | Retrieve a feature |
@@ -62,7 +66,8 @@ this API beyond the host loopback interface is unsupported.
 
 Feature transitions, run starts, planning, implementation, merge, recovery,
 run-control actions, run interventions, project-repository repair, session
-commands, and goal acceptance require an `Idempotency-Key` header. Retrying the
+commands, goal acceptance, and setup-assistant mutations require an
+`Idempotency-Key` header. Retrying the
 same operation with the same key returns the existing durable result. Reusing a
 key for a different operation returns `409 Conflict` with the
 `idempotency_conflict` error code.
@@ -555,6 +560,53 @@ allowlisted `[tools]` entries with explicit versions. Its environment, tasks,
 hooks, and other sections are never activated. Detection does not save or
 install anything; the user reviews the suggestion and submits it through the
 `PUT` endpoint with `source: "detected"`.
+
+For a new project whose user wants help choosing, start a dedicated bounded
+provider conversation:
+
+```http
+POST /api/v1/projects/prj_example/toolchain/assistant-sessions
+Idempotency-Key: setup-stack-1
+Content-Type: application/json
+
+{
+  "provider": "claude",
+  "model": "claude-opus-4-8",
+  "message": "I want a small personal web app and prefer simple deployment."
+}
+```
+
+`provider` is `codex` or `claude`; `model` must be an exact ID currently
+offered by that provider's lead worker catalog. The response is `202 Accepted`,
+has a session `Location`, and initially reports `status: "running"`. Poll that
+location. Every response includes the durable ordered `messages` transcript. A
+bounded turn eventually reports one of:
+
+- `waiting_for_user` with `message`: show the question, then send one
+  `{"message":"..."}` object to the session's `/messages` route with a new
+  `Idempotency-Key`.
+- `proposal_ready` with `message` and `proposal`: show the exact tools and
+  metadata-only services for review.
+- `failed`: show the message and allow the user to return to the picker.
+
+The assistant reuses the same provider conversation for each reply. Its worker
+gets a private empty setup directory and is explicitly forbidden to modify the
+repository, run commands, install tools, or implement the project. Its durable
+coordinator record and deterministic worker attempts make exact retries safe
+across restarts. The setup assignment uses the consultant role, so it receives
+no Forgejo token or Git publishing identity.
+
+After the user approves a `proposal_ready` response, apply it:
+
+```http
+POST /api/v1/projects/prj_example/toolchain/assistant-sessions/tcs_example/apply
+Idempotency-Key: apply-stack-1
+```
+
+The body must be empty. This validates the proposal again, writes the internal
+generated mise configuration with `source: "assistant"`, returns the effective
+project toolchain, and changes the assistant session to `applied`. It never
+writes a repository file. Applying again is a no-op.
 
 At provider-attempt admission, a worker installs any missing exact runtimes
 with pinned mise into the shared, version-keyed cache before launching the

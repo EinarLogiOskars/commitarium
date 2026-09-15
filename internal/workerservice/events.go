@@ -282,6 +282,11 @@ func (service *Service) finishAttempt(
 			ReviewID:          result.Review.ReviewID,
 		}
 	}
+	if result.ToolchainProposal != nil {
+		terminalResult.ToolchainProposal = &workerhttp.ToolchainProposal{
+			Tools: result.ToolchainProposal.Tools, Services: result.ToolchainProposal.Services,
+		}
+	}
 	if result.Outcome == worker.OutcomeFailed {
 		terminalResult.Error = &workerhttp.ProtocolError{
 			Code:      workerhttp.ErrorInternal,

@@ -187,7 +187,8 @@ func (request PutAttemptRequest) Validate(identity MutationIdentity) error {
 		request.OutputContract != OutputContractImplementationLead &&
 		request.OutputContract != OutputContractImplementationReview &&
 		request.OutputContract != OutputContractImplementationReadiness &&
-		request.OutputContract != OutputContractIntervention {
+		request.OutputContract != OutputContractIntervention &&
+		request.OutputContract != OutputContractToolchainSetup {
 		return invalid("output contract %q is not recognized", request.OutputContract)
 	}
 	if (request.OutputContract == OutputContractPlanningLead ||
@@ -195,6 +196,10 @@ func (request PutAttemptRequest) Validate(identity MutationIdentity) error {
 		request.OutputContract == OutputContractImplementationReadiness) &&
 		request.Assignment.Role != RoleLead {
 		return invalid("lead output contract requires the lead role")
+	}
+	if request.OutputContract == OutputContractToolchainSetup &&
+		request.Assignment.Role != RoleLead && request.Assignment.Role != RoleConsultant {
+		return invalid("toolchain setup output contract requires a consultation role")
 	}
 	if request.OutputContract == OutputContractImplementationReview &&
 		request.Assignment.Role != RoleReviewer {
@@ -374,6 +379,12 @@ func (result TerminalResult) Validate() error {
 		if result.InterventionEffect != "" && (result.Publication != nil || result.Review != nil) {
 			return invalid("intervention result cannot contain a publication")
 		}
+		if result.ToolchainProposal != nil && result.Disposition != DispositionSucceeded {
+			return invalid("toolchain proposal requires a successful disposition")
+		}
+		if result.ToolchainProposal != nil && (result.Publication != nil || result.Review != nil || result.InterventionEffect != "") {
+			return invalid("toolchain proposal cannot contain another specialized result")
+		}
 	case OutcomeStopped:
 		if result.Disposition != "" {
 			return invalid("stopped outcome cannot include a disposition")
@@ -389,6 +400,9 @@ func (result TerminalResult) Validate() error {
 		}
 		if result.InterventionEffect != "" {
 			return invalid("stopped outcome cannot include an intervention effect")
+		}
+		if result.ToolchainProposal != nil {
+			return invalid("stopped outcome cannot include a toolchain proposal")
 		}
 	case OutcomeFailed:
 		if result.Disposition != "" {
@@ -409,6 +423,9 @@ func (result TerminalResult) Validate() error {
 		if result.InterventionEffect != "" {
 			return invalid("failed outcome cannot include an intervention effect")
 		}
+		if result.ToolchainProposal != nil {
+			return invalid("failed outcome cannot include a toolchain proposal")
+		}
 	}
 	if result.Publication != nil {
 		if err := result.Publication.Validate(); err != nil {
@@ -417,6 +434,31 @@ func (result TerminalResult) Validate() error {
 	}
 	if result.Review != nil {
 		if err := result.Review.Validate(); err != nil {
+			return err
+		}
+	}
+	if result.ToolchainProposal != nil {
+		if err := result.ToolchainProposal.Validate(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (proposal ToolchainProposal) Validate() error {
+	if len(proposal.Tools) == 0 || len(proposal.Tools) > 16 || proposal.Services == nil || len(proposal.Services) > 16 {
+		return invalid("toolchain proposal is incomplete or too large")
+	}
+	for name, version := range proposal.Tools {
+		if err := validateRequiredText("toolchain tool", name, 64); err != nil {
+			return err
+		}
+		if err := validateRequiredText("toolchain version", version, 64); err != nil {
+			return err
+		}
+	}
+	for _, service := range proposal.Services {
+		if err := validateRequiredText("toolchain service", service, 64); err != nil {
 			return err
 		}
 	}

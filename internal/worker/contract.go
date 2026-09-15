@@ -41,6 +41,7 @@ const (
 	OutputContractImplementationReview    OutputContract = "implementation_reviewer"
 	OutputContractImplementationReadiness OutputContract = "implementation_lead_readiness"
 	OutputContractIntervention            OutputContract = "intervention"
+	OutputContractToolchainSetup          OutputContract = "toolchain_setup"
 )
 
 // LaunchEnvironment is the worker-resolved view of the profile and workspace
@@ -157,6 +158,12 @@ type Result struct {
 	Publication        *ImplementationPublication
 	Review             *ReviewPublication
 	InterventionEffect InterventionEffect
+	ToolchainProposal  *ToolchainProposal
+}
+
+type ToolchainProposal struct {
+	Tools    map[string]string
+	Services []string
 }
 
 // ImplementationPublication contains only the external identities that the
@@ -243,12 +250,16 @@ func (request SessionRequest) Validate() error {
 		request.OutputContract != OutputContractImplementationLead &&
 		request.OutputContract != OutputContractImplementationReview &&
 		request.OutputContract != OutputContractImplementationReadiness &&
-		request.OutputContract != OutputContractIntervention:
+		request.OutputContract != OutputContractIntervention &&
+		request.OutputContract != OutputContractToolchainSetup:
 		return fmt.Errorf("%w: output contract %q is not recognized", ErrInvalidSessionRequest, request.OutputContract)
 	case (request.OutputContract == OutputContractPlanningLead ||
 		request.OutputContract == OutputContractImplementationLead ||
 		request.OutputContract == OutputContractImplementationReadiness) && request.Role != RoleLead:
 		return fmt.Errorf("%w: lead output contract requires the lead role", ErrInvalidSessionRequest)
+	case request.OutputContract == OutputContractToolchainSetup &&
+		request.Role != RoleLead && request.Role != RoleConsultant:
+		return fmt.Errorf("%w: toolchain setup output contract requires a consultation role", ErrInvalidSessionRequest)
 	case request.OutputContract == OutputContractImplementationReview && request.Role != RoleReviewer:
 		return fmt.Errorf("%w: reviewer output contract requires the reviewer role", ErrInvalidSessionRequest)
 	}

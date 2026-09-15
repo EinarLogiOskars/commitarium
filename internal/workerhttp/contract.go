@@ -118,6 +118,7 @@ const (
 	OutputContractImplementationReview    OutputContract = "implementation_reviewer"
 	OutputContractImplementationReadiness OutputContract = "implementation_lead_readiness"
 	OutputContractIntervention            OutputContract = "intervention"
+	OutputContractToolchainSetup          OutputContract = "toolchain_setup"
 )
 
 type AttemptState string
@@ -163,7 +164,13 @@ type TerminalResult struct {
 	Publication        *ImplementationPublication `json:"publication,omitempty"`
 	Review             *ReviewPublication         `json:"review,omitempty"`
 	InterventionEffect InterventionEffect         `json:"intervention_effect,omitempty"`
+	ToolchainProposal  *ToolchainProposal         `json:"toolchain_proposal,omitempty"`
 	Error              *ProtocolError             `json:"error,omitempty"`
+}
+
+type ToolchainProposal struct {
+	Tools    map[string]string `json:"tools"`
+	Services []string          `json:"services"`
 }
 
 type ImplementationPublication struct {

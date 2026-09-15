@@ -43,6 +43,12 @@ func TestSessionRequestValidate(t *testing.T) {
 	if err := intervention.Validate(); err != nil {
 		t.Fatalf("validate reviewer intervention request: %v", err)
 	}
+	toolchain := valid
+	toolchain.Role = RoleLead
+	toolchain.OutputContract = OutputContractToolchainSetup
+	if err := toolchain.Validate(); err != nil {
+		t.Fatalf("validate toolchain setup request: %v", err)
+	}
 
 	tests := map[string]SessionRequest{
 		"missing session ID":            {AttemptID: "att_test", FeatureID: "fea_test", Role: RoleCoder, Instructions: "work"},
@@ -53,6 +59,7 @@ func TestSessionRequestValidate(t *testing.T) {
 		"unknown output contract":       {SessionID: "ses_test", AttemptID: "att_test", FeatureID: "fea_test", Role: RoleCoder, Instructions: "work", OutputContract: "unknown"},
 		"planning output for reviewer":  {SessionID: "ses_test", AttemptID: "att_test", FeatureID: "fea_test", Role: RoleReviewer, Instructions: "work", OutputContract: OutputContractPlanningLead},
 		"readiness output for reviewer": {SessionID: "ses_test", AttemptID: "att_test", FeatureID: "fea_test", Role: RoleReviewer, Instructions: "work", OutputContract: OutputContractImplementationReadiness},
+		"toolchain output for reviewer": {SessionID: "ses_test", AttemptID: "att_test", FeatureID: "fea_test", Role: RoleReviewer, Instructions: "work", OutputContract: OutputContractToolchainSetup},
 	}
 	for name, request := range tests {
 		t.Run(name, func(t *testing.T) {
