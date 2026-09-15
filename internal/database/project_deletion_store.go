@@ -96,12 +96,11 @@ func (store *ProjectDeletionStore) BeginDeletion(
 		ProjectID: projectID, IdempotencyKey: idempotencyKey, Force: force,
 	}
 	var owner, repository, branch string
-	var boundAt any
+	var deletionOwner, deletionRepository, deletionBranch string
+	var deletionBoundAt any
 	if storedProject.ForgejoRepository != nil {
 		copy := *storedProject.ForgejoRepository
-		deletion.Repository = &copy
 		owner, repository, branch = copy.Owner, copy.Name, copy.DefaultBranch
-		boundAt = copy.BoundAt.UTC().Format(time.RFC3339Nano)
 		var shared int
 		if err := tx.QueryRowContext(ctx, `
 			SELECT EXISTS (
@@ -112,7 +111,14 @@ func (store *ProjectDeletionStore) BeginDeletion(
 			return projectdeletion.Deletion{}, fmt.Errorf("check repository ownership: %w", err)
 		}
 		if shared != 0 {
-			return projectdeletion.Deletion{}, projectdeletion.ErrUnsafeArtifacts
+			// Legacy smoke-test data could bind more than one project to one
+			// repository. That repository is not exclusively owned by this
+			// project, so preserve it; deletion of the final reference may remove
+			// it. Work-order identities are checked separately below.
+		} else {
+			deletion.Repository = &copy
+			deletionOwner, deletionRepository, deletionBranch = owner, repository, branch
+			deletionBoundAt = copy.BoundAt.UTC().Format(time.RFC3339Nano)
 		}
 	}
 	var unsafeWorkspace int
@@ -131,13 +137,38 @@ func (store *ProjectDeletionStore) BeginDeletion(
 	if unsafeWorkspace != 0 {
 		return projectdeletion.Deletion{}, projectdeletion.ErrUnsafeArtifacts
 	}
+	var collidingWorkspace int
+	if err := tx.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM feature_workspaces owned
+			JOIN features owned_feature ON owned_feature.id = owned.feature_id
+			JOIN feature_workspaces other
+			  ON other.id != owned.id
+			 AND lower(other.repository_owner) = lower(owned.repository_owner)
+			 AND lower(other.repository_name) = lower(owned.repository_name)
+			JOIN features other_feature ON other_feature.id = other.feature_id
+			WHERE owned_feature.project_id = ?
+			  AND other_feature.project_id != ?
+			  AND (
+				lower(other.branch_name) = lower(owned.branch_name)
+				OR (owned.pull_request_number > 0
+				    AND other.pull_request_number = owned.pull_request_number)
+			  )
+		)`, projectID, projectID).Scan(&collidingWorkspace); err != nil {
+		return projectdeletion.Deletion{}, fmt.Errorf("check cross-project work-order identities: %w", err)
+	}
+	if collidingWorkspace != 0 {
+		return projectdeletion.Deletion{}, projectdeletion.ErrUnsafeArtifacts
+	}
 
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO project_deletions (
 			project_id, idempotency_key, force, repository_owner, repository_name,
 			repository_default_branch, repository_bound_at, status, requested_at
 		) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?)`,
-		projectID, idempotencyKey, force, owner, repository, branch, boundAt,
+		projectID, idempotencyKey, force, deletionOwner, deletionRepository,
+		deletionBranch, deletionBoundAt,
 		formatExecutionTime(store.now())); err != nil {
 		return projectdeletion.Deletion{}, fmt.Errorf("claim project deletion: %w", err)
 	}
