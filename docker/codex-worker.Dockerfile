@@ -24,10 +24,28 @@ FROM node:22-bookworm-slim AS build-release-stage
 ARG CODEX_VERSION=0.153.4
 
 RUN apt-get update && \
-    apt-get install --yes --no-install-recommends ca-certificates curl git jq && \
+    apt-get install --yes --no-install-recommends \
+        build-essential \
+        ca-certificates \
+        curl \
+        git \
+        jq \
+        openssh-client \
+        pkg-config \
+        python-is-python3 \
+        python3 \
+        python3-pip \
+        python3-venv \
+        ripgrep \
+        unzip \
+        zip && \
     rm -rf /var/lib/apt/lists/* && \
     npm install --global --omit=dev "@openai/codex@${CODEX_VERSION}" && \
     codex --version && \
+    python --version && \
+    python3 -m pip --version && \
+    python3 -m venv /tmp/commitarium-python-smoke && \
+    rm -rf /tmp/commitarium-python-smoke && \
     npm cache clean --force
 
 RUN groupadd --gid 65532 commitarium && \
