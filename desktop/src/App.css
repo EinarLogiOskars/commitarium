@@ -298,6 +298,11 @@ body {
 .pill--bad {
   color: var(--muted);
 }
+.pill--warn {
+  color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 12%, var(--panel));
+  border-color: color-mix(in srgb, var(--warn) 35%, transparent);
+}
 
 .back {
   margin-bottom: 14px;
@@ -320,6 +325,25 @@ body {
 }
 .list__title {
   font-weight: 500;
+}
+/* A row whose left side is a plain (non-navigable) project + status, with a
+   set-up action on the right — used while a project's repository is unbound. */
+.list__row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 6px;
+}
+.list__row .list__item {
+  margin-bottom: 0;
+}
+.list__item--static {
+  cursor: default;
+  background: transparent;
+}
+.list__row .primary {
+  flex: none;
+  white-space: nowrap;
 }
 
 .create {

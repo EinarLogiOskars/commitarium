@@ -56,6 +56,12 @@ export interface ForgejoRepository {
   bound_at: string;
 }
 
+// "ready" has a bound, cloneable repository and may create work orders.
+// "needs_setup" means repository provisioning was interrupted or unavailable —
+// retry via the repair endpoint. Absent on coordinators built before slice 1;
+// treat absent as "ready" (an older coordinator always bound a repo on create).
+export type RepositoryStatus = "ready" | "needs_setup";
+
 export interface Project {
   id: string;
   name: string;
@@ -67,6 +73,7 @@ export interface Project {
   merge_policy?: MergePolicy;
   autonomy_policy?: AutonomyPolicy;
   forgejo_repository?: ForgejoRepository;
+  repository_status?: RepositoryStatus;
   created_at: string;
 }
 

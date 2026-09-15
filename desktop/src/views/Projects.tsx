@@ -1,8 +1,12 @@
 import { useCallback, useEffect, useState } from "react";
-import { listProjects, createProject } from "../api/projects";
+import { listProjects, createProject, repairRepository } from "../api/projects";
 import { ApiError } from "../api/client";
 import { ImportProject } from "./ImportProject";
 import type { Project, RecoveryPolicy } from "../api/types";
+
+// Absent repository_status means a pre-slice-1 coordinator that always bound a
+// repo on create — treat as ready.
+const needsSetup = (p: Project) => p.repository_status === "needs_setup";
 
 /** Project chooser: list existing projects and create new ones. */
 export function Projects({
@@ -18,6 +22,7 @@ export function Projects({
   const [policy, setPolicy] = useState<RecoveryPolicy>("approval_required");
   const [creating, setCreating] = useState(false);
   const [importing, setImporting] = useState(false);
+  const [repairing, setRepairing] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     if (!reachable) return;
@@ -39,14 +44,39 @@ export function Projects({
     setCreating(true);
     setError(null);
     try {
-      const created = await createProject({ name: name.trim(), recovery_policy: policy });
+      const created = await createProject(
+        { name: name.trim(), recovery_policy: policy },
+        crypto.randomUUID(),
+      );
       setName("");
       await load();
       onSelect(created.id);
     } catch (e) {
-      setError(describe(e));
+      // The project is durable even when repo provisioning was unavailable —
+      // reload so it shows with a Set-up action instead of vanishing on error.
+      if (e instanceof ApiError && e.code === "repository_provisioning_unavailable") {
+        setName("");
+        await load();
+        setError("Project created, but its repository couldn't be provisioned. Retry setup below.");
+      } else {
+        setError(describe(e));
+      }
     } finally {
       setCreating(false);
+    }
+  };
+
+  const repair = async (id: string) => {
+    setRepairing(id);
+    setError(null);
+    try {
+      await repairRepository(id);
+      await load();
+      onSelect(id);
+    } catch (e) {
+      setError(describe(e));
+    } finally {
+      setRepairing(null);
     }
   };
 
@@ -86,18 +116,34 @@ export function Projects({
         <p className="muted">No projects yet. Create your first one below.</p>
       ) : (
         <ul className="list">
-          {projects.map((p) => (
-            <li key={p.id}>
-              <button className="list__item" onClick={() => onSelect(p.id)}>
-                <span className="list__title">{p.name}</span>
-                <span className="muted">
-                  {p.forgejo_repository
-                    ? `${p.forgejo_repository.owner}/${p.forgejo_repository.name}`
-                    : "no repository bound"}
-                </span>
-              </button>
-            </li>
-          ))}
+          {projects.map((p) =>
+            needsSetup(p) ? (
+              <li key={p.id} className="list__row">
+                <div className="list__item list__item--static">
+                  <span className="list__title">{p.name}</span>
+                  <span className="pill pill--warn">Repository setup incomplete</span>
+                </div>
+                <button
+                  className="primary"
+                  onClick={() => void repair(p.id)}
+                  disabled={repairing !== null}
+                >
+                  {repairing === p.id ? "Setting up…" : "Set up repository"}
+                </button>
+              </li>
+            ) : (
+              <li key={p.id}>
+                <button className="list__item" onClick={() => onSelect(p.id)}>
+                  <span className="list__title">{p.name}</span>
+                  <span className="muted">
+                    {p.forgejo_repository
+                      ? `${p.forgejo_repository.owner}/${p.forgejo_repository.name}`
+                      : "no repository bound"}
+                  </span>
+                </button>
+              </li>
+            ),
+          )}
         </ul>
       )}
 

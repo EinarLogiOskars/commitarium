@@ -44,8 +44,25 @@ export const getRepositoryOverview = (id: string): Promise<RepositoryOverview> =
 export const getProject = (id: string): Promise<Project> =>
   request(`/api/v1/projects/${encodeURIComponent(id)}`);
 
-export const createProject = (input: CreateProjectInput): Promise<Project> =>
-  request("/api/v1/projects", { method: "POST", body: input });
+// Creation prepares a private Forgejo repository before returning. Always send a
+// stable Idempotency-Key: a retry after an interruption resumes the *same*
+// project + repository. On transient Forgejo failure the coordinator returns
+// 503 repository_provisioning_unavailable, but the durable project still exists
+// (visible in listProjects) with repository_status "needs_setup" — repair it
+// with repairRepository rather than re-creating.
+export const createProject = (
+  input: CreateProjectInput,
+  idempotencyKey: string,
+): Promise<Project> =>
+  request("/api/v1/projects", { method: "POST", body: input, idempotencyKey });
+
+// Create-or-repair the project's internal repository. Empty body, fresh key each
+// call, safe to retry, no-op once the repo is ready. Never starts an agent.
+export const repairRepository = (id: string): Promise<Project> =>
+  request(`${projectPath(id)}/forgejo-repository`, {
+    method: "POST",
+    idempotencyKey: crypto.randomUUID(),
+  });
 
 const projectPath = (id: string) => `/api/v1/projects/${encodeURIComponent(id)}`;
 
