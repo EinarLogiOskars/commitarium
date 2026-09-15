@@ -7,8 +7,10 @@ import {
 } from "../api/toolchains";
 import { ApiError } from "../api/client";
 import { TOOL_NAMES } from "../api/types";
+import { SetupAssistant } from "./SetupAssistant";
 import type {
   ProjectToolchain,
+  ProvisioningStatus,
   ToolchainPreset,
   ToolchainSource,
   ToolName,
@@ -42,6 +44,7 @@ export function StackPicker({
   const [busy, setBusy] = useState(false);
   const [detecting, setDetecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [helping, setHelping] = useState(false);
 
   useEffect(() => {
     let live = true;
@@ -67,6 +70,20 @@ export function StackPicker({
       live = false;
     };
   }, [projectId]);
+
+  // Follow runtime installation to completion once a stack is configured.
+  const provisioning = current?.provisioning_status;
+  useEffect(() => {
+    if (provisioning !== "pending" && provisioning !== "installing") return;
+    const t = setInterval(async () => {
+      try {
+        setCurrent(await getProjectToolchain(projectId));
+      } catch {
+        /* transient — keep the last known state */
+      }
+    }, 2500);
+    return () => clearInterval(t);
+  }, [provisioning, projectId]);
 
   const applyPreset = (p: ToolchainPreset) => {
     setRows(rowsFrom(p.tools));
@@ -132,14 +149,38 @@ export function StackPicker({
     }
   };
 
+  if (helping) {
+    return (
+      <section className="panel">
+        <h2>Stack — help me choose</h2>
+        <SetupAssistant
+          projectId={projectId}
+          onApplied={(t) => {
+            setHelping(false);
+            onSaved(t);
+          }}
+          onCancel={() => setHelping(false)}
+        />
+      </section>
+    );
+  }
+
   return (
     <section className="panel">
-      <h2>Stack</h2>
+      <div className="panel__head">
+        <h2>Stack</h2>
+        <button className="ghost" onClick={() => setHelping(true)} disabled={busy}>
+          Help me choose
+        </button>
+      </div>
       {current?.status === "needs_setup" && (
         <p className="muted">
           Choose the runtime this project's agents build with. You can create work orders once a
           stack is saved.
         </p>
+      )}
+      {current?.status === "configured" && provisioning && (
+        <ProvisioningBanner status={provisioning} message={current.provisioning_message} />
       )}
       {error && <div className="banner banner--error">{error}</div>}
 
@@ -242,6 +283,29 @@ export function StackPicker({
         {busy ? "Saving…" : current?.status === "configured" ? "Save changes" : "Save stack"}
       </button>
     </section>
+  );
+}
+
+function ProvisioningBanner({
+  status,
+  message,
+}: {
+  status: ProvisioningStatus;
+  message?: string;
+}) {
+  const cls =
+    status === "ready" ? "banner--ok" : status === "failed" ? "banner--error" : "banner--info";
+  const label: Record<ProvisioningStatus, string> = {
+    pending: "Runtime install queued",
+    installing: "Installing runtimes…",
+    ready: "Runtimes ready",
+    failed: "Runtime install failed",
+  };
+  return (
+    <div className={`banner ${cls}`}>
+      <strong>{label[status]}</strong>
+      {message ? ` — ${message}` : ""}
+    </div>
   );
 }
 

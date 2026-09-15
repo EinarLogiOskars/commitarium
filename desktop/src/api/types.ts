@@ -102,6 +102,11 @@ export type ToolName = (typeof TOOL_NAMES)[number];
 export type ToolchainStatus = "needs_setup" | "configured";
 export type ToolchainSource = "picker" | "detected" | "assistant" | "runtime";
 
+// Durable runtime install state for a configured toolchain. Saving sets it
+// "pending"; the worker moves it to "installing" then "ready"/"failed". The
+// first provider turn launches only after "ready".
+export type ProvisioningStatus = "pending" | "installing" | "ready" | "failed";
+
 export interface ProjectToolchain {
   project_id: string;
   status: ToolchainStatus;
@@ -109,6 +114,8 @@ export interface ProjectToolchain {
   tools: Record<string, string>; // tool name -> exact version
   services: string[];
   services_runnable: boolean;
+  provisioning_status?: ProvisioningStatus;
+  provisioning_message?: string;
   updated_at?: string;
 }
 
@@ -131,6 +138,40 @@ export interface UpdateToolchainInput {
   source: ToolchainSource;
   tools: Record<string, string>;
   services?: string[];
+}
+
+// Guided ("help me choose") stack setup: a bounded provider conversation that
+// ends in an exact proposal the user applies. It never touches the repository.
+export type AssistantStatus =
+  | "running"
+  | "waiting_for_user"
+  | "proposal_ready"
+  | "applied"
+  | "failed";
+
+export interface AssistantMessage {
+  role: string; // "user" | "assistant"
+  text: string;
+  occurred_at: string;
+}
+
+export interface AssistantSession {
+  id: string;
+  project_id: string;
+  provider: AgentProvider;
+  model: string;
+  status: AssistantStatus;
+  message?: string; // current question, proposal note, or failure reason
+  proposal?: ToolchainSuggestion; // present when status is proposal_ready
+  messages: AssistantMessage[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface StartAssistantInput {
+  provider: AgentProvider;
+  model: string;
+  message: string;
 }
 
 export type FeatureState =
