@@ -43,6 +43,7 @@ pub struct DockerProbe {
     docker_installed: bool,
     docker_running: bool,
     compose_available: bool,
+    docker_launchable: bool,
     docker_version: Option<String>,
     compose_version: Option<String>,
     install_url: &'static str,
@@ -157,7 +158,7 @@ pub(crate) fn release_mode() -> bool {
 /// Compose runner. Both profile names and service names come only from trusted
 /// constants or the fixed provider-profile table, never from the renderer.
 fn compose(profiles: &[&str], args: &[&str]) -> Result<String, String> {
-    let mut command = Command::new("docker");
+    let mut command = docker_command();
     command.arg("compose");
     for profile in profiles {
         command.args(["--profile", profile]);
@@ -191,31 +192,220 @@ fn probe(program: &str, args: &[&str]) -> Option<String> {
     }
 }
 
-/// Probe the host for Docker and Compose readiness.
-#[tauri::command]
-pub fn docker_probe() -> DockerProbe {
-    let docker_version = probe("docker", &["--version"]);
+/// Resolve Docker independently of the GUI process PATH. Apps launched from
+/// Finder/Explorer do not inherit an interactive shell PATH, even when Docker
+/// Desktop installed its CLI correctly for terminals.
+fn docker_executable() -> Option<PathBuf> {
+    let executable_name = if cfg!(windows) {
+        "docker.exe"
+    } else {
+        "docker"
+    };
+
+    if let Some(path) = std::env::var_os("PATH") {
+        for directory in std::env::split_paths(&path) {
+            let candidate = directory.join(executable_name);
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        for candidate in [
+            "/usr/local/bin/docker",
+            "/opt/homebrew/bin/docker",
+            "/Applications/Docker.app/Contents/Resources/bin/docker",
+        ] {
+            let candidate = PathBuf::from(candidate);
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+        if let Some(candidate) = docker_desktop_path()
+            .map(|app| app.join("Contents/Resources/bin/docker"))
+            .filter(|path| path.is_file())
+        {
+            return Some(candidate);
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        if let Some(program_files) = std::env::var_os("ProgramFiles") {
+            let candidate =
+                PathBuf::from(program_files).join("Docker/Docker/resources/bin/docker.exe");
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        for candidate in [
+            "/usr/bin/docker",
+            "/usr/local/bin/docker",
+            "/snap/bin/docker",
+        ] {
+            let candidate = PathBuf::from(candidate);
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+
+    None
+}
+
+/// Create a Docker CLI command using the same host-side resolution everywhere
+/// in the desktop backend, including profile login and Forgejo bootstrap.
+pub(crate) fn docker_command() -> Command {
+    let executable = docker_executable().unwrap_or_else(|| PathBuf::from("docker"));
+    let mut command = Command::new(&executable);
+
+    // Docker invokes credential helpers (for example
+    // `docker-credential-osxkeychain`) by name. A packaged app's PATH commonly
+    // omits both /usr/local/bin and Docker Desktop's bundled bin directory, so
+    // resolving the Docker binary alone is not enough for authenticated pulls.
+    let mut paths = Vec::new();
+    if let Some(parent) = executable
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty())
+    {
+        paths.push(parent.to_path_buf());
+    }
+    #[cfg(target_os = "macos")]
+    if let Some(bundled_bin) = docker_desktop_path()
+        .map(|app| app.join("Contents/Resources/bin"))
+        .filter(|path| path.is_dir())
+    {
+        if !paths.contains(&bundled_bin) {
+            paths.push(bundled_bin);
+        }
+    }
+    if let Some(current) = std::env::var_os("PATH") {
+        for path in std::env::split_paths(&current) {
+            if !paths.contains(&path) {
+                paths.push(path);
+            }
+        }
+    }
+    if let Ok(path) = std::env::join_paths(paths) {
+        command.env("PATH", path);
+    }
+
+    command
+}
+
+#[cfg(target_os = "macos")]
+fn docker_desktop_path() -> Option<PathBuf> {
+    let system = PathBuf::from("/Applications/Docker.app");
+    if system.is_dir() {
+        return Some(system);
+    }
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .map(|home| home.join("Applications/Docker.app"))
+        .filter(|path| path.is_dir())
+}
+
+#[cfg(target_os = "windows")]
+fn docker_desktop_path() -> Option<PathBuf> {
+    ["ProgramFiles", "LOCALAPPDATA"]
+        .into_iter()
+        .filter_map(std::env::var_os)
+        .map(PathBuf::from)
+        .map(|root| root.join("Docker/Docker/Docker Desktop.exe"))
+        .find(|path| path.is_file())
+}
+
+#[cfg(target_os = "linux")]
+fn docker_desktop_path() -> Option<PathBuf> {
+    [
+        "/usr/bin/docker-desktop",
+        "/opt/docker-desktop/bin/docker-desktop",
+    ]
+    .into_iter()
+    .map(PathBuf::from)
+    .find(|path| path.is_file())
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+fn docker_desktop_path() -> Option<PathBuf> {
+    None
+}
+
+fn probe_docker(args: &[&str]) -> Option<String> {
+    let executable = docker_executable()?;
+    probe(executable.to_string_lossy().as_ref(), args)
+}
+
+fn docker_probe_blocking() -> DockerProbe {
+    let executable_found = docker_executable().is_some();
+    let docker_version = probe_docker(&["--version"]);
     // `docker info --format {{.ServerVersion}}` only succeeds when the daemon
     // is actually reachable, so it doubles as the "is the daemon running" check.
-    let server_version = probe("docker", &["info", "--format", "{{.ServerVersion}}"]);
-    let compose_version = probe("docker", &["compose", "version", "--short"]);
+    let server_version = probe_docker(&["info", "--format", "{{.ServerVersion}}"]);
+    let compose_version = probe_docker(&["compose", "version", "--short"]);
+    let desktop_path = docker_desktop_path();
 
     DockerProbe {
-        docker_installed: docker_version.is_some(),
+        docker_installed: executable_found || desktop_path.is_some(),
         docker_running: server_version.is_some(),
         compose_available: compose_version.is_some(),
+        docker_launchable: desktop_path.is_some(),
         docker_version,
         compose_version,
         install_url: DOCKER_INSTALL_URL,
     }
 }
 
+/// Probe the host for Docker and Compose readiness without blocking the app's
+/// event loop while Docker Desktop is still starting.
+#[tauri::command]
+pub async fn docker_probe() -> Result<DockerProbe, String> {
+    tauri::async_runtime::spawn_blocking(docker_probe_blocking)
+        .await
+        .map_err(|_| "could not inspect Docker Desktop".to_string())
+}
+
+/// Launch only a detected Docker Desktop installation. The renderer cannot
+/// supply a program or arguments, preserving the native command boundary.
+#[tauri::command]
+pub fn launch_docker_desktop() -> Result<(), String> {
+    let path = docker_desktop_path()
+        .ok_or_else(|| "Docker Desktop is not installed in a supported location".to_string())?;
+
+    #[cfg(target_os = "macos")]
+    let mut command = {
+        let mut command = Command::new("/usr/bin/open");
+        command.arg(path);
+        command
+    };
+
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
+    let mut command = Command::new(path);
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+    let mut command = Command::new(path);
+
+    command
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| format!("could not launch Docker Desktop: {e}"))
+}
+
 /// Bring core services up and reconcile every real role worker against its
 /// exact provider profile. A disconnected, expired, or failed profile keeps
 /// only its matching worker stopped; it does not prevent the app from opening.
 #[tauri::command]
-pub fn stack_up(manager: State<'_, profiles::ProfileManager>) -> Result<(), String> {
-    stack_up_with_manager(manager.inner())
+pub async fn stack_up(manager: State<'_, profiles::ProfileManager>) -> Result<(), String> {
+    let manager = manager.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || stack_up_with_manager(&manager))
+        .await
+        .map_err(|_| "could not start the Commitarium stack".to_string())?
 }
 
 fn stack_up_with_manager(manager: &profiles::ProfileManager) -> Result<(), String> {
@@ -235,14 +425,19 @@ fn stack_up_with_manager(manager: &profiles::ProfileManager) -> Result<(), Strin
 
 /// Tear the whole Commitarium stack down (project-wide, all profiles).
 #[tauri::command]
-pub fn stack_down() -> Result<(), String> {
-    compose(PROVIDER_PROFILES, &["down"]).map(|_| ())
+pub async fn stack_down() -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(|| compose(PROVIDER_PROFILES, &["down"]).map(|_| ()))
+        .await
+        .map_err(|_| "could not stop the Commitarium stack".to_string())?
 }
 
 /// Update the stack: pull the latest images, then recreate in the background.
 #[tauri::command]
-pub fn stack_update(manager: State<'_, profiles::ProfileManager>) -> Result<(), String> {
-    stack_update_with_manager(manager.inner())
+pub async fn stack_update(manager: State<'_, profiles::ProfileManager>) -> Result<(), String> {
+    let manager = manager.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || stack_update_with_manager(&manager))
+        .await
+        .map_err(|_| "could not update the Commitarium stack".to_string())?
 }
 
 fn stack_update_with_manager(manager: &profiles::ProfileManager) -> Result<(), String> {
@@ -321,10 +516,16 @@ fn reconcile_provider_workers(
 }
 
 /// Report each Commitarium service's current Compose state.
-#[tauri::command]
-pub fn stack_status() -> Result<Vec<ServiceStatus>, String> {
+fn stack_status_blocking() -> Result<Vec<ServiceStatus>, String> {
     let raw = compose(PROVIDER_PROFILES, &["ps", "--all", "--format", "json"])?;
     Ok(parse_ps(&raw))
+}
+
+#[tauri::command]
+pub async fn stack_status() -> Result<Vec<ServiceStatus>, String> {
+    tauri::async_runtime::spawn_blocking(stack_status_blocking)
+        .await
+        .map_err(|_| "could not inspect the Commitarium stack".to_string())?
 }
 
 /// Parse `docker compose ps --format json` output, which is either one JSON
@@ -411,6 +612,24 @@ fn service_status_rank(status: &ServiceStatus) -> (u8, u8) {
 mod tests {
     use super::*;
 
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn docker_command_exposes_desktop_credential_helpers() {
+        let Some(app) = docker_desktop_path() else {
+            return;
+        };
+        let bundled_bin = app.join("Contents/Resources/bin");
+        let command = docker_command();
+        let configured_path = command
+            .get_envs()
+            .find(|(name, _)| *name == std::ffi::OsStr::new("PATH"))
+            .and_then(|(_, value)| value)
+            .expect("Docker command should carry an explicit PATH");
+
+        assert!(std::env::split_paths(configured_path).any(|path| path == bundled_bin));
+        assert!(bundled_bin.join("docker-credential-osxkeychain").is_file());
+    }
+
     #[test]
     fn materializes_embedded_release_compose_files() {
         let root = tempfile::tempdir().unwrap();
@@ -464,7 +683,7 @@ mod tests {
         let expected = profiles::worker_connections(&manager);
 
         stack_up_with_manager(&manager).unwrap();
-        let statuses = stack_status().unwrap();
+        let statuses = stack_status_blocking().unwrap();
 
         for core in ["forgejo", "coordinator", "simulated-codex-worker"] {
             assert!(statuses

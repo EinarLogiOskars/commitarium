@@ -21,6 +21,7 @@ export interface DockerProbe {
   docker_installed: boolean;
   docker_running: boolean;
   compose_available: boolean;
+  docker_launchable: boolean;
   docker_version: string | null;
   compose_version: string | null;
   install_url: string;
@@ -34,6 +35,7 @@ export interface ServiceStatus {
 }
 
 export const dockerProbe = (): Promise<DockerProbe> => invoke("docker_probe");
+export const launchDockerDesktop = (): Promise<void> => invoke("launch_docker_desktop");
 
 export const stackUp = (): Promise<void> => invoke("stack_up");
 export const stackDown = (): Promise<void> => invoke("stack_down");

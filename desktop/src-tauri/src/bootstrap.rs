@@ -15,6 +15,8 @@ use std::thread;
 use std::time::Duration;
 use zeroize::Zeroizing;
 
+use crate::docker;
+
 const FORGEJO_READY_ATTEMPTS: usize = 60;
 const FORGEJO_READY_DELAY: Duration = Duration::from_millis(250);
 
@@ -220,7 +222,7 @@ impl DockerForgejoAdmin {
     }
 
     fn command(&self) -> Command {
-        let mut command = Command::new("docker");
+        let mut command = docker::docker_command();
         command.args(["compose", "-f"]);
         command.arg(&self.compose_file);
         command.args(["-p", &self.project_name, "exec", "-T", "forgejo", "forgejo"]);
