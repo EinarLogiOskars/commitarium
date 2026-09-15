@@ -45,29 +45,29 @@ func (manager *Manager) Get(ctx context.Context, projectID string) (Manifest, er
 	if err != nil {
 		return Manifest{}, err
 	}
-	manager.mu.Lock()
-	defer manager.mu.Unlock()
-	var result Manifest
-	err = manager.withProjectLock(stored.ID, func() error {
-		var readErr error
-		result, readErr = manager.getLocked(stored.ID)
-		return readErr
-	})
-	return result, err
+	// All toolchain files are atomically replaced. Reads intentionally avoid the
+	// install lock so the API can expose installing/failed state while a worker
+	// holds that lock for a long-running runtime download.
+	return manager.get(stored.ID)
 }
 
-func (manager *Manager) getLocked(projectID string) (Manifest, error) {
+func (manager *Manager) get(projectID string) (Manifest, error) {
 	configPath := filepath.Join(manager.projectDirectory(projectID), "mise.toml")
 	configuredTools, configErr := ReadGeneratedConfig(configPath)
 	if configErr != nil {
 		return Manifest{}, fmt.Errorf("%w: read generated config", ErrUnavailable)
+	}
+	provisioning, provisioningErr := ReadProvisioningState(configPath)
+	if provisioningErr != nil {
+		return Manifest{}, fmt.Errorf("%w: read provisioning state", ErrUnavailable)
 	}
 	path := manager.manifestPath(projectID)
 	contents, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		if len(configuredTools) > 0 {
 			return Manifest{ProjectID: projectID, Status: StatusConfigured, Source: SourceRuntime,
-				Tools: configuredTools, Services: []string{}, ServicesRunnable: false}, nil
+				Tools: configuredTools, Services: []string{}, ServicesRunnable: false,
+				ProvisioningStatus: provisioning.Status, ProvisioningMessage: provisioning.Message}, nil
 		}
 		return Manifest{ProjectID: projectID, Status: StatusNeedsSetup, Tools: map[string]string{},
 			Services: []string{}, ServicesRunnable: false}, nil
@@ -87,6 +87,8 @@ func (manager *Manager) getLocked(projectID string) (Manifest, error) {
 		return Manifest{}, fmt.Errorf("%w: generated config is missing", ErrUnavailable)
 	}
 	normalized.Tools = configuredTools
+	normalized.ProvisioningStatus = provisioning.Status
+	normalized.ProvisioningMessage = provisioning.Message
 	normalized.UpdatedAt = manifest.UpdatedAt
 	return normalized, nil
 }
@@ -110,6 +112,11 @@ func (manager *Manager) Configure(ctx context.Context, projectID string, manifes
 		if writeErr := WriteGeneratedConfig(filepath.Join(directory, "mise.toml"), normalized.Tools); writeErr != nil {
 			return fmt.Errorf("%w: write generated config: %v", ErrUnavailable, writeErr)
 		}
+		if writeErr := WriteProvisioningState(filepath.Join(directory, "mise.toml"), ProvisioningState{
+			Status: ProvisioningPending, Message: "Runtime installation has not started.", UpdatedAt: normalized.UpdatedAt,
+		}); writeErr != nil {
+			return fmt.Errorf("%w: reset provisioning state: %v", ErrUnavailable, writeErr)
+		}
 		encoded, encodeErr := json.Marshal(normalized)
 		if encodeErr != nil {
 			return fmt.Errorf("%w: encode manifest", ErrUnavailable)
@@ -122,6 +129,8 @@ func (manager *Manager) Configure(ctx context.Context, projectID string, manifes
 	if err != nil {
 		return Manifest{}, err
 	}
+	normalized.ProvisioningStatus = ProvisioningPending
+	normalized.ProvisioningMessage = "Runtime installation has not started."
 	return normalized, nil
 }
 

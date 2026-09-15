@@ -227,6 +227,11 @@ func (resolver *RootedEnvironmentResolver) prepareToolchain(
 	if configured, err := toolchain.ReadGeneratedConfig(configPath); err != nil || len(configured) == 0 {
 		return nil, fmt.Errorf("%w: generated mise config is unsafe or empty", ErrToolchainUnavailable)
 	}
+	if err := toolchain.WriteProvisioningState(configPath, toolchain.ProvisioningState{
+		Status: toolchain.ProvisioningInstalling, Message: "Installing exact project runtimes.",
+	}); err != nil {
+		return nil, fmt.Errorf("%w: provisioning status cannot be recorded", ErrToolchainUnavailable)
+	}
 	installContext, cancel := context.WithTimeout(ctx, resolver.installTimeout)
 	defer cancel()
 	command := exec.CommandContext(installContext, resolver.miseExecutable, "install", "--yes")
@@ -236,9 +241,21 @@ func (resolver *RootedEnvironmentResolver) prepareToolchain(
 	command.Stderr = os.Stderr
 	if err := command.Run(); err != nil {
 		if errors.Is(installContext.Err(), context.DeadlineExceeded) {
+			_ = toolchain.WriteProvisioningState(configPath, toolchain.ProvisioningState{
+				Status:  toolchain.ProvisioningFailed,
+				Message: fmt.Sprintf("Runtime installation exceeded the %s safety limit.", resolver.installTimeout),
+			})
 			return nil, fmt.Errorf("%w: installation exceeded %s", ErrToolchainUnavailable, resolver.installTimeout)
 		}
+		_ = toolchain.WriteProvisioningState(configPath, toolchain.ProvisioningState{
+			Status: toolchain.ProvisioningFailed, Message: "Runtime installation failed; retry when worker network access is available.",
+		})
 		return nil, fmt.Errorf("%w: mise install failed: %v", ErrToolchainUnavailable, err)
+	}
+	if err := toolchain.WriteProvisioningState(configPath, toolchain.ProvisioningState{
+		Status: toolchain.ProvisioningReady, Message: "Exact project runtimes are installed.",
+	}); err != nil {
+		return nil, fmt.Errorf("%w: provisioning completion cannot be recorded", ErrToolchainUnavailable)
 	}
 	return variables, nil
 }

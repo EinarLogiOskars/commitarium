@@ -20,9 +20,15 @@ const (
 
 type Status string
 
+type ProvisioningStatus string
+
 const (
-	StatusNeedsSetup Status = "needs_setup"
-	StatusConfigured Status = "configured"
+	StatusNeedsSetup       Status             = "needs_setup"
+	StatusConfigured       Status             = "configured"
+	ProvisioningPending    ProvisioningStatus = "pending"
+	ProvisioningInstalling ProvisioningStatus = "installing"
+	ProvisioningReady      ProvisioningStatus = "ready"
+	ProvisioningFailed     ProvisioningStatus = "failed"
 )
 
 var (
@@ -37,13 +43,15 @@ var (
 )
 
 type Manifest struct {
-	ProjectID        string            `json:"project_id"`
-	Status           Status            `json:"status"`
-	Source           Source            `json:"source,omitempty"`
-	Tools            map[string]string `json:"tools"`
-	Services         []string          `json:"services"`
-	ServicesRunnable bool              `json:"services_runnable"`
-	UpdatedAt        time.Time         `json:"updated_at,omitempty"`
+	ProjectID           string             `json:"project_id"`
+	Status              Status             `json:"status"`
+	Source              Source             `json:"source,omitempty"`
+	Tools               map[string]string  `json:"tools"`
+	Services            []string           `json:"services"`
+	ServicesRunnable    bool               `json:"services_runnable"`
+	ProvisioningStatus  ProvisioningStatus `json:"provisioning_status,omitempty"`
+	ProvisioningMessage string             `json:"provisioning_message,omitempty"`
+	UpdatedAt           time.Time          `json:"updated_at,omitempty"`
 }
 
 type Suggestion struct {

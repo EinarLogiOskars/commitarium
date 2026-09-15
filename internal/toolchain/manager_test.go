@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 	"time"
 
@@ -44,7 +45,8 @@ func TestManagerConfiguresRuntimeManifestOutsideRepository(t *testing.T) {
 	if err != nil {
 		t.Fatalf("configure manifest: %v", err)
 	}
-	if configured.Status != StatusConfigured || configured.UpdatedAt != fixedTime {
+	if configured.Status != StatusConfigured || configured.UpdatedAt != fixedTime ||
+		configured.ProvisioningStatus != ProvisioningPending {
 		t.Fatalf("unexpected configured manifest %+v", configured)
 	}
 	configPath := filepath.Join(root, "projects", "prj_test", "mise.toml")
@@ -53,7 +55,8 @@ func TestManagerConfiguresRuntimeManifestOutsideRepository(t *testing.T) {
 		t.Fatalf("unexpected generated config %q err=%v", contents, err)
 	}
 	loaded, err := manager.Get(t.Context(), "prj_test")
-	if err != nil || loaded.Tools["python"] != "3.14.7" || loaded.Services[0] != "postgresql" || loaded.ServicesRunnable {
+	if err != nil || loaded.Tools["python"] != "3.14.7" || loaded.Services[0] != "postgresql" ||
+		loaded.ServicesRunnable || loaded.ProvisioningStatus != ProvisioningPending {
 		t.Fatalf("loaded manifest=%+v err=%v", loaded, err)
 	}
 	if err := WriteGeneratedConfig(configPath, map[string]string{"python": "3.14.7", "go": "1.27.1"}); err != nil {
@@ -79,6 +82,38 @@ func TestManagerReadsRuntimeConfigWithoutManifest(t *testing.T) {
 	loaded, err := manager.Get(t.Context(), "prj_test")
 	if err != nil || loaded.Source != SourceRuntime || loaded.Tools["rust"] != "1.98.1" {
 		t.Fatalf("runtime manifest=%+v err=%v", loaded, err)
+	}
+}
+
+func TestManagerReadsInstallingStateWithoutWaitingForInstallLock(t *testing.T) {
+	root := t.TempDir()
+	reader := &projectReaderStub{stored: project.Project{ID: "prj_test"}}
+	manager, err := NewManager(root, reader)
+	if err != nil {
+		t.Fatalf("create manager: %v", err)
+	}
+	if _, err := manager.Configure(t.Context(), "prj_test", Manifest{
+		Source: SourcePicker, Tools: map[string]string{"python": "3.14.7"},
+	}); err != nil {
+		t.Fatalf("configure manifest: %v", err)
+	}
+	configPath := filepath.Join(root, "projects", "prj_test", "mise.toml")
+	lock, err := os.OpenFile(configPath+".lock", os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		t.Fatalf("open install lock: %v", err)
+	}
+	defer lock.Close()
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
+		t.Fatalf("hold install lock: %v", err)
+	}
+	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
+	if err := WriteProvisioningState(configPath, ProvisioningState{Status: ProvisioningInstalling}); err != nil {
+		t.Fatalf("write installing state: %v", err)
+	}
+
+	loaded, err := manager.Get(t.Context(), "prj_test")
+	if err != nil || loaded.ProvisioningStatus != ProvisioningInstalling {
+		t.Fatalf("loaded manifest=%+v err=%v", loaded, err)
 	}
 }
 

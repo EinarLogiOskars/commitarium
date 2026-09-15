@@ -129,6 +129,11 @@ Safe UI capabilities:
   release does not provision PostgreSQL or other sidecars. Generated mise
   configuration is internal runtime state, never a repository file and never a
   diff the user needs to ignore.
+- For a configured toolchain, render `provisioning_status` as
+  `pending`, `installing`, `ready`, or `failed`. Poll the toolchain endpoint
+  while it is `installing`; show the bounded `provisioning_message` as status
+  text. The first provider turn is launched only after provisioning reaches
+  `ready`, and a provisioning failure leaves that turn unstarted and retryable.
 - Do not enable work-order creation until the project toolchain is
   `configured`. The backend also enforces this and returns
   `409 project_toolchain_required` without starting clarification.

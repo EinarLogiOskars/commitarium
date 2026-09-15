@@ -8,6 +8,7 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/EinarLogiOskars/commitarium/internal/toolchain"
 	"github.com/EinarLogiOskars/commitarium/internal/workerhttp"
 )
 
@@ -118,6 +119,10 @@ func TestRootedEnvironmentResolverUsesOnlyInternalToolchainConfig(t *testing.T) 
 	}
 	if _, err := resolver.Resolve(t.Context(), assignment); err != nil {
 		t.Fatalf("provision configured toolchain: %v", err)
+	}
+	provisioning, err := toolchain.ReadProvisioningState(configPath)
+	if err != nil || provisioning.Status != toolchain.ProvisioningReady {
+		t.Fatalf("provisioning state=%+v err=%v", provisioning, err)
 	}
 }
 
