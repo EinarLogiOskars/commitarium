@@ -491,8 +491,9 @@ ignore repository mise configuration and activate only this generated file in
 safe mode.
 
 `GET /api/v1/toolchain-presets` returns curated picker choices with explicit
-versions. The current presets are Python, Node.js LTS, Go, and Rust. The exact
-versions are part of the response rather than floating aliases.
+versions. The current presets are Python, Node.js LTS, Java with Gradle, Java
+with Maven, Go, and Rust. The Java presets use an explicit Temurin 25 LTS JDK.
+All exact versions are part of the response rather than floating aliases.
 
 `GET /api/v1/projects/{projectID}/toolchain` returns either:
 
@@ -539,11 +540,11 @@ Content-Type: application/json
 }
 ```
 
-Supported tool names are `bun`, `deno`, `go`, `java`, `node`, `php`, `python`,
-`ruby`, and `rust`. Every version must be explicit; `latest` and `system` are
-rejected. `source` must be `picker`, `detected`, `assistant`, or `runtime`.
-Invalid input returns `400 invalid_toolchain`; an unknown project returns
-`404 project_not_found`. `PUT` is an idempotent replacement.
+Supported tool names are `bun`, `deno`, `go`, `gradle`, `java`, `maven`, `node`,
+`php`, `python`, `ruby`, and `rust`. Every version must be explicit; `latest`
+and `system` are rejected. `source` must be `picker`, `detected`, `assistant`,
+or `runtime`. Invalid input returns `400 invalid_toolchain`; an unknown project
+returns `404 project_not_found`. `PUT` is an idempotent replacement.
 
 Every configured manifest exposes durable provisioning state. Saving a new
 toolchain sets `provisioning_status` to `pending`; the worker changes it to

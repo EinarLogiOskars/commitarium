@@ -37,8 +37,8 @@ var (
 	exactVersion       = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$`)
 	safeService        = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,63}$`)
 	allowedTools       = map[string]struct{}{
-		"bun": {}, "deno": {}, "go": {}, "java": {}, "node": {},
-		"php": {}, "python": {}, "ruby": {}, "rust": {},
+		"bun": {}, "deno": {}, "go": {}, "gradle": {}, "java": {},
+		"maven": {}, "node": {}, "php": {}, "python": {}, "ruby": {}, "rust": {},
 	}
 )
 
@@ -73,6 +73,8 @@ func Presets() []Preset {
 	return []Preset{
 		{ID: "python", DisplayName: "Python", Description: "Current stable Python runtime", Tools: map[string]string{"python": "3.14.7"}},
 		{ID: "node-lts", DisplayName: "Node.js LTS", Description: "Current Node.js long-term support runtime", Tools: map[string]string{"node": "24.21.0"}},
+		{ID: "java-gradle", DisplayName: "Java + Gradle", Description: "Temurin 25 LTS with the Gradle build tool", Tools: map[string]string{"java": "temurin-25.0.4+7.0.LTS", "gradle": "9.7.1"}},
+		{ID: "java-maven", DisplayName: "Java + Maven", Description: "Temurin 25 LTS with the Maven build tool", Tools: map[string]string{"java": "temurin-25.0.4+7.0.LTS", "maven": "3.9.16"}},
 		{ID: "go", DisplayName: "Go", Description: "Current stable Go toolchain", Tools: map[string]string{"go": "1.27.1"}},
 		{ID: "rust", DisplayName: "Rust", Description: "Current stable Rust toolchain", Tools: map[string]string{"rust": "1.98.1"}},
 	}
