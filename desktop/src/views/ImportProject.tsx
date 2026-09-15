@@ -8,7 +8,13 @@ import {
 import { detectProjectToolchain, updateProjectToolchain } from "../api/toolchains";
 import { ApiError } from "../api/client";
 import { SetupAssistant } from "./SetupAssistant";
-import type { RecoveryPolicy, ToolchainSuggestion } from "../api/types";
+import { useModels } from "./useModels";
+import {
+  ProjectDefaultsFields,
+  initialProjectDefaults,
+  projectDefaultsPayload,
+} from "./ProjectDefaultsFields";
+import type { ToolchainSuggestion } from "../api/types";
 
 export function ImportProject({
   onClose,
@@ -20,7 +26,9 @@ export function ImportProject({
   const [info, setInfo] = useState<FolderInfo | null>(null);
   const [name, setName] = useState("");
   const [branch, setBranch] = useState("");
-  const [policy, setPolicy] = useState<RecoveryPolicy>("approval_required");
+  const [defaults, setDefaults] = useState(initialProjectDefaults());
+  const [showDefaults, setShowDefaults] = useState(false);
+  const { modelsFor, loading: modelsLoading } = useModels();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // After import: run toolchain detection and let the user accept it before
@@ -50,7 +58,8 @@ export function ImportProject({
     setBusy(true);
     setError(null);
     try {
-      const project = await importProject(info.path, name.trim(), branch.trim(), policy);
+      const { recovery_policy, ...rest } = projectDefaultsPayload(defaults);
+      const project = await importProject(info.path, name.trim(), branch.trim(), recovery_policy!, rest);
       setImported(project.id);
       // Shallow, non-mutating scan of the imported repo. Failure isn't fatal —
       // the user can still choose a stack in the workspace.
@@ -164,17 +173,29 @@ export function ImportProject({
                 Default branch
                 <input value={branch} onChange={(e) => setBranch(e.target.value)} disabled={busy} />
               </label>
-              <label>
-                Recovery policy
-                <select
-                  value={policy}
-                  onChange={(e) => setPolicy(e.target.value as RecoveryPolicy)}
+            </div>
+
+            <div className="neworder__options">
+              <button
+                type="button"
+                className="neworder__options-head"
+                onClick={() => setShowDefaults((v) => !v)}
+              >
+                <span className="activity-group__chevron">{showDefaults ? "▼" : "▶"}</span>
+                Project defaults
+                {!showDefaults && (
+                  <span className="neworder__summary">Agents, models, autonomy, merge, recovery, rounds</span>
+                )}
+              </button>
+              {showDefaults && (
+                <ProjectDefaultsFields
+                  value={defaults}
+                  onChange={setDefaults}
+                  modelsFor={modelsFor}
+                  modelsLoading={modelsLoading}
                   disabled={busy}
-                >
-                  <option value="approval_required">Approval required</option>
-                  <option value="automatic">Automatic recovery</option>
-                </select>
-              </label>
+                />
+              )}
             </div>
 
             <div className="row">
