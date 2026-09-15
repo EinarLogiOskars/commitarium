@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
 import { listProjects, createProject, repairRepository } from "../api/projects";
-import { getToolchainPresets, updateProjectToolchain } from "../api/toolchains";
 import { deleteProject } from "../ipc";
 import { ApiError } from "../api/client";
 import { ImportProject } from "./ImportProject";
@@ -10,7 +9,7 @@ import {
   initialProjectDefaults,
   projectDefaultsPayload,
 } from "./ProjectDefaultsFields";
-import type { Project, ToolchainPreset } from "../api/types";
+import type { Project } from "../api/types";
 
 // Absent repository_status means a pre-slice-1 coordinator that always bound a
 // repo on create — treat as ready.
@@ -33,17 +32,6 @@ export function Projects({
   const [importing, setImporting] = useState(false);
   const [repairing, setRepairing] = useState<string | null>(null);
   const { modelsFor, loading: modelsLoading } = useModels();
-  // Stack quick-pick: a preset id configures the project inline on create; ""
-  // means decide in the workspace (custom, agent, or later).
-  const [presets, setPresets] = useState<ToolchainPreset[]>([]);
-  const [stackChoice, setStackChoice] = useState("");
-
-  useEffect(() => {
-    if (!reachable) return;
-    void getToolchainPresets()
-      .then((r) => setPresets(r.presets))
-      .catch(() => setPresets([]));
-  }, [reachable]);
 
   const load = useCallback(async () => {
     if (!reachable) return;
@@ -69,18 +57,7 @@ export function Projects({
         { name: name.trim(), ...projectDefaultsPayload(defaults) },
         crypto.randomUUID(),
       );
-      // Configure the chosen preset now so the project lands runnable; otherwise
-      // the workspace's Stack step handles custom / agent / detection.
-      const preset = presets.find((p) => p.id === stackChoice);
-      if (preset) {
-        await updateProjectToolchain(created.id, {
-          source: "picker",
-          tools: preset.tools,
-          services: preset.services ?? [],
-        });
-      }
       setName("");
-      setStackChoice("");
       await load();
       onSelect(created.id);
     } catch (e) {
@@ -171,24 +148,6 @@ export function Projects({
           disabled={creating}
           autoFocus
         />
-
-        {presets.length > 0 && (
-          <label className="create__stack">
-            Stack
-            <select
-              value={stackChoice}
-              onChange={(e) => setStackChoice(e.target.value)}
-              disabled={creating}
-            >
-              <option value="">Decide in the workspace</option>
-              {presets.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.display_name} ({Object.entries(p.tools).map(([t, v]) => `${t} ${v}`).join(", ")})
-                </option>
-              ))}
-            </select>
-          </label>
-        )}
 
         <div className="neworder__options">
           <button
