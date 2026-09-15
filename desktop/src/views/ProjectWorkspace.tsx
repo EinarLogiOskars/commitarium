@@ -144,6 +144,11 @@ export function ProjectWorkspace({
           {mode === "overview" && project && (
             <ProjectDashboard
               project={project}
+              needsStack={needsStack}
+              onOpenStack={() => {
+                setMode("stack");
+                setOrderId(null);
+              }}
               onOpenOrder={openOrder}
               onNewOrder={startNewOrder}
               onSettings={() => {

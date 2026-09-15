@@ -1852,10 +1852,19 @@ button.danger:not(.ghost) {
   margin-top: 4px;
 }
 
-/* Create form: stack quick-pick */
-.create__stack {
+/* Overview CTA prompting stack setup for a not-yet-configured project. */
+.dash__cta {
   display: flex;
-  flex-direction: column;
-  gap: 4px;
-  font-size: 13px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+  background: color-mix(in srgb, var(--accent) 8%, var(--panel));
+}
+.dash__cta h2 {
+  margin: 0 0 4px;
+}
+.dash__cta .primary {
+  flex: none;
+  white-space: nowrap;
 }

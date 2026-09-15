@@ -14,11 +14,15 @@ const POLL_MS = 4000;
 // the matching backend slices ship.
 export function ProjectDashboard({
   project,
+  needsStack,
+  onOpenStack,
   onOpenOrder,
   onNewOrder,
   onSettings,
 }: {
   project: Project;
+  needsStack?: boolean;
+  onOpenStack: () => void;
   onOpenOrder: (featureId: string) => void;
   onNewOrder: () => void;
   onSettings: () => void;
@@ -109,6 +113,19 @@ export function ProjectDashboard({
           <Fact label="Created" value={new Date(project.created_at).toLocaleDateString()} />
         </div>
       </section>
+
+      {needsStack && (
+        <section className="panel dash__cta">
+          <div>
+            <h2>Choose a stack to start</h2>
+            <p className="muted">
+              Pick the runtime this project's agents build with — a preset, your own tools, or let
+              an agent propose one. Required before you can create work orders.
+            </p>
+          </div>
+          <button className="primary" onClick={onOpenStack}>Set up stack</button>
+        </section>
+      )}
 
       {error && <div className="banner banner--error">{error}</div>}
       {recoveryNotice && <div className="banner">{recoveryNotice}</div>}
