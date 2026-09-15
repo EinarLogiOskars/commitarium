@@ -63,7 +63,11 @@ export function NewWorkOrder({
       });
       onCreated(created.id);
     } catch (e) {
-      setError(e instanceof ApiError ? `${e.message} (${e.code})` : String(e));
+      if (e instanceof ApiError && e.code === "project_toolchain_required") {
+        setError("This project needs a stack before you can create work orders. Open Stack to choose one.");
+      } else {
+        setError(e instanceof ApiError ? `${e.message} (${e.code})` : String(e));
+      }
     } finally {
       setBusy(false);
     }

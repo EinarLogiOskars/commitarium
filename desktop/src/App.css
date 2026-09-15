@@ -1698,3 +1698,81 @@ button.danger:not(.ghost) {
     transform: rotate(360deg);
   }
 }
+
+/* ---- Stack / toolchain picker ------------------------------------------- */
+.rail__badge {
+  font-size: 10px;
+  padding: 1px 7px;
+  flex: none;
+}
+.stack__presets {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 10px;
+  margin: 12px 0 18px;
+}
+.stack__preset {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  text-align: left;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel);
+  cursor: pointer;
+}
+.stack__preset:hover {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+}
+.stack__preset-name {
+  font-weight: 600;
+}
+.stack__preset-desc {
+  font-size: 12px;
+}
+.stack__preset-tools {
+  font-size: 12px;
+  color: var(--accent);
+  margin-top: 2px;
+}
+.stack__tools {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 18px;
+}
+.stack__row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.stack__row input {
+  flex: 1;
+}
+.stack__actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 2px;
+}
+.stack__services {
+  margin-bottom: 18px;
+}
+.stack__services > label {
+  font-weight: 500;
+}
+.stack__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 8px 0;
+}
+.pill__x {
+  background: none;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  padding: 0 0 0 2px;
+  font-size: 14px;
+  line-height: 1;
+}
