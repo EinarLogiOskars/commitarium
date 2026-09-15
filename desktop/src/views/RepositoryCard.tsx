@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { getRepositoryOverview, type RepositoryOverview } from "../api/projects";
 import { ApiError } from "../api/client";
 import { Markdown } from "./Markdown";
@@ -9,6 +9,23 @@ export function RepositoryCard({ projectId }: { projectId: string }) {
   const [overview, setOverview] = useState<RepositoryOverview | null>(null);
   const [error, setError] = useState<{ code?: string; message: string } | null>(null);
   const [expanded, setExpanded] = useState(false);
+  // Only offer the expand toggle when the clamped README actually overflows —
+  // a short README that fits shows in full with no toggle. Re-measured on resize
+  // so a wider window that gains room drops the toggle.
+  const [overflowing, setOverflowing] = useState(false);
+  const bodyRef = useRef<HTMLDivElement | null>(null);
+
+  const measure = useCallback(() => {
+    const el = bodyRef.current;
+    if (!el || expanded) return;
+    setOverflowing(el.scrollHeight - el.clientHeight > 4);
+  }, [expanded]);
+
+  useLayoutEffect(() => {
+    measure();
+    window.addEventListener("resize", measure);
+    return () => window.removeEventListener("resize", measure);
+  }, [measure, overview]);
 
   useEffect(() => {
     let active = true;
@@ -62,11 +79,18 @@ export function RepositoryCard({ projectId }: { projectId: string }) {
           )}
 
           {overview.readme_markdown ? (
-            <div className={`repo__readme ${expanded ? "" : "repo__readme--clamped"}`}>
-              <Markdown text={overview.readme_markdown} />
-              <button className="linkish repo__readme-toggle" onClick={() => setExpanded((v) => !v)}>
-                {expanded ? "Show less" : "Show full README"}
-              </button>
+            <div className="repo__readme">
+              <div
+                ref={bodyRef}
+                className={`repo__readme-body ${expanded ? "" : "repo__readme-body--clamped"}`}
+              >
+                <Markdown text={overview.readme_markdown} />
+              </div>
+              {(overflowing || expanded) && (
+                <button className="linkish repo__readme-toggle" onClick={() => setExpanded((v) => !v)}>
+                  {expanded ? "Show less" : "Show full README"}
+                </button>
+              )}
             </div>
           ) : (
             <p className="muted note">No README in the repository root.</p>
