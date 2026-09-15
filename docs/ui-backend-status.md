@@ -150,10 +150,9 @@ Safe UI capabilities:
 - Both ordinary creation and import already accept the complete project-default
   settings objects: lead/reviewer providers and exact models, autonomy, merge,
   recovery, and dialogue limits. Expose these as a visible, prefilled “Project
-  defaults” step; no coordinator contract change is needed. The current Tauri
-  `import_project` command only forwards `recoveryPolicy`, so the desktop slice
-  must also extend that typed IPC command and its multipart metadata to carry
-  the other selected defaults.
+  defaults” step; no coordinator contract change is needed. The Tauri
+  `import_project` command forwards the same selected defaults in its multipart
+  metadata.
 - After import, run the fast detector immediately and offer “Accept detected
   stack,” “Have an agent verify,” and “Choose manually.” Verification uses the
   same assistant routes with `purpose: "verify_repository"`, preselected from
@@ -164,8 +163,14 @@ Safe UI capabilities:
   read failure. The model receives bounded committed evidence, never a checkout
   or repository credential.
 
-The UI must not expect project deletion, general project editing, or changing a
-bound Forgejo repository. Those operations are not implemented.
+Project deletion is available through the native `delete_project` command,
+which combines coordinator teardown with trusted local source-metadata cleanup.
+It is irreversible and must have an explicit confirmation. The default action
+uses a stable idempotency key and surfaces `409 project_has_active_run` rather
+than stopping live work silently. Offer a separate explicit force choice that
+reuses one stable key with `force: true`; retry
+`503 project_deletion_unavailable` with that same key. General project editing
+and changing a bound Forgejo repository remain unavailable.
 
 For “Open existing project,” the desktop/native layer—not browser JavaScript—
 owns the folder picker, clean-worktree check, default-branch discovery, Git
@@ -208,6 +213,11 @@ rather than rereading the project's possibly newer settings.
 
 Safe UI capabilities:
 
+- Irreversibly delete a project with the native `delete_project` command. It
+  removes every owned work order and internal repository plus the trusted host
+  source mapping. Confirm before invoking it. A default delete refuses live
+  work with `409 project_has_active_run`; an explicit force delete stops exact
+  active attempts first. Preserve the idempotency key for retries.
 - Create a draft feature with
   `POST /api/v1/projects/{projectID}/features`.
 - List all features in a project, ordered by recent activity, with
@@ -517,5 +527,7 @@ repository credentials.
 - Pause, continue, and stop are complete for simulated sessions. The real Codex
   path currently supports bounded messages at safe waiting points, not every
   mid-turn control.
-- Project deletion, accepted-goal editing, and automatic repair of
-  contradictory Git or Forgejo state are intentionally unavailable.
+- Accepted-goal editing and automatic repair of contradictory Git or Forgejo
+  state are intentionally unavailable. Project deletion is implemented and
+  irreversible; contradictory artifact ownership is refused rather than
+  repaired automatically.

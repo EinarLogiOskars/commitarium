@@ -104,6 +104,36 @@ func TestClientMapsRepositoryVerificationFailures(t *testing.T) {
 	}
 }
 
+func TestClientDeletesExactRepositoryAndAcceptsMissingRetry(t *testing.T) {
+	tokenFile := writeTestToken(t, "secret-test-token")
+	calls := 0
+	client, err := NewClient(ClientConfig{
+		BaseURL: "http://forgejo:3000", TokenFile: tokenFile, RequestTimeout: time.Second,
+		HTTPClient: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+			calls++
+			if request.Method != http.MethodDelete || request.URL.Path != "/api/v1/repos/owner/project-repo" {
+				t.Fatalf("unexpected repository delete %s %s", request.Method, request.URL)
+			}
+			if calls == 1 {
+				return jsonResponse(http.StatusNoContent, ``), nil
+			}
+			return jsonResponse(http.StatusNotFound, `{}`), nil
+		})},
+	})
+	if err != nil {
+		t.Fatalf("create client: %v", err)
+	}
+	if err := client.DeleteRepository(t.Context(), "owner", "project-repo"); err != nil {
+		t.Fatalf("delete repository: %v", err)
+	}
+	if err := client.DeleteRepository(t.Context(), "owner", "project-repo"); err != nil {
+		t.Fatalf("retry missing repository: %v", err)
+	}
+	if calls != 2 {
+		t.Fatalf("repository delete calls=%d want=2", calls)
+	}
+}
+
 func TestClientReadsRotatedTokenWithoutRestart(t *testing.T) {
 	tokenFile := writeTestToken(t, "first-token")
 	wantTokens := []string{"token first-token", "token second-token"}

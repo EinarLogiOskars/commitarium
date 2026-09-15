@@ -36,6 +36,7 @@ pub fn run() {
             import::inspect_folder,
             import::import_project,
             import::get_project_source,
+            import::delete_project,
             handoff::synchronize_feature_locally,
             handoff::plain_folder::synchronize_feature_to_folder,
             handoff::project::get_project_sync_state,

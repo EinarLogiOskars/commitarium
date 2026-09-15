@@ -341,7 +341,12 @@ func (s *ExecutionStore) ListRecoverableRuns(
 		        r.lead_provider, r.reviewer_provider, r.lead_model, r.reviewer_model, r.merge_policy, r.autonomy_policy, r.plan_version,
 		        r.started_at, r.updated_at, r.ended_at
 		 FROM runs r
-		 WHERE r.status = ?
+		 WHERE NOT EXISTS (
+		       SELECT 1
+		       FROM features f
+		       JOIN project_deletions d ON d.project_id = f.project_id
+		       WHERE f.id = r.feature_id AND d.status = 'pending'
+		   ) AND (r.status = ?
 		    OR (r.status = ? AND (
 			   EXISTS (
 			     SELECT 1 FROM sessions s
@@ -357,7 +362,7 @@ func (s *ExecutionStore) ListRecoverableRuns(
 			         WHERE f.id = r.feature_id AND f.state = 'draft'
 			           AND f.accepted_goal != '' AND f.goal_accepted_at IS NOT NULL
 			       ))
-		   ))
+		   )))
 		 ORDER BY r.started_at, r.id`,
 		execution.RunStatusRunning,
 		execution.RunStatusWaitingForUser,

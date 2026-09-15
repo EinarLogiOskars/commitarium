@@ -23,6 +23,25 @@ type ProjectReader interface {
 	GetRepositoryToolchainEvidence(context.Context, string) (project.RepositoryToolchainEvidence, error)
 }
 
+type projectDeletionReader interface {
+	ProjectDeletionPending(context.Context, string) (bool, error)
+}
+
+func ensureProjectNotDeleting(ctx context.Context, projects ProjectReader, projectID string) error {
+	reader, ok := projects.(projectDeletionReader)
+	if !ok {
+		return nil
+	}
+	pending, err := reader.ProjectDeletionPending(ctx, projectID)
+	if err != nil {
+		return err
+	}
+	if pending {
+		return project.ErrNotFound
+	}
+	return nil
+}
+
 type Manager struct {
 	root     string
 	projects ProjectReader
@@ -95,6 +114,9 @@ func (manager *Manager) get(projectID string) (Manifest, error) {
 }
 
 func (manager *Manager) Configure(ctx context.Context, projectID string, manifest Manifest) (Manifest, error) {
+	if err := ensureProjectNotDeleting(ctx, manager.projects, projectID); err != nil {
+		return Manifest{}, err
+	}
 	stored, err := manager.projects.GetByID(ctx, projectID)
 	if err != nil {
 		return Manifest{}, err
@@ -133,6 +155,38 @@ func (manager *Manager) Configure(ctx context.Context, projectID string, manifes
 	normalized.ProvisioningStatus = ProvisioningPending
 	normalized.ProvisioningMessage = "Runtime installation has not started."
 	return normalized, nil
+}
+
+// DeleteProject removes only one project's generated configuration. Shared
+// mise data, cache, and state directories are siblings of projects/ and are
+// never named by this operation.
+func (manager *Manager) DeleteProject(ctx context.Context, projectID string) error {
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	directory := manager.projectDirectory(projectID)
+	projectsRoot := filepath.Join(manager.root, "projects")
+	if strings.TrimSpace(projectID) == "" || filepath.Dir(directory) != projectsRoot || directory == projectsRoot {
+		return fmt.Errorf("%w: project identity is unsafe", ErrUnavailable)
+	}
+	info, err := os.Lstat(directory)
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		return nil
+	case err != nil:
+		return fmt.Errorf("%w: inspect project toolchain directory", ErrUnavailable)
+	case info.Mode()&os.ModeSymlink != 0 || !info.IsDir():
+		return fmt.Errorf("%w: project toolchain path is unsafe", ErrUnavailable)
+	}
+	// Provisioning in worker containers takes this same file lock.
+	return manager.withProjectLock(projectID, func() error {
+		if err := os.RemoveAll(directory); err != nil {
+			return fmt.Errorf("%w: remove project toolchain directory", ErrUnavailable)
+		}
+		return nil
+	})
 }
 
 func (manager *Manager) Detect(ctx context.Context, projectID string) (Suggestion, error) {

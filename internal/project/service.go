@@ -28,6 +28,10 @@ type Service struct {
 	now                      func() time.Time
 }
 
+type projectDeletionStateStore interface {
+	ProjectDeletionPending(context.Context, string) (bool, error)
+}
+
 func NewService(store Store) *Service {
 	return NewServiceWithRepositoryVerifier(store, unavailableRepositoryVerifier{})
 }
@@ -549,6 +553,21 @@ func (s *Service) GetByID(
 	}
 
 	return project, nil
+}
+
+// ProjectDeletionPending lets project-scoped services fence new mutations
+// while a durable teardown is waiting to be resumed after a restart. Stores
+// without project deletion support remain compatible and report false.
+func (s *Service) ProjectDeletionPending(ctx context.Context, projectID string) (bool, error) {
+	store, ok := s.store.(projectDeletionStateStore)
+	if !ok {
+		return false, nil
+	}
+	pending, err := store.ProjectDeletionPending(ctx, projectID)
+	if err != nil {
+		return false, fmt.Errorf("check project %q deletion state: %w", projectID, err)
+	}
+	return pending, nil
 }
 
 func (s *Service) List(ctx context.Context) ([]Project, error) {

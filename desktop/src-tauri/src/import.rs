@@ -10,6 +10,7 @@
 //! pushed to any external remote.
 
 use serde::{Deserialize, Serialize};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use tauri::{AppHandle, Manager};
@@ -19,6 +20,7 @@ const IMPORT_AUTHOR: &str = "Commitarium Import";
 const IMPORT_EMAIL: &str = "import@commitarium.local";
 // Rough estimate only (the real import honors .gitignore); skip obvious noise.
 const SKIP_DIRS: &[&str] = &[".git", "node_modules", "target", "dist", ".venv", ".next"];
+static PROJECT_SOURCES_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// What we learned about a picked folder, to drive the import dialog.
 #[derive(Serialize)]
@@ -424,6 +426,9 @@ pub(crate) struct ProjectSource {
 }
 
 fn record_source(app: &AppHandle, project_id: &str, source: ProjectSource) -> Result<(), String> {
+    let _guard = PROJECT_SOURCES_LOCK
+        .lock()
+        .map_err(|_| "project source storage lock is unavailable".to_string())?;
     let path = sources_path(app)?;
     let mut map: serde_json::Map<String, serde_json::Value> = match std::fs::read_to_string(&path) {
         Ok(s) => serde_json::from_str(&s).unwrap_or_default(),
@@ -433,11 +438,7 @@ fn record_source(app: &AppHandle, project_id: &str, source: ProjectSource) -> Re
         project_id.to_string(),
         serde_json::to_value(source).map_err(|e| format!("encode project source: {e}"))?,
     );
-    std::fs::write(
-        &path,
-        serde_json::to_string_pretty(&serde_json::Value::Object(map)).unwrap_or_default(),
-    )
-    .map_err(|e| format!("write sources: {e}"))
+    write_source_map(&path, map)
 }
 
 /// Look up the on-disk source path recorded for a project, if any.
@@ -446,10 +447,106 @@ pub fn get_project_source(app: AppHandle, project_id: String) -> Result<Option<S
     Ok(get_project_source_record(&app, &project_id)?.map(|source| source.path))
 }
 
+/// Delete a project through the coordinator, then forget only its trusted
+/// host-side source mapping. If the local write fails, retrying the same key
+/// replays coordinator success and repairs this final host-only step.
+#[tauri::command]
+pub async fn delete_project(
+    app: AppHandle,
+    project_id: String,
+    idempotency_key: String,
+    force: Option<bool>,
+) -> Result<serde_json::Value, String> {
+    if project_id.trim().is_empty() || idempotency_key.trim().is_empty() {
+        return Err("project ID and Idempotency-Key are required".into());
+    }
+    let mut url =
+        reqwest::Url::parse(COORDINATOR_BASE).map_err(|e| format!("coordinator URL: {e}"))?;
+    url.path_segments_mut()
+        .map_err(|_| "coordinator URL cannot accept a project path".to_string())?
+        .extend(["api", "v1", "projects", project_id.trim()]);
+    if force.unwrap_or(false) {
+        url.query_pairs_mut().append_pair("force", "true");
+    }
+    let response = reqwest::Client::new()
+        .delete(url)
+        .header("Idempotency-Key", idempotency_key.trim())
+        .send()
+        .await
+        .map_err(|e| format!("delete project through coordinator: {e}"))?;
+    let status = response.status();
+    let body = response.text().await.unwrap_or_default();
+    if !status.is_success() {
+        if let Ok(value) = serde_json::from_str::<serde_json::Value>(&body) {
+            if let (Some(code), Some(message)) = (
+                value.pointer("/error/code").and_then(|item| item.as_str()),
+                value
+                    .pointer("/error/message")
+                    .and_then(|item| item.as_str()),
+            ) {
+                return Err(format!("{message} ({code})"));
+            }
+        }
+        return Err(format!(
+            "project deletion failed (HTTP {}): {}",
+            status.as_u16(),
+            body
+        ));
+    }
+    let result = serde_json::from_str(&body).map_err(|e| format!("parse project deletion: {e}"))?;
+    remove_source(&app, project_id.trim())?;
+    Ok(result)
+}
+
+fn remove_source(app: &AppHandle, project_id: &str) -> Result<(), String> {
+    let _guard = PROJECT_SOURCES_LOCK
+        .lock()
+        .map_err(|_| "project source storage lock is unavailable".to_string())?;
+    remove_source_at(&sources_path(app)?, project_id)
+}
+
+fn remove_source_at(path: &Path, project_id: &str) -> Result<(), String> {
+    let contents = match std::fs::read_to_string(path) {
+        Ok(contents) => contents,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(format!("read sources: {error}")),
+    };
+    let mut map: serde_json::Map<String, serde_json::Value> =
+        serde_json::from_str(&contents).map_err(|e| format!("parse sources: {e}"))?;
+    if map.remove(project_id).is_none() {
+        return Ok(());
+    }
+    write_source_map(path, map)
+}
+
+fn write_source_map(
+    path: &Path,
+    map: serde_json::Map<String, serde_json::Value>,
+) -> Result<(), String> {
+    let encoded = serde_json::to_vec_pretty(&serde_json::Value::Object(map))
+        .map_err(|e| format!("encode sources: {e}"))?;
+    let parent = path
+        .parent()
+        .ok_or_else(|| "project source path has no parent".to_string())?;
+    let mut temporary = tempfile::NamedTempFile::new_in(parent)
+        .map_err(|e| format!("create temporary sources file: {e}"))?;
+    temporary
+        .write_all(&encoded)
+        .and_then(|_| temporary.as_file().sync_all())
+        .map_err(|e| format!("write temporary sources file: {e}"))?;
+    temporary
+        .persist(path)
+        .map_err(|e| format!("replace sources: {}", e.error))?;
+    Ok(())
+}
+
 pub(crate) fn get_project_source_record(
     app: &AppHandle,
     project_id: &str,
 ) -> Result<Option<ProjectSource>, String> {
+    let _guard = PROJECT_SOURCES_LOCK
+        .lock()
+        .map_err(|_| "project source storage lock is unavailable".to_string())?;
     let path = sources_path(app)?;
     let map: serde_json::Map<String, serde_json::Value> = match std::fs::read_to_string(&path) {
         Ok(s) => serde_json::from_str(&s).unwrap_or_default(),
@@ -546,6 +643,28 @@ mod tests {
         assert!(value.get("autonomy_policy").is_none());
         assert!(value.get("merge_policy").is_none());
         assert!(value.get("dialogue_limits").is_none());
+    }
+
+    #[test]
+    fn source_removal_forgets_only_the_deleted_project_and_is_idempotent() {
+        let root = tempfile::tempdir().expect("temp root");
+        let path = root.path().join("project-sources.json");
+        std::fs::write(
+            &path,
+            r#"{
+              "prj_delete":{"path":"/delete","source_type":"git"},
+              "prj_keep":{"path":"/keep","source_type":"plain_folder"}
+            }"#,
+        )
+        .expect("write sources");
+
+        remove_source_at(&path, "prj_delete").expect("remove deleted source");
+        remove_source_at(&path, "prj_delete").expect("repeat source removal");
+        let value: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).expect("read resulting sources"))
+                .expect("parse resulting sources");
+        assert!(value.get("prj_delete").is_none());
+        assert_eq!(value["prj_keep"]["path"], "/keep");
     }
 
     #[test]

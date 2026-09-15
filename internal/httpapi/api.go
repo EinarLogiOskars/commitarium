@@ -9,6 +9,7 @@ import (
 	"github.com/EinarLogiOskars/commitarium/internal/feature"
 	"github.com/EinarLogiOskars/commitarium/internal/modelcatalog"
 	"github.com/EinarLogiOskars/commitarium/internal/project"
+	"github.com/EinarLogiOskars/commitarium/internal/projectdeletion"
 	"github.com/EinarLogiOskars/commitarium/internal/toolchain"
 	"github.com/EinarLogiOskars/commitarium/internal/worker"
 	"github.com/EinarLogiOskars/commitarium/internal/workflow"
@@ -161,6 +162,10 @@ type FeatureDeletionService interface {
 	Delete(ctx context.Context, projectID, featureID string) (workorder.Result, error)
 }
 
+type ProjectDeletionService interface {
+	Delete(ctx context.Context, projectID, idempotencyKey string, force bool) (projectdeletion.Result, error)
+}
+
 type ModelCatalogService interface {
 	List(context.Context) []modelcatalog.Catalog
 	Refresh(context.Context) ([]modelcatalog.Catalog, error)
@@ -219,6 +224,7 @@ type API struct {
 	workspaces         WorkspaceService
 	realWorkflow       RealWorkflowStarter
 	featureDeletion    FeatureDeletionService
+	projectDeletion    ProjectDeletionService
 	modelCatalog       ModelCatalogService
 	toolchains         ToolchainService
 	toolchainAssistant ToolchainAssistantService
@@ -295,10 +301,13 @@ func NewWithWorkspaceRealWorkflowDeletionAndModels(
 	modelCatalog ModelCatalogService,
 	toolchains ToolchainService,
 	toolchainAssistant ToolchainAssistantService,
+	additional ...any,
 ) http.Handler {
+	extras := []any{toolchains, toolchainAssistant}
+	extras = append(extras, additional...)
 	return newAPI(
 		projects, features, workflow, executionService, controller, starter,
-		workspaces, realWorkflow, featureDeletion, modelCatalog, toolchains, toolchainAssistant,
+		workspaces, realWorkflow, featureDeletion, modelCatalog, extras...,
 	)
 }
 
@@ -317,12 +326,15 @@ func newAPI(
 ) http.Handler {
 	var toolchainService ToolchainService
 	var toolchainAssistant ToolchainAssistantService
+	var projectDeletion ProjectDeletionService
 	for _, extra := range extras {
 		switch typed := extra.(type) {
 		case ToolchainService:
 			toolchainService = typed
 		case ToolchainAssistantService:
 			toolchainAssistant = typed
+		case ProjectDeletionService:
+			projectDeletion = typed
 		}
 	}
 	api := &API{
@@ -335,6 +347,7 @@ func newAPI(
 		workspaces:         workspaces,
 		realWorkflow:       realWorkflow,
 		featureDeletion:    featureDeletion,
+		projectDeletion:    projectDeletion,
 		modelCatalog:       modelCatalog,
 		toolchains:         toolchainService,
 		toolchainAssistant: toolchainAssistant,
@@ -377,6 +390,12 @@ func newAPI(
 		"GET /api/v1/projects/{id}",
 		api.getProjectByIDHandler,
 	)
+	if projectDeletion != nil {
+		mux.HandleFunc(
+			"DELETE /api/v1/projects/{id}",
+			api.deleteProjectHandler,
+		)
+	}
 	mux.HandleFunc(
 		"GET /api/v1/projects/{id}/repository-overview",
 		api.getProjectRepositoryOverviewHandler,

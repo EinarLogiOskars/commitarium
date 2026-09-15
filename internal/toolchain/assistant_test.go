@@ -3,17 +3,21 @@ package toolchain
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/EinarLogiOskars/commitarium/internal/project"
+	"github.com/EinarLogiOskars/commitarium/internal/projectdeletion"
 	"github.com/EinarLogiOskars/commitarium/internal/workerhttp"
 )
 
 type assistantWorkerStub struct {
 	attempt workerhttp.Attempt
 	puts    []workerhttp.PutAttemptRequest
+	forces  int
 }
 
 func (worker *assistantWorkerStub) PutAttempt(_ context.Context, identity workerhttp.MutationIdentity, request workerhttp.PutAttemptRequest) (workerhttp.Attempt, bool, error) {
@@ -33,8 +37,66 @@ func (*assistantWorkerStub) SendCommand(context.Context, workerhttp.MutationIden
 	panic("unexpected command")
 }
 
-func (*assistantWorkerStub) ForceStop(context.Context, workerhttp.MutationIdentity, workerhttp.ForceStopRequest) (workerhttp.Attempt, error) {
-	panic("unexpected stop")
+func (worker *assistantWorkerStub) ForceStop(_ context.Context, identity workerhttp.MutationIdentity, _ workerhttp.ForceStopRequest) (workerhttp.Attempt, error) {
+	worker.forces++
+	worker.attempt.AttemptReference = identity.AttemptReference
+	worker.attempt.State = workerhttp.AttemptStateTerminal
+	return worker.attempt, nil
+}
+
+func TestAssistantProjectDeletionRefusesActiveUnlessForcedAndKeepsOtherProjects(t *testing.T) {
+	root, workspaces := t.TempDir(), t.TempDir()
+	reader := &projectReaderStub{stored: project.Project{ID: "prj_one", Name: "One"}}
+	manager, err := NewManager(root, reader)
+	if err != nil {
+		t.Fatalf("create manager: %v", err)
+	}
+	worker := &assistantWorkerStub{}
+	assistant, err := NewAssistant(root, workspaces, reader, manager, map[project.AgentProvider]AssistantWorker{
+		project.AgentProviderCodex: {Service: worker, AgentProfileID: "profile_codex"},
+	})
+	if err != nil {
+		t.Fatalf("create assistant: %v", err)
+	}
+	first, _, err := assistant.Start(t.Context(), "prj_one", project.AgentProviderCodex,
+		"gpt-5.6-sol", "First", AssistantPurposeDesignStack, "start-one")
+	if err != nil {
+		t.Fatalf("start first assistant: %v", err)
+	}
+	reader.stored = project.Project{ID: "prj_two", Name: "Two"}
+	second, _, err := assistant.Start(t.Context(), "prj_two", project.AgentProviderCodex,
+		"gpt-5.6-sol", "Second", AssistantPurposeDesignStack, "start-two")
+	if err != nil {
+		t.Fatalf("start second assistant: %v", err)
+	}
+	if err := assistant.DeleteProject(t.Context(), "prj_one", "delete-one", false); !errors.Is(err, projectdeletion.ErrActive) {
+		t.Fatalf("expected active assistant refusal, got %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "assistants", first.ID+".json")); err != nil {
+		t.Fatalf("refused delete removed first record: %v", err)
+	}
+	if err := assistant.DeleteProject(t.Context(), "prj_one", "delete-one", true); err != nil {
+		t.Fatalf("force-delete first assistants: %v", err)
+	}
+	if worker.forces != 1 {
+		t.Fatalf("force-stop calls=%d want=1", worker.forces)
+	}
+	for _, path := range []string{
+		filepath.Join(root, "assistants", first.ID+".json"),
+		filepath.Join(workspaces, first.ID),
+	} {
+		if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("project-one artifact remains at %s: %v", path, err)
+		}
+	}
+	for _, path := range []string{
+		filepath.Join(root, "assistants", second.ID+".json"),
+		filepath.Join(workspaces, second.ID),
+	} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("other-project artifact removed at %s: %v", path, err)
+		}
+	}
 }
 
 func TestAssistantConversationAppliesValidatedProposal(t *testing.T) {

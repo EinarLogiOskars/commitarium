@@ -15,6 +15,7 @@ this API beyond the host loopback interface is unsupported.
 | `PUT` | `/api/v1/project-imports/{importID}` | Import committed Git history into a new private Forgejo-backed project |
 | `GET` | `/api/v1/projects` | List projects for switching/selecting |
 | `GET` | `/api/v1/projects/{projectID}` | Retrieve a project |
+| `DELETE` | `/api/v1/projects/{projectID}` | Irreversibly delete a project and all project-owned internal artifacts |
 | `GET` | `/api/v1/projects/{projectID}/repository-overview` | Read the internal repository's default-branch head, root tree, and optional README |
 | `GET` | `/api/v1/projects/{projectID}/handoff` | Describe the canonical project head and ordered completed work for trusted-host synchronization |
 | `PUT` | `/api/v1/projects/{projectID}/dialogue-limits` | Replace planning and implementation-review round limits |
@@ -65,7 +66,7 @@ this API beyond the host loopback interface is unsupported.
 ## Idempotency
 
 Feature transitions, run starts, planning, implementation, merge, recovery,
-run-control actions, run interventions, project-repository repair, session
+run-control actions, run interventions, project deletion, project-repository repair, session
 commands, goal acceptance, and setup-assistant mutations require an
 `Idempotency-Key` header. Retrying the
 same operation with the same key returns the existing durable result. Reusing a
@@ -742,6 +743,66 @@ project, returns `404 feature_not_found`; a feature that has not started returns
 These discovery endpoints intentionally have no pagination, search, or
 server-side state filtering in the MVP. Clients can group and filter the
 complete project list locally.
+
+## Deleting a project
+
+Project deletion is irreversible. Send an empty request with a stable
+idempotency key:
+
+```http
+DELETE /api/v1/projects/prj_example
+Idempotency-Key: delete-prj-example-1
+Content-Length: 0
+```
+
+A successful response is `200 OK`:
+
+```json
+{"project_id":"prj_example","deleted":true}
+```
+
+The coordinator first writes a durable deletion claim that fences new work
+orders, runs, toolchain mutations, and setup-assistant turns. It removes the
+project's setup-assistant sessions and their isolated workspaces, then invokes
+the normal per-work-order teardown for every feature, so draft PRs, feature
+branches, managed checkouts, runs, sessions, events, commands, and recovery
+records use the same safety checks as individual work-order deletion. It also
+removes only `projects/{projectID}` from the toolchain volume. Shared mise data,
+cache, and state directories and provider profiles are never touched. The exact
+project-owned private Forgejo repository is deleted last; only after Forgejo
+confirms deletion (or that an earlier attempt already deleted it) does the
+coordinator transactionally remove the project row and complete its tombstone.
+
+An imported project's host filesystem path is intentionally unknown to the
+coordinator. The desktop `delete_project` command wraps this endpoint and,
+after coordinator success, atomically removes that project's entry from the
+trusted native `project-sources.json` file. Retrying the same command repairs a
+crash between coordinator deletion and native metadata cleanup.
+
+If a run or setup-assistant provider turn may still be active, the default
+request returns `409 project_has_active_run` before deleting artifacts. The
+user may explicitly choose forced deletion:
+
+```http
+DELETE /api/v1/projects/prj_example?force=true
+Idempotency-Key: force-delete-prj-example-1
+```
+
+Forced deletion terminates each exact durable provider attempt and marks its
+run stopped before work-order teardown. Failure to confirm termination returns
+`503 project_deletion_unavailable`; deletion never proceeds underneath an
+unconfirmed live turn.
+
+Deletion is restart-safe. While a claim is pending, coordinator startup skips
+ordinary recovery for that project's runs and the toolchain APIs cannot start
+new project work. A transient checkout, worker, storage, or Forgejo failure
+returns `503 project_deletion_unavailable` and retains the claim and repository
+identity; retry with the same key and the same `force` value to resume. Reusing
+that key for different input returns `409 idempotency_conflict`. After success,
+an exact retry with the same key is a no-op `200`; an unknown project or a
+second delete with a new key returns `404 project_not_found`. Contradictory or
+cross-project artifact identities return `409 project_deletion_conflict`
+without touching the suspect resource.
 
 ## Deleting a work order
 
