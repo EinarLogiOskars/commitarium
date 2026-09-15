@@ -687,7 +687,8 @@ body {
   background: var(--muted);
 }
 input,
-select {
+select,
+textarea {
   font: inherit;
   padding: 7px 12px;
   border-radius: 8px;
