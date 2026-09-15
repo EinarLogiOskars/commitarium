@@ -2,6 +2,8 @@ package toolchain
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -51,7 +53,7 @@ func TestAssistantConversationAppliesValidatedProposal(t *testing.T) {
 	}
 
 	session, created, err := assistant.Start(t.Context(), "prj_test", project.AgentProviderCodex,
-		"gpt-5.6-sol", "A small web API", "start-1")
+		"gpt-5.6-sol", "A small web API", AssistantPurposeDesignStack, "start-1")
 	if err != nil || !created || session.Status != AssistantStatusRunning || len(worker.puts) != 1 {
 		t.Fatalf("start session=%+v created=%t puts=%d err=%v", session, created, len(worker.puts), err)
 	}
@@ -67,7 +69,7 @@ func TestAssistantConversationAppliesValidatedProposal(t *testing.T) {
 		t.Fatalf("reply session=%+v created=%t err=%v", session, created, err)
 	}
 	if _, created, err := assistant.Start(t.Context(), "prj_test", project.AgentProviderCodex,
-		"gpt-5.6-sol", "A small web API", "start-1"); err != nil || created {
+		"gpt-5.6-sol", "A small web API", AssistantPurposeDesignStack, "start-1"); err != nil || created {
 		t.Fatalf("original start was not replayable after reply: created=%t err=%v", created, err)
 	}
 	worker.attempt.State = workerhttp.AttemptStateTerminal
@@ -102,15 +104,76 @@ func TestAssistantStartIsDurablyIdempotent(t *testing.T) {
 		}
 		return created
 	}
-	first, _, err := newAssistant().Start(t.Context(), "prj_test", project.AgentProviderCodex, "gpt-5.6-sol", "API", "same-key")
+	first, _, err := newAssistant().Start(t.Context(), "prj_test", project.AgentProviderCodex, "gpt-5.6-sol", "API", AssistantPurposeDesignStack, "same-key")
 	if err != nil {
 		t.Fatalf("first start: %v", err)
 	}
-	second, created, err := newAssistant().Start(t.Context(), "prj_test", project.AgentProviderCodex, "gpt-5.6-sol", "API", "same-key")
+	second, created, err := newAssistant().Start(t.Context(), "prj_test", project.AgentProviderCodex, "gpt-5.6-sol", "API", AssistantPurposeDesignStack, "same-key")
 	if err != nil || created || first.ID != second.ID {
 		t.Fatalf("replay first=%+v second=%+v created=%t err=%v", first, second, created, err)
 	}
-	if _, _, err := newAssistant().Start(t.Context(), "prj_test", project.AgentProviderCodex, "gpt-5.6-sol", "different", "same-key"); err != ErrAssistantConflict {
+	if _, _, err := newAssistant().Start(t.Context(), "prj_test", project.AgentProviderCodex, "gpt-5.6-sol", "different", AssistantPurposeDesignStack, "same-key"); err != ErrAssistantConflict {
 		t.Fatalf("expected conflict, got %v", err)
+	}
+}
+
+func TestAssistantVerifiesPinnedRepositoryEvidenceAndRejectsStaleApply(t *testing.T) {
+	root, workspaces := t.TempDir(), t.TempDir()
+	reader := &projectReaderStub{
+		stored:   project.Project{ID: "prj_test", Name: "Imported app"},
+		overview: project.RepositoryOverview{Head: project.RepositoryHead{CommitID: "commit_one"}},
+		evidence: project.RepositoryToolchainEvidence{
+			DefaultBranch: "main", CommitID: "commit_one",
+			Files:          []project.RepositoryEvidenceFile{{Path: "backend/pyproject.toml", Content: "[project]\nname='app'\n"}},
+			LanguageCounts: map[string]int{"Python": 8},
+		},
+	}
+	manager, err := NewManager(root, reader)
+	if err != nil {
+		t.Fatalf("create manager: %v", err)
+	}
+	worker := &assistantWorkerStub{}
+	assistant, err := NewAssistant(root, workspaces, reader, manager, map[project.AgentProvider]AssistantWorker{
+		project.AgentProviderClaude: {Service: worker, AgentProfileID: "profile_claude"},
+	})
+	if err != nil {
+		t.Fatalf("create assistant: %v", err)
+	}
+
+	session, created, err := assistant.Start(
+		t.Context(), "prj_test", project.AgentProviderClaude, "claude-opus-4-8",
+		"Please verify the detected stack.", AssistantPurposeVerifyRepository, "verify-1",
+	)
+	if err != nil || !created || session.Purpose != AssistantPurposeVerifyRepository ||
+		session.VerifiedCommitID != "commit_one" || len(worker.puts) != 1 {
+		t.Fatalf("start session=%+v created=%t puts=%d err=%v", session, created, len(worker.puts), err)
+	}
+	instructions := worker.puts[0].Instructions
+	if !strings.Contains(instructions, "backend/pyproject.toml") ||
+		!strings.Contains(instructions, "untrusted quoted data") || strings.Contains(instructions, "FORGEJO_TOKEN") {
+		t.Fatalf("unsafe or incomplete verification instructions %q", instructions)
+	}
+
+	worker.attempt.State = workerhttp.AttemptStateTerminal
+	worker.attempt.Result = &workerhttp.TerminalResult{
+		Outcome: workerhttp.OutcomeCompleted, Disposition: workerhttp.DispositionSucceeded,
+		Summary:           "This is a Python application. The project metadata pins the runtime requirements.",
+		ToolchainProposal: &workerhttp.ToolchainProposal{Tools: map[string]string{"python": "3.14.7"}, Services: []string{}},
+	}
+	session, err = assistant.Get(t.Context(), "prj_test", session.ID)
+	if err != nil || session.Status != AssistantStatusProposalReady || session.Proposal == nil ||
+		session.Proposal.Confidence != "agent_verified" ||
+		len(session.Proposal.Evidence) != 1 || session.Proposal.Evidence[0] != "backend/pyproject.toml" {
+		t.Fatalf("verified session=%+v err=%v", session, err)
+	}
+
+	reader.overview.Head.CommitID = "commit_two"
+	if _, err := assistant.Apply(t.Context(), "prj_test", session.ID); !errors.Is(err, ErrAssistantStale) {
+		t.Fatalf("stale apply error=%v", err)
+	}
+	reader.overview.Head.CommitID = "commit_one"
+	manifest, err := assistant.Apply(t.Context(), "prj_test", session.ID)
+	if err != nil || manifest.Tools["python"] != "3.14.7" {
+		t.Fatalf("apply verified manifest=%+v err=%v", manifest, err)
 	}
 }

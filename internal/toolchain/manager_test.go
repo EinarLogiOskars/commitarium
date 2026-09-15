@@ -14,6 +14,7 @@ import (
 type projectReaderStub struct {
 	stored   project.Project
 	overview project.RepositoryOverview
+	evidence project.RepositoryToolchainEvidence
 	blobs    map[string][]byte
 }
 
@@ -27,6 +28,10 @@ func (reader *projectReaderStub) GetRepositoryOverview(context.Context, string) 
 
 func (reader *projectReaderStub) ReadRepositoryBlob(_ context.Context, _ string, blobID string, _ int64) ([]byte, error) {
 	return reader.blobs[blobID], nil
+}
+
+func (reader *projectReaderStub) GetRepositoryToolchainEvidence(context.Context, string) (project.RepositoryToolchainEvidence, error) {
+	return reader.evidence, nil
 }
 
 func TestManagerConfiguresRuntimeManifestOutsideRepository(t *testing.T) {

@@ -7,9 +7,12 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"path"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/EinarLogiOskars/commitarium/internal/project"
 )
@@ -29,35 +32,15 @@ func (client *Client) ReadRepositoryOverview(
 		return project.RepositoryOverview{}, project.ErrForgejoRepositoryNotReady
 	}
 
-	status, body, err := client.doJSON(
-		ctx,
-		http.MethodGet,
-		repositoryBranchPath(owner, name, defaultBranch),
-		nil,
-	)
-	if err != nil {
-		return project.RepositoryOverview{}, err
-	}
-	switch status {
-	case http.StatusOK:
-	case http.StatusNotFound:
-		return project.RepositoryOverview{}, project.ErrForgejoRepositoryNotReady
-	default:
-		return project.RepositoryOverview{}, fmt.Errorf(
-			"%w: repository branch request returned HTTP %d",
-			project.ErrForgejoUnavailable,
-			status,
-		)
-	}
-	head, err := decodeRepositoryOverviewHead(body, defaultBranch)
+	head, err := client.readRepositoryHead(ctx, owner, name, defaultBranch)
 	if err != nil {
 		return project.RepositoryOverview{}, err
 	}
 
-	status, body, err = client.doJSON(
+	status, body, err := client.doJSON(
 		ctx,
 		http.MethodGet,
-		repositoryTreePath(owner, name, head.CommitID),
+		repositoryTreePath(owner, name, head.CommitID, false),
 		nil,
 	)
 	if err != nil {
@@ -108,6 +91,68 @@ func (client *Client) ReadRepositoryOverview(
 	}
 	overview.ReadmeMarkdown = &contents
 	return overview, nil
+}
+
+func (client *Client) ReadRepositoryTree(
+	ctx context.Context,
+	owner string,
+	name string,
+	defaultBranch string,
+) (project.RepositoryTreeSnapshot, error) {
+	owner, name, err := project.NormalizeRepositoryCoordinate(owner, name)
+	if err != nil {
+		return project.RepositoryTreeSnapshot{}, err
+	}
+	defaultBranch = strings.TrimSpace(defaultBranch)
+	if defaultBranch == "" {
+		return project.RepositoryTreeSnapshot{}, project.ErrForgejoRepositoryNotReady
+	}
+	head, err := client.readRepositoryHead(ctx, owner, name, defaultBranch)
+	if err != nil {
+		return project.RepositoryTreeSnapshot{}, err
+	}
+	status, body, err := client.doJSON(
+		ctx, http.MethodGet, repositoryTreePath(owner, name, head.CommitID, true), nil,
+	)
+	if err != nil {
+		return project.RepositoryTreeSnapshot{}, err
+	}
+	if status != http.StatusOK {
+		return project.RepositoryTreeSnapshot{}, fmt.Errorf(
+			"%w: recursive repository tree request returned HTTP %d",
+			project.ErrForgejoUnavailable, status,
+		)
+	}
+	tree, err := decodeRecursiveRepositoryTree(body)
+	if err != nil {
+		return project.RepositoryTreeSnapshot{}, err
+	}
+	return project.RepositoryTreeSnapshot{DefaultBranch: defaultBranch, Head: head, Tree: tree}, nil
+}
+
+func (client *Client) readRepositoryHead(
+	ctx context.Context,
+	owner string,
+	name string,
+	defaultBranch string,
+) (project.RepositoryHead, error) {
+	status, body, err := client.doJSON(
+		ctx, http.MethodGet, repositoryBranchPath(owner, name, defaultBranch), nil,
+	)
+	if err != nil {
+		return project.RepositoryHead{}, err
+	}
+	switch status {
+	case http.StatusOK:
+	case http.StatusNotFound:
+		return project.RepositoryHead{}, project.ErrForgejoRepositoryNotReady
+	default:
+		return project.RepositoryHead{}, fmt.Errorf(
+			"%w: repository branch request returned HTTP %d",
+			project.ErrForgejoUnavailable, status,
+		)
+	}
+	return decodeRepositoryOverviewHead(body, defaultBranch)
 }
 
 type repositoryTreeEntry struct {
@@ -231,6 +276,61 @@ func decodeRepositoryOverviewTree(
 	return tree, readme, nil
 }
 
+func decodeRecursiveRepositoryTree(body []byte) ([]project.RepositoryTreeEntry, error) {
+	var decoded struct {
+		Tree      []repositoryTreeEntry `json:"tree"`
+		Truncated bool                  `json:"truncated"`
+	}
+	if err := json.Unmarshal(body, &decoded); err != nil || decoded.Truncated || len(decoded.Tree) > 8192 {
+		return nil, fmt.Errorf(
+			"%w: recursive repository tree response is invalid or incomplete",
+			project.ErrForgejoUnavailable,
+		)
+	}
+	tree := make([]project.RepositoryTreeEntry, 0, len(decoded.Tree))
+	seen := make(map[string]struct{}, len(decoded.Tree))
+	for _, entry := range decoded.Tree {
+		entry.Path = strings.TrimSpace(entry.Path)
+		entry.SHA = strings.TrimSpace(entry.SHA)
+		entry.Type = strings.TrimSpace(entry.Type)
+		cleaned := path.Clean(entry.Path)
+		if entry.Path == "" || len(entry.Path) > 512 || !utf8.ValidString(entry.Path) ||
+			strings.IndexFunc(entry.Path, func(character rune) bool { return character < 32 }) >= 0 ||
+			cleaned != entry.Path || strings.HasPrefix(cleaned, "../") ||
+			strings.HasPrefix(cleaned, "/") || entry.SHA == "" || entry.Size < 0 {
+			return nil, fmt.Errorf(
+				"%w: recursive repository tree response contains an invalid entry",
+				project.ErrForgejoUnavailable,
+			)
+		}
+		if _, exists := seen[entry.Path]; exists {
+			return nil, fmt.Errorf(
+				"%w: recursive repository tree response contains duplicate entries",
+				project.ErrForgejoUnavailable,
+			)
+		}
+		seen[entry.Path] = struct{}{}
+		entryType := "file"
+		switch entry.Type {
+		case "tree":
+			entryType = "dir"
+		case "commit":
+			entryType = "submodule"
+		case "blob":
+		default:
+			return nil, fmt.Errorf(
+				"%w: recursive repository tree response contains an unsupported entry type",
+				project.ErrForgejoUnavailable,
+			)
+		}
+		tree = append(tree, project.RepositoryTreeEntry{
+			Path: entry.Path, Type: entryType, BlobID: entry.SHA, Size: entry.Size,
+		})
+	}
+	sort.Slice(tree, func(i, j int) bool { return tree[i].Path < tree[j].Path })
+	return tree, nil
+}
+
 func (client *Client) ReadRepositoryBlob(
 	ctx context.Context,
 	owner string,
@@ -330,10 +430,10 @@ func decodeRepositoryReadme(body []byte, expectedSHA string) (string, error) {
 	return string(contents), nil
 }
 
-func repositoryTreePath(owner, repository, commitID string) string {
+func repositoryTreePath(owner, repository, commitID string, recursive bool) string {
 	return "/api/v1/repos/" + url.PathEscape(owner) + "/" +
 		url.PathEscape(repository) + "/git/trees/" + url.PathEscape(commitID) +
-		"?recursive=false"
+		"?recursive=" + strconv.FormatBool(recursive)
 }
 
 func repositoryBlobPath(owner, repository, blobID string) string {

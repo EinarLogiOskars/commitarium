@@ -16,9 +16,11 @@ type toolchainAssistantStub struct {
 	manifest toolchain.Manifest
 	err      error
 	message  string
+	purpose  toolchain.AssistantPurpose
 }
 
-func (stub *toolchainAssistantStub) Start(context.Context, string, project.AgentProvider, string, string, string) (toolchain.AssistantSession, bool, error) {
+func (stub *toolchainAssistantStub) Start(_ context.Context, _ string, _ project.AgentProvider, _, _ string, purpose toolchain.AssistantPurpose, _ string) (toolchain.AssistantSession, bool, error) {
+	stub.purpose = purpose
 	return stub.session, true, stub.err
 }
 func (stub *toolchainAssistantStub) Get(context.Context, string, string) (toolchain.AssistantSession, error) {
@@ -41,10 +43,11 @@ func TestToolchainAssistantHTTPWorkflow(t *testing.T) {
 
 	start := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodPost, "/api/v1/projects/prj_test/toolchain/assistant-sessions",
-		strings.NewReader(`{"provider":"codex","model":"gpt-5.6-sol","message":"Help me choose"}`))
+		strings.NewReader(`{"provider":"codex","model":"gpt-5.6-sol","message":"Verify this","purpose":"verify_repository"}`))
 	request.Header.Set("Idempotency-Key", "setup-1")
 	handler.ServeHTTP(start, request)
-	if start.Code != http.StatusAccepted || start.Header().Get("Location") == "" {
+	if start.Code != http.StatusAccepted || start.Header().Get("Location") == "" ||
+		stub.purpose != toolchain.AssistantPurposeVerifyRepository {
 		t.Fatalf("start status=%d body=%s", start.Code, start.Body.String())
 	}
 
@@ -71,6 +74,30 @@ func TestToolchainAssistantHTTPWorkflow(t *testing.T) {
 	handler.ServeHTTP(apply, request)
 	if apply.Code != http.StatusOK || !strings.Contains(apply.Body.String(), `"source":"assistant"`) {
 		t.Fatalf("apply status=%d body=%s", apply.Code, apply.Body.String())
+	}
+}
+
+func TestToolchainAssistantRejectsUnknownPurposeAndMapsStaleVerification(t *testing.T) {
+	stub := &toolchainAssistantStub{}
+	handler := newAPI(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, stub)
+
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/projects/prj_test/toolchain/assistant-sessions",
+		strings.NewReader(`{"provider":"codex","model":"gpt-5.6-sol","message":"Verify","purpose":"unsafe"}`))
+	request.Header.Set("Idempotency-Key", "verify-1")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "invalid_toolchain_assistant_request") {
+		t.Fatalf("invalid purpose status=%d body=%s", response.Code, response.Body.String())
+	}
+
+	stub.err = toolchain.ErrAssistantStale
+	request = httptest.NewRequest(http.MethodPost,
+		"/api/v1/projects/prj_test/toolchain/assistant-sessions/tcs_test/apply", nil)
+	request.Header.Set("Idempotency-Key", "apply-1")
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "toolchain_assistant_stale") {
+		t.Fatalf("stale apply status=%d body=%s", response.Code, response.Body.String())
 	}
 }
 

@@ -20,6 +20,7 @@ type ProjectReader interface {
 	GetByID(context.Context, string) (project.Project, error)
 	GetRepositoryOverview(context.Context, string) (project.RepositoryOverview, error)
 	ReadRepositoryBlob(context.Context, string, string, int64) ([]byte, error)
+	GetRepositoryToolchainEvidence(context.Context, string) (project.RepositoryToolchainEvidence, error)
 }
 
 type Manager struct {

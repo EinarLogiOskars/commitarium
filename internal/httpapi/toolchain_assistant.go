@@ -15,9 +15,10 @@ import (
 )
 
 type startToolchainAssistantRequest struct {
-	Provider project.AgentProvider `json:"provider"`
-	Model    string                `json:"model"`
-	Message  string                `json:"message"`
+	Provider project.AgentProvider      `json:"provider"`
+	Model    string                     `json:"model"`
+	Message  string                     `json:"message"`
+	Purpose  toolchain.AssistantPurpose `json:"purpose,omitempty"`
 }
 
 type replyToolchainAssistantRequest struct {
@@ -43,7 +44,13 @@ func (api *API) startToolchainAssistantHandler(w http.ResponseWriter, r *http.Re
 		writeModelSelectionError(w, err)
 		return
 	}
-	session, created, err := api.toolchainAssistant.Start(r.Context(), r.PathValue("id"), request.Provider, request.Model, request.Message, key)
+	if request.Purpose != "" && !request.Purpose.IsValid() {
+		writeError(w, http.StatusBadRequest, "invalid_toolchain_assistant_request", "purpose must be design_stack or verify_repository")
+		return
+	}
+	session, created, err := api.toolchainAssistant.Start(
+		r.Context(), r.PathValue("id"), request.Provider, request.Model, request.Message, request.Purpose, key,
+	)
 	if err != nil {
 		api.writeAssistantError(w, err)
 		return
@@ -151,6 +158,13 @@ func (api *API) writeAssistantError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusConflict, "idempotency_conflict", "Idempotency-Key was already used for different setup assistant input")
 	case errors.Is(err, toolchain.ErrAssistantNotReady):
 		writeError(w, http.StatusConflict, "toolchain_assistant_not_ready", "the setup assistant is not waiting for this action")
+	case errors.Is(err, toolchain.ErrAssistantStale):
+		writeError(w, http.StatusConflict, "toolchain_assistant_stale", "the repository changed after verification; start a new verification session")
+	case errors.Is(err, project.ErrForgejoRepositoryNotFound),
+		errors.Is(err, project.ErrForgejoRepositoryNotReady),
+		errors.Is(err, project.ErrForgejoUnavailable),
+		errors.Is(err, project.ErrRepositoryContentTooLarge):
+		writeError(w, http.StatusServiceUnavailable, "toolchain_verification_unavailable", "the committed repository evidence is unavailable")
 	case errors.Is(err, toolchain.ErrAssistantUnavailable), errors.Is(err, workerhttp.ErrRequestFailed), errors.Is(err, workerhttp.ErrRemote):
 		writeError(w, http.StatusServiceUnavailable, "toolchain_assistant_unavailable", "the setup assistant worker is unavailable")
 	default:
