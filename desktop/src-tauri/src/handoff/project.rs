@@ -10,9 +10,11 @@ use super::*;
 use crate::import::ProjectSource;
 use serde::{Deserialize, Serialize};
 use std::io::Write;
+use std::process::Stdio;
 
 const PROJECT_RECEIPTS_FILE: &str = "project-handoff-receipts.json";
 const PROJECT_UPSTREAM_RECEIPTS_FILE: &str = "project-upstream-receipts.json";
+const PROJECT_SETUP_RECEIPTS_FILE: &str = "project-workspace-setup-receipts.json";
 
 #[derive(Clone, Debug, Deserialize)]
 struct ProjectHandoff {
@@ -104,6 +106,45 @@ impl Default for ProjectUpstreamReceipts {
     }
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum ProjectSetupStatus {
+    Prepared,
+    Installed,
+    Completed,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct ProjectSetupReceipt {
+    idempotency_key: String,
+    project_id: String,
+    destination_path: String,
+    staging_path: String,
+    default_branch: String,
+    canonical_commit_id: String,
+    canonical_tree_id: String,
+    local_commit_id: String,
+    commit_message: String,
+    author_name: String,
+    author_email: String,
+    status: ProjectSetupStatus,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct ProjectSetupReceipts {
+    version: u32,
+    receipts: Vec<ProjectSetupReceipt>,
+}
+
+impl Default for ProjectSetupReceipts {
+    fn default() -> Self {
+        Self {
+            version: 1,
+            receipts: Vec::new(),
+        }
+    }
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectSyncState {
@@ -119,6 +160,7 @@ pub struct ProjectSyncState {
 struct ProjectSourceState {
     source_type: String,
     path: String,
+    created_by_commitarium: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -161,6 +203,520 @@ pub struct ProjectSynchronizeResult {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct GitIdentityState {
+    name: Option<String>,
+    email: Option<String>,
+}
+
+#[derive(Debug)]
+pub(crate) struct NewRemoteContext {
+    pub(crate) repository_path: PathBuf,
+    pub(crate) default_branch: String,
+    pub(crate) canonical_commit_id: String,
+    pub(crate) local_commit_id: String,
+}
+
+pub(crate) async fn new_remote_context(
+    app: &AppHandle,
+    project_id: &str,
+) -> Result<NewRemoteContext, String> {
+    validate_identifier("project ID", project_id)?;
+    let handoff = fetch_project_handoff(project_id).await?;
+    validate_project_handoff(&handoff, project_id)?;
+    let source = crate::import::get_project_source_record(app, project_id)?
+        .ok_or("this project has no trusted local source mapping")?;
+    let receipts_path = project_receipts_path(app)?;
+    let (repository, receipt) = project_publication_source(&source, &receipts_path, &handoff)?;
+    Ok(NewRemoteContext {
+        repository_path: repository,
+        default_branch: receipt
+            .target_branch
+            .ok_or("the local project sync has no target branch")?,
+        canonical_commit_id: receipt.internal_head_commit_id,
+        local_commit_id: receipt
+            .local_commit_id
+            .ok_or("the local project sync has no commit")?,
+    })
+}
+
+/// Read the effective host Git identity without modifying Git configuration.
+#[tauri::command]
+pub async fn get_git_identity(parent_path: Option<String>) -> Result<GitIdentityState, String> {
+    tokio::task::spawn_blocking(move || {
+        let directory = parent_path
+            .as_deref()
+            .map(Path::new)
+            .filter(|path| path.is_dir());
+        let read = |key: &str| {
+            let mut command = Command::new("git");
+            if let Some(directory) = directory {
+                command.arg("-C").arg(directory);
+            }
+            command
+                .args(["config", "--get", key])
+                .output()
+                .ok()
+                .filter(|output| output.status.success())
+                .and_then(|output| {
+                    let value = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                    (!value.is_empty()).then_some(value)
+                })
+        };
+        Ok(GitIdentityState {
+            name: read("user.name"),
+            email: read("user.email"),
+        })
+    })
+    .await
+    .map_err(|error| format!("Git identity task failed: {error}"))?
+}
+
+/// Materialize a coordinator-created project as a new, clean local Git
+/// repository. The internal Forgejo history is deliberately replaced by one
+/// user-authored root commit before the destination is installed.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn initialize_project_local_repository(
+    app: AppHandle,
+    project_id: String,
+    parent_path: String,
+    folder_name: String,
+    commit_message: String,
+    author_name: String,
+    author_email: String,
+    idempotency_key: String,
+) -> Result<ProjectSynchronizeResult, String> {
+    validate_identifier("project ID", &project_id)?;
+    validate_text("commit message", &commit_message, 4096)?;
+    validate_text("Idempotency-Key", &idempotency_key, 512)?;
+    validate_identity("Git author name", &author_name)?;
+    validate_identity("Git author email", &author_email)?;
+    validate_folder_name(&folder_name)?;
+    let handoff = fetch_project_handoff(&project_id).await?;
+    validate_project_handoff(&handoff, &project_id)?;
+    let token = forgejo_token_path()
+        .ok()
+        .and_then(|path| std::fs::read_to_string(path).ok())
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    let internal_url = internal_repository_url(&handoff.source.repository)?;
+    let receipts_path = project_receipts_path(&app)?;
+    let setup_path = project_setup_receipts_path(&app)?;
+    let app_for_task = app.clone();
+
+    tokio::task::spawn_blocking(move || {
+        let _guard = HANDOFF_LOCK
+            .lock()
+            .map_err(|_| "the local handoff lock is unavailable".to_string())?;
+        initialize_project_repository(
+            &app_for_task,
+            &handoff,
+            Path::new(&parent_path),
+            &folder_name,
+            &commit_message,
+            &GitIdentity {
+                name: author_name,
+                email: author_email,
+            },
+            &idempotency_key,
+            &internal_url,
+            token.as_deref(),
+            &receipts_path,
+            &setup_path,
+        )
+    })
+    .await
+    .map_err(|error| format!("project workspace setup task failed: {error}"))?
+}
+
+#[allow(clippy::too_many_arguments)]
+fn initialize_project_repository(
+    app: &AppHandle,
+    handoff: &ProjectHandoff,
+    parent_path: &Path,
+    folder_name: &str,
+    commit_message: &str,
+    identity: &GitIdentity,
+    idempotency_key: &str,
+    internal_url: &str,
+    token: Option<&str>,
+    receipts_path: &Path,
+    setup_path: &Path,
+) -> Result<ProjectSynchronizeResult, String> {
+    let parent = std::fs::canonicalize(parent_path)
+        .map_err(|error| format!("resolve workspace parent folder: {error}"))?;
+    if !parent.is_dir() {
+        return Err("the selected workspace parent is not a folder".into());
+    }
+    let destination = parent.join(folder_name);
+    let destination_text = destination.to_string_lossy().into_owned();
+    let mut setups = load_project_setup_receipts(setup_path)?;
+
+    if let Some(index) = setups
+        .receipts
+        .iter()
+        .position(|receipt| receipt.idempotency_key == idempotency_key)
+    {
+        let receipt = &setups.receipts[index];
+        if receipt.project_id != handoff.project_id
+            || receipt.destination_path != destination_text
+            || receipt.commit_message != commit_message
+            || receipt.author_name != identity.name
+            || receipt.author_email != identity.email
+        {
+            return Err(
+                "this Idempotency-Key was already used for different workspace setup parameters"
+                    .into(),
+            );
+        }
+        if receipt.status == ProjectSetupStatus::Completed {
+            verify_bootstrap_repository(Path::new(&receipt.destination_path), receipt)?;
+            let source = crate::import::get_project_source_record(app, &handoff.project_id)?
+                .ok_or("the completed workspace setup has no trusted source mapping")?;
+            if source.source_type != "git" || source.path != receipt.destination_path {
+                return Err(
+                    "the completed workspace setup disagrees with the trusted source mapping"
+                        .into(),
+                );
+            }
+            return setup_result(receipt, false);
+        }
+        resume_project_setup(app, handoff, receipts_path, setup_path, &mut setups, index)?;
+        return setup_result(&setups.receipts[index], false);
+    }
+
+    if let Some(source) = crate::import::get_project_source_record(app, &handoff.project_id)? {
+        return Err(format!(
+            "this project already has a trusted local source mapping at {}",
+            source.path
+        ));
+    }
+    require_available_destination(&destination)?;
+
+    let material =
+        prepare_project_material(internal_url, handoff, &handoff.source.head_commit_id, token)?;
+    let temporary = tempfile::Builder::new()
+        .prefix(".commitarium-setup-")
+        .tempdir_in(&parent)
+        .map_err(|error| format!("create workspace staging folder: {error}"))?;
+    let staging = temporary.keep();
+    let local_commit = match create_bootstrap_repository(
+        &staging,
+        &material.repository,
+        handoff,
+        commit_message,
+        identity,
+        &material.head_tree,
+    ) {
+        Ok(commit) => commit,
+        Err(error) => {
+            let _ = std::fs::remove_dir_all(&staging);
+            return Err(error);
+        }
+    };
+
+    setups.receipts.push(ProjectSetupReceipt {
+        idempotency_key: idempotency_key.to_string(),
+        project_id: handoff.project_id.clone(),
+        destination_path: destination_text,
+        staging_path: staging.to_string_lossy().into_owned(),
+        default_branch: handoff.source.default_branch.clone(),
+        canonical_commit_id: handoff.source.head_commit_id.clone(),
+        canonical_tree_id: material.head_tree,
+        local_commit_id: local_commit,
+        commit_message: commit_message.to_string(),
+        author_name: identity.name.clone(),
+        author_email: identity.email.clone(),
+        status: ProjectSetupStatus::Prepared,
+    });
+    let index = setups.receipts.len() - 1;
+    save_project_setup_receipts(setup_path, &setups)?;
+    resume_project_setup(app, handoff, receipts_path, setup_path, &mut setups, index)?;
+    setup_result(&setups.receipts[index], true)
+}
+
+fn resume_project_setup(
+    app: &AppHandle,
+    handoff: &ProjectHandoff,
+    receipts_path: &Path,
+    setup_path: &Path,
+    setups: &mut ProjectSetupReceipts,
+    index: usize,
+) -> Result<(), String> {
+    let receipt = setups.receipts[index].clone();
+    let destination = Path::new(&receipt.destination_path);
+    let staging = Path::new(&receipt.staging_path);
+
+    if receipt.status == ProjectSetupStatus::Prepared {
+        if verify_bootstrap_repository(destination, &receipt).is_err() {
+            verify_bootstrap_repository(staging, &receipt).map_err(|_| {
+                "the prepared workspace is missing or changed; no local files were overwritten"
+                    .to_string()
+            })?;
+            require_available_destination(destination)?;
+            if destination.exists() {
+                std::fs::remove_dir(destination)
+                    .map_err(|error| format!("remove selected empty destination: {error}"))?;
+            }
+            std::fs::rename(staging, destination)
+                .map_err(|error| format!("install prepared local workspace: {error}"))?;
+        }
+        verify_bootstrap_repository(destination, &receipt)?;
+        setups.receipts[index].status = ProjectSetupStatus::Installed;
+        save_project_setup_receipts(setup_path, setups)?;
+    }
+
+    verify_bootstrap_repository(destination, &setups.receipts[index])?;
+    record_bootstrap_sync_receipt(receipts_path, handoff, &setups.receipts[index])?;
+    crate::import::record_source(
+        app,
+        &handoff.project_id,
+        ProjectSource {
+            path: std::fs::canonicalize(destination)
+                .map_err(|error| format!("resolve installed local workspace: {error}"))?
+                .to_string_lossy()
+                .into_owned(),
+            source_type: "git".to_string(),
+            import_commit_id: Some(receipt.canonical_commit_id.clone()),
+            created_by_commitarium: true,
+        },
+    )?;
+    setups.receipts[index].status = ProjectSetupStatus::Completed;
+    save_project_setup_receipts(setup_path, setups)
+}
+
+fn require_available_destination(destination: &Path) -> Result<(), String> {
+    let metadata = match std::fs::symlink_metadata(destination) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(format!("inspect local workspace destination: {error}")),
+    };
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(
+            "the local workspace destination already exists and is not an empty folder".into(),
+        );
+    }
+    let mut entries = std::fs::read_dir(destination)
+        .map_err(|error| format!("inspect local workspace destination: {error}"))?;
+    if entries.next().is_some() {
+        return Err("the local workspace destination is not empty; no files were changed".into());
+    }
+    Ok(())
+}
+
+fn create_bootstrap_repository(
+    staging: &Path,
+    internal: &Path,
+    handoff: &ProjectHandoff,
+    commit_message: &str,
+    identity: &GitIdentity,
+    expected_tree: &str,
+) -> Result<String, String> {
+    run_checked(
+        Command::new("git")
+            .args(["init", "--quiet", "--initial-branch"])
+            .arg(&handoff.source.default_branch)
+            .arg("--")
+            .arg(staging),
+        "initialize local workspace repository",
+    )?;
+    check_branch_name(staging, &handoff.source.default_branch)?;
+    let bootstrap_ref = "refs/commitarium/bootstrap";
+    let refspec = format!("+{}:{bootstrap_ref}", handoff.source.head_commit_id);
+    run_checked(
+        Command::new("git")
+            .arg("-C")
+            .arg(staging)
+            .args([
+                "fetch",
+                "--quiet",
+                "--no-tags",
+                "--no-write-fetch-head",
+                "--",
+            ])
+            .arg(internal)
+            .arg(refspec),
+        "load canonical project tree into local workspace",
+    )?;
+    let tree = git_line(
+        staging,
+        &["rev-parse", &format!("{bootstrap_ref}^{{tree}}")],
+    )?;
+    if tree != expected_tree {
+        return Err("the fetched canonical tree changed while the workspace was prepared".into());
+    }
+
+    let mut child = Command::new("git")
+        .arg("-C")
+        .arg(staging)
+        .args(["commit-tree", &tree, "-F", "-"])
+        .env("GIT_AUTHOR_NAME", &identity.name)
+        .env("GIT_AUTHOR_EMAIL", &identity.email)
+        .env("GIT_COMMITTER_NAME", &identity.name)
+        .env("GIT_COMMITTER_EMAIL", &identity.email)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| format!("create local workspace root commit: {error}"))?;
+    child
+        .stdin
+        .as_mut()
+        .ok_or("Git did not open stdin for the workspace commit")?
+        .write_all(commit_message.as_bytes())
+        .map_err(|error| format!("write local workspace commit message: {error}"))?;
+    let output = child
+        .wait_with_output()
+        .map_err(|error| format!("wait for local workspace root commit: {error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "create local workspace root commit: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    let commit = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if !valid_object_id(&commit) {
+        return Err("Git returned an invalid local workspace commit".into());
+    }
+    let branch_ref = format!("refs/heads/{}", handoff.source.default_branch);
+    run_git_checked(
+        staging,
+        &["update-ref", &branch_ref, &commit],
+        "install local workspace root commit",
+    )?;
+    run_git_checked(
+        staging,
+        &["symbolic-ref", "HEAD", &branch_ref],
+        "select local workspace default branch",
+    )?;
+    run_git_checked(
+        staging,
+        &["reset", "--quiet", "--hard", &commit],
+        "check out local workspace",
+    )?;
+    run_git_checked(
+        staging,
+        &["update-ref", "-d", bootstrap_ref],
+        "forget internal bootstrap history",
+    )?;
+    run_git_checked(
+        staging,
+        &["reflog", "expire", "--expire=now", "--all"],
+        "expire internal bootstrap reflog",
+    )?;
+    run_git_checked(
+        staging,
+        &["gc", "--quiet", "--prune=now"],
+        "prune internal bootstrap history",
+    )?;
+    let commits = git_line(staging, &["rev-list", "--count", "--all"])?;
+    if commits != "1" {
+        return Err("the local workspace contains unexpected Git history".into());
+    }
+    let committed_tree = git_line(staging, &["rev-parse", "HEAD^{tree}"])?;
+    if committed_tree != expected_tree {
+        return Err("the local workspace tree differs from the canonical project".into());
+    }
+    let status = git_line_allow_empty(
+        staging,
+        &["status", "--porcelain=v1", "--untracked-files=all"],
+    )?;
+    if !status.is_empty() {
+        return Err("the prepared local workspace is not clean".into());
+    }
+    Ok(commit)
+}
+
+fn verify_bootstrap_repository(
+    destination: &Path,
+    receipt: &ProjectSetupReceipt,
+) -> Result<(), String> {
+    if !destination.is_dir() || !crate::import::is_repo_root(destination) {
+        return Err("the prepared local workspace is not a Git repository".into());
+    }
+    let branch = git_line(destination, &["symbolic-ref", "--quiet", "--short", "HEAD"])?;
+    let commit = git_line(destination, &["rev-parse", "HEAD"])?;
+    let tree = git_line(destination, &["rev-parse", "HEAD^{tree}"])?;
+    let status = git_line_allow_empty(
+        destination,
+        &["status", "--porcelain=v1", "--untracked-files=all"],
+    )?;
+    if branch != receipt.default_branch
+        || commit != receipt.local_commit_id
+        || tree != receipt.canonical_tree_id
+        || !status.is_empty()
+    {
+        return Err("the prepared local workspace changed and was not adopted".into());
+    }
+    Ok(())
+}
+
+fn record_bootstrap_sync_receipt(
+    path: &Path,
+    handoff: &ProjectHandoff,
+    setup: &ProjectSetupReceipt,
+) -> Result<(), String> {
+    let mut receipts = load_project_receipts(path)?;
+    if receipts.receipts.iter().any(|receipt| {
+        receipt.project_id == setup.project_id
+            && receipt.source_path == setup.destination_path
+            && receipt.internal_head_commit_id == setup.canonical_commit_id
+            && receipt.local_commit_id.as_deref() == Some(&setup.local_commit_id)
+    }) {
+        return Ok(());
+    }
+    receipts.receipts.push(ProjectReceipt {
+        project_id: setup.project_id.clone(),
+        source_type: "git".to_string(),
+        source_path: setup.destination_path.clone(),
+        internal_repository_owner: handoff.source.repository.owner.clone(),
+        internal_repository_name: handoff.source.repository.name.clone(),
+        internal_base_commit_id: setup.canonical_commit_id.clone(),
+        internal_head_commit_id: setup.canonical_commit_id.clone(),
+        base_tree_id: setup.canonical_tree_id.clone(),
+        head_tree_id: setup.canonical_tree_id.clone(),
+        target_branch: Some(setup.default_branch.clone()),
+        local_base_commit_id: None,
+        local_commit_id: Some(setup.local_commit_id.clone()),
+        commit_message: Some(setup.commit_message.clone()),
+        status: ProjectReceiptStatus::Completed,
+    });
+    save_project_receipts(path, &receipts)
+}
+
+fn setup_result(
+    receipt: &ProjectSetupReceipt,
+    created: bool,
+) -> Result<ProjectSynchronizeResult, String> {
+    if receipt.status != ProjectSetupStatus::Completed {
+        return Err("the local workspace setup did not complete".into());
+    }
+    Ok(ProjectSynchronizeResult {
+        project_id: receipt.project_id.clone(),
+        source_type: "git".to_string(),
+        source_path: receipt.destination_path.clone(),
+        canonical_commit_id: receipt.canonical_commit_id.clone(),
+        target_branch: Some(receipt.default_branch.clone()),
+        local_commit_id: Some(receipt.local_commit_id.clone()),
+        result_tree_id: receipt.canonical_tree_id.clone(),
+        created,
+    })
+}
+
+fn validate_folder_name(name: &str) -> Result<(), String> {
+    validate_text("workspace folder name", name, 255)?;
+    let mut components = Path::new(name).components();
+    if !matches!(components.next(), Some(std::path::Component::Normal(_)))
+        || components.next().is_some()
+        || name.contains(['/', '\\'])
+    {
+        return Err("workspace folder name must be one ordinary path component".into());
+    }
+    Ok(())
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ProjectUpstreamResult {
     project_id: String,
     repository_path: String,
@@ -193,6 +749,7 @@ pub async fn get_project_sync_state(
     let source = crate::import::get_project_source_record(&app, &project_id)?;
     let receipts_path = project_receipts_path(&app)?;
     let upstream_path = project_upstream_receipts_path(&app)?;
+    let remote_setup_path = crate::git_providers::remote_receipts_path(&app)?;
     let feature_receipts_path = receipts_path_for_features(&app)?;
     let folder_receipts_path = super::plain_folder::folder_receipts_path(&app)?;
     tokio::task::spawn_blocking(move || {
@@ -203,6 +760,7 @@ pub async fn get_project_sync_state(
             &feature_receipts_path,
             &folder_receipts_path,
             &upstream_path,
+            &remote_setup_path,
         )
     })
     .await
@@ -383,6 +941,7 @@ fn build_sync_state(
     feature_receipts_path: &Path,
     folder_receipts_path: &Path,
     upstream_path: &Path,
+    remote_setup_path: &Path,
 ) -> Result<ProjectSyncState, String> {
     let receipts = load_project_receipts(receipts_path)?;
     let local_receipt =
@@ -415,6 +974,11 @@ fn build_sync_state(
         let repository = Path::new(&source.path);
         if repository.is_dir() && crate::import::is_repo_root(repository) {
             let publications = load_project_upstream_receipts(upstream_path)?;
+            let created = crate::git_providers::created_remote_watermarks(
+                remote_setup_path,
+                &handoff.project_id,
+                &repository.to_string_lossy(),
+            )?;
             for remote in super::upstream::configured_remotes(repository)? {
                 let publication = publications.receipts.iter().rev().find(|receipt| {
                     receipt.project_id == handoff.project_id
@@ -422,11 +986,22 @@ fn build_sync_state(
                         && receipt.remote_name == remote.name
                         && receipt.remote_fingerprint == remote.fingerprint
                 });
-                let watermark = publication.map(|receipt| receipt.internal_head_commit_id.clone());
+                let created_publication = created
+                    .iter()
+                    .find(|receipt| receipt.remote_name == remote.name);
+                let watermark = publication
+                    .map(|receipt| receipt.internal_head_commit_id.clone())
+                    .or_else(|| {
+                        created_publication.map(|receipt| receipt.canonical_commit_id.clone())
+                    });
                 upstreams.push(ProjectUpstreamState {
                     remote_name: remote.name,
                     display_location: remote.display_location,
-                    branch_name: publication.map(|receipt| receipt.branch_name.clone()),
+                    branch_name: publication
+                        .map(|receipt| receipt.branch_name.clone())
+                        .or_else(|| {
+                            created_publication.map(|receipt| receipt.default_branch.clone())
+                        }),
                     watermark_commit_id: watermark.clone(),
                     unsynced_features: features_after(
                         &handoff.completed_features,
@@ -441,6 +1016,7 @@ fn build_sync_state(
         source: source.map(|source| ProjectSourceState {
             source_type: source.source_type.clone(),
             path: source.path.clone(),
+            created_by_commitarium: source.created_by_commitarium,
         }),
         canonical: ProjectCanonicalState {
             default_branch: handoff.source.default_branch.clone(),
@@ -1375,13 +1951,21 @@ fn validate_project_receipt(receipt: &ProjectReceipt) -> Result<(), String> {
             .as_deref()
             .ok_or("Git project sync receipt has no target branch")?;
         validate_text("project sync receipt target branch", branch, 256)?;
-        for value in [
-            receipt.local_base_commit_id.as_deref(),
-            receipt.local_commit_id.as_deref(),
-        ] {
-            if !value.is_some_and(valid_object_id) {
-                return Err("Git project sync receipt has an invalid local commit ID".into());
-            }
+        if receipt.local_base_commit_id.is_none()
+            && receipt.internal_base_commit_id != receipt.internal_head_commit_id
+        {
+            return Err("Git project sync receipt has no local base commit".into());
+        }
+        if receipt
+            .local_base_commit_id
+            .as_deref()
+            .is_some_and(|value| !valid_object_id(value))
+            || !receipt
+                .local_commit_id
+                .as_deref()
+                .is_some_and(valid_object_id)
+        {
+            return Err("Git project sync receipt has an invalid local commit ID".into());
         }
         validate_text(
             "project sync receipt commit message",
@@ -1445,6 +2029,12 @@ impl VersionedReceipts for ProjectUpstreamReceipts {
     }
 }
 
+impl VersionedReceipts for ProjectSetupReceipts {
+    fn version(&self) -> u32 {
+        self.version
+    }
+}
+
 fn load_versioned<T: VersionedReceipts>(path: &Path, name: &str) -> Result<T, String> {
     match std::fs::read_to_string(path) {
         Ok(contents) => {
@@ -1462,6 +2052,50 @@ fn load_versioned<T: VersionedReceipts>(path: &Path, name: &str) -> Result<T, St
 
 fn save_project_receipts(path: &Path, receipts: &ProjectReceipts) -> Result<(), String> {
     save_json(path, receipts, "project sync receipts")
+}
+
+fn load_project_setup_receipts(path: &Path) -> Result<ProjectSetupReceipts, String> {
+    let receipts: ProjectSetupReceipts = load_versioned(path, "project workspace setup receipts")?;
+    for receipt in &receipts.receipts {
+        validate_identifier("workspace setup project ID", &receipt.project_id)?;
+        validate_text(
+            "workspace setup Idempotency-Key",
+            &receipt.idempotency_key,
+            512,
+        )?;
+        validate_text(
+            "workspace setup destination path",
+            &receipt.destination_path,
+            32 * 1024,
+        )?;
+        validate_text(
+            "workspace setup staging path",
+            &receipt.staging_path,
+            32 * 1024,
+        )?;
+        validate_text("workspace setup branch", &receipt.default_branch, 256)?;
+        validate_text(
+            "workspace setup commit message",
+            &receipt.commit_message,
+            4096,
+        )?;
+        validate_identity("workspace setup author name", &receipt.author_name)?;
+        validate_identity("workspace setup author email", &receipt.author_email)?;
+        for object in [
+            &receipt.canonical_commit_id,
+            &receipt.canonical_tree_id,
+            &receipt.local_commit_id,
+        ] {
+            if !valid_object_id(object) {
+                return Err("workspace setup receipt contains an invalid Git object ID".into());
+            }
+        }
+    }
+    Ok(receipts)
+}
+
+fn save_project_setup_receipts(path: &Path, receipts: &ProjectSetupReceipts) -> Result<(), String> {
+    save_json(path, receipts, "project workspace setup receipts")
 }
 
 fn save_json<T: Serialize>(path: &Path, value: &T, name: &str) -> Result<(), String> {
@@ -1501,6 +2135,61 @@ fn project_upstream_receipts_path(app: &AppHandle) -> Result<PathBuf, String> {
         .app_data_dir()
         .map_err(|error| format!("resolve app data directory: {error}"))?;
     Ok(directory.join(PROJECT_UPSTREAM_RECEIPTS_FILE))
+}
+
+fn project_setup_receipts_path(app: &AppHandle) -> Result<PathBuf, String> {
+    let directory = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| format!("resolve app data directory: {error}"))?;
+    Ok(directory.join(PROJECT_SETUP_RECEIPTS_FILE))
+}
+
+pub(crate) fn remove_project_handoff_state(
+    app: &AppHandle,
+    project_id: &str,
+) -> Result<(), String> {
+    validate_identifier("project ID", project_id)?;
+    let _guard = HANDOFF_LOCK
+        .lock()
+        .map_err(|_| "the local handoff lock is unavailable".to_string())?;
+
+    let project_path = project_receipts_path(app)?;
+    if project_path.exists() {
+        let mut receipts = load_project_receipts(&project_path)?;
+        let before = receipts.receipts.len();
+        receipts
+            .receipts
+            .retain(|receipt| receipt.project_id != project_id);
+        if receipts.receipts.len() != before {
+            save_project_receipts(&project_path, &receipts)?;
+        }
+    }
+
+    let upstream_path = project_upstream_receipts_path(app)?;
+    if upstream_path.exists() {
+        let mut receipts = load_project_upstream_receipts(&upstream_path)?;
+        let before = receipts.receipts.len();
+        receipts
+            .receipts
+            .retain(|receipt| receipt.project_id != project_id);
+        if receipts.receipts.len() != before {
+            save_json(&upstream_path, &receipts, "project upstream receipts")?;
+        }
+    }
+
+    let setup_path = project_setup_receipts_path(app)?;
+    if setup_path.exists() {
+        let mut receipts = load_project_setup_receipts(&setup_path)?;
+        let before = receipts.receipts.len();
+        receipts
+            .receipts
+            .retain(|receipt| receipt.project_id != project_id);
+        if receipts.receipts.len() != before {
+            save_project_setup_receipts(&setup_path, &receipts)?;
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1650,6 +2339,62 @@ mod tests {
     }
 
     #[test]
+    fn bootstrap_repository_keeps_only_one_clean_root_commit() {
+        let fixture = fixture();
+        let destination = fixture._root.path().join("exported");
+        std::fs::create_dir(&destination).expect("destination");
+        let expected_tree = git_dir_line(
+            &fixture.internal,
+            &["rev-parse", &format!("{}^{{tree}}", fixture.initial)],
+        )
+        .expect("canonical tree");
+        let commit = create_bootstrap_repository(
+            &destination,
+            &fixture.internal,
+            &fixture.handoff,
+            "Initialize exported project",
+            &GitIdentity {
+                name: "Export User".into(),
+                email: "export@example.test".into(),
+            },
+            &expected_tree,
+        )
+        .expect("bootstrap repository");
+
+        assert_eq!(line(&destination, &["rev-list", "--count", "--all"]), "1");
+        assert_eq!(line(&destination, &["rev-parse", "HEAD"]), commit);
+        assert_eq!(
+            line(&destination, &["rev-parse", "HEAD^{tree}"]),
+            expected_tree
+        );
+        assert_eq!(
+            std::fs::read_to_string(destination.join("README.md")).unwrap(),
+            "initial\n"
+        );
+        assert!(!Command::new("git")
+            .arg("-C")
+            .arg(&destination)
+            .args(["cat-file", "-e", &format!("{}^{{commit}}", fixture.initial)])
+            .output()
+            .expect("inspect pruned internal commit")
+            .status
+            .success());
+    }
+
+    #[test]
+    fn workspace_destination_must_be_absent_or_empty() {
+        let root = tempfile::tempdir().expect("root");
+        let destination = root.path().join("project");
+        assert!(require_available_destination(&destination).is_ok());
+        std::fs::create_dir(&destination).expect("destination");
+        assert!(require_available_destination(&destination).is_ok());
+        std::fs::write(destination.join("keep.txt"), "user data").expect("user file");
+        assert!(require_available_destination(&destination)
+            .unwrap_err()
+            .contains("not empty"));
+    }
+
+    #[test]
     fn project_handoff_rejects_unrecorded_canonical_head() {
         let handoff = ProjectHandoff {
             project_id: "prj_test".into(),
@@ -1679,6 +2424,7 @@ mod tests {
             path: fixture.source.to_string_lossy().into_owned(),
             source_type: "git".into(),
             import_commit_id: Some(fixture.initial.clone()),
+            created_by_commitarium: false,
         };
         add_canonical_change(&mut fixture, "fea_one", "one.txt", "one\n");
         let first = synchronize_project(
@@ -1744,6 +2490,7 @@ mod tests {
             path: fixture.source.to_string_lossy().into_owned(),
             source_type: "git".into(),
             import_commit_id: Some(fixture.initial.clone()),
+            created_by_commitarium: false,
         };
         add_canonical_change(&mut fixture, "fea_one", "README.md", "canonical\n");
         std::fs::write(fixture.source.join("README.md"), "local\n").expect("local edit");
@@ -1785,6 +2532,7 @@ mod tests {
             path: fixture.source.to_string_lossy().into_owned(),
             source_type: "git".into(),
             import_commit_id: Some(fixture.initial.clone()),
+            created_by_commitarium: false,
         };
         add_canonical_change(&mut fixture, "fea_one", "one.txt", "one\n");
         let synchronized = synchronize_project(
@@ -1865,6 +2613,7 @@ mod tests {
             path: folder.to_string_lossy().into_owned(),
             source_type: "plain_folder".into(),
             import_commit_id: Some(fixture.initial.clone()),
+            created_by_commitarium: false,
         };
 
         add_canonical_change(&mut fixture, "fea_one", "one.txt", "one\n");

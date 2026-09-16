@@ -1,5 +1,6 @@
 mod bootstrap;
 mod docker;
+mod git_providers;
 mod handoff;
 mod import;
 mod profiles;
@@ -38,9 +39,13 @@ pub fn run() {
             import::import_project,
             import::get_project_source,
             import::delete_project,
+            git_providers::probe_git_providers,
+            git_providers::create_project_remote,
             handoff::synchronize_feature_locally,
             handoff::plain_folder::synchronize_feature_to_folder,
             handoff::project::get_project_sync_state,
+            handoff::project::get_git_identity,
+            handoff::project::initialize_project_local_repository,
             handoff::project::synchronize_project_locally,
             handoff::project::preview_project_upstream_branch,
             handoff::project::publish_project_upstream_branch,

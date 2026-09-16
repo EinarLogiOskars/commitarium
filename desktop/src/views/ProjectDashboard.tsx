@@ -207,7 +207,7 @@ export function ProjectDashboard({
         </section>
       )}
 
-      {repo && <ProjectSyncCard projectId={project.id} />}
+      {repo && <ProjectSyncCard projectId={project.id} projectName={project.name} />}
     </div>
   );
 }

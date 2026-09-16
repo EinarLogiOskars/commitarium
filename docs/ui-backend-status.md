@@ -385,6 +385,20 @@ in backend event payloads; the UI maps factual activity to presentation.
   IDs itself.
 - Existing feature-level sync commands remain settled compatibility surfaces
   until the UI has moved over; do not remove them yet.
+- A project created inside Commitarium can establish its missing trusted local
+  mapping with `initialize_project_local_repository`. The user chooses a parent
+  folder, folder name, author identity, and root-commit message. Only a missing
+  or empty destination is accepted; internal agent history is not copied into
+  the new repository.
+- `probe_git_providers` detects GitHub, GitLab, and Azure DevOps CLIs and keeps
+  installed, authenticated, and ready states distinct. Prefer authenticated
+  GitHub, otherwise the sole ready provider, while always supporting **Local
+  repository only**.
+- `create_project_remote` is the explicit second consent step. It creates a new
+  empty provider repository and publishes the exact synchronized default-branch
+  commit. Provider failure leaves the local repository intact and retryable.
+  Existing remotes, repositories, or divergent branches are never overwritten,
+  and no provider credential crosses into the renderer, coordinator, or worker.
 
 ### Completed handoff source
 

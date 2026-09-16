@@ -177,7 +177,11 @@ export interface ProjectTargetState {
 
 export interface ProjectSyncState {
   projectId: string;
-  source: { sourceType: "git" | "plain_folder"; path: string } | null;
+  source: {
+    sourceType: "git" | "plain_folder";
+    path: string;
+    createdByCommitarium: boolean;
+  } | null;
   canonical: { defaultBranch: string; headCommitId: string };
   local: ProjectTargetState;
   upstreams: Array<{
@@ -200,6 +204,46 @@ export interface ProjectSynchronizeResult {
   created: boolean;
 }
 
+export interface GitIdentityState {
+  name: string | null;
+  email: string | null;
+}
+
+export interface GitProviderProbe {
+  provider: "github" | "gitlab" | "azure_devops";
+  displayName: string;
+  installed: boolean;
+  authenticated: boolean;
+  canCreate: boolean;
+  account: string | null;
+  host: string | null;
+  detail: string | null;
+  installUrl: string;
+}
+
+export interface CreateProjectRemoteRequest {
+  projectId: string;
+  provider: GitProviderProbe["provider"];
+  namespace: string;
+  repositoryName: string;
+  visibility: "private" | "public" | "internal";
+  azureProject?: string;
+  idempotencyKey: string;
+}
+
+export interface ProjectRemoteResult {
+  projectId: string;
+  provider: string;
+  repositoryPath: string;
+  remoteName: string;
+  remoteUrl: string;
+  webUrl: string;
+  defaultBranch: string;
+  localCommitId: string;
+  created: boolean;
+  pushed: boolean;
+}
+
 export interface ProjectUpstreamResult {
   projectId: string;
   repositoryPath: string;
@@ -215,6 +259,35 @@ export interface ProjectUpstreamResult {
 
 export const getProjectSyncState = (projectId: string): Promise<ProjectSyncState> =>
   invoke("get_project_sync_state", { projectId });
+
+export const getGitIdentity = (parentPath?: string): Promise<GitIdentityState> =>
+  invoke("get_git_identity", { parentPath });
+
+export const initializeProjectLocalRepository = (
+  projectId: string,
+  parentPath: string,
+  folderName: string,
+  commitMessage: string,
+  authorName: string,
+  authorEmail: string,
+  idempotencyKey: string,
+): Promise<ProjectSynchronizeResult> =>
+  invoke("initialize_project_local_repository", {
+    projectId,
+    parentPath,
+    folderName,
+    commitMessage,
+    authorName,
+    authorEmail,
+    idempotencyKey,
+  });
+
+export const probeGitProviders = (): Promise<GitProviderProbe[]> =>
+  invoke("probe_git_providers");
+
+export const createProjectRemote = (
+  request: CreateProjectRemoteRequest,
+): Promise<ProjectRemoteResult> => invoke("create_project_remote", { request });
 
 export const synchronizeProjectLocally = (
   projectId: string,

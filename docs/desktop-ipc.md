@@ -69,8 +69,10 @@ Project import (host-side git):
 - `get_project_source(projectId) -> string | null`
 - `delete_project(projectId, idempotencyKey, force?) -> ProjectDeletionResult`
   — invokes resumable coordinator deletion and then atomically removes only
-  this project's trusted local source mapping. Reuse the same key after any
-  error. `force` defaults to false and must be an explicit user choice.
+  this project's trusted local source mapping plus its local sync, workspace
+  setup, and provider-publication receipts. It never deletes the user's local
+  folder or external provider repository. Reuse the same key after any error.
+  `force` defaults to false and must be an explicit user choice.
 
 ```ts
 type ImportAgentProviders = { lead: "codex" | "claude"; reviewer: "codex" | "claude" };
@@ -90,6 +92,15 @@ Project handoff (canonical project → host):
 
 - `get_project_sync_state(projectId) -> ProjectSyncState` — combine the live
   internal default-branch head with native-only destination watermarks.
+- `get_git_identity(parentPath?) -> GitIdentityState` — read the effective host
+  Git author defaults without changing Git configuration.
+- `initialize_project_local_repository(projectId, parentPath, folderName,
+  commitMessage, authorName, authorEmail, idempotencyKey) ->
+  ProjectSynchronizeResult` — establish the first trusted local source mapping
+  for a coordinator-created project. It accepts only a missing or empty
+  destination, recreates the exact canonical tree as one user-authored root
+  commit, prunes the fetched internal history, and durably resumes installation
+  after interruption.
 - `synchronize_project_locally(projectId, commitMessage) ->
   ProjectSynchronizeResult` — bring the imported Git repository or plain folder
   to the current canonical project state.
@@ -118,7 +129,11 @@ type ProjectTargetState = {
 
 type ProjectSyncState = {
   projectId: string;
-  source: { sourceType: "git" | "plain_folder"; path: string } | null;
+  source: {
+    sourceType: "git" | "plain_folder";
+    path: string;
+    createdByCommitarium: boolean;
+  } | null;
   canonical: { defaultBranch: string; headCommitId: string };
   local: ProjectTargetState;
   upstreams: Array<{
@@ -155,6 +170,49 @@ type ProjectUpstreamResult = {
 };
 ```
 
+Git-provider discovery and first publication:
+
+- `probe_git_providers() -> GitProviderProbe[]` — inspect trusted standard
+  installation paths plus `PATH` for GitHub CLI (`gh`), GitLab CLI (`glab`),
+  and Azure CLI (`az`). Installed, authenticated, and repository-creation-ready
+  are separate states. Only account and host display metadata crosses IPC.
+- `create_project_remote(request) -> ProjectRemoteResult` — after the current
+  canonical head has been materialized locally, create a new provider
+  repository, add `origin`, and push the exact local default-branch commit.
+  It requires an Idempotency-Key, refuses a local repository that already has a
+  remote, never overwrites an existing provider repository or branch, never
+  force-pushes, and resumes a partially completed create/push.
+
+```ts
+type GitProviderProbe = {
+  provider: "github" | "gitlab" | "azure_devops";
+  displayName: string;
+  installed: boolean;
+  authenticated: boolean;
+  canCreate: boolean;
+  account: string | null;
+  host: string | null;
+  detail: string | null;
+  installUrl: string;
+};
+
+type CreateProjectRemoteRequest = {
+  projectId: string;
+  provider: GitProviderProbe["provider"];
+  namespace: string;
+  repositoryName: string;
+  visibility: "private" | "public" | "internal";
+  azureProject?: string;
+  idempotencyKey: string;
+};
+```
+
+Provider CLIs and host Git retain their own credentials. Tokens are never
+accepted by these commands, serialized into receipts, returned to the renderer,
+or sent to the coordinator. Repository creation is a distinct, explicitly
+confirmed external side effect after local workspace creation; failure does not
+remove or roll back the local repository.
+
 The local watermark is the exact internal commit whose changes have reached
 that source. A fresh import starts at its recorded import commit. Each later
 sync computes only `previous watermark → current canonical head`, applies it in
@@ -178,6 +236,12 @@ branch protection as the feature path. It never changes the checkout or updates
 an existing remote branch. Each remote receipt records its own canonical
 watermark, so the state response can show which completed work orders that
 destination has not received.
+
+For a project created inside Commitarium, initial workspace setup writes to a
+temporary sibling directory, records the exact canonical tree and generated
+root commit, and only then atomically installs the destination. A retry adopts
+only that exact clean repository. Existing non-empty paths, symlinks, changed
+prepared repositories, and contradictory source mappings stop without writing.
 
 The feature-level commands below remain available during frontend migration;
 new project-workspace UI should use the project-level commands.

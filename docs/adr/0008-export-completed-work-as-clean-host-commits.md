@@ -110,6 +110,22 @@ changes. A plain-folder handoff produces no local commit and cannot use the
 separate upstream-push operation unless the user later makes that folder a Git
 repository through an explicit workflow.
 
+Projects created inside Commitarium have no original host path. For these
+projects, the trusted desktop may establish a new local Git repository in an
+explicitly selected missing or empty destination. It materializes the complete
+verified canonical tree as one user-authored root commit, removes the fetched
+internal commit history from the new object database, records that canonical
+head as the first local watermark, and then uses the normal project-level sync
+path for later work. Installation is receipt-backed and restart-safe.
+
+After local setup completes, the user may separately ask the trusted desktop to
+create a new empty repository through an installed and authenticated provider
+CLI. GitHub, GitLab, and Azure DevOps are adapters behind one declarative IPC
+contract. An adapter may add `origin` and push only the exact recorded local
+default-branch commit. It must not overwrite an existing repository or branch
+and must reconcile a partially completed create/push from its durable receipt.
+Local-only remains a complete supported outcome.
+
 ## Consequences
 
 ### Positive

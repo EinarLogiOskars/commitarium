@@ -399,6 +399,7 @@ pub async fn import_project(
                 path: abs.to_string_lossy().into_owned(),
                 source_type: source_kind.to_string(),
                 import_commit_id: Some(import_commit_id),
+                created_by_commitarium: false,
             },
         ) {
             eprintln!("warning: could not record project source path: {e}");
@@ -423,9 +424,15 @@ pub(crate) struct ProjectSource {
     pub(crate) source_type: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) import_commit_id: Option<String>,
+    #[serde(default)]
+    pub(crate) created_by_commitarium: bool,
 }
 
-fn record_source(app: &AppHandle, project_id: &str, source: ProjectSource) -> Result<(), String> {
+pub(crate) fn record_source(
+    app: &AppHandle,
+    project_id: &str,
+    source: ProjectSource,
+) -> Result<(), String> {
     let _guard = PROJECT_SOURCES_LOCK
         .lock()
         .map_err(|_| "project source storage lock is unavailable".to_string())?;
@@ -495,6 +502,8 @@ pub async fn delete_project(
     }
     let result = serde_json::from_str(&body).map_err(|e| format!("parse project deletion: {e}"))?;
     remove_source(&app, project_id.trim())?;
+    crate::handoff::project::remove_project_handoff_state(&app, project_id.trim())?;
+    crate::git_providers::remove_project_remote_state(&app, project_id.trim())?;
     Ok(result)
 }
 
@@ -565,6 +574,7 @@ pub(crate) fn get_project_source_record(
             path: path.to_string(),
             source_type: source_type.to_string(),
             import_commit_id: None,
+            created_by_commitarium: false,
         }));
     }
     let source: ProjectSource = serde_json::from_value(value.clone())
