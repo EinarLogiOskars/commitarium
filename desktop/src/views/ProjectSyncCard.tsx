@@ -69,7 +69,7 @@ export function ProjectSyncCard({ projectId, projectName }: { projectId: string;
     <section className="panel">
       <div className="panel__head">
         <h2>Sync to your machine</h2>
-        <span className="muted" style={{ fontSize: 12 }}>
+        <span className="muted handoff__meta">
           canonical {state.canonical.defaultBranch} @ {state.canonical.headCommitId.slice(0, 12)}
         </span>
       </div>
@@ -155,7 +155,7 @@ function WorkspaceSetup({
       <div className="settings-row">
         <label>
           Parent folder
-          <div style={{ display: "flex", gap: 8 }}>
+          <div className="row">
             <input value={parent} readOnly placeholder="Choose where to create the project" />
             <button type="button" onClick={() => void choose()} disabled={busy}>Choose…</button>
           </div>
@@ -371,7 +371,7 @@ function CreateRemote({
       {installed.length === 0 ? (
         <>
           <p className="muted note">No supported provider CLI was found. The project will remain local.</p>
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <div className="row">
             {providers.map((item) => (
               <button key={item.provider} type="button" onClick={() => void openExternal(item.installUrl)}>
                 Install {item.displayName} CLI
@@ -437,7 +437,7 @@ function CreateRemote({
                     Create <strong>{namespace}/{repo}</strong> on {provider.displayName} and push
                     the local <strong>{state.canonical.defaultBranch}</strong> branch? This creates an external repository.
                   </p>
-                  <div style={{ display: "flex", gap: 8 }}>
+                  <div className="row">
                     <button className="primary" onClick={() => void create()} disabled={busy}>
                       {busy ? "Creating and pushing…" : "Confirm create and push"}
                     </button>

@@ -1011,6 +1011,11 @@ button.primary {
   border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
   color: var(--text);
 }
+.banner--warn {
+  background: color-mix(in srgb, var(--warn) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--warn) 45%, transparent);
+  color: var(--text);
+}
 
 /* New work order — per-order options. */
 .neworder__options {
@@ -1247,6 +1252,9 @@ button.danger:not(.ghost) {
   margin-top: 16px;
   padding-top: 14px;
   border-top: 1px solid var(--border);
+}
+.handoff__meta {
+  font-size: 12px;
 }
 .handoff h3 {
   margin: 0 0 4px;
