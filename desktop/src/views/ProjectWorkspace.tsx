@@ -166,7 +166,7 @@ export function ProjectWorkspace({
               preferred={{ provider: project.agent_providers?.lead, model: project.agent_models?.lead }}
               onSaved={(t) => {
                 setToolchain(t);
-                setMode("new"); // configured now — go straight to creating an order
+                setMode("overview"); // return to where the flow was most likely initiated
               }}
             />
           )}

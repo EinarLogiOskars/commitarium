@@ -12,12 +12,17 @@ import {
 // Art: "32x32 Pixel Isometric Tiles" + "critters" by scrabling (itch.io).
 // Tiles are 32x32 iso cubes; the top diamond face is 32 wide x 16 tall.
 
-const VIEW_W = 480;
-const VIEW_H = 270;
+// Bigger internal buffer + larger grid = the world renders "zoomed out":
+// each 32px tile takes less of the stretched canvas, so pixels read finer.
+const VIEW_W = 640;
+const VIEW_H = 360;
 
 const TILE_W = 32; // top-diamond width
 const TILE_H = 16; // top-diamond height
-const GRID = 6;
+const GRID = 12;
+
+// Multiply-tint on grass to deepen the meadow green (base art is light).
+const GRASS_TINT = 0xb4d888;
 
 // Resolve pack files to bundled URLs (paths contain spaces, so glob them).
 const tileUrls = import.meta.glob(
@@ -25,6 +30,11 @@ const tileUrls = import.meta.glob(
   { eager: true, query: "?url", import: "default" }
 ) as Record<string, string>;
 const boarUrls = import.meta.glob("../assets/pixel/critters/boar/*.png", {
+  eager: true,
+  query: "?url",
+  import: "default",
+}) as Record<string, string>;
+const robotUrls = import.meta.glob("../assets/pixel/critters/robot/*.png", {
   eager: true,
   query: "?url",
   import: "default",
@@ -94,33 +104,57 @@ export function PixelWorld({ onClose }: { onClose: () => void }) {
       app.canvas.style.objectFit = "contain";
 
       // --- Load textures ---
-      const grassTex = await Assets.load<Texture>(
-        urlEnding(tileUrls, "tile_022.png")
-      );
+      // Load a tile by its pack index (files are tile_000.png ... tile_114.png).
+      const loadTile = (n: number) =>
+        Assets.load<Texture>(
+          urlEnding(tileUrls, `tile_${String(n).padStart(3, "0")}.png`)
+        );
+      const [grassTexes, waterTexes, rockWaterTexes, foliageTexes] =
+        await Promise.all([
+          Promise.all([22, 23, 24].map(loadTile)), // grass ground variants
+          Promise.all([110, 111].map(loadTile)), // bright lake water
+          Promise.all([77, 80, 81, 88].map(loadTile)), // rocks sitting in water
+          Promise.all([40, 42, 44, 46, 52, 55, 56].map(loadTile)), // tufts + flowers
+        ]);
 
       const dirs: Dir[] = ["NE", "NW", "SE", "SW"];
-      const loadFrames = async (dir: Dir, action: "idle" | "run") => {
-        const count = action === "idle" ? 7 : 4;
-        const frames: Texture[] = [];
-        for (let i = 0; i < count; i++) {
-          frames.push(
-            await Assets.load<Texture>(
-              urlEnding(boarUrls, `boar_${dir}_${action}_${i}.png`)
-            )
-          );
-        }
-        return frames;
-      };
-      const boarAnims = {} as Record<
-        Dir,
-        { idle: Texture[]; run: Texture[] }
-      >;
-      for (const d of dirs) {
-        boarAnims[d] = {
-          idle: await loadFrames(d, "idle"),
-          run: await loadFrames(d, "run"),
+      type Anims = Record<Dir, { idle: Texture[]; run: Texture[] }>;
+      // Load a 4-dir idle/run sprite set. `counts` gives the frame count per
+      // action (creatures differ: boar 7/4, PixelLab robot 1/6).
+      const loadCreature = async (
+        map: Record<string, string>,
+        prefix: string,
+        counts: { idle: number; run: number }
+      ): Promise<Anims> => {
+        const loadFrames = async (dir: Dir, action: "idle" | "run") => {
+          const frames: Texture[] = [];
+          for (let i = 0; i < counts[action]; i++) {
+            frames.push(
+              await Assets.load<Texture>(
+                urlEnding(map, `${prefix}_${dir}_${action}_${i}.png`)
+              )
+            );
+          }
+          return frames;
         };
-      }
+        const anims = {} as Anims;
+        for (const d of dirs) {
+          anims[d] = {
+            idle: await loadFrames(d, "idle"),
+            run: await loadFrames(d, "run"),
+          };
+        }
+        return anims;
+      };
+
+      const boarAnims = await loadCreature(boarUrls, "boar", {
+        idle: 7,
+        run: 4,
+      });
+      const robotAnims = await loadCreature(robotUrls, "robot", {
+        idle: 1,
+        run: 6,
+      });
       if (cancelled) return;
 
       // --- Scene ---
@@ -130,34 +164,81 @@ export function PixelWorld({ onClose }: { onClose: () => void }) {
       world.y = VIEW_H / 2 - (GRID * TILE_H) / 2;
       app.stage.addChild(world);
 
-      // Floor
+      // Stable per-cell pseudo-random so variation doesn't reshuffle on redraw.
+      const rand = (c: number, r: number, salt = 0) => {
+        const h = Math.sin(c * 127.1 + r * 311.7 + salt * 74.3) * 43758.5453;
+        return h - Math.floor(h);
+      };
+      const pick = <T,>(arr: T[], c: number, r: number, salt = 0) =>
+        arr[Math.floor(rand(c, r, salt) * arr.length)];
+
+      // Small oval lake near the middle-right of the map.
+      const lake = new Set(
+        [
+          [7, 5], [8, 5],
+          [6, 6], [7, 6], [8, 6], [9, 6],
+          [6, 7], [7, 7], [8, 7], [9, 7], [10, 7],
+          [6, 8], [7, 8], [8, 8], [9, 8],
+          [7, 9], [8, 9],
+        ].map(([c, r]) => `${c},${r}`)
+      );
+      // A few rim cells get a rock sitting in the water.
+      const lakeRocks = new Set(["6,6", "9,6", "10,7", "6,8", "8,9"]);
+
+      // Floor: water inside the lake, deep-green grass everywhere else.
       for (let row = 0; row < GRID; row++) {
         for (let col = 0; col < GRID; col++) {
-          const t = new Sprite(grassTex);
+          const water = lake.has(`${col},${row}`);
+          const t = new Sprite(
+            water ? pick(waterTexes, col, row) : pick(grassTexes, col, row)
+          );
           t.anchor.set(0.5, 0.25); // top-diamond centre in a 32x32 cube
+          if (!water) t.tint = GRASS_TINT;
           const { x, y } = isoToScreen(col, row);
           t.x = x;
           t.y = y;
           t.zIndex = col + row;
           world.addChild(t);
+
+          // Rocks in the water at chosen rim cells.
+          if (lakeRocks.has(`${col},${row}`)) {
+            const rock = new Sprite(pick(rockWaterTexes, col, row, 1));
+            rock.anchor.set(0.5, 0.55);
+            rock.x = x;
+            rock.y = y;
+            rock.zIndex = col + row + 0.4;
+            world.addChild(rock);
+          }
+
+          // Scatter tufts/flowers on some dry cells for cozy density.
+          if (!water && rand(col, row, 2) > 0.78) {
+            const deco = new Sprite(pick(foliageTexes, col, row, 3));
+            deco.anchor.set(0.5, 0.62);
+            deco.x = x;
+            deco.y = y;
+            deco.zIndex = col + row + 0.3;
+            world.addChild(deco);
+          }
         }
       }
 
-      // Boar agents
+      // Agents (boar or robot). `anchorY` plants the feet on the tile.
       const makeAgent = (
+        anims: Anims,
+        anchorY: number,
         col: number,
         row: number,
         path: Array<[number, number]>
       ): Agent => {
         const dir: Dir = "SE";
-        const sprite = new AnimatedSprite(boarAnims[dir].idle);
-        sprite.anchor.set(0.5, 0.85);
+        const sprite = new AnimatedSprite(anims[dir].idle);
+        sprite.anchor.set(0.5, anchorY);
         sprite.animationSpeed = 0.15;
         sprite.play();
         world.addChild(sprite);
         return {
           sprite,
-          anims: boarAnims,
+          anims,
           col,
           row,
           path,
@@ -169,14 +250,16 @@ export function PixelWorld({ onClose }: { onClose: () => void }) {
       };
 
       const agents: Agent[] = [
-        makeAgent(1, 1, [
-          [1, 1],
-          [3, 1],
-          [3, 3],
-          [1, 3],
+        // Robot agent — walks a loop (stand-in for a working session).
+        makeAgent(robotAnims, 0.9, 2, 2, [
+          [2, 2],
+          [4, 2],
+          [4, 4],
+          [2, 4],
         ]),
-        makeAgent(4, 2, [[4, 2]]),
-        makeAgent(2, 4, [[2, 4]]),
+        // Boars for contrast.
+        makeAgent(boarAnims, 0.85, 4, 1, [[4, 1]]),
+        makeAgent(boarAnims, 0.85, 1, 4, [[1, 4]]),
       ];
 
       const setAnim = (a: Agent, dir: Dir, action: "idle" | "run") => {
@@ -245,7 +328,7 @@ export function PixelWorld({ onClose }: { onClose: () => void }) {
       >
         <strong style={{ color: "var(--text)" }}>Pixel world</strong>
         <span style={{ color: "var(--muted)", fontSize: 12 }}>
-          isometric — tiles &amp; critters by scrabling
+          isometric — tiles &amp; critters by scrabling, robot by PixelLab
         </span>
         <span style={{ flex: 1 }} />
         <button className="ghost" onClick={onClose}>
