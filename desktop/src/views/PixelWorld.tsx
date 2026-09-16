@@ -24,21 +24,29 @@ const GRID = 12;
 // Multiply-tint on grass to deepen the meadow green (base art is light).
 const GRASS_TINT = 0xb4d888;
 
-// Resolve pack files to bundled URLs (paths contain spaces, so glob them).
+// World art lives in `assets/world/` — gitignored, licensed packs baked into
+// official builds only. A fresh clone has no art here, so these globs resolve
+// to {} and `worldArtAvailable` is false (the World feature disables itself).
 const tileUrls = import.meta.glob(
-  "../assets/pixel/tiles/separated images/*.png",
+  "../assets/world/tiles/separated images/*.png",
   { eager: true, query: "?url", import: "default" }
 ) as Record<string, string>;
-const boarUrls = import.meta.glob("../assets/pixel/critters/boar/*.png", {
+const boarUrls = import.meta.glob("../assets/world/critters/boar/*.png", {
   eager: true,
   query: "?url",
   import: "default",
 }) as Record<string, string>;
-const robotUrls = import.meta.glob("../assets/pixel/critters/robot/*.png", {
+const robotUrls = import.meta.glob("../assets/world/critters/robot/*.png", {
   eager: true,
   query: "?url",
   import: "default",
 }) as Record<string, string>;
+
+// True when the licensed world art is present (official build / dev who
+// supplied their own). Drives the World-feature gate in the app shell.
+export const worldArtAvailable =
+  Object.keys(tileUrls).length > 0 &&
+  Object.keys(robotUrls).length > 0;
 
 const urlEnding = (map: Record<string, string>, name: string): string => {
   const key = Object.keys(map).find((k) => k.endsWith("/" + name));

@@ -12,6 +12,13 @@ dist
 dist-ssr
 *.local
 
+# Proprietary graphical-world art (licensed asset packs — not redistributable).
+# World logic/scaffolding stays public; only the pixels are gated. See
+# src/assets/world/README.md. Official app builds bake these in; forks run
+# without the world (detector disables it) or supply their own art here.
+src/assets/world/*
+!src/assets/world/README.md
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
