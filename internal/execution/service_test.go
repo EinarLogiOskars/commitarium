@@ -332,7 +332,7 @@ func TestServicePublishesOnlyNewWorkerEventAfterStoreAcceptance(t *testing.T) {
 	occurredAt := acceptedAt.Add(-time.Second)
 	expected := Event{
 		ID: "sev_generated", SessionID: "ses_test", Sequence: 3,
-		Type: worker.EventActivity, Text: "running tests", OccurredAt: occurredAt,
+		Type: worker.EventActivity, Text: "running tests", StreamID: "item_final", OccurredAt: occurredAt,
 		WorkerAttemptID: "att_test", WorkerEventSequence: 2,
 	}
 	store := &recordingStore{workerEventResult: expected, workerEventCreated: true}
@@ -347,7 +347,7 @@ func TestServicePublishesOnlyNewWorkerEventAfterStoreAcceptance(t *testing.T) {
 		expected.WorkerAttemptID,
 		expected.WorkerEventSequence,
 		expected.OccurredAt,
-		worker.Event{Type: expected.Type, Text: expected.Text},
+		worker.Event{Type: expected.Type, Text: expected.Text, StreamID: expected.StreamID},
 	)
 	if err != nil {
 		t.Fatalf("record worker event: %v", err)
@@ -356,6 +356,7 @@ func TestServicePublishesOnlyNewWorkerEventAfterStoreAcceptance(t *testing.T) {
 		t.Fatalf("unexpected worker event result %+v, created %t", actual, created)
 	}
 	if store.workerEvent.ID != "sev_generated" ||
+		store.workerEvent.StreamID != expected.StreamID ||
 		store.workerEvent.AcceptedAt != acceptedAt ||
 		store.workerEvent.OccurredAt != occurredAt {
 		t.Fatalf("unexpected pending worker event %+v", store.workerEvent)
@@ -371,7 +372,7 @@ func TestServicePublishesOnlyNewWorkerEventAfterStoreAcceptance(t *testing.T) {
 		expected.WorkerAttemptID,
 		expected.WorkerEventSequence,
 		expected.OccurredAt,
-		worker.Event{Type: expected.Type, Text: expected.Text},
+		worker.Event{Type: expected.Type, Text: expected.Text, StreamID: expected.StreamID},
 	); err != nil || created {
 		t.Fatalf("retry worker event: created %t, error %v", created, err)
 	}

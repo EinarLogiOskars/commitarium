@@ -90,6 +90,7 @@ func TestExecutionStorePersistsWorkerEventAndCheckpointAtomically(t *testing.T) 
 	pending := execution.PendingWorkerEvent{
 		ID: "sev_worker_one", SessionID: session.ID, AttemptID: checkpoint.AttemptID,
 		SourceSequence: 1, Type: worker.EventActivity, Text: "running tests",
+		StreamID: "item_final",
 		Activity: &worker.Activity{
 			Kind: worker.ActivityKindFileChange, Operation: worker.FileOperationModified,
 			Path: "README.md", Additions: databaseIntPointer(4), Deletions: databaseIntPointer(1),
@@ -101,6 +102,7 @@ func TestExecutionStorePersistsWorkerEventAndCheckpointAtomically(t *testing.T) 
 		t.Fatalf("append worker event: %v", err)
 	}
 	if !created || recorded.Sequence != ordinary.Sequence+1 ||
+		recorded.StreamID != pending.StreamID ||
 		recorded.WorkerAttemptID != pending.AttemptID ||
 		recorded.WorkerEventSequence != pending.SourceSequence {
 		t.Fatalf("unexpected recorded worker event %+v", recorded)

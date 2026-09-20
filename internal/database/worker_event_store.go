@@ -178,6 +178,7 @@ func (s *ExecutionStore) AppendWorkerEvent(
 		Sequence:            sequence,
 		Type:                pending.Type,
 		Text:                pending.Text,
+		StreamID:            pending.StreamID,
 		Activity:            pending.Activity,
 		OccurredAt:          pending.OccurredAt.UTC(),
 		WorkerAttemptID:     pending.AttemptID,
@@ -193,14 +194,15 @@ func (s *ExecutionStore) AppendWorkerEvent(
 	if _, err := tx.ExecContext(
 		ctx,
 		`INSERT INTO session_events (
-			id, session_id, sequence, event_type, text, occurred_at,
+			id, session_id, sequence, event_type, text, stream_id, occurred_at,
 			worker_attempt_id, worker_event_sequence, activity_json
-		 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		event.ID,
 		event.SessionID,
 		event.Sequence,
 		event.Type,
 		event.Text,
+		event.StreamID,
 		formatExecutionTime(event.OccurredAt),
 		event.WorkerAttemptID,
 		event.WorkerEventSequence,
@@ -244,7 +246,7 @@ func findWorkerSourceEvent(
 ) (execution.Event, bool, error) {
 	event, err := scanExecutionEvent(tx.QueryRowContext(
 		ctx,
-		`SELECT id, session_id, sequence, event_type, text, occurred_at,
+		`SELECT id, session_id, sequence, event_type, text, stream_id, occurred_at,
 		        worker_attempt_id, worker_event_sequence, activity_json
 		 FROM session_events
 		 WHERE session_id = ? AND worker_attempt_id = ? AND worker_event_sequence = ?`,
@@ -272,6 +274,7 @@ func sameWorkerEvent(existing execution.Event, pending execution.PendingWorkerEv
 		existing.WorkerEventSequence == pending.SourceSequence &&
 		existing.Type == pending.Type &&
 		existing.Text == pending.Text &&
+		existing.StreamID == pending.StreamID &&
 		activitiesEqual(existing.Activity, pending.Activity) &&
 		existing.OccurredAt.Equal(pending.OccurredAt)
 }

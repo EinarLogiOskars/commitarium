@@ -63,6 +63,7 @@ func TestStreamSessionEventsResumesAfterLastEventID(t *testing.T) {
 func TestStreamSessionEventsDeliversLiveEvent(t *testing.T) {
 	first := testSessionEvent("sev_one", 1, "starting")
 	second := testSessionEvent("sev_two", 2, "running tests")
+	second.StreamID = "item_final"
 	liveEvents := make(chan execution.Event, 1)
 	liveEvents <- second
 	close(liveEvents)
@@ -83,7 +84,8 @@ func TestStreamSessionEventsDeliversLiveEvent(t *testing.T) {
 
 	body := recorder.Body.String()
 	if !strings.Contains(body, "id: "+second.ID) ||
-		!strings.Contains(body, `"text":"running tests"`) {
+		!strings.Contains(body, `"text":"running tests"`) ||
+		!strings.Contains(body, `"stream_id":"item_final"`) {
 		t.Errorf("expected live event in stream, got %q", body)
 	}
 }

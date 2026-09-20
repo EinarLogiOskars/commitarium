@@ -100,7 +100,7 @@ func (s *ExecutionStore) ListPlanningMessages(
 	rows, err := s.db.QueryContext(
 		ctx,
 		`SELECT pm.run_id, pm.plan_version, pm.sequence, s.agent_id, s.role,
-		        se.id, se.session_id, se.sequence, se.event_type, se.text,
+		        se.id, se.session_id, se.sequence, se.event_type, se.text, se.stream_id,
 		        se.occurred_at, se.worker_attempt_id, se.worker_event_sequence,
 		        pm.linked_at
 		 FROM planning_messages pm
@@ -137,7 +137,7 @@ func findPlanningMessageByEvent(
 	message, err := scanPlanningMessage(tx.QueryRowContext(
 		ctx,
 		`SELECT pm.run_id, pm.plan_version, pm.sequence, s.agent_id, s.role,
-		        se.id, se.session_id, se.sequence, se.event_type, se.text,
+		        se.id, se.session_id, se.sequence, se.event_type, se.text, se.stream_id,
 		        se.occurred_at, se.worker_attempt_id, se.worker_event_sequence,
 		        pm.linked_at
 		 FROM planning_messages pm
@@ -159,6 +159,7 @@ func scanPlanningMessage(scanner executionScanner) (execution.PlanningMessage, e
 	message := execution.PlanningMessage{}
 	var role string
 	var eventType string
+	var streamID sql.NullString
 	var occurredAt string
 	var workerAttemptID sql.NullString
 	var workerEventSequence sql.NullInt64
@@ -166,13 +167,16 @@ func scanPlanningMessage(scanner executionScanner) (execution.PlanningMessage, e
 	if err := scanner.Scan(
 		&message.RunID, &message.PlanVersion, &message.Sequence, &message.AgentID, &role,
 		&message.Event.ID, &message.Event.SessionID, &message.Event.Sequence,
-		&eventType, &message.Event.Text, &occurredAt,
+		&eventType, &message.Event.Text, &streamID, &occurredAt,
 		&workerAttemptID, &workerEventSequence, &linkedAt,
 	); err != nil {
 		return execution.PlanningMessage{}, err
 	}
 	message.Role = worker.Role(role)
 	message.Event.Type = worker.EventType(eventType)
+	if streamID.Valid {
+		message.Event.StreamID = streamID.String
+	}
 	if workerAttemptID.Valid {
 		message.Event.WorkerAttemptID = workerAttemptID.String
 	}

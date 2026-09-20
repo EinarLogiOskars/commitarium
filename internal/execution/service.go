@@ -481,6 +481,7 @@ func (s *Service) RecordWorkerEvent(
 		SourceSequence: sourceSequence,
 		Type:           event.Type,
 		Text:           event.Text,
+		StreamID:       event.StreamID,
 		Activity:       event.Activity,
 		OccurredAt:     occurredAt,
 		AcceptedAt:     s.now().UTC(),

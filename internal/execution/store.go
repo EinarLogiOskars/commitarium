@@ -16,6 +16,7 @@ type PendingEvent struct {
 	SessionID  string
 	Type       worker.EventType
 	Text       string
+	StreamID   string
 	Activity   *worker.Activity
 	OccurredAt time.Time
 }
@@ -27,6 +28,7 @@ type PendingWorkerEvent struct {
 	SourceSequence int64
 	Type           worker.EventType
 	Text           string
+	StreamID       string
 	Activity       *worker.Activity
 	OccurredAt     time.Time
 	AcceptedAt     time.Time
