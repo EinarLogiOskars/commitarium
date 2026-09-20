@@ -101,12 +101,15 @@ export function ReviewView({
 
       {live && decisions.length > 0 && (
         <div className="row" style={{ marginBottom: 12 }}>
-          {decisions.map((d) => (
-            <span key={d.role} className="state state--warn">
-              <span className="dot dot--warn" />
-              {d.role}: {d.outcome || d.status}
-            </span>
-          ))}
+          {decisions.map((d) => {
+            const s = sessionStatus(d.role, d.status, d.outcome);
+            return (
+              <span key={d.role} className={`state state--${s.tone}`}>
+                <span className={`dot dot--${s.tone}${s.pulse ? " dot--pulse" : ""}`} />
+                {s.label}
+              </span>
+            );
+          })}
         </div>
       )}
 
@@ -124,4 +127,34 @@ export function ReviewView({
       {live && run && <InterveneBar run={run} onChanged={onChanged} />}
     </section>
   );
+}
+
+// Human, phase-aware label for a session's status. A session's raw
+// "waiting_for_user" just means that agent's turn is done — during the other
+// agent's turn it's simply idle, not blocked on the user — so render it as a
+// muted "waiting", and pulse the one that's actively working.
+function sessionStatus(
+  role: string,
+  status: string,
+  outcome?: string,
+): { label: string; tone: "ok" | "bad" | "warn" | "muted"; pulse: boolean } {
+  const name = role.charAt(0).toUpperCase() + role.slice(1);
+  if (outcome) {
+    const tone = /approv|pass|ready|accept/i.test(outcome)
+      ? "ok"
+      : /reject|fail|block|chang/i.test(outcome)
+        ? "bad"
+        : "muted";
+    return { label: `${name}: ${outcome.replace(/_/g, " ")}`, tone, pulse: false };
+  }
+  switch (status) {
+    case "running":
+      return { label: `${name}: working`, tone: "warn", pulse: true };
+    case "waiting_for_user":
+      return { label: `${name}: waiting`, tone: "muted", pulse: false };
+    case "succeeded":
+      return { label: `${name}: done`, tone: "ok", pulse: false };
+    default:
+      return { label: `${name}: ${status.replace(/_/g, " ")}`, tone: "muted", pulse: false };
+  }
 }

@@ -959,6 +959,27 @@ button.primary {
 .dot--warn {
   background: var(--warn);
 }
+/* Active/working indicator — a soft pulse so "something is happening" reads at a
+   glance without a spinner. */
+.dot--pulse {
+  animation: dot-pulse 1.3s ease-in-out infinite;
+}
+@keyframes dot-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--warn) 55%, transparent);
+  }
+  50% {
+    opacity: 0.6;
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--warn) 0%, transparent);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .dot--pulse {
+    animation: none;
+  }
+}
 
 .services {
   width: 100%;
