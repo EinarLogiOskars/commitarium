@@ -59,9 +59,9 @@ data: {"id":"sev_123","sequence":8,"type":"message","stream_id":"item_789","text
 
 ## Provider behavior
 
-Both providers retain their strict structured-output contracts. Their generated
-text is accumulated, and a contract-aware extractor reads one top-level prose
-field from the incomplete JSON:
+Both providers retain their strict structured-output contracts. Codex exposes
+its generated final JSON incrementally, so a contract-aware extractor reads one
+top-level prose field from the incomplete JSON:
 
 | Output contract | Prose field |
 | --- | --- |
@@ -85,13 +85,17 @@ Codex App Server supplies `item/agentMessage/delta` with `threadId`, `turnId`,
 and other narration phases never enter the preview accumulator. The item ID is
 the preview `stream_id` and is copied to the final durable event.
 
-Claude Code runs with `--include-partial-messages` in addition to
-`--output-format stream-json` for structured turns. Its `stream_event` records
-may carry either `text_delta.text` or `input_json_delta.partial_json`; both feed
-the same accumulator. The worker attempt ID is its response-local `stream_id`.
+Claude Code's `--json-schema` integration exposes structured output only on the
+terminal `result.structured_output` record, not through partial stream events.
+Commitarium therefore does not synthesize a Claude final-message preview or add
+a `stream_id` to its durable final event. Completed assistant text blocks during
+a structured turn are published as narration; only a duplicate structured JSON
+envelope is suppressed. `input_json_delta` is tool input and is never treated as
+final-response prose. This follows Anthropic's documented Agent SDK limitation:
+<https://code.claude.com/docs/en/agent-sdk/streaming-output#known-limitations>.
 
-Adapters coalesce updates before publication. The target cadence is 50 ms; an
-unchanged or empty extracted prefix is not emitted.
+The Codex adapter coalesces updates before publication. The target cadence is
+50 ms; an unchanged or empty extracted prefix is not emitted.
 
 ## Safety and lifecycle invariants
 
@@ -115,7 +119,8 @@ unchanged or empty extracted prefix is not emitted.
 - [x] Slice 1: provider-neutral preview contract and partial-JSON prose extractor.
 - [x] Slice 2: transient frames on worker SSE, including client decoding.
 - [x] Slice 3: relay previews through ingestion and coordinator session SSE.
-- [x] Slice 4: Codex and Claude adapter emission with coalescing.
+- [x] Slice 4: Codex adapter emission with coalescing and an explicit Claude
+  capability fallback.
 - [x] Slice 5: end-to-end validation, documentation, and frontend handoff.
 
 ## Implemented backend
@@ -123,7 +128,7 @@ unchanged or empty extracted prefix is not emitted.
 The backend pipeline is complete:
 
 ```text
-provider delta
+Codex final-answer delta
   -> adapter cumulative prose preview
   -> worker normalization and latest-snapshot buffer
   -> id-less worker SSE frame
@@ -132,9 +137,10 @@ provider delta
   -> desktop client
 ```
 
-The final event's `stream_id` is persisted in `session_events`, returned by the
-session history endpoint, and included in durable session SSE frames. Preview
-text is not persisted in either the worker journal or coordinator database.
+When present, the final event's `stream_id` is persisted in `session_events`,
+returned by the session history endpoint, and included in durable session SSE
+frames. Preview text is not persisted in either the worker journal or
+coordinator database.
 
 The worker SSE client exposes `NextFrame` for consumers that handle previews;
 its existing `Next` method skips previews and continues returning only durable
@@ -151,8 +157,8 @@ Verification covers:
 - durable `stream_id` persistence and replay;
 - Codex `item/agentMessage/delta` fixtures under `OutputSchema`, including a
   regression that narration containing an `ask` envelope emits no preview;
-- Claude `stream_event` fixtures and `--include-partial-messages` under
-  `--json-schema`;
+- Claude standalone-text narration during structured turns, structured-envelope
+  suppression, and the absence of unsupported final-message previews;
 - the complete Go test suite (`go test ./...`).
 
 The provider tests use protocol-faithful local helper processes; they do not
