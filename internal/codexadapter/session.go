@@ -35,15 +35,16 @@ type session struct {
 	done             chan struct{}
 	previewBuffer    *worker.MessagePreviewAccumulator
 
-	mu               sync.Mutex
-	turnID           string
-	lastAgentMessage string
-	pendingMessage   string
-	pendingStreamID  string
-	forced           bool
-	result           worker.Result
-	waitErr          error
-	finished         bool
+	mu                   sync.Mutex
+	turnID               string
+	previewEligibleItems map[string]struct{}
+	lastAgentMessage     string
+	pendingMessage       string
+	pendingStreamID      string
+	forced               bool
+	result               worker.Result
+	waitErr              error
+	finished             bool
 }
 
 var _ worker.ForceStoppableSession = (*session)(nil)
@@ -58,16 +59,17 @@ func newSession(
 	outputContract worker.OutputContract,
 ) *session {
 	return &session{
-		client:           client,
-		process:          process,
-		threadID:         threadID,
-		workingDirectory: workingDirectory,
-		shutdownTimeout:  shutdownTimeout,
-		outputContract:   outputContract,
-		events:           make(chan worker.Event, eventBuffer),
-		previews:         make(chan worker.MessagePreview, 1),
-		done:             make(chan struct{}),
-		previewBuffer:    worker.NewMessagePreviewAccumulator(outputContract, messagePreviewInterval),
+		client:               client,
+		process:              process,
+		threadID:             threadID,
+		workingDirectory:     workingDirectory,
+		shutdownTimeout:      shutdownTimeout,
+		outputContract:       outputContract,
+		events:               make(chan worker.Event, eventBuffer),
+		previews:             make(chan worker.MessagePreview, 1),
+		done:                 make(chan struct{}),
+		previewBuffer:        worker.NewMessagePreviewAccumulator(outputContract, messagePreviewInterval),
+		previewEligibleItems: make(map[string]struct{}),
 	}
 }
 
@@ -403,6 +405,9 @@ func (session *session) translate(
 }
 
 func (session *session) acceptMessageDelta(streamID string, delta string) {
+	if !session.previewEligible(streamID) {
+		return
+	}
 	preview, emit := session.previewBuffer.Add(streamID, delta, time.Now().UTC())
 	if !emit {
 		return
@@ -424,6 +429,16 @@ func (session *session) acceptMessageDelta(streamID string, delta string) {
 
 func (session *session) startedItem(item threadItem) *worker.Event {
 	switch item.Type {
+	case "agentMessage":
+		// Commentary is durable narration without a stream ID. Only explicitly
+		// classified final responses may create a transient preview that the
+		// frontend can later reconcile with a correlated durable event.
+		if item.Phase == "final_answer" {
+			session.mu.Lock()
+			session.previewEligibleItems[item.ID] = struct{}{}
+			session.mu.Unlock()
+		}
+		return nil
 	case "commandExecution", "fileChange":
 		// A command or file change is published once, when its completed item has
 		// the final execution facts. This avoids duplicate UI steps.
@@ -442,6 +457,9 @@ func (session *session) startedItem(item threadItem) *worker.Event {
 func (session *session) completedItem(item threadItem) ([]worker.Event, error) {
 	switch item.Type {
 	case "agentMessage":
+		session.mu.Lock()
+		delete(session.previewEligibleItems, item.ID)
+		session.mu.Unlock()
 		text := strings.TrimSpace(item.Text)
 		if text == "" {
 			return nil, nil
@@ -489,6 +507,13 @@ func (session *session) completedItem(item threadItem) ([]worker.Event, error) {
 	default:
 		return nil, nil
 	}
+}
+
+func (session *session) previewEligible(itemID string) bool {
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	_, ok := session.previewEligibleItems[itemID]
+	return ok
 }
 
 func (session *session) narrationEvents(texts ...string) []worker.Event {

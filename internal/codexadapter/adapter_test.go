@@ -228,6 +228,34 @@ func TestNarrationEventsRemainSuppressedForInterventionTurns(t *testing.T) {
 	}
 }
 
+func TestNarrationAgentMessageDoesNotPublishPreview(t *testing.T) {
+	session := newSession(
+		nil, nil, "thr_test", t.TempDir(), time.Second, 1,
+		worker.OutputContractGoalClarification,
+	)
+	item := threadItem{
+		ID: "item_preamble", Type: "agentMessage", Phase: "commentary",
+		Text: `{"action":"ask","message":"Which target should I use?","options":[]}`,
+	}
+
+	session.startedItem(item)
+	session.acceptMessageDelta(item.ID, `{"action":"ask","message":"Which target`)
+	if len(session.previews) != 0 {
+		t.Fatalf("narration published an orphaned preview: %+v", <-session.previews)
+	}
+
+	events, err := session.completedItem(item)
+	if err != nil {
+		t.Fatalf("complete narration item: %v", err)
+	}
+	if !equalEvents(events, []worker.Event{{
+		Type: worker.EventActivity, Text: item.Text,
+		Activity: &worker.Activity{Kind: worker.ActivityKindNarration},
+	}}) {
+		t.Fatalf("narration events = %+v", events)
+	}
+}
+
 func TestAdapterReturnsStructuredImplementationBlocker(t *testing.T) {
 	adapter := testAdapter(t, "structured-implementation-blocked", "Implement and publish")
 	request := adapter.request("att_codex_implementation_blocked", "Implement and publish")
@@ -728,6 +756,12 @@ func TestCodexAppServerHelper(t *testing.T) {
 		helpWriteTurnCompleted(writer, "completed")
 		helperWaitForever()
 	case "structured-plan":
+		helpNotify(writer, "item/started", map[string]any{
+			"threadId": "thr_test", "turnId": "turn_test",
+			"item": map[string]any{
+				"id": "item_message", "type": "agentMessage", "phase": "final_answer",
+			},
+		})
 		helpNotify(writer, "item/agentMessage/delta", map[string]any{
 			"threadId": "thr_test", "turnId": "turn_test", "itemId": "item_message",
 			"delta": `{"action":"submit_plan","content":"Final agreed`,
@@ -735,7 +769,7 @@ func TestCodexAppServerHelper(t *testing.T) {
 		helpNotify(writer, "item/completed", map[string]any{
 			"threadId": "thr_test", "turnId": "turn_test",
 			"item": map[string]any{
-				"id": "item_message", "type": "agentMessage",
+				"id": "item_message", "type": "agentMessage", "phase": "final_answer",
 				"text": `{"action":"submit_plan","content":"Final agreed plan","plan_title":"Backend plan","plan_subtitle":"Ship safely","steps":[{"id":"store","title":"Persist state","subtitle":"Add storage","details_markdown":"Create the durable store.","verification":["go test ./..."],"commit_subject":"Add artifact storage"}]}`,
 			},
 		})
