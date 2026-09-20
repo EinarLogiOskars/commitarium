@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/EinarLogiOskars/commitarium/internal/feature"
+	"github.com/EinarLogiOskars/commitarium/internal/featureartifact"
 	"github.com/EinarLogiOskars/commitarium/internal/workflow"
 )
 
@@ -173,6 +174,12 @@ func TestGetFeatureEvents(t *testing.T) {
 	if err != nil {
 		t.Fatalf("encode test payload: %v", err)
 	}
+	artifactPayload, err := workflow.EncodeFeatureArtifactUpdatedPayload(
+		featureartifact.KindImplementationPlan, 4, 3, strings.Repeat("a", 64),
+	)
+	if err != nil {
+		t.Fatalf("encode artifact payload: %v", err)
+	}
 	features := &recordingFeatureService{
 		getResult: feature.Feature{ID: "fea_test", ProjectID: "prj_test"},
 	}
@@ -196,6 +203,12 @@ func TestGetFeatureEvents(t *testing.T) {
 			PayloadVersion: workflow.FeatureStateChangedPayloadVersion,
 			IdempotencyKey: "cmd_test",
 			Payload:        statePayload,
+		}, {
+			ID: "evt_artifact", AggregateID: "fea_test", Type: workflow.EventTypeArtifactUpdated,
+			Actor:      workflow.Actor{Kind: workflow.ActorKindAgent, ID: "implementation-lead"},
+			OccurredAt: time.Date(2026, time.September, 8, 18, 1, 0, 0, time.UTC),
+			Sequence:   3, PayloadVersion: workflow.FeatureArtifactUpdatedPayloadVersion,
+			IdempotencyKey: "artifact_test", Payload: artifactPayload,
 		}}}
 	request := httptest.NewRequest(
 		http.MethodGet,
@@ -215,8 +228,8 @@ func TestGetFeatureEvents(t *testing.T) {
 	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
 		t.Fatalf("decode events response: %v", err)
 	}
-	if len(body) != 2 {
-		t.Fatalf("expected two events, got %d", len(body))
+	if len(body) != 3 {
+		t.Fatalf("expected three events, got %d", len(body))
 	}
 	if body[0].Goal != "Ship CSV export." || body[0].SessionID != "ses_lead" ||
 		body[0].Type != workflow.EventTypeGoalAccepted {
@@ -226,5 +239,9 @@ func TestGetFeatureEvents(t *testing.T) {
 		body[1].State != feature.StatePlanning ||
 		body[1].Actor.ID != "agt_coder" {
 		t.Errorf("unexpected state event response %+v", body[1])
+	}
+	if body[2].Type != workflow.EventTypeArtifactUpdated ||
+		body[2].ArtifactKind != featureartifact.KindImplementationPlan || body[2].ArtifactRevision != 4 {
+		t.Errorf("unexpected artifact event response %+v", body[2])
 	}
 }

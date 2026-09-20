@@ -174,6 +174,8 @@ func TestJournalBackedServicePassesExactResolvedEnvironmentToProvider(t *testing
 	observed := provider.lastRequest(t)
 	want := launchEnvironment(request.Assignment, observed.LaunchEnvironment.WorkingDirectory, []string{
 		"PATH=/usr/bin:/bin", "CODEX_HOME=/var/lib/commitarium/provider",
+		"COMMITARIUM_PROJECT_ID=" + request.Assignment.ProjectID,
+		"COMMITARIUM_FEATURE_ID=" + request.Assignment.FeatureID,
 	})
 	if !observed.LaunchEnvironment.Equal(want) ||
 		observed.FeatureID != request.Assignment.FeatureID ||

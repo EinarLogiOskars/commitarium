@@ -434,7 +434,7 @@ func run(ctx context.Context, coordinatorConfig config) error {
 		}
 		remoteStarter, err := orchestration.NewRemoteLeadStarter(orchestration.RemoteLeadConfig{
 			Executions: executionService, Features: featureStore, Goals: workflowService,
-			Planning: workflowService, Workspaces: workspaceService,
+			Planning: workflowService, Artifacts: workflowService, Workspaces: workspaceService,
 			Worker:   workerRouter,
 			Pump:     pumpRouter,
 			Lifetime: ctx, AgentProfileID: coordinatorConfig.codexAgentProfileID,

@@ -4,8 +4,9 @@ import { getRun, startRun } from "../api/runs";
 import { getSessionEvents, sendSessionMessage, acceptGoal } from "../api/sessions";
 import { ApiError } from "../api/client";
 import { Transcript, type TranscriptEntry } from "./Transcript";
+import { useFeatureArtifact } from "./useFeatureArtifact";
 import { WORK } from "../vocab";
-import type { Feature, SessionEvent, Session } from "../api/types";
+import type { Feature, GoalDraftDocument, SessionEvent, Session } from "../api/types";
 
 const SHOWN = new Set(["message", "activity", "user_message"]);
 
@@ -36,6 +37,23 @@ export function GoalClarification({
   const [busy, setBusy] = useState<null | "start" | "send" | "accept">(null);
   const [error, setError] = useState<string | null>(null);
   const [started, setStarted] = useState(false);
+
+  // The proposed goal is a durable artifact (goal_draft), not the lead's last
+  // chat message — a question stays in the transcript while the draft carries the
+  // current best goal and any open questions. Live via the feature event stream.
+  const { artifact: goalDraft } = useFeatureArtifact<GoalDraftDocument>(
+    projectId,
+    feature.id,
+    "goal_draft",
+    started && !feature.accepted_goal,
+  );
+  const openQuestions = goalDraft?.document.open_questions ?? [];
+
+  // Seed / refresh the editable goal box from the draft, unless the user has
+  // started editing it themselves.
+  useEffect(() => {
+    if (goalDraft && !goalEdited.current) setGoal(goalDraft.document.goal);
+  }, [goalDraft]);
 
   // Auto-scroll to the newest message only when the user is already near the
   // bottom — so scrolling up to read history is not yanked back down each poll.
@@ -93,12 +111,7 @@ export function GoalClarification({
       if (!lead) return;
       setLeadSessionId(lead.id);
       setStatus(lead.status);
-      const evts = await getSessionEvents(lead.id);
-      setEvents(evts);
-      if (!goalEdited.current) {
-        const lastLead = [...evts].reverse().find((e) => e.type === "message");
-        if (lastLead) setGoal(lastLead.text);
-      }
+      setEvents(await getSessionEvents(lead.id));
     } catch (e) {
       setError(describe(e));
     }
@@ -248,12 +261,23 @@ export function GoalClarification({
             <label className="accept__label">Proposed goal</label>
             <textarea
               value={goal}
+              placeholder="The lead will propose a goal here as it clarifies. You can edit it before accepting."
               onChange={(e) => {
                 goalEdited.current = true;
                 setGoal(e.target.value);
               }}
               disabled={busy !== null || !waiting}
             />
+            {openQuestions.length > 0 && (
+              <div className="clarify__questions">
+                <span className="muted note">Open questions</span>
+                <ul>
+                  {openQuestions.map((q, i) => (
+                    <li key={i}>{q}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
             <button
               className="primary"
               onClick={() => void accept()}

@@ -625,6 +625,8 @@ func (session *session) translateResult(
 			Publication: resolved.Publication, Review: resolved.Review,
 			InterventionEffect: resolved.InterventionEffect,
 			ToolchainProposal:  resolved.ToolchainProposal,
+			GoalDraft:          resolved.GoalDraft,
+			ImplementationPlan: resolved.ImplementationPlan,
 		}, nil
 	}
 

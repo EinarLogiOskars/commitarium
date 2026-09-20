@@ -159,7 +159,9 @@ func (adapter *Adapter) launch(
 	if model == "" {
 		return nil, fmt.Errorf("%w: exact model ID is required", worker.ErrInvalidSessionRequest)
 	}
-	arguments, err := adapter.commandArguments(model, request.OutputContract, providerSessionID, resume, prompt)
+	arguments, err := adapter.commandArguments(
+		model, request.OutputContract, request.WorkspaceAccess, providerSessionID, resume, prompt,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -191,6 +193,7 @@ func (adapter *Adapter) launch(
 func (adapter *Adapter) commandArguments(
 	model string,
 	contract worker.OutputContract,
+	access worker.WorkspaceAccess,
 	providerSessionID string,
 	resume bool,
 	prompt string,
@@ -202,7 +205,7 @@ func (adapter *Adapter) commandArguments(
 		"--verbose",
 		"--no-chrome",
 		"--prompt-suggestions", "false",
-		"--permission-mode", adapter.permissionMode,
+		"--permission-mode", adapter.permissionModeFor(access),
 	)
 	if resume {
 		arguments = append(arguments, "--resume", providerSessionID)
@@ -221,6 +224,13 @@ func (adapter *Adapter) commandArguments(
 	}
 	arguments = append(arguments, prompt)
 	return arguments, nil
+}
+
+func (adapter *Adapter) permissionModeFor(access worker.WorkspaceAccess) string {
+	if access == worker.WorkspaceAccessReadOnly {
+		return "plan"
+	}
+	return adapter.permissionMode
 }
 
 func validPermissionMode(value string) bool {

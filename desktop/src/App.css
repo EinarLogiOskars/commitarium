@@ -1875,3 +1875,121 @@ button.danger:not(.ghost) {
   flex: none;
   white-space: nowrap;
 }
+
+/* ---- Goal clarification: open questions from the goal_draft artifact ----- */
+.clarify__questions {
+  border-top: 1px solid var(--border);
+  padding-top: 8px;
+}
+.clarify__questions ul {
+  margin: 4px 0 0;
+  padding-left: 18px;
+  font-size: 13px;
+}
+.clarify__questions li {
+  margin-bottom: 3px;
+}
+
+/* ---- Implementation: plan checklist sidebar + transcript ---------------- */
+.impl {
+  display: flex;
+  gap: 16px;
+  align-items: stretch;
+  flex: 1;
+  min-height: 0;
+}
+.impl__main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.impl__side {
+  width: 320px;
+  flex: none;
+  overflow-y: auto;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 14px;
+}
+
+.plan h3 {
+  margin: 0;
+  font-size: 14px;
+}
+.plan__head {
+  margin-bottom: 10px;
+}
+.plan__subtitle {
+  margin: 4px 0;
+  font-size: 13px;
+}
+.plan__steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  counter-reset: none;
+}
+.plan-step {
+  border-top: 1px solid var(--border);
+}
+.plan-step__row {
+  width: 100%;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  text-align: left;
+  background: transparent;
+  border: none;
+  padding: 9px 2px;
+  cursor: pointer;
+  color: var(--text);
+  font: inherit;
+}
+.plan-step__mark {
+  flex: none;
+  width: 16px;
+  text-align: center;
+  color: var(--muted);
+}
+.plan-step--completed .plan-step__mark {
+  color: var(--ok);
+}
+.plan-step--in_progress .plan-step__mark {
+  color: var(--accent);
+}
+.plan-step__text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.plan-step__title {
+  font-size: 13px;
+  font-weight: 500;
+}
+.plan-step--completed .plan-step__title {
+  color: var(--muted);
+}
+.plan-step__subtitle {
+  font-size: 12px;
+}
+.plan-step__chevron {
+  flex: none;
+  color: var(--muted);
+  font-size: 10px;
+  margin-top: 3px;
+}
+.plan-step__detail {
+  padding: 0 2px 10px 26px;
+  font-size: 13px;
+}
+.plan-step__verify ul {
+  margin: 4px 0 0;
+  padding-left: 16px;
+}
+.plan-step__verify li {
+  font-size: 12px;
+}

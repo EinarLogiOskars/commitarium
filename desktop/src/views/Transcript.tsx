@@ -12,9 +12,10 @@ import type { ActivityDetail } from "../api/types";
 // and file-diff stats instead of counting generic lines.
 
 // Agents emit their turns as a JSON envelope keyed by `action`. The human-
-// readable prose lives in `content` (respond) or `summary` (blocked, plan
-// actions, etc.); unwrap whichever is present, falling back to the raw string
-// when it isn't a recognized envelope (plain text or an unknown shape).
+// readable prose lives in `content` (respond), `summary` (blocked, plan
+// actions), or `message` (goal-clarification ask/propose); unwrap whichever is
+// present, falling back to the raw string when it isn't a recognized envelope
+// (plain text or an unknown shape).
 function agentText(text: string): string {
   const t = text.trimStart();
   if (t[0] !== "{") return text;
@@ -23,6 +24,7 @@ function agentText(text: string): string {
     if (v && typeof v === "object") {
       if (typeof v.content === "string") return v.content;
       if (typeof v.summary === "string") return v.summary;
+      if (typeof v.message === "string") return v.message;
     }
   } catch {
     /* not JSON — show as-is */

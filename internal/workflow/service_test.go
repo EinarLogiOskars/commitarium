@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/EinarLogiOskars/commitarium/internal/feature"
+	"github.com/EinarLogiOskars/commitarium/internal/featureartifact"
 )
 
 type recordingWorkflowStore struct {
@@ -19,6 +20,28 @@ type recordingWorkflowStore struct {
 	receivedAggregate  string
 	eventsResult       []Event
 	eventsErr          error
+	receivedArtifact   FeatureArtifactMutation
+	artifactResult     FeatureArtifact
+	artifactEvent      Event
+	artifactErr        error
+	currentArtifact    FeatureArtifact
+	currentArtifactErr error
+}
+
+func (s *recordingWorkflowStore) PutFeatureArtifact(
+	_ context.Context,
+	mutation FeatureArtifactMutation,
+) (FeatureArtifact, Event, error) {
+	s.receivedArtifact = mutation
+	return s.artifactResult, s.artifactEvent, s.artifactErr
+}
+
+func (s *recordingWorkflowStore) GetFeatureArtifact(
+	_ context.Context,
+	_ string,
+	_ featureartifact.Kind,
+) (FeatureArtifact, error) {
+	return s.currentArtifact, s.currentArtifactErr
 }
 
 func (s *recordingWorkflowStore) AcceptGoal(
@@ -189,5 +212,67 @@ func TestServicePublishesSuccessfulTransition(t *testing.T) {
 		}
 	default:
 		t.Fatal("expected transition event to be published")
+	}
+}
+
+func TestServicePublishesGoalDraftArtifactUpdate(t *testing.T) {
+	fixedTime := time.Date(2026, time.September, 20, 16, 0, 0, 0, time.UTC)
+	event := validTestEvent(t)
+	event.Type = EventTypeArtifactUpdated
+	artifact := FeatureArtifact{
+		FeatureID: "fea_test", Kind: featureartifact.KindGoalDraft, Revision: 1,
+		Document: `{"goal":"Ship it.","open_questions":[]}`,
+		Actor:    Actor{Kind: ActorKindAgent, ID: "ses_lead"}, UpdatedAt: fixedTime,
+	}
+	store := &recordingWorkflowStore{artifactResult: artifact, artifactEvent: event}
+	service := &Service{
+		store: store, broker: newEventBroker(defaultSubscriberBuffer),
+		generateID: func() string { return "evt_artifact" }, now: func() time.Time { return fixedTime },
+	}
+	events, cancel := service.SubscribeFeatureEvents("fea_test")
+	defer cancel()
+	actual, err := service.PutGoalDraft(
+		t.Context(), "fea_test", 0,
+		featureartifact.GoalDraft{Goal: "Ship it.", OpenQuestions: []string{}},
+		artifact.Actor, "goal-1",
+	)
+	if err != nil || actual != artifact {
+		t.Fatalf("artifact=%+v error=%v", actual, err)
+	}
+	if store.receivedArtifact.ExpectedRevision != 0 || store.receivedArtifact.Kind != featureartifact.KindGoalDraft ||
+		store.receivedArtifact.IdempotencyKey != "goal-1" {
+		t.Fatalf("mutation=%+v", store.receivedArtifact)
+	}
+	select {
+	case published := <-events:
+		if published != event {
+			t.Fatalf("published=%+v", published)
+		}
+	default:
+		t.Fatal("artifact update was not published")
+	}
+}
+
+func TestServiceUpsertGoalDraftReusesMatchingDurableRevision(t *testing.T) {
+	draft := featureartifact.GoalDraft{Goal: "Ship it.", OpenQuestions: []string{}}
+	current := FeatureArtifact{
+		FeatureID: "fea_test", Kind: featureartifact.KindGoalDraft, Revision: 2,
+		Document: `{"goal":"Ship it.","open_questions":[]}`,
+		Actor:    Actor{Kind: ActorKindAgent, ID: "ses_lead"}, UpdatedAt: time.Now().UTC(),
+	}
+	store := &recordingWorkflowStore{currentArtifact: current}
+	service := NewService(store)
+
+	actual, err := service.UpsertGoalDraft(
+		t.Context(), "fea_test", draft, current.Actor, "attempt-1:goal-draft",
+	)
+	if err != nil {
+		t.Fatalf("upsert matching goal draft: %v", err)
+	}
+	if actual != current {
+		t.Fatalf("expected current revision %+v, got %+v", current, actual)
+	}
+	if store.receivedArtifact.FeatureID != "" {
+		t.Fatalf("matching retry wrote a new revision: %+v", store.receivedArtifact)
 	}
 }

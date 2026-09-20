@@ -343,7 +343,7 @@ func (adapter *Adapter) launch(
 		Model:          model,
 		CWD:            request.LaunchEnvironment.WorkingDirectory,
 		ApprovalPolicy: adapter.approvalPolicy,
-		Sandbox:        adapter.sandbox,
+		Sandbox:        adapter.sandboxFor(request.WorkspaceAccess),
 		ServiceName:    "commitarium",
 	}
 	if resumeThreadID != "" {
@@ -407,6 +407,13 @@ func (adapter *Adapter) launch(
 	}
 	providerSession.start(turnID)
 	return providerSession, nil
+}
+
+func (adapter *Adapter) sandboxFor(access worker.WorkspaceAccess) string {
+	if access == worker.WorkspaceAccessReadOnly {
+		return "read-only"
+	}
+	return adapter.sandbox
 }
 
 func validSandbox(value string) bool {

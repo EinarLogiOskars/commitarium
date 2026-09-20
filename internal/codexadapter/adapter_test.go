@@ -356,9 +356,9 @@ func TestImplementationReadinessResponseFailsClosed(t *testing.T) {
 func TestPlanningLeadResponseFailsClosed(t *testing.T) {
 	for _, response := range []string{
 		`{"action":"unknown","content":"plan"}`,
-		`{"action":"submit_plan","content":" "}`,
-		`{"action":"respond","content":"reply","extra":true}`,
-		`{"action":"respond","content":"reply"} {}`,
+		`{"action":"submit_plan","content":" ","plan_title":"","plan_subtitle":"","steps":[]}`,
+		`{"action":"respond","content":"reply","plan_title":"","plan_subtitle":"","steps":[],"extra":true}`,
+		`{"action":"respond","content":"reply","plan_title":"","plan_subtitle":"","steps":[]} {}`,
 	} {
 		if _, err := worker.ResolveStructuredOutput(
 			worker.OutputContractPlanningLead,
@@ -554,6 +554,16 @@ func TestNewAdapterValidatesAndUsesSafeDefaults(t *testing.T) {
 	}
 }
 
+func TestReadOnlyWorkspaceOverridesContainerSandbox(t *testing.T) {
+	adapter := &Adapter{sandbox: "danger-full-access"}
+	if actual := adapter.sandboxFor(worker.WorkspaceAccessReadOnly); actual != "read-only" {
+		t.Fatalf("read-only turn sandbox = %q", actual)
+	}
+	if actual := adapter.sandboxFor(worker.WorkspaceAccessReadWrite); actual != "danger-full-access" {
+		t.Fatalf("writable turn sandbox = %q", actual)
+	}
+}
+
 func TestCodexAppServerHelper(t *testing.T) {
 	mode := os.Getenv(helperModeEnvironment)
 	if mode == "" {
@@ -714,7 +724,7 @@ func TestCodexAppServerHelper(t *testing.T) {
 			"threadId": "thr_test", "turnId": "turn_test",
 			"item": map[string]any{
 				"id": "item_message", "type": "agentMessage",
-				"text": `{"action":"submit_plan","content":"Final agreed plan"}`,
+				"text": `{"action":"submit_plan","content":"Final agreed plan","plan_title":"Backend plan","plan_subtitle":"Ship safely","steps":[{"id":"store","title":"Persist state","subtitle":"Add storage","details_markdown":"Create the durable store.","verification":["go test ./..."],"commit_subject":"Add artifact storage"}]}`,
 			},
 		})
 		helpWriteTurnCompleted(writer, "completed")
@@ -860,7 +870,7 @@ func helperTurnHasPlanningSchema(raw json.RawMessage) bool {
 		} `json:"outputSchema"`
 	}
 	return json.Unmarshal(raw, &params) == nil &&
-		slices.Equal(params.OutputSchema.Required, []string{"action", "content"})
+		slices.Equal(params.OutputSchema.Required, []string{"action", "content", "plan_title", "plan_subtitle", "steps"})
 }
 
 func helperTurnHasImplementationSchema(raw json.RawMessage) bool {

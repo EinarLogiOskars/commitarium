@@ -117,6 +117,7 @@ func TestPutAttemptRequestValidate(t *testing.T) {
 		{name: "invalid assignment", identity: identity, request: withAssignment(start, Assignment{})},
 		{name: "missing instructions", identity: identity, request: withInstructions(start, " ")},
 		{name: "unknown output contract", identity: identity, request: func() PutAttemptRequest { invalid := start; invalid.OutputContract = "unknown"; return invalid }()},
+		{name: "unknown workspace access", identity: identity, request: func() PutAttemptRequest { invalid := start; invalid.WorkspaceAccess = "unknown"; return invalid }()},
 		{name: "planning output for reviewer", identity: identity, request: func() PutAttemptRequest {
 			invalid := start
 			invalid.OutputContract = OutputContractPlanningLead

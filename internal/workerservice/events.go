@@ -287,6 +287,8 @@ func (service *Service) finishAttempt(
 			Tools: result.ToolchainProposal.Tools, Services: result.ToolchainProposal.Services,
 		}
 	}
+	terminalResult.GoalDraft = result.GoalDraft
+	terminalResult.ImplementationPlan = result.ImplementationPlan
 	if result.Outcome == worker.OutcomeFailed {
 		terminalResult.Error = &workerhttp.ProtocolError{
 			Code:      workerhttp.ErrorInternal,
