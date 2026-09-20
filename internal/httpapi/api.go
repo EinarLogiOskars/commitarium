@@ -7,6 +7,7 @@ import (
 
 	"github.com/EinarLogiOskars/commitarium/internal/execution"
 	"github.com/EinarLogiOskars/commitarium/internal/feature"
+	"github.com/EinarLogiOskars/commitarium/internal/featureartifact"
 	"github.com/EinarLogiOskars/commitarium/internal/modelcatalog"
 	"github.com/EinarLogiOskars/commitarium/internal/project"
 	"github.com/EinarLogiOskars/commitarium/internal/projectdeletion"
@@ -88,6 +89,12 @@ type WorkflowService interface {
 		featureID string,
 	) ([]workflow.Event, error)
 	SubscribeFeatureEvents(featureID string) (<-chan workflow.Event, func())
+}
+
+type FeatureArtifactService interface {
+	GetFeatureArtifact(context.Context, string, featureartifact.Kind) (workflow.FeatureArtifact, error)
+	PutGoalDraft(context.Context, string, int, featureartifact.GoalDraft, workflow.Actor, string) (workflow.FeatureArtifact, error)
+	TransitionImplementationPlanStep(context.Context, string, int, string, featureartifact.StepStatus, string, workflow.Actor, string) (workflow.FeatureArtifact, error)
 }
 
 type ExecutionService interface {
@@ -218,6 +225,7 @@ type API struct {
 	projectImporter    ProjectImporter
 	features           FeatureService
 	workflow           WorkflowService
+	artifacts          FeatureArtifactService
 	execution          ExecutionService
 	controller         SessionController
 	starter            RunStarter
@@ -352,6 +360,7 @@ func newAPI(
 		toolchains:         toolchainService,
 		toolchainAssistant: toolchainAssistant,
 	}
+	api.artifacts, _ = workflow.(FeatureArtifactService)
 	api.projectImporter, _ = projects.(ProjectImporter)
 
 	mux := http.NewServeMux()
@@ -460,6 +469,20 @@ func newAPI(
 		"GET /api/v1/projects/{projectID}/features/{id}/events/stream",
 		api.streamFeatureEventsHandler,
 	)
+	if api.artifacts != nil {
+		mux.HandleFunc(
+			"GET /api/v1/projects/{projectID}/features/{id}/artifacts/{kind}",
+			api.getFeatureArtifactHandler,
+		)
+		mux.HandleFunc(
+			"PUT /api/v1/projects/{projectID}/features/{id}/artifacts/goal_draft",
+			api.putGoalDraftArtifactHandler,
+		)
+		mux.HandleFunc(
+			"POST /api/v1/projects/{projectID}/features/{id}/implementation-plan/steps/{stepID}/transitions",
+			api.transitionImplementationPlanStepHandler,
+		)
+	}
 	mux.HandleFunc(
 		"POST /api/v1/projects/{projectID}/features/{id}/runs",
 		api.startRunHandler,

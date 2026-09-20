@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/EinarLogiOskars/commitarium/internal/feature"
+	"github.com/EinarLogiOskars/commitarium/internal/featureartifact"
 	"github.com/EinarLogiOskars/commitarium/internal/workflow"
 )
 
@@ -28,16 +29,18 @@ type transitionFeatureResponse struct {
 }
 
 type featureEventResponse struct {
-	ID             string             `json:"id"`
-	Type           workflow.EventType `json:"type"`
-	Actor          eventActorResponse `json:"actor"`
-	OccurredAt     time.Time          `json:"occurred_at"`
-	Sequence       int64              `json:"sequence"`
-	PayloadVersion int                `json:"payload_version"`
-	PreviousState  feature.State      `json:"previous_state,omitempty"`
-	State          feature.State      `json:"state,omitempty"`
-	Goal           string             `json:"goal,omitempty"`
-	SessionID      string             `json:"session_id,omitempty"`
+	ID               string               `json:"id"`
+	Type             workflow.EventType   `json:"type"`
+	Actor            eventActorResponse   `json:"actor"`
+	OccurredAt       time.Time            `json:"occurred_at"`
+	Sequence         int64                `json:"sequence"`
+	PayloadVersion   int                  `json:"payload_version"`
+	PreviousState    feature.State        `json:"previous_state,omitempty"`
+	State            feature.State        `json:"state,omitempty"`
+	Goal             string               `json:"goal,omitempty"`
+	SessionID        string               `json:"session_id,omitempty"`
+	ArtifactKind     featureartifact.Kind `json:"artifact_kind,omitempty"`
+	ArtifactRevision int                  `json:"artifact_revision,omitempty"`
 }
 
 type eventActorResponse struct {
@@ -177,6 +180,13 @@ func newFeatureEventResponse(event workflow.Event) (featureEventResponse, error)
 		}
 		response.Goal = payload.Goal
 		response.SessionID = payload.SessionID
+	case workflow.EventTypeArtifactUpdated:
+		payload, err := workflow.DecodeFeatureArtifactUpdatedPayload(event.PayloadVersion, event.Payload)
+		if err != nil {
+			return featureEventResponse{}, err
+		}
+		response.ArtifactKind = payload.Kind
+		response.ArtifactRevision = payload.Revision
 	default:
 		return featureEventResponse{}, fmt.Errorf("unsupported workflow event type %q", event.Type)
 	}
