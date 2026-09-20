@@ -170,6 +170,10 @@ func TestAdapterPublishesStructuredPlanningSubmission(t *testing.T) {
 	if err != nil {
 		t.Fatalf("start structured planning turn: %v", err)
 	}
+	previewSession, ok := session.(worker.PreviewSession)
+	if !ok {
+		t.Fatal("structured Codex session does not expose previews")
+	}
 	events := collectEvents(session)
 	result, err := session.Wait(timeoutContext(t, 3*time.Second))
 	if err != nil || result.Summary != "Final agreed plan" {
@@ -177,9 +181,13 @@ func TestAdapterPublishesStructuredPlanningSubmission(t *testing.T) {
 	}
 	if observed := <-events; !equalEvents(observed, []worker.Event{
 		{Type: worker.EventActivity, Text: "Codex started working."},
-		{Type: worker.EventPlanSubmitted, Text: "Final agreed plan"},
+		{Type: worker.EventPlanSubmitted, Text: "Final agreed plan", StreamID: "item_message"},
 	}) {
 		t.Fatalf("structured planning events = %+v", observed)
+	}
+	preview := <-previewSession.Previews()
+	if preview.StreamID != "item_message" || preview.Text != "Final agreed" {
+		t.Fatalf("structured planning preview = %+v", preview)
 	}
 }
 
@@ -207,7 +215,7 @@ func TestAdapterReturnsStructuredImplementationPublication(t *testing.T) {
 			Type: worker.EventActivity, Text: "I’ll update the implementation and verify it.",
 			Activity: &worker.Activity{Kind: worker.ActivityKindNarration},
 		},
-		{Type: worker.EventMessage, Text: "Implemented the agreed change and passed tests."},
+		{Type: worker.EventMessage, Text: "Implemented the agreed change and passed tests.", StreamID: "item_message"},
 	}) {
 		t.Fatalf("structured implementation events = %+v", observed)
 	}
@@ -238,7 +246,7 @@ func TestAdapterReturnsStructuredImplementationBlocker(t *testing.T) {
 	}
 	if observed := <-events; !equalEvents(observed, []worker.Event{
 		{Type: worker.EventActivity, Text: "Codex started working."},
-		{Type: worker.EventInputRequired, Text: "Forgejo rejected the push."},
+		{Type: worker.EventInputRequired, Text: "Forgejo rejected the push.", StreamID: "item_message"},
 	}) {
 		t.Fatalf("blocked implementation events = %+v", observed)
 	}
@@ -264,7 +272,7 @@ func TestAdapterReturnsStructuredImplementationReview(t *testing.T) {
 	}
 	if observed := <-events; !equalEvents(observed, []worker.Event{
 		{Type: worker.EventActivity, Text: "Codex started working."},
-		{Type: worker.EventMessage, Text: "The implementation misses the documented failure case."},
+		{Type: worker.EventMessage, Text: "The implementation misses the documented failure case.", StreamID: "item_message"},
 	}) {
 		t.Fatalf("structured review events = %+v", observed)
 	}
@@ -288,7 +296,7 @@ func TestAdapterReturnsStructuredLeadMergeReadiness(t *testing.T) {
 	}
 	if observed := <-events; !equalEvents(observed, []worker.Event{
 		{Type: worker.EventActivity, Text: "Codex started working."},
-		{Type: worker.EventMessage, Text: "I agree that the approved commit is ready to merge."},
+		{Type: worker.EventMessage, Text: "I agree that the approved commit is ready to merge.", StreamID: "item_message"},
 	}) {
 		t.Fatalf("structured readiness events = %+v", observed)
 	}
@@ -315,7 +323,7 @@ func TestAdapterReturnsStructuredToolchainProposal(t *testing.T) {
 	}
 	if observed := <-events; !equalEvents(observed, []worker.Event{
 		{Type: worker.EventActivity, Text: "Codex started working."},
-		{Type: worker.EventMessage, Text: "Use Python and Node."},
+		{Type: worker.EventMessage, Text: "Use Python and Node.", StreamID: "item_message"},
 	}) {
 		t.Fatalf("structured toolchain events = %+v", observed)
 	}
@@ -720,6 +728,10 @@ func TestCodexAppServerHelper(t *testing.T) {
 		helpWriteTurnCompleted(writer, "completed")
 		helperWaitForever()
 	case "structured-plan":
+		helpNotify(writer, "item/agentMessage/delta", map[string]any{
+			"threadId": "thr_test", "turnId": "turn_test", "itemId": "item_message",
+			"delta": `{"action":"submit_plan","content":"Final agreed`,
+		})
 		helpNotify(writer, "item/completed", map[string]any{
 			"threadId": "thr_test", "turnId": "turn_test",
 			"item": map[string]any{

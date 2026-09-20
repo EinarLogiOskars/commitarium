@@ -21,6 +21,8 @@ var (
 	ErrEventBackpressure  = errors.New("Codex activity consumer fell behind")
 )
 
+const messagePreviewInterval = 50 * time.Millisecond
+
 type session struct {
 	client           *protocolClient
 	process          *processsupervisor.Process
@@ -29,12 +31,15 @@ type session struct {
 	shutdownTimeout  time.Duration
 	outputContract   worker.OutputContract
 	events           chan worker.Event
+	previews         chan worker.MessagePreview
 	done             chan struct{}
+	previewBuffer    *worker.MessagePreviewAccumulator
 
 	mu               sync.Mutex
 	turnID           string
 	lastAgentMessage string
 	pendingMessage   string
+	pendingStreamID  string
 	forced           bool
 	result           worker.Result
 	waitErr          error
@@ -60,7 +65,9 @@ func newSession(
 		shutdownTimeout:  shutdownTimeout,
 		outputContract:   outputContract,
 		events:           make(chan worker.Event, eventBuffer),
+		previews:         make(chan worker.MessagePreview, 1),
 		done:             make(chan struct{}),
+		previewBuffer:    worker.NewMessagePreviewAccumulator(outputContract, messagePreviewInterval),
 	}
 }
 
@@ -83,6 +90,13 @@ func (session *session) Events() <-chan worker.Event {
 		return nil
 	}
 	return session.events
+}
+
+func (session *session) Previews() <-chan worker.MessagePreview {
+	if session == nil {
+		return nil
+	}
+	return session.previews
 }
 
 func (session *session) Send(ctx context.Context, command worker.Command) error {
@@ -257,6 +271,7 @@ func (session *session) complete(result worker.Result, err error) {
 	session.result = result
 	session.waitErr = err
 	close(session.events)
+	close(session.previews)
 	close(session.done)
 	session.mu.Unlock()
 }
@@ -267,6 +282,13 @@ type scopedNotification struct {
 	Turn      turnRecord `json:"turn"`
 	Item      threadItem `json:"item"`
 	WillRetry bool       `json:"willRetry"`
+}
+
+type agentMessageDelta struct {
+	ThreadID string `json:"threadId"`
+	TurnID   string `json:"turnId"`
+	ItemID   string `json:"itemId"`
+	Delta    string `json:"delta"`
 }
 
 type turnRecord struct {
@@ -357,9 +379,20 @@ func (session *session) translate(
 		case "turn/completed":
 			return session.completedTurn(params.Turn)
 		}
-	case "item/agentMessage/delta", "turn/diff/updated", "thread/tokenUsage/updated":
-		// Deltas are intentionally ignored. The completed item is authoritative,
-		// avoids duplicate text, and passes through the worker's safety filter.
+	case "item/agentMessage/delta":
+		var params agentMessageDelta
+		if err := decodeParams(message, &params); err != nil {
+			return nil, false, worker.Result{}, err
+		}
+		if params.ThreadID != session.threadID || params.TurnID != session.currentTurnID() {
+			return nil, false, worker.Result{}, session.scopeError(params.ThreadID, params.TurnID)
+		}
+		if strings.TrimSpace(params.ItemID) == "" {
+			return nil, false, worker.Result{}, fmt.Errorf("%w: agent message delta omitted item ID", ErrProtocol)
+		}
+		session.acceptMessageDelta(params.ItemID, params.Delta)
+		return nil, false, worker.Result{}, nil
+	case "turn/diff/updated", "thread/tokenUsage/updated":
 		return nil, false, worker.Result{}, nil
 	default:
 		// App Server evolves quickly and emits many optional notifications. An
@@ -367,6 +400,26 @@ func (session *session) translate(
 		return nil, false, worker.Result{}, nil
 	}
 	return nil, false, worker.Result{}, nil
+}
+
+func (session *session) acceptMessageDelta(streamID string, delta string) {
+	preview, emit := session.previewBuffer.Add(streamID, delta, time.Now().UTC())
+	if !emit {
+		return
+	}
+	select {
+	case session.previews <- preview:
+		return
+	default:
+	}
+	select {
+	case <-session.previews:
+	default:
+	}
+	select {
+	case session.previews <- preview:
+	default:
+	}
 }
 
 func (session *session) startedItem(item threadItem) *worker.Event {
@@ -411,6 +464,7 @@ func (session *session) completedItem(item threadItem) ([]worker.Event, error) {
 			session.outputContract == worker.OutputContractToolchainSetup {
 			session.mu.Lock()
 			session.pendingMessage = text
+			session.pendingStreamID = item.ID
 			session.mu.Unlock()
 			return nil, nil
 		}
@@ -616,6 +670,7 @@ func (session *session) completeStructuredResponse() (
 	}
 	session.mu.Lock()
 	raw := session.pendingMessage
+	streamID := session.pendingStreamID
 	session.mu.Unlock()
 	if strings.TrimSpace(raw) == "" {
 		return nil, "", nil, nil, "", nil, nil, nil, fmt.Errorf(
@@ -626,6 +681,7 @@ func (session *session) completeStructuredResponse() (
 	if err != nil {
 		return nil, "", nil, nil, "", nil, nil, nil, fmt.Errorf("%w: %v", ErrProtocol, err)
 	}
+	resolved.Event.StreamID = streamID
 	session.mu.Lock()
 	session.lastAgentMessage = resolved.Event.Text
 	session.mu.Unlock()

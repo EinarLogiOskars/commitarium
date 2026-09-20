@@ -2,9 +2,57 @@ package worker
 
 import (
 	"strings"
+	"time"
 	"unicode/utf16"
 	"unicode/utf8"
 )
+
+// MessagePreviewAccumulator turns provider text deltas into bounded-rate,
+// cumulative visible-prose snapshots. It is intended to be owned by the one
+// goroutine translating a provider session.
+type MessagePreviewAccumulator struct {
+	contract      OutputContract
+	interval      time.Duration
+	streamID      string
+	raw           strings.Builder
+	lastText      string
+	lastPublished time.Time
+}
+
+func NewMessagePreviewAccumulator(
+	contract OutputContract,
+	interval time.Duration,
+) *MessagePreviewAccumulator {
+	return &MessagePreviewAccumulator{contract: contract, interval: interval}
+}
+
+func (accumulator *MessagePreviewAccumulator) Add(
+	streamID string,
+	delta string,
+	now time.Time,
+) (MessagePreview, bool) {
+	if accumulator == nil || PreviewProseField(accumulator.contract) == "" ||
+		strings.TrimSpace(streamID) == "" || delta == "" {
+		return MessagePreview{}, false
+	}
+	if accumulator.streamID != streamID {
+		accumulator.streamID = streamID
+		accumulator.raw.Reset()
+		accumulator.lastText = ""
+		accumulator.lastPublished = time.Time{}
+	}
+	accumulator.raw.WriteString(delta)
+	text := ExtractMessagePreview(accumulator.contract, []byte(accumulator.raw.String()))
+	if strings.TrimSpace(text) == "" || text == accumulator.lastText {
+		return MessagePreview{}, false
+	}
+	if !accumulator.lastPublished.IsZero() && now.Sub(accumulator.lastPublished) < accumulator.interval {
+		return MessagePreview{}, false
+	}
+	accumulator.lastText = text
+	accumulator.lastPublished = now
+	return MessagePreview{StreamID: streamID, Text: text}, true
+}
 
 // PreviewProseField returns the one human-visible string field for a structured
 // output contract. An empty result means the contract has no streamable final
