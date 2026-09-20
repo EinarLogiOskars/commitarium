@@ -220,6 +220,7 @@ every pull request and push to `main`.
 | [Release guide](docs/releasing.md) | Versioning, image publication, installers, and release verification |
 | [Desktop IPC](docs/desktop-ipc.md) | Trusted Tauri command and event contract |
 | [Coordinator API](docs/coordinator-api.md) | Coordinator HTTP API and event stream |
+| [Final-message streaming](docs/final-message-streaming.md) | Transient final-response previews and frontend handoff |
 | [Worker API](docs/worker-api.md) | Authenticated worker protocol |
 | [UI/backend status](docs/ui-backend-status.md) | Current integration status and ownership boundaries |
 | [Architecture decisions](docs/adr) | Accepted architectural decisions and rationale |
