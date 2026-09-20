@@ -25,20 +25,15 @@ var (
 	ErrEventBackpressure  = errors.New("Claude activity consumer fell behind")
 )
 
-const messagePreviewInterval = 50 * time.Millisecond
-
 type session struct {
 	process           *processsupervisor.Process
 	providerSessionID string
-	previewStreamID   string
 	workingDirectory  string
 	expectedModel     string
 	outputContract    worker.OutputContract
 	shutdownTimeout   time.Duration
 	events            chan worker.Event
-	previews          chan worker.MessagePreview
 	done              chan struct{}
-	previewBuffer     *worker.MessagePreviewAccumulator
 
 	mu               sync.Mutex
 	finished         bool
@@ -57,7 +52,6 @@ var _ worker.ForceStoppableSession = (*session)(nil)
 func newSession(
 	process *processsupervisor.Process,
 	providerSessionID string,
-	previewStreamID string,
 	workingDirectory string,
 	expectedModel string,
 	outputContract worker.OutputContract,
@@ -66,13 +60,11 @@ func newSession(
 ) *session {
 	return &session{
 		process: process, providerSessionID: providerSessionID,
-		previewStreamID:  previewStreamID,
 		workingDirectory: workingDirectory, expectedModel: expectedModel, outputContract: outputContract,
 		shutdownTimeout: shutdownTimeout,
 		events:          make(chan worker.Event, eventBuffer),
-		previews:        make(chan worker.MessagePreview, 1), done: make(chan struct{}),
-		previewBuffer: worker.NewMessagePreviewAccumulator(outputContract, messagePreviewInterval),
-		tools:         make(map[string]pendingTool),
+		done:            make(chan struct{}),
+		tools:           make(map[string]pendingTool),
 	}
 }
 
@@ -92,13 +84,6 @@ func (session *session) Events() <-chan worker.Event {
 		return nil
 	}
 	return session.events
-}
-
-func (session *session) Previews() <-chan worker.MessagePreview {
-	if session == nil {
-		return nil
-	}
-	return session.previews
 }
 
 func (session *session) Send(ctx context.Context, command worker.Command) error {
@@ -380,23 +365,13 @@ func (session *session) translate(raw []byte) ([]worker.Event, *worker.Result, e
 		if err := session.requireInitialized(message.SessionID); err != nil {
 			return nil, nil, err
 		}
+		// Claude Code exposes partial text and tool-input blocks here, but its
+		// structured result is available only on the terminal result record.
+		// Completed assistant and tool records remain the durable source of truth.
 		var partial partialStreamEvent
 		if err := json.Unmarshal(message.Event, &partial); err != nil {
 			return nil, nil, fmt.Errorf("%w: decode stream event", ErrProtocol)
 		}
-		if partial.Type != "content_block_delta" {
-			return nil, nil, nil
-		}
-		delta := ""
-		switch partial.Delta.Type {
-		case "text_delta":
-			delta = partial.Delta.Text
-		case "input_json_delta":
-			delta = partial.Delta.PartialJSON
-		default:
-			return nil, nil, nil
-		}
-		session.acceptMessageDelta(delta)
 		return nil, nil, nil
 	case "rate_limit_event", "tool_progress", "auth_status":
 		return nil, nil, nil
@@ -404,28 +379,6 @@ func (session *session) translate(raw []byte) ([]worker.Event, *worker.Result, e
 		// Claude Code uses semantic versioning for this stream. Unknown records
 		// are ignored unless they claim to be one of the state-bearing types above.
 		return nil, nil, nil
-	}
-}
-
-func (session *session) acceptMessageDelta(delta string) {
-	preview, emit := session.previewBuffer.Add(
-		session.previewStreamID, delta, time.Now().UTC(),
-	)
-	if !emit {
-		return
-	}
-	select {
-	case session.previews <- preview:
-		return
-	default:
-	}
-	select {
-	case <-session.previews:
-	default:
-	}
-	select {
-	case session.previews <- preview:
-	default:
 	}
 }
 
@@ -445,17 +398,16 @@ func (session *session) assistantEvents(blocks []contentBlock) []worker.Event {
 			if text == "" || session.outputContract == worker.OutputContractIntervention {
 				continue
 			}
-			if hasToolUse {
+			if session.outputContract != "" && isStructuredEnvelope(session.outputContract, text) {
+				// A validated structured result arrives separately on the terminal
+				// result record. Suppress only a duplicate protocol envelope here.
+				continue
+			}
+			if hasToolUse || session.outputContract != "" {
 				events = append(events, worker.Event{
 					Type: worker.EventActivity, Text: text,
 					Activity: &worker.Activity{Kind: worker.ActivityKindNarration},
 				})
-				continue
-			}
-			if session.outputContract != "" {
-				// Structured turns publish their final user-facing message from
-				// structured_output. A text-only block may contain that private JSON
-				// wrapper, so it is not safe to present as narration.
 				continue
 			}
 			session.mu.Lock()
@@ -479,6 +431,26 @@ func (session *session) assistantEvents(blocks []contentBlock) []worker.Event {
 		}
 	}
 	return events
+}
+
+func isStructuredEnvelope(contract worker.OutputContract, text string) bool {
+	field := worker.PreviewProseField(contract)
+	if field == "" {
+		return false
+	}
+	var object map[string]json.RawMessage
+	if json.Unmarshal([]byte(text), &object) != nil {
+		return false
+	}
+	if _, ok := object[field]; !ok {
+		return false
+	}
+	discriminator := "action"
+	if contract == worker.OutputContractIntervention {
+		discriminator = "effect"
+	}
+	_, ok := object[discriminator]
+	return ok
 }
 
 func (session *session) userEvents(blocks []contentBlock, toolUseResult json.RawMessage) []worker.Event {
@@ -686,7 +658,6 @@ func (session *session) translateResult(
 		if err != nil {
 			return nil, nil, fmt.Errorf("%w: %v", ErrProtocol, err)
 		}
-		resolved.Event.StreamID = session.previewStreamID
 		session.mu.Lock()
 		session.lastAgentMessage = resolved.Event.Text
 		session.mu.Unlock()
@@ -783,7 +754,6 @@ func (session *session) complete(result worker.Result, err error) {
 	session.result = result
 	session.waitErr = err
 	close(session.events)
-	close(session.previews)
 	close(session.done)
 	session.mu.Unlock()
 }
