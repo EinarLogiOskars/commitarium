@@ -105,6 +105,19 @@ export function ImplementationView({
 }
 
 function PlanChecklist({ plan }: { plan: ImplementationPlanDocument | null }) {
+  // One step open at a time (accordion). Auto-follows the active step until the
+  // user picks a step themselves, after which their choice is respected.
+  const [openId, setOpenId] = useState<string | null>(null);
+  const touched = useRef(false);
+  const activeId = plan?.steps.find((s) => s.status === "in_progress")?.id ?? null;
+  useEffect(() => {
+    if (!touched.current) setOpenId(activeId);
+  }, [activeId]);
+  const toggle = (id: string) => {
+    touched.current = true;
+    setOpenId((cur) => (cur === id ? null : id));
+  };
+
   if (!plan) {
     return (
       <div className="plan">
@@ -125,7 +138,12 @@ function PlanChecklist({ plan }: { plan: ImplementationPlanDocument | null }) {
       </div>
       <ol className="plan__steps">
         {plan.steps.map((step) => (
-          <PlanStepRow key={step.id} step={step} />
+          <PlanStepRow
+            key={step.id}
+            step={step}
+            open={openId === step.id}
+            onToggle={() => toggle(step.id)}
+          />
         ))}
       </ol>
     </div>
@@ -138,8 +156,15 @@ const STATUS_MARK: Record<PlanStep["status"], string> = {
   completed: "✓",
 };
 
-function PlanStepRow({ step }: { step: PlanStep }) {
-  const [open, setOpen] = useState(step.status === "in_progress");
+function PlanStepRow({
+  step,
+  open,
+  onToggle,
+}: {
+  step: PlanStep;
+  open: boolean;
+  onToggle: () => void;
+}) {
   const hasDetail =
     Boolean(step.details_markdown) ||
     (step.verification?.length ?? 0) > 0 ||
@@ -150,7 +175,7 @@ function PlanStepRow({ step }: { step: PlanStep }) {
     <li className={`plan-step plan-step--${step.status}`}>
       <button
         className="plan-step__row"
-        onClick={() => hasDetail && setOpen((v) => !v)}
+        onClick={() => hasDetail && onToggle()}
         aria-expanded={hasDetail ? open : undefined}
       >
         <span className="plan-step__mark" aria-hidden>
@@ -163,7 +188,8 @@ function PlanStepRow({ step }: { step: PlanStep }) {
         {hasDetail && <span className="plan-step__chevron">{open ? "▼" : "▶"}</span>}
       </button>
       {open && hasDetail && (
-        <div className="plan-step__detail">
+        // Clicking anywhere in the expanded body collapses it too.
+        <div className="plan-step__detail" onClick={onToggle}>
           {step.details_markdown && <Markdown text={step.details_markdown} />}
           {step.commit_subject && (
             <p className="muted note">
