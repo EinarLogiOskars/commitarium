@@ -97,7 +97,7 @@ func TestAdapterStartsClaudeAndTranslatesObservableActivity(t *testing.T) {
 	}
 }
 
-func TestAssistantNarrationRemainsSuppressedForInterventionTurns(t *testing.T) {
+func TestAssistantPublishesNarrationForInterventionTurns(t *testing.T) {
 	session := &session{
 		outputContract: worker.OutputContractIntervention,
 		tools:          make(map[string]pendingTool),
@@ -106,10 +106,12 @@ func TestAssistantNarrationRemainsSuppressedForInterventionTurns(t *testing.T) {
 		{Type: "text", Text: "I’ll inspect the project first."},
 		{Type: "tool_use", ID: "tool_read", Name: "Read", Input: json.RawMessage(`{"file_path":"README.md"}`)},
 	})
-	for _, event := range events {
-		if event.Activity != nil && event.Activity.Kind == worker.ActivityKindNarration {
-			t.Fatalf("intervention assistant events include narration: %+v", events)
-		}
+	wantNarration := worker.Event{
+		Type: worker.EventActivity, Text: "I’ll inspect the project first.",
+		Activity: &worker.Activity{Kind: worker.ActivityKindNarration},
+	}
+	if len(events) == 0 || !reflect.DeepEqual(events[0], wantNarration) {
+		t.Fatalf("intervention assistant events = %+v, want narration first", events)
 	}
 }
 

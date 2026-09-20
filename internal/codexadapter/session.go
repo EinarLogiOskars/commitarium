@@ -517,9 +517,6 @@ func (session *session) previewEligible(itemID string) bool {
 }
 
 func (session *session) narrationEvents(texts ...string) []worker.Event {
-	if session.outputContract == worker.OutputContractIntervention {
-		return nil
-	}
 	result := make([]worker.Event, 0, len(texts))
 	for _, value := range texts {
 		text := strings.TrimSpace(value)

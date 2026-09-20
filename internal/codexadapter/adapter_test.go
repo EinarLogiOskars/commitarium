@@ -221,10 +221,14 @@ func TestAdapterReturnsStructuredImplementationPublication(t *testing.T) {
 	}
 }
 
-func TestNarrationEventsRemainSuppressedForInterventionTurns(t *testing.T) {
+func TestNarrationEventsRemainVisibleForInterventionTurns(t *testing.T) {
 	session := &session{outputContract: worker.OutputContractIntervention}
-	if events := session.narrationEvents("I’ll inspect the project first."); len(events) != 0 {
-		t.Fatalf("intervention narration events = %+v, want none", events)
+	want := []worker.Event{{
+		Type: worker.EventActivity, Text: "I’ll inspect the project first.",
+		Activity: &worker.Activity{Kind: worker.ActivityKindNarration},
+	}}
+	if events := session.narrationEvents("I’ll inspect the project first."); !equalEvents(events, want) {
+		t.Fatalf("intervention narration events = %+v, want %+v", events, want)
 	}
 }
 

@@ -395,7 +395,7 @@ func (session *session) assistantEvents(blocks []contentBlock) []worker.Event {
 		switch block.Type {
 		case "text":
 			text := strings.TrimSpace(block.Text)
-			if text == "" || session.outputContract == worker.OutputContractIntervention {
+			if text == "" {
 				continue
 			}
 			if session.outputContract != "" && isStructuredEnvelope(session.outputContract, text) {
