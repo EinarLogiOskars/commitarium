@@ -83,9 +83,12 @@ services:
       COMMITARIUM_CODEX_FORGEJO_ROLE: lead
       COMMITARIUM_CODEX_GIT_AUTHOR_NAME: ${COMMITARIUM_CODEX_GIT_AUTHOR_NAME:-Commitarium Codex Lead}
       COMMITARIUM_CODEX_GIT_AUTHOR_EMAIL: ${COMMITARIUM_CODEX_GIT_AUTHOR_EMAIL:-codex-lead@commitarium.local}
-      # Docker is the security boundary. Codex's nested Linux sandbox cannot
-      # create namespaces inside this unprivileged container.
+      # Docker remains the boundary for write-capable turns. Read-only turns
+      # additionally use Codex's bwrap sandbox, enabled below without granting
+      # SYS_ADMIN, privileged mode, or access to the Docker socket.
       COMMITARIUM_CODEX_SANDBOX: danger-full-access
+    security_opt:
+      - seccomp=unconfined
     volumes:
       - codex-worker-journal:/var/lib/commitarium-worker
       - codex-profile:/var/lib/commitarium-provider
@@ -122,9 +125,12 @@ services:
       COMMITARIUM_CODEX_FORGEJO_ROLE: reviewer
       COMMITARIUM_CODEX_GIT_AUTHOR_NAME: ${COMMITARIUM_CODEX_REVIEWER_GIT_AUTHOR_NAME:-Commitarium Codex Reviewer}
       COMMITARIUM_CODEX_GIT_AUTHOR_EMAIL: ${COMMITARIUM_CODEX_REVIEWER_GIT_AUTHOR_EMAIL:-codex-reviewer@commitarium.local}
-      # Docker and the internal Forgejo repository are the security boundary.
-      # Ordinary review-turn instructions still forbid Git writes.
+      # Docker remains the boundary for write-capable turns. Read-only turns
+      # additionally use Codex's bwrap sandbox, enabled below without granting
+      # SYS_ADMIN, privileged mode, or access to the Docker socket.
       COMMITARIUM_CODEX_SANDBOX: danger-full-access
+    security_opt:
+      - seccomp=unconfined
     volumes:
       - codex-reviewer-worker-journal:/var/lib/commitarium-worker
       - codex-reviewer-profile:/var/lib/commitarium-provider

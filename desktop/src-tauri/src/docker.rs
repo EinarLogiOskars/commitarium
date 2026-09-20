@@ -643,6 +643,11 @@ mod tests {
         assert!(EMBEDDED_RELEASE_COMPOSE.contains("build: !reset null"));
         assert!(EMBEDDED_RELEASE_COMPOSE.contains("ghcr.io/einarlogioskars"));
         assert!(EMBEDDED_RELEASE_COMPOSE.contains("COMMITARIUM_RUNNER_MODE: real_agents"));
+        assert_eq!(
+            EMBEDDED_COMPOSE.matches("seccomp=unconfined").count(),
+            2,
+            "both Codex workers must allow the nested read-only bwrap sandbox"
+        );
     }
 
     #[test]

@@ -419,9 +419,13 @@ its journal has a different persistent volume, and its assigned host workspace
 root is mounted read-write. The real worker advertises force-stop because the Codex
 session owns an exact supervised process handle; it does not advertise
 pause/continue because App Server cannot provide the required safe boundary.
-Codex runs with its internal process sandbox disabled in this service because
-the Linux namespace sandbox cannot start inside the unprivileged container.
-Docker and the service's explicit mounts are therefore the security boundary.
+Write-capable Codex turns run with the internal process sandbox disabled, so
+Docker and the service's explicit mounts are their security boundary. Read-only
+turns select Codex's `read-only` sandbox. The Codex services relax Docker's
+default seccomp profile so the bundled `bwrap` can create an unprivileged user
+namespace; they do not receive `SYS_ADMIN`, privileged mode, or the Docker
+socket. The nested sandbox then enforces read-only repository access for
+clarification and planning.
 The dedicated smoke-test child remains overlaid read-only, while coordinator-
 prepared feature children may be selected for write-capable implementation.
 
@@ -530,9 +534,10 @@ User messages use App Server's `turn/steer` operation. Cooperative stop uses
 App Server does not currently expose Commitarium's safe-pause meaning, so this
 adapter rejects pause and continue. Approval forwarding is also deferred; the
 adapter currently requires the `never` approval policy. The adapter defaults to
-a read-only sandbox for native use, while the Compose worker explicitly uses
-`danger-full-access` inside its containing Docker boundary because nested Linux
-namespaces are unavailable there.
+a read-only sandbox for native use. The Compose worker uses
+`danger-full-access` as its write-capable default inside the containing Docker
+boundary, while per-turn `workspace_access: "read_only"` overrides that default
+and uses Codex's nested read-only sandbox.
 
 Unit tests execute a deterministic fake App Server as a real child process.
 They do not log in, contact OpenAI, or consume model usage. The opt-in
