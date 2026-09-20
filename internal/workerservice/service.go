@@ -473,6 +473,7 @@ func (service *Service) launchProvider(
 		Model:             request.Assignment.Model,
 		Instructions:      request.Instructions,
 		OutputContract:    worker.OutputContract(request.OutputContract),
+		WorkspaceAccess:   worker.WorkspaceAccess(request.WorkspaceAccess),
 		LaunchEnvironment: launchEnvironment.Clone(),
 	}
 	if request.Mode == workerhttp.AttemptModeResume {

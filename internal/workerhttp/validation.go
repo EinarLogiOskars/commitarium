@@ -182,8 +182,13 @@ func (request PutAttemptRequest) Validate(identity MutationIdentity) error {
 	if err := validateRequiredText("instructions", request.Instructions, MaxInstructionsBytes); err != nil {
 		return err
 	}
+	if request.WorkspaceAccess != "" && request.WorkspaceAccess != WorkspaceAccessReadOnly &&
+		request.WorkspaceAccess != WorkspaceAccessReadWrite {
+		return invalid("workspace access %q is not recognized", request.WorkspaceAccess)
+	}
 	if request.OutputContract != "" &&
 		request.OutputContract != OutputContractPlanningLead &&
+		request.OutputContract != OutputContractGoalClarification &&
 		request.OutputContract != OutputContractImplementationLead &&
 		request.OutputContract != OutputContractImplementationReview &&
 		request.OutputContract != OutputContractImplementationReadiness &&
@@ -192,6 +197,7 @@ func (request PutAttemptRequest) Validate(identity MutationIdentity) error {
 		return invalid("output contract %q is not recognized", request.OutputContract)
 	}
 	if (request.OutputContract == OutputContractPlanningLead ||
+		request.OutputContract == OutputContractGoalClarification ||
 		request.OutputContract == OutputContractImplementationLead ||
 		request.OutputContract == OutputContractImplementationReadiness) &&
 		request.Assignment.Role != RoleLead {
@@ -385,6 +391,12 @@ func (result TerminalResult) Validate() error {
 		if result.ToolchainProposal != nil && (result.Publication != nil || result.Review != nil || result.InterventionEffect != "") {
 			return invalid("toolchain proposal cannot contain another specialized result")
 		}
+		if result.GoalDraft != nil && (result.Disposition != DispositionSucceeded || result.Publication != nil || result.Review != nil || result.InterventionEffect != "" || result.ToolchainProposal != nil || result.ImplementationPlan != nil) {
+			return invalid("goal draft requires success and cannot contain another specialized result")
+		}
+		if result.ImplementationPlan != nil && (result.Disposition != DispositionSucceeded || result.Publication != nil || result.Review != nil || result.InterventionEffect != "" || result.ToolchainProposal != nil) {
+			return invalid("implementation plan requires success and cannot contain another specialized result")
+		}
 	case OutcomeStopped:
 		if result.Disposition != "" {
 			return invalid("stopped outcome cannot include a disposition")
@@ -403,6 +415,9 @@ func (result TerminalResult) Validate() error {
 		}
 		if result.ToolchainProposal != nil {
 			return invalid("stopped outcome cannot include a toolchain proposal")
+		}
+		if result.GoalDraft != nil || result.ImplementationPlan != nil {
+			return invalid("stopped outcome cannot include a feature artifact")
 		}
 	case OutcomeFailed:
 		if result.Disposition != "" {
@@ -426,6 +441,9 @@ func (result TerminalResult) Validate() error {
 		if result.ToolchainProposal != nil {
 			return invalid("failed outcome cannot include a toolchain proposal")
 		}
+		if result.GoalDraft != nil || result.ImplementationPlan != nil {
+			return invalid("failed outcome cannot include a feature artifact")
+		}
 	}
 	if result.Publication != nil {
 		if err := result.Publication.Validate(); err != nil {
@@ -440,6 +458,16 @@ func (result TerminalResult) Validate() error {
 	if result.ToolchainProposal != nil {
 		if err := result.ToolchainProposal.Validate(); err != nil {
 			return err
+		}
+	}
+	if result.GoalDraft != nil {
+		if err := result.GoalDraft.Validate(); err != nil {
+			return invalid("goal draft: %v", err)
+		}
+	}
+	if result.ImplementationPlan != nil {
+		if _, err := result.ImplementationPlan.NormalizeInitial(1); err != nil {
+			return invalid("implementation plan: %v", err)
 		}
 	}
 	return nil

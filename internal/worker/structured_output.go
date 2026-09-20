@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"strings"
+
+	"github.com/EinarLogiOskars/commitarium/internal/featureartifact"
 )
 
 var ErrInvalidStructuredOutput = errors.New("invalid structured worker output")
@@ -21,17 +23,43 @@ type StructuredOutput struct {
 	Review             *ReviewPublication
 	InterventionEffect InterventionEffect
 	ToolchainProposal  *ToolchainProposal
+	GoalDraft          *featureartifact.GoalDraft
+	ImplementationPlan *featureartifact.ImplementationPlan
 }
 
 func OutputJSONSchema(contract OutputContract) any {
 	switch contract {
-	case OutputContractPlanningLead:
+	case OutputContractGoalClarification:
 		return objectSchema(
 			map[string]any{
-				"action":  map[string]any{"type": "string", "enum": []string{"respond", "submit_plan"}},
-				"content": map[string]any{"type": "string"},
+				"action":         map[string]any{"type": "string", "enum": []string{"ask", "propose"}},
+				"message":        map[string]any{"type": "string"},
+				"goal":           map[string]any{"type": "string"},
+				"open_questions": map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
 			},
-			[]string{"action", "content"},
+			[]string{"action", "message", "goal", "open_questions"},
+		)
+	case OutputContractPlanningLead:
+		stepSchema := objectSchema(
+			map[string]any{
+				"id":               map[string]any{"type": "string"},
+				"title":            map[string]any{"type": "string"},
+				"subtitle":         map[string]any{"type": "string"},
+				"details_markdown": map[string]any{"type": "string"},
+				"verification":     map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+				"commit_subject":   map[string]any{"type": "string"},
+			},
+			[]string{"id", "title", "subtitle", "details_markdown", "verification", "commit_subject"},
+		)
+		return objectSchema(
+			map[string]any{
+				"action":        map[string]any{"type": "string", "enum": []string{"respond", "submit_plan"}},
+				"content":       map[string]any{"type": "string"},
+				"plan_title":    map[string]any{"type": "string"},
+				"plan_subtitle": map[string]any{"type": "string"},
+				"steps":         map[string]any{"type": "array", "items": stepSchema},
+			},
+			[]string{"action", "content", "plan_title", "plan_subtitle", "steps"},
 		)
 	case OutputContractImplementationLead:
 		return objectSchema(
@@ -103,21 +131,78 @@ func ResolveStructuredOutput(
 	raw []byte,
 ) (StructuredOutput, error) {
 	switch contract {
+	case OutputContractGoalClarification:
+		var response struct {
+			Action        string   `json:"action"`
+			Message       string   `json:"message"`
+			Goal          string   `json:"goal"`
+			OpenQuestions []string `json:"open_questions"`
+		}
+		if err := decodeStructuredOutput(raw, &response); err != nil {
+			return StructuredOutput{}, err
+		}
+		response.Message = strings.TrimSpace(response.Message)
+		response.Goal = strings.TrimSpace(response.Goal)
+		for index := range response.OpenQuestions {
+			response.OpenQuestions[index] = strings.TrimSpace(response.OpenQuestions[index])
+		}
+		if response.Message == "" || (response.Action != "ask" && response.Action != "propose") {
+			return StructuredOutput{}, invalidStructuredOutput("goal clarification response is incomplete")
+		}
+		if response.Action == "ask" && len(response.OpenQuestions) == 0 {
+			return StructuredOutput{}, invalidStructuredOutput("goal clarification question is missing")
+		}
+		if response.Action == "propose" && (response.Goal == "" || len(response.OpenQuestions) != 0) {
+			return StructuredOutput{}, invalidStructuredOutput("goal proposal must be complete")
+		}
+		var draft *featureartifact.GoalDraft
+		if response.Goal != "" {
+			candidate := featureartifact.GoalDraft{Goal: response.Goal, OpenQuestions: response.OpenQuestions}
+			if err := candidate.Validate(); err != nil {
+				return StructuredOutput{}, invalidStructuredOutput("goal draft: %v", err)
+			}
+			draft = &candidate
+		}
+		return StructuredOutput{
+			Event:       Event{Type: EventMessage, Text: response.Message},
+			Disposition: DispositionSucceeded, GoalDraft: draft,
+		}, nil
+
 	case OutputContractPlanningLead:
 		var response struct {
-			Action  string `json:"action"`
-			Content string `json:"content"`
+			Action       string                                   `json:"action"`
+			Content      string                                   `json:"content"`
+			PlanTitle    string                                   `json:"plan_title"`
+			PlanSubtitle string                                   `json:"plan_subtitle"`
+			Steps        []featureartifact.ImplementationPlanStep `json:"steps"`
 		}
 		if err := decodeStructuredOutput(raw, &response); err != nil {
 			return StructuredOutput{}, err
 		}
 		response.Content = strings.TrimSpace(response.Content)
+		response.PlanTitle = strings.TrimSpace(response.PlanTitle)
+		response.PlanSubtitle = strings.TrimSpace(response.PlanSubtitle)
 		if response.Content == "" || (response.Action != "respond" && response.Action != "submit_plan") {
 			return StructuredOutput{}, invalidStructuredOutput("planning lead response is incomplete")
 		}
 		eventType := EventMessage
 		if response.Action == "submit_plan" {
 			eventType = EventPlanSubmitted
+			plan := featureartifact.ImplementationPlan{
+				Title: response.PlanTitle, Subtitle: response.PlanSubtitle, Steps: response.Steps,
+			}
+			normalized, err := plan.NormalizeInitial(1)
+			if err != nil {
+				return StructuredOutput{}, invalidStructuredOutput("implementation plan: %v", err)
+			}
+			normalized.PlanVersion = 0 // the coordinator assigns the run's durable version
+			return StructuredOutput{
+				Event:       Event{Type: eventType, Text: response.Content},
+				Disposition: DispositionSucceeded, ImplementationPlan: &normalized,
+			}, nil
+		}
+		if response.PlanTitle != "" || response.PlanSubtitle != "" || len(response.Steps) != 0 {
+			return StructuredOutput{}, invalidStructuredOutput("planning response cannot publish checklist fields")
 		}
 		return StructuredOutput{
 			Event:       Event{Type: eventType, Text: response.Content},

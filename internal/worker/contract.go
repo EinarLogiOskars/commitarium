@@ -8,6 +8,8 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+
+	"github.com/EinarLogiOskars/commitarium/internal/featureartifact"
 )
 
 type Role string
@@ -27,7 +29,22 @@ type SessionRequest struct {
 	Model             string
 	Instructions      string
 	OutputContract    OutputContract
+	WorkspaceAccess   WorkspaceAccess
 	LaunchEnvironment LaunchEnvironment
+}
+
+// WorkspaceAccess is an explicit per-turn capability boundary. The zero value
+// preserves adapter defaults for older callers; orchestrated real-agent turns
+// always select one of the two settled values.
+type WorkspaceAccess string
+
+const (
+	WorkspaceAccessReadOnly  WorkspaceAccess = "read_only"
+	WorkspaceAccessReadWrite WorkspaceAccess = "read_write"
+)
+
+func (access WorkspaceAccess) IsValid() bool {
+	return access == WorkspaceAccessReadOnly || access == WorkspaceAccessReadWrite
 }
 
 // OutputContract asks a provider adapter to return one small, workflow-owned
@@ -37,6 +54,7 @@ type OutputContract string
 
 const (
 	OutputContractPlanningLead            OutputContract = "planning_lead"
+	OutputContractGoalClarification       OutputContract = "goal_clarification"
 	OutputContractImplementationLead      OutputContract = "implementation_lead"
 	OutputContractImplementationReview    OutputContract = "implementation_reviewer"
 	OutputContractImplementationReadiness OutputContract = "implementation_lead_readiness"
@@ -159,6 +177,8 @@ type Result struct {
 	Review             *ReviewPublication
 	InterventionEffect InterventionEffect
 	ToolchainProposal  *ToolchainProposal
+	GoalDraft          *featureartifact.GoalDraft
+	ImplementationPlan *featureartifact.ImplementationPlan
 }
 
 type ToolchainProposal struct {
@@ -245,8 +265,11 @@ func (request SessionRequest) Validate() error {
 		return fmt.Errorf("%w: model %q is a floating alias", ErrInvalidSessionRequest, request.Model)
 	case strings.TrimSpace(request.Instructions) == "":
 		return fmt.Errorf("%w: instructions are required", ErrInvalidSessionRequest)
+	case request.WorkspaceAccess != "" && !request.WorkspaceAccess.IsValid():
+		return fmt.Errorf("%w: workspace access %q is not recognized", ErrInvalidSessionRequest, request.WorkspaceAccess)
 	case request.OutputContract != "" &&
 		request.OutputContract != OutputContractPlanningLead &&
+		request.OutputContract != OutputContractGoalClarification &&
 		request.OutputContract != OutputContractImplementationLead &&
 		request.OutputContract != OutputContractImplementationReview &&
 		request.OutputContract != OutputContractImplementationReadiness &&
@@ -254,6 +277,7 @@ func (request SessionRequest) Validate() error {
 		request.OutputContract != OutputContractToolchainSetup:
 		return fmt.Errorf("%w: output contract %q is not recognized", ErrInvalidSessionRequest, request.OutputContract)
 	case (request.OutputContract == OutputContractPlanningLead ||
+		request.OutputContract == OutputContractGoalClarification ||
 		request.OutputContract == OutputContractImplementationLead ||
 		request.OutputContract == OutputContractImplementationReadiness) && request.Role != RoleLead:
 		return fmt.Errorf("%w: lead output contract requires the lead role", ErrInvalidSessionRequest)
@@ -440,6 +464,10 @@ func (result Result) Validate() error {
 		return fmt.Errorf("%w: failed session cannot have a disposition", ErrInvalidResult)
 	case result.Publication != nil && result.Review != nil:
 		return fmt.Errorf("%w: result cannot contain implementation and review publications", ErrInvalidResult)
+	case result.GoalDraft != nil && (result.Publication != nil || result.Review != nil || result.ImplementationPlan != nil || result.ToolchainProposal != nil || result.InterventionEffect != ""):
+		return fmt.Errorf("%w: goal draft cannot be combined with another structured result", ErrInvalidResult)
+	case result.ImplementationPlan != nil && (result.Publication != nil || result.Review != nil || result.ToolchainProposal != nil || result.InterventionEffect != ""):
+		return fmt.Errorf("%w: implementation plan cannot be combined with another structured result", ErrInvalidResult)
 	case result.Publication != nil &&
 		(result.Outcome != OutcomeCompleted || result.Disposition != DispositionSucceeded):
 		return fmt.Errorf("%w: implementation publication requires a successful completed session", ErrInvalidResult)
@@ -454,6 +482,20 @@ func (result Result) Validate() error {
 		return fmt.Errorf("%w: intervention effect %q is not recognized", ErrInvalidResult, result.InterventionEffect)
 	case result.InterventionEffect != "" && (result.Publication != nil || result.Review != nil):
 		return fmt.Errorf("%w: intervention result cannot contain a publication", ErrInvalidResult)
+	case result.GoalDraft != nil:
+		if result.Outcome != OutcomeCompleted || result.Disposition != DispositionSucceeded {
+			return fmt.Errorf("%w: goal draft requires a successful completed session", ErrInvalidResult)
+		}
+		if err := result.GoalDraft.Validate(); err != nil {
+			return fmt.Errorf("%w: %v", ErrInvalidResult, err)
+		}
+	case result.ImplementationPlan != nil:
+		if result.Outcome != OutcomeCompleted || result.Disposition != DispositionSucceeded {
+			return fmt.Errorf("%w: implementation plan requires a successful completed session", ErrInvalidResult)
+		}
+		if _, err := result.ImplementationPlan.NormalizeInitial(1); err != nil {
+			return fmt.Errorf("%w: %v", ErrInvalidResult, err)
+		}
 	case result.Publication != nil:
 		if err := result.Publication.Validate(); err != nil {
 			return fmt.Errorf("%w: %v", ErrInvalidResult, err)

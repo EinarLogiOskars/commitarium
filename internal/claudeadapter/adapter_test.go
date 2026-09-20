@@ -403,6 +403,16 @@ func TestNewAdapterValidatesConfigurationAndSessionIdentity(t *testing.T) {
 	}
 }
 
+func TestReadOnlyWorkspaceOverridesClaudePermissionMode(t *testing.T) {
+	adapter := &Adapter{permissionMode: "bypassPermissions"}
+	if actual := adapter.permissionModeFor(worker.WorkspaceAccessReadOnly); actual != "plan" {
+		t.Fatalf("read-only turn permission mode = %q", actual)
+	}
+	if actual := adapter.permissionModeFor(worker.WorkspaceAccessReadWrite); actual != "bypassPermissions" {
+		t.Fatalf("writable turn permission mode = %q", actual)
+	}
+}
+
 func TestClaudeCLIHelper(t *testing.T) {
 	mode := os.Getenv(helperModeEnvironment)
 	if mode == "" {
@@ -510,13 +520,13 @@ func TestClaudeCLIHelper(t *testing.T) {
 		helperWrite(writer, map[string]any{
 			"type": "assistant", "session_id": sessionID,
 			"message": map[string]any{"role": "assistant", "content": []any{
-				map[string]any{"type": "text", "text": `{"action":"submit_plan","content":"Final agreed plan"}`},
+				map[string]any{"type": "text", "text": `{"action":"submit_plan","content":"Final agreed plan","plan_title":"Backend plan","plan_subtitle":"Ship safely","steps":[{"id":"store","title":"Persist state","subtitle":"Add storage","details_markdown":"Create the durable store.","verification":["go test ./..."],"commit_subject":"Add artifact storage"}]}`},
 			}},
 		})
 		helperWrite(writer, map[string]any{
 			"type": "result", "subtype": "success", "session_id": sessionID,
 			"is_error":          false,
-			"structured_output": map[string]any{"action": "submit_plan", "content": "Final agreed plan"},
+			"structured_output": map[string]any{"action": "submit_plan", "content": "Final agreed plan", "plan_title": "Backend plan", "plan_subtitle": "Ship safely", "steps": []map[string]any{{"id": "store", "title": "Persist state", "subtitle": "Add storage", "details_markdown": "Create the durable store.", "verification": []string{"go test ./..."}, "commit_subject": "Add artifact storage"}}},
 		})
 	case "structured-review":
 		helperWrite(writer, map[string]any{

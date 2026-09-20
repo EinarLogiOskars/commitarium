@@ -3,7 +3,11 @@
 // orchestration types remain in internal/worker.
 package workerhttp
 
-import "time"
+import (
+	"time"
+
+	"github.com/EinarLogiOskars/commitarium/internal/featureartifact"
+)
 
 const (
 	ProtocolVersion      = "v1"
@@ -103,17 +107,26 @@ type Assignment struct {
 }
 
 type PutAttemptRequest struct {
-	Mode              AttemptMode    `json:"mode"`
-	Assignment        Assignment     `json:"assignment"`
-	Instructions      string         `json:"instructions"`
-	OutputContract    OutputContract `json:"output_contract,omitempty"`
-	ProviderSessionID string         `json:"provider_session_id,omitempty"`
+	Mode              AttemptMode     `json:"mode"`
+	Assignment        Assignment      `json:"assignment"`
+	Instructions      string          `json:"instructions"`
+	OutputContract    OutputContract  `json:"output_contract,omitempty"`
+	WorkspaceAccess   WorkspaceAccess `json:"workspace_access,omitempty"`
+	ProviderSessionID string          `json:"provider_session_id,omitempty"`
 }
+
+type WorkspaceAccess string
+
+const (
+	WorkspaceAccessReadOnly  WorkspaceAccess = "read_only"
+	WorkspaceAccessReadWrite WorkspaceAccess = "read_write"
+)
 
 type OutputContract string
 
 const (
 	OutputContractPlanningLead            OutputContract = "planning_lead"
+	OutputContractGoalClarification       OutputContract = "goal_clarification"
 	OutputContractImplementationLead      OutputContract = "implementation_lead"
 	OutputContractImplementationReview    OutputContract = "implementation_reviewer"
 	OutputContractImplementationReadiness OutputContract = "implementation_lead_readiness"
@@ -158,14 +171,16 @@ const (
 )
 
 type TerminalResult struct {
-	Outcome            Outcome                    `json:"outcome"`
-	Disposition        Disposition                `json:"disposition,omitempty"`
-	Summary            string                     `json:"summary"`
-	Publication        *ImplementationPublication `json:"publication,omitempty"`
-	Review             *ReviewPublication         `json:"review,omitempty"`
-	InterventionEffect InterventionEffect         `json:"intervention_effect,omitempty"`
-	ToolchainProposal  *ToolchainProposal         `json:"toolchain_proposal,omitempty"`
-	Error              *ProtocolError             `json:"error,omitempty"`
+	Outcome            Outcome                             `json:"outcome"`
+	Disposition        Disposition                         `json:"disposition,omitempty"`
+	Summary            string                              `json:"summary"`
+	Publication        *ImplementationPublication          `json:"publication,omitempty"`
+	Review             *ReviewPublication                  `json:"review,omitempty"`
+	InterventionEffect InterventionEffect                  `json:"intervention_effect,omitempty"`
+	ToolchainProposal  *ToolchainProposal                  `json:"toolchain_proposal,omitempty"`
+	GoalDraft          *featureartifact.GoalDraft          `json:"goal_draft,omitempty"`
+	ImplementationPlan *featureartifact.ImplementationPlan `json:"implementation_plan,omitempty"`
+	Error              *ProtocolError                      `json:"error,omitempty"`
 }
 
 type ToolchainProposal struct {

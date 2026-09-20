@@ -4,6 +4,8 @@ import (
 	"errors"
 	"reflect"
 	"testing"
+
+	"github.com/EinarLogiOskars/commitarium/internal/featureartifact"
 )
 
 func TestOutputJSONSchemaCoversStructuredContracts(t *testing.T) {
@@ -11,7 +13,8 @@ func TestOutputJSONSchemaCoversStructuredContracts(t *testing.T) {
 		contract OutputContract
 		required []string
 	}{
-		{OutputContractPlanningLead, []string{"action", "content"}},
+		{OutputContractGoalClarification, []string{"action", "message", "goal", "open_questions"}},
+		{OutputContractPlanningLead, []string{"action", "content", "plan_title", "plan_subtitle", "steps"}},
 		{OutputContractImplementationLead, []string{"action", "summary", "commit_id", "pull_request_number"}},
 		{OutputContractImplementationReview, []string{"action", "summary", "commit_id", "pull_request_number", "review_id"}},
 		{OutputContractImplementationReadiness, []string{"action", "summary"}},
@@ -53,16 +56,25 @@ func TestResolveStructuredOutput(t *testing.T) {
 		review      *ReviewPublication
 		effect      InterventionEffect
 		proposal    *ToolchainProposal
+		goalDraft   *featureartifact.GoalDraft
+		plan        *featureartifact.ImplementationPlan
 	}{
 		{
 			name: "planning response", contract: OutputContractPlanningLead,
-			raw:   `{"action":"respond","content":"One detail remains."}`,
+			raw:   `{"action":"respond","content":"One detail remains.","plan_title":"","plan_subtitle":"","steps":[]}`,
 			event: Event{Type: EventMessage, Text: "One detail remains."}, disposition: DispositionSucceeded,
 		},
 		{
 			name: "plan submission", contract: OutputContractPlanningLead,
-			raw:   `{"action":"submit_plan","content":"Final agreed plan"}`,
+			raw:   `{"action":"submit_plan","content":"Final agreed plan","plan_title":"Backend plan","plan_subtitle":"Ship it safely","steps":[{"id":"store","title":"Persist state","subtitle":"Add durable storage","details_markdown":"Create the migration and store.","verification":["go test ./internal/database"],"commit_subject":"Add artifact persistence"}]}`,
 			event: Event{Type: EventPlanSubmitted, Text: "Final agreed plan"}, disposition: DispositionSucceeded,
+			plan: &featureartifact.ImplementationPlan{Title: "Backend plan", Subtitle: "Ship it safely", Steps: []featureartifact.ImplementationPlanStep{{ID: "store", Position: 1, Title: "Persist state", Subtitle: "Add durable storage", DetailsMarkdown: "Create the migration and store.", Verification: []string{"go test ./internal/database"}, CommitSubject: "Add artifact persistence", Status: featureartifact.StepPending}}},
+		},
+		{
+			name: "goal proposal", contract: OutputContractGoalClarification,
+			raw:   `{"action":"propose","message":"This is ready.","goal":"Build the feature.","open_questions":[]}`,
+			event: Event{Type: EventMessage, Text: "This is ready."}, disposition: DispositionSucceeded,
+			goalDraft: &featureartifact.GoalDraft{Goal: "Build the feature.", OpenQuestions: []string{}},
 		},
 		{
 			name: "published implementation", contract: OutputContractImplementationLead,
@@ -113,7 +125,9 @@ func TestResolveStructuredOutput(t *testing.T) {
 			if resolved.Event != test.event || resolved.Disposition != test.disposition ||
 				!reflect.DeepEqual(resolved.Publication, test.publication) ||
 				!reflect.DeepEqual(resolved.Review, test.review) || resolved.InterventionEffect != test.effect ||
-				!reflect.DeepEqual(resolved.ToolchainProposal, test.proposal) {
+				!reflect.DeepEqual(resolved.ToolchainProposal, test.proposal) ||
+				!reflect.DeepEqual(resolved.GoalDraft, test.goalDraft) ||
+				!reflect.DeepEqual(resolved.ImplementationPlan, test.plan) {
 				t.Fatalf("resolved output = %+v", resolved)
 			}
 		})
