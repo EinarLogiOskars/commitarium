@@ -80,7 +80,10 @@ substring search. An incomplete escape or UTF-16 surrogate is withheld until a
 later snapshot makes it decodable.
 
 Codex App Server supplies `item/agentMessage/delta` with `threadId`, `turnId`,
-`itemId`, and `delta`. The item ID is the preview `stream_id`.
+`itemId`, and `delta`. The adapter admits those deltas only after the matching
+`item/started` classifies the agent message as `phase: final_answer`; commentary
+and other narration phases never enter the preview accumulator. The item ID is
+the preview `stream_id` and is copied to the final durable event.
 
 Claude Code runs with `--include-partial-messages` in addition to
 `--output-format stream-json` for structured turns. Its `stream_event` records
@@ -96,6 +99,8 @@ unchanged or empty extracted prefix is not emitted.
 - Preview and final text are public agent prose, never hidden reasoning.
 - A preview is scoped to one session and worker attempt.
 - A stream ID is non-empty and stable for the response.
+- Every emitted preview is eligible for a correlated durable final event;
+  narration and reasoning events never emit previews.
 - Durable event validation, sequencing, persistence, and replay are unchanged.
 - Losing any preview frame is harmless because the next preview is cumulative.
 - Reconnecting may temporarily show no preview; the durable final event remains
@@ -144,7 +149,8 @@ Verification covers:
 - worker normalization failure and non-blocking latest-snapshot behavior;
 - coordinator ingestion and session SSE relay;
 - durable `stream_id` persistence and replay;
-- Codex `item/agentMessage/delta` fixtures under `OutputSchema`;
+- Codex `item/agentMessage/delta` fixtures under `OutputSchema`, including a
+  regression that narration containing an `ask` envelope emits no preview;
 - Claude `stream_event` fixtures and `--include-partial-messages` under
   `--json-schema`;
 - the complete Go test suite (`go test ./...`).
