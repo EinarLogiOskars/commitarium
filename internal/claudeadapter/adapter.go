@@ -180,6 +180,7 @@ func (adapter *Adapter) launch(
 	providerSession := newSession(
 		process,
 		providerSessionID,
+		request.AttemptID,
 		request.LaunchEnvironment.WorkingDirectory,
 		model,
 		request.OutputContract,
@@ -207,6 +208,9 @@ func (adapter *Adapter) commandArguments(
 		"--prompt-suggestions", "false",
 		"--permission-mode", adapter.permissionModeFor(access),
 	)
+	if worker.OutputJSONSchema(contract) != nil {
+		arguments = append(arguments, "--include-partial-messages")
+	}
 	if resume {
 		arguments = append(arguments, "--resume", providerSessionID)
 	} else {

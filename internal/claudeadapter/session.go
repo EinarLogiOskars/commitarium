@@ -25,15 +25,20 @@ var (
 	ErrEventBackpressure  = errors.New("Claude activity consumer fell behind")
 )
 
+const messagePreviewInterval = 50 * time.Millisecond
+
 type session struct {
 	process           *processsupervisor.Process
 	providerSessionID string
+	previewStreamID   string
 	workingDirectory  string
 	expectedModel     string
 	outputContract    worker.OutputContract
 	shutdownTimeout   time.Duration
 	events            chan worker.Event
+	previews          chan worker.MessagePreview
 	done              chan struct{}
+	previewBuffer     *worker.MessagePreviewAccumulator
 
 	mu               sync.Mutex
 	finished         bool
@@ -52,6 +57,7 @@ var _ worker.ForceStoppableSession = (*session)(nil)
 func newSession(
 	process *processsupervisor.Process,
 	providerSessionID string,
+	previewStreamID string,
 	workingDirectory string,
 	expectedModel string,
 	outputContract worker.OutputContract,
@@ -60,10 +66,13 @@ func newSession(
 ) *session {
 	return &session{
 		process: process, providerSessionID: providerSessionID,
+		previewStreamID:  previewStreamID,
 		workingDirectory: workingDirectory, expectedModel: expectedModel, outputContract: outputContract,
 		shutdownTimeout: shutdownTimeout,
-		events:          make(chan worker.Event, eventBuffer), done: make(chan struct{}),
-		tools: make(map[string]pendingTool),
+		events:          make(chan worker.Event, eventBuffer),
+		previews:        make(chan worker.MessagePreview, 1), done: make(chan struct{}),
+		previewBuffer: worker.NewMessagePreviewAccumulator(outputContract, messagePreviewInterval),
+		tools:         make(map[string]pendingTool),
 	}
 }
 
@@ -83,6 +92,13 @@ func (session *session) Events() <-chan worker.Event {
 		return nil
 	}
 	return session.events
+}
+
+func (session *session) Previews() <-chan worker.MessagePreview {
+	if session == nil {
+		return nil
+	}
+	return session.previews
 }
 
 func (session *session) Send(ctx context.Context, command worker.Command) error {
@@ -264,6 +280,16 @@ type streamMessage struct {
 	Model            string          `json:"model"`
 	Message          json.RawMessage `json:"message"`
 	ToolUseResult    json.RawMessage `json:"tool_use_result"`
+	Event            json.RawMessage `json:"event"`
+}
+
+type partialStreamEvent struct {
+	Type  string `json:"type"`
+	Delta struct {
+		Type        string `json:"type"`
+		Text        string `json:"text"`
+		PartialJSON string `json:"partial_json"`
+	} `json:"delta"`
 }
 
 type messageBody struct {
@@ -350,12 +376,56 @@ func (session *session) translate(raw []byte) ([]worker.Event, *worker.Result, e
 		}
 		return session.translateResult(message)
 
-	case "stream_event", "rate_limit_event", "tool_progress", "auth_status":
+	case "stream_event":
+		if err := session.requireInitialized(message.SessionID); err != nil {
+			return nil, nil, err
+		}
+		var partial partialStreamEvent
+		if err := json.Unmarshal(message.Event, &partial); err != nil {
+			return nil, nil, fmt.Errorf("%w: decode stream event", ErrProtocol)
+		}
+		if partial.Type != "content_block_delta" {
+			return nil, nil, nil
+		}
+		delta := ""
+		switch partial.Delta.Type {
+		case "text_delta":
+			delta = partial.Delta.Text
+		case "input_json_delta":
+			delta = partial.Delta.PartialJSON
+		default:
+			return nil, nil, nil
+		}
+		session.acceptMessageDelta(delta)
+		return nil, nil, nil
+	case "rate_limit_event", "tool_progress", "auth_status":
 		return nil, nil, nil
 	default:
 		// Claude Code uses semantic versioning for this stream. Unknown records
 		// are ignored unless they claim to be one of the state-bearing types above.
 		return nil, nil, nil
+	}
+}
+
+func (session *session) acceptMessageDelta(delta string) {
+	preview, emit := session.previewBuffer.Add(
+		session.previewStreamID, delta, time.Now().UTC(),
+	)
+	if !emit {
+		return
+	}
+	select {
+	case session.previews <- preview:
+		return
+	default:
+	}
+	select {
+	case <-session.previews:
+	default:
+	}
+	select {
+	case session.previews <- preview:
+	default:
 	}
 }
 
@@ -616,6 +686,7 @@ func (session *session) translateResult(
 		if err != nil {
 			return nil, nil, fmt.Errorf("%w: %v", ErrProtocol, err)
 		}
+		resolved.Event.StreamID = session.previewStreamID
 		session.mu.Lock()
 		session.lastAgentMessage = resolved.Event.Text
 		session.mu.Unlock()
@@ -712,6 +783,7 @@ func (session *session) complete(result worker.Result, err error) {
 	session.result = result
 	session.waitErr = err
 	close(session.events)
+	close(session.previews)
 	close(session.done)
 	session.mu.Unlock()
 }

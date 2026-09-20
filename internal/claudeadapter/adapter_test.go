@@ -31,7 +31,7 @@ const (
 
 func TestSessionRejectsClaudeModelSubstitution(t *testing.T) {
 	directory := t.TempDir()
-	session := newSession(nil, testSessionID, directory, "claude-pinned-20260914", "", time.Second, 1)
+	session := newSession(nil, testSessionID, "att_model", directory, "claude-pinned-20260914", "", time.Second, 1)
 	encoded, err := json.Marshal(map[string]any{
 		"type": "system", "subtype": "init", "session_id": testSessionID,
 		"cwd": directory, "model": "claude-different-20260914",
@@ -209,6 +209,10 @@ func TestAdapterPublishesStructuredPlanningSubmission(t *testing.T) {
 	if err != nil {
 		t.Fatalf("start structured Claude planning turn: %v", err)
 	}
+	previewSession, ok := session.(worker.PreviewSession)
+	if !ok {
+		t.Fatal("structured Claude session does not expose previews")
+	}
 	events := collectEvents(session)
 	result, err := session.Wait(timeoutContext(t, 3*time.Second))
 	if err != nil || result.Summary != "Final agreed plan" {
@@ -216,9 +220,13 @@ func TestAdapterPublishesStructuredPlanningSubmission(t *testing.T) {
 	}
 	if observed := <-events; !slices.Equal(observed, []worker.Event{
 		{Type: worker.EventActivity, Text: "Claude started working."},
-		{Type: worker.EventPlanSubmitted, Text: "Final agreed plan"},
+		{Type: worker.EventPlanSubmitted, Text: "Final agreed plan", StreamID: "att_claude_plan"},
 	}) {
 		t.Fatalf("structured planning events = %+v", observed)
+	}
+	preview := <-previewSession.Previews()
+	if preview.StreamID != "att_claude_plan" || preview.Text != "Final agreed" {
+		t.Fatalf("structured planning preview = %+v", preview)
 	}
 }
 
@@ -241,7 +249,7 @@ func TestAdapterReturnsStructuredImplementationReview(t *testing.T) {
 	}
 	if observed := <-events; !slices.Equal(observed, []worker.Event{
 		{Type: worker.EventActivity, Text: "Claude started working."},
-		{Type: worker.EventMessage, Text: "The implementation misses the documented failure case."},
+		{Type: worker.EventMessage, Text: "The implementation misses the documented failure case.", StreamID: "att_claude_review"},
 	}) {
 		t.Fatalf("structured review events = %+v", observed)
 	}
@@ -268,7 +276,7 @@ func TestAdapterReturnsStructuredToolchainProposal(t *testing.T) {
 	}
 	if observed := <-events; !slices.Equal(observed, []worker.Event{
 		{Type: worker.EventActivity, Text: "Claude started working."},
-		{Type: worker.EventMessage, Text: "Use Python and Node."},
+		{Type: worker.EventMessage, Text: "Use Python and Node.", StreamID: "att_claude_toolchain"},
 	}) {
 		t.Fatalf("structured toolchain events = %+v", observed)
 	}
@@ -446,6 +454,9 @@ func TestClaudeCLIHelper(t *testing.T) {
 	if (mode == "structured-plan" || mode == "structured-review" || mode == "structured-toolchain" || mode == "missing-structured-output") != schemaPresent {
 		os.Exit(84)
 	}
+	if slices.Contains(arguments, "--include-partial-messages") != schemaPresent {
+		os.Exit(85)
+	}
 	if mode == "identity-before-init" {
 		helperWaitForever()
 	}
@@ -517,6 +528,15 @@ func TestClaudeCLIHelper(t *testing.T) {
 			"is_error": false, "result": "Result-only answer.",
 		})
 	case "structured-plan":
+		helperWrite(writer, map[string]any{
+			"type": "stream_event", "session_id": sessionID,
+			"event": map[string]any{
+				"type": "content_block_delta",
+				"delta": map[string]any{
+					"type": "text_delta", "text": `{"action":"submit_plan","content":"Final agreed`,
+				},
+			},
+		})
 		helperWrite(writer, map[string]any{
 			"type": "assistant", "session_id": sessionID,
 			"message": map[string]any{"role": "assistant", "content": []any{
