@@ -55,14 +55,20 @@ export function useSessionEvents(
           at: e.occurred_at,
         },
       }));
-      // A final message supersedes its live preview.
-      if (e.stream_id) {
-        const k = previewKey(sessionId, e.stream_id);
+      // A final message ends the turn: drop every preview for this session, not
+      // just the stream_id match. This supersedes the matching preview and also
+      // clears any stale one that never resolved (e.g. a turn whose durable form
+      // carried no stream_id), so a preview can't get stranded at the bottom.
+      if (e.type === "message") {
+        const prefix = `${sessionId}::`;
         setPreviewByKey((cur) => {
-          if (!(k in cur)) return cur;
-          const next = { ...cur };
-          delete next[k];
-          return next;
+          const next: Record<string, TranscriptEntry> = {};
+          let changed = false;
+          for (const [k, v] of Object.entries(cur)) {
+            if (k.startsWith(prefix)) changed = true;
+            else next[k] = v;
+          }
+          return changed ? next : cur;
         });
       }
     };
