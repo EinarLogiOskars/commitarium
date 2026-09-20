@@ -64,16 +64,20 @@ export function MergeView({
   const merge_ = workspace?.merge;
   const merged = merge_?.merged_at;
   const done = merged || state === "completed";
+  // When the gate is open the PR link sits next to Merge instead of the header,
+  // so the user can review the code right at the decision point.
+  const gateOpen = !done && live && state === "ready_to_merge";
+  const openPr = pr ? (
+    <button className="ghost" onClick={() => void openExternal(pr.url)} title={pr.url}>
+      Open PR #{pr.number} ↗
+    </button>
+  ) : null;
 
   return (
     <section className="panel">
       <div className="panel__head">
         <h2>Merge</h2>
-        {pr && (
-          <button onClick={() => void openExternal(pr.url)} title={pr.url}>
-            Open PR #{pr.number} ↗
-          </button>
-        )}
+        {!gateOpen && openPr}
       </div>
       {error && <div className="banner banner--error">{error}</div>}
 
@@ -96,26 +100,29 @@ export function MergeView({
 
       {done ? (
         <p className="muted note">The work order is complete.</p>
-      ) : live && state === "ready_to_merge" ? (
+      ) : gateOpen ? (
         <div className="merge-gate">
           <p className="muted">
-            Both agents approved this revision. Merge PR #{pr?.number} into the default
-            branch to complete the work order.
+            Both agents approved this revision. Review the PR if you like, then merge #{pr?.number}
+            into the default branch to complete the work order.
           </p>
-          {!confirm ? (
-            <button className="primary" onClick={() => setConfirm(true)} disabled={merging}>
-              Merge
-            </button>
-          ) : (
-            <div className="row">
-              <button className="primary" onClick={() => void merge()} disabled={merging}>
-                {merging ? "Merging…" : "Confirm merge"}
+          <div className="row">
+            {!confirm ? (
+              <button className="primary" onClick={() => setConfirm(true)} disabled={merging}>
+                Merge
               </button>
-              <button className="ghost" onClick={() => setConfirm(false)} disabled={merging}>
-                Cancel
-              </button>
-            </div>
-          )}
+            ) : (
+              <>
+                <button className="primary" onClick={() => void merge()} disabled={merging}>
+                  {merging ? "Merging…" : "Confirm merge"}
+                </button>
+                <button className="ghost" onClick={() => setConfirm(false)} disabled={merging}>
+                  Cancel
+                </button>
+              </>
+            )}
+            {openPr}
+          </div>
         </div>
       ) : (
         <p className="muted">
