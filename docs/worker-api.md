@@ -80,11 +80,22 @@ that exact value to Codex `thread/start`/`thread/resume` or Claude Code
 `--model`. There is no fallback. Claude verifies its `system/init` model and
 fails the attempt if it differs from the request.
 
-An attempt request may select one of five provider-neutral structured-output
+Real-agent attempt requests also carry `workspace_access`. Clarification and
+every lead/reviewer planning turn use `read_only`; implementation and its review
+use `read_write`. The worker maps this to Codex's read-only sandbox or Claude's
+plan permission mode on each process launch, overriding the worker's writable
+implementation default. The zero value remains accepted only for compatibility
+with older internal callers.
+
+An attempt request may select one of seven provider-neutral structured-output
 contracts:
 
+- `goal_clarification` keeps the user-facing conversational `message` separate
+  from the current structured `goal` and its `open_questions`.
 - `planning_lead` makes the lead return either a normal planning message or the
-  complete agreed plan as `plan_submitted`.
+  complete agreed plan as `plan_submitted`. A submission also includes a title,
+  subtitle, and ordered commit-sized steps with details, verification, and an
+  intended commit subject.
 - `implementation_lead` makes the lead return either a blocker or the exact
   commit and pull-request identities it published.
 - `implementation_reviewer` makes the reviewer return either a blocker or the
@@ -96,6 +107,8 @@ contracts:
 - `intervention` lets either the lead or reviewer answer a user at a safe
   paused boundary and explicitly classify the message as `guidance_applied`,
   `clarification_required`, or `replanning_required`.
+- `toolchain_setup` returns a validated exact runtime proposal for project
+  setup or imported-repository verification.
 
 The provider adapter enforces these shapes using the provider's structured
 output mechanism; the coordinator does not infer actions by matching words in
@@ -498,8 +511,12 @@ turn identity, missing required identity, and event backpressure fail closed.
 For `planning_lead`, the adapter supplies App Server's per-turn `outputSchema`
 with two actions: `respond` and `submit_plan`. It strictly decodes the completed
 assistant response, removes the private JSON wrapper, and publishes the content
-as `message` or `plan_submitted`. Invalid actions, empty content, extra fields,
-or trailing JSON fail the attempt instead of being interpreted as agreement.
+as `message` or `plan_submitted`. A submitted plan must also include its
+structured implementation checklist; an ordinary response must leave those
+fields empty. `goal_clarification` similarly produces a message plus an
+optional validated goal draft instead of asking the coordinator to infer a
+proposal from prose. Invalid actions, empty content, extra fields, or trailing
+JSON fail the attempt instead of being interpreted as agreement.
 
 For `implementation_lead`, the output schema requires either `published` with a
 concise summary, lowercase commit ID, and positive pull-request number, or
@@ -548,6 +565,14 @@ rather than either provider's protocol. Claude receives the relevant schema via
 becomes an observable workflow event or publication fact. Codex uses the same
 schema and strict interpreter through App Server. This keeps provider behavior
 consistent without asking the coordinator to infer decisions from prose.
+
+The real lead workers also contain `commitarium-artifact`. For an implementation
+attempt the worker injects trusted coordinator, project, and feature identity;
+the lead uses `plan show`, `plan start <step-id>`, and
+`plan complete <step-id> <commit-id>` to update the coordinator-owned checklist.
+It cannot select an arbitrary feature or filesystem path. Each accepted update
+is durable before the helper exits and produces the existing feature-level SSE
+notification. The helper never creates a repository file.
 
 Claude's print process cannot accept safe mid-turn steering. The adapter
 therefore advertises start, exact-session resume, cooperative stop, forced stop,

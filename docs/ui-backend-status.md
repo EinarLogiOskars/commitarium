@@ -323,11 +323,40 @@ in backend event payloads; the UI maps factual activity to presentation.
 - The initial lead turn and every clarification reply use that same durable
   workspace ID. There is no coordinator-wide active project or fixed smoke
   workspace involved in workflow routing.
-- Existing goal-clarification request and response shapes are unchanged.
+- Clarification and all collaborative planning turns are now admitted with
+  provider-enforced read-only workspace access. Implementation is the first
+  phase admitted with write access; this is not dependent on prompt compliance.
+- Goal clarification now has a durable `goal_draft` artifact independent of
+  the conversational transcript. The proposed-goal panel must render
+  `goal_draft.document.goal`, never the lead's last message. A question remains
+  a session message while the artifact carries the current best goal and
+  `open_questions`.
+- Load artifacts through
+  `GET /api/v1/projects/{projectID}/features/{featureID}/artifacts/{kind}`.
+  A user edit replaces the goal draft with its `expected_revision` and an
+  `Idempotency-Key`; `409 artifact_revision_conflict` means reload first.
+- The accepted-goal action is unchanged: send the exact reviewed draft through
+  the existing session goal-acceptance route.
 - Repository and checkout failures at run start use the same specific conflict
   and temporary-unavailability error categories as workspace preparation.
 - Opening the workspace resource during clarification may return `preparing`
   with `checkout` present while `branch_created_at` and `pull_request` are absent.
+
+### Implementation-plan checklist
+
+- The agreed plan is also exposed as the durable `implementation_plan`
+  artifact. It contains a title, subtitle, plan version, and ordered
+  commit-sized steps with expandable Markdown details, verification checks,
+  intended commit subjects, status, and completed commit identity.
+- Load the artifact once when implementation opens. Keep the existing feature
+  event SSE connected. On `feature.artifact_updated`, compare
+  `artifact_kind`, then fetch the announced `artifact_revision`. This gives the
+  checklist live updates without polling or renderer access to workspace files.
+- Render step states `pending`, `in_progress`, and `completed`. The backend and
+  worker advance them in order; there is no user gate or reviewer turn between
+  commits. Keep the last valid artifact visible during reconnects.
+- These documents are coordinator data only. The desktop must not look for a
+  plan file in the checkout and must not copy one during local synchronization.
 
 ### Managed workspace and Forgejo links
 

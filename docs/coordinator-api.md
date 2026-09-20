@@ -40,6 +40,9 @@ this API beyond the host loopback interface is unsupported.
 | `POST` | `/api/v1/projects/{projectID}/features/{featureID}/transitions` | Apply an explicit feature transition |
 | `GET` | `/api/v1/projects/{projectID}/features/{featureID}/events` | Retrieve durable workflow history |
 | `GET` | `/api/v1/projects/{projectID}/features/{featureID}/events/stream` | Replay and stream workflow history with SSE |
+| `GET` | `/api/v1/projects/{projectID}/features/{featureID}/artifacts/{kind}` | Read the current durable goal draft or implementation plan |
+| `PUT` | `/api/v1/projects/{projectID}/features/{featureID}/artifacts/goal_draft` | Replace the editable proposed goal using optimistic concurrency |
+| `POST` | `/api/v1/projects/{projectID}/features/{featureID}/implementation-plan/steps/{stepID}/transitions` | Record implementation-plan step progress |
 | `POST` | `/api/v1/projects/{projectID}/features/{featureID}/runs` | Start the configured workflow asynchronously |
 | `GET` | `/api/v1/projects/{projectID}/features/{featureID}/runs` | List the feature's run history and sessions |
 | `PUT` | `/api/v1/projects/{projectID}/features/{featureID}/workspace` | Reconcile the pinned planning checkout after goal acceptance |
@@ -65,7 +68,7 @@ this API beyond the host loopback interface is unsupported.
 
 ## Idempotency
 
-Feature transitions, run starts, planning, implementation, merge, recovery,
+Feature transitions, feature-artifact mutations, run starts, planning, implementation, merge, recovery,
 run-control actions, run interventions, project deletion, project-repository repair, session
 commands, goal acceptance, and setup-assistant mutations require an
 `Idempotency-Key` header. Retrying the
@@ -751,6 +754,116 @@ project, returns `404 feature_not_found`; a feature that has not started returns
 These discovery endpoints intentionally have no pagination, search, or
 server-side state filtering in the MVP. Clients can group and filter the
 complete project list locally.
+
+## Feature artifacts and live checklists
+
+Conversational messages are not workflow documents. The coordinator stores two
+feature-scoped, revisioned JSON artifacts separately from session history:
+
+- `goal_draft` is the lead's current proposed goal plus unresolved questions.
+- `implementation_plan` is the agreed plan version and its ordered,
+  commit-sized implementation steps.
+
+Read the latest revision with:
+
+```http
+GET /api/v1/projects/prj_example/features/fea_example/artifacts/goal_draft
+```
+
+```json
+{
+  "feature_id": "fea_example",
+  "kind": "goal_draft",
+  "revision": 3,
+  "document": {
+    "goal": "Export the visible report columns as CSV for administrators.",
+    "open_questions": []
+  },
+  "updated_by": {"kind": "agent", "id": "ses_lead"},
+  "updated_at": "2026-09-20T12:00:00Z"
+}
+```
+
+`kind` is `goal_draft` or `implementation_plan`. An unknown feature returns
+`404 feature_not_found`; a recognized artifact that has not been created yet
+returns `404 artifact_not_found`.
+
+The user may edit a proposed goal before accepting it:
+
+```http
+PUT /api/v1/projects/prj_example/features/fea_example/artifacts/goal_draft
+Idempotency-Key: edit-goal-3
+Content-Type: application/json
+
+{
+  "expected_revision": 3,
+  "document": {
+    "goal": "Export the visible report columns as CSV for administrators and auditors.",
+    "open_questions": []
+  }
+}
+```
+
+The response is the new artifact revision. A stale `expected_revision` returns
+`409 artifact_revision_conflict`; reload before applying another edit. Invalid
+or oversized content returns `400 invalid_feature_artifact`. Goal acceptance
+remains the existing explicit action and must be sent the exact goal the user
+reviewed. Once accepted, the immutable accepted goal—not later draft state—is
+the input to planning.
+
+An implementation plan has this document shape:
+
+```json
+{
+  "plan_version": 1,
+  "title": "Add CSV report export",
+  "subtitle": "Deliver the export in three independently verifiable commits.",
+  "steps": [
+    {
+      "id": "export-contract",
+      "position": 1,
+      "title": "Define the export contract",
+      "subtitle": "Add the request and response types.",
+      "details_markdown": "Define the endpoint contract and CSV column ordering.",
+      "verification": ["go test ./internal/report/..."],
+      "commit_subject": "Add CSV export contract",
+      "status": "completed",
+      "commit_id": "0123456789abcdef0123456789abcdef01234567",
+      "completed_at": "2026-09-20T12:10:00Z"
+    }
+  ]
+}
+```
+
+Step status is `pending`, `in_progress`, or `completed`. Completed steps form
+an ordered prefix and only one step may be in progress. The worker-provided
+`commitarium-artifact` helper records `start` and `complete` transitions through
+the step route using the plan version and an idempotency key. The coordinator
+does not pause for review between steps. It refuses initial implementation
+publication until every step is complete and the final step's `commit_id`
+equals the published HEAD.
+
+Every accepted mutation atomically appends `feature.artifact_updated` to the
+existing feature workflow stream. REST history and SSE serialize it as:
+
+```json
+{
+  "id": "evt_opaque",
+  "type": "feature.artifact_updated",
+  "actor": {"kind": "agent", "id": "implementation-lead"},
+  "occurred_at": "2026-09-20T12:10:00Z",
+  "sequence": 19,
+  "payload_version": 1,
+  "artifact_kind": "implementation_plan",
+  "artifact_revision": 7
+}
+```
+
+The desktop loads the current artifact once, keeps the feature event SSE open,
+and fetches the announced revision when this event arrives. It does not poll.
+`Last-Event-ID` supplies the existing gap-free reconnect behavior. Artifacts
+live only in coordinator SQLite; they never enter a managed checkout, Git
+commit, Forgejo branch, or user-local handoff.
 
 ## Deleting a project
 
