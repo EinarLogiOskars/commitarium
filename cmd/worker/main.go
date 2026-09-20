@@ -759,6 +759,7 @@ func normalizeObservableEvent(
 	normalized := workerservice.NormalizedEvent{
 		Type:      workerhttp.EventType(event.Type),
 		Text:      event.Text,
+		StreamID:  event.StreamID,
 		Redaction: workerhttp.RedactionMetadata{},
 	}
 	if event.Activity != nil {

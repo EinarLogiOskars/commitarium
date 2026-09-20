@@ -61,20 +61,26 @@ func (service *Service) OpenEventStream(
 	if attempt.State == workerhttp.AttemptStateTerminal ||
 		attempt.State == workerhttp.AttemptStateIndeterminate ||
 		!service.hasActiveSession(reference) {
-		closed := make(chan workerhttp.Event)
-		close(closed)
+		closedEvents := make(chan workerhttp.Event)
+		closedPreviews := make(chan workerhttp.MessagePreview)
+		close(closedEvents)
+		close(closedPreviews)
 		return workerhttp.EventStream{
-			Replay: replay, ReplayThrough: boundary, Live: closed, Close: func() {},
+			Replay: replay, ReplayThrough: boundary, Live: closedEvents,
+			Previews: closedPreviews, Close: func() {},
 		}, nil
 	}
 
 	service.nextSubID++
 	subscriberID := service.nextSubID
-	live := make(chan workerhttp.Event, service.bufferSize)
-	if service.subscribers[reference] == nil {
-		service.subscribers[reference] = make(map[uint64]chan workerhttp.Event)
+	subscriber := &eventSubscriber{
+		events:   make(chan workerhttp.Event, service.bufferSize),
+		previews: make(chan workerhttp.MessagePreview, 1),
 	}
-	service.subscribers[reference][subscriberID] = live
+	if service.subscribers[reference] == nil {
+		service.subscribers[reference] = make(map[uint64]*eventSubscriber)
+	}
+	service.subscribers[reference][subscriberID] = subscriber
 	var once sync.Once
 	closeSubscription := func() {
 		once.Do(func() {
@@ -84,7 +90,8 @@ func (service *Service) OpenEventStream(
 		})
 	}
 	return workerhttp.EventStream{
-		Replay: replay, ReplayThrough: boundary, Live: live, Close: closeSubscription,
+		Replay: replay, ReplayThrough: boundary, Live: subscriber.events,
+		Previews: subscriber.previews, Close: closeSubscription,
 	}, nil
 }
 
@@ -97,6 +104,10 @@ func (service *Service) supervise(
 		close(live.finished)
 	}()
 	providerSession := live.session
+	var previews <-chan worker.MessagePreview
+	if previewSession, ok := providerSession.(worker.PreviewSession); ok {
+		previews = previewSession.Previews()
+	}
 	for {
 		select {
 		case <-service.lifetime.Done():
@@ -109,8 +120,43 @@ func (service *Service) supervise(
 			if err := service.recordProviderEvent(reference, event); err != nil {
 				return
 			}
+		case preview, open := <-previews:
+			if !open {
+				previews = nil
+				continue
+			}
+			service.publishProviderPreview(reference, preview)
 		}
 	}
+}
+
+func (service *Service) publishProviderPreview(
+	reference workerhttp.AttemptReference,
+	providerPreview worker.MessagePreview,
+) {
+	if err := providerPreview.Validate(); err != nil {
+		return
+	}
+	normalized, err := service.normalizer.Normalize(service.lifetime, worker.Event{
+		Type: worker.EventMessage, Text: providerPreview.Text, StreamID: providerPreview.StreamID,
+	})
+	if err != nil || normalized.Type != workerhttp.EventMessage {
+		return
+	}
+	preview := workerhttp.MessagePreview{
+		AttemptReference: reference,
+		StreamID:         providerPreview.StreamID,
+		Text:             normalized.Text,
+		OccurredAt:       service.timestamp(),
+		Redaction:        normalized.Redaction,
+		Truncation:       normalized.Truncation,
+	}
+	if err := preview.Validate(); err != nil {
+		return
+	}
+	service.eventMu.Lock()
+	defer service.eventMu.Unlock()
+	service.publishPreviewLocked(preview)
 }
 
 func (service *Service) recordProviderEvent(
@@ -147,6 +193,7 @@ func (service *Service) recordProviderEvent(
 		Sequence:           attempt.LatestEventSequence + 1,
 		Type:               normalized.Type,
 		Text:               normalized.Text,
+		StreamID:           normalized.StreamID,
 		OccurredAt:         service.timestamp(),
 		Redaction:          normalized.Redaction,
 		Truncation:         normalized.Truncation,
@@ -351,12 +398,13 @@ func (service *Service) hasActiveSession(reference workerhttp.AttemptReference) 
 }
 
 func (service *Service) publishLocked(event workerhttp.Event) {
-	for subscriberID, events := range service.subscribers[event.AttemptReference] {
+	for subscriberID, subscriber := range service.subscribers[event.AttemptReference] {
 		select {
-		case events <- event:
+		case subscriber.events <- event:
 		default:
 			delete(service.subscribers[event.AttemptReference], subscriberID)
-			close(events)
+			close(subscriber.events)
+			close(subscriber.previews)
 		}
 	}
 	if len(service.subscribers[event.AttemptReference]) == 0 {
@@ -364,10 +412,31 @@ func (service *Service) publishLocked(event workerhttp.Event) {
 	}
 }
 
+func (service *Service) publishPreviewLocked(preview workerhttp.MessagePreview) {
+	for _, subscriber := range service.subscribers[preview.AttemptReference] {
+		select {
+		case subscriber.previews <- preview:
+			continue
+		default:
+		}
+		// Previews are cumulative. Replace a slow consumer's stale snapshot
+		// without evicting it or interfering with durable event delivery.
+		select {
+		case <-subscriber.previews:
+		default:
+		}
+		select {
+		case subscriber.previews <- preview:
+		default:
+		}
+	}
+}
+
 func (service *Service) closeSubscribersLocked(reference workerhttp.AttemptReference) {
-	for subscriberID, events := range service.subscribers[reference] {
+	for subscriberID, subscriber := range service.subscribers[reference] {
 		delete(service.subscribers[reference], subscriberID)
-		close(events)
+		close(subscriber.events)
+		close(subscriber.previews)
 	}
 	delete(service.subscribers, reference)
 }
@@ -376,12 +445,13 @@ func (service *Service) removeSubscriberLocked(
 	reference workerhttp.AttemptReference,
 	subscriberID uint64,
 ) {
-	events, ok := service.subscribers[reference][subscriberID]
+	subscriber, ok := service.subscribers[reference][subscriberID]
 	if !ok {
 		return
 	}
 	delete(service.subscribers[reference], subscriberID)
-	close(events)
+	close(subscriber.events)
+	close(subscriber.previews)
 	if len(service.subscribers[reference]) == 0 {
 		delete(service.subscribers, reference)
 	}

@@ -28,6 +28,7 @@ var ErrInvalidConfig = errors.New("invalid journal-backed worker service configu
 type NormalizedEvent struct {
 	Type               workerhttp.EventType
 	Text               string
+	StreamID           string
 	Redaction          workerhttp.RedactionMetadata
 	Truncation         *workerhttp.TruncationMetadata
 	Activity           *workerhttp.Activity
@@ -68,6 +69,11 @@ type activeProviderSession struct {
 	finished chan struct{}
 }
 
+type eventSubscriber struct {
+	events   chan workerhttp.Event
+	previews chan workerhttp.MessagePreview
+}
+
 // Service owns live provider-session handles while the journal remains the
 // durable authority exposed through inspection and replay.
 type Service struct {
@@ -82,7 +88,7 @@ type Service struct {
 	active   map[workerhttp.AttemptReference]*activeProviderSession
 
 	eventMu          sync.Mutex
-	subscribers      map[workerhttp.AttemptReference]map[uint64]chan workerhttp.Event
+	subscribers      map[workerhttp.AttemptReference]map[uint64]*eventSubscriber
 	nextSubID        uint64
 	bufferSize       int
 	forceStopTimeout time.Duration
@@ -139,7 +145,7 @@ func New(
 		lifetime:            config.Lifetime,
 		now:                 now,
 		active:              make(map[workerhttp.AttemptReference]*activeProviderSession),
-		subscribers:         make(map[workerhttp.AttemptReference]map[uint64]chan workerhttp.Event),
+		subscribers:         make(map[workerhttp.AttemptReference]map[uint64]*eventSubscriber),
 		bufferSize:          bufferSize,
 		forceStopTimeout:    forceStopTimeout,
 	}
