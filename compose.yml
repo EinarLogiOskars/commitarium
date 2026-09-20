@@ -72,6 +72,7 @@ services:
       COMMITARIUM_WORKER_TOKEN_FILE: /run/commitarium-internal/worker-token
       COMMITARIUM_CODEX_PROVIDER_STATE_PATH: /var/lib/commitarium-provider
       COMMITARIUM_CODEX_WORKSPACE_ROOT: /workspaces
+      COMMITARIUM_COORDINATOR_URL: http://coordinator:8080
       COMMITARIUM_TOOLCHAIN_ROOT: /var/lib/commitarium-toolchains
       COMMITARIUM_CODEX_PROFILE_ID: ${COMMITARIUM_CODEX_PROFILE_ID:-profile_local_codex}
       COMMITARIUM_CODEX_MODEL: ${COMMITARIUM_CODEX_MODEL:-}
@@ -110,6 +111,7 @@ services:
       COMMITARIUM_WORKER_TOKEN_FILE: /run/commitarium-internal/worker-token
       COMMITARIUM_CODEX_PROVIDER_STATE_PATH: /var/lib/commitarium-provider
       COMMITARIUM_CODEX_WORKSPACE_ROOT: /workspaces
+      COMMITARIUM_COORDINATOR_URL: http://coordinator:8080
       COMMITARIUM_TOOLCHAIN_ROOT: /var/lib/commitarium-toolchains
       COMMITARIUM_CODEX_PROFILE_ID: ${COMMITARIUM_CODEX_REVIEWER_PROFILE_ID:-profile_local_codex_reviewer}
       COMMITARIUM_CODEX_MODEL: ${COMMITARIUM_CODEX_REVIEWER_MODEL:-}
@@ -148,6 +150,7 @@ services:
       COMMITARIUM_WORKER_TOKEN_FILE: /run/commitarium-internal/worker-token
       COMMITARIUM_CLAUDE_PROVIDER_STATE_PATH: /var/lib/commitarium-provider
       COMMITARIUM_CLAUDE_WORKSPACE_ROOT: /workspaces
+      COMMITARIUM_COORDINATOR_URL: http://coordinator:8080
       COMMITARIUM_TOOLCHAIN_ROOT: /var/lib/commitarium-toolchains
       COMMITARIUM_CLAUDE_PROFILE_ID: ${COMMITARIUM_CLAUDE_PROFILE_ID:-profile_local_claude}
       COMMITARIUM_CLAUDE_MODEL: ${COMMITARIUM_CLAUDE_MODEL:-}
@@ -187,6 +190,7 @@ services:
       COMMITARIUM_WORKER_TOKEN_FILE: /run/commitarium-internal/worker-token
       COMMITARIUM_CLAUDE_PROVIDER_STATE_PATH: /var/lib/commitarium-provider
       COMMITARIUM_CLAUDE_WORKSPACE_ROOT: /workspaces
+      COMMITARIUM_COORDINATOR_URL: http://coordinator:8080
       COMMITARIUM_TOOLCHAIN_ROOT: /var/lib/commitarium-toolchains
       COMMITARIUM_CLAUDE_PROFILE_ID: ${COMMITARIUM_CLAUDE_REVIEWER_PROFILE_ID:-profile_local_claude_reviewer}
       COMMITARIUM_CLAUDE_MODEL: ${COMMITARIUM_CLAUDE_REVIEWER_MODEL:-}

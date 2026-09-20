@@ -64,6 +64,7 @@ type codexConfig struct {
 	gitAuthorName     string
 	gitAuthorEmail    string
 	toolchainRoot     string
+	coordinatorURL    string
 }
 
 type claudeConfig struct {
@@ -81,6 +82,7 @@ type claudeConfig struct {
 	gitAuthorName     string
 	gitAuthorEmail    string
 	toolchainRoot     string
+	coordinatorURL    string
 }
 
 type runtime struct {
@@ -359,6 +361,10 @@ func loadCodexConfig(getenv func(string) string) (codexConfig, error) {
 	if toolchainRoot != "" && !filepath.IsAbs(toolchainRoot) {
 		return codexConfig{}, errors.New("COMMITARIUM_TOOLCHAIN_ROOT must be absolute")
 	}
+	coordinatorURL, err := optionalHTTPURL(getenv("COMMITARIUM_COORDINATOR_URL"))
+	if err != nil {
+		return codexConfig{}, fmt.Errorf("COMMITARIUM_COORDINATOR_URL: %w", err)
+	}
 	return codexConfig{
 		executable: executable, model: strings.TrimSpace(getenv("COMMITARIUM_CODEX_MODEL")),
 		availableModels: availableModels,
@@ -367,7 +373,7 @@ func loadCodexConfig(getenv func(string) string) (codexConfig, error) {
 		forgejoURL: strings.TrimRight(forgejoURL, "/"), forgejoTokenFile: forgejoTokenFile,
 		forgejoLogin: forgejoLogin, forgejoRole: forgejoRole,
 		gitAuthorName: gitAuthorName, gitAuthorEmail: gitAuthorEmail,
-		toolchainRoot: toolchainRoot,
+		toolchainRoot: toolchainRoot, coordinatorURL: coordinatorURL,
 	}, nil
 }
 
@@ -458,6 +464,10 @@ func loadClaudeConfig(getenv func(string) string) (claudeConfig, error) {
 	if toolchainRoot != "" && !filepath.IsAbs(toolchainRoot) {
 		return claudeConfig{}, errors.New("COMMITARIUM_TOOLCHAIN_ROOT must be absolute")
 	}
+	coordinatorURL, err := optionalHTTPURL(getenv("COMMITARIUM_COORDINATOR_URL"))
+	if err != nil {
+		return claudeConfig{}, fmt.Errorf("COMMITARIUM_COORDINATOR_URL: %w", err)
+	}
 	return claudeConfig{
 		executable: executable, model: strings.TrimSpace(getenv("COMMITARIUM_CLAUDE_MODEL")),
 		availableModels: availableModels,
@@ -466,7 +476,7 @@ func loadClaudeConfig(getenv func(string) string) (claudeConfig, error) {
 		forgejoURL: strings.TrimRight(forgejoURL, "/"), forgejoTokenFile: forgejoTokenFile,
 		forgejoLogin: forgejoLogin, forgejoRole: forgejoRole,
 		gitAuthorName: gitAuthorName, gitAuthorEmail: gitAuthorEmail,
-		toolchainRoot: toolchainRoot,
+		toolchainRoot: toolchainRoot, coordinatorURL: coordinatorURL,
 	}, nil
 }
 
@@ -483,17 +493,21 @@ func newCodexRuntime(config codexConfig) (runtime, error) {
 	if forgejoToken == "" || strings.IndexFunc(forgejoToken, unicode.IsSpace) >= 0 {
 		return runtime{}, errors.New("Codex Forgejo token is empty or contains whitespace")
 	}
+	baseVariables := []string{
+		"CODEX_HOME=" + config.providerStatePath,
+		"HOME=" + config.providerStatePath,
+		"LANG=C.UTF-8",
+		"PATH=/usr/local/bin:/usr/bin:/bin",
+	}
+	if config.coordinatorURL != "" {
+		baseVariables = append(baseVariables, "COMMITARIUM_COORDINATOR_URL="+config.coordinatorURL)
+	}
 	resolver, err := workerservice.NewRootedEnvironmentResolver(
 		workerservice.RootedEnvironmentResolverConfig{
 			AgentProfileID: config.profileID,
 			WorkspaceRoot:  config.workspaceRoot,
 			ToolchainRoot:  config.toolchainRoot,
-			Variables: []string{
-				"CODEX_HOME=" + config.providerStatePath,
-				"HOME=" + config.providerStatePath,
-				"LANG=C.UTF-8",
-				"PATH=/usr/local/bin:/usr/bin:/bin",
-			},
+			Variables:      baseVariables,
 			RoleVariables: map[worker.Role][]string{
 				config.forgejoRole: {
 					"COMMITARIUM_FORGEJO_URL=" + config.forgejoURL,
@@ -584,17 +598,21 @@ func newClaudeRuntime(config claudeConfig) (runtime, error) {
 	if forgejoToken == "" || strings.IndexFunc(forgejoToken, unicode.IsSpace) >= 0 {
 		return runtime{}, errors.New("Claude Forgejo token is empty or contains whitespace")
 	}
+	baseVariables := []string{
+		"CLAUDE_CONFIG_DIR=" + config.providerStatePath,
+		"HOME=" + config.providerStatePath,
+		"LANG=C.UTF-8",
+		"PATH=/usr/local/bin:/usr/bin:/bin",
+	}
+	if config.coordinatorURL != "" {
+		baseVariables = append(baseVariables, "COMMITARIUM_COORDINATOR_URL="+config.coordinatorURL)
+	}
 	resolver, err := workerservice.NewRootedEnvironmentResolver(
 		workerservice.RootedEnvironmentResolverConfig{
 			AgentProfileID: config.profileID,
 			WorkspaceRoot:  config.workspaceRoot,
 			ToolchainRoot:  config.toolchainRoot,
-			Variables: []string{
-				"CLAUDE_CONFIG_DIR=" + config.providerStatePath,
-				"HOME=" + config.providerStatePath,
-				"LANG=C.UTF-8",
-				"PATH=/usr/local/bin:/usr/bin:/bin",
-			},
+			Variables:      baseVariables,
 			RoleVariables: map[worker.Role][]string{
 				config.forgejoRole: {
 					"COMMITARIUM_FORGEJO_URL=" + config.forgejoURL,
@@ -662,6 +680,19 @@ func parseAvailableModels(value string, configuredModel string) ([]string, error
 		models = append(models, model)
 	}
 	return models, nil
+}
+
+func optionalHTTPURL(value string) (string, error) {
+	value = strings.TrimRight(strings.TrimSpace(value), "/")
+	if value == "" {
+		return "", nil
+	}
+	parsed, err := url.Parse(value)
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" ||
+		parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return "", errors.New("must be an absolute HTTP URL without credentials, query, or fragment")
+	}
+	return value, nil
 }
 
 func staticModelSource(ids ...string) workerhttp.ModelSource {

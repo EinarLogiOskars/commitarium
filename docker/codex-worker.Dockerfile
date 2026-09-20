@@ -17,6 +17,7 @@ COPY internal ./internal
 RUN go test -v ./...
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -o /worker ./cmd/worker
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -o /commitarium-toolchain ./cmd/toolchain
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -o /commitarium-artifact ./cmd/artifact
 
 # Keep the Codex version explicit so rebuilding the worker cannot silently
 # change the provider protocol underneath the tested Go adapter.
@@ -61,6 +62,7 @@ RUN groupadd --gid 65532 commitarium && \
 
 COPY --from=build-stage /worker /worker
 COPY --from=build-stage /commitarium-toolchain /usr/local/bin/commitarium-toolchain
+COPY --from=build-stage /commitarium-artifact /usr/local/bin/commitarium-artifact
 
 ENV CODEX_HOME=/var/lib/commitarium-provider
 

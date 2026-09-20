@@ -164,6 +164,8 @@ func (resolver *RootedEnvironmentResolver) Resolve(
 	}
 	variables := cloneVariables(resolver.variables)
 	variables = append(variables, resolver.roleVariables[worker.Role(assignment.Role)]...)
+	variables = setVariable(variables, "COMMITARIUM_PROJECT_ID", assignment.ProjectID)
+	variables = setVariable(variables, "COMMITARIUM_FEATURE_ID", assignment.FeatureID)
 	if resolver.toolchainRoot != "" {
 		variables, err = resolver.prepareToolchain(ctx, assignment.ProjectID, directory, variables)
 		if err != nil {
