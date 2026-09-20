@@ -135,10 +135,21 @@ type Event struct {
 	Sequence            int64
 	Type                worker.EventType
 	Text                string
+	StreamID            string
 	Activity            *worker.Activity
 	OccurredAt          time.Time
 	WorkerAttemptID     string
 	WorkerEventSequence int64
+}
+
+// MessagePreview is transient live state for an in-progress final response.
+// It is published to subscribers only and never enters the execution store.
+type MessagePreview struct {
+	SessionID  string
+	AttemptID  string
+	StreamID   string
+	Text       string
+	OccurredAt time.Time
 }
 
 // PlanningMessage points at one existing session event in the shared,
@@ -467,6 +478,23 @@ func (event Event) Validate() error {
 		return fmt.Errorf("%w: worker event sequence cannot be negative", ErrInvalidEvent)
 	case hasWorkerAttempt != hasWorkerSequence:
 		return fmt.Errorf("%w: worker attempt and event sequence must be provided together", ErrInvalidEvent)
+	default:
+		return nil
+	}
+}
+
+func (preview MessagePreview) Validate() error {
+	switch {
+	case strings.TrimSpace(preview.SessionID) == "":
+		return fmt.Errorf("%w: session ID is required", ErrInvalidEvent)
+	case strings.TrimSpace(preview.AttemptID) == "":
+		return fmt.Errorf("%w: worker attempt ID is required", ErrInvalidEvent)
+	case strings.TrimSpace(preview.StreamID) == "":
+		return fmt.Errorf("%w: stream ID is required", ErrInvalidEvent)
+	case strings.TrimSpace(preview.Text) == "":
+		return fmt.Errorf("%w: text is required", ErrInvalidEvent)
+	case preview.OccurredAt.IsZero():
+		return fmt.Errorf("%w: occurrence time is required", ErrInvalidEvent)
 	default:
 		return nil
 	}

@@ -15,6 +15,7 @@ import (
 type Service struct {
 	store      Store
 	broker     *eventBroker
+	previews   *previewBroker
 	planning   *planningMessageBroker
 	generateID func() string
 	now        func() time.Time
@@ -24,6 +25,7 @@ func NewService(store Store) *Service {
 	return &Service{
 		store:    store,
 		broker:   newEventBroker(defaultSubscriberBuffer),
+		previews: newPreviewBroker(),
 		planning: newPlanningMessageBroker(defaultSubscriberBuffer),
 		generateID: func() string {
 			return "sev_" + rand.Text()
@@ -779,4 +781,18 @@ func (s *Service) SubscribeSessionEvents(
 	sessionID string,
 ) (<-chan Event, func()) {
 	return s.broker.subscribe(sessionID)
+}
+
+func (s *Service) PublishWorkerPreview(preview MessagePreview) error {
+	if err := preview.Validate(); err != nil {
+		return err
+	}
+	s.previews.publish(preview)
+	return nil
+}
+
+func (s *Service) SubscribeSessionPreviews(
+	sessionID string,
+) (<-chan MessagePreview, func()) {
+	return s.previews.subscribe(sessionID)
 }

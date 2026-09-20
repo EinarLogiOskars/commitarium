@@ -88,6 +88,43 @@ func TestStreamSessionEventsDeliversLiveEvent(t *testing.T) {
 	}
 }
 
+func TestStreamSessionEventsDeliversIdlessMessagePreview(t *testing.T) {
+	liveEvents := make(chan execution.Event)
+	livePreviews := make(chan execution.MessagePreview)
+	executions := &recordingExecutionService{
+		session:             execution.Session{ID: "ses_test"},
+		subscription:        liveEvents,
+		previewSubscription: livePreviews,
+	}
+	go func() {
+		livePreviews <- execution.MessagePreview{
+			SessionID: "ses_test", AttemptID: "att_test", StreamID: "item_final",
+			Text: "Answer in prog", OccurredAt: time.Now().UTC(),
+		}
+		close(livePreviews)
+		close(liveEvents)
+	}()
+	request := httptest.NewRequest(
+		http.MethodGet,
+		"/api/v1/sessions/ses_test/events/stream",
+		nil,
+	)
+	recorder := httptest.NewRecorder()
+
+	New(nil, nil, nil, executions, nil, nil).ServeHTTP(recorder, request)
+
+	body := recorder.Body.String()
+	if !strings.Contains(body, "event: message_preview\n") ||
+		!strings.Contains(body, `data: {"stream_id":"item_final","text":"Answer in prog"}`) {
+		t.Fatalf("expected preview frame, got %q", body)
+	}
+	previewStart := strings.Index(body, "event: message_preview\n")
+	previewEnd := strings.Index(body[previewStart:], "\n\n")
+	if strings.Contains(body[previewStart:previewStart+previewEnd], "id:") {
+		t.Fatalf("preview unexpectedly had SSE id: %q", body)
+	}
+}
+
 func TestStreamSessionEventsRejectsUnknownLastEventID(t *testing.T) {
 	executions := &recordingExecutionService{
 		session: execution.Session{ID: "ses_test"},

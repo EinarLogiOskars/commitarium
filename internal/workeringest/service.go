@@ -21,6 +21,10 @@ type Reader interface {
 	Next() (workerhttp.Event, error)
 }
 
+type frameReader interface {
+	NextFrame() (workerhttp.StreamFrame, error)
+}
+
 // Filter is the coordinator's final fail-closed safety check before activity is
 // persisted or published. It may redact or truncate Text and update the related
 // metadata, but it cannot change which worker event is being acknowledged.
@@ -48,16 +52,22 @@ type Recorder interface {
 	) (execution.Event, bool, error)
 }
 
+type PreviewPublisher interface {
+	PublishWorkerPreview(execution.MessagePreview) error
+}
+
 var _ Reader = (*workerhttp.EventReader)(nil)
 var _ Recorder = (*execution.Service)(nil)
 
 type Service struct {
 	recorder Recorder
+	previews PreviewPublisher
 	filter   Filter
 }
 
 func NewService(recorder Recorder, filter Filter) *Service {
-	return &Service{recorder: recorder, filter: filter}
+	previews, _ := recorder.(PreviewPublisher)
+	return &Service{recorder: recorder, previews: previews, filter: filter}
 }
 
 // IngestNext reads and handles exactly one worker event. Stream lifecycle and
@@ -66,9 +76,38 @@ func (s *Service) IngestNext(
 	ctx context.Context,
 	reader Reader,
 ) (execution.Event, bool, error) {
-	event, err := reader.Next()
-	if err != nil {
-		return execution.Event{}, false, fmt.Errorf("read worker event: %w", err)
+	var event workerhttp.Event
+	for {
+		if framed, ok := reader.(frameReader); ok {
+			frame, err := framed.NextFrame()
+			if err != nil {
+				return execution.Event{}, false, fmt.Errorf("read worker event: %w", err)
+			}
+			if frame.Preview != nil {
+				if s.previews != nil {
+					preview := execution.MessagePreview{
+						SessionID: frame.Preview.SessionID, AttemptID: frame.Preview.AttemptID,
+						StreamID: frame.Preview.StreamID, Text: frame.Preview.Text,
+						OccurredAt: frame.Preview.OccurredAt,
+					}
+					if err := s.previews.PublishWorkerPreview(preview); err != nil {
+						return execution.Event{}, false, fmt.Errorf("publish worker preview: %w", err)
+					}
+				}
+				continue
+			}
+			if frame.Event == nil {
+				return execution.Event{}, false, errors.New("read worker event: empty stream frame")
+			}
+			event = *frame.Event
+			break
+		}
+		var err error
+		event, err = reader.Next()
+		if err != nil {
+			return execution.Event{}, false, fmt.Errorf("read worker event: %w", err)
+		}
+		break
 	}
 	if err := event.Validate(); err != nil {
 		return execution.Event{}, false, fmt.Errorf("validate worker event: %w", err)
@@ -85,8 +124,9 @@ func (s *Service) IngestNext(
 	}
 
 	visibleEvent := worker.Event{
-		Type: worker.EventType(filtered.Type),
-		Text: filtered.Text,
+		Type:     worker.EventType(filtered.Type),
+		Text:     filtered.Text,
+		StreamID: filtered.StreamID,
 	}
 	if filtered.Activity != nil {
 		visibleEvent.Activity = &worker.Activity{

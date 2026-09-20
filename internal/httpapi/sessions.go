@@ -36,6 +36,7 @@ type sessionEventResponse struct {
 	Sequence   int64             `json:"sequence"`
 	Type       worker.EventType  `json:"type"`
 	Text       string            `json:"text"`
+	StreamID   string            `json:"stream_id,omitempty"`
 	Activity   *activityResponse `json:"activity,omitempty"`
 	OccurredAt time.Time         `json:"occurred_at"`
 }
@@ -109,7 +110,7 @@ func (api *API) getSessionEventsHandler(w http.ResponseWriter, r *http.Request) 
 func newSessionEventResponse(event execution.Event) sessionEventResponse {
 	response := sessionEventResponse{
 		ID: event.ID, Sequence: event.Sequence, Type: event.Type,
-		Text: event.Text, OccurredAt: event.OccurredAt,
+		Text: event.Text, StreamID: event.StreamID, OccurredAt: event.OccurredAt,
 	}
 	if event.Activity != nil {
 		response.Activity = &activityResponse{

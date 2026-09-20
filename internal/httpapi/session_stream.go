@@ -31,6 +31,8 @@ func (api *API) streamSessionEventsHandler(w http.ResponseWriter, r *http.Reques
 
 	liveEvents, unsubscribe := api.execution.SubscribeSessionEvents(sessionID)
 	defer unsubscribe()
+	livePreviews, unsubscribePreviews := api.execution.SubscribeSessionPreviews(sessionID)
+	defer unsubscribePreviews()
 	persistedEvents, err := api.execution.EventsForSession(r.Context(), sessionID)
 	if err != nil {
 		log.Printf("list events for streamed session %q: %v", sessionID, err)
@@ -83,6 +85,15 @@ func (api *API) streamSessionEventsHandler(w http.ResponseWriter, r *http.Reques
 			}
 			lastSequence = event.Sequence
 			flusher.Flush()
+		case preview, open := <-livePreviews:
+			if !open {
+				livePreviews = nil
+				continue
+			}
+			if err := writeSessionPreview(w, preview); err != nil {
+				return
+			}
+			flusher.Flush()
 		case <-heartbeat.C:
 			setEventStreamWriteDeadline(w)
 			if _, err := fmt.Fprint(w, ": keep-alive\n\n"); err != nil {
@@ -91,6 +102,21 @@ func (api *API) streamSessionEventsHandler(w http.ResponseWriter, r *http.Reques
 			flusher.Flush()
 		}
 	}
+}
+
+func writeSessionPreview(w http.ResponseWriter, preview execution.MessagePreview) error {
+	data, err := json.Marshal(struct {
+		StreamID string `json:"stream_id"`
+		Text     string `json:"text"`
+	}{StreamID: preview.StreamID, Text: preview.Text})
+	if err != nil {
+		return fmt.Errorf("encode session preview response: %w", err)
+	}
+	setEventStreamWriteDeadline(w)
+	if _, err := fmt.Fprintf(w, "event: message_preview\ndata: %s\n\n", data); err != nil {
+		return fmt.Errorf("write session preview: %w", err)
+	}
+	return nil
 }
 
 func sequenceForLastSessionEvent(

@@ -31,6 +31,7 @@ type recordingExecutionService struct {
 	events                 []execution.Event
 	eventsErr              error
 	subscription           <-chan execution.Event
+	previewSubscription    <-chan execution.MessagePreview
 	unsubscribed           int
 	requestedID            string
 	eventSession           string
@@ -71,6 +72,15 @@ func (s *recordingExecutionService) SubscribeSessionEvents(
 		s.subscription = make(chan execution.Event)
 	}
 	return s.subscription, func() { s.unsubscribed++ }
+}
+
+func (s *recordingExecutionService) SubscribeSessionPreviews(
+	_ string,
+) (<-chan execution.MessagePreview, func()) {
+	if s.previewSubscription == nil {
+		s.previewSubscription = make(chan execution.MessagePreview)
+	}
+	return s.previewSubscription, func() {}
 }
 
 func (s *recordingExecutionService) GetSession(

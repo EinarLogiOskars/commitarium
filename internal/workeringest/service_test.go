@@ -30,6 +30,7 @@ type recordingRecorder struct {
 	created   bool
 	err       error
 	calls     int
+	previews  []execution.MessagePreview
 }
 
 func (recorder *recordingRecorder) RecordWorkerEvent(
@@ -47,6 +48,28 @@ func (recorder *recordingRecorder) RecordWorkerEvent(
 	recorder.occurred = occurredAt
 	recorder.event = event
 	return recorder.result, recorder.created, recorder.err
+}
+
+func (recorder *recordingRecorder) PublishWorkerPreview(preview execution.MessagePreview) error {
+	recorder.previews = append(recorder.previews, preview)
+	return nil
+}
+
+type stubFrameReader struct {
+	frames []workerhttp.StreamFrame
+}
+
+func (reader *stubFrameReader) Next() (workerhttp.Event, error) {
+	return workerhttp.Event{}, errors.New("legacy Next called")
+}
+
+func (reader *stubFrameReader) NextFrame() (workerhttp.StreamFrame, error) {
+	if len(reader.frames) == 0 {
+		return workerhttp.StreamFrame{}, errors.New("no frames")
+	}
+	frame := reader.frames[0]
+	reader.frames = reader.frames[1:]
+	return frame, nil
 }
 
 func TestIngestNextFiltersAndRecordsOneEvent(t *testing.T) {
@@ -82,6 +105,36 @@ func TestIngestNextFiltersAndRecordsOneEvent(t *testing.T) {
 		recorder.event.Activity.Command != "go test ./..." ||
 		recorder.event.Activity.ExitCode == nil || *recorder.event.Activity.ExitCode != 0 {
 		t.Fatalf("unexpected recorder call %+v", recorder)
+	}
+}
+
+func TestIngestNextRelaysPreviewBeforeRecordingDurableEvent(t *testing.T) {
+	source := validEvent()
+	preview := workerhttp.MessagePreview{
+		AttemptReference: source.AttemptReference,
+		StreamID:         "item_final",
+		Text:             "Visible pre",
+		OccurredAt:       source.OccurredAt.Add(-time.Millisecond),
+		Redaction:        workerhttp.RedactionMetadata{},
+	}
+	recorder := &recordingRecorder{created: true}
+	service := NewService(recorder, unchangedFilter())
+	reader := &stubFrameReader{frames: []workerhttp.StreamFrame{
+		{Preview: &preview},
+		{Event: &source},
+	}}
+
+	if _, _, err := service.IngestNext(t.Context(), reader); err != nil {
+		t.Fatalf("ingest frames: %v", err)
+	}
+	if recorder.calls != 1 || len(recorder.previews) != 1 {
+		t.Fatalf("events=%d previews=%d", recorder.calls, len(recorder.previews))
+	}
+	actual := recorder.previews[0]
+	if actual.SessionID != preview.SessionID || actual.AttemptID != preview.AttemptID ||
+		actual.StreamID != preview.StreamID || actual.Text != preview.Text ||
+		!actual.OccurredAt.Equal(preview.OccurredAt) {
+		t.Fatalf("unexpected relayed preview %+v", actual)
 	}
 }
 

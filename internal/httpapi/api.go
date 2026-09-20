@@ -104,6 +104,7 @@ type ExecutionService interface {
 	GetSession(ctx context.Context, id string) (execution.Session, error)
 	EventsForSession(ctx context.Context, sessionID string) ([]execution.Event, error)
 	SubscribeSessionEvents(sessionID string) (<-chan execution.Event, func())
+	SubscribeSessionPreviews(sessionID string) (<-chan execution.MessagePreview, func())
 	PlanningMessagesForRun(ctx context.Context, runID string) ([]execution.PlanningMessage, error)
 	SubscribePlanningMessages(runID string) (<-chan execution.PlanningMessage, func())
 	GetLatestIntervention(ctx context.Context, runID string) (execution.Intervention, error)
