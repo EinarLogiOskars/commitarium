@@ -2014,26 +2014,3 @@ button.danger:not(.ghost) {
 .plan-step__verify li {
   font-size: 12px;
 }
-
-/* Live message-preview caret (final-answer streaming). */
-.msg__caret {
-  display: inline-block;
-  width: 7px;
-  height: 1.05em;
-  margin-left: 2px;
-  vertical-align: text-bottom;
-  background: var(--accent);
-  border-radius: 1px;
-  animation: caret-blink 1s step-end infinite;
-}
-@keyframes caret-blink {
-  50% {
-    opacity: 0;
-  }
-}
-@media (prefers-reduced-motion: reduce) {
-  .msg__caret {
-    animation: none;
-    opacity: 0.7;
-  }
-}

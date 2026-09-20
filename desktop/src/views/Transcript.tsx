@@ -108,7 +108,6 @@ function MessageEntry({ e }: { e: TranscriptEntry }) {
       <span className="msg__who">{who}</span>
       <div className="msg__text">
         <Markdown text={agentText(e.text)} />
-        {e.streaming && <span className="msg__caret" aria-hidden />}
       </div>
     </div>
   );
