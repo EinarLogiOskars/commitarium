@@ -265,6 +265,8 @@ function body(
   if (viewed === 2) {
     return (
       <ImplementationView
+        projectId={projectId}
+        featureId={feature.id}
         runId={run.id}
         run={run}
         live={live}

@@ -388,11 +388,56 @@ export interface Workspace {
 // activity. Other event types (e.g. feature.goal_accepted) are ignored for that.
 export interface WorkflowEvent {
   id: string;
-  type: string; // "feature.state_changed" | "feature.goal_accepted" | ...
+  type: string; // "feature.state_changed" | "feature.goal_accepted" | "feature.artifact_updated" | ...
   sequence: number;
   occurred_at: string;
   previous_state?: FeatureState;
   state?: FeatureState;
+  // Present on "feature.artifact_updated": which durable artifact changed and to
+  // what revision — the UI refetches that artifact when it sees a higher one.
+  artifact_kind?: FeatureArtifactKind;
+  artifact_revision?: number;
+}
+
+// Durable, revisioned feature documents kept in coordinator SQLite (never Git):
+// the proposed goal and the agreed implementation plan. They are separate from
+// the conversational session transcript.
+export type FeatureArtifactKind = "goal_draft" | "implementation_plan";
+
+export interface GoalDraftDocument {
+  goal: string;
+  open_questions: string[];
+}
+
+export type PlanStepStatus = "pending" | "in_progress" | "completed";
+
+export interface PlanStep {
+  id: string;
+  position: number;
+  title: string;
+  subtitle?: string;
+  details_markdown?: string;
+  verification?: string[];
+  commit_subject?: string;
+  status: PlanStepStatus;
+  commit_id?: string;
+  completed_at?: string;
+}
+
+export interface ImplementationPlanDocument {
+  plan_version: number;
+  title: string;
+  subtitle?: string;
+  steps: PlanStep[];
+}
+
+export interface FeatureArtifact<T = unknown> {
+  feature_id: string;
+  kind: FeatureArtifactKind;
+  revision: number;
+  document: T;
+  updated_by?: { kind: string; id: string };
+  updated_at: string;
 }
 
 /** One ordered lead/reviewer message in the planning discussion. */

@@ -1,5 +1,14 @@
 import { request } from "./client";
-import type { CreateFeatureInput, Feature, Run, WorkflowEvent, Workspace } from "./types";
+import type {
+  CreateFeatureInput,
+  Feature,
+  FeatureArtifact,
+  FeatureArtifactKind,
+  GoalDraftDocument,
+  Run,
+  WorkflowEvent,
+  Workspace,
+} from "./types";
 
 export const listFeatures = (projectId: string): Promise<Feature[]> =>
   request(`/api/v1/projects/${encodeURIComponent(projectId)}/features`);
@@ -21,6 +30,33 @@ export const getFeatureEvents = (
 ): Promise<WorkflowEvent[]> =>
   request(
     `/api/v1/projects/${encodeURIComponent(projectId)}/features/${encodeURIComponent(featureId)}/events`,
+  );
+
+// Read a durable feature artifact (goal_draft or implementation_plan). Caller
+// supplies the document type. Throws ApiError code artifact_not_found when the
+// kind exists but the agent hasn't produced it yet, or feature_not_found.
+export const getFeatureArtifact = <T = unknown>(
+  projectId: string,
+  featureId: string,
+  kind: FeatureArtifactKind,
+): Promise<FeatureArtifact<T>> =>
+  request(
+    `/api/v1/projects/${encodeURIComponent(projectId)}/features/${encodeURIComponent(featureId)}/artifacts/${kind}`,
+  );
+
+// Replace the editable proposed goal with optimistic concurrency. A stale
+// expected_revision throws ApiError code artifact_revision_conflict (reload
+// first); invalid/oversized content throws invalid_feature_artifact.
+export const updateGoalDraft = (
+  projectId: string,
+  featureId: string,
+  expectedRevision: number,
+  document: GoalDraftDocument,
+  idempotencyKey: string,
+): Promise<FeatureArtifact<GoalDraftDocument>> =>
+  request(
+    `/api/v1/projects/${encodeURIComponent(projectId)}/features/${encodeURIComponent(featureId)}/artifacts/goal_draft`,
+    { method: "PUT", body: { expected_revision: expectedRevision, document }, idempotencyKey },
   );
 
 export const getWorkspace = (projectId: string, featureId: string): Promise<Workspace> =>
