@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/EinarLogiOskars/commitarium/internal/feature"
+	"github.com/EinarLogiOskars/commitarium/internal/featureartifact"
 )
 
 type FeatureTransition struct {
@@ -36,6 +37,13 @@ type Store interface {
 	) (Event, error)
 	AcceptGoal(ctx context.Context, acceptance GoalAcceptance) (Event, error)
 	ListEvents(ctx context.Context, aggregateID string) ([]Event, error)
+}
+
+// ArtifactStore is optional so focused workflow fakes do not need to implement
+// artifact persistence. The production SQLite store implements both contracts.
+type ArtifactStore interface {
+	PutFeatureArtifact(context.Context, FeatureArtifactMutation) (FeatureArtifact, Event, error)
+	GetFeatureArtifact(context.Context, string, featureartifact.Kind) (FeatureArtifact, error)
 }
 
 var ErrInvalidTransitionRequest = errors.New("invalid feature transition request")

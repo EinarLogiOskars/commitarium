@@ -13,6 +13,7 @@ type EventType string
 const (
 	EventTypeFeatureStateChanged EventType = "feature.state_changed"
 	EventTypeGoalAccepted        EventType = "feature.goal_accepted"
+	EventTypeArtifactUpdated     EventType = "feature.artifact_updated"
 )
 
 type ActorKind string
