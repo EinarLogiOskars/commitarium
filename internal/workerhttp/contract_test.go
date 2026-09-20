@@ -743,6 +743,30 @@ func withEventText(event Event, text string) Event {
 	return event
 }
 
+func TestMessagePreviewValidation(t *testing.T) {
+	valid := MessagePreview{
+		AttemptReference: validAttemptReference(),
+		StreamID:         "item_final",
+		Text:             "Visible prefix",
+		OccurredAt:       time.Date(2026, 9, 8, 12, 0, 0, 0, time.UTC),
+		Redaction:        RedactionMetadata{},
+	}
+	if err := valid.Validate(); err != nil {
+		t.Fatalf("validate preview: %v", err)
+	}
+	invalid := []MessagePreview{
+		func() MessagePreview { value := valid; value.StreamID = ""; return value }(),
+		func() MessagePreview { value := valid; value.Text = ""; return value }(),
+		func() MessagePreview { value := valid; value.OccurredAt = time.Time{}; return value }(),
+		func() MessagePreview { value := valid; value.AttemptID = "other id"; return value }(),
+	}
+	for _, preview := range invalid {
+		if err := preview.Validate(); err == nil {
+			t.Fatalf("expected invalid preview %+v", preview)
+		}
+	}
+}
+
 func withOccurredAt(event Event, occurredAt time.Time) Event {
 	event.OccurredAt = occurredAt
 	return event

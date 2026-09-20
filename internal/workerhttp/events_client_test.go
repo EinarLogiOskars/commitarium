@@ -59,6 +59,54 @@ func TestClientAndServerRoundTripEventStream(t *testing.T) {
 	}
 }
 
+func TestClientAndServerRoundTripTransientPreview(t *testing.T) {
+	reference := validAttemptReference()
+	live := make(chan Event)
+	previews := make(chan MessagePreview)
+	go func() {
+		previews <- MessagePreview{
+			AttemptReference: reference,
+			StreamID:         "item_final",
+			Text:             "Answer in prog",
+			OccurredAt:       time.Date(2026, 9, 8, 12, 0, 0, 0, time.UTC),
+			Redaction:        RedactionMetadata{},
+		}
+		close(previews)
+		live <- validWorkerEvent(reference, 1, EventMessage, "Answer in progress")
+		close(live)
+	}()
+	source := &recordingEventSource{stream: EventStream{
+		Live: live, Previews: previews, Close: func() {},
+	}}
+	workerServer := newTestServer(
+		t,
+		eventStreamServerConfig(source),
+		&recordingService{attempt: validServerAttempt()},
+	)
+	client := newTestClient(t, workerServer, time.Second)
+
+	reader, err := client.OpenEventStream(context.Background(), reference, 0)
+	if err != nil {
+		t.Fatalf("open event stream: %v", err)
+	}
+	defer reader.Close()
+	previewFrame, err := reader.NextFrame()
+	if err != nil || previewFrame.Preview == nil {
+		t.Fatalf("preview frame=%+v error=%v", previewFrame, err)
+	}
+	if previewFrame.Event != nil || previewFrame.Preview.StreamID != "item_final" ||
+		previewFrame.Preview.Text != "Answer in prog" {
+		t.Fatalf("unexpected preview frame %+v", previewFrame)
+	}
+	finalFrame, err := reader.NextFrame()
+	if err != nil || finalFrame.Event == nil || finalFrame.Event.Sequence != 1 {
+		t.Fatalf("final frame=%+v error=%v", finalFrame, err)
+	}
+	if _, err := reader.NextFrame(); !errors.Is(err, io.EOF) {
+		t.Fatalf("end error = %v, want EOF", err)
+	}
+}
+
 func TestClientEventStreamSendsAuthenticationAndDurableCursor(t *testing.T) {
 	reference := validAttemptReference()
 	event := validWorkerEvent(reference, 8, EventActivity, "Reviewing changes")

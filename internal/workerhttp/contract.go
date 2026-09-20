@@ -305,11 +305,24 @@ type Event struct {
 	Sequence           int64               `json:"sequence"`
 	Type               EventType           `json:"type"`
 	Text               string              `json:"text"`
+	StreamID           string              `json:"stream_id,omitempty"`
 	OccurredAt         time.Time           `json:"occurred_at"`
 	Redaction          RedactionMetadata   `json:"redaction"`
 	Truncation         *TruncationMetadata `json:"truncation,omitempty"`
 	Activity           *Activity           `json:"activity,omitempty"`
 	RecoveryAssessment *RecoveryAssessment `json:"recovery_assessment,omitempty"`
+}
+
+// MessagePreview is transient public prose for an in-progress final response.
+// It deliberately has no durable sequence: SSE transports it without an id and
+// reconnect cursors continue to refer only to Event.
+type MessagePreview struct {
+	AttemptReference
+	StreamID   string              `json:"stream_id"`
+	Text       string              `json:"text"`
+	OccurredAt time.Time           `json:"occurred_at"`
+	Redaction  RedactionMetadata   `json:"redaction"`
+	Truncation *TruncationMetadata `json:"truncation,omitempty"`
 }
 
 type ErrorCode string

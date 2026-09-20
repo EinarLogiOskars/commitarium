@@ -61,6 +61,13 @@ type EventReader struct {
 	closeErr  error
 }
 
+// StreamFrame is exactly one worker SSE payload. Durable events and transient
+// previews are mutually exclusive.
+type StreamFrame struct {
+	Event   *Event
+	Preview *MessagePreview
+}
+
 type sseFrame struct {
 	id       string
 	event    string
@@ -152,12 +159,27 @@ func (client *Client) OpenEventStream(
 // or the request context is canceled. SSE retry advice and heartbeat comments
 // are transport details and are not returned as agent activity.
 func (reader *EventReader) Next() (Event, error) {
+	for {
+		frame, err := reader.NextFrame()
+		if err != nil {
+			return Event{}, err
+		}
+		if frame.Event != nil {
+			return *frame.Event, nil
+		}
+	}
+}
+
+// NextFrame blocks until it receives one durable event, one transient preview,
+// the stream ends, or the request context is canceled. Only durable events
+// advance the reader's replay cursor.
+func (reader *EventReader) NextFrame() (StreamFrame, error) {
 	for reader.scanner.Scan() {
 		rawLine := reader.scanner.Bytes()
 		reader.frame.touched = true
 		reader.frame.bytes += len(rawLine)
 		if reader.frame.bytes > MaxEventStreamFrameBytes {
-			return Event{}, reader.failInvalid("frame exceeds the client limit", nil)
+			return StreamFrame{}, reader.failInvalid("frame exceeds the client limit", nil)
 		}
 		lineBytes := rawLine
 		if len(lineBytes) > 0 && lineBytes[len(lineBytes)-1] == '\n' {
@@ -170,40 +192,42 @@ func (reader *EventReader) Next() (Event, error) {
 		if line == "" {
 			frame := reader.frame
 			reader.frame = sseFrame{}
-			event, skipped, err := reader.decodeFrame(frame)
+			decoded, skipped, err := reader.decodeFrame(frame)
 			if err != nil {
 				_ = reader.Close()
-				return Event{}, err
+				return StreamFrame{}, err
 			}
 			if skipped {
 				continue
 			}
-			reader.lastSequence = event.Sequence
-			return event, nil
+			if decoded.Event != nil {
+				reader.lastSequence = decoded.Event.Sequence
+			}
+			return decoded, nil
 		}
 		if strings.HasPrefix(line, ":") {
 			continue
 		}
 		if err := reader.addField(line); err != nil {
-			return Event{}, reader.failInvalid("frame field", err)
+			return StreamFrame{}, reader.failInvalid("frame field", err)
 		}
 	}
 
 	if err := reader.scanner.Err(); err != nil {
 		_ = reader.Close()
 		if contextErr := reader.context.Err(); contextErr != nil {
-			return Event{}, fmt.Errorf("%w: %w", ErrRequestFailed, contextErr)
+			return StreamFrame{}, fmt.Errorf("%w: %w", ErrRequestFailed, contextErr)
 		}
 		if errors.Is(err, errEventStreamLineTooLong) {
-			return Event{}, invalidClientResponse("event stream line exceeds the client limit", err)
+			return StreamFrame{}, invalidClientResponse("event stream line exceeds the client limit", err)
 		}
-		return Event{}, fmt.Errorf("%w: read event stream: %w", ErrRequestFailed, err)
+		return StreamFrame{}, fmt.Errorf("%w: read event stream: %w", ErrRequestFailed, err)
 	}
 	_ = reader.Close()
 	if reader.frame.touched {
-		return Event{}, invalidClientResponse("event stream ended inside a frame", nil)
+		return StreamFrame{}, invalidClientResponse("event stream ended inside a frame", nil)
 	}
-	return Event{}, io.EOF
+	return StreamFrame{}, io.EOF
 }
 
 func (reader *EventReader) addField(line string) error {
@@ -246,46 +270,62 @@ func (reader *EventReader) addField(line string) error {
 	return nil
 }
 
-func (reader *EventReader) decodeFrame(frame sseFrame) (Event, bool, error) {
+func (reader *EventReader) decodeFrame(frame sseFrame) (StreamFrame, bool, error) {
 	if !frame.hasID && !frame.hasEvent && !frame.hasData && !frame.hasRetry {
-		return Event{}, true, nil
+		return StreamFrame{}, true, nil
 	}
 	if frame.hasRetry {
 		if frame.hasID || frame.hasEvent || frame.hasData {
-			return Event{}, false, invalidClientResponse("event stream retry frame", nil)
+			return StreamFrame{}, false, invalidClientResponse("event stream retry frame", nil)
 		}
 		if _, err := parsePositiveDecimal(frame.retry); err != nil {
-			return Event{}, false, invalidClientResponse("event stream retry value", err)
+			return StreamFrame{}, false, invalidClientResponse("event stream retry value", err)
 		}
-		return Event{}, true, nil
+		return StreamFrame{}, true, nil
 	}
 	if frame.event == "protocol_error" {
-		return Event{}, false, decodeStreamProtocolError(frame)
+		return StreamFrame{}, false, decodeStreamProtocolError(frame)
+	}
+	if frame.event == messagePreviewEventName {
+		if frame.hasID || !frame.hasEvent || !frame.hasData {
+			return StreamFrame{}, false, invalidClientResponse("event stream preview frame", nil)
+		}
+		var preview MessagePreview
+		if err := decodeStrictJSON([]byte(frame.data), &preview); err != nil {
+			return StreamFrame{}, false, invalidClientResponse("event stream preview data", err)
+		}
+		if err := preview.Validate(); err != nil {
+			return StreamFrame{}, false, invalidClientResponse("event stream preview", err)
+		}
+		if preview.AttemptReference != reader.reference {
+			return StreamFrame{}, false, invalidClientResponse("event stream preview identity", nil)
+		}
+		return StreamFrame{Preview: &preview}, false, nil
 	}
 	if !frame.hasID || !frame.hasEvent || !frame.hasData {
-		return Event{}, false, invalidClientResponse("event stream activity frame", nil)
+		return StreamFrame{}, false, invalidClientResponse("event stream activity frame", nil)
 	}
 
 	sequence, err := parsePositiveDecimal(frame.id)
 	if err != nil {
-		return Event{}, false, invalidClientResponse("event stream event ID", err)
+		return StreamFrame{}, false, invalidClientResponse("event stream event ID", err)
 	}
 	if reader.lastSequence == math.MaxInt64 || sequence != reader.lastSequence+1 {
-		return Event{}, false, invalidClientResponse("event stream event sequence", nil)
+		return StreamFrame{}, false, invalidClientResponse("event stream event sequence", nil)
 	}
 	var event Event
 	if err := decodeStrictJSON([]byte(frame.data), &event); err != nil {
-		return Event{}, false, invalidClientResponse("event stream event data", err)
+		return StreamFrame{}, false, invalidClientResponse("event stream event data", err)
 	}
 	if err := event.Validate(); err != nil {
-		return Event{}, false, invalidClientResponse("event stream event", err)
+		return StreamFrame{}, false, invalidClientResponse("event stream event", err)
 	}
 	if event.AttemptReference != reader.reference ||
 		event.Sequence != sequence ||
 		string(event.Type) != frame.event {
-		return Event{}, false, invalidClientResponse("event stream event identity", nil)
+		return StreamFrame{}, false, invalidClientResponse("event stream event identity", nil)
 	}
-	return event, false, nil
+	return StreamFrame{Event: &event}, false, nil
 }
 
 func decodeStreamProtocolError(frame sseFrame) error {

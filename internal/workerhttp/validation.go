@@ -704,6 +704,11 @@ func (event Event) Validate() error {
 	if !event.Type.IsValid() {
 		return invalid("event type %q is not recognized", event.Type)
 	}
+	if event.StreamID != "" {
+		if err := validateID("event stream ID", event.StreamID); err != nil {
+			return err
+		}
+	}
 	if err := validateRequiredText("event text", event.Text, MaxEventTextBytes); err != nil {
 		return err
 	}
@@ -735,6 +740,31 @@ func (event Event) Validate() error {
 		}
 	} else if event.RecoveryAssessment != nil {
 		return invalid("event type %q cannot include recovery assessment data", event.Type)
+	}
+	return nil
+}
+
+func (preview MessagePreview) Validate() error {
+	if err := preview.AttemptReference.Validate(); err != nil {
+		return err
+	}
+	if err := validateID("preview stream ID", preview.StreamID); err != nil {
+		return err
+	}
+	if err := validateRequiredText("preview text", preview.Text, MaxEventTextBytes); err != nil {
+		return err
+	}
+	if preview.OccurredAt.IsZero() {
+		return invalid("preview occurrence time is required")
+	}
+	if !isUTC(preview.OccurredAt) {
+		return invalid("preview occurrence time must be UTC")
+	}
+	if err := preview.Redaction.Validate(); err != nil {
+		return err
+	}
+	if preview.Truncation != nil {
+		return preview.Truncation.Validate()
 	}
 	return nil
 }

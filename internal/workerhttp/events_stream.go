@@ -17,6 +17,7 @@ const (
 	defaultStreamHeartbeat    = 15 * time.Second
 	defaultStreamWriteTimeout = 10 * time.Second
 	streamReconnectDelayMilli = 1000
+	messagePreviewEventName   = "message_preview"
 )
 
 // EventSource provides one consistent handoff from durable replay to live
@@ -40,6 +41,7 @@ type EventStream struct {
 	Replay        []Event
 	ReplayThrough int64
 	Live          <-chan Event
+	Previews      <-chan MessagePreview
 	Close         func()
 }
 
@@ -156,6 +158,20 @@ func (server *Server) streamEvents(w http.ResponseWriter, r *http.Request) {
 			}
 			lastSequence = event.Sequence
 			flusher.Flush()
+		case preview, open := <-stream.Previews:
+			if !open {
+				stream.Previews = nil
+				continue
+			}
+			payload, err := validateAndEncodePreview(reference, preview)
+			if err != nil {
+				server.writeStreamProtocolError(w, flusher)
+				return
+			}
+			if err := server.writePreviewFrame(w, payload); err != nil {
+				return
+			}
+			flusher.Flush()
 		case <-heartbeat.C:
 			server.setStreamWriteDeadline(w)
 			if _, err := fmt.Fprint(w, ": keep-alive\n\n"); err != nil {
@@ -164,6 +180,20 @@ func (server *Server) streamEvents(w http.ResponseWriter, r *http.Request) {
 			flusher.Flush()
 		}
 	}
+}
+
+func validateAndEncodePreview(reference AttemptReference, preview MessagePreview) ([]byte, error) {
+	if err := preview.Validate(); err != nil {
+		return nil, err
+	}
+	if preview.AttemptReference != reference {
+		return nil, errors.New("preview belongs to a different attempt")
+	}
+	payload, err := json.Marshal(preview)
+	if err != nil {
+		return nil, fmt.Errorf("encode message preview: %w", err)
+	}
+	return payload, nil
 }
 
 func (server *Server) readLastEventSequence(w http.ResponseWriter, r *http.Request) (int64, bool) {
@@ -270,6 +300,15 @@ func (server *Server) writeEventFrame(w http.ResponseWriter, event Event, payloa
 		payload,
 	)
 	return err
+}
+
+func (server *Server) writePreviewFrame(w http.ResponseWriter, payload []byte) error {
+	server.setStreamWriteDeadline(w)
+	_, err := fmt.Fprintf(w, "event: %s\ndata: %s\n\n", messagePreviewEventName, payload)
+	if err != nil {
+		return fmt.Errorf("write message preview: %w", err)
+	}
+	return nil
 }
 
 func (server *Server) writeStreamProtocolError(w http.ResponseWriter, flusher http.Flusher) {
