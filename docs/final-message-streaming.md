@@ -101,6 +101,9 @@ The Codex adapter coalesces updates before publication. The target cadence is
 
 - Preview text crosses the worker's normalization boundary before publication.
 - Preview and final text are public agent prose, never hidden reasoning.
+- Public assistant commentary is retained as narration for every output contract,
+  including intervention turns. Only duplicate structured JSON envelopes are
+  omitted from the transcript.
 - A preview is scoped to one session and worker attempt.
 - A stream ID is non-empty and stable for the response.
 - Every emitted preview is eligible for a correlated durable final event;
