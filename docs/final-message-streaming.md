@@ -102,6 +102,8 @@ unchanged or empty extracted prefix is not emitted.
   guaranteed by the existing replay path.
 - Backpressure may drop previews, but must not make the worker attempt
   indeterminate or interfere with durable events.
+- Each multiplexing boundary drains a pending preview before publishing its
+  correlated final event, so a stale preview cannot reappear after completion.
 
 ## Backend slices
 
@@ -138,6 +140,7 @@ Verification covers:
 - truncated JSON, nesting, escapes, incomplete UTF-8, and surrogate pairs;
 - 50 ms cumulative-snapshot coalescing and stream changes;
 - worker SSE preview encoding/decoding without an ID;
+- preview-before-final ordering even when both channels are ready together;
 - worker normalization failure and non-blocking latest-snapshot behavior;
 - coordinator ingestion and session SSE relay;
 - durable `stream_id` persistence and replay;
