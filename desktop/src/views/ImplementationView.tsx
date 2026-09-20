@@ -170,9 +170,17 @@ function PlanStepRow({
     (step.verification?.length ?? 0) > 0 ||
     Boolean(step.commit_subject) ||
     Boolean(step.commit_id);
+  const rowRef = useRef<HTMLLIElement | null>(null);
+
+  // On expand, bring the step's top into view so the title and start of its
+  // detail are visible — otherwise expanding the last item leaves the checklist
+  // scrolled to the end of the detail.
+  useEffect(() => {
+    if (open) rowRef.current?.scrollIntoView({ block: "start", behavior: "smooth" });
+  }, [open]);
 
   return (
-    <li className={`plan-step plan-step--${step.status}`}>
+    <li ref={rowRef} className={`plan-step plan-step--${step.status}`}>
       <button
         className="plan-step__row"
         onClick={() => hasDetail && onToggle()}
