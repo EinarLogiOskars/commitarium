@@ -261,6 +261,7 @@ export function GoalClarification({
             <label className="accept__label">Proposed goal</label>
             <textarea
               value={goal}
+              placeholder="The lead will propose a goal here as it clarifies. You can edit it before accepting."
               onChange={(e) => {
                 goalEdited.current = true;
                 setGoal(e.target.value);
