@@ -91,21 +91,22 @@ func TestStreamSessionEventsDeliversLiveEvent(t *testing.T) {
 }
 
 func TestStreamSessionEventsDeliversIdlessMessagePreview(t *testing.T) {
-	liveEvents := make(chan execution.Event)
-	livePreviews := make(chan execution.MessagePreview)
+	liveEvents := make(chan execution.Event, 1)
+	livePreviews := make(chan execution.MessagePreview, 1)
+	livePreviews <- execution.MessagePreview{
+		SessionID: "ses_test", AttemptID: "att_test", StreamID: "item_final",
+		Text: "Answer in prog", OccurredAt: time.Now().UTC(),
+	}
+	close(livePreviews)
+	final := testSessionEvent("sev_final", 1, "Answer in progress")
+	final.StreamID = "item_final"
+	liveEvents <- final
+	close(liveEvents)
 	executions := &recordingExecutionService{
 		session:             execution.Session{ID: "ses_test"},
 		subscription:        liveEvents,
 		previewSubscription: livePreviews,
 	}
-	go func() {
-		livePreviews <- execution.MessagePreview{
-			SessionID: "ses_test", AttemptID: "att_test", StreamID: "item_final",
-			Text: "Answer in prog", OccurredAt: time.Now().UTC(),
-		}
-		close(livePreviews)
-		close(liveEvents)
-	}()
 	request := httptest.NewRequest(
 		http.MethodGet,
 		"/api/v1/sessions/ses_test/events/stream",
@@ -124,6 +125,9 @@ func TestStreamSessionEventsDeliversIdlessMessagePreview(t *testing.T) {
 	previewEnd := strings.Index(body[previewStart:], "\n\n")
 	if strings.Contains(body[previewStart:previewStart+previewEnd], "id:") {
 		t.Fatalf("preview unexpectedly had SSE id: %q", body)
+	}
+	if finalStart := strings.Index(body, "id: sev_final"); finalStart < previewStart {
+		t.Fatalf("durable final preceded its preview: %q", body)
 	}
 }
 

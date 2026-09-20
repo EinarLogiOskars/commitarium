@@ -148,6 +148,11 @@ func (server *Server) streamEvents(w http.ResponseWriter, r *http.Request) {
 			if !open {
 				return
 			}
+			if event.StreamID != "" {
+				if err := server.writePendingPreviews(w, flusher, reference, &stream.Previews); err != nil {
+					return
+				}
+			}
 			payload, err := validateAndEncodeLiveEvent(reference, lastSequence, event)
 			if err != nil {
 				server.writeStreamProtocolError(w, flusher)
@@ -180,6 +185,35 @@ func (server *Server) streamEvents(w http.ResponseWriter, r *http.Request) {
 			flusher.Flush()
 		}
 	}
+}
+
+func (server *Server) writePendingPreviews(
+	w http.ResponseWriter,
+	flusher http.Flusher,
+	reference AttemptReference,
+	previews *<-chan MessagePreview,
+) error {
+	for *previews != nil {
+		select {
+		case preview, open := <-*previews:
+			if !open {
+				*previews = nil
+				return nil
+			}
+			payload, err := validateAndEncodePreview(reference, preview)
+			if err != nil {
+				server.writeStreamProtocolError(w, flusher)
+				return err
+			}
+			if err := server.writePreviewFrame(w, payload); err != nil {
+				return err
+			}
+			flusher.Flush()
+		default:
+			return nil
+		}
+	}
+	return nil
 }
 
 func validateAndEncodePreview(reference AttemptReference, preview MessagePreview) ([]byte, error) {

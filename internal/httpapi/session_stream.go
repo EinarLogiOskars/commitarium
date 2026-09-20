@@ -80,6 +80,11 @@ func (api *API) streamSessionEventsHandler(w http.ResponseWriter, r *http.Reques
 			if event.Sequence <= lastSequence {
 				continue
 			}
+			if event.StreamID != "" {
+				if err := writePendingSessionPreviews(w, flusher, &livePreviews); err != nil {
+					return
+				}
+			}
 			if err := writeSessionEvent(w, event); err != nil {
 				return
 			}
@@ -102,6 +107,29 @@ func (api *API) streamSessionEventsHandler(w http.ResponseWriter, r *http.Reques
 			flusher.Flush()
 		}
 	}
+}
+
+func writePendingSessionPreviews(
+	w http.ResponseWriter,
+	flusher http.Flusher,
+	previews *<-chan execution.MessagePreview,
+) error {
+	for *previews != nil {
+		select {
+		case preview, open := <-*previews:
+			if !open {
+				*previews = nil
+				return nil
+			}
+			if err := writeSessionPreview(w, preview); err != nil {
+				return err
+			}
+			flusher.Flush()
+		default:
+			return nil
+		}
+	}
+	return nil
 }
 
 func writeSessionPreview(w http.ResponseWriter, preview execution.MessagePreview) error {

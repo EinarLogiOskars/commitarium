@@ -61,20 +61,20 @@ func TestClientAndServerRoundTripEventStream(t *testing.T) {
 
 func TestClientAndServerRoundTripTransientPreview(t *testing.T) {
 	reference := validAttemptReference()
-	live := make(chan Event)
-	previews := make(chan MessagePreview)
-	go func() {
-		previews <- MessagePreview{
-			AttemptReference: reference,
-			StreamID:         "item_final",
-			Text:             "Answer in prog",
-			OccurredAt:       time.Date(2026, 9, 8, 12, 0, 0, 0, time.UTC),
-			Redaction:        RedactionMetadata{},
-		}
-		close(previews)
-		live <- validWorkerEvent(reference, 1, EventMessage, "Answer in progress")
-		close(live)
-	}()
+	live := make(chan Event, 1)
+	previews := make(chan MessagePreview, 1)
+	previews <- MessagePreview{
+		AttemptReference: reference,
+		StreamID:         "item_final",
+		Text:             "Answer in prog",
+		OccurredAt:       time.Date(2026, 9, 8, 12, 0, 0, 0, time.UTC),
+		Redaction:        RedactionMetadata{},
+	}
+	close(previews)
+	final := validWorkerEvent(reference, 1, EventMessage, "Answer in progress")
+	final.StreamID = "item_final"
+	live <- final
+	close(live)
 	source := &recordingEventSource{stream: EventStream{
 		Live: live, Previews: previews, Close: func() {},
 	}}

@@ -117,6 +117,9 @@ func (service *Service) supervise(
 				service.finishAttempt(reference, providerSession)
 				return
 			}
+			if event.StreamID != "" {
+				service.drainProviderPreviews(reference, &previews)
+			}
 			if err := service.recordProviderEvent(reference, event); err != nil {
 				return
 			}
@@ -126,6 +129,24 @@ func (service *Service) supervise(
 				continue
 			}
 			service.publishProviderPreview(reference, preview)
+		}
+	}
+}
+
+func (service *Service) drainProviderPreviews(
+	reference workerhttp.AttemptReference,
+	previews *<-chan worker.MessagePreview,
+) {
+	for *previews != nil {
+		select {
+		case preview, open := <-*previews:
+			if !open {
+				*previews = nil
+				return
+			}
+			service.publishProviderPreview(reference, preview)
+		default:
+			return
 		}
 	}
 }
