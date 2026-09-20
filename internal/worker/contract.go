@@ -137,8 +137,18 @@ type RecoveryAssessment struct {
 type Event struct {
 	Type               EventType
 	Text               string
+	StreamID           string
 	Activity           *Activity
 	RecoveryAssessment *RecoveryAssessment
+}
+
+// MessagePreview is the complete visible prefix of one in-progress final
+// response. It is advisory live state: workers publish it without assigning a
+// durable event sequence, and consumers replace older previews with the same
+// stream ID rather than appending Text.
+type MessagePreview struct {
+	StreamID string
+	Text     string
 }
 
 type Outcome string
@@ -219,6 +229,15 @@ type Session interface {
 	Wait(ctx context.Context) (Result, error)
 }
 
+// PreviewSession is implemented by provider sessions that can expose the
+// visible portion of an in-progress final response. Keeping previews as an
+// optional extension preserves the durable Session event contract for scripted
+// and non-streaming providers.
+type PreviewSession interface {
+	Session
+	Previews() <-chan MessagePreview
+}
+
 // ForceStoppableSession is an optional extension implemented only when a
 // provider session owns an operating-system process handle. Keeping it separate
 // from Session prevents simulated or remotely managed providers from claiming a
@@ -232,6 +251,7 @@ var ErrInvalidSessionRequest = errors.New("invalid worker session request")
 var ErrInvalidLaunchEnvironment = errors.New("invalid worker launch environment")
 var ErrInvalidCommand = errors.New("invalid worker command")
 var ErrInvalidResult = errors.New("invalid worker result")
+var ErrInvalidMessagePreview = errors.New("invalid worker message preview")
 
 var (
 	launchIDPattern        = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
@@ -246,6 +266,17 @@ func (role Role) IsValid() bool {
 		return true
 	default:
 		return false
+	}
+}
+
+func (preview MessagePreview) Validate() error {
+	switch {
+	case !launchIDPattern.MatchString(strings.TrimSpace(preview.StreamID)):
+		return fmt.Errorf("%w: stream ID is invalid", ErrInvalidMessagePreview)
+	case strings.TrimSpace(preview.Text) == "":
+		return fmt.Errorf("%w: text is required", ErrInvalidMessagePreview)
+	default:
+		return nil
 	}
 }
 
