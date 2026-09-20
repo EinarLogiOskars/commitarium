@@ -68,8 +68,8 @@ field from the incomplete JSON:
 | `goal_clarification` | `message` |
 | `planning_lead` | `content` |
 | `implementation_lead` | `summary` |
-| `implementation_review` | `summary` |
-| `implementation_readiness` | `summary` |
+| `implementation_reviewer` | `summary` |
+| `implementation_lead_readiness` | `summary` |
 | `intervention` | `response` |
 | `toolchain_setup` | `message` |
 
@@ -82,10 +82,10 @@ later snapshot makes it decodable.
 Codex App Server supplies `item/agentMessage/delta` with `threadId`, `turnId`,
 `itemId`, and `delta`. The item ID is the preview `stream_id`.
 
-Claude Code must run with `--include-partial-messages` in addition to
-`--output-format stream-json`. Its `stream_event` records are accumulated for
-the final structured response. A stable response-local stream ID is synthesized
-when the provider does not supply one.
+Claude Code runs with `--include-partial-messages` in addition to
+`--output-format stream-json` for structured turns. Its `stream_event` records
+may carry either `text_delta.text` or `input_json_delta.partial_json`; both feed
+the same accumulator. The worker attempt ID is its response-local `stream_id`.
 
 Adapters coalesce updates before publication. The target cadence is 50 ms; an
 unchanged or empty extracted prefix is not emitted.
@@ -105,11 +105,50 @@ unchanged or empty extracted prefix is not emitted.
 
 ## Backend slices
 
-- [ ] Slice 1: provider-neutral preview contract and partial-JSON prose extractor.
-- [ ] Slice 2: transient frames on worker SSE, including client decoding.
-- [ ] Slice 3: relay previews through ingestion and coordinator session SSE.
-- [ ] Slice 4: Codex and Claude adapter emission with coalescing.
-- [ ] Slice 5: end-to-end validation, documentation, and frontend handoff.
+- [x] Slice 1: provider-neutral preview contract and partial-JSON prose extractor.
+- [x] Slice 2: transient frames on worker SSE, including client decoding.
+- [x] Slice 3: relay previews through ingestion and coordinator session SSE.
+- [x] Slice 4: Codex and Claude adapter emission with coalescing.
+- [x] Slice 5: end-to-end validation, documentation, and frontend handoff.
+
+## Implemented backend
+
+The backend pipeline is complete:
+
+```text
+provider delta
+  -> adapter cumulative prose preview
+  -> worker normalization and latest-snapshot buffer
+  -> id-less worker SSE frame
+  -> coordinator ingestion and latest-snapshot broker
+  -> id-less session SSE frame
+  -> desktop client
+```
+
+The final event's `stream_id` is persisted in `session_events`, returned by the
+session history endpoint, and included in durable session SSE frames. Preview
+text is not persisted in either the worker journal or coordinator database.
+
+The worker SSE client exposes `NextFrame` for consumers that handle previews;
+its existing `Next` method skips previews and continues returning only durable
+events. This keeps non-preview callers source-compatible.
+
+Verification covers:
+
+- truncated JSON, nesting, escapes, incomplete UTF-8, and surrogate pairs;
+- 50 ms cumulative-snapshot coalescing and stream changes;
+- worker SSE preview encoding/decoding without an ID;
+- worker normalization failure and non-blocking latest-snapshot behavior;
+- coordinator ingestion and session SSE relay;
+- durable `stream_id` persistence and replay;
+- Codex `item/agentMessage/delta` fixtures under `OutputSchema`;
+- Claude `stream_event` fixtures and `--include-partial-messages` under
+  `--json-schema`;
+- the complete Go test suite (`go test ./...`).
+
+The provider tests use protocol-faithful local helper processes; they do not
+make authenticated network calls. A live-provider smoke test remains useful
+release validation, especially after upgrading either provider CLI.
 
 ## Frontend handoff
 
@@ -133,6 +172,25 @@ classes described above. Frontend work should then:
    already pinned near its bottom.
 8. Respect `prefers-reduced-motion`; the text still updates, but a caret or pulse
    should be disabled.
+
+Frontend types need these additions:
+
+```ts
+export interface MessagePreview {
+  stream_id: string;
+  text: string;
+}
+
+export interface SessionEvent {
+  // existing fields...
+  stream_id?: string;
+}
+```
+
+`streamEvents` already leaves its saved `lastId` unchanged for a frame without
+an ID. Dispatch `event.event === "message_preview"` separately from durable
+session event types; do not add `message_preview` to `SessionEventType` because
+it is not a stored session event.
 
 The frontend must continue polling or otherwise refreshing run/session status
 until those state changes have their own live feed. This feature replaces only
