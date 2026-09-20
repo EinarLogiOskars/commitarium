@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strconv"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/EinarLogiOskars/commitarium/internal/execution"
 	"github.com/EinarLogiOskars/commitarium/internal/feature"
+	"github.com/EinarLogiOskars/commitarium/internal/featureartifact"
 	"github.com/EinarLogiOskars/commitarium/internal/project"
 	"github.com/EinarLogiOskars/commitarium/internal/worker"
 	"github.com/EinarLogiOskars/commitarium/internal/workerhttp"
@@ -117,6 +119,12 @@ type RemoteLeadPlanningWorkflow interface {
 	TransitionFeature(context.Context, string, feature.State, workflow.Actor, string) (workflow.Event, error)
 }
 
+type RemoteLeadArtifactService interface {
+	GetFeatureArtifact(context.Context, string, featureartifact.Kind) (workflow.FeatureArtifact, error)
+	UpsertGoalDraft(context.Context, string, featureartifact.GoalDraft, workflow.Actor, string) (workflow.FeatureArtifact, error)
+	UpsertImplementationPlan(context.Context, string, featureartifact.ImplementationPlan, workflow.Actor, string) (workflow.FeatureArtifact, error)
+}
+
 type RemoteLeadWorkspaceService interface {
 	Get(context.Context, string, string) (workspace.Workspace, error)
 	PrepareForClarification(context.Context, string, string) (workspace.Workspace, bool, error)
@@ -149,6 +157,7 @@ type RemoteLeadConfig struct {
 	Features                     RemoteLeadFeatureFinder
 	Goals                        RemoteLeadGoalService
 	Planning                     RemoteLeadPlanningWorkflow
+	Artifacts                    RemoteLeadArtifactService
 	Workspaces                   RemoteLeadWorkspaceService
 	Worker                       RemoteLeadWorker
 	Pump                         RemoteLeadPump
@@ -173,6 +182,7 @@ type RemoteLeadStarter struct {
 	features                     RemoteLeadFeatureFinder
 	goals                        RemoteLeadGoalService
 	planning                     RemoteLeadPlanningWorkflow
+	artifacts                    RemoteLeadArtifactService
 	workspaces                   RemoteLeadWorkspaceService
 	worker                       RemoteLeadWorker
 	pump                         RemoteLeadPump
@@ -229,7 +239,7 @@ func NewRemoteLeadStarter(config RemoteLeadConfig) (*RemoteLeadStarter, error) {
 	}
 	return &RemoteLeadStarter{
 		executions: config.Executions, features: config.Features, goals: config.Goals,
-		planning: config.Planning, workspaces: config.Workspaces,
+		planning: config.Planning, artifacts: config.Artifacts, workspaces: config.Workspaces,
 		worker: config.Worker, pump: config.Pump,
 		lifetime: config.Lifetime, agentProfileID: config.AgentProfileID,
 		reviewerAgentProfileID:       reviewerAgentProfileID,
@@ -1528,6 +1538,9 @@ func (starter *RemoteLeadStarter) recoverIdlePlanningRun(
 	}
 	last := messages[len(messages)-1]
 	if last.Event.Type == worker.EventPlanSubmitted {
+		if err := starter.ensureSubmittedPlanArtifact(ctx, run, last.Event); err != nil {
+			return true, err
+		}
 		if !starter.claim(run.ID) {
 			return true, fmt.Errorf("%w: %q", ErrRunAlreadyActive, run.ID)
 		}
@@ -1573,6 +1586,47 @@ func (starter *RemoteLeadStarter) recoverIdlePlanningRun(
 	}
 	go starter.launch(request)
 	return true, nil
+}
+
+func (starter *RemoteLeadStarter) ensureSubmittedPlanArtifact(
+	ctx context.Context,
+	run execution.Run,
+	planEvent execution.Event,
+) error {
+	if starter.artifacts == nil {
+		return nil
+	}
+	current, err := starter.artifacts.GetFeatureArtifact(
+		ctx, run.FeatureID, featureartifact.KindImplementationPlan,
+	)
+	if err == nil {
+		plan := featureartifact.ImplementationPlan{}
+		if decodeErr := json.Unmarshal([]byte(current.Document), &plan); decodeErr == nil &&
+			plan.PlanVersion == run.PlanVersion {
+			return nil
+		}
+	} else if !errors.Is(err, workflow.ErrArtifactNotFound) {
+		return err
+	}
+	if strings.TrimSpace(planEvent.WorkerAttemptID) == "" || strings.TrimSpace(planEvent.SessionID) == "" {
+		return errors.New("submitted plan has no durable worker attempt identity")
+	}
+	attempt, err := starter.worker.GetAttempt(ctx, workerhttp.AttemptReference{
+		SessionID: planEvent.SessionID, AttemptID: planEvent.WorkerAttemptID,
+	})
+	if err != nil || attempt.Result == nil || attempt.Result.ImplementationPlan == nil {
+		return errors.New("submitted plan has no recoverable structured implementation checklist")
+	}
+	normalized, err := attempt.Result.ImplementationPlan.NormalizeInitial(run.PlanVersion)
+	if err != nil {
+		return err
+	}
+	_, err = starter.artifacts.UpsertImplementationPlan(
+		ctx, run.FeatureID, normalized,
+		workflow.Actor{Kind: workflow.ActorKindAgent, ID: planEvent.SessionID},
+		planEvent.WorkerAttemptID+":implementation-plan",
+	)
+	return err
 }
 
 type remoteLeadRequest struct {
@@ -1623,7 +1677,8 @@ func (starter *RemoteLeadStarter) startRequest(
 				ProjectID:      projectID, FeatureID: featureID,
 				Role: workerhttp.RoleLead, WorkspaceID: workspaceID,
 			},
-			Instructions: remoteLeadInstructions(goal),
+			Instructions:   remoteLeadInstructions(goal),
+			OutputContract: workerhttp.OutputContractGoalClarification,
 		},
 	}
 	if err := request.request.Validate(request.identity); err != nil {
@@ -1672,6 +1727,7 @@ func (starter *RemoteLeadStarter) replyRequest(
 			},
 			Instructions:      remoteLeadReplyInstructions(command.Message),
 			ProviderSessionID: session.ProviderSessionID,
+			OutputContract:    workerhttp.OutputContractGoalClarification,
 		},
 	}
 	if err := request.request.Validate(request.identity); err != nil {
@@ -1884,7 +1940,12 @@ func remoteLeadInstructions(goal string) string {
 		"This is goal clarification only: do not modify files, run destructive commands, " +
 		"create commits, or begin implementation. Inspect the available project read-only " +
 		"when useful. Restate your understanding, identify important ambiguity or risk, and " +
-		"ask the user the smallest useful set of questions needed before planning. " +
+		"ask the user the smallest useful set of questions needed before planning. Return action 'ask' " +
+		"while information is missing, put the user-facing question in message, put your current best " +
+		"complete goal draft in goal when one is useful (or an empty string when it would be misleading), " +
+		"and list the unresolved questions in open_questions. Once the goal is ready to accept, return " +
+		"action 'propose', explain that in message, put the complete proposed goal in goal, and return an " +
+		"empty open_questions array. The conversational message is not the proposed goal. " +
 		"The user's current goal is:\n\n" + goal
 }
 
@@ -1892,7 +1953,11 @@ func remoteLeadReplyInstructions(message string) string {
 	return "Continue the same goal-clarification conversation. This is still clarification only: " +
 		"do not modify files, run destructive commands, create commits, or begin implementation. " +
 		"Use the existing conversation context, incorporate the user's reply, and ask only the " +
-		"next questions genuinely needed before planning. The user replied:\n\n" + message
+		"next questions genuinely needed before planning. Return action 'ask' with a user-facing message, " +
+		"the current best complete goal draft in goal when useful (otherwise an empty string), and unresolved " +
+		"questions in open_questions. When ready, return action 'propose' with the complete goal, an empty " +
+		"open_questions array, and a separate user-facing message. The conversational message is never the " +
+		"proposed goal. The user replied:\n\n" + message
 }
 
 // StartPlanning resumes the existing lead conversation in the feature's
@@ -2751,6 +2816,7 @@ func implementationInstructions(
 		"is missing, contradictory, or ambiguous, stop and explain the problem without making changes. " +
 		"Otherwise implement the accepted goal and agreed plan and run the relevant available tests. " +
 		implementationToolchainInstructions +
+		implementationChecklistInstructions +
 		"When you decide the implementation is ready for independent review, commit all intended work " +
 		"on the assigned feature branch, push that exact HEAD to the 'commitarium' remote, and post one " +
 		"Forgejo pull-request comment using the worker-provided Forgejo URL and token-file environment " +
@@ -2789,6 +2855,7 @@ func implementationContinuationInstructions(
 		"the accepted goal or agreed plan, stop and explain the problem without making further changes. " +
 		"Otherwise apply the user's guidance within the accepted plan, continue the implementation, and " +
 		"run the relevant available tests. " + implementationToolchainInstructions +
+		implementationChecklistInstructions +
 		"When you decide the result is ready for independent review, " +
 		"commit the intended work, push the exact HEAD to the 'commitarium' remote, and post one Forgejo " +
 		"PR comment using the worker-provided URL and token-file environment variables. Never print, log, " +
@@ -2817,6 +2884,16 @@ const implementationToolchainInstructions = "If an additional supported language
 	"run 'commitarium-toolchain require <tool>@<exact-version>' with a generous timeout and wait for it " +
 	"to finish; its shim becomes available on PATH immediately. Do not use apt, mise use, floating versions " +
 	"such as latest, or repository mise configuration to provision tools. "
+
+const implementationChecklistInstructions = "The coordinator owns a structured commit-sized checklist. " +
+	"Run 'commitarium-artifact plan show' before changing files. Work through its steps in order without " +
+	"waiting for an intermediate review. Immediately before beginning a pending step run " +
+	"'commitarium-artifact plan start <step-id>'. Implement only that cohesive slice, run its listed " +
+	"verification, and commit it with the planned commit subject. Then run " +
+	"'commitarium-artifact plan complete <step-id> <lowercase-commit-id>' before continuing. Resume from " +
+	"the statuses already recorded after an interruption. Do not amend, squash, or combine planned commits, " +
+	"and do not create or commit a local checklist file. The final published HEAD must be the commit recorded " +
+	"for the final checklist step. "
 
 func (starter *RemoteLeadStarter) startLeadResponse(
 	ctx context.Context,
@@ -2906,7 +2983,11 @@ func leadPlanningResponseInstructions(
 		"Address every material concern. If useful work or disagreement remains, respond to the reviewer " +
 		"with action 'respond' and put your natural Markdown reply in content. If, and only if, you conclude " +
 		"that both you and the reviewer genuinely agree and the plan completely satisfies the accepted " +
-		"goal, use action 'submit_plan' and put the complete final implementation plan in content. " +
+		"goal, use action 'submit_plan' and put the complete final implementation plan in content. Also " +
+		"supply plan_title, plan_subtitle, and ordered steps. Each step must be one cohesive commit and " +
+		"must have a stable lowercase ID, title, subtitle, detailed Markdown instructions, concrete " +
+		"verification checks, and an imperative commit_subject. When action is 'respond', leave " +
+		"plan_title and plan_subtitle empty and steps empty. " +
 		"Do not submit merely to end the discussion. If you disagree, explain why with repository evidence. " +
 		"Durable repository and workflow state are authoritative over conversational memory.\n\n" +
 		"Accepted goal:\n" + storedFeature.AcceptedGoal +
@@ -3056,7 +3137,9 @@ func planningInstructions(storedFeature feature.Feature, prepared workspace.Work
 	return "The goal is now accepted and planning has begun. Continue as the same lead agent. " +
 		"First inspect the managed repository and current Git state. Do not modify files, install " +
 		"dependencies, create commits, push, or begin implementation. Produce a concrete proposed " +
-		"implementation plan for a separate reviewer agent to challenge. Call out assumptions, risks, " +
+		"implementation plan for a separate reviewer agent to challenge. Break it into small ordered " +
+		"slices where each slice should produce one cohesive commit, with a short title, subtitle, " +
+		"implementation details, verification, and intended commit subject. Call out assumptions, risks, " +
 		"likely files or components, and how the result should be tested. Durable repository and " +
 		"workflow state are authoritative over conversational memory.\n\nAccepted goal:\n" +
 		storedFeature.AcceptedGoal + "\n\n" + planningWorkspaceFacts(prepared)
@@ -3378,6 +3461,12 @@ func (starter *RemoteLeadStarter) launch(request remoteLeadRequest) {
 // ownership while handing a completed lead revision directly to the reviewer.
 func (starter *RemoteLeadStarter) launchAdmitted(request remoteLeadRequest) {
 	ctx := starter.lifetime
+	if request.planningStage != planningStageNone ||
+		request.request.OutputContract == workerhttp.OutputContractGoalClarification {
+		request.request.WorkspaceAccess = workerhttp.WorkspaceAccessReadOnly
+	} else {
+		request.request.WorkspaceAccess = workerhttp.WorkspaceAccessReadWrite
+	}
 	attempt, _, putErr := starter.worker.PutAttempt(ctx, request.identity, request.request)
 	if putErr != nil {
 		// The PUT response may have been lost after the worker durably admitted
@@ -3527,6 +3616,21 @@ func (starter *RemoteLeadStarter) finish(
 
 	switch attempt.Result.Outcome {
 	case workerhttp.OutcomeCompleted:
+		if attempt.Result.GoalDraft != nil && starter.artifacts != nil {
+			run, loadErr := starter.executions.GetRun(ctx, request.runID)
+			if loadErr != nil {
+				starter.requireReview(ctx, request, loadErr)
+				return
+			}
+			if _, artifactErr := starter.artifacts.UpsertGoalDraft(
+				ctx, run.FeatureID, *attempt.Result.GoalDraft,
+				workflow.Actor{Kind: workflow.ActorKindAgent, ID: session.ID},
+				request.identity.AttemptID+":goal-draft",
+			); artifactErr != nil {
+				starter.requireReview(ctx, request, artifactErr)
+				return
+			}
+		}
 		if request.interventionID != "" {
 			if !worker.InterventionEffect(attempt.Result.InterventionEffect).IsValid() {
 				starter.requireReview(ctx, request, errors.New("completed intervention omitted its structured effect"))
@@ -3573,6 +3677,30 @@ func (starter *RemoteLeadStarter) finish(
 		}
 		if request.planningStage == planningStageLeadResponse {
 			if planningMessage.Type == worker.EventPlanSubmitted {
+				if starter.artifacts != nil {
+					if attempt.Result.ImplementationPlan == nil {
+						starter.requireReview(ctx, request, errors.New("submitted plan omitted its structured implementation checklist"))
+						return
+					}
+					run, loadErr := starter.executions.GetRun(ctx, request.runID)
+					if loadErr != nil {
+						starter.requireReview(ctx, request, loadErr)
+						return
+					}
+					normalized, normalizeErr := attempt.Result.ImplementationPlan.NormalizeInitial(run.PlanVersion)
+					if normalizeErr != nil {
+						starter.requireReview(ctx, request, normalizeErr)
+						return
+					}
+					if _, artifactErr := starter.artifacts.UpsertImplementationPlan(
+						ctx, run.FeatureID, normalized,
+						workflow.Actor{Kind: workflow.ActorKindAgent, ID: session.ID},
+						request.identity.AttemptID+":implementation-plan",
+					); artifactErr != nil {
+						starter.requireReview(ctx, request, artifactErr)
+						return
+					}
+				}
 				if publishErr := starter.publishSubmittedPlan(
 					ctx, request.runID, planningMessage,
 				); publishErr != nil {
@@ -3715,6 +3843,24 @@ func (starter *RemoteLeadStarter) verifyImplementationPublication(
 	if len(messages) == 0 || messages[len(messages)-1].Role != worker.RoleLead ||
 		messages[len(messages)-1].Event.Type != worker.EventPlanSubmitted {
 		return errors.New("implementation publication has no durable agreed plan")
+	}
+	if starter.artifacts != nil {
+		if _, correcting := implementationCorrectionTurnNumber(request.identity.SessionID, request.identity.AttemptID); !correcting {
+			artifact, artifactErr := starter.artifacts.GetFeatureArtifact(
+				ctx, run.FeatureID, featureartifact.KindImplementationPlan,
+			)
+			if artifactErr != nil {
+				return fmt.Errorf("load implementation checklist: %w", artifactErr)
+			}
+			checklist := featureartifact.ImplementationPlan{}
+			if decodeErr := json.Unmarshal([]byte(artifact.Document), &checklist); decodeErr != nil {
+				return fmt.Errorf("decode implementation checklist: %w", decodeErr)
+			}
+			if checklist.PlanVersion != run.PlanVersion || !checklist.Complete() ||
+				checklist.Steps[len(checklist.Steps)-1].CommitID != result.Publication.CommitID {
+				return errors.New("implementation checklist is incomplete or does not end at the published commit")
+			}
+		}
 	}
 	plan := messages[len(messages)-1].Event
 	var verifyErr error

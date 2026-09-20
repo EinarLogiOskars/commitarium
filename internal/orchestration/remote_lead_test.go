@@ -3,6 +3,7 @@ package orchestration
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http/httptest"
@@ -15,6 +16,7 @@ import (
 	"github.com/EinarLogiOskars/commitarium/internal/database"
 	"github.com/EinarLogiOskars/commitarium/internal/execution"
 	"github.com/EinarLogiOskars/commitarium/internal/feature"
+	"github.com/EinarLogiOskars/commitarium/internal/featureartifact"
 	"github.com/EinarLogiOskars/commitarium/internal/project"
 	"github.com/EinarLogiOskars/commitarium/internal/worker"
 	"github.com/EinarLogiOskars/commitarium/internal/workerhttp"
@@ -536,9 +538,10 @@ func TestRemoteLeadStartsOneWorkerTurnAndWaitsForUser(t *testing.T) {
 		},
 	))
 	workspaceStub := &remoteLeadWorkspaceStub{}
+	workflowService := workflow.NewService(database.NewWorkflowStore(db))
 	starter, err := NewRemoteLeadStarter(RemoteLeadConfig{
 		Executions: executions, Features: database.NewFeatureStore(db),
-		Goals:      workflow.NewService(database.NewWorkflowStore(db)),
+		Goals: workflowService, Artifacts: workflowService,
 		Workspaces: workspaceStub, Worker: client,
 		Pump:     workeringest.NewPump(executions, ingester, workeringest.NewHTTPAttemptSource(client)),
 		Lifetime: t.Context(), AgentProfileID: "codex-default",
@@ -586,7 +589,9 @@ func TestRemoteLeadStartsOneWorkerTurnAndWaitsForUser(t *testing.T) {
 	workerStub.mu.Unlock()
 	if putCalls != 1 || putRequest.Assignment.ProjectID != storedProject.ID ||
 		putRequest.Assignment.FeatureID != storedFeature.ID || putRequest.Assignment.Role != workerhttp.RoleLead ||
-		putRequest.Assignment.WorkspaceID != "wsp_managed_feature" {
+		putRequest.Assignment.WorkspaceID != "wsp_managed_feature" ||
+		putRequest.OutputContract != workerhttp.OutputContractGoalClarification ||
+		putRequest.WorkspaceAccess != workerhttp.WorkspaceAccessReadOnly {
 		t.Fatalf("unexpected worker launch calls=%d request=%+v", putCalls, putRequest)
 	}
 	if workspaceStub.clarificationCalls != 1 ||
@@ -604,6 +609,20 @@ func TestRemoteLeadStartsOneWorkerTurnAndWaitsForUser(t *testing.T) {
 	}
 	if unchangedFeature.State != feature.StateDraft {
 		t.Fatalf("goal clarification advanced feature to %q", unchangedFeature.State)
+	}
+	artifact, err := workflowService.GetFeatureArtifact(
+		t.Context(), storedFeature.ID, featureartifact.KindGoalDraft,
+	)
+	if err != nil {
+		t.Fatalf("get durable goal draft: %v", err)
+	}
+	draft := featureartifact.GoalDraft{}
+	if err := json.Unmarshal([]byte(artifact.Document), &draft); err != nil {
+		t.Fatalf("decode durable goal draft: %v", err)
+	}
+	if draft.Goal != "Build the feature after confirming success criteria." ||
+		len(draft.OpenQuestions) != 1 || draft.OpenQuestions[0] != "What should success look like?" {
+		t.Fatalf("unexpected goal draft %+v", draft)
 	}
 }
 
@@ -689,6 +708,63 @@ func TestRemoteLeadRecoveryReusesDurableWorkerAttempt(t *testing.T) {
 	}
 	if checkpoint.AttemptID != attemptID || checkpoint.LastEventSequence != 3 {
 		t.Fatalf("recovery replaced or failed to advance checkpoint %+v", checkpoint)
+	}
+}
+
+func TestRemoteLeadRecoveryRebuildsSubmittedPlanArtifactFromExactAttempt(t *testing.T) {
+	db, _, _, storedFeature := newRemoteLeadExecution(t)
+	workflowService := workflow.NewService(database.NewWorkflowStore(db))
+	reference := workerhttp.AttemptReference{SessionID: "ses_plan", AttemptID: "att_plan"}
+	workerStub := &conversationalRemoteLeadWorker{
+		terminal: map[workerhttp.AttemptReference]workerhttp.Attempt{
+			reference: {
+				AttemptReference: reference,
+				Result: &workerhttp.TerminalResult{
+					Outcome: workerhttp.OutcomeCompleted, Disposition: workerhttp.DispositionSucceeded,
+					Summary: "Submitted the agreed plan.",
+					ImplementationPlan: &featureartifact.ImplementationPlan{
+						Title: "Deliver export", Subtitle: "Two durable slices.",
+						Steps: []featureartifact.ImplementationPlanStep{
+							{
+								ID: "contract", Title: "Define contract", Subtitle: "Add the API shape.",
+								DetailsMarkdown: "Define the export API.", Verification: []string{"go test ./internal/export"},
+								CommitSubject: "Add export contract",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	starter := &RemoteLeadStarter{artifacts: workflowService, worker: workerStub}
+	run := execution.Run{ID: "run_plan", FeatureID: storedFeature.ID, PlanVersion: 2}
+	event := execution.Event{SessionID: reference.SessionID, WorkerAttemptID: reference.AttemptID}
+
+	if err := starter.ensureSubmittedPlanArtifact(t.Context(), run, event); err != nil {
+		t.Fatalf("recover submitted plan artifact: %v", err)
+	}
+	artifact, err := workflowService.GetFeatureArtifact(
+		t.Context(), storedFeature.ID, featureartifact.KindImplementationPlan,
+	)
+	if err != nil {
+		t.Fatalf("get recovered plan artifact: %v", err)
+	}
+	plan := featureartifact.ImplementationPlan{}
+	if err := json.Unmarshal([]byte(artifact.Document), &plan); err != nil {
+		t.Fatalf("decode recovered plan: %v", err)
+	}
+	if plan.PlanVersion != 2 || len(plan.Steps) != 1 || plan.Steps[0].Position != 1 ||
+		plan.Steps[0].Status != featureartifact.StepPending {
+		t.Fatalf("unexpected recovered plan %+v", plan)
+	}
+	if err := starter.ensureSubmittedPlanArtifact(t.Context(), run, event); err != nil {
+		t.Fatalf("retry recovered plan artifact: %v", err)
+	}
+	retried, err := workflowService.GetFeatureArtifact(
+		t.Context(), storedFeature.ID, featureartifact.KindImplementationPlan,
+	)
+	if err != nil || retried.Revision != artifact.Revision {
+		t.Fatalf("retry created a new revision: before=%+v after=%+v err=%v", artifact, retried, err)
 	}
 }
 
@@ -2285,8 +2361,11 @@ func newCompletedRemoteLeadWorker(runID, projectID, featureID string) *remoteLea
 	terminal.UpdatedAt = endedAt
 	terminal.EndedAt = &endedAt
 	terminal.Result = &workerhttp.TerminalResult{
-		Outcome: workerhttp.OutcomeCompleted, Disposition: workerhttp.DispositionInputRequired,
-		Summary: "Asked one clarification question.",
+		Outcome: workerhttp.OutcomeCompleted, Disposition: workerhttp.DispositionSucceeded,
+		Summary: "Asked one clarification question.", GoalDraft: &featureartifact.GoalDraft{
+			Goal:          "Build the feature after confirming success criteria.",
+			OpenQuestions: []string{"What should success look like?"},
+		},
 	}
 	texts := []string{"Inspecting the draft goal", "What should success look like?", terminal.Result.Summary}
 	types := []workerhttp.EventType{workerhttp.EventActivity, workerhttp.EventMessage, workerhttp.EventAttemptTerminal}
