@@ -1,12 +1,13 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listFeatureRuns } from "../api/features";
 import { getRun, startRun } from "../api/runs";
-import { getSessionEvents, sendSessionMessage, acceptGoal } from "../api/sessions";
+import { sendSessionMessage, acceptGoal } from "../api/sessions";
 import { ApiError } from "../api/client";
-import { Transcript, type TranscriptEntry } from "./Transcript";
+import { Transcript } from "./Transcript";
 import { useFeatureArtifact } from "./useFeatureArtifact";
+import { useSessionEvents, type SessionRef } from "./useSessionEvents";
 import { WORK } from "../vocab";
-import type { Feature, GoalDraftDocument, SessionEvent, Session } from "../api/types";
+import type { Feature, GoalDraftDocument, Session } from "../api/types";
 
 const SHOWN = new Set(["message", "activity", "user_message"]);
 
@@ -28,7 +29,6 @@ export function GoalClarification({
 }) {
   const [leadSessionId, setLeadSessionId] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
-  const [events, setEvents] = useState<SessionEvent[]>([]);
   const [reply, setReply] = useState("");
   const [goal, setGoal] = useState("");
   const goalEdited = useRef(false);
@@ -49,6 +49,17 @@ export function GoalClarification({
   );
   const openQuestions = goalDraft?.document.open_questions ?? [];
 
+  // The lead's transcript, live over SSE (durable events + streaming previews).
+  const sessions = useMemo<SessionRef[]>(
+    () => (leadSessionId ? [{ id: leadSessionId, role: "lead" }] : []),
+    [leadSessionId],
+  );
+  const { durable, previews } = useSessionEvents(sessions, started && !feature.accepted_goal);
+  const shown = useMemo(
+    () => [...durable.filter((e) => e.text && SHOWN.has(e.type)), ...previews],
+    [durable, previews],
+  );
+
   // Seed / refresh the editable goal box from the draft, unless the user has
   // started editing it themselves.
   useEffect(() => {
@@ -60,7 +71,7 @@ export function GoalClarification({
   useEffect(() => {
     const el = chatRef.current;
     if (el && pinnedToBottom.current) el.scrollTop = el.scrollHeight;
-  }, [events]);
+  }, [shown]);
 
   const onChatScroll = (e: React.UIEvent<HTMLDivElement>) => {
     const el = e.currentTarget;
@@ -111,7 +122,6 @@ export function GoalClarification({
       if (!lead) return;
       setLeadSessionId(lead.id);
       setStatus(lead.status);
-      setEvents(await getSessionEvents(lead.id));
     } catch (e) {
       setError(describe(e));
     }
@@ -231,7 +241,7 @@ export function GoalClarification({
         <div className="clarify">
           <div className="clarify__main">
             <div className="chat" ref={chatRef} onScroll={onChatScroll}>
-              <Transcript entries={toEntries(events)} empty="Waiting for the lead to respond…" />
+              <Transcript entries={shown} empty="Waiting for the lead to respond…" />
             </div>
 
             <div className="composer">
@@ -290,22 +300,6 @@ export function GoalClarification({
       )}
     </section>
   );
-}
-
-// Map lead/user session events into the shared transcript (bubbles for
-// messages, grouped commands, inline narration) — the same rendering the other
-// phases use.
-function toEntries(events: SessionEvent[]): TranscriptEntry[] {
-  return events
-    .filter((e) => e.text && SHOWN.has(e.type))
-    .map((e) => ({
-      key: e.id,
-      role: e.type === "user_message" ? "user" : "lead",
-      type: e.type,
-      text: e.text,
-      activity: e.activity,
-      at: e.occurred_at,
-    }));
 }
 
 function describe(e: unknown): string {

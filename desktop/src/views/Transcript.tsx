@@ -39,6 +39,7 @@ export interface TranscriptEntry {
   text: string;
   activity?: ActivityDetail; // structured command / file-change detail
   at: string;
+  streaming?: boolean; // a live message preview (not yet the durable final)
 }
 
 export function Transcript({
@@ -103,10 +104,11 @@ function MessageEntry({ e }: { e: TranscriptEntry }) {
   const who = e.role === "reviewer" ? "Reviewer" : e.role === "user" ? "You" : "Lead";
   const cls = e.role === "reviewer" ? "msg--reviewer" : e.role === "user" ? "msg--user" : "msg--lead";
   return (
-    <div className={`msg ${cls}`}>
+    <div className={`msg ${cls}${e.streaming ? " msg--streaming" : ""}`}>
       <span className="msg__who">{who}</span>
       <div className="msg__text">
         <Markdown text={agentText(e.text)} />
+        {e.streaming && <span className="msg__caret" aria-hidden />}
       </div>
     </div>
   );

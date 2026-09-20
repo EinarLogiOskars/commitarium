@@ -1,15 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { getRun } from "../api/runs";
-import { getSessionEvents } from "../api/sessions";
-import { ApiError } from "../api/client";
-import { Transcript, type TranscriptEntry } from "./Transcript";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Transcript } from "./Transcript";
 import { InterveneBar } from "./InterveneBar";
 import { Markdown } from "./Markdown";
 import { useFeatureArtifact } from "./useFeatureArtifact";
+import { useSessionEvents, type SessionRef } from "./useSessionEvents";
 import { scopeToPhase, type Interval } from "./phaseWindows";
-import type { ImplementationPlanDocument, PlanStep, Run, SessionEvent } from "../api/types";
-
-const POLL_MS = 2000;
+import type { ImplementationPlanDocument, PlanStep, Run } from "../api/types";
 
 const SHOWN = new Set(["message", "activity"]);
 
@@ -20,7 +16,6 @@ const SHOWN = new Set(["message", "activity"]);
 export function ImplementationView({
   projectId,
   featureId,
-  runId,
   run,
   live = true,
   intervals = [],
@@ -36,8 +31,6 @@ export function ImplementationView({
   scoped?: boolean;
   onChanged: () => void;
 }) {
-  const [entries, setEntries] = useState<TranscriptEntry[]>([]);
-  const [error, setError] = useState<string | null>(null);
   const feedRef = useRef<HTMLDivElement | null>(null);
   const pinned = useRef(true);
 
@@ -47,34 +40,26 @@ export function ImplementationView({
     "implementation_plan",
   );
 
-  const poll = useCallback(async () => {
-    try {
-      const run = await getRun(runId);
-      const lead = run.sessions.find((s) => s.role === "lead") ?? run.sessions[0];
-      if (!lead) return;
-      const events = (await getSessionEvents(lead.id)) as SessionEvent[];
-      setEntries(
-        events
-          .filter((e) => e.text && SHOWN.has(e.type))
-          .map((e) => ({ key: e.id, role: "lead", type: e.type, text: e.text, activity: e.activity, at: e.occurred_at })),
-      );
-    } catch (e) {
-      setError(e instanceof ApiError ? `${e.message} (${e.code})` : String(e));
-    }
-  }, [runId]);
+  // Only the lead acts during implementation; stream its transcript live.
+  const sessions = useMemo<SessionRef[]>(() => {
+    const lead = run?.sessions.find((s) => s.role === "lead") ?? run?.sessions[0];
+    return lead ? [{ id: lead.id, role: "lead" }] : [];
+  }, [run]);
+  const { durable, previews, error } = useSessionEvents(sessions);
 
-  useEffect(() => {
-    void poll();
-    const id = setInterval(() => void poll(), POLL_MS);
-    return () => clearInterval(id);
-  }, [poll]);
+  const shown = useMemo(() => {
+    const scopedDurable = scopeToPhase(
+      durable.filter((e) => e.text && SHOWN.has(e.type)),
+      intervals,
+      scoped,
+    );
+    return [...scopedDurable, ...previews];
+  }, [durable, previews, intervals, scoped]);
 
   useEffect(() => {
     const el = feedRef.current;
     if (el && pinned.current) el.scrollTop = el.scrollHeight;
-  }, [entries]);
-
-  const shown = scopeToPhase(entries, intervals, scoped);
+  }, [shown]);
 
   return (
     <section className="panel panel--phase">

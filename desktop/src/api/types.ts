@@ -360,6 +360,18 @@ export interface SessionEvent {
   text: string;
   activity?: ActivityDetail;
   occurred_at: string;
+  // Present on a final agent message that was previewed live; ties it to the
+  // transient message_preview frames so the UI can replace the preview.
+  stream_id?: string;
+}
+
+// A transient, non-durable live preview of an agent's final response prose.
+// Cumulative (full visible prefix so far, not an append), never persisted or
+// replayed. Delivered over the session SSE as `event: message_preview` with no
+// SSE id; the durable message with the same stream_id supersedes it.
+export interface MessagePreview {
+  stream_id: string;
+  text: string;
 }
 
 export interface Workspace {

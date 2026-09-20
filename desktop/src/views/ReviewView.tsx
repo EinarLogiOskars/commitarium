@@ -1,13 +1,13 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getRun } from "../api/runs";
-import { getSessionEvents } from "../api/sessions";
 import { getWorkspace } from "../api/features";
 import { openExternal } from "../ipc";
 import { ApiError } from "../api/client";
-import { Transcript, type TranscriptEntry } from "./Transcript";
+import { Transcript } from "./Transcript";
 import { InterveneBar } from "./InterveneBar";
+import { useSessionEvents, type SessionRef } from "./useSessionEvents";
 import { scopeToPhase, type Interval } from "./phaseWindows";
-import type { Run, SessionEvent, Workspace } from "../api/types";
+import type { Run, Workspace } from "../api/types";
 
 const POLL_MS = 2000;
 
@@ -38,30 +38,19 @@ export function ReviewView({
   scoped?: boolean;
   onChanged: () => void;
 }) {
-  const [entries, setEntries] = useState<TranscriptEntry[]>([]);
   const [decisions, setDecisions] = useState<{ role: string; status: string; outcome?: string }[]>([]);
   const [workspace, setWorkspace] = useState<Workspace | null>(null);
   const [error, setError] = useState<string | null>(null);
   const chatRef = useRef<HTMLDivElement | null>(null);
   const pinned = useRef(true);
 
+  // Agent decisions (status/outcome) + PR workspace still poll; the transcript
+  // streams over SSE below.
   const poll = useCallback(async () => {
     try {
-      const run = await getRun(runId);
-      const perSession = await Promise.all(
-        run.sessions.map(async (s) => ({ role: s.role || s.agent_id, events: await getSessionEvents(s.id) })),
-      );
-      const merged: TranscriptEntry[] = [];
-      for (const { role, events } of perSession) {
-        for (const e of events as SessionEvent[]) {
-          if (!e.text || !SHOWN.has(e.type)) continue;
-          merged.push({ key: e.id, role, type: e.type, text: e.text, activity: e.activity, at: e.occurred_at });
-        }
-      }
-      merged.sort((a, b) => a.at.localeCompare(b.at));
-      setEntries(merged);
+      const r = await getRun(runId);
       setDecisions(
-        run.sessions.map((s) => ({ role: s.role || s.agent_id, status: s.status, outcome: s.disposition || s.outcome })),
+        r.sessions.map((s) => ({ role: s.role || s.agent_id, status: s.status, outcome: s.disposition || s.outcome })),
       );
       try {
         setWorkspace(await getWorkspace(projectId, featureId));
@@ -79,13 +68,28 @@ export function ReviewView({
     return () => clearInterval(id);
   }, [poll]);
 
+  // Reviewer ↔ lead transcript, live over SSE (durable events + previews).
+  const sessions = useMemo<SessionRef[]>(
+    () => (run?.sessions ?? []).map((s) => ({ id: s.id, role: s.role || s.agent_id })),
+    [run],
+  );
+  const { durable, previews, error: streamError } = useSessionEvents(sessions);
+
+  const shown = useMemo(() => {
+    const scopedDurable = scopeToPhase(
+      durable.filter((e) => e.text && SHOWN.has(e.type)),
+      intervals,
+      scoped,
+    );
+    return [...scopedDurable, ...previews];
+  }, [durable, previews, intervals, scoped]);
+
   useEffect(() => {
     const el = chatRef.current;
     if (el && pinned.current) el.scrollTop = el.scrollHeight;
-  }, [entries]);
+  }, [shown]);
 
   const pr = workspace?.pull_request;
-  const shown = scopeToPhase(entries, intervals, scoped);
 
   return (
     <section className="panel panel--phase">
@@ -97,7 +101,7 @@ export function ReviewView({
           </button>
         )}
       </div>
-      {error && <div className="banner banner--error">{error}</div>}
+      {(error || streamError) && <div className="banner banner--error">{error || streamError}</div>}
 
       {live && decisions.length > 0 && (
         <div className="row" style={{ marginBottom: 12 }}>

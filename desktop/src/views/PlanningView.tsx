@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   getPlanningMessages,
   getRun,
@@ -7,12 +7,12 @@ import {
   startPlanningRound,
   startImplementation,
 } from "../api/runs";
-import { getSessionEvents } from "../api/sessions";
 import { ApiError } from "../api/client";
-import { Transcript, type TranscriptEntry } from "./Transcript";
+import { Transcript } from "./Transcript";
 import { InterveneBar } from "./InterveneBar";
+import { useSessionEvents, type SessionRef } from "./useSessionEvents";
 import { scopeToPhase, type Interval } from "./phaseWindows";
-import type { PlanningMessage, Run, SessionEvent } from "../api/types";
+import type { PlanningMessage, Run } from "../api/types";
 
 const POLL_MS = 2000;
 
@@ -53,7 +53,6 @@ export function PlanningView({
   scoped?: boolean;
   onAdvanced: () => void;
 }) {
-  const [entries, setEntries] = useState<TranscriptEntry[]>([]);
   const [planMsgs, setPlanMsgs] = useState<PlanningMessage[]>([]);
   const [status, setStatus] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -61,25 +60,12 @@ export function PlanningView({
   const chatRef = useRef<HTMLDivElement | null>(null);
   const pinned = useRef(true);
 
+  // Status + the curated planning-messages feed still poll (no live channel yet);
+  // the transcript itself streams over SSE below.
   const poll = useCallback(async () => {
     try {
-      const run = await getRun(runId);
-      setStatus(run.status);
-      const perSession = await Promise.all(
-        run.sessions.map(async (s) => ({
-          role: s.role || s.agent_id,
-          events: await getSessionEvents(s.id),
-        })),
-      );
-      const merged: TranscriptEntry[] = [];
-      for (const { role, events } of perSession) {
-        for (const e of events as SessionEvent[]) {
-          if (!e.text || !SHOWN.has(e.type)) continue;
-          merged.push({ key: e.id, role, type: e.type, text: e.text, activity: e.activity, at: e.occurred_at });
-        }
-      }
-      merged.sort((a, b) => a.at.localeCompare(b.at));
-      setEntries(merged);
+      const r = await getRun(runId);
+      setStatus(r.status);
       setPlanMsgs(await getPlanningMessages(runId));
     } catch (e) {
       setError(e instanceof ApiError ? `${e.message} (${e.code})` : String(e));
@@ -92,10 +78,26 @@ export function PlanningView({
     return () => clearInterval(id);
   }, [poll]);
 
+  // Lead + reviewer transcript, live over SSE (durable events + previews).
+  const sessions = useMemo<SessionRef[]>(
+    () => (run?.sessions ?? []).map((s) => ({ id: s.id, role: s.role || s.agent_id })),
+    [run],
+  );
+  const { durable, previews, error: streamError } = useSessionEvents(sessions);
+
+  const shown = useMemo(() => {
+    const scopedDurable = scopeToPhase(
+      durable.filter((e) => e.text && SHOWN.has(e.type)),
+      intervals,
+      scoped,
+    );
+    return [...scopedDurable, ...previews];
+  }, [durable, previews, intervals, scoped]);
+
   useEffect(() => {
     const el = chatRef.current;
     if (el && pinned.current) el.scrollTop = el.scrollHeight;
-  }, [entries]);
+  }, [shown]);
 
   const idle = status === "waiting_for_user";
   // Scope plan state to the current version so a prior version's plan_submitted
@@ -135,14 +137,13 @@ export function PlanningView({
   }
 
   const revised = planVersion > 1;
-  const shown = scopeToPhase(entries, intervals, scoped);
   // The dock's advance CTA only appears when it's the user's turn.
   const advance = idle ? { label, onClick: run_, busy } : undefined;
 
   return (
     <section className="panel panel--phase">
       <h2>Planning{revised ? ` · revised v${planVersion}` : ""}</h2>
-      {error && <div className="banner banner--error">{error}</div>}
+      {(error || streamError) && <div className="banner banner--error">{error || streamError}</div>}
 
       <div
         className="chat"
