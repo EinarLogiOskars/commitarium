@@ -1,5 +1,5 @@
 import { request } from "./client";
-import type { InterventionTargetRole, PlanningMessage, Run } from "./types";
+import type { InterventionTargetRole, PlanningMessage, Run, ValidationJob } from "./types";
 
 /** Start the configured workflow for a draft feature. Idempotent by key. */
 export const startRun = (
@@ -69,3 +69,22 @@ export const queueIntervention = (
     idempotencyKey: key,
     body: { target, message },
   });
+
+// --- Isolated validation jobs (Phase 4) ---
+// Native execution (claim/run/complete) is a Tauri command (runValidationJob);
+// these are the coordinator reads + the create/retry triggers.
+
+export const getRunValidationJobs = (runId: string): Promise<{ jobs: ValidationJob[] }> =>
+  request(`${runPath(runId)}/validation-jobs`);
+
+export const getValidationJob = (jobId: string): Promise<ValidationJob> =>
+  request(`/api/v1/validation-jobs/${encodeURIComponent(jobId)}`);
+
+// Create or idempotently return the job for the exact approved commit + current
+// command list (used when the gate was reached before commands were configured).
+export const ensureValidationJob = (runId: string): Promise<ValidationJob> =>
+  request(`${runPath(runId)}/validation-jobs`, { method: "POST" });
+
+// Create a new pending job from a terminal one; returns the new job to run.
+export const retryValidationJob = (jobId: string): Promise<ValidationJob> =>
+  request(`/api/v1/validation-jobs/${encodeURIComponent(jobId)}/retry`, { method: "POST" });

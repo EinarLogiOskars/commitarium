@@ -451,3 +451,68 @@ export interface PlanningMessage {
   text: string;
   occurred_at: string;
 }
+
+// --- Phase 4: isolated validation + approved system packages ---
+
+export type ValidationJobStatus = "pending" | "running" | "passed" | "failed";
+
+export interface ValidationCommandResult {
+  command: string;
+  exit_code: number;
+  output: string;
+  duration_ms: number;
+}
+
+export interface ValidationJob {
+  id: string;
+  project_id: string;
+  feature_id: string;
+  run_id: string;
+  workspace_id: string;
+  commit_id: string;
+  commands: string[];
+  status: ValidationJobStatus;
+  results: ValidationCommandResult[];
+  error?: string;
+  created_at: string;
+  updated_at: string;
+  completed_at?: string;
+}
+
+// Returned by the native run_validation_job command (Tauri claims + runs it).
+export interface ValidationRunResult {
+  job: ValidationJob;
+}
+
+export type EnvironmentRequestStatus =
+  | "requested"
+  | "approved"
+  | "provisioning"
+  | "ready"
+  | "rejected"
+  | "failed";
+
+export interface EnvironmentRequest {
+  id: string;
+  project_id: string;
+  feature_id: string;
+  run_id: string;
+  session_id: string;
+  attempt_id: string;
+  system_packages: string[];
+  reason: string;
+  status: EnvironmentRequestStatus;
+  resolved_packages: Record<string, string>;
+  error?: string;
+  requested_at: string;
+  updated_at: string;
+  completed_at?: string;
+}
+
+// Returned by the native provision_environment_request command.
+export interface EnvironmentProvisionResult {
+  request: EnvironmentRequest;
+  resolved_packages: Record<string, string>;
+  codex_image: string;
+  claude_image: string;
+}

@@ -11,10 +11,12 @@ import type {
   AgentProviders,
   AutonomyPolicy,
   DialogueLimits,
+  EnvironmentProvisionResult,
   MergePolicy,
   Project,
   ProjectDeletionResult,
   RecoveryPolicy,
+  ValidationRunResult,
 } from "./api/types";
 
 export interface DockerProbe {
@@ -99,6 +101,16 @@ export const importProject = (
 
 export const getProjectSource = (projectId: string): Promise<string | null> =>
   invoke("get_project_source", { projectId });
+
+// Phase 4 native execution: the renderer supplies only the opaque coordinator
+// ID; Tauri does the fixed Docker work (claim/build/run) itself.
+export const runValidationJob = (jobId: string): Promise<ValidationRunResult> =>
+  invoke("run_validation_job", { jobId });
+
+export const provisionEnvironmentRequest = (
+  requestId: string,
+): Promise<EnvironmentProvisionResult> =>
+  invoke("provision_environment_request", { requestId });
 
 /** Delete coordinator-owned project state and its trusted local source mapping
  * as one resumable native operation. Reuse idempotencyKey on retry. */
