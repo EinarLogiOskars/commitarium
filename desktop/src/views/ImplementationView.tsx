@@ -20,6 +20,7 @@ export function ImplementationView({
   live = true,
   intervals = [],
   scoped = false,
+  suppressRecover = false,
   onChanged,
 }: {
   projectId: string;
@@ -29,6 +30,7 @@ export function ImplementationView({
   live?: boolean;
   intervals?: Interval[];
   scoped?: boolean;
+  suppressRecover?: boolean;
   onChanged: () => void;
 }) {
   const feedRef = useRef<HTMLDivElement | null>(null);
@@ -82,7 +84,9 @@ export function ImplementationView({
             <Transcript entries={shown} empty="Waiting for the lead to start…" />
           </div>
 
-          {live && run && <InterveneBar run={run} onChanged={onChanged} />}
+          {live && run && (
+            <InterveneBar run={run} onChanged={onChanged} suppressRecover={suppressRecover} />
+          )}
         </div>
       </div>
     </section>

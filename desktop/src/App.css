@@ -2158,3 +2158,22 @@ button.danger:not(.ghost) {
   overflow: auto;
   white-space: pre-wrap;
 }
+
+/* Environment (system-package) approval panel. */
+.env-approval {
+  border-color: color-mix(in srgb, var(--warn) 45%, var(--border));
+}
+.env-approval__reason {
+  font-size: 13px;
+  margin: 4px 0 10px;
+}
+.env-approval__pkgs {
+  margin-bottom: 12px;
+}
+.env-approval__reason-input {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+  margin-bottom: 10px;
+}

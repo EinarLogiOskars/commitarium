@@ -7,6 +7,7 @@ import { PlanningView } from "./PlanningView";
 import { ImplementationView } from "./ImplementationView";
 import { ReviewView } from "./ReviewView";
 import { MergeView } from "./MergeView";
+import { EnvironmentApproval } from "./EnvironmentApproval";
 import { PhaseStepper, currentPhaseIndex } from "./PhaseStepper";
 import { phaseIntervals, type Interval } from "./phaseWindows";
 import { WORK } from "../vocab";
@@ -40,6 +41,7 @@ export function FeatureView({
   const [pinnedIndex, setPinnedIndex] = useState<number | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [envActive, setEnvActive] = useState(false);
   const lastState = useRef<string | null>(null);
 
   const load = useCallback(async () => {
@@ -177,7 +179,16 @@ export function FeatureView({
         {error && <div className="banner banner--error">{error}</div>}
       </section>
 
-      {body(viewed, feature, projectId, hasRepo, run, live, intervals, scoped, load)}
+      {run && (
+        <EnvironmentApproval
+          projectId={projectId}
+          runId={run.id}
+          onResolved={load}
+          onActiveChange={setEnvActive}
+        />
+      )}
+
+      {body(viewed, feature, projectId, hasRepo, run, live, intervals, scoped, load, envActive)}
     </div>
   );
 }
@@ -229,6 +240,7 @@ function body(
   intervals: Interval[],
   scoped: boolean,
   reload: () => void,
+  envActive: boolean,
 ) {
   if (feature.state === "cancelled") {
     return (
@@ -285,6 +297,7 @@ function body(
         live={live}
         intervals={intervals}
         scoped={scoped}
+        suppressRecover={envActive}
         onChanged={reload}
       />
     );

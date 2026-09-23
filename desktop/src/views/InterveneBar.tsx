@@ -25,10 +25,14 @@ export function InterveneBar({
   run,
   onChanged,
   action,
+  suppressRecover = false,
 }: {
   run: Run;
   onChanged: () => void;
   action?: AdvanceAction;
+  // Hide the generic blocker "Re-check" action — used when the blocker is
+  // actually an environment/package request handled by its own panel.
+  suppressRecover?: boolean;
 }) {
   const [agent, setAgent] = useState<InterventionTargetRole>("lead");
   const [text, setText] = useState("");
@@ -41,7 +45,8 @@ export function InterveneBar({
   const running = !paused && run.status === "running";
   // A recovery blocker: the coordinator couldn't confirm the last agent turn's
   // state. Re-check reconciles the durable attempt without a new agent.
-  const blocked = !paused && run.status === "waiting_for_user" && run.wait_kind === "blocker";
+  const blocked =
+    !suppressRecover && !paused && run.status === "waiting_for_user" && run.wait_kind === "blocker";
 
   // Prefer the backend's authoritative target list; fall back to the sessions.
   const targets = run.intervention_targets;

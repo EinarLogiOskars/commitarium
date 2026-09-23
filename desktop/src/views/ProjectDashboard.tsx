@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { listFeatures, listFeatureRuns } from "../api/features";
 import { getRun, recoverRun } from "../api/runs";
+import { ENV_ACTIVE, listEnvironmentRequests } from "../api/environments";
 import { currentPhaseIndex, PHASE_LABELS, PHASES } from "./PhaseStepper";
 import { ProjectSyncCard } from "./ProjectSyncCard";
 import { WORK } from "../vocab";
@@ -32,11 +33,19 @@ export function ProjectDashboard({
   const [error, setError] = useState<string | null>(null);
   const [recoveryNotice, setRecoveryNotice] = useState<string | null>(null);
   const [recovering, setRecovering] = useState<string | null>(null);
+  // run_ids with a nonterminal environment (package) request — one project-wide
+  // fetch, indexed by run so the attention list can distinguish these blockers.
+  const [envRunIds, setEnvRunIds] = useState<Set<string>>(new Set());
 
   const poll = useCallback(async () => {
     try {
       const fs = await listFeatures(project.id);
       setFeatures(fs);
+      listEnvironmentRequests(project.id)
+        .then(({ requests }) =>
+          setEnvRunIds(new Set(requests.filter((r) => ENV_ACTIVE.has(r.status)).map((r) => r.run_id))),
+        )
+        .catch(() => {});
       // Fetch the live run only for orders that are mid-flight — that's where
       // attention (waiting/paused/blocked) and "who's working" come from.
       const active = fs.filter((f) => IN_FLIGHT.has(f.state));
@@ -159,17 +168,23 @@ export function ProjectDashboard({
           <div className="dash__list">
             {attention.map((i) => {
               const r = runs[i.feature.id];
+              // A package request presents as a blocker; distinguish it and
+              // suppress the generic Re-check (its approval lives in the order).
+              const envRequest = r != null && envRunIds.has(r.id);
               const blocked =
-                !r?.paused && r?.status === "waiting_for_user" && r?.wait_kind === "blocker";
+                !envRequest &&
+                !r?.paused &&
+                r?.status === "waiting_for_user" &&
+                r?.wait_kind === "blocker";
               return (
                 <div key={i.feature.id} className="dash__attn-item">
                   <button
                     className="dash__row dash__row--attn"
                     onClick={() => onOpenOrder(i.feature.id)}
                   >
-                    <span className={`state state--${i.attention!.tone}`}>
-                      <span className={`dot dot--${i.attention!.tone}`} />
-                      {i.attention!.label}
+                    <span className={`state state--${envRequest ? "warn" : i.attention!.tone}`}>
+                      <span className={`dot dot--${envRequest ? "warn" : i.attention!.tone}`} />
+                      {envRequest ? "Needs package approval" : i.attention!.label}
                     </span>
                     <span className="dash__row-title">{i.feature.title}</span>
                     <span className="dash__row-phase">{i.phase}</span>
