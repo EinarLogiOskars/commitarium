@@ -5,7 +5,9 @@ import type { EnvironmentRequest } from "./types";
 // Debian package raises one; the user approves or rejects the exact list.
 // Provisioning (image rebuild) is a native Tauri command, not a coordinator call.
 
-export const listEnvironmentRequests = (projectId: string): Promise<{ requests: EnvironmentRequest[] }> =>
+export const listEnvironmentRequests = (
+  projectId: string,
+): Promise<{ requests: EnvironmentRequest[] }> =>
   request(`/api/v1/projects/${encodeURIComponent(projectId)}/environment-requests`);
 
 export const getEnvironmentRequest = (id: string): Promise<EnvironmentRequest> =>

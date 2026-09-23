@@ -89,8 +89,8 @@ function Validation({ project }: { project: Project }) {
       <h2>Validation checks</h2>
       {error && <div className="banner banner--error">{error}</div>}
       <p className="muted">
-        Commands run in a disposable, credential-free worker against the exact reviewed commit.
-        All must pass before the merge gate opens.
+        Commands run in a disposable, credential-free worker against the exact reviewed commit. All
+        must pass before the merge gate opens.
       </p>
       {!loaded ? (
         <p className="muted">Loading…</p>
@@ -109,7 +109,12 @@ function Validation({ project }: { project: Project }) {
                     disabled={busy}
                     spellCheck={false}
                   />
-                  <button className="ghost danger" onClick={() => removeAt(i)} disabled={busy} title="Remove">
+                  <button
+                    className="ghost danger"
+                    onClick={() => removeAt(i)}
+                    disabled={busy}
+                    title="Remove"
+                  >
                     Remove
                   </button>
                 </li>

@@ -84,7 +84,10 @@ export const getProjectValidation = async (id: string): Promise<ValidationConfig
 
 // PUT stores the ordered command list. It must be non-empty — there is no
 // disable/delete operation.
-export const updateProjectValidation = (id: string, commands: string[]): Promise<ValidationConfig> =>
+export const updateProjectValidation = (
+  id: string,
+  commands: string[],
+): Promise<ValidationConfig> =>
   request(`${projectPath(id)}/validation`, { method: "PUT", body: { commands } });
 
 export const updateDialogueLimits = (

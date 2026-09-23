@@ -485,12 +485,7 @@ export interface ValidationRunResult {
 }
 
 export type EnvironmentRequestStatus =
-  | "requested"
-  | "approved"
-  | "provisioning"
-  | "ready"
-  | "rejected"
-  | "failed";
+  "requested" | "approved" | "provisioning" | "ready" | "rejected" | "failed";
 
 export interface EnvironmentRequest {
   id: string;

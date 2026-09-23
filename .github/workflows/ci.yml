@@ -30,7 +30,7 @@ jobs:
         run: docker compose -f compose.yml -f compose.release.yml config >/dev/null
 
   go:
-    name: Go tests
+    name: Go checks
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -40,6 +40,19 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+
+      - name: Check formatting
+        shell: bash
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [[ -n "${unformatted}" ]]; then
+            echo "The following Go files need gofmt:"
+            echo "${unformatted}"
+            exit 1
+          fi
+
+      - name: Vet
+        run: go vet ./...
 
       - name: Test
         run: go test ./...
@@ -70,6 +83,8 @@ jobs:
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
 
       - name: Cache Rust build artifacts
         uses: Swatinem/rust-cache@v2
@@ -80,9 +95,25 @@ jobs:
         working-directory: desktop
         run: pnpm install --frozen-lockfile
 
+      - name: Lint frontend
+        working-directory: desktop
+        run: pnpm lint
+
+      - name: Check frontend formatting
+        working-directory: desktop
+        run: pnpm format:check
+
       - name: Build frontend
         working-directory: desktop
         run: pnpm build
+
+      - name: Check Rust formatting
+        working-directory: desktop/src-tauri
+        run: cargo fmt --all -- --check
+
+      - name: Lint native application
+        working-directory: desktop/src-tauri
+        run: cargo clippy --all-targets --locked -- -D warnings
 
       - name: Test native application
         working-directory: desktop/src-tauri

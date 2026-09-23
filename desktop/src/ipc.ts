@@ -109,8 +109,7 @@ export const runValidationJob = (jobId: string): Promise<ValidationRunResult> =>
 
 export const provisionEnvironmentRequest = (
   requestId: string,
-): Promise<EnvironmentProvisionResult> =>
-  invoke("provision_environment_request", { requestId });
+): Promise<EnvironmentProvisionResult> => invoke("provision_environment_request", { requestId });
 
 /** Delete coordinator-owned project state and its trusted local source mapping
  * as one resumable native operation. Reuse idempotencyKey on retry. */

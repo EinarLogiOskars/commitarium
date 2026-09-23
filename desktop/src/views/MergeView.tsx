@@ -235,7 +235,9 @@ function ValidationPanel({
       <div className="validation-panel__head">
         <h3>Validation</h3>
         <span className={`state state--${st.tone}`}>
-          <span className={`dot dot--${st.tone}${job.status === "running" || busy ? " dot--pulse" : ""}`} />
+          <span
+            className={`dot dot--${st.tone}${job.status === "running" || busy ? " dot--pulse" : ""}`}
+          />
           {busy ? "Running…" : st.label}
         </span>
       </div>
@@ -250,8 +252,14 @@ function ValidationPanel({
               <div className="validation-cmd__line">
                 <span className={`dot dot--${tone}`} />
                 <span className="mono validation-cmd__text">{cmd}</span>
-                {r && <span className={`chip chip--${r.exit_code === 0 ? "ok" : "bad"}`}>exit {r.exit_code}</span>}
-                {r && <span className="muted validation-cmd__dur">{Math.round(r.duration_ms)}ms</span>}
+                {r && (
+                  <span className={`chip chip--${r.exit_code === 0 ? "ok" : "bad"}`}>
+                    exit {r.exit_code}
+                  </span>
+                )}
+                {r && (
+                  <span className="muted validation-cmd__dur">{Math.round(r.duration_ms)}ms</span>
+                )}
               </div>
               {r && r.exit_code !== 0 && r.output && (
                 <pre className="validation-cmd__output">{r.output}</pre>

@@ -198,19 +198,24 @@ curl http://127.0.0.1:8080/health
 Run the core checks locally:
 
 ```sh
+test -z "$(gofmt -l .)"
 go test ./...
 go test -race ./...
 go vet ./...
 
 cd desktop
+pnpm lint
+pnpm format:check
 pnpm build
+cargo fmt --all --manifest-path src-tauri/Cargo.toml -- --check
+cargo clippy --all-targets --locked --manifest-path src-tauri/Cargo.toml -- -D warnings
 cargo test --locked --manifest-path src-tauri/Cargo.toml
 ```
 
 Additional container recovery and real-provider smoke tests live in
 [`scripts/`](scripts). GitHub Actions runs version validation, Compose release
-rendering, Go tests, the frontend production build, and native Rust tests for
-every pull request and push to `main`.
+rendering, Go formatting, vet and tests, frontend linting, formatting and build,
+and Rust formatting, Clippy and tests for every pull request and push to `main`.
 
 ## Documentation
 
@@ -242,7 +247,9 @@ together. See [the release guide](docs/releasing.md) before creating a tag.
 Issues and focused pull requests are welcome. For substantial behavioral or
 architectural changes, open an issue first so the proposed direction can be
 discussed. Please include tests for changed behavior and keep privileged host
-operations narrow and explicit.
+operations narrow and explicit. See the [contributor guide](CONTRIBUTING.md) for
+repository conventions, required checks, documentation rules, and security
+boundaries.
 
 ## License
 

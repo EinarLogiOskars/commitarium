@@ -43,7 +43,9 @@ export function ProjectDashboard({
       setFeatures(fs);
       listEnvironmentRequests(project.id)
         .then(({ requests }) =>
-          setEnvRunIds(new Set(requests.filter((r) => ENV_ACTIVE.has(r.status)).map((r) => r.run_id))),
+          setEnvRunIds(
+            new Set(requests.filter((r) => ENV_ACTIVE.has(r.status)).map((r) => r.run_id)),
+          ),
         )
         .catch(() => {});
       // Fetch the live run only for orders that are mid-flight — that's where
