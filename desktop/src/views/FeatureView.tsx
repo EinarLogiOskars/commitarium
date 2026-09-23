@@ -118,7 +118,11 @@ export function FeatureView({
 
   return (
     <div className="order">
-      {onBack && <button className="back" onClick={onBack}>← {WORK.Plural}</button>}
+      {onBack && (
+        <button className="back" onClick={onBack}>
+          ← {WORK.Plural}
+        </button>
+      )}
 
       <section className="panel order-head">
         <div className="panel__head">
@@ -127,7 +131,11 @@ export function FeatureView({
             {feature.description && <p className="muted order-head__desc">{feature.description}</p>}
           </div>
           {onDeleted && !confirmDelete && (
-            <button className="ghost danger" onClick={() => setConfirmDelete(true)} disabled={deleting}>
+            <button
+              className="ghost danger"
+              onClick={() => setConfirmDelete(true)}
+              disabled={deleting}
+            >
               Delete
             </button>
           )}
@@ -151,7 +159,12 @@ export function FeatureView({
           </div>
         )}
 
-        <PhaseStepper feature={feature} viewedIndex={viewed} onSelect={select} paused={run?.paused} />
+        <PhaseStepper
+          feature={feature}
+          viewedIndex={viewed}
+          onSelect={select}
+          paused={run?.paused}
+        />
 
         {/* The top orients: what phase, and why the run is waiting. Actions —
             the message composer and pause/continue — live below the transcript. */}

@@ -3,7 +3,10 @@ import { listFeatures } from "../api/features";
 import type { Feature, FeatureState } from "../api/types";
 
 const GROUPS: { label: string; states: FeatureState[] }[] = [
-  { label: "In progress", states: ["draft", "planning", "implementing", "reviewing", "ready_to_merge"] },
+  {
+    label: "In progress",
+    states: ["draft", "planning", "implementing", "reviewing", "ready_to_merge"],
+  },
   { label: "Completed", states: ["completed"] },
   { label: "Cancelled", states: ["cancelled"] },
 ];
@@ -35,8 +38,7 @@ export function WorkOrderRail({
   }, [load, reloadKey]);
 
   if (features === null) return <p className="muted rail__section">Loading…</p>;
-  if (features.length === 0)
-    return <p className="muted rail__section">No work orders yet</p>;
+  if (features.length === 0) return <p className="muted rail__section">No work orders yet</p>;
 
   return (
     <>

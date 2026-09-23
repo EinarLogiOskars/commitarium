@@ -1,10 +1,5 @@
 import { useState } from "react";
-import {
-  pickFolder,
-  inspectFolder,
-  importProject,
-  type FolderInfo,
-} from "../ipc";
+import { pickFolder, inspectFolder, importProject, type FolderInfo } from "../ipc";
 import { detectProjectToolchain, updateProjectToolchain } from "../api/toolchains";
 import { ApiError } from "../api/client";
 import { SetupAssistant } from "./SetupAssistant";
@@ -59,7 +54,13 @@ export function ImportProject({
     setError(null);
     try {
       const { recovery_policy, ...rest } = projectDefaultsPayload(defaults);
-      const project = await importProject(info.path, name.trim(), branch.trim(), recovery_policy!, rest);
+      const project = await importProject(
+        info.path,
+        name.trim(),
+        branch.trim(),
+        recovery_policy!,
+        rest,
+      );
       setImported(project.id);
       // Shallow, non-mutating scan of the imported repo. Failure isn't fatal —
       // the user can still choose a stack in the workspace.
@@ -76,7 +77,7 @@ export function ImportProject({
   };
 
   // Accept the detected toolchain (source "detected"), then enter the workspace.
-  const useDetected = async () => {
+  const applyDetected = async () => {
     if (!imported || !detection) return;
     setSaving(true);
     setError(null);
@@ -105,9 +106,9 @@ export function ImportProject({
       <div className="modal__card" onClick={(e) => e.stopPropagation()}>
         <h2>Import a project</h2>
         <p className="muted">
-          Commitarium copies your project into its own internal workspace. Your folder on
-          disk is never changed. When work is ready, you'll bring it back to your machine
-          with a handoff step (and choose whether to push it anywhere).
+          Commitarium copies your project into its own internal workspace. Your folder on disk is
+          never changed. When work is ready, you'll bring it back to your machine with a handoff
+          step (and choose whether to push it anywhere).
         </p>
 
         {error && <div className="banner banner--error">{error}</div>}
@@ -124,7 +125,7 @@ export function ImportProject({
             <DetectionReview
               detection={detection}
               saving={saving}
-              onUse={() => void useDetected()}
+              onUse={() => void applyDetected()}
               onVerify={() => setVerifying(true)}
               onManual={() => onImported(imported)}
             />
@@ -150,15 +151,15 @@ export function ImportProject({
             )}
             {info.is_git_repo && info.dirty && (
               <div className="banner banner--error">
-                This repository has uncommitted changes. Commit them first so the import
-                captures your work.
+                This repository has uncommitted changes. Commit them first so the import captures
+                your work.
               </div>
             )}
             {!info.is_git_repo && (
               <p className="muted">
                 Not a Git repository — we'll snapshot the current files (about{" "}
-                {info.estimated_files ?? 0} files, {formatBytes(info.estimated_bytes ?? 0)})
-                into an initial commit inside the internal workspace. Your{" "}
+                {info.estimated_files ?? 0} files, {formatBytes(info.estimated_bytes ?? 0)}) into an
+                initial commit inside the internal workspace. Your{" "}
                 <span className="mono">.gitignore</span> is respected; your folder is left
                 untouched.
               </p>
@@ -184,7 +185,9 @@ export function ImportProject({
                 <span className="activity-group__chevron">{showDefaults ? "▼" : "▶"}</span>
                 Project defaults
                 {!showDefaults && (
-                  <span className="neworder__summary">Agents, models, autonomy, merge, recovery, rounds</span>
+                  <span className="neworder__summary">
+                    Agents, models, autonomy, merge, recovery, rounds
+                  </span>
                 )}
               </button>
               {showDefaults && (

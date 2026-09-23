@@ -49,7 +49,9 @@ export function BootScreen({
             <div className="boot__status">
               <p className="boot__message">{actionMessage}</p>
               {detail && (
-                <p className={`boot__detail${needsAction ? " boot__detail--error" : ""}`}>{detail}</p>
+                <p className={`boot__detail${needsAction ? " boot__detail--error" : ""}`}>
+                  {detail}
+                </p>
               )}
               <div className="boot__actions">
                 {probe?.docker_launchable && !probe.docker_running && (
@@ -58,13 +60,17 @@ export function BootScreen({
                   </button>
                 )}
                 <button
-                  className={probe?.docker_launchable && !probe.docker_running ? undefined : "primary"}
+                  className={
+                    probe?.docker_launchable && !probe.docker_running ? undefined : "primary"
+                  }
                   onClick={onRetry}
                 >
                   Re-check
                 </button>
                 {probe && !probe.docker_installed && (
-                  <button onClick={() => void openExternal(probe.install_url)}>Install Docker</button>
+                  <button onClick={() => void openExternal(probe.install_url)}>
+                    Install Docker
+                  </button>
                 )}
               </div>
             </div>

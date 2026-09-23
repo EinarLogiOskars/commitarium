@@ -213,8 +213,8 @@ export function GoalClarification({
       <section className="panel">
         <h2>Goal clarification</h2>
         <p className="muted">
-          This project has no internal repository yet, so work orders can't start. Import
-          a project or bind a repository first.
+          This project has no internal repository yet, so work orders can't start. Import a project
+          or bind a repository first.
         </p>
       </section>
     );
@@ -230,8 +230,8 @@ export function GoalClarification({
       {!started ? (
         <>
           <p className="muted">
-            Start a conversation with the lead to clarify what this {WORK.short} should do.
-            The lead will ask questions; accept a final goal when you are satisfied.
+            Start a conversation with the lead to clarify what this {WORK.short} should do. The lead
+            will ask questions; accept a final goal when you are satisfied.
           </p>
           <button className="primary" onClick={() => void start()} disabled={busy !== null}>
             {busy === "start" ? "Starting…" : "Start goal clarification"}

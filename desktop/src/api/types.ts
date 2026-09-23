@@ -158,11 +158,7 @@ export interface UpdateToolchainInput {
 // Guided ("help me choose") stack setup: a bounded provider conversation that
 // ends in an exact proposal the user applies. It never touches the repository.
 export type AssistantStatus =
-  | "running"
-  | "waiting_for_user"
-  | "proposal_ready"
-  | "applied"
-  | "failed";
+  "running" | "waiting_for_user" | "proposal_ready" | "applied" | "failed";
 
 export interface AssistantMessage {
   role: string; // "user" | "assistant"
@@ -233,23 +229,12 @@ export interface CreateFeatureInput {
   dialogue_limits?: DialogueLimits;
 }
 
-export type RunStatus =
-  | "running"
-  | "waiting_for_user"
-  | "succeeded"
-  | "stopped"
-  | "failed";
+export type RunStatus = "running" | "waiting_for_user" | "succeeded" | "stopped" | "failed";
 
 // Machine-readable reason a run is waiting or paused. Empty when running.
 // Clients pick controls/labels from this — never from parsing `reason` text.
 export type WaitKind =
-  | ""
-  | "phase_checkpoint"
-  | "round_cap"
-  | "blocker"
-  | "merge_gate"
-  | "clarification"
-  | "paused";
+  "" | "phase_checkpoint" | "round_cap" | "blocker" | "merge_gate" | "clarification" | "paused";
 
 export interface Session {
   id: string;

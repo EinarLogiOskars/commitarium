@@ -53,7 +53,10 @@ export function useFeatureArtifact<T>(
             return;
           }
           if (payload.type !== "feature.artifact_updated" || payload.artifact_kind !== kind) return;
-          if (typeof payload.artifact_revision === "number" && payload.artifact_revision <= revisionRef.current) {
+          if (
+            typeof payload.artifact_revision === "number" &&
+            payload.artifact_revision <= revisionRef.current
+          ) {
             return;
           }
           void load();

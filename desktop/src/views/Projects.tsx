@@ -158,7 +158,9 @@ export function Projects({
             <span className="activity-group__chevron">{showDefaults ? "▼" : "▶"}</span>
             Project defaults
             {!showDefaults && (
-              <span className="neworder__summary">Agents, models, autonomy, merge, recovery, rounds</span>
+              <span className="neworder__summary">
+                Agents, models, autonomy, merge, recovery, rounds
+              </span>
             )}
           </button>
           {showDefaults && (

@@ -43,8 +43,7 @@ export const stackUpdate = (): Promise<void> => invoke("stack_update");
 export const stackStatus = (): Promise<ServiceStatus[]> => invoke("stack_status");
 
 export const loadUiState = <T = unknown>(): Promise<T | null> => invoke("load_ui_state");
-export const saveUiState = (state: unknown): Promise<void> =>
-  invoke("save_ui_state", { state });
+export const saveUiState = (state: unknown): Promise<void> => invoke("save_ui_state", { state });
 
 // Open a URL in the user's default browser (used for the Docker install link).
 export const openExternal = (url: string): Promise<void> => openUrl(url);
@@ -107,8 +106,7 @@ export const deleteProject = (
   projectId: string,
   idempotencyKey: string,
   force = false,
-): Promise<ProjectDeletionResult> =>
-  invoke("delete_project", { projectId, idempotencyKey, force });
+): Promise<ProjectDeletionResult> => invoke("delete_project", { projectId, idempotencyKey, force });
 
 // --- Handoff: completed work → host (see docs/desktop-ipc.md) ---
 // NOTE: SynchronizeResult / FolderSynchronizeResult serialize snake_case
@@ -282,8 +280,7 @@ export const initializeProjectLocalRepository = (
     idempotencyKey,
   });
 
-export const probeGitProviders = (): Promise<GitProviderProbe[]> =>
-  invoke("probe_git_providers");
+export const probeGitProviders = (): Promise<GitProviderProbe[]> => invoke("probe_git_providers");
 
 export const createProjectRemote = (
   request: CreateProjectRemoteRequest,
@@ -332,7 +329,13 @@ export const previewUpstreamBranch = (
   remoteName?: string,
   branchName?: string,
 ): Promise<UpstreamBranchResult> =>
-  invoke("preview_upstream_branch", { projectId, featureId, workOrderName, remoteName, branchName });
+  invoke("preview_upstream_branch", {
+    projectId,
+    featureId,
+    workOrderName,
+    remoteName,
+    branchName,
+  });
 
 /** Push the exact clean local handoff commit to a new remote branch. */
 export const publishUpstreamBranch = (

@@ -21,7 +21,13 @@ const POLL_MS = 5000;
 // default branch (all merged orders), as one clean 3-way commit — not per-order.
 // Shows how far behind the local repo / each remote is, and syncs the whole
 // project state at once.
-export function ProjectSyncCard({ projectId, projectName }: { projectId: string; projectName: string }) {
+export function ProjectSyncCard({
+  projectId,
+  projectName,
+}: {
+  projectId: string;
+  projectName: string;
+}) {
   const [state, setState] = useState<ProjectSyncState | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -60,9 +66,9 @@ export function ProjectSyncCard({ projectId, projectName }: { projectId: string;
   const isGit = state.source?.sourceType === "git";
   const creatingFirstRemote = Boolean(
     isGit &&
-      state.source?.createdByCommitarium &&
-      state.local.watermarkCommitId === state.canonical.headCommitId &&
-      !state.upstreams.some((upstream) => upstream.watermarkCommitId != null),
+    state.source?.createdByCommitarium &&
+    state.local.watermarkCommitId === state.canonical.headCommitId &&
+    !state.upstreams.some((upstream) => upstream.watermarkCommitId != null),
   );
 
   return (
@@ -81,7 +87,9 @@ export function ProjectSyncCard({ projectId, projectName }: { projectId: string;
         <LocalSync state={state} onDone={load} />
       )}
 
-      {isGit && state.upstreams.length > 0 && !creatingFirstRemote && <Push state={state} onDone={load} />}
+      {isGit && state.upstreams.length > 0 && !creatingFirstRemote && (
+        <Push state={state} onDone={load} />
+      )}
       {creatingFirstRemote && (
         <CreateRemote state={state} projectName={projectName} onDone={load} />
       )}
@@ -157,12 +165,18 @@ function WorkspaceSetup({
           Parent folder
           <div className="row">
             <input value={parent} readOnly placeholder="Choose where to create the project" />
-            <button type="button" onClick={() => void choose()} disabled={busy}>Choose…</button>
+            <button type="button" onClick={() => void choose()} disabled={busy}>
+              Choose…
+            </button>
           </div>
         </label>
         <label>
           Folder name
-          <input value={folder} onChange={(event) => setFolder(event.target.value)} disabled={busy} />
+          <input
+            value={folder}
+            onChange={(event) => setFolder(event.target.value)}
+            disabled={busy}
+          />
         </label>
       </div>
       <div className="settings-row">
@@ -178,13 +192,19 @@ function WorkspaceSetup({
       <div className="settings-row">
         <label>
           Initial commit message
-          <input value={message} onChange={(event) => setMessage(event.target.value)} disabled={busy} />
+          <input
+            value={message}
+            onChange={(event) => setMessage(event.target.value)}
+            disabled={busy}
+          />
         </label>
       </div>
       <button
         className="primary"
         onClick={() => void run()}
-        disabled={busy || !parent || !folder.trim() || !name.trim() || !email.trim() || !message.trim()}
+        disabled={
+          busy || !parent || !folder.trim() || !name.trim() || !email.trim() || !message.trim()
+        }
       >
         {busy ? "Creating local repository…" : "Create local repository"}
       </button>
@@ -208,7 +228,10 @@ function LocalSync({ state, onDone }: { state: ProjectSyncState; onDone: () => v
     setError(null);
     setOk(null);
     try {
-      const r = await synchronizeProjectLocally(state.projectId, message.trim() || "Sync from Commitarium");
+      const r = await synchronizeProjectLocally(
+        state.projectId,
+        message.trim() || "Sync from Commitarium",
+      );
       setOk(
         r.created
           ? git
@@ -229,7 +252,9 @@ function LocalSync({ state, onDone }: { state: ProjectSyncState; onDone: () => v
       <h3>{git ? "Local repository" : "Local folder"}</h3>
       {error && <div className="banner banner--error">{error}</div>}
       {inSync ? (
-        <p className="muted note">✓ Your {git ? "repository" : "folder"} is up to date with the project.</p>
+        <p className="muted note">
+          ✓ Your {git ? "repository" : "folder"} is up to date with the project.
+        </p>
       ) : (
         <>
           <p className="muted">
@@ -244,7 +269,11 @@ function LocalSync({ state, onDone }: { state: ProjectSyncState; onDone: () => v
             <div className="settings-row">
               <label>
                 Commit message
-                <input value={message} onChange={(e) => setMessage(e.target.value)} disabled={busy} />
+                <input
+                  value={message}
+                  onChange={(e) => setMessage(e.target.value)}
+                  disabled={busy}
+                />
               </label>
             </div>
           )}
@@ -268,12 +297,14 @@ function CreateRemote({
   onDone: () => void;
 }) {
   const draftKey = `commitarium.remoteSetup.${state.projectId}`;
-  const saved = loadRemoteDraft(draftKey);
+  const [saved] = useState(() => loadRemoteDraft(draftKey));
   const [providers, setProviders] = useState<GitProviderProbe[] | null>(null);
   const [providerId, setProviderId] = useState(saved?.provider ?? "");
   const [namespace, setNamespace] = useState(saved?.namespace ?? "");
   const [repo, setRepo] = useState(saved?.repositoryName ?? slug(projectName));
-  const [visibility, setVisibility] = useState<"private" | "public" | "internal">(saved?.visibility ?? "private");
+  const [visibility, setVisibility] = useState<"private" | "public" | "internal">(
+    saved?.visibility ?? "private",
+  );
   const [azureProject, setAzureProject] = useState(saved?.azureProject ?? "");
   const [key] = useState(saved?.idempotencyKey ?? newIdempotencyKey);
   const [busy, setBusy] = useState(false);
@@ -289,24 +320,25 @@ function CreateRemote({
         const ready = result.filter((item) => item.canCreate);
         const selected = saved
           ? ready.find((item) => item.provider === saved.provider)
-          : ready.find((item) => item.provider === remembered) ??
+          : (ready.find((item) => item.provider === remembered) ??
             ready.find((item) => item.provider === "github") ??
-            ready[0];
+            ready[0]);
         if (selected) {
           setProviderId(selected.provider);
-          setNamespace((current) =>
-            current || (selected.provider === "azure_devops" ? "" : selected.account || ""),
+          setNamespace(
+            (current) =>
+              current || (selected.provider === "azure_devops" ? "" : selected.account || ""),
           );
         }
       })
       .catch((reason) => setError(String(reason)));
-  }, []);
+  }, [saved]);
 
   const provider = providers?.find((item) => item.provider === providerId);
   const chooseProvider = (value: string) => {
     setProviderId(value);
     const selected = providers?.find((item) => item.provider === value);
-    setNamespace(selected?.provider === "azure_devops" ? "" : selected?.account ?? "");
+    setNamespace(selected?.provider === "azure_devops" ? "" : (selected?.account ?? ""));
     setVisibility("private");
     setConfirming(false);
   };
@@ -361,7 +393,9 @@ function CreateRemote({
   const installed = providers.filter((item) => item.installed);
   return (
     <div className="handoff__section">
-      <h3>Connect a remote repository <span className="muted">— optional</span></h3>
+      <h3>
+        Connect a remote repository <span className="muted">— optional</span>
+      </h3>
       <p className="muted">
         Your local repository is ready. You can keep it local, or create an empty repository with
         one of your installed provider CLIs and push the current default branch.
@@ -370,10 +404,16 @@ function CreateRemote({
       {ok && <p className="muted note">{ok}</p>}
       {installed.length === 0 ? (
         <>
-          <p className="muted note">No supported provider CLI was found. The project will remain local.</p>
+          <p className="muted note">
+            No supported provider CLI was found. The project will remain local.
+          </p>
           <div className="row">
             {providers.map((item) => (
-              <button key={item.provider} type="button" onClick={() => void openExternal(item.installUrl)}>
+              <button
+                key={item.provider}
+                type="button"
+                onClick={() => void openExternal(item.installUrl)}
+              >
                 Install {item.displayName} CLI
               </button>
             ))}
@@ -384,11 +424,20 @@ function CreateRemote({
           <div className="settings-row">
             <label>
               Provider
-              <select value={providerId} onChange={(event) => chooseProvider(event.target.value)} disabled={busy}>
+              <select
+                value={providerId}
+                onChange={(event) => chooseProvider(event.target.value)}
+                disabled={busy}
+              >
                 <option value="">Local repository only</option>
                 {installed.map((item) => (
                   <option key={item.provider} value={item.provider} disabled={!item.canCreate}>
-                    {item.displayName}{item.canCreate ? item.account ? ` — ${item.account}` : " — ready" : " — sign in required"}
+                    {item.displayName}
+                    {item.canCreate
+                      ? item.account
+                        ? ` — ${item.account}`
+                        : " — ready"
+                      : " — sign in required"}
                   </option>
                 ))}
               </select>
@@ -396,7 +445,11 @@ function CreateRemote({
             {provider && (
               <label>
                 {provider.provider === "azure_devops" ? "Organization URL" : "Owner / namespace"}
-                <input value={namespace} onChange={(event) => setNamespace(event.target.value)} disabled={busy} />
+                <input
+                  value={namespace}
+                  onChange={(event) => setNamespace(event.target.value)}
+                  disabled={busy}
+                />
               </label>
             )}
           </div>
@@ -405,17 +458,29 @@ function CreateRemote({
               <div className="settings-row">
                 <label>
                   Remote repository name
-                  <input value={repo} onChange={(event) => setRepo(event.target.value)} disabled={busy} />
+                  <input
+                    value={repo}
+                    onChange={(event) => setRepo(event.target.value)}
+                    disabled={busy}
+                  />
                 </label>
                 {provider.provider === "azure_devops" ? (
                   <label>
                     Azure DevOps project
-                    <input value={azureProject} onChange={(event) => setAzureProject(event.target.value)} disabled={busy} />
+                    <input
+                      value={azureProject}
+                      onChange={(event) => setAzureProject(event.target.value)}
+                      disabled={busy}
+                    />
                   </label>
                 ) : (
                   <label>
                     Visibility
-                    <select value={visibility} onChange={(event) => setVisibility(event.target.value as typeof visibility)} disabled={busy}>
+                    <select
+                      value={visibility}
+                      onChange={(event) => setVisibility(event.target.value as typeof visibility)}
+                      disabled={busy}
+                    >
                       <option value="private">Private</option>
                       <option value="public">Public</option>
                       {provider.provider === "gitlab" && <option value="internal">Internal</option>}
@@ -427,31 +492,45 @@ function CreateRemote({
                 <button
                   className="primary"
                   onClick={() => setConfirming(true)}
-                  disabled={!provider.canCreate || !namespace.trim() || !repo.trim() || (provider.provider === "azure_devops" && !azureProject.trim())}
+                  disabled={
+                    !provider.canCreate ||
+                    !namespace.trim() ||
+                    !repo.trim() ||
+                    (provider.provider === "azure_devops" && !azureProject.trim())
+                  }
                 >
                   Review remote creation
                 </button>
               ) : (
                 <div className="banner banner--warn">
                   <p>
-                    Create <strong>{namespace}/{repo}</strong> on {provider.displayName} and push
-                    the local <strong>{state.canonical.defaultBranch}</strong> branch? This creates an external repository.
+                    Create{" "}
+                    <strong>
+                      {namespace}/{repo}
+                    </strong>{" "}
+                    on {provider.displayName} and push the local{" "}
+                    <strong>{state.canonical.defaultBranch}</strong> branch? This creates an
+                    external repository.
                   </p>
                   <div className="row">
                     <button className="primary" onClick={() => void create()} disabled={busy}>
                       {busy ? "Creating and pushing…" : "Confirm create and push"}
                     </button>
-                    <button type="button" onClick={() => setConfirming(false)} disabled={busy}>Cancel</button>
+                    <button type="button" onClick={() => setConfirming(false)} disabled={busy}>
+                      Cancel
+                    </button>
                   </div>
                 </div>
               )}
             </>
           )}
-          {installed.filter((item) => !item.canCreate).map((item) => (
-            <p className="muted note" key={item.provider}>
-              {item.displayName}: {item.detail} Sign in from a terminal, then reopen this panel.
-            </p>
-          ))}
+          {installed
+            .filter((item) => !item.canCreate)
+            .map((item) => (
+              <p className="muted note" key={item.provider}>
+                {item.displayName}: {item.detail} Sign in from a terminal, then reopen this panel.
+              </p>
+            ))}
         </>
       )}
     </div>
@@ -526,7 +605,11 @@ function Push({ state, onDone }: { state: ProjectSyncState; onDone: () => void }
           <div className="settings-row">
             <label>
               Remote
-              <select value={remote} onChange={(e) => setRemote(e.target.value)} disabled={busy != null}>
+              <select
+                value={remote}
+                onChange={(e) => setRemote(e.target.value)}
+                disabled={busy != null}
+              >
                 {preview.remotes.map((r) => (
                   <option key={r.name} value={r.name}>
                     {r.name} — {r.displayLocation}
@@ -536,7 +619,11 @@ function Push({ state, onDone }: { state: ProjectSyncState; onDone: () => void }
             </label>
             <label>
               Branch
-              <input value={branch} onChange={(e) => setBranch(e.target.value)} disabled={busy != null} />
+              <input
+                value={branch}
+                onChange={(e) => setBranch(e.target.value)}
+                disabled={busy != null}
+              />
             </label>
           </div>
           <button
@@ -553,15 +640,20 @@ function Push({ state, onDone }: { state: ProjectSyncState; onDone: () => void }
 }
 
 function slug(value: string): string {
-  return value
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9._-]+/g, "-")
-    .replace(/^-+|-+$/g, "") || "project";
+  return (
+    value
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9._-]+/g, "-")
+      .replace(/^-+|-+$/g, "") || "project"
+  );
 }
 
 function newIdempotencyKey(): string {
-  return globalThis.crypto?.randomUUID?.() ?? `commitarium-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  return (
+    globalThis.crypto?.randomUUID?.() ??
+    `commitarium-${Date.now()}-${Math.random().toString(16).slice(2)}`
+  );
 }
 
 interface RemoteSetupDraft {
@@ -582,7 +674,10 @@ function loadRemoteDraft(key: string): RemoteSetupDraft | null {
   }
 }
 
-function upstreamHint(status: ProjectUpstreamResult["status"], detail: string | null): string | null {
+function upstreamHint(
+  status: ProjectUpstreamResult["status"],
+  detail: string | null,
+): string | null {
   switch (status) {
     case "selection_required":
       return "Choose which remote to push to.";

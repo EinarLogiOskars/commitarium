@@ -120,7 +120,12 @@ export function SetupAssistant({
     setBusy(true);
     setError(null);
     try {
-      const next = await sendAssistantMessage(projectId, session.id, reply.trim(), crypto.randomUUID());
+      const next = await sendAssistantMessage(
+        projectId,
+        session.id,
+        reply.trim(),
+        crypto.randomUUID(),
+      );
       setReply("");
       setSession(next);
     } catch (e) {
@@ -174,8 +179,9 @@ export function SetupAssistant({
       <div className="assistant">
         {error && <div className="banner banner--error">{error}</div>}
         <p>
-          No agent provider is connected, so an agent can't {verify ? "verify this repository" : "help choose a stack"} yet.
-          Connect Codex or Claude under Providers, or choose a stack manually.
+          No agent provider is connected, so an agent can't{" "}
+          {verify ? "verify this repository" : "help choose a stack"} yet. Connect Codex or Claude
+          under Providers, or choose a stack manually.
         </p>
         <div className="assistant__actions">
           <button className="primary" onClick={onCancel} disabled={busy}>
@@ -215,7 +221,11 @@ export function SetupAssistant({
           </label>
           <label>
             Model
-            <select value={model} onChange={(e) => setModel(e.target.value)} disabled={busy || leadModels.length === 0}>
+            <select
+              value={model}
+              onChange={(e) => setModel(e.target.value)}
+              disabled={busy || leadModels.length === 0}
+            >
               {leadModels.length === 0 ? (
                 <option value="">No models available</option>
               ) : (

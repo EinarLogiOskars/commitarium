@@ -4,7 +4,13 @@ import { ApiError } from "../api/client";
 import { AgentModelFields } from "./AgentModelFields";
 import { useModels, pickModel } from "./useModels";
 import { WORK } from "../vocab";
-import type { AgentModels, AgentProviders, AutonomyPolicy, MergePolicy, Project } from "../api/types";
+import type {
+  AgentModels,
+  AgentProviders,
+  AutonomyPolicy,
+  MergePolicy,
+  Project,
+} from "../api/types";
 
 /** Create-a-work-order form. Settings default to the project's, and can be
  * changed for this one order (backend applies the effective values). */
@@ -31,7 +37,9 @@ export function NewWorkOrder({
     lead: project.agent_models?.lead ?? "",
     reviewer: project.agent_models?.reviewer ?? "",
   });
-  const [autonomy, setAutonomy] = useState<AutonomyPolicy>(project.autonomy_policy ?? "review_each_phase");
+  const [autonomy, setAutonomy] = useState<AutonomyPolicy>(
+    project.autonomy_policy ?? "review_each_phase",
+  );
   const [merge, setMerge] = useState<MergePolicy>(project.merge_policy ?? "require_user_approval");
   const [planning, setPlanning] = useState(project.dialogue_limits?.planning_rounds ?? 6);
   const [review, setReview] = useState(project.dialogue_limits?.implementation_review_rounds ?? 6);
@@ -64,7 +72,9 @@ export function NewWorkOrder({
       onCreated(created.id);
     } catch (e) {
       if (e instanceof ApiError && e.code === "project_toolchain_required") {
-        setError("This project needs a stack before you can create work orders. Open Stack to choose one.");
+        setError(
+          "This project needs a stack before you can create work orders. Open Stack to choose one.",
+        );
       } else {
         setError(e instanceof ApiError ? `${e.message} (${e.code})` : String(e));
       }
@@ -126,14 +136,22 @@ export function NewWorkOrder({
               />
               <label>
                 Autonomy
-                <select value={autonomy} onChange={(e) => setAutonomy(e.target.value as AutonomyPolicy)} disabled={busy}>
+                <select
+                  value={autonomy}
+                  onChange={(e) => setAutonomy(e.target.value as AutonomyPolicy)}
+                  disabled={busy}
+                >
                   <option value="review_each_phase">Stop at each phase</option>
                   <option value="run_to_completion">Run to the merge gate</option>
                 </select>
               </label>
               <label>
                 Merge
-                <select value={merge} onChange={(e) => setMerge(e.target.value as MergePolicy)} disabled={busy}>
+                <select
+                  value={merge}
+                  onChange={(e) => setMerge(e.target.value as MergePolicy)}
+                  disabled={busy}
+                >
                   <option value="require_user_approval">Require my approval</option>
                   <option value="auto_after_gates">Auto after gates</option>
                 </select>

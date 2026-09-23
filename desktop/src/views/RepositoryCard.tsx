@@ -43,7 +43,9 @@ export function RepositoryCard({ projectId }: { projectId: string }) {
       .then((o) => active && setOverview(o))
       .catch((e) => {
         if (!active) return;
-        setError(e instanceof ApiError ? { code: e.code, message: e.message } : { message: String(e) });
+        setError(
+          e instanceof ApiError ? { code: e.code, message: e.message } : { message: String(e) },
+        );
       });
     return () => {
       active = false;
@@ -102,7 +104,10 @@ export function RepositoryCard({ projectId }: { projectId: string }) {
                 <Markdown text={overview.readme_markdown} />
               </div>
               {(overflowing || expanded) && (
-                <button className="linkish repo__readme-toggle" onClick={() => setExpanded((v) => !v)}>
+                <button
+                  className="linkish repo__readme-toggle"
+                  onClick={() => setExpanded((v) => !v)}
+                >
                   {expanded ? "Show less" : "Show full README"}
                 </button>
               )}

@@ -43,7 +43,9 @@ export function StackPicker({
   const [services, setServices] = useState<string[]>([]);
   const [source, setSource] = useState<ToolchainSource>("picker");
   const [serviceDraft, setServiceDraft] = useState("");
-  const [detection, setDetection] = useState<{ evidence: string[]; confidence: string } | null>(null);
+  const [detection, setDetection] = useState<{ evidence: string[]; confidence: string } | null>(
+    null,
+  );
   const [busy, setBusy] = useState(false);
   const [detecting, setDetecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -203,7 +205,9 @@ export function StackPicker({
       </div>
 
       <div className="stack__tools">
-        {rows.length === 0 && <p className="muted">No tools yet — pick a preset above or add one.</p>}
+        {rows.length === 0 && (
+          <p className="muted">No tools yet — pick a preset above or add one.</p>
+        )}
         {rows.map((r, i) => (
           <div className="stack__row" key={i}>
             <select
@@ -234,15 +238,20 @@ export function StackPicker({
           <button type="button" className="ghost" onClick={addRow} disabled={busy}>
             + Add tool
           </button>
-          <button type="button" className="ghost" onClick={() => void detect()} disabled={busy || detecting}>
+          <button
+            type="button"
+            className="ghost"
+            onClick={() => void detect()}
+            disabled={busy || detecting}
+          >
             {detecting ? "Detecting…" : "Detect from repository"}
           </button>
         </div>
         {detection && (
           <p className="muted note">
             Detected ({detection.confidence} confidence)
-            {detection.evidence.length > 0 && <> from {detection.evidence.join(", ")}</>}. Review, then
-            save.
+            {detection.evidence.length > 0 && <> from {detection.evidence.join(", ")}</>}. Review,
+            then save.
           </p>
         )}
       </div>
@@ -257,7 +266,12 @@ export function StackPicker({
           {services.map((s) => (
             <span key={s} className="pill">
               {s}
-              <button type="button" className="pill__x" onClick={() => removeService(s)} disabled={busy}>
+              <button
+                type="button"
+                className="pill__x"
+                onClick={() => removeService(s)}
+                disabled={busy}
+              >
                 ×
               </button>
             </span>
@@ -277,7 +291,12 @@ export function StackPicker({
             }}
             disabled={busy}
           />
-          <button type="button" className="ghost" onClick={addService} disabled={busy || !serviceDraft.trim()}>
+          <button
+            type="button"
+            className="ghost"
+            onClick={addService}
+            disabled={busy || !serviceDraft.trim()}
+          >
             Add
           </button>
         </div>
@@ -290,13 +309,7 @@ export function StackPicker({
   );
 }
 
-function ProvisioningBanner({
-  status,
-  message,
-}: {
-  status: ProvisioningStatus;
-  message?: string;
-}) {
+function ProvisioningBanner({ status, message }: { status: ProvisioningStatus; message?: string }) {
   const cls =
     status === "ready" ? "banner--ok" : status === "failed" ? "banner--error" : "banner--info";
   const label: Record<ProvisioningStatus, string> = {

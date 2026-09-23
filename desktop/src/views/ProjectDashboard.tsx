@@ -73,7 +73,9 @@ export function ProjectDashboard({
     try {
       const recovered = await recoverRun(runId, crypto.randomUUID());
       if (recovered.wait_kind === "blocker") {
-        setRecoveryNotice(`Re-check completed, but the run is still blocked. ${recovered.reason ?? "The durable state is still inconsistent."}`);
+        setRecoveryNotice(
+          `Re-check completed, but the run is still blocked. ${recovered.reason ?? "The durable state is still inconsistent."}`,
+        );
       }
       await poll();
     } catch (e) {
@@ -102,14 +104,33 @@ export function ProjectDashboard({
             </p>
           </div>
           <div className="row">
-            <button className="primary" onClick={onNewOrder}>+ {WORK.newAction}</button>
-            <button className="ghost" onClick={onSettings}>Settings</button>
+            <button className="primary" onClick={onNewOrder}>
+              + {WORK.newAction}
+            </button>
+            <button className="ghost" onClick={onSettings}>
+              Settings
+            </button>
           </div>
         </div>
         <div className="dash__facts">
-          <Fact label="Agents" value={`${cap(project.agent_providers?.lead ?? "codex")} lead · ${cap(project.agent_providers?.reviewer ?? "codex")} reviewer`} />
-          <Fact label="Autonomy" value={project.autonomy_policy === "run_to_completion" ? "Runs to merge gate" : "Stops each phase"} />
-          <Fact label="Merge" value={project.merge_policy === "auto_after_gates" ? "Auto after gates" : "Requires approval"} />
+          <Fact
+            label="Agents"
+            value={`${cap(project.agent_providers?.lead ?? "codex")} lead · ${cap(project.agent_providers?.reviewer ?? "codex")} reviewer`}
+          />
+          <Fact
+            label="Autonomy"
+            value={
+              project.autonomy_policy === "run_to_completion"
+                ? "Runs to merge gate"
+                : "Stops each phase"
+            }
+          />
+          <Fact
+            label="Merge"
+            value={
+              project.merge_policy === "auto_after_gates" ? "Auto after gates" : "Requires approval"
+            }
+          />
           <Fact label="Created" value={new Date(project.created_at).toLocaleDateString()} />
         </div>
       </section>
@@ -123,7 +144,9 @@ export function ProjectDashboard({
               an agent propose one. Required before you can create work orders.
             </p>
           </div>
-          <button className="primary" onClick={onOpenStack}>Set up stack</button>
+          <button className="primary" onClick={onOpenStack}>
+            Set up stack
+          </button>
         </section>
       )}
 
@@ -136,10 +159,14 @@ export function ProjectDashboard({
           <div className="dash__list">
             {attention.map((i) => {
               const r = runs[i.feature.id];
-              const blocked = !r?.paused && r?.status === "waiting_for_user" && r?.wait_kind === "blocker";
+              const blocked =
+                !r?.paused && r?.status === "waiting_for_user" && r?.wait_kind === "blocker";
               return (
                 <div key={i.feature.id} className="dash__attn-item">
-                  <button className="dash__row dash__row--attn" onClick={() => onOpenOrder(i.feature.id)}>
+                  <button
+                    className="dash__row dash__row--attn"
+                    onClick={() => onOpenOrder(i.feature.id)}
+                  >
                     <span className={`state state--${i.attention!.tone}`}>
                       <span className={`dot dot--${i.attention!.tone}`} />
                       {i.attention!.label}
@@ -168,7 +195,11 @@ export function ProjectDashboard({
           <h2>In progress</h2>
           <div className="dash__list">
             {working.map((i) => (
-              <button key={i.feature.id} className="dash__row" onClick={() => onOpenOrder(i.feature.id)}>
+              <button
+                key={i.feature.id}
+                className="dash__row"
+                onClick={() => onOpenOrder(i.feature.id)}
+              >
                 <span className="state state--warn">
                   <span className="spinner" aria-hidden />
                   {i.actor ? `${cap(i.actor)} working` : "Working"}
@@ -184,7 +215,10 @@ export function ProjectDashboard({
       {features && attention.length === 0 && working.length === 0 && (
         <section className="panel">
           <p className="muted">
-            Nothing needs you right now. {completed.length > 0 ? "Recent work is below." : `Create a ${WORK.short} to get started.`}
+            Nothing needs you right now.{" "}
+            {completed.length > 0
+              ? "Recent work is below."
+              : `Create a ${WORK.short} to get started.`}
           </p>
         </section>
       )}
@@ -244,13 +278,23 @@ function describe(feature: Feature, run?: Run): Item {
   const phase = PHASE_LABELS[PHASES[currentPhaseIndex(feature)]];
 
   if (feature.state === "draft" && !feature.accepted_goal) {
-    return { feature, phase, activity: "waiting", attention: { label: "Clarifying the goal", tone: "warn" } };
+    return {
+      feature,
+      phase,
+      activity: "waiting",
+      attention: { label: "Clarifying the goal", tone: "warn" },
+    };
   }
   if (feature.state === "completed" || feature.state === "cancelled") {
     return { feature, phase, activity: "idle" };
   }
   if (feature.state === "ready_to_merge") {
-    return { feature, phase, activity: "waiting", attention: { label: "Ready to merge", tone: "ok" } };
+    return {
+      feature,
+      phase,
+      activity: "waiting",
+      attention: { label: "Ready to merge", tone: "ok" },
+    };
   }
   if (!run) return { feature, phase, activity: "waiting" };
 
@@ -258,7 +302,10 @@ function describe(feature: Feature, run?: Run): Item {
     return { feature, phase, activity: "waiting", attention: WAIT_ATTENTION.paused };
   }
   if (run.status === "waiting_for_user") {
-    const a = WAIT_ATTENTION[run.wait_kind ?? ""] ?? { label: "Waiting for you", tone: "warn" as const };
+    const a = WAIT_ATTENTION[run.wait_kind ?? ""] ?? {
+      label: "Waiting for you",
+      tone: "warn" as const,
+    };
     return { feature, phase, activity: "waiting", attention: a };
   }
   if (run.status === "running") {

@@ -68,8 +68,8 @@ export function Providers({ onClose }: { onClose: () => void }) {
       <div className="modal__card" onClick={(e) => e.stopPropagation()}>
         <h2>Providers</h2>
         <p className="muted">
-          Connect the agents to your Codex and Claude accounts. Each role signs in on its
-          own; secrets go straight to a private volume and never touch the coordinator.
+          Connect the agents to your Codex and Claude accounts. Each role signs in on its own;
+          secrets go straight to a private volume and never touch the coordinator.
         </p>
         {error && <div className="banner banner--error">{error}</div>}
 
@@ -82,7 +82,9 @@ export function Providers({ onClose }: { onClose: () => void }) {
         </div>
 
         <div className="modal__footer">
-          <button className="ghost" onClick={onClose}>Close</button>
+          <button className="ghost" onClick={onClose}>
+            Close
+          </button>
         </div>
       </div>
     </div>
@@ -99,7 +101,13 @@ function ProfileRow({ profile, onChanged }: { profile: Profile; onChanged: () =>
   const openedUrl = useRef<string | null>(null);
 
   const s = profile.status;
-  const active = ["starting", "waiting_for_browser", "waiting_for_code", "waiting_for_api_key", "verifying"].includes(s);
+  const active = [
+    "starting",
+    "waiting_for_browser",
+    "waiting_for_code",
+    "waiting_for_api_key",
+    "verifying",
+  ].includes(s);
 
   // Auto-open the provider login page once when it appears.
   useEffect(() => {
@@ -133,7 +141,9 @@ function ProfileRow({ profile, onChanged }: { profile: Profile; onChanged: () =>
         </span>
       </div>
 
-      {profile.detail?.message && <p className="muted profile-row__msg">{profile.detail.message}</p>}
+      {profile.detail?.message && (
+        <p className="muted profile-row__msg">{profile.detail.message}</p>
+      )}
       {error && <div className="banner banner--error">{error}</div>}
 
       {/* Idle: connect / disconnect */}
@@ -155,18 +165,24 @@ function ProfileRow({ profile, onChanged }: { profile: Profile; onChanged: () =>
         <div className="row">
           <button
             className="primary"
-            onClick={() => run(() => beginLogin(profile.id, "subscription")).then(() => setPicking(false))}
+            onClick={() =>
+              run(() => beginLogin(profile.id, "subscription")).then(() => setPicking(false))
+            }
             disabled={busy}
           >
             Subscription
           </button>
           <button
-            onClick={() => run(() => beginLogin(profile.id, "api_key")).then(() => setPicking(false))}
+            onClick={() =>
+              run(() => beginLogin(profile.id, "api_key")).then(() => setPicking(false))
+            }
             disabled={busy}
           >
             API key
           </button>
-          <button className="ghost" onClick={() => setPicking(false)} disabled={busy}>Cancel</button>
+          <button className="ghost" onClick={() => setPicking(false)} disabled={busy}>
+            Cancel
+          </button>
         </div>
       )}
 
@@ -178,7 +194,9 @@ function ProfileRow({ profile, onChanged }: { profile: Profile; onChanged: () =>
       )}
       {profile.detail?.browserUrl && (
         <div className="row">
-          <button onClick={() => void openExternal(profile.detail!.browserUrl!)}>Open login page</button>
+          <button onClick={() => void openExternal(profile.detail!.browserUrl!)}>
+            Open login page
+          </button>
         </div>
       )}
 
@@ -194,7 +212,9 @@ function ProfileRow({ profile, onChanged }: { profile: Profile; onChanged: () =>
             />
             <button
               className="primary"
-              onClick={() => run(() => submitLoginCode(profile.id, code.trim())).then(() => setCode(""))}
+              onClick={() =>
+                run(() => submitLoginCode(profile.id, code.trim())).then(() => setCode(""))
+              }
               disabled={busy || !code.trim()}
             >
               Submit code
@@ -212,12 +232,19 @@ function ProfileRow({ profile, onChanged }: { profile: Profile; onChanged: () =>
             disabled={busy}
           />
           <label className="api-key__both">
-            <input type="checkbox" checked={useBoth} onChange={(e) => setUseBoth(e.target.checked)} disabled={busy} />
+            <input
+              type="checkbox"
+              checked={useBoth}
+              onChange={(e) => setUseBoth(e.target.checked)}
+              disabled={busy}
+            />
             Use this key for both {profile.provider} roles
           </label>
           <button
             className="primary"
-            onClick={() => run(() => submitApiKey(profile.id, apiKey.trim(), useBoth)).then(() => setApiKey(""))}
+            onClick={() =>
+              run(() => submitApiKey(profile.id, apiKey.trim(), useBoth)).then(() => setApiKey(""))
+            }
             disabled={busy || !apiKey.trim()}
           >
             Save key
@@ -227,7 +254,11 @@ function ProfileRow({ profile, onChanged }: { profile: Profile; onChanged: () =>
 
       {active && (
         <div className="row">
-          <button className="ghost" onClick={() => void run(() => cancelLogin(profile.id))} disabled={busy}>
+          <button
+            className="ghost"
+            onClick={() => void run(() => cancelLogin(profile.id))}
+            disabled={busy}
+          >
             Cancel login
           </button>
         </div>

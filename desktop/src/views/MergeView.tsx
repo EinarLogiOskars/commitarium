@@ -83,12 +83,14 @@ export function MergeView({
 
       <dl className="detail">
         <dt>Pull request</dt>
-        <dd>
-          {pr ? `#${pr.number}${pr.draft ? " (draft)" : ""}` : "not opened yet"}
-        </dd>
+        <dd>{pr ? `#${pr.number}${pr.draft ? " (draft)" : ""}` : "not opened yet"}</dd>
         <dt>Status</dt>
         <dd className={done ? "" : "muted"}>
-          {done ? "Merged into the default branch ✓" : state === "ready_to_merge" ? "Ready to merge" : "Awaiting review"}
+          {done
+            ? "Merged into the default branch ✓"
+            : state === "ready_to_merge"
+              ? "Ready to merge"
+              : "Awaiting review"}
         </dd>
         {merge_?.merge_commit_id && (
           <>
@@ -126,8 +128,8 @@ export function MergeView({
         </div>
       ) : (
         <p className="muted">
-          The agents are still working toward a mergeable revision. The merge gate opens
-          once review passes.
+          The agents are still working toward a mergeable revision. The merge gate opens once review
+          passes.
         </p>
       )}
     </section>

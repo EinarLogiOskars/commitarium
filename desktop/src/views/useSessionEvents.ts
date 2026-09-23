@@ -122,6 +122,9 @@ export function useSessionEvents(
       active = false;
       for (const h of handles) h.close();
     };
+    // `key` is the stable identity of the session set. Depending on the array
+    // itself would reconnect whenever a caller creates an equivalent array.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key, enabled]);
 
   const durable = useMemo(

@@ -15,7 +15,7 @@ const SHOWN = new Set(["message", "activity"]);
 
 // The automatic review / correction loop, scoped to the review window: the
 // reviewer's findings and the lead addressing them, interleaved. The formal
-// APPROVE / REQUEST_CHANGES reviews live on the Forgejo PR (linked). The merge
+// APPROVED / REQUEST_CHANGES reviews live on the Forgejo PR (linked). The merge
 // gate itself is the Merge phase, not here — this phase ends when the agents
 // agree the revision is mergeable.
 export function ReviewView({
@@ -38,7 +38,9 @@ export function ReviewView({
   scoped?: boolean;
   onChanged: () => void;
 }) {
-  const [decisions, setDecisions] = useState<{ role: string; status: string; outcome?: string }[]>([]);
+  const [decisions, setDecisions] = useState<{ role: string; status: string; outcome?: string }[]>(
+    [],
+  );
   const [workspace, setWorkspace] = useState<Workspace | null>(null);
   const [error, setError] = useState<string | null>(null);
   const chatRef = useRef<HTMLDivElement | null>(null);
@@ -50,7 +52,11 @@ export function ReviewView({
     try {
       const r = await getRun(runId);
       setDecisions(
-        r.sessions.map((s) => ({ role: s.role || s.agent_id, status: s.status, outcome: s.disposition || s.outcome })),
+        r.sessions.map((s) => ({
+          role: s.role || s.agent_id,
+          status: s.status,
+          outcome: s.disposition || s.outcome,
+        })),
       );
       try {
         setWorkspace(await getWorkspace(projectId, featureId));

@@ -1,5 +1,11 @@
 import { pickModel } from "./useModels";
-import type { AgentModels, AgentProvider, AgentProviders, AgentRole, ModelInfo } from "../api/types";
+import type {
+  AgentModels,
+  AgentProvider,
+  AgentProviders,
+  AgentRole,
+  ModelInfo,
+} from "../api/types";
 
 const ROLES: AgentRole[] = ["lead", "reviewer"];
 

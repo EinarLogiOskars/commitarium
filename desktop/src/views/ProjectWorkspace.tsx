@@ -163,7 +163,10 @@ export function ProjectWorkspace({
           {mode === "stack" && project && (
             <StackPicker
               projectId={id}
-              preferred={{ provider: project.agent_providers?.lead, model: project.agent_models?.lead }}
+              preferred={{
+                provider: project.agent_providers?.lead,
+                model: project.agent_models?.lead,
+              }}
               onSaved={(t) => {
                 setToolchain(t);
                 setMode("overview"); // return to where the flow was most likely initiated

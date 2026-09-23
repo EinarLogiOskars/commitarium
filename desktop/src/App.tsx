@@ -72,7 +72,9 @@ function App() {
         <header className="app__header">
           <h1>Commitarium</h1>
           <span className="app__subtitle">Local workspace launcher</span>
-          <button className="ghost" onClick={() => setShowProviders(true)}>Providers</button>
+          <button className="ghost" onClick={() => setShowProviders(true)}>
+            Providers
+          </button>
           {statusPill}
         </header>
 
@@ -115,7 +117,9 @@ function App() {
           </button>
         )}
         <span className="topbar__spacer" />
-        <button className="ghost" onClick={() => setShowProviders(true)}>Providers</button>
+        <button className="ghost" onClick={() => setShowProviders(true)}>
+          Providers
+        </button>
         <button
           className={`${pillClass} pill--button`}
           onClick={() => setEntered(false)}

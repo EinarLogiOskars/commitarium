@@ -87,7 +87,10 @@ export function ProjectDefaultsFields({
   useEffect(() => {
     if (modelsLoading) return;
     const lead = pickModel(modelsFor(value.providers.lead, "lead"), value.models.lead);
-    const reviewer = pickModel(modelsFor(value.providers.reviewer, "reviewer"), value.models.reviewer);
+    const reviewer = pickModel(
+      modelsFor(value.providers.reviewer, "reviewer"),
+      value.models.reviewer,
+    );
     if (lead !== value.models.lead || reviewer !== value.models.reviewer) {
       onChange({ ...value, models: { lead, reviewer } });
     }
@@ -106,7 +109,9 @@ export function ProjectDefaultsFields({
         Autonomy
         <select
           value={value.autonomy_policy}
-          onChange={(e) => onChange({ ...value, autonomy_policy: e.target.value as AutonomyPolicy })}
+          onChange={(e) =>
+            onChange({ ...value, autonomy_policy: e.target.value as AutonomyPolicy })
+          }
           disabled={disabled}
         >
           <option value="review_each_phase">Stop at each phase</option>
@@ -128,7 +133,9 @@ export function ProjectDefaultsFields({
         Recovery
         <select
           value={value.recovery_policy}
-          onChange={(e) => onChange({ ...value, recovery_policy: e.target.value as RecoveryPolicy })}
+          onChange={(e) =>
+            onChange({ ...value, recovery_policy: e.target.value as RecoveryPolicy })
+          }
           disabled={disabled}
         >
           <option value="approval_required">Approval required</option>
@@ -141,7 +148,9 @@ export function ProjectDefaultsFields({
           type="number"
           min={0}
           value={value.planning_rounds}
-          onChange={(e) => onChange({ ...value, planning_rounds: Math.max(0, Number(e.target.value)) })}
+          onChange={(e) =>
+            onChange({ ...value, planning_rounds: Math.max(0, Number(e.target.value)) })
+          }
           disabled={disabled}
         />
       </label>
@@ -151,7 +160,9 @@ export function ProjectDefaultsFields({
           type="number"
           min={0}
           value={value.review_rounds}
-          onChange={(e) => onChange({ ...value, review_rounds: Math.max(0, Number(e.target.value)) })}
+          onChange={(e) =>
+            onChange({ ...value, review_rounds: Math.max(0, Number(e.target.value)) })
+          }
           disabled={disabled}
         />
       </label>

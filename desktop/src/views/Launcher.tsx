@@ -77,18 +77,34 @@ export function Launcher({ onStackChanged }: { onStackChanged?: () => void }) {
           <section className="panel">
             <h2>Host</h2>
             <ul className="checks">
-              <Check ok={probe.docker_installed} label="Docker installed" detail={probe.docker_version ?? undefined} />
+              <Check
+                ok={probe.docker_installed}
+                label="Docker installed"
+                detail={probe.docker_version ?? undefined}
+              />
               <Check
                 ok={probe.docker_running}
                 label="Docker daemon running"
-                detail={probe.docker_installed && !probe.docker_running ? "Start Docker Desktop, then re-check" : undefined}
+                detail={
+                  probe.docker_installed && !probe.docker_running
+                    ? "Start Docker Desktop, then re-check"
+                    : undefined
+                }
               />
-              <Check ok={probe.compose_available} label="Docker Compose available" detail={probe.compose_version ?? undefined} />
+              <Check
+                ok={probe.compose_available}
+                label="Docker Compose available"
+                detail={probe.compose_version ?? undefined}
+              />
             </ul>
             <div className="row">
-              <button onClick={() => void runProbe()} disabled={probing}>Re-check</button>
+              <button onClick={() => void runProbe()} disabled={probing}>
+                Re-check
+              </button>
               {!probe.docker_installed && (
-                <button className="primary" onClick={() => void openExternal(probe.install_url)}>Install Docker</button>
+                <button className="primary" onClick={() => void openExternal(probe.install_url)}>
+                  Install Docker
+                </button>
               )}
             </div>
           </section>
@@ -97,7 +113,11 @@ export function Launcher({ onStackChanged }: { onStackChanged?: () => void }) {
             <section className="panel panel--stack">
               <h2>Commitarium stack</h2>
               <div className="row">
-                <button className="primary" onClick={() => void act("up", stackUp)} disabled={busy !== null}>
+                <button
+                  className="primary"
+                  onClick={() => void act("up", stackUp)}
+                  disabled={busy !== null}
+                >
                   {busy === "up" ? "Starting…" : "Start"}
                 </button>
                 <button onClick={() => void act("down", stackDown)} disabled={busy !== null}>
@@ -106,7 +126,9 @@ export function Launcher({ onStackChanged }: { onStackChanged?: () => void }) {
                 <button onClick={() => void act("update", stackUpdate)} disabled={busy !== null}>
                   {busy === "update" ? "Updating…" : "Update"}
                 </button>
-                <button onClick={() => void refreshStatus()} disabled={busy !== null}>Refresh</button>
+                <button onClick={() => void refreshStatus()} disabled={busy !== null}>
+                  Refresh
+                </button>
               </div>
 
               {services.length === 0 ? (
@@ -114,13 +136,21 @@ export function Launcher({ onStackChanged }: { onStackChanged?: () => void }) {
               ) : (
                 <table className="services">
                   <thead>
-                    <tr><th>Service</th><th>State</th><th>Health</th><th>Status</th></tr>
+                    <tr>
+                      <th>Service</th>
+                      <th>State</th>
+                      <th>Health</th>
+                      <th>Status</th>
+                    </tr>
                   </thead>
                   <tbody>
                     {services.map((s) => (
                       <tr key={s.service}>
                         <td>{s.service}</td>
-                        <td><span className={`dot dot--${dotFor(s)}`} />{s.state}</td>
+                        <td>
+                          <span className={`dot dot--${dotFor(s)}`} />
+                          {s.state}
+                        </td>
                         <td>{s.health ?? "—"}</td>
                         <td className="muted">{s.status}</td>
                       </tr>

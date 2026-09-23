@@ -24,10 +24,7 @@ export const listFeatureRuns = (projectId: string, featureId: string): Promise<R
   );
 
 /** Durable workflow history — used for phase-boundary timestamps. */
-export const getFeatureEvents = (
-  projectId: string,
-  featureId: string,
-): Promise<WorkflowEvent[]> =>
+export const getFeatureEvents = (projectId: string, featureId: string): Promise<WorkflowEvent[]> =>
   request(
     `/api/v1/projects/${encodeURIComponent(projectId)}/features/${encodeURIComponent(featureId)}/events`,
   );
@@ -64,10 +61,7 @@ export const getWorkspace = (projectId: string, featureId: string): Promise<Work
     `/api/v1/projects/${encodeURIComponent(projectId)}/features/${encodeURIComponent(featureId)}/workspace`,
   );
 
-export const createFeature = (
-  projectId: string,
-  input: CreateFeatureInput,
-): Promise<Feature> =>
+export const createFeature = (projectId: string, input: CreateFeatureInput): Promise<Feature> =>
   request(`/api/v1/projects/${encodeURIComponent(projectId)}/features`, {
     method: "POST",
     body: input,
@@ -82,10 +76,7 @@ export interface DeleteFeatureResult {
 
 /** Delete a work order and its isolated internal artifacts. Never touches the
  * default branch. Refuses (409 feature_active) while a run is active. */
-export const deleteFeature = (
-  projectId: string,
-  featureId: string,
-): Promise<DeleteFeatureResult> =>
+export const deleteFeature = (projectId: string, featureId: string): Promise<DeleteFeatureResult> =>
   request(
     `/api/v1/projects/${encodeURIComponent(projectId)}/features/${encodeURIComponent(featureId)}`,
     { method: "DELETE" },

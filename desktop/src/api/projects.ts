@@ -1,4 +1,4 @@
-import { request } from "./client";
+import { request, ApiError } from "./client";
 import type {
   AgentModels,
   AgentProviders,
@@ -54,8 +54,7 @@ export const getProject = (id: string): Promise<Project> =>
 export const createProject = (
   input: CreateProjectInput,
   idempotencyKey: string,
-): Promise<Project> =>
-  request("/api/v1/projects", { method: "POST", body: input, idempotencyKey });
+): Promise<Project> => request("/api/v1/projects", { method: "POST", body: input, idempotencyKey });
 
 // Create-or-repair the project's internal repository. Empty body, fresh key each
 // call, safe to retry, no-op once the repo is ready. Never starts an agent.
@@ -66,6 +65,27 @@ export const repairRepository = (id: string): Promise<Project> =>
   });
 
 const projectPath = (id: string) => `/api/v1/projects/${encodeURIComponent(id)}`;
+
+// Project validation: an ordered, non-empty list of shell commands run in a
+// disposable worker for the exact approved commit before the merge gate opens.
+export interface ValidationConfig {
+  commands: string[];
+}
+
+// GET returns 404 when validation was never configured — treat that as empty.
+export const getProjectValidation = async (id: string): Promise<ValidationConfig> => {
+  try {
+    return await request<ValidationConfig>(`${projectPath(id)}/validation`);
+  } catch (e) {
+    if (e instanceof ApiError && e.status === 404) return { commands: [] };
+    throw e;
+  }
+};
+
+// PUT stores the ordered command list. It must be non-empty — there is no
+// disable/delete operation.
+export const updateProjectValidation = (id: string, commands: string[]): Promise<ValidationConfig> =>
+  request(`${projectPath(id)}/validation`, { method: "PUT", body: { commands } });
 
 export const updateDialogueLimits = (
   id: string,

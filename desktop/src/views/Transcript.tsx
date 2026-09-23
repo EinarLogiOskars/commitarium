@@ -55,7 +55,9 @@ export function Transcript({
   // Narration is presentation text — it stays inline like a message, so the
   // feed reads as the agent explaining itself between tool calls.
   const isTool = (e: TranscriptEntry) => e.type === "activity" && e.activity?.kind !== "narration";
-  const blocks: ({ kind: "entry"; e: TranscriptEntry } | { kind: "activity"; items: TranscriptEntry[] })[] = [];
+  const blocks: (
+    { kind: "entry"; e: TranscriptEntry } | { kind: "activity"; items: TranscriptEntry[] }
+  )[] = [];
   for (const e of entries) {
     if (isTool(e)) {
       const last = blocks[blocks.length - 1];
@@ -102,7 +104,8 @@ function MessageEntry({ e }: { e: TranscriptEntry }) {
     );
   }
   const who = e.role === "reviewer" ? "Reviewer" : e.role === "user" ? "You" : "Lead";
-  const cls = e.role === "reviewer" ? "msg--reviewer" : e.role === "user" ? "msg--user" : "msg--lead";
+  const cls =
+    e.role === "reviewer" ? "msg--reviewer" : e.role === "user" ? "msg--user" : "msg--lead";
   return (
     <div className={`msg ${cls}${e.streaming ? " msg--streaming" : ""}`}>
       <span className="msg__who">{who}</span>
@@ -152,9 +155,13 @@ function ActivityItem({ e }: { e: TranscriptEntry }) {
           <span className="activity-item__prompt">$</span> {a.command}
         </span>
         {a.exit_code !== undefined && (
-          <span className={`chip chip--${a.exit_code === 0 ? "ok" : "bad"}`}>exit {a.exit_code}</span>
+          <span className={`chip chip--${a.exit_code === 0 ? "ok" : "bad"}`}>
+            exit {a.exit_code}
+          </span>
         )}
-        {a.duration_ms !== undefined && <span className="activity-item__dur">{fmtMs(a.duration_ms)}</span>}
+        {a.duration_ms !== undefined && (
+          <span className="activity-item__dur">{fmtMs(a.duration_ms)}</span>
+        )}
       </div>
     );
   }
@@ -162,7 +169,9 @@ function ActivityItem({ e }: { e: TranscriptEntry }) {
     return (
       <div className="activity-item">
         <span className={`activity-item__op activity-item__op--${a.op}`}>{a.op}</span>
-        <span className="activity-item__path">{a.op === "renamed" && a.old_path ? `${a.old_path} → ${a.path}` : a.path}</span>
+        <span className="activity-item__path">
+          {a.op === "renamed" && a.old_path ? `${a.old_path} → ${a.path}` : a.path}
+        </span>
         {(a.additions !== undefined || a.deletions !== undefined) && (
           <span className="activity-item__diff">
             {a.additions !== undefined && <span className="diff--add">+{a.additions}</span>}

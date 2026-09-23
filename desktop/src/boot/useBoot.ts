@@ -1,12 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { coordinatorReachable } from "../api/health";
-import {
-  dockerProbe,
-  launchDockerDesktop,
-  stackStatus,
-  stackUp,
-  type DockerProbe,
-} from "../ipc";
+import { dockerProbe, launchDockerDesktop, stackStatus, stackUp, type DockerProbe } from "../ipc";
 
 export type BootPhase =
   | "probing"

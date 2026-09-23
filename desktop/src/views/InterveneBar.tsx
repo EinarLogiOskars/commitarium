@@ -114,7 +114,15 @@ export function InterveneBar({
   // pauses-and-sends (with text). The right-hand button only carries the
   // "proceed" actions — the phase advance CTA, or resume after a pause.
   const submitLabel =
-    busy === "send" ? "Sending…" : busy === "control" ? "…" : running ? (text.trim() ? "Pause & send" : "Pause") : "Send";
+    busy === "send"
+      ? "Sending…"
+      : busy === "control"
+        ? "…"
+        : running
+          ? text.trim()
+            ? "Pause & send"
+            : "Pause"
+          : "Send";
   const submit = () => {
     if (text.trim()) void send();
     else if (running) void control(pauseRun);
@@ -123,7 +131,9 @@ export function InterveneBar({
   return (
     <div className="intervene">
       <div className="intervene__row">
-        <span className={`intervene__state intervene__state--${pausing ? "pausing" : paused ? "paused" : "run"}`}>
+        <span
+          className={`intervene__state intervene__state--${pausing ? "pausing" : paused ? "paused" : "run"}`}
+        >
           {(pausing || delivering || busy != null) && <span className="spinner" aria-hidden />}
           {stateLabel}
         </span>
@@ -147,11 +157,19 @@ export function InterveneBar({
               Continue workflow
             </button>
           ) : pausing ? (
-            <button className="ghost" onClick={() => void control(resumeRun)} disabled={busy != null}>
+            <button
+              className="ghost"
+              onClick={() => void control(resumeRun)}
+              disabled={busy != null}
+            >
               Cancel pause
             </button>
           ) : action ? (
-            <button className="primary" onClick={action.onClick} disabled={busy != null || action.busy}>
+            <button
+              className="primary"
+              onClick={action.onClick}
+              disabled={busy != null || action.busy}
+            >
               {action.busy ? "Working…" : action.label}
             </button>
           ) : null}
