@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"time"
 
 	"github.com/EinarLogiOskars/commitarium/internal/execution"
 	"github.com/EinarLogiOskars/commitarium/internal/workerhttp"
@@ -83,6 +84,9 @@ type Pump struct {
 	checkpoints CheckpointReader
 	ingester    EventIngester
 	source      AttemptSource
+	reconnect   bool
+	retryDelay  time.Duration
+	retryWindow time.Duration
 }
 
 func NewPump(
@@ -93,7 +97,46 @@ func NewPump(
 	return &Pump{checkpoints: checkpoints, ingester: ingester, source: source}
 }
 
+// NewRecoveringPump reconnects to the same durable attempt while a worker
+// container restarts. It never launches a replacement attempt; the worker must
+// prove that it resumed the stored provider-session identity.
+func NewRecoveringPump(
+	checkpoints CheckpointReader,
+	ingester EventIngester,
+	source AttemptSource,
+) *Pump {
+	return &Pump{
+		checkpoints: checkpoints, ingester: ingester, source: source,
+		reconnect: true, retryDelay: 250 * time.Millisecond, retryWindow: 2 * time.Minute,
+	}
+}
+
 func (pump *Pump) Run(
+	ctx context.Context,
+	sessionID string,
+) (PumpResult, error) {
+	if !pump.reconnect {
+		return pump.runOnce(ctx, sessionID)
+	}
+	deadline := time.Now().Add(pump.retryWindow)
+	var last PumpResult
+	for {
+		result, err := pump.runOnce(ctx, sessionID)
+		last = result
+		if err == nil || !retryableReconnect(err) || time.Now().After(deadline) {
+			return result, err
+		}
+		timer := time.NewTimer(pump.retryDelay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return last, ctx.Err()
+		case <-timer.C:
+		}
+	}
+}
+
+func (pump *Pump) runOnce(
 	ctx context.Context,
 	sessionID string,
 ) (PumpResult, error) {
@@ -183,10 +226,26 @@ func (pump *Pump) Run(
 			return result, err
 		}
 		if !errors.Is(ingestErr, io.EOF) {
+			if result.Attempt.State.MayStillBeActive() {
+				return result, errors.Join(
+					fmt.Errorf("consume worker event stream: %w", ingestErr),
+					ErrStreamEndedActive,
+				)
+			}
 			return result, fmt.Errorf("consume worker event stream: %w", ingestErr)
 		}
 		return result, classifyStreamEnd(result)
 	}
+}
+
+func retryableReconnect(err error) bool {
+	if errors.Is(err, ErrStreamEndedActive) {
+		return true
+	}
+	var remote *workerhttp.RemoteError
+	return !errors.As(err, &remote) &&
+		!errors.Is(err, ErrAttemptIndeterminate) &&
+		!errors.Is(err, ErrAttemptStateConflict)
 }
 
 func validateInspectedAttempt(result PumpResult) error {

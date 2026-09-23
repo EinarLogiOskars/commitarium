@@ -1087,6 +1087,9 @@ fn legacy_feature_watermark(
     Ok(None)
 }
 
+// These values describe one verified synchronization operation; keeping them
+// explicit avoids hiding security-relevant paths and revisions in a loose bag.
+#[allow(clippy::too_many_arguments)]
 fn synchronize_project(
     source: &ProjectSource,
     receipts_path: &Path,
@@ -1460,6 +1463,7 @@ fn synthetic_handoff(handoff: &ProjectHandoff, base_commit: &str) -> CompletedHa
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn new_project_receipt(
     handoff: &ProjectHandoff,
     source_type: &str,
@@ -1842,6 +1846,7 @@ fn project_probe_result(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn project_upstream_result(
     handoff: &ProjectHandoff,
     receipt: &ProjectReceipt,

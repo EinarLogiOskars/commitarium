@@ -2960,6 +2960,18 @@ func TestDialogueRoundLimitsAndReviewRouting(t *testing.T) {
 	}
 }
 
+func TestImplementationReviewInstructionsUseForgejoApprovalEvent(t *testing.T) {
+	instructions := implementationReviewInstructions(
+		feature.Feature{}, workspace.Workspace{}, "plan", "summary", "commit", "attempt",
+	)
+	if !strings.Contains(instructions, "submit one review with event APPROVED.") {
+		t.Fatalf("review instructions do not use Forgejo's APPROVED event: %q", instructions)
+	}
+	if strings.Contains(instructions, "submit one review with event APPROVE.") {
+		t.Fatalf("review instructions use unsupported APPROVE event: %q", instructions)
+	}
+}
+
 func waitForRemoteLeadStatus(
 	t *testing.T,
 	executions *execution.Service,

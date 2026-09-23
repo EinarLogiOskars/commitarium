@@ -25,6 +25,7 @@ type StructuredOutput struct {
 	ToolchainProposal  *ToolchainProposal
 	GoalDraft          *featureartifact.GoalDraft
 	ImplementationPlan *featureartifact.ImplementationPlan
+	EnvironmentRequest *EnvironmentRequest
 }
 
 func OutputJSONSchema(contract OutputContract) any {
@@ -64,12 +65,14 @@ func OutputJSONSchema(contract OutputContract) any {
 	case OutputContractImplementationLead:
 		return objectSchema(
 			map[string]any{
-				"action":              map[string]any{"type": "string", "enum": []string{"published", "blocked"}},
+				"action":              map[string]any{"type": "string", "enum": []string{"published", "blocked", "environment_required"}},
 				"summary":             map[string]any{"type": "string"},
 				"commit_id":           map[string]any{"type": "string"},
 				"pull_request_number": map[string]any{"type": "integer"},
+				"system_packages":     map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+				"environment_reason":  map[string]any{"type": "string"},
 			},
-			[]string{"action", "summary", "commit_id", "pull_request_number"},
+			[]string{"action", "summary", "commit_id", "pull_request_number", "system_packages", "environment_reason"},
 		)
 	case OutputContractImplementationReview:
 		return objectSchema(
@@ -211,18 +214,30 @@ func ResolveStructuredOutput(
 
 	case OutputContractImplementationLead:
 		var response struct {
-			Action            string `json:"action"`
-			Summary           string `json:"summary"`
-			CommitID          string `json:"commit_id"`
-			PullRequestNumber int64  `json:"pull_request_number"`
+			Action            string   `json:"action"`
+			Summary           string   `json:"summary"`
+			CommitID          string   `json:"commit_id"`
+			PullRequestNumber int64    `json:"pull_request_number"`
+			SystemPackages    []string `json:"system_packages"`
+			EnvironmentReason string   `json:"environment_reason"`
 		}
 		if err := decodeStructuredOutput(raw, &response); err != nil {
 			return StructuredOutput{}, err
 		}
 		response.Summary = strings.TrimSpace(response.Summary)
 		response.CommitID = strings.TrimSpace(response.CommitID)
-		if response.Summary == "" || response.PullRequestNumber < 1 {
+		if response.Summary == "" {
 			return StructuredOutput{}, invalidStructuredOutput("implementation lead response is incomplete")
+		}
+		if response.Action == "environment_required" {
+			request := &EnvironmentRequest{SystemPackages: response.SystemPackages, Reason: strings.TrimSpace(response.EnvironmentReason)}
+			if response.CommitID != "" || response.PullRequestNumber != 0 || request.Validate() != nil {
+				return StructuredOutput{}, invalidStructuredOutput("implementation environment request is invalid")
+			}
+			return StructuredOutput{Event: Event{Type: EventInputRequired, Text: response.Summary}, Disposition: DispositionInputRequired, EnvironmentRequest: request}, nil
+		}
+		if response.PullRequestNumber < 1 || len(response.SystemPackages) != 0 || strings.TrimSpace(response.EnvironmentReason) != "" {
+			return StructuredOutput{}, invalidStructuredOutput("implementation lead response has contradictory environment fields")
 		}
 		if response.Action == "blocked" {
 			if response.CommitID != "" {
@@ -261,7 +276,10 @@ func ResolveStructuredOutput(
 		}
 		response.Summary = strings.TrimSpace(response.Summary)
 		response.CommitID = strings.TrimSpace(response.CommitID)
-		if response.Summary == "" || response.PullRequestNumber < 1 {
+		if response.Summary == "" {
+			return StructuredOutput{}, invalidStructuredOutput("implementation review response is incomplete")
+		}
+		if response.PullRequestNumber < 1 {
 			return StructuredOutput{}, invalidStructuredOutput("implementation review response is incomplete")
 		}
 		if response.Action == "blocked" {

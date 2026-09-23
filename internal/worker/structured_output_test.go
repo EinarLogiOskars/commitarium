@@ -15,7 +15,7 @@ func TestOutputJSONSchemaCoversStructuredContracts(t *testing.T) {
 	}{
 		{OutputContractGoalClarification, []string{"action", "message", "goal", "open_questions"}},
 		{OutputContractPlanningLead, []string{"action", "content", "plan_title", "plan_subtitle", "steps"}},
-		{OutputContractImplementationLead, []string{"action", "summary", "commit_id", "pull_request_number"}},
+		{OutputContractImplementationLead, []string{"action", "summary", "commit_id", "pull_request_number", "system_packages", "environment_reason"}},
 		{OutputContractImplementationReview, []string{"action", "summary", "commit_id", "pull_request_number", "review_id"}},
 		{OutputContractImplementationReadiness, []string{"action", "summary"}},
 		{OutputContractIntervention, []string{"effect", "response"}},
@@ -58,6 +58,7 @@ func TestResolveStructuredOutput(t *testing.T) {
 		proposal    *ToolchainProposal
 		goalDraft   *featureartifact.GoalDraft
 		plan        *featureartifact.ImplementationPlan
+		environment *EnvironmentRequest
 	}{
 		{
 			name: "planning response", contract: OutputContractPlanningLead,
@@ -86,6 +87,12 @@ func TestResolveStructuredOutput(t *testing.T) {
 			name: "implementation blocker", contract: OutputContractImplementationLead,
 			raw:   `{"action":"blocked","summary":"Cannot push","commit_id":"","pull_request_number":7}`,
 			event: Event{Type: EventInputRequired, Text: "Cannot push"}, disposition: DispositionInputRequired,
+		},
+		{
+			name: "implementation environment request", contract: OutputContractImplementationLead,
+			raw:   `{"action":"environment_required","summary":"libvips is required","commit_id":"","pull_request_number":0,"system_packages":["libvips-dev"],"environment_reason":"The repository builds image bindings against libvips."}`,
+			event: Event{Type: EventInputRequired, Text: "libvips is required"}, disposition: DispositionInputRequired,
+			environment: &EnvironmentRequest{SystemPackages: []string{"libvips-dev"}, Reason: "The repository builds image bindings against libvips."},
 		},
 		{
 			name: "changes requested", contract: OutputContractImplementationReview,
@@ -127,7 +134,8 @@ func TestResolveStructuredOutput(t *testing.T) {
 				!reflect.DeepEqual(resolved.Review, test.review) || resolved.InterventionEffect != test.effect ||
 				!reflect.DeepEqual(resolved.ToolchainProposal, test.proposal) ||
 				!reflect.DeepEqual(resolved.GoalDraft, test.goalDraft) ||
-				!reflect.DeepEqual(resolved.ImplementationPlan, test.plan) {
+				!reflect.DeepEqual(resolved.ImplementationPlan, test.plan) ||
+				!reflect.DeepEqual(resolved.EnvironmentRequest, test.environment) {
 				t.Fatalf("resolved output = %+v", resolved)
 			}
 		})

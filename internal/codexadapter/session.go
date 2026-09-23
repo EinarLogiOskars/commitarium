@@ -639,7 +639,7 @@ func (session *session) completedTurn(
 ) ([]worker.Event, bool, worker.Result, error) {
 	switch turn.Status {
 	case "completed":
-		structured, disposition, publication, review, interventionEffect, toolchainProposal, goalDraft, implementationPlan, err := session.completeStructuredResponse()
+		structured, disposition, publication, review, interventionEffect, toolchainProposal, environmentRequest, goalDraft, implementationPlan, err := session.completeStructuredResponse()
 		if err != nil {
 			return nil, false, worker.Result{}, err
 		}
@@ -652,6 +652,7 @@ func (session *session) completedTurn(
 			Review:             review,
 			InterventionEffect: interventionEffect,
 			ToolchainProposal:  toolchainProposal,
+			EnvironmentRequest: environmentRequest,
 			GoalDraft:          goalDraft,
 			ImplementationPlan: implementationPlan,
 		}, nil
@@ -683,32 +684,33 @@ func (session *session) completeStructuredResponse() (
 	*worker.ReviewPublication,
 	worker.InterventionEffect,
 	*worker.ToolchainProposal,
+	*worker.EnvironmentRequest,
 	*featureartifact.GoalDraft,
 	*featureartifact.ImplementationPlan,
 	error,
 ) {
 	if session.outputContract == "" {
-		return nil, worker.DispositionSucceeded, nil, nil, "", nil, nil, nil, nil
+		return nil, worker.DispositionSucceeded, nil, nil, "", nil, nil, nil, nil, nil
 	}
 	session.mu.Lock()
 	raw := session.pendingMessage
 	streamID := session.pendingStreamID
 	session.mu.Unlock()
 	if strings.TrimSpace(raw) == "" {
-		return nil, "", nil, nil, "", nil, nil, nil, fmt.Errorf(
+		return nil, "", nil, nil, "", nil, nil, nil, nil, fmt.Errorf(
 			"%w: structured turn omitted its final response", ErrProtocol,
 		)
 	}
 	resolved, err := worker.ResolveStructuredOutput(session.outputContract, []byte(raw))
 	if err != nil {
-		return nil, "", nil, nil, "", nil, nil, nil, fmt.Errorf("%w: %v", ErrProtocol, err)
+		return nil, "", nil, nil, "", nil, nil, nil, nil, fmt.Errorf("%w: %v", ErrProtocol, err)
 	}
 	resolved.Event.StreamID = streamID
 	session.mu.Lock()
 	session.lastAgentMessage = resolved.Event.Text
 	session.mu.Unlock()
 	return &resolved.Event, resolved.Disposition, resolved.Publication, resolved.Review,
-		resolved.InterventionEffect, resolved.ToolchainProposal, resolved.GoalDraft,
+		resolved.InterventionEffect, resolved.ToolchainProposal, resolved.EnvironmentRequest, resolved.GoalDraft,
 		resolved.ImplementationPlan, nil
 }
 

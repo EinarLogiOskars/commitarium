@@ -26,13 +26,20 @@ const DOCKER_INSTALL_URL: &str = "https://docs.docker.com/get-docker/";
 /// Every opt-in provider profile. Lifecycle and status commands include both
 /// so they can address any previously created role worker, while startup names
 /// the exact connected services it is allowed to run.
-const PROVIDER_PROFILES: &[&str] = &["real-codex", "real-claude"];
+pub(crate) const PROVIDER_PROFILES: &[&str] = &["real-codex", "real-claude"];
+const PROVIDER_SERVICES: &[&str] = &[
+    "codex-worker",
+    "codex-reviewer-worker",
+    "claude-worker",
+    "claude-reviewer-worker",
+];
 
 /// Services that do not contain provider credentials and are useful even when
 /// no real agent profile has been connected yet.
 const CORE_SERVICES: &[&str] = &["coordinator", "simulated-codex-worker"];
 
 const COMPOSE_OVERRIDE_ENV: &str = "COMMITARIUM_COMPOSE_OVERRIDE_FILE";
+const ENVIRONMENT_COMPOSE_ENV: &str = "COMMITARIUM_ENVIRONMENT_COMPOSE_FILE";
 const RELEASE_MODE_ENV: &str = "COMMITARIUM_RELEASE_MODE";
 const EMBEDDED_COMPOSE: &str = include_str!("../../../compose.yml");
 const EMBEDDED_RELEASE_COMPOSE: &str = include_str!("../../../compose.release.yml");
@@ -62,15 +69,23 @@ pub struct ServiceStatus {
 /// Development builds keep resolving the repository Compose file, and an
 /// explicit environment override always wins for tests and advanced use.
 pub(crate) fn prepare_runtime(app: &AppHandle) -> Result<(), String> {
-    if std::env::var_os("COMMITARIUM_COMPOSE_FILE").is_some() || cfg!(debug_assertions) {
-        return Ok(());
-    }
-
     let runtime_dir = app
         .path()
         .app_data_dir()
         .map_err(|e| format!("resolve app data directory: {e}"))?
         .join("runtime");
+    fs::create_dir_all(&runtime_dir)
+        .map_err(|e| format!("create Docker runtime directory: {e}"))?;
+    if std::env::var_os(ENVIRONMENT_COMPOSE_ENV).is_none() {
+        std::env::set_var(
+            ENVIRONMENT_COMPOSE_ENV,
+            runtime_dir.join("compose.environment.yml"),
+        );
+    }
+    if std::env::var_os("COMMITARIUM_COMPOSE_FILE").is_some() || cfg!(debug_assertions) {
+        return Ok(());
+    }
+
     let (compose_file, release_file) = materialize_release_compose(&runtime_dir)?;
 
     std::env::set_var("COMMITARIUM_COMPOSE_FILE", compose_file);
@@ -138,11 +153,36 @@ pub(crate) fn compose_files() -> Result<Vec<PathBuf>, String> {
         }
         files.push(path);
     }
+    if let Some(path) = std::env::var_os(ENVIRONMENT_COMPOSE_ENV) {
+        let path = PathBuf::from(path);
+        if path.exists() {
+            files.push(path);
+        }
+    }
     Ok(files)
 }
 
+pub(crate) fn environment_compose_file() -> Result<PathBuf, String> {
+    std::env::var_os(ENVIRONMENT_COMPOSE_ENV)
+        .map(PathBuf::from)
+        .ok_or_else(|| "environment Compose path was not initialized".to_string())
+}
+
 pub(crate) fn append_compose_files(command: &mut Command) -> Result<(), String> {
-    for file in compose_files()? {
+    append_selected_compose_files(command, true)
+}
+
+fn append_selected_compose_files(
+    command: &mut Command,
+    include_environment: bool,
+) -> Result<(), String> {
+    let mut files = compose_files()?;
+    if !include_environment {
+        if let Some(environment) = std::env::var_os(ENVIRONMENT_COMPOSE_ENV).map(PathBuf::from) {
+            files.retain(|path| path != &environment);
+        }
+    }
+    for file in files {
         command.arg("-f").arg(file);
     }
     Ok(())
@@ -157,13 +197,28 @@ pub(crate) fn release_mode() -> bool {
 /// scoped to the Commitarium project and its Compose file — not a general
 /// Compose runner. Both profile names and service names come only from trusted
 /// constants or the fixed provider-profile table, never from the renderer.
-fn compose(profiles: &[&str], args: &[&str]) -> Result<String, String> {
+pub(crate) fn compose(profiles: &[&str], args: &[&str]) -> Result<String, String> {
+    compose_command(profiles, args, true)
+}
+
+/// Execute against the shipped/base definitions without the locally generated
+/// approved-environment overlay. Pulling base images and deriving a refreshed
+/// environment must not accidentally address the derivative image itself.
+pub(crate) fn compose_base(profiles: &[&str], args: &[&str]) -> Result<String, String> {
+    compose_command(profiles, args, false)
+}
+
+fn compose_command(
+    profiles: &[&str],
+    args: &[&str],
+    include_environment: bool,
+) -> Result<String, String> {
     let mut command = docker_command();
     command.arg("compose");
     for profile in profiles {
         command.args(["--profile", profile]);
     }
-    append_compose_files(&mut command)?;
+    append_selected_compose_files(&mut command, include_environment)?;
     command.args(["-p", PROJECT_NAME]).args(args);
 
     let output = command
@@ -180,6 +235,39 @@ fn compose(profiles: &[&str], args: &[&str]) -> Result<String, String> {
             stderr.trim()
         ))
     }
+}
+
+/// Return the trusted image reference selected by the base Compose files for a
+/// fixed service. Development definitions without an explicit image use
+/// Compose's deterministic project/service build tag.
+pub(crate) fn configured_service_image(service: &str) -> Result<String, String> {
+    if !PROVIDER_SERVICES.contains(&service) {
+        return Err("service is not a managed provider worker".to_string());
+    }
+    let configured = compose_base(PROVIDER_PROFILES, &["config", "--format", "json"])?;
+    configured_service_image_from_json(&configured, service)
+}
+
+fn configured_service_image_from_json(configured: &str, service: &str) -> Result<String, String> {
+    let value: serde_json::Value = serde_json::from_str(configured)
+        .map_err(|e| format!("decode base Compose configuration: {e}"))?;
+    let image = value
+        .get("services")
+        .and_then(|services| services.get(service))
+        .and_then(|service| service.get("image"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string)
+        .unwrap_or_else(|| format!("{PROJECT_NAME}-{service}"));
+    if image.is_empty()
+        || !image.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric() || matches!(byte, b':' | b'-' | b'_' | b'.' | b'/' | b'@')
+        })
+    {
+        return Err(format!(
+            "base Compose selected an unsafe image for {service}"
+        ));
+    }
+    Ok(image)
 }
 
 /// Run a plain command and return its trimmed stdout when it exits zero.
@@ -412,7 +500,7 @@ fn stack_up_with_manager(manager: &profiles::ProfileManager) -> Result<(), Strin
     let file = compose_file()?;
     let transport_changed = bootstrap::prepare_transport_secrets(&file)?;
     if release_mode() {
-        compose(PROVIDER_PROFILES, &["pull", "--policy", "missing"])?;
+        compose_base(PROVIDER_PROFILES, &["pull", "--policy", "missing"])?;
     }
     // Forgejo must exist before its own admin CLI can create the internal
     // identities and tokens required by the other services.
@@ -443,7 +531,7 @@ pub async fn stack_update(manager: State<'_, profiles::ProfileManager>) -> Resul
 fn stack_update_with_manager(manager: &profiles::ProfileManager) -> Result<(), String> {
     let file = compose_file()?;
     let transport_changed = bootstrap::prepare_transport_secrets(&file)?;
-    compose(PROVIDER_PROFILES, &["pull"])?;
+    compose_base(PROVIDER_PROFILES, &["pull"])?;
     start_forgejo()?;
     let forgejo_changed = bootstrap::provision_forgejo(&file, PROJECT_NAME)?;
     let credentials_changed = transport_changed || forgejo_changed;
@@ -472,7 +560,7 @@ fn start_core_services(force_recreate: bool) -> Result<(), String> {
     compose(&[], &args).map(|_| ())
 }
 
-fn reconcile_provider_workers(
+pub(crate) fn reconcile_provider_workers(
     manager: &profiles::ProfileManager,
     force_recreate: bool,
 ) -> Result<(), String> {
@@ -648,6 +736,21 @@ mod tests {
             2,
             "both Codex workers must allow the nested read-only bwrap sandbox"
         );
+    }
+
+    #[test]
+    fn resolves_only_safe_base_service_images() {
+        let configured = r#"{"services":{"codex-worker":{"image":"ghcr.io/example/codex:1.2.3"},"claude-worker":{"build":{"context":"."}}}}"#;
+        assert_eq!(
+            configured_service_image_from_json(configured, "codex-worker").unwrap(),
+            "ghcr.io/example/codex:1.2.3"
+        );
+        assert_eq!(
+            configured_service_image_from_json(configured, "claude-worker").unwrap(),
+            "commitarium-claude-worker"
+        );
+        let unsafe_configured = r#"{"services":{"codex-worker":{"image":"safe;touch-host"}}}"#;
+        assert!(configured_service_image_from_json(unsafe_configured, "codex-worker").is_err());
     }
 
     #[test]

@@ -189,11 +189,21 @@ type Result struct {
 	ToolchainProposal  *ToolchainProposal
 	GoalDraft          *featureartifact.GoalDraft
 	ImplementationPlan *featureartifact.ImplementationPlan
+	EnvironmentRequest *EnvironmentRequest
 }
 
 type ToolchainProposal struct {
 	Tools    map[string]string
 	Services []string
+}
+
+// EnvironmentRequest asks the user to add named operating-system packages to
+// Commitarium's managed agent and validation images. It is a declaration, not
+// a shell command: package names are validated again by the coordinator and
+// only the trusted desktop backend can provision them.
+type EnvironmentRequest struct {
+	SystemPackages []string
+	Reason         string
 }
 
 // ImplementationPublication contains only the external identities that the
@@ -258,6 +268,7 @@ var (
 	environmentNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 	commitIDPattern        = regexp.MustCompile(`^[0-9a-f]{40}([0-9a-f]{24})?$`)
 	exactModelIDPattern    = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
+	systemPackagePattern   = regexp.MustCompile(`^[a-z0-9][a-z0-9+.-]{0,127}$`)
 )
 
 func (role Role) IsValid() bool {
@@ -495,9 +506,9 @@ func (result Result) Validate() error {
 		return fmt.Errorf("%w: failed session cannot have a disposition", ErrInvalidResult)
 	case result.Publication != nil && result.Review != nil:
 		return fmt.Errorf("%w: result cannot contain implementation and review publications", ErrInvalidResult)
-	case result.GoalDraft != nil && (result.Publication != nil || result.Review != nil || result.ImplementationPlan != nil || result.ToolchainProposal != nil || result.InterventionEffect != ""):
+	case result.GoalDraft != nil && (result.Publication != nil || result.Review != nil || result.ImplementationPlan != nil || result.ToolchainProposal != nil || result.EnvironmentRequest != nil || result.InterventionEffect != ""):
 		return fmt.Errorf("%w: goal draft cannot be combined with another structured result", ErrInvalidResult)
-	case result.ImplementationPlan != nil && (result.Publication != nil || result.Review != nil || result.ToolchainProposal != nil || result.InterventionEffect != ""):
+	case result.ImplementationPlan != nil && (result.Publication != nil || result.Review != nil || result.ToolchainProposal != nil || result.EnvironmentRequest != nil || result.InterventionEffect != ""):
 		return fmt.Errorf("%w: implementation plan cannot be combined with another structured result", ErrInvalidResult)
 	case result.Publication != nil &&
 		(result.Outcome != OutcomeCompleted || result.Disposition != DispositionSucceeded):
@@ -513,6 +524,10 @@ func (result Result) Validate() error {
 		return fmt.Errorf("%w: intervention effect %q is not recognized", ErrInvalidResult, result.InterventionEffect)
 	case result.InterventionEffect != "" && (result.Publication != nil || result.Review != nil):
 		return fmt.Errorf("%w: intervention result cannot contain a publication", ErrInvalidResult)
+	case result.EnvironmentRequest != nil && (result.Publication != nil || result.Review != nil || result.ToolchainProposal != nil || result.InterventionEffect != ""):
+		return fmt.Errorf("%w: environment request cannot be combined with another structured result", ErrInvalidResult)
+	case result.EnvironmentRequest != nil && (result.Outcome != OutcomeCompleted || result.Disposition != DispositionInputRequired):
+		return fmt.Errorf("%w: environment request requires an input-required completed session", ErrInvalidResult)
 	case result.GoalDraft != nil:
 		if result.Outcome != OutcomeCompleted || result.Disposition != DispositionSucceeded {
 			return fmt.Errorf("%w: goal draft requires a successful completed session", ErrInvalidResult)
@@ -535,8 +550,33 @@ func (result Result) Validate() error {
 		if err := result.Review.Validate(); err != nil {
 			return fmt.Errorf("%w: %v", ErrInvalidResult, err)
 		}
+	case result.EnvironmentRequest != nil:
+		if err := result.EnvironmentRequest.Validate(); err != nil {
+			return fmt.Errorf("%w: %v", ErrInvalidResult, err)
+		}
 	default:
 		return nil
+	}
+	return nil
+}
+
+func (request EnvironmentRequest) Validate() error {
+	if strings.TrimSpace(request.Reason) == "" || len(request.Reason) > 1000 {
+		return errors.New("environment request reason is required and cannot exceed 1000 characters")
+	}
+	if len(request.SystemPackages) == 0 || len(request.SystemPackages) > 32 {
+		return errors.New("environment request must contain between 1 and 32 packages")
+	}
+	seen := make(map[string]struct{}, len(request.SystemPackages))
+	for _, item := range request.SystemPackages {
+		name := strings.TrimSpace(item)
+		if !systemPackagePattern.MatchString(name) || name != item {
+			return fmt.Errorf("environment package %q is invalid", item)
+		}
+		if _, exists := seen[name]; exists {
+			return fmt.Errorf("environment package %q is duplicated", name)
+		}
+		seen[name] = struct{}{}
 	}
 	return nil
 }

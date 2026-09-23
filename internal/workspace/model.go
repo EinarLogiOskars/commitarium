@@ -457,6 +457,33 @@ func safePullRequestURL(value string) bool {
 		parsed.Host != "" && parsed.User == nil
 }
 
+// ValidationPublicationSpec is the coordinator-authored, marker-owned status
+// entry for one isolated validation job. It contains no command output or
+// credential-bearing data.
+type ValidationPublicationSpec struct {
+	JobID             string
+	PullRequestNumber int64
+	CommitID          string
+	Status            string
+	Summary           string
+}
+
+func (spec ValidationPublicationSpec) Marker() string {
+	if strings.TrimSpace(spec.JobID) == "" {
+		return ""
+	}
+	digest := sha256.Sum256([]byte(spec.JobID))
+	return "<!-- commitarium-validation: " + hex.EncodeToString(digest[:]) + " -->"
+}
+
+func (spec ValidationPublicationSpec) Validate() error {
+	if spec.Marker() == "" || spec.PullRequestNumber < 1 || !safeCommitID.MatchString(spec.CommitID) ||
+		(spec.Status != "passed" && spec.Status != "failed") || strings.TrimSpace(spec.Summary) == "" {
+		return errors.New("validation publication is invalid")
+	}
+	return nil
+}
+
 type CheckoutSpec struct {
 	WorkspaceID          string
 	RepositoryOwner      string

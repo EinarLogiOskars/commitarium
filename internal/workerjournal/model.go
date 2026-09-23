@@ -29,8 +29,17 @@ var digestPattern = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 
 type AttemptCreation struct {
 	Attempt        workerhttp.Attempt
+	Request        workerhttp.PutAttemptRequest
 	IdempotencyKey string
 	RequestDigest  string
+}
+
+// InterruptedAttempt contains the durable launch data required to resume the
+// same provider conversation after the worker container restarts. The attempt
+// identity and event sequence remain stable across the replacement process.
+type InterruptedAttempt struct {
+	Attempt workerhttp.Attempt
+	Request workerhttp.PutAttemptRequest
 }
 
 type AttemptTransition struct {
@@ -48,6 +57,7 @@ type EventAppend struct {
 }
 
 type RecoveryResult struct {
+	AttemptsResumed int64
 	AttemptsMarked  int64
 	MutationsMarked int64
 }
@@ -105,6 +115,12 @@ func (creation AttemptCreation) Validate() error {
 		return fmt.Errorf("%w: invalid launch identity", ErrInvalidRecord)
 	case creation.Attempt.Validate() != nil:
 		return fmt.Errorf("%w: invalid attempt", ErrInvalidRecord)
+	case creation.Request.Validate(identity) != nil:
+		return fmt.Errorf("%w: invalid launch request", ErrInvalidRecord)
+	case creation.Request.Mode != creation.Attempt.Mode ||
+		creation.Request.Assignment != creation.Attempt.Assignment ||
+		creation.Request.ProviderSessionID != creation.Attempt.ProviderSessionID:
+		return fmt.Errorf("%w: launch request does not match attempt", ErrInvalidRecord)
 	case creation.Attempt.State != workerhttp.AttemptStateStarting:
 		return fmt.Errorf("%w: new attempt must start in starting state", ErrInvalidRecord)
 	case creation.Attempt.LatestEventSequence != 0:

@@ -27,9 +27,7 @@ fn state_path(app: &AppHandle) -> Result<PathBuf, String> {
 pub fn load_ui_state(app: AppHandle) -> Result<Value, String> {
     let path = state_path(&app)?;
     match fs::read_to_string(&path) {
-        Ok(contents) => {
-            serde_json::from_str(&contents).map_err(|e| format!("parse ui state: {e}"))
-        }
+        Ok(contents) => serde_json::from_str(&contents).map_err(|e| format!("parse ui state: {e}")),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Value::Null),
         Err(e) => Err(format!("read ui state: {e}")),
     }
@@ -39,6 +37,7 @@ pub fn load_ui_state(app: AppHandle) -> Result<Value, String> {
 #[tauri::command]
 pub fn save_ui_state(app: AppHandle, state: Value) -> Result<(), String> {
     let path = state_path(&app)?;
-    let contents = serde_json::to_string_pretty(&state).map_err(|e| format!("encode ui state: {e}"))?;
+    let contents =
+        serde_json::to_string_pretty(&state).map_err(|e| format!("encode ui state: {e}"))?;
     fs::write(&path, contents).map_err(|e| format!("write ui state: {e}"))
 }

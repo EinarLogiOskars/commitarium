@@ -1,6 +1,6 @@
 # ADR-007: Route visible agent dialogue and mirror agreed engineering records
 
-- Status: Accepted
+- Status: Accepted; pull-request timing refined below
 - Date: 2026-09-09
 
 ## Context
@@ -83,6 +83,15 @@ storage. Agent containers receive only the provider state, project workspace,
 and scoped Forgejo identity needed for their role. They do not receive GitHub
 credentials. Any later synchronization from Forgejo to GitHub is an explicit
 user-controlled operation at the trusted host boundary.
+
+## Implementation refinement (2026-09-22)
+
+The implemented workflow reserves the pinned planning checkout after goal
+acceptance but delays feature-branch promotion and draft-pull-request creation
+until the durable final `plan_submitted` event. This keeps collaborative
+planning read-only and prevents an abandoned or unresolved plan from creating
+Forgejo artifacts. The dialogue-routing and concise-audit decisions above are
+unchanged.
 
 ## Consequences
 

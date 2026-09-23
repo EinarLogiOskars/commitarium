@@ -15,6 +15,8 @@ import (
 	"github.com/EinarLogiOskars/commitarium/internal/feature"
 	"github.com/EinarLogiOskars/commitarium/internal/featureartifact"
 	"github.com/EinarLogiOskars/commitarium/internal/project"
+	"github.com/EinarLogiOskars/commitarium/internal/projectenvironment"
+	"github.com/EinarLogiOskars/commitarium/internal/validation"
 	"github.com/EinarLogiOskars/commitarium/internal/worker"
 	"github.com/EinarLogiOskars/commitarium/internal/workerhttp"
 	"github.com/EinarLogiOskars/commitarium/internal/workeringest"
@@ -152,6 +154,48 @@ type RemoteLeadPump interface {
 	Run(context.Context, string) (workeringest.PumpResult, error)
 }
 
+type RemoteLeadEnvironmentRequests interface {
+	Request(context.Context, projectenvironment.Request) (projectenvironment.Request, bool, error)
+}
+
+type RemoteLeadValidationGate interface {
+	EnsureJob(context.Context, string, string, string, string, string) (validation.Job, bool, error)
+	RequirePassed(context.Context, string, string) error
+}
+
+// EnsureValidationJob lets the UI create the pending job after a project that
+// reached the merge gate without validation configuration is configured, and
+// re-snapshot commands after the configuration changes.
+func (starter *RemoteLeadStarter) EnsureValidationJob(
+	ctx context.Context,
+	runID string,
+) (validation.Job, bool, error) {
+	if starter.validation == nil || strings.TrimSpace(runID) == "" {
+		return validation.Job{}, false, validation.ErrInvalid
+	}
+	run, err := starter.executions.GetRun(ctx, runID)
+	if err != nil {
+		return validation.Job{}, false, err
+	}
+	storedFeature, err := starter.features.GetByID(ctx, run.FeatureID)
+	if err != nil {
+		return validation.Job{}, false, err
+	}
+	if storedFeature.State != feature.StateReadyToMerge || run.Status.IsTerminal() {
+		return validation.Job{}, false, validation.ErrConflict
+	}
+	prepared, err := starter.workspaces.Get(ctx, storedFeature.ProjectID, storedFeature.ID)
+	if err != nil {
+		return validation.Job{}, false, err
+	}
+	if !workspace.ValidCommitID(prepared.ApprovedCommitID) {
+		return validation.Job{}, false, validation.ErrConflict
+	}
+	return starter.validation.EnsureJob(
+		ctx, storedFeature.ProjectID, storedFeature.ID, run.ID, prepared.ID, prepared.ApprovedCommitID,
+	)
+}
+
 type RemoteLeadConfig struct {
 	Executions                   RemoteLeadExecution
 	Features                     RemoteLeadFeatureFinder
@@ -161,6 +205,8 @@ type RemoteLeadConfig struct {
 	Workspaces                   RemoteLeadWorkspaceService
 	Worker                       RemoteLeadWorker
 	Pump                         RemoteLeadPump
+	EnvironmentRequests          RemoteLeadEnvironmentRequests
+	Validation                   RemoteLeadValidationGate
 	Lifetime                     context.Context
 	AgentProfileID               string
 	ReviewerAgentProfileID       string
@@ -186,6 +232,8 @@ type RemoteLeadStarter struct {
 	workspaces                   RemoteLeadWorkspaceService
 	worker                       RemoteLeadWorker
 	pump                         RemoteLeadPump
+	environmentRequests          RemoteLeadEnvironmentRequests
+	validation                   RemoteLeadValidationGate
 	lifetime                     context.Context
 	agentProfileID               string
 	reviewerAgentProfileID       string
@@ -241,6 +289,7 @@ func NewRemoteLeadStarter(config RemoteLeadConfig) (*RemoteLeadStarter, error) {
 		executions: config.Executions, features: config.Features, goals: config.Goals,
 		planning: config.Planning, artifacts: config.Artifacts, workspaces: config.Workspaces,
 		worker: config.Worker, pump: config.Pump,
+		environmentRequests: config.EnvironmentRequests, validation: config.Validation,
 		lifetime: config.Lifetime, agentProfileID: config.AgentProfileID,
 		reviewerAgentProfileID:       reviewerAgentProfileID,
 		claudeAgentProfileID:         strings.TrimSpace(config.ClaudeAgentProfileID),
@@ -684,6 +733,33 @@ func (starter *RemoteLeadStarter) recoverIdleReadyToMergeRun(
 	if !recorded {
 		return fmt.Errorf("%w: ready-to-merge run has no verified lead acknowledgement", ErrInvalidRunRequest)
 	}
+	if starter.validation != nil {
+		storedFeature, err := starter.features.GetByID(ctx, run.FeatureID)
+		if err != nil {
+			return err
+		}
+		prepared, err := starter.workspaces.Get(ctx, storedFeature.ProjectID, storedFeature.ID)
+		if err != nil {
+			return err
+		}
+		if _, _, err := starter.validation.EnsureJob(
+			ctx, storedFeature.ProjectID, storedFeature.ID, run.ID, prepared.ID, prepared.ApprovedCommitID,
+		); err != nil {
+			if errors.Is(err, validation.ErrNotFound) {
+				return starter.waitRun(ctx, run.ID,
+					"Configure this project's isolated validation commands before merge.",
+					execution.RunWaitKindMergeGate,
+				)
+			}
+			return fmt.Errorf("recover isolated validation job: %w", err)
+		}
+		if err := starter.validation.RequirePassed(ctx, run.ID, prepared.ApprovedCommitID); err != nil {
+			return starter.waitRun(ctx, run.ID,
+				"The exact approved revision is waiting for isolated validation before merge.",
+				execution.RunWaitKindMergeGate,
+			)
+		}
+	}
 	if run.MergePolicy == project.MergePolicyAutoAfterGates {
 		if _, _, err := starter.Merge(ctx, run.ID, run.ID+":automatic-merge"); err != nil {
 			starter.recordMergeBlocked(ctx, run.ID, err)
@@ -724,6 +800,15 @@ func (starter *RemoteLeadStarter) Merge(
 	storedFeature, err := starter.features.GetByID(ctx, run.FeatureID)
 	if err != nil {
 		return execution.Run{}, false, err
+	}
+	if starter.validation != nil {
+		prepared, err := starter.workspaces.Get(ctx, storedFeature.ProjectID, storedFeature.ID)
+		if err != nil {
+			return execution.Run{}, false, err
+		}
+		if err := starter.validation.RequirePassed(ctx, run.ID, prepared.ApprovedCommitID); err != nil {
+			return execution.Run{}, false, err
+		}
 	}
 	mergedWorkspace, mergedNow, err := starter.workspaces.MergeApproved(
 		ctx, storedFeature.ProjectID, storedFeature.ID,
@@ -1356,7 +1441,7 @@ func (starter *RemoteLeadStarter) recoverIdleImplementationRun(
 		return errors.New("completed implementation attempt has no result")
 	}
 	if attempt.Result.Disposition == workerhttp.DispositionInputRequired {
-		return starter.waitRun(ctx, run.ID, attempt.Result.Summary)
+		return starter.handleInputRequired(ctx, remoteLeadRequest{runID: run.ID, identity: workerhttp.MutationIdentity{AttemptReference: attempt.AttemptReference}}, *attempt.Result)
 	}
 	request := remoteLeadRequest{
 		runID: run.ID,
@@ -1424,7 +1509,7 @@ func (starter *RemoteLeadStarter) recoverIdleReviewingRun(
 			return errors.New("completed review attempt has no result")
 		}
 		if attempt.Result.Disposition == workerhttp.DispositionInputRequired {
-			return starter.waitRun(ctx, run.ID, attempt.Result.Summary)
+			return starter.handleInputRequired(ctx, remoteLeadRequest{runID: run.ID, identity: workerhttp.MutationIdentity{AttemptReference: attempt.AttemptReference}}, *attempt.Result)
 		}
 		request := remoteLeadRequest{runID: run.ID, agentName: "reviewer", identity: workerhttp.MutationIdentity{
 			AttemptReference: workerhttp.AttemptReference{SessionID: reviewer.ID, AttemptID: reviewerCheckpoint.AttemptID},
@@ -1449,7 +1534,7 @@ func (starter *RemoteLeadStarter) recoverIdleReviewingRun(
 			return errors.New("completed lead review response has no result")
 		}
 		if attempt.Result.Disposition == workerhttp.DispositionInputRequired {
-			return starter.waitRun(ctx, run.ID, attempt.Result.Summary)
+			return starter.handleInputRequired(ctx, remoteLeadRequest{runID: run.ID, identity: workerhttp.MutationIdentity{AttemptReference: attempt.AttemptReference}}, *attempt.Result)
 		}
 		request := remoteLeadRequest{runID: run.ID, agentName: "lead agent", identity: workerhttp.MutationIdentity{
 			AttemptReference: workerhttp.AttemptReference{SessionID: lead.ID, AttemptID: leadCheckpoint.AttemptID},
@@ -2882,8 +2967,11 @@ func implementationPublicationMarker(attemptID string) string {
 
 const implementationToolchainInstructions = "If an additional supported language runtime is required, " +
 	"run 'commitarium-toolchain require <tool>@<exact-version>' with a generous timeout and wait for it " +
-	"to finish; its shim becomes available on PATH immediately. Do not use apt, mise use, floating versions " +
-	"such as latest, or repository mise configuration to provision tools. "
+	"to finish; its shim becomes available on PATH immediately. If an operating-system package is missing, " +
+	"do not run apt. Return action 'environment_required', leave commit_id empty and pull_request_number zero, " +
+	"and provide only the Debian package names in system_packages plus a concise environment_reason. Commitarium " +
+	"will ask the user and provision the same package set for lead, reviewer, and isolated validation. Do not use " +
+	"mise use, floating versions such as latest, or repository mise configuration to provision tools. "
 
 const implementationChecklistInstructions = "The coordinator owns a structured commit-sized checklist. " +
 	"Run 'commitarium-artifact plan show' before changing files. Work through its steps in order without " +
@@ -3779,7 +3867,7 @@ func (starter *RemoteLeadStarter) finish(
 		}
 		if request.request.OutputContract == workerhttp.OutputContractImplementationLead {
 			if attempt.Result.Disposition == workerhttp.DispositionInputRequired {
-				err = starter.waitRun(ctx, request.runID, attempt.Result.Summary, execution.RunWaitKindBlocker)
+				err = starter.handleInputRequired(ctx, request, *attempt.Result)
 				break
 			}
 			if _, correcting := implementationCorrectionTurnNumber(
@@ -3793,7 +3881,7 @@ func (starter *RemoteLeadStarter) finish(
 		}
 		if request.request.OutputContract == workerhttp.OutputContractImplementationReview {
 			if attempt.Result.Disposition == workerhttp.DispositionInputRequired {
-				err = starter.waitRun(ctx, request.runID, attempt.Result.Summary, execution.RunWaitKindBlocker)
+				err = starter.handleInputRequired(ctx, request, *attempt.Result)
 				break
 			}
 			err = starter.verifyImplementationReview(ctx, request, *attempt.Result)
@@ -3801,7 +3889,7 @@ func (starter *RemoteLeadStarter) finish(
 		}
 		if request.request.OutputContract == workerhttp.OutputContractImplementationReadiness {
 			if attempt.Result.Disposition == workerhttp.DispositionInputRequired {
-				err = starter.waitRun(ctx, request.runID, attempt.Result.Summary, execution.RunWaitKindBlocker)
+				err = starter.handleInputRequired(ctx, request, *attempt.Result)
 				break
 			}
 			err = starter.verifyImplementationReadiness(ctx, request, *attempt.Result)
@@ -4028,7 +4116,7 @@ func implementationReviewInstructions(
 		"when practical. Do not modify tracked files, commit, push, change the pull-request body, or merge. " +
 		"If you find material problems, submit one formal Forgejo review with event REQUEST_CHANGES. If the " +
 		"implementation is correct and sufficiently tested, tell the lead that you think the exact revision is " +
-		"ready to merge and submit one review with event APPROVE. Use the worker-provided " +
+		"ready to merge and submit one review with event APPROVED. Use the worker-provided " +
 		"Forgejo URL and token-file environment variables; never print, log, commit, or put the token in a URL. " +
 		"Set commit_id on the review to the exact commit below. The review body must begin with exactly the marker below, " +
 		"a blank line, '## Review', and another blank line, followed by your structured findings or approval. " +
@@ -4604,10 +4692,11 @@ func (starter *RemoteLeadStarter) verifyImplementationReadiness(
 		return fmt.Errorf("record verified merge-readiness decision: %w", err)
 	}
 	if result.Disposition == workerhttp.DispositionSucceeded {
-		if _, err := starter.workspaces.RecordMergeReady(
+		mergeReady, err := starter.workspaces.RecordMergeReady(
 			ctx, storedFeature.ProjectID, storedFeature.ID,
 			approved.CommitID, approved.PullRequestNumber,
-		); err != nil {
+		)
+		if err != nil {
 			return fmt.Errorf("record exact merge target: %w", err)
 		}
 		if _, err := starter.planning.TransitionFeature(
@@ -4621,6 +4710,30 @@ func (starter *RemoteLeadStarter) verifyImplementationReadiness(
 			ctx, run.ID, implementationApprovedReason,
 		); err != nil || paused {
 			return err
+		}
+		if starter.validation != nil {
+			job, _, err := starter.validation.EnsureJob(
+				ctx, storedFeature.ProjectID, storedFeature.ID, run.ID, mergeReady.ID, approved.CommitID,
+			)
+			if err != nil {
+				if errors.Is(err, validation.ErrNotFound) {
+					return starter.waitRun(ctx, request.runID,
+						"Configure this project's isolated validation commands before merge.",
+						execution.RunWaitKindMergeGate,
+					)
+				}
+				return fmt.Errorf("create isolated validation job: %w", err)
+			}
+			if _, err := starter.executions.RecordSessionEventWithID(
+				ctx, request.identity.AttemptID+":validation-created", request.identity.SessionID,
+				worker.Event{Type: worker.EventActivity, Text: "Isolated validation job " + job.ID + " is pending for approved commit " + approved.CommitID + "."},
+			); err != nil {
+				return fmt.Errorf("record validation activity: %w", err)
+			}
+			return starter.waitRun(ctx, request.runID,
+				"The exact approved revision is waiting for isolated validation before merge.",
+				execution.RunWaitKindMergeGate,
+			)
 		}
 		if run.MergePolicy == project.MergePolicyAutoAfterGates {
 			if _, _, err := starter.Merge(ctx, run.ID, run.ID+":automatic-merge"); err != nil {
@@ -4898,6 +5011,39 @@ func (starter *RemoteLeadStarter) requireReview(
 		)
 	}
 	_ = starter.waitRun(ctx, request.runID, text, execution.RunWaitKindBlocker)
+}
+
+func (starter *RemoteLeadStarter) handleInputRequired(
+	ctx context.Context,
+	request remoteLeadRequest,
+	result workerhttp.TerminalResult,
+) error {
+	if result.EnvironmentRequest == nil || starter.environmentRequests == nil {
+		return starter.waitRun(ctx, request.runID, result.Summary, execution.RunWaitKindBlocker)
+	}
+	run, err := starter.executions.GetRun(ctx, request.runID)
+	if err != nil {
+		return err
+	}
+	storedFeature, err := starter.features.GetByID(ctx, run.FeatureID)
+	if err != nil {
+		return err
+	}
+	_, _, err = starter.environmentRequests.Request(ctx, projectenvironment.Request{
+		ID: request.identity.AttemptID + ":environment", ProjectID: storedFeature.ProjectID,
+		FeatureID: storedFeature.ID, RunID: run.ID, SessionID: request.identity.SessionID,
+		AttemptID:      request.identity.AttemptID,
+		SystemPackages: append([]string(nil), result.EnvironmentRequest.SystemPackages...),
+		Reason:         result.EnvironmentRequest.Reason,
+	})
+	if err != nil {
+		return fmt.Errorf("record agent environment request: %w", err)
+	}
+	return starter.waitRun(ctx, request.runID,
+		"The lead requested approved additions to the managed project environment: "+
+			strings.Join(result.EnvironmentRequest.SystemPackages, ", ")+". Review the request before provisioning.",
+		execution.RunWaitKindBlocker,
+	)
 }
 
 func (starter *RemoteLeadStarter) waitRun(

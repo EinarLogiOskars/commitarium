@@ -35,7 +35,10 @@ with the implementation and public API documentation they describe.
   files.
 - Before a selected project checkout is prepared, the coordinator idempotently
   gives those internal identities write access to that project's private
-  Forgejo repository. A failure stops the work order before checkout creation.
+  Forgejo repository and reconciles its protected default-branch workflow.
+  Agents retain feature-branch access, while one approval and the coordinator
+  identity are required for a default-branch merge. A failure stops the work
+  order before checkout creation.
 - The same launcher path creates separate random coordinator-to-worker bearer
   tokens. No internal or Forgejo secret crosses Tauri IPC, and the UI does not
   need setup fields or commands for them.
@@ -137,6 +140,24 @@ Safe UI capabilities:
 - Do not enable work-order creation until the project toolchain is
   `configured`. The backend also enforces this and returns
   `409 project_toolchain_required` without starting clarification.
+- Configure the independent merge gate with `GET`/`PUT
+  /api/v1/projects/{projectID}/validation`. Commands are ordered and the backend
+  requires at least one. This is project workflow configuration, not a host
+  shell command invoked by the renderer.
+- When an implementation attempt returns an environment request, list it from
+  the project environment-request route. Approval is a coordinator action;
+  native provisioning is then invoked with only `requestId`. Rejection needs a
+  short user reason. Both outcomes resume the same lead conversation. After a
+  stack image update, replay native provisioning with the newest `ready`
+  request when approved packages exist so the derivative images use the new
+  base; that replay is intentionally idempotent.
+- At the merge gate, list the run's validation jobs and invoke native
+  `run_validation_job` with only `jobId` for a pending job. Render per-command
+  exit status, bounded output, duration, and the final `passed`/`failed` state.
+  The run collection's `POST` creates a job after first-time configuration or
+  command changes; a terminal job's `/retry` endpoint creates a separate
+  auditable attempt. A passed job for the current command list enables manual
+  merge; auto-after-gates merges from the completion callback.
 - For guided setup, start a session with
   `POST /api/v1/projects/{projectID}/toolchain/assistant-sessions`, supplying a
   selected lead provider, exact model, `purpose: "design_stack"`, initial
@@ -556,17 +577,21 @@ repository credentials.
 - Guided toolchain assistant routes are registered in `real_agents` mode. The
   deterministic simulated mode still supports the stack picker and import
   detection, but does not invent an assistant conversation.
+- Phase 4 backend APIs and native commands are implemented, but the renderer
+  does not yet expose environment approvals, validation configuration, or
+  validation-job execution. Until that UI lands, real workflows can reach a
+  validation merge gate that must be driven through the documented APIs.
 - The guarded merge endpoint and automatic merge policy operate in that real
   Forgejo-backed mode. The deterministic simulation does not invent a remote
   merge result.
 - The standalone Codex and Claude lead/reviewer workers are implemented, and
   real-provider mode routes each role from the run's project-level provider
   snapshot.
-- Real-provider recovery can reattach after a coordinator restart. A worker
-  container restart during an active provider process still becomes an
-  indeterminate state requiring user review, but the user can invoke the
-  blocker recovery action later to re-check that same durable attempt; the
-  coordinator never substitutes a replacement attempt.
+- Real-provider recovery reattaches after a coordinator restart. A worker
+  container restart during a cleanly running turn resumes the exact provider
+  conversation and the coordinator reconnects to the same durable attempt.
+  Paused, command-ambiguous, or otherwise unsafe recovery remains indeterminate
+  for user review; no replacement attempt is substituted.
 - Pause, continue, and stop are complete for simulated sessions. The real Codex
   path currently supports bounded messages at safe waiting points, not every
   mid-turn control.

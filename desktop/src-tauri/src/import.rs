@@ -316,6 +316,8 @@ fn import_id(name: &str, abs_path: &Path) -> String {
 
 /// Import a folder as a new private project. Returns the created project JSON.
 #[tauri::command]
+// The arguments intentionally mirror the documented Tauri IPC contract.
+#[allow(clippy::too_many_arguments)]
 pub async fn import_project(
     app: AppHandle,
     path: String,

@@ -10,6 +10,7 @@ import (
 	"github.com/EinarLogiOskars/commitarium/internal/feature"
 	"github.com/EinarLogiOskars/commitarium/internal/orchestration"
 	"github.com/EinarLogiOskars/commitarium/internal/project"
+	"github.com/EinarLogiOskars/commitarium/internal/validation"
 	"github.com/EinarLogiOskars/commitarium/internal/workspace"
 )
 
@@ -28,13 +29,14 @@ func (api *API) mergeRunHandler(w http.ResponseWriter, r *http.Request) {
 		case errors.Is(err, orchestration.ErrRunControlNotAllowed):
 			writeError(w, http.StatusConflict, "run_paused", "resume the run before merging")
 		case errors.Is(err, orchestration.ErrImplementationNotAllowed),
+			errors.Is(err, validation.ErrRequired),
 			errors.Is(err, workspace.ErrFeatureNotReadyToMerge),
 			errors.Is(err, workspace.ErrConflict),
 			errors.Is(err, workspace.ErrBranchConflict),
 			errors.Is(err, workspace.ErrCheckoutConflict),
 			errors.Is(err, workspace.ErrPullRequestConflict),
 			errors.Is(err, feature.ErrInvalidTransition):
-			writeError(w, http.StatusConflict, "merge_not_ready", "merge requires the unchanged Forgejo pull request and exact commit approved by both agents")
+			writeError(w, http.StatusConflict, "merge_not_ready", "merge requires the unchanged Forgejo pull request, the exact commit approved by both agents, and passing isolated validation")
 		case errors.Is(err, workspace.ErrCheckoutUnavailable),
 			errors.Is(err, project.ErrForgejoUnavailable):
 			writeError(w, http.StatusServiceUnavailable, "merge_unavailable", "the approved Forgejo revision cannot be merged right now")

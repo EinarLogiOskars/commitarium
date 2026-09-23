@@ -138,6 +138,136 @@ func (client *Client) EnsureRepositoryCollaborators(
 	return nil
 }
 
+// EnsureRepositoryAccess gives the fixed agent identities their ordinary
+// repository access and makes the repository's default branch follow the
+// feature-branch and pull-request workflow. It is safe to repeat before every
+// work order so repositories created by older Commitarium versions are updated
+// when they are next used.
+func (client *Client) EnsureRepositoryAccess(
+	ctx context.Context,
+	owner string,
+	repository string,
+	defaultBranch string,
+) error {
+	if err := client.EnsureRepositoryCollaborators(ctx, owner, repository); err != nil {
+		return err
+	}
+	return client.EnsureDefaultBranchProtection(ctx, owner, repository, defaultBranch)
+}
+
+type branchProtectionSettings struct {
+	RuleName                string   `json:"rule_name,omitempty"`
+	BranchName              string   `json:"branch_name,omitempty"`
+	EnablePush              bool     `json:"enable_push"`
+	EnablePushWhitelist     bool     `json:"enable_push_whitelist"`
+	EnableMergeWhitelist    bool     `json:"enable_merge_whitelist"`
+	MergeWhitelistUsernames []string `json:"merge_whitelist_usernames"`
+	RequiredApprovals       int64    `json:"required_approvals"`
+}
+
+// EnsureDefaultBranchProtection reconciles the exact default-branch rule used
+// by Commitarium. Agents retain write access to feature branches and pull
+// requests; only the coordinator identity may merge into the default branch.
+func (client *Client) EnsureDefaultBranchProtection(
+	ctx context.Context,
+	owner string,
+	repository string,
+	defaultBranch string,
+) error {
+	var err error
+	owner, repository, err = project.NormalizeRepositoryCoordinate(owner, repository)
+	if err != nil {
+		return err
+	}
+	defaultBranch = strings.TrimSpace(defaultBranch)
+	if defaultBranch == "" {
+		return errors.New("default branch is required")
+	}
+	merger, err := client.importRepositoryOwner(ctx)
+	if err != nil {
+		return err
+	}
+	wanted := branchProtectionSettings{
+		RuleName:                defaultBranch,
+		EnableMergeWhitelist:    true,
+		MergeWhitelistUsernames: []string{merger},
+		RequiredApprovals:       1,
+	}
+	path := branchProtectionPath(owner, repository, defaultBranch)
+	status, body, err := client.doJSON(ctx, http.MethodGet, path, nil)
+	if err != nil {
+		return err
+	}
+	switch status {
+	case http.StatusOK:
+		stored, err := decodeBranchProtection(body)
+		if err != nil {
+			return err
+		}
+		if branchProtectionMatches(stored, wanted) {
+			return nil
+		}
+		status, body, err = client.doJSON(ctx, http.MethodPatch, path, wanted)
+	case http.StatusNotFound:
+		status, body, err = client.doJSON(
+			ctx, http.MethodPost, branchProtectionsPath(owner, repository), wanted,
+		)
+	default:
+		return fmt.Errorf(
+			"%w: branch protection request returned HTTP %d",
+			project.ErrForgejoUnavailable, status,
+		)
+	}
+	if err != nil {
+		return err
+	}
+	if status != http.StatusOK && status != http.StatusCreated {
+		return fmt.Errorf(
+			"%w: branch protection update returned HTTP %d",
+			project.ErrForgejoUnavailable, status,
+		)
+	}
+	stored, err := decodeBranchProtection(body)
+	if err != nil {
+		return err
+	}
+	if !branchProtectionMatches(stored, wanted) {
+		return fmt.Errorf(
+			"%w: Forgejo returned different default-branch protection",
+			project.ErrForgejoUnavailable,
+		)
+	}
+	return nil
+}
+
+func decodeBranchProtection(body []byte) (branchProtectionSettings, error) {
+	var decoded branchProtectionSettings
+	if err := json.Unmarshal(body, &decoded); err != nil {
+		return branchProtectionSettings{}, fmt.Errorf(
+			"%w: branch protection response is invalid JSON",
+			project.ErrForgejoUnavailable,
+		)
+	}
+	decoded.RuleName = strings.TrimSpace(decoded.RuleName)
+	decoded.BranchName = strings.TrimSpace(decoded.BranchName)
+	for index := range decoded.MergeWhitelistUsernames {
+		decoded.MergeWhitelistUsernames[index] = strings.TrimSpace(decoded.MergeWhitelistUsernames[index])
+	}
+	return decoded, nil
+}
+
+func branchProtectionMatches(stored, wanted branchProtectionSettings) bool {
+	ruleName := stored.RuleName
+	if ruleName == "" {
+		ruleName = stored.BranchName
+	}
+	return ruleName == wanted.RuleName && !stored.EnablePush &&
+		!stored.EnablePushWhitelist && stored.EnableMergeWhitelist &&
+		stored.RequiredApprovals == wanted.RequiredApprovals &&
+		len(stored.MergeWhitelistUsernames) == 1 &&
+		strings.EqualFold(stored.MergeWhitelistUsernames[0], wanted.MergeWhitelistUsernames[0])
+}
+
 func (client *Client) VerifyRepository(
 	ctx context.Context,
 	owner string,
@@ -305,7 +435,16 @@ func (client *Client) FinalizeImportRepository(
 	if err != nil {
 		return project.ForgejoRepository{}, err
 	}
-	return validateImportRepository(stored, owner, spec, false)
+	repository, err := validateImportRepository(stored, owner, spec, false)
+	if err != nil {
+		return project.ForgejoRepository{}, err
+	}
+	if err := client.EnsureDefaultBranchProtection(
+		ctx, repository.Owner, repository.Name, repository.DefaultBranch,
+	); err != nil {
+		return project.ForgejoRepository{}, err
+	}
+	return repository, nil
 }
 
 func (client *Client) VerifyImportRepository(
@@ -866,6 +1005,68 @@ func (client *Client) VerifyPullRequestReview(
 	return pullRequest, nil
 }
 
+func (client *Client) EnsureValidationResult(
+	ctx context.Context,
+	owner string,
+	repository string,
+	spec workspace.ValidationPublicationSpec,
+) (bool, error) {
+	var err error
+	owner, repository, err = project.NormalizeRepositoryCoordinate(owner, repository)
+	if err != nil {
+		return false, err
+	}
+	if err := spec.Validate(); err != nil {
+		return false, err
+	}
+	marker := spec.Marker()
+	wantBody := marker + "\n\n## Isolated validation: " + spec.Status +
+		"\n\nCommit: `" + spec.CommitID + "`\n\n" + strings.TrimSpace(spec.Summary)
+	status, body, err := client.doJSON(ctx, http.MethodGet, fmt.Sprintf(
+		"/api/v1/repos/%s/%s/issues/%d/comments?limit=100",
+		url.PathEscape(owner), url.PathEscape(repository), spec.PullRequestNumber,
+	), nil)
+	if err != nil {
+		return false, err
+	}
+	if status != http.StatusOK {
+		return false, fmt.Errorf("%w: validation comments returned HTTP %d", project.ErrForgejoUnavailable, status)
+	}
+	var comments []struct {
+		Body string `json:"body"`
+	}
+	if err := json.Unmarshal(body, &comments); err != nil {
+		return false, fmt.Errorf("%w: validation comments response is invalid JSON", project.ErrForgejoUnavailable)
+	}
+	// A full first page is ambiguous: a matching marker may exist on a later
+	// page. Stop instead of risking a duplicate audit comment.
+	if len(comments) >= 100 {
+		return false, workspace.ErrPullRequestConflict
+	}
+	for _, comment := range comments {
+		if strings.Contains(comment.Body, marker) {
+			if comment.Body != wantBody {
+				return false, workspace.ErrPullRequestConflict
+			}
+			return false, nil
+		}
+	}
+	payload := struct {
+		Body string `json:"body"`
+	}{Body: wantBody}
+	status, _, err = client.doJSON(ctx, http.MethodPost, fmt.Sprintf(
+		"/api/v1/repos/%s/%s/issues/%d/comments",
+		url.PathEscape(owner), url.PathEscape(repository), spec.PullRequestNumber,
+	), payload)
+	if err != nil {
+		return false, err
+	}
+	if status != http.StatusCreated {
+		return false, fmt.Errorf("%w: publish validation result returned HTTP %d", project.ErrForgejoUnavailable, status)
+	}
+	return true, nil
+}
+
 func (client *Client) reconcilePullRequestPlan(
 	ctx context.Context,
 	owner string,
@@ -1200,6 +1401,15 @@ func (client *Client) doJSON(
 func repositoryBranchPath(owner, repository, branch string) string {
 	return "/api/v1/repos/" + url.PathEscape(owner) + "/" +
 		url.PathEscape(repository) + "/branches/" + url.PathEscape(branch)
+}
+
+func branchProtectionsPath(owner, repository string) string {
+	return "/api/v1/repos/" + url.PathEscape(owner) + "/" +
+		url.PathEscape(repository) + "/branch_protections"
+}
+
+func branchProtectionPath(owner, repository, branch string) string {
+	return branchProtectionsPath(owner, repository) + "/" + url.PathEscape(branch)
 }
 
 func pullRequestsPath(owner, repository string) string {

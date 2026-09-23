@@ -931,7 +931,7 @@ func helperTurnHasImplementationSchema(raw json.RawMessage) bool {
 	}
 	return json.Unmarshal(raw, &params) == nil && slices.Equal(
 		params.OutputSchema.Required,
-		[]string{"action", "summary", "commit_id", "pull_request_number"},
+		[]string{"action", "summary", "commit_id", "pull_request_number", "system_packages", "environment_reason"},
 	)
 }
 

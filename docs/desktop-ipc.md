@@ -14,6 +14,10 @@ This is the Tauri `invoke` command surface plus emitted events. It is separate
 from the coordinator HTTP API ([`coordinator-api.md`](coordinator-api.md)),
 which the frontend reaches directly over loopback.
 
+Phase 4 keeps the same ownership split: the coordinator owns requests and
+results, Tauri performs fixed Docker operations, and the renderer only chooses
+approve/reject/run and displays progress. See ADR-010.
+
 ## Conventions
 
 - **Arg names:** Tauri maps Rust snake_case params to **camelCase** JS keys, so
@@ -53,6 +57,100 @@ Docker probes and Compose lifecycle commands execute on blocking worker
 threads. Long daemon startup, image pulls, and container reconciliation must
 not block the desktop event loop; the frontend remains responsive and advances
 its startup display from observed Docker and service-health milestones.
+
+## Phase 4 backend commands
+
+These commands are the native half of the project-environment and isolated
+validation boundary. The backend implementation lands before its frontend.
+
+- `provision_environment_request(requestId) -> EnvironmentProvisionResult`
+  fetches one already-approved request from the coordinator, rebuilds the fixed
+  Codex and Claude derivative images from the durable approved package union,
+  uses that environment for workers and validation, recreates connected
+  workers, and reports resolved Debian versions. The renderer supplies only
+  the opaque request ID.
+- `run_validation_job(jobId) -> ValidationRunResult` fetches and claims one
+  coordinator-created job, resolves its managed workspace and exact commit,
+  runs the coordinator-owned command list in a disposable validation container,
+  and reports the bounded result. The renderer supplies only the opaque job ID.
+
+Neither command accepts package names, shell text, paths, image names, resource
+limits, environment variables, volume specifications, or Docker arguments from
+the renderer. Tauri obtains those fields from the loopback coordinator and
+uses fixed images, mounts, entrypoint, network policy, and resource ceilings.
+Provider state, Forgejo credentials, worker API tokens, the Docker socket, and
+the user's source repository are never mounted into validation.
+
+The renderer integration should:
+
+1. read environment requests and validation jobs from the coordinator API;
+2. call coordinator approve/reject, create-validation, or retry-validation
+   endpoints;
+3. invoke the matching native command with only the returned ID;
+4. refresh coordinator state until it is `ready`, `passed`, `failed`, or
+   `rejected`; and
+5. display native execution errors without attempting the Docker operation in
+   JavaScript.
+
+Environment provisioning is installation-wide in the current shared-worker
+topology. The UI should describe approval as adding the packages to all real
+agent and validation containers, not as changing the user's host system.
+After `stack_update`, replay `provision_environment_request` with the newest
+`ready` request when any approved packages exist. The native command accepts
+that terminal request deliberately: it rebuilds the derivative environment
+from the newly selected base images and idempotently retries the fixed resume
+message. Base-image pulls always bypass the local derivative overlay.
+
+```ts
+type EnvironmentRequest = {
+  id: string;
+  project_id: string;
+  feature_id: string;
+  run_id: string;
+  session_id: string;
+  attempt_id: string;
+  system_packages: string[];
+  reason: string;
+  status: "requested" | "approved" | "provisioning" | "ready" | "rejected" | "failed";
+  resolved_packages: Record<string, string>;
+  error?: string;
+  requested_at: string;
+  updated_at: string;
+  completed_at?: string;
+};
+
+type EnvironmentProvisionResult = {
+  request: EnvironmentRequest;
+  resolved_packages: Record<string, string>;
+  codex_image: string;
+  claude_image: string;
+};
+
+type ValidationCommandResult = {
+  command: string;
+  exit_code: number;
+  output: string;
+  duration_ms: number;
+};
+
+type ValidationJob = {
+  id: string;
+  project_id: string;
+  feature_id: string;
+  run_id: string;
+  workspace_id: string;
+  commit_id: string;
+  commands: string[];
+  status: "pending" | "running" | "passed" | "failed";
+  results: ValidationCommandResult[];
+  error?: string;
+  created_at: string;
+  updated_at: string;
+  completed_at?: string;
+};
+
+type ValidationRunResult = { job: ValidationJob };
+```
 
 UI-local persistence:
 

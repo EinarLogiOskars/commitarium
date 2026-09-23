@@ -381,6 +381,66 @@ func TestJournalBackedServiceMarksInterruptedWorkIndeterminateOnStartup(t *testi
 	_ = provider.Advance(t.Context(), identity.SessionID)
 }
 
+func TestJournalBackedServiceResumesSafeInterruptedAttemptOnStartup(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "worker.db")
+	clock := newStepClock()
+	script := worker.Script{
+		Events:      []worker.Event{{Type: worker.EventActivity, Text: "continued after restart"}},
+		Disposition: worker.DispositionSucceeded,
+		Summary:     "completed recovered work",
+	}
+	firstProvider := worker.NewScriptedAdapter("codex", map[worker.Role]worker.Script{
+		worker.RoleCoder: script,
+	})
+	first := newHTTPHarness(t, path, firstProvider, clock)
+	identity := validLaunchIdentity("ses_restart", "att_restart", "launch_restart")
+	request := validPutRequest()
+	attempt, created, err := first.client.PutAttempt(t.Context(), identity, request)
+	if err != nil || !created || attempt.State != workerhttp.AttemptStateRunning {
+		t.Fatalf("start recoverable attempt: attempt=%+v created=%t error=%v", attempt, created, err)
+	}
+	providerSessionID := attempt.ProviderSessionID
+	first.cancel()
+	waitForNoActiveSession(t, first.service, attempt.AttemptReference)
+	first.server.Close()
+	if err := first.db.Close(); err != nil {
+		t.Fatalf("close interrupted journal: %v", err)
+	}
+
+	reopenedProvider := worker.NewScriptedAdapter("codex", map[worker.Role]worker.Script{
+		worker.RoleCoder: script,
+	})
+	reopened := newHTTPHarness(t, path, reopenedProvider, clock)
+	defer reopened.close(t)
+	if reopened.recovery.AttemptsResumed != 1 || reopened.recovery.AttemptsMarked != 0 ||
+		reopened.recovery.MutationsMarked != 0 {
+		t.Fatalf("startup recovery = %+v", reopened.recovery)
+	}
+	recovered := waitForAttemptState(t, reopened.client, attempt.AttemptReference, workerhttp.AttemptStatePaused)
+	if recovered.ProviderSessionID != providerSessionID {
+		t.Fatalf("recovered provider session = %q, want %q", recovered.ProviderSessionID, providerSessionID)
+	}
+	reader, err := reopened.client.OpenEventStream(t.Context(), attempt.AttemptReference, 0)
+	if err != nil {
+		t.Fatalf("open recovered event stream: %v", err)
+	}
+	defer reader.Close()
+	assertNextEvent(t, reader, 1, workerhttp.EventRecoveryAssessment,
+		"Recovery assessment: durable activity matches the restored simulated conversation and workflow phase. Repository, worktree, Git HEAD/status/diff, interrupted tests, and Forgejo PR state are not applicable to this simulated worker.")
+	if _, err := reopened.client.SendCommand(
+		t.Context(), commandIdentity(attempt.AttemptReference, "continue_restart"),
+		workerhttp.CommandRequest{Type: workerhttp.CommandContinue},
+	); err != nil {
+		t.Fatalf("continue recovered attempt: %v", err)
+	}
+	assertNextEvent(t, reader, 2, workerhttp.EventContinued, "session continued")
+	if err := reopenedProvider.Advance(t.Context(), identity.SessionID); err != nil {
+		t.Fatalf("advance recovered attempt: %v", err)
+	}
+	assertNextEvent(t, reader, 3, workerhttp.EventActivity, "continued after restart")
+	assertNextEvent(t, reader, 4, workerhttp.EventAttemptTerminal, script.Summary)
+}
+
 func TestJournalBackedServiceResumesAtRecoveryBoundaryAndStopsCooperatively(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "worker.db")
 	clock := newStepClock()

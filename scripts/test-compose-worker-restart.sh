@@ -61,9 +61,38 @@ import json,sys
 attempt=json.load(sys.stdin)
 assert attempt["session_id"] == "ses_container", attempt
 assert attempt["attempt_id"] == "att_original", attempt
-assert attempt["state"] == "indeterminate", attempt
+assert attempt["state"] == "paused", attempt
 assert attempt["provider_session_id"] == sys.argv[1], attempt
-' "$expected_provider_session_id"
+assert attempt["latest_event_sequence"] >= int(sys.argv[2]), attempt
+' "$expected_provider_session_id" "$2"
+}
+
+wait_for_recovered_attempt() {
+    expected_provider_session_id="$1"
+    minimum_sequence="$2"
+    attempts=0
+    while [ "$attempts" -lt 80 ]; do
+        recovered_json=$(curl --fail --silent "$attempt_url" \
+            --header "Authorization: Bearer $worker_token")
+        state=$(printf '%s' "$recovered_json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["state"])')
+        if [ "$state" = "paused" ]; then
+            printf '%s' "$recovered_json" | assert_recovered_attempt "$expected_provider_session_id" "$minimum_sequence"
+            return 0
+        fi
+        attempts=$((attempts + 1))
+        sleep 0.25
+    done
+    echo "worker did not reach its recovery boundary: $recovered_json" >&2
+    return 1
+}
+
+continue_attempt() {
+    key="$1"
+    curl --fail --silent --request POST "$attempt_url/commands" \
+        --header "Authorization: Bearer $worker_token" \
+        --header 'Content-Type: application/json' \
+        --header "Idempotency-Key: $key" \
+        --data '{"type":"continue","message":""}' >/dev/null
 }
 
 attempt_url="$base_url/sessions/ses_container/attempts/att_original"
@@ -82,9 +111,7 @@ provider_session_id=$(printf '%s' "$launch_json" | assert_running_attempt)
 
 recreate_worker
 
-recovered_json=$(curl --fail --silent "$attempt_url" \
-    --header "Authorization: Bearer $worker_token")
-printf '%s' "$recovered_json" | assert_recovered_attempt "$provider_session_id"
+wait_for_recovered_attempt "$provider_session_id" 1
 
 retry_output=$(curl --silent --request PUT "$attempt_url" \
     --header "Authorization: Bearer $worker_token" \
@@ -98,7 +125,7 @@ if [ "$retry_status" != "200" ]; then
     echo "exact launch retry returned HTTP $retry_status: $retry_json" >&2
     exit 1
 fi
-printf '%s' "$retry_json" | assert_recovered_attempt "$provider_session_id"
+printf '%s' "$retry_json" | assert_recovered_attempt "$provider_session_id" 1
 
 replacement_output=$(curl --silent --request PUT \
     "$base_url/sessions/ses_container/attempts/att_replacement" \
@@ -119,9 +146,8 @@ response=json.load(sys.stdin)
 assert response["error"]["code"] == "attempt_active", response
 '
 
+continue_attempt continue-after-first-restart
 recreate_worker
-recovered_again_json=$(curl --fail --silent "$attempt_url" \
-    --header "Authorization: Bearer $worker_token")
-printf '%s' "$recovered_again_json" | assert_recovered_attempt "$provider_session_id"
+wait_for_recovered_attempt "$provider_session_id" 3
 
 echo "standalone worker container restart test passed"

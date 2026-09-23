@@ -355,6 +355,12 @@ func (service *Service) finishAttempt(
 			Tools: result.ToolchainProposal.Tools, Services: result.ToolchainProposal.Services,
 		}
 	}
+	if result.EnvironmentRequest != nil {
+		terminalResult.EnvironmentRequest = &workerhttp.EnvironmentRequest{
+			SystemPackages: append([]string(nil), result.EnvironmentRequest.SystemPackages...),
+			Reason:         result.EnvironmentRequest.Reason,
+		}
+	}
 	terminalResult.GoalDraft = result.GoalDraft
 	terminalResult.ImplementationPlan = result.ImplementationPlan
 	if result.Outcome == worker.OutcomeFailed {

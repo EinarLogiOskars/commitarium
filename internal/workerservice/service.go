@@ -97,9 +97,11 @@ type Service struct {
 var _ workerhttp.Service = (*Service)(nil)
 var _ workerhttp.EventSource = (*Service)(nil)
 
-// New creates one worker-service instance and performs its startup recovery
-// transaction before it can serve requests. Any nonterminal journal entries
-// came from a previous process incarnation and therefore become indeterminate.
+// New creates one worker-service instance and performs startup recovery before
+// it can serve requests. A running attempt with a durable provider identity,
+// complete launch data, and no uncertain command is resumed against the same
+// provider conversation. Other nonterminal work remains fenced as
+// indeterminate for explicit user review.
 func New(
 	ctx context.Context,
 	config Config,
@@ -149,11 +151,113 @@ func New(
 		bufferSize:          bufferSize,
 		forceStopTimeout:    forceStopTimeout,
 	}
-	recovery, err := service.journal.RecoverInterrupted(ctx, service.timestamp())
+	interrupted, recovery, err := service.journal.PrepareInterruptedRecovery(ctx, service.timestamp())
 	if err != nil {
 		return nil, workerjournal.RecoveryResult{}, fmt.Errorf("recover worker journal at startup: %w", err)
 	}
+	for _, candidate := range interrupted {
+		if err := service.resumeInterruptedAttempt(ctx, candidate); err != nil {
+			_ = service.markIndeterminate(context.WithoutCancel(ctx), candidate.Attempt)
+			recovery.AttemptsMarked++
+			continue
+		}
+		recovery.AttemptsResumed++
+	}
 	return service, recovery, nil
+}
+
+func (service *Service) resumeInterruptedAttempt(
+	ctx context.Context,
+	candidate workerjournal.InterruptedAttempt,
+) error {
+	request := candidate.Request
+	request.Mode = workerhttp.AttemptModeResume
+	request.ProviderSessionID = candidate.Attempt.ProviderSessionID
+	request.Instructions = interruptedRecoveryBriefing(candidate.Attempt)
+	identity := workerhttp.MutationIdentity{
+		AttemptReference: candidate.Attempt.AttemptReference,
+		IdempotencyKey:   "worker_restart_recovery",
+	}
+	if err := request.Validate(identity); err != nil {
+		return fmt.Errorf("validate interrupted provider resume: %w", err)
+	}
+	launchEnvironment, err := service.environmentResolver.Resolve(service.lifetime, request.Assignment)
+	if err != nil {
+		return fmt.Errorf("resolve interrupted provider environment: %w", err)
+	}
+	if !launchEnvironmentMatches(launchEnvironment, request.Assignment) {
+		return fmt.Errorf("%w: recovery resolver returned a different assignment", ErrConfigurationMismatch)
+	}
+	completed, err := service.journal.ListEventsAfter(ctx, candidate.Attempt.AttemptReference, 0)
+	if err != nil {
+		return fmt.Errorf("load interrupted provider events: %w", err)
+	}
+	providerSession, err := service.provider.Resume(service.lifetime, worker.ResumeRequest{
+		SessionRequest: worker.SessionRequest{
+			SessionID: candidate.Attempt.SessionID, AttemptID: candidate.Attempt.AttemptID,
+			FeatureID: request.Assignment.FeatureID, Role: worker.Role(request.Assignment.Role),
+			Model: request.Assignment.Model, Instructions: request.Instructions,
+			OutputContract:    worker.OutputContract(request.OutputContract),
+			WorkspaceAccess:   worker.WorkspaceAccess(request.WorkspaceAccess),
+			LaunchEnvironment: launchEnvironment.Clone(),
+		},
+		ProviderSessionID: candidate.Attempt.ProviderSessionID,
+		Recovery: worker.RecoveryContext{
+			Briefing: request.Instructions, CompletedEvents: workerEvents(completed),
+			PreviousState: string(candidate.Attempt.State),
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("resume interrupted provider session: %w", err)
+	}
+	if providerSession == nil || providerSession.ProviderSessionID() != candidate.Attempt.ProviderSessionID {
+		service.stopUnownedSession(providerSession)
+		return errors.New("resumed provider returned a different session identity")
+	}
+	live := &activeProviderSession{session: providerSession, finished: make(chan struct{})}
+	service.activeMu.Lock()
+	if _, exists := service.active[candidate.Attempt.AttemptReference]; exists {
+		service.activeMu.Unlock()
+		service.stopUnownedSession(providerSession)
+		return errors.New("interrupted provider attempt already has a live owner")
+	}
+	service.active[candidate.Attempt.AttemptReference] = live
+	service.activeMu.Unlock()
+	go service.supervise(candidate.Attempt.AttemptReference, live)
+	return nil
+}
+
+func (service *Service) stopUnownedSession(session worker.Session) {
+	if session == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(service.lifetime), service.forceStopTimeout)
+	defer cancel()
+	if forceStoppable, ok := session.(worker.ForceStoppableSession); ok {
+		_ = forceStoppable.ForceStop(ctx, "worker recovery rejected the resumed provider identity")
+		return
+	}
+	_ = session.Send(ctx, worker.Command{
+		ID: "worker-recovery-rejected", Type: worker.CommandStop,
+	})
+}
+
+func workerEvents(events []workerhttp.Event) []worker.Event {
+	converted := make([]worker.Event, 0, len(events))
+	for _, event := range events {
+		converted = append(converted, worker.Event{Type: worker.EventType(event.Type), Text: event.Text, StreamID: event.StreamID})
+	}
+	return converted
+}
+
+func interruptedRecoveryBriefing(attempt workerhttp.Attempt) string {
+	return "The Commitarium worker container restarted while this exact provider turn was active. " +
+		"Resume the existing provider conversation and reconcile the managed workspace, Git status and diff, " +
+		"completed commands, tests, commits, and Forgejo state before doing more work. Treat durable repository " +
+		"and Forgejo facts as authoritative, do not repeat an already completed external effect, and continue the " +
+		"original task only when the state is consistent. If the state is ambiguous or contradictory, return the " +
+		"blocked or input-required result allowed by the current output contract. The durable worker attempt is " +
+		attempt.AttemptID + "."
 }
 
 func (service *Service) PutAttempt(
@@ -182,6 +286,7 @@ func (service *Service) PutAttempt(
 			StartedAt:         now,
 			UpdatedAt:         now,
 		},
+		Request:        request,
 		IdempotencyKey: identity.IdempotencyKey,
 		RequestDigest:  digest,
 	})

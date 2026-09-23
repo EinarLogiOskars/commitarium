@@ -20,9 +20,10 @@ A **session** is the logical conversation that the coordinator wants to keep
 across restarts. The provider session ID identifies that conversation inside
 Codex or Claude Code.
 
-An **attempt** is one exact supervised CLI process for the session. Its attempt
-ID is also a safety token: a command carrying an old attempt ID cannot control
-or terminate a newer process.
+An **attempt** is one durable provider turn for the session. It normally owns
+one supervised CLI process, but may reconnect to the same provider conversation
+after the worker process is replaced. Its attempt ID is also a safety token: a
+command carrying an old attempt ID cannot control or terminate a newer turn.
 
 ## Authentication
 
@@ -96,8 +97,9 @@ contracts:
   complete agreed plan as `plan_submitted`. A submission also includes a title,
   subtitle, and ordered commit-sized steps with details, verification, and an
   intended commit subject.
-- `implementation_lead` makes the lead return either a blocker or the exact
-  commit and pull-request identities it published.
+- `implementation_lead` makes the lead return a blocker, a structured request
+  for approved Debian packages that are missing from the managed environment,
+  or the exact commit and pull-request identities it published.
 - `implementation_reviewer` makes the reviewer return either a blocker or the
   exact commit, pull request, formal review ID, and approval/changes-requested
   decision it published. Its `summary` is the concise session result and may be
@@ -336,10 +338,14 @@ ordered replay.
 
 Only one nonterminal attempt may exist for a coordinator session. A terminal
 attempt releases that fence, but an indeterminate attempt continues blocking a
-replacement. On worker restart, active attempts and pending mutations are
-marked indeterminate together in one transaction. Exact retries remain
-recognizable after database reopen, while changed retries, event gaps, and
-altered event replay are rejected.
+replacement. The original launch request is durable. On worker restart, a
+cleanly running attempt with its exact provider-session identity and no pending
+mutation reconnects to that provider conversation under the same attempt ID
+and event sequence. Paused, starting, stopping, legacy, malformed, or
+command-ambiguous attempts are marked indeterminate, and pending mutations are
+marked indeterminate in the same transaction. Exact retries remain recognizable
+after database reopen, while changed retries, event gaps, and altered event
+replay are rejected.
 
 Provider events are stored before live publication. Opening an SSE stream reads
 history and registers the live subscriber under the same service lock, which
@@ -349,10 +355,11 @@ terminal result and closing subscribers. A resumed deterministic session
 publishes its recovery assessment and waits at a durable paused boundary for a
 continue or stop command.
 
-Creating the service performs startup recovery before requests are served:
-leftover active attempts and pending commands become indeterminate. Retrying
-the original launch then returns that same uncertain record without starting a
-second provider, and the uncertain attempt keeps fencing replacements.
+Creating the service performs startup recovery before requests are served.
+Eligible running attempts resume at a recovery boundary and emit a durable
+recovery assessment before further work. Unsafe-to-resume attempts remain
+fenced for explicit review. Retrying the original launch returns that same
+durable record and never starts a second provider.
 The same fence is applied when a provider process appears to start but does not
 return the expected resumable provider session ID; the worker cannot safely
 assume that such a process is absent merely because its identity is unusable.
@@ -405,12 +412,13 @@ finite test queue. The normal Compose configuration deliberately does not
 publish port 8081 to the host.
 
 On process startup, the journal-backed service performs recovery before the
-HTTP server begins listening. Therefore a recreated container exposes leftover
-active work only after it has been marked indeterminate. The repeatable
+HTTP server begins listening. A recreated container resumes an eligible active
+turn against its exact provider conversation and pauses at a durable recovery
+assessment; ambiguous state remains indeterminate. The repeatable
 `scripts/test-compose-worker-restart.sh` check temporarily publishes a random
 localhost port, interrupts an active attempt, recreates the container twice,
-and verifies that the same provider session identity remains fenced against a
-replacement.
+and verifies that the same provider session and attempt identities survive
+both restarts while replacement attempts remain fenced.
 
 The opt-in `codex-worker` service wires an operating-system provider process
 into the standalone service. Its image

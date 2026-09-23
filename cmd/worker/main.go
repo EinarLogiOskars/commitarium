@@ -195,9 +195,10 @@ func run(ctx context.Context, workerConfig config) error {
 	if err != nil {
 		return fmt.Errorf("create worker service: %w", err)
 	}
-	if recovery.AttemptsMarked > 0 || recovery.MutationsMarked > 0 {
+	if recovery.AttemptsResumed > 0 || recovery.AttemptsMarked > 0 || recovery.MutationsMarked > 0 {
 		log.Printf(
-			"worker startup marked %d attempt(s) and %d command(s) indeterminate",
+			"worker startup resumed %d attempt(s) and marked %d attempt(s) and %d command(s) indeterminate",
+			recovery.AttemptsResumed,
 			recovery.AttemptsMarked,
 			recovery.MutationsMarked,
 		)

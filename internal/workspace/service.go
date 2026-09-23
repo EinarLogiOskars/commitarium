@@ -26,6 +26,7 @@ var ErrBranchConflict = errors.New("Forgejo feature branch exists at a different
 var ErrCheckoutConflict = errors.New("managed checkout conflicts with its durable workspace")
 var ErrCheckoutUnavailable = errors.New("managed checkout is unavailable")
 var ErrPullRequestConflict = errors.New("managed Forgejo pull request conflicts with its durable workspace")
+var ErrPullRequestUnavailable = errors.New("managed Forgejo pull request service is unavailable")
 
 type FeatureFinder interface {
 	GetByID(ctx context.Context, projectID, featureID string) (feature.Feature, error)
@@ -92,7 +93,38 @@ type PullRequestManager interface {
 }
 
 type RepositoryAccessManager interface {
-	EnsureRepositoryCollaborators(ctx context.Context, owner, repository string) error
+	EnsureRepositoryAccess(
+		ctx context.Context,
+		owner string,
+		repository string,
+		defaultBranch string,
+	) error
+}
+
+type ValidationResultPublisher interface {
+	EnsureValidationResult(context.Context, string, string, ValidationPublicationSpec) (bool, error)
+}
+
+func (service *Service) PublishValidationResult(
+	ctx context.Context,
+	projectID, featureID string,
+	spec ValidationPublicationSpec,
+) (bool, error) {
+	if err := spec.Validate(); err != nil {
+		return false, err
+	}
+	stored, err := service.Get(ctx, projectID, featureID)
+	if err != nil {
+		return false, err
+	}
+	if stored.PullRequestNumber != spec.PullRequestNumber || stored.ApprovedCommitID != spec.CommitID {
+		return false, ErrPullRequestConflict
+	}
+	publisher, ok := service.pullRequests.(ValidationResultPublisher)
+	if !ok {
+		return false, ErrPullRequestUnavailable
+	}
+	return publisher.EnsureValidationResult(ctx, stored.RepositoryOwner, stored.RepositoryName, spec)
 }
 
 // RecordMergeReady durably pins the exact commit approved by both agents.
@@ -469,8 +501,8 @@ func (service *Service) PrepareForClarification(
 	}
 	if service.repositoryAccess != nil {
 		repository := storedProject.ForgejoRepository
-		if err := service.repositoryAccess.EnsureRepositoryCollaborators(
-			ctx, repository.Owner, repository.Name,
+		if err := service.repositoryAccess.EnsureRepositoryAccess(
+			ctx, repository.Owner, repository.Name, repository.DefaultBranch,
 		); err != nil {
 			return Workspace{}, false, fmt.Errorf("ensure agent repository access: %w", err)
 		}

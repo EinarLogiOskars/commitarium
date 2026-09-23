@@ -2,7 +2,30 @@
 
 ## Status
 
-This document captures the current product vision and technical plan for Commitarium. It is a living design document: settled decisions should remain stable, while proposed decisions should be promoted into architecture decision records as implementation begins.
+This document captures the current product vision, implemented foundation, and
+remaining roadmap for Commitarium. It is a living design document: settled
+decisions remain here or in architecture decision records, while phase statuses
+describe the repository rather than the order in which work happened.
+
+Last reconciled with the implementation: 2026-09-23.
+
+Remaining milestones are completed in numeric order. Work that already landed
+out of order remains recorded in its owning phase; it does not make an earlier
+incomplete phase complete. Phase 2 is closed. Phase 4's coordinator, worker, and
+trusted-native backend are implemented; its renderer integration is the active
+remaining slice.
+
+| Phase | Status |
+| --- | --- |
+| Phase 0: Foundation and decisions | Complete |
+| Phase 1: Headless workflow core | Complete |
+| Phase 2: Real agent adapters | Complete |
+| Phase 3: Git and Forgejo workflow | Complete |
+| Phase 4: Project environments and isolated validation | Backend complete; renderer integration pending |
+| Phase 5: Desktop application | In progress |
+| Phase 6: Trusted host handoff | Substantially complete |
+| Phase 7: Rich review and visualization | Planned |
+| Phase 8: Remote and phone access | Deferred |
 
 ## Product vision
 
@@ -19,7 +42,9 @@ The first supported collaboration is between Codex CLI and Claude Code. The desi
 3. **Independent review:** The agent acting as reviewer must critically evaluate the implementation rather than ratify the coder's work.
 4. **Context continuity:** The agreed plan, architectural reasoning, implementation history, and review history remain available throughout the feature lifecycle.
 5. **Auditable work:** Plans, commits, reviews, findings, responses, test results, and decisions are durable and inspectable.
-6. **Local-first isolation:** Agent execution and CI run inside controlled containers, protecting the host and the user's upstream repository.
+6. **Local-first isolation:** Agent execution runs inside controlled containers,
+   protecting the host and the user's upstream repository. Disposable,
+   credential-free validation workers provide the independent merge gate.
 7. **Controlled handoff:** Iterative agent activity stays in the internal forge. The trusted host converts accepted work into one clean local commit, and pushing that commit to any external Git provider is a separate user-controlled action; users may explicitly chain the two.
 8. **Provider choice:** The user chooses which agent codes and which reviews, and can configure subscription-backed or API-backed authentication explicitly.
 9. **No silent billing changes:** The system never silently switches from subscription usage to API billing, or between billing profiles.
@@ -37,7 +62,8 @@ The initial product will provide:
 - Project and feature conversations with the user, Codex, and Claude.
 - A structured feature workflow from discovery through an approved merge into Forgejo's default branch.
 - An internal Forgejo instance with distinct agent identities.
-- Isolated implementation, review, and CI activity.
+- Isolated implementation and review activity, with separately isolated
+  validation for the exact approved revision.
 - Configurable coder and reviewer assignments.
 - Explicit authentication profiles for subscriptions and APIs.
 - A visible audit history and review inbox.
@@ -70,7 +96,7 @@ Docker Compose workspace
     +-- Forgejo
     +-- Codex worker
     +-- Claude worker
-    +-- Disposable, credential-free CI workers
+    +-- Disposable, credential-free validation workers (Phase 4)
     +-- Persistent internal data volumes
 ```
 
@@ -78,7 +104,9 @@ The desktop application is the control surface, not the workflow engine. The Com
 
 ### Desktop application
 
-The planned desktop shell is Tauri 2 with a web-technology frontend. This provides a native desktop application while allowing the interface and shared types to be reused later.
+The desktop shell uses Tauri 2 with a React, TypeScript, and Vite frontend. This
+provides a native desktop application while keeping the renderer separate from
+trusted host operations.
 
 Its responsibilities are:
 
@@ -95,7 +123,8 @@ The privileged desktop boundary must expose a small, explicit command set. An un
 
 ### Local launcher
 
-A small trusted host-side component manages the Compose lifecycle. It may be packaged as a Tauri sidecar or implemented in the Tauri backend.
+The trusted Tauri backend manages the Compose lifecycle and narrowly scoped
+host integrations.
 
 It is responsible for:
 
@@ -175,11 +204,15 @@ Forgejo stores:
 
 The first desktop UI may deep-link to Forgejo for detailed review. A later version can use the Forgejo API to render diffs and review controls directly inside Commitarium. Untrusted Forgejo content must not share a privileged native bridge.
 
-### CI workers
+### Validation workers
 
-Repository code and tests are untrusted. They must run in disposable workers without agent, Forgejo-administrator, or GitHub credentials.
+Phase 4 adds disposable validation workers. Their purpose is to run
+project-defined checks without provider, Forgejo-administrator, or upstream
+credentials, separately from the ordinary agent workflow. The coordinator and
+trusted Tauri backend are implemented; the renderer controls documented later
+in this plan remain to be built.
 
-CI workers should receive only:
+Validation workers should receive only:
 
 - A specific source revision.
 - The project-defined validation commands.
@@ -187,11 +220,16 @@ CI workers should receive only:
 - An isolated network policy.
 - A writeable temporary workspace.
 
-They must not receive the host Docker socket. A compromised test suite must not be able to control the host or steal agent credentials.
+They do not receive the host Docker socket. The native runner uses no network,
+fixed CPU, memory, PID, and time limits, a read-only root filesystem, and a
+temporary writable workspace. These limits apply to isolated validation, not
+to the ordinary development agents working inside their managed containers.
 
 ### Host-side source handoff
 
-Forgejo is the only forge used by the managed agent workflow. The coordinator, Forgejo, agent workers, and CI workers do not receive GitHub credentials or access to the user's GitHub repositories.
+Forgejo is the only forge used by the managed agent workflow. The coordinator,
+Forgejo, agent workers, and validation workers do not receive GitHub
+credentials or access to the user's GitHub repositories.
 
 After an approved internal pull request is merged into Forgejo's protected
 default branch, Commitarium offers two separate trusted-host actions:
@@ -231,7 +269,12 @@ Each imported project receives isolated logical resources:
 - Internal merge policy and optional host-handoff configuration references.
 - Audit events and artifacts.
 
-Project files may originate from a local clone of a GitHub repository. Importing a project must not modify its upstream default branch. The precise mirroring/worktree strategy will be decided before implementing project import.
+Project files may originate from a local Git repository or plain folder. The
+trusted desktop checks the selected source, stores its host path only in local
+app state, and uploads committed Git data to a private internal Forgejo
+repository. Feature work uses separate Commitarium-managed checkouts. Importing
+or working on a project does not modify the original source or its upstream
+remote.
 
 Managed feature workspaces live in container-controlled storage and use Forgejo
 as their Git remote. An agent receives only its scoped workspace rather than a
@@ -258,13 +301,17 @@ The result is a user-accepted goal with explicit acceptance criteria. The system
 
 The lead agent takes the accepted goal to the consulting agent. They inspect the project and propose a plan together. They must challenge each other's assumptions, identify risks, and converge on a plan both consider acceptable.
 
-The coordinator creates the internal feature branch and draft Forgejo pull
-request after goal acceptance and before this discussion begins. It routes the
-agents' authored messages between their existing provider sessions without
-summarizing them in transit. The user sees the same ordered conversation live
-and may address either agent, pause the exchange, or resolve a disagreement.
-Material proposals, objections, decisions, and the accepted plan are also
-recorded in the draft pull request under the appropriate identity.
+Goal acceptance reserves a managed checkout pinned to the exact internal
+default-branch revision, but does not yet create a feature branch or pull
+request. The coordinator routes the agents' authored planning messages between
+their existing provider sessions without summarizing them in transit. The user
+sees the same ordered conversation live and may address either agent, pause the
+exchange, or resolve a disagreement.
+
+Only a durable final `plan_submitted` event promotes the checkout to the feature
+branch, creates the draft Forgejo pull request, and publishes the accepted plan.
+The full planning conversation remains in Commitarium rather than being copied
+into Forgejo.
 
 Consensus does not mean superficial agreement. Each agent must be instructed to:
 
@@ -302,12 +349,12 @@ Agents have autonomy over implementation details that remain within the accepted
 
 ### 5. Internal pull request
 
-The draft internal Forgejo pull request created before collaborative planning is
-updated throughout the workflow. It is the canonical human-readable
-engineering and review record. Its description contains the accepted goal and
-acceptance criteria, the complete agreed plan with its revision identifier, an
-implementation summary, validation evidence, plan deviations, and known risks
-or limitations.
+The draft internal Forgejo pull request created after planning agreement is
+updated throughout implementation and review. It is the canonical
+human-readable engineering and review record. Its description contains the
+accepted goal and acceptance criteria, the complete agreed plan with its
+revision identifier, an implementation summary, validation evidence, plan
+deviations, and known risks or limitations.
 
 Assigned agents write these structured engineering records directly using
 their separate scoped Forgejo identities. Commitarium shows their full explicit
@@ -349,7 +396,7 @@ The loop is bounded by configurable limits for rounds, time, and usage. A genuin
 
 A feature becomes eligible to merge into Forgejo's default branch only when:
 
-- Required CI checks pass.
+- Any configured validation checks pass.
 - All blocking findings are resolved or explicitly accepted by the user.
 - The reviewer approves.
 - The implemented behavior satisfies the accepted plan revision.
@@ -434,23 +481,33 @@ Requirements:
 
 ## Security boundaries
 
-Commitarium executes code written or influenced by agents, so repositories, prompts, generated code, dependencies, build scripts, and test suites must all be treated as potentially hostile.
+Commitarium's current security goal is deliberately narrow and is defined in
+[`docs/threat-model.md`](docs/threat-model.md): agent-controlled work must stay
+inside its managed environment and must not directly affect the host system,
+the user's original repository, or an upstream repository.
 
-Required boundaries include:
+Workers are intentionally useful inside that boundary. Their managed
+workspaces, provider state, and scoped internal Forgejo credentials are working
+tools, not boundary failures. Current boundary requirements are:
 
-- Separate agent identities and credentials.
-- Least-privilege mounts for each container.
-- No agent credentials in test runners.
-- No GitHub credentials or GitHub repository access in the coordinator, Forgejo, agent, or CI containers.
-- No host Docker socket in untrusted containers.
-- Explicit network policies where feasible.
-- Resource, time, and concurrency limits.
-- Secret redaction before logging.
-- User approval for privileged host actions.
-- Verifiable source revisions and artifact hashes at internal merge and host-handoff boundaries.
-- Safe cancellation and cleanup without deleting user-owned repositories.
+- no original repository path, upstream credential, or host Docker socket in an
+  agent container;
+- separate provider and internal Forgejo identities for lead and reviewer roles;
+- explicit trusted-host operations for local synchronization and upstream
+  publication;
+- exact revision verification at merge and handoff boundaries;
+- secret-aware logs, errors, events, and IPC; and
+- safe cancellation and cleanup that do not reset, clean, delete, or force-push
+  user-owned repositories.
 
-The application must never claim that containers are a complete security boundary. The threat model and residual risks should be documented honestly as the implementation develops.
+Phase 4 adds separately isolated validation workers with explicit resource and
+network policies. Backup and restore, installer signing, and remote multi-user
+operation are later operational concerns. They do not redefine the current
+host and upstream isolation boundary.
+
+Commitarium relies on Docker for worker containment and does not claim to defend
+against a compromised host account, Docker daemon, operating system, or a
+container-runtime escape.
 
 ## Docker deployment model
 
@@ -524,33 +581,40 @@ A future PWA or native companion may:
 
 The phone must connect through the Commitarium control API, never directly to Docker or an agent app server.
 
-## Proposed implementation stack
+## Implementation stack
 
-These are current defaults, subject to explicit architecture decisions before significant implementation:
+These are the current implementation choices:
 
-- **Repository:** Public monorepo using pnpm workspaces.
+- **Repository:** Public monorepo; pnpm manages the desktop package.
 - **Coordinator:** Go
-- **HTTP service:** Go's net/http initially
-- **Coordinator persistence:** SQLite for the initial single-user product.
-- **Live updates:** Server-sent events initially; WebSocket only when bidirectional realtime needs justify it.
-- **Desktop:** Tauri 2 with a web frontend.
+- **HTTP service:** Go's `net/http`
+- **Coordinator persistence:** SQLite through `modernc.org/sqlite`, with embedded
+  Goose migrations.
+- **Live updates:** Server-sent events; WebSocket remains unnecessary unless a
+  later bidirectional use case justifies it.
+- **Desktop:** Tauri 2 with React, TypeScript, and Vite.
 - **Internal forge:** Forgejo.
 - **Infrastructure:** Docker Compose.
 - **Agent integration:** Provider-specific worker adapters around Codex CLI and Claude Code.
-- **Contracts:** OpenAPI/JSON Schema with generated TypeScript clients later
-
-The choice of frontend framework remains open. The coordinator stack should be confirmed before scaffolding.
+- **Contracts:** Versioned JSON/HTTP and Tauri IPC contracts documented in
+  `docs/`; generated clients may be added later if maintaining them becomes
+  worthwhile.
 
 ## Delivery roadmap
 
 ### Phase 0: Foundation and decisions
 
+**Status: Complete (2026-09-22).**
+
 - Establish repository conventions.
 - Record the product plan and initial architecture decisions.
 - Define threat-model assumptions.
 - Confirm coordinator language, package manager, database, and API conventions.
+- Enforce formatting, linting, static analysis, builds, and tests in CI.
 
 ### Phase 1: Headless workflow core
+
+**Status: Complete.**
 
 - Create the minimal Compose stack.
 - Run the coordinator and Forgejo with persistent data.
@@ -560,9 +624,19 @@ The choice of frontend framework remains open. The coordinator stack should be c
 - Use deterministic fake Codex and Claude adapters.
 - Demonstrate restart recovery and idempotent transitions.
 
-Phase 1 is complete when a simulated feature can move from discovery through approval, persist its full event history, and resume after the stack is restarted.
+The Phase 1 completion criterion was a simulated feature moving from discovery
+through approval, persisting its full event history, and resuming after the
+stack restarted.
 
 ### Phase 2: Real agent adapters
+
+**Status: Complete.** Codex and Claude
+lead/reviewer workers, profiles, model selection, bounded conversations,
+intervention, provider-session continuity, and coordinator-process recovery are
+implemented. A worker-container restart during a clean running turn resumes the
+exact provider conversation against the same workspace, durable attempt, and
+event cursor. Paused or command-ambiguous interruptions remain fenced for user
+review rather than guessing whether an instruction was applied.
 
 - Add Codex worker integration.
 - Add Claude worker integration.
@@ -572,36 +646,75 @@ Phase 1 is complete when a simulated feature can move from discovery through app
 
 ### Phase 3: Git and Forgejo workflow
 
+**Status: Complete.**
+
 - Import a local project safely.
 - Provision separate agent identities.
 - Create isolated feature branches/workspaces.
 - Open internal pull requests.
 - Post structured reviews and resolutions.
 - Enforce internal approval gates.
+- Protect each internal default branch while preserving ordinary feature-branch
+  work.
 
-### Phase 4: Isolated validation
+### Phase 4: Project environments and isolated validation
 
+**Status: Backend complete; renderer integration pending. This is a separate
+capability, not unfinished Phase 0 work.** ADR-010 records the boundary. The
+coordinator owns requests, configuration, jobs, results, and the merge gate;
+Tauri owns the fixed Docker execution. The frontend still needs to present the
+approval and validation controls documented in `docs/desktop-ipc.md`.
+
+- Extend the project environment definition with user-approved system packages
+  in addition to exact language runtimes.
+- Let an implementation agent submit a structured system-package request when
+  project work is blocked. The coordinator pauses the workflow until the user
+  approves or rejects the exact package list.
+- Persist approved environment changes, provision them consistently for lead
+  and reviewer workers, record the resolved package versions, and resume the
+  blocked provider session after successful provisioning.
+- Expose the complete approval, provisioning, failure, and resume contract to
+  the desktop through documented coordinator and Tauri APIs. Renderer work may
+  land separately after the backend contract is settled.
 - Define project validation commands.
 - Run them in disposable credential-free workers.
 - Apply resource and network limits.
+- Run validation with the same approved project runtime and system-package
+  environment used for implementation and review.
 - Attach results to the internal pull request and workflow events.
+- Require the exact reviewed revision's configured validation commands to pass
+  before the merge gate opens.
 
 ### Phase 5: Desktop application
+
+**Status: In progress.** Core stack control, provider profiles, projects, work
+orders, conversations, settings, approval controls, and handoff surfaces are
+implemented. Clear notification and review-inbox presentation remain.
 
 - Detect and control the Compose stack.
 - Implement projects, features, shared chat, activity, review inbox, and settings.
 - Add desktop notifications and approval prompts.
 - Deep-link to Forgejo review surfaces.
+- Design and implement backup and restore for coordinator, Forgejo, credentials,
+  and trusted local handoff state before stable-release guarantees are made.
+- Complete production installer signing and notarization before the stable
+  release. Current prereleases document their unsigned or ad-hoc-signed status.
 
 ### Phase 6: Trusted host handoff
+
+**Status: Substantially complete.** Exact local synchronization, receipt-backed
+upstream publication, guarded retries, and provider-neutral Git pushing are
+implemented. Automatic synchronization-to-publication chaining remains before
+phase completion. Provider-specific pull-request creation after publication is
+an optional later enhancement, not a handoff blocker.
 
 - Synchronize an exact completed feature into a temporary host worktree as one
   clean commit using the user's configured Git identity.
 - Record and verify the internal revision to clean local commit mapping.
 - Keep local synchronization and upstream push as separate actions, with an
   option to chain them automatically.
-- Add provider-neutral host Git pushing and optional provider-specific pull
-  request integration.
+- Add provider-neutral host Git pushing. Provider-specific pull-request
+  integration is deferred as the optional enhancement described above.
 - Refuse dirty, diverged, contradictory, or ambiguous state and never
   force-push automatically.
 - Keep the detailed audit trail in Forgejo rather than embedding it in the
@@ -609,11 +722,16 @@ Phase 1 is complete when a simulated feature can move from discovery through app
 
 ### Phase 7: Rich review and visualization
 
+**Status: Planned.**
+
 - Render Forgejo diffs and review threads inside Commitarium.
 - Add the optional pixel-art town driven by workflow events.
 - Improve observability, usage reporting, and agent presence.
 
 ### Phase 8: Remote and phone access
+
+**Status: Deferred.** Remote or multi-user operation requires a separate threat
+model before implementation.
 
 - Design secure device pairing.
 - Add a PWA or native phone companion based on actual desktop usage.
@@ -621,7 +739,7 @@ Phase 1 is complete when a simulated feature can move from discovery through app
 
 ## First vertical slice
 
-The first implementation should be deliberately small:
+The completed first vertical slice was deliberately small:
 
 1. `docker compose up` starts a coordinator and Forgejo.
 2. The coordinator exposes a health endpoint.
@@ -632,20 +750,25 @@ The first implementation should be deliberately small:
 7. Stopping and restarting Compose preserves the feature and its history.
 8. Automated tests verify valid transitions, rejected transitions, replay, and idempotency.
 
-Real CLI authentication, repository mutation, and the desktop interface should wait until this slice is reliable.
+That slice established the durable state-machine and recovery foundation used by
+the later real-provider, Forgejo, desktop, and handoff phases.
 
-## Decisions still to make
+## Deferred work and remaining decisions
 
-- Choose the frontend framework for Tauri.
-- Define the exact project import, mirror, and worktree strategy.
-- Define the coordinator-to-worker protocol and trust boundary.
-- Decide how subscription credentials are provisioned into workers on each platform.
-- Define session retention and transcript-redaction policies.
-- Decide which events are stored in the coordinator versus referenced from Forgejo.
-- Define default time, round, concurrency, and usage limits.
-- Define backup, restore, and migration behavior for the shared workspace.
-- Define the supported host Git and GitHub CLI versions and exact allowlisted handoff operations.
-- Create a formal threat model before executing real repository code.
+Settled choices are recorded above and in the accepted ADRs. Remaining decisions
+belong to the phase that will implement them:
+
+- **Phase 4 UI:** placement and presentation of environment approvals,
+  provisioning progress, validation configuration, job logs, and retry actions.
+- **Phase 5:** backup and restore format, retention and compatibility guarantees;
+  production signing/notarization; supported host-tool version matrix; and
+  default time, concurrency, and usage limits beyond the existing round caps.
+- **Phase 6 enhancement:** whether provider-specific pull-request creation adds
+  enough value after publishing a protected upstream branch.
+- **Phase 7:** scope of embedded Forgejo review surfaces and the optional
+  graphical agent-world presentation.
+- **Phase 8:** pairing, authentication, transport, and trust assumptions for any
+  remote or phone access.
 
 ## Open-source posture
 
@@ -653,4 +776,5 @@ Commitarium is a public open-source personal workspace project under the Apache 
 
 The repository must not include provider credentials, generated secrets, private project data, or proprietary CLI binaries without redistribution permission. Documentation should clearly distinguish Commitarium from OpenAI, Anthropic, GitHub, Docker, and Forgejo; it is not affiliated with those projects unless that changes explicitly.
 
-Security-sensitive changes should receive particularly careful review, and the repository should gain a `SECURITY.md` before the first usable release.
+Security-sensitive changes should receive particularly careful review, and the
+repository should gain a `SECURITY.md` before the stable release.

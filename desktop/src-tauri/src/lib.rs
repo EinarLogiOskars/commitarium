@@ -3,6 +3,7 @@ mod docker;
 mod git_providers;
 mod handoff;
 mod import;
+mod phase4;
 mod profiles;
 mod store;
 
@@ -33,6 +34,8 @@ pub fn run() {
             docker::stack_down,
             docker::stack_update,
             docker::stack_status,
+            phase4::provision_environment_request,
+            phase4::run_validation_job,
             store::load_ui_state,
             store::save_ui_state,
             import::inspect_folder,

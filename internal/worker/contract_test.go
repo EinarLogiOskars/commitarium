@@ -217,6 +217,14 @@ func TestResultValidate(t *testing.T) {
 	if err := answered.Validate(); err != nil {
 		t.Fatalf("validate intervention result: %v", err)
 	}
+	environment := completed
+	environment.Disposition = DispositionInputRequired
+	environment.EnvironmentRequest = &EnvironmentRequest{
+		SystemPackages: []string{"libvips-dev"}, Reason: "Image bindings need the system library.",
+	}
+	if err := environment.Validate(); err != nil {
+		t.Fatalf("validate environment request result: %v", err)
+	}
 	stopped := Result{
 		Outcome:           OutcomeStopped,
 		ProviderSessionID: "provider_session_test",
@@ -246,6 +254,8 @@ func TestResultValidate(t *testing.T) {
 		{Outcome: OutcomeCompleted, Disposition: DispositionSucceeded, ProviderSessionID: "provider_session_test", Publication: &ImplementationPublication{CommitID: "0123456789abcdef0123456789abcdef01234567", PullRequestNumber: 7}, Review: &ReviewPublication{CommitID: "0123456789abcdef0123456789abcdef01234567", PullRequestNumber: 7, ReviewID: 11}},
 		{Outcome: OutcomeCompleted, Disposition: DispositionSucceeded, ProviderSessionID: "provider_session_test", InterventionEffect: "unknown"},
 		{Outcome: OutcomeStopped, ProviderSessionID: "provider_session_test", InterventionEffect: InterventionEffectGuidanceApplied},
+		{Outcome: OutcomeCompleted, Disposition: DispositionSucceeded, ProviderSessionID: "provider_session_test", EnvironmentRequest: &EnvironmentRequest{SystemPackages: []string{"libvips-dev"}, Reason: "Needed."}},
+		{Outcome: OutcomeCompleted, Disposition: DispositionInputRequired, ProviderSessionID: "provider_session_test", EnvironmentRequest: &EnvironmentRequest{SystemPackages: []string{"bad package"}, Reason: "Needed."}},
 		{Outcome: OutcomeCompleted, Disposition: DispositionSucceeded, ProviderSessionID: "provider_session_test", InterventionEffect: InterventionEffectGuidanceApplied, Publication: &ImplementationPublication{CommitID: "0123456789abcdef0123456789abcdef01234567", PullRequestNumber: 7}},
 	}
 	for _, result := range invalid {

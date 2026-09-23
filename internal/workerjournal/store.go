@@ -64,20 +64,25 @@ func (store *Store) CreateAttempt(
 	if err != nil {
 		return workerhttp.Attempt{}, false, fmt.Errorf("encode worker assignment: %w", err)
 	}
+	requestJSON, err := json.Marshal(creation.Request)
+	if err != nil {
+		return workerhttp.Attempt{}, false, fmt.Errorf("encode worker launch request: %w", err)
+	}
 	_, err = tx.ExecContext(
 		ctx,
 		`INSERT INTO worker_attempts (
 			session_id, attempt_id, mode, assignment_json,
-			launch_idempotency_key, launch_request_digest,
+			launch_idempotency_key, launch_request_digest, launch_request_json,
 			provider_session_id, state, latest_event_sequence,
 			started_at, updated_at, ended_at, result_json
-		 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, NULL, NULL)`,
+		 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, NULL, NULL)`,
 		creation.Attempt.SessionID,
 		creation.Attempt.AttemptID,
 		creation.Attempt.Mode,
 		string(assignmentJSON),
 		creation.IdempotencyKey,
 		creation.RequestDigest,
+		string(requestJSON),
 		creation.Attempt.ProviderSessionID,
 		creation.Attempt.State,
 		formatTime(creation.Attempt.StartedAt),
@@ -90,6 +95,140 @@ func (store *Store) CreateAttempt(
 		return workerhttp.Attempt{}, false, fmt.Errorf("commit worker attempt: %w", err)
 	}
 	return creation.Attempt, true, nil
+}
+
+// PrepareInterruptedRecovery atomically identifies attempts that can be
+// resumed and fences every other nonterminal attempt. Only a running attempt
+// with a durable provider-session identity, complete launch request, and no
+// command of uncertain delivery is eligible for automatic recovery.
+func (store *Store) PrepareInterruptedRecovery(
+	ctx context.Context,
+	occurredAt time.Time,
+) ([]InterruptedAttempt, RecoveryResult, error) {
+	if occurredAt.IsZero() {
+		return nil, RecoveryResult{}, fmt.Errorf("%w: recovery time is required", ErrInvalidRecord)
+	}
+	tx, err := store.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, RecoveryResult{}, fmt.Errorf("begin worker journal recovery: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	formattedTime := formatTime(occurredAt)
+	timeRows, err := tx.QueryContext(
+		ctx,
+		`SELECT updated_at FROM worker_attempts
+		 WHERE state NOT IN ('terminal', 'indeterminate')
+		 UNION ALL
+		 SELECT updated_at FROM worker_mutations WHERE status = 'pending'`,
+	)
+	if err != nil {
+		return nil, RecoveryResult{}, fmt.Errorf("read worker recovery times: %w", err)
+	}
+	for timeRows.Next() {
+		var value string
+		if err := timeRows.Scan(&value); err != nil {
+			_ = timeRows.Close()
+			return nil, RecoveryResult{}, fmt.Errorf("scan worker recovery time: %w", err)
+		}
+		updatedAt, err := parseTime(value)
+		if err != nil {
+			_ = timeRows.Close()
+			return nil, RecoveryResult{}, err
+		}
+		if occurredAt.Before(updatedAt) {
+			_ = timeRows.Close()
+			return nil, RecoveryResult{}, fmt.Errorf("%w: recovery time precedes durable worker state", ErrInvalidRecord)
+		}
+	}
+	if err := timeRows.Close(); err != nil {
+		return nil, RecoveryResult{}, fmt.Errorf("close worker recovery times: %w", err)
+	}
+	if err := timeRows.Err(); err != nil {
+		return nil, RecoveryResult{}, fmt.Errorf("iterate worker recovery times: %w", err)
+	}
+
+	rows, err := tx.QueryContext(ctx, `
+		SELECT session_id, attempt_id, launch_request_json
+		FROM worker_attempts AS attempts
+		WHERE state = 'running'
+		  AND provider_session_id <> ''
+		  AND launch_request_json IS NOT NULL
+		  AND NOT EXISTS (
+		      SELECT 1 FROM worker_mutations AS mutations
+		      WHERE mutations.session_id = attempts.session_id
+		        AND mutations.attempt_id = attempts.attempt_id
+		        AND mutations.status = 'pending'
+		  )
+		ORDER BY session_id, attempt_id`)
+	if err != nil {
+		return nil, RecoveryResult{}, fmt.Errorf("list resumable worker attempts: %w", err)
+	}
+	type candidate struct {
+		reference   workerhttp.AttemptReference
+		requestJSON string
+	}
+	candidates := make([]candidate, 0)
+	for rows.Next() {
+		var stored candidate
+		if scanErr := rows.Scan(&stored.reference.SessionID, &stored.reference.AttemptID, &stored.requestJSON); scanErr != nil {
+			_ = rows.Close()
+			return nil, RecoveryResult{}, fmt.Errorf("scan resumable worker attempt: %w", scanErr)
+		}
+		candidates = append(candidates, stored)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, RecoveryResult{}, fmt.Errorf("close resumable worker attempts: %w", err)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, RecoveryResult{}, fmt.Errorf("iterate resumable worker attempts: %w", err)
+	}
+	resumable := make([]InterruptedAttempt, 0, len(candidates))
+	for _, candidate := range candidates {
+		attempt, _, _, found, findErr := findAttempt(ctx, tx, candidate.reference)
+		if findErr != nil {
+			return nil, RecoveryResult{}, findErr
+		}
+		if !found {
+			continue
+		}
+		var request workerhttp.PutAttemptRequest
+		identity := workerhttp.MutationIdentity{AttemptReference: attempt.AttemptReference, IdempotencyKey: "recovery_validation"}
+		if json.Unmarshal([]byte(candidate.requestJSON), &request) != nil || request.Validate(identity) != nil ||
+			request.Assignment != attempt.Assignment {
+			continue
+		}
+		resumable = append(resumable, InterruptedAttempt{Attempt: attempt, Request: request})
+	}
+
+	arguments := make([]any, 0, len(resumable)*2+1)
+	query := `UPDATE worker_attempts SET state = 'indeterminate', updated_at = ?
+		WHERE state NOT IN ('terminal', 'indeterminate')`
+	arguments = append(arguments, formattedTime)
+	for _, candidate := range resumable {
+		query += ` AND NOT (session_id = ? AND attempt_id = ?)`
+		arguments = append(arguments, candidate.Attempt.SessionID, candidate.Attempt.AttemptID)
+	}
+	attemptResult, err := tx.ExecContext(ctx, query, arguments...)
+	if err != nil {
+		return nil, RecoveryResult{}, fmt.Errorf("mark unrecoverable worker attempts indeterminate: %w", err)
+	}
+	attemptCount, err := attemptResult.RowsAffected()
+	if err != nil {
+		return nil, RecoveryResult{}, fmt.Errorf("count indeterminate worker attempts: %w", err)
+	}
+	mutationResult, err := tx.ExecContext(ctx, `UPDATE worker_mutations
+		SET status = 'indeterminate', updated_at = ? WHERE status = 'pending'`, formattedTime)
+	if err != nil {
+		return nil, RecoveryResult{}, fmt.Errorf("mark worker mutations indeterminate: %w", err)
+	}
+	mutationCount, err := mutationResult.RowsAffected()
+	if err != nil {
+		return nil, RecoveryResult{}, fmt.Errorf("count indeterminate worker mutations: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, RecoveryResult{}, fmt.Errorf("commit worker journal recovery: %w", err)
+	}
+	return resumable, RecoveryResult{AttemptsMarked: attemptCount, MutationsMarked: mutationCount}, nil
 }
 
 func (store *Store) GetAttempt(

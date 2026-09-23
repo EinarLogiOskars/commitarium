@@ -22,6 +22,20 @@ type stubCheckpointReader struct {
 	err        error
 }
 
+type sequenceCheckpointReader struct {
+	checkpoints []execution.WorkerAttemptCheckpoint
+	next        int
+}
+
+func (reader *sequenceCheckpointReader) GetWorkerAttempt(
+	context.Context,
+	string,
+) (execution.WorkerAttemptCheckpoint, error) {
+	checkpoint := reader.checkpoints[reader.next]
+	reader.next++
+	return checkpoint, nil
+}
+
 func (reader *stubCheckpointReader) GetWorkerAttempt(
 	context.Context,
 	string,
@@ -81,6 +95,34 @@ type stubAttemptSource struct {
 	opened      workerhttp.AttemptReference
 	after       int64
 	inspectCall int
+}
+
+type reconnectingAttemptSource struct {
+	streams  []EventStream
+	attempts []workerhttp.Attempt
+	opens    int
+	inspects int
+	afters   []int64
+}
+
+func (source *reconnectingAttemptSource) OpenEventStream(
+	_ context.Context,
+	_ workerhttp.AttemptReference,
+	afterSequence int64,
+) (EventStream, error) {
+	source.afters = append(source.afters, afterSequence)
+	stream := source.streams[source.opens]
+	source.opens++
+	return stream, nil
+}
+
+func (source *reconnectingAttemptSource) GetAttempt(
+	context.Context,
+	workerhttp.AttemptReference,
+) (workerhttp.Attempt, error) {
+	attempt := source.attempts[source.inspects]
+	source.inspects++
+	return attempt, nil
 }
 
 func (source *stubAttemptSource) OpenEventStream(
@@ -199,6 +241,41 @@ func TestPumpInspectsAttemptAfterStreamFailure(t *testing.T) {
 	}
 	if !result.AttemptInspected || source.inspectCall != 1 {
 		t.Fatalf("expected inspected result, got %+v", result)
+	}
+}
+
+func TestRecoveringPumpReconnectsToSameActiveAttempt(t *testing.T) {
+	now := time.Date(2026, time.September, 9, 2, 0, 0, 0, time.UTC)
+	checkpoint := execution.WorkerAttemptCheckpoint{
+		SessionID: "ses_restart", AttemptID: "att_restart", CreatedAt: now, UpdatedAt: now,
+	}
+	source := &reconnectingAttemptSource{
+		streams: []EventStream{&sliceEventStream{}, &sliceEventStream{}},
+		attempts: []workerhttp.Attempt{
+			validPumpAttempt(checkpoint.SessionID, checkpoint.AttemptID, workerhttp.AttemptStateRunning, 1),
+			validPumpAttempt(checkpoint.SessionID, checkpoint.AttemptID, workerhttp.AttemptStateTerminal, 2),
+		},
+	}
+	ingester := &stubIngester{steps: []ingestStep{
+		{event: acceptedPumpEvent(checkpoint, 1), created: true},
+		{err: io.EOF},
+		{event: acceptedPumpEvent(checkpoint, 2), created: true},
+		{err: io.EOF},
+	}}
+	afterFirst := checkpoint
+	afterFirst.LastEventSequence = 1
+	pump := NewRecoveringPump(&sequenceCheckpointReader{checkpoints: []execution.WorkerAttemptCheckpoint{
+		checkpoint, afterFirst,
+	}}, ingester, source)
+	pump.retryDelay = time.Millisecond
+	pump.retryWindow = time.Second
+	result, err := pump.Run(t.Context(), checkpoint.SessionID)
+	if err != nil {
+		t.Fatalf("run recovering pump: result=%+v error=%v", result, err)
+	}
+	if source.opens != 2 || source.inspects != 2 || len(source.afters) != 2 ||
+		source.afters[0] != 0 || source.afters[1] != 1 {
+		t.Fatalf("reconnects=%d inspections=%d cursors=%v", source.opens, source.inspects, source.afters)
 	}
 }
 

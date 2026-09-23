@@ -434,7 +434,7 @@ func validAttemptCreation(sessionID string, attemptID string, key string) Attemp
 			Mode:             request.Mode, Assignment: request.Assignment,
 			State: workerhttp.AttemptStateStarting, StartedAt: now, UpdatedAt: now,
 		},
-		IdempotencyKey: key, RequestDigest: digest,
+		Request: request, IdempotencyKey: key, RequestDigest: digest,
 	}
 }
 

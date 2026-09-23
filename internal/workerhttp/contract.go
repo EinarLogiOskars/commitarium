@@ -66,9 +66,9 @@ type ModelsResponse struct {
 	FetchedAt       time.Time `json:"fetched_at"`
 }
 
-// AttemptReference identifies one supervised provider process. SessionID is
-// the durable coordinator conversation; AttemptID fences one concrete process
-// incarnation within that conversation.
+// AttemptReference identifies one durable provider turn. SessionID is the
+// coordinator conversation; AttemptID fences one logical turn across worker
+// process replacement and reconnection to the same provider conversation.
 type AttemptReference struct {
 	SessionID string `json:"session_id"`
 	AttemptID string `json:"attempt_id"`
@@ -180,12 +180,18 @@ type TerminalResult struct {
 	ToolchainProposal  *ToolchainProposal                  `json:"toolchain_proposal,omitempty"`
 	GoalDraft          *featureartifact.GoalDraft          `json:"goal_draft,omitempty"`
 	ImplementationPlan *featureartifact.ImplementationPlan `json:"implementation_plan,omitempty"`
+	EnvironmentRequest *EnvironmentRequest                 `json:"environment_request,omitempty"`
 	Error              *ProtocolError                      `json:"error,omitempty"`
 }
 
 type ToolchainProposal struct {
 	Tools    map[string]string `json:"tools"`
 	Services []string          `json:"services"`
+}
+
+type EnvironmentRequest struct {
+	SystemPackages []string `json:"system_packages"`
+	Reason         string   `json:"reason"`
 }
 
 type ImplementationPublication struct {

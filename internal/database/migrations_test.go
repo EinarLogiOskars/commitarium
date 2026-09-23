@@ -674,8 +674,10 @@ func TestMigrateCreatesExecutionTables(t *testing.T) {
 		`SELECT name
 		 FROM sqlite_schema
 		 WHERE type = 'table'
-		   AND name IN ('runs', 'sessions', 'session_events', 'session_commands',
-		                'worker_attempt_checkpoints', 'run_interventions')`,
+			   AND name IN ('runs', 'sessions', 'session_events', 'session_commands',
+			                'worker_attempt_checkpoints', 'run_interventions',
+			                'project_environment_requests', 'project_validation_configs',
+			                'validation_jobs')`,
 	)
 	if err != nil {
 		t.Fatalf("query execution tables: %v", err)
@@ -696,6 +698,7 @@ func TestMigrateCreatesExecutionTables(t *testing.T) {
 	for _, name := range []string{
 		"runs", "sessions", "session_events", "session_commands", "worker_attempt_checkpoints",
 		"run_interventions",
+		"project_environment_requests", "project_validation_configs", "validation_jobs",
 	} {
 		if !found[name] {
 			t.Errorf("expected table %q to exist", name)

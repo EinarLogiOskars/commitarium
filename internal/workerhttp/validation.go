@@ -20,6 +20,7 @@ var (
 	ErrInvalidContract = errors.New("invalid worker HTTP contract value")
 	safeIDPattern      = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
 	safeCommitID       = regexp.MustCompile(`^[0-9a-f]{40}([0-9a-f]{24})?$`)
+	safeSystemPackage  = regexp.MustCompile(`^[a-z0-9][a-z0-9+.-]{0,127}$`)
 )
 
 func (provider Provider) IsValid() bool {
@@ -391,11 +392,14 @@ func (result TerminalResult) Validate() error {
 		if result.ToolchainProposal != nil && (result.Publication != nil || result.Review != nil || result.InterventionEffect != "") {
 			return invalid("toolchain proposal cannot contain another specialized result")
 		}
-		if result.GoalDraft != nil && (result.Disposition != DispositionSucceeded || result.Publication != nil || result.Review != nil || result.InterventionEffect != "" || result.ToolchainProposal != nil || result.ImplementationPlan != nil) {
+		if result.GoalDraft != nil && (result.Disposition != DispositionSucceeded || result.Publication != nil || result.Review != nil || result.InterventionEffect != "" || result.ToolchainProposal != nil || result.ImplementationPlan != nil || result.EnvironmentRequest != nil) {
 			return invalid("goal draft requires success and cannot contain another specialized result")
 		}
-		if result.ImplementationPlan != nil && (result.Disposition != DispositionSucceeded || result.Publication != nil || result.Review != nil || result.InterventionEffect != "" || result.ToolchainProposal != nil) {
+		if result.ImplementationPlan != nil && (result.Disposition != DispositionSucceeded || result.Publication != nil || result.Review != nil || result.InterventionEffect != "" || result.ToolchainProposal != nil || result.EnvironmentRequest != nil) {
 			return invalid("implementation plan requires success and cannot contain another specialized result")
+		}
+		if result.EnvironmentRequest != nil && (result.Disposition != DispositionInputRequired || result.Publication != nil || result.Review != nil || result.InterventionEffect != "" || result.ToolchainProposal != nil) {
+			return invalid("environment request requires input and cannot contain another specialized result")
 		}
 	case OutcomeStopped:
 		if result.Disposition != "" {
@@ -416,7 +420,7 @@ func (result TerminalResult) Validate() error {
 		if result.ToolchainProposal != nil {
 			return invalid("stopped outcome cannot include a toolchain proposal")
 		}
-		if result.GoalDraft != nil || result.ImplementationPlan != nil {
+		if result.GoalDraft != nil || result.ImplementationPlan != nil || result.EnvironmentRequest != nil {
 			return invalid("stopped outcome cannot include a feature artifact")
 		}
 	case OutcomeFailed:
@@ -441,7 +445,7 @@ func (result TerminalResult) Validate() error {
 		if result.ToolchainProposal != nil {
 			return invalid("failed outcome cannot include a toolchain proposal")
 		}
-		if result.GoalDraft != nil || result.ImplementationPlan != nil {
+		if result.GoalDraft != nil || result.ImplementationPlan != nil || result.EnvironmentRequest != nil {
 			return invalid("failed outcome cannot include a feature artifact")
 		}
 	}
@@ -460,6 +464,11 @@ func (result TerminalResult) Validate() error {
 			return err
 		}
 	}
+	if result.EnvironmentRequest != nil {
+		if err := result.EnvironmentRequest.Validate(); err != nil {
+			return err
+		}
+	}
 	if result.GoalDraft != nil {
 		if err := result.GoalDraft.Validate(); err != nil {
 			return invalid("goal draft: %v", err)
@@ -469,6 +478,26 @@ func (result TerminalResult) Validate() error {
 		if _, err := result.ImplementationPlan.NormalizeInitial(1); err != nil {
 			return invalid("implementation plan: %v", err)
 		}
+	}
+	return nil
+}
+
+func (request EnvironmentRequest) Validate() error {
+	if err := validateRequiredText("environment request reason", request.Reason, 1000); err != nil {
+		return err
+	}
+	if len(request.SystemPackages) == 0 || len(request.SystemPackages) > 32 {
+		return invalid("environment request must contain between 1 and 32 packages")
+	}
+	seen := make(map[string]struct{}, len(request.SystemPackages))
+	for _, name := range request.SystemPackages {
+		if !safeSystemPackage.MatchString(name) {
+			return invalid("environment package %q is invalid", name)
+		}
+		if _, exists := seen[name]; exists {
+			return invalid("environment package %q is duplicated", name)
+		}
+		seen[name] = struct{}{}
 	}
 	return nil
 }

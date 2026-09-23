@@ -11,7 +11,9 @@ import (
 	"github.com/EinarLogiOskars/commitarium/internal/modelcatalog"
 	"github.com/EinarLogiOskars/commitarium/internal/project"
 	"github.com/EinarLogiOskars/commitarium/internal/projectdeletion"
+	"github.com/EinarLogiOskars/commitarium/internal/projectenvironment"
 	"github.com/EinarLogiOskars/commitarium/internal/toolchain"
+	"github.com/EinarLogiOskars/commitarium/internal/validation"
 	"github.com/EinarLogiOskars/commitarium/internal/worker"
 	"github.com/EinarLogiOskars/commitarium/internal/workflow"
 	"github.com/EinarLogiOskars/commitarium/internal/workorder"
@@ -193,6 +195,31 @@ type ToolchainAssistantService interface {
 	Apply(context.Context, string, string) (toolchain.Manifest, error)
 }
 
+type ProjectEnvironmentService interface {
+	Get(context.Context, string) (projectenvironment.Request, error)
+	ListByProject(context.Context, string) ([]projectenvironment.Request, error)
+	Approve(context.Context, string) (projectenvironment.Request, bool, error)
+	Reject(context.Context, string, string) (projectenvironment.Request, bool, error)
+	BeginProvisioning(context.Context, string) (projectenvironment.Request, bool, error)
+	Complete(context.Context, string, map[string]string) (projectenvironment.Request, bool, error)
+	Fail(context.Context, string, string) (projectenvironment.Request, bool, error)
+	ApprovedPackages(context.Context) ([]string, error)
+}
+
+type ValidationService interface {
+	Configure(context.Context, string, []string) (validation.Config, error)
+	GetConfig(context.Context, string) (validation.Config, error)
+	GetJob(context.Context, string) (validation.Job, error)
+	JobsForRun(context.Context, string) ([]validation.Job, error)
+	Claim(context.Context, string) (validation.Job, bool, error)
+	Complete(context.Context, string, []validation.CommandResult, string) (validation.Job, bool, error)
+	Retry(context.Context, string) (validation.Job, bool, error)
+}
+
+type validationJobEnsurer interface {
+	EnsureValidationJob(context.Context, string) (validation.Job, bool, error)
+}
+
 type RealWorkflowStarter interface {
 	StartPlanning(
 		ctx context.Context,
@@ -237,6 +264,8 @@ type API struct {
 	modelCatalog       ModelCatalogService
 	toolchains         ToolchainService
 	toolchainAssistant ToolchainAssistantService
+	environments       ProjectEnvironmentService
+	validations        ValidationService
 }
 
 func New(
@@ -336,6 +365,8 @@ func newAPI(
 	var toolchainService ToolchainService
 	var toolchainAssistant ToolchainAssistantService
 	var projectDeletion ProjectDeletionService
+	var environments ProjectEnvironmentService
+	var validations ValidationService
 	for _, extra := range extras {
 		switch typed := extra.(type) {
 		case ToolchainService:
@@ -344,6 +375,10 @@ func newAPI(
 			toolchainAssistant = typed
 		case ProjectDeletionService:
 			projectDeletion = typed
+		case ProjectEnvironmentService:
+			environments = typed
+		case ValidationService:
+			validations = typed
 		}
 	}
 	api := &API{
@@ -360,6 +395,8 @@ func newAPI(
 		modelCatalog:       modelCatalog,
 		toolchains:         toolchainService,
 		toolchainAssistant: toolchainAssistant,
+		environments:       environments,
+		validations:        validations,
 	}
 	api.artifacts, _ = workflow.(FeatureArtifactService)
 	api.projectImporter, _ = projects.(ProjectImporter)
@@ -381,6 +418,25 @@ func newAPI(
 		mux.HandleFunc("GET /api/v1/projects/{id}/toolchain/assistant-sessions/{sessionID}", api.getToolchainAssistantHandler)
 		mux.HandleFunc("POST /api/v1/projects/{id}/toolchain/assistant-sessions/{sessionID}/messages", api.replyToolchainAssistantHandler)
 		mux.HandleFunc("POST /api/v1/projects/{id}/toolchain/assistant-sessions/{sessionID}/apply", api.applyToolchainAssistantHandler)
+	}
+	if environments != nil {
+		mux.HandleFunc("GET /api/v1/projects/{id}/environment-requests", api.listEnvironmentRequestsHandler)
+		mux.HandleFunc("GET /api/v1/environment-requests/{id}", api.getEnvironmentRequestHandler)
+		mux.HandleFunc("POST /api/v1/environment-requests/{id}/approve", api.approveEnvironmentRequestHandler)
+		mux.HandleFunc("POST /api/v1/environment-requests/{id}/reject", api.rejectEnvironmentRequestHandler)
+		mux.HandleFunc("POST /api/v1/environment-requests/{id}/provision", api.beginEnvironmentProvisioningHandler)
+		mux.HandleFunc("POST /api/v1/environment-requests/{id}/complete", api.completeEnvironmentProvisioningHandler)
+		mux.HandleFunc("POST /api/v1/environment-requests/{id}/fail", api.failEnvironmentProvisioningHandler)
+	}
+	if validations != nil {
+		mux.HandleFunc("GET /api/v1/projects/{id}/validation", api.getValidationConfigHandler)
+		mux.HandleFunc("PUT /api/v1/projects/{id}/validation", api.configureValidationHandler)
+		mux.HandleFunc("GET /api/v1/runs/{id}/validation-jobs", api.listValidationJobsHandler)
+		mux.HandleFunc("POST /api/v1/runs/{id}/validation-jobs", api.ensureValidationJobHandler)
+		mux.HandleFunc("GET /api/v1/validation-jobs/{id}", api.getValidationJobHandler)
+		mux.HandleFunc("POST /api/v1/validation-jobs/{id}/claim", api.claimValidationJobHandler)
+		mux.HandleFunc("POST /api/v1/validation-jobs/{id}/complete", api.completeValidationJobHandler)
+		mux.HandleFunc("POST /api/v1/validation-jobs/{id}/retry", api.retryValidationJobHandler)
 	}
 	mux.HandleFunc(
 		"POST /api/v1/projects",

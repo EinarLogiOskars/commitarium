@@ -21,8 +21,10 @@ import (
 	"github.com/EinarLogiOskars/commitarium/internal/orchestration"
 	"github.com/EinarLogiOskars/commitarium/internal/project"
 	"github.com/EinarLogiOskars/commitarium/internal/projectdeletion"
+	"github.com/EinarLogiOskars/commitarium/internal/projectenvironment"
 	"github.com/EinarLogiOskars/commitarium/internal/secretfile"
 	"github.com/EinarLogiOskars/commitarium/internal/toolchain"
+	"github.com/EinarLogiOskars/commitarium/internal/validation"
 	"github.com/EinarLogiOskars/commitarium/internal/workerhttp"
 	"github.com/EinarLogiOskars/commitarium/internal/workeringest"
 	"github.com/EinarLogiOskars/commitarium/internal/workflow"
@@ -307,6 +309,8 @@ func run(ctx context.Context, coordinatorConfig config) error {
 	workflowService := workflow.NewService(workflowStore)
 	executionStore := coordinatordatabase.NewExecutionStore(db)
 	executionService := execution.NewService(executionStore)
+	environmentService := projectenvironment.NewService(coordinatordatabase.NewProjectEnvironmentStore(db))
+	validationService := validation.NewService(coordinatordatabase.NewValidationStore(db))
 	activeSessions := orchestration.NewActiveSessions()
 	var sessionController httpapi.SessionController
 	var runStarter httpapi.RunStarter
@@ -415,16 +419,16 @@ func run(ctx context.Context, coordinatorConfig config) error {
 		pumpRouter, err := orchestration.NewProviderRoutedPump(
 			executionService,
 			orchestration.ProviderPumpRoutes{
-				CodexLead: workeringest.NewPump(
+				CodexLead: workeringest.NewRecoveringPump(
 					executionService, ingestion, workeringest.NewHTTPAttemptSource(leadClient),
 				),
-				CodexReviewer: workeringest.NewPump(
+				CodexReviewer: workeringest.NewRecoveringPump(
 					executionService, ingestion, workeringest.NewHTTPAttemptSource(reviewerClient),
 				),
-				ClaudeLead: workeringest.NewPump(
+				ClaudeLead: workeringest.NewRecoveringPump(
 					executionService, ingestion, workeringest.NewHTTPAttemptSource(claudeLeadClient),
 				),
-				ClaudeReviewer: workeringest.NewPump(
+				ClaudeReviewer: workeringest.NewRecoveringPump(
 					executionService, ingestion, workeringest.NewHTTPAttemptSource(claudeReviewerClient),
 				),
 			},
@@ -435,9 +439,11 @@ func run(ctx context.Context, coordinatorConfig config) error {
 		remoteStarter, err := orchestration.NewRemoteLeadStarter(orchestration.RemoteLeadConfig{
 			Executions: executionService, Features: featureStore, Goals: workflowService,
 			Planning: workflowService, Artifacts: workflowService, Workspaces: workspaceService,
-			Worker:   workerRouter,
-			Pump:     pumpRouter,
-			Lifetime: ctx, AgentProfileID: coordinatorConfig.codexAgentProfileID,
+			Worker:              workerRouter,
+			Pump:                pumpRouter,
+			EnvironmentRequests: environmentService,
+			Validation:          validationService,
+			Lifetime:            ctx, AgentProfileID: coordinatorConfig.codexAgentProfileID,
 			ReviewerAgentProfileID:       coordinatorConfig.codexReviewerAgentProfileID,
 			ClaudeAgentProfileID:         coordinatorConfig.claudeAgentProfileID,
 			ClaudeReviewerAgentProfileID: coordinatorConfig.claudeReviewerAgentProfileID,
@@ -497,6 +503,8 @@ func run(ctx context.Context, coordinatorConfig config) error {
 		toolchainService,
 		toolchainAssistantService,
 		projectDeletionService,
+		environmentService,
+		validationService,
 	)
 
 	log.Print("Listening...")

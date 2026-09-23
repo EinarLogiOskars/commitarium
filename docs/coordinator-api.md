@@ -300,9 +300,10 @@ Idempotency-Key: repair-prj-example-1
 ```
 
 The repair body must be empty. It creates or verifies the same private
-repository and empty default branch, atomically binds it, and returns the full
-project with `repository_status: "ready"`. Calling it again after success is a
-no-op. It never starts an agent or creates a work order. An unknown project
+repository and empty default branch, protects that branch for the reviewed PR
+workflow, atomically binds it, and returns the full project with
+`repository_status: "ready"`. Calling it again after success is a no-op. It
+never starts an agent or creates a work order. An unknown project
 returns `404 project_not_found`; transient Forgejo, credential, Git, or storage
 failure returns `503 repository_provisioning_unavailable` and leaves the
 project in `needs_setup` for another retry.
@@ -350,12 +351,12 @@ to 512 MiB.
 
 On the first successful request, the coordinator creates a private repository
 owned by its Forgejo service account, imports only the bundle's committed branch
-and tag references, sets the requested default branch, and inserts an already-
-bound project. It returns `201 Created`, a project `Location`, and the same
-complete project representation used by the project detail/list routes. The
-source directory is not stored in SQLite, sent to Forgejo, or made visible to an
-agent. The desktop application should retain that path in trusted local app
-state for later local synchronization.
+and tag references, sets and protects the requested default branch, and inserts
+an already-bound project. It returns `201 Created`, a project `Location`, and
+the same complete project representation used by the project detail/list
+routes. The source directory is not stored in SQLite, sent to Forgejo, or made
+visible to an agent. The desktop application should retain that path in trusted
+local app state for later local synchronization.
 
 `importID` identifies one import operation. The desktop must reuse the same ID,
 metadata, and exact bundle bytes when retrying an interrupted request. A
@@ -669,6 +670,91 @@ Work-order creation requires `status: "configured"`. Until the user saves a
 picker choice or a reviewed detection/assistant result,
 `POST /api/v1/projects/{projectID}/features` returns
 `409 project_toolchain_required`; no clarification run is started.
+
+## Approved system packages and isolated validation
+
+An implementation lead that cannot continue without a Debian system package
+returns the structured `environment_required` action. The worker validates the
+package-name shape; the coordinator validates it again and creates one durable
+request tied to the project, feature, run, session, and attempt. Ordinary
+`blocked` results remain ordinary blockers.
+
+- `GET /api/v1/projects/{projectID}/environment-requests` returns
+  `{ "requests": [...] }` newest first.
+- `GET /api/v1/environment-requests/{requestID}` returns one request.
+- `POST .../{requestID}/approve` and `/provision` require empty bodies.
+- `POST .../{requestID}/reject` accepts `{ "reason": "..." }`.
+- Trusted Tauri calls `/provision`, receives the request plus the complete
+  installation-wide `approved_packages` union, and builds the fixed managed
+  images. The renderer never sends that package list.
+- Trusted Tauri reports `{ "resolved_packages": {"libvips-dev":"..."} }`
+  to `/complete`, or `{ "reason": "..." }` to `/fail`.
+
+Statuses are `requested`, `approved`, `provisioning`, `ready`, `rejected`, and
+`failed`. Completion records exact versions and resumes the same lead provider
+conversation with a fixed coordinator message. Rejection also resumes it with
+a fixed message so the agent can choose an alternative or explain the blocker.
+An approved request may still be rejected before provisioning, and a failed
+request may be rejected to remove its packages from future approved unions.
+Retries reuse the durable request and continuation-command identities. A
+`/provision` retry may return an already-`ready` request when image creation was
+recorded but resuming the conversation had an uncertain response; replaying
+`/complete` retries only the fixed continuation.
+
+Project validation is an ordered, non-empty list of shell commands:
+
+```http
+PUT /api/v1/projects/prj_example/validation
+Content-Type: application/json
+
+{"commands":["go test ./...","go vet ./..."]}
+```
+
+`GET` on the same route returns the stored configuration. Once both agents
+approve an exact commit, the coordinator creates a deterministic validation job
+and leaves the run at its merge gate. Jobs are read through
+`GET /api/v1/runs/{runID}/validation-jobs` or
+`GET /api/v1/validation-jobs/{jobID}`.
+
+If a run reached the merge gate before commands were configured, or the
+commands changed there, an empty-body `POST` to
+`/api/v1/runs/{runID}/validation-jobs` creates or idempotently returns the job
+for the exact approved commit and current ordered command list. A passing job
+for an older command list does not open the gate.
+
+Trusted Tauri claims a pending job with an empty-body `POST` to
+`/api/v1/validation-jobs/{jobID}/claim`. The returned job is the authoritative
+specification: project, managed workspace, exact commit, and ordered commands.
+An already-terminal response means an earlier `/complete` response was
+uncertain; Tauri replays the stored result to `/complete` without running the
+repository commands again.
+After disposable execution it posts:
+
+```json
+{
+  "results": [
+    {"command":"go test ./...","exit_code":0,"output":"ok ...","duration_ms":842}
+  ],
+  "error": ""
+}
+```
+
+to `/api/v1/validation-jobs/{jobID}/complete`. Output is bounded. The
+coordinator records `passed` only when every snapshotted command returned zero,
+adds a durable workflow event, and publishes an idempotent marker-owned summary
+to the internal pull request. Failed setup or an incomplete result becomes
+`failed`. Automatic merge is attempted only after a passing result; the manual
+merge route returns `409 merge_not_ready` until a passing job exists for the
+exact still-approved commit.
+
+An empty-body `POST` to `/api/v1/validation-jobs/{jobID}/retry` creates a new
+pending, auditable job from a terminal job and the project's current command
+list. It never overwrites the earlier result. The native runner then receives
+the new job ID.
+
+The native execution details and renderer responsibilities are documented in
+`docs/desktop-ipc.md`; ADR-010 records why Docker execution remains outside the
+coordinator container.
 
 ## Browsing features and run history
 
@@ -988,12 +1074,13 @@ though the now-missing resource has the required `404` response.
 
 For the real-provider workflow, starting a run performs the first half of
 workspace preparation before the provider session starts. The coordinator
-reserves the selected project's repository identity, default branch, exact
-current commit, and deterministic `commitarium/{featureID}` branch name in
-SQLite. It then clones that default branch into the feature's dedicated managed
-checkout and passes that checkout's workspace ID to the worker. The initial lead
-turn and every clarification reply therefore run in the selected project, even
-when several projects or work orders are active concurrently.
+reconciles the fixed agent collaborators and the repository's default-branch
+protection, then reserves the selected project's repository identity, default
+branch, exact current commit, and deterministic `commitarium/{featureID}` branch
+name in SQLite. It then clones that default branch into the feature's dedicated
+managed checkout and passes that checkout's workspace ID to the worker. The
+initial lead turn and every clarification reply therefore run in the selected
+project, even when several projects or work orders are active concurrently.
 
 This early workspace remains `preparing`: it has a checkout, but no feature
 branch or pull request yet. `GET` on the workspace route can return that state
@@ -1722,8 +1809,10 @@ temporarily marks the run as rechecking and verifies the same publication facts.
 It performs no worker mutation, provider resume, commit, push, or PR write. A
 coordinator restart during the active turn reattaches to this exact attempt and
 records the existing recovery assessment event; it never starts a replacement.
-If the worker itself restarts while Codex is active, its journal deliberately
-marks the attempt indeterminate and the coordinator stops for user review.
+If the worker itself restarts during a cleanly running turn, its journal resumes
+the exact provider conversation and the coordinator reconnects to the same
+attempt and event cursor. Ambiguous command delivery or other unsafe recovery
+state remains indeterminate and stops for user review.
 
 ## Automatic bounded implementation-review loop
 
@@ -1738,7 +1827,7 @@ The reviewer receives the accepted goal, agreed plan, lead summary, exact
 commit and PR identities, and a retry-stable audit marker. It inspects Git HEAD,
 status, the baseline diff, and the exact PR head before deciding. It must not
 modify tracked files, commit, push, alter the PR body, or merge. It posts one
-formal Forgejo review using `APPROVE` or `REQUEST_CHANGES`, with the exact commit
+formal Forgejo review using `APPROVED` or `REQUEST_CHANGES`, with the exact commit
 ID and a body beginning with the hidden attempt marker followed by one non-empty
 `Review` section. The review may contain detailed audit findings; conversation
 messages are not copied to Forgejo.
@@ -2167,10 +2256,11 @@ lead is not counted as concurrent active work while the reviewer is running. If
 it still exists and is consistent, the coordinator records a `recovery_assessment`
 event, marks its pending reply applied once the attempt is confirmed, and
 reattaches to the event stream without starting a process. If it is missing,
-unreachable, contradictory, or indeterminate, the run waits for user review and
-no replacement agent starts. The current real-worker restart behavior
-deliberately marks a previously active process indeterminate, so resuming after
-the worker itself restarts remains a later slice.
+contradictory, or indeterminate, the run waits for user review and no replacement
+agent starts. A temporarily unreachable worker is retried for a bounded window
+so a recreated container can resume the exact provider conversation and the
+coordinator can reconnect to the same attempt. The coordinator never
+substitutes a replacement attempt.
 
 During the autonomous planning loop and agreed-plan publication, the run remains `running` across every
 internal handoff. If the coordinator stops after one response is durable but
@@ -2216,9 +2306,10 @@ separate private persistent volumes while sharing only the managed workspace
 root. Coordinator-process recovery covers the first implementation turn and
 first implementation-review turn: it verifies durable state before admission,
 reattaches to an admitted exact attempt, and re-verifies a terminal review
-instead of posting another one. Provider resume after the worker container
-itself restarts, interrupted-command reconciliation, and recovery assessment
-mirroring to Forgejo are not implemented yet.
+instead of posting another one. Provider resume after a worker-container restart
+is implemented for cleanly running attempts with durable launch data.
+Interrupted-command reconciliation remains intentionally manual, and recovery
+assessment mirroring to Forgejo is not implemented yet.
 
 Run `./scripts/test-compose-recovery.sh` for the repeatable isolated
 container-level interruption test.

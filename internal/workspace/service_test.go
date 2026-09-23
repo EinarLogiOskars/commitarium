@@ -158,18 +158,21 @@ func (finder fixedProjectFinder) GetByID(context.Context, string) (project.Proje
 }
 
 type recordingRepositoryAccess struct {
-	owner      string
-	repository string
-	err        error
+	owner         string
+	repository    string
+	defaultBranch string
+	err           error
 }
 
-func (access *recordingRepositoryAccess) EnsureRepositoryCollaborators(
+func (access *recordingRepositoryAccess) EnsureRepositoryAccess(
 	_ context.Context,
 	owner string,
 	repository string,
+	defaultBranch string,
 ) error {
 	access.owner = owner
 	access.repository = repository
+	access.defaultBranch = defaultBranch
 	return access.err
 }
 
@@ -401,7 +404,7 @@ func TestServiceEnsuresAgentRepositoryAccessBeforeClarificationCheckout(t *testi
 	); err != nil {
 		t.Fatalf("prepare with collaborator access: %v", err)
 	}
-	if access.owner != "owner" || access.repository != "repository" {
+	if access.owner != "owner" || access.repository != "repository" || access.defaultBranch != "main" {
 		t.Fatalf("access prepared for wrong repository: %+v", access)
 	}
 

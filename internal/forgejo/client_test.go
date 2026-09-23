@@ -470,6 +470,118 @@ func TestClientEnsuresConfiguredRepositoryCollaborators(t *testing.T) {
 	}
 }
 
+func TestClientCreatesDefaultBranchProtection(t *testing.T) {
+	calls := 0
+	client, err := NewClient(ClientConfig{
+		BaseURL: "http://forgejo:3000", Owner: "coordinator",
+		TokenFile: writeTestToken(t, "admin-token"), RequestTimeout: time.Second,
+		HTTPClient: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+			calls++
+			path := "/api/v1/repos/owner/repository/branch_protections"
+			switch calls {
+			case 1:
+				if request.Method != http.MethodGet || request.URL.Path != path+"/main" {
+					t.Fatalf("unexpected branch protection lookup %s %s", request.Method, request.URL)
+				}
+				return jsonResponse(http.StatusNotFound, `{}`), nil
+			case 2:
+				if request.Method != http.MethodPost || request.URL.Path != path {
+					t.Fatalf("unexpected branch protection creation %s %s", request.Method, request.URL)
+				}
+				assertBranchProtectionRequest(t, request, "main", "coordinator")
+				return jsonResponse(http.StatusCreated, branchProtectionJSON("main", "coordinator")), nil
+			default:
+				t.Fatalf("unexpected request %d", calls)
+				return nil, nil
+			}
+		})},
+	})
+	if err != nil {
+		t.Fatalf("create client: %v", err)
+	}
+	if err := client.EnsureDefaultBranchProtection(
+		t.Context(), "owner", "repository", "main",
+	); err != nil {
+		t.Fatalf("create default branch protection: %v", err)
+	}
+	if calls != 2 {
+		t.Fatalf("branch protection calls=%d want=2", calls)
+	}
+}
+
+func TestClientKeepsMatchingDefaultBranchProtection(t *testing.T) {
+	calls := 0
+	client, err := NewClient(ClientConfig{
+		BaseURL: "http://forgejo:3000", Owner: "coordinator",
+		TokenFile: writeTestToken(t, "admin-token"), RequestTimeout: time.Second,
+		HTTPClient: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+			calls++
+			if request.Method != http.MethodGet ||
+				request.URL.Path != "/api/v1/repos/owner/repository/branch_protections/main" {
+				t.Fatalf("unexpected branch protection request %s %s", request.Method, request.URL)
+			}
+			return jsonResponse(http.StatusOK, branchProtectionJSON("main", "COORDINATOR")), nil
+		})},
+	})
+	if err != nil {
+		t.Fatalf("create client: %v", err)
+	}
+	if err := client.EnsureDefaultBranchProtection(
+		t.Context(), "owner", "repository", "main",
+	); err != nil {
+		t.Fatalf("verify default branch protection: %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("matching branch protection calls=%d want=1", calls)
+	}
+}
+
+func TestClientRepairsDifferentDefaultBranchProtection(t *testing.T) {
+	calls := 0
+	client, err := NewClient(ClientConfig{
+		BaseURL: "http://forgejo:3000", Owner: "coordinator",
+		TokenFile: writeTestToken(t, "admin-token"), RequestTimeout: time.Second,
+		HTTPClient: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+			calls++
+			path := "/api/v1/repos/owner/repository/branch_protections/main"
+			if request.URL.Path != path {
+				t.Fatalf("unexpected branch protection path %s", request.URL)
+			}
+			switch calls {
+			case 1:
+				if request.Method != http.MethodGet {
+					t.Fatalf("unexpected branch protection lookup method %s", request.Method)
+				}
+				return jsonResponse(http.StatusOK, `{
+					"rule_name":"main","enable_push":true,
+					"enable_push_whitelist":false,"enable_merge_whitelist":false,
+					"merge_whitelist_usernames":[],"required_approvals":0
+				}`), nil
+			case 2:
+				if request.Method != http.MethodPatch {
+					t.Fatalf("unexpected branch protection repair method %s", request.Method)
+				}
+				assertBranchProtectionRequest(t, request, "main", "coordinator")
+				return jsonResponse(http.StatusOK, branchProtectionJSON("main", "coordinator")), nil
+			default:
+				t.Fatalf("unexpected request %d", calls)
+				return nil, nil
+			}
+		})},
+	})
+	if err != nil {
+		t.Fatalf("create client: %v", err)
+	}
+	if err := client.EnsureDefaultBranchProtection(
+		t.Context(), "owner", "repository", "main",
+	); err != nil {
+		t.Fatalf("repair default branch protection: %v", err)
+	}
+	if calls != 2 {
+		t.Fatalf("branch protection repair calls=%d want=2", calls)
+	}
+}
+
 func TestClientCreatesPrivateImportRepository(t *testing.T) {
 	spec := project.RepositoryImportSpec{
 		ImportID: "desktop-1", Repository: "commitarium-aabbcc",
@@ -633,6 +745,24 @@ func TestClientFinalizesAndVerifiesImportedDefaultBranch(t *testing.T) {
 				"default_branch":"main","private":true,"empty":true,
 				"owner":{"login":"coordinator"}
 			}`), nil
+		case 3:
+			if request.Method != http.MethodGet || request.URL.Path != "/api/v1/user" {
+				t.Fatalf("unexpected protection identity request %s %s", request.Method, request.URL)
+			}
+			return jsonResponse(http.StatusOK, `{"login":"coordinator"}`), nil
+		case 4:
+			if request.Method != http.MethodGet ||
+				request.URL.Path != "/api/v1/repos/coordinator/commitarium-aabbcc/branch_protections/main" {
+				t.Fatalf("unexpected protection lookup %s %s", request.Method, request.URL)
+			}
+			return jsonResponse(http.StatusNotFound, `{}`), nil
+		case 5:
+			if request.Method != http.MethodPost ||
+				request.URL.Path != "/api/v1/repos/coordinator/commitarium-aabbcc/branch_protections" {
+				t.Fatalf("unexpected protection creation %s %s", request.Method, request.URL)
+			}
+			assertBranchProtectionRequest(t, request, "main", "coordinator")
+			return jsonResponse(http.StatusCreated, branchProtectionJSON("main", "coordinator")), nil
 		default:
 			t.Fatalf("unexpected request %d", calls)
 			return nil, nil
@@ -642,7 +772,7 @@ func TestClientFinalizesAndVerifiesImportedDefaultBranch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("finalize import: %v", err)
 	}
-	if repository.Owner != "coordinator" || repository.DefaultBranch != "main" || calls != 2 {
+	if repository.Owner != "coordinator" || repository.DefaultBranch != "main" || calls != 5 {
 		t.Fatalf("unexpected repository %+v calls=%d", repository, calls)
 	}
 }
@@ -1349,6 +1479,65 @@ func TestClientRejectsDuplicatePlanPublicationMarker(t *testing.T) {
 	}
 }
 
+func TestClientPublishesValidationResultOnce(t *testing.T) {
+	spec := workspace.ValidationPublicationSpec{
+		JobID: "val_test", PullRequestNumber: 7,
+		CommitID: forgejoTestCommitID, Status: "passed",
+		Summary: "Isolated validation passed.",
+	}
+	var storedBody string
+	client := newBranchTestClient(t, func(request *http.Request) (*http.Response, error) {
+		switch request.Method {
+		case http.MethodGet:
+			if storedBody == "" {
+				return jsonResponse(http.StatusOK, `[]`), nil
+			}
+			encoded, _ := json.Marshal([]map[string]string{{"body": storedBody}})
+			return jsonResponse(http.StatusOK, string(encoded)), nil
+		case http.MethodPost:
+			var payload struct {
+				Body string `json:"body"`
+			}
+			if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+				t.Fatal(err)
+			}
+			storedBody = payload.Body
+			return jsonResponse(http.StatusCreated, `{}`), nil
+		default:
+			t.Fatalf("unexpected method %s", request.Method)
+			return nil, nil
+		}
+	})
+
+	created, err := client.EnsureValidationResult(t.Context(), "owner", "repository", spec)
+	if err != nil || !created || !strings.Contains(storedBody, spec.Marker()) {
+		t.Fatalf("publish validation = %t, %q, %v", created, storedBody, err)
+	}
+	created, err = client.EnsureValidationResult(t.Context(), "owner", "repository", spec)
+	if err != nil || created {
+		t.Fatalf("retry validation publication = %t, %v", created, err)
+	}
+}
+
+func TestClientRefusesAmbiguousValidationCommentPage(t *testing.T) {
+	comments := make([]map[string]string, 100)
+	for index := range comments {
+		comments[index] = map[string]string{"body": "ordinary comment"}
+	}
+	body, _ := json.Marshal(comments)
+	client := newBranchTestClient(t, func(*http.Request) (*http.Response, error) {
+		return jsonResponse(http.StatusOK, string(body)), nil
+	})
+	_, err := client.EnsureValidationResult(t.Context(), "owner", "repository", workspace.ValidationPublicationSpec{
+		JobID: "val_test", PullRequestNumber: 7,
+		CommitID: forgejoTestCommitID, Status: "failed",
+		Summary: "Isolated validation failed.",
+	})
+	if !errors.Is(err, workspace.ErrPullRequestConflict) {
+		t.Fatalf("ambiguous validation page error = %v", err)
+	}
+}
+
 func TestNewClientRejectsUnsafeConfiguration(t *testing.T) {
 	for _, config := range []ClientConfig{
 		{},
@@ -1481,6 +1670,36 @@ func pullRequestJSON(t *testing.T, pullRequest workspace.PullRequest) string {
 	})
 	if err != nil {
 		t.Fatalf("encode pull request: %v", err)
+	}
+	return string(body)
+}
+
+func assertBranchProtectionRequest(
+	t *testing.T,
+	request *http.Request,
+	branch string,
+	merger string,
+) {
+	t.Helper()
+	var payload branchProtectionSettings
+	if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode branch protection request: %v", err)
+	}
+	if payload.RuleName != branch || payload.BranchName != "" || payload.EnablePush ||
+		payload.EnablePushWhitelist || !payload.EnableMergeWhitelist ||
+		payload.RequiredApprovals != 1 || len(payload.MergeWhitelistUsernames) != 1 ||
+		payload.MergeWhitelistUsernames[0] != merger {
+		t.Fatalf("unexpected branch protection payload %+v", payload)
+	}
+}
+
+func branchProtectionJSON(branch string, merger string) string {
+	body, err := json.Marshal(branchProtectionSettings{
+		RuleName: branch, EnableMergeWhitelist: true,
+		MergeWhitelistUsernames: []string{merger}, RequiredApprovals: 1,
+	})
+	if err != nil {
+		panic(err)
 	}
 	return string(body)
 }

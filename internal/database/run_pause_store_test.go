@@ -55,9 +55,9 @@ func TestExecutionStorePausesAndResumesExactWaitingCheckpointIdempotently(t *tes
 	}
 	reclassified, err := store.TransitionRun(t.Context(), execution.RunTransition{
 		RunID: run.ID, Expected: execution.RunStatusWaitingForUser,
-		Status: execution.RunStatusWaitingForUser,
-		Reason: "Both agents approved; user merge approval is required.",
-		WaitKind: execution.RunWaitKindMergeGate,
+		Status:     execution.RunStatusWaitingForUser,
+		Reason:     "Both agents approved; user merge approval is required.",
+		WaitKind:   execution.RunWaitKindMergeGate,
 		OccurredAt: waitingAt.Add(3 * time.Second),
 	})
 	if err != nil || reclassified.WaitKind != execution.RunWaitKindMergeGate {
