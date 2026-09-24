@@ -41,8 +41,9 @@ The first supported collaboration is between Codex CLI and Claude Code. The desi
 4. **Context continuity:** The agreed plan, architectural reasoning, implementation history, and review history remain available throughout the feature lifecycle.
 5. **Auditable work:** Plans, commits, reviews, findings, responses, test results, and decisions are durable and inspectable.
 6. **Local-first isolation:** Agent execution runs inside controlled containers,
-   protecting the host and the user's upstream repository. Disposable,
-   credential-free validation workers provide the independent merge gate.
+   protecting the host and the user's upstream repository. Projects may add
+   disposable, credential-free validation workers as an independent merge
+   gate; without them, the UI explicitly warns that merge relies on the agents.
 7. **Controlled handoff:** Iterative agent activity stays in the internal forge. The trusted host converts accepted work into one clean local commit, and pushing that commit to any external Git provider is a separate user-controlled action; users may explicitly chain the two.
 8. **Provider choice:** The user chooses which agent codes and which reviews, and can configure subscription-backed or API-backed authentication explicitly.
 9. **No silent billing changes:** The system never silently switches from subscription usage to API billing, or between billing profiles.
@@ -60,8 +61,8 @@ The initial product will provide:
 - Project and feature conversations with the user, Codex, and Claude.
 - A structured feature workflow from discovery through an approved merge into Forgejo's default branch.
 - An internal Forgejo instance with distinct agent identities.
-- Isolated implementation and review activity, with separately isolated
-  validation for the exact approved revision.
+- Isolated implementation and review activity, with optional separately
+  isolated validation for the exact approved revision.
 - Configurable coder and reviewer assignments.
 - Explicit authentication profiles for subscriptions and APIs.
 - A visible audit history and review inbox.
@@ -206,9 +207,10 @@ The first desktop UI may deep-link to Forgejo for detailed review. A later versi
 
 Phase 4 adds disposable validation workers. Their purpose is to run
 project-defined checks without provider, Forgejo-administrator, or upstream
-credentials, separately from the ordinary agent workflow. The coordinator and
-trusted Tauri backend are implemented; the renderer controls documented later
-in this plan remain to be built.
+credentials, separately from the ordinary agent workflow. Validation is
+optional per project; projects without configured commands rely on mutual agent
+approval and receive an explicit warning in the desktop. The coordinator and
+trusted Tauri backend are implemented.
 
 Validation workers should receive only:
 
@@ -659,8 +661,8 @@ review rather than guessing whether an instruction was applied.
 
 **Status: Complete. This is a separate capability, not unfinished Phase 0
 work.** ADR-010 records the boundary. The coordinator owns requests,
-configuration, jobs, results, and the merge gate; Tauri owns the fixed Docker
-execution; the renderer presents approval, provisioning, configuration,
+configuration, jobs, results, and the optional merge gate; Tauri owns the fixed
+Docker execution; the renderer presents approval, provisioning, configuration,
 execution, logs, retry, and merge-gate state.
 
 - Extend the project environment definition with user-approved system packages
@@ -681,7 +683,7 @@ execution, logs, retry, and merge-gate state.
   environment used for implementation and review.
 - Attach results to the internal pull request and workflow events.
 - Require the exact reviewed revision's configured validation commands to pass
-  before the merge gate opens.
+  before either merge policy may complete the merge.
 
 ### Phase 5: Desktop application
 
