@@ -919,11 +919,18 @@ func (client *Client) VerifyPullRequestImplementation(
 		return workspace.PullRequest{}, workspace.ErrPullRequestConflict
 	}
 	publicationMarker := spec.PublicationKind.Marker(spec.AttemptID)
-	wantBody := publicationMarker + "\n\n## " + spec.PublicationKind.CommentHeading() + "\n\n" + spec.Summary
+	publicationPrefix := publicationMarker + "\n\n## " + spec.PublicationKind.CommentHeading() + "\n\n"
 	matches := 0
 	for _, comment := range comments {
 		if strings.Contains(comment.Body, publicationMarker) {
-			if comment.Body != wantBody ||
+			// The marker, author, and structure are durable publication
+			// identities. The natural-language audit summary may legitimately
+			// paraphrase the worker's terminal summary, so byte equality between
+			// the two is not a safety invariant. This mirrors formal review
+			// verification, which requires attributable, non-empty findings.
+			if strings.Count(comment.Body, publicationMarker) != 1 ||
+				!strings.HasPrefix(comment.Body, publicationPrefix) ||
+				strings.TrimSpace(strings.TrimPrefix(comment.Body, publicationPrefix)) == "" ||
 				!strings.EqualFold(strings.TrimSpace(comment.User.Login), spec.ExpectedAuthor) {
 				return workspace.PullRequest{}, workspace.ErrPullRequestConflict
 			}

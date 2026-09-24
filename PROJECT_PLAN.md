@@ -7,13 +7,11 @@ remaining roadmap for Commitarium. It is a living design document: settled
 decisions remain here or in architecture decision records, while phase statuses
 describe the repository rather than the order in which work happened.
 
-Last reconciled with the implementation: 2026-09-23.
+Last reconciled with the implementation: 2026-09-24.
 
 Remaining milestones are completed in numeric order. Work that already landed
 out of order remains recorded in its owning phase; it does not make an earlier
-incomplete phase complete. Phase 2 is closed. Phase 4's coordinator, worker, and
-trusted-native backend are implemented; its renderer integration is the active
-remaining slice.
+incomplete phase complete. Phase 2, Phase 4, and Phase 5 are closed.
 
 | Phase | Status |
 | --- | --- |
@@ -21,8 +19,8 @@ remaining slice.
 | Phase 1: Headless workflow core | Complete |
 | Phase 2: Real agent adapters | Complete |
 | Phase 3: Git and Forgejo workflow | Complete |
-| Phase 4: Project environments and isolated validation | Backend complete; renderer integration pending |
-| Phase 5: Desktop application | In progress |
+| Phase 4: Project environments and isolated validation | Complete |
+| Phase 5: Desktop application | Complete |
 | Phase 6: Trusted host handoff | Substantially complete |
 | Phase 7: Rich review and visualization | Planned |
 | Phase 8: Remote and phone access | Deferred |
@@ -659,11 +657,11 @@ review rather than guessing whether an instruction was applied.
 
 ### Phase 4: Project environments and isolated validation
 
-**Status: Backend complete; renderer integration pending. This is a separate
-capability, not unfinished Phase 0 work.** ADR-010 records the boundary. The
-coordinator owns requests, configuration, jobs, results, and the merge gate;
-Tauri owns the fixed Docker execution. The frontend still needs to present the
-approval and validation controls documented in `docs/desktop-ipc.md`.
+**Status: Complete. This is a separate capability, not unfinished Phase 0
+work.** ADR-010 records the boundary. The coordinator owns requests,
+configuration, jobs, results, and the merge gate; Tauri owns the fixed Docker
+execution; the renderer presents approval, provisioning, configuration,
+execution, logs, retry, and merge-gate state.
 
 - Extend the project environment definition with user-approved system packages
   in addition to exact language runtimes.
@@ -687,18 +685,29 @@ approval and validation controls documented in `docs/desktop-ipc.md`.
 
 ### Phase 5: Desktop application
 
-**Status: In progress.** Core stack control, provider profiles, projects, work
-orders, conversations, settings, approval controls, and handoff surfaces are
-implemented. Clear notification and review-inbox presentation remain.
+**Status: Complete.** Core stack control, provider profiles, projects, work
+orders, conversations, settings, approval controls, handoff surfaces, the
+global review inbox, deduplicated native notifications, explicit exit behavior,
+disk probing, and versioned backup/restore are implemented in both the backend
+and the renderer.
 
 - Detect and control the Compose stack.
 - Implement projects, features, shared chat, activity, review inbox, and settings.
 - Add desktop notifications and approval prompts.
 - Deep-link to Forgejo review surfaces.
-- Design and implement backup and restore for coordinator, Forgejo, credentials,
-  and trusted local handoff state before stable-release guarantees are made.
-- Complete production installer signing and notarization before the stable
-  release. Current prereleases document their unsigned or ad-hoc-signed status.
+- Present the versioned backup and restore flow for coordinator, Forgejo,
+  managed workspaces, toolchains, worker journals, and trusted local handoff
+  state. Ordinary backups intentionally exclude provider credentials and
+  native transcripts under ADR-005 and ADR-011; provider profiles are not
+  transferred and must be connected on a destination that lacks its own local
+  profiles.
+- Production installer signing and notarization are intentionally out of scope.
+  Commitarium is a personal, open-source project distributed as source and as
+  unsigned/ad-hoc-signed installers. The macOS build is ad-hoc signed and not
+  notarized, and the Windows installer is unsigned; first-launch OS prompts are
+  documented for anyone who runs a prebuilt installer rather than compiling it
+  themselves. If the project ever targets broad distribution, signing becomes a
+  new decision at that point.
 
 ### Phase 6: Trusted host handoff
 
@@ -758,11 +767,15 @@ the later real-provider, Forgejo, desktop, and handoff phases.
 Settled choices are recorded above and in the accepted ADRs. Remaining decisions
 belong to the phase that will implement them:
 
-- **Phase 4 UI:** placement and presentation of environment approvals,
-  provisioning progress, validation configuration, job logs, and retry actions.
-- **Phase 5:** backup and restore format, retention and compatibility guarantees;
-  production signing/notarization; supported host-tool version matrix; and
-  default time, concurrency, and usage limits beyond the existing round caps.
+- **Phase 5 (settled):** production installer signing and notarization are out
+  of scope for a personal, source-available project; see the phase entry above.
+  Backup format version 1 and its compatibility boundary are settled in ADR-011.
+  The desktop release keeps the existing dialogue round caps, single-run handoff
+  admission, provider timeouts, and fixed validation resource ceilings. Broader
+  time, concurrency, and provider-usage budgets are **explicitly deferred**:
+  there is no provider-neutral usage accounting to enforce meaningful budgets,
+  so they belong to a later observability phase rather than a superficial
+  Phase 5 control.
 - **Phase 6 enhancement:** whether provider-specific pull-request creation adds
   enough value after publishing a protected upstream branch.
 - **Phase 7:** scope of embedded Forgejo review surfaces and the optional

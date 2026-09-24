@@ -72,6 +72,9 @@ approval always return control to you.
 - A Codex or Claude account for each provider assigned to a lead or reviewer
   role
 
+Supported operating-system and Docker versions are listed in
+[the support matrix](docs/support-matrix.md).
+
 ### Download
 
 Download the latest prerelease from
@@ -96,13 +99,26 @@ Service images are available for both `linux/amd64` and `linux/arm64`. Apple
 Silicon therefore runs native ARM containers rather than emulating Intel
 containers.
 
-### Prerelease security prompts
+### Unsigned installers
 
-The current macOS build is ad-hoc signed but not notarized, and the Windows
-installer is not yet code-signed. macOS Gatekeeper or Windows SmartScreen may
-therefore ask for confirmation or require you to approve the app in system
-security settings. Production signing and notarization are planned before a
-stable release.
+Commitarium is a personal, source-available project. Its installers are not
+code-signed, and paying for signing certificates to remove a first-launch
+prompt on binaries anyone can rebuild is out of scope. The macOS build is
+ad-hoc signed but not notarized; the Windows installer is unsigned.
+
+You approve the app once, per machine:
+
+- **macOS.** Gatekeeper blocks the first launch. Right-click the app and choose
+  **Open**, or run `xattr -dr com.apple.quarantine /Applications/Commitarium.app`
+  once. It launches normally afterwards.
+- **Windows.** SmartScreen shows an "unknown publisher" warning. Choose **More
+  info → Run anyway**.
+- **Linux.** Nothing to approve.
+
+If you would rather not trust a prebuilt binary at all, [build from
+source](#run-from-source) — the whole project compiles locally.
+
+To report a security problem, see [the security policy](SECURITY.md).
 
 ## Getting started
 
@@ -222,6 +238,10 @@ and Rust formatting, Clippy and tests for every pull request and push to `main`.
 | Document | Purpose |
 | --- | --- |
 | [Product and architecture plan](PROJECT_PLAN.md) | Product principles, scope, and system design |
+| [Security policy](SECURITY.md) | Supported versions, reporting, and what counts as a vulnerability |
+| [Support matrix](docs/support-matrix.md) | Supported host operating systems, Docker, and Compose |
+| [Threat model](docs/threat-model.md) | Trust assumptions, protected assets, and boundaries |
+| [Backup and restore verification](docs/backup-restore-verification.md) | Manual end-to-end procedure run before a stable release |
 | [Release guide](docs/releasing.md) | Versioning, image publication, installers, and release verification |
 | [Desktop IPC](docs/desktop-ipc.md) | Trusted Tauri command and event contract |
 | [Coordinator API](docs/coordinator-api.md) | Coordinator HTTP API and event stream |

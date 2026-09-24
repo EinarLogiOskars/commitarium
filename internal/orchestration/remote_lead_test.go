@@ -1396,11 +1396,11 @@ func TestRemoteLeadStartsPlanningInManagedWorkspace(t *testing.T) {
 	stub.mu.Unlock()
 	workspaceStub.publicationVerifyErr = nil
 	workspaceStub.responseVerifyErr = errors.New("Forgejo response lookup unavailable")
-	implementationRun, admitted, err = starter.StartImplementation(
+	implementationRun, admitted, err = starter.RecoverBlocker(
 		t.Context(), runID, "retry-implementation-verification-1",
 	)
 	if err != nil || !admitted || implementationRun.Status != execution.RunStatusRunning {
-		t.Fatalf("retry implementation verification: run=%+v admitted=%t err=%v", implementationRun, admitted, err)
+		t.Fatalf("recover implementation verification: run=%+v admitted=%t err=%v", implementationRun, admitted, err)
 	}
 	waitForRemoteLeadStatus(t, executions, runID, execution.RunStatusWaitingForUser)
 	waitForRemoteLeadIdle(t, starter, runID)

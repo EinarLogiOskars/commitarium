@@ -496,7 +496,7 @@ pub async fn stack_up(manager: State<'_, profiles::ProfileManager>) -> Result<()
         .map_err(|_| "could not start the Commitarium stack".to_string())?
 }
 
-fn stack_up_with_manager(manager: &profiles::ProfileManager) -> Result<(), String> {
+pub(crate) fn stack_up_with_manager(manager: &profiles::ProfileManager) -> Result<(), String> {
     let file = compose_file()?;
     let transport_changed = bootstrap::prepare_transport_secrets(&file)?;
     if release_mode() {
@@ -514,9 +514,13 @@ fn stack_up_with_manager(manager: &profiles::ProfileManager) -> Result<(), Strin
 /// Tear the whole Commitarium stack down (project-wide, all profiles).
 #[tauri::command]
 pub async fn stack_down() -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(|| compose(PROVIDER_PROFILES, &["down"]).map(|_| ()))
+    tauri::async_runtime::spawn_blocking(stack_down_blocking)
         .await
         .map_err(|_| "could not stop the Commitarium stack".to_string())?
+}
+
+pub(crate) fn stack_down_blocking() -> Result<(), String> {
+    compose(PROVIDER_PROFILES, &["down"]).map(|_| ())
 }
 
 /// Update the stack: pull the latest images, then recreate in the background.

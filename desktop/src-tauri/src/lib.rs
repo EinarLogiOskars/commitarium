@@ -4,8 +4,11 @@ mod git_providers;
 mod handoff;
 mod import;
 mod phase4;
+mod phase5;
 mod profiles;
 mod store;
+
+use tauri::{Emitter, Manager};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -13,6 +16,9 @@ pub fn run() {
     let shutdown_profiles = profiles.clone();
     tauri::Builder::default()
         .manage(profiles)
+        .manage(phase5::ExitCoordinator::default())
+        .manage(phase5::NotificationCoordinator::default())
+        .manage(phase5::BackupCoordinator::default())
         .plugin(tauri_plugin_opener::init())
         // HTTP client for the frontend to reach the local coordinator. The
         // capability scope (see capabilities/default.json) restricts it to the
@@ -20,6 +26,7 @@ pub fn run() {
         .plugin(tauri_plugin_http::init())
         // Native folder picker for project import.
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
         .setup(|app| {
             docker::prepare_runtime(app.handle()).map_err(std::io::Error::other)?;
             Ok(())
@@ -36,6 +43,15 @@ pub fn run() {
             docker::stack_status,
             phase4::provision_environment_request,
             phase4::run_validation_job,
+            phase5::load_desktop_settings,
+            phase5::save_desktop_settings,
+            phase5::confirm_exit,
+            phase5::cancel_exit,
+            phase5::notify_attention,
+            phase5::disk_space_probe,
+            phase5::create_backup,
+            phase5::inspect_backup,
+            phase5::restore_backup,
             store::load_ui_state,
             store::save_ui_state,
             import::inspect_folder,
@@ -64,12 +80,31 @@ pub fn run() {
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
-        .run(move |_, event| {
-            if matches!(
-                event,
-                tauri::RunEvent::Exit | tauri::RunEvent::ExitRequested { .. }
-            ) {
+        .run(move |app, event| match event {
+            tauri::RunEvent::ExitRequested { api, .. }
+                if phase5::exit_behavior(app) == phase5::ExitBehavior::StopStack =>
+            {
+                let coordinator = app.state::<phase5::ExitCoordinator>();
+                match phase5::begin_exit_stop(&coordinator) {
+                    phase5::ExitRequestAction::Prompt(request_id) => {
+                        api.prevent_exit();
+                        let _ = app.emit(
+                            phase5::EXIT_CONFIRMATION_EVENT,
+                            phase5::ExitConfirmationRequested::new(),
+                        );
+                        phase5::schedule_exit_timeout(
+                            app.clone(),
+                            shutdown_profiles.clone(),
+                            request_id,
+                        );
+                    }
+                    phase5::ExitRequestAction::Wait => api.prevent_exit(),
+                    phase5::ExitRequestAction::Allow => {}
+                }
+            }
+            tauri::RunEvent::Exit | tauri::RunEvent::ExitRequested { .. } => {
                 shutdown_profiles.shutdown();
             }
+            _ => {}
         });
 }

@@ -318,7 +318,9 @@ type PlanPublicationSpec struct {
 // ImplementationPublicationSpec is the read-only proof the coordinator
 // expects after a lead agent publishes one implementation turn. The lead owns
 // the Git and Forgejo writes; this value only describes what must already be
-// visible before review can be routed to another agent.
+// visible before review can be routed to another agent. Summary is the
+// provider's terminal summary; the independently authored Forgejo audit may
+// paraphrase it, while retaining the required marker, heading, and author.
 type ImplementationPublicationSpec struct {
 	Number                int64
 	FeatureMarker         string

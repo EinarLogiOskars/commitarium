@@ -44,6 +44,73 @@ export const stackDown = (): Promise<void> => invoke("stack_down");
 export const stackUpdate = (): Promise<void> => invoke("stack_update");
 export const stackStatus = (): Promise<ServiceStatus[]> => invoke("stack_status");
 
+// --- Phase 5 desktop services ---
+
+export interface DesktopSettings {
+  notifications_configured: boolean;
+  notifications_enabled: boolean;
+  notify_attention: boolean;
+  notify_failures: boolean;
+  notify_auto_merges: boolean;
+  exit_behavior: "keep_running" | "stop_stack";
+}
+
+export interface NativeNotification {
+  event_id: string;
+  kind: "attention" | "failure" | "auto_merge";
+  title: string;
+  body: string;
+}
+
+export interface NotificationDelivery {
+  delivered: boolean;
+  reason: "delivered" | "disabled" | "duplicate";
+}
+
+export interface DiskSpaceProbe {
+  path: string;
+  available_bytes: number;
+  recommended_free_bytes: number;
+  backup_ready: boolean;
+}
+
+export interface BackupResult {
+  path: string;
+  format_version: number;
+  components: string[];
+  credentials_included: boolean;
+}
+
+export interface BackupInspection extends BackupResult {
+  app_version: string;
+  created_at_unix_seconds: number;
+}
+
+export interface ExitConfirmationRequested {
+  timeout_ms: number;
+}
+
+export const loadDesktopSettings = (): Promise<DesktopSettings> => invoke("load_desktop_settings");
+export const saveDesktopSettings = (settings: DesktopSettings): Promise<DesktopSettings> =>
+  invoke("save_desktop_settings", { settings });
+export const confirmExit = (): Promise<boolean> => invoke("confirm_exit");
+export const cancelExit = (): Promise<boolean> => invoke("cancel_exit");
+export const onExitConfirmationRequested = (
+  handler: (payload: ExitConfirmationRequested) => void,
+): Promise<UnlistenFn> =>
+  listen<ExitConfirmationRequested>("exit-confirmation-requested", (event) =>
+    handler(event.payload),
+  );
+export const notifyAttention = (notification: NativeNotification): Promise<NotificationDelivery> =>
+  invoke("notify_attention", { notification });
+export const diskSpaceProbe = (): Promise<DiskSpaceProbe> => invoke("disk_space_probe");
+export const createBackup = (destination: string): Promise<BackupResult> =>
+  invoke("create_backup", { destination });
+export const inspectBackup = (source: string): Promise<BackupInspection> =>
+  invoke("inspect_backup", { source });
+export const restoreBackup = (source: string): Promise<BackupResult> =>
+  invoke("restore_backup", { source });
+
 export const loadUiState = <T = unknown>(): Promise<T | null> => invoke("load_ui_state");
 export const saveUiState = (state: unknown): Promise<void> => invoke("save_ui_state", { state });
 

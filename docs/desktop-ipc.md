@@ -425,6 +425,132 @@ after an interrupted receipt write safe. Remote credentials remain owned by the
 system Git credential helper or SSH setup; neither command accepts or returns a
 credential.
 
+## Phase 5 desktop services
+
+These commands are implemented and safe for renderer integration:
+
+- `load_desktop_settings() -> DesktopSettings`
+- `save_desktop_settings(settings) -> DesktopSettings`
+- `confirm_exit() -> boolean`
+- `cancel_exit() -> boolean`
+- `notify_attention(notification) -> NotificationDelivery`
+- `disk_space_probe() -> DiskSpaceProbe`
+- `create_backup(destination) -> BackupResult`
+- `inspect_backup(source) -> BackupInspection`
+- `restore_backup(source) -> BackupResult`
+
+```ts
+type DesktopSettings = {
+  notifications_configured: boolean;
+  notifications_enabled: boolean;
+  notify_attention: boolean;
+  notify_failures: boolean;
+  notify_auto_merges: boolean;
+  exit_behavior: "keep_running" | "stop_stack";
+};
+
+type NativeNotification = {
+  event_id: string;
+  kind: "attention" | "failure" | "auto_merge";
+  title: string;
+  body: string;
+};
+
+type NotificationDelivery = {
+  delivered: boolean;
+  reason: "delivered" | "disabled" | "duplicate";
+};
+
+type DiskSpaceProbe = {
+  path: string;
+  available_bytes: number;
+  recommended_free_bytes: number;
+  backup_ready: boolean;
+};
+
+type BackupResult = {
+  path: string;
+  format_version: number;
+  components: string[];
+  credentials_included: false;
+};
+
+type BackupInspection = BackupResult & {
+  app_version: string;
+  created_at_unix_seconds: number;
+};
+
+type ExitConfirmationRequested = {
+  timeout_ms: 30000;
+};
+```
+
+Settings are stored as a typed, host-durable document rather than mixed into
+the opaque UI-state blob. A new installation starts with
+`notifications_configured: false` and `notifications_enabled: false`; the
+frontend must deliberately check/request platform permission, then save
+`notifications_configured: true` and enable delivery only when permission was
+granted. Category defaults are true so they take effect after that opt-in. The
+default exit behavior keeps Compose running. With `stop_stack`, an exit request
+is prevented and Tauri emits `exit-confirmation-requested` once with an
+`ExitConfirmationRequested` payload. While that confirmation is pending,
+additional exit requests are prevented without emitting another event.
+`confirm_exit() -> boolean` returns `true` only when it claims the pending
+request, then shuts down provider profiles, performs the fixed project-wide
+Compose teardown, and exits. `cancel_exit() -> boolean` returns `true` only
+when it cancels the pending request and resets the coordinator so a later quit
+can ask again. If the renderer does not answer within 30 seconds, Tauri claims
+the pending request and follows the same shutdown path. A stale timeout after a
+cancel or newer prompt is ignored. `keep_running` behavior is unchanged.
+
+The renderer permission step uses `isPermissionGranted()` and
+`requestPermission()` from `@tauri-apps/plugin-notification`, which the frontend
+now depends on. The current desktop plugin reports permission as granted because
+desktop delivery has no separate Tauri permission state; `notifications_configured`
+still prevents the first native delivery from happening accidentally during
+background polling.
+
+Notification clicks do not navigate. The native path builds and shows a
+notification without a handle, and the plugin's `onAction` listener is driven by
+the mobile notification service, so a desktop click has nothing to route. The
+inbox badge is the way back to an item. Wiring clicks would need the native
+layer to own notification identity and emit an event the renderer can route on.
+
+`notify_attention` is the only notification primitive exposed to the renderer.
+It validates bounded text, applies the stored category preferences, invokes the
+native notification service, and records the event ID only after delivery.
+The bounded native ledger makes repeated polling and app restarts idempotent.
+The UI should use the stable attention-item ID from `GET /api/v1/attention` as
+`event_id`; it should not persist its own delivery ledger.
+
+`disk_space_probe` reports free space at the app-data filesystem and a 5 GiB
+readiness recommendation. This is a preflight hint, not an exact backup-size
+estimate.
+
+Backup paths must be absolute paths returned by the native folder picker.
+`create_backup` expects a new child directory and refuses to overwrite an
+existing path. It briefly stops the Commitarium services for a coherent
+snapshot and restarts them if they were running. `inspect_backup` verifies the
+format, required component set, and every SHA-256 checksum without changing
+state; use it before showing the destructive restore confirmation.
+`restore_backup` repeats that validation, creates an automatic temporary
+rollback snapshot, replaces the fixed durable components, restores allowlisted
+desktop state, and restarts the stack. A failure attempts rollback and reports
+whether rollback or restart was incomplete.
+
+Format version 1 is the inspectable directory format accepted in ADR-011. It
+includes coordinator and Forgejo data, managed workspaces, toolchains, existing
+worker journals, project-source mappings, handoff receipts, UI state, desktop
+settings, and the notification ledger. It intentionally excludes provider
+profile volumes, provider credentials/native transcripts, and generated
+internal token files. The user reconnects provider profiles when restoring
+onto a destination without its own local profiles; a same-installation restore
+leaves those separate volumes untouched. Backups contain private source and
+conversations and are not encrypted.
+
+The renderer never supplies a container, image, mount, component path, archive
+member, user ID, or command. Those remain fixed in Rust.
+
 ## Implemented — provider authentication / profiles
 
 Drives the connect-your-providers flow. The frontend needs:

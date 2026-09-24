@@ -150,6 +150,34 @@ pub(crate) fn prepare_transport_secrets(compose_file: &Path) -> Result<bool, Str
     Ok(changed)
 }
 
+/// Ensure Forgejo credential bind sources are regular private files before a
+/// restore creates all service containers. The files intentionally remain
+/// empty: after Forgejo data is restored, ordinary bootstrap replaces them
+/// with newly generated tokens for the restored identities.
+pub(crate) fn prepare_forgejo_secret_mounts(compose_file: &Path) -> Result<(), String> {
+    let root = compose_root(compose_file)?;
+    for identity in FORGEJO_IDENTITIES {
+        let path = secret_path(root, &identity.token);
+        if secret_is_ready(&path)? {
+            continue;
+        }
+        let parent = path
+            .parent()
+            .ok_or_else(|| format!("private file {} has no parent directory", path.display()))?;
+        fs::create_dir_all(parent)
+            .map_err(|_| format!("could not create private directory {}", parent.display()))?;
+        set_private_directory_permissions(parent)?;
+        OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(&path)
+            .map_err(|_| format!("could not create private file {}", path.display()))?;
+        set_private_file_permissions(&path)?;
+    }
+    Ok(())
+}
+
 /// Create any missing Forgejo identities and scoped credentials after Forgejo
 /// itself is running. Credential values are written directly to private files
 /// and are never returned across Tauri IPC.
@@ -525,6 +553,25 @@ mod tests {
                     0o600
                 );
             }
+        }
+    }
+
+    #[test]
+    fn restore_mount_bootstrap_creates_empty_files_without_replacing_tokens() {
+        let root = tempfile::tempdir().expect("temp root");
+        let compose_file = root.path().join("compose.yml");
+        fs::write(&compose_file, "services: {}").expect("compose file");
+        let preserved = secret_path(root.path(), &FORGEJO_IDENTITIES[0].token);
+        fs::create_dir_all(preserved.parent().expect("parent")).expect("parent");
+        fs::write(&preserved, b"existing-token").expect("existing token");
+
+        prepare_forgejo_secret_mounts(&compose_file).expect("prepare restore mounts");
+
+        assert_eq!(fs::read(preserved).expect("token"), b"existing-token");
+        for identity in &FORGEJO_IDENTITIES[1..] {
+            let path = secret_path(root.path(), &identity.token);
+            assert!(path.is_file());
+            assert!(fs::read(path).expect("placeholder").is_empty());
         }
     }
 

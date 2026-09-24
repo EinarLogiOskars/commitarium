@@ -33,6 +33,7 @@ const (
 	implementationRunningReason           = "The lead is implementing the agreed plan in the managed workspace."
 	implementationContinuationReason      = "The lead is continuing implementation after the user's guidance."
 	implementationVerificationReason      = "The coordinator is rechecking the implementation revision already published by the lead."
+	recoveryRecheckReason                 = "The coordinator is rechecking the blocked durable workflow state."
 	implementationReadyReason             = "The lead needs user input before it can publish the implementation for review."
 	implementationPublishedReason         = "The lead published its implementation commit and Forgejo audit entry. The verified revision is ready for automated review."
 	implementationReviewRunningReason     = "The reviewer is inspecting the lead's exact implementation commit and preparing a formal Forgejo review."
@@ -676,12 +677,31 @@ func (starter *RemoteLeadStarter) RecoverBlocker(
 	if err != nil {
 		return execution.Run{}, false, err
 	}
+	rechecking, err := starter.executions.TransitionRun(
+		ctx, run.ID, execution.RunStatusWaitingForUser, execution.RunStatusRunning,
+		recoveryRecheckReason,
+	)
+	if err != nil {
+		if errors.Is(err, execution.ErrStateConflict) {
+			current, getErr := starter.executions.GetRun(ctx, run.ID)
+			if getErr == nil && current.Status == execution.RunStatusRunning && !current.Paused {
+				return current, false, nil
+			}
+			return execution.Run{}, false, errors.Join(err, getErr)
+		}
+		return execution.Run{}, false, err
+	}
 
-	err = starter.Recover(context.WithoutCancel(ctx), run, storedFeature, project.RecoveryPolicyAutomatic)
+	err = starter.Recover(
+		context.WithoutCancel(ctx), rechecking, storedFeature, project.RecoveryPolicyAutomatic,
+	)
 	if err != nil && !errors.Is(err, ErrRunAlreadyActive) {
 		// A failed re-check is itself a safe outcome: retain the existing blocker
 		// and its user-facing reason so another explicit request can try again.
 		starter.reportError(fmt.Errorf("re-check recovery blocker for run %q: %w", run.ID, err))
+		_ = starter.waitRun(
+			context.WithoutCancel(ctx), run.ID, run.Reason, execution.RunWaitKindBlocker,
+		)
 		current, getErr := starter.executions.GetRun(ctx, run.ID)
 		if getErr != nil {
 			return execution.Run{}, false, errors.Join(err, getErr)

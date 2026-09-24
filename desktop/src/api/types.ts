@@ -511,3 +511,53 @@ export interface EnvironmentProvisionResult {
   codex_image: string;
   claude_image: string;
 }
+
+// --- Phase 5: global review inbox ---
+
+export type AttentionKind =
+  | "clarification"
+  | "phase_checkpoint"
+  | "round_cap"
+  | "blocker"
+  | "paused"
+  | "merge_approval"
+  | "environment_approval"
+  | "environment_provisioning"
+  | "environment_failed"
+  | "validation_pending"
+  | "validation_running"
+  | "validation_failed"
+  | "run_failed"
+  | "auto_merge_completed";
+
+export interface AttentionItem {
+  id: string;
+  kind: AttentionKind;
+  severity: "info" | "warning" | "error";
+  actionable: boolean;
+  project_id: string;
+  project_name: string;
+  feature_id: string;
+  feature_title: string;
+  run_id?: string;
+  environment_request_id?: string;
+  validation_job_id?: string;
+  title: string;
+  detail: string;
+  updated_at: string;
+}
+
+export interface AttentionResponse {
+  generated_at: string;
+  items: AttentionItem[];
+  running: RunningWorkOrder[];
+}
+
+export interface RunningWorkOrder {
+  project_id: string;
+  project_name: string;
+  feature_id: string;
+  feature_title: string;
+  run_id: string;
+  updated_at: string;
+}

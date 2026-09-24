@@ -1,11 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
 import { listFeatures, listFeatureRuns } from "../api/features";
 import { getRun, recoverRun } from "../api/runs";
-import { ENV_ACTIVE, listEnvironmentRequests } from "../api/environments";
 import { currentPhaseIndex, PHASE_LABELS, PHASES } from "./PhaseStepper";
 import { ProjectSyncCard } from "./ProjectSyncCard";
 import { WORK } from "../vocab";
-import type { Feature, Project, Run, WaitKind } from "../api/types";
+import type { AttentionItem, Feature, Project, Run } from "../api/types";
 
 const POLL_MS = 4000;
 
@@ -15,6 +14,7 @@ const POLL_MS = 4000;
 // the matching backend slices ship.
 export function ProjectDashboard({
   project,
+  attention,
   needsStack,
   onOpenStack,
   onOpenOrder,
@@ -22,6 +22,8 @@ export function ProjectDashboard({
   onSettings,
 }: {
   project: Project;
+  /** This project's items from the coordinator-owned attention snapshot. */
+  attention: AttentionItem[];
   needsStack?: boolean;
   onOpenStack: () => void;
   onOpenOrder: (featureId: string) => void;
@@ -33,23 +35,13 @@ export function ProjectDashboard({
   const [error, setError] = useState<string | null>(null);
   const [recoveryNotice, setRecoveryNotice] = useState<string | null>(null);
   const [recovering, setRecovering] = useState<string | null>(null);
-  // run_ids with a nonterminal environment (package) request — one project-wide
-  // fetch, indexed by run so the attention list can distinguish these blockers.
-  const [envRunIds, setEnvRunIds] = useState<Set<string>>(new Set());
-
   const poll = useCallback(async () => {
     try {
       const fs = await listFeatures(project.id);
       setFeatures(fs);
-      listEnvironmentRequests(project.id)
-        .then(({ requests }) =>
-          setEnvRunIds(
-            new Set(requests.filter((r) => ENV_ACTIVE.has(r.status)).map((r) => r.run_id)),
-          ),
-        )
-        .catch(() => {});
       // Fetch the live run only for orders that are mid-flight — that's where
-      // attention (waiting/paused/blocked) and "who's working" come from.
+      // "who's working" comes from. What needs the user is the coordinator's
+      // call, delivered through the shared attention snapshot.
       const active = fs.filter((f) => IN_FLIGHT.has(f.state));
       const entries = await Promise.all(
         active.map(async (f) => {
@@ -97,8 +89,10 @@ export function ProjectDashboard({
   };
 
   const items = (features ?? []).map((f) => describe(f, runs[f.id]));
-  const attention = items.filter((i) => i.attention);
-  const working = items.filter((i) => !i.attention && i.activity === "working");
+  const actionable = attention.filter((i) => i.actionable);
+  const waiting = new Set(actionable.map((i) => i.feature_id));
+  const working = items.filter((i) => !waiting.has(i.feature.id) && i.activity === "working");
+  const phaseOf = new Map(items.map((i) => [i.feature.id, i.phase] as const));
   const completed = (features ?? []).filter((f) => f.state === "completed");
   const repo = project.forgejo_repository;
 
@@ -164,40 +158,37 @@ export function ProjectDashboard({
       {error && <div className="banner banner--error">{error}</div>}
       {recoveryNotice && <div className="banner">{recoveryNotice}</div>}
 
-      {attention.length > 0 && (
+      {actionable.length > 0 && (
         <section className="panel">
           <h2>Needs your attention</h2>
           <div className="dash__list">
-            {attention.map((i) => {
-              const r = runs[i.feature.id];
-              // A package request presents as a blocker; distinguish it and
-              // suppress the generic Re-check (its approval lives in the order).
-              const envRequest = r != null && envRunIds.has(r.id);
-              const blocked =
-                !envRequest &&
-                !r?.paused &&
-                r?.status === "waiting_for_user" &&
-                r?.wait_kind === "blocker";
+            {actionable.map((item) => {
+              // A generic blocker is the only kind a re-check can clear; the
+              // environment and validation kinds carry their own controls in
+              // the work order, so don't offer a misleading second action.
+              const recheckable = item.kind === "blocker" && item.run_id;
+              const tone = TONE[item.severity];
               return (
-                <div key={i.feature.id} className="dash__attn-item">
+                <div key={item.id} className="dash__attn-item">
                   <button
                     className="dash__row dash__row--attn"
-                    onClick={() => onOpenOrder(i.feature.id)}
+                    onClick={() => onOpenOrder(item.feature_id)}
+                    title={item.detail}
                   >
-                    <span className={`state state--${envRequest ? "warn" : i.attention!.tone}`}>
-                      <span className={`dot dot--${envRequest ? "warn" : i.attention!.tone}`} />
-                      {envRequest ? "Needs package approval" : i.attention!.label}
+                    <span className={`state state--${tone}`}>
+                      <span className={`dot dot--${tone}`} />
+                      {item.title}
                     </span>
-                    <span className="dash__row-title">{i.feature.title}</span>
-                    <span className="dash__row-phase">{i.phase}</span>
+                    <span className="dash__row-title">{item.feature_title}</span>
+                    <span className="dash__row-phase">{phaseOf.get(item.feature_id) ?? ""}</span>
                   </button>
-                  {blocked && r && (
+                  {recheckable && (
                     <button
                       className="ghost dash__recheck"
-                      onClick={() => void recover(r.id)}
+                      onClick={() => void recover(item.run_id!)}
                       disabled={recovering != null}
                     >
-                      {recovering === r.id ? "Re-checking…" : "Re-check"}
+                      {recovering === item.run_id ? "Re-checking…" : "Re-check"}
                     </button>
                   )}
                 </div>
@@ -229,7 +220,7 @@ export function ProjectDashboard({
         </section>
       )}
 
-      {features && attention.length === 0 && working.length === 0 && (
+      {features && actionable.length === 0 && working.length === 0 && (
         <section className="panel">
           <p className="muted">
             Nothing needs you right now.{" "}
@@ -274,13 +265,11 @@ function Fact({ label, value }: { label: string; value: string }) {
 
 const IN_FLIGHT = new Set(["draft", "planning", "implementing", "reviewing", "ready_to_merge"]);
 
-const WAIT_ATTENTION: Partial<Record<WaitKind, { label: string; tone: "warn" | "ok" | "bad" }>> = {
-  clarification: { label: "Needs your input", tone: "warn" },
-  round_cap: { label: "Round limit reached", tone: "warn" },
-  blocker: { label: "Blocked — needs review", tone: "bad" },
-  merge_gate: { label: "Ready to merge", tone: "ok" },
-  phase_checkpoint: { label: "Waiting at a checkpoint", tone: "warn" },
-  paused: { label: "Paused", tone: "warn" },
+/** Coordinator severities mapped onto the shared state-dot tones. */
+const TONE: Record<AttentionItem["severity"], "bad" | "warn" | "ok"> = {
+  error: "bad",
+  warning: "warn",
+  info: "ok",
 };
 
 interface Item {
@@ -288,43 +277,14 @@ interface Item {
   phase: string;
   activity: "working" | "waiting" | "idle";
   actor?: string;
-  attention?: { label: string; tone: "warn" | "ok" | "bad" };
 }
 
+// What needs the user is the coordinator's decision (see the attention
+// snapshot); this only projects the phase label and who is mid-turn.
 function describe(feature: Feature, run?: Run): Item {
   const phase = PHASE_LABELS[PHASES[currentPhaseIndex(feature)]];
 
-  if (feature.state === "draft" && !feature.accepted_goal) {
-    return {
-      feature,
-      phase,
-      activity: "waiting",
-      attention: { label: "Clarifying the goal", tone: "warn" },
-    };
-  }
-  if (feature.state === "completed" || feature.state === "cancelled") {
-    return { feature, phase, activity: "idle" };
-  }
-  if (feature.state === "ready_to_merge") {
-    return {
-      feature,
-      phase,
-      activity: "waiting",
-      attention: { label: "Ready to merge", tone: "ok" },
-    };
-  }
   if (!run) return { feature, phase, activity: "waiting" };
-
-  if (run.paused) {
-    return { feature, phase, activity: "waiting", attention: WAIT_ATTENTION.paused };
-  }
-  if (run.status === "waiting_for_user") {
-    const a = WAIT_ATTENTION[run.wait_kind ?? ""] ?? {
-      label: "Waiting for you",
-      tone: "warn" as const,
-    };
-    return { feature, phase, activity: "waiting", attention: a };
-  }
   if (run.status === "running") {
     // Which agent is mid-turn (best-effort from session status).
     const busy = run.sessions.find((s) => s.status === "running");

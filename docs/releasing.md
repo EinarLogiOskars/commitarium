@@ -24,12 +24,14 @@ release.
 - Keep the workflow's `contents: write` and `packages: write` permissions
   available to `GITHUB_TOKEN`.
 
-The initial prerelease workflow deliberately uses ad-hoc signing on macOS and
-no signing certificate on Windows. Before calling a build production-ready,
-configure Apple Developer ID signing and notarization and Windows code signing,
-then replace the temporary signing behavior in
-`.github/workflows/publish-desktop.yml`. Signing credentials belong in GitHub
-Actions secrets, never in this repository.
+The workflow uses ad-hoc signing on macOS and no signing certificate on
+Windows, by design. Commitarium is a personal, source-available project;
+production code-signing certificates are out of scope (see the Phase 5 entry in
+[the plan](../PROJECT_PLAN.md)). Releases ship unsigned, and the README
+documents the one-time Gatekeeper/SmartScreen approval. If the project is ever
+distributed broadly, revisit this: configure Apple Developer ID signing and
+notarization and Windows code signing, keep the credentials in GitHub Actions
+secrets, and add signature verification to `publish-desktop.yml`.
 
 ## Prepare a version
 

@@ -9,6 +9,7 @@ this API beyond the host loopback interface is unsupported.
 | Method | Route | Purpose |
 | --- | --- | --- |
 | `GET` | `/health` | Process health |
+| `GET` | `/api/v1/attention` | Read one cross-project review-inbox and notification snapshot |
 | `GET` | `/api/v1/models` | List persisted exact model catalogs for each provider role |
 | `POST` | `/api/v1/models/refresh` | Refresh model catalogs from provider workers now |
 | `POST` | `/api/v1/projects` | Create a project |
@@ -65,6 +66,70 @@ this API beyond the host loopback interface is unsupported.
 | `GET` | `/api/v1/sessions/{sessionID}/events/stream` | Replay and stream observable session activity with SSE |
 | `POST` | `/api/v1/sessions/{sessionID}/commands` | Send an idempotent message or supported control to a session |
 | `POST` | `/api/v1/sessions/{sessionID}/goal-acceptance` | Accept the clarified goal from a waiting real lead session |
+
+## Global attention snapshot
+
+`GET /api/v1/attention` assembles the cross-project state used by the desktop
+review inbox and notification poller. Clients do not need to list every project,
+feature, run, environment request, and validation job themselves.
+
+```json
+{
+  "generated_at": "2026-09-23T12:00:00Z",
+  "items": [
+    {
+      "id": "environment:env_example:requested:2026-09-23T11:59:00Z",
+      "kind": "environment_approval",
+      "severity": "warning",
+      "actionable": true,
+      "project_id": "prj_example",
+      "project_name": "Example",
+      "feature_id": "fea_example",
+      "feature_title": "Add export",
+      "run_id": "run_example",
+      "environment_request_id": "env_example",
+      "title": "Environment approval needed",
+      "detail": "Install jq to run the repository checks.",
+      "updated_at": "2026-09-23T11:59:00Z"
+    }
+  ],
+  "running": [
+    {
+      "project_id": "prj_example",
+      "project_name": "Example",
+      "feature_id": "fea_running",
+      "feature_title": "Improve search",
+      "run_id": "run_running",
+      "updated_at": "2026-09-23T11:58:00Z"
+    }
+  ]
+}
+```
+
+Current kinds are `clarification`, `phase_checkpoint`, `round_cap`, `blocker`,
+`paused`, `merge_approval`, `environment_approval`,
+`environment_provisioning`, `environment_failed`, `validation_pending`,
+`validation_running`, `validation_failed`, `run_failed`, and
+`auto_merge_completed`. Severity is `info`, `warning`, or `error`.
+
+An active environment request replaces the run's generic blocker so the inbox
+does not show two cards for one cause. At the merge gate, the newest pending,
+running, or failed validation attempt similarly replaces the generic merge
+card. Actionable items sort first by newest activity. Up to 25 of the newest
+automatic-merge completions are included as non-actionable notification/history
+items. Item IDs remain stable for one observed condition and change when the
+same resource enters a materially new status, so clients should deduplicate
+notifications by `id`.
+
+`running` is a separate newest-first projection of the newest run for each
+non-terminal feature whose status is `running`. These entries are not attention
+items and do not appear in the review inbox; the desktop uses them to explain
+which provider turns could be interrupted by a stop-stack quit. Both `items`
+and `running` are empty arrays when no matching records exist.
+
+The response is a polling snapshot, not a durable event log. It returns
+`500 attention_unavailable` if any required project, feature, run, environment,
+or validation read fails, rather than silently presenting a partial inbox.
 
 ## Idempotency
 
@@ -1791,8 +1856,10 @@ and final messages use the existing lead-session history and SSE endpoint. The
 coordinator does not infer success or readiness from free-form prose. For a
 `published` result it read-only verifies the clean exact local HEAD, its descent
 from the planning base, the Forgejo feature branch and draft PR head, the exact
-published plan, and exactly one matching implementation comment attributed to
-the configured lead login. These checks confirm identities and external side
+published plan, and exactly one implementation comment with the attempt-owned
+marker, required heading, non-empty audit summary, and configured lead login.
+The audit summary may paraphrase the lead's terminal summary; prose equality is
+not a publication identity. These checks confirm identities and external side
 effects; they do not judge code quality or decide whether review should start.
 The lead already made that decision by returning `published`.
 

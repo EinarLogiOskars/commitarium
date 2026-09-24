@@ -82,6 +82,60 @@ with the implementation and public API documentation they describe.
   durable result; changing the request under the same key returns `409`.
 - Timestamps are UTC RFC 3339 values and resource IDs are opaque strings.
 
+### Global review inbox and native notifications
+
+- `GET /api/v1/attention` is the settled cross-project snapshot for the review
+  inbox. It normalizes run waits, merge approval, environment approval and
+  provisioning failures, validation state, run failures, and the newest 25
+  automatic merges. Active environment/validation causes replace the generic
+  blocker card rather than duplicating it.
+- Every item carries stable project, feature, run, environment-request, and
+  validation-job identifiers needed for app navigation. Actionable items sort
+  before non-actionable progress/history items and then by newest activity.
+- The sibling `running` array reports the newest running run for every
+  non-terminal feature, newest first. It is deliberately separate from
+  `items`: the renderer uses it for stop-stack exit warnings without adding
+  non-actionable cards to the inbox.
+- The native `notify_attention` command applies typed preferences and maintains
+  a bounded durable delivery ledger. Use the attention item ID as its event ID;
+  repeated polls and app restarts will not duplicate a delivered notification.
+  The renderer additionally compares consecutive snapshots so that only newly
+  appeared IDs are announced, and adopts the first snapshot after launch
+  silently — the inbox already shows what was outstanding at startup.
+- Typed `load_desktop_settings` / `save_desktop_settings` commands own the
+  notification categories and `keep_running` / `stop_stack` close behavior.
+  A new installation is explicitly unconfigured and disabled; after a
+  deliberate platform permission check/request, save it as configured and
+  enable delivery only when granted. With `stop_stack`, Tauri prevents the
+  first exit, emits `exit-confirmation-requested`, and waits for
+  `confirm_exit` or `cancel_exit`. Confirmation performs the fixed Compose
+  shutdown before exit; cancellation resets the coordinator for a later quit.
+  A 30-second unanswered confirmation proceeds automatically so a failed
+  renderer cannot make the app unquittable.
+
+### Backup and restore
+
+- `disk_space_probe` supplies a host-filesystem free-space preflight.
+- `create_backup`, `inspect_backup`, and `restore_backup` implement the
+  version-1 directory contract in ADR-011. The renderer supplies only a native
+  picker path; component lists, containers, mounts, commands, identities, and
+  archive locations are fixed in Rust.
+- Creation snapshots stopped services without overwriting an existing
+  destination. Inspection verifies required components and SHA-256 checksums
+  without mutation. Restore takes an automatic rollback snapshot before
+  replacing state and restarts the stack afterward.
+- Ordinary backups include private project and conversation data but exclude
+  provider credentials and native provider transcripts. The restore UI must
+  say that profiles are not transferred, may need to be reconnected on the
+  destination, and that the backup itself is not encrypted.
+- The renderer presents all three operations from the settings sheet. Creation
+  names the destination directory itself, so the fixed "refuse to overwrite"
+  rule cannot be tripped by picking an existing folder, and restore is gated
+  behind an inspection showing the backup's date, writing version, format
+  version and components. End-to-end verification is a manual procedure — see
+  [backup-restore-verification.md](backup-restore-verification.md) — because it
+  needs a real Docker installation and destroys the one it runs against.
+
 ### Project selection and repository identity
 
 Safe UI capabilities:
@@ -551,11 +605,6 @@ No current backend contract area is reserved by the versioned-replanning work.
 
 ## Planned — do not depend on it yet
 
-### Near-term MVP backend
-
-- Clear notification presentation for a feature that merged automatically or
-  is waiting for merge approval.
-
 ### Trusted-host and desktop capabilities
 
 - Open the managed workspace in VS Code or another configured editor.
@@ -577,10 +626,8 @@ repository credentials.
 - Guided toolchain assistant routes are registered in `real_agents` mode. The
   deterministic simulated mode still supports the stack picker and import
   detection, but does not invent an assistant conversation.
-- Phase 4 backend APIs and native commands are implemented, but the renderer
-  does not yet expose environment approvals, validation configuration, or
-  validation-job execution. Until that UI lands, real workflows can reach a
-  validation merge gate that must be driven through the documented APIs.
+- Phase 4 environment approvals, validation configuration, validation-job
+  execution, results, and retry controls are integrated in the renderer.
 - The guarded merge endpoint and automatic merge policy operate in that real
   Forgejo-backed mode. The deterministic simulation does not invent a remote
   merge result.

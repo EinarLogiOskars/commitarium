@@ -1132,6 +1132,75 @@ func TestClientVerifiesLeadImplementationCommitAndAuditComment(t *testing.T) {
 	}
 }
 
+func TestClientAcceptsLeadAuditSummaryThatParaphrasesTerminalResult(t *testing.T) {
+	spec := testImplementationPublicationSpec()
+	publicationMarker := spec.PublicationKind.Marker(spec.AttemptID)
+	stored := managedPullRequest(testPullRequestSpec())
+	stored.HeadCommitID = spec.HeadCommitID
+	stored.Body += "\n\n" + spec.PlanPublicationMarker +
+		"\n\n## Agreed implementation plan\n\n" + spec.Plan
+	client := newBranchTestClient(t, func(request *http.Request) (*http.Response, error) {
+		if request.URL.Path == "/api/v1/repos/owner/repository/pulls/7" {
+			return pullRequestJSONResponse(t, http.StatusOK, stored), nil
+		}
+		comment := publicationMarker +
+			"\n\n## " + spec.PublicationKind.CommentHeading() +
+			"\n\nImplemented the requested behavior; the focused and full test suites pass."
+		return jsonResponse(http.StatusOK, `[{"body":`+
+			strconv.Quote(comment)+`,"user":{"login":"codex-lead"}}]`), nil
+	})
+
+	if _, err := client.VerifyPullRequestImplementation(
+		t.Context(), "owner", "repository", spec,
+	); err != nil {
+		t.Fatalf("verify paraphrased implementation audit: %v", err)
+	}
+}
+
+func TestClientRejectsMalformedLeadAuditComment(t *testing.T) {
+	spec := testImplementationPublicationSpec()
+	publicationMarker := spec.PublicationKind.Marker(spec.AttemptID)
+	for _, test := range []struct {
+		name string
+		body string
+	}{
+		{
+			name: "missing heading",
+			body: publicationMarker + "\n\n" + spec.Summary,
+		},
+		{
+			name: "empty summary",
+			body: publicationMarker + "\n\n## " + spec.PublicationKind.CommentHeading() + "\n\n  ",
+		},
+		{
+			name: "duplicate marker",
+			body: publicationMarker + "\n\n## " + spec.PublicationKind.CommentHeading() +
+				"\n\nImplemented and tested.\n\n" + publicationMarker,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			stored := managedPullRequest(testPullRequestSpec())
+			stored.HeadCommitID = spec.HeadCommitID
+			stored.Body += "\n\n" + spec.PlanPublicationMarker +
+				"\n\n## Agreed implementation plan\n\n" + spec.Plan
+			client := newBranchTestClient(t, func(request *http.Request) (*http.Response, error) {
+				if request.URL.Path == "/api/v1/repos/owner/repository/pulls/7" {
+					return pullRequestJSONResponse(t, http.StatusOK, stored), nil
+				}
+				return jsonResponse(http.StatusOK, `[{"body":`+
+					strconv.Quote(test.body)+`,"user":{"login":"codex-lead"}}]`), nil
+			})
+
+			_, err := client.VerifyPullRequestImplementation(
+				t.Context(), "owner", "repository", spec,
+			)
+			if !errors.Is(err, workspace.ErrPullRequestConflict) {
+				t.Fatalf("expected %v, got %v", workspace.ErrPullRequestConflict, err)
+			}
+		})
+	}
+}
+
 func TestClientRejectsImplementationAuditFromWrongAgent(t *testing.T) {
 	spec := testImplementationPublicationSpec()
 	publicationMarker := spec.PublicationKind.Marker(spec.AttemptID)

@@ -153,12 +153,29 @@ again, which also brings repositories bound by older versions or manually into
 the current workflow. The rule requires one approval and allows only the
 coordinator identity to merge. It leaves agent feature-branch work unrestricted.
 
+## Backup and restore boundary
+
+Backup and restore are trusted-host operations implemented behind fixed Tauri
+commands. The renderer may provide only an absolute directory selected by the
+user; it cannot choose Docker containers, images, mounts, archive sources,
+component paths, or shell text. Commitarium stops its own services, operates
+only on the fixed `commitarium` Compose project, verifies the versioned
+manifest and SHA-256 checksums before restore, and takes a rollback snapshot
+before replacing state.
+
+The ordinary backup format excludes provider-state volumes, provider
+credentials, native provider transcripts, and generated token files. It does
+contain managed source, Forgejo history, coordinator conversations, worker
+journals, and trusted handoff receipts, so the user's normal host-disk and
+backup-location protections remain responsible for confidentiality. Protecting
+backup files from the trusted signed-in local user remains outside this model.
+ADR-011 records the format and compatibility decision.
+
 ## Outside the current model
 
 The following do not change the current host and upstream isolation guarantee:
 
 - strict worker network or resource policies;
-- backup and restore;
 - installer signing; and
 - remote or multi-user access.
 
@@ -174,6 +191,8 @@ Review this document when a change:
 - gives a container an upstream credential or the user's repository path;
 - adds a host command, filesystem, Git, synchronization, or publication
   capability to Tauri;
+- changes backup components, credential exclusions, archive handling, or
+  restore compatibility;
 - changes Forgejo permissions, branch protection, or merge rules; or
 - adds remote or multi-user operation.
 

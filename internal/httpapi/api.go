@@ -403,6 +403,9 @@ func newAPI(
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", api.healthHandler)
+	if projects != nil && features != nil && executionService != nil {
+		mux.HandleFunc("GET /api/v1/attention", api.listAttentionHandler)
+	}
 	if modelCatalog != nil {
 		mux.HandleFunc("GET /api/v1/models", api.listModelsHandler)
 		mux.HandleFunc("POST /api/v1/models/refresh", api.refreshModelsHandler)

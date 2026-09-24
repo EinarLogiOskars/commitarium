@@ -10,7 +10,7 @@ import { ProjectDashboard } from "./ProjectDashboard";
 import { RepositoryCard } from "./RepositoryCard";
 import { StackPicker } from "./StackPicker";
 import { WORK } from "../vocab";
-import type { Project, ProjectToolchain } from "../api/types";
+import type { AttentionItem, Project, ProjectToolchain } from "../api/types";
 
 type Mode = "overview" | "repository" | "stack" | "new" | "order" | "settings";
 
@@ -18,9 +18,18 @@ type Mode = "overview" | "repository" | "stack" | "new" | "order" | "settings";
 export function ProjectWorkspace({
   id,
   onLoaded,
+  attention,
+  openOrder: openOrderTarget,
+  onForeground,
 }: {
   id: string;
   onLoaded?: (name: string) => void;
+  /** This project's slice of the shared coordinator attention snapshot. */
+  attention: AttentionItem[];
+  /** A work order the inbox asked for; the nonce re-triggers a repeat open. */
+  openOrder: { featureId: string; nonce: number } | null;
+  /** Reports the work order on screen, so its own news isn't also notified. */
+  onForeground?: (featureId: string | null) => void;
 }) {
   const [project, setProject] = useState<Project | null>(null);
   const [toolchain, setToolchain] = useState<ProjectToolchain | null>(null);
@@ -53,15 +62,26 @@ export function ProjectWorkspace({
   useEffect(() => {
     setProject(null);
     setToolchain(null);
-    setMode("overview");
-    setOrderId(null);
     void load();
   }, [load]);
+
+  // Where the workspace points. Switching project lands on the overview; an
+  // inbox deep link opens its work order instead — including when the click
+  // switches project and selects an order in the same step. The target's nonce
+  // makes re-opening the same order after navigating away work.
+  useEffect(() => {
+    setOrderId(openOrderTarget?.featureId ?? null);
+    setMode(openOrderTarget ? "order" : "overview");
+  }, [id, openOrderTarget]);
 
   const openOrder = (featureId: string) => {
     setOrderId(featureId);
     setMode("order");
   };
+
+  useEffect(() => {
+    onForeground?.(mode === "order" ? orderId : null);
+  }, [mode, orderId, onForeground]);
 
   const hasRepo = project ? !!project.forgejo_repository : undefined;
   // Only gate when we actually have a toolchain record saying needs_setup.
@@ -149,6 +169,7 @@ export function ProjectWorkspace({
                 setMode("stack");
                 setOrderId(null);
               }}
+              attention={attention}
               onOpenOrder={openOrder}
               onNewOrder={startNewOrder}
               onSettings={() => {

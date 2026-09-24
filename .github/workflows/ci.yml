@@ -107,6 +107,10 @@ jobs:
         working-directory: desktop
         run: pnpm build
 
+      - name: Test frontend
+        working-directory: desktop
+        run: pnpm test
+
       - name: Check Rust formatting
         working-directory: desktop/src-tauri
         run: cargo fmt --all -- --check
