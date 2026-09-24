@@ -198,6 +198,10 @@ export function ProjectWorkspace({
           {mode === "new" && project && (
             <NewWorkOrder
               project={project}
+              onOpenValidation={() => {
+                setOrderId(null);
+                setMode("settings");
+              }}
               onCreated={(fid) => {
                 setReloadKey((k) => k + 1);
                 openOrder(fid);
@@ -210,6 +214,7 @@ export function ProjectWorkspace({
               projectId={id}
               featureId={orderId}
               hasRepo={hasRepo}
+              onOpenValidation={() => setMode("settings")}
               onChanged={bumpRail}
               onDeleted={() => {
                 setMode("overview");

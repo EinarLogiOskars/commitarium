@@ -4,10 +4,13 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/EinarLogiOskars/commitarium/internal/workspace"
 )
 
 type Store interface {
@@ -176,20 +179,27 @@ func (service *Service) Complete(ctx context.Context, id string, results []Comma
 	return service.store.TransitionJob(ctx, id, StatusRunning, status, results, detail, service.now())
 }
 
-func (service *Service) RequirePassed(ctx context.Context, runID, commitID string) error {
+// RequirePassed enforces the project's current command list when one exists.
+// An absent configuration is the explicit optional-validation state.
+func (service *Service) RequirePassed(ctx context.Context, projectID, runID, commitID string) error {
+	if strings.TrimSpace(projectID) == "" || strings.TrimSpace(runID) == "" ||
+		!workspace.ValidCommitID(commitID) {
+		return ErrInvalid
+	}
+	config, err := service.store.GetConfig(ctx, projectID)
+	if errors.Is(err, ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
 	jobs, err := service.store.ListJobsByRun(ctx, runID)
 	if err != nil {
 		return err
 	}
-	if len(jobs) == 0 {
-		return ErrRequired
-	}
-	config, err := service.store.GetConfig(ctx, jobs[0].ProjectID)
-	if err != nil {
-		return err
-	}
 	for _, job := range jobs {
-		if job.CommitID == commitID && job.Status == StatusPassed && slices.Equal(job.Commands, config.Commands) {
+		if job.ProjectID == projectID && job.CommitID == commitID && job.Status == StatusPassed &&
+			slices.Equal(job.Commands, config.Commands) {
 			return nil
 		}
 	}

@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { createFeature } from "../api/features";
+import { getProjectValidation } from "../api/projects";
 import { ApiError } from "../api/client";
+import { NoValidationWarning } from "./NoValidationWarning";
 import { AgentModelFields } from "./AgentModelFields";
 import { useModels, pickModel } from "./useModels";
 import { WORK } from "../vocab";
@@ -16,9 +18,12 @@ import type {
  * changed for this one order (backend applies the effective values). */
 export function NewWorkOrder({
   project,
+  onOpenValidation,
   onCreated,
 }: {
   project: Project;
+  /** Opens the project settings where validation commands are configured. */
+  onOpenValidation: () => void;
   onCreated: (featureId: string) => void;
 }) {
   const [title, setTitle] = useState("");
@@ -43,6 +48,18 @@ export function NewWorkOrder({
   const [merge, setMerge] = useState<MergePolicy>(project.merge_policy ?? "require_user_approval");
   const [planning, setPlanning] = useState(project.dialogue_limits?.planning_rounds ?? 6);
   const [review, setReview] = useState(project.dialogue_limits?.implementation_review_rounds ?? 6);
+  // null while unknown; only warn once we positively know none is configured.
+  const [hasValidation, setHasValidation] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    getProjectValidation(project.id)
+      .then((v) => active && setHasValidation(v.commands.length > 0))
+      .catch(() => active && setHasValidation(null));
+    return () => {
+      active = false;
+    };
+  }, [project.id]);
 
   useEffect(() => {
     if (modelsLoading) return;
@@ -179,6 +196,13 @@ export function NewWorkOrder({
             </div>
           )}
         </div>
+
+        {merge === "auto_after_gates" && hasValidation === false && (
+          <NoValidationWarning
+            message="No validation is set up for this project. This order will merge automatically on the two agents' approval alone — none of your own checks will run first."
+            onOpenValidation={onOpenValidation}
+          />
+        )}
 
         <button className="primary" type="submit" disabled={busy || !title.trim()}>
           {busy ? "Creating…" : "Create"}

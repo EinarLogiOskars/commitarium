@@ -161,7 +161,7 @@ type RemoteLeadEnvironmentRequests interface {
 
 type RemoteLeadValidationGate interface {
 	EnsureJob(context.Context, string, string, string, string, string) (validation.Job, bool, error)
-	RequirePassed(context.Context, string, string) error
+	RequirePassed(context.Context, string, string, string) error
 }
 
 // EnsureValidationJob lets the UI create the pending job after a project that
@@ -762,18 +762,19 @@ func (starter *RemoteLeadStarter) recoverIdleReadyToMergeRun(
 		if err != nil {
 			return err
 		}
-		if _, _, err := starter.validation.EnsureJob(
+		_, _, validationErr := starter.validation.EnsureJob(
 			ctx, storedFeature.ProjectID, storedFeature.ID, run.ID, prepared.ID, prepared.ApprovedCommitID,
-		); err != nil {
-			if errors.Is(err, validation.ErrNotFound) {
-				return starter.waitRun(ctx, run.ID,
-					"Configure this project's isolated validation commands before merge.",
-					execution.RunWaitKindMergeGate,
-				)
-			}
-			return fmt.Errorf("recover isolated validation job: %w", err)
+		)
+		if errors.Is(validationErr, validation.ErrNotFound) {
+			validationErr = nil
+		} else if validationErr != nil {
+			return fmt.Errorf("recover isolated validation job: %w", validationErr)
+		} else {
+			validationErr = starter.validation.RequirePassed(
+				ctx, storedFeature.ProjectID, run.ID, prepared.ApprovedCommitID,
+			)
 		}
-		if err := starter.validation.RequirePassed(ctx, run.ID, prepared.ApprovedCommitID); err != nil {
+		if validationErr != nil {
 			return starter.waitRun(ctx, run.ID,
 				"The exact approved revision is waiting for isolated validation before merge.",
 				execution.RunWaitKindMergeGate,
@@ -826,7 +827,9 @@ func (starter *RemoteLeadStarter) Merge(
 		if err != nil {
 			return execution.Run{}, false, err
 		}
-		if err := starter.validation.RequirePassed(ctx, run.ID, prepared.ApprovedCommitID); err != nil {
+		if err := starter.validation.RequirePassed(
+			ctx, storedFeature.ProjectID, run.ID, prepared.ApprovedCommitID,
+		); err != nil {
 			return execution.Run{}, false, err
 		}
 	}
@@ -4735,25 +4738,21 @@ func (starter *RemoteLeadStarter) verifyImplementationReadiness(
 			job, _, err := starter.validation.EnsureJob(
 				ctx, storedFeature.ProjectID, storedFeature.ID, run.ID, mergeReady.ID, approved.CommitID,
 			)
-			if err != nil {
-				if errors.Is(err, validation.ErrNotFound) {
-					return starter.waitRun(ctx, request.runID,
-						"Configure this project's isolated validation commands before merge.",
-						execution.RunWaitKindMergeGate,
-					)
-				}
+			if err != nil && !errors.Is(err, validation.ErrNotFound) {
 				return fmt.Errorf("create isolated validation job: %w", err)
 			}
-			if _, err := starter.executions.RecordSessionEventWithID(
-				ctx, request.identity.AttemptID+":validation-created", request.identity.SessionID,
-				worker.Event{Type: worker.EventActivity, Text: "Isolated validation job " + job.ID + " is pending for approved commit " + approved.CommitID + "."},
-			); err != nil {
-				return fmt.Errorf("record validation activity: %w", err)
+			if err == nil {
+				if _, err := starter.executions.RecordSessionEventWithID(
+					ctx, request.identity.AttemptID+":validation-created", request.identity.SessionID,
+					worker.Event{Type: worker.EventActivity, Text: "Isolated validation job " + job.ID + " is pending for approved commit " + approved.CommitID + "."},
+				); err != nil {
+					return fmt.Errorf("record validation activity: %w", err)
+				}
+				return starter.waitRun(ctx, request.runID,
+					"The exact approved revision is waiting for isolated validation before merge.",
+					execution.RunWaitKindMergeGate,
+				)
 			}
-			return starter.waitRun(ctx, request.runID,
-				"The exact approved revision is waiting for isolated validation before merge.",
-				execution.RunWaitKindMergeGate,
-			)
 		}
 		if run.MergePolicy == project.MergePolicyAutoAfterGates {
 			if _, _, err := starter.Merge(ctx, run.ID, run.ID+":automatic-merge"); err != nil {

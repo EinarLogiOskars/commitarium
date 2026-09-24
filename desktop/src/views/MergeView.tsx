@@ -7,8 +7,10 @@ import {
   retryValidationJob,
 } from "../api/runs";
 import { getWorkspace } from "../api/features";
+import { getProjectValidation } from "../api/projects";
 import { openExternal, runValidationJob } from "../ipc";
 import { ApiError } from "../api/client";
+import { NoValidationWarning } from "./NoValidationWarning";
 import type { ValidationJob, Workspace } from "../api/types";
 
 const POLL_MS = 2000;
@@ -23,6 +25,7 @@ export function MergeView({
   state,
   live = true,
   onAdvanced,
+  onOpenValidation,
 }: {
   projectId: string;
   featureId: string;
@@ -30,6 +33,8 @@ export function MergeView({
   state: string;
   live?: boolean;
   onAdvanced: () => void;
+  /** Opens project settings where validation commands are configured. */
+  onOpenValidation?: () => void;
 }) {
   const [workspace, setWorkspace] = useState<Workspace | null>(null);
   const [jobs, setJobs] = useState<ValidationJob[]>([]);
@@ -38,6 +43,8 @@ export function MergeView({
   const [merging, setMerging] = useState(false);
   const [validating, setValidating] = useState(false);
   const [valError, setValError] = useState<string | null>(null);
+  // null while unknown; only warn once we positively know none is configured.
+  const [hasValidation, setHasValidation] = useState<boolean | null>(null);
 
   const poll = useCallback(async () => {
     try {
@@ -51,6 +58,11 @@ export function MergeView({
       setJobs((await getRunValidationJobs(runId)).jobs);
     } catch {
       /* no jobs yet / not configured */
+    }
+    try {
+      setHasValidation((await getProjectValidation(projectId)).commands.length > 0);
+    } catch {
+      /* leave unknown */
     }
   }, [runId, projectId, featureId]);
 
@@ -170,6 +182,12 @@ export function MergeView({
         <p className="muted note">The work order is complete.</p>
       ) : gateOpen ? (
         <div className="merge-gate">
+          {hasValidation === false && !validationBlocks && onOpenValidation && (
+            <NoValidationWarning
+              message="No validation is set up for this project. Merging relies on the two agents' approval alone — none of your own checks run against this revision."
+              onOpenValidation={onOpenValidation}
+            />
+          )}
           <p className="muted">
             {validationBlocks
               ? "Validation checks must pass before this revision can merge."

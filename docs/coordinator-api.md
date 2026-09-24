@@ -766,7 +766,8 @@ Retries reuse the durable request and continuation-command identities. A
 recorded but resuming the conversation had an uncertain response; replaying
 `/complete` retries only the fixed continuation.
 
-Project validation is an ordered, non-empty list of shell commands:
+Project validation is optional. When configured, it is an ordered, non-empty
+list of shell commands:
 
 ```http
 PUT /api/v1/projects/prj_example/validation
@@ -775,9 +776,16 @@ Content-Type: application/json
 {"commands":["go test ./...","go vet ./..."]}
 ```
 
-`GET` on the same route returns the stored configuration. Once both agents
-approve an exact commit, the coordinator creates a deterministic validation job
-and leaves the run at its merge gate. Jobs are read through
+`GET` on the same route returns the stored configuration and returns
+`404 validation_not_found` when the project has never configured validation.
+That absence is not a merge blocker: after both agents approve the exact
+revision, manual merge may proceed and `auto_after_gates` may merge
+automatically without creating a validation job. The desktop warns that these
+projects rely on agent approval alone.
+
+When a configuration exists and both agents approve an exact commit, the
+coordinator creates a deterministic validation job and leaves the run at its
+merge gate. Jobs are read through
 `GET /api/v1/runs/{runID}/validation-jobs` or
 `GET /api/v1/validation-jobs/{jobID}`.
 
@@ -808,9 +816,9 @@ to `/api/v1/validation-jobs/{jobID}/complete`. Output is bounded. The
 coordinator records `passed` only when every snapshotted command returned zero,
 adds a durable workflow event, and publishes an idempotent marker-owned summary
 to the internal pull request. Failed setup or an incomplete result becomes
-`failed`. Automatic merge is attempted only after a passing result; the manual
-merge route returns `409 merge_not_ready` until a passing job exists for the
-exact still-approved commit.
+`failed`. For a configured project, automatic merge is attempted only after a
+passing result; the manual merge route returns `409 merge_not_ready` until a
+passing job exists for the exact still-approved commit.
 
 An empty-body `POST` to `/api/v1/validation-jobs/{jobID}/retry` creates a new
 pending, auditable job from a terminal job and the project's current command
@@ -1402,7 +1410,8 @@ Run responses also contain `paused` and, while waiting or paused, a machine-read
 - `round_cap`: the configured planning or review limit was reached;
 - `blocker`: contradictory, ambiguous, unavailable, or recovery-sensitive state
   requires user review;
-- `merge_gate`: both agents are ready, but `merge_policy` requires the user;
+- `merge_gate`: both agents are ready, but configured validation or the
+  `require_user_approval` merge policy is still outstanding;
 - `paused`: the user armed the run-level pause gate.
 
 Clients should use `wait_kind` to choose controls and labels, and show `reason`
@@ -1970,9 +1979,12 @@ Content-Length: 0
 The action does not accept a commit, branch, or PR from the caller. It reloads
 the identities pinned by the workflow, requires the managed checkout to be
 clean at that exact commit, and requires the Forgejo feature branch and PR head
-to still match. It removes the managed PR's `WIP:` draft marker and asks
-Forgejo to merge using the approved head SHA as a compare-and-swap guard. A
-branch push racing with this request is therefore rejected rather than merged.
+to still match. When project validation is configured, it also requires the
+current command list to have passed on that exact commit. An unconfigured
+project skips that optional gate. It removes the managed PR's `WIP:` draft
+marker and asks Forgejo to merge using the approved head SHA as a
+compare-and-swap guard. A branch push racing with this request is therefore
+rejected rather than merged.
 The feature advances to `completed` and the run to `succeeded` only after the
 merged PR and resulting merge commit are visible in Forgejo and recorded in
 SQLite.

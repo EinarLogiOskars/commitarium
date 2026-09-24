@@ -112,12 +112,14 @@ allows container escape.
 
 ## Isolated validation
 
-Isolated validation is an independent workflow gate, not a restriction on the
-development agents. The coordinator pins a job to the exact commit approved by
-the lead and reviewer. Tauri launches it in a disposable container with the
-same approved runtime and system-package environment, a read-only managed
-workspace source, and no provider state, Forgejo token, worker token, upstream
-credential, host repository, or Docker socket.
+When configured for a project, isolated validation is an independent workflow
+gate, not a restriction on the development agents. The coordinator pins a job
+to the exact commit approved by the lead and reviewer. Tauri launches it in a
+disposable container with the same approved runtime and system-package
+environment, a read-only managed workspace source, and no provider state,
+Forgejo token, worker token, upstream credential, host repository, or Docker
+socket. Projects without validation may merge on mutual agent approval alone;
+the desktop presents that as an explicit reduction in assurance.
 
 Before executing the project-configured commands, the container copies the
 managed workspace into temporary storage and resets tracked source to the exact
@@ -125,8 +127,8 @@ approved commit. Ignored dependency caches may be reused so ordinary builds
 remain useful, but they are not merge authority. The validation container has
 no network and uses fixed CPU, memory, process-count, per-command, and total
 time limits. Results are bounded, stored by the coordinator, and summarized in
-the workflow and internal pull request. A merge is refused unless every
-configured command passed for the exact still-approved commit.
+the workflow and internal pull request. When commands are configured, a merge
+is refused unless every command passed for the exact still-approved commit.
 
 Validation repository code is still untrusted inside its disposable container.
 Its allowed failure mode is to corrupt or exhaust that job's temporary

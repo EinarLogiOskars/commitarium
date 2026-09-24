@@ -41,9 +41,11 @@ export function ProjectSettings({
   );
 }
 
-// Ordered shell commands run in a disposable, credential-free worker against the
-// exact approved commit; every command must pass (exit 0) before the merge gate
-// opens. The list must stay non-empty — there is no "disable validation".
+// Optional ordered shell commands run in a disposable, credential-free worker
+// against the exact approved commit; every command must pass (exit 0) before the
+// merge gate opens. Leaving the list empty is a deliberate choice: no gate, and
+// merges rest on the two agents' approval alone. Because the commands live here
+// and not in the repo, the agents can't edit them — unlike a CI workflow file.
 function Validation({ project }: { project: Project }) {
   const [commands, setCommands] = useState<string[]>([]);
   const [loaded, setLoaded] = useState(false);
@@ -89,15 +91,22 @@ function Validation({ project }: { project: Project }) {
       <h2>Validation checks</h2>
       {error && <div className="banner banner--error">{error}</div>}
       <p className="muted">
-        Commands run in a disposable, credential-free worker against the exact reviewed commit. All
-        must pass before the merge gate opens.
+        This is one choice: do you want to check the agents' work yourself, or trust them to keep
+        themselves in check? Add commands — tests, a build, a linter — and they run against the
+        exact code the agents approved, in a throwaway credential-free container, and block the
+        merge if any fail. Because they live here and not in the repo, the agents can't change them.
+        Leave the list empty to trust the agents instead; merges then rest on their approval alone.
       </p>
       {!loaded ? (
         <p className="muted">Loading…</p>
       ) : (
         <>
           {commands.length === 0 ? (
-            <p className="muted note">No checks configured — merges aren't validation-gated yet.</p>
+            <p className="muted note">
+              No checks configured. Merges rest on the two agents' approval alone — you're trusting
+              them to keep themselves in check. Add a command below to gate merges on your own
+              checks.
+            </p>
           ) : (
             <ol className="validation__list">
               {commands.map((c, i) => (

@@ -1,6 +1,6 @@
 # ADR-010: Use approved project environments and host-launched validation
 
-- Status: Accepted
+- Status: Accepted (merge-gate mandatoriness amended by [ADR-012](0012-make-isolated-validation-an-optional-merge-gate.md))
 - Date: 2026-09-23
 
 ## Context
@@ -48,19 +48,23 @@ all lead/reviewer provider workers plus validation receive the same union. A
 future per-project worker topology may narrow this without changing the
 approval contract.
 
-Projects declare ordered validation commands. A validation job is pinned to
-the exact reviewed commit and managed workspace. Tauri claims the job from the
-coordinator, copies that revision into a disposable container workspace, and
-runs the stored commands in a fixed validation image. The container receives no
-provider state, Forgejo token, worker token, Docker socket, or host repository
-mount. It runs with no network by default, bounded CPU, memory, process count,
-and time, and returns bounded logs and per-command results.
+Projects may declare ordered validation commands. When configured, a validation
+job is pinned to the exact reviewed commit and managed workspace. Tauri claims
+the job from the coordinator, copies that revision into a disposable container
+workspace, and runs the stored commands in a fixed validation image. The
+container receives no provider state, Forgejo token, worker token, Docker
+socket, or host repository mount. It runs with no network by default, bounded
+CPU, memory, process count, and time, and returns bounded logs and per-command
+results. A project without a validation configuration may merge after the two
+agents approve the exact revision; the renderer warns that no independent
+project checks will run.
 
 The coordinator accepts a result only for the claimed job and expected commit.
-Every configured command must pass for that exact commit before either the
-automatic or user-approved merge path can merge. A changed reviewed revision
-requires a new validation job. Validation results are workflow evidence; they
-do not give validation code access to workflow credentials.
+If validation is configured, every command must pass for that exact commit
+before either the automatic or user-approved merge path can merge. A changed
+reviewed revision requires a new validation job. Validation results are
+workflow evidence; they do not give validation code access to workflow
+credentials.
 
 ## Consequences
 
@@ -94,6 +98,9 @@ do not give validation code access to workflow credentials.
   stage.
 - Clean-machine testing is required because image construction and disposable
   validation depend on the host's Docker implementation.
+- Projects without validation rely on the lead and reviewer alone. The desktop
+  must make that reduced assurance visible before auto-merge selection and at
+  the merge gate.
 
 ## Alternatives considered
 

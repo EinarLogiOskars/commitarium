@@ -21,7 +21,7 @@ var (
 	ErrInvalid  = errors.New("invalid validation record")
 	ErrNotFound = errors.New("validation record not found")
 	ErrConflict = errors.New("validation state conflict")
-	ErrRequired = errors.New("successful isolated validation is required for the approved revision")
+	ErrRequired = errors.New("configured isolated validation must pass for the approved revision")
 )
 
 type Config struct {

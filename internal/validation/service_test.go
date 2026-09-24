@@ -90,14 +90,14 @@ func TestPassingJobMatchesCurrentConfigurationAndRetryPreservesHistory(t *testin
 	if err != nil || passed.Status != StatusPassed {
 		t.Fatalf("Complete = %#v, %v", passed, err)
 	}
-	if err := service.RequirePassed(ctx, "run", job.CommitID); err != nil {
+	if err := service.RequirePassed(ctx, "project", "run", job.CommitID); err != nil {
 		t.Fatalf("RequirePassed = %v", err)
 	}
 
 	if _, err := service.Configure(ctx, "project", []string{"go test ./...", "go vet ./..."}); err != nil {
 		t.Fatal(err)
 	}
-	if err := service.RequirePassed(ctx, "run", job.CommitID); !errors.Is(err, ErrRequired) {
+	if err := service.RequirePassed(ctx, "project", "run", job.CommitID); !errors.Is(err, ErrRequired) {
 		t.Fatalf("RequirePassed after config change = %v", err)
 	}
 	current, created, err := service.Retry(ctx, job.ID)
@@ -106,6 +106,22 @@ func TestPassingJobMatchesCurrentConfigurationAndRetryPreservesHistory(t *testin
 	}
 	if store.jobs[job.ID].Status != StatusPassed {
 		t.Fatal("retry overwrote the original terminal job")
+	}
+}
+
+func TestValidationIsOptionalUntilProjectCommandsAreConfigured(t *testing.T) {
+	store := &memoryStore{jobs: map[string]Job{}}
+	service := NewService(store)
+	commitID := "0123456789abcdef0123456789abcdef01234567"
+
+	if err := service.RequirePassed(t.Context(), "project", "run", commitID); err != nil {
+		t.Fatalf("unconfigured validation blocked merge: %v", err)
+	}
+	if _, err := service.Configure(t.Context(), "project", []string{"go test ./..."}); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.RequirePassed(t.Context(), "project", "run", commitID); !errors.Is(err, ErrRequired) {
+		t.Fatalf("configured validation without a passing job = %v", err)
 	}
 }
 

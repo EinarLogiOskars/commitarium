@@ -195,9 +195,12 @@ Safe UI capabilities:
   `configured`. The backend also enforces this and returns
   `409 project_toolchain_required` without starting clarification.
 - Configure the independent merge gate with `GET`/`PUT
-  /api/v1/projects/{projectID}/validation`. Commands are ordered and the backend
-  requires at least one. This is project workflow configuration, not a host
-  shell command invoked by the renderer.
+  /api/v1/projects/{projectID}/validation`. Validation is optional: `GET`
+  returns `404` when it has never been configured, and that absence does not
+  block either merge policy. A stored configuration is an ordered, non-empty
+  list and remains fail-closed until all current commands pass on the exact
+  approved revision. This is project workflow configuration, not a host shell
+  command invoked by the renderer.
 - When an implementation attempt returns an environment request, list it from
   the project environment-request route. Approval is a coordinator action;
   native provisioning is then invoked with only `requestId`. Rejection needs a
@@ -212,6 +215,10 @@ Safe UI capabilities:
   command changes; a terminal job's `/retry` endpoint creates a separate
   auditable attempt. A passed job for the current command list enables manual
   merge; auto-after-gates merges from the completion callback.
+- If no validation configuration exists, no job is created. Manual merge stays
+  enabled after mutual agent approval, and auto-after-gates proceeds on that
+  approval alone. The renderer warns about the missing independent checks at
+  work-order creation and at the merge gate.
 - For guided setup, start a session with
   `POST /api/v1/projects/{projectID}/toolchain/assistant-sessions`, supplying a
   selected lead provider, exact model, `purpose: "design_stack"`, initial

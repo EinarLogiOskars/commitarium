@@ -18,6 +18,7 @@ import (
 	"github.com/EinarLogiOskars/commitarium/internal/feature"
 	"github.com/EinarLogiOskars/commitarium/internal/featureartifact"
 	"github.com/EinarLogiOskars/commitarium/internal/project"
+	"github.com/EinarLogiOskars/commitarium/internal/validation"
 	"github.com/EinarLogiOskars/commitarium/internal/worker"
 	"github.com/EinarLogiOskars/commitarium/internal/workerhttp"
 	"github.com/EinarLogiOskars/commitarium/internal/workeringest"
@@ -1719,7 +1720,8 @@ func TestRemoteLeadRecoveryAutomaticallyMergesApprovedRevision(t *testing.T) {
 		Executions: executions, Features: database.NewFeatureStore(db),
 		Goals: workflowService, Planning: workflowService, Workspaces: workspaceStub,
 		Worker: unavailableRemoteLeadWorker{}, Pump: pump,
-		Lifetime: t.Context(), AgentProfileID: "codex-default",
+		Validation: validation.NewService(database.NewValidationStore(db)),
+		Lifetime:   t.Context(), AgentProfileID: "codex-default",
 	})
 	if err != nil {
 		t.Fatalf("create automatic-merge recovery starter: %v", err)
@@ -1787,8 +1789,9 @@ func TestRemoteLeadRunToCompletionAdvancesFromPlanningToMergeGate(t *testing.T) 
 	starter, err := NewRemoteLeadStarter(RemoteLeadConfig{
 		Executions: executions, Features: database.NewFeatureStore(db), Goals: workflowService,
 		Planning: workflowService, Workspaces: workspaceStub, Worker: stub,
-		Pump:     &conversationalRemoteLeadPump{executions: executions, worker: stub},
-		Lifetime: t.Context(), AgentProfileID: "codex-default",
+		Pump:       &conversationalRemoteLeadPump{executions: executions, worker: stub},
+		Validation: validation.NewService(database.NewValidationStore(db)),
+		Lifetime:   t.Context(), AgentProfileID: "codex-default",
 	})
 	if err != nil {
 		t.Fatalf("create autonomous starter: %v", err)

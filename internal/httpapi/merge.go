@@ -36,7 +36,7 @@ func (api *API) mergeRunHandler(w http.ResponseWriter, r *http.Request) {
 			errors.Is(err, workspace.ErrCheckoutConflict),
 			errors.Is(err, workspace.ErrPullRequestConflict),
 			errors.Is(err, feature.ErrInvalidTransition):
-			writeError(w, http.StatusConflict, "merge_not_ready", "merge requires the unchanged Forgejo pull request, the exact commit approved by both agents, and passing isolated validation")
+			writeError(w, http.StatusConflict, "merge_not_ready", "merge requires the unchanged Forgejo pull request, the exact commit approved by both agents, and passing isolated validation when configured")
 		case errors.Is(err, workspace.ErrCheckoutUnavailable),
 			errors.Is(err, project.ErrForgejoUnavailable):
 			writeError(w, http.StatusServiceUnavailable, "merge_unavailable", "the approved Forgejo revision cannot be merged right now")

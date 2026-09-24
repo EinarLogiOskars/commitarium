@@ -2329,3 +2329,14 @@ button.danger:not(.ghost) {
 .exit-confirm__actions {
   justify-content: space-between;
 }
+
+.no-validation {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.no-validation__action {
+  flex: none;
+  white-space: nowrap;
+}

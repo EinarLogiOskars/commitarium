@@ -66,8 +66,8 @@ export const repairRepository = (id: string): Promise<Project> =>
 
 const projectPath = (id: string) => `/api/v1/projects/${encodeURIComponent(id)}`;
 
-// Project validation: an ordered, non-empty list of shell commands run in a
-// disposable worker for the exact approved commit before the merge gate opens.
+// Optional project validation: when configured, this ordered, non-empty list
+// runs in a disposable worker and must pass for the exact approved commit.
 export interface ValidationConfig {
   commands: string[];
 }

@@ -25,6 +25,7 @@ export function FeatureView({
   onBack,
   onChanged,
   onDeleted,
+  onOpenValidation,
 }: {
   projectId: string;
   featureId: string;
@@ -32,6 +33,8 @@ export function FeatureView({
   onBack?: () => void;
   onChanged?: () => void;
   onDeleted?: () => void;
+  /** Opens project settings where validation commands are configured. */
+  onOpenValidation?: () => void;
 }) {
   const [feature, setFeature] = useState<Feature | null>(null);
   const [run, setRun] = useState<Run | null>(null);
@@ -188,7 +191,19 @@ export function FeatureView({
         />
       )}
 
-      {body(viewed, feature, projectId, hasRepo, run, live, intervals, scoped, load, envActive)}
+      {body(
+        viewed,
+        feature,
+        projectId,
+        hasRepo,
+        run,
+        live,
+        intervals,
+        scoped,
+        load,
+        envActive,
+        onOpenValidation,
+      )}
     </div>
   );
 }
@@ -198,9 +213,17 @@ function waitBanner(run: Run, state: string) {
   // reasons the user must resolve (round cap, blocker, merge gate, clarification).
   if (run.paused || run.status !== "waiting_for_user") return null;
   const kind: WaitKind = run.wait_kind ?? "";
-  const label = WAIT_LABELS[kind];
+  // merge_gate normally means "ready" (green). The one exception is when the
+  // coordinator parks here because configured isolated validation hasn't passed
+  // yet — that reason is a pending prerequisite, not a ready state. A ready gate
+  // also carries a reason, so key on the specific validation-waiting text rather
+  // than on the mere presence of one.
+  const validationPending =
+    kind === "merge_gate" && /waiting for isolated validation/i.test(run.reason ?? "");
+  const label = validationPending ? "Validation pending" : WAIT_LABELS[kind];
   if (!label && !run.reason) return null;
-  const tone = kind === "paused" ? "warn" : kind === "merge_gate" ? "ok" : "warn";
+  const tone =
+    kind === "paused" || validationPending ? "warn" : kind === "merge_gate" ? "ok" : "warn";
   return (
     <div className={`wait-banner wait-banner--${tone}`}>
       <span className="wait-banner__kind">{label ?? "Waiting"}</span>
@@ -241,6 +264,7 @@ function body(
   scoped: boolean,
   reload: () => void,
   envActive: boolean,
+  onOpenValidation?: () => void,
 ) {
   if (feature.state === "cancelled") {
     return (
@@ -327,6 +351,7 @@ function body(
       state={feature.state}
       live={live}
       onAdvanced={reload}
+      onOpenValidation={onOpenValidation}
     />
   );
 }
