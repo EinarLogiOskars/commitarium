@@ -128,12 +128,14 @@ function ActivityGroup({ items }: { items: TranscriptEntry[] }) {
     if (open) itemsRef.current?.scrollIntoView({ block: "nearest" });
   }, [open]);
 
+  const s = summarize(items);
+  const hasDiff = s.additions > 0 || s.deletions > 0;
   return (
     <div className={`activity-group ${sameRole === "reviewer" ? "activity-group--reviewer" : ""}`}>
-      <button className="activity-group__head" onClick={() => setOpen((o) => !o)}>
-        <span className="activity-group__chevron">{open ? "▼" : "▶"}</span>
-        <span className="activity-group__summary">{summarize(items)}</span>
-        <span className="activity-group__toggle">{open ? "Hide" : "Show"}</span>
+      <button className="activity-group__head" onClick={() => setOpen((o) => !o)} aria-expanded={open}>
+        <span className="activity-group__summary">{s.text}</span>
+        {hasDiff && <DiffStat additions={s.additions} deletions={s.deletions} />}
+        <span className="activity-group__chevron">{open ? "⌄" : "›"}</span>
       </button>
       {open && (
         <div className="activity-group__items" ref={itemsRef}>
@@ -146,36 +148,56 @@ function ActivityGroup({ items }: { items: TranscriptEntry[] }) {
   );
 }
 
+function DiffStat({ additions, deletions }: { additions: number; deletions: number }) {
+  return (
+    <span className="diffstat">
+      {additions > 0 && <span className="diff--add">+{additions}</span>}
+      {deletions > 0 && <span className="diff--del">−{deletions}</span>}
+    </span>
+  );
+}
+
+// created → "Created", modified → "Updated", deleted → "Removed" (match the
+// mental model of a change log rather than raw git op names).
+const FILE_VERB: Record<string, string> = {
+  created: "Created",
+  modified: "Updated",
+  deleted: "Removed",
+  renamed: "Renamed",
+};
+
 function ActivityItem({ e }: { e: TranscriptEntry }) {
   const a = e.activity;
   if (a?.kind === "command") {
+    const failed = a.exit_code !== undefined && a.exit_code !== 0;
     return (
-      <div className="activity-item">
-        <span className="activity-item__cmd">
-          <span className="activity-item__prompt">$</span> {a.command}
+      <div className="activity-item activity-item--cmd">
+        <span className="activity-item__prompt">$</span>
+        <span className="activity-item__cmd">{a.command}</span>
+        <span className="activity-item__right">
+          {a.exit_code !== undefined && (
+            <span className={`chip chip--${failed ? "bad" : "ok"}`}>exit {a.exit_code}</span>
+          )}
+          {a.duration_ms !== undefined && (
+            <span className="activity-item__dur">{fmtMs(a.duration_ms)}</span>
+          )}
         </span>
-        {a.exit_code !== undefined && (
-          <span className={`chip chip--${a.exit_code === 0 ? "ok" : "bad"}`}>
-            exit {a.exit_code}
-          </span>
-        )}
-        {a.duration_ms !== undefined && (
-          <span className="activity-item__dur">{fmtMs(a.duration_ms)}</span>
-        )}
       </div>
     );
   }
   if (a?.kind === "file_change") {
+    const hasDiff = (a.additions ?? 0) > 0 || (a.deletions ?? 0) > 0;
     return (
       <div className="activity-item">
-        <span className={`activity-item__op activity-item__op--${a.op}`}>{a.op}</span>
+        <span className={`activity-item__verb activity-item__verb--${a.op}`}>
+          {FILE_VERB[a.op] ?? a.op}
+        </span>
         <span className="activity-item__path">
           {a.op === "renamed" && a.old_path ? `${a.old_path} → ${a.path}` : a.path}
         </span>
-        {(a.additions !== undefined || a.deletions !== undefined) && (
-          <span className="activity-item__diff">
-            {a.additions !== undefined && <span className="diff--add">+{a.additions}</span>}
-            {a.deletions !== undefined && <span className="diff--del">−{a.deletions}</span>}
+        {hasDiff && (
+          <span className="activity-item__right">
+            <DiffStat additions={a.additions ?? 0} deletions={a.deletions ?? 0} />
           </span>
         )}
       </div>
@@ -184,29 +206,57 @@ function ActivityItem({ e }: { e: TranscriptEntry }) {
   return <div className="activity-item activity-item--note">{agentText(e.text)}</div>;
 }
 
-function summarize(items: TranscriptEntry[]): string {
-  const commands = items.filter((e) => e.activity?.kind === "command").length;
-  const files = items.filter((e) => e.activity?.kind === "file_change").length;
-  const role = items.every((e) => e.role === items[0].role) ? attributed(items[0].role) : null;
-  const prefix = role ? `${role} · ` : "";
-  const parts: string[] = [];
-  if (commands) parts.push(`ran ${commands} command${commands === 1 ? "" : "s"}`);
-  if (files) parts.push(`${files} file${files === 1 ? "" : "s"} changed`);
-  if (parts.length === 0) {
-    // Fall back to generic prose (pre-structured events).
-    const cmds = items.filter((e) => /started a command/i.test(e.text)).length;
-    if (cmds) parts.push(`ran ${cmds} command${cmds === 1 ? "" : "s"}`);
-    else parts.push(`${items.length} step${items.length === 1 ? "" : "s"}`);
+interface Summary {
+  text: string;
+  additions: number;
+  deletions: number;
+}
+
+// A natural-language roll-up of a run of tool activity, plus the net diff across
+// its file changes — e.g. "Ran 3 commands (1 failed), created 2 files, edited 1".
+function summarize(items: TranscriptEntry[]): Summary {
+  let commands = 0;
+  let failed = 0;
+  let created = 0;
+  let edited = 0;
+  let removed = 0;
+  let renamed = 0;
+  let additions = 0;
+  let deletions = 0;
+  for (const e of items) {
+    const a = e.activity;
+    if (a?.kind === "command") {
+      commands++;
+      if (a.exit_code !== undefined && a.exit_code !== 0) failed++;
+    } else if (a?.kind === "file_change") {
+      if (a.op === "created") created++;
+      else if (a.op === "modified") edited++;
+      else if (a.op === "deleted") removed++;
+      else if (a.op === "renamed") renamed++;
+      additions += a.additions ?? 0;
+      deletions += a.deletions ?? 0;
+    }
   }
-  return prefix + parts.join(" · ");
+  const parts: string[] = [];
+  if (commands) parts.push(`ran ${commands} command${plural(commands)}${failed ? ` (${failed} failed)` : ""}`);
+  if (created) parts.push(`created ${created} file${plural(created)}`);
+  if (edited) parts.push(`edited ${edited} file${plural(edited)}`);
+  if (removed) parts.push(`removed ${removed} file${plural(removed)}`);
+  if (renamed) parts.push(`renamed ${renamed} file${plural(renamed)}`);
+  if (parts.length === 0) {
+    // Pre-structured fallback (older coordinators emit generic prose).
+    const cmds = items.filter((e) => /started a command/i.test(e.text)).length;
+    parts.push(cmds ? `ran ${cmds} command${plural(cmds)}` : `${items.length} step${plural(items.length)}`);
+  }
+  const joined = parts.join(", ");
+  return { text: joined.charAt(0).toUpperCase() + joined.slice(1), additions, deletions };
+}
+
+function plural(n: number): string {
+  return n === 1 ? "" : "s";
 }
 
 function fmtMs(ms: number): string {
   return ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`;
 }
 
-function attributed(role: string): string {
-  if (role === "reviewer") return "Reviewer";
-  if (role === "user") return "You";
-  return "Lead";
-}
