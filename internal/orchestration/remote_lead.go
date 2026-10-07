@@ -3791,6 +3791,12 @@ func (starter *RemoteLeadStarter) reattach(request remoteLeadRequest) {
 		starter.requireReview(ctx, request, fmt.Errorf("inspect interrupted worker attempt: %w", err))
 		return
 	}
+	if reconciled, reconcileErr := starter.reconcileKnownEndedAttempt(ctx, request, attempt); reconcileErr != nil {
+		starter.requireReview(ctx, request, reconcileErr)
+		return
+	} else if reconciled {
+		return
+	}
 	if attempt.State == workerhttp.AttemptStateIndeterminate {
 		starter.requireReview(ctx, request, errors.New("worker reports an indeterminate provider attempt"))
 		return
@@ -3832,6 +3838,12 @@ func (starter *RemoteLeadStarter) reattachAdmitted(request remoteLeadRequest) {
 		starter.requireReview(ctx, request, fmt.Errorf("inspect interrupted parallel worker attempt: %w", err))
 		return
 	}
+	if reconciled, reconcileErr := starter.reconcileKnownEndedAttempt(ctx, request, attempt); reconcileErr != nil {
+		starter.requireReview(ctx, request, reconcileErr)
+		return
+	} else if reconciled {
+		return
+	}
 	if attempt.State == workerhttp.AttemptStateIndeterminate {
 		starter.requireReview(ctx, request, errors.New("worker reports an indeterminate provider attempt"))
 		return
@@ -3841,6 +3853,62 @@ func (starter *RemoteLeadStarter) reattachAdmitted(request remoteLeadRequest) {
 		return
 	}
 	starter.observe(ctx, request, attempt)
+}
+
+// reconcileKnownEndedAttempt confirms required workflow effects before any
+// successor is considered. At present the acceptance-test artifact is the
+// complete durable effect for its authoring turn; a private checkout commit by
+// itself is useful evidence, but is not enough to advance the workflow.
+func (starter *RemoteLeadStarter) reconcileKnownEndedAttempt(
+	ctx context.Context,
+	request remoteLeadRequest,
+	attempt workerhttp.Attempt,
+) (bool, error) {
+	if attempt.State != workerhttp.AttemptStateTerminal || attempt.Result == nil ||
+		attempt.Result.Outcome != workerhttp.OutcomeFailed || attempt.Result.Error == nil ||
+		attempt.Result.Error.Code != workerhttp.ErrorIncompleteResult ||
+		request.request.OutputContract != workerhttp.OutputContractAcceptanceTests {
+		return false, nil
+	}
+	run, err := starter.executions.GetRun(ctx, request.runID)
+	if err != nil {
+		return false, err
+	}
+	session, err := starter.executions.GetSession(ctx, request.identity.SessionID)
+	if err != nil {
+		return false, err
+	}
+	checkpoint, err := starter.executions.GetWorkerAttempt(ctx, session.ID)
+	if err != nil {
+		return false, err
+	}
+	if _, found, err := starter.durableAcceptanceTests(ctx, run, session, checkpoint, attempt); err != nil {
+		return false, err
+	} else if !found {
+		return false, nil
+	}
+	if session.Status == execution.SessionStatusRunning || session.Status == execution.SessionStatusPauseRequested {
+		session, err = starter.executions.TransitionSession(
+			ctx, session.ID, session.Status, execution.SessionStatusWaitingForUser, attempt.ProviderSessionID,
+		)
+		if err != nil {
+			return false, err
+		}
+	}
+	if session.Status != execution.SessionStatusWaitingForUser {
+		return false, fmt.Errorf("acceptance-test effects are durable but reviewer session is %q", session.Status)
+	}
+	if _, err := starter.executions.RecordSessionEventWithID(
+		ctx, request.identity.AttemptID+":recovery:effects-confirmed", session.ID,
+		worker.Event{
+			Type:               worker.EventRecoveryAssessment,
+			Text:               "The reviewer process ended without its final reply, but the independent acceptance-test manifest was already stored and validated. No replacement agent was started.",
+			RecoveryAssessment: &worker.RecoveryAssessment{Consistent: true, RequiresUserReview: false},
+		},
+	); err != nil {
+		return false, err
+	}
+	return true, starter.tryStartAcceptanceReview(ctx, run.ID)
 }
 
 func (starter *RemoteLeadStarter) applyReply(ctx context.Context, request remoteLeadRequest) error {
@@ -4320,9 +4388,6 @@ func (starter *RemoteLeadStarter) tryStartAcceptanceReview(ctx context.Context, 
 	if err := starter.confirmCompletedTurn(ctx, lead, leadCheckpoint); err != nil {
 		return fmt.Errorf("confirm completed implementation: %w", err)
 	}
-	if err := starter.confirmCompletedTurn(ctx, reviewer, reviewerCheckpoint); err != nil {
-		return fmt.Errorf("confirm authored acceptance tests: %w", err)
-	}
 	verified := false
 	events, err := starter.executions.EventsForSession(ctx, lead.ID)
 	if err != nil {
@@ -4346,19 +4411,15 @@ func (starter *RemoteLeadStarter) tryStartAcceptanceReview(ctx context.Context, 
 	if err != nil {
 		return err
 	}
-	if leadAttempt.Result == nil || leadAttempt.Result.Publication == nil || reviewerAttempt.Result == nil || reviewerAttempt.Result.AcceptanceTests == nil {
+	if leadAttempt.Result == nil || leadAttempt.Result.Publication == nil {
 		return errors.New("parallel implementation results are incomplete")
 	}
-	artifact, err := starter.artifacts.GetFeatureArtifact(ctx, run.FeatureID, featureartifact.KindAcceptanceTests)
+	tests, found, err := starter.durableAcceptanceTests(ctx, run, reviewer, reviewerCheckpoint, reviewerAttempt)
 	if err != nil {
-		return fmt.Errorf("load independent acceptance tests: %w", err)
+		return err
 	}
-	tests := featureartifact.AcceptanceTests{}
-	if err := json.Unmarshal([]byte(artifact.Document), &tests); err != nil {
-		return fmt.Errorf("decode independent acceptance tests: %w", err)
-	}
-	if tests.PlanVersion != run.PlanVersion || tests.TestCommitID != reviewerAttempt.Result.AcceptanceTests.TestCommitID {
-		return errors.New("independent acceptance test artifact does not match the private reviewer commit")
+	if !found {
+		return errors.New("independent acceptance-test manifest is missing")
 	}
 	tests.ImplementationCommitID = leadAttempt.Result.Publication.CommitID
 	acceptanceArtifacts, ok := starter.artifacts.(remoteLeadAcceptanceArtifactService)
@@ -4399,6 +4460,50 @@ func (starter *RemoteLeadStarter) tryStartAcceptanceReview(ctx context.Context, 
 		starter.launchAdmitted(next)
 	}
 	return nil
+}
+
+func (starter *RemoteLeadStarter) durableAcceptanceTests(
+	ctx context.Context,
+	run execution.Run,
+	reviewer execution.Session,
+	checkpoint execution.WorkerAttemptCheckpoint,
+	attempt workerhttp.Attempt,
+) (featureartifact.AcceptanceTests, bool, error) {
+	if starter.artifacts == nil {
+		return featureartifact.AcceptanceTests{}, false, nil
+	}
+	if attempt.SessionID != reviewer.ID || attempt.AttemptID != checkpoint.AttemptID ||
+		attempt.State != workerhttp.AttemptStateTerminal || attempt.Result == nil ||
+		attempt.ProviderSessionID != reviewer.ProviderSessionID ||
+		attempt.LatestEventSequence != checkpoint.LastEventSequence {
+		return featureartifact.AcceptanceTests{}, false, errors.New("acceptance-test attempt does not match its durable checkpoint")
+	}
+	completed := attempt.Result.Outcome == workerhttp.OutcomeCompleted &&
+		attempt.Result.Disposition == workerhttp.DispositionSucceeded &&
+		attempt.Result.AcceptanceTests != nil
+	incomplete := attempt.Result.Outcome == workerhttp.OutcomeFailed && attempt.Result.Error != nil &&
+		attempt.Result.Error.Code == workerhttp.ErrorIncompleteResult
+	if !completed && !incomplete {
+		return featureartifact.AcceptanceTests{}, false, nil
+	}
+	artifact, err := starter.artifacts.GetFeatureArtifact(ctx, run.FeatureID, featureartifact.KindAcceptanceTests)
+	if errors.Is(err, workflow.ErrArtifactNotFound) {
+		return featureartifact.AcceptanceTests{}, false, nil
+	}
+	if err != nil {
+		return featureartifact.AcceptanceTests{}, false, fmt.Errorf("load independent acceptance tests: %w", err)
+	}
+	tests := featureartifact.AcceptanceTests{}
+	if err := json.Unmarshal([]byte(artifact.Document), &tests); err != nil {
+		return featureartifact.AcceptanceTests{}, false, fmt.Errorf("decode independent acceptance tests: %w", err)
+	}
+	if err := tests.Validate(); err != nil || tests.PlanVersion != run.PlanVersion {
+		return featureartifact.AcceptanceTests{}, false, errors.New("independent acceptance-test manifest does not match the current plan")
+	}
+	if completed && tests.TestCommitID != attempt.Result.AcceptanceTests.TestCommitID {
+		return featureartifact.AcceptanceTests{}, false, errors.New("independent acceptance-test manifest does not match the private reviewer commit")
+	}
+	return tests, true, nil
 }
 
 func (starter *RemoteLeadStarter) startImplementationReview(

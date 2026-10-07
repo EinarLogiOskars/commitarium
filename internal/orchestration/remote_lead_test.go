@@ -39,6 +39,23 @@ type remoteLeadWorkerStub struct {
 
 type unavailableRemoteLeadWorker struct{}
 
+type recoveryArtifactStub struct {
+	artifact workflow.FeatureArtifact
+	err      error
+}
+
+func (stub recoveryArtifactStub) GetFeatureArtifact(context.Context, string, featureartifact.Kind) (workflow.FeatureArtifact, error) {
+	return stub.artifact, stub.err
+}
+
+func (recoveryArtifactStub) UpsertGoalDraft(context.Context, string, featureartifact.GoalDraft, workflow.Actor, string) (workflow.FeatureArtifact, error) {
+	return workflow.FeatureArtifact{}, errors.New("unexpected goal draft write")
+}
+
+func (recoveryArtifactStub) UpsertImplementationPlan(context.Context, string, featureartifact.ImplementationPlan, workflow.Actor, string) (workflow.FeatureArtifact, error) {
+	return workflow.FeatureArtifact{}, errors.New("unexpected plan write")
+}
+
 type conversationalRemoteLeadWorker struct {
 	mu          sync.Mutex
 	putRequests []workerhttp.PutAttemptRequest
@@ -3035,6 +3052,55 @@ func TestAcceptanceResultsMustFinishBeforeReviewCanAdvance(t *testing.T) {
 	tests.Tests[0].Status = featureartifact.AcceptanceTestNotApplicable
 	if err := validateAcceptanceReviewResults(tests, 1, commitID, workerhttp.DispositionSucceeded); err != nil {
 		t.Fatalf("justified not-applicable test blocked approval: %v", err)
+	}
+}
+
+func TestDurableAcceptanceTestsReconcileIncompleteProviderResult(t *testing.T) {
+	testCommitID := strings.Repeat("a", 40)
+	tests := featureartifact.AcceptanceTests{
+		PlanVersion:  1,
+		TestCommitID: testCommitID,
+		Tests: []featureartifact.AcceptanceTest{{
+			ID: "exports-csv", Position: 1, Title: "Exports visible rows",
+			Status: featureartifact.AcceptanceTestPending,
+		}},
+	}
+	document, err := json.Marshal(tests)
+	if err != nil {
+		t.Fatalf("encode acceptance tests: %v", err)
+	}
+	starter := &RemoteLeadStarter{artifacts: recoveryArtifactStub{artifact: workflow.FeatureArtifact{
+		FeatureID: "fea_recovery", Kind: featureartifact.KindAcceptanceTests,
+		Revision: 1, Document: string(document),
+		Actor:     workflow.Actor{Kind: workflow.ActorKindAgent, ID: "reviewer"},
+		UpdatedAt: time.Now().UTC(),
+	}}}
+	reviewer := execution.Session{ID: "run_recovery:reviewer", ProviderSessionID: "claude_session"}
+	checkpoint := execution.WorkerAttemptCheckpoint{
+		SessionID: reviewer.ID, AttemptID: reviewer.ID + ":acceptance:1:turn:1", LastEventSequence: 25,
+	}
+	attempt := workerhttp.Attempt{
+		AttemptReference:  workerhttp.AttemptReference{SessionID: reviewer.ID, AttemptID: checkpoint.AttemptID},
+		ProviderSessionID: reviewer.ProviderSessionID, State: workerhttp.AttemptStateTerminal,
+		LatestEventSequence: checkpoint.LastEventSequence,
+		Result: &workerhttp.TerminalResult{
+			Outcome: workerhttp.OutcomeFailed,
+			Summary: "provider process ended without a structured result",
+			Error:   &workerhttp.ProtocolError{Code: workerhttp.ErrorIncompleteResult, Message: "missing structured_output", Retryable: true},
+		},
+	}
+	got, found, err := starter.durableAcceptanceTests(
+		t.Context(), execution.Run{FeatureID: "fea_recovery", PlanVersion: 1}, reviewer, checkpoint, attempt,
+	)
+	if err != nil || !found || got.TestCommitID != testCommitID {
+		t.Fatalf("reconciled acceptance tests=%+v found=%t error=%v", got, found, err)
+	}
+
+	starter.artifacts = recoveryArtifactStub{err: workflow.ErrArtifactNotFound}
+	if _, found, err := starter.durableAcceptanceTests(
+		t.Context(), execution.Run{FeatureID: "fea_recovery", PlanVersion: 1}, reviewer, checkpoint, attempt,
+	); err != nil || found {
+		t.Fatalf("private commit without manifest found=%t error=%v", found, err)
 	}
 }
 
