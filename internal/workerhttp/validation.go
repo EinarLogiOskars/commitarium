@@ -826,6 +826,7 @@ func (code ErrorCode) IsValid() bool {
 		ErrorToolchainUnavailable,
 		ErrorModelCatalogUnavailable,
 		ErrorConfigurationMismatch,
+		ErrorIncompleteResult,
 		ErrorIndeterminateState,
 		ErrorRedactionFailed,
 		ErrorInvalidEventStream,

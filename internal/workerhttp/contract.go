@@ -352,6 +352,7 @@ const (
 	ErrorToolchainUnavailable    ErrorCode = "toolchain_unavailable"
 	ErrorModelCatalogUnavailable ErrorCode = "model_catalog_unavailable"
 	ErrorConfigurationMismatch   ErrorCode = "configuration_mismatch"
+	ErrorIncompleteResult        ErrorCode = "incomplete_result"
 	ErrorIndeterminateState      ErrorCode = "indeterminate_state"
 	ErrorRedactionFailed         ErrorCode = "redaction_failed"
 	ErrorInvalidEventStream      ErrorCode = "invalid_event_stream"

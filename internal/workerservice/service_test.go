@@ -302,6 +302,30 @@ func TestJournalBackedServiceRecordsProviderReportedFailure(t *testing.T) {
 	}
 }
 
+func TestJournalBackedServiceRecordsMissingProviderResultAsTerminalFailure(t *testing.T) {
+	provider := immediateResultAdapter{
+		result:  worker.Result{ProviderSessionID: "claude_session_incomplete"},
+		waitErr: errors.New("Claude Code exited before returning a result (exit code 0, signal \"\")"),
+	}
+	harness := newHTTPHarness(t, filepath.Join(t.TempDir(), "worker.db"), provider, newStepClock())
+	defer harness.close(t)
+	identity := validLaunchIdentity("ses_incomplete", "att_incomplete", "launch_incomplete")
+
+	attempt, created, err := harness.client.PutAttempt(t.Context(), identity, validPutRequest())
+	if err != nil || !created {
+		t.Fatalf("start incomplete provider turn: attempt=%+v created=%t error=%v", attempt, created, err)
+	}
+	terminal := waitForAttemptState(t, harness.client, attempt.AttemptReference, workerhttp.AttemptStateTerminal)
+	if terminal.Result == nil || terminal.Result.Outcome != workerhttp.OutcomeFailed ||
+		terminal.Result.Error == nil || terminal.Result.Error.Code != workerhttp.ErrorIncompleteResult ||
+		!terminal.Result.Error.Retryable || !strings.Contains(terminal.Result.Error.Message, "exit code 0") {
+		t.Fatalf("stored incomplete result = %+v", terminal.Result)
+	}
+	if terminal.State.MayStillBeActive() {
+		t.Fatalf("known-ended attempt remains active: %+v", terminal)
+	}
+}
+
 func TestJournalBackedServiceMarksInterruptedWorkIndeterminateOnStartup(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "worker.db")
 	clock := newStepClock()
@@ -855,7 +879,8 @@ type identityOverrideAdapter struct {
 }
 
 type immediateResultAdapter struct {
-	result worker.Result
+	result  worker.Result
+	waitErr error
 }
 
 type recordingAdapter struct {
@@ -874,7 +899,7 @@ func (adapter *recordingAdapter) Start(
 	return newImmediateResultSession(worker.Result{
 		Outcome: worker.OutcomeCompleted, Disposition: worker.DispositionSucceeded,
 		ProviderSessionID: adapter.providerSessionID, Summary: "recording adapter completed",
-	}), nil
+	}, nil), nil
 }
 
 func (adapter *recordingAdapter) Resume(
@@ -904,25 +929,26 @@ func (adapter immediateResultAdapter) Start(
 	context.Context,
 	worker.SessionRequest,
 ) (worker.Session, error) {
-	return newImmediateResultSession(adapter.result), nil
+	return newImmediateResultSession(adapter.result, adapter.waitErr), nil
 }
 
 func (adapter immediateResultAdapter) Resume(
 	context.Context,
 	worker.ResumeRequest,
 ) (worker.Session, error) {
-	return newImmediateResultSession(adapter.result), nil
+	return newImmediateResultSession(adapter.result, adapter.waitErr), nil
 }
 
 type immediateResultSession struct {
-	result worker.Result
-	events chan worker.Event
+	result  worker.Result
+	waitErr error
+	events  chan worker.Event
 }
 
-func newImmediateResultSession(result worker.Result) *immediateResultSession {
+func newImmediateResultSession(result worker.Result, waitErr error) *immediateResultSession {
 	events := make(chan worker.Event)
 	close(events)
-	return &immediateResultSession{result: result, events: events}
+	return &immediateResultSession{result: result, waitErr: waitErr, events: events}
 }
 
 func (session *immediateResultSession) ProviderSessionID() string {
@@ -938,7 +964,7 @@ func (*immediateResultSession) Send(context.Context, worker.Command) error {
 }
 
 func (session *immediateResultSession) Wait(context.Context) (worker.Result, error) {
-	return session.result, nil
+	return session.result, session.waitErr
 }
 
 func (adapter *identityOverrideAdapter) Start(

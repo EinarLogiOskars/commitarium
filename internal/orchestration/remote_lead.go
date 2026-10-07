@@ -4161,7 +4161,11 @@ func (starter *RemoteLeadStarter) finish(
 	case workerhttp.OutcomeStopped:
 		err = starter.failSession(ctx, session, execution.SessionStatusStopped, attempt, "The "+request.agentName+" was stopped.")
 	case workerhttp.OutcomeFailed:
-		err = starter.failSession(ctx, session, execution.SessionStatusFailed, attempt, "The "+request.agentName+" could not complete this turn.")
+		if attempt.Result.Error != nil && attempt.Result.Error.Code == workerhttp.ErrorIncompleteResult {
+			err = fmt.Errorf("%s ended before returning its required structured result: %s", request.agentName, attempt.Result.Error.Message)
+		} else {
+			err = starter.failSession(ctx, session, execution.SessionStatusFailed, attempt, "The "+request.agentName+" could not complete this turn.")
+		}
 	default:
 		err = fmt.Errorf("unsupported worker outcome %q", attempt.Result.Outcome)
 	}
@@ -5470,9 +5474,9 @@ func (starter *RemoteLeadStarter) requireReview(
 	request remoteLeadRequest,
 	cause error,
 ) {
-	starter.reportError(fmt.Errorf("observe real lead run %q: %w", request.runID, cause))
-	text := "The coordinator could not safely confirm the real Codex turn's state. " +
-		"It did not start a replacement agent. Check the worker and approve recovery before continuing."
+	starter.reportError(fmt.Errorf("observe agent run %q: %w", request.runID, cause))
+	text := "The coordinator could not complete the " + request.agentName + " turn. " +
+		"The work order is paused so its durable work can be checked and continued safely."
 	_, _ = starter.executions.RecordSessionEventWithID(
 		ctx, request.identity.AttemptID+":recovery:review-required",
 		request.identity.SessionID,

@@ -3,6 +3,7 @@ package workerservice
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 
 	"github.com/EinarLogiOskars/commitarium/internal/worker"
@@ -315,8 +316,21 @@ func (service *Service) finishAttempt(
 	result, err := providerSession.Wait(service.lifetime)
 	if err != nil {
 		if !errors.Is(err, context.Canceled) {
-			if attempt, getErr := service.journal.GetAttempt(context.WithoutCancel(service.lifetime), reference); getErr == nil {
-				_ = service.markIndeterminate(context.WithoutCancel(service.lifetime), attempt)
+			ctx := context.WithoutCancel(service.lifetime)
+			service.eventMu.Lock()
+			defer service.eventMu.Unlock()
+			if attempt, getErr := service.journal.GetAttempt(ctx, reference); getErr == nil {
+				message := strings.TrimSpace(err.Error())
+				if message == "" || len(message) > 4096 {
+					message = "The provider process ended without returning a usable structured result."
+				}
+				_ = service.completeAttemptLocked(ctx, attempt, workerhttp.TerminalResult{
+					Outcome: workerhttp.OutcomeFailed,
+					Summary: "The provider process ended without returning a usable structured result.",
+					Error: &workerhttp.ProtocolError{
+						Code: workerhttp.ErrorIncompleteResult, Message: message, Retryable: true,
+					},
+				})
 			}
 		}
 		return
@@ -371,6 +385,18 @@ func (service *Service) finishAttempt(
 			Retryable: false,
 		}
 	}
+	_ = service.completeAttemptLocked(service.lifetime, attempt, terminalResult)
+}
+
+// completeAttemptLocked records a known process ending. A missing or invalid
+// provider result is a failed terminal attempt, not an indeterminate live
+// process: the process has ended and only its required structured result is
+// missing. The caller must hold eventMu.
+func (service *Service) completeAttemptLocked(
+	ctx context.Context,
+	attempt workerhttp.Attempt,
+	terminalResult workerhttp.TerminalResult,
+) error {
 	validationTime := service.timestamp()
 	terminalCandidate := attempt
 	terminalCandidate.State = workerhttp.AttemptStateTerminal
@@ -379,43 +405,44 @@ func (service *Service) finishAttempt(
 	terminalCandidate.Result = &terminalResult
 	if err := terminalCandidate.Validate(); err != nil {
 		_ = service.markIndeterminateLocked(service.lifetime, attempt)
-		return
+		return err
 	}
 	terminalEvent := workerhttp.Event{
-		AttemptReference: reference,
+		AttemptReference: attempt.AttemptReference,
 		Sequence:         attempt.LatestEventSequence + 1,
 		Type:             workerhttp.EventAttemptTerminal,
-		Text:             result.Summary,
+		Text:             terminalResult.Summary,
 		OccurredAt:       service.timestamp(),
 		Redaction:        workerhttp.RedactionMetadata{},
 	}
-	recorded, created, err := service.journal.AppendEvent(service.lifetime, workerjournal.EventAppend{
+	recorded, created, err := service.journal.AppendEvent(ctx, workerjournal.EventAppend{
 		Event: terminalEvent, AcceptedAt: service.timestamp(),
 	})
 	if err != nil {
 		_ = service.markIndeterminateLocked(service.lifetime, attempt)
-		return
+		return err
 	}
 	if created {
 		service.publishLocked(recorded)
 	}
-	current, err := service.journal.GetAttempt(service.lifetime, reference)
+	current, err := service.journal.GetAttempt(ctx, attempt.AttemptReference)
 	if err != nil {
-		return
+		return err
 	}
-	_, err = service.journal.TransitionAttempt(service.lifetime, workerjournal.AttemptTransition{
-		Reference:         reference,
+	_, err = service.journal.TransitionAttempt(ctx, workerjournal.AttemptTransition{
+		Reference:         attempt.AttemptReference,
 		Expected:          current.State,
 		State:             workerhttp.AttemptStateTerminal,
-		ProviderSessionID: result.ProviderSessionID,
+		ProviderSessionID: attempt.ProviderSessionID,
 		OccurredAt:        service.timestamp(),
 		Result:            &terminalResult,
 	})
 	if err != nil {
 		_ = service.markIndeterminateLocked(service.lifetime, current)
-		return
+		return err
 	}
-	service.closeSubscribersLocked(reference)
+	service.closeSubscribersLocked(attempt.AttemptReference)
+	return nil
 }
 
 func (service *Service) hasActiveSession(reference workerhttp.AttemptReference) bool {
