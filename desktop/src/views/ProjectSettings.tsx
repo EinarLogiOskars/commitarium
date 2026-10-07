@@ -4,6 +4,7 @@ import {
   updateAgentSettings,
   updateAutonomyPolicy,
   updateDialogueLimits,
+  updateIndependentAcceptanceTests,
   updateMergePolicy,
   updateProjectValidation,
 } from "../api/projects";
@@ -35,9 +36,60 @@ export function ProjectSettings({
       <Rounds project={project} onUpdated={onUpdated} />
       <Autonomy project={project} onUpdated={onUpdated} />
       <Merge project={project} onUpdated={onUpdated} />
+      <IndependentTests project={project} onUpdated={onUpdated} />
       <Validation project={project} />
       <Recovery project={project} />
     </>
+  );
+}
+
+// Reviewer writes blind acceptance tests before the lead implements, then runs
+// them against the exact published commit as the first input to review.
+function IndependentTests({
+  project,
+  onUpdated,
+}: {
+  project: Project;
+  onUpdated: (p: Project) => void;
+}) {
+  const [enabled, setEnabled] = useState(project.independent_acceptance_tests ?? false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const save = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      onUpdated(await updateIndependentAcceptanceTests(project.id, enabled));
+    } catch (e) {
+      setError(describe(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <section className="panel">
+      <h2>Independent acceptance tests</h2>
+      {error && <div className="banner banner--error">{error}</div>}
+      <p className="muted">
+        Before the lead implements, the reviewer privately writes executable acceptance tests from
+        the goal and plan, then runs them against the exact published commit as the first input to
+        review. Adds a reviewer turn; off by default. Can be overridden per work order.
+      </p>
+      <label className="toggle">
+        <input
+          type="checkbox"
+          checked={enabled}
+          onChange={(e) => setEnabled(e.target.checked)}
+          disabled={busy}
+        />
+        Enable for new work orders in this project
+      </label>
+      <button className="primary" onClick={() => void save()} disabled={busy}>
+        {busy ? "Saving…" : "Save"}
+      </button>
+    </section>
   );
 }
 

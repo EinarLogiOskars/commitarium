@@ -48,6 +48,9 @@ export function NewWorkOrder({
   const [merge, setMerge] = useState<MergePolicy>(project.merge_policy ?? "require_user_approval");
   const [planning, setPlanning] = useState(project.dialogue_limits?.planning_rounds ?? 6);
   const [review, setReview] = useState(project.dialogue_limits?.implementation_review_rounds ?? 6);
+  const [independentTests, setIndependentTests] = useState(
+    project.independent_acceptance_tests ?? false,
+  );
   // null while unknown; only warn once we positively know none is configured.
   const [hasValidation, setHasValidation] = useState<boolean | null>(null);
 
@@ -85,6 +88,7 @@ export function NewWorkOrder({
         autonomy_policy: autonomy,
         merge_policy: merge,
         dialogue_limits: { planning_rounds: planning, implementation_review_rounds: review },
+        independent_acceptance_tests: independentTests,
       });
       onCreated(created.id);
     } catch (e) {
@@ -105,6 +109,7 @@ export function NewWorkOrder({
     autonomy === "run_to_completion" ? "runs to merge gate" : "stops each phase",
     merge === "auto_after_gates" ? "auto-merge" : "approval to merge",
     `${planning}/${review} rounds`,
+    ...(independentTests ? ["reviewer tests"] : []),
   ].join(" · ");
 
   return (
@@ -192,6 +197,15 @@ export function NewWorkOrder({
                   onChange={(e) => setReview(Math.max(0, Number(e.target.value)))}
                   disabled={busy}
                 />
+              </label>
+              <label className="toggle neworder__toggle">
+                <input
+                  type="checkbox"
+                  checked={independentTests}
+                  onChange={(e) => setIndependentTests(e.target.checked)}
+                  disabled={busy}
+                />
+                Independent acceptance tests
               </label>
             </div>
           )}

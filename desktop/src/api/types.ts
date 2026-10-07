@@ -72,6 +72,7 @@ export interface Project {
   agent_models?: AgentModels;
   merge_policy?: MergePolicy;
   autonomy_policy?: AutonomyPolicy;
+  independent_acceptance_tests?: boolean; // project default for future work orders
   forgejo_repository?: ForgejoRepository;
   repository_status?: RepositoryStatus;
   created_at: string;
@@ -210,6 +211,7 @@ export interface Feature {
   state: FeatureState;
   accepted_goal?: string;
   goal_accepted_at?: string;
+  independent_acceptance_tests?: boolean; // immutable effective snapshot
   created_at: string;
   updated_at: string;
 }
@@ -227,6 +229,8 @@ export interface CreateFeatureInput {
   autonomy_policy?: AutonomyPolicy;
   merge_policy?: MergePolicy;
   dialogue_limits?: DialogueLimits;
+  // Per-order override; omitted inherits the project default.
+  independent_acceptance_tests?: boolean;
 }
 
 export type RunStatus = "running" | "waiting_for_user" | "succeeded" | "stopped" | "failed";
@@ -399,7 +403,27 @@ export interface WorkflowEvent {
 // Durable, revisioned feature documents kept in coordinator SQLite (never Git):
 // the proposed goal and the agreed implementation plan. They are separate from
 // the conversational session transcript.
-export type FeatureArtifactKind = "goal_draft" | "implementation_plan";
+export type FeatureArtifactKind = "goal_draft" | "implementation_plan" | "acceptance_tests";
+
+// The reviewer's private, blind acceptance-test checklist (titles + commit ids
+// only — never executable source). pending = not yet run (unmet, not a failed
+// execution); failed/not_applicable carry a human-readable note.
+export type AcceptanceTestStatus = "pending" | "running" | "passed" | "failed" | "not_applicable";
+
+export interface AcceptanceTest {
+  id: string;
+  position: number;
+  title: string;
+  status: AcceptanceTestStatus;
+  note: string;
+}
+
+export interface AcceptanceTestsDocument {
+  plan_version: number;
+  test_commit_id: string;
+  implementation_commit_id: string; // pinned at review handoff; "" while authoring
+  tests: AcceptanceTest[];
+}
 
 export interface GoalDraftDocument {
   goal: string;

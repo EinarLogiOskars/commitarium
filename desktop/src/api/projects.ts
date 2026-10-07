@@ -66,6 +66,14 @@ export const repairRepository = (id: string): Promise<Project> =>
 
 const projectPath = (id: string) => `/api/v1/projects/${encodeURIComponent(id)}`;
 
+// Project default: whether the reviewer writes blind acceptance tests before the
+// lead implements. Off by default; per-order override lives on CreateFeatureInput.
+export const updateIndependentAcceptanceTests = (id: string, enabled: boolean): Promise<Project> =>
+  request(`${projectPath(id)}/independent-acceptance-tests`, {
+    method: "PUT",
+    body: { enabled },
+  });
+
 // Optional project validation: when configured, this ordered, non-empty list
 // runs in a disposable worker and must pass for the exact approved commit.
 export interface ValidationConfig {
