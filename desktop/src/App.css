@@ -1552,6 +1552,67 @@ button.danger:not(.ghost) {
   color: var(--ok);
 }
 
+/* Recovery surface for a blocker (see RecoveryPanel): a bordered card inside
+   the intervention dock, carrying the full recheck/continue/replace controls. */
+.recover {
+  margin-top: 14px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--bad) 45%, transparent);
+  background: color-mix(in srgb, var(--bad) 8%, transparent);
+}
+.recover__head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.recover__title {
+  font-weight: 600;
+  font-size: 14px;
+}
+.recover__reason {
+  margin: 8px 0 0;
+  font-size: 13px;
+}
+.recover__facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 8px;
+  margin-top: 10px;
+}
+.recover__fact {
+  font-size: 12px;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 2px 8px;
+}
+.recover__evidence {
+  margin: 10px 0 0;
+  padding-left: 18px;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.recover__evidence li {
+  margin: 2px 0;
+}
+.recover__guidance {
+  display: block;
+  width: 100%;
+  margin-top: 12px;
+  resize: vertical;
+}
+.recover__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+.recover__hint {
+  margin: 10px 0 0;
+  font-size: 12px;
+}
+
 .linkish {
   display: inline-block;
   margin-top: 12px;

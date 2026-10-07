@@ -1,6 +1,7 @@
 import { useState } from "react";
-import { pauseRun, queueIntervention, recoverRun, resumeRun } from "../api/runs";
+import { pauseRun, queueIntervention, resumeRun } from "../api/runs";
 import { ApiError } from "../api/client";
+import { RecoveryPanel } from "./RecoveryPanel";
 import type { Intervention, InterventionTargetRole, Run } from "../api/types";
 
 // The single, always-present intervention surface. It reflects the true run
@@ -85,19 +86,11 @@ export function InterveneBar({
     }
   };
 
-  const control = async (
-    fn: (id: string, key: string) => Promise<Run>,
-    reportPersistentBlocker = false,
-  ) => {
+  const control = async (fn: (id: string, key: string) => Promise<Run>) => {
     setBusy("control");
     setError(null);
     try {
-      const changed = await fn(run.id, crypto.randomUUID());
-      if (reportPersistentBlocker && changed.wait_kind === "blocker") {
-        setError(
-          `Re-check completed, but the run is still blocked. ${changed.reason ?? "The durable state is still inconsistent."}`,
-        );
-      }
+      await fn(run.id, crypto.randomUUID());
       onChanged();
     } catch (e) {
       setError(controlError(e));
@@ -143,16 +136,7 @@ export function InterveneBar({
           {stateLabel}
         </span>
         <span className="intervene__actions">
-          {blocked ? (
-            <button
-              className="primary"
-              onClick={() => void control(recoverRun, true)}
-              disabled={busy != null}
-              title="Re-check the durable state; continues if the last turn is confirmable"
-            >
-              Re-check / approve recovery
-            </button>
-          ) : pausedWaiting ? (
+          {pausedWaiting ? (
             <button
               className="primary"
               onClick={() => void control(resumeRun)}
@@ -182,6 +166,8 @@ export function InterveneBar({
       </div>
 
       {error && <div className="banner banner--error">{error}</div>}
+
+      {blocked && <RecoveryPanel run={run} onChanged={onChanged} />}
 
       {iv && !iv.resolved_at && (
         <div className={`intervene__queued ${answered ? "intervene__queued--done" : ""}`}>
