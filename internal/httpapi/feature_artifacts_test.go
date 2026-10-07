@@ -23,9 +23,33 @@ type artifactWorkflowService struct {
 	planVersion      int
 	stepID           string
 	stepStatus       featureartifact.StepStatus
+	acceptanceStatus featureartifact.AcceptanceTestStatus
+	testID           string
+	note             string
 	commitID         string
 	artifactActor    workflow.Actor
 	artifactKey      string
+}
+
+func (s *artifactWorkflowService) TransitionAcceptanceTest(
+	_ context.Context,
+	_ string,
+	planVersion int,
+	testID string,
+	status featureartifact.AcceptanceTestStatus,
+	note string,
+	implementationCommitID string,
+	actor workflow.Actor,
+	key string,
+) (workflow.FeatureArtifact, error) {
+	s.planVersion = planVersion
+	s.testID = testID
+	s.acceptanceStatus = status
+	s.note = note
+	s.commitID = implementationCommitID
+	s.artifactActor = actor
+	s.artifactKey = key
+	return s.artifact, s.artifactErr
 }
 
 func (s *artifactWorkflowService) GetFeatureArtifact(
@@ -154,6 +178,35 @@ func TestTransitionImplementationPlanStep(t *testing.T) {
 		service.stepStatus != featureartifact.StepCompleted || service.commitID != commitID ||
 		service.artifactKey != "complete-api" {
 		t.Fatalf("unexpected plan transition: %+v", service)
+	}
+}
+
+func TestTransitionAcceptanceTest(t *testing.T) {
+	service := &artifactWorkflowService{
+		recordingWorkflowService: &recordingWorkflowService{},
+		artifact: workflow.FeatureArtifact{
+			FeatureID: "fea_test", Kind: featureartifact.KindAcceptanceTests, Revision: 5,
+			Document: `{}`, Actor: workflow.Actor{Kind: workflow.ActorKindAgent, ID: "implementation-reviewer"},
+			UpdatedAt: time.Now().UTC(),
+		},
+	}
+	features := &recordingFeatureService{getResult: feature.Feature{ID: "fea_test", ProjectID: "prj_test"}}
+	commitID := strings.Repeat("b", 40)
+	request := httptest.NewRequest(http.MethodPost,
+		"/api/v1/projects/prj_test/features/fea_test/acceptance-tests/exports-csv/transitions",
+		strings.NewReader(`{"plan_version":2,"status":"failed","note":"wrong rows","implementation_commit_id":"`+commitID+`"}`))
+	request.Header.Set("Idempotency-Key", "fail-exports-csv")
+	recorder := httptest.NewRecorder()
+
+	New(nil, features, service, nil, nil, nil).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusOK, recorder.Code, recorder.Body.String())
+	}
+	if service.planVersion != 2 || service.testID != "exports-csv" ||
+		service.acceptanceStatus != featureartifact.AcceptanceTestFailed || service.note != "wrong rows" ||
+		service.commitID != commitID || service.artifactKey != "fail-exports-csv" {
+		t.Fatalf("unexpected acceptance transition: %+v", service)
 	}
 }
 

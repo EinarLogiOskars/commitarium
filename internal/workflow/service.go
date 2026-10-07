@@ -192,6 +192,108 @@ func (s *Service) UpsertImplementationPlan(
 	return s.PutImplementationPlan(ctx, featureID, expected, plan, actor, idempotencyKey)
 }
 
+func (s *Service) UpsertAcceptanceTests(
+	ctx context.Context,
+	featureID string,
+	tests featureartifact.AcceptanceTests,
+	actor Actor,
+	idempotencyKey string,
+) (FeatureArtifact, error) {
+	if err := tests.Validate(); err != nil {
+		return FeatureArtifact{}, err
+	}
+	expected := 0
+	current, err := s.GetFeatureArtifact(ctx, featureID, featureartifact.KindAcceptanceTests)
+	if err == nil {
+		matches, compareErr := artifactDocumentMatches(current, tests)
+		if compareErr != nil {
+			return FeatureArtifact{}, compareErr
+		}
+		if matches {
+			return current, nil
+		}
+		expected = current.Revision
+	} else if !errors.Is(err, ErrArtifactNotFound) {
+		return FeatureArtifact{}, err
+	}
+	return s.putFeatureArtifact(
+		ctx, featureID, featureartifact.KindAcceptanceTests, expected, tests, actor, idempotencyKey,
+	)
+}
+
+func (s *Service) TransitionAcceptanceTest(
+	ctx context.Context,
+	featureID string,
+	planVersion int,
+	testID string,
+	status featureartifact.AcceptanceTestStatus,
+	note string,
+	implementationCommitID string,
+	actor Actor,
+	idempotencyKey string,
+) (FeatureArtifact, error) {
+	current, err := s.GetFeatureArtifact(ctx, featureID, featureartifact.KindAcceptanceTests)
+	if err != nil {
+		return FeatureArtifact{}, err
+	}
+	tests := featureartifact.AcceptanceTests{}
+	if err := json.Unmarshal([]byte(current.Document), &tests); err != nil {
+		return FeatureArtifact{}, fmt.Errorf("decode acceptance tests: %w", err)
+	}
+	if tests.PlanVersion != planVersion {
+		return FeatureArtifact{}, ErrArtifactConflict
+	}
+	implementationCommitID = strings.TrimSpace(implementationCommitID)
+	if tests.ImplementationCommitID == "" {
+		tests.ImplementationCommitID = implementationCommitID
+	} else if implementationCommitID != "" && tests.ImplementationCommitID != implementationCommitID {
+		return FeatureArtifact{}, ErrArtifactConflict
+	}
+	index := -1
+	for candidate := range tests.Tests {
+		if tests.Tests[candidate].ID == testID {
+			index = candidate
+			break
+		}
+	}
+	if index < 0 {
+		return FeatureArtifact{}, featureartifact.ErrInvalidArtifact
+	}
+	note = strings.TrimSpace(note)
+	entry := &tests.Tests[index]
+	if entry.Status == status && entry.Note == note {
+		return current, nil
+	}
+	switch status {
+	case featureartifact.AcceptanceTestRunning:
+		if entry.Status != featureartifact.AcceptanceTestPending || note != "" {
+			return FeatureArtifact{}, featureartifact.ErrInvalidArtifact
+		}
+	case featureartifact.AcceptanceTestPassed:
+		if entry.Status != featureartifact.AcceptanceTestRunning || note != "" {
+			return FeatureArtifact{}, featureartifact.ErrInvalidArtifact
+		}
+	case featureartifact.AcceptanceTestFailed:
+		if entry.Status != featureartifact.AcceptanceTestRunning || note == "" {
+			return FeatureArtifact{}, featureartifact.ErrInvalidArtifact
+		}
+	case featureartifact.AcceptanceTestNotApplicable:
+		if entry.Status == featureartifact.AcceptanceTestNotApplicable || note == "" {
+			return FeatureArtifact{}, featureartifact.ErrInvalidArtifact
+		}
+	default:
+		return FeatureArtifact{}, featureartifact.ErrInvalidArtifact
+	}
+	entry.Status = status
+	entry.Note = note
+	if err := tests.Validate(); err != nil {
+		return FeatureArtifact{}, err
+	}
+	return s.putFeatureArtifact(
+		ctx, featureID, featureartifact.KindAcceptanceTests, current.Revision, tests, actor, idempotencyKey,
+	)
+}
+
 func artifactDocumentMatches(current FeatureArtifact, document any) (bool, error) {
 	encoded, err := json.Marshal(document)
 	if err != nil {

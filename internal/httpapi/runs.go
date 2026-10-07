@@ -19,24 +19,25 @@ import (
 )
 
 type runResponse struct {
-	ID                  string                       `json:"id"`
-	FeatureID           string                       `json:"feature_id"`
-	Status              execution.RunStatus          `json:"status"`
-	Reason              string                       `json:"reason,omitempty"`
-	WaitKind            execution.RunWaitKind        `json:"wait_kind,omitempty"`
-	Paused              bool                         `json:"paused"`
-	DialogueLimits      dialogueLimitsResponse       `json:"dialogue_limits"`
-	AgentProviders      agentProvidersResponse       `json:"agent_providers"`
-	AgentModels         agentModelsResponse          `json:"agent_models"`
-	MergePolicy         project.MergePolicy          `json:"merge_policy"`
-	AutonomyPolicy      project.AutonomyPolicy       `json:"autonomy_policy"`
-	PlanVersion         int                          `json:"plan_version"`
-	StartedAt           time.Time                    `json:"started_at"`
-	UpdatedAt           time.Time                    `json:"updated_at"`
-	EndedAt             *time.Time                   `json:"ended_at,omitempty"`
-	Sessions            []sessionResponse            `json:"sessions"`
-	InterventionTargets []interventionTargetResponse `json:"intervention_targets"`
-	Intervention        *interventionResponse        `json:"intervention,omitempty"`
+	ID                         string                       `json:"id"`
+	FeatureID                  string                       `json:"feature_id"`
+	Status                     execution.RunStatus          `json:"status"`
+	Reason                     string                       `json:"reason,omitempty"`
+	WaitKind                   execution.RunWaitKind        `json:"wait_kind,omitempty"`
+	Paused                     bool                         `json:"paused"`
+	DialogueLimits             dialogueLimitsResponse       `json:"dialogue_limits"`
+	AgentProviders             agentProvidersResponse       `json:"agent_providers"`
+	AgentModels                agentModelsResponse          `json:"agent_models"`
+	MergePolicy                project.MergePolicy          `json:"merge_policy"`
+	AutonomyPolicy             project.AutonomyPolicy       `json:"autonomy_policy"`
+	IndependentAcceptanceTests bool                         `json:"independent_acceptance_tests"`
+	PlanVersion                int                          `json:"plan_version"`
+	StartedAt                  time.Time                    `json:"started_at"`
+	UpdatedAt                  time.Time                    `json:"updated_at"`
+	EndedAt                    *time.Time                   `json:"ended_at,omitempty"`
+	Sessions                   []sessionResponse            `json:"sessions"`
+	InterventionTargets        []interventionTargetResponse `json:"intervention_targets"`
+	Intervention               *interventionResponse        `json:"intervention,omitempty"`
 }
 
 type interventionTargetResponse struct {
@@ -234,8 +235,9 @@ func (api *API) newRunResponse(
 			Lead: run.AgentModels.Lead, Reviewer: run.AgentModels.Reviewer,
 		},
 		MergePolicy: run.MergePolicy, AutonomyPolicy: run.AutonomyPolicy,
-		PlanVersion: run.PlanVersion,
-		StartedAt:   run.StartedAt, UpdatedAt: run.UpdatedAt,
+		IndependentAcceptanceTests: run.IndependentAcceptanceTests,
+		PlanVersion:                run.PlanVersion,
+		StartedAt:                  run.StartedAt, UpdatedAt: run.UpdatedAt,
 		EndedAt: run.EndedAt, Sessions: make([]sessionResponse, 0, len(sessions)),
 		InterventionTargets: make([]interventionTargetResponse, 0),
 	}

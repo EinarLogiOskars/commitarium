@@ -187,6 +187,7 @@ type recordingBranches struct {
 type recordingCheckout struct {
 	specs      []CheckoutSpec
 	promotions []CheckoutPromotionSpec
+	removed    []string
 	ensureErr  error
 	promoteErr error
 }
@@ -276,6 +277,11 @@ func (pullRequests *recordingPullRequests) EnsurePullRequestPlan(
 func (checkout *recordingCheckout) Ensure(_ context.Context, spec CheckoutSpec) error {
 	checkout.specs = append(checkout.specs, spec)
 	return checkout.ensureErr
+}
+
+func (checkout *recordingCheckout) Remove(_ context.Context, workspaceID string) error {
+	checkout.removed = append(checkout.removed, workspaceID)
+	return nil
 }
 
 func (branches *recordingBranches) GetBranch(context.Context, string, string, string) (Branch, error) {
@@ -371,6 +377,42 @@ func TestServicePreparesSelectedProjectCheckoutForClarification(t *testing.T) {
 	}
 	if len(store.checkoutMarkedAt) != 1 || len(store.markedAt) != 0 {
 		t.Fatalf("clarification persisted the wrong readiness state: %+v", store.stored)
+	}
+}
+
+func TestServicePreparesSeparateReviewerCheckout(t *testing.T) {
+	now := time.Date(2026, time.October, 7, 12, 0, 0, 0, time.UTC)
+	for _, test := range []struct {
+		name    string
+		enabled bool
+		want    int
+	}{
+		{name: "disabled", enabled: false, want: 1},
+		{name: "enabled", enabled: true, want: 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			primary, reviewer := &recordingCheckout{}, &recordingCheckout{}
+			service := NewServiceWithPreparationAndAccess(
+				&memoryStore{},
+				fixedFeatureFinder{stored: feature.Feature{
+					ID: "fea_test", ProjectID: "prj_test", State: feature.StateDraft,
+					IndependentAcceptanceTests: test.enabled,
+				}},
+				fixedProjectFinder{stored: project.Project{
+					ID: "prj_test", ForgejoRepository: testRepository(now),
+				}},
+				&recordingBranches{base: Branch{Name: "main", CommitID: testCommitID}},
+				primary, &recordingPullRequests{}, nil, reviewer,
+			)
+			service.now = func() time.Time { return now }
+
+			if _, _, err := service.PrepareForClarification(t.Context(), "prj_test", "fea_test"); err != nil {
+				t.Fatalf("prepare clarification checkout: %v", err)
+			}
+			if len(primary.specs) != 1 || len(reviewer.specs) != test.want {
+				t.Fatalf("checkout requests: primary=%d reviewer=%d", len(primary.specs), len(reviewer.specs))
+			}
+		})
 	}
 }
 
@@ -1047,6 +1089,7 @@ func TestServicePreparesReplanningFromCurrentFeatureBranchWithoutChangingIt(t *t
 	currentCommit := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 	branches := &recordingBranches{base: Branch{Name: stored.Branch, CommitID: currentCommit}}
 	checkout := &recordingCheckout{}
+	reviewerCheckout := &recordingCheckout{}
 	pullRequests := &recordingPullRequests{planResult: PullRequest{
 		Number: 8, URL: stored.PullRequestURL, Title: "WIP: Test feature",
 		Body: "published plan", State: "open", Draft: true,
@@ -1055,11 +1098,11 @@ func TestServicePreparesReplanningFromCurrentFeatureBranchWithoutChangingIt(t *t
 	}}
 	accepted := acceptedTestFeature(now)
 	accepted.State = feature.StateReadyToMerge
-	service := NewServiceWithPreparation(
+	service := NewServiceWithPreparationAndAccess(
 		&memoryStore{stored: stored}, fixedFeatureFinder{stored: accepted},
 		fixedProjectFinder{stored: project.Project{
 			ID: "prj_test", ForgejoRepository: testRepository(now),
-		}}, branches, checkout, pullRequests,
+		}}, branches, checkout, pullRequests, nil, reviewerCheckout,
 	)
 
 	got, baseline, err := service.PrepareReplanningBaseline(
@@ -1071,6 +1114,11 @@ func TestServicePreparesReplanningFromCurrentFeatureBranchWithoutChangingIt(t *t
 	if branches.getCalls != 1 || branches.ensureCalls != 0 || len(checkout.specs) != 1 ||
 		len(pullRequests.verifiedPlanSpecs) != 1 || len(pullRequests.planSpecs) != 0 {
 		t.Fatalf("replanning changed external state: branches=%+v checkout=%+v verify=%+v publish=%+v", branches, checkout.specs, pullRequests.verifiedPlanSpecs, pullRequests.planSpecs)
+	}
+	if len(reviewerCheckout.removed) != 1 || reviewerCheckout.removed[0] != stored.ID ||
+		len(reviewerCheckout.specs) != 1 || reviewerCheckout.specs[0].BaseCommitID != currentCommit ||
+		reviewerCheckout.specs[0].AlreadyReady {
+		t.Fatalf("replanning did not recreate the disposable reviewer checkout: %+v", reviewerCheckout)
 	}
 	checkoutSpec := checkout.specs[0]
 	if checkoutSpec.Branch != stored.Branch || checkoutSpec.ExpectedHeadCommitID != currentCommit ||

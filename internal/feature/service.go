@@ -110,21 +110,26 @@ func (s *Service) Create(
 	if err != nil {
 		return Feature{}, err
 	}
+	independentAcceptanceTests := storedProject.IndependentAcceptanceTests
+	if overrides.IndependentAcceptanceTests != nil {
+		independentAcceptanceTests = *overrides.IndependentAcceptanceTests
+	}
 
 	now := s.now()
 	createdFeature := Feature{
-		ID:             s.generateID(),
-		ProjectID:      projectID,
-		Title:          sanitizedTitle,
-		Description:    strings.TrimSpace(description),
-		State:          StateDraft,
-		DialogueLimits: dialogueLimits,
-		AgentProviders: agentProviders,
-		AgentModels:    agentModels,
-		MergePolicy:    mergePolicy,
-		AutonomyPolicy: autonomyPolicy,
-		CreatedAt:      now,
-		UpdatedAt:      now,
+		ID:                         s.generateID(),
+		ProjectID:                  projectID,
+		Title:                      sanitizedTitle,
+		Description:                strings.TrimSpace(description),
+		State:                      StateDraft,
+		DialogueLimits:             dialogueLimits,
+		AgentProviders:             agentProviders,
+		AgentModels:                agentModels,
+		MergePolicy:                mergePolicy,
+		AutonomyPolicy:             autonomyPolicy,
+		IndependentAcceptanceTests: independentAcceptanceTests,
+		CreatedAt:                  now,
+		UpdatedAt:                  now,
 	}
 
 	if err := s.store.Create(ctx, createdFeature); err != nil {

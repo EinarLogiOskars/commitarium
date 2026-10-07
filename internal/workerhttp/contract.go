@@ -128,6 +128,7 @@ const (
 	OutputContractPlanningLead            OutputContract = "planning_lead"
 	OutputContractGoalClarification       OutputContract = "goal_clarification"
 	OutputContractImplementationLead      OutputContract = "implementation_lead"
+	OutputContractAcceptanceTests         OutputContract = "acceptance_tests"
 	OutputContractImplementationReview    OutputContract = "implementation_reviewer"
 	OutputContractImplementationReadiness OutputContract = "implementation_lead_readiness"
 	OutputContractIntervention            OutputContract = "intervention"
@@ -180,6 +181,7 @@ type TerminalResult struct {
 	ToolchainProposal  *ToolchainProposal                  `json:"toolchain_proposal,omitempty"`
 	GoalDraft          *featureartifact.GoalDraft          `json:"goal_draft,omitempty"`
 	ImplementationPlan *featureartifact.ImplementationPlan `json:"implementation_plan,omitempty"`
+	AcceptanceTests    *featureartifact.AcceptanceTests    `json:"acceptance_tests,omitempty"`
 	EnvironmentRequest *EnvironmentRequest                 `json:"environment_request,omitempty"`
 	Error              *ProtocolError                      `json:"error,omitempty"`
 }

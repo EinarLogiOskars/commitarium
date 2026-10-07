@@ -27,17 +27,18 @@ type createProjectRequest struct {
 }
 
 type projectResponse struct {
-	ID                string                     `json:"id"`
-	Name              string                     `json:"name"`
-	RecoveryPolicy    project.RecoveryPolicy     `json:"recovery_policy"`
-	MergePolicy       project.MergePolicy        `json:"merge_policy"`
-	AutonomyPolicy    project.AutonomyPolicy     `json:"autonomy_policy"`
-	DialogueLimits    dialogueLimitsResponse     `json:"dialogue_limits"`
-	AgentProviders    agentProvidersResponse     `json:"agent_providers"`
-	AgentModels       agentModelsResponse        `json:"agent_models"`
-	ForgejoRepository *forgejoRepositoryResponse `json:"forgejo_repository,omitempty"`
-	RepositoryStatus  string                     `json:"repository_status"`
-	CreatedAt         time.Time                  `json:"created_at"`
+	ID                         string                     `json:"id"`
+	Name                       string                     `json:"name"`
+	RecoveryPolicy             project.RecoveryPolicy     `json:"recovery_policy"`
+	MergePolicy                project.MergePolicy        `json:"merge_policy"`
+	AutonomyPolicy             project.AutonomyPolicy     `json:"autonomy_policy"`
+	IndependentAcceptanceTests bool                       `json:"independent_acceptance_tests"`
+	DialogueLimits             dialogueLimitsResponse     `json:"dialogue_limits"`
+	AgentProviders             agentProvidersResponse     `json:"agent_providers"`
+	AgentModels                agentModelsResponse        `json:"agent_models"`
+	ForgejoRepository          *forgejoRepositoryResponse `json:"forgejo_repository,omitempty"`
+	RepositoryStatus           string                     `json:"repository_status"`
+	CreatedAt                  time.Time                  `json:"created_at"`
 }
 
 type dialogueLimitsRequest struct {
@@ -436,6 +437,36 @@ type autonomyPolicyRequest struct {
 	AutonomyPolicy project.AutonomyPolicy `json:"autonomy_policy"`
 }
 
+type independentAcceptanceTestsRequest struct {
+	Enabled *bool `json:"enabled"`
+}
+
+func (api *API) updateProjectIndependentAcceptanceTestsHandler(w http.ResponseWriter, r *http.Request) {
+	request := independentAcceptanceTestsRequest{}
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&request); err != nil || ensureJSONEOF(decoder) != nil || request.Enabled == nil {
+		writeError(w, http.StatusBadRequest, "invalid_json", "request body must contain exactly one valid JSON object with no unknown fields")
+		return
+	}
+	settings, ok := api.projects.(ProjectIndependentAcceptanceTestsService)
+	if !ok {
+		writeError(w, http.StatusServiceUnavailable, "independent_acceptance_tests_unavailable", "independent acceptance test settings are unavailable")
+		return
+	}
+	updated, err := settings.UpdateIndependentAcceptanceTests(r.Context(), r.PathValue("id"), *request.Enabled)
+	if err != nil {
+		if errors.Is(err, project.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "project_not_found", "project not found")
+			return
+		}
+		log.Printf("update project independent acceptance tests %q: %v", r.PathValue("id"), err)
+		writeError(w, http.StatusInternalServerError, "internal_error", "internal server error")
+		return
+	}
+	writeJSON(w, http.StatusOK, newProjectResponse(updated), "project")
+}
+
 func (api *API) updateProjectAutonomyPolicyHandler(w http.ResponseWriter, r *http.Request) {
 	request := autonomyPolicyRequest{}
 	decoder := json.NewDecoder(r.Body)
@@ -773,9 +804,10 @@ func newProjectResponse(storedProject project.Project) projectResponse {
 	}
 	response := projectResponse{
 		ID: storedProject.ID, Name: storedProject.Name,
-		RecoveryPolicy: storedProject.RecoveryPolicy,
-		MergePolicy:    storedProject.MergePolicy,
-		AutonomyPolicy: storedProject.AutonomyPolicy,
+		RecoveryPolicy:             storedProject.RecoveryPolicy,
+		MergePolicy:                storedProject.MergePolicy,
+		AutonomyPolicy:             storedProject.AutonomyPolicy,
+		IndependentAcceptanceTests: storedProject.IndependentAcceptanceTests,
 		DialogueLimits: dialogueLimitsResponse{
 			PlanningRounds:             storedProject.DialogueLimits.PlanningRounds,
 			ImplementationReviewRounds: storedProject.DialogueLimits.ImplementationReviewRounds,

@@ -75,6 +75,22 @@ func (s *MemoryStore) UpdateAutonomyPolicy(
 	return cloneProject(storedProject), nil
 }
 
+func (s *MemoryStore) UpdateIndependentAcceptanceTests(
+	_ context.Context,
+	projectID string,
+	enabled bool,
+) (Project, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	storedProject, exists := s.projects[projectID]
+	if !exists {
+		return Project{}, ErrNotFound
+	}
+	storedProject.IndependentAcceptanceTests = enabled
+	s.projects[projectID] = cloneProject(storedProject)
+	return cloneProject(storedProject), nil
+}
+
 func (s *MemoryStore) UpdateMergePolicy(
 	_ context.Context,
 	projectID string,

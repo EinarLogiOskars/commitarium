@@ -476,6 +476,7 @@ func (session *session) completedItem(item threadItem) ([]worker.Event, error) {
 		if session.outputContract == worker.OutputContractGoalClarification ||
 			session.outputContract == worker.OutputContractPlanningLead ||
 			session.outputContract == worker.OutputContractImplementationLead ||
+			session.outputContract == worker.OutputContractAcceptanceTests ||
 			session.outputContract == worker.OutputContractImplementationReview ||
 			session.outputContract == worker.OutputContractImplementationReadiness ||
 			session.outputContract == worker.OutputContractIntervention ||
@@ -639,7 +640,7 @@ func (session *session) completedTurn(
 ) ([]worker.Event, bool, worker.Result, error) {
 	switch turn.Status {
 	case "completed":
-		structured, disposition, publication, review, interventionEffect, toolchainProposal, environmentRequest, goalDraft, implementationPlan, err := session.completeStructuredResponse()
+		structured, disposition, publication, review, interventionEffect, toolchainProposal, environmentRequest, goalDraft, implementationPlan, acceptanceTests, err := session.completeStructuredResponse()
 		if err != nil {
 			return nil, false, worker.Result{}, err
 		}
@@ -655,6 +656,7 @@ func (session *session) completedTurn(
 			EnvironmentRequest: environmentRequest,
 			GoalDraft:          goalDraft,
 			ImplementationPlan: implementationPlan,
+			AcceptanceTests:    acceptanceTests,
 		}, nil
 	case "interrupted":
 		return nil, true, worker.Result{
@@ -687,23 +689,24 @@ func (session *session) completeStructuredResponse() (
 	*worker.EnvironmentRequest,
 	*featureartifact.GoalDraft,
 	*featureartifact.ImplementationPlan,
+	*featureartifact.AcceptanceTests,
 	error,
 ) {
 	if session.outputContract == "" {
-		return nil, worker.DispositionSucceeded, nil, nil, "", nil, nil, nil, nil, nil
+		return nil, worker.DispositionSucceeded, nil, nil, "", nil, nil, nil, nil, nil, nil
 	}
 	session.mu.Lock()
 	raw := session.pendingMessage
 	streamID := session.pendingStreamID
 	session.mu.Unlock()
 	if strings.TrimSpace(raw) == "" {
-		return nil, "", nil, nil, "", nil, nil, nil, nil, fmt.Errorf(
+		return nil, "", nil, nil, "", nil, nil, nil, nil, nil, fmt.Errorf(
 			"%w: structured turn omitted its final response", ErrProtocol,
 		)
 	}
 	resolved, err := worker.ResolveStructuredOutput(session.outputContract, []byte(raw))
 	if err != nil {
-		return nil, "", nil, nil, "", nil, nil, nil, nil, fmt.Errorf("%w: %v", ErrProtocol, err)
+		return nil, "", nil, nil, "", nil, nil, nil, nil, nil, fmt.Errorf("%w: %v", ErrProtocol, err)
 	}
 	resolved.Event.StreamID = streamID
 	session.mu.Lock()
@@ -711,7 +714,7 @@ func (session *session) completeStructuredResponse() (
 	session.mu.Unlock()
 	return &resolved.Event, resolved.Disposition, resolved.Publication, resolved.Review,
 		resolved.InterventionEffect, resolved.ToolchainProposal, resolved.EnvironmentRequest, resolved.GoalDraft,
-		resolved.ImplementationPlan, nil
+		resolved.ImplementationPlan, resolved.AcceptanceTests, nil
 }
 
 func (session *session) summary() string {

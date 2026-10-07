@@ -24,6 +24,7 @@ this API beyond the host loopback interface is unsupported.
 | `PUT` | `/api/v1/projects/{projectID}/agent-settings` | Atomically select default providers and exact models for future work orders |
 | `PUT` | `/api/v1/projects/{projectID}/merge-policy` | Select the default merge behavior for future work orders |
 | `PUT` | `/api/v1/projects/{projectID}/autonomy-policy` | Select the default phase checkpoint behavior for future work orders |
+| `PUT` | `/api/v1/projects/{projectID}/independent-acceptance-tests` | Enable or disable independent acceptance tests for future work orders |
 | `POST` | `/api/v1/projects/{projectID}/forgejo-repository` | Create or repair the project's private internal repository |
 | `PUT` | `/api/v1/projects/{projectID}/forgejo-repository` | Verify and bind the project's internal repository |
 | `GET` | `/api/v1/toolchain-presets` | List curated stacks with explicit runtime versions |
@@ -41,9 +42,10 @@ this API beyond the host loopback interface is unsupported.
 | `POST` | `/api/v1/projects/{projectID}/features/{featureID}/transitions` | Apply an explicit feature transition |
 | `GET` | `/api/v1/projects/{projectID}/features/{featureID}/events` | Retrieve durable workflow history |
 | `GET` | `/api/v1/projects/{projectID}/features/{featureID}/events/stream` | Replay and stream workflow history with SSE |
-| `GET` | `/api/v1/projects/{projectID}/features/{featureID}/artifacts/{kind}` | Read the current durable goal draft or implementation plan |
+| `GET` | `/api/v1/projects/{projectID}/features/{featureID}/artifacts/{kind}` | Read the current durable goal draft, implementation plan, or acceptance-test checklist |
 | `PUT` | `/api/v1/projects/{projectID}/features/{featureID}/artifacts/goal_draft` | Replace the editable proposed goal using optimistic concurrency |
 | `POST` | `/api/v1/projects/{projectID}/features/{featureID}/implementation-plan/steps/{stepID}/transitions` | Record implementation-plan step progress |
+| `POST` | `/api/v1/projects/{projectID}/features/{featureID}/acceptance-tests/{testID}/transitions` | Record an independent acceptance-test result |
 | `POST` | `/api/v1/projects/{projectID}/features/{featureID}/runs` | Start the configured workflow asynchronously |
 | `GET` | `/api/v1/projects/{projectID}/features/{featureID}/runs` | List the feature's run history and sessions |
 | `PUT` | `/api/v1/projects/{projectID}/features/{featureID}/workspace` | Reconcile the pinned planning checkout after goal acceptance |
@@ -195,6 +197,20 @@ Every new work order captures either its supplied override or this project
 default, and its run snapshots that captured effective value. Changing the
 project does not alter an existing work order or its active or historical run.
 Project, feature, and run responses expose their effective `autonomy_policy`.
+
+Independent acceptance tests default to disabled. Replace the project default
+for future work orders with:
+
+```http
+PUT /api/v1/projects/prj_example/independent-acceptance-tests
+Content-Type: application/json
+
+{"enabled":true}
+```
+
+Work-order creation may supply `independent_acceptance_tests: true` or `false`;
+omission inherits the project default. Project responses expose the default,
+while feature and run responses expose the immutable effective snapshot.
 
 With `review_each_phase`, the run waits after goal acceptance, after the lead's
 first planning proposal, after the reviewer's first planning response, and
@@ -916,12 +932,14 @@ complete project list locally.
 
 ## Feature artifacts and live checklists
 
-Conversational messages are not workflow documents. The coordinator stores two
+Conversational messages are not workflow documents. The coordinator stores three
 feature-scoped, revisioned JSON artifacts separately from session history:
 
 - `goal_draft` is the lead's current proposed goal plus unresolved questions.
 - `implementation_plan` is the agreed plan version and its ordered,
   commit-sized implementation steps.
+- `acceptance_tests` is the reviewer's ordered private acceptance-test status
+  checklist. It contains titles and commit identities, never executable source.
 
 Read the latest revision with:
 
@@ -943,7 +961,7 @@ GET /api/v1/projects/prj_example/features/fea_example/artifacts/goal_draft
 }
 ```
 
-`kind` is `goal_draft` or `implementation_plan`. An unknown feature returns
+`kind` is `goal_draft`, `implementation_plan`, or `acceptance_tests`. An unknown feature returns
 `404 feature_not_found`; a recognized artifact that has not been created yet
 returns `404 artifact_not_found`.
 

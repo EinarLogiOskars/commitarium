@@ -2975,6 +2975,53 @@ func TestImplementationReviewInstructionsUseForgejoApprovalEvent(t *testing.T) {
 	}
 }
 
+func TestIndependentAcceptanceInstructionsKeepAuthoringBlindAndReviewLocal(t *testing.T) {
+	authoring := acceptanceTestsInstructions(
+		feature.Feature{AcceptedGoal: "Export visible rows."},
+		workspace.Workspace{RepositoryOwner: "owner", RepositoryName: "repo", BaseBranch: "main", BaseCommitID: strings.Repeat("a", 40)},
+		"Implement CSV export.",
+	)
+	for _, required := range []string{"Do not fetch", "do not push", "private checkout", "exact local test commit ID"} {
+		if !strings.Contains(authoring, required) {
+			t.Fatalf("acceptance authoring instructions omit %q: %q", required, authoring)
+		}
+	}
+	review := implementationReviewInstructions(
+		feature.Feature{}, workspace.Workspace{}, "plan", "summary",
+		strings.Repeat("b", 40), "attempt", strings.Repeat("c", 40),
+	)
+	for _, required := range []string{"Reset this disposable private checkout", "merge that exact commit locally", "acceptance start <test-id>", "acceptance not-applicable <test-id> <note>", "Never push your private test commit"} {
+		if !strings.Contains(review, required) {
+			t.Fatalf("acceptance review instructions omit %q: %q", required, review)
+		}
+	}
+}
+
+func TestAcceptanceResultsMustFinishBeforeReviewCanAdvance(t *testing.T) {
+	commitID := strings.Repeat("b", 40)
+	tests := featureartifact.AcceptanceTests{
+		PlanVersion: 1, TestCommitID: strings.Repeat("a", 40), ImplementationCommitID: commitID,
+		Tests: []featureartifact.AcceptanceTest{{
+			ID: "exports-csv", Position: 1, Title: "Exports visible rows", Status: featureartifact.AcceptanceTestPending,
+		}},
+	}
+	if err := validateAcceptanceReviewResults(tests, 1, commitID, workerhttp.DispositionSucceeded); err == nil {
+		t.Fatal("pending acceptance test allowed an approved review")
+	}
+	tests.Tests[0].Status = featureartifact.AcceptanceTestFailed
+	tests.Tests[0].Note = "hidden rows were exported"
+	if err := validateAcceptanceReviewResults(tests, 1, commitID, workerhttp.DispositionSucceeded); err == nil {
+		t.Fatal("failed acceptance test allowed an approved review")
+	}
+	if err := validateAcceptanceReviewResults(tests, 1, commitID, workerhttp.DispositionChangesRequested); err != nil {
+		t.Fatalf("failed acceptance test did not support requested changes: %v", err)
+	}
+	tests.Tests[0].Status = featureartifact.AcceptanceTestNotApplicable
+	if err := validateAcceptanceReviewResults(tests, 1, commitID, workerhttp.DispositionSucceeded); err != nil {
+		t.Fatalf("justified not-applicable test blocked approval: %v", err)
+	}
+}
+
 func waitForRemoteLeadStatus(
 	t *testing.T,
 	executions *execution.Service,

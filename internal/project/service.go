@@ -465,6 +465,24 @@ func (s *Service) UpdateAutonomyPolicy(
 	return updated, nil
 }
 
+func (s *Service) UpdateIndependentAcceptanceTests(
+	ctx context.Context,
+	projectID string,
+	enabled bool,
+) (Project, error) {
+	settings, ok := s.store.(interface {
+		UpdateIndependentAcceptanceTests(context.Context, string, bool) (Project, error)
+	})
+	if !ok {
+		return Project{}, errors.New("project store does not support independent acceptance tests")
+	}
+	updated, err := settings.UpdateIndependentAcceptanceTests(ctx, projectID, enabled)
+	if err != nil {
+		return Project{}, fmt.Errorf("update independent acceptance tests for project %q: %w", projectID, err)
+	}
+	return updated, nil
+}
+
 func (s *Service) UpdateMergePolicy(
 	ctx context.Context,
 	projectID string,

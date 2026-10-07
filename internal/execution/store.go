@@ -179,6 +179,17 @@ type AutonomousTurnAdmission struct {
 	RunAlreadyActive          bool
 }
 
+// ParallelImplementationAdmission is the one intentional concurrent boundary
+// in the workflow: the lead implements while the reviewer authors private
+// acceptance tests from the same accepted baseline.
+type ParallelImplementationAdmission struct {
+	RunID      string
+	Lead       AutonomousTurnAdmission
+	Reviewer   AutonomousTurnAdmission
+	RunReason  string
+	OccurredAt time.Time
+}
+
 // NewSessionTurnAdmission creates a new durable logical conversation and its
 // first provider attempt while returning the existing run to active work.
 type NewSessionTurnAdmission struct {

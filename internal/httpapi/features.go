@@ -13,30 +13,32 @@ import (
 )
 
 type createFeatureRequest struct {
-	Title          string                  `json:"title"`
-	Description    string                  `json:"description"`
-	AgentProviders *agentProvidersRequest  `json:"agent_providers"`
-	AgentModels    *agentModelsRequest     `json:"agent_models"`
-	AutonomyPolicy *project.AutonomyPolicy `json:"autonomy_policy"`
-	MergePolicy    *project.MergePolicy    `json:"merge_policy"`
-	DialogueLimits *dialogueLimitsRequest  `json:"dialogue_limits"`
+	Title                      string                  `json:"title"`
+	Description                string                  `json:"description"`
+	AgentProviders             *agentProvidersRequest  `json:"agent_providers"`
+	AgentModels                *agentModelsRequest     `json:"agent_models"`
+	AutonomyPolicy             *project.AutonomyPolicy `json:"autonomy_policy"`
+	MergePolicy                *project.MergePolicy    `json:"merge_policy"`
+	DialogueLimits             *dialogueLimitsRequest  `json:"dialogue_limits"`
+	IndependentAcceptanceTests *bool                   `json:"independent_acceptance_tests"`
 }
 
 type featureResponse struct {
-	ID             string                 `json:"id"`
-	ProjectID      string                 `json:"project_id"`
-	Title          string                 `json:"title"`
-	Description    string                 `json:"description"`
-	State          feature.State          `json:"state"`
-	AcceptedGoal   string                 `json:"accepted_goal,omitempty"`
-	GoalAcceptedAt *time.Time             `json:"goal_accepted_at,omitempty"`
-	DialogueLimits dialogueLimitsResponse `json:"dialogue_limits"`
-	AgentProviders agentProvidersResponse `json:"agent_providers"`
-	AgentModels    agentModelsResponse    `json:"agent_models"`
-	MergePolicy    project.MergePolicy    `json:"merge_policy"`
-	AutonomyPolicy project.AutonomyPolicy `json:"autonomy_policy"`
-	CreatedAt      time.Time              `json:"created_at"`
-	UpdatedAt      time.Time              `json:"updated_at"`
+	ID                         string                 `json:"id"`
+	ProjectID                  string                 `json:"project_id"`
+	Title                      string                 `json:"title"`
+	Description                string                 `json:"description"`
+	State                      feature.State          `json:"state"`
+	AcceptedGoal               string                 `json:"accepted_goal,omitempty"`
+	GoalAcceptedAt             *time.Time             `json:"goal_accepted_at,omitempty"`
+	DialogueLimits             dialogueLimitsResponse `json:"dialogue_limits"`
+	AgentProviders             agentProvidersResponse `json:"agent_providers"`
+	AgentModels                agentModelsResponse    `json:"agent_models"`
+	MergePolicy                project.MergePolicy    `json:"merge_policy"`
+	AutonomyPolicy             project.AutonomyPolicy `json:"autonomy_policy"`
+	IndependentAcceptanceTests bool                   `json:"independent_acceptance_tests"`
+	CreatedAt                  time.Time              `json:"created_at"`
+	UpdatedAt                  time.Time              `json:"updated_at"`
 }
 
 func (api *API) createFeatureHandler(
@@ -82,6 +84,7 @@ func (api *API) createFeatureHandler(
 	}
 	overrides.MergePolicy = request.MergePolicy
 	overrides.AutonomyPolicy = request.AutonomyPolicy
+	overrides.IndependentAcceptanceTests = request.IndependentAcceptanceTests
 	if api.toolchains != nil {
 		manifest, err := api.toolchains.Get(r.Context(), projectID)
 		if err != nil {
@@ -273,11 +276,12 @@ func newFeatureResponse(storedFeature feature.Feature) featureResponse {
 			PlanningRounds:             storedFeature.DialogueLimits.PlanningRounds,
 			ImplementationReviewRounds: storedFeature.DialogueLimits.ImplementationReviewRounds,
 		},
-		AgentProviders: agentProvidersResponse{Lead: agentProviders.Lead, Reviewer: agentProviders.Reviewer},
-		AgentModels:    agentModelsResponse{Lead: storedFeature.AgentModels.Lead, Reviewer: storedFeature.AgentModels.Reviewer},
-		MergePolicy:    mergePolicy,
-		AutonomyPolicy: autonomyPolicy,
-		CreatedAt:      storedFeature.CreatedAt,
-		UpdatedAt:      storedFeature.UpdatedAt,
+		AgentProviders:             agentProvidersResponse{Lead: agentProviders.Lead, Reviewer: agentProviders.Reviewer},
+		AgentModels:                agentModelsResponse{Lead: storedFeature.AgentModels.Lead, Reviewer: storedFeature.AgentModels.Reviewer},
+		MergePolicy:                mergePolicy,
+		AutonomyPolicy:             autonomyPolicy,
+		IndependentAcceptanceTests: storedFeature.IndependentAcceptanceTests,
+		CreatedAt:                  storedFeature.CreatedAt,
+		UpdatedAt:                  storedFeature.UpdatedAt,
 	}
 }

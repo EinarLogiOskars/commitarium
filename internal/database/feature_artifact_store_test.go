@@ -42,3 +42,23 @@ func TestWorkflowStorePersistsArtifactRevisionAndEventAtomically(t *testing.T) {
 		t.Fatalf("stale revision error=%v", err)
 	}
 }
+
+func TestWorkflowStorePersistsAcceptanceTestArtifactKind(t *testing.T) {
+	store, features := newTestWorkflowStore(t)
+	created := createWorkflowTestFeature(t, features)
+	document := `{"plan_version":1,"test_commit_id":"0123456789abcdef0123456789abcdef01234567","implementation_commit_id":"","tests":[{"id":"exports-csv","position":1,"title":"Exports visible rows","status":"pending","note":""}]}`
+	mutation := workflow.FeatureArtifactMutation{
+		EventID: "evt_acceptance_1", FeatureID: created.ID, Kind: featureartifact.KindAcceptanceTests,
+		ExpectedRevision: 0, Document: document, DocumentDigest: workflow.DigestArtifactDocument(document),
+		Actor:          workflow.Actor{Kind: workflow.ActorKindAgent, ID: "ses_reviewer"},
+		OccurredAt:     time.Date(2026, time.October, 7, 12, 0, 0, 0, time.UTC),
+		IdempotencyKey: "attempt-1:acceptance-tests",
+	}
+	artifact, _, err := store.PutFeatureArtifact(t.Context(), mutation)
+	if err != nil {
+		t.Fatalf("put acceptance tests: %v", err)
+	}
+	if artifact.Kind != featureartifact.KindAcceptanceTests || artifact.Document != document {
+		t.Fatalf("unexpected acceptance artifact: %+v", artifact)
+	}
+}

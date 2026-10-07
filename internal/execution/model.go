@@ -54,6 +54,7 @@ type Run struct {
 	AgentModels                    project.AgentModels
 	MergePolicy                    project.MergePolicy
 	AutonomyPolicy                 project.AutonomyPolicy
+	IndependentAcceptanceTests     bool
 	PlanVersion                    int
 	StartedAt                      time.Time
 	UpdatedAt                      time.Time

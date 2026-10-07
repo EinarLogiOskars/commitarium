@@ -16,6 +16,7 @@ func TestOutputJSONSchemaCoversStructuredContracts(t *testing.T) {
 		{OutputContractGoalClarification, []string{"action", "message", "goal", "open_questions"}},
 		{OutputContractPlanningLead, []string{"action", "content", "plan_title", "plan_subtitle", "steps"}},
 		{OutputContractImplementationLead, []string{"action", "summary", "commit_id", "pull_request_number", "system_packages", "environment_reason"}},
+		{OutputContractAcceptanceTests, []string{"action", "summary", "test_commit_id", "tests"}},
 		{OutputContractImplementationReview, []string{"action", "summary", "commit_id", "pull_request_number", "review_id"}},
 		{OutputContractImplementationReadiness, []string{"action", "summary"}},
 		{OutputContractIntervention, []string{"effect", "response"}},
@@ -58,6 +59,7 @@ func TestResolveStructuredOutput(t *testing.T) {
 		proposal    *ToolchainProposal
 		goalDraft   *featureartifact.GoalDraft
 		plan        *featureartifact.ImplementationPlan
+		acceptance  *featureartifact.AcceptanceTests
 		environment *EnvironmentRequest
 	}{
 		{
@@ -87,6 +89,15 @@ func TestResolveStructuredOutput(t *testing.T) {
 			name: "implementation blocker", contract: OutputContractImplementationLead,
 			raw:   `{"action":"blocked","summary":"Cannot push","commit_id":"","pull_request_number":7}`,
 			event: Event{Type: EventInputRequired, Text: "Cannot push"}, disposition: DispositionInputRequired,
+		},
+		{
+			name: "authored acceptance tests", contract: OutputContractAcceptanceTests,
+			raw:   `{"action":"authored","summary":"Two private tests are committed.","test_commit_id":"0123456789abcdef0123456789abcdef01234567","tests":[{"id":"exports-csv","title":"Exports visible rows"},{"id":"rejects-empty","title":"Rejects an empty selection"}]}`,
+			event: Event{Type: EventMessage, Text: "Two private tests are committed."}, disposition: DispositionSucceeded,
+			acceptance: &featureartifact.AcceptanceTests{TestCommitID: "0123456789abcdef0123456789abcdef01234567", Tests: []featureartifact.AcceptanceTest{
+				{ID: "exports-csv", Position: 1, Title: "Exports visible rows", Status: featureartifact.AcceptanceTestPending},
+				{ID: "rejects-empty", Position: 2, Title: "Rejects an empty selection", Status: featureartifact.AcceptanceTestPending},
+			}},
 		},
 		{
 			name: "implementation environment request", contract: OutputContractImplementationLead,
@@ -135,6 +146,7 @@ func TestResolveStructuredOutput(t *testing.T) {
 				!reflect.DeepEqual(resolved.ToolchainProposal, test.proposal) ||
 				!reflect.DeepEqual(resolved.GoalDraft, test.goalDraft) ||
 				!reflect.DeepEqual(resolved.ImplementationPlan, test.plan) ||
+				!reflect.DeepEqual(resolved.AcceptanceTests, test.acceptance) ||
 				!reflect.DeepEqual(resolved.EnvironmentRequest, test.environment) {
 				t.Fatalf("resolved output = %+v", resolved)
 			}
@@ -151,6 +163,7 @@ func TestResolveStructuredOutputFailsClosed(t *testing.T) {
 		{OutputContractPlanningLead, `{"action":"respond","content":"reply","extra":true}`},
 		{OutputContractImplementationLead, `{"action":"published","summary":"done","commit_id":"bad","pull_request_number":7}`},
 		{OutputContractImplementationLead, `{"action":"blocked","summary":"blocked","commit_id":"0123456789abcdef0123456789abcdef01234567","pull_request_number":7}`},
+		{OutputContractAcceptanceTests, `{"action":"authored","summary":"done","test_commit_id":"bad","tests":[{"id":"one","title":"One"}]}`},
 		{OutputContractImplementationReview, `{"action":"approved","summary":"good","commit_id":"bad","pull_request_number":7,"review_id":11}`},
 		{OutputContractImplementationReview, `{"action":"blocked","summary":"blocked","commit_id":"0123456789abcdef0123456789abcdef01234567","pull_request_number":7,"review_id":0}`},
 		{OutputContractImplementationReadiness, `{"action":"unknown","summary":"decision"}`},

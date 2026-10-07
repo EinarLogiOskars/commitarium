@@ -39,7 +39,7 @@ func (store *FeatureDeletionStore) BeginDeletion(
 		       goal_accepted_at,
 		       planning_round_limit, implementation_review_round_limit,
 		       lead_provider, reviewer_provider, lead_model, reviewer_model,
-		       merge_policy, autonomy_policy,
+		       merge_policy, autonomy_policy, independent_acceptance_tests,
 		       created_at, updated_at
 		FROM features WHERE id = ?`, featureID))
 	if errors.Is(err, sql.ErrNoRows) || (err == nil && storedFeature.ProjectID != projectID) {

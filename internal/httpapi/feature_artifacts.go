@@ -35,6 +35,13 @@ type transitionPlanStepRequest struct {
 	CommitID    string                     `json:"commit_id"`
 }
 
+type transitionAcceptanceTestRequest struct {
+	PlanVersion            int                                  `json:"plan_version"`
+	Status                 featureartifact.AcceptanceTestStatus `json:"status"`
+	Note                   string                               `json:"note"`
+	ImplementationCommitID string                               `json:"implementation_commit_id"`
+}
+
 func (api *API) getFeatureArtifactHandler(w http.ResponseWriter, r *http.Request) {
 	projectID, featureID := r.PathValue("projectID"), r.PathValue("id")
 	if !api.requireFeature(w, r, projectID, featureID) {
@@ -104,6 +111,38 @@ func (api *API) transitionImplementationPlanStepHandler(w http.ResponseWriter, r
 		return
 	}
 	writeJSON(w, http.StatusOK, newFeatureArtifactResponse(artifact), "implementation plan step")
+}
+
+func (api *API) transitionAcceptanceTestHandler(w http.ResponseWriter, r *http.Request) {
+	projectID, featureID := r.PathValue("projectID"), r.PathValue("id")
+	if !api.requireFeature(w, r, projectID, featureID) {
+		return
+	}
+	key := strings.TrimSpace(r.Header.Get("Idempotency-Key"))
+	if key == "" {
+		writeError(w, http.StatusBadRequest, "idempotency_key_required", "Idempotency-Key header is required")
+		return
+	}
+	request := transitionAcceptanceTestRequest{}
+	if err := decodeArtifactJSONBody(r, &request); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_json", err.Error())
+		return
+	}
+	acceptance, ok := api.artifacts.(AcceptanceTestArtifactService)
+	if !ok {
+		writeError(w, http.StatusServiceUnavailable, "acceptance_tests_unavailable", "independent acceptance test updates are unavailable")
+		return
+	}
+	artifact, err := acceptance.TransitionAcceptanceTest(
+		r.Context(), featureID, request.PlanVersion, r.PathValue("testID"),
+		request.Status, request.Note, request.ImplementationCommitID,
+		workflow.Actor{Kind: workflow.ActorKindAgent, ID: "implementation-reviewer"}, key,
+	)
+	if err != nil {
+		writeFeatureArtifactError(w, featureID, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, newFeatureArtifactResponse(artifact), "acceptance test")
 }
 
 func decodeArtifactJSONBody(r *http.Request, destination any) error {

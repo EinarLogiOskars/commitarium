@@ -31,6 +31,7 @@ const (
 	planningPlanPublishedReason           = "The agreed implementation plan was published to Forgejo. It is ready for implementation."
 	planningPublicationReviewReason       = "The coordinator could not safely confirm publication of the agreed plan to Forgejo. No agent or implementation work was started. Inspect the managed workspace and pull request before retrying."
 	implementationRunningReason           = "The lead is implementing the agreed plan in the managed workspace."
+	acceptanceTestsRunningReason          = "The reviewer is privately authoring independent acceptance tests from the agreed plan."
 	implementationContinuationReason      = "The lead is continuing implementation after the user's guidance."
 	implementationVerificationReason      = "The coordinator is rechecking the implementation revision already published by the lead."
 	recoveryRecheckReason                 = "The coordinator is rechecking the blocked durable workflow state."
@@ -110,6 +111,14 @@ type RemoteLeadExecution interface {
 	PlanningMessagesForRun(context.Context, string) ([]execution.PlanningMessage, error)
 }
 
+type remoteLeadAcceptanceExecution interface {
+	CreateRunWithModelsAndAcceptance(context.Context, string, string, int, int, project.AgentProviders, project.AgentModels, project.MergePolicy, bool, ...project.AutonomyPolicy) (execution.Run, bool, error)
+}
+
+type remoteLeadParallelImplementationExecution interface {
+	BeginParallelImplementationTurns(context.Context, string, string, execution.WorkerAttemptCheckpoint, string, string, execution.WorkerAttemptCheckpoint, string, string) (bool, error)
+}
+
 type RemoteLeadFeatureFinder interface {
 	GetByID(context.Context, string) (feature.Feature, error)
 }
@@ -126,6 +135,10 @@ type RemoteLeadArtifactService interface {
 	GetFeatureArtifact(context.Context, string, featureartifact.Kind) (workflow.FeatureArtifact, error)
 	UpsertGoalDraft(context.Context, string, featureartifact.GoalDraft, workflow.Actor, string) (workflow.FeatureArtifact, error)
 	UpsertImplementationPlan(context.Context, string, featureartifact.ImplementationPlan, workflow.Actor, string) (workflow.FeatureArtifact, error)
+}
+
+type remoteLeadAcceptanceArtifactService interface {
+	UpsertAcceptanceTests(context.Context, string, featureartifact.AcceptanceTests, workflow.Actor, string) (workflow.FeatureArtifact, error)
 }
 
 type RemoteLeadWorkspaceService interface {
@@ -249,6 +262,10 @@ type RemoteLeadStarter struct {
 	activeMu sync.Mutex
 	active   map[string]struct{}
 	mergeMu  sync.Mutex
+	// acceptanceJoinMu closes the small window where both parallel workers can
+	// observe the other as incomplete and then both leave without starting the
+	// review. The durable turn admission still provides cross-process safety.
+	acceptanceJoinMu sync.Mutex
 }
 
 func NewRemoteLeadStarter(config RemoteLeadConfig) (*RemoteLeadStarter, error) {
@@ -413,17 +430,25 @@ func (starter *RemoteLeadStarter) StartWithModels(
 	if err != nil {
 		return execution.Run{}, false, err
 	}
-	run, created, err := starter.executions.CreateRunWithModels(
-		ctx,
-		runID,
-		featureID,
-		dialogueLimits.PlanningRounds,
-		dialogueLimits.ImplementationReviewRounds,
-		agentProviders,
-		agentModels,
-		mergePolicy,
-		autonomyPolicy,
-	)
+	storedFeature, featureErr := starter.features.GetByID(ctx, featureID)
+	if featureErr != nil {
+		return execution.Run{}, false, featureErr
+	}
+	var run execution.Run
+	var created bool
+	if acceptanceExecutions, ok := starter.executions.(remoteLeadAcceptanceExecution); ok {
+		run, created, err = acceptanceExecutions.CreateRunWithModelsAndAcceptance(
+			ctx, runID, featureID, dialogueLimits.PlanningRounds,
+			dialogueLimits.ImplementationReviewRounds, agentProviders, agentModels,
+			mergePolicy, storedFeature.IndependentAcceptanceTests, autonomyPolicy,
+		)
+	} else {
+		run, created, err = starter.executions.CreateRunWithModels(
+			ctx, runID, featureID, dialogueLimits.PlanningRounds,
+			dialogueLimits.ImplementationReviewRounds, agentProviders, agentModels,
+			mergePolicy, autonomyPolicy,
+		)
+	}
 	if err != nil || !created {
 		return run, created, err
 	}
@@ -512,6 +537,47 @@ func (starter *RemoteLeadStarter) Recover(
 		_, err = starter.advanceIntervention(ctx, run.ID)
 		return err
 	}
+	if len(activeSessions) == 2 && run.IndependentAcceptanceTests && storedFeature.State == feature.StateImplementing {
+		if !starter.claim(run.ID) {
+			return fmt.Errorf("%w: %q", ErrRunAlreadyActive, run.ID)
+		}
+		requests := make([]remoteLeadRequest, 0, 2)
+		for _, active := range activeSessions {
+			checkpoint, checkpointErr := starter.executions.GetWorkerAttempt(ctx, active.ID)
+			if checkpointErr != nil {
+				starter.release(run.ID)
+				return checkpointErr
+			}
+			request := remoteLeadRequest{runID: run.ID, identity: workerhttp.MutationIdentity{AttemptReference: workerhttp.AttemptReference{SessionID: active.ID, AttemptID: checkpoint.AttemptID}}}
+			switch {
+			case active.Role == worker.RoleLead:
+				version, _, ok := workflowAttemptVersionAndTurn(active.ID, "implementation", checkpoint.AttemptID)
+				if !ok || version != run.PlanVersion {
+					starter.release(run.ID)
+					return fmt.Errorf("%w: parallel lead attempt is invalid", ErrInvalidRunRequest)
+				}
+				request.agentName = "lead agent"
+				request.request.OutputContract = workerhttp.OutputContractImplementationLead
+			case active.Role == worker.RoleReviewer:
+				version, _, ok := workflowAttemptVersionAndTurn(active.ID, "acceptance", checkpoint.AttemptID)
+				if !ok || version != run.PlanVersion {
+					starter.release(run.ID)
+					return fmt.Errorf("%w: parallel reviewer attempt is invalid", ErrInvalidRunRequest)
+				}
+				request.agentName = "reviewer"
+				request.request.OutputContract = workerhttp.OutputContractAcceptanceTests
+			default:
+				starter.release(run.ID)
+				return fmt.Errorf("%w: parallel implementation has an unexpected role", ErrInvalidRunRequest)
+			}
+			requests = append(requests, request)
+		}
+		starter.release(run.ID)
+		for _, request := range requests {
+			go starter.reattachAdmitted(request)
+		}
+		return nil
+	}
 	var session execution.Session
 	if len(activeSessions) == 1 {
 		session = activeSessions[0]
@@ -557,7 +623,12 @@ func (starter *RemoteLeadStarter) Recover(
 		attemptVersion, _, implementing := workflowAttemptVersionAndTurn(
 			session.ID, "implementation", checkpoint.AttemptID,
 		)
-		if !isLead || !implementing || attemptVersion != run.PlanVersion {
+		acceptanceVersion, _, authoring := workflowAttemptVersionAndTurn(
+			session.ID, "acceptance", checkpoint.AttemptID,
+		)
+		validLead := isLead && implementing && attemptVersion == run.PlanVersion
+		validReviewer := run.IndependentAcceptanceTests && isReviewer && authoring && acceptanceVersion == run.PlanVersion
+		if !validLead && !validReviewer {
 			return fmt.Errorf("%w: implementing feature has an unexpected active attempt", ErrInvalidRunRequest)
 		}
 	}
@@ -616,6 +687,9 @@ func (starter *RemoteLeadStarter) Recover(
 	}
 	if isReviewer && !isIntervention {
 		request.agentName = "reviewer"
+		if _, authoring := acceptanceTestsTurnNumber(session.ID, checkpoint.AttemptID); authoring {
+			request.request.OutputContract = workerhttp.OutputContractAcceptanceTests
+		}
 		if _, reviewing := implementationReviewTurnNumber(session.ID, checkpoint.AttemptID); reviewing {
 			request.request.OutputContract = workerhttp.OutputContractImplementationReview
 		}
@@ -1904,6 +1978,15 @@ func implementationReviewAttemptForVersion(sessionID string, version int, turn i
 	return workflowAttemptForVersion(sessionID, "review", version, turn)
 }
 
+func acceptanceTestsAttemptForVersion(sessionID string, version int) string {
+	return workflowAttemptForVersion(sessionID, "acceptance", version, 1)
+}
+
+func acceptanceTestsTurnNumber(sessionID, attemptID string) (int, bool) {
+	_, turn, found := workflowAttemptVersionAndTurn(sessionID, "acceptance", attemptID)
+	return turn, found
+}
+
 func implementationCorrectionAttemptForVersion(sessionID string, version int, turn int) string {
 	return workflowAttemptForVersion(sessionID, "correction", version, turn)
 }
@@ -2011,6 +2094,9 @@ func waitKindForAttempt(session execution.Session, attemptID string) execution.R
 	if _, reviewing := implementationReviewTurnNumber(session.ID, attemptID); reviewing {
 		return execution.RunWaitKindPhaseCheckpoint
 	}
+	if _, authoring := acceptanceTestsTurnNumber(session.ID, attemptID); authoring {
+		return execution.RunWaitKindPhaseCheckpoint
+	}
 	return execution.RunWaitKindClarification
 }
 
@@ -2026,6 +2112,9 @@ func waitingReasonForAttempt(session execution.Session, attemptID string) string
 	}
 	if _, reviewing := implementationReviewTurnNumber(session.ID, attemptID); session.Role == worker.RoleReviewer && reviewing {
 		return implementationReviewRunningReason
+	}
+	if _, authoring := acceptanceTestsTurnNumber(session.ID, attemptID); session.Role == worker.RoleReviewer && authoring {
+		return acceptanceTestsRunningReason
 	}
 	turn, planned := planningTurnNumber(session.ID, attemptID)
 	if session.Role == worker.RoleReviewer && planned && turn == 1 {
@@ -2772,6 +2861,51 @@ func (starter *RemoteLeadStarter) StartImplementation(
 			return execution.Run{}, false, err
 		}
 	}
+	if run.IndependentAcceptanceTests {
+		reviewerCheckpoint, checkpointErr := starter.executions.GetWorkerAttempt(ctx, reviewer.ID)
+		if checkpointErr != nil {
+			starter.release(run.ID)
+			return execution.Run{}, false, checkpointErr
+		}
+		if confirmErr := starter.confirmCompletedTurn(ctx, reviewer, reviewerCheckpoint); confirmErr != nil {
+			starter.release(run.ID)
+			return execution.Run{}, false, fmt.Errorf("%w: the reviewer's planning turn is not confirmed complete: %v", ErrImplementationNotAllowed, confirmErr)
+		}
+		acceptanceAttemptID := acceptanceTestsAttemptForVersion(reviewer.ID, run.PlanVersion)
+		acceptanceRequest, requestErr := starter.acceptanceTestsRequest(
+			run, currentFeature, reviewer, prepared, plan.Text, acceptanceAttemptID,
+		)
+		if requestErr != nil {
+			starter.release(run.ID)
+			return execution.Run{}, false, requestErr
+		}
+		parallel, ok := starter.executions.(remoteLeadParallelImplementationExecution)
+		if !ok {
+			starter.release(run.ID)
+			return execution.Run{}, false, errors.New("parallel implementation admission is unavailable")
+		}
+		admitted, admissionErr := parallel.BeginParallelImplementationTurns(
+			ctx, run.ID, lead.ID, checkpoint, attemptID,
+			reviewer.ID, reviewerCheckpoint, acceptanceAttemptID,
+			"The lead is implementing while the reviewer privately authors independent acceptance tests.",
+		)
+		if admissionErr != nil {
+			starter.release(run.ID)
+			return execution.Run{}, false, admissionErr
+		}
+		if !admitted {
+			starter.release(run.ID)
+			storedRun, getErr := starter.executions.GetRun(ctx, run.ID)
+			return storedRun, false, getErr
+		}
+		// Durable state, not the in-memory claim, prevents duplicate admission.
+		// Both independent worker observations may now progress concurrently.
+		starter.release(run.ID)
+		go starter.launchAdmitted(request)
+		go starter.launchAdmitted(acceptanceRequest)
+		startedRun, getErr := starter.executions.GetRun(ctx, run.ID)
+		return startedRun, true, getErr
+	}
 	admitted, err := starter.executions.BeginAutonomousTurn(
 		ctx, lead.ID, checkpoint, attemptID,
 		feature.StateImplementing, implementationRunningReason,
@@ -2795,6 +2929,54 @@ func (starter *RemoteLeadStarter) StartImplementation(
 	go starter.launch(request)
 	startedRun, err := starter.executions.GetRun(ctx, run.ID)
 	return startedRun, true, err
+}
+
+func (starter *RemoteLeadStarter) acceptanceTestsRequest(
+	run execution.Run,
+	storedFeature feature.Feature,
+	reviewer execution.Session,
+	prepared workspace.Workspace,
+	plan string,
+	attemptID string,
+) (remoteLeadRequest, error) {
+	request := remoteLeadRequest{
+		runID: run.ID, agentName: "reviewer", waitingReason: acceptanceTestsRunningReason,
+		identity: workerhttp.MutationIdentity{
+			AttemptReference: workerhttp.AttemptReference{SessionID: reviewer.ID, AttemptID: attemptID},
+			IdempotencyKey:   attemptID + ":resume",
+		},
+		request: workerhttp.PutAttemptRequest{
+			Mode: workerhttp.AttemptModeResume,
+			Assignment: workerhttp.Assignment{
+				AgentProfileID: starter.profileID(run.AgentProviders.Reviewer, worker.RoleReviewer),
+				Model:          run.AgentModels.Reviewer,
+				ProjectID:      storedFeature.ProjectID, FeatureID: storedFeature.ID,
+				Role: workerhttp.RoleReviewer, WorkspaceID: prepared.ID,
+			},
+			ProviderSessionID: reviewer.ProviderSessionID,
+			Instructions:      acceptanceTestsInstructions(storedFeature, prepared, plan),
+			OutputContract:    workerhttp.OutputContractAcceptanceTests,
+		},
+	}
+	if err := request.request.Validate(request.identity); err != nil {
+		return remoteLeadRequest{}, fmt.Errorf("%w: %v", ErrInvalidRunRequest, err)
+	}
+	return request, nil
+}
+
+func acceptanceTestsInstructions(storedFeature feature.Feature, prepared workspace.Workspace, plan string) string {
+	return "Continue the same provider conversation as the independent reviewer. Work only from the accepted goal, " +
+		"agreed plan, and the clean planning baseline already present in your private checkout. Do not fetch, inspect, " +
+		"or query the lead's implementation or pull-request head. Write the smallest useful executable acceptance tests " +
+		"you would have written before implementation, and do not alter production code. Run the tests against the " +
+		"baseline when practical; they are expected to expose missing behavior. Commit only the acceptance-test changes " +
+		"locally and do not push any branch or commit. Return action 'authored', a concise summary, the exact local test " +
+		"commit ID, and ordered stable test IDs and user-facing titles. If independent executable acceptance tests are " +
+		"not meaningful or cannot safely be authored, return action 'blocked' with no commit or tests.\n\n" +
+		"Current workflow phase: independent acceptance test authoring\nAccepted goal:\n" + storedFeature.AcceptedGoal +
+		"\n\nAgreed implementation plan:\n" + plan +
+		"\n\nRepository: " + prepared.RepositoryOwner + "/" + prepared.RepositoryName +
+		"\nBase branch: " + prepared.BaseBranch + "\nPrivate checkout baseline commit: " + prepared.BaseCommitID
 }
 
 func (starter *RemoteLeadStarter) retryImplementationPublication(
@@ -3643,6 +3825,24 @@ func (starter *RemoteLeadStarter) reattach(request remoteLeadRequest) {
 	starter.observe(ctx, request, attempt)
 }
 
+func (starter *RemoteLeadStarter) reattachAdmitted(request remoteLeadRequest) {
+	ctx := starter.lifetime
+	attempt, err := starter.worker.GetAttempt(ctx, request.identity.AttemptReference)
+	if err != nil {
+		starter.requireReview(ctx, request, fmt.Errorf("inspect interrupted parallel worker attempt: %w", err))
+		return
+	}
+	if attempt.State == workerhttp.AttemptStateIndeterminate {
+		starter.requireReview(ctx, request, errors.New("worker reports an indeterminate provider attempt"))
+		return
+	}
+	if err := starter.captureProviderSession(ctx, request.identity.SessionID, attempt); err != nil {
+		starter.requireReview(ctx, request, err)
+		return
+	}
+	starter.observe(ctx, request, attempt)
+}
+
 func (starter *RemoteLeadStarter) applyReply(ctx context.Context, request remoteLeadRequest) error {
 	if request.commandID == "" {
 		return nil
@@ -3774,6 +3974,37 @@ func (starter *RemoteLeadStarter) finish(
 				return
 			}
 		}
+		if request.request.OutputContract == workerhttp.OutputContractAcceptanceTests {
+			if attempt.Result.Disposition != workerhttp.DispositionInputRequired && attempt.Result.AcceptanceTests == nil {
+				err = errors.New("reviewer completed acceptance-test authoring without structured test metadata")
+				break
+			}
+			if attempt.Result.Disposition != workerhttp.DispositionInputRequired {
+				run, loadErr := starter.executions.GetRun(ctx, request.runID)
+				if loadErr != nil {
+					err = loadErr
+					break
+				}
+				normalized, normalizeErr := attempt.Result.AcceptanceTests.NormalizeInitial(run.PlanVersion)
+				if normalizeErr != nil {
+					err = normalizeErr
+					break
+				}
+				acceptanceArtifacts, ok := starter.artifacts.(remoteLeadAcceptanceArtifactService)
+				if !ok {
+					err = errors.New("acceptance-test artifact service is unavailable")
+					break
+				}
+				if _, artifactErr := acceptanceArtifacts.UpsertAcceptanceTests(
+					ctx, run.FeatureID, normalized,
+					workflow.Actor{Kind: workflow.ActorKindAgent, ID: session.ID},
+					request.identity.AttemptID+":acceptance-tests",
+				); artifactErr != nil {
+					err = artifactErr
+					break
+				}
+			}
+		}
 		if session.Status == execution.SessionStatusPauseRequested {
 			_, err = starter.executions.TransitionSession(
 				ctx, session.ID, session.Status, execution.SessionStatusWaitingForUser, attempt.ProviderSessionID,
@@ -3784,6 +4015,14 @@ func (starter *RemoteLeadStarter) finish(
 			)
 		}
 		if err != nil {
+			break
+		}
+		if request.request.OutputContract == workerhttp.OutputContractAcceptanceTests {
+			if attempt.Result.Disposition == workerhttp.DispositionInputRequired {
+				err = starter.handleInputRequired(ctx, request, *attempt.Result)
+				break
+			}
+			err = starter.tryStartAcceptanceReview(ctx, request.runID)
 			break
 		}
 		if request.planningStage == planningStageLeadResponse {
@@ -4013,6 +4252,9 @@ func (starter *RemoteLeadStarter) verifyImplementationPublication(
 	if err != nil {
 		return fmt.Errorf("record verified implementation publication: %w", err)
 	}
+	if run.IndependentAcceptanceTests {
+		return starter.tryStartAcceptanceReview(ctx, run.ID)
+	}
 	if paused, err := starter.stopAtPauseBoundary(
 		ctx, run.ID, "Implementation is published and ready for independent review.",
 	); err != nil || paused {
@@ -4024,6 +4266,131 @@ func (starter *RemoteLeadStarter) verifyImplementationPublication(
 	if err != nil {
 		return err
 	}
+	if admitted {
+		starter.launchAdmitted(next)
+	}
+	return nil
+}
+
+func (starter *RemoteLeadStarter) tryStartAcceptanceReview(ctx context.Context, runID string) error {
+	starter.acceptanceJoinMu.Lock()
+	locked := true
+	defer func() {
+		if locked {
+			starter.acceptanceJoinMu.Unlock()
+		}
+	}()
+	run, err := starter.executions.GetRun(ctx, runID)
+	if err != nil {
+		return err
+	}
+	if !run.IndependentAcceptanceTests {
+		return nil
+	}
+	lead, err := starter.executions.GetSession(ctx, remoteLeadSessionID(run.ID))
+	if err != nil {
+		return err
+	}
+	reviewer, err := starter.executions.GetSession(ctx, remoteReviewerSessionID(run.ID))
+	if err != nil {
+		return err
+	}
+	// The first branch to finish leaves the run active. Only the second branch,
+	// after both durable checkpoints exist, performs the review handoff.
+	if lead.Status != execution.SessionStatusWaitingForUser || reviewer.Status != execution.SessionStatusWaitingForUser {
+		return nil
+	}
+	leadCheckpoint, err := starter.executions.GetWorkerAttempt(ctx, lead.ID)
+	if err != nil {
+		return err
+	}
+	reviewerCheckpoint, err := starter.executions.GetWorkerAttempt(ctx, reviewer.ID)
+	if err != nil {
+		return err
+	}
+	leadVersion, _, implementing := workflowAttemptVersionAndTurn(lead.ID, "implementation", leadCheckpoint.AttemptID)
+	acceptanceVersion, _, authoring := workflowAttemptVersionAndTurn(reviewer.ID, "acceptance", reviewerCheckpoint.AttemptID)
+	if !implementing || leadVersion != run.PlanVersion || !authoring || acceptanceVersion != run.PlanVersion {
+		return errors.New("parallel implementation checkpoints do not match the current plan")
+	}
+	if err := starter.confirmCompletedTurn(ctx, lead, leadCheckpoint); err != nil {
+		return fmt.Errorf("confirm completed implementation: %w", err)
+	}
+	if err := starter.confirmCompletedTurn(ctx, reviewer, reviewerCheckpoint); err != nil {
+		return fmt.Errorf("confirm authored acceptance tests: %w", err)
+	}
+	verified := false
+	events, err := starter.executions.EventsForSession(ctx, lead.ID)
+	if err != nil {
+		return err
+	}
+	verifiedEventID := leadCheckpoint.AttemptID + ":publication-verified"
+	for _, event := range events {
+		if event.ID == verifiedEventID {
+			verified = true
+			break
+		}
+	}
+	if !verified {
+		return nil
+	}
+	leadAttempt, err := starter.worker.GetAttempt(ctx, workerhttp.AttemptReference{SessionID: lead.ID, AttemptID: leadCheckpoint.AttemptID})
+	if err != nil {
+		return err
+	}
+	reviewerAttempt, err := starter.worker.GetAttempt(ctx, workerhttp.AttemptReference{SessionID: reviewer.ID, AttemptID: reviewerCheckpoint.AttemptID})
+	if err != nil {
+		return err
+	}
+	if leadAttempt.Result == nil || leadAttempt.Result.Publication == nil || reviewerAttempt.Result == nil || reviewerAttempt.Result.AcceptanceTests == nil {
+		return errors.New("parallel implementation results are incomplete")
+	}
+	artifact, err := starter.artifacts.GetFeatureArtifact(ctx, run.FeatureID, featureartifact.KindAcceptanceTests)
+	if err != nil {
+		return fmt.Errorf("load independent acceptance tests: %w", err)
+	}
+	tests := featureartifact.AcceptanceTests{}
+	if err := json.Unmarshal([]byte(artifact.Document), &tests); err != nil {
+		return fmt.Errorf("decode independent acceptance tests: %w", err)
+	}
+	if tests.PlanVersion != run.PlanVersion || tests.TestCommitID != reviewerAttempt.Result.AcceptanceTests.TestCommitID {
+		return errors.New("independent acceptance test artifact does not match the private reviewer commit")
+	}
+	tests.ImplementationCommitID = leadAttempt.Result.Publication.CommitID
+	acceptanceArtifacts, ok := starter.artifacts.(remoteLeadAcceptanceArtifactService)
+	if !ok {
+		return errors.New("acceptance-test artifact service is unavailable")
+	}
+	if _, err := acceptanceArtifacts.UpsertAcceptanceTests(
+		ctx, run.FeatureID, tests,
+		workflow.Actor{Kind: workflow.ActorKindCoordinator, ID: coordinatorActorID},
+		leadCheckpoint.AttemptID+":pin-acceptance-implementation",
+	); err != nil {
+		return err
+	}
+	storedFeature, err := starter.features.GetByID(ctx, run.FeatureID)
+	if err != nil {
+		return err
+	}
+	messages, err := starter.currentPlanningMessages(ctx, run)
+	if err != nil {
+		return err
+	}
+	if len(messages) == 0 || messages[len(messages)-1].Role != worker.RoleLead || messages[len(messages)-1].Event.Type != worker.EventPlanSubmitted {
+		return errors.New("acceptance review has no durable agreed plan")
+	}
+	if paused, err := starter.stopAtPauseBoundary(ctx, run.ID, "Implementation and private acceptance tests are ready for independent review."); err != nil || paused {
+		return err
+	}
+	next, admitted, err := starter.startImplementationReview(
+		ctx, run, storedFeature, messages[len(messages)-1].Event,
+		leadAttempt.Result.Summary, *leadAttempt.Result.Publication, 1,
+	)
+	if err != nil {
+		return err
+	}
+	starter.acceptanceJoinMu.Unlock()
+	locked = false
 	if admitted {
 		starter.launchAdmitted(next)
 	}
@@ -4082,6 +4449,18 @@ func (starter *RemoteLeadStarter) startImplementationReview(
 	if err != nil {
 		return remoteLeadRequest{}, false, err
 	}
+	acceptanceTestCommitID := ""
+	if run.IndependentAcceptanceTests {
+		artifact, artifactErr := starter.artifacts.GetFeatureArtifact(ctx, run.FeatureID, featureartifact.KindAcceptanceTests)
+		if artifactErr != nil {
+			return remoteLeadRequest{}, false, artifactErr
+		}
+		tests := featureartifact.AcceptanceTests{}
+		if decodeErr := json.Unmarshal([]byte(artifact.Document), &tests); decodeErr != nil {
+			return remoteLeadRequest{}, false, decodeErr
+		}
+		acceptanceTestCommitID = tests.TestCommitID
+	}
 	attemptID := implementationReviewAttemptForVersion(reviewer.ID, run.PlanVersion, round)
 	request := remoteLeadRequest{
 		runID: run.ID, agentName: "reviewer", waitingReason: implementationReviewRunningReason,
@@ -4099,7 +4478,7 @@ func (starter *RemoteLeadStarter) startImplementationReview(
 			ProviderSessionID: reviewer.ProviderSessionID,
 			Instructions: implementationReviewInstructions(
 				storedFeature, prepared, plan.Text, leadSummary,
-				publication.CommitID, attemptID,
+				publication.CommitID, attemptID, acceptanceTestCommitID,
 			),
 			OutputContract: workerhttp.OutputContractImplementationReview,
 		},
@@ -4130,13 +4509,24 @@ func implementationReviewInstructions(
 	implementationSummary string,
 	commitID string,
 	attemptID string,
+	acceptanceTestCommitIDs ...string,
 ) string {
 	marker := implementationReviewMarker(attemptID)
+	acceptanceTestCommitID := ""
+	if len(acceptanceTestCommitIDs) > 0 {
+		acceptanceTestCommitID = acceptanceTestCommitIDs[0]
+	}
+	acceptanceInstructions := ""
+	workspaceRules := "Reset this disposable reviewer checkout to the planning baseline, fetch the exact implementation commit below, and check out that exact commit detached. Then do not modify tracked files, commit, push, change the pull-request body, or merge. "
+	if acceptanceTestCommitID != "" {
+		workspaceRules = "Reset this disposable private checkout to the exact private acceptance-test commit below, discarding only any prior local review merge. Fetch the exact implementation commit below without inspecting other lead history, then merge that exact commit locally into your private test commit. Resolve only mechanical merge conflicts; if a conflict changes test meaning, mark the affected test not applicable with a reason instead of silently rewriting it. Never push your private test commit, the local merge, or any test changes. Do not change the pull-request body or merge the pull request. "
+		acceptanceInstructions = "Run every pending private acceptance test against that local combination. Before each pending test, run `commitarium-artifact acceptance start <test-id>`; then record `acceptance pass`, `acceptance fail <test-id> <note>`, or `acceptance not-applicable <test-id> <note>` as appropriate. A failed acceptance test is review evidence, not automatically proof that production code is wrong: inspect whether the implementation, the test, or the shared understanding is incorrect. Private acceptance test commit: " + acceptanceTestCommitID + "\n"
+	}
 	return "Continue the same provider conversation as the independent reviewer. The lead has now " +
 		"published an implementation for review. Inspect before judging: confirm the current branch, " +
 		"Git HEAD, status, diff from the planning baseline, and the exact pull-request head. Review only " +
-		"the exact commit below against the accepted goal and agreed plan, and run relevant read-only tests " +
-		"when practical. Do not modify tracked files, commit, push, change the pull-request body, or merge. " +
+		"the exact commit below against the accepted goal and agreed plan, and run relevant tests " +
+		"when practical. " + workspaceRules + acceptanceInstructions +
 		"If you find material problems, submit one formal Forgejo review with event REQUEST_CHANGES. If the " +
 		"implementation is correct and sufficiently tested, tell the lead that you think the exact revision is " +
 		"ready to merge and submit one review with event APPROVED. Use the worker-provided " +
@@ -4382,6 +4772,34 @@ func (starter *RemoteLeadStarter) verifyImplementationCorrection(
 	if implementationReviewRoundLimitReached(run.ImplementationReviewRoundLimit, round) {
 		return starter.waitRun(ctx, request.runID, implementationReviewLimitReason(run.ImplementationReviewRoundLimit), execution.RunWaitKindRoundCap)
 	}
+	if run.IndependentAcceptanceTests {
+		artifact, artifactErr := starter.artifacts.GetFeatureArtifact(ctx, run.FeatureID, featureartifact.KindAcceptanceTests)
+		if artifactErr != nil {
+			return artifactErr
+		}
+		tests := featureartifact.AcceptanceTests{}
+		if decodeErr := json.Unmarshal([]byte(artifact.Document), &tests); decodeErr != nil {
+			return decodeErr
+		}
+		tests.ImplementationCommitID = result.Publication.CommitID
+		for index := range tests.Tests {
+			if tests.Tests[index].Status != featureartifact.AcceptanceTestNotApplicable {
+				tests.Tests[index].Status = featureartifact.AcceptanceTestPending
+				tests.Tests[index].Note = ""
+			}
+		}
+		acceptanceArtifacts, ok := starter.artifacts.(remoteLeadAcceptanceArtifactService)
+		if !ok {
+			return errors.New("acceptance-test artifact service is unavailable")
+		}
+		if _, artifactErr := acceptanceArtifacts.UpsertAcceptanceTests(
+			ctx, run.FeatureID, tests,
+			workflow.Actor{Kind: workflow.ActorKindCoordinator, ID: coordinatorActorID},
+			request.identity.AttemptID+":reset-acceptance-tests",
+		); artifactErr != nil {
+			return artifactErr
+		}
+	}
 	if paused, err := starter.stopAtPauseBoundary(
 		ctx, run.ID, "The correction is published and ready for another independent review.",
 	); err != nil || paused {
@@ -4438,6 +4856,21 @@ func (starter *RemoteLeadStarter) verifyImplementationReview(
 	if len(messages) == 0 || messages[len(messages)-1].Event.Type != worker.EventPlanSubmitted {
 		return errors.New("implementation review has no durable agreed plan")
 	}
+	if run.IndependentAcceptanceTests {
+		artifact, artifactErr := starter.artifacts.GetFeatureArtifact(ctx, run.FeatureID, featureartifact.KindAcceptanceTests)
+		if artifactErr != nil {
+			return fmt.Errorf("load acceptance results before review verification: %w", artifactErr)
+		}
+		tests := featureartifact.AcceptanceTests{}
+		if decodeErr := json.Unmarshal([]byte(artifact.Document), &tests); decodeErr != nil {
+			return fmt.Errorf("decode acceptance results before review verification: %w", decodeErr)
+		}
+		if validateErr := validateAcceptanceReviewResults(
+			tests, run.PlanVersion, result.Review.CommitID, result.Disposition,
+		); validateErr != nil {
+			return validateErr
+		}
+	}
 	expectedState := "APPROVED"
 	if result.Disposition == workerhttp.DispositionChangesRequested {
 		expectedState = "REQUEST_CHANGES"
@@ -4492,6 +4925,31 @@ func (starter *RemoteLeadStarter) verifyImplementationReview(
 	default:
 		return errors.New("implementation review produced an unsupported next action")
 	}
+}
+
+func validateAcceptanceReviewResults(
+	tests featureartifact.AcceptanceTests,
+	planVersion int,
+	commitID string,
+	disposition workerhttp.Disposition,
+) error {
+	if err := tests.Validate(); err != nil {
+		return err
+	}
+	if tests.PlanVersion != planVersion || tests.ImplementationCommitID != commitID {
+		return errors.New("acceptance results do not describe the reviewed implementation commit")
+	}
+	for _, test := range tests.Tests {
+		switch test.Status {
+		case featureartifact.AcceptanceTestPending, featureartifact.AcceptanceTestRunning:
+			return fmt.Errorf("acceptance test %q has no final result", test.ID)
+		case featureartifact.AcceptanceTestFailed:
+			if disposition == workerhttp.DispositionSucceeded {
+				return fmt.Errorf("approved review still has failed acceptance test %q", test.ID)
+			}
+		}
+	}
+	return nil
 }
 
 func (starter *RemoteLeadStarter) startImplementationReadiness(

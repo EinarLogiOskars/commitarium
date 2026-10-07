@@ -669,6 +669,7 @@ func (session *session) translateResult(
 			ToolchainProposal:  resolved.ToolchainProposal,
 			GoalDraft:          resolved.GoalDraft,
 			ImplementationPlan: resolved.ImplementationPlan,
+			AcceptanceTests:    resolved.AcceptanceTests,
 			EnvironmentRequest: resolved.EnvironmentRequest,
 		}, nil
 	}

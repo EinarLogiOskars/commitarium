@@ -56,6 +56,7 @@ const (
 	OutputContractPlanningLead            OutputContract = "planning_lead"
 	OutputContractGoalClarification       OutputContract = "goal_clarification"
 	OutputContractImplementationLead      OutputContract = "implementation_lead"
+	OutputContractAcceptanceTests         OutputContract = "acceptance_tests"
 	OutputContractImplementationReview    OutputContract = "implementation_reviewer"
 	OutputContractImplementationReadiness OutputContract = "implementation_lead_readiness"
 	OutputContractIntervention            OutputContract = "intervention"
@@ -189,6 +190,7 @@ type Result struct {
 	ToolchainProposal  *ToolchainProposal
 	GoalDraft          *featureartifact.GoalDraft
 	ImplementationPlan *featureartifact.ImplementationPlan
+	AcceptanceTests    *featureartifact.AcceptanceTests
 	EnvironmentRequest *EnvironmentRequest
 }
 
@@ -313,6 +315,7 @@ func (request SessionRequest) Validate() error {
 		request.OutputContract != OutputContractPlanningLead &&
 		request.OutputContract != OutputContractGoalClarification &&
 		request.OutputContract != OutputContractImplementationLead &&
+		request.OutputContract != OutputContractAcceptanceTests &&
 		request.OutputContract != OutputContractImplementationReview &&
 		request.OutputContract != OutputContractImplementationReadiness &&
 		request.OutputContract != OutputContractIntervention &&
@@ -326,7 +329,8 @@ func (request SessionRequest) Validate() error {
 	case request.OutputContract == OutputContractToolchainSetup &&
 		request.Role != RoleLead && request.Role != RoleConsultant:
 		return fmt.Errorf("%w: toolchain setup output contract requires a consultation role", ErrInvalidSessionRequest)
-	case request.OutputContract == OutputContractImplementationReview && request.Role != RoleReviewer:
+	case (request.OutputContract == OutputContractImplementationReview ||
+		request.OutputContract == OutputContractAcceptanceTests) && request.Role != RoleReviewer:
 		return fmt.Errorf("%w: reviewer output contract requires the reviewer role", ErrInvalidSessionRequest)
 	}
 	if !request.LaunchEnvironment.IsZero() {
@@ -506,10 +510,12 @@ func (result Result) Validate() error {
 		return fmt.Errorf("%w: failed session cannot have a disposition", ErrInvalidResult)
 	case result.Publication != nil && result.Review != nil:
 		return fmt.Errorf("%w: result cannot contain implementation and review publications", ErrInvalidResult)
-	case result.GoalDraft != nil && (result.Publication != nil || result.Review != nil || result.ImplementationPlan != nil || result.ToolchainProposal != nil || result.EnvironmentRequest != nil || result.InterventionEffect != ""):
+	case result.GoalDraft != nil && (result.Publication != nil || result.Review != nil || result.ImplementationPlan != nil || result.AcceptanceTests != nil || result.ToolchainProposal != nil || result.EnvironmentRequest != nil || result.InterventionEffect != ""):
 		return fmt.Errorf("%w: goal draft cannot be combined with another structured result", ErrInvalidResult)
-	case result.ImplementationPlan != nil && (result.Publication != nil || result.Review != nil || result.ToolchainProposal != nil || result.EnvironmentRequest != nil || result.InterventionEffect != ""):
+	case result.ImplementationPlan != nil && (result.Publication != nil || result.Review != nil || result.AcceptanceTests != nil || result.ToolchainProposal != nil || result.EnvironmentRequest != nil || result.InterventionEffect != ""):
 		return fmt.Errorf("%w: implementation plan cannot be combined with another structured result", ErrInvalidResult)
+	case result.AcceptanceTests != nil && (result.Publication != nil || result.Review != nil || result.GoalDraft != nil || result.ImplementationPlan != nil || result.ToolchainProposal != nil || result.EnvironmentRequest != nil || result.InterventionEffect != ""):
+		return fmt.Errorf("%w: acceptance tests cannot be combined with another structured result", ErrInvalidResult)
 	case result.Publication != nil &&
 		(result.Outcome != OutcomeCompleted || result.Disposition != DispositionSucceeded):
 		return fmt.Errorf("%w: implementation publication requires a successful completed session", ErrInvalidResult)
@@ -540,6 +546,13 @@ func (result Result) Validate() error {
 			return fmt.Errorf("%w: implementation plan requires a successful completed session", ErrInvalidResult)
 		}
 		if _, err := result.ImplementationPlan.NormalizeInitial(1); err != nil {
+			return fmt.Errorf("%w: %v", ErrInvalidResult, err)
+		}
+	case result.AcceptanceTests != nil:
+		if result.Outcome != OutcomeCompleted || result.Disposition != DispositionSucceeded {
+			return fmt.Errorf("%w: acceptance tests require a successful completed session", ErrInvalidResult)
+		}
+		if _, err := result.AcceptanceTests.NormalizeInitial(1); err != nil {
 			return fmt.Errorf("%w: %v", ErrInvalidResult, err)
 		}
 	case result.Publication != nil:

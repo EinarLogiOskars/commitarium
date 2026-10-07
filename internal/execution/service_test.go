@@ -163,6 +163,22 @@ func TestServiceCreatesRunAndSessionWithCoordinatorTime(t *testing.T) {
 	}
 }
 
+func TestServiceSnapshotsIndependentAcceptanceTestsOnRun(t *testing.T) {
+	store := &recordingStore{}
+	service := testService(store, time.Date(2026, time.October, 7, 12, 0, 0, 0, time.UTC))
+
+	run, created, err := service.CreateRunWithModelsAndAcceptance(
+		t.Context(), "run_acceptance", "fea_test", 6, 4,
+		project.DefaultAgentProviders(), project.AgentModels{}, project.DefaultMergePolicy(), true,
+	)
+	if err != nil || !created {
+		t.Fatalf("create acceptance run: created=%t err=%v", created, err)
+	}
+	if !run.IndependentAcceptanceTests || !store.createdRun.IndependentAcceptanceTests {
+		t.Fatalf("acceptance preference was not snapshotted: run=%+v stored=%+v", run, store.createdRun)
+	}
+}
+
 func TestServiceListsSessionsForRun(t *testing.T) {
 	expected := []Session{{ID: "ses_test", RunID: "run_test"}}
 	store := &recordingStore{listedSessions: expected}

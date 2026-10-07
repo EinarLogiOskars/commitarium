@@ -363,6 +363,7 @@ func (service *Service) finishAttempt(
 	}
 	terminalResult.GoalDraft = result.GoalDraft
 	terminalResult.ImplementationPlan = result.ImplementationPlan
+	terminalResult.AcceptanceTests = result.AcceptanceTests
 	if result.Outcome == worker.OutcomeFailed {
 		terminalResult.Error = &workerhttp.ProtocolError{
 			Code:      workerhttp.ErrorInternal,

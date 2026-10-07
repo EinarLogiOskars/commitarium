@@ -15,6 +15,7 @@ services:
       COMMITARIUM_FORGEJO_TOKEN_FILE: /run/commitarium-config/forgejo-token
       COMMITARIUM_FORGEJO_VIEWER_LOGIN: ${COMMITARIUM_FORGEJO_VIEWER_LOGIN:-commitarium-viewer}
       COMMITARIUM_WORKSPACE_ROOT: /workspaces
+      COMMITARIUM_REVIEWER_WORKSPACE_ROOT: /reviewer-workspaces
       COMMITARIUM_TOOLCHAIN_ROOT: /var/lib/commitarium-toolchains
       COMMITARIUM_CODEX_WORKER_URL: http://codex-worker:8081
       COMMITARIUM_CODEX_WORKER_TOKEN_FILE: /run/commitarium-internal/codex-lead-worker-token
@@ -40,6 +41,7 @@ services:
       - ${COMMITARIUM_CLAUDE_WORKER_TOKEN_SOURCE:-./.commitarium/internal/claude-lead-worker-token}:/run/commitarium-internal/claude-lead-worker-token:ro
       - ${COMMITARIUM_CLAUDE_REVIEWER_WORKER_TOKEN_SOURCE:-./.commitarium/internal/claude-reviewer-worker-token}:/run/commitarium-internal/claude-reviewer-worker-token:ro
       - ${COMMITARIUM_WORKSPACE_SOURCE:-./.commitarium/workspaces}:/workspaces
+      - ${COMMITARIUM_REVIEWER_WORKSPACE_SOURCE:-./.commitarium/reviewer-workspaces}:/reviewer-workspaces
       - commitarium-toolchains:/var/lib/commitarium-toolchains
     ports:
       - "127.0.0.1:${COMMITARIUM_COORDINATOR_PORT:-8080}:8080"
@@ -137,7 +139,7 @@ services:
       - codex-reviewer-profile:/var/lib/commitarium-provider
       - ${COMMITARIUM_CODEX_REVIEWER_WORKER_TOKEN_SOURCE:-./.commitarium/internal/codex-reviewer-worker-token}:/run/commitarium-internal/worker-token:ro
       - ${COMMITARIUM_CODEX_REVIEWER_FORGEJO_TOKEN_SOURCE:-./.commitarium/agents/codex-reviewer/forgejo-token}:/run/commitarium-agent/forgejo-token:ro
-      - ${COMMITARIUM_WORKSPACE_SOURCE:-./.commitarium/workspaces}:/workspaces
+      - ${COMMITARIUM_REVIEWER_WORKSPACE_SOURCE:-./.commitarium/reviewer-workspaces}:/workspaces
       - ${COMMITARIUM_CODEX_WORKSPACE_SOURCE:-.}:/workspaces/${COMMITARIUM_CODEX_WORKSPACE_ID:-workspace_smoke}:ro
       - commitarium-toolchains:/var/lib/commitarium-toolchains
     expose:
@@ -214,7 +216,7 @@ services:
       - claude-reviewer-profile:/var/lib/commitarium-provider
       - ${COMMITARIUM_CLAUDE_REVIEWER_WORKER_TOKEN_SOURCE:-./.commitarium/internal/claude-reviewer-worker-token}:/run/commitarium-internal/worker-token:ro
       - ${COMMITARIUM_CLAUDE_REVIEWER_FORGEJO_TOKEN_SOURCE:-./.commitarium/agents/claude-reviewer/forgejo-token}:/run/commitarium-agent/forgejo-token:ro
-      - ${COMMITARIUM_WORKSPACE_SOURCE:-./.commitarium/workspaces}:/workspaces
+      - ${COMMITARIUM_REVIEWER_WORKSPACE_SOURCE:-./.commitarium/reviewer-workspaces}:/workspaces
       - ${COMMITARIUM_CLAUDE_WORKSPACE_SOURCE:-.}:/workspaces/${COMMITARIUM_CLAUDE_WORKSPACE_ID:-workspace_smoke}:ro
       - commitarium-toolchains:/var/lib/commitarium-toolchains
     expose:

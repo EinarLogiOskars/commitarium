@@ -44,6 +44,7 @@ type recordingProjectService struct {
 	receivedAgentProviders project.AgentProviders
 	receivedMergePolicy    project.MergePolicy
 	receivedAutonomyPolicy project.AutonomyPolicy
+	receivedAcceptance     bool
 	result                 project.Project
 	err                    error
 
@@ -151,6 +152,16 @@ func (s *recordingProjectService) UpdateMergePolicy(
 ) (project.Project, error) {
 	s.updateProjectID = projectID
 	s.receivedMergePolicy = policy
+	return s.updateResult, s.updateErr
+}
+
+func (s *recordingProjectService) UpdateIndependentAcceptanceTests(
+	_ context.Context,
+	projectID string,
+	enabled bool,
+) (project.Project, error) {
+	s.updateProjectID = projectID
+	s.receivedAcceptance = enabled
 	return s.updateResult, s.updateErr
 }
 
@@ -722,6 +733,32 @@ func TestUpdateProjectAutonomyPolicy(t *testing.T) {
 	}
 	if service.updateProjectID != "prj_test" || service.receivedAutonomyPolicy != want {
 		t.Fatalf("updated project=%q policy=%q", service.updateProjectID, service.receivedAutonomyPolicy)
+	}
+}
+
+func TestUpdateProjectIndependentAcceptanceTests(t *testing.T) {
+	service := &recordingProjectService{updateResult: project.Project{
+		ID: "prj_test", IndependentAcceptanceTests: true, CreatedAt: time.Now().UTC(),
+	}}
+	request := httptest.NewRequest(
+		http.MethodPut,
+		"/api/v1/projects/prj_test/independent-acceptance-tests",
+		strings.NewReader(`{"enabled":true}`),
+	)
+	recorder := httptest.NewRecorder()
+	New(service, nil, nil, nil, nil, nil).ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", recorder.Code, recorder.Body.String())
+	}
+	if service.updateProjectID != "prj_test" || !service.receivedAcceptance {
+		t.Fatalf("updated project=%q enabled=%t", service.updateProjectID, service.receivedAcceptance)
+	}
+	var response projectResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if !response.IndependentAcceptanceTests {
+		t.Fatal("response omitted enabled independent acceptance tests")
 	}
 }
 

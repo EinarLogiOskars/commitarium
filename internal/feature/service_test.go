@@ -143,6 +143,25 @@ func TestServiceCreate(t *testing.T) {
 	}
 }
 
+func TestServiceCreateSnapshotsIndependentAcceptancePreferenceAndOverride(t *testing.T) {
+	store := &recordingStore{}
+	projects := &recordingProjectFinder{result: project.Project{
+		ID: "prj_test", DialogueLimits: project.DefaultDialogueLimits(),
+		AgentProviders: project.DefaultAgentProviders(), MergePolicy: project.DefaultMergePolicy(),
+		AutonomyPolicy: project.DefaultAutonomyPolicy(), IndependentAcceptanceTests: true,
+	}}
+	service := NewService(store, projects)
+	created, err := service.Create(t.Context(), "prj_test", "Feature", "", SettingsOverrides{})
+	if err != nil || !created.IndependentAcceptanceTests {
+		t.Fatalf("inherited feature=%+v err=%v", created, err)
+	}
+	disabled := false
+	created, err = service.Create(t.Context(), "prj_test", "Override", "", SettingsOverrides{IndependentAcceptanceTests: &disabled})
+	if err != nil || created.IndependentAcceptanceTests {
+		t.Fatalf("overridden feature=%+v err=%v", created, err)
+	}
+}
+
 func TestServiceCreateRejectsBlankTitle(t *testing.T) {
 	store := &recordingStore{}
 	projects := &recordingProjectFinder{}

@@ -2,6 +2,7 @@ package workflow
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -26,6 +27,45 @@ type recordingWorkflowStore struct {
 	artifactErr        error
 	currentArtifact    FeatureArtifact
 	currentArtifactErr error
+}
+
+func TestServiceTransitionsAcceptanceTestAgainstPinnedImplementation(t *testing.T) {
+	currentDocument, err := json.Marshal(featureartifact.AcceptanceTests{
+		PlanVersion: 1, TestCommitID: "0123456789abcdef0123456789abcdef01234567",
+		ImplementationCommitID: "abcdef0123456789abcdef0123456789abcdef01",
+		Tests: []featureartifact.AcceptanceTest{{
+			ID: "exports-csv", Position: 1, Title: "Exports visible rows",
+			Status: featureartifact.AcceptanceTestPending, Note: "",
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := &recordingWorkflowStore{
+		currentArtifact: FeatureArtifact{
+			FeatureID: "fea_test", Kind: featureartifact.KindAcceptanceTests,
+			Revision: 2, Document: string(currentDocument),
+			Actor: Actor{Kind: ActorKindAgent, ID: "reviewer"}, UpdatedAt: time.Now().UTC(),
+		},
+		artifactResult: FeatureArtifact{FeatureID: "fea_test", Kind: featureartifact.KindAcceptanceTests, Revision: 3, Document: string(currentDocument), Actor: Actor{Kind: ActorKindAgent, ID: "reviewer"}, UpdatedAt: time.Now().UTC()},
+		artifactEvent:  validTestEvent(t),
+	}
+	service := NewService(store)
+	_, err = service.TransitionAcceptanceTest(
+		t.Context(), "fea_test", 1, "exports-csv", featureartifact.AcceptanceTestRunning,
+		"", "abcdef0123456789abcdef0123456789abcdef01",
+		Actor{Kind: ActorKindAgent, ID: "reviewer"}, "acceptance-start",
+	)
+	if err != nil {
+		t.Fatalf("start acceptance test: %v", err)
+	}
+	updated := featureartifact.AcceptanceTests{}
+	if err := json.Unmarshal([]byte(store.receivedArtifact.Document), &updated); err != nil {
+		t.Fatalf("decode updated artifact: %v", err)
+	}
+	if store.receivedArtifact.ExpectedRevision != 2 || updated.Tests[0].Status != featureartifact.AcceptanceTestRunning {
+		t.Fatalf("mutation=%+v tests=%+v", store.receivedArtifact, updated)
+	}
 }
 
 func (s *recordingWorkflowStore) PutFeatureArtifact(

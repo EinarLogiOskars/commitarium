@@ -53,6 +53,11 @@ type CheckoutManager interface {
 	Promote(ctx context.Context, spec CheckoutPromotionSpec) error
 }
 
+type DisposableCheckoutManager interface {
+	CheckoutManager
+	Remove(ctx context.Context, workspaceID string) error
+}
+
 type PullRequestManager interface {
 	EnsureDraftPullRequest(
 		ctx context.Context,
@@ -246,14 +251,15 @@ func (service *Service) MergeApproved(
 }
 
 type Service struct {
-	store            Store
-	features         FeatureFinder
-	projects         ProjectFinder
-	branches         BranchManager
-	checkouts        CheckoutManager
-	pullRequests     PullRequestManager
-	repositoryAccess RepositoryAccessManager
-	now              func() time.Time
+	store             Store
+	features          FeatureFinder
+	projects          ProjectFinder
+	branches          BranchManager
+	checkouts         CheckoutManager
+	reviewerCheckouts CheckoutManager
+	pullRequests      PullRequestManager
+	repositoryAccess  RepositoryAccessManager
+	now               func() time.Time
 }
 
 func NewServiceWithPreparationAndAccess(
@@ -264,11 +270,15 @@ func NewServiceWithPreparationAndAccess(
 	checkouts CheckoutManager,
 	pullRequests PullRequestManager,
 	repositoryAccess RepositoryAccessManager,
+	reviewerCheckouts ...CheckoutManager,
 ) *Service {
 	service := NewServiceWithPreparation(
 		store, features, projects, branches, checkouts, pullRequests,
 	)
 	service.repositoryAccess = repositoryAccess
+	if len(reviewerCheckouts) > 0 {
+		service.reviewerCheckouts = reviewerCheckouts[0]
+	}
 	return service
 }
 
@@ -533,6 +543,15 @@ func (service *Service) PrepareForClarification(
 	}); err != nil {
 		return Workspace{}, false, fmt.Errorf("ensure clarification checkout: %w", err)
 	}
+	if service.reviewerCheckouts != nil {
+		if err := service.reviewerCheckouts.Ensure(ctx, CheckoutSpec{
+			WorkspaceID: reserved.ID, RepositoryOwner: reserved.RepositoryOwner,
+			RepositoryName: reserved.RepositoryName, Branch: checkoutBranch,
+			BaseCommitID: reserved.BaseCommitID, AlreadyReady: false,
+		}); err != nil {
+			return Workspace{}, false, fmt.Errorf("ensure reviewer clarification checkout: %w", err)
+		}
+	}
 	if reserved.CheckoutReady() {
 		return reserved, false, nil
 	}
@@ -652,6 +671,15 @@ func (service *Service) prepareAgreedPlanWorkspace(
 		}); err != nil {
 			return Workspace{}, fmt.Errorf("promote agreed-plan checkout: %w", err)
 		}
+		if service.reviewerCheckouts != nil {
+			if err := service.reviewerCheckouts.Promote(ctx, CheckoutPromotionSpec{
+				WorkspaceID: stored.ID, RepositoryOwner: stored.RepositoryOwner,
+				RepositoryName: stored.RepositoryName, BaseBranch: stored.BaseBranch,
+				FeatureBranch: stored.Branch, BaseCommitID: stored.BaseCommitID,
+			}); err != nil {
+				return Workspace{}, fmt.Errorf("promote reviewer agreed-plan checkout: %w", err)
+			}
+		}
 		branch, err := service.branches.EnsureBranch(
 			ctx, stored.RepositoryOwner, stored.RepositoryName,
 			stored.Branch, stored.BaseCommitID,
@@ -687,6 +715,16 @@ func (service *Service) prepareAgreedPlanWorkspace(
 		RequireCleanBaseline: true,
 	}); err != nil {
 		return Workspace{}, fmt.Errorf("reconcile agreed-plan checkout: %w", err)
+	}
+	if service.reviewerCheckouts != nil {
+		if err := service.reviewerCheckouts.Ensure(ctx, CheckoutSpec{
+			WorkspaceID: stored.ID, RepositoryOwner: stored.RepositoryOwner,
+			RepositoryName: stored.RepositoryName, Branch: stored.Branch,
+			BaseCommitID: stored.BaseCommitID, AlreadyReady: true,
+			RequireCleanBaseline: true,
+		}); err != nil {
+			return Workspace{}, fmt.Errorf("reconcile reviewer agreed-plan checkout: %w", err)
+		}
 	}
 	if stored.PullRequestReady() {
 		return stored, nil
@@ -804,6 +842,25 @@ func (service *Service) PrepareReplanningBaseline(
 	}
 	if branch.Name != stored.Branch || !ValidCommitID(branch.CommitID) {
 		return Workspace{}, "", ErrBranchConflict
+	}
+	if service.reviewerCheckouts != nil {
+		disposable, ok := service.reviewerCheckouts.(DisposableCheckoutManager)
+		if !ok {
+			return Workspace{}, "", ErrCheckoutUnavailable
+		}
+		// A prior private review may have a local test commit or merge. Replanning
+		// deliberately discards that disposable state and recreates the reviewer
+		// checkout from the exact preserved feature-branch commit.
+		if err := disposable.Remove(ctx, stored.ID); err != nil {
+			return Workspace{}, "", fmt.Errorf("remove stale reviewer checkout before replanning: %w", err)
+		}
+		if err := disposable.Ensure(ctx, CheckoutSpec{
+			WorkspaceID: stored.ID, RepositoryOwner: stored.RepositoryOwner,
+			RepositoryName: stored.RepositoryName, Branch: stored.Branch,
+			BaseCommitID: branch.CommitID, AlreadyReady: false,
+		}); err != nil {
+			return Workspace{}, "", fmt.Errorf("recreate reviewer checkout for replanning: %w", err)
+		}
 	}
 	if err := service.checkouts.Ensure(ctx, CheckoutSpec{
 		WorkspaceID: stored.ID, RepositoryOwner: stored.RepositoryOwner,

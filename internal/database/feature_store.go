@@ -67,10 +67,11 @@ func (s *FeatureStore) Create(
 				reviewer_model,
 				merge_policy,
 				autonomy_policy,
+				independent_acceptance_tests,
 				created_at,
 				updated_at
 			)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT(id) DO NOTHING
 		`,
 		createdFeature.ID,
@@ -88,6 +89,7 @@ func (s *FeatureStore) Create(
 		createdFeature.AgentModels.Reviewer,
 		createdFeature.MergePolicy,
 		createdFeature.AutonomyPolicy,
+		createdFeature.IndependentAcceptanceTests,
 		createdFeature.CreatedAt.UTC().Format(time.RFC3339Nano),
 		createdFeature.UpdatedAt.UTC().Format(time.RFC3339Nano),
 	)
@@ -146,6 +148,7 @@ func (s *FeatureStore) GetByID(
 				reviewer_model,
 				merge_policy,
 				autonomy_policy,
+				independent_acceptance_tests,
 				created_at,
 				updated_at
 			FROM features
@@ -191,6 +194,7 @@ func (s *FeatureStore) ListByProjectID(
 				reviewer_model,
 				merge_policy,
 				autonomy_policy,
+				independent_acceptance_tests,
 				created_at,
 				updated_at
 			FROM features
@@ -245,6 +249,7 @@ func scanFeature(row featureScanner) (feature.Feature, error) {
 		&storedFeature.AgentModels.Reviewer,
 		&storedFeature.MergePolicy,
 		&storedFeature.AutonomyPolicy,
+		&storedFeature.IndependentAcceptanceTests,
 		&createdAt,
 		&updatedAt,
 	); err != nil {

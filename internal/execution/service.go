@@ -63,6 +63,42 @@ func (s *Service) CreateRunWithModels(
 	mergePolicy project.MergePolicy,
 	autonomyPolicies ...project.AutonomyPolicy,
 ) (Run, bool, error) {
+	return s.createRunWithModels(
+		ctx, id, featureID, planningRoundLimit, implementationReviewRoundLimit,
+		agentProviders, agentModels, mergePolicy, false, autonomyPolicies...,
+	)
+}
+
+func (s *Service) CreateRunWithModelsAndAcceptance(
+	ctx context.Context,
+	id string,
+	featureID string,
+	planningRoundLimit int,
+	implementationReviewRoundLimit int,
+	agentProviders project.AgentProviders,
+	agentModels project.AgentModels,
+	mergePolicy project.MergePolicy,
+	independentAcceptanceTests bool,
+	autonomyPolicies ...project.AutonomyPolicy,
+) (Run, bool, error) {
+	return s.createRunWithModels(
+		ctx, id, featureID, planningRoundLimit, implementationReviewRoundLimit,
+		agentProviders, agentModels, mergePolicy, independentAcceptanceTests, autonomyPolicies...,
+	)
+}
+
+func (s *Service) createRunWithModels(
+	ctx context.Context,
+	id string,
+	featureID string,
+	planningRoundLimit int,
+	implementationReviewRoundLimit int,
+	agentProviders project.AgentProviders,
+	agentModels project.AgentModels,
+	mergePolicy project.MergePolicy,
+	independentAcceptanceTests bool,
+	autonomyPolicies ...project.AutonomyPolicy,
+) (Run, bool, error) {
 	agentProviders, err := agentProviders.Normalize()
 	if err != nil {
 		return Run{}, false, err
@@ -95,6 +131,7 @@ func (s *Service) CreateRunWithModels(
 		AgentModels:                    agentModels,
 		MergePolicy:                    mergePolicy,
 		AutonomyPolicy:                 autonomyPolicy,
+		IndependentAcceptanceTests:     independentAcceptanceTests,
 		PlanVersion:                    1,
 		StartedAt:                      now, UpdatedAt: now,
 	}
@@ -124,7 +161,8 @@ func (s *Service) CreateRunWithModels(
 			existingProviders != agentProviders ||
 			existing.AgentModels != agentModels ||
 			existingMergePolicy != mergePolicy ||
-			existingAutonomyPolicy != autonomyPolicy {
+			existingAutonomyPolicy != autonomyPolicy ||
+			existing.IndependentAcceptanceTests != independentAcceptanceTests {
 			return Run{}, false, ErrRecordConflict
 		}
 		return existing, false, nil
@@ -607,6 +645,46 @@ func (s *Service) BeginAutonomousTurn(
 	})
 	if err != nil {
 		return false, fmt.Errorf("begin autonomous turn for session %q: %w", sessionID, err)
+	}
+	return admitted, nil
+}
+
+func (s *Service) BeginParallelImplementationTurns(
+	ctx context.Context,
+	runID string,
+	leadSessionID string,
+	leadPrevious WorkerAttemptCheckpoint,
+	leadAttemptID string,
+	reviewerSessionID string,
+	reviewerPrevious WorkerAttemptCheckpoint,
+	reviewerAttemptID string,
+	runReason string,
+) (bool, error) {
+	now := s.now().UTC()
+	store, ok := s.store.(interface {
+		BeginParallelImplementationTurns(context.Context, ParallelImplementationAdmission) (bool, error)
+	})
+	if !ok {
+		return false, errors.New("execution store does not support parallel implementation turns")
+	}
+	admitted, err := store.BeginParallelImplementationTurns(ctx, ParallelImplementationAdmission{
+		RunID: runID,
+		Lead: AutonomousTurnAdmission{
+			SessionID: leadSessionID, PreviousAttemptID: leadPrevious.AttemptID,
+			PreviousLastEventSequence: leadPrevious.LastEventSequence,
+			NextAttempt:               WorkerAttemptCheckpoint{SessionID: leadSessionID, AttemptID: leadAttemptID, CreatedAt: now, UpdatedAt: now},
+			ExpectedFeatureState:      feature.StateImplementing, RunReason: runReason, OccurredAt: now,
+		},
+		Reviewer: AutonomousTurnAdmission{
+			SessionID: reviewerSessionID, PreviousAttemptID: reviewerPrevious.AttemptID,
+			PreviousLastEventSequence: reviewerPrevious.LastEventSequence,
+			NextAttempt:               WorkerAttemptCheckpoint{SessionID: reviewerSessionID, AttemptID: reviewerAttemptID, CreatedAt: now, UpdatedAt: now},
+			ExpectedFeatureState:      feature.StateImplementing, RunReason: runReason, OccurredAt: now,
+		},
+		RunReason: runReason, OccurredAt: now,
+	})
+	if err != nil {
+		return false, fmt.Errorf("begin parallel implementation turns for run %q: %w", runID, err)
 	}
 	return admitted, nil
 }

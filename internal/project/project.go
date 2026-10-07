@@ -3,16 +3,17 @@ package project
 import "time"
 
 type Project struct {
-	ID                string
-	Name              string
-	RecoveryPolicy    RecoveryPolicy
-	MergePolicy       MergePolicy
-	AutonomyPolicy    AutonomyPolicy
-	DialogueLimits    DialogueLimits
-	AgentProviders    AgentProviders
-	AgentModels       AgentModels
-	ForgejoRepository *ForgejoRepository
-	CreatedAt         time.Time
+	ID                         string
+	Name                       string
+	RecoveryPolicy             RecoveryPolicy
+	MergePolicy                MergePolicy
+	AutonomyPolicy             AutonomyPolicy
+	IndependentAcceptanceTests bool
+	DialogueLimits             DialogueLimits
+	AgentProviders             AgentProviders
+	AgentModels                AgentModels
+	ForgejoRepository          *ForgejoRepository
+	CreatedAt                  time.Time
 }
 
 // ForgejoRepository is the verified internal repository identity for a

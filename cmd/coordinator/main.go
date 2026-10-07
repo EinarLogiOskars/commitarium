@@ -44,6 +44,7 @@ const (
 	defaultForgejoViewerLogin     = "commitarium-viewer"
 	defaultForgejoTimeout         = 10 * time.Second
 	defaultWorkspaceRoot          = "/workspaces"
+	defaultReviewerWorkspaceRoot  = "/reviewer-workspaces"
 	defaultToolchainRoot          = "/var/lib/commitarium-toolchains"
 )
 
@@ -76,6 +77,7 @@ type config struct {
 	forgejoViewerLogin           string
 	forgejoTimeout               time.Duration
 	workspaceRoot                string
+	reviewerWorkspaceRoot        string
 	toolchainRoot                string
 	gitExecutable                string
 }
@@ -128,6 +130,7 @@ func loadConfig(getenv func(string) string) (config, error) {
 		forgejoViewerLogin:          defaultForgejoViewerLogin,
 		forgejoTimeout:              defaultForgejoTimeout,
 		workspaceRoot:               defaultWorkspaceRoot,
+		reviewerWorkspaceRoot:       defaultReviewerWorkspaceRoot,
 		toolchainRoot:               defaultToolchainRoot,
 		gitExecutable:               "git",
 		codexForgejoAuthor:          "codex-lead",
@@ -159,6 +162,9 @@ func loadConfig(getenv func(string) string) (config, error) {
 	}
 	if value := strings.TrimSpace(getenv("COMMITARIUM_WORKSPACE_ROOT")); value != "" {
 		loaded.workspaceRoot = value
+	}
+	if value := strings.TrimSpace(getenv("COMMITARIUM_REVIEWER_WORKSPACE_ROOT")); value != "" {
+		loaded.reviewerWorkspaceRoot = value
 	}
 	if value := strings.TrimSpace(getenv("COMMITARIUM_TOOLCHAIN_ROOT")); value != "" {
 		loaded.toolchainRoot = value
@@ -308,9 +314,19 @@ func run(ctx context.Context, coordinatorConfig config) error {
 	if err != nil {
 		return fmt.Errorf("create managed-checkout service: %w", err)
 	}
+	reviewerCheckoutManager, err := gitworkspace.NewManager(gitworkspace.Config{
+		Root:            coordinatorConfig.reviewerWorkspaceRoot,
+		InternalBaseURL: coordinatorConfig.forgejoURL,
+		HostBaseURL:     coordinatorConfig.forgejoHostURL,
+		TokenFile:       coordinatorConfig.forgejoTokenFile,
+		GitExecutable:   coordinatorConfig.gitExecutable,
+	})
+	if err != nil {
+		return fmt.Errorf("create reviewer managed-checkout service: %w", err)
+	}
 	workspaceService := workspace.NewServiceWithPreparationAndAccess(
 		workspaceStore, featureService, projectService, forgejoClient,
-		checkoutManager, forgejoClient, forgejoClient,
+		checkoutManager, forgejoClient, forgejoClient, reviewerCheckoutManager,
 	)
 	workflowStore := coordinatordatabase.NewWorkflowStore(db)
 	workflowService := workflow.NewService(workflowStore)
@@ -484,7 +500,7 @@ func run(ctx context.Context, coordinatorConfig config) error {
 		log.Printf("recovering %d interrupted workflow(s)", recoveredRuns)
 	}
 	featureDeletionService := workorder.NewService(
-		coordinatordatabase.NewFeatureDeletionStore(db), forgejoClient, checkoutManager,
+		coordinatordatabase.NewFeatureDeletionStore(db), forgejoClient, checkoutManager, reviewerCheckoutManager,
 	)
 	projectDeletionService := projectdeletion.NewService(
 		coordinatordatabase.NewProjectDeletionStore(db),

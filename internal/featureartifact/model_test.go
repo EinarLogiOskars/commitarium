@@ -49,3 +49,42 @@ func TestImplementationPlanRejectsOutOfOrderCompletion(t *testing.T) {
 		t.Fatal("out-of-order completion was accepted")
 	}
 }
+
+func TestAcceptanceTestsNormalizeAndValidate(t *testing.T) {
+	tests, err := (AcceptanceTests{
+		TestCommitID: "0123456789abcdef0123456789abcdef01234567",
+		Tests: []AcceptanceTest{
+			{ID: "creates-report", Title: "Creates the requested report", Status: AcceptanceTestFailed, Note: "provider value"},
+			{ID: "rejects-empty", Title: "Rejects an empty request"},
+		},
+	}).NormalizeInitial(2)
+	if err != nil {
+		t.Fatalf("normalize acceptance tests: %v", err)
+	}
+	if tests.PlanVersion != 2 || tests.ImplementationCommitID != "" ||
+		tests.Tests[0].Position != 1 || tests.Tests[1].Position != 2 ||
+		tests.Tests[0].Status != AcceptanceTestPending || tests.Tests[0].Note != "" {
+		t.Fatalf("normalized acceptance tests = %+v", tests)
+	}
+	tests.ImplementationCommitID = "abcdef0123456789abcdef0123456789abcdef01"
+	tests.Tests[0].Status = AcceptanceTestRunning
+	tests.Tests[1].Status = AcceptanceTestNotApplicable
+	tests.Tests[1].Note = "The accepted goal excludes empty requests."
+	if err := tests.Validate(); err != nil {
+		t.Fatalf("validate acceptance progress: %v", err)
+	}
+}
+
+func TestAcceptanceTestsRejectExecutedStatusWithoutImplementation(t *testing.T) {
+	tests, err := (AcceptanceTests{
+		TestCommitID: "0123456789abcdef0123456789abcdef01234567",
+		Tests:        []AcceptanceTest{{ID: "behavior", Title: "Exercises the behavior"}},
+	}).NormalizeInitial(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests.Tests[0].Status = AcceptanceTestPassed
+	if err := tests.Validate(); err == nil {
+		t.Fatal("executed status without an implementation commit was accepted")
+	}
+}

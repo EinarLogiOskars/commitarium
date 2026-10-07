@@ -42,10 +42,10 @@ type CheckoutCleaner interface {
 type Service struct {
 	store     Store
 	forgejo   ForgejoCleaner
-	checkouts CheckoutCleaner
+	checkouts []CheckoutCleaner
 }
 
-func NewService(store Store, forgejo ForgejoCleaner, checkouts CheckoutCleaner) *Service {
+func NewService(store Store, forgejo ForgejoCleaner, checkouts ...CheckoutCleaner) *Service {
 	return &Service{store: store, forgejo: forgejo, checkouts: checkouts}
 }
 
@@ -93,11 +93,16 @@ func (service *Service) Delete(
 			}
 		}
 		if stored.CheckoutCreatedAt != nil {
-			if service.checkouts == nil {
+			if len(service.checkouts) == 0 {
 				return Result{}, ErrUnsafeArtifacts
 			}
-			if err := service.checkouts.Remove(ctx, stored.ID); err != nil {
-				return Result{}, fmt.Errorf("remove managed checkout: %w", err)
+			for _, checkouts := range service.checkouts {
+				if checkouts == nil {
+					continue
+				}
+				if err := checkouts.Remove(ctx, stored.ID); err != nil {
+					return Result{}, fmt.Errorf("remove managed checkout: %w", err)
+				}
 			}
 		}
 	}
