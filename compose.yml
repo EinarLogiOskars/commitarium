@@ -13,6 +13,7 @@ services:
       COMMITARIUM_FORGEJO_OWNER: ${COMMITARIUM_FORGEJO_OWNER:-commitarium_admin}
       COMMITARIUM_FORGEJO_HOST_URL: http://127.0.0.1:${COMMITARIUM_FORGEJO_PORT:-3001}
       COMMITARIUM_FORGEJO_TOKEN_FILE: /run/commitarium-config/forgejo-token
+      COMMITARIUM_FORGEJO_VIEWER_LOGIN: ${COMMITARIUM_FORGEJO_VIEWER_LOGIN:-commitarium-viewer}
       COMMITARIUM_WORKSPACE_ROOT: /workspaces
       COMMITARIUM_TOOLCHAIN_ROOT: /var/lib/commitarium-toolchains
       COMMITARIUM_CODEX_WORKER_URL: http://codex-worker:8081

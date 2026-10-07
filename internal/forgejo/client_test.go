@@ -437,8 +437,9 @@ func TestClientEnsuresConfiguredRepositoryCollaborators(t *testing.T) {
 	var collaborators []string
 	client, err := NewClient(ClientConfig{
 		BaseURL: "http://forgejo:3000", TokenFile: writeTestToken(t, "admin-token"),
-		Collaborators:  []string{"codex-lead", "claude-reviewer", "CODEX-LEAD"},
-		RequestTimeout: time.Second,
+		Collaborators:     []string{"codex-lead", "claude-reviewer", "CODEX-LEAD"},
+		ReadCollaborators: []string{"commitarium-viewer", "CLAUDE-REVIEWER"},
+		RequestTimeout:    time.Second,
 		HTTPClient: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
 			if request.Method != http.MethodPut ||
 				!strings.HasPrefix(request.URL.Path, "/api/v1/repos/owner/repository/collaborators/") {
@@ -450,10 +451,10 @@ func TestClientEnsuresConfiguredRepositoryCollaborators(t *testing.T) {
 			var payload struct {
 				Permission string `json:"permission"`
 			}
-			if err := json.NewDecoder(request.Body).Decode(&payload); err != nil || payload.Permission != "write" {
+			if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
 				t.Fatalf("unexpected collaborator payload %+v err=%v", payload, err)
 			}
-			collaborators = append(collaborators, strings.TrimPrefix(
+			collaborators = append(collaborators, payload.Permission+":"+strings.TrimPrefix(
 				request.URL.Path, "/api/v1/repos/owner/repository/collaborators/",
 			))
 			return jsonResponse(http.StatusNoContent, ""), nil
@@ -465,8 +466,43 @@ func TestClientEnsuresConfiguredRepositoryCollaborators(t *testing.T) {
 	if err := client.EnsureRepositoryCollaborators(t.Context(), "owner", "repository"); err != nil {
 		t.Fatalf("ensure collaborators: %v", err)
 	}
-	if got, want := strings.Join(collaborators, ","), "codex-lead,claude-reviewer"; got != want {
+	if got, want := strings.Join(collaborators, ","), "write:codex-lead,write:claude-reviewer,read:commitarium-viewer"; got != want {
 		t.Fatalf("collaborators = %q, want %q", got, want)
+	}
+}
+
+func TestClientToleratesViewerBeforeOnboardingButNotMissingAgent(t *testing.T) {
+	tests := []struct {
+		name       string
+		viewerOnly bool
+		wantError  bool
+	}{
+		{name: "optional viewer", viewerOnly: true},
+		{name: "required agent", wantError: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			config := ClientConfig{
+				BaseURL: "http://forgejo:3000", TokenFile: writeTestToken(t, "admin-token"),
+				RequestTimeout: time.Second,
+				HTTPClient: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+					return jsonResponse(http.StatusNotFound, `{}`), nil
+				})},
+			}
+			if test.viewerOnly {
+				config.ReadCollaborators = []string{"commitarium-viewer"}
+			} else {
+				config.Collaborators = []string{"codex-lead"}
+			}
+			client, err := NewClient(config)
+			if err != nil {
+				t.Fatalf("create client: %v", err)
+			}
+			err = client.EnsureRepositoryCollaborators(t.Context(), "owner", "repository")
+			if (err != nil) != test.wantError {
+				t.Fatalf("error = %v, wantError = %v", err, test.wantError)
+			}
+		})
 	}
 }
 

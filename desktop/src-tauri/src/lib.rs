@@ -41,6 +41,8 @@ pub fn run() {
             docker::stack_down,
             docker::stack_update,
             docker::stack_status,
+            bootstrap::get_forgejo_viewer_status,
+            bootstrap::configure_forgejo_viewer,
             phase4::provision_environment_request,
             phase4::run_validation_job,
             phase5::load_desktop_settings,

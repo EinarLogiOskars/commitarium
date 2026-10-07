@@ -132,7 +132,11 @@ function ActivityGroup({ items }: { items: TranscriptEntry[] }) {
   const hasDiff = s.additions > 0 || s.deletions > 0;
   return (
     <div className={`activity-group ${sameRole === "reviewer" ? "activity-group--reviewer" : ""}`}>
-      <button className="activity-group__head" onClick={() => setOpen((o) => !o)} aria-expanded={open}>
+      <button
+        className="activity-group__head"
+        onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
+      >
         <span className="activity-group__summary">{s.text}</span>
         {hasDiff && <DiffStat additions={s.additions} deletions={s.deletions} />}
         <span className="activity-group__chevron">{open ? "⌄" : "›"}</span>
@@ -238,7 +242,8 @@ function summarize(items: TranscriptEntry[]): Summary {
     }
   }
   const parts: string[] = [];
-  if (commands) parts.push(`ran ${commands} command${plural(commands)}${failed ? ` (${failed} failed)` : ""}`);
+  if (commands)
+    parts.push(`ran ${commands} command${plural(commands)}${failed ? ` (${failed} failed)` : ""}`);
   if (created) parts.push(`created ${created} file${plural(created)}`);
   if (edited) parts.push(`edited ${edited} file${plural(edited)}`);
   if (removed) parts.push(`removed ${removed} file${plural(removed)}`);
@@ -246,7 +251,9 @@ function summarize(items: TranscriptEntry[]): Summary {
   if (parts.length === 0) {
     // Pre-structured fallback (older coordinators emit generic prose).
     const cmds = items.filter((e) => /started a command/i.test(e.text)).length;
-    parts.push(cmds ? `ran ${cmds} command${plural(cmds)}` : `${items.length} step${plural(items.length)}`);
+    parts.push(
+      cmds ? `ran ${cmds} command${plural(cmds)}` : `${items.length} step${plural(items.length)}`,
+    );
   }
   const joined = parts.join(", ");
   return { text: joined.charAt(0).toUpperCase() + joined.slice(1), additions, deletions };
@@ -259,4 +266,3 @@ function plural(n: number): string {
 function fmtMs(ms: number): string {
   return ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`;
 }
-

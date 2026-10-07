@@ -25,23 +25,25 @@ const maxResponseBytes = 512 * 1024
 var ErrInvalidClientConfig = errors.New("invalid Forgejo client configuration")
 
 type ClientConfig struct {
-	BaseURL        string
-	HostBaseURL    string
-	Owner          string
-	TokenFile      string
-	Collaborators  []string
-	RequestTimeout time.Duration
-	HTTPClient     *http.Client
+	BaseURL           string
+	HostBaseURL       string
+	Owner             string
+	TokenFile         string
+	Collaborators     []string
+	ReadCollaborators []string
+	RequestTimeout    time.Duration
+	HTTPClient        *http.Client
 }
 
 type Client struct {
-	baseURL        string
-	hostBaseURL    string
-	owner          string
-	tokenFile      string
-	collaborators  []string
-	requestTimeout time.Duration
-	httpClient     *http.Client
+	baseURL           string
+	hostBaseURL       string
+	owner             string
+	tokenFile         string
+	collaborators     []string
+	readCollaborators []string
+	requestTimeout    time.Duration
+	httpClient        *http.Client
 }
 
 func NewClient(config ClientConfig) (*Client, error) {
@@ -71,19 +73,29 @@ func NewClient(config ClientConfig) (*Client, error) {
 		return nil, fmt.Errorf("%w: owner must be a single path segment", ErrInvalidClientConfig)
 	}
 	collaborators := make([]string, 0, len(config.Collaborators))
-	seenCollaborators := make(map[string]struct{}, len(config.Collaborators))
-	for _, configured := range config.Collaborators {
-		collaborator := strings.TrimSpace(configured)
-		if collaborator == "" || strings.ContainsAny(collaborator, "/\\") ||
-			strings.IndexFunc(collaborator, func(r rune) bool { return r <= ' ' }) >= 0 {
-			return nil, fmt.Errorf("%w: collaborator must be a non-empty single path segment", ErrInvalidClientConfig)
+	readCollaborators := make([]string, 0, len(config.ReadCollaborators))
+	seenCollaborators := make(map[string]struct{}, len(config.Collaborators)+len(config.ReadCollaborators))
+	addCollaborators := func(configuredCollaborators []string, target *[]string) error {
+		for _, configured := range configuredCollaborators {
+			collaborator := strings.TrimSpace(configured)
+			if collaborator == "" || strings.ContainsAny(collaborator, "/\\") ||
+				strings.IndexFunc(collaborator, func(r rune) bool { return r <= ' ' }) >= 0 {
+				return fmt.Errorf("%w: collaborator must be a non-empty single path segment", ErrInvalidClientConfig)
+			}
+			key := strings.ToLower(collaborator)
+			if _, exists := seenCollaborators[key]; exists {
+				continue
+			}
+			seenCollaborators[key] = struct{}{}
+			*target = append(*target, collaborator)
 		}
-		key := strings.ToLower(collaborator)
-		if _, exists := seenCollaborators[key]; exists {
-			continue
-		}
-		seenCollaborators[key] = struct{}{}
-		collaborators = append(collaborators, collaborator)
+		return nil
+	}
+	if err := addCollaborators(config.Collaborators, &collaborators); err != nil {
+		return nil, err
+	}
+	if err := addCollaborators(config.ReadCollaborators, &readCollaborators); err != nil {
+		return nil, err
 	}
 	httpClient := config.HTTPClient
 	if httpClient == nil {
@@ -95,13 +107,16 @@ func NewClient(config ClientConfig) (*Client, error) {
 	}
 	return &Client{
 		baseURL: baseURL, hostBaseURL: hostBaseURL, owner: owner, tokenFile: tokenFile,
-		collaborators: collaborators, requestTimeout: config.RequestTimeout, httpClient: &clientCopy,
+		collaborators: collaborators, readCollaborators: readCollaborators,
+		requestTimeout: config.RequestTimeout, httpClient: &clientCopy,
 	}, nil
 }
 
 // EnsureRepositoryCollaborators gives Commitarium's fixed agent identities
-// write access to one internal repository. It is safe to repeat before every
-// work order and does not grant access to any host or upstream repository.
+// write access and its optional audit-viewer identity read access to one
+// internal repository. A missing optional viewer is tolerated until desktop
+// onboarding creates it. It is safe to repeat before every work order and does
+// not grant access to any host or upstream repository.
 func (client *Client) EnsureRepositoryCollaborators(
 	ctx context.Context,
 	owner string,
@@ -111,7 +126,7 @@ func (client *Client) EnsureRepositoryCollaborators(
 	if err != nil {
 		return err
 	}
-	for _, collaborator := range client.collaborators {
+	ensure := func(collaborator, permission string, optional bool) error {
 		status, _, err := client.doJSON(
 			ctx,
 			http.MethodPut,
@@ -119,13 +134,19 @@ func (client *Client) EnsureRepositoryCollaborators(
 				"/collaborators/"+url.PathEscape(collaborator),
 			struct {
 				Permission string `json:"permission"`
-			}{Permission: "write"},
+			}{Permission: permission},
 		)
 		if err != nil {
 			return err
 		}
 		switch status {
 		case http.StatusOK, http.StatusCreated, http.StatusNoContent:
+			return nil
+		case http.StatusNotFound:
+			if optional {
+				return nil
+			}
+			fallthrough
 		default:
 			return fmt.Errorf(
 				"%w: collaborator setup for %q returned HTTP %d",
@@ -133,6 +154,16 @@ func (client *Client) EnsureRepositoryCollaborators(
 				collaborator,
 				status,
 			)
+		}
+	}
+	for _, collaborator := range client.collaborators {
+		if err := ensure(collaborator, "write", false); err != nil {
+			return err
+		}
+	}
+	for _, collaborator := range client.readCollaborators {
+		if err := ensure(collaborator, "read", true); err != nil {
+			return err
 		}
 	}
 	return nil

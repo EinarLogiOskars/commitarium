@@ -1096,6 +1096,7 @@ fn extract_trusted_url(output: &str, provider: Provider) -> Option<String> {
 }
 
 fn extract_device_code(output: &str) -> Option<String> {
+    let output = Zeroizing::new(strip_terminal_control_sequences(output));
     output
         .split(|character: char| !(character.is_ascii_alphanumeric() || character == '-'))
         .find(|token| {
@@ -1111,6 +1112,50 @@ fn extract_device_code(output: &str) -> Option<String> {
                     .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit())
         })
         .map(str::to_string)
+}
+
+/// Codex decorates its device-login prompt with ANSI colors even when its
+/// output is piped. Strip terminal control sequences before tokenizing so the
+/// trailing `m` from an SGR sequence (for example `\x1b[94m`) cannot become
+/// part of the device code. OSC sequences are removed as well because some
+/// provider CLIs render links as terminal hyperlinks.
+fn strip_terminal_control_sequences(output: &str) -> String {
+    let mut cleaned = String::with_capacity(output.len());
+    let mut characters = output.chars().peekable();
+
+    while let Some(character) = characters.next() {
+        if character != '\x1b' {
+            cleaned.push(character);
+            continue;
+        }
+
+        match characters.peek().copied() {
+            Some('[') => {
+                characters.next();
+                for control in characters.by_ref() {
+                    if ('@'..='~').contains(&control) {
+                        break;
+                    }
+                }
+            }
+            Some(']') => {
+                characters.next();
+                let mut saw_escape = false;
+                for control in characters.by_ref() {
+                    if control == '\x07' || (saw_escape && control == '\\') {
+                        break;
+                    }
+                    saw_escape = control == '\x1b';
+                }
+            }
+            Some(_) => {
+                characters.next();
+            }
+            None => {}
+        }
+    }
+
+    cleaned
 }
 
 fn detail(message: &str) -> ProfileDetail {
@@ -1325,7 +1370,7 @@ mod tests {
     fn codex_output_exposes_only_the_trusted_url_and_device_code() {
         let mut parser = LoginOutputParser::new(Provider::Codex);
         parser.ingest(
-            b"Open https://evil.example/x then https://auth.openai.com/codex/device\ncode 80HQ-J9E0B\nsecret-token",
+            b"Open https://evil.example/x then \x1b[94mhttps://auth.openai.com/codex/device\x1b[0m\nEnter this one-time code \x1b[90m(expires in 15 minutes)\x1b[0m\n \x1b[94m80HQ-J9E0B\x1b[0m\nsecret-token",
         );
         assert_eq!(
             parser.browser_url.as_deref(),

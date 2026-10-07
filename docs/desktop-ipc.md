@@ -27,9 +27,11 @@ approve/reject/run and displays progress. See ADR-010.
 - **Async progress:** anything with intermediate states (logins) reports via a
   Tauri **event**, not a blocking command — backend emits, frontend subscribes.
 - **Secrets:** never travel as operating-system command arguments that can be
-  inspected or logged. A secret goes `UI field → Tauri command memory →
-  child-process stdin → private volume`, never into child args, environment
-  values, the coordinator, SQLite, logs, events, Forgejo, or git.
+  inspected or logged. Provider secrets go `UI field → Tauri command memory →
+  child-process stdin → private volume`. The local Forgejo viewer password goes
+  `UI field → Tauri command memory → authenticated loopback API body → Forgejo
+  password hash`. Neither route puts plaintext into child args, environment
+  values, the coordinator, SQLite, logs, events, or git.
 
 ## Implemented commands
 
@@ -52,6 +54,34 @@ Docker / stack lifecycle:
 - `stack_status() -> ServiceStatus[]` — one current row per Compose service,
   ordered by service name. If Compose briefly exposes both sides of a
   container replacement, the running/healthy row wins.
+
+Forgejo audit-viewer onboarding:
+
+- `get_forgejo_viewer_status() -> ForgejoViewerStatus`
+- `configure_forgejo_viewer(password) -> ForgejoViewerStatus`
+
+```ts
+interface ForgejoViewerStatus {
+  configured: boolean;
+  username: "commitarium-viewer";
+  loginUrl: string;
+}
+```
+
+The configure command creates or repairs one fixed restricted, non-admin local
+Forgejo account, disables repository and organization creation, and applies the
+submitted password without storing or returning it. It grants that account
+read access to all existing Commitarium-owned repositories. The coordinator
+also treats this fixed identity as an optional read-only collaborator, so
+repositories created after onboarding receive the same access; before
+onboarding, the missing optional identity does not block imports or work
+orders. Account existence plus its restricted/non-admin flags is the durable
+configured state inside the Forgejo volume.
+
+The password travels only in the Tauri invocation and the authenticated local
+Forgejo API request body. It is never placed in process arguments, environment
+variables, token files, application state, logs, events, or command results.
+The status result's `loginUrl` is always a credential-free loopback URL.
 
 Docker probes and Compose lifecycle commands execute on blocking worker
 threads. Long daemon startup, image pulls, and container reconciliation must

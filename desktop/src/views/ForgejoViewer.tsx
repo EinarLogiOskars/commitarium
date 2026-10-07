@@ -28,9 +28,9 @@ export function ForgejoViewer({ onClose }: { onClose: () => void }) {
     };
   }, []);
 
-  const tooShort = password.length > 0 && password.length < 8;
+  const tooShort = password.length > 0 && password.length < 12;
   const mismatch = confirm.length > 0 && confirm !== password;
-  const canSave = password.length >= 8 && confirm === password && !busy;
+  const canSave = password.length >= 12 && confirm === password && !busy;
 
   const save = async () => {
     setBusy(true);
@@ -54,8 +54,8 @@ export function ForgejoViewer({ onClose }: { onClose: () => void }) {
       <div className="modal__card" onClick={(e) => e.stopPropagation()}>
         <h2>Audit viewer</h2>
         <p className="muted">
-          Set a password for a read-only account to browse the internal Forgejo — repositories,
-          pull requests, and reviews — in your browser. It can't create or change anything.
+          Set a password for a read-only account to browse the internal Forgejo — repositories, pull
+          requests, and reviews — in your browser. It can't create or change anything.
         </p>
         {error && <div className="banner banner--error">{error}</div>}
 
@@ -90,7 +90,7 @@ export function ForgejoViewer({ onClose }: { onClose: () => void }) {
             autoComplete="new-password"
           />
         </label>
-        {tooShort && <p className="muted note">Use at least 8 characters.</p>}
+        {tooShort && <p className="muted note">Use at least 12 characters.</p>}
         {mismatch && <p className="muted note">Passwords don't match.</p>}
 
         <div className="row">

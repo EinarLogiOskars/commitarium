@@ -41,6 +41,7 @@ const (
 	defaultForgejoURL             = "http://forgejo:3000"
 	defaultForgejoHostURL         = "http://127.0.0.1:3001"
 	defaultForgejoTokenFile       = "/run/commitarium-config/forgejo-token"
+	defaultForgejoViewerLogin     = "commitarium-viewer"
 	defaultForgejoTimeout         = 10 * time.Second
 	defaultWorkspaceRoot          = "/workspaces"
 	defaultToolchainRoot          = "/var/lib/commitarium-toolchains"
@@ -72,6 +73,7 @@ type config struct {
 	forgejoOwner                 string
 	forgejoHostURL               string
 	forgejoTokenFile             string
+	forgejoViewerLogin           string
 	forgejoTimeout               time.Duration
 	workspaceRoot                string
 	toolchainRoot                string
@@ -123,6 +125,7 @@ func loadConfig(getenv func(string) string) (config, error) {
 		forgejoOwner:                "commitarium_admin",
 		forgejoHostURL:              defaultForgejoHostURL,
 		forgejoTokenFile:            defaultForgejoTokenFile,
+		forgejoViewerLogin:          defaultForgejoViewerLogin,
 		forgejoTimeout:              defaultForgejoTimeout,
 		workspaceRoot:               defaultWorkspaceRoot,
 		toolchainRoot:               defaultToolchainRoot,
@@ -143,6 +146,9 @@ func loadConfig(getenv func(string) string) (config, error) {
 	}
 	if value := strings.TrimSpace(getenv("COMMITARIUM_FORGEJO_TOKEN_FILE")); value != "" {
 		loaded.forgejoTokenFile = value
+	}
+	if value := strings.TrimSpace(getenv("COMMITARIUM_FORGEJO_VIEWER_LOGIN")); value != "" {
+		loaded.forgejoViewerLogin = value
 	}
 	if value := strings.TrimSpace(getenv("COMMITARIUM_FORGEJO_REQUEST_TIMEOUT")); value != "" {
 		parsed, err := time.ParseDuration(value)
@@ -267,7 +273,8 @@ func run(ctx context.Context, coordinatorConfig config) error {
 			coordinatorConfig.claudeForgejoAuthor,
 			coordinatorConfig.claudeReviewerForgejoAuthor,
 		},
-		RequestTimeout: coordinatorConfig.forgejoTimeout,
+		ReadCollaborators: []string{coordinatorConfig.forgejoViewerLogin},
+		RequestTimeout:    coordinatorConfig.forgejoTimeout,
 	})
 	if err != nil {
 		return fmt.Errorf("create Forgejo client: %w", err)

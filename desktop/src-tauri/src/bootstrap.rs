@@ -6,6 +6,9 @@
 //! files and users are adopted so repeated app starts are harmless.
 
 use getrandom::fill as random_fill;
+use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION};
+use reqwest::{Method, StatusCode, Url};
+use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
@@ -19,6 +22,13 @@ use crate::docker;
 
 const FORGEJO_READY_ATTEMPTS: usize = 60;
 const FORGEJO_READY_DELAY: Duration = Duration::from_millis(250);
+const FORGEJO_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+const FORGEJO_VIEWER_USERNAME: &str = "commitarium-viewer";
+const FORGEJO_VIEWER_EMAIL: &str = "audit-viewer@commitarium.local";
+const FORGEJO_VIEWER_FULL_NAME: &str = "Commitarium Audit Viewer";
+const FORGEJO_DEFAULT_PORT: u16 = 3001;
+const FORGEJO_REPOSITORY_PAGE_SIZE: usize = 50;
+const FORGEJO_MAX_REPOSITORY_PAGES: usize = 1_000;
 
 struct SecretLocation {
     source_variable: &'static str,
@@ -109,6 +119,49 @@ const FORGEJO_IDENTITIES: &[ForgejoIdentity] = &[
     },
 ];
 
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ForgejoViewerStatus {
+    configured: bool,
+    username: &'static str,
+    login_url: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct ForgejoUser {
+    login: String,
+    active: bool,
+    is_admin: bool,
+    prohibit_login: bool,
+    restricted: bool,
+}
+
+impl ForgejoUser {
+    fn is_configured_viewer(&self) -> bool {
+        self.login == FORGEJO_VIEWER_USERNAME
+            && self.active
+            && !self.is_admin
+            && !self.prohibit_login
+            && self.restricted
+    }
+}
+
+#[derive(Deserialize)]
+struct ForgejoRepositoryOwner {
+    login: String,
+}
+
+#[derive(Deserialize)]
+struct ForgejoRepository {
+    name: String,
+    owner: ForgejoRepositoryOwner,
+}
+
+struct ForgejoApi {
+    base_url: Url,
+    client: reqwest::Client,
+}
+
 fn compose_root(compose_file: &Path) -> Result<&Path, String> {
     compose_file
         .parent()
@@ -121,6 +174,317 @@ fn secret_path(root: &Path, location: &SecretLocation) -> PathBuf {
         .filter(|value| !value.trim().is_empty())
         .map(PathBuf::from)
         .unwrap_or_else(|| root.join(location.relative_path))
+}
+
+fn forgejo_host_base_url() -> Result<Url, String> {
+    let configured = if let Ok(value) = std::env::var("COMMITARIUM_FORGEJO_HOST_URL") {
+        value
+    } else {
+        let port = match std::env::var("COMMITARIUM_FORGEJO_PORT") {
+            Ok(value) => value
+                .parse::<u16>()
+                .ok()
+                .filter(|port| *port > 0)
+                .ok_or_else(|| "COMMITARIUM_FORGEJO_PORT must be a valid TCP port".to_string())?,
+            Err(_) => FORGEJO_DEFAULT_PORT,
+        };
+        format!("http://127.0.0.1:{port}/")
+    };
+    let mut parsed = Url::parse(configured.trim())
+        .map_err(|_| "the Forgejo browser URL is invalid".to_string())?;
+    let loopback = parsed
+        .host_str()
+        .is_some_and(|host| matches!(host, "127.0.0.1" | "localhost" | "::1"));
+    if parsed.scheme() != "http"
+        || !loopback
+        || parsed.username() != ""
+        || parsed.password().is_some()
+        || parsed.query().is_some()
+        || parsed.fragment().is_some()
+    {
+        return Err("the Forgejo browser URL must be a credential-free loopback HTTP URL".into());
+    }
+    parsed.set_path("/");
+    Ok(parsed)
+}
+
+fn validate_viewer_password(password: &str) -> Result<(), String> {
+    if password.chars().count() < 12 {
+        return Err("the audit viewer password must be at least 12 characters".to_string());
+    }
+    if password.len() > 255 {
+        return Err("the audit viewer password must be at most 255 bytes".to_string());
+    }
+    if password.chars().any(char::is_control) {
+        return Err("the audit viewer password cannot contain control characters".to_string());
+    }
+    Ok(())
+}
+
+impl ForgejoApi {
+    async fn new(compose_file: &Path) -> Result<Self, String> {
+        let root = compose_root(compose_file)?;
+        let token_path = secret_path(root, &FORGEJO_IDENTITIES[0].token);
+        let token = tokio::fs::read(&token_path)
+            .await
+            .map(Zeroizing::new)
+            .map_err(|_| {
+                "the internal Forgejo administrator credential is unavailable".to_string()
+            })?;
+        let token = trim_ascii_whitespace(&token);
+        validate_secret_bytes(token)?;
+
+        let mut encoded = Zeroizing::new(Vec::with_capacity(6 + token.len()));
+        encoded.extend_from_slice(b"token ");
+        encoded.extend_from_slice(token);
+        let mut authorization = HeaderValue::from_bytes(&encoded)
+            .map_err(|_| "the internal Forgejo administrator credential is invalid".to_string())?;
+        authorization.set_sensitive(true);
+        let mut headers = HeaderMap::new();
+        headers.insert(AUTHORIZATION, authorization);
+
+        let client = reqwest::Client::builder()
+            .default_headers(headers)
+            .redirect(reqwest::redirect::Policy::none())
+            .timeout(FORGEJO_REQUEST_TIMEOUT)
+            .build()
+            .map_err(|_| "the Forgejo audit-viewer client could not start".to_string())?;
+        Ok(Self {
+            base_url: forgejo_host_base_url()?,
+            client,
+        })
+    }
+
+    fn endpoint(&self, segments: &[&str]) -> Result<Url, String> {
+        let mut url = self.base_url.clone();
+        let mut path = url
+            .path_segments_mut()
+            .map_err(|_| "the Forgejo browser URL cannot be used for API requests".to_string())?;
+        path.pop_if_empty();
+        path.extend(["api", "v1"]);
+        path.extend(segments.iter().copied());
+        drop(path);
+        Ok(url)
+    }
+
+    async fn viewer(&self) -> Result<Option<ForgejoUser>, String> {
+        let response = self
+            .client
+            .get(self.endpoint(&["users", FORGEJO_VIEWER_USERNAME])?)
+            .send()
+            .await
+            .map_err(|_| "Forgejo is unavailable while checking audit access".to_string())?;
+        match response.status() {
+            StatusCode::OK => response
+                .json()
+                .await
+                .map(Some)
+                .map_err(|_| "Forgejo returned an invalid audit-viewer account".to_string()),
+            StatusCode::NOT_FOUND => Ok(None),
+            status => Err(format!(
+                "Forgejo could not check the audit-viewer account (HTTP {status})"
+            )),
+        }
+    }
+
+    async fn configure_viewer(&self, password: &str) -> Result<(), String> {
+        #[derive(Serialize)]
+        struct CreateViewer<'a> {
+            username: &'static str,
+            email: &'static str,
+            full_name: &'static str,
+            password: &'a str,
+            must_change_password: bool,
+            restricted: bool,
+            send_notify: bool,
+            visibility: &'static str,
+        }
+        #[derive(Serialize)]
+        struct EditViewer<'a> {
+            email: &'static str,
+            full_name: &'static str,
+            password: &'a str,
+            must_change_password: bool,
+            active: bool,
+            admin: bool,
+            allow_git_hook: bool,
+            allow_import_local: bool,
+            max_repo_creation: i32,
+            prohibit_login: bool,
+            allow_create_organization: bool,
+            restricted: bool,
+            visibility: &'static str,
+            hide_email: bool,
+        }
+
+        if self.viewer().await?.is_none() {
+            let response = self
+                .client
+                .post(self.endpoint(&["admin", "users"])?)
+                .json(&CreateViewer {
+                    username: FORGEJO_VIEWER_USERNAME,
+                    email: FORGEJO_VIEWER_EMAIL,
+                    full_name: FORGEJO_VIEWER_FULL_NAME,
+                    password,
+                    must_change_password: false,
+                    restricted: true,
+                    send_notify: false,
+                    visibility: "private",
+                })
+                .send()
+                .await
+                .map_err(|_| "Forgejo is unavailable while creating audit access".to_string())?;
+            if !matches!(
+                response.status(),
+                StatusCode::CREATED | StatusCode::CONFLICT
+            ) {
+                return Err(format!(
+                    "Forgejo rejected the audit-viewer account (HTTP {})",
+                    response.status()
+                ));
+            }
+        }
+
+        let response = self
+            .client
+            .patch(self.endpoint(&["admin", "users", FORGEJO_VIEWER_USERNAME])?)
+            .json(&EditViewer {
+                email: FORGEJO_VIEWER_EMAIL,
+                full_name: FORGEJO_VIEWER_FULL_NAME,
+                password,
+                must_change_password: false,
+                active: true,
+                admin: false,
+                allow_git_hook: false,
+                allow_import_local: false,
+                max_repo_creation: 0,
+                prohibit_login: false,
+                allow_create_organization: false,
+                restricted: true,
+                visibility: "private",
+                hide_email: true,
+            })
+            .send()
+            .await
+            .map_err(|_| "Forgejo is unavailable while securing audit access".to_string())?;
+        if response.status() != StatusCode::OK {
+            return Err(format!(
+                "Forgejo rejected the audit-viewer settings (HTTP {})",
+                response.status()
+            ));
+        }
+        Ok(())
+    }
+
+    async fn owned_repositories(&self) -> Result<Vec<ForgejoRepository>, String> {
+        let owner = FORGEJO_IDENTITIES[0].username;
+        let mut repositories = Vec::new();
+        for page in 1..=FORGEJO_MAX_REPOSITORY_PAGES {
+            let mut url = self.endpoint(&["user", "repos"])?;
+            url.query_pairs_mut()
+                .append_pair("page", &page.to_string())
+                .append_pair("limit", &FORGEJO_REPOSITORY_PAGE_SIZE.to_string());
+            let response = self.client.get(url).send().await.map_err(|_| {
+                "Forgejo is unavailable while listing internal repositories".to_string()
+            })?;
+            if response.status() != StatusCode::OK {
+                return Err(format!(
+                    "Forgejo could not list internal repositories (HTTP {})",
+                    response.status()
+                ));
+            }
+            let page_repositories: Vec<ForgejoRepository> = response
+                .json()
+                .await
+                .map_err(|_| "Forgejo returned an invalid repository list".to_string())?;
+            let count = page_repositories.len();
+            repositories.extend(
+                page_repositories
+                    .into_iter()
+                    .filter(|repository| repository.owner.login == owner),
+            );
+            if count < FORGEJO_REPOSITORY_PAGE_SIZE {
+                return Ok(repositories);
+            }
+        }
+        Err("Forgejo returned too many repository pages to reconcile safely".to_string())
+    }
+
+    async fn grant_viewer_access(&self, repository: &ForgejoRepository) -> Result<(), String> {
+        #[derive(Serialize)]
+        struct Permission<'a> {
+            permission: &'a str,
+        }
+        let response = self
+            .client
+            .request(
+                Method::PUT,
+                self.endpoint(&[
+                    "repos",
+                    &repository.owner.login,
+                    &repository.name,
+                    "collaborators",
+                    FORGEJO_VIEWER_USERNAME,
+                ])?,
+            )
+            .json(&Permission { permission: "read" })
+            .send()
+            .await
+            .map_err(|_| "Forgejo is unavailable while granting audit access".to_string())?;
+        if !matches!(
+            response.status(),
+            StatusCode::OK | StatusCode::CREATED | StatusCode::NO_CONTENT
+        ) {
+            return Err(format!(
+                "Forgejo could not grant audit access to an internal repository (HTTP {})",
+                response.status()
+            ));
+        }
+        Ok(())
+    }
+
+    async fn backfill_viewer_access(&self) -> Result<(), String> {
+        for repository in self.owned_repositories().await? {
+            self.grant_viewer_access(&repository).await?;
+        }
+        Ok(())
+    }
+
+    fn status(&self, viewer: Option<&ForgejoUser>) -> ForgejoViewerStatus {
+        let mut login_url = self.base_url.clone();
+        login_url.set_path("/user/login");
+        ForgejoViewerStatus {
+            configured: viewer.is_some_and(ForgejoUser::is_configured_viewer),
+            username: FORGEJO_VIEWER_USERNAME,
+            login_url: login_url.to_string(),
+        }
+    }
+}
+
+#[tauri::command]
+pub async fn get_forgejo_viewer_status() -> Result<ForgejoViewerStatus, String> {
+    let compose_file = docker::compose_file()?;
+    let api = ForgejoApi::new(&compose_file).await?;
+    let viewer = api.viewer().await?;
+    Ok(api.status(viewer.as_ref()))
+}
+
+#[tauri::command]
+pub async fn configure_forgejo_viewer(password: String) -> Result<ForgejoViewerStatus, String> {
+    let password = Zeroizing::new(password);
+    validate_viewer_password(&password)?;
+    let compose_file = docker::compose_file()?;
+    let api = ForgejoApi::new(&compose_file).await?;
+    api.configure_viewer(&password).await?;
+    api.backfill_viewer_access().await?;
+    let viewer = api.viewer().await?;
+    if !viewer
+        .as_ref()
+        .is_some_and(ForgejoUser::is_configured_viewer)
+    {
+        return Err("Forgejo did not preserve the secured audit-viewer account".to_string());
+    }
+    Ok(api.status(viewer.as_ref()))
 }
 
 /// Ensure all coordinator-to-worker bearer tokens exist before Compose can
@@ -624,6 +988,56 @@ mod tests {
             parsed,
             HashSet::from(["commitarium_admin".to_string(), "claude-lead".to_string()])
         );
+    }
+
+    #[test]
+    fn audit_viewer_password_has_a_bounded_non_control_contract() {
+        assert!(validate_viewer_password("twelve-chars").is_ok());
+        assert!(validate_viewer_password("too-short").is_err());
+        assert!(validate_viewer_password("valid-length\n").is_err());
+        assert!(validate_viewer_password(&"x".repeat(256)).is_err());
+    }
+
+    #[test]
+    fn only_the_restricted_non_admin_account_is_a_configured_viewer() {
+        let expected = ForgejoUser {
+            login: FORGEJO_VIEWER_USERNAME.to_string(),
+            active: true,
+            is_admin: false,
+            prohibit_login: false,
+            restricted: true,
+        };
+        assert!(expected.is_configured_viewer());
+
+        let cases = [
+            ForgejoUser {
+                is_admin: true,
+                ..expected.clone()
+            },
+            ForgejoUser {
+                restricted: false,
+                ..expected.clone()
+            },
+            ForgejoUser {
+                active: false,
+                ..expected.clone()
+            },
+        ];
+        assert!(cases.iter().all(|viewer| !viewer.is_configured_viewer()));
+    }
+
+    #[test]
+    fn audit_viewer_status_serializes_for_the_frontend_contract() {
+        let value = serde_json::to_value(ForgejoViewerStatus {
+            configured: true,
+            username: FORGEJO_VIEWER_USERNAME,
+            login_url: "http://127.0.0.1:3001/user/login".to_string(),
+        })
+        .expect("serialize viewer status");
+        assert_eq!(value["configured"], true);
+        assert_eq!(value["username"], FORGEJO_VIEWER_USERNAME);
+        assert_eq!(value["loginUrl"], "http://127.0.0.1:3001/user/login");
+        assert!(value.get("login_url").is_none());
     }
 
     #[test]
