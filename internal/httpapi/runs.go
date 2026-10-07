@@ -38,6 +38,86 @@ type runResponse struct {
 	Sessions                   []sessionResponse            `json:"sessions"`
 	InterventionTargets        []interventionTargetResponse `json:"intervention_targets"`
 	Intervention               *interventionResponse        `json:"intervention,omitempty"`
+	Recovery                   *recoveryResponse            `json:"recovery,omitempty"`
+}
+
+type recoveryResponse struct {
+	Action           orchestration.RecoveryAction   `json:"action"`
+	Role             worker.Role                    `json:"role,omitempty"`
+	Provider         project.AgentProvider          `json:"provider,omitempty"`
+	Classification   string                         `json:"classification"`
+	Evidence         []string                       `json:"evidence"`
+	MissingResult    string                         `json:"missing_result,omitempty"`
+	ProcessStatus    string                         `json:"process_status"`
+	Successor        string                         `json:"successor"`
+	AvailableActions []orchestration.RecoveryAction `json:"available_actions"`
+}
+
+func newRecoveryResponse(
+	action orchestration.RecoveryAction,
+	run execution.Run,
+	sessions []sessionResponse,
+	providers agentProvidersResponse,
+) *recoveryResponse {
+	classification := "incomplete_result"
+	processStatus := "confirmed"
+	successor := "resume_then_fresh"
+	missingResult := "structured_result"
+	if action == orchestration.RecoveryActionRecheck {
+		classification, successor = "rechecking_durable_effects", "none"
+		missingResult = ""
+	}
+	if action == orchestration.RecoveryActionReplace {
+		successor = "fresh_conversation"
+	}
+	if run.Status == execution.RunStatusRunning {
+		processStatus = "successor_running"
+	} else {
+		successor = "none"
+		missingResult = ""
+		classification = "confirmed_from_effects"
+	}
+	if action == orchestration.RecoveryActionLeavePaused {
+		classification, processStatus, successor = "left_paused", "paused", "none"
+		missingResult = ""
+	} else if run.Status == execution.RunStatusWaitingForUser && run.WaitKind == execution.RunWaitKindBlocker {
+		classification, processStatus, successor = "unresolved", "paused", "none"
+		if action != orchestration.RecoveryActionRecheck {
+			missingResult = "structured_result"
+		}
+	} else if run.Status == execution.RunStatusWaitingForUser {
+		processStatus = "paused"
+	}
+	role, provider := recoveryRoleAndProvider(sessions, providers)
+	evidence := make([]string, 0, 1)
+	if run.Reason != "" {
+		evidence = append(evidence, run.Reason)
+	}
+	return &recoveryResponse{
+		Action: action, Role: role, Provider: provider,
+		Classification: classification, Evidence: evidence, MissingResult: missingResult,
+		ProcessStatus: processStatus, Successor: successor,
+		AvailableActions: []orchestration.RecoveryAction{
+			orchestration.RecoveryActionRecheck, orchestration.RecoveryActionContinue,
+			orchestration.RecoveryActionReplace, orchestration.RecoveryActionLeavePaused,
+		},
+	}
+}
+
+func recoveryRoleAndProvider(
+	sessions []sessionResponse,
+	providers agentProvidersResponse,
+) (worker.Role, project.AgentProvider) {
+	for index := len(sessions) - 1; index >= 0; index-- {
+		role := sessions[index].Role
+		if role == worker.RoleLead {
+			return role, providers.Lead
+		}
+		if role == worker.RoleReviewer {
+			return role, providers.Reviewer
+		}
+	}
+	return "", ""
 }
 
 type interventionTargetResponse struct {

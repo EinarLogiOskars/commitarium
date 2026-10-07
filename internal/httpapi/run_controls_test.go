@@ -112,8 +112,63 @@ func TestRecoverRunHandlerRequiresBlockerControlAndReturnsState(t *testing.T) {
 	}
 	if body := response.Body.String(); !containsAll(
 		body, `"wait_kind":"blocker"`, `"reason":"The coordinator could not safely confirm`,
+		`"action":"continue"`, `"classification":"unresolved"`,
+		`"available_actions":["recheck","continue","replace","leave_paused"]`,
 	) {
 		t.Fatalf("recovery response omitted blocker state: %s", body)
+	}
+}
+
+func TestRecoverRunHandlerAcceptsExplicitUserControl(t *testing.T) {
+	workflow := &planningStarterStub{run: execution.Run{
+		ID: "run_recovery", FeatureID: "fea_recovery", Status: execution.RunStatusRunning,
+		Reason: "A fenced successor is completing the missing result.",
+	}}
+	handler := NewWithWorkspaceAndRealWorkflowService(
+		nil, nil, nil,
+		planningExecutionStub{sessions: []execution.Session{{Role: "reviewer"}}},
+		nil, nil, nil, workflow,
+	)
+	request := httptest.NewRequest(
+		http.MethodPost, "/api/v1/runs/run_recovery/recover",
+		strings.NewReader(`{"action":"replace","message":"Re-read the accepted goal before finishing."}`),
+	)
+	request.Header.Set("Idempotency-Key", "replace-recovery")
+	response := httptest.NewRecorder()
+
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d: %s", response.Code, response.Body.String())
+	}
+	if workflow.receivedRecovery.Action != orchestration.RecoveryActionReplace ||
+		workflow.receivedRecovery.Message != "Re-read the accepted goal before finishing." {
+		t.Fatalf("unexpected recovery directive: %+v", workflow.receivedRecovery)
+	}
+	if body := response.Body.String(); !containsAll(
+		body, `"action":"replace"`, `"role":"reviewer"`, `"provider":"codex"`,
+		`"classification":"incomplete_result"`, `"missing_result":"structured_result"`,
+		`"process_status":"successor_running"`, `"successor":"fresh_conversation"`,
+	) {
+		t.Fatalf("recovery response omitted structured status: %s", body)
+	}
+}
+
+func TestRecoverRunHandlerRejectsUnknownAction(t *testing.T) {
+	handler := NewWithWorkspaceAndRealWorkflowService(
+		nil, nil, nil, planningExecutionStub{}, nil, nil, nil, &planningStarterStub{},
+	)
+	request := httptest.NewRequest(
+		http.MethodPost, "/api/v1/runs/run_recovery/recover",
+		strings.NewReader(`{"action":"hope"}`),
+	)
+	request.Header.Set("Idempotency-Key", "invalid-recovery")
+	response := httptest.NewRecorder()
+
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), `"code":"invalid_recovery_action"`) {
+		t.Fatalf("expected invalid recovery action, got %d: %s", response.Code, response.Body.String())
 	}
 }
 

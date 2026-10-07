@@ -1636,6 +1636,13 @@ func TestRemoteLeadStartsPlanningInManagedWorkspace(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create completed-review recovery starter: %v", err)
 	}
+	leftPaused, admitted, err := restarted.RecoverBlockerWithDirective(
+		t.Context(), runID, "leave-completed-review-paused",
+		RecoveryDirective{Action: RecoveryActionLeavePaused},
+	)
+	if err != nil || admitted || leftPaused.WaitKind != execution.RunWaitKindBlocker {
+		t.Fatalf("leave-paused recovery changed the blocker: run=%+v admitted=%t err=%v", leftPaused, admitted, err)
+	}
 	rechecking, admitted, err := restarted.RecoverBlocker(
 		t.Context(), runID, "recover-completed-review",
 	)

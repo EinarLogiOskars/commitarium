@@ -15,14 +15,15 @@ import (
 )
 
 type planningStarterStub struct {
-	run             execution.Run
-	err             error
-	receivedRunID   string
-	receivedKey     string
-	receivedAction  string
-	receivedTarget  worker.Role
-	receivedMessage string
-	intervention    execution.Intervention
+	run              execution.Run
+	err              error
+	receivedRunID    string
+	receivedKey      string
+	receivedAction   string
+	receivedTarget   worker.Role
+	receivedMessage  string
+	receivedRecovery orchestration.RecoveryDirective
+	intervention     execution.Intervention
 }
 
 func (stub *planningStarterStub) StartPlanning(
@@ -105,6 +106,19 @@ func (stub *planningStarterStub) RecoverBlocker(
 	stub.receivedRunID = runID
 	stub.receivedKey = actionID
 	stub.receivedAction = "recover"
+	return stub.run, true, stub.err
+}
+
+func (stub *planningStarterStub) RecoverBlockerWithDirective(
+	_ context.Context,
+	runID string,
+	actionID string,
+	directive orchestration.RecoveryDirective,
+) (execution.Run, bool, error) {
+	stub.receivedRunID = runID
+	stub.receivedKey = actionID
+	stub.receivedAction = "recover"
+	stub.receivedRecovery = directive
 	return stub.run, true, stub.err
 }
 

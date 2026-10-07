@@ -76,6 +76,20 @@ var ErrInterventionPending = errors.New("an intervention must be answered before
 var ErrInterventionClarificationRequired = errors.New("the intervention answer requires more user clarification")
 var ErrInterventionReplanningRequired = errors.New("the intervention answer requires a safe replanning decision")
 
+type RecoveryAction string
+
+const (
+	RecoveryActionRecheck     RecoveryAction = "recheck"
+	RecoveryActionContinue    RecoveryAction = "continue"
+	RecoveryActionReplace     RecoveryAction = "replace"
+	RecoveryActionLeavePaused RecoveryAction = "leave_paused"
+)
+
+type RecoveryDirective struct {
+	Action  RecoveryAction
+	Message string
+}
+
 // RemoteLeadExecution is the durable coordinator state used by the first real
 // lead turn. It deliberately contains no workflow transition: goal
 // clarification leaves the feature in draft.
@@ -480,6 +494,16 @@ func (starter *RemoteLeadStarter) Recover(
 	storedFeature feature.Feature,
 	recoveryPolicy project.RecoveryPolicy,
 ) error {
+	return starter.recoverWithDirective(ctx, run, storedFeature, recoveryPolicy, RecoveryDirective{})
+}
+
+func (starter *RemoteLeadStarter) recoverWithDirective(
+	ctx context.Context,
+	run execution.Run,
+	storedFeature feature.Feature,
+	recoveryPolicy project.RecoveryPolicy,
+	directive RecoveryDirective,
+) error {
 	if storedFeature.State == feature.StateCompleted {
 		_, _, err := starter.Merge(ctx, run.ID, run.ID+":recovery-merge")
 		return err
@@ -550,7 +574,7 @@ func (starter *RemoteLeadStarter) Recover(
 				starter.release(run.ID)
 				return checkpointErr
 			}
-			request := remoteLeadRequest{runID: run.ID, allowRecoveryContinuation: recoveryPolicy == project.RecoveryPolicyAutomatic, identity: workerhttp.MutationIdentity{AttemptReference: workerhttp.AttemptReference{SessionID: active.ID, AttemptID: checkpoint.AttemptID}}}
+			request := remoteLeadRequest{runID: run.ID, allowRecoveryContinuation: recoveryPolicy == project.RecoveryPolicyAutomatic, forceFreshRecovery: directive.Action == RecoveryActionReplace, recoveryMessage: directive.Message, identity: workerhttp.MutationIdentity{AttemptReference: workerhttp.AttemptReference{SessionID: active.ID, AttemptID: checkpoint.AttemptID}}}
 			switch {
 			case active.Role == worker.RoleLead:
 				version, _, ok := workflowAttemptVersionAndTurn(active.ID, "implementation", checkpoint.AttemptID)
@@ -659,6 +683,8 @@ func (starter *RemoteLeadStarter) Recover(
 	request := remoteLeadRequest{
 		runID:                     run.ID,
 		allowRecoveryContinuation: recoveryPolicy == project.RecoveryPolicyAutomatic,
+		forceFreshRecovery:        directive.Action == RecoveryActionReplace,
+		recoveryMessage:           directive.Message,
 		agentName:                 "lead agent",
 		waitingReason:             waitingReasonForAttempt(session, checkpoint.AttemptID),
 		waitKind:                  waitKindForAttempt(session, checkpoint.AttemptID),
@@ -729,17 +755,34 @@ func (starter *RemoteLeadStarter) Recover(
 	return nil
 }
 
-// RecoverBlocker lets a user explicitly retry reconciliation of the exact
-// durable checkpoint that produced a blocker. Recover performs only worker
-// lookups, event reattachment, and already-admitted result verification; it
-// never calls PutAttempt for a replacement provider turn. The per-run claim
-// folds concurrent retries onto the same in-flight reconciliation.
+// RecoverBlocker preserves the original approve-and-continue behavior for
+// existing clients. New clients can choose a narrower directive below.
 func (starter *RemoteLeadStarter) RecoverBlocker(
 	ctx context.Context,
 	runID string,
 	actionID string,
 ) (execution.Run, bool, error) {
+	return starter.RecoverBlockerWithDirective(ctx, runID, actionID, RecoveryDirective{Action: RecoveryActionContinue})
+}
+
+func (starter *RemoteLeadStarter) RecoverBlockerWithDirective(
+	ctx context.Context,
+	runID string,
+	actionID string,
+	directive RecoveryDirective,
+) (execution.Run, bool, error) {
 	if strings.TrimSpace(runID) == "" || strings.TrimSpace(actionID) == "" {
+		return execution.Run{}, false, ErrInvalidRunRequest
+	}
+	if directive.Action == "" {
+		directive.Action = RecoveryActionContinue
+	}
+	directive.Message = strings.TrimSpace(directive.Message)
+	if directive.Action != RecoveryActionRecheck && directive.Action != RecoveryActionContinue &&
+		directive.Action != RecoveryActionReplace && directive.Action != RecoveryActionLeavePaused {
+		return execution.Run{}, false, ErrInvalidRunRequest
+	}
+	if len(directive.Message) > 16*1024 {
 		return execution.Run{}, false, ErrInvalidRunRequest
 	}
 	run, err := starter.executions.GetRun(ctx, runID)
@@ -749,6 +792,9 @@ func (starter *RemoteLeadStarter) RecoverBlocker(
 	if run.Status != execution.RunStatusWaitingForUser || run.Paused ||
 		run.WaitKind != execution.RunWaitKindBlocker {
 		return execution.Run{}, false, ErrRecoveryNotAllowed
+	}
+	if directive.Action == RecoveryActionLeavePaused {
+		return run, false, nil
 	}
 	storedFeature, err := starter.features.GetByID(ctx, run.FeatureID)
 	if err != nil {
@@ -769,8 +815,12 @@ func (starter *RemoteLeadStarter) RecoverBlocker(
 		return execution.Run{}, false, err
 	}
 
-	err = starter.Recover(
-		context.WithoutCancel(ctx), rechecking, storedFeature, project.RecoveryPolicyAutomatic,
+	policy := project.RecoveryPolicyAutomatic
+	if directive.Action == RecoveryActionRecheck {
+		policy = project.RecoveryPolicyApprovalRequired
+	}
+	err = starter.recoverWithDirective(
+		context.WithoutCancel(ctx), rechecking, storedFeature, policy, directive,
 	)
 	if err != nil && !errors.Is(err, ErrRunAlreadyActive) {
 		// A failed re-check is itself a safe outcome: retain the existing blocker
@@ -1825,6 +1875,8 @@ type remoteLeadRequest struct {
 	identity                  workerhttp.MutationIdentity
 	request                   workerhttp.PutAttemptRequest
 	allowRecoveryContinuation bool
+	forceFreshRecovery        bool
+	recoveryMessage           string
 }
 
 func interventionAttemptID(sessionID, interventionID string) string {
@@ -4104,6 +4156,41 @@ func (starter *RemoteLeadStarter) launchRecoverySuccessor(
 	storedFeature feature.Feature,
 	briefing string,
 ) {
+	if request.recoveryMessage != "" {
+		briefing += "\n\nUser recovery guidance:\n" + request.recoveryMessage
+		if len(briefing) > workerhttp.MaxInstructionsBytes {
+			starter.requireReview(ctx, request, errors.New("recovery briefing and user guidance exceed the worker instruction limit"))
+			return
+		}
+		request.request.Instructions = briefing
+	}
+	if request.forceFreshRecovery {
+		oldProviderSessionID := session.ProviderSessionID
+		request.request.Mode = workerhttp.AttemptModeStart
+		request.request.ProviderSessionID = ""
+		request.identity.IdempotencyKey = request.identity.AttemptID + ":start"
+		fresh, _, err := starter.worker.PutAttempt(ctx, request.identity, request.request)
+		if err != nil {
+			if inspected, inspectErr := starter.worker.GetAttempt(ctx, request.identity.AttemptReference); inspectErr == nil {
+				fresh = inspected
+			} else {
+				starter.requireReview(ctx, request, errors.Join(err, inspectErr))
+				return
+			}
+		}
+		if fresh.ProviderSessionID != "" && fresh.ProviderSessionID != oldProviderSessionID {
+			if _, err := starter.executions.RotateProviderSession(ctx, session.ID, oldProviderSessionID, fresh.ProviderSessionID); err != nil {
+				starter.requireReview(ctx, request, err)
+				return
+			}
+		}
+		_, _ = starter.executions.RecordSessionEventWithID(
+			ctx, request.identity.AttemptID+":recovery:fresh-conversation", session.ID,
+			worker.Event{Type: worker.EventRecoveryAssessment, Text: "The user chose a fresh fenced conversation. It received the durable goal, plan, workspace, activity history, and recovery guidance.", RecoveryAssessment: &worker.RecoveryAssessment{Consistent: true}},
+		)
+		starter.observe(ctx, request, fresh)
+		return
+	}
 	attempt, _, err := starter.worker.PutAttempt(ctx, request.identity, request.request)
 	if err != nil {
 		if inspected, inspectErr := starter.worker.GetAttempt(ctx, request.identity.AttemptReference); inspectErr == nil {

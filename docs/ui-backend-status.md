@@ -641,11 +641,13 @@ repository credentials.
 - The standalone Codex and Claude lead/reviewer workers are implemented, and
   real-provider mode routes each role from the run's project-level provider
   snapshot.
-- Real-provider recovery reattaches after a coordinator restart. A worker
-  container restart during a cleanly running turn resumes the exact provider
-  conversation and the coordinator reconnects to the same durable attempt.
-  Paused, command-ambiguous, or otherwise unsafe recovery remains indeterminate
-  for user review; no replacement attempt is substituted.
+- Real-provider recovery confirms completed work from durable effects before it
+  starts anything. If a required result is missing, a user-approved recovery
+  resumes the same provider conversation first and may fall back to one fresh,
+  fenced conversation. The recovery response exposes the affected role,
+  provider, evidence, process state, successor type, and available actions.
+  Unsafe concurrency or contradictory state remains paused with the message
+  composer and recovery controls available.
 - Pause, continue, and stop are complete for simulated sessions. The real Codex
   path currently supports bounded messages at safe waiting points, not every
   mid-turn control.

@@ -2,6 +2,25 @@
 
 export type RecoveryPolicy = "approval_required" | "automatic";
 
+export type RecoveryAction = "recheck" | "continue" | "replace" | "leave_paused";
+
+export interface RecoveryStatus {
+  action: RecoveryAction;
+  role?: AgentRole;
+  provider?: AgentProvider;
+  classification:
+    | "rechecking_durable_effects"
+    | "confirmed_from_effects"
+    | "incomplete_result"
+    | "unresolved"
+    | "left_paused";
+  evidence: string[];
+  missing_result?: string;
+  process_status: "confirmed" | "successor_running" | "paused";
+  successor: "none" | "resume_then_fresh" | "fresh_conversation";
+  available_actions: RecoveryAction[];
+}
+
 export type AgentProvider = "codex" | "claude";
 export interface AgentProviders {
   lead: AgentProvider;
@@ -310,6 +329,9 @@ export interface Run {
   // runs). `intervention` describes the latest request once one has been made.
   intervention_targets?: InterventionTarget[];
   intervention?: Intervention;
+  // Present on the immediate response to an explicit recovery action. Normal
+  // run reads remain unchanged.
+  recovery?: RecoveryStatus;
   started_at: string;
   updated_at: string;
   ended_at?: string;

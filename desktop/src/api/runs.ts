@@ -1,5 +1,11 @@
 import { request } from "./client";
-import type { InterventionTargetRole, PlanningMessage, Run, ValidationJob } from "./types";
+import type {
+  InterventionTargetRole,
+  PlanningMessage,
+  RecoveryAction,
+  Run,
+  ValidationJob,
+} from "./types";
 
 /** Start the configured workflow for a draft feature. Idempotent by key. */
 export const startRun = (
@@ -48,11 +54,19 @@ export const pauseRun = (runId: string, key: string): Promise<Run> =>
 export const resumeRun = (runId: string, key: string): Promise<Run> =>
   request(`${runPath(runId)}/resume`, { method: "POST", idempotencyKey: key });
 
-// Re-check and reconcile the exact durable attempt behind a recovery blocker
-// (wait_kind === "blocker"). Never starts a replacement agent; advances the
-// workflow if the attempt is now confirmable, otherwise stays blocked.
-export const recoverRun = (runId: string, key: string): Promise<Run> =>
-  request(`${runPath(runId)}/recover`, { method: "POST", idempotencyKey: key });
+// Reconcile a recovery blocker from durable effects first, then optionally
+// continue its fenced conversation or replace it with a fresh fenced one.
+// Omitting the directive preserves the original approve-and-continue action.
+export const recoverRun = (
+  runId: string,
+  key: string,
+  directive?: { action: RecoveryAction; message?: string },
+): Promise<Run> =>
+  request(`${runPath(runId)}/recover`, {
+    method: "POST",
+    idempotencyKey: key,
+    body: directive,
+  });
 
 // Queue a user message for the lead or reviewer and arm the pause gate. Delivery
 // happens at the next safe boundary (a following backend slice); until then the

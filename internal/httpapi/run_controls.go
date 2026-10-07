@@ -1,8 +1,10 @@
 package httpapi
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"io"
 	"log"
@@ -16,6 +18,15 @@ import (
 	"github.com/EinarLogiOskars/commitarium/internal/workflow"
 	"github.com/EinarLogiOskars/commitarium/internal/workspace"
 )
+
+type recoveryControlRequest struct {
+	Action  orchestration.RecoveryAction `json:"action"`
+	Message string                       `json:"message,omitempty"`
+}
+
+type directedRecoveryWorkflow interface {
+	RecoverBlockerWithDirective(context.Context, string, string, orchestration.RecoveryDirective) (execution.Run, bool, error)
+}
 
 func (api *API) pauseRunHandler(w http.ResponseWriter, r *http.Request) {
 	api.changeRunPause(w, r, true)
@@ -31,15 +42,35 @@ func (api *API) recoverRunHandler(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "idempotency_key_required", "Idempotency-Key header is required")
 		return
 	}
-	body, err := io.ReadAll(io.LimitReader(r.Body, 1))
-	if err != nil || len(body) != 0 {
-		writeError(w, http.StatusBadRequest, "invalid_body", "request body must be empty")
+	body, err := io.ReadAll(io.LimitReader(r.Body, 20*1024+1))
+	if err != nil || len(body) > 20*1024 {
+		writeError(w, http.StatusBadRequest, "invalid_body", "recovery request is too large")
+		return
+	}
+	control := recoveryControlRequest{Action: orchestration.RecoveryActionContinue}
+	if len(body) > 0 {
+		if err := json.Unmarshal(body, &control); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid_body", "recovery request must be valid JSON")
+			return
+		}
+	}
+	if !validRecoveryAction(control.Action) {
+		writeError(w, http.StatusBadRequest, "invalid_recovery_action", "action must be recheck, continue, replace, or leave_paused")
 		return
 	}
 	runID := r.PathValue("id")
-	recovered, _, err := api.realWorkflow.RecoverBlocker(
-		r.Context(), runID, runActionIDForKey(key),
-	)
+	var recovered execution.Run
+	if directed, ok := api.realWorkflow.(directedRecoveryWorkflow); ok {
+		recovered, _, err = directed.RecoverBlockerWithDirective(
+			r.Context(), runID, runActionIDForKey(key),
+			orchestration.RecoveryDirective{Action: control.Action, Message: control.Message},
+		)
+	} else if control.Action == orchestration.RecoveryActionContinue {
+		recovered, _, err = api.realWorkflow.RecoverBlocker(r.Context(), runID, runActionIDForKey(key))
+	} else {
+		writeError(w, http.StatusBadRequest, "unsupported_recovery_action", "this coordinator does not support the requested recovery action")
+		return
+	}
 	if err != nil {
 		switch {
 		case errors.Is(err, execution.ErrNotFound):
@@ -52,7 +83,21 @@ func (api *API) recoverRunHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	api.writeRun(w, r, http.StatusAccepted, recovered)
+	response, responseErr := api.newRunResponse(r.Context(), recovered)
+	if responseErr != nil {
+		log.Printf("build recovery response for run %q: %v", recovered.ID, responseErr)
+		writeError(w, http.StatusInternalServerError, "internal_error", "internal server error")
+		return
+	}
+	response.Recovery = newRecoveryResponse(control.Action, recovered, response.Sessions, response.AgentProviders)
+	writeJSON(w, http.StatusAccepted, response, "run recovery")
+}
+
+func validRecoveryAction(action orchestration.RecoveryAction) bool {
+	return action == orchestration.RecoveryActionRecheck ||
+		action == orchestration.RecoveryActionContinue ||
+		action == orchestration.RecoveryActionReplace ||
+		action == orchestration.RecoveryActionLeavePaused
 }
 
 func (api *API) changeRunPause(w http.ResponseWriter, r *http.Request, pause bool) {

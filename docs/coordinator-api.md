@@ -59,7 +59,7 @@ this API beyond the host loopback interface is unsupported.
 | `POST` | `/api/v1/runs/{runID}/merge` | Merge the exact revision approved by both agents |
 | `POST` | `/api/v1/runs/{runID}/pause` | Stop automatic handoffs at the next safe provider-turn boundary |
 | `POST` | `/api/v1/runs/{runID}/resume` | Remove a run pause and dispatch its retained automatic checkpoint when applicable |
-| `POST` | `/api/v1/runs/{runID}/recover` | Re-check and reconcile the exact durable attempt behind a recovery blocker |
+| `POST` | `/api/v1/runs/{runID}/recover` | Reconcile a recovery blocker, then optionally continue or replace its fenced conversation |
 | `POST` | `/api/v1/runs/{runID}/interventions` | Queue a user message for the lead or reviewer and stop at the next safe boundary |
 | `GET` | `/api/v1/runs/{runID}/planning/messages` | Retrieve the ordered lead/reviewer planning messages |
 | `GET` | `/api/v1/runs/{runID}/planning/messages/stream` | Replay and stream ordered planning messages with SSE |
@@ -1441,10 +1441,12 @@ lead/reviewer agreement. A user-approved scope-changing intervention advances
 the same run to the next version; earlier planning messages remain available
 for history but are no longer used as the current implementation plan.
 
-### Re-checking a recovery blocker
+### Recovering a blocked run
 
-When a run is `waiting_for_user` with `wait_kind: "blocker"`, the user may ask
-the coordinator to re-check the exact durable checkpoint that caused the wait:
+When a run is `waiting_for_user` with `wait_kind: "blocker"`, the user always
+has a way to inspect again, continue, replace the conversation, or leave the
+run paused. The smallest request preserves the original approve-and-continue
+behavior:
 
 ```http
 POST /api/v1/runs/run_opaque/recover
@@ -1452,28 +1454,50 @@ Idempotency-Key: recover-run-1
 Content-Length: 0
 ```
 
-The response is the ordinary run resource with `202 Accepted`. The action
-reconstructs the current phase from durable feature, run, session, planning,
-and worker-attempt identities. It looks up and consumes only that exact
-attempt, or re-verifies its already-durable result and Forgejo effects. It never
-starts a replacement provider attempt. This applies to clarification,
-planning, agreed-plan publication, implementation, review, correction,
-readiness, and merge reconciliation blockers.
+An explicit action and optional guidance may be supplied instead:
+
+```json
+{
+  "action": "continue",
+  "message": "Re-read the accepted goal before returning the missing result."
+}
+```
+
+The actions are:
+
+- `recheck`: inspect durable worker, Git, Forgejo, artifact, and checklist
+  effects only; do not start a successor;
+- `continue`: confirm from durable effects first, otherwise resume the same
+  provider conversation; if that resume is explicitly unavailable, start one
+  fresh fenced conversation with the durable briefing;
+- `replace`: confirm from durable effects first, otherwise supersede the old
+  attempt only after proving it has no live process, then start one fresh
+  fenced conversation;
+- `leave_paused`: make no state change.
+
+This applies to clarification, planning, agreed-plan publication,
+implementation, review, correction, readiness, and merge reconciliation
+blockers. No action starts a second writer while the original can still be
+alive. All external publication and transition effects remain idempotent.
 
 If the attempt and its effects are now confirmable, the workflow advances from
 that checkpoint and follows the run's snapshotted `autonomy_policy` and
 `merge_policy`. For example, a durable verified approval can advance review to
-the lead readiness decision and then `ready_to_merge`. If confirmation still
-fails, the response retains `wait_kind: "blocker"` and the existing `reason`;
-no replacement agent or speculative state change occurs. The frontend should
-render a **Re-check / approve recovery** action only for that wait kind.
+the lead readiness decision and then `ready_to_merge`. If an effects-only
+confirmation still fails, the response retains `wait_kind: "blocker"` and the
+existing `reason`. The frontend should keep the message composer and all
+applicable recovery controls available so a blocked work order never becomes a
+dead end.
 
-The request body must be empty and `Idempotency-Key` is required. Repeated or
-concurrent requests are safe across coordinator restarts: the exact durable
-attempt IDs, event cursors, verification markers, per-run admission claim, and
-idempotent external reconciliation prevent duplicate provider attempts or
-effects. An unknown run returns `404 run_not_found`; a run that is paused,
-terminal, running, or waiting for another reason returns
+The response is the ordinary run resource with `202 Accepted`, plus a
+`recovery` object containing the chosen action, affected role/provider,
+classification, evidence, missing-result kind, process status, successor kind,
+and currently available actions. `Idempotency-Key` is required. Repeated or
+concurrent requests are safe across coordinator restarts: exact durable
+attempt IDs, event cursors, verification markers, worker fencing, per-run
+admission claims, and idempotent external reconciliation prevent duplicate
+provider attempts or effects. An unknown run returns `404 run_not_found`; a
+run that is paused, terminal, running, or waiting for another reason returns
 `409 recovery_not_allowed`.
 
 ## Queuing a user intervention
@@ -1902,7 +1926,9 @@ is terminal but verification previously failed, another implementation action
 temporarily marks the run as rechecking and verifies the same publication facts.
 It performs no worker mutation, provider resume, commit, push, or PR write. A
 coordinator restart during the active turn reattaches to this exact attempt and
-records the existing recovery assessment event; it never starts a replacement.
+records the existing recovery assessment event while that attempt remains live
+or resumable. A fenced successor is considered only after the worker proves
+the original can no longer write and the required result is still missing.
 If the worker itself restarts during a cleanly running turn, its journal resumes
 the exact provider conversation and the coordinator reconnects to the same
 attempt and event cursor. Ambiguous command delivery or other unsafe recovery
@@ -2344,20 +2370,26 @@ recovered only when they still own an interrupted session. A stable
 clarification, round-cap, blocker, merge-gate, or paused wait is not mistaken
 for interrupted work.
 
-For the real-lead mode, recovery only performs a read-only lookup of the exact
-durable worker attempt, including an interrupted lead, clarification follow-up,
+For real-provider mode, recovery first checks whether the phase's required
+result is already satisfied by durable worker, Git, Forgejo, artifact, and
+checklist effects. This includes an interrupted lead, clarification follow-up,
 initial planning, first-reviewer, later planning-discussion, initial
 implementation, numbered implementation-continuation, implementation review,
 corrective implementation, repeated review, or merge-readiness turn. A waiting
-lead is not counted as concurrent active work while the reviewer is running. If
-it still exists and is consistent, the coordinator records a `recovery_assessment`
-event, marks its pending reply applied once the attempt is confirmed, and
-reattaches to the event stream without starting a process. If it is missing,
-contradictory, or indeterminate, the run waits for user review and no replacement
-agent starts. A temporarily unreachable worker is retried for a bounded window
-so a recreated container can resume the exact provider conversation and the
-coordinator can reconnect to the same attempt. The coordinator never
-substitutes a replacement attempt.
+lead is not counted as concurrent active work while the reviewer is running.
+If the durable result is sufficient, the coordinator records a
+`recovery_assessment` and advances without starting an agent. If a result is
+genuinely missing and policy or the user permits continuation, it resumes the
+same conversation first. Only an explicitly unavailable resume admits one
+fresh conversation with the durable goal, plan, workspace, attempt cursor, and
+recent events. A user may choose that fresh path directly with `replace`.
+
+Before any successor is admitted, the coordinator reattaches to the old
+attempt or asks the worker to supersede it. Supersede succeeds only when the
+worker can prove it owns no live or unfenced provider process. Contradictory or
+unsafe state remains blocked for user control. A temporarily unreachable
+worker is retried for a bounded window so a recreated container can reconnect
+to the same provider conversation and exact attempt.
 
 During the autonomous planning loop and agreed-plan publication, the run remains `running` across every
 internal handoff. If the coordinator stops after one response is durable but

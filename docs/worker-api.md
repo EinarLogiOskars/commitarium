@@ -59,6 +59,7 @@ are not cached.
 | `GET` | `/internal/v1/sessions/{sessionID}/attempts/{attemptID}/events/stream` | Replay and follow the attempt's safe activity events |
 | `POST` | `/internal/v1/sessions/{sessionID}/attempts/{attemptID}/commands` | Send a message, pause, continue, or request a clean stop |
 | `POST` | `/internal/v1/sessions/{sessionID}/attempts/{attemptID}/force-stop` | Forcibly terminate that exact process through its supervisor |
+| `POST` | `/internal/v1/sessions/{sessionID}/attempts/{attemptID}/supersede` | Close an indeterminate attempt after proving no provider process can still be alive |
 
 The stream route is available only when the worker advertises the
 `event_replay` capability and has an event source. A separate JSON event-history
@@ -267,7 +268,8 @@ silently repeated.
 
 A newly created attempt returns `201 Created` with a `Location` header. An
 existing attempt returned for a safe retry uses `200 OK`. Commands are accepted
-with `202 Accepted`; force-stop returns the inspected attempt with `200 OK`.
+with `202 Accepted`; force-stop and supersede return the inspected attempt with
+`200 OK`.
 
 For a worker that advertises `force_stop`, the journal-backed service records
 the request as pending before it contacts the provider session. The provider
@@ -279,6 +281,14 @@ durable result and does not send another signal. A stale attempt cannot be used
 to stop a newer attempt for the same logical session. If the worker cannot
 prove whether termination occurred, both the attempt and mutation become
 `indeterminate`, preventing automatic replacement or redelivery.
+
+Supersede is a separate, idempotent fencing operation. It succeeds only for an
+indeterminate attempt whose supervisor owns no live or unfenced provider
+process. A live process returns `unsafe_concurrency`; the coordinator must keep
+the run paused and must not launch a successor. Once safely superseded, the
+attempt is terminal and an exact retry returns the same journaled result. This
+creates a durable happens-before boundary between the old writer and any
+replacement conversation.
 
 ## Request safety
 
