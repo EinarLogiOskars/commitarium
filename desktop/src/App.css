@@ -2382,3 +2382,60 @@ button.danger:not(.ghost) {
   grid-column: 1 / -1;
   margin: 2px 0 0;
 }
+
+/* Independent acceptance-tests checklist (review phase). */
+.accept-tests {
+  margin-bottom: 14px;
+}
+.accept-tests h3 {
+  margin: 0;
+  font-size: 14px;
+}
+.accept-tests__list {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.accept-test {
+  padding: 3px 0;
+}
+.accept-test__line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+.accept-test__mark {
+  flex: none;
+  width: 16px;
+  text-align: center;
+}
+.accept-test__title {
+  flex: 1;
+  min-width: 0;
+}
+.accept-test--passed .accept-test__title,
+.accept-test--not_applicable .accept-test__title {
+  color: var(--muted);
+}
+.accept-test__status {
+  flex: none;
+  font-size: 11px;
+}
+.accept-test__status--ok {
+  color: var(--ok);
+}
+.accept-test__status--bad {
+  color: var(--bad);
+}
+.accept-test__status--warn {
+  color: var(--warn);
+}
+.accept-test__note {
+  margin: 2px 0 0 24px;
+  font-size: 12px;
+  color: var(--muted);
+}

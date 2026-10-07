@@ -5,6 +5,7 @@ import { openExternal } from "../ipc";
 import { ApiError } from "../api/client";
 import { Transcript } from "./Transcript";
 import { InterveneBar } from "./InterveneBar";
+import { AcceptanceTestsPanel } from "./AcceptanceTests";
 import { useSessionEvents, type SessionRef } from "./useSessionEvents";
 import { scopeToPhase, type Interval } from "./phaseWindows";
 import type { Run, Workspace } from "../api/types";
@@ -122,6 +123,8 @@ export function ReviewView({
           })}
         </div>
       )}
+
+      <AcceptanceTestsPanel projectId={projectId} featureId={featureId} />
 
       <div
         className="chat"
