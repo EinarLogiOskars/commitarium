@@ -109,6 +109,22 @@ func (router *ProviderRoutedWorker) ForceStop(
 	return stopper.ForceStop(ctx, identity, request)
 }
 
+func (router *ProviderRoutedWorker) Supersede(
+	ctx context.Context,
+	identity workerhttp.MutationIdentity,
+	request workerhttp.SupersedeRequest,
+) (workerhttp.Attempt, error) {
+	run, role, err := router.runAndRole(ctx, identity.SessionID)
+	if err != nil {
+		return workerhttp.Attempt{}, err
+	}
+	client, err := router.routes.forAssignment(run.AgentProviders, role)
+	if err != nil {
+		return workerhttp.Attempt{}, err
+	}
+	return client.Supersede(ctx, identity, request)
+}
+
 func (router *ProviderRoutedWorker) runAndRole(
 	ctx context.Context,
 	sessionID string,

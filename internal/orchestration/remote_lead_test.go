@@ -155,6 +155,14 @@ func (unavailableRemoteLeadWorker) GetAttempt(
 	return workerhttp.Attempt{}, errors.New("worker state unavailable")
 }
 
+func (unavailableRemoteLeadWorker) Supersede(
+	context.Context,
+	workerhttp.MutationIdentity,
+	workerhttp.SupersedeRequest,
+) (workerhttp.Attempt, error) {
+	return workerhttp.Attempt{}, errors.New("worker state unavailable")
+}
+
 type unexpectedRemoteLeadPump struct{ called bool }
 
 type remoteLeadWorkspaceStub struct {
@@ -3101,6 +3109,30 @@ func TestDurableAcceptanceTestsReconcileIncompleteProviderResult(t *testing.T) {
 		t.Context(), execution.Run{FeatureID: "fea_recovery", PlanVersion: 1}, reviewer, checkpoint, attempt,
 	); err != nil || found {
 		t.Fatalf("private commit without manifest found=%t error=%v", found, err)
+	}
+}
+
+func TestRecoverySuccessorPreservesWorkflowLaneAndClassifiesResumeFailure(t *testing.T) {
+	sessionID := "run_recovery:reviewer"
+	first := acceptanceTestsAttemptForVersion(sessionID, 2)
+	second, err := recoverySuccessorAttemptID(sessionID, first)
+	if err != nil || second != workflowAttemptForVersion(sessionID, "acceptance", 2, 2) {
+		t.Fatalf("acceptance successor=%q error=%v", second, err)
+	}
+	third, err := recoverySuccessorAttemptID(sessionID, second)
+	if err != nil || third != workflowAttemptForVersion(sessionID, "acceptance", 2, 3) {
+		t.Fatalf("fresh fallback successor=%q error=%v", third, err)
+	}
+	failed := workerhttp.Attempt{State: workerhttp.AttemptStateTerminal, Result: &workerhttp.TerminalResult{
+		Outcome: workerhttp.OutcomeFailed,
+		Error:   &workerhttp.ProtocolError{Code: workerhttp.ErrorProviderSessionMissing, Message: "conversation missing", Retryable: true},
+	}}
+	if !resumeLaunchUnavailable(failed) {
+		t.Fatal("missing resumable conversation did not permit a fresh fallback")
+	}
+	failed.Result.Error.Retryable = false
+	if resumeLaunchUnavailable(failed) {
+		t.Fatal("non-retryable launch failure permitted a fresh fallback")
 	}
 }
 

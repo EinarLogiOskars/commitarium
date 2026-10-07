@@ -98,6 +98,7 @@ type RemoteLeadExecution interface {
 	BeginReplanningTurn(context.Context, string, string, string, int, string, string, string, execution.WorkerAttemptCheckpoint, string, string) (execution.Run, execution.PlanRevision, bool, error)
 	GetPlanRevision(context.Context, string, int) (execution.PlanRevision, error)
 	TransitionSession(context.Context, string, execution.SessionStatus, execution.SessionStatus, string) (execution.Session, error)
+	RotateProviderSession(context.Context, string, string, string) (execution.Session, error)
 	RecordSessionEventWithID(context.Context, string, string, worker.Event) (execution.Event, error)
 	GetCommand(context.Context, string) (execution.Command, error)
 	PendingCommandsForSession(context.Context, string) ([]execution.Command, error)
@@ -162,6 +163,7 @@ type RemoteLeadWorkspaceService interface {
 type RemoteLeadWorker interface {
 	PutAttempt(context.Context, workerhttp.MutationIdentity, workerhttp.PutAttemptRequest) (workerhttp.Attempt, bool, error)
 	GetAttempt(context.Context, workerhttp.AttemptReference) (workerhttp.Attempt, error)
+	Supersede(context.Context, workerhttp.MutationIdentity, workerhttp.SupersedeRequest) (workerhttp.Attempt, error)
 }
 
 type RemoteLeadPump interface {
@@ -476,7 +478,7 @@ func (starter *RemoteLeadStarter) Recover(
 	ctx context.Context,
 	run execution.Run,
 	storedFeature feature.Feature,
-	_ project.RecoveryPolicy,
+	recoveryPolicy project.RecoveryPolicy,
 ) error {
 	if storedFeature.State == feature.StateCompleted {
 		_, _, err := starter.Merge(ctx, run.ID, run.ID+":recovery-merge")
@@ -548,7 +550,7 @@ func (starter *RemoteLeadStarter) Recover(
 				starter.release(run.ID)
 				return checkpointErr
 			}
-			request := remoteLeadRequest{runID: run.ID, identity: workerhttp.MutationIdentity{AttemptReference: workerhttp.AttemptReference{SessionID: active.ID, AttemptID: checkpoint.AttemptID}}}
+			request := remoteLeadRequest{runID: run.ID, allowRecoveryContinuation: recoveryPolicy == project.RecoveryPolicyAutomatic, identity: workerhttp.MutationIdentity{AttemptReference: workerhttp.AttemptReference{SessionID: active.ID, AttemptID: checkpoint.AttemptID}}}
 			switch {
 			case active.Role == worker.RoleLead:
 				version, _, ok := workflowAttemptVersionAndTurn(active.ID, "implementation", checkpoint.AttemptID)
@@ -655,11 +657,12 @@ func (starter *RemoteLeadStarter) Recover(
 		}
 	}
 	request := remoteLeadRequest{
-		runID:         run.ID,
-		agentName:     "lead agent",
-		waitingReason: waitingReasonForAttempt(session, checkpoint.AttemptID),
-		waitKind:      waitKindForAttempt(session, checkpoint.AttemptID),
-		planningStage: planningStageForAttempt(session, checkpoint.AttemptID),
+		runID:                     run.ID,
+		allowRecoveryContinuation: recoveryPolicy == project.RecoveryPolicyAutomatic,
+		agentName:                 "lead agent",
+		waitingReason:             waitingReasonForAttempt(session, checkpoint.AttemptID),
+		waitKind:                  waitKindForAttempt(session, checkpoint.AttemptID),
+		planningStage:             planningStageForAttempt(session, checkpoint.AttemptID),
 		identity: workerhttp.MutationIdentity{AttemptReference: workerhttp.AttemptReference{
 			SessionID: session.ID, AttemptID: checkpoint.AttemptID,
 		}},
@@ -1812,15 +1815,16 @@ func (starter *RemoteLeadStarter) ensureSubmittedPlanArtifact(
 }
 
 type remoteLeadRequest struct {
-	runID          string
-	commandID      string
-	interventionID string
-	agentName      string
-	waitingReason  string
-	waitKind       execution.RunWaitKind
-	planningStage  planningStage
-	identity       workerhttp.MutationIdentity
-	request        workerhttp.PutAttemptRequest
+	runID                     string
+	commandID                 string
+	interventionID            string
+	agentName                 string
+	waitingReason             string
+	waitKind                  execution.RunWaitKind
+	planningStage             planningStage
+	identity                  workerhttp.MutationIdentity
+	request                   workerhttp.PutAttemptRequest
+	allowRecoveryContinuation bool
 }
 
 func interventionAttemptID(sessionID, interventionID string) string {
@@ -3797,6 +3801,12 @@ func (starter *RemoteLeadStarter) reattach(request remoteLeadRequest) {
 	} else if reconciled {
 		return
 	}
+	if continued, continueErr := starter.continueFailedAttempt(ctx, request, attempt); continueErr != nil {
+		starter.requireReview(ctx, request, continueErr)
+		return
+	} else if continued {
+		return
+	}
 	if attempt.State == workerhttp.AttemptStateIndeterminate {
 		starter.requireReview(ctx, request, errors.New("worker reports an indeterminate provider attempt"))
 		return
@@ -3842,6 +3852,12 @@ func (starter *RemoteLeadStarter) reattachAdmitted(request remoteLeadRequest) {
 		starter.requireReview(ctx, request, reconcileErr)
 		return
 	} else if reconciled {
+		return
+	}
+	if continued, continueErr := starter.continueFailedAttempt(ctx, request, attempt); continueErr != nil {
+		starter.requireReview(ctx, request, continueErr)
+		return
+	} else if continued {
 		return
 	}
 	if attempt.State == workerhttp.AttemptStateIndeterminate {
@@ -3909,6 +3925,263 @@ func (starter *RemoteLeadStarter) reconcileKnownEndedAttempt(
 		return false, err
 	}
 	return true, starter.tryStartAcceptanceReview(ctx, run.ID)
+}
+
+func (starter *RemoteLeadStarter) continueFailedAttempt(
+	ctx context.Context,
+	request remoteLeadRequest,
+	attempt workerhttp.Attempt,
+) (bool, error) {
+	incomplete := attempt.State == workerhttp.AttemptStateTerminal && attempt.Result != nil &&
+		attempt.Result.Outcome == workerhttp.OutcomeFailed && attempt.Result.Error != nil &&
+		attempt.Result.Error.Code == workerhttp.ErrorIncompleteResult
+	if !incomplete && attempt.State != workerhttp.AttemptStateIndeterminate {
+		return false, nil
+	}
+	if !request.allowRecoveryContinuation {
+		return false, nil
+	}
+	if request.request.OutputContract == "" {
+		return false, errors.New("the failed turn has no recoverable output contract")
+	}
+	if attempt.State == workerhttp.AttemptStateIndeterminate {
+		closed, err := starter.worker.Supersede(ctx, workerhttp.MutationIdentity{
+			AttemptReference: attempt.AttemptReference,
+			IdempotencyKey:   attempt.AttemptID + ":recovery:supersede",
+		}, workerhttp.SupersedeRequest{Reason: "admit one fenced recovery successor"})
+		if err != nil {
+			return false, fmt.Errorf("fence original attempt before recovery: %w", err)
+		}
+		if closed.State != workerhttp.AttemptStateTerminal {
+			return false, errors.New("worker did not close the original attempt before recovery")
+		}
+	}
+	run, err := starter.executions.GetRun(ctx, request.runID)
+	if err != nil {
+		return false, err
+	}
+	storedFeature, err := starter.features.GetByID(ctx, run.FeatureID)
+	if err != nil {
+		return false, err
+	}
+	session, err := starter.executions.GetSession(ctx, request.identity.SessionID)
+	if err != nil {
+		return false, err
+	}
+	if session.Status == execution.SessionStatusRunning || session.Status == execution.SessionStatusPauseRequested {
+		session, err = starter.executions.TransitionSession(
+			ctx, session.ID, session.Status, execution.SessionStatusWaitingForUser, session.ProviderSessionID,
+		)
+		if err != nil {
+			return false, err
+		}
+	}
+	if session.Status != execution.SessionStatusWaitingForUser || session.ProviderSessionID == "" {
+		return false, fmt.Errorf("failed %s session is not ready for one recovery successor", request.agentName)
+	}
+	checkpoint, err := starter.executions.GetWorkerAttempt(ctx, session.ID)
+	if err != nil {
+		return false, err
+	}
+	nextAttemptID, err := recoverySuccessorAttemptID(session.ID, checkpoint.AttemptID)
+	if err != nil {
+		return false, err
+	}
+	prepared, err := starter.workspaceForCurrentPlan(ctx, run, storedFeature.ProjectID, storedFeature.ID)
+	if err != nil {
+		return false, err
+	}
+	briefing, err := starter.recoveryBriefing(ctx, run, storedFeature, session, checkpoint, attempt, prepared)
+	if err != nil {
+		return false, err
+	}
+	admitted, err := starter.executions.BeginChainedTurnInState(
+		ctx, session.ID, checkpoint, nextAttemptID, storedFeature.State,
+		"The "+request.agentName+" is completing the missing result from a fenced attempt.",
+	)
+	if err != nil {
+		return false, err
+	}
+	if !admitted {
+		return true, nil
+	}
+	request.identity = workerhttp.MutationIdentity{
+		AttemptReference: workerhttp.AttemptReference{SessionID: session.ID, AttemptID: nextAttemptID},
+		IdempotencyKey:   nextAttemptID + ":resume",
+	}
+	request.request = workerhttp.PutAttemptRequest{
+		Mode: workerhttp.AttemptModeResume,
+		Assignment: workerhttp.Assignment{
+			AgentProfileID: starter.profileID(providerForSession(run, session.Role), session.Role),
+			Model:          modelForSession(run, session.Role), ProjectID: storedFeature.ProjectID,
+			FeatureID: storedFeature.ID, Role: workerhttp.Role(session.Role), WorkspaceID: prepared.ID,
+		},
+		ProviderSessionID: session.ProviderSessionID,
+		Instructions:      briefing, OutputContract: request.request.OutputContract,
+	}
+	if err := request.request.Validate(request.identity); err != nil {
+		return false, err
+	}
+	starter.launchRecoverySuccessor(ctx, request, session, storedFeature, briefing)
+	return true, nil
+}
+
+func providerForSession(run execution.Run, role worker.Role) project.AgentProvider {
+	if role == worker.RoleReviewer {
+		return run.AgentProviders.Reviewer
+	}
+	return run.AgentProviders.Lead
+}
+
+func modelForSession(run execution.Run, role worker.Role) string {
+	if role == worker.RoleReviewer {
+		return run.AgentModels.Reviewer
+	}
+	return run.AgentModels.Lead
+}
+
+func recoverySuccessorAttemptID(sessionID, attemptID string) (string, error) {
+	if version, turn, ok := planningAttemptVersionAndTurn(sessionID, attemptID); ok {
+		return planningAttemptForVersion(sessionID, version, turn+1), nil
+	}
+	for _, kind := range []string{"implementation", "acceptance", "review", "correction", "readiness"} {
+		if version, turn, ok := workflowAttemptVersionAndTurn(sessionID, kind, attemptID); ok {
+			return workflowAttemptForVersion(sessionID, kind, version, turn+1), nil
+		}
+	}
+	return "", errors.New("failed turn does not have a recognized recovery attempt identity")
+}
+
+func (starter *RemoteLeadStarter) recoveryBriefing(
+	ctx context.Context,
+	run execution.Run,
+	storedFeature feature.Feature,
+	session execution.Session,
+	checkpoint execution.WorkerAttemptCheckpoint,
+	attempt workerhttp.Attempt,
+	prepared workspace.Workspace,
+) (string, error) {
+	messages, err := starter.currentPlanningMessages(ctx, run)
+	if err != nil {
+		return "", err
+	}
+	plan := "No submitted plan text was found."
+	if len(messages) > 0 {
+		plan = messages[len(messages)-1].Event.Text
+	}
+	events, err := starter.executions.EventsForSession(ctx, session.ID)
+	if err != nil {
+		return "", err
+	}
+	start := 0
+	if len(events) > 8 {
+		start = len(events) - 8
+	}
+	var history strings.Builder
+	for _, event := range events[start:] {
+		fmt.Fprintf(&history, "- %s: %s\n", event.Type, event.Text)
+	}
+	cause := "The prior attempt ended without a usable result."
+	if attempt.Result != nil && attempt.Result.Error != nil {
+		cause = attempt.Result.Error.Message
+	}
+	briefing := fmt.Sprintf(
+		"Recovery continuation. Complete the same logical %s turn and return the required structured result. Do not redo durable work that is already correct. Inspect the existing checkout and commits first.\n\nGoal:\n%s\n\nAgreed plan:\n%s\n\nPrior attempt: %s (events recorded through %d)\nWhy it needs continuation: %s\n\nWorkspace: %s, branch %s, base commit %s, Forgejo PR #%d.\n\nRecent durable activity:\n%s",
+		session.Role, storedFeature.AcceptedGoal, plan, checkpoint.AttemptID,
+		checkpoint.LastEventSequence, cause, prepared.ID, prepared.Branch,
+		prepared.BaseCommitID, prepared.PullRequestNumber, history.String(),
+	)
+	if len(briefing) > workerhttp.MaxInstructionsBytes {
+		return "", errors.New("recovery briefing exceeds the worker instruction limit")
+	}
+	return briefing, nil
+}
+
+func (starter *RemoteLeadStarter) launchRecoverySuccessor(
+	ctx context.Context,
+	request remoteLeadRequest,
+	session execution.Session,
+	storedFeature feature.Feature,
+	briefing string,
+) {
+	attempt, _, err := starter.worker.PutAttempt(ctx, request.identity, request.request)
+	if err != nil {
+		if inspected, inspectErr := starter.worker.GetAttempt(ctx, request.identity.AttemptReference); inspectErr == nil {
+			attempt = inspected
+		} else {
+			starter.requireReview(ctx, request, errors.Join(err, inspectErr))
+			return
+		}
+	}
+	if !resumeLaunchUnavailable(attempt) {
+		starter.observe(ctx, request, attempt)
+		return
+	}
+	current, err := starter.executions.GetSession(ctx, session.ID)
+	if err != nil || current.Status != execution.SessionStatusRunning {
+		starter.requireReview(ctx, request, errors.Join(err, errors.New("resume failed before fresh recovery fallback")))
+		return
+	}
+	current, err = starter.executions.TransitionSession(
+		ctx, current.ID, current.Status, execution.SessionStatusWaitingForUser, current.ProviderSessionID,
+	)
+	if err != nil {
+		starter.requireReview(ctx, request, err)
+		return
+	}
+	checkpoint, err := starter.executions.GetWorkerAttempt(ctx, session.ID)
+	if err != nil {
+		starter.requireReview(ctx, request, err)
+		return
+	}
+	nextAttemptID, err := recoverySuccessorAttemptID(session.ID, checkpoint.AttemptID)
+	if err != nil {
+		starter.requireReview(ctx, request, err)
+		return
+	}
+	admitted, err := starter.executions.BeginChainedTurnInState(
+		ctx, session.ID, checkpoint, nextAttemptID, storedFeature.State,
+		"The original conversation could not resume; one fresh "+request.agentName+" conversation is continuing from durable context.",
+	)
+	if err != nil || !admitted {
+		starter.requireReview(ctx, request, errors.Join(err, errors.New("fresh recovery fallback was not admitted")))
+		return
+	}
+	oldProviderSessionID := current.ProviderSessionID
+	request.identity = workerhttp.MutationIdentity{
+		AttemptReference: workerhttp.AttemptReference{SessionID: session.ID, AttemptID: nextAttemptID},
+		IdempotencyKey:   nextAttemptID + ":start",
+	}
+	request.request.Mode = workerhttp.AttemptModeStart
+	request.request.ProviderSessionID = ""
+	request.request.Instructions = briefing + "\n\nThe original provider conversation was unavailable. You are the single fenced replacement conversation."
+	fresh, _, err := starter.worker.PutAttempt(ctx, request.identity, request.request)
+	if err != nil {
+		if inspected, inspectErr := starter.worker.GetAttempt(ctx, request.identity.AttemptReference); inspectErr == nil {
+			fresh = inspected
+		} else {
+			starter.requireReview(ctx, request, errors.Join(err, inspectErr))
+			return
+		}
+	}
+	if fresh.ProviderSessionID != "" && fresh.ProviderSessionID != oldProviderSessionID {
+		if _, err := starter.executions.RotateProviderSession(ctx, session.ID, oldProviderSessionID, fresh.ProviderSessionID); err != nil {
+			starter.requireReview(ctx, request, err)
+			return
+		}
+	}
+	_, _ = starter.executions.RecordSessionEventWithID(
+		ctx, nextAttemptID+":recovery:fresh-conversation", session.ID,
+		worker.Event{Type: worker.EventRecoveryAssessment, Text: "The original provider conversation could not be resumed, so recovery started one fresh fenced conversation with the durable goal, plan, workspace, and activity history.", RecoveryAssessment: &worker.RecoveryAssessment{Consistent: true}},
+	)
+	starter.observe(ctx, request, fresh)
+}
+
+func resumeLaunchUnavailable(attempt workerhttp.Attempt) bool {
+	return attempt.State == workerhttp.AttemptStateTerminal && attempt.Result != nil &&
+		attempt.Result.Outcome == workerhttp.OutcomeFailed && attempt.Result.Error != nil &&
+		attempt.Result.Error.Retryable &&
+		(attempt.Result.Error.Code == workerhttp.ErrorInternal || attempt.Result.Error.Code == workerhttp.ErrorProviderSessionMissing)
 }
 
 func (starter *RemoteLeadStarter) applyReply(ctx context.Context, request remoteLeadRequest) error {

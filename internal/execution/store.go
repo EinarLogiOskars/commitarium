@@ -138,6 +138,13 @@ type SessionRecovery struct {
 	OccurredAt time.Time
 }
 
+type ProviderSessionRotation struct {
+	SessionID                 string
+	ExpectedProviderSessionID string
+	ProviderSessionID         string
+	OccurredAt                time.Time
+}
+
 type CommandResolution struct {
 	CommandID string
 	Status    CommandStatus

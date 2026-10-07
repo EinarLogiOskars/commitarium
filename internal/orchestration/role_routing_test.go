@@ -31,6 +31,12 @@ func (stub *routingWorkerStub) GetAttempt(
 	return workerhttp.Attempt{}, nil
 }
 
+func (*routingWorkerStub) Supersede(
+	context.Context, workerhttp.MutationIdentity, workerhttp.SupersedeRequest,
+) (workerhttp.Attempt, error) {
+	return workerhttp.Attempt{}, nil
+}
+
 type routingPumpStub struct{ runs int }
 
 func (stub *routingPumpStub) Run(context.Context, string) (workeringest.PumpResult, error) {

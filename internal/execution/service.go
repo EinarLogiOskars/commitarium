@@ -432,6 +432,31 @@ func (s *Service) BeginSessionRecovery(
 	return session, nil
 }
 
+// RotateProviderSession records the one deliberate identity change allowed by
+// recovery: a fenced failed conversation could not be resumed, so a fresh
+// conversation now owns the already-admitted successor attempt.
+func (s *Service) RotateProviderSession(
+	ctx context.Context,
+	sessionID string,
+	expectedProviderSessionID string,
+	providerSessionID string,
+) (Session, error) {
+	store, ok := s.store.(interface {
+		RotateProviderSession(context.Context, ProviderSessionRotation) (Session, error)
+	})
+	if !ok {
+		return Session{}, errors.New("execution store does not support provider-session rotation")
+	}
+	session, err := store.RotateProviderSession(ctx, ProviderSessionRotation{
+		SessionID: sessionID, ExpectedProviderSessionID: expectedProviderSessionID,
+		ProviderSessionID: providerSessionID, OccurredAt: s.now().UTC(),
+	})
+	if err != nil {
+		return Session{}, fmt.Errorf("rotate provider session for %q: %w", sessionID, err)
+	}
+	return session, nil
+}
+
 func (s *Service) RecordSessionEvent(
 	ctx context.Context,
 	sessionID string,
