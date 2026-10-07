@@ -2354,3 +2354,12 @@ button.danger:not(.ghost) {
   flex: none;
   white-space: nowrap;
 }
+
+/* Labeled stacked field (modal forms). */
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+  margin-bottom: 10px;
+}

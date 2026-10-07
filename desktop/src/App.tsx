@@ -13,6 +13,7 @@ import { Launcher } from "./views/Launcher";
 import { Projects } from "./views/Projects";
 import { ProjectWorkspace } from "./views/ProjectWorkspace";
 import { Providers } from "./views/Providers";
+import { ForgejoViewer } from "./views/ForgejoViewer";
 import "./App.css";
 
 function App() {
@@ -23,6 +24,7 @@ function App() {
   const [projectId, setProjectId] = useState<string | null>(null);
   const [projectName, setProjectName] = useState<string | null>(null);
   const [showProviders, setShowProviders] = useState(false);
+  const [showViewer, setShowViewer] = useState(false);
   const [showInbox, setShowInbox] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   // Set while the native layer holds a quit, waiting for this answer.
@@ -127,6 +129,9 @@ function App() {
           <button className="ghost" onClick={() => setShowProviders(true)}>
             Providers
           </button>
+          <button className="ghost" onClick={() => setShowViewer(true)}>
+            Audit viewer
+          </button>
           {statusPill}
         </header>
 
@@ -144,6 +149,7 @@ function App() {
         <Launcher onStackChanged={() => void checkHealth()} />
 
         {showProviders && <Providers onClose={() => setShowProviders(false)} />}
+        {showViewer && <ForgejoViewer onClose={() => setShowViewer(false)} />}
         {exitDialog}
       </main>
     );
@@ -192,6 +198,9 @@ function App() {
         <button className="ghost" onClick={() => setShowProviders(true)}>
           Providers
         </button>
+        <button className="ghost" onClick={() => setShowViewer(true)}>
+          Audit viewer
+        </button>
         <button className="ghost" onClick={() => setShowSettings(true)}>
           Settings
         </button>
@@ -206,6 +215,7 @@ function App() {
 
       {exitDialog}
       {showProviders && <Providers onClose={() => setShowProviders(false)} />}
+      {showViewer && <ForgejoViewer onClose={() => setShowViewer(false)} />}
       {showSettings && (
         <AppSettings
           desktop={desktop}

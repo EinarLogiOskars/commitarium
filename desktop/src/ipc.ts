@@ -44,6 +44,22 @@ export const stackDown = (): Promise<void> => invoke("stack_down");
 export const stackUpdate = (): Promise<void> => invoke("stack_update");
 export const stackStatus = (): Promise<ServiceStatus[]> => invoke("stack_status");
 
+// A fixed restricted, non-admin Forgejo account the user sets a password for, to
+// browse the internal audit trail (repos, PRs, reviews) in a browser read-only.
+export interface ForgejoViewerStatus {
+  configured: boolean;
+  username: "commitarium-viewer";
+  loginUrl: string;
+}
+
+export const getForgejoViewerStatus = (): Promise<ForgejoViewerStatus> =>
+  invoke("get_forgejo_viewer_status");
+
+// The password travels only in this invocation + Forgejo's loopback API; it is
+// never stored or returned.
+export const configureForgejoViewer = (password: string): Promise<ForgejoViewerStatus> =>
+  invoke("configure_forgejo_viewer", { password });
+
 // --- Phase 5 desktop services ---
 
 export interface DesktopSettings {
