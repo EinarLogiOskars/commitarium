@@ -86,6 +86,7 @@ type Service struct {
 
 	activeMu sync.RWMutex
 	active   map[workerhttp.AttemptReference]*activeProviderSession
+	unfenced map[workerhttp.AttemptReference]struct{}
 
 	eventMu          sync.Mutex
 	subscribers      map[workerhttp.AttemptReference]map[uint64]*eventSubscriber
@@ -147,6 +148,7 @@ func New(
 		lifetime:            config.Lifetime,
 		now:                 now,
 		active:              make(map[workerhttp.AttemptReference]*activeProviderSession),
+		unfenced:            make(map[workerhttp.AttemptReference]struct{}),
 		subscribers:         make(map[workerhttp.AttemptReference]map[uint64]*eventSubscriber),
 		bufferSize:          bufferSize,
 		forceStopTimeout:    forceStopTimeout,
@@ -569,6 +571,79 @@ func (service *Service) ForceStop(
 		return workerhttp.Attempt{}, service.handleForceStopFailure(identity, terminal, err)
 	}
 	return terminal, nil
+}
+
+// Supersede turns a historical indeterminate attempt into a closed stopped
+// attempt. It is deliberately refused while this worker still owns a live
+// provider session, so admitting a successor cannot create two writers.
+func (service *Service) Supersede(
+	ctx context.Context,
+	identity workerhttp.MutationIdentity,
+	request workerhttp.SupersedeRequest,
+) (workerhttp.Attempt, error) {
+	if err := request.Validate(identity); err != nil {
+		return workerhttp.Attempt{}, err
+	}
+	digest, err := workerjournal.DigestRequest(request)
+	if err != nil {
+		return workerhttp.Attempt{}, fmt.Errorf("digest worker supersede request: %w", err)
+	}
+	now := service.timestamp()
+	mutation, created, err := service.journal.ClaimMutation(ctx, workerjournal.Mutation{
+		MutationIdentity: identity,
+		Kind:             workerjournal.MutationSupersede,
+		RequestDigest:    digest,
+		Status:           workerjournal.MutationPending,
+		RequestedAt:      now,
+		UpdatedAt:        now,
+	})
+	if err != nil {
+		return workerhttp.Attempt{}, service.journalError(err)
+	}
+	if !created {
+		return service.replayForceStop(ctx, mutation)
+	}
+	attempt, err := service.journal.GetAttempt(ctx, identity.AttemptReference)
+	if err != nil {
+		return workerhttp.Attempt{}, service.journalError(err)
+	}
+	if service.hasActiveSession(identity.AttemptReference) || service.hasUnfencedSession(identity.AttemptReference) {
+		_ = service.resolveMutation(context.WithoutCancel(ctx), identity, workerjournal.MutationRejected)
+		return workerhttp.Attempt{}, workerhttp.NewServiceError(
+			workerhttp.ErrorUnsafeConcurrency,
+			"the original provider process is still attached to this worker",
+			false,
+			nil,
+		)
+	}
+	if attempt.State != workerhttp.AttemptStateIndeterminate {
+		_ = service.resolveMutation(context.WithoutCancel(ctx), identity, workerjournal.MutationRejected)
+		return workerhttp.Attempt{}, workerhttp.NewServiceError(
+			workerhttp.ErrorAttemptConflict,
+			fmt.Sprintf("supersede is not valid while the attempt is %q", attempt.State),
+			false,
+			nil,
+		)
+	}
+	closed, err := service.journal.TransitionAttempt(ctx, workerjournal.AttemptTransition{
+		Reference:         attempt.AttemptReference,
+		Expected:          workerhttp.AttemptStateIndeterminate,
+		State:             workerhttp.AttemptStateTerminal,
+		ProviderSessionID: attempt.ProviderSessionID,
+		OccurredAt:        service.timestamp(),
+		Result: &workerhttp.TerminalResult{
+			Outcome: workerhttp.OutcomeStopped,
+			Summary: "The original attempt was superseded for recovery. " + request.Reason,
+		},
+	})
+	if err != nil {
+		_ = service.resolveMutation(context.WithoutCancel(ctx), identity, workerjournal.MutationIndeterminate)
+		return workerhttp.Attempt{}, service.journalError(err)
+	}
+	if err := service.resolveMutation(ctx, identity, workerjournal.MutationApplied); err != nil {
+		return workerhttp.Attempt{}, err
+	}
+	return closed, nil
 }
 
 func (service *Service) launchProvider(

@@ -405,6 +405,73 @@ func TestJournalBackedServiceMarksInterruptedWorkIndeterminateOnStartup(t *testi
 	_ = provider.Advance(t.Context(), identity.SessionID)
 }
 
+func TestSupersedeFencesHistoricalAttemptBeforeAdmittingSuccessor(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "worker.db")
+	clock := newStepClock()
+	provider := worker.NewScriptedAdapter("codex", map[worker.Role]worker.Script{
+		worker.RoleCoder: {
+			Events:      []worker.Event{{Type: worker.EventActivity, Text: "still working"}},
+			Disposition: worker.DispositionSucceeded, Summary: "done",
+		},
+	})
+	first := newHTTPHarness(t, path, provider, clock)
+	identity := validLaunchIdentity("ses_supersede", "att_original", "launch_original")
+	original, created, err := first.client.PutAttempt(t.Context(), identity, validPutRequest())
+	if err != nil || !created {
+		t.Fatalf("start original attempt: attempt=%+v created=%t error=%v", original, created, err)
+	}
+	first.cancel()
+	waitForNoActiveSession(t, first.service, original.AttemptReference)
+	if _, err := first.journal.RecoverInterrupted(t.Context(), clock.Now()); err != nil {
+		t.Fatalf("mark interrupted attempt: %v", err)
+	}
+	first.close(t)
+
+	reopenedProvider := worker.NewScriptedAdapter("codex", map[worker.Role]worker.Script{
+		worker.RoleCoder: {Disposition: worker.DispositionSucceeded, Summary: "successor done"},
+	})
+	reopened := newHTTPHarness(t, path, reopenedProvider, clock)
+	defer reopened.close(t)
+	supersedeIdentity := commandIdentity(original.AttemptReference, "supersede_original")
+	request := workerhttp.SupersedeRequest{Reason: "continue the missing result in one successor"}
+	closed, err := reopened.client.Supersede(t.Context(), supersedeIdentity, request)
+	if err != nil || closed.State != workerhttp.AttemptStateTerminal || closed.Result == nil ||
+		closed.Result.Outcome != workerhttp.OutcomeStopped {
+		t.Fatalf("supersede original attempt: attempt=%+v error=%v", closed, err)
+	}
+	replayed, err := reopened.client.Supersede(t.Context(), supersedeIdentity, request)
+	if err != nil || !reflect.DeepEqual(replayed, closed) {
+		t.Fatalf("replay supersede: attempt=%+v error=%v", replayed, err)
+	}
+	successorIdentity := validLaunchIdentity(identity.SessionID, "att_successor", "launch_successor")
+	successor, created, err := reopened.client.PutAttempt(t.Context(), successorIdentity, validPutRequest())
+	if err != nil || !created || successor.State != workerhttp.AttemptStateRunning {
+		t.Fatalf("admit successor: attempt=%+v created=%t error=%v", successor, created, err)
+	}
+}
+
+func TestSupersedeRefusesAttemptWithAttachedProviderProcess(t *testing.T) {
+	provider := worker.NewScriptedAdapter("codex", map[worker.Role]worker.Script{
+		worker.RoleCoder: {
+			Events:      []worker.Event{{Type: worker.EventActivity, Text: "still live"}},
+			Disposition: worker.DispositionSucceeded, Summary: "done",
+		},
+	})
+	harness := newHTTPHarness(t, filepath.Join(t.TempDir(), "worker.db"), provider, newStepClock())
+	defer harness.close(t)
+	identity := validLaunchIdentity("ses_live_supersede", "att_live", "launch_live")
+	attempt, created, err := harness.client.PutAttempt(t.Context(), identity, validPutRequest())
+	if err != nil || !created {
+		t.Fatalf("start live attempt: attempt=%+v created=%t error=%v", attempt, created, err)
+	}
+	_, err = harness.client.Supersede(
+		t.Context(),
+		commandIdentity(attempt.AttemptReference, "supersede_live"),
+		workerhttp.SupersedeRequest{Reason: "must not create a second writer"},
+	)
+	assertRemoteCode(t, err, workerhttp.ErrorUnsafeConcurrency)
+}
+
 func TestJournalBackedServiceResumesSafeInterruptedAttemptOnStartup(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "worker.db")
 	clock := newStepClock()
@@ -643,6 +710,7 @@ func newHTTPHarness(
 		workerhttp.CapabilityPause,
 		workerhttp.CapabilityContinue,
 		workerhttp.CapabilityCooperativeStop,
+		workerhttp.CapabilityForceStop,
 		workerhttp.CapabilityEventReplay,
 	})
 }

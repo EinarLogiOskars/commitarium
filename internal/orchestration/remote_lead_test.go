@@ -91,6 +91,14 @@ func (*conversationalRemoteLeadWorker) ForceStop(
 	return workerhttp.Attempt{}, errors.New("force stop is not expected")
 }
 
+func (*conversationalRemoteLeadWorker) Supersede(
+	context.Context,
+	workerhttp.MutationIdentity,
+	workerhttp.SupersedeRequest,
+) (workerhttp.Attempt, error) {
+	return workerhttp.Attempt{}, errors.New("supersede is not expected")
+}
+
 func (stub *conversationalRemoteLeadWorker) OpenEventStream(
 	_ context.Context,
 	reference workerhttp.AttemptReference,
@@ -489,6 +497,14 @@ func (stub *remoteLeadWorkerStub) ForceStop(
 	workerhttp.ForceStopRequest,
 ) (workerhttp.Attempt, error) {
 	return workerhttp.Attempt{}, errors.New("force stop is not expected")
+}
+
+func (stub *remoteLeadWorkerStub) Supersede(
+	context.Context,
+	workerhttp.MutationIdentity,
+	workerhttp.SupersedeRequest,
+) (workerhttp.Attempt, error) {
+	return workerhttp.Attempt{}, errors.New("supersede is not expected")
 }
 
 func (stub *remoteLeadWorkerStub) OpenEventStream(

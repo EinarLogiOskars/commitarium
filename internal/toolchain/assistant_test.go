@@ -44,6 +44,12 @@ func (worker *assistantWorkerStub) ForceStop(_ context.Context, identity workerh
 	return worker.attempt, nil
 }
 
+func (worker *assistantWorkerStub) Supersede(_ context.Context, identity workerhttp.MutationIdentity, _ workerhttp.SupersedeRequest) (workerhttp.Attempt, error) {
+	worker.attempt.AttemptReference = identity.AttemptReference
+	worker.attempt.State = workerhttp.AttemptStateTerminal
+	return worker.attempt, nil
+}
+
 func TestAssistantProjectDeletionRefusesActiveUnlessForcedAndKeepsOtherProjects(t *testing.T) {
 	root, workspaces := t.TempDir(), t.TempDir()
 	reader := &projectReaderStub{stored: project.Project{ID: "prj_one", Name: "One"}}

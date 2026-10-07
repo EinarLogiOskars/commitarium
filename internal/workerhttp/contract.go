@@ -238,6 +238,12 @@ type ForceStopRequest struct {
 	Reason string `json:"reason"`
 }
 
+// SupersedeRequest closes a previously indeterminate attempt only after the
+// worker has proved that it no longer owns a live provider process for it.
+type SupersedeRequest struct {
+	Reason string `json:"reason"`
+}
+
 type EventType string
 
 const (
@@ -353,6 +359,7 @@ const (
 	ErrorModelCatalogUnavailable ErrorCode = "model_catalog_unavailable"
 	ErrorConfigurationMismatch   ErrorCode = "configuration_mismatch"
 	ErrorIncompleteResult        ErrorCode = "incomplete_result"
+	ErrorUnsafeConcurrency       ErrorCode = "unsafe_concurrency"
 	ErrorIndeterminateState      ErrorCode = "indeterminate_state"
 	ErrorRedactionFailed         ErrorCode = "redaction_failed"
 	ErrorInvalidEventStream      ErrorCode = "invalid_event_stream"

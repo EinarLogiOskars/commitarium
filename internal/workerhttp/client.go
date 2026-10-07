@@ -278,6 +278,36 @@ func (client *Client) ForceStop(
 	return attempt, nil
 }
 
+func (client *Client) Supersede(
+	ctx context.Context,
+	identity MutationIdentity,
+	request SupersedeRequest,
+) (Attempt, error) {
+	if err := request.Validate(identity); err != nil {
+		return Attempt{}, err
+	}
+	var attempt Attempt
+	status, _, err := client.do(
+		ctx,
+		http.MethodPost,
+		attemptPath(identity.AttemptReference)+"/supersede",
+		true,
+		identity.IdempotencyKey,
+		request,
+		&attempt,
+	)
+	if err != nil {
+		return Attempt{}, err
+	}
+	if status != http.StatusOK {
+		return Attempt{}, invalidClientResponse("supersede status", nil)
+	}
+	if err := validateClientAttempt(identity.AttemptReference, attempt); err != nil {
+		return Attempt{}, err
+	}
+	return attempt, nil
+}
+
 type responseMetadata struct {
 	location string
 }

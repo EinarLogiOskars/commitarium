@@ -70,6 +70,7 @@ const (
 	MutationContinue  MutationKind = "continue"
 	MutationStop      MutationKind = "stop"
 	MutationForceStop MutationKind = "force_stop"
+	MutationSupersede MutationKind = "supersede"
 )
 
 type MutationStatus string
@@ -156,7 +157,7 @@ func (transition AttemptTransition) Validate() error {
 
 func (kind MutationKind) IsValid() bool {
 	switch kind {
-	case MutationMessage, MutationPause, MutationContinue, MutationStop, MutationForceStop:
+	case MutationMessage, MutationPause, MutationContinue, MutationStop, MutationForceStop, MutationSupersede:
 		return true
 	default:
 		return false

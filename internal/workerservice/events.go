@@ -122,6 +122,13 @@ func (service *Service) supervise(
 				service.drainProviderPreviews(reference, &previews)
 			}
 			if err := service.recordProviderEvent(reference, event); err != nil {
+				if service.forceStopAfterSupervisionFailure(providerSession) {
+					service.finishAttempt(reference, providerSession)
+				} else {
+					service.activeMu.Lock()
+					service.unfenced[reference] = struct{}{}
+					service.activeMu.Unlock()
+				}
 				return
 			}
 		case preview, open := <-previews:
@@ -132,6 +139,16 @@ func (service *Service) supervise(
 			service.publishProviderPreview(reference, preview)
 		}
 	}
+}
+
+func (service *Service) forceStopAfterSupervisionFailure(providerSession worker.Session) bool {
+	forceStoppable, ok := providerSession.(worker.ForceStoppableSession)
+	if !ok {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(service.lifetime), service.forceStopTimeout)
+	defer cancel()
+	return forceStoppable.ForceStop(ctx, "worker supervision failed closed") == nil
 }
 
 func (service *Service) drainProviderPreviews(
@@ -449,6 +466,13 @@ func (service *Service) hasActiveSession(reference workerhttp.AttemptReference) 
 	service.activeMu.RLock()
 	defer service.activeMu.RUnlock()
 	_, ok := service.active[reference]
+	return ok
+}
+
+func (service *Service) hasUnfencedSession(reference workerhttp.AttemptReference) bool {
+	service.activeMu.RLock()
+	defer service.activeMu.RUnlock()
+	_, ok := service.unfenced[reference]
 	return ok
 }
 

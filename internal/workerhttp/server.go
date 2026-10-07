@@ -36,6 +36,11 @@ type Service interface {
 		identity MutationIdentity,
 		request ForceStopRequest,
 	) (Attempt, error)
+	Supersede(
+		ctx context.Context,
+		identity MutationIdentity,
+		request SupersedeRequest,
+	) (Attempt, error)
 }
 
 type ServerConfig struct {
@@ -170,6 +175,10 @@ func (server *Server) routes() {
 	server.mux.HandleFunc(
 		APIBasePath+"/sessions/{sessionID}/attempts/{attemptID}/force-stop",
 		server.authenticate(server.requireMethod(http.MethodPost, server.forceStop)),
+	)
+	server.mux.HandleFunc(
+		APIBasePath+"/sessions/{sessionID}/attempts/{attemptID}/supersede",
+		server.authenticate(server.requireMethod(http.MethodPost, server.supersede)),
 	)
 	server.mux.HandleFunc(
 		APIBasePath+"/sessions/{sessionID}/attempts/{attemptID}/events/stream",
@@ -329,6 +338,35 @@ func (server *Server) forceStop(w http.ResponseWriter, r *http.Request) {
 	}
 
 	attempt, err := server.service.ForceStop(r.Context(), identity, request)
+	if err != nil {
+		server.writeServiceError(w, err)
+		return
+	}
+	if !server.validateAttemptResponse(w, identity.AttemptReference, attempt) {
+		return
+	}
+	server.writeResponse(w, http.StatusOK, attempt)
+}
+
+func (server *Server) supersede(w http.ResponseWriter, r *http.Request) {
+	identity, ok := server.readMutationIdentity(w, r)
+	if !ok {
+		return
+	}
+	var request SupersedeRequest
+	if !server.decodeRequest(w, r, &request) {
+		return
+	}
+	if err := request.Validate(identity); err != nil {
+		server.writeProtocolError(w, http.StatusBadRequest, ProtocolError{
+			Code: ErrorInvalidRequest, Message: err.Error(),
+		})
+		return
+	}
+	if !server.requireCapability(w, CapabilityForceStop) {
+		return
+	}
+	attempt, err := server.service.Supersede(r.Context(), identity, request)
 	if err != nil {
 		server.writeServiceError(w, err)
 		return

@@ -83,6 +83,14 @@ func (service *recordingService) ForceStop(
 	return service.attempt, service.forceErr
 }
 
+func (service *recordingService) Supersede(
+	_ context.Context,
+	_ MutationIdentity,
+	_ SupersedeRequest,
+) (Attempt, error) {
+	return service.attempt, nil
+}
+
 func TestNewServerValidatesConfiguration(t *testing.T) {
 	validConfig := testServerConfig()
 	service := &recordingService{attempt: validServerAttempt()}

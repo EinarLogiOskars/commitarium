@@ -598,6 +598,13 @@ func (request ForceStopRequest) Validate(identity MutationIdentity) error {
 	return validateRequiredText("force-stop reason", request.Reason, maxReasonBytes)
 }
 
+func (request SupersedeRequest) Validate(identity MutationIdentity) error {
+	if err := identity.Validate(); err != nil {
+		return err
+	}
+	return validateRequiredText("supersede reason", request.Reason, maxReasonBytes)
+}
+
 func (eventType EventType) IsValid() bool {
 	switch eventType {
 	case EventMessage,
@@ -827,6 +834,7 @@ func (code ErrorCode) IsValid() bool {
 		ErrorModelCatalogUnavailable,
 		ErrorConfigurationMismatch,
 		ErrorIncompleteResult,
+		ErrorUnsafeConcurrency,
 		ErrorIndeterminateState,
 		ErrorRedactionFailed,
 		ErrorInvalidEventStream,
