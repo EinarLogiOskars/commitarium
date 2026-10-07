@@ -75,7 +75,7 @@ const FORGEJO_IDENTITIES: &[ForgejoIdentity] = &[
             source_variable: "COMMITARIUM_FORGEJO_TOKEN_SOURCE",
             relative_path: ".commitarium/forgejo-token",
         },
-        scopes: "write:user,write:repository,read:issue",
+        scopes: "write:admin,write:user,write:repository,read:issue",
     },
     ForgejoIdentity {
         username: "codex-lead",
@@ -589,15 +589,36 @@ fn ensure_forgejo_credentials(
             true
         };
         let path = secret_path(root, &identity.token);
-        if !created && secret_is_ready(&path)? {
+        if !created && token_scopes_are_ready(&path, identity.scopes)? {
             continue;
         }
         let token = admin.generate_token(identity.username, identity.scopes)?;
         validate_secret_bytes(&token)?;
         write_secret(&path, &token)?;
+        write_secret(&token_scope_marker_path(&path), identity.scopes.as_bytes())?;
         changed = true;
     }
     Ok(changed)
+}
+
+fn token_scope_marker_path(token_path: &Path) -> PathBuf {
+    let mut marker = token_path.as_os_str().to_os_string();
+    marker.push(".scopes");
+    PathBuf::from(marker)
+}
+
+fn token_scopes_are_ready(token_path: &Path, scopes: &str) -> Result<bool, String> {
+    if !secret_is_ready(token_path)? {
+        return Ok(false);
+    }
+    let marker = token_scope_marker_path(token_path);
+    if !secret_is_ready(&marker)? {
+        return Ok(false);
+    }
+    let stored = fs::read(&marker)
+        .map(Zeroizing::new)
+        .map_err(|_| format!("could not read private file {}", marker.display()))?;
+    Ok(trim_ascii_whitespace(&stored) == scopes.as_bytes())
 }
 
 struct DockerForgejoAdmin {
@@ -891,6 +912,14 @@ mod tests {
         }
     }
 
+    fn write_current_forgejo_token(root: &Path, identity: &ForgejoIdentity, token: &[u8]) {
+        let path = secret_path(root, &identity.token);
+        fs::create_dir_all(path.parent().expect("token parent")).expect("create token parent");
+        write_secret(&path, token).expect("write token");
+        write_secret(&token_scope_marker_path(&path), identity.scopes.as_bytes())
+            .expect("write token scopes");
+    }
+
     #[test]
     fn transport_bootstrap_creates_and_preserves_private_tokens() {
         let root = tempfile::tempdir().expect("temp root");
@@ -944,8 +973,7 @@ mod tests {
         let root = tempfile::tempdir().expect("temp root");
         let existing = &FORGEJO_IDENTITIES[0];
         let existing_path = secret_path(root.path(), &existing.token);
-        fs::create_dir_all(existing_path.parent().expect("parent")).expect("parent");
-        fs::write(&existing_path, b"existing-token").expect("existing token");
+        write_current_forgejo_token(root.path(), existing, b"existing-token");
 
         let broken = &FORGEJO_IDENTITIES[1];
         fs::create_dir_all(secret_path(root.path(), &broken.token)).expect("empty mount directory");
@@ -967,6 +995,10 @@ mod tests {
             .generated
             .iter()
             .all(|(_, scopes)| !scopes.contains("all")));
+        assert!(FORGEJO_IDENTITIES[0]
+            .scopes
+            .split(',')
+            .any(|scope| scope == "write:admin"));
         assert!(secret_path(root.path(), &broken.token).is_file());
 
         let created = admin.created.len();
@@ -977,6 +1009,40 @@ mod tests {
         );
         assert_eq!(admin.created.len(), created);
         assert_eq!(admin.generated.len(), generated);
+    }
+
+    #[test]
+    fn forgejo_bootstrap_rotates_a_token_when_its_scope_marker_is_missing() {
+        let root = tempfile::tempdir().expect("temp root");
+        let mut admin = FakeAdmin::default();
+        for identity in FORGEJO_IDENTITIES {
+            admin.users.insert(identity.username.to_string());
+            write_current_forgejo_token(root.path(), identity, b"current-token");
+        }
+
+        let administrator = &FORGEJO_IDENTITIES[0];
+        let administrator_path = secret_path(root.path(), &administrator.token);
+        fs::remove_file(token_scope_marker_path(&administrator_path)).expect("remove old marker");
+        admin.tokens.insert(
+            administrator.username.to_string(),
+            b"upgraded-admin-token".to_vec(),
+        );
+
+        let users = admin.users.clone();
+        assert!(
+            ensure_forgejo_credentials(root.path(), &mut admin, users).expect("upgrade old token")
+        );
+        assert_eq!(
+            admin.generated,
+            vec![(
+                administrator.username.to_string(),
+                administrator.scopes.to_string()
+            )]
+        );
+        assert_eq!(
+            fs::read(administrator_path).expect("upgraded token"),
+            b"upgraded-admin-token"
+        );
     }
 
     #[test]

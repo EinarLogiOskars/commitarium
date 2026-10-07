@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -142,8 +143,15 @@ func (client *Client) EnsureRepositoryCollaborators(
 		switch status {
 		case http.StatusOK, http.StatusCreated, http.StatusNoContent:
 			return nil
-		case http.StatusNotFound:
+		case http.StatusNotFound, http.StatusUnprocessableEntity:
 			if optional {
+				log.Printf(
+					"skip optional Forgejo collaborator %q for %s/%s: HTTP %d",
+					collaborator,
+					owner,
+					name,
+					status,
+				)
 				return nil
 			}
 			fallthrough

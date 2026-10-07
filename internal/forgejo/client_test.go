@@ -471,14 +471,17 @@ func TestClientEnsuresConfiguredRepositoryCollaborators(t *testing.T) {
 	}
 }
 
-func TestClientToleratesViewerBeforeOnboardingButNotMissingAgent(t *testing.T) {
+func TestClientToleratesUnavailableViewerBeforeOnboardingButNotMissingAgent(t *testing.T) {
 	tests := []struct {
 		name       string
+		status     int
 		viewerOnly bool
 		wantError  bool
 	}{
-		{name: "optional viewer", viewerOnly: true},
-		{name: "required agent", wantError: true},
+		{name: "optional viewer is missing", status: http.StatusNotFound, viewerOnly: true},
+		{name: "optional restricted viewer is not addable", status: http.StatusUnprocessableEntity, viewerOnly: true},
+		{name: "required agent is missing", status: http.StatusNotFound, wantError: true},
+		{name: "required agent is not addable", status: http.StatusUnprocessableEntity, wantError: true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -486,7 +489,7 @@ func TestClientToleratesViewerBeforeOnboardingButNotMissingAgent(t *testing.T) {
 				BaseURL: "http://forgejo:3000", TokenFile: writeTestToken(t, "admin-token"),
 				RequestTimeout: time.Second,
 				HTTPClient: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
-					return jsonResponse(http.StatusNotFound, `{}`), nil
+					return jsonResponse(test.status, `{}`), nil
 				})},
 			}
 			if test.viewerOnly {
