@@ -209,8 +209,8 @@ fn forgejo_host_base_url() -> Result<Url, String> {
 }
 
 fn validate_viewer_password(password: &str) -> Result<(), String> {
-    if password.chars().count() < 12 {
-        return Err("the audit viewer password must be at least 12 characters".to_string());
+    if password.chars().count() < 6 {
+        return Err("the audit viewer password must be at least 6 characters".to_string());
     }
     if password.len() > 255 {
         return Err("the audit viewer password must be at most 255 bytes".to_string());
@@ -1058,9 +1058,9 @@ mod tests {
 
     #[test]
     fn audit_viewer_password_has_a_bounded_non_control_contract() {
-        assert!(validate_viewer_password("twelve-chars").is_ok());
-        assert!(validate_viewer_password("too-short").is_err());
-        assert!(validate_viewer_password("valid-length\n").is_err());
+        assert!(validate_viewer_password("sixsix").is_ok());
+        assert!(validate_viewer_password("short").is_err());
+        assert!(validate_viewer_password("sixsix\n").is_err());
         assert!(validate_viewer_password(&"x".repeat(256)).is_err());
     }
 

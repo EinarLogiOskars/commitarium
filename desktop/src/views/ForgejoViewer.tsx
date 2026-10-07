@@ -28,9 +28,9 @@ export function ForgejoViewer({ onClose }: { onClose: () => void }) {
     };
   }, []);
 
-  const tooShort = password.length > 0 && password.length < 12;
+  const tooShort = password.length > 0 && password.length < 6;
   const mismatch = confirm.length > 0 && confirm !== password;
-  const canSave = password.length >= 12 && confirm === password && !busy;
+  const canSave = password.length >= 6 && confirm === password && !busy;
 
   const save = async () => {
     setBusy(true);
@@ -90,7 +90,7 @@ export function ForgejoViewer({ onClose }: { onClose: () => void }) {
             autoComplete="new-password"
           />
         </label>
-        {tooShort && <p className="muted note">Use at least 12 characters.</p>}
+        {tooShort && <p className="muted note">Use at least 6 characters.</p>}
         {mismatch && <p className="muted note">Passwords don't match.</p>}
 
         <div className="row">
