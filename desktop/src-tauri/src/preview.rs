@@ -1,88 +1,28 @@
-//! Disposable project previews for ADR-013.
+//! Disposable project previews backed by a validated Docker Compose model.
 //!
 //! The renderer supplies only a project identity and target. This module reads
-//! the trusted coordinator contract, fetches the canonical commit with the
-//! host-only Forgejo credential, and launches a resource-bounded container.
+//! the trusted coordinator contract, fetches the canonical commit, asks
+//! `preview_compose` to normalize and rewrite the repository Compose file, and
+//! only launches that rewritten file.
 
-use crate::docker;
+use crate::{docker, preview_compose};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
-use std::collections::{HashMap, VecDeque};
+use serde_json::Value;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::{Arc, Mutex};
+use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, State};
 
 const STATUS_EVENT: &str = "preview-status-changed";
-const PREVIEW_LABEL: &str = "commitarium.preview";
 const PREVIEW_TEMP_PREFIX: &str = "commitarium-preview-";
+const COMPOSE_PROJECT_LABEL: &str = "com.docker.compose.project";
 const READY_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 const LOG_LIMIT: usize = 400;
-
-const PREVIEW_SCRIPT: &str = r#"set -eu
-mkdir -p /workspace /tmp/home /tmp/mise-cache /tmp/mise-state
-cp -a /source/. /workspace/
-cd /workspace
-
-setup_count=$(jq '.setup | length' /spec/run.json)
-index=0
-while [ "$index" -lt "$setup_count" ]; do
-    command=$(jq -r ".setup[$index]" /spec/run.json)
-    fifo="/tmp/preview-setup-$index"
-    mkfifo "$fifo"
-    sed -u 's/^/[setup] /' < "$fifo" &
-    logger=$!
-    set +e
-    /bin/sh -lc "$command" > "$fifo" 2>&1
-    code=$?
-    set -e
-    wait "$logger"
-    rm -f "$fifo"
-    if [ "$code" -ne 0 ]; then exit "$code"; fi
-    index=$((index+1))
-done
-
-pids=''
-loggers=''
-cleanup() {
-    for pid in $pids $loggers; do kill "$pid" 2>/dev/null || true; done
-    wait 2>/dev/null || true
-}
-trap cleanup EXIT INT TERM
-
-process_count=$(jq '.processes | length' /spec/run.json)
-index=0
-while [ "$index" -lt "$process_count" ]; do
-    name=$(jq -r ".processes[$index].name" /spec/run.json)
-    command=$(jq -r ".processes[$index].command" /spec/run.json)
-    fifo="/tmp/preview-process-$index"
-    mkfifo "$fifo"
-    sed -u "s/^/[$name] /" < "$fifo" &
-    logger=$!
-    /bin/sh -lc "$command" > "$fifo" 2>&1 &
-    pid=$!
-    pids="$pids $pid"
-    loggers="$loggers $logger"
-    index=$((index+1))
-done
-
-while :; do
-    for pid in $pids; do
-        if ! kill -0 "$pid" 2>/dev/null; then
-            set +e
-            wait "$pid"
-            code=$?
-            set -e
-            exit "$code"
-        fi
-    done
-    sleep 1
-done
-"#;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -102,7 +42,7 @@ pub enum PreviewState {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PreviewUrl {
-    process: String,
+    service: String,
     url: String,
     open: bool,
 }
@@ -118,19 +58,15 @@ pub struct PreviewStatus {
     error: Option<String>,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize)]
 struct RunConfig {
-    setup: Vec<String>,
-    processes: Vec<RunProcess>,
+    open: RunOpen,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
-struct RunProcess {
-    name: String,
-    command: String,
-    port: Option<u16>,
-    #[serde(default)]
-    open: bool,
+#[derive(Clone, Debug, Deserialize)]
+struct RunOpen {
+    service: String,
+    port: u16,
 }
 
 #[derive(Deserialize)]
@@ -158,22 +94,27 @@ struct Repository {
     name: String,
 }
 
+#[derive(Clone)]
+struct ComposeRuntime {
+    project_name: String,
+    compose_file: PathBuf,
+    source_root: PathBuf,
+}
+
 struct PreviewRecord {
     status: PreviewStatus,
     generation: u64,
-    container_id: Option<String>,
-    source_root: Option<PathBuf>,
+    runtime: Option<ComposeRuntime>,
     logs: VecDeque<String>,
 }
 
 struct StoppedPreview {
     status: PreviewStatus,
-    container_id: Option<String>,
-    source_root: Option<PathBuf>,
+    runtime: Option<ComposeRuntime>,
 }
 
 struct PreviewLogSource {
-    container_id: Option<String>,
+    runtime: Option<ComposeRuntime>,
     cached: Vec<String>,
 }
 
@@ -201,8 +142,7 @@ impl PreviewManager {
             PreviewRecord {
                 status,
                 generation,
-                container_id: None,
-                source_root: None,
+                runtime: None,
                 logs: VecDeque::new(),
             },
         );
@@ -220,13 +160,7 @@ impl PreviewManager {
             .map(|record| record.status.clone()))
     }
 
-    fn attach(
-        &self,
-        project_id: &str,
-        generation: u64,
-        container_id: String,
-        source_root: PathBuf,
-    ) -> bool {
+    fn attach(&self, project_id: &str, generation: u64, runtime: ComposeRuntime) -> bool {
         let Ok(mut registry) = self.inner.lock() else {
             return false;
         };
@@ -236,8 +170,7 @@ impl PreviewManager {
         if record.generation != generation || record.status.state != PreviewState::Starting {
             return false;
         }
-        record.container_id = Some(container_id);
-        record.source_root = Some(source_root);
+        record.runtime = Some(runtime);
         true
     }
 
@@ -255,6 +188,14 @@ impl PreviewManager {
             record.logs.pop_front();
         }
         record.logs.push_back(line);
+    }
+
+    fn active(&self, project_id: &str, generation: u64, state: PreviewState) -> bool {
+        self.inner.lock().ok().is_some_and(|registry| {
+            registry.projects.get(project_id).is_some_and(|record| {
+                record.generation == generation && record.status.state == state
+            })
+        })
     }
 
     fn running(
@@ -278,7 +219,7 @@ impl PreviewManager {
         project_id: &str,
         generation: u64,
         fallback: &str,
-    ) -> Option<(PreviewStatus, Option<PathBuf>)> {
+    ) -> Option<(PreviewStatus, Option<ComposeRuntime>)> {
         let mut registry = self.inner.lock().ok()?;
         let record = registry.projects.get_mut(project_id)?;
         if record.generation != generation || record.status.state == PreviewState::Stopped {
@@ -287,7 +228,7 @@ impl PreviewManager {
         let detail = if record.logs.is_empty() {
             fallback.to_string()
         } else {
-            record
+            let recent = record
                 .logs
                 .iter()
                 .rev()
@@ -297,13 +238,17 @@ impl PreviewManager {
                 .into_iter()
                 .rev()
                 .collect::<Vec<_>>()
-                .join("\n")
+                .join("\n");
+            if recent.contains(fallback) {
+                recent
+            } else {
+                format!("{fallback}\n\n{recent}")
+            }
         };
         record.status.state = PreviewState::Failed;
         record.status.error = Some(detail);
         record.status.urls.clear();
-        record.container_id = None;
-        Some((record.status.clone(), record.source_root.take()))
+        Some((record.status.clone(), record.runtime.take()))
     }
 
     fn stop(&self, project_id: &str) -> Result<Option<StoppedPreview>, String> {
@@ -319,12 +264,11 @@ impl PreviewManager {
         record.status.error = None;
         Ok(Some(StoppedPreview {
             status: record.status.clone(),
-            container_id: record.container_id.take(),
-            source_root: record.source_root.take(),
+            runtime: record.runtime.take(),
         }))
     }
 
-    fn container_and_logs(&self, project_id: &str) -> Result<Option<PreviewLogSource>, String> {
+    fn logs(&self, project_id: &str) -> Result<Option<PreviewLogSource>, String> {
         let registry = self
             .inner
             .lock()
@@ -333,7 +277,7 @@ impl PreviewManager {
             .projects
             .get(project_id)
             .map(|record| PreviewLogSource {
-                container_id: record.container_id.clone(),
+                runtime: record.runtime.clone(),
                 cached: record.logs.iter().cloned().collect(),
             }))
     }
@@ -364,7 +308,7 @@ pub async fn start_preview(
     }
     let run = manifest
         .run
-        .ok_or("this project's stack has no preview run configuration")?;
+        .ok_or("this project's stack has no preview open target")?;
     validate_run(&run)?;
     let handoff: ProjectHandoff = coordinator_json(
         client
@@ -408,7 +352,6 @@ pub async fn start_preview(
         })
         .await;
         if result.is_err() {
-            // A panic is deliberately reduced to a non-sensitive fixed error.
             fail_preview(
                 &task_app,
                 &owned,
@@ -447,19 +390,23 @@ pub async fn get_preview_logs(
     project_id: String,
 ) -> Result<Vec<String>, String> {
     validate_identifier("project ID", &project_id)?;
-    let Some(source) = manager.container_and_logs(&project_id)? else {
+    let Some(source) = manager.logs(&project_id)? else {
         return Ok(Vec::new());
     };
-    let Some(container) = source.container_id else {
+    let Some(runtime) = source.runtime else {
         return Ok(source.cached);
     };
-    let logs = tauri::async_runtime::spawn_blocking(move || docker_logs(&container))
+    let logs = tauri::async_runtime::spawn_blocking(move || compose_logs(&runtime))
         .await
         .map_err(|_| "preview log task stopped unexpectedly".to_string())?;
-    match logs {
-        Ok(lines) if !lines.is_empty() => Ok(lines),
-        _ => Ok(source.cached),
+    let mut combined = source.cached;
+    if let Ok(lines) = logs {
+        combined.extend(lines);
     }
+    if combined.len() > LOG_LIMIT {
+        combined.drain(..combined.len() - LOG_LIMIT);
+    }
+    Ok(combined)
 }
 
 async fn stop_project(
@@ -472,11 +419,9 @@ async fn stop_project(
     };
     let _ = app.emit(STATUS_EVENT, stopped.status);
     tauri::async_runtime::spawn_blocking(move || {
-        if let Some(container) = stopped.container_id {
-            remove_container(&container);
-        }
-        if let Some(path) = stopped.source_root {
-            let _ = fs::remove_dir_all(path);
+        if let Some(runtime) = stopped.runtime {
+            compose_down(&runtime, false, false);
+            remove_source(&runtime.source_root);
         }
     })
     .await
@@ -492,76 +437,113 @@ fn launch_preview(
     handoff: ProjectHandoff,
     run: RunConfig,
 ) {
-    let root = match prepare_source(&handoff, &run) {
+    let root = match prepare_source(&handoff) {
         Ok(path) => path,
         Err(error) => {
             fail_preview(&app, &manager, &project_id, generation, &error, None);
             return;
         }
     };
-    let launched = launch_container(&project_id, generation, &root, &run);
-    let container = match launched {
-        Ok(container) => container,
+    let source = root.join("source");
+    let open = preview_compose::OpenTarget {
+        service: run.open.service.clone(),
+        port: run.open.port,
+    };
+    let prepared = match preview_compose::normalize_and_rewrite(&source, &project_id, &open) {
+        Ok(prepared) => prepared,
         Err(error) => {
-            fail_preview(&app, &manager, &project_id, generation, &error, Some(root));
+            fail_preview(&app, &manager, &project_id, generation, &error, None);
+            remove_source(&root);
             return;
         }
     };
-    if !manager.attach(&project_id, generation, container.clone(), root.clone()) {
-        remove_container(&container);
-        let _ = fs::remove_dir_all(root);
+    let compose_file = root.join("preview.compose.json");
+    if let Err(error) = preview_compose::write_rewritten(&prepared, &compose_file) {
+        fail_preview(&app, &manager, &project_id, generation, &error, None);
+        remove_source(&root);
         return;
     }
-    follow_logs(
-        manager.clone(),
-        project_id.clone(),
+    let runtime = ComposeRuntime {
+        project_name: prepared.project_name.clone(),
+        compose_file,
+        source_root: root,
+    };
+    if !manager.attach(&project_id, generation, runtime.clone()) {
+        remove_source(&runtime.source_root);
+        return;
+    }
+    manager.append_log(
+        &project_id,
         generation,
-        container.clone(),
+        "[preview] Building and starting the Compose stack.".into(),
     );
-    watch_container(
-        app.clone(),
-        manager.clone(),
-        project_id.clone(),
-        generation,
-        container.clone(),
-    );
+    match compose_stream_up(&runtime, &manager, &project_id, generation) {
+        Ok(()) => {}
+        Err(error) => {
+            manager.append_log(&project_id, generation, format!("[preview] {error}"));
+            fail_preview(&app, &manager, &project_id, generation, &error, None);
+            return;
+        }
+    }
+    if !manager.active(&project_id, generation, PreviewState::Starting) {
+        compose_down(&runtime, false, false);
+        remove_source(&runtime.source_root);
+        return;
+    }
 
-    let urls = match resolve_urls(&container, &run) {
+    let urls = match resolve_urls(&runtime, &prepared.published_ports, &run.open) {
         Ok(urls) => urls,
         Err(error) => {
             fail_preview(&app, &manager, &project_id, generation, &error, None);
-            remove_container(&container);
             return;
         }
     };
-    if let Some(open) = urls.iter().find(|url| url.open) {
-        if let Err(error) = wait_for_http(&manager, &project_id, generation, &container, &open.url)
-        {
-            fail_preview(&app, &manager, &project_id, generation, &error, None);
-            remove_container(&container);
-            return;
-        }
+    let Some(open_url) = urls.iter().find(|url| url.open) else {
+        fail_preview(
+            &app,
+            &manager,
+            &project_id,
+            generation,
+            "the preview open target has no URL",
+            None,
+        );
+        return;
+    };
+    if let Err(error) = wait_for_http(
+        &manager,
+        &project_id,
+        generation,
+        &runtime,
+        &run.open.service,
+        &open_url.url,
+    ) {
+        fail_preview(&app, &manager, &project_id, generation, &error, None);
+        return;
     }
     if let Some(status) = manager.running(&project_id, generation, urls) {
         let _ = app.emit(STATUS_EVENT, status);
+        watch_stack(
+            app,
+            manager,
+            project_id,
+            generation,
+            runtime,
+            run.open.service,
+        );
+    } else {
+        compose_down(&runtime, false, false);
+        remove_source(&runtime.source_root);
     }
 }
 
-fn prepare_source(handoff: &ProjectHandoff, run: &RunConfig) -> Result<PathBuf, String> {
+fn prepare_source(handoff: &ProjectHandoff) -> Result<PathBuf, String> {
     let temporary = tempfile::Builder::new()
         .prefix(PREVIEW_TEMP_PREFIX)
         .tempdir()
         .map_err(|e| format!("create preview source directory: {e}"))?;
     let root = temporary.path().to_path_buf();
     let source = root.join("source");
-    let spec = root.join("spec");
     fs::create_dir_all(&source).map_err(|e| format!("create preview checkout: {e}"))?;
-    fs::create_dir_all(&spec).map_err(|e| format!("create preview specification: {e}"))?;
-    fs::write(
-        spec.join("run.json"),
-        serde_json::to_vec(run).map_err(|e| e.to_string())?,
-    )
-    .map_err(|e| format!("write preview specification: {e}"))?;
     run_checked(
         Command::new("git").arg("init").arg(&source),
         "initialize preview checkout",
@@ -620,118 +602,111 @@ fn prepare_source(handoff: &ProjectHandoff, run: &RunConfig) -> Result<PathBuf, 
     Ok(temporary.keep())
 }
 
-fn launch_container(
-    project_id: &str,
-    generation: u64,
-    root: &Path,
-    run: &RunConfig,
-) -> Result<String, String> {
-    let image = docker::configured_service_image("codex-worker")?;
-    let toolchain_volume = format!("{}_commitarium-toolchains", docker::PROJECT_NAME);
-    let name = container_name(project_id, generation);
+fn compose_command(runtime: &ComposeRuntime) -> Command {
     let mut command = docker::docker_command();
     command
-        .args([
-            "run",
-            "-d",
-            "--rm",
-            "--pull=never",
-            "--name",
-            &name,
-            "--label",
-        ])
-        .arg(format!("{PREVIEW_LABEL}={project_id}"))
-        .args([
-            "--cpus",
-            "2",
-            "--memory",
-            "4g",
-            "--pids-limit",
-            "512",
-            "--read-only",
-        ])
-        .args([
-            "--tmpfs",
-            "/workspace:rw,exec,nosuid,nodev,size=4g,uid=65532,gid=65532",
-        ])
-        .args([
-            "--tmpfs",
-            "/tmp:rw,exec,nosuid,nodev,size=1g,uid=65532,gid=65532",
-        ])
-        .arg("--mount")
-        .arg(format!(
-            "type=bind,src={},dst=/source,readonly",
-            root.join("source").display()
-        ))
-        .arg("--mount")
-        .arg(format!(
-            "type=bind,src={},dst=/spec,readonly",
-            root.join("spec").display()
-        ))
-        .arg("--mount")
-        .arg(format!(
-            "type=volume,src={toolchain_volume},dst=/toolchains,readonly"
-        ))
-        .args([
-            "--env",
-            "HOME=/tmp/home",
-            "--env",
-            "PATH=/toolchains/data/shims:/usr/local/bin:/usr/bin:/bin",
-        ])
-        .arg("--env")
-        .arg(format!(
-            "MISE_GLOBAL_CONFIG_FILE=/toolchains/projects/{project_id}/mise.toml"
-        ))
-        .args([
-            "--env",
-            "MISE_SAFE=1",
-            "--env",
-            "MISE_DATA_DIR=/toolchains/data",
-            "--env",
-            "MISE_CACHE_DIR=/tmp/mise-cache",
-            "--env",
-            "MISE_STATE_DIR=/tmp/mise-state",
-        ])
-        .args(["--cap-drop", "ALL", "--security-opt", "no-new-privileges"]);
-    for process in &run.processes {
-        if let Some(port) = process.port {
-            command.args(["--publish", &format!("127.0.0.1::{port}")]);
-        }
-    }
-    command.args([
-        "--entrypoint",
-        "/usr/bin/timeout",
-        &image,
-        "24h",
-        "/bin/sh",
-        "-c",
-        PREVIEW_SCRIPT,
-    ]);
-    command_line(&mut command, "launch preview container")
+        .arg("compose")
+        .args(["-p", &runtime.project_name, "-f"])
+        .arg(&runtime.compose_file);
+    command
 }
 
-fn resolve_urls(container: &str, run: &RunConfig) -> Result<Vec<PreviewUrl>, String> {
-    let default_open = run
-        .processes
-        .iter()
-        .position(|process| process.open)
-        .or_else(|| {
-            run.processes
-                .iter()
-                .position(|process| process.port.is_some())
-        });
-    let mut urls = Vec::new();
-    for (index, process) in run.processes.iter().enumerate() {
-        let Some(port) = process.port else { continue };
-        let output = command_line(
-            docker::docker_command().args(["port", container, &format!("{port}/tcp")]),
+fn compose_capture(
+    runtime: &ComposeRuntime,
+    args: &[&str],
+    action: &str,
+) -> Result<String, String> {
+    let output = compose_command(runtime)
+        .args(args)
+        .output()
+        .map_err(|e| format!("{action}: {e}"))?;
+    let mut bytes = output.stdout;
+    bytes.extend_from_slice(&output.stderr);
+    let message = String::from_utf8_lossy(&bytes).trim().to_string();
+    if output.status.success() {
+        Ok(message)
+    } else if message.is_empty() {
+        Err(format!("{action} failed"))
+    } else {
+        Err(format!("{action}: {}", bounded(&message)))
+    }
+}
+
+fn compose_stream_up(
+    runtime: &ComposeRuntime,
+    manager: &PreviewManager,
+    project_id: &str,
+    generation: u64,
+) -> Result<(), String> {
+    let mut child = compose_command(runtime)
+        .args(["--progress", "plain", "up", "-d", "--build"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("start preview stack: {e}"))?;
+    let (sender, receiver) = mpsc::channel();
+    if let Some(stdout) = child.stdout.take() {
+        spawn_log_reader(stdout, sender.clone());
+    }
+    if let Some(stderr) = child.stderr.take() {
+        spawn_log_reader(stderr, sender.clone());
+    }
+    drop(sender);
+    for line in receiver {
+        if !line.trim().is_empty() {
+            manager.append_log(project_id, generation, format!("[preview] {line}"));
+        }
+    }
+    let status = child
+        .wait()
+        .map_err(|e| format!("wait for preview stack startup: {e}"))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err("start preview stack failed; see preview logs for details".into())
+    }
+}
+
+fn spawn_log_reader<R: Read + Send + 'static>(output: R, sender: mpsc::Sender<String>) {
+    std::thread::spawn(move || {
+        for line in BufReader::new(output).lines().map_while(Result::ok) {
+            let _ = sender.send(line);
+        }
+    });
+}
+
+fn compose_down(runtime: &ComposeRuntime, volumes: bool, images: bool) {
+    let mut args = vec!["down", "--remove-orphans"];
+    if volumes {
+        args.push("-v");
+    }
+    if images {
+        args.extend(["--rmi", "local"]);
+    }
+    let _ = compose_command(runtime).args(args).output();
+}
+
+fn resolve_urls(
+    runtime: &ComposeRuntime,
+    ports: &[preview_compose::PublishedPort],
+    open: &RunOpen,
+) -> Result<Vec<PreviewUrl>, String> {
+    let mut urls = Vec::with_capacity(ports.len());
+    for port in ports {
+        if port.protocol != "tcp" {
+            continue;
+        }
+        let private = format!("{}/tcp", port.target);
+        let output = compose_capture(
+            runtime,
+            &["port", &port.service, &private],
             "resolve preview port",
         )?;
         let host_port = parse_published_port(&output)?;
         urls.push(PreviewUrl {
-            process: process.name.clone(),
+            service: port.service.clone(),
             url: format!("http://127.0.0.1:{host_port}"),
-            open: Some(index) == default_open,
+            open: port.service == open.service && port.target == open.port,
         });
     }
     Ok(urls)
@@ -741,7 +716,8 @@ fn wait_for_http(
     manager: &PreviewManager,
     project_id: &str,
     generation: u64,
-    container: &str,
+    runtime: &ComposeRuntime,
+    open_service: &str,
     url: &str,
 ) -> Result<(), String> {
     let port = url
@@ -750,22 +726,17 @@ fn wait_for_http(
         .ok_or_else(|| "resolved preview URL has no valid port".to_string())?;
     let deadline = Instant::now() + READY_TIMEOUT;
     while Instant::now() < deadline {
-        let status = manager.status(project_id)?;
-        if status
-            .as_ref()
-            .is_none_or(|status| status.state != PreviewState::Starting)
-        {
+        if !manager.active(project_id, generation, PreviewState::Starting) {
             return Err("preview start was cancelled".into());
         }
-        if !container_running(container) {
-            return Err("a preview process exited before its HTTP port became ready".into());
+        if let Some(error) = stack_failure(runtime, open_service)? {
+            return Err(error);
         }
         if http_responds(port) {
             return Ok(());
         }
         std::thread::sleep(Duration::from_millis(500));
     }
-    let _ = generation;
     Err("the preview HTTP port did not become ready within 10 minutes".into())
 }
 
@@ -785,56 +756,75 @@ fn http_responds(port: u16) -> bool {
     stream.read_exact(&mut prefix).is_ok() && &prefix == b"HTTP/"
 }
 
-fn follow_logs(manager: PreviewManager, project_id: String, generation: u64, container: String) {
-    std::thread::spawn(move || {
-        let mut command = docker::docker_command();
-        command
-            .args([
-                "logs",
-                "--follow",
-                "--tail",
-                &LOG_LIMIT.to_string(),
-                &container,
-            ])
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null());
-        let Ok(mut child) = command.spawn() else {
-            return;
-        };
-        if let Some(stdout) = child.stdout.take() {
-            for line in BufReader::new(stdout).lines().map_while(Result::ok) {
-                manager.append_log(&project_id, generation, line);
-            }
-        }
-        let _ = child.wait();
-    });
-}
-
-fn watch_container(
+fn watch_stack(
     app: AppHandle,
     manager: PreviewManager,
     project_id: String,
     generation: u64,
-    container: String,
+    runtime: ComposeRuntime,
+    open_service: String,
 ) {
-    std::thread::spawn(move || {
-        let mut command = docker::docker_command();
-        let waited = command.args(["wait", &container]).output();
-        if !waited.is_ok_and(|output| output.status.success()) {
-            while container_running(&container) {
-                std::thread::sleep(Duration::from_secs(1));
+    std::thread::spawn(move || loop {
+        std::thread::sleep(Duration::from_secs(1));
+        if !manager.active(&project_id, generation, PreviewState::Running) {
+            return;
+        }
+        match stack_failure(&runtime, &open_service) {
+            Ok(None) => continue,
+            Ok(Some(error)) => {
+                fail_preview(&app, &manager, &project_id, generation, &error, None);
+                return;
+            }
+            Err(error) => {
+                fail_preview(&app, &manager, &project_id, generation, &error, None);
+                return;
             }
         }
-        std::thread::sleep(Duration::from_millis(100));
-        fail_preview(
-            &app,
-            &manager,
-            &project_id,
-            generation,
-            "a preview process exited",
-            None,
-        );
     });
+}
+
+fn stack_failure(runtime: &ComposeRuntime, open_service: &str) -> Result<Option<String>, String> {
+    let output = compose_capture(
+        runtime,
+        &["ps", "--all", "--format", "json"],
+        "inspect preview stack",
+    )?;
+    let services = parse_compose_ps(&output)?;
+    if services.iter().any(|service| service.exit_code != 0) {
+        return Ok(Some("a preview service exited with an error".into()));
+    }
+    let open_running = services
+        .iter()
+        .any(|service| service.service == open_service && service.state == "running");
+    if !open_running {
+        return Ok(Some("the preview open service stopped".into()));
+    }
+    Ok(None)
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct ComposeServiceState {
+    service: String,
+    state: String,
+    #[serde(default)]
+    exit_code: i64,
+}
+
+fn parse_compose_ps(output: &str) -> Result<Vec<ComposeServiceState>, String> {
+    if let Ok(services) = serde_json::from_str::<Vec<ComposeServiceState>>(output) {
+        return Ok(services);
+    }
+    let services = output
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(serde_json::from_str::<ComposeServiceState>)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("decode preview service status: {e}"))?;
+    if services.is_empty() {
+        return Err("the preview stack has no containers".into());
+    }
+    Ok(services)
 }
 
 fn fail_preview(
@@ -843,53 +833,45 @@ fn fail_preview(
     project_id: &str,
     generation: u64,
     error: &str,
-    source: Option<PathBuf>,
+    fallback_runtime: Option<ComposeRuntime>,
 ) {
-    if let Some((status, managed_source)) = manager.fail(project_id, generation, &bounded(error)) {
+    if let Some((status, runtime)) = manager.fail(project_id, generation, &bounded(error)) {
         let _ = app.emit(STATUS_EVENT, status);
-        if let Some(path) = managed_source.or(source) {
-            let _ = fs::remove_dir_all(path);
+        if let Some(runtime) = runtime.or(fallback_runtime) {
+            compose_down(&runtime, false, false);
+            remove_source(&runtime.source_root);
         }
-    } else if let Some(path) = source {
-        let _ = fs::remove_dir_all(path);
+    } else if let Some(runtime) = fallback_runtime {
+        compose_down(&runtime, false, false);
+        remove_source(&runtime.source_root);
     }
 }
 
-fn docker_logs(container: &str) -> Result<Vec<String>, String> {
-    let output = docker::docker_command()
-        .args(["logs", "--tail", &LOG_LIMIT.to_string(), container])
-        .output()
-        .map_err(|e| format!("read preview logs: {e}"))?;
-    if !output.status.success() {
-        return Err("preview logs are no longer available".into());
-    }
-    let mut bytes = output.stdout;
-    bytes.extend_from_slice(&output.stderr);
-    Ok(String::from_utf8_lossy(&bytes)
-        .lines()
-        .map(str::to_string)
-        .collect())
+fn compose_logs(runtime: &ComposeRuntime) -> Result<Vec<String>, String> {
+    let tail = LOG_LIMIT.to_string();
+    let output = compose_capture(
+        runtime,
+        &["logs", "--tail", &tail, "--no-color"],
+        "read preview logs",
+    )?;
+    Ok(output.lines().map(str::to_string).collect())
 }
 
-fn remove_container(container: &str) {
-    let _ = docker::docker_command()
-        .args(["rm", "--force", container])
-        .output();
-}
-
-fn container_running(container: &str) -> bool {
-    docker::docker_command()
-        .args(["inspect", "--format", "{{.State.Running}}", container])
-        .output()
-        .is_ok_and(|output| {
-            output.status.success() && String::from_utf8_lossy(&output.stdout).trim() == "true"
-        })
+fn remove_source(path: &Path) {
+    let _ = fs::remove_dir_all(path);
 }
 
 pub(crate) fn sweep_leftovers() {
     sweep_source_directories();
     let Ok(output) = docker::docker_command()
-        .args(["ps", "-aq", "--filter", &format!("label={PREVIEW_LABEL}")])
+        .args([
+            "ps",
+            "-a",
+            "--filter",
+            &format!("label={COMPOSE_PROJECT_LABEL}"),
+            "--format",
+            &format!("{{{{.Label \"{COMPOSE_PROJECT_LABEL}\"}}}}"),
+        ])
         .output()
     else {
         return;
@@ -897,9 +879,46 @@ pub(crate) fn sweep_leftovers() {
     if !output.status.success() {
         return;
     }
-    for container in String::from_utf8_lossy(&output.stdout).split_whitespace() {
-        remove_container(container);
+    let projects = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter(|name| name.starts_with(PREVIEW_TEMP_PREFIX))
+        .map(str::to_string)
+        .collect::<HashSet<_>>();
+    for project in projects {
+        remove_labeled_resources("container", &project);
+        remove_labeled_resources("network", &project);
     }
+}
+
+fn remove_labeled_resources(kind: &str, project: &str) {
+    let Ok(output) = docker::docker_command()
+        .args([
+            kind,
+            "ls",
+            "-q",
+            "--filter",
+            &format!("label={COMPOSE_PROJECT_LABEL}={project}"),
+        ])
+        .output()
+    else {
+        return;
+    };
+    if !output.status.success() {
+        return;
+    }
+    let identifiers = String::from_utf8_lossy(&output.stdout)
+        .split_whitespace()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    if identifiers.is_empty() {
+        return;
+    }
+    let mut command = docker::docker_command();
+    command.arg(kind).arg("rm");
+    if kind == "container" {
+        command.arg("--force");
+    }
+    let _ = command.args(identifiers).output();
 }
 
 fn sweep_source_directories() {
@@ -934,11 +953,9 @@ pub(crate) fn stop_all(manager: &PreviewManager) {
         .unwrap_or_default();
     for project in projects {
         if let Ok(Some(stopped)) = manager.stop(&project) {
-            if let Some(container) = stopped.container_id {
-                remove_container(&container);
-            }
-            if let Some(path) = stopped.source_root {
-                let _ = fs::remove_dir_all(path);
+            if let Some(runtime) = stopped.runtime {
+                compose_down(&runtime, false, false);
+                remove_source(&runtime.source_root);
             }
         }
     }
@@ -952,11 +969,8 @@ async fn coordinator_json<T: for<'de> Deserialize<'de>>(
     let status = response.status();
     if !status.is_success() {
         let body = response.text().await.unwrap_or_default();
-        if let Ok(value) = serde_json::from_str::<serde_json::Value>(&body) {
-            if let Some(message) = value
-                .pointer("/error/message")
-                .and_then(serde_json::Value::as_str)
-            {
+        if let Ok(value) = serde_json::from_str::<Value>(&body) {
+            if let Some(message) = value.pointer("/error/message").and_then(Value::as_str) {
                 return Err(message.to_string());
             }
         }
@@ -1032,65 +1046,31 @@ fn validate_handoff(handoff: &ProjectHandoff, project_id: &str) -> Result<(), St
 }
 
 fn validate_run(run: &RunConfig) -> Result<(), String> {
-    if run.processes.is_empty() {
-        return Err("preview run configuration has no processes".into());
-    }
-    let mut names = std::collections::HashSet::new();
-    let mut ports = std::collections::HashSet::new();
-    let mut open = 0;
-    for command in &run.setup {
-        validate_command(command)?;
-    }
-    for process in &run.processes {
-        if !safe_process_name(&process.name) || !names.insert(process.name.as_str()) {
-            return Err(
-                "preview run configuration has an invalid or duplicate process name".into(),
-            );
-        }
-        validate_command(&process.command)?;
-        if let Some(port) = process.port {
-            if port == 0 || !ports.insert(port) {
-                return Err("preview run configuration has an invalid or duplicate port".into());
-            }
-        }
-        if process.open {
-            open += 1;
-            if process.port.is_none() {
-                return Err("the open preview process requires a port".into());
-            }
-        }
-    }
-    if open > 1 {
-        return Err("preview run configuration opens more than one process".into());
+    if run.open.port == 0 || !safe_service_name(&run.open.service) {
+        return Err("preview open target is invalid".into());
     }
     Ok(())
 }
 
-fn validate_command(command: &str) -> Result<(), String> {
-    if command.is_empty() || command != command.trim() || command.contains('\0') {
-        return Err("preview run configuration contains an invalid command".into());
-    }
-    Ok(())
-}
-
-fn safe_process_name(value: &str) -> bool {
+fn safe_service_name(value: &str) -> bool {
     !value.is_empty()
-        && value.len() <= 32
+        && value.len() <= 63
         && value.bytes().enumerate().all(|(index, byte)| {
             if index == 0 {
-                byte.is_ascii_lowercase()
+                byte.is_ascii_alphanumeric()
             } else {
-                byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-'
+                byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b'-')
             }
         })
 }
 
 fn validate_identifier(name: &str, value: &str) -> Result<(), String> {
     if value.is_empty()
-        || value.len() > 160
+        || value.len() > 80
         || !value
             .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || b"._:-".contains(&byte))
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || b"_-".contains(&byte))
+        || !value.as_bytes()[0].is_ascii_alphanumeric()
     {
         return Err(format!("{name} is invalid"));
     }
@@ -1117,21 +1097,13 @@ fn safe_commit(value: &str) -> bool {
             .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
 }
 
-fn container_name(project_id: &str, generation: u64) -> String {
-    let mut digest = Sha256::new();
-    digest.update(project_id.as_bytes());
-    digest.update(generation.to_be_bytes());
-    let encoded = format!("{:x}", digest.finalize());
-    format!("commitarium-preview-{}", &encoded[..16])
-}
-
 fn parse_published_port(output: &str) -> Result<u16, String> {
     output
         .lines()
         .find_map(|line| {
             line.trim()
-                .rsplit_once(':')
-                .and_then(|(_, port)| port.parse().ok())
+                .strip_prefix("127.0.0.1:")
+                .and_then(|port| port.parse().ok())
         })
         .ok_or_else(|| "Docker did not publish the preview port on loopback".to_string())
 }
@@ -1169,52 +1141,42 @@ mod tests {
     use super::*;
 
     #[test]
-    fn published_ports_are_loopback_host_ports() {
+    fn published_ports_must_be_ipv4_loopback_host_ports() {
         assert_eq!(parse_published_port("127.0.0.1:49152\n").unwrap(), 49152);
+        assert!(parse_published_port("0.0.0.0:49152").is_err());
         assert!(parse_published_port("not a mapping").is_err());
     }
 
     #[test]
     fn run_validation_matches_the_coordinator_contract() {
-        let run = RunConfig {
-            setup: vec!["npm ci".into()],
-            processes: vec![RunProcess {
-                name: "web".into(),
-                command: "npm run dev -- --host 0.0.0.0".into(),
-                port: Some(5173),
-                open: true,
-            }],
-        };
-        assert!(validate_run(&run).is_ok());
-        let duplicate = RunConfig {
-            setup: vec![],
-            processes: vec![
-                run.processes[0].clone(),
-                RunProcess {
-                    name: "api".into(),
-                    command: "serve".into(),
-                    port: Some(5173),
-                    open: false,
-                },
-            ],
-        };
-        assert!(validate_run(&duplicate).is_err());
-        let leading_digit = RunConfig {
-            setup: vec![],
-            processes: vec![RunProcess {
-                name: "1web".into(),
-                command: "serve".into(),
-                port: None,
-                open: false,
-            }],
-        };
-        assert!(validate_run(&leading_digit).is_err());
+        assert!(validate_run(&RunConfig {
+            open: RunOpen {
+                service: "web.v2_api-1".into(),
+                port: 5173,
+            }
+        })
+        .is_ok());
+        assert!(validate_run(&RunConfig {
+            open: RunOpen {
+                service: "bad service".into(),
+                port: 5173,
+            }
+        })
+        .is_err());
+        assert!(validate_run(&RunConfig {
+            open: RunOpen {
+                service: "web".into(),
+                port: 0,
+            }
+        })
+        .is_err());
     }
 
     #[test]
-    fn preview_script_prefixes_setup_and_process_logs() {
-        assert!(PREVIEW_SCRIPT.contains("[setup]"));
-        assert!(PREVIEW_SCRIPT.contains("[$name]"));
-        assert!(PREVIEW_SCRIPT.contains("kill -0"));
+    fn compose_ps_accepts_array_and_line_delimited_json() {
+        let array = r#"[{"Service":"web","State":"running","ExitCode":0}]"#;
+        assert_eq!(parse_compose_ps(array).unwrap()[0].service, "web");
+        let lines = "{\"Service\":\"web\",\"State\":\"running\",\"ExitCode\":0}\n{\"Service\":\"job\",\"State\":\"exited\",\"ExitCode\":0}\n";
+        assert_eq!(parse_compose_ps(lines).unwrap().len(), 2);
     }
 }
