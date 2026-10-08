@@ -28,7 +28,10 @@ jobs:
         include:
           - platform: macos-latest
             rust_targets: aarch64-apple-darwin,x86_64-apple-darwin
-            args: --target universal-apple-darwin --bundles dmg
+            # The DMG is the human-facing installer. The app bundle is also
+            # required so tauri-action uploads its signed .app.tar.gz payload
+            # and includes both macOS architectures in latest.json.
+            args: --target universal-apple-darwin --bundles app,dmg
           - platform: windows-latest
             rust_targets: ""
             args: --bundles nsis

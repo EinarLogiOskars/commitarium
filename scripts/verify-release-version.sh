@@ -71,6 +71,11 @@ if ! grep -Fq 'uploadUpdaterJson: true' .github/workflows/publish-desktop.yml; t
     exit 1
 fi
 
+if ! grep -Fq -- '--target universal-apple-darwin --bundles app,dmg' .github/workflows/publish-desktop.yml; then
+    echo "desktop release workflow does not publish the signed macOS updater bundle" >&2
+    exit 1
+fi
+
 if ! grep -Fq 'TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}' .github/workflows/publish-desktop.yml ||
     ! grep -Fq 'TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}' .github/workflows/publish-desktop.yml; then
     echo "desktop release workflow does not provide updater signing secrets" >&2
