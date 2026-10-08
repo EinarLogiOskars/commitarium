@@ -36,16 +36,15 @@ func (stub previewToolchainStub) Get(context.Context, string) (toolchain.Manifes
 }
 
 func TestPreviewRunInstructionsShareConfigAndConventions(t *testing.T) {
-	port := 5173
 	starter := &RemoteLeadStarter{toolchains: previewToolchainStub{manifest: toolchain.Manifest{
-		Run: &toolchain.RunConfig{Setup: []string{"npm ci"}, Processes: []toolchain.RunProcess{{
-			Name: "web", Command: "npm run dev -- --host 0.0.0.0", Port: &port, Open: true,
-		}}},
+		Run: &toolchain.RunConfig{Open: toolchain.RunOpen{Service: "web", Port: 5173}},
 	}}}
 	instructions, err := starter.previewRunInstructions(t.Context(), "prj_test")
-	if err != nil || !strings.Contains(instructions, `"name":"web"`) ||
+	if err != nil || !strings.Contains(instructions, `"service":"web"`) ||
 		!strings.Contains(instructions, "bind 0.0.0.0") ||
-		!strings.Contains(instructions, "relative-path development proxy") {
+		!strings.Contains(instructions, "relative-path development proxy") ||
+		!strings.Contains(instructions, "Build contexts, Dockerfiles, and bind mounts must resolve inside the repository") ||
+		!strings.Contains(instructions, "Do not use privileged mode") {
 		t.Fatalf("preview instructions=%q error=%v", instructions, err)
 	}
 }

@@ -3161,7 +3161,7 @@ func (starter *RemoteLeadStarter) implementationRequest(
 }
 
 func (starter *RemoteLeadStarter) previewRunInstructions(ctx context.Context, projectID string) (string, error) {
-	const conventions = "Preview compatibility requirement: every preview process must bind 0.0.0.0, and a frontend must reach its API through a relative-path development proxy rather than a hardcoded localhost port. Keep the configured preview setup and process commands working as you implement and review changes."
+	const conventions = "Preview compatibility requirement: keep one Docker Compose file at the repository root under a standard Compose filename. Services may use image, build (context, dockerfile, args, and target only), command, entrypoint, environment, working_dir, user, ports, expose, volumes, depends_on, healthcheck, restart, init, tty, stdin_open, labels, networks, and x-* extension fields. Build contexts, Dockerfiles, and bind mounts must resolve inside the repository; use named volumes for persistent data. Volumes must use the local driver without driver_opts or external resources, and networks must use the default bridge driver without external resources. Do not use privileged mode, added capabilities, devices, host namespace modes, security_opt, volumes_from, secrets, configs, or build secrets, SSH, or network overrides. Every HTTP service must bind 0.0.0.0, and a frontend must reach its API through its Compose service name or a relative-path development proxy rather than a hardcoded localhost port. Reviewers must flag changes that violate these rules or break the configured open target."
 	if starter.toolchains == nil {
 		return "", nil
 	}
@@ -3170,13 +3170,13 @@ func (starter *RemoteLeadStarter) previewRunInstructions(ctx context.Context, pr
 		return "", fmt.Errorf("load project preview run configuration: %w", err)
 	}
 	if manifest.Run == nil {
-		return "\n\n" + conventions + " This project currently has no preview run configuration.", nil
+		return "\n\n" + conventions + " This project currently has no configured preview open target.", nil
 	}
 	encoded, err := json.Marshal(manifest.Run)
 	if err != nil {
 		return "", fmt.Errorf("encode project preview run configuration: %w", err)
 	}
-	return "\n\n" + conventions + "\nConfigured preview run JSON:\n" + string(encoded), nil
+	return "\n\n" + conventions + "\nConfigured preview open target JSON:\n" + string(encoded), nil
 }
 
 func implementationInstructions(
