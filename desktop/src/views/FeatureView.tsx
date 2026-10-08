@@ -214,11 +214,7 @@ export function FeatureView({
             review → evidence at merge). Hidden in Clarify/Plan — no baseline
             yet. Still self-gates on the artifact, so absent unless independent
             tests are enabled. */}
-        <AcceptanceTestsPanel
-          projectId={projectId}
-          featureId={feature.id}
-          enabled={viewed >= 2}
-        />
+        <AcceptanceTestsPanel projectId={projectId} featureId={feature.id} enabled={viewed >= 2} />
       </div>
     </div>
   );

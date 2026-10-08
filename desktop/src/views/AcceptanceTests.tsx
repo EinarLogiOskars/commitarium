@@ -78,7 +78,11 @@ export function AcceptanceTestsPanel({
 
       <div className="accept-tests__dots" aria-hidden>
         {doc.tests.map((t) => (
-          <span key={t.id} className={`dot dot--${DOT[t.status]}`} title={`${t.title} — ${t.status}`} />
+          <span
+            key={t.id}
+            className={`dot dot--${DOT[t.status]}`}
+            title={`${t.title} — ${t.status}`}
+          />
         ))}
       </div>
 
@@ -149,7 +153,9 @@ function AcceptanceRow({ t }: { t: AcceptanceTest }) {
           {m.ch}
         </span>
         <span className="accept-test__title">{t.title}</span>
-        <span className={`muted accept-test__status accept-test__status--${m.tone}`}>{m.label}</span>
+        <span className={`muted accept-test__status accept-test__status--${m.tone}`}>
+          {m.label}
+        </span>
       </div>
       {t.note && (t.status === "failed" || t.status === "not_applicable") && (
         <p className="accept-test__note">{t.note}</p>
