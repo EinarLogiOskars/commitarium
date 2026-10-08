@@ -2531,9 +2531,9 @@ button.danger:not(.ghost) {
   color: var(--accent);
   border-color: color-mix(in srgb, var(--accent) 45%, transparent);
 }
-/* The glyph points down when expanded (click to collapse); rotate it up when
-   collapsed (click to expand). */
-.accept-tests--collapsed .accept-tests__chevron {
+/* Glyph points down by default (collapsed → click to expand). When expanded it
+   points up (→ click to collapse). */
+.accept-tests:not(.accept-tests--collapsed) .accept-tests__chevron {
   transform: rotate(-180deg);
 }
 .accept-tests__meta {
