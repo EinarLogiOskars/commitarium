@@ -305,7 +305,7 @@ func TestTerminalResultValidate(t *testing.T) {
 		{Outcome: OutcomeCompleted, Disposition: DispositionSucceeded, Summary: "approved", Review: &ReviewPublication{CommitID: "0123456789abcdef0123456789abcdef01234567", PullRequestNumber: 7, ReviewID: 11}},
 		{Outcome: OutcomeCompleted, Disposition: DispositionChangesRequested, Summary: "changes requested", Review: &ReviewPublication{CommitID: "0123456789abcdef0123456789abcdef01234567", PullRequestNumber: 7, ReviewID: 11}},
 		{Outcome: OutcomeCompleted, Disposition: DispositionSucceeded, Summary: "answered", InterventionEffect: InterventionEffectGuidanceApplied},
-		{Outcome: OutcomeCompleted, Disposition: DispositionSucceeded, Summary: "Python", ToolchainProposal: &ToolchainProposal{Tools: map[string]string{"python": "3.14.7"}, Services: []string{}, Run: &ToolchainRunConfig{Setup: []string{}, Processes: []ToolchainRunProcess{{Name: "api", Command: "python -m http.server 8000", Port: intPointer(8000), Open: true}}}}},
+		{Outcome: OutcomeCompleted, Disposition: DispositionSucceeded, Summary: "Python", ToolchainProposal: &ToolchainProposal{Tools: map[string]string{"python": "3.14.7"}, Services: []string{}, Run: &ToolchainRunConfig{Open: ToolchainRunOpen{Service: "api", Port: 8000}}}},
 		{Outcome: OutcomeStopped, Summary: "stopped safely"},
 		{Outcome: OutcomeFailed, Summary: "provider unavailable", Error: &ProtocolError{Code: ErrorProfileUnavailable, Message: "profile is unavailable", Retryable: true}},
 	}

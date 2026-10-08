@@ -36,7 +36,7 @@ var (
 	ErrUnavailable     = errors.New("project toolchain storage is unavailable")
 	exactVersion       = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$`)
 	safeService        = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,63}$`)
-	safeProcess        = regexp.MustCompile(`^[a-z][a-z0-9-]{0,31}$`)
+	safeComposeService = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$`)
 	allowedTools       = map[string]struct{}{
 		"bun": {}, "deno": {}, "go": {}, "gradle": {}, "java": {},
 		"maven": {}, "node": {}, "php": {}, "python": {}, "ruby": {}, "rust": {},
@@ -65,19 +65,16 @@ type Suggestion struct {
 }
 
 type Run struct {
-	Setup     []string     `json:"setup"`
-	Processes []RunProcess `json:"processes"`
+	Open RunOpen `json:"open"`
 }
 
 // RunConfig keeps the descriptive name used by API-facing callers while Run
 // is the manifest model named in ADR-013.
 type RunConfig = Run
 
-type RunProcess struct {
-	Name    string `json:"name"`
-	Command string `json:"command"`
-	Port    *int   `json:"port,omitempty"`
-	Open    bool   `json:"open,omitempty"`
+type RunOpen struct {
+	Service string `json:"service"`
+	Port    int    `json:"port"`
 }
 
 type Preset struct {
@@ -160,55 +157,12 @@ func NormalizeManifest(manifest Manifest) (Manifest, error) {
 }
 
 func normalizeRun(run Run) (Run, error) {
-	if len(run.Processes) == 0 {
-		return Run{}, fmt.Errorf("%w: run requires at least one process", ErrInvalidManifest)
+	open := RunOpen{Service: strings.TrimSpace(run.Open.Service), Port: run.Open.Port}
+	if !safeComposeService.MatchString(open.Service) {
+		return Run{}, fmt.Errorf("%w: run open service %q is invalid", ErrInvalidManifest, run.Open.Service)
 	}
-	normalized := Run{
-		Setup: make([]string, 0, len(run.Setup)), Processes: make([]RunProcess, 0, len(run.Processes)),
+	if open.Port < 1 || open.Port > 65535 {
+		return Run{}, fmt.Errorf("%w: run open port is invalid", ErrInvalidManifest)
 	}
-	for _, configured := range run.Setup {
-		command := strings.TrimSpace(configured)
-		if command == "" || strings.ContainsRune(command, '\x00') {
-			return Run{}, fmt.Errorf("%w: run setup command is invalid", ErrInvalidManifest)
-		}
-		normalized.Setup = append(normalized.Setup, command)
-	}
-	seenNames := make(map[string]struct{}, len(run.Processes))
-	seenPorts := make(map[int]struct{}, len(run.Processes))
-	openCount := 0
-	for _, configured := range run.Processes {
-		process := RunProcess{Name: strings.TrimSpace(configured.Name), Command: strings.TrimSpace(configured.Command), Open: configured.Open}
-		if !safeProcess.MatchString(process.Name) {
-			return Run{}, fmt.Errorf("%w: run process name %q is invalid", ErrInvalidManifest, configured.Name)
-		}
-		if _, exists := seenNames[process.Name]; exists {
-			return Run{}, fmt.Errorf("%w: run process name %q is duplicated", ErrInvalidManifest, process.Name)
-		}
-		seenNames[process.Name] = struct{}{}
-		if process.Command == "" || strings.ContainsRune(process.Command, '\x00') {
-			return Run{}, fmt.Errorf("%w: run process %q has an invalid command", ErrInvalidManifest, process.Name)
-		}
-		if configured.Port != nil {
-			port := *configured.Port
-			if port < 1 || port > 65535 {
-				return Run{}, fmt.Errorf("%w: run process %q has an invalid port", ErrInvalidManifest, process.Name)
-			}
-			if _, exists := seenPorts[port]; exists {
-				return Run{}, fmt.Errorf("%w: run port %d is duplicated", ErrInvalidManifest, port)
-			}
-			seenPorts[port] = struct{}{}
-			process.Port = &port
-		}
-		if process.Open {
-			openCount++
-			if process.Port == nil {
-				return Run{}, fmt.Errorf("%w: open run process %q requires a port", ErrInvalidManifest, process.Name)
-			}
-		}
-		normalized.Processes = append(normalized.Processes, process)
-	}
-	if openCount > 1 {
-		return Run{}, fmt.Errorf("%w: at most one run process may open", ErrInvalidManifest)
-	}
-	return normalized, nil
+	return Run{Open: open}, nil
 }

@@ -124,20 +124,16 @@ func OutputJSONSchema(contract OutputContract) any {
 			[]string{"effect", "response"},
 		)
 	case OutputContractToolchainSetup:
-		runProcessSchema := objectSchema(
+		runOpenSchema := objectSchema(
 			map[string]any{
-				"name": map[string]any{"type": "string"}, "command": map[string]any{"type": "string"},
-				"port": map[string]any{"anyOf": []any{map[string]any{"type": "integer"}, map[string]any{"type": "null"}}},
-				"open": map[string]any{"type": "boolean"},
+				"service": map[string]any{"type": "string"},
+				"port":    map[string]any{"type": "integer"},
 			},
-			[]string{"name", "command", "port", "open"},
+			[]string{"service", "port"},
 		)
 		runSchema := objectSchema(
-			map[string]any{
-				"setup":     map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
-				"processes": map[string]any{"type": "array", "items": runProcessSchema},
-			},
-			[]string{"setup", "processes"},
+			map[string]any{"open": runOpenSchema},
+			[]string{"open"},
 		)
 		return objectSchema(
 			map[string]any{
@@ -438,13 +434,10 @@ func ResolveStructuredOutput(
 			} `json:"tools"`
 			Services []string `json:"services"`
 			Run      *struct {
-				Setup     []string `json:"setup"`
-				Processes []struct {
-					Name    string `json:"name"`
-					Command string `json:"command"`
-					Port    *int   `json:"port"`
-					Open    bool   `json:"open"`
-				} `json:"processes"`
+				Open struct {
+					Service string `json:"service"`
+					Port    int    `json:"port"`
+				} `json:"open"`
 			} `json:"run"`
 		}
 		if err := decodeStructuredOutput(raw, &response); err != nil {
@@ -479,12 +472,9 @@ func ResolveStructuredOutput(
 		}
 		proposal := &ToolchainProposal{Tools: tools, Services: response.Services}
 		if response.Run != nil {
-			proposal.Run = &ToolchainRunConfig{Setup: response.Run.Setup, Processes: make([]ToolchainRunProcess, 0, len(response.Run.Processes))}
-			for _, process := range response.Run.Processes {
-				proposal.Run.Processes = append(proposal.Run.Processes, ToolchainRunProcess{
-					Name: process.Name, Command: process.Command, Port: process.Port, Open: process.Open,
-				})
-			}
+			proposal.Run = &ToolchainRunConfig{Open: ToolchainRunOpen{
+				Service: response.Run.Open.Service, Port: response.Run.Open.Port,
+			}}
 		}
 		return StructuredOutput{
 			Event: Event{Type: EventMessage, Text: response.Message}, Disposition: DispositionSucceeded,

@@ -386,16 +386,12 @@ func (service *Service) finishAttempt(
 			Tools: result.ToolchainProposal.Tools, Services: result.ToolchainProposal.Services,
 		}
 		if result.ToolchainProposal.Run != nil {
-			run := &workerhttp.ToolchainRunConfig{
-				Setup:     append([]string(nil), result.ToolchainProposal.Run.Setup...),
-				Processes: make([]workerhttp.ToolchainRunProcess, 0, len(result.ToolchainProposal.Run.Processes)),
+			terminalResult.ToolchainProposal.Run = &workerhttp.ToolchainRunConfig{
+				Open: workerhttp.ToolchainRunOpen{
+					Service: result.ToolchainProposal.Run.Open.Service,
+					Port:    result.ToolchainProposal.Run.Open.Port,
+				},
 			}
-			for _, process := range result.ToolchainProposal.Run.Processes {
-				run.Processes = append(run.Processes, workerhttp.ToolchainRunProcess{
-					Name: process.Name, Command: process.Command, Port: process.Port, Open: process.Open,
-				})
-			}
-			terminalResult.ToolchainProposal.Run = run
 		}
 	}
 	if result.EnvironmentRequest != nil {

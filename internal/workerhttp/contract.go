@@ -193,15 +193,12 @@ type ToolchainProposal struct {
 }
 
 type ToolchainRunConfig struct {
-	Setup     []string              `json:"setup"`
-	Processes []ToolchainRunProcess `json:"processes"`
+	Open ToolchainRunOpen `json:"open"`
 }
 
-type ToolchainRunProcess struct {
-	Name    string `json:"name"`
-	Command string `json:"command"`
-	Port    *int   `json:"port,omitempty"`
-	Open    bool   `json:"open,omitempty"`
+type ToolchainRunOpen struct {
+	Service string `json:"service"`
+	Port    int    `json:"port"`
 }
 
 type EnvironmentRequest struct {
