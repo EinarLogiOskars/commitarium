@@ -75,7 +75,7 @@ const FORGEJO_IDENTITIES: &[ForgejoIdentity] = &[
             source_variable: "COMMITARIUM_FORGEJO_TOKEN_SOURCE",
             relative_path: ".commitarium/forgejo-token",
         },
-        scopes: "write:admin,write:user,write:repository,read:issue",
+        scopes: "write:admin,write:user,write:repository,write:issue",
     },
     ForgejoIdentity {
         username: "codex-lead",

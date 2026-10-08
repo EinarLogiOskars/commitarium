@@ -52,6 +52,17 @@ func (api *API) configureValidationHandler(w http.ResponseWriter, r *http.Reques
 	writeJSON(w, http.StatusOK, config, "validation config")
 }
 
+func (api *API) disableValidationHandler(w http.ResponseWriter, r *http.Request) {
+	if !emptyBody(w, r) {
+		return
+	}
+	if _, err := api.validations.Disable(r.Context(), r.PathValue("id")); err != nil {
+		api.writeValidationError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (api *API) listValidationJobsHandler(w http.ResponseWriter, r *http.Request) {
 	jobs, err := api.validations.JobsForRun(r.Context(), r.PathValue("id"))
 	if err != nil {
@@ -130,19 +141,18 @@ func (api *API) completeValidationJobHandler(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	statusSummary := validationSummary(job)
+	publicationWarning := ""
 	if publisher, ok := api.workspaces.(validationResultPublisher); ok {
 		prepared, workspaceErr := api.workspaces.Get(r.Context(), job.ProjectID, job.FeatureID)
 		if workspaceErr != nil {
-			writeError(w, http.StatusServiceUnavailable, "validation_publication_unavailable", "validation completed but its Forgejo result could not be published yet; retry this operation")
-			return
-		}
-		if _, publishErr := publisher.PublishValidationResult(r.Context(), job.ProjectID, job.FeatureID, workspace.ValidationPublicationSpec{
+			publicationWarning = "Validation completed, but its summary could not be posted to the internal pull request."
+			log.Printf("load workspace to publish validation job %q: %v", job.ID, workspaceErr)
+		} else if _, publishErr := publisher.PublishValidationResult(r.Context(), job.ProjectID, job.FeatureID, workspace.ValidationPublicationSpec{
 			JobID: job.ID, PullRequestNumber: prepared.PullRequestNumber, CommitID: job.CommitID,
 			Status: string(job.Status), Summary: statusSummary,
 		}); publishErr != nil {
 			log.Printf("publish validation job %q to Forgejo: %v", job.ID, publishErr)
-			writeError(w, http.StatusServiceUnavailable, "validation_publication_unavailable", "validation completed but its Forgejo result could not be published yet; retry this operation")
-			return
+			publicationWarning = "Validation completed, but its summary could not be posted to the internal pull request."
 		}
 	}
 	if recorder, ok := api.execution.(validationEventRecorder); ok {
@@ -152,6 +162,10 @@ func (api *API) completeValidationJobHandler(w http.ResponseWriter, r *http.Requ
 				if session.Role == worker.RoleLead {
 					_, _ = recorder.RecordSessionEventWithID(r.Context(), job.ID+":completed", session.ID,
 						worker.Event{Type: worker.EventActivity, Text: statusSummary})
+					if publicationWarning != "" {
+						_, _ = recorder.RecordSessionEventWithID(r.Context(), job.ID+":publication-warning", session.ID,
+							worker.Event{Type: worker.EventActivity, Text: publicationWarning})
+					}
 					break
 				}
 			}
@@ -164,6 +178,9 @@ func (api *API) completeValidationJobHandler(w http.ResponseWriter, r *http.Requ
 				log.Printf("automatic merge after validation job %q: %v", job.ID, mergeErr)
 			}
 		}
+	}
+	if publicationWarning != "" {
+		w.Header().Set("Warning", `199 commitarium "`+publicationWarning+`"`)
 	}
 	writeJSON(w, http.StatusOK, job, "completed validation job")
 }

@@ -27,6 +27,18 @@ func (store *ValidationStore) PutConfig(ctx context.Context, config validation.C
 	return store.GetConfig(ctx, config.ProjectID)
 }
 
+func (store *ValidationStore) DeleteConfig(ctx context.Context, projectID string) (bool, error) {
+	result, err := store.db.ExecContext(ctx, `DELETE FROM project_validation_configs WHERE project_id = ?`, projectID)
+	if err != nil {
+		return false, fmt.Errorf("delete validation config: %w", err)
+	}
+	count, err := result.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("read deleted validation config count: %w", err)
+	}
+	return count == 1, nil
+}
+
 func (store *ValidationStore) GetConfig(ctx context.Context, projectID string) (validation.Config, error) {
 	var config validation.Config
 	var commandsJSON, updatedAt string

@@ -216,6 +216,7 @@ type ProjectEnvironmentService interface {
 
 type ValidationService interface {
 	Configure(context.Context, string, []string) (validation.Config, error)
+	Disable(context.Context, string) (bool, error)
 	GetConfig(context.Context, string) (validation.Config, error)
 	GetJob(context.Context, string) (validation.Job, error)
 	JobsForRun(context.Context, string) ([]validation.Job, error)
@@ -442,6 +443,7 @@ func newAPI(
 	if validations != nil {
 		mux.HandleFunc("GET /api/v1/projects/{id}/validation", api.getValidationConfigHandler)
 		mux.HandleFunc("PUT /api/v1/projects/{id}/validation", api.configureValidationHandler)
+		mux.HandleFunc("DELETE /api/v1/projects/{id}/validation", api.disableValidationHandler)
 		mux.HandleFunc("GET /api/v1/runs/{id}/validation-jobs", api.listValidationJobsHandler)
 		mux.HandleFunc("POST /api/v1/runs/{id}/validation-jobs", api.ensureValidationJobHandler)
 		mux.HandleFunc("GET /api/v1/validation-jobs/{id}", api.getValidationJobHandler)

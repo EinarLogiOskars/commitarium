@@ -51,6 +51,9 @@ type attentionValidationService struct {
 func (service *attentionValidationService) Configure(context.Context, string, []string) (validation.Config, error) {
 	return validation.Config{}, nil
 }
+func (service *attentionValidationService) Disable(context.Context, string) (bool, error) {
+	return true, nil
+}
 func (service *attentionValidationService) GetConfig(context.Context, string) (validation.Config, error) {
 	return validation.Config{}, nil
 }

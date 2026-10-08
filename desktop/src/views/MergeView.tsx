@@ -131,7 +131,9 @@ export function MergeView({
   const done = merged || state === "completed";
   // Latest validation job (newest first); a non-passing one blocks the merge.
   const latestJob = [...jobs].sort((a, b) => b.created_at.localeCompare(a.created_at))[0] ?? null;
-  const validationBlocks = !!latestJob && latestJob.status !== "passed";
+  // Historical jobs stay visible after project validation is disabled, but no
+  // longer gate a merge once the project configuration is absent.
+  const validationBlocks = hasValidation !== false && !!latestJob && latestJob.status !== "passed";
   // When the gate is open the PR link sits next to Merge instead of the header,
   // so the user can review the code right at the decision point.
   const gateOpen = !done && live && state === "ready_to_merge";

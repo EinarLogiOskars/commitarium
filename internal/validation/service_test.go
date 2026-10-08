@@ -17,6 +17,14 @@ func (store *memoryStore) PutConfig(_ context.Context, config Config) (Config, e
 	return config, nil
 }
 
+func (store *memoryStore) DeleteConfig(_ context.Context, projectID string) (bool, error) {
+	if store.config.ProjectID != projectID {
+		return false, nil
+	}
+	store.config = Config{}
+	return true, nil
+}
+
 func (store *memoryStore) GetConfig(_ context.Context, projectID string) (Config, error) {
 	if store.config.ProjectID != projectID {
 		return Config{}, ErrNotFound
@@ -122,6 +130,13 @@ func TestValidationIsOptionalUntilProjectCommandsAreConfigured(t *testing.T) {
 	}
 	if err := service.RequirePassed(t.Context(), "project", "run", commitID); !errors.Is(err, ErrRequired) {
 		t.Fatalf("configured validation without a passing job = %v", err)
+	}
+	disabled, err := service.Disable(t.Context(), "project")
+	if err != nil || !disabled {
+		t.Fatalf("disable validation = %t, %v", disabled, err)
+	}
+	if err := service.RequirePassed(t.Context(), "project", "run", commitID); err != nil {
+		t.Fatalf("disabled validation blocked merge: %v", err)
 	}
 }
 

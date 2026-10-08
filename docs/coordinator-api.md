@@ -799,6 +799,10 @@ revision, manual merge may proceed and `auto_after_gates` may merge
 automatically without creating a validation job. The desktop warns that these
 projects rely on agent approval alone.
 
+An empty-body `DELETE /api/v1/projects/{projectID}/validation` disables the
+project gate by removing its current command configuration. Historical jobs
+remain immutable audit records but no longer gate new or waiting merges.
+
 When a configuration exists and both agents approve an exact commit, the
 coordinator creates a deterministic validation job and leaves the run at its
 merge gate. Jobs are read through
@@ -831,10 +835,13 @@ After disposable execution it posts:
 to `/api/v1/validation-jobs/{jobID}/complete`. Output is bounded. The
 coordinator records `passed` only when every snapshotted command returned zero,
 adds a durable workflow event, and publishes an idempotent marker-owned summary
-to the internal pull request. Failed setup or an incomplete result becomes
-`failed`. For a configured project, automatic merge is attempted only after a
-passing result; the manual merge route returns `409 merge_not_ready` until a
-passing job exists for the exact still-approved commit.
+to the internal pull request. That summary is observability, not a second gate:
+if Forgejo cannot accept it, completion still returns the durable validation
+result with an HTTP `Warning` header and records the warning in session
+activity. Failed setup or an incomplete command result becomes `failed`. For a
+configured project, automatic merge is attempted only after a passing result;
+the manual merge route returns `409 merge_not_ready` until a passing job exists
+for the exact still-approved commit.
 
 An empty-body `POST` to `/api/v1/validation-jobs/{jobID}/retry` creates a new
 pending, auditable job from a terminal job and the project's current command

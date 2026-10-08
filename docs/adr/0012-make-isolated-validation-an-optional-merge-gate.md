@@ -72,8 +72,8 @@ and Tauri-owned execution — is unchanged.
 
 - Projects without validation configuration merge on agent approval alone, and
   the UI says so at the points where it matters.
-- Configuring validation is now an explicit, reversible-by-omission decision
-  rather than a precondition for ever merging.
+- Configuring validation is an explicit, reversible decision. Deleting the
+  project configuration turns the gate off while preserving historical jobs.
 - The `merge_not_ready` contract now requires passing isolated validation only
   when validation is configured.
 - CI can be added later for feedback without conflicting with this gate; using

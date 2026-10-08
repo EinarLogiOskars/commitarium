@@ -195,7 +195,8 @@ Safe UI capabilities:
   `configured`. The backend also enforces this and returns
   `409 project_toolchain_required` without starting clarification.
 - Configure the independent merge gate with `GET`/`PUT
-  /api/v1/projects/{projectID}/validation`. Validation is optional: `GET`
+  /api/v1/projects/{projectID}/validation`; `DELETE` turns it off again.
+  Validation is optional: `GET`
   returns `404` when it has never been configured, and that absence does not
   block either merge policy. A stored configuration is an ordered, non-empty
   list and remains fail-closed until all current commands pass on the exact

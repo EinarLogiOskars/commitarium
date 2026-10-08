@@ -15,11 +15,19 @@ import (
 
 type Store interface {
 	PutConfig(context.Context, Config) (Config, error)
+	DeleteConfig(context.Context, string) (bool, error)
 	GetConfig(context.Context, string) (Config, error)
 	CreateJob(context.Context, Job) (Job, bool, error)
 	GetJob(context.Context, string) (Job, error)
 	ListJobsByRun(context.Context, string) ([]Job, error)
 	TransitionJob(context.Context, string, Status, Status, []CommandResult, string, time.Time) (Job, bool, error)
+}
+
+func (service *Service) Disable(ctx context.Context, projectID string) (bool, error) {
+	if strings.TrimSpace(projectID) == "" {
+		return false, ErrInvalid
+	}
+	return service.store.DeleteConfig(ctx, projectID)
 }
 
 type Service struct {

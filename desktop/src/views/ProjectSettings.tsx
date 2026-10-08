@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import {
+  disableProjectValidation,
   getProjectValidation,
   updateAgentSettings,
   updateAutonomyPolicy,
@@ -99,6 +100,7 @@ function IndependentTests({
 // merges rest on the two agents' approval alone. Because the commands live here
 // and not in the repo, the agents can't edit them — unlike a CI workflow file.
 function Validation({ project }: { project: Project }) {
+  const [enabled, setEnabled] = useState(false);
   const [commands, setCommands] = useState<string[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -108,7 +110,11 @@ function Validation({ project }: { project: Project }) {
   useEffect(() => {
     let active = true;
     getProjectValidation(project.id)
-      .then((v) => active && setCommands(v.commands))
+      .then((v) => {
+        if (!active) return;
+        setCommands(v.commands);
+        setEnabled(v.commands.length > 0);
+      })
       .catch((e) => active && setError(describe(e)))
       .finally(() => active && setLoaded(true));
     return () => {
@@ -128,8 +134,13 @@ function Validation({ project }: { project: Project }) {
     setError(null);
     setSaved(false);
     try {
-      const v = await updateProjectValidation(project.id, cleaned);
-      setCommands(v.commands);
+      if (!enabled) {
+        await disableProjectValidation(project.id);
+        setCommands([]);
+      } else {
+        const v = await updateProjectValidation(project.id, cleaned);
+        setCommands(v.commands);
+      }
       setSaved(true);
     } catch (e) {
       setError(describe(e));
@@ -149,16 +160,25 @@ function Validation({ project }: { project: Project }) {
         merge if any fail. Because they live here and not in the repo, the agents can't change them.
         Leave the list empty to trust the agents instead; merges then rest on their approval alone.
       </p>
+      <label className="toggle">
+        <input
+          type="checkbox"
+          checked={enabled}
+          onChange={(event) => setEnabled(event.target.checked)}
+          disabled={busy || !loaded}
+        />
+        Use validation as a merge gate for this project
+      </label>
       {!loaded ? (
         <p className="muted">Loading…</p>
       ) : (
         <>
-          {commands.length === 0 ? (
+          {!enabled ? (
             <p className="muted note">
-              No checks configured. Merges rest on the two agents' approval alone — you're trusting
-              them to keep themselves in check. Add a command below to gate merges on your own
-              checks.
+              Validation is off. Merges rest on the two agents' approval alone.
             </p>
+          ) : commands.length === 0 ? (
+            <p className="muted note">Add at least one command to enable this gate.</p>
           ) : (
             <ol className="validation__list">
               {commands.map((c, i) => (
@@ -183,19 +203,19 @@ function Validation({ project }: { project: Project }) {
             </ol>
           )}
           <div className="row">
-            <button className="ghost" onClick={add} disabled={busy}>
+            <button className="ghost" onClick={add} disabled={busy || !enabled}>
               + Add command
             </button>
             <button
               className="primary"
               onClick={() => void save()}
-              disabled={busy || cleaned.length === 0}
+              disabled={busy || (enabled && cleaned.length === 0)}
             >
               {busy ? "Saving…" : "Save checks"}
             </button>
             {saved && <span className="muted note">Saved ✓</span>}
           </div>
-          {cleaned.length === 0 && commands.length > 0 && (
+          {enabled && cleaned.length === 0 && commands.length > 0 && (
             <p className="muted note">At least one non-empty command is required to save.</p>
           )}
         </>

@@ -45,6 +45,15 @@ func TestEnvironmentAndValidationStoresPersistLifecycle(t *testing.T) {
 		!reflect.DeepEqual(storedConfig.Commands, config.Commands) {
 		t.Fatalf("put validation config = %#v, %v", storedConfig, err)
 	}
+	if deleted, err := validations.DeleteConfig(t.Context(), config.ProjectID); err != nil || !deleted {
+		t.Fatalf("delete validation config = %t, %v", deleted, err)
+	}
+	if _, err := validations.GetConfig(t.Context(), config.ProjectID); err != validation.ErrNotFound {
+		t.Fatalf("deleted validation config remained readable: %v", err)
+	}
+	if _, err := validations.PutConfig(t.Context(), config); err != nil {
+		t.Fatalf("restore validation config: %v", err)
+	}
 	job := validation.Job{
 		ID: "val_test", ProjectID: config.ProjectID, FeatureID: run.FeatureID,
 		RunID: run.ID, WorkspaceID: "wsp_test",
