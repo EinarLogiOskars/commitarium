@@ -27,7 +27,10 @@ a configured stack is a previewable project.
    Stopped on Stop and on app exit. A labelled sweep on app start removes
    leftovers from crashes. The source is a shallow fetch into a tempdir that
    is deleted with the container; there is no cache.
-6. **Opens in the system browser** (`openExternal`).
+6. **Always one click away.** A Preview item in the project rail starts the
+   preview and opens it in the system browser (`openExternal`) once it is
+   ready; a Preview page holds status, controls, and logs. Not tied to work
+   orders.
 7. **Conventions** (in the assistant prompt and the agent context): processes
    bind `0.0.0.0`, and a frontend reaches its API through a relative-path dev
    proxy (e.g. Vite `/api`), not a hardcoded `localhost:<port>`.
@@ -120,7 +123,8 @@ Each slice is one commit. **C** = coordinator and Tauri backend.
 | --- | --- | --- | --- |
 | R1 | `feat(desktop): add preview bindings` | `run` on the toolchain types in `api/`. `startPreview`, `stopPreview`, `getPreviewStatus`, `getPreviewLogs`, `onPreviewStatusChanged` in `ipc.ts`. | 0 |
 | R2 | `feat(desktop): edit run commands in the stack view` | A "Run" section in `StackPicker.tsx`: setup command list and processes (name, command, port, open). Saved with the stack. Show the proposed `run` in `SetupAssistant.tsx` proposals before applying. | R1, C1 (C2 for proposals) |
-| R3 | `feat(desktop): preview card on project overview` | `PreviewCard.tsx` on `ProjectDashboard` next to `ProjectSyncCard`. Run / Stop / Restart, state badge, open buttons via `openExternal`, the commit it runs, and a Restart prompt when the canonical head has moved. If the stack has no run config, link to the stack view. Logs toggle that polls `get_preview_logs` while open; opens automatically on failure. | R1, C5 |
+| R3 | `feat(desktop): preview control in the project rail` | A Preview item pinned at the bottom of the `ProjectWorkspace` rail next to Settings, visible on every project page. Status dot (pulsing while starting, ok while running, bad on failure). A quick action button like "+ New": ▶ starts the preview and opens the `open` URL in the browser via `openExternal` once it is running; ↗ reopens it while running. Subscribes to `preview-status-changed`. Clicking the label opens the Preview page (R4). | R1, C4 |
+| R4 | `feat(desktop): preview page` | A `preview` mode in `ProjectWorkspace` rendering `PreviewView.tsx`: state and the commit it shows, open buttons per process, Stop and Restart, a Restart prompt when the canonical head has moved past the preview's commit, and a short notice: "The preview shows your project as it was when it started. Restart it to see newly merged work." Logs panel that polls `get_preview_logs` while visible; opens automatically on failure. If the stack has no `run`, explain and link to the Stack page. | R3, C5 |
 
 ### Order
 
@@ -128,7 +132,8 @@ Each slice is one commit. **C** = coordinator and Tauri backend.
 0 ─┬─ C1 ─┬─ C2
    │      ├─ C3
    │      └─ C4 ─ C5
-   └─ R1 ─ R2 (needs C1) ─ R3 (needs C5)
+   └─ R1 ─ R2 (needs C1)
+        └─ R3 (needs C4) ─ R4 (needs C5)
 ```
 
 ## Later (not in this plan)
