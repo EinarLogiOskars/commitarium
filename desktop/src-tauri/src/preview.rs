@@ -376,6 +376,23 @@ pub async fn stop_preview(
 }
 
 #[tauri::command]
+pub async fn reset_preview_data(
+    app: AppHandle,
+    manager: State<'_, PreviewManager>,
+    project_id: String,
+) -> Result<(), String> {
+    cleanup_preview_data(&app, manager.inner().clone(), &project_id, false).await
+}
+
+pub(crate) async fn delete_project_data(
+    app: &AppHandle,
+    manager: PreviewManager,
+    project_id: &str,
+) -> Result<(), String> {
+    cleanup_preview_data(app, manager, project_id, true).await
+}
+
+#[tauri::command]
 pub fn get_preview_status(
     manager: State<'_, PreviewManager>,
     project_id: String,
@@ -420,13 +437,49 @@ async fn stop_project(
     let _ = app.emit(STATUS_EVENT, stopped.status);
     tauri::async_runtime::spawn_blocking(move || {
         if let Some(runtime) = stopped.runtime {
-            compose_down(&runtime, false, false);
+            let _ = compose_down(&runtime, false, false);
             remove_source(&runtime.source_root);
         }
     })
     .await
     .map_err(|_| "preview stop task stopped unexpectedly".to_string())?;
     Ok(())
+}
+
+async fn cleanup_preview_data(
+    app: &AppHandle,
+    manager: PreviewManager,
+    project_id: &str,
+    images: bool,
+) -> Result<(), String> {
+    validate_identifier("project ID", project_id)?;
+    let stopped = manager.stop(project_id)?;
+    if let Some(stopped) = &stopped {
+        let _ = app.emit(STATUS_EVENT, stopped.status.clone());
+    }
+    let compose_project = preview_compose::project_name(project_id)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut down_error = None;
+        if let Some(runtime) = stopped.and_then(|stopped| stopped.runtime) {
+            if let Err(error) = compose_down(&runtime, true, images) {
+                down_error = Some(error);
+            }
+            remove_source(&runtime.source_root);
+        }
+        remove_labeled_resources("container", &compose_project);
+        remove_labeled_resources("network", &compose_project);
+        remove_labeled_resources("volume", &compose_project);
+        if images {
+            remove_labeled_resources("image", &compose_project);
+        }
+        if let Some(error) = down_error {
+            Err(error)
+        } else {
+            Ok(())
+        }
+    })
+    .await
+    .map_err(|_| "preview data cleanup task stopped unexpectedly".to_string())?
 }
 
 fn launch_preview(
@@ -486,7 +539,7 @@ fn launch_preview(
         }
     }
     if !manager.active(&project_id, generation, PreviewState::Starting) {
-        compose_down(&runtime, false, false);
+        let _ = compose_down(&runtime, false, false);
         remove_source(&runtime.source_root);
         return;
     }
@@ -531,7 +584,7 @@ fn launch_preview(
             run.open.service,
         );
     } else {
-        compose_down(&runtime, false, false);
+        let _ = compose_down(&runtime, false, false);
         remove_source(&runtime.source_root);
     }
 }
@@ -675,7 +728,12 @@ fn spawn_log_reader<R: Read + Send + 'static>(output: R, sender: mpsc::Sender<St
     });
 }
 
-fn compose_down(runtime: &ComposeRuntime, volumes: bool, images: bool) {
+fn compose_down(runtime: &ComposeRuntime, volumes: bool, images: bool) -> Result<(), String> {
+    let args = compose_down_args(volumes, images);
+    compose_capture(runtime, &args, "stop preview stack").map(|_| ())
+}
+
+fn compose_down_args(volumes: bool, images: bool) -> Vec<&'static str> {
     let mut args = vec!["down", "--remove-orphans"];
     if volumes {
         args.push("-v");
@@ -683,7 +741,7 @@ fn compose_down(runtime: &ComposeRuntime, volumes: bool, images: bool) {
     if images {
         args.extend(["--rmi", "local"]);
     }
-    let _ = compose_command(runtime).args(args).output();
+    args
 }
 
 fn resolve_urls(
@@ -838,11 +896,11 @@ fn fail_preview(
     if let Some((status, runtime)) = manager.fail(project_id, generation, &bounded(error)) {
         let _ = app.emit(STATUS_EVENT, status);
         if let Some(runtime) = runtime.or(fallback_runtime) {
-            compose_down(&runtime, false, false);
+            let _ = compose_down(&runtime, false, false);
             remove_source(&runtime.source_root);
         }
     } else if let Some(runtime) = fallback_runtime {
-        compose_down(&runtime, false, false);
+        let _ = compose_down(&runtime, false, false);
         remove_source(&runtime.source_root);
     }
 }
@@ -954,7 +1012,7 @@ pub(crate) fn stop_all(manager: &PreviewManager) {
     for project in projects {
         if let Ok(Some(stopped)) = manager.stop(&project) {
             if let Some(runtime) = stopped.runtime {
-                compose_down(&runtime, false, false);
+                let _ = compose_down(&runtime, false, false);
                 remove_source(&runtime.source_root);
             }
         }
@@ -1178,5 +1236,21 @@ mod tests {
         assert_eq!(parse_compose_ps(array).unwrap()[0].service, "web");
         let lines = "{\"Service\":\"web\",\"State\":\"running\",\"ExitCode\":0}\n{\"Service\":\"job\",\"State\":\"exited\",\"ExitCode\":0}\n";
         assert_eq!(parse_compose_ps(lines).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn destructive_cleanup_uses_explicit_compose_flags() {
+        assert_eq!(
+            compose_down_args(false, false),
+            ["down", "--remove-orphans"]
+        );
+        assert_eq!(
+            compose_down_args(true, false),
+            ["down", "--remove-orphans", "-v"]
+        );
+        assert_eq!(
+            compose_down_args(true, true),
+            ["down", "--remove-orphans", "-v", "--rmi", "local"]
+        );
     }
 }

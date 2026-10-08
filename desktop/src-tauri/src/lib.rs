@@ -85,6 +85,7 @@ pub fn run() {
             handoff::upstream::publish_upstream_branch,
             preview::start_preview,
             preview::stop_preview,
+            preview::reset_preview_data,
             preview::get_preview_status,
             preview::get_preview_logs,
             profiles::list_profiles,
