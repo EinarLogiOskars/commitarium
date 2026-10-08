@@ -209,9 +209,16 @@ export function FeatureView({
           )}
         </div>
 
-        {/* Persistent reference once the reviewer has authored them — self-gates
-            on the artifact, so it's absent before review. */}
-        <AcceptanceTestsPanel projectId={projectId} featureId={feature.id} />
+        {/* The reviewer authors these blind during implementation, so show them
+            from Implement onward (populating as they're written → results in
+            review → evidence at merge). Hidden in Clarify/Plan — no baseline
+            yet. Still self-gates on the artifact, so absent unless independent
+            tests are enabled. */}
+        <AcceptanceTestsPanel
+          projectId={projectId}
+          featureId={feature.id}
+          enabled={viewed >= 2}
+        />
       </div>
     </div>
   );
