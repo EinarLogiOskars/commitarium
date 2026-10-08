@@ -42,7 +42,8 @@ interpolation and file-indirection features such as `include`, `extends`,
 allowlisted subprocess environment to get one normalized model and checks it
 against an **allowlist**. Anything not on the list is rejected with an error
 that names the key, so new compose features are refused until someone decides
-they are safe.
+they are safe. The normalized model must not contain `$` in any string or key,
+which also rejects interpolation syntax produced from YAML escapes.
 
 - Services may use: `image`, `build` (`context`, `dockerfile`, `args`,
   `target`), `command`, `entrypoint`, `environment`, `working_dir`, `user`,
@@ -66,8 +67,9 @@ they are safe.
 that, never the original:
 
 - The compose project name is `commitarium-preview-<project id>`.
-- Volume and network names are replaced with project-owned names, and user
-  labels on those resources are dropped.
+- Volume and network names are replaced with project-owned names whose `.`
+  separator cannot appear in a project ID, and user labels on those resources
+  are dropped.
 - Every published port becomes `127.0.0.1::<container port>`, so it lands on a
   random loopback port.
 - Every service gets the preview label, `no-new-privileges`, and CPU, memory,

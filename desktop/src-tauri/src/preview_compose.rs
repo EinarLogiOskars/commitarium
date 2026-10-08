@@ -170,6 +170,7 @@ pub(crate) fn validate_and_rewrite(
         .canonicalize()
         .map_err(|e| format!("resolve preview checkout: {e}"))?;
     let compose_project = project_name(project_id)?;
+    reject_normalized_interpolation(&model)?;
     let root = object_mut(&mut model, "Compose document")?;
     validate_keys_with_extensions(
         root,
@@ -367,7 +368,10 @@ fn validate_top_volumes(value: &mut Value, project: &str) -> Result<(), String> 
             return Err(format!("volume {name:?} must use the local driver"));
         }
         volume.remove("labels");
-        volume.insert("name".into(), Value::String(format!("{project}_{name}")));
+        volume.insert(
+            "name".into(),
+            Value::String(owned_resource_name(project, name)),
+        );
     }
     Ok(())
 }
@@ -393,7 +397,10 @@ fn validate_top_networks(value: &mut Value, project: &str) -> Result<(), String>
             return Err(format!("network {name:?} must use the bridge driver"));
         }
         network.remove("labels");
-        network.insert("name".into(), Value::String(format!("{project}_{name}")));
+        network.insert(
+            "name".into(),
+            Value::String(owned_resource_name(project, name)),
+        );
     }
     Ok(())
 }
@@ -573,6 +580,39 @@ fn validate_keys_with_extensions(
         }
     }
     Ok(())
+}
+
+fn reject_normalized_interpolation(value: &Value) -> Result<(), String> {
+    match value {
+        Value::String(value) if value.contains('$') => Err(
+            "the normalized Compose model cannot contain environment interpolation ('$')".into(),
+        ),
+        Value::Array(values) => {
+            for value in values {
+                reject_normalized_interpolation(value)?;
+            }
+            Ok(())
+        }
+        Value::Object(values) => {
+            for (key, value) in values {
+                if key.contains('$') {
+                    return Err(
+                        "the normalized Compose model cannot contain environment interpolation ('$')"
+                            .into(),
+                    );
+                }
+                reject_normalized_interpolation(value)?;
+            }
+            Ok(())
+        }
+        _ => Ok(()),
+    }
+}
+
+fn owned_resource_name(project: &str, logical_name: &str) -> String {
+    // Project IDs cannot contain '.', so the first dot is an unambiguous
+    // boundary even when logical resource names contain underscores.
+    format!("{project}.{logical_name}")
 }
 
 fn validate_raw_compose(path: &Path) -> Result<(), String> {
@@ -760,12 +800,12 @@ mod tests {
         assert_eq!(web["pids_limit"], 512);
         assert_eq!(
             prepared.model["volumes"]["data"]["name"],
-            "commitarium-preview-prj_test_data"
+            "commitarium-preview-prj_test.data"
         );
         assert!(prepared.model["volumes"]["data"].get("labels").is_none());
         assert_eq!(
             prepared.model["networks"]["default"]["name"],
-            "commitarium-preview-prj_test_default"
+            "commitarium-preview-prj_test.default"
         );
         assert!(prepared.model["networks"]["default"]
             .get("labels")
@@ -927,6 +967,81 @@ mod tests {
             let error = validate_raw_compose(&path).unwrap_err();
             assert!(error.contains(expected), "error for {expected}: {error}");
         }
+    }
+
+    #[test]
+    fn normalized_model_rejects_yaml_escaped_interpolation() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("compose.yaml");
+        fs::write(
+            &path,
+            "services:\n  web:\n    environment:\n      LEAK: \"\\x24{DOCKER_CONFIG}\"\n",
+        )
+        .unwrap();
+
+        // The source contains no literal '$', so the raw-byte defense cannot
+        // see it. YAML decoding (and Compose normalization) produces one.
+        validate_raw_compose(&path).unwrap();
+        let yaml: serde_yaml_ng::Value =
+            serde_yaml_ng::from_slice(&fs::read(&path).unwrap()).unwrap();
+        let model = serde_json::to_value(yaml).unwrap();
+        let error = validate_and_rewrite(
+            root.path(),
+            "prj_test",
+            &OpenTarget {
+                service: "web".into(),
+                port: 5173,
+            },
+            model,
+        )
+        .unwrap_err();
+        assert!(error.contains("interpolation"), "unexpected error: {error}");
+    }
+
+    #[test]
+    fn normalized_model_rejects_dollars_in_paths_and_keys() {
+        let root = tempfile::tempdir().unwrap();
+        let escaped_path = root.path().join("${Z:-..}");
+        fs::create_dir(&escaped_path).unwrap();
+        let mut model = full_stack(root.path());
+        model["services"]["web"]["volumes"][0]["source"] = json!(escaped_path);
+        let error = validate_and_rewrite(
+            root.path(),
+            "prj_test",
+            &OpenTarget {
+                service: "web".into(),
+                port: 5173,
+            },
+            model,
+        )
+        .unwrap_err();
+        assert!(error.contains("interpolation"), "unexpected error: {error}");
+
+        let mut model = full_stack(root.path());
+        model["services"]["web"]["environment"] = json!({"$SECRET": "value"});
+        let error = validate_and_rewrite(
+            root.path(),
+            "prj_test",
+            &OpenTarget {
+                service: "web".into(),
+                port: 5173,
+            },
+            model,
+        )
+        .unwrap_err();
+        assert!(error.contains("interpolation"), "unexpected error: {error}");
+    }
+
+    #[test]
+    fn resource_names_have_an_unambiguous_project_boundary() {
+        assert_ne!(
+            owned_resource_name("commitarium-preview-zzh", "a_data"),
+            owned_resource_name("commitarium-preview-zzh_a", "data")
+        );
+        assert_eq!(
+            owned_resource_name("commitarium-preview-prj_test", "data"),
+            "commitarium-preview-prj_test.data"
+        );
     }
 
     #[test]
