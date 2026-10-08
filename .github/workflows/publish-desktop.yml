@@ -76,6 +76,8 @@ jobs:
         uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           # Until Developer ID credentials are configured, ad-hoc signing keeps
           # downloaded Apple Silicon builds from being treated as damaged.
           APPLE_SIGNING_IDENTITY: ${{ runner.os == 'macOS' && '-' || '' }}
@@ -89,9 +91,9 @@ jobs:
 
             Docker Desktop (with Docker Compose) is required. Commitarium will guide you through setup on first launch.
           releaseDraft: true
-          prerelease: true
+          prerelease: false
           generateReleaseNotes: true
-          uploadUpdaterJson: false
+          uploadUpdaterJson: true
           retryAttempts: 2
           releaseAssetNamePattern: Commitarium_[version]_[platform]_[arch][setup].[ext]
           args: ${{ matrix.args }}

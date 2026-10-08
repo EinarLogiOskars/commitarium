@@ -46,4 +46,24 @@ if ! grep -Eq '^[[:space:]]*COMMITARIUM_RUNNER_MODE:[[:space:]]*real_agents[[:sp
     exit 1
 fi
 
+if ! grep -Fq '"createUpdaterArtifacts": true' desktop/src-tauri/tauri.conf.json; then
+    echo "desktop release does not create updater artifacts" >&2
+    exit 1
+fi
+
+if ! grep -Fq 'releases/latest/download/latest.json' desktop/src-tauri/tauri.conf.json; then
+    echo "desktop updater endpoint is not the latest GitHub release manifest" >&2
+    exit 1
+fi
+
+if ! grep -Fq 'uploadUpdaterJson: true' .github/workflows/publish-desktop.yml; then
+    echo "desktop release workflow does not publish updater metadata" >&2
+    exit 1
+fi
+
+if ! grep -Fq 'prerelease: false' .github/workflows/publish-desktop.yml; then
+    echo "desktop release workflow must publish the stable 0.x update channel" >&2
+    exit 1
+fi
+
 echo "release version $version is consistent"
