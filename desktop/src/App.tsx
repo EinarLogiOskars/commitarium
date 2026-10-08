@@ -48,8 +48,7 @@ function App() {
   const update = useDesktopUpdate(entered && reachable, attention.running.length);
   // An install in progress or a held once-safe retry must stay visible.
   const updateActive =
-    update.status === "installing" ||
-    (update.status === "blocked" && update.armedOnceSafe);
+    update.status === "installing" || (update.status === "blocked" && update.armedOnceSafe);
   // Keep the flow on screen while it's actively installing or waiting to.
   useEffect(() => {
     if (updateActive) setShowUpdate(true);

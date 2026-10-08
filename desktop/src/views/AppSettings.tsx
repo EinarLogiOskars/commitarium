@@ -221,17 +221,9 @@ export function AppSettings({
 
 // The version Fact's companion: a status word + a check/view action, sharing the
 // same update state as the topbar notice.
-function UpdateLine({
-  update,
-  onOpenUpdate,
-}: {
-  update: DesktopUpdate;
-  onOpenUpdate: () => void;
-}) {
+function UpdateLine({ update, onOpenUpdate }: { update: DesktopUpdate; onOpenUpdate: () => void }) {
   const hasUpdate =
-    update.status === "available" ||
-    update.status === "blocked" ||
-    update.status === "installing";
+    update.status === "available" || update.status === "blocked" || update.status === "installing";
   const word =
     update.status === "checking"
       ? "Checking…"
@@ -255,11 +247,7 @@ function UpdateLine({
           View update
         </button>
       ) : (
-        <button
-          className="ghost"
-          onClick={update.check}
-          disabled={update.status === "checking"}
-        >
+        <button className="ghost" onClick={update.check} disabled={update.status === "checking"}>
           Check for updates
         </button>
       )}
