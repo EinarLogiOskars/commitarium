@@ -14,6 +14,7 @@ import type {
   AssistantSession,
   ProjectToolchain,
 } from "../api/types";
+import { RunSummary } from "./RunEditor";
 
 const POLL_MS = 2000;
 const PROVIDERS: AgentProvider[] = ["claude", "codex"];
@@ -297,6 +298,7 @@ export function SetupAssistant({
               External services (requirements only, not provisioned): {proposal.services.join(", ")}
             </p>
           )}
+          {proposal.run && <RunSummary run={proposal.run} />}
           <div className="assistant__actions">
             <button className="ghost" onClick={onCancel} disabled={busy}>
               Back to picker

@@ -8,6 +8,13 @@ import {
 import { ApiError } from "../api/client";
 import { TOOL_NAMES } from "../api/types";
 import { SetupAssistant } from "./SetupAssistant";
+import {
+  RunEditor,
+  runDraftComplete,
+  runDraftFrom,
+  runFromDraft,
+  type RunDraft,
+} from "./RunEditor";
 import type {
   AgentProvider,
   ProjectToolchain,
@@ -43,6 +50,7 @@ export function StackPicker({
   const [services, setServices] = useState<string[]>([]);
   const [source, setSource] = useState<ToolchainSource>("picker");
   const [serviceDraft, setServiceDraft] = useState("");
+  const [run, setRun] = useState<RunDraft>(runDraftFrom());
   const [detection, setDetection] = useState<{ evidence: string[]; confidence: string } | null>(
     null,
   );
@@ -66,6 +74,7 @@ export function StackPicker({
           setRows(rowsFrom(tc.tools));
           setServices(tc.services);
           setSource(tc.source ?? "picker");
+          setRun(runDraftFrom(tc.run));
         }
       } catch (e) {
         if (live) setError(describe(e));
@@ -140,13 +149,20 @@ export function StackPicker({
   }, [rows]);
 
   const complete = rows.length > 0 && rows.every((r) => r.tool && r.version.trim());
-  const canSave = complete && Object.keys(tools).length > 0 && !busy;
+  const canSave = complete && Object.keys(tools).length > 0 && runDraftComplete(run) && !busy;
 
   const save = async () => {
     setBusy(true);
     setError(null);
     try {
-      onSaved(await updateProjectToolchain(projectId, { source, tools, services }));
+      onSaved(
+        await updateProjectToolchain(projectId, {
+          source,
+          tools,
+          services,
+          run: runFromDraft(run),
+        }),
+      );
     } catch (e) {
       setError(describe(e));
     } finally {
@@ -301,6 +317,8 @@ export function StackPicker({
           </button>
         </div>
       </div>
+
+      <RunEditor value={run} onChange={setRun} disabled={busy} />
 
       <button className="primary" onClick={() => void save()} disabled={!canSave}>
         {busy ? "Saving…" : current?.status === "configured" ? "Save changes" : "Save stack"}
