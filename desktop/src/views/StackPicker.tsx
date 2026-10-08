@@ -25,6 +25,7 @@ import type {
 } from "../api/types";
 
 type Row = { tool: string; version: string };
+type AssistantMode = "stack" | "preview";
 
 function rowsFrom(tools: Record<string, string>): Row[] {
   return Object.entries(tools)
@@ -57,7 +58,7 @@ export function StackPicker({
   const [busy, setBusy] = useState(false);
   const [detecting, setDetecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [helping, setHelping] = useState(false);
+  const [helping, setHelping] = useState<AssistantMode | null>(null);
 
   useEffect(() => {
     let live = true;
@@ -171,17 +172,20 @@ export function StackPicker({
   };
 
   if (helping) {
+    const previewHelp = helping === "preview";
     return (
       <section className="panel">
-        <h2>Stack — ask an agent</h2>
+        <h2>{previewHelp ? "Preview setup — ask an agent" : "Stack — ask an agent"}</h2>
         <SetupAssistant
           projectId={projectId}
+          purpose={previewHelp ? "verify_repository" : "design_stack"}
+          intent={previewHelp ? "preview" : "stack"}
           preferred={preferred}
           onApplied={(t) => {
-            setHelping(false);
+            setHelping(null);
             onSaved(t);
           }}
-          onCancel={() => setHelping(false)}
+          onCancel={() => setHelping(null)}
         />
       </section>
     );
@@ -191,8 +195,8 @@ export function StackPicker({
     <section className="panel">
       <div className="panel__head">
         <h2>Stack</h2>
-        <button className="ghost" onClick={() => setHelping(true)} disabled={busy}>
-          Ask an agent
+        <button className="ghost" onClick={() => setHelping("stack")} disabled={busy}>
+          Ask an agent about the stack
         </button>
       </div>
       {current?.status === "needs_setup" && (
@@ -318,7 +322,12 @@ export function StackPicker({
         </div>
       </div>
 
-      <RunEditor value={run} onChange={setRun} disabled={busy} />
+      <RunEditor
+        value={run}
+        onChange={setRun}
+        onAskAgent={() => setHelping("preview")}
+        disabled={busy}
+      />
 
       <button className="primary" onClick={() => void save()} disabled={!canSave}>
         {busy ? "Saving…" : current?.status === "configured" ? "Save changes" : "Save stack"}

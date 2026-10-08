@@ -621,6 +621,43 @@ body {
 .run__reason {
   margin: 6px 0 0;
 }
+.run__title {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+}
+.run__empty {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 18px;
+  padding: 14px;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+}
+.run__empty p {
+  max-width: 620px;
+  margin: 6px 0 0;
+}
+.run__empty-actions {
+  display: flex;
+  flex: none;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.run__conventions {
+  margin: 0 0 4px;
+}
+.run__issue {
+  padding: 8px 10px;
+  color: var(--text);
+  background: color-mix(in srgb, var(--warn) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--warn) 45%, transparent);
+  border-radius: 6px;
+  font-size: 13px;
+}
 .mono {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 12px;
