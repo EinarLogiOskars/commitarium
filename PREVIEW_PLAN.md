@@ -82,6 +82,23 @@ Authoritative text: `docs/coordinator-api.md` (Project toolchains) and
 | C9 | `feat(desktop): run previews with compose` | Replace the single-container runner. `start_preview` fetches the head, refuses to start without a root compose file, validates with C8, writes the rewritten file to the temp dir, and runs `docker compose -p <name> -f <file> up -d --build`, logging pulls and builds as `[preview]`. Resolve URLs with `docker compose port` and mark running when the open target answers HTTP. Mark failed when a service exits non-zero or the open service stops. Logs come from `docker compose logs --tail 400`. Stop, replace, and exit run `down` without `-v`. The sweep finds leftovers by the compose project label and keeps volumes. | C6, C8 |
 | C10 | `feat(desktop): reset and delete preview data` | `reset_preview_data`: `down -v` for the project. Project deletion (`import::delete_project`) also runs `down -v --rmi local` for that project. | C9 |
 
+### Security fixes from review (C11)
+
+A review of C8–C10 confirmed these holes on a real Docker host. Each one lets
+an agent-written compose file reach the host. Fix them before previews run
+untrusted compose files. Add a rejection test for each.
+
+| # | Finding | Fix |
+| --- | --- | --- |
+| 1 | **Host file and environment leak (critical).** `docker compose config` reads `env_file`, `include`, `extends.file` (and `label_file`) at absolute host paths and inlines their contents into `environment`. It also interpolates `${VAR}` from the desktop app's full environment, e.g. `${HOME}`. Confirmed: a host secret file and `HOME` came out in the validated model. | Run `config` (and `up`) with a cleared environment (`env_clear()` plus minimal `PATH`, `HOME`, `DOCKER_*`). Before running `config`, parse the raw YAML and reject `env_file`, `include`, `extends`, and `label_file` whose paths resolve outside the checkout. Reject `$` interpolation, or use `--no-interpolate`. |
+| 2 | **Volume `name:` adopts any Docker volume (critical).** `volumes: {v: {name: commitarium_claude-profile}}` mounts that existing volume read-write, and Reset or Delete then removes it with `down -v`. | Reject `name` on top-level volumes, or force it to `<project>_<key>`. |
+| 3 | **Network `name:` joins any network (critical).** `name: commitarium_default` puts the preview on the coordinator's and Forgejo's network. | Reject `name` on top-level networks, or force it. Also reject `ipam` and `attachable`. |
+| 4 | **`image` with `build` overwrites trusted tags (high).** A preview can build agent code tagged `commitarium-coordinator:latest` or a worker image, and Commitarium runs it later with credentials. | When `build` is present, force `image` to `<project>-<service>`, or reject the combination. |
+| 5 | Service-level `networks` values are not checked (`ipv4_address`, `mac_address`, `driver_opts`). | Allowlist them: `aliases` at most. |
+| 6 | `x-*` keys are accepted at every level. | Accept them only at the service and top level, as ADR-014 says. |
+| 7 | User `labels` are allowed on volumes and networks. | Drop them, or forbid the `com.docker.*` and `commitarium.*` prefixes. |
+| 8 | Delete removes images by label. It is unconfirmed whether that catches built images. | Becomes moot once fix 4 forces the tag; verify `--rmi local` removes them. |
+
 ### Renderer
 
 | # | Commit | Contents | Depends on |
@@ -94,7 +111,7 @@ Authoritative text: `docs/coordinator-api.md` (Project toolchains) and
 ```
 D1 ─┬─ C6 ─┬─ C7
     │      └─────┐
-    ├─ C8 ───────┴─ C9 ─ C10
+    ├─ C8 ───────┴─ C9 ─ C10 ─ C11
     └─ R5 (needs C6) ─ R6 (needs C9)
 ```
 
