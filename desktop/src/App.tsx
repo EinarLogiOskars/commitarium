@@ -14,6 +14,8 @@ import { Projects } from "./views/Projects";
 import { ProjectWorkspace } from "./views/ProjectWorkspace";
 import { Providers } from "./views/Providers";
 import { ForgejoViewer } from "./views/ForgejoViewer";
+import { UpdateModal } from "./views/UpdateModal";
+import { useDesktopUpdate } from "./update/useDesktopUpdate";
 import "./App.css";
 
 function App() {
@@ -27,6 +29,7 @@ function App() {
   const [showViewer, setShowViewer] = useState(false);
   const [showInbox, setShowInbox] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [showUpdate, setShowUpdate] = useState(false);
   // Set while the native layer holds a quit, waiting for this answer.
   const [exitPrompt, setExitPrompt] = useState<{ timeoutMs: number } | null>(null);
   // A work order to open once the workspace for `projectId` is mounted. The
@@ -40,6 +43,19 @@ function App() {
   // Only poll from inside the workspace: the launcher has nowhere to show it.
   const attention = useAttention(entered && reachable);
   const refreshAttention = attention.refresh;
+  // Signed desktop updates: check once the stack is usable; the install flow
+  // uses the live `running` count to know when a restart is safe.
+  const update = useDesktopUpdate(entered && reachable, attention.running.length);
+  // An install in progress or a held once-safe retry must stay visible.
+  const updateActive =
+    update.status === "installing" ||
+    (update.status === "blocked" && update.armedOnceSafe);
+  // Keep the flow on screen while it's actively installing or waiting to.
+  useEffect(() => {
+    if (updateActive) setShowUpdate(true);
+  }, [updateActive]);
+  const updateNotice =
+    update.status === "available" || update.status === "blocked" || update.status === "installing";
   const desktop = useDesktopSettings();
   useNotifier({
     items: attention.items,
@@ -195,6 +211,20 @@ function App() {
             )}
           </button>
         )}
+        {updateNotice && (
+          <button
+            className="ghost topbar__update"
+            onClick={() => setShowUpdate(true)}
+            title={
+              update.status === "installing"
+                ? "Update in progress"
+                : `Update available${update.update ? ` — ${update.update.version}` : ""}`
+            }
+          >
+            {update.status === "installing" ? "Updating…" : "Update"}
+            <span className="topbar__update-dot" aria-hidden />
+          </button>
+        )}
         <button className="ghost" onClick={() => setShowProviders(true)}>
           Providers
         </button>
@@ -216,10 +246,16 @@ function App() {
       {exitDialog}
       {showProviders && <Providers onClose={() => setShowProviders(false)} />}
       {showViewer && <ForgejoViewer onClose={() => setShowViewer(false)} />}
+      {showUpdate && <UpdateModal u={update} onClose={() => setShowUpdate(false)} />}
       {showSettings && (
         <AppSettings
           desktop={desktop}
           running={attention.running}
+          update={update}
+          onOpenUpdate={() => {
+            setShowSettings(false);
+            setShowUpdate(true);
+          }}
           onClose={() => setShowSettings(false)}
         />
       )}

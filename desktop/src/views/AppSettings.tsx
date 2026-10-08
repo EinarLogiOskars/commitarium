@@ -12,6 +12,7 @@ import { BackupSection } from "./BackupSection";
 import { Fact } from "./Fact";
 import type { DesktopSettingsState } from "../settings/useDesktopSettings";
 import type { RunningWorkOrder } from "../api/types";
+import type { DesktopUpdate } from "../update/useDesktopUpdate";
 
 function gigabytes(bytes: number): string {
   return `${(bytes / 1024 ** 3).toFixed(1)} GB`;
@@ -30,11 +31,17 @@ interface Runtime {
 export function AppSettings({
   desktop,
   running,
+  update,
+  onOpenUpdate,
   onClose,
 }: {
   desktop: DesktopSettingsState;
   /** Work orders the coordinator reports as in flight right now. */
   running: RunningWorkOrder[];
+  /** Desktop-update state (shared with the topbar notice + modal). */
+  update: DesktopUpdate;
+  /** Open the full update flow (modal). */
+  onOpenUpdate: () => void;
   onClose: () => void;
 }) {
   const { settings, loaded, error, save, enableNotifications } = desktop;
@@ -187,7 +194,10 @@ export function AppSettings({
             <p className="muted set__note">Reading runtime status…</p>
           ) : (
             <>
-              <Fact label="Commitarium" value={runtime.version} />
+              <div className="set__update">
+                <Fact label="Commitarium" value={runtime.version} />
+                <UpdateLine update={update} onOpenUpdate={onOpenUpdate} />
+              </div>
               <Fact label="Docker" value={runtime.docker.docker_version ?? "not detected"} />
               <Fact label="Compose" value={runtime.docker.compose_version ?? "not detected"} />
               <Fact
@@ -205,6 +215,54 @@ export function AppSettings({
           )}
         </section>
       </div>
+    </div>
+  );
+}
+
+// The version Fact's companion: a status word + a check/view action, sharing the
+// same update state as the topbar notice.
+function UpdateLine({
+  update,
+  onOpenUpdate,
+}: {
+  update: DesktopUpdate;
+  onOpenUpdate: () => void;
+}) {
+  const hasUpdate =
+    update.status === "available" ||
+    update.status === "blocked" ||
+    update.status === "installing";
+  const word =
+    update.status === "checking"
+      ? "Checking…"
+      : update.status === "installing"
+        ? "Updating…"
+        : update.status === "up_to_date"
+          ? "Up to date"
+          : hasUpdate
+            ? `Update available${update.update ? ` (${update.update.version})` : ""}`
+            : update.status === "error"
+              ? "Check failed"
+              : "";
+
+  return (
+    <div className="set__update-line">
+      {word && (
+        <span className={`muted set__note${hasUpdate ? " set__update-avail" : ""}`}>{word}</span>
+      )}
+      {hasUpdate ? (
+        <button className="ghost" onClick={onOpenUpdate}>
+          View update
+        </button>
+      ) : (
+        <button
+          className="ghost"
+          onClick={update.check}
+          disabled={update.status === "checking"}
+        >
+          Check for updates
+        </button>
+      )}
     </div>
   );
 }
