@@ -8,6 +8,13 @@ import {
 import { ApiError } from "../api/client";
 import { TOOL_NAMES } from "../api/types";
 import { SetupAssistant } from "./SetupAssistant";
+import {
+  RunEditor,
+  runDraftComplete,
+  runDraftFrom,
+  runFromDraft,
+  type RunDraft,
+} from "./RunEditor";
 import type {
   AgentProvider,
   ProjectToolchain,
@@ -18,6 +25,7 @@ import type {
 } from "../api/types";
 
 type Row = { tool: string; version: string };
+type AssistantMode = "stack" | "preview";
 
 function rowsFrom(tools: Record<string, string>): Row[] {
   return Object.entries(tools)
@@ -43,13 +51,14 @@ export function StackPicker({
   const [services, setServices] = useState<string[]>([]);
   const [source, setSource] = useState<ToolchainSource>("picker");
   const [serviceDraft, setServiceDraft] = useState("");
+  const [run, setRun] = useState<RunDraft>(runDraftFrom());
   const [detection, setDetection] = useState<{ evidence: string[]; confidence: string } | null>(
     null,
   );
   const [busy, setBusy] = useState(false);
   const [detecting, setDetecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [helping, setHelping] = useState(false);
+  const [helping, setHelping] = useState<AssistantMode | null>(null);
 
   useEffect(() => {
     let live = true;
@@ -66,6 +75,7 @@ export function StackPicker({
           setRows(rowsFrom(tc.tools));
           setServices(tc.services);
           setSource(tc.source ?? "picker");
+          setRun(runDraftFrom(tc.run));
         }
       } catch (e) {
         if (live) setError(describe(e));
@@ -140,13 +150,20 @@ export function StackPicker({
   }, [rows]);
 
   const complete = rows.length > 0 && rows.every((r) => r.tool && r.version.trim());
-  const canSave = complete && Object.keys(tools).length > 0 && !busy;
+  const canSave = complete && Object.keys(tools).length > 0 && runDraftComplete(run) && !busy;
 
   const save = async () => {
     setBusy(true);
     setError(null);
     try {
-      onSaved(await updateProjectToolchain(projectId, { source, tools, services }));
+      onSaved(
+        await updateProjectToolchain(projectId, {
+          source,
+          tools,
+          services,
+          run: runFromDraft(run),
+        }),
+      );
     } catch (e) {
       setError(describe(e));
     } finally {
@@ -155,17 +172,20 @@ export function StackPicker({
   };
 
   if (helping) {
+    const previewHelp = helping === "preview";
     return (
       <section className="panel">
-        <h2>Stack — ask an agent</h2>
+        <h2>{previewHelp ? "Preview setup — ask an agent" : "Stack — ask an agent"}</h2>
         <SetupAssistant
           projectId={projectId}
+          purpose={previewHelp ? "verify_repository" : "design_stack"}
+          intent={previewHelp ? "preview" : "stack"}
           preferred={preferred}
           onApplied={(t) => {
-            setHelping(false);
+            setHelping(null);
             onSaved(t);
           }}
-          onCancel={() => setHelping(false)}
+          onCancel={() => setHelping(null)}
         />
       </section>
     );
@@ -175,8 +195,8 @@ export function StackPicker({
     <section className="panel">
       <div className="panel__head">
         <h2>Stack</h2>
-        <button className="ghost" onClick={() => setHelping(true)} disabled={busy}>
-          Ask an agent
+        <button className="ghost" onClick={() => setHelping("stack")} disabled={busy}>
+          Ask an agent about the stack
         </button>
       </div>
       {current?.status === "needs_setup" && (
@@ -301,6 +321,13 @@ export function StackPicker({
           </button>
         </div>
       </div>
+
+      <RunEditor
+        value={run}
+        onChange={setRun}
+        onAskAgent={() => setHelping("preview")}
+        disabled={busy}
+      />
 
       <button className="primary" onClick={() => void save()} disabled={!canSave}>
         {busy ? "Saving…" : current?.status === "configured" ? "Save changes" : "Save stack"}

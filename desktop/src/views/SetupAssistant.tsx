@@ -14,10 +14,15 @@ import type {
   AssistantSession,
   ProjectToolchain,
 } from "../api/types";
+import { RunSummary } from "./RunEditor";
 
 const POLL_MS = 2000;
 const PROVIDERS: AgentProvider[] = ["claude", "codex"];
 const LABEL: Record<AgentProvider, string> = { claude: "Claude", codex: "Codex" };
+const REPOSITORY_VERIFICATION_MESSAGE =
+  "Inspect the committed repository and verify its exact runtime stack and requirements.";
+const PREVIEW_SETUP_MESSAGE =
+  "Inspect the committed repository and propose the exact runtime stack and a complete preview run configuration. Focus on setup commands, long-running processes, ports, 0.0.0.0 binding, and any relative-path frontend API proxy needed.";
 
 /** "Ask an agent" — a bounded provider conversation that ends in an exact
  * toolchain proposal the user applies. Two purposes: design_stack (describe a
@@ -26,12 +31,15 @@ const LABEL: Record<AgentProvider, string> = { claude: "Claude", codex: "Codex" 
 export function SetupAssistant({
   projectId,
   purpose = "design_stack",
+  intent = "stack",
   preferred,
   onApplied,
   onCancel,
 }: {
   projectId: string;
   purpose?: AssistantPurpose;
+  /** Focus repository verification on a complete preview run configuration. */
+  intent?: "stack" | "preview";
   /** Project's configured lead provider/model — the first choice when connected. */
   preferred?: { provider?: AgentProvider; model?: string };
   onApplied: (t: ProjectToolchain) => void;
@@ -39,6 +47,7 @@ export function SetupAssistant({
 }) {
   const { modelsFor, loading: modelsLoading } = useModels();
   const verify = purpose === "verify_repository";
+  const preview = intent === "preview";
 
   // A provider is usable only if its lead catalog has models (i.e. connected).
   const available = useMemo(
@@ -103,7 +112,11 @@ export function SetupAssistant({
             provider,
             model,
             purpose,
-            ...(verify ? {} : { message: description.trim() }),
+            message: verify
+              ? preview
+                ? PREVIEW_SETUP_MESSAGE
+                : REPOSITORY_VERIFICATION_MESSAGE
+              : description.trim(),
           },
           crypto.randomUUID(),
         ),
@@ -180,12 +193,16 @@ export function SetupAssistant({
         {error && <div className="banner banner--error">{error}</div>}
         <p>
           No agent provider is connected, so an agent can't{" "}
-          {verify ? "verify this repository" : "help choose a stack"} yet. Connect Codex or Claude
-          under Providers, or choose a stack manually.
+          {preview
+            ? "set up this preview"
+            : verify
+              ? "verify this repository"
+              : "help choose a stack"}{" "}
+          yet. Connect Codex or Claude under Providers, or continue manually.
         </p>
         <div className="assistant__actions">
           <button className="primary" onClick={onCancel} disabled={busy}>
-            Choose a stack manually
+            {preview ? "Enter commands manually" : "Choose a stack manually"}
           </button>
         </div>
       </div>
@@ -199,9 +216,11 @@ export function SetupAssistant({
       <div className="assistant">
         {error && <div className="banner banner--error">{error}</div>}
         <p className="muted">
-          {verify
-            ? "An agent reads this repository's committed files and proposes an exact runtime stack, explaining what it found. It won't modify or run anything."
-            : "Describe what you want to build. An agent asks a few questions and proposes an exact runtime stack — it won't touch your repository or run anything."}{" "}
+          {preview
+            ? "An agent reads the repository's committed files and proposes the exact setup commands, processes, ports, and runtime stack needed for Preview. It won't modify or run anything."
+            : verify
+              ? "An agent reads this repository's committed files and proposes an exact runtime stack, explaining what it found. It won't modify or run anything."
+              : "Describe what you want to build. An agent asks a few questions and proposes an exact runtime stack — it won't touch your repository or run anything."}{" "}
           This uses one provider turn.
         </p>
         <div className="assistant__setup">
@@ -251,14 +270,20 @@ export function SetupAssistant({
         {!verify && <p className="muted note">Enter to send · Alt+Enter for a new line</p>}
         <div className="assistant__actions">
           <button className="ghost" onClick={onCancel} disabled={busy}>
-            Back to picker
+            {preview ? "Back to preview setup" : "Back to picker"}
           </button>
           <button
             className="primary"
             onClick={() => void start()}
             disabled={busy || !provider || !model || (!verify && !description.trim())}
           >
-            {busy ? "Starting…" : verify ? "Verify repository" : "Start"}
+            {busy
+              ? "Starting…"
+              : preview
+                ? "Analyze repository"
+                : verify
+                  ? "Verify repository"
+                  : "Start"}
           </button>
         </div>
       </div>
@@ -284,7 +309,7 @@ export function SetupAssistant({
 
       {status === "proposal_ready" && proposal && (
         <div className="assistant__proposal">
-          <h3>Proposed stack</h3>
+          <h3>{preview ? "Proposed preview setup" : "Proposed stack"}</h3>
           <div className="stack__chips">
             {Object.entries(proposal.tools).map(([t, v]) => (
               <span key={t} className="pill pill--ok">
@@ -297,12 +322,28 @@ export function SetupAssistant({
               External services (requirements only, not provisioned): {proposal.services.join(", ")}
             </p>
           )}
+          {proposal.run && <RunSummary run={proposal.run} />}
+          {preview && !proposal.run && (
+            <div className="banner banner--warn">
+              The agent did not find a complete preview setup. Try the analysis again or enter the
+              commands manually.
+            </div>
+          )}
           <div className="assistant__actions">
             <button className="ghost" onClick={onCancel} disabled={busy}>
-              Back to picker
+              {preview ? "Back to preview setup" : "Back to picker"}
             </button>
-            <button className="primary" onClick={() => void apply()} disabled={busy}>
-              {busy ? "Applying…" : "Use this stack"}
+            {preview && !proposal.run && (
+              <button className="ghost" onClick={() => setSession(null)} disabled={busy}>
+                Try again
+              </button>
+            )}
+            <button
+              className="primary"
+              onClick={() => void apply()}
+              disabled={busy || (preview && !proposal.run)}
+            >
+              {busy ? "Applying…" : preview ? "Use this preview setup" : "Use this stack"}
             </button>
           </div>
         </div>
@@ -327,7 +368,7 @@ export function SetupAssistant({
       {status === "failed" && (
         <div className="assistant__actions">
           <button className="primary" onClick={onCancel} disabled={busy}>
-            Back to picker
+            {preview ? "Back to preview setup" : "Back to picker"}
           </button>
         </div>
       )}

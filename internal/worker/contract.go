@@ -197,6 +197,19 @@ type Result struct {
 type ToolchainProposal struct {
 	Tools    map[string]string
 	Services []string
+	Run      *ToolchainRunConfig
+}
+
+type ToolchainRunConfig struct {
+	Setup     []string
+	Processes []ToolchainRunProcess
+}
+
+type ToolchainRunProcess struct {
+	Name    string
+	Command string
+	Port    *int
+	Open    bool
 }
 
 // EnvironmentRequest asks the user to add named operating-system packages to

@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use tauri::{AppHandle, Manager, State};
 
-use crate::{bootstrap, profiles};
+use crate::{bootstrap, preview, profiles};
 
 /// Fixed Compose project name. Scoping every command to this project keeps the
 /// launcher from touching any other Compose stack on the host.
@@ -505,6 +505,7 @@ pub(crate) fn stack_up_with_manager(manager: &profiles::ProfileManager) -> Resul
     // Forgejo must exist before its own admin CLI can create the internal
     // identities and tokens required by the other services.
     start_forgejo()?;
+    preview::sweep_leftovers();
     let forgejo_changed = bootstrap::provision_forgejo(&file, PROJECT_NAME)?;
     let credentials_changed = transport_changed || forgejo_changed;
     start_core_services(credentials_changed)?;

@@ -466,6 +466,7 @@ func run(ctx context.Context, coordinatorConfig config) error {
 			Pump:                pumpRouter,
 			EnvironmentRequests: environmentService,
 			Validation:          validationService,
+			Toolchains:          toolchainService,
 			Lifetime:            ctx, AgentProfileID: coordinatorConfig.codexAgentProfileID,
 			ReviewerAgentProfileID:       coordinatorConfig.codexReviewerAgentProfileID,
 			ClaudeAgentProfileID:         coordinatorConfig.claudeAgentProfileID,

@@ -350,7 +350,7 @@ func TestAdapterReturnsStructuredToolchainProposal(t *testing.T) {
 		result.Disposition != worker.DispositionSucceeded || result.ToolchainProposal == nil ||
 		!reflect.DeepEqual(result.ToolchainProposal.Tools, map[string]string{
 			"python": "3.14.7", "node": "24.21.0",
-		}) {
+		}) || result.ToolchainProposal.Run == nil || result.ToolchainProposal.Run.Processes[0].Name != "web" {
 		t.Fatalf("structured toolchain result=%+v error=%v", result, err)
 	}
 	if observed := <-events; !equalEvents(observed, []worker.Event{
@@ -826,7 +826,7 @@ func TestCodexAppServerHelper(t *testing.T) {
 			"threadId": "thr_test", "turnId": "turn_test",
 			"item": map[string]any{
 				"id": "item_message", "type": "agentMessage",
-				"text": `{"action":"propose","message":"Use Python and Node.","tools":[{"name":"python","version":"3.14.7"},{"name":"node","version":"24.21.0"}],"services":[]}`,
+				"text": `{"action":"propose","message":"Use Python and Node.","tools":[{"name":"python","version":"3.14.7"},{"name":"node","version":"24.21.0"}],"services":[],"run":{"setup":["npm ci"],"processes":[{"name":"web","command":"npm run dev -- --host 0.0.0.0 --port 5173","port":5173,"open":true}]}}`,
 			},
 		})
 		helpWriteTurnCompleted(writer, "completed")
@@ -978,7 +978,7 @@ func helperTurnHasToolchainSchema(raw json.RawMessage) bool {
 		return false
 	}
 	tools := params.OutputSchema.Properties.Tools
-	return slices.Equal(params.OutputSchema.Required, []string{"action", "message", "tools", "services"}) &&
+	return slices.Equal(params.OutputSchema.Required, []string{"action", "message", "tools", "services", "run"}) &&
 		tools.Type == "array" && !tools.Items.AdditionalProperties &&
 		slices.Equal(tools.Items.Required, []string{"name", "version"})
 }

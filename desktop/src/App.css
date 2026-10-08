@@ -361,6 +361,15 @@ body {
   background: color-mix(in srgb, var(--accent) 15%, transparent);
   border-color: color-mix(in srgb, var(--accent) 35%, transparent);
 }
+.rail__preview {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.rail__preview .rail__new {
+  font-size: 13px;
+  padding: 4px 8px;
+}
 .rail__back {
   color: var(--muted);
   font-size: 13px;
@@ -576,6 +585,27 @@ body {
   border-color: var(--accent);
 }
 
+.preview__urls,
+.preview__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 10px 0;
+}
+.preview__logs {
+  margin: 0;
+  padding: 8px 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 12px;
+  max-height: 360px;
+  overflow: auto;
+  white-space: pre-wrap;
+}
+.preview__error {
+  margin-left: 0;
+}
 .run {
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -590,6 +620,43 @@ body {
 }
 .run__reason {
   margin: 6px 0 0;
+}
+.run__title {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+}
+.run__empty {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 18px;
+  padding: 14px;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+}
+.run__empty p {
+  max-width: 620px;
+  margin: 6px 0 0;
+}
+.run__empty-actions {
+  display: flex;
+  flex: none;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.run__conventions {
+  margin: 0 0 4px;
+}
+.run__issue {
+  padding: 8px 10px;
+  color: var(--text);
+  background: color-mix(in srgb, var(--warn) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--warn) 45%, transparent);
+  border-radius: 6px;
+  font-size: 13px;
 }
 .mono {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -2124,6 +2191,37 @@ button.danger:not(.ghost) {
   padding: 0 0 0 2px;
   font-size: 14px;
   line-height: 1;
+}
+
+.run {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 18px;
+}
+.run > label {
+  font-weight: 500;
+}
+.run__label {
+  font-size: 13px;
+}
+.stack__row input.run__name {
+  flex: 0 0 110px;
+}
+.stack__row input.run__port {
+  flex: 0 0 70px;
+}
+.run__open {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 13px;
+  white-space: nowrap;
+}
+.run-summary ul {
+  margin: 4px 0 8px;
+  padding-left: 18px;
+  font-size: 12px;
 }
 
 /* ---- Guided setup assistant --------------------------------------------- */

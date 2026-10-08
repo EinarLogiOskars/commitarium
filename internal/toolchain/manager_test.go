@@ -69,9 +69,11 @@ func TestManagerConfiguresRuntimeManifestOutsideRepository(t *testing.T) {
 	}
 	fixedTime := time.Date(2026, time.September, 15, 12, 0, 0, 0, time.UTC)
 	manager.now = func() time.Time { return fixedTime }
+	port := 8000
 	configured, err := manager.Configure(t.Context(), "prj_test", Manifest{
 		Source: SourcePicker, Tools: map[string]string{"python": "3.14.7"},
 		Services: []string{"postgresql"},
+		Run:      &RunConfig{Setup: []string{"uv sync"}, Processes: []RunProcess{{Name: "api", Command: "uv run app", Port: &port}}},
 	})
 	if err != nil {
 		t.Fatalf("configure manifest: %v", err)
@@ -94,7 +96,7 @@ func TestManagerConfiguresRuntimeManifestOutsideRepository(t *testing.T) {
 		t.Fatalf("simulate runtime requirement: %v", err)
 	}
 	loaded, err = manager.Get(t.Context(), "prj_test")
-	if err != nil || loaded.Tools["go"] != "1.27.1" {
+	if err != nil || loaded.Tools["go"] != "1.27.1" || loaded.Run == nil || loaded.Run.Processes[0].Name != "api" {
 		t.Fatalf("runtime-added tool was not reflected: manifest=%+v err=%v", loaded, err)
 	}
 }
@@ -113,6 +115,28 @@ func TestManagerReadsRuntimeConfigWithoutManifest(t *testing.T) {
 	loaded, err := manager.Get(t.Context(), "prj_test")
 	if err != nil || loaded.Source != SourceRuntime || loaded.Tools["rust"] != "1.98.1" {
 		t.Fatalf("runtime manifest=%+v err=%v", loaded, err)
+	}
+}
+
+func TestManagerRuntimeConfigureKeepsExistingRun(t *testing.T) {
+	root := t.TempDir()
+	reader := &projectReaderStub{stored: project.Project{ID: "prj_test"}}
+	manager, err := NewManager(root, reader)
+	if err != nil {
+		t.Fatalf("create manager: %v", err)
+	}
+	port := 8000
+	if _, err := manager.Configure(t.Context(), "prj_test", Manifest{
+		Source: SourcePicker, Tools: map[string]string{"python": "3.14.7"},
+		Run: &Run{Setup: []string{}, Processes: []RunProcess{{Name: "api", Command: "python -m http.server 8000", Port: &port}}},
+	}); err != nil {
+		t.Fatalf("configure manifest: %v", err)
+	}
+	updated, err := manager.Configure(t.Context(), "prj_test", Manifest{
+		Source: SourceRuntime, Tools: map[string]string{"python": "3.14.7", "node": "24.21.0"},
+	})
+	if err != nil || updated.Run == nil || updated.Run.Processes[0].Name != "api" {
+		t.Fatalf("runtime update lost run config: manifest=%+v err=%v", updated, err)
 	}
 }
 
