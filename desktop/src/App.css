@@ -2445,8 +2445,70 @@ button.danger:not(.ghost) {
 }
 
 /* Independent acceptance-tests checklist (review phase). */
+/* Review phase: chat on the left, acceptance tests as a right column. */
+.review__body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  gap: 16px;
+  align-items: stretch;
+}
+.review__body .chat {
+  min-width: 0;
+}
+.review__body .accept-tests {
+  flex: none;
+  width: 340px;
+  margin-bottom: 0;
+  overflow-y: auto;
+}
+@media (max-width: 1100px) {
+  .review__body {
+    flex-direction: column;
+  }
+  .review__body .accept-tests {
+    width: auto;
+    overflow-y: visible;
+  }
+}
+
 .accept-tests {
   margin-bottom: 14px;
+}
+.accept-tests__head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  width: 100%;
+  background: none;
+  border: none;
+  padding: 0;
+  text-align: left;
+  cursor: pointer;
+  color: inherit;
+  font: inherit;
+}
+.accept-tests__chevron {
+  flex: none;
+  color: var(--muted);
+  font-size: 11px;
+  align-self: center;
+}
+.accept-tests__count {
+  margin-left: auto;
+  flex: none;
+}
+.accept-tests__meta {
+  margin-top: 6px;
+}
+.accept-tests__dots {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 10px;
+}
+.accept-tests--collapsed .accept-tests__dots {
+  margin-top: 8px;
 }
 .accept-tests h3 {
   margin: 0;

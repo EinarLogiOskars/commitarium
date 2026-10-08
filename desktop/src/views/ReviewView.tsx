@@ -124,17 +124,18 @@ export function ReviewView({
         </div>
       )}
 
-      <AcceptanceTestsPanel projectId={projectId} featureId={featureId} />
-
-      <div
-        className="chat"
-        ref={chatRef}
-        onScroll={(e) => {
-          const el = e.currentTarget;
-          pinned.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
-        }}
-      >
-        <Transcript entries={shown} empty="No review activity yet." />
+      <div className="review__body">
+        <div
+          className="chat"
+          ref={chatRef}
+          onScroll={(e) => {
+            const el = e.currentTarget;
+            pinned.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+          }}
+        >
+          <Transcript entries={shown} empty="No review activity yet." />
+        </div>
+        <AcceptanceTestsPanel projectId={projectId} featureId={featureId} />
       </div>
 
       {live && run && <InterveneBar run={run} onChanged={onChanged} />}
