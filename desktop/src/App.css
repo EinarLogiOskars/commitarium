@@ -361,6 +361,15 @@ body {
   background: color-mix(in srgb, var(--accent) 15%, transparent);
   border-color: color-mix(in srgb, var(--accent) 35%, transparent);
 }
+.rail__preview {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.rail__preview .rail__new {
+  font-size: 13px;
+  padding: 4px 8px;
+}
 .rail__back {
   color: var(--muted);
   font-size: 13px;
@@ -576,6 +585,27 @@ body {
   border-color: var(--accent);
 }
 
+.preview__urls,
+.preview__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 10px 0;
+}
+.preview__logs {
+  margin: 0;
+  padding: 8px 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 12px;
+  max-height: 360px;
+  overflow: auto;
+  white-space: pre-wrap;
+}
+.preview__error {
+  margin-left: 0;
+}
 .run {
   border: 1px solid var(--border);
   border-radius: 8px;

@@ -9,10 +9,13 @@ import { ProjectSettings } from "./ProjectSettings";
 import { ProjectDashboard } from "./ProjectDashboard";
 import { RepositoryCard } from "./RepositoryCard";
 import { StackPicker } from "./StackPicker";
+import { PreviewRailItem } from "./PreviewRailItem";
+import { PreviewView } from "./PreviewView";
+import { usePreview } from "./usePreview";
 import { WORK } from "../vocab";
 import type { AttentionItem, Project, ProjectToolchain } from "../api/types";
 
-type Mode = "overview" | "repository" | "stack" | "new" | "order" | "settings";
+type Mode = "overview" | "repository" | "stack" | "new" | "order" | "settings" | "preview";
 
 /** Project workspace shell: work-order rail + master/detail main pane. */
 export function ProjectWorkspace({
@@ -37,6 +40,7 @@ export function ProjectWorkspace({
   const [mode, setMode] = useState<Mode>("overview");
   const [orderId, setOrderId] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
+  const preview = usePreview(id);
   // Stable so it doesn't re-trigger FeatureView's load effect; refreshes the
   // rail's work-order grouping when a feature's state changes.
   const bumpRail = useCallback(() => setReloadKey((k) => k + 1), []);
@@ -146,6 +150,17 @@ export function ProjectWorkspace({
         />
 
         <div className="rail__spacer" />
+        {project?.forgejo_repository && (
+          <PreviewRailItem
+            preview={preview}
+            runnable={!!toolchain?.run}
+            active={mode === "preview"}
+            onOpenPage={() => {
+              setMode("preview");
+              setOrderId(null);
+            }}
+          />
+        )}
         <button
           className={`rail__item ${mode === "settings" ? "rail__item--active" : ""}`}
           onClick={() => {
@@ -221,6 +236,16 @@ export function ProjectWorkspace({
                 setOrderId(null);
                 bumpRail();
               }}
+            />
+          )}
+
+          {mode === "preview" && project && (
+            <PreviewView
+              projectId={id}
+              preview={preview}
+              runnable={!!toolchain?.run}
+              hasRepo={!!project.forgejo_repository}
+              onOpenStack={() => setMode("stack")}
             />
           )}
 
