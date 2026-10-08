@@ -142,6 +142,20 @@ export type ToolchainSource = "picker" | "detected" | "assistant" | "runtime";
 // first provider turn launches only after "ready".
 export type ProvisioningStatus = "pending" | "installing" | "ready" | "failed";
 
+// How to install and start the app for a preview (ADR-013). Setup commands run
+// in order from the repository root; processes start after and keep running.
+export interface RunProcess {
+  name: string;
+  command: string;
+  port?: number;
+  open?: boolean; // the URL opened in the browser; defaults to the first with a port
+}
+
+export interface RunConfig {
+  setup: string[];
+  processes: RunProcess[];
+}
+
 export interface ProjectToolchain {
   project_id: string;
   status: ToolchainStatus;
@@ -149,6 +163,7 @@ export interface ProjectToolchain {
   tools: Record<string, string>; // tool name -> exact version
   services: string[];
   services_runnable: boolean;
+  run?: RunConfig;
   provisioning_status?: ProvisioningStatus;
   provisioning_message?: string;
   updated_at?: string;
@@ -165,6 +180,7 @@ export interface ToolchainPreset {
 export interface ToolchainSuggestion {
   tools: Record<string, string>;
   services: string[];
+  run?: RunConfig;
   evidence: string[];
   confidence: string;
 }
@@ -173,6 +189,7 @@ export interface UpdateToolchainInput {
   source: ToolchainSource;
   tools: Record<string, string>;
   services?: string[];
+  run?: RunConfig; // replacement semantics: omitting it removes it
 }
 
 // Guided ("help me choose") stack setup: a bounded provider conversation that

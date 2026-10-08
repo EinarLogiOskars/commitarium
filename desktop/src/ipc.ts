@@ -439,6 +439,52 @@ export const previewProjectUpstreamBranch = (
 ): Promise<ProjectUpstreamResult> =>
   invoke("preview_project_upstream_branch", { projectId, remoteName, branchName });
 
+// --- Project previews (ADR-013) ---
+// Runs the project's canonical head in a disposable container from the stack's
+// run config. camelCase like the project sync types.
+
+// Only "canonical" exists today; more target kinds will be added.
+export type PreviewTarget = { kind: "canonical" };
+
+export type PreviewState = "starting" | "running" | "failed" | "stopped";
+
+export interface PreviewUrl {
+  process: string;
+  url: string; // http://127.0.0.1:<host port>
+  open: boolean;
+}
+
+export interface PreviewStatus {
+  projectId: string;
+  target: PreviewTarget;
+  commitId: string;
+  state: PreviewState;
+  urls: PreviewUrl[]; // filled once "running"
+  error: string | null; // set when "failed"
+}
+
+/** Start a preview, replacing any running one for the project. Returns in
+ * "starting"; progress arrives via onPreviewStatusChanged. */
+export const startPreview = (
+  projectId: string,
+  target: PreviewTarget = { kind: "canonical" },
+): Promise<PreviewStatus> => invoke("start_preview", { projectId, target });
+
+export const stopPreview = (projectId: string): Promise<void> =>
+  invoke("stop_preview", { projectId });
+
+export const getPreviewStatus = (projectId: string): Promise<PreviewStatus | null> =>
+  invoke("get_preview_status", { projectId });
+
+/** Last 400 lines of combined output, prefixed [setup] / [<process>]. */
+export const getPreviewLogs = (projectId: string): Promise<string[]> =>
+  invoke("get_preview_logs", { projectId });
+
+export const onPreviewStatusChanged = (
+  handler: (status: PreviewStatus) => void,
+): Promise<UnlistenFn> =>
+  listen<PreviewStatus>("preview-status-changed", (event) => handler(event.payload));
+
 export const publishProjectUpstreamBranch = (
   projectId: string,
   remoteName: string,
