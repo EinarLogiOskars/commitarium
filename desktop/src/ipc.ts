@@ -141,6 +141,38 @@ export type DesktopUpdateCheck =
 
 export const checkDesktopUpdate = (): Promise<DesktopUpdateCheck> => invoke("check_desktop_update");
 
+export interface UpdateBlockingWorkOrder {
+  project_id: string;
+  project_name: string;
+  feature_id: string;
+  feature_title: string;
+  run_id: string;
+  updated_at: string;
+}
+
+export type InstallDesktopUpdateResult =
+  | { status: "blocked"; work_orders: UpdateBlockingWorkOrder[] }
+  | { status: "installing"; version: string };
+
+export type DesktopUpdateProgress =
+  | {
+      status: "downloading";
+      version: string;
+      downloaded_bytes: number;
+      total_bytes: number | null;
+    }
+  | { status: "installing"; version: string }
+  | { status: "restarting"; version: string };
+
+export const installDesktopUpdate = (
+  expectedVersion: string,
+): Promise<InstallDesktopUpdateResult> => invoke("install_desktop_update", { expectedVersion });
+
+export const onDesktopUpdateProgress = (
+  handler: (payload: DesktopUpdateProgress) => void,
+): Promise<UnlistenFn> =>
+  listen<DesktopUpdateProgress>("desktop-update-progress", (event) => handler(event.payload));
+
 export const loadUiState = <T = unknown>(): Promise<T | null> => invoke("load_ui_state");
 export const saveUiState = (state: unknown): Promise<void> => invoke("save_ui_state", { state });
 

@@ -20,6 +20,7 @@ pub fn run() {
         .manage(phase5::ExitCoordinator::default())
         .manage(phase5::NotificationCoordinator::default())
         .manage(phase5::BackupCoordinator::default())
+        .manage(updater::UpdateCoordinator::default())
         .plugin(tauri_plugin_opener::init())
         // HTTP client for the frontend to reach the local coordinator. The
         // capability scope (see capabilities/default.json) restricts it to the
@@ -57,6 +58,7 @@ pub fn run() {
             phase5::inspect_backup,
             phase5::restore_backup,
             updater::check_desktop_update,
+            updater::install_desktop_update,
             store::load_ui_state,
             store::save_ui_state,
             import::inspect_folder,
@@ -87,7 +89,8 @@ pub fn run() {
         .expect("error while building tauri application")
         .run(move |app, event| match event {
             tauri::RunEvent::ExitRequested { api, .. }
-                if phase5::exit_behavior(app) == phase5::ExitBehavior::StopStack =>
+                if phase5::exit_behavior(app) == phase5::ExitBehavior::StopStack
+                    && !updater::is_restarting(app) =>
             {
                 let coordinator = app.state::<phase5::ExitCoordinator>();
                 match phase5::begin_exit_stop(&coordinator) {
