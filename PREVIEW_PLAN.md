@@ -110,6 +110,14 @@ multi-document files and repository `.env`, but it has a bypass:
 | A | **YAML escapes get around the `$` ban (critical).** The raw-byte `$` check (`preview_compose.rs:584`) misses the double-quoted escape `"\x24{...}"`. `config --no-interpolate` keeps it as `${...}` in `preview.compose.json`, and `up` interpolates it. Confirmed: a bind source through directories literally named `${Z:-..}` passed the path check and mounted a host file outside the checkout at `up`. Any host path can be reached this way, including the Docker socket, and so can build contexts. Values such as `"\x24{DOCKER_CONFIG}"` also resolve to host values. | Validate the **normalized** model, not raw bytes. Either reject any `$` in any key or string of the model, or escape every `$` to `$$` before writing `preview.compose.json`. Add tests with `\x24` and with literal `$` in paths. |
 | B | **Volume and network names can collide across previews (low).** The forced `<project>_<key>` lets volume key `a_data` in project `zzh` collide with project `zzh_a`'s `data` volume. It isn't reachable with today's `prj_<hex>` IDs. | Reject `_` in volume and network keys, or use a separator that can't appear in project IDs. |
 
+### Last follow-up (C13)
+
+The re-check of `c5952c3` confirmed A and B are fixed. One low issue remains:
+
+| # | Finding | Fix |
+| --- | --- | --- |
+| C | **Key-only `environment` entries pass through the up-time env (low).** `environment: [PATH, DOCKER_CONFIG, HOME]` or `{DOCKER_CONFIG: null}` passes validation, and at `up` the container sees the host `PATH` and `DOCKER_CONFIG` path. The cleared environment keeps secrets out, so only paths and the username leak. | Reject null values in the normalized `environment` map, and list entries without `=`. |
+
 ### Renderer
 
 | # | Commit | Contents | Depends on |
@@ -122,7 +130,7 @@ multi-document files and repository `.env`, but it has a bypass:
 ```
 D1 ─┬─ C6 ─┬─ C7
     │      └─────┐
-    ├─ C8 ───────┴─ C9 ─ C10 ─ C11 ─ C12
+    ├─ C8 ───────┴─ C9 ─ C10 ─ C11 ─ C12 ─ C13
     └─ R5 (needs C6) ─ R6 (needs C9)
 ```
 
