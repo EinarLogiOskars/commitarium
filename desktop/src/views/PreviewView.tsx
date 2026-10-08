@@ -125,11 +125,11 @@ export function PreviewView({
             <div className="preview__urls">
               {status.urls.map((u) => (
                 <button
-                  key={u.process}
+                  key={u.service}
                   className={u.open ? "primary" : "ghost"}
                   onClick={() => void openExternal(u.url)}
                 >
-                  Open {u.process} ↗
+                  Open {u.service} ↗
                 </button>
               ))}
             </div>

@@ -22,7 +22,7 @@ const LABEL: Record<AgentProvider, string> = { claude: "Claude", codex: "Codex" 
 const REPOSITORY_VERIFICATION_MESSAGE =
   "Inspect the committed repository and verify its exact runtime stack and requirements.";
 const PREVIEW_SETUP_MESSAGE =
-  "Inspect the committed repository and propose the exact runtime stack and a complete preview run configuration. Focus on setup commands, long-running processes, ports, 0.0.0.0 binding, and any relative-path frontend API proxy needed.";
+  "Inspect the committed repository and propose the exact runtime stack and the preview open target: the service in the root compose file that serves the app in a browser, and its container port. If there is no root compose file, say so.";
 
 /** "Ask an agent" — a bounded provider conversation that ends in an exact
  * toolchain proposal the user applies. Two purposes: design_stack (describe a
@@ -202,7 +202,7 @@ export function SetupAssistant({
         </p>
         <div className="assistant__actions">
           <button className="primary" onClick={onCancel} disabled={busy}>
-            {preview ? "Enter commands manually" : "Choose a stack manually"}
+            {preview ? "Enter it manually" : "Choose a stack manually"}
           </button>
         </div>
       </div>
@@ -217,7 +217,7 @@ export function SetupAssistant({
         {error && <div className="banner banner--error">{error}</div>}
         <p className="muted">
           {preview
-            ? "An agent reads the repository's committed files and proposes the exact setup commands, processes, ports, and runtime stack needed for Preview. It won't modify or run anything."
+            ? "An agent reads the repository's committed files, including its compose file, and proposes which service and port Preview should open. It won't modify or run anything."
             : verify
               ? "An agent reads this repository's committed files and proposes an exact runtime stack, explaining what it found. It won't modify or run anything."
               : "Describe what you want to build. An agent asks a few questions and proposes an exact runtime stack — it won't touch your repository or run anything."}{" "}
@@ -325,8 +325,8 @@ export function SetupAssistant({
           {proposal.run && <RunSummary run={proposal.run} />}
           {preview && !proposal.run && (
             <div className="banner banner--warn">
-              The agent did not find a complete preview setup. Try the analysis again or enter the
-              commands manually.
+              The agent did not find a preview target. If the repository has no compose file yet,
+              create a work order to add one, or enter the target manually.
             </div>
           )}
           <div className="assistant__actions">
