@@ -5,6 +5,7 @@ mod handoff;
 mod import;
 mod phase4;
 mod phase5;
+mod preview;
 mod profiles;
 mod store;
 mod updater;
@@ -15,8 +16,11 @@ use tauri::{Emitter, Manager};
 pub fn run() {
     let profiles = profiles::ProfileManager::new();
     let shutdown_profiles = profiles.clone();
+    let previews = preview::PreviewManager::default();
+    let shutdown_previews = previews.clone();
     tauri::Builder::default()
         .manage(profiles)
+        .manage(previews)
         .manage(phase5::ExitCoordinator::default())
         .manage(phase5::NotificationCoordinator::default())
         .manage(phase5::BackupCoordinator::default())
@@ -32,6 +36,7 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             docker::prepare_runtime(app.handle()).map_err(std::io::Error::other)?;
+            preview::sweep_leftovers();
             Ok(())
         })
         // The renderer can invoke ONLY the commands listed here. This explicit
@@ -77,6 +82,10 @@ pub fn run() {
             handoff::project::publish_project_upstream_branch,
             handoff::upstream::preview_upstream_branch,
             handoff::upstream::publish_upstream_branch,
+            preview::start_preview,
+            preview::stop_preview,
+            preview::get_preview_status,
+            preview::get_preview_logs,
             profiles::list_profiles,
             profiles::begin_login,
             profiles::submit_login_code,
@@ -111,6 +120,7 @@ pub fn run() {
                 }
             }
             tauri::RunEvent::Exit | tauri::RunEvent::ExitRequested { .. } => {
+                preview::stop_all(&shutdown_previews);
                 shutdown_profiles.shutdown();
             }
             _ => {}
