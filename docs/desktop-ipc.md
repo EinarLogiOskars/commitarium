@@ -581,6 +581,93 @@ conversations and are not encrypted.
 The renderer never supplies a container, image, mount, component path, archive
 member, user ID, or command. Those remain fixed in Rust.
 
+## Signed application updates
+
+The native updater owns release discovery, signature verification, download,
+installation, and restart. The renderer receives display metadata and invokes
+only the fixed commands below; it cannot provide an update URL, payload, or
+signature.
+
+- `check_desktop_update() -> DesktopUpdateCheck`
+- `install_desktop_update(expectedVersion) -> InstallDesktopUpdateResult`
+- Event `desktop-update-progress` with a `DesktopUpdateProgress` payload
+
+The TypeScript wrappers and canonical types are exported from
+`desktop/src/ipc.ts` as `checkDesktopUpdate`, `installDesktopUpdate`, and
+`onDesktopUpdateProgress`.
+
+```ts
+type DesktopUpdateInfo = {
+  version: string;
+  notes: string | null;
+  published_at: string | null;
+};
+
+type DesktopUpdateCheck =
+  | { status: "up_to_date"; current_version: string }
+  | {
+      status: "available";
+      current_version: string;
+      update: DesktopUpdateInfo;
+    };
+
+type UpdateBlockingWorkOrder = {
+  project_id: string;
+  project_name: string;
+  feature_id: string;
+  feature_title: string;
+  run_id: string;
+  updated_at: string;
+};
+
+type InstallDesktopUpdateResult =
+  | { status: "blocked"; work_orders: UpdateBlockingWorkOrder[] }
+  | { status: "installing"; version: string };
+
+type DesktopUpdateProgress =
+  | {
+      status: "downloading";
+      version: string;
+      downloaded_bytes: number;
+      total_bytes: number | null;
+    }
+  | { status: "installing"; version: string }
+  | { status: "restarting"; version: string };
+```
+
+`expectedVersion` binds an install click to the release that the user saw. The
+backend performs a fresh trusted update check and rejects the request if the
+available version changed. Only one installation attempt can run at a time.
+
+Before downloading, the backend reads the coordinator's installation-wide
+`GET /api/v1/attention` projection. A non-empty `running` list returns
+`status: "blocked"` without downloading. The backend checks the same projection
+again after signature-verified download and immediately before installation,
+because a provider turn may have started while the package was downloading.
+An unavailable or malformed safety response is an error rather than permission
+to restart. Work orders waiting for the user are durable and do not appear in
+`running`, so they do not block an update.
+
+The frontend flow is:
+
+1. Show **Update and restart** for an `available` response.
+2. Invoke `installDesktopUpdate(update.version)` and render progress from
+   `onDesktopUpdateProgress`.
+3. For `blocked`, show the returned work orders and offer **Update once safe**
+   and **Later**.
+4. **Update once safe** is a renderer-session-only choice. Keep observing the
+   existing attention response and invoke installation again when `running` is
+   empty. If the backend's second safety check still returns `blocked`, retain
+   the choice and wait again.
+5. **Later** dismisses the warning and does not persist a queue; the user must
+   trigger **Update and restart** again.
+
+Treat progress events as the authoritative installation display. On Windows a
+successful installer launch can terminate the process before the invocation
+returns. An updater-driven restart bypasses the normal stop-stack quit prompt
+only after installation begins; ordinary user exits retain the configured exit
+behavior.
+
 ## Implemented — provider authentication / profiles
 
 Drives the connect-your-providers flow. The frontend needs:
