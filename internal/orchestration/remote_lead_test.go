@@ -45,6 +45,7 @@ func TestPreviewRunInstructionsShareConfigAndConventions(t *testing.T) {
 		!strings.Contains(instructions, "relative-path development proxy") ||
 		!strings.Contains(instructions, "Build contexts, Dockerfiles, and bind mounts must resolve inside the repository") ||
 		!strings.Contains(instructions, "must not also set image") ||
+		!strings.Contains(instructions, "Every environment variable must have an explicit value") ||
 		!strings.Contains(instructions, "Do not use Compose interpolation") {
 		t.Fatalf("preview instructions=%q error=%v", instructions, err)
 	}

@@ -54,7 +54,8 @@ which also rejects interpolation syntax produced from YAML escapes.
 - Build contexts and Dockerfiles must resolve inside the checkout.
 - A service may use `image` or `build`, but not both. Service-level network
   options may contain aliases only. `x-*` extensions are accepted only at the
-  document and service levels.
+  document and service levels. Environment variables must have explicit
+  values; key-only entries that inherit from the Compose process are rejected.
 - Top-level `volumes` must use the local driver with no `driver_opts`
   (`driver_opts` can bind-mount a host path) and must not be `external`.
   Top-level `networks` must use the default bridge driver and must not be

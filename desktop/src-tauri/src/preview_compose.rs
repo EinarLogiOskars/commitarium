@@ -212,6 +212,9 @@ pub(crate) fn validate_and_rewrite(
         if let Some(build) = service.get("build") {
             validate_build(build, &checkout, service_name)?;
         }
+        if let Some(environment) = service.get("environment") {
+            validate_environment(environment, service_name)?;
+        }
         if let Some(volumes) = service.get("volumes") {
             validate_mounts(volumes, &checkout, service_name)?;
         }
@@ -272,6 +275,37 @@ fn validate_build(build: &Value, checkout: &Path, service: &str) -> Result<(), S
         resolve_inside(&context, Path::new(dockerfile), "Dockerfile")?;
     }
     Ok(())
+}
+
+fn validate_environment(value: &Value, service: &str) -> Result<(), String> {
+    match value {
+        Value::Object(environment) => {
+            for (name, value) in environment {
+                if value.is_null() {
+                    return Err(format!(
+                        "service {service:?} environment variable {name:?} must have an explicit value"
+                    ));
+                }
+            }
+            Ok(())
+        }
+        Value::Array(environment) => {
+            for entry in environment {
+                let entry = entry.as_str().ok_or_else(|| {
+                    format!("service {service:?} environment entries must be strings")
+                })?;
+                if !entry.contains('=') {
+                    return Err(format!(
+                        "service {service:?} environment entry {entry:?} must have an explicit value"
+                    ));
+                }
+            }
+            Ok(())
+        }
+        _ => Err(format!(
+            "service {service:?} environment must be an object or array"
+        )),
+    }
 }
 
 fn validate_mounts(value: &Value, checkout: &Path, service: &str) -> Result<(), String> {
@@ -933,6 +967,47 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.contains("x-unsafe"));
+    }
+
+    #[test]
+    fn environment_variables_must_have_explicit_values() {
+        for environment in [
+            json!({"DOCKER_CONFIG": null}),
+            json!(["PATH", "HOME=/preview/home"]),
+            json!(["DOCKER_CONFIG"]),
+        ] {
+            let root = tempfile::tempdir().unwrap();
+            let mut model = full_stack(root.path());
+            model["services"]["web"]["environment"] = environment;
+            let error = validate_and_rewrite(
+                root.path(),
+                "prj_test",
+                &OpenTarget {
+                    service: "web".into(),
+                    port: 5173,
+                },
+                model,
+            )
+            .unwrap_err();
+            assert!(
+                error.contains("explicit value"),
+                "unexpected error: {error}"
+            );
+        }
+
+        let root = tempfile::tempdir().unwrap();
+        let mut model = full_stack(root.path());
+        model["services"]["web"]["environment"] = json!(["PATH=/preview/bin", "EMPTY="]);
+        validate_and_rewrite(
+            root.path(),
+            "prj_test",
+            &OpenTarget {
+                service: "web".into(),
+                port: 5173,
+            },
+            model,
+        )
+        .unwrap();
     }
 
     #[test]
