@@ -12,9 +12,10 @@ import (
 )
 
 type configureToolchainRequest struct {
-	Source   toolchain.Source  `json:"source"`
-	Tools    map[string]string `json:"tools"`
-	Services []string          `json:"services"`
+	Source   toolchain.Source     `json:"source"`
+	Tools    map[string]string    `json:"tools"`
+	Services []string             `json:"services"`
+	Run      *toolchain.RunConfig `json:"run,omitempty"`
 }
 
 func (api *API) listToolchainPresetsHandler(w http.ResponseWriter, _ *http.Request) {
@@ -43,7 +44,7 @@ func (api *API) configureProjectToolchainHandler(w http.ResponseWriter, r *http.
 		return
 	}
 	manifest, err := api.toolchains.Configure(r.Context(), r.PathValue("id"), toolchain.Manifest{
-		Source: request.Source, Tools: request.Tools, Services: request.Services,
+		Source: request.Source, Tools: request.Tools, Services: request.Services, Run: request.Run,
 	})
 	if err != nil {
 		api.writeToolchainError(w, r.PathValue("id"), "configure", err)
@@ -71,7 +72,7 @@ func (api *API) writeToolchainError(w http.ResponseWriter, projectID, action str
 	case errors.Is(err, project.ErrNotFound):
 		writeError(w, http.StatusNotFound, "project_not_found", "project not found")
 	case errors.Is(err, toolchain.ErrInvalidManifest):
-		writeError(w, http.StatusBadRequest, "invalid_toolchain", "tools must use supported names and explicit versions; services must use safe identifiers")
+		writeError(w, http.StatusBadRequest, "invalid_toolchain", "tools must use supported names and explicit versions; services and preview run commands must satisfy the documented contract")
 	case errors.Is(err, project.ErrForgejoRepositoryNotFound),
 		errors.Is(err, project.ErrForgejoRepositoryNotReady),
 		errors.Is(err, project.ErrForgejoUnavailable):

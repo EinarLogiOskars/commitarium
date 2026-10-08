@@ -123,6 +123,13 @@ func (manager *Manager) Configure(ctx context.Context, projectID string, manifes
 	}
 	manifest.ProjectID = stored.ID
 	manifest.UpdatedAt = manager.now()
+	if manifest.Source == SourceRuntime && manifest.Run == nil {
+		current, currentErr := manager.get(stored.ID)
+		if currentErr != nil {
+			return Manifest{}, currentErr
+		}
+		manifest.Run = current.Run
+	}
 	normalized, err := NormalizeManifest(manifest)
 	if err != nil {
 		return Manifest{}, err

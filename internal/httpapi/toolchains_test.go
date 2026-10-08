@@ -61,9 +61,9 @@ func TestToolchainEndpointsExposePresetsAndProjectConfiguration(t *testing.T) {
 
 	configure := httptest.NewRecorder()
 	handler.ServeHTTP(configure, httptest.NewRequest(http.MethodPut, "/api/v1/projects/prj_test/toolchain",
-		strings.NewReader(`{"source":"picker","tools":{"python":"3.14.7"},"services":["postgresql"]}`)))
+		strings.NewReader(`{"source":"picker","tools":{"python":"3.14.7"},"services":["postgresql"],"run":{"setup":[],"processes":[{"name":"web","command":"python -m http.server 8000","port":8000,"open":true}]}}`)))
 	if configure.Code != http.StatusOK || service.configured.Tools["python"] != "3.14.7" ||
-		service.configured.Source != toolchain.SourcePicker {
+		service.configured.Source != toolchain.SourcePicker || service.configured.Run == nil || service.configured.Run.Processes[0].Name != "web" {
 		t.Fatalf("configure status=%d captured=%+v body=%s", configure.Code, service.configured, configure.Body.String())
 	}
 
