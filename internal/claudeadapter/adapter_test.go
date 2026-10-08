@@ -304,7 +304,7 @@ func TestAdapterReturnsStructuredToolchainProposal(t *testing.T) {
 		result.Disposition != worker.DispositionSucceeded || result.ToolchainProposal == nil ||
 		!reflect.DeepEqual(result.ToolchainProposal.Tools, map[string]string{
 			"python": "3.14.7", "node": "24.21.0",
-		}) {
+		}) || result.ToolchainProposal.Run == nil || result.ToolchainProposal.Run.Processes[0].Name != "web" {
 		t.Fatalf("structured toolchain result=%+v error=%v", result, err)
 	}
 	if observed := <-events; !slices.Equal(observed, []worker.Event{
@@ -592,6 +592,10 @@ func TestClaudeCLIHelper(t *testing.T) {
 					map[string]any{"name": "node", "version": "24.21.0"},
 				},
 				"services": []any{},
+				"run": map[string]any{
+					"setup":     []any{"npm ci"},
+					"processes": []any{map[string]any{"name": "web", "command": "npm run dev -- --host 0.0.0.0 --port 5173", "port": 5173, "open": true}},
+				},
 			},
 		})
 	case "failed":

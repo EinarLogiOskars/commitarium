@@ -20,7 +20,7 @@ func TestOutputJSONSchemaCoversStructuredContracts(t *testing.T) {
 		{OutputContractImplementationReview, []string{"action", "summary", "commit_id", "pull_request_number", "review_id"}},
 		{OutputContractImplementationReadiness, []string{"action", "summary"}},
 		{OutputContractIntervention, []string{"effect", "response"}},
-		{OutputContractToolchainSetup, []string{"action", "message", "tools", "services"}},
+		{OutputContractToolchainSetup, []string{"action", "message", "tools", "services", "run"}},
 	}
 	for _, test := range tests {
 		t.Run(string(test.contract), func(t *testing.T) {
@@ -129,9 +129,10 @@ func TestResolveStructuredOutput(t *testing.T) {
 		},
 		{
 			name: "toolchain proposal", contract: OutputContractToolchainSetup,
-			raw:   `{"action":"propose","message":"Use Python.","tools":[{"name":"python","version":"3.14.7"}],"services":[]}`,
+			raw:   `{"action":"propose","message":"Use Python.","tools":[{"name":"python","version":"3.14.7"}],"services":[],"run":{"setup":[],"processes":[{"name":"web","command":"python -m http.server 8000 --bind 0.0.0.0","port":8000,"open":true}]}}`,
 			event: Event{Type: EventMessage, Text: "Use Python."}, disposition: DispositionSucceeded,
-			proposal: &ToolchainProposal{Tools: map[string]string{"python": "3.14.7"}, Services: []string{}},
+			proposal: &ToolchainProposal{Tools: map[string]string{"python": "3.14.7"}, Services: []string{},
+				Run: &ToolchainRunConfig{Setup: []string{}, Processes: []ToolchainRunProcess{{Name: "web", Command: "python -m http.server 8000 --bind 0.0.0.0", Port: intPointer(8000), Open: true}}}},
 		},
 	}
 	for _, test := range tests {
@@ -153,6 +154,8 @@ func TestResolveStructuredOutput(t *testing.T) {
 		})
 	}
 }
+
+func intPointer(value int) *int { return &value }
 
 func TestResolveStructuredOutputFailsClosed(t *testing.T) {
 	tests := []struct {

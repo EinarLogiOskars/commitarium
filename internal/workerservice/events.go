@@ -385,6 +385,18 @@ func (service *Service) finishAttempt(
 		terminalResult.ToolchainProposal = &workerhttp.ToolchainProposal{
 			Tools: result.ToolchainProposal.Tools, Services: result.ToolchainProposal.Services,
 		}
+		if result.ToolchainProposal.Run != nil {
+			run := &workerhttp.ToolchainRunConfig{
+				Setup:     append([]string(nil), result.ToolchainProposal.Run.Setup...),
+				Processes: make([]workerhttp.ToolchainRunProcess, 0, len(result.ToolchainProposal.Run.Processes)),
+			}
+			for _, process := range result.ToolchainProposal.Run.Processes {
+				run.Processes = append(run.Processes, workerhttp.ToolchainRunProcess{
+					Name: process.Name, Command: process.Command, Port: process.Port, Open: process.Open,
+				})
+			}
+			terminalResult.ToolchainProposal.Run = run
+		}
 	}
 	if result.EnvironmentRequest != nil {
 		terminalResult.EnvironmentRequest = &workerhttp.EnvironmentRequest{

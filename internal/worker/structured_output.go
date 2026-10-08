@@ -124,6 +124,21 @@ func OutputJSONSchema(contract OutputContract) any {
 			[]string{"effect", "response"},
 		)
 	case OutputContractToolchainSetup:
+		runProcessSchema := objectSchema(
+			map[string]any{
+				"name": map[string]any{"type": "string"}, "command": map[string]any{"type": "string"},
+				"port": map[string]any{"anyOf": []any{map[string]any{"type": "integer"}, map[string]any{"type": "null"}}},
+				"open": map[string]any{"type": "boolean"},
+			},
+			[]string{"name", "command", "port", "open"},
+		)
+		runSchema := objectSchema(
+			map[string]any{
+				"setup":     map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+				"processes": map[string]any{"type": "array", "items": runProcessSchema},
+			},
+			[]string{"setup", "processes"},
+		)
 		return objectSchema(
 			map[string]any{
 				"action":  map[string]any{"type": "string", "enum": []string{"ask", "propose"}},
@@ -139,8 +154,9 @@ func OutputJSONSchema(contract OutputContract) any {
 					),
 				},
 				"services": map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+				"run":      map[string]any{"anyOf": []any{runSchema, map[string]any{"type": "null"}}},
 			},
-			[]string{"action", "message", "tools", "services"},
+			[]string{"action", "message", "tools", "services", "run"},
 		)
 	default:
 		return nil
@@ -421,6 +437,15 @@ func ResolveStructuredOutput(
 				Version string `json:"version"`
 			} `json:"tools"`
 			Services []string `json:"services"`
+			Run      *struct {
+				Setup     []string `json:"setup"`
+				Processes []struct {
+					Name    string `json:"name"`
+					Command string `json:"command"`
+					Port    *int   `json:"port"`
+					Open    bool   `json:"open"`
+				} `json:"processes"`
+			} `json:"run"`
 		}
 		if err := decodeStructuredOutput(raw, &response); err != nil {
 			return StructuredOutput{}, err
@@ -430,7 +455,7 @@ func ResolveStructuredOutput(
 			return StructuredOutput{}, invalidStructuredOutput("toolchain setup response is incomplete")
 		}
 		if response.Action == "ask" {
-			if len(response.Tools) != 0 || len(response.Services) != 0 {
+			if len(response.Tools) != 0 || len(response.Services) != 0 || response.Run != nil {
 				return StructuredOutput{}, invalidStructuredOutput("toolchain setup question cannot include a proposal")
 			}
 			return StructuredOutput{
@@ -453,6 +478,14 @@ func ResolveStructuredOutput(
 			tools[name] = version
 		}
 		proposal := &ToolchainProposal{Tools: tools, Services: response.Services}
+		if response.Run != nil {
+			proposal.Run = &ToolchainRunConfig{Setup: response.Run.Setup, Processes: make([]ToolchainRunProcess, 0, len(response.Run.Processes))}
+			for _, process := range response.Run.Processes {
+				proposal.Run.Processes = append(proposal.Run.Processes, ToolchainRunProcess{
+					Name: process.Name, Command: process.Command, Port: process.Port, Open: process.Open,
+				})
+			}
+		}
 		return StructuredOutput{
 			Event: Event{Type: EventMessage, Text: response.Message}, Disposition: DispositionSucceeded,
 			ToolchainProposal: proposal,

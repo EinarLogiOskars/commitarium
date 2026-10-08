@@ -187,8 +187,21 @@ type TerminalResult struct {
 }
 
 type ToolchainProposal struct {
-	Tools    map[string]string `json:"tools"`
-	Services []string          `json:"services"`
+	Tools    map[string]string   `json:"tools"`
+	Services []string            `json:"services"`
+	Run      *ToolchainRunConfig `json:"run,omitempty"`
+}
+
+type ToolchainRunConfig struct {
+	Setup     []string              `json:"setup"`
+	Processes []ToolchainRunProcess `json:"processes"`
+}
+
+type ToolchainRunProcess struct {
+	Name    string `json:"name"`
+	Command string `json:"command"`
+	Port    *int   `json:"port,omitempty"`
+	Open    bool   `json:"open,omitempty"`
 }
 
 type EnvironmentRequest struct {
