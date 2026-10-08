@@ -52,14 +52,27 @@ export function AcceptanceTestsPanel({
 
   return (
     <aside className={`panel accept-tests ${open ? "" : "accept-tests--collapsed"}`}>
-      <button className="accept-tests__head" onClick={toggle} aria-expanded={open}>
-        <span className="accept-tests__chevron" aria-hidden>
-          {open ? "▾" : "▸"}
-        </span>
+      <button
+        className="accept-tests__head"
+        onClick={toggle}
+        aria-expanded={open}
+        title={open ? "Collapse" : "Expand"}
+      >
         <h3>Independent acceptance tests</h3>
         <span className="accept-tests__count muted note">
           {failed > 0 ? `${failed} failed · ` : ""}
           {passed}/{ran || doc.tests.length} passed
+        </span>
+        <span className="accept-tests__chevron" aria-hidden>
+          <svg viewBox="0 0 16 16" width="14" height="14" fill="none">
+            <path
+              d="M4 6l4 4 4-4"
+              stroke="currentColor"
+              strokeWidth="1.75"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
         </span>
       </button>
 
