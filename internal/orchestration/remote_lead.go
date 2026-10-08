@@ -16,6 +16,7 @@ import (
 	"github.com/EinarLogiOskars/commitarium/internal/featureartifact"
 	"github.com/EinarLogiOskars/commitarium/internal/project"
 	"github.com/EinarLogiOskars/commitarium/internal/projectenvironment"
+	"github.com/EinarLogiOskars/commitarium/internal/toolchain"
 	"github.com/EinarLogiOskars/commitarium/internal/validation"
 	"github.com/EinarLogiOskars/commitarium/internal/worker"
 	"github.com/EinarLogiOskars/commitarium/internal/workerhttp"
@@ -237,6 +238,7 @@ type RemoteLeadConfig struct {
 	Pump                         RemoteLeadPump
 	EnvironmentRequests          RemoteLeadEnvironmentRequests
 	Validation                   RemoteLeadValidationGate
+	Toolchains                   RemoteLeadToolchainReader
 	Lifetime                     context.Context
 	AgentProfileID               string
 	ReviewerAgentProfileID       string
@@ -247,6 +249,10 @@ type RemoteLeadConfig struct {
 	ClaudeForgejoAuthor          string
 	ClaudeReviewerForgejoAuthor  string
 	ReportError                  func(error)
+}
+
+type RemoteLeadToolchainReader interface {
+	Get(context.Context, string) (toolchain.Manifest, error)
 }
 
 // RemoteLeadStarter owns the deliberately small real-provider path used while
@@ -264,6 +270,7 @@ type RemoteLeadStarter struct {
 	pump                         RemoteLeadPump
 	environmentRequests          RemoteLeadEnvironmentRequests
 	validation                   RemoteLeadValidationGate
+	toolchains                   RemoteLeadToolchainReader
 	lifetime                     context.Context
 	agentProfileID               string
 	reviewerAgentProfileID       string
@@ -323,7 +330,7 @@ func NewRemoteLeadStarter(config RemoteLeadConfig) (*RemoteLeadStarter, error) {
 		executions: config.Executions, features: config.Features, goals: config.Goals,
 		planning: config.Planning, artifacts: config.Artifacts, workspaces: config.Workspaces,
 		worker: config.Worker, pump: config.Pump,
-		environmentRequests: config.EnvironmentRequests, validation: config.Validation,
+		environmentRequests: config.EnvironmentRequests, validation: config.Validation, toolchains: config.Toolchains,
 		lifetime: config.Lifetime, agentProfileID: config.AgentProfileID,
 		reviewerAgentProfileID:       reviewerAgentProfileID,
 		claudeAgentProfileID:         strings.TrimSpace(config.ClaudeAgentProfileID),
@@ -2896,7 +2903,7 @@ func (starter *RemoteLeadStarter) StartImplementation(
 		return execution.Run{}, false, fmt.Errorf("verify implementation workspace: %w", err)
 	}
 	request, err := starter.implementationRequest(
-		run, currentFeature, lead, prepared, plan.Text, attemptID,
+		ctx, run, currentFeature, lead, prepared, plan.Text, attemptID,
 	)
 	if err != nil {
 		return execution.Run{}, false, err
@@ -3113,6 +3120,7 @@ func (starter *RemoteLeadStarter) launchImplementationPublicationVerification(
 }
 
 func (starter *RemoteLeadStarter) implementationRequest(
+	ctx context.Context,
 	run execution.Run,
 	storedFeature feature.Feature,
 	lead execution.Session,
@@ -3120,6 +3128,10 @@ func (starter *RemoteLeadStarter) implementationRequest(
 	plan string,
 	attemptID string,
 ) (remoteLeadRequest, error) {
+	previewContext, err := starter.previewRunInstructions(ctx, storedFeature.ProjectID)
+	if err != nil {
+		return remoteLeadRequest{}, err
+	}
 	request := remoteLeadRequest{
 		runID: run.ID, agentName: "lead agent", waitingReason: implementationReadyReason,
 		identity: workerhttp.MutationIdentity{
@@ -3138,7 +3150,7 @@ func (starter *RemoteLeadStarter) implementationRequest(
 			ProviderSessionID: lead.ProviderSessionID,
 			Instructions: implementationInstructions(
 				storedFeature, prepared, plan, attemptID,
-			),
+			) + previewContext,
 			OutputContract: workerhttp.OutputContractImplementationLead,
 		},
 	}
@@ -3146,6 +3158,25 @@ func (starter *RemoteLeadStarter) implementationRequest(
 		return remoteLeadRequest{}, fmt.Errorf("%w: %v", ErrInvalidRunRequest, err)
 	}
 	return request, nil
+}
+
+func (starter *RemoteLeadStarter) previewRunInstructions(ctx context.Context, projectID string) (string, error) {
+	const conventions = "Preview compatibility requirement: every preview process must bind 0.0.0.0, and a frontend must reach its API through a relative-path development proxy rather than a hardcoded localhost port. Keep the configured preview setup and process commands working as you implement and review changes."
+	if starter.toolchains == nil {
+		return "", nil
+	}
+	manifest, err := starter.toolchains.Get(ctx, projectID)
+	if err != nil {
+		return "", fmt.Errorf("load project preview run configuration: %w", err)
+	}
+	if manifest.Run == nil {
+		return "\n\n" + conventions + " This project currently has no preview run configuration.", nil
+	}
+	encoded, err := json.Marshal(manifest.Run)
+	if err != nil {
+		return "", fmt.Errorf("encode project preview run configuration: %w", err)
+	}
+	return "\n\n" + conventions + "\nConfigured preview run JSON:\n" + string(encoded), nil
 }
 
 func implementationInstructions(
@@ -3736,6 +3767,10 @@ func (starter *RemoteLeadStarter) implementationContinuationRequest(
 		return remoteLeadRequest{}, fmt.Errorf("verify implementation continuation workspace: %w", err)
 	}
 	attemptID := implementationAttemptForVersion(lead.ID, run.PlanVersion, turn+1)
+	previewContext, err := starter.previewRunInstructions(ctx, storedFeature.ProjectID)
+	if err != nil {
+		return remoteLeadRequest{}, err
+	}
 	request := remoteLeadRequest{
 		runID: run.ID, commandID: command.ID, agentName: "lead agent",
 		waitingReason: implementationReadyReason,
@@ -3755,7 +3790,7 @@ func (starter *RemoteLeadStarter) implementationContinuationRequest(
 			ProviderSessionID: lead.ProviderSessionID,
 			Instructions: implementationContinuationInstructions(
 				currentFeature, prepared, plan.Text, command.Message, attemptID,
-			),
+			) + previewContext,
 			OutputContract: workerhttp.OutputContractImplementationLead,
 		},
 	}
@@ -4931,6 +4966,10 @@ func (starter *RemoteLeadStarter) startImplementationReview(
 		acceptanceTestCommitID = tests.TestCommitID
 	}
 	attemptID := implementationReviewAttemptForVersion(reviewer.ID, run.PlanVersion, round)
+	previewContext, err := starter.previewRunInstructions(ctx, storedFeature.ProjectID)
+	if err != nil {
+		return remoteLeadRequest{}, false, err
+	}
 	request := remoteLeadRequest{
 		runID: run.ID, agentName: "reviewer", waitingReason: implementationReviewRunningReason,
 		identity: workerhttp.MutationIdentity{
@@ -4948,7 +4987,7 @@ func (starter *RemoteLeadStarter) startImplementationReview(
 			Instructions: implementationReviewInstructions(
 				storedFeature, prepared, plan.Text, leadSummary,
 				publication.CommitID, attemptID, acceptanceTestCommitID,
-			),
+			) + previewContext,
 			OutputContract: workerhttp.OutputContractImplementationReview,
 		},
 	}
@@ -5084,6 +5123,10 @@ func (starter *RemoteLeadStarter) startImplementationCorrection(
 		return remoteLeadRequest{}, false, err
 	}
 	attemptID := implementationCorrectionAttemptForVersion(lead.ID, run.PlanVersion, round)
+	previewContext, err := starter.previewRunInstructions(ctx, storedFeature.ProjectID)
+	if err != nil {
+		return remoteLeadRequest{}, false, err
+	}
 	request := remoteLeadRequest{
 		runID: run.ID, agentName: "lead agent", waitingReason: implementationCorrectionRunningReason,
 		identity: workerhttp.MutationIdentity{
@@ -5101,7 +5144,7 @@ func (starter *RemoteLeadStarter) startImplementationCorrection(
 			Instructions: implementationCorrectionInstructions(
 				storedFeature, prepared, plan.Text, review.Summary,
 				review.Review.CommitID, review.Review.ReviewID, attemptID,
-			),
+			) + previewContext,
 			OutputContract: workerhttp.OutputContractImplementationLead,
 		},
 	}

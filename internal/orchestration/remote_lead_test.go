@@ -18,6 +18,7 @@ import (
 	"github.com/EinarLogiOskars/commitarium/internal/feature"
 	"github.com/EinarLogiOskars/commitarium/internal/featureartifact"
 	"github.com/EinarLogiOskars/commitarium/internal/project"
+	"github.com/EinarLogiOskars/commitarium/internal/toolchain"
 	"github.com/EinarLogiOskars/commitarium/internal/validation"
 	"github.com/EinarLogiOskars/commitarium/internal/worker"
 	"github.com/EinarLogiOskars/commitarium/internal/workerhttp"
@@ -27,6 +28,27 @@ import (
 )
 
 const remoteLeadTestToken = "remote-lead-test-token"
+
+type previewToolchainStub struct{ manifest toolchain.Manifest }
+
+func (stub previewToolchainStub) Get(context.Context, string) (toolchain.Manifest, error) {
+	return stub.manifest, nil
+}
+
+func TestPreviewRunInstructionsShareConfigAndConventions(t *testing.T) {
+	port := 5173
+	starter := &RemoteLeadStarter{toolchains: previewToolchainStub{manifest: toolchain.Manifest{
+		Run: &toolchain.RunConfig{Setup: []string{"npm ci"}, Processes: []toolchain.RunProcess{{
+			Name: "web", Command: "npm run dev -- --host 0.0.0.0", Port: &port, Open: true,
+		}}},
+	}}}
+	instructions, err := starter.previewRunInstructions(t.Context(), "prj_test")
+	if err != nil || !strings.Contains(instructions, `"name":"web"`) ||
+		!strings.Contains(instructions, "bind 0.0.0.0") ||
+		!strings.Contains(instructions, "relative-path development proxy") {
+		t.Fatalf("preview instructions=%q error=%v", instructions, err)
+	}
+}
 
 type remoteLeadWorkerStub struct {
 	mu         sync.Mutex
