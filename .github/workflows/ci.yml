@@ -26,6 +26,9 @@ jobs:
           version="$(sed -n 's/^[[:space:]]*"version":[[:space:]]*"\([^"]*\)".*/\1/p' desktop/package.json | head -n 1)"
           ./scripts/verify-release-version.sh "${version}"
 
+      - name: Test updater manifest verification
+        run: node --test scripts/verify-updater-manifest.test.mjs
+
       - name: Render release Compose configuration
         run: docker compose -f compose.yml -f compose.release.yml config >/dev/null
 

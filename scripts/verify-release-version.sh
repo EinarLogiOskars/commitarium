@@ -56,8 +56,29 @@ if ! grep -Fq 'releases/latest/download/latest.json' desktop/src-tauri/tauri.con
     exit 1
 fi
 
+if ! grep -Fq '"requireSignedVersion": true' desktop/src-tauri/tauri.conf.json; then
+    echo "desktop updater does not require signed versions" >&2
+    exit 1
+fi
+
+if ! grep -Eq '"pubkey":[[:space:]]*"[^"[:space:]][^"]*"' desktop/src-tauri/tauri.conf.json; then
+    echo "desktop updater public key is missing" >&2
+    exit 1
+fi
+
 if ! grep -Fq 'uploadUpdaterJson: true' .github/workflows/publish-desktop.yml; then
     echo "desktop release workflow does not publish updater metadata" >&2
+    exit 1
+fi
+
+if ! grep -Fq 'TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}' .github/workflows/publish-desktop.yml ||
+    ! grep -Fq 'TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}' .github/workflows/publish-desktop.yml; then
+    echo "desktop release workflow does not provide updater signing secrets" >&2
+    exit 1
+fi
+
+if ! grep -Fq 'verify-updater-manifest.mjs' .github/workflows/publish-desktop.yml; then
+    echo "desktop release workflow does not verify the published updater manifest" >&2
     exit 1
 fi
 

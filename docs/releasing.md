@@ -3,7 +3,8 @@
 Commitarium releases have two coordinated outputs:
 
 1. versioned multi-architecture service images in GitHub Container Registry;
-2. native installers attached to a draft GitHub prerelease.
+2. native installers and signed update artifacts attached to a draft GitHub
+   release.
 
 The desktop embeds the release Compose configuration and uses its own package
 version as the service-image tag. Those versions must remain synchronized.
@@ -21,17 +22,30 @@ release.
   - `commitarium-worker`
   - `commitarium-codex-worker`
   - `commitarium-claude-worker`
-- Keep the workflow's `contents: write` and `packages: write` permissions
+- Keep the workflows' `contents: write` and `packages: write` permissions
   available to `GITHUB_TOKEN`.
+- Configure the repository Actions secrets `TAURI_SIGNING_PRIVATE_KEY` and
+  `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. The private updater key must never be
+  committed. The corresponding public key is embedded in `tauri.conf.json`.
 
-The workflow uses ad-hoc signing on macOS and no signing certificate on
-Windows, by design. Commitarium is a personal, source-available project;
-production code-signing certificates are out of scope (see the Phase 5 entry in
-[the plan](../PROJECT_PLAN.md)). Releases ship unsigned, and the README
-documents the one-time Gatekeeper/SmartScreen approval. If the project is ever
-distributed broadly, revisit this: configure Apple Developer ID signing and
-notarization and Windows code signing, keep the credentials in GitHub Actions
-secrets, and add signature verification to `publish-desktop.yml`.
+There are two separate kinds of signing here. Every automatic-update payload is
+signed with Commitarium's updater key, and the installed app refuses payloads
+whose signature does not match its embedded public key. This protects the
+update channel without an Apple or Microsoft developer account.
+
+The operating-system installers themselves use ad-hoc signing on macOS and no
+commercial signing certificate on Windows, by design. Commitarium is a
+personal, source-available project; production code-signing certificates are
+out of scope (see the Phase 5 entry in [the plan](../PROJECT_PLAN.md)). The
+README documents the one-time Gatekeeper/SmartScreen approval. If the project
+is ever distributed broadly, add Apple Developer ID signing and notarization
+and Windows code signing without removing updater signatures.
+
+Keep a recoverable offline backup of the updater private key and its password.
+Losing it means existing installations cannot accept another automatic update.
+To rotate a key without requiring a manual reinstall, first ship an update
+signed by the old key that embeds the new public key; only subsequent releases
+may be signed by the new key.
 
 ## Prepare a version
 
@@ -96,8 +110,17 @@ or Claude lead/reviewer profiles.
 - a Windows x86-64 NSIS installer;
 - a Linux x86-64 AppImage.
 
-The installers are attached to a draft prerelease. This keeps a partially
-completed matrix or an untested artifact from becoming visible automatically.
+It also uploads each platform's signed updater payload and a `latest.json`
+manifest. A final workflow job downloads that manifest from the draft and
+checks its version, signatures, secure download URLs, and coverage for Apple
+Silicon macOS, Intel macOS, Windows x86-64, and Linux x86-64.
+
+The artifacts remain on a draft regular release. This keeps a partially
+completed matrix or an untested artifact from becoming visible automatically,
+while publishing the approved draft makes it discoverable through GitHub's
+`releases/latest` update endpoint. GitHub excludes drafts and prereleases from
+that endpoint, so 0.x builds on the normal update channel must remain regular
+releases rather than prereleases.
 
 ## Verify and publish
 
@@ -114,7 +137,13 @@ Before publishing the draft release:
    application-data directory rather than the source checkout.
 6. Quit and relaunch to confirm that persisted data is retained and healthy
    startup goes directly to Projects.
-7. Review generated release notes, then publish the draft prerelease manually.
+7. Confirm the draft contains `latest.json`, signed updater payloads, and their
+   `.sig` files.
+8. Review generated release notes, then publish the draft release manually.
+
+The first updater-enabled version is a bootstrap release: existing builds that
+do not contain the updater still require a manual download. After that version
+is installed, later published releases can be installed from inside the app.
 
 ## Development versus release Compose
 

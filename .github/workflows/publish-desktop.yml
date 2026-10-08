@@ -97,3 +97,17 @@ jobs:
           retryAttempts: 2
           releaseAssetNamePattern: Commitarium_[version]_[platform]_[arch][setup].[ext]
           args: ${{ matrix.args }}
+
+  verify-updater:
+    needs: publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Download generated updater manifest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release download "${GITHUB_REF_NAME}" --pattern latest.json --dir "${RUNNER_TEMP}/updater"
+
+      - name: Verify signed updater coverage
+        run: node ./scripts/verify-updater-manifest.mjs "${RUNNER_TEMP}/updater/latest.json" "${GITHUB_REF_NAME}"
