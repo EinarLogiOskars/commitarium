@@ -127,6 +127,20 @@ export const inspectBackup = (source: string): Promise<BackupInspection> =>
 export const restoreBackup = (source: string): Promise<BackupResult> =>
   invoke("restore_backup", { source });
 
+// --- Signed desktop application updates ---
+
+export interface DesktopUpdateInfo {
+  version: string;
+  notes: string | null;
+  published_at: string | null;
+}
+
+export type DesktopUpdateCheck =
+  | { status: "up_to_date"; current_version: string }
+  | { status: "available"; current_version: string; update: DesktopUpdateInfo };
+
+export const checkDesktopUpdate = (): Promise<DesktopUpdateCheck> => invoke("check_desktop_update");
+
 export const loadUiState = <T = unknown>(): Promise<T | null> => invoke("load_ui_state");
 export const saveUiState = (state: unknown): Promise<void> => invoke("save_ui_state", { state });
 

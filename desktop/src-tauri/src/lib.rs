@@ -7,6 +7,7 @@ mod phase4;
 mod phase5;
 mod profiles;
 mod store;
+mod updater;
 
 use tauri::{Emitter, Manager};
 
@@ -27,6 +28,7 @@ pub fn run() {
         // Native folder picker for project import.
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             docker::prepare_runtime(app.handle()).map_err(std::io::Error::other)?;
             Ok(())
@@ -54,6 +56,7 @@ pub fn run() {
             phase5::create_backup,
             phase5::inspect_backup,
             phase5::restore_backup,
+            updater::check_desktop_update,
             store::load_ui_state,
             store::save_ui_state,
             import::inspect_folder,
