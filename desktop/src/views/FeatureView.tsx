@@ -8,6 +8,7 @@ import { ImplementationView } from "./ImplementationView";
 import { ReviewView } from "./ReviewView";
 import { MergeView } from "./MergeView";
 import { EnvironmentApproval } from "./EnvironmentApproval";
+import { AcceptanceTestsPanel } from "./AcceptanceTests";
 import { PhaseStepper, currentPhaseIndex } from "./PhaseStepper";
 import { phaseIntervals, type Interval } from "./phaseWindows";
 import { WORK } from "../vocab";
@@ -182,28 +183,36 @@ export function FeatureView({
         {error && <div className="banner banner--error">{error}</div>}
       </section>
 
-      {run && (
-        <EnvironmentApproval
-          projectId={projectId}
-          runId={run.id}
-          onResolved={load}
-          onActiveChange={setEnvActive}
-        />
-      )}
+      <div className="order__split">
+        <div className="order__body">
+          {run && (
+            <EnvironmentApproval
+              projectId={projectId}
+              runId={run.id}
+              onResolved={load}
+              onActiveChange={setEnvActive}
+            />
+          )}
 
-      {body(
-        viewed,
-        feature,
-        projectId,
-        hasRepo,
-        run,
-        live,
-        intervals,
-        scoped,
-        load,
-        envActive,
-        onOpenValidation,
-      )}
+          {body(
+            viewed,
+            feature,
+            projectId,
+            hasRepo,
+            run,
+            live,
+            intervals,
+            scoped,
+            load,
+            envActive,
+            onOpenValidation,
+          )}
+        </div>
+
+        {/* Persistent reference once the reviewer has authored them — self-gates
+            on the artifact, so it's absent before review. */}
+        <AcceptanceTestsPanel projectId={projectId} featureId={feature.id} />
+      </div>
     </div>
   );
 }

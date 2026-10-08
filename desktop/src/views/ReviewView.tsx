@@ -5,7 +5,6 @@ import { openExternal } from "../ipc";
 import { ApiError } from "../api/client";
 import { Transcript } from "./Transcript";
 import { InterveneBar } from "./InterveneBar";
-import { AcceptanceTestsPanel } from "./AcceptanceTests";
 import { useSessionEvents, type SessionRef } from "./useSessionEvents";
 import { scopeToPhase, type Interval } from "./phaseWindows";
 import type { Run, Workspace } from "../api/types";
@@ -124,18 +123,15 @@ export function ReviewView({
         </div>
       )}
 
-      <div className="review__body">
-        <div
-          className="chat"
-          ref={chatRef}
-          onScroll={(e) => {
-            const el = e.currentTarget;
-            pinned.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
-          }}
-        >
-          <Transcript entries={shown} empty="No review activity yet." />
-        </div>
-        <AcceptanceTestsPanel projectId={projectId} featureId={featureId} />
+      <div
+        className="chat"
+        ref={chatRef}
+        onScroll={(e) => {
+          const el = e.currentTarget;
+          pinned.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+        }}
+      >
+        <Transcript entries={shown} empty="No review activity yet." />
       </div>
 
       {live && run && <InterveneBar run={run} onChanged={onChanged} />}

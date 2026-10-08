@@ -300,6 +300,10 @@ body {
   min-height: 0;
   display: flex;
   flex-direction: column;
+  /* Order mode carries a right sidebar; give it the window's width instead of
+     the reading-width cap so the sidebar lives in the gutter, not inside the
+     phase card. The phase content keeps its own inner caps (chat bubbles, etc). */
+  max-width: 1560px;
 }
 
 /* The work-order fixed frame: pinned head, scrolling body, pinned composer. */
@@ -2445,30 +2449,42 @@ button.danger:not(.ghost) {
 }
 
 /* Independent acceptance-tests checklist (review phase). */
-/* Review phase: chat on the left, acceptance tests as a right column. */
-.review__body {
+/* Order body + right sidebar: the phase view on the left, the acceptance-tests
+   reference in the right gutter. The sidebar self-gates (absent before review),
+   so when there's no panel the body simply fills the width. */
+.order__split {
   flex: 1;
   min-height: 0;
   display: flex;
   gap: 16px;
   align-items: stretch;
 }
-.review__body .chat {
+.order__body {
+  flex: 1;
   min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
 }
-.review__body .accept-tests {
+.order__split > .accept-tests {
   flex: none;
   width: 340px;
   margin-bottom: 0;
+  align-self: flex-start;
+  max-height: 100%;
   overflow-y: auto;
 }
 @media (max-width: 1100px) {
-  .review__body {
+  .order__split {
     flex-direction: column;
   }
-  .review__body .accept-tests {
+  .order__split > .accept-tests {
     width: auto;
+    align-self: stretch;
+    max-height: none;
     overflow-y: visible;
+    order: -1;
   }
 }
 
