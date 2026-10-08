@@ -99,6 +99,17 @@ untrusted compose files. Add a rejection test for each.
 | 7 | User `labels` are allowed on volumes and networks. | Drop them, or forbid the `com.docker.*` and `commitarium.*` prefixes. |
 | 8 | Delete removes images by label. It is unconfirmed whether that catches built images. | Becomes moot once fix 4 forces the tag; verify `--rmi local` removes them. |
 
+### Follow-up from re-review (C12)
+
+The re-review of `cfb111b` confirmed that findings 2–8 are fixed. Finding 1 is
+fixed for `env_file`, `include`, `extends`, `label_file`, merge keys,
+multi-document files and repository `.env`, but it has a bypass:
+
+| # | Finding | Fix |
+| --- | --- | --- |
+| A | **YAML escapes get around the `$` ban (critical).** The raw-byte `$` check (`preview_compose.rs:584`) misses the double-quoted escape `"\x24{...}"`. `config --no-interpolate` keeps it as `${...}` in `preview.compose.json`, and `up` interpolates it. Confirmed: a bind source through directories literally named `${Z:-..}` passed the path check and mounted a host file outside the checkout at `up`. Any host path can be reached this way, including the Docker socket, and so can build contexts. Values such as `"\x24{DOCKER_CONFIG}"` also resolve to host values. | Validate the **normalized** model, not raw bytes. Either reject any `$` in any key or string of the model, or escape every `$` to `$$` before writing `preview.compose.json`. Add tests with `\x24` and with literal `$` in paths. |
+| B | **Volume and network names can collide across previews (low).** The forced `<project>_<key>` lets volume key `a_data` in project `zzh` collide with project `zzh_a`'s `data` volume. It isn't reachable with today's `prj_<hex>` IDs. | Reject `_` in volume and network keys, or use a separator that can't appear in project IDs. |
+
 ### Renderer
 
 | # | Commit | Contents | Depends on |
@@ -111,7 +122,7 @@ untrusted compose files. Add a rejection test for each.
 ```
 D1 ─┬─ C6 ─┬─ C7
     │      └─────┐
-    ├─ C8 ───────┴─ C9 ─ C10 ─ C11
+    ├─ C8 ───────┴─ C9 ─ C10 ─ C11 ─ C12
     └─ R5 (needs C6) ─ R6 (needs C9)
 ```
 
