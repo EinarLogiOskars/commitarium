@@ -668,6 +668,60 @@ returns. An updater-driven restart bypasses the normal stop-stack quit prompt
 only after installation begins; ordinary user exits retain the configured exit
 behavior.
 
+## Project previews
+
+The backend runs the project's canonical head in a disposable container using
+the stack's `run` configuration (ADR-013). The renderer passes only a project
+ID and a target; the backend reads the run configuration and head commit from
+the coordinator and owns the fetch, container, ports, and cleanup.
+
+- `start_preview(projectId, target) -> PreviewStatus` — starts a preview,
+  replacing any running preview of the same project. Returns immediately in
+  `starting`; progress arrives as events.
+- `stop_preview(projectId) -> void` — stops and removes the preview. Stopping a
+  project with no preview is not an error.
+- `get_preview_status(projectId) -> PreviewStatus | null`
+- `get_preview_logs(projectId) -> string[]` — the last 400 lines of combined
+  output, each prefixed `[setup]` or `[<process name>]`.
+- Event `preview-status-changed` with a `PreviewStatus` payload on every state
+  change.
+
+The TypeScript wrappers are exported from `desktop/src/ipc.ts` as
+`startPreview`, `stopPreview`, `getPreviewStatus`, `getPreviewLogs`, and
+`onPreviewStatusChanged`.
+
+```ts
+// Only "canonical" exists today; more target kinds will be added.
+type PreviewTarget = { kind: "canonical" };
+
+type PreviewState = "starting" | "running" | "failed" | "stopped";
+
+type PreviewUrl = {
+  process: string;
+  url: string; // http://127.0.0.1:<host port>
+  open: boolean;
+};
+
+type PreviewStatus = {
+  projectId: string;
+  target: PreviewTarget;
+  commitId: string;
+  state: PreviewState;
+  urls: PreviewUrl[]; // filled once "running"
+  error: string | null; // set when "failed"
+};
+```
+
+`starting` covers fetching, setup, and process startup. The preview becomes
+`running` once the `open` process's port answers HTTP. It becomes `failed` if
+the fetch, setup, or any process fails; `error` then holds the last lines of
+output. It becomes `stopped` after `stop_preview`. Previews are stopped when the
+app exits, and containers labelled `commitarium.preview` are removed at app
+start.
+
+`start_preview` fails without starting anything when the project has no
+configured stack, the stack has no `run`, or the project has no repository.
+
 ## Implemented — provider authentication / profiles
 
 Drives the connect-your-providers flow. The frontend needs:
