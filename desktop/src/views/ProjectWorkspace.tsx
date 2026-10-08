@@ -12,6 +12,7 @@ import { StackPicker } from "./StackPicker";
 import { PreviewRailItem } from "./PreviewRailItem";
 import { PreviewView } from "./PreviewView";
 import { usePreview } from "./usePreview";
+import { PREVIEW_SETUP_ORDER } from "./PreviewView";
 import { WORK } from "../vocab";
 import type { AttentionItem, Project, ProjectToolchain } from "../api/types";
 
@@ -41,6 +42,7 @@ export function ProjectWorkspace({
   const [orderId, setOrderId] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
   const preview = usePreview(id);
+  const [orderDraft, setOrderDraft] = useState<{ title: string; description: string }>();
   // Stable so it doesn't re-trigger FeatureView's load effect; refreshes the
   // rail's work-order grouping when a feature's state changes.
   const bumpRail = useCallback(() => setReloadKey((k) => k + 1), []);
@@ -92,6 +94,7 @@ export function ProjectWorkspace({
   const needsStack = toolchain?.status === "needs_setup";
   // Route "new work order" to stack setup first when the toolchain isn't ready.
   const startNewOrder = () => {
+    setOrderDraft(undefined);
     setOrderId(null);
     setMode(needsStack ? "stack" : "new");
   };
@@ -212,7 +215,9 @@ export function ProjectWorkspace({
 
           {mode === "new" && project && (
             <NewWorkOrder
+              key={orderDraft ? "draft" : "blank"}
               project={project}
+              initial={orderDraft}
               onOpenValidation={() => {
                 setOrderId(null);
                 setMode("settings");
@@ -246,6 +251,11 @@ export function ProjectWorkspace({
               runnable={!!toolchain?.run}
               hasRepo={!!project.forgejo_repository}
               onOpenStack={() => setMode("stack")}
+              onSetUpPreview={() => {
+                setOrderDraft(PREVIEW_SETUP_ORDER);
+                setOrderId(null);
+                setMode(needsStack ? "stack" : "new");
+              }}
             />
           )}
 

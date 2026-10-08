@@ -1,25 +1,45 @@
 import { useEffect, useRef, useState } from "react";
 import { getPreviewLogs, getProjectSyncState, openExternal } from "../ipc";
+import { getRepositoryOverview } from "../api/projects";
 import { PREVIEW_STATE, type PreviewHandle } from "./usePreview";
 
 const LOG_POLL_MS = 2000;
 const HEAD_POLL_MS = 15000;
 
-/** The project's preview: what it runs, controls, and output (ADR-013). */
+// Names `docker compose` finds at the repository root by default.
+const COMPOSE_FILES = ["compose.yaml", "compose.yml", "docker-compose.yaml", "docker-compose.yml"];
+
+/** Work order the Preview page offers when the repository has no compose file. */
+export const PREVIEW_SETUP_ORDER = {
+  title: "Set up the preview",
+  description: `Add a compose file at the repository root (compose.yaml) that runs this project for Commitarium's preview.
+
+- One service per part the app needs (for example frontend, API, database). Servers listen on 0.0.0.0.
+- Keep data in named volumes.
+- Bind mounts, build contexts, and Dockerfiles stay inside the repository. No privileged mode, host networking, added capabilities, devices, secrets, or external volumes or networks.
+- The frontend reaches the API through a relative-path dev proxy (for example /api), not a hardcoded localhost port.
+- Mention in the README that \`docker compose up\` runs the project locally.
+
+When you're done, say which service and container port the preview should open.`,
+};
+
+/** The project's preview: what it runs, controls, and output (ADR-014). */
 export function PreviewView({
   projectId,
   preview,
   runnable,
   hasRepo,
   onOpenStack,
+  onSetUpPreview,
 }: {
   projectId: string;
   preview: PreviewHandle;
   runnable: boolean;
   hasRepo: boolean;
   onOpenStack: () => void;
+  onSetUpPreview: () => void;
 }) {
-  const { status, error, start, stop } = preview;
+  const { status, error, start, stop, resetData } = preview;
   const state = status?.state ?? "stopped";
   const shown = PREVIEW_STATE[state];
   const active = state === "starting" || state === "running";
@@ -28,6 +48,23 @@ export function PreviewView({
   const [logs, setLogs] = useState<string[]>([]);
   const [head, setHead] = useState<string | null>(null);
   const logRef = useRef<HTMLPreElement>(null);
+  const [hasCompose, setHasCompose] = useState<boolean | null>(null);
+  const [confirmReset, setConfirmReset] = useState(false);
+
+  // Checked against the canonical head; a merged work order may add it.
+  useEffect(() => {
+    if (!hasRepo) return;
+    let live = true;
+    getRepositoryOverview(projectId).then(
+      (o) =>
+        live &&
+        setHasCompose(o.tree.some((e) => e.type === "file" && COMPOSE_FILES.includes(e.path))),
+      () => live && setHasCompose(null),
+    );
+    return () => {
+      live = false;
+    };
+  }, [projectId, hasRepo, status?.state]);
 
   // A failure is explained by its output.
   useEffect(() => {
@@ -89,6 +126,21 @@ export function PreviewView({
 
       {!hasRepo ? (
         <p className="muted">This project has no repository yet, so there is nothing to preview.</p>
+      ) : hasCompose === false ? (
+        <div className="run__empty">
+          <div>
+            <strong>No compose file yet</strong>
+            <p className="muted">
+              Preview runs the compose file at the repository root. The agents can add one in a work
+              order; you review it like any other change.
+            </p>
+          </div>
+          <div className="run__empty-actions">
+            <button className="primary" onClick={onSetUpPreview}>
+              Set up preview
+            </button>
+          </div>
+        </div>
       ) : !runnable ? (
         <p className="muted">
           Add run commands to the stack to preview this project.{" "}
@@ -100,7 +152,7 @@ export function PreviewView({
         <>
           <p className="muted note">
             The preview shows your project as it was when it started. Restart it to see newly merged
-            work.
+            work. Data is kept between runs until you reset it.
           </p>
 
           {error && <div className="banner banner--error">{error}</div>}
@@ -153,7 +205,35 @@ export function PreviewView({
             <button className="ghost" onClick={() => setShowLogs((v) => !v)}>
               {showLogs ? "Hide logs" : "Show logs"}
             </button>
+            {!confirmReset && (
+              <button className="ghost danger" onClick={() => setConfirmReset(true)}>
+                Reset data
+              </button>
+            )}
           </div>
+
+          {confirmReset && (
+            <div className="delete-confirm">
+              <span className="muted">
+                Delete the preview's databases and other stored data? The preview stops; your code
+                is not affected.
+              </span>
+              <div className="row">
+                <button
+                  className="danger"
+                  onClick={() => {
+                    setConfirmReset(false);
+                    void resetData();
+                  }}
+                >
+                  Reset data
+                </button>
+                <button className="ghost" onClick={() => setConfirmReset(false)}>
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
 
           {showLogs && (
             <pre className="preview__logs mono" ref={logRef}>

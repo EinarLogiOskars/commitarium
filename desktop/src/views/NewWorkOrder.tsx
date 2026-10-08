@@ -18,16 +18,19 @@ import type {
  * changed for this one order (backend applies the effective values). */
 export function NewWorkOrder({
   project,
+  initial,
   onOpenValidation,
   onCreated,
 }: {
   project: Project;
+  /** Prefill for a work order started from elsewhere (e.g. preview setup). */
+  initial?: { title: string; description: string };
   /** Opens the project settings where validation commands are configured. */
   onOpenValidation: () => void;
   onCreated: (featureId: string) => void;
 }) {
-  const [title, setTitle] = useState("");
-  const [description, setDescription] = useState("");
+  const [title, setTitle] = useState(initial?.title ?? "");
+  const [description, setDescription] = useState(initial?.description ?? "");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
