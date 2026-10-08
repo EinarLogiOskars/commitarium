@@ -7,8 +7,10 @@
 
 use crate::docker;
 use serde_json::{json, Map, Value};
+use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 const COMPOSE_FILENAMES: &[&str] = &[
     "compose.yaml",
@@ -47,6 +49,24 @@ const MOUNT_KEYS: &[&str] = &[
     "volume",
     "tmpfs",
 ];
+const MAX_COMPOSE_BYTES: u64 = 1024 * 1024;
+const MAX_YAML_DEPTH: usize = 64;
+const SAFE_DOCKER_ENV: &[&str] = &[
+    "DOCKER_API_VERSION",
+    "DOCKER_CERT_PATH",
+    "DOCKER_CONFIG",
+    "DOCKER_CONTEXT",
+    "DOCKER_HOST",
+    "DOCKER_TLS_VERIFY",
+];
+const RAW_FILE_KEYS: &[&str] = &[
+    "configs",
+    "env_file",
+    "extends",
+    "include",
+    "label_file",
+    "secrets",
+];
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct OpenTarget {
@@ -82,10 +102,25 @@ pub(crate) fn project_name(project_id: &str) -> Result<String, String> {
 }
 
 pub(crate) fn find_compose_file(checkout: &Path) -> Result<PathBuf, String> {
+    let checkout = checkout
+        .canonicalize()
+        .map_err(|e| format!("resolve preview checkout: {e}"))?;
     for name in COMPOSE_FILENAMES {
         let candidate = checkout.join(name);
-        if candidate.is_file() {
-            return Ok(candidate);
+        match fs::symlink_metadata(&candidate) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                return Err("the root Compose file cannot be a symbolic link".into());
+            }
+            Ok(metadata) if metadata.is_file() => {
+                let resolved = candidate
+                    .canonicalize()
+                    .map_err(|e| format!("resolve project Compose file: {e}"))?;
+                if !resolved.starts_with(&checkout) {
+                    return Err("the root Compose file resolves outside the repository".into());
+                }
+                return Ok(resolved);
+            }
+            Ok(_) | Err(_) => {}
         }
     }
     Err(
@@ -100,10 +135,17 @@ pub(crate) fn normalize_and_rewrite(
     open: &OpenTarget,
 ) -> Result<PreparedCompose, String> {
     let compose_file = find_compose_file(checkout)?;
-    let output = docker::docker_command()
-        .args(["compose", "-f"])
+    validate_raw_compose(&compose_file)?;
+    let empty_environment = tempfile::NamedTempFile::new()
+        .map_err(|e| format!("create isolated Compose environment file: {e}"))?;
+    let mut command = docker::docker_command();
+    sanitize_compose_command(&mut command, checkout);
+    let output = command
+        .args(["compose", "--env-file"])
+        .arg(empty_environment.path())
+        .arg("-f")
         .arg(&compose_file)
-        .args(["config", "--format", "json"])
+        .args(["config", "--no-interpolate", "--format", "json"])
         .current_dir(checkout)
         .output()
         .map_err(|e| format!("validate project Compose file: {e}"))?;
@@ -129,17 +171,17 @@ pub(crate) fn validate_and_rewrite(
         .map_err(|e| format!("resolve preview checkout: {e}"))?;
     let compose_project = project_name(project_id)?;
     let root = object_mut(&mut model, "Compose document")?;
-    validate_keys(
+    validate_keys_with_extensions(
         root,
         &["name", "services", "volumes", "networks"],
         "Compose document",
     )?;
 
-    if let Some(volumes) = root.get("volumes") {
-        validate_top_volumes(volumes)?;
+    if let Some(volumes) = root.get_mut("volumes") {
+        validate_top_volumes(volumes, &compose_project)?;
     }
-    if let Some(networks) = root.get("networks") {
-        validate_top_networks(networks)?;
+    if let Some(networks) = root.get_mut("networks") {
+        validate_top_networks(networks, &compose_project)?;
     }
 
     let services = root
@@ -160,12 +202,20 @@ pub(crate) fn validate_and_rewrite(
     let mut published = Vec::new();
     for (service_name, service_value) in services.iter_mut() {
         let service = object_mut(service_value, &format!("service {service_name:?}"))?;
-        validate_keys(service, SERVICE_KEYS, &format!("service {service_name:?}"))?;
+        validate_keys_with_extensions(service, SERVICE_KEYS, &format!("service {service_name:?}"))?;
+        if service.contains_key("build") && service.contains_key("image") {
+            return Err(format!(
+                "service {service_name:?} cannot set image when build is present"
+            ));
+        }
         if let Some(build) = service.get("build") {
             validate_build(build, &checkout, service_name)?;
         }
         if let Some(volumes) = service.get("volumes") {
             validate_mounts(volumes, &checkout, service_name)?;
+        }
+        if let Some(networks) = service.get("networks") {
+            validate_service_networks(networks, service_name)?;
         }
         if let Some(ports) = service.get_mut("ports") {
             rewrite_ports(ports, service_name, &mut published)?;
@@ -296,13 +346,13 @@ fn validate_short_mount(spec: &str, checkout: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn validate_top_volumes(value: &Value) -> Result<(), String> {
+fn validate_top_volumes(value: &mut Value, project: &str) -> Result<(), String> {
     let volumes = value
-        .as_object()
+        .as_object_mut()
         .ok_or_else(|| "top-level volumes must be an object".to_string())?;
-    for (name, volume) in volumes {
+    for (name, volume) in volumes.iter_mut() {
         let volume = volume
-            .as_object()
+            .as_object_mut()
             .ok_or_else(|| format!("volume {name:?} must be an object"))?;
         validate_keys(
             volume,
@@ -316,29 +366,23 @@ fn validate_top_volumes(value: &Value) -> Result<(), String> {
         {
             return Err(format!("volume {name:?} must use the local driver"));
         }
+        volume.remove("labels");
+        volume.insert("name".into(), Value::String(format!("{project}_{name}")));
     }
     Ok(())
 }
 
-fn validate_top_networks(value: &Value) -> Result<(), String> {
+fn validate_top_networks(value: &mut Value, project: &str) -> Result<(), String> {
     let networks = value
-        .as_object()
+        .as_object_mut()
         .ok_or_else(|| "top-level networks must be an object".to_string())?;
-    for (name, network) in networks {
+    for (name, network) in networks.iter_mut() {
         let network = network
-            .as_object()
+            .as_object_mut()
             .ok_or_else(|| format!("network {name:?} must be an object"))?;
         validate_keys(
             network,
-            &[
-                "name",
-                "driver",
-                "labels",
-                "attachable",
-                "enable_ipv4",
-                "enable_ipv6",
-                "ipam",
-            ],
+            &["name", "driver", "labels", "enable_ipv4", "enable_ipv6"],
             &format!("network {name:?}"),
         )?;
         if network
@@ -348,8 +392,45 @@ fn validate_top_networks(value: &Value) -> Result<(), String> {
         {
             return Err(format!("network {name:?} must use the bridge driver"));
         }
+        network.remove("labels");
+        network.insert("name".into(), Value::String(format!("{project}_{name}")));
     }
     Ok(())
+}
+
+fn validate_service_networks(value: &Value, service: &str) -> Result<(), String> {
+    match value {
+        Value::Array(networks) => {
+            if networks.iter().all(Value::is_string) {
+                Ok(())
+            } else {
+                Err(format!(
+                    "service {service:?} networks must contain network names"
+                ))
+            }
+        }
+        Value::Object(networks) => {
+            for (network_name, options) in networks {
+                if options.is_null() {
+                    continue;
+                }
+                let options = options.as_object().ok_or_else(|| {
+                    format!(
+                        "service {service:?} network {network_name:?} options must be an object"
+                    )
+                })?;
+                validate_keys(
+                    options,
+                    &["aliases"],
+                    &format!("service {service:?} network {network_name:?}"),
+                )?;
+            }
+            Ok(())
+        }
+        _ => Err(format!(
+            "service {service:?} networks must be an object or array"
+        )),
+    }
 }
 
 fn rewrite_ports(
@@ -443,6 +524,9 @@ fn rewrite_labels(service: &mut Map<String, Value>, project: &str) -> Result<(),
     let labels = labels
         .as_object_mut()
         .ok_or_else(|| "service labels must be an object or array".to_string())?;
+    labels.retain(|key, _| {
+        !key.starts_with("com.docker.compose.") && !key.starts_with("commitarium.")
+    });
     labels.insert("commitarium.preview".into(), Value::String("true".into()));
     labels.insert(
         "commitarium.preview.project".into(),
@@ -471,11 +555,129 @@ fn resolve_inside(base: &Path, configured: &Path, kind: &str) -> Result<PathBuf,
 
 fn validate_keys(object: &Map<String, Value>, allowed: &[&str], name: &str) -> Result<(), String> {
     for key in object.keys() {
+        if !allowed.contains(&key.as_str()) {
+            return Err(format!("{name} uses unsupported field {key:?}"));
+        }
+    }
+    Ok(())
+}
+
+fn validate_keys_with_extensions(
+    object: &Map<String, Value>,
+    allowed: &[&str],
+    name: &str,
+) -> Result<(), String> {
+    for key in object.keys() {
         if !allowed.contains(&key.as_str()) && !key.starts_with("x-") {
             return Err(format!("{name} uses unsupported field {key:?}"));
         }
     }
     Ok(())
+}
+
+fn validate_raw_compose(path: &Path) -> Result<(), String> {
+    let metadata = fs::metadata(path).map_err(|e| format!("inspect project Compose file: {e}"))?;
+    if metadata.len() > MAX_COMPOSE_BYTES {
+        return Err("the project Compose file is larger than 1 MiB".into());
+    }
+    let contents = fs::read(path).map_err(|e| format!("read project Compose file: {e}"))?;
+    if contents.contains(&b'$') {
+        return Err("the project Compose file cannot use environment interpolation ('$')".into());
+    }
+    let document: serde_yaml_ng::Value = serde_yaml_ng::from_slice(&contents)
+        .map_err(|e| format!("parse project Compose file before validation: {e}"))?;
+    validate_raw_document(&document)
+}
+
+fn validate_raw_document(value: &serde_yaml_ng::Value) -> Result<(), String> {
+    let root = value
+        .as_mapping()
+        .ok_or_else(|| "the project Compose file must contain an object".to_string())?;
+    for (key, value) in root {
+        reject_raw_key(key, true)?;
+        if key.as_str() == Some("services") {
+            let services = value
+                .as_mapping()
+                .ok_or_else(|| "Compose services must be an object".to_string())?;
+            for service in services.values() {
+                reject_raw_file_keys(service, true, 0)?;
+            }
+        } else {
+            reject_raw_file_keys(value, false, 0)?;
+        }
+    }
+    Ok(())
+}
+
+fn reject_raw_file_keys(
+    value: &serde_yaml_ng::Value,
+    allow_extensions: bool,
+    depth: usize,
+) -> Result<(), String> {
+    if depth > MAX_YAML_DEPTH {
+        return Err("the project Compose file is nested too deeply".into());
+    }
+    match value {
+        serde_yaml_ng::Value::Mapping(mapping) => {
+            for (key, value) in mapping {
+                reject_raw_key(key, allow_extensions)?;
+                reject_raw_file_keys(value, false, depth + 1)?;
+            }
+        }
+        serde_yaml_ng::Value::Sequence(sequence) => {
+            for value in sequence {
+                reject_raw_file_keys(value, false, depth + 1)?;
+            }
+        }
+        serde_yaml_ng::Value::Tagged(tagged) => {
+            reject_raw_file_keys(&tagged.value, allow_extensions, depth + 1)?;
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn reject_raw_key(key: &serde_yaml_ng::Value, allow_extensions: bool) -> Result<(), String> {
+    let Some(key) = key.as_str() else {
+        return Ok(());
+    };
+    if RAW_FILE_KEYS.contains(&key) {
+        return Err(format!("the project Compose file cannot use {key:?}"));
+    }
+    if key.starts_with("x-") && !allow_extensions {
+        return Err(format!(
+            "Compose extension field {key:?} is allowed only at the document or service level"
+        ));
+    }
+    Ok(())
+}
+
+pub(crate) fn sanitize_compose_command(command: &mut Command, safe_home: &Path) {
+    let configured_path = command
+        .get_envs()
+        .find(|(key, _)| *key == "PATH")
+        .and_then(|(_, value)| value.map(OsString::from))
+        .or_else(|| std::env::var_os("PATH"));
+    let docker_config = std::env::var_os("DOCKER_CONFIG").or_else(|| {
+        std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".docker").into_os_string())
+    });
+
+    command.env_clear();
+    if let Some(path) = configured_path {
+        command.env("PATH", path);
+    }
+    command.env("HOME", safe_home);
+    if let Some(config) = docker_config {
+        command.env("DOCKER_CONFIG", config);
+    }
+    for key in SAFE_DOCKER_ENV {
+        if *key == "DOCKER_CONFIG" {
+            continue;
+        }
+        if let Some(value) = std::env::var_os(key) {
+            command.env(key, value);
+        }
+    }
 }
 
 fn object_mut<'a>(value: &'a mut Value, name: &str) -> Result<&'a mut Map<String, Value>, String> {
@@ -506,13 +708,16 @@ mod tests {
         fs::write(root.join("api/Dockerfile"), "FROM scratch\n").unwrap();
         json!({
             "name": "untrusted",
+            "x-project-note": "allowed at the top level",
             "services": {
                 "web": {
+                    "x-service-note": "allowed on a service",
                     "build": {"context": root.join("web"), "dockerfile": "Dockerfile", "args": {}, "target": "dev"},
                     "ports": [{"target": 5173, "published": "5173", "host_ip": "0.0.0.0", "protocol": "tcp"}],
                     "volumes": [{"type": "bind", "source": root.join("web"), "target": "/app", "bind": {"create_host_path": true}}],
                     "depends_on": {"api": {"condition": "service_started", "required": true}},
-                    "networks": ["default"]
+                    "networks": {"default": {"aliases": ["frontend"]}},
+                    "labels": {"commitarium.preview": "victim", "com.docker.compose.project": "victim", "app.example.role": "frontend"}
                 },
                 "api": {
                     "build": {"context": root.join("api"), "dockerfile": "Dockerfile"},
@@ -525,8 +730,8 @@ mod tests {
                     "volumes": [{"type": "volume", "source": "data", "target": "/var/lib/postgresql/data"}]
                 }
             },
-            "volumes": {"data": {"name": "untrusted_data", "driver": "local"}},
-            "networks": {"default": {"name": "untrusted_default", "driver": "bridge"}}
+            "volumes": {"data": {"name": "untrusted_data", "driver": "local", "labels": {"com.docker.compose.project": "victim"}}},
+            "networks": {"default": {"name": "untrusted_default", "driver": "bridge", "labels": {"commitarium.preview": "victim"}}}
         })
     }
 
@@ -550,7 +755,21 @@ mod tests {
         assert_eq!(web["ports"][0]["published"], "0");
         assert_eq!(web["security_opt"][0], "no-new-privileges:true");
         assert_eq!(web["labels"]["commitarium.preview"], "true");
+        assert!(web["labels"].get("com.docker.compose.project").is_none());
+        assert_eq!(web["labels"]["app.example.role"], "frontend");
         assert_eq!(web["pids_limit"], 512);
+        assert_eq!(
+            prepared.model["volumes"]["data"]["name"],
+            "commitarium-preview-prj_test_data"
+        );
+        assert!(prepared.model["volumes"]["data"].get("labels").is_none());
+        assert_eq!(
+            prepared.model["networks"]["default"]["name"],
+            "commitarium-preview-prj_test_default"
+        );
+        assert!(prepared.model["networks"]["default"]
+            .get("labels")
+            .is_none());
     }
 
     #[test]
@@ -591,6 +810,8 @@ mod tests {
             ("/volumes/data", "driver_opts", json!({"type": "none"})),
             ("/volumes/data", "external", json!(true)),
             ("/networks/default", "external", json!(true)),
+            ("/networks/default", "attachable", json!(true)),
+            ("/networks/default", "ipam", json!({"driver": "default"})),
             ("/services/web/build", "secrets", json!(["token"])),
             ("/services/web/build", "ssh", json!(["default"])),
             ("/services/web/build", "network", json!("host")),
@@ -615,6 +836,116 @@ mod tests {
             .unwrap_err();
             assert!(error.contains(field), "error for {parent}/{field}: {error}");
         }
+    }
+
+    #[test]
+    fn rejects_build_image_tag_and_unsafe_service_network_options() {
+        let root = tempfile::tempdir().unwrap();
+        let mut model = full_stack(root.path());
+        model["services"]["web"]["image"] = json!("commitarium-coordinator:latest");
+        let error = validate_and_rewrite(
+            root.path(),
+            "prj_test",
+            &OpenTarget {
+                service: "web".into(),
+                port: 5173,
+            },
+            model,
+        )
+        .unwrap_err();
+        assert!(error.contains("cannot set image when build is present"));
+
+        for field in ["ipv4_address", "mac_address", "driver_opts"] {
+            let root = tempfile::tempdir().unwrap();
+            let mut model = full_stack(root.path());
+            model["services"]["web"]["networks"] = json!({"default": {}});
+            model["services"]["web"]["networks"]["default"]
+                .as_object_mut()
+                .unwrap()
+                .insert(field.into(), json!("unsafe"));
+            let error = validate_and_rewrite(
+                root.path(),
+                "prj_test",
+                &OpenTarget {
+                    service: "web".into(),
+                    port: 5173,
+                },
+                model,
+            )
+            .unwrap_err();
+            assert!(error.contains(field), "error for {field}: {error}");
+        }
+    }
+
+    #[test]
+    fn extensions_are_rejected_below_the_top_and_service_levels() {
+        let root = tempfile::tempdir().unwrap();
+        let mut model = full_stack(root.path());
+        model["services"]["web"]["build"]["x-unsafe"] = json!(true);
+        let error = validate_and_rewrite(
+            root.path(),
+            "prj_test",
+            &OpenTarget {
+                service: "web".into(),
+                port: 5173,
+            },
+            model,
+        )
+        .unwrap_err();
+        assert!(error.contains("x-unsafe"));
+    }
+
+    #[test]
+    fn raw_compose_rejects_file_indirection_and_interpolation() {
+        for (body, expected) in [
+            ("services:\n  web:\n    env_file: /tmp/secret\n", "env_file"),
+            (
+                "services:\n  web: !custom { env_file: /tmp/secret }\n",
+                "env_file",
+            ),
+            ("include: /tmp/compose.yaml\nservices: {}\n", "include"),
+            (
+                "services:\n  web:\n    extends:\n      file: /tmp/base.yaml\n      service: base\n",
+                "extends",
+            ),
+            (
+                "services:\n  web:\n    label_file: '/tmp/labels'\n",
+                "label_file",
+            ),
+            (
+                "services:\n  web:\n    image: '${HOME}/secret'\n",
+                "interpolation",
+            ),
+            (
+                "services:\n  web:\n    build:\n      context: .\n      x-unsafe: true\n",
+                "allowed only",
+            ),
+        ] {
+            let root = tempfile::tempdir().unwrap();
+            let path = root.path().join("compose.yaml");
+            fs::write(&path, body).unwrap();
+            let error = validate_raw_compose(&path).unwrap_err();
+            assert!(error.contains(expected), "error for {expected}: {error}");
+        }
+    }
+
+    #[test]
+    fn compose_subprocess_environment_is_allowlisted() {
+        let root = tempfile::tempdir().unwrap();
+        let mut command = Command::new("env");
+        command.env("PATH", "/safe/bin");
+        command.env("AWS_SECRET_ACCESS_KEY", "must-not-survive");
+        sanitize_compose_command(&mut command, root.path());
+        let environment = command
+            .get_envs()
+            .map(|(key, _)| key.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        assert!(environment.contains(&"HOME".to_string()));
+        assert!(environment.contains(&"PATH".to_string()));
+        assert!(!environment.contains(&"AWS_SECRET_ACCESS_KEY".to_string()));
+        assert!(environment.iter().all(|key| {
+            key == "HOME" || key == "PATH" || SAFE_DOCKER_ENV.contains(&key.as_str())
+        }));
     }
 
     #[test]
@@ -674,5 +1005,20 @@ mod tests {
         )
         .unwrap_err()
         .contains("outside the repository"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rejects_a_symlinked_root_compose_file_before_reading_it() {
+        use std::os::unix::fs::symlink;
+        let parent = tempfile::tempdir().unwrap();
+        let root = parent.path().join("repo");
+        fs::create_dir(&root).unwrap();
+        let outside = parent.path().join("secret.yaml");
+        fs::write(&outside, "host secret").unwrap();
+        symlink(&outside, root.join("compose.yaml")).unwrap();
+
+        let error = find_compose_file(&root).unwrap_err();
+        assert!(error.contains("symbolic link"));
     }
 }

@@ -34,12 +34,15 @@ validated it and rewritten it into a file it controls.
 one thing compose doesn't say: which service and container port to open in
 the browser. The ADR-013 `setup` and `processes` fields are removed.
 
-**Validation.** The Tauri backend fetches the canonical head as before, runs
-`docker compose config --format json` in that checkout to get one normalized
-model (with `include`, `extends`, interpolation, and env files resolved), and
-checks it against an **allowlist**. Anything not on the list is rejected with
-an error that names the key, so new compose features are refused until
-someone decides they are safe.
+**Validation.** The Tauri backend fetches the canonical head as before. Before
+Docker reads the file, the backend parses the raw YAML and rejects Compose
+interpolation and file-indirection features such as `include`, `extends`,
+`env_file`, and `label_file`. It then runs
+`docker compose config --no-interpolate --format json` with a cleared,
+allowlisted subprocess environment to get one normalized model and checks it
+against an **allowlist**. Anything not on the list is rejected with an error
+that names the key, so new compose features are refused until someone decides
+they are safe.
 
 - Services may use: `image`, `build` (`context`, `dockerfile`, `args`,
   `target`), `command`, `entrypoint`, `environment`, `working_dir`, `user`,
@@ -48,10 +51,13 @@ someone decides they are safe.
 - Volume mounts may be named volumes, tmpfs, or bind mounts whose source
   resolves inside the checkout. Bind mounts are what hot-reload setups use.
 - Build contexts and Dockerfiles must resolve inside the checkout.
+- A service may use `image` or `build`, but not both. Service-level network
+  options may contain aliases only. `x-*` extensions are accepted only at the
+  document and service levels.
 - Top-level `volumes` must use the local driver with no `driver_opts`
   (`driver_opts` can bind-mount a host path) and must not be `external`.
   Top-level `networks` must use the default bridge driver and must not be
-  `external`.
+  `external`, attachable, or configure IPAM.
 - Everything else is rejected, including `privileged`, `cap_add`, `devices`,
   `network_mode`, `pid`, `ipc`, `userns_mode`, `security_opt`, `volumes_from`,
   `secrets`, `configs`, and build `secrets`, `ssh`, and `network`.
@@ -60,6 +66,8 @@ someone decides they are safe.
 that, never the original:
 
 - The compose project name is `commitarium-preview-<project id>`.
+- Volume and network names are replaced with project-owned names, and user
+  labels on those resources are dropped.
 - Every published port becomes `127.0.0.1::<container port>`, so it lands on a
   random loopback port.
 - Every service gets the preview label, `no-new-privileges`, and CPU, memory,

@@ -98,6 +98,7 @@ struct Repository {
 struct ComposeRuntime {
     project_name: String,
     compose_file: PathBuf,
+    environment_file: PathBuf,
     source_root: PathBuf,
 }
 
@@ -516,9 +517,23 @@ fn launch_preview(
         remove_source(&root);
         return;
     }
+    let environment_file = root.join("preview.env");
+    if let Err(error) = fs::write(&environment_file, []) {
+        fail_preview(
+            &app,
+            &manager,
+            &project_id,
+            generation,
+            &format!("write isolated preview environment file: {error}"),
+            None,
+        );
+        remove_source(&root);
+        return;
+    }
     let runtime = ComposeRuntime {
         project_name: prepared.project_name.clone(),
         compose_file,
+        environment_file,
         source_root: root,
     };
     if !manager.attach(&project_id, generation, runtime.clone()) {
@@ -657,8 +672,11 @@ fn prepare_source(handoff: &ProjectHandoff) -> Result<PathBuf, String> {
 
 fn compose_command(runtime: &ComposeRuntime) -> Command {
     let mut command = docker::docker_command();
+    preview_compose::sanitize_compose_command(&mut command, &runtime.source_root);
     command
         .arg("compose")
+        .arg("--env-file")
+        .arg(&runtime.environment_file)
         .args(["-p", &runtime.project_name, "-f"])
         .arg(&runtime.compose_file);
     command
