@@ -619,27 +619,19 @@ or the effective configured values:
 start databases or other sidecars, and `services_runnable` is therefore always
 false. A UI must not imply that selecting PostgreSQL provisions a server.
 
-A configured manifest may also include `run`, which describes how to install
-and start the application for a preview (ADR-013):
+A configured manifest may also include `run`, which names what a preview
+opens in the browser (ADR-013, ADR-014):
 
 ```json
-"run": {
-  "setup": ["cd backend && uv sync", "cd frontend && npm ci"],
-  "processes": [
-    {"name": "api", "command": "cd backend && uv run uvicorn app.main:app --host 0.0.0.0 --port 8000", "port": 8000},
-    {"name": "web", "command": "cd frontend && npm run dev -- --host 0.0.0.0 --port 5173", "port": 5173, "open": true}
-  ]
-}
+"run": {"open": {"service": "web", "port": 5173}}
 ```
 
-`run` is optional and omitted when absent. `setup` commands run in order from
-the repository root; `processes` start after setup and keep running. Process
-names match `^[a-z][a-z0-9-]{0,31}$` and are unique, ports are unique integers
-from 1 to 65535, and at most one process sets `open`. When none does, the first
-process with a port is opened. `processes` must be non-empty when `run` is
-present. Invalid `run` input returns `400 invalid_toolchain`. Processes must
-bind `0.0.0.0`, and a frontend should reach its API through a relative-path dev
-proxy. A `runtime` update from a worker adding a tool keeps the existing `run`.
+The preview itself runs the compose file at the repository root; `run` only
+says which compose service and container port to open. `service` matches
+`^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$` and `port` is an integer from 1 to 65535.
+`run` is optional and omitted when absent; a project without it can't be
+previewed. Invalid `run` input returns `400 invalid_toolchain`. A `runtime`
+update from a worker adding a tool keeps the existing `run`.
 
 The picker saves an exact replacement with:
 
@@ -651,7 +643,7 @@ Content-Type: application/json
   "source": "picker",
   "tools": {"python": "3.14.7"},
   "services": ["postgresql"],
-  "run": {"setup": [], "processes": [{"name": "app", "command": "python -m http.server 8000", "port": 8000}]}
+  "run": {"open": {"service": "web", "port": 8000}}
 }
 ```
 
@@ -718,8 +710,8 @@ includes `purpose`, the selected provider/model, and the durable ordered
   `{"message":"..."}` object to the session's `/messages` route with a new
   `Idempotency-Key`.
 - `proposal_ready` with `message` and `proposal`: show the exact tools,
-  metadata-only services, and the proposed `run` commands (when present) for
-  review. Applying the proposal saves `run` with the toolchain.
+  metadata-only services, and the proposed `run` open target (when present)
+  for review. Applying the proposal saves `run` with the toolchain.
 - `failed`: show the message and allow the user to return to the picker.
 
 The assistant reuses the same provider conversation for each reply. Its worker

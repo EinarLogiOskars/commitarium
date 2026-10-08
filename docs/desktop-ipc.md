@@ -670,25 +670,29 @@ behavior.
 
 ## Project previews
 
-The backend runs the project's canonical head in a disposable container using
-the stack's `run` configuration (ADR-013). The renderer passes only a project
-ID and a target; the backend reads the run configuration and head commit from
-the coordinator and owns the fetch, container, ports, and cleanup.
+The backend runs the project's canonical head from its validated compose file
+(ADR-013, ADR-014). The renderer passes only a project ID and a target; the
+backend reads the stack's `run.open` target and the head commit from the
+coordinator and owns the fetch, compose validation, containers, ports,
+volumes, and cleanup.
 
 - `start_preview(projectId, target) -> PreviewStatus` — starts a preview,
   replacing any running preview of the same project. Returns immediately in
   `starting`; progress arrives as events.
-- `stop_preview(projectId) -> void` — stops and removes the preview. Stopping a
-  project with no preview is not an error.
+- `stop_preview(projectId) -> void` — stops the preview and keeps its data.
+  Stopping a project with no preview is not an error.
+- `reset_preview_data(projectId) -> void` — stops the preview if running and
+  removes its named volumes.
 - `get_preview_status(projectId) -> PreviewStatus | null`
 - `get_preview_logs(projectId) -> string[]` — the last 400 lines of combined
-  output, each prefixed `[setup]` or `[<process name>]`.
+  output. Lines from validation and image builds are prefixed `[preview]`;
+  service output keeps compose's `<service> | ` prefix.
 - Event `preview-status-changed` with a `PreviewStatus` payload on every state
   change.
 
 The TypeScript wrappers are exported from `desktop/src/ipc.ts` as
-`startPreview`, `stopPreview`, `getPreviewStatus`, `getPreviewLogs`, and
-`onPreviewStatusChanged`.
+`startPreview`, `stopPreview`, `resetPreviewData`, `getPreviewStatus`,
+`getPreviewLogs`, and `onPreviewStatusChanged`.
 
 ```ts
 // Only "canonical" exists today; more target kinds will be added.
@@ -697,9 +701,9 @@ type PreviewTarget = { kind: "canonical" };
 type PreviewState = "starting" | "running" | "failed" | "stopped";
 
 type PreviewUrl = {
-  process: string;
+  service: string;
   url: string; // http://127.0.0.1:<host port>
-  open: boolean;
+  open: boolean; // the stack's run.open target
 };
 
 type PreviewStatus = {
@@ -707,20 +711,23 @@ type PreviewStatus = {
   target: PreviewTarget;
   commitId: string;
   state: PreviewState;
-  urls: PreviewUrl[]; // filled once "running"
+  urls: PreviewUrl[]; // one per published port, filled once "running"
   error: string | null; // set when "failed"
 };
 ```
 
-`starting` covers fetching, setup, and process startup. The preview becomes
-`running` once the `open` process's port answers HTTP. It becomes `failed` if
-the fetch, setup, or any process fails; `error` then holds the last lines of
-output. It becomes `stopped` after `stop_preview`. Previews are stopped when the
-app exits, and containers labelled `commitarium.preview` are removed at app
-start.
+`starting` covers fetching, compose validation, pulls and builds, and service
+startup. The preview becomes `running` once the `open` target answers HTTP. It
+becomes `failed` if the fetch or validation fails (the error names the
+rejected compose key), if a build fails, or if a service exits with a non-zero
+code; `error` then holds the reason or the last lines of output. It becomes
+`stopped` after `stop_preview`. Previews are stopped when the app exits; at app
+start, leftover preview containers are removed and volumes are kept. Deleting
+the project removes its preview volumes and built images.
 
 `start_preview` fails without starting anything when the project has no
-configured stack, the stack has no `run`, or the project has no repository.
+configured stack, the stack has no `run`, the project has no repository, or
+the canonical head has no compose file at its root.
 
 ## Implemented — provider authentication / profiles
 
