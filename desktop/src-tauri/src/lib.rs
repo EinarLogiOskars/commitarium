@@ -6,6 +6,7 @@ mod import;
 mod phase4;
 mod phase5;
 mod preview;
+mod preview_compose;
 mod profiles;
 mod store;
 mod updater;
