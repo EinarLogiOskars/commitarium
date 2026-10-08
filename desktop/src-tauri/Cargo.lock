@@ -509,7 +509,7 @@ dependencies = [
 
 [[package]]
 name = "commitarium"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "fs2",
  "getrandom 0.3.4",

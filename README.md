@@ -4,7 +4,7 @@
 and ship software together—without taking control away from you.**
 
 [![CI](https://github.com/EinarLogiOskars/commitarium/actions/workflows/ci.yml/badge.svg)](https://github.com/EinarLogiOskars/commitarium/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/EinarLogiOskars/commitarium?include_prereleases&label=release)](https://github.com/EinarLogiOskars/commitarium/releases)
+[![Release](https://img.shields.io/github/v/release/EinarLogiOskars/commitarium?label=release)](https://github.com/EinarLogiOskars/commitarium/releases)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
 ![Commitarium workshop](desktop/src/assets/loading/workshop.png)
@@ -16,9 +16,10 @@ on your machine inside a Docker-managed environment with an internal Forgejo
 instance for branches, pull requests, reviews, and audit history.
 
 > [!IMPORTANT]
-> Commitarium is currently an early prerelease. The workflow is functional and
-> tested, but installer signing, broader platform testing, and some product
-> polish are still in progress. Use it on repositories you can recover.
+> Commitarium is currently pre-1.0 early-access software. The core workflow is
+> functional and tested, but operating-system code signing, broader platform
+> testing, and some product polish are still in progress. Use it on repositories
+> you can recover.
 
 ## What it does
 
@@ -77,7 +78,7 @@ Supported operating-system and Docker versions are listed in
 
 ### Download
 
-Download the latest prerelease from
+Download the latest release from
 [GitHub Releases](https://github.com/EinarLogiOskars/commitarium/releases):
 
 | Platform | Download | Architecture |
@@ -256,8 +257,8 @@ A `v*` Git tag starts two release workflows:
 
 - multi-platform service images are published to GHCR with version and commit
   tags, provenance, and an SBOM;
-- native macOS, Windows, and Linux packages are attached to a draft GitHub
-  prerelease for final clean-machine verification.
+- native macOS, Windows, and Linux packages plus signed update artifacts are
+  attached to a draft GitHub release for final clean-machine verification.
 
 The desktop version and service-image version are intentionally locked
 together. See [the release guide](docs/releasing.md) before creating a tag.
