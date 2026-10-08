@@ -58,7 +58,9 @@ export function usePreview(projectId: string) {
       openWhenRunning.current = false;
       const url = primaryUrl(status);
       if (url) void openExternal(url);
-    } else if (status?.state === "failed" || status?.state === "stopped") {
+    } else if (status?.state === "failed") {
+      // Not "stopped": starting again first stops the old preview, and that
+      // event must not cancel opening the new one. stop() clears it itself.
       openWhenRunning.current = false;
     }
   }, [status]);
