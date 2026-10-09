@@ -122,6 +122,7 @@ export function NewWorkOrder({
     <section className="panel">
       <h2>{WORK.newAction}</h2>
       {error && <div className="banner banner--error">{error}</div>}
+      <RoundsNotice />
       <form className="create create--feature" onSubmit={submit}>
         <input
           type="text"
@@ -214,4 +215,38 @@ export function NewWorkOrder({
 
 function cap(s: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+const ROUNDS_NOTICE_KEY = "commitarium.roundsNoticeDismissed";
+
+// Shown until dismissed once: the round cap is fixed, so the user only needs
+// to learn it, not configure it.
+function RoundsNotice() {
+  const [dismissed, setDismissed] = useState(() => {
+    try {
+      return localStorage.getItem(ROUNDS_NOTICE_KEY) === "1";
+    } catch {
+      return false;
+    }
+  });
+  if (dismissed) return null;
+  const dismiss = () => {
+    try {
+      localStorage.setItem(ROUNDS_NOTICE_KEY, "1");
+    } catch {
+      // Without storage the notice simply shows again next time.
+    }
+    setDismissed(true);
+  };
+  return (
+    <div className="banner banner--info rounds-notice">
+      <span>
+        The agents get up to 10 rounds to agree on a plan and 10 rounds of review. If they
+        haven&apos;t settled by then, the work order pauses and asks you how to continue.
+      </span>
+      <button type="button" className="ghost" onClick={dismiss}>
+        Got it
+      </button>
+    </div>
+  );
 }

@@ -2749,3 +2749,11 @@ button.danger:not(.ghost) {
   font-size: 12px;
   color: var(--muted);
 }
+
+.rounds-notice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
