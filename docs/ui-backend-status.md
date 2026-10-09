@@ -354,6 +354,10 @@ Safe UI capabilities:
   `clarification`, `phase_checkpoint`, `round_cap`, `blocker`, `merge_gate`, and
   `paused`. Use these values to choose UI controls; display `reason` as prose,
   but never parse it to infer state.
+- When planning is waiting at `round_cap`, the existing **Continue planning**
+  action grants exactly one additional complete lead/reviewer round. Send a
+  fresh `Idempotency-Key` for each deliberate continuation and reuse that key
+  only when retrying the same click; an exact retry cannot extend the cap twice.
 - Pause and resume a non-terminal run with
   `POST /api/v1/runs/{runID}/pause` and
   `POST /api/v1/runs/{runID}/resume`. Both require an empty body and a stable
@@ -575,7 +579,9 @@ not implemented yet.
   `review_each_phase` instead leaves the accepted draft at a
   `phase_checkpoint` for the existing Start planning control. Automatic mode
   still stops at unresolved clarification, round caps, blockers, recovery
-  assessments, and any merge approval required by `merge_policy`.
+  assessments, and any merge approval required by `merge_policy`. At a planning
+  round cap, the user's existing Continue planning action authorizes one more
+  complete dialogue round and returns to the cap again if no plan is submitted.
 - Pausing does not freeze a provider process mid-command. The current bounded
   turn may finish and be recorded, while the coordinator prevents the next
   agent turn or automatic merge. Resume restores and dispatches the exact

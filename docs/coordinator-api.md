@@ -1838,6 +1838,12 @@ with a reviewer response; and the pinned managed checkout must remain ready.
 Missing or contradictory prerequisites return
 `409 planning_round_not_ready` or `409 planning_round_conflict`.
 
+If the run is waiting with `wait_kind: "round_cap"`, this explicit user action
+authorizes exactly one additional complete lead/reviewer round. The coordinator
+durably increases only this run's snapshotted planning limit by one before it
+resumes the lead. Retrying the same `Idempotency-Key` never grants another
+round; a later deliberate continuation must use a fresh key.
+
 The action first resumes the lead's existing provider conversation with the
 reviewer's exact response. When that response is durable, the coordinator
 resumes the existing reviewer conversation with it. The agents continue
@@ -1856,6 +1862,10 @@ activity. `respond` becomes a normal `message`; `submit_plan` becomes a distinct
 `plan_submitted` event. The coordinator therefore never guesses agreement by
 searching prose. The lead is instructed to submit only after it concludes that
 both agents genuinely agree and the plan satisfies the accepted goal.
+
+Reaching the expanded cap returns the run to the same `round_cap` checkpoint.
+The user can inspect or intervene again, or explicitly authorize one more round
+with this endpoint.
 
 After `plan_submitted`, the coordinator verifies that the stored repository and
 host-visible checkout still have their exact managed identities and clean

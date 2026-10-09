@@ -91,10 +91,12 @@ func (api *API) startPlanningRoundHandler(w http.ResponseWriter, r *http.Request
 			writeError(w, http.StatusNotFound, "run_not_found", "run not found")
 		case errors.Is(err, execution.ErrRecordConflict):
 			writeError(w, http.StatusConflict, "planning_round_conflict", "stored planning sessions conflict with this run")
+		case errors.Is(err, execution.ErrRunActionConflict):
+			writeError(w, http.StatusConflict, "idempotency_conflict", "Idempotency-Key was already used for a different operation")
 		case errors.Is(err, orchestration.ErrRunControlNotAllowed):
 			writeError(w, http.StatusConflict, "run_paused", "resume the run before starting another workflow phase")
-		case errors.Is(err, orchestration.ErrPlanningNotAllowed):
-			writeError(w, http.StatusConflict, "planning_round_not_ready", "the planning loop requires a completed reviewer response below the run's configured round limit")
+		case errors.Is(err, orchestration.ErrPlanningNotAllowed), errors.Is(err, execution.ErrStateConflict):
+			writeError(w, http.StatusConflict, "planning_round_not_ready", "the planning loop requires a completed reviewer response and a ready run")
 		default:
 			log.Printf("start planning round for run %q: %v", runID, err)
 			writeError(w, http.StatusInternalServerError, "internal_error", "internal server error")

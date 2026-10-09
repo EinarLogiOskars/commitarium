@@ -2017,10 +2017,36 @@ func TestRemotePlanningLoopUsesRunLimitSnapshot(t *testing.T) {
 	if requestCount != 7 {
 		t.Fatalf("expected clarification plus six planning turns, got %d requests", requestCount)
 	}
+	extraRound := limits.PlanningRounds + 1
+	addCompletedPlanningCorrectionAttempt(
+		stub, remoteLeadSessionID(runID), storedProject.ID, storedFeature.ID,
+		workerhttp.RoleLead, "codex-thread-test", extraRound,
+		workerhttp.EventMessage, "Lead planning response after user continuation",
+	)
+	addCompletedPlanningCorrectionAttempt(
+		stub, remoteReviewerSessionID(runID), storedProject.ID, storedFeature.ID,
+		workerhttp.RoleReviewer, "codex-review-thread-test", extraRound,
+		workerhttp.EventMessage, "Reviewer response after user continuation",
+	)
 	if _, admitted, err := starter.StartPlanningRound(
-		t.Context(), runID, "start-limited-loop",
+		t.Context(), runID, "continue-after-round-cap",
+	); err != nil || !admitted {
+		t.Fatalf("continue bounded loop: admitted=%t err=%v", admitted, err)
+	}
+	waitForRemoteLeadStatus(t, executions, runID, execution.RunStatusWaitingForUser)
+	messages, err = executions.PlanningMessagesForRun(t.Context(), runID)
+	if err != nil || len(messages) != extraRound*2 {
+		t.Fatalf("extra planning round history: len=%d err=%v messages=%+v", len(messages), err, messages)
+	}
+	run, err = executions.GetRun(t.Context(), runID)
+	if err != nil || run.PlanningRoundLimit != extraRound ||
+		run.WaitKind != execution.RunWaitKindRoundCap {
+		t.Fatalf("extra planning round did not establish a new cap: run=%+v err=%v", run, err)
+	}
+	if _, admitted, err := starter.StartPlanningRound(
+		t.Context(), runID, "continue-after-round-cap",
 	); err != nil || admitted {
-		t.Fatalf("bounded loop retry: admitted=%t err=%v", admitted, err)
+		t.Fatalf("continued-round retry: admitted=%t err=%v", admitted, err)
 	}
 }
 

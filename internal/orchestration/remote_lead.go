@@ -105,6 +105,7 @@ type RemoteLeadExecution interface {
 	GetWorkerAttempt(context.Context, string) (execution.WorkerAttemptCheckpoint, error)
 	TransitionRun(context.Context, string, execution.RunStatus, execution.RunStatus, string, ...execution.RunWaitKind) (execution.Run, error)
 	ApplyRunPause(context.Context, string, string, execution.RunPauseAction) (execution.Run, bool, error)
+	ExtendPlanningRoundLimit(context.Context, string, string, int) (execution.Run, bool, error)
 	QueueIntervention(context.Context, string, string, worker.Role, string) (execution.Intervention, bool, error)
 	GetLatestIntervention(context.Context, string) (execution.Intervention, error)
 	BeginInterventionTurn(context.Context, string, execution.WorkerAttemptCheckpoint, string, string) (bool, error)
@@ -2727,9 +2728,10 @@ func (starter *RemoteLeadStarter) StartPlanningRound(
 	if err != nil {
 		return execution.Run{}, false, err
 	}
-	if len(messages) > 0 && (planningRoundLimitReached(run.PlanningRoundLimit, len(messages)) ||
-		messages[len(messages)-1].Event.Type == worker.EventPlanSubmitted) {
-		if messages[len(messages)-1].Event.Type != worker.EventPlanSubmitted {
+	claimed := false
+	if len(messages) > 0 && planningRoundLimitReached(run.PlanningRoundLimit, len(messages)) &&
+		messages[len(messages)-1].Event.Type != worker.EventPlanSubmitted {
+		if run.WaitKind != execution.RunWaitKindRoundCap {
 			if err := starter.waitRun(
 				ctx, run.ID, planningLimitReason(run.PlanningRoundLimit), execution.RunWaitKindRoundCap,
 			); err != nil {
@@ -2738,6 +2740,27 @@ func (starter *RemoteLeadStarter) StartPlanningRound(
 			updated, err := starter.executions.GetRun(ctx, run.ID)
 			return updated, false, err
 		}
+		if !starter.claim(run.ID) {
+			return execution.Run{}, false, ErrPlanningNotAllowed
+		}
+		claimed = true
+		extended, applied, err := starter.executions.ExtendPlanningRoundLimit(
+			ctx,
+			planningRoundExtensionID(run.ID, idempotencyKey),
+			run.ID,
+			run.PlanningRoundLimit,
+		)
+		if err != nil {
+			starter.release(run.ID)
+			return execution.Run{}, false, err
+		}
+		if !applied {
+			starter.release(run.ID)
+			return extended, false, nil
+		}
+		run = extended
+	}
+	if len(messages) > 0 && messages[len(messages)-1].Event.Type == worker.EventPlanSubmitted {
 		submitted := messages[len(messages)-1].Event
 		published, err := starter.planPublicationRecorded(ctx, submitted)
 		if err != nil {
@@ -2760,9 +2783,12 @@ func (starter *RemoteLeadStarter) StartPlanningRound(
 		return running, true, nil
 	}
 	if len(messages) < 2 || messages[len(messages)-1].Role != worker.RoleReviewer {
+		if claimed {
+			starter.release(run.ID)
+		}
 		return execution.Run{}, false, ErrPlanningNotAllowed
 	}
-	if !starter.claim(run.ID) {
+	if !claimed && !starter.claim(run.ID) {
 		return execution.Run{}, false, ErrPlanningNotAllowed
 	}
 	request, admitted, err := starter.startLeadResponse(ctx, run, storedFeature, messages, false)
@@ -2782,6 +2808,11 @@ func (starter *RemoteLeadStarter) StartPlanningRound(
 	go starter.launch(request)
 	startedRun, err := starter.executions.GetRun(ctx, run.ID)
 	return startedRun, true, err
+}
+
+func planningRoundExtensionID(runID, idempotencyKey string) string {
+	digest := sha256.Sum256([]byte(runID + "\x00" + idempotencyKey))
+	return "planning_round_" + hex.EncodeToString(digest[:16])
 }
 
 // StartImplementation resumes the same lead conversation that submitted the
