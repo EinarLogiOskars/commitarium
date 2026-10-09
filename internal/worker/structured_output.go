@@ -29,6 +29,14 @@ type StructuredOutput struct {
 	EnvironmentRequest *EnvironmentRequest
 }
 
+// idSchema describes checklist IDs. Invalid IDs are normalized rather than
+// rejected, but stating the format keeps the agent's IDs and the stored ones
+// identical.
+var idSchema = map[string]any{
+	"type":        "string",
+	"description": "Stable ID: lowercase letters, digits, '.', '_' or '-', starting with a letter or digit, at most 64 characters.",
+}
+
 func OutputJSONSchema(contract OutputContract) any {
 	switch contract {
 	case OutputContractGoalClarification:
@@ -44,7 +52,7 @@ func OutputJSONSchema(contract OutputContract) any {
 	case OutputContractPlanningLead:
 		stepSchema := objectSchema(
 			map[string]any{
-				"id":               map[string]any{"type": "string"},
+				"id":               idSchema,
 				"title":            map[string]any{"type": "string"},
 				"subtitle":         map[string]any{"type": "string"},
 				"details_markdown": map[string]any{"type": "string"},
@@ -78,7 +86,7 @@ func OutputJSONSchema(contract OutputContract) any {
 	case OutputContractAcceptanceTests:
 		testSchema := objectSchema(
 			map[string]any{
-				"id":    map[string]any{"type": "string"},
+				"id":    idSchema,
 				"title": map[string]any{"type": "string"},
 			},
 			[]string{"id", "title"},
@@ -102,6 +110,14 @@ func OutputJSONSchema(contract OutputContract) any {
 				"review_id":           map[string]any{"type": "integer"},
 			},
 			[]string{"action", "summary", "commit_id", "pull_request_number", "review_id"},
+		)
+	case OutputContractPlanApproval:
+		return objectSchema(
+			map[string]any{
+				"action":  map[string]any{"type": "string", "enum": []string{"approve", "request_changes"}},
+				"message": map[string]any{"type": "string"},
+			},
+			[]string{"action", "message"},
 		)
 	case OutputContractImplementationReadiness:
 		return objectSchema(
@@ -383,6 +399,29 @@ func ResolveStructuredOutput(
 			Disposition: disposition,
 			Review:      review,
 		}, nil
+
+	case OutputContractPlanApproval:
+		var response struct {
+			Action  string `json:"action"`
+			Message string `json:"message"`
+		}
+		if err := decodeStructuredOutput(raw, &response); err != nil {
+			return StructuredOutput{}, err
+		}
+		response.Message = strings.TrimSpace(response.Message)
+		if response.Message == "" {
+			return StructuredOutput{}, invalidStructuredOutput("plan approval response is incomplete")
+		}
+		resolved := StructuredOutput{Event: Event{Type: EventMessage, Text: response.Message}}
+		switch response.Action {
+		case "approve":
+			resolved.Disposition = DispositionSucceeded
+		case "request_changes":
+			resolved.Disposition = DispositionChangesRequested
+		default:
+			return StructuredOutput{}, invalidStructuredOutput("plan approval response has an unknown action")
+		}
+		return resolved, nil
 
 	case OutputContractImplementationReadiness:
 		var response struct {

@@ -203,11 +203,28 @@ func TestAdapterEmitsResultTextWhenAssistantRecordIsMissing(t *testing.T) {
 	if err != nil || result.Summary != "Result-only answer." {
 		t.Fatalf("result-only result=%+v error=%v", result, err)
 	}
+	wantUsage := worker.TokenUsage{InputTokens: 12, CachedInputTokens: 4000, CacheWriteTokens: 300, OutputTokens: 56}
+	if result.Usage == nil || *result.Usage != wantUsage {
+		t.Fatalf("result-only usage = %+v, want %+v", result.Usage, wantUsage)
+	}
 	if observed := <-events; !slices.Equal(observed, []worker.Event{
 		{Type: worker.EventActivity, Text: "Claude started working."},
 		{Type: worker.EventMessage, Text: "Result-only answer."},
 	}) {
 		t.Fatalf("result-only events = %+v", observed)
+	}
+}
+
+func TestAdapterIgnoresSubagentInitAndTrailingSummary(t *testing.T) {
+	adapter := testAdapter(t, "subagent-init", "Delegate to a subagent")
+	session, err := adapter.Start(t.Context(), adapter.request("att_claude_subagent", "Delegate to a subagent"))
+	if err != nil {
+		t.Fatalf("start subagent Claude adapter: %v", err)
+	}
+	_ = collectEvents(session)
+	result, err := session.Wait(timeoutContext(t, 3*time.Second))
+	if err != nil || result.Outcome != worker.OutcomeCompleted || result.Summary != "Finished after a subagent." {
+		t.Fatalf("subagent init result=%+v error=%v", result, err)
 	}
 }
 
@@ -555,10 +572,27 @@ func TestClaudeCLIHelper(t *testing.T) {
 			"type": "result", "subtype": "success", "session_id": sessionID,
 			"is_error": false, "result": "Implemented and verified the change.",
 		})
+	case "subagent-init":
+		helperWrite(writer, map[string]any{
+			"type": "system", "subtype": "init", "session_id": sessionID, "cwd": directory,
+			"model": "subagent-model",
+		})
+		helperWrite(writer, map[string]any{
+			"type": "result", "subtype": "success", "session_id": sessionID,
+			"is_error": false, "result": "Finished after a subagent.",
+		})
+		// Claude Code reports a summary after its result.
+		helperWrite(writer, map[string]any{
+			"type": "system", "subtype": "task_summary", "session_id": sessionID,
+		})
 	case "result-only":
 		helperWrite(writer, map[string]any{
 			"type": "result", "subtype": "success", "session_id": sessionID,
 			"is_error": false, "result": "Result-only answer.",
+			"usage": map[string]any{
+				"input_tokens": 12, "cache_creation_input_tokens": 300,
+				"cache_read_input_tokens": 4000, "output_tokens": 56,
+			},
 		})
 	case "structured-plan":
 		helperWrite(writer, map[string]any{

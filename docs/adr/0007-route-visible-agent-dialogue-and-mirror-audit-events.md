@@ -93,6 +93,30 @@ planning read-only and prevents an abandoned or unresolved plan from creating
 Forgejo artifacts. The dialogue-routing and concise-audit decisions above are
 unchanged.
 
+## Dialogue efficiency refinement (2026-10-09)
+
+Routing is unchanged: exact messages, turn-based delivery, and bounded rounds.
+What changed is how turns are framed, after one-file work orders were found to
+spend most of a provider's usage limit on repeated context:
+
+- Each session gets the accepted goal and workspace facts once. Later turns
+  carry only the other agent's message, and implementation, review, and
+  correction turns read the agreed plan with `commitarium-artifact plan show`
+  instead of receiving it again.
+- Agents address each other by provider and role. The reviewer numbers its
+  planning concerns and review findings; the lead answers each by number and
+  sends only what changed.
+- The reviewer approves the lead's exact final plan before it is published.
+  Requested changes return to the lead as a normal planning message; only an
+  approved plan reaches implementation.
+- After a correction, the reviewer reviews the diff since the commit it last
+  reviewed and re-runs every test, widening only where the change reaches
+  beyond the findings.
+- Agents inspect the repository only where a point depends on code they have
+  not read; a read-only planning checkout does not change between turns.
+
+Per-turn provider token usage is recorded so the effect can be measured.
+
 ## Consequences
 
 ### Positive

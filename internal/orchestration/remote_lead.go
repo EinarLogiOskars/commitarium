@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/EinarLogiOskars/commitarium/internal/execution"
 	"github.com/EinarLogiOskars/commitarium/internal/feature"
@@ -62,6 +63,7 @@ const (
 	planningStageFirstReview      planningStage = "first_review"
 	planningStageLeadResponse     planningStage = "lead_response"
 	planningStageReviewerResponse planningStage = "reviewer_response"
+	planningStagePlanApproval     planningStage = "plan_approval"
 )
 
 const (
@@ -240,6 +242,7 @@ type RemoteLeadConfig struct {
 	EnvironmentRequests          RemoteLeadEnvironmentRequests
 	Validation                   RemoteLeadValidationGate
 	Toolchains                   RemoteLeadToolchainReader
+	Usage                        RemoteLeadUsageRecorder
 	Lifetime                     context.Context
 	AgentProfileID               string
 	ReviewerAgentProfileID       string
@@ -254,6 +257,11 @@ type RemoteLeadConfig struct {
 
 type RemoteLeadToolchainReader interface {
 	Get(context.Context, string) (toolchain.Manifest, error)
+}
+
+// RemoteLeadUsageRecorder stores provider-reported token usage per attempt.
+type RemoteLeadUsageRecorder interface {
+	RecordAttemptUsage(context.Context, execution.AttemptUsage) error
 }
 
 // RemoteLeadStarter owns the deliberately small real-provider path used while
@@ -272,6 +280,7 @@ type RemoteLeadStarter struct {
 	environmentRequests          RemoteLeadEnvironmentRequests
 	validation                   RemoteLeadValidationGate
 	toolchains                   RemoteLeadToolchainReader
+	usage                        RemoteLeadUsageRecorder
 	lifetime                     context.Context
 	agentProfileID               string
 	reviewerAgentProfileID       string
@@ -332,6 +341,7 @@ func NewRemoteLeadStarter(config RemoteLeadConfig) (*RemoteLeadStarter, error) {
 		planning: config.Planning, artifacts: config.Artifacts, workspaces: config.Workspaces,
 		worker: config.Worker, pump: config.Pump,
 		environmentRequests: config.EnvironmentRequests, validation: config.Validation, toolchains: config.Toolchains,
+		usage:    config.Usage,
 		lifetime: config.Lifetime, agentProfileID: config.AgentProfileID,
 		reviewerAgentProfileID:       reviewerAgentProfileID,
 		claudeAgentProfileID:         strings.TrimSpace(config.ClaudeAgentProfileID),
@@ -679,6 +689,9 @@ func (starter *RemoteLeadStarter) recoverWithDirective(
 	}
 	if !isIntervention && storedFeature.State == feature.StatePlanning {
 		attemptVersion, _, planning := planningAttemptVersionAndTurn(session.ID, checkpoint.AttemptID)
+		if !planning {
+			attemptVersion, _, planning = planApprovalVersionAndTurn(session.ID, checkpoint.AttemptID)
+		}
 		if !planning || attemptVersion != run.PlanVersion {
 			return fmt.Errorf("%w: planning attempt does not match the run's current plan version", ErrInvalidRunRequest)
 		}
@@ -729,6 +742,9 @@ func (starter *RemoteLeadStarter) recoverWithDirective(
 		}
 		if _, reviewing := implementationReviewTurnNumber(session.ID, checkpoint.AttemptID); reviewing {
 			request.request.OutputContract = workerhttp.OutputContractImplementationReview
+		}
+		if _, _, approving := planApprovalVersionAndTurn(session.ID, checkpoint.AttemptID); approving {
+			request.request.OutputContract = workerhttp.OutputContractPlanApproval
 		}
 	}
 	pending, err := starter.executions.PendingCommandsForSession(ctx, session.ID)
@@ -1160,14 +1176,6 @@ func (starter *RemoteLeadStarter) interventionRequest(
 	return request, nil
 }
 
-func interventionInstructions(state feature.State, message string) string {
-	return fmt.Sprintf(`The user paused the Commitarium workflow during the %s phase and sent this intervention:
-
-%s
-
-Answer the user directly using the restored conversation and current project context. This is an intervention-only turn: do not edit files, run implementation work, commit, push, publish or update a pull request, submit a formal review, or continue the workflow. Return "guidance_applied" when the message can guide later work without changing the accepted goal or agreed plan; return "clarification_required" when you need more information before classifying or applying it; return "replanning_required" when following it would change the accepted goal, scope, or agreed plan.`, state, strings.TrimSpace(message))
-}
-
 func (starter *RemoteLeadStarter) Resume(
 	ctx context.Context,
 	runID string,
@@ -1437,32 +1445,6 @@ func (starter *RemoteLeadStarter) replanningRequest(
 		return remoteLeadRequest{}, fmt.Errorf("%w: %v", ErrInvalidRunRequest, err)
 	}
 	return request, nil
-}
-
-func replanningInstructions(
-	planVersion int,
-	effectiveGoal string,
-	previousPlan string,
-	userAmendment string,
-	prepared workspace.Workspace,
-	baselineCommitID string,
-) string {
-	return "Continue as the same lead agent and begin plan version " + strconv.Itoa(planVersion) +
-		" after the user's scope-changing intervention. Inspect the managed repository, current Git " +
-		"HEAD, branch, status, and diff before proposing anything. Existing branch commits and " +
-		"uncommitted user or agent edits are intentional external state: preserve them, do not reset, " +
-		"clean, overwrite, commit, push, or modify the pull request during this planning turn. Compare " +
-		"the prior plan and work already present against the amended goal, identify what remains useful, " +
-		"and propose a complete revised implementation plan for the same reviewer to challenge. Durable " +
-		"Git, Forgejo, and coordinator state are authoritative over conversational memory.\n\n" +
-		"Effective amended goal:\n" + effectiveGoal +
-		"\n\nUser's exact scope amendment:\n" + strings.TrimSpace(userAmendment) +
-		"\n\nPrevious agreed plan:\n" + previousPlan +
-		"\n\nRepository: " + prepared.RepositoryOwner + "/" + prepared.RepositoryName +
-		"\nBase branch: " + prepared.BaseBranch +
-		"\nExisting feature branch: " + prepared.Branch +
-		"\nReplanning baseline commit: " + baselineCommitID +
-		fmt.Sprintf("\nExisting draft pull request: #%d (%s)", prepared.PullRequestNumber, prepared.PullRequestURL)
 }
 
 func (starter *RemoteLeadStarter) advanceWaitingRun(ctx context.Context, runID string) error {
@@ -1787,10 +1769,9 @@ func (starter *RemoteLeadStarter) recoverIdlePlanningRun(
 		if !starter.claim(run.ID) {
 			return true, fmt.Errorf("%w: %q", ErrRunAlreadyActive, run.ID)
 		}
-		defer starter.release(run.ID)
-		if err := starter.publishSubmittedPlan(ctx, run.ID, last.Event); err != nil {
-			starter.requirePlanPublicationReview(ctx, run.ID, last.Event, err)
-		}
+		// The reviewer may still need to approve the plan, which is a whole
+		// provider turn, so continue outside recovery.
+		go starter.launchPlanPublication(run.ID, last.Event)
 		return true, nil
 	}
 	if planningRoundLimitReached(run.PlanningRoundLimit, len(messages)) {
@@ -2107,6 +2088,9 @@ func planningTurnNumber(sessionID, attemptID string) (int, bool) {
 // replanning. Recovery uses both coordinates so an old attempt cannot be
 // mistaken for work on the run's current plan.
 func planningAttemptVersionAndTurn(sessionID, attemptID string) (int, int, bool) {
+	if version, turn, _, ok := planningRecoveryVersionAndTurn(sessionID, attemptID); ok {
+		return version, turn, true
+	}
 	value, found := strings.CutPrefix(attemptID, sessionID+":planning:")
 	if !found {
 		return 0, 0, false
@@ -2125,6 +2109,9 @@ func planningAttemptVersionAndTurn(sessionID, attemptID string) (int, int, bool)
 }
 
 func planningStageForAttempt(session execution.Session, attemptID string) planningStage {
+	if _, _, approving := planApprovalVersionAndTurn(session.ID, attemptID); approving && session.Role == worker.RoleReviewer {
+		return planningStagePlanApproval
+	}
 	turn, planned := planningTurnNumber(session.ID, attemptID)
 	switch {
 	case !planned:
@@ -2143,6 +2130,9 @@ func planningStageForAttempt(session execution.Session, attemptID string) planni
 }
 
 func waitKindForAttempt(session execution.Session, attemptID string) execution.RunWaitKind {
+	if _, _, approving := planApprovalVersionAndTurn(session.ID, attemptID); approving {
+		return execution.RunWaitKindPhaseCheckpoint
+	}
 	if _, planned := planningTurnNumber(session.ID, attemptID); planned {
 		return execution.RunWaitKindPhaseCheckpoint
 	}
@@ -2165,6 +2155,9 @@ func waitKindForAttempt(session execution.Session, attemptID string) execution.R
 }
 
 func waitingReasonForAttempt(session execution.Session, attemptID string) string {
+	if _, _, approving := planApprovalVersionAndTurn(session.ID, attemptID); approving && session.Role == worker.RoleReviewer {
+		return planApprovalReason
+	}
 	if _, implementing := implementationTurnNumber(session.ID, attemptID); session.Role == worker.RoleLead && implementing {
 		return implementationReadyReason
 	}
@@ -2194,31 +2187,6 @@ func waitingReasonForAttempt(session execution.Session, attemptID string) string
 		return "The lead has responded in the planning discussion."
 	}
 	return "The lead agent is waiting for the user's response."
-}
-
-func remoteLeadInstructions(goal string) string {
-	return "You are the lead agent helping the user define a software-development goal. " +
-		"This is goal clarification only: do not modify files, run destructive commands, " +
-		"create commits, or begin implementation. Inspect the available project read-only " +
-		"when useful. Restate your understanding, identify important ambiguity or risk, and " +
-		"ask the user the smallest useful set of questions needed before planning. Return action 'ask' " +
-		"while information is missing, put the user-facing question in message, put your current best " +
-		"complete goal draft in goal when one is useful (or an empty string when it would be misleading), " +
-		"and list the unresolved questions in open_questions. Once the goal is ready to accept, return " +
-		"action 'propose', explain that in message, put the complete proposed goal in goal, and return an " +
-		"empty open_questions array. The conversational message is not the proposed goal. " +
-		"The user's current goal is:\n\n" + goal
-}
-
-func remoteLeadReplyInstructions(message string) string {
-	return "Continue the same goal-clarification conversation. This is still clarification only: " +
-		"do not modify files, run destructive commands, create commits, or begin implementation. " +
-		"Use the existing conversation context, incorporate the user's reply, and ask only the " +
-		"next questions genuinely needed before planning. Return action 'ask' with a user-facing message, " +
-		"the current best complete goal draft in goal when useful (otherwise an empty string), and unresolved " +
-		"questions in open_questions. When ready, return action 'propose' with the complete goal, an empty " +
-		"open_questions array, and a separate user-facing message. The conversational message is never the " +
-		"proposed goal. The user replied:\n\n" + message
 }
 
 // StartPlanning resumes the existing lead conversation in the feature's
@@ -2365,7 +2333,7 @@ func (starter *RemoteLeadStarter) planningRequest(
 				Role: workerhttp.RoleLead, WorkspaceID: prepared.ID,
 			},
 			ProviderSessionID: session.ProviderSessionID,
-			Instructions:      planningInstructions(storedFeature, prepared),
+			Instructions:      planningInstructions(storedFeature, prepared, reviewerParticipant(run.AgentProviders)),
 		},
 	}
 	if err := request.request.Validate(request.identity); err != nil {
@@ -2653,29 +2621,13 @@ func (starter *RemoteLeadStarter) reviewerPlanningRequest(
 				ProjectID:      storedFeature.ProjectID, FeatureID: storedFeature.ID,
 				Role: workerhttp.RoleReviewer, WorkspaceID: prepared.ID,
 			},
-			Instructions: reviewerPlanningInstructions(storedFeature, prepared, proposal),
+			Instructions: reviewerPlanningInstructions(storedFeature, prepared, proposal, leadParticipant(run.AgentProviders)),
 		},
 	}
 	if err := request.request.Validate(request.identity); err != nil {
 		return remoteLeadRequest{}, fmt.Errorf("%w: %v", ErrInvalidRunRequest, err)
 	}
 	return request, nil
-}
-
-func reviewerPlanningInstructions(
-	storedFeature feature.Feature,
-	prepared workspace.Workspace,
-	proposal string,
-) string {
-	return "You are the independent reviewer in a collaborative planning discussion. " +
-		"Inspect the managed repository and current Git state before responding. Do not modify files, " +
-		"install dependencies, create commits, push, or begin implementation. Challenge the lead's " +
-		"proposal against the accepted goal and the actual repository. Identify missing steps, unsafe " +
-		"assumptions, scope problems, and weak test coverage. Finish by clearly saying whether you accept " +
-		"the proposal as written or what must change. Durable repository and workflow state are " +
-		"authoritative over the supplied proposal.\n\nAccepted goal:\n" + storedFeature.AcceptedGoal +
-		"\n\n" + planningWorkspaceFacts(prepared) +
-		"\n\nLead's exact proposal:\n" + proposal
 }
 
 // StartPlanningRound begins the autonomous part of the planning discussion.
@@ -3048,7 +3000,7 @@ func (starter *RemoteLeadStarter) acceptanceTestsRequest(
 				Role: workerhttp.RoleReviewer, WorkspaceID: prepared.ID,
 			},
 			ProviderSessionID: reviewer.ProviderSessionID,
-			Instructions:      acceptanceTestsInstructions(storedFeature, prepared, plan),
+			Instructions:      acceptanceTestsInstructions(prepared),
 			OutputContract:    workerhttp.OutputContractAcceptanceTests,
 		},
 	}
@@ -3056,21 +3008,6 @@ func (starter *RemoteLeadStarter) acceptanceTestsRequest(
 		return remoteLeadRequest{}, fmt.Errorf("%w: %v", ErrInvalidRunRequest, err)
 	}
 	return request, nil
-}
-
-func acceptanceTestsInstructions(storedFeature feature.Feature, prepared workspace.Workspace, plan string) string {
-	return "Continue the same provider conversation as the independent reviewer. Work only from the accepted goal, " +
-		"agreed plan, and the clean planning baseline already present in your private checkout. Do not fetch, inspect, " +
-		"or query the lead's implementation or pull-request head. Write the smallest useful executable acceptance tests " +
-		"you would have written before implementation, and do not alter production code. Run the tests against the " +
-		"baseline when practical; they are expected to expose missing behavior. Commit only the acceptance-test changes " +
-		"locally and do not push any branch or commit. Return action 'authored', a concise summary, the exact local test " +
-		"commit ID, and ordered stable test IDs and user-facing titles. If independent executable acceptance tests are " +
-		"not meaningful or cannot safely be authored, return action 'blocked' with no commit or tests.\n\n" +
-		"Current workflow phase: independent acceptance test authoring\nAccepted goal:\n" + storedFeature.AcceptedGoal +
-		"\n\nAgreed implementation plan:\n" + plan +
-		"\n\nRepository: " + prepared.RepositoryOwner + "/" + prepared.RepositoryName +
-		"\nBase branch: " + prepared.BaseBranch + "\nPrivate checkout baseline commit: " + prepared.BaseCommitID
 }
 
 func (starter *RemoteLeadStarter) retryImplementationPublication(
@@ -3180,7 +3117,7 @@ func (starter *RemoteLeadStarter) implementationRequest(
 			},
 			ProviderSessionID: lead.ProviderSessionID,
 			Instructions: implementationInstructions(
-				storedFeature, prepared, plan, attemptID,
+				prepared, attemptID,
 			) + previewContext,
 			OutputContract: workerhttp.OutputContractImplementationLead,
 		},
@@ -3210,101 +3147,9 @@ func (starter *RemoteLeadStarter) previewRunInstructions(ctx context.Context, pr
 	return "\n\n" + conventions + "\nConfigured preview open target JSON:\n" + string(encoded), nil
 }
 
-func implementationInstructions(
-	storedFeature feature.Feature,
-	prepared workspace.Workspace,
-	plan string,
-	attemptID string,
-) string {
-	marker := implementationPublicationMarker(attemptID)
-	return "Continue the same provider conversation as the lead and begin implementation of the " +
-		"agreed plan. Before modifying anything, inspect the current working directory, Git HEAD, " +
-		"branch, status, and diff, and reconcile them with the durable facts below. Preserve any " +
-		"unexpected user work: do not reset, clean, overwrite, or silently discard it. If the state " +
-		"is missing, contradictory, or ambiguous, stop and explain the problem without making changes. " +
-		"Otherwise implement the accepted goal and agreed plan and run the relevant available tests. " +
-		implementationToolchainInstructions +
-		implementationChecklistInstructions +
-		"When you decide the implementation is ready for independent review, commit all intended work " +
-		"on the assigned feature branch, push that exact HEAD to the 'commitarium' remote, and post one " +
-		"Forgejo pull-request comment using the worker-provided Forgejo URL and token-file environment " +
-		"variables. Never print, log, commit, or include the token in a URL. The comment must be exactly " +
-		"the marker below, a blank line, the heading " +
-		"'## Implementation summary', another blank line, and your concise summary. Check existing PR " +
-		"comments for the marker before posting so a retry never duplicates the audit entry. Do not " +
-		"change the PR body or merge the PR. Then return action 'published' with the same summary, exact " +
-		"lowercase Git HEAD in commit_id, and the PR number. If any step is unsafe or cannot be confirmed, " +
-		"return action 'blocked', explain why in summary, leave commit_id empty, and still return the known " +
-		"PR number. Durable " +
-		"repository and coordinator state are authoritative over conversational memory.\n\n" +
-		"Current workflow phase: implementing\nAccepted goal:\n" + storedFeature.AcceptedGoal +
-		"\n\nAgreed implementation plan:\n" + plan +
-		"\n\nRepository: " + prepared.RepositoryOwner + "/" + prepared.RepositoryName +
-		"\nBase branch: " + prepared.BaseBranch + "\nFeature branch: " + prepared.Branch +
-		"\nPlanning baseline commit: " + prepared.BaseCommitID +
-		fmt.Sprintf("\nDraft pull request: #%d (%s)", prepared.PullRequestNumber, prepared.PullRequestURL) +
-		"\nImplementation audit marker:\n" + marker
-}
-
-func implementationContinuationInstructions(
-	storedFeature feature.Feature,
-	prepared workspace.Workspace,
-	plan string,
-	userMessage string,
-	attemptID string,
-) string {
-	marker := implementationPublicationMarker(attemptID)
-	return "Continue the same provider conversation and implementation work after the user's " +
-		"guidance below. Inspect before modifying anything: reconcile the current working directory, " +
-		"Git HEAD, branch, status, and diff with the durable facts below and with the work already " +
-		"completed in this conversation. Preserve all existing changes, including manual user edits; " +
-		"do not reset, clean, overwrite, or repeat completed work. If partial work is ambiguous, facts " +
-		"conflict, an external side effect may or may not have happened, or the guidance would change " +
-		"the accepted goal or agreed plan, stop and explain the problem without making further changes. " +
-		"Otherwise apply the user's guidance within the accepted plan, continue the implementation, and " +
-		"run the relevant available tests. " + implementationToolchainInstructions +
-		implementationChecklistInstructions +
-		"When you decide the result is ready for independent review, " +
-		"commit the intended work, push the exact HEAD to the 'commitarium' remote, and post one Forgejo " +
-		"PR comment using the worker-provided URL and token-file environment variables. Never print, log, " +
-		"commit, or include the token in a URL. The comment must contain exactly the audit " +
-		"marker below, a blank line, '## Implementation summary', another blank " +
-		"line, and your concise summary. Check for the marker before posting so retries do not duplicate " +
-		"it. Do not change the PR body or merge. Return action 'published' with that same summary, exact " +
-		"lowercase HEAD in commit_id, and the PR number. If publication is unsafe or cannot be confirmed, " +
-		"return action 'blocked' with commit_id empty and explain the blocker. Durable repository, pull-request, and " +
-		"coordinator state are authoritative over conversational memory.\n\n" +
-		"User's continuation guidance:\n" + userMessage +
-		"\n\nCurrent workflow phase: implementing\nAccepted goal:\n" + storedFeature.AcceptedGoal +
-		"\n\nAgreed implementation plan:\n" + plan +
-		"\n\nRepository: " + prepared.RepositoryOwner + "/" + prepared.RepositoryName +
-		"\nBase branch: " + prepared.BaseBranch + "\nFeature branch: " + prepared.Branch +
-		"\nPlanning baseline commit: " + prepared.BaseCommitID +
-		fmt.Sprintf("\nDraft pull request: #%d (%s)", prepared.PullRequestNumber, prepared.PullRequestURL) +
-		"\nImplementation audit marker:\n" + marker
-}
-
 func implementationPublicationMarker(attemptID string) string {
 	return workspace.ImplementationPublicationInitial.Marker(attemptID)
 }
-
-const implementationToolchainInstructions = "If an additional supported language runtime is required, " +
-	"run 'commitarium-toolchain require <tool>@<exact-version>' with a generous timeout and wait for it " +
-	"to finish; its shim becomes available on PATH immediately. If an operating-system package is missing, " +
-	"do not run apt. Return action 'environment_required', leave commit_id empty and pull_request_number zero, " +
-	"and provide only the Debian package names in system_packages plus a concise environment_reason. Commitarium " +
-	"will ask the user and provision the same package set for lead, reviewer, and isolated validation. Do not use " +
-	"mise use, floating versions such as latest, or repository mise configuration to provision tools. "
-
-const implementationChecklistInstructions = "The coordinator owns a structured commit-sized checklist. " +
-	"Run 'commitarium-artifact plan show' before changing files. Work through its steps in order without " +
-	"waiting for an intermediate review. Immediately before beginning a pending step run " +
-	"'commitarium-artifact plan start <step-id>'. Implement only that cohesive slice, run its listed " +
-	"verification, and commit it with the planned commit subject. Then run " +
-	"'commitarium-artifact plan complete <step-id> <lowercase-commit-id>' before continuing. Resume from " +
-	"the statuses already recorded after an interruption. Do not amend, squash, or combine planned commits, " +
-	"and do not create or commit a local checklist file. The final published HEAD must be the commit recorded " +
-	"for the final checklist step. "
 
 func (starter *RemoteLeadStarter) startLeadResponse(
 	ctx context.Context,
@@ -3361,7 +3206,7 @@ func (starter *RemoteLeadStarter) startLeadResponse(
 				Role: workerhttp.RoleLead, WorkspaceID: prepared.ID,
 			},
 			ProviderSessionID: lead.ProviderSessionID,
-			Instructions:      leadPlanningResponseInstructions(storedFeature, prepared, messages[len(messages)-1].Event.Text),
+			Instructions:      leadPlanningResponseInstructions(messages[len(messages)-1].Event.Text, reviewerParticipant(run.AgentProviders)),
 			OutputContract:    workerhttp.OutputContractPlanningLead,
 		},
 	}
@@ -3381,29 +3226,6 @@ func (starter *RemoteLeadStarter) startLeadResponse(
 		"The lead is considering the reviewer's response.",
 	)
 	return request, admitted, err
-}
-
-func leadPlanningResponseInstructions(
-	storedFeature feature.Feature,
-	prepared workspace.Workspace,
-	reviewerResponse string,
-) string {
-	return "Continue the same planning conversation as the lead. The independent reviewer has " +
-		"responded to your proposal. Inspect the managed repository and current Git state again before " +
-		"answering. Do not modify files, install dependencies, commit, push, or begin implementation. " +
-		"Address every material concern. If useful work or disagreement remains, respond to the reviewer " +
-		"with action 'respond' and put your natural Markdown reply in content. If, and only if, you conclude " +
-		"that both you and the reviewer genuinely agree and the plan completely satisfies the accepted " +
-		"goal, use action 'submit_plan' and put the complete final implementation plan in content. Also " +
-		"supply plan_title, plan_subtitle, and ordered steps. Each step must be one cohesive commit and " +
-		"must have a stable lowercase ID, title, subtitle, detailed Markdown instructions, concrete " +
-		"verification checks, and an imperative commit_subject. When action is 'respond', leave " +
-		"plan_title and plan_subtitle empty and steps empty. " +
-		"Do not submit merely to end the discussion. If you disagree, explain why with repository evidence. " +
-		"Durable repository and workflow state are authoritative over conversational memory.\n\n" +
-		"Accepted goal:\n" + storedFeature.AcceptedGoal +
-		"\n\n" + planningWorkspaceFacts(prepared) +
-		"\n\nReviewer's exact response:\n" + reviewerResponse
 }
 
 func (starter *RemoteLeadStarter) startReviewerResponse(
@@ -3482,30 +3304,13 @@ func (starter *RemoteLeadStarter) reviewerResponseRequest(
 				Role: workerhttp.RoleReviewer, WorkspaceID: prepared.ID,
 			},
 			ProviderSessionID: reviewer.ProviderSessionID,
-			Instructions:      reviewerResponseInstructions(storedFeature, prepared, leadResponse),
+			Instructions:      reviewerResponseInstructions(leadResponse, leadParticipant(run.AgentProviders)),
 		},
 	}
 	if err := request.request.Validate(request.identity); err != nil {
 		return remoteLeadRequest{}, fmt.Errorf("%w: %v", ErrInvalidRunRequest, err)
 	}
 	return request, nil
-}
-
-func reviewerResponseInstructions(
-	storedFeature feature.Feature,
-	prepared workspace.Workspace,
-	leadResponse string,
-) string {
-	return "Continue the same planning conversation as the independent reviewer. Inspect the managed " +
-		"repository and current Git state again. Do not modify files, install dependencies, commit, push, " +
-		"or begin implementation. Evaluate whether the lead's response and current plan satisfy the accepted " +
-		"goal and resolve every material concern. Respond naturally: clearly explain remaining concerns, or " +
-		"clearly explain why you are satisfied. Do not use a special approval marker; the lead owns the later " +
-		"structured plan-submission action after considering your response. " +
-		"Durable repository and workflow state are authoritative over conversational memory.\n\n" +
-		"Accepted goal:\n" + storedFeature.AcceptedGoal +
-		"\n\n" + planningWorkspaceFacts(prepared) +
-		"\n\nLead's exact latest response:\n" + leadResponse
 }
 
 func planningRoleMessageCount(messages []execution.PlanningMessage, role worker.Role) int {
@@ -3542,27 +3347,6 @@ func (starter *RemoteLeadStarter) messageForAttempt(
 		return execution.Event{}, errors.New("provider turn has no final message")
 	}
 	return message, nil
-}
-
-func planningInstructions(storedFeature feature.Feature, prepared workspace.Workspace) string {
-	return "The goal is now accepted and planning has begun. Continue as the same lead agent. " +
-		"First inspect the managed repository and current Git state. Do not modify files, install " +
-		"dependencies, create commits, push, or begin implementation. Produce a concrete proposed " +
-		"implementation plan for a separate reviewer agent to challenge. Break it into small ordered " +
-		"slices where each slice should produce one cohesive commit, with a short title, subtitle, " +
-		"implementation details, verification, and intended commit subject. Call out assumptions, risks, " +
-		"likely files or components, and how the result should be tested. Durable repository and " +
-		"workflow state are authoritative over conversational memory.\n\nAccepted goal:\n" +
-		storedFeature.AcceptedGoal + "\n\n" + planningWorkspaceFacts(prepared)
-}
-
-func planningWorkspaceFacts(prepared workspace.Workspace) string {
-	return "Repository: " + prepared.RepositoryOwner + "/" + prepared.RepositoryName +
-		"\nBase branch: " + prepared.BaseBranch +
-		"\nBase commit: " + prepared.BaseCommitID +
-		"\nReserved feature branch name: " + prepared.Branch +
-		"\nThe coordinator creates the feature branch and draft pull request only after " +
-		"the final agreed plan is submitted. Do not require either resource during planning."
 }
 
 func (starter *RemoteLeadStarter) AcceptGoal(
@@ -3774,8 +3558,7 @@ func (starter *RemoteLeadStarter) implementationContinuationRequest(
 	if !published {
 		return remoteLeadRequest{}, ErrCommandNotAllowed
 	}
-	currentFeature, err := starter.featureForCurrentPlan(ctx, run, storedFeature)
-	if err != nil {
+	if _, err := starter.featureForCurrentPlan(ctx, run, storedFeature); err != nil {
 		return remoteLeadRequest{}, err
 	}
 	var prepared workspace.Workspace
@@ -3798,10 +3581,6 @@ func (starter *RemoteLeadStarter) implementationContinuationRequest(
 		return remoteLeadRequest{}, fmt.Errorf("verify implementation continuation workspace: %w", err)
 	}
 	attemptID := implementationAttemptForVersion(lead.ID, run.PlanVersion, turn+1)
-	previewContext, err := starter.previewRunInstructions(ctx, storedFeature.ProjectID)
-	if err != nil {
-		return remoteLeadRequest{}, err
-	}
 	request := remoteLeadRequest{
 		runID: run.ID, commandID: command.ID, agentName: "lead agent",
 		waitingReason: implementationReadyReason,
@@ -3820,8 +3599,8 @@ func (starter *RemoteLeadStarter) implementationContinuationRequest(
 			},
 			ProviderSessionID: lead.ProviderSessionID,
 			Instructions: implementationContinuationInstructions(
-				currentFeature, prepared, plan.Text, command.Message, attemptID,
-			) + previewContext,
+				prepared, command.Message, attemptID,
+			),
 			OutputContract: workerhttp.OutputContractImplementationLead,
 		},
 	}
@@ -4059,7 +3838,7 @@ func (starter *RemoteLeadStarter) continueFailedAttempt(
 	if !request.allowRecoveryContinuation {
 		return false, nil
 	}
-	if request.request.OutputContract == "" {
+	if request.request.OutputContract == "" && request.planningStage == planningStageNone {
 		return false, errors.New("the failed turn has no recoverable output contract")
 	}
 	if attempt.State == workerhttp.AttemptStateIndeterminate {
@@ -4161,15 +3940,55 @@ func modelForSession(run execution.Run, role worker.Role) string {
 }
 
 func recoverySuccessorAttemptID(sessionID, attemptID string) (string, error) {
-	if version, turn, ok := planningAttemptVersionAndTurn(sessionID, attemptID); ok {
-		return planningAttemptForVersion(sessionID, version, turn+1), nil
+	// Planning turns are numbered by counting each agent's linked messages,
+	// so a successor takes a separate ID space instead of the next turn.
+	if version, turn, successor, ok := planningRecoveryVersionAndTurn(sessionID, attemptID); ok {
+		return planningRecoveryAttemptID(sessionID, version, turn, successor+1), nil
 	}
-	for _, kind := range []string{"implementation", "acceptance", "review", "correction", "readiness"} {
+	if version, turn, ok := planningAttemptVersionAndTurn(sessionID, attemptID); ok {
+		return planningRecoveryAttemptID(sessionID, version, turn, 1), nil
+	}
+	for _, kind := range []string{"implementation", "acceptance", "review", "correction", "readiness", "approval"} {
 		if version, turn, ok := workflowAttemptVersionAndTurn(sessionID, kind, attemptID); ok {
 			return workflowAttemptForVersion(sessionID, kind, version, turn+1), nil
 		}
 	}
 	return "", errors.New("failed turn does not have a recognized recovery attempt identity")
+}
+
+// planningRecoveryAttemptID names the successor of a failed planning turn.
+// It keeps the logical turn so stage detection still treats it as that turn.
+func planningRecoveryAttemptID(sessionID string, version, turn, successor int) string {
+	if version == 1 {
+		return sessionID + ":planning-recovery:" + strconv.Itoa(turn) + ":" + strconv.Itoa(successor)
+	}
+	return sessionID + ":planning-recovery:v" + strconv.Itoa(version) + ":" +
+		strconv.Itoa(turn) + ":" + strconv.Itoa(successor)
+}
+
+func planningRecoveryVersionAndTurn(sessionID, attemptID string) (int, int, int, bool) {
+	value, found := strings.CutPrefix(attemptID, sessionID+":planning-recovery:")
+	if !found {
+		return 0, 0, 0, false
+	}
+	parts := strings.Split(value, ":")
+	version := 1
+	if len(parts) == 3 && strings.HasPrefix(parts[0], "v") {
+		parsed, err := strconv.Atoi(strings.TrimPrefix(parts[0], "v"))
+		if err != nil || parsed < 2 {
+			return 0, 0, 0, false
+		}
+		version, parts = parsed, parts[1:]
+	}
+	if len(parts) != 2 {
+		return 0, 0, 0, false
+	}
+	turn, turnErr := strconv.Atoi(parts[0])
+	successor, successorErr := strconv.Atoi(parts[1])
+	if turnErr != nil || successorErr != nil || turn < 1 || successor < 1 {
+		return 0, 0, 0, false
+	}
+	return version, turn, successor, true
 }
 
 func (starter *RemoteLeadStarter) recoveryBriefing(
@@ -4207,8 +4026,8 @@ func (starter *RemoteLeadStarter) recoveryBriefing(
 		cause = attempt.Result.Error.Message
 	}
 	briefing := fmt.Sprintf(
-		"Recovery continuation. Complete the same logical %s turn and return the required structured result. Do not redo durable work that is already correct. Inspect the existing checkout and commits first.\n\nGoal:\n%s\n\nAgreed plan:\n%s\n\nPrior attempt: %s (events recorded through %d)\nWhy it needs continuation: %s\n\nWorkspace: %s, branch %s, base commit %s, Forgejo PR #%d.\n\nRecent durable activity:\n%s",
-		session.Role, storedFeature.AcceptedGoal, plan, checkpoint.AttemptID,
+		"Recovery continuation. Complete the same logical %s turn and %s Do not redo durable work that is already correct. Inspect the existing checkout and commits first.\n\nGoal:\n%s\n\nAgreed plan:\n%s\n\nPrior attempt: %s (events recorded through %d)\nWhy it needs continuation: %s\n\nWorkspace: %s, branch %s, base commit %s, Forgejo PR #%d.\n\nRecent durable activity:\n%s",
+		session.Role, recoveryDeliverable(session, attempt), storedFeature.AcceptedGoal, plan, checkpoint.AttemptID,
 		checkpoint.LastEventSequence, cause, prepared.ID, prepared.Branch,
 		prepared.BaseCommitID, prepared.PullRequestNumber, history.String(),
 	)
@@ -4219,30 +4038,13 @@ func (starter *RemoteLeadStarter) recoveryBriefing(
 	return briefing, nil
 }
 
-func recoveryPublicationInstructions(sessionID, attemptID string) string {
-	marker := ""
-	heading := ""
-	if _, ok := implementationTurnNumber(sessionID, attemptID); ok {
-		marker = implementationPublicationMarker(attemptID)
-		heading = "Implementation summary"
-	} else if _, ok := implementationCorrectionTurnNumber(sessionID, attemptID); ok {
-		marker = implementationReviewResponseMarker(attemptID)
-		heading = "Review response"
-	} else if _, ok := implementationReadinessTurnNumber(sessionID, attemptID); ok {
-		marker = workspace.ImplementationPublicationMergeReadiness.Marker(attemptID)
-		heading = "Merge readiness"
-	} else if _, ok := implementationReviewTurnNumber(sessionID, attemptID); ok {
-		marker = implementationReviewMarker(attemptID)
-		heading = "Review"
+// recoveryDeliverable says what the successor must return. Conversational
+// planning turns have no structured result; their final reply is the result.
+func recoveryDeliverable(session execution.Session, attempt workerhttp.Attempt) string {
+	if _, _, ok := planningAttemptVersionAndTurn(session.ID, attempt.AttemptID); ok && session.Role == worker.RoleReviewer {
+		return "give your complete final reply for that turn again, as your final message; your earlier reply was lost."
 	}
-	if marker == "" {
-		return ""
-	}
-	return "\n\nRecovery publication identity:\n" +
-		"This recovery successor has a new durable attempt identity. If you publish or verify " +
-		"external work, use the exact marker below rather than any marker from an earlier attempt. " +
-		"Check for this exact marker before writing so a retry does not duplicate it.\n" +
-		marker + "\n\nRequired heading after the marker: ## " + heading
+	return "return the required structured result."
 }
 
 func (starter *RemoteLeadStarter) launchRecoverySuccessor(
@@ -4406,6 +4208,26 @@ func (starter *RemoteLeadStarter) observe(
 	starter.finish(ctx, request, result.Attempt)
 }
 
+// recordUsage is accounting only: a failure is reported but never blocks the
+// workflow.
+func (starter *RemoteLeadStarter) recordUsage(
+	ctx context.Context,
+	reference workerhttp.AttemptReference,
+	usage *workerhttp.TokenUsage,
+) {
+	if starter.usage == nil || usage == nil {
+		return
+	}
+	err := starter.usage.RecordAttemptUsage(ctx, execution.AttemptUsage{
+		SessionID: reference.SessionID, AttemptID: reference.AttemptID,
+		Usage:      execution.TokenUsage(*usage),
+		RecordedAt: time.Now().UTC(),
+	})
+	if err != nil {
+		starter.reportError(fmt.Errorf("record token usage for attempt %q: %w", reference.AttemptID, err))
+	}
+}
+
 func (starter *RemoteLeadStarter) captureProviderSession(
 	ctx context.Context,
 	sessionID string,
@@ -4439,6 +4261,7 @@ func (starter *RemoteLeadStarter) finish(
 		starter.requireReview(ctx, request, errors.New("terminal worker attempt has no result"))
 		return
 	}
+	starter.recordUsage(ctx, request.identity.AttemptReference, attempt.Result.Usage)
 	if err := starter.captureProviderSession(ctx, request.identity.SessionID, attempt); err != nil {
 		starter.requireReview(ctx, request, err)
 		return
@@ -4483,7 +4306,7 @@ func (starter *RemoteLeadStarter) finish(
 			return
 		}
 		var planningMessage execution.Event
-		if request.planningStage != planningStageNone {
+		if request.planningStage != planningStageNone && request.planningStage != planningStagePlanApproval {
 			planningMessage, err = starter.messageForAttempt(
 				ctx, session.ID, request.identity.AttemptID,
 			)
@@ -4541,6 +4364,10 @@ func (starter *RemoteLeadStarter) finish(
 		if err != nil {
 			break
 		}
+		if request.planningStage == planningStagePlanApproval {
+			starter.continueApprovedPlanning(ctx, request)
+			return
+		}
 		if request.request.OutputContract == workerhttp.OutputContractAcceptanceTests {
 			if attempt.Result.Disposition == workerhttp.DispositionInputRequired {
 				err = starter.handleInputRequired(ctx, request, *attempt.Result)
@@ -4575,11 +4402,11 @@ func (starter *RemoteLeadStarter) finish(
 						return
 					}
 				}
-				if publishErr := starter.publishSubmittedPlan(
+				if continueErr := starter.continueSubmittedPlan(
 					ctx, request.runID, planningMessage,
-				); publishErr != nil {
+				); continueErr != nil {
 					starter.requirePlanPublicationReview(
-						ctx, request.runID, planningMessage, publishErr,
+						ctx, request.runID, planningMessage, continueErr,
 					)
 				}
 				return
@@ -4962,6 +4789,17 @@ func (starter *RemoteLeadStarter) durableAcceptanceTests(
 	return tests, true, nil
 }
 
+// previousReviewedCommit returns the commit the reviewer's previous review
+// attempt approved or rejected. An empty result makes the next review a full
+// one, which is always safe.
+func (starter *RemoteLeadStarter) previousReviewedCommit(ctx context.Context, sessionID, attemptID string) string {
+	attempt, err := starter.worker.GetAttempt(ctx, workerhttp.AttemptReference{SessionID: sessionID, AttemptID: attemptID})
+	if err != nil || attempt.Result == nil || attempt.Result.Review == nil {
+		return ""
+	}
+	return attempt.Result.Review.CommitID
+}
+
 func (starter *RemoteLeadStarter) startImplementationReview(
 	ctx context.Context,
 	run execution.Run,
@@ -5025,11 +4863,39 @@ func (starter *RemoteLeadStarter) startImplementationReview(
 			return remoteLeadRequest{}, false, decodeErr
 		}
 		acceptanceTestCommitID = tests.TestCommitID
+		// Each review round runs the tests against the corrected commit, so
+		// the checklist follows that commit and starts pending again.
+		if round > 1 && tests.ImplementationCommitID != publication.CommitID {
+			tests.ImplementationCommitID = publication.CommitID
+			for index := range tests.Tests {
+				tests.Tests[index].Status = featureartifact.AcceptanceTestPending
+				tests.Tests[index].Note = ""
+			}
+			acceptanceArtifacts, ok := starter.artifacts.(remoteLeadAcceptanceArtifactService)
+			if !ok {
+				return remoteLeadRequest{}, false, errors.New("acceptance-test artifact service is unavailable")
+			}
+			if _, pinErr := acceptanceArtifacts.UpsertAcceptanceTests(
+				ctx, run.FeatureID, tests,
+				workflow.Actor{Kind: workflow.ActorKindCoordinator, ID: coordinatorActorID},
+				implementationReviewAttemptForVersion(reviewer.ID, run.PlanVersion, round)+":pin-acceptance-implementation",
+			); pinErr != nil {
+				return remoteLeadRequest{}, false, pinErr
+			}
+		}
 	}
 	attemptID := implementationReviewAttemptForVersion(reviewer.ID, run.PlanVersion, round)
-	previewContext, err := starter.previewRunInstructions(ctx, storedFeature.ProjectID)
-	if err != nil {
-		return remoteLeadRequest{}, false, err
+	// The first review reads the whole feature and the preview rules. Later
+	// rounds review only the correction since the commit reviewed last.
+	previewContext := ""
+	previousReviewedCommitID := ""
+	if round == 1 {
+		previewContext, err = starter.previewRunInstructions(ctx, storedFeature.ProjectID)
+		if err != nil {
+			return remoteLeadRequest{}, false, err
+		}
+	} else {
+		previousReviewedCommitID = starter.previousReviewedCommit(ctx, reviewer.ID, checkpoint.AttemptID)
 	}
 	request := remoteLeadRequest{
 		runID: run.ID, agentName: "reviewer", waitingReason: implementationReviewRunningReason,
@@ -5046,8 +4912,8 @@ func (starter *RemoteLeadStarter) startImplementationReview(
 			},
 			ProviderSessionID: reviewer.ProviderSessionID,
 			Instructions: implementationReviewInstructions(
-				storedFeature, prepared, plan.Text, leadSummary,
-				publication.CommitID, attemptID, acceptanceTestCommitID,
+				prepared, leadSummary,
+				publication.CommitID, attemptID, previousReviewedCommitID, acceptanceTestCommitID,
 			) + previewContext,
 			OutputContract: workerhttp.OutputContractImplementationReview,
 		},
@@ -5069,52 +4935,6 @@ func (starter *RemoteLeadStarter) startImplementationReview(
 		implementationReviewRunningReason,
 	)
 	return request, admitted, err
-}
-
-func implementationReviewInstructions(
-	storedFeature feature.Feature,
-	prepared workspace.Workspace,
-	plan string,
-	implementationSummary string,
-	commitID string,
-	attemptID string,
-	acceptanceTestCommitIDs ...string,
-) string {
-	marker := implementationReviewMarker(attemptID)
-	acceptanceTestCommitID := ""
-	if len(acceptanceTestCommitIDs) > 0 {
-		acceptanceTestCommitID = acceptanceTestCommitIDs[0]
-	}
-	acceptanceInstructions := ""
-	workspaceRules := "Reset this disposable reviewer checkout to the planning baseline, fetch the exact implementation commit below, and check out that exact commit detached. Then do not modify tracked files, commit, push, change the pull-request body, or merge. "
-	if acceptanceTestCommitID != "" {
-		workspaceRules = "Reset this disposable private checkout to the exact private acceptance-test commit below, discarding only any prior local review merge. Fetch the exact implementation commit below without inspecting other lead history, then merge that exact commit locally into your private test commit. Resolve only mechanical merge conflicts; if a conflict changes test meaning, mark the affected test not applicable with a reason instead of silently rewriting it. Never push your private test commit, the local merge, or any test changes. Do not change the pull-request body or merge the pull request. "
-		acceptanceInstructions = "Run every pending private acceptance test against that local combination. Before each pending test, run `commitarium-artifact acceptance start <test-id>`; then record `acceptance pass`, `acceptance fail <test-id> <note>`, or `acceptance not-applicable <test-id> <note>` as appropriate. A failed acceptance test is review evidence, not automatically proof that production code is wrong: inspect whether the implementation, the test, or the shared understanding is incorrect. Private acceptance test commit: " + acceptanceTestCommitID + "\n"
-	}
-	return "Continue the same provider conversation as the independent reviewer. The lead has now " +
-		"published an implementation for review. Inspect before judging: confirm the current branch, " +
-		"Git HEAD, status, diff from the planning baseline, and the exact pull-request head. Review only " +
-		"the exact commit below against the accepted goal and agreed plan, and run relevant tests " +
-		"when practical. " + workspaceRules + acceptanceInstructions +
-		"If you find material problems, submit one formal Forgejo review with event REQUEST_CHANGES. If the " +
-		"implementation is correct and sufficiently tested, tell the lead that you think the exact revision is " +
-		"ready to merge and submit one review with event APPROVED. Use the worker-provided " +
-		"Forgejo URL and token-file environment variables; never print, log, commit, or put the token in a URL. " +
-		"Set commit_id on the review to the exact commit below. The review body must begin with exactly the marker below, " +
-		"a blank line, '## Review', and another blank line, followed by your structured findings or approval. " +
-		"Check existing reviews for the marker before posting so recovery never duplicates it. Return action " +
-		"'approved' or 'changes_requested' with a concise session summary, exact commit ID, PR number, and returned review ID. " +
-		"If state is contradictory, the exact revision is unavailable, or you cannot safely establish whether a " +
-		"review was posted, return action 'blocked', leave commit_id empty and review_id zero, and explain why. " +
-		"Durable Git, Forgejo, and coordinator state are authoritative over conversational memory.\n\n" +
-		"Current workflow phase: reviewing\nAccepted goal:\n" + storedFeature.AcceptedGoal +
-		"\n\nAgreed implementation plan:\n" + plan +
-		"\n\nLead's latest implementation or readiness summary:\n" + implementationSummary +
-		"\n\nRepository: " + prepared.RepositoryOwner + "/" + prepared.RepositoryName +
-		"\nBase branch: " + prepared.BaseBranch + "\nFeature branch: " + prepared.Branch +
-		"\nPlanning baseline commit: " + prepared.BaseCommitID + "\nExact implementation commit: " + commitID +
-		fmt.Sprintf("\nDraft pull request: #%d (%s)", prepared.PullRequestNumber, prepared.PullRequestURL) +
-		"\nReview audit marker:\n" + marker
 }
 
 func implementationReviewMarker(attemptID string) string {
@@ -5184,10 +5004,6 @@ func (starter *RemoteLeadStarter) startImplementationCorrection(
 		return remoteLeadRequest{}, false, err
 	}
 	attemptID := implementationCorrectionAttemptForVersion(lead.ID, run.PlanVersion, round)
-	previewContext, err := starter.previewRunInstructions(ctx, storedFeature.ProjectID)
-	if err != nil {
-		return remoteLeadRequest{}, false, err
-	}
 	request := remoteLeadRequest{
 		runID: run.ID, agentName: "lead agent", waitingReason: implementationCorrectionRunningReason,
 		identity: workerhttp.MutationIdentity{
@@ -5203,9 +5019,9 @@ func (starter *RemoteLeadStarter) startImplementationCorrection(
 			},
 			ProviderSessionID: lead.ProviderSessionID,
 			Instructions: implementationCorrectionInstructions(
-				storedFeature, prepared, plan.Text, review.Summary,
+				prepared, review.Summary,
 				review.Review.CommitID, review.Review.ReviewID, attemptID,
-			) + previewContext,
+			),
 			OutputContract: workerhttp.OutputContractImplementationLead,
 		},
 	}
@@ -5217,43 +5033,6 @@ func (starter *RemoteLeadStarter) startImplementationCorrection(
 		implementationCorrectionRunningReason,
 	)
 	return request, admitted, err
-}
-
-func implementationCorrectionInstructions(
-	storedFeature feature.Feature,
-	prepared workspace.Workspace,
-	plan string,
-	reviewSummary string,
-	reviewedCommitID string,
-	reviewID int64,
-	attemptID string,
-) string {
-	marker := implementationReviewResponseMarker(attemptID)
-	return "Continue the same provider conversation as the lead. The independent reviewer requested " +
-		"changes to the exact commit below. Inspect before modifying anything: reconcile the working " +
-		"directory, branch, Git HEAD, status, diff, pull-request head, and existing review with these durable " +
-		"facts. Do not repeat completed work or discard unexpected user changes. Address every material review " +
-		"finding while preserving the accepted goal and agreed plan, then run the relevant tests. " +
-		implementationToolchainInstructions + "When the " +
-		"correction is ready, create a new commit descended from the reviewed commit, push that exact HEAD to " +
-		"the 'commitarium' remote, and post one pull-request comment using the worker-provided Forgejo URL and " +
-		"token-file environment variables. Never print, log, commit, or include the token in a URL. The comment " +
-		"must be exactly the marker below, a blank line, '## Review response', another blank line, and a concise " +
-		"structured account of how the findings were addressed and tested. Check existing comments for the marker " +
-		"before posting so recovery never duplicates it. Do not change the PR body or merge. Return action " +
-		"'published' with that same summary, the new lowercase Git HEAD in commit_id, and the PR number. If state " +
-		"is contradictory, the prior commit or review is unavailable, work is ambiguous, or publication cannot " +
-		"be confirmed, return action 'blocked', leave commit_id empty, and explain why. Durable Git, Forgejo, and " +
-		"coordinator state are authoritative over conversational memory.\n\n" +
-		"Current workflow phase: reviewing (corrective implementation)\nAccepted goal:\n" + storedFeature.AcceptedGoal +
-		"\n\nAgreed implementation plan:\n" + plan +
-		"\n\nVerified reviewer findings:\n" + reviewSummary +
-		"\n\nRepository: " + prepared.RepositoryOwner + "/" + prepared.RepositoryName +
-		"\nBase branch: " + prepared.BaseBranch + "\nFeature branch: " + prepared.Branch +
-		"\nPlanning baseline commit: " + prepared.BaseCommitID +
-		"\nExact reviewed commit: " + reviewedCommitID +
-		fmt.Sprintf("\nFormal review: #%d\nDraft pull request: #%d (%s)", reviewID, prepared.PullRequestNumber, prepared.PullRequestURL) +
-		"\nReview-response audit marker:\n" + marker
 }
 
 func implementationReviewResponseMarker(attemptID string) string {
@@ -5598,7 +5377,7 @@ func (starter *RemoteLeadStarter) startImplementationReadiness(
 			},
 			ProviderSessionID: lead.ProviderSessionID,
 			Instructions: implementationReadinessInstructions(
-				storedFeature, prepared, plan.Text, review.Summary,
+				prepared, review.Summary,
 				review.Review.CommitID, review.Review.ReviewID, attemptID,
 			),
 			OutputContract: workerhttp.OutputContractImplementationReadiness,
@@ -5612,41 +5391,6 @@ func (starter *RemoteLeadStarter) startImplementationReadiness(
 		implementationReadinessRunningReason,
 	)
 	return request, admitted, err
-}
-
-func implementationReadinessInstructions(
-	storedFeature feature.Feature,
-	prepared workspace.Workspace,
-	plan string,
-	reviewSummary string,
-	commitID string,
-	reviewID int64,
-	attemptID string,
-) string {
-	marker := workspace.ImplementationPublicationMergeReadiness.Marker(attemptID)
-	return "Continue the same provider conversation as the lead. The independent reviewer has said " +
-		"that the exact commit below is ready to merge. Inspect before answering: reconcile the branch, " +
-		"Git HEAD, status, diff, pull-request head, accepted goal, agreed plan, and exact approved review. " +
-		"Do not modify files, commit, push, change the pull-request body, or merge. If you agree that no " +
-		"material blocker remains, give the merge green light. If you do not agree, state the concrete " +
-		"remaining concern. For either decision, post one pull-request comment using the worker-provided " +
-		"Forgejo URL and token-file environment variables. Never print, log, commit, or include the token " +
-		"in a URL. The comment must be exactly the marker below, a blank line, '## Merge readiness', " +
-		"another blank line, and your concise decision summary. Check existing comments for the marker " +
-		"before posting so recovery never duplicates it. Return action 'ready_to_merge' with that same " +
-		"summary when you agree, or action 'concern' with the same summary when you do not. If state is " +
-		"contradictory, the exact revision or approval is unavailable, or you cannot safely establish " +
-		"whether the comment was posted, return action 'blocked' and explain why. Durable Git, Forgejo, " +
-		"and coordinator state are authoritative over conversational memory.\n\n" +
-		"Current workflow phase: reviewing (merge-readiness acknowledgement)\nAccepted goal:\n" + storedFeature.AcceptedGoal +
-		"\n\nAgreed implementation plan:\n" + plan +
-		"\n\nReviewer's exact approval summary:\n" + reviewSummary +
-		"\n\nRepository: " + prepared.RepositoryOwner + "/" + prepared.RepositoryName +
-		"\nBase branch: " + prepared.BaseBranch + "\nFeature branch: " + prepared.Branch +
-		"\nPlanning baseline commit: " + prepared.BaseCommitID +
-		"\nExact approved commit: " + commitID +
-		fmt.Sprintf("\nFormal review: #%d\nDraft pull request: #%d (%s)", reviewID, prepared.PullRequestNumber, prepared.PullRequestURL) +
-		"\nMerge-readiness audit marker:\n" + marker
 }
 
 func (starter *RemoteLeadStarter) launchImplementationReadinessVerification(
@@ -5896,12 +5640,204 @@ func nextImplementationReviewAction(disposition workerhttp.Disposition) implemen
 	return implementationReviewActionAcknowledge
 }
 
+// continueSubmittedPlan moves a submitted plan forward. The reviewer approves
+// the exact final plan before it is published and implementation can start;
+// a request for changes returns the discussion to the lead. The reviewer's
+// approval attempt is the durable record, so recovery resumes at the right
+// point.
+func (starter *RemoteLeadStarter) continueSubmittedPlan(
+	ctx context.Context,
+	runID string,
+	plan execution.Event,
+) error {
+	run, err := starter.executions.GetRun(ctx, runID)
+	if err != nil {
+		return err
+	}
+	messages, err := starter.currentPlanningMessages(ctx, run)
+	if err != nil {
+		return err
+	}
+	if len(messages) == 0 || messages[len(messages)-1].Event.ID != plan.ID ||
+		messages[len(messages)-1].Event.Type != worker.EventPlanSubmitted {
+		return fmt.Errorf("%w: the submitted plan is no longer the latest planning message", ErrPlanningNotAllowed)
+	}
+	published, err := starter.planPublicationRecorded(ctx, plan)
+	if err != nil {
+		return err
+	}
+	if published {
+		return starter.publishSubmittedPlan(ctx, runID, plan)
+	}
+	reviewer, err := starter.executions.GetSession(ctx, remoteReviewerSessionID(run.ID))
+	if err != nil {
+		return err
+	}
+	checkpoint, err := starter.executions.GetWorkerAttempt(ctx, reviewer.ID)
+	if err != nil {
+		return err
+	}
+	attemptID := planApprovalAttemptForVersion(reviewer.ID, run.PlanVersion, planSubmissionCount(messages))
+	if checkpoint.AttemptID == attemptID {
+		attempt, err := starter.worker.GetAttempt(ctx, workerhttp.AttemptReference{SessionID: reviewer.ID, AttemptID: attemptID})
+		if err != nil {
+			return err
+		}
+		if err := validateCompletedTurn(reviewer, checkpoint, attempt); err != nil {
+			return err
+		}
+		switch attempt.Result.Disposition {
+		case workerhttp.DispositionSucceeded:
+			return starter.publishSubmittedPlan(ctx, runID, plan)
+		case workerhttp.DispositionChangesRequested:
+			return starter.returnPlanToLead(ctx, run, reviewer.ID, attemptID)
+		default:
+			return fmt.Errorf("%w: plan approval ended with disposition %q", ErrPlanningNotAllowed, attempt.Result.Disposition)
+		}
+	}
+	if run.Paused {
+		return starter.waitRun(ctx, run.ID, planApprovalReason, execution.RunWaitKindPhaseCheckpoint)
+	}
+	if reviewer.Status != execution.SessionStatusWaitingForUser || reviewer.ProviderSessionID == "" ||
+		reviewer.AgentID != agentID(run.AgentProviders.Reviewer, worker.RoleReviewer) || reviewer.Role != worker.RoleReviewer {
+		return fmt.Errorf("%w: reviewer cannot approve the plan now", ErrPlanningNotAllowed)
+	}
+	if err := starter.confirmCompletedTurn(ctx, reviewer, checkpoint); err != nil {
+		return err
+	}
+	storedFeature, err := starter.features.GetByID(ctx, run.FeatureID)
+	if err != nil {
+		return err
+	}
+	prepared, err := starter.workspaceForCurrentPlan(ctx, run, storedFeature.ProjectID, storedFeature.ID)
+	if err != nil {
+		return err
+	}
+	if !prepared.CheckoutReady() {
+		return fmt.Errorf("%w: planning checkout is not ready", ErrPlanningNotAllowed)
+	}
+	request := remoteLeadRequest{
+		runID: run.ID, agentName: "reviewer",
+		waitingReason: planApprovalReason,
+		planningStage: planningStagePlanApproval,
+		identity: workerhttp.MutationIdentity{
+			AttemptReference: workerhttp.AttemptReference{SessionID: reviewer.ID, AttemptID: attemptID},
+			IdempotencyKey:   attemptID + ":resume",
+		},
+		request: workerhttp.PutAttemptRequest{
+			Mode: workerhttp.AttemptModeResume,
+			Assignment: workerhttp.Assignment{
+				AgentProfileID: starter.profileID(run.AgentProviders.Reviewer, worker.RoleReviewer),
+				ProjectID:      storedFeature.ProjectID, FeatureID: storedFeature.ID,
+				Role: workerhttp.RoleReviewer, WorkspaceID: prepared.ID,
+			},
+			ProviderSessionID: reviewer.ProviderSessionID,
+			Instructions:      planApprovalInstructions(plan.Text, leadParticipant(run.AgentProviders)),
+			OutputContract:    workerhttp.OutputContractPlanApproval,
+		},
+	}
+	if err := request.request.Validate(request.identity); err != nil {
+		return fmt.Errorf("%w: %v", ErrInvalidRunRequest, err)
+	}
+	admitted, err := starter.executions.BeginChainedTurn(ctx, reviewer.ID, checkpoint, attemptID, planApprovalReason)
+	if err != nil {
+		return err
+	}
+	if admitted {
+		starter.launchAdmitted(request)
+	}
+	return nil
+}
+
+// continueApprovedPlanning runs after the reviewer's approval turn finishes.
+func (starter *RemoteLeadStarter) continueApprovedPlanning(ctx context.Context, request remoteLeadRequest) {
+	run, err := starter.executions.GetRun(ctx, request.runID)
+	if err != nil {
+		starter.requireReview(ctx, request, err)
+		return
+	}
+	messages, err := starter.currentPlanningMessages(ctx, run)
+	if err != nil {
+		starter.requireReview(ctx, request, err)
+		return
+	}
+	if len(messages) == 0 || messages[len(messages)-1].Event.Type != worker.EventPlanSubmitted {
+		starter.requireReview(ctx, request, errors.New("plan approval has no submitted plan"))
+		return
+	}
+	plan := messages[len(messages)-1].Event
+	if err := starter.continueSubmittedPlan(ctx, request.runID, plan); err != nil {
+		starter.requirePlanPublicationReview(ctx, request.runID, plan, err)
+	}
+}
+
+// returnPlanToLead records the reviewer's requested changes as a planning
+// message, so the lead revises and resubmits within the normal round limit.
+func (starter *RemoteLeadStarter) returnPlanToLead(
+	ctx context.Context,
+	run execution.Run,
+	reviewerSessionID string,
+	attemptID string,
+) error {
+	message, err := starter.messageForAttempt(ctx, reviewerSessionID, attemptID)
+	if err != nil {
+		return err
+	}
+	if _, _, err := starter.executions.LinkPlanningMessage(ctx, run.ID, message.ID); err != nil {
+		return err
+	}
+	if run.Paused {
+		return starter.waitRun(ctx, run.ID, "The reviewer asked for changes to the final plan.", execution.RunWaitKindPhaseCheckpoint)
+	}
+	messages, err := starter.currentPlanningMessages(ctx, run)
+	if err != nil {
+		return err
+	}
+	if planningRoundLimitReached(run.PlanningRoundLimit, len(messages)) {
+		return starter.waitRun(ctx, run.ID, planningLimitReason(run.PlanningRoundLimit), execution.RunWaitKindRoundCap)
+	}
+	storedFeature, err := starter.features.GetByID(ctx, run.FeatureID)
+	if err != nil {
+		return err
+	}
+	next, admitted, err := starter.startLeadResponse(ctx, run, storedFeature, messages, true)
+	if err != nil {
+		return err
+	}
+	if admitted {
+		starter.launchAdmitted(next)
+	}
+	return nil
+}
+
+const planApprovalReason = "The reviewer is checking the final plan before implementation."
+
+func planApprovalAttemptForVersion(sessionID string, version int, submission int) string {
+	return workflowAttemptForVersion(sessionID, "approval", version, submission)
+}
+
+func planApprovalVersionAndTurn(sessionID, attemptID string) (int, int, bool) {
+	return workflowAttemptVersionAndTurn(sessionID, "approval", attemptID)
+}
+
+// planSubmissionCount numbers the lead's plan submissions in this plan
+// version, so each resubmission gets its own approval attempt.
+func planSubmissionCount(messages []execution.PlanningMessage) int {
+	count := 0
+	for _, message := range messages {
+		if message.Role == worker.RoleLead && message.Event.Type == worker.EventPlanSubmitted {
+			count++
+		}
+	}
+	return count
+}
+
 func (starter *RemoteLeadStarter) launchPlanPublication(
 	runID string,
 	plan execution.Event,
 ) {
 	ctx := starter.lifetime
-	if err := starter.publishSubmittedPlan(ctx, runID, plan); err != nil {
+	if err := starter.continueSubmittedPlan(ctx, runID, plan); err != nil {
 		starter.requirePlanPublicationReview(ctx, runID, plan, err)
 	}
 	starter.release(runID)

@@ -4,7 +4,6 @@ import {
   getProjectValidation,
   updateAgentSettings,
   updateAutonomyPolicy,
-  updateDialogueLimits,
   updateIndependentAcceptanceTests,
   updateMergePolicy,
   updateProjectValidation,
@@ -34,7 +33,6 @@ export function ProjectSettings({
   return (
     <>
       <Agents project={project} onUpdated={onUpdated} />
-      <Rounds project={project} onUpdated={onUpdated} />
       <Autonomy project={project} onUpdated={onUpdated} />
       <Merge project={project} onUpdated={onUpdated} />
       <IndependentTests project={project} onUpdated={onUpdated} />
@@ -292,60 +290,6 @@ function Agents({ project, onUpdated }: { project: Project; onUpdated: (p: Proje
         disabled={busy || loading || !models.lead || !models.reviewer}
       >
         {busy ? "Saving…" : "Save agents & models"}
-      </button>
-    </section>
-  );
-}
-
-function Rounds({ project, onUpdated }: { project: Project; onUpdated: (p: Project) => void }) {
-  const [planning, setPlanning] = useState(project.dialogue_limits?.planning_rounds ?? 6);
-  const [review, setReview] = useState(project.dialogue_limits?.implementation_review_rounds ?? 6);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const save = async () => {
-    setBusy(true);
-    setError(null);
-    try {
-      onUpdated(await updateDialogueLimits(project.id, planning, review));
-    } catch (e) {
-      setError(describe(e));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <section className="panel">
-      <h2>Dialogue rounds</h2>
-      {error && <div className="banner banner--error">{error}</div>}
-      <p className="muted">
-        A round is one exchange where both agents get a turn. 0 means unlimited.
-      </p>
-      <div className="settings-row">
-        <label>
-          Planning
-          <input
-            type="number"
-            min={0}
-            value={planning}
-            onChange={(e) => setPlanning(Math.max(0, Number(e.target.value)))}
-            disabled={busy}
-          />
-        </label>
-        <label>
-          Review
-          <input
-            type="number"
-            min={0}
-            value={review}
-            onChange={(e) => setReview(Math.max(0, Number(e.target.value)))}
-            disabled={busy}
-          />
-        </label>
-      </div>
-      <button className="primary" onClick={() => void save()} disabled={busy}>
-        {busy ? "Saving…" : "Save rounds"}
       </button>
     </section>
   );

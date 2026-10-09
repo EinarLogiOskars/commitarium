@@ -434,6 +434,33 @@ export interface WorkflowEvent {
 // Durable, revisioned feature documents kept in coordinator SQLite (never Git):
 // the proposed goal and the agreed implementation plan. They are separate from
 // the conversational session transcript.
+export interface TokenUsage {
+  /** Excludes cached reads and cache writes. */
+  input_tokens: number;
+  cached_input_tokens: number;
+  cache_write_tokens: number;
+  output_tokens: number;
+}
+
+export interface RoleUsage extends TokenUsage {
+  role: string;
+}
+
+export interface PhaseUsage extends TokenUsage {
+  /** clarify, plan, plan_approval, implement, acceptance_tests, review,
+   * correction, readiness, intervention, or other. */
+  phase: string;
+  role: string;
+}
+
+/** Provider-reported token totals for a work order, by role and by phase. */
+export interface FeatureUsage {
+  roles: RoleUsage[];
+  /** Absent on older coordinators. */
+  phases?: PhaseUsage[];
+  total: TokenUsage;
+}
+
 export type FeatureArtifactKind = "goal_draft" | "implementation_plan" | "acceptance_tests";
 
 // The reviewer's private, blind acceptance-test checklist (titles + commit ids

@@ -570,11 +570,12 @@ func TestRemoteLeadContinuesScopeChangeIntoVersionedReplanning(t *testing.T) {
 	workerStub.mu.Lock()
 	requests = append([]workerhttp.PutAttemptRequest(nil), workerStub.putRequests...)
 	workerStub.mu.Unlock()
-	if len(requests) != 4 || requests[1].Mode != workerhttp.AttemptModeResume ||
+	if len(requests) != 5 || requests[1].Mode != workerhttp.AttemptModeResume ||
 		requests[1].ProviderSessionID != reviewer.ProviderSessionID ||
 		requests[2].Mode != workerhttp.AttemptModeResume ||
-		requests[3].OutputContract != workerhttp.OutputContractImplementationLead ||
-		!strings.Contains(requests[3].Instructions, amendment) {
+		requests[3].OutputContract != workerhttp.OutputContractPlanApproval ||
+		requests[4].OutputContract != workerhttp.OutputContractImplementationLead ||
+		!strings.Contains(requests[4].Instructions, "commitarium-artifact plan show") {
 		t.Fatalf("unexpected versioned reviewer/lead/implementation requests: %+v", requests)
 	}
 	if workspaceStub.revisedVerifyCalls != 1 || workspaceStub.publishedBaseline != baseline {

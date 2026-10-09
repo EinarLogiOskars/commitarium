@@ -175,6 +175,9 @@ func (session *session) run() {
 				break
 			}
 			if terminal != nil {
+				if trailingInformationalRecord(line) {
+					continue
+				}
 				protocolErr = fmt.Errorf("%w: output followed the terminal result", ErrProtocol)
 				session.abortProcess()
 				break
@@ -199,7 +202,9 @@ func (session *session) run() {
 	}
 	if protocolErr == nil && len(bytes.TrimSpace(stdout)) > 0 {
 		if terminal != nil {
-			protocolErr = fmt.Errorf("%w: output followed the terminal result", ErrProtocol)
+			if !trailingInformationalRecord(bytes.TrimSpace(stdout)) {
+				protocolErr = fmt.Errorf("%w: output followed the terminal result", ErrProtocol)
+			}
 		} else {
 			events, result, err := session.translate(bytes.TrimSpace(stdout))
 			if err != nil {
@@ -254,6 +259,25 @@ func (session *session) run() {
 	session.complete(*terminal, nil)
 }
 
+// trailingInformationalRecord reports whether a record after the terminal
+// result is informational. Claude Code writes summaries such as
+// system/task_summary after its result; they cannot change the outcome. A
+// second result or any further conversation still fails the turn.
+func trailingInformationalRecord(line []byte) bool {
+	var record struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(line, &record); err != nil {
+		return false
+	}
+	switch record.Type {
+	case "system", "rate_limit_event", "stream_event", "tool_progress", "auth_status":
+		return true
+	default:
+		return false
+	}
+}
+
 type streamMessage struct {
 	Type             string          `json:"type"`
 	Subtype          string          `json:"subtype"`
@@ -266,6 +290,27 @@ type streamMessage struct {
 	Message          json.RawMessage `json:"message"`
 	ToolUseResult    json.RawMessage `json:"tool_use_result"`
 	Event            json.RawMessage `json:"event"`
+	Usage            *resultUsage    `json:"usage"`
+}
+
+// resultUsage is the turn total Claude Code reports on its result record.
+type resultUsage struct {
+	InputTokens              int64 `json:"input_tokens"`
+	CacheCreationInputTokens int64 `json:"cache_creation_input_tokens"`
+	CacheReadInputTokens     int64 `json:"cache_read_input_tokens"`
+	OutputTokens             int64 `json:"output_tokens"`
+}
+
+func (usage *resultUsage) tokenUsage() *worker.TokenUsage {
+	if usage == nil {
+		return nil
+	}
+	return &worker.TokenUsage{
+		InputTokens:       usage.InputTokens,
+		CachedInputTokens: usage.CacheReadInputTokens,
+		CacheWriteTokens:  usage.CacheCreationInputTokens,
+		OutputTokens:      usage.OutputTokens,
+	}
 }
 
 type partialStreamEvent struct {
@@ -315,6 +360,15 @@ func (session *session) translate(raw []byte) ([]worker.Event, *worker.Result, e
 		if message.Subtype != "init" {
 			return nil, nil, nil
 		}
+		// Claude Code emits another init when the agent starts a subagent,
+		// which may run on a different model. Only the first init describes
+		// this session; later ones are ignored.
+		session.mu.Lock()
+		initialized := session.initialized
+		session.mu.Unlock()
+		if initialized {
+			return nil, nil, nil
+		}
 		if err := session.verifyScope(message.SessionID); err != nil {
 			return nil, nil, err
 		}
@@ -331,10 +385,6 @@ func (session *session) translate(raw []byte) ([]worker.Event, *worker.Result, e
 			)
 		}
 		session.mu.Lock()
-		if session.initialized {
-			session.mu.Unlock()
-			return nil, nil, fmt.Errorf("%w: duplicate init message", ErrProtocol)
-		}
 		session.initialized = true
 		session.mu.Unlock()
 		return []worker.Event{{Type: worker.EventActivity, Text: "Claude started working."}}, nil, nil
@@ -648,6 +698,7 @@ func (session *session) translateResult(
 			Outcome:           worker.OutcomeFailed,
 			ProviderSessionID: session.providerSessionID,
 			Summary:           summary,
+			Usage:             message.Usage.tokenUsage(),
 		}, nil
 	}
 	if session.outputContract != "" {
@@ -671,6 +722,7 @@ func (session *session) translateResult(
 			ImplementationPlan: resolved.ImplementationPlan,
 			AcceptanceTests:    resolved.AcceptanceTests,
 			EnvironmentRequest: resolved.EnvironmentRequest,
+			Usage:              message.Usage.tokenUsage(),
 		}, nil
 	}
 
@@ -696,6 +748,7 @@ func (session *session) translateResult(
 	return events, &worker.Result{
 		Outcome: worker.OutcomeCompleted, Disposition: worker.DispositionSucceeded,
 		ProviderSessionID: session.providerSessionID, Summary: lastMessage,
+		Usage: message.Usage.tokenUsage(),
 	}, nil
 }
 

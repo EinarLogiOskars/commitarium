@@ -24,7 +24,6 @@ type ProjectService interface {
 	Create(ctx context.Context, name string, recoveryPolicy project.RecoveryPolicy, dialogueLimits project.DialogueLimits, agentProviders project.AgentProviders, mergePolicy project.MergePolicy, autonomyPolicy ...project.AutonomyPolicy) (project.Project, error)
 	GetByID(ctx context.Context, id string) (project.Project, error)
 	List(ctx context.Context) ([]project.Project, error)
-	UpdateDialogueLimits(ctx context.Context, projectID string, limits project.DialogueLimits) (project.Project, error)
 	UpdateAgentProviders(ctx context.Context, projectID string, providers project.AgentProviders) (project.Project, error)
 	UpdateMergePolicy(ctx context.Context, projectID string, policy project.MergePolicy) (project.Project, error)
 	UpdateAutonomyPolicy(ctx context.Context, projectID string, policy project.AutonomyPolicy) (project.Project, error)
@@ -215,6 +214,11 @@ type ProjectEnvironmentService interface {
 	ApprovedPackages(context.Context) ([]string, error)
 }
 
+// FeatureUsageService totals provider token usage for a work order.
+type FeatureUsageService interface {
+	FeatureAttemptUsage(ctx context.Context, featureID string) ([]execution.RoleAttemptUsage, error)
+}
+
 type ValidationService interface {
 	Configure(context.Context, string, []string) (validation.Config, error)
 	Disable(context.Context, string) (bool, error)
@@ -276,6 +280,7 @@ type API struct {
 	toolchainAssistant ToolchainAssistantService
 	environments       ProjectEnvironmentService
 	validations        ValidationService
+	usage              FeatureUsageService
 }
 
 func New(
@@ -377,8 +382,11 @@ func newAPI(
 	var projectDeletion ProjectDeletionService
 	var environments ProjectEnvironmentService
 	var validations ValidationService
+	var usage FeatureUsageService
 	for _, extra := range extras {
 		switch typed := extra.(type) {
+		case FeatureUsageService:
+			usage = typed
 		case ToolchainService:
 			toolchainService = typed
 		case ToolchainAssistantService:
@@ -407,6 +415,7 @@ func newAPI(
 		toolchainAssistant: toolchainAssistant,
 		environments:       environments,
 		validations:        validations,
+		usage:              usage,
 	}
 	api.artifacts, _ = workflow.(FeatureArtifactService)
 	api.projectImporter, _ = projects.(ProjectImporter)
@@ -479,10 +488,6 @@ func newAPI(
 	mux.HandleFunc(
 		"GET /api/v1/projects/{id}/repository-overview",
 		api.getProjectRepositoryOverviewHandler,
-	)
-	mux.HandleFunc(
-		"PUT /api/v1/projects/{id}/dialogue-limits",
-		api.updateProjectDialogueLimitsHandler,
 	)
 	mux.HandleFunc(
 		"PUT /api/v1/projects/{id}/agent-providers",
@@ -570,6 +575,12 @@ func newAPI(
 		"GET /api/v1/projects/{projectID}/features/{id}/runs",
 		api.listFeatureRunsHandler,
 	)
+	if usage != nil {
+		mux.HandleFunc(
+			"GET /api/v1/projects/{projectID}/features/{id}/usage",
+			api.getFeatureUsageHandler,
+		)
+	}
 	if workspaces != nil {
 		mux.HandleFunc(
 			"GET /api/v1/projects/{projectID}/handoff",

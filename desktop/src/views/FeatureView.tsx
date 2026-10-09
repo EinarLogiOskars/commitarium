@@ -1,5 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { deleteFeature, getFeature, getFeatureEvents, listFeatureRuns } from "../api/features";
+import { Fragment, useCallback, useEffect, useRef, useState } from "react";
+import {
+  deleteFeature,
+  getFeature,
+  getFeatureEvents,
+  getFeatureUsage,
+  listFeatureRuns,
+} from "../api/features";
 import { getRun } from "../api/runs";
 import { ApiError } from "../api/client";
 import { GoalClarification } from "./GoalClarification";
@@ -12,7 +18,15 @@ import { AcceptanceTestsPanel } from "./AcceptanceTests";
 import { PhaseStepper, currentPhaseIndex } from "./PhaseStepper";
 import { phaseIntervals, type Interval } from "./phaseWindows";
 import { WORK } from "../vocab";
-import type { Feature, Run, WaitKind, WorkflowEvent } from "../api/types";
+import type {
+  Feature,
+  FeatureUsage,
+  PhaseUsage,
+  Run,
+  TokenUsage,
+  WaitKind,
+  WorkflowEvent,
+} from "../api/types";
 
 const POLL_MS = 2500;
 
@@ -40,6 +54,7 @@ export function FeatureView({
   const [feature, setFeature] = useState<Feature | null>(null);
   const [run, setRun] = useState<Run | null>(null);
   const [events, setEvents] = useState<WorkflowEvent[]>([]);
+  const [usage, setUsage] = useState<FeatureUsage | null>(null);
   const [error, setError] = useState<string | null>(null);
   // null = follow the current phase; a number = the user pinned that phase.
   const [pinnedIndex, setPinnedIndex] = useState<number | null>(null);
@@ -62,6 +77,11 @@ export function FeatureView({
         setRun(null);
       }
       try {
+        setUsage(await getFeatureUsage(projectId, featureId));
+      } catch {
+        // Older coordinators lack the usage endpoint; the header omits it.
+      }
+      try {
         setEvents(await getFeatureEvents(projectId, featureId));
       } catch {
         // Older coordinators lack the events endpoint; views fall back to
@@ -80,6 +100,7 @@ export function FeatureView({
     setFeature(null);
     setRun(null);
     setEvents([]);
+    setUsage(null);
     setPinnedIndex(null);
     lastState.current = null;
     void load();
@@ -153,6 +174,7 @@ export function FeatureView({
           <div>
             <h2>{feature.title}</h2>
             {feature.description && <p className="muted order-head__desc">{feature.description}</p>}
+            {usage && usage.roles.length > 0 && <UsageLine usage={usage} />}
           </div>
           {onDeleted && !confirmDelete && (
             <button className="ghost danger" onClick={openDeleteConfirm} disabled={deleting}>
@@ -234,6 +256,98 @@ export function FeatureView({
       </div>
     </div>
   );
+}
+
+// Input is everything the provider read: fresh, cached, and cache writes.
+// Cached reads are listed separately because they are much cheaper.
+const readTokens = (u: TokenUsage) => u.input_tokens + u.cached_input_tokens + u.cache_write_tokens;
+
+const PHASE_LABELS: Record<string, string> = {
+  clarify: "Clarify",
+  plan: "Plan",
+  plan_approval: "Plan approval",
+  implement: "Implement",
+  acceptance_tests: "Acceptance tests",
+  review: "Review",
+  correction: "Correction",
+  readiness: "Readiness",
+  intervention: "Your messages",
+  other: "Other",
+};
+
+function UsageLine({ usage }: { usage: FeatureUsage }) {
+  const [open, setOpen] = useState(false);
+  const phases = usage.phases ?? [];
+  const summary = usage.roles
+    .map(
+      (r) =>
+        `${r.role} ${formatTokens(readTokens(r))} in (${formatTokens(r.cached_input_tokens)} cached) · ${formatTokens(r.output_tokens)} out`,
+    )
+    .join(" — ");
+  if (phases.length === 0) {
+    return (
+      <p className="muted order-head__usage" title="Provider-reported tokens for finished turns">
+        Tokens: {summary}
+      </p>
+    );
+  }
+  return (
+    <div className="order-head__usage">
+      <button
+        type="button"
+        className="linkish muted usage-toggle"
+        onClick={() => setOpen((v) => !v)}
+        title="Provider-reported tokens for finished turns"
+      >
+        {open ? "▼" : "▶"} Tokens: {summary}
+      </button>
+      {open && <UsageTable phases={phases} roles={usage.roles.map((r) => r.role)} />}
+    </div>
+  );
+}
+
+function UsageTable({ phases, roles }: { phases: PhaseUsage[]; roles: string[] }) {
+  // Phases arrive in workflow order; keep the first occurrence of each.
+  const order = phases.map((p) => p.phase).filter((p, i, all) => all.indexOf(p) === i);
+  const cell = (phase: string, role: string) => {
+    const u = phases.find((p) => p.phase === phase && p.role === role);
+    if (!u) return <td className="muted">—</td>;
+    return (
+      <td>
+        {formatTokens(readTokens(u))} in
+        <span className="muted"> ({formatTokens(u.cached_input_tokens)} cached)</span> ·{" "}
+        {formatTokens(u.output_tokens)} out
+      </td>
+    );
+  };
+  return (
+    <table className="usage-table">
+      <thead>
+        <tr>
+          <th>Phase</th>
+          {roles.map((r) => (
+            <th key={r}>{r}</th>
+          ))}
+        </tr>
+      </thead>
+      <tbody>
+        {order.map((phase) => (
+          <tr key={phase}>
+            <td>{PHASE_LABELS[phase] ?? phase}</td>
+            {roles.map((r) => (
+              <Fragment key={r}>{cell(phase, r)}</Fragment>
+            ))}
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
+function formatTokens(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
+  return String(n);
 }
 
 function waitBanner(run: Run, state: string) {

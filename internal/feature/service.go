@@ -58,13 +58,9 @@ func (s *Service) Create(
 		)
 	}
 
-	dialogueLimits := storedProject.DialogueLimits
-	if overrides.DialogueLimits != nil {
-		dialogueLimits = *overrides.DialogueLimits
-	}
-	if err := dialogueLimits.Validate(); err != nil {
-		return Feature{}, err
-	}
+	// Round limits are system-wide; stored project values and overrides from
+	// older clients are ignored.
+	dialogueLimits := project.DefaultDialogueLimits()
 
 	agentProviders := storedProject.AgentProviders
 	if overrides.AgentProviders != nil {

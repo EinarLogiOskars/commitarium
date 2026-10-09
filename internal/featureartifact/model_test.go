@@ -1,6 +1,7 @@
 package featureartifact
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -86,5 +87,36 @@ func TestAcceptanceTestsRejectExecutedStatusWithoutImplementation(t *testing.T) 
 	tests.Tests[0].Status = AcceptanceTestPassed
 	if err := tests.Validate(); err == nil {
 		t.Fatal("executed status without an implementation commit was accepted")
+	}
+}
+
+func TestNormalizeInitialRepairsAgentChosenIDs(t *testing.T) {
+	tests, err := (AcceptanceTests{
+		TestCommitID: strings.Repeat("a", 40),
+		Tests: []AcceptanceTest{
+			{ID: "Docker Compose: start", Title: "Starts"},
+			{ID: "docker-compose-start", Title: "Duplicate after cleanup"},
+			{ID: "!!!", Title: "Nothing usable"},
+			{ID: "readme.docker_section", Title: "Already valid"},
+		},
+	}).NormalizeInitial(1)
+	if err != nil {
+		t.Fatalf("normalize acceptance tests: %v", err)
+	}
+	want := []string{"docker-compose-start", "docker-compose-start-2", "test-3", "readme.docker_section"}
+	for index, test := range tests.Tests {
+		if test.ID != want[index] {
+			t.Fatalf("test %d ID = %q, want %q", index+1, test.ID, want[index])
+		}
+	}
+	plan, err := (ImplementationPlan{
+		Title: "Plan", Subtitle: "Sub",
+		Steps: []ImplementationPlanStep{{
+			ID: "Update README (Docker)", Title: "Update", Subtitle: "Docs",
+			DetailsMarkdown: "Edit README.", Verification: []string{"Read it"}, CommitSubject: "docs: update readme",
+		}},
+	}).NormalizeInitial(1)
+	if err != nil || plan.Steps[0].ID != "update-readme-docker" {
+		t.Fatalf("normalize plan: step=%+v err=%v", plan.Steps, err)
 	}
 }

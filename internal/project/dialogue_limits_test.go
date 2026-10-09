@@ -7,7 +7,7 @@ import (
 
 func TestDialogueLimits(t *testing.T) {
 	defaults := DefaultDialogueLimits()
-	if defaults.PlanningRounds != 6 || defaults.ImplementationReviewRounds != 6 {
+	if defaults.PlanningRounds != 10 || defaults.ImplementationReviewRounds != 10 {
 		t.Fatalf("unexpected defaults %+v", defaults)
 	}
 	if err := (DialogueLimits{}).Validate(); err != nil {

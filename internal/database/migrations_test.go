@@ -167,7 +167,8 @@ func TestRecoveryMigrationPreservesExistingExecutionRecords(t *testing.T) {
 	if storedProject.RecoveryPolicy != project.RecoveryPolicyApprovalRequired {
 		t.Fatalf("unexpected migrated recovery policy %+v", storedProject)
 	}
-	if storedProject.DialogueLimits != project.DefaultDialogueLimits() {
+	// The migration's column default predates the fixed system-wide limit.
+	if storedProject.DialogueLimits != (project.DialogueLimits{PlanningRounds: 6, ImplementationReviewRounds: 6}) {
 		t.Fatalf("unexpected migrated project dialogue limits %+v", storedProject.DialogueLimits)
 	}
 	if storedProject.AgentProviders != project.DefaultAgentProviders() {
@@ -177,8 +178,7 @@ func TestRecoveryMigrationPreservesExistingExecutionRecords(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get migrated run: %v", err)
 	}
-	if storedRun.PlanningRoundLimit != project.DefaultDialogueRoundLimit ||
-		storedRun.ImplementationReviewRoundLimit != project.DefaultDialogueRoundLimit {
+	if storedRun.PlanningRoundLimit != 6 || storedRun.ImplementationReviewRoundLimit != 6 {
 		t.Fatalf("unexpected migrated run dialogue limits %+v", storedRun)
 	}
 	if storedRun.AgentProviders != project.DefaultAgentProviders() {
