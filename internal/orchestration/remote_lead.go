@@ -2088,6 +2088,9 @@ func planningTurnNumber(sessionID, attemptID string) (int, bool) {
 // replanning. Recovery uses both coordinates so an old attempt cannot be
 // mistaken for work on the run's current plan.
 func planningAttemptVersionAndTurn(sessionID, attemptID string) (int, int, bool) {
+	if version, turn, _, ok := planningRecoveryVersionAndTurn(sessionID, attemptID); ok {
+		return version, turn, true
+	}
 	value, found := strings.CutPrefix(attemptID, sessionID+":planning:")
 	if !found {
 		return 0, 0, false
@@ -3835,7 +3838,7 @@ func (starter *RemoteLeadStarter) continueFailedAttempt(
 	if !request.allowRecoveryContinuation {
 		return false, nil
 	}
-	if request.request.OutputContract == "" {
+	if request.request.OutputContract == "" && request.planningStage == planningStageNone {
 		return false, errors.New("the failed turn has no recoverable output contract")
 	}
 	if attempt.State == workerhttp.AttemptStateIndeterminate {
@@ -3937,15 +3940,55 @@ func modelForSession(run execution.Run, role worker.Role) string {
 }
 
 func recoverySuccessorAttemptID(sessionID, attemptID string) (string, error) {
-	if version, turn, ok := planningAttemptVersionAndTurn(sessionID, attemptID); ok {
-		return planningAttemptForVersion(sessionID, version, turn+1), nil
+	// Planning turns are numbered by counting each agent's linked messages,
+	// so a successor takes a separate ID space instead of the next turn.
+	if version, turn, successor, ok := planningRecoveryVersionAndTurn(sessionID, attemptID); ok {
+		return planningRecoveryAttemptID(sessionID, version, turn, successor+1), nil
 	}
-	for _, kind := range []string{"implementation", "acceptance", "review", "correction", "readiness"} {
+	if version, turn, ok := planningAttemptVersionAndTurn(sessionID, attemptID); ok {
+		return planningRecoveryAttemptID(sessionID, version, turn, 1), nil
+	}
+	for _, kind := range []string{"implementation", "acceptance", "review", "correction", "readiness", "approval"} {
 		if version, turn, ok := workflowAttemptVersionAndTurn(sessionID, kind, attemptID); ok {
 			return workflowAttemptForVersion(sessionID, kind, version, turn+1), nil
 		}
 	}
 	return "", errors.New("failed turn does not have a recognized recovery attempt identity")
+}
+
+// planningRecoveryAttemptID names the successor of a failed planning turn.
+// It keeps the logical turn so stage detection still treats it as that turn.
+func planningRecoveryAttemptID(sessionID string, version, turn, successor int) string {
+	if version == 1 {
+		return sessionID + ":planning-recovery:" + strconv.Itoa(turn) + ":" + strconv.Itoa(successor)
+	}
+	return sessionID + ":planning-recovery:v" + strconv.Itoa(version) + ":" +
+		strconv.Itoa(turn) + ":" + strconv.Itoa(successor)
+}
+
+func planningRecoveryVersionAndTurn(sessionID, attemptID string) (int, int, int, bool) {
+	value, found := strings.CutPrefix(attemptID, sessionID+":planning-recovery:")
+	if !found {
+		return 0, 0, 0, false
+	}
+	parts := strings.Split(value, ":")
+	version := 1
+	if len(parts) == 3 && strings.HasPrefix(parts[0], "v") {
+		parsed, err := strconv.Atoi(strings.TrimPrefix(parts[0], "v"))
+		if err != nil || parsed < 2 {
+			return 0, 0, 0, false
+		}
+		version, parts = parsed, parts[1:]
+	}
+	if len(parts) != 2 {
+		return 0, 0, 0, false
+	}
+	turn, turnErr := strconv.Atoi(parts[0])
+	successor, successorErr := strconv.Atoi(parts[1])
+	if turnErr != nil || successorErr != nil || turn < 1 || successor < 1 {
+		return 0, 0, 0, false
+	}
+	return version, turn, successor, true
 }
 
 func (starter *RemoteLeadStarter) recoveryBriefing(
@@ -3983,8 +4026,8 @@ func (starter *RemoteLeadStarter) recoveryBriefing(
 		cause = attempt.Result.Error.Message
 	}
 	briefing := fmt.Sprintf(
-		"Recovery continuation. Complete the same logical %s turn and return the required structured result. Do not redo durable work that is already correct. Inspect the existing checkout and commits first.\n\nGoal:\n%s\n\nAgreed plan:\n%s\n\nPrior attempt: %s (events recorded through %d)\nWhy it needs continuation: %s\n\nWorkspace: %s, branch %s, base commit %s, Forgejo PR #%d.\n\nRecent durable activity:\n%s",
-		session.Role, storedFeature.AcceptedGoal, plan, checkpoint.AttemptID,
+		"Recovery continuation. Complete the same logical %s turn and %s Do not redo durable work that is already correct. Inspect the existing checkout and commits first.\n\nGoal:\n%s\n\nAgreed plan:\n%s\n\nPrior attempt: %s (events recorded through %d)\nWhy it needs continuation: %s\n\nWorkspace: %s, branch %s, base commit %s, Forgejo PR #%d.\n\nRecent durable activity:\n%s",
+		session.Role, recoveryDeliverable(session, attempt), storedFeature.AcceptedGoal, plan, checkpoint.AttemptID,
 		checkpoint.LastEventSequence, cause, prepared.ID, prepared.Branch,
 		prepared.BaseCommitID, prepared.PullRequestNumber, history.String(),
 	)
@@ -3993,6 +4036,15 @@ func (starter *RemoteLeadStarter) recoveryBriefing(
 		return "", errors.New("recovery briefing exceeds the worker instruction limit")
 	}
 	return briefing, nil
+}
+
+// recoveryDeliverable says what the successor must return. Conversational
+// planning turns have no structured result; their final reply is the result.
+func recoveryDeliverable(session execution.Session, attempt workerhttp.Attempt) string {
+	if _, _, ok := planningAttemptVersionAndTurn(session.ID, attempt.AttemptID); ok && session.Role == worker.RoleReviewer {
+		return "give your complete final reply for that turn again, as your final message; your earlier reply was lost."
+	}
+	return "return the required structured result."
 }
 
 func (starter *RemoteLeadStarter) launchRecoverySuccessor(

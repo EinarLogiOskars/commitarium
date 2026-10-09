@@ -4,8 +4,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/EinarLogiOskars/commitarium/internal/execution"
 	"github.com/EinarLogiOskars/commitarium/internal/feature"
 	"github.com/EinarLogiOskars/commitarium/internal/project"
+	"github.com/EinarLogiOskars/commitarium/internal/worker"
 	"github.com/EinarLogiOskars/commitarium/internal/workspace"
 )
 
@@ -49,5 +51,31 @@ func TestPlanningDialogueBriefsOnceAndAddressesTheOtherAgent(t *testing.T) {
 	}
 	if !strings.Contains(reviewerReply, "R1 accepted") || !strings.Contains(reviewerReply, "Do not restate the plan") {
 		t.Fatalf("reviewer reply lost the message or the no-restating rule:\n%s", reviewerReply)
+	}
+}
+
+func TestPlanningRecoverySuccessorsDoNotTakeTheNextTurn(t *testing.T) {
+	session := execution.Session{ID: "run_x:reviewer", Role: worker.RoleReviewer}
+	first, err := recoverySuccessorAttemptID(session.ID, "run_x:reviewer:planning:1")
+	if err != nil || first != "run_x:reviewer:planning-recovery:1:1" {
+		t.Fatalf("first successor = %q err=%v", first, err)
+	}
+	second, err := recoverySuccessorAttemptID(session.ID, first)
+	if err != nil || second != "run_x:reviewer:planning-recovery:1:2" {
+		t.Fatalf("second successor = %q err=%v", second, err)
+	}
+	revised, err := recoverySuccessorAttemptID(session.ID, "run_x:reviewer:planning:v2:3")
+	if err != nil || revised != "run_x:reviewer:planning-recovery:v2:3:1" {
+		t.Fatalf("revised-plan successor = %q err=%v", revised, err)
+	}
+	if version, turn, ok := planningAttemptVersionAndTurn(session.ID, revised); !ok || version != 2 || turn != 3 {
+		t.Fatalf("successor did not parse as its logical turn: v%d turn %d ok=%v", version, turn, ok)
+	}
+	if stage := planningStageForAttempt(session, first); stage != planningStageFirstReview {
+		t.Fatalf("successor of the first review has stage %q", stage)
+	}
+	approval, err := recoverySuccessorAttemptID(session.ID, "run_x:reviewer:approval:1")
+	if err != nil || approval != "run_x:reviewer:approval:2" {
+		t.Fatalf("approval successor = %q err=%v", approval, err)
 	}
 }
