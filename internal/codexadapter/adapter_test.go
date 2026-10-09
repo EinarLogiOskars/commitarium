@@ -1076,3 +1076,37 @@ func timeoutContext(t *testing.T, duration time.Duration) context.Context {
 	t.Cleanup(cancel)
 	return ctx
 }
+
+func TestTurnUsageExcludesEarlierTurnsAndRepeatedUpdates(t *testing.T) {
+	session := newSession(nil, nil, "thr_usage", t.TempDir(), time.Second, 1, "")
+	session.turnID = "turn_usage"
+	update := func(threadID, turnID string, total, last tokenUsageBreakdown) {
+		params, err := json.Marshal(tokenUsageUpdated{
+			ThreadID: threadID, TurnID: turnID,
+			TokenUsage: threadTokenUsage{Total: total, Last: last},
+		})
+		if err != nil {
+			t.Fatalf("marshal usage update: %v", err)
+		}
+		if _, terminal, _, err := session.translate(protocolMessage{
+			Method: "thread/tokenUsage/updated", Params: params,
+		}); err != nil || terminal {
+			t.Fatalf("translate usage update: terminal=%v err=%v", terminal, err)
+		}
+	}
+	// The resumed thread already used 1000 input tokens in earlier turns.
+	first := tokenUsageBreakdown{InputTokens: 300, CachedInputTokens: 200, OutputTokens: 40}
+	update("thr_usage", "turn_usage", tokenUsageBreakdown{InputTokens: 1300, CachedInputTokens: 600, OutputTokens: 140}, first)
+	second := tokenUsageBreakdown{InputTokens: 500, CachedInputTokens: 450, OutputTokens: 60}
+	total := tokenUsageBreakdown{InputTokens: 1800, CachedInputTokens: 1050, OutputTokens: 200}
+	update("thr_usage", "turn_usage", total, second)
+	// A repeated update and one for another turn change nothing.
+	update("thr_usage", "turn_usage", total, second)
+	update("thr_usage", "turn_other", tokenUsageBreakdown{InputTokens: 9999}, tokenUsageBreakdown{InputTokens: 9999})
+
+	usage := session.turnUsage()
+	want := worker.TokenUsage{InputTokens: 150, CachedInputTokens: 650, OutputTokens: 100}
+	if usage == nil || *usage != want {
+		t.Fatalf("turn usage = %+v, want %+v", usage, want)
+	}
+}

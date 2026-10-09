@@ -120,6 +120,26 @@ matching output contract and terminal disposition. Unknown contracts and
 contradictory result fields are rejected. Omitting the field preserves ordinary
 conversational output.
 
+### Token usage
+
+A terminal result may include the turn's provider-reported token usage:
+
+```json
+"usage": {
+  "input_tokens": 1200,
+  "cached_input_tokens": 48000,
+  "cache_write_tokens": 3000,
+  "output_tokens": 900
+}
+```
+
+`input_tokens` excludes cached reads and cache writes, so the four values add
+up to everything the provider processed. Claude reports these totals on its
+result record. Codex reports cumulative thread totals; the adapter subtracts
+the total from before the turn, so earlier turns of a resumed thread are not
+counted. Usage is advisory accounting: it is absent when the provider does not
+report it, and a malformed or mismatched usage update never fails the turn.
+
 ## Live activity stream
 
 The event stream uses Server-Sent Events (SSE), a one-way HTTP stream from the

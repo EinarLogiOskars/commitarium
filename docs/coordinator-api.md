@@ -48,6 +48,7 @@ this API beyond the host loopback interface is unsupported.
 | `POST` | `/api/v1/projects/{projectID}/features/{featureID}/acceptance-tests/{testID}/transitions` | Record an independent acceptance-test result |
 | `POST` | `/api/v1/projects/{projectID}/features/{featureID}/runs` | Start the configured workflow asynchronously |
 | `GET` | `/api/v1/projects/{projectID}/features/{featureID}/runs` | List the feature's run history and sessions |
+| `GET` | `/api/v1/projects/{projectID}/features/{featureID}/usage` | Total provider token usage for the feature by session role |
 | `PUT` | `/api/v1/projects/{projectID}/features/{featureID}/workspace` | Reconcile the pinned planning checkout after goal acceptance |
 | `GET` | `/api/v1/projects/{projectID}/features/{featureID}/workspace` | Retrieve the durable checkout, reserved branch, and optional PR identity |
 | `GET` | `/api/v1/projects/{projectID}/features/{featureID}/handoff` | Retrieve exact completed Git identities for trusted-host synchronization |
@@ -951,6 +952,26 @@ therefore lead directly to the existing detail, history, stream, and control
 routes. An unknown feature, including a feature belonging to a different
 project, returns `404 feature_not_found`; a feature that has not started returns
 `[]`.
+
+`GET /api/v1/projects/{projectID}/features/{featureID}/usage` totals the
+provider-reported token usage of every finished agent turn across all of the
+feature's runs:
+
+```json
+{
+  "roles": [
+    {"role": "lead", "input_tokens": 1200, "cached_input_tokens": 48000, "cache_write_tokens": 3000, "output_tokens": 900},
+    {"role": "reviewer", "input_tokens": 400, "cached_input_tokens": 12000, "cache_write_tokens": 1000, "output_tokens": 300}
+  ],
+  "total": {"input_tokens": 1600, "cached_input_tokens": 60000, "cache_write_tokens": 4000, "output_tokens": 1200}
+}
+```
+
+`input_tokens` excludes cached reads and cache writes. Roles appear only once a
+turn with reported usage has finished, so a new feature returns an empty
+`roles` array and zero totals. Usage is recorded when the coordinator observes
+a turn's terminal result; refetch it when a run update arrives. An unknown
+feature returns `404 feature_not_found`.
 
 These discovery endpoints intentionally have no pagination, search, or
 server-side state filtering in the MVP. Clients can group and filter the

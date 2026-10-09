@@ -203,6 +203,10 @@ func TestAdapterEmitsResultTextWhenAssistantRecordIsMissing(t *testing.T) {
 	if err != nil || result.Summary != "Result-only answer." {
 		t.Fatalf("result-only result=%+v error=%v", result, err)
 	}
+	wantUsage := worker.TokenUsage{InputTokens: 12, CachedInputTokens: 4000, CacheWriteTokens: 300, OutputTokens: 56}
+	if result.Usage == nil || *result.Usage != wantUsage {
+		t.Fatalf("result-only usage = %+v, want %+v", result.Usage, wantUsage)
+	}
 	if observed := <-events; !slices.Equal(observed, []worker.Event{
 		{Type: worker.EventActivity, Text: "Claude started working."},
 		{Type: worker.EventMessage, Text: "Result-only answer."},
@@ -559,6 +563,10 @@ func TestClaudeCLIHelper(t *testing.T) {
 		helperWrite(writer, map[string]any{
 			"type": "result", "subtype": "success", "session_id": sessionID,
 			"is_error": false, "result": "Result-only answer.",
+			"usage": map[string]any{
+				"input_tokens": 12, "cache_creation_input_tokens": 300,
+				"cache_read_input_tokens": 4000, "output_tokens": 56,
+			},
 		})
 	case "structured-plan":
 		helperWrite(writer, map[string]any{

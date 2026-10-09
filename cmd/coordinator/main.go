@@ -467,6 +467,7 @@ func run(ctx context.Context, coordinatorConfig config) error {
 			EnvironmentRequests: environmentService,
 			Validation:          validationService,
 			Toolchains:          toolchainService,
+			Usage:               executionStore,
 			Lifetime:            ctx, AgentProfileID: coordinatorConfig.codexAgentProfileID,
 			ReviewerAgentProfileID:       coordinatorConfig.codexReviewerAgentProfileID,
 			ClaudeAgentProfileID:         coordinatorConfig.claudeAgentProfileID,
@@ -531,6 +532,7 @@ func run(ctx context.Context, coordinatorConfig config) error {
 		projectDeletionService,
 		environmentService,
 		validationService,
+		executionStore,
 	)
 
 	log.Print("Listening...")

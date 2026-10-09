@@ -365,6 +365,10 @@ func (result TerminalResult) Validate() error {
 	if err := validateRequiredText("terminal summary", result.Summary, maxSummaryBytes); err != nil {
 		return err
 	}
+	if result.Usage != nil && (result.Usage.InputTokens < 0 || result.Usage.CachedInputTokens < 0 ||
+		result.Usage.CacheWriteTokens < 0 || result.Usage.OutputTokens < 0) {
+		return invalid("token usage cannot be negative")
+	}
 	switch result.Outcome {
 	case OutcomeCompleted:
 		if !result.Disposition.IsValid() {

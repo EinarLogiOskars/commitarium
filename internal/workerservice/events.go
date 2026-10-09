@@ -403,6 +403,10 @@ func (service *Service) finishAttempt(
 	terminalResult.GoalDraft = result.GoalDraft
 	terminalResult.ImplementationPlan = result.ImplementationPlan
 	terminalResult.AcceptanceTests = result.AcceptanceTests
+	if result.Usage != nil {
+		usage := workerhttp.TokenUsage(*result.Usage)
+		terminalResult.Usage = &usage
+	}
 	if result.Outcome == worker.OutcomeFailed {
 		terminalResult.Error = &workerhttp.ProtocolError{
 			Code:      workerhttp.ErrorInternal,

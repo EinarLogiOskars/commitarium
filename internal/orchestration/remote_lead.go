@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/EinarLogiOskars/commitarium/internal/execution"
 	"github.com/EinarLogiOskars/commitarium/internal/feature"
@@ -240,6 +241,7 @@ type RemoteLeadConfig struct {
 	EnvironmentRequests          RemoteLeadEnvironmentRequests
 	Validation                   RemoteLeadValidationGate
 	Toolchains                   RemoteLeadToolchainReader
+	Usage                        RemoteLeadUsageRecorder
 	Lifetime                     context.Context
 	AgentProfileID               string
 	ReviewerAgentProfileID       string
@@ -254,6 +256,11 @@ type RemoteLeadConfig struct {
 
 type RemoteLeadToolchainReader interface {
 	Get(context.Context, string) (toolchain.Manifest, error)
+}
+
+// RemoteLeadUsageRecorder stores provider-reported token usage per attempt.
+type RemoteLeadUsageRecorder interface {
+	RecordAttemptUsage(context.Context, execution.AttemptUsage) error
 }
 
 // RemoteLeadStarter owns the deliberately small real-provider path used while
@@ -272,6 +279,7 @@ type RemoteLeadStarter struct {
 	environmentRequests          RemoteLeadEnvironmentRequests
 	validation                   RemoteLeadValidationGate
 	toolchains                   RemoteLeadToolchainReader
+	usage                        RemoteLeadUsageRecorder
 	lifetime                     context.Context
 	agentProfileID               string
 	reviewerAgentProfileID       string
@@ -332,6 +340,7 @@ func NewRemoteLeadStarter(config RemoteLeadConfig) (*RemoteLeadStarter, error) {
 		planning: config.Planning, artifacts: config.Artifacts, workspaces: config.Workspaces,
 		worker: config.Worker, pump: config.Pump,
 		environmentRequests: config.EnvironmentRequests, validation: config.Validation, toolchains: config.Toolchains,
+		usage:    config.Usage,
 		lifetime: config.Lifetime, agentProfileID: config.AgentProfileID,
 		reviewerAgentProfileID:       reviewerAgentProfileID,
 		claudeAgentProfileID:         strings.TrimSpace(config.ClaudeAgentProfileID),
@@ -4406,6 +4415,26 @@ func (starter *RemoteLeadStarter) observe(
 	starter.finish(ctx, request, result.Attempt)
 }
 
+// recordUsage is accounting only: a failure is reported but never blocks the
+// workflow.
+func (starter *RemoteLeadStarter) recordUsage(
+	ctx context.Context,
+	reference workerhttp.AttemptReference,
+	usage *workerhttp.TokenUsage,
+) {
+	if starter.usage == nil || usage == nil {
+		return
+	}
+	err := starter.usage.RecordAttemptUsage(ctx, execution.AttemptUsage{
+		SessionID: reference.SessionID, AttemptID: reference.AttemptID,
+		Usage:      execution.TokenUsage(*usage),
+		RecordedAt: time.Now().UTC(),
+	})
+	if err != nil {
+		starter.reportError(fmt.Errorf("record token usage for attempt %q: %w", reference.AttemptID, err))
+	}
+}
+
 func (starter *RemoteLeadStarter) captureProviderSession(
 	ctx context.Context,
 	sessionID string,
@@ -4439,6 +4468,7 @@ func (starter *RemoteLeadStarter) finish(
 		starter.requireReview(ctx, request, errors.New("terminal worker attempt has no result"))
 		return
 	}
+	starter.recordUsage(ctx, request.identity.AttemptReference, attempt.Result.Usage)
 	if err := starter.captureProviderSession(ctx, request.identity.SessionID, attempt); err != nil {
 		starter.requireReview(ctx, request, err)
 		return

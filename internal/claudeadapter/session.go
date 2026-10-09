@@ -266,6 +266,27 @@ type streamMessage struct {
 	Message          json.RawMessage `json:"message"`
 	ToolUseResult    json.RawMessage `json:"tool_use_result"`
 	Event            json.RawMessage `json:"event"`
+	Usage            *resultUsage    `json:"usage"`
+}
+
+// resultUsage is the turn total Claude Code reports on its result record.
+type resultUsage struct {
+	InputTokens              int64 `json:"input_tokens"`
+	CacheCreationInputTokens int64 `json:"cache_creation_input_tokens"`
+	CacheReadInputTokens     int64 `json:"cache_read_input_tokens"`
+	OutputTokens             int64 `json:"output_tokens"`
+}
+
+func (usage *resultUsage) tokenUsage() *worker.TokenUsage {
+	if usage == nil {
+		return nil
+	}
+	return &worker.TokenUsage{
+		InputTokens:       usage.InputTokens,
+		CachedInputTokens: usage.CacheReadInputTokens,
+		CacheWriteTokens:  usage.CacheCreationInputTokens,
+		OutputTokens:      usage.OutputTokens,
+	}
 }
 
 type partialStreamEvent struct {
@@ -648,6 +669,7 @@ func (session *session) translateResult(
 			Outcome:           worker.OutcomeFailed,
 			ProviderSessionID: session.providerSessionID,
 			Summary:           summary,
+			Usage:             message.Usage.tokenUsage(),
 		}, nil
 	}
 	if session.outputContract != "" {
@@ -671,6 +693,7 @@ func (session *session) translateResult(
 			ImplementationPlan: resolved.ImplementationPlan,
 			AcceptanceTests:    resolved.AcceptanceTests,
 			EnvironmentRequest: resolved.EnvironmentRequest,
+			Usage:              message.Usage.tokenUsage(),
 		}, nil
 	}
 
@@ -696,6 +719,7 @@ func (session *session) translateResult(
 	return events, &worker.Result{
 		Outcome: worker.OutcomeCompleted, Disposition: worker.DispositionSucceeded,
 		ProviderSessionID: session.providerSessionID, Summary: lastMessage,
+		Usage: message.Usage.tokenUsage(),
 	}, nil
 }
 

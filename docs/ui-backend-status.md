@@ -446,6 +446,14 @@ in backend event payloads; the UI maps factual activity to presentation.
 - These documents are coordinator data only. The desktop must not look for a
   plan file in the checkout and must not copy one during local synchronization.
 
+### Token usage
+
+- `GET /api/v1/projects/{projectID}/features/{featureID}/usage` returns
+  provider token totals per session role and overall. Usage is recorded as
+  each agent turn finishes; refetch on run updates rather than polling.
+- Older turns and providers that do not report usage contribute nothing, so
+  treat the numbers as a lower bound, not a bill.
+
 ### Managed workspace and Forgejo links
 
 - `PUT` and `GET` on the feature workspace route expose the durable reserved

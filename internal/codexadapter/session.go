@@ -42,6 +42,8 @@ type session struct {
 	pendingMessage       string
 	pendingStreamID      string
 	forced               bool
+	usageBaseline        *tokenUsageBreakdown
+	usageLatest          *tokenUsageBreakdown
 	result               worker.Result
 	waitErr              error
 	finished             bool
@@ -293,6 +295,68 @@ type agentMessageDelta struct {
 	Delta    string `json:"delta"`
 }
 
+type tokenUsageUpdated struct {
+	ThreadID   string           `json:"threadId"`
+	TurnID     string           `json:"turnId"`
+	TokenUsage threadTokenUsage `json:"tokenUsage"`
+}
+
+type threadTokenUsage struct {
+	Total tokenUsageBreakdown `json:"total"`
+	Last  tokenUsageBreakdown `json:"last"`
+}
+
+// tokenUsageBreakdown follows the App Server: inputTokens includes cached
+// reads, and reasoning output is part of outputTokens.
+type tokenUsageBreakdown struct {
+	InputTokens           int64 `json:"inputTokens"`
+	CachedInputTokens     int64 `json:"cachedInputTokens"`
+	CacheWriteInputTokens int64 `json:"cacheWriteInputTokens"`
+	OutputTokens          int64 `json:"outputTokens"`
+}
+
+func (usage tokenUsageBreakdown) minus(other tokenUsageBreakdown) tokenUsageBreakdown {
+	return tokenUsageBreakdown{
+		InputTokens:           usage.InputTokens - other.InputTokens,
+		CachedInputTokens:     usage.CachedInputTokens - other.CachedInputTokens,
+		CacheWriteInputTokens: usage.CacheWriteInputTokens - other.CacheWriteInputTokens,
+		OutputTokens:          usage.OutputTokens - other.OutputTokens,
+	}
+}
+
+// acceptTokenUsage tracks the thread's cumulative total. The first update of
+// the turn fixes the baseline as that total minus the model call it reports,
+// so a resumed thread's earlier turns and repeated updates are not counted.
+func (session *session) acceptTokenUsage(usage threadTokenUsage) {
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	if session.usageBaseline == nil {
+		baseline := usage.Total.minus(usage.Last)
+		session.usageBaseline = &baseline
+	}
+	total := usage.Total
+	session.usageLatest = &total
+}
+
+func (session *session) turnUsage() *worker.TokenUsage {
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	if session.usageBaseline == nil || session.usageLatest == nil {
+		return nil
+	}
+	turn := session.usageLatest.minus(*session.usageBaseline)
+	uncached := turn.InputTokens - turn.CachedInputTokens - turn.CacheWriteInputTokens
+	if uncached < 0 || turn.CachedInputTokens < 0 || turn.CacheWriteInputTokens < 0 || turn.OutputTokens < 0 {
+		return nil
+	}
+	return &worker.TokenUsage{
+		InputTokens:       uncached,
+		CachedInputTokens: turn.CachedInputTokens,
+		CacheWriteTokens:  turn.CacheWriteInputTokens,
+		OutputTokens:      turn.OutputTokens,
+	}
+}
+
 type turnRecord struct {
 	ID     string `json:"id"`
 	Status string `json:"status"`
@@ -394,7 +458,16 @@ func (session *session) translate(
 		}
 		session.acceptMessageDelta(params.ItemID, params.Delta)
 		return nil, false, worker.Result{}, nil
-	case "turn/diff/updated", "thread/tokenUsage/updated":
+	case "thread/tokenUsage/updated":
+		// Usage is advisory: a malformed update or one for another turn is
+		// ignored rather than failing work over accounting.
+		var params tokenUsageUpdated
+		if decodeParams(message, &params) == nil &&
+			params.ThreadID == session.threadID && params.TurnID == session.currentTurnID() {
+			session.acceptTokenUsage(params.TokenUsage)
+		}
+		return nil, false, worker.Result{}, nil
+	case "turn/diff/updated":
 		return nil, false, worker.Result{}, nil
 	default:
 		// App Server evolves quickly and emits many optional notifications. An
@@ -657,18 +730,21 @@ func (session *session) completedTurn(
 			GoalDraft:          goalDraft,
 			ImplementationPlan: implementationPlan,
 			AcceptanceTests:    acceptanceTests,
+			Usage:              session.turnUsage(),
 		}, nil
 	case "interrupted":
 		return nil, true, worker.Result{
 			Outcome:           worker.OutcomeStopped,
 			ProviderSessionID: session.threadID,
 			Summary:           "Codex turn was interrupted.",
+			Usage:             session.turnUsage(),
 		}, nil
 	case "failed":
 		return nil, true, worker.Result{
 			Outcome:           worker.OutcomeFailed,
 			ProviderSessionID: session.threadID,
 			Summary:           "Codex reported that the turn failed.",
+			Usage:             session.turnUsage(),
 		}, nil
 	default:
 		return nil, false, worker.Result{}, fmt.Errorf(

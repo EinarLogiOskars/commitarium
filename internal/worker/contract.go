@@ -192,6 +192,17 @@ type Result struct {
 	ImplementationPlan *featureartifact.ImplementationPlan
 	AcceptanceTests    *featureartifact.AcceptanceTests
 	EnvironmentRequest *EnvironmentRequest
+	Usage              *TokenUsage
+}
+
+// TokenUsage is the provider-reported token consumption of one turn.
+// InputTokens excludes cached reads and cache writes, so the four fields add
+// up to everything the provider processed.
+type TokenUsage struct {
+	InputTokens       int64
+	CachedInputTokens int64
+	CacheWriteTokens  int64
+	OutputTokens      int64
 }
 
 type ToolchainProposal struct {

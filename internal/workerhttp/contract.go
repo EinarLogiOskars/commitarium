@@ -183,7 +183,17 @@ type TerminalResult struct {
 	ImplementationPlan *featureartifact.ImplementationPlan `json:"implementation_plan,omitempty"`
 	AcceptanceTests    *featureartifact.AcceptanceTests    `json:"acceptance_tests,omitempty"`
 	EnvironmentRequest *EnvironmentRequest                 `json:"environment_request,omitempty"`
+	Usage              *TokenUsage                         `json:"usage,omitempty"`
 	Error              *ProtocolError                      `json:"error,omitempty"`
+}
+
+// TokenUsage is the provider-reported token consumption of one attempt.
+// InputTokens excludes cached reads and cache writes.
+type TokenUsage struct {
+	InputTokens       int64 `json:"input_tokens"`
+	CachedInputTokens int64 `json:"cached_input_tokens"`
+	CacheWriteTokens  int64 `json:"cache_write_tokens"`
+	OutputTokens      int64 `json:"output_tokens"`
 }
 
 type ToolchainProposal struct {

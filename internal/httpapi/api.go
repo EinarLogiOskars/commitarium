@@ -215,6 +215,11 @@ type ProjectEnvironmentService interface {
 	ApprovedPackages(context.Context) ([]string, error)
 }
 
+// FeatureUsageService totals provider token usage for a work order.
+type FeatureUsageService interface {
+	FeatureUsageByRole(ctx context.Context, featureID string) ([]execution.RoleUsage, error)
+}
+
 type ValidationService interface {
 	Configure(context.Context, string, []string) (validation.Config, error)
 	Disable(context.Context, string) (bool, error)
@@ -276,6 +281,7 @@ type API struct {
 	toolchainAssistant ToolchainAssistantService
 	environments       ProjectEnvironmentService
 	validations        ValidationService
+	usage              FeatureUsageService
 }
 
 func New(
@@ -377,8 +383,11 @@ func newAPI(
 	var projectDeletion ProjectDeletionService
 	var environments ProjectEnvironmentService
 	var validations ValidationService
+	var usage FeatureUsageService
 	for _, extra := range extras {
 		switch typed := extra.(type) {
+		case FeatureUsageService:
+			usage = typed
 		case ToolchainService:
 			toolchainService = typed
 		case ToolchainAssistantService:
@@ -407,6 +416,7 @@ func newAPI(
 		toolchainAssistant: toolchainAssistant,
 		environments:       environments,
 		validations:        validations,
+		usage:              usage,
 	}
 	api.artifacts, _ = workflow.(FeatureArtifactService)
 	api.projectImporter, _ = projects.(ProjectImporter)
@@ -570,6 +580,12 @@ func newAPI(
 		"GET /api/v1/projects/{projectID}/features/{id}/runs",
 		api.listFeatureRunsHandler,
 	)
+	if usage != nil {
+		mux.HandleFunc(
+			"GET /api/v1/projects/{projectID}/features/{id}/usage",
+			api.getFeatureUsageHandler,
+		)
+	}
 	if workspaces != nil {
 		mux.HandleFunc(
 			"GET /api/v1/projects/{projectID}/handoff",
