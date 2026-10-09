@@ -178,6 +178,7 @@ type WorkspaceService interface {
 
 type FeatureDeletionService interface {
 	Delete(ctx context.Context, projectID, featureID string) (workorder.Result, error)
+	ForceDelete(ctx context.Context, projectID, featureID, requestKey string) (workorder.Result, error)
 }
 
 type ProjectDeletionService interface {

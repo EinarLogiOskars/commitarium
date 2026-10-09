@@ -310,8 +310,9 @@ Safe UI capabilities:
 - Delete a stopped work order with
   `DELETE /api/v1/projects/{projectID}/features/{featureID}`. The backend
   removes only its isolated branch, managed checkout, draft PR, and internal
-  records. It refuses live agent work with `409 feature_active`. A completed
-  work order may be deleted, but the response sets
+  records. It refuses live agent work with `409 feature_active`; an explicit
+  `?force=true` retry with an idempotency key stops exact active attempts first.
+  A completed work order may be deleted, but the response sets
   `merged_changes_remain: true` because deletion is never a revert and never
   writes the default branch.
 - Open a feature's run history, including the sessions needed for historical

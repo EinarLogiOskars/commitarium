@@ -75,9 +75,14 @@ export interface DeleteFeatureResult {
 }
 
 /** Delete a work order and its isolated internal artifacts. Never touches the
- * default branch. Refuses (409 feature_active) while a run is active. */
-export const deleteFeature = (projectId: string, featureId: string): Promise<DeleteFeatureResult> =>
+ * default branch. A forced delete stops exact active attempts first. */
+export const deleteFeature = (
+  projectId: string,
+  featureId: string,
+  idempotencyKey?: string,
+  force = false,
+): Promise<DeleteFeatureResult> =>
   request(
-    `/api/v1/projects/${encodeURIComponent(projectId)}/features/${encodeURIComponent(featureId)}`,
-    { method: "DELETE" },
+    `/api/v1/projects/${encodeURIComponent(projectId)}/features/${encodeURIComponent(featureId)}${force ? "?force=true" : ""}`,
+    { method: "DELETE", idempotencyKey },
   );

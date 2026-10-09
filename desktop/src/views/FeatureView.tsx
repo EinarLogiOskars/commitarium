@@ -44,6 +44,8 @@ export function FeatureView({
   // null = follow the current phase; a number = the user pinned that phase.
   const [pinnedIndex, setPinnedIndex] = useState<number | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [forceDelete, setForceDelete] = useState(false);
+  const [deleteKey, setDeleteKey] = useState("");
   const [deleting, setDeleting] = useState(false);
   const [envActive, setEnvActive] = useState(false);
   const lastState = useRef<string | null>(null);
@@ -99,19 +101,35 @@ export function FeatureView({
 
   const select = (i: number) => setPinnedIndex(i === current ? null : i);
 
+  const openDeleteConfirm = () => {
+    setConfirmDelete(true);
+    setForceDelete(false);
+    setDeleteKey(crypto.randomUUID());
+    setError(null);
+  };
+
+  const cancelDelete = () => {
+    setConfirmDelete(false);
+    setForceDelete(false);
+    setError(null);
+  };
+
   const runDelete = async () => {
     setDeleting(true);
     setError(null);
     try {
-      await deleteFeature(projectId, featureId);
+      await deleteFeature(projectId, featureId, deleteKey, forceDelete);
       onDeleted?.();
     } catch (e) {
-      setError(
-        e instanceof ApiError && e.code === "feature_active"
-          ? "Stop the run first — agents may still be working on this order."
-          : describe(e),
-      );
-      setConfirmDelete(false);
+      if (e instanceof ApiError && e.code === "feature_active") {
+        setForceDelete(true);
+        setDeleteKey(crypto.randomUUID());
+        setError("This work order has an active run. Force delete will stop it first.");
+      } else if (e instanceof ApiError && e.code === "feature_deletion_unavailable") {
+        setError("Deletion is temporarily unavailable. Try again to resume.");
+      } else {
+        setError(describe(e));
+      }
     } finally {
       setDeleting(false);
     }
@@ -137,11 +155,7 @@ export function FeatureView({
             {feature.description && <p className="muted order-head__desc">{feature.description}</p>}
           </div>
           {onDeleted && !confirmDelete && (
-            <button
-              className="ghost danger"
-              onClick={() => setConfirmDelete(true)}
-              disabled={deleting}
-            >
+            <button className="ghost danger" onClick={openDeleteConfirm} disabled={deleting}>
               Delete
             </button>
           )}
@@ -150,15 +164,17 @@ export function FeatureView({
         {confirmDelete && (
           <div className="delete-confirm">
             <span className="muted">
-              {feature.state === "completed"
-                ? "This order was merged — deleting removes it from the list, but its changes stay in the project (not a revert)."
-                : "Delete this work order? Its branch, checkout, and history are dropped; nothing reaches the default branch."}
+              {forceDelete
+                ? "Force-delete this work order? Its active run is stopped, then its branch, checkout, and history are permanently removed."
+                : feature.state === "completed"
+                  ? "This order was merged — deleting removes it from the list, but its changes stay in the project (not a revert)."
+                  : "Delete this work order? Its branch, checkout, and history are dropped; nothing reaches the default branch."}
             </span>
             <div className="row">
               <button className="danger" onClick={() => void runDelete()} disabled={deleting}>
-                {deleting ? "Deleting…" : "Confirm delete"}
+                {deleting ? "Deleting…" : forceDelete ? "Force delete" : "Confirm delete"}
               </button>
-              <button className="ghost" onClick={() => setConfirmDelete(false)} disabled={deleting}>
+              <button className="ghost" onClick={cancelDelete} disabled={deleting}>
                 Cancel
               </button>
             </div>

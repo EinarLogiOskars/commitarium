@@ -5,6 +5,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strings"
 
 	"github.com/EinarLogiOskars/commitarium/internal/feature"
 	"github.com/EinarLogiOskars/commitarium/internal/project"
@@ -20,7 +21,25 @@ func (api *API) deleteFeatureHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	projectID := r.PathValue("projectID")
 	featureID := r.PathValue("id")
-	result, err := api.featureDeletion.Delete(r.Context(), projectID, featureID)
+	force := false
+	if values, exists := r.URL.Query()["force"]; exists {
+		if len(values) != 1 || (values[0] != "true" && values[0] != "false") {
+			writeError(w, http.StatusBadRequest, "invalid_force", "force must be true or false")
+			return
+		}
+		force = values[0] == "true"
+	}
+	var result workorder.Result
+	if force {
+		key := strings.TrimSpace(r.Header.Get("Idempotency-Key"))
+		if key == "" {
+			writeError(w, http.StatusBadRequest, "idempotency_key_required", "Idempotency-Key header is required for force deletion")
+			return
+		}
+		result, err = api.featureDeletion.ForceDelete(r.Context(), projectID, featureID, key)
+	} else {
+		result, err = api.featureDeletion.Delete(r.Context(), projectID, featureID)
+	}
 	if err != nil {
 		switch {
 		case errors.Is(err, feature.ErrNotFound):
@@ -34,9 +53,10 @@ func (api *API) deleteFeatureHandler(w http.ResponseWriter, r *http.Request) {
 			errors.Is(err, workspace.ErrPullRequestConflict):
 			writeError(w, http.StatusConflict, "feature_deletion_conflict", "the work order's isolated artifacts could not be safely identified")
 		case errors.Is(err, workspace.ErrCheckoutUnavailable),
+			errors.Is(err, workorder.ErrUnavailable),
 			errors.Is(err, project.ErrForgejoUnavailable),
 			errors.Is(err, project.ErrForgejoRepositoryNotReady):
-			writeError(w, http.StatusServiceUnavailable, "feature_deletion_unavailable", "the managed checkout or Forgejo is temporarily unavailable")
+			writeError(w, http.StatusServiceUnavailable, "feature_deletion_unavailable", "work-order deletion is temporarily unavailable; retry with the same Idempotency-Key")
 		default:
 			log.Printf("delete feature %q from project %q: %v", featureID, projectID, err)
 			writeError(w, http.StatusInternalServerError, "internal_error", "internal server error")

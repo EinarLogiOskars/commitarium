@@ -1161,10 +1161,11 @@ request when present, deletes its exact Forgejo feature branch, removes its
 managed checkout, and transactionally deletes the feature record plus its
 runs, sessions, commands, session events, planning messages, interventions,
 workflow events, recovery checkpoints, plan revisions, and run-control
-records. A durable deletion claim is stored before external cleanup and fences
-new run admission. If cleanup or the coordinator is interrupted, retrying the
-same request adopts already-closed or missing isolated artifacts and finishes
-the retained claim.
+records. A forced deletion first performs idempotent run termination. A durable
+deletion claim is then stored before branch or checkout cleanup and fences new
+run admission. If cleanup or the coordinator is interrupted, retrying the same
+request adopts already-stopped work and already-closed or missing isolated
+artifacts, then finishes the retained claim.
 
 Deletion never checks out, updates, resets, merges, reverts, pushes, or deletes
 the repository's recorded default branch. Before any external mutation, the
@@ -1179,13 +1180,16 @@ request is not mutated and their merged changes remain on the default branch.
 The response states this explicitly as `"merged_changes_remain": true`.
 Deletion is not a revert.
 
-The coordinator refuses deletion with `409 feature_active` while a run is
-active or any session may still own a live provider turn. Stop the work first,
-then retry. Temporarily unavailable Forgejo or checkout cleanup returns
-`503 feature_deletion_unavailable` while retaining the durable deletion claim.
-A missing feature, including a repeat after successful deletion, returns
-`404 feature_not_found`. The cleanup effects themselves are idempotent even
-though the now-missing resource has the required `404` response.
+The coordinator refuses a default deletion with `409 feature_active` while a
+run is active or any session may still own a live provider turn. The user may
+then explicitly retry with `?force=true` and an `Idempotency-Key`; force deletion
+stops the work order's exact active attempts and makes its run and sessions
+terminal before deleting artifacts. Temporarily unavailable run termination,
+Forgejo, or checkout cleanup returns `503 feature_deletion_unavailable`; retry
+with the same idempotency key. A missing feature, including a repeat after
+successful deletion, returns `404 feature_not_found`. The cleanup effects
+themselves are idempotent even though the now-missing resource has the required
+`404` response.
 
 ## Preparing a feature workspace
 

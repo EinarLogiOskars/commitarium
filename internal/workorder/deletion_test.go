@@ -51,6 +51,17 @@ func (stub *checkoutCleanerStub) Remove(_ context.Context, workspaceID string) e
 	return nil
 }
 
+type runTerminatorStub struct {
+	featureID string
+	key       string
+	err       error
+}
+
+func (stub *runTerminatorStub) StopWorkOrderRuns(_ context.Context, featureID, key string) error {
+	stub.featureID, stub.key = featureID, key
+	return stub.err
+}
+
 func TestDeleteRemovesOnlyIsolatedUnmergedArtifacts(t *testing.T) {
 	deletion := testDeletion(feature.StateReviewing)
 	store := &deletionStoreStub{deletion: deletion}
@@ -108,6 +119,34 @@ func TestDeleteRejectsActiveOrDefaultBranchArtifact(t *testing.T) {
 	}
 	if forgejo.closed != 0 || forgejo.deleted != 0 || store.finished {
 		t.Fatalf("unsafe deletion mutated artifacts: store=%+v forgejo=%+v", store, forgejo)
+	}
+}
+
+func TestForceDeleteStopsTheWorkOrderBeforeRemovingArtifacts(t *testing.T) {
+	deletion := testDeletion(feature.StateImplementing)
+	store := &deletionStoreStub{deletion: deletion}
+	runs := &runTerminatorStub{}
+	service := NewServiceWithRunTerminator(
+		store, &forgejoCleanerStub{}, runs, &checkoutCleanerStub{},
+	)
+	result, err := service.ForceDelete(
+		t.Context(), deletion.Feature.ProjectID, deletion.Feature.ID, "delete-work-order-1",
+	)
+	if err != nil {
+		t.Fatalf("force delete work order: %v", err)
+	}
+	if !result.Deleted || runs.featureID != deletion.Feature.ID || runs.key != "delete-work-order-1" || !store.finished {
+		t.Fatalf("unexpected force deletion result=%+v runs=%+v store=%+v", result, runs, store)
+	}
+}
+
+func TestForceDeleteRefusesWhenRunTerminationIsUnavailable(t *testing.T) {
+	deletion := testDeletion(feature.StateImplementing)
+	service := NewService(&deletionStoreStub{deletion: deletion}, &forgejoCleanerStub{})
+	if _, err := service.ForceDelete(
+		t.Context(), deletion.Feature.ProjectID, deletion.Feature.ID, "delete-work-order-1",
+	); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("expected unavailable error, got %v", err)
 	}
 }
 

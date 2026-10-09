@@ -16,11 +16,21 @@ type featureDeletionStub struct {
 	err       error
 	projectID string
 	featureID string
+	key       string
+	forced    bool
 }
 
 func (stub *featureDeletionStub) Delete(_ context.Context, projectID, featureID string) (workorder.Result, error) {
 	stub.projectID = projectID
 	stub.featureID = featureID
+	return stub.result, stub.err
+}
+
+func (stub *featureDeletionStub) ForceDelete(_ context.Context, projectID, featureID, key string) (workorder.Result, error) {
+	stub.projectID = projectID
+	stub.featureID = featureID
+	stub.key = key
+	stub.forced = true
 	return stub.result, stub.err
 }
 
@@ -67,5 +77,53 @@ func TestDeleteFeatureRefusesActiveRunAndReturnsMissingAsNotFound(t *testing.T) 
 	))
 	if response.Code != http.StatusNotFound || !containsAll(response.Body.String(), `"code":"feature_not_found"`) {
 		t.Fatalf("unexpected missing response: %d %s", response.Code, response.Body.String())
+	}
+}
+
+func TestForceDeleteFeatureForwardsIdempotencyKey(t *testing.T) {
+	deletion := &featureDeletionStub{result: workorder.Result{
+		ProjectID: "prj_test", FeatureID: "fea_test", Deleted: true,
+	}}
+	handler := NewWithWorkspaceRealWorkflowAndDeletionService(
+		nil, nil, nil, nil, nil, nil, nil, nil, deletion,
+	)
+	request := httptest.NewRequest(
+		http.MethodDelete,
+		"/api/v1/projects/prj_test/features/fea_test?force=true",
+		nil,
+	)
+	request.Header.Set("Idempotency-Key", "delete-feature-1")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK || !deletion.forced || deletion.key != "delete-feature-1" ||
+		deletion.projectID != "prj_test" || deletion.featureID != "fea_test" {
+		t.Fatalf("unexpected force deletion response: code=%d deletion=%+v body=%s", response.Code, deletion, response.Body.String())
+	}
+}
+
+func TestForceDeleteFeatureValidatesForceAndIdempotencyKey(t *testing.T) {
+	handler := NewWithWorkspaceRealWorkflowAndDeletionService(
+		nil, nil, nil, nil, nil, nil, nil, nil, &featureDeletionStub{},
+	)
+	for _, target := range []string{
+		"/api/v1/projects/prj_test/features/fea_test?force=yes",
+		"/api/v1/projects/prj_test/features/fea_test?force=true&force=false",
+	} {
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, httptest.NewRequest(http.MethodDelete, target, nil))
+		if response.Code != http.StatusBadRequest || !containsAll(response.Body.String(), `"code":"invalid_force"`) {
+			t.Fatalf("unexpected invalid force response: %d %s", response.Code, response.Body.String())
+		}
+	}
+
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(
+		http.MethodDelete,
+		"/api/v1/projects/prj_test/features/fea_test?force=true",
+		nil,
+	))
+	if response.Code != http.StatusBadRequest || !containsAll(response.Body.String(), `"code":"idempotency_key_required"`) {
+		t.Fatalf("unexpected missing key response: %d %s", response.Code, response.Body.String())
 	}
 }
