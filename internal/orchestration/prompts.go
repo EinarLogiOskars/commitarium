@@ -92,8 +92,8 @@ func acceptanceTestsInstructions(prepared workspace.Workspace) string {
 		"the agreed plan (read it with 'commitarium-artifact plan show'), and the clean planning baseline already " +
 		"present in your private checkout. Do not fetch, inspect, " +
 		"or query the lead's implementation or pull-request head. Write the smallest useful executable acceptance tests " +
-		"you would have written before implementation: usually one to three, covering the goal's essential " +
-		"behavior rather than every detail, and one for a documentation-only change. Do not alter production code. Run the tests against the " +
+		"you would have written before implementation: one per essential behavior the goal requires, not one per " +
+		"detail, so a small change needs only a few and a documentation-only change usually one. Do not alter production code. Run the tests against the " +
 		"baseline when practical; they are expected to expose missing behavior. Commit only the acceptance-test changes " +
 		"locally and do not push any branch or commit. Return action 'authored', a concise summary, the exact local test " +
 		"commit ID, and ordered stable test IDs and user-facing titles. If independent executable acceptance tests are " +
