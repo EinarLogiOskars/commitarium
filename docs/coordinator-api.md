@@ -2423,6 +2423,11 @@ genuinely missing and policy or the user permits continuation, it resumes the
 same conversation first. Only an explicitly unavailable resume admits one
 fresh conversation with the durable goal, plan, workspace, attempt cursor, and
 recent events. A user may choose that fresh path directly with `replace`.
+Each admitted recovery successor receives its exact retry-stable Forgejo audit
+marker and required heading in the recovery briefing. It must use that marker,
+not one retained from an earlier physical attempt in the same provider
+conversation. The coordinator verifies the same successor identity before it
+advances the workflow.
 
 Before any successor is admitted, the coordinator reattaches to the old
 attempt or asks the worker to supersede it. Supersede succeeds only when the

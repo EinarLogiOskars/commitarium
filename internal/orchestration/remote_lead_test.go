@@ -3192,6 +3192,64 @@ func TestRecoverySuccessorPreservesWorkflowLaneAndClassifiesResumeFailure(t *tes
 	}
 }
 
+func TestRecoveryPublicationInstructionsUseSuccessorIdentity(t *testing.T) {
+	lead := "run_recovery:lead"
+	reviewer := "run_recovery:reviewer"
+	tests := []struct {
+		name      string
+		sessionID string
+		attemptID string
+		marker    string
+		heading   string
+	}{
+		{
+			name: "implementation", sessionID: lead,
+			attemptID: implementationAttemptForVersion(lead, 1, 3),
+			marker: workspace.ImplementationPublicationInitial.Marker(
+				implementationAttemptForVersion(lead, 1, 3),
+			),
+			heading: "## Implementation summary",
+		},
+		{
+			name: "correction", sessionID: lead,
+			attemptID: implementationCorrectionAttemptForVersion(lead, 2, 4),
+			marker: workspace.ImplementationPublicationReviewResponse.Marker(
+				implementationCorrectionAttemptForVersion(lead, 2, 4),
+			),
+			heading: "## Review response",
+		},
+		{
+			name: "readiness", sessionID: lead,
+			attemptID: implementationReadinessAttemptForVersion(lead, 2, 4),
+			marker: workspace.ImplementationPublicationMergeReadiness.Marker(
+				implementationReadinessAttemptForVersion(lead, 2, 4),
+			),
+			heading: "## Merge readiness",
+		},
+		{
+			name: "review", sessionID: reviewer,
+			attemptID: implementationReviewAttemptForVersion(reviewer, 2, 4),
+			marker: implementationReviewMarker(
+				implementationReviewAttemptForVersion(reviewer, 2, 4),
+			),
+			heading: "## Review",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			instructions := recoveryPublicationInstructions(test.sessionID, test.attemptID)
+			if !strings.Contains(instructions, test.marker) ||
+				!strings.Contains(instructions, test.heading) ||
+				!strings.Contains(instructions, "rather than any marker from an earlier attempt") {
+				t.Fatalf("unexpected recovery publication instructions %q", instructions)
+			}
+		})
+	}
+	if instructions := recoveryPublicationInstructions(lead, planningAttemptID(lead)); instructions != "" {
+		t.Fatalf("planning recovery unexpectedly received publication instructions %q", instructions)
+	}
+}
+
 func waitForRemoteLeadStatus(
 	t *testing.T,
 	executions *execution.Service,

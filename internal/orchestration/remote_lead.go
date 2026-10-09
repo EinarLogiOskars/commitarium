@@ -4109,7 +4109,9 @@ func (starter *RemoteLeadStarter) continueFailedAttempt(
 	if err != nil {
 		return false, err
 	}
-	briefing, err := starter.recoveryBriefing(ctx, run, storedFeature, session, checkpoint, attempt, prepared)
+	briefing, err := starter.recoveryBriefing(
+		ctx, run, storedFeature, session, checkpoint, attempt, prepared, nextAttemptID,
+	)
 	if err != nil {
 		return false, err
 	}
@@ -4178,6 +4180,7 @@ func (starter *RemoteLeadStarter) recoveryBriefing(
 	checkpoint execution.WorkerAttemptCheckpoint,
 	attempt workerhttp.Attempt,
 	prepared workspace.Workspace,
+	nextAttemptID string,
 ) (string, error) {
 	messages, err := starter.currentPlanningMessages(ctx, run)
 	if err != nil {
@@ -4209,10 +4212,37 @@ func (starter *RemoteLeadStarter) recoveryBriefing(
 		checkpoint.LastEventSequence, cause, prepared.ID, prepared.Branch,
 		prepared.BaseCommitID, prepared.PullRequestNumber, history.String(),
 	)
+	briefing += recoveryPublicationInstructions(session.ID, nextAttemptID)
 	if len(briefing) > workerhttp.MaxInstructionsBytes {
 		return "", errors.New("recovery briefing exceeds the worker instruction limit")
 	}
 	return briefing, nil
+}
+
+func recoveryPublicationInstructions(sessionID, attemptID string) string {
+	marker := ""
+	heading := ""
+	if _, ok := implementationTurnNumber(sessionID, attemptID); ok {
+		marker = implementationPublicationMarker(attemptID)
+		heading = "Implementation summary"
+	} else if _, ok := implementationCorrectionTurnNumber(sessionID, attemptID); ok {
+		marker = implementationReviewResponseMarker(attemptID)
+		heading = "Review response"
+	} else if _, ok := implementationReadinessTurnNumber(sessionID, attemptID); ok {
+		marker = workspace.ImplementationPublicationMergeReadiness.Marker(attemptID)
+		heading = "Merge readiness"
+	} else if _, ok := implementationReviewTurnNumber(sessionID, attemptID); ok {
+		marker = implementationReviewMarker(attemptID)
+		heading = "Review"
+	}
+	if marker == "" {
+		return ""
+	}
+	return "\n\nRecovery publication identity:\n" +
+		"This recovery successor has a new durable attempt identity. If you publish or verify " +
+		"external work, use the exact marker below rather than any marker from an earlier attempt. " +
+		"Check for this exact marker before writing so a retry does not duplicate it.\n" +
+		marker + "\n\nRequired heading after the marker: ## " + heading
 }
 
 func (starter *RemoteLeadStarter) launchRecoverySuccessor(

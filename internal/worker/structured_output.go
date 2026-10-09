@@ -261,8 +261,14 @@ func ResolveStructuredOutput(
 		}
 		if response.Action == "environment_required" {
 			request := &EnvironmentRequest{SystemPackages: response.SystemPackages, Reason: strings.TrimSpace(response.EnvironmentReason)}
-			if response.CommitID != "" || response.PullRequestNumber != 0 || request.Validate() != nil {
-				return StructuredOutput{}, invalidStructuredOutput("implementation environment request is invalid")
+			if response.CommitID != "" {
+				return StructuredOutput{}, invalidStructuredOutput("implementation environment request cannot claim a commit")
+			}
+			if response.PullRequestNumber != 0 {
+				return StructuredOutput{}, invalidStructuredOutput("implementation environment request cannot claim a pull request")
+			}
+			if err := request.Validate(); err != nil {
+				return StructuredOutput{}, invalidStructuredOutput("implementation environment request: %v", err)
 			}
 			return StructuredOutput{Event: Event{Type: EventInputRequired, Text: response.Summary}, Disposition: DispositionInputRequired, EnvironmentRequest: request}, nil
 		}

@@ -3,6 +3,7 @@ package worker
 import (
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/EinarLogiOskars/commitarium/internal/featureartifact"
@@ -181,5 +182,32 @@ func TestResolveStructuredOutputFailsClosed(t *testing.T) {
 		if _, err := ResolveStructuredOutput(test.contract, []byte(test.raw)); !errors.Is(err, ErrInvalidStructuredOutput) {
 			t.Errorf("contract %q response %q error=%v", test.contract, test.raw, err)
 		}
+	}
+}
+
+func TestResolveStructuredEnvironmentRequestExplainsInvalidField(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{
+			name: "pull request",
+			raw:  `{"action":"environment_required","summary":"Docker is required","commit_id":"","pull_request_number":8,"system_packages":["docker.io"],"environment_reason":"Docker is unavailable."}`,
+			want: "cannot claim a pull request",
+		},
+		{
+			name: "package",
+			raw:  `{"action":"environment_required","summary":"Docker is required","commit_id":"","pull_request_number":0,"system_packages":["bad package"],"environment_reason":"Docker is unavailable."}`,
+			want: `environment package "bad package" is invalid`,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := ResolveStructuredOutput(OutputContractImplementationLead, []byte(test.raw))
+			if !errors.Is(err, ErrInvalidStructuredOutput) || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("error=%v, want invalid structured output containing %q", err, test.want)
+			}
+		})
 	}
 }
