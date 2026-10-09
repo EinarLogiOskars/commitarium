@@ -22,8 +22,6 @@ export interface ProjectDefaults {
   models: AgentModels;
   autonomy_policy: AutonomyPolicy;
   merge_policy: MergePolicy;
-  planning_rounds: number;
-  review_rounds: number;
 }
 
 /** Safe starting defaults for a brand-new project. */
@@ -34,8 +32,6 @@ export function initialProjectDefaults(): ProjectDefaults {
     models: { lead: "", reviewer: "" },
     autonomy_policy: "review_each_phase",
     merge_policy: "require_user_approval",
-    planning_rounds: 6,
-    review_rounds: 6,
   };
 }
 
@@ -48,8 +44,6 @@ export function projectDefaultsFrom(p: Project): ProjectDefaults {
     models: { lead: p.agent_models?.lead ?? "", reviewer: p.agent_models?.reviewer ?? "" },
     autonomy_policy: p.autonomy_policy ?? d.autonomy_policy,
     merge_policy: p.merge_policy ?? d.merge_policy,
-    planning_rounds: p.dialogue_limits?.planning_rounds ?? d.planning_rounds,
-    review_rounds: p.dialogue_limits?.implementation_review_rounds ?? d.review_rounds,
   };
 }
 
@@ -62,10 +56,6 @@ export function projectDefaultsPayload(d: ProjectDefaults): Omit<CreateProjectIn
     ...(d.models.lead && d.models.reviewer ? { agent_models: d.models } : {}),
     autonomy_policy: d.autonomy_policy,
     merge_policy: d.merge_policy,
-    dialogue_limits: {
-      planning_rounds: d.planning_rounds,
-      implementation_review_rounds: d.review_rounds,
-    },
   };
 }
 
@@ -141,30 +131,6 @@ export function ProjectDefaultsFields({
           <option value="approval_required">Approval required</option>
           <option value="automatic">Automatic recovery</option>
         </select>
-      </label>
-      <label>
-        Planning rounds
-        <input
-          type="number"
-          min={0}
-          value={value.planning_rounds}
-          onChange={(e) =>
-            onChange({ ...value, planning_rounds: Math.max(0, Number(e.target.value)) })
-          }
-          disabled={disabled}
-        />
-      </label>
-      <label>
-        Review rounds
-        <input
-          type="number"
-          min={0}
-          value={value.review_rounds}
-          onChange={(e) =>
-            onChange({ ...value, review_rounds: Math.max(0, Number(e.target.value)) })
-          }
-          disabled={disabled}
-        />
       </label>
     </div>
   );

@@ -110,8 +110,8 @@ func TestStartRunReturnsDurableAcceptedRun(t *testing.T) {
 	if starter.goal != "Build coordinator: Exercise its deterministic workflow" {
 		t.Errorf("unexpected derived goal %q", starter.goal)
 	}
-	if starter.limits != limits {
-		t.Errorf("expected run snapshot %+v, got %+v", limits, starter.limits)
+	if starter.limits != project.DefaultDialogueLimits() {
+		t.Errorf("expected the system round limits, got %+v", starter.limits)
 	}
 	if starter.providers != providers {
 		t.Errorf("expected provider snapshot %+v, got %+v", providers, starter.providers)
@@ -133,7 +133,7 @@ func TestStartRunReturnsDurableAcceptedRun(t *testing.T) {
 		t.Fatalf("decode run response: %v", err)
 	}
 	if body.ID != expectedRunID || body.Status != execution.RunStatusRunning || body.Sessions == nil ||
-		body.DialogueLimits.PlanningRounds != 3 || body.DialogueLimits.ImplementationReviewRounds != 0 {
+		body.DialogueLimits.PlanningRounds != 10 || body.DialogueLimits.ImplementationReviewRounds != 10 {
 		t.Errorf("unexpected run response %+v", body)
 	}
 	if body.AgentProviders.Lead != providers.Lead || body.AgentProviders.Reviewer != providers.Reviewer {

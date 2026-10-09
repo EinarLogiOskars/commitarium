@@ -652,41 +652,6 @@ func writeModelSelectionError(w http.ResponseWriter, err error) {
 	}
 }
 
-func (api *API) updateProjectDialogueLimitsHandler(w http.ResponseWriter, r *http.Request) {
-	request := dialogueLimitsRequest{}
-	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_json", "request body must contain valid JSON")
-		return
-	}
-	limits, err := decodeDialogueLimits(&request, false)
-	if err != nil {
-		writeError(
-			w,
-			http.StatusBadRequest,
-			"invalid_dialogue_limits",
-			"request must include non-negative planning_rounds and implementation_review_rounds; zero means unlimited",
-		)
-		return
-	}
-	updated, err := api.projects.UpdateDialogueLimits(r.Context(), r.PathValue("id"), limits)
-	if err != nil {
-		switch {
-		case errors.Is(err, project.ErrNotFound):
-			writeError(w, http.StatusNotFound, "project_not_found", "project not found")
-		case errors.Is(err, project.ErrInvalidDialogueLimits):
-			writeError(w, http.StatusBadRequest, "invalid_dialogue_limits", "dialogue limits must be non-negative; zero means unlimited")
-		default:
-			log.Printf("update project dialogue limits %q: %v", r.PathValue("id"), err)
-			writeError(w, http.StatusInternalServerError, "internal_error", "internal server error")
-		}
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(newProjectResponse(updated)); err != nil {
-		log.Printf("encode project response: %v", err)
-	}
-}
-
 func decodeDialogueLimits(
 	request *dialogueLimitsRequest,
 	useDefaultsWhenOmitted bool,

@@ -190,13 +190,13 @@ func (api *API) startRunHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		startedRun, _, err = modelStarter.StartWithModels(
-			r.Context(), runID, projectID, featureID, goal, storedFeature.DialogueLimits,
+			r.Context(), runID, projectID, featureID, goal, project.DefaultDialogueLimits(),
 			storedFeature.AgentProviders, storedFeature.AgentModels,
 			storedFeature.MergePolicy, storedFeature.AutonomyPolicy,
 		)
 	} else {
 		startedRun, _, err = api.starter.Start(
-			r.Context(), runID, projectID, featureID, goal, storedFeature.DialogueLimits,
+			r.Context(), runID, projectID, featureID, goal, project.DefaultDialogueLimits(),
 			storedFeature.AgentProviders, storedFeature.MergePolicy, storedFeature.AutonomyPolicy,
 		)
 	}

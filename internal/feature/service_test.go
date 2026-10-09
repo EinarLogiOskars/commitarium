@@ -249,13 +249,12 @@ func TestServiceCreateResolvesPerOrderOverrides(t *testing.T) {
 	if created.AgentProviders != overrideProviders || created.AutonomyPolicy != overrideAutonomy {
 		t.Fatalf("overrides not captured: %+v", created)
 	}
-	if created.DialogueLimits != defaults.DialogueLimits || created.MergePolicy != defaults.MergePolicy {
+	if created.DialogueLimits != project.DefaultDialogueLimits() || created.MergePolicy != defaults.MergePolicy {
 		t.Fatalf("omitted settings did not inherit project values: %+v", created)
 	}
 }
 
 func TestServiceCreateRejectsInvalidOverrides(t *testing.T) {
-	negative := project.DialogueLimits{PlanningRounds: -1}
 	providers := project.AgentProviders{Lead: project.AgentProviderCodex}
 	badMerge := project.MergePolicy("surprise")
 	badAutonomy := project.AutonomyPolicy("surprise")
@@ -264,7 +263,6 @@ func TestServiceCreateRejectsInvalidOverrides(t *testing.T) {
 		overrides SettingsOverrides
 		want      error
 	}{
-		{name: "dialogue limits", overrides: SettingsOverrides{DialogueLimits: &negative}, want: project.ErrInvalidDialogueLimits},
 		{name: "agent providers", overrides: SettingsOverrides{AgentProviders: &providers}, want: project.ErrInvalidAgentProviders},
 		{name: "merge policy", overrides: SettingsOverrides{MergePolicy: &badMerge}, want: project.ErrInvalidMergePolicy},
 		{name: "autonomy policy", overrides: SettingsOverrides{AutonomyPolicy: &badAutonomy}, want: project.ErrInvalidAutonomyPolicy},

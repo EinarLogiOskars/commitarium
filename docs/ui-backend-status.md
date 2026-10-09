@@ -160,8 +160,8 @@ Safe UI capabilities:
   that it is clean and produces a Git bundle. The response is the normal,
   already-Forgejo-bound project representation and can be opened immediately.
 - Display the effective recovery policy returned on a project.
-- Display and edit the project's planning and implementation-review round
-  limits through `PUT /api/v1/projects/{projectID}/dialogue-limits`.
+- Planning and review round limits are fixed system-wide at ten; there is no
+  setting to show or edit.
 - Display and edit independent provider/model lead/reviewer choices through
   `PUT /api/v1/projects/{projectID}/agent-settings`.
 - Populate exact model selectors with `GET /api/v1/models`; use

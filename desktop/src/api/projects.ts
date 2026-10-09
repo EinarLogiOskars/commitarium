@@ -101,16 +101,6 @@ export const updateProjectValidation = (
 export const disableProjectValidation = (id: string): Promise<void> =>
   request(`${projectPath(id)}/validation`, { method: "DELETE" });
 
-export const updateDialogueLimits = (
-  id: string,
-  planning_rounds: number,
-  implementation_review_rounds: number,
-): Promise<Project> =>
-  request(`${projectPath(id)}/dialogue-limits`, {
-    method: "PUT",
-    body: { planning_rounds, implementation_review_rounds },
-  });
-
 export const updateAgentProviders = (
   id: string,
   lead: AgentProvider,

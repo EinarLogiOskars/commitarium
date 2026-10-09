@@ -186,7 +186,7 @@ export function ImportProject({
                 Project defaults
                 {!showDefaults && (
                   <span className="neworder__summary">
-                    Agents, models, autonomy, merge, recovery, rounds
+                    Agents, models, autonomy, merge, recovery
                   </span>
                 )}
               </button>

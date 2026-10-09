@@ -5,7 +5,10 @@ import (
 	"fmt"
 )
 
-const DefaultDialogueRoundLimit = 6
+// DefaultDialogueRoundLimit is the system-wide cap on planning and review
+// rounds. It is not configurable: agents rarely need more than a few rounds,
+// and reaching the cap brings the user in, which is the decision that matters.
+const DefaultDialogueRoundLimit = 10
 
 type DialogueLimits struct {
 	PlanningRounds             int

@@ -19,7 +19,6 @@ this API beyond the host loopback interface is unsupported.
 | `DELETE` | `/api/v1/projects/{projectID}` | Irreversibly delete a project and all project-owned internal artifacts |
 | `GET` | `/api/v1/projects/{projectID}/repository-overview` | Read the internal repository's default-branch head, root tree, and optional README |
 | `GET` | `/api/v1/projects/{projectID}/handoff` | Describe the canonical project head and ordered completed work for trusted-host synchronization |
-| `PUT` | `/api/v1/projects/{projectID}/dialogue-limits` | Replace planning and implementation-review round limits |
 | `PUT` | `/api/v1/projects/{projectID}/agent-providers` | Select the default lead and reviewer providers for future work orders |
 | `PUT` | `/api/v1/projects/{projectID}/agent-settings` | Atomically select default providers and exact models for future work orders |
 | `PUT` | `/api/v1/projects/{projectID}/merge-policy` | Select the default merge behavior for future work orders |
@@ -228,42 +227,12 @@ always remain user-driven. Both modes always wait for a round limit, blocker,
 recovery assessment, or required merge approval. Final merge behavior remains
 governed only by `merge_policy`.
 
-Project creation also accepts an optional complete `dialogue_limits` object:
-
-```json
-{
-  "name": "Example",
-  "dialogue_limits": {
-    "planning_rounds": 6,
-    "implementation_review_rounds": 6
-  }
-}
-```
-
-Omitting the object defaults both fields to six complete two-agent rounds. If
-the object is present, both fields are required. Values must be non-negative;
-`0` means unlimited.
-
-Replace both defaults for future work orders with:
-
-```http
-PUT /api/v1/projects/prj_example/dialogue-limits
-Content-Type: application/json
-
-{"planning_rounds":3,"implementation_review_rounds":0}
-```
-
-The successful response is the complete updated project. The operation is an
-idempotent replacement: sending the same values again leaves the same settings.
-An unknown project returns `404 project_not_found`; missing or negative fields
-return `400 invalid_dialogue_limits`.
-
-Every new work order captures either its supplied complete override or the
-project's current values. Its run copies those effective feature values into
-its own durable record when it starts. A later project update therefore affects
-only work orders created afterward. Feature and run retrieval return their
-immutable snapshots in the same `dialogue_limits` shape, including after a
-coordinator restart.
+Planning and implementation review are each capped at ten complete two-agent
+rounds. The cap is system-wide and not configurable: reaching it brings the
+user in. Project and feature responses still return `dialogue_limits` with the
+effective values, and older clients may still send `dialogue_limits` on
+project or work-order creation; it is accepted and ignored. Runs keep the
+limits they started with.
 
 Projects also choose the provider for each independent role. Both fields are
 required when `agent_providers` is supplied; omitting the object defaults both

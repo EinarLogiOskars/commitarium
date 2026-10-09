@@ -24,7 +24,6 @@ type ProjectService interface {
 	Create(ctx context.Context, name string, recoveryPolicy project.RecoveryPolicy, dialogueLimits project.DialogueLimits, agentProviders project.AgentProviders, mergePolicy project.MergePolicy, autonomyPolicy ...project.AutonomyPolicy) (project.Project, error)
 	GetByID(ctx context.Context, id string) (project.Project, error)
 	List(ctx context.Context) ([]project.Project, error)
-	UpdateDialogueLimits(ctx context.Context, projectID string, limits project.DialogueLimits) (project.Project, error)
 	UpdateAgentProviders(ctx context.Context, projectID string, providers project.AgentProviders) (project.Project, error)
 	UpdateMergePolicy(ctx context.Context, projectID string, policy project.MergePolicy) (project.Project, error)
 	UpdateAutonomyPolicy(ctx context.Context, projectID string, policy project.AutonomyPolicy) (project.Project, error)
@@ -489,10 +488,6 @@ func newAPI(
 	mux.HandleFunc(
 		"GET /api/v1/projects/{id}/repository-overview",
 		api.getProjectRepositoryOverviewHandler,
-	)
-	mux.HandleFunc(
-		"PUT /api/v1/projects/{id}/dialogue-limits",
-		api.updateProjectDialogueLimitsHandler,
 	)
 	mux.HandleFunc(
 		"PUT /api/v1/projects/{id}/agent-providers",

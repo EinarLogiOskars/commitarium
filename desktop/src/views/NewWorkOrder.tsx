@@ -20,8 +20,6 @@ import type {
 export interface OrderDraft {
   title: string;
   description: string;
-  planningRounds?: number;
-  reviewRounds?: number;
   independentTests?: boolean;
 }
 
@@ -58,12 +56,6 @@ export function NewWorkOrder({
     project.autonomy_policy ?? "review_each_phase",
   );
   const [merge, setMerge] = useState<MergePolicy>(project.merge_policy ?? "require_user_approval");
-  const [planning, setPlanning] = useState(
-    initial?.planningRounds ?? project.dialogue_limits?.planning_rounds ?? 6,
-  );
-  const [review, setReview] = useState(
-    initial?.reviewRounds ?? project.dialogue_limits?.implementation_review_rounds ?? 6,
-  );
   const [independentTests, setIndependentTests] = useState(
     initial?.independentTests ?? project.independent_acceptance_tests ?? false,
   );
@@ -103,7 +95,6 @@ export function NewWorkOrder({
         ...(models.lead && models.reviewer ? { agent_models: models } : {}),
         autonomy_policy: autonomy,
         merge_policy: merge,
-        dialogue_limits: { planning_rounds: planning, implementation_review_rounds: review },
         independent_acceptance_tests: independentTests,
       });
       onCreated(created.id);
@@ -124,7 +115,6 @@ export function NewWorkOrder({
     `${cap(providers.lead)} lead · ${cap(providers.reviewer)} reviewer`,
     autonomy === "run_to_completion" ? "runs to merge gate" : "stops each phase",
     merge === "auto_after_gates" ? "auto-merge" : "approval to merge",
-    `${planning}/${review} rounds`,
     ...(independentTests ? ["reviewer tests"] : []),
   ].join(" · ");
 
@@ -193,26 +183,6 @@ export function NewWorkOrder({
                   <option value="require_user_approval">Require my approval</option>
                   <option value="auto_after_gates">Auto after gates</option>
                 </select>
-              </label>
-              <label>
-                Planning rounds
-                <input
-                  type="number"
-                  min={0}
-                  value={planning}
-                  onChange={(e) => setPlanning(Math.max(0, Number(e.target.value)))}
-                  disabled={busy}
-                />
-              </label>
-              <label>
-                Review rounds
-                <input
-                  type="number"
-                  min={0}
-                  value={review}
-                  onChange={(e) => setReview(Math.max(0, Number(e.target.value)))}
-                  disabled={busy}
-                />
               </label>
               <label className="toggle neworder__toggle">
                 <input
