@@ -2315,7 +2315,7 @@ func (starter *RemoteLeadStarter) planningRequest(
 				Role: workerhttp.RoleLead, WorkspaceID: prepared.ID,
 			},
 			ProviderSessionID: session.ProviderSessionID,
-			Instructions:      planningInstructions(storedFeature, prepared),
+			Instructions:      planningInstructions(storedFeature, prepared, reviewerParticipant(run.AgentProviders)),
 		},
 	}
 	if err := request.request.Validate(request.identity); err != nil {
@@ -2603,7 +2603,7 @@ func (starter *RemoteLeadStarter) reviewerPlanningRequest(
 				ProjectID:      storedFeature.ProjectID, FeatureID: storedFeature.ID,
 				Role: workerhttp.RoleReviewer, WorkspaceID: prepared.ID,
 			},
-			Instructions: reviewerPlanningInstructions(storedFeature, prepared, proposal),
+			Instructions: reviewerPlanningInstructions(storedFeature, prepared, proposal, leadParticipant(run.AgentProviders)),
 		},
 	}
 	if err := request.request.Validate(request.identity); err != nil {
@@ -3188,7 +3188,7 @@ func (starter *RemoteLeadStarter) startLeadResponse(
 				Role: workerhttp.RoleLead, WorkspaceID: prepared.ID,
 			},
 			ProviderSessionID: lead.ProviderSessionID,
-			Instructions:      leadPlanningResponseInstructions(storedFeature, prepared, messages[len(messages)-1].Event.Text),
+			Instructions:      leadPlanningResponseInstructions(messages[len(messages)-1].Event.Text, reviewerParticipant(run.AgentProviders)),
 			OutputContract:    workerhttp.OutputContractPlanningLead,
 		},
 	}
@@ -3286,7 +3286,7 @@ func (starter *RemoteLeadStarter) reviewerResponseRequest(
 				Role: workerhttp.RoleReviewer, WorkspaceID: prepared.ID,
 			},
 			ProviderSessionID: reviewer.ProviderSessionID,
-			Instructions:      reviewerResponseInstructions(storedFeature, prepared, leadResponse),
+			Instructions:      reviewerResponseInstructions(leadResponse, leadParticipant(run.AgentProviders)),
 		},
 	}
 	if err := request.request.Validate(request.identity); err != nil {

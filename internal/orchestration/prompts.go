@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/EinarLogiOskars/commitarium/internal/feature"
+	"github.com/EinarLogiOskars/commitarium/internal/project"
 	"github.com/EinarLogiOskars/commitarium/internal/workspace"
 )
 
@@ -72,16 +73,18 @@ func reviewerPlanningInstructions(
 	storedFeature feature.Feature,
 	prepared workspace.Workspace,
 	proposal string,
+	lead string,
 ) string {
-	return "You are the independent reviewer in a collaborative planning discussion. " +
-		"Inspect the managed repository and current Git state before responding. Do not modify files, " +
-		"install dependencies, create commits, push, or begin implementation. Challenge the lead's " +
-		"proposal against the accepted goal and the actual repository. Identify missing steps, unsafe " +
-		"assumptions, scope problems, and weak test coverage. Finish by clearly saying whether you accept " +
-		"the proposal as written or what must change. Durable repository and workflow state are " +
-		"authoritative over the supplied proposal.\n\nAccepted goal:\n" + storedFeature.AcceptedGoal +
+	return "You are the independent reviewer, discussing an implementation plan with " + lead + ". " +
+		"Planning is read-only: do not modify files, install dependencies, commit, or push. Check the " +
+		"proposal against the accepted goal and the actual repository: missing steps, unsafe assumptions, " +
+		"scope problems, weak verification, and steps that should be merged or split. Reply to " + lead +
+		" directly. Number each concern (R1, R2, ...) so it can be answered by number, and leave out matters " +
+		"of taste. Where the plan is sound, say so briefly rather than restating it. End by stating whether " +
+		"you accept the plan as written. Durable repository and workflow state are authoritative over the " +
+		"proposal.\n\nAccepted goal:\n" + storedFeature.AcceptedGoal +
 		"\n\n" + planningWorkspaceFacts(prepared) +
-		"\n\nLead's exact proposal:\n" + proposal
+		"\n\n" + lead + "'s proposal:\n" + proposal
 }
 
 func acceptanceTestsInstructions(storedFeature feature.Feature, prepared workspace.Workspace, plan string) string {
@@ -191,56 +194,60 @@ const implementationChecklistInstructions = "The coordinator owns a structured c
 	"and do not create or commit a local checklist file. The final published HEAD must be the commit recorded " +
 	"for the final checklist step. "
 
-func leadPlanningResponseInstructions(
-	storedFeature feature.Feature,
-	prepared workspace.Workspace,
-	reviewerResponse string,
-) string {
-	return "Continue the same planning conversation as the lead. The independent reviewer has " +
-		"responded to your proposal. Inspect the managed repository and current Git state again before " +
-		"answering. Do not modify files, install dependencies, commit, push, or begin implementation. " +
-		"Address every material concern. If useful work or disagreement remains, respond to the reviewer " +
-		"with action 'respond' and put your natural Markdown reply in content. If, and only if, you conclude " +
-		"that both you and the reviewer genuinely agree and the plan completely satisfies the accepted " +
-		"goal, use action 'submit_plan' and put the complete final implementation plan in content. Also " +
-		"supply plan_title, plan_subtitle, and ordered steps. Each step must be one cohesive commit and " +
-		"must have a stable lowercase ID, title, subtitle, detailed Markdown instructions, concrete " +
-		"verification checks, and an imperative commit_subject. When action is 'respond', leave " +
-		"plan_title and plan_subtitle empty and steps empty. " +
-		"Do not submit merely to end the discussion. If you disagree, explain why with repository evidence. " +
-		"Durable repository and workflow state are authoritative over conversational memory.\n\n" +
-		"Accepted goal:\n" + storedFeature.AcceptedGoal +
-		"\n\n" + planningWorkspaceFacts(prepared) +
-		"\n\nReviewer's exact response:\n" + reviewerResponse
+func leadPlanningResponseInstructions(reviewerResponse string, reviewer string) string {
+	return "Continue planning as the lead. Reply to " + reviewer + " directly. Answer each numbered " +
+		"point by its number: accepted, changed (say exactly what changes in the plan), or disputed " +
+		"(with repository evidence). Send only what changes, not the whole plan, and keep agreement " +
+		"brief. Planning is read-only and nothing has changed since your last turn, so inspect the " +
+		"repository only where a point depends on code you have not read yet. While anything is open, " +
+		"use action 'respond' with your reply in content and leave plan_title, plan_subtitle, and steps " +
+		"empty. When you and " + reviewer + " genuinely agree and the plan fully satisfies the accepted " +
+		"goal, use action 'submit_plan': put the complete final plan in content and supply plan_title, " +
+		"plan_subtitle, and the ordered steps, as few as the goal needs. Each step is one cohesive commit " +
+		"with a stable lowercase ID, title, subtitle, detailed Markdown instructions, concrete verification " +
+		"checks, and an imperative commit_subject. Do not submit merely to end the discussion.\n\n" +
+		reviewer + " replied:\n" + reviewerResponse
 }
 
-func reviewerResponseInstructions(
-	storedFeature feature.Feature,
-	prepared workspace.Workspace,
-	leadResponse string,
-) string {
-	return "Continue the same planning conversation as the independent reviewer. Inspect the managed " +
-		"repository and current Git state again. Do not modify files, install dependencies, commit, push, " +
-		"or begin implementation. Evaluate whether the lead's response and current plan satisfy the accepted " +
-		"goal and resolve every material concern. Respond naturally: clearly explain remaining concerns, or " +
-		"clearly explain why you are satisfied. Do not use a special approval marker; the lead owns the later " +
-		"structured plan-submission action after considering your response. " +
-		"Durable repository and workflow state are authoritative over conversational memory.\n\n" +
-		"Accepted goal:\n" + storedFeature.AcceptedGoal +
-		"\n\n" + planningWorkspaceFacts(prepared) +
-		"\n\nLead's exact latest response:\n" + leadResponse
+func reviewerResponseInstructions(leadResponse string, lead string) string {
+	return "Continue planning as the independent reviewer. Reply to " + lead + " directly. For each " +
+		"open point, say in a line whether it is resolved or still open and why; number any new concern " +
+		"after your last one. Do not restate the plan. Planning is read-only and nothing has changed since " +
+		"your last turn, so inspect the repository only to check a specific claim. When nothing is open, " +
+		"say clearly that you agree with the plan; " + lead + " then submits it. Do not use a special " +
+		"approval marker.\n\n" + lead + " replied:\n" + leadResponse
 }
 
-func planningInstructions(storedFeature feature.Feature, prepared workspace.Workspace) string {
-	return "The goal is now accepted and planning has begun. Continue as the same lead agent. " +
-		"First inspect the managed repository and current Git state. Do not modify files, install " +
-		"dependencies, create commits, push, or begin implementation. Produce a concrete proposed " +
-		"implementation plan for a separate reviewer agent to challenge. Break it into small ordered " +
-		"slices where each slice should produce one cohesive commit, with a short title, subtitle, " +
-		"implementation details, verification, and intended commit subject. Call out assumptions, risks, " +
-		"likely files or components, and how the result should be tested. Durable repository and " +
+func planningInstructions(storedFeature feature.Feature, prepared workspace.Workspace, reviewer string) string {
+	return "The goal is accepted and planning begins. You are the lead. Inspect the repository as " +
+		"needed to plan; planning is read-only, so do not modify files, install dependencies, commit, or " +
+		"push. Propose a concrete implementation plan to " + reviewer + ", who will review it with you. " +
+		"Split the work into ordered commit-sized steps, as few as the goal needs: a small change can be " +
+		"a single step. For each step give a short title, what to change, how to verify it, and the " +
+		"commit subject. Note assumptions and risks only where they matter. Durable repository and " +
 		"workflow state are authoritative over conversational memory.\n\nAccepted goal:\n" +
 		storedFeature.AcceptedGoal + "\n\n" + planningWorkspaceFacts(prepared)
+}
+
+// leadParticipant and reviewerParticipant name the agents for each other, so
+// the dialogue reads as a conversation even when both use the same provider.
+func leadParticipant(providers project.AgentProviders) string {
+	return providerDisplayName(providers.Lead) + " (lead)"
+}
+
+func reviewerParticipant(providers project.AgentProviders) string {
+	return providerDisplayName(providers.Reviewer) + " (reviewer)"
+}
+
+func providerDisplayName(provider project.AgentProvider) string {
+	switch provider {
+	case project.AgentProviderClaude:
+		return "Claude"
+	case project.AgentProviderCodex:
+		return "Codex"
+	default:
+		return string(provider)
+	}
 }
 
 func planningWorkspaceFacts(prepared workspace.Workspace) string {

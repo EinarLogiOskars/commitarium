@@ -1270,7 +1270,7 @@ func TestRemoteLeadStartsPlanningInManagedWorkspace(t *testing.T) {
 		planningRequest.Assignment.WorkspaceID != workspaceStub.prepared.ID ||
 		planningRequest.Assignment.Role != workerhttp.RoleLead ||
 		!strings.Contains(planningRequest.Instructions, plannedFeature.AcceptedGoal) ||
-		!strings.Contains(planningRequest.Instructions, "Do not modify files") ||
+		!strings.Contains(planningRequest.Instructions, "do not modify files") ||
 		strings.Contains(planningRequest.Instructions, "Draft pull request: #") {
 		t.Fatalf("unexpected planning request %+v", planningRequest)
 	}
@@ -1319,7 +1319,7 @@ func TestRemoteLeadStartsPlanningInManagedWorkspace(t *testing.T) {
 	if len(requests) != 3 || requests[2].Mode != workerhttp.AttemptModeStart ||
 		requests[2].Assignment.Role != workerhttp.RoleReviewer ||
 		!strings.Contains(requests[2].Instructions, "Proposed implementation plan") ||
-		!strings.Contains(requests[2].Instructions, "Do not modify files") ||
+		!strings.Contains(requests[2].Instructions, "do not modify files") ||
 		strings.Contains(requests[2].Instructions, "Draft pull request: #") {
 		t.Fatalf("unexpected reviewer request %+v", requests)
 	}
