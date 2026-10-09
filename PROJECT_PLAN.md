@@ -25,6 +25,9 @@ incomplete phase complete. Phase 2, Phase 4, and Phase 5 are closed.
 | Phase 7: Rich review and visualization | Planned |
 | Phase 8: Remote and phone access | Deferred |
 
+What 1.0 means, and the work between here and there, is recorded in
+[V1_VISION.md](V1_VISION.md).
+
 ## Product vision
 
 Commitarium is a local-first workspace where a person and multiple coding agents plan, build, review, and ship software together.
