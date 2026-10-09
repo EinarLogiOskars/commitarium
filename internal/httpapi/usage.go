@@ -55,7 +55,7 @@ func attemptPhase(sessionID, attemptID string) string {
 	switch kind {
 	case "turn", "reply":
 		return "clarify"
-	case "planning":
+	case "planning", "planning-recovery":
 		return "plan"
 	case "approval":
 		return "plan_approval"
