@@ -56,8 +56,9 @@ export function RunEditor({
       <div>
         <strong>Preview</strong>
         <p className="muted run__reason">
-          Preview runs the compose file at the repository root (<code>compose.yaml</code>). Choose
-          the service and container port to open in the browser.
+          Preview runs the project's <code>compose.yaml</code>, the same file you can run yourself
+          with <code>docker compose up</code>. Choose the service and container port to open in the
+          browser.
         </p>
       </div>
       <OpenTargetFields value={value} onChange={onChange} disabled={disabled} />

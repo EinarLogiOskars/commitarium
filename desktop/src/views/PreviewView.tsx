@@ -144,8 +144,11 @@ export function PreviewView({
           <div>
             <strong>No compose file yet</strong>
             <p className="muted">
-              Preview runs the compose file at the repository root. The agents can add one in a work
-              order; you review it like any other change.
+              Preview runs your project with Docker Compose. The agents can add a{" "}
+              <code>compose.yaml</code> to the project in a work order, which you review like any
+              other change. It becomes part of your repository, so you can also run it yourself with{" "}
+              <code>docker compose up</code>. Commitarium checks the file and runs it isolated from
+              the rest of your machine.
             </p>
           </div>
           <div className="run__empty-actions">
@@ -173,8 +176,9 @@ export function PreviewView({
       ) : (
         <>
           <p className="muted note">
-            The preview shows your project as it was when it started. Restart it to see newly merged
-            work. Data is kept between runs until you reset it.
+            The preview runs your project's <code>compose.yaml</code>, checked and isolated by
+            Commitarium. It shows the project as it was when it started; restart it to see newly
+            merged work. Data is kept between runs until you reset it.
           </p>
 
           {error && <div className="banner banner--error">{error}</div>}
