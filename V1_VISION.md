@@ -107,6 +107,10 @@ subscription or an API key. For example: "Claude Max", "Claude API",
   which agent each running item uses and knows they share one quota.
 - **The model is chosen per item.** The agent says which account pays; the
   model says which model does the work.
+- **Cost by billing type.** Work orders already show token usage by phase and
+  role. Once an agent knows whether it is a subscription or an API key, API
+  agents can also show an estimated dollar cost; subscription agents keep
+  tokens, since they are limited by usage rather than billed per token.
 - **Lead and reviewer may be the same agent.** They are still separate
   sessions with separate contexts.
 - **Not personas.** Named characters with personalities were considered and
