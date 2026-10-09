@@ -447,6 +447,16 @@ in backend event payloads; the UI maps factual activity to presentation.
 - These documents are coordinator data only. The desktop must not look for a
   plan file in the checkout and must not copy one during local synchronization.
 
+### Work-order clarification and Ready orders
+
+- A new work order is a Draft. Start its clarification with
+  `POST …/features/{id}/assistant`, poll `GET …/assistant` while `running`,
+  and reply with `POST …/assistant/messages`.
+- When the status is `proposal_ready`, show the `handoff_brief` artifact; the
+  user can edit it (`PUT …/artifacts/handoff_brief`) or accept it
+  (`POST …/accept`), which makes the order `ready`. `POST …/reopen` returns a
+  Ready order to Draft.
+
 ### Token usage
 
 - `GET /api/v1/projects/{projectID}/features/{featureID}/usage` returns

@@ -44,6 +44,11 @@ this API beyond the host loopback interface is unsupported.
 | `GET` | `/api/v1/projects/{projectID}/features/{featureID}/artifacts/{kind}` | Read the current durable goal draft, implementation plan, or acceptance-test checklist |
 | `PUT` | `/api/v1/projects/{projectID}/features/{featureID}/artifacts/goal_draft` | Replace the editable proposed goal using optimistic concurrency |
 | `PUT` | `/api/v1/projects/{projectID}/features/{featureID}/artifacts/handoff_brief` | Replace the editable handoff brief using optimistic concurrency |
+| `POST` | `/api/v1/projects/{projectID}/features/{featureID}/assistant` | Start (or return) the draft work order's clarification with the project assistant |
+| `GET` | `/api/v1/projects/{projectID}/features/{featureID}/assistant` | Read the clarification conversation and status |
+| `POST` | `/api/v1/projects/{projectID}/features/{featureID}/assistant/messages` | Reply to the assistant |
+| `POST` | `/api/v1/projects/{projectID}/features/{featureID}/accept` | Accept the handoff brief: `draft` → `ready` |
+| `POST` | `/api/v1/projects/{projectID}/features/{featureID}/reopen` | Reopen a ready work order for more clarification: `ready` → `draft` |
 | `POST` | `/api/v1/projects/{projectID}/features/{featureID}/implementation-plan/steps/{stepID}/transitions` | Record implementation-plan step progress |
 | `POST` | `/api/v1/projects/{projectID}/features/{featureID}/acceptance-tests/{testID}/transitions` | Record an independent acceptance-test result |
 | `POST` | `/api/v1/projects/{projectID}/features/{featureID}/runs` | Start the configured workflow asynchronously |
@@ -955,6 +960,55 @@ feature returns `404 feature_not_found`.
 These discovery endpoints intentionally have no pagination, search, or
 server-side state filtering in the MVP. Clients can group and filter the
 complete project list locally.
+
+## Work-order clarification
+
+A draft work order is clarified with the project assistant (ADR-015) before
+any agent starts. The assistant can read the feature's checkout but not change
+it, asks the questions whose answers change the work, and proposes a
+`handoff_brief` artifact.
+
+`POST …/features/{featureID}/assistant` starts the conversation, or returns
+the existing one (`201` when created, otherwise `200`). The body is optional:
+`{"provider":"claude","model":"…"}`. Without a provider the work order's lead
+provider and model are used. The response is the session:
+
+```json
+{
+  "id": "ast_…",
+  "feature_id": "fea_…",
+  "provider": "claude",
+  "model": "",
+  "status": "waiting_for_user",
+  "message": "Should overdue to-dos be highlighted?",
+  "messages": [
+    {"role": "user", "text": "Add due dates…", "occurred_at": "…"},
+    {"role": "assistant", "text": "Should overdue to-dos be highlighted?", "occurred_at": "…"}
+  ],
+  "created_at": "…",
+  "updated_at": "…"
+}
+```
+
+`status` is `running` while the assistant is thinking, `waiting_for_user`
+after a question, `proposal_ready` once a brief has been written, and `failed`
+when a turn could not complete (reply to try again). Poll `GET …/assistant`
+while it is `running`. `POST …/assistant/messages` with `{"message":"…"}` and
+an `Idempotency-Key` sends a reply (`202` when a new turn started, `200` for a
+repeated delivery); it is allowed whenever the assistant is not `running` and
+the order is still a draft. When the user asks for changes after a proposal,
+the assistant proposes the complete revised brief.
+
+`POST …/accept` (with an `Idempotency-Key`) moves the order from `draft` to
+`ready`. It requires a `handoff_brief` and an assistant that is not running,
+otherwise `409 assistant_not_ready`. `POST …/reopen` moves a `ready` order back
+to `draft`. Both return the work order and repeat safely. Errors:
+`404 assistant_not_found` before the conversation exists,
+`409 feature_not_draft` when the order has already moved on,
+`409 forgejo_repository_not_bound` for a project without a repository.
+
+The assistant's turns count toward the work order's token usage under the role
+`assistant` and the phase `clarify`.
 
 ## Feature artifacts and live checklists
 

@@ -101,7 +101,7 @@ func newAssistant(t *testing.T) (*assistant.Service, *scriptedWorker, *workflow.
 	briefs := workflow.NewService(database.NewWorkflowStore(db))
 	service, err := assistant.NewService(assistant.Config{
 		Store: database.NewAssistantStore(db), Features: features,
-		Workspaces: workspaceStub{}, Briefs: briefs,
+		Workspaces: workspaceStub{}, Briefs: briefs, Transitions: briefs,
 		Workers: map[project.AgentProvider]assistant.Worker{
 			project.AgentProviderClaude: {Service: worker, AgentProfileID: "claude-default"},
 		},
@@ -177,5 +177,24 @@ func TestAssistantClarifiesAWorkOrderIntoAHandoffBrief(t *testing.T) {
 	if err := json.Unmarshal([]byte(artifact.Document), &brief); err != nil || brief.BaseCommitID != baseCommit ||
 		!strings.Contains(brief.Goal, "overdue") {
 		t.Fatalf("brief=%+v err=%v", brief, err)
+	}
+
+	ready, err := service.AcceptBrief(t.Context(), storedFeature.ProjectID, storedFeature.ID, "accept-1")
+	if err != nil || ready.State != feature.StateReady {
+		t.Fatalf("accept: feature=%+v err=%v", ready, err)
+	}
+	if _, _, err := service.Reply(t.Context(), storedFeature.ProjectID, storedFeature.ID, "One more thing.", "reply-2"); !errors.Is(err, assistant.ErrNotDraft) {
+		t.Fatalf("reply to a ready order: %v", err)
+	}
+	draft, err := service.Reopen(t.Context(), storedFeature.ProjectID, storedFeature.ID, "reopen-1")
+	if err != nil || draft.State != feature.StateDraft {
+		t.Fatalf("reopen: feature=%+v err=%v", draft, err)
+	}
+}
+
+func TestAssistantCannotAcceptWithoutABrief(t *testing.T) {
+	service, _, _, storedFeature := newAssistant(t)
+	if _, err := service.AcceptBrief(t.Context(), storedFeature.ProjectID, storedFeature.ID, "accept-1"); !errors.Is(err, assistant.ErrNotReady) {
+		t.Fatalf("accept without a brief: %v", err)
 	}
 }

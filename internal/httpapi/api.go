@@ -285,6 +285,7 @@ type API struct {
 	environments       ProjectEnvironmentService
 	validations        ValidationService
 	usage              FeatureUsageService
+	assistant          WorkOrderAssistant
 }
 
 func New(
@@ -387,8 +388,11 @@ func newAPI(
 	var environments ProjectEnvironmentService
 	var validations ValidationService
 	var usage FeatureUsageService
+	var workOrderAssistant WorkOrderAssistant
 	for _, extra := range extras {
 		switch typed := extra.(type) {
+		case WorkOrderAssistant:
+			workOrderAssistant = typed
 		case FeatureUsageService:
 			usage = typed
 		case ToolchainService:
@@ -420,6 +424,7 @@ func newAPI(
 		environments:       environments,
 		validations:        validations,
 		usage:              usage,
+		assistant:          workOrderAssistant,
 	}
 	api.artifacts, _ = workflow.(FeatureArtifactService)
 	api.projectImporter, _ = projects.(ProjectImporter)
@@ -585,6 +590,13 @@ func newAPI(
 		"GET /api/v1/projects/{projectID}/features/{id}/runs",
 		api.listFeatureRunsHandler,
 	)
+	if workOrderAssistant != nil {
+		mux.HandleFunc("POST /api/v1/projects/{projectID}/features/{id}/assistant", api.startAssistantHandler)
+		mux.HandleFunc("GET /api/v1/projects/{projectID}/features/{id}/assistant", api.getAssistantHandler)
+		mux.HandleFunc("POST /api/v1/projects/{projectID}/features/{id}/assistant/messages", api.replyAssistantHandler)
+		mux.HandleFunc("POST /api/v1/projects/{projectID}/features/{id}/accept", api.acceptBriefHandler)
+		mux.HandleFunc("POST /api/v1/projects/{projectID}/features/{id}/reopen", api.reopenWorkOrderHandler)
+	}
 	if usage != nil {
 		mux.HandleFunc(
 			"GET /api/v1/projects/{projectID}/features/{id}/usage",

@@ -101,6 +101,11 @@ type WorkspacePreparer interface {
 
 type BriefWriter interface {
 	UpsertHandoffBrief(ctx context.Context, featureID string, brief featureartifact.HandoffBrief, actor workflow.Actor, idempotencyKey string) (workflow.FeatureArtifact, error)
+	GetFeatureArtifact(ctx context.Context, featureID string, kind featureartifact.Kind) (workflow.FeatureArtifact, error)
+}
+
+type FeatureTransitioner interface {
+	TransitionFeature(ctx context.Context, featureID string, state feature.State, actor workflow.Actor, idempotencyKey string) (workflow.Event, error)
 }
 
 type WorkerService interface {
@@ -114,28 +119,30 @@ type Worker struct {
 }
 
 type Config struct {
-	Store      Store
-	Features   FeatureReader
-	Workspaces WorkspacePreparer
-	Briefs     BriefWriter
-	Workers    map[project.AgentProvider]Worker
-	Now        func() time.Time
+	Store       Store
+	Features    FeatureReader
+	Workspaces  WorkspacePreparer
+	Briefs      BriefWriter
+	Transitions FeatureTransitioner
+	Workers     map[project.AgentProvider]Worker
+	Now         func() time.Time
 }
 
 type Service struct {
-	store      Store
-	features   FeatureReader
-	workspaces WorkspacePreparer
-	briefs     BriefWriter
-	workers    map[project.AgentProvider]Worker
-	now        func() time.Time
-	mu         sync.Mutex
+	store       Store
+	features    FeatureReader
+	workspaces  WorkspacePreparer
+	briefs      BriefWriter
+	transitions FeatureTransitioner
+	workers     map[project.AgentProvider]Worker
+	now         func() time.Time
+	mu          sync.Mutex
 }
 
 func NewService(config Config) (*Service, error) {
 	if config.Store == nil || config.Features == nil || config.Workspaces == nil || config.Briefs == nil ||
-		len(config.Workers) == 0 {
-		return nil, fmt.Errorf("%w: store, features, workspaces, briefs, and workers are required", ErrUnavailable)
+		config.Transitions == nil || len(config.Workers) == 0 {
+		return nil, fmt.Errorf("%w: store, features, workspaces, briefs, transitions, and workers are required", ErrUnavailable)
 	}
 	for provider, configured := range config.Workers {
 		if !provider.IsValid() || configured.Service == nil || strings.TrimSpace(configured.AgentProfileID) == "" {
@@ -148,7 +155,7 @@ func NewService(config Config) (*Service, error) {
 	}
 	return &Service{
 		store: config.Store, features: config.Features, workspaces: config.Workspaces,
-		briefs: config.Briefs, workers: config.Workers, now: now,
+		briefs: config.Briefs, transitions: config.Transitions, workers: config.Workers, now: now,
 	}, nil
 }
 
@@ -329,6 +336,71 @@ func (service *Service) Reply(
 	}
 	session, err := service.load(ctx, featureID)
 	return session, created, err
+}
+
+// AcceptBrief makes a clarified draft Ready. It needs a handoff brief and an
+// assistant that is not mid-turn. Accepting a Ready order again is a no-op.
+func (service *Service) AcceptBrief(ctx context.Context, projectID, featureID, idempotencyKey string) (feature.Feature, error) {
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	storedFeature, err := service.features.GetByID(ctx, projectID, featureID)
+	if err != nil {
+		return feature.Feature{}, err
+	}
+	if storedFeature.State == feature.StateReady {
+		return storedFeature, nil
+	}
+	if storedFeature.State != feature.StateDraft {
+		return feature.Feature{}, ErrNotDraft
+	}
+	if _, err := service.briefs.GetFeatureArtifact(ctx, featureID, featureartifact.KindHandoffBrief); err != nil {
+		if errors.Is(err, workflow.ErrArtifactNotFound) {
+			return feature.Feature{}, ErrNotReady
+		}
+		return feature.Feature{}, err
+	}
+	record, err := service.store.GetAssistantSessionByFeature(ctx, featureID)
+	if err == nil && record.Status == StatusRunning {
+		if record, err = service.refresh(ctx, record); err != nil {
+			return feature.Feature{}, err
+		}
+		if record.Status == StatusRunning {
+			return feature.Feature{}, ErrNotReady
+		}
+	} else if err != nil && !errors.Is(err, ErrNotFound) {
+		return feature.Feature{}, err
+	}
+	if _, err := service.transitions.TransitionFeature(
+		ctx, featureID, feature.StateReady,
+		workflow.Actor{Kind: workflow.ActorKindUser, ID: "local-user"}, idempotencyKey,
+	); err != nil {
+		return feature.Feature{}, err
+	}
+	return service.features.GetByID(ctx, projectID, featureID)
+}
+
+// Reopen returns a Ready order to Draft for more clarification. Reopening a
+// draft again is a no-op.
+func (service *Service) Reopen(ctx context.Context, projectID, featureID, idempotencyKey string) (feature.Feature, error) {
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	storedFeature, err := service.features.GetByID(ctx, projectID, featureID)
+	if err != nil {
+		return feature.Feature{}, err
+	}
+	if storedFeature.State == feature.StateDraft {
+		return storedFeature, nil
+	}
+	if storedFeature.State != feature.StateReady {
+		return feature.Feature{}, ErrNotReady
+	}
+	if _, err := service.transitions.TransitionFeature(
+		ctx, featureID, feature.StateDraft,
+		workflow.Actor{Kind: workflow.ActorKindUser, ID: "local-user"}, idempotencyKey,
+	); err != nil {
+		return feature.Feature{}, err
+	}
+	return service.features.GetByID(ctx, projectID, featureID)
 }
 
 func (service *Service) assignment(record Record, configured Worker) workerhttp.Assignment {
