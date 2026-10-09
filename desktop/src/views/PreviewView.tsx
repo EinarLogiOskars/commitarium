@@ -1,7 +1,17 @@
 import { useEffect, useRef, useState } from "react";
 import { getPreviewLogs, getProjectSyncState, openExternal } from "../ipc";
 import { getRepositoryOverview } from "../api/projects";
+import { updateProjectToolchain } from "../api/toolchains";
+import { ApiError } from "../api/client";
+import type { ProjectToolchain } from "../api/types";
 import { PREVIEW_STATE, type PreviewHandle } from "./usePreview";
+import {
+  OpenTargetFields,
+  runDraftFrom,
+  runDraftIssue,
+  runFromDraft,
+  type RunDraft,
+} from "./RunEditor";
 
 const LOG_POLL_MS = 2000;
 const HEAD_POLL_MS = 15000;
@@ -27,18 +37,21 @@ When you're done, say which service and container port the preview should open.`
 export function PreviewView({
   projectId,
   preview,
-  runnable,
+  toolchain,
   hasRepo,
   onOpenStack,
   onSetUpPreview,
+  onToolchainSaved,
 }: {
   projectId: string;
   preview: PreviewHandle;
-  runnable: boolean;
+  toolchain: ProjectToolchain | null;
   hasRepo: boolean;
   onOpenStack: () => void;
   onSetUpPreview: () => void;
+  onToolchainSaved: (t: ProjectToolchain) => void;
 }) {
+  const runnable = !!toolchain?.run;
   const { status, error, start, stop, resetData } = preview;
   const state = status?.state ?? "stopped";
   const shown = PREVIEW_STATE[state];
@@ -141,13 +154,22 @@ export function PreviewView({
             </button>
           </div>
         </div>
-      ) : !runnable ? (
+      ) : toolchain?.status !== "configured" ? (
         <p className="muted">
-          Add run commands to the stack to preview this project.{" "}
+          Choose a stack for this project first.{" "}
           <button className="ghost" onClick={onOpenStack}>
             Open stack
           </button>
         </p>
+      ) : !runnable ? (
+        <OpenTargetSetup
+          projectId={projectId}
+          toolchain={toolchain}
+          onSaved={(t) => {
+            onToolchainSaved(t);
+            void start();
+          }}
+        />
       ) : (
         <>
           <p className="muted note">
@@ -244,5 +266,62 @@ export function PreviewView({
         </>
       )}
     </section>
+  );
+}
+
+/** Name what the preview opens, saved on the stack without changing its tools,
+ * then start the preview. */
+function OpenTargetSetup({
+  projectId,
+  toolchain,
+  onSaved,
+}: {
+  projectId: string;
+  toolchain: ProjectToolchain;
+  onSaved: (t: ProjectToolchain) => void;
+}) {
+  const [draft, setDraft] = useState<RunDraft>(runDraftFrom());
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const issue = runDraftIssue(draft);
+  const ready = !!draft.service.trim() && !!draft.port.trim() && !issue;
+
+  const save = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      onSaved(
+        await updateProjectToolchain(projectId, {
+          source: toolchain.source ?? "picker",
+          tools: toolchain.tools,
+          services: toolchain.services,
+          run: runFromDraft(draft),
+        }),
+      );
+    } catch (e) {
+      setError(e instanceof ApiError ? `${e.message} (${e.code})` : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="run">
+      <div>
+        <strong>What should the preview open?</strong>
+        <p className="muted run__reason">
+          The compose service that serves the app in a browser, and the port it listens on inside
+          its container.
+        </p>
+      </div>
+      {error && <div className="banner banner--error">{error}</div>}
+      <OpenTargetFields value={draft} onChange={setDraft} disabled={busy} />
+      {issue && <div className="run__issue">{issue}</div>}
+      <div className="row">
+        <button className="primary" onClick={() => void save()} disabled={!ready || busy}>
+          {busy ? "Saving…" : "Save and run"}
+        </button>
+      </div>
+    </div>
   );
 }

@@ -248,8 +248,9 @@ export function ProjectWorkspace({
             <PreviewView
               projectId={id}
               preview={preview}
-              runnable={!!toolchain?.run}
+              toolchain={toolchain}
               hasRepo={!!project.forgejo_repository}
+              onToolchainSaved={setToolchain}
               onOpenStack={() => setMode("stack")}
               onSetUpPreview={() => {
                 setOrderDraft(PREVIEW_SETUP_ORDER);

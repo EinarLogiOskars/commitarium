@@ -615,12 +615,6 @@ body {
 .run__reason {
   margin: 6px 0 0;
 }
-.run__title {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  gap: 16px;
-}
 .run__empty {
   display: flex;
   justify-content: space-between;
@@ -640,9 +634,6 @@ body {
   flex: none;
   gap: 8px;
   flex-wrap: wrap;
-}
-.run__conventions {
-  margin: 0 0 4px;
 }
 .run__issue {
   padding: 8px 10px;
