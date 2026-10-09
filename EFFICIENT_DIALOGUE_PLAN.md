@@ -59,6 +59,15 @@ markers, Forgejo records, and the validation merge gate.
 
 `fix/efficient-dialogue`, from `main` after compose previews merged.
 
+## Status
+
+E1–E4, E6, E7, and E8 landed on `fix/efficient-dialogue`. E5 (plan
+confirmation) is open: it needs a new output contract, a planning stage, and
+recovery handling, and its mismatch path should be agreed before building it.
+Acceptance tests are pinned to the first implementation commit, so re-reviews
+re-run them locally and report results in the review; re-pinning the checklist
+per revision is a follow-up.
+
 ## Slices
 
 | # | Commit | Contents | Depends on |
