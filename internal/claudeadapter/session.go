@@ -336,6 +336,15 @@ func (session *session) translate(raw []byte) ([]worker.Event, *worker.Result, e
 		if message.Subtype != "init" {
 			return nil, nil, nil
 		}
+		// Claude Code emits another init when the agent starts a subagent,
+		// which may run on a different model. Only the first init describes
+		// this session; later ones are ignored.
+		session.mu.Lock()
+		initialized := session.initialized
+		session.mu.Unlock()
+		if initialized {
+			return nil, nil, nil
+		}
 		if err := session.verifyScope(message.SessionID); err != nil {
 			return nil, nil, err
 		}
@@ -352,10 +361,6 @@ func (session *session) translate(raw []byte) ([]worker.Event, *worker.Result, e
 			)
 		}
 		session.mu.Lock()
-		if session.initialized {
-			session.mu.Unlock()
-			return nil, nil, fmt.Errorf("%w: duplicate init message", ErrProtocol)
-		}
 		session.initialized = true
 		session.mu.Unlock()
 		return []worker.Event{{Type: worker.EventActivity, Text: "Claude started working."}}, nil, nil

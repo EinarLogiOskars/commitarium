@@ -215,6 +215,19 @@ func TestAdapterEmitsResultTextWhenAssistantRecordIsMissing(t *testing.T) {
 	}
 }
 
+func TestAdapterIgnoresSubagentInit(t *testing.T) {
+	adapter := testAdapter(t, "subagent-init", "Delegate to a subagent")
+	session, err := adapter.Start(t.Context(), adapter.request("att_claude_subagent", "Delegate to a subagent"))
+	if err != nil {
+		t.Fatalf("start subagent Claude adapter: %v", err)
+	}
+	_ = collectEvents(session)
+	result, err := session.Wait(timeoutContext(t, 3*time.Second))
+	if err != nil || result.Outcome != worker.OutcomeCompleted || result.Summary != "Finished after a subagent." {
+		t.Fatalf("subagent init result=%+v error=%v", result, err)
+	}
+}
+
 func TestAdapterResumesExactClaudeSessionWithRecoveryBriefing(t *testing.T) {
 	adapter := testAdapter(t, "resume", "Inspect durable state before continuing")
 	session, err := adapter.Resume(t.Context(), worker.ResumeRequest{
@@ -558,6 +571,15 @@ func TestClaudeCLIHelper(t *testing.T) {
 		helperWrite(writer, map[string]any{
 			"type": "result", "subtype": "success", "session_id": sessionID,
 			"is_error": false, "result": "Implemented and verified the change.",
+		})
+	case "subagent-init":
+		helperWrite(writer, map[string]any{
+			"type": "system", "subtype": "init", "session_id": sessionID, "cwd": directory,
+			"model": "subagent-model",
+		})
+		helperWrite(writer, map[string]any{
+			"type": "result", "subtype": "success", "session_id": sessionID,
+			"is_error": false, "result": "Finished after a subagent.",
 		})
 	case "result-only":
 		helperWrite(writer, map[string]any{
