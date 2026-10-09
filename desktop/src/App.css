@@ -2757,3 +2757,24 @@ button.danger:not(.ghost) {
   gap: 12px;
   margin-bottom: 10px;
 }
+
+.usage-toggle {
+  font-size: 11px;
+  padding: 0;
+  text-align: left;
+}
+.usage-table {
+  margin-top: 6px;
+  border-collapse: collapse;
+  font-size: 11px;
+}
+.usage-table th,
+.usage-table td {
+  padding: 3px 14px 3px 0;
+  text-align: left;
+  white-space: nowrap;
+}
+.usage-table th {
+  font-weight: 600;
+  text-transform: capitalize;
+}

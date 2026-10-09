@@ -4,6 +4,8 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"sort"
+	"strings"
 
 	"github.com/EinarLogiOskars/commitarium/internal/execution"
 	"github.com/EinarLogiOskars/commitarium/internal/feature"
@@ -21,9 +23,16 @@ type roleUsageResponse struct {
 	tokenUsageResponse
 }
 
+type phaseUsageResponse struct {
+	Phase string `json:"phase"`
+	Role  string `json:"role"`
+	tokenUsageResponse
+}
+
 type featureUsageResponse struct {
-	Roles []roleUsageResponse `json:"roles"`
-	Total tokenUsageResponse  `json:"total"`
+	Roles  []roleUsageResponse  `json:"roles"`
+	Phases []phaseUsageResponse `json:"phases"`
+	Total  tokenUsageResponse   `json:"total"`
 }
 
 func newTokenUsageResponse(usage execution.TokenUsage) tokenUsageResponse {
@@ -33,6 +42,44 @@ func newTokenUsageResponse(usage execution.TokenUsage) tokenUsageResponse {
 		CacheWriteTokens:  usage.CacheWriteTokens,
 		OutputTokens:      usage.OutputTokens,
 	}
+}
+
+// attemptPhase names the workflow phase an attempt belonged to. Attempt IDs
+// are "<session>:<kind>:...", and the kind identifies the phase.
+func attemptPhase(sessionID, attemptID string) string {
+	rest, found := strings.CutPrefix(attemptID, sessionID+":")
+	if !found {
+		return "other"
+	}
+	kind, _, _ := strings.Cut(rest, ":")
+	switch kind {
+	case "turn", "reply":
+		return "clarify"
+	case "planning":
+		return "plan"
+	case "approval":
+		return "plan_approval"
+	case "implementation":
+		return "implement"
+	case "acceptance":
+		return "acceptance_tests"
+	case "review":
+		return "review"
+	case "correction":
+		return "correction"
+	case "readiness":
+		return "readiness"
+	case "intervention":
+		return "intervention"
+	default:
+		return "other"
+	}
+}
+
+// phaseOrder keeps the breakdown in workflow order rather than first-use order.
+var phaseOrder = map[string]int{
+	"clarify": 0, "plan": 1, "plan_approval": 2, "implement": 3, "acceptance_tests": 4,
+	"review": 5, "correction": 6, "readiness": 7, "intervention": 8, "other": 9,
 }
 
 func (api *API) getFeatureUsageHandler(w http.ResponseWriter, r *http.Request) {
@@ -47,20 +94,42 @@ func (api *API) getFeatureUsageHandler(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "internal_error", "internal server error")
 		return
 	}
-	roles, err := api.usage.FeatureUsageByRole(r.Context(), featureID)
+	attempts, err := api.usage.FeatureAttemptUsage(r.Context(), featureID)
 	if err != nil {
-		log.Printf("total token usage for feature %q: %v", featureID, err)
+		log.Printf("list token usage for feature %q: %v", featureID, err)
 		writeError(w, http.StatusInternalServerError, "internal_error", "internal server error")
 		return
 	}
-	response := featureUsageResponse{Roles: make([]roleUsageResponse, 0, len(roles))}
+	type phaseKey struct{ phase, role string }
+	roles := map[string]execution.TokenUsage{}
+	phases := map[phaseKey]execution.TokenUsage{}
 	total := execution.TokenUsage{}
-	for _, role := range roles {
-		response.Roles = append(response.Roles, roleUsageResponse{
-			Role: role.Role, tokenUsageResponse: newTokenUsageResponse(role.Usage),
-		})
-		total = total.Add(role.Usage)
+	for _, attempt := range attempts {
+		roles[attempt.Role] = roles[attempt.Role].Add(attempt.Usage)
+		key := phaseKey{attemptPhase(attempt.SessionID, attempt.AttemptID), attempt.Role}
+		phases[key] = phases[key].Add(attempt.Usage)
+		total = total.Add(attempt.Usage)
 	}
-	response.Total = newTokenUsageResponse(total)
+	response := featureUsageResponse{
+		Roles:  make([]roleUsageResponse, 0, len(roles)),
+		Phases: make([]phaseUsageResponse, 0, len(phases)),
+		Total:  newTokenUsageResponse(total),
+	}
+	for role, usage := range roles {
+		response.Roles = append(response.Roles, roleUsageResponse{Role: role, tokenUsageResponse: newTokenUsageResponse(usage)})
+	}
+	sort.Slice(response.Roles, func(i, j int) bool { return response.Roles[i].Role < response.Roles[j].Role })
+	for key, usage := range phases {
+		response.Phases = append(response.Phases, phaseUsageResponse{
+			Phase: key.phase, Role: key.role, tokenUsageResponse: newTokenUsageResponse(usage),
+		})
+	}
+	sort.Slice(response.Phases, func(i, j int) bool {
+		left, right := response.Phases[i], response.Phases[j]
+		if phaseOrder[left.Phase] != phaseOrder[right.Phase] {
+			return phaseOrder[left.Phase] < phaseOrder[right.Phase]
+		}
+		return left.Role < right.Role
+	})
 	writeJSON(w, http.StatusOK, response, "feature token usage")
 }

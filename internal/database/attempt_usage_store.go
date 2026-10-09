@@ -29,40 +29,39 @@ func (s *ExecutionStore) RecordAttemptUsage(ctx context.Context, usage execution
 	return nil
 }
 
-// FeatureUsageByRole totals recorded usage across every run of a feature,
-// grouped by session role and ordered by role.
-func (s *ExecutionStore) FeatureUsageByRole(ctx context.Context, featureID string) ([]execution.RoleUsage, error) {
+// FeatureAttemptUsage lists recorded usage for every attempt across all of a
+// feature's runs, in recording order.
+func (s *ExecutionStore) FeatureAttemptUsage(ctx context.Context, featureID string) ([]execution.RoleAttemptUsage, error) {
 	rows, err := s.db.QueryContext(
 		ctx,
-		`SELECT sessions.role,
-		        SUM(usage.input_tokens), SUM(usage.cached_input_tokens),
-		        SUM(usage.cache_write_tokens), SUM(usage.output_tokens)
+		`SELECT sessions.role, usage.session_id, usage.attempt_id,
+		        usage.input_tokens, usage.cached_input_tokens,
+		        usage.cache_write_tokens, usage.output_tokens
 		   FROM attempt_token_usage AS usage
 		   JOIN sessions ON sessions.id = usage.session_id
 		   JOIN runs ON runs.id = sessions.run_id
 		  WHERE runs.feature_id = ?
-		  GROUP BY sessions.role
-		  ORDER BY sessions.role`,
+		  ORDER BY usage.recorded_at, usage.session_id, usage.attempt_id`,
 		featureID,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("total feature token usage: %w", err)
+		return nil, fmt.Errorf("list feature token usage: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
-	totals := make([]execution.RoleUsage, 0, 2)
+	usage := make([]execution.RoleAttemptUsage, 0)
 	for rows.Next() {
-		var total execution.RoleUsage
+		var attempt execution.RoleAttemptUsage
 		if err := rows.Scan(
-			&total.Role,
-			&total.Usage.InputTokens, &total.Usage.CachedInputTokens,
-			&total.Usage.CacheWriteTokens, &total.Usage.OutputTokens,
+			&attempt.Role, &attempt.SessionID, &attempt.AttemptID,
+			&attempt.Usage.InputTokens, &attempt.Usage.CachedInputTokens,
+			&attempt.Usage.CacheWriteTokens, &attempt.Usage.OutputTokens,
 		); err != nil {
 			return nil, fmt.Errorf("scan feature token usage: %w", err)
 		}
-		totals = append(totals, total)
+		usage = append(usage, attempt)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("read feature token usage: %w", err)
 	}
-	return totals, nil
+	return usage, nil
 }

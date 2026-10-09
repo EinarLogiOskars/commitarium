@@ -46,8 +46,10 @@ func (usage AttemptUsage) Validate() error {
 	return nil
 }
 
-// RoleUsage totals usage for every session with one role.
-type RoleUsage struct {
-	Role  string
-	Usage TokenUsage
+// RoleAttemptUsage is one recorded attempt's usage with its session's role.
+type RoleAttemptUsage struct {
+	Role      string
+	SessionID string
+	AttemptID string
+	Usage     TokenUsage
 }

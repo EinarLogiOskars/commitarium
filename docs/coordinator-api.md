@@ -924,7 +924,7 @@ project, returns `404 feature_not_found`; a feature that has not started returns
 
 `GET /api/v1/projects/{projectID}/features/{featureID}/usage` totals the
 provider-reported token usage of every finished agent turn across all of the
-feature's runs:
+feature's runs, by role, by workflow phase and role, and overall:
 
 ```json
 {
@@ -932,9 +932,18 @@ feature's runs:
     {"role": "lead", "input_tokens": 1200, "cached_input_tokens": 48000, "cache_write_tokens": 3000, "output_tokens": 900},
     {"role": "reviewer", "input_tokens": 400, "cached_input_tokens": 12000, "cache_write_tokens": 1000, "output_tokens": 300}
   ],
+  "phases": [
+    {"phase": "plan", "role": "lead", "input_tokens": 300, "cached_input_tokens": 9000, "cache_write_tokens": 0, "output_tokens": 200},
+    {"phase": "plan", "role": "reviewer", "input_tokens": 100, "cached_input_tokens": 4000, "cache_write_tokens": 500, "output_tokens": 150}
+  ],
   "total": {"input_tokens": 1600, "cached_input_tokens": 60000, "cache_write_tokens": 4000, "output_tokens": 1200}
 }
 ```
+
+`phases` is ordered by workflow phase, then role. Phases are `clarify`,
+`plan`, `plan_approval`, `implement`, `acceptance_tests`, `review`,
+`correction`, `readiness`, `intervention` (answers to user messages), and
+`other`.
 
 `input_tokens` excludes cached reads and cache writes. Roles appear only once a
 turn with reported usage has finished, so a new feature returns an empty

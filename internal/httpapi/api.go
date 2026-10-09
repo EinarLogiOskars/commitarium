@@ -216,7 +216,7 @@ type ProjectEnvironmentService interface {
 
 // FeatureUsageService totals provider token usage for a work order.
 type FeatureUsageService interface {
-	FeatureUsageByRole(ctx context.Context, featureID string) ([]execution.RoleUsage, error)
+	FeatureAttemptUsage(ctx context.Context, featureID string) ([]execution.RoleAttemptUsage, error)
 }
 
 type ValidationService interface {

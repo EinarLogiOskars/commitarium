@@ -9,7 +9,7 @@ import (
 	"github.com/EinarLogiOskars/commitarium/internal/worker"
 )
 
-func TestExecutionStoreTotalsAttemptUsageByRole(t *testing.T) {
+func TestExecutionStoreListsFeatureAttemptUsage(t *testing.T) {
 	db, store := newTestExecutionStore(t)
 	run, coder := createExecutionRecords(t, db, store)
 	reviewer := execution.Session{
@@ -33,16 +33,18 @@ func TestExecutionStoreTotalsAttemptUsageByRole(t *testing.T) {
 			t.Fatalf("record usage %+v: %v", record, err)
 		}
 	}
-	totals, err := store.FeatureUsageByRole(t.Context(), run.FeatureID)
+	attempts, err := store.FeatureAttemptUsage(t.Context(), run.FeatureID)
 	if err != nil {
-		t.Fatalf("total usage: %v", err)
+		t.Fatalf("list usage: %v", err)
 	}
-	want := []execution.RoleUsage{
-		{Role: string(worker.RoleCoder), Usage: execution.TokenUsage{InputTokens: 30, CachedInputTokens: 100, CacheWriteTokens: 30, OutputTokens: 12}},
-		{Role: string(worker.RoleReviewer), Usage: execution.TokenUsage{InputTokens: 1, OutputTokens: 2}},
+	// Same recording time, so ties order by session and attempt.
+	want := []execution.RoleAttemptUsage{
+		{Role: string(worker.RoleReviewer), SessionID: reviewer.ID, AttemptID: "att_3", Usage: execution.TokenUsage{InputTokens: 1, OutputTokens: 2}},
+		{Role: string(worker.RoleCoder), SessionID: coder.ID, AttemptID: "att_1", Usage: execution.TokenUsage{InputTokens: 10, CachedInputTokens: 100, OutputTokens: 5}},
+		{Role: string(worker.RoleCoder), SessionID: coder.ID, AttemptID: "att_2", Usage: execution.TokenUsage{InputTokens: 20, CacheWriteTokens: 30, OutputTokens: 7}},
 	}
-	if !slices.Equal(totals, want) {
-		t.Fatalf("usage totals = %+v, want %+v", totals, want)
+	if !slices.Equal(attempts, want) {
+		t.Fatalf("attempt usage = %+v, want %+v", attempts, want)
 	}
 	if err := store.RecordAttemptUsage(t.Context(), execution.AttemptUsage{
 		SessionID: coder.ID, AttemptID: "att_bad", Usage: execution.TokenUsage{OutputTokens: -1}, RecordedAt: now,

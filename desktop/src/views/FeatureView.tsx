@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import {
   deleteFeature,
   getFeature,
@@ -18,7 +18,15 @@ import { AcceptanceTestsPanel } from "./AcceptanceTests";
 import { PhaseStepper, currentPhaseIndex } from "./PhaseStepper";
 import { phaseIntervals, type Interval } from "./phaseWindows";
 import { WORK } from "../vocab";
-import type { Feature, FeatureUsage, Run, WaitKind, WorkflowEvent } from "../api/types";
+import type {
+  Feature,
+  FeatureUsage,
+  PhaseUsage,
+  Run,
+  TokenUsage,
+  WaitKind,
+  WorkflowEvent,
+} from "../api/types";
 
 const POLL_MS = 2500;
 
@@ -252,19 +260,87 @@ export function FeatureView({
 
 // Input is everything the provider read: fresh, cached, and cache writes.
 // Cached reads are listed separately because they are much cheaper.
+const readTokens = (u: TokenUsage) => u.input_tokens + u.cached_input_tokens + u.cache_write_tokens;
+
+const PHASE_LABELS: Record<string, string> = {
+  clarify: "Clarify",
+  plan: "Plan",
+  plan_approval: "Plan approval",
+  implement: "Implement",
+  acceptance_tests: "Acceptance tests",
+  review: "Review",
+  correction: "Correction",
+  readiness: "Readiness",
+  intervention: "Your messages",
+  other: "Other",
+};
+
 function UsageLine({ usage }: { usage: FeatureUsage }) {
-  const read = (u: FeatureUsage["total"]) =>
-    u.input_tokens + u.cached_input_tokens + u.cache_write_tokens;
+  const [open, setOpen] = useState(false);
+  const phases = usage.phases ?? [];
+  const summary = usage.roles
+    .map(
+      (r) =>
+        `${r.role} ${formatTokens(readTokens(r))} in (${formatTokens(r.cached_input_tokens)} cached) · ${formatTokens(r.output_tokens)} out`,
+    )
+    .join(" — ");
+  if (phases.length === 0) {
+    return (
+      <p className="muted order-head__usage" title="Provider-reported tokens for finished turns">
+        Tokens: {summary}
+      </p>
+    );
+  }
   return (
-    <p className="muted order-head__usage" title="Provider-reported tokens for finished turns">
-      Tokens:{" "}
-      {usage.roles
-        .map(
-          (r) =>
-            `${r.role} ${formatTokens(read(r))} in (${formatTokens(r.cached_input_tokens)} cached) · ${formatTokens(r.output_tokens)} out`,
-        )
-        .join(" — ")}
-    </p>
+    <div className="order-head__usage">
+      <button
+        type="button"
+        className="linkish muted usage-toggle"
+        onClick={() => setOpen((v) => !v)}
+        title="Provider-reported tokens for finished turns"
+      >
+        {open ? "▼" : "▶"} Tokens: {summary}
+      </button>
+      {open && <UsageTable phases={phases} roles={usage.roles.map((r) => r.role)} />}
+    </div>
+  );
+}
+
+function UsageTable({ phases, roles }: { phases: PhaseUsage[]; roles: string[] }) {
+  // Phases arrive in workflow order; keep the first occurrence of each.
+  const order = phases.map((p) => p.phase).filter((p, i, all) => all.indexOf(p) === i);
+  const cell = (phase: string, role: string) => {
+    const u = phases.find((p) => p.phase === phase && p.role === role);
+    if (!u) return <td className="muted">—</td>;
+    return (
+      <td>
+        {formatTokens(readTokens(u))} in
+        <span className="muted"> ({formatTokens(u.cached_input_tokens)} cached)</span> ·{" "}
+        {formatTokens(u.output_tokens)} out
+      </td>
+    );
+  };
+  return (
+    <table className="usage-table">
+      <thead>
+        <tr>
+          <th>Phase</th>
+          {roles.map((r) => (
+            <th key={r}>{r}</th>
+          ))}
+        </tr>
+      </thead>
+      <tbody>
+        {order.map((phase) => (
+          <tr key={phase}>
+            <td>{PHASE_LABELS[phase] ?? phase}</td>
+            {roles.map((r) => (
+              <Fragment key={r}>{cell(phase, r)}</Fragment>
+            ))}
+          </tr>
+        ))}
+      </tbody>
+    </table>
   );
 }
 

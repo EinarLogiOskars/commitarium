@@ -446,9 +446,18 @@ export interface RoleUsage extends TokenUsage {
   role: string;
 }
 
-/** Provider-reported token totals for a work order, by session role. */
+export interface PhaseUsage extends TokenUsage {
+  /** clarify, plan, plan_approval, implement, acceptance_tests, review,
+   * correction, readiness, intervention, or other. */
+  phase: string;
+  role: string;
+}
+
+/** Provider-reported token totals for a work order, by role and by phase. */
 export interface FeatureUsage {
   roles: RoleUsage[];
+  /** Absent on older coordinators. */
+  phases?: PhaseUsage[];
   total: TokenUsage;
 }
 
