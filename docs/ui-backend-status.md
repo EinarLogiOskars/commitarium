@@ -321,8 +321,9 @@ Safe UI capabilities:
 - Read durable lifecycle history or follow it live through the feature event
   history and SSE routes.
 - Render the settled lifecycle states:
-  `draft`, `planning`, `implementing`, `reviewing`, `ready_to_merge`, and
-  `completed`.
+  `draft`, `ready`, `planning`, `implementing`, `reviewing`, `ready_to_merge`,
+  `completed`, and `cancelled`. `ready` is a clarified work order with a
+  handoff brief, waiting to be started.
 
 Both discovery routes return `[]` for an existing resource with no children.
 The UI may group features locally using their settled lifecycle states; search,
