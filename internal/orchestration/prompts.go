@@ -281,6 +281,7 @@ func implementationReviewInstructions(
 	implementationSummary string,
 	commitID string,
 	attemptID string,
+	previousReviewedCommitID string,
 	acceptanceTestCommitIDs ...string,
 ) string {
 	marker := implementationReviewMarker(attemptID)
@@ -288,18 +289,30 @@ func implementationReviewInstructions(
 	if len(acceptanceTestCommitIDs) > 0 {
 		acceptanceTestCommitID = acceptanceTestCommitIDs[0]
 	}
+	rereview := previousReviewedCommitID != ""
 	acceptanceInstructions := ""
 	workspaceRules := "Reset this disposable reviewer checkout to the planning baseline, fetch the exact implementation commit below, and check out that exact commit detached. Then do not modify tracked files, commit, push, change the pull-request body, or merge. "
 	if acceptanceTestCommitID != "" {
 		workspaceRules = "Reset this disposable private checkout to the exact private acceptance-test commit below, discarding only any prior local review merge. Fetch the exact implementation commit below without inspecting other lead history, then merge that exact commit locally into your private test commit. Resolve only mechanical merge conflicts; if a conflict changes test meaning, mark the affected test not applicable with a reason instead of silently rewriting it. Never push your private test commit, the local merge, or any test changes. Do not change the pull-request body or merge the pull request. "
 		acceptanceInstructions = "Run every pending private acceptance test against that local combination. Before each pending test, run `commitarium-artifact acceptance start <test-id>`; then record `acceptance pass`, `acceptance fail <test-id> <note>`, or `acceptance not-applicable <test-id> <note>` as appropriate. A failed acceptance test is review evidence, not automatically proof that production code is wrong: inspect whether the implementation, the test, or the shared understanding is incorrect. Private acceptance test commit: " + acceptanceTestCommitID + "\n"
+		if rereview {
+			acceptanceInstructions = "Re-run every private acceptance test against that local combination and report the results in your review. The acceptance checklist keeps the results recorded in your first review; do not try to change those statuses. A failed acceptance test is review evidence, not automatically proof that production code is wrong. Private acceptance test commit: " + acceptanceTestCommitID + "\n"
+		}
 	}
-	return "Continue the same provider conversation as the independent reviewer. The lead has now " +
-		"published an implementation for review. Inspect before judging: confirm the current branch, " +
+	scope := "The lead has now published an implementation for review. Inspect before judging: confirm the current branch, " +
 		"Git HEAD, status, diff from the planning baseline, and the exact pull-request head. Review only " +
 		"the exact commit below against the accepted goal and the agreed plan (read it with " +
-		"'commitarium-artifact plan show'), and run relevant tests " +
-		"when practical. " + workspaceRules + acceptanceInstructions +
+		"'commitarium-artifact plan show'), and run relevant tests when practical. Number each finding " +
+		"(F1, F2, ...) so the lead can answer it by number. "
+	if rereview {
+		scope = "You requested changes to commit " + previousReviewedCommitID + " and the lead has published " +
+			"a correction. You already reviewed everything up to that commit, so review what changed: run " +
+			"'git diff " + previousReviewedCommitID + " " + commitID + "'. Confirm each of your numbered findings " +
+			"as fixed or not fixed, and look beyond the diff only where the change touches code outside your " +
+			"findings. Re-run the relevant tests. Number any new finding after your last one. "
+	}
+	return "Continue the same provider conversation as the independent reviewer. " + scope +
+		workspaceRules + acceptanceInstructions +
 		"If you find material problems, submit one formal Forgejo review with event REQUEST_CHANGES. If the " +
 		"implementation is correct and sufficiently tested, tell the lead that you think the exact revision is " +
 		"ready to merge and submit one review with event APPROVED. Use the worker-provided " +
@@ -331,13 +344,14 @@ func implementationCorrectionInstructions(
 	return "Continue the same provider conversation as the lead. The independent reviewer requested " +
 		"changes to the exact commit below. First check Git HEAD and status against these facts. Do not " +
 		"repeat completed work or discard unexpected user changes. Address every material review finding " +
-		"while preserving the accepted goal and agreed plan, then run the relevant tests. " +
+		"while preserving the accepted goal and agreed plan, then run the relevant tests. Answer each " +
+		"numbered finding by its number: fixed (say how) or disputed (with evidence). " +
 		implementationToolchainInstructions + "When the " +
 		"correction is ready, create a new commit descended from the reviewed commit, push that exact HEAD to " +
 		"the 'commitarium' remote, and post one pull-request comment using the worker-provided Forgejo URL and " +
 		"token-file environment variables. Never print, log, commit, or include the token in a URL. The comment " +
-		"must be exactly the marker below, a blank line, '## Review response', another blank line, and a concise " +
-		"structured account of how the findings were addressed and tested. Check existing comments for the marker " +
+		"must be exactly the marker below, a blank line, '## Review response', another blank line, and your " +
+		"answer to each finding by number, with how it was tested. Check existing comments for the marker " +
 		"before posting so recovery never duplicates it. Do not change the PR body or merge. Return action " +
 		"'published' with that same summary, the new lowercase Git HEAD in commit_id, and the PR number. If state " +
 		"is contradictory, the prior commit or review is unavailable, work is ambiguous, or publication cannot " +
@@ -362,9 +376,9 @@ func implementationReadinessInstructions(
 ) string {
 	marker := workspace.ImplementationPublicationMergeReadiness.Marker(attemptID)
 	return "Continue the same provider conversation as the lead. The independent reviewer has said " +
-		"that the exact commit below is ready to merge. Inspect before answering: reconcile the branch, " +
-		"Git HEAD, status, diff, pull-request head, accepted goal, agreed plan, and exact approved review. " +
-		"Do not modify files, commit, push, change the pull-request body, or merge. If you agree that no " +
+		"that the exact commit below is ready to merge. You know the work, so do not re-review it: confirm " +
+		"that your Git HEAD is the approved commit and that nothing is left unpushed. Do not modify files, " +
+		"commit, push, change the pull-request body, or merge. If you agree that no " +
 		"material blocker remains, give the merge green light. If you do not agree, state the concrete " +
 		"remaining concern. For either decision, post one pull-request comment using the worker-provided " +
 		"Forgejo URL and token-file environment variables. Never print, log, commit, or include the token " +

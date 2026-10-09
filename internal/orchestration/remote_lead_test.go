@@ -1597,6 +1597,11 @@ func TestRemoteLeadStartsPlanningInManagedWorkspace(t *testing.T) {
 		!strings.Contains(secondReviewRequest.Instructions, "Published the corrected implementation") {
 		t.Fatalf("unexpected second implementation review request %+v", secondReviewRequest)
 	}
+	if !strings.Contains(secondReviewRequest.Instructions, "review what changed") ||
+		!strings.Contains(secondReviewRequest.Instructions, "git diff ") ||
+		strings.Contains(secondReviewRequest.Instructions, "diff from the planning baseline") {
+		t.Fatalf("second review did not limit itself to the correction:\n%s", secondReviewRequest.Instructions)
+	}
 	secondCorrectionRequest := requests[requestCount+3]
 	if secondCorrectionRequest.Mode != workerhttp.AttemptModeResume ||
 		secondCorrectionRequest.ProviderSessionID != "codex-thread-test" ||
@@ -3063,7 +3068,7 @@ func TestDialogueRoundLimitsAndReviewRouting(t *testing.T) {
 
 func TestImplementationReviewInstructionsUseForgejoApprovalEvent(t *testing.T) {
 	instructions := implementationReviewInstructions(
-		workspace.Workspace{}, "summary", "commit", "attempt",
+		workspace.Workspace{}, "summary", "commit", "attempt", "",
 	)
 	if !strings.Contains(instructions, "submit one review with event APPROVED.") {
 		t.Fatalf("review instructions do not use Forgejo's APPROVED event: %q", instructions)
@@ -3084,7 +3089,7 @@ func TestIndependentAcceptanceInstructionsKeepAuthoringBlindAndReviewLocal(t *te
 	}
 	review := implementationReviewInstructions(
 		workspace.Workspace{}, "summary",
-		strings.Repeat("b", 40), "attempt", strings.Repeat("c", 40),
+		strings.Repeat("b", 40), "attempt", "", strings.Repeat("c", 40),
 	)
 	for _, required := range []string{"Reset this disposable private checkout", "merge that exact commit locally", "acceptance start <test-id>", "acceptance not-applicable <test-id> <note>", "Never push your private test commit"} {
 		if !strings.Contains(review, required) {

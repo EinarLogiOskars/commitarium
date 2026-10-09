@@ -4718,6 +4718,17 @@ func (starter *RemoteLeadStarter) durableAcceptanceTests(
 	return tests, true, nil
 }
 
+// previousReviewedCommit returns the commit the reviewer's previous review
+// attempt approved or rejected. An empty result makes the next review a full
+// one, which is always safe.
+func (starter *RemoteLeadStarter) previousReviewedCommit(ctx context.Context, sessionID, attemptID string) string {
+	attempt, err := starter.worker.GetAttempt(ctx, workerhttp.AttemptReference{SessionID: sessionID, AttemptID: attemptID})
+	if err != nil || attempt.Result == nil || attempt.Result.Review == nil {
+		return ""
+	}
+	return attempt.Result.Review.CommitID
+}
+
 func (starter *RemoteLeadStarter) startImplementationReview(
 	ctx context.Context,
 	run execution.Run,
@@ -4783,9 +4794,17 @@ func (starter *RemoteLeadStarter) startImplementationReview(
 		acceptanceTestCommitID = tests.TestCommitID
 	}
 	attemptID := implementationReviewAttemptForVersion(reviewer.ID, run.PlanVersion, round)
-	previewContext, err := starter.previewRunInstructions(ctx, storedFeature.ProjectID)
-	if err != nil {
-		return remoteLeadRequest{}, false, err
+	// The first review reads the whole feature and the preview rules. Later
+	// rounds review only the correction since the commit reviewed last.
+	previewContext := ""
+	previousReviewedCommitID := ""
+	if round == 1 {
+		previewContext, err = starter.previewRunInstructions(ctx, storedFeature.ProjectID)
+		if err != nil {
+			return remoteLeadRequest{}, false, err
+		}
+	} else {
+		previousReviewedCommitID = starter.previousReviewedCommit(ctx, reviewer.ID, checkpoint.AttemptID)
 	}
 	request := remoteLeadRequest{
 		runID: run.ID, agentName: "reviewer", waitingReason: implementationReviewRunningReason,
@@ -4803,7 +4822,7 @@ func (starter *RemoteLeadStarter) startImplementationReview(
 			ProviderSessionID: reviewer.ProviderSessionID,
 			Instructions: implementationReviewInstructions(
 				prepared, leadSummary,
-				publication.CommitID, attemptID, acceptanceTestCommitID,
+				publication.CommitID, attemptID, previousReviewedCommitID, acceptanceTestCommitID,
 			) + previewContext,
 			OutputContract: workerhttp.OutputContractImplementationReview,
 		},
