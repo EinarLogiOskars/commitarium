@@ -772,12 +772,9 @@ fn resolve_urls(
         if port.protocol != "tcp" {
             continue;
         }
-        let private = format!("{}/tcp", port.target);
-        let output = compose_capture(
-            runtime,
-            &["port", &port.service, &private],
-            "resolve preview port",
-        )?;
+        let target = port.target.to_string();
+        let args = compose_port_args(&port.protocol, &port.service, &target);
+        let output = compose_capture(runtime, &args, "resolve preview port")?;
         let host_port = parse_published_port(&output)?;
         urls.push(PreviewUrl {
             service: port.service.clone(),
@@ -786,6 +783,10 @@ fn resolve_urls(
         });
     }
     Ok(urls)
+}
+
+fn compose_port_args<'a>(protocol: &'a str, service: &'a str, target: &'a str) -> [&'a str; 5] {
+    ["port", "--protocol", protocol, service, target]
 }
 
 fn wait_for_http(
@@ -1269,6 +1270,14 @@ mod tests {
         assert_eq!(
             compose_down_args(true, true),
             ["down", "--remove-orphans", "-v", "--rmi", "local"]
+        );
+    }
+
+    #[test]
+    fn compose_port_uses_a_bare_port_and_explicit_protocol_flag() {
+        assert_eq!(
+            compose_port_args("tcp", "frontend", "5173"),
+            ["port", "--protocol", "tcp", "frontend", "5173"]
         );
     }
 }
