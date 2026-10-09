@@ -574,7 +574,7 @@ func TestRemoteLeadContinuesScopeChangeIntoVersionedReplanning(t *testing.T) {
 		requests[1].ProviderSessionID != reviewer.ProviderSessionID ||
 		requests[2].Mode != workerhttp.AttemptModeResume ||
 		requests[3].OutputContract != workerhttp.OutputContractImplementationLead ||
-		!strings.Contains(requests[3].Instructions, amendment) {
+		!strings.Contains(requests[3].Instructions, "commitarium-artifact plan show") {
 		t.Fatalf("unexpected versioned reviewer/lead/implementation requests: %+v", requests)
 	}
 	if workspaceStub.revisedVerifyCalls != 1 || workspaceStub.publishedBaseline != baseline {

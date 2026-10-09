@@ -1444,8 +1444,9 @@ func TestRemoteLeadStartsPlanningInManagedWorkspace(t *testing.T) {
 		requests[6].ProviderSessionID != "codex-thread-test" ||
 		requests[6].Assignment.Role != workerhttp.RoleLead ||
 		requests[6].Assignment.WorkspaceID != workspaceStub.prepared.ID ||
-		!strings.Contains(requests[6].Instructions, implementedFeature.AcceptedGoal) ||
-		!strings.Contains(requests[6].Instructions, messages[4].Event.Text) ||
+		strings.Contains(requests[6].Instructions, implementedFeature.AcceptedGoal) ||
+		strings.Contains(requests[6].Instructions, messages[4].Event.Text) ||
+		!strings.Contains(requests[6].Instructions, "commitarium-artifact plan show") ||
 		!strings.Contains(requests[6].Instructions, "push that exact HEAD") ||
 		requests[6].OutputContract != workerhttp.OutputContractImplementationLead ||
 		!strings.Contains(requests[6].Instructions, "Git HEAD") {
@@ -3062,7 +3063,7 @@ func TestDialogueRoundLimitsAndReviewRouting(t *testing.T) {
 
 func TestImplementationReviewInstructionsUseForgejoApprovalEvent(t *testing.T) {
 	instructions := implementationReviewInstructions(
-		feature.Feature{}, workspace.Workspace{}, "plan", "summary", "commit", "attempt",
+		workspace.Workspace{}, "summary", "commit", "attempt",
 	)
 	if !strings.Contains(instructions, "submit one review with event APPROVED.") {
 		t.Fatalf("review instructions do not use Forgejo's APPROVED event: %q", instructions)
@@ -3074,9 +3075,7 @@ func TestImplementationReviewInstructionsUseForgejoApprovalEvent(t *testing.T) {
 
 func TestIndependentAcceptanceInstructionsKeepAuthoringBlindAndReviewLocal(t *testing.T) {
 	authoring := acceptanceTestsInstructions(
-		feature.Feature{AcceptedGoal: "Export visible rows."},
 		workspace.Workspace{RepositoryOwner: "owner", RepositoryName: "repo", BaseBranch: "main", BaseCommitID: strings.Repeat("a", 40)},
-		"Implement CSV export.",
 	)
 	for _, required := range []string{"Do not fetch", "do not push", "private checkout", "exact local test commit ID"} {
 		if !strings.Contains(authoring, required) {
@@ -3084,7 +3083,7 @@ func TestIndependentAcceptanceInstructionsKeepAuthoringBlindAndReviewLocal(t *te
 		}
 	}
 	review := implementationReviewInstructions(
-		feature.Feature{}, workspace.Workspace{}, "plan", "summary",
+		workspace.Workspace{}, "summary",
 		strings.Repeat("b", 40), "attempt", strings.Repeat("c", 40),
 	)
 	for _, required := range []string{"Reset this disposable private checkout", "merge that exact commit locally", "acceptance start <test-id>", "acceptance not-applicable <test-id> <note>", "Never push your private test commit"} {

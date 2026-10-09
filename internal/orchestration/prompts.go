@@ -87,34 +87,30 @@ func reviewerPlanningInstructions(
 		"\n\n" + lead + "'s proposal:\n" + proposal
 }
 
-func acceptanceTestsInstructions(storedFeature feature.Feature, prepared workspace.Workspace, plan string) string {
+func acceptanceTestsInstructions(prepared workspace.Workspace) string {
 	return "Continue the same provider conversation as the independent reviewer. Work only from the accepted goal, " +
-		"agreed plan, and the clean planning baseline already present in your private checkout. Do not fetch, inspect, " +
+		"the agreed plan (read it with 'commitarium-artifact plan show'), and the clean planning baseline already " +
+		"present in your private checkout. Do not fetch, inspect, " +
 		"or query the lead's implementation or pull-request head. Write the smallest useful executable acceptance tests " +
 		"you would have written before implementation, and do not alter production code. Run the tests against the " +
 		"baseline when practical; they are expected to expose missing behavior. Commit only the acceptance-test changes " +
 		"locally and do not push any branch or commit. Return action 'authored', a concise summary, the exact local test " +
 		"commit ID, and ordered stable test IDs and user-facing titles. If independent executable acceptance tests are " +
 		"not meaningful or cannot safely be authored, return action 'blocked' with no commit or tests.\n\n" +
-		"Current workflow phase: independent acceptance test authoring\nAccepted goal:\n" + storedFeature.AcceptedGoal +
-		"\n\nAgreed implementation plan:\n" + plan +
-		"\n\nRepository: " + prepared.RepositoryOwner + "/" + prepared.RepositoryName +
+		"Current workflow phase: independent acceptance test authoring" +
+		"\nRepository: " + prepared.RepositoryOwner + "/" + prepared.RepositoryName +
 		"\nBase branch: " + prepared.BaseBranch + "\nPrivate checkout baseline commit: " + prepared.BaseCommitID
 }
 
 func implementationInstructions(
-	storedFeature feature.Feature,
 	prepared workspace.Workspace,
-	plan string,
 	attemptID string,
 ) string {
 	marker := implementationPublicationMarker(attemptID)
-	return "Continue the same provider conversation as the lead and begin implementation of the " +
-		"agreed plan. Before modifying anything, inspect the current working directory, Git HEAD, " +
-		"branch, status, and diff, and reconcile them with the durable facts below. Preserve any " +
-		"unexpected user work: do not reset, clean, overwrite, or silently discard it. If the state " +
-		"is missing, contradictory, or ambiguous, stop and explain the problem without making changes. " +
-		"Otherwise implement the accepted goal and agreed plan and run the relevant available tests. " +
+	return "Continue the same provider conversation as the lead and begin implementing the agreed plan. " +
+		"First check Git HEAD and status against the facts below. Preserve any unexpected user work: do " +
+		"not reset, clean, overwrite, or silently discard it. If the state is missing, contradictory, or " +
+		"ambiguous, stop and explain the problem without making changes. " +
 		implementationToolchainInstructions +
 		implementationChecklistInstructions +
 		"When you decide the implementation is ready for independent review, commit all intended work " +
@@ -129,9 +125,8 @@ func implementationInstructions(
 		"return action 'blocked', explain why in summary, leave commit_id empty, and still return the known " +
 		"PR number. Durable " +
 		"repository and coordinator state are authoritative over conversational memory.\n\n" +
-		"Current workflow phase: implementing\nAccepted goal:\n" + storedFeature.AcceptedGoal +
-		"\n\nAgreed implementation plan:\n" + plan +
-		"\n\nRepository: " + prepared.RepositoryOwner + "/" + prepared.RepositoryName +
+		"Current workflow phase: implementing" +
+		"\nRepository: " + prepared.RepositoryOwner + "/" + prepared.RepositoryName +
 		"\nBase branch: " + prepared.BaseBranch + "\nFeature branch: " + prepared.Branch +
 		"\nPlanning baseline commit: " + prepared.BaseCommitID +
 		fmt.Sprintf("\nDraft pull request: #%d (%s)", prepared.PullRequestNumber, prepared.PullRequestURL) +
@@ -139,16 +134,13 @@ func implementationInstructions(
 }
 
 func implementationContinuationInstructions(
-	storedFeature feature.Feature,
 	prepared workspace.Workspace,
-	plan string,
 	userMessage string,
 	attemptID string,
 ) string {
 	marker := implementationPublicationMarker(attemptID)
 	return "Continue the same provider conversation and implementation work after the user's " +
-		"guidance below. Inspect before modifying anything: reconcile the current working directory, " +
-		"Git HEAD, branch, status, and diff with the durable facts below and with the work already " +
+		"guidance below. First check Git HEAD and status against the facts below and the work already " +
 		"completed in this conversation. Preserve all existing changes, including manual user edits; " +
 		"do not reset, clean, overwrite, or repeat completed work. If partial work is ambiguous, facts " +
 		"conflict, an external side effect may or may not have happened, or the guidance would change " +
@@ -167,9 +159,8 @@ func implementationContinuationInstructions(
 		"return action 'blocked' with commit_id empty and explain the blocker. Durable repository, pull-request, and " +
 		"coordinator state are authoritative over conversational memory.\n\n" +
 		"User's continuation guidance:\n" + userMessage +
-		"\n\nCurrent workflow phase: implementing\nAccepted goal:\n" + storedFeature.AcceptedGoal +
-		"\n\nAgreed implementation plan:\n" + plan +
-		"\n\nRepository: " + prepared.RepositoryOwner + "/" + prepared.RepositoryName +
+		"\n\nCurrent workflow phase: implementing" +
+		"\nRepository: " + prepared.RepositoryOwner + "/" + prepared.RepositoryName +
 		"\nBase branch: " + prepared.BaseBranch + "\nFeature branch: " + prepared.Branch +
 		"\nPlanning baseline commit: " + prepared.BaseCommitID +
 		fmt.Sprintf("\nDraft pull request: #%d (%s)", prepared.PullRequestNumber, prepared.PullRequestURL) +
@@ -286,9 +277,7 @@ func recoveryPublicationInstructions(sessionID, attemptID string) string {
 }
 
 func implementationReviewInstructions(
-	storedFeature feature.Feature,
 	prepared workspace.Workspace,
-	plan string,
 	implementationSummary string,
 	commitID string,
 	attemptID string,
@@ -308,7 +297,8 @@ func implementationReviewInstructions(
 	return "Continue the same provider conversation as the independent reviewer. The lead has now " +
 		"published an implementation for review. Inspect before judging: confirm the current branch, " +
 		"Git HEAD, status, diff from the planning baseline, and the exact pull-request head. Review only " +
-		"the exact commit below against the accepted goal and agreed plan, and run relevant tests " +
+		"the exact commit below against the accepted goal and the agreed plan (read it with " +
+		"'commitarium-artifact plan show'), and run relevant tests " +
 		"when practical. " + workspaceRules + acceptanceInstructions +
 		"If you find material problems, submit one formal Forgejo review with event REQUEST_CHANGES. If the " +
 		"implementation is correct and sufficiently tested, tell the lead that you think the exact revision is " +
@@ -321,8 +311,7 @@ func implementationReviewInstructions(
 		"If state is contradictory, the exact revision is unavailable, or you cannot safely establish whether a " +
 		"review was posted, return action 'blocked', leave commit_id empty and review_id zero, and explain why. " +
 		"Durable Git, Forgejo, and coordinator state are authoritative over conversational memory.\n\n" +
-		"Current workflow phase: reviewing\nAccepted goal:\n" + storedFeature.AcceptedGoal +
-		"\n\nAgreed implementation plan:\n" + plan +
+		"Current workflow phase: reviewing" +
 		"\n\nLead's latest implementation or readiness summary:\n" + implementationSummary +
 		"\n\nRepository: " + prepared.RepositoryOwner + "/" + prepared.RepositoryName +
 		"\nBase branch: " + prepared.BaseBranch + "\nFeature branch: " + prepared.Branch +
@@ -332,9 +321,7 @@ func implementationReviewInstructions(
 }
 
 func implementationCorrectionInstructions(
-	storedFeature feature.Feature,
 	prepared workspace.Workspace,
-	plan string,
 	reviewSummary string,
 	reviewedCommitID string,
 	reviewID int64,
@@ -342,10 +329,9 @@ func implementationCorrectionInstructions(
 ) string {
 	marker := implementationReviewResponseMarker(attemptID)
 	return "Continue the same provider conversation as the lead. The independent reviewer requested " +
-		"changes to the exact commit below. Inspect before modifying anything: reconcile the working " +
-		"directory, branch, Git HEAD, status, diff, pull-request head, and existing review with these durable " +
-		"facts. Do not repeat completed work or discard unexpected user changes. Address every material review " +
-		"finding while preserving the accepted goal and agreed plan, then run the relevant tests. " +
+		"changes to the exact commit below. First check Git HEAD and status against these facts. Do not " +
+		"repeat completed work or discard unexpected user changes. Address every material review finding " +
+		"while preserving the accepted goal and agreed plan, then run the relevant tests. " +
 		implementationToolchainInstructions + "When the " +
 		"correction is ready, create a new commit descended from the reviewed commit, push that exact HEAD to " +
 		"the 'commitarium' remote, and post one pull-request comment using the worker-provided Forgejo URL and " +
@@ -357,8 +343,7 @@ func implementationCorrectionInstructions(
 		"is contradictory, the prior commit or review is unavailable, work is ambiguous, or publication cannot " +
 		"be confirmed, return action 'blocked', leave commit_id empty, and explain why. Durable Git, Forgejo, and " +
 		"coordinator state are authoritative over conversational memory.\n\n" +
-		"Current workflow phase: reviewing (corrective implementation)\nAccepted goal:\n" + storedFeature.AcceptedGoal +
-		"\n\nAgreed implementation plan:\n" + plan +
+		"Current workflow phase: reviewing (corrective implementation)" +
 		"\n\nVerified reviewer findings:\n" + reviewSummary +
 		"\n\nRepository: " + prepared.RepositoryOwner + "/" + prepared.RepositoryName +
 		"\nBase branch: " + prepared.BaseBranch + "\nFeature branch: " + prepared.Branch +
@@ -369,9 +354,7 @@ func implementationCorrectionInstructions(
 }
 
 func implementationReadinessInstructions(
-	storedFeature feature.Feature,
 	prepared workspace.Workspace,
-	plan string,
 	reviewSummary string,
 	commitID string,
 	reviewID int64,
@@ -392,8 +375,7 @@ func implementationReadinessInstructions(
 		"contradictory, the exact revision or approval is unavailable, or you cannot safely establish " +
 		"whether the comment was posted, return action 'blocked' and explain why. Durable Git, Forgejo, " +
 		"and coordinator state are authoritative over conversational memory.\n\n" +
-		"Current workflow phase: reviewing (merge-readiness acknowledgement)\nAccepted goal:\n" + storedFeature.AcceptedGoal +
-		"\n\nAgreed implementation plan:\n" + plan +
+		"Current workflow phase: reviewing (merge-readiness acknowledgement)" +
 		"\n\nReviewer's exact approval summary:\n" + reviewSummary +
 		"\n\nRepository: " + prepared.RepositoryOwner + "/" + prepared.RepositoryName +
 		"\nBase branch: " + prepared.BaseBranch + "\nFeature branch: " + prepared.Branch +

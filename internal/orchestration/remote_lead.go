@@ -2982,7 +2982,7 @@ func (starter *RemoteLeadStarter) acceptanceTestsRequest(
 				Role: workerhttp.RoleReviewer, WorkspaceID: prepared.ID,
 			},
 			ProviderSessionID: reviewer.ProviderSessionID,
-			Instructions:      acceptanceTestsInstructions(storedFeature, prepared, plan),
+			Instructions:      acceptanceTestsInstructions(prepared),
 			OutputContract:    workerhttp.OutputContractAcceptanceTests,
 		},
 	}
@@ -3099,7 +3099,7 @@ func (starter *RemoteLeadStarter) implementationRequest(
 			},
 			ProviderSessionID: lead.ProviderSessionID,
 			Instructions: implementationInstructions(
-				storedFeature, prepared, plan, attemptID,
+				prepared, attemptID,
 			) + previewContext,
 			OutputContract: workerhttp.OutputContractImplementationLead,
 		},
@@ -3540,8 +3540,7 @@ func (starter *RemoteLeadStarter) implementationContinuationRequest(
 	if !published {
 		return remoteLeadRequest{}, ErrCommandNotAllowed
 	}
-	currentFeature, err := starter.featureForCurrentPlan(ctx, run, storedFeature)
-	if err != nil {
+	if _, err := starter.featureForCurrentPlan(ctx, run, storedFeature); err != nil {
 		return remoteLeadRequest{}, err
 	}
 	var prepared workspace.Workspace
@@ -3564,10 +3563,6 @@ func (starter *RemoteLeadStarter) implementationContinuationRequest(
 		return remoteLeadRequest{}, fmt.Errorf("verify implementation continuation workspace: %w", err)
 	}
 	attemptID := implementationAttemptForVersion(lead.ID, run.PlanVersion, turn+1)
-	previewContext, err := starter.previewRunInstructions(ctx, storedFeature.ProjectID)
-	if err != nil {
-		return remoteLeadRequest{}, err
-	}
 	request := remoteLeadRequest{
 		runID: run.ID, commandID: command.ID, agentName: "lead agent",
 		waitingReason: implementationReadyReason,
@@ -3586,8 +3581,8 @@ func (starter *RemoteLeadStarter) implementationContinuationRequest(
 			},
 			ProviderSessionID: lead.ProviderSessionID,
 			Instructions: implementationContinuationInstructions(
-				currentFeature, prepared, plan.Text, command.Message, attemptID,
-			) + previewContext,
+				prepared, command.Message, attemptID,
+			),
 			OutputContract: workerhttp.OutputContractImplementationLead,
 		},
 	}
@@ -4807,7 +4802,7 @@ func (starter *RemoteLeadStarter) startImplementationReview(
 			},
 			ProviderSessionID: reviewer.ProviderSessionID,
 			Instructions: implementationReviewInstructions(
-				storedFeature, prepared, plan.Text, leadSummary,
+				prepared, leadSummary,
 				publication.CommitID, attemptID, acceptanceTestCommitID,
 			) + previewContext,
 			OutputContract: workerhttp.OutputContractImplementationReview,
@@ -4899,10 +4894,6 @@ func (starter *RemoteLeadStarter) startImplementationCorrection(
 		return remoteLeadRequest{}, false, err
 	}
 	attemptID := implementationCorrectionAttemptForVersion(lead.ID, run.PlanVersion, round)
-	previewContext, err := starter.previewRunInstructions(ctx, storedFeature.ProjectID)
-	if err != nil {
-		return remoteLeadRequest{}, false, err
-	}
 	request := remoteLeadRequest{
 		runID: run.ID, agentName: "lead agent", waitingReason: implementationCorrectionRunningReason,
 		identity: workerhttp.MutationIdentity{
@@ -4918,9 +4909,9 @@ func (starter *RemoteLeadStarter) startImplementationCorrection(
 			},
 			ProviderSessionID: lead.ProviderSessionID,
 			Instructions: implementationCorrectionInstructions(
-				storedFeature, prepared, plan.Text, review.Summary,
+				prepared, review.Summary,
 				review.Review.CommitID, review.Review.ReviewID, attemptID,
-			) + previewContext,
+			),
 			OutputContract: workerhttp.OutputContractImplementationLead,
 		},
 	}
@@ -5276,7 +5267,7 @@ func (starter *RemoteLeadStarter) startImplementationReadiness(
 			},
 			ProviderSessionID: lead.ProviderSessionID,
 			Instructions: implementationReadinessInstructions(
-				storedFeature, prepared, plan.Text, review.Summary,
+				prepared, review.Summary,
 				review.Review.CommitID, review.Review.ReviewID, attemptID,
 			),
 			OutputContract: workerhttp.OutputContractImplementationReadiness,
