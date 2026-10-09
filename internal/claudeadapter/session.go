@@ -175,6 +175,9 @@ func (session *session) run() {
 				break
 			}
 			if terminal != nil {
+				if trailingInformationalRecord(line) {
+					continue
+				}
 				protocolErr = fmt.Errorf("%w: output followed the terminal result", ErrProtocol)
 				session.abortProcess()
 				break
@@ -199,7 +202,9 @@ func (session *session) run() {
 	}
 	if protocolErr == nil && len(bytes.TrimSpace(stdout)) > 0 {
 		if terminal != nil {
-			protocolErr = fmt.Errorf("%w: output followed the terminal result", ErrProtocol)
+			if !trailingInformationalRecord(bytes.TrimSpace(stdout)) {
+				protocolErr = fmt.Errorf("%w: output followed the terminal result", ErrProtocol)
+			}
 		} else {
 			events, result, err := session.translate(bytes.TrimSpace(stdout))
 			if err != nil {
@@ -252,6 +257,25 @@ func (session *session) run() {
 		return
 	}
 	session.complete(*terminal, nil)
+}
+
+// trailingInformationalRecord reports whether a record after the terminal
+// result is informational. Claude Code writes summaries such as
+// system/task_summary after its result; they cannot change the outcome. A
+// second result or any further conversation still fails the turn.
+func trailingInformationalRecord(line []byte) bool {
+	var record struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(line, &record); err != nil {
+		return false
+	}
+	switch record.Type {
+	case "system", "rate_limit_event", "stream_event", "tool_progress", "auth_status":
+		return true
+	default:
+		return false
+	}
 }
 
 type streamMessage struct {

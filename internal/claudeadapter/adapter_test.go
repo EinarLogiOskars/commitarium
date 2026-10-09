@@ -215,7 +215,7 @@ func TestAdapterEmitsResultTextWhenAssistantRecordIsMissing(t *testing.T) {
 	}
 }
 
-func TestAdapterIgnoresSubagentInit(t *testing.T) {
+func TestAdapterIgnoresSubagentInitAndTrailingSummary(t *testing.T) {
 	adapter := testAdapter(t, "subagent-init", "Delegate to a subagent")
 	session, err := adapter.Start(t.Context(), adapter.request("att_claude_subagent", "Delegate to a subagent"))
 	if err != nil {
@@ -580,6 +580,10 @@ func TestClaudeCLIHelper(t *testing.T) {
 		helperWrite(writer, map[string]any{
 			"type": "result", "subtype": "success", "session_id": sessionID,
 			"is_error": false, "result": "Finished after a subagent.",
+		})
+		// Claude Code reports a summary after its result.
+		helperWrite(writer, map[string]any{
+			"type": "system", "subtype": "task_summary", "session_id": sessionID,
 		})
 	case "result-only":
 		helperWrite(writer, map[string]any{
