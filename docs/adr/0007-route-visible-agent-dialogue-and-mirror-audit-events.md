@@ -106,6 +106,9 @@ spend most of a provider's usage limit on repeated context:
 - Agents address each other by provider and role. The reviewer numbers its
   planning concerns and review findings; the lead answers each by number and
   sends only what changed.
+- The reviewer approves the lead's exact final plan before it is published.
+  Requested changes return to the lead as a normal planning message; only an
+  approved plan reaches implementation.
 - After a correction, the reviewer reviews the diff since the commit it last
   reviewed and re-runs every test, widening only where the change reaches
   beyond the findings.

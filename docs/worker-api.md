@@ -98,6 +98,10 @@ contracts:
   complete agreed plan as `plan_submitted`. A submission also includes a title,
   subtitle, and ordered commit-sized steps with details, verification, and an
   intended commit subject.
+- `plan_approval` makes the reviewer approve the lead's submitted final plan or
+  request changes with a note. The plan is published and implementation starts
+  only after approval; requested changes go back to the lead as a planning
+  message.
 - `implementation_lead` makes the lead return a blocker, a structured request
   for approved Debian packages that are missing from the managed environment,
   or the exact commit and pull-request identities it published.

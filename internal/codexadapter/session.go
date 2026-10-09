@@ -553,7 +553,8 @@ func (session *session) completedItem(item threadItem) ([]worker.Event, error) {
 			session.outputContract == worker.OutputContractImplementationReview ||
 			session.outputContract == worker.OutputContractImplementationReadiness ||
 			session.outputContract == worker.OutputContractIntervention ||
-			session.outputContract == worker.OutputContractToolchainSetup {
+			session.outputContract == worker.OutputContractToolchainSetup ||
+			session.outputContract == worker.OutputContractPlanApproval {
 			session.mu.Lock()
 			session.pendingMessage = text
 			session.pendingStreamID = item.ID

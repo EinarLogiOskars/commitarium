@@ -63,6 +63,7 @@ const (
 	planningStageFirstReview      planningStage = "first_review"
 	planningStageLeadResponse     planningStage = "lead_response"
 	planningStageReviewerResponse planningStage = "reviewer_response"
+	planningStagePlanApproval     planningStage = "plan_approval"
 )
 
 const (
@@ -688,6 +689,9 @@ func (starter *RemoteLeadStarter) recoverWithDirective(
 	}
 	if !isIntervention && storedFeature.State == feature.StatePlanning {
 		attemptVersion, _, planning := planningAttemptVersionAndTurn(session.ID, checkpoint.AttemptID)
+		if !planning {
+			attemptVersion, _, planning = planApprovalVersionAndTurn(session.ID, checkpoint.AttemptID)
+		}
 		if !planning || attemptVersion != run.PlanVersion {
 			return fmt.Errorf("%w: planning attempt does not match the run's current plan version", ErrInvalidRunRequest)
 		}
@@ -738,6 +742,9 @@ func (starter *RemoteLeadStarter) recoverWithDirective(
 		}
 		if _, reviewing := implementationReviewTurnNumber(session.ID, checkpoint.AttemptID); reviewing {
 			request.request.OutputContract = workerhttp.OutputContractImplementationReview
+		}
+		if _, _, approving := planApprovalVersionAndTurn(session.ID, checkpoint.AttemptID); approving {
+			request.request.OutputContract = workerhttp.OutputContractPlanApproval
 		}
 	}
 	pending, err := starter.executions.PendingCommandsForSession(ctx, session.ID)
@@ -1762,10 +1769,9 @@ func (starter *RemoteLeadStarter) recoverIdlePlanningRun(
 		if !starter.claim(run.ID) {
 			return true, fmt.Errorf("%w: %q", ErrRunAlreadyActive, run.ID)
 		}
-		defer starter.release(run.ID)
-		if err := starter.publishSubmittedPlan(ctx, run.ID, last.Event); err != nil {
-			starter.requirePlanPublicationReview(ctx, run.ID, last.Event, err)
-		}
+		// The reviewer may still need to approve the plan, which is a whole
+		// provider turn, so continue outside recovery.
+		go starter.launchPlanPublication(run.ID, last.Event)
 		return true, nil
 	}
 	if planningRoundLimitReached(run.PlanningRoundLimit, len(messages)) {
@@ -2100,6 +2106,9 @@ func planningAttemptVersionAndTurn(sessionID, attemptID string) (int, int, bool)
 }
 
 func planningStageForAttempt(session execution.Session, attemptID string) planningStage {
+	if _, _, approving := planApprovalVersionAndTurn(session.ID, attemptID); approving && session.Role == worker.RoleReviewer {
+		return planningStagePlanApproval
+	}
 	turn, planned := planningTurnNumber(session.ID, attemptID)
 	switch {
 	case !planned:
@@ -2118,6 +2127,9 @@ func planningStageForAttempt(session execution.Session, attemptID string) planni
 }
 
 func waitKindForAttempt(session execution.Session, attemptID string) execution.RunWaitKind {
+	if _, _, approving := planApprovalVersionAndTurn(session.ID, attemptID); approving {
+		return execution.RunWaitKindPhaseCheckpoint
+	}
 	if _, planned := planningTurnNumber(session.ID, attemptID); planned {
 		return execution.RunWaitKindPhaseCheckpoint
 	}
@@ -2140,6 +2152,9 @@ func waitKindForAttempt(session execution.Session, attemptID string) execution.R
 }
 
 func waitingReasonForAttempt(session execution.Session, attemptID string) string {
+	if _, _, approving := planApprovalVersionAndTurn(session.ID, attemptID); approving && session.Role == worker.RoleReviewer {
+		return planApprovalReason
+	}
 	if _, implementing := implementationTurnNumber(session.ID, attemptID); session.Role == worker.RoleLead && implementing {
 		return implementationReadyReason
 	}
@@ -4239,7 +4254,7 @@ func (starter *RemoteLeadStarter) finish(
 			return
 		}
 		var planningMessage execution.Event
-		if request.planningStage != planningStageNone {
+		if request.planningStage != planningStageNone && request.planningStage != planningStagePlanApproval {
 			planningMessage, err = starter.messageForAttempt(
 				ctx, session.ID, request.identity.AttemptID,
 			)
@@ -4297,6 +4312,10 @@ func (starter *RemoteLeadStarter) finish(
 		if err != nil {
 			break
 		}
+		if request.planningStage == planningStagePlanApproval {
+			starter.continueApprovedPlanning(ctx, request)
+			return
+		}
 		if request.request.OutputContract == workerhttp.OutputContractAcceptanceTests {
 			if attempt.Result.Disposition == workerhttp.DispositionInputRequired {
 				err = starter.handleInputRequired(ctx, request, *attempt.Result)
@@ -4331,11 +4350,11 @@ func (starter *RemoteLeadStarter) finish(
 						return
 					}
 				}
-				if publishErr := starter.publishSubmittedPlan(
+				if continueErr := starter.continueSubmittedPlan(
 					ctx, request.runID, planningMessage,
-				); publishErr != nil {
+				); continueErr != nil {
 					starter.requirePlanPublicationReview(
-						ctx, request.runID, planningMessage, publishErr,
+						ctx, request.runID, planningMessage, continueErr,
 					)
 				}
 				return
@@ -5569,12 +5588,204 @@ func nextImplementationReviewAction(disposition workerhttp.Disposition) implemen
 	return implementationReviewActionAcknowledge
 }
 
+// continueSubmittedPlan moves a submitted plan forward. The reviewer approves
+// the exact final plan before it is published and implementation can start;
+// a request for changes returns the discussion to the lead. The reviewer's
+// approval attempt is the durable record, so recovery resumes at the right
+// point.
+func (starter *RemoteLeadStarter) continueSubmittedPlan(
+	ctx context.Context,
+	runID string,
+	plan execution.Event,
+) error {
+	run, err := starter.executions.GetRun(ctx, runID)
+	if err != nil {
+		return err
+	}
+	messages, err := starter.currentPlanningMessages(ctx, run)
+	if err != nil {
+		return err
+	}
+	if len(messages) == 0 || messages[len(messages)-1].Event.ID != plan.ID ||
+		messages[len(messages)-1].Event.Type != worker.EventPlanSubmitted {
+		return fmt.Errorf("%w: the submitted plan is no longer the latest planning message", ErrPlanningNotAllowed)
+	}
+	published, err := starter.planPublicationRecorded(ctx, plan)
+	if err != nil {
+		return err
+	}
+	if published {
+		return starter.publishSubmittedPlan(ctx, runID, plan)
+	}
+	reviewer, err := starter.executions.GetSession(ctx, remoteReviewerSessionID(run.ID))
+	if err != nil {
+		return err
+	}
+	checkpoint, err := starter.executions.GetWorkerAttempt(ctx, reviewer.ID)
+	if err != nil {
+		return err
+	}
+	attemptID := planApprovalAttemptForVersion(reviewer.ID, run.PlanVersion, planSubmissionCount(messages))
+	if checkpoint.AttemptID == attemptID {
+		attempt, err := starter.worker.GetAttempt(ctx, workerhttp.AttemptReference{SessionID: reviewer.ID, AttemptID: attemptID})
+		if err != nil {
+			return err
+		}
+		if err := validateCompletedTurn(reviewer, checkpoint, attempt); err != nil {
+			return err
+		}
+		switch attempt.Result.Disposition {
+		case workerhttp.DispositionSucceeded:
+			return starter.publishSubmittedPlan(ctx, runID, plan)
+		case workerhttp.DispositionChangesRequested:
+			return starter.returnPlanToLead(ctx, run, reviewer.ID, attemptID)
+		default:
+			return fmt.Errorf("%w: plan approval ended with disposition %q", ErrPlanningNotAllowed, attempt.Result.Disposition)
+		}
+	}
+	if run.Paused {
+		return starter.waitRun(ctx, run.ID, planApprovalReason, execution.RunWaitKindPhaseCheckpoint)
+	}
+	if reviewer.Status != execution.SessionStatusWaitingForUser || reviewer.ProviderSessionID == "" ||
+		reviewer.AgentID != agentID(run.AgentProviders.Reviewer, worker.RoleReviewer) || reviewer.Role != worker.RoleReviewer {
+		return fmt.Errorf("%w: reviewer cannot approve the plan now", ErrPlanningNotAllowed)
+	}
+	if err := starter.confirmCompletedTurn(ctx, reviewer, checkpoint); err != nil {
+		return err
+	}
+	storedFeature, err := starter.features.GetByID(ctx, run.FeatureID)
+	if err != nil {
+		return err
+	}
+	prepared, err := starter.workspaceForCurrentPlan(ctx, run, storedFeature.ProjectID, storedFeature.ID)
+	if err != nil {
+		return err
+	}
+	if !prepared.CheckoutReady() {
+		return fmt.Errorf("%w: planning checkout is not ready", ErrPlanningNotAllowed)
+	}
+	request := remoteLeadRequest{
+		runID: run.ID, agentName: "reviewer",
+		waitingReason: planApprovalReason,
+		planningStage: planningStagePlanApproval,
+		identity: workerhttp.MutationIdentity{
+			AttemptReference: workerhttp.AttemptReference{SessionID: reviewer.ID, AttemptID: attemptID},
+			IdempotencyKey:   attemptID + ":resume",
+		},
+		request: workerhttp.PutAttemptRequest{
+			Mode: workerhttp.AttemptModeResume,
+			Assignment: workerhttp.Assignment{
+				AgentProfileID: starter.profileID(run.AgentProviders.Reviewer, worker.RoleReviewer),
+				ProjectID:      storedFeature.ProjectID, FeatureID: storedFeature.ID,
+				Role: workerhttp.RoleReviewer, WorkspaceID: prepared.ID,
+			},
+			ProviderSessionID: reviewer.ProviderSessionID,
+			Instructions:      planApprovalInstructions(plan.Text, leadParticipant(run.AgentProviders)),
+			OutputContract:    workerhttp.OutputContractPlanApproval,
+		},
+	}
+	if err := request.request.Validate(request.identity); err != nil {
+		return fmt.Errorf("%w: %v", ErrInvalidRunRequest, err)
+	}
+	admitted, err := starter.executions.BeginChainedTurn(ctx, reviewer.ID, checkpoint, attemptID, planApprovalReason)
+	if err != nil {
+		return err
+	}
+	if admitted {
+		starter.launchAdmitted(request)
+	}
+	return nil
+}
+
+// continueApprovedPlanning runs after the reviewer's approval turn finishes.
+func (starter *RemoteLeadStarter) continueApprovedPlanning(ctx context.Context, request remoteLeadRequest) {
+	run, err := starter.executions.GetRun(ctx, request.runID)
+	if err != nil {
+		starter.requireReview(ctx, request, err)
+		return
+	}
+	messages, err := starter.currentPlanningMessages(ctx, run)
+	if err != nil {
+		starter.requireReview(ctx, request, err)
+		return
+	}
+	if len(messages) == 0 || messages[len(messages)-1].Event.Type != worker.EventPlanSubmitted {
+		starter.requireReview(ctx, request, errors.New("plan approval has no submitted plan"))
+		return
+	}
+	plan := messages[len(messages)-1].Event
+	if err := starter.continueSubmittedPlan(ctx, request.runID, plan); err != nil {
+		starter.requirePlanPublicationReview(ctx, request.runID, plan, err)
+	}
+}
+
+// returnPlanToLead records the reviewer's requested changes as a planning
+// message, so the lead revises and resubmits within the normal round limit.
+func (starter *RemoteLeadStarter) returnPlanToLead(
+	ctx context.Context,
+	run execution.Run,
+	reviewerSessionID string,
+	attemptID string,
+) error {
+	message, err := starter.messageForAttempt(ctx, reviewerSessionID, attemptID)
+	if err != nil {
+		return err
+	}
+	if _, _, err := starter.executions.LinkPlanningMessage(ctx, run.ID, message.ID); err != nil {
+		return err
+	}
+	if run.Paused {
+		return starter.waitRun(ctx, run.ID, "The reviewer asked for changes to the final plan.", execution.RunWaitKindPhaseCheckpoint)
+	}
+	messages, err := starter.currentPlanningMessages(ctx, run)
+	if err != nil {
+		return err
+	}
+	if planningRoundLimitReached(run.PlanningRoundLimit, len(messages)) {
+		return starter.waitRun(ctx, run.ID, planningLimitReason(run.PlanningRoundLimit), execution.RunWaitKindRoundCap)
+	}
+	storedFeature, err := starter.features.GetByID(ctx, run.FeatureID)
+	if err != nil {
+		return err
+	}
+	next, admitted, err := starter.startLeadResponse(ctx, run, storedFeature, messages, true)
+	if err != nil {
+		return err
+	}
+	if admitted {
+		starter.launchAdmitted(next)
+	}
+	return nil
+}
+
+const planApprovalReason = "The reviewer is checking the final plan before implementation."
+
+func planApprovalAttemptForVersion(sessionID string, version int, submission int) string {
+	return workflowAttemptForVersion(sessionID, "approval", version, submission)
+}
+
+func planApprovalVersionAndTurn(sessionID, attemptID string) (int, int, bool) {
+	return workflowAttemptVersionAndTurn(sessionID, "approval", attemptID)
+}
+
+// planSubmissionCount numbers the lead's plan submissions in this plan
+// version, so each resubmission gets its own approval attempt.
+func planSubmissionCount(messages []execution.PlanningMessage) int {
+	count := 0
+	for _, message := range messages {
+		if message.Role == worker.RoleLead && message.Event.Type == worker.EventPlanSubmitted {
+			count++
+		}
+	}
+	return count
+}
+
 func (starter *RemoteLeadStarter) launchPlanPublication(
 	runID string,
 	plan execution.Event,
 ) {
 	ctx := starter.lifetime
-	if err := starter.publishSubmittedPlan(ctx, runID, plan); err != nil {
+	if err := starter.continueSubmittedPlan(ctx, runID, plan); err != nil {
 		starter.requirePlanPublicationReview(ctx, runID, plan, err)
 	}
 	starter.release(runID)

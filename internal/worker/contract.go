@@ -61,6 +61,7 @@ const (
 	OutputContractImplementationReadiness OutputContract = "implementation_lead_readiness"
 	OutputContractIntervention            OutputContract = "intervention"
 	OutputContractToolchainSetup          OutputContract = "toolchain_setup"
+	OutputContractPlanApproval            OutputContract = "plan_approval"
 )
 
 // LaunchEnvironment is the worker-resolved view of the profile and workspace
@@ -340,7 +341,8 @@ func (request SessionRequest) Validate() error {
 		request.OutputContract != OutputContractImplementationReview &&
 		request.OutputContract != OutputContractImplementationReadiness &&
 		request.OutputContract != OutputContractIntervention &&
-		request.OutputContract != OutputContractToolchainSetup:
+		request.OutputContract != OutputContractToolchainSetup &&
+		request.OutputContract != OutputContractPlanApproval:
 		return fmt.Errorf("%w: output contract %q is not recognized", ErrInvalidSessionRequest, request.OutputContract)
 	case (request.OutputContract == OutputContractPlanningLead ||
 		request.OutputContract == OutputContractGoalClarification ||
@@ -351,7 +353,8 @@ func (request SessionRequest) Validate() error {
 		request.Role != RoleLead && request.Role != RoleConsultant:
 		return fmt.Errorf("%w: toolchain setup output contract requires a consultation role", ErrInvalidSessionRequest)
 	case (request.OutputContract == OutputContractImplementationReview ||
-		request.OutputContract == OutputContractAcceptanceTests) && request.Role != RoleReviewer:
+		request.OutputContract == OutputContractAcceptanceTests ||
+		request.OutputContract == OutputContractPlanApproval) && request.Role != RoleReviewer:
 		return fmt.Errorf("%w: reviewer output contract requires the reviewer role", ErrInvalidSessionRequest)
 	}
 	if !request.LaunchEnvironment.IsZero() {

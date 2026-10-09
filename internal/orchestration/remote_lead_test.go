@@ -80,11 +80,14 @@ func (recoveryArtifactStub) UpsertImplementationPlan(context.Context, string, fe
 }
 
 type conversationalRemoteLeadWorker struct {
-	mu          sync.Mutex
-	putRequests []workerhttp.PutAttemptRequest
-	initial     map[workerhttp.AttemptReference]workerhttp.Attempt
-	terminal    map[workerhttp.AttemptReference]workerhttp.Attempt
-	events      map[workerhttp.AttemptReference][]workerhttp.Event
+	mu sync.Mutex
+	// planChangeRequests makes that many unscripted plan approvals ask for
+	// changes before later ones approve.
+	planChangeRequests int
+	putRequests        []workerhttp.PutAttemptRequest
+	initial            map[workerhttp.AttemptReference]workerhttp.Attempt
+	terminal           map[workerhttp.AttemptReference]workerhttp.Attempt
+	events             map[workerhttp.AttemptReference][]workerhttp.Event
 }
 
 func (stub *conversationalRemoteLeadWorker) PutAttempt(
@@ -95,11 +98,51 @@ func (stub *conversationalRemoteLeadWorker) PutAttempt(
 	stub.mu.Lock()
 	defer stub.mu.Unlock()
 	attempt, ok := stub.initial[identity.AttemptReference]
+	if !ok && strings.Contains(identity.AttemptID, ":approval:") {
+		attempt = stub.addPlanApproval(identity.AttemptReference, request)
+		ok = true
+	}
 	if !ok {
 		return workerhttp.Attempt{}, false, errors.New("unexpected attempt identity")
 	}
 	stub.putRequests = append(stub.putRequests, request)
 	return attempt, true, nil
+}
+
+// addPlanApproval lets tests that do not script the reviewer's plan approval
+// get an approving reviewer. The caller holds stub.mu.
+func (stub *conversationalRemoteLeadWorker) addPlanApproval(
+	reference workerhttp.AttemptReference,
+	request workerhttp.PutAttemptRequest,
+) workerhttp.Attempt {
+	now := time.Date(2026, time.September, 9, 20, 50, 0, 0, time.UTC)
+	initial := workerhttp.Attempt{
+		AttemptReference: reference, Mode: request.Mode, Assignment: request.Assignment,
+		ProviderSessionID: request.ProviderSessionID, State: workerhttp.AttemptStateRunning,
+		StartedAt: now, UpdatedAt: now,
+	}
+	endedAt := now.Add(time.Second)
+	terminal := initial
+	terminal.State = workerhttp.AttemptStateTerminal
+	terminal.LatestEventSequence = 2
+	terminal.UpdatedAt = endedAt
+	terminal.EndedAt = &endedAt
+	terminal.Result = &workerhttp.TerminalResult{
+		Outcome: workerhttp.OutcomeCompleted, Disposition: workerhttp.DispositionSucceeded,
+		Summary: "The final plan matches what we agreed.",
+	}
+	if stub.planChangeRequests > 0 {
+		stub.planChangeRequests--
+		terminal.Result.Disposition = workerhttp.DispositionChangesRequested
+		terminal.Result.Summary = "The final plan dropped the failure-path test we agreed on."
+	}
+	stub.initial[reference] = initial
+	stub.terminal[reference] = terminal
+	stub.events[reference] = []workerhttp.Event{
+		{AttemptReference: reference, Sequence: 1, Type: workerhttp.EventMessage, Text: terminal.Result.Summary, OccurredAt: now},
+		{AttemptReference: reference, Sequence: 2, Type: workerhttp.EventAttemptTerminal, Text: terminal.Result.Summary, OccurredAt: endedAt},
+	}
+	return initial
 }
 
 func (stub *conversationalRemoteLeadWorker) GetAttempt(
@@ -1370,7 +1413,7 @@ func TestRemoteLeadStartsPlanningInManagedWorkspace(t *testing.T) {
 	stub.mu.Lock()
 	requests = append([]workerhttp.PutAttemptRequest(nil), stub.putRequests...)
 	stub.mu.Unlock()
-	if len(requests) != 6 || requests[3].Mode != workerhttp.AttemptModeResume ||
+	if len(requests) != 7 || requests[3].Mode != workerhttp.AttemptModeResume ||
 		requests[3].ProviderSessionID != "codex-thread-test" ||
 		requests[3].Assignment.Role != workerhttp.RoleLead ||
 		requests[3].OutputContract != workerhttp.OutputContractPlanningLead ||
@@ -1385,7 +1428,10 @@ func TestRemoteLeadStartsPlanningInManagedWorkspace(t *testing.T) {
 		requests[5].Assignment.Role != workerhttp.RoleLead ||
 		requests[5].OutputContract != workerhttp.OutputContractPlanningLead ||
 		!strings.Contains(requests[5].Instructions, "resolves my remaining concern") ||
-		strings.Contains(requests[5].Instructions, "Draft pull request: #") {
+		strings.Contains(requests[5].Instructions, "Draft pull request: #") ||
+		requests[6].Assignment.Role != workerhttp.RoleReviewer ||
+		requests[6].OutputContract != workerhttp.OutputContractPlanApproval ||
+		!strings.Contains(requests[6].Instructions, "Complete final implementation plan") {
 		t.Fatalf("unexpected correction-round requests %+v", requests)
 	}
 	workspaceStub.publishErr = nil
@@ -1414,7 +1460,7 @@ func TestRemoteLeadStartsPlanningInManagedWorkspace(t *testing.T) {
 	stub.mu.Lock()
 	requestCount = len(stub.putRequests)
 	stub.mu.Unlock()
-	if requestCount != 6 {
+	if requestCount != 7 {
 		t.Fatalf("planning round retry launched duplicate turns: %d requests", requestCount)
 	}
 	if workspaceStub.publishCalls != 2 {
@@ -1440,17 +1486,17 @@ func TestRemoteLeadStartsPlanningInManagedWorkspace(t *testing.T) {
 	stub.mu.Lock()
 	requests = append([]workerhttp.PutAttemptRequest(nil), stub.putRequests...)
 	stub.mu.Unlock()
-	if len(requests) != 7 || requests[6].Mode != workerhttp.AttemptModeResume ||
-		requests[6].ProviderSessionID != "codex-thread-test" ||
-		requests[6].Assignment.Role != workerhttp.RoleLead ||
-		requests[6].Assignment.WorkspaceID != workspaceStub.prepared.ID ||
-		strings.Contains(requests[6].Instructions, implementedFeature.AcceptedGoal) ||
-		strings.Contains(requests[6].Instructions, messages[4].Event.Text) ||
-		!strings.Contains(requests[6].Instructions, "commitarium-artifact plan show") ||
-		!strings.Contains(requests[6].Instructions, "push that exact HEAD") ||
-		requests[6].OutputContract != workerhttp.OutputContractImplementationLead ||
-		!strings.Contains(requests[6].Instructions, "Git HEAD") {
-		t.Fatalf("unexpected implementation request %+v", requests[6])
+	if len(requests) != 8 || requests[7].Mode != workerhttp.AttemptModeResume ||
+		requests[7].ProviderSessionID != "codex-thread-test" ||
+		requests[7].Assignment.Role != workerhttp.RoleLead ||
+		requests[7].Assignment.WorkspaceID != workspaceStub.prepared.ID ||
+		strings.Contains(requests[7].Instructions, implementedFeature.AcceptedGoal) ||
+		strings.Contains(requests[7].Instructions, messages[4].Event.Text) ||
+		!strings.Contains(requests[7].Instructions, "commitarium-artifact plan show") ||
+		!strings.Contains(requests[7].Instructions, "push that exact HEAD") ||
+		requests[7].OutputContract != workerhttp.OutputContractImplementationLead ||
+		!strings.Contains(requests[7].Instructions, "Git HEAD") {
+		t.Fatalf("unexpected implementation request %+v", requests[7])
 	}
 	failedVerification, err := executions.GetRun(t.Context(), runID)
 	if err != nil || failedVerification.Reason == implementationPublishedReason ||
@@ -1914,8 +1960,8 @@ func TestRemoteLeadRunToCompletionAdvancesFromPlanningToMergeGate(t *testing.T) 
 	stub.mu.Lock()
 	requestCount := len(stub.putRequests)
 	stub.mu.Unlock()
-	if requestCount != 11 {
-		t.Fatalf("expected complete autonomous conversation with 11 turns, got %d", requestCount)
+	if requestCount != 12 {
+		t.Fatalf("expected complete autonomous conversation with 12 turns, got %d", requestCount)
 	}
 	if workspaceStub.publishCalls != 1 || workspaceStub.publicationVerifyCalls != 1 ||
 		workspaceStub.reviewVerifyCalls != 2 || workspaceStub.responseVerifyCalls != 1 ||
@@ -2404,7 +2450,8 @@ func TestRemoteReviewerRecoveryReattachesAndPublishesItsResponse(t *testing.T) {
 	stub.mu.Lock()
 	putCount = len(stub.putRequests)
 	stub.mu.Unlock()
-	if putCount != 4 {
+	// The reviewer's response, the lead's submission, and the plan approval.
+	if putCount != 5 {
 		t.Fatalf("recovery should resume the loop without replaying the lead turn: %d PUTs", putCount)
 	}
 	if workspaceStub.publishCalls != 1 {
@@ -3290,5 +3337,100 @@ func waitForRemoteLeadIdle(
 			t.Fatalf("run %q remained claimed after reaching its durable waiting state", runID)
 		}
 		time.Sleep(time.Millisecond)
+	}
+}
+
+func TestReviewerMustApproveTheFinalPlanBeforeImplementation(t *testing.T) {
+	db, executions, storedProject, storedFeature := newRemoteLeadExecution(t)
+	storedProject, err := database.NewProjectStore(db).UpdateAutonomyPolicy(
+		t.Context(), storedProject.ID, project.AutonomyPolicyRunToCompletion,
+	)
+	if err != nil {
+		t.Fatalf("enable run-to-completion: %v", err)
+	}
+	runID := "run_plan_approval"
+	stub := newConversationalRemoteLeadWorker(runID, storedProject.ID, storedFeature.ID)
+	stub.planChangeRequests = 1
+	addCompletedPlanningAttempt(stub, runID, storedProject.ID, storedFeature.ID)
+	addCompletedReviewerPlanningAttempt(stub, runID, storedProject.ID, storedFeature.ID)
+	addCompletedPlanningCorrectionAttempts(stub, runID, storedProject.ID, storedFeature.ID)
+	addCompletedPlanningCorrectionAttempt(
+		stub, remoteLeadSessionID(runID), storedProject.ID, storedFeature.ID,
+		workerhttp.RoleLead, "codex-thread-test", 4,
+		workerhttp.EventPlanSubmitted, "Complete final implementation plan with the failure-path test",
+	)
+	addCompletedImplementationAttempt(stub, runID, storedProject.ID, storedFeature.ID)
+
+	workflowService := workflow.NewService(database.NewWorkflowStore(db))
+	checkoutAt := time.Date(2026, time.September, 12, 11, 0, 0, 0, time.UTC)
+	workspaceStub := &remoteLeadWorkspaceStub{prepared: workspace.Workspace{
+		ID: "wsp_plan_approval", ProjectID: storedProject.ID, FeatureID: storedFeature.ID,
+		RepositoryOwner: "commitarium", RepositoryName: "approval-test",
+		BaseBranch: "main", Branch: "commitarium/" + storedFeature.ID,
+		BaseCommitID:         "0123456789abcdef0123456789abcdef01234567",
+		Status:               workspace.StatusPreparing,
+		CheckoutRelativePath: "wsp_plan_approval",
+		CheckoutCreatedAt:    &checkoutAt,
+	}}
+	starter, err := NewRemoteLeadStarter(RemoteLeadConfig{
+		Executions: executions, Features: database.NewFeatureStore(db), Goals: workflowService,
+		Planning: workflowService, Workspaces: workspaceStub, Worker: stub,
+		Pump:       &conversationalRemoteLeadPump{executions: executions, worker: stub},
+		Validation: validation.NewService(database.NewValidationStore(db)),
+		Lifetime:   t.Context(), AgentProfileID: "codex-default",
+	})
+	if err != nil {
+		t.Fatalf("create starter: %v", err)
+	}
+	if _, _, err := starter.Start(
+		t.Context(), runID, storedProject.ID, storedFeature.ID, storedFeature.Title,
+		storedProject.DialogueLimits, storedProject.AgentProviders,
+		storedProject.MergePolicy, storedProject.AutonomyPolicy,
+	); err != nil {
+		t.Fatalf("start goal clarification: %v", err)
+	}
+	waitForRemoteLeadStatus(t, executions, runID, execution.RunStatusWaitingForUser)
+	if _, err := starter.AcceptGoal(
+		t.Context(), remoteLeadSessionID(runID), "Export the visible report columns as CSV.",
+		workflow.Actor{Kind: workflow.ActorKindUser, ID: "local-user"}, "accept-approval-goal",
+	); err != nil {
+		t.Fatalf("accept goal: %v", err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) && workspaceStub.publicationVerifyCalls == 0 {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if workspaceStub.publishCalls != 1 ||
+		workspaceStub.publishedPlan != "Complete final implementation plan with the failure-path test" {
+		t.Fatalf("only the approved resubmission should be published: %+v", workspaceStub)
+	}
+	messages, err := executions.PlanningMessagesForRun(t.Context(), runID)
+	if err != nil || len(messages) != 7 ||
+		messages[5].Role != worker.RoleReviewer ||
+		messages[5].Event.Text != "The final plan dropped the failure-path test we agreed on." ||
+		messages[6].Event.Type != worker.EventPlanSubmitted {
+		t.Fatalf("requested changes did not return the plan to the lead: %+v err=%v", messages, err)
+	}
+	stub.mu.Lock()
+	requests := append([]workerhttp.PutAttemptRequest(nil), stub.putRequests...)
+	stub.mu.Unlock()
+	approvals := 0
+	for index, request := range requests {
+		if request.OutputContract != workerhttp.OutputContractPlanApproval {
+			continue
+		}
+		approvals++
+		if index+1 >= len(requests) {
+			t.Fatalf("plan approval %d was the last request", approvals)
+		}
+		if approvals == 1 && requests[index+1].OutputContract != workerhttp.OutputContractPlanningLead {
+			t.Fatalf("requested changes did not go back to the lead: %+v", requests[index+1])
+		}
+		if approvals == 2 && requests[index+1].OutputContract != workerhttp.OutputContractImplementationLead {
+			t.Fatalf("approval did not start implementation: %+v", requests[index+1])
+		}
+	}
+	if approvals != 2 {
+		t.Fatalf("expected two plan approvals, got %d", approvals)
 	}
 }

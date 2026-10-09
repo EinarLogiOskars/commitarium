@@ -196,7 +196,8 @@ func (request PutAttemptRequest) Validate(identity MutationIdentity) error {
 		request.OutputContract != OutputContractImplementationReview &&
 		request.OutputContract != OutputContractImplementationReadiness &&
 		request.OutputContract != OutputContractIntervention &&
-		request.OutputContract != OutputContractToolchainSetup {
+		request.OutputContract != OutputContractToolchainSetup &&
+		request.OutputContract != OutputContractPlanApproval {
 		return invalid("output contract %q is not recognized", request.OutputContract)
 	}
 	if (request.OutputContract == OutputContractPlanningLead ||
@@ -211,7 +212,8 @@ func (request PutAttemptRequest) Validate(identity MutationIdentity) error {
 		return invalid("toolchain setup output contract requires a consultation role")
 	}
 	if (request.OutputContract == OutputContractImplementationReview ||
-		request.OutputContract == OutputContractAcceptanceTests) &&
+		request.OutputContract == OutputContractAcceptanceTests ||
+		request.OutputContract == OutputContractPlanApproval) &&
 		request.Assignment.Role != RoleReviewer {
 		return invalid("reviewer output contract requires the reviewer role")
 	}

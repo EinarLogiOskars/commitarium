@@ -111,6 +111,14 @@ func OutputJSONSchema(contract OutputContract) any {
 			},
 			[]string{"action", "summary", "commit_id", "pull_request_number", "review_id"},
 		)
+	case OutputContractPlanApproval:
+		return objectSchema(
+			map[string]any{
+				"action":  map[string]any{"type": "string", "enum": []string{"approve", "request_changes"}},
+				"message": map[string]any{"type": "string"},
+			},
+			[]string{"action", "message"},
+		)
 	case OutputContractImplementationReadiness:
 		return objectSchema(
 			map[string]any{
@@ -391,6 +399,29 @@ func ResolveStructuredOutput(
 			Disposition: disposition,
 			Review:      review,
 		}, nil
+
+	case OutputContractPlanApproval:
+		var response struct {
+			Action  string `json:"action"`
+			Message string `json:"message"`
+		}
+		if err := decodeStructuredOutput(raw, &response); err != nil {
+			return StructuredOutput{}, err
+		}
+		response.Message = strings.TrimSpace(response.Message)
+		if response.Message == "" {
+			return StructuredOutput{}, invalidStructuredOutput("plan approval response is incomplete")
+		}
+		resolved := StructuredOutput{Event: Event{Type: EventMessage, Text: response.Message}}
+		switch response.Action {
+		case "approve":
+			resolved.Disposition = DispositionSucceeded
+		case "request_changes":
+			resolved.Disposition = DispositionChangesRequested
+		default:
+			return StructuredOutput{}, invalidStructuredOutput("plan approval response has an unknown action")
+		}
+		return resolved, nil
 
 	case OutputContractImplementationReadiness:
 		var response struct {

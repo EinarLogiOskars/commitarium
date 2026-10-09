@@ -131,6 +131,7 @@ const (
 	OutputContractAcceptanceTests         OutputContract = "acceptance_tests"
 	OutputContractImplementationReview    OutputContract = "implementation_reviewer"
 	OutputContractImplementationReadiness OutputContract = "implementation_lead_readiness"
+	OutputContractPlanApproval            OutputContract = "plan_approval"
 	OutputContractIntervention            OutputContract = "intervention"
 	OutputContractToolchainSetup          OutputContract = "toolchain_setup"
 )

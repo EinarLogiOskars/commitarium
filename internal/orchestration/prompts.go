@@ -396,3 +396,12 @@ func implementationReadinessInstructions(
 		fmt.Sprintf("\nFormal review: #%d\nDraft pull request: #%d (%s)", reviewID, prepared.PullRequestNumber, prepared.PullRequestURL) +
 		"\nMerge-readiness audit marker:\n" + marker
 }
+
+func planApprovalInstructions(plan string, lead string) string {
+	return lead + " submitted the final plan below, and implementation starts only once you approve " +
+		"it. Check that it matches what you agreed: every settled point is reflected, nothing was " +
+		"dropped or changed, and the steps are sound. The structured checklist is available with " +
+		"'commitarium-artifact plan show'. Do not reopen points you already settled. Return action " +
+		"'approve' with a one-line confirmation, or 'request_changes' with exactly what differs from " +
+		"what you agreed; " + lead + " will then revise and resubmit.\n\n" + lead + "'s final plan:\n" + plan
+}

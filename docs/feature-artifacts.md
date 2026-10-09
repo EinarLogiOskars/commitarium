@@ -47,8 +47,10 @@ planning continues to consume only the immutable accepted goal.
 
 The lead's final `submit_plan` result includes both the Markdown plan used for
 the pull request and a structured implementation plan. The coordinator assigns
-the run's plan version, persists the JSON artifact, and only then publishes the
-agreed plan.
+the run's plan version and persists the JSON artifact. The reviewer then checks
+the exact final plan in a `plan_approval` turn: the plan is published only once
+the reviewer approves it, and requested changes return the discussion to the
+lead, who revises and resubmits within the normal round limit.
 
 Goal clarification and all lead/reviewer planning attempts are sent to the
 worker with `workspace_access: "read_only"`. The Codex adapter selects its
