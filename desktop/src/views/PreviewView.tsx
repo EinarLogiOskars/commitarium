@@ -169,8 +169,9 @@ export function PreviewView({
               Merged work as of <span className="mono">{status.commitId.slice(0, 12)}</span>
             </p>
           )}
+          {/* The backend appends recent output to the error; the logs below show it. */}
           {state === "failed" && status?.error && (
-            <pre className="validation-cmd__output preview__error">{status.error}</pre>
+            <div className="banner banner--error">{status.error.split("\n")[0]}</div>
           )}
 
           {state === "running" && status && status.urls.length > 0 && (

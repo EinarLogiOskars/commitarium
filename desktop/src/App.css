@@ -603,9 +603,6 @@ body {
   overflow: auto;
   white-space: pre-wrap;
 }
-.preview__error {
-  margin-left: 0;
-}
 .run {
   display: flex;
   flex-direction: column;
