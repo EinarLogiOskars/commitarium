@@ -132,6 +132,7 @@ const (
 	OutputContractImplementationReview    OutputContract = "implementation_reviewer"
 	OutputContractImplementationReadiness OutputContract = "implementation_lead_readiness"
 	OutputContractPlanApproval            OutputContract = "plan_approval"
+	OutputContractWorkOrderBrief          OutputContract = "work_order_brief"
 	OutputContractIntervention            OutputContract = "intervention"
 	OutputContractToolchainSetup          OutputContract = "toolchain_setup"
 )
@@ -184,6 +185,7 @@ type TerminalResult struct {
 	ImplementationPlan *featureartifact.ImplementationPlan `json:"implementation_plan,omitempty"`
 	AcceptanceTests    *featureartifact.AcceptanceTests    `json:"acceptance_tests,omitempty"`
 	EnvironmentRequest *EnvironmentRequest                 `json:"environment_request,omitempty"`
+	HandoffBrief       *featureartifact.HandoffBrief       `json:"handoff_brief,omitempty"`
 	Usage              *TokenUsage                         `json:"usage,omitempty"`
 	Error              *ProtocolError                      `json:"error,omitempty"`
 }

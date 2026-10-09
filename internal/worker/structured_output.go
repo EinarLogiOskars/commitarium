@@ -27,6 +27,7 @@ type StructuredOutput struct {
 	ImplementationPlan *featureartifact.ImplementationPlan
 	AcceptanceTests    *featureartifact.AcceptanceTests
 	EnvironmentRequest *EnvironmentRequest
+	HandoffBrief       *featureartifact.HandoffBrief
 }
 
 // idSchema describes checklist IDs. Invalid IDs are normalized rather than
@@ -110,6 +111,19 @@ func OutputJSONSchema(contract OutputContract) any {
 				"review_id":           map[string]any{"type": "integer"},
 			},
 			[]string{"action", "summary", "commit_id", "pull_request_number", "review_id"},
+		)
+	case OutputContractWorkOrderBrief:
+		list := map[string]any{"type": "array", "items": map[string]any{"type": "string"}}
+		return objectSchema(
+			map[string]any{
+				"action":         map[string]any{"type": "string", "enum": []string{"ask", "propose"}},
+				"message":        map[string]any{"type": "string"},
+				"goal":           map[string]any{"type": "string"},
+				"areas":          list,
+				"considerations": list,
+				"open_questions": list,
+			},
+			[]string{"action", "message", "goal", "areas", "considerations", "open_questions"},
 		)
 	case OutputContractPlanApproval:
 		return objectSchema(
@@ -400,6 +414,43 @@ func ResolveStructuredOutput(
 			Review:      review,
 		}, nil
 
+	case OutputContractWorkOrderBrief:
+		var response struct {
+			Action         string   `json:"action"`
+			Message        string   `json:"message"`
+			Goal           string   `json:"goal"`
+			Areas          []string `json:"areas"`
+			Considerations []string `json:"considerations"`
+			OpenQuestions  []string `json:"open_questions"`
+		}
+		if err := decodeStructuredOutput(raw, &response); err != nil {
+			return StructuredOutput{}, err
+		}
+		response.Message = strings.TrimSpace(response.Message)
+		if response.Message == "" {
+			return StructuredOutput{}, invalidStructuredOutput("work order brief response is incomplete")
+		}
+		switch response.Action {
+		case "ask":
+			return StructuredOutput{
+				Event: Event{Type: EventInputRequired, Text: response.Message}, Disposition: DispositionInputRequired,
+			}, nil
+		case "propose":
+			brief := featureartifact.HandoffBrief{
+				Goal: strings.TrimSpace(response.Goal), Areas: trimmedItems(response.Areas),
+				Considerations: trimmedItems(response.Considerations), OpenQuestions: trimmedItems(response.OpenQuestions),
+			}
+			if err := brief.Validate(); err != nil {
+				return StructuredOutput{}, invalidStructuredOutput("handoff brief: %v", err)
+			}
+			return StructuredOutput{
+				Event: Event{Type: EventMessage, Text: response.Message}, Disposition: DispositionSucceeded,
+				HandoffBrief: &brief,
+			}, nil
+		default:
+			return StructuredOutput{}, invalidStructuredOutput("work order brief response has an unknown action")
+		}
+
 	case OutputContractPlanApproval:
 		var response struct {
 			Action  string `json:"action"`
@@ -553,4 +604,15 @@ func decodeStructuredOutput(raw []byte, destination any) error {
 
 func invalidStructuredOutput(format string, arguments ...any) error {
 	return fmt.Errorf("%w: %s", ErrInvalidStructuredOutput, fmt.Sprintf(format, arguments...))
+}
+
+// trimmedItems drops blank list entries an agent may leave behind.
+func trimmedItems(items []string) []string {
+	trimmed := make([]string, 0, len(items))
+	for _, item := range items {
+		if item = strings.TrimSpace(item); item != "" {
+			trimmed = append(trimmed, item)
+		}
+	}
+	return trimmed
 }

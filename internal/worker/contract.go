@@ -62,6 +62,7 @@ const (
 	OutputContractIntervention            OutputContract = "intervention"
 	OutputContractToolchainSetup          OutputContract = "toolchain_setup"
 	OutputContractPlanApproval            OutputContract = "plan_approval"
+	OutputContractWorkOrderBrief          OutputContract = "work_order_brief"
 )
 
 // LaunchEnvironment is the worker-resolved view of the profile and workspace
@@ -193,6 +194,7 @@ type Result struct {
 	ImplementationPlan *featureartifact.ImplementationPlan
 	AcceptanceTests    *featureartifact.AcceptanceTests
 	EnvironmentRequest *EnvironmentRequest
+	HandoffBrief       *featureartifact.HandoffBrief
 	Usage              *TokenUsage
 }
 
@@ -342,14 +344,16 @@ func (request SessionRequest) Validate() error {
 		request.OutputContract != OutputContractImplementationReadiness &&
 		request.OutputContract != OutputContractIntervention &&
 		request.OutputContract != OutputContractToolchainSetup &&
-		request.OutputContract != OutputContractPlanApproval:
+		request.OutputContract != OutputContractPlanApproval &&
+		request.OutputContract != OutputContractWorkOrderBrief:
 		return fmt.Errorf("%w: output contract %q is not recognized", ErrInvalidSessionRequest, request.OutputContract)
 	case (request.OutputContract == OutputContractPlanningLead ||
 		request.OutputContract == OutputContractGoalClarification ||
 		request.OutputContract == OutputContractImplementationLead ||
 		request.OutputContract == OutputContractImplementationReadiness) && request.Role != RoleLead:
 		return fmt.Errorf("%w: lead output contract requires the lead role", ErrInvalidSessionRequest)
-	case request.OutputContract == OutputContractToolchainSetup &&
+	case (request.OutputContract == OutputContractToolchainSetup ||
+		request.OutputContract == OutputContractWorkOrderBrief) &&
 		request.Role != RoleLead && request.Role != RoleConsultant:
 		return fmt.Errorf("%w: toolchain setup output contract requires a consultation role", ErrInvalidSessionRequest)
 	case (request.OutputContract == OutputContractImplementationReview ||

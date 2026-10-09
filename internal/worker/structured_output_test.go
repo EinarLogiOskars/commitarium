@@ -211,3 +211,24 @@ func TestResolveStructuredEnvironmentRequestExplainsInvalidField(t *testing.T) {
 		})
 	}
 }
+
+func TestResolveWorkOrderBrief(t *testing.T) {
+	ask, err := ResolveStructuredOutput(OutputContractWorkOrderBrief, []byte(
+		`{"action":"ask","message":"Should overdue items be highlighted?","goal":"","areas":[],"considerations":[],"open_questions":[]}`,
+	))
+	if err != nil || ask.Disposition != DispositionInputRequired || ask.HandoffBrief != nil {
+		t.Fatalf("ask=%+v err=%v", ask, err)
+	}
+	proposed, err := ResolveStructuredOutput(OutputContractWorkOrderBrief, []byte(
+		`{"action":"propose","message":"Here is the brief.","goal":"Add due dates.","areas":["backend/app/models"," "],"considerations":["Keep rows valid."],"open_questions":[]}`,
+	))
+	if err != nil || proposed.Disposition != DispositionSucceeded || proposed.HandoffBrief == nil ||
+		proposed.HandoffBrief.Goal != "Add due dates." || len(proposed.HandoffBrief.Areas) != 1 {
+		t.Fatalf("proposed=%+v err=%v", proposed, err)
+	}
+	if _, err := ResolveStructuredOutput(OutputContractWorkOrderBrief, []byte(
+		`{"action":"propose","message":"Brief.","goal":"","areas":[],"considerations":[],"open_questions":[]}`,
+	)); err == nil {
+		t.Fatal("a brief without a goal was accepted")
+	}
+}

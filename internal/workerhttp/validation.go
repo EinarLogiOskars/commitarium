@@ -197,7 +197,8 @@ func (request PutAttemptRequest) Validate(identity MutationIdentity) error {
 		request.OutputContract != OutputContractImplementationReadiness &&
 		request.OutputContract != OutputContractIntervention &&
 		request.OutputContract != OutputContractToolchainSetup &&
-		request.OutputContract != OutputContractPlanApproval {
+		request.OutputContract != OutputContractPlanApproval &&
+		request.OutputContract != OutputContractWorkOrderBrief {
 		return invalid("output contract %q is not recognized", request.OutputContract)
 	}
 	if (request.OutputContract == OutputContractPlanningLead ||
@@ -207,7 +208,8 @@ func (request PutAttemptRequest) Validate(identity MutationIdentity) error {
 		request.Assignment.Role != RoleLead {
 		return invalid("lead output contract requires the lead role")
 	}
-	if request.OutputContract == OutputContractToolchainSetup &&
+	if (request.OutputContract == OutputContractToolchainSetup ||
+		request.OutputContract == OutputContractWorkOrderBrief) &&
 		request.Assignment.Role != RoleLead && request.Assignment.Role != RoleConsultant {
 		return invalid("toolchain setup output contract requires a consultation role")
 	}
@@ -409,6 +411,9 @@ func (result TerminalResult) Validate() error {
 		}
 		if result.AcceptanceTests != nil && (result.Disposition != DispositionSucceeded || result.Publication != nil || result.Review != nil || result.InterventionEffect != "" || result.ToolchainProposal != nil || result.GoalDraft != nil || result.ImplementationPlan != nil || result.EnvironmentRequest != nil) {
 			return invalid("acceptance tests require success and cannot contain another specialized result")
+		}
+		if result.HandoffBrief != nil && result.Disposition != DispositionSucceeded {
+			return invalid("handoff brief requires a successful disposition")
 		}
 		if result.EnvironmentRequest != nil && (result.Disposition != DispositionInputRequired || result.Publication != nil || result.Review != nil || result.InterventionEffect != "" || result.ToolchainProposal != nil) {
 			return invalid("environment request requires input and cannot contain another specialized result")
