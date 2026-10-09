@@ -29,6 +29,14 @@ type StructuredOutput struct {
 	EnvironmentRequest *EnvironmentRequest
 }
 
+// idSchema describes checklist IDs. Invalid IDs are normalized rather than
+// rejected, but stating the format keeps the agent's IDs and the stored ones
+// identical.
+var idSchema = map[string]any{
+	"type":        "string",
+	"description": "Stable ID: lowercase letters, digits, '.', '_' or '-', starting with a letter or digit, at most 64 characters.",
+}
+
 func OutputJSONSchema(contract OutputContract) any {
 	switch contract {
 	case OutputContractGoalClarification:
@@ -44,7 +52,7 @@ func OutputJSONSchema(contract OutputContract) any {
 	case OutputContractPlanningLead:
 		stepSchema := objectSchema(
 			map[string]any{
-				"id":               map[string]any{"type": "string"},
+				"id":               idSchema,
 				"title":            map[string]any{"type": "string"},
 				"subtitle":         map[string]any{"type": "string"},
 				"details_markdown": map[string]any{"type": "string"},
@@ -78,7 +86,7 @@ func OutputJSONSchema(contract OutputContract) any {
 	case OutputContractAcceptanceTests:
 		testSchema := objectSchema(
 			map[string]any{
-				"id":    map[string]any{"type": "string"},
+				"id":    idSchema,
 				"title": map[string]any{"type": "string"},
 			},
 			[]string{"id", "title"},

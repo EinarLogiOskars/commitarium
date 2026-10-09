@@ -115,7 +115,14 @@ func (status AcceptanceTestStatus) IsValid() bool {
 func (tests AcceptanceTests) NormalizeInitial(planVersion int) (AcceptanceTests, error) {
 	tests.PlanVersion = planVersion
 	tests.ImplementationCommitID = ""
+	tests.Tests = append([]AcceptanceTest(nil), tests.Tests...)
+	ids := make([]string, len(tests.Tests))
 	for index := range tests.Tests {
+		ids[index] = tests.Tests[index].ID
+	}
+	ids = normalizeIDs(ids, "test")
+	for index := range tests.Tests {
+		tests.Tests[index].ID = ids[index]
 		tests.Tests[index].Position = index + 1
 		tests.Tests[index].Status = AcceptanceTestPending
 		tests.Tests[index].Note = ""
@@ -192,7 +199,14 @@ func (draft GoalDraft) Validate() error {
 // initial checklist. Providers do not choose progress or commit identities.
 func (plan ImplementationPlan) NormalizeInitial(planVersion int) (ImplementationPlan, error) {
 	plan.PlanVersion = planVersion
+	plan.Steps = append([]ImplementationPlanStep(nil), plan.Steps...)
+	ids := make([]string, len(plan.Steps))
 	for index := range plan.Steps {
+		ids[index] = plan.Steps[index].ID
+	}
+	ids = normalizeIDs(ids, "step")
+	for index := range plan.Steps {
+		plan.Steps[index].ID = ids[index]
 		plan.Steps[index].Position = index + 1
 		plan.Steps[index].Status = StepPending
 		plan.Steps[index].CommitID = ""
@@ -297,4 +311,43 @@ func validRequiredText(label, value string, maximum int) error {
 		return fmt.Errorf("%w: %s exceeds %d bytes", ErrInvalidArtifact, label, maximum)
 	}
 	return nil
+}
+
+// normalizeIDs turns agent-chosen IDs into valid, unique checklist IDs instead
+// of failing a whole turn over formatting: "Docker Compose: start" becomes
+// "docker-compose-start". Valid unique IDs are kept unchanged.
+func normalizeIDs(ids []string, fallback string) []string {
+	normalized := make([]string, len(ids))
+	seen := make(map[string]struct{}, len(ids))
+	for index, id := range ids {
+		var builder strings.Builder
+		dash := false
+		for _, r := range strings.ToLower(strings.TrimSpace(id)) {
+			switch {
+			case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '.', r == '_':
+				builder.WriteRune(r)
+				dash = false
+			case !dash && builder.Len() > 0:
+				builder.WriteByte('-')
+				dash = true
+			}
+		}
+		candidate := strings.Trim(builder.String(), "-._")
+		if len(candidate) > 56 {
+			candidate = strings.Trim(candidate[:56], "-._")
+		}
+		if candidate == "" {
+			candidate = fmt.Sprintf("%s-%d", fallback, index+1)
+		}
+		unique := candidate
+		for suffix := 2; ; suffix++ {
+			if _, taken := seen[unique]; !taken {
+				break
+			}
+			unique = fmt.Sprintf("%s-%d", candidate, suffix)
+		}
+		seen[unique] = struct{}{}
+		normalized[index] = unique
+	}
+	return normalized
 }
