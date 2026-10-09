@@ -21,9 +21,10 @@ const HEAD_POLL_MS = 15000;
 const COMPOSE_FILES = ["compose.yaml", "compose.yml", "docker-compose.yaml", "docker-compose.yml"];
 
 // Preview setup is mostly boilerplate whose real test is running the preview,
-// so these orders use one planning and one review round and no reviewer tests.
-// Merging still follows the project's policy.
-const LIGHT = { planningRounds: 1, reviewRounds: 1, independentTests: false };
+// so these orders use short dialogue limits and no reviewer tests. Two is the
+// minimum: the lead can only submit a plan in its reply to the first review,
+// and a review fix needs a second review. Merging follows the project's policy.
+const LIGHT = { planningRounds: 2, reviewRounds: 2, independentTests: false };
 
 const PREVIEW_RULES = `- One service per part the app needs (for example frontend, API, database). Servers listen on 0.0.0.0.
 - Keep data in named volumes.
