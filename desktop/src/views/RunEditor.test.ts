@@ -1,66 +1,30 @@
 import { describe, expect, it } from "vitest";
-import { runDraftComplete, runDraftIssue, type RunDraft } from "./RunEditor";
+import { runDraftComplete, runDraftIssue, runFromDraft } from "./RunEditor";
 
-const valid: RunDraft = {
-  setup: "npm ci",
-  processes: [{ name: "web", command: "npm run dev -- --host 0.0.0.0", port: "5173", open: true }],
-};
-
-describe("manual preview setup validation", () => {
-  it("allows preview setup to remain optional", () => {
-    expect(runDraftIssue({ setup: "", processes: [] })).toBeNull();
-    expect(runDraftComplete({ setup: "", processes: [] })).toBe(true);
+describe("preview open target", () => {
+  it("allows the target to remain unset", () => {
+    expect(runDraftIssue({ service: "", port: "" })).toBeNull();
+    expect(runFromDraft({ service: " ", port: "" })).toBeUndefined();
   });
 
-  it("requires a process when setup commands have been entered", () => {
-    expect(runDraftIssue({ setup: "npm ci", processes: [] })).toBe(
-      "Add at least one process to make the project previewable.",
+  it("accepts a compose service and port", () => {
+    const draft = { service: "web", port: "5173" };
+    expect(runDraftComplete(draft)).toBe(true);
+    expect(runFromDraft(draft)).toEqual({ open: { service: "web", port: 5173 } });
+  });
+
+  it("requires both halves", () => {
+    expect(runDraftIssue({ service: "web", port: "" })).toBe(
+      "Add the container port “web” listens on.",
     );
+    expect(runDraftIssue({ service: "", port: "5173" })).toBe("Name the compose service to open.");
   });
 
-  it("accepts a complete preview setup", () => {
-    expect(runDraftIssue(valid)).toBeNull();
-    expect(runDraftComplete(valid)).toBe(true);
-  });
-
-  it("rejects invalid process names and ports", () => {
-    expect(
-      runDraftIssue({
-        ...valid,
-        processes: [{ ...valid.processes[0], name: "Web app" }],
-      }),
-    ).toContain("Process names start");
-    expect(
-      runDraftIssue({
-        ...valid,
-        processes: [{ ...valid.processes[0], port: "70000" }],
-      }),
-    ).toContain("1 to 65535");
-  });
-
-  it("requires unique names and ports and only one browser process", () => {
-    const duplicate = { ...valid.processes[0], command: "npm run api" };
-    expect(runDraftIssue({ ...valid, processes: [valid.processes[0], duplicate] })).toContain(
-      "used more than once",
+  it("rejects invalid service names and ports", () => {
+    expect(runDraftIssue({ service: "my web", port: "5173" })).toBe(
+      "Use the service name exactly as it appears in the compose file.",
     );
-
-    expect(
-      runDraftIssue({
-        ...valid,
-        processes: [
-          valid.processes[0],
-          { name: "api", command: "npm run api", port: "5174", open: true },
-        ],
-      }),
-    ).toBe("Choose only one process to open in the browser.");
-  });
-
-  it("requires a port for the process opened in the browser", () => {
-    expect(
-      runDraftIssue({
-        ...valid,
-        processes: [{ ...valid.processes[0], port: "" }],
-      }),
-    ).toBe("Add a port for “web” so it can open in the browser.");
+    expect(runDraftIssue({ service: "web", port: "0" })).toBe("Use a port from 1 to 65535.");
+    expect(runDraftIssue({ service: "web", port: "80a" })).toBe("Use a port from 1 to 65535.");
   });
 });

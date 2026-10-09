@@ -440,8 +440,8 @@ export const previewProjectUpstreamBranch = (
   invoke("preview_project_upstream_branch", { projectId, remoteName, branchName });
 
 // --- Project previews (ADR-013) ---
-// Runs the project's canonical head in a disposable container from the stack's
-// run config. camelCase like the project sync types.
+// Runs the project's canonical head from its validated compose file (ADR-014).
+// camelCase like the project sync types.
 
 // Only "canonical" exists today; more target kinds will be added.
 export type PreviewTarget = { kind: "canonical" };
@@ -449,7 +449,7 @@ export type PreviewTarget = { kind: "canonical" };
 export type PreviewState = "starting" | "running" | "failed" | "stopped";
 
 export interface PreviewUrl {
-  process: string;
+  service: string;
   url: string; // http://127.0.0.1:<host port>
   open: boolean;
 }
@@ -459,7 +459,7 @@ export interface PreviewStatus {
   target: PreviewTarget;
   commitId: string;
   state: PreviewState;
-  urls: PreviewUrl[]; // filled once "running"
+  urls: PreviewUrl[]; // one per published port, filled once "running"
   error: string | null; // set when "failed"
 }
 
@@ -470,13 +470,19 @@ export const startPreview = (
   target: PreviewTarget = { kind: "canonical" },
 ): Promise<PreviewStatus> => invoke("start_preview", { projectId, target });
 
+/** Stop the preview; its data volumes are kept. */
 export const stopPreview = (projectId: string): Promise<void> =>
   invoke("stop_preview", { projectId });
+
+/** Stop the preview if running and remove its data volumes. */
+export const resetPreviewData = (projectId: string): Promise<void> =>
+  invoke("reset_preview_data", { projectId });
 
 export const getPreviewStatus = (projectId: string): Promise<PreviewStatus | null> =>
   invoke("get_preview_status", { projectId });
 
-/** Last 400 lines of combined output, prefixed [setup] / [<process>]. */
+/** Last 400 lines of combined output: [preview] for validation and builds,
+ * "<service> | " for service output. */
 export const getPreviewLogs = (projectId: string): Promise<string[]> =>
   invoke("get_preview_logs", { projectId });
 

@@ -57,6 +57,15 @@ type RunPauseMutation struct {
 	OccurredAt time.Time
 }
 
+// PlanningRoundExtension is one explicit user authorization to run one more
+// complete lead/reviewer planning round after the run reached its durable cap.
+type PlanningRoundExtension struct {
+	ID            string
+	RunID         string
+	ExpectedLimit int
+	OccurredAt    time.Time
+}
+
 // InterventionRequest is the atomic user action that records a message and
 // arms the existing run pause gate. SessionID is resolved by the store from
 // Target so callers cannot accidentally address a session from another run.
@@ -218,6 +227,7 @@ type Store interface {
 	ListRunsByFeatureID(ctx context.Context, featureID string) ([]Run, error)
 	TransitionRun(ctx context.Context, transition RunTransition) (Run, error)
 	ApplyRunPause(ctx context.Context, mutation RunPauseMutation) (Run, bool, error)
+	ExtendPlanningRoundLimit(ctx context.Context, extension PlanningRoundExtension) (Run, bool, error)
 	QueueIntervention(ctx context.Context, request InterventionRequest) (InterventionRequestResult, bool, error)
 	GetLatestIntervention(ctx context.Context, runID string) (Intervention, error)
 	ListInterventionTargets(ctx context.Context, runID string) ([]InterventionTarget, error)
@@ -264,6 +274,21 @@ var ErrInterventionConflict = errors.New("intervention ID reused for different c
 var ErrInterventionInProgress = errors.New("run already has an unfinished intervention")
 var ErrInterventionNotAllowed = errors.New("run does not allow an intervention")
 var ErrInterventionTargetUnavailable = errors.New("intervention target is unavailable")
+
+func (extension PlanningRoundExtension) Validate() error {
+	switch {
+	case strings.TrimSpace(extension.ID) == "":
+		return fmt.Errorf("%w: action ID is required", ErrStateConflict)
+	case strings.TrimSpace(extension.RunID) == "":
+		return fmt.Errorf("%w: run ID is required", ErrStateConflict)
+	case extension.ExpectedLimit <= 0:
+		return fmt.Errorf("%w: expected planning round limit must be positive", ErrStateConflict)
+	case extension.OccurredAt.IsZero():
+		return fmt.Errorf("%w: occurrence time is required", ErrStateConflict)
+	default:
+		return nil
+	}
+}
 
 func (message PendingPlanningMessage) Validate() error {
 	switch {

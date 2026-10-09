@@ -17,11 +17,11 @@ const (
 )
 
 var (
-	ErrInvalidContract   = errors.New("invalid worker HTTP contract value")
-	safeIDPattern        = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
-	safeCommitID         = regexp.MustCompile(`^[0-9a-f]{40}([0-9a-f]{24})?$`)
-	safeSystemPackage    = regexp.MustCompile(`^[a-z0-9][a-z0-9+.-]{0,127}$`)
-	safeToolchainProcess = regexp.MustCompile(`^[a-z][a-z0-9-]{0,31}$`)
+	ErrInvalidContract = errors.New("invalid worker HTTP contract value")
+	safeIDPattern      = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
+	safeCommitID       = regexp.MustCompile(`^[0-9a-f]{40}([0-9a-f]{24})?$`)
+	safeSystemPackage  = regexp.MustCompile(`^[a-z0-9][a-z0-9+.-]{0,127}$`)
+	safeComposeService = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$`)
 )
 
 func (provider Provider) IsValid() bool {
@@ -531,46 +531,11 @@ func (proposal ToolchainProposal) Validate() error {
 		}
 	}
 	if proposal.Run != nil {
-		if proposal.Run.Setup == nil || len(proposal.Run.Processes) == 0 {
-			return invalid("toolchain run config requires a process")
+		if !safeComposeService.MatchString(proposal.Run.Open.Service) {
+			return invalid("toolchain run open service %q is invalid", proposal.Run.Open.Service)
 		}
-		seenNames := make(map[string]struct{}, len(proposal.Run.Processes))
-		seenPorts := make(map[int]struct{}, len(proposal.Run.Processes))
-		openCount := 0
-		for _, command := range proposal.Run.Setup {
-			if err := validateRequiredText("toolchain setup command", command, 16*1024); err != nil {
-				return err
-			}
-		}
-		for _, process := range proposal.Run.Processes {
-			if !safeToolchainProcess.MatchString(process.Name) {
-				return invalid("toolchain run process name %q is invalid", process.Name)
-			}
-			if _, exists := seenNames[process.Name]; exists {
-				return invalid("toolchain run process name %q is duplicated", process.Name)
-			}
-			seenNames[process.Name] = struct{}{}
-			if err := validateRequiredText("toolchain run command", process.Command, 16*1024); err != nil {
-				return err
-			}
-			if process.Port != nil {
-				if *process.Port < 1 || *process.Port > 65535 {
-					return invalid("toolchain run process port is invalid")
-				}
-				if _, exists := seenPorts[*process.Port]; exists {
-					return invalid("toolchain run process port is duplicated")
-				}
-				seenPorts[*process.Port] = struct{}{}
-			}
-			if process.Open {
-				openCount++
-				if process.Port == nil {
-					return invalid("open toolchain run process requires a port")
-				}
-			}
-		}
-		if openCount > 1 {
-			return invalid("toolchain run config has more than one open process")
+		if proposal.Run.Open.Port < 1 || proposal.Run.Open.Port > 65535 {
+			return invalid("toolchain run open port is invalid")
 		}
 	}
 	return nil

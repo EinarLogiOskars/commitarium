@@ -59,6 +59,23 @@ func NewRunStopper(
 }
 
 func (stopper *RunStopper) StopFeatureRuns(ctx context.Context, featureID, requestKey string) error {
+	return stopper.stopFeatureRuns(
+		ctx, featureID, requestKey, "The user forced deletion of this project.",
+	)
+}
+
+func (stopper *RunStopper) StopWorkOrderRuns(ctx context.Context, featureID, requestKey string) error {
+	return stopper.stopFeatureRuns(
+		ctx, featureID, requestKey, "The user forced deletion of this work order.",
+	)
+}
+
+func (stopper *RunStopper) stopFeatureRuns(
+	ctx context.Context,
+	featureID string,
+	requestKey string,
+	reason string,
+) error {
 	if stopper == nil || stopper.executions == nil {
 		return ErrUnavailable
 	}
@@ -75,7 +92,7 @@ func (stopper *RunStopper) StopFeatureRuns(ctx context.Context, featureID, reque
 			if session.Status.IsTerminal() {
 				continue
 			}
-			if err := stopper.stopSession(ctx, session, requestKey); err != nil {
+			if err := stopper.stopSession(ctx, session, requestKey, reason); err != nil {
 				return err
 			}
 		}
@@ -89,7 +106,7 @@ func (stopper *RunStopper) StopFeatureRuns(ctx context.Context, featureID, reque
 		if !current.Status.IsTerminal() {
 			if _, transitionErr := stopper.executions.TransitionRun(
 				ctx, current.ID, current.Status, execution.RunStatusStopped,
-				"The user forced deletion of this project.",
+				reason,
 			); transitionErr != nil {
 				latest, latestErr := stopper.executions.GetRun(ctx, current.ID)
 				if latestErr != nil || !latest.Status.IsTerminal() {
@@ -105,6 +122,7 @@ func (stopper *RunStopper) stopSession(
 	ctx context.Context,
 	session execution.Session,
 	requestKey string,
+	reason string,
 ) error {
 	checkpoint, checkpointErr := stopper.executions.GetWorkerAttempt(ctx, session.ID)
 	if checkpointErr == nil && stopper.worker != nil {
@@ -117,7 +135,7 @@ func (stopper *RunStopper) stopSession(
 			attempt, err = stopper.worker.ForceStop(ctx, workerhttp.MutationIdentity{
 				AttemptReference: reference,
 				IdempotencyKey:   runDeletionKey(requestKey, session.ID),
-			}, workerhttp.ForceStopRequest{Reason: "The user forced deletion of this project."})
+			}, workerhttp.ForceStopRequest{Reason: reason})
 			if err != nil {
 				return err
 			}

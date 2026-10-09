@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -310,5 +311,14 @@ func TestStartPlanningRoundHandlerRequiresReadyStateAndIdempotencyKey(t *testing
 	handler.ServeHTTP(notReady, request)
 	if notReady.Code != http.StatusConflict {
 		t.Fatalf("expected unready round to return 409, got %d: %s", notReady.Code, notReady.Body.String())
+	}
+
+	starter.err = execution.ErrRunActionConflict
+	conflict := httptest.NewRecorder()
+	request = httptest.NewRequest(http.MethodPost, "/api/v1/runs/run_round/planning/round", nil)
+	request.Header.Set("Idempotency-Key", "planning-round-conflict")
+	handler.ServeHTTP(conflict, request)
+	if conflict.Code != http.StatusConflict || !strings.Contains(conflict.Body.String(), "idempotency_conflict") {
+		t.Fatalf("expected action conflict to return 409 idempotency_conflict, got %d: %s", conflict.Code, conflict.Body.String())
 	}
 }

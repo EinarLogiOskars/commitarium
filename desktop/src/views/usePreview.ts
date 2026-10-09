@@ -3,6 +3,7 @@ import {
   getPreviewStatus,
   onPreviewStatusChanged,
   openExternal,
+  resetPreviewData,
   startPreview,
   stopPreview,
   type PreviewState,
@@ -86,5 +87,15 @@ export function usePreview(projectId: string) {
     }
   }, [projectId]);
 
-  return { status, error, start, stop };
+  const resetData = useCallback(async () => {
+    setError(null);
+    openWhenRunning.current = false;
+    try {
+      await resetPreviewData(projectId);
+    } catch (e) {
+      setError(String(e));
+    }
+  }, [projectId]);
+
+  return { status, error, start, stop, resetData };
 }

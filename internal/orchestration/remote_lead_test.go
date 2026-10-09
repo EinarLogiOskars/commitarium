@@ -36,16 +36,17 @@ func (stub previewToolchainStub) Get(context.Context, string) (toolchain.Manifes
 }
 
 func TestPreviewRunInstructionsShareConfigAndConventions(t *testing.T) {
-	port := 5173
 	starter := &RemoteLeadStarter{toolchains: previewToolchainStub{manifest: toolchain.Manifest{
-		Run: &toolchain.RunConfig{Setup: []string{"npm ci"}, Processes: []toolchain.RunProcess{{
-			Name: "web", Command: "npm run dev -- --host 0.0.0.0", Port: &port, Open: true,
-		}}},
+		Run: &toolchain.RunConfig{Open: toolchain.RunOpen{Service: "web", Port: 5173}},
 	}}}
 	instructions, err := starter.previewRunInstructions(t.Context(), "prj_test")
-	if err != nil || !strings.Contains(instructions, `"name":"web"`) ||
+	if err != nil || !strings.Contains(instructions, `"service":"web"`) ||
 		!strings.Contains(instructions, "bind 0.0.0.0") ||
-		!strings.Contains(instructions, "relative-path development proxy") {
+		!strings.Contains(instructions, "relative-path development proxy") ||
+		!strings.Contains(instructions, "Build contexts, Dockerfiles, and bind mounts must resolve inside the repository") ||
+		!strings.Contains(instructions, "must not also set image") ||
+		!strings.Contains(instructions, "Every environment variable must have an explicit value") ||
+		!strings.Contains(instructions, "Do not use Compose interpolation") {
 		t.Fatalf("preview instructions=%q error=%v", instructions, err)
 	}
 }
@@ -2016,10 +2017,36 @@ func TestRemotePlanningLoopUsesRunLimitSnapshot(t *testing.T) {
 	if requestCount != 7 {
 		t.Fatalf("expected clarification plus six planning turns, got %d requests", requestCount)
 	}
+	extraRound := limits.PlanningRounds + 1
+	addCompletedPlanningCorrectionAttempt(
+		stub, remoteLeadSessionID(runID), storedProject.ID, storedFeature.ID,
+		workerhttp.RoleLead, "codex-thread-test", extraRound,
+		workerhttp.EventMessage, "Lead planning response after user continuation",
+	)
+	addCompletedPlanningCorrectionAttempt(
+		stub, remoteReviewerSessionID(runID), storedProject.ID, storedFeature.ID,
+		workerhttp.RoleReviewer, "codex-review-thread-test", extraRound,
+		workerhttp.EventMessage, "Reviewer response after user continuation",
+	)
 	if _, admitted, err := starter.StartPlanningRound(
-		t.Context(), runID, "start-limited-loop",
+		t.Context(), runID, "continue-after-round-cap",
+	); err != nil || !admitted {
+		t.Fatalf("continue bounded loop: admitted=%t err=%v", admitted, err)
+	}
+	waitForRemoteLeadStatus(t, executions, runID, execution.RunStatusWaitingForUser)
+	messages, err = executions.PlanningMessagesForRun(t.Context(), runID)
+	if err != nil || len(messages) != extraRound*2 {
+		t.Fatalf("extra planning round history: len=%d err=%v messages=%+v", len(messages), err, messages)
+	}
+	run, err = executions.GetRun(t.Context(), runID)
+	if err != nil || run.PlanningRoundLimit != extraRound ||
+		run.WaitKind != execution.RunWaitKindRoundCap {
+		t.Fatalf("extra planning round did not establish a new cap: run=%+v err=%v", run, err)
+	}
+	if _, admitted, err := starter.StartPlanningRound(
+		t.Context(), runID, "continue-after-round-cap",
 	); err != nil || admitted {
-		t.Fatalf("bounded loop retry: admitted=%t err=%v", admitted, err)
+		t.Fatalf("continued-round retry: admitted=%t err=%v", admitted, err)
 	}
 }
 
@@ -3162,6 +3189,64 @@ func TestRecoverySuccessorPreservesWorkflowLaneAndClassifiesResumeFailure(t *tes
 	failed.Result.Error.Retryable = false
 	if resumeLaunchUnavailable(failed) {
 		t.Fatal("non-retryable launch failure permitted a fresh fallback")
+	}
+}
+
+func TestRecoveryPublicationInstructionsUseSuccessorIdentity(t *testing.T) {
+	lead := "run_recovery:lead"
+	reviewer := "run_recovery:reviewer"
+	tests := []struct {
+		name      string
+		sessionID string
+		attemptID string
+		marker    string
+		heading   string
+	}{
+		{
+			name: "implementation", sessionID: lead,
+			attemptID: implementationAttemptForVersion(lead, 1, 3),
+			marker: workspace.ImplementationPublicationInitial.Marker(
+				implementationAttemptForVersion(lead, 1, 3),
+			),
+			heading: "## Implementation summary",
+		},
+		{
+			name: "correction", sessionID: lead,
+			attemptID: implementationCorrectionAttemptForVersion(lead, 2, 4),
+			marker: workspace.ImplementationPublicationReviewResponse.Marker(
+				implementationCorrectionAttemptForVersion(lead, 2, 4),
+			),
+			heading: "## Review response",
+		},
+		{
+			name: "readiness", sessionID: lead,
+			attemptID: implementationReadinessAttemptForVersion(lead, 2, 4),
+			marker: workspace.ImplementationPublicationMergeReadiness.Marker(
+				implementationReadinessAttemptForVersion(lead, 2, 4),
+			),
+			heading: "## Merge readiness",
+		},
+		{
+			name: "review", sessionID: reviewer,
+			attemptID: implementationReviewAttemptForVersion(reviewer, 2, 4),
+			marker: implementationReviewMarker(
+				implementationReviewAttemptForVersion(reviewer, 2, 4),
+			),
+			heading: "## Review",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			instructions := recoveryPublicationInstructions(test.sessionID, test.attemptID)
+			if !strings.Contains(instructions, test.marker) ||
+				!strings.Contains(instructions, test.heading) ||
+				!strings.Contains(instructions, "rather than any marker from an earlier attempt") {
+				t.Fatalf("unexpected recovery publication instructions %q", instructions)
+			}
+		})
+	}
+	if instructions := recoveryPublicationInstructions(lead, planningAttemptID(lead)); instructions != "" {
+		t.Fatalf("planning recovery unexpectedly received publication instructions %q", instructions)
 	}
 }
 

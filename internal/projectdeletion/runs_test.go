@@ -57,16 +57,43 @@ type workerStopperStub struct {
 	attempt workerhttp.Attempt
 	forces  int
 	key     string
+	reason  string
 }
 
 func (stub *workerStopperStub) GetAttempt(context.Context, workerhttp.AttemptReference) (workerhttp.Attempt, error) {
 	return stub.attempt, nil
 }
-func (stub *workerStopperStub) ForceStop(_ context.Context, identity workerhttp.MutationIdentity, _ workerhttp.ForceStopRequest) (workerhttp.Attempt, error) {
+func (stub *workerStopperStub) ForceStop(_ context.Context, identity workerhttp.MutationIdentity, request workerhttp.ForceStopRequest) (workerhttp.Attempt, error) {
 	stub.forces++
 	stub.key = identity.IdempotencyKey
+	stub.reason = request.Reason
 	stub.attempt.State = workerhttp.AttemptStateTerminal
 	return stub.attempt, nil
+}
+
+func TestRunStopperUsesWorkOrderReasonForAForcedWorkOrderDeletion(t *testing.T) {
+	now := time.Now().UTC()
+	executions := &runExecutionStub{
+		run: execution.Run{ID: "run_test", FeatureID: "fea_test", Status: execution.RunStatusRunning,
+			StartedAt: now, UpdatedAt: now},
+		session: execution.Session{ID: "run_test:lead", RunID: "run_test", AgentID: "codex-lead",
+			Role: worker.RoleLead, Status: execution.SessionStatusRunning,
+			ProviderSessionID: "provider_test", StartedAt: now, UpdatedAt: now},
+		checkpoint: execution.WorkerAttemptCheckpoint{SessionID: "run_test:lead", AttemptID: "att_test"},
+	}
+	remote := &workerStopperStub{attempt: workerhttp.Attempt{
+		AttemptReference: workerhttp.AttemptReference{SessionID: "run_test:lead", AttemptID: "att_test"},
+		State:            workerhttp.AttemptStateRunning,
+	}}
+	if err := NewRunStopper(executions, remote, nil).StopWorkOrderRuns(
+		t.Context(), "fea_test", "delete-1",
+	); err != nil {
+		t.Fatalf("stop work-order runs: %v", err)
+	}
+	if remote.reason != "The user forced deletion of this work order." ||
+		executions.run.Reason != remote.reason {
+		t.Fatalf("unexpected stop reasons: remote=%q run=%q", remote.reason, executions.run.Reason)
+	}
 }
 
 func TestRunStopperForceStopsExactAttemptThenMakesDatabaseTerminal(t *testing.T) {

@@ -201,15 +201,12 @@ type ToolchainProposal struct {
 }
 
 type ToolchainRunConfig struct {
-	Setup     []string
-	Processes []ToolchainRunProcess
+	Open ToolchainRunOpen
 }
 
-type ToolchainRunProcess struct {
-	Name    string
-	Command string
-	Port    *int
-	Open    bool
+type ToolchainRunOpen struct {
+	Service string
+	Port    int
 }
 
 // EnvironmentRequest asks the user to add named operating-system packages to

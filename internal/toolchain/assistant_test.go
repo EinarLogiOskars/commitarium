@@ -144,9 +144,7 @@ func TestAssistantConversationAppliesValidatedProposal(t *testing.T) {
 	worker.attempt.Result = &workerhttp.TerminalResult{Outcome: workerhttp.OutcomeCompleted,
 		Disposition: workerhttp.DispositionSucceeded, Summary: "Use Python and SQLite.",
 		ToolchainProposal: &workerhttp.ToolchainProposal{Tools: map[string]string{"python": "3.14.7"}, Services: []string{"sqlite"},
-			Run: &workerhttp.ToolchainRunConfig{Setup: []string{}, Processes: []workerhttp.ToolchainRunProcess{{
-				Name: "api", Command: "python -m http.server 8000 --bind 0.0.0.0", Port: assistantPort(8000), Open: true,
-			}}}}}
+			Run: &workerhttp.ToolchainRunConfig{Open: workerhttp.ToolchainRunOpen{Service: "api", Port: 8000}}}}
 	session, err = assistant.Get(t.Context(), "prj_test", session.ID)
 	if err != nil || session.Status != AssistantStatusProposalReady || session.Proposal.Tools["python"] != "3.14.7" || session.Proposal.Run == nil || len(session.Messages) != 4 {
 		t.Fatalf("proposal session=%+v err=%v", session, err)
@@ -160,8 +158,6 @@ func TestAssistantConversationAppliesValidatedProposal(t *testing.T) {
 		t.Fatalf("idempotent apply manifest=%+v err=%v", manifest, err)
 	}
 }
-
-func assistantPort(value int) *int { return &value }
 
 func TestAssistantStartIsDurablyIdempotent(t *testing.T) {
 	root, workspaces := t.TempDir(), t.TempDir()

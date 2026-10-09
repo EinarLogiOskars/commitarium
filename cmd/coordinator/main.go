@@ -500,15 +500,17 @@ func run(ctx context.Context, coordinatorConfig config) error {
 	if recoveredRuns > 0 {
 		log.Printf("recovering %d interrupted workflow(s)", recoveredRuns)
 	}
-	featureDeletionService := workorder.NewService(
-		coordinatordatabase.NewFeatureDeletionStore(db), forgejoClient, checkoutManager, reviewerCheckoutManager,
+	runStopper := projectdeletion.NewRunStopper(
+		executionService, deletionWorker, sessionController, deletionLiveSessions,
+	)
+	featureDeletionService := workorder.NewServiceWithRunTerminator(
+		coordinatordatabase.NewFeatureDeletionStore(db), forgejoClient, runStopper,
+		checkoutManager, reviewerCheckoutManager,
 	)
 	projectDeletionService := projectdeletion.NewService(
 		coordinatordatabase.NewProjectDeletionStore(db),
 		featureDeletionService,
-		projectdeletion.NewRunStopper(
-			executionService, deletionWorker, sessionController, deletionLiveSessions,
-		),
+		runStopper,
 		toolchainService,
 		assistantCleaner,
 		forgejoClient,

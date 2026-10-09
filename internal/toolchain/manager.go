@@ -99,6 +99,20 @@ func (manager *Manager) get(projectID string) (Manifest, error) {
 	if err := json.Unmarshal(contents, &manifest); err != nil {
 		return Manifest{}, fmt.Errorf("%w: decode manifest", ErrUnavailable)
 	}
+	// ADR-014 replaces setup/process commands with a Compose open target. Old
+	// manifests remain readable, but their obsolete run block is intentionally
+	// discarded so the project can be configured again under the new contract.
+	var storedShape struct {
+		Run map[string]json.RawMessage `json:"run"`
+	}
+	if err := json.Unmarshal(contents, &storedShape); err == nil && storedShape.Run != nil {
+		_, hasOpen := storedShape.Run["open"]
+		_, hasSetup := storedShape.Run["setup"]
+		_, hasProcesses := storedShape.Run["processes"]
+		if !hasOpen && (hasSetup || hasProcesses) {
+			manifest.Run = nil
+		}
+	}
 	normalized, err := NormalizeManifest(manifest)
 	if err != nil || normalized.ProjectID != projectID {
 		return Manifest{}, fmt.Errorf("%w: stored manifest is invalid", ErrUnavailable)

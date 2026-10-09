@@ -12,6 +12,7 @@ import (
 
 var ErrActive = errors.New("work order has active agent work")
 var ErrUnsafeArtifacts = errors.New("work order artifacts are unsafe to delete")
+var ErrUnavailable = errors.New("work order deletion is temporarily unavailable")
 
 type Deletion struct {
 	Feature   feature.Feature
@@ -39,14 +40,28 @@ type CheckoutCleaner interface {
 	Remove(ctx context.Context, workspaceID string) error
 }
 
+type RunTerminator interface {
+	StopWorkOrderRuns(ctx context.Context, featureID, requestKey string) error
+}
+
 type Service struct {
 	store     Store
 	forgejo   ForgejoCleaner
+	runs      RunTerminator
 	checkouts []CheckoutCleaner
 }
 
 func NewService(store Store, forgejo ForgejoCleaner, checkouts ...CheckoutCleaner) *Service {
-	return &Service{store: store, forgejo: forgejo, checkouts: checkouts}
+	return NewServiceWithRunTerminator(store, forgejo, nil, checkouts...)
+}
+
+func NewServiceWithRunTerminator(
+	store Store,
+	forgejo ForgejoCleaner,
+	runs RunTerminator,
+	checkouts ...CheckoutCleaner,
+) *Service {
+	return &Service{store: store, forgejo: forgejo, runs: runs, checkouts: checkouts}
 }
 
 // Delete removes only isolated work-order artifacts. In particular, it never
@@ -110,6 +125,24 @@ func (service *Service) Delete(
 		return Result{}, err
 	}
 	return result, nil
+}
+
+// ForceDelete first makes every run and session terminal, then performs the
+// same artifact-safe deletion as Delete. The request key makes remote worker
+// stop commands safe to retry after an interrupted request.
+func (service *Service) ForceDelete(
+	ctx context.Context,
+	projectID string,
+	featureID string,
+	requestKey string,
+) (Result, error) {
+	if service.runs == nil {
+		return Result{}, fmt.Errorf("%w: active-run termination is unavailable", ErrUnavailable)
+	}
+	if err := service.runs.StopWorkOrderRuns(ctx, featureID, requestKey); err != nil {
+		return Result{}, fmt.Errorf("%w: stop active agent work: %v", ErrUnavailable, err)
+	}
+	return service.Delete(ctx, projectID, featureID)
 }
 
 func validateArtifacts(storedFeature feature.Feature, stored workspace.Workspace) error {

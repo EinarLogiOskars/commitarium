@@ -142,18 +142,10 @@ export type ToolchainSource = "picker" | "detected" | "assistant" | "runtime";
 // first provider turn launches only after "ready".
 export type ProvisioningStatus = "pending" | "installing" | "ready" | "failed";
 
-// How to install and start the app for a preview (ADR-013). Setup commands run
-// in order from the repository root; processes start after and keep running.
-export interface RunProcess {
-  name: string;
-  command: string;
-  port?: number;
-  open?: boolean; // the URL opened in the browser; defaults to the first with a port
-}
-
+// What a preview opens in the browser (ADR-014). The preview runs the compose
+// file at the repository root; this names the service and container port.
 export interface RunConfig {
-  setup: string[];
-  processes: RunProcess[];
+  open: { service: string; port: number };
 }
 
 export interface ProjectToolchain {

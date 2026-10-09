@@ -105,6 +105,7 @@ type RemoteLeadExecution interface {
 	GetWorkerAttempt(context.Context, string) (execution.WorkerAttemptCheckpoint, error)
 	TransitionRun(context.Context, string, execution.RunStatus, execution.RunStatus, string, ...execution.RunWaitKind) (execution.Run, error)
 	ApplyRunPause(context.Context, string, string, execution.RunPauseAction) (execution.Run, bool, error)
+	ExtendPlanningRoundLimit(context.Context, string, string, int) (execution.Run, bool, error)
 	QueueIntervention(context.Context, string, string, worker.Role, string) (execution.Intervention, bool, error)
 	GetLatestIntervention(context.Context, string) (execution.Intervention, error)
 	BeginInterventionTurn(context.Context, string, execution.WorkerAttemptCheckpoint, string, string) (bool, error)
@@ -2727,9 +2728,10 @@ func (starter *RemoteLeadStarter) StartPlanningRound(
 	if err != nil {
 		return execution.Run{}, false, err
 	}
-	if len(messages) > 0 && (planningRoundLimitReached(run.PlanningRoundLimit, len(messages)) ||
-		messages[len(messages)-1].Event.Type == worker.EventPlanSubmitted) {
-		if messages[len(messages)-1].Event.Type != worker.EventPlanSubmitted {
+	claimed := false
+	if len(messages) > 0 && planningRoundLimitReached(run.PlanningRoundLimit, len(messages)) &&
+		messages[len(messages)-1].Event.Type != worker.EventPlanSubmitted {
+		if run.WaitKind != execution.RunWaitKindRoundCap {
 			if err := starter.waitRun(
 				ctx, run.ID, planningLimitReason(run.PlanningRoundLimit), execution.RunWaitKindRoundCap,
 			); err != nil {
@@ -2738,6 +2740,27 @@ func (starter *RemoteLeadStarter) StartPlanningRound(
 			updated, err := starter.executions.GetRun(ctx, run.ID)
 			return updated, false, err
 		}
+		if !starter.claim(run.ID) {
+			return execution.Run{}, false, ErrPlanningNotAllowed
+		}
+		claimed = true
+		extended, applied, err := starter.executions.ExtendPlanningRoundLimit(
+			ctx,
+			planningRoundExtensionID(run.ID, idempotencyKey),
+			run.ID,
+			run.PlanningRoundLimit,
+		)
+		if err != nil {
+			starter.release(run.ID)
+			return execution.Run{}, false, err
+		}
+		if !applied {
+			starter.release(run.ID)
+			return extended, false, nil
+		}
+		run = extended
+	}
+	if len(messages) > 0 && messages[len(messages)-1].Event.Type == worker.EventPlanSubmitted {
 		submitted := messages[len(messages)-1].Event
 		published, err := starter.planPublicationRecorded(ctx, submitted)
 		if err != nil {
@@ -2760,9 +2783,12 @@ func (starter *RemoteLeadStarter) StartPlanningRound(
 		return running, true, nil
 	}
 	if len(messages) < 2 || messages[len(messages)-1].Role != worker.RoleReviewer {
+		if claimed {
+			starter.release(run.ID)
+		}
 		return execution.Run{}, false, ErrPlanningNotAllowed
 	}
-	if !starter.claim(run.ID) {
+	if !claimed && !starter.claim(run.ID) {
 		return execution.Run{}, false, ErrPlanningNotAllowed
 	}
 	request, admitted, err := starter.startLeadResponse(ctx, run, storedFeature, messages, false)
@@ -2782,6 +2808,11 @@ func (starter *RemoteLeadStarter) StartPlanningRound(
 	go starter.launch(request)
 	startedRun, err := starter.executions.GetRun(ctx, run.ID)
 	return startedRun, true, err
+}
+
+func planningRoundExtensionID(runID, idempotencyKey string) string {
+	digest := sha256.Sum256([]byte(runID + "\x00" + idempotencyKey))
+	return "planning_round_" + hex.EncodeToString(digest[:16])
 }
 
 // StartImplementation resumes the same lead conversation that submitted the
@@ -3161,7 +3192,7 @@ func (starter *RemoteLeadStarter) implementationRequest(
 }
 
 func (starter *RemoteLeadStarter) previewRunInstructions(ctx context.Context, projectID string) (string, error) {
-	const conventions = "Preview compatibility requirement: every preview process must bind 0.0.0.0, and a frontend must reach its API through a relative-path development proxy rather than a hardcoded localhost port. Keep the configured preview setup and process commands working as you implement and review changes."
+	const conventions = "Preview compatibility requirement: keep one Docker Compose file at the repository root under a standard Compose filename. Services may use image, build (context, dockerfile, args, and target only), command, entrypoint, environment, working_dir, user, ports, expose, volumes, depends_on, healthcheck, restart, init, tty, stdin_open, labels, networks, and x-* extension fields. Every environment variable must have an explicit value; do not use key-only entries that inherit from the Compose process. Build contexts, Dockerfiles, and bind mounts must resolve inside the repository; use named volumes for persistent data. Do not set explicit volume or network names, resource labels, driver_opts, external resources, IPAM, or attachable networks; service network options may contain aliases only. A service with build must not also set image. Do not use Compose interpolation, env_file, label_file, include, extends, privileged mode, added capabilities, devices, host namespace modes, security_opt, volumes_from, secrets, configs, or build secrets, SSH, or network overrides. Extension fields are accepted only at the document and service levels. Every HTTP service must bind 0.0.0.0, and a frontend must reach its API through its Compose service name or a relative-path development proxy rather than a hardcoded localhost port. Reviewers must flag changes that violate these rules or break the configured open target."
 	if starter.toolchains == nil {
 		return "", nil
 	}
@@ -3170,13 +3201,13 @@ func (starter *RemoteLeadStarter) previewRunInstructions(ctx context.Context, pr
 		return "", fmt.Errorf("load project preview run configuration: %w", err)
 	}
 	if manifest.Run == nil {
-		return "\n\n" + conventions + " This project currently has no preview run configuration.", nil
+		return "\n\n" + conventions + " This project currently has no configured preview open target.", nil
 	}
 	encoded, err := json.Marshal(manifest.Run)
 	if err != nil {
 		return "", fmt.Errorf("encode project preview run configuration: %w", err)
 	}
-	return "\n\n" + conventions + "\nConfigured preview run JSON:\n" + string(encoded), nil
+	return "\n\n" + conventions + "\nConfigured preview open target JSON:\n" + string(encoded), nil
 }
 
 func implementationInstructions(
@@ -4078,7 +4109,9 @@ func (starter *RemoteLeadStarter) continueFailedAttempt(
 	if err != nil {
 		return false, err
 	}
-	briefing, err := starter.recoveryBriefing(ctx, run, storedFeature, session, checkpoint, attempt, prepared)
+	briefing, err := starter.recoveryBriefing(
+		ctx, run, storedFeature, session, checkpoint, attempt, prepared, nextAttemptID,
+	)
 	if err != nil {
 		return false, err
 	}
@@ -4147,6 +4180,7 @@ func (starter *RemoteLeadStarter) recoveryBriefing(
 	checkpoint execution.WorkerAttemptCheckpoint,
 	attempt workerhttp.Attempt,
 	prepared workspace.Workspace,
+	nextAttemptID string,
 ) (string, error) {
 	messages, err := starter.currentPlanningMessages(ctx, run)
 	if err != nil {
@@ -4178,10 +4212,37 @@ func (starter *RemoteLeadStarter) recoveryBriefing(
 		checkpoint.LastEventSequence, cause, prepared.ID, prepared.Branch,
 		prepared.BaseCommitID, prepared.PullRequestNumber, history.String(),
 	)
+	briefing += recoveryPublicationInstructions(session.ID, nextAttemptID)
 	if len(briefing) > workerhttp.MaxInstructionsBytes {
 		return "", errors.New("recovery briefing exceeds the worker instruction limit")
 	}
 	return briefing, nil
+}
+
+func recoveryPublicationInstructions(sessionID, attemptID string) string {
+	marker := ""
+	heading := ""
+	if _, ok := implementationTurnNumber(sessionID, attemptID); ok {
+		marker = implementationPublicationMarker(attemptID)
+		heading = "Implementation summary"
+	} else if _, ok := implementationCorrectionTurnNumber(sessionID, attemptID); ok {
+		marker = implementationReviewResponseMarker(attemptID)
+		heading = "Review response"
+	} else if _, ok := implementationReadinessTurnNumber(sessionID, attemptID); ok {
+		marker = workspace.ImplementationPublicationMergeReadiness.Marker(attemptID)
+		heading = "Merge readiness"
+	} else if _, ok := implementationReviewTurnNumber(sessionID, attemptID); ok {
+		marker = implementationReviewMarker(attemptID)
+		heading = "Review"
+	}
+	if marker == "" {
+		return ""
+	}
+	return "\n\nRecovery publication identity:\n" +
+		"This recovery successor has a new durable attempt identity. If you publish or verify " +
+		"external work, use the exact marker below rather than any marker from an earlier attempt. " +
+		"Check for this exact marker before writing so a retry does not duplicate it.\n" +
+		marker + "\n\nRequired heading after the marker: ## " + heading
 }
 
 func (starter *RemoteLeadStarter) launchRecoverySuccessor(

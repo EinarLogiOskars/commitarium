@@ -4,7 +4,7 @@ import { getProjectToolchain } from "../api/toolchains";
 import { ApiError } from "../api/client";
 import { FeatureView } from "./FeatureView";
 import { WorkOrderRail } from "./WorkOrderRail";
-import { NewWorkOrder } from "./NewWorkOrder";
+import { NewWorkOrder, type OrderDraft } from "./NewWorkOrder";
 import { ProjectSettings } from "./ProjectSettings";
 import { ProjectDashboard } from "./ProjectDashboard";
 import { RepositoryCard } from "./RepositoryCard";
@@ -41,6 +41,7 @@ export function ProjectWorkspace({
   const [orderId, setOrderId] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
   const preview = usePreview(id);
+  const [orderDraft, setOrderDraft] = useState<OrderDraft>();
   // Stable so it doesn't re-trigger FeatureView's load effect; refreshes the
   // rail's work-order grouping when a feature's state changes.
   const bumpRail = useCallback(() => setReloadKey((k) => k + 1), []);
@@ -92,6 +93,7 @@ export function ProjectWorkspace({
   const needsStack = toolchain?.status === "needs_setup";
   // Route "new work order" to stack setup first when the toolchain isn't ready.
   const startNewOrder = () => {
+    setOrderDraft(undefined);
     setOrderId(null);
     setMode(needsStack ? "stack" : "new");
   };
@@ -212,7 +214,9 @@ export function ProjectWorkspace({
 
           {mode === "new" && project && (
             <NewWorkOrder
+              key={orderDraft?.title ?? "blank"}
               project={project}
+              initial={orderDraft}
               onOpenValidation={() => {
                 setOrderId(null);
                 setMode("settings");
@@ -243,9 +247,15 @@ export function ProjectWorkspace({
             <PreviewView
               projectId={id}
               preview={preview}
-              runnable={!!toolchain?.run}
+              toolchain={toolchain}
               hasRepo={!!project.forgejo_repository}
+              onToolchainSaved={setToolchain}
               onOpenStack={() => setMode("stack")}
+              onStartOrder={(draft) => {
+                setOrderDraft(draft);
+                setOrderId(null);
+                setMode(needsStack ? "stack" : "new");
+              }}
             />
           )}
 

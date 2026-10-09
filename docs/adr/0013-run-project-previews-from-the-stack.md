@@ -1,6 +1,6 @@
 # ADR-013: Run project previews from the stack
 
-- Status: Accepted
+- Status: Accepted (run configuration and container model amended by [ADR-014](0014-run-previews-from-a-validated-project-compose-file.md))
 - Date: 2026-10-08
 
 ## Context
