@@ -5,6 +5,7 @@ import { updateProjectToolchain } from "../api/toolchains";
 import { ApiError } from "../api/client";
 import type { ProjectToolchain } from "../api/types";
 import { PREVIEW_STATE, type PreviewHandle } from "./usePreview";
+import type { OrderDraft } from "./NewWorkOrder";
 import {
   OpenTargetFields,
   runDraftFrom,
@@ -19,19 +20,44 @@ const HEAD_POLL_MS = 15000;
 // Names `docker compose` finds at the repository root by default.
 const COMPOSE_FILES = ["compose.yaml", "compose.yml", "docker-compose.yaml", "docker-compose.yml"];
 
+// Preview setup is mostly boilerplate whose real test is running the preview,
+// so these orders use one planning and one review round and no reviewer tests.
+// Merging still follows the project's policy.
+const LIGHT = { planningRounds: 1, reviewRounds: 1, independentTests: false };
+
+const PREVIEW_RULES = `- One service per part the app needs (for example frontend, API, database). Servers listen on 0.0.0.0.
+- Keep data in named volumes.
+- Bind mounts, build contexts, and Dockerfiles stay inside the repository. No privileged mode, host networking, added capabilities, devices, secrets, or external volumes or networks.
+- The frontend reaches the API through a relative-path dev proxy (for example /api), not a hardcoded localhost port.`;
+
 /** Work order the Preview page offers when the repository has no compose file. */
-export const PREVIEW_SETUP_ORDER = {
+const PREVIEW_SETUP_ORDER: OrderDraft = {
+  ...LIGHT,
   title: "Set up the preview",
   description: `Add a compose file at the repository root (compose.yaml) that runs this project for Commitarium's preview.
 
-- One service per part the app needs (for example frontend, API, database). Servers listen on 0.0.0.0.
-- Keep data in named volumes.
-- Bind mounts, build contexts, and Dockerfiles stay inside the repository. No privileged mode, host networking, added capabilities, devices, secrets, or external volumes or networks.
-- The frontend reaches the API through a relative-path dev proxy (for example /api), not a hardcoded localhost port.
+${PREVIEW_RULES}
 - Mention in the README that \`docker compose up\` runs the project locally.
 
 When you're done, say which service and container port the preview should open.`,
 };
+
+/** Follow-up work order for a preview that failed to start. */
+function previewFixOrder(error: string): OrderDraft {
+  return {
+    ...LIGHT,
+    title: "Fix the preview",
+    description: `The preview failed to start. Fix the compose setup or the app so it starts, keeping the preview rules:
+
+${PREVIEW_RULES}
+
+Error and recent output:
+
+\`\`\`
+${error}
+\`\`\``,
+  };
+}
 
 /** The project's preview: what it runs, controls, and output (ADR-014). */
 export function PreviewView({
@@ -40,7 +66,7 @@ export function PreviewView({
   toolchain,
   hasRepo,
   onOpenStack,
-  onSetUpPreview,
+  onStartOrder,
   onToolchainSaved,
 }: {
   projectId: string;
@@ -48,7 +74,8 @@ export function PreviewView({
   toolchain: ProjectToolchain | null;
   hasRepo: boolean;
   onOpenStack: () => void;
-  onSetUpPreview: () => void;
+  /** Open New work order with this draft. */
+  onStartOrder: (draft: OrderDraft) => void;
   onToolchainSaved: (t: ProjectToolchain) => void;
 }) {
   const runnable = !!toolchain?.run;
@@ -152,7 +179,7 @@ export function PreviewView({
             </p>
           </div>
           <div className="run__empty-actions">
-            <button className="primary" onClick={onSetUpPreview}>
+            <button className="primary" onClick={() => onStartOrder(PREVIEW_SETUP_ORDER)}>
               Set up preview
             </button>
           </div>
@@ -227,6 +254,14 @@ export function PreviewView({
             ) : (
               <button className="primary" onClick={() => void start()}>
                 {state === "failed" ? "Try again" : "Run preview"}
+              </button>
+            )}
+            {state === "failed" && status?.error && (
+              <button
+                className="ghost"
+                onClick={() => onStartOrder(previewFixOrder(status.error!))}
+              >
+                Fix with agents
               </button>
             )}
             <button className="ghost" onClick={() => setShowLogs((v) => !v)}>

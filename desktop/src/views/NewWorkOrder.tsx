@@ -16,6 +16,15 @@ import type {
 
 /** Create-a-work-order form. Settings default to the project's, and can be
  * changed for this one order (backend applies the effective values). */
+/** A prefilled work order, optionally with lighter settings than the project's. */
+export interface OrderDraft {
+  title: string;
+  description: string;
+  planningRounds?: number;
+  reviewRounds?: number;
+  independentTests?: boolean;
+}
+
 export function NewWorkOrder({
   project,
   initial,
@@ -24,7 +33,7 @@ export function NewWorkOrder({
 }: {
   project: Project;
   /** Prefill for a work order started from elsewhere (e.g. preview setup). */
-  initial?: { title: string; description: string };
+  initial?: OrderDraft;
   /** Opens the project settings where validation commands are configured. */
   onOpenValidation: () => void;
   onCreated: (featureId: string) => void;
@@ -49,10 +58,14 @@ export function NewWorkOrder({
     project.autonomy_policy ?? "review_each_phase",
   );
   const [merge, setMerge] = useState<MergePolicy>(project.merge_policy ?? "require_user_approval");
-  const [planning, setPlanning] = useState(project.dialogue_limits?.planning_rounds ?? 6);
-  const [review, setReview] = useState(project.dialogue_limits?.implementation_review_rounds ?? 6);
+  const [planning, setPlanning] = useState(
+    initial?.planningRounds ?? project.dialogue_limits?.planning_rounds ?? 6,
+  );
+  const [review, setReview] = useState(
+    initial?.reviewRounds ?? project.dialogue_limits?.implementation_review_rounds ?? 6,
+  );
   const [independentTests, setIndependentTests] = useState(
-    project.independent_acceptance_tests ?? false,
+    initial?.independentTests ?? project.independent_acceptance_tests ?? false,
   );
   // null while unknown; only warn once we positively know none is configured.
   const [hasValidation, setHasValidation] = useState<boolean | null>(null);
