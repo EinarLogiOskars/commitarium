@@ -1566,6 +1566,10 @@ button.danger:not(.ghost) {
   margin: 3px 0 0;
   font-size: 12px;
 }
+.order-head__usage {
+  margin: 3px 0 0;
+  font-size: 11px;
+}
 
 /* Phase timeline (stepper) — compact. */
 .stepper {

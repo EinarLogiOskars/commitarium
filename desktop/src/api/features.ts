@@ -4,6 +4,7 @@ import type {
   Feature,
   FeatureArtifact,
   FeatureArtifactKind,
+  FeatureUsage,
   GoalDraftDocument,
   Run,
   WorkflowEvent,
@@ -21,6 +22,11 @@ export const getFeature = (projectId: string, featureId: string): Promise<Featur
 export const listFeatureRuns = (projectId: string, featureId: string): Promise<Run[]> =>
   request(
     `/api/v1/projects/${encodeURIComponent(projectId)}/features/${encodeURIComponent(featureId)}/runs`,
+  );
+
+export const getFeatureUsage = (projectId: string, featureId: string): Promise<FeatureUsage> =>
+  request(
+    `/api/v1/projects/${encodeURIComponent(projectId)}/features/${encodeURIComponent(featureId)}/usage`,
   );
 
 /** Durable workflow history — used for phase-boundary timestamps. */
