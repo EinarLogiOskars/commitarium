@@ -102,6 +102,10 @@ type FeatureArtifactService interface {
 	TransitionImplementationPlanStep(context.Context, string, int, string, featureartifact.StepStatus, string, workflow.Actor, string) (workflow.FeatureArtifact, error)
 }
 
+type HandoffBriefService interface {
+	PutHandoffBrief(context.Context, string, int, featureartifact.HandoffBrief, workflow.Actor, string) (workflow.FeatureArtifact, error)
+}
+
 type AcceptanceTestArtifactService interface {
 	TransitionAcceptanceTest(context.Context, string, int, string, featureartifact.AcceptanceTestStatus, string, string, workflow.Actor, string) (workflow.FeatureArtifact, error)
 }
@@ -558,6 +562,12 @@ func newAPI(
 			"PUT /api/v1/projects/{projectID}/features/{id}/artifacts/goal_draft",
 			api.putGoalDraftArtifactHandler,
 		)
+		if _, ok := api.artifacts.(HandoffBriefService); ok {
+			mux.HandleFunc(
+				"PUT /api/v1/projects/{projectID}/features/{id}/artifacts/handoff_brief",
+				api.putHandoffBriefArtifactHandler,
+			)
+		}
 		mux.HandleFunc(
 			"POST /api/v1/projects/{projectID}/features/{id}/implementation-plan/steps/{stepID}/transitions",
 			api.transitionImplementationPlanStepHandler,

@@ -86,6 +86,38 @@ func (api *API) putGoalDraftArtifactHandler(w http.ResponseWriter, r *http.Reque
 	writeJSON(w, http.StatusOK, newFeatureArtifactResponse(artifact), "goal draft artifact")
 }
 
+type putHandoffBriefRequest struct {
+	ExpectedRevision int                          `json:"expected_revision"`
+	Document         featureartifact.HandoffBrief `json:"document"`
+}
+
+// putHandoffBriefArtifactHandler lets the user edit a work order's brief.
+func (api *API) putHandoffBriefArtifactHandler(w http.ResponseWriter, r *http.Request) {
+	projectID, featureID := r.PathValue("projectID"), r.PathValue("id")
+	if !api.requireFeature(w, r, projectID, featureID) {
+		return
+	}
+	key := strings.TrimSpace(r.Header.Get("Idempotency-Key"))
+	if key == "" {
+		writeError(w, http.StatusBadRequest, "idempotency_key_required", "Idempotency-Key header is required")
+		return
+	}
+	request := putHandoffBriefRequest{}
+	if err := decodeArtifactJSONBody(r, &request); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_json", err.Error())
+		return
+	}
+	artifact, err := api.artifacts.(HandoffBriefService).PutHandoffBrief(
+		r.Context(), featureID, request.ExpectedRevision, request.Document,
+		workflow.Actor{Kind: workflow.ActorKindUser, ID: localUserID}, key,
+	)
+	if err != nil {
+		writeFeatureArtifactError(w, featureID, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, newFeatureArtifactResponse(artifact), "handoff brief artifact")
+}
+
 func (api *API) transitionImplementationPlanStepHandler(w http.ResponseWriter, r *http.Request) {
 	projectID, featureID := r.PathValue("projectID"), r.PathValue("id")
 	if !api.requireFeature(w, r, projectID, featureID) {

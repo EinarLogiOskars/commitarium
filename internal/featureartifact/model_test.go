@@ -120,3 +120,24 @@ func TestNormalizeInitialRepairsAgentChosenIDs(t *testing.T) {
 		t.Fatalf("normalize plan: step=%+v err=%v", plan.Steps, err)
 	}
 }
+
+func TestHandoffBriefValidate(t *testing.T) {
+	valid := HandoffBrief{
+		Goal: "Add due dates.", Areas: []string{"backend/app/models"},
+		Considerations: []string{"Keep existing rows valid."}, OpenQuestions: []string{},
+		BaseCommitID: strings.Repeat("a", 40),
+	}
+	if err := valid.Validate(); err != nil {
+		t.Fatalf("valid brief: %v", err)
+	}
+	for name, brief := range map[string]HandoffBrief{
+		"missing goal":   {Areas: []string{"x"}},
+		"blank area":     {Goal: "Goal", Areas: []string{" "}},
+		"bad commit":     {Goal: "Goal", BaseCommitID: "main"},
+		"too many areas": {Goal: "Goal", Areas: make([]string, MaxBriefItems+1)},
+	} {
+		if err := brief.Validate(); err == nil {
+			t.Errorf("%s was accepted", name)
+		}
+	}
+}

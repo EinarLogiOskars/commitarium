@@ -130,6 +130,46 @@ func (s *Service) PutGoalDraft(
 	return s.putFeatureArtifact(ctx, featureID, featureartifact.KindGoalDraft, expectedRevision, draft, actor, idempotencyKey)
 }
 
+// PutHandoffBrief replaces the brief with optimistic concurrency.
+func (s *Service) PutHandoffBrief(
+	ctx context.Context,
+	featureID string,
+	expectedRevision int,
+	brief featureartifact.HandoffBrief,
+	actor Actor,
+	idempotencyKey string,
+) (FeatureArtifact, error) {
+	if err := brief.Validate(); err != nil {
+		return FeatureArtifact{}, err
+	}
+	return s.putFeatureArtifact(ctx, featureID, featureartifact.KindHandoffBrief, expectedRevision, brief, actor, idempotencyKey)
+}
+
+// UpsertHandoffBrief writes an agent-proposed brief over the latest revision.
+func (s *Service) UpsertHandoffBrief(
+	ctx context.Context,
+	featureID string,
+	brief featureartifact.HandoffBrief,
+	actor Actor,
+	idempotencyKey string,
+) (FeatureArtifact, error) {
+	expected := 0
+	current, err := s.GetFeatureArtifact(ctx, featureID, featureartifact.KindHandoffBrief)
+	if err == nil {
+		matches, compareErr := artifactDocumentMatches(current, brief)
+		if compareErr != nil {
+			return FeatureArtifact{}, compareErr
+		}
+		if matches {
+			return current, nil
+		}
+		expected = current.Revision
+	} else if !errors.Is(err, ErrArtifactNotFound) {
+		return FeatureArtifact{}, err
+	}
+	return s.PutHandoffBrief(ctx, featureID, expected, brief, actor, idempotencyKey)
+}
+
 func (s *Service) UpsertGoalDraft(
 	ctx context.Context,
 	featureID string,

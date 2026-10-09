@@ -43,6 +43,7 @@ this API beyond the host loopback interface is unsupported.
 | `GET` | `/api/v1/projects/{projectID}/features/{featureID}/events/stream` | Replay and stream workflow history with SSE |
 | `GET` | `/api/v1/projects/{projectID}/features/{featureID}/artifacts/{kind}` | Read the current durable goal draft, implementation plan, or acceptance-test checklist |
 | `PUT` | `/api/v1/projects/{projectID}/features/{featureID}/artifacts/goal_draft` | Replace the editable proposed goal using optimistic concurrency |
+| `PUT` | `/api/v1/projects/{projectID}/features/{featureID}/artifacts/handoff_brief` | Replace the editable handoff brief using optimistic concurrency |
 | `POST` | `/api/v1/projects/{projectID}/features/{featureID}/implementation-plan/steps/{stepID}/transitions` | Record implementation-plan step progress |
 | `POST` | `/api/v1/projects/{projectID}/features/{featureID}/acceptance-tests/{testID}/transitions` | Record an independent acceptance-test result |
 | `POST` | `/api/v1/projects/{projectID}/features/{featureID}/runs` | Start the configured workflow asynchronously |

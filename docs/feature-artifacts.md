@@ -6,8 +6,13 @@ never interpreted as a goal or implementation-plan update.
 
 ## Artifact kinds
 
-Three feature-scoped JSON artifacts are currently defined:
+Four feature-scoped JSON artifacts are currently defined:
 
+- `handoff_brief` is a clarified work order (ADR-015): `goal`, `areas` of the
+  code to touch, `considerations` worth planning around, remaining
+  `open_questions`, and the `base_commit_id` of the default branch it was
+  written against. The project assistant proposes it; the user can edit it
+  with `PUT …/artifacts/handoff_brief` and an `expected_revision`.
 - `goal_draft` contains the lead's current proposed goal and any unresolved
   questions. Accepting a goal still creates the immutable
   `feature.goal_accepted` workflow fact.
