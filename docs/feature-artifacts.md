@@ -121,10 +121,10 @@ commitarium-artifact acceptance not-applicable <test-id> <note>
 ```
 
 Every transition creates another artifact revision and the ordinary
-`feature.artifact_updated` SSE notification. The checklist records the first
-review's results. Later review rounds re-run every acceptance test against the
-corrected commit locally and report the results in the formal review rather
-than in the checklist. Private tests are review evidence;
+`feature.artifact_updated` SSE notification. Each review round pins the
+checklist to the commit under review and resets every test to `pending`, so
+the checklist always shows results for the latest reviewed commit. Earlier
+rounds' results remain in the formal reviews. Private tests are review evidence;
 they are not automatically added to the pull request. The normal review and
 correction conversation decides whether a test is wrong, exposes a shared
 misunderstanding, or should be promoted into the repository.

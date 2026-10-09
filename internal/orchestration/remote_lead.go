@@ -4792,6 +4792,26 @@ func (starter *RemoteLeadStarter) startImplementationReview(
 			return remoteLeadRequest{}, false, decodeErr
 		}
 		acceptanceTestCommitID = tests.TestCommitID
+		// Each review round runs the tests against the corrected commit, so
+		// the checklist follows that commit and starts pending again.
+		if round > 1 && tests.ImplementationCommitID != publication.CommitID {
+			tests.ImplementationCommitID = publication.CommitID
+			for index := range tests.Tests {
+				tests.Tests[index].Status = featureartifact.AcceptanceTestPending
+				tests.Tests[index].Note = ""
+			}
+			acceptanceArtifacts, ok := starter.artifacts.(remoteLeadAcceptanceArtifactService)
+			if !ok {
+				return remoteLeadRequest{}, false, errors.New("acceptance-test artifact service is unavailable")
+			}
+			if _, pinErr := acceptanceArtifacts.UpsertAcceptanceTests(
+				ctx, run.FeatureID, tests,
+				workflow.Actor{Kind: workflow.ActorKindCoordinator, ID: coordinatorActorID},
+				implementationReviewAttemptForVersion(reviewer.ID, run.PlanVersion, round)+":pin-acceptance-implementation",
+			); pinErr != nil {
+				return remoteLeadRequest{}, false, pinErr
+			}
+		}
 	}
 	attemptID := implementationReviewAttemptForVersion(reviewer.ID, run.PlanVersion, round)
 	// The first review reads the whole feature and the preview rules. Later
