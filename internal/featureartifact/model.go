@@ -14,6 +14,7 @@ const (
 	KindGoalDraft          Kind = "goal_draft"
 	KindImplementationPlan Kind = "implementation_plan"
 	KindAcceptanceTests    Kind = "acceptance_tests"
+	KindHandoffBrief       Kind = "handoff_brief"
 )
 
 type StepStatus string
@@ -51,6 +52,42 @@ var (
 type GoalDraft struct {
 	Goal          string   `json:"goal"`
 	OpenQuestions []string `json:"open_questions"`
+}
+
+// HandoffBrief is a clarified work order: what to build and why, where in the
+// code, and what is worth planning around. The commit-by-commit plan is left
+// to the agents. BaseCommitID is the default-branch commit it was written
+// against, so a later start can check what changed since.
+type HandoffBrief struct {
+	Goal           string   `json:"goal"`
+	Areas          []string `json:"areas"`
+	Considerations []string `json:"considerations"`
+	OpenQuestions  []string `json:"open_questions"`
+	BaseCommitID   string   `json:"base_commit_id"`
+}
+
+const MaxBriefItems = 50
+
+func (brief HandoffBrief) Validate() error {
+	if err := validRequiredText("goal", brief.Goal, MaxGoalBytes); err != nil {
+		return err
+	}
+	for name, items := range map[string][]string{
+		"area": brief.Areas, "consideration": brief.Considerations, "open question": brief.OpenQuestions,
+	} {
+		if len(items) > MaxBriefItems {
+			return fmt.Errorf("%w: too many %ss", ErrInvalidArtifact, name)
+		}
+		for index, item := range items {
+			if err := validRequiredText(fmt.Sprintf("%s %d", name, index+1), item, MaxStepTextBytes); err != nil {
+				return err
+			}
+		}
+	}
+	if brief.BaseCommitID != "" && !commitIDPattern.MatchString(brief.BaseCommitID) {
+		return fmt.Errorf("%w: handoff brief has an invalid base commit", ErrInvalidArtifact)
+	}
+	return nil
 }
 
 type ImplementationPlan struct {
@@ -92,7 +129,8 @@ type AcceptanceTest struct {
 }
 
 func (kind Kind) IsValid() bool {
-	return kind == KindGoalDraft || kind == KindImplementationPlan || kind == KindAcceptanceTests
+	return kind == KindGoalDraft || kind == KindImplementationPlan || kind == KindAcceptanceTests ||
+		kind == KindHandoffBrief
 }
 
 func (status StepStatus) IsValid() bool {

@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/EinarLogiOskars/commitarium/internal/feature"
+	"github.com/EinarLogiOskars/commitarium/internal/featureartifact"
 	"github.com/EinarLogiOskars/commitarium/internal/project"
 	"github.com/EinarLogiOskars/commitarium/internal/workspace"
 )
@@ -42,31 +43,6 @@ func replanningInstructions(
 		"\nExisting feature branch: " + prepared.Branch +
 		"\nReplanning baseline commit: " + baselineCommitID +
 		fmt.Sprintf("\nExisting draft pull request: #%d (%s)", prepared.PullRequestNumber, prepared.PullRequestURL)
-}
-
-func remoteLeadInstructions(goal string) string {
-	return "You are the lead agent helping the user define a software-development goal. " +
-		"This is goal clarification only: do not modify files, run destructive commands, " +
-		"create commits, or begin implementation. Inspect the available project read-only " +
-		"when useful. Restate your understanding, identify important ambiguity or risk, and " +
-		"ask the user the smallest useful set of questions needed before planning. Return action 'ask' " +
-		"while information is missing, put the user-facing question in message, put your current best " +
-		"complete goal draft in goal when one is useful (or an empty string when it would be misleading), " +
-		"and list the unresolved questions in open_questions. Once the goal is ready to accept, return " +
-		"action 'propose', explain that in message, put the complete proposed goal in goal, and return an " +
-		"empty open_questions array. The conversational message is not the proposed goal. " +
-		"The user's current goal is:\n\n" + goal
-}
-
-func remoteLeadReplyInstructions(message string) string {
-	return "Continue the same goal-clarification conversation. This is still clarification only: " +
-		"do not modify files, run destructive commands, create commits, or begin implementation. " +
-		"Use the existing conversation context, incorporate the user's reply, and ask only the " +
-		"next questions genuinely needed before planning. Return action 'ask' with a user-facing message, " +
-		"the current best complete goal draft in goal when useful (otherwise an empty string), and unresolved " +
-		"questions in open_questions. When ready, return action 'propose' with the complete goal, an empty " +
-		"open_questions array, and a separate user-facing message. The conversational message is never the " +
-		"proposed goal. The user replied:\n\n" + message
 }
 
 func reviewerPlanningInstructions(
@@ -404,4 +380,37 @@ func planApprovalInstructions(plan string, lead string) string {
 		"'commitarium-artifact plan show'. Do not reopen points you already settled. Return action " +
 		"'approve' with a one-line confirmation, or 'request_changes' with exactly what differs from " +
 		"what you agreed; " + lead + " will then revise and resubmit.\n\n" + lead + "'s final plan:\n" + plan
+}
+
+// briefGoal renders the handoff brief as the work order's accepted goal, which
+// the lead and reviewer receive at the start of planning.
+func briefGoal(brief featureartifact.HandoffBrief) string {
+	var text strings.Builder
+	text.WriteString(strings.TrimSpace(brief.Goal))
+	section := func(title string, items []string) {
+		if len(items) == 0 {
+			return
+		}
+		text.WriteString("\n\n" + title + ":")
+		for _, item := range items {
+			text.WriteString("\n- " + item)
+		}
+	}
+	section("Areas to touch", brief.Areas)
+	section("Worth planning around", brief.Considerations)
+	section("Open questions to settle while planning", brief.OpenQuestions)
+	return text.String()
+}
+
+// briefFreshnessInstructions asks the lead to check the brief before relying
+// on it: main may have moved since the brief was written.
+func briefFreshnessInstructions(previousBase, currentBase string) string {
+	if previousBase == "" {
+		return "\n\nThe goal above is a handoff brief written with the user against the current base commit. " +
+			"Before planning, confirm that the areas it names still match the code, and say so in one line."
+	}
+	return "\n\nThe goal above is a handoff brief written against commit " + previousBase + "; the default " +
+		"branch has since moved to " + currentBase + ". Before planning, check what changed between them " +
+		"('git log --oneline " + previousBase + ".." + currentBase + "' and the diff of the areas the brief " +
+		"names) and whether the brief still holds. Say briefly what changed and how it affects the plan."
 }

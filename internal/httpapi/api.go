@@ -98,8 +98,11 @@ type WorkflowService interface {
 
 type FeatureArtifactService interface {
 	GetFeatureArtifact(context.Context, string, featureartifact.Kind) (workflow.FeatureArtifact, error)
-	PutGoalDraft(context.Context, string, int, featureartifact.GoalDraft, workflow.Actor, string) (workflow.FeatureArtifact, error)
 	TransitionImplementationPlanStep(context.Context, string, int, string, featureartifact.StepStatus, string, workflow.Actor, string) (workflow.FeatureArtifact, error)
+}
+
+type HandoffBriefService interface {
+	PutHandoffBrief(context.Context, string, int, featureartifact.HandoffBrief, workflow.Actor, string) (workflow.FeatureArtifact, error)
 }
 
 type AcceptanceTestArtifactService interface {
@@ -155,13 +158,6 @@ type SessionController interface {
 		sessionID string,
 		command worker.Command,
 	) (execution.Command, error)
-	AcceptGoal(
-		ctx context.Context,
-		sessionID string,
-		goal string,
-		actor workflow.Actor,
-		idempotencyKey string,
-	) (workflow.Event, error)
 }
 
 type WorkspaceService interface {
@@ -235,11 +231,6 @@ type validationJobEnsurer interface {
 }
 
 type RealWorkflowStarter interface {
-	StartPlanning(
-		ctx context.Context,
-		runID string,
-		idempotencyKey string,
-	) (execution.Run, bool, error)
 	StartPlanningReview(
 		ctx context.Context,
 		runID string,
@@ -281,6 +272,7 @@ type API struct {
 	environments       ProjectEnvironmentService
 	validations        ValidationService
 	usage              FeatureUsageService
+	assistant          WorkOrderAssistant
 }
 
 func New(
@@ -383,8 +375,11 @@ func newAPI(
 	var environments ProjectEnvironmentService
 	var validations ValidationService
 	var usage FeatureUsageService
+	var workOrderAssistant WorkOrderAssistant
 	for _, extra := range extras {
 		switch typed := extra.(type) {
+		case WorkOrderAssistant:
+			workOrderAssistant = typed
 		case FeatureUsageService:
 			usage = typed
 		case ToolchainService:
@@ -416,6 +411,7 @@ func newAPI(
 		environments:       environments,
 		validations:        validations,
 		usage:              usage,
+		assistant:          workOrderAssistant,
 	}
 	api.artifacts, _ = workflow.(FeatureArtifactService)
 	api.projectImporter, _ = projects.(ProjectImporter)
@@ -554,10 +550,12 @@ func newAPI(
 			"GET /api/v1/projects/{projectID}/features/{id}/artifacts/{kind}",
 			api.getFeatureArtifactHandler,
 		)
-		mux.HandleFunc(
-			"PUT /api/v1/projects/{projectID}/features/{id}/artifacts/goal_draft",
-			api.putGoalDraftArtifactHandler,
-		)
+		if _, ok := api.artifacts.(HandoffBriefService); ok {
+			mux.HandleFunc(
+				"PUT /api/v1/projects/{projectID}/features/{id}/artifacts/handoff_brief",
+				api.putHandoffBriefArtifactHandler,
+			)
+		}
 		mux.HandleFunc(
 			"POST /api/v1/projects/{projectID}/features/{id}/implementation-plan/steps/{stepID}/transitions",
 			api.transitionImplementationPlanStepHandler,
@@ -575,6 +573,13 @@ func newAPI(
 		"GET /api/v1/projects/{projectID}/features/{id}/runs",
 		api.listFeatureRunsHandler,
 	)
+	if workOrderAssistant != nil {
+		mux.HandleFunc("POST /api/v1/projects/{projectID}/features/{id}/assistant", api.startAssistantHandler)
+		mux.HandleFunc("GET /api/v1/projects/{projectID}/features/{id}/assistant", api.getAssistantHandler)
+		mux.HandleFunc("POST /api/v1/projects/{projectID}/features/{id}/assistant/messages", api.replyAssistantHandler)
+		mux.HandleFunc("POST /api/v1/projects/{projectID}/features/{id}/accept", api.acceptBriefHandler)
+		mux.HandleFunc("POST /api/v1/projects/{projectID}/features/{id}/reopen", api.reopenWorkOrderHandler)
+	}
 	if usage != nil {
 		mux.HandleFunc(
 			"GET /api/v1/projects/{projectID}/features/{id}/usage",
@@ -600,7 +605,6 @@ func newAPI(
 		)
 	}
 	if realWorkflow != nil {
-		mux.HandleFunc("POST /api/v1/runs/{id}/planning", api.startPlanningHandler)
 		mux.HandleFunc("POST /api/v1/runs/{id}/planning/reviewer", api.startPlanningReviewHandler)
 		mux.HandleFunc("POST /api/v1/runs/{id}/planning/round", api.startPlanningRoundHandler)
 		mux.HandleFunc("POST /api/v1/runs/{id}/implementation", api.startImplementationHandler)
@@ -617,7 +621,6 @@ func newAPI(
 	mux.HandleFunc("GET /api/v1/sessions/{id}/events", api.getSessionEventsHandler)
 	mux.HandleFunc("GET /api/v1/sessions/{id}/events/stream", api.streamSessionEventsHandler)
 	mux.HandleFunc("POST /api/v1/sessions/{id}/commands", api.sendSessionCommandHandler)
-	mux.HandleFunc("POST /api/v1/sessions/{id}/goal-acceptance", api.acceptGoalHandler)
 
 	return mux
 }

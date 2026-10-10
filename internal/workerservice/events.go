@@ -403,6 +403,7 @@ func (service *Service) finishAttempt(
 	terminalResult.GoalDraft = result.GoalDraft
 	terminalResult.ImplementationPlan = result.ImplementationPlan
 	terminalResult.AcceptanceTests = result.AcceptanceTests
+	terminalResult.HandoffBrief = result.HandoffBrief
 	if result.Usage != nil {
 		usage := workerhttp.TokenUsage(*result.Usage)
 		terminalResult.Usage = &usage

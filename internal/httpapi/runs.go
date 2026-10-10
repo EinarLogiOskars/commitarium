@@ -173,9 +173,8 @@ func (api *API) startRunHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if storedFeature.State != feature.StateDraft ||
-		storedFeature.AcceptedGoal != "" || storedFeature.GoalAcceptedAt != nil {
-		writeError(w, http.StatusConflict, "feature_not_startable", "feature is not available to start a new run")
+	if storedFeature.State != feature.StateReady {
+		writeError(w, http.StatusConflict, "feature_not_startable", "only a ready work order can be started")
 		return
 	}
 	goal := storedFeature.Title
@@ -204,6 +203,8 @@ func (api *API) startRunHandler(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case errors.Is(err, execution.ErrRecordConflict):
 			writeError(w, http.StatusConflict, "idempotency_conflict", "Idempotency-Key was already used for a different run")
+		case errors.Is(err, orchestration.ErrFeatureNotReady):
+			writeError(w, http.StatusConflict, "feature_not_startable", "only a ready work order with a handoff brief can be started")
 		case errors.Is(err, orchestration.ErrInvalidRunRequest):
 			writeError(w, http.StatusBadRequest, "invalid_run", "run request is invalid")
 		case errors.Is(err, workspace.ErrProjectRepositoryNotBound):

@@ -30,7 +30,8 @@ func (s *ExecutionStore) RecordAttemptUsage(ctx context.Context, usage execution
 }
 
 // FeatureAttemptUsage lists recorded usage for every attempt across all of a
-// feature's runs, in recording order.
+// feature's runs and its assistant clarification, ordered by session and
+// attempt.
 func (s *ExecutionStore) FeatureAttemptUsage(ctx context.Context, featureID string) ([]execution.RoleAttemptUsage, error) {
 	rows, err := s.db.QueryContext(
 		ctx,
@@ -41,8 +42,15 @@ func (s *ExecutionStore) FeatureAttemptUsage(ctx context.Context, featureID stri
 		   JOIN sessions ON sessions.id = usage.session_id
 		   JOIN runs ON runs.id = sessions.run_id
 		  WHERE runs.feature_id = ?
-		  ORDER BY usage.recorded_at, usage.session_id, usage.attempt_id`,
-		featureID,
+		 UNION ALL
+		 SELECT 'assistant', usage.session_id, usage.attempt_id,
+		        usage.input_tokens, usage.cached_input_tokens,
+		        usage.cache_write_tokens, usage.output_tokens
+		   FROM assistant_turn_usage AS usage
+		   JOIN assistant_sessions ON assistant_sessions.id = usage.session_id
+		  WHERE assistant_sessions.feature_id = ?
+		  ORDER BY 2, 3`,
+		featureID, featureID,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("list feature token usage: %w", err)

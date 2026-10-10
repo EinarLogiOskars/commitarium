@@ -8,7 +8,10 @@ import (
 type State string
 
 const (
-	StateDraft        State = "draft"
+	StateDraft State = "draft"
+	// StateReady is a clarified work order with a handoff brief, waiting for
+	// the user to start it.
+	StateReady        State = "ready"
 	StatePlanning     State = "planning"
 	StateImplementing State = "implementing"
 	StateReviewing    State = "reviewing"
@@ -22,6 +25,7 @@ var ErrInvalidTransition = errors.New("invalid feature state transition")
 func (state State) IsValid() bool {
 	switch state {
 	case StateDraft,
+		StateReady,
 		StatePlanning,
 		StateImplementing,
 		StateReviewing,
@@ -50,7 +54,11 @@ func (state State) CanTransitionTo(next State) bool {
 
 	switch state {
 	case StateDraft:
-		return next == StatePlanning
+		return next == StateReady ||
+			next == StatePlanning
+	case StateReady:
+		return next == StateDraft ||
+			next == StatePlanning
 	case StatePlanning:
 		return next == StateDraft ||
 			next == StateImplementing

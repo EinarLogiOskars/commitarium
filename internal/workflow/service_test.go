@@ -154,48 +154,6 @@ func TestServiceTransitionFeature(t *testing.T) {
 	}
 }
 
-func TestServiceAcceptGoal(t *testing.T) {
-	fixedTime := time.Date(2026, time.September, 9, 14, 0, 0, 123456789, time.UTC)
-	expectedEvent := validTestEvent(t)
-	expectedEvent.Type = EventTypeGoalAccepted
-	store := &recordingWorkflowStore{acceptanceResult: expectedEvent}
-	service := &Service{
-		store:      store,
-		broker:     newEventBroker(defaultSubscriberBuffer),
-		generateID: func() string { return "evt_goal" },
-		now:        func() time.Time { return fixedTime },
-	}
-	actor := Actor{Kind: ActorKindUser, ID: "local-user"}
-	events, cancel := service.SubscribeFeatureEvents("fea_test")
-	defer cancel()
-
-	actual, err := service.AcceptGoal(
-		t.Context(), "fea_test", "ses_lead", "  Ship CSV export.  ", actor, "accept-1",
-	)
-	if err != nil {
-		t.Fatalf("accept goal: %v", err)
-	}
-	if actual != expectedEvent {
-		t.Fatalf("expected event %+v, got %+v", expectedEvent, actual)
-	}
-	expected := GoalAcceptance{
-		EventID: "evt_goal", FeatureID: "fea_test", SessionID: "ses_lead",
-		Goal: "Ship CSV export.", Actor: actor, OccurredAt: fixedTime,
-		IdempotencyKey: "accept-1",
-	}
-	if store.receivedAcceptance != expected {
-		t.Fatalf("expected acceptance %+v, got %+v", expected, store.receivedAcceptance)
-	}
-	select {
-	case published := <-events:
-		if published != expectedEvent {
-			t.Fatalf("expected published event %+v, got %+v", expectedEvent, published)
-		}
-	default:
-		t.Fatal("expected accepted-goal event to be published")
-	}
-}
-
 func TestServiceTransitionFeatureWrapsStoreError(t *testing.T) {
 	storeErr := errors.New("storage failed")
 	service := NewService(&recordingWorkflowStore{transitionErr: storeErr})
@@ -255,13 +213,13 @@ func TestServicePublishesSuccessfulTransition(t *testing.T) {
 	}
 }
 
-func TestServicePublishesGoalDraftArtifactUpdate(t *testing.T) {
+func TestServicePublishesHandoffBriefArtifactUpdate(t *testing.T) {
 	fixedTime := time.Date(2026, time.September, 20, 16, 0, 0, 0, time.UTC)
 	event := validTestEvent(t)
 	event.Type = EventTypeArtifactUpdated
 	artifact := FeatureArtifact{
-		FeatureID: "fea_test", Kind: featureartifact.KindGoalDraft, Revision: 1,
-		Document: `{"goal":"Ship it.","open_questions":[]}`,
+		FeatureID: "fea_test", Kind: featureartifact.KindHandoffBrief, Revision: 1,
+		Document: `{"goal":"Ship it.","areas":[],"considerations":[],"open_questions":[],"base_commit_id":""}`,
 		Actor:    Actor{Kind: ActorKindAgent, ID: "ses_lead"}, UpdatedAt: fixedTime,
 	}
 	store := &recordingWorkflowStore{artifactResult: artifact, artifactEvent: event}
@@ -271,15 +229,15 @@ func TestServicePublishesGoalDraftArtifactUpdate(t *testing.T) {
 	}
 	events, cancel := service.SubscribeFeatureEvents("fea_test")
 	defer cancel()
-	actual, err := service.PutGoalDraft(
+	actual, err := service.PutHandoffBrief(
 		t.Context(), "fea_test", 0,
-		featureartifact.GoalDraft{Goal: "Ship it.", OpenQuestions: []string{}},
+		featureartifact.HandoffBrief{Goal: "Ship it.", Areas: []string{}, Considerations: []string{}, OpenQuestions: []string{}},
 		artifact.Actor, "goal-1",
 	)
 	if err != nil || actual != artifact {
 		t.Fatalf("artifact=%+v error=%v", actual, err)
 	}
-	if store.receivedArtifact.ExpectedRevision != 0 || store.receivedArtifact.Kind != featureartifact.KindGoalDraft ||
+	if store.receivedArtifact.ExpectedRevision != 0 || store.receivedArtifact.Kind != featureartifact.KindHandoffBrief ||
 		store.receivedArtifact.IdempotencyKey != "goal-1" {
 		t.Fatalf("mutation=%+v", store.receivedArtifact)
 	}
@@ -293,21 +251,21 @@ func TestServicePublishesGoalDraftArtifactUpdate(t *testing.T) {
 	}
 }
 
-func TestServiceUpsertGoalDraftReusesMatchingDurableRevision(t *testing.T) {
-	draft := featureartifact.GoalDraft{Goal: "Ship it.", OpenQuestions: []string{}}
+func TestServiceUpsertHandoffBriefReusesMatchingDurableRevision(t *testing.T) {
+	draft := featureartifact.HandoffBrief{Goal: "Ship it.", Areas: []string{}, Considerations: []string{}, OpenQuestions: []string{}}
 	current := FeatureArtifact{
-		FeatureID: "fea_test", Kind: featureartifact.KindGoalDraft, Revision: 2,
-		Document: `{"goal":"Ship it.","open_questions":[]}`,
+		FeatureID: "fea_test", Kind: featureartifact.KindHandoffBrief, Revision: 2,
+		Document: `{"goal":"Ship it.","areas":[],"considerations":[],"open_questions":[],"base_commit_id":""}`,
 		Actor:    Actor{Kind: ActorKindAgent, ID: "ses_lead"}, UpdatedAt: time.Now().UTC(),
 	}
 	store := &recordingWorkflowStore{currentArtifact: current}
 	service := NewService(store)
 
-	actual, err := service.UpsertGoalDraft(
-		t.Context(), "fea_test", draft, current.Actor, "attempt-1:goal-draft",
+	actual, err := service.UpsertHandoffBrief(
+		t.Context(), "fea_test", draft, current.Actor, "attempt-1:handoff-brief",
 	)
 	if err != nil {
-		t.Fatalf("upsert matching goal draft: %v", err)
+		t.Fatalf("upsert matching handoff brief: %v", err)
 	}
 	if actual != current {
 		t.Fatalf("expected current revision %+v, got %+v", current, actual)

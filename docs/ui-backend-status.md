@@ -321,8 +321,9 @@ Safe UI capabilities:
 - Read durable lifecycle history or follow it live through the feature event
   history and SSE routes.
 - Render the settled lifecycle states:
-  `draft`, `planning`, `implementing`, `reviewing`, `ready_to_merge`, and
-  `completed`.
+  `draft`, `ready`, `planning`, `implementing`, `reviewing`, `ready_to_merge`,
+  `completed`, and `cancelled`. `ready` is a clarified work order with a
+  handoff brief, waiting to be started.
 
 Both discovery routes return `[]` for an existing resource with no children.
 The UI may group features locally using their settled lifecycle states; search,
@@ -403,32 +404,22 @@ categories are the stable input for both a conventional activity view and the
 future graphical agent-world view. Avatar or animation concepts do not belong
 in backend event payloads; the UI maps factual activity to presentation.
 
-### Goal clarification and selected-project routing
+### Selected-project routing
 
-- Starting an opt-in real-provider run reserves the selected project's exact
-  Forgejo default-branch commit and creates a dedicated checkout for that work
-  order before the first provider turn.
-- The initial lead turn and every clarification reply use that same durable
-  workspace ID. There is no coordinator-wide active project or fixed smoke
-  workspace involved in workflow routing.
-- Clarification and all collaborative planning turns are now admitted with
+- A draft's assistant conversation prepares the selected project's checkout,
+  pinned to the Forgejo default-branch commit; starting a Ready order re-pins it
+  to the current head if main has moved and no branch exists yet.
+- Every agent turn for the work order uses that same durable workspace ID.
+  There is no coordinator-wide active project involved in workflow routing.
+- The assistant and all collaborative planning turns are admitted with
   provider-enforced read-only workspace access. Implementation is the first
   phase admitted with write access; this is not dependent on prompt compliance.
-- Goal clarification now has a durable `goal_draft` artifact independent of
-  the conversational transcript. The proposed-goal panel must render
-  `goal_draft.document.goal`, never the lead's last message. A question remains
-  a session message while the artifact carries the current best goal and
-  `open_questions`.
 - Load artifacts through
   `GET /api/v1/projects/{projectID}/features/{featureID}/artifacts/{kind}`.
-  A user edit replaces the goal draft with its `expected_revision` and an
+  A user edit of the handoff brief sends its `expected_revision` and an
   `Idempotency-Key`; `409 artifact_revision_conflict` means reload first.
-- The accepted-goal action is unchanged: send the exact reviewed draft through
-  the existing session goal-acceptance route.
 - Repository and checkout failures at run start use the same specific conflict
   and temporary-unavailability error categories as workspace preparation.
-- Opening the workspace resource during clarification may return `preparing`
-  with `checkout` present while `branch_created_at` and `pull_request` are absent.
 
 ### Implementation-plan checklist
 
@@ -445,6 +436,16 @@ in backend event payloads; the UI maps factual activity to presentation.
   commits. Keep the last valid artifact visible during reconnects.
 - These documents are coordinator data only. The desktop must not look for a
   plan file in the checkout and must not copy one during local synchronization.
+
+### Work-order clarification and Ready orders
+
+- A new work order is a Draft. Start its clarification with
+  `POST …/features/{id}/assistant`, poll `GET …/assistant` while `running`,
+  and reply with `POST …/assistant/messages`.
+- When the status is `proposal_ready`, show the `handoff_brief` artifact; the
+  user can edit it (`PUT …/artifacts/handoff_brief`) or accept it
+  (`POST …/accept`), which makes the order `ready`. `POST …/reopen` returns a
+  Ready order to Draft.
 
 ### Token usage
 

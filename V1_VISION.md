@@ -54,7 +54,7 @@ finish and then brings the user in.
 - **Agent context on resume.** Resume the provider's own conversation thread
   where possible; otherwise start from a short summary plus the branch's git
   log.
-- **Visible when paused.** Paused sessions appear in the backlog with how long
+- **Visible when paused.** Paused sessions appear in the planning view with how long
   they have been paused. Leaving one open is the user's choice.
 - **Live preview** (scope open, see below): mount the session workspace into
   the project's compose services so dev servers reload as the agent edits. Already
@@ -143,11 +143,16 @@ job (a README update becomes a task, not a work order).
   override.
 - Project setup and imports through the assistant come after 1.0.
 
-## Backlog
+## Planning view
 
-Work is created and scoped without starting. Sessions, tasks, and work orders
-sit in the backlog until the user starts them, and the backlog is where paused
-sessions are visible.
+Work is planned before it starts. A work order moves through **Draft** (being
+clarified with the project assistant), **Ready** (a handoff brief is saved),
+**In progress**, and **Done**. The handoff brief records the goal, the areas
+to touch, what is worth planning around, and the main commit it was written
+against; at Start the lead first checks that the brief still holds, then plans
+the commits with the reviewer. Tasks and sessions join the same view, and it
+is where paused sessions are visible. See
+[READY_WORK_ORDERS_PLAN.md](READY_WORK_ORDERS_PLAN.md).
 
 ## Unchanged
 
@@ -163,7 +168,7 @@ sessions are visible.
 | Part | Status |
 | --- | --- |
 | Work order + reviewer | Done. This is today's product. |
-| Backlog | Mostly done in the backend: a work order is created in `draft` and started separately. Missing a backlog view and a clear start action. |
+| Planning view | In progress: Draft and Ready states, handoff briefs, Start with a freshness check ([READY_WORK_ORDERS_PLAN.md](READY_WORK_ORDERS_PLAN.md)). |
 | Escalation | Done: wait reasons, the attention inbox, native notifications, the intervene bar. |
 | Isolation | Done. Every new kind of work reuses it. |
 | Agents | Missing. Today: four fixed role profiles and containers. |
@@ -184,7 +189,7 @@ match the behavior and a test should prove it.
 **In 1.0:**
 
 - Agents
-- Backlog
+- Planning view: Draft, Ready, In progress, Done, with handoff briefs
 - Sessions (with pause, resume, and catch-up), tasks, work orders with and
   without a reviewer
 - The project assistant, planning and creating all kinds of work
@@ -203,12 +208,14 @@ commit), but the fix-the-wording use case is much better with it.
 ## Order
 
 1. Efficient planning and review dialogue
-   ([EFFICIENT_DIALOGUE_PLAN.md](EFFICIENT_DIALOGUE_PLAN.md)).
-2. Backlog view and start action.
+   ([EFFICIENT_DIALOGUE_PLAN.md](EFFICIENT_DIALOGUE_PLAN.md)). Done.
+2. Ready work orders: Draft and Ready states, handoff briefs written with the
+   first piece of the project assistant, and Start with a freshness check
+   ([READY_WORK_ORDERS_PLAN.md](READY_WORK_ORDERS_PLAN.md)).
 3. Agents, including the worker concurrency test and honest capability value.
 4. Tasks, which introduce the single-agent runner.
 5. Sessions, on the same runner, adding chat and pause/resume.
-6. Project assistant, reusing the session chat.
+6. The rest of the project assistant, growing from the clarification chat.
 7. Work order without reviewer, starting with a refactor that separates the
    reviewer stages in `remote_lead.go`.
 

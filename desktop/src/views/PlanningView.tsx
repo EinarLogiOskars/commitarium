@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   getPlanningMessages,
   getRun,
-  startPlanning,
   startPlanningReviewer,
   startPlanningRound,
   startImplementation,
@@ -30,7 +29,6 @@ const SHOWN = new Set(["message", "plan_submitted", "activity", "user_message"])
 export function PlanningView({
   runId,
   run,
-  featureState,
   live = true,
   planVersion = 1,
   intervals = [],
@@ -40,7 +38,6 @@ export function PlanningView({
   runId: string;
   // Full run (for the docked composer/pause); may be null very briefly.
   run: Run | null;
-  featureState: string;
   // When false, the phase is being viewed as history — transcript only, no
   // action dock (the run has moved past planning, or is auto-driven).
   live?: boolean;
@@ -122,10 +119,7 @@ export function PlanningView({
 
   let label: string;
   let run_: () => void;
-  if (featureState === "draft") {
-    label = "Start planning";
-    run_ = () => void act(startPlanning, true);
-  } else if (submittedCurrent) {
+  if (submittedCurrent) {
     label = "Start implementation";
     run_ = () => void act(startImplementation, true);
   } else if (reviewerRespondedCurrent) {

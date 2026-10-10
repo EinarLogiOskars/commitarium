@@ -5,7 +5,8 @@ import type {
   FeatureArtifact,
   FeatureArtifactKind,
   FeatureUsage,
-  GoalDraftDocument,
+  WorkOrderAssistantSession,
+  HandoffBriefDocument,
   Run,
   WorkflowEvent,
   Workspace,
@@ -23,6 +24,63 @@ export const listFeatureRuns = (projectId: string, featureId: string): Promise<R
   request(
     `/api/v1/projects/${encodeURIComponent(projectId)}/features/${encodeURIComponent(featureId)}/runs`,
   );
+
+const featurePath = (projectId: string, featureId: string) =>
+  `/api/v1/projects/${encodeURIComponent(projectId)}/features/${encodeURIComponent(featureId)}`;
+
+/** Start (or return) the draft's clarification with the project assistant. */
+export const startAssistant = (
+  projectId: string,
+  featureId: string,
+): Promise<WorkOrderAssistantSession> =>
+  request(`${featurePath(projectId, featureId)}/assistant`, { method: "POST" });
+
+/** Throws ApiError code assistant_not_found before the conversation exists. */
+export const getAssistant = (
+  projectId: string,
+  featureId: string,
+): Promise<WorkOrderAssistantSession> => request(`${featurePath(projectId, featureId)}/assistant`);
+
+export const replyToAssistant = (
+  projectId: string,
+  featureId: string,
+  message: string,
+  idempotencyKey: string,
+): Promise<WorkOrderAssistantSession> =>
+  request(`${featurePath(projectId, featureId)}/assistant/messages`, {
+    method: "POST",
+    body: { message },
+    idempotencyKey,
+  });
+
+/** Accept the handoff brief: the draft becomes Ready. */
+export const acceptBrief = (
+  projectId: string,
+  featureId: string,
+  idempotencyKey: string,
+): Promise<Feature> =>
+  request(`${featurePath(projectId, featureId)}/accept`, { method: "POST", idempotencyKey });
+
+/** Return a Ready work order to Draft for more clarification. */
+export const reopenWorkOrder = (
+  projectId: string,
+  featureId: string,
+  idempotencyKey: string,
+): Promise<Feature> =>
+  request(`${featurePath(projectId, featureId)}/reopen`, { method: "POST", idempotencyKey });
+
+export const updateHandoffBrief = (
+  projectId: string,
+  featureId: string,
+  expectedRevision: number,
+  document: HandoffBriefDocument,
+  idempotencyKey: string,
+): Promise<FeatureArtifact<HandoffBriefDocument>> =>
+  request(`${featurePath(projectId, featureId)}/artifacts/handoff_brief`, {
+    method: "PUT",
+    body: { expected_revision: expectedRevision, document },
+    idempotencyKey,
+  });
 
 export const getFeatureUsage = (projectId: string, featureId: string): Promise<FeatureUsage> =>
   request(
@@ -45,21 +103,6 @@ export const getFeatureArtifact = <T = unknown>(
 ): Promise<FeatureArtifact<T>> =>
   request(
     `/api/v1/projects/${encodeURIComponent(projectId)}/features/${encodeURIComponent(featureId)}/artifacts/${kind}`,
-  );
-
-// Replace the editable proposed goal with optimistic concurrency. A stale
-// expected_revision throws ApiError code artifact_revision_conflict (reload
-// first); invalid/oversized content throws invalid_feature_artifact.
-export const updateGoalDraft = (
-  projectId: string,
-  featureId: string,
-  expectedRevision: number,
-  document: GoalDraftDocument,
-  idempotencyKey: string,
-): Promise<FeatureArtifact<GoalDraftDocument>> =>
-  request(
-    `/api/v1/projects/${encodeURIComponent(projectId)}/features/${encodeURIComponent(featureId)}/artifacts/goal_draft`,
-    { method: "PUT", body: { expected_revision: expectedRevision, document }, idempotencyKey },
   );
 
 export const getWorkspace = (projectId: string, featureId: string): Promise<Workspace> =>

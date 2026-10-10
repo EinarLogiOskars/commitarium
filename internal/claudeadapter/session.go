@@ -722,6 +722,7 @@ func (session *session) translateResult(
 			ImplementationPlan: resolved.ImplementationPlan,
 			AcceptanceTests:    resolved.AcceptanceTests,
 			EnvironmentRequest: resolved.EnvironmentRequest,
+			HandoffBrief:       resolved.HandoffBrief,
 			Usage:              message.Usage.tokenUsage(),
 		}, nil
 	}

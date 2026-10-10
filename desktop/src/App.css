@@ -530,7 +530,7 @@ body {
   gap: 10px;
   flex-wrap: wrap;
 }
-.create input {
+.create > input {
   flex: 1;
   min-width: 180px;
 }
@@ -704,6 +704,21 @@ body {
   border: 1px solid var(--border);
   border-radius: 10px;
   padding: 14px;
+}
+/* The brief can be longer than the chat; it scrolls inside its card while the
+   Accept button stays in view below it. */
+.clarify__side {
+  min-height: 0;
+  max-height: 70vh;
+}
+.clarify__scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+.clarify__side > .primary {
+  flex: none;
+  align-self: flex-start;
 }
 .clarify__side textarea {
   flex: 1;
@@ -1297,6 +1312,7 @@ button.primary {
 
 /* New work order — per-order options. */
 .neworder__options {
+  flex: none;
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: 10px 12px;
@@ -1322,16 +1338,59 @@ button.primary {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.neworder__body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin-top: 12px;
+}
+.neworder__group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.neworder__heading {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.neworder__options > .neworder__grid {
+  margin-top: 12px;
+}
+/* Two columns: provider and model per role, autonomy and merge side by side. */
 .neworder__grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  gap: 12px;
-  margin-top: 12px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 12px;
+  align-items: start;
 }
 .neworder__grid label {
   display: flex;
   flex-direction: column;
   gap: 4px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.neworder__grid select {
+  width: 100%;
+}
+.neworder__check {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  font-size: 13px;
+  color: var(--text);
+  cursor: pointer;
+}
+.neworder__check input {
+  flex: none;
+  margin: 2px 0 0;
+}
+.neworder__hint {
+  display: block;
+  margin-top: 2px;
   font-size: 12px;
   color: var(--muted);
 }
@@ -2592,10 +2651,6 @@ button.danger:not(.ghost) {
   width: auto;
   margin: 0;
 }
-.neworder__toggle {
-  grid-column: 1 / -1;
-  margin: 2px 0 0;
-}
 
 /* Independent acceptance-tests checklist (review phase). */
 /* Order body + right sidebar: the phase view on the left, the acceptance-tests
@@ -2777,4 +2832,22 @@ button.danger:not(.ghost) {
 .usage-table th {
   font-weight: 600;
   text-transform: capitalize;
+}
+
+.brief {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 8px 0;
+}
+.brief__card p {
+  margin: 2px 0 8px;
+  white-space: pre-wrap;
+}
+.brief__card ul {
+  margin: 2px 0 8px;
+  padding-left: 18px;
+}
+.brief--editing textarea {
+  width: 100%;
 }

@@ -18,7 +18,7 @@ type artifactWorkflowService struct {
 	*recordingWorkflowService
 	artifact         workflow.FeatureArtifact
 	artifactErr      error
-	putDraft         featureartifact.GoalDraft
+	putBrief         featureartifact.HandoffBrief
 	expectedRevision int
 	planVersion      int
 	stepID           string
@@ -60,16 +60,16 @@ func (s *artifactWorkflowService) GetFeatureArtifact(
 	return s.artifact, s.artifactErr
 }
 
-func (s *artifactWorkflowService) PutGoalDraft(
+func (s *artifactWorkflowService) PutHandoffBrief(
 	_ context.Context,
 	_ string,
 	expectedRevision int,
-	draft featureartifact.GoalDraft,
+	brief featureartifact.HandoffBrief,
 	actor workflow.Actor,
 	key string,
 ) (workflow.FeatureArtifact, error) {
 	s.expectedRevision = expectedRevision
-	s.putDraft = draft
+	s.putBrief = brief
 	s.artifactActor = actor
 	s.artifactKey = key
 	return s.artifact, s.artifactErr
@@ -124,19 +124,19 @@ func TestGetFeatureArtifact(t *testing.T) {
 	}
 }
 
-func TestPutGoalDraftArtifact(t *testing.T) {
+func TestPutHandoffBriefArtifact(t *testing.T) {
 	service := &artifactWorkflowService{
 		recordingWorkflowService: &recordingWorkflowService{},
 		artifact: workflow.FeatureArtifact{
-			FeatureID: "fea_test", Kind: featureartifact.KindGoalDraft, Revision: 3,
-			Document: `{"goal":"Edited goal.","open_questions":[]}`,
+			FeatureID: "fea_test", Kind: featureartifact.KindHandoffBrief, Revision: 3,
+			Document: `{"goal":"Edited goal.","areas":[],"considerations":[],"open_questions":[],"base_commit_id":""}`,
 			Actor:    workflow.Actor{Kind: workflow.ActorKindUser, ID: localUserID}, UpdatedAt: time.Now().UTC(),
 		},
 	}
 	features := &recordingFeatureService{getResult: feature.Feature{ID: "fea_test", ProjectID: "prj_test"}}
 	request := httptest.NewRequest(http.MethodPut,
-		"/api/v1/projects/prj_test/features/fea_test/artifacts/goal_draft",
-		strings.NewReader(`{"expected_revision":2,"document":{"goal":"Edited goal.","open_questions":[]}}`))
+		"/api/v1/projects/prj_test/features/fea_test/artifacts/handoff_brief",
+		strings.NewReader(`{"expected_revision":2,"document":{"goal":"Edited goal.","areas":["report export"],"considerations":[],"open_questions":[],"base_commit_id":""}}`))
 	request.Header.Set("Idempotency-Key", "edit-goal-1")
 	recorder := httptest.NewRecorder()
 
@@ -145,10 +145,10 @@ func TestPutGoalDraftArtifact(t *testing.T) {
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("expected status %d, got %d: %s", http.StatusOK, recorder.Code, recorder.Body.String())
 	}
-	if service.expectedRevision != 2 || service.putDraft.Goal != "Edited goal." ||
+	if service.expectedRevision != 2 || service.putBrief.Goal != "Edited goal." || len(service.putBrief.Areas) != 1 ||
 		service.artifactActor != (workflow.Actor{Kind: workflow.ActorKindUser, ID: localUserID}) ||
 		service.artifactKey != "edit-goal-1" {
-		t.Fatalf("unexpected goal update: %+v", service)
+		t.Fatalf("unexpected brief update: %+v", service)
 	}
 }
 

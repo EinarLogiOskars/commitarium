@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	workorderassistant "github.com/EinarLogiOskars/commitarium/internal/assistant"
 	"log"
 	"net/http"
 	"os"
@@ -341,6 +342,7 @@ func run(ctx context.Context, coordinatorConfig config) error {
 	var realWorkflowStarter httpapi.RealWorkflowStarter
 	var modelCatalogService httpapi.ModelCatalogService
 	var toolchainAssistantService httpapi.ToolchainAssistantService
+	var workOrderAssistant httpapi.WorkOrderAssistant
 	var deletionWorker projectdeletion.WorkerStopper
 	var deletionLiveSessions projectdeletion.LiveSessionRegistry
 	var assistantCleaner projectdeletion.AssistantCleaner
@@ -423,6 +425,18 @@ func run(ctx context.Context, coordinatorConfig config) error {
 		}
 		toolchainAssistantService = assistant
 		assistantCleaner = assistant
+		clarifier, err := workorderassistant.NewService(workorderassistant.Config{
+			Store: coordinatordatabase.NewAssistantStore(db), Features: featureService,
+			Workspaces: workspaceService, Briefs: workflowService, Transitions: workflowService,
+			Workers: map[project.AgentProvider]workorderassistant.Worker{
+				project.AgentProviderCodex:  {Service: leadClient, AgentProfileID: coordinatorConfig.codexAgentProfileID},
+				project.AgentProviderClaude: {Service: claudeLeadClient, AgentProfileID: coordinatorConfig.claudeAgentProfileID},
+			},
+		})
+		if err != nil {
+			return fmt.Errorf("create work-order assistant: %w", err)
+		}
+		workOrderAssistant = clarifier
 		ingestion := workeringest.NewService(executionService, workeringest.FilterFunc(
 			func(_ context.Context, event workerhttp.Event) (workerhttp.Event, error) {
 				return event, nil
@@ -461,7 +475,7 @@ func run(ctx context.Context, coordinatorConfig config) error {
 		}
 		remoteStarter, err := orchestration.NewRemoteLeadStarter(orchestration.RemoteLeadConfig{
 			Executions: executionService, Features: featureStore, Goals: workflowService,
-			Planning: workflowService, Artifacts: workflowService, Workspaces: workspaceService,
+			Planning: workflowService, Artifacts: workflowService, Briefs: workflowService, Workspaces: workspaceService,
 			Worker:              workerRouter,
 			Pump:                pumpRouter,
 			EnvironmentRequests: environmentService,
@@ -533,6 +547,7 @@ func run(ctx context.Context, coordinatorConfig config) error {
 		environmentService,
 		validationService,
 		executionStore,
+		workOrderAssistant,
 	)
 
 	log.Print("Listening...")

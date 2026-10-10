@@ -152,47 +152,63 @@ export function NewWorkOrder({
           </button>
 
           {showOptions && (
-            <div className="neworder__grid">
-              <AgentModelFields
-                providers={providers}
-                models={models}
-                modelsFor={modelsFor}
-                onChange={(p, m) => {
-                  setProviders(p);
-                  setModels(m);
-                }}
-                disabled={busy}
-              />
-              <label>
-                Autonomy
-                <select
-                  value={autonomy}
-                  onChange={(e) => setAutonomy(e.target.value as AutonomyPolicy)}
-                  disabled={busy}
-                >
-                  <option value="review_each_phase">Stop at each phase</option>
-                  <option value="run_to_completion">Run to the merge gate</option>
-                </select>
-              </label>
-              <label>
-                Merge
-                <select
-                  value={merge}
-                  onChange={(e) => setMerge(e.target.value as MergePolicy)}
-                  disabled={busy}
-                >
-                  <option value="require_user_approval">Require my approval</option>
-                  <option value="auto_after_gates">Auto after gates</option>
-                </select>
-              </label>
-              <label className="toggle neworder__toggle">
+            <div className="neworder__body">
+              <div className="neworder__group">
+                <span className="neworder__heading">Agents</span>
+                <div className="neworder__grid">
+                  <AgentModelFields
+                    providers={providers}
+                    models={models}
+                    modelsFor={modelsFor}
+                    onChange={(p, m) => {
+                      setProviders(p);
+                      setModels(m);
+                    }}
+                    disabled={busy}
+                  />
+                </div>
+              </div>
+              <div className="neworder__group">
+                <span className="neworder__heading">Workflow</span>
+                <div className="neworder__grid">
+                  <label>
+                    Autonomy
+                    <select
+                      value={autonomy}
+                      onChange={(e) => setAutonomy(e.target.value as AutonomyPolicy)}
+                      disabled={busy}
+                    >
+                      <option value="review_each_phase">Stop at each phase</option>
+                      <option value="run_to_completion">Run to the merge gate</option>
+                    </select>
+                  </label>
+                  <label>
+                    Merge
+                    <select
+                      value={merge}
+                      onChange={(e) => setMerge(e.target.value as MergePolicy)}
+                      disabled={busy}
+                    >
+                      <option value="require_user_approval">Require my approval</option>
+                      <option value="auto_after_gates">Auto after gates</option>
+                    </select>
+                  </label>
+                </div>
+              </div>
+              <label className="neworder__check">
                 <input
                   type="checkbox"
                   checked={independentTests}
                   onChange={(e) => setIndependentTests(e.target.checked)}
                   disabled={busy}
                 />
-                Independent acceptance tests
+                <span>
+                  Independent acceptance tests
+                  <span className="neworder__hint">
+                    The reviewer writes its own tests before seeing the code. Worth it when a wrong
+                    understanding is costly; it roughly doubles the reviewer&apos;s work.
+                  </span>
+                </span>
               </label>
             </div>
           )}

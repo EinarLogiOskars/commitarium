@@ -3,12 +3,10 @@ import { listFeatures } from "../api/features";
 import type { Feature, FeatureState } from "../api/types";
 
 const GROUPS: { label: string; states: FeatureState[] }[] = [
-  {
-    label: "In progress",
-    states: ["draft", "planning", "implementing", "reviewing", "ready_to_merge"],
-  },
-  { label: "Completed", states: ["completed"] },
-  { label: "Cancelled", states: ["cancelled"] },
+  { label: "Draft", states: ["draft"] },
+  { label: "Ready", states: ["ready"] },
+  { label: "In progress", states: ["planning", "implementing", "reviewing", "ready_to_merge"] },
+  { label: "Done", states: ["completed", "cancelled"] },
 ];
 
 /** Compact work-order list for the workspace rail. `reloadKey` bumps to refetch. */
@@ -66,7 +64,7 @@ export function WorkOrderRail({
 }
 
 function tone(state: FeatureState): "ok" | "bad" | "warn" | "muted" {
-  if (state === "completed" || state === "ready_to_merge") return "ok";
+  if (state === "completed" || state === "ready_to_merge" || state === "ready") return "ok";
   if (state === "cancelled" || state === "draft") return "muted";
   return "warn";
 }

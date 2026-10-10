@@ -20,7 +20,15 @@ type Service struct {
 	now        func() time.Time
 }
 
-func (s *Service) AcceptGoal(
+// GoalStarter records a Ready work order's goal from its handoff brief when
+// the user starts it (ADR-015).
+type GoalStarter interface {
+	AcceptGoalAtStart(ctx context.Context, acceptance GoalAcceptance) (Event, error)
+}
+
+// AcceptGoalAtStart records the accepted goal of a Ready work order. The
+// session is the lead session the run is about to create.
+func (s *Service) AcceptGoalAtStart(
 	ctx context.Context,
 	featureID string,
 	sessionID string,
@@ -28,13 +36,17 @@ func (s *Service) AcceptGoal(
 	actor Actor,
 	idempotencyKey string,
 ) (Event, error) {
-	event, err := s.store.AcceptGoal(ctx, GoalAcceptance{
+	store, ok := s.store.(GoalStarter)
+	if !ok {
+		return Event{}, ErrGoalAcceptanceNotAllowed
+	}
+	event, err := store.AcceptGoalAtStart(ctx, GoalAcceptance{
 		EventID: s.generateID(), FeatureID: featureID, SessionID: sessionID,
 		Goal: strings.TrimSpace(goal), Actor: actor,
 		OccurredAt: s.now().UTC(), IdempotencyKey: idempotencyKey,
 	})
 	if err != nil {
-		return Event{}, fmt.Errorf("accept goal for feature %q: %w", featureID, err)
+		return Event{}, fmt.Errorf("accept goal at start for feature %q: %w", featureID, err)
 	}
 	if s.broker != nil {
 		s.broker.publish(event)
@@ -116,31 +128,33 @@ func (s *Service) GetFeatureArtifact(
 	return store.GetFeatureArtifact(ctx, featureID, kind)
 }
 
-func (s *Service) PutGoalDraft(
+// PutHandoffBrief replaces the brief with optimistic concurrency.
+func (s *Service) PutHandoffBrief(
 	ctx context.Context,
 	featureID string,
 	expectedRevision int,
-	draft featureartifact.GoalDraft,
+	brief featureartifact.HandoffBrief,
 	actor Actor,
 	idempotencyKey string,
 ) (FeatureArtifact, error) {
-	if err := draft.Validate(); err != nil {
+	if err := brief.Validate(); err != nil {
 		return FeatureArtifact{}, err
 	}
-	return s.putFeatureArtifact(ctx, featureID, featureartifact.KindGoalDraft, expectedRevision, draft, actor, idempotencyKey)
+	return s.putFeatureArtifact(ctx, featureID, featureartifact.KindHandoffBrief, expectedRevision, brief, actor, idempotencyKey)
 }
 
-func (s *Service) UpsertGoalDraft(
+// UpsertHandoffBrief writes an agent-proposed brief over the latest revision.
+func (s *Service) UpsertHandoffBrief(
 	ctx context.Context,
 	featureID string,
-	draft featureartifact.GoalDraft,
+	brief featureartifact.HandoffBrief,
 	actor Actor,
 	idempotencyKey string,
 ) (FeatureArtifact, error) {
 	expected := 0
-	current, err := s.GetFeatureArtifact(ctx, featureID, featureartifact.KindGoalDraft)
+	current, err := s.GetFeatureArtifact(ctx, featureID, featureartifact.KindHandoffBrief)
 	if err == nil {
-		matches, compareErr := artifactDocumentMatches(current, draft)
+		matches, compareErr := artifactDocumentMatches(current, brief)
 		if compareErr != nil {
 			return FeatureArtifact{}, compareErr
 		}
@@ -151,7 +165,7 @@ func (s *Service) UpsertGoalDraft(
 	} else if !errors.Is(err, ErrArtifactNotFound) {
 		return FeatureArtifact{}, err
 	}
-	return s.PutGoalDraft(ctx, featureID, expected, draft, actor, idempotencyKey)
+	return s.PutHandoffBrief(ctx, featureID, expected, brief, actor, idempotencyKey)
 }
 
 func (s *Service) PutImplementationPlan(

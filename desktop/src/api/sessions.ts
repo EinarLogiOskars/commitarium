@@ -15,15 +15,3 @@ export const sendSessionMessage = (
     idempotencyKey,
     body: { type: "message", message },
   });
-
-/** Accept the clarified goal from a waiting draft lead session. */
-export const acceptGoal = (
-  sessionId: string,
-  goal: string,
-  idempotencyKey: string,
-): Promise<unknown> =>
-  request(`/api/v1/sessions/${encodeURIComponent(sessionId)}/goal-acceptance`, {
-    method: "POST",
-    idempotencyKey,
-    body: { goal },
-  });

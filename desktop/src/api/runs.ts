@@ -28,9 +28,6 @@ export const getPlanningMessages = (runId: string): Promise<PlanningMessage[]> =
 
 // Explicit phase actions. Each is empty-body + Idempotency-Key and safe to
 // retry; the backend's state gating prevents double-launch.
-export const startPlanning = (runId: string, key: string): Promise<Run> =>
-  request(`${runPath(runId)}/planning`, { method: "POST", idempotencyKey: key });
-
 export const startPlanningReviewer = (runId: string, key: string): Promise<Run> =>
   request(`${runPath(runId)}/planning/reviewer`, { method: "POST", idempotencyKey: key });
 

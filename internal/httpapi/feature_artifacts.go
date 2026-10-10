@@ -24,11 +24,6 @@ type featureArtifactResponse struct {
 	UpdatedAt time.Time            `json:"updated_at"`
 }
 
-type putGoalDraftRequest struct {
-	ExpectedRevision int                       `json:"expected_revision"`
-	Document         featureartifact.GoalDraft `json:"document"`
-}
-
 type transitionPlanStepRequest struct {
 	PlanVersion int                        `json:"plan_version"`
 	Status      featureartifact.StepStatus `json:"status"`
@@ -60,7 +55,13 @@ func (api *API) getFeatureArtifactHandler(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusOK, newFeatureArtifactResponse(artifact), "feature artifact")
 }
 
-func (api *API) putGoalDraftArtifactHandler(w http.ResponseWriter, r *http.Request) {
+type putHandoffBriefRequest struct {
+	ExpectedRevision int                          `json:"expected_revision"`
+	Document         featureartifact.HandoffBrief `json:"document"`
+}
+
+// putHandoffBriefArtifactHandler lets the user edit a work order's brief.
+func (api *API) putHandoffBriefArtifactHandler(w http.ResponseWriter, r *http.Request) {
 	projectID, featureID := r.PathValue("projectID"), r.PathValue("id")
 	if !api.requireFeature(w, r, projectID, featureID) {
 		return
@@ -70,12 +71,12 @@ func (api *API) putGoalDraftArtifactHandler(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusBadRequest, "idempotency_key_required", "Idempotency-Key header is required")
 		return
 	}
-	request := putGoalDraftRequest{}
+	request := putHandoffBriefRequest{}
 	if err := decodeArtifactJSONBody(r, &request); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_json", err.Error())
 		return
 	}
-	artifact, err := api.artifacts.PutGoalDraft(
+	artifact, err := api.artifacts.(HandoffBriefService).PutHandoffBrief(
 		r.Context(), featureID, request.ExpectedRevision, request.Document,
 		workflow.Actor{Kind: workflow.ActorKindUser, ID: localUserID}, key,
 	)
@@ -83,7 +84,7 @@ func (api *API) putGoalDraftArtifactHandler(w http.ResponseWriter, r *http.Reque
 		writeFeatureArtifactError(w, featureID, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, newFeatureArtifactResponse(artifact), "goal draft artifact")
+	writeJSON(w, http.StatusOK, newFeatureArtifactResponse(artifact), "handoff brief artifact")
 }
 
 func (api *API) transitionImplementationPlanStepHandler(w http.ResponseWriter, r *http.Request) {

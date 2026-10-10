@@ -6,11 +6,17 @@ never interpreted as a goal or implementation-plan update.
 
 ## Artifact kinds
 
-Three feature-scoped JSON artifacts are currently defined:
+Four feature-scoped JSON artifacts are currently defined:
 
-- `goal_draft` contains the lead's current proposed goal and any unresolved
-  questions. Accepting a goal still creates the immutable
-  `feature.goal_accepted` workflow fact.
+- `handoff_brief` is a clarified work order (ADR-015): `goal`, `areas` of the
+  code to touch, `considerations` worth planning around, remaining
+  `open_questions`, and the `base_commit_id` of the default branch it was
+  written against. The project assistant proposes it; the user can edit it
+  with `PUT …/artifacts/handoff_brief` and an `expected_revision`.
+- `goal_draft` contains the proposed goal from the lead's former
+  clarification. Older work orders still have it; it is no longer written.
+  Starting a Ready work order creates the immutable `feature.goal_accepted`
+  workflow fact from the handoff brief.
 - `implementation_plan` contains the agreed plan version, title, subtitle, and
   ordered commit-sized steps. Each step carries its intended commit subject,
   verification, current status, and completed commit identity.
@@ -31,17 +37,15 @@ stream replays and follows those events. A UI loads the current artifact once,
 then fetches the new revision when an SSE update arrives. `Last-Event-ID`
 retains the existing reconnect and gap-free replay behavior.
 
-## Goal clarification
+## Work-order clarification
 
-Goal-clarification turns use a structured provider result with independent
-fields for the conversational `message`, the current `goal`, and
-`open_questions`. The message remains in session history. A non-empty goal is
-persisted as a new `goal_draft` revision and is the only source for the proposed
-goal panel.
-
-The user may edit the current draft through the artifact API. The desktop then
-accepts that exact text through the existing goal-acceptance action. Project
-planning continues to consume only the immutable accepted goal.
+The project assistant's turns use the structured `work_order_brief` result:
+a conversational `message`, and when proposing, the brief's `goal`, `areas`,
+`considerations`, and `open_questions`. The message stays in the assistant's
+transcript; a proposal is persisted as a new `handoff_brief` revision with the
+checkout's base commit. The user may edit it through the artifact API.
+Planning consumes only the immutable accepted goal recorded from the brief at
+Start.
 
 ## Planning and implementation
 
@@ -160,8 +164,8 @@ The desktop should:
 4. Keep rendering the last valid revision during reconnects or transient
    failures.
 
-The clarification transcript renders session messages. The proposed-goal panel
-renders only `goal_draft.document.goal`. The implementation sidebar renders
+The clarification chat renders the assistant's messages; the brief card renders
+the `handoff_brief` document. The implementation sidebar renders
 `implementation_plan.document.steps`, using `title` and `subtitle` for the
 collapsed row and `details_markdown`, `verification`, `commit_subject`, and
 `commit_id` in the expanded view.
