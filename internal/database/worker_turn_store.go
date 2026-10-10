@@ -86,10 +86,8 @@ func (s *ExecutionStore) BeginWorkerTurn(
 	if featureState != admission.ExpectedFeatureState {
 		return execution.WorkerTurnAdmissionResult{}, false, execution.ErrStateConflict
 	}
-	validGoalBoundary := (featureState == feature.StateDraft &&
-		acceptedGoal == "" && !goalAcceptedAt.Valid) ||
-		(featureState == feature.StateImplementing &&
-			strings.TrimSpace(acceptedGoal) != "" && goalAcceptedAt.Valid)
+	validGoalBoundary := featureState == feature.StateImplementing &&
+		strings.TrimSpace(acceptedGoal) != "" && goalAcceptedAt.Valid
 	if !validGoalBoundary {
 		return execution.WorkerTurnAdmissionResult{}, false, execution.ErrStateConflict
 	}
@@ -232,9 +230,8 @@ func validateWorkerTurnAdmission(admission execution.WorkerTurnAdmission) error 
 		return fmt.Errorf("%w: previous event sequence cannot be negative", execution.ErrInvalidWorkerAttempt)
 	case admission.NextAttempt.AttemptID == admission.PreviousAttemptID:
 		return fmt.Errorf("%w: replacement attempt must be new", execution.ErrInvalidWorkerAttempt)
-	case admission.ExpectedFeatureState != feature.StateDraft &&
-		admission.ExpectedFeatureState != feature.StateImplementing:
-		return fmt.Errorf("%w: worker turn feature state must be draft or implementing", execution.ErrStateConflict)
+	case admission.ExpectedFeatureState != feature.StateImplementing:
+		return fmt.Errorf("%w: worker turn feature state must be implementing", execution.ErrStateConflict)
 	case strings.TrimSpace(admission.RunReason) == "":
 		return fmt.Errorf("%w: run reason is required", execution.ErrInvalidRun)
 	case admission.OccurredAt.IsZero():

@@ -42,7 +42,6 @@ this API beyond the host loopback interface is unsupported.
 | `GET` | `/api/v1/projects/{projectID}/features/{featureID}/events` | Retrieve durable workflow history |
 | `GET` | `/api/v1/projects/{projectID}/features/{featureID}/events/stream` | Replay and stream workflow history with SSE |
 | `GET` | `/api/v1/projects/{projectID}/features/{featureID}/artifacts/{kind}` | Read the current durable goal draft, implementation plan, or acceptance-test checklist |
-| `PUT` | `/api/v1/projects/{projectID}/features/{featureID}/artifacts/goal_draft` | Replace the editable proposed goal using optimistic concurrency |
 | `PUT` | `/api/v1/projects/{projectID}/features/{featureID}/artifacts/handoff_brief` | Replace the editable handoff brief using optimistic concurrency |
 | `POST` | `/api/v1/projects/{projectID}/features/{featureID}/assistant` | Start (or return) the draft work order's clarification with the project assistant |
 | `GET` | `/api/v1/projects/{projectID}/features/{featureID}/assistant` | Read the clarification conversation and status |
@@ -1010,10 +1009,13 @@ The assistant's turns count toward the work order's token usage under the role
 
 ## Feature artifacts and live checklists
 
-Conversational messages are not workflow documents. The coordinator stores three
+Conversational messages are not workflow documents. The coordinator stores
 feature-scoped, revisioned JSON artifacts separately from session history:
 
-- `goal_draft` is the lead's current proposed goal plus unresolved questions.
+- `handoff_brief` is the clarified work order the agents start from (see
+  Work-order clarification).
+- `goal_draft` is the proposed goal from the lead's former clarification. It is
+  still readable on older work orders and no longer written.
 - `implementation_plan` is the agreed plan version and its ordered,
   commit-sized implementation steps.
 - `acceptance_tests` is the reviewer's ordered private acceptance-test status
@@ -1022,49 +1024,54 @@ feature-scoped, revisioned JSON artifacts separately from session history:
 Read the latest revision with:
 
 ```http
-GET /api/v1/projects/prj_example/features/fea_example/artifacts/goal_draft
+GET /api/v1/projects/prj_example/features/fea_example/artifacts/handoff_brief
 ```
 
 ```json
 {
   "feature_id": "fea_example",
-  "kind": "goal_draft",
+  "kind": "handoff_brief",
   "revision": 3,
   "document": {
     "goal": "Export the visible report columns as CSV for administrators.",
-    "open_questions": []
+    "areas": ["report export: add a CSV writer next to the table view"],
+    "considerations": ["Large reports must stream rather than load in memory."],
+    "open_questions": [],
+    "base_commit_id": "0123456789abcdef0123456789abcdef01234567"
   },
-  "updated_by": {"kind": "agent", "id": "ses_lead"},
-  "updated_at": "2026-09-20T12:00:00Z"
+  "updated_by": {"kind": "agent", "id": "ast_opaque"},
+  "updated_at": "2026-10-10T12:00:00Z"
 }
 ```
 
-`kind` is `goal_draft`, `implementation_plan`, or `acceptance_tests`. An unknown feature returns
+`kind` is `handoff_brief`, `goal_draft`, `implementation_plan`, or
+`acceptance_tests`. An unknown feature returns
 `404 feature_not_found`; a recognized artifact that has not been created yet
 returns `404 artifact_not_found`.
 
-The user may edit a proposed goal before accepting it:
+The user may edit the handoff brief while the work order is a draft or ready:
 
 ```http
-PUT /api/v1/projects/prj_example/features/fea_example/artifacts/goal_draft
-Idempotency-Key: edit-goal-3
+PUT /api/v1/projects/prj_example/features/fea_example/artifacts/handoff_brief
+Idempotency-Key: edit-brief-3
 Content-Type: application/json
 
 {
   "expected_revision": 3,
   "document": {
     "goal": "Export the visible report columns as CSV for administrators and auditors.",
-    "open_questions": []
+    "areas": ["report export: add a CSV writer next to the table view"],
+    "considerations": [],
+    "open_questions": [],
+    "base_commit_id": "0123456789abcdef0123456789abcdef01234567"
   }
 }
 ```
 
 The response is the new artifact revision. A stale `expected_revision` returns
 `409 artifact_revision_conflict`; reload before applying another edit. Invalid
-or oversized content returns `400 invalid_feature_artifact`. Goal acceptance
-remains the existing explicit action and must be sent the exact goal the user
-reviewed. Once accepted, the immutable accepted goal—not later draft state—is
-the input to planning.
+or oversized content returns `400 invalid_feature_artifact`. At Start the brief
+becomes the immutable accepted goal, which is the input to planning.
 
 An implementation plan has this document shape:
 

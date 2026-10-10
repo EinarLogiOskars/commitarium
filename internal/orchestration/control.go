@@ -7,7 +7,6 @@ import (
 
 	"github.com/EinarLogiOskars/commitarium/internal/execution"
 	"github.com/EinarLogiOskars/commitarium/internal/worker"
-	"github.com/EinarLogiOskars/commitarium/internal/workflow"
 )
 
 type CommandExecution interface {
@@ -40,16 +39,6 @@ type Controller struct {
 }
 
 var ErrCommandNotAllowed = errors.New("command is not allowed for session state")
-
-func (c *Controller) AcceptGoal(
-	context.Context,
-	string,
-	string,
-	workflow.Actor,
-	string,
-) (workflow.Event, error) {
-	return workflow.Event{}, workflow.ErrGoalAcceptanceNotAllowed
-}
 
 func NewController(
 	executions CommandExecution,

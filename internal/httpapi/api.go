@@ -98,7 +98,6 @@ type WorkflowService interface {
 
 type FeatureArtifactService interface {
 	GetFeatureArtifact(context.Context, string, featureartifact.Kind) (workflow.FeatureArtifact, error)
-	PutGoalDraft(context.Context, string, int, featureartifact.GoalDraft, workflow.Actor, string) (workflow.FeatureArtifact, error)
 	TransitionImplementationPlanStep(context.Context, string, int, string, featureartifact.StepStatus, string, workflow.Actor, string) (workflow.FeatureArtifact, error)
 }
 
@@ -550,10 +549,6 @@ func newAPI(
 		mux.HandleFunc(
 			"GET /api/v1/projects/{projectID}/features/{id}/artifacts/{kind}",
 			api.getFeatureArtifactHandler,
-		)
-		mux.HandleFunc(
-			"PUT /api/v1/projects/{projectID}/features/{id}/artifacts/goal_draft",
-			api.putGoalDraftArtifactHandler,
 		)
 		if _, ok := api.artifacts.(HandoffBriefService); ok {
 			mux.HandleFunc(

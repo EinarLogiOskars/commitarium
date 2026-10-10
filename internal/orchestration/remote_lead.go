@@ -152,7 +152,6 @@ type RemoteLeadPlanningWorkflow interface {
 
 type RemoteLeadArtifactService interface {
 	GetFeatureArtifact(context.Context, string, featureartifact.Kind) (workflow.FeatureArtifact, error)
-	UpsertGoalDraft(context.Context, string, featureartifact.GoalDraft, workflow.Actor, string) (workflow.FeatureArtifact, error)
 	UpsertImplementationPlan(context.Context, string, featureartifact.ImplementationPlan, workflow.Actor, string) (workflow.FeatureArtifact, error)
 }
 
@@ -4063,21 +4062,6 @@ func (starter *RemoteLeadStarter) finish(
 
 	switch attempt.Result.Outcome {
 	case workerhttp.OutcomeCompleted:
-		if attempt.Result.GoalDraft != nil && starter.artifacts != nil {
-			run, loadErr := starter.executions.GetRun(ctx, request.runID)
-			if loadErr != nil {
-				starter.requireReview(ctx, request, loadErr)
-				return
-			}
-			if _, artifactErr := starter.artifacts.UpsertGoalDraft(
-				ctx, run.FeatureID, *attempt.Result.GoalDraft,
-				workflow.Actor{Kind: workflow.ActorKindAgent, ID: session.ID},
-				request.identity.AttemptID+":goal-draft",
-			); artifactErr != nil {
-				starter.requireReview(ctx, request, artifactErr)
-				return
-			}
-		}
 		if request.interventionID != "" {
 			if !worker.InterventionEffect(attempt.Result.InterventionEffect).IsValid() {
 				starter.requireReview(ctx, request, errors.New("completed intervention omitted its structured effect"))

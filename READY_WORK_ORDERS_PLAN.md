@@ -17,9 +17,9 @@ and the first piece of the project assistant.
 ## Status
 
 Done on `feat/ready-work-orders`: R1–R8, with the lead-clarification removal
-as its own commit after the desktop moved over. The data layer still has
-unreachable support for draft-state worker turns and the old goal-acceptance
-store method; removing them is a small follow-up.
+(including the data layer's draft-turn support, the old goal acceptance, and
+goal-draft writes) as separate commits after the desktop moved over. The
+assistant chat polls rather than streams; live streaming comes with sessions.
 
 ## Flow
 

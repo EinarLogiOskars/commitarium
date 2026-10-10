@@ -10,112 +10,48 @@ import (
 	"github.com/EinarLogiOskars/commitarium/internal/workflow"
 )
 
-func TestWorkflowStoreAcceptsGoalAtomicallyAndIdempotently(t *testing.T) {
-	db, executions := newTestExecutionStore(t)
-	run, session := createExecutionRecords(t, db, executions)
-	acceptanceTime := run.StartedAt.Add(time.Minute)
-	moveExecutionToUserWait(t, executions, run, session, acceptanceTime)
-	store := NewWorkflowStore(db)
-	features := NewFeatureStore(db)
+func TestWorkflowStoreAcceptsGoalAtStartOnlyForReadyFeatures(t *testing.T) {
+	store, features := newTestWorkflowStore(t)
+	created := createWorkflowTestFeature(t, features)
 	acceptance := workflow.GoalAcceptance{
-		EventID: "evt_goal", FeatureID: run.FeatureID, SessionID: session.ID,
-		Goal:       "Export reports as CSV.\n\n- Include a header row.",
+		EventID: "evt_goal", FeatureID: created.ID, SessionID: "run_start:lead",
+		Goal:       "Export reports as CSV.\n\nAreas to touch:\n- report export",
 		Actor:      workflow.Actor{Kind: workflow.ActorKindUser, ID: "local-user"},
-		OccurredAt: acceptanceTime.Add(time.Minute), IdempotencyKey: "accept-goal-1",
+		OccurredAt: created.CreatedAt.Add(time.Hour), IdempotencyKey: "run_start:start-goal",
+	}
+	if _, err := store.AcceptGoalAtStart(t.Context(), acceptance); !errors.Is(err, workflow.ErrGoalAcceptanceNotAllowed) {
+		t.Fatalf("draft goal acceptance error = %v", err)
+	}
+	if _, err := workflow.NewService(store).TransitionFeature(
+		t.Context(), created.ID, feature.StateReady,
+		workflow.Actor{Kind: workflow.ActorKindUser, ID: "local-user"}, "make-ready",
+	); err != nil {
+		t.Fatalf("make ready: %v", err)
 	}
 
-	event, err := store.AcceptGoal(t.Context(), acceptance)
-	if err != nil {
-		t.Fatalf("accept goal: %v", err)
+	event, err := store.AcceptGoalAtStart(t.Context(), acceptance)
+	if err != nil || event.Type != workflow.EventTypeGoalAccepted {
+		t.Fatalf("accept goal at start: event=%+v err=%v", event, err)
 	}
-	if event.Type != workflow.EventTypeGoalAccepted || event.Sequence != 1 {
-		t.Fatalf("unexpected goal event %+v", event)
+	stored, err := features.GetByID(t.Context(), created.ID)
+	if err != nil || stored.AcceptedGoal != acceptance.Goal || stored.GoalAcceptedAt == nil ||
+		stored.State != feature.StateReady {
+		t.Fatalf("stored feature=%+v err=%v", stored, err)
 	}
-	payload, err := workflow.DecodeGoalAcceptedPayload(event.PayloadVersion, event.Payload)
-	if err != nil {
-		t.Fatalf("decode goal event: %v", err)
-	}
-	if payload.Goal != acceptance.Goal || payload.SessionID != session.ID {
-		t.Fatalf("unexpected goal payload %+v", payload)
-	}
-
-	storedFeature, err := features.GetByID(t.Context(), run.FeatureID)
-	if err != nil {
-		t.Fatalf("get accepted feature: %v", err)
-	}
-	if storedFeature.State != feature.StateDraft || storedFeature.AcceptedGoal != acceptance.Goal ||
-		storedFeature.GoalAcceptedAt == nil || !storedFeature.GoalAcceptedAt.Equal(acceptance.OccurredAt) ||
-		storedFeature.UpdatedAt != acceptance.OccurredAt {
-		t.Fatalf("unexpected accepted feature %+v", storedFeature)
-	}
-	storedRun, err := executions.GetRun(t.Context(), run.ID)
-	if err != nil {
-		t.Fatalf("get accepted-goal run: %v", err)
-	}
-	if storedRun.Status != execution.RunStatusWaitingForUser || storedRun.Paused ||
-		storedRun.WaitKind != execution.RunWaitKindPhaseCheckpoint ||
-		storedRun.Reason != workflow.GoalAcceptedPlanningReason {
-		t.Fatalf("goal acceptance did not create planning checkpoint: %+v", storedRun)
-	}
-
 	retry := acceptance
-	retry.EventID = "evt_retry_ignored"
-	retry.OccurredAt = acceptance.OccurredAt.Add(time.Hour)
-	retried, err := store.AcceptGoal(t.Context(), retry)
-	if err != nil {
-		t.Fatalf("retry goal acceptance: %v", err)
+	retry.EventID = "evt_goal_retry"
+	if retried, err := store.AcceptGoalAtStart(t.Context(), retry); err != nil || retried.ID != event.ID {
+		t.Fatalf("retried acceptance=%+v err=%v", retried, err)
 	}
-	if retried != event {
-		t.Fatalf("expected original event %+v, got %+v", event, retried)
-	}
-	events, err := store.ListEvents(t.Context(), run.FeatureID)
-	if err != nil {
-		t.Fatalf("list goal events: %v", err)
-	}
-	if len(events) != 1 || events[0] != event {
-		t.Fatalf("expected one durable goal event, got %+v", events)
-	}
-
 	conflict := retry
-	conflict.Goal = "A different goal."
-	if _, err := store.AcceptGoal(t.Context(), conflict); !errors.Is(err, workflow.ErrIdempotencyConflict) {
-		t.Fatalf("expected error %v, got %v", workflow.ErrIdempotencyConflict, err)
+	conflict.Goal = "Something else."
+	if _, err := store.AcceptGoalAtStart(t.Context(), conflict); !errors.Is(err, workflow.ErrIdempotencyConflict) {
+		t.Fatalf("changed goal under the same key error = %v", err)
 	}
 	second := acceptance
-	second.EventID = "evt_second"
-	second.IdempotencyKey = "accept-goal-2"
-	if _, err := store.AcceptGoal(t.Context(), second); !errors.Is(err, workflow.ErrGoalAlreadyAccepted) {
-		t.Fatalf("expected error %v, got %v", workflow.ErrGoalAlreadyAccepted, err)
-	}
-}
-
-func TestWorkflowStoreRejectsGoalUnlessRunAndSessionAreWaiting(t *testing.T) {
-	db, executions := newTestExecutionStore(t)
-	run, session := createExecutionRecords(t, db, executions)
-	store := NewWorkflowStore(db)
-	acceptance := workflow.GoalAcceptance{
-		EventID: "evt_goal", FeatureID: run.FeatureID, SessionID: session.ID,
-		Goal:       "Export reports as CSV.",
-		Actor:      workflow.Actor{Kind: workflow.ActorKindUser, ID: "local-user"},
-		OccurredAt: run.StartedAt.Add(time.Minute), IdempotencyKey: "accept-goal-1",
-	}
-
-	if _, err := store.AcceptGoal(t.Context(), acceptance); !errors.Is(err, workflow.ErrGoalAcceptanceNotAllowed) {
-		t.Fatalf("expected error %v, got %v", workflow.ErrGoalAcceptanceNotAllowed, err)
-	}
-	storedFeature, err := NewFeatureStore(db).GetByID(t.Context(), run.FeatureID)
-	if err != nil {
-		t.Fatalf("get unchanged feature: %v", err)
-	}
-	if storedFeature.AcceptedGoal != "" || storedFeature.GoalAcceptedAt != nil {
-		t.Fatalf("goal was partially stored: %+v", storedFeature)
-	}
-	events, err := store.ListEvents(t.Context(), run.FeatureID)
-	if err != nil {
-		t.Fatalf("list unchanged events: %v", err)
-	}
-	if len(events) != 0 {
-		t.Fatalf("goal event was partially stored: %+v", events)
+	second.EventID, second.IdempotencyKey = "evt_goal_second", "run_other:start-goal"
+	if _, err := store.AcceptGoalAtStart(t.Context(), second); !errors.Is(err, workflow.ErrGoalAcceptanceNotAllowed) {
+		t.Fatalf("second acceptance error = %v", err)
 	}
 }
 

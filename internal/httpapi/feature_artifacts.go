@@ -24,11 +24,6 @@ type featureArtifactResponse struct {
 	UpdatedAt time.Time            `json:"updated_at"`
 }
 
-type putGoalDraftRequest struct {
-	ExpectedRevision int                       `json:"expected_revision"`
-	Document         featureartifact.GoalDraft `json:"document"`
-}
-
 type transitionPlanStepRequest struct {
 	PlanVersion int                        `json:"plan_version"`
 	Status      featureartifact.StepStatus `json:"status"`
@@ -58,32 +53,6 @@ func (api *API) getFeatureArtifactHandler(w http.ResponseWriter, r *http.Request
 		return
 	}
 	writeJSON(w, http.StatusOK, newFeatureArtifactResponse(artifact), "feature artifact")
-}
-
-func (api *API) putGoalDraftArtifactHandler(w http.ResponseWriter, r *http.Request) {
-	projectID, featureID := r.PathValue("projectID"), r.PathValue("id")
-	if !api.requireFeature(w, r, projectID, featureID) {
-		return
-	}
-	key := strings.TrimSpace(r.Header.Get("Idempotency-Key"))
-	if key == "" {
-		writeError(w, http.StatusBadRequest, "idempotency_key_required", "Idempotency-Key header is required")
-		return
-	}
-	request := putGoalDraftRequest{}
-	if err := decodeArtifactJSONBody(r, &request); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_json", err.Error())
-		return
-	}
-	artifact, err := api.artifacts.PutGoalDraft(
-		r.Context(), featureID, request.ExpectedRevision, request.Document,
-		workflow.Actor{Kind: workflow.ActorKindUser, ID: localUserID}, key,
-	)
-	if err != nil {
-		writeFeatureArtifactError(w, featureID, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, newFeatureArtifactResponse(artifact), "goal draft artifact")
 }
 
 type putHandoffBriefRequest struct {
