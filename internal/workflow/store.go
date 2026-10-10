@@ -50,7 +50,6 @@ var ErrInvalidGoalAcceptance = errors.New("invalid goal acceptance")
 var ErrGoalAcceptanceNotAllowed = errors.New("goal acceptance is not allowed")
 var ErrIdempotencyConflict = errors.New("idempotency key reused for a different command")
 
-
 func (transition FeatureTransition) Validate() error {
 	switch {
 	case strings.TrimSpace(transition.EventID) == "":
