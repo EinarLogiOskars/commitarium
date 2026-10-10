@@ -342,7 +342,7 @@ func TestRemoteLeadContinuesScopeChangeIntoVersionedReplanning(t *testing.T) {
 		SessionID: lead.ID, AttemptID: nextAttemptID,
 	}
 	assignment := workerhttp.Assignment{
-		AgentProfileID: "codex-default", ProjectID: storedProject.ID,
+		AgentProfileID: "codex", ProjectID: storedProject.ID,
 		FeatureID: storedFeature.ID, Role: workerhttp.RoleLead,
 		WorkspaceID: "wsp_replanning",
 	}
@@ -404,7 +404,7 @@ func TestRemoteLeadContinuesScopeChangeIntoVersionedReplanning(t *testing.T) {
 		Worker: workerStub, Pump: &conversationalRemoteLeadPump{
 			executions: executions, worker: workerStub,
 		},
-		Lifetime: t.Context(), AgentProfileID: "codex-default",
+		Lifetime: t.Context(),
 	})
 	if err != nil {
 		t.Fatalf("create replanning starter: %v", err)
@@ -627,7 +627,7 @@ func prepareRestingReviewerForReplanning(
 	stub.terminal[reference] = workerhttp.Attempt{
 		AttemptReference: reference, Mode: workerhttp.AttemptModeResume,
 		Assignment: workerhttp.Assignment{
-			AgentProfileID: "codex-default", ProjectID: storedProject.ID,
+			AgentProfileID: "codex", ProjectID: storedProject.ID,
 			FeatureID: storedFeature.ID, Role: workerhttp.RoleReviewer,
 			WorkspaceID: "wsp_replanning",
 		},
@@ -664,7 +664,7 @@ func addVersionedPlanningAttempt(
 	initial := workerhttp.Attempt{
 		AttemptReference: reference, Mode: workerhttp.AttemptModeResume,
 		Assignment: workerhttp.Assignment{
-			AgentProfileID: "codex-default", ProjectID: projectID,
+			AgentProfileID: "codex", ProjectID: projectID,
 			FeatureID: featureID, Role: role, WorkspaceID: "wsp_replanning",
 		},
 		ProviderSessionID: providerSessionID,
@@ -708,7 +708,7 @@ func addVersionedImplementationBlocker(
 	initial := workerhttp.Attempt{
 		AttemptReference: reference, Mode: workerhttp.AttemptModeResume,
 		Assignment: workerhttp.Assignment{
-			AgentProfileID: "codex-default", ProjectID: projectID,
+			AgentProfileID: "codex", ProjectID: projectID,
 			FeatureID: featureID, Role: workerhttp.RoleLead, WorkspaceID: "wsp_replanning",
 		},
 		ProviderSessionID: providerSessionID,
@@ -816,7 +816,7 @@ func interventionWorker(
 	initial := workerhttp.Attempt{
 		AttemptReference: reference, Mode: workerhttp.AttemptModeResume,
 		Assignment: workerhttp.Assignment{
-			AgentProfileID: "codex-default", ProjectID: projectID, FeatureID: featureID,
+			AgentProfileID: "codex", ProjectID: projectID, FeatureID: featureID,
 			Role: workerhttp.Role(session.Role), WorkspaceID: "wsp_intervention",
 		},
 		ProviderSessionID: session.ProviderSessionID,
@@ -888,7 +888,7 @@ func interventionStarter(
 		Goals:      workflow.NewService(database.NewWorkflowStore(db)),
 		Workspaces: workspaceStub, Worker: client,
 		Pump:     workeringest.NewPump(executions, ingester, workeringest.NewHTTPAttemptSource(client)),
-		Lifetime: t.Context(), AgentProfileID: "codex-default",
+		Lifetime: t.Context(),
 	})
 	if err != nil {
 		t.Fatalf("create intervention starter: %v", err)

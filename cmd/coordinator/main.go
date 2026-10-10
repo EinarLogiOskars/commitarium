@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/EinarLogiOskars/commitarium/internal/agent"
+	"github.com/EinarLogiOskars/commitarium/internal/agentworker"
 	workorderassistant "github.com/EinarLogiOskars/commitarium/internal/assistant"
 	"log"
 	"net/http"
@@ -24,7 +25,6 @@ import (
 	"github.com/EinarLogiOskars/commitarium/internal/project"
 	"github.com/EinarLogiOskars/commitarium/internal/projectdeletion"
 	"github.com/EinarLogiOskars/commitarium/internal/projectenvironment"
-	"github.com/EinarLogiOskars/commitarium/internal/secretfile"
 	"github.com/EinarLogiOskars/commitarium/internal/toolchain"
 	"github.com/EinarLogiOskars/commitarium/internal/validation"
 	"github.com/EinarLogiOskars/commitarium/internal/workerhttp"
@@ -48,40 +48,27 @@ const (
 	defaultWorkspaceRoot          = "/workspaces"
 	defaultReviewerWorkspaceRoot  = "/reviewer-workspaces"
 	defaultToolchainRoot          = "/var/lib/commitarium-toolchains"
+	defaultAgentWorkerTokenDir    = "/run/commitarium-agent-workers"
 )
 
 type config struct {
-	databasePath                 string
-	runnerMode                   string
-	simulatedStepDelay           time.Duration
-	codexWorkerURL               string
-	codexWorkerToken             string
-	codexAgentProfileID          string
-	codexReviewerWorkerURL       string
-	codexReviewerWorkerToken     string
-	codexReviewerAgentProfileID  string
-	codexForgejoAuthor           string
-	codexReviewerForgejoAuthor   string
-	claudeWorkerURL              string
-	claudeWorkerToken            string
-	claudeAgentProfileID         string
-	claudeReviewerWorkerURL      string
-	claudeReviewerWorkerToken    string
-	claudeReviewerAgentProfileID string
-	claudeForgejoAuthor          string
-	claudeReviewerForgejoAuthor  string
-	workerRequestTimeout         time.Duration
-	attemptStartTimeout          time.Duration
-	forgejoURL                   string
-	forgejoOwner                 string
-	forgejoHostURL               string
-	forgejoTokenFile             string
-	forgejoViewerLogin           string
-	forgejoTimeout               time.Duration
-	workspaceRoot                string
-	reviewerWorkspaceRoot        string
-	toolchainRoot                string
-	gitExecutable                string
+	databasePath           string
+	runnerMode             string
+	simulatedStepDelay     time.Duration
+	agentWorkerURLTemplate string
+	agentWorkerTokenDir    string
+	workerRequestTimeout   time.Duration
+	attemptStartTimeout    time.Duration
+	forgejoURL             string
+	forgejoOwner           string
+	forgejoHostURL         string
+	forgejoTokenFile       string
+	forgejoViewerLogin     string
+	forgejoTimeout         time.Duration
+	workspaceRoot          string
+	reviewerWorkspaceRoot  string
+	toolchainRoot          string
+	gitExecutable          string
 }
 
 func main() {
@@ -122,23 +109,21 @@ func loadConfig(getenv func(string) string) (config, error) {
 	}
 	loaded := config{
 		databasePath: databasePath, runnerMode: runnerMode,
-		simulatedStepDelay:          simulatedStepDelay,
-		workerRequestTimeout:        defaultWorkerRequestTimeout,
-		attemptStartTimeout:         defaultAttemptStartTimeout,
-		forgejoURL:                  defaultForgejoURL,
-		forgejoOwner:                "commitarium_admin",
-		forgejoHostURL:              defaultForgejoHostURL,
-		forgejoTokenFile:            defaultForgejoTokenFile,
-		forgejoViewerLogin:          defaultForgejoViewerLogin,
-		forgejoTimeout:              defaultForgejoTimeout,
-		workspaceRoot:               defaultWorkspaceRoot,
-		reviewerWorkspaceRoot:       defaultReviewerWorkspaceRoot,
-		toolchainRoot:               defaultToolchainRoot,
-		gitExecutable:               "git",
-		codexForgejoAuthor:          "codex-lead",
-		codexReviewerForgejoAuthor:  "codex-reviewer",
-		claudeForgejoAuthor:         "claude-lead",
-		claudeReviewerForgejoAuthor: "claude-reviewer",
+		simulatedStepDelay:     simulatedStepDelay,
+		workerRequestTimeout:   defaultWorkerRequestTimeout,
+		attemptStartTimeout:    defaultAttemptStartTimeout,
+		forgejoURL:             defaultForgejoURL,
+		forgejoOwner:           "commitarium_admin",
+		forgejoHostURL:         defaultForgejoHostURL,
+		forgejoTokenFile:       defaultForgejoTokenFile,
+		forgejoViewerLogin:     defaultForgejoViewerLogin,
+		forgejoTimeout:         defaultForgejoTimeout,
+		workspaceRoot:          defaultWorkspaceRoot,
+		reviewerWorkspaceRoot:  defaultReviewerWorkspaceRoot,
+		toolchainRoot:          defaultToolchainRoot,
+		gitExecutable:          "git",
+		agentWorkerURLTemplate: agentworker.DefaultURLTemplate,
+		agentWorkerTokenDir:    defaultAgentWorkerTokenDir,
 	}
 	if value := strings.TrimSpace(getenv("COMMITARIUM_FORGEJO_URL")); value != "" {
 		loaded.forgejoURL = value
@@ -175,74 +160,17 @@ func loadConfig(getenv func(string) string) (config, error) {
 		loaded.gitExecutable = value
 	}
 	if runnerMode == realAgentsRunnerMode {
-		required := func(name string) (string, error) {
-			value := strings.TrimSpace(getenv(name))
-			if value == "" {
-				return "", fmt.Errorf("%s is required in real_agents mode", name)
-			}
-			return value, nil
-		}
 		var err error
-		if loaded.codexWorkerURL, err = required("COMMITARIUM_CODEX_WORKER_URL"); err != nil {
-			return config{}, err
+		if value := strings.TrimSpace(getenv("COMMITARIUM_AGENT_WORKER_URL_TEMPLATE")); value != "" {
+			loaded.agentWorkerURLTemplate = value
 		}
-		if loaded.codexWorkerToken, err = secretfile.RequiredPath(
-			getenv, "COMMITARIUM_CODEX_WORKER_TOKEN_FILE", "Codex lead worker API token",
-		); err != nil {
-			return config{}, err
+		if value := strings.TrimSpace(getenv("COMMITARIUM_AGENT_WORKER_TOKEN_DIR")); value != "" {
+			loaded.agentWorkerTokenDir = value
 		}
-		if loaded.codexAgentProfileID, err = required("COMMITARIUM_CODEX_PROFILE_ID"); err != nil {
-			return config{}, err
-		}
-		if loaded.codexReviewerWorkerURL, err = required("COMMITARIUM_CODEX_REVIEWER_WORKER_URL"); err != nil {
-			return config{}, err
-		}
-		if loaded.codexReviewerWorkerToken, err = secretfile.RequiredPath(
-			getenv, "COMMITARIUM_CODEX_REVIEWER_WORKER_TOKEN_FILE", "Codex reviewer worker API token",
-		); err != nil {
-			return config{}, err
-		}
-		if loaded.codexReviewerAgentProfileID, err = required("COMMITARIUM_CODEX_REVIEWER_PROFILE_ID"); err != nil {
-			return config{}, err
-		}
-		if loaded.claudeWorkerURL, err = required("COMMITARIUM_CLAUDE_WORKER_URL"); err != nil {
-			return config{}, err
-		}
-		if loaded.claudeWorkerToken, err = secretfile.RequiredPath(
-			getenv, "COMMITARIUM_CLAUDE_WORKER_TOKEN_FILE", "Claude lead worker API token",
-		); err != nil {
-			return config{}, err
-		}
-		if loaded.claudeAgentProfileID, err = required("COMMITARIUM_CLAUDE_PROFILE_ID"); err != nil {
-			return config{}, err
-		}
-		if loaded.claudeReviewerWorkerURL, err = required("COMMITARIUM_CLAUDE_REVIEWER_WORKER_URL"); err != nil {
-			return config{}, err
-		}
-		if loaded.claudeReviewerWorkerToken, err = secretfile.RequiredPath(
-			getenv, "COMMITARIUM_CLAUDE_REVIEWER_WORKER_TOKEN_FILE", "Claude reviewer worker API token",
-		); err != nil {
-			return config{}, err
-		}
-		if loaded.claudeReviewerAgentProfileID, err = required("COMMITARIUM_CLAUDE_REVIEWER_PROFILE_ID"); err != nil {
-			return config{}, err
-		}
-		if value := strings.TrimSpace(getenv("COMMITARIUM_CODEX_FORGEJO_LOGIN")); value != "" {
-			loaded.codexForgejoAuthor = value
-		}
-		if value := strings.TrimSpace(getenv("COMMITARIUM_CODEX_REVIEWER_FORGEJO_LOGIN")); value != "" {
-			loaded.codexReviewerForgejoAuthor = value
-		}
-		if value := strings.TrimSpace(getenv("COMMITARIUM_CLAUDE_FORGEJO_LOGIN")); value != "" {
-			loaded.claudeForgejoAuthor = value
-		}
-		if value := strings.TrimSpace(getenv("COMMITARIUM_CLAUDE_REVIEWER_FORGEJO_LOGIN")); value != "" {
-			loaded.claudeReviewerForgejoAuthor = value
-		}
-		if value := strings.TrimSpace(getenv("COMMITARIUM_CODEX_WORKER_REQUEST_TIMEOUT")); value != "" {
+		if value := strings.TrimSpace(getenv("COMMITARIUM_WORKER_REQUEST_TIMEOUT")); value != "" {
 			loaded.workerRequestTimeout, err = time.ParseDuration(value)
 			if err != nil || loaded.workerRequestTimeout <= 0 {
-				return config{}, errors.New("COMMITARIUM_CODEX_WORKER_REQUEST_TIMEOUT must be a positive duration")
+				return config{}, errors.New("COMMITARIUM_WORKER_REQUEST_TIMEOUT must be a positive duration")
 			}
 		}
 		if value := strings.TrimSpace(getenv("COMMITARIUM_WORKER_ATTEMPT_START_TIMEOUT")); value != "" {
@@ -271,15 +199,21 @@ func run(ctx context.Context, coordinatorConfig config) error {
 	}
 
 	projectStore := coordinatordatabase.NewProjectStore(db)
+	agentService := agent.NewService(coordinatordatabase.NewAgentStore(db))
 	forgejoClient, err := forgejo.NewClient(forgejo.ClientConfig{
 		BaseURL: coordinatorConfig.forgejoURL, HostBaseURL: coordinatorConfig.forgejoHostURL,
 		Owner:     coordinatorConfig.forgejoOwner,
 		TokenFile: coordinatorConfig.forgejoTokenFile,
-		Collaborators: []string{
-			coordinatorConfig.codexForgejoAuthor,
-			coordinatorConfig.codexReviewerForgejoAuthor,
-			coordinatorConfig.claudeForgejoAuthor,
-			coordinatorConfig.claudeReviewerForgejoAuthor,
+		AgentCollaborators: func(ctx context.Context) ([]string, error) {
+			agents, err := agentService.List(ctx)
+			if err != nil {
+				return nil, err
+			}
+			identities := make([]string, 0, 2*len(agents))
+			for _, configured := range agents {
+				identities = append(identities, configured.ID+"-lead", configured.ID+"-reviewer")
+			}
+			return identities, nil
 		},
 		ReadCollaborators: []string{coordinatorConfig.forgejoViewerLogin},
 		RequestTimeout:    coordinatorConfig.forgejoTimeout,
@@ -361,49 +295,26 @@ func run(ctx context.Context, coordinatorConfig config) error {
 		runStarter = simulatedStarter
 		runRecoverer = simulatedStarter
 	case realAgentsRunnerMode:
-		leadClient, err := workerhttp.NewClient(workerhttp.ClientConfig{
-			BaseURL:             coordinatorConfig.codexWorkerURL,
-			BearerToken:         coordinatorConfig.codexWorkerToken,
+		agentWorkers, err := agentworker.New(agentworker.Config{
+			URLTemplate:         coordinatorConfig.agentWorkerURLTemplate,
+			TokenDir:            coordinatorConfig.agentWorkerTokenDir,
 			RequestTimeout:      coordinatorConfig.workerRequestTimeout,
 			AttemptStartTimeout: coordinatorConfig.attemptStartTimeout,
 		})
 		if err != nil {
-			return fmt.Errorf("create Codex lead worker client: %w", err)
+			return fmt.Errorf("create agent worker registry: %w", err)
 		}
-		reviewerClient, err := workerhttp.NewClient(workerhttp.ClientConfig{
-			BaseURL:             coordinatorConfig.codexReviewerWorkerURL,
-			BearerToken:         coordinatorConfig.codexReviewerWorkerToken,
-			RequestTimeout:      coordinatorConfig.workerRequestTimeout,
-			AttemptStartTimeout: coordinatorConfig.attemptStartTimeout,
-		})
-		if err != nil {
-			return fmt.Errorf("create Codex reviewer worker client: %w", err)
+		modelSource := func(provider project.AgentProvider) modelcatalog.Source {
+			return agentworker.ModelSource{Workers: agentWorkers.Models, Agents: agentService, Provider: provider}
 		}
-		claudeLeadClient, err := workerhttp.NewClient(workerhttp.ClientConfig{
-			BaseURL:             coordinatorConfig.claudeWorkerURL,
-			BearerToken:         coordinatorConfig.claudeWorkerToken,
-			RequestTimeout:      coordinatorConfig.workerRequestTimeout,
-			AttemptStartTimeout: coordinatorConfig.attemptStartTimeout,
-		})
-		if err != nil {
-			return fmt.Errorf("create Claude lead worker client: %w", err)
-		}
-		claudeReviewerClient, err := workerhttp.NewClient(workerhttp.ClientConfig{
-			BaseURL:             coordinatorConfig.claudeReviewerWorkerURL,
-			BearerToken:         coordinatorConfig.claudeReviewerWorkerToken,
-			RequestTimeout:      coordinatorConfig.workerRequestTimeout,
-			AttemptStartTimeout: coordinatorConfig.attemptStartTimeout,
-		})
-		if err != nil {
-			return fmt.Errorf("create Claude reviewer worker client: %w", err)
-		}
+		// Model catalogs stay per provider: any agent of the provider answers.
 		catalog, err := modelcatalog.New(
 			coordinatordatabase.NewModelCatalogStore(db),
 			map[modelcatalog.SourceKey]modelcatalog.Source{
-				{Provider: project.AgentProviderCodex, Role: modelcatalog.RoleLead}:      leadClient,
-				{Provider: project.AgentProviderCodex, Role: modelcatalog.RoleReviewer}:  reviewerClient,
-				{Provider: project.AgentProviderClaude, Role: modelcatalog.RoleLead}:     claudeLeadClient,
-				{Provider: project.AgentProviderClaude, Role: modelcatalog.RoleReviewer}: claudeReviewerClient,
+				{Provider: project.AgentProviderCodex, Role: modelcatalog.RoleLead}:      modelSource(project.AgentProviderCodex),
+				{Provider: project.AgentProviderCodex, Role: modelcatalog.RoleReviewer}:  modelSource(project.AgentProviderCodex),
+				{Provider: project.AgentProviderClaude, Role: modelcatalog.RoleLead}:     modelSource(project.AgentProviderClaude),
+				{Provider: project.AgentProviderClaude, Role: modelcatalog.RoleReviewer}: modelSource(project.AgentProviderClaude),
 			},
 		)
 		if err != nil {
@@ -416,10 +327,7 @@ func run(ctx context.Context, coordinatorConfig config) error {
 		modelCatalogService = catalog
 		assistant, err := toolchain.NewAssistant(
 			coordinatorConfig.toolchainRoot, coordinatorConfig.workspaceRoot, projectService, toolchainService,
-			map[project.AgentProvider]toolchain.AssistantWorker{
-				project.AgentProviderCodex:  {Service: leadClient, AgentProfileID: coordinatorConfig.codexAgentProfileID},
-				project.AgentProviderClaude: {Service: claudeLeadClient, AgentProfileID: coordinatorConfig.claudeAgentProfileID},
-			},
+			func(agentID string) (workerhttp.Service, error) { return agentWorkers.Client(agentID) },
 		)
 		if err != nil {
 			return fmt.Errorf("create project toolchain assistant: %w", err)
@@ -429,9 +337,8 @@ func run(ctx context.Context, coordinatorConfig config) error {
 		clarifier, err := workorderassistant.NewService(workorderassistant.Config{
 			Store: coordinatordatabase.NewAssistantStore(db), Features: featureService,
 			Workspaces: workspaceService, Briefs: workflowService, Transitions: workflowService,
-			Workers: map[project.AgentProvider]workorderassistant.Worker{
-				project.AgentProviderCodex:  {Service: leadClient, AgentProfileID: coordinatorConfig.codexAgentProfileID},
-				project.AgentProviderClaude: {Service: claudeLeadClient, AgentProfileID: coordinatorConfig.claudeAgentProfileID},
+			Workers: func(agentID string) (workorderassistant.WorkerService, error) {
+				return agentWorkers.Client(agentID)
 			},
 		})
 		if err != nil {
@@ -443,36 +350,28 @@ func run(ctx context.Context, coordinatorConfig config) error {
 				return event, nil
 			},
 		))
-		workerRouter, err := orchestration.NewProviderRoutedWorker(
+		workerRouter, err := orchestration.NewAgentRoutedWorker(
 			executionService,
-			orchestration.ProviderWorkerRoutes{
-				CodexLead: leadClient, CodexReviewer: reviewerClient,
-				ClaudeLead: claudeLeadClient, ClaudeReviewer: claudeReviewerClient,
-			},
+			func(agentID string) (orchestration.RemoteLeadWorker, error) { return agentWorkers.Client(agentID) },
 		)
 		if err != nil {
-			return fmt.Errorf("create provider worker router: %w", err)
+			return fmt.Errorf("create agent worker router: %w", err)
 		}
 		deletionWorker = workerRouter
-		pumpRouter, err := orchestration.NewProviderRoutedPump(
+		pumpRouter, err := orchestration.NewAgentRoutedPump(
 			executionService,
-			orchestration.ProviderPumpRoutes{
-				CodexLead: workeringest.NewRecoveringPump(
-					executionService, ingestion, workeringest.NewHTTPAttemptSource(leadClient),
-				),
-				CodexReviewer: workeringest.NewRecoveringPump(
-					executionService, ingestion, workeringest.NewHTTPAttemptSource(reviewerClient),
-				),
-				ClaudeLead: workeringest.NewRecoveringPump(
-					executionService, ingestion, workeringest.NewHTTPAttemptSource(claudeLeadClient),
-				),
-				ClaudeReviewer: workeringest.NewRecoveringPump(
-					executionService, ingestion, workeringest.NewHTTPAttemptSource(claudeReviewerClient),
-				),
+			func(agentID string) (orchestration.RemoteLeadPump, error) {
+				client, err := agentWorkers.Client(agentID)
+				if err != nil {
+					return nil, err
+				}
+				return workeringest.NewRecoveringPump(
+					executionService, ingestion, workeringest.NewHTTPAttemptSource(client),
+				), nil
 			},
 		)
 		if err != nil {
-			return fmt.Errorf("create provider event-pump router: %w", err)
+			return fmt.Errorf("create agent event-pump router: %w", err)
 		}
 		remoteStarter, err := orchestration.NewRemoteLeadStarter(orchestration.RemoteLeadConfig{
 			Executions: executionService, Features: featureStore, Goals: workflowService,
@@ -483,15 +382,8 @@ func run(ctx context.Context, coordinatorConfig config) error {
 			Validation:          validationService,
 			Toolchains:          toolchainService,
 			Usage:               executionStore,
-			Lifetime:            ctx, AgentProfileID: coordinatorConfig.codexAgentProfileID,
-			ReviewerAgentProfileID:       coordinatorConfig.codexReviewerAgentProfileID,
-			ClaudeAgentProfileID:         coordinatorConfig.claudeAgentProfileID,
-			ClaudeReviewerAgentProfileID: coordinatorConfig.claudeReviewerAgentProfileID,
-			ForgejoAuthor:                coordinatorConfig.codexForgejoAuthor,
-			ReviewerForgejoAuthor:        coordinatorConfig.codexReviewerForgejoAuthor,
-			ClaudeForgejoAuthor:          coordinatorConfig.claudeForgejoAuthor,
-			ClaudeReviewerForgejoAuthor:  coordinatorConfig.claudeReviewerForgejoAuthor,
-			ReportError:                  func(err error) { log.Printf("real agent workflow: %v", err) },
+			Lifetime:            ctx,
+			ReportError:         func(err error) { log.Printf("real agent workflow: %v", err) },
 		})
 		if err != nil {
 			return fmt.Errorf("create real agent workflow runner: %w", err)
@@ -549,7 +441,7 @@ func run(ctx context.Context, coordinatorConfig config) error {
 		validationService,
 		executionStore,
 		workOrderAssistant,
-		agent.NewService(coordinatordatabase.NewAgentStore(db)),
+		agentService,
 	)
 
 	log.Print("Listening...")

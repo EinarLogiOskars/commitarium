@@ -62,8 +62,9 @@ The user's four logins are two subscriptions, each logged in twice.
 8. **Concurrency stays unlimited and becomes honest:** workers advertise
    that they do not limit attempts, and a test runs two attempts on one
    worker at the same time.
-9. **Model catalogs and both assistants are keyed by agent** instead of by
-   provider and role.
+9. **Both assistants pick an agent.** Model catalogs stay per provider: the
+   models depend on the provider, so any connected agent of that provider
+   answers the catalog request.
 
 ## Slices
 
@@ -72,7 +73,7 @@ The user's four logins are two subscriptions, each logged in twice.
 | A1 | `docs: add ADR-016 for agents` | ADR-016 (amends ADR-005's one-profile-per-role and ADR-009's per-profile identities), this plan, V1_VISION status. | — |
 | A2 | `feat(worker): serve both roles on one worker` | Role-keyed workspace roots and Forgejo environment in the worker; the assignment role selects them. Accept any assignment for the worker's own agent. Advertise no attempt limit; a test runs two attempts concurrently on one worker service. Existing four-worker compose keeps working (each worker still only receives its role). | A1 |
 | A3 | `feat(agents): store agents in the coordinator` | `agents` table and store; migration seeding `codex` and `claude` agents; API to list, create, rename, and remove agents (removal refused while a project default or an active run uses it). Docs. | A1 |
-| A4 | `feat(orchestration): route turns to agent workers` | A worker registry resolves an agent ID to a client by convention (URL and token file read on demand), replacing `ProviderWorkerRoutes` and the eight profile/author settings. Profile ID and Forgejo author derive from agent and role. Model catalogs keyed by agent; both assistants pick an agent. | A2, A3 |
+| A4 | `feat(orchestration): route turns to agent workers` | A worker registry resolves an agent ID to a client by convention (URL and token file read on demand), replacing `ProviderWorkerRoutes` and the eight profile/author settings. Profile ID (the agent ID) and Forgejo author (`<agent>-<role>`) derive from agent and role. Forgejo collaborators come from the agent list. Model catalogs stay per provider, answered by any of its agents; both assistants pick an agent. | A2, A3 |
 | A5 | `feat: let work orders choose agents` | Lead and reviewer agent on projects, features, and runs (migration adding agent columns backfilled from the providers; provider derived from the agent). API, desktop types, and validation. | A3, A4 |
 | A6 | `feat(desktop): run one worker per agent` | Tauri: generated compose overlay per agent (profile, journal, both workspace trees, both Forgejo tokens, bearer token), Forgejo identity pair and bearer token provisioned per agent, reconcile starts connected agents and stops the rest. Login, status, and disconnect target an agent instead of a fixed profile. | A3 |
 | A7 | `feat(desktop): migrate the four profiles to agents` | One-time migration on stack update: the two lead volumes become the `codex` and `claude` agents and the old services and their tokens are retired. Idempotent and safe to repeat. | A6 |

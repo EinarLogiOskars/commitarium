@@ -102,8 +102,11 @@ func newAssistant(t *testing.T) (*assistant.Service, *scriptedWorker, *workflow.
 	service, err := assistant.NewService(assistant.Config{
 		Store: database.NewAssistantStore(db), Features: features,
 		Workspaces: workspaceStub{}, Briefs: briefs, Transitions: briefs,
-		Workers: map[project.AgentProvider]assistant.Worker{
-			project.AgentProviderClaude: {Service: worker, AgentProfileID: "claude-default"},
+		Workers: func(agentID string) (assistant.WorkerService, error) {
+			if agentID != "claude" {
+				return nil, errors.New("unknown agent")
+			}
+			return worker, nil
 		},
 		Now: func() time.Time { return time.Date(2026, time.October, 9, 12, 0, 0, 0, time.UTC) },
 	})

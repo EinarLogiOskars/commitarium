@@ -49,8 +49,6 @@ const (
 	interventionAnsweredReason            = "The selected agent answered the intervention. The workflow remains paused until the user explicitly continues it."
 	replanningRunningReason               = "The lead is reconciling the preserved feature branch and proposing a revised plan."
 	replanningProposalReason              = "The lead's revised planning proposal is ready for reviewer consultation."
-	defaultLeadForgejoAuthor              = "codex-lead"
-	defaultReviewerForgejoAuthor          = "codex-reviewer"
 )
 
 type planningStage string
@@ -231,29 +229,21 @@ func (starter *RemoteLeadStarter) EnsureValidationJob(
 }
 
 type RemoteLeadConfig struct {
-	Executions                   RemoteLeadExecution
-	Features                     RemoteLeadFeatureFinder
-	Goals                        RemoteLeadGoalService
-	Planning                     RemoteLeadPlanningWorkflow
-	Artifacts                    RemoteLeadArtifactService
-	Briefs                       RemoteLeadBriefReader
-	Workspaces                   RemoteLeadWorkspaceService
-	Worker                       RemoteLeadWorker
-	Pump                         RemoteLeadPump
-	EnvironmentRequests          RemoteLeadEnvironmentRequests
-	Validation                   RemoteLeadValidationGate
-	Toolchains                   RemoteLeadToolchainReader
-	Usage                        RemoteLeadUsageRecorder
-	Lifetime                     context.Context
-	AgentProfileID               string
-	ReviewerAgentProfileID       string
-	ClaudeAgentProfileID         string
-	ClaudeReviewerAgentProfileID string
-	ForgejoAuthor                string
-	ReviewerForgejoAuthor        string
-	ClaudeForgejoAuthor          string
-	ClaudeReviewerForgejoAuthor  string
-	ReportError                  func(error)
+	Executions          RemoteLeadExecution
+	Features            RemoteLeadFeatureFinder
+	Goals               RemoteLeadGoalService
+	Planning            RemoteLeadPlanningWorkflow
+	Artifacts           RemoteLeadArtifactService
+	Briefs              RemoteLeadBriefReader
+	Workspaces          RemoteLeadWorkspaceService
+	Worker              RemoteLeadWorker
+	Pump                RemoteLeadPump
+	EnvironmentRequests RemoteLeadEnvironmentRequests
+	Validation          RemoteLeadValidationGate
+	Toolchains          RemoteLeadToolchainReader
+	Usage               RemoteLeadUsageRecorder
+	Lifetime            context.Context
+	ReportError         func(error)
 }
 
 // RemoteLeadBriefReader reads a work order's handoff brief at Start.
@@ -275,29 +265,21 @@ type RemoteLeadUsageRecorder interface {
 // attempt identity make replaying PutAttempt after a restart safe: the worker
 // returns the existing attempt instead of launching a duplicate process.
 type RemoteLeadStarter struct {
-	executions                   RemoteLeadExecution
-	features                     RemoteLeadFeatureFinder
-	goals                        RemoteLeadGoalService
-	planning                     RemoteLeadPlanningWorkflow
-	artifacts                    RemoteLeadArtifactService
-	briefs                       RemoteLeadBriefReader
-	workspaces                   RemoteLeadWorkspaceService
-	worker                       RemoteLeadWorker
-	pump                         RemoteLeadPump
-	environmentRequests          RemoteLeadEnvironmentRequests
-	validation                   RemoteLeadValidationGate
-	toolchains                   RemoteLeadToolchainReader
-	usage                        RemoteLeadUsageRecorder
-	lifetime                     context.Context
-	agentProfileID               string
-	reviewerAgentProfileID       string
-	claudeAgentProfileID         string
-	claudeReviewerAgentProfileID string
-	forgejoAuthor                string
-	reviewerForgejoAuthor        string
-	claudeForgejoAuthor          string
-	claudeReviewerForgejoAuthor  string
-	reportError                  func(error)
+	executions          RemoteLeadExecution
+	features            RemoteLeadFeatureFinder
+	goals               RemoteLeadGoalService
+	planning            RemoteLeadPlanningWorkflow
+	artifacts           RemoteLeadArtifactService
+	briefs              RemoteLeadBriefReader
+	workspaces          RemoteLeadWorkspaceService
+	worker              RemoteLeadWorker
+	pump                RemoteLeadPump
+	environmentRequests RemoteLeadEnvironmentRequests
+	validation          RemoteLeadValidationGate
+	toolchains          RemoteLeadToolchainReader
+	usage               RemoteLeadUsageRecorder
+	lifetime            context.Context
+	reportError         func(error)
 
 	activeMu sync.Mutex
 	active   map[string]struct{}
@@ -316,88 +298,42 @@ func NewRemoteLeadStarter(config RemoteLeadConfig) (*RemoteLeadStarter, error) {
 	if config.Lifetime == nil {
 		return nil, fmt.Errorf("%w: lifetime context is required", ErrInvalidRunRequest)
 	}
-	if strings.TrimSpace(config.AgentProfileID) == "" {
-		return nil, fmt.Errorf("%w: agent profile is required", ErrInvalidRunRequest)
-	}
 	reportError := config.ReportError
 	if reportError == nil {
 		reportError = func(error) {}
-	}
-	forgejoAuthor := strings.TrimSpace(config.ForgejoAuthor)
-	if forgejoAuthor == "" {
-		forgejoAuthor = defaultLeadForgejoAuthor
-	}
-	reviewerAgentProfileID := strings.TrimSpace(config.ReviewerAgentProfileID)
-	if reviewerAgentProfileID == "" {
-		reviewerAgentProfileID = config.AgentProfileID
-	}
-	reviewerForgejoAuthor := strings.TrimSpace(config.ReviewerForgejoAuthor)
-	if reviewerForgejoAuthor == "" {
-		reviewerForgejoAuthor = defaultReviewerForgejoAuthor
-	}
-	claudeForgejoAuthor := strings.TrimSpace(config.ClaudeForgejoAuthor)
-	if claudeForgejoAuthor == "" {
-		claudeForgejoAuthor = "claude-lead"
-	}
-	claudeReviewerForgejoAuthor := strings.TrimSpace(config.ClaudeReviewerForgejoAuthor)
-	if claudeReviewerForgejoAuthor == "" {
-		claudeReviewerForgejoAuthor = "claude-reviewer"
 	}
 	return &RemoteLeadStarter{
 		executions: config.Executions, features: config.Features, goals: config.Goals,
 		planning: config.Planning, artifacts: config.Artifacts, briefs: config.Briefs, workspaces: config.Workspaces,
 		worker: config.Worker, pump: config.Pump,
 		environmentRequests: config.EnvironmentRequests, validation: config.Validation, toolchains: config.Toolchains,
-		usage:    config.Usage,
-		lifetime: config.Lifetime, agentProfileID: config.AgentProfileID,
-		reviewerAgentProfileID:       reviewerAgentProfileID,
-		claudeAgentProfileID:         strings.TrimSpace(config.ClaudeAgentProfileID),
-		claudeReviewerAgentProfileID: strings.TrimSpace(config.ClaudeReviewerAgentProfileID),
-		forgejoAuthor:                forgejoAuthor,
-		reviewerForgejoAuthor:        reviewerForgejoAuthor,
-		claudeForgejoAuthor:          claudeForgejoAuthor,
-		claudeReviewerForgejoAuthor:  claudeReviewerForgejoAuthor,
-		reportError:                  reportError,
-		active:                       make(map[string]struct{}),
+		usage: config.Usage, lifetime: config.Lifetime, reportError: reportError,
+		active: make(map[string]struct{}),
 	}, nil
 }
 
-func agentID(provider project.AgentProvider, role worker.Role) string {
-	return string(provider) + "-" + string(role)
+// agentID names a session's participant: the agent and the role it plays.
+func agentID(agent project.AgentProvider, role worker.Role) string {
+	return string(agent) + "-" + string(role)
 }
 
-func (starter *RemoteLeadStarter) profileID(provider project.AgentProvider, role worker.Role) string {
-	switch {
-	case provider == project.AgentProviderCodex && role == worker.RoleLead:
-		return starter.agentProfileID
-	case provider == project.AgentProviderCodex && role == worker.RoleReviewer:
-		return starter.reviewerAgentProfileID
-	case provider == project.AgentProviderClaude && role == worker.RoleLead:
-		return starter.claudeAgentProfileID
-	case provider == project.AgentProviderClaude && role == worker.RoleReviewer:
-		return starter.claudeReviewerAgentProfileID
-	default:
-		return ""
-	}
+// profileID is the worker profile for an agent; an agent's worker serves both
+// roles under one profile (ADR-016).
+func (*RemoteLeadStarter) profileID(agent project.AgentProvider, _ worker.Role) string {
+	return string(agent)
 }
 
-func (starter *RemoteLeadStarter) forgejoAuthorFor(run execution.Run, role worker.Role) string {
-	provider := run.AgentProviders.Lead
+// forgejoAuthorFor is the Forgejo identity the run's agent uses in a role:
+// "<agent>-lead" or "<agent>-reviewer" (ADR-016).
+func (*RemoteLeadStarter) forgejoAuthorFor(run execution.Run, role worker.Role) string {
+	agent := run.AgentProviders.Lead
 	if role == worker.RoleReviewer {
-		provider = run.AgentProviders.Reviewer
+		agent = run.AgentProviders.Reviewer
 	}
-	switch {
-	case provider == project.AgentProviderCodex && role == worker.RoleLead:
-		return starter.forgejoAuthor
-	case provider == project.AgentProviderCodex && role == worker.RoleReviewer:
-		return starter.reviewerForgejoAuthor
-	case provider == project.AgentProviderClaude && role == worker.RoleLead:
-		return starter.claudeForgejoAuthor
-	case provider == project.AgentProviderClaude && role == worker.RoleReviewer:
-		return starter.claudeReviewerForgejoAuthor
-	default:
+	if agent == "" {
 		return ""
 	}
+	return agentID(agent, role)
 }
 
 func (starter *RemoteLeadStarter) Start(

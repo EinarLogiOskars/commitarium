@@ -58,9 +58,7 @@ func TestAssistantProjectDeletionRefusesActiveUnlessForcedAndKeepsOtherProjects(
 		t.Fatalf("create manager: %v", err)
 	}
 	worker := &assistantWorkerStub{}
-	assistant, err := NewAssistant(root, workspaces, reader, manager, map[project.AgentProvider]AssistantWorker{
-		project.AgentProviderCodex: {Service: worker, AgentProfileID: "profile_codex"},
-	})
+	assistant, err := NewAssistant(root, workspaces, reader, manager, onlyAgent("codex", worker))
 	if err != nil {
 		t.Fatalf("create assistant: %v", err)
 	}
@@ -113,9 +111,7 @@ func TestAssistantConversationAppliesValidatedProposal(t *testing.T) {
 		t.Fatalf("create manager: %v", err)
 	}
 	worker := &assistantWorkerStub{}
-	assistant, err := NewAssistant(root, workspaces, reader, manager, map[project.AgentProvider]AssistantWorker{
-		project.AgentProviderCodex: {Service: worker, AgentProfileID: "profile_codex"},
-	})
+	assistant, err := NewAssistant(root, workspaces, reader, manager, onlyAgent("codex", worker))
 	if err != nil {
 		t.Fatalf("create assistant: %v", err)
 	}
@@ -165,9 +161,7 @@ func TestAssistantStartIsDurablyIdempotent(t *testing.T) {
 	manager, _ := NewManager(root, reader)
 	worker := &assistantWorkerStub{}
 	newAssistant := func() *Assistant {
-		created, err := NewAssistant(root, workspaces, reader, manager, map[project.AgentProvider]AssistantWorker{
-			project.AgentProviderCodex: {Service: worker, AgentProfileID: "profile_codex"},
-		})
+		created, err := NewAssistant(root, workspaces, reader, manager, onlyAgent("codex", worker))
 		if err != nil {
 			t.Fatalf("create assistant: %v", err)
 		}
@@ -202,9 +196,7 @@ func TestAssistantVerifiesPinnedRepositoryEvidenceAndRejectsStaleApply(t *testin
 		t.Fatalf("create manager: %v", err)
 	}
 	worker := &assistantWorkerStub{}
-	assistant, err := NewAssistant(root, workspaces, reader, manager, map[project.AgentProvider]AssistantWorker{
-		project.AgentProviderClaude: {Service: worker, AgentProfileID: "profile_claude"},
-	})
+	assistant, err := NewAssistant(root, workspaces, reader, manager, onlyAgent("claude", worker))
 	if err != nil {
 		t.Fatalf("create assistant: %v", err)
 	}
@@ -244,5 +236,14 @@ func TestAssistantVerifiesPinnedRepositoryEvidenceAndRejectsStaleApply(t *testin
 	manifest, err := assistant.Apply(t.Context(), "prj_test", session.ID)
 	if err != nil || manifest.Tools["python"] != "3.14.7" {
 		t.Fatalf("apply verified manifest=%+v err=%v", manifest, err)
+	}
+}
+
+func onlyAgent(agentID string, worker workerhttp.Service) func(string) (workerhttp.Service, error) {
+	return func(requested string) (workerhttp.Service, error) {
+		if requested != agentID {
+			return nil, errors.New("unknown agent")
+		}
+		return worker, nil
 	}
 }

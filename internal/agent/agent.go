@@ -27,6 +27,10 @@ const MaxIDLength = 30
 
 var idPattern = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,28}[a-z0-9])?$`)
 
+// ValidID reports whether id is a well-formed agent ID, safe to use in
+// worker service, volume, file, and Forgejo user names.
+func ValidID(id string) bool { return idPattern.MatchString(id) }
+
 type Agent struct {
 	ID        string
 	Name      string

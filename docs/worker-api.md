@@ -163,6 +163,14 @@ Each turn's assignment role selects its workspace tree and Forgejo identity;
 roles without an identity, such as the assistants' consultant role, get no
 Forgejo access and use the default workspace root.
 
+The coordinator addresses the worker for agent `<id>` by convention: the URL
+template `COMMITARIUM_AGENT_WORKER_URL_TEMPLATE` (default
+`http://agent-{agent}-worker:8081`) and the bearer token file
+`agent-<id>-worker-token` in `COMMITARIUM_AGENT_WORKER_TOKEN_DIR`. It reads the
+token on demand, so a new agent's worker is reachable without a coordinator
+restart. Assignments carry the agent ID as `agent_profile_id`; the worker's
+Forgejo identities are `<id>-lead` and `<id>-reviewer`.
+
 ## Live activity stream
 
 The event stream uses Server-Sent Events (SSE), a one-way HTTP stream from the

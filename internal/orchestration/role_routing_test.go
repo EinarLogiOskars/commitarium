@@ -3,6 +3,7 @@ package orchestration
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/EinarLogiOskars/commitarium/internal/execution"
@@ -13,14 +14,14 @@ import (
 
 type routingWorkerStub struct {
 	puts, gets int
-	lastPut    workerhttp.PutAttemptRequest
+	models     []string
 }
 
 func (stub *routingWorkerStub) PutAttempt(
 	_ context.Context, _ workerhttp.MutationIdentity, request workerhttp.PutAttemptRequest,
 ) (workerhttp.Attempt, bool, error) {
 	stub.puts++
-	stub.lastPut = request
+	stub.models = append(stub.models, request.Assignment.Model)
 	return workerhttp.Attempt{}, true, nil
 }
 
@@ -54,9 +55,19 @@ func (finder routingRunFinder) GetRun(_ context.Context, id string) (execution.R
 	return run, nil
 }
 
-func TestProviderRoutersUseTheDurableRunAssignment(t *testing.T) {
-	codexLead, codexReviewer := &routingWorkerStub{}, &routingWorkerStub{}
-	claudeLead, claudeReviewer := &routingWorkerStub{}, &routingWorkerStub{}
+func routeTo[T any](byAgent map[string]T) func(string) (T, error) {
+	return func(agentID string) (T, error) {
+		target, ok := byAgent[agentID]
+		if !ok {
+			var zero T
+			return zero, errors.New("unknown agent " + agentID)
+		}
+		return target, nil
+	}
+}
+
+func TestAgentRoutersUseTheDurableRunAssignment(t *testing.T) {
+	codex, claude := &routingWorkerStub{}, &routingWorkerStub{}
 	finder := routingRunFinder{runs: map[string]execution.Run{
 		"run_mixed": {AgentProviders: project.AgentProviders{
 			Lead: project.AgentProviderClaude, Reviewer: project.AgentProviderCodex,
@@ -65,10 +76,9 @@ func TestProviderRoutersUseTheDurableRunAssignment(t *testing.T) {
 			Lead: project.AgentProviderCodex, Reviewer: project.AgentProviderClaude,
 		}, AgentModels: project.AgentModels{Lead: "gpt-lead-pinned-1", Reviewer: "claude-review-pinned-1"}},
 	}}
-	workerRouter, err := NewProviderRoutedWorker(finder, ProviderWorkerRoutes{
-		CodexLead: codexLead, CodexReviewer: codexReviewer,
-		ClaudeLead: claudeLead, ClaudeReviewer: claudeReviewer,
-	})
+	workerRouter, err := NewAgentRoutedWorker(finder, routeTo(map[string]RemoteLeadWorker{
+		"codex": codex, "claude": claude,
+	}))
 	if err != nil {
 		t.Fatalf("create worker router: %v", err)
 	}
@@ -93,26 +103,18 @@ func TestProviderRoutersUseTheDurableRunAssignment(t *testing.T) {
 			t.Fatalf("route %s get: %v", test.role, err)
 		}
 	}
-	if claudeLead.puts != 1 || claudeLead.gets != 1 ||
-		codexReviewer.puts != 1 || codexReviewer.gets != 1 ||
-		codexLead.puts != 1 || codexLead.gets != 1 ||
-		claudeReviewer.puts != 1 || claudeReviewer.gets != 1 {
-		t.Fatalf("unexpected provider routing codexLead=%+v codexReviewer=%+v claudeLead=%+v claudeReviewer=%+v",
-			codexLead, codexReviewer, claudeLead, claudeReviewer)
+	if codex.puts != 2 || codex.gets != 2 || claude.puts != 2 || claude.gets != 2 {
+		t.Fatalf("unexpected agent routing codex=%+v claude=%+v", codex, claude)
 	}
-	if claudeLead.lastPut.Assignment.Model != "claude-lead-pinned-1" ||
-		codexReviewer.lastPut.Assignment.Model != "gpt-review-pinned-1" ||
-		codexLead.lastPut.Assignment.Model != "gpt-lead-pinned-1" ||
-		claudeReviewer.lastPut.Assignment.Model != "claude-review-pinned-1" {
-		t.Fatalf("router did not inject exact run model snapshots")
+	if strings.Join(claude.models, ",") != "claude-lead-pinned-1,claude-review-pinned-1" ||
+		strings.Join(codex.models, ",") != "gpt-review-pinned-1,gpt-lead-pinned-1" {
+		t.Fatalf("router did not inject exact run model snapshots: codex=%v claude=%v", codex.models, claude.models)
 	}
 
-	codexLeadPump, codexReviewerPump := &routingPumpStub{}, &routingPumpStub{}
-	claudeLeadPump, claudeReviewerPump := &routingPumpStub{}, &routingPumpStub{}
-	pumpRouter, err := NewProviderRoutedPump(finder, ProviderPumpRoutes{
-		CodexLead: codexLeadPump, CodexReviewer: codexReviewerPump,
-		ClaudeLead: claudeLeadPump, ClaudeReviewer: claudeReviewerPump,
-	})
+	codexPump, claudePump := &routingPumpStub{}, &routingPumpStub{}
+	pumpRouter, err := NewAgentRoutedPump(finder, routeTo(map[string]RemoteLeadPump{
+		"codex": codexPump, "claude": claudePump,
+	}))
 	if err != nil {
 		t.Fatalf("create pump router: %v", err)
 	}
@@ -122,20 +124,19 @@ func TestProviderRoutersUseTheDurableRunAssignment(t *testing.T) {
 	if _, err := pumpRouter.Run(t.Context(), "run_mixed:reviewer"); err != nil {
 		t.Fatalf("route reviewer pump: %v", err)
 	}
-	if claudeLeadPump.runs != 1 || codexReviewerPump.runs != 1 ||
-		codexLeadPump.runs != 0 || claudeReviewerPump.runs != 0 {
+	if claudePump.runs != 1 || codexPump.runs != 1 {
 		t.Fatalf("unexpected pump routing")
 	}
 }
 
-func TestProviderRoutersRejectUnknownOrMismatchedSessions(t *testing.T) {
+func TestAgentRoutersRejectUnknownOrMismatchedSessions(t *testing.T) {
 	worker := &routingWorkerStub{}
 	finder := routingRunFinder{runs: map[string]execution.Run{
 		"run_test": {AgentProviders: project.DefaultAgentProviders()},
 	}}
-	router, _ := NewProviderRoutedWorker(finder, ProviderWorkerRoutes{
-		CodexLead: worker, CodexReviewer: worker, ClaudeLead: worker, ClaudeReviewer: worker,
-	})
+	router, _ := NewAgentRoutedWorker(finder, routeTo(map[string]RemoteLeadWorker{
+		"codex": worker, "claude": worker,
+	}))
 	if _, err := router.GetAttempt(t.Context(), workerhttp.AttemptReference{SessionID: "unknown"}); err == nil {
 		t.Fatal("expected unsupported session to fail")
 	}

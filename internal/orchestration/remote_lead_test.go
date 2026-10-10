@@ -660,7 +660,6 @@ func TestRemoteLeadRecoveryReusesDurableWorkerAttempt(t *testing.T) {
 		Executions: executions, Features: database.NewFeatureStore(db),
 		Goals:  workflow.NewService(database.NewWorkflowStore(db)),
 		Worker: client, Pump: pump, Lifetime: t.Context(),
-		AgentProfileID: "codex-default",
 	})
 	if err != nil {
 		t.Fatalf("create real lead starter: %v", err)
@@ -778,7 +777,7 @@ func TestRemoteLeadRequiresReviewWhenWorkerStateCannotBeConfirmed(t *testing.T) 
 		Executions: executions, Features: database.NewFeatureStore(db),
 		Goals: workflowService, Planning: workflowService, Briefs: workflowService,
 		Workspaces: &remoteLeadWorkspaceStub{}, Worker: unavailableRemoteLeadWorker{}, Pump: pump,
-		Lifetime: t.Context(), AgentProfileID: "codex-default",
+		Lifetime:    t.Context(),
 		ReportError: func(err error) { reported <- err },
 	})
 	if err != nil {
@@ -886,7 +885,7 @@ func TestRemoteLeadStartsPlanningInManagedWorkspace(t *testing.T) {
 		Executions: executions, Features: database.NewFeatureStore(db), Goals: workflowService,
 		Planning: workflowService, Briefs: workflowService, Workspaces: workspaceStub, Worker: stub,
 		Pump:     &conversationalRemoteLeadPump{executions: executions, worker: stub},
-		Lifetime: t.Context(), AgentProfileID: "codex-default",
+		Lifetime: t.Context(),
 	})
 	if err != nil {
 		t.Fatalf("create real lead starter: %v", err)
@@ -1177,7 +1176,7 @@ func TestRemoteLeadStartsPlanningInManagedWorkspace(t *testing.T) {
 		Executions: executions, Features: database.NewFeatureStore(db), Goals: workflowService,
 		Planning: workflowService, Workspaces: workspaceStub, Worker: stub,
 		Pump:     &conversationalRemoteLeadPump{executions: executions, worker: stub},
-		Lifetime: t.Context(), AgentProfileID: "codex-default",
+		Lifetime: t.Context(),
 	})
 	if err != nil {
 		t.Fatalf("create completed-correction recovery starter: %v", err)
@@ -1210,7 +1209,7 @@ func TestRemoteLeadStartsPlanningInManagedWorkspace(t *testing.T) {
 		Executions: executions, Features: database.NewFeatureStore(db), Goals: workflowService,
 		Planning: workflowService, Workspaces: workspaceStub, Worker: stub,
 		Pump:     &conversationalRemoteLeadPump{executions: executions, worker: stub},
-		Lifetime: t.Context(), AgentProfileID: "codex-default",
+		Lifetime: t.Context(),
 	})
 	if err != nil {
 		t.Fatalf("create completed-readiness recovery starter: %v", err)
@@ -1316,7 +1315,7 @@ func TestRemoteLeadStartsPlanningInManagedWorkspace(t *testing.T) {
 		Executions: executions, Features: database.NewFeatureStore(db), Goals: workflowService,
 		Planning: workflowService, Workspaces: workspaceStub, Worker: stub,
 		Pump:     &conversationalRemoteLeadPump{executions: executions, worker: stub},
-		Lifetime: t.Context(), AgentProfileID: "codex-default",
+		Lifetime: t.Context(),
 	})
 	if err != nil {
 		t.Fatalf("create completed-review recovery starter: %v", err)
@@ -1454,7 +1453,7 @@ func TestRemoteLeadRecoveryAutomaticallyMergesApprovedRevision(t *testing.T) {
 		Goals: workflowService, Planning: workflowService, Workspaces: workspaceStub,
 		Worker: unavailableRemoteLeadWorker{}, Pump: pump,
 		Validation: validation.NewService(database.NewValidationStore(db)),
-		Lifetime:   t.Context(), AgentProfileID: "codex-default",
+		Lifetime:   t.Context(),
 	})
 	if err != nil {
 		t.Fatalf("create automatic-merge recovery starter: %v", err)
@@ -1524,7 +1523,7 @@ func TestRemoteLeadRunToCompletionAdvancesFromPlanningToMergeGate(t *testing.T) 
 		Planning: workflowService, Briefs: workflowService, Workspaces: workspaceStub, Worker: stub,
 		Pump:       &conversationalRemoteLeadPump{executions: executions, worker: stub},
 		Validation: validation.NewService(database.NewValidationStore(db)),
-		Lifetime:   t.Context(), AgentProfileID: "codex-default",
+		Lifetime:   t.Context(),
 	})
 	if err != nil {
 		t.Fatalf("create autonomous starter: %v", err)
@@ -1615,7 +1614,7 @@ func TestRemotePlanningLoopUsesRunLimitSnapshot(t *testing.T) {
 		Executions: executions, Features: database.NewFeatureStore(db), Goals: workflowService,
 		Planning: workflowService, Briefs: workflowService, Workspaces: workspaceStub, Worker: stub,
 		Pump:     &conversationalRemoteLeadPump{executions: executions, worker: stub},
-		Lifetime: t.Context(), AgentProfileID: "codex-default",
+		Lifetime: t.Context(),
 	})
 	if err != nil {
 		t.Fatalf("create planning starter: %v", err)
@@ -1708,7 +1707,7 @@ func TestRemoteLeadRecoveryReattachesToPlanningAttempt(t *testing.T) {
 			Executions: executions, Features: database.NewFeatureStore(db), Goals: workflowService,
 			Workspaces: &remoteLeadWorkspaceStub{}, Worker: stub,
 			Pump:     &conversationalRemoteLeadPump{executions: executions, worker: stub},
-			Lifetime: t.Context(), AgentProfileID: "codex-default",
+			Lifetime: t.Context(),
 		})
 		if err != nil {
 			t.Fatalf("create real lead starter: %v", err)
@@ -1811,7 +1810,7 @@ func TestRemoteReviewerRecoveryReattachesAndPublishesItsResponse(t *testing.T) {
 			Executions: executions, Features: database.NewFeatureStore(db), Goals: workflowService,
 			Planning: workflowService, Briefs: workflowService, Worker: stub,
 			Pump:     &conversationalRemoteLeadPump{executions: executions, worker: stub},
-			Lifetime: t.Context(), AgentProfileID: "codex-default",
+			Lifetime: t.Context(),
 		}
 		if withWorkspace {
 			config.Workspaces = workspaceStub
@@ -1982,7 +1981,7 @@ func newCompletedRemoteLeadWorker(runID, projectID, featureID string) *remoteLea
 		SessionID: remoteLeadSessionID(runID), AttemptID: remoteLeadSessionID(runID) + ":turn:1",
 	}
 	assignment := workerhttp.Assignment{
-		AgentProfileID: "codex-default", ProjectID: projectID, FeatureID: featureID,
+		AgentProfileID: "codex", ProjectID: projectID, FeatureID: featureID,
 		Role: workerhttp.RoleLead, WorkspaceID: "wsp_managed_feature",
 	}
 	initial := workerhttp.Attempt{
@@ -2042,7 +2041,7 @@ func newConversationalRemoteLeadWorker(
 		initial := workerhttp.Attempt{
 			AttemptReference: reference, Mode: mode,
 			Assignment: workerhttp.Assignment{
-				AgentProfileID: "codex-default", ProjectID: projectID, FeatureID: featureID,
+				AgentProfileID: "codex", ProjectID: projectID, FeatureID: featureID,
 				Role: workerhttp.RoleLead, WorkspaceID: "wsp_managed_feature",
 			},
 			ProviderSessionID: "codex-thread-test", State: workerhttp.AttemptStateRunning,
@@ -2089,7 +2088,7 @@ func addCompletedPlanningAttempt(
 	initial := workerhttp.Attempt{
 		AttemptReference: reference, Mode: workerhttp.AttemptModeResume,
 		Assignment: workerhttp.Assignment{
-			AgentProfileID: "codex-default", ProjectID: projectID, FeatureID: featureID,
+			AgentProfileID: "codex", ProjectID: projectID, FeatureID: featureID,
 			Role: workerhttp.RoleLead, WorkspaceID: "wsp_managed_feature",
 		},
 		ProviderSessionID: "codex-thread-test", State: workerhttp.AttemptStateRunning,
@@ -2137,7 +2136,7 @@ func addCompletedReviewerPlanningAttempt(
 	initial := workerhttp.Attempt{
 		AttemptReference: reference, Mode: workerhttp.AttemptModeStart,
 		Assignment: workerhttp.Assignment{
-			AgentProfileID: "codex-default", ProjectID: projectID, FeatureID: featureID,
+			AgentProfileID: "codex", ProjectID: projectID, FeatureID: featureID,
 			Role: workerhttp.RoleReviewer, WorkspaceID: "wsp_managed_feature",
 		},
 		ProviderSessionID: "codex-review-thread-test", State: workerhttp.AttemptStateRunning,
@@ -2208,7 +2207,7 @@ func addCompletedPlanningCorrectionAttempt(
 	initial := workerhttp.Attempt{
 		AttemptReference: reference, Mode: workerhttp.AttemptModeResume,
 		Assignment: workerhttp.Assignment{
-			AgentProfileID: "codex-default", ProjectID: projectID, FeatureID: featureID,
+			AgentProfileID: "codex", ProjectID: projectID, FeatureID: featureID,
 			Role: role, WorkspaceID: "wsp_managed_feature",
 		},
 		ProviderSessionID: providerSessionID, State: workerhttp.AttemptStateRunning,
@@ -2256,7 +2255,7 @@ func addCompletedImplementationAttempt(
 	initial := workerhttp.Attempt{
 		AttemptReference: reference, Mode: workerhttp.AttemptModeResume,
 		Assignment: workerhttp.Assignment{
-			AgentProfileID: "codex-default", ProjectID: projectID, FeatureID: featureID,
+			AgentProfileID: "codex", ProjectID: projectID, FeatureID: featureID,
 			Role: workerhttp.RoleLead, WorkspaceID: "wsp_managed_feature",
 		},
 		ProviderSessionID: "codex-thread-test", State: workerhttp.AttemptStateRunning,
@@ -2307,7 +2306,7 @@ func addCompletedImplementationReviewAttempt(
 	initial := workerhttp.Attempt{
 		AttemptReference: reference, Mode: workerhttp.AttemptModeResume,
 		Assignment: workerhttp.Assignment{
-			AgentProfileID: "codex-default", ProjectID: projectID, FeatureID: featureID,
+			AgentProfileID: "codex", ProjectID: projectID, FeatureID: featureID,
 			Role: workerhttp.RoleReviewer, WorkspaceID: "wsp_managed_feature",
 		},
 		ProviderSessionID: "codex-review-thread-test", State: workerhttp.AttemptStateRunning,
@@ -2362,7 +2361,7 @@ func addCompletedImplementationCorrectionAttempt(
 	initial := workerhttp.Attempt{
 		AttemptReference: reference, Mode: workerhttp.AttemptModeResume,
 		Assignment: workerhttp.Assignment{
-			AgentProfileID: "codex-default", ProjectID: projectID, FeatureID: featureID,
+			AgentProfileID: "codex", ProjectID: projectID, FeatureID: featureID,
 			Role: workerhttp.RoleLead, WorkspaceID: "wsp_managed_feature",
 		},
 		ProviderSessionID: "codex-thread-test", State: workerhttp.AttemptStateRunning,
@@ -2418,7 +2417,7 @@ func addCompletedLaterImplementationReviewAttempt(
 	initial := workerhttp.Attempt{
 		AttemptReference: reference, Mode: workerhttp.AttemptModeResume,
 		Assignment: workerhttp.Assignment{
-			AgentProfileID: "codex-default", ProjectID: projectID, FeatureID: featureID,
+			AgentProfileID: "codex", ProjectID: projectID, FeatureID: featureID,
 			Role: workerhttp.RoleReviewer, WorkspaceID: "wsp_managed_feature",
 		},
 		ProviderSessionID: "codex-review-thread-test", State: workerhttp.AttemptStateRunning,
@@ -2472,7 +2471,7 @@ func addCompletedImplementationReadinessAttempt(
 	initial := workerhttp.Attempt{
 		AttemptReference: reference, Mode: workerhttp.AttemptModeResume,
 		Assignment: workerhttp.Assignment{
-			AgentProfileID: "codex-default", ProjectID: projectID, FeatureID: featureID,
+			AgentProfileID: "codex", ProjectID: projectID, FeatureID: featureID,
 			Role: workerhttp.RoleLead, WorkspaceID: "wsp_managed_feature",
 		},
 		ProviderSessionID: "codex-thread-test", State: workerhttp.AttemptStateRunning,
@@ -2520,7 +2519,7 @@ func addCompletedImplementationContinuationAttempt(
 	initial := workerhttp.Attempt{
 		AttemptReference: reference, Mode: workerhttp.AttemptModeResume,
 		Assignment: workerhttp.Assignment{
-			AgentProfileID: "codex-default", ProjectID: projectID, FeatureID: featureID,
+			AgentProfileID: "codex", ProjectID: projectID, FeatureID: featureID,
 			Role: workerhttp.RoleLead, WorkspaceID: "wsp_managed_feature",
 		},
 		ProviderSessionID: "codex-thread-test", State: workerhttp.AttemptStateRunning,
@@ -2860,7 +2859,7 @@ func TestReviewerMustApproveTheFinalPlanBeforeImplementation(t *testing.T) {
 		Planning: workflowService, Briefs: workflowService, Workspaces: workspaceStub, Worker: stub,
 		Pump:       &conversationalRemoteLeadPump{executions: executions, worker: stub},
 		Validation: validation.NewService(database.NewValidationStore(db)),
-		Lifetime:   t.Context(), AgentProfileID: "codex-default",
+		Lifetime:   t.Context(),
 	})
 	if err != nil {
 		t.Fatalf("create starter: %v", err)
@@ -2941,7 +2940,7 @@ func TestStartRequiresAReadyWorkOrder(t *testing.T) {
 		Executions: executions, Features: database.NewFeatureStore(db), Goals: workflowService,
 		Planning: workflowService, Briefs: workflowService, Workspaces: &remoteLeadWorkspaceStub{},
 		Worker: unavailableRemoteLeadWorker{}, Pump: &unexpectedRemoteLeadPump{},
-		Lifetime: t.Context(), AgentProfileID: "codex-default",
+		Lifetime: t.Context(),
 	})
 	if err != nil {
 		t.Fatalf("create starter: %v", err)

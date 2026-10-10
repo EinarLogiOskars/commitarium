@@ -96,28 +96,37 @@ type Assistant struct {
 	workspaceRoot   string
 	projects        ProjectReader
 	toolchains      *Manager
-	workers         map[project.AgentProvider]AssistantWorker
+	workers         func(agentID string) (workerhttp.Service, error)
 	now             func() time.Time
 	mu              sync.Mutex
 	deletedProjects map[string]struct{}
 }
 
-func NewAssistant(root, workspaceRoot string, projects ProjectReader, toolchains *Manager, workers map[project.AgentProvider]AssistantWorker) (*Assistant, error) {
+// NewAssistant creates the setup assistant; workers resolves an agent ID to
+// its worker (ADR-016).
+func NewAssistant(root, workspaceRoot string, projects ProjectReader, toolchains *Manager, workers func(agentID string) (workerhttp.Service, error)) (*Assistant, error) {
 	root = filepath.Clean(strings.TrimSpace(root))
 	workspaceRoot = filepath.Clean(strings.TrimSpace(workspaceRoot))
-	if !filepath.IsAbs(root) || !filepath.IsAbs(workspaceRoot) || projects == nil || toolchains == nil || len(workers) == 0 {
+	if !filepath.IsAbs(root) || !filepath.IsAbs(workspaceRoot) || projects == nil || toolchains == nil || workers == nil {
 		return nil, fmt.Errorf("%w: roots, projects, toolchains, and workers are required", ErrAssistantUnavailable)
-	}
-	for provider, configured := range workers {
-		if !provider.IsValid() || configured.Service == nil || strings.TrimSpace(configured.AgentProfileID) == "" {
-			return nil, fmt.Errorf("%w: invalid worker for %q", ErrAssistantUnavailable, provider)
-		}
 	}
 	if err := os.MkdirAll(filepath.Join(root, "assistants"), 0o700); err != nil {
 		return nil, fmt.Errorf("%w: create assistant storage", ErrAssistantUnavailable)
 	}
 	return &Assistant{root: root, workspaceRoot: workspaceRoot, projects: projects, toolchains: toolchains,
 		workers: workers, now: func() time.Time { return time.Now().UTC() }, deletedProjects: make(map[string]struct{})}, nil
+}
+
+// worker resolves an agent's worker; the agent's ID is its worker profile.
+func (assistant *Assistant) worker(agent project.AgentProvider) (AssistantWorker, bool) {
+	if !agent.IsValid() {
+		return AssistantWorker{}, false
+	}
+	resolved, err := assistant.workers(string(agent))
+	if err != nil || resolved == nil {
+		return AssistantWorker{}, false
+	}
+	return AssistantWorker{Service: resolved, AgentProfileID: string(agent)}, true
 }
 
 func (assistant *Assistant) Start(
@@ -141,7 +150,7 @@ func (assistant *Assistant) Start(
 	if err != nil {
 		return AssistantSession{}, false, err
 	}
-	worker, ok := assistant.workers[provider]
+	worker, ok := assistant.worker(provider)
 	message, model, key := strings.TrimSpace(message), strings.TrimSpace(model), strings.TrimSpace(idempotencyKey)
 	purpose = normalizeAssistantPurpose(purpose)
 	if !ok || message == "" || key == "" || !validAssistantModel(model) || !purpose.IsValid() {
@@ -238,7 +247,7 @@ func (assistant *Assistant) DeleteProject(
 	assistant.deletedProjects[projectID] = struct{}{}
 	for _, record := range records {
 		if record.Status == AssistantStatusRunning {
-			configured, ok := assistant.workers[record.Provider]
+			configured, ok := assistant.worker(record.Provider)
 			if !ok {
 				return ErrAssistantUnavailable
 			}
@@ -390,7 +399,10 @@ func (assistant *Assistant) Reply(ctx context.Context, projectID, sessionID, mes
 			return AssistantSession{}, false, err
 		}
 	}
-	configured := assistant.workers[record.Provider]
+	configured, ok := assistant.worker(record.Provider)
+	if !ok {
+		return AssistantSession{}, false, ErrAssistantUnavailable
+	}
 	attempt, created, err := configured.Service.PutAttempt(ctx, workerhttp.MutationIdentity{
 		AttemptReference: workerhttp.AttemptReference{SessionID: record.ID, AttemptID: record.AttemptID}, IdempotencyKey: key,
 	}, workerhttp.PutAttemptRequest{Mode: workerhttp.AttemptModeResume, Assignment: workerhttp.Assignment{
@@ -455,7 +467,7 @@ func (assistant *Assistant) Apply(ctx context.Context, projectID, sessionID stri
 }
 
 func (assistant *Assistant) refresh(ctx context.Context, record assistantRecord) (assistantRecord, error) {
-	configured, ok := assistant.workers[record.Provider]
+	configured, ok := assistant.worker(record.Provider)
 	if !ok {
 		return record, ErrAssistantUnavailable
 	}

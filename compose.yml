@@ -17,29 +17,13 @@ services:
       COMMITARIUM_WORKSPACE_ROOT: /workspaces
       COMMITARIUM_REVIEWER_WORKSPACE_ROOT: /reviewer-workspaces
       COMMITARIUM_TOOLCHAIN_ROOT: /var/lib/commitarium-toolchains
-      COMMITARIUM_CODEX_WORKER_URL: http://codex-worker:8081
-      COMMITARIUM_CODEX_WORKER_TOKEN_FILE: /run/commitarium-internal/codex-lead-worker-token
-      COMMITARIUM_CODEX_PROFILE_ID: ${COMMITARIUM_CODEX_PROFILE_ID:-profile_local_codex}
-      COMMITARIUM_CODEX_REVIEWER_WORKER_URL: http://codex-reviewer-worker:8081
-      COMMITARIUM_CODEX_REVIEWER_WORKER_TOKEN_FILE: /run/commitarium-internal/codex-reviewer-worker-token
-      COMMITARIUM_CODEX_REVIEWER_PROFILE_ID: ${COMMITARIUM_CODEX_REVIEWER_PROFILE_ID:-profile_local_codex_reviewer}
-      COMMITARIUM_CODEX_FORGEJO_LOGIN: ${COMMITARIUM_CODEX_FORGEJO_LOGIN:-codex-lead}
-      COMMITARIUM_CODEX_REVIEWER_FORGEJO_LOGIN: ${COMMITARIUM_CODEX_REVIEWER_FORGEJO_LOGIN:-codex-reviewer}
-      COMMITARIUM_CLAUDE_WORKER_URL: http://claude-worker:8081
-      COMMITARIUM_CLAUDE_WORKER_TOKEN_FILE: /run/commitarium-internal/claude-lead-worker-token
-      COMMITARIUM_CLAUDE_PROFILE_ID: ${COMMITARIUM_CLAUDE_PROFILE_ID:-profile_local_claude}
-      COMMITARIUM_CLAUDE_REVIEWER_WORKER_URL: http://claude-reviewer-worker:8081
-      COMMITARIUM_CLAUDE_REVIEWER_WORKER_TOKEN_FILE: /run/commitarium-internal/claude-reviewer-worker-token
-      COMMITARIUM_CLAUDE_REVIEWER_PROFILE_ID: ${COMMITARIUM_CLAUDE_REVIEWER_PROFILE_ID:-profile_local_claude_reviewer}
-      COMMITARIUM_CLAUDE_FORGEJO_LOGIN: ${COMMITARIUM_CLAUDE_FORGEJO_LOGIN:-claude-lead}
-      COMMITARIUM_CLAUDE_REVIEWER_FORGEJO_LOGIN: ${COMMITARIUM_CLAUDE_REVIEWER_FORGEJO_LOGIN:-claude-reviewer}
+      # Agent workers are addressed by convention (ADR-016): service
+      # agent-<id>-worker, bearer token agent-<id>-worker-token in this directory.
+      COMMITARIUM_AGENT_WORKER_TOKEN_DIR: /run/commitarium-agent-workers
     volumes:
       - coordinator-data:/var/lib/commitarium
       - ${COMMITARIUM_FORGEJO_TOKEN_SOURCE:-./.commitarium/forgejo-token}:/run/commitarium-config/forgejo-token:ro
-      - ${COMMITARIUM_CODEX_WORKER_TOKEN_SOURCE:-./.commitarium/internal/codex-lead-worker-token}:/run/commitarium-internal/codex-lead-worker-token:ro
-      - ${COMMITARIUM_CODEX_REVIEWER_WORKER_TOKEN_SOURCE:-./.commitarium/internal/codex-reviewer-worker-token}:/run/commitarium-internal/codex-reviewer-worker-token:ro
-      - ${COMMITARIUM_CLAUDE_WORKER_TOKEN_SOURCE:-./.commitarium/internal/claude-lead-worker-token}:/run/commitarium-internal/claude-lead-worker-token:ro
-      - ${COMMITARIUM_CLAUDE_REVIEWER_WORKER_TOKEN_SOURCE:-./.commitarium/internal/claude-reviewer-worker-token}:/run/commitarium-internal/claude-reviewer-worker-token:ro
+      - ${COMMITARIUM_AGENT_WORKER_TOKEN_DIR_SOURCE:-./.commitarium/internal/agent-workers}:/run/commitarium-agent-workers:ro
       - ${COMMITARIUM_WORKSPACE_SOURCE:-./.commitarium/workspaces}:/workspaces
       - ${COMMITARIUM_REVIEWER_WORKSPACE_SOURCE:-./.commitarium/reviewer-workspaces}:/reviewer-workspaces
       - commitarium-toolchains:/var/lib/commitarium-toolchains

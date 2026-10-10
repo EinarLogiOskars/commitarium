@@ -15,37 +15,32 @@ type ProviderRunFinder interface {
 	GetRun(context.Context, string) (execution.Run, error)
 }
 
-type ProviderWorkerRoutes struct {
-	CodexLead      RemoteLeadWorker
-	CodexReviewer  RemoteLeadWorker
-	ClaudeLead     RemoteLeadWorker
-	ClaudeReviewer RemoteLeadWorker
-}
+// AgentWorkers resolves an agent ID to its worker (ADR-016).
+type AgentWorkers func(agentID string) (RemoteLeadWorker, error)
+
+// AgentPumps resolves an agent ID to an event pump for its worker.
+type AgentPumps func(agentID string) (RemoteLeadPump, error)
 
 type remoteLeadForceStopper interface {
 	ForceStop(context.Context, workerhttp.MutationIdentity, workerhttp.ForceStopRequest) (workerhttp.Attempt, error)
 }
 
-// ProviderRoutedWorker keeps workflow code provider-neutral. The selected
-// route comes from the run snapshot, not the project's current settings, so
-// recovery always returns to the provider that owns the original session.
-type ProviderRoutedWorker struct {
-	runs   ProviderRunFinder
-	routes ProviderWorkerRoutes
+// AgentRoutedWorker keeps workflow code agent-neutral. The selected agent
+// comes from the run snapshot, not the project's current settings, so
+// recovery always returns to the agent that owns the original session.
+type AgentRoutedWorker struct {
+	runs    ProviderRunFinder
+	workers AgentWorkers
 }
 
-func NewProviderRoutedWorker(
-	runs ProviderRunFinder,
-	routes ProviderWorkerRoutes,
-) (*ProviderRoutedWorker, error) {
-	if runs == nil || routes.CodexLead == nil || routes.CodexReviewer == nil ||
-		routes.ClaudeLead == nil || routes.ClaudeReviewer == nil {
-		return nil, errors.New("run finder and all provider worker clients are required")
+func NewAgentRoutedWorker(runs ProviderRunFinder, workers AgentWorkers) (*AgentRoutedWorker, error) {
+	if runs == nil || workers == nil {
+		return nil, errors.New("run finder and agent workers are required")
 	}
-	return &ProviderRoutedWorker{runs: runs, routes: routes}, nil
+	return &AgentRoutedWorker{runs: runs, workers: workers}, nil
 }
 
-func (router *ProviderRoutedWorker) PutAttempt(
+func (router *AgentRoutedWorker) PutAttempt(
 	ctx context.Context,
 	identity workerhttp.MutationIdentity,
 	request workerhttp.PutAttemptRequest,
@@ -67,14 +62,14 @@ func (router *ProviderRoutedWorker) PutAttempt(
 	if model != "" {
 		request.Assignment.Model = model
 	}
-	client, err := router.routes.forAssignment(run.AgentProviders, role)
+	client, err := router.forAssignment(run.AgentProviders, role)
 	if err != nil {
 		return workerhttp.Attempt{}, false, err
 	}
 	return client.PutAttempt(ctx, identity, request)
 }
 
-func (router *ProviderRoutedWorker) GetAttempt(
+func (router *AgentRoutedWorker) GetAttempt(
 	ctx context.Context,
 	reference workerhttp.AttemptReference,
 ) (workerhttp.Attempt, error) {
@@ -82,14 +77,14 @@ func (router *ProviderRoutedWorker) GetAttempt(
 	if err != nil {
 		return workerhttp.Attempt{}, err
 	}
-	client, err := router.routes.forAssignment(run.AgentProviders, role)
+	client, err := router.forAssignment(run.AgentProviders, role)
 	if err != nil {
 		return workerhttp.Attempt{}, err
 	}
 	return client.GetAttempt(ctx, reference)
 }
 
-func (router *ProviderRoutedWorker) ForceStop(
+func (router *AgentRoutedWorker) ForceStop(
 	ctx context.Context,
 	identity workerhttp.MutationIdentity,
 	request workerhttp.ForceStopRequest,
@@ -98,18 +93,18 @@ func (router *ProviderRoutedWorker) ForceStop(
 	if err != nil {
 		return workerhttp.Attempt{}, err
 	}
-	client, err := router.routes.forAssignment(run.AgentProviders, role)
+	client, err := router.forAssignment(run.AgentProviders, role)
 	if err != nil {
 		return workerhttp.Attempt{}, err
 	}
 	stopper, ok := client.(remoteLeadForceStopper)
 	if !ok {
-		return workerhttp.Attempt{}, errors.New("selected provider worker does not support forced termination")
+		return workerhttp.Attempt{}, errors.New("selected agent worker does not support forced termination")
 	}
 	return stopper.ForceStop(ctx, identity, request)
 }
 
-func (router *ProviderRoutedWorker) Supersede(
+func (router *AgentRoutedWorker) Supersede(
 	ctx context.Context,
 	identity workerhttp.MutationIdentity,
 	request workerhttp.SupersedeRequest,
@@ -118,14 +113,14 @@ func (router *ProviderRoutedWorker) Supersede(
 	if err != nil {
 		return workerhttp.Attempt{}, err
 	}
-	client, err := router.routes.forAssignment(run.AgentProviders, role)
+	client, err := router.forAssignment(run.AgentProviders, role)
 	if err != nil {
 		return workerhttp.Attempt{}, err
 	}
 	return client.Supersede(ctx, identity, request)
 }
 
-func (router *ProviderRoutedWorker) runAndRole(
+func (router *AgentRoutedWorker) runAndRole(
 	ctx context.Context,
 	sessionID string,
 ) (execution.Run, workerhttp.Role, error) {
@@ -140,52 +135,30 @@ func (router *ProviderRoutedWorker) runAndRole(
 	return run, role, nil
 }
 
-func (routes ProviderWorkerRoutes) forAssignment(
+func (router *AgentRoutedWorker) forAssignment(
 	providers project.AgentProviders,
 	role workerhttp.Role,
 ) (RemoteLeadWorker, error) {
-	provider, err := providerForRole(providers, role)
+	agentID, err := providerForRole(providers, role)
 	if err != nil {
 		return nil, err
 	}
-	switch {
-	case provider == project.AgentProviderCodex && role == workerhttp.RoleLead:
-		return routes.CodexLead, nil
-	case provider == project.AgentProviderCodex && role == workerhttp.RoleReviewer:
-		return routes.CodexReviewer, nil
-	case provider == project.AgentProviderClaude && role == workerhttp.RoleLead:
-		return routes.ClaudeLead, nil
-	case provider == project.AgentProviderClaude && role == workerhttp.RoleReviewer:
-		return routes.ClaudeReviewer, nil
-	default:
-		return nil, errors.New("run has an unsupported provider assignment")
+	return router.workers(string(agentID))
+}
+
+type AgentRoutedPump struct {
+	runs  ProviderRunFinder
+	pumps AgentPumps
+}
+
+func NewAgentRoutedPump(runs ProviderRunFinder, pumps AgentPumps) (*AgentRoutedPump, error) {
+	if runs == nil || pumps == nil {
+		return nil, errors.New("run finder and agent event pumps are required")
 	}
+	return &AgentRoutedPump{runs: runs, pumps: pumps}, nil
 }
 
-type ProviderPumpRoutes struct {
-	CodexLead      RemoteLeadPump
-	CodexReviewer  RemoteLeadPump
-	ClaudeLead     RemoteLeadPump
-	ClaudeReviewer RemoteLeadPump
-}
-
-type ProviderRoutedPump struct {
-	runs   ProviderRunFinder
-	routes ProviderPumpRoutes
-}
-
-func NewProviderRoutedPump(
-	runs ProviderRunFinder,
-	routes ProviderPumpRoutes,
-) (*ProviderRoutedPump, error) {
-	if runs == nil || routes.CodexLead == nil || routes.CodexReviewer == nil ||
-		routes.ClaudeLead == nil || routes.ClaudeReviewer == nil {
-		return nil, errors.New("run finder and all provider event pumps are required")
-	}
-	return &ProviderRoutedPump{runs: runs, routes: routes}, nil
-}
-
-func (router *ProviderRoutedPump) Run(
+func (router *AgentRoutedPump) Run(
 	ctx context.Context,
 	sessionID string,
 ) (workeringest.PumpResult, error) {
@@ -197,33 +170,15 @@ func (router *ProviderRoutedPump) Run(
 	if err != nil {
 		return workeringest.PumpResult{}, err
 	}
-	pump, err := router.routes.forAssignment(run.AgentProviders, role)
+	agentID, err := providerForRole(run.AgentProviders, role)
+	if err != nil {
+		return workeringest.PumpResult{}, err
+	}
+	pump, err := router.pumps(string(agentID))
 	if err != nil {
 		return workeringest.PumpResult{}, err
 	}
 	return pump.Run(ctx, sessionID)
-}
-
-func (routes ProviderPumpRoutes) forAssignment(
-	providers project.AgentProviders,
-	role workerhttp.Role,
-) (RemoteLeadPump, error) {
-	provider, err := providerForRole(providers, role)
-	if err != nil {
-		return nil, err
-	}
-	switch {
-	case provider == project.AgentProviderCodex && role == workerhttp.RoleLead:
-		return routes.CodexLead, nil
-	case provider == project.AgentProviderCodex && role == workerhttp.RoleReviewer:
-		return routes.CodexReviewer, nil
-	case provider == project.AgentProviderClaude && role == workerhttp.RoleLead:
-		return routes.ClaudeLead, nil
-	case provider == project.AgentProviderClaude && role == workerhttp.RoleReviewer:
-		return routes.ClaudeReviewer, nil
-	default:
-		return nil, errors.New("run has an unsupported provider assignment")
-	}
 }
 
 func runAndRoleForSession(sessionID string) (string, workerhttp.Role, error) {

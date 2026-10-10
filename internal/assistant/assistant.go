@@ -124,8 +124,9 @@ type Config struct {
 	Workspaces  WorkspacePreparer
 	Briefs      BriefWriter
 	Transitions FeatureTransitioner
-	Workers     map[project.AgentProvider]Worker
-	Now         func() time.Time
+	// Workers resolves an agent ID to its worker (ADR-016).
+	Workers func(agentID string) (WorkerService, error)
+	Now     func() time.Time
 }
 
 type Service struct {
@@ -134,20 +135,15 @@ type Service struct {
 	workspaces  WorkspacePreparer
 	briefs      BriefWriter
 	transitions FeatureTransitioner
-	workers     map[project.AgentProvider]Worker
+	workers     func(agentID string) (WorkerService, error)
 	now         func() time.Time
 	mu          sync.Mutex
 }
 
 func NewService(config Config) (*Service, error) {
 	if config.Store == nil || config.Features == nil || config.Workspaces == nil || config.Briefs == nil ||
-		config.Transitions == nil || len(config.Workers) == 0 {
+		config.Transitions == nil || config.Workers == nil {
 		return nil, fmt.Errorf("%w: store, features, workspaces, briefs, transitions, and workers are required", ErrUnavailable)
-	}
-	for provider, configured := range config.Workers {
-		if !provider.IsValid() || configured.Service == nil || strings.TrimSpace(configured.AgentProfileID) == "" {
-			return nil, fmt.Errorf("%w: invalid worker for %q", ErrUnavailable, provider)
-		}
 	}
 	now := config.Now
 	if now == nil {
@@ -186,7 +182,7 @@ func (service *Service) Start(
 	if storedFeature.State != feature.StateDraft {
 		return Session{}, false, ErrNotDraft
 	}
-	configured, ok := service.workers[provider]
+	configured, ok := service.worker(provider)
 	model = strings.TrimSpace(model)
 	if !ok {
 		return Session{}, false, fmt.Errorf("%w: provider %q is not available", ErrInvalid, provider)
@@ -310,7 +306,7 @@ func (service *Service) Reply(
 			return Session{}, false, err
 		}
 	}
-	configured, ok := service.workers[record.Provider]
+	configured, ok := service.worker(record.Provider)
 	if !ok {
 		return Session{}, false, ErrUnavailable
 	}
@@ -403,6 +399,18 @@ func (service *Service) Reopen(ctx context.Context, projectID, featureID, idempo
 	return service.features.GetByID(ctx, projectID, featureID)
 }
 
+// worker resolves an agent's worker; the agent's ID is its worker profile.
+func (service *Service) worker(agent project.AgentProvider) (Worker, bool) {
+	if !agent.IsValid() {
+		return Worker{}, false
+	}
+	resolved, err := service.workers(string(agent))
+	if err != nil || resolved == nil {
+		return Worker{}, false
+	}
+	return Worker{Service: resolved, AgentProfileID: string(agent)}, true
+}
+
 func (service *Service) assignment(record Record, configured Worker) workerhttp.Assignment {
 	return workerhttp.Assignment{
 		AgentProfileID: configured.AgentProfileID, Model: record.Model,
@@ -414,7 +422,7 @@ func (service *Service) assignment(record Record, configured Worker) workerhttp.
 // refresh folds a finished turn into the session: a question waits for the
 // user, a proposal becomes the work order's handoff brief.
 func (service *Service) refresh(ctx context.Context, record Record) (Record, error) {
-	configured, ok := service.workers[record.Provider]
+	configured, ok := service.worker(record.Provider)
 	if !ok {
 		return record, ErrUnavailable
 	}
