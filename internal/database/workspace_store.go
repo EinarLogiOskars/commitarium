@@ -512,3 +512,36 @@ func sameWorkspaceReservation(left, right workspace.Workspace) bool {
 func formatWorkspaceTime(value time.Time) string {
 	return value.UTC().Format(time.RFC3339Nano)
 }
+
+// RepinBase moves a workspace that has no feature branch yet to a newer base
+// commit and marks its checkout as needing a fresh clone. It only applies
+// while the expected base is still recorded, so a retry is a no-op.
+func (store *WorkspaceStore) RepinBase(
+	ctx context.Context,
+	featureID string,
+	expectedBaseCommitID string,
+	baseCommitID string,
+	repinnedAt time.Time,
+) (workspace.Workspace, error) {
+	result, err := store.db.ExecContext(
+		ctx,
+		`UPDATE feature_workspaces
+		 SET base_commit_id = ?, checkout_relative_path = '', checkout_created_at = NULL, updated_at = ?
+		 WHERE feature_id = ? AND status = ? AND base_commit_id = ?`,
+		baseCommitID, formatWorkspaceTime(repinnedAt), featureID, workspace.StatusPreparing, expectedBaseCommitID,
+	)
+	if err != nil {
+		return workspace.Workspace{}, fmt.Errorf("repin workspace base: %w", err)
+	}
+	if _, err := result.RowsAffected(); err != nil {
+		return workspace.Workspace{}, fmt.Errorf("read workspace repin row count: %w", err)
+	}
+	stored, err := store.GetByFeatureID(ctx, featureID)
+	if err != nil {
+		return workspace.Workspace{}, err
+	}
+	if stored.BaseCommitID != baseCommitID {
+		return workspace.Workspace{}, workspace.ErrConflict
+	}
+	return stored, nil
+}

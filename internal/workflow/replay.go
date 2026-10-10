@@ -44,7 +44,7 @@ func ReplayFeatureState(events []Event) (feature.State, error) {
 		}
 		switch event.Type {
 		case EventTypeGoalAccepted:
-			if state != feature.StateDraft || goalAccepted {
+			if (state != feature.StateDraft && state != feature.StateReady) || goalAccepted {
 				return "", fmt.Errorf(
 					"%w: goal acceptance event %q is out of order", ErrInvalidEventStream, event.ID,
 				)

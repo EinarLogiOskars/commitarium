@@ -6,6 +6,7 @@ import (
 
 	"github.com/EinarLogiOskars/commitarium/internal/execution"
 	"github.com/EinarLogiOskars/commitarium/internal/feature"
+	"github.com/EinarLogiOskars/commitarium/internal/featureartifact"
 	"github.com/EinarLogiOskars/commitarium/internal/project"
 	"github.com/EinarLogiOskars/commitarium/internal/worker"
 	"github.com/EinarLogiOskars/commitarium/internal/workspace"
@@ -77,5 +78,23 @@ func TestPlanningRecoverySuccessorsDoNotTakeTheNextTurn(t *testing.T) {
 	approval, err := recoverySuccessorAttemptID(session.ID, "run_x:reviewer:approval:1")
 	if err != nil || approval != "run_x:reviewer:approval:2" {
 		t.Fatalf("approval successor = %q err=%v", approval, err)
+	}
+}
+
+func TestBriefBecomesThePlanningGoalWithAFreshnessCheck(t *testing.T) {
+	goal := briefGoal(featureartifact.HandoffBrief{
+		Goal: "Add due dates.", Areas: []string{"backend/app/models"},
+		Considerations: []string{"Keep rows valid."}, OpenQuestions: []string{},
+	})
+	if !strings.HasPrefix(goal, "Add due dates.") || !strings.Contains(goal, "Areas to touch:\n- backend/app/models") ||
+		!strings.Contains(goal, "Worth planning around:\n- Keep rows valid.") || strings.Contains(goal, "Open questions") {
+		t.Fatalf("brief goal:\n%s", goal)
+	}
+	moved := briefFreshnessInstructions(strings.Repeat("a", 40), strings.Repeat("b", 40))
+	if !strings.Contains(moved, "git log --oneline "+strings.Repeat("a", 40)+".."+strings.Repeat("b", 40)) {
+		t.Fatalf("moved-base freshness:\n%s", moved)
+	}
+	if current := briefFreshnessInstructions("", strings.Repeat("b", 40)); strings.Contains(current, "git log") {
+		t.Fatalf("unmoved-base freshness asks for history:\n%s", current)
 	}
 }

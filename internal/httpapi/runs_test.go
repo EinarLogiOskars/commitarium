@@ -73,7 +73,7 @@ func TestStartRunReturnsDurableAcceptedRun(t *testing.T) {
 	}
 	features := &recordingFeatureService{getResult: feature.Feature{
 		ID: "fea_test", ProjectID: "prj_test", Title: "Build coordinator",
-		Description: "Exercise its deterministic workflow", State: feature.StateDraft,
+		Description: "Exercise its deterministic workflow", State: feature.StateReady,
 		DialogueLimits: limits, AgentProviders: providers,
 		MergePolicy:    project.MergePolicyAutoAfterGates,
 		AutonomyPolicy: project.AutonomyPolicyRunToCompletion,
@@ -189,7 +189,7 @@ func TestStartRunValidatesAdmission(t *testing.T) {
 		{name: "missing key", feature: feature.Feature{State: feature.StateDraft}, status: http.StatusBadRequest, code: "idempotency_key_required"},
 		{name: "unknown feature", key: "new", featureErr: feature.ErrNotFound, status: http.StatusNotFound, code: "feature_not_found"},
 		{name: "feature already active", key: "new", feature: feature.Feature{State: feature.StatePlanning}, status: http.StatusConflict, code: "feature_not_startable"},
-		{name: "goal already accepted", key: "new", feature: feature.Feature{State: feature.StateDraft, AcceptedGoal: "Ship it"}, status: http.StatusConflict, code: "feature_not_startable"},
+		{name: "draft without a brief", key: "new", feature: feature.Feature{State: feature.StateDraft}, status: http.StatusConflict, code: "feature_not_startable"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -229,7 +229,7 @@ func TestStartRunMapsSelectedProjectWorkspaceErrors(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			features := &recordingFeatureService{getResult: feature.Feature{
-				ID: "fea_test", ProjectID: "prj_test", Title: "Test", State: feature.StateDraft,
+				ID: "fea_test", ProjectID: "prj_test", Title: "Test", State: feature.StateReady,
 			}}
 			executions := &recordingExecutionService{runErr: execution.ErrNotFound}
 			projects := &recordingProjectService{getByIDResult: project.Project{ID: "prj_test"}}

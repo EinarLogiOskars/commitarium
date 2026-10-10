@@ -144,6 +144,7 @@ type RemoteLeadFeatureFinder interface {
 
 type RemoteLeadGoalService interface {
 	AcceptGoal(context.Context, string, string, string, workflow.Actor, string) (workflow.Event, error)
+	AcceptGoalAtStart(context.Context, string, string, string, workflow.Actor, string) (workflow.Event, error)
 }
 
 type RemoteLeadPlanningWorkflow interface {
@@ -163,6 +164,7 @@ type remoteLeadAcceptanceArtifactService interface {
 type RemoteLeadWorkspaceService interface {
 	Get(context.Context, string, string) (workspace.Workspace, error)
 	PrepareForClarification(context.Context, string, string) (workspace.Workspace, bool, error)
+	PrepareForStart(context.Context, string, string) (workspace.Workspace, string, error)
 	PublishPlan(context.Context, string, string, string, string) (workspace.Workspace, bool, error)
 	PublishRevisedPlan(context.Context, string, string, string, string, string) (workspace.Workspace, bool, error)
 	VerifyPublishedPlan(context.Context, string, string, string, string) (workspace.Workspace, error)
@@ -236,6 +238,7 @@ type RemoteLeadConfig struct {
 	Goals                        RemoteLeadGoalService
 	Planning                     RemoteLeadPlanningWorkflow
 	Artifacts                    RemoteLeadArtifactService
+	Briefs                       RemoteLeadBriefReader
 	Workspaces                   RemoteLeadWorkspaceService
 	Worker                       RemoteLeadWorker
 	Pump                         RemoteLeadPump
@@ -253,6 +256,11 @@ type RemoteLeadConfig struct {
 	ClaudeForgejoAuthor          string
 	ClaudeReviewerForgejoAuthor  string
 	ReportError                  func(error)
+}
+
+// RemoteLeadBriefReader reads a work order's handoff brief at Start.
+type RemoteLeadBriefReader interface {
+	GetFeatureArtifact(context.Context, string, featureartifact.Kind) (workflow.FeatureArtifact, error)
 }
 
 type RemoteLeadToolchainReader interface {
@@ -274,6 +282,7 @@ type RemoteLeadStarter struct {
 	goals                        RemoteLeadGoalService
 	planning                     RemoteLeadPlanningWorkflow
 	artifacts                    RemoteLeadArtifactService
+	briefs                       RemoteLeadBriefReader
 	workspaces                   RemoteLeadWorkspaceService
 	worker                       RemoteLeadWorker
 	pump                         RemoteLeadPump
@@ -338,7 +347,7 @@ func NewRemoteLeadStarter(config RemoteLeadConfig) (*RemoteLeadStarter, error) {
 	}
 	return &RemoteLeadStarter{
 		executions: config.Executions, features: config.Features, goals: config.Goals,
-		planning: config.Planning, artifacts: config.Artifacts, workspaces: config.Workspaces,
+		planning: config.Planning, artifacts: config.Artifacts, briefs: config.Briefs, workspaces: config.Workspaces,
 		worker: config.Worker, pump: config.Pump,
 		environmentRequests: config.EnvironmentRequests, validation: config.Validation, toolchains: config.Toolchains,
 		usage:    config.Usage,
@@ -442,15 +451,24 @@ func (starter *RemoteLeadStarter) StartWithModels(
 		strings.TrimSpace(featureID) == "" || strings.TrimSpace(goal) == "" {
 		return execution.Run{}, false, ErrInvalidRunRequest
 	}
-	if starter.workspaces == nil {
-		return execution.Run{}, false, fmt.Errorf("%w: workspace service is required", ErrInvalidRunRequest)
+	if starter.workspaces == nil || starter.briefs == nil || starter.planning == nil {
+		return execution.Run{}, false, fmt.Errorf("%w: workspace, brief, and planning services are required", ErrInvalidRunRequest)
 	}
-	prepared, _, err := starter.workspaces.PrepareForClarification(ctx, projectID, featureID)
+	if existing, err := starter.executions.GetRun(ctx, runID); err == nil {
+		return existing, false, nil
+	} else if !errors.Is(err, execution.ErrNotFound) {
+		return execution.Run{}, false, err
+	}
+	storedFeature, err := starter.features.GetByID(ctx, featureID)
 	if err != nil {
-		return execution.Run{}, false, fmt.Errorf("prepare goal-clarification workspace: %w", err)
+		return execution.Run{}, false, err
 	}
-	if !prepared.CheckoutReady() {
-		return execution.Run{}, false, fmt.Errorf("%w: goal-clarification checkout is not ready", ErrInvalidRunRequest)
+	if storedFeature.State != feature.StateReady {
+		return execution.Run{}, false, ErrFeatureNotReady
+	}
+	brief, err := starter.handoffBrief(ctx, featureID)
+	if err != nil {
+		return execution.Run{}, false, err
 	}
 	agentProviders, err = agentProviders.Normalize()
 	if err != nil {
@@ -460,13 +478,19 @@ func (starter *RemoteLeadStarter) StartWithModels(
 	if err != nil {
 		return execution.Run{}, false, ErrInvalidRunRequest
 	}
-	request, err := starter.startRequest(runID, projectID, featureID, prepared.ID, goal, agentProviders)
+	prepared, previousBase, err := starter.workspaces.PrepareForStart(ctx, projectID, featureID)
 	if err != nil {
-		return execution.Run{}, false, err
+		return execution.Run{}, false, fmt.Errorf("prepare workspace for start: %w", err)
 	}
-	storedFeature, featureErr := starter.features.GetByID(ctx, featureID)
-	if featureErr != nil {
-		return execution.Run{}, false, featureErr
+	if !prepared.CheckoutReady() {
+		return execution.Run{}, false, fmt.Errorf("%w: start checkout is not ready", ErrInvalidRunRequest)
+	}
+	sessionID := remoteLeadSessionID(runID)
+	userActor := workflow.Actor{Kind: workflow.ActorKindUser, ID: "local-user"}
+	if _, err := starter.goals.AcceptGoalAtStart(
+		ctx, featureID, sessionID, briefGoal(brief), userActor, runID+":start-goal",
+	); err != nil {
+		return execution.Run{}, false, err
 	}
 	var run execution.Run
 	var created bool
@@ -486,16 +510,30 @@ func (starter *RemoteLeadStarter) StartWithModels(
 	if err != nil || !created {
 		return run, created, err
 	}
-	sessionID := remoteLeadSessionID(runID)
+	if _, err := starter.planning.TransitionFeature(
+		ctx, featureID, feature.StatePlanning,
+		workflow.Actor{Kind: workflow.ActorKindCoordinator, ID: coordinatorActorID}, runID+":start-planning",
+	); err != nil {
+		starter.failAdmission(ctx, run, sessionID, fmt.Errorf("start planning: %w", err))
+		return execution.Run{}, false, err
+	}
 	if _, _, err := starter.executions.CreateSession(
 		ctx, sessionID, runID, agentID(agentProviders.Lead, worker.RoleLead), worker.RoleLead,
 	); err != nil {
 		starter.failAdmission(ctx, run, sessionID, fmt.Errorf("create lead session: %w", err))
 		return execution.Run{}, false, err
 	}
-	if _, _, err := starter.executions.CreateWorkerAttempt(
-		ctx, sessionID, request.identity.AttemptID,
-	); err != nil {
+	storedFeature, err = starter.features.GetByID(ctx, featureID)
+	if err != nil {
+		return execution.Run{}, false, err
+	}
+	attemptID := planningAttemptID(sessionID)
+	request, err := starter.startPlanningRequest(run, storedFeature, sessionID, prepared, previousBase, attemptID)
+	if err != nil {
+		starter.failAdmission(ctx, run, sessionID, err)
+		return execution.Run{}, false, err
+	}
+	if _, _, err := starter.executions.CreateWorkerAttempt(ctx, sessionID, attemptID); err != nil {
 		starter.failAdmission(ctx, run, sessionID, fmt.Errorf("create worker attempt: %w", err))
 		return execution.Run{}, false, err
 	}
@@ -503,7 +541,66 @@ func (starter *RemoteLeadStarter) StartWithModels(
 		return execution.Run{}, false, fmt.Errorf("%w: %q", ErrRunAlreadyActive, runID)
 	}
 	go starter.launch(request)
-	return run, true, nil
+	startedRun, err := starter.executions.GetRun(ctx, runID)
+	return startedRun, true, err
+}
+
+// ErrFeatureNotReady means a run can only start from a Ready work order.
+var ErrFeatureNotReady = errors.New("only a ready work order can be started")
+
+func (starter *RemoteLeadStarter) handoffBrief(ctx context.Context, featureID string) (featureartifact.HandoffBrief, error) {
+	artifact, err := starter.briefs.GetFeatureArtifact(ctx, featureID, featureartifact.KindHandoffBrief)
+	if err != nil {
+		if errors.Is(err, workflow.ErrArtifactNotFound) {
+			return featureartifact.HandoffBrief{}, ErrFeatureNotReady
+		}
+		return featureartifact.HandoffBrief{}, err
+	}
+	brief := featureartifact.HandoffBrief{}
+	if err := json.Unmarshal([]byte(artifact.Document), &brief); err != nil {
+		return featureartifact.HandoffBrief{}, fmt.Errorf("decode handoff brief: %w", err)
+	}
+	if err := brief.Validate(); err != nil {
+		return featureartifact.HandoffBrief{}, err
+	}
+	return brief, nil
+}
+
+// startPlanningRequest is the lead's first turn: it checks the brief against
+// the current checkout, then proposes the plan.
+func (starter *RemoteLeadStarter) startPlanningRequest(
+	run execution.Run,
+	storedFeature feature.Feature,
+	sessionID string,
+	prepared workspace.Workspace,
+	previousBase string,
+	attemptID string,
+) (remoteLeadRequest, error) {
+	request := remoteLeadRequest{
+		runID:         run.ID,
+		agentName:     "lead agent",
+		waitingReason: "The lead planning proposal is ready for reviewer consultation.",
+		waitKind:      execution.RunWaitKindPhaseCheckpoint,
+		planningStage: planningStageLeadProposal,
+		identity: workerhttp.MutationIdentity{
+			AttemptReference: workerhttp.AttemptReference{SessionID: sessionID, AttemptID: attemptID},
+			IdempotencyKey:   attemptID + ":start",
+		},
+		request: workerhttp.PutAttemptRequest{
+			Mode: workerhttp.AttemptModeStart,
+			Assignment: workerhttp.Assignment{
+				AgentProfileID: starter.profileID(run.AgentProviders.Lead, worker.RoleLead),
+				Model:          run.AgentModels.Lead, ProjectID: storedFeature.ProjectID, FeatureID: storedFeature.ID,
+				Role: workerhttp.RoleLead, WorkspaceID: prepared.ID,
+			},
+			Instructions: planningInstructions(storedFeature, prepared, reviewerParticipant(run.AgentProviders)) +
+				briefFreshnessInstructions(previousBase, prepared.BaseCommitID),
+		},
+	}
+	if err := request.request.Validate(request.identity); err != nil {
+		return remoteLeadRequest{}, fmt.Errorf("%w: %v", ErrInvalidRunRequest, err)
+	}
+	return request, nil
 }
 
 func (starter *RemoteLeadStarter) Recover(

@@ -15,6 +15,7 @@ import (
 
 var ErrGoalNotAccepted = errors.New("feature goal has not been accepted")
 var ErrFeatureNotDraft = errors.New("feature is no longer a draft")
+var ErrFeatureNotReady = errors.New("feature is not ready to start")
 var ErrFeatureNotPlanning = errors.New("feature is not in planning")
 var ErrFeatureNotReviewing = errors.New("feature is not in review")
 var ErrFeatureNotReadyToMerge = errors.New("feature is not ready to merge")
@@ -499,6 +500,71 @@ func (service *Service) PrepareForClarification(
 	if storedFeature.State != feature.StateDraft {
 		return Workspace{}, false, ErrFeatureNotDraft
 	}
+	return service.prepareCheckout(ctx, storedFeature)
+}
+
+// PrepareForStart prepares a Ready work order's checkout for its run. A
+// checkout that has no feature branch yet is first moved to the default
+// branch's current head. When it moved, the previous base commit (the one the
+// handoff brief was written against) is returned so the lead can check what
+// changed since.
+func (service *Service) PrepareForStart(
+	ctx context.Context,
+	projectID string,
+	featureID string,
+) (Workspace, string, error) {
+	storedFeature, err := service.features.GetByID(ctx, projectID, featureID)
+	if err != nil {
+		return Workspace{}, "", err
+	}
+	if storedFeature.State != feature.StateReady {
+		return Workspace{}, "", ErrFeatureNotReady
+	}
+	previousBase := ""
+	stored, err := service.store.GetByFeatureID(ctx, featureID)
+	switch {
+	case errors.Is(err, ErrNotFound):
+	case err != nil:
+		return Workspace{}, "", err
+	case stored.Status == StatusPreparing:
+		storedProject, err := service.projects.GetByID(ctx, projectID)
+		if err != nil {
+			return Workspace{}, "", err
+		}
+		if storedProject.ForgejoRepository == nil {
+			return Workspace{}, "", ErrProjectRepositoryNotBound
+		}
+		repository := storedProject.ForgejoRepository
+		head, err := service.branches.GetBranch(ctx, repository.Owner, repository.Name, repository.DefaultBranch)
+		if err != nil {
+			return Workspace{}, "", fmt.Errorf("get Forgejo default branch: %w", err)
+		}
+		if head.CommitID != stored.BaseCommitID {
+			previousBase = stored.BaseCommitID
+			if stored, err = service.store.RepinBase(
+				ctx, featureID, stored.BaseCommitID, head.CommitID, service.now().UTC(),
+			); err != nil {
+				return Workspace{}, "", err
+			}
+		}
+		if !stored.CheckoutReady() {
+			// A checkout at the old base (or left half-made by an interrupted
+			// repin) is only ever read, so it is safe to clone again.
+			for _, checkouts := range []CheckoutManager{service.checkouts, service.reviewerCheckouts} {
+				if disposable, ok := checkouts.(DisposableCheckoutManager); ok {
+					if err := disposable.Remove(ctx, stored.ID); err != nil {
+						return Workspace{}, "", err
+					}
+				}
+			}
+		}
+	}
+	prepared, _, err := service.prepareCheckout(ctx, storedFeature)
+	return prepared, previousBase, err
+}
+
+func (service *Service) prepareCheckout(ctx context.Context, storedFeature feature.Feature) (Workspace, bool, error) {
+	projectID, featureID := storedFeature.ProjectID, storedFeature.ID
 	storedProject, err := service.projects.GetByID(ctx, projectID)
 	if err != nil {
 		return Workspace{}, false, err

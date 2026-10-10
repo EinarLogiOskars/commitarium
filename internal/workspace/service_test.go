@@ -101,6 +101,19 @@ func (store *memoryStore) MarkCheckoutReady(
 	return store.stored, nil
 }
 
+func (store *memoryStore) RepinBase(_ context.Context, _ string, expected, base string, at time.Time) (Workspace, error) {
+	if store.stored.Status == StatusPreparing && store.stored.BaseCommitID == expected {
+		store.stored.BaseCommitID = base
+		store.stored.CheckoutRelativePath = ""
+		store.stored.CheckoutCreatedAt = nil
+		store.stored.UpdatedAt = at
+	}
+	if store.stored.BaseCommitID != base {
+		return Workspace{}, ErrConflict
+	}
+	return store.stored, nil
+}
+
 func (store *memoryStore) GetByFeatureID(_ context.Context, _ string) (Workspace, error) {
 	if store.stored.ID == "" {
 		if store.getErr != nil {
@@ -1709,5 +1722,55 @@ func testWorkspace(now time.Time) Workspace {
 		RepositoryOwner: "owner", RepositoryName: "repository",
 		BaseBranch: "main", Branch: "commitarium/fea_test", BaseCommitID: testCommitID,
 		Status: StatusPreparing, CreatedAt: now, UpdatedAt: now,
+	}
+}
+
+func TestServicePrepareForStartRepinsAnUnbranchedCheckout(t *testing.T) {
+	now := time.Date(2026, time.October, 10, 9, 0, 0, 0, time.UTC)
+	readyAt := now.Add(-time.Hour)
+	newHead := strings.Repeat("b", 40)
+	store := &memoryStore{stored: Workspace{
+		ID: "wsp_fea_test", ProjectID: "prj_test", FeatureID: "fea_test",
+		RepositoryOwner: "owner", RepositoryName: "repository", BaseBranch: "main",
+		Branch: "commitarium/fea_test", BaseCommitID: testCommitID, Status: StatusPreparing,
+		CheckoutRelativePath: "wsp_fea_test", CheckoutCreatedAt: &readyAt,
+		CreatedAt: now.Add(-2 * time.Hour), UpdatedAt: readyAt,
+	}}
+	branches := &recordingBranches{base: Branch{Name: "main", CommitID: newHead}}
+	checkout := &recordingCheckout{}
+	service := NewServiceWithCheckout(
+		store,
+		fixedFeatureFinder{stored: feature.Feature{ID: "fea_test", ProjectID: "prj_test", State: feature.StateReady}},
+		fixedProjectFinder{stored: project.Project{ID: "prj_test", ForgejoRepository: testRepository(now)}},
+		branches, checkout,
+	)
+	service.now = func() time.Time { return now }
+
+	prepared, previous, err := service.PrepareForStart(t.Context(), "prj_test", "fea_test")
+	if err != nil {
+		t.Fatalf("prepare for start: %v", err)
+	}
+	if previous != testCommitID || prepared.BaseCommitID != newHead || !prepared.CheckoutReady() {
+		t.Fatalf("previous=%q workspace=%+v", previous, prepared)
+	}
+	if len(checkout.removed) != 1 || len(checkout.specs) != 1 || checkout.specs[0].BaseCommitID != newHead ||
+		checkout.specs[0].AlreadyReady {
+		t.Fatalf("the old checkout was not replaced: removed=%v specs=%+v", checkout.removed, checkout.specs)
+	}
+
+	unchanged, previous, err := service.PrepareForStart(t.Context(), "prj_test", "fea_test")
+	if err != nil || previous != "" || unchanged.BaseCommitID != newHead || len(checkout.removed) != 1 {
+		t.Fatalf("an up-to-date checkout moved again: previous=%q workspace=%+v err=%v", previous, unchanged, err)
+	}
+}
+
+func TestServicePrepareForStartRequiresAReadyOrder(t *testing.T) {
+	service := NewServiceWithCheckout(
+		&memoryStore{},
+		fixedFeatureFinder{stored: feature.Feature{ID: "fea_test", ProjectID: "prj_test", State: feature.StateDraft}},
+		fixedProjectFinder{}, &recordingBranches{}, &recordingCheckout{},
+	)
+	if _, _, err := service.PrepareForStart(t.Context(), "prj_test", "fea_test"); !errors.Is(err, ErrFeatureNotReady) {
+		t.Fatalf("draft start error=%v", err)
 	}
 }

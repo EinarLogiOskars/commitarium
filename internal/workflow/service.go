@@ -42,6 +42,40 @@ func (s *Service) AcceptGoal(
 	return event, nil
 }
 
+// GoalStarter records a Ready work order's goal from its handoff brief when
+// the user starts it (ADR-015).
+type GoalStarter interface {
+	AcceptGoalAtStart(ctx context.Context, acceptance GoalAcceptance) (Event, error)
+}
+
+// AcceptGoalAtStart records the accepted goal of a Ready work order. The
+// session is the lead session the run is about to create.
+func (s *Service) AcceptGoalAtStart(
+	ctx context.Context,
+	featureID string,
+	sessionID string,
+	goal string,
+	actor Actor,
+	idempotencyKey string,
+) (Event, error) {
+	store, ok := s.store.(GoalStarter)
+	if !ok {
+		return Event{}, ErrGoalAcceptanceNotAllowed
+	}
+	event, err := store.AcceptGoalAtStart(ctx, GoalAcceptance{
+		EventID: s.generateID(), FeatureID: featureID, SessionID: sessionID,
+		Goal: strings.TrimSpace(goal), Actor: actor,
+		OccurredAt: s.now().UTC(), IdempotencyKey: idempotencyKey,
+	})
+	if err != nil {
+		return Event{}, fmt.Errorf("accept goal at start for feature %q: %w", featureID, err)
+	}
+	if s.broker != nil {
+		s.broker.publish(event)
+	}
+	return event, nil
+}
+
 func NewService(store Store) *Service {
 	return &Service{
 		store:  store,

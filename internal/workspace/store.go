@@ -28,4 +28,5 @@ type Store interface {
 	) (Workspace, error)
 	MarkMergeReady(ctx context.Context, featureID, approvedCommitID string, readyAt time.Time) (Workspace, error)
 	MarkMerged(ctx context.Context, featureID, approvedCommitID, mergeCommitID string, mergedAt, recordedAt time.Time) (Workspace, error)
+	RepinBase(ctx context.Context, featureID, expectedBaseCommitID, baseCommitID string, repinnedAt time.Time) (Workspace, error)
 }
