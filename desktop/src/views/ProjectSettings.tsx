@@ -232,6 +232,8 @@ function Agents({ project, onUpdated }: { project: Project; onUpdated: (p: Proje
   const [providers, setProviders] = useState<AgentProviders>({
     lead: project.agent_providers?.lead ?? "codex",
     reviewer: project.agent_providers?.reviewer ?? "codex",
+    lead_agent: project.agent_providers?.lead_agent,
+    reviewer_agent: project.agent_providers?.reviewer_agent,
   });
   const [models, setModels] = useState<AgentModels>({
     lead: project.agent_models?.lead ?? "",

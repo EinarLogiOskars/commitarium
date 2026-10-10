@@ -48,6 +48,16 @@ export interface ModelInfo {
   supported_reasoning_efforts?: string[];
 }
 
+/** One provider account — a subscription or an API key — that can lead or
+ * review any number of work orders (ADR-016). */
+export interface Agent {
+  id: string;
+  name: string;
+  provider: AgentProvider;
+  created_at: string;
+  updated_at: string;
+}
+
 /** The persisted last-successful model list for a provider+role worker. */
 export interface ModelCatalog {
   provider: AgentProvider;

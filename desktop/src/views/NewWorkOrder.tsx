@@ -5,6 +5,7 @@ import { ApiError } from "../api/client";
 import { NoValidationWarning } from "./NoValidationWarning";
 import { AgentModelFields } from "./AgentModelFields";
 import { useModels, pickModel } from "./useModels";
+import { agentFor, agentName, useAgents } from "./useAgents";
 import { WORK } from "../vocab";
 import type {
   AgentModels,
@@ -44,9 +45,12 @@ export function NewWorkOrder({
   // Per-order settings, seeded from the project defaults.
   const [showOptions, setShowOptions] = useState(false);
   const { modelsFor, loading: modelsLoading } = useModels();
+  const agents = useAgents();
   const [providers, setProviders] = useState<AgentProviders>({
     lead: project.agent_providers?.lead ?? "codex",
     reviewer: project.agent_providers?.reviewer ?? "codex",
+    lead_agent: project.agent_providers?.lead_agent,
+    reviewer_agent: project.agent_providers?.reviewer_agent,
   });
   const [models, setModels] = useState<AgentModels>({
     lead: project.agent_models?.lead ?? "",
@@ -112,7 +116,7 @@ export function NewWorkOrder({
   };
 
   const summary = [
-    `${cap(providers.lead)} lead · ${cap(providers.reviewer)} reviewer`,
+    `${agentName(agents, agentFor(providers, "lead"))} lead · ${agentName(agents, agentFor(providers, "reviewer"))} reviewer`,
     autonomy === "run_to_completion" ? "runs to merge gate" : "stops each phase",
     merge === "auto_after_gates" ? "auto-merge" : "approval to merge",
     ...(independentTests ? ["reviewer tests"] : []),
@@ -227,10 +231,6 @@ export function NewWorkOrder({
       </form>
     </section>
   );
-}
-
-function cap(s: string): string {
-  return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
 const ROUNDS_NOTICE_KEY = "commitarium.roundsNoticeDismissed";

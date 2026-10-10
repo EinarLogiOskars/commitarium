@@ -202,7 +202,7 @@ export function ProjectWorkspace({
             <StackPicker
               projectId={id}
               preferred={{
-                provider: project.agent_providers?.lead,
+                agent: project.agent_providers?.lead_agent ?? project.agent_providers?.lead,
                 model: project.agent_models?.lead,
               }}
               onSaved={(t) => {

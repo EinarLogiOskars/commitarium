@@ -12,7 +12,7 @@ import { Inbox } from "./views/Inbox";
 import { Launcher } from "./views/Launcher";
 import { Projects } from "./views/Projects";
 import { ProjectWorkspace } from "./views/ProjectWorkspace";
-import { Providers } from "./views/Providers";
+import { Agents } from "./views/Agents";
 import { ForgejoViewer } from "./views/ForgejoViewer";
 import { UpdateModal } from "./views/UpdateModal";
 import { useDesktopUpdate } from "./update/useDesktopUpdate";
@@ -25,7 +25,7 @@ function App() {
   const [autoEntered, setAutoEntered] = useState(false);
   const [projectId, setProjectId] = useState<string | null>(null);
   const [projectName, setProjectName] = useState<string | null>(null);
-  const [showProviders, setShowProviders] = useState(false);
+  const [showAgents, setShowAgents] = useState(false);
   const [showViewer, setShowViewer] = useState(false);
   const [showInbox, setShowInbox] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
@@ -141,8 +141,8 @@ function App() {
         <header className="app__header">
           <h1>Commitarium</h1>
           <span className="app__subtitle">Local workspace launcher</span>
-          <button className="ghost" onClick={() => setShowProviders(true)}>
-            Providers
+          <button className="ghost" onClick={() => setShowAgents(true)}>
+            Agents
           </button>
           <button className="ghost" onClick={() => setShowViewer(true)}>
             Audit viewer
@@ -156,14 +156,14 @@ function App() {
           </button>
           {!reachable && (
             <span className="muted">
-              Connect your providers, then start the stack below and wait for the coordinator.
+              Connect your agents, then start the stack below and wait for the coordinator.
             </span>
           )}
         </section>
 
         <Launcher onStackChanged={() => void checkHealth()} />
 
-        {showProviders && <Providers onClose={() => setShowProviders(false)} />}
+        {showAgents && <Agents onClose={() => setShowAgents(false)} />}
         {showViewer && <ForgejoViewer onClose={() => setShowViewer(false)} />}
         {exitDialog}
       </main>
@@ -224,8 +224,8 @@ function App() {
             <span className="topbar__update-dot" aria-hidden />
           </button>
         )}
-        <button className="ghost" onClick={() => setShowProviders(true)}>
-          Providers
+        <button className="ghost" onClick={() => setShowAgents(true)}>
+          Agents
         </button>
         <button className="ghost" onClick={() => setShowViewer(true)}>
           Audit viewer
@@ -243,7 +243,7 @@ function App() {
       </header>
 
       {exitDialog}
-      {showProviders && <Providers onClose={() => setShowProviders(false)} />}
+      {showAgents && <Agents onClose={() => setShowAgents(false)} />}
       {showViewer && <ForgejoViewer onClose={() => setShowViewer(false)} />}
       {showUpdate && <UpdateModal u={update} onClose={() => setShowUpdate(false)} />}
       {showSettings && (

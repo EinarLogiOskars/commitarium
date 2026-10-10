@@ -1,4 +1,5 @@
 import { pickModel } from "./useModels";
+import { agentFor, useAgents } from "./useAgents";
 import type {
   AgentModels,
   AgentProvider,
@@ -9,9 +10,10 @@ import type {
 
 const ROLES: AgentRole[] = ["lead", "reviewer"];
 
-// Per-role provider + model selectors. Controlled: the parent owns providers +
-// models. Changing a provider resets that role's model to a valid one from the
-// new provider's catalog.
+// Per-role agent + model selectors. Controlled: the parent owns the agent
+// assignment + models. Choosing an agent sets its provider and resets that
+// role's model to a valid one from the provider's catalog. One agent may play
+// both roles; they run as separate sessions.
 export function AgentModelFields({
   providers,
   models,
@@ -25,10 +27,13 @@ export function AgentModelFields({
   onChange: (providers: AgentProviders, models: AgentModels) => void;
   disabled?: boolean;
 }) {
-  const setProvider = (role: AgentRole, provider: AgentProvider) => {
-    const list = modelsFor(provider, role);
+  const agents = useAgents();
+  const setAgent = (role: AgentRole, id: string) => {
+    const agent = agents.find((candidate) => candidate.id === id);
+    if (!agent) return;
+    const list = modelsFor(agent.provider, role);
     onChange(
-      { ...providers, [role]: provider },
+      { ...providers, [role]: agent.provider, [`${role}_agent`]: agent.id },
       { ...models, [role]: pickModel(list, models[role]) },
     );
   };
@@ -40,18 +45,25 @@ export function AgentModelFields({
     <>
       {ROLES.map((role) => {
         const provider = providers[role];
+        const selected = agentFor(providers, role);
         const list = modelsFor(provider, role);
         return (
           <div className="agentrole" key={role}>
             <label>
-              {cap(role)} provider
+              {cap(role)} agent
               <select
-                value={provider}
-                onChange={(e) => setProvider(role, e.target.value as AgentProvider)}
+                value={selected}
+                onChange={(e) => setAgent(role, e.target.value)}
                 disabled={disabled}
               >
-                <option value="codex">Codex</option>
-                <option value="claude">Claude</option>
+                {!agents.some((agent) => agent.id === selected) && (
+                  <option value={selected}>{selected}</option>
+                )}
+                {agents.map((agent) => (
+                  <option key={agent.id} value={agent.id}>
+                    {agent.name}
+                  </option>
+                ))}
               </select>
             </label>
             <label>

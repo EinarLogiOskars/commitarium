@@ -77,7 +77,7 @@ The user's four logins are two subscriptions, each logged in twice.
 | A5 | `feat: let work orders choose agents` | Lead and reviewer agent on projects, features, and runs (migration adding agent columns backfilled from the providers; provider derived from the agent). API, desktop types, and validation. | A3, A4 |
 | A6 | `feat(desktop): run one worker per agent` | Tauri: generated compose overlay per agent (profile, journal, both workspace trees, both Forgejo tokens, bearer token), Forgejo identity pair and bearer token provisioned per agent, reconcile starts connected agents and stops the rest. Login, status, and disconnect target an agent instead of a fixed profile. | A3 |
 | A7 | Folded into A6 | The `codex` and `claude` agents use the lead profile and journal volumes by name, so nothing is copied; every reconcile removes the containers of the four pre-agent workers and of removed agents, keeping their volumes and token files. | A6 |
-| A8 | `feat(desktop): manage agents` | The Providers page becomes Agents: add (name, provider, subscription or API key), connect, disconnect, rename, remove. Agent pickers replace provider pickers in the work-order and project forms; models listed per agent. | A5, A6 |
+| A8 | `feat(desktop): manage agents` | The Providers page becomes Agents: add (name, provider, subscription or API key), connect, disconnect, rename, remove. Agent pickers replace provider pickers in the work-order and project forms and the setup assistant; models listed for the agent's provider. Connecting an agent starts its worker. | A5, A6 |
 | A9 | `docs: record agents` | Backup and restore per agent journal; desktop IPC, threat model, coordinator and worker API docs; plan marked done. | A8 |
 
 ## Verification
