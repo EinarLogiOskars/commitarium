@@ -158,6 +158,24 @@ function AssistantChat({
     }
   };
 
+  const canReply = !!session && !running && busy === null;
+
+  // Enter sends; Shift+Enter or Alt+Enter starts a new line.
+  const onReplyKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key !== "Enter" || e.shiftKey) return;
+    e.preventDefault();
+    if (e.altKey) {
+      const ta = e.currentTarget;
+      const start = ta.selectionStart;
+      setReply(reply.slice(0, start) + "\n" + reply.slice(ta.selectionEnd));
+      requestAnimationFrame(() => {
+        ta.selectionStart = ta.selectionEnd = start + 1;
+      });
+      return;
+    }
+    if (canReply && reply.trim()) void send();
+  };
+
   const accept = async () => {
     setBusy("accept");
     setError(null);
@@ -183,7 +201,6 @@ function AssistantChat({
     );
   }
 
-  const canReply = !!session && !running && busy === null;
   return (
     <section className="panel panel--phase">
       <h2>Clarify with the assistant</h2>
@@ -215,9 +232,7 @@ function AssistantChat({
                 placeholder="Reply to the assistant…"
                 value={reply}
                 onChange={(e) => setReply(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) void send();
-                }}
+                onKeyDown={onReplyKeyDown}
                 disabled={!canReply}
                 rows={2}
               />
@@ -230,13 +245,15 @@ function AssistantChat({
         <aside className="clarify__side">
           {brief ? (
             <>
-              <BriefEditor
-                projectId={projectId}
-                featureId={feature.id}
-                brief={brief}
-                revision={briefRevision}
-                disabled={running || busy !== null}
-              />
+              <div className="clarify__scroll">
+                <BriefEditor
+                  projectId={projectId}
+                  featureId={feature.id}
+                  brief={brief}
+                  revision={briefRevision}
+                  disabled={running || busy !== null}
+                />
+              </div>
               <button
                 className="primary"
                 onClick={() => void accept()}

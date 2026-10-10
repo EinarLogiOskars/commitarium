@@ -705,6 +705,21 @@ body {
   border-radius: 10px;
   padding: 14px;
 }
+/* The brief can be longer than the chat; it scrolls inside its card while the
+   Accept button stays in view below it. */
+.clarify__side {
+  min-height: 0;
+  max-height: 70vh;
+}
+.clarify__scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+.clarify__side > .primary {
+  flex: none;
+  align-self: flex-start;
+}
 .clarify__side textarea {
   flex: 1;
   font: inherit;

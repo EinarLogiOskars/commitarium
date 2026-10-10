@@ -103,7 +103,14 @@ function MessageEntry({ e }: { e: TranscriptEntry }) {
       </div>
     );
   }
-  const who = e.role === "reviewer" ? "Reviewer" : e.role === "user" ? "You" : "Lead";
+  const who =
+    e.role === "reviewer"
+      ? "Reviewer"
+      : e.role === "user"
+        ? "You"
+        : e.role === "assistant"
+          ? "Assistant"
+          : "Lead";
   const cls =
     e.role === "reviewer" ? "msg--reviewer" : e.role === "user" ? "msg--user" : "msg--lead";
   return (
