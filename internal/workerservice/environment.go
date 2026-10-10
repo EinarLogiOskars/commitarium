@@ -53,6 +53,7 @@ type RootedEnvironmentResolver struct {
 	workspaceRoot  string
 	variables      []string
 	roleVariables  map[worker.Role][]string
+	roleRoots      map[worker.Role]string
 	toolchainRoot  string
 	miseExecutable string
 	installTimeout time.Duration
@@ -63,9 +64,12 @@ type RootedEnvironmentResolverConfig struct {
 	WorkspaceRoot  string
 	Variables      []string
 	RoleVariables  map[worker.Role][]string
-	ToolchainRoot  string
-	MiseExecutable string
-	InstallTimeout time.Duration
+	// RoleWorkspaceRoots gives roles their own workspace tree; other roles use
+	// WorkspaceRoot. An agent worker keeps lead and reviewer checkouts apart.
+	RoleWorkspaceRoots map[worker.Role]string
+	ToolchainRoot      string
+	MiseExecutable     string
+	InstallTimeout     time.Duration
 }
 
 func NewRootedEnvironmentResolver(
@@ -104,6 +108,17 @@ func NewRootedEnvironmentResolver(
 		}
 		roleVariables[role] = cloneVariables(configured)
 	}
+	roleRoots := make(map[worker.Role]string, len(config.RoleWorkspaceRoots))
+	for role, configured := range config.RoleWorkspaceRoots {
+		if !role.IsValid() {
+			return nil, fmt.Errorf("%w: role %q is not recognized", ErrInvalidEnvironmentResolver, role)
+		}
+		roleRoot, err := canonicalDirectory(configured)
+		if err != nil {
+			return nil, fmt.Errorf("%w: %s workspace root: %v", ErrInvalidEnvironmentResolver, role, err)
+		}
+		roleRoots[role] = roleRoot
+	}
 	toolchainRoot := strings.TrimSpace(config.ToolchainRoot)
 	if toolchainRoot != "" {
 		toolchainRoot, err = canonicalDirectory(toolchainRoot)
@@ -124,6 +139,7 @@ func NewRootedEnvironmentResolver(
 		workspaceRoot:  root,
 		variables:      variables,
 		roleVariables:  roleVariables,
+		roleRoots:      roleRoots,
 		toolchainRoot:  toolchainRoot,
 		miseExecutable: miseExecutable,
 		installTimeout: installTimeout,
@@ -154,8 +170,12 @@ func (resolver *RootedEnvironmentResolver) Resolve(
 		)
 	}
 
-	directory, err := canonicalDirectory(filepath.Join(resolver.workspaceRoot, assignment.WorkspaceID))
-	if err != nil || !directoryWithin(resolver.workspaceRoot, directory) {
+	root := resolver.workspaceRoot
+	if roleRoot, ok := resolver.roleRoots[worker.Role(assignment.Role)]; ok {
+		root = roleRoot
+	}
+	directory, err := canonicalDirectory(filepath.Join(root, assignment.WorkspaceID))
+	if err != nil || !directoryWithin(root, directory) {
 		return worker.LaunchEnvironment{}, fmt.Errorf(
 			"%w: workspace %q cannot be opened inside the configured root",
 			ErrWorkspaceUnavailable,

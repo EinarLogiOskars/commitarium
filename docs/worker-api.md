@@ -144,6 +144,25 @@ the total from before the turn, so earlier turns of a resumed thread are not
 counted. Usage is advisory accounting: it is absent when the provider does not
 report it, and a malformed or mismatched usage update never fails the turn.
 
+## Concurrency
+
+`GET /internal/v1/capabilities` reports `max_concurrent_attempts`; `0` means
+the worker does not limit simultaneous attempts. Commitarium's workers report
+`0`: each attempt is its own provider process with its own session, so one
+agent can serve several work orders at once (ADR-016).
+
+## Agent workers
+
+A worker configured with a single role names it in
+`COMMITARIUM_<PROVIDER>_FORGEJO_ROLE` and uses the unprefixed Forgejo and Git
+identity settings. An agent worker serves both roles: it omits that setting
+and instead has `COMMITARIUM_<PROVIDER>_LEAD_*` and
+`COMMITARIUM_<PROVIDER>_REVIEWER_*` settings (`FORGEJO_TOKEN_FILE`,
+`FORGEJO_LOGIN`, `GIT_AUTHOR_NAME`, `GIT_AUTHOR_EMAIL`, `WORKSPACE_ROOT`).
+Each turn's assignment role selects its workspace tree and Forgejo identity;
+roles without an identity, such as the assistants' consultant role, get no
+Forgejo access and use the default workspace root.
+
 ## Live activity stream
 
 The event stream uses Server-Sent Events (SSE), a one-way HTTP stream from the

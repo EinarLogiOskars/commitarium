@@ -6,9 +6,11 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/EinarLogiOskars/commitarium/internal/toolchain"
+	"github.com/EinarLogiOskars/commitarium/internal/worker"
 	"github.com/EinarLogiOskars/commitarium/internal/workerhttp"
 )
 
@@ -203,4 +205,51 @@ func withAssignmentProfile(assignment workerhttp.Assignment, profileID string) w
 func withAssignmentWorkspace(assignment workerhttp.Assignment, workspaceID string) workerhttp.Assignment {
 	assignment.WorkspaceID = workspaceID
 	return assignment
+}
+
+func TestRootedEnvironmentResolverGivesEachRoleItsWorkspaceTree(t *testing.T) {
+	leadRoot, reviewerRoot := t.TempDir(), t.TempDir()
+	for _, root := range []string{leadRoot, reviewerRoot} {
+		if err := os.Mkdir(filepath.Join(root, "workspace_one"), 0o700); err != nil {
+			t.Fatalf("create workspace: %v", err)
+		}
+	}
+	resolver, err := NewRootedEnvironmentResolver(RootedEnvironmentResolverConfig{
+		AgentProfileID: "profile_test",
+		WorkspaceRoot:  leadRoot,
+		Variables:      []string{"PATH=/usr/bin:/bin"},
+		RoleVariables: map[worker.Role][]string{
+			worker.RoleLead:     {"COMMITARIUM_FORGEJO_LOGIN=agent-lead"},
+			worker.RoleReviewer: {"COMMITARIUM_FORGEJO_LOGIN=agent-reviewer"},
+		},
+		RoleWorkspaceRoots: map[worker.Role]string{worker.RoleLead: leadRoot, worker.RoleReviewer: reviewerRoot},
+	})
+	if err != nil {
+		t.Fatalf("create resolver: %v", err)
+	}
+	for role, root := range map[workerhttp.Role]string{
+		workerhttp.RoleLead: leadRoot, workerhttp.RoleReviewer: reviewerRoot, workerhttp.RoleConsultant: leadRoot,
+	} {
+		assignment := environmentTestAssignment()
+		assignment.Role = role
+		resolved, err := resolver.Resolve(t.Context(), assignment)
+		if err != nil {
+			t.Fatalf("resolve %s: %v", role, err)
+		}
+		want, _ := filepath.EvalSymlinks(filepath.Join(root, "workspace_one"))
+		if resolved.WorkingDirectory != want {
+			t.Fatalf("%s opened %q, want %q", role, resolved.WorkingDirectory, want)
+		}
+		login := ""
+		for _, variable := range resolved.Variables {
+			if value, ok := strings.CutPrefix(variable, "COMMITARIUM_FORGEJO_LOGIN="); ok {
+				login = value
+			}
+		}
+		if wantLogin := map[workerhttp.Role]string{
+			workerhttp.RoleLead: "agent-lead", workerhttp.RoleReviewer: "agent-reviewer",
+		}[role]; login != wantLogin {
+			t.Fatalf("%s got Forgejo login %q, want %q", role, login, wantLogin)
+		}
+	}
 }

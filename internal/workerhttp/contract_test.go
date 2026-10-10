@@ -59,7 +59,11 @@ func TestHealthAndCapabilitiesValidate(t *testing.T) {
 		{ProtocolVersion: ProtocolVersion, Provider: ProviderCodex, MaxConcurrentAttempts: 1},
 		{ProtocolVersion: ProtocolVersion, Provider: ProviderCodex, Capabilities: []Capability{"unknown"}, MaxConcurrentAttempts: 1},
 		{ProtocolVersion: ProtocolVersion, Provider: ProviderCodex, Capabilities: []Capability{CapabilityStart, CapabilityStart}, MaxConcurrentAttempts: 1},
-		{ProtocolVersion: ProtocolVersion, Provider: ProviderCodex, Capabilities: []Capability{CapabilityStart}},
+		{ProtocolVersion: ProtocolVersion, Provider: ProviderCodex, Capabilities: []Capability{CapabilityStart}, MaxConcurrentAttempts: -1},
+	}
+	unlimited := CapabilitiesResponse{ProtocolVersion: ProtocolVersion, Provider: ProviderCodex, Capabilities: []Capability{CapabilityStart}}
+	if err := unlimited.Validate(); err != nil {
+		t.Fatalf("a worker without an attempt limit was rejected: %v", err)
 	}
 	for _, response := range invalid {
 		if err := response.Validate(); !errors.Is(err, ErrInvalidContract) {

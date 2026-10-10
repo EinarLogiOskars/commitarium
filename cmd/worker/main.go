@@ -58,11 +58,7 @@ type codexConfig struct {
 	workspaceRoot     string
 	profileID         string
 	forgejoURL        string
-	forgejoTokenFile  string
-	forgejoLogin      string
-	forgejoRole       worker.Role
-	gitAuthorName     string
-	gitAuthorEmail    string
+	identities        map[worker.Role]forgejoIdentity
 	toolchainRoot     string
 	coordinatorURL    string
 }
@@ -76,11 +72,7 @@ type claudeConfig struct {
 	workspaceRoot     string
 	profileID         string
 	forgejoURL        string
-	forgejoTokenFile  string
-	forgejoLogin      string
-	forgejoRole       worker.Role
-	gitAuthorName     string
-	gitAuthorEmail    string
+	identities        map[worker.Role]forgejoIdentity
 	toolchainRoot     string
 	coordinatorURL    string
 }
@@ -204,10 +196,12 @@ func run(ctx context.Context, workerConfig config) error {
 		)
 	}
 	handler, err := workerhttp.NewServer(workerhttp.ServerConfig{
-		BearerToken:           workerConfig.bearerToken,
-		Provider:              workerRuntime.providerKind,
-		Capabilities:          workerRuntime.capabilities,
-		MaxConcurrentAttempts: 1,
+		BearerToken:  workerConfig.bearerToken,
+		Provider:     workerRuntime.providerKind,
+		Capabilities: workerRuntime.capabilities,
+		// Each attempt is its own provider process; one agent serves several
+		// work orders at once (ADR-016).
+		MaxConcurrentAttempts: 0,
 		EventSource:           service,
 		ModelSource:           workerRuntime.modelSource,
 	}, service)
@@ -310,33 +304,9 @@ func loadCodexConfig(getenv func(string) string) (codexConfig, error) {
 		parsedForgejoURL.RawQuery != "" || parsedForgejoURL.Fragment != "" {
 		return codexConfig{}, errors.New("COMMITARIUM_CODEX_FORGEJO_URL must be an absolute HTTP URL without credentials, query, or fragment")
 	}
-	forgejoTokenFile, err := required("COMMITARIUM_CODEX_FORGEJO_TOKEN_FILE")
+	identities, err := loadForgejoIdentities("COMMITARIUM_CODEX", "Codex", getenv, workspaceRoot)
 	if err != nil {
 		return codexConfig{}, err
-	}
-	if !filepath.IsAbs(forgejoTokenFile) {
-		return codexConfig{}, errors.New("COMMITARIUM_CODEX_FORGEJO_TOKEN_FILE must be absolute")
-	}
-	forgejoLogin, err := required("COMMITARIUM_CODEX_FORGEJO_LOGIN")
-	if err != nil {
-		return codexConfig{}, err
-	}
-	forgejoRole := worker.Role(strings.TrimSpace(getenv("COMMITARIUM_CODEX_FORGEJO_ROLE")))
-	if forgejoRole != worker.RoleLead && forgejoRole != worker.RoleReviewer {
-		return codexConfig{}, errors.New("COMMITARIUM_CODEX_FORGEJO_ROLE must be lead or reviewer")
-	}
-	gitAuthorName, err := required("COMMITARIUM_CODEX_GIT_AUTHOR_NAME")
-	if err != nil {
-		return codexConfig{}, err
-	}
-	gitAuthorEmail, err := required("COMMITARIUM_CODEX_GIT_AUTHOR_EMAIL")
-	if err != nil {
-		return codexConfig{}, err
-	}
-	for _, value := range []string{forgejoLogin, gitAuthorName, gitAuthorEmail} {
-		if strings.ContainsAny(value, "\r\n") {
-			return codexConfig{}, errors.New("Codex Forgejo and Git identity values cannot contain newlines")
-		}
 	}
 	executable := strings.TrimSpace(getenv("COMMITARIUM_CODEX_EXECUTABLE"))
 	if executable == "" {
@@ -371,9 +341,7 @@ func loadCodexConfig(getenv func(string) string) (codexConfig, error) {
 		availableModels: availableModels,
 		sandbox:         sandbox, providerStatePath: providerStatePath,
 		workspaceRoot: workspaceRoot, profileID: profileID,
-		forgejoURL: strings.TrimRight(forgejoURL, "/"), forgejoTokenFile: forgejoTokenFile,
-		forgejoLogin: forgejoLogin, forgejoRole: forgejoRole,
-		gitAuthorName: gitAuthorName, gitAuthorEmail: gitAuthorEmail,
+		forgejoURL: strings.TrimRight(forgejoURL, "/"), identities: identities,
 		toolchainRoot: toolchainRoot, coordinatorURL: coordinatorURL,
 	}, nil
 }
@@ -411,33 +379,9 @@ func loadClaudeConfig(getenv func(string) string) (claudeConfig, error) {
 		parsedForgejoURL.RawQuery != "" || parsedForgejoURL.Fragment != "" {
 		return claudeConfig{}, errors.New("COMMITARIUM_CLAUDE_FORGEJO_URL must be an absolute HTTP URL without credentials, query, or fragment")
 	}
-	forgejoTokenFile, err := required("COMMITARIUM_CLAUDE_FORGEJO_TOKEN_FILE")
+	identities, err := loadForgejoIdentities("COMMITARIUM_CLAUDE", "Claude", getenv, workspaceRoot)
 	if err != nil {
 		return claudeConfig{}, err
-	}
-	if !filepath.IsAbs(forgejoTokenFile) {
-		return claudeConfig{}, errors.New("COMMITARIUM_CLAUDE_FORGEJO_TOKEN_FILE must be absolute")
-	}
-	forgejoLogin, err := required("COMMITARIUM_CLAUDE_FORGEJO_LOGIN")
-	if err != nil {
-		return claudeConfig{}, err
-	}
-	forgejoRole := worker.Role(strings.TrimSpace(getenv("COMMITARIUM_CLAUDE_FORGEJO_ROLE")))
-	if forgejoRole != worker.RoleLead && forgejoRole != worker.RoleReviewer {
-		return claudeConfig{}, errors.New("COMMITARIUM_CLAUDE_FORGEJO_ROLE must be lead or reviewer")
-	}
-	gitAuthorName, err := required("COMMITARIUM_CLAUDE_GIT_AUTHOR_NAME")
-	if err != nil {
-		return claudeConfig{}, err
-	}
-	gitAuthorEmail, err := required("COMMITARIUM_CLAUDE_GIT_AUTHOR_EMAIL")
-	if err != nil {
-		return claudeConfig{}, err
-	}
-	for _, value := range []string{forgejoLogin, gitAuthorName, gitAuthorEmail} {
-		if strings.ContainsAny(value, "\r\n") {
-			return claudeConfig{}, errors.New("Claude Forgejo and Git identity values cannot contain newlines")
-		}
 	}
 	executable := strings.TrimSpace(getenv("COMMITARIUM_CLAUDE_EXECUTABLE"))
 	if executable == "" {
@@ -474,9 +418,7 @@ func loadClaudeConfig(getenv func(string) string) (claudeConfig, error) {
 		availableModels: availableModels,
 		permissionMode:  permissionMode, providerStatePath: providerStatePath,
 		workspaceRoot: workspaceRoot, profileID: profileID,
-		forgejoURL: strings.TrimRight(forgejoURL, "/"), forgejoTokenFile: forgejoTokenFile,
-		forgejoLogin: forgejoLogin, forgejoRole: forgejoRole,
-		gitAuthorName: gitAuthorName, gitAuthorEmail: gitAuthorEmail,
+		forgejoURL: strings.TrimRight(forgejoURL, "/"), identities: identities,
 		toolchainRoot: toolchainRoot, coordinatorURL: coordinatorURL,
 	}, nil
 }
@@ -486,13 +428,9 @@ func newCodexRuntime(config codexConfig) (runtime, error) {
 	if err != nil || !providerState.IsDir() {
 		return runtime{}, errors.New("Codex provider-state directory is unavailable")
 	}
-	tokenBytes, err := os.ReadFile(config.forgejoTokenFile)
+	roleVariables, roleWorkspaceRoots, err := forgejoRoleEnvironment(config.forgejoURL, config.identities, "Codex")
 	if err != nil {
-		return runtime{}, errors.New("Codex Forgejo token file is unavailable")
-	}
-	forgejoToken := strings.TrimSpace(string(tokenBytes))
-	if forgejoToken == "" || strings.IndexFunc(forgejoToken, unicode.IsSpace) >= 0 {
-		return runtime{}, errors.New("Codex Forgejo token is empty or contains whitespace")
+		return runtime{}, err
 	}
 	baseVariables := []string{
 		"CODEX_HOME=" + config.providerStatePath,
@@ -505,25 +443,12 @@ func newCodexRuntime(config codexConfig) (runtime, error) {
 	}
 	resolver, err := workerservice.NewRootedEnvironmentResolver(
 		workerservice.RootedEnvironmentResolverConfig{
-			AgentProfileID: config.profileID,
-			WorkspaceRoot:  config.workspaceRoot,
-			ToolchainRoot:  config.toolchainRoot,
-			Variables:      baseVariables,
-			RoleVariables: map[worker.Role][]string{
-				config.forgejoRole: {
-					"COMMITARIUM_FORGEJO_URL=" + config.forgejoURL,
-					"COMMITARIUM_FORGEJO_TOKEN_FILE=" + config.forgejoTokenFile,
-					"COMMITARIUM_FORGEJO_LOGIN=" + config.forgejoLogin,
-					"GIT_AUTHOR_NAME=" + config.gitAuthorName,
-					"GIT_AUTHOR_EMAIL=" + config.gitAuthorEmail,
-					"GIT_COMMITTER_NAME=" + config.gitAuthorName,
-					"GIT_COMMITTER_EMAIL=" + config.gitAuthorEmail,
-					"GIT_TERMINAL_PROMPT=0",
-					"GIT_CONFIG_COUNT=1",
-					"GIT_CONFIG_KEY_0=http." + config.forgejoURL + "/.extraHeader",
-					"GIT_CONFIG_VALUE_0=Authorization: token " + forgejoToken,
-				},
-			},
+			AgentProfileID:     config.profileID,
+			WorkspaceRoot:      config.workspaceRoot,
+			ToolchainRoot:      config.toolchainRoot,
+			Variables:          baseVariables,
+			RoleVariables:      roleVariables,
+			RoleWorkspaceRoots: roleWorkspaceRoots,
 		},
 	)
 	if err != nil {
@@ -591,13 +516,9 @@ func newClaudeRuntime(config claudeConfig) (runtime, error) {
 	if err != nil || !providerState.IsDir() {
 		return runtime{}, errors.New("Claude provider-state directory is unavailable")
 	}
-	tokenBytes, err := os.ReadFile(config.forgejoTokenFile)
+	roleVariables, roleWorkspaceRoots, err := forgejoRoleEnvironment(config.forgejoURL, config.identities, "Claude")
 	if err != nil {
-		return runtime{}, errors.New("Claude Forgejo token file is unavailable")
-	}
-	forgejoToken := strings.TrimSpace(string(tokenBytes))
-	if forgejoToken == "" || strings.IndexFunc(forgejoToken, unicode.IsSpace) >= 0 {
-		return runtime{}, errors.New("Claude Forgejo token is empty or contains whitespace")
+		return runtime{}, err
 	}
 	baseVariables := []string{
 		"CLAUDE_CONFIG_DIR=" + config.providerStatePath,
@@ -610,25 +531,12 @@ func newClaudeRuntime(config claudeConfig) (runtime, error) {
 	}
 	resolver, err := workerservice.NewRootedEnvironmentResolver(
 		workerservice.RootedEnvironmentResolverConfig{
-			AgentProfileID: config.profileID,
-			WorkspaceRoot:  config.workspaceRoot,
-			ToolchainRoot:  config.toolchainRoot,
-			Variables:      baseVariables,
-			RoleVariables: map[worker.Role][]string{
-				config.forgejoRole: {
-					"COMMITARIUM_FORGEJO_URL=" + config.forgejoURL,
-					"COMMITARIUM_FORGEJO_TOKEN_FILE=" + config.forgejoTokenFile,
-					"COMMITARIUM_FORGEJO_LOGIN=" + config.forgejoLogin,
-					"GIT_AUTHOR_NAME=" + config.gitAuthorName,
-					"GIT_AUTHOR_EMAIL=" + config.gitAuthorEmail,
-					"GIT_COMMITTER_NAME=" + config.gitAuthorName,
-					"GIT_COMMITTER_EMAIL=" + config.gitAuthorEmail,
-					"GIT_TERMINAL_PROMPT=0",
-					"GIT_CONFIG_COUNT=1",
-					"GIT_CONFIG_KEY_0=http." + config.forgejoURL + "/.extraHeader",
-					"GIT_CONFIG_VALUE_0=Authorization: token " + forgejoToken,
-				},
-			},
+			AgentProfileID:     config.profileID,
+			WorkspaceRoot:      config.workspaceRoot,
+			ToolchainRoot:      config.toolchainRoot,
+			Variables:          baseVariables,
+			RoleVariables:      roleVariables,
+			RoleWorkspaceRoots: roleWorkspaceRoots,
 		},
 	)
 	if err != nil {
@@ -847,4 +755,129 @@ func checkHealth(ctx context.Context, healthURL string) error {
 		return fmt.Errorf("validate worker health: %w", err)
 	}
 	return nil
+}
+
+// forgejoIdentity is one role's Forgejo account, Git author, and workspace
+// tree.
+type forgejoIdentity struct {
+	workspaceRoot  string
+	tokenFile      string
+	login          string
+	gitAuthorName  string
+	gitAuthorEmail string
+}
+
+// loadForgejoIdentities reads the identities a worker holds. A single-role
+// worker names its role in <prefix>_FORGEJO_ROLE and uses the unprefixed
+// identity settings. An agent worker (ADR-016) serves both roles and has a
+// lead and a reviewer identity, each with its own workspace tree.
+func loadForgejoIdentities(
+	prefix string,
+	label string,
+	getenv func(string) string,
+	defaultWorkspaceRoot string,
+) (map[worker.Role]forgejoIdentity, error) {
+	read := func(name string) (string, error) {
+		value := strings.TrimSpace(getenv(name))
+		if value == "" {
+			return "", fmt.Errorf("%s is required for the %s adapter", name, label)
+		}
+		return value, nil
+	}
+	identity := func(settings string, workspaceRoot string) (forgejoIdentity, error) {
+		tokenFile, err := read(settings + "_FORGEJO_TOKEN_FILE")
+		if err != nil {
+			return forgejoIdentity{}, err
+		}
+		if !filepath.IsAbs(tokenFile) {
+			return forgejoIdentity{}, errors.New(settings + "_FORGEJO_TOKEN_FILE must be absolute")
+		}
+		login, err := read(settings + "_FORGEJO_LOGIN")
+		if err != nil {
+			return forgejoIdentity{}, err
+		}
+		authorName, err := read(settings + "_GIT_AUTHOR_NAME")
+		if err != nil {
+			return forgejoIdentity{}, err
+		}
+		authorEmail, err := read(settings + "_GIT_AUTHOR_EMAIL")
+		if err != nil {
+			return forgejoIdentity{}, err
+		}
+		for _, value := range []string{login, authorName, authorEmail} {
+			if strings.ContainsAny(value, "\r\n") {
+				return forgejoIdentity{}, errors.New(label + " Forgejo and Git identity values cannot contain newlines")
+			}
+		}
+		return forgejoIdentity{
+			workspaceRoot: workspaceRoot, tokenFile: tokenFile, login: login,
+			gitAuthorName: authorName, gitAuthorEmail: authorEmail,
+		}, nil
+	}
+	if role := strings.TrimSpace(getenv(prefix + "_FORGEJO_ROLE")); role != "" {
+		if worker.Role(role) != worker.RoleLead && worker.Role(role) != worker.RoleReviewer {
+			return nil, errors.New(prefix + "_FORGEJO_ROLE must be lead or reviewer")
+		}
+		single, err := identity(prefix, defaultWorkspaceRoot)
+		if err != nil {
+			return nil, err
+		}
+		return map[worker.Role]forgejoIdentity{worker.Role(role): single}, nil
+	}
+	identities := make(map[worker.Role]forgejoIdentity, 2)
+	for role, settings := range map[worker.Role]string{
+		worker.RoleLead: prefix + "_LEAD", worker.RoleReviewer: prefix + "_REVIEWER",
+	} {
+		workspaceRoot, err := read(settings + "_WORKSPACE_ROOT")
+		if err != nil {
+			return nil, err
+		}
+		if !filepath.IsAbs(workspaceRoot) {
+			return nil, errors.New(settings + "_WORKSPACE_ROOT must be absolute")
+		}
+		configured, err := identity(settings, workspaceRoot)
+		if err != nil {
+			return nil, err
+		}
+		identities[role] = configured
+	}
+	return identities, nil
+}
+
+// forgejoRoleEnvironment turns each role's identity into the variables its
+// turns receive (Forgejo access and Git author) and the workspace tree they
+// open. Roles without an identity, such as the assistants' consultant role,
+// get neither.
+func forgejoRoleEnvironment(
+	forgejoURL string,
+	identities map[worker.Role]forgejoIdentity,
+	label string,
+) (map[worker.Role][]string, map[worker.Role]string, error) {
+	variables := make(map[worker.Role][]string, len(identities))
+	roots := make(map[worker.Role]string, len(identities))
+	for role, identity := range identities {
+		tokenBytes, err := os.ReadFile(identity.tokenFile)
+		if err != nil {
+			return nil, nil, fmt.Errorf("%s %s Forgejo token file is unavailable", label, role)
+		}
+		token := strings.TrimSpace(string(tokenBytes))
+		if token == "" || strings.IndexFunc(token, unicode.IsSpace) >= 0 {
+			return nil, nil, fmt.Errorf("%s %s Forgejo token is empty or contains whitespace", label, role)
+		}
+		variables[role] = []string{
+			"COMMITARIUM_FORGEJO_URL=" + forgejoURL,
+			"COMMITARIUM_FORGEJO_TOKEN_FILE=" + identity.tokenFile,
+			"COMMITARIUM_FORGEJO_LOGIN=" + identity.login,
+			"GIT_AUTHOR_NAME=" + identity.gitAuthorName,
+			"GIT_AUTHOR_EMAIL=" + identity.gitAuthorEmail,
+			"GIT_COMMITTER_NAME=" + identity.gitAuthorName,
+			"GIT_COMMITTER_EMAIL=" + identity.gitAuthorEmail,
+			"GIT_TERMINAL_PROMPT=0",
+			"GIT_CONFIG_COUNT=1",
+			"GIT_CONFIG_KEY_0=http." + forgejoURL + "/.extraHeader",
+			"GIT_CONFIG_VALUE_0=Authorization: token " + token,
+		}
+		roots[role] = identity.workspaceRoot
+	}
+	return variables, roots, nil
 }
