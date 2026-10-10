@@ -14,7 +14,7 @@ export interface Interval {
 
 // Which feature states belong to each phase index (see PhaseStepper.PHASES).
 const PHASE_STATES: FeatureState[][] = [
-  ["draft"], // 0 clarify
+  ["draft", "ready"], // 0 clarify
   ["planning"], // 1 plan
   ["implementing"], // 2 implement
   ["reviewing"], // 3 review

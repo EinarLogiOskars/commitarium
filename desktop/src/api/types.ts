@@ -224,6 +224,7 @@ export interface StartAssistantInput {
 
 export type FeatureState =
   | "draft"
+  | "ready"
   | "planning"
   | "implementing"
   | "reviewing"
@@ -461,7 +462,39 @@ export interface FeatureUsage {
   total: TokenUsage;
 }
 
-export type FeatureArtifactKind = "goal_draft" | "implementation_plan" | "acceptance_tests";
+export type FeatureArtifactKind =
+  "goal_draft" | "implementation_plan" | "acceptance_tests" | "handoff_brief";
+
+/** A clarified work order: what and why, where, and what to plan around. */
+export interface HandoffBriefDocument {
+  goal: string;
+  areas: string[];
+  considerations: string[];
+  open_questions: string[];
+  /** The default-branch commit the brief was written against. */
+  base_commit_id: string;
+}
+
+export type WorkOrderAssistantStatus = "running" | "waiting_for_user" | "proposal_ready" | "failed";
+
+export interface WorkOrderAssistantMessage {
+  role: "user" | "assistant";
+  text: string;
+  occurred_at: string;
+}
+
+/** A draft work order's clarification conversation with the project assistant. */
+export interface WorkOrderAssistantSession {
+  id: string;
+  feature_id: string;
+  provider: string;
+  model: string;
+  status: WorkOrderAssistantStatus;
+  message: string;
+  messages: WorkOrderAssistantMessage[];
+  created_at: string;
+  updated_at: string;
+}
 
 // The reviewer's private, blind acceptance-test checklist (titles + commit ids
 // only — never executable source). pending = not yet run (unmet, not a failed

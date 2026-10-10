@@ -263,7 +263,14 @@ function Fact({ label, value }: { label: string; value: string }) {
   );
 }
 
-const IN_FLIGHT = new Set(["draft", "planning", "implementing", "reviewing", "ready_to_merge"]);
+const IN_FLIGHT = new Set([
+  "draft",
+  "ready",
+  "planning",
+  "implementing",
+  "reviewing",
+  "ready_to_merge",
+]);
 
 /** Coordinator severities mapped onto the shared state-dot tones. */
 const TONE: Record<AttentionItem["severity"], "bad" | "warn" | "ok"> = {

@@ -18,7 +18,8 @@ export const PHASE_LABELS: Record<Phase, string> = {
 export function currentPhaseIndex(f: Feature): number {
   switch (f.state) {
     case "draft":
-      return f.accepted_goal ? 1 : 0;
+    case "ready":
+      return 0;
     case "planning":
       return 1;
     case "implementing":

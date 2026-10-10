@@ -8,7 +8,7 @@ import {
 } from "../api/features";
 import { getRun } from "../api/runs";
 import { ApiError } from "../api/client";
-import { GoalClarification } from "./GoalClarification";
+import { ClarifyView } from "./ClarifyView";
 import { PlanningView } from "./PlanningView";
 import { ImplementationView } from "./ImplementationView";
 import { ReviewView } from "./ReviewView";
@@ -420,12 +420,7 @@ function body(
   // Clarify
   if (viewed === 0) {
     return (
-      <GoalClarification
-        projectId={projectId}
-        feature={feature}
-        hasRepo={hasRepo}
-        onAccepted={reload}
-      />
+      <ClarifyView projectId={projectId} feature={feature} hasRepo={hasRepo} onChanged={reload} />
     );
   }
 

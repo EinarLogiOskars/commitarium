@@ -2778,3 +2778,21 @@ button.danger:not(.ghost) {
   font-weight: 600;
   text-transform: capitalize;
 }
+
+.brief {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 8px 0;
+}
+.brief__card p {
+  margin: 2px 0 8px;
+  white-space: pre-wrap;
+}
+.brief__card ul {
+  margin: 2px 0 8px;
+  padding-left: 18px;
+}
+.brief--editing textarea {
+  width: 100%;
+}
