@@ -14,6 +14,13 @@ and the first piece of the project assistant.
 | **In progress** | Agents are working (planning through merge) |
 | **Done** | Merged, or cancelled |
 
+## Status
+
+Done on `feat/ready-work-orders`: R1–R8, with the lead-clarification removal
+as its own commit after the desktop moved over. The data layer still has
+unreachable support for draft-state worker turns and the old goal-acceptance
+store method; removing them is a small follow-up.
+
 ## Flow
 
 1. **Create.** Title and description, plus the per-order settings as today.

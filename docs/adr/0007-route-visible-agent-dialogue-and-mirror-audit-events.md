@@ -117,6 +117,13 @@ spend most of a provider's usage limit on repeated context:
 
 Per-turn provider token usage is recorded so the effect can be measured.
 
+## Clarification moves to the project assistant (2026-10-10)
+
+ADR-015 moves goal clarification out of the lead session. The lead session now
+begins with planning, from the work order's handoff brief, instead of
+continuing from a goal-drafting conversation. The rest of this decision is
+unchanged.
+
 ## Consequences
 
 ### Positive

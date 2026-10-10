@@ -58,7 +58,6 @@ this API beyond the host loopback interface is unsupported.
 | `GET` | `/api/v1/projects/{projectID}/features/{featureID}/workspace` | Retrieve the durable checkout, reserved branch, and optional PR identity |
 | `GET` | `/api/v1/projects/{projectID}/features/{featureID}/handoff` | Retrieve exact completed Git identities for trusted-host synchronization |
 | `GET` | `/api/v1/runs/{runID}` | Retrieve run state and its ordered sessions |
-| `POST` | `/api/v1/runs/{runID}/planning` | Resume the real lead in the managed workspace for its first plan proposal |
 | `POST` | `/api/v1/runs/{runID}/planning/reviewer` | Start the persistent reviewer with the lead's exact proposal |
 | `POST` | `/api/v1/runs/{runID}/planning/round` | Continue the lead/reviewer discussion until plan submission or its safety limit |
 | `POST` | `/api/v1/runs/{runID}/implementation` | Resume the same lead to implement and publish, or recheck its existing terminal publication |
@@ -73,7 +72,6 @@ this API beyond the host loopback interface is unsupported.
 | `GET` | `/api/v1/sessions/{sessionID}/events` | Retrieve durable observable session activity |
 | `GET` | `/api/v1/sessions/{sessionID}/events/stream` | Replay and stream observable session activity with SSE |
 | `POST` | `/api/v1/sessions/{sessionID}/commands` | Send an idempotent message or supported control to a session |
-| `POST` | `/api/v1/sessions/{sessionID}/goal-acceptance` | Accept the clarified goal from a waiting real lead session |
 
 ## Global attention snapshot
 
@@ -156,7 +154,7 @@ with different project settings returns `409 idempotency_conflict`. The header
 remains optional for compatibility with older clients.
 
 Run IDs are stable opaque values derived from the start request's idempotency
-key. Only a feature in `draft` can admit a new run, but a retry remains valid
+key. Only a `ready` feature can admit a new run, but a retry remains valid
 after that run has advanced the feature.
 
 ## Project settings
@@ -1451,10 +1449,10 @@ credentials and never pushes to the user's remote.
 
 ## Starting and observing a run
 
-Starting a run has no request body. In the default simulated workflow, the
-feature title and description still seed the complete scripted run. In
-`real_agents` mode they seed the clarification conversation; the final goal
-is stored separately only when the user accepts it:
+Only a `ready` work order can start (ADR-015); anything else returns
+`409 feature_not_startable`. Starting a run has no request body. In
+`real_agents` mode the run begins with the lead's planning proposal from the
+work order's handoff brief (see below):
 
 ```http
 POST /api/v1/projects/prj_example/features/fea_example/runs
@@ -1507,7 +1505,7 @@ control endpoints. Terminal run statuses are `succeeded`, `stopped`, and
 Run responses also contain `paused` and, while waiting or paused, a machine-readable
 `wait_kind`:
 
-- `clarification`: the lead needs user input or explicit goal acceptance;
+- `clarification`: an agent needs the user's input;
 - `phase_checkpoint`: a normal boundary that `run_to_completion` may dispatch;
 - `round_cap`: the configured planning or review limit was reached;
 - `blocker`: contradictory, ambiguous, unavailable, or recovery-sensitive state
@@ -1802,45 +1800,29 @@ acceptance. Both fields are omitted while clarification remains open.
 
 ## Starting the lead planning proposal
 
-In `real_agents` mode, this action starts planning after the goal has been
-accepted and the pinned managed checkout is ready:
+In `real_agents` mode, starting a ready work order begins planning directly.
+The coordinator:
 
-```http
-POST /api/v1/runs/run_opaque/planning
-Idempotency-Key: start-planning-1
-Content-Length: 0
-```
+1. re-pins the work order's checkout to the default branch's current head when
+   main has moved since the handoff brief was written and no feature branch
+   exists yet (the checkout was only ever read by the assistant);
+2. records the handoff brief as the feature's accepted goal and appends
+   `feature.goal_accepted`;
+3. creates the run, moves the feature from `ready` to `planning`, and creates
+   the lead session; and
+4. starts the lead's first turn in the managed checkout.
 
-The coordinator first reconciles the clean checkout against the reserved base
-commit without creating a feature branch or PR.
-It then records the feature transition from `draft` to `planning`, rotates the
-existing lead session to one deterministic planning attempt, and changes the
-run and session back to `running`. The attempt rotation and both operational
-status changes happen in one SQLite transaction, so a restart cannot observe
-only part of that admission.
+The lead's first turn receives the brief (goal, areas to touch, what to plan
+around, open questions), the repository identity, base branch and commit, and
+the reserved branch name. It first checks the brief against what changed since
+the brief's commit (or, when main has not moved, that the areas still match
+the code), then proposes the commit-by-commit plan. It must not modify files,
+install dependencies, commit, push, or implement. On completion the run waits
+with a reason stating that the proposal is ready for reviewer consultation.
+Under `review_each_phase` the user starts the reviewer with the endpoint below;
+under `run_to_completion` that action is dispatched server-side.
 
-The worker resumes the lead's original provider thread in the same managed
-feature workspace used during clarification. Its prompt includes the accepted
-goal, repository identity, exact base branch and commit, and reserved future
-branch name. It explicitly says no PR is required during planning. It must
-inspect before proposing a concrete implementation plan and
-must not modify files, install dependencies, commit, push, or implement. Worker
-activity and the proposal remain available through the lead session history and
-SSE stream. On completion, the run and lead session return to
-`waiting_for_user` with a reason stating that the proposal is ready for reviewer
-consultation. Under `review_each_phase`, the user starts the reviewer with the
-endpoint below. Under `run_to_completion`, that same idempotent reviewer action
-is dispatched server-side as soon as the proposal checkpoint is durable.
-
-The successful response is `202 Accepted`, contains the ordinary run resource,
-and points its `Location` header at `/api/v1/runs/{runID}`. The action is safe to
-retry and will not start a second planning attempt. Missing accepted goal,
-unready or contradictory checkout state, an unsafe prior worker attempt, or
-the wrong run/session state returns `409 planning_not_ready`. This endpoint is
-currently registered only for the opt-in real-Codex runner. Under
-`review_each_phase`, the user invokes it explicitly. Under `run_to_completion`,
-goal acceptance invokes this same deterministic action server-side; clients do
-not need to send another request.
+Retrying the start with the same `Idempotency-Key` returns the existing run.
 
 ## Starting the first planning review
 
@@ -2405,61 +2387,12 @@ Pause, continue, stop, and messages sent while a turn is already running still
 target only the in-process simulated sessions. Safe real-provider mid-turn
 controls remain outside the current lead-conversation slice.
 
-## Goal acceptance
-
-Only a waiting real lead session for a draft feature can accept a goal:
-
-```http
-POST /api/v1/sessions/ses_lead/goal-acceptance
-Idempotency-Key: accept-goal-1
-Content-Type: application/json
-
-{"goal":"Export reports as CSV for administrators, including all visible columns."}
-```
-
-A successful response is `200 OK`:
-
-```json
-{
-  "feature_id": "fea_example",
-  "session_id": "ses_lead",
-  "goal": "Export reports as CSV for administrators, including all visible columns.",
-  "event_id": "evt_opaque",
-  "sequence": 1,
-  "accepted_at": "2026-09-09T15:00:00Z"
-}
-```
-
-The coordinator stores the exact trimmed goal and timestamp on the feature,
-appends a `feature.goal_accepted` event to the existing workflow history, and
-changes the run's next wait to `phase_checkpoint` in the same SQLite
-transaction. The event also identifies the lead session whose conversation
-produced the goal. Feature event history and SSE represent this event with
-`goal` and `session_id`; state-change events continue to use `previous_state`
-and `state`.
-
-The acceptance transaction reaches this durable boundary before another
-provider turn can start, and the feature is still `draft` there. Under
-`review_each_phase`, the run remains `waiting_for_user` at the planning
-checkpoint until the user calls the planning action. Under `run_to_completion`,
-the coordinator immediately dispatches that same deterministic planning action,
-moving the feature to `planning` without another click. Acceptance closes the
-clarification boundary: later message commands and a new run-start request are
-rejected. An exact retry of the original run start or goal acceptance still
-returns its durable result. A changed request using the same key returns
-`idempotency_conflict`, and another acceptance under a new key returns
-`goal_already_accepted`. Editing an accepted goal is intentionally unsupported
-until a later explicit reopen operation can return it to user-controlled
-clarification safely.
-
 ## Restart recovery
 
 At coordinator startup, durable `running` runs are replayed from their stored
 session results. A `run_to_completion` run waiting unpaused at
 `phase_checkpoint` is also recovered so startup can retry the missing automatic
-handoff. For upgrade compatibility, an autonomous draft with an accepted goal
-that an older coordinator left at `clarification` is reclassified to the same
-planning checkpoint and dispatched once. Other `waiting_for_user` runs are
+handoff. Other `waiting_for_user` runs are
 recovered only when they still own an interrupted session. A stable
 clarification, round-cap, blocker, merge-gate, or paused wait is not mistaken
 for interrupted work.
