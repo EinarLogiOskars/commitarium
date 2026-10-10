@@ -43,20 +43,20 @@ with the implementation and public API documentation they describe.
   tokens. No internal or Forgejo secret crosses Tauri IPC, and the UI does not
   need setup fields or commands for them.
 
-### Provider connection profiles
+### Agent logins
 
-- The trusted Rust backend exposes the four fixed role profiles through
-  `list_profiles`, with real provider status checks for idle profiles.
+- The trusted Rust backend exposes one login per agent (ADR-016) through
+  `list_profiles`, with real provider status checks for idle logins. Agents
+  themselves are managed through the coordinator's `/api/v1/agents`.
 - The settled login commands are `begin_login`, `submit_login_code`,
   `submit_api_key`, `cancel_login`, `verify_profile`, and
   `disconnect_profile`. Exact args, result shapes, and status values are in
   `desktop-ipc.md`.
 - `login_progress` emits structured messages, trusted browser URLs, and Codex
   device codes. Raw provider output and credentials are never emitted.
-- Subscription and API-key setup both write only to the selected role's private
-  provider-state volume. One API key may explicitly be provisioned to both
-  roles, but those remain separate copies in separate volumes.
-- A running role worker must be stopped before its login is changed or removed.
+- Subscription and API-key setup both write only to the agent's private
+  provider-state volume, which its worker uses for lead and reviewer work.
+- A running agent worker must be stopped before its login is changed or removed.
   This is an intentional volume-ownership and active-work safety rule.
 
 ### Profile-aware stack lifecycle

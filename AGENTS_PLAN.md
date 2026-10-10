@@ -7,6 +7,9 @@ lead, Claude reviewer) with **agents**. An agent is one provider account: a
 subscription or an API key, such as "Claude Max", "Claude API", or
 "Codex Pro". This is milestone 3 of [V1_VISION.md](V1_VISION.md).
 
+**Status:** implemented on `feat/agents` (A1–A9); awaiting user testing (see
+Verification).
+
 - An agent can be lead or reviewer, and can work on any number of work orders
   at once. Concurrency is not limited.
 - The model is still chosen per work order; the agent says which account
@@ -78,7 +81,7 @@ The user's four logins are two subscriptions, each logged in twice.
 | A6 | `feat(desktop): run one worker per agent` | Tauri: generated compose overlay per agent (profile, journal, both workspace trees, both Forgejo tokens, bearer token), Forgejo identity pair and bearer token provisioned per agent, reconcile starts connected agents and stops the rest. Login, status, and disconnect target an agent instead of a fixed profile. | A3 |
 | A7 | Folded into A6 | The `codex` and `claude` agents use the lead profile and journal volumes by name, so nothing is copied; every reconcile removes the containers of the four pre-agent workers and of removed agents, keeping their volumes and token files. | A6 |
 | A8 | `feat(desktop): manage agents` | The Providers page becomes Agents: add (name, provider, subscription or API key), connect, disconnect, rename, remove. Agent pickers replace provider pickers in the work-order and project forms and the setup assistant; models listed for the agent's provider. Connecting an agent starts its worker. | A5, A6 |
-| A9 | `docs: record agents` | Backup and restore per agent journal; desktop IPC, threat model, coordinator and worker API docs; plan marked done. | A8 |
+| A9 | `docs: record agents` | Backup and restore per agent journal; desktop IPC, threat model, coordinator and worker API docs; plan marked implemented. | A8 |
 
 ## Verification
 

@@ -319,8 +319,10 @@ normal UI preference action because it validates each provider/model pair.
 ### Available models
 
 `GET /api/v1/models` returns the persisted last-successful catalog for each
-provider and role. The coordinator refreshes all four worker catalogs on
-startup and every 30 minutes. A failed refresh preserves the last successful
+provider and role. Models depend on the provider, not the account, so each
+provider's catalog is answered by the first of its agents whose worker
+responds (ADR-016); both roles share it. The coordinator refreshes the
+catalogs on startup and every 30 minutes. A failed refresh preserves the last successful
 `models` and `fetched_at` and adds `last_error`.
 
 ```json
@@ -2074,8 +2076,9 @@ state remains indeterminate and stops for user review.
 
 After lead publication verification, no user action is required to start the
 first review. The coordinator resumes the same reviewer provider conversation
-that participated in planning, but routes it to the separate reviewer worker,
-profile, journal, and Forgejo identity. Its deterministic attempt ID is
+that participated in planning on the reviewer agent's worker, as a session
+separate from the lead's and under the agent's `<agent>-reviewer` Forgejo
+identity (ADR-016). Its deterministic attempt ID is
 `{reviewer-session-id}:review:1`; the run stays `running`, while SQLite prevents
 the waiting lead and reviewer from becoming active together.
 
@@ -2522,9 +2525,8 @@ inspection.
 
 The simulated workers have no repository, worktree, test process, or Forgejo
 pull request, so their assessment records those checks as not applicable. Each
-real Codex role keeps provider data, authentication, and its worker journal on
-separate private persistent volumes while sharing only the managed workspace
-root. Coordinator-process recovery covers the first implementation turn and
+agent keeps provider data, authentication, and its worker journal on private
+persistent volumes while sharing only the managed workspace roots. Coordinator-process recovery covers the first implementation turn and
 first implementation-review turn: it verifies durable state before admission,
 reattaches to an admitted exact attempt, and re-verifies a terminal review
 instead of posting another one. Provider resume after a worker-container restart
