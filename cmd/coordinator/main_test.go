@@ -1,10 +1,10 @@
 package main
 
 import (
-	"os"
-	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/EinarLogiOskars/commitarium/internal/agentworker"
 )
 
 func TestLoadConfigDefaultsToSimulatedRunner(t *testing.T) {
@@ -66,20 +66,24 @@ func TestLoadConfigAcceptsRealAgentRunner(t *testing.T) {
 		t.Fatalf("load real-agent coordinator config: %v", err)
 	}
 	if loaded.runnerMode != realAgentsRunnerMode ||
-		loaded.codexWorkerURL != "http://codex-worker:8081" ||
-		loaded.codexWorkerToken != "test-token" ||
-		loaded.codexAgentProfileID != "profile_test" ||
-		loaded.codexReviewerWorkerURL != "http://codex-reviewer-worker:8081" ||
-		loaded.codexReviewerWorkerToken != "reviewer-test-token" ||
-		loaded.codexReviewerAgentProfileID != "reviewer_profile_test" ||
-		loaded.claudeWorkerURL != "http://claude-worker:8081" ||
-		loaded.claudeWorkerToken != "claude-test-token" ||
-		loaded.claudeAgentProfileID != "claude_profile_test" ||
-		loaded.claudeReviewerWorkerURL != "http://claude-reviewer-worker:8081" ||
-		loaded.claudeReviewerWorkerToken != "claude-reviewer-test-token" ||
-		loaded.claudeReviewerAgentProfileID != "claude_reviewer_profile_test" ||
+		loaded.agentWorkerURLTemplate != "http://{agent}.workers:8081" ||
+		loaded.agentWorkerTokenDir != "/private/agent-workers" ||
 		loaded.workerRequestTimeout != 4*time.Second || loaded.attemptStartTimeout != 5*time.Minute {
 		t.Fatalf("unexpected real-agent config %+v", loaded)
+	}
+}
+
+func TestLoadConfigDefaultsAgentWorkerAddressing(t *testing.T) {
+	values := realAgentConfigValues(t)
+	delete(values, "COMMITARIUM_AGENT_WORKER_URL_TEMPLATE")
+	delete(values, "COMMITARIUM_AGENT_WORKER_TOKEN_DIR")
+	loaded, err := loadConfig(func(name string) string { return values[name] })
+	if err != nil {
+		t.Fatalf("load real-agent coordinator config: %v", err)
+	}
+	if loaded.agentWorkerURLTemplate != agentworker.DefaultURLTemplate ||
+		loaded.agentWorkerTokenDir != defaultAgentWorkerTokenDir {
+		t.Fatalf("unexpected agent worker defaults %+v", loaded)
 	}
 }
 
@@ -106,29 +110,17 @@ func TestLoadConfigRejectsInvalidAttemptStartTimeout(t *testing.T) {
 
 func realAgentConfigValues(t *testing.T) map[string]string {
 	t.Helper()
-	tokenFiles := coordinatorWorkerTokenFiles(t)
 	return map[string]string{
-		"COMMITARIUM_DATABASE_PATH":                     "/state/coordinator.db",
-		"COMMITARIUM_RUNNER_MODE":                       realAgentsRunnerMode,
-		"COMMITARIUM_CODEX_WORKER_URL":                  "http://codex-worker:8081",
-		"COMMITARIUM_CODEX_WORKER_TOKEN_FILE":           tokenFiles[0],
-		"COMMITARIUM_CODEX_PROFILE_ID":                  "profile_test",
-		"COMMITARIUM_CODEX_REVIEWER_WORKER_URL":         "http://codex-reviewer-worker:8081",
-		"COMMITARIUM_CODEX_REVIEWER_WORKER_TOKEN_FILE":  tokenFiles[1],
-		"COMMITARIUM_CODEX_REVIEWER_PROFILE_ID":         "reviewer_profile_test",
-		"COMMITARIUM_CLAUDE_WORKER_URL":                 "http://claude-worker:8081",
-		"COMMITARIUM_CLAUDE_WORKER_TOKEN_FILE":          tokenFiles[2],
-		"COMMITARIUM_CLAUDE_PROFILE_ID":                 "claude_profile_test",
-		"COMMITARIUM_CLAUDE_REVIEWER_WORKER_URL":        "http://claude-reviewer-worker:8081",
-		"COMMITARIUM_CLAUDE_REVIEWER_WORKER_TOKEN_FILE": tokenFiles[3],
-		"COMMITARIUM_CLAUDE_REVIEWER_PROFILE_ID":        "claude_reviewer_profile_test",
-		"COMMITARIUM_CODEX_WORKER_REQUEST_TIMEOUT":      "4s",
-		"COMMITARIUM_WORKER_ATTEMPT_START_TIMEOUT":      "5m",
+		"COMMITARIUM_DATABASE_PATH":                "/state/coordinator.db",
+		"COMMITARIUM_RUNNER_MODE":                  realAgentsRunnerMode,
+		"COMMITARIUM_AGENT_WORKER_URL_TEMPLATE":    "http://{agent}.workers:8081",
+		"COMMITARIUM_AGENT_WORKER_TOKEN_DIR":       "/private/agent-workers",
+		"COMMITARIUM_WORKER_REQUEST_TIMEOUT":       "4s",
+		"COMMITARIUM_WORKER_ATTEMPT_START_TIMEOUT": "5m",
 	}
 }
 
 func TestLoadConfigRejectsIncompleteOrUnknownRunner(t *testing.T) {
-	tokenFiles := coordinatorWorkerTokenFiles(t)
 	tests := []map[string]string{
 		{},
 		{
@@ -136,19 +128,9 @@ func TestLoadConfigRejectsIncompleteOrUnknownRunner(t *testing.T) {
 			"COMMITARIUM_RUNNER_MODE":   "automatic-magic",
 		},
 		{
-			"COMMITARIUM_DATABASE_PATH": "/state/coordinator.db",
-			"COMMITARIUM_RUNNER_MODE":   realAgentsRunnerMode,
-		},
-		{
-			"COMMITARIUM_DATABASE_PATH":                    "/state/coordinator.db",
-			"COMMITARIUM_RUNNER_MODE":                      realAgentsRunnerMode,
-			"COMMITARIUM_CODEX_WORKER_URL":                 "http://codex-worker:8081",
-			"COMMITARIUM_CODEX_WORKER_TOKEN_FILE":          tokenFiles[0],
-			"COMMITARIUM_CODEX_PROFILE_ID":                 "profile_test",
-			"COMMITARIUM_CODEX_REVIEWER_WORKER_URL":        "http://codex-reviewer-worker:8081",
-			"COMMITARIUM_CODEX_REVIEWER_WORKER_TOKEN_FILE": tokenFiles[1],
-			"COMMITARIUM_CODEX_REVIEWER_PROFILE_ID":        "reviewer_profile_test",
-			"COMMITARIUM_CODEX_WORKER_REQUEST_TIMEOUT":     "zero",
+			"COMMITARIUM_DATABASE_PATH":          "/state/coordinator.db",
+			"COMMITARIUM_RUNNER_MODE":            realAgentsRunnerMode,
+			"COMMITARIUM_WORKER_REQUEST_TIMEOUT": "zero",
 		},
 		{
 			"COMMITARIUM_DATABASE_PATH":           "/state/coordinator.db",
@@ -160,18 +142,4 @@ func TestLoadConfigRejectsIncompleteOrUnknownRunner(t *testing.T) {
 			t.Errorf("case %d accepted invalid config %+v", index, values)
 		}
 	}
-}
-
-func coordinatorWorkerTokenFiles(t *testing.T) [4]string {
-	t.Helper()
-	root := t.TempDir()
-	values := [...]string{"test-token", "reviewer-test-token", "claude-test-token", "claude-reviewer-test-token"}
-	var paths [4]string
-	for index, value := range values {
-		paths[index] = filepath.Join(root, value)
-		if err := os.WriteFile(paths[index], []byte(value), 0o600); err != nil {
-			t.Fatalf("write worker token: %v", err)
-		}
-	}
-	return paths
 }

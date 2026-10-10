@@ -114,7 +114,7 @@ struct ValidationCompletion<'a> {
     error: &'a str,
 }
 
-fn coordinator_url(path: &str) -> String {
+pub(crate) fn coordinator_url(path: &str) -> String {
     let port = std::env::var("COMMITARIUM_COORDINATOR_PORT").unwrap_or_else(|_| "8080".into());
     format!("http://127.0.0.1:{port}{path}")
 }
@@ -228,8 +228,8 @@ fn provision_images(
     manager: &profiles::ProfileManager,
     packages: &[String],
 ) -> Result<(BTreeMap<String, String>, String, String), String> {
-    let codex_base = compose_image("codex-worker")?;
-    let claude_base = compose_image("claude-worker")?;
+    let codex_base = compose_image("codex-agent-template")?;
+    let claude_base = compose_image("claude-agent-template")?;
     let package_text = packages.join(" ");
     let codex_image = derivative_tag("codex", &codex_base, packages);
     let claude_image = derivative_tag("claude", &claude_base, packages);
@@ -240,7 +240,7 @@ fn provision_images(
         return Err("Codex and Claude images resolved different system-package versions".into());
     }
     write_environment_overlay(&codex_image, &claude_image)?;
-    docker::reconcile_provider_workers(manager, true)?;
+    docker::reconcile_agent_workers(manager, true)?;
     Ok((resolved, codex_image, claude_image))
 }
 
@@ -326,18 +326,14 @@ fn write_environment_overlay(codex: &str, claude: &str) -> Result<(), String> {
         .parent()
         .ok_or_else(|| "environment Compose path has no parent".to_string())?;
     fs::create_dir_all(parent).map_err(|e| format!("create environment Compose directory: {e}"))?;
+    // The agent worker templates carry the images; agent workers generated
+    // from them pick the approved environment up on the next reconcile.
     let contents = format!(
         r#"services:
-  codex-worker:
+  codex-agent-template:
     build: !reset null
     image: {codex}
-  codex-reviewer-worker:
-    build: !reset null
-    image: {codex}
-  claude-worker:
-    build: !reset null
-    image: {claude}
-  claude-reviewer-worker:
+  claude-agent-template:
     build: !reset null
     image: {claude}
 "#
@@ -351,6 +347,49 @@ fn write_environment_overlay(codex: &str, claude: &str) -> Result<(), String> {
         .persist(&path)
         .map_err(|e| format!("install environment Compose update: {e}"))?;
     Ok(())
+}
+
+/// Environment overlays written before agents (ADR-016) set the images of the
+/// four role workers. Move those images onto the agent worker templates once,
+/// so the approved environment survives the upgrade and no stray role
+/// services remain.
+pub(crate) fn migrate_environment_overlay() -> Result<(), String> {
+    let path = docker::environment_compose_file()?;
+    let Ok(contents) = fs::read_to_string(&path) else {
+        return Ok(());
+    };
+    if !contents
+        .lines()
+        .any(|line| line.trim_end() == "  codex-worker:")
+    {
+        return Ok(());
+    }
+    match (
+        legacy_overlay_image(&contents, "codex-worker"),
+        legacy_overlay_image(&contents, "claude-worker"),
+    ) {
+        (Some(codex), Some(claude)) => write_environment_overlay(&codex, &claude),
+        _ => Err("the approved-environment overlay has an unexpected form".into()),
+    }
+}
+
+fn legacy_overlay_image(contents: &str, service: &str) -> Option<String> {
+    let header = format!("  {service}:");
+    let mut lines = contents
+        .lines()
+        .skip_while(|line| line.trim_end() != header);
+    lines.next()?;
+    lines
+        .take_while(|line| line.starts_with("    "))
+        .find_map(|line| line.trim().strip_prefix("image:"))
+        .map(|image| image.trim().to_string())
+        .filter(|image| {
+            !image.is_empty()
+                && image.bytes().all(|byte| {
+                    byte.is_ascii_alphanumeric()
+                        || matches!(byte, b':' | b'-' | b'_' | b'.' | b'/' | b'@')
+                })
+        })
 }
 
 #[tauri::command]
@@ -417,7 +456,7 @@ fn safe_commit(value: &str) -> bool {
 
 fn execute_validation(job: &ValidationJob) -> Result<Vec<ValidationCommandResult>, String> {
     let workspace = managed_workspace(&job.workspace_id)?;
-    let image = compose_image("codex-worker")?;
+    let image = compose_image("codex-agent-template")?;
     let spec_dir =
         tempfile::tempdir().map_err(|e| format!("create validation specification: {e}"))?;
     let output_dir =
@@ -579,6 +618,26 @@ mod tests {
         assert!(safe_commit(&"a".repeat(64)));
         assert!(!safe_commit("deadbeef"));
         assert!(!safe_commit("0123456789ABCDEF0123456789ABCDEF01234567"));
+    }
+
+    #[test]
+    fn legacy_environment_overlays_yield_their_images() {
+        let legacy = "services:\n  codex-worker:\n    build: !reset null\n    image: commitarium-codex-environment:abc\n  codex-reviewer-worker:\n    build: !reset null\n    image: commitarium-codex-environment:abc\n  claude-worker:\n    build: !reset null\n    image: commitarium-claude-environment:def\n";
+        assert_eq!(
+            legacy_overlay_image(legacy, "codex-worker").as_deref(),
+            Some("commitarium-codex-environment:abc")
+        );
+        assert_eq!(
+            legacy_overlay_image(legacy, "claude-worker").as_deref(),
+            Some("commitarium-claude-environment:def")
+        );
+        assert_eq!(
+            legacy_overlay_image(
+                "services:\n  codex-worker:\n    image: bad;rm\n",
+                "codex-worker"
+            ),
+            None
+        );
     }
 
     #[test]

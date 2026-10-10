@@ -22,9 +22,14 @@ export interface RecoveryStatus {
 }
 
 export type AgentProvider = "codex" | "claude";
+/** Lead and reviewer providers and agents (ADR-016). The provider follows
+ * from the agent; without agents, the providers name the agents migrated
+ * from the provider profiles. Responses always carry all four. */
 export interface AgentProviders {
   lead: AgentProvider;
   reviewer: AgentProvider;
+  lead_agent?: string;
+  reviewer_agent?: string;
 }
 
 /** Exact model IDs per role (never floating aliases like "latest"). */
@@ -41,6 +46,16 @@ export interface ModelInfo {
   display_name: string;
   default_reasoning_effort?: string;
   supported_reasoning_efforts?: string[];
+}
+
+/** One provider account — a subscription or an API key — that can lead or
+ * review any number of work orders (ADR-016). */
+export interface Agent {
+  id: string;
+  name: string;
+  provider: AgentProvider;
+  created_at: string;
+  updated_at: string;
 }
 
 /** The persisted last-successful model list for a provider+role worker. */
@@ -203,7 +218,7 @@ export type AssistantPurpose = "design_stack" | "verify_repository";
 export interface AssistantSession {
   id: string;
   project_id: string;
-  provider: AgentProvider;
+  agent: string;
   model: string;
   purpose?: AssistantPurpose;
   status: AssistantStatus;
@@ -216,7 +231,8 @@ export interface AssistantSession {
 }
 
 export interface StartAssistantInput {
-  provider: AgentProvider;
+  agent?: string;
+  provider?: AgentProvider; // names its migrated agent when agent is omitted
   model: string;
   purpose?: AssistantPurpose; // omitted preserves design_stack
   message?: string; // required for design_stack; omitted for verify_repository
@@ -487,7 +503,7 @@ export interface WorkOrderAssistantMessage {
 export interface WorkOrderAssistantSession {
   id: string;
   feature_id: string;
-  provider: string;
+  agent: string;
   model: string;
   status: WorkOrderAssistantStatus;
   message: string;

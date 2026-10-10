@@ -1,6 +1,7 @@
 package forgejo
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -506,6 +507,43 @@ func TestClientToleratesUnavailableViewerBeforeOnboardingButNotMissingAgent(t *t
 				t.Fatalf("error = %v, wantError = %v", err, test.wantError)
 			}
 		})
+	}
+}
+
+func TestClientAddsCurrentAgentIdentitiesAndSkipsUnprovisionedOnes(t *testing.T) {
+	agents := []string{"claude-lead", "claude-reviewer"}
+	var added []string
+	client, err := NewClient(ClientConfig{
+		BaseURL: "http://forgejo:3000", TokenFile: writeTestToken(t, "admin-token"),
+		AgentCollaborators: func(context.Context) ([]string, error) { return agents, nil },
+		RequestTimeout:     time.Second,
+		HTTPClient: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+			name := strings.TrimPrefix(request.URL.Path, "/api/v1/repos/owner/repository/collaborators/")
+			if strings.HasPrefix(name, "new-") {
+				return jsonResponse(http.StatusNotFound, `{}`), nil
+			}
+			added = append(added, name)
+			return jsonResponse(http.StatusNoContent, ""), nil
+		})},
+	})
+	if err != nil {
+		t.Fatalf("create client: %v", err)
+	}
+	if err := client.EnsureRepositoryCollaborators(t.Context(), "owner", "repository"); err != nil {
+		t.Fatalf("ensure collaborators: %v", err)
+	}
+	// An agent added later is picked up without a new client, and its
+	// identities are skipped until the desktop has created them.
+	agents = append(agents, "new-lead", "new-reviewer")
+	if err := client.EnsureRepositoryCollaborators(t.Context(), "owner", "repository"); err != nil {
+		t.Fatalf("ensure collaborators with an unprovisioned agent: %v", err)
+	}
+	if got, want := strings.Join(added, ","), "claude-lead,claude-reviewer,claude-lead,claude-reviewer"; got != want {
+		t.Fatalf("added = %q, want %q", got, want)
+	}
+	agents = []string{"bad/name"}
+	if err := client.EnsureRepositoryCollaborators(t.Context(), "owner", "repository"); err == nil {
+		t.Fatal("expected an unsafe agent identity to be rejected")
 	}
 }
 

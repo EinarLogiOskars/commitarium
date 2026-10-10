@@ -14,15 +14,15 @@ import (
 )
 
 type recordingWorkOrderAssistant struct {
-	provider  project.AgentProvider
+	agent     string
 	model     string
 	acceptKey string
 	acceptErr error
 }
 
-func (a *recordingWorkOrderAssistant) Start(_ context.Context, _, featureID string, provider project.AgentProvider, model string) (assistant.Session, bool, error) {
-	a.provider, a.model = provider, model
-	return assistant.Session{ID: "ast_test", FeatureID: featureID, Provider: provider, Model: model, Status: assistant.StatusRunning}, true, nil
+func (a *recordingWorkOrderAssistant) Start(_ context.Context, _, featureID, agentID, model string) (assistant.Session, bool, error) {
+	a.agent, a.model = agentID, model
+	return assistant.Session{ID: "ast_test", FeatureID: featureID, Agent: agentID, Model: model, Status: assistant.StatusRunning}, true, nil
 }
 
 func (a *recordingWorkOrderAssistant) Get(context.Context, string, string) (assistant.Session, error) {
@@ -63,8 +63,8 @@ func TestWorkOrderAssistantRoutes(t *testing.T) {
 	}
 
 	started := serve(http.MethodPost, "/api/v1/projects/prj_test/features/fea_test/assistant", "", "")
-	if started.Code != http.StatusCreated || clarifier.provider != project.AgentProviderClaude || clarifier.model != "claude-opus-5-5" {
-		t.Fatalf("start: status=%d provider=%q model=%q", started.Code, clarifier.provider, clarifier.model)
+	if started.Code != http.StatusCreated || clarifier.agent != "claude" || clarifier.model != "claude-opus-5-5" {
+		t.Fatalf("start: status=%d agent=%q model=%q", started.Code, clarifier.agent, clarifier.model)
 	}
 	var session assistantSessionResponse
 	if err := json.NewDecoder(started.Body).Decode(&session); err != nil || session.Status != "running" {

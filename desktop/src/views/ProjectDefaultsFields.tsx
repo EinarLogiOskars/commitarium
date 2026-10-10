@@ -28,7 +28,7 @@ export interface ProjectDefaults {
 export function initialProjectDefaults(): ProjectDefaults {
   return {
     recovery_policy: "approval_required",
-    providers: { lead: "codex", reviewer: "codex" },
+    providers: { lead: "codex", reviewer: "codex", lead_agent: "codex", reviewer_agent: "codex" },
     models: { lead: "", reviewer: "" },
     autonomy_policy: "review_each_phase",
     merge_policy: "require_user_approval",

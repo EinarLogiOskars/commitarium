@@ -32,19 +32,24 @@ type ClientConfig struct {
 	TokenFile         string
 	Collaborators     []string
 	ReadCollaborators []string
-	RequestTimeout    time.Duration
-	HTTPClient        *http.Client
+	// AgentCollaborators lists the agent identities that get write access,
+	// read on every call so new agents need no restart (ADR-016). Identities
+	// the desktop has not created yet are skipped.
+	AgentCollaborators func(context.Context) ([]string, error)
+	RequestTimeout     time.Duration
+	HTTPClient         *http.Client
 }
 
 type Client struct {
-	baseURL           string
-	hostBaseURL       string
-	owner             string
-	tokenFile         string
-	collaborators     []string
-	readCollaborators []string
-	requestTimeout    time.Duration
-	httpClient        *http.Client
+	baseURL            string
+	hostBaseURL        string
+	owner              string
+	tokenFile          string
+	collaborators      []string
+	readCollaborators  []string
+	agentCollaborators func(context.Context) ([]string, error)
+	requestTimeout     time.Duration
+	httpClient         *http.Client
 }
 
 func NewClient(config ClientConfig) (*Client, error) {
@@ -79,8 +84,7 @@ func NewClient(config ClientConfig) (*Client, error) {
 	addCollaborators := func(configuredCollaborators []string, target *[]string) error {
 		for _, configured := range configuredCollaborators {
 			collaborator := strings.TrimSpace(configured)
-			if collaborator == "" || strings.ContainsAny(collaborator, "/\\") ||
-				strings.IndexFunc(collaborator, func(r rune) bool { return r <= ' ' }) >= 0 {
+			if !validCollaborator(collaborator) {
 				return fmt.Errorf("%w: collaborator must be a non-empty single path segment", ErrInvalidClientConfig)
 			}
 			key := strings.ToLower(collaborator)
@@ -109,11 +113,17 @@ func NewClient(config ClientConfig) (*Client, error) {
 	return &Client{
 		baseURL: baseURL, hostBaseURL: hostBaseURL, owner: owner, tokenFile: tokenFile,
 		collaborators: collaborators, readCollaborators: readCollaborators,
-		requestTimeout: config.RequestTimeout, httpClient: &clientCopy,
+		agentCollaborators: config.AgentCollaborators,
+		requestTimeout:     config.RequestTimeout, httpClient: &clientCopy,
 	}, nil
 }
 
-// EnsureRepositoryCollaborators gives Commitarium's fixed agent identities
+func validCollaborator(name string) bool {
+	return name != "" && !strings.ContainsAny(name, "/\\") &&
+		strings.IndexFunc(name, func(r rune) bool { return r <= ' ' }) < 0
+}
+
+// EnsureRepositoryCollaborators gives Commitarium's agent identities
 // write access and its optional audit-viewer identity read access to one
 // internal repository. A missing optional viewer is tolerated until desktop
 // onboarding creates it. It is safe to repeat before every work order and does
@@ -167,6 +177,21 @@ func (client *Client) EnsureRepositoryCollaborators(
 	for _, collaborator := range client.collaborators {
 		if err := ensure(collaborator, "write", false); err != nil {
 			return err
+		}
+	}
+	if client.agentCollaborators != nil {
+		agents, err := client.agentCollaborators(ctx)
+		if err != nil {
+			return err
+		}
+		for _, collaborator := range agents {
+			collaborator = strings.TrimSpace(collaborator)
+			if !validCollaborator(collaborator) {
+				return fmt.Errorf("%w: agent collaborator %q is not a single path segment", ErrInvalidClientConfig, collaborator)
+			}
+			if err := ensure(collaborator, "write", true); err != nil {
+				return err
+			}
 		}
 	}
 	for _, collaborator := range client.readCollaborators {

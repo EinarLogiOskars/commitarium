@@ -538,7 +538,7 @@ export const publishUpstreamBranch = (
 ): Promise<UpstreamBranchResult> =>
   invoke("publish_upstream_branch", { projectId, featureId, remoteName, branchName });
 
-// --- Provider authentication / profiles (see docs/desktop-ipc.md) ---
+// --- Agent logins (provider authentication; see docs/desktop-ipc.md) ---
 
 export type ProfileStatus =
   | "not_configured"
@@ -551,7 +551,8 @@ export type ProfileStatus =
   | "expired"
   | "failed";
 
-export type ProfileId = "codex-lead" | "codex-reviewer" | "claude-lead" | "claude-reviewer";
+/** An agent's ID (ADR-016): each agent has one login, used for both roles. */
+export type ProfileId = string;
 
 export interface ProfileDetail {
   message?: string;
@@ -561,8 +562,8 @@ export interface ProfileDetail {
 
 export interface Profile {
   id: ProfileId;
+  name: string;
   provider: "codex" | "claude";
-  role: "lead" | "reviewer";
   status: ProfileStatus;
   detail?: ProfileDetail;
 }
@@ -577,11 +578,8 @@ export const beginLogin = (profileId: ProfileId, method: LoginMethod): Promise<v
 export const submitLoginCode = (profileId: ProfileId, code: string): Promise<void> =>
   invoke("submit_login_code", { profileId, code });
 
-export const submitApiKey = (
-  profileId: ProfileId,
-  key: string,
-  useForBothRoles?: boolean,
-): Promise<void> => invoke("submit_api_key", { profileId, key, useForBothRoles });
+export const submitApiKey = (profileId: ProfileId, key: string): Promise<void> =>
+  invoke("submit_api_key", { profileId, key });
 
 export const cancelLogin = (profileId: ProfileId): Promise<void> =>
   invoke("cancel_login", { profileId });

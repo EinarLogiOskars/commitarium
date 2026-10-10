@@ -18,7 +18,8 @@ use std::time::Duration;
 use tauri::{AppHandle, Manager, State};
 use tauri_plugin_notification::NotificationExt;
 
-use crate::{bootstrap, docker, profiles};
+use crate::{agents, bootstrap, docker, profiles};
+use std::borrow::Cow;
 
 const SETTINGS_FILE: &str = "desktop-settings.json";
 const NOTIFICATION_LEDGER_FILE: &str = "notification-ledger.json";
@@ -42,79 +43,99 @@ const APP_STATE_FILES: &[&str] = &[
     "upstream-publication-receipts.json",
 ];
 
-const BACKUP_COMPONENTS: &[BackupComponent] = &[
+const CORE_COMPONENTS: &[BackupComponent] = &[
     BackupComponent {
-        name: "coordinator",
-        service: "coordinator",
+        name: Cow::Borrowed("coordinator"),
+        service: Cow::Borrowed("coordinator"),
         source: "/var/lib/commitarium",
         owner: "65532:65532",
         required: true,
     },
     BackupComponent {
-        name: "forgejo",
-        service: "forgejo",
+        name: Cow::Borrowed("forgejo"),
+        service: Cow::Borrowed("forgejo"),
         source: "/var/lib/gitea",
         owner: "1000:1000",
         required: true,
     },
     BackupComponent {
-        name: "workspaces",
-        service: "coordinator",
+        name: Cow::Borrowed("workspaces"),
+        service: Cow::Borrowed("coordinator"),
         source: "/workspaces",
         owner: "65532:65532",
         required: true,
     },
     BackupComponent {
-        name: "toolchains",
-        service: "coordinator",
+        name: Cow::Borrowed("toolchains"),
+        service: Cow::Borrowed("coordinator"),
         source: "/var/lib/commitarium-toolchains",
         owner: "65532:65532",
         required: true,
     },
     BackupComponent {
-        name: "simulated-worker-journal",
-        service: "simulated-codex-worker",
-        source: "/var/lib/commitarium-worker",
-        owner: "65532:65532",
-        required: false,
-    },
-    BackupComponent {
-        name: "codex-worker-journal",
-        service: "codex-worker",
-        source: "/var/lib/commitarium-worker",
-        owner: "65532:65532",
-        required: false,
-    },
-    BackupComponent {
-        name: "codex-reviewer-worker-journal",
-        service: "codex-reviewer-worker",
-        source: "/var/lib/commitarium-worker",
-        owner: "65532:65532",
-        required: false,
-    },
-    BackupComponent {
-        name: "claude-worker-journal",
-        service: "claude-worker",
-        source: "/var/lib/commitarium-worker",
-        owner: "65532:65532",
-        required: false,
-    },
-    BackupComponent {
-        name: "claude-reviewer-worker-journal",
-        service: "claude-reviewer-worker",
+        name: Cow::Borrowed("simulated-worker-journal"),
+        service: Cow::Borrowed("simulated-codex-worker"),
         source: "/var/lib/commitarium-worker",
         owner: "65532:65532",
         required: false,
     },
 ];
 
-#[derive(Clone, Copy)]
+/// Journals of the fixed pre-agent workers in older backups. The lead
+/// journals restore into the agents migrated from them; the reviewer journals
+/// have no worker any more and are skipped (ADR-016).
+const LEGACY_JOURNALS: &[(&str, &str)] = &[
+    ("codex-worker-journal", "agent-codex-worker"),
+    ("claude-worker-journal", "agent-claude-worker"),
+    ("codex-reviewer-worker-journal", "codex-reviewer-worker"),
+    ("claude-reviewer-worker-journal", "claude-reviewer-worker"),
+];
+
+#[derive(Clone)]
 struct BackupComponent {
-    name: &'static str,
-    service: &'static str,
+    name: Cow<'static, str>,
+    service: Cow<'static, str>,
     source: &'static str,
     owner: &'static str,
     required: bool,
+}
+
+fn journal_component(name: String, service: String) -> BackupComponent {
+    BackupComponent {
+        name: Cow::Owned(name),
+        service: Cow::Owned(service),
+        source: "/var/lib/commitarium-worker",
+        owner: "65532:65532",
+        required: false,
+    }
+}
+
+/// Every component a backup of this installation contains: the core state
+/// and each agent worker's journal.
+fn backup_components(agents: &[agents::Agent]) -> Vec<BackupComponent> {
+    let mut components = CORE_COMPONENTS.to_vec();
+    components.extend(agents.iter().map(|agent| {
+        let service = agents::worker_service(&agent.id);
+        journal_component(format!("{service}-journal"), service)
+    }));
+    components
+}
+
+/// Resolve a component named in a backup manifest.
+fn backup_component(name: &str) -> Option<BackupComponent> {
+    if let Some(core) = CORE_COMPONENTS.iter().find(|core| core.name == name) {
+        return Some(core.clone());
+    }
+    if let Some((legacy, service)) = LEGACY_JOURNALS.iter().find(|(legacy, _)| *legacy == name) {
+        return Some(journal_component(legacy.to_string(), service.to_string()));
+    }
+    let agent_id = name
+        .strip_prefix("agent-")?
+        .strip_suffix("-worker-journal")?;
+    agents::valid_id(agent_id).then(|| {
+        let service = agents::worker_service(agent_id);
+        journal_component(name.to_string(), service)
+    })
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -565,8 +586,9 @@ fn export_backup(app: &AppHandle, destination: &Path) -> Result<BackupManifest, 
     let mut components = Vec::new();
     let mut hashes = BTreeMap::new();
 
-    for component in BACKUP_COMPONENTS {
-        let Some(container_id) = container_id(component.service)? else {
+    let agents = agents::current().unwrap_or_default();
+    for component in backup_components(&agents) {
+        let Some(container_id) = container_id(&component.service)? else {
             if component.required {
                 return Err(format!(
                     "required {} container does not exist",
@@ -626,8 +648,10 @@ fn restore_backup_blocking(
 ) -> Result<BackupResult, String> {
     let manifest = read_backup_manifest(source)?;
     let compose_file = docker::compose_file()?;
+    let agents = agents::current().unwrap_or_default();
     bootstrap::prepare_transport_secrets(&compose_file)?;
-    bootstrap::prepare_forgejo_secret_mounts(&compose_file)?;
+    bootstrap::prepare_agent_worker_tokens(&compose_file, &agents)?;
+    bootstrap::prepare_forgejo_secret_mounts(&compose_file, &agents)?;
     if docker::release_mode() {
         docker::compose_base(docker::PROVIDER_PROFILES, &["pull", "--policy", "missing"])?;
     }
@@ -677,20 +701,23 @@ fn apply_backup(
     helper_image: &str,
 ) -> Result<(), String> {
     for name in &manifest.components {
-        let component = BACKUP_COMPONENTS
-            .iter()
-            .find(|candidate| candidate.name == name)
+        let component = backup_component(name)
             .ok_or_else(|| format!("backup contains unknown component {name}"))?;
-        let container_id = container_id(component.service)?.ok_or_else(|| {
-            format!(
-                "could not create restore container for {}",
-                component.service
-            )
-        })?;
+        // A journal whose agent is not configured here has no worker to
+        // restore into; its work orders can no longer resume anyway.
+        let Some(container_id) = container_id(&component.service)? else {
+            if component.required {
+                return Err(format!(
+                    "could not create restore container for {}",
+                    component.service
+                ));
+            }
+            continue;
+        };
         restore_component(
             helper_image,
             &container_id,
-            component,
+            &component,
             &source.join(format!("{}.tar.gz", component.name)),
         )?;
     }
@@ -712,10 +739,7 @@ fn read_backup_manifest(source: &Path) -> Result<BackupManifest, String> {
     }
     let mut seen = std::collections::BTreeSet::new();
     for name in &manifest.components {
-        if !BACKUP_COMPONENTS
-            .iter()
-            .any(|candidate| candidate.name == name)
-        {
+        if backup_component(name).is_none() {
             return Err(format!("backup contains unknown component {name}"));
         }
         if !seen.insert(name.as_str()) {
@@ -726,11 +750,11 @@ fn read_backup_manifest(source: &Path) -> Result<BackupManifest, String> {
             return Err(format!("backup has no checksum for {archive}"));
         }
     }
-    for required in BACKUP_COMPONENTS
+    for required in CORE_COMPONENTS
         .iter()
         .filter(|component| component.required)
     {
-        if !seen.contains(required.name) {
+        if !seen.contains(required.name.as_ref()) {
             return Err(format!(
                 "backup is missing required component {}",
                 required.name
@@ -838,9 +862,28 @@ fn restore_component(
     Ok(())
 }
 
+/// The container of a Commitarium service, found by its Compose labels so a
+/// service that is no longer defined simply has none.
 fn container_id(service: &str) -> Result<Option<String>, String> {
-    let id = docker::compose(docker::PROVIDER_PROFILES, &["ps", "--all", "-q", service])?;
-    let id = id.trim().to_string();
+    let output = docker::docker_command()
+        .args(["ps", "--all", "--quiet", "--filter"])
+        .arg(format!(
+            "label=com.docker.compose.project={}",
+            docker::PROJECT_NAME
+        ))
+        .arg("--filter")
+        .arg(format!("label=com.docker.compose.service={service}"))
+        .output()
+        .map_err(|e| format!("find the {service} container: {e}"))?;
+    if !output.status.success() {
+        return Err(format!("could not find the {service} container"));
+    }
+    let id = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .to_string();
     Ok((!id.is_empty()).then_some(id))
 }
 
@@ -1038,9 +1081,9 @@ mod tests {
         let root = tempfile::tempdir().expect("backup root");
         let mut components = Vec::new();
         let mut hashes = BTreeMap::new();
-        for component in BACKUP_COMPONENTS.iter().filter(|item| item.required) {
+        for component in CORE_COMPONENTS.iter().filter(|item| item.required) {
             let name = format!("{}.tar.gz", component.name);
-            fs::write(root.path().join(&name), component.name).expect("archive fixture");
+            fs::write(root.path().join(&name), component.name.as_bytes()).expect("archive fixture");
             hashes.insert(
                 name,
                 sha256_file(&root.path().join(format!("{}.tar.gz", component.name)))

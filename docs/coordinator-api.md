@@ -43,6 +43,10 @@ this API beyond the host loopback interface is unsupported.
 | `GET` | `/api/v1/projects/{projectID}/features/{featureID}/events/stream` | Replay and stream workflow history with SSE |
 | `GET` | `/api/v1/projects/{projectID}/features/{featureID}/artifacts/{kind}` | Read the current durable goal draft, implementation plan, or acceptance-test checklist |
 | `PUT` | `/api/v1/projects/{projectID}/features/{featureID}/artifacts/handoff_brief` | Replace the editable handoff brief using optimistic concurrency |
+| `GET` | `/api/v1/agents` | List agents (provider accounts) |
+| `POST` | `/api/v1/agents` | Add an agent |
+| `PATCH` | `/api/v1/agents/{agentID}` | Rename an agent |
+| `DELETE` | `/api/v1/agents/{agentID}` | Remove an agent no project or active work order uses |
 | `POST` | `/api/v1/projects/{projectID}/features/{featureID}/assistant` | Start (or return) the draft work order's clarification with the project assistant |
 | `GET` | `/api/v1/projects/{projectID}/features/{featureID}/assistant` | Read the clarification conversation and status |
 | `POST` | `/api/v1/projects/{projectID}/features/{featureID}/assistant/messages` | Reply to the assistant |
@@ -255,8 +259,24 @@ roles to Codex:
 }
 ```
 
-Each value is either `codex` or `claude`, and any combination is valid. Replace
-both default choices for future work orders with:
+Each value is either `codex` or `claude`, and any combination is valid.
+
+Each role is played by an agent (ADR-016). `lead_agent` and `reviewer_agent`
+name agents by ID, and the agent determines the provider, so `lead` and
+`reviewer` may then be omitted; a provider sent with an agent must match it.
+A provider sent without an agent names the agent migrated from that provider
+profile (`codex` or `claude`). An unknown agent or a mismatched provider
+returns `400 invalid_agent_providers`. Responses always carry all four fields:
+
+```json
+{"lead": "claude", "reviewer": "claude", "lead_agent": "claude-max", "reviewer_agent": "claude-api"}
+```
+
+One agent may play both roles: the lead and reviewer are separate sessions on
+the agent's worker, under the Forgejo identities `<agent>-lead` and
+`<agent>-reviewer`.
+
+Replace both default choices for future work orders with:
 
 ```http
 PUT /api/v1/projects/prj_example/agent-providers
@@ -299,8 +319,10 @@ normal UI preference action because it validates each provider/model pair.
 ### Available models
 
 `GET /api/v1/models` returns the persisted last-successful catalog for each
-provider and role. The coordinator refreshes all four worker catalogs on
-startup and every 30 minutes. A failed refresh preserves the last successful
+provider and role. Models depend on the provider, not the account, so each
+provider's catalog is answered by the first of its agents whose worker
+responds (ADR-016); both roles share it. The coordinator refreshes the
+catalogs on startup and every 30 minutes. A failed refresh preserves the last successful
 `models` and `fetched_at` and adds `last_error`.
 
 ```json
@@ -671,8 +693,9 @@ Content-Type: application/json
 }
 ```
 
-`provider` is `codex` or `claude`; `model` must be an exact ID currently
-offered by that provider's lead worker catalog. `purpose` is `design_stack` or
+`agent` names the agent that runs the conversation (`provider` names its
+migrated agent when `agent` is omitted); `model` must be an exact ID currently
+offered by that agent's provider catalog. The session reports `agent`. `purpose` is `design_stack` or
 `verify_repository`; omitting it preserves the existing `design_stack`
 behavior. The response is `202 Accepted`, has a session `Location`, and
 initially reports `status: "running"`. Poll that location. Every response
@@ -958,6 +981,37 @@ These discovery endpoints intentionally have no pagination, search, or
 server-side state filtering in the MVP. Clients can group and filter the
 complete project list locally.
 
+## Agents
+
+An agent is one provider account, a subscription or an API key (ADR-016). It
+can be lead or reviewer on any number of work orders at once. Credentials are
+connected through the desktop, never sent to the coordinator.
+
+```http
+POST /api/v1/agents
+Content-Type: application/json
+
+{"name": "Claude Max", "provider": "claude"}
+```
+
+```json
+{
+  "id": "claude-max",
+  "name": "Claude Max",
+  "provider": "claude",
+  "created_at": "2026-10-10T12:00:00Z",
+  "updated_at": "2026-10-10T12:00:00Z"
+}
+```
+
+The ID is derived from the name and numbered when taken (`claude-max-2`); it
+names the agent's worker, volumes, and Forgejo identities, so it never
+changes. `PATCH /api/v1/agents/{id}` with `{"name": "…"}` renames the agent.
+`DELETE` returns `204`, or `409 agent_in_use` while a project default, a
+draft or ready work order, or an unfinished run uses the agent. The two subscriptions configured before agents
+existed are the agents `codex` and `claude`. `provider` is `codex` or
+`claude`; anything else returns `400 invalid_agent`.
+
 ## Work-order clarification
 
 A draft work order is clarified with the project assistant (ADR-015) before
@@ -967,14 +1021,15 @@ it, asks the questions whose answers change the work, and proposes a
 
 `POST …/features/{featureID}/assistant` starts the conversation, or returns
 the existing one (`201` when created, otherwise `200`). The body is optional:
-`{"provider":"claude","model":"…"}`. Without a provider the work order's lead
-provider and model are used. The response is the session:
+`{"agent":"claude-max","model":"…"}` (`provider` names its migrated agent
+when `agent` is omitted). Without either, the work order's lead agent and
+model are used. The response is the session:
 
 ```json
 {
   "id": "ast_…",
   "feature_id": "fea_…",
-  "provider": "claude",
+  "agent": "claude-max",
   "model": "",
   "status": "waiting_for_user",
   "message": "Should overdue to-dos be highlighted?",
@@ -2021,8 +2076,9 @@ state remains indeterminate and stops for user review.
 
 After lead publication verification, no user action is required to start the
 first review. The coordinator resumes the same reviewer provider conversation
-that participated in planning, but routes it to the separate reviewer worker,
-profile, journal, and Forgejo identity. Its deterministic attempt ID is
+that participated in planning on the reviewer agent's worker, as a session
+separate from the lead's and under the agent's `<agent>-reviewer` Forgejo
+identity (ADR-016). Its deterministic attempt ID is
 `{reviewer-session-id}:review:1`; the run stays `running`, while SQLite prevents
 the waiting lead and reviewer from becoming active together.
 
@@ -2469,9 +2525,8 @@ inspection.
 
 The simulated workers have no repository, worktree, test process, or Forgejo
 pull request, so their assessment records those checks as not applicable. Each
-real Codex role keeps provider data, authentication, and its worker journal on
-separate private persistent volumes while sharing only the managed workspace
-root. Coordinator-process recovery covers the first implementation turn and
+agent keeps provider data, authentication, and its worker journal on private
+persistent volumes while sharing only the managed workspace roots. Coordinator-process recovery covers the first implementation turn and
 first implementation-review turn: it verifies durable state before admission,
 reattaches to an admitted exact attempt, and re-verifies a terminal review
 instead of posting another one. Provider resume after a worker-container restart

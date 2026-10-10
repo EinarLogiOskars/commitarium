@@ -92,6 +92,7 @@ func TestProjectStoreUpdatesAgentProviders(t *testing.T) {
 	}
 	want := project.AgentProviders{
 		Lead: project.AgentProviderClaude, Reviewer: project.AgentProviderCodex,
+		LeadAgent: "claude-max", ReviewerAgent: "codex",
 	}
 	updated, err := store.UpdateAgentProviders(t.Context(), created.ID, want)
 	if err != nil {

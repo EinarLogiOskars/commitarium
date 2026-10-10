@@ -114,7 +114,7 @@ func TestLoadConfigBuildsCodexRuntimeSettings(t *testing.T) {
 	}
 	if loaded.adapter != "codex" ||
 		loaded.codex.profileID != "profile_test" ||
-		loaded.codex.forgejoRole != worker.RoleLead ||
+		len(loaded.codex.identities) != 1 || loaded.codex.identities[worker.RoleLead].login == "" ||
 		loaded.codex.sandbox != "danger-full-access" {
 		t.Fatalf("Codex worker config = %+v", loaded)
 	}
@@ -209,7 +209,7 @@ func TestLoadConfigBuildsClaudeRuntimeSettings(t *testing.T) {
 	}
 	if loaded.adapter != "claude_code" ||
 		loaded.claude.profileID != "profile_claude_test" ||
-		loaded.claude.forgejoRole != worker.RoleReviewer ||
+		len(loaded.claude.identities) != 1 || loaded.claude.identities[worker.RoleReviewer].login == "" ||
 		loaded.claude.permissionMode != "bypassPermissions" {
 		t.Fatalf("Claude worker config = %+v", loaded)
 	}
@@ -425,4 +425,36 @@ func writeTokenBesideWorkspace(workspace string, name string, value string) stri
 		panic(err)
 	}
 	return path
+}
+
+func TestLoadConfigBuildsAnAgentWorkerForBothRoles(t *testing.T) {
+	values := validClaudeConfig(t.TempDir())
+	for _, name := range []string{
+		"COMMITARIUM_CLAUDE_FORGEJO_TOKEN_FILE", "COMMITARIUM_CLAUDE_FORGEJO_LOGIN",
+		"COMMITARIUM_CLAUDE_FORGEJO_ROLE", "COMMITARIUM_CLAUDE_GIT_AUTHOR_NAME",
+		"COMMITARIUM_CLAUDE_GIT_AUTHOR_EMAIL",
+	} {
+		delete(values, name)
+	}
+	tokenFile := writeWorkerToken(t, "forgejo-token")
+	for role, login := range map[string]string{"LEAD": "claude-max-lead", "REVIEWER": "claude-max-reviewer"} {
+		values["COMMITARIUM_CLAUDE_"+role+"_FORGEJO_TOKEN_FILE"] = tokenFile
+		values["COMMITARIUM_CLAUDE_"+role+"_FORGEJO_LOGIN"] = login
+		values["COMMITARIUM_CLAUDE_"+role+"_GIT_AUTHOR_NAME"] = login
+		values["COMMITARIUM_CLAUDE_"+role+"_GIT_AUTHOR_EMAIL"] = login + "@commitarium.local"
+		values["COMMITARIUM_CLAUDE_"+role+"_WORKSPACE_ROOT"] = "/workspaces/" + strings.ToLower(role)
+	}
+	loaded, err := loadConfig(func(name string) string { return values[name] })
+	if err != nil {
+		t.Fatalf("load agent worker config: %v", err)
+	}
+	lead, reviewer := loaded.claude.identities[worker.RoleLead], loaded.claude.identities[worker.RoleReviewer]
+	if lead.login != "claude-max-lead" || reviewer.login != "claude-max-reviewer" ||
+		lead.workspaceRoot != "/workspaces/lead" || reviewer.workspaceRoot != "/workspaces/reviewer" {
+		t.Fatalf("agent identities = %+v", loaded.claude.identities)
+	}
+	delete(values, "COMMITARIUM_CLAUDE_REVIEWER_WORKSPACE_ROOT")
+	if _, err := loadConfig(func(name string) string { return values[name] }); err == nil {
+		t.Fatal("an agent worker without a reviewer workspace root was accepted")
+	}
 }

@@ -14,7 +14,10 @@ import (
 	"github.com/EinarLogiOskars/commitarium/internal/workerhttp"
 )
 
+// startToolchainAssistantRequest picks the agent by ID or, before agents, by
+// provider name (its migrated agent).
 type startToolchainAssistantRequest struct {
+	Agent    string                     `json:"agent"`
 	Provider project.AgentProvider      `json:"provider"`
 	Model    string                     `json:"model"`
 	Message  string                     `json:"message"`
@@ -36,9 +39,21 @@ func (api *API) startToolchainAssistantHandler(w http.ResponseWriter, r *http.Re
 		writeError(w, http.StatusBadRequest, "invalid_json", "request body must contain exactly one valid JSON object with no unknown fields")
 		return
 	}
-	if err := api.validateAssistantModel(r, request.Provider, request.Model); err != nil {
+	var provider *project.AgentProvider
+	if request.Provider != "" {
+		provider = &request.Provider
+	}
+	var agentID *string
+	if request.Agent != "" {
+		agentID = &request.Agent
+	}
+	resolvedProvider, resolvedAgent, err := api.resolveAgent(r.Context(), provider, agentID)
+	if err == nil {
+		err = api.validateAssistantModel(r, resolvedProvider, request.Model)
+	}
+	if err != nil {
 		if errors.Is(err, project.ErrInvalidAgentProviders) {
-			writeError(w, http.StatusBadRequest, "invalid_agent_provider", "provider must be codex or claude")
+			writeError(w, http.StatusBadRequest, "invalid_agent_provider", "agent must be an existing agent")
 			return
 		}
 		writeModelSelectionError(w, err)
@@ -49,7 +64,7 @@ func (api *API) startToolchainAssistantHandler(w http.ResponseWriter, r *http.Re
 		return
 	}
 	session, created, err := api.toolchainAssistant.Start(
-		r.Context(), r.PathValue("id"), request.Provider, request.Model, request.Message, request.Purpose, key,
+		r.Context(), r.PathValue("id"), resolvedAgent, request.Model, request.Message, request.Purpose, key,
 	)
 	if err != nil {
 		api.writeAssistantError(w, err)

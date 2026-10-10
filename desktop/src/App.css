@@ -1136,6 +1136,23 @@ textarea {
 .profile-row__name {
   font-weight: 600;
 }
+.profile-row__name .muted {
+  font-weight: 400;
+}
+.profile-row__head input {
+  flex: 1;
+  min-width: 0;
+}
+.agent-add {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 14px;
+}
+.agent-add input {
+  flex: 1;
+  min-width: 0;
+}
 .profile-row__msg {
   margin: 0;
   font-size: 13px;
@@ -1155,16 +1172,6 @@ textarea {
   display: flex;
   flex-direction: column;
   gap: 8px;
-}
-.api-key__both {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 13px;
-  color: var(--muted);
-}
-.api-key__both input {
-  min-width: 0;
 }
 .api-key .primary {
   align-self: flex-start;

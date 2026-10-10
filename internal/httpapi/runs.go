@@ -309,9 +309,7 @@ func (api *API) newRunResponse(
 			PlanningRounds:             run.PlanningRoundLimit,
 			ImplementationReviewRounds: run.ImplementationReviewRoundLimit,
 		},
-		AgentProviders: agentProvidersResponse{
-			Lead: agentProviders.Lead, Reviewer: agentProviders.Reviewer,
-		},
+		AgentProviders: newAgentProvidersResponse(agentProviders),
 		AgentModels: agentModelsResponse{
 			Lead: run.AgentModels.Lead, Reviewer: run.AgentModels.Reviewer,
 		},

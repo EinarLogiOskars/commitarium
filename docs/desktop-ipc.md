@@ -47,10 +47,14 @@ Docker / stack lifecycle:
   ready before continuing startup.
 - `stack_up()` / `stack_down()` / `stack_update()` — lifecycle. Start and
   update always bring up Forgejo, the coordinator, and the simulated worker.
-  They verify all four provider profiles and start each real role worker only
-  when that exact profile is `connected`; disconnected, expired, failed, or
-  actively authenticating role workers remain stopped. One role's state does
-  not prevent another connected role from starting.
+  They then read the agents from the coordinator (ADR-016), provision each
+  agent's worker (bearer token, `<agent>-lead` and `<agent>-reviewer` Forgejo
+  identities, and a generated `agent-<id>-worker` Compose service), and start
+  each agent worker only when that agent's login is `connected`;
+  disconnected, expired, failed, or actively authenticating agents' workers
+  remain stopped. One agent's state does not prevent another from starting.
+  Containers of removed agents and of the four pre-agent role workers are
+  removed; their volumes are kept.
 - `stack_status() -> ServiceStatus[]` — one current row per Compose service,
   ordered by service name. If Compose briefly exposes both sides of a
   container replacement, the running/healthy row wins.
@@ -569,13 +573,16 @@ desktop state, and restarts the stack. A failure attempts rollback and reports
 whether rollback or restart was incomplete.
 
 Format version 1 is the inspectable directory format accepted in ADR-011. It
-includes coordinator and Forgejo data, managed workspaces, toolchains, existing
-worker journals, project-source mappings, handoff receipts, UI state, desktop
-settings, and the notification ledger. It intentionally excludes provider
-profile volumes, provider credentials/native transcripts, and generated
-internal token files. The user reconnects provider profiles when restoring
-onto a destination without its own local profiles; a same-installation restore
-leaves those separate volumes untouched. Backups contain private source and
+includes coordinator and Forgejo data, managed workspaces, toolchains, the
+journal of each agent's worker (`agent-<id>-worker-journal`), project-source
+mappings, handoff receipts, UI state, desktop settings, and the notification
+ledger. It intentionally excludes agent provider volumes, provider
+credentials/native transcripts, and generated internal token files. The user
+reconnects agents when restoring onto a destination without its own local
+logins; a same-installation restore leaves those separate volumes untouched.
+Backups made before agents restore their Codex and Claude lead journals into
+the `codex` and `claude` agents; their reviewer journals are skipped, as is
+the journal of an agent that is not configured on the destination. Backups contain private source and
 conversations and are not encrypted.
 
 The renderer never supplies a container, image, mount, component path, archive
@@ -741,8 +748,10 @@ private state volume and no model-catalog response contains a secret.
 
 **Profile status**
 
-Profiles are the four agent roles: `codex-lead`, `codex-reviewer`,
-`claude-lead`, `claude-reviewer`. Each has a login-session state:
+A profile is an agent's login (ADR-016): one per agent, used for both its lead
+and reviewer work. The profile ID is the agent ID from
+`GET /api/v1/agents`; agents are added, renamed, and removed through the
+coordinator API. Each has a login-session state:
 
 ```
 not_configured | starting | waiting_for_browser | waiting_for_code
@@ -764,9 +773,9 @@ type ProfileStatus =
   | "failed";
 
 type Profile = {
-  id: "codex-lead" | "codex-reviewer" | "claude-lead" | "claude-reviewer";
+  id: string; // the agent ID
+  name: string;
   provider: "codex" | "claude";
-  role: "lead" | "reviewer";
   status: ProfileStatus;
   detail?: ProfileDetail;
 };
@@ -778,8 +787,9 @@ type ProfileDetail = {
 };
 ```
 
-For an idle profile, listing runs the provider's real status command inside
-the exact role container/volume. A failed status with a credential file is
+Listing first provisions the worker of any agent added since the stack
+started, so its login can be inspected. For an idle profile, listing runs the
+provider's real status command inside the agent's worker container/volume. A failed status with a credential file is
 `expired`; no credential is `not_configured`; an unavailable Docker/profile
 command is `failed`. While a login is active, listing returns its in-memory
 progress without starting a second process.
@@ -793,16 +803,15 @@ progress without starting a second process.
 - `submit_login_code(profileId, code) -> void` — sends Claude's browser
   paste-back code to the still-running login process over stdin. A Codex device
   code is entered on the provider page and this command rejects it.
-- `submit_api_key(profileId, key, useForBothRoles?)` — key handed to the child
-  over stdin; optionally provisioned independently into the paired role's
-  private volume too. Codex writes its own file-backed login. Claude uses the
-  image's fixed `apiKeyHelper`, whose private key file is not returned.
+- `submit_api_key(profileId, key)` — key handed to the child over stdin.
+  Codex writes its own file-backed login. Claude uses the image's fixed
+  `apiKeyHelper`, whose private key file is not returned.
 - `cancel_login(profileId) -> void`
 - `verify_profile(profileId) -> Profile` — real provider status check (not just
   "login exited 0"); a stale/invalid token must resolve to `expired`/`failed`.
 - `disconnect_profile(profileId) -> Profile`
 
-Changing or disconnecting a profile is rejected while that role's long-lived
+Changing or disconnecting a profile is rejected while that agent's long-lived
 worker is running. This prevents two containers from mounting one writable
 provider-state volume at once and prevents credentials from being removed
 under an active agent. The user can stop the stack, change the profile, and
@@ -827,5 +836,8 @@ or any backend database.
 - Forgejo agent identities and their scoped tokens, and internal
   coordinator↔worker tokens are **auto-provisioned inside `stack_up` and
   `stack_update`**, never exposed to the frontend or the user. Forgejo starts
-  first; the backend then adopts or creates the fixed internal identities and
-  private token files before starting the remaining services.
+  first; the backend then adopts or creates the administrator identity and
+  private token files before starting the coordinator, and each agent's
+  identity pair and worker bearer token (in the directory the coordinator
+  reads them from) before starting agent workers. The `codex` and `claude`
+  agents adopt the users and token files of the profiles they replaced.
