@@ -1,10 +1,11 @@
-//! Provider-profile authentication owned by the trusted desktop backend.
+//! Agent login (provider authentication) owned by the trusted desktop backend.
 //!
-//! Provider credentials never cross into the coordinator. Login commands run
-//! inside the exact lead/reviewer service whose private provider-state volume
-//! will later be used for agent work. Only deliberately parsed progress facts
-//! (a trusted browser URL, a one-time device code, or a generic status) are
-//! emitted to the frontend; raw provider CLI output is never forwarded.
+//! Provider credentials never cross into the coordinator. Each agent (ADR-016)
+//! has one login, run inside the agent's worker service whose private
+//! provider-state volume will later be used for both its lead and reviewer
+//! work. Only deliberately parsed progress facts (a trusted browser URL, a
+//! one-time device code, or a generic status) are emitted to the frontend; raw
+//! provider CLI output is never forwarded.
 
 use serde::Serialize;
 use std::collections::HashMap;
@@ -17,25 +18,12 @@ use std::time::Duration;
 use tauri::{AppHandle, Emitter, State};
 use zeroize::Zeroizing;
 
+use crate::agents::{self, Provider};
 use crate::docker;
 
 const PROGRESS_EVENT: &str = "login_progress";
 const OUTPUT_LIMIT: usize = 64 * 1024;
 const POLL_INTERVAL: Duration = Duration::from_millis(50);
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-enum Provider {
-    Codex,
-    Claude,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-enum Role {
-    Lead,
-    Reviewer,
-}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -66,8 +54,8 @@ pub struct ProfileDetail {
 #[serde(rename_all = "camelCase")]
 pub struct Profile {
     id: String,
+    name: String,
     provider: Provider,
-    role: Role,
     status: ProfileStatus,
     #[serde(skip_serializing_if = "Option::is_none")]
     detail: Option<ProfileDetail>,
@@ -98,69 +86,46 @@ impl LoginMethod {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+/// One agent's login: its worker service and fixed login helper container.
+#[derive(Clone, Debug)]
 struct ProfileSpec {
-    id: &'static str,
+    id: String,
+    name: String,
     provider: Provider,
-    role: Role,
-    compose_profile: &'static str,
-    service: &'static str,
-    executable: &'static str,
-    login_container: &'static str,
+    service: String,
+    login_container: String,
 }
 
-/// The small part of a provider profile that the stack launcher needs.
+impl ProfileSpec {
+    fn for_agent(agent: &agents::Agent) -> Self {
+        Self {
+            id: agent.id.clone(),
+            name: agent.name.clone(),
+            provider: agent.provider,
+            service: agents::worker_service(&agent.id),
+            login_container: agents::login_container(&agent.id),
+        }
+    }
+
+    fn executable(&self) -> &'static str {
+        self.provider.executable()
+    }
+}
+
+/// The small part of an agent login that the stack launcher needs.
 ///
 /// Authentication remains owned by this module. The launcher receives only a
-/// yes/no decision plus fixed Compose identifiers, never provider credentials
-/// or provider command output.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+/// yes/no decision plus the agent's Compose service, never provider
+/// credentials or provider command output.
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct WorkerConnection {
-    pub(crate) service: &'static str,
+    pub(crate) service: String,
     pub(crate) connected: bool,
 }
 
-const PROFILES: &[ProfileSpec] = &[
-    ProfileSpec {
-        id: "codex-lead",
-        provider: Provider::Codex,
-        role: Role::Lead,
-        compose_profile: "real-codex",
-        service: "codex-worker",
-        executable: "codex",
-        login_container: "commitarium-login-codex-lead",
-    },
-    ProfileSpec {
-        id: "codex-reviewer",
-        provider: Provider::Codex,
-        role: Role::Reviewer,
-        compose_profile: "real-codex",
-        service: "codex-reviewer-worker",
-        executable: "codex",
-        login_container: "commitarium-login-codex-reviewer",
-    },
-    ProfileSpec {
-        id: "claude-lead",
-        provider: Provider::Claude,
-        role: Role::Lead,
-        compose_profile: "real-claude",
-        service: "claude-worker",
-        executable: "claude",
-        login_container: "commitarium-login-claude-lead",
-    },
-    ProfileSpec {
-        id: "claude-reviewer",
-        provider: Provider::Claude,
-        role: Role::Reviewer,
-        compose_profile: "real-claude",
-        service: "claude-reviewer-worker",
-        executable: "claude",
-        login_container: "commitarium-login-claude-reviewer",
-    },
-];
-
 #[derive(Clone)]
 struct ActiveLogin {
+    spec: ProfileSpec,
     generation: u64,
     method: LoginMethod,
     submitted: bool,
@@ -170,8 +135,8 @@ struct ActiveLogin {
 }
 
 struct ProfileState {
-    statuses: HashMap<&'static str, (ProfileStatus, Option<ProfileDetail>)>,
-    active: HashMap<&'static str, ActiveLogin>,
+    statuses: HashMap<String, (ProfileStatus, Option<ProfileDetail>)>,
+    active: HashMap<String, ActiveLogin>,
 }
 
 struct ProfileManagerInner {
@@ -188,14 +153,10 @@ pub struct ProfileManager {
 
 impl ProfileManager {
     pub fn new() -> Self {
-        let statuses = PROFILES
-            .iter()
-            .map(|spec| (spec.id, (ProfileStatus::NotConfigured, None)))
-            .collect();
         Self {
             inner: Arc::new(ProfileManagerInner {
                 state: Mutex::new(ProfileState {
-                    statuses,
+                    statuses: HashMap::new(),
                     active: HashMap::new(),
                 }),
                 next_generation: AtomicU64::new(1),
@@ -203,11 +164,11 @@ impl ProfileManager {
         }
     }
 
-    fn snapshot(&self, spec: ProfileSpec) -> Profile {
+    fn snapshot(&self, spec: &ProfileSpec) -> Profile {
         let state = self.inner.state.lock().expect("profile state poisoned");
         let (status, detail) = state
             .statuses
-            .get(spec.id)
+            .get(&spec.id)
             .cloned()
             .unwrap_or((ProfileStatus::NotConfigured, None));
         profile(spec, status, detail)
@@ -224,18 +185,19 @@ impl ProfileManager {
 
     fn reserve(
         &self,
-        spec: ProfileSpec,
+        spec: &ProfileSpec,
         method: LoginMethod,
         status: ProfileStatus,
     ) -> Result<u64, String> {
         let mut state = self.inner.state.lock().expect("profile state poisoned");
-        if state.active.contains_key(spec.id) {
-            return Err("a login is already in progress for this profile".to_string());
+        if state.active.contains_key(&spec.id) {
+            return Err("a login is already in progress for this agent".to_string());
         }
         let generation = self.inner.next_generation.fetch_add(1, Ordering::Relaxed);
         state.active.insert(
-            spec.id,
+            spec.id.clone(),
             ActiveLogin {
+                spec: spec.clone(),
                 generation,
                 method,
                 submitted: false,
@@ -244,13 +206,13 @@ impl ProfileManager {
                 cancelled: Arc::new(AtomicBool::new(false)),
             },
         );
-        state.statuses.insert(spec.id, (status, None));
+        state.statuses.insert(spec.id.clone(), (status, None));
         Ok(generation)
     }
 
     fn attach_process(
         &self,
-        spec: ProfileSpec,
+        spec: &ProfileSpec,
         generation: u64,
         child: Arc<Mutex<Child>>,
         stdin: Arc<Mutex<Option<ChildStdin>>>,
@@ -258,7 +220,7 @@ impl ProfileManager {
         let mut state = self.inner.state.lock().expect("profile state poisoned");
         let active = state
             .active
-            .get_mut(spec.id)
+            .get_mut(&spec.id)
             .filter(|active| active.generation == generation)
             .ok_or_else(|| "the login was cancelled before it started".to_string())?;
         active.child = Some(child);
@@ -266,42 +228,42 @@ impl ProfileManager {
         Ok(active.cancelled.clone())
     }
 
-    fn mark_submitted(&self, spec: ProfileSpec, generation: u64) -> Result<(), String> {
+    fn mark_submitted(&self, spec: &ProfileSpec, generation: u64) -> Result<(), String> {
         let mut state = self.inner.state.lock().expect("profile state poisoned");
         let active = state
             .active
-            .get_mut(spec.id)
+            .get_mut(&spec.id)
             .filter(|active| active.generation == generation)
             .ok_or_else(|| "the login is no longer active".to_string())?;
         active.submitted = true;
         Ok(())
     }
 
-    fn active(&self, spec: ProfileSpec) -> Option<ActiveLogin> {
+    fn active(&self, spec: &ProfileSpec) -> Option<ActiveLogin> {
         self.inner
             .state
             .lock()
             .expect("profile state poisoned")
             .active
-            .get(spec.id)
+            .get(&spec.id)
             .cloned()
     }
 
-    fn finish(&self, spec: ProfileSpec, generation: u64) {
+    fn finish(&self, spec: &ProfileSpec, generation: u64) {
         let mut state = self.inner.state.lock().expect("profile state poisoned");
         if state
             .active
-            .get(spec.id)
+            .get(&spec.id)
             .is_some_and(|active| active.generation == generation)
         {
-            state.active.remove(spec.id);
+            state.active.remove(&spec.id);
         }
     }
 
     fn transition(
         &self,
         app: &AppHandle,
-        spec: ProfileSpec,
+        spec: &ProfileSpec,
         status: ProfileStatus,
         detail: Option<ProfileDetail>,
     ) {
@@ -310,11 +272,11 @@ impl ProfileManager {
             .lock()
             .expect("profile state poisoned")
             .statuses
-            .insert(spec.id, (status, detail.clone()));
+            .insert(spec.id.clone(), (status, detail.clone()));
         let _ = app.emit(
             PROGRESS_EVENT,
             LoginProgress {
-                profile_id: spec.id.to_string(),
+                profile_id: spec.id.clone(),
                 status,
                 detail,
             },
@@ -331,19 +293,15 @@ impl ProfileManager {
             .lock()
             .expect("profile state poisoned")
             .active
-            .iter()
-            .filter_map(|(profile_id, login)| {
-                profile_spec(profile_id)
-                    .ok()
-                    .map(|spec| (spec, login.clone()))
-            })
+            .values()
+            .cloned()
             .collect();
-        for (spec, login) in active {
+        for login in active {
             login.cancelled.store(true, Ordering::Release);
             if let Some(child) = login.child {
                 let _ = child.lock().expect("login process poisoned").kill();
             }
-            remove_login_container(spec);
+            remove_login_container(&login.spec);
         }
     }
 }
@@ -354,48 +312,63 @@ impl Default for ProfileManager {
     }
 }
 
-fn profile(spec: ProfileSpec, status: ProfileStatus, detail: Option<ProfileDetail>) -> Profile {
+fn profile(spec: &ProfileSpec, status: ProfileStatus, detail: Option<ProfileDetail>) -> Profile {
     Profile {
-        id: spec.id.to_string(),
+        id: spec.id.clone(),
+        name: spec.name.clone(),
         provider: spec.provider,
-        role: spec.role,
         status,
         detail,
     }
 }
 
-fn profile_spec(profile_id: &str) -> Result<ProfileSpec, String> {
-    PROFILES
-        .iter()
-        .copied()
-        .find(|spec| spec.id == profile_id)
-        .ok_or_else(|| "unknown provider profile".to_string())
+/// Provision the agent's worker before a login runs in it.
+fn provision_worker(spec: &ProfileSpec) -> Result<(), String> {
+    let agents = agents::current()?;
+    if !agents.iter().any(|agent| agent.id == spec.id) {
+        return Err("unknown agent".to_string());
+    }
+    docker::provision_agents(&agents, false).map(|_| ())
 }
 
-fn paired_spec(spec: ProfileSpec) -> ProfileSpec {
-    PROFILES
+/// The login of an agent the coordinator knows. The ID is only ever matched
+/// against the agent list, never turned into a Compose name directly.
+fn profile_spec(agent_id: &str) -> Result<ProfileSpec, String> {
+    agents::current()?
         .iter()
-        .copied()
-        .find(|candidate| candidate.provider == spec.provider && candidate.role != spec.role)
-        .expect("each provider has a paired role")
+        .find(|agent| agent.id == agent_id)
+        .map(ProfileSpec::for_agent)
+        .ok_or_else(|| "unknown agent".to_string())
 }
 
 #[tauri::command]
 pub async fn list_profiles(manager: State<'_, ProfileManager>) -> Result<Vec<Profile>, String> {
     let manager = manager.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || inspect_profiles(&manager))
-        .await
-        .map_err(|_| "could not inspect provider profiles".to_string())
+    tauri::async_runtime::spawn_blocking(move || {
+        let agents = agents::current()?;
+        // A new agent's worker must exist before its login can be inspected.
+        // If that is not possible yet (the stack is stopped), its login is
+        // reported as not inspectable rather than hiding the other agents.
+        let _ = docker::provision_agents(&agents, false);
+        let specs = agents.iter().map(ProfileSpec::for_agent).collect();
+        Ok(inspect_profiles(&manager, specs))
+    })
+    .await
+    .map_err(|_| "could not inspect agent logins".to_string())?
 }
 
-/// Verify all role profiles and return only the fixed routing facts needed by
+/// Verify each agent's login and return only the routing facts needed by
 /// stack startup. Active login sessions are deliberately not re-probed: their
 /// private volume is already owned by the login helper, and their in-memory
 /// non-connected state keeps the long-lived worker stopped.
-pub(crate) fn worker_connections(manager: &ProfileManager) -> Vec<WorkerConnection> {
-    inspect_profiles(manager)
+pub(crate) fn worker_connections(
+    manager: &ProfileManager,
+    agents: &[agents::Agent],
+) -> Vec<WorkerConnection> {
+    let specs: Vec<_> = agents.iter().map(ProfileSpec::for_agent).collect();
+    inspect_profiles(manager, specs.clone())
         .into_iter()
-        .zip(PROFILES.iter().copied())
+        .zip(specs)
         .map(|(profile, spec)| WorkerConnection {
             service: spec.service,
             connected: profile.status == ProfileStatus::Connected,
@@ -403,30 +376,30 @@ pub(crate) fn worker_connections(manager: &ProfileManager) -> Vec<WorkerConnecti
         .collect()
 }
 
-fn inspect_profiles(manager: &ProfileManager) -> Vec<Profile> {
-    let checks: Vec<_> = PROFILES
+fn inspect_profiles(manager: &ProfileManager, specs: Vec<ProfileSpec>) -> Vec<Profile> {
+    let checks: Vec<_> = specs
         .iter()
-        .copied()
+        .cloned()
         .map(|spec| {
             let manager = manager.clone();
             thread::spawn(move || {
-                if manager.is_active(spec.id) {
-                    manager.snapshot(spec)
+                if manager.is_active(&spec.id) {
+                    manager.snapshot(&spec)
                 } else {
-                    probe_profile(spec)
+                    probe_profile(&spec)
                 }
             })
         })
         .collect();
     checks
         .into_iter()
-        .zip(PROFILES.iter().copied())
+        .zip(specs)
         .map(|(check, spec)| {
             check.join().unwrap_or_else(|_| {
                 profile(
-                    spec,
+                    &spec,
                     ProfileStatus::Failed,
-                    Some(detail("The provider profile could not be inspected.")),
+                    Some(detail("The agent login could not be inspected.")),
                 )
             })
         })
@@ -442,7 +415,8 @@ pub fn begin_login(
 ) -> Result<(), String> {
     let spec = profile_spec(&profile_id)?;
     let method = LoginMethod::parse(&method)?;
-    if service_is_running(spec)? {
+    provision_worker(&spec)?;
+    if service_is_running(&spec)? {
         return Err(
             "this provider worker is running; stop the stack before changing its login".to_string(),
         );
@@ -450,16 +424,16 @@ pub fn begin_login(
     match method {
         LoginMethod::ApiKey => {
             let manager = manager.inner().clone();
-            manager.reserve(spec, method, ProfileStatus::WaitingForApiKey)?;
+            manager.reserve(&spec, method, ProfileStatus::WaitingForApiKey)?;
             manager.transition(
                 &app,
-                spec,
+                &spec,
                 ProfileStatus::WaitingForApiKey,
                 Some(detail("Enter the API key to connect this profile.")),
             );
             Ok(())
         }
-        LoginMethod::Subscription => start_subscription(app, manager.inner().clone(), spec),
+        LoginMethod::Subscription => start_subscription(app, manager.inner().clone(), &spec),
     }
 }
 
@@ -478,7 +452,7 @@ pub fn submit_login_code(
         return Err("login code must be between 1 and 4096 characters".to_string());
     }
     let active = manager
-        .active(spec)
+        .active(&spec)
         .filter(|active| active.method == LoginMethod::Subscription)
         .ok_or_else(|| "this profile is not waiting for a login code".to_string())?;
     let stdin = active
@@ -504,7 +478,6 @@ pub fn submit_api_key(
     manager: State<'_, ProfileManager>,
     profile_id: String,
     key: String,
-    use_for_both_roles: Option<bool>,
 ) -> Result<(), String> {
     let spec = profile_spec(&profile_id)?;
     let key = Zeroizing::new(key.into_bytes());
@@ -513,33 +486,12 @@ pub fn submit_api_key(
     }
     let manager = manager.inner().clone();
     let active = manager
-        .active(spec)
+        .active(&spec)
         .filter(|active| active.method == LoginMethod::ApiKey)
-        .ok_or_else(|| "begin API-key login for this profile first".to_string())?;
-
-    let mut targets = vec![(spec, active.generation)];
-    if use_for_both_roles.unwrap_or(false) {
-        let paired = paired_spec(spec);
-        if service_is_running(paired)? {
-            return Err(
-                "the paired provider worker is running; stop the stack before changing its login"
-                    .to_string(),
-            );
-        }
-        let generation = manager.reserve(paired, LoginMethod::ApiKey, ProfileStatus::Starting)?;
-        targets.push((paired, generation));
-    }
-
-    for (target, generation) in &targets {
-        manager.mark_submitted(*target, *generation)?;
-    }
-
-    for (target, generation) in targets {
-        let app = app.clone();
-        let manager = manager.clone();
-        let target_key = Zeroizing::new(key.to_vec());
-        thread::spawn(move || provision_api_key(app, manager, target, generation, target_key));
-    }
+        .ok_or_else(|| "begin API-key login for this agent first".to_string())?;
+    manager.mark_submitted(&spec, active.generation)?;
+    let generation = active.generation;
+    thread::spawn(move || provision_api_key(app, manager, &spec, generation, key));
     Ok(())
 }
 
@@ -551,31 +503,31 @@ pub fn cancel_login(
 ) -> Result<(), String> {
     let spec = profile_spec(&profile_id)?;
     let active = manager
-        .active(spec)
+        .active(&spec)
         .ok_or_else(|| "no login is in progress for this profile".to_string())?;
     active.cancelled.store(true, Ordering::Release);
     if let Some(child) = active.child {
         let _ = child.lock().expect("login process poisoned").kill();
-        remove_login_container(spec);
+        remove_login_container(&spec);
         manager.transition(
             &app,
-            spec,
+            &spec,
             ProfileStatus::Verifying,
             Some(detail("Cancelling login and checking the profile.")),
         );
     } else if !active.submitted {
         manager.transition(
             &app,
-            spec,
+            &spec,
             ProfileStatus::Verifying,
             Some(detail("Cancelling login and checking the profile.")),
         );
         let manager = manager.inner().clone();
         thread::spawn(move || {
-            let current = probe_profile(spec);
+            let current = probe_profile(&spec);
             manager.transition(
                 &app,
-                spec,
+                &spec,
                 current.status,
                 Some(ProfileDetail {
                     message: Some(
@@ -584,12 +536,12 @@ pub fn cancel_login(
                     ..current.detail.unwrap_or_default()
                 }),
             );
-            manager.finish(spec, active.generation);
+            manager.finish(&spec, active.generation);
         });
     } else {
         manager.transition(
             &app,
-            spec,
+            &spec,
             ProfileStatus::Verifying,
             Some(detail("Cancelling login and checking the profile.")),
         );
@@ -603,10 +555,10 @@ pub async fn verify_profile(
     profile_id: String,
 ) -> Result<Profile, String> {
     let spec = profile_spec(&profile_id)?;
-    if manager.is_active(spec.id) {
-        return Ok(manager.snapshot(spec));
+    if manager.is_active(&spec.id) {
+        return Ok(manager.snapshot(&spec));
     }
-    tauri::async_runtime::spawn_blocking(move || probe_profile(spec))
+    tauri::async_runtime::spawn_blocking(move || probe_profile(&spec))
         .await
         .map_err(|_| "could not verify the provider profile".to_string())
 }
@@ -617,10 +569,10 @@ pub async fn disconnect_profile(
     profile_id: String,
 ) -> Result<Profile, String> {
     let spec = profile_spec(&profile_id)?;
-    if manager.is_active(spec.id) {
+    if manager.is_active(&spec.id) {
         return Err("cancel the login before disconnecting this profile".to_string());
     }
-    if service_is_running(spec)? {
+    if service_is_running(&spec)? {
         return Err(
             "this provider worker is running; stop the stack before disconnecting it".to_string(),
         );
@@ -628,7 +580,7 @@ pub async fn disconnect_profile(
     tauri::async_runtime::spawn_blocking(move || {
         if spec.provider == Provider::Claude {
             run_profile_command(
-                spec,
+                &spec,
                 "/usr/local/bin/commitarium-claude-api-key",
                 &["clear"],
                 Stdio::null(),
@@ -643,17 +595,17 @@ pub async fn disconnect_profile(
         // A provider may report "already logged out" as non-zero. The real
         // status probe below is authoritative, so no CLI text is surfaced.
         let _ = run_profile_command(
-            spec,
-            spec.executable,
+            &spec,
+            spec.executable(),
             arguments,
             Stdio::null(),
             Stdio::null(),
             Stdio::null(),
         );
-        let result = probe_profile(spec);
+        let result = probe_profile(&spec);
         match result.status {
             ProfileStatus::NotConfigured => Ok(profile(
-                spec,
+                &spec,
                 ProfileStatus::NotConfigured,
                 Some(detail("Profile disconnected.")),
             )),
@@ -671,7 +623,7 @@ pub async fn disconnect_profile(
 fn start_subscription(
     app: AppHandle,
     manager: ProfileManager,
-    spec: ProfileSpec,
+    spec: &ProfileSpec,
 ) -> Result<(), String> {
     let generation = manager.reserve(spec, LoginMethod::Subscription, ProfileStatus::Starting)?;
     manager.transition(
@@ -690,7 +642,7 @@ fn start_subscription(
         ],
         Provider::Claude => &["auth", "login"],
     };
-    let mut child = match spawn_profile_command(spec, spec.executable, arguments) {
+    let mut child = match spawn_profile_command(spec, spec.executable(), arguments) {
         Ok(child) => child,
         Err(error) => {
             manager.finish(spec, generation);
@@ -704,9 +656,10 @@ fn start_subscription(
     let child = Arc::new(Mutex::new(child));
     let cancelled = manager.attach_process(spec, generation, child.clone(), stdin)?;
 
+    let spec = spec.clone();
     thread::spawn(move || {
         monitor_subscription(
-            app, manager, spec, generation, child, stdout, stderr, cancelled,
+            app, manager, &spec, generation, child, stdout, stderr, cancelled,
         )
     });
     Ok(())
@@ -715,7 +668,7 @@ fn start_subscription(
 fn provision_api_key(
     app: AppHandle,
     manager: ProfileManager,
-    spec: ProfileSpec,
+    spec: &ProfileSpec,
     generation: u64,
     key: Zeroizing<Vec<u8>>,
 ) {
@@ -799,7 +752,7 @@ fn provision_api_key(
 
 fn run_secret_command(
     manager: &ProfileManager,
-    spec: ProfileSpec,
+    spec: &ProfileSpec,
     generation: u64,
     executable: &str,
     arguments: &[&str],
@@ -867,7 +820,7 @@ fn run_secret_command(
 fn monitor_subscription(
     app: AppHandle,
     manager: ProfileManager,
-    spec: ProfileSpec,
+    spec: &ProfileSpec,
     generation: u64,
     child: Arc<Mutex<Child>>,
     stdout: Option<std::process::ChildStdout>,
@@ -928,7 +881,7 @@ fn monitor_subscription(
 fn finish_subscription(
     app: &AppHandle,
     manager: &ProfileManager,
-    spec: ProfileSpec,
+    spec: &ProfileSpec,
     exit_status: Option<ExitStatus>,
 ) {
     if exit_status.is_some_and(|status| status.success()) {
@@ -972,7 +925,7 @@ fn spawn_reader(mut reader: impl Read + Send + 'static, sender: mpsc::Sender<Zer
 fn publish_parser_progress(
     app: &AppHandle,
     manager: &ProfileManager,
-    spec: ProfileSpec,
+    spec: &ProfileSpec,
     parser: &mut LoginOutputParser,
 ) {
     if parser.url_changed {
@@ -1166,7 +1119,7 @@ fn detail(message: &str) -> ProfileDetail {
     }
 }
 
-fn probe_profile(spec: ProfileSpec) -> Profile {
+fn probe_profile(spec: &ProfileSpec) -> Profile {
     let arguments: &[&str] = match spec.provider {
         Provider::Codex => &[
             "-c",
@@ -1178,7 +1131,7 @@ fn probe_profile(spec: ProfileSpec) -> Profile {
     };
     match profile_command_status(
         spec,
-        spec.executable,
+        spec.executable(),
         arguments,
         Stdio::null(),
         Stdio::null(),
@@ -1210,7 +1163,7 @@ fn probe_profile(spec: ProfileSpec) -> Profile {
     }
 }
 
-fn profile_has_credentials(spec: ProfileSpec) -> Result<bool, String> {
+fn profile_has_credentials(spec: &ProfileSpec) -> Result<bool, String> {
     let script = match spec.provider {
         Provider::Codex => "test -s /var/lib/commitarium-provider/auth.json",
         Provider::Claude => {
@@ -1227,9 +1180,9 @@ fn profile_has_credentials(spec: ProfileSpec) -> Result<bool, String> {
     )
 }
 
-fn service_is_running(spec: ProfileSpec) -> Result<bool, String> {
+fn service_is_running(spec: &ProfileSpec) -> Result<bool, String> {
     let mut command = docker::docker_command();
-    command.args(["compose", "--profile", spec.compose_profile]);
+    command.arg("compose");
     docker::append_compose_files(&mut command)?;
     let output = command
         .args([
@@ -1239,7 +1192,7 @@ fn service_is_running(spec: ProfileSpec) -> Result<bool, String> {
             "--status",
             "running",
             "--services",
-            spec.service,
+            &spec.service,
         ])
         .output()
         .map_err(|_| "could not inspect the provider worker".to_string())?;
@@ -1252,17 +1205,17 @@ fn service_is_running(spec: ProfileSpec) -> Result<bool, String> {
 }
 
 fn compose_command(
-    spec: ProfileSpec,
+    spec: &ProfileSpec,
     executable: &str,
     running_service: bool,
     login_container: Option<&str>,
 ) -> Result<Command, String> {
     let mut command = docker::docker_command();
-    command.args(["compose", "--profile", spec.compose_profile]);
+    command.arg("compose");
     docker::append_compose_files(&mut command)?;
     command.args(["-p", docker::PROJECT_NAME]);
     if running_service {
-        command.args(["exec", "-T", spec.service, executable]);
+        command.args(["exec", "-T", &spec.service, executable]);
     } else {
         command.args(["run", "--rm", "--no-deps"]);
         if docker::release_mode() {
@@ -1271,13 +1224,13 @@ fn compose_command(
         if let Some(container) = login_container {
             command.args(["--name", container]);
         }
-        command.args(["--entrypoint", executable, spec.service]);
+        command.args(["--entrypoint", executable, &spec.service]);
     }
     Ok(command)
 }
 
 fn spawn_profile_command(
-    spec: ProfileSpec,
+    spec: &ProfileSpec,
     executable: &str,
     arguments: &[&str],
 ) -> Result<Child, String> {
@@ -1285,7 +1238,7 @@ fn spawn_profile_command(
     // Starting a new user-requested login removes only that exact stale helper,
     // never a worker or arbitrary container.
     remove_login_container(spec);
-    let mut command = compose_command(spec, executable, false, Some(spec.login_container))?;
+    let mut command = compose_command(spec, executable, false, Some(&spec.login_container))?;
     command
         .args(arguments)
         .stdin(Stdio::piped())
@@ -1296,7 +1249,7 @@ fn spawn_profile_command(
 }
 
 fn run_profile_command(
-    spec: ProfileSpec,
+    spec: &ProfileSpec,
     executable: &str,
     arguments: &[&str],
     stdin: Stdio,
@@ -1310,7 +1263,7 @@ fn run_profile_command(
 }
 
 fn profile_command_status(
-    spec: ProfileSpec,
+    spec: &ProfileSpec,
     executable: &str,
     arguments: &[&str],
     stdin: Stdio,
@@ -1328,9 +1281,9 @@ fn profile_command_status(
     Ok(status.success())
 }
 
-fn remove_login_container(spec: ProfileSpec) {
+fn remove_login_container(spec: &ProfileSpec) {
     let _ = docker::docker_command()
-        .args(["rm", "--force", spec.login_container])
+        .args(["rm", "--force", &spec.login_container])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -1341,19 +1294,17 @@ fn remove_login_container(spec: ProfileSpec) {
 mod tests {
     use super::*;
 
+    fn spec(id: &str, provider: Provider) -> ProfileSpec {
+        ProfileSpec::for_agent(&agents::Agent::new(id, "Test agent", provider))
+    }
+
     #[test]
-    fn profile_ids_map_to_separate_provider_and_role_services() {
-        assert_eq!(PROFILES.len(), 4);
-        assert_eq!(profile_spec("codex-lead").unwrap().service, "codex-worker");
-        assert_eq!(
-            profile_spec("claude-reviewer").unwrap().service,
-            "claude-reviewer-worker"
-        );
-        assert!(profile_spec("codex").is_err());
-        assert_eq!(
-            paired_spec(profile_spec("claude-lead").unwrap()).id,
-            "claude-reviewer"
-        );
+    fn each_agent_logs_in_once_in_its_own_worker_service() {
+        let claude = spec("claude-max", Provider::Claude);
+        assert_eq!(claude.service, "agent-claude-max-worker");
+        assert_eq!(claude.login_container, "commitarium-login-claude-max");
+        assert_eq!(claude.executable(), "claude");
+        assert_eq!(spec("codex", Provider::Codex).executable(), "codex");
     }
 
     #[test]
@@ -1408,19 +1359,19 @@ mod tests {
     #[test]
     fn profile_manager_fences_duplicate_logins() {
         let manager = ProfileManager::new();
-        let spec = profile_spec("codex-lead").unwrap();
+        let spec = spec("codex", Provider::Codex);
         manager
-            .reserve(spec, LoginMethod::ApiKey, ProfileStatus::WaitingForApiKey)
+            .reserve(&spec, LoginMethod::ApiKey, ProfileStatus::WaitingForApiKey)
             .unwrap();
         assert!(manager
-            .reserve(spec, LoginMethod::Subscription, ProfileStatus::Starting)
+            .reserve(&spec, LoginMethod::Subscription, ProfileStatus::Starting)
             .is_err());
     }
 
     #[test]
     fn profile_serialization_matches_the_frontend_contract() {
         let value = serde_json::to_value(profile(
-            profile_spec("codex-lead").unwrap(),
+            &spec("codex", Provider::Codex),
             ProfileStatus::WaitingForBrowser,
             Some(ProfileDetail {
                 message: Some("Open the page.".to_string()),
@@ -1429,9 +1380,10 @@ mod tests {
             }),
         ))
         .unwrap();
-        assert_eq!(value["id"], "codex-lead");
+        assert_eq!(value["id"], "codex");
+        assert_eq!(value["name"], "Test agent");
         assert_eq!(value["provider"], "codex");
-        assert_eq!(value["role"], "lead");
+        assert!(value.get("role").is_none());
         assert_eq!(value["status"], "waiting_for_browser");
         assert_eq!(
             value["detail"]["browserUrl"],
@@ -1447,10 +1399,10 @@ mod tests {
         std::fs::write(&compose_file, "services: {}").unwrap();
         std::env::set_var("COMMITARIUM_COMPOSE_FILE", &compose_file);
         let command = compose_command(
-            profile_spec("claude-lead").unwrap(),
+            &spec("claude", Provider::Claude),
             "claude",
             false,
-            Some("commitarium-login-claude-lead"),
+            Some("commitarium-login-claude"),
         )
         .unwrap();
         let arguments: Vec<_> = command
@@ -1462,8 +1414,11 @@ mod tests {
             .any(|pair| pair == ["--entrypoint", "claude"]));
         assert!(arguments
             .windows(2)
-            .any(|pair| { pair == ["--name", "commitarium-login-claude-lead"] }));
-        assert_eq!(arguments.last().map(String::as_str), Some("claude-worker"));
+            .any(|pair| { pair == ["--name", "commitarium-login-claude"] }));
+        assert_eq!(
+            arguments.last().map(String::as_str),
+            Some("agent-claude-worker")
+        );
         std::env::remove_var("COMMITARIUM_COMPOSE_FILE");
     }
 }

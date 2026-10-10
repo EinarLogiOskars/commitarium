@@ -114,7 +114,7 @@ struct ValidationCompletion<'a> {
     error: &'a str,
 }
 
-fn coordinator_url(path: &str) -> String {
+pub(crate) fn coordinator_url(path: &str) -> String {
     let port = std::env::var("COMMITARIUM_COORDINATOR_PORT").unwrap_or_else(|_| "8080".into());
     format!("http://127.0.0.1:{port}{path}")
 }
@@ -228,8 +228,8 @@ fn provision_images(
     manager: &profiles::ProfileManager,
     packages: &[String],
 ) -> Result<(BTreeMap<String, String>, String, String), String> {
-    let codex_base = compose_image("codex-worker")?;
-    let claude_base = compose_image("claude-worker")?;
+    let codex_base = compose_image("codex-agent-template")?;
+    let claude_base = compose_image("claude-agent-template")?;
     let package_text = packages.join(" ");
     let codex_image = derivative_tag("codex", &codex_base, packages);
     let claude_image = derivative_tag("claude", &claude_base, packages);
@@ -240,7 +240,7 @@ fn provision_images(
         return Err("Codex and Claude images resolved different system-package versions".into());
     }
     write_environment_overlay(&codex_image, &claude_image)?;
-    docker::reconcile_provider_workers(manager, true)?;
+    docker::reconcile_agent_workers(manager, true)?;
     Ok((resolved, codex_image, claude_image))
 }
 
@@ -326,18 +326,14 @@ fn write_environment_overlay(codex: &str, claude: &str) -> Result<(), String> {
         .parent()
         .ok_or_else(|| "environment Compose path has no parent".to_string())?;
     fs::create_dir_all(parent).map_err(|e| format!("create environment Compose directory: {e}"))?;
+    // The agent worker templates carry the images; agent workers generated
+    // from them pick the approved environment up on the next reconcile.
     let contents = format!(
         r#"services:
-  codex-worker:
+  codex-agent-template:
     build: !reset null
     image: {codex}
-  codex-reviewer-worker:
-    build: !reset null
-    image: {codex}
-  claude-worker:
-    build: !reset null
-    image: {claude}
-  claude-reviewer-worker:
+  claude-agent-template:
     build: !reset null
     image: {claude}
 "#
@@ -417,7 +413,7 @@ fn safe_commit(value: &str) -> bool {
 
 fn execute_validation(job: &ValidationJob) -> Result<Vec<ValidationCommandResult>, String> {
     let workspace = managed_workspace(&job.workspace_id)?;
-    let image = compose_image("codex-worker")?;
+    let image = compose_image("codex-agent-template")?;
     let spec_dir =
         tempfile::tempdir().map_err(|e| format!("create validation specification: {e}"))?;
     let output_dir =

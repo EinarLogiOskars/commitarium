@@ -1,3 +1,4 @@
+mod agents;
 mod bootstrap;
 mod docker;
 mod git_providers;

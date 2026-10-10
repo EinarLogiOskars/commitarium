@@ -9,16 +9,8 @@ import {
   onLoginProgress,
   openExternal,
   type Profile,
-  type ProfileId,
   type ProfileStatus,
 } from "../ipc";
-
-const LABEL: Record<ProfileId, string> = {
-  "codex-lead": "Codex · Lead",
-  "codex-reviewer": "Codex · Reviewer",
-  "claude-lead": "Claude · Lead",
-  "claude-reviewer": "Claude · Reviewer",
-};
 
 const STATUS_LABEL: Record<ProfileStatus, string> = {
   not_configured: "Not connected",
@@ -68,8 +60,8 @@ export function Providers({ onClose }: { onClose: () => void }) {
       <div className="modal__card" onClick={(e) => e.stopPropagation()}>
         <h2>Providers</h2>
         <p className="muted">
-          Connect the agents to your Codex and Claude accounts. Each role signs in on its own;
-          secrets go straight to a private volume and never touch the coordinator.
+          Connect each agent to its Codex or Claude account. An agent signs in once and serves as
+          lead or reviewer; secrets go straight to a private volume and never touch the coordinator.
         </p>
         {error && <div className="banner banner--error">{error}</div>}
 
@@ -95,7 +87,6 @@ function ProfileRow({ profile, onChanged }: { profile: Profile; onChanged: () =>
   const [picking, setPicking] = useState(false);
   const [code, setCode] = useState("");
   const [apiKey, setApiKey] = useState("");
-  const [useBoth, setUseBoth] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const openedUrl = useRef<string | null>(null);
@@ -134,7 +125,7 @@ function ProfileRow({ profile, onChanged }: { profile: Profile; onChanged: () =>
   return (
     <div className="profile-row">
       <div className="profile-row__head">
-        <span className="profile-row__name">{LABEL[profile.id]}</span>
+        <span className="profile-row__name">{profile.name}</span>
         <span className={`state state--${tone(s)}`}>
           <span className={`dot dot--${tone(s)}`} />
           {STATUS_LABEL[s]}
@@ -231,19 +222,10 @@ function ProfileRow({ profile, onChanged }: { profile: Profile; onChanged: () =>
             onChange={(e) => setApiKey(e.target.value)}
             disabled={busy}
           />
-          <label className="api-key__both">
-            <input
-              type="checkbox"
-              checked={useBoth}
-              onChange={(e) => setUseBoth(e.target.checked)}
-              disabled={busy}
-            />
-            Use this key for both {profile.provider} roles
-          </label>
           <button
             className="primary"
             onClick={() =>
-              run(() => submitApiKey(profile.id, apiKey.trim(), useBoth)).then(() => setApiKey(""))
+              run(() => submitApiKey(profile.id, apiKey.trim())).then(() => setApiKey(""))
             }
             disabled={busy || !apiKey.trim()}
           >
