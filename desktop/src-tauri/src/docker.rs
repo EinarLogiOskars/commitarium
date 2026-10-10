@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use tauri::{AppHandle, Manager, State};
 
-use crate::{agents, bootstrap, preview, profiles};
+use crate::{agents, bootstrap, phase4, preview, profiles};
 
 /// Fixed Compose project name. Scoping every command to this project keeps the
 /// launcher from touching any other Compose stack on the host.
@@ -87,6 +87,9 @@ pub(crate) fn prepare_runtime(app: &AppHandle) -> Result<(), String> {
         );
     }
     agents::init_overlay_path(&runtime_dir);
+    // Best effort: a failed rewrite leaves the old overlay, whose role
+    // services are then only created to be retired.
+    let _ = phase4::migrate_environment_overlay();
     if std::env::var_os("COMMITARIUM_COMPOSE_FILE").is_some() || cfg!(debug_assertions) {
         return Ok(());
     }
