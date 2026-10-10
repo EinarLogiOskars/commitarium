@@ -273,6 +273,7 @@ type API struct {
 	validations        ValidationService
 	usage              FeatureUsageService
 	assistant          WorkOrderAssistant
+	agents             AgentService
 }
 
 func New(
@@ -376,8 +377,11 @@ func newAPI(
 	var validations ValidationService
 	var usage FeatureUsageService
 	var workOrderAssistant WorkOrderAssistant
+	var agents AgentService
 	for _, extra := range extras {
 		switch typed := extra.(type) {
+		case AgentService:
+			agents = typed
 		case WorkOrderAssistant:
 			workOrderAssistant = typed
 		case FeatureUsageService:
@@ -412,6 +416,7 @@ func newAPI(
 		validations:        validations,
 		usage:              usage,
 		assistant:          workOrderAssistant,
+		agents:             agents,
 	}
 	api.artifacts, _ = workflow.(FeatureArtifactService)
 	api.projectImporter, _ = projects.(ProjectImporter)
@@ -573,6 +578,12 @@ func newAPI(
 		"GET /api/v1/projects/{projectID}/features/{id}/runs",
 		api.listFeatureRunsHandler,
 	)
+	if agents != nil {
+		mux.HandleFunc("GET /api/v1/agents", api.listAgentsHandler)
+		mux.HandleFunc("POST /api/v1/agents", api.createAgentHandler)
+		mux.HandleFunc("PATCH /api/v1/agents/{id}", api.renameAgentHandler)
+		mux.HandleFunc("DELETE /api/v1/agents/{id}", api.deleteAgentHandler)
+	}
 	if workOrderAssistant != nil {
 		mux.HandleFunc("POST /api/v1/projects/{projectID}/features/{id}/assistant", api.startAssistantHandler)
 		mux.HandleFunc("GET /api/v1/projects/{projectID}/features/{id}/assistant", api.getAssistantHandler)

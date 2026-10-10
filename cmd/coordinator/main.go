@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/EinarLogiOskars/commitarium/internal/agent"
 	workorderassistant "github.com/EinarLogiOskars/commitarium/internal/assistant"
 	"log"
 	"net/http"
@@ -548,6 +549,7 @@ func run(ctx context.Context, coordinatorConfig config) error {
 		validationService,
 		executionStore,
 		workOrderAssistant,
+		agent.NewService(coordinatordatabase.NewAgentStore(db)),
 	)
 
 	log.Print("Listening...")

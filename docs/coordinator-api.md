@@ -43,6 +43,10 @@ this API beyond the host loopback interface is unsupported.
 | `GET` | `/api/v1/projects/{projectID}/features/{featureID}/events/stream` | Replay and stream workflow history with SSE |
 | `GET` | `/api/v1/projects/{projectID}/features/{featureID}/artifacts/{kind}` | Read the current durable goal draft, implementation plan, or acceptance-test checklist |
 | `PUT` | `/api/v1/projects/{projectID}/features/{featureID}/artifacts/handoff_brief` | Replace the editable handoff brief using optimistic concurrency |
+| `GET` | `/api/v1/agents` | List agents (provider accounts) |
+| `POST` | `/api/v1/agents` | Add an agent |
+| `PATCH` | `/api/v1/agents/{agentID}` | Rename an agent |
+| `DELETE` | `/api/v1/agents/{agentID}` | Remove an agent no project or active work order uses |
 | `POST` | `/api/v1/projects/{projectID}/features/{featureID}/assistant` | Start (or return) the draft work order's clarification with the project assistant |
 | `GET` | `/api/v1/projects/{projectID}/features/{featureID}/assistant` | Read the clarification conversation and status |
 | `POST` | `/api/v1/projects/{projectID}/features/{featureID}/assistant/messages` | Reply to the assistant |
@@ -957,6 +961,37 @@ feature returns `404 feature_not_found`.
 These discovery endpoints intentionally have no pagination, search, or
 server-side state filtering in the MVP. Clients can group and filter the
 complete project list locally.
+
+## Agents
+
+An agent is one provider account, a subscription or an API key (ADR-016). It
+can be lead or reviewer on any number of work orders at once. Credentials are
+connected through the desktop, never sent to the coordinator.
+
+```http
+POST /api/v1/agents
+Content-Type: application/json
+
+{"name": "Claude Max", "provider": "claude"}
+```
+
+```json
+{
+  "id": "claude-max",
+  "name": "Claude Max",
+  "provider": "claude",
+  "created_at": "2026-10-10T12:00:00Z",
+  "updated_at": "2026-10-10T12:00:00Z"
+}
+```
+
+The ID is derived from the name and numbered when taken (`claude-max-2`); it
+names the agent's worker, volumes, and Forgejo identities, so it never
+changes. `PATCH /api/v1/agents/{id}` with `{"name": "…"}` renames the agent.
+`DELETE` returns `204`, or `409 agent_in_use` while a project default or an
+unfinished run uses the agent. The two subscriptions configured before agents
+existed are the agents `codex` and `claude`. `provider` is `codex` or
+`claude`; anything else returns `400 invalid_agent`.
 
 ## Work-order clarification
 
