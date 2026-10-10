@@ -556,7 +556,9 @@ pub async fn stack_down() -> Result<(), String> {
 }
 
 pub(crate) fn stack_down_blocking() -> Result<(), String> {
-    compose(PROVIDER_PROFILES, &["down"]).map(|_| ())
+    // Workers no longer defined (the pre-agent role workers, removed agents)
+    // would otherwise keep the project network in use.
+    compose(PROVIDER_PROFILES, &["down", "--remove-orphans"]).map(|_| ())
 }
 
 /// Update the stack: pull the latest images, then recreate in the background.
