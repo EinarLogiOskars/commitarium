@@ -1738,7 +1738,7 @@ func TestRemoteLeadRecoveryReattachesToPlanningAttempt(t *testing.T) {
 		t.Fatalf("enter planning: %v", err)
 	}
 	if _, _, err := executions.CreateSession(
-		t.Context(), sessionID, runID, agentID(storedProject.AgentProviders.Lead, worker.RoleLead), worker.RoleLead,
+		t.Context(), sessionID, runID, agentID(storedProject.AgentProviders.LeadAgent, worker.RoleLead), worker.RoleLead,
 	); err != nil {
 		t.Fatalf("create lead session: %v", err)
 	}

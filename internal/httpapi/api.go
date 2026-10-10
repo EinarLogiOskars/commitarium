@@ -193,7 +193,7 @@ type ToolchainService interface {
 }
 
 type ToolchainAssistantService interface {
-	Start(context.Context, string, project.AgentProvider, string, string, toolchain.AssistantPurpose, string) (toolchain.AssistantSession, bool, error)
+	Start(context.Context, string, string, string, string, toolchain.AssistantPurpose, string) (toolchain.AssistantSession, bool, error)
 	Get(context.Context, string, string) (toolchain.AssistantSession, error)
 	Reply(context.Context, string, string, string, string) (toolchain.AssistantSession, bool, error)
 	Apply(context.Context, string, string) (toolchain.Manifest, error)

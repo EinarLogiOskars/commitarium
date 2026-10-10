@@ -595,7 +595,7 @@ func prepareRestingReviewerForReplanning(
 	reviewerID := remoteReviewerSessionID(run.ID)
 	reviewer, _, err := executions.CreateSession(
 		t.Context(), reviewerID, run.ID,
-		agentID(storedProject.AgentProviders.Reviewer, worker.RoleReviewer), worker.RoleReviewer,
+		agentID(storedProject.AgentProviders.ReviewerAgent, worker.RoleReviewer), worker.RoleReviewer,
 	)
 	if err != nil {
 		t.Fatalf("create prior reviewer conversation: %v", err)
@@ -757,12 +757,8 @@ func prepareInterventionBoundary(
 	if role == worker.RoleReviewer {
 		sessionID = remoteReviewerSessionID(run.ID)
 	}
-	provider := providers.Lead
-	if role == worker.RoleReviewer {
-		provider = providers.Reviewer
-	}
 	session, _, err := executions.CreateSession(
-		t.Context(), sessionID, run.ID, agentID(provider, role), role,
+		t.Context(), sessionID, run.ID, agentID(agentForSession(run, role), role), role,
 	)
 	if err != nil {
 		t.Fatalf("create intervention session: %v", err)

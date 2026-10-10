@@ -97,7 +97,7 @@ func (s *AgentStore) Delete(ctx context.Context, id string) error {
 	}
 	defer func() { _ = tx.Rollback() }()
 	var used int
-	if err := tx.QueryRowContext(ctx, agentInUseQuery, id, id, id, id).Scan(&used); err != nil {
+	if err := tx.QueryRowContext(ctx, agentInUseQuery, id).Scan(&used); err != nil {
 		return fmt.Errorf("check agent use: %w", err)
 	}
 	if used != 0 {
@@ -116,13 +116,16 @@ func (s *AgentStore) Delete(ctx context.Context, id string) error {
 	return tx.Commit()
 }
 
-// agentInUseQuery reports whether a project default or a run that has not
-// finished still points at the agent.
+// agentInUseQuery reports whether a project default, a work order that has
+// not started, or a run that has not finished still points at the agent.
 const agentInUseQuery = `SELECT EXISTS (
-	SELECT 1 FROM projects WHERE lead_provider = ? OR reviewer_provider = ?
+	SELECT 1 FROM projects WHERE lead_agent = ?1 OR reviewer_agent = ?1
+	UNION ALL
+	SELECT 1 FROM features
+	 WHERE (lead_agent = ?1 OR reviewer_agent = ?1) AND state IN ('draft', 'ready')
 	UNION ALL
 	SELECT 1 FROM runs
-	 WHERE (lead_provider = ? OR reviewer_provider = ?)
+	 WHERE (lead_agent = ?1 OR reviewer_agent = ?1)
 	   AND status NOT IN ('succeeded', 'stopped', 'failed')
 )`
 

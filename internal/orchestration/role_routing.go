@@ -139,11 +139,11 @@ func (router *AgentRoutedWorker) forAssignment(
 	providers project.AgentProviders,
 	role workerhttp.Role,
 ) (RemoteLeadWorker, error) {
-	agentID, err := providerForRole(providers, role)
+	agentID, err := agentForRole(providers, role)
 	if err != nil {
 		return nil, err
 	}
-	return router.workers(string(agentID))
+	return router.workers(agentID)
 }
 
 type AgentRoutedPump struct {
@@ -170,11 +170,11 @@ func (router *AgentRoutedPump) Run(
 	if err != nil {
 		return workeringest.PumpResult{}, err
 	}
-	agentID, err := providerForRole(run.AgentProviders, role)
+	agentID, err := agentForRole(run.AgentProviders, role)
 	if err != nil {
 		return workeringest.PumpResult{}, err
 	}
-	pump, err := router.pumps(string(agentID))
+	pump, err := router.pumps(agentID)
 	if err != nil {
 		return workeringest.PumpResult{}, err
 	}
@@ -192,19 +192,19 @@ func runAndRoleForSession(sessionID string) (string, workerhttp.Role, error) {
 	}
 }
 
-func providerForRole(
+func agentForRole(
 	providers project.AgentProviders,
 	role workerhttp.Role,
-) (project.AgentProvider, error) {
+) (string, error) {
 	normalized, err := providers.Normalize()
 	if err != nil {
 		return "", err
 	}
 	switch role {
 	case workerhttp.RoleLead:
-		return normalized.Lead, nil
+		return normalized.LeadAgent, nil
 	case workerhttp.RoleReviewer:
-		return normalized.Reviewer, nil
+		return normalized.ReviewerAgent, nil
 	default:
 		return "", errors.New("remote workflow attempt has an unsupported role")
 	}

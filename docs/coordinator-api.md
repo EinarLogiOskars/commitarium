@@ -259,8 +259,24 @@ roles to Codex:
 }
 ```
 
-Each value is either `codex` or `claude`, and any combination is valid. Replace
-both default choices for future work orders with:
+Each value is either `codex` or `claude`, and any combination is valid.
+
+Each role is played by an agent (ADR-016). `lead_agent` and `reviewer_agent`
+name agents by ID, and the agent determines the provider, so `lead` and
+`reviewer` may then be omitted; a provider sent with an agent must match it.
+A provider sent without an agent names the agent migrated from that provider
+profile (`codex` or `claude`). An unknown agent or a mismatched provider
+returns `400 invalid_agent_providers`. Responses always carry all four fields:
+
+```json
+{"lead": "claude", "reviewer": "claude", "lead_agent": "claude-max", "reviewer_agent": "claude-api"}
+```
+
+One agent may play both roles: the lead and reviewer are separate sessions on
+the agent's worker, under the Forgejo identities `<agent>-lead` and
+`<agent>-reviewer`.
+
+Replace both default choices for future work orders with:
 
 ```http
 PUT /api/v1/projects/prj_example/agent-providers
@@ -675,8 +691,9 @@ Content-Type: application/json
 }
 ```
 
-`provider` is `codex` or `claude`; `model` must be an exact ID currently
-offered by that provider's lead worker catalog. `purpose` is `design_stack` or
+`agent` names the agent that runs the conversation (`provider` names its
+migrated agent when `agent` is omitted); `model` must be an exact ID currently
+offered by that agent's provider catalog. The session reports `agent`. `purpose` is `design_stack` or
 `verify_repository`; omitting it preserves the existing `design_stack`
 behavior. The response is `202 Accepted`, has a session `Location`, and
 initially reports `status: "running"`. Poll that location. Every response
@@ -988,8 +1005,8 @@ Content-Type: application/json
 The ID is derived from the name and numbered when taken (`claude-max-2`); it
 names the agent's worker, volumes, and Forgejo identities, so it never
 changes. `PATCH /api/v1/agents/{id}` with `{"name": "…"}` renames the agent.
-`DELETE` returns `204`, or `409 agent_in_use` while a project default or an
-unfinished run uses the agent. The two subscriptions configured before agents
+`DELETE` returns `204`, or `409 agent_in_use` while a project default, a
+draft or ready work order, or an unfinished run uses the agent. The two subscriptions configured before agents
 existed are the agents `codex` and `claude`. `provider` is `codex` or
 `claude`; anything else returns `400 invalid_agent`.
 
@@ -1002,14 +1019,15 @@ it, asks the questions whose answers change the work, and proposes a
 
 `POST …/features/{featureID}/assistant` starts the conversation, or returns
 the existing one (`201` when created, otherwise `200`). The body is optional:
-`{"provider":"claude","model":"…"}`. Without a provider the work order's lead
-provider and model are used. The response is the session:
+`{"agent":"claude-max","model":"…"}` (`provider` names its migrated agent
+when `agent` is omitted). Without either, the work order's lead agent and
+model are used. The response is the session:
 
 ```json
 {
   "id": "ast_…",
   "feature_id": "fea_…",
-  "provider": "claude",
+  "agent": "claude-max",
   "model": "",
   "status": "waiting_for_user",
   "message": "Should overdue to-dos be highlighted?",

@@ -84,7 +84,10 @@ func TestCreateFeature(t *testing.T) {
 		Description:    "Store each transition atomically.",
 		State:          feature.StateDraft,
 		DialogueLimits: project.DialogueLimits{PlanningRounds: 0, ImplementationReviewRounds: 3},
-		AgentProviders: project.AgentProviders{Lead: project.AgentProviderClaude, Reviewer: project.AgentProviderCodex},
+		AgentProviders: project.AgentProviders{
+			Lead: project.AgentProviderClaude, Reviewer: project.AgentProviderCodex,
+			LeadAgent: "claude", ReviewerAgent: "codex",
+		},
 		MergePolicy:    project.MergePolicyAutoAfterGates,
 		AutonomyPolicy: project.AutonomyPolicyRunToCompletion,
 		CreatedAt:      createdAt,

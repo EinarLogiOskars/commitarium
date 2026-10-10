@@ -71,13 +71,15 @@ func TestAgentRoutersUseTheDurableRunAssignment(t *testing.T) {
 	finder := routingRunFinder{runs: map[string]execution.Run{
 		"run_mixed": {AgentProviders: project.AgentProviders{
 			Lead: project.AgentProviderClaude, Reviewer: project.AgentProviderCodex,
+			LeadAgent: "claude-max", ReviewerAgent: "codex",
 		}, AgentModels: project.AgentModels{Lead: "claude-lead-pinned-1", Reviewer: "gpt-review-pinned-1"}},
 		"run_reverse": {AgentProviders: project.AgentProviders{
 			Lead: project.AgentProviderCodex, Reviewer: project.AgentProviderClaude,
+			LeadAgent: "codex", ReviewerAgent: "claude-max",
 		}, AgentModels: project.AgentModels{Lead: "gpt-lead-pinned-1", Reviewer: "claude-review-pinned-1"}},
 	}}
 	workerRouter, err := NewAgentRoutedWorker(finder, routeTo(map[string]RemoteLeadWorker{
-		"codex": codex, "claude": claude,
+		"codex": codex, "claude-max": claude,
 	}))
 	if err != nil {
 		t.Fatalf("create worker router: %v", err)
@@ -113,7 +115,7 @@ func TestAgentRoutersUseTheDurableRunAssignment(t *testing.T) {
 
 	codexPump, claudePump := &routingPumpStub{}, &routingPumpStub{}
 	pumpRouter, err := NewAgentRoutedPump(finder, routeTo(map[string]RemoteLeadPump{
-		"codex": codexPump, "claude": claudePump,
+		"codex": codexPump, "claude-max": claudePump,
 	}))
 	if err != nil {
 		t.Fatalf("create pump router: %v", err)

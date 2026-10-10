@@ -7,7 +7,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"regexp"
 	"strings"
 	"time"
 
@@ -25,11 +24,9 @@ var (
 // such as "<id>-reviewer") within Docker and Forgejo limits.
 const MaxIDLength = 30
 
-var idPattern = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,28}[a-z0-9])?$`)
-
 // ValidID reports whether id is a well-formed agent ID, safe to use in
 // worker service, volume, file, and Forgejo user names.
-func ValidID(id string) bool { return idPattern.MatchString(id) }
+func ValidID(id string) bool { return project.ValidAgentID(id) }
 
 type Agent struct {
 	ID        string
@@ -41,7 +38,7 @@ type Agent struct {
 
 func (a Agent) Validate() error {
 	switch {
-	case !idPattern.MatchString(a.ID):
+	case !ValidID(a.ID):
 		return fmt.Errorf("%w: id %q must be lowercase letters, digits, and dashes (at most %d)", ErrInvalid, a.ID, MaxIDLength)
 	case strings.TrimSpace(a.Name) == "" || len(a.Name) > 80 || strings.ContainsAny(a.Name, "\r\n"):
 		return fmt.Errorf("%w: name is required, single-line, and at most 80 characters", ErrInvalid)

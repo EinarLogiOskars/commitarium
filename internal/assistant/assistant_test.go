@@ -118,7 +118,7 @@ func newAssistant(t *testing.T) (*assistant.Service, *scriptedWorker, *workflow.
 
 func TestAssistantClarifiesAWorkOrderIntoAHandoffBrief(t *testing.T) {
 	service, worker, briefs, storedFeature := newAssistant(t)
-	session, created, err := service.Start(t.Context(), storedFeature.ProjectID, storedFeature.ID, project.AgentProviderClaude, "")
+	session, created, err := service.Start(t.Context(), storedFeature.ProjectID, storedFeature.ID, "claude", "")
 	if err != nil || !created || session.Status != assistant.StatusRunning {
 		t.Fatalf("start: session=%+v created=%v err=%v", session, created, err)
 	}
@@ -130,7 +130,7 @@ func TestAssistantClarifiesAWorkOrderIntoAHandoffBrief(t *testing.T) {
 		!strings.Contains(first.Instructions, "Let users set a due date on to-dos.") {
 		t.Fatalf("first turn request: %+v", first)
 	}
-	if again, created, err := service.Start(t.Context(), storedFeature.ProjectID, storedFeature.ID, project.AgentProviderClaude, ""); err != nil ||
+	if again, created, err := service.Start(t.Context(), storedFeature.ProjectID, storedFeature.ID, "claude", ""); err != nil ||
 		created || again.ID != session.ID || len(worker.puts) != 1 {
 		t.Fatalf("restart: session=%+v created=%v err=%v puts=%d", again, created, err, len(worker.puts))
 	}
