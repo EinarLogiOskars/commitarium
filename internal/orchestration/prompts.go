@@ -45,31 +45,6 @@ func replanningInstructions(
 		fmt.Sprintf("\nExisting draft pull request: #%d (%s)", prepared.PullRequestNumber, prepared.PullRequestURL)
 }
 
-func remoteLeadInstructions(goal string) string {
-	return "You are the lead agent helping the user define a software-development goal. " +
-		"This is goal clarification only: do not modify files, run destructive commands, " +
-		"create commits, or begin implementation. Inspect the available project read-only " +
-		"when useful. Restate your understanding, identify important ambiguity or risk, and " +
-		"ask the user the smallest useful set of questions needed before planning. Return action 'ask' " +
-		"while information is missing, put the user-facing question in message, put your current best " +
-		"complete goal draft in goal when one is useful (or an empty string when it would be misleading), " +
-		"and list the unresolved questions in open_questions. Once the goal is ready to accept, return " +
-		"action 'propose', explain that in message, put the complete proposed goal in goal, and return an " +
-		"empty open_questions array. The conversational message is not the proposed goal. " +
-		"The user's current goal is:\n\n" + goal
-}
-
-func remoteLeadReplyInstructions(message string) string {
-	return "Continue the same goal-clarification conversation. This is still clarification only: " +
-		"do not modify files, run destructive commands, create commits, or begin implementation. " +
-		"Use the existing conversation context, incorporate the user's reply, and ask only the " +
-		"next questions genuinely needed before planning. Return action 'ask' with a user-facing message, " +
-		"the current best complete goal draft in goal when useful (otherwise an empty string), and unresolved " +
-		"questions in open_questions. When ready, return action 'propose' with the complete goal, an empty " +
-		"open_questions array, and a separate user-facing message. The conversational message is never the " +
-		"proposed goal. The user replied:\n\n" + message
-}
-
 func reviewerPlanningInstructions(
 	storedFeature feature.Feature,
 	prepared workspace.Workspace,

@@ -934,11 +934,12 @@ func TestRemoteLeadStartsPlanningInManagedWorkspace(t *testing.T) {
 		events[len(events)-2].Text != "Proposed implementation plan" {
 		t.Fatalf("planning proposal was not visible: %+v", events)
 	}
-	retriedRun, admitted, err := starter.StartPlanning(
-		t.Context(), runID, "start-planning",
+	retriedRun, admitted, err := starter.Start(
+		t.Context(), runID, storedProject.ID, storedFeature.ID, storedFeature.Title,
+		storedProject.DialogueLimits, storedProject.AgentProviders, storedProject.MergePolicy,
 	)
 	if err != nil || admitted || retriedRun.ID != runID {
-		t.Fatalf("retry planning: run=%+v admitted=%t err=%v", retriedRun, admitted, err)
+		t.Fatalf("retry start: run=%+v admitted=%t err=%v", retriedRun, admitted, err)
 	}
 	stub.mu.Lock()
 	requestCount := len(stub.putRequests)

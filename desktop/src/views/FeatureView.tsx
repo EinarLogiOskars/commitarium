@@ -438,7 +438,6 @@ function body(
       <PlanningView
         runId={run.id}
         run={run}
-        featureState={feature.state}
         live={live}
         planVersion={run.plan_version}
         intervals={intervals}

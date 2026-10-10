@@ -143,7 +143,6 @@ type RemoteLeadFeatureFinder interface {
 }
 
 type RemoteLeadGoalService interface {
-	AcceptGoal(context.Context, string, string, string, workflow.Actor, string) (workflow.Event, error)
 	AcceptGoalAtStart(context.Context, string, string, string, workflow.Actor, string) (workflow.Event, error)
 }
 
@@ -634,27 +633,6 @@ func (starter *RemoteLeadStarter) recoverWithDirective(
 		_, err := starter.advanceIntervention(ctx, run.ID)
 		return err
 	}
-	// Versions before accepted-goal auto-planning left this durable boundary
-	// labeled as clarification. Repair that label before dispatching so an
-	// upgraded coordinator can resume the same run without another user click.
-	if run.Status == execution.RunStatusWaitingForUser && !run.Paused &&
-		run.WaitKind == execution.RunWaitKindClarification &&
-		run.AutonomyPolicy == project.AutonomyPolicyRunToCompletion &&
-		storedFeature.State == feature.StateDraft &&
-		strings.TrimSpace(storedFeature.AcceptedGoal) != "" &&
-		storedFeature.GoalAcceptedAt != nil {
-		if err := starter.waitRun(
-			ctx, run.ID, workflow.GoalAcceptedPlanningReason,
-			execution.RunWaitKindPhaseCheckpoint,
-		); err != nil {
-			return err
-		}
-		refreshedRun, err := starter.executions.GetRun(ctx, run.ID)
-		if err != nil {
-			return err
-		}
-		run = refreshedRun
-	}
 	if run.Status == execution.RunStatusWaitingForUser && !run.Paused &&
 		run.WaitKind == execution.RunWaitKindPhaseCheckpoint &&
 		run.AutonomyPolicy == project.AutonomyPolicyRunToCompletion {
@@ -859,12 +837,9 @@ func (starter *RemoteLeadStarter) recoverWithDirective(
 	}
 	if isLead && len(pending) == 1 {
 		implementationTurn, implementing := implementationTurnNumber(session.ID, checkpoint.AttemptID)
-		matchesDraftReply := storedFeature.State == feature.StateDraft &&
-			replyAttemptID(session.ID, pending[0].ID) == checkpoint.AttemptID
 		matchesImplementationContinuation := storedFeature.State == feature.StateImplementing &&
 			implementing && implementationTurn > 1
-		if pending[0].Type != worker.CommandMessage ||
-			(!matchesDraftReply && !matchesImplementationContinuation) {
+		if pending[0].Type != worker.CommandMessage || !matchesImplementationContinuation {
 			return fmt.Errorf("%w: pending reply does not match the current worker attempt", ErrInvalidRunRequest)
 		}
 		request.commandID = pending[0].ID
@@ -1562,13 +1537,6 @@ func (starter *RemoteLeadStarter) advanceWaitingRun(ctx context.Context, runID s
 		return err
 	}
 	switch storedFeature.State {
-	case feature.StateDraft:
-		if strings.TrimSpace(storedFeature.AcceptedGoal) == "" ||
-			storedFeature.GoalAcceptedAt == nil {
-			return fmt.Errorf("%w: draft checkpoint has no accepted goal", ErrPlanningNotAllowed)
-		}
-		_, _, err = starter.StartPlanning(ctx, run.ID, run.ID+":autonomy:planning")
-		return err
 	case feature.StatePlanning:
 		messages, err := starter.currentPlanningMessages(ctx, run)
 		if err != nil {
@@ -1970,96 +1938,6 @@ func interventionAttemptID(sessionID, interventionID string) string {
 	return sessionID + ":intervention:" + hex.EncodeToString(digest[:16])
 }
 
-func (starter *RemoteLeadStarter) startRequest(
-	runID string,
-	projectID string,
-	featureID string,
-	workspaceID string,
-	goal string,
-	agentProviders project.AgentProviders,
-) (remoteLeadRequest, error) {
-	if strings.TrimSpace(runID) == "" || strings.TrimSpace(projectID) == "" ||
-		strings.TrimSpace(featureID) == "" || strings.TrimSpace(workspaceID) == "" ||
-		strings.TrimSpace(goal) == "" {
-		return remoteLeadRequest{}, ErrInvalidRunRequest
-	}
-	sessionID := remoteLeadSessionID(runID)
-	attemptID := sessionID + ":turn:1"
-	request := remoteLeadRequest{
-		runID:         runID,
-		agentName:     "lead agent",
-		waitingReason: "The lead agent is waiting for the user's response.",
-		waitKind:      execution.RunWaitKindClarification,
-		identity: workerhttp.MutationIdentity{
-			AttemptReference: workerhttp.AttemptReference{SessionID: sessionID, AttemptID: attemptID},
-			IdempotencyKey:   attemptID + ":start",
-		},
-		request: workerhttp.PutAttemptRequest{
-			Mode: workerhttp.AttemptModeStart,
-			Assignment: workerhttp.Assignment{
-				AgentProfileID: starter.profileID(agentProviders.Lead, worker.RoleLead),
-				ProjectID:      projectID, FeatureID: featureID,
-				Role: workerhttp.RoleLead, WorkspaceID: workspaceID,
-			},
-			Instructions:   remoteLeadInstructions(goal),
-			OutputContract: workerhttp.OutputContractGoalClarification,
-		},
-	}
-	if err := request.request.Validate(request.identity); err != nil {
-		return remoteLeadRequest{}, fmt.Errorf("%w: %v", ErrInvalidRunRequest, err)
-	}
-	return request, nil
-}
-
-func (starter *RemoteLeadStarter) replyRequest(
-	ctx context.Context,
-	run execution.Run,
-	storedFeature feature.Feature,
-	session execution.Session,
-	command worker.Command,
-) (remoteLeadRequest, error) {
-	if starter.workspaces == nil {
-		return remoteLeadRequest{}, fmt.Errorf("%w: workspace service is required", ErrInvalidRunRequest)
-	}
-	prepared, _, err := starter.workspaces.PrepareForClarification(
-		ctx, storedFeature.ProjectID, storedFeature.ID,
-	)
-	if err != nil {
-		return remoteLeadRequest{}, fmt.Errorf("prepare goal-clarification reply workspace: %w", err)
-	}
-	if !prepared.CheckoutReady() {
-		return remoteLeadRequest{}, fmt.Errorf("%w: goal-clarification checkout is not ready", ErrInvalidRunRequest)
-	}
-	attemptID := replyAttemptID(session.ID, command.ID)
-	request := remoteLeadRequest{
-		runID: run.ID, commandID: command.ID,
-		agentName:     "lead agent",
-		waitingReason: "The lead agent is waiting for the user's response.",
-		waitKind:      execution.RunWaitKindClarification,
-		identity: workerhttp.MutationIdentity{
-			AttemptReference: workerhttp.AttemptReference{
-				SessionID: session.ID, AttemptID: attemptID,
-			},
-			IdempotencyKey: attemptID + ":resume",
-		},
-		request: workerhttp.PutAttemptRequest{
-			Mode: workerhttp.AttemptModeResume,
-			Assignment: workerhttp.Assignment{
-				AgentProfileID: starter.profileID(run.AgentProviders.Lead, worker.RoleLead),
-				ProjectID:      storedFeature.ProjectID, FeatureID: storedFeature.ID,
-				Role: workerhttp.RoleLead, WorkspaceID: prepared.ID,
-			},
-			Instructions:      remoteLeadReplyInstructions(command.Message),
-			ProviderSessionID: session.ProviderSessionID,
-			OutputContract:    workerhttp.OutputContractGoalClarification,
-		},
-	}
-	if err := request.request.Validate(request.identity); err != nil {
-		return remoteLeadRequest{}, fmt.Errorf("%w: %v", ErrInvalidRunRequest, err)
-	}
-	return request, nil
-}
-
 func replyAttemptID(sessionID, commandID string) string {
 	// Public idempotency keys are free-form, while worker IDs are bounded to a
 	// small safe character set. A stable digest keeps the attempt ID valid and
@@ -2284,123 +2162,6 @@ func waitingReasonForAttempt(session execution.Session, attemptID string) string
 		return "The lead has responded in the planning discussion."
 	}
 	return "The lead agent is waiting for the user's response."
-}
-
-// StartPlanning resumes the existing lead conversation in the feature's
-// managed workspace. It deliberately produces only the lead proposal; the
-// separate reviewer turn is the next bounded workflow slice.
-func (starter *RemoteLeadStarter) StartPlanning(
-	ctx context.Context,
-	runID string,
-	idempotencyKey string,
-) (execution.Run, bool, error) {
-	if strings.TrimSpace(runID) == "" || strings.TrimSpace(idempotencyKey) == "" ||
-		starter.planning == nil || starter.workspaces == nil {
-		return execution.Run{}, false, ErrPlanningNotAllowed
-	}
-	run, err := starter.executions.GetRun(ctx, runID)
-	if err != nil {
-		return execution.Run{}, false, err
-	}
-	if run.Paused {
-		return execution.Run{}, false, ErrRunControlNotAllowed
-	}
-	session, err := starter.executions.GetSession(ctx, remoteLeadSessionID(run.ID))
-	if err != nil {
-		return execution.Run{}, false, err
-	}
-	if session.RunID != run.ID || session.AgentID != agentID(run.AgentProviders.Lead, worker.RoleLead) ||
-		session.Role != worker.RoleLead || session.ProviderSessionID == "" {
-		return execution.Run{}, false, ErrPlanningNotAllowed
-	}
-	storedFeature, err := starter.features.GetByID(ctx, run.FeatureID)
-	if err != nil {
-		return execution.Run{}, false, err
-	}
-	if strings.TrimSpace(storedFeature.AcceptedGoal) == "" ||
-		storedFeature.GoalAcceptedAt == nil {
-		return execution.Run{}, false, ErrPlanningNotAllowed
-	}
-	checkpoint, err := starter.executions.GetWorkerAttempt(ctx, session.ID)
-	if err != nil {
-		return execution.Run{}, false, err
-	}
-	nextAttemptID := planningAttemptID(session.ID)
-	if checkpoint.AttemptID == nextAttemptID {
-		if storedFeature.State != feature.StatePlanning {
-			return execution.Run{}, false, ErrPlanningNotAllowed
-		}
-		return run, false, nil
-	}
-	if run.Status != execution.RunStatusWaitingForUser ||
-		session.Status != execution.SessionStatusWaitingForUser ||
-		(storedFeature.State != feature.StateDraft && storedFeature.State != feature.StatePlanning) {
-		return execution.Run{}, false, ErrPlanningNotAllowed
-	}
-
-	var prepared workspace.Workspace
-	if storedFeature.State == feature.StateDraft {
-		prepared, _, err = starter.workspaces.PrepareForClarification(
-			ctx, storedFeature.ProjectID, storedFeature.ID,
-		)
-	} else {
-		prepared, err = starter.workspaces.Get(
-			ctx, storedFeature.ProjectID, storedFeature.ID,
-		)
-	}
-	if err != nil {
-		return execution.Run{}, false, fmt.Errorf("prepare planning workspace: %w", err)
-	}
-	if !prepared.CheckoutReady() {
-		return execution.Run{}, false, ErrPlanningNotAllowed
-	}
-	prior, err := starter.worker.GetAttempt(ctx, workerhttp.AttemptReference{
-		SessionID: session.ID, AttemptID: checkpoint.AttemptID,
-	})
-	if err != nil {
-		return execution.Run{}, false, fmt.Errorf("confirm prior lead attempt: %w", err)
-	}
-	if err := validateCompletedTurn(session, checkpoint, prior); err != nil {
-		return execution.Run{}, false, ErrPlanningNotAllowed
-	}
-	request, err := starter.planningRequest(
-		run, storedFeature, session, prepared, nextAttemptID,
-	)
-	if err != nil {
-		return execution.Run{}, false, err
-	}
-	if !starter.claim(run.ID) {
-		return execution.Run{}, false, ErrPlanningNotAllowed
-	}
-	if _, err := starter.planning.TransitionFeature(
-		ctx, storedFeature.ID, feature.StatePlanning,
-		workflow.Actor{Kind: workflow.ActorKindCoordinator, ID: coordinatorActorID},
-		idempotencyKey,
-	); err != nil {
-		starter.release(run.ID)
-		return execution.Run{}, false, err
-	}
-	admitted, err := starter.executions.BeginAutonomousTurn(
-		ctx, session.ID, checkpoint, nextAttemptID,
-		feature.StatePlanning,
-		"The lead agent is inspecting the managed workspace and preparing a plan.",
-	)
-	if err != nil {
-		starter.release(run.ID)
-		if errors.Is(err, execution.ErrStateConflict) ||
-			errors.Is(err, execution.ErrWorkerAttemptConflict) {
-			return execution.Run{}, false, ErrPlanningNotAllowed
-		}
-		return execution.Run{}, false, err
-	}
-	if !admitted {
-		starter.release(run.ID)
-		storedRun, getErr := starter.executions.GetRun(ctx, run.ID)
-		return storedRun, false, getErr
-	}
-	go starter.launch(request)
-	startedRun, err := starter.executions.GetRun(ctx, run.ID)
-	return startedRun, true, err
 }
 
 func (starter *RemoteLeadStarter) planningRequest(
@@ -3446,68 +3207,6 @@ func (starter *RemoteLeadStarter) messageForAttempt(
 	return message, nil
 }
 
-func (starter *RemoteLeadStarter) AcceptGoal(
-	ctx context.Context,
-	sessionID string,
-	goal string,
-	actor workflow.Actor,
-	idempotencyKey string,
-) (workflow.Event, error) {
-	session, err := starter.executions.GetSession(ctx, sessionID)
-	if err != nil {
-		return workflow.Event{}, err
-	}
-	run, err := starter.executions.GetRun(ctx, session.RunID)
-	if err != nil {
-		return workflow.Event{}, err
-	}
-	if session.AgentID != agentID(run.AgentProviders.Lead, worker.RoleLead) || session.Role != worker.RoleLead {
-		return workflow.Event{}, workflow.ErrGoalAcceptanceNotAllowed
-	}
-	storedFeature, err := starter.features.GetByID(ctx, run.FeatureID)
-	if err != nil {
-		return workflow.Event{}, err
-	}
-	event, err := starter.goals.AcceptGoal(
-		ctx, storedFeature.ID, session.ID, goal, actor, idempotencyKey,
-	)
-	if err != nil {
-		return workflow.Event{}, err
-	}
-
-	// Idempotent retries can encounter an acceptance written by an older
-	// coordinator, before acceptance also stored the planning checkpoint.
-	// Normalize that durable state before considering automatic dispatch.
-	run, err = starter.executions.GetRun(ctx, run.ID)
-	if err != nil {
-		return workflow.Event{}, err
-	}
-	if run.Status == execution.RunStatusWaitingForUser && !run.Paused &&
-		run.WaitKind == execution.RunWaitKindClarification {
-		if err := starter.waitRun(
-			ctx, run.ID, workflow.GoalAcceptedPlanningReason,
-			execution.RunWaitKindPhaseCheckpoint,
-		); err != nil {
-			return workflow.Event{}, err
-		}
-		run, err = starter.executions.GetRun(ctx, run.ID)
-		if err != nil {
-			return workflow.Event{}, err
-		}
-	}
-	if run.AutonomyPolicy == project.AutonomyPolicyRunToCompletion && !run.Paused {
-		if err := starter.advanceWaitingRun(context.WithoutCancel(ctx), run.ID); err != nil {
-			starter.requireReview(context.WithoutCancel(ctx), remoteLeadRequest{
-				runID: run.ID,
-				identity: workerhttp.MutationIdentity{AttemptReference: workerhttp.AttemptReference{
-					SessionID: session.ID,
-				}},
-			}, err)
-		}
-	}
-	return event, nil
-}
-
 // SendCommand turns a public message command into a new resume attempt. It is
 // intentionally narrower than the simulated controller: this real-agent slice
 // does not claim that Codex can safely pause or accept messages mid-turn.
@@ -3570,13 +3269,6 @@ func (starter *RemoteLeadStarter) SendCommand(
 	var expectedState feature.State
 	var runReason string
 	switch storedFeature.State {
-	case feature.StateDraft:
-		if storedFeature.AcceptedGoal != "" || storedFeature.GoalAcceptedAt != nil {
-			return execution.Command{}, ErrCommandNotAllowed
-		}
-		request, err = starter.replyRequest(ctx, run, storedFeature, session, command)
-		expectedState = feature.StateDraft
-		runReason = "The lead agent is responding to the user's message."
 	case feature.StateImplementing:
 		request, err = starter.implementationContinuationRequest(
 			ctx, run, storedFeature, session, checkpoint, command,
