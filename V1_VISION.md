@@ -211,8 +211,9 @@ commit), but the fix-the-wording use case is much better with it.
    ([EFFICIENT_DIALOGUE_PLAN.md](EFFICIENT_DIALOGUE_PLAN.md)). Done.
 2. Ready work orders: Draft and Ready states, handoff briefs written with the
    first piece of the project assistant, and Start with a freshness check
-   ([READY_WORK_ORDERS_PLAN.md](READY_WORK_ORDERS_PLAN.md)).
-3. Agents, including the worker concurrency test and honest capability value.
+   ([READY_WORK_ORDERS_PLAN.md](READY_WORK_ORDERS_PLAN.md)). Done.
+3. Agents, including the worker concurrency test and honest capability value
+   ([AGENTS_PLAN.md](AGENTS_PLAN.md)).
 4. Tasks, which introduce the single-agent runner.
 5. Sessions, on the same runner, adding chat and pause/resume.
 6. The rest of the project assistant, growing from the clarification chat.
