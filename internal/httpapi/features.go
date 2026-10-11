@@ -43,6 +43,9 @@ type featureResponse struct {
 	IndependentAcceptanceTests bool                   `json:"independent_acceptance_tests"`
 	Steps                      workStepsResponse      `json:"steps"`
 	Kind                       feature.Kind           `json:"kind"`
+	// Background marks a work order Commitarium runs by itself, such as the
+	// preview setup.
+	Background bool `json:"background,omitempty"`
 	// Session reports a session's agent activity in feature lists (ADR-019).
 	Session   *sessionActivityResponse `json:"session,omitempty"`
 	CreatedAt time.Time                `json:"created_at"`
@@ -95,7 +98,7 @@ func (api *API) createFeatureHandler(
 	overrides.IndependentAcceptanceTests = request.IndependentAcceptanceTests
 	overrides.Kind = request.Kind
 	if api.toolchains != nil {
-		manifest, err := api.toolchains.Get(r.Context(), projectID)
+		manifest, err := api.projectToolchain(r.Context(), projectID)
 		if err != nil {
 			api.writeToolchainError(w, projectID, "check before work-order creation", err)
 			return
@@ -308,6 +311,7 @@ func newFeatureResponse(storedFeature feature.Feature) featureResponse {
 		IndependentAcceptanceTests: storedFeature.IndependentAcceptanceTests,
 		Steps:                      newWorkStepsResponse(storedFeature.Steps),
 		Kind:                       featureKind(storedFeature.Kind),
+		Background:                 storedFeature.Background,
 		CreatedAt:                  storedFeature.CreatedAt,
 		UpdatedAt:                  storedFeature.UpdatedAt,
 	}
