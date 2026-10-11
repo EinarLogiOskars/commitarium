@@ -250,10 +250,12 @@ func TestResolveSessionOpening(t *testing.T) {
 		!strings.HasSuffix(long.SessionTitle, "…") {
 		t.Fatalf("long title = %q err=%v", long.SessionTitle, err)
 	}
-	for _, raw := range []string{`{"title":" ","message":"hi"}`, `{"title":"Tweaks","message":""}`} {
-		if _, err := ResolveStructuredOutput(OutputContractSessionOpening, []byte(raw)); !errors.Is(err, ErrInvalidStructuredOutput) {
-			t.Fatalf("incomplete opening %s: %v", raw, err)
-		}
+	untitled, err := ResolveStructuredOutput(OutputContractSessionOpening, []byte(`{"title":" ","message":"hi"}`))
+	if err != nil || untitled.SessionTitle != "" || untitled.Event.Text != "hi" {
+		t.Fatalf("untitled opening = %+v err=%v", untitled, err)
+	}
+	if _, err := ResolveStructuredOutput(OutputContractSessionOpening, []byte(`{"title":"Tweaks","message":""}`)); !errors.Is(err, ErrInvalidStructuredOutput) {
+		t.Fatalf("opening without a message: %v", err)
 	}
 	if field := PreviewProseField(OutputContractSessionOpening); field != "message" {
 		t.Fatalf("preview field = %q", field)

@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -16,8 +17,9 @@ var ErrTitleRequired = errors.New("feature title is required")
 // ErrInvalidKind rejects a kind of work other than a work order or a session.
 var ErrInvalidKind = errors.New("kind must be work_order or session")
 
-// NewSessionTitle names a session until its first turn names it.
-const NewSessionTitle = "New session"
+// untitledSessionPrefix names a session until something gives it a title:
+// "Untitled session 1", "Untitled session 2", and so on within a project.
+const untitledSessionPrefix = "Untitled session "
 
 type ProjectFinder interface {
 	GetByID(ctx context.Context, id string) (project.Project, error)
@@ -57,11 +59,14 @@ func (s *Service) Create(
 	if !kind.IsValid() {
 		return Feature{}, ErrInvalidKind
 	}
-	sanitizedTitle := strings.TrimSpace(title)
-	if sanitizedTitle == "" && kind == KindSession {
-		// The first turn names a session after what the user asked for.
-		sanitizedTitle = NewSessionTitle
+	if strings.TrimSpace(title) == "" && kind == KindSession {
+		untitled, err := s.untitledSessionTitle(ctx, projectID)
+		if err != nil {
+			return Feature{}, err
+		}
+		title = untitled
 	}
+	sanitizedTitle := strings.TrimSpace(title)
 	if sanitizedTitle == "" {
 		return Feature{}, ErrTitleRequired
 	}
@@ -118,6 +123,24 @@ func (s *Service) Create(
 	}
 
 	return createdFeature, nil
+}
+
+// untitledSessionTitle numbers a new untitled session after the highest
+// untitled session in the project.
+func (s *Service) untitledSessionTitle(ctx context.Context, projectID string) (string, error) {
+	existing, err := s.store.ListByProjectID(ctx, projectID)
+	if err != nil {
+		return "", fmt.Errorf("list work orders to number a session: %w", err)
+	}
+	highest := 0
+	for _, stored := range existing {
+		number, err := strconv.Atoi(strings.TrimPrefix(stored.Title, untitledSessionPrefix))
+		if stored.Kind == KindSession && strings.HasPrefix(stored.Title, untitledSessionPrefix) &&
+			err == nil && number > highest {
+			highest = number
+		}
+	}
+	return untitledSessionPrefix + strconv.Itoa(highest+1), nil
 }
 
 func (s *Service) GetByID(

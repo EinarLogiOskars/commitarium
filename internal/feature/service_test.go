@@ -484,10 +484,14 @@ func TestServiceCreatesASessionWithoutPlanOrReviewer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create session: %v", err)
 	}
-	if created.Kind != KindSession || created.Title != NewSessionTitle ||
+	if created.Kind != KindSession || created.Title != "Untitled session 1" ||
 		created.Steps != (project.WorkSteps{SkipPlan: true, SkipReviewer: true}) ||
 		created.IndependentAcceptanceTests {
 		t.Fatalf("unexpected session: %+v", created)
+	}
+	second, err := service.Create(t.Context(), "prj_test", " ", "", SettingsOverrides{Kind: KindSession})
+	if err != nil || second.Title != "Untitled session 2" {
+		t.Fatalf("second untitled session = %q err=%v", second.Title, err)
 	}
 	if _, err := service.Create(t.Context(), "prj_test", "", "", SettingsOverrides{}); !errors.Is(err, ErrTitleRequired) {
 		t.Fatalf("a work order without a title: %v", err)

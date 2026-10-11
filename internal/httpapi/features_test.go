@@ -636,7 +636,7 @@ func (service *recordingFeatureService) ChooseStartSettings(
 
 func TestCreateFeatureHandlerPassesTheKind(t *testing.T) {
 	service := &recordingFeatureService{createResult: feature.Feature{
-		ID: "fea_session", ProjectID: "prj_test", Title: feature.NewSessionTitle,
+		ID: "fea_session", ProjectID: "prj_test", Title: "Untitled session 1",
 		State: feature.StateDraft, Kind: feature.KindSession,
 	}}
 	request := httptest.NewRequest(http.MethodPost, "/api/v1/projects/prj_test/features",

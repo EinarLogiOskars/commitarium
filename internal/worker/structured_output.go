@@ -476,8 +476,10 @@ func ResolveStructuredOutput(
 			title = strings.TrimSpace(string(runes[:MaxSessionTitleRunes-1])) + "…"
 		}
 		response.Message = strings.TrimSpace(response.Message)
-		if title == "" || response.Message == "" {
-			return StructuredOutput{}, invalidStructuredOutput("session opening response is incomplete")
+		// A missing title is not worth failing the turn over: the session
+		// keeps its untitled name.
+		if response.Message == "" {
+			return StructuredOutput{}, invalidStructuredOutput("session opening response has no message")
 		}
 		return StructuredOutput{
 			Event: Event{Type: EventMessage, Text: response.Message}, Disposition: DispositionSucceeded,

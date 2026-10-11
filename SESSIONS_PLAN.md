@@ -46,7 +46,8 @@ work and merges it into the default branch through the merge gate (ADR-019).
    - The coordinator records "Interactive session" as the run's plan, which
      opens the session branch and draft pull request, as for a quick change.
    - The work order goes Draft → implementing within the request. It is
-     titled "New session" until the first turn names it.
+     titled "Untitled session N" (numbered within the project) until something
+     names it.
    - No agent turn runs yet. The session view greets the user ("Hey, what can
      I help you with?") and waits.
    - The first message starts the agent's conversation. The coordinator puts
@@ -55,8 +56,10 @@ work and merges it into the default branch through the merge gate (ADR-019).
      works, and that the user ends the session.
    - **The first turn names the session.** It uses a new output contract,
      `session_opening`, which returns the reply and a short title for what the
-     user asked for. The coordinator renames the work order to that title. The
-     user can rename it at any time.
+     user asked for. The coordinator renames the work order to that title. A
+     missing title never fails the turn: the session stays untitled, and the
+     project assistant can name it once it exists. The user can rename it at
+     any time.
 3. **Turns are plain conversation.**
    - Each later user message is one agent turn in the same provider
      conversation, with no structured output contract.
