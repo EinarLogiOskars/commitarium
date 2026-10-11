@@ -37,6 +37,10 @@ type remoteLeadFirstTurnExecution interface {
 	BeginFirstWorkerTurn(context.Context, worker.Command, string, string, string) (execution.WorkerTurnAdmissionResult, bool, error)
 }
 
+type remoteLeadSessionCatchUp interface {
+	SessionCatchUp(context.Context, string, string) (string, bool, error)
+}
+
 type remoteLeadFeatureRenamer interface {
 	Rename(context.Context, string, string) error
 }
@@ -180,6 +184,10 @@ func (starter *RemoteLeadStarter) SendSessionMessage(
 		request.request.Mode = workerhttp.AttemptModeResume
 		request.request.ProviderSessionID = lead.ProviderSessionID
 		request.request.Instructions = command.Message
+		if mainHead, behind := starter.sessionBehindMain(ctx, storedFeature); behind {
+			request.request.Instructions = sessionCatchUpInstructions(prepared.BaseBranch, mainHead) +
+				"\n\nThe user's message:\n" + command.Message
+		}
 	}
 	if err := request.request.Validate(request.identity); err != nil {
 		return execution.Run{}, fmt.Errorf("%w: %v", ErrInvalidRunRequest, err)
@@ -239,6 +247,36 @@ func (starter *RemoteLeadStarter) nameSession(ctx context.Context, runID string,
 	if err := renamer.Rename(ctx, storedFeature.ID, title); err != nil {
 		starter.reportError(fmt.Errorf("name session %q: %w", storedFeature.ID, err))
 	}
+}
+
+// sessionBehindMain reports whether the default branch moved past the
+// session's checkout. A failed check is reported and skipped: the turn goes
+// ahead without catching up, and the next one checks again.
+func (starter *RemoteLeadStarter) sessionBehindMain(ctx context.Context, storedFeature feature.Feature) (string, bool) {
+	catchUp, ok := starter.workspaces.(remoteLeadSessionCatchUp)
+	if !ok {
+		return "", false
+	}
+	mainHead, behind, err := catchUp.SessionCatchUp(ctx, storedFeature.ProjectID, storedFeature.ID)
+	if err != nil {
+		starter.reportError(fmt.Errorf("check whether session %q is behind main: %w", storedFeature.ID, err))
+		return "", false
+	}
+	return mainHead, behind
+}
+
+// sessionCatchUpInstructions ask the agent to merge the moved default branch
+// into the session branch before the user's message, keeping uncommitted
+// work. Conflicts are resolved with the user, not by the agent alone.
+func sessionCatchUpInstructions(baseBranch string, mainHead string) string {
+	return "Before the user's message: the base branch '" + baseBranch + "' has moved to " + mainHead +
+		" since this session last caught up. Bring it into the session branch while keeping the user's " +
+		"uncommitted work: stash everything including untracked files, run 'git fetch commitarium " +
+		baseBranch + "' and 'git merge --no-edit FETCH_HEAD', then restore the stash. If the merge or " +
+		"restoring the stash conflicts, stop there: do not resolve the conflicts on your own. Explain each " +
+		"conflict to the user in plain terms, ask how to resolve it, and continue with their message only " +
+		"once it is resolved. Otherwise say in one line that you brought in the latest " + baseBranch +
+		", then handle the message."
 }
 
 // sessionInstructions start a session's provider conversation. The user's

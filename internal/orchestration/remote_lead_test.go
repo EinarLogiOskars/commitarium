@@ -232,6 +232,9 @@ func (unavailableRemoteLeadWorker) Supersede(
 type unexpectedRemoteLeadPump struct{ called bool }
 
 type remoteLeadWorkspaceStub struct {
+	// mainHead, when set, is a default-branch head the session has not
+	// merged yet.
+	mainHead                      string
 	prepared                      workspace.Workspace
 	previousBase                  string
 	clarificationCalls            int
@@ -292,6 +295,14 @@ func (stub *remoteLeadWorkspaceStub) RecordMergeReady(
 	stub.prepared.MergeReadyAt = &readyAt
 	stub.prepared.PullRequestNumber = pullRequestNumber
 	return stub.prepared, nil
+}
+
+func (stub *remoteLeadWorkspaceStub) SessionCatchUp(
+	_ context.Context,
+	_ string,
+	_ string,
+) (string, bool, error) {
+	return stub.mainHead, stub.mainHead != "", nil
 }
 
 func (stub *remoteLeadWorkspaceStub) MergeApproved(
@@ -3475,6 +3486,7 @@ func TestRemoteLeadRunsASessionMessageByMessage(t *testing.T) {
 	if renamed, _ := features.GetByID(t.Context(), storedFeature.ID); renamed.Title != "Fix the Icelandic copy" {
 		t.Fatalf("the first turn did not name the session: %q", renamed.Title)
 	}
+	workspaceStub.mainHead = "9999999999999999999999999999999999999999"
 	send("msg-2", "Now the footer.")
 	// A retried message does not start another turn.
 	if _, err := starter.SendSessionMessage(t.Context(), runID, worker.Command{
@@ -3495,7 +3507,9 @@ func TestRemoteLeadRunsASessionMessageByMessage(t *testing.T) {
 		t.Fatalf("unexpected first session turn: %+v", requests[0])
 	}
 	if requests[1].Mode != workerhttp.AttemptModeResume || requests[1].OutputContract != "" ||
-		requests[1].ProviderSessionID != "codex-session-thread" || requests[1].Instructions != "Now the footer." {
+		requests[1].ProviderSessionID != "codex-session-thread" ||
+		!strings.Contains(requests[1].Instructions, "has moved to 9999999999999999999999999999999999999999") ||
+		!strings.HasSuffix(requests[1].Instructions, "The user's message:\nNow the footer.") {
 		t.Fatalf("unexpected later session turn: %+v", requests[1])
 	}
 	run, err := executions.GetRun(t.Context(), runID)

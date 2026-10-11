@@ -105,6 +105,25 @@ func (manager *Manager) Ensure(ctx context.Context, spec workspace.CheckoutSpec)
 	return manager.reconcile(ctx, spec, target)
 }
 
+// Contains reports whether a checkout's HEAD already contains a commit. A
+// commit the checkout has not fetched is not contained.
+func (manager *Manager) Contains(ctx context.Context, workspaceID string, commitID string) (bool, error) {
+	if !safeWorkspaceID.MatchString(workspaceID) || !workspace.ValidCommitID(commitID) {
+		return false, fmt.Errorf("%w: workspace or commit identity is unsafe", workspace.ErrCheckoutConflict)
+	}
+	target := filepath.Join(manager.root, workspaceID)
+	if info, err := os.Lstat(target); err != nil || !info.IsDir() {
+		return false, fmt.Errorf("%w: checkout directory is missing", workspace.ErrCheckoutConflict)
+	}
+	if _, err := manager.runner.Run(ctx, target, gitEnvironment(""), "cat-file", "-e", commitID+"^{commit}"); err != nil {
+		return false, nil
+	}
+	if _, err := manager.runner.Run(ctx, target, gitEnvironment(""), "merge-base", "--is-ancestor", commitID, "HEAD"); err != nil {
+		return false, nil
+	}
+	return true, nil
+}
+
 // Remove deletes one exact managed checkout without running Git or resolving
 // any branch. It is safe to repeat after a partial work-order deletion.
 func (manager *Manager) Remove(ctx context.Context, workspaceID string) error {
