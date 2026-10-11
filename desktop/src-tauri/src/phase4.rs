@@ -32,6 +32,8 @@ if [ -n "${COMMITARIUM_TEST_COMMIT:-}" ]; then
     git -c safe.directory='*' -c user.name=Commitarium -c user.email=commitarium@commitarium.local \
         -C /workspace merge --quiet --no-edit "$COMMITARIUM_TEST_COMMIT"
 fi
+# Commands run from the repository root, as they do for the agents.
+cd /workspace
 results='[]'
 printf '%s\n' "$results" > /output/results.json
 count=$(jq '.commands | length' /spec/job.json)
@@ -643,6 +645,13 @@ fn bounded_error(error: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn commands_run_from_the_repository_root() {
+        let root = VALIDATION_SCRIPT.find("cd /workspace").expect("no cd");
+        let first = VALIDATION_SCRIPT.find("timeout 30m").expect("no command");
+        assert!(root < first);
+    }
 
     #[test]
     fn renderer_ids_are_opaque_but_strictly_bounded() {
