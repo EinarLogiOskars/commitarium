@@ -282,6 +282,8 @@ export type WorkKind = "work_order" | "session";
 
 export interface CreateFeatureInput {
   title: string;
+  // "session" creates and starts a session (ADR-019); its title may be empty.
+  kind?: WorkKind;
   description?: string;
   // Optional per-order overrides. Each omitted field falls back to the project
   // default; the run snapshots the effective values. (Backend handling lands

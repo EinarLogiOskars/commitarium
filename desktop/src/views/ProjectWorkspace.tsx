@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { getProject } from "../api/projects";
+import { createSession } from "../api/features";
 import { getProjectToolchain } from "../api/toolchains";
 import { ApiError } from "../api/client";
 import { FeatureView } from "./FeatureView";
@@ -97,6 +98,26 @@ export function ProjectWorkspace({
     setOrderId(null);
     setMode(needsStack ? "stack" : "new");
   };
+  // A session starts at once and opens on its greeting (ADR-019).
+  const [startingSession, setStartingSession] = useState(false);
+  const startSession = async () => {
+    if (needsStack) {
+      setOrderId(null);
+      setMode("stack");
+      return;
+    }
+    setStartingSession(true);
+    setError(null);
+    try {
+      const session = await createSession(id);
+      setReloadKey((k) => k + 1);
+      openOrder(session.id);
+    } catch (e) {
+      setError(e instanceof ApiError ? `${e.message} (${e.code})` : String(e));
+    } finally {
+      setStartingSession(false);
+    }
+  };
 
   return (
     <>
@@ -136,13 +157,25 @@ export function ProjectWorkspace({
 
         <div className="rail__section-head">
           <span>{WORK.Plural}</span>
-          <button
-            className="rail__new"
-            title={needsStack ? "Choose a stack first" : WORK.newAction}
-            onClick={startNewOrder}
-          >
-            + New
-          </button>
+          <span className="rail__actions">
+            {hasRepo && (
+              <button
+                className="rail__new"
+                title={needsStack ? "Choose a stack first" : "Start a session with an agent"}
+                onClick={() => void startSession()}
+                disabled={startingSession}
+              >
+                {startingSession ? "Starting…" : "+ Session"}
+              </button>
+            )}
+            <button
+              className="rail__new"
+              title={needsStack ? "Choose a stack first" : WORK.newAction}
+              onClick={startNewOrder}
+            >
+              + New
+            </button>
+          </span>
         </div>
         <WorkOrderRail
           projectId={id}

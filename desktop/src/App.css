@@ -2954,3 +2954,37 @@ button.danger:not(.ghost) {
   border-top: 1px solid var(--border);
   padding-top: 12px;
 }
+
+/* Sessions (ADR-019). */
+.rail__actions {
+  display: flex;
+  gap: 2px;
+}
+.rail__kind {
+  flex: none;
+  margin-left: 6px;
+  font-size: 11px;
+  color: var(--muted);
+}
+.session__title h2 {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+.session__rename {
+  font-size: 12px;
+  font-weight: normal;
+}
+.session__kind {
+  margin: 2px 0 0;
+  font-size: 12px;
+}
+.session__blocked {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.session__body {
+  min-height: 360px;
+}

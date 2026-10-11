@@ -53,6 +53,11 @@ export function WorkOrderRail({
                 onClick={() => onSelect(f.id)}
               >
                 <span className="rail__item-title">{f.title}</span>
+                {f.kind === "session" && (
+                  <span className="rail__kind" title={idleTitle(f)}>
+                    session{idleFor(f)}
+                  </span>
+                )}
                 <span className={`dot dot--${tone(f.state)}`} />
               </button>
             ))}
@@ -61,6 +66,19 @@ export function WorkOrderRail({
       })}
     </>
   );
+}
+
+// An open session runs nothing between turns, so its last update is when it
+// went idle (ADR-019).
+function idleFor(f: Feature): string {
+  if (!["implementing", "ready_to_merge"].includes(f.state)) return "";
+  const hours = (Date.now() - Date.parse(f.updated_at)) / 3_600_000;
+  if (!(hours >= 1)) return "";
+  return hours < 24 ? ` · ${Math.floor(hours)}h` : ` · ${Math.floor(hours / 24)}d`;
+}
+
+function idleTitle(f: Feature): string | undefined {
+  return idleFor(f) ? `Idle since ${new Date(f.updated_at).toLocaleString()}` : undefined;
 }
 
 function tone(state: FeatureState): "ok" | "bad" | "warn" | "muted" {

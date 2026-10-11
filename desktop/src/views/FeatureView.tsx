@@ -10,6 +10,7 @@ import {
 import { getRun } from "../api/runs";
 import { ApiError } from "../api/client";
 import { ClarifyView } from "./ClarifyView";
+import { SessionView } from "./SessionView";
 import { PlanningView } from "./PlanningView";
 import { ImplementationView } from "./ImplementationView";
 import { ReviewView } from "./ReviewView";
@@ -113,6 +114,21 @@ export function FeatureView({
 
   if (error && !feature) return <div className="banner banner--error">{error}</div>;
   if (!feature) return <p className="muted">Loading…</p>;
+  if (feature.kind === "session") {
+    return (
+      <SessionView
+        projectId={projectId}
+        feature={feature}
+        run={run}
+        onChanged={() => {
+          void load();
+          onChanged?.();
+        }}
+        onDeleted={onDeleted}
+        onOpenValidation={onOpenValidation}
+      />
+    );
+  }
 
   const current = currentPhaseIndex(feature);
   const viewed = pinnedIndex ?? current;
