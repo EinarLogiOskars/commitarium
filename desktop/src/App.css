@@ -3219,3 +3219,25 @@ button.danger:not(.ghost) {
   background: color-mix(in srgb, var(--accent) 18%, transparent);
   color: var(--text);
 }
+
+/* The model working right now, in a work order's header. */
+.agents-at-work {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 6px 0 0;
+  padding: 3px 10px;
+  width: fit-content;
+  font-size: 12px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--warn) 45%, transparent);
+  background: color-mix(in srgb, var(--warn) 10%, transparent);
+}
+.agents-at-work__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--warn);
+  animation: dot-pulse 1.6s ease-in-out infinite;
+}

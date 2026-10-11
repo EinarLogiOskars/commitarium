@@ -8,6 +8,7 @@ import {
   listFeatureRuns,
 } from "../api/features";
 import { getRun } from "../api/runs";
+import { AgentsAtWork } from "./AgentsAtWork";
 import { ApiError } from "../api/client";
 import { ClarifyView } from "./ClarifyView";
 import { SessionView } from "./SessionView";
@@ -219,6 +220,7 @@ export function FeatureView({
             <h2>{feature.title}</h2>
             {feature.description && <OrderDescription text={feature.description} />}
             {usage && usage.roles.length > 0 && <UsageLine usage={usage} />}
+            <AgentsAtWork run={run} />
           </div>
           <div className="row">
             {restartable && !confirmDelete && !confirmReady && (

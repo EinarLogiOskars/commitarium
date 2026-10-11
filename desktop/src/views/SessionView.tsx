@@ -8,6 +8,7 @@ import { MergeView } from "./MergeView";
 import { PREVIEW_STATE, primaryUrl, usePreview, type PreviewHandle } from "./usePreview";
 import { openExternal } from "../ipc";
 import { markSessionSeen } from "./sessionSeen";
+import { useModelName } from "./useModelName";
 import type { Feature, Run } from "../api/types";
 
 const GREETING = "Hey, what can I help you with?";
@@ -48,6 +49,10 @@ export function SessionView({
   const preview = usePreview(projectId, feature.id);
 
   const lead = run?.sessions.find((s) => s.role === "lead");
+  // The model is named while it works and in the message box, so a small
+  // change isn't sent to an expensive model by accident.
+  const modelName = useModelName();
+  const model = modelName(run?.agent_models?.lead);
   const sessionRefs = useMemo(() => (lead ? [{ id: lead.id, role: "lead" }] : []), [lead]);
   const { durable, previews } = useSessionEvents(sessionRefs, !!lead);
 
@@ -140,7 +145,7 @@ export function SessionView({
         ? "Merged."
         : "Closed."
       : working
-        ? run.reason || "The agent is working…"
+        ? `${model || "The agent"} is working…`
         : blocked
           ? null
           : atMergeGate
@@ -299,7 +304,7 @@ export function SessionView({
             {status && <p className="muted status-line">{status}</p>}
             <div className="reply">
               <textarea
-                placeholder="Message the agent…"
+                placeholder={model ? `Message ${model}…` : "Message the agent…"}
                 value={reply}
                 onChange={(e) => setReply(e.target.value)}
                 onKeyDown={onKeyDown}
