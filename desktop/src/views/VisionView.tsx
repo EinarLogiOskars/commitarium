@@ -1,0 +1,718 @@
+import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  getVision,
+  getVisionSession,
+  replyToVisionAssistant,
+  saveVision,
+  startVisionAssistant,
+  startVisionWorkOrder,
+} from "../api/vision";
+import { listFeatures } from "../api/features";
+import { ApiError } from "../api/client";
+import { Markdown } from "./Markdown";
+import type {
+  Feature,
+  FeatureState,
+  Vision,
+  VisionItem,
+  VisionMode,
+  VisionPlan,
+  VisionSession,
+} from "../api/types";
+
+const MAX_DEPTH = 3;
+const sessionKey = (projectId: string) => `commitarium.vision-session.${projectId}`;
+
+function rememberedSession(projectId: string): string | null {
+  try {
+    return localStorage.getItem(sessionKey(projectId));
+  } catch {
+    return null;
+  }
+}
+
+function rememberSession(projectId: string, sessionId: string | null) {
+  try {
+    if (sessionId) localStorage.setItem(sessionKey(projectId), sessionId);
+    else localStorage.removeItem(sessionKey(projectId));
+  } catch {
+    // The conversation is only reopened less conveniently.
+  }
+}
+
+const STATE_LABEL: Record<FeatureState, string> = {
+  draft: "Draft",
+  ready: "Ready",
+  planning: "Planning",
+  implementing: "In progress",
+  reviewing: "In review",
+  ready_to_merge: "Ready to merge",
+  completed: "Done",
+  cancelled: "Cancelled",
+};
+
+// The Vision page (ADR-020): the project's vision statement on top and the
+// prioritized plan below. The assistant writes it from a description or after
+// talking it through; the user edits it or has it rewritten. Each item without
+// sub-items starts exactly one work order.
+export function VisionView({
+  projectId,
+  onOpenOrder,
+}: {
+  projectId: string;
+  onOpenOrder: (featureId: string) => void;
+}) {
+  const [vision, setVision] = useState<Vision | null>(null);
+  const [loaded, setLoaded] = useState(false);
+  const [features, setFeatures] = useState<Map<string, Feature>>(new Map());
+  const [session, setSession] = useState<VisionSession | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [draft, setDraft] = useState<VisionPlan | null>(null);
+  const [rewriting, setRewriting] = useState(false);
+  const [busy, setBusy] = useState<string | null>(null);
+
+  const loadVision = useCallback(async () => {
+    try {
+      setVision(await getVision(projectId));
+    } catch (e) {
+      if (e instanceof ApiError && e.code === "vision_not_found") setVision(null);
+      else setError(describe(e));
+    }
+    try {
+      setFeatures(new Map((await listFeatures(projectId)).map((f) => [f.id, f])));
+    } catch {
+      // Statuses are a convenience; the plan still shows.
+    }
+    setLoaded(true);
+  }, [projectId]);
+
+  useEffect(() => {
+    setVision(null);
+    setSession(null);
+    setDraft(null);
+    setRewriting(false);
+    setLoaded(false);
+    setError(null);
+    void loadVision();
+    const remembered = rememberedSession(projectId);
+    if (remembered) {
+      getVisionSession(projectId, remembered)
+        .then((s) => {
+          if (s.status === "running" || s.status === "waiting_for_user") setSession(s);
+          else rememberSession(projectId, null);
+        })
+        .catch(() => rememberSession(projectId, null));
+    }
+  }, [projectId, loadVision]);
+
+  // Follow the assistant while it works.
+  const sessionId = session?.id;
+  const sessionRunning = session?.status === "running";
+  useEffect(() => {
+    if (!sessionId || !sessionRunning) return;
+    const timer = setInterval(() => {
+      getVisionSession(projectId, sessionId)
+        .then((s) => {
+          setSession(s);
+          if (s.status === "written") {
+            rememberSession(projectId, null);
+            setSession(null);
+            setRewriting(false);
+            void loadVision();
+          }
+        })
+        .catch((e) => setError(describe(e)));
+    }, 2000);
+    return () => clearInterval(timer);
+  }, [projectId, sessionId, sessionRunning, loadVision]);
+
+  const start = async (mode: VisionMode, message: string) => {
+    setBusy(mode);
+    setError(null);
+    try {
+      const s = await startVisionAssistant(projectId, mode, message, crypto.randomUUID());
+      rememberSession(projectId, s.id);
+      setSession(s);
+      setDraft(null);
+    } catch (e) {
+      setError(describe(e));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const startOrder = async (item: VisionItem) => {
+    setBusy(item.id);
+    setError(null);
+    try {
+      const { work_order, vision: linked } = await startVisionWorkOrder(projectId, item.id);
+      setVision(linked);
+      onOpenOrder(work_order.id);
+    } catch (e) {
+      setError(describe(e));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const save = async () => {
+    if (!draft) return;
+    setBusy("save");
+    setError(null);
+    try {
+      setVision(await saveVision(projectId, trimPlan(draft), vision?.revision ?? 0));
+      setDraft(null);
+    } catch (e) {
+      setError(
+        e instanceof ApiError && e.code === "vision_conflict"
+          ? "The vision changed while you edited it. Cancel to see the latest version."
+          : describe(e),
+      );
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  if (!loaded) return <p className="muted">Loading…</p>;
+
+  const plan = vision?.plan;
+  const lowConfidence = plan && plan.confidence !== "high" && plan.guesses.length > 0;
+
+  return (
+    <div className="vision">
+      <div className="vision__head">
+        <h2>Vision</h2>
+        {vision && !draft && !session && (
+          <div className="row">
+            <button className="ghost" onClick={() => setDraft(structuredClone(vision.plan))}>
+              Edit
+            </button>
+            <button className="ghost" onClick={() => setRewriting((r) => !r)}>
+              Rewrite with the assistant
+            </button>
+          </div>
+        )}
+      </div>
+      {error && <div className="banner banner--error">{error}</div>}
+
+      {session ? (
+        <VisionConversation
+          projectId={projectId}
+          session={session}
+          onSession={setSession}
+          onClose={() => {
+            rememberSession(projectId, null);
+            setSession(null);
+          }}
+        />
+      ) : !vision || rewriting ? (
+        <WriteVision
+          rewriting={!!vision}
+          busy={busy}
+          onStart={(mode, message) => void start(mode, message)}
+          onCancel={vision ? () => setRewriting(false) : undefined}
+        />
+      ) : draft ? (
+        <VisionEditor
+          plan={draft}
+          onChange={setDraft}
+          saving={busy === "save"}
+          onSave={() => void save()}
+          onCancel={() => {
+            setDraft(null);
+            setError(null);
+            void loadVision();
+          }}
+        />
+      ) : (
+        plan && (
+          <>
+            <section className="panel vision__statement">
+              <Markdown text={plan.statement} />
+              <p className="muted vision__source">
+                {vision.source === "assistant" ? "Written by the assistant" : "Edited by you"} ·{" "}
+                {new Date(vision.updated_at).toLocaleString()}
+              </p>
+            </section>
+            {lowConfidence && (
+              <div
+                className={`banner ${plan.confidence === "low" ? "banner--warn" : ""} vision__guesses`}
+              >
+                <p>
+                  {plan.confidence === "low"
+                    ? "The assistant wrote this plan but isn't confident it had everything it needed. It guessed:"
+                    : "The assistant guessed some things:"}
+                </p>
+                <ul>
+                  {plan.guesses.map((g) => (
+                    <li key={g}>{g}</li>
+                  ))}
+                </ul>
+                <button
+                  onClick={() =>
+                    void start(
+                      "converse",
+                      "Go through the guesses in the current vision with me, then rewrite it with my answers.",
+                    )
+                  }
+                  disabled={busy !== null}
+                >
+                  {busy === "converse" ? "Starting…" : "Answer these"}
+                </button>
+              </div>
+            )}
+            {plan.priorities.length === 0 && <p className="muted">The plan has no items yet.</p>}
+            {[...plan.priorities]
+              .sort((a, b) => a.level - b.level)
+              .map((priority) => (
+                <section className="panel vision__priority" key={priority.level}>
+                  <h3>P{priority.level}</h3>
+                  <ItemList
+                    items={priority.items}
+                    prefix={`P${priority.level}`}
+                    features={features}
+                    busy={busy}
+                    onStart={(item) => void startOrder(item)}
+                    onOpen={onOpenOrder}
+                  />
+                </section>
+              ))}
+          </>
+        )
+      )}
+    </div>
+  );
+}
+
+function WriteVision({
+  rewriting,
+  busy,
+  onStart,
+  onCancel,
+}: {
+  rewriting: boolean;
+  busy: string | null;
+  onStart: (mode: VisionMode, message: string) => void;
+  onCancel?: () => void;
+}) {
+  const [text, setText] = useState("");
+  const message = text.trim();
+  return (
+    <section className="panel vision__write">
+      <p>
+        {rewriting
+          ? "Tell the assistant what should change. It rewrites the vision from the current one, keeping the work orders already started."
+          : "Describe the app: who it's for, what it should do, and what matters most. The assistant writes the vision and a prioritized plan from it."}
+      </p>
+      <textarea
+        rows={6}
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        placeholder={
+          rewriting
+            ? "What should change?"
+            : "A to-do app for my family, shared lists, works on phones…"
+        }
+      />
+      <div className="row">
+        <button
+          className="primary"
+          onClick={() => onStart("describe", message)}
+          disabled={!message || busy !== null}
+          title="The assistant writes it at once and lists what it had to guess."
+        >
+          {busy === "describe" ? "Starting…" : "Write it from my description"}
+        </button>
+        <button
+          onClick={() => onStart("converse", message)}
+          disabled={!message || busy !== null}
+          title="The assistant asks what it needs to know first."
+        >
+          {busy === "converse" ? "Starting…" : "Talk it through"}
+        </button>
+        {onCancel && (
+          <button className="ghost" onClick={onCancel} disabled={busy !== null}>
+            Cancel
+          </button>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function VisionConversation({
+  projectId,
+  session,
+  onSession,
+  onClose,
+}: {
+  projectId: string;
+  session: VisionSession;
+  onSession: (s: VisionSession) => void;
+  onClose: () => void;
+}) {
+  const [reply, setReply] = useState("");
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const chatRef = useRef<HTMLDivElement | null>(null);
+  const waiting = session.status === "waiting_for_user";
+
+  useEffect(() => {
+    const el = chatRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [session.messages.length]);
+
+  const send = async () => {
+    const text = reply.trim();
+    if (!text) return;
+    setSending(true);
+    setError(null);
+    try {
+      onSession(await replyToVisionAssistant(projectId, session.id, text, crypto.randomUUID()));
+      setReply("");
+    } catch (e) {
+      setError(describe(e));
+    } finally {
+      setSending(false);
+    }
+  };
+
+  return (
+    <section className="panel vision__conversation">
+      <div className="chat" ref={chatRef}>
+        {session.messages.map((m, index) => (
+          <div key={index} className={`msg ${m.role === "user" ? "msg--user" : "msg--lead"}`}>
+            <span className="msg__who">{m.role === "user" ? "You" : "Assistant"}</span>
+            <div className="msg__text">
+              <Markdown text={m.text} />
+            </div>
+          </div>
+        ))}
+      </div>
+      {error && <div className="banner banner--error">{error}</div>}
+      {session.status === "running" && (
+        <p className="muted status-line">
+          {session.mode === "describe"
+            ? "The assistant is writing the vision…"
+            : "The assistant is thinking…"}
+        </p>
+      )}
+      {session.status === "failed" && (
+        <div className="banner banner--warn">
+          <span>The assistant stopped before writing the vision.</span>
+          <button onClick={onClose}>Start again</button>
+        </div>
+      )}
+      {waiting && (
+        <div className="composer">
+          <div className="reply">
+            <textarea
+              rows={2}
+              value={reply}
+              placeholder="Answer the assistant…"
+              onChange={(e) => setReply(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key !== "Enter" || e.shiftKey) return;
+                e.preventDefault();
+                if (!sending && reply.trim()) void send();
+              }}
+              disabled={sending}
+            />
+            <button onClick={() => void send()} disabled={sending || !reply.trim()}>
+              {sending ? "Sending…" : "Send"}
+            </button>
+          </div>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function ItemList({
+  items,
+  prefix,
+  features,
+  busy,
+  onStart,
+  onOpen,
+}: {
+  items: VisionItem[];
+  prefix: string;
+  features: Map<string, Feature>;
+  busy: string | null;
+  onStart: (item: VisionItem) => void;
+  onOpen: (featureId: string) => void;
+}) {
+  return (
+    <ol className="vision__items">
+      {items.map((item, index) => {
+        const label = `${prefix}.${index + 1}`;
+        const leaf = !item.items?.length;
+        const linked = item.feature_id ? features.get(item.feature_id) : undefined;
+        const done = leaf ? linked?.state === "completed" : allDone(item, features);
+        return (
+          <li key={item.id} className="vision__item">
+            <div className="vision__row">
+              <span className="vision__label">{label}</span>
+              <div className="vision__text">
+                <strong>{item.title}</strong>
+                {item.description && <p className="muted">{item.description}</p>}
+              </div>
+              <div className="row vision__actions">
+                {done && <span className="pill pill--ok">Done</span>}
+                {leaf && item.feature_id && !done && (
+                  <span className="pill">{linked ? STATE_LABEL[linked.state] : "Work order"}</span>
+                )}
+                {leaf &&
+                  (item.feature_id ? (
+                    <button className="ghost" onClick={() => onOpen(item.feature_id!)}>
+                      Open
+                    </button>
+                  ) : (
+                    <button onClick={() => onStart(item)} disabled={busy !== null}>
+                      {busy === item.id ? "Creating…" : "Start work order"}
+                    </button>
+                  ))}
+              </div>
+            </div>
+            {!leaf && (
+              <ItemList
+                items={item.items!}
+                prefix={label}
+                features={features}
+                busy={busy}
+                onStart={onStart}
+                onOpen={onOpen}
+              />
+            )}
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
+
+// A group is done when every item under it is.
+function allDone(item: VisionItem, features: Map<string, Feature>): boolean {
+  if (!item.items?.length) return features.get(item.feature_id ?? "")?.state === "completed";
+  return item.items.every((child) => allDone(child, features));
+}
+
+function VisionEditor({
+  plan,
+  onChange,
+  saving,
+  onSave,
+  onCancel,
+}: {
+  plan: VisionPlan;
+  onChange: (plan: VisionPlan) => void;
+  saving: boolean;
+  onSave: () => void;
+  onCancel: () => void;
+}) {
+  const ids = new Set<string>();
+  const collect = (items: VisionItem[]) =>
+    items.forEach((item) => {
+      ids.add(item.id);
+      collect(item.items ?? []);
+    });
+  plan.priorities.forEach((p) => collect(p.items));
+  const newItem = (): VisionItem => {
+    let id = "item";
+    for (let n = 2; ids.has(id); n++) id = `item-${n}`;
+    ids.add(id);
+    return { id, title: "", description: "" };
+  };
+
+  const setPriorityItems = (level: number, items: VisionItem[]) =>
+    onChange({
+      ...plan,
+      priorities: plan.priorities.map((p) => (p.level === level ? { ...p, items } : p)),
+    });
+  const nextLevel = plan.priorities.reduce((max, p) => Math.max(max, p.level + 1), 0);
+  const sorted = [...plan.priorities].sort((a, b) => a.level - b.level);
+  const incomplete = hasEmptyTitle(plan) || !plan.statement.trim();
+
+  return (
+    <div className="vision__editor">
+      <section className="panel">
+        <label className="field">
+          <span>Vision</span>
+          <textarea
+            rows={4}
+            value={plan.statement}
+            onChange={(e) => onChange({ ...plan, statement: e.target.value })}
+          />
+        </label>
+      </section>
+      {sorted.map((priority) => (
+        <section className="panel vision__priority" key={priority.level}>
+          <div className="vision__head">
+            <h3>P{priority.level}</h3>
+            <button
+              className="ghost danger"
+              onClick={() =>
+                onChange({ ...plan, priorities: plan.priorities.filter((p) => p !== priority) })
+              }
+            >
+              Remove P{priority.level}
+            </button>
+          </div>
+          <ItemEditor
+            items={priority.items}
+            prefix={`P${priority.level}`}
+            depth={1}
+            newItem={newItem}
+            onChange={(items) => setPriorityItems(priority.level, items)}
+          />
+        </section>
+      ))}
+      <div className="row">
+        {nextLevel <= 9 && (
+          <button
+            className="ghost"
+            onClick={() =>
+              onChange({
+                ...plan,
+                priorities: [...plan.priorities, { level: nextLevel, items: [newItem()] }],
+              })
+            }
+          >
+            Add P{nextLevel}
+          </button>
+        )}
+        <span className="rail__spacer" />
+        <button className="ghost" onClick={onCancel} disabled={saving}>
+          Cancel
+        </button>
+        <button className="primary" onClick={onSave} disabled={saving || incomplete}>
+          {saving ? "Saving…" : "Save"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function ItemEditor({
+  items,
+  prefix,
+  depth,
+  newItem,
+  onChange,
+}: {
+  items: VisionItem[];
+  prefix: string;
+  depth: number;
+  newItem: () => VisionItem;
+  onChange: (items: VisionItem[]) => void;
+}) {
+  const update = (index: number, item: VisionItem) =>
+    onChange(items.map((existing, i) => (i === index ? item : existing)));
+  const move = (index: number, by: number) => {
+    const next = [...items];
+    const [item] = next.splice(index, 1);
+    next.splice(index + by, 0, item);
+    onChange(next);
+  };
+  return (
+    <ol className="vision__items">
+      {items.map((item, index) => {
+        const label = `${prefix}.${index + 1}`;
+        return (
+          <li key={item.id} className="vision__item">
+            <div className="vision__row">
+              <span className="vision__label">{label}</span>
+              <div className="vision__text">
+                <input
+                  type="text"
+                  value={item.title}
+                  placeholder="Title"
+                  onChange={(e) => update(index, { ...item, title: e.target.value })}
+                />
+                <textarea
+                  rows={2}
+                  value={item.description}
+                  placeholder="Description"
+                  onChange={(e) => update(index, { ...item, description: e.target.value })}
+                />
+              </div>
+              <div className="vision__actions vision__actions--edit">
+                <button className="ghost" onClick={() => move(index, -1)} disabled={index === 0}>
+                  ↑
+                </button>
+                <button
+                  className="ghost"
+                  onClick={() => move(index, 1)}
+                  disabled={index === items.length - 1}
+                >
+                  ↓
+                </button>
+                {depth < MAX_DEPTH && !item.feature_id && (
+                  <button
+                    className="ghost"
+                    onClick={() =>
+                      update(index, { ...item, items: [...(item.items ?? []), newItem()] })
+                    }
+                  >
+                    Add sub-item
+                  </button>
+                )}
+                <button
+                  className="ghost danger"
+                  onClick={() => onChange(items.filter((_, i) => i !== index))}
+                  title={item.feature_id ? "Its work order stays." : undefined}
+                >
+                  Remove
+                </button>
+              </div>
+            </div>
+            {!!item.items?.length && (
+              <ItemEditor
+                items={item.items}
+                prefix={label}
+                depth={depth + 1}
+                newItem={newItem}
+                onChange={(children) => update(index, { ...item, items: children })}
+              />
+            )}
+          </li>
+        );
+      })}
+      <li>
+        <button className="ghost" onClick={() => onChange([...items, newItem()])}>
+          Add item
+        </button>
+      </li>
+    </ol>
+  );
+}
+
+function trimPlan(plan: VisionPlan): VisionPlan {
+  const trim = (items: VisionItem[]): VisionItem[] =>
+    items.map((item) => ({
+      ...item,
+      title: item.title.trim(),
+      description: item.description.trim(),
+      items: item.items?.length ? trim(item.items) : undefined,
+    }));
+  return {
+    ...plan,
+    statement: plan.statement.trim(),
+    priorities: plan.priorities.map((p) => ({ ...p, items: trim(p.items) })),
+  };
+}
+
+function hasEmptyTitle(plan: VisionPlan): boolean {
+  const empty = (items: VisionItem[]): boolean =>
+    items.some((item) => !item.title.trim() || empty(item.items ?? []));
+  return plan.priorities.some((p) => empty(p.items));
+}
+
+function describe(e: unknown): string {
+  if (e instanceof ApiError) {
+    if (e.code === "vision_unavailable") return "The vision assistant is unavailable: " + e.message;
+    return e.message;
+  }
+  return String(e);
+}

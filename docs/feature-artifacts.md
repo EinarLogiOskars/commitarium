@@ -47,6 +47,15 @@ checkout's base commit. The user may edit it through the artifact API.
 Planning consumes only the immutable accepted goal recorded from the brief at
 Start.
 
+## Project vision
+
+The vision assistant's turns use the structured `vision_plan` result: a
+conversational `message`, and when proposing, the vision's `statement`,
+`priorities` with nested `items` (at most three levels), the assistant's
+`confidence`, and its `guesses`. The coordinator gives proposed items IDs from
+their titles and keeps the vision as its own record (ADR-020), not as a feature
+artifact.
+
 ## Planning and implementation
 
 The lead's final `submit_plan` result includes both the Markdown plan used for

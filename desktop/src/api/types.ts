@@ -731,3 +731,50 @@ export interface RunningWorkOrder {
   run_id: string;
   updated_at: string;
 }
+
+// A project's vision (ADR-020): why it exists, and the prioritized plan that
+// gets it there. Items nest up to three levels; only items without sub-items
+// become work orders. Numbers (P0.1.2) come from position; IDs stay stable.
+export interface VisionItem {
+  id: string;
+  title: string;
+  description: string;
+  items?: VisionItem[];
+  feature_id?: string;
+}
+
+export interface VisionPriority {
+  level: number;
+  items: VisionItem[];
+}
+
+export type VisionConfidence = "high" | "medium" | "low";
+
+export interface VisionPlan {
+  statement: string;
+  priorities: VisionPriority[];
+  confidence: VisionConfidence;
+  guesses: string[];
+}
+
+export interface Vision {
+  project_id: string;
+  plan: VisionPlan;
+  source: "assistant" | "user";
+  revision: number;
+  updated_at: string;
+}
+
+export type VisionMode = "describe" | "converse";
+
+export interface VisionSession {
+  id: string;
+  project_id: string;
+  agent: string;
+  model: string;
+  mode: VisionMode;
+  status: "running" | "waiting_for_user" | "written" | "failed";
+  messages: { role: "user" | "assistant"; text: string; occurred_at: string }[];
+  created_at: string;
+  updated_at: string;
+}

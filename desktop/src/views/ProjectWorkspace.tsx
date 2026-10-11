@@ -13,12 +13,14 @@ import { RepositoryCard } from "./RepositoryCard";
 import { StackPicker } from "./StackPicker";
 import { PreviewRailItem } from "./PreviewRailItem";
 import { PreviewView } from "./PreviewView";
+import { VisionView } from "./VisionView";
 import { usePreview } from "./usePreview";
 import { usePreviewSetup } from "./usePreviewSetup";
 import { WORK } from "../vocab";
 import type { AttentionItem, Project, ProjectToolchain, WorkKind } from "../api/types";
 
-type Mode = "overview" | "repository" | "stack" | "new" | "order" | "settings" | "preview";
+type Mode =
+  "overview" | "vision" | "repository" | "stack" | "new" | "order" | "settings" | "preview";
 
 /** Project workspace shell: work-order rail + master/detail main pane. */
 export function ProjectWorkspace({
@@ -160,6 +162,17 @@ export function ProjectWorkspace({
         </button>
         {project?.forgejo_repository && (
           <button
+            className={`rail__item ${mode === "vision" ? "rail__item--active" : ""}`}
+            onClick={() => {
+              setMode("vision");
+              setOrderId(null);
+            }}
+          >
+            Vision
+          </button>
+        )}
+        {project?.forgejo_repository && (
+          <button
             className={`rail__item ${mode === "repository" ? "rail__item--active" : ""}`}
             onClick={() => {
               setMode("repository");
@@ -271,6 +284,17 @@ export function ProjectWorkspace({
               onSettings={() => {
                 setMode("settings");
                 setOrderId(null);
+              }}
+            />
+          )}
+
+          {mode === "vision" && project && (
+            <VisionView
+              projectId={id}
+              onOpenOrder={(fid) => {
+                setReloadKey((k) => k + 1);
+                setRailKind("work_order");
+                openOrder(fid);
               }}
             />
           )}

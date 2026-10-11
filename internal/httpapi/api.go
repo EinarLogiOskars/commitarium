@@ -277,6 +277,7 @@ type API struct {
 	usage              FeatureUsageService
 	assistant          WorkOrderAssistant
 	agents             AgentService
+	visions            VisionService
 }
 
 func New(
@@ -381,8 +382,11 @@ func newAPI(
 	var usage FeatureUsageService
 	var workOrderAssistant WorkOrderAssistant
 	var agents AgentService
+	var visions VisionService
 	for _, extra := range extras {
 		switch typed := extra.(type) {
+		case VisionService:
+			visions = typed
 		case AgentService:
 			agents = typed
 		case WorkOrderAssistant:
@@ -420,12 +424,21 @@ func newAPI(
 		usage:              usage,
 		assistant:          workOrderAssistant,
 		agents:             agents,
+		visions:            visions,
 	}
 	api.artifacts, _ = workflow.(FeatureArtifactService)
 	api.projectImporter, _ = projects.(ProjectImporter)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", api.healthHandler)
+	if visions != nil && projects != nil && features != nil {
+		mux.HandleFunc("GET /api/v1/projects/{id}/vision", api.getVisionHandler)
+		mux.HandleFunc("PUT /api/v1/projects/{id}/vision", api.saveVisionHandler)
+		mux.HandleFunc("POST /api/v1/projects/{id}/vision/assistant", api.startVisionHandler)
+		mux.HandleFunc("GET /api/v1/projects/{id}/vision/assistant/{sessionID}", api.getVisionSessionHandler)
+		mux.HandleFunc("POST /api/v1/projects/{id}/vision/assistant/{sessionID}/messages", api.replyVisionHandler)
+		mux.HandleFunc("POST /api/v1/projects/{id}/vision/items/{itemID}/work-order", api.startVisionWorkOrderHandler)
+	}
 	if projects != nil && features != nil && executionService != nil {
 		mux.HandleFunc("GET /api/v1/attention", api.listAttentionHandler)
 	}

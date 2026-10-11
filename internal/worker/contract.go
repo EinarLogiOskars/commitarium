@@ -66,6 +66,9 @@ const (
 	// OutputContractSessionOpening is a session's first turn (ADR-019): the
 	// reply and a short title for the session.
 	OutputContractSessionOpening OutputContract = "session_opening"
+	// OutputContractVisionPlan asks the project assistant for a project's
+	// vision and prioritized plan, or for a question first (ADR-020).
+	OutputContractVisionPlan OutputContract = "vision_plan"
 )
 
 // LaunchEnvironment is the worker-resolved view of the profile and workspace
@@ -199,6 +202,7 @@ type Result struct {
 	EnvironmentRequest *EnvironmentRequest
 	HandoffBrief       *featureartifact.HandoffBrief
 	SessionTitle       string
+	VisionPlan         *featureartifact.VisionPlan
 	Usage              *TokenUsage
 	// LoginRequired marks a failed turn whose provider login must be renewed.
 	LoginRequired bool
@@ -352,7 +356,8 @@ func (request SessionRequest) Validate() error {
 		request.OutputContract != OutputContractToolchainSetup &&
 		request.OutputContract != OutputContractPlanApproval &&
 		request.OutputContract != OutputContractWorkOrderBrief &&
-		request.OutputContract != OutputContractSessionOpening:
+		request.OutputContract != OutputContractSessionOpening &&
+		request.OutputContract != OutputContractVisionPlan:
 		return fmt.Errorf("%w: output contract %q is not recognized", ErrInvalidSessionRequest, request.OutputContract)
 	case (request.OutputContract == OutputContractPlanningLead ||
 		request.OutputContract == OutputContractGoalClarification ||
@@ -361,7 +366,8 @@ func (request SessionRequest) Validate() error {
 		request.OutputContract == OutputContractSessionOpening) && request.Role != RoleLead:
 		return fmt.Errorf("%w: lead output contract requires the lead role", ErrInvalidSessionRequest)
 	case (request.OutputContract == OutputContractToolchainSetup ||
-		request.OutputContract == OutputContractWorkOrderBrief) &&
+		request.OutputContract == OutputContractWorkOrderBrief ||
+		request.OutputContract == OutputContractVisionPlan) &&
 		request.Role != RoleLead && request.Role != RoleConsultant:
 		return fmt.Errorf("%w: toolchain setup output contract requires a consultation role", ErrInvalidSessionRequest)
 	case (request.OutputContract == OutputContractImplementationReview ||

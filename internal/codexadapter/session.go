@@ -568,7 +568,8 @@ func (session *session) completedItem(item threadItem) ([]worker.Event, error) {
 			session.outputContract == worker.OutputContractToolchainSetup ||
 			session.outputContract == worker.OutputContractPlanApproval ||
 			session.outputContract == worker.OutputContractWorkOrderBrief ||
-			session.outputContract == worker.OutputContractSessionOpening {
+			session.outputContract == worker.OutputContractSessionOpening ||
+			session.outputContract == worker.OutputContractVisionPlan {
 			session.mu.Lock()
 			session.pendingMessage = text
 			session.pendingStreamID = item.ID
@@ -753,6 +754,7 @@ func (session *session) completedTurn(
 		result.AcceptanceTests = resolved.AcceptanceTests
 		result.HandoffBrief = resolved.HandoffBrief
 		result.SessionTitle = resolved.SessionTitle
+		result.VisionPlan = resolved.VisionPlan
 		return events(&resolved.Event), true, result, nil
 	case "interrupted":
 		return nil, true, worker.Result{
