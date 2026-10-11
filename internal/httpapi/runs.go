@@ -1,10 +1,13 @@
 package httpapi
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
+	"io"
 	"log"
 	"net/http"
 	"strings"
@@ -150,6 +153,99 @@ type interventionResponse struct {
 	ResolvedAt  *time.Time                   `json:"resolved_at,omitempty"`
 }
 
+// startRunRequest holds the settings a work order starts with. Every field
+// is optional and falls back to the work order's current settings.
+type startRunRequest struct {
+	AgentProviders             *agentProvidersRequest  `json:"agent_providers"`
+	AgentModels                *agentModelsRequest     `json:"agent_models"`
+	AutonomyPolicy             *project.AutonomyPolicy `json:"autonomy_policy"`
+	MergePolicy                *project.MergePolicy    `json:"merge_policy"`
+	IndependentAcceptanceTests *bool                   `json:"independent_acceptance_tests"`
+}
+
+type startSettingsChooser interface {
+	ChooseStartSettings(context.Context, string, string, feature.SettingsOverrides) (feature.Feature, error)
+}
+
+// chooseStartSettings applies and saves the settings in a Start request. It
+// writes the error response itself and reports whether to continue.
+func (api *API) chooseStartSettings(
+	w http.ResponseWriter,
+	r *http.Request,
+	storedFeature feature.Feature,
+) (feature.Feature, bool) {
+	body, err := io.ReadAll(io.LimitReader(r.Body, 64*1024+1))
+	if err != nil || len(body) > 64*1024 {
+		writeError(w, http.StatusBadRequest, "invalid_body", "start request is too large")
+		return feature.Feature{}, false
+	}
+	if len(bytes.TrimSpace(body)) == 0 {
+		return storedFeature, true
+	}
+	var request startRunRequest
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&request); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_json", "start request must be a JSON object with known fields")
+		return feature.Feature{}, false
+	}
+	var overrides feature.SettingsOverrides
+	if request.AgentProviders != nil {
+		providers, err := api.decodeAgentProviders(r.Context(), request.AgentProviders, false)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid_agent_providers", "agent_providers must name existing lead and reviewer agents")
+			return feature.Feature{}, false
+		}
+		overrides.AgentProviders = &providers
+	}
+	if request.AgentModels != nil {
+		models, err := decodeAgentModels(request.AgentModels, false)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid_agent_models", "agent_models must include explicit lead and reviewer model IDs")
+			return feature.Feature{}, false
+		}
+		overrides.AgentModels = &models
+	}
+	overrides.MergePolicy = request.MergePolicy
+	overrides.AutonomyPolicy = request.AutonomyPolicy
+	overrides.IndependentAcceptanceTests = request.IndependentAcceptanceTests
+	chooser, ok := api.features.(startSettingsChooser)
+	if !ok {
+		writeError(w, http.StatusServiceUnavailable, "start_settings_unavailable", "choosing settings at Start is unavailable")
+		return feature.Feature{}, false
+	}
+	if api.modelCatalog != nil && overrides.AgentModels != nil {
+		providers := storedFeature.AgentProviders
+		if overrides.AgentProviders != nil {
+			providers = *overrides.AgentProviders
+		}
+		if err := api.modelCatalog.ValidateSelection(r.Context(), providers, *overrides.AgentModels); err != nil {
+			writeModelSelectionError(w, err)
+			return feature.Feature{}, false
+		}
+	}
+	chosen, err := chooser.ChooseStartSettings(r.Context(), storedFeature.ProjectID, storedFeature.ID, overrides)
+	if err != nil {
+		switch {
+		case errors.Is(err, feature.ErrNotReady):
+			writeError(w, http.StatusConflict, "feature_not_startable", "only a ready work order can be started")
+		case errors.Is(err, project.ErrInvalidAgentProviders):
+			writeError(w, http.StatusBadRequest, "invalid_agent_providers", "agent_providers must name existing lead and reviewer agents")
+		case errors.Is(err, project.ErrInvalidAgentModels):
+			writeError(w, http.StatusBadRequest, "invalid_agent_models", "agent_models must include explicit lead and reviewer model IDs")
+		case errors.Is(err, project.ErrInvalidMergePolicy):
+			writeError(w, http.StatusBadRequest, "invalid_merge_policy", "merge_policy must be require_user_approval or auto_after_gates")
+		case errors.Is(err, project.ErrInvalidAutonomyPolicy):
+			writeError(w, http.StatusBadRequest, "invalid_autonomy_policy", "autonomy_policy must be review_each_phase or run_to_completion")
+		default:
+			log.Printf("choose start settings for feature %q: %v", storedFeature.ID, err)
+			writeError(w, http.StatusInternalServerError, "internal_error", "internal server error")
+		}
+		return feature.Feature{}, false
+	}
+	return chosen, true
+}
+
 func (api *API) startRunHandler(w http.ResponseWriter, r *http.Request) {
 	idempotencyKey := strings.TrimSpace(r.Header.Get("Idempotency-Key"))
 	if idempotencyKey == "" {
@@ -189,6 +285,13 @@ func (api *API) startRunHandler(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "feature_not_startable", "only a ready work order can be started")
 		return
 	}
+	// Agents, models, and policies are chosen at Start; an empty body starts
+	// with the work order's current settings (its project's defaults).
+	chosen, ok := api.chooseStartSettings(w, r, storedFeature)
+	if !ok {
+		return
+	}
+	storedFeature = chosen
 	goal := storedFeature.Title
 	if storedFeature.Description != "" {
 		goal += ": " + storedFeature.Description

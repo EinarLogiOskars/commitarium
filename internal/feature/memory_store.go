@@ -71,3 +71,21 @@ func (s *MemoryStore) ListByProjectID(
 	})
 	return features, nil
 }
+
+// UpdateReadySettings saves the settings a Ready work order starts with.
+func (s *MemoryStore) UpdateReadySettings(_ context.Context, chosen Feature) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	stored, exists := s.features[chosen.ID]
+	if !exists {
+		return ErrNotFound
+	}
+	if stored.State != StateReady {
+		return ErrNotReady
+	}
+	stored.AgentProviders, stored.AgentModels = chosen.AgentProviders, chosen.AgentModels
+	stored.MergePolicy, stored.AutonomyPolicy = chosen.MergePolicy, chosen.AutonomyPolicy
+	stored.IndependentAcceptanceTests = chosen.IndependentAcceptanceTests
+	s.features[chosen.ID] = stored
+	return nil
+}

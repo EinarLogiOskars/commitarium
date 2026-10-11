@@ -1534,15 +1534,32 @@ credentials and never pushes to the user's remote.
 ## Starting and observing a run
 
 Only a `ready` work order can start (ADR-015); anything else returns
-`409 feature_not_startable`. Starting a run has no request body. In
-`real_agents` mode the run begins with the lead's planning proposal from the
-work order's handoff brief (see below):
+`409 feature_not_startable`. In `real_agents` mode the run begins with the
+lead's planning proposal from the work order's handoff brief (see below).
+
+A work order's agents, models, and workflow settings are chosen at Start, not
+while drafting. The optional body names them; every field is optional and an
+omitted one keeps the work order's current setting, which is its project's
+default until a Start chose another:
 
 ```http
 POST /api/v1/projects/prj_example/features/fea_example/runs
 Idempotency-Key: user-selected-stable-key
-Content-Length: 0
+Content-Type: application/json
+
+{
+  "agent_providers": {"lead_agent": "codex", "reviewer_agent": "claude-max"},
+  "agent_models": {"lead": "gpt-5.6-sol", "reviewer": "claude-opus-5"},
+  "autonomy_policy": "run_to_completion",
+  "merge_policy": "require_user_approval",
+  "independent_acceptance_tests": false
+}
 ```
+
+The chosen settings are saved on the work order, then snapshotted by the run.
+Unknown fields return `400 invalid_json`; agents, models, and policies are
+validated as for project settings. An empty body starts with the current
+settings.
 
 A successful response is `202 Accepted` and points to the run resource:
 

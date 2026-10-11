@@ -1,4 +1,5 @@
 import { request } from "./client";
+import type { StartSettingsValue } from "../views/StartSettings";
 import type {
   InterventionTargetRole,
   PlanningMessage,
@@ -7,15 +8,17 @@ import type {
   ValidationJob,
 } from "./types";
 
-/** Start the configured workflow for a draft feature. Idempotent by key. */
+/** Start a Ready work order with the settings chosen at Start (omitted ones
+ * keep the work order's current settings). Idempotent by key. */
 export const startRun = (
   projectId: string,
   featureId: string,
   idempotencyKey: string,
+  settings?: StartSettingsValue,
 ): Promise<Run> =>
   request(
     `/api/v1/projects/${encodeURIComponent(projectId)}/features/${encodeURIComponent(featureId)}/runs`,
-    { method: "POST", idempotencyKey },
+    { method: "POST", idempotencyKey, body: settings },
   );
 
 export const getRun = (runId: string): Promise<Run> =>

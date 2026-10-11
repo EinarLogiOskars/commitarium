@@ -7,6 +7,7 @@ import {
   startAssistant,
   updateHandoffBrief,
 } from "../api/features";
+import { StartSettings, startSettingsFrom, type StartSettingsValue } from "./StartSettings";
 import { startRun } from "../api/runs";
 import { ApiError } from "../api/client";
 import { Transcript, type TranscriptEntry } from "./Transcript";
@@ -24,11 +25,13 @@ export function ClarifyView({
   feature,
   hasRepo,
   onChanged,
+  onOpenValidation,
 }: {
   projectId: string;
   feature: Feature;
   hasRepo?: boolean;
   onChanged: () => void;
+  onOpenValidation?: () => void;
 }) {
   const { artifact: brief } = useFeatureArtifact<HandoffBriefDocument>(
     projectId,
@@ -56,6 +59,7 @@ export function ClarifyView({
         brief={brief?.document ?? null}
         briefRevision={brief?.revision ?? 0}
         onChanged={onChanged}
+        onOpenValidation={onOpenValidation}
       />
     );
   }
@@ -281,15 +285,20 @@ function ReadyView({
   brief,
   briefRevision,
   onChanged,
+  onOpenValidation,
 }: {
   projectId: string;
   feature: Feature;
   brief: HandoffBriefDocument | null;
   briefRevision: number;
   onChanged: () => void;
+  onOpenValidation?: () => void;
 }) {
   const [busy, setBusy] = useState<null | "start" | "reopen">(null);
   const [error, setError] = useState<string | null>(null);
+  // Agents, models, and workflow settings are chosen here, at Start,
+  // starting from the work order's current settings (its project's defaults).
+  const [settings, setSettings] = useState<StartSettingsValue>(() => startSettingsFrom(feature));
 
   const run = async (action: "start" | "reopen") => {
     setBusy(action);
@@ -299,7 +308,12 @@ function ReadyView({
         // One key per Ready state: a repeated click or retry joins the same
         // run, while a work order returned to Ready (its updated_at moved)
         // starts a new one.
-        await startRun(projectId, feature.id, `start-${feature.id}-${feature.updated_at}`);
+        await startRun(
+          projectId,
+          feature.id,
+          `start-${feature.id}-${feature.updated_at}`,
+          settings,
+        );
       } else {
         await reopenWorkOrder(projectId, feature.id, crypto.randomUUID());
       }
@@ -319,15 +333,28 @@ function ReadyView({
         The lead and reviewer start from this brief. The lead first checks it against what has
         changed on main since it was written, then plans the commits with the reviewer.
       </p>
-      {brief && (
-        <BriefEditor
-          projectId={projectId}
-          featureId={feature.id}
-          brief={brief}
-          revision={briefRevision}
-          disabled={busy !== null}
-        />
-      )}
+      {/* The brief and the settings scroll together; Start stays in view. */}
+      <div className="ready__scroll">
+        {brief && (
+          <BriefEditor
+            projectId={projectId}
+            featureId={feature.id}
+            brief={brief}
+            revision={briefRevision}
+            disabled={busy !== null}
+          />
+        )}
+        <div className="start-settings">
+          <span className="neworder__heading">Start with</span>
+          <StartSettings
+            projectId={projectId}
+            value={settings}
+            onChange={setSettings}
+            onOpenValidation={onOpenValidation}
+            disabled={busy !== null}
+          />
+        </div>
+      </div>
       <div className="row">
         <button className="primary" onClick={() => void run("start")} disabled={busy !== null}>
           {busy === "start" ? "Starting…" : "Start"}

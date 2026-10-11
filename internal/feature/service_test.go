@@ -416,3 +416,35 @@ func TestServiceListReturnsProjectAndStoreErrors(t *testing.T) {
 		})
 	}
 }
+
+func TestServiceChoosesStartSettingsOnlyWhileReady(t *testing.T) {
+	store := NewMemoryStore()
+	defaults := project.Project{ID: "prj_test", AgentProviders: project.DefaultAgentProviders()}
+	service := NewService(store, &recordingProjectFinder{result: defaults})
+	created, err := service.Create(t.Context(), defaults.ID, "Filter", "", SettingsOverrides{})
+	if err != nil {
+		t.Fatalf("create feature: %v", err)
+	}
+	claude := project.AgentProviders{
+		Lead: project.AgentProviderClaude, Reviewer: project.AgentProviderClaude,
+		LeadAgent: "claude-max", ReviewerAgent: "claude-max",
+	}
+	autonomy := project.AutonomyPolicyRunToCompletion
+	overrides := SettingsOverrides{AgentProviders: &claude, AutonomyPolicy: &autonomy}
+	if _, err := service.ChooseStartSettings(t.Context(), defaults.ID, created.ID, overrides); !errors.Is(err, ErrNotReady) {
+		t.Fatalf("draft settings error = %v", err)
+	}
+	ready := created
+	ready.State = StateReady
+	store.features[created.ID] = ready
+
+	chosen, err := service.ChooseStartSettings(t.Context(), defaults.ID, created.ID, overrides)
+	if err != nil || chosen.AgentProviders != claude || chosen.AutonomyPolicy != autonomy ||
+		chosen.MergePolicy != created.MergePolicy {
+		t.Fatalf("chosen settings = %+v err=%v", chosen, err)
+	}
+	stored, _ := store.GetByID(t.Context(), created.ID)
+	if stored.AgentProviders != claude || stored.AutonomyPolicy != autonomy {
+		t.Fatalf("settings were not saved: %+v", stored)
+	}
+}

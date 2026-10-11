@@ -619,3 +619,17 @@ func assertFeatureResponse(
 		t.Errorf("expected update time %v, got %v", expected.UpdatedAt, actual.UpdatedAt)
 	}
 }
+
+func (service *recordingFeatureService) ChooseStartSettings(
+	_ context.Context, _, _ string, overrides feature.SettingsOverrides,
+) (feature.Feature, error) {
+	service.receivedOverrides = overrides
+	chosen := service.getResult
+	if overrides.AgentProviders != nil {
+		chosen.AgentProviders = *overrides.AgentProviders
+	}
+	if overrides.AutonomyPolicy != nil {
+		chosen.AutonomyPolicy = *overrides.AutonomyPolicy
+	}
+	return chosen, nil
+}

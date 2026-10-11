@@ -256,7 +256,13 @@ export interface Feature {
   state: FeatureState;
   accepted_goal?: string;
   goal_accepted_at?: string;
-  independent_acceptance_tests?: boolean; // immutable effective snapshot
+  independent_acceptance_tests?: boolean;
+  // The settings it starts with: its project's defaults until a Start chose
+  // others. The run snapshots them.
+  agent_providers?: AgentProviders;
+  agent_models?: AgentModels;
+  autonomy_policy?: AutonomyPolicy;
+  merge_policy?: MergePolicy;
   created_at: string;
   updated_at: string;
 }

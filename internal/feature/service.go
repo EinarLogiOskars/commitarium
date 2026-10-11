@@ -62,53 +62,13 @@ func (s *Service) Create(
 	// older clients are ignored.
 	dialogueLimits := project.DefaultDialogueLimits()
 
-	agentProviders := storedProject.AgentProviders
-	if overrides.AgentProviders != nil {
-		agentProviders = *overrides.AgentProviders
-		if !agentProviders.Lead.IsValid() || !agentProviders.Reviewer.IsValid() {
-			return Feature{}, project.ErrInvalidAgentProviders
-		}
-	}
-	agentProviders, err = agentProviders.Normalize()
+	settings, err := resolveSettings(Feature{
+		AgentProviders: storedProject.AgentProviders, AgentModels: storedProject.AgentModels,
+		MergePolicy: storedProject.MergePolicy, AutonomyPolicy: storedProject.AutonomyPolicy,
+		IndependentAcceptanceTests: storedProject.IndependentAcceptanceTests,
+	}, overrides)
 	if err != nil {
 		return Feature{}, err
-	}
-
-	agentModels := storedProject.AgentModels
-	if overrides.AgentModels != nil {
-		agentModels = *overrides.AgentModels
-	}
-	agentModels, err = agentModels.Normalize()
-	if err != nil {
-		return Feature{}, project.ErrInvalidAgentModels
-	}
-
-	mergePolicy := storedProject.MergePolicy
-	if overrides.MergePolicy != nil {
-		if *overrides.MergePolicy == "" {
-			return Feature{}, project.ErrInvalidMergePolicy
-		}
-		mergePolicy = *overrides.MergePolicy
-	}
-	mergePolicy, err = project.NormalizeMergePolicy(mergePolicy)
-	if err != nil {
-		return Feature{}, err
-	}
-
-	autonomyPolicy := storedProject.AutonomyPolicy
-	if overrides.AutonomyPolicy != nil {
-		if *overrides.AutonomyPolicy == "" {
-			return Feature{}, project.ErrInvalidAutonomyPolicy
-		}
-		autonomyPolicy = *overrides.AutonomyPolicy
-	}
-	autonomyPolicy, err = project.NormalizeAutonomyPolicy(autonomyPolicy)
-	if err != nil {
-		return Feature{}, err
-	}
-	independentAcceptanceTests := storedProject.IndependentAcceptanceTests
-	if overrides.IndependentAcceptanceTests != nil {
-		independentAcceptanceTests = *overrides.IndependentAcceptanceTests
 	}
 
 	now := s.now()
@@ -119,11 +79,11 @@ func (s *Service) Create(
 		Description:                strings.TrimSpace(description),
 		State:                      StateDraft,
 		DialogueLimits:             dialogueLimits,
-		AgentProviders:             agentProviders,
-		AgentModels:                agentModels,
-		MergePolicy:                mergePolicy,
-		AutonomyPolicy:             autonomyPolicy,
-		IndependentAcceptanceTests: independentAcceptanceTests,
+		AgentProviders:             settings.AgentProviders,
+		AgentModels:                settings.AgentModels,
+		MergePolicy:                settings.MergePolicy,
+		AutonomyPolicy:             settings.AutonomyPolicy,
+		IndependentAcceptanceTests: settings.IndependentAcceptanceTests,
 		CreatedAt:                  now,
 		UpdatedAt:                  now,
 	}
@@ -177,4 +137,86 @@ func (s *Service) List(
 		return nil, fmt.Errorf("list features for project %q: %w", projectID, err)
 	}
 	return features, nil
+}
+
+// resolveSettings applies a work order's setting overrides to base and
+// normalizes the result.
+func resolveSettings(base Feature, overrides SettingsOverrides) (Feature, error) {
+	var err error
+	if overrides.AgentProviders != nil {
+		base.AgentProviders = *overrides.AgentProviders
+		if !base.AgentProviders.Lead.IsValid() || !base.AgentProviders.Reviewer.IsValid() {
+			return Feature{}, project.ErrInvalidAgentProviders
+		}
+	}
+	if base.AgentProviders, err = base.AgentProviders.Normalize(); err != nil {
+		return Feature{}, err
+	}
+	if overrides.AgentModels != nil {
+		base.AgentModels = *overrides.AgentModels
+	}
+	if base.AgentModels, err = base.AgentModels.Normalize(); err != nil {
+		return Feature{}, project.ErrInvalidAgentModels
+	}
+	if overrides.MergePolicy != nil {
+		if *overrides.MergePolicy == "" {
+			return Feature{}, project.ErrInvalidMergePolicy
+		}
+		base.MergePolicy = *overrides.MergePolicy
+	}
+	if base.MergePolicy, err = project.NormalizeMergePolicy(base.MergePolicy); err != nil {
+		return Feature{}, err
+	}
+	if overrides.AutonomyPolicy != nil {
+		if *overrides.AutonomyPolicy == "" {
+			return Feature{}, project.ErrInvalidAutonomyPolicy
+		}
+		base.AutonomyPolicy = *overrides.AutonomyPolicy
+	}
+	if base.AutonomyPolicy, err = project.NormalizeAutonomyPolicy(base.AutonomyPolicy); err != nil {
+		return Feature{}, err
+	}
+	if overrides.IndependentAcceptanceTests != nil {
+		base.IndependentAcceptanceTests = *overrides.IndependentAcceptanceTests
+	}
+	return base, nil
+}
+
+// ErrNotReady means a work order's start settings can only be chosen while
+// it is Ready.
+var ErrNotReady = errors.New("work order is not ready to start")
+
+// SettingsStore saves a Ready work order's settings.
+type SettingsStore interface {
+	UpdateReadySettings(ctx context.Context, feature Feature) error
+}
+
+// ChooseStartSettings records the agents, models, and policies a Ready work
+// order starts with. Settings are chosen at Start, not while drafting; until
+// then the work order carries its project's defaults.
+func (s *Service) ChooseStartSettings(
+	ctx context.Context,
+	projectID string,
+	featureID string,
+	overrides SettingsOverrides,
+) (Feature, error) {
+	stored, err := s.GetByID(ctx, projectID, featureID)
+	if err != nil {
+		return Feature{}, err
+	}
+	if stored.State != StateReady {
+		return Feature{}, ErrNotReady
+	}
+	chosen, err := resolveSettings(stored, overrides)
+	if err != nil {
+		return Feature{}, err
+	}
+	settings, ok := s.store.(SettingsStore)
+	if !ok {
+		return Feature{}, errors.New("work-order settings cannot be saved")
+	}
+	if err := settings.UpdateReadySettings(ctx, chosen); err != nil {
+		return Feature{}, err
+	}
+	return chosen, nil
 }

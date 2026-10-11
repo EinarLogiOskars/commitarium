@@ -476,7 +476,13 @@ function body(
   // Clarify
   if (viewed === 0) {
     return (
-      <ClarifyView projectId={projectId} feature={feature} hasRepo={hasRepo} onChanged={reload} />
+      <ClarifyView
+        projectId={projectId}
+        feature={feature}
+        hasRepo={hasRepo}
+        onChanged={reload}
+        onOpenValidation={onOpenValidation}
+      />
     );
   }
 

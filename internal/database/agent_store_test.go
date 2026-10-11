@@ -41,7 +41,8 @@ func TestAgentStoreSeedsCreatesRenamesAndRemoves(t *testing.T) {
 	if err := service.Delete(t.Context(), "codex"); !errors.Is(err, agent.ErrInUse) {
 		t.Fatalf("delete an agent in use: %v", err)
 	}
-	// A work order that has not started yet keeps its chosen agent too.
+	// A work order that has not started chooses its agents at Start, so it
+	// does not keep an agent from being removed.
 	var projectID string
 	if err := db.QueryRowContext(t.Context(), `SELECT project_id FROM features WHERE id = ?`, run.FeatureID).Scan(&projectID); err != nil {
 		t.Fatalf("find project: %v", err)
@@ -58,7 +59,7 @@ func TestAgentStoreSeedsCreatesRenamesAndRemoves(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("create draft work order: %v", err)
 	}
-	if err := service.Delete(t.Context(), first.ID); !errors.Is(err, agent.ErrInUse) {
-		t.Fatalf("delete an agent chosen by a draft work order: %v", err)
+	if err := service.Delete(t.Context(), first.ID); err != nil {
+		t.Fatalf("delete an agent named by a draft work order: %v", err)
 	}
 }
