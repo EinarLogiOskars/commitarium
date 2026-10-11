@@ -1705,6 +1705,94 @@ func testRemoteLeadWithoutReviewer(t *testing.T, repliesFirst bool) {
 	}
 }
 
+func TestRemoteLeadQuickChangeImplementsTheGoalWithoutAPlan(t *testing.T) {
+	db, executions, storedProject, storedFeature := newRemoteLeadExecution(t)
+	runID := "run_quick_change"
+	stub := newConversationalRemoteLeadWorker(runID, storedProject.ID, storedFeature.ID)
+	addCompletedImplementationAttempt(stub, runID, storedProject.ID, storedFeature.ID)
+
+	workflowService := workflow.NewService(database.NewWorkflowStore(db))
+	checkoutAt := time.Date(2026, time.October, 11, 12, 0, 0, 0, time.UTC)
+	workspaceStub := &remoteLeadWorkspaceStub{prepared: workspace.Workspace{
+		ID: "wsp_quick_change", ProjectID: storedProject.ID, FeatureID: storedFeature.ID,
+		RepositoryOwner: "commitarium", RepositoryName: "quick-change-test",
+		BaseBranch: "main", Branch: "commitarium/" + storedFeature.ID,
+		BaseCommitID:         "0123456789abcdef0123456789abcdef01234567",
+		Status:               workspace.StatusPreparing,
+		CheckoutRelativePath: "wsp_quick_change",
+		CheckoutCreatedAt:    &checkoutAt,
+	}}
+	features := database.NewFeatureStore(db)
+	starter, err := NewRemoteLeadStarter(RemoteLeadConfig{
+		Executions: executions, Features: features, Goals: workflowService,
+		Planning: workflowService, Briefs: workflowService, Workspaces: workspaceStub, Worker: stub,
+		Pump:       &conversationalRemoteLeadPump{executions: executions, worker: stub},
+		Validation: validation.NewService(database.NewValidationStore(db)),
+		Lifetime:   t.Context(),
+	})
+	if err != nil {
+		t.Fatalf("create starter: %v", err)
+	}
+	readyRemoteLeadFeature(t, workflowService, storedFeature.ID)
+	chosen, err := features.GetByID(t.Context(), storedFeature.ID)
+	if err != nil {
+		t.Fatalf("load ready feature: %v", err)
+	}
+	chosen.Steps = project.WorkSteps{SkipPlan: true, SkipReviewer: true}
+	if err := features.UpdateReadySettings(t.Context(), chosen); err != nil {
+		t.Fatalf("choose steps: %v", err)
+	}
+	if _, _, err := starter.Start(
+		t.Context(), runID, storedProject.ID, storedFeature.ID, storedFeature.Title,
+		storedProject.DialogueLimits, storedProject.AgentProviders,
+		storedProject.MergePolicy, storedProject.AutonomyPolicy,
+	); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	var gated execution.Run
+	for time.Now().Before(deadline) {
+		gated, err = executions.GetRun(t.Context(), runID)
+		if err != nil {
+			t.Fatalf("load run: %v", err)
+		}
+		if gated.Status == execution.RunStatusWaitingForUser {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	current, err := features.GetByID(t.Context(), storedFeature.ID)
+	if err != nil {
+		t.Fatalf("load feature: %v", err)
+	}
+	if current.State != feature.StateReadyToMerge || gated.WaitKind != execution.RunWaitKindMergeGate {
+		t.Fatalf("quick change did not reach the merge gate: feature=%s run=%+v", current.State, gated)
+	}
+	stub.mu.Lock()
+	requests := append([]workerhttp.PutAttemptRequest(nil), stub.putRequests...)
+	stub.mu.Unlock()
+	if len(requests) != 1 {
+		t.Fatalf("expected a single lead turn, got %d", len(requests))
+	}
+	first := requests[0]
+	if first.Mode != workerhttp.AttemptModeStart || first.ProviderSessionID != "" ||
+		first.OutputContract != workerhttp.OutputContractImplementationLead ||
+		!strings.Contains(first.Instructions, "Accepted goal:") ||
+		strings.Contains(first.Instructions, "commitarium-artifact plan") {
+		t.Fatalf("quick change did not start by implementing the goal: %+v", first)
+	}
+	if workspaceStub.publishCalls != 1 || workspaceStub.publishedPlan != noDocumentedPlan ||
+		workspaceStub.publicationVerifyCalls != 1 {
+		t.Fatalf("quick change did not open its pull request without a plan: %+v", workspaceStub)
+	}
+	if _, _, err := starter.Merge(t.Context(), runID, "merge-quick-change"); err != nil {
+		t.Fatalf("merge: %v", err)
+	}
+	if workspaceStub.mergeCalls != 1 || len(workspaceStub.mergeApprovalNotes) != 1 {
+		t.Fatalf("quick change did not merge with the coordinator's approval: %+v", workspaceStub)
+	}
+}
+
 func TestRemotePlanningLoopUsesRunLimitSnapshot(t *testing.T) {
 	db, executions, storedProject, storedFeature := newRemoteLeadExecution(t)
 	limits := project.DialogueLimits{PlanningRounds: 3, ImplementationReviewRounds: 4}

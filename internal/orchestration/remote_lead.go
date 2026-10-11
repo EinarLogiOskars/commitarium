@@ -141,7 +141,7 @@ var ErrStepsUnsupported = errors.New("these work-order steps are not supported y
 // supportedSteps reports whether the orchestrator can run a work order with
 // these optional steps.
 func supportedSteps(steps project.WorkSteps) bool {
-	return !steps.SkipPlan
+	return steps.Validate() == nil
 }
 
 type remoteLeadAcceptanceExecution interface {
@@ -497,6 +497,9 @@ func (starter *RemoteLeadStarter) StartWithModels(
 	if err != nil {
 		return execution.Run{}, false, err
 	}
+	if run.Steps.SkipPlan {
+		return starter.startWithoutPlan(ctx, run, storedFeature, sessionID)
+	}
 	attemptID := planningAttemptID(sessionID)
 	request, err := starter.startPlanningRequest(run, storedFeature, sessionID, prepared, previousBase, attemptID)
 	if err != nil {
@@ -512,6 +515,66 @@ func (starter *RemoteLeadStarter) StartWithModels(
 	}
 	go starter.launch(request)
 	startedRun, err := starter.executions.GetRun(ctx, runID)
+	return startedRun, true, err
+}
+
+// noDocumentedPlan is the plan record of a work order without a documented
+// plan (ADR-018). The coordinator publishes it in place of a plan, so the pull
+// request says plainly how the work was planned.
+const noDocumentedPlan = "No documented plan. This work order is a quick change: the lead " +
+	"implements the accepted goal directly, without a commit-by-commit plan."
+
+// startWithoutPlan starts a work order without a documented plan. The
+// coordinator records that there is no plan as the run's plan, which creates
+// the feature branch and draft pull request, and the lead's first turn
+// implements the accepted goal.
+func (starter *RemoteLeadStarter) startWithoutPlan(
+	ctx context.Context,
+	run execution.Run,
+	storedFeature feature.Feature,
+	sessionID string,
+) (execution.Run, bool, error) {
+	fail := func(err error) (execution.Run, bool, error) {
+		starter.failAdmission(ctx, run, sessionID, err)
+		return execution.Run{}, false, err
+	}
+	plan, err := starter.executions.RecordSessionEventWithID(
+		ctx, run.ID+":no-documented-plan", sessionID,
+		worker.Event{Type: worker.EventPlanSubmitted, Text: noDocumentedPlan},
+	)
+	if err != nil {
+		return fail(fmt.Errorf("record the work order's plan: %w", err))
+	}
+	if _, _, err := starter.executions.LinkPlanningMessage(ctx, run.ID, plan.ID); err != nil {
+		return fail(fmt.Errorf("record the work order's plan: %w", err))
+	}
+	prepared, err := starter.recordPlanPublication(ctx, run, storedFeature, plan)
+	if err != nil {
+		return fail(fmt.Errorf("open the draft pull request: %w", err))
+	}
+	if _, err := starter.planning.TransitionFeature(
+		ctx, storedFeature.ID, feature.StateImplementing,
+		workflow.Actor{Kind: workflow.ActorKindCoordinator, ID: coordinatorActorID}, run.ID+":start-implementing",
+	); err != nil {
+		return fail(fmt.Errorf("start implementing: %w", err))
+	}
+	lead, err := starter.executions.GetSession(ctx, sessionID)
+	if err != nil {
+		return fail(err)
+	}
+	attemptID := implementationAttemptForVersion(sessionID, run.PlanVersion, 1)
+	request, err := starter.implementationRequest(ctx, run, storedFeature, lead, prepared, plan.Text, attemptID)
+	if err != nil {
+		return fail(err)
+	}
+	if _, _, err := starter.executions.CreateWorkerAttempt(ctx, sessionID, attemptID); err != nil {
+		return fail(fmt.Errorf("create worker attempt: %w", err))
+	}
+	if !starter.claim(run.ID) {
+		return execution.Run{}, false, fmt.Errorf("%w: %q", ErrRunAlreadyActive, run.ID)
+	}
+	go starter.launch(request)
+	startedRun, err := starter.executions.GetRun(ctx, run.ID)
 	return startedRun, true, err
 }
 
@@ -1382,6 +1445,11 @@ func (starter *RemoteLeadStarter) resumeIntoReplanning(
 	if run.Status != execution.RunStatusWaitingForUser || !run.Paused ||
 		run.WaitKind != execution.RunWaitKindPaused {
 		return execution.Run{}, false, ErrRunControlNotAllowed
+	}
+	if run.Steps.SkipPlan {
+		// A work order without a documented plan has no plan to revise; it
+		// goes Back to Ready and starts again with a plan (ADR-018).
+		return execution.Run{}, false, ErrInterventionReplanningRequired
 	}
 	storedFeature, err := starter.features.GetByID(ctx, run.FeatureID)
 	if err != nil {
@@ -3139,26 +3207,33 @@ func (starter *RemoteLeadStarter) implementationRequest(
 	if err != nil {
 		return remoteLeadRequest{}, err
 	}
+	mode, idempotencySuffix := workerhttp.AttemptModeResume, ":resume"
+	if lead.ProviderSessionID == "" {
+		// Without a documented plan, implementation is the lead's first turn.
+		mode, idempotencySuffix = workerhttp.AttemptModeStart, ":start"
+	}
+	instructions := implementationInstructions(prepared, attemptID)
+	if run.Steps.SkipPlan {
+		instructions = planlessImplementationInstructions(storedFeature, prepared, attemptID)
+	}
 	request := remoteLeadRequest{
 		runID: run.ID, agentName: "lead agent", waitingReason: implementationReadyReason,
 		identity: workerhttp.MutationIdentity{
 			AttemptReference: workerhttp.AttemptReference{
 				SessionID: lead.ID, AttemptID: attemptID,
 			},
-			IdempotencyKey: attemptID + ":resume",
+			IdempotencyKey: attemptID + idempotencySuffix,
 		},
 		request: workerhttp.PutAttemptRequest{
-			Mode: workerhttp.AttemptModeResume,
+			Mode: mode,
 			Assignment: workerhttp.Assignment{
 				AgentProfileID: starter.profileID(run.AgentProviders.LeadAgent, worker.RoleLead),
 				ProjectID:      storedFeature.ProjectID, FeatureID: storedFeature.ID,
 				Role: workerhttp.RoleLead, WorkspaceID: prepared.ID,
 			},
 			ProviderSessionID: lead.ProviderSessionID,
-			Instructions: implementationInstructions(
-				prepared, attemptID,
-			) + previewContext,
-			OutputContract: workerhttp.OutputContractImplementationLead,
+			Instructions:      instructions + previewContext,
+			OutputContract:    workerhttp.OutputContractImplementationLead,
 		},
 	}
 	if err := request.request.Validate(request.identity); err != nil {
@@ -3579,7 +3654,7 @@ func (starter *RemoteLeadStarter) implementationContinuationRequest(
 			},
 			ProviderSessionID: lead.ProviderSessionID,
 			Instructions: implementationContinuationInstructions(
-				prepared, command.Message, attemptID,
+				prepared, command.Message, attemptID, !run.Steps.SkipPlan,
 			),
 			OutputContract: workerhttp.OutputContractImplementationLead,
 		},
@@ -4531,7 +4606,7 @@ func (starter *RemoteLeadStarter) verifyImplementationPublication(
 		messages[len(messages)-1].Event.Type != worker.EventPlanSubmitted {
 		return errors.New("implementation publication has no durable agreed plan")
 	}
-	if starter.artifacts != nil {
+	if starter.artifacts != nil && !run.Steps.SkipPlan {
 		if _, correcting := implementationCorrectionTurnNumber(request.identity.SessionID, request.identity.AttemptID); !correcting {
 			artifact, artifactErr := starter.artifacts.GetFeatureArtifact(
 				ctx, run.FeatureID, featureartifact.KindImplementationPlan,
@@ -5872,6 +5947,21 @@ func (starter *RemoteLeadStarter) publishSubmittedPlan(
 	if err != nil {
 		return err
 	}
+	if _, err := starter.recordPlanPublication(ctx, run, storedFeature, plan); err != nil {
+		return err
+	}
+	return starter.waitRun(ctx, runID, planningPlanPublishedReason, execution.RunWaitKindPhaseCheckpoint)
+}
+
+// recordPlanPublication publishes the run's plan to the draft pull request,
+// creating the feature branch and pull request for the first plan.
+func (starter *RemoteLeadStarter) recordPlanPublication(
+	ctx context.Context,
+	run execution.Run,
+	storedFeature feature.Feature,
+	plan execution.Event,
+) (workspace.Workspace, error) {
+	var err error
 	var prepared workspace.Workspace
 	if run.PlanVersion == 1 {
 		prepared, _, err = starter.workspaces.PublishPlan(
@@ -5880,7 +5970,7 @@ func (starter *RemoteLeadStarter) publishSubmittedPlan(
 	} else {
 		revision, revisionErr := starter.executions.GetPlanRevision(ctx, run.ID, run.PlanVersion)
 		if revisionErr != nil {
-			return revisionErr
+			return workspace.Workspace{}, revisionErr
 		}
 		prepared, _, err = starter.workspaces.PublishRevisedPlan(
 			ctx, storedFeature.ProjectID, run.FeatureID, plan.ID, plan.Text,
@@ -5888,22 +5978,17 @@ func (starter *RemoteLeadStarter) publishSubmittedPlan(
 		)
 	}
 	if err != nil {
-		return err
+		return workspace.Workspace{}, err
+	}
+	activity := "The agreed implementation plan was published to Forgejo pull request #%d."
+	if run.Steps.SkipPlan {
+		activity = "Forgejo pull request #%d was opened for this work order, without a documented plan."
 	}
 	_, err = starter.executions.RecordSessionEventWithID(
 		ctx, planPublicationEventID(plan), plan.SessionID,
-		worker.Event{
-			Type: worker.EventActivity,
-			Text: fmt.Sprintf(
-				"The agreed implementation plan was published to Forgejo pull request #%d.",
-				prepared.PullRequestNumber,
-			),
-		},
+		worker.Event{Type: worker.EventActivity, Text: fmt.Sprintf(activity, prepared.PullRequestNumber)},
 	)
-	if err != nil {
-		return err
-	}
-	return starter.waitRun(ctx, runID, planningPlanPublishedReason, execution.RunWaitKindPhaseCheckpoint)
+	return prepared, err
 }
 
 func planPublicationEventID(plan execution.Event) string {

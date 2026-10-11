@@ -76,12 +76,15 @@ throughout:
      policy. Branch protection is unchanged, nothing bypasses it, and the PR
      history shows honestly how the merge was approved.
 5. **Without a documented plan:**
-   - Start goes Ready → implementing.
-   - The feature branch and draft PR are created at Start. The PR body holds
-     the accepted goal and no plan section.
-   - The lead gets implementation instructions without the plan checklist.
-   - Verification checks the PR body and the published commit without a plan
-     section or plan checklist.
+   - At Start the coordinator records "No documented plan" as the run's plan
+     and publishes it. This creates the feature branch and draft PR, and the
+     PR body states that the work order had no documented plan. Every
+     verifier that checks the published plan keeps working unchanged.
+   - The work order moves Ready → planning → implementing within Start, and
+     the lead's first turn implements the accepted goal, without the plan
+     checklist.
+   - Verification of the published commit skips the plan checklist.
+   - Replanning is not offered: such a work order goes Back to Ready.
 6. **The UI follows the run's steps.**
    - The phase stepper hides Plan and Review when the run skipped them.
    - The intervention bar offers only the lead when there is no reviewer.
