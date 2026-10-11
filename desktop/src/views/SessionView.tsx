@@ -12,6 +12,11 @@ import type { Feature, Run } from "../api/types";
 
 const GREETING = "Hey, what can I help you with?";
 
+// What belongs in the conversation: the session's plan record is bookkeeping,
+// attempt_terminal repeats the agent's reply, and input_required shows in the
+// status line.
+const SHOWN = new Set(["message", "activity", "user_message"]);
+
 // A session (ADR-019): one conversation with the lead agent on the session's
 // own branch. The user directs every turn, previews the work, and finishes it
 // through the merge gate, or discards it.
@@ -46,8 +51,7 @@ export function SessionView({
   const sessionRefs = useMemo(() => (lead ? [{ id: lead.id, role: "lead" }] : []), [lead]);
   const { durable, previews } = useSessionEvents(sessionRefs, !!lead);
 
-  // The conversation: the greeting, then messages and tool activity. The
-  // session's plan record is bookkeeping, not part of the conversation.
+  // The conversation: the greeting, then messages and tool activity.
   const entries = useMemo<TranscriptEntry[]>(() => {
     const greeting: TranscriptEntry = {
       key: "greeting",
@@ -56,7 +60,7 @@ export function SessionView({
       text: GREETING,
       at: run?.started_at ?? feature.created_at,
     };
-    return [greeting, ...durable.filter((e) => e.type !== "plan_submitted"), ...previews];
+    return [greeting, ...durable.filter((e) => SHOWN.has(e.type)), ...previews];
   }, [durable, previews, run?.started_at, feature.created_at]);
 
   useEffect(() => {

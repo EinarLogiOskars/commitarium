@@ -701,6 +701,8 @@ export interface AttentionItem {
   run_id?: string;
   environment_request_id?: string;
   validation_job_id?: string;
+  // A pending validation job the desktop runs by itself (auto-merge runs).
+  auto_run?: boolean;
   title: string;
   detail: string;
   updated_at: string;

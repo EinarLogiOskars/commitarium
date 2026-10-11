@@ -19,20 +19,23 @@ import (
 // inbox. It deliberately carries navigation identifiers instead of URLs so the
 // desktop app remains responsible for its own routing.
 type attentionItem struct {
-	ID                   string    `json:"id"`
-	Kind                 string    `json:"kind"`
-	Severity             string    `json:"severity"`
-	Actionable           bool      `json:"actionable"`
-	ProjectID            string    `json:"project_id"`
-	ProjectName          string    `json:"project_name"`
-	FeatureID            string    `json:"feature_id"`
-	FeatureTitle         string    `json:"feature_title"`
-	RunID                string    `json:"run_id,omitempty"`
-	EnvironmentRequestID string    `json:"environment_request_id,omitempty"`
-	ValidationJobID      string    `json:"validation_job_id,omitempty"`
-	Title                string    `json:"title"`
-	Detail               string    `json:"detail"`
-	UpdatedAt            time.Time `json:"updated_at"`
+	ID                   string `json:"id"`
+	Kind                 string `json:"kind"`
+	Severity             string `json:"severity"`
+	Actionable           bool   `json:"actionable"`
+	ProjectID            string `json:"project_id"`
+	ProjectName          string `json:"project_name"`
+	FeatureID            string `json:"feature_id"`
+	FeatureTitle         string `json:"feature_title"`
+	RunID                string `json:"run_id,omitempty"`
+	EnvironmentRequestID string `json:"environment_request_id,omitempty"`
+	ValidationJobID      string `json:"validation_job_id,omitempty"`
+	// AutoRun asks the desktop to run a pending validation job itself: the
+	// run merges automatically once its gates pass.
+	AutoRun   bool      `json:"auto_run,omitempty"`
+	Title     string    `json:"title"`
+	Detail    string    `json:"detail"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 type attentionResponse struct {
@@ -197,6 +200,8 @@ func (api *API) attentionForFeature(
 			return nil, nil, err
 		}
 		if item, ok := validationAttention(base, jobs); ok {
+			item.AutoRun = item.Kind == "validation_pending" &&
+				currentRun.MergePolicy == project.MergePolicyAutoAfterGates
 			return []attentionItem{item}, nil, nil
 		}
 	}
