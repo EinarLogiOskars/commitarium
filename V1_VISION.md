@@ -169,7 +169,7 @@ is where paused sessions are visible. See
 | --- | --- |
 | Work order + reviewer | Done. This is today's product. |
 | Planning view | In progress: Draft and Ready states, handoff briefs, Start with a freshness check ([READY_WORK_ORDERS_PLAN.md](READY_WORK_ORDERS_PLAN.md)). |
-| Escalation | Done: wait reasons, the attention inbox, native notifications, the intervene bar. |
+| Escalation | Done: wait reasons, the attention inbox, native notifications, the intervene bar. Failures pause instead of ending work orders ([RECOVERABLE_RUNS_PLAN.md](RECOVERABLE_RUNS_PLAN.md), ADR-017): retry, reopen, back to Ready, and resume after an expired login. |
 | Isolation | Done. Every new kind of work reuses it. |
 | Agents | Done, awaiting user testing ([AGENTS_PLAN.md](AGENTS_PLAN.md), ADR-016): one worker per provider account, serving both roles, chosen per work order. |
 | Task | Missing. No single-agent runner outside the work-order orchestrator. |

@@ -1,5 +1,8 @@
 # Recoverable Runs: Implementation Plan
 
+**Status:** implemented on `feat/recoverable-runs` (R1–R7); awaiting user
+testing.
+
 ## Goal
 
 Only the user or a merge ends a work order. Any agent or system failure —

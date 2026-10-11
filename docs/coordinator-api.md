@@ -68,6 +68,9 @@ this API beyond the host loopback interface is unsupported.
 | `POST` | `/api/v1/runs/{runID}/pause` | Stop automatic handoffs at the next safe provider-turn boundary |
 | `POST` | `/api/v1/runs/{runID}/resume` | Remove a run pause and dispatch its retained automatic checkpoint when applicable |
 | `POST` | `/api/v1/runs/{runID}/recover` | Reconcile a recovery blocker, then optionally continue or replace its fenced conversation |
+| `POST` | `/api/v1/runs/{runID}/reopen` | Reopen a failed run as a recovery blocker at its last turn |
+| `POST` | `/api/v1/agents/{agentID}/logged-in` | Continue the runs that paused on the agent's expired login |
+| `POST` | `/api/v1/projects/{projectID}/features/{featureID}/return-to-ready` | Stop a started work order and return it to Ready, keeping its brief |
 | `POST` | `/api/v1/runs/{runID}/interventions` | Queue a user message for the lead or reviewer and stop at the next safe boundary |
 | `GET` | `/api/v1/runs/{runID}/planning/messages` | Retrieve the ordered lead/reviewer planning messages |
 | `GET` | `/api/v1/runs/{runID}/planning/messages/stream` | Replay and stream ordered planning messages with SSE |
@@ -1249,6 +1252,25 @@ second delete with a new key returns `404 project_not_found`. Contradictory or
 cross-project artifact identities return `409 project_deletion_conflict`
 without touching the suspect resource.
 
+## Returning a work order to Ready
+
+A started work order that has not merged can start over from its handoff
+brief (ADR-017):
+
+```http
+POST /api/v1/projects/prj_example/features/fea_example/return-to-ready
+Idempotency-Key: back-to-ready-1
+```
+
+The coordinator stops the work order's runs, closes its pull request, deletes
+its feature branch and managed checkouts, forgets its workspace and goal
+acceptance, and moves it to `ready`. The handoff brief is kept, and the runs
+and their conversations stay in its history. The response is the updated
+feature. The next Start creates a fresh run from the brief on a fresh branch
+at the default branch's current head, with the agents and models chosen then.
+Repeating the request with the same `Idempotency-Key` finishes an interrupted
+attempt. A work order that has not started returns `409 feature_not_started`.
+
 ## Deleting a work order
 
 Delete a work order and its isolated internal artifacts with an empty request:
@@ -1584,6 +1606,36 @@ Every run also exposes `plan_version`. It begins at `1` for the original
 lead/reviewer agreement. A user-approved scope-changing intervention advances
 the same run to the next version; earlier planning messages remain available
 for history but are no longer used as the current implementation plan.
+
+### Failed turns pause the run
+
+Only the user (stop, delete, back to Ready) or a merge ends a work order
+(ADR-017). When a provider turn fails — a provider error, a rate limit, an
+expired login — the provider's error is recorded on the session, the session
+stays active, and the run waits with `wait_kind: "blocker"` and a reason
+naming the failure. `continue` below retries the turn in a fenced successor
+attempt in the same provider conversation; a turn that never got a provider
+conversation starts one from the durable briefing. A turn the user force
+stopped still stops.
+
+When the failure was an expired provider login (the worker's
+`provider_login_required`), the run response includes the agent and role it
+waits for:
+
+```json
+{"status": "waiting_for_user", "wait_kind": "blocker", "login_required": {"agent": "claude", "role": "reviewer"}}
+```
+
+Once the agent is connected again, the desktop calls
+`POST /api/v1/agents/{agentID}/logged-in`; the coordinator continues every
+run waiting on that agent as if the user chose `continue`, and responds with
+`{"resumed": 1}`. The user can also continue such a run directly.
+
+A run that failed before this behavior existed still has its conversations,
+branch, and plan. `POST /api/v1/runs/{runID}/reopen` turns a `failed` run of
+an unfinished work order back into a blocker at its last turn, reactivating
+the session that failed; reopening an already reopened run returns it
+unchanged. Other runs return `409 run_not_reopenable`.
 
 ### Recovering a blocked run
 
