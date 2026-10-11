@@ -2955,3 +2955,109 @@ func TestStartRequiresAReadyWorkOrder(t *testing.T) {
 		t.Fatalf("a draft start created a run: %v", err)
 	}
 }
+
+// copyScriptedAttempt scripts the same attempt under another identity.
+func copyScriptedAttempt(
+	stub *conversationalRemoteLeadWorker,
+	from workerhttp.AttemptReference,
+	to workerhttp.AttemptReference,
+) {
+	stub.mu.Lock()
+	defer stub.mu.Unlock()
+	initial, terminal := stub.initial[from], stub.terminal[from]
+	initial.AttemptReference, terminal.AttemptReference = to, to
+	events := make([]workerhttp.Event, 0, len(stub.events[from]))
+	for _, event := range stub.events[from] {
+		event.AttemptReference = to
+		events = append(events, event)
+	}
+	stub.initial[to], stub.terminal[to], stub.events[to] = initial, terminal, events
+}
+
+func TestRemoteFailedTurnPausesAndContinueRetriesItInTheSameConversation(t *testing.T) {
+	db, executions, storedProject, storedFeature := newRemoteLeadExecution(t)
+	runID := "run_remote_failed_turn"
+	stub := newConversationalRemoteLeadWorker(runID, storedProject.ID, storedFeature.ID)
+	addCompletedPlanningAttempt(stub, runID, storedProject.ID, storedFeature.ID)
+	leadID := remoteLeadSessionID(runID)
+	failedRef := workerhttp.AttemptReference{SessionID: leadID, AttemptID: planningAttemptID(leadID)}
+	successorID, err := recoverySuccessorAttemptID(leadID, failedRef.AttemptID)
+	if err != nil {
+		t.Fatalf("successor identity: %v", err)
+	}
+	// The successor completes the planning turn the first attempt could not.
+	copyScriptedAttempt(stub, failedRef, workerhttp.AttemptReference{SessionID: leadID, AttemptID: successorID})
+	stub.mu.Lock()
+	failed := stub.terminal[failedRef]
+	failed.Result = &workerhttp.TerminalResult{
+		Outcome: workerhttp.OutcomeFailed,
+		Summary: "Failed to authenticate: OAuth session expired",
+		Error: &workerhttp.ProtocolError{
+			Code: workerhttp.ErrorInternal, Message: "Failed to authenticate: OAuth session expired",
+		},
+	}
+	stub.terminal[failedRef] = failed
+	stub.mu.Unlock()
+
+	workflowService := workflow.NewService(database.NewWorkflowStore(db))
+	checkoutAt := time.Date(2026, time.September, 9, 22, 0, 0, 0, time.UTC)
+	starter, err := NewRemoteLeadStarter(RemoteLeadConfig{
+		Executions: executions, Features: database.NewFeatureStore(db), Goals: workflowService,
+		Planning: workflowService, Briefs: workflowService, Worker: stub,
+		Pump:     &conversationalRemoteLeadPump{executions: executions, worker: stub},
+		Lifetime: t.Context(),
+		Workspaces: &remoteLeadWorkspaceStub{prepared: workspace.Workspace{
+			ID: "wsp_managed_feature", ProjectID: storedProject.ID, FeatureID: storedFeature.ID,
+			RepositoryOwner: "commitarium", RepositoryName: "planning-test",
+			BaseBranch: "main", Branch: "commitarium/" + storedFeature.ID,
+			BaseCommitID: "0123456789abcdef0123456789abcdef01234567",
+			Status:       workspace.StatusBranchReady, CheckoutRelativePath: "wsp_managed_feature",
+			CheckoutCreatedAt: &checkoutAt,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("create remote starter: %v", err)
+	}
+	readyRemoteLeadFeature(t, workflowService, storedFeature.ID)
+	if _, _, err := starter.Start(
+		t.Context(), runID, storedProject.ID, storedFeature.ID, storedFeature.Title,
+		storedProject.DialogueLimits, storedProject.AgentProviders, storedProject.MergePolicy,
+	); err != nil {
+		t.Fatalf("start lead: %v", err)
+	}
+	waitForRemoteLeadStatus(t, executions, runID, execution.RunStatusWaitingForUser)
+	paused, err := executions.GetRun(t.Context(), runID)
+	if err != nil || paused.WaitKind != execution.RunWaitKindBlocker ||
+		!strings.Contains(paused.Reason, "OAuth session expired") {
+		t.Fatalf("failed turn did not pause the run as a blocker: %+v err=%v", paused, err)
+	}
+	lead, err := executions.GetSession(t.Context(), leadID)
+	if err != nil || lead.Status.IsTerminal() {
+		t.Fatalf("failed turn ended its session: %+v err=%v", lead, err)
+	}
+
+	if _, admitted, err := starter.RecoverBlockerWithDirective(
+		t.Context(), runID, "continue-after-failure", RecoveryDirective{Action: RecoveryActionContinue},
+	); err != nil || !admitted {
+		t.Fatalf("continue failed turn: admitted=%t err=%v", admitted, err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		current, err := executions.GetRun(t.Context(), runID)
+		if err == nil && current.Status == execution.RunStatusWaitingForUser &&
+			current.WaitKind != execution.RunWaitKindBlocker {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("retried turn did not complete: %+v err=%v", current, err)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	stub.mu.Lock()
+	defer stub.mu.Unlock()
+	retry := stub.putRequests[len(stub.putRequests)-1]
+	if retry.Mode != workerhttp.AttemptModeResume || retry.ProviderSessionID != "codex-thread-test" ||
+		!strings.Contains(retry.Instructions, "OAuth session expired") {
+		t.Fatalf("retry did not resume the same conversation with the failure context: %+v", retry)
+	}
+}
