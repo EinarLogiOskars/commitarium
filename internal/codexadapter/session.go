@@ -404,6 +404,9 @@ func (session *session) translate(
 		if err := decodeParams(message, &params); err != nil {
 			return nil, false, worker.Result{}, err
 		}
+		if session.otherThread(params.Thread.ID) {
+			return nil, false, worker.Result{}, nil
+		}
 		if strings.TrimSpace(params.Thread.ID) == "" || params.Thread.ID != session.threadID {
 			return nil, false, worker.Result{}, session.scopeError(params.Thread.ID, "")
 		}
@@ -416,6 +419,9 @@ func (session *session) translate(
 		turnID := params.TurnID
 		if turnID == "" {
 			turnID = params.Turn.ID
+		}
+		if session.otherThread(params.ThreadID) {
+			return nil, false, worker.Result{}, nil
 		}
 		if params.ThreadID != session.threadID || turnID != session.currentTurnID() {
 			return nil, false, worker.Result{}, session.scopeError(params.ThreadID, turnID)
@@ -461,6 +467,9 @@ func (session *session) translate(
 		var params agentMessageDelta
 		if err := decodeParams(message, &params); err != nil {
 			return nil, false, worker.Result{}, err
+		}
+		if session.otherThread(params.ThreadID) {
+			return nil, false, worker.Result{}, nil
 		}
 		if params.ThreadID != session.threadID || params.TurnID != session.currentTurnID() {
 			return nil, false, worker.Result{}, session.scopeError(params.ThreadID, params.TurnID)
@@ -824,6 +833,13 @@ func (session *session) currentTurnID() string {
 	session.mu.Lock()
 	defer session.mu.Unlock()
 	return session.turnID
+}
+
+// otherThread reports a notification for another thread on the same
+// app-server connection, such as a helper agent Codex started itself. Its work
+// reaches this turn through the thread's own items, so it is not translated.
+func (session *session) otherThread(threadID string) bool {
+	return strings.TrimSpace(threadID) != "" && session.threadID != "" && threadID != session.threadID
 }
 
 func (session *session) scopeError(threadID string, turnID string) error {

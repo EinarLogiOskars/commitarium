@@ -1144,3 +1144,26 @@ func TestTurnUsageExcludesEarlierTurnsAndRepeatedUpdates(t *testing.T) {
 		t.Fatalf("turn usage = %+v, want %+v", usage, want)
 	}
 }
+
+func TestNotificationsForAnotherThreadAreIgnored(t *testing.T) {
+	session := newSession(nil, nil, "thr_main", t.TempDir(), time.Second, 1, "")
+	session.turnID = "turn_main"
+	translate := func(method, params string) ([]worker.Event, error) {
+		events, _, _, err := session.translate(protocolMessage{Method: method, Params: json.RawMessage(params)})
+		return events, err
+	}
+	for _, message := range []struct{ method, params string }{
+		{"thread/started", `{"thread":{"id":"thr_helper"}}`},
+		{"turn/started", `{"threadId":"thr_helper","turn":{"id":"turn_helper","status":"inProgress"}}`},
+		{"item/started", `{"threadId":"thr_helper","turnId":"turn_helper","item":{"id":"i1","type":"agentMessage"}}`},
+		{"item/agentMessage/delta", `{"threadId":"thr_helper","turnId":"turn_helper","itemId":"i1","delta":"hi"}`},
+		{"turn/completed", `{"threadId":"thr_helper","turn":{"id":"turn_helper","status":"completed"}}`},
+	} {
+		if events, err := translate(message.method, message.params); err != nil || len(events) != 0 {
+			t.Fatalf("%s from a helper thread = %v, %v", message.method, events, err)
+		}
+	}
+	if _, err := translate("turn/started", `{"threadId":"thr_main","turn":{"id":"turn_old","status":"inProgress"}}`); !errors.Is(err, ErrProtocol) {
+		t.Fatalf("another turn on our own thread was accepted: %v", err)
+	}
+}
