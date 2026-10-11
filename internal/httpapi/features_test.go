@@ -633,3 +633,20 @@ func (service *recordingFeatureService) ChooseStartSettings(
 	}
 	return chosen, nil
 }
+
+func TestCreateFeatureHandlerPassesTheKind(t *testing.T) {
+	service := &recordingFeatureService{createResult: feature.Feature{
+		ID: "fea_session", ProjectID: "prj_test", Title: "Untitled session 1",
+		State: feature.StateDraft, Kind: feature.KindSession,
+	}}
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/projects/prj_test/features",
+		strings.NewReader(`{"kind":"session"}`))
+	recorder := httptest.NewRecorder()
+	New(nil, service, nil, nil, nil, nil).ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusCreated || service.receivedOverrides.Kind != feature.KindSession {
+		t.Fatalf("status %d kind=%q: %s", recorder.Code, service.receivedOverrides.Kind, recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Body.String(), `"kind":"session"`) {
+		t.Fatalf("response does not carry the kind: %s", recorder.Body.String())
+	}
+}

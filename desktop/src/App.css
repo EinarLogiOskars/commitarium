@@ -2954,3 +2954,58 @@ button.danger:not(.ghost) {
   border-top: 1px solid var(--border);
   padding-top: 12px;
 }
+
+/* Sessions (ADR-019). */
+.rail__tabs {
+  display: flex;
+  gap: 2px;
+}
+.rail__tab {
+  background: transparent;
+  border: none;
+  padding: 2px 6px;
+  border-radius: 6px;
+  font: inherit;
+  color: var(--muted);
+  letter-spacing: inherit;
+  text-transform: inherit;
+  cursor: pointer;
+}
+.rail__tab:hover {
+  color: var(--text);
+}
+.rail__tab--on {
+  color: var(--text);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+.session__title h2 {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+.session__rename {
+  font-size: 12px;
+  font-weight: normal;
+}
+.session__kind {
+  margin: 2px 0 0;
+  font-size: 12px;
+}
+.session__blocked {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.session__body {
+  min-height: 360px;
+}
+.session__preview {
+  gap: 6px;
+}
+.session__preview-error {
+  white-space: pre-wrap;
+  max-height: 160px;
+  overflow: auto;
+  font-size: 12px;
+}

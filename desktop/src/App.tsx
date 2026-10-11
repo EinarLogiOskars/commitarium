@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { coordinatorReachable } from "./api/health";
 import { useAttention } from "./attention/useAttention";
+import { useAutoValidation } from "./attention/useAutoValidation";
 import { useNotifier } from "./attention/useNotifier";
 import { useDesktopSettings } from "./settings/useDesktopSettings";
 import { useBoot } from "./boot/useBoot";
@@ -43,6 +44,8 @@ function App() {
   // Only poll from inside the workspace: the launcher has nowhere to show it.
   const attention = useAttention(entered && reachable);
   const refreshAttention = attention.refresh;
+  // Auto-merge work orders run their validation without waiting for a click.
+  useAutoValidation(attention.items, refreshAttention);
   // Signed desktop updates: check once the stack is usable; the install flow
   // uses the live `running` count to know when a restart is safe.
   const update = useDesktopUpdate(entered && reachable, attention.running.length);

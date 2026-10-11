@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -12,6 +13,13 @@ import (
 )
 
 var ErrTitleRequired = errors.New("feature title is required")
+
+// ErrInvalidKind rejects a kind of work other than a work order or a session.
+var ErrInvalidKind = errors.New("kind must be work_order or session")
+
+// untitledSessionPrefix names a session until something gives it a title:
+// "Untitled session 1", "Untitled session 2", and so on within a project.
+const untitledSessionPrefix = "Untitled session "
 
 type ProjectFinder interface {
 	GetByID(ctx context.Context, id string) (project.Project, error)
@@ -44,9 +52,26 @@ func (s *Service) Create(
 	description string,
 	overrides SettingsOverrides,
 ) (Feature, error) {
+	kind := overrides.Kind
+	if kind == "" {
+		kind = KindWorkOrder
+	}
+	if !kind.IsValid() {
+		return Feature{}, ErrInvalidKind
+	}
+	if strings.TrimSpace(title) == "" && kind == KindSession {
+		untitled, err := s.untitledSessionTitle(ctx, projectID)
+		if err != nil {
+			return Feature{}, err
+		}
+		title = untitled
+	}
 	sanitizedTitle := strings.TrimSpace(title)
 	if sanitizedTitle == "" {
 		return Feature{}, ErrTitleRequired
+	}
+	if kind == KindSession {
+		overrides.Steps = &project.WorkSteps{SkipPlan: true, SkipReviewer: true}
 	}
 
 	storedProject, err := s.projects.GetByID(ctx, projectID)
@@ -85,6 +110,7 @@ func (s *Service) Create(
 		AutonomyPolicy:             settings.AutonomyPolicy,
 		IndependentAcceptanceTests: settings.IndependentAcceptanceTests,
 		Steps:                      settings.Steps,
+		Kind:                       kind,
 		CreatedAt:                  now,
 		UpdatedAt:                  now,
 	}
@@ -97,6 +123,24 @@ func (s *Service) Create(
 	}
 
 	return createdFeature, nil
+}
+
+// untitledSessionTitle numbers a new untitled session after the highest
+// untitled session in the project.
+func (s *Service) untitledSessionTitle(ctx context.Context, projectID string) (string, error) {
+	existing, err := s.store.ListByProjectID(ctx, projectID)
+	if err != nil {
+		return "", fmt.Errorf("list work orders to number a session: %w", err)
+	}
+	highest := 0
+	for _, stored := range existing {
+		number, err := strconv.Atoi(strings.TrimPrefix(stored.Title, untitledSessionPrefix))
+		if stored.Kind == KindSession && strings.HasPrefix(stored.Title, untitledSessionPrefix) &&
+			err == nil && number > highest {
+			highest = number
+		}
+	}
+	return untitledSessionPrefix + strconv.Itoa(highest+1), nil
 }
 
 func (s *Service) GetByID(
@@ -205,6 +249,30 @@ type SettingsStore interface {
 // ChooseStartSettings records the agents, models, and policies a Ready work
 // order starts with. Settings are chosen at Start, not while drafting; until
 // then the work order carries its project's defaults.
+// RenameStore renames work orders.
+type RenameStore interface {
+	Rename(ctx context.Context, id string, title string) error
+}
+
+// Rename changes a work order's title.
+func (s *Service) Rename(ctx context.Context, projectID string, featureID string, title string) (Feature, error) {
+	title = strings.TrimSpace(title)
+	if title == "" {
+		return Feature{}, ErrTitleRequired
+	}
+	if _, err := s.GetByID(ctx, projectID, featureID); err != nil {
+		return Feature{}, err
+	}
+	renamer, ok := s.store.(RenameStore)
+	if !ok {
+		return Feature{}, errors.New("work orders cannot be renamed")
+	}
+	if err := renamer.Rename(ctx, featureID, title); err != nil {
+		return Feature{}, err
+	}
+	return s.GetByID(ctx, projectID, featureID)
+}
+
 func (s *Service) ChooseStartSettings(
 	ctx context.Context,
 	projectID string,

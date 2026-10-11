@@ -280,6 +280,25 @@ func TestAdapterPublishesStructuredPlanningSubmission(t *testing.T) {
 	}
 }
 
+func TestAdapterReturnsASessionTitle(t *testing.T) {
+	adapter := testAdapter(t, "structured-session", "Open the session")
+	request := adapter.request("att_claude_session", "Open the session")
+	request.Role = worker.RoleLead
+	request.LaunchEnvironment.Role = worker.RoleLead
+	request.OutputContract = worker.OutputContractSessionOpening
+	session, err := adapter.Start(t.Context(), request)
+	if err != nil {
+		t.Fatalf("start session opening: %v", err)
+	}
+	events := collectEvents(session)
+	result, err := session.Wait(timeoutContext(t, 3*time.Second))
+	if err != nil || result.Disposition != worker.DispositionSucceeded ||
+		result.SessionTitle != "Fix the Icelandic copy" || result.Summary != "Sure. Which page first?" {
+		t.Fatalf("session opening result=%+v error=%v", result, err)
+	}
+	<-events
+}
+
 func TestAdapterReturnsStructuredImplementationReview(t *testing.T) {
 	adapter := testAdapter(t, "structured-review", "Review the exact implementation commit")
 	request := adapter.request("att_claude_review", "Review the exact implementation commit")
@@ -501,7 +520,7 @@ func TestClaudeCLIHelper(t *testing.T) {
 		os.Exit(83)
 	}
 	schemaPresent := slices.Contains(arguments, "--json-schema")
-	if (mode == "structured-plan" || mode == "structured-review" || mode == "structured-toolchain" || mode == "missing-structured-output") != schemaPresent {
+	if (mode == "structured-plan" || mode == "structured-review" || mode == "structured-toolchain" || mode == "structured-session" || mode == "missing-structured-output") != schemaPresent {
 		os.Exit(84)
 	}
 	if slices.Contains(arguments, "--include-partial-messages") {
@@ -614,6 +633,12 @@ func TestClaudeCLIHelper(t *testing.T) {
 				"action": "changes_requested", "summary": "The implementation misses the documented failure case.",
 				"commit_id": "0123456789abcdef0123456789abcdef01234567", "pull_request_number": 7, "review_id": 11,
 			},
+		})
+	case "structured-session":
+		helperWrite(writer, map[string]any{
+			"type": "result", "subtype": "success", "session_id": sessionID,
+			"is_error":          false,
+			"structured_output": map[string]any{"title": "Fix the Icelandic copy", "message": "Sure. Which page first?"},
 		})
 	case "structured-toolchain":
 		helperWrite(writer, map[string]any{

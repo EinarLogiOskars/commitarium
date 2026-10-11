@@ -10,6 +10,7 @@ import {
 import { getRun } from "../api/runs";
 import { ApiError } from "../api/client";
 import { ClarifyView } from "./ClarifyView";
+import { SessionView } from "./SessionView";
 import { PlanningView } from "./PlanningView";
 import { ImplementationView } from "./ImplementationView";
 import { ReviewView } from "./ReviewView";
@@ -27,6 +28,7 @@ import type {
   TokenUsage,
   WaitKind,
   WorkflowEvent,
+  WorkKind,
 } from "../api/types";
 
 const POLL_MS = 2500;
@@ -42,6 +44,7 @@ export function FeatureView({
   onChanged,
   onDeleted,
   onOpenValidation,
+  onKind,
 }: {
   projectId: string;
   featureId: string;
@@ -49,6 +52,8 @@ export function FeatureView({
   onBack?: () => void;
   onChanged?: () => void;
   onDeleted?: () => void;
+  /** Reports whether this is a work order or a session, once loaded. */
+  onKind?: (kind: WorkKind) => void;
   /** Opens project settings where validation commands are configured. */
   onOpenValidation?: () => void;
 }) {
@@ -72,6 +77,7 @@ export function FeatureView({
     try {
       const f = await getFeature(projectId, featureId);
       setFeature(f);
+      onKind?.(f.kind ?? "work_order");
       const runs = await listFeatureRuns(projectId, featureId);
       if (runs.length > 0) {
         // The list entry may omit pause/wait detail; fetch the full run.
@@ -97,7 +103,7 @@ export function FeatureView({
     } catch (e) {
       setError(describe(e));
     }
-  }, [projectId, featureId, onChanged]);
+  }, [projectId, featureId, onChanged, onKind]);
 
   useEffect(() => {
     setFeature(null);
@@ -113,6 +119,21 @@ export function FeatureView({
 
   if (error && !feature) return <div className="banner banner--error">{error}</div>;
   if (!feature) return <p className="muted">Loading…</p>;
+  if (feature.kind === "session") {
+    return (
+      <SessionView
+        projectId={projectId}
+        feature={feature}
+        run={run}
+        onChanged={() => {
+          void load();
+          onChanged?.();
+        }}
+        onDeleted={onDeleted}
+        onOpenValidation={onOpenValidation}
+      />
+    );
+  }
 
   const current = currentPhaseIndex(feature);
   const viewed = pinnedIndex ?? current;

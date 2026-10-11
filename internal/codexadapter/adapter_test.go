@@ -284,6 +284,30 @@ func TestAdapterReturnsStructuredImplementationBlocker(t *testing.T) {
 	}
 }
 
+func TestAdapterReturnsASessionTitle(t *testing.T) {
+	adapter := testAdapter(t, "structured-session", "Open the session")
+	request := adapter.request("att_codex_session", "Open the session")
+	request.Role = worker.RoleLead
+	request.LaunchEnvironment.Role = worker.RoleLead
+	request.OutputContract = worker.OutputContractSessionOpening
+	session, err := adapter.Start(t.Context(), request)
+	if err != nil {
+		t.Fatalf("start session opening: %v", err)
+	}
+	events := collectEvents(session)
+	result, err := session.Wait(timeoutContext(t, 3*time.Second))
+	if err != nil || result.Disposition != worker.DispositionSucceeded ||
+		result.SessionTitle != "Fix the Icelandic copy" || result.Summary != "Sure. Which page first?" {
+		t.Fatalf("session opening result=%+v error=%v", result, err)
+	}
+	if observed := <-events; !equalEvents(observed, []worker.Event{
+		{Type: worker.EventActivity, Text: "Codex started working."},
+		{Type: worker.EventMessage, Text: "Sure. Which page first?", StreamID: "item_message"},
+	}) {
+		t.Fatalf("session opening events = %+v", observed)
+	}
+}
+
 func TestAdapterReturnsStructuredImplementationReview(t *testing.T) {
 	adapter := testAdapter(t, "structured-review", "Review the exact implementation commit")
 	request := adapter.request("att_codex_review", "Review the exact implementation commit")
@@ -807,6 +831,16 @@ func TestCodexAppServerHelper(t *testing.T) {
 			"item": map[string]any{
 				"id": "item_message", "type": "agentMessage",
 				"text": `{"action":"changes_requested","summary":"The implementation misses the documented failure case.","commit_id":"0123456789abcdef0123456789abcdef01234567","pull_request_number":7,"review_id":11}`,
+			},
+		})
+		helpWriteTurnCompleted(writer, "completed")
+		helperWaitForever()
+	case "structured-session":
+		helpNotify(writer, "item/completed", map[string]any{
+			"threadId": "thr_test", "turnId": "turn_test",
+			"item": map[string]any{
+				"id": "item_message", "type": "agentMessage",
+				"text": `{"title":"Fix the Icelandic copy","message":"Sure. Which page first?"}`,
 			},
 		})
 		helpWriteTurnCompleted(writer, "completed")

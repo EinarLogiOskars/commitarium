@@ -538,9 +538,13 @@ func (starter *RemoteLeadStarter) startWithoutPlan(
 		starter.failAdmission(ctx, run, sessionID, err)
 		return execution.Run{}, false, err
 	}
+	planText := noDocumentedPlan
+	if storedFeature.Kind == feature.KindSession {
+		planText = sessionPlanRecord
+	}
 	plan, err := starter.executions.RecordSessionEventWithID(
 		ctx, run.ID+":no-documented-plan", sessionID,
-		worker.Event{Type: worker.EventPlanSubmitted, Text: noDocumentedPlan},
+		worker.Event{Type: worker.EventPlanSubmitted, Text: planText},
 	)
 	if err != nil {
 		return fail(fmt.Errorf("record the work order's plan: %w", err))
@@ -557,6 +561,13 @@ func (starter *RemoteLeadStarter) startWithoutPlan(
 		workflow.Actor{Kind: workflow.ActorKindCoordinator, ID: coordinatorActorID}, run.ID+":start-implementing",
 	); err != nil {
 		return fail(fmt.Errorf("start implementing: %w", err))
+	}
+	if storedFeature.Kind == feature.KindSession {
+		opened, created, err := starter.openSession(ctx, run, sessionID)
+		if err != nil {
+			return fail(fmt.Errorf("open the session: %w", err))
+		}
+		return opened, created, nil
 	}
 	lead, err := starter.executions.GetSession(ctx, sessionID)
 	if err != nil {
@@ -784,7 +795,8 @@ func (starter *RemoteLeadStarter) recoverWithDirective(
 		acceptanceVersion, _, authoring := workflowAttemptVersionAndTurn(
 			session.ID, "acceptance", checkpoint.AttemptID,
 		)
-		validLead := isLead && implementing && attemptVersion == run.PlanVersion
+		_, sessionTurn := sessionTurnNumber(session.ID, checkpoint.AttemptID)
+		validLead := isLead && ((implementing && attemptVersion == run.PlanVersion) || sessionTurn)
 		validReviewer := run.IndependentAcceptanceTests && isReviewer && authoring && acceptanceVersion == run.PlanVersion
 		if !validLead && !validReviewer {
 			return fmt.Errorf("%w: implementing feature has an unexpected active attempt", ErrInvalidRunRequest)
@@ -843,6 +855,9 @@ func (starter *RemoteLeadStarter) recoverWithDirective(
 		submitPlanAlone(&request)
 	}
 	if isLead && !isIntervention {
+		if turn, ok := sessionTurnNumber(session.ID, checkpoint.AttemptID); ok && turn == 1 {
+			request.request.OutputContract = workerhttp.OutputContractSessionOpening
+		}
 		if _, implementing := implementationTurnNumber(session.ID, checkpoint.AttemptID); implementing {
 			request.request.OutputContract = workerhttp.OutputContractImplementationLead
 		}
@@ -882,7 +897,9 @@ func (starter *RemoteLeadStarter) recoverWithDirective(
 		implementationTurn, implementing := implementationTurnNumber(session.ID, checkpoint.AttemptID)
 		matchesImplementationContinuation := storedFeature.State == feature.StateImplementing &&
 			implementing && implementationTurn > 1
-		if pending[0].Type != worker.CommandMessage || !matchesImplementationContinuation {
+		_, sessionTurn := sessionTurnNumber(session.ID, checkpoint.AttemptID)
+		matchesSessionTurn := storedFeature.State == feature.StateImplementing && sessionTurn
+		if pending[0].Type != worker.CommandMessage || (!matchesImplementationContinuation && !matchesSessionTurn) {
 			return fmt.Errorf("%w: pending reply does not match the current worker attempt", ErrInvalidRunRequest)
 		}
 		request.commandID = pending[0].ID
@@ -2364,6 +2381,9 @@ func waitKindForAttempt(session execution.Session, attemptID string) execution.R
 }
 
 func waitingReasonForAttempt(session execution.Session, attemptID string) string {
+	if _, ok := sessionTurnNumber(session.ID, attemptID); ok {
+		return sessionYourTurnReason
+	}
 	if _, _, approving := planApprovalVersionAndTurn(session.ID, attemptID); approving && session.Role == worker.RoleReviewer {
 		return planApprovalReason
 	}
@@ -3744,6 +3764,12 @@ func (starter *RemoteLeadStarter) reattach(request remoteLeadRequest) {
 	ctx := starter.lifetime
 	attempt, err := starter.worker.GetAttempt(ctx, request.identity.AttemptReference)
 	if err != nil {
+		// A session turn that never reached its worker is sent again with the
+		// same identity, so a worker that did receive it is not asked twice.
+		if rebuilt, ok := starter.rebuildSessionTurn(ctx, request); ok {
+			starter.launchAdmitted(rebuilt)
+			return
+		}
 		starter.requireReview(ctx, request, fmt.Errorf("inspect interrupted worker attempt: %w", err))
 		return
 	}
@@ -4011,7 +4037,7 @@ func recoverySuccessorAttemptID(sessionID, attemptID string) (string, error) {
 	if version, turn, ok := planningAttemptVersionAndTurn(sessionID, attemptID); ok {
 		return planningRecoveryAttemptID(sessionID, version, turn, 1), nil
 	}
-	for _, kind := range []string{"implementation", "acceptance", "review", "correction", "readiness", "approval"} {
+	for _, kind := range []string{"implementation", "acceptance", "review", "correction", "readiness", "approval", "session"} {
 		if version, turn, ok := workflowAttemptVersionAndTurn(sessionID, kind, attemptID); ok {
 			return workflowAttemptForVersion(sessionID, kind, version, turn+1), nil
 		}
@@ -4352,6 +4378,9 @@ func (starter *RemoteLeadStarter) finish(
 				starter.requireReview(ctx, request, err)
 			}
 			return
+		}
+		if attempt.Result.SessionTitle != "" {
+			starter.nameSession(ctx, request.runID, attempt.Result.SessionTitle)
 		}
 		var planningMessage execution.Event
 		if request.planningStage != planningStageNone && request.planningStage != planningStagePlanApproval {
@@ -5983,6 +6012,9 @@ func (starter *RemoteLeadStarter) recordPlanPublication(
 	activity := "The agreed implementation plan was published to Forgejo pull request #%d."
 	if run.Steps.SkipPlan {
 		activity = "Forgejo pull request #%d was opened for this work order, without a documented plan."
+	}
+	if storedFeature.Kind == feature.KindSession {
+		activity = "Forgejo pull request #%d was opened for this session."
 	}
 	_, err = starter.executions.RecordSessionEventWithID(
 		ctx, planPublicationEventID(plan), plan.SessionID,

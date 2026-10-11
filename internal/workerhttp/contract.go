@@ -137,6 +137,7 @@ const (
 	OutputContractWorkOrderBrief          OutputContract = "work_order_brief"
 	OutputContractIntervention            OutputContract = "intervention"
 	OutputContractToolchainSetup          OutputContract = "toolchain_setup"
+	OutputContractSessionOpening          OutputContract = "session_opening"
 )
 
 type AttemptState string
@@ -188,6 +189,7 @@ type TerminalResult struct {
 	AcceptanceTests    *featureartifact.AcceptanceTests    `json:"acceptance_tests,omitempty"`
 	EnvironmentRequest *EnvironmentRequest                 `json:"environment_request,omitempty"`
 	HandoffBrief       *featureartifact.HandoffBrief       `json:"handoff_brief,omitempty"`
+	SessionTitle       string                              `json:"session_title,omitempty"`
 	Usage              *TokenUsage                         `json:"usage,omitempty"`
 	Error              *ProtocolError                      `json:"error,omitempty"`
 }

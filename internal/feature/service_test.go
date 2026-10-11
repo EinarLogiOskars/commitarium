@@ -118,6 +118,7 @@ func TestServiceCreate(t *testing.T) {
 		AgentProviders: project.DefaultAgentProviders(),
 		MergePolicy:    project.DefaultMergePolicy(),
 		AutonomyPolicy: project.DefaultAutonomyPolicy(),
+		Kind:           KindWorkOrder,
 		CreatedAt:      fixedTime,
 		UpdatedAt:      fixedTime,
 	}
@@ -469,5 +470,33 @@ func TestStartSettingsStepsDropAcceptanceTestsWithoutAReviewer(t *testing.T) {
 	invalid := project.WorkSteps{SkipPlan: true}
 	if _, err := service.ChooseStartSettings(t.Context(), defaults.ID, created.ID, SettingsOverrides{Steps: &invalid}); !errors.Is(err, project.ErrInvalidWorkSteps) {
 		t.Fatalf("reviewer without a plan error = %v", err)
+	}
+}
+
+func TestServiceCreatesASessionWithoutPlanOrReviewer(t *testing.T) {
+	store := NewMemoryStore()
+	service := NewService(store, &recordingProjectFinder{result: project.Project{
+		ID: "prj_test", AgentProviders: project.DefaultAgentProviders(),
+		MergePolicy: project.DefaultMergePolicy(), AutonomyPolicy: project.DefaultAutonomyPolicy(),
+		IndependentAcceptanceTests: true,
+	}})
+	created, err := service.Create(t.Context(), "prj_test", "", "", SettingsOverrides{Kind: KindSession})
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	if created.Kind != KindSession || created.Title != "Untitled session 1" ||
+		created.Steps != (project.WorkSteps{SkipPlan: true, SkipReviewer: true}) ||
+		created.IndependentAcceptanceTests {
+		t.Fatalf("unexpected session: %+v", created)
+	}
+	second, err := service.Create(t.Context(), "prj_test", " ", "", SettingsOverrides{Kind: KindSession})
+	if err != nil || second.Title != "Untitled session 2" {
+		t.Fatalf("second untitled session = %q err=%v", second.Title, err)
+	}
+	if _, err := service.Create(t.Context(), "prj_test", "", "", SettingsOverrides{}); !errors.Is(err, ErrTitleRequired) {
+		t.Fatalf("a work order without a title: %v", err)
+	}
+	if _, err := service.Create(t.Context(), "prj_test", "x", "", SettingsOverrides{Kind: "chat"}); !errors.Is(err, ErrInvalidKind) {
+		t.Fatalf("an unknown kind: %v", err)
 	}
 }

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { getProject } from "../api/projects";
+import { createSession } from "../api/features";
 import { getProjectToolchain } from "../api/toolchains";
 import { ApiError } from "../api/client";
 import { FeatureView } from "./FeatureView";
@@ -13,7 +14,7 @@ import { PreviewRailItem } from "./PreviewRailItem";
 import { PreviewView } from "./PreviewView";
 import { usePreview } from "./usePreview";
 import { WORK } from "../vocab";
-import type { AttentionItem, Project, ProjectToolchain } from "../api/types";
+import type { AttentionItem, Project, ProjectToolchain, WorkKind } from "../api/types";
 
 type Mode = "overview" | "repository" | "stack" | "new" | "order" | "settings" | "preview";
 
@@ -40,6 +41,8 @@ export function ProjectWorkspace({
   const [mode, setMode] = useState<Mode>("overview");
   const [orderId, setOrderId] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
+  // The rail lists one kind of work at a time: work orders or sessions.
+  const [railKind, setRailKind] = useState<WorkKind>("work_order");
   const preview = usePreview(id);
   const [orderDraft, setOrderDraft] = useState<OrderDraft>();
   // Stable so it doesn't re-trigger FeatureView's load effect; refreshes the
@@ -97,6 +100,27 @@ export function ProjectWorkspace({
     setOrderId(null);
     setMode(needsStack ? "stack" : "new");
   };
+  // A session starts at once and opens on its greeting (ADR-019).
+  const [startingSession, setStartingSession] = useState(false);
+  const startSession = async () => {
+    if (needsStack) {
+      setOrderId(null);
+      setMode("stack");
+      return;
+    }
+    setStartingSession(true);
+    setError(null);
+    try {
+      const session = await createSession(id);
+      setReloadKey((k) => k + 1);
+      setRailKind("session");
+      openOrder(session.id);
+    } catch (e) {
+      setError(e instanceof ApiError ? `${e.message} (${e.code})` : String(e));
+    } finally {
+      setStartingSession(false);
+    }
+  };
 
   return (
     <>
@@ -135,16 +159,47 @@ export function ProjectWorkspace({
         )}
 
         <div className="rail__section-head">
-          <span>{WORK.Plural}</span>
-          <button
-            className="rail__new"
-            title={needsStack ? "Choose a stack first" : WORK.newAction}
-            onClick={startNewOrder}
-          >
-            + New
-          </button>
+          <span className="rail__tabs" role="tablist">
+            <button
+              role="tab"
+              aria-selected={railKind === "work_order"}
+              className={`rail__tab ${railKind === "work_order" ? "rail__tab--on" : ""}`}
+              onClick={() => setRailKind("work_order")}
+            >
+              {WORK.Plural}
+            </button>
+            {hasRepo && (
+              <button
+                role="tab"
+                aria-selected={railKind === "session"}
+                className={`rail__tab ${railKind === "session" ? "rail__tab--on" : ""}`}
+                onClick={() => setRailKind("session")}
+              >
+                Sessions
+              </button>
+            )}
+          </span>
+          {railKind === "session" ? (
+            <button
+              className="rail__new"
+              title={needsStack ? "Choose a stack first" : "Start a session with an agent"}
+              onClick={() => void startSession()}
+              disabled={startingSession}
+            >
+              {startingSession ? "Starting…" : "+ New"}
+            </button>
+          ) : (
+            <button
+              className="rail__new"
+              title={needsStack ? "Choose a stack first" : WORK.newAction}
+              onClick={startNewOrder}
+            >
+              + New
+            </button>
+          )}
         </div>
         <WorkOrderRail
+          kind={railKind}
           projectId={id}
           selectedId={mode === "order" ? orderId : null}
           reloadKey={reloadKey}
@@ -235,6 +290,7 @@ export function ProjectWorkspace({
               hasRepo={hasRepo}
               onOpenValidation={() => setMode("settings")}
               onChanged={bumpRail}
+              onKind={setRailKind}
               onDeleted={() => {
                 setMode("overview");
                 setOrderId(null);

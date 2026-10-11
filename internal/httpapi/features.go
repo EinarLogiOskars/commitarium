@@ -1,12 +1,14 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"log"
 	"net/http"
 	"time"
 
+	"github.com/EinarLogiOskars/commitarium/internal/execution"
 	"github.com/EinarLogiOskars/commitarium/internal/feature"
 	"github.com/EinarLogiOskars/commitarium/internal/project"
 	"github.com/EinarLogiOskars/commitarium/internal/toolchain"
@@ -21,6 +23,8 @@ type createFeatureRequest struct {
 	MergePolicy                *project.MergePolicy    `json:"merge_policy"`
 	DialogueLimits             *dialogueLimitsRequest  `json:"dialogue_limits"`
 	IndependentAcceptanceTests *bool                   `json:"independent_acceptance_tests"`
+	// Kind is "work_order" (the default) or "session" (ADR-019).
+	Kind feature.Kind `json:"kind"`
 }
 
 type featureResponse struct {
@@ -38,8 +42,11 @@ type featureResponse struct {
 	AutonomyPolicy             project.AutonomyPolicy `json:"autonomy_policy"`
 	IndependentAcceptanceTests bool                   `json:"independent_acceptance_tests"`
 	Steps                      workStepsResponse      `json:"steps"`
-	CreatedAt                  time.Time              `json:"created_at"`
-	UpdatedAt                  time.Time              `json:"updated_at"`
+	Kind                       feature.Kind           `json:"kind"`
+	// Session reports a session's agent activity in feature lists (ADR-019).
+	Session   *sessionActivityResponse `json:"session,omitempty"`
+	CreatedAt time.Time                `json:"created_at"`
+	UpdatedAt time.Time                `json:"updated_at"`
 }
 
 func (api *API) createFeatureHandler(
@@ -86,6 +93,7 @@ func (api *API) createFeatureHandler(
 	overrides.MergePolicy = request.MergePolicy
 	overrides.AutonomyPolicy = request.AutonomyPolicy
 	overrides.IndependentAcceptanceTests = request.IndependentAcceptanceTests
+	overrides.Kind = request.Kind
 	if api.toolchains != nil {
 		manifest, err := api.toolchains.Get(r.Context(), projectID)
 		if err != nil {
@@ -129,6 +137,8 @@ func (api *API) createFeatureHandler(
 	)
 	if err != nil {
 		switch {
+		case errors.Is(err, feature.ErrInvalidKind):
+			writeError(w, http.StatusBadRequest, "invalid_kind", "kind must be work_order or session")
 		case errors.Is(err, feature.ErrTitleRequired):
 			writeError(
 				w,
@@ -169,6 +179,16 @@ func (api *API) createFeatureHandler(
 		return
 	}
 
+	if createdFeature.Kind == feature.KindSession && api.starter != nil {
+		// Creating a session starts it (ADR-019): its branch and pull request
+		// open and it waits for the user's first message.
+		if _, ok := api.startFeature(w, r, createdFeature, "session-"+createdFeature.ID, nil); !ok {
+			return
+		}
+		if started, err := api.features.GetByID(r.Context(), projectID, createdFeature.ID); err == nil {
+			createdFeature = started
+		}
+	}
 	response := newFeatureResponse(createdFeature)
 	w.Header().Set(
 		"Location",
@@ -197,7 +217,11 @@ func (api *API) listFeaturesHandler(w http.ResponseWriter, r *http.Request) {
 
 	response := make([]featureResponse, 0, len(features))
 	for _, storedFeature := range features {
-		response = append(response, newFeatureResponse(storedFeature))
+		item := newFeatureResponse(storedFeature)
+		if storedFeature.Kind == feature.KindSession {
+			item.Session = api.sessionActivity(r.Context(), storedFeature.ID)
+		}
+		response = append(response, item)
 	}
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(response); err != nil {
@@ -283,7 +307,38 @@ func newFeatureResponse(storedFeature feature.Feature) featureResponse {
 		AutonomyPolicy:             autonomyPolicy,
 		IndependentAcceptanceTests: storedFeature.IndependentAcceptanceTests,
 		Steps:                      newWorkStepsResponse(storedFeature.Steps),
+		Kind:                       featureKind(storedFeature.Kind),
 		CreatedAt:                  storedFeature.CreatedAt,
 		UpdatedAt:                  storedFeature.UpdatedAt,
 	}
+}
+
+// featureKind reports a work order's kind; one without a stored kind is a work
+// order.
+func featureKind(kind feature.Kind) feature.Kind {
+	if kind == "" {
+		return feature.KindWorkOrder
+	}
+	return kind
+}
+
+// sessionActivityResponse is what a session's agent is doing: working on a
+// message, or waiting since its last reply.
+type sessionActivityResponse struct {
+	Working   bool      `json:"working"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// sessionActivity reads a session's newest run; nil when it has none or the
+// runs cannot be read, which lists show as idle.
+func (api *API) sessionActivity(ctx context.Context, featureID string) *sessionActivityResponse {
+	if api.execution == nil {
+		return nil
+	}
+	runs, err := api.execution.RunsForFeature(ctx, featureID)
+	if err != nil || len(runs) == 0 {
+		return nil
+	}
+	run := newestRun(runs)
+	return &sessionActivityResponse{Working: run.Status == execution.RunStatusRunning, UpdatedAt: run.UpdatedAt}
 }

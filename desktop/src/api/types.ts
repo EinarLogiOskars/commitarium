@@ -271,12 +271,22 @@ export interface Feature {
   autonomy_policy?: AutonomyPolicy;
   merge_policy?: MergePolicy;
   steps?: WorkSteps;
+  // "session" is an interactive session with one agent (ADR-019); absent on
+  // older coordinators, which only have work orders.
+  kind?: WorkKind;
+  // A session's agent activity, in feature lists only: working on a message,
+  // or idle since `updated_at`.
+  session?: { working: boolean; updated_at: string };
   created_at: string;
   updated_at: string;
 }
 
+export type WorkKind = "work_order" | "session";
+
 export interface CreateFeatureInput {
   title: string;
+  // "session" creates and starts a session (ADR-019); its title may be empty.
+  kind?: WorkKind;
   description?: string;
   // Optional per-order overrides. Each omitted field falls back to the project
   // default; the run snapshots the effective values. (Backend handling lands
@@ -691,6 +701,8 @@ export interface AttentionItem {
   run_id?: string;
   environment_request_id?: string;
   validation_job_id?: string;
+  // A pending validation job the desktop runs by itself (auto-merge runs).
+  auto_run?: boolean;
   title: string;
   detail: string;
   updated_at: string;

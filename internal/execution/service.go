@@ -721,6 +721,33 @@ func (s *Service) BeginWorkerTurn(
 	expectedFeatureState feature.State,
 	runReason string,
 ) (WorkerTurnAdmissionResult, bool, error) {
+	return s.beginWorkerTurn(ctx, requested, sessionID, previous, nextAttemptID, expectedFeatureState, runReason, false)
+}
+
+// BeginFirstWorkerTurn admits a session's first message (ADR-019): the lead
+// session waits without a provider conversation until the user writes.
+func (s *Service) BeginFirstWorkerTurn(
+	ctx context.Context,
+	requested worker.Command,
+	sessionID string,
+	attemptID string,
+	runReason string,
+) (WorkerTurnAdmissionResult, bool, error) {
+	return s.beginWorkerTurn(
+		ctx, requested, sessionID, WorkerAttemptCheckpoint{}, attemptID, feature.StateImplementing, runReason, true,
+	)
+}
+
+func (s *Service) beginWorkerTurn(
+	ctx context.Context,
+	requested worker.Command,
+	sessionID string,
+	previous WorkerAttemptCheckpoint,
+	nextAttemptID string,
+	expectedFeatureState feature.State,
+	runReason string,
+	firstTurn bool,
+) (WorkerTurnAdmissionResult, bool, error) {
 	now := s.now().UTC()
 	command := Command{
 		ID: requested.ID, SessionID: sessionID, Type: requested.Type,
@@ -741,6 +768,7 @@ func (s *Service) BeginWorkerTurn(
 		ExpectedFeatureState: expectedFeatureState,
 		RunReason:            runReason,
 		OccurredAt:           now,
+		FirstTurn:            firstTurn,
 	})
 	if err != nil {
 		return WorkerTurnAdmissionResult{}, false, fmt.Errorf(

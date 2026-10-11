@@ -60,7 +60,7 @@ func (accumulator *MessagePreviewAccumulator) Add(
 func PreviewProseField(contract OutputContract) string {
 	switch contract {
 	case OutputContractGoalClarification, OutputContractToolchainSetup, OutputContractPlanApproval,
-		OutputContractWorkOrderBrief:
+		OutputContractWorkOrderBrief, OutputContractSessionOpening:
 		return "message"
 	case OutputContractPlanningLead:
 		return "content"

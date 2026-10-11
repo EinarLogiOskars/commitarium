@@ -54,6 +54,11 @@ type CheckoutManager interface {
 	Promote(ctx context.Context, spec CheckoutPromotionSpec) error
 }
 
+// CheckoutInspector reports whether a checkout already contains a commit.
+type CheckoutInspector interface {
+	Contains(ctx context.Context, workspaceID string, commitID string) (bool, error)
+}
+
 type DisposableCheckoutManager interface {
 	CheckoutManager
 	Remove(ctx context.Context, workspaceID string) error
@@ -109,6 +114,36 @@ type RepositoryAccessManager interface {
 
 type ValidationResultPublisher interface {
 	EnsureValidationResult(context.Context, string, string, ValidationPublicationSpec) (bool, error)
+}
+
+// SessionCatchUp reports whether the default branch has moved past a
+// session's checkout (ADR-019), and its current head. The session's next turn
+// then merges it in first.
+func (service *Service) SessionCatchUp(
+	ctx context.Context,
+	projectID string,
+	featureID string,
+) (string, bool, error) {
+	stored, err := service.Get(ctx, projectID, featureID)
+	if err != nil {
+		return "", false, err
+	}
+	base, err := service.branches.GetBranch(ctx, stored.RepositoryOwner, stored.RepositoryName, stored.BaseBranch)
+	if err != nil {
+		return "", false, fmt.Errorf("read the default branch: %w", err)
+	}
+	if base.CommitID == stored.BaseCommitID {
+		return base.CommitID, false, nil
+	}
+	inspector, ok := service.checkouts.(CheckoutInspector)
+	if !ok {
+		return "", false, errors.New("checkouts cannot be inspected")
+	}
+	contained, err := inspector.Contains(ctx, stored.ID, base.CommitID)
+	if err != nil {
+		return "", false, err
+	}
+	return base.CommitID, !contained, nil
 }
 
 func (service *Service) PublishValidationResult(
@@ -177,6 +212,21 @@ func (service *Service) RecordMergeReady(
 		return Workspace{}, fmt.Errorf("verify merge-ready checkout: %w", err)
 	}
 	return service.store.MarkMergeReady(ctx, featureID, commitID, service.now().UTC())
+}
+
+// ClearMergeReady forgets an unmerged merge target, so a session that goes
+// back to chatting can finish again at a new commit (ADR-019).
+func (service *Service) ClearMergeReady(ctx context.Context, projectID string, featureID string) error {
+	if _, err := service.Get(ctx, projectID, featureID); err != nil {
+		return err
+	}
+	clearer, ok := service.store.(interface {
+		ClearMergeReady(context.Context, string) error
+	})
+	if !ok {
+		return errors.New("merge readiness cannot be cleared")
+	}
+	return clearer.ClearMergeReady(ctx, featureID)
 }
 
 // MergeApproved reconciles and merges only the commit previously pinned by

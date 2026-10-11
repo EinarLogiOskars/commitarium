@@ -72,10 +72,11 @@ func (s *FeatureStore) Create(
 				independent_acceptance_tests,
 				skip_plan,
 				skip_reviewer,
+				kind,
 				created_at,
 				updated_at
 			)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT(id) DO NOTHING
 		`,
 		createdFeature.ID,
@@ -98,6 +99,7 @@ func (s *FeatureStore) Create(
 		createdFeature.IndependentAcceptanceTests,
 		createdFeature.Steps.SkipPlan,
 		createdFeature.Steps.SkipReviewer,
+		storedFeatureKind(createdFeature.Kind),
 		createdFeature.CreatedAt.UTC().Format(time.RFC3339Nano),
 		createdFeature.UpdatedAt.UTC().Format(time.RFC3339Nano),
 	)
@@ -161,6 +163,7 @@ func (s *FeatureStore) GetByID(
 				independent_acceptance_tests,
 				skip_plan,
 				skip_reviewer,
+				kind,
 				created_at,
 				updated_at
 			FROM features
@@ -211,6 +214,7 @@ func (s *FeatureStore) ListByProjectID(
 				independent_acceptance_tests,
 				skip_plan,
 				skip_reviewer,
+				kind,
 				created_at,
 				updated_at
 			FROM features
@@ -245,6 +249,7 @@ type featureScanner interface {
 func scanFeature(row featureScanner) (feature.Feature, error) {
 	storedFeature := feature.Feature{}
 	var storedState string
+	var storedKind string
 	var goalAcceptedAt sql.NullString
 	var createdAt string
 	var updatedAt string
@@ -270,6 +275,7 @@ func scanFeature(row featureScanner) (feature.Feature, error) {
 		&storedFeature.IndependentAcceptanceTests,
 		&storedFeature.Steps.SkipPlan,
 		&storedFeature.Steps.SkipReviewer,
+		&storedKind,
 		&createdAt,
 		&updatedAt,
 	); err != nil {
@@ -277,6 +283,7 @@ func scanFeature(row featureScanner) (feature.Feature, error) {
 	}
 
 	storedFeature.State = feature.State(storedState)
+	storedFeature.Kind = feature.Kind(storedKind)
 	if goalAcceptedAt.Valid {
 		parsed, err := time.Parse(time.RFC3339Nano, goalAcceptedAt.String)
 		if err != nil {
@@ -309,6 +316,23 @@ func scanFeature(row featureScanner) (feature.Feature, error) {
 	return storedFeature, nil
 }
 
+// Rename changes a work order's title.
+func (s *FeatureStore) Rename(ctx context.Context, id string, title string) error {
+	result, err := s.db.ExecContext(
+		ctx, `UPDATE features SET title = ?, updated_at = ? WHERE id = ?`,
+		title, time.Now().UTC().Format(time.RFC3339Nano), id,
+	)
+	if err != nil {
+		return fmt.Errorf("rename feature %q: %w", id, err)
+	}
+	if updated, err := result.RowsAffected(); err != nil {
+		return fmt.Errorf("rename feature %q: %w", id, err)
+	} else if updated != 1 {
+		return feature.ErrNotFound
+	}
+	return nil
+}
+
 // UpdateReadySettings saves the settings a Ready work order starts with.
 func (s *FeatureStore) UpdateReadySettings(ctx context.Context, chosen feature.Feature) error {
 	result, err := s.db.ExecContext(
@@ -334,4 +358,13 @@ func (s *FeatureStore) UpdateReadySettings(ctx context.Context, chosen feature.F
 		return feature.ErrNotReady
 	}
 	return nil
+}
+
+// storedFeatureKind stores a work order created without a kind as a work
+// order.
+func storedFeatureKind(kind feature.Kind) feature.Kind {
+	if kind == "" {
+		return feature.KindWorkOrder
+	}
+	return kind
 }

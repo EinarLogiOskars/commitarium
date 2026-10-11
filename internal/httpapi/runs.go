@@ -243,6 +243,9 @@ func (api *API) readyWithoutClarification(
 	if description := strings.TrimSpace(storedFeature.Description); description != "" {
 		goal += "\n\n" + description
 	}
+	if storedFeature.Kind == feature.KindSession {
+		goal = sessionGoal
+	}
 	actor := workflow.Actor{Kind: workflow.ActorKindUser, ID: "local-user"}
 	if _, err := briefs.PutHandoffBrief(
 		ctx, storedFeature.ID, expected,
@@ -260,6 +263,10 @@ func (api *API) readyWithoutClarification(
 	}
 	return api.features.GetByID(ctx, storedFeature.ProjectID, storedFeature.ID)
 }
+
+// sessionGoal is a session's goal (ADR-019): the user directs it message by
+// message.
+const sessionGoal = "Interactive session: the user directs each change in conversation with the agent."
 
 var errStartWithoutClarificationUnavailable = errors.New("starting without clarification is unavailable")
 
@@ -382,83 +389,10 @@ func (api *API) startRunHandler(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if storedFeature.State == feature.StateDraft && request.skipsClarification() {
-		readied, err := api.readyWithoutClarification(r.Context(), storedFeature, idempotencyKey)
-		switch {
-		case errors.Is(err, featureartifact.ErrInvalidArtifact):
-			writeError(w, http.StatusBadRequest, "invalid_goal", "the work order's title and description do not make a valid goal")
-			return
-		case errors.Is(err, errStartWithoutClarificationUnavailable):
-			writeError(w, http.StatusServiceUnavailable, "start_without_clarification_unavailable", err.Error())
-			return
-		case err != nil:
-			log.Printf("ready feature %q without clarification: %v", storedFeature.ID, err)
-			writeError(w, http.StatusInternalServerError, "internal_error", "internal server error")
-			return
-		}
-		storedFeature = readied
-	}
-	if storedFeature.State != feature.StateReady {
-		writeError(w, http.StatusConflict, "feature_not_startable", "only a ready work order can be started")
-		return
-	}
-	// Agents, models, and policies are chosen at Start; an empty body starts
-	// with the work order's current settings (its project's defaults).
-	chosen, ok := api.chooseStartSettings(w, r, storedFeature, request)
+	startedRun, ok := api.startFeature(w, r, storedFeature, idempotencyKey, request)
 	if !ok {
 		return
 	}
-	storedFeature = chosen
-	goal := storedFeature.Title
-	if storedFeature.Description != "" {
-		goal += ": " + storedFeature.Description
-	}
-	var startedRun execution.Run
-	if storedFeature.AgentModels.Lead != "" || storedFeature.AgentModels.Reviewer != "" {
-		modelStarter, ok := api.starter.(ModelRunStarter)
-		if !ok {
-			writeError(w, http.StatusServiceUnavailable, "agent_models_unavailable", "model-specific run admission is unavailable")
-			return
-		}
-		startedRun, _, err = modelStarter.StartWithModels(
-			r.Context(), runID, projectID, featureID, goal, project.DefaultDialogueLimits(),
-			storedFeature.AgentProviders, storedFeature.AgentModels,
-			storedFeature.MergePolicy, storedFeature.AutonomyPolicy,
-		)
-	} else {
-		startedRun, _, err = api.starter.Start(
-			r.Context(), runID, projectID, featureID, goal, project.DefaultDialogueLimits(),
-			storedFeature.AgentProviders, storedFeature.MergePolicy, storedFeature.AutonomyPolicy,
-		)
-	}
-	if err != nil {
-		switch {
-		case errors.Is(err, execution.ErrRecordConflict):
-			writeError(w, http.StatusConflict, "idempotency_conflict", "Idempotency-Key was already used for a different run")
-		case errors.Is(err, orchestration.ErrStepsUnsupported):
-			writeError(w, http.StatusConflict, "steps_unsupported", "this combination of work-order steps is not supported yet")
-		case errors.Is(err, orchestration.ErrFeatureNotReady):
-			writeError(w, http.StatusConflict, "feature_not_startable", "only a ready work order with a handoff brief can be started")
-		case errors.Is(err, orchestration.ErrInvalidRunRequest):
-			writeError(w, http.StatusBadRequest, "invalid_run", "run request is invalid")
-		case errors.Is(err, workspace.ErrProjectRepositoryNotBound):
-			writeError(w, http.StatusConflict, "forgejo_repository_not_bound", "project must be bound to a Forgejo repository before starting a real-provider run")
-		case errors.Is(err, workspace.ErrBranchNotFound), errors.Is(err, project.ErrForgejoRepositoryNotReady):
-			writeError(w, http.StatusConflict, "forgejo_repository_not_ready", "the bound Forgejo repository or its default branch is not ready")
-		case errors.Is(err, workspace.ErrConflict), errors.Is(err, workspace.ErrBranchConflict),
-			errors.Is(err, workspace.ErrCheckoutConflict):
-			writeError(w, http.StatusConflict, "workspace_conflict", "the selected project's managed checkout disagrees with its durable workspace; user review is required")
-		case errors.Is(err, workspace.ErrCheckoutUnavailable):
-			writeError(w, http.StatusServiceUnavailable, "checkout_unavailable", "the selected project's managed checkout cannot be prepared right now")
-		case errors.Is(err, project.ErrForgejoUnavailable):
-			writeError(w, http.StatusServiceUnavailable, "forgejo_unavailable", "Forgejo workspace preparation is unavailable")
-		default:
-			log.Printf("start run %q for feature %q: %v", runID, featureID, err)
-			writeError(w, http.StatusInternalServerError, "internal_error", "internal server error")
-		}
-		return
-	}
-
 	w.Header().Set("Location", "/api/v1/runs/"+startedRun.ID)
 	api.writeRun(w, r, http.StatusAccepted, startedRun)
 }
@@ -596,4 +530,98 @@ func (api *API) newRunResponse(
 func runIDForKey(idempotencyKey string) string {
 	digest := sha256.Sum256([]byte(idempotencyKey))
 	return "run_" + hex.EncodeToString(digest[:16])
+}
+
+// startFeature readies a draft that skips clarification (a session always
+// does), applies the Start settings, and starts the run. It writes the error
+// response itself and reports whether it started.
+func (api *API) startFeature(
+	w http.ResponseWriter,
+	r *http.Request,
+	storedFeature feature.Feature,
+	idempotencyKey string,
+	request *startRunRequest,
+) (execution.Run, bool) {
+	runID := runIDForKey(idempotencyKey)
+	projectID, featureID := storedFeature.ProjectID, storedFeature.ID
+	var err error
+	if storedFeature.State == feature.StateDraft &&
+		(request.skipsClarification() || storedFeature.Kind == feature.KindSession) {
+		readied, err := api.readyWithoutClarification(r.Context(), storedFeature, idempotencyKey)
+		switch {
+		case errors.Is(err, featureartifact.ErrInvalidArtifact):
+			writeError(w, http.StatusBadRequest, "invalid_goal", "the work order's title and description do not make a valid goal")
+			return execution.Run{}, false
+		case errors.Is(err, errStartWithoutClarificationUnavailable):
+			writeError(w, http.StatusServiceUnavailable, "start_without_clarification_unavailable", err.Error())
+			return execution.Run{}, false
+		case err != nil:
+			log.Printf("ready feature %q without clarification: %v", storedFeature.ID, err)
+			writeError(w, http.StatusInternalServerError, "internal_error", "internal server error")
+			return execution.Run{}, false
+		}
+		storedFeature = readied
+	}
+	if storedFeature.State != feature.StateReady {
+		writeError(w, http.StatusConflict, "feature_not_startable", "only a ready work order can be started")
+		return execution.Run{}, false
+	}
+	// Agents, models, and policies are chosen at Start; an empty body starts
+	// with the work order's current settings (its project's defaults).
+	chosen, ok := api.chooseStartSettings(w, r, storedFeature, request)
+	if !ok {
+		return execution.Run{}, false
+	}
+	storedFeature = chosen
+	goal := storedFeature.Title
+	if storedFeature.Description != "" {
+		goal += ": " + storedFeature.Description
+	}
+	var startedRun execution.Run
+	if storedFeature.AgentModels.Lead != "" || storedFeature.AgentModels.Reviewer != "" {
+		modelStarter, ok := api.starter.(ModelRunStarter)
+		if !ok {
+			writeError(w, http.StatusServiceUnavailable, "agent_models_unavailable", "model-specific run admission is unavailable")
+			return execution.Run{}, false
+		}
+		startedRun, _, err = modelStarter.StartWithModels(
+			r.Context(), runID, projectID, featureID, goal, project.DefaultDialogueLimits(),
+			storedFeature.AgentProviders, storedFeature.AgentModels,
+			storedFeature.MergePolicy, storedFeature.AutonomyPolicy,
+		)
+	} else {
+		startedRun, _, err = api.starter.Start(
+			r.Context(), runID, projectID, featureID, goal, project.DefaultDialogueLimits(),
+			storedFeature.AgentProviders, storedFeature.MergePolicy, storedFeature.AutonomyPolicy,
+		)
+	}
+	if err != nil {
+		switch {
+		case errors.Is(err, execution.ErrRecordConflict):
+			writeError(w, http.StatusConflict, "idempotency_conflict", "Idempotency-Key was already used for a different run")
+		case errors.Is(err, orchestration.ErrStepsUnsupported):
+			writeError(w, http.StatusConflict, "steps_unsupported", "this combination of work-order steps is not supported yet")
+		case errors.Is(err, orchestration.ErrFeatureNotReady):
+			writeError(w, http.StatusConflict, "feature_not_startable", "only a ready work order with a handoff brief can be started")
+		case errors.Is(err, orchestration.ErrInvalidRunRequest):
+			writeError(w, http.StatusBadRequest, "invalid_run", "run request is invalid")
+		case errors.Is(err, workspace.ErrProjectRepositoryNotBound):
+			writeError(w, http.StatusConflict, "forgejo_repository_not_bound", "project must be bound to a Forgejo repository before starting a real-provider run")
+		case errors.Is(err, workspace.ErrBranchNotFound), errors.Is(err, project.ErrForgejoRepositoryNotReady):
+			writeError(w, http.StatusConflict, "forgejo_repository_not_ready", "the bound Forgejo repository or its default branch is not ready")
+		case errors.Is(err, workspace.ErrConflict), errors.Is(err, workspace.ErrBranchConflict),
+			errors.Is(err, workspace.ErrCheckoutConflict):
+			writeError(w, http.StatusConflict, "workspace_conflict", "the selected project's managed checkout disagrees with its durable workspace; user review is required")
+		case errors.Is(err, workspace.ErrCheckoutUnavailable):
+			writeError(w, http.StatusServiceUnavailable, "checkout_unavailable", "the selected project's managed checkout cannot be prepared right now")
+		case errors.Is(err, project.ErrForgejoUnavailable):
+			writeError(w, http.StatusServiceUnavailable, "forgejo_unavailable", "Forgejo workspace preparation is unavailable")
+		default:
+			log.Printf("start run %q for feature %q: %v", runID, featureID, err)
+			writeError(w, http.StatusInternalServerError, "internal_error", "internal server error")
+		}
+		return execution.Run{}, false
+	}
+
+	return startedRun, true
 }

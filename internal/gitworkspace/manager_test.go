@@ -403,3 +403,33 @@ func containsEnvironment(environment []string, wanted string) bool {
 	}
 	return false
 }
+
+func TestManagerReportsWhetherACheckoutContainsACommit(t *testing.T) {
+	manager, root := newTestManager(t, nil)
+	spec := initializeCheckout(t, root)
+	if err := manager.Ensure(t.Context(), spec); err != nil {
+		t.Fatalf("ensure new checkout: %v", err)
+	}
+	target := filepath.Join(root, spec.WorkspaceID)
+	if contained, err := manager.Contains(t.Context(), spec.WorkspaceID, spec.BaseCommitID); err != nil || !contained {
+		t.Fatalf("base commit contained=%t err=%v", contained, err)
+	}
+	testGit(t, target, "checkout", "-q", "-b", "elsewhere")
+	if err := os.WriteFile(filepath.Join(target, "main.txt"), []byte("main moved\n"), 0o644); err != nil {
+		t.Fatalf("write main change: %v", err)
+	}
+	testGit(t, target, "add", "main.txt")
+	testGit(t, target, "commit", "-q", "-m", "main moved")
+	moved := testGit(t, target, "rev-parse", "HEAD")
+	testGit(t, target, "checkout", "-q", spec.Branch)
+	if contained, err := manager.Contains(t.Context(), spec.WorkspaceID, moved); err != nil || contained {
+		t.Fatalf("unmerged commit contained=%t err=%v", contained, err)
+	}
+	if contained, err := manager.Contains(t.Context(), spec.WorkspaceID, strings.Repeat("e", 40)); err != nil || contained {
+		t.Fatalf("unknown commit contained=%t err=%v", contained, err)
+	}
+	testGit(t, target, "merge", "-q", "--no-edit", moved)
+	if contained, err := manager.Contains(t.Context(), spec.WorkspaceID, moved); err != nil || !contained {
+		t.Fatalf("merged commit contained=%t err=%v", contained, err)
+	}
+}

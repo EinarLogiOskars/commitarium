@@ -19,20 +19,23 @@ import (
 // inbox. It deliberately carries navigation identifiers instead of URLs so the
 // desktop app remains responsible for its own routing.
 type attentionItem struct {
-	ID                   string    `json:"id"`
-	Kind                 string    `json:"kind"`
-	Severity             string    `json:"severity"`
-	Actionable           bool      `json:"actionable"`
-	ProjectID            string    `json:"project_id"`
-	ProjectName          string    `json:"project_name"`
-	FeatureID            string    `json:"feature_id"`
-	FeatureTitle         string    `json:"feature_title"`
-	RunID                string    `json:"run_id,omitempty"`
-	EnvironmentRequestID string    `json:"environment_request_id,omitempty"`
-	ValidationJobID      string    `json:"validation_job_id,omitempty"`
-	Title                string    `json:"title"`
-	Detail               string    `json:"detail"`
-	UpdatedAt            time.Time `json:"updated_at"`
+	ID                   string `json:"id"`
+	Kind                 string `json:"kind"`
+	Severity             string `json:"severity"`
+	Actionable           bool   `json:"actionable"`
+	ProjectID            string `json:"project_id"`
+	ProjectName          string `json:"project_name"`
+	FeatureID            string `json:"feature_id"`
+	FeatureTitle         string `json:"feature_title"`
+	RunID                string `json:"run_id,omitempty"`
+	EnvironmentRequestID string `json:"environment_request_id,omitempty"`
+	ValidationJobID      string `json:"validation_job_id,omitempty"`
+	// AutoRun asks the desktop to run a pending validation job itself: the
+	// run merges automatically once its gates pass.
+	AutoRun   bool      `json:"auto_run,omitempty"`
+	Title     string    `json:"title"`
+	Detail    string    `json:"detail"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 type attentionResponse struct {
@@ -142,7 +145,7 @@ func (api *API) attentionForFeature(
 			ID: "auto_merge_completed:" + currentFeature.ID, Kind: "auto_merge_completed",
 			Severity: "info", Actionable: false, ProjectID: currentProject.ID,
 			ProjectName: currentProject.Name, FeatureID: currentFeature.ID, FeatureTitle: currentFeature.Title,
-			Title: "Work order merged", Detail: "Automatic merge completed after all gates passed.",
+			Title: mergedTitle(currentFeature), Detail: "Automatic merge completed after all gates passed.",
 			UpdatedAt: currentFeature.UpdatedAt,
 		}}, nil, nil
 	}
@@ -185,6 +188,11 @@ func (api *API) attentionForFeature(
 	if currentRun.Status != execution.RunStatusWaitingForUser {
 		return nil, nil, nil
 	}
+	// A session waiting for the user's next message is idle, not asking for
+	// attention: the rail shows its new replies instead (ADR-019).
+	if currentFeature.Kind == feature.KindSession && currentRun.WaitKind == execution.RunWaitKindClarification {
+		return nil, nil, nil
+	}
 
 	if currentRun.WaitKind == execution.RunWaitKindMergeGate && api.validations != nil {
 		jobs, err := api.validations.JobsForRun(ctx, currentRun.ID)
@@ -192,10 +200,19 @@ func (api *API) attentionForFeature(
 			return nil, nil, err
 		}
 		if item, ok := validationAttention(base, jobs); ok {
+			item.AutoRun = item.Kind == "validation_pending" &&
+				currentRun.MergePolicy == project.MergePolicyAutoAfterGates
 			return []attentionItem{item}, nil, nil
 		}
 	}
 	return []attentionItem{runWaitAttention(base, currentRun)}, nil, nil
+}
+
+func mergedTitle(currentFeature feature.Feature) string {
+	if currentFeature.Kind == feature.KindSession {
+		return "Session merged"
+	}
+	return "Work order merged"
 }
 
 func newestRun(runs []execution.Run) execution.Run {

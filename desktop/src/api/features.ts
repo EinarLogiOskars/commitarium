@@ -148,3 +148,39 @@ export const deleteFeature = (
     `/api/v1/projects/${encodeURIComponent(projectId)}/features/${encodeURIComponent(featureId)}${force ? "?force=true" : ""}`,
     { method: "DELETE", idempotencyKey },
   );
+
+// --- Sessions (ADR-019): work orders of kind "session" ---
+
+/** Create a session. It starts at once: its branch and pull request open and it
+ * waits for the first message. */
+export const createSession = (projectId: string): Promise<Feature> =>
+  createFeature(projectId, { title: "", kind: "session" });
+
+/** Start the session's next agent turn. Refused with session_busy while the
+ * agent is still working. */
+export const sendSessionTurn = (
+  projectId: string,
+  featureId: string,
+  message: string,
+  idempotencyKey: string,
+): Promise<Run> =>
+  request(`${featurePath(projectId, featureId)}/messages`, {
+    method: "POST",
+    idempotencyKey,
+    body: { message },
+  });
+
+/** Ask the session's agent to commit the work for the merge gate. */
+export const finishSession = (
+  projectId: string,
+  featureId: string,
+  idempotencyKey: string,
+): Promise<Run> =>
+  request(`${featurePath(projectId, featureId)}/finish`, { method: "POST", idempotencyKey });
+
+export const renameFeature = (
+  projectId: string,
+  featureId: string,
+  title: string,
+): Promise<Feature> =>
+  request(featurePath(projectId, featureId), { method: "PATCH", body: { title } });

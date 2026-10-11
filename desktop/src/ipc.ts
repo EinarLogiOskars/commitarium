@@ -443,8 +443,9 @@ export const previewProjectUpstreamBranch = (
 // Runs the project's canonical head from its validated compose file (ADR-014).
 // camelCase like the project sync types.
 
-// Only "canonical" exists today; more target kinds will be added.
-export type PreviewTarget = { kind: "canonical" };
+// The default branch head, or a session's working copy with its uncommitted
+// changes (ADR-019).
+export type PreviewTarget = { kind: "canonical" } | { kind: "session"; feature_id: string };
 
 export type PreviewState = "starting" | "running" | "failed" | "stopped";
 
@@ -471,20 +472,22 @@ export const startPreview = (
 ): Promise<PreviewStatus> => invoke("start_preview", { projectId, target });
 
 /** Stop the preview; its data volumes are kept. */
-export const stopPreview = (projectId: string): Promise<void> =>
-  invoke("stop_preview", { projectId });
+export const stopPreview = (projectId: string, featureId?: string): Promise<void> =>
+  invoke("stop_preview", { projectId, featureId });
 
 /** Stop the preview if running and remove its data volumes. */
 export const resetPreviewData = (projectId: string): Promise<void> =>
   invoke("reset_preview_data", { projectId });
 
-export const getPreviewStatus = (projectId: string): Promise<PreviewStatus | null> =>
-  invoke("get_preview_status", { projectId });
+export const getPreviewStatus = (
+  projectId: string,
+  featureId?: string,
+): Promise<PreviewStatus | null> => invoke("get_preview_status", { projectId, featureId });
 
 /** Last 400 lines of combined output: [preview] for validation and builds,
  * "<service> | " for service output. */
-export const getPreviewLogs = (projectId: string): Promise<string[]> =>
-  invoke("get_preview_logs", { projectId });
+export const getPreviewLogs = (projectId: string, featureId?: string): Promise<string[]> =>
+  invoke("get_preview_logs", { projectId, featureId });
 
 export const onPreviewStatusChanged = (
   handler: (status: PreviewStatus) => void,

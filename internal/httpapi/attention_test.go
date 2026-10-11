@@ -242,3 +242,58 @@ func TestAttentionIncludesBoundedAutomaticMergeHistory(t *testing.T) {
 		t.Fatalf("expected newest 25 automatic merges, got %+v", response.Items)
 	}
 }
+
+func TestAttentionSkipsASessionWaitingForTheNextMessage(t *testing.T) {
+	now := time.Date(2026, time.October, 11, 12, 0, 0, 0, time.UTC)
+	projects := &recordingProjectService{listResult: []project.Project{{ID: "prj_one", Name: "One"}}}
+	features := &recordingFeatureService{listResult: []feature.Feature{{
+		ID: "fea_one", ProjectID: "prj_one", Title: "Untitled session 1",
+		State: feature.StateImplementing, Kind: feature.KindSession,
+	}}}
+	executions := &recordingExecutionService{runs: []execution.Run{{
+		ID: "run_one", FeatureID: "fea_one", Status: execution.RunStatusWaitingForUser,
+		WaitKind: execution.RunWaitKindClarification, Reason: "Your turn.", StartedAt: now, UpdatedAt: now,
+	}}}
+	handler := NewWithWorkspaceRealWorkflowDeletionAndModels(
+		projects, features, nil, executions, nil, nil, nil, nil, nil, nil, nil, nil,
+	)
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/v1/attention", nil))
+	var response attentionResponse
+	if err := json.NewDecoder(recorder.Body).Decode(&response); err != nil {
+		t.Fatalf("decode attention response: %v", err)
+	}
+	if len(response.Items) != 0 {
+		t.Fatalf("an idle session asked for attention: %+v", response.Items)
+	}
+}
+
+func TestAttentionAsksToAutoRunValidationOnlyUnderAutoMerge(t *testing.T) {
+	now := time.Date(2026, time.October, 11, 12, 0, 0, 0, time.UTC)
+	for _, policy := range []project.MergePolicy{project.MergePolicyAutoAfterGates, project.MergePolicyRequireUserApproval} {
+		projects := &recordingProjectService{listResult: []project.Project{{ID: "prj_one", Name: "One"}}}
+		features := &recordingFeatureService{listResult: []feature.Feature{{
+			ID: "fea_one", ProjectID: "prj_one", Title: "Ship it", State: feature.StateReadyToMerge,
+		}}}
+		executions := &recordingExecutionService{runs: []execution.Run{{
+			ID: "run_one", FeatureID: "fea_one", Status: execution.RunStatusWaitingForUser,
+			WaitKind: execution.RunWaitKindMergeGate, MergePolicy: policy, StartedAt: now, UpdatedAt: now,
+		}}}
+		validations := &attentionValidationService{jobs: []validation.Job{{
+			ID: "val_one", RunID: "run_one", Status: validation.StatusPending, CreatedAt: now, UpdatedAt: now,
+		}}}
+		handler := NewWithWorkspaceRealWorkflowDeletionAndModels(
+			projects, features, nil, executions, nil, nil, nil, nil, nil, nil, nil, nil, validations,
+		)
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/v1/attention", nil))
+		var response attentionResponse
+		if err := json.NewDecoder(recorder.Body).Decode(&response); err != nil {
+			t.Fatalf("decode attention response: %v", err)
+		}
+		want := policy == project.MergePolicyAutoAfterGates
+		if len(response.Items) != 1 || response.Items[0].Kind != "validation_pending" || response.Items[0].AutoRun != want {
+			t.Fatalf("%s: unexpected attention response: %+v", policy, response.Items)
+		}
+	}
+}
