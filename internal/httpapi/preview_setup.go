@@ -112,7 +112,7 @@ func (api *API) ensurePreviewSetup(ctx context.Context, projectID string) (*feat
 	if repositoryHasCompose(overview) {
 		return nil, errPreviewHasCompose
 	}
-	if !repositoryHasApp(overview) {
+	if !overview.HasCode() {
 		// Nothing to preview yet. Reading the stack checks again, so the setup
 		// starts once the first code is merged.
 		return nil, nil
@@ -201,34 +201,31 @@ func repositoryHasCompose(overview project.RepositoryOverview) bool {
 	return false
 }
 
-// repositoryHasApp reports whether the repository holds more than the files a
-// new repository starts with, such as a README or a license.
-func repositoryHasApp(overview project.RepositoryOverview) bool {
-	for _, entry := range overview.Tree {
-		name := strings.ToLower(entry.Path)
-		switch {
-		case strings.HasPrefix(name, "readme"), strings.HasPrefix(name, "license"),
-			strings.HasPrefix(name, "licence"), strings.HasPrefix(name, "."):
-		default:
-			return true
-		}
-	}
-	return false
-}
-
 // startBackgroundWorkOrder creates and starts a quick change Commitarium runs
-// by itself: no clarification, plan, or reviewer, and an automatic merge once
-// validation passes.
+// by itself and leaves out of the user's lists.
 func (api *API) startBackgroundWorkOrder(
 	ctx context.Context,
 	projectID string,
 	title string,
 	description string,
 ) (feature.Feature, error) {
+	return api.startQuickChange(ctx, projectID, title, description, true)
+}
+
+// startQuickChange creates and starts a quick change Commitarium starts
+// itself: no clarification, plan, or reviewer, and an automatic merge once
+// validation passes.
+func (api *API) startQuickChange(
+	ctx context.Context,
+	projectID string,
+	title string,
+	description string,
+	background bool,
+) (feature.Feature, error) {
 	merge := project.MergePolicyAutoAfterGates
 	autonomy := project.AutonomyPolicyRunToCompletion
 	created, err := api.features.Create(ctx, projectID, title, description, feature.SettingsOverrides{
-		Background: true, Steps: &project.WorkSteps{SkipPlan: true, SkipReviewer: true},
+		Background: background, Steps: &project.WorkSteps{SkipPlan: true, SkipReviewer: true},
 		MergePolicy: &merge, AutonomyPolicy: &autonomy,
 	})
 	if err != nil {

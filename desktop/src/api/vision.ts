@@ -1,5 +1,12 @@
 import { request } from "./client";
-import type { Feature, Vision, VisionMode, VisionPlan, VisionSession } from "./types";
+import type {
+  Feature,
+  ProjectToolchain,
+  Vision,
+  VisionMode,
+  VisionPlan,
+  VisionSession,
+} from "./types";
 
 const visionPath = (id: string) => `/api/v1/projects/${encodeURIComponent(id)}/vision`;
 
@@ -48,3 +55,16 @@ export const startVisionWorkOrder = (
   itemId: string,
 ): Promise<{ work_order: Feature; vision: Vision }> =>
   request(`${visionPath(id)}/items/${encodeURIComponent(itemId)}/work-order`, { method: "POST" });
+
+/** Set a new project up: save the stack from runtime presets and start the
+ * visible work order that scaffolds the app and its preview. A running setup
+ * is answered again. 409 project_has_code once the repository has code. */
+export const setUpProject = (
+  id: string,
+  presets: string[],
+  frameworks: string,
+): Promise<{ work_order: Feature; toolchain: ProjectToolchain }> =>
+  request(`/api/v1/projects/${encodeURIComponent(id)}/setup`, {
+    method: "POST",
+    body: { presets, frameworks },
+  });

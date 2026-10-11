@@ -14,6 +14,7 @@ import { StackPicker } from "./StackPicker";
 import { PreviewRailItem } from "./PreviewRailItem";
 import { PreviewView } from "./PreviewView";
 import { VisionView } from "./VisionView";
+import { rememberedSession } from "./visionSession";
 import { usePreview } from "./usePreview";
 import { usePreviewSetup } from "./usePreviewSetup";
 import { WORK } from "../vocab";
@@ -87,7 +88,10 @@ export function ProjectWorkspace({
     // Toolchain is a separate record; absent on older coordinators (404/other) —
     // leave it null and treat the project as unconstrained (no creation gate).
     try {
-      setToolchain(await getProjectToolchain(id));
+      const t = await getProjectToolchain(id);
+      setToolchain(t);
+      // A project just created from an idea opens on its vision conversation.
+      if (t.status === "needs_setup" && rememberedSession(id)) setMode("vision");
     } catch {
       setToolchain(null);
     }
@@ -291,6 +295,18 @@ export function ProjectWorkspace({
           {mode === "vision" && project && (
             <VisionView
               projectId={id}
+              setup={
+                needsStack
+                  ? {
+                      onStarted: (fid, t) => {
+                        setToolchain(t);
+                        setReloadKey((k) => k + 1);
+                        setRailKind("work_order");
+                        openOrder(fid);
+                      },
+                    }
+                  : undefined
+              }
               onOpenOrder={(fid) => {
                 setReloadKey((k) => k + 1);
                 setRailKind("work_order");

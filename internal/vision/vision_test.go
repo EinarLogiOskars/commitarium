@@ -233,3 +233,27 @@ func TestTheAssistantInspectsACheckoutAndMarksDeliveredItemsDone(t *testing.T) {
 		t.Fatalf("the delivered item is not done: %+v", item)
 	}
 }
+
+func TestANewProjectGetsAStackRecommendation(t *testing.T) {
+	service, worker := newTestService(t)
+	session, _, err := service.Start(t.Context(), "prj_test", "codex", "gpt-5", ModeDescribe, "A calorie tracker", "start-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if instructions := worker.puts[0].Instructions; !strings.Contains(instructions, "no code yet") ||
+		!strings.Contains(instructions, "node-lts") {
+		t.Fatalf("an empty repository got no stack question: %s", instructions)
+	}
+	plan := samplePlan()
+	plan.Stack = &featureartifact.VisionStack{Presets: []string{"node-lts", "cobol"}, Frameworks: "React with Vite", Reason: "A small web app."}
+	worker.finish(workerhttp.TerminalResult{
+		Outcome: workerhttp.OutcomeCompleted, Disposition: workerhttp.DispositionSucceeded, Summary: "Done.", VisionPlan: plan,
+	})
+	if _, err := service.GetSession(t.Context(), "prj_test", session.ID); err != nil {
+		t.Fatal(err)
+	}
+	stored, _ := service.Get(t.Context(), "prj_test")
+	if stored.Plan.Stack == nil || len(stored.Plan.Stack.Presets) != 1 || stored.Plan.Stack.Presets[0] != "node-lts" {
+		t.Fatalf("stack = %+v", stored.Plan.Stack)
+	}
+}

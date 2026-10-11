@@ -439,6 +439,9 @@ func newAPI(
 		mux.HandleFunc("POST /api/v1/projects/{id}/vision/assistant/{sessionID}/messages", api.replyVisionHandler)
 		mux.HandleFunc("POST /api/v1/projects/{id}/vision/items/{itemID}/work-order", api.startVisionWorkOrderHandler)
 	}
+	if toolchainService != nil && projects != nil && features != nil {
+		mux.HandleFunc("POST /api/v1/projects/{id}/setup", api.setUpProjectHandler)
+	}
 	if projects != nil && features != nil && executionService != nil {
 		mux.HandleFunc("GET /api/v1/attention", api.listAttentionHandler)
 	}

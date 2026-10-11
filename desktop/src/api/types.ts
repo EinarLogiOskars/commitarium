@@ -757,6 +757,14 @@ export interface VisionPlan {
   priorities: VisionPriority[];
   confidence: VisionConfidence;
   guesses: string[];
+  // The recommended stack for a project without code yet.
+  stack?: VisionStack;
+}
+
+export interface VisionStack {
+  presets: string[];
+  frameworks: string;
+  reason: string;
 }
 
 export interface Vision {

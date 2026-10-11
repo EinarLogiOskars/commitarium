@@ -16,7 +16,18 @@ type VisionPlan struct {
 	// high, medium, or low. Guesses name what it had to assume.
 	Confidence string   `json:"confidence"`
 	Guesses    []string `json:"guesses"`
+	// Stack is the assistant's recommendation for a project that has no code
+	// yet: the runtime presets to install and the frameworks to scaffold.
+	Stack *VisionStack `json:"stack,omitempty"`
 }
+
+type VisionStack struct {
+	Presets    []string `json:"presets"`
+	Frameworks string   `json:"frameworks"`
+	Reason     string   `json:"reason"`
+}
+
+const maxVisionStackPresets = 4
 
 type VisionPriority struct {
 	Level int          `json:"level"`
@@ -57,6 +68,19 @@ func (plan VisionPlan) Validate() error {
 	for index, guess := range plan.Guesses {
 		if err := validRequiredText(fmt.Sprintf("vision guess %d", index+1), guess, MaxStepTextBytes); err != nil {
 			return err
+		}
+	}
+	if plan.Stack != nil {
+		if len(plan.Stack.Presets) == 0 || len(plan.Stack.Presets) > maxVisionStackPresets {
+			return fmt.Errorf("%w: a recommended stack names one to %d presets", ErrInvalidArtifact, maxVisionStackPresets)
+		}
+		for _, preset := range plan.Stack.Presets {
+			if !stepIDPattern.MatchString(preset) {
+				return fmt.Errorf("%w: stack preset %q is invalid", ErrInvalidArtifact, preset)
+			}
+		}
+		if len(plan.Stack.Frameworks) > MaxStepTextBytes || len(plan.Stack.Reason) > MaxStepTextBytes {
+			return fmt.Errorf("%w: the recommended stack is too long", ErrInvalidArtifact)
 		}
 	}
 	seenLevels := map[int]bool{}
@@ -109,6 +133,17 @@ func (plan VisionPlan) NormalizeProposed() (VisionPlan, error) {
 	plan.Statement = strings.TrimSpace(plan.Statement)
 	plan.Confidence = strings.ToLower(strings.TrimSpace(plan.Confidence))
 	plan.Guesses = trimmedVisionTexts(plan.Guesses)
+	if plan.Stack != nil {
+		presets := trimmedVisionTexts(plan.Stack.Presets)
+		if len(presets) == 0 {
+			plan.Stack = nil
+		} else {
+			plan.Stack = &VisionStack{
+				Presets: presets, Frameworks: strings.TrimSpace(plan.Stack.Frameworks),
+				Reason: strings.TrimSpace(plan.Stack.Reason),
+			}
+		}
+	}
 	seen := map[string]bool{}
 	for index := range plan.Priorities {
 		plan.Priorities[index].Items = normalizeVisionItems(plan.Priorities[index].Items, seen)

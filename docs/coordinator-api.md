@@ -2370,6 +2370,9 @@ Only an item without sub-items starts a work order.
   The plan is `{"statement", "priorities": [{"level", "items": [{"id", "title",
   "description", "items", "feature_id", "done"}]}], "confidence", "guesses"}`.
   `done` marks an item without sub-items that the project already delivers.
+  For a repository without code, the plan also has the recommended
+  `"stack": {"presets": ["node-lts"], "frameworks": "React with Vite", "reason"}`,
+  naming runtime presets from `GET /api/v1/toolchain-presets`.
   `404 vision_not_found` until one is written.
 - `PUT /api/v1/projects/{id}/vision` with `{"plan", "expected_revision"}` saves
   the user's edit. `409 vision_conflict` when the vision changed meanwhile;
@@ -2393,6 +2396,24 @@ Only an item without sub-items starts a work order.
   draft work order for an item without sub-items, links it, and answers
   `201 {"work_order", "vision"}`. An item that already has one answers it with
   `200`. `409 vision_item_not_startable` for a group, a done item, or an unknown item.
+
+## Setting a new project up
+
+`POST /api/v1/projects/{id}/setup` with `{"presets": ["node-lts", "python"],
+"frameworks": "React with Vite; FastAPI"}` sets up a project whose repository
+has no code yet. It saves the stack from the runtime presets and starts the
+visible quick change "Set the project up", with automatic merge: it scaffolds a
+minimal app on the stack with a test runner and one test, and writes the
+preview's compose file. It answers `201 {"work_order", "toolchain"}`, or `200`
+with the setup already running.
+
+- `400 invalid_stack` for no runtime, an unknown one, or two versions of a tool.
+- `409 project_has_code` once the repository has code; its stack is set on the
+  Stack page.
+- `503 project_setup_unavailable` without real agents.
+
+The background preview setup waits for a repository with code, so it never
+starts on a new project's empty repository.
 
 ## Merging an approved revision
 

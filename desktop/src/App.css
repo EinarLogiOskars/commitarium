@@ -3181,3 +3181,28 @@ button.danger:not(.ghost) {
 .vision__done {
   margin: 0 6px;
 }
+.vision__setup {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+}
+.vision__setup h3 {
+  margin: 0 0 6px;
+}
+.vision__setup .field {
+  max-width: 480px;
+}
+.vision__presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 10px 0 12px;
+}
+.vision__preset {
+  border-radius: 999px;
+  padding: 4px 12px;
+  font-size: 12px;
+}
+.vision__preset--on {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--text);
+}

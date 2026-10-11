@@ -40,6 +40,13 @@ Vision page.
   keeps the work orders of items it keeps by ID. Saves are guarded by a
   revision, so an edit never silently overwrites a newer version.
 
+- **New projects start from it.** Creating a project with a description of the
+  app starts the assistant at once. For a repository without code it also
+  recommends the stack: runtime presets, the frameworks, and why. The user
+  confirms or changes it, and "Set the project up" starts one visible quick
+  change that scaffolds a minimal app on that stack with a test and the
+  preview's compose file. The plan then holds only the app's own work.
+
 ## Consequences
 
 - The vision is planning input for the assistant and the backlog to come; it

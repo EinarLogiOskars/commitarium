@@ -6,10 +6,13 @@ import {
   saveVision,
   startVisionAssistant,
   startVisionWorkOrder,
+  setUpProject,
 } from "../api/vision";
 import { listFeatures } from "../api/features";
+import { getToolchainPresets } from "../api/toolchains";
 import { ApiError } from "../api/client";
 import { Markdown } from "./Markdown";
+import { rememberSession, rememberedSession } from "./visionSession";
 import type {
   Feature,
   FeatureState,
@@ -18,28 +21,12 @@ import type {
   VisionMode,
   VisionPlan,
   VisionSession,
+  VisionStack,
+  ProjectToolchain,
+  ToolchainPreset,
 } from "../api/types";
 
 const MAX_DEPTH = 3;
-const sessionKey = (projectId: string) => `commitarium.vision-session.${projectId}`;
-
-function rememberedSession(projectId: string): string | null {
-  try {
-    return localStorage.getItem(sessionKey(projectId));
-  } catch {
-    return null;
-  }
-}
-
-function rememberSession(projectId: string, sessionId: string | null) {
-  try {
-    if (sessionId) localStorage.setItem(sessionKey(projectId), sessionId);
-    else localStorage.removeItem(sessionKey(projectId));
-  } catch {
-    // The conversation is only reopened less conveniently.
-  }
-}
-
 const STATE_LABEL: Record<FeatureState, string> = {
   draft: "Draft",
   ready: "Ready",
@@ -58,9 +45,12 @@ const STATE_LABEL: Record<FeatureState, string> = {
 export function VisionView({
   projectId,
   onOpenOrder,
+  setup,
 }: {
   projectId: string;
   onOpenOrder: (featureId: string) => void;
+  /** A new project without a stack: the recommended stack sets it up. */
+  setup?: { onStarted: (workOrderId: string, toolchain: ProjectToolchain) => void };
 }) {
   const [vision, setVision] = useState<Vision | null>(null);
   const [loaded, setLoaded] = useState(false);
@@ -227,6 +217,13 @@ export function VisionView({
       ) : (
         plan && (
           <>
+            {setup && plan.stack && (
+              <ProjectSetupCard
+                projectId={projectId}
+                stack={plan.stack}
+                onStarted={setup.onStarted}
+              />
+            )}
             <section className="panel vision__statement">
               <Markdown text={plan.statement} />
               <p className="muted vision__source">
@@ -281,6 +278,86 @@ export function VisionView({
         )
       )}
     </div>
+  );
+}
+
+// The last step of creating a project: confirm the recommended stack, and
+// Commitarium scaffolds the app on it with its preview in one work order.
+function ProjectSetupCard({
+  projectId,
+  stack,
+  onStarted,
+}: {
+  projectId: string;
+  stack: VisionStack;
+  onStarted: (workOrderId: string, toolchain: ProjectToolchain) => void;
+}) {
+  const [presets, setPresets] = useState<ToolchainPreset[]>([]);
+  const [chosen, setChosen] = useState<string[]>(stack.presets);
+  const [frameworks, setFrameworks] = useState(stack.frameworks);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    getToolchainPresets()
+      .then((r) => setPresets(r.presets))
+      .catch((e) => setError(describe(e)));
+  }, []);
+
+  const toggle = (id: string) =>
+    setChosen((c) => (c.includes(id) ? c.filter((p) => p !== id) : [...c, id]));
+
+  const start = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const { work_order, toolchain } = await setUpProject(projectId, chosen, frameworks);
+      onStarted(work_order.id, toolchain);
+    } catch (e) {
+      setError(describe(e));
+      setBusy(false);
+    }
+  };
+
+  return (
+    <section className="panel vision__setup">
+      <h3>Set the project up</h3>
+      <p className="muted">
+        {stack.reason || "The assistant recommends this stack."} Commitarium scaffolds a minimal app
+        on it, with tests and a live-reloading preview, before the plan's items start.
+      </p>
+      <div className="vision__presets">
+        {presets.map((p) => (
+          <button
+            key={p.id}
+            className={`vision__preset ${chosen.includes(p.id) ? "vision__preset--on" : ""}`}
+            onClick={() => toggle(p.id)}
+            title={p.description}
+            disabled={busy}
+          >
+            {p.display_name}
+          </button>
+        ))}
+      </div>
+      <label className="field">
+        <span>Frameworks</span>
+        <input
+          type="text"
+          value={frameworks}
+          onChange={(e) => setFrameworks(e.target.value)}
+          placeholder="React with Vite; FastAPI"
+          disabled={busy}
+        />
+      </label>
+      {error && <div className="banner banner--error">{error}</div>}
+      <button
+        className="primary"
+        onClick={() => void start()}
+        disabled={busy || chosen.length === 0}
+      >
+        {busy ? "Starting…" : "Set the project up"}
+      </button>
+    </section>
   );
 }
 

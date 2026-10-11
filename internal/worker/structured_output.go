@@ -167,8 +167,19 @@ func OutputJSONSchema(contract OutputContract) any {
 				"confidence": map[string]any{"type": "string", "enum": []string{"high", "medium", "low"}},
 				"guesses":    map[string]any{"type": "array", "items": text},
 				"priorities": map[string]any{"type": "array", "items": priority},
+				"stack": objectSchema(
+					map[string]any{
+						"presets": map[string]any{
+							"type": "array", "items": text,
+							"description": "Runtime preset IDs for a project without code yet; empty otherwise.",
+						},
+						"frameworks": text,
+						"reason":     text,
+					},
+					[]string{"presets", "frameworks", "reason"},
+				),
 			},
-			[]string{"action", "message", "statement", "confidence", "guesses", "priorities"},
+			[]string{"action", "message", "statement", "confidence", "guesses", "priorities", "stack"},
 		)
 	case OutputContractSessionOpening:
 		return objectSchema(
@@ -512,6 +523,7 @@ func ResolveStructuredOutput(
 			Confidence string                           `json:"confidence"`
 			Guesses    []string                         `json:"guesses"`
 			Priorities []featureartifact.VisionPriority `json:"priorities"`
+			Stack      *featureartifact.VisionStack     `json:"stack"`
 		}
 		if err := decodeStructuredOutput(raw, &response); err != nil {
 			return StructuredOutput{}, err
@@ -528,7 +540,7 @@ func ResolveStructuredOutput(
 		case "propose":
 			plan, err := featureartifact.VisionPlan{
 				Statement: response.Statement, Priorities: response.Priorities,
-				Confidence: response.Confidence, Guesses: response.Guesses,
+				Confidence: response.Confidence, Guesses: response.Guesses, Stack: response.Stack,
 			}.NormalizeProposed()
 			if err != nil {
 				return StructuredOutput{}, invalidStructuredOutput("vision plan: %v", err)

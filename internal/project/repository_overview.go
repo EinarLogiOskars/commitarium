@@ -3,6 +3,7 @@ package project
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 )
 
@@ -83,4 +84,17 @@ func (unavailableRepositoryOverviewReader) ReadRepositoryOverview(
 	string,
 ) (RepositoryOverview, error) {
 	return RepositoryOverview{}, ErrForgejoUnavailable
+}
+
+// HasCode reports whether the repository holds more than the files a new
+// repository starts with, such as a README, a license, or dotfiles.
+func (overview RepositoryOverview) HasCode() bool {
+	for _, entry := range overview.Tree {
+		name := strings.ToLower(entry.Path)
+		if !strings.HasPrefix(name, "readme") && !strings.HasPrefix(name, "license") &&
+			!strings.HasPrefix(name, "licence") && !strings.HasPrefix(name, ".") {
+			return true
+		}
+	}
+	return false
 }

@@ -22,6 +22,7 @@ import (
 
 	"github.com/EinarLogiOskars/commitarium/internal/featureartifact"
 	"github.com/EinarLogiOskars/commitarium/internal/project"
+	"github.com/EinarLogiOskars/commitarium/internal/toolchain"
 	"github.com/EinarLogiOskars/commitarium/internal/workerhttp"
 	"github.com/EinarLogiOskars/commitarium/internal/workspace"
 )
@@ -471,6 +472,7 @@ func (service *Service) refresh(ctx context.Context, record sessionRecord) (sess
 	case attempt.Result.VisionPlan != nil:
 		reply = attempt.Result.Summary
 		plan := *attempt.Result.VisionPlan
+		plan.Stack = knownStack(plan.Stack)
 		previous, readErr := service.read(record.ProjectID)
 		if readErr == nil {
 			keepWorkOrders(plan.Priorities, previous.Plan)
@@ -607,6 +609,15 @@ func initialInstructions(
 		"focused and independently useful. Write titles as short imperative tasks and give each item a one or two " +
 		"sentence description of the outcome. Prefer a small plan that ships a useful first version over an " +
 		"exhaustive one. This is planning only: do not edit files or begin implementation.\n\n")
+	if !overview.HasCode() {
+		builder.WriteString("The repository has no code yet. Recommend its stack in stack: one or more of these " +
+			"runtime presets, by ID (" + presetList() + "); the frameworks to build it with, in a few words (for " +
+			"example \"React with Vite; FastAPI with SQLite\"); and one sentence on why. Prefer the simplest stack " +
+			"that fits. Commitarium scaffolds the app on that stack and sets up its preview before any item is " +
+			"built, so leave scaffolding and project setup out of the plan.\n\n")
+	} else {
+		builder.WriteString("The repository already has code, so leave stack.presets empty.\n\n")
+	}
 	if checkedOut {
 		builder.WriteString("The project's repository is checked out read-only in your working directory. Before " +
 			"you plan, inspect it (read the code, list directories, run read-only commands) to learn what the app " +
@@ -650,6 +661,39 @@ func initialInstructions(
 		}
 	}
 	return builder.String()
+}
+
+func presetList() string {
+	presets := toolchain.Presets()
+	described := make([]string, 0, len(presets))
+	for _, preset := range presets {
+		described = append(described, preset.ID+": "+preset.DisplayName)
+	}
+	return strings.Join(described, "; ")
+}
+
+// knownStack keeps only the presets Commitarium offers; a recommendation
+// without any is dropped.
+func knownStack(stack *featureartifact.VisionStack) *featureartifact.VisionStack {
+	if stack == nil {
+		return nil
+	}
+	known := map[string]bool{}
+	for _, preset := range toolchain.Presets() {
+		known[preset.ID] = true
+	}
+	presets := make([]string, 0, len(stack.Presets))
+	for _, preset := range stack.Presets {
+		if known[preset] {
+			presets = append(presets, preset)
+		}
+	}
+	if len(presets) == 0 {
+		return nil
+	}
+	kept := *stack
+	kept.Presets = presets
+	return &kept
 }
 
 func replyInstructions(message string) string {
