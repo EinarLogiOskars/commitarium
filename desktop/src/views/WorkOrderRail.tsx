@@ -64,7 +64,8 @@ export function WorkOrderRail({
   }, [kind, load]);
 
   if (features === null) return <p className="muted rail__section">Loading…</p>;
-  const ofKind = features.filter((f) => (f.kind ?? "work_order") === kind);
+  // Background work, such as the preview setup, is not the user's to manage.
+  const ofKind = features.filter((f) => (f.kind ?? "work_order") === kind && !f.background);
   if (ofKind.length === 0) {
     return (
       <p className="muted rail__section">
