@@ -411,3 +411,42 @@ func TestListFeatureRunsMapsErrors(t *testing.T) {
 		})
 	}
 }
+
+func TestStartRunUsesTheSettingsChosenAtStart(t *testing.T) {
+	features := &recordingFeatureService{getResult: feature.Feature{
+		ID: "fea_test", ProjectID: "prj_test", Title: "Filter", State: feature.StateReady,
+		AgentProviders: project.DefaultAgentProviders(),
+		MergePolicy:    project.MergePolicyAutoAfterGates,
+		AutonomyPolicy: project.AutonomyPolicyRunToCompletion,
+	}}
+	starter := &recordingRunStarter{}
+	request := httptest.NewRequest(
+		http.MethodPost, "/api/v1/projects/prj_test/features/fea_test/runs",
+		strings.NewReader(`{"agent_providers":{"lead":"codex","reviewer":"claude"},"autonomy_policy":"review_each_phase"}`),
+	)
+	request.Header.Set("Idempotency-Key", "start-with-settings")
+	recorder := httptest.NewRecorder()
+	New(&recordingProjectService{}, features, nil, &recordingExecutionService{runErr: execution.ErrNotFound}, nil, starter).
+		ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusAccepted {
+		t.Fatalf("status %d: %s", recorder.Code, recorder.Body.String())
+	}
+	if starter.providers.Reviewer != project.AgentProviderClaude ||
+		starter.autonomyPolicy != project.AutonomyPolicyReviewEachPhase ||
+		starter.mergePolicy != project.MergePolicyAutoAfterGates {
+		t.Fatalf("run did not start with the chosen settings: providers=%+v autonomy=%q merge=%q",
+			starter.providers, starter.autonomyPolicy, starter.mergePolicy)
+	}
+
+	bad := httptest.NewRequest(
+		http.MethodPost, "/api/v1/projects/prj_test/features/fea_test/runs",
+		strings.NewReader(`{"surprise":true}`),
+	)
+	bad.Header.Set("Idempotency-Key", "start-unknown-field")
+	recorder = httptest.NewRecorder()
+	New(&recordingProjectService{}, features, nil, &recordingExecutionService{runErr: execution.ErrNotFound}, nil, starter).
+		ServeHTTP(recorder, bad)
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("unknown start field status %d", recorder.Code)
+	}
+}

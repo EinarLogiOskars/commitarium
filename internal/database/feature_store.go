@@ -298,3 +298,29 @@ func scanFeature(row featureScanner) (feature.Feature, error) {
 	}
 	return storedFeature, nil
 }
+
+// UpdateReadySettings saves the settings a Ready work order starts with.
+func (s *FeatureStore) UpdateReadySettings(ctx context.Context, chosen feature.Feature) error {
+	result, err := s.db.ExecContext(
+		ctx,
+		`UPDATE features
+		    SET lead_provider = ?, reviewer_provider = ?, lead_agent = ?, reviewer_agent = ?,
+		        lead_model = ?, reviewer_model = ?, merge_policy = ?, autonomy_policy = ?,
+		        independent_acceptance_tests = ?
+		  WHERE id = ? AND state = ?`,
+		chosen.AgentProviders.Lead, chosen.AgentProviders.Reviewer,
+		chosen.AgentProviders.LeadAgent, chosen.AgentProviders.ReviewerAgent,
+		chosen.AgentModels.Lead, chosen.AgentModels.Reviewer,
+		chosen.MergePolicy, chosen.AutonomyPolicy, chosen.IndependentAcceptanceTests,
+		chosen.ID, feature.StateReady,
+	)
+	if err != nil {
+		return fmt.Errorf("update start settings of feature %q: %w", chosen.ID, err)
+	}
+	if updated, err := result.RowsAffected(); err != nil {
+		return fmt.Errorf("update start settings of feature %q: %w", chosen.ID, err)
+	} else if updated != 1 {
+		return feature.ErrNotReady
+	}
+	return nil
+}

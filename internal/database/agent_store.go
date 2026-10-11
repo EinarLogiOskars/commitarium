@@ -116,13 +116,11 @@ func (s *AgentStore) Delete(ctx context.Context, id string) error {
 	return tx.Commit()
 }
 
-// agentInUseQuery reports whether a project default, a work order that has
-// not started, or a run that has not finished still points at the agent.
+// agentInUseQuery reports whether a project default or a run that has not
+// finished still points at the agent. Work orders choose agents at Start, so a
+// draft or ready one does not hold an agent.
 const agentInUseQuery = `SELECT EXISTS (
 	SELECT 1 FROM projects WHERE lead_agent = ?1 OR reviewer_agent = ?1
-	UNION ALL
-	SELECT 1 FROM features
-	 WHERE (lead_agent = ?1 OR reviewer_agent = ?1) AND state IN ('draft', 'ready')
 	UNION ALL
 	SELECT 1 FROM runs
 	 WHERE (lead_agent = ?1 OR reviewer_agent = ?1)
