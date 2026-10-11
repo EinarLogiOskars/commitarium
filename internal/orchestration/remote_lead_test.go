@@ -3322,3 +3322,37 @@ func TestRemoteExpiredLoginWaitsForTheAgentAndResumesAfterLogin(t *testing.T) {
 		t.Fatalf("login wait was not cleared: %+v err=%v", wait, err)
 	}
 }
+
+func TestValidationPassedClearsThePendingReason(t *testing.T) {
+	db, executions, storedProject, storedFeature := newRemoteLeadExecution(t)
+	runID := "run_validation_passed"
+	if _, _, err := executions.CreateRunWithModels(
+		t.Context(), runID, storedFeature.ID, storedProject.DialogueLimits.PlanningRounds,
+		storedProject.DialogueLimits.ImplementationReviewRounds, storedProject.AgentProviders,
+		project.AgentModels{}, storedProject.MergePolicy, project.DefaultAutonomyPolicy(),
+	); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	if _, err := executions.TransitionRun(
+		t.Context(), runID, execution.RunStatusRunning, execution.RunStatusWaitingForUser,
+		validationPendingReason, execution.RunWaitKindMergeGate,
+	); err != nil {
+		t.Fatalf("wait for validation: %v", err)
+	}
+	workflowService := workflow.NewService(database.NewWorkflowStore(db))
+	starter, err := NewRemoteLeadStarter(RemoteLeadConfig{
+		Executions: executions, Features: database.NewFeatureStore(db), Goals: workflowService,
+		Workspaces: &remoteLeadWorkspaceStub{}, Worker: unavailableRemoteLeadWorker{},
+		Pump: &unexpectedRemoteLeadPump{}, Lifetime: t.Context(),
+	})
+	if err != nil {
+		t.Fatalf("create starter: %v", err)
+	}
+	if err := starter.ValidationPassed(t.Context(), runID); err != nil {
+		t.Fatalf("validation passed: %v", err)
+	}
+	run, err := executions.GetRun(t.Context(), runID)
+	if err != nil || run.Reason != validationPassedReason || run.WaitKind != execution.RunWaitKindMergeGate {
+		t.Fatalf("run still reports pending validation: %+v err=%v", run, err)
+	}
+}

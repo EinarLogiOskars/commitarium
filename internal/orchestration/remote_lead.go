@@ -1120,7 +1120,7 @@ func (starter *RemoteLeadStarter) recoverIdleReadyToMergeRun(
 		}
 		if validationErr != nil {
 			return starter.waitRun(ctx, run.ID,
-				"The exact approved revision is waiting for isolated validation before merge.",
+				validationPendingReason,
 				execution.RunWaitKindMergeGate,
 			)
 		}
@@ -5513,7 +5513,7 @@ func (starter *RemoteLeadStarter) enterMergeGate(
 				return fmt.Errorf("record validation activity: %w", err)
 			}
 			return starter.waitRun(ctx, request.runID,
-				"The exact approved revision is waiting for isolated validation before merge.",
+				validationPendingReason,
 				execution.RunWaitKindMergeGate,
 			)
 		}
@@ -6221,6 +6221,25 @@ func (starter *RemoteLeadStarter) waitRun(
 		ctx, run.ID, run.Status, execution.RunStatusWaitingForUser, reason, waitKind,
 	)
 	return err
+}
+
+const (
+	validationPendingReason = "The exact approved revision is waiting for isolated validation before merge."
+	validationPassedReason  = "Isolated validation passed. The approved revision is ready to merge."
+)
+
+// ValidationPassed moves a run waiting on isolated validation at the merge
+// gate to ready, so its reason no longer says validation is pending.
+func (starter *RemoteLeadStarter) ValidationPassed(ctx context.Context, runID string) error {
+	run, err := starter.executions.GetRun(ctx, runID)
+	if err != nil {
+		return err
+	}
+	if run.Status != execution.RunStatusWaitingForUser || run.Paused ||
+		run.WaitKind != execution.RunWaitKindMergeGate || run.Reason != validationPendingReason {
+		return nil
+	}
+	return starter.waitRun(ctx, runID, validationPassedReason, execution.RunWaitKindMergeGate)
 }
 
 func (starter *RemoteLeadStarter) failAdmission(
