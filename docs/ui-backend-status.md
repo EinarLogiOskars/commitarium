@@ -56,7 +56,9 @@ with the implementation and public API documentation they describe.
   device codes. Raw provider output and credentials are never emitted.
 - Subscription and API-key setup both write only to the agent's private
   provider-state volume, which its worker uses for lead and reviewer work.
-- A running agent worker must be stopped before its login is changed or removed.
+- A login runs inside the agent's worker while it runs, so an expired login can
+  be renewed without stopping the stack. A running agent worker must be
+  stopped before its login is removed.
   This is an intentional volume-ownership and active-work safety rule.
 
 ### Profile-aware stack lifecycle

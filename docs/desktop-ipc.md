@@ -811,12 +811,13 @@ progress without starting a second process.
   "login exited 0"); a stale/invalid token must resolve to `expired`/`failed`.
 - `disconnect_profile(profileId) -> Profile`
 
-Changing or disconnecting a profile is rejected while that agent's long-lived
-worker is running. This prevents two containers from mounting one writable
-provider-state volume at once and prevents credentials from being removed
-under an active agent. The user can stop the stack, change the profile, and
-start it again; subsequent starts leave that worker stopped until the new login
-passes its real provider status check.
+Logging in while an agent's worker is running happens inside that worker, as
+`/login` does in a provider session: no second container mounts the provider
+volume, and the worker's next provider process uses the new login, so an
+expired login can be renewed without stopping work. Otherwise a fixed-name
+helper container runs the login. Disconnecting is still rejected while the
+agent's worker is running, so credentials are never removed under an active
+agent; the user stops the stack first.
 
 **Progress event**
 

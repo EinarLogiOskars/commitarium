@@ -416,11 +416,6 @@ pub fn begin_login(
     let spec = profile_spec(&profile_id)?;
     let method = LoginMethod::parse(&method)?;
     provision_worker(&spec)?;
-    if service_is_running(&spec)? {
-        return Err(
-            "this provider worker is running; stop the stack before changing its login".to_string(),
-        );
-    }
     match method {
         LoginMethod::ApiKey => {
             let manager = manager.inner().clone();
@@ -1238,7 +1233,17 @@ fn spawn_profile_command(
     // Starting a new user-requested login removes only that exact stale helper,
     // never a worker or arbitrary container.
     remove_login_container(spec);
-    let mut command = compose_command(spec, executable, false, Some(&spec.login_container))?;
+    // While the agent's worker runs, log in inside it, as `/login` does in a
+    // provider session: no second container mounts the provider volume, and
+    // the worker's next provider process uses the new login without a
+    // restart. Otherwise a fixed-name helper container runs the login.
+    let running = service_is_running(spec)?;
+    let mut command = compose_command(
+        spec,
+        executable,
+        running,
+        (!running).then_some(spec.login_container.as_str()),
+    )?;
     command
         .args(arguments)
         .stdin(Stdio::piped())
