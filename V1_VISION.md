@@ -213,7 +213,7 @@ public coordinator API, and every new action comes with an approval policy
 | Escalation | Done: wait reasons, the attention inbox, native notifications, the intervene bar. Failures pause instead of ending work orders ([RECOVERABLE_RUNS_PLAN.md](RECOVERABLE_RUNS_PLAN.md), ADR-017): retry, reopen, back to Ready, and resume after an expired login. |
 | Isolation | Done. Every new kind of work reuses it. |
 | Agents | Done ([AGENTS_PLAN.md](AGENTS_PLAN.md), ADR-016): one worker per provider account, serving both roles, chosen at Start. |
-| Flexible work orders | Missing: optional reviewer, documented plan, and clarification, with presets ([FLEXIBLE_WORK_ORDERS_PLAN.md](FLEXIBLE_WORK_ORDERS_PLAN.md)). |
+| Flexible work orders | Done ([FLEXIBLE_WORK_ORDERS_PLAN.md](FLEXIBLE_WORK_ORDERS_PLAN.md), ADR-018): Full, Planned, and Quick change chosen at Start, and a Draft can start without clarifying. Turning a step on mid-run is a follow-up. |
 | Session | Missing: chat, pause and resume, catch-up on resume, live preview. |
 | Project direction and assistant | Missing. The clarification chat and `SetupAssistant` are working templates. |
 | Builder mode, autopilot, Apps | Missing; after the parts above. |

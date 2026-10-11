@@ -160,6 +160,15 @@ again, which also brings repositories bound by older versions or manually into
 the current workflow. The rule requires one approval and allows only the
 coordinator identity to merge. It leaves agent feature-branch work unrestricted.
 
+A work order without a reviewer (ADR-018) gets that approval from the
+coordinator at the merge gate. The coordinator is not the pull request's
+author, so Forgejo counts its review; the review body states that no reviewer
+took part and whether the user or the auto-merge policy approved. No second
+model has checked such a change, so the project's validation commands and the
+user's merge decision are the only checks before the default branch. This does
+not weaken the rule for other work orders: it is still one approval, and still
+only the coordinator merges.
+
 ## Backup and restore boundary
 
 Backup and restore are trusted-host operations implemented behind fixed Tauri

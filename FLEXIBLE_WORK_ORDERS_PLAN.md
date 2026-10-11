@@ -1,5 +1,8 @@
 # Flexible Work Orders: Implementation Plan
 
+**Status:** implemented on `feat/flexible-work-orders` (F1–F8); awaiting user
+testing.
+
 ## Goal
 
 Make three steps of a work order optional, chosen at Start (ADR-018):

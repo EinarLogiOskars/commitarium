@@ -1533,9 +1533,10 @@ credentials and never pushes to the user's remote.
 
 ## Starting and observing a run
 
-Only a `ready` work order can start (ADR-015); anything else returns
-`409 feature_not_startable`. In `real_agents` mode the run begins with the
-lead's planning proposal from the work order's handoff brief (see below).
+Only a `ready` work order can start (ADR-015), unless the Start skips
+clarification (below); anything else returns `409 feature_not_startable`. In
+`real_agents` mode the run begins with the lead's planning proposal from the
+work order's handoff brief (see below).
 
 A work order's agents, models, and workflow settings are chosen at Start, not
 while drafting. The optional body names them; every field is optional and an
@@ -1552,7 +1553,8 @@ Content-Type: application/json
   "agent_models": {"lead": "gpt-5.6-sol", "reviewer": "claude-opus-5"},
   "autonomy_policy": "run_to_completion",
   "merge_policy": "require_user_approval",
-  "independent_acceptance_tests": false
+  "independent_acceptance_tests": false,
+  "steps": {"documented_plan": true, "reviewer": false}
 }
 ```
 
@@ -1560,6 +1562,35 @@ The chosen settings are saved on the work order, then snapshotted by the run.
 Unknown fields return `400 invalid_json`; agents, models, and policies are
 validated as for project settings. An empty body starts with the current
 settings.
+
+`steps` chooses the work order's optional steps (ADR-018). Both default to
+`true`, and a reviewer requires a documented plan, so `{"documented_plan":
+false, "reviewer": true}` returns `400 invalid_steps`:
+
+- **Full** (`documented_plan` and `reviewer`): the lead and reviewer agree a
+  commit-ordered plan, the reviewer may write independent acceptance tests, and
+  code review and the lead's readiness acknowledgement precede the merge gate.
+- **Planned** (`reviewer: false`): the lead submits its plan in its first
+  planning turn, the coordinator publishes it without an approval turn, and
+  after the published implementation is verified the run goes straight to the
+  merge gate. `independent_acceptance_tests` is forced to `false`.
+- **Quick change** (neither): at Start the coordinator publishes "No documented
+  plan" as the run's plan, which opens the feature branch and draft pull
+  request, and the lead's first turn implements the accepted goal without a
+  plan checklist. A scope-changing intervention cannot replan such a run; it
+  goes Back to Ready instead.
+
+Without a reviewer, Forgejo's branch protection still requires one approval.
+At the merge gate the coordinator posts that approval itself, stating that the
+work order had no reviewer and whether the user or the auto-merge policy
+approved the merge, then merges normally. Feature and run responses carry the
+chosen `steps` object.
+
+`steps.clarification: false` starts a `draft` work order without
+clarification: the coordinator writes the handoff brief with the title and
+description as its goal, moves the work order to `ready`, and starts it as
+above. A goal that is not a valid brief returns `400 invalid_goal`.
+`clarification` is not stored; on a `ready` work order it has no effect.
 
 A successful response is `202 Accepted` and points to the run resource:
 
