@@ -142,7 +142,7 @@ func (api *API) attentionForFeature(
 			ID: "auto_merge_completed:" + currentFeature.ID, Kind: "auto_merge_completed",
 			Severity: "info", Actionable: false, ProjectID: currentProject.ID,
 			ProjectName: currentProject.Name, FeatureID: currentFeature.ID, FeatureTitle: currentFeature.Title,
-			Title: "Work order merged", Detail: "Automatic merge completed after all gates passed.",
+			Title: mergedTitle(currentFeature), Detail: "Automatic merge completed after all gates passed.",
 			UpdatedAt: currentFeature.UpdatedAt,
 		}}, nil, nil
 	}
@@ -185,6 +185,11 @@ func (api *API) attentionForFeature(
 	if currentRun.Status != execution.RunStatusWaitingForUser {
 		return nil, nil, nil
 	}
+	// A session waiting for the user's next message is idle, not asking for
+	// attention: the rail shows its new replies instead (ADR-019).
+	if currentFeature.Kind == feature.KindSession && currentRun.WaitKind == execution.RunWaitKindClarification {
+		return nil, nil, nil
+	}
 
 	if currentRun.WaitKind == execution.RunWaitKindMergeGate && api.validations != nil {
 		jobs, err := api.validations.JobsForRun(ctx, currentRun.ID)
@@ -196,6 +201,13 @@ func (api *API) attentionForFeature(
 		}
 	}
 	return []attentionItem{runWaitAttention(base, currentRun)}, nil, nil
+}
+
+func mergedTitle(currentFeature feature.Feature) string {
+	if currentFeature.Kind == feature.KindSession {
+		return "Session merged"
+	}
+	return "Work order merged"
 }
 
 func newestRun(runs []execution.Run) execution.Run {

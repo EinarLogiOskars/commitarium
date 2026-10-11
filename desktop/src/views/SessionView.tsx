@@ -7,6 +7,7 @@ import { useSessionEvents } from "./useSessionEvents";
 import { MergeView } from "./MergeView";
 import { PREVIEW_STATE, primaryUrl, usePreview, type PreviewHandle } from "./usePreview";
 import { openExternal } from "../ipc";
+import { markSessionSeen } from "./sessionSeen";
 import type { Feature, Run } from "../api/types";
 
 const GREETING = "Hey, what can I help you with?";
@@ -62,6 +63,11 @@ export function SessionView({
     const el = chatRef.current;
     if (el && pinnedToBottom.current) el.scrollTop = el.scrollHeight;
   }, [entries]);
+
+  // An open session's latest reply is seen.
+  useEffect(() => {
+    if (run && run.status !== "running") markSessionSeen(feature.id, run.updated_at);
+  }, [feature.id, run]);
 
   const done = feature.state === "completed" || feature.state === "cancelled";
   const working = run?.status === "running";

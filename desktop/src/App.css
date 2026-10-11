@@ -2956,15 +2956,27 @@ button.danger:not(.ghost) {
 }
 
 /* Sessions (ADR-019). */
-.rail__actions {
+.rail__tabs {
   display: flex;
   gap: 2px;
 }
-.rail__kind {
-  flex: none;
-  margin-left: 6px;
-  font-size: 11px;
+.rail__tab {
+  background: transparent;
+  border: none;
+  padding: 2px 6px;
+  border-radius: 6px;
+  font: inherit;
   color: var(--muted);
+  letter-spacing: inherit;
+  text-transform: inherit;
+  cursor: pointer;
+}
+.rail__tab:hover {
+  color: var(--text);
+}
+.rail__tab--on {
+  color: var(--text);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
 }
 .session__title h2 {
   display: flex;

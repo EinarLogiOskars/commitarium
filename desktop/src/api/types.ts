@@ -274,6 +274,9 @@ export interface Feature {
   // "session" is an interactive session with one agent (ADR-019); absent on
   // older coordinators, which only have work orders.
   kind?: WorkKind;
+  // A session's agent activity, in feature lists only: working on a message,
+  // or idle since `updated_at`.
+  session?: { working: boolean; updated_at: string };
   created_at: string;
   updated_at: string;
 }

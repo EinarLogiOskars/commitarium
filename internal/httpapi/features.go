@@ -1,12 +1,14 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"log"
 	"net/http"
 	"time"
 
+	"github.com/EinarLogiOskars/commitarium/internal/execution"
 	"github.com/EinarLogiOskars/commitarium/internal/feature"
 	"github.com/EinarLogiOskars/commitarium/internal/project"
 	"github.com/EinarLogiOskars/commitarium/internal/toolchain"
@@ -41,8 +43,10 @@ type featureResponse struct {
 	IndependentAcceptanceTests bool                   `json:"independent_acceptance_tests"`
 	Steps                      workStepsResponse      `json:"steps"`
 	Kind                       feature.Kind           `json:"kind"`
-	CreatedAt                  time.Time              `json:"created_at"`
-	UpdatedAt                  time.Time              `json:"updated_at"`
+	// Session reports a session's agent activity in feature lists (ADR-019).
+	Session   *sessionActivityResponse `json:"session,omitempty"`
+	CreatedAt time.Time                `json:"created_at"`
+	UpdatedAt time.Time                `json:"updated_at"`
 }
 
 func (api *API) createFeatureHandler(
@@ -213,7 +217,11 @@ func (api *API) listFeaturesHandler(w http.ResponseWriter, r *http.Request) {
 
 	response := make([]featureResponse, 0, len(features))
 	for _, storedFeature := range features {
-		response = append(response, newFeatureResponse(storedFeature))
+		item := newFeatureResponse(storedFeature)
+		if storedFeature.Kind == feature.KindSession {
+			item.Session = api.sessionActivity(r.Context(), storedFeature.ID)
+		}
+		response = append(response, item)
 	}
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(response); err != nil {
@@ -312,4 +320,25 @@ func featureKind(kind feature.Kind) feature.Kind {
 		return feature.KindWorkOrder
 	}
 	return kind
+}
+
+// sessionActivityResponse is what a session's agent is doing: working on a
+// message, or waiting since its last reply.
+type sessionActivityResponse struct {
+	Working   bool      `json:"working"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// sessionActivity reads a session's newest run; nil when it has none or the
+// runs cannot be read, which lists show as idle.
+func (api *API) sessionActivity(ctx context.Context, featureID string) *sessionActivityResponse {
+	if api.execution == nil {
+		return nil
+	}
+	runs, err := api.execution.RunsForFeature(ctx, featureID)
+	if err != nil || len(runs) == 0 {
+		return nil
+	}
+	run := newestRun(runs)
+	return &sessionActivityResponse{Working: run.Status == execution.RunStatusRunning, UpdatedAt: run.UpdatedAt}
 }
