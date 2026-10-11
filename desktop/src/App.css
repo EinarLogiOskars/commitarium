@@ -1846,6 +1846,10 @@ button.danger:not(.ghost) {
   margin-top: 12px;
   padding-top: 12px;
   border-top: 1px solid var(--border);
+  /* Banners and recovery controls can outgrow the phase panel; the dock
+     then scrolls inside it rather than spilling past its edge. */
+  max-height: 60%;
+  overflow-y: auto;
 }
 .intervene__row {
   display: flex;

@@ -52,6 +52,9 @@ export function InterveneBar({
   // state. Re-check reconciles the durable attempt without a new agent.
   const blocked =
     !suppressRecover && !paused && run.status === "waiting_for_user" && run.wait_kind === "blocker";
+  // Waiting on an agent's login: the login banner is the one action needed,
+  // and the run continues by itself once the agent is connected.
+  const loginWait = blocked && run.login_required != null;
 
   // Prefer the backend's authoritative target list; fall back to the sessions.
   const targets = run.intervention_targets;
@@ -190,7 +193,7 @@ export function InterveneBar({
             >
               Cancel pause
             </button>
-          ) : action ? (
+          ) : action && !blocked ? (
             <button
               className="primary"
               onClick={action.onClick}
@@ -204,7 +207,7 @@ export function InterveneBar({
 
       {error && <div className="banner banner--error">{error}</div>}
 
-      {blocked && run.login_required && (
+      {loginWait && run.login_required && (
         <div className="wait-banner wait-banner--warn">
           <span className="wait-banner__kind">
             {agentName(agents, run.login_required.agent)} login expired
@@ -227,7 +230,7 @@ export function InterveneBar({
         />
       )}
 
-      {blocked && <RecoveryPanel run={run} onChanged={onChanged} />}
+      {blocked && !loginWait && <RecoveryPanel run={run} onChanged={onChanged} />}
 
       {iv && !iv.resolved_at && (
         <div className={`intervene__queued ${answered ? "intervene__queued--done" : ""}`}>
