@@ -1286,6 +1286,9 @@ fn profile_command_status(
     Ok(status.success())
 }
 
+/// Ends a login left behind: the fixed-name helper container, and a login
+/// process running inside the agent's worker. Only provider login commands
+/// are matched, never the worker's own provider turns.
 fn remove_login_container(spec: &ProfileSpec) {
     let _ = docker::docker_command()
         .args(["rm", "--force", &spec.login_container])
@@ -1293,7 +1296,28 @@ fn remove_login_container(spec: &ProfileSpec) {
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status();
+    if service_is_running(spec).unwrap_or(false) {
+        if let Ok(mut command) = compose_command(spec, "/bin/sh", true, None) {
+            let _ = command
+                .args(["-c", END_LOGIN_PROCESSES])
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status();
+        }
+    }
 }
+
+/// Stops provider login processes inside a worker without depending on
+/// procps, which the worker images do not include.
+const END_LOGIN_PROCESSES: &str = r#"for process in /proc/[0-9]*; do
+  [ "${process#/proc/}" = "$$" ] && continue
+  command=$(tr '\0' ' ' < "$process/cmdline" 2>/dev/null) || continue
+  case "$command" in
+    *" auth login"*|*" login --device-auth"*|*" login --with-api-key"*|*"commitarium-claude-api-key store"*)
+      kill "${process#/proc/}" 2>/dev/null ;;
+  esac
+done"#;
 
 #[cfg(test)]
 mod tests {
