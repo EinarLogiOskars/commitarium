@@ -112,6 +112,11 @@ func (api *API) ensurePreviewSetup(ctx context.Context, projectID string) (*feat
 	if repositoryHasCompose(overview) {
 		return nil, errPreviewHasCompose
 	}
+	if !repositoryHasApp(overview) {
+		// Nothing to preview yet. Reading the stack checks again, so the setup
+		// starts once the first code is merged.
+		return nil, nil
+	}
 	started, err := api.startBackgroundWorkOrder(ctx, projectID, previewSetupTitle, previewSetupDescription())
 	if err != nil {
 		return nil, err
@@ -191,6 +196,21 @@ func repositoryHasCompose(overview project.RepositoryOverview) bool {
 			if entry.Path == name {
 				return true
 			}
+		}
+	}
+	return false
+}
+
+// repositoryHasApp reports whether the repository holds more than the files a
+// new repository starts with, such as a README or a license.
+func repositoryHasApp(overview project.RepositoryOverview) bool {
+	for _, entry := range overview.Tree {
+		name := strings.ToLower(entry.Path)
+		switch {
+		case strings.HasPrefix(name, "readme"), strings.HasPrefix(name, "license"),
+			strings.HasPrefix(name, "licence"), strings.HasPrefix(name, "."):
+		default:
+			return true
 		}
 	}
 	return false

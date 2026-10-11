@@ -111,3 +111,13 @@ func TestProjectToolchainSavesAConfidentDetection(t *testing.T) {
 		t.Fatalf("an unsure detection was saved: %+v %+v err=%v", manifest, unsure.configured, err)
 	}
 }
+
+func TestPreviewSetupWaitsForTheFirstCode(t *testing.T) {
+	api, features, starter := previewSetupAPI([]project.RepositoryTreeEntry{
+		{Path: "README.md", Type: "blob"}, {Path: "LICENSE", Type: "blob"}, {Path: ".gitignore", Type: "blob"},
+	}, nil)
+	started, err := api.ensurePreviewSetup(t.Context(), "prj_test")
+	if err != nil || started != nil || features.createCalls != 0 || starter.featureID != "" {
+		t.Fatalf("an empty repository started a preview setup: %+v err=%v", started, err)
+	}
+}
