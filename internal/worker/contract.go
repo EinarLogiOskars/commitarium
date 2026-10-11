@@ -63,6 +63,9 @@ const (
 	OutputContractToolchainSetup          OutputContract = "toolchain_setup"
 	OutputContractPlanApproval            OutputContract = "plan_approval"
 	OutputContractWorkOrderBrief          OutputContract = "work_order_brief"
+	// OutputContractSessionOpening is a session's first turn (ADR-019): the
+	// reply and a short title for the session.
+	OutputContractSessionOpening OutputContract = "session_opening"
 )
 
 // LaunchEnvironment is the worker-resolved view of the profile and workspace
@@ -195,6 +198,7 @@ type Result struct {
 	AcceptanceTests    *featureartifact.AcceptanceTests
 	EnvironmentRequest *EnvironmentRequest
 	HandoffBrief       *featureartifact.HandoffBrief
+	SessionTitle       string
 	Usage              *TokenUsage
 	// LoginRequired marks a failed turn whose provider login must be renewed.
 	LoginRequired bool
@@ -347,12 +351,14 @@ func (request SessionRequest) Validate() error {
 		request.OutputContract != OutputContractIntervention &&
 		request.OutputContract != OutputContractToolchainSetup &&
 		request.OutputContract != OutputContractPlanApproval &&
-		request.OutputContract != OutputContractWorkOrderBrief:
+		request.OutputContract != OutputContractWorkOrderBrief &&
+		request.OutputContract != OutputContractSessionOpening:
 		return fmt.Errorf("%w: output contract %q is not recognized", ErrInvalidSessionRequest, request.OutputContract)
 	case (request.OutputContract == OutputContractPlanningLead ||
 		request.OutputContract == OutputContractGoalClarification ||
 		request.OutputContract == OutputContractImplementationLead ||
-		request.OutputContract == OutputContractImplementationReadiness) && request.Role != RoleLead:
+		request.OutputContract == OutputContractImplementationReadiness ||
+		request.OutputContract == OutputContractSessionOpening) && request.Role != RoleLead:
 		return fmt.Errorf("%w: lead output contract requires the lead role", ErrInvalidSessionRequest)
 	case (request.OutputContract == OutputContractToolchainSetup ||
 		request.OutputContract == OutputContractWorkOrderBrief) &&

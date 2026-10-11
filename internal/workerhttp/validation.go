@@ -198,13 +198,15 @@ func (request PutAttemptRequest) Validate(identity MutationIdentity) error {
 		request.OutputContract != OutputContractIntervention &&
 		request.OutputContract != OutputContractToolchainSetup &&
 		request.OutputContract != OutputContractPlanApproval &&
-		request.OutputContract != OutputContractWorkOrderBrief {
+		request.OutputContract != OutputContractWorkOrderBrief &&
+		request.OutputContract != OutputContractSessionOpening {
 		return invalid("output contract %q is not recognized", request.OutputContract)
 	}
 	if (request.OutputContract == OutputContractPlanningLead ||
 		request.OutputContract == OutputContractGoalClarification ||
 		request.OutputContract == OutputContractImplementationLead ||
-		request.OutputContract == OutputContractImplementationReadiness) &&
+		request.OutputContract == OutputContractImplementationReadiness ||
+		request.OutputContract == OutputContractSessionOpening) &&
 		request.Assignment.Role != RoleLead {
 		return invalid("lead output contract requires the lead role")
 	}
@@ -414,6 +416,9 @@ func (result TerminalResult) Validate() error {
 		}
 		if result.HandoffBrief != nil && result.Disposition != DispositionSucceeded {
 			return invalid("handoff brief requires a successful disposition")
+		}
+		if result.SessionTitle != "" && result.Disposition != DispositionSucceeded {
+			return invalid("session title requires a successful disposition")
 		}
 		if result.EnvironmentRequest != nil && (result.Disposition != DispositionInputRequired || result.Publication != nil || result.Review != nil || result.InterventionEffect != "" || result.ToolchainProposal != nil) {
 			return invalid("environment request requires input and cannot contain another specialized result")

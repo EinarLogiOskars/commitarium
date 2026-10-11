@@ -28,7 +28,11 @@ type StructuredOutput struct {
 	AcceptanceTests    *featureartifact.AcceptanceTests
 	EnvironmentRequest *EnvironmentRequest
 	HandoffBrief       *featureartifact.HandoffBrief
+	SessionTitle       string
 }
+
+// MaxSessionTitleRunes bounds a session title; longer titles are shortened.
+const MaxSessionTitleRunes = 80
 
 // idSchema describes checklist IDs. Invalid IDs are normalized rather than
 // rejected, but stating the format keeps the agent's IDs and the stored ones
@@ -124,6 +128,14 @@ func OutputJSONSchema(contract OutputContract) any {
 				"open_questions": list,
 			},
 			[]string{"action", "message", "goal", "areas", "considerations", "open_questions"},
+		)
+	case OutputContractSessionOpening:
+		return objectSchema(
+			map[string]any{
+				"title":   map[string]any{"type": "string", "description": "A short title, at most 60 characters, for what the user asked for in this session."},
+				"message": map[string]any{"type": "string"},
+			},
+			[]string{"title", "message"},
 		)
 	case OutputContractPlanApproval:
 		return objectSchema(
@@ -450,6 +462,27 @@ func ResolveStructuredOutput(
 		default:
 			return StructuredOutput{}, invalidStructuredOutput("work order brief response has an unknown action")
 		}
+
+	case OutputContractSessionOpening:
+		var response struct {
+			Title   string `json:"title"`
+			Message string `json:"message"`
+		}
+		if err := decodeStructuredOutput(raw, &response); err != nil {
+			return StructuredOutput{}, err
+		}
+		title := strings.Join(strings.Fields(response.Title), " ")
+		if runes := []rune(title); len(runes) > MaxSessionTitleRunes {
+			title = strings.TrimSpace(string(runes[:MaxSessionTitleRunes-1])) + "…"
+		}
+		response.Message = strings.TrimSpace(response.Message)
+		if title == "" || response.Message == "" {
+			return StructuredOutput{}, invalidStructuredOutput("session opening response is incomplete")
+		}
+		return StructuredOutput{
+			Event: Event{Type: EventMessage, Text: response.Message}, Disposition: DispositionSucceeded,
+			SessionTitle: title,
+		}, nil
 
 	case OutputContractPlanApproval:
 		var response struct {

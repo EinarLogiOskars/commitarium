@@ -22,6 +22,7 @@ func TestOutputJSONSchemaCoversStructuredContracts(t *testing.T) {
 		{OutputContractImplementationReadiness, []string{"action", "summary"}},
 		{OutputContractIntervention, []string{"effect", "response"}},
 		{OutputContractToolchainSetup, []string{"action", "message", "tools", "services", "run"}},
+		{OutputContractSessionOpening, []string{"title", "message"}},
 	}
 	for _, test := range tests {
 		t.Run(string(test.contract), func(t *testing.T) {
@@ -230,5 +231,31 @@ func TestResolveWorkOrderBrief(t *testing.T) {
 		`{"action":"propose","message":"Brief.","goal":"","areas":[],"considerations":[],"open_questions":[]}`,
 	)); err == nil {
 		t.Fatal("a brief without a goal was accepted")
+	}
+}
+
+func TestResolveSessionOpening(t *testing.T) {
+	opened, err := ResolveStructuredOutput(OutputContractSessionOpening, []byte(
+		`{"title":"  Fix   the Icelandic\ncopy ","message":" Sure, which page first? "}`,
+	))
+	if err != nil || opened.SessionTitle != "Fix the Icelandic copy" ||
+		opened.Event != (Event{Type: EventMessage, Text: "Sure, which page first?"}) ||
+		opened.Disposition != DispositionSucceeded {
+		t.Fatalf("session opening = %+v err=%v", opened, err)
+	}
+	long, err := ResolveStructuredOutput(OutputContractSessionOpening, []byte(
+		`{"title":"`+strings.Repeat("a", 200)+`","message":"ok"}`,
+	))
+	if err != nil || len([]rune(long.SessionTitle)) != MaxSessionTitleRunes ||
+		!strings.HasSuffix(long.SessionTitle, "…") {
+		t.Fatalf("long title = %q err=%v", long.SessionTitle, err)
+	}
+	for _, raw := range []string{`{"title":" ","message":"hi"}`, `{"title":"Tweaks","message":""}`} {
+		if _, err := ResolveStructuredOutput(OutputContractSessionOpening, []byte(raw)); !errors.Is(err, ErrInvalidStructuredOutput) {
+			t.Fatalf("incomplete opening %s: %v", raw, err)
+		}
+	}
+	if field := PreviewProseField(OutputContractSessionOpening); field != "message" {
+		t.Fatalf("preview field = %q", field)
 	}
 }

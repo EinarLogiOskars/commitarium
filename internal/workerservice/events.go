@@ -404,6 +404,7 @@ func (service *Service) finishAttempt(
 	terminalResult.ImplementationPlan = result.ImplementationPlan
 	terminalResult.AcceptanceTests = result.AcceptanceTests
 	terminalResult.HandoffBrief = result.HandoffBrief
+	terminalResult.SessionTitle = result.SessionTitle
 	if result.Usage != nil {
 		usage := workerhttp.TokenUsage(*result.Usage)
 		terminalResult.Usage = &usage
