@@ -29,7 +29,7 @@ export const primaryUrl = (s: PreviewStatus | null) =>
 /** One project's preview: live status from the backend, plus start/stop. A
  * user-started preview opens in the browser once it's running (the port
  * changes on every start, so restarts open again too). */
-export function usePreview(projectId: string) {
+export function usePreview(projectId: string, featureId?: string) {
   const [status, setStatus] = useState<PreviewStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   const openWhenRunning = useRef(false);
@@ -39,20 +39,21 @@ export function usePreview(projectId: string) {
     setStatus(null);
     setError(null);
     openWhenRunning.current = false;
-    getPreviewStatus(projectId).then(
+    getPreviewStatus(projectId, featureId).then(
       (s) => live && setStatus(s),
       () => {
         /* no preview backend yet — show as not running */
       },
     );
     const unlisten = onPreviewStatusChanged((s) => {
-      if (live && s.projectId === projectId) setStatus(s);
+      const sessionId = s.target.kind === "session" ? s.target.feature_id : undefined;
+      if (live && s.projectId === projectId && sessionId === featureId) setStatus(s);
     });
     return () => {
       live = false;
       void unlisten.then((u) => u());
     };
-  }, [projectId]);
+  }, [projectId, featureId]);
 
   useEffect(() => {
     if (status?.state === "running" && openWhenRunning.current) {
@@ -70,22 +71,27 @@ export function usePreview(projectId: string) {
     setError(null);
     openWhenRunning.current = true;
     try {
-      setStatus(await startPreview(projectId));
+      setStatus(
+        await startPreview(
+          projectId,
+          featureId ? { kind: "session", feature_id: featureId } : { kind: "canonical" },
+        ),
+      );
     } catch (e) {
       openWhenRunning.current = false;
       setError(String(e));
     }
-  }, [projectId]);
+  }, [projectId, featureId]);
 
   const stop = useCallback(async () => {
     setError(null);
     openWhenRunning.current = false;
     try {
-      await stopPreview(projectId);
+      await stopPreview(projectId, featureId);
     } catch (e) {
       setError(String(e));
     }
-  }, [projectId]);
+  }, [projectId, featureId]);
 
   const resetData = useCallback(async () => {
     setError(null);

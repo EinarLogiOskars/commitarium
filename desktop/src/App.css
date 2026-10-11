@@ -2988,3 +2988,12 @@ button.danger:not(.ghost) {
 .session__body {
   min-height: 360px;
 }
+.session__preview {
+  gap: 6px;
+}
+.session__preview-error {
+  white-space: pre-wrap;
+  max-height: 160px;
+  overflow: auto;
+  font-size: 12px;
+}

@@ -5,6 +5,8 @@ import { ApiError } from "../api/client";
 import { Transcript, type TranscriptEntry } from "./Transcript";
 import { useSessionEvents } from "./useSessionEvents";
 import { MergeView } from "./MergeView";
+import { PREVIEW_STATE, primaryUrl, usePreview, type PreviewHandle } from "./usePreview";
+import { openExternal } from "../ipc";
 import type { Feature, Run } from "../api/types";
 
 const GREETING = "Hey, what can I help you with?";
@@ -37,6 +39,7 @@ export function SessionView({
   const [forceDiscard, setForceDiscard] = useState(false);
   const chatRef = useRef<HTMLDivElement | null>(null);
   const pinnedToBottom = useRef(true);
+  const preview = usePreview(projectId, feature.id);
 
   const lead = run?.sessions.find((s) => s.role === "lead");
   const sessionRefs = useMemo(() => (lead ? [{ id: lead.id, role: "lead" }] : []), [lead]);
@@ -105,6 +108,7 @@ export function SessionView({
     setBusy("delete");
     setError(null);
     try {
+      await preview.stop();
       await deleteFeature(projectId, feature.id, crypto.randomUUID(), forceDiscard);
       onDeleted?.();
     } catch (e) {
@@ -186,6 +190,7 @@ export function SessionView({
             <p className="muted session__kind">Session</p>
           </div>
           <div className="row">
+            {!done && <SessionPreview preview={preview} />}
             {canFinish && (
               <button
                 className="primary"
@@ -235,6 +240,11 @@ export function SessionView({
           </div>
         )}
         {error && <div className="banner banner--error">{error}</div>}
+        {(preview.error || preview.status?.state === "failed") && !done && (
+          <div className="banner banner--warn session__preview-error">
+            Preview: {preview.error ?? preview.status?.error ?? "it stopped."}
+          </div>
+        )}
         {blocked && run && (
           <div className="banner banner--warn session__blocked">
             <span>{run.reason || "The session stopped."}</span>
@@ -294,6 +304,48 @@ export function SessionView({
         )}
       </section>
     </div>
+  );
+}
+
+// The session preview runs the project's stack from the session's working
+// copy, so it shows changes before they are committed (ADR-019).
+function SessionPreview({ preview }: { preview: PreviewHandle }) {
+  const state = preview.status?.state ?? "stopped";
+  const url = primaryUrl(preview.status);
+  if (state === "starting") {
+    return (
+      <span className="row session__preview">
+        <span className="muted">{PREVIEW_STATE.starting.label}</span>
+        <button className="ghost" onClick={() => void preview.stop()}>
+          Stop preview
+        </button>
+      </span>
+    );
+  }
+  if (state === "running") {
+    return (
+      <span className="row session__preview">
+        {url && <button onClick={() => void openExternal(url)}>Open preview</button>}
+        <button
+          className="ghost"
+          onClick={() => void preview.start()}
+          title="Rebuild the preview from the working copy"
+        >
+          Restart
+        </button>
+        <button className="ghost" onClick={() => void preview.stop()}>
+          Stop
+        </button>
+      </span>
+    );
+  }
+  return (
+    <button
+      onClick={() => void preview.start()}
+      title="Run the project from this session's working copy, uncommitted changes included"
+    >
+      Preview
+    </button>
   );
 }
 

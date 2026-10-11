@@ -28,6 +28,67 @@ const LOG_LIMIT: usize = 400;
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum PreviewTarget {
     Canonical,
+    /// A session's working copy, uncommitted changes included (ADR-019).
+    Session {
+        feature_id: String,
+    },
+}
+
+/// Where a preview's sources come from.
+enum PreviewSource {
+    /// A fresh clone of the default branch head.
+    Canonical(ProjectHandoff),
+    /// A session's checkout, used in place and never removed.
+    Checkout(PathBuf),
+}
+
+#[derive(Deserialize)]
+struct SessionWorkspace {
+    checkout: Option<SessionCheckout>,
+}
+
+#[derive(Deserialize)]
+struct SessionCheckout {
+    relative_path: String,
+}
+
+/// The registry key of one preview: a project's default branch, or one of its
+/// sessions.
+fn preview_key(project_id: &str, feature_id: Option<&str>) -> Result<String, String> {
+    validate_identifier("project ID", project_id)?;
+    match feature_id {
+        None => Ok(project_id.to_string()),
+        Some(feature_id) => {
+            validate_record_id("work order ID", feature_id)?;
+            Ok(format!("{project_id}#{feature_id}"))
+        }
+    }
+}
+
+/// The Compose project of a session's preview, apart from the default
+/// branch's: lowercase, as Compose requires.
+fn session_compose_id(project_id: &str, feature_id: &str) -> String {
+    format!("{project_id}-{}", feature_id.to_ascii_lowercase())
+}
+
+/// The host directory holding the coordinator's managed checkouts.
+fn workspaces_root() -> Result<PathBuf, String> {
+    if let Ok(configured) = std::env::var("COMMITARIUM_WORKSPACE_SOURCE") {
+        let path = PathBuf::from(&configured);
+        if path.is_absolute() {
+            return Ok(path);
+        }
+        if let Ok(compose) = std::env::var("COMMITARIUM_COMPOSE_FILE") {
+            if let Some(parent) = Path::new(&compose).parent() {
+                return Ok(parent.join(path));
+            }
+        }
+    }
+    let token = forgejo_token_path()?;
+    token
+        .parent()
+        .map(|internal| internal.join("workspaces"))
+        .ok_or_else(|| "the managed checkouts directory is unknown".into())
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -131,7 +192,7 @@ struct PreviewRegistry {
 }
 
 impl PreviewManager {
-    fn begin(&self, status: PreviewStatus) -> Result<u64, String> {
+    fn begin(&self, key: &str, status: PreviewStatus) -> Result<u64, String> {
         let mut registry = self
             .inner
             .lock()
@@ -139,7 +200,7 @@ impl PreviewManager {
         registry.generation += 1;
         let generation = registry.generation;
         registry.projects.insert(
-            status.project_id.clone(),
+            key.to_string(),
             PreviewRecord {
                 status,
                 generation,
@@ -291,7 +352,11 @@ pub async fn start_preview(
     project_id: String,
     target: PreviewTarget,
 ) -> Result<PreviewStatus, String> {
-    validate_identifier("project ID", &project_id)?;
+    let feature_id = match &target {
+        PreviewTarget::Canonical => None,
+        PreviewTarget::Session { feature_id } => Some(feature_id.clone()),
+    };
+    let key = preview_key(&project_id, feature_id.as_deref())?;
     let client = reqwest::Client::new();
     let manifest: ToolchainManifest = coordinator_json(
         client
@@ -311,44 +376,81 @@ pub async fn start_preview(
         .run
         .ok_or("this project's stack has no preview open target")?;
     validate_run(&run)?;
-    let handoff: ProjectHandoff = coordinator_json(
-        client
-            .get(coordinator_url(&format!(
-                "/api/v1/projects/{project_id}/handoff"
-            )))
-            .send()
-            .await
-            .map_err(|e| format!("request project handoff from coordinator: {e}"))?,
-        "project handoff",
-    )
-    .await?;
-    validate_handoff(&handoff, &project_id)?;
+    let (source, commit_id, compose_id) = match &feature_id {
+        None => {
+            let handoff: ProjectHandoff = coordinator_json(
+                client
+                    .get(coordinator_url(&format!(
+                        "/api/v1/projects/{project_id}/handoff"
+                    )))
+                    .send()
+                    .await
+                    .map_err(|e| format!("request project handoff from coordinator: {e}"))?,
+                "project handoff",
+            )
+            .await?;
+            validate_handoff(&handoff, &project_id)?;
+            let commit_id = handoff.source.head_commit_id.clone();
+            (
+                PreviewSource::Canonical(handoff),
+                commit_id,
+                project_id.clone(),
+            )
+        }
+        Some(feature_id) => {
+            let workspace: SessionWorkspace = coordinator_json(
+                client
+                    .get(coordinator_url(&format!(
+                        "/api/v1/projects/{project_id}/features/{feature_id}/workspace"
+                    )))
+                    .send()
+                    .await
+                    .map_err(|e| format!("request session workspace from coordinator: {e}"))?,
+                "session workspace",
+            )
+            .await?;
+            let checkout = workspace
+                .checkout
+                .ok_or("the session has no working copy yet")?;
+            validate_record_id("checkout path", &checkout.relative_path)?;
+            let path = workspaces_root()?
+                .join(&checkout.relative_path)
+                .canonicalize()
+                .map_err(|e| format!("find the session's working copy: {e}"))?;
+            (
+                PreviewSource::Checkout(path),
+                String::new(),
+                session_compose_id(&project_id, feature_id),
+            )
+        }
+    };
 
     let owned = manager.inner().clone();
-    stop_project(&app, owned.clone(), &project_id).await?;
+    stop_project(&app, owned.clone(), &key).await?;
     let status = PreviewStatus {
         project_id: project_id.clone(),
         target,
-        commit_id: handoff.source.head_commit_id.clone(),
+        commit_id,
         state: PreviewState::Starting,
         urls: Vec::new(),
         error: None,
     };
-    let generation = owned.begin(status.clone())?;
+    let generation = owned.begin(&key, status.clone())?;
     let _ = app.emit(STATUS_EVENT, status.clone());
     let task_app = app.clone();
     tauri::async_runtime::spawn(async move {
         let launch_app = task_app.clone();
         let launch_manager = owned.clone();
-        let launch_project = project_id.clone();
+        let launch_key = key.clone();
         let result = tauri::async_runtime::spawn_blocking(move || {
             launch_preview(
                 launch_app,
                 launch_manager,
-                launch_project,
+                launch_key,
                 generation,
-                handoff,
+                source,
                 run,
+                compose_id,
             )
         })
         .await;
@@ -356,7 +458,7 @@ pub async fn start_preview(
             fail_preview(
                 &task_app,
                 &owned,
-                &project_id,
+                &key,
                 generation,
                 "preview task stopped unexpectedly",
                 None,
@@ -371,9 +473,10 @@ pub async fn stop_preview(
     app: AppHandle,
     manager: State<'_, PreviewManager>,
     project_id: String,
+    feature_id: Option<String>,
 ) -> Result<(), String> {
-    validate_identifier("project ID", &project_id)?;
-    stop_project(&app, manager.inner().clone(), &project_id).await
+    let key = preview_key(&project_id, feature_id.as_deref())?;
+    stop_project(&app, manager.inner().clone(), &key).await
 }
 
 #[tauri::command]
@@ -397,18 +500,20 @@ pub(crate) async fn delete_project_data(
 pub fn get_preview_status(
     manager: State<'_, PreviewManager>,
     project_id: String,
+    feature_id: Option<String>,
 ) -> Result<Option<PreviewStatus>, String> {
-    validate_identifier("project ID", &project_id)?;
-    manager.status(&project_id)
+    let key = preview_key(&project_id, feature_id.as_deref())?;
+    manager.status(&key)
 }
 
 #[tauri::command]
 pub async fn get_preview_logs(
     manager: State<'_, PreviewManager>,
     project_id: String,
+    feature_id: Option<String>,
 ) -> Result<Vec<String>, String> {
-    validate_identifier("project ID", &project_id)?;
-    let Some(source) = manager.logs(&project_id)? else {
+    let key = preview_key(&project_id, feature_id.as_deref())?;
+    let Some(source) = manager.logs(&key)? else {
         return Ok(Vec::new());
     };
     let Some(runtime) = source.runtime else {
@@ -488,22 +593,35 @@ fn launch_preview(
     manager: PreviewManager,
     project_id: String,
     generation: u64,
-    handoff: ProjectHandoff,
+    preview_source: PreviewSource,
     run: RunConfig,
+    compose_id: String,
 ) {
-    let root = match prepare_source(&handoff) {
-        Ok(path) => path,
+    // `project_id` here is the preview's registry key; `root` holds the
+    // generated Compose files and is removed on stop. A session's working
+    // copy is used in place and never removed.
+    let prepared_root = match preview_source {
+        PreviewSource::Canonical(handoff) => {
+            prepare_source(&handoff).map(|root| (root.clone(), root.join("source")))
+        }
+        PreviewSource::Checkout(checkout) => tempfile::Builder::new()
+            .prefix(PREVIEW_TEMP_PREFIX)
+            .tempdir()
+            .map(|temporary| (temporary.keep(), checkout))
+            .map_err(|e| format!("create preview directory: {e}")),
+    };
+    let (root, source) = match prepared_root {
+        Ok(paths) => paths,
         Err(error) => {
             fail_preview(&app, &manager, &project_id, generation, &error, None);
             return;
         }
     };
-    let source = root.join("source");
     let open = preview_compose::OpenTarget {
         service: run.open.service.clone(),
         port: run.open.port,
     };
-    let prepared = match preview_compose::normalize_and_rewrite(&source, &project_id, &open) {
+    let prepared = match preview_compose::normalize_and_rewrite(&source, &compose_id, &open) {
         Ok(prepared) => prepared,
         Err(error) => {
             fail_preview(&app, &manager, &project_id, generation, &error, None);
@@ -1141,6 +1259,21 @@ fn safe_service_name(value: &str) -> bool {
         })
 }
 
+/// Coordinator record IDs such as work orders and checkouts, which may contain
+/// uppercase letters.
+fn validate_record_id(name: &str, value: &str) -> Result<(), String> {
+    if value.is_empty()
+        || value.len() > 128
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"_-".contains(&byte))
+        || !value.as_bytes()[0].is_ascii_alphanumeric()
+    {
+        return Err(format!("{name} is invalid"));
+    }
+    Ok(())
+}
+
 fn validate_identifier(name: &str, value: &str) -> Result<(), String> {
     if value.is_empty()
         || value.len() > 80
@@ -1216,6 +1349,22 @@ fn bounded(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn session_previews_have_their_own_keys_and_compose_projects() {
+        assert_eq!(preview_key("prj_abc", None).unwrap(), "prj_abc");
+        assert_eq!(
+            preview_key("prj_abc", Some("fea_QX2Z")).unwrap(),
+            "prj_abc#fea_QX2Z"
+        );
+        assert!(preview_key("prj_abc", Some("../fea")).is_err());
+        let compose_id = session_compose_id("prj_abc", "fea_QX2Z");
+        assert_eq!(compose_id, "prj_abc-fea_qx2z");
+        assert_eq!(
+            preview_compose::project_name(&compose_id).unwrap(),
+            "commitarium-preview-prj_abc-fea_qx2z"
+        );
+    }
 
     #[test]
     fn published_ports_must_be_ipv4_loopback_host_ports() {
