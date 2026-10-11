@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   getVision,
+  getOpenVisionSession,
   getVisionSession,
   replyToVisionAssistant,
   saveVision,
@@ -12,7 +13,7 @@ import { listFeatures } from "../api/features";
 import { getToolchainPresets } from "../api/toolchains";
 import { ApiError } from "../api/client";
 import { Markdown } from "./Markdown";
-import { rememberSession, rememberedSession } from "./visionSession";
+import { rememberIdea, rememberedIdea } from "./visionSession";
 import type {
   Feature,
   FeatureState,
@@ -84,15 +85,10 @@ export function VisionView({
     setLoaded(false);
     setError(null);
     void loadVision();
-    const remembered = rememberedSession(projectId);
-    if (remembered) {
-      getVisionSession(projectId, remembered)
-        .then((s) => {
-          if (s.status === "running" || s.status === "waiting_for_user") setSession(s);
-          else rememberSession(projectId, null);
-        })
-        .catch(() => rememberSession(projectId, null));
-    }
+    // Reopen a conversation that is still running or waiting for the user.
+    getOpenVisionSession(projectId)
+      .then(setSession)
+      .catch(() => undefined);
   }, [projectId, loadVision]);
 
   // Follow the assistant while it works.
@@ -105,7 +101,6 @@ export function VisionView({
         .then((s) => {
           setSession(s);
           if (s.status === "written") {
-            rememberSession(projectId, null);
             setSession(null);
             setRewriting(false);
             void loadVision();
@@ -121,7 +116,7 @@ export function VisionView({
     setError(null);
     try {
       const s = await startVisionAssistant(projectId, mode, message, crypto.randomUUID());
-      rememberSession(projectId, s.id);
+      rememberIdea(projectId, null);
       setSession(s);
       setDraft(null);
     } catch (e) {
@@ -191,13 +186,13 @@ export function VisionView({
           session={session}
           onSession={setSession}
           onClose={() => {
-            rememberSession(projectId, null);
             setSession(null);
           }}
         />
       ) : !vision || rewriting ? (
         <WriteVision
           rewriting={!!vision}
+          initial={vision ? "" : (rememberedIdea(projectId) ?? "")}
           busy={busy}
           onStart={(mode, message) => void start(mode, message)}
           onCancel={vision ? () => setRewriting(false) : undefined}
@@ -363,16 +358,18 @@ function ProjectSetupCard({
 
 function WriteVision({
   rewriting,
+  initial,
   busy,
   onStart,
   onCancel,
 }: {
   rewriting: boolean;
+  initial: string;
   busy: string | null;
   onStart: (mode: VisionMode, message: string) => void;
   onCancel?: () => void;
 }) {
-  const [text, setText] = useState("");
+  const [text, setText] = useState(initial);
   const message = text.trim();
   return (
     <section className="panel vision__write">

@@ -34,6 +34,11 @@ export const startVisionAssistant = (
     idempotencyKey,
   });
 
+/** The project's conversation still running or waiting for the user; 404
+ * vision_not_found when there is none. */
+export const getOpenVisionSession = (id: string): Promise<VisionSession> =>
+  request(`${visionPath(id)}/assistant`);
+
 export const getVisionSession = (id: string, sessionId: string): Promise<VisionSession> =>
   request(`${visionPath(id)}/assistant/${encodeURIComponent(sessionId)}`);
 

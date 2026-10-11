@@ -382,6 +382,37 @@ func (service *Service) GetSession(ctx context.Context, projectID, id string) (S
 }
 
 // Reply answers the assistant's question.
+// OpenSession returns the project's most recent conversation that is still
+// running or waiting for the user, so the Vision page reopens it.
+func (service *Service) OpenSession(ctx context.Context, projectID string) (Session, error) {
+	if _, err := service.projects.GetByID(ctx, projectID); err != nil {
+		return Session{}, err
+	}
+	entries, err := os.ReadDir(filepath.Join(service.root, "vision-sessions"))
+	if err != nil {
+		return Session{}, ErrUnavailable
+	}
+	var latest *sessionRecord
+	for _, entry := range entries {
+		id, ok := strings.CutSuffix(entry.Name(), ".json")
+		if !ok {
+			continue
+		}
+		record, err := service.readSession(id)
+		if err != nil || record.ProjectID != projectID ||
+			(record.Status != StatusRunning && record.Status != StatusWaitingForUser) {
+			continue
+		}
+		if latest == nil || record.CreatedAt.After(latest.CreatedAt) {
+			latest = &record
+		}
+	}
+	if latest == nil {
+		return Session{}, ErrNotFound
+	}
+	return service.GetSession(ctx, projectID, latest.ID)
+}
+
 func (service *Service) Reply(ctx context.Context, projectID, id, message, idempotencyKey string) (Session, bool, error) {
 	if _, err := service.projects.GetByID(ctx, projectID); err != nil {
 		return Session{}, false, err

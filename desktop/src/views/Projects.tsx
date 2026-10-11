@@ -4,7 +4,7 @@ import { deleteProject } from "../ipc";
 import { ApiError } from "../api/client";
 import { ImportProject } from "./ImportProject";
 import { startVisionAssistant } from "../api/vision";
-import { rememberSession } from "./visionSession";
+import { rememberIdea } from "./visionSession";
 import { useModels } from "./useModels";
 import {
   ProjectDefaultsFields,
@@ -63,16 +63,12 @@ export function Projects({
       );
       const description = idea.trim();
       if (mode && description) {
+        rememberIdea(created.id, description);
         try {
-          const session = await startVisionAssistant(
-            created.id,
-            mode,
-            description,
-            crypto.randomUUID(),
-          );
-          rememberSession(created.id, session.id);
+          await startVisionAssistant(created.id, mode, description, crypto.randomUUID());
+          rememberIdea(created.id, null);
         } catch {
-          // The Vision page offers to write it again.
+          // The project opens on Vision with the idea filled in to retry.
         }
       }
       setName("");

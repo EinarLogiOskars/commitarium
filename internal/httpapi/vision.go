@@ -22,6 +22,7 @@ type VisionService interface {
 	LinkWorkOrder(ctx context.Context, projectID, itemID, featureID string) (vision.Vision, error)
 	Start(ctx context.Context, projectID, agentID, model string, mode vision.Mode, message, idempotencyKey string) (vision.Session, bool, error)
 	GetSession(ctx context.Context, projectID, sessionID string) (vision.Session, error)
+	OpenSession(ctx context.Context, projectID string) (vision.Session, error)
 	Reply(ctx context.Context, projectID, sessionID, message, idempotencyKey string) (vision.Session, bool, error)
 }
 
@@ -97,6 +98,17 @@ func (api *API) startVisionHandler(w http.ResponseWriter, r *http.Request) {
 
 func (api *API) getVisionSessionHandler(w http.ResponseWriter, r *http.Request) {
 	session, err := api.visions.GetSession(r.Context(), r.PathValue("id"), r.PathValue("sessionID"))
+	if err != nil {
+		writeVisionError(w, r.PathValue("id"), err)
+		return
+	}
+	writeJSON(w, http.StatusOK, session, "vision conversation")
+}
+
+// openVisionSessionHandler answers the conversation still open, if any:
+// 404 vision_not_found otherwise.
+func (api *API) openVisionSessionHandler(w http.ResponseWriter, r *http.Request) {
+	session, err := api.visions.OpenSession(r.Context(), r.PathValue("id"))
 	if err != nil {
 		writeVisionError(w, r.PathValue("id"), err)
 		return

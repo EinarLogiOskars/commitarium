@@ -2386,6 +2386,9 @@ Only an item without sub-items starts a work order.
   "messages": [{"role", "text", "occurred_at"}], ...}`.
   The assistant inspects a read-only checkout of the default branch, removed
   when the conversation ends. `503 vision_unavailable` without real agents.
+- `GET /api/v1/projects/{id}/vision/assistant` answers the project's most
+  recent conversation that is still `running` or `waiting_for_user`, or
+  `404 vision_not_found`.
 - `GET /api/v1/projects/{id}/vision/assistant/{sessionID}` follows it. When the
   assistant proposes, the vision is saved with source `assistant`, keeping the
   work orders of items it kept by ID, and the status becomes `written`.

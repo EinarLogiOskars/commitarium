@@ -435,6 +435,7 @@ func newAPI(
 		mux.HandleFunc("GET /api/v1/projects/{id}/vision", api.getVisionHandler)
 		mux.HandleFunc("PUT /api/v1/projects/{id}/vision", api.saveVisionHandler)
 		mux.HandleFunc("POST /api/v1/projects/{id}/vision/assistant", api.startVisionHandler)
+		mux.HandleFunc("GET /api/v1/projects/{id}/vision/assistant", api.openVisionSessionHandler)
 		mux.HandleFunc("GET /api/v1/projects/{id}/vision/assistant/{sessionID}", api.getVisionSessionHandler)
 		mux.HandleFunc("POST /api/v1/projects/{id}/vision/assistant/{sessionID}/messages", api.replyVisionHandler)
 		mux.HandleFunc("POST /api/v1/projects/{id}/vision/items/{itemID}/work-order", api.startVisionWorkOrderHandler)

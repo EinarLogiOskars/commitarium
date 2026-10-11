@@ -257,3 +257,21 @@ func TestANewProjectGetsAStackRecommendation(t *testing.T) {
 		t.Fatalf("stack = %+v", stored.Plan.Stack)
 	}
 }
+
+func TestTheOpenConversationIsFoundWithoutItsID(t *testing.T) {
+	service, worker := newTestService(t)
+	if _, err := service.OpenSession(t.Context(), "prj_test"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("an open conversation before any: %v", err)
+	}
+	session, _, _ := service.Start(t.Context(), "prj_test", "codex", "gpt-5", ModeConverse, "A calorie tracker", "start-1")
+	worker.finish(workerhttp.TerminalResult{
+		Outcome: workerhttp.OutcomeCompleted, Disposition: workerhttp.DispositionInputRequired, Summary: "Who is it for?",
+	})
+	open, err := service.OpenSession(t.Context(), "prj_test")
+	if err != nil || open.ID != session.ID || open.Status != StatusWaitingForUser {
+		t.Fatalf("open conversation = %+v err=%v", open, err)
+	}
+	if _, err := service.OpenSession(t.Context(), "prj_other"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("another project's conversation was found: %v", err)
+	}
+}

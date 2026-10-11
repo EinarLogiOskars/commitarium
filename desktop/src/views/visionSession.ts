@@ -1,20 +1,20 @@
-// The vision conversation in progress for a project, so it reopens where it
-// was: after a restart, and right after a new project is created.
-const sessionKey = (projectId: string) => `commitarium.vision-session.${projectId}`;
+// The idea a project was created with, kept until the assistant has it, so a
+// start that failed can be retried from the Vision page.
+const ideaKey = (projectId: string) => `commitarium.vision-idea.${projectId}`;
 
-export function rememberedSession(projectId: string): string | null {
+export function rememberedIdea(projectId: string): string | null {
   try {
-    return localStorage.getItem(sessionKey(projectId));
+    return localStorage.getItem(ideaKey(projectId));
   } catch {
     return null;
   }
 }
 
-export function rememberSession(projectId: string, sessionId: string | null) {
+export function rememberIdea(projectId: string, idea: string | null) {
   try {
-    if (sessionId) localStorage.setItem(sessionKey(projectId), sessionId);
-    else localStorage.removeItem(sessionKey(projectId));
+    if (idea) localStorage.setItem(ideaKey(projectId), idea);
+    else localStorage.removeItem(ideaKey(projectId));
   } catch {
-    // The conversation is only reopened less conveniently.
+    // The user types it again.
   }
 }

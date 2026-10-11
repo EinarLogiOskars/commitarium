@@ -14,7 +14,8 @@ import { StackPicker } from "./StackPicker";
 import { PreviewRailItem } from "./PreviewRailItem";
 import { PreviewView } from "./PreviewView";
 import { VisionView } from "./VisionView";
-import { rememberedSession } from "./visionSession";
+import { rememberedIdea } from "./visionSession";
+import { getOpenVisionSession } from "../api/vision";
 import { usePreview } from "./usePreview";
 import { usePreviewSetup } from "./usePreviewSetup";
 import { WORK } from "../vocab";
@@ -91,7 +92,15 @@ export function ProjectWorkspace({
       const t = await getProjectToolchain(id);
       setToolchain(t);
       // A project just created from an idea opens on its vision conversation.
-      if (t.status === "needs_setup" && rememberedSession(id)) setMode("vision");
+      if (t.status === "needs_setup") {
+        const open =
+          !!rememberedIdea(id) ||
+          (await getOpenVisionSession(id).then(
+            () => true,
+            () => false,
+          ));
+        if (open) setMode("vision");
+      }
     } catch {
       setToolchain(null);
     }
@@ -280,6 +289,10 @@ export function ProjectWorkspace({
               needsStack={needsStack}
               onOpenStack={() => {
                 setMode("stack");
+                setOrderId(null);
+              }}
+              onOpenVision={() => {
+                setMode("vision");
                 setOrderId(null);
               }}
               attention={attention}
