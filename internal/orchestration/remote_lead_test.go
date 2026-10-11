@@ -1576,6 +1576,135 @@ func TestRemoteLeadRunToCompletionAdvancesFromPlanningToMergeGate(t *testing.T) 
 	}
 }
 
+func TestRemoteLeadWithoutReviewerPlansImplementsAndMergesAlone(t *testing.T) {
+	t.Run("submits in the first turn", func(t *testing.T) { testRemoteLeadWithoutReviewer(t, false) })
+	t.Run("asked again after replying", func(t *testing.T) { testRemoteLeadWithoutReviewer(t, true) })
+}
+
+// testRemoteLeadWithoutReviewer runs a work order without a reviewer from
+// Start to merge. When repliesFirst, the lead's first planning turn replies
+// instead of submitting, and the coordinator asks it again.
+func testRemoteLeadWithoutReviewer(t *testing.T, repliesFirst bool) {
+	db, executions, storedProject, storedFeature := newRemoteLeadExecution(t)
+	storedProject, err := database.NewProjectStore(db).UpdateAutonomyPolicy(
+		t.Context(), storedProject.ID, project.AutonomyPolicyRunToCompletion,
+	)
+	if err != nil {
+		t.Fatalf("enable run-to-completion: %v", err)
+	}
+	runID := "run_without_reviewer"
+	stub := newConversationalRemoteLeadWorker(runID, storedProject.ID, storedFeature.ID)
+	addCompletedPlanningAttempt(stub, runID, storedProject.ID, storedFeature.ID)
+	leadSessionID := remoteLeadSessionID(runID)
+	planning := workerhttp.AttemptReference{SessionID: leadSessionID, AttemptID: planningAttemptID(leadSessionID)}
+	turns := 2
+	if repliesFirst {
+		addCompletedPlanningCorrectionAttempt(
+			stub, leadSessionID, storedProject.ID, storedFeature.ID,
+			workerhttp.RoleLead, "codex-thread-test", 2,
+			workerhttp.EventPlanSubmitted, "Complete final implementation plan",
+		)
+		turns = 3
+	} else {
+		stub.events[planning][1].Type = workerhttp.EventPlanSubmitted
+		stub.events[planning][1].Text = "Complete final implementation plan"
+	}
+	addCompletedImplementationAttempt(stub, runID, storedProject.ID, storedFeature.ID)
+
+	workflowService := workflow.NewService(database.NewWorkflowStore(db))
+	checkoutAt := time.Date(2026, time.October, 11, 11, 0, 0, 0, time.UTC)
+	workspaceStub := &remoteLeadWorkspaceStub{prepared: workspace.Workspace{
+		ID: "wsp_without_reviewer", ProjectID: storedProject.ID, FeatureID: storedFeature.ID,
+		RepositoryOwner: "commitarium", RepositoryName: "without-reviewer-test",
+		BaseBranch: "main", Branch: "commitarium/" + storedFeature.ID,
+		BaseCommitID:         "0123456789abcdef0123456789abcdef01234567",
+		Status:               workspace.StatusPreparing,
+		CheckoutRelativePath: "wsp_without_reviewer",
+		CheckoutCreatedAt:    &checkoutAt,
+	}}
+	features := database.NewFeatureStore(db)
+	starter, err := NewRemoteLeadStarter(RemoteLeadConfig{
+		Executions: executions, Features: features, Goals: workflowService,
+		Planning: workflowService, Briefs: workflowService, Workspaces: workspaceStub, Worker: stub,
+		Pump:       &conversationalRemoteLeadPump{executions: executions, worker: stub},
+		Validation: validation.NewService(database.NewValidationStore(db)),
+		Lifetime:   t.Context(),
+	})
+	if err != nil {
+		t.Fatalf("create starter: %v", err)
+	}
+	readyRemoteLeadFeature(t, workflowService, storedFeature.ID)
+	chosen, err := features.GetByID(t.Context(), storedFeature.ID)
+	if err != nil {
+		t.Fatalf("load ready feature: %v", err)
+	}
+	chosen.Steps = project.WorkSteps{SkipReviewer: true}
+	if err := features.UpdateReadySettings(t.Context(), chosen); err != nil {
+		t.Fatalf("choose steps: %v", err)
+	}
+	if _, _, err := starter.Start(
+		t.Context(), runID, storedProject.ID, storedFeature.ID, storedFeature.Title,
+		storedProject.DialogueLimits, storedProject.AgentProviders,
+		storedProject.MergePolicy, storedProject.AutonomyPolicy,
+	); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	var gated execution.Run
+	for time.Now().Before(deadline) {
+		gated, err = executions.GetRun(t.Context(), runID)
+		if err != nil {
+			t.Fatalf("load run: %v", err)
+		}
+		current, featureErr := features.GetByID(t.Context(), storedFeature.ID)
+		if featureErr != nil {
+			t.Fatalf("load feature: %v", featureErr)
+		}
+		if current.State == feature.StateReadyToMerge && gated.Status == execution.RunStatusWaitingForUser {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if gated.Status != execution.RunStatusWaitingForUser || gated.WaitKind != execution.RunWaitKindMergeGate ||
+		!gated.Steps.SkipReviewer {
+		t.Fatalf("run without a reviewer did not reach the merge gate: %+v", gated)
+	}
+	stub.mu.Lock()
+	requests := append([]workerhttp.PutAttemptRequest(nil), stub.putRequests...)
+	stub.mu.Unlock()
+	if len(requests) != turns {
+		t.Fatalf("expected %d lead turns, got %d", turns, len(requests))
+	}
+	if repliesFirst && (requests[1].OutputContract != workerhttp.OutputContractPlanningLead ||
+		!strings.Contains(requests[1].Instructions, "submit_plan")) {
+		t.Fatalf("the lead was not asked again to submit its plan: %+v", requests[1])
+	}
+	if requests[0].OutputContract != workerhttp.OutputContractPlanningLead ||
+		!strings.Contains(requests[0].Instructions, "no reviewer") {
+		t.Fatalf("first planning turn did not ask the lead to submit alone: %+v", requests[0])
+	}
+	for _, request := range requests {
+		if request.Assignment.Role != workerhttp.RoleLead {
+			t.Fatalf("a run without a reviewer started a %s turn", request.Assignment.Role)
+		}
+	}
+	if _, err := executions.GetSession(t.Context(), remoteReviewerSessionID(runID)); !errors.Is(err, execution.ErrNotFound) {
+		t.Fatalf("a run without a reviewer created a reviewer session: %v", err)
+	}
+	if workspaceStub.publishCalls != 1 || workspaceStub.publicationVerifyCalls != 1 ||
+		workspaceStub.reviewVerifyCalls != 0 || workspaceStub.mergeCalls != 0 {
+		t.Fatalf("unexpected publication calls: %+v", workspaceStub)
+	}
+
+	if _, _, err := starter.Merge(t.Context(), runID, "merge-without-reviewer"); err != nil {
+		t.Fatalf("merge: %v", err)
+	}
+	if workspaceStub.mergeCalls != 1 || len(workspaceStub.mergeApprovalNotes) != 1 ||
+		!strings.Contains(workspaceStub.mergeApprovalNotes[0], "no reviewer") {
+		t.Fatalf("merge did not carry the coordinator's approval note: %+v", workspaceStub.mergeApprovalNotes)
+	}
+}
+
 func TestRemotePlanningLoopUsesRunLimitSnapshot(t *testing.T) {
 	db, executions, storedProject, storedFeature := newRemoteLeadExecution(t)
 	limits := project.DialogueLimits{PlanningRounds: 3, ImplementationReviewRounds: 4}

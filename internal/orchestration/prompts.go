@@ -197,6 +197,24 @@ func planningInstructions(storedFeature feature.Feature, prepared workspace.Work
 		storedFeature.AcceptedGoal + "\n\n" + planningWorkspaceFacts(prepared)
 }
 
+// soloPlanningInstructions start planning for a work order without a reviewer
+// (ADR-018): the lead plans alone and submits the plan in the same turn.
+func soloPlanningInstructions(storedFeature feature.Feature, prepared workspace.Workspace) string {
+	return "The goal is accepted and planning begins. You are the lead, and this work order has no " +
+		"reviewer: you plan alone, and the user decides the merge. Inspect the repository as needed to " +
+		"plan; planning is read-only, so do not modify files, install dependencies, commit, or push. " +
+		"Split the work into ordered commit-sized steps, as few as the goal needs: a small change can be " +
+		"a single step. Note assumptions and risks only where they matter. Durable repository and " +
+		"workflow state are authoritative over conversational memory.\n\n" + soloPlanSubmissionInstructions +
+		"\n\nAccepted goal:\n" + storedFeature.AcceptedGoal + "\n\n" + planningWorkspaceFacts(prepared)
+}
+
+const soloPlanSubmissionInstructions = "There is no reviewer to discuss the plan with, so submit it in " +
+	"this turn: use action 'submit_plan', put the complete final plan in content, and supply plan_title, " +
+	"plan_subtitle, and the ordered steps. Each step is one cohesive commit with a stable lowercase ID, " +
+	"title, subtitle, detailed Markdown instructions, concrete verification checks, and an imperative " +
+	"commit_subject. Do not use action 'respond'."
+
 // leadParticipant and reviewerParticipant name the agents for each other, so
 // the dialogue reads as a conversation even when both use the same provider.
 func leadParticipant(providers project.AgentProviders) string {
