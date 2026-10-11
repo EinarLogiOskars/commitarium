@@ -57,8 +57,10 @@ same work order, keeping its context.
 - The orchestrator gains conditional stages, and every stage must handle the
   work order's chosen steps.
 - Without a reviewer, no second model checks the work before the merge gate;
-  the user and the project's validation commands are the check. The default
-  branch protection must allow a merge that no reviewer approved.
+  the user and the project's validation commands are the check. Branch
+  protection keeps requiring one approval: for such a run the coordinator
+  approves the pull request at the merge gate, stating that no reviewer took
+  part and who approved (the user, or the auto-merge policy).
 
 ## Alternatives considered
 

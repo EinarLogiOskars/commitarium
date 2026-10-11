@@ -68,9 +68,13 @@ throughout:
      readiness for that commit and goes to the merge gate. The feature moves
      implementing → ready_to_merge.
    - The merge gate keeps validation and the merge policy.
-   - Because no Forgejo approval exists, the coordinator's merge uses Forgejo's
-     administrator `force_merge` for runs without a reviewer only. Branch
-     protection stays as it is for reviewed runs.
+   - Branch protection still requires one approval. At the merge gate, the
+     coordinator approves the pull request itself and then merges normally.
+     It is not the PR's author (the lead's `<agent>-lead` identity is), so
+     Forgejo accepts its review. The approval says why: no reviewer for this
+     work order, approved at the merge gate by the user, or by the auto-merge
+     policy. Branch protection is unchanged, nothing bypasses it, and the PR
+     history shows honestly how the merge was approved.
 5. **Without a documented plan:**
    - Start goes Ready → implementing.
    - The feature branch and draft PR are created at Start. The PR body holds
@@ -91,7 +95,7 @@ throughout:
 | --- | --- | --- |
 | F1 | `docs: plan flexible work orders` | ADR-018, this plan, the revised vision. |
 | F2 | `feat: record a work order's steps` | Migration adding `documented_plan` and `reviewer` to features and runs (default on). Start body `steps`; validation (a reviewer requires a plan); feature and run responses. Start rejects combinations whose slice has not landed yet. |
-| F3 | `feat(orchestration): merge without a reviewer` | Lead-only merge readiness after verified implementation; implementing → ready_to_merge; force merge for runs without a reviewer; `recoverIdle*` without a reviewer session. Tests with a lead-only run from a published plan. |
+| F3 | `feat(orchestration): merge without a reviewer` | Lead-only merge readiness after verified implementation; implementing → ready_to_merge; the coordinator's own approval at the merge gate for runs without a reviewer; `recoverIdle*` without a reviewer session. Tests with a lead-only run from a published plan. |
 | F4 | `feat(orchestration): plan without a reviewer` | The lead submits the plan in its first planning turn; publication without approval; autonomy advances to implementation; no acceptance tests. Enables "plan, no reviewer" at Start. |
 | F5 | `feat(orchestration): implement without a documented plan` | Branch and draft PR at Start without a plan section; ready → implementing; implementation and verification variants without the plan checklist; recovery. Enables "neither" at Start. |
 | F6 | `feat: start without clarification` | Start from Draft writes the brief from the title and description and readies the work order, then starts. |
@@ -111,11 +115,9 @@ throughout:
 
 ## Risks
 
-- **Force merge.** Forgejo's `force_merge` must work for the coordinator's
-  administrator on a protected branch with required approvals. Verify it
-  against the pinned Forgejo version in F3 before building on it; the
-  fallback is a per-repository protection rule without required approvals,
-  set only while a reviewer-less run merges.
+- **The coordinator's approval.** Forgejo must count an approval from the
+  coordinator's administrator identity toward the required approvals. Verify
+  this against the pinned Forgejo version at the start of F3.
 - **Conditional stages** touch many verifiers. Each slice keeps the full flow's
   tests passing unchanged.
 
