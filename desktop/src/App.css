@@ -2875,6 +2875,8 @@ button.danger:not(.ghost) {
   min-height: 0;
   overflow-y: auto;
   padding-right: 4px;
+  padding-bottom: 8px;
+  margin-bottom: 16px;
   display: flex;
   flex-direction: column;
   gap: 12px;
