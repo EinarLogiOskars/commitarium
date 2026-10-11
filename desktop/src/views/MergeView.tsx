@@ -45,10 +45,13 @@ export function MergeView({
   const [valError, setValError] = useState<string | null>(null);
   // null while unknown; only warn once we positively know none is configured.
   const [hasValidation, setHasValidation] = useState<boolean | null>(null);
+  // Without a reviewer the lead alone approved the revision (ADR-018).
+  const [reviewed, setReviewed] = useState(true);
 
   const poll = useCallback(async () => {
     try {
-      await getRun(runId); // keep the run warm / surface auth errors
+      const run = await getRun(runId);
+      setReviewed(run.steps?.reviewer !== false);
       setWorkspace(await getWorkspace(projectId, featureId));
     } catch (e) {
       if (e instanceof ApiError) setError(`${e.message} (${e.code})`);
@@ -186,14 +189,20 @@ export function MergeView({
         <div className="merge-gate">
           {hasValidation === false && !validationBlocks && onOpenValidation && (
             <NoValidationWarning
-              message="No validation is set up for this project. Merging relies on the two agents' approval alone — none of your own checks run against this revision."
+              message={
+                reviewed
+                  ? "No validation is set up for this project. Merging relies on the two agents' approval alone — none of your own checks run against this revision."
+                  : "No validation is set up for this project. Merging relies on the lead's word alone — none of your own checks run against this revision."
+              }
               onOpenValidation={onOpenValidation}
             />
           )}
           <p className="muted">
             {validationBlocks
               ? "Validation checks must pass before this revision can merge."
-              : `Both agents approved this revision. Review the PR if you like, then merge #${pr?.number} into the default branch to complete the work order.`}
+              : reviewed
+                ? `Both agents approved this revision. Review the PR if you like, then merge #${pr?.number} into the default branch to complete the work order.`
+                : `The lead finished this revision. Review the PR if you like, then merge #${pr?.number} into the default branch to complete the work order.`}
           </p>
           <div className="row">
             {!confirm ? (

@@ -15,9 +15,11 @@ import (
 
 	"github.com/EinarLogiOskars/commitarium/internal/execution"
 	"github.com/EinarLogiOskars/commitarium/internal/feature"
+	"github.com/EinarLogiOskars/commitarium/internal/featureartifact"
 	"github.com/EinarLogiOskars/commitarium/internal/orchestration"
 	"github.com/EinarLogiOskars/commitarium/internal/project"
 	"github.com/EinarLogiOskars/commitarium/internal/worker"
+	"github.com/EinarLogiOskars/commitarium/internal/workflow"
 	"github.com/EinarLogiOskars/commitarium/internal/workspace"
 )
 
@@ -43,6 +45,7 @@ type runResponse struct {
 	Intervention               *interventionResponse        `json:"intervention,omitempty"`
 	Recovery                   *recoveryResponse            `json:"recovery,omitempty"`
 	LoginRequired              *loginRequiredResponse       `json:"login_required,omitempty"`
+	Steps                      workStepsResponse            `json:"steps"`
 }
 
 // loginRequiredResponse names the agent a paused run waits for to log in
@@ -161,11 +164,104 @@ type startRunRequest struct {
 	AutonomyPolicy             *project.AutonomyPolicy `json:"autonomy_policy"`
 	MergePolicy                *project.MergePolicy    `json:"merge_policy"`
 	IndependentAcceptanceTests *bool                   `json:"independent_acceptance_tests"`
+	Steps                      *workStepsRequest       `json:"steps"`
+}
+
+// workStepsRequest names a work order's optional steps (ADR-018); an omitted
+// step keeps the work order's current choice.
+type workStepsRequest struct {
+	// Clarification false starts a Draft work order with its title and
+	// description as the goal. It is not stored: it only lets Start ready a
+	// draft.
+	Clarification  *bool `json:"clarification"`
+	DocumentedPlan *bool `json:"documented_plan"`
+	Reviewer       *bool `json:"reviewer"`
+}
+
+// workStepsResponse reports which optional steps a work order or run takes.
+type workStepsResponse struct {
+	DocumentedPlan bool `json:"documented_plan"`
+	Reviewer       bool `json:"reviewer"`
+}
+
+func newWorkStepsResponse(steps project.WorkSteps) workStepsResponse {
+	return workStepsResponse{DocumentedPlan: !steps.SkipPlan, Reviewer: !steps.SkipReviewer}
 }
 
 type startSettingsChooser interface {
 	ChooseStartSettings(context.Context, string, string, feature.SettingsOverrides) (feature.Feature, error)
 }
+
+// readStartRequest decodes an optional Start body; an empty body is nil. It
+// writes the error response itself and reports whether to continue.
+func readStartRequest(w http.ResponseWriter, r *http.Request) (*startRunRequest, bool) {
+	body, err := io.ReadAll(io.LimitReader(r.Body, 64*1024+1))
+	if err != nil || len(body) > 64*1024 {
+		writeError(w, http.StatusBadRequest, "invalid_body", "start request is too large")
+		return nil, false
+	}
+	if len(bytes.TrimSpace(body)) == 0 {
+		return nil, true
+	}
+	var request startRunRequest
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&request); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_json", "start request must be a JSON object with known fields")
+		return nil, false
+	}
+	return &request, true
+}
+
+// skipsClarification reports whether a Start request starts a draft without
+// clarification (ADR-018).
+func (request *startRunRequest) skipsClarification() bool {
+	return request != nil && request.Steps != nil && request.Steps.Clarification != nil &&
+		!*request.Steps.Clarification
+}
+
+// readyWithoutClarification readies a draft work order whose Start skips
+// clarification: its title and description become the handoff brief's goal,
+// and the normal Start follows.
+func (api *API) readyWithoutClarification(
+	ctx context.Context,
+	storedFeature feature.Feature,
+	idempotencyKey string,
+) (feature.Feature, error) {
+	briefs, ok := api.artifacts.(HandoffBriefService)
+	if !ok {
+		return feature.Feature{}, errStartWithoutClarificationUnavailable
+	}
+	expected := 0
+	current, err := api.artifacts.GetFeatureArtifact(ctx, storedFeature.ID, featureartifact.KindHandoffBrief)
+	if err == nil {
+		expected = current.Revision
+	} else if !errors.Is(err, workflow.ErrArtifactNotFound) {
+		return feature.Feature{}, err
+	}
+	goal := storedFeature.Title
+	if description := strings.TrimSpace(storedFeature.Description); description != "" {
+		goal += "\n\n" + description
+	}
+	actor := workflow.Actor{Kind: workflow.ActorKindUser, ID: "local-user"}
+	if _, err := briefs.PutHandoffBrief(
+		ctx, storedFeature.ID, expected,
+		featureartifact.HandoffBrief{
+			Goal: goal, Areas: []string{}, Considerations: []string{}, OpenQuestions: []string{},
+		},
+		actor, idempotencyKey+":brief",
+	); err != nil {
+		return feature.Feature{}, err
+	}
+	if _, err := api.workflow.TransitionFeature(
+		ctx, storedFeature.ID, feature.StateReady, actor, idempotencyKey+":ready",
+	); err != nil {
+		return feature.Feature{}, err
+	}
+	return api.features.GetByID(ctx, storedFeature.ProjectID, storedFeature.ID)
+}
+
+var errStartWithoutClarificationUnavailable = errors.New("starting without clarification is unavailable")
 
 // chooseStartSettings applies and saves the settings in a Start request. It
 // writes the error response itself and reports whether to continue.
@@ -173,21 +269,10 @@ func (api *API) chooseStartSettings(
 	w http.ResponseWriter,
 	r *http.Request,
 	storedFeature feature.Feature,
+	request *startRunRequest,
 ) (feature.Feature, bool) {
-	body, err := io.ReadAll(io.LimitReader(r.Body, 64*1024+1))
-	if err != nil || len(body) > 64*1024 {
-		writeError(w, http.StatusBadRequest, "invalid_body", "start request is too large")
-		return feature.Feature{}, false
-	}
-	if len(bytes.TrimSpace(body)) == 0 {
+	if request == nil {
 		return storedFeature, true
-	}
-	var request startRunRequest
-	decoder := json.NewDecoder(bytes.NewReader(body))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&request); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_json", "start request must be a JSON object with known fields")
-		return feature.Feature{}, false
 	}
 	var overrides feature.SettingsOverrides
 	if request.AgentProviders != nil {
@@ -209,6 +294,16 @@ func (api *API) chooseStartSettings(
 	overrides.MergePolicy = request.MergePolicy
 	overrides.AutonomyPolicy = request.AutonomyPolicy
 	overrides.IndependentAcceptanceTests = request.IndependentAcceptanceTests
+	if request.Steps != nil {
+		steps := storedFeature.Steps
+		if request.Steps.DocumentedPlan != nil {
+			steps.SkipPlan = !*request.Steps.DocumentedPlan
+		}
+		if request.Steps.Reviewer != nil {
+			steps.SkipReviewer = !*request.Steps.Reviewer
+		}
+		overrides.Steps = &steps
+	}
 	chooser, ok := api.features.(startSettingsChooser)
 	if !ok {
 		writeError(w, http.StatusServiceUnavailable, "start_settings_unavailable", "choosing settings at Start is unavailable")
@@ -237,6 +332,8 @@ func (api *API) chooseStartSettings(
 			writeError(w, http.StatusBadRequest, "invalid_merge_policy", "merge_policy must be require_user_approval or auto_after_gates")
 		case errors.Is(err, project.ErrInvalidAutonomyPolicy):
 			writeError(w, http.StatusBadRequest, "invalid_autonomy_policy", "autonomy_policy must be review_each_phase or run_to_completion")
+		case errors.Is(err, project.ErrInvalidWorkSteps):
+			writeError(w, http.StatusBadRequest, "invalid_steps", "a reviewer requires a documented plan")
 		default:
 			log.Printf("choose start settings for feature %q: %v", storedFeature.ID, err)
 			writeError(w, http.StatusInternalServerError, "internal_error", "internal server error")
@@ -281,13 +378,33 @@ func (api *API) startRunHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	request, ok := readStartRequest(w, r)
+	if !ok {
+		return
+	}
+	if storedFeature.State == feature.StateDraft && request.skipsClarification() {
+		readied, err := api.readyWithoutClarification(r.Context(), storedFeature, idempotencyKey)
+		switch {
+		case errors.Is(err, featureartifact.ErrInvalidArtifact):
+			writeError(w, http.StatusBadRequest, "invalid_goal", "the work order's title and description do not make a valid goal")
+			return
+		case errors.Is(err, errStartWithoutClarificationUnavailable):
+			writeError(w, http.StatusServiceUnavailable, "start_without_clarification_unavailable", err.Error())
+			return
+		case err != nil:
+			log.Printf("ready feature %q without clarification: %v", storedFeature.ID, err)
+			writeError(w, http.StatusInternalServerError, "internal_error", "internal server error")
+			return
+		}
+		storedFeature = readied
+	}
 	if storedFeature.State != feature.StateReady {
 		writeError(w, http.StatusConflict, "feature_not_startable", "only a ready work order can be started")
 		return
 	}
 	// Agents, models, and policies are chosen at Start; an empty body starts
 	// with the work order's current settings (its project's defaults).
-	chosen, ok := api.chooseStartSettings(w, r, storedFeature)
+	chosen, ok := api.chooseStartSettings(w, r, storedFeature, request)
 	if !ok {
 		return
 	}
@@ -318,6 +435,8 @@ func (api *API) startRunHandler(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case errors.Is(err, execution.ErrRecordConflict):
 			writeError(w, http.StatusConflict, "idempotency_conflict", "Idempotency-Key was already used for a different run")
+		case errors.Is(err, orchestration.ErrStepsUnsupported):
+			writeError(w, http.StatusConflict, "steps_unsupported", "this combination of work-order steps is not supported yet")
 		case errors.Is(err, orchestration.ErrFeatureNotReady):
 			writeError(w, http.StatusConflict, "feature_not_startable", "only a ready work order with a handoff brief can be started")
 		case errors.Is(err, orchestration.ErrInvalidRunRequest):
@@ -430,6 +549,7 @@ func (api *API) newRunResponse(
 		},
 		MergePolicy: run.MergePolicy, AutonomyPolicy: run.AutonomyPolicy,
 		IndependentAcceptanceTests: run.IndependentAcceptanceTests,
+		Steps:                      newWorkStepsResponse(run.Steps),
 		PlanVersion:                run.PlanVersion,
 		StartedAt:                  run.StartedAt, UpdatedAt: run.UpdatedAt,
 		EndedAt: run.EndedAt, Sessions: make([]sessionResponse, 0, len(sessions)),

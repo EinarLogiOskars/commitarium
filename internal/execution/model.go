@@ -55,10 +55,12 @@ type Run struct {
 	MergePolicy                    project.MergePolicy
 	AutonomyPolicy                 project.AutonomyPolicy
 	IndependentAcceptanceTests     bool
-	PlanVersion                    int
-	StartedAt                      time.Time
-	UpdatedAt                      time.Time
-	EndedAt                        *time.Time
+	// Steps are the optional work-order steps this run skips (ADR-018).
+	Steps       project.WorkSteps
+	PlanVersion int
+	StartedAt   time.Time
+	UpdatedAt   time.Time
+	EndedAt     *time.Time
 }
 
 // PlanRevision records why a later planning cycle exists and the exact Git

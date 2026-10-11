@@ -1873,3 +1873,84 @@ func newBranchTestClientWithHostURL(
 	}
 	return client
 }
+
+func TestClientApprovesOnceBeforeMergingAWorkOrderWithoutAReviewer(t *testing.T) {
+	spec := workspace.PullRequestMergeSpec{
+		Number: 7, FeatureMarker: "<!-- commitarium-feature: fea_test -->",
+		BaseBranch: "main", HeadBranch: "commitarium/fea_test",
+		HeadCommitID: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		ApprovalNote: "This work order had no reviewer.",
+	}
+	remote := managedPullRequest(testPullRequestSpec())
+	remote.Title, remote.Draft, remote.HeadCommitID = "Test feature", false, spec.HeadCommitID
+	mergedAt := remote.CreatedAt.Add(time.Hour)
+	approvals := 0
+	reviews := `[]`
+	gateExists := false
+	var order []string
+	client := newBranchTestClient(t, func(request *http.Request) (*http.Response, error) {
+		path := request.Method + " " + request.URL.Path
+		switch path {
+		case "GET /api/v1/users/commitarium-merge-gate":
+			if !gateExists {
+				return jsonResponse(http.StatusNotFound, `{}`), nil
+			}
+			return jsonResponse(http.StatusOK, `{"login":"commitarium-merge-gate"}`), nil
+		case "POST /api/v1/admin/users":
+			var payload struct {
+				Username string `json:"username"`
+				Password string `json:"password"`
+			}
+			if err := json.NewDecoder(request.Body).Decode(&payload); err != nil ||
+				payload.Username != MergeGateUser || len(payload.Password) < 32 || request.Header.Get("Sudo") != "" {
+				t.Fatalf("unexpected merge gate user %+v err=%v", payload, err)
+			}
+			gateExists = true
+			order = append(order, "create-gate")
+			return jsonResponse(http.StatusCreated, `{}`), nil
+		case "PUT /api/v1/repos/owner/repository/collaborators/commitarium-merge-gate":
+			if !gateExists {
+				t.Fatal("merge gate was added before it existed")
+			}
+			return &http.Response{StatusCode: http.StatusNoContent, Body: io.NopCloser(strings.NewReader("")), Header: http.Header{}}, nil
+		case "GET /api/v1/repos/owner/repository/pulls/7":
+			return pullRequestJSONResponse(t, http.StatusOK, remote), nil
+		case "GET /api/v1/repos/owner/repository/pulls/7/reviews":
+			return jsonResponse(http.StatusOK, reviews), nil
+		case "POST /api/v1/repos/owner/repository/pulls/7/reviews":
+			var payload struct {
+				Event    string `json:"event"`
+				Body     string `json:"body"`
+				CommitID string `json:"commit_id"`
+			}
+			if err := json.NewDecoder(request.Body).Decode(&payload); err != nil ||
+				payload.Event != "APPROVED" || payload.CommitID != spec.HeadCommitID || payload.Body != spec.ApprovalNote ||
+				request.Header.Get("Sudo") != MergeGateUser {
+				t.Fatalf("unexpected approval %+v sudo=%q err=%v", payload, request.Header.Get("Sudo"), err)
+			}
+			approvals++
+			order = append(order, "approve")
+			reviews = `[{"commit_id":"` + spec.HeadCommitID + `","state":"APPROVED","stale":false,"user":{"login":"commitarium-merge-gate"}}]`
+			return jsonResponse(http.StatusOK, `{}`), nil
+		case "POST /api/v1/repos/owner/repository/pulls/7/merge":
+			order = append(order, "merge")
+			if approvals == 1 && len(order) == 3 {
+				remote.State, remote.Merged, remote.MergeCommitID, remote.MergedAt = "closed", true, strings.Repeat("b", 40), &mergedAt
+				return jsonResponse(http.StatusOK, `{}`), nil
+			}
+			return jsonResponse(http.StatusMethodNotAllowed, `{}`), nil
+		default:
+			t.Fatalf("unexpected request %s", path)
+			return nil, nil
+		}
+	})
+	merged, err := client.MergePullRequest(t.Context(), "owner", "repository", spec)
+	if err != nil || !merged.Merged || strings.Join(order, ",") != "create-gate,approve,merge" {
+		t.Fatalf("merge without a reviewer: merged=%t order=%v err=%v", merged.Merged, order, err)
+	}
+	// A retried merge does not approve twice.
+	remote.Merged = false
+	if err := client.approvePullRequest(t.Context(), "owner", "repository", 7, spec.HeadCommitID, spec.ApprovalNote); err != nil || approvals != 1 {
+		t.Fatalf("repeated approval: approvals=%d err=%v", approvals, err)
+	}
+}

@@ -9,7 +9,14 @@ import type {
   AutonomyPolicy,
   Feature,
   MergePolicy,
+  WorkSteps,
 } from "../api/types";
+
+/** The steps chosen at Start. `clarification: false` starts a Draft with its
+ * title and description as the goal; it is only sent from a Draft. */
+export interface StartSteps extends WorkSteps {
+  clarification?: boolean;
+}
 
 /** What a work order starts with: chosen at Start, not while drafting. */
 export interface StartSettingsValue {
@@ -18,7 +25,31 @@ export interface StartSettingsValue {
   autonomy_policy: AutonomyPolicy;
   merge_policy: MergePolicy;
   independent_acceptance_tests: boolean;
+  steps: StartSteps;
 }
+
+/** The valid combinations of a work order's steps (ADR-018): a reviewer
+ * requires a documented plan. */
+const PRESETS: { id: string; label: string; steps: WorkSteps; hint: string }[] = [
+  {
+    id: "full",
+    label: "Full",
+    steps: { documented_plan: true, reviewer: true },
+    hint: "A reviewer checks the plan and the code before the merge gate.",
+  },
+  {
+    id: "planned",
+    label: "Planned",
+    steps: { documented_plan: true, reviewer: false },
+    hint: "The lead plans the commits alone and implements them. You decide the merge.",
+  },
+  {
+    id: "quick",
+    label: "Quick change",
+    steps: { documented_plan: false, reviewer: false },
+    hint: "The lead goes straight to the change in one turn. You decide the merge.",
+  },
+];
 
 /** The work order's current settings — its project's defaults until a Start
  * chose others — as the starting point for the form. */
@@ -32,6 +63,7 @@ export function startSettingsFrom(feature: Feature): StartSettingsValue {
     autonomy_policy: feature.autonomy_policy ?? "review_each_phase",
     merge_policy: feature.merge_policy ?? "require_user_approval",
     independent_acceptance_tests: feature.independent_acceptance_tests ?? false,
+    steps: feature.steps ?? { documented_plan: true, reviewer: true },
   };
 }
 
@@ -64,7 +96,10 @@ export function StartSettings({
   }, [projectId]);
 
   // Resolve each role's model to one the agent's provider offers.
-  const { agent_providers: providers, agent_models: models } = value;
+  const { agent_providers: providers, agent_models: models, steps } = value;
+  const preset = PRESETS.find(
+    (p) => p.steps.documented_plan === steps.documented_plan && p.steps.reviewer === steps.reviewer,
+  );
   useEffect(() => {
     if (modelsLoading) return;
     const lead = pickModel(modelsFor(providers.lead, "lead"), models.lead);
@@ -76,6 +111,41 @@ export function StartSettings({
   return (
     <div className="neworder__body">
       <div className="neworder__group">
+        <span className="neworder__heading">How it runs</span>
+        <div className="steps-choice" role="radiogroup" aria-label="How it runs">
+          {PRESETS.map((p) => {
+            const on = preset?.id === p.id;
+            return (
+              <button
+                key={p.id}
+                type="button"
+                role="radio"
+                aria-checked={on}
+                className={`steps-choice__opt ${on ? "steps-choice__opt--on" : ""}`}
+                onClick={() =>
+                  onChange({
+                    ...value,
+                    steps: { ...steps, ...p.steps },
+                    // Acceptance tests are the reviewer's.
+                    independent_acceptance_tests: p.steps.reviewer
+                      ? value.independent_acceptance_tests
+                      : false,
+                  })
+                }
+                disabled={disabled}
+              >
+                <span className="steps-choice__title">{p.label}</span>
+                <span className="steps-choice__parts">
+                  <StepPart on={p.steps.documented_plan}>Plan</StepPart>
+                  <StepPart on={p.steps.reviewer}>Reviewer</StepPart>
+                </span>
+                <span className="steps-choice__hint">{p.hint}</span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+      <div className="neworder__group">
         <span className="neworder__heading">Agents</span>
         <div className="neworder__grid">
           <AgentModelFields
@@ -84,6 +154,7 @@ export function StartSettings({
             modelsFor={modelsFor}
             onChange={(p, m) => onChange({ ...value, agent_providers: p, agent_models: m })}
             disabled={disabled}
+            roles={steps.reviewer ? ["lead", "reviewer"] : ["lead"]}
           />
         </div>
       </div>
@@ -116,27 +187,41 @@ export function StartSettings({
           </label>
         </div>
       </div>
-      <label className="neworder__check">
-        <input
-          type="checkbox"
-          checked={value.independent_acceptance_tests}
-          onChange={(e) => onChange({ ...value, independent_acceptance_tests: e.target.checked })}
-          disabled={disabled}
-        />
-        <span>
-          Independent acceptance tests
-          <span className="neworder__hint">
-            The reviewer writes its own tests before seeing the code. Worth it when a wrong
-            understanding is costly; it roughly doubles the reviewer&apos;s work.
+      {steps.reviewer && (
+        <label className="neworder__check">
+          <input
+            type="checkbox"
+            checked={value.independent_acceptance_tests}
+            onChange={(e) => onChange({ ...value, independent_acceptance_tests: e.target.checked })}
+            disabled={disabled}
+          />
+          <span>
+            Independent acceptance tests
+            <span className="neworder__hint">
+              The reviewer writes its own tests before seeing the code. Worth it when a wrong
+              understanding is costly; it roughly doubles the reviewer&apos;s work.
+            </span>
           </span>
-        </span>
-      </label>
+        </label>
+      )}
       {value.merge_policy === "auto_after_gates" && hasValidation === false && (
         <NoValidationWarning
-          message="No validation is set up for this project. This order will merge automatically on the two agents' approval alone — none of your own checks will run first."
+          message={
+            steps.reviewer
+              ? "No validation is set up for this project. This order will merge automatically on the two agents' approval alone — none of your own checks will run first."
+              : "No validation is set up for this project, and this order has no reviewer. It will merge automatically on the lead's word alone — nothing will check it first."
+          }
           onOpenValidation={onOpenValidation ?? (() => undefined)}
         />
       )}
     </div>
+  );
+}
+
+function StepPart({ on, children }: { on: boolean; children: string }) {
+  return (
+    <span className={`steps-choice__part ${on ? "" : "steps-choice__part--off"}`}>
+      {on ? "✓" : "–"} {children}
+    </span>
   );
 }

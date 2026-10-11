@@ -248,6 +248,13 @@ export type FeatureState =
   | "completed"
   | "cancelled";
 
+/** A work order's optional steps (ADR-018). A reviewer requires a documented
+ * plan, so the valid choices are Full, Planned, and Quick change. */
+export interface WorkSteps {
+  documented_plan: boolean;
+  reviewer: boolean;
+}
+
 export interface Feature {
   id: string;
   project_id: string;
@@ -263,6 +270,7 @@ export interface Feature {
   agent_models?: AgentModels;
   autonomy_policy?: AutonomyPolicy;
   merge_policy?: MergePolicy;
+  steps?: WorkSteps;
   created_at: string;
   updated_at: string;
 }
@@ -354,6 +362,8 @@ export interface Run {
   // Immutable per-run snapshots (effective provider/model per role).
   agent_providers?: AgentProviders;
   agent_models?: AgentModels;
+  // The optional steps the run started with; absent on older coordinators.
+  steps?: WorkSteps;
   // Agreement cycle: 1 for the original plan; advances when a scope-changing
   // intervention is admitted into a revised plan.
   plan_version?: number;

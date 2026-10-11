@@ -44,6 +44,8 @@ const (
 	implementationReadinessRunningReason  = "The lead is deciding whether it agrees with the reviewer's approval of the exact commit."
 	implementationApprovedReason          = "The reviewer and lead agreed that the exact verified revision is ready for the merge gate."
 	implementationMergedReason            = "Forgejo merged the exact commit approved by the reviewer and lead."
+	implementationLeadOnlyReadyReason     = "The lead published and verified its implementation. This work order has no reviewer; the exact revision is ready for the merge gate."
+	implementationLeadOnlyMergedReason    = "Forgejo merged the lead's exact verified commit. This work order had no reviewer."
 	implementationMergeBlockedReason      = "The exact approved revision could not be merged safely. Inspect the merge activity and Forgejo pull request before retrying."
 	interventionAnsweringReason           = "The selected agent is answering the user's intervention while the workflow remains paused."
 	interventionAnsweredReason            = "The selected agent answered the intervention. The workflow remains paused until the user explicitly continues it."
@@ -128,6 +130,20 @@ type RemoteLeadExecution interface {
 	PlanningMessagesForRun(context.Context, string) ([]execution.PlanningMessage, error)
 }
 
+type remoteLeadStepsExecution interface {
+	CreateRunWithSteps(context.Context, string, string, int, int, project.AgentProviders, project.AgentModels, project.MergePolicy, bool, project.WorkSteps, ...project.AutonomyPolicy) (execution.Run, bool, error)
+}
+
+// ErrStepsUnsupported rejects optional-step combinations the orchestrator
+// cannot run yet (ADR-018).
+var ErrStepsUnsupported = errors.New("these work-order steps are not supported yet")
+
+// supportedSteps reports whether the orchestrator can run a work order with
+// these optional steps.
+func supportedSteps(steps project.WorkSteps) bool {
+	return steps.Validate() == nil
+}
+
 type remoteLeadAcceptanceExecution interface {
 	CreateRunWithModelsAndAcceptance(context.Context, string, string, int, int, project.AgentProviders, project.AgentModels, project.MergePolicy, bool, ...project.AutonomyPolicy) (execution.Run, bool, error)
 }
@@ -173,7 +189,7 @@ type RemoteLeadWorkspaceService interface {
 	VerifyImplementationMergeReadiness(context.Context, string, string, string, string, string, string, string, int64, string) (workspace.Workspace, error)
 	VerifyImplementationReview(context.Context, string, string, string, string, string, string, string, int64, int64, string, string) (workspace.Workspace, error)
 	RecordMergeReady(context.Context, string, string, string, int64) (workspace.Workspace, error)
-	MergeApproved(context.Context, string, string) (workspace.Workspace, bool, error)
+	MergeApproved(context.Context, string, string, ...string) (workspace.Workspace, bool, error)
 }
 
 type RemoteLeadWorker interface {
@@ -408,6 +424,12 @@ func (starter *RemoteLeadStarter) StartWithModels(
 	if storedFeature.State != feature.StateReady {
 		return execution.Run{}, false, ErrFeatureNotReady
 	}
+	if err := storedFeature.Steps.Validate(); err != nil {
+		return execution.Run{}, false, err
+	}
+	if !supportedSteps(storedFeature.Steps) {
+		return execution.Run{}, false, ErrStepsUnsupported
+	}
 	brief, err := starter.handoffBrief(ctx, featureID)
 	if err != nil {
 		return execution.Run{}, false, err
@@ -436,7 +458,13 @@ func (starter *RemoteLeadStarter) StartWithModels(
 	}
 	var run execution.Run
 	var created bool
-	if acceptanceExecutions, ok := starter.executions.(remoteLeadAcceptanceExecution); ok {
+	if stepsExecutions, ok := starter.executions.(remoteLeadStepsExecution); ok {
+		run, created, err = stepsExecutions.CreateRunWithSteps(
+			ctx, runID, featureID, dialogueLimits.PlanningRounds,
+			dialogueLimits.ImplementationReviewRounds, agentProviders, agentModels,
+			mergePolicy, storedFeature.IndependentAcceptanceTests, storedFeature.Steps, autonomyPolicy,
+		)
+	} else if acceptanceExecutions, ok := starter.executions.(remoteLeadAcceptanceExecution); ok {
 		run, created, err = acceptanceExecutions.CreateRunWithModelsAndAcceptance(
 			ctx, runID, featureID, dialogueLimits.PlanningRounds,
 			dialogueLimits.ImplementationReviewRounds, agentProviders, agentModels,
@@ -469,6 +497,9 @@ func (starter *RemoteLeadStarter) StartWithModels(
 	if err != nil {
 		return execution.Run{}, false, err
 	}
+	if run.Steps.SkipPlan {
+		return starter.startWithoutPlan(ctx, run, storedFeature, sessionID)
+	}
 	attemptID := planningAttemptID(sessionID)
 	request, err := starter.startPlanningRequest(run, storedFeature, sessionID, prepared, previousBase, attemptID)
 	if err != nil {
@@ -484,6 +515,66 @@ func (starter *RemoteLeadStarter) StartWithModels(
 	}
 	go starter.launch(request)
 	startedRun, err := starter.executions.GetRun(ctx, runID)
+	return startedRun, true, err
+}
+
+// noDocumentedPlan is the plan record of a work order without a documented
+// plan (ADR-018). The coordinator publishes it in place of a plan, so the pull
+// request says plainly how the work was planned.
+const noDocumentedPlan = "No documented plan. This work order is a quick change: the lead " +
+	"implements the accepted goal directly, without a commit-by-commit plan."
+
+// startWithoutPlan starts a work order without a documented plan. The
+// coordinator records that there is no plan as the run's plan, which creates
+// the feature branch and draft pull request, and the lead's first turn
+// implements the accepted goal.
+func (starter *RemoteLeadStarter) startWithoutPlan(
+	ctx context.Context,
+	run execution.Run,
+	storedFeature feature.Feature,
+	sessionID string,
+) (execution.Run, bool, error) {
+	fail := func(err error) (execution.Run, bool, error) {
+		starter.failAdmission(ctx, run, sessionID, err)
+		return execution.Run{}, false, err
+	}
+	plan, err := starter.executions.RecordSessionEventWithID(
+		ctx, run.ID+":no-documented-plan", sessionID,
+		worker.Event{Type: worker.EventPlanSubmitted, Text: noDocumentedPlan},
+	)
+	if err != nil {
+		return fail(fmt.Errorf("record the work order's plan: %w", err))
+	}
+	if _, _, err := starter.executions.LinkPlanningMessage(ctx, run.ID, plan.ID); err != nil {
+		return fail(fmt.Errorf("record the work order's plan: %w", err))
+	}
+	prepared, err := starter.recordPlanPublication(ctx, run, storedFeature, plan)
+	if err != nil {
+		return fail(fmt.Errorf("open the draft pull request: %w", err))
+	}
+	if _, err := starter.planning.TransitionFeature(
+		ctx, storedFeature.ID, feature.StateImplementing,
+		workflow.Actor{Kind: workflow.ActorKindCoordinator, ID: coordinatorActorID}, run.ID+":start-implementing",
+	); err != nil {
+		return fail(fmt.Errorf("start implementing: %w", err))
+	}
+	lead, err := starter.executions.GetSession(ctx, sessionID)
+	if err != nil {
+		return fail(err)
+	}
+	attemptID := implementationAttemptForVersion(sessionID, run.PlanVersion, 1)
+	request, err := starter.implementationRequest(ctx, run, storedFeature, lead, prepared, plan.Text, attemptID)
+	if err != nil {
+		return fail(err)
+	}
+	if _, _, err := starter.executions.CreateWorkerAttempt(ctx, sessionID, attemptID); err != nil {
+		return fail(fmt.Errorf("create worker attempt: %w", err))
+	}
+	if !starter.claim(run.ID) {
+		return execution.Run{}, false, fmt.Errorf("%w: %q", ErrRunAlreadyActive, run.ID)
+	}
+	go starter.launch(request)
+	startedRun, err := starter.executions.GetRun(ctx, run.ID)
 	return startedRun, true, err
 }
 
@@ -538,6 +629,11 @@ func (starter *RemoteLeadStarter) startPlanningRequest(
 			Instructions: planningInstructions(storedFeature, prepared, reviewerParticipant(run.AgentProviders)) +
 				briefFreshnessInstructions(previousBase, prepared.BaseCommitID),
 		},
+	}
+	if run.Steps.SkipReviewer {
+		request.request.Instructions = soloPlanningInstructions(storedFeature, prepared) +
+			briefFreshnessInstructions(previousBase, prepared.BaseCommitID)
+		submitPlanAlone(&request)
 	}
 	if err := request.request.Validate(request.identity); err != nil {
 		return remoteLeadRequest{}, fmt.Errorf("%w: %v", ErrInvalidRunRequest, err)
@@ -742,6 +838,10 @@ func (starter *RemoteLeadStarter) recoverWithDirective(
 		request.waitKind = execution.RunWaitKindPaused
 		request.request.OutputContract = workerhttp.OutputContractIntervention
 	}
+	if run.Steps.SkipReviewer && isLead && !isIntervention &&
+		(request.planningStage == planningStageLeadProposal || request.planningStage == planningStageLeadResponse) {
+		submitPlanAlone(&request)
+	}
 	if isLead && !isIntervention {
 		if _, implementing := implementationTurnNumber(session.ID, checkpoint.AttemptID); implementing {
 			request.request.OutputContract = workerhttp.OutputContractImplementationLead
@@ -920,13 +1020,9 @@ func (starter *RemoteLeadStarter) ResumeAfterLogin(ctx context.Context, agentID 
 	return resumed, errors.Join(failures...)
 }
 
-func (starter *RemoteLeadStarter) recoverIdleReadyToMergeRun(
-	ctx context.Context,
-	run execution.Run,
-) error {
-	// The lead's verified acknowledgement and feature transition are durable
-	// before the run returns to its user gate. Once both exist, recovery must not
-	// depend on a worker container that has no more work to perform.
+// confirmReviewedMergeReady checks that a reviewed run reached the merge gate
+// through the lead's verified readiness acknowledgement.
+func (starter *RemoteLeadStarter) confirmReviewedMergeReady(ctx context.Context, run execution.Run) error {
 	lead, err := starter.executions.GetSession(ctx, remoteLeadSessionID(run.ID))
 	if err != nil {
 		return fmt.Errorf("load approved lead session: %w", err)
@@ -958,6 +1054,49 @@ func (starter *RemoteLeadStarter) recoverIdleReadyToMergeRun(
 	if !recorded {
 		return fmt.Errorf("%w: ready-to-merge run has no verified lead acknowledgement", ErrInvalidRunRequest)
 	}
+	return nil
+}
+
+// confirmLeadOnlyMergeReady checks that a run without a reviewer (ADR-018)
+// reached the merge gate through the lead's verified implementation
+// publication.
+func (starter *RemoteLeadStarter) confirmLeadOnlyMergeReady(ctx context.Context, run execution.Run) error {
+	lead, err := starter.executions.GetSession(ctx, remoteLeadSessionID(run.ID))
+	if err != nil {
+		return fmt.Errorf("load lead session at the merge gate: %w", err)
+	}
+	if lead.Status != execution.SessionStatusWaitingForUser {
+		return fmt.Errorf("%w: lead is not waiting at the merge gate", ErrInvalidRunRequest)
+	}
+	checkpoint, err := starter.executions.GetWorkerAttempt(ctx, lead.ID)
+	if err != nil {
+		return fmt.Errorf("load lead implementation checkpoint: %w", err)
+	}
+	verified, err := starter.sessionActivityRecorded(ctx, lead.ID, checkpoint.AttemptID+":publication-verified")
+	if err != nil {
+		return err
+	}
+	if !verified {
+		return fmt.Errorf("%w: the merge gate has no verified lead publication", ErrInvalidRunRequest)
+	}
+	return nil
+}
+
+func (starter *RemoteLeadStarter) recoverIdleReadyToMergeRun(
+	ctx context.Context,
+	run execution.Run,
+) error {
+	// The lead's verified acknowledgement (or, without a reviewer, its verified
+	// publication) and the feature transition are durable before the run
+	// returns to its user gate. Once both exist, recovery must not depend on a
+	// worker container that has no more work to perform.
+	confirm := starter.confirmReviewedMergeReady
+	if run.Steps.SkipReviewer {
+		confirm = starter.confirmLeadOnlyMergeReady
+	}
+	if err := confirm(ctx, run); err != nil {
+		return err
+	}
 	if starter.validation != nil {
 		storedFeature, err := starter.features.GetByID(ctx, run.FeatureID)
 		if err != nil {
@@ -981,7 +1120,7 @@ func (starter *RemoteLeadStarter) recoverIdleReadyToMergeRun(
 		}
 		if validationErr != nil {
 			return starter.waitRun(ctx, run.ID,
-				"The exact approved revision is waiting for isolated validation before merge.",
+				validationPendingReason,
 				execution.RunWaitKindMergeGate,
 			)
 		}
@@ -1038,8 +1177,18 @@ func (starter *RemoteLeadStarter) Merge(
 			return execution.Run{}, false, err
 		}
 	}
+	var approvalNote []string
+	if run.Steps.SkipReviewer {
+		// Branch protection still requires an approval; without a reviewer the
+		// coordinator gives it here and says why (ADR-018).
+		approver := "the user"
+		if idempotencyKey == run.ID+":automatic-merge" {
+			approver = "the work order's auto-merge policy"
+		}
+		approvalNote = append(approvalNote, "This work order had no reviewer. Commitarium approved the lead's verified commit at the merge gate, as decided by "+approver+".")
+	}
 	mergedWorkspace, mergedNow, err := starter.workspaces.MergeApproved(
-		ctx, storedFeature.ProjectID, storedFeature.ID,
+		ctx, storedFeature.ProjectID, storedFeature.ID, approvalNote...,
 	)
 	if err != nil {
 		return execution.Run{}, false, err
@@ -1064,8 +1213,12 @@ func (starter *RemoteLeadStarter) Merge(
 	); err != nil {
 		return execution.Run{}, false, fmt.Errorf("record completed merge activity: %w", err)
 	}
+	mergedReason := implementationMergedReason
+	if run.Steps.SkipReviewer {
+		mergedReason = implementationLeadOnlyMergedReason
+	}
 	completed, err := starter.executions.TransitionRun(
-		ctx, run.ID, run.Status, execution.RunStatusSucceeded, implementationMergedReason,
+		ctx, run.ID, run.Status, execution.RunStatusSucceeded, mergedReason,
 	)
 	if errors.Is(err, execution.ErrStateConflict) {
 		stored, getErr := starter.executions.GetRun(ctx, run.ID)
@@ -1293,6 +1446,11 @@ func (starter *RemoteLeadStarter) resumeIntoReplanning(
 		run.WaitKind != execution.RunWaitKindPaused {
 		return execution.Run{}, false, ErrRunControlNotAllowed
 	}
+	if run.Steps.SkipPlan {
+		// A work order without a documented plan has no plan to revise; it
+		// goes Back to Ready and starts again with a plan (ADR-018).
+		return execution.Run{}, false, ErrInterventionReplanningRequired
+	}
 	storedFeature, err := starter.features.GetByID(ctx, run.FeatureID)
 	if err != nil {
 		return execution.Run{}, false, err
@@ -1491,6 +1649,10 @@ func (starter *RemoteLeadStarter) replanningRequest(
 			),
 		},
 	}
+	if run.Steps.SkipReviewer {
+		request.request.Instructions += "\n\n" + soloPlanSubmissionInstructions
+		submitPlanAlone(&request)
+	}
 	if err := request.request.Validate(request.identity); err != nil {
 		return remoteLeadRequest{}, fmt.Errorf("%w: %v", ErrInvalidRunRequest, err)
 	}
@@ -1532,6 +1694,10 @@ func (starter *RemoteLeadStarter) advanceWaitingRun(ctx context.Context, runID s
 				_, _, err = starter.StartImplementation(ctx, run.ID, run.ID+":autonomy:implementation")
 				return err
 			}
+		}
+		if run.Steps.SkipReviewer {
+			_, err = starter.recoverIdlePlanningRun(ctx, run, storedFeature)
+			return err
 		}
 		if _, err := starter.executions.GetSession(ctx, remoteReviewerSessionID(run.ID)); errors.Is(err, execution.ErrNotFound) {
 			_, _, err = starter.StartPlanningReview(ctx, run.ID, run.ID+":autonomy:first-review")
@@ -1593,13 +1759,17 @@ func (starter *RemoteLeadStarter) recoverIdleImplementationRun(
 	if err != nil {
 		return fmt.Errorf("load implementing lead session: %w", err)
 	}
-	reviewer, err := starter.executions.GetSession(ctx, remoteReviewerSessionID(run.ID))
-	if err != nil {
-		return fmt.Errorf("load implementing reviewer session: %w", err)
-	}
-	if lead.Status != execution.SessionStatusWaitingForUser ||
-		reviewer.Status != execution.SessionStatusWaitingForUser {
+	if lead.Status != execution.SessionStatusWaitingForUser {
 		return fmt.Errorf("%w: idle implementation has a non-waiting session", ErrInvalidRunRequest)
+	}
+	if !run.Steps.SkipReviewer {
+		reviewer, err := starter.executions.GetSession(ctx, remoteReviewerSessionID(run.ID))
+		if err != nil {
+			return fmt.Errorf("load implementing reviewer session: %w", err)
+		}
+		if reviewer.Status != execution.SessionStatusWaitingForUser {
+			return fmt.Errorf("%w: idle implementation has a non-waiting session", ErrInvalidRunRequest)
+		}
 	}
 	checkpoint, err := starter.executions.GetWorkerAttempt(ctx, lead.ID)
 	if err != nil {
@@ -1768,6 +1938,9 @@ func (starter *RemoteLeadStarter) recoverIdlePlanningRun(
 	run execution.Run,
 	storedFeature feature.Feature,
 ) (bool, error) {
+	if run.Steps.SkipReviewer {
+		return true, starter.recoverIdleSoloPlanningRun(ctx, run, storedFeature)
+	}
 	reviewer, err := starter.executions.GetSession(ctx, remoteReviewerSessionID(run.ID))
 	if errors.Is(err, execution.ErrNotFound) {
 		return false, nil
@@ -1853,6 +2026,89 @@ func (starter *RemoteLeadStarter) recoverIdlePlanningRun(
 	}
 	go starter.launch(request)
 	return true, nil
+}
+
+const (
+	soloPlanningRunningReason = "The lead is submitting its plan."
+	soloPlanSubmittedReason   = "The lead has submitted its plan."
+)
+
+// submitPlanAlone makes a lead planning turn submit the plan, for work orders
+// without a reviewer (ADR-018): there is no one to discuss it with.
+func submitPlanAlone(request *remoteLeadRequest) {
+	request.planningStage = planningStageLeadResponse
+	request.request.OutputContract = workerhttp.OutputContractPlanningLead
+	request.waitingReason = soloPlanSubmittedReason
+	request.waitKind = execution.RunWaitKindPhaseCheckpoint
+}
+
+// continueSoloPlanning is the planning control for a work order without a
+// reviewer: there is no review to start, so it continues the lead's
+// submission instead.
+func (starter *RemoteLeadStarter) continueSoloPlanning(
+	ctx context.Context,
+	run execution.Run,
+	storedFeature feature.Feature,
+) (execution.Run, bool, error) {
+	if run.Status == execution.RunStatusRunning {
+		return run, false, nil
+	}
+	if run.Status != execution.RunStatusWaitingForUser {
+		return execution.Run{}, false, ErrPlanningNotAllowed
+	}
+	if err := starter.recoverIdleSoloPlanningRun(ctx, run, storedFeature); err != nil {
+		return execution.Run{}, false, err
+	}
+	updated, err := starter.executions.GetRun(ctx, run.ID)
+	return updated, true, err
+}
+
+// recoverIdleSoloPlanningRun continues planning without a reviewer: a
+// submitted plan is published, and a lead that replied without submitting is
+// asked again within the planning round limit.
+func (starter *RemoteLeadStarter) recoverIdleSoloPlanningRun(
+	ctx context.Context,
+	run execution.Run,
+	storedFeature feature.Feature,
+) error {
+	lead, err := starter.executions.GetSession(ctx, remoteLeadSessionID(run.ID))
+	if err != nil {
+		return fmt.Errorf("load lead session: %w", err)
+	}
+	if lead.Status != execution.SessionStatusWaitingForUser {
+		return fmt.Errorf("%w: idle planning run has a non-waiting session", ErrInvalidRunRequest)
+	}
+	messages, err := starter.currentPlanningMessages(ctx, run)
+	if err != nil {
+		return err
+	}
+	if len(messages) == 0 {
+		return fmt.Errorf("%w: idle planning run has no planning message", ErrInvalidRunRequest)
+	}
+	last := messages[len(messages)-1]
+	if last.Event.Type == worker.EventPlanSubmitted {
+		if err := starter.ensureSubmittedPlanArtifact(ctx, run, last.Event); err != nil {
+			return err
+		}
+		if !starter.claim(run.ID) {
+			return fmt.Errorf("%w: %q", ErrRunAlreadyActive, run.ID)
+		}
+		go starter.launchPlanPublication(run.ID, last.Event)
+		return nil
+	}
+	if planningRoundLimitReached(run.PlanningRoundLimit, len(messages)) {
+		return starter.waitRun(ctx, run.ID, planningLimitReason(run.PlanningRoundLimit), execution.RunWaitKindRoundCap)
+	}
+	if !starter.claim(run.ID) {
+		return fmt.Errorf("%w: %q", ErrRunAlreadyActive, run.ID)
+	}
+	request, admitted, err := starter.startLeadResponse(ctx, run, storedFeature, messages, true)
+	if err != nil || !admitted {
+		starter.release(run.ID)
+		return err
+	}
+	go starter.launch(request)
+	return nil
 }
 
 func (starter *RemoteLeadStarter) ensureSubmittedPlanArtifact(
@@ -2172,6 +2428,10 @@ func (starter *RemoteLeadStarter) planningRequest(
 			Instructions:      planningInstructions(storedFeature, prepared, reviewerParticipant(run.AgentProviders)),
 		},
 	}
+	if run.Steps.SkipReviewer {
+		request.request.Instructions = soloPlanningInstructions(storedFeature, prepared)
+		submitPlanAlone(&request)
+	}
 	if err := request.request.Validate(request.identity); err != nil {
 		return remoteLeadRequest{}, fmt.Errorf("%w: %v", ErrInvalidRunRequest, err)
 	}
@@ -2203,6 +2463,9 @@ func (starter *RemoteLeadStarter) StartPlanningReview(
 	if storedFeature.State != feature.StatePlanning ||
 		strings.TrimSpace(storedFeature.AcceptedGoal) == "" || storedFeature.GoalAcceptedAt == nil {
 		return execution.Run{}, false, ErrPlanningNotAllowed
+	}
+	if run.Steps.SkipReviewer {
+		return starter.continueSoloPlanning(ctx, run, storedFeature)
 	}
 	if run.PlanVersion > 1 {
 		return starter.startReplanningReview(ctx, run, storedFeature)
@@ -2493,6 +2756,9 @@ func (starter *RemoteLeadStarter) StartPlanningRound(
 		strings.TrimSpace(storedFeature.AcceptedGoal) == "" || storedFeature.GoalAcceptedAt == nil {
 		return execution.Run{}, false, ErrPlanningNotAllowed
 	}
+	if run.Steps.SkipReviewer {
+		return starter.continueSoloPlanning(ctx, run, storedFeature)
+	}
 	lead, err := starter.executions.GetSession(ctx, remoteLeadSessionID(run.ID))
 	if err != nil {
 		return execution.Run{}, false, err
@@ -2639,9 +2905,12 @@ func (starter *RemoteLeadStarter) StartImplementation(
 	if err != nil {
 		return execution.Run{}, false, err
 	}
-	reviewer, err := starter.executions.GetSession(ctx, remoteReviewerSessionID(run.ID))
-	if err != nil {
-		return execution.Run{}, false, err
+	var reviewer execution.Session
+	if !run.Steps.SkipReviewer {
+		reviewer, err = starter.executions.GetSession(ctx, remoteReviewerSessionID(run.ID))
+		if err != nil {
+			return execution.Run{}, false, err
+		}
 	}
 	messages, err := starter.currentPlanningMessages(ctx, run)
 	if err != nil {
@@ -2681,12 +2950,14 @@ func (starter *RemoteLeadStarter) StartImplementation(
 			ctx, run, lead, reviewer, checkpoint,
 		)
 	}
+	reviewerReady := run.Steps.SkipReviewer ||
+		reviewer.Status == execution.SessionStatusWaitingForUser &&
+			reviewer.AgentID == agentID(run.AgentProviders.ReviewerAgent, worker.RoleReviewer) &&
+			reviewer.Role == worker.RoleReviewer && reviewer.ProviderSessionID != ""
 	if run.Status != execution.RunStatusWaitingForUser ||
 		lead.Status != execution.SessionStatusWaitingForUser ||
-		reviewer.Status != execution.SessionStatusWaitingForUser ||
 		lead.AgentID != agentID(run.AgentProviders.LeadAgent, worker.RoleLead) || lead.Role != worker.RoleLead ||
-		reviewer.AgentID != agentID(run.AgentProviders.ReviewerAgent, worker.RoleReviewer) || reviewer.Role != worker.RoleReviewer ||
-		lead.ProviderSessionID == "" || reviewer.ProviderSessionID == "" {
+		lead.ProviderSessionID == "" || !reviewerReady {
 		return execution.Run{}, false, fmt.Errorf(
 			"%w: run and planning sessions are not at the completed-plan checkpoint",
 			ErrImplementationNotAllowed,
@@ -2858,7 +3129,7 @@ func (starter *RemoteLeadStarter) retryImplementationPublication(
 	}
 	if run.Status != execution.RunStatusWaitingForUser ||
 		lead.Status != execution.SessionStatusWaitingForUser ||
-		reviewer.Status != execution.SessionStatusWaitingForUser {
+		(!run.Steps.SkipReviewer && reviewer.Status != execution.SessionStatusWaitingForUser) {
 		return execution.Run{}, false, fmt.Errorf(
 			"%w: implementation publication cannot be rechecked while execution is active",
 			ErrImplementationNotAllowed,
@@ -2936,26 +3207,33 @@ func (starter *RemoteLeadStarter) implementationRequest(
 	if err != nil {
 		return remoteLeadRequest{}, err
 	}
+	mode, idempotencySuffix := workerhttp.AttemptModeResume, ":resume"
+	if lead.ProviderSessionID == "" {
+		// Without a documented plan, implementation is the lead's first turn.
+		mode, idempotencySuffix = workerhttp.AttemptModeStart, ":start"
+	}
+	instructions := implementationInstructions(prepared, attemptID)
+	if run.Steps.SkipPlan {
+		instructions = planlessImplementationInstructions(storedFeature, prepared, attemptID)
+	}
 	request := remoteLeadRequest{
 		runID: run.ID, agentName: "lead agent", waitingReason: implementationReadyReason,
 		identity: workerhttp.MutationIdentity{
 			AttemptReference: workerhttp.AttemptReference{
 				SessionID: lead.ID, AttemptID: attemptID,
 			},
-			IdempotencyKey: attemptID + ":resume",
+			IdempotencyKey: attemptID + idempotencySuffix,
 		},
 		request: workerhttp.PutAttemptRequest{
-			Mode: workerhttp.AttemptModeResume,
+			Mode: mode,
 			Assignment: workerhttp.Assignment{
 				AgentProfileID: starter.profileID(run.AgentProviders.LeadAgent, worker.RoleLead),
 				ProjectID:      storedFeature.ProjectID, FeatureID: storedFeature.ID,
 				Role: workerhttp.RoleLead, WorkspaceID: prepared.ID,
 			},
 			ProviderSessionID: lead.ProviderSessionID,
-			Instructions: implementationInstructions(
-				prepared, attemptID,
-			) + previewContext,
-			OutputContract: workerhttp.OutputContractImplementationLead,
+			Instructions:      instructions + previewContext,
+			OutputContract:    workerhttp.OutputContractImplementationLead,
 		},
 	}
 	if err := request.request.Validate(request.identity); err != nil {
@@ -2994,8 +3272,10 @@ func (starter *RemoteLeadStarter) startLeadResponse(
 	messages []execution.PlanningMessage,
 	chained bool,
 ) (remoteLeadRequest, bool, error) {
-	if len(messages) < 2 || planningRoundLimitReached(run.PlanningRoundLimit, len(messages)) ||
-		messages[len(messages)-1].Role != worker.RoleReviewer {
+	solo := run.Steps.SkipReviewer
+	if len(messages) == 0 || planningRoundLimitReached(run.PlanningRoundLimit, len(messages)) ||
+		(!solo && (len(messages) < 2 || messages[len(messages)-1].Role != worker.RoleReviewer)) ||
+		(solo && messages[len(messages)-1].Event.Type == worker.EventPlanSubmitted) {
 		return remoteLeadRequest{}, false, ErrPlanningNotAllowed
 	}
 	storedFeature, err := starter.featureForCurrentPlan(ctx, run, storedFeature)
@@ -3046,13 +3326,19 @@ func (starter *RemoteLeadStarter) startLeadResponse(
 			OutputContract:    workerhttp.OutputContractPlanningLead,
 		},
 	}
+	chainedReason := "The lead is considering the reviewer's response."
+	if solo {
+		request.request.Instructions = soloPlanSubmissionInstructions
+		submitPlanAlone(&request)
+		chainedReason = soloPlanningRunningReason
+	}
 	if err := request.request.Validate(request.identity); err != nil {
 		return remoteLeadRequest{}, false, fmt.Errorf("%w: %v", ErrInvalidRunRequest, err)
 	}
 	if chained {
 		admitted, err := starter.executions.BeginChainedTurn(
 			ctx, lead.ID, checkpoint, attemptID,
-			"The lead is considering the reviewer's response.",
+			chainedReason,
 		)
 		return request, admitted, err
 	}
@@ -3300,14 +3586,16 @@ func (starter *RemoteLeadStarter) implementationContinuationRequest(
 	if !implementing || attemptVersion != run.PlanVersion {
 		return remoteLeadRequest{}, ErrCommandNotAllowed
 	}
-	reviewer, err := starter.executions.GetSession(ctx, remoteReviewerSessionID(run.ID))
-	if err != nil {
-		return remoteLeadRequest{}, err
-	}
-	if reviewer.Status != execution.SessionStatusWaitingForUser ||
-		reviewer.AgentID != agentID(run.AgentProviders.ReviewerAgent, worker.RoleReviewer) || reviewer.Role != worker.RoleReviewer ||
-		reviewer.ProviderSessionID == "" {
-		return remoteLeadRequest{}, ErrCommandNotAllowed
+	if !run.Steps.SkipReviewer {
+		reviewer, err := starter.executions.GetSession(ctx, remoteReviewerSessionID(run.ID))
+		if err != nil {
+			return remoteLeadRequest{}, err
+		}
+		if reviewer.Status != execution.SessionStatusWaitingForUser ||
+			reviewer.AgentID != agentID(run.AgentProviders.ReviewerAgent, worker.RoleReviewer) || reviewer.Role != worker.RoleReviewer ||
+			reviewer.ProviderSessionID == "" {
+			return remoteLeadRequest{}, ErrCommandNotAllowed
+		}
 	}
 	messages, err := starter.currentPlanningMessages(ctx, run)
 	if err != nil {
@@ -3366,7 +3654,7 @@ func (starter *RemoteLeadStarter) implementationContinuationRequest(
 			},
 			ProviderSessionID: lead.ProviderSessionID,
 			Instructions: implementationContinuationInstructions(
-				prepared, command.Message, attemptID,
+				prepared, command.Message, attemptID, !run.Steps.SkipPlan,
 			),
 			OutputContract: workerhttp.OutputContractImplementationLead,
 		},
@@ -4194,7 +4482,16 @@ func (starter *RemoteLeadStarter) finish(
 				err = starter.waitRun(ctx, request.runID, planningLimitReason(run.PlanningRoundLimit), execution.RunWaitKindRoundCap)
 				break
 			}
-			next, admitted, startErr := starter.startReviewerResponse(ctx, run, storedFeature, messages)
+			startNext := starter.startReviewerResponse
+			if run.Steps.SkipReviewer {
+				startNext = func(
+					ctx context.Context, run execution.Run, storedFeature feature.Feature,
+					messages []execution.PlanningMessage,
+				) (remoteLeadRequest, bool, error) {
+					return starter.startLeadResponse(ctx, run, storedFeature, messages, true)
+				}
+			}
+			next, admitted, startErr := startNext(ctx, run, storedFeature, messages)
 			if startErr != nil {
 				err = startErr
 				break
@@ -4309,7 +4606,7 @@ func (starter *RemoteLeadStarter) verifyImplementationPublication(
 		messages[len(messages)-1].Event.Type != worker.EventPlanSubmitted {
 		return errors.New("implementation publication has no durable agreed plan")
 	}
-	if starter.artifacts != nil {
+	if starter.artifacts != nil && !run.Steps.SkipPlan {
 		if _, correcting := implementationCorrectionTurnNumber(request.identity.SessionID, request.identity.AttemptID); !correcting {
 			artifact, artifactErr := starter.artifacts.GetFeatureArtifact(
 				ctx, run.FeatureID, featureartifact.KindImplementationPlan,
@@ -4366,6 +4663,14 @@ func (starter *RemoteLeadStarter) verifyImplementationPublication(
 	)
 	if err != nil {
 		return fmt.Errorf("record verified implementation publication: %w", err)
+	}
+	if run.Steps.SkipReviewer {
+		// Without a reviewer (ADR-018) the lead's verified publication is the
+		// work order's result; the merge gate and validation still apply.
+		return starter.enterMergeGate(
+			ctx, request, run, storedFeature, result.Publication.CommitID,
+			result.Publication.PullRequestNumber, implementationLeadOnlyReadyReason,
+		)
 	}
 	if run.IndependentAcceptanceTests {
 		return starter.tryStartAcceptanceReview(ctx, run.ID)
@@ -5163,6 +5468,66 @@ func (starter *RemoteLeadStarter) launchImplementationReadinessVerification(
 	}
 }
 
+// enterMergeGate records the exact commit to merge, moves the work order to
+// ready_to_merge, and either waits at the merge gate or merges by policy,
+// after isolated validation when the project has it. Reviewed runs enter it
+// after the lead's readiness acknowledgement; runs without a reviewer
+// (ADR-018) after the lead's verified publication.
+func (starter *RemoteLeadStarter) enterMergeGate(
+	ctx context.Context,
+	request remoteLeadRequest,
+	run execution.Run,
+	storedFeature feature.Feature,
+	commitID string,
+	pullRequestNumber int64,
+	readyReason string,
+) error {
+	mergeReady, err := starter.workspaces.RecordMergeReady(
+		ctx, storedFeature.ProjectID, storedFeature.ID, commitID, pullRequestNumber,
+	)
+	if err != nil {
+		return fmt.Errorf("record exact merge target: %w", err)
+	}
+	if _, err := starter.planning.TransitionFeature(
+		ctx, storedFeature.ID, feature.StateReadyToMerge,
+		workflow.Actor{Kind: workflow.ActorKindCoordinator, ID: coordinatorActorID},
+		request.identity.AttemptID+":ready-to-merge",
+	); err != nil {
+		return fmt.Errorf("advance approved implementation to ready to merge: %w", err)
+	}
+	if paused, err := starter.stopAtPauseBoundary(ctx, run.ID, readyReason); err != nil || paused {
+		return err
+	}
+	if starter.validation != nil {
+		job, _, err := starter.validation.EnsureJob(
+			ctx, storedFeature.ProjectID, storedFeature.ID, run.ID, mergeReady.ID, commitID,
+		)
+		if err != nil && !errors.Is(err, validation.ErrNotFound) {
+			return fmt.Errorf("create isolated validation job: %w", err)
+		}
+		if err == nil {
+			if _, err := starter.executions.RecordSessionEventWithID(
+				ctx, request.identity.AttemptID+":validation-created", request.identity.SessionID,
+				worker.Event{Type: worker.EventActivity, Text: "Isolated validation job " + job.ID + " is pending for approved commit " + commitID + "."},
+			); err != nil {
+				return fmt.Errorf("record validation activity: %w", err)
+			}
+			return starter.waitRun(ctx, request.runID,
+				validationPendingReason,
+				execution.RunWaitKindMergeGate,
+			)
+		}
+	}
+	if run.MergePolicy == project.MergePolicyAutoAfterGates {
+		if _, _, err := starter.Merge(ctx, run.ID, run.ID+":automatic-merge"); err != nil {
+			starter.recordMergeBlocked(ctx, run.ID, err)
+			return starter.waitRun(ctx, request.runID, implementationMergeBlockedReason, execution.RunWaitKindBlocker)
+		}
+		return nil
+	}
+	return starter.waitRun(ctx, request.runID, readyReason, execution.RunWaitKindMergeGate)
+}
+
 func (starter *RemoteLeadStarter) verifyImplementationReadiness(
 	ctx context.Context,
 	request remoteLeadRequest,
@@ -5250,53 +5615,10 @@ func (starter *RemoteLeadStarter) verifyImplementationReadiness(
 		return fmt.Errorf("record verified merge-readiness decision: %w", err)
 	}
 	if result.Disposition == workerhttp.DispositionSucceeded {
-		mergeReady, err := starter.workspaces.RecordMergeReady(
-			ctx, storedFeature.ProjectID, storedFeature.ID,
-			approved.CommitID, approved.PullRequestNumber,
+		return starter.enterMergeGate(
+			ctx, request, run, storedFeature, approved.CommitID, approved.PullRequestNumber,
+			implementationApprovedReason,
 		)
-		if err != nil {
-			return fmt.Errorf("record exact merge target: %w", err)
-		}
-		if _, err := starter.planning.TransitionFeature(
-			ctx, storedFeature.ID, feature.StateReadyToMerge,
-			workflow.Actor{Kind: workflow.ActorKindCoordinator, ID: coordinatorActorID},
-			request.identity.AttemptID+":ready-to-merge",
-		); err != nil {
-			return fmt.Errorf("advance mutually approved implementation to ready to merge: %w", err)
-		}
-		if paused, err := starter.stopAtPauseBoundary(
-			ctx, run.ID, implementationApprovedReason,
-		); err != nil || paused {
-			return err
-		}
-		if starter.validation != nil {
-			job, _, err := starter.validation.EnsureJob(
-				ctx, storedFeature.ProjectID, storedFeature.ID, run.ID, mergeReady.ID, approved.CommitID,
-			)
-			if err != nil && !errors.Is(err, validation.ErrNotFound) {
-				return fmt.Errorf("create isolated validation job: %w", err)
-			}
-			if err == nil {
-				if _, err := starter.executions.RecordSessionEventWithID(
-					ctx, request.identity.AttemptID+":validation-created", request.identity.SessionID,
-					worker.Event{Type: worker.EventActivity, Text: "Isolated validation job " + job.ID + " is pending for approved commit " + approved.CommitID + "."},
-				); err != nil {
-					return fmt.Errorf("record validation activity: %w", err)
-				}
-				return starter.waitRun(ctx, request.runID,
-					"The exact approved revision is waiting for isolated validation before merge.",
-					execution.RunWaitKindMergeGate,
-				)
-			}
-		}
-		if run.MergePolicy == project.MergePolicyAutoAfterGates {
-			if _, _, err := starter.Merge(ctx, run.ID, run.ID+":automatic-merge"); err != nil {
-				starter.recordMergeBlocked(ctx, run.ID, err)
-				return starter.waitRun(ctx, request.runID, implementationMergeBlockedReason, execution.RunWaitKindBlocker)
-			}
-			return nil
-		}
-		return starter.waitRun(ctx, request.runID, implementationApprovedReason, execution.RunWaitKindMergeGate)
 	}
 	if implementationReviewRoundLimitReached(run.ImplementationReviewRoundLimit, round) {
 		return starter.waitRun(ctx, request.runID, implementationReviewLimitReason(run.ImplementationReviewRoundLimit), execution.RunWaitKindRoundCap)
@@ -5426,7 +5748,7 @@ func (starter *RemoteLeadStarter) continueSubmittedPlan(
 	if err != nil {
 		return err
 	}
-	if published {
+	if published || run.Steps.SkipReviewer {
 		return starter.publishSubmittedPlan(ctx, runID, plan)
 	}
 	reviewer, err := starter.executions.GetSession(ctx, remoteReviewerSessionID(run.ID))
@@ -5625,6 +5947,21 @@ func (starter *RemoteLeadStarter) publishSubmittedPlan(
 	if err != nil {
 		return err
 	}
+	if _, err := starter.recordPlanPublication(ctx, run, storedFeature, plan); err != nil {
+		return err
+	}
+	return starter.waitRun(ctx, runID, planningPlanPublishedReason, execution.RunWaitKindPhaseCheckpoint)
+}
+
+// recordPlanPublication publishes the run's plan to the draft pull request,
+// creating the feature branch and pull request for the first plan.
+func (starter *RemoteLeadStarter) recordPlanPublication(
+	ctx context.Context,
+	run execution.Run,
+	storedFeature feature.Feature,
+	plan execution.Event,
+) (workspace.Workspace, error) {
+	var err error
 	var prepared workspace.Workspace
 	if run.PlanVersion == 1 {
 		prepared, _, err = starter.workspaces.PublishPlan(
@@ -5633,7 +5970,7 @@ func (starter *RemoteLeadStarter) publishSubmittedPlan(
 	} else {
 		revision, revisionErr := starter.executions.GetPlanRevision(ctx, run.ID, run.PlanVersion)
 		if revisionErr != nil {
-			return revisionErr
+			return workspace.Workspace{}, revisionErr
 		}
 		prepared, _, err = starter.workspaces.PublishRevisedPlan(
 			ctx, storedFeature.ProjectID, run.FeatureID, plan.ID, plan.Text,
@@ -5641,22 +5978,17 @@ func (starter *RemoteLeadStarter) publishSubmittedPlan(
 		)
 	}
 	if err != nil {
-		return err
+		return workspace.Workspace{}, err
+	}
+	activity := "The agreed implementation plan was published to Forgejo pull request #%d."
+	if run.Steps.SkipPlan {
+		activity = "Forgejo pull request #%d was opened for this work order, without a documented plan."
 	}
 	_, err = starter.executions.RecordSessionEventWithID(
 		ctx, planPublicationEventID(plan), plan.SessionID,
-		worker.Event{
-			Type: worker.EventActivity,
-			Text: fmt.Sprintf(
-				"The agreed implementation plan was published to Forgejo pull request #%d.",
-				prepared.PullRequestNumber,
-			),
-		},
+		worker.Event{Type: worker.EventActivity, Text: fmt.Sprintf(activity, prepared.PullRequestNumber)},
 	)
-	if err != nil {
-		return err
-	}
-	return starter.waitRun(ctx, runID, planningPlanPublishedReason, execution.RunWaitKindPhaseCheckpoint)
+	return prepared, err
 }
 
 func planPublicationEventID(plan execution.Event) string {
@@ -5889,6 +6221,25 @@ func (starter *RemoteLeadStarter) waitRun(
 		ctx, run.ID, run.Status, execution.RunStatusWaitingForUser, reason, waitKind,
 	)
 	return err
+}
+
+const (
+	validationPendingReason = "The exact approved revision is waiting for isolated validation before merge."
+	validationPassedReason  = "Isolated validation passed. The approved revision is ready to merge."
+)
+
+// ValidationPassed moves a run waiting on isolated validation at the merge
+// gate to ready, so its reason no longer says validation is pending.
+func (starter *RemoteLeadStarter) ValidationPassed(ctx context.Context, runID string) error {
+	run, err := starter.executions.GetRun(ctx, runID)
+	if err != nil {
+		return err
+	}
+	if run.Status != execution.RunStatusWaitingForUser || run.Paused ||
+		run.WaitKind != execution.RunWaitKindMergeGate || run.Reason != validationPendingReason {
+		return nil
+	}
+	return starter.waitRun(ctx, runID, validationPassedReason, execution.RunWaitKindMergeGate)
 }
 
 func (starter *RemoteLeadStarter) failAdmission(

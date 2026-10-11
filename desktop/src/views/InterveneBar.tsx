@@ -234,23 +234,26 @@ export function InterveneBar({
       {pendingEffect && <EffectNote effect={pendingEffect} />}
 
       <div className="intervene__composer">
-        <div className="seg">
-          <button
-            className={`seg__opt ${agent === "lead" ? "seg__opt--on" : ""}`}
-            onClick={() => setAgent("lead")}
-            disabled={busy != null}
-          >
-            Lead
-          </button>
-          <button
-            className={`seg__opt ${agent === "reviewer" ? "seg__opt--on" : ""}`}
-            onClick={() => setAgent("reviewer")}
-            disabled={busy != null || !reviewerAvailable}
-            title={reviewerAvailable ? undefined : "The reviewer has not joined this run yet"}
-          >
-            Reviewer
-          </button>
-        </div>
+        {/* A work order without a reviewer has only the lead to message. */}
+        {run.steps?.reviewer !== false && (
+          <div className="seg">
+            <button
+              className={`seg__opt ${agent === "lead" ? "seg__opt--on" : ""}`}
+              onClick={() => setAgent("lead")}
+              disabled={busy != null}
+            >
+              Lead
+            </button>
+            <button
+              className={`seg__opt ${agent === "reviewer" ? "seg__opt--on" : ""}`}
+              onClick={() => setAgent("reviewer")}
+              disabled={busy != null || !reviewerAvailable}
+              title={reviewerAvailable ? undefined : "The reviewer has not joined this run yet"}
+            >
+              Reviewer
+            </button>
+          </div>
+        )}
         <textarea
           className="intervene__text"
           rows={2}

@@ -20,12 +20,15 @@ export function AgentModelFields({
   modelsFor,
   onChange,
   disabled,
+  roles = ROLES,
 }: {
   providers: AgentProviders;
   models: AgentModels;
   modelsFor: (provider: AgentProvider, role: AgentRole) => ModelInfo[];
   onChange: (providers: AgentProviders, models: AgentModels) => void;
   disabled?: boolean;
+  // The roles to choose for; a work order without a reviewer has only a lead.
+  roles?: AgentRole[];
 }) {
   const agents = useAgents();
   const setAgent = (role: AgentRole, id: string) => {
@@ -43,7 +46,7 @@ export function AgentModelFields({
 
   return (
     <>
-      {ROLES.map((role) => {
+      {roles.map((role) => {
         const provider = providers[role];
         const selected = agentFor(providers, role);
         const list = modelsFor(provider, role);

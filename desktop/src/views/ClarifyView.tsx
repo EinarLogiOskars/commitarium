@@ -48,6 +48,7 @@ export function ClarifyView({
         brief={brief?.document ?? null}
         briefRevision={brief?.revision ?? 0}
         onChanged={onChanged}
+        onOpenValidation={onOpenValidation}
       />
     );
   }
@@ -83,6 +84,7 @@ function AssistantChat({
   brief,
   briefRevision,
   onChanged,
+  onOpenValidation,
 }: {
   projectId: string;
   feature: Feature;
@@ -90,8 +92,12 @@ function AssistantChat({
   brief: HandoffBriefDocument | null;
   briefRevision: number;
   onChanged: () => void;
+  onOpenValidation?: () => void;
 }) {
   const [session, setSession] = useState<WorkOrderAssistantSession | null>(null);
+  // Clarification is optional (ADR-018): until the assistant has started, the
+  // user chooses to clarify or to start right away.
+  const [choice, setChoice] = useState<null | "unstarted" | "start">(null);
   const [reply, setReply] = useState("");
   const [busy, setBusy] = useState<null | "send" | "accept">(null);
   const [error, setError] = useState<string | null>(null);
@@ -106,18 +112,12 @@ function AssistantChat({
       setError(null);
     } catch (e) {
       if (e instanceof ApiError && e.code === "assistant_not_found") {
-        if (hasRepo === false) return;
-        try {
-          setSession(await startAssistant(projectId, feature.id));
-          setError(null);
-        } catch (startError) {
-          setError(describe(startError));
-        }
+        setChoice((current) => current ?? "unstarted");
         return;
       }
       setError(describe(e));
     }
-  }, [projectId, feature.id, hasRepo]);
+  }, [projectId, feature.id]);
 
   useEffect(() => {
     void load();
@@ -162,6 +162,16 @@ function AssistantChat({
     }
   };
 
+  const clarify = async () => {
+    setChoice(null);
+    try {
+      setSession(await startAssistant(projectId, feature.id));
+      setError(null);
+    } catch (startError) {
+      setError(describe(startError));
+    }
+  };
+
   const canReply = !!session && !running && busy === null;
 
   // Enter sends; Shift+Enter or Alt+Enter starts a new line.
@@ -193,6 +203,18 @@ function AssistantChat({
     }
   };
 
+  if (!session && choice === "start") {
+    return (
+      <StartWithoutClarifying
+        projectId={projectId}
+        feature={feature}
+        onChanged={onChanged}
+        onBack={() => setChoice("unstarted")}
+        onOpenValidation={onOpenValidation}
+      />
+    );
+  }
+
   if (hasRepo === false && !session) {
     return (
       <section className="panel">
@@ -201,6 +223,26 @@ function AssistantChat({
           This project has no internal repository yet, so the assistant can't look at the code.
           Import a project or bind a repository first.
         </p>
+      </section>
+    );
+  }
+
+  if (!session && choice === "unstarted") {
+    return (
+      <section className="panel panel--phase">
+        <h2>Clarify</h2>
+        {error && <div className="banner banner--error">{error}</div>}
+        <p className="muted">
+          The assistant can look into the code with you and turn this {WORK.short} into a handoff
+          brief. For a small, clear change, start right away: the title and description become the
+          goal.
+        </p>
+        <div className="row">
+          <button className="primary" onClick={() => void clarify()}>
+            Clarify with the assistant
+          </button>
+          <button onClick={() => setChoice("start")}>Start without clarifying</button>
+        </div>
       </section>
     );
   }
@@ -329,10 +371,7 @@ function ReadyView({
     <section className="panel panel--phase">
       <h2>Ready</h2>
       {error && <div className="banner banner--error">{error}</div>}
-      <p className="muted">
-        The lead and reviewer start from this brief. The lead first checks it against what has
-        changed on main since it was written, then plans the commits with the reviewer.
-      </p>
+      <p className="muted">{startIntro(settings)}</p>
       {/* The brief and the settings scroll together; Start stays in view. */}
       <div className="ready__scroll">
         {brief && (
@@ -361,6 +400,87 @@ function ReadyView({
         </button>
         <button className="ghost" onClick={() => void run("reopen")} disabled={busy !== null}>
           {busy === "reopen" ? "Reopening…" : "Reopen for clarification"}
+        </button>
+      </div>
+    </section>
+  );
+}
+
+function startIntro(settings: StartSettingsValue): string {
+  const { documented_plan, reviewer } = settings.steps;
+  if (reviewer)
+    return "The lead and reviewer start from this brief. The lead first checks it against what has changed on main since it was written, then plans the commits with the reviewer.";
+  if (documented_plan)
+    return "The lead starts from this brief: it checks it against main, writes a commit-by-commit plan, and implements it. You decide the merge.";
+  return "The lead implements this brief directly in one turn. You decide the merge.";
+}
+
+// Starts a Draft without clarification (ADR-018): the title and description
+// become the goal, and the agents start right away.
+function StartWithoutClarifying({
+  projectId,
+  feature,
+  onChanged,
+  onBack,
+  onOpenValidation,
+}: {
+  projectId: string;
+  feature: Feature;
+  onChanged: () => void;
+  onBack: () => void;
+  onOpenValidation?: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [settings, setSettings] = useState<StartSettingsValue>(() => ({
+    ...startSettingsFrom(feature),
+    steps: { clarification: false, documented_plan: false, reviewer: false },
+    independent_acceptance_tests: false,
+  }));
+
+  const start = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await startRun(projectId, feature.id, `start-${feature.id}-${feature.updated_at}`, settings);
+      onChanged();
+    } catch (e) {
+      setError(describe(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <section className="panel panel--phase">
+      <h2>Start without clarifying</h2>
+      {error && <div className="banner banner--error">{error}</div>}
+      <p className="muted">{startIntro(settings)}</p>
+      <div className="ready__scroll">
+        <div className="brief">
+          <span className="neworder__heading">Goal</span>
+          <p>
+            <strong>{feature.title}</strong>
+          </p>
+          {feature.description && <p>{feature.description}</p>}
+        </div>
+        <div className="start-settings">
+          <span className="neworder__heading">Start with</span>
+          <StartSettings
+            projectId={projectId}
+            value={settings}
+            onChange={setSettings}
+            onOpenValidation={onOpenValidation}
+            disabled={busy}
+          />
+        </div>
+      </div>
+      <div className="row">
+        <button className="primary" onClick={() => void start()} disabled={busy}>
+          {busy ? "Starting…" : "Start"}
+        </button>
+        <button className="ghost" onClick={onBack} disabled={busy}>
+          Back
         </button>
       </div>
     </section>

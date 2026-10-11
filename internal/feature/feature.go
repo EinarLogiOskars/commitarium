@@ -20,6 +20,7 @@ type Feature struct {
 	MergePolicy                project.MergePolicy
 	AutonomyPolicy             project.AutonomyPolicy
 	IndependentAcceptanceTests bool
+	Steps                      project.WorkSteps
 	CreatedAt                  time.Time
 	UpdatedAt                  time.Time
 }
@@ -33,4 +34,5 @@ type SettingsOverrides struct {
 	MergePolicy                *project.MergePolicy
 	AutonomyPolicy             *project.AutonomyPolicy
 	IndependentAcceptanceTests *bool
+	Steps                      *project.WorkSteps
 }

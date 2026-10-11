@@ -291,3 +291,33 @@ func createFeatureTestProject(
 		t.Fatalf("create parent project: %v", err)
 	}
 }
+
+func TestFeatureAndRunStoresKeepWorkSteps(t *testing.T) {
+	db, executions := newTestExecutionStore(t)
+	run, _ := createExecutionRecords(t, db, executions)
+	features := NewFeatureStore(db)
+	stored, err := features.GetByID(t.Context(), run.FeatureID)
+	if err != nil || stored.Steps != (project.WorkSteps{}) {
+		t.Fatalf("existing work order steps = %+v err=%v", stored.Steps, err)
+	}
+	if _, err := db.ExecContext(t.Context(), `UPDATE features SET state = 'ready' WHERE id = ?`, stored.ID); err != nil {
+		t.Fatalf("make ready: %v", err)
+	}
+	stored.Steps = project.WorkSteps{SkipPlan: true, SkipReviewer: true}
+	if err := features.UpdateReadySettings(t.Context(), stored); err != nil {
+		t.Fatalf("save steps: %v", err)
+	}
+	if reloaded, _ := features.GetByID(t.Context(), stored.ID); reloaded.Steps != stored.Steps {
+		t.Fatalf("saved steps = %+v", reloaded.Steps)
+	}
+
+	quick := run
+	quick.ID = "run_quick"
+	quick.Steps = project.WorkSteps{SkipPlan: true, SkipReviewer: true}
+	if err := executions.CreateRun(t.Context(), quick); err != nil {
+		t.Fatalf("create quick run: %v", err)
+	}
+	if reloaded, err := executions.GetRun(t.Context(), quick.ID); err != nil || reloaded.Steps != quick.Steps {
+		t.Fatalf("run steps = %+v err=%v", reloaded.Steps, err)
+	}
+}

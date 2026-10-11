@@ -172,6 +172,11 @@ func (api *API) completeValidationJobHandler(w http.ResponseWriter, r *http.Requ
 		}
 	}
 	if job.Status == validation.StatusPassed && api.realWorkflow != nil {
+		if passed, ok := api.realWorkflow.(validationPassedRecorder); ok {
+			if err := passed.ValidationPassed(r.Context(), job.RunID); err != nil {
+				log.Printf("record passed validation job %q on run %q: %v", job.ID, job.RunID, err)
+			}
+		}
 		run, getErr := api.execution.GetRun(r.Context(), job.RunID)
 		if getErr == nil && run.MergePolicy == project.MergePolicyAutoAfterGates {
 			if _, _, mergeErr := api.realWorkflow.Merge(r.Context(), run.ID, run.ID+":automatic-validation-merge"); mergeErr != nil {
@@ -183,6 +188,12 @@ func (api *API) completeValidationJobHandler(w http.ResponseWriter, r *http.Requ
 		w.Header().Set("Warning", `199 commitarium "`+publicationWarning+`"`)
 	}
 	writeJSON(w, http.StatusOK, job, "completed validation job")
+}
+
+// validationPassedRecorder clears a run's "validation pending" reason once its
+// isolated validation passes.
+type validationPassedRecorder interface {
+	ValidationPassed(ctx context.Context, runID string) error
 }
 
 func validationSummary(job validation.Job) string {

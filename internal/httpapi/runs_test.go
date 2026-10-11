@@ -12,8 +12,10 @@ import (
 
 	"github.com/EinarLogiOskars/commitarium/internal/execution"
 	"github.com/EinarLogiOskars/commitarium/internal/feature"
+	"github.com/EinarLogiOskars/commitarium/internal/featureartifact"
 	"github.com/EinarLogiOskars/commitarium/internal/project"
 	"github.com/EinarLogiOskars/commitarium/internal/worker"
+	"github.com/EinarLogiOskars/commitarium/internal/workflow"
 	"github.com/EinarLogiOskars/commitarium/internal/workspace"
 )
 
@@ -448,5 +450,74 @@ func TestStartRunUsesTheSettingsChosenAtStart(t *testing.T) {
 		ServeHTTP(recorder, bad)
 	if recorder.Code != http.StatusBadRequest {
 		t.Fatalf("unknown start field status %d", recorder.Code)
+	}
+}
+
+// readyingFeatureService reports the work order as Ready once the workflow
+// readied it.
+type readyingFeatureService struct {
+	*recordingFeatureService
+	workflow *artifactWorkflowService
+}
+
+func (s *readyingFeatureService) GetByID(ctx context.Context, projectID, id string) (feature.Feature, error) {
+	stored, err := s.recordingFeatureService.GetByID(ctx, projectID, id)
+	if s.workflow.state == feature.StateReady {
+		stored.State = feature.StateReady
+	}
+	return stored, err
+}
+
+// firstBriefWorkflowService has no brief yet and accepts the first one.
+type firstBriefWorkflowService struct{ *artifactWorkflowService }
+
+func (s firstBriefWorkflowService) PutHandoffBrief(
+	ctx context.Context,
+	featureID string,
+	expectedRevision int,
+	brief featureartifact.HandoffBrief,
+	actor workflow.Actor,
+	key string,
+) (workflow.FeatureArtifact, error) {
+	_, _ = s.artifactWorkflowService.PutHandoffBrief(ctx, featureID, expectedRevision, brief, actor, key)
+	return workflow.FeatureArtifact{FeatureID: featureID, Kind: featureartifact.KindHandoffBrief, Revision: 1}, nil
+}
+
+func TestStartRunWithoutClarificationReadiesTheDraft(t *testing.T) {
+	workflowService := &artifactWorkflowService{
+		recordingWorkflowService: &recordingWorkflowService{},
+		artifactErr:              workflow.ErrArtifactNotFound,
+	}
+	features := &readyingFeatureService{
+		recordingFeatureService: &recordingFeatureService{getResult: feature.Feature{
+			ID: "fea_test", ProjectID: "prj_test", Title: "Update the README",
+			Description: "Mention the new export button.", State: feature.StateDraft,
+			AgentProviders: project.DefaultAgentProviders(),
+		}},
+		workflow: workflowService,
+	}
+	starter := &recordingRunStarter{}
+	start := func(body, key string) *httptest.ResponseRecorder {
+		request := httptest.NewRequest(
+			http.MethodPost, "/api/v1/projects/prj_test/features/fea_test/runs", strings.NewReader(body),
+		)
+		request.Header.Set("Idempotency-Key", key)
+		recorder := httptest.NewRecorder()
+		New(&recordingProjectService{}, features, firstBriefWorkflowService{workflowService},
+			&recordingExecutionService{runErr: execution.ErrNotFound}, nil, starter).ServeHTTP(recorder, request)
+		return recorder
+	}
+
+	if recorder := start(`{}`, "start-draft"); recorder.Code != http.StatusConflict {
+		t.Fatalf("a draft started with clarification: status %d", recorder.Code)
+	}
+	recorder := start(`{"steps":{"clarification":false,"documented_plan":false,"reviewer":false}}`, "quick-change")
+	if recorder.Code != http.StatusAccepted {
+		t.Fatalf("status %d: %s", recorder.Code, recorder.Body.String())
+	}
+	if workflowService.putBrief.Goal != "Update the README\n\nMention the new export button." ||
+		workflowService.artifactKey != "quick-change:brief" ||
+		workflowService.state != feature.StateReady || workflowService.idempotencyKey != "quick-change:ready" {
+		t.Fatalf("draft was not readied from its title and description: %+v", workflowService)
 	}
 }

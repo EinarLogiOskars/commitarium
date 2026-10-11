@@ -70,10 +70,12 @@ func (s *FeatureStore) Create(
 				merge_policy,
 				autonomy_policy,
 				independent_acceptance_tests,
+				skip_plan,
+				skip_reviewer,
 				created_at,
 				updated_at
 			)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT(id) DO NOTHING
 		`,
 		createdFeature.ID,
@@ -94,6 +96,8 @@ func (s *FeatureStore) Create(
 		createdFeature.MergePolicy,
 		createdFeature.AutonomyPolicy,
 		createdFeature.IndependentAcceptanceTests,
+		createdFeature.Steps.SkipPlan,
+		createdFeature.Steps.SkipReviewer,
 		createdFeature.CreatedAt.UTC().Format(time.RFC3339Nano),
 		createdFeature.UpdatedAt.UTC().Format(time.RFC3339Nano),
 	)
@@ -155,6 +159,8 @@ func (s *FeatureStore) GetByID(
 				merge_policy,
 				autonomy_policy,
 				independent_acceptance_tests,
+				skip_plan,
+				skip_reviewer,
 				created_at,
 				updated_at
 			FROM features
@@ -203,6 +209,8 @@ func (s *FeatureStore) ListByProjectID(
 				merge_policy,
 				autonomy_policy,
 				independent_acceptance_tests,
+				skip_plan,
+				skip_reviewer,
 				created_at,
 				updated_at
 			FROM features
@@ -260,6 +268,8 @@ func scanFeature(row featureScanner) (feature.Feature, error) {
 		&storedFeature.MergePolicy,
 		&storedFeature.AutonomyPolicy,
 		&storedFeature.IndependentAcceptanceTests,
+		&storedFeature.Steps.SkipPlan,
+		&storedFeature.Steps.SkipReviewer,
 		&createdAt,
 		&updatedAt,
 	); err != nil {
@@ -306,12 +316,13 @@ func (s *FeatureStore) UpdateReadySettings(ctx context.Context, chosen feature.F
 		`UPDATE features
 		    SET lead_provider = ?, reviewer_provider = ?, lead_agent = ?, reviewer_agent = ?,
 		        lead_model = ?, reviewer_model = ?, merge_policy = ?, autonomy_policy = ?,
-		        independent_acceptance_tests = ?
+		        independent_acceptance_tests = ?, skip_plan = ?, skip_reviewer = ?
 		  WHERE id = ? AND state = ?`,
 		chosen.AgentProviders.Lead, chosen.AgentProviders.Reviewer,
 		chosen.AgentProviders.LeadAgent, chosen.AgentProviders.ReviewerAgent,
 		chosen.AgentModels.Lead, chosen.AgentModels.Reviewer,
 		chosen.MergePolicy, chosen.AutonomyPolicy, chosen.IndependentAcceptanceTests,
+		chosen.Steps.SkipPlan, chosen.Steps.SkipReviewer,
 		chosen.ID, feature.StateReady,
 	)
 	if err != nil {

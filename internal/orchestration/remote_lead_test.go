@@ -252,6 +252,7 @@ type remoteLeadWorkspaceStub struct {
 	readinessVerifyCalls          int
 	mergeReadyCalls               int
 	mergeCalls                    int
+	mergeApprovalNotes            []string
 	responseReviewedCommit        string
 	responseCommit                string
 	publishedEventID              string
@@ -297,8 +298,10 @@ func (stub *remoteLeadWorkspaceStub) MergeApproved(
 	_ context.Context,
 	_ string,
 	_ string,
+	approvalNote ...string,
 ) (workspace.Workspace, bool, error) {
 	stub.mergeCalls++
+	stub.mergeApprovalNotes = append(stub.mergeApprovalNotes, approvalNote...)
 	if stub.prepared.MergeCommitID == "" {
 		stub.prepared.MergeCommitID = "dddddddddddddddddddddddddddddddddddddddd"
 		mergedAt := time.Now().UTC()
@@ -1570,6 +1573,223 @@ func TestRemoteLeadRunToCompletionAdvancesFromPlanningToMergeGate(t *testing.T) 
 		workspaceStub.reviewVerifyCalls != 2 || workspaceStub.responseVerifyCalls != 1 ||
 		workspaceStub.readinessVerifyCalls != 1 || workspaceStub.mergeCalls != 0 {
 		t.Fatalf("unexpected autonomous publication/review calls: %+v", workspaceStub)
+	}
+}
+
+func TestRemoteLeadWithoutReviewerPlansImplementsAndMergesAlone(t *testing.T) {
+	t.Run("submits in the first turn", func(t *testing.T) { testRemoteLeadWithoutReviewer(t, false) })
+	t.Run("asked again after replying", func(t *testing.T) { testRemoteLeadWithoutReviewer(t, true) })
+}
+
+// testRemoteLeadWithoutReviewer runs a work order without a reviewer from
+// Start to merge. When repliesFirst, the lead's first planning turn replies
+// instead of submitting, and the coordinator asks it again.
+func testRemoteLeadWithoutReviewer(t *testing.T, repliesFirst bool) {
+	db, executions, storedProject, storedFeature := newRemoteLeadExecution(t)
+	storedProject, err := database.NewProjectStore(db).UpdateAutonomyPolicy(
+		t.Context(), storedProject.ID, project.AutonomyPolicyRunToCompletion,
+	)
+	if err != nil {
+		t.Fatalf("enable run-to-completion: %v", err)
+	}
+	runID := "run_without_reviewer"
+	stub := newConversationalRemoteLeadWorker(runID, storedProject.ID, storedFeature.ID)
+	addCompletedPlanningAttempt(stub, runID, storedProject.ID, storedFeature.ID)
+	leadSessionID := remoteLeadSessionID(runID)
+	planning := workerhttp.AttemptReference{SessionID: leadSessionID, AttemptID: planningAttemptID(leadSessionID)}
+	turns := 2
+	if repliesFirst {
+		addCompletedPlanningCorrectionAttempt(
+			stub, leadSessionID, storedProject.ID, storedFeature.ID,
+			workerhttp.RoleLead, "codex-thread-test", 2,
+			workerhttp.EventPlanSubmitted, "Complete final implementation plan",
+		)
+		turns = 3
+	} else {
+		stub.events[planning][1].Type = workerhttp.EventPlanSubmitted
+		stub.events[planning][1].Text = "Complete final implementation plan"
+	}
+	addCompletedImplementationAttempt(stub, runID, storedProject.ID, storedFeature.ID)
+
+	workflowService := workflow.NewService(database.NewWorkflowStore(db))
+	checkoutAt := time.Date(2026, time.October, 11, 11, 0, 0, 0, time.UTC)
+	workspaceStub := &remoteLeadWorkspaceStub{prepared: workspace.Workspace{
+		ID: "wsp_without_reviewer", ProjectID: storedProject.ID, FeatureID: storedFeature.ID,
+		RepositoryOwner: "commitarium", RepositoryName: "without-reviewer-test",
+		BaseBranch: "main", Branch: "commitarium/" + storedFeature.ID,
+		BaseCommitID:         "0123456789abcdef0123456789abcdef01234567",
+		Status:               workspace.StatusPreparing,
+		CheckoutRelativePath: "wsp_without_reviewer",
+		CheckoutCreatedAt:    &checkoutAt,
+	}}
+	features := database.NewFeatureStore(db)
+	starter, err := NewRemoteLeadStarter(RemoteLeadConfig{
+		Executions: executions, Features: features, Goals: workflowService,
+		Planning: workflowService, Briefs: workflowService, Workspaces: workspaceStub, Worker: stub,
+		Pump:       &conversationalRemoteLeadPump{executions: executions, worker: stub},
+		Validation: validation.NewService(database.NewValidationStore(db)),
+		Lifetime:   t.Context(),
+	})
+	if err != nil {
+		t.Fatalf("create starter: %v", err)
+	}
+	readyRemoteLeadFeature(t, workflowService, storedFeature.ID)
+	chosen, err := features.GetByID(t.Context(), storedFeature.ID)
+	if err != nil {
+		t.Fatalf("load ready feature: %v", err)
+	}
+	chosen.Steps = project.WorkSteps{SkipReviewer: true}
+	if err := features.UpdateReadySettings(t.Context(), chosen); err != nil {
+		t.Fatalf("choose steps: %v", err)
+	}
+	if _, _, err := starter.Start(
+		t.Context(), runID, storedProject.ID, storedFeature.ID, storedFeature.Title,
+		storedProject.DialogueLimits, storedProject.AgentProviders,
+		storedProject.MergePolicy, storedProject.AutonomyPolicy,
+	); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	var gated execution.Run
+	for time.Now().Before(deadline) {
+		gated, err = executions.GetRun(t.Context(), runID)
+		if err != nil {
+			t.Fatalf("load run: %v", err)
+		}
+		current, featureErr := features.GetByID(t.Context(), storedFeature.ID)
+		if featureErr != nil {
+			t.Fatalf("load feature: %v", featureErr)
+		}
+		if current.State == feature.StateReadyToMerge && gated.Status == execution.RunStatusWaitingForUser {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if gated.Status != execution.RunStatusWaitingForUser || gated.WaitKind != execution.RunWaitKindMergeGate ||
+		!gated.Steps.SkipReviewer {
+		t.Fatalf("run without a reviewer did not reach the merge gate: %+v", gated)
+	}
+	stub.mu.Lock()
+	requests := append([]workerhttp.PutAttemptRequest(nil), stub.putRequests...)
+	stub.mu.Unlock()
+	if len(requests) != turns {
+		t.Fatalf("expected %d lead turns, got %d", turns, len(requests))
+	}
+	if repliesFirst && (requests[1].OutputContract != workerhttp.OutputContractPlanningLead ||
+		!strings.Contains(requests[1].Instructions, "submit_plan")) {
+		t.Fatalf("the lead was not asked again to submit its plan: %+v", requests[1])
+	}
+	if requests[0].OutputContract != workerhttp.OutputContractPlanningLead ||
+		!strings.Contains(requests[0].Instructions, "no reviewer") {
+		t.Fatalf("first planning turn did not ask the lead to submit alone: %+v", requests[0])
+	}
+	for _, request := range requests {
+		if request.Assignment.Role != workerhttp.RoleLead {
+			t.Fatalf("a run without a reviewer started a %s turn", request.Assignment.Role)
+		}
+	}
+	if _, err := executions.GetSession(t.Context(), remoteReviewerSessionID(runID)); !errors.Is(err, execution.ErrNotFound) {
+		t.Fatalf("a run without a reviewer created a reviewer session: %v", err)
+	}
+	if workspaceStub.publishCalls != 1 || workspaceStub.publicationVerifyCalls != 1 ||
+		workspaceStub.reviewVerifyCalls != 0 || workspaceStub.mergeCalls != 0 {
+		t.Fatalf("unexpected publication calls: %+v", workspaceStub)
+	}
+
+	if _, _, err := starter.Merge(t.Context(), runID, "merge-without-reviewer"); err != nil {
+		t.Fatalf("merge: %v", err)
+	}
+	if workspaceStub.mergeCalls != 1 || len(workspaceStub.mergeApprovalNotes) != 1 ||
+		!strings.Contains(workspaceStub.mergeApprovalNotes[0], "no reviewer") {
+		t.Fatalf("merge did not carry the coordinator's approval note: %+v", workspaceStub.mergeApprovalNotes)
+	}
+}
+
+func TestRemoteLeadQuickChangeImplementsTheGoalWithoutAPlan(t *testing.T) {
+	db, executions, storedProject, storedFeature := newRemoteLeadExecution(t)
+	runID := "run_quick_change"
+	stub := newConversationalRemoteLeadWorker(runID, storedProject.ID, storedFeature.ID)
+	addCompletedImplementationAttempt(stub, runID, storedProject.ID, storedFeature.ID)
+
+	workflowService := workflow.NewService(database.NewWorkflowStore(db))
+	checkoutAt := time.Date(2026, time.October, 11, 12, 0, 0, 0, time.UTC)
+	workspaceStub := &remoteLeadWorkspaceStub{prepared: workspace.Workspace{
+		ID: "wsp_quick_change", ProjectID: storedProject.ID, FeatureID: storedFeature.ID,
+		RepositoryOwner: "commitarium", RepositoryName: "quick-change-test",
+		BaseBranch: "main", Branch: "commitarium/" + storedFeature.ID,
+		BaseCommitID:         "0123456789abcdef0123456789abcdef01234567",
+		Status:               workspace.StatusPreparing,
+		CheckoutRelativePath: "wsp_quick_change",
+		CheckoutCreatedAt:    &checkoutAt,
+	}}
+	features := database.NewFeatureStore(db)
+	starter, err := NewRemoteLeadStarter(RemoteLeadConfig{
+		Executions: executions, Features: features, Goals: workflowService,
+		Planning: workflowService, Briefs: workflowService, Workspaces: workspaceStub, Worker: stub,
+		Pump:       &conversationalRemoteLeadPump{executions: executions, worker: stub},
+		Validation: validation.NewService(database.NewValidationStore(db)),
+		Lifetime:   t.Context(),
+	})
+	if err != nil {
+		t.Fatalf("create starter: %v", err)
+	}
+	readyRemoteLeadFeature(t, workflowService, storedFeature.ID)
+	chosen, err := features.GetByID(t.Context(), storedFeature.ID)
+	if err != nil {
+		t.Fatalf("load ready feature: %v", err)
+	}
+	chosen.Steps = project.WorkSteps{SkipPlan: true, SkipReviewer: true}
+	if err := features.UpdateReadySettings(t.Context(), chosen); err != nil {
+		t.Fatalf("choose steps: %v", err)
+	}
+	if _, _, err := starter.Start(
+		t.Context(), runID, storedProject.ID, storedFeature.ID, storedFeature.Title,
+		storedProject.DialogueLimits, storedProject.AgentProviders,
+		storedProject.MergePolicy, storedProject.AutonomyPolicy,
+	); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	var gated execution.Run
+	for time.Now().Before(deadline) {
+		gated, err = executions.GetRun(t.Context(), runID)
+		if err != nil {
+			t.Fatalf("load run: %v", err)
+		}
+		if gated.Status == execution.RunStatusWaitingForUser {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	current, err := features.GetByID(t.Context(), storedFeature.ID)
+	if err != nil {
+		t.Fatalf("load feature: %v", err)
+	}
+	if current.State != feature.StateReadyToMerge || gated.WaitKind != execution.RunWaitKindMergeGate {
+		t.Fatalf("quick change did not reach the merge gate: feature=%s run=%+v", current.State, gated)
+	}
+	stub.mu.Lock()
+	requests := append([]workerhttp.PutAttemptRequest(nil), stub.putRequests...)
+	stub.mu.Unlock()
+	if len(requests) != 1 {
+		t.Fatalf("expected a single lead turn, got %d", len(requests))
+	}
+	first := requests[0]
+	if first.Mode != workerhttp.AttemptModeStart || first.ProviderSessionID != "" ||
+		first.OutputContract != workerhttp.OutputContractImplementationLead ||
+		!strings.Contains(first.Instructions, "Accepted goal:") ||
+		strings.Contains(first.Instructions, "commitarium-artifact plan") {
+		t.Fatalf("quick change did not start by implementing the goal: %+v", first)
+	}
+	if workspaceStub.publishCalls != 1 || workspaceStub.publishedPlan != noDocumentedPlan ||
+		workspaceStub.publicationVerifyCalls != 1 {
+		t.Fatalf("quick change did not open its pull request without a plan: %+v", workspaceStub)
+	}
+	if _, _, err := starter.Merge(t.Context(), runID, "merge-quick-change"); err != nil {
+		t.Fatalf("merge: %v", err)
+	}
+	if workspaceStub.mergeCalls != 1 || len(workspaceStub.mergeApprovalNotes) != 1 {
+		t.Fatalf("quick change did not merge with the coordinator's approval: %+v", workspaceStub)
 	}
 }
 
@@ -3100,5 +3320,39 @@ func TestRemoteExpiredLoginWaitsForTheAgentAndResumesAfterLogin(t *testing.T) {
 	waitForRetriedTurn(t, executions, runID)
 	if wait, err := executions.LoginWaitForRun(t.Context(), runID); err != nil || wait.AgentID != "" {
 		t.Fatalf("login wait was not cleared: %+v err=%v", wait, err)
+	}
+}
+
+func TestValidationPassedClearsThePendingReason(t *testing.T) {
+	db, executions, storedProject, storedFeature := newRemoteLeadExecution(t)
+	runID := "run_validation_passed"
+	if _, _, err := executions.CreateRunWithModels(
+		t.Context(), runID, storedFeature.ID, storedProject.DialogueLimits.PlanningRounds,
+		storedProject.DialogueLimits.ImplementationReviewRounds, storedProject.AgentProviders,
+		project.AgentModels{}, storedProject.MergePolicy, project.DefaultAutonomyPolicy(),
+	); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	if _, err := executions.TransitionRun(
+		t.Context(), runID, execution.RunStatusRunning, execution.RunStatusWaitingForUser,
+		validationPendingReason, execution.RunWaitKindMergeGate,
+	); err != nil {
+		t.Fatalf("wait for validation: %v", err)
+	}
+	workflowService := workflow.NewService(database.NewWorkflowStore(db))
+	starter, err := NewRemoteLeadStarter(RemoteLeadConfig{
+		Executions: executions, Features: database.NewFeatureStore(db), Goals: workflowService,
+		Workspaces: &remoteLeadWorkspaceStub{}, Worker: unavailableRemoteLeadWorker{},
+		Pump: &unexpectedRemoteLeadPump{}, Lifetime: t.Context(),
+	})
+	if err != nil {
+		t.Fatalf("create starter: %v", err)
+	}
+	if err := starter.ValidationPassed(t.Context(), runID); err != nil {
+		t.Fatalf("validation passed: %v", err)
+	}
+	run, err := executions.GetRun(t.Context(), runID)
+	if err != nil || run.Reason != validationPassedReason || run.WaitKind != execution.RunWaitKindMergeGate {
+		t.Fatalf("run still reports pending validation: %+v err=%v", run, err)
 	}
 }

@@ -3,6 +3,7 @@ package forgejo
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -1298,6 +1299,11 @@ func (client *Client) MergePullRequest(
 		}
 	}
 
+	if strings.TrimSpace(spec.ApprovalNote) != "" {
+		if err := client.approvePullRequest(ctx, owner, repository, spec.Number, spec.HeadCommitID, spec.ApprovalNote); err != nil {
+			return workspace.PullRequest{}, err
+		}
+	}
 	status, _, mergeErr := client.doJSON(
 		ctx,
 		http.MethodPost,
@@ -1339,6 +1345,117 @@ func (client *Client) MergePullRequest(
 			status,
 		)
 	}
+}
+
+// approvePullRequest approves the exact head commit as the coordinator's own
+// identity, unless it already has. Branch protection requires one approval;
+// for a work order without a reviewer (ADR-018) the coordinator gives it at
+// the merge gate, with a note saying why and who approved. The coordinator is
+// never the pull request's author, so Forgejo counts the approval.
+// MergeGateUser is the Forgejo identity that approves a work order without a
+// reviewer at the merge gate (ADR-018). The coordinator opens every pull
+// request, so it cannot approve one itself; it acts as this user through its
+// administrator token instead, which keeps the approval visibly the merge
+// gate's rather than an agent's.
+const MergeGateUser = "commitarium-merge-gate"
+
+// ensureMergeGate creates the merge gate's Forgejo user when it is missing and
+// gives it write access to the repository, so its approval counts toward
+// branch protection. Nobody knows its password: only the coordinator acts as
+// it.
+func (client *Client) ensureMergeGate(ctx context.Context, owner string, repository string) error {
+	status, _, err := client.doJSON(ctx, http.MethodGet, "/api/v1/users/"+url.PathEscape(MergeGateUser), nil)
+	if err != nil {
+		return err
+	}
+	if status == http.StatusNotFound {
+		password := make([]byte, 32)
+		if _, err := rand.Read(password); err != nil {
+			return fmt.Errorf("generate merge gate password: %w", err)
+		}
+		status, _, err = client.doJSON(ctx, http.MethodPost, "/api/v1/admin/users", struct {
+			Username           string `json:"username"`
+			Email              string `json:"email"`
+			Password           string `json:"password"`
+			MustChangePassword bool   `json:"must_change_password"`
+		}{
+			Username: MergeGateUser, Email: MergeGateUser + "@commitarium.localhost",
+			Password: hex.EncodeToString(password), MustChangePassword: false,
+		})
+		if err != nil {
+			return err
+		}
+		if status != http.StatusCreated && status != http.StatusUnprocessableEntity {
+			return fmt.Errorf("%w: merge gate user setup returned HTTP %d", project.ErrForgejoUnavailable, status)
+		}
+	} else if status != http.StatusOK {
+		return fmt.Errorf("%w: merge gate user lookup returned HTTP %d", project.ErrForgejoUnavailable, status)
+	}
+	status, _, err = client.doJSON(
+		ctx, http.MethodPut,
+		"/api/v1/repos/"+url.PathEscape(owner)+"/"+url.PathEscape(repository)+
+			"/collaborators/"+url.PathEscape(MergeGateUser),
+		struct {
+			Permission string `json:"permission"`
+		}{Permission: "write"},
+	)
+	if err != nil {
+		return err
+	}
+	if status != http.StatusOK && status != http.StatusCreated && status != http.StatusNoContent {
+		return fmt.Errorf("%w: merge gate collaborator setup returned HTTP %d", project.ErrForgejoUnavailable, status)
+	}
+	return nil
+}
+
+func (client *Client) approvePullRequest(
+	ctx context.Context,
+	owner string,
+	repository string,
+	number int64,
+	commitID string,
+	note string,
+) error {
+	if err := client.ensureMergeGate(ctx, owner, repository); err != nil {
+		return err
+	}
+	reviewsPath := fmt.Sprintf("%s/%d/reviews", pullRequestsPath(owner, repository), number)
+	status, body, err := client.doJSON(ctx, http.MethodGet, reviewsPath+"?limit=50", nil)
+	if err != nil {
+		return err
+	}
+	if status != http.StatusOK {
+		return fmt.Errorf("%w: pull request reviews returned HTTP %d", project.ErrForgejoUnavailable, status)
+	}
+	var reviews []struct {
+		CommitID string `json:"commit_id"`
+		State    string `json:"state"`
+		Stale    bool   `json:"stale"`
+		User     struct {
+			Login string `json:"login"`
+		} `json:"user"`
+	}
+	if err := json.Unmarshal(body, &reviews); err != nil {
+		return fmt.Errorf("%w: pull request reviews response is invalid JSON", project.ErrForgejoUnavailable)
+	}
+	for _, review := range reviews {
+		if review.State == "APPROVED" && !review.Stale && review.CommitID == commitID &&
+			strings.EqualFold(review.User.Login, MergeGateUser) {
+			return nil
+		}
+	}
+	status, _, err = client.doJSONAs(ctx, MergeGateUser, http.MethodPost, reviewsPath, struct {
+		Event    string `json:"event"`
+		Body     string `json:"body"`
+		CommitID string `json:"commit_id"`
+	}{Event: "APPROVED", Body: note, CommitID: commitID})
+	if err != nil {
+		return err
+	}
+	if status != http.StatusOK && status != http.StatusCreated {
+		return fmt.Errorf("%w: pull request approval returned HTTP %d", project.ErrForgejoUnavailable, status)
+	}
+	return nil
 }
 
 func validateMergePullRequest(
@@ -1424,6 +1541,18 @@ func (client *Client) doJSON(
 	path string,
 	body any,
 ) (int, []byte, error) {
+	return client.doJSONAs(ctx, "", method, path, body)
+}
+
+// doJSONAs sends a request as another Forgejo user through the administrator
+// token's Sudo header; an empty user sends it as the coordinator.
+func (client *Client) doJSONAs(
+	ctx context.Context,
+	sudo string,
+	method string,
+	path string,
+	body any,
+) (int, []byte, error) {
 	tokenBytes, err := os.ReadFile(client.tokenFile)
 	if err != nil {
 		return 0, nil, fmt.Errorf("%w: access token file cannot be read", project.ErrForgejoUnavailable)
@@ -1453,6 +1582,9 @@ func (client *Client) doJSON(
 		request.Header.Set("Content-Type", "application/json")
 	}
 	request.Header.Set("Authorization", "token "+token)
+	if sudo != "" {
+		request.Header.Set("Sudo", sudo)
+	}
 	response, err := client.httpClient.Do(request)
 	if err != nil {
 		return 0, nil, fmt.Errorf("%w: request failed: %v", project.ErrForgejoUnavailable, err)

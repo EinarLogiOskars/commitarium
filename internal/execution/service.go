@@ -65,7 +65,7 @@ func (s *Service) CreateRunWithModels(
 ) (Run, bool, error) {
 	return s.createRunWithModels(
 		ctx, id, featureID, planningRoundLimit, implementationReviewRoundLimit,
-		agentProviders, agentModels, mergePolicy, false, autonomyPolicies...,
+		agentProviders, agentModels, mergePolicy, false, project.WorkSteps{}, autonomyPolicies...,
 	)
 }
 
@@ -83,7 +83,33 @@ func (s *Service) CreateRunWithModelsAndAcceptance(
 ) (Run, bool, error) {
 	return s.createRunWithModels(
 		ctx, id, featureID, planningRoundLimit, implementationReviewRoundLimit,
-		agentProviders, agentModels, mergePolicy, independentAcceptanceTests, autonomyPolicies...,
+		agentProviders, agentModels, mergePolicy, independentAcceptanceTests, project.WorkSteps{},
+		autonomyPolicies...,
+	)
+}
+
+// CreateRunWithSteps creates a run that snapshots the work order's optional
+// steps (ADR-018) with its other settings.
+func (s *Service) CreateRunWithSteps(
+	ctx context.Context,
+	id string,
+	featureID string,
+	planningRoundLimit int,
+	implementationReviewRoundLimit int,
+	agentProviders project.AgentProviders,
+	agentModels project.AgentModels,
+	mergePolicy project.MergePolicy,
+	independentAcceptanceTests bool,
+	steps project.WorkSteps,
+	autonomyPolicies ...project.AutonomyPolicy,
+) (Run, bool, error) {
+	if err := steps.Validate(); err != nil {
+		return Run{}, false, err
+	}
+	return s.createRunWithModels(
+		ctx, id, featureID, planningRoundLimit, implementationReviewRoundLimit,
+		agentProviders, agentModels, mergePolicy, independentAcceptanceTests && !steps.SkipReviewer, steps,
+		autonomyPolicies...,
 	)
 }
 
@@ -97,6 +123,7 @@ func (s *Service) createRunWithModels(
 	agentModels project.AgentModels,
 	mergePolicy project.MergePolicy,
 	independentAcceptanceTests bool,
+	steps project.WorkSteps,
 	autonomyPolicies ...project.AutonomyPolicy,
 ) (Run, bool, error) {
 	agentProviders, err := agentProviders.Normalize()
@@ -132,6 +159,7 @@ func (s *Service) createRunWithModels(
 		MergePolicy:                    mergePolicy,
 		AutonomyPolicy:                 autonomyPolicy,
 		IndependentAcceptanceTests:     independentAcceptanceTests,
+		Steps:                          steps,
 		PlanVersion:                    1,
 		StartedAt:                      now, UpdatedAt: now,
 	}

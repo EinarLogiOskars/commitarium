@@ -83,14 +83,41 @@ func implementationInstructions(
 	prepared workspace.Workspace,
 	attemptID string,
 ) string {
-	marker := implementationPublicationMarker(attemptID)
 	return "Continue the same provider conversation as the lead and begin implementing the agreed plan. " +
 		"First check Git HEAD and status against the facts below. Preserve any unexpected user work: do " +
 		"not reset, clean, overwrite, or silently discard it. If the state is missing, contradictory, or " +
 		"ambiguous, stop and explain the problem without making changes. " +
 		implementationToolchainInstructions +
 		implementationChecklistInstructions +
-		"When you decide the implementation is ready for independent review, commit all intended work " +
+		"When you decide the implementation is ready for independent review, " +
+		implementationPublicationInstructions(prepared, attemptID)
+}
+
+// planlessImplementationInstructions start a work order without a documented
+// plan or a reviewer (ADR-018): the lead implements the accepted goal in its
+// first turn.
+func planlessImplementationInstructions(
+	storedFeature feature.Feature,
+	prepared workspace.Workspace,
+	attemptID string,
+) string {
+	return "You are the lead, and this work order is a quick change: there is no documented plan and " +
+		"no reviewer, and the user decides the merge. Implement the accepted goal below directly, in as " +
+		"few commits as it needs. First check Git HEAD and status against the facts below. Preserve any " +
+		"unexpected user work: do not reset, clean, overwrite, or silently discard it. If the state is " +
+		"missing, contradictory, or ambiguous, stop and explain the problem without making changes. Run " +
+		"the relevant available tests. " + implementationToolchainInstructions +
+		"When the implementation is complete, " +
+		implementationPublicationInstructions(prepared, attemptID) +
+		"\n\nAccepted goal:\n" + storedFeature.AcceptedGoal
+}
+
+func implementationPublicationInstructions(
+	prepared workspace.Workspace,
+	attemptID string,
+) string {
+	marker := implementationPublicationMarker(attemptID)
+	return "commit all intended work " +
 		"on the assigned feature branch, push that exact HEAD to the 'commitarium' remote, and post one " +
 		"Forgejo pull-request comment using the worker-provided Forgejo URL and token-file environment " +
 		"variables. Never print, log, commit, or include the token in a URL. The comment must be exactly " +
@@ -114,8 +141,13 @@ func implementationContinuationInstructions(
 	prepared workspace.Workspace,
 	userMessage string,
 	attemptID string,
+	documentedPlan bool,
 ) string {
 	marker := implementationPublicationMarker(attemptID)
+	checklist := ""
+	if documentedPlan {
+		checklist = implementationChecklistInstructions
+	}
 	return "Continue the same provider conversation and implementation work after the user's " +
 		"guidance below. First check Git HEAD and status against the facts below and the work already " +
 		"completed in this conversation. Preserve all existing changes, including manual user edits; " +
@@ -124,7 +156,7 @@ func implementationContinuationInstructions(
 		"the accepted goal or agreed plan, stop and explain the problem without making further changes. " +
 		"Otherwise apply the user's guidance within the accepted plan, continue the implementation, and " +
 		"run the relevant available tests. " + implementationToolchainInstructions +
-		implementationChecklistInstructions +
+		checklist +
 		"When you decide the result is ready for independent review, " +
 		"commit the intended work, push the exact HEAD to the 'commitarium' remote, and post one Forgejo " +
 		"PR comment using the worker-provided URL and token-file environment variables. Never print, log, " +
@@ -196,6 +228,24 @@ func planningInstructions(storedFeature feature.Feature, prepared workspace.Work
 		"workflow state are authoritative over conversational memory.\n\nAccepted goal:\n" +
 		storedFeature.AcceptedGoal + "\n\n" + planningWorkspaceFacts(prepared)
 }
+
+// soloPlanningInstructions start planning for a work order without a reviewer
+// (ADR-018): the lead plans alone and submits the plan in the same turn.
+func soloPlanningInstructions(storedFeature feature.Feature, prepared workspace.Workspace) string {
+	return "The goal is accepted and planning begins. You are the lead, and this work order has no " +
+		"reviewer: you plan alone, and the user decides the merge. Inspect the repository as needed to " +
+		"plan; planning is read-only, so do not modify files, install dependencies, commit, or push. " +
+		"Split the work into ordered commit-sized steps, as few as the goal needs: a small change can be " +
+		"a single step. Note assumptions and risks only where they matter. Durable repository and " +
+		"workflow state are authoritative over conversational memory.\n\n" + soloPlanSubmissionInstructions +
+		"\n\nAccepted goal:\n" + storedFeature.AcceptedGoal + "\n\n" + planningWorkspaceFacts(prepared)
+}
+
+const soloPlanSubmissionInstructions = "There is no reviewer to discuss the plan with, so submit it in " +
+	"this turn: use action 'submit_plan', put the complete final plan in content, and supply plan_title, " +
+	"plan_subtitle, and the ordered steps. Each step is one cohesive commit with a stable lowercase ID, " +
+	"title, subtitle, detailed Markdown instructions, concrete verification checks, and an imperative " +
+	"commit_subject. Do not use action 'respond'."
 
 // leadParticipant and reviewerParticipant name the agents for each other, so
 // the dialogue reads as a conversation even when both use the same provider.

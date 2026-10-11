@@ -2887,6 +2887,66 @@ button.danger:not(.ghost) {
 .panel--phase > .row {
   flex: none;
 }
+/* The work order's steps (ADR-018): three cards, so the choice stands out. */
+.steps-choice {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 6px;
+}
+.steps-choice__opt {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 10px 12px;
+  text-align: left;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font: inherit;
+  color: var(--text);
+  cursor: pointer;
+}
+.steps-choice__opt:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+}
+.steps-choice__opt--on {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, var(--panel));
+  box-shadow: 0 0 0 1px var(--accent);
+}
+.steps-choice__opt:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.steps-choice__title {
+  font-weight: 600;
+  font-size: 14px;
+}
+.steps-choice__opt--on .steps-choice__title {
+  color: var(--accent);
+}
+.steps-choice__parts {
+  display: flex;
+  gap: 10px;
+  font-size: 12px;
+  color: var(--ok);
+}
+.steps-choice__part--off {
+  color: var(--muted);
+}
+.steps-choice__hint {
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.4;
+}
+@media (max-width: 720px) {
+  .steps-choice {
+    grid-template-columns: 1fr;
+  }
+}
+
 .start-settings {
   display: flex;
   flex-direction: column;
