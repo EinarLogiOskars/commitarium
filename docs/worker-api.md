@@ -117,6 +117,11 @@ contracts:
   `clarification_required`, or `replanning_required`.
 - `toolchain_setup` returns a validated exact runtime proposal for project
   setup or imported-repository verification.
+- `session_opening` is a session's first turn (ADR-019). The lead returns its
+  reply in `message` and a short `title` for the session. The terminal result
+  carries the title as `session_title`, with whitespace collapsed and shortened
+  to 80 characters. A missing title is not an error: the session keeps its
+  untitled name. Later session turns use no output contract.
 
 The provider adapter enforces these shapes using the provider's structured
 output mechanism; the coordinator does not infer actions by matching words in

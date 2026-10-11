@@ -1,6 +1,6 @@
 # ADR-019: Run sessions as interactive work orders
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-10-11
 
 ## Context

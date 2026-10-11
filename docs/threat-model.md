@@ -172,6 +172,17 @@ user's merge decision are the only checks before the default branch. This does
 not weaken the rule for other work orders: it is still one approval, and still
 only the coordinator merges.
 
+## Session previews
+
+A session's preview (ADR-019) runs the project's validated Compose file from
+the session's working copy on the host, including changes the agent has not
+committed and nobody has reviewed. The same Compose validation applies as for
+the default-branch preview. Build contexts and bind mounts must stay inside
+the working copy, and the host-access keys stay forbidden. The preview runs
+under its own Compose project with no host environment. The user starts it
+explicitly, and it runs code the user is actively directing. Its working copy
+is never removed by the preview.
+
 ## Backup and restore boundary
 
 Backup and restore are trusted-host operations implemented behind fixed Tauri

@@ -37,7 +37,10 @@ this API beyond the host loopback interface is unsupported.
 | `POST` | `/api/v1/projects/{projectID}/features` | Create a draft feature with optional per-order setting overrides |
 | `GET` | `/api/v1/projects/{projectID}/features` | List the project's features by recent activity |
 | `GET` | `/api/v1/projects/{projectID}/features/{featureID}` | Retrieve a feature |
+| `PATCH` | `/api/v1/projects/{projectID}/features/{featureID}` | Rename a work order or session |
 | `DELETE` | `/api/v1/projects/{projectID}/features/{featureID}` | Delete a work order and its isolated internal artifacts |
+| `POST` | `/api/v1/projects/{projectID}/features/{featureID}/messages` | Start a session's next agent turn |
+| `POST` | `/api/v1/projects/{projectID}/features/{featureID}/finish` | Finish a session: commit its work and enter the merge gate |
 | `POST` | `/api/v1/projects/{projectID}/features/{featureID}/transitions` | Apply an explicit feature transition |
 | `GET` | `/api/v1/projects/{projectID}/features/{featureID}/events` | Retrieve durable workflow history |
 | `GET` | `/api/v1/projects/{projectID}/features/{featureID}/events/stream` | Replay and stream workflow history with SSE |
@@ -2243,6 +2246,64 @@ Startup orders the numbered deterministic checkpoints, reattaches to the one
 active attempt, or re-verifies the completed Forgejo review/lead response before
 starting only the next missing stage. It never substitutes worker profiles,
 starts both agents, or duplicates a review, commit, push, or audit comment.
+
+## Sessions
+
+A session (ADR-019) is a work order of kind `session`: one conversation with
+the lead agent on the session's own branch. "Session" alone names an agent's
+conversation elsewhere in this API (`/api/v1/sessions/{id}`), so sessions are
+always work orders with `kind: "session"`.
+
+Create one with `POST /api/v1/projects/{projectID}/features` and
+`{"kind":"session"}`. The title is optional: a session without one is named
+`Untitled session N`, numbered within the project. Creating a session starts
+it: the coordinator writes its brief, records "Interactive session" as its
+plan, which opens the session branch and draft pull request, and leaves the
+run `waiting_for_user` with `wait_kind: "clarification"` and the reason
+"Your turn." No agent turn runs yet. The response is the session in state
+`implementing`. A session has neither a documented plan nor a reviewer.
+
+```http
+POST /api/v1/projects/prj_example/features/fea_example/messages
+Idempotency-Key: user-selected-stable-key
+Content-Type: application/json
+
+{"message":"Fix the Icelandic wording on the front page."}
+```
+
+Each message starts one agent turn and returns `202` with the run.
+
+- **First message.** It starts the provider conversation with the session's
+  instructions in front of the message, using the `session_opening` output
+  contract. That turn's title renames an untitled session; a session the user
+  renamed keeps its name.
+- **Later messages.** They resume the same conversation as plain turns.
+- **Uncommitted work.** The agent edits the working copy and does not commit
+  unless asked.
+- **Catching up with main.** When the default branch has moved past the
+  session's working copy, the turn's instructions first ask the agent to merge
+  it in, keeping uncommitted work. On conflicts the agent stops and works them
+  out with the user.
+- **Errors.**
+  - `409 session_busy` while the agent is working.
+  - `409 session_not_waiting` when the session cannot take a message.
+  - `409 not_a_session` for a work order of another kind.
+
+`POST .../finish` (with an `Idempotency-Key`) starts the finish turn. The agent
+commits the remaining work as one commit, pushes it, and posts its
+implementation summary on the pull request. Commits the user asked for earlier
+are kept. The coordinator verifies the published commit and enters the merge
+gate as for a work order without a reviewer, so validation, the merge policy,
+and the merge gate identity's approval apply. A session where nothing has
+happened yet cannot finish.
+
+A message sent while the session waits at the merge gate takes it back to
+chatting: the merge target is cleared, the session returns to `implementing`,
+and the next Finish pins a new commit. Discarding a session is deleting the
+work order.
+
+`PATCH /api/v1/projects/{projectID}/features/{featureID}` with `{"title": ...}`
+renames a work order or session.
 
 ## Merging an approved revision
 

@@ -1,5 +1,7 @@
 # Sessions: Implementation Plan
 
+**Status:** implemented on `feat/sessions` (S1–S9); awaiting user testing.
+
 ## Goal
 
 A session is a 1:1 conversation with one agent for many small edits, such as

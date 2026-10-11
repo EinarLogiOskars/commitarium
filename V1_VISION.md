@@ -216,7 +216,7 @@ public coordinator API, and every new action comes with an approval policy
 | Isolation | Done. Every new kind of work reuses it. |
 | Agents | Done ([AGENTS_PLAN.md](AGENTS_PLAN.md), ADR-016): one worker per provider account, serving both roles, chosen at Start. |
 | Flexible work orders | Done ([FLEXIBLE_WORK_ORDERS_PLAN.md](FLEXIBLE_WORK_ORDERS_PLAN.md), ADR-018): Full, Planned, and Quick change chosen at Start, and a Draft can start without clarifying. Turning a step on mid-run is a follow-up. |
-| Session | Planned ([SESSIONS_PLAN.md](SESSIONS_PLAN.md), ADR-019): one-click start, chat on the session branch, catch-up with main, session preview, one commit at finish through the merge gate. |
+| Session | Done; awaiting testing ([SESSIONS_PLAN.md](SESSIONS_PLAN.md), ADR-019): one-click start, chat on the session branch, catch-up with main, session preview, one commit at finish through the merge gate. |
 | Project direction and assistant | Missing. The clarification chat and `SetupAssistant` are working templates. |
 | Builder mode, autopilot, Apps | Missing; after the parts above. |
 
@@ -279,7 +279,7 @@ gives it something to plan against before it is trusted to act. Intermediate
 - **Recoverable runs**: recorded in ADR-017.
 - **Flexible work orders**: optional steps per work order (ADR-018).
 - **Sessions** are work orders of kind `session` that reuse the work order's
-  branch, merge gate, and recovery (ADR-019, proposed).
+  branch, merge gate, and recovery (ADR-019).
 - **Autopilot and Apps**: the assistant acts only through the coordinator API
   with Commitarium permissions; system capabilities are separate, opt-in
   grants.
