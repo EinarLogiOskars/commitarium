@@ -147,7 +147,10 @@ func (service *Service) RecordMergeReady(
 	if err != nil {
 		return Workspace{}, err
 	}
-	if storedFeature.State != feature.StateReviewing && storedFeature.State != feature.StateReadyToMerge {
+	// A work order without a reviewer (ADR-018) reaches the merge gate
+	// straight from implementation.
+	if storedFeature.State != feature.StateReviewing && storedFeature.State != feature.StateReadyToMerge &&
+		storedFeature.State != feature.StateImplementing {
 		return Workspace{}, ErrFeatureNotReviewing
 	}
 	stored, err := service.Get(ctx, projectID, featureID)
@@ -179,10 +182,14 @@ func (service *Service) RecordMergeReady(
 // MergeApproved reconciles and merges only the commit previously pinned by
 // RecordMergeReady. Forgejo receives the same head SHA as a compare-and-swap
 // guard, and its resulting merge commit is recorded for restart recovery.
+// MergeApproved merges the exact approved commit. An approval note makes the
+// coordinator approve the pull request first, for a work order that had no
+// reviewer (ADR-018).
 func (service *Service) MergeApproved(
 	ctx context.Context,
 	projectID string,
 	featureID string,
+	approvalNote ...string,
 ) (Workspace, bool, error) {
 	storedFeature, err := service.features.GetByID(ctx, projectID, featureID)
 	if err != nil {
@@ -233,6 +240,7 @@ func (service *Service) MergeApproved(
 			FeatureMarker: "<!-- commitarium-feature: " + storedFeature.ID + " -->",
 			BaseBranch:    stored.BaseBranch, HeadBranch: stored.Branch,
 			HeadCommitID: stored.ApprovedCommitID,
+			ApprovalNote: strings.Join(approvalNote, "\n\n"),
 		},
 	)
 	if err != nil {

@@ -252,6 +252,7 @@ type remoteLeadWorkspaceStub struct {
 	readinessVerifyCalls          int
 	mergeReadyCalls               int
 	mergeCalls                    int
+	mergeApprovalNotes            []string
 	responseReviewedCommit        string
 	responseCommit                string
 	publishedEventID              string
@@ -297,8 +298,10 @@ func (stub *remoteLeadWorkspaceStub) MergeApproved(
 	_ context.Context,
 	_ string,
 	_ string,
+	approvalNote ...string,
 ) (workspace.Workspace, bool, error) {
 	stub.mergeCalls++
+	stub.mergeApprovalNotes = append(stub.mergeApprovalNotes, approvalNote...)
 	if stub.prepared.MergeCommitID == "" {
 		stub.prepared.MergeCommitID = "dddddddddddddddddddddddddddddddddddddddd"
 		mergedAt := time.Now().UTC()

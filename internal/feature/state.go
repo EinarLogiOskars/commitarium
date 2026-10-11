@@ -65,10 +65,13 @@ func (state State) CanTransitionTo(next State) bool {
 		return next == StateDraft ||
 			next == StateReady ||
 			next == StateImplementing
+	// Without a reviewer (ADR-018), implementation goes straight to the
+	// merge gate.
 	case StateImplementing:
 		return next == StatePlanning ||
 			next == StateReady ||
-			next == StateReviewing
+			next == StateReviewing ||
+			next == StateReadyToMerge
 	case StateReviewing:
 		return next == StatePlanning ||
 			next == StateReady ||

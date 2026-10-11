@@ -44,6 +44,8 @@ const (
 	implementationReadinessRunningReason  = "The lead is deciding whether it agrees with the reviewer's approval of the exact commit."
 	implementationApprovedReason          = "The reviewer and lead agreed that the exact verified revision is ready for the merge gate."
 	implementationMergedReason            = "Forgejo merged the exact commit approved by the reviewer and lead."
+	implementationLeadOnlyReadyReason     = "The lead published and verified its implementation. This work order has no reviewer; the exact revision is ready for the merge gate."
+	implementationLeadOnlyMergedReason    = "Forgejo merged the lead's exact verified commit. This work order had no reviewer."
 	implementationMergeBlockedReason      = "The exact approved revision could not be merged safely. Inspect the merge activity and Forgejo pull request before retrying."
 	interventionAnsweringReason           = "The selected agent is answering the user's intervention while the workflow remains paused."
 	interventionAnsweredReason            = "The selected agent answered the intervention. The workflow remains paused until the user explicitly continues it."
@@ -187,7 +189,7 @@ type RemoteLeadWorkspaceService interface {
 	VerifyImplementationMergeReadiness(context.Context, string, string, string, string, string, string, string, int64, string) (workspace.Workspace, error)
 	VerifyImplementationReview(context.Context, string, string, string, string, string, string, string, int64, int64, string, string) (workspace.Workspace, error)
 	RecordMergeReady(context.Context, string, string, string, int64) (workspace.Workspace, error)
-	MergeApproved(context.Context, string, string) (workspace.Workspace, bool, error)
+	MergeApproved(context.Context, string, string, ...string) (workspace.Workspace, bool, error)
 }
 
 type RemoteLeadWorker interface {
@@ -946,13 +948,9 @@ func (starter *RemoteLeadStarter) ResumeAfterLogin(ctx context.Context, agentID 
 	return resumed, errors.Join(failures...)
 }
 
-func (starter *RemoteLeadStarter) recoverIdleReadyToMergeRun(
-	ctx context.Context,
-	run execution.Run,
-) error {
-	// The lead's verified acknowledgement and feature transition are durable
-	// before the run returns to its user gate. Once both exist, recovery must not
-	// depend on a worker container that has no more work to perform.
+// confirmReviewedMergeReady checks that a reviewed run reached the merge gate
+// through the lead's verified readiness acknowledgement.
+func (starter *RemoteLeadStarter) confirmReviewedMergeReady(ctx context.Context, run execution.Run) error {
 	lead, err := starter.executions.GetSession(ctx, remoteLeadSessionID(run.ID))
 	if err != nil {
 		return fmt.Errorf("load approved lead session: %w", err)
@@ -983,6 +981,49 @@ func (starter *RemoteLeadStarter) recoverIdleReadyToMergeRun(
 	}
 	if !recorded {
 		return fmt.Errorf("%w: ready-to-merge run has no verified lead acknowledgement", ErrInvalidRunRequest)
+	}
+	return nil
+}
+
+// confirmLeadOnlyMergeReady checks that a run without a reviewer (ADR-018)
+// reached the merge gate through the lead's verified implementation
+// publication.
+func (starter *RemoteLeadStarter) confirmLeadOnlyMergeReady(ctx context.Context, run execution.Run) error {
+	lead, err := starter.executions.GetSession(ctx, remoteLeadSessionID(run.ID))
+	if err != nil {
+		return fmt.Errorf("load lead session at the merge gate: %w", err)
+	}
+	if lead.Status != execution.SessionStatusWaitingForUser {
+		return fmt.Errorf("%w: lead is not waiting at the merge gate", ErrInvalidRunRequest)
+	}
+	checkpoint, err := starter.executions.GetWorkerAttempt(ctx, lead.ID)
+	if err != nil {
+		return fmt.Errorf("load lead implementation checkpoint: %w", err)
+	}
+	verified, err := starter.sessionActivityRecorded(ctx, lead.ID, checkpoint.AttemptID+":publication-verified")
+	if err != nil {
+		return err
+	}
+	if !verified {
+		return fmt.Errorf("%w: the merge gate has no verified lead publication", ErrInvalidRunRequest)
+	}
+	return nil
+}
+
+func (starter *RemoteLeadStarter) recoverIdleReadyToMergeRun(
+	ctx context.Context,
+	run execution.Run,
+) error {
+	// The lead's verified acknowledgement (or, without a reviewer, its verified
+	// publication) and the feature transition are durable before the run
+	// returns to its user gate. Once both exist, recovery must not depend on a
+	// worker container that has no more work to perform.
+	confirm := starter.confirmReviewedMergeReady
+	if run.Steps.SkipReviewer {
+		confirm = starter.confirmLeadOnlyMergeReady
+	}
+	if err := confirm(ctx, run); err != nil {
+		return err
 	}
 	if starter.validation != nil {
 		storedFeature, err := starter.features.GetByID(ctx, run.FeatureID)
@@ -1064,8 +1105,18 @@ func (starter *RemoteLeadStarter) Merge(
 			return execution.Run{}, false, err
 		}
 	}
+	var approvalNote []string
+	if run.Steps.SkipReviewer {
+		// Branch protection still requires an approval; without a reviewer the
+		// coordinator gives it here and says why (ADR-018).
+		approver := "the user"
+		if idempotencyKey == run.ID+":automatic-merge" {
+			approver = "the work order's auto-merge policy"
+		}
+		approvalNote = append(approvalNote, "This work order had no reviewer. Commitarium approved the lead's verified commit at the merge gate, as decided by "+approver+".")
+	}
 	mergedWorkspace, mergedNow, err := starter.workspaces.MergeApproved(
-		ctx, storedFeature.ProjectID, storedFeature.ID,
+		ctx, storedFeature.ProjectID, storedFeature.ID, approvalNote...,
 	)
 	if err != nil {
 		return execution.Run{}, false, err
@@ -1090,8 +1141,12 @@ func (starter *RemoteLeadStarter) Merge(
 	); err != nil {
 		return execution.Run{}, false, fmt.Errorf("record completed merge activity: %w", err)
 	}
+	mergedReason := implementationMergedReason
+	if run.Steps.SkipReviewer {
+		mergedReason = implementationLeadOnlyMergedReason
+	}
 	completed, err := starter.executions.TransitionRun(
-		ctx, run.ID, run.Status, execution.RunStatusSucceeded, implementationMergedReason,
+		ctx, run.ID, run.Status, execution.RunStatusSucceeded, mergedReason,
 	)
 	if errors.Is(err, execution.ErrStateConflict) {
 		stored, getErr := starter.executions.GetRun(ctx, run.ID)
@@ -1619,13 +1674,17 @@ func (starter *RemoteLeadStarter) recoverIdleImplementationRun(
 	if err != nil {
 		return fmt.Errorf("load implementing lead session: %w", err)
 	}
-	reviewer, err := starter.executions.GetSession(ctx, remoteReviewerSessionID(run.ID))
-	if err != nil {
-		return fmt.Errorf("load implementing reviewer session: %w", err)
-	}
-	if lead.Status != execution.SessionStatusWaitingForUser ||
-		reviewer.Status != execution.SessionStatusWaitingForUser {
+	if lead.Status != execution.SessionStatusWaitingForUser {
 		return fmt.Errorf("%w: idle implementation has a non-waiting session", ErrInvalidRunRequest)
+	}
+	if !run.Steps.SkipReviewer {
+		reviewer, err := starter.executions.GetSession(ctx, remoteReviewerSessionID(run.ID))
+		if err != nil {
+			return fmt.Errorf("load implementing reviewer session: %w", err)
+		}
+		if reviewer.Status != execution.SessionStatusWaitingForUser {
+			return fmt.Errorf("%w: idle implementation has a non-waiting session", ErrInvalidRunRequest)
+		}
 	}
 	checkpoint, err := starter.executions.GetWorkerAttempt(ctx, lead.ID)
 	if err != nil {
@@ -4393,6 +4452,14 @@ func (starter *RemoteLeadStarter) verifyImplementationPublication(
 	if err != nil {
 		return fmt.Errorf("record verified implementation publication: %w", err)
 	}
+	if run.Steps.SkipReviewer {
+		// Without a reviewer (ADR-018) the lead's verified publication is the
+		// work order's result; the merge gate and validation still apply.
+		return starter.enterMergeGate(
+			ctx, request, run, storedFeature, result.Publication.CommitID,
+			result.Publication.PullRequestNumber, implementationLeadOnlyReadyReason,
+		)
+	}
 	if run.IndependentAcceptanceTests {
 		return starter.tryStartAcceptanceReview(ctx, run.ID)
 	}
@@ -5189,6 +5256,66 @@ func (starter *RemoteLeadStarter) launchImplementationReadinessVerification(
 	}
 }
 
+// enterMergeGate records the exact commit to merge, moves the work order to
+// ready_to_merge, and either waits at the merge gate or merges by policy,
+// after isolated validation when the project has it. Reviewed runs enter it
+// after the lead's readiness acknowledgement; runs without a reviewer
+// (ADR-018) after the lead's verified publication.
+func (starter *RemoteLeadStarter) enterMergeGate(
+	ctx context.Context,
+	request remoteLeadRequest,
+	run execution.Run,
+	storedFeature feature.Feature,
+	commitID string,
+	pullRequestNumber int64,
+	readyReason string,
+) error {
+	mergeReady, err := starter.workspaces.RecordMergeReady(
+		ctx, storedFeature.ProjectID, storedFeature.ID, commitID, pullRequestNumber,
+	)
+	if err != nil {
+		return fmt.Errorf("record exact merge target: %w", err)
+	}
+	if _, err := starter.planning.TransitionFeature(
+		ctx, storedFeature.ID, feature.StateReadyToMerge,
+		workflow.Actor{Kind: workflow.ActorKindCoordinator, ID: coordinatorActorID},
+		request.identity.AttemptID+":ready-to-merge",
+	); err != nil {
+		return fmt.Errorf("advance approved implementation to ready to merge: %w", err)
+	}
+	if paused, err := starter.stopAtPauseBoundary(ctx, run.ID, readyReason); err != nil || paused {
+		return err
+	}
+	if starter.validation != nil {
+		job, _, err := starter.validation.EnsureJob(
+			ctx, storedFeature.ProjectID, storedFeature.ID, run.ID, mergeReady.ID, commitID,
+		)
+		if err != nil && !errors.Is(err, validation.ErrNotFound) {
+			return fmt.Errorf("create isolated validation job: %w", err)
+		}
+		if err == nil {
+			if _, err := starter.executions.RecordSessionEventWithID(
+				ctx, request.identity.AttemptID+":validation-created", request.identity.SessionID,
+				worker.Event{Type: worker.EventActivity, Text: "Isolated validation job " + job.ID + " is pending for approved commit " + commitID + "."},
+			); err != nil {
+				return fmt.Errorf("record validation activity: %w", err)
+			}
+			return starter.waitRun(ctx, request.runID,
+				"The exact approved revision is waiting for isolated validation before merge.",
+				execution.RunWaitKindMergeGate,
+			)
+		}
+	}
+	if run.MergePolicy == project.MergePolicyAutoAfterGates {
+		if _, _, err := starter.Merge(ctx, run.ID, run.ID+":automatic-merge"); err != nil {
+			starter.recordMergeBlocked(ctx, run.ID, err)
+			return starter.waitRun(ctx, request.runID, implementationMergeBlockedReason, execution.RunWaitKindBlocker)
+		}
+		return nil
+	}
+	return starter.waitRun(ctx, request.runID, readyReason, execution.RunWaitKindMergeGate)
+}
+
 func (starter *RemoteLeadStarter) verifyImplementationReadiness(
 	ctx context.Context,
 	request remoteLeadRequest,
@@ -5276,53 +5403,10 @@ func (starter *RemoteLeadStarter) verifyImplementationReadiness(
 		return fmt.Errorf("record verified merge-readiness decision: %w", err)
 	}
 	if result.Disposition == workerhttp.DispositionSucceeded {
-		mergeReady, err := starter.workspaces.RecordMergeReady(
-			ctx, storedFeature.ProjectID, storedFeature.ID,
-			approved.CommitID, approved.PullRequestNumber,
+		return starter.enterMergeGate(
+			ctx, request, run, storedFeature, approved.CommitID, approved.PullRequestNumber,
+			implementationApprovedReason,
 		)
-		if err != nil {
-			return fmt.Errorf("record exact merge target: %w", err)
-		}
-		if _, err := starter.planning.TransitionFeature(
-			ctx, storedFeature.ID, feature.StateReadyToMerge,
-			workflow.Actor{Kind: workflow.ActorKindCoordinator, ID: coordinatorActorID},
-			request.identity.AttemptID+":ready-to-merge",
-		); err != nil {
-			return fmt.Errorf("advance mutually approved implementation to ready to merge: %w", err)
-		}
-		if paused, err := starter.stopAtPauseBoundary(
-			ctx, run.ID, implementationApprovedReason,
-		); err != nil || paused {
-			return err
-		}
-		if starter.validation != nil {
-			job, _, err := starter.validation.EnsureJob(
-				ctx, storedFeature.ProjectID, storedFeature.ID, run.ID, mergeReady.ID, approved.CommitID,
-			)
-			if err != nil && !errors.Is(err, validation.ErrNotFound) {
-				return fmt.Errorf("create isolated validation job: %w", err)
-			}
-			if err == nil {
-				if _, err := starter.executions.RecordSessionEventWithID(
-					ctx, request.identity.AttemptID+":validation-created", request.identity.SessionID,
-					worker.Event{Type: worker.EventActivity, Text: "Isolated validation job " + job.ID + " is pending for approved commit " + approved.CommitID + "."},
-				); err != nil {
-					return fmt.Errorf("record validation activity: %w", err)
-				}
-				return starter.waitRun(ctx, request.runID,
-					"The exact approved revision is waiting for isolated validation before merge.",
-					execution.RunWaitKindMergeGate,
-				)
-			}
-		}
-		if run.MergePolicy == project.MergePolicyAutoAfterGates {
-			if _, _, err := starter.Merge(ctx, run.ID, run.ID+":automatic-merge"); err != nil {
-				starter.recordMergeBlocked(ctx, run.ID, err)
-				return starter.waitRun(ctx, request.runID, implementationMergeBlockedReason, execution.RunWaitKindBlocker)
-			}
-			return nil
-		}
-		return starter.waitRun(ctx, request.runID, implementationApprovedReason, execution.RunWaitKindMergeGate)
 	}
 	if implementationReviewRoundLimitReached(run.ImplementationReviewRoundLimit, round) {
 		return starter.waitRun(ctx, request.runID, implementationReviewLimitReason(run.ImplementationReviewRoundLimit), execution.RunWaitKindRoundCap)

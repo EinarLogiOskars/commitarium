@@ -1873,3 +1873,62 @@ func newBranchTestClientWithHostURL(
 	}
 	return client
 }
+
+func TestClientApprovesOnceBeforeMergingAWorkOrderWithoutAReviewer(t *testing.T) {
+	spec := workspace.PullRequestMergeSpec{
+		Number: 7, FeatureMarker: "<!-- commitarium-feature: fea_test -->",
+		BaseBranch: "main", HeadBranch: "commitarium/fea_test",
+		HeadCommitID: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		ApprovalNote: "This work order had no reviewer.",
+	}
+	remote := managedPullRequest(testPullRequestSpec())
+	remote.Title, remote.Draft, remote.HeadCommitID = "Test feature", false, spec.HeadCommitID
+	mergedAt := remote.CreatedAt.Add(time.Hour)
+	approvals := 0
+	reviews := `[]`
+	var order []string
+	client := newBranchTestClient(t, func(request *http.Request) (*http.Response, error) {
+		path := request.Method + " " + request.URL.Path
+		switch path {
+		case "GET /api/v1/user":
+			return jsonResponse(http.StatusOK, `{"login":"commitarium_admin"}`), nil
+		case "GET /api/v1/repos/owner/repository/pulls/7":
+			return pullRequestJSONResponse(t, http.StatusOK, remote), nil
+		case "GET /api/v1/repos/owner/repository/pulls/7/reviews":
+			return jsonResponse(http.StatusOK, reviews), nil
+		case "POST /api/v1/repos/owner/repository/pulls/7/reviews":
+			var payload struct {
+				Event    string `json:"event"`
+				Body     string `json:"body"`
+				CommitID string `json:"commit_id"`
+			}
+			if err := json.NewDecoder(request.Body).Decode(&payload); err != nil ||
+				payload.Event != "APPROVED" || payload.CommitID != spec.HeadCommitID || payload.Body != spec.ApprovalNote {
+				t.Fatalf("unexpected approval %+v err=%v", payload, err)
+			}
+			approvals++
+			order = append(order, "approve")
+			reviews = `[{"commit_id":"` + spec.HeadCommitID + `","state":"APPROVED","stale":false,"user":{"login":"commitarium_admin"}}]`
+			return jsonResponse(http.StatusOK, `{}`), nil
+		case "POST /api/v1/repos/owner/repository/pulls/7/merge":
+			order = append(order, "merge")
+			if approvals == 1 && len(order) == 2 {
+				remote.State, remote.Merged, remote.MergeCommitID, remote.MergedAt = "closed", true, strings.Repeat("b", 40), &mergedAt
+				return jsonResponse(http.StatusOK, `{}`), nil
+			}
+			return jsonResponse(http.StatusMethodNotAllowed, `{}`), nil
+		default:
+			t.Fatalf("unexpected request %s", path)
+			return nil, nil
+		}
+	})
+	merged, err := client.MergePullRequest(t.Context(), "owner", "repository", spec)
+	if err != nil || !merged.Merged || strings.Join(order, ",") != "approve,merge" {
+		t.Fatalf("merge without a reviewer: merged=%t order=%v err=%v", merged.Merged, order, err)
+	}
+	// A retried merge does not approve twice.
+	remote.Merged = false
+	if err := client.approvePullRequest(t.Context(), "owner", "repository", 7, spec.HeadCommitID, spec.ApprovalNote); err != nil || approvals != 1 {
+		t.Fatalf("repeated approval: approvals=%d err=%v", approvals, err)
+	}
+}

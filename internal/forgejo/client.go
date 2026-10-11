@@ -1298,6 +1298,11 @@ func (client *Client) MergePullRequest(
 		}
 	}
 
+	if strings.TrimSpace(spec.ApprovalNote) != "" {
+		if err := client.approvePullRequest(ctx, owner, repository, spec.Number, spec.HeadCommitID, spec.ApprovalNote); err != nil {
+			return workspace.PullRequest{}, err
+		}
+	}
 	status, _, mergeErr := client.doJSON(
 		ctx,
 		http.MethodPost,
@@ -1339,6 +1344,62 @@ func (client *Client) MergePullRequest(
 			status,
 		)
 	}
+}
+
+// approvePullRequest approves the exact head commit as the coordinator's own
+// identity, unless it already has. Branch protection requires one approval;
+// for a work order without a reviewer (ADR-018) the coordinator gives it at
+// the merge gate, with a note saying why and who approved. The coordinator is
+// never the pull request's author, so Forgejo counts the approval.
+func (client *Client) approvePullRequest(
+	ctx context.Context,
+	owner string,
+	repository string,
+	number int64,
+	commitID string,
+	note string,
+) error {
+	login, err := client.authenticatedUser(ctx)
+	if err != nil {
+		return err
+	}
+	reviewsPath := fmt.Sprintf("%s/%d/reviews", pullRequestsPath(owner, repository), number)
+	status, body, err := client.doJSON(ctx, http.MethodGet, reviewsPath+"?limit=50", nil)
+	if err != nil {
+		return err
+	}
+	if status != http.StatusOK {
+		return fmt.Errorf("%w: pull request reviews returned HTTP %d", project.ErrForgejoUnavailable, status)
+	}
+	var reviews []struct {
+		CommitID string `json:"commit_id"`
+		State    string `json:"state"`
+		Stale    bool   `json:"stale"`
+		User     struct {
+			Login string `json:"login"`
+		} `json:"user"`
+	}
+	if err := json.Unmarshal(body, &reviews); err != nil {
+		return fmt.Errorf("%w: pull request reviews response is invalid JSON", project.ErrForgejoUnavailable)
+	}
+	for _, review := range reviews {
+		if review.State == "APPROVED" && !review.Stale && review.CommitID == commitID &&
+			strings.EqualFold(review.User.Login, login) {
+			return nil
+		}
+	}
+	status, _, err = client.doJSON(ctx, http.MethodPost, reviewsPath, struct {
+		Event    string `json:"event"`
+		Body     string `json:"body"`
+		CommitID string `json:"commit_id"`
+	}{Event: "APPROVED", Body: note, CommitID: commitID})
+	if err != nil {
+		return err
+	}
+	if status != http.StatusOK && status != http.StatusCreated {
+		return fmt.Errorf("%w: pull request approval returned HTTP %d", project.ErrForgejoUnavailable, status)
+	}
+	return nil
 }
 
 func validateMergePullRequest(

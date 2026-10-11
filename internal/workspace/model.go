@@ -285,6 +285,10 @@ type PullRequestMergeSpec struct {
 	BaseBranch    string
 	HeadBranch    string
 	HeadCommitID  string
+	// ApprovalNote, when set, makes the coordinator approve the exact head
+	// commit before merging, for a work order without a reviewer (ADR-018).
+	// The note says why and who approved.
+	ApprovalNote string
 }
 
 func (spec PullRequestMergeSpec) Validate() error {
