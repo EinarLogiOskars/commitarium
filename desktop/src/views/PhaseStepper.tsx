@@ -39,6 +39,14 @@ export function currentPhaseIndex(f: Feature): number {
   }
 }
 
+/** Whether a work order takes a phase: Plan and Review are optional steps
+ * (ADR-018). Indices stay fixed, so a skipped phase is simply not shown. */
+export function phaseTaken(f: Feature, phase: Phase): boolean {
+  if (phase === "plan") return f.steps?.documented_plan !== false;
+  if (phase === "review") return f.steps?.reviewer !== false;
+  return true;
+}
+
 type StepState = "done" | "active" | "pending";
 
 /** The timeline: click any reached phase to view only it. */
@@ -67,6 +75,8 @@ export function PhaseStepper({
   return (
     <nav className="stepper" aria-label="Work order phases">
       {PHASES.map((phase, i) => {
+        if (!phaseTaken(feature, phase)) return null;
+        const position = PHASES.slice(0, i + 1).filter((p) => phaseTaken(feature, p)).length;
         const st = stateOf(i);
         // Everything up to and including the current phase is reachable; when the
         // order is complete, every phase is browsable history.
@@ -84,14 +94,14 @@ export function PhaseStepper({
           .join(" ");
         return (
           <div className="stepper__cell" key={phase}>
-            {i > 0 && <span className="stepper__line" aria-hidden />}
+            {position > 1 && <span className="stepper__line" aria-hidden />}
             <button
               className={cls}
               disabled={!reachable}
               aria-current={isViewed ? "step" : undefined}
               onClick={() => reachable && onSelect(i)}
             >
-              <span className="stepper__marker">{markerGlyph(st, i, isPaused)}</span>
+              <span className="stepper__marker">{markerGlyph(st, position, isPaused)}</span>
               <span className="stepper__label">{PHASE_LABELS[phase]}</span>
             </button>
           </div>
@@ -101,8 +111,8 @@ export function PhaseStepper({
   );
 }
 
-function markerGlyph(st: StepState, i: number, paused?: boolean): string {
+function markerGlyph(st: StepState, position: number, paused?: boolean): string {
   if (paused) return "⏸";
   if (st === "done") return "✓";
-  return String(i + 1);
+  return String(position);
 }
