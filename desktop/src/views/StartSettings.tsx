@@ -35,19 +35,19 @@ const PRESETS: { id: string; label: string; steps: WorkSteps; hint: string }[] =
     id: "full",
     label: "Full",
     steps: { documented_plan: true, reviewer: true },
-    hint: "The lead plans the commits with a reviewer, who then reviews the code before the merge gate.",
+    hint: "A reviewer checks the plan and the code before the merge gate.",
   },
   {
     id: "planned",
     label: "Planned",
     steps: { documented_plan: true, reviewer: false },
-    hint: "The lead writes a commit-by-commit plan and implements it. No reviewer: you decide the merge.",
+    hint: "The lead plans the commits alone and implements them. You decide the merge.",
   },
   {
     id: "quick",
     label: "Quick change",
     steps: { documented_plan: false, reviewer: false },
-    hint: "The lead implements the goal directly in one turn. No plan, no reviewer: you decide the merge.",
+    hint: "The lead goes straight to the change in one turn. You decide the merge.",
   },
 ];
 
@@ -111,30 +111,39 @@ export function StartSettings({
   return (
     <div className="neworder__body">
       <div className="neworder__group">
-        <span className="neworder__heading">Steps</span>
-        <div className="seg">
-          {PRESETS.map((p) => (
-            <button
-              key={p.id}
-              type="button"
-              className={`seg__opt ${preset?.id === p.id ? "seg__opt--on" : ""}`}
-              onClick={() =>
-                onChange({
-                  ...value,
-                  steps: { ...steps, ...p.steps },
-                  // Acceptance tests are the reviewer's.
-                  independent_acceptance_tests: p.steps.reviewer
-                    ? value.independent_acceptance_tests
-                    : false,
-                })
-              }
-              disabled={disabled}
-            >
-              {p.label}
-            </button>
-          ))}
+        <span className="neworder__heading">How it runs</span>
+        <div className="steps-choice" role="radiogroup" aria-label="How it runs">
+          {PRESETS.map((p) => {
+            const on = preset?.id === p.id;
+            return (
+              <button
+                key={p.id}
+                type="button"
+                role="radio"
+                aria-checked={on}
+                className={`steps-choice__opt ${on ? "steps-choice__opt--on" : ""}`}
+                onClick={() =>
+                  onChange({
+                    ...value,
+                    steps: { ...steps, ...p.steps },
+                    // Acceptance tests are the reviewer's.
+                    independent_acceptance_tests: p.steps.reviewer
+                      ? value.independent_acceptance_tests
+                      : false,
+                  })
+                }
+                disabled={disabled}
+              >
+                <span className="steps-choice__title">{p.label}</span>
+                <span className="steps-choice__parts">
+                  <StepPart on={p.steps.documented_plan}>Plan</StepPart>
+                  <StepPart on={p.steps.reviewer}>Reviewer</StepPart>
+                </span>
+                <span className="steps-choice__hint">{p.hint}</span>
+              </button>
+            );
+          })}
         </div>
-        {preset && <span className="neworder__hint">{preset.hint}</span>}
       </div>
       <div className="neworder__group">
         <span className="neworder__heading">Agents</span>
@@ -206,5 +215,13 @@ export function StartSettings({
         />
       )}
     </div>
+  );
+}
+
+function StepPart({ on, children }: { on: boolean; children: string }) {
+  return (
+    <span className={`steps-choice__part ${on ? "" : "steps-choice__part--off"}`}>
+      {on ? "✓" : "–"} {children}
+    </span>
   );
 }
