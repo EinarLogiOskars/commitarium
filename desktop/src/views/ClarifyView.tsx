@@ -296,8 +296,10 @@ function ReadyView({
     setError(null);
     try {
       if (action === "start") {
-        // One key per work order: a repeated click or retry joins the same run.
-        await startRun(projectId, feature.id, `start-${feature.id}`);
+        // One key per Ready state: a repeated click or retry joins the same
+        // run, while a work order returned to Ready (its updated_at moved)
+        // starts a new one.
+        await startRun(projectId, feature.id, `start-${feature.id}-${feature.updated_at}`);
       } else {
         await reopenWorkOrder(projectId, feature.id, crypto.randomUUID());
       }
