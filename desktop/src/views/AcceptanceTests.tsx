@@ -56,7 +56,7 @@ export function AcceptanceTestsPanel({
         className="accept-tests__head"
         onClick={toggle}
         aria-expanded={open}
-        title={open ? "Collapse" : "Expand"}
+        title={open ? "Collapse" : "Show the acceptance tests"}
       >
         <h3>Independent acceptance tests</h3>
         <span className="accept-tests__count muted note">
@@ -66,9 +66,6 @@ export function AcceptanceTestsPanel({
         {/* Collapsed into the side strip on wide windows: just the score. */}
         <span className="accept-tests__score muted note" aria-hidden>
           {passed}/{ran || doc.tests.length}
-        </span>
-        <span className="accept-tests__label muted" aria-hidden>
-          Acceptance tests
         </span>
         <span className="accept-tests__chevron" aria-hidden>
           <svg viewBox="0 0 16 16" width="14" height="14" fill="none">

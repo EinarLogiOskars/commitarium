@@ -2696,8 +2696,7 @@ button.danger:not(.ghost) {
   max-height: 100%;
   overflow-y: auto;
 }
-.accept-tests__score,
-.accept-tests__label {
+.accept-tests__score {
   display: none;
 }
 /* Wide windows: collapsing folds the panel into a slim strip on the right, so
@@ -2729,12 +2728,6 @@ button.danger:not(.ghost) {
   .order__split > .accept-tests--collapsed .accept-tests__score {
     display: block;
     margin: 0;
-  }
-  .order__split > .accept-tests--collapsed .accept-tests__label {
-    display: block;
-    writing-mode: vertical-rl;
-    font-size: 12px;
-    letter-spacing: 0.02em;
   }
   .order__split > .accept-tests--collapsed .accept-tests__dots {
     flex-direction: column;
