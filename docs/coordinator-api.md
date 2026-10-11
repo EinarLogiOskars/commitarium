@@ -1581,9 +1581,11 @@ false, "reviewer": true}` returns `400 invalid_steps`:
   goes Back to Ready instead.
 
 Without a reviewer, Forgejo's branch protection still requires one approval.
-At the merge gate the coordinator posts that approval itself, stating that the
-work order had no reviewer and whether the user or the auto-merge policy
-approved the merge, then merges normally. Feature and run responses carry the
+At the merge gate the coordinator posts that approval as the dedicated
+`commitarium-merge-gate` Forgejo identity (it creates the user and gives it
+write access if needed; the coordinator itself opened the pull request and
+cannot approve it), stating that the work order had no reviewer and whether
+the user or the auto-merge policy approved the merge, then merges normally. Feature and run responses carry the
 chosen `steps` object.
 
 `steps.clarification: false` starts a `draft` work order without

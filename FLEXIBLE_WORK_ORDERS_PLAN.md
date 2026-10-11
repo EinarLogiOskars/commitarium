@@ -71,13 +71,17 @@ throughout:
      readiness for that commit and goes to the merge gate. The feature moves
      implementing → ready_to_merge.
    - The merge gate keeps validation and the merge policy.
-   - Branch protection still requires one approval. At the merge gate, the
-     coordinator approves the pull request itself and then merges normally.
-     It is not the PR's author (the lead's `<agent>-lead` identity is), so
-     Forgejo accepts its review. The approval says why: no reviewer for this
-     work order, approved at the merge gate by the user, or by the auto-merge
-     policy. Branch protection is unchanged, nothing bypasses it, and the PR
-     history shows honestly how the merge was approved.
+   - Branch protection still requires one approval. The coordinator opens
+     every pull request, and Forgejo rejects an author's own approval
+     ("approve your own pull is not allowed"), so a dedicated
+     `commitarium-merge-gate` identity approves at the merge gate. The
+     coordinator creates it with an unknown password, gives it write access
+     to the repository, and acts as it through its administrator token's
+     `Sudo` header; then it merges normally. The approval says why: no
+     reviewer for this work order, approved at the merge gate by the user, or
+     by the auto-merge policy. Branch protection is unchanged, nothing
+     bypasses it, and the PR history shows honestly how the merge was
+     approved.
 5. **Without a documented plan:**
    - At Start the coordinator records "No documented plan" as the run's plan
      and publishes it. This creates the feature branch and draft PR, and the
@@ -121,9 +125,10 @@ throughout:
 
 ## Risks
 
-- **The coordinator's approval.** Forgejo must count an approval from the
-  coordinator's administrator identity toward the required approvals. Verify
-  this against the pinned Forgejo version at the start of F3.
+- **The merge gate's approval.** Verified against Forgejo 16.0.3: the
+  coordinator, as the PR's author, cannot approve (HTTP 422, found in the
+  first real run); the merge gate identity's approval through `Sudo` counts as
+  official and the merge then succeeds.
 - **Conditional stages** touch many verifiers. Each slice keeps the full flow's
   tests passing unchanged.
 

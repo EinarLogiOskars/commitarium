@@ -58,9 +58,12 @@ same work order, keeping its context.
   work order's chosen steps.
 - Without a reviewer, no second model checks the work before the merge gate;
   the user and the project's validation commands are the check. Branch
-  protection keeps requiring one approval: for such a run the coordinator
-  approves the pull request at the merge gate, stating that no reviewer took
-  part and who approved (the user, or the auto-merge policy).
+  protection keeps requiring one approval. The coordinator opens every pull
+  request, and Forgejo rejects an author's own approval, so for such a run a
+  dedicated `commitarium-merge-gate` identity approves at the merge gate. The
+  coordinator creates it, gives it write access, and acts as it through its
+  administrator token; nobody signs in as it. The approval states that no
+  reviewer took part and who approved (the user, or the auto-merge policy).
 
 ## Alternatives considered
 
