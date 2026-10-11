@@ -15,9 +15,11 @@ import (
 
 	"github.com/EinarLogiOskars/commitarium/internal/execution"
 	"github.com/EinarLogiOskars/commitarium/internal/feature"
+	"github.com/EinarLogiOskars/commitarium/internal/featureartifact"
 	"github.com/EinarLogiOskars/commitarium/internal/orchestration"
 	"github.com/EinarLogiOskars/commitarium/internal/project"
 	"github.com/EinarLogiOskars/commitarium/internal/worker"
+	"github.com/EinarLogiOskars/commitarium/internal/workflow"
 	"github.com/EinarLogiOskars/commitarium/internal/workspace"
 )
 
@@ -168,6 +170,10 @@ type startRunRequest struct {
 // workStepsRequest names a work order's optional steps (ADR-018); an omitted
 // step keeps the work order's current choice.
 type workStepsRequest struct {
+	// Clarification false starts a Draft work order with its title and
+	// description as the goal. It is not stored: it only lets Start ready a
+	// draft.
+	Clarification  *bool `json:"clarification"`
 	DocumentedPlan *bool `json:"documented_plan"`
 	Reviewer       *bool `json:"reviewer"`
 }
@@ -186,27 +192,87 @@ type startSettingsChooser interface {
 	ChooseStartSettings(context.Context, string, string, feature.SettingsOverrides) (feature.Feature, error)
 }
 
-// chooseStartSettings applies and saves the settings in a Start request. It
+// readStartRequest decodes an optional Start body; an empty body is nil. It
 // writes the error response itself and reports whether to continue.
-func (api *API) chooseStartSettings(
-	w http.ResponseWriter,
-	r *http.Request,
-	storedFeature feature.Feature,
-) (feature.Feature, bool) {
+func readStartRequest(w http.ResponseWriter, r *http.Request) (*startRunRequest, bool) {
 	body, err := io.ReadAll(io.LimitReader(r.Body, 64*1024+1))
 	if err != nil || len(body) > 64*1024 {
 		writeError(w, http.StatusBadRequest, "invalid_body", "start request is too large")
-		return feature.Feature{}, false
+		return nil, false
 	}
 	if len(bytes.TrimSpace(body)) == 0 {
-		return storedFeature, true
+		return nil, true
 	}
 	var request startRunRequest
 	decoder := json.NewDecoder(bytes.NewReader(body))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&request); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_json", "start request must be a JSON object with known fields")
-		return feature.Feature{}, false
+		return nil, false
+	}
+	return &request, true
+}
+
+// skipsClarification reports whether a Start request starts a draft without
+// clarification (ADR-018).
+func (request *startRunRequest) skipsClarification() bool {
+	return request != nil && request.Steps != nil && request.Steps.Clarification != nil &&
+		!*request.Steps.Clarification
+}
+
+// readyWithoutClarification readies a draft work order whose Start skips
+// clarification: its title and description become the handoff brief's goal,
+// and the normal Start follows.
+func (api *API) readyWithoutClarification(
+	ctx context.Context,
+	storedFeature feature.Feature,
+	idempotencyKey string,
+) (feature.Feature, error) {
+	briefs, ok := api.artifacts.(HandoffBriefService)
+	if !ok {
+		return feature.Feature{}, errStartWithoutClarificationUnavailable
+	}
+	expected := 0
+	current, err := api.artifacts.GetFeatureArtifact(ctx, storedFeature.ID, featureartifact.KindHandoffBrief)
+	if err == nil {
+		expected = current.Revision
+	} else if !errors.Is(err, workflow.ErrArtifactNotFound) {
+		return feature.Feature{}, err
+	}
+	goal := storedFeature.Title
+	if description := strings.TrimSpace(storedFeature.Description); description != "" {
+		goal += "\n\n" + description
+	}
+	actor := workflow.Actor{Kind: workflow.ActorKindUser, ID: "local-user"}
+	if _, err := briefs.PutHandoffBrief(
+		ctx, storedFeature.ID, expected,
+		featureartifact.HandoffBrief{
+			Goal: goal, Areas: []string{}, Considerations: []string{}, OpenQuestions: []string{},
+		},
+		actor, idempotencyKey+":brief",
+	); err != nil {
+		return feature.Feature{}, err
+	}
+	if _, err := api.workflow.TransitionFeature(
+		ctx, storedFeature.ID, feature.StateReady, actor, idempotencyKey+":ready",
+	); err != nil {
+		return feature.Feature{}, err
+	}
+	return api.features.GetByID(ctx, storedFeature.ProjectID, storedFeature.ID)
+}
+
+var errStartWithoutClarificationUnavailable = errors.New("starting without clarification is unavailable")
+
+// chooseStartSettings applies and saves the settings in a Start request. It
+// writes the error response itself and reports whether to continue.
+func (api *API) chooseStartSettings(
+	w http.ResponseWriter,
+	r *http.Request,
+	storedFeature feature.Feature,
+	request *startRunRequest,
+) (feature.Feature, bool) {
+	if request == nil {
+		return storedFeature, true
 	}
 	var overrides feature.SettingsOverrides
 	if request.AgentProviders != nil {
@@ -312,13 +378,33 @@ func (api *API) startRunHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	request, ok := readStartRequest(w, r)
+	if !ok {
+		return
+	}
+	if storedFeature.State == feature.StateDraft && request.skipsClarification() {
+		readied, err := api.readyWithoutClarification(r.Context(), storedFeature, idempotencyKey)
+		switch {
+		case errors.Is(err, featureartifact.ErrInvalidArtifact):
+			writeError(w, http.StatusBadRequest, "invalid_goal", "the work order's title and description do not make a valid goal")
+			return
+		case errors.Is(err, errStartWithoutClarificationUnavailable):
+			writeError(w, http.StatusServiceUnavailable, "start_without_clarification_unavailable", err.Error())
+			return
+		case err != nil:
+			log.Printf("ready feature %q without clarification: %v", storedFeature.ID, err)
+			writeError(w, http.StatusInternalServerError, "internal_error", "internal server error")
+			return
+		}
+		storedFeature = readied
+	}
 	if storedFeature.State != feature.StateReady {
 		writeError(w, http.StatusConflict, "feature_not_startable", "only a ready work order can be started")
 		return
 	}
 	// Agents, models, and policies are chosen at Start; an empty body starts
 	// with the work order's current settings (its project's defaults).
-	chosen, ok := api.chooseStartSettings(w, r, storedFeature)
+	chosen, ok := api.chooseStartSettings(w, r, storedFeature, request)
 	if !ok {
 		return
 	}
