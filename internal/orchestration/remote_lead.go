@@ -128,6 +128,20 @@ type RemoteLeadExecution interface {
 	PlanningMessagesForRun(context.Context, string) ([]execution.PlanningMessage, error)
 }
 
+type remoteLeadStepsExecution interface {
+	CreateRunWithSteps(context.Context, string, string, int, int, project.AgentProviders, project.AgentModels, project.MergePolicy, bool, project.WorkSteps, ...project.AutonomyPolicy) (execution.Run, bool, error)
+}
+
+// ErrStepsUnsupported rejects optional-step combinations the orchestrator
+// cannot run yet (ADR-018).
+var ErrStepsUnsupported = errors.New("these work-order steps are not supported yet")
+
+// supportedSteps reports whether the orchestrator can run a work order with
+// these optional steps.
+func supportedSteps(steps project.WorkSteps) bool {
+	return steps == project.WorkSteps{}
+}
+
 type remoteLeadAcceptanceExecution interface {
 	CreateRunWithModelsAndAcceptance(context.Context, string, string, int, int, project.AgentProviders, project.AgentModels, project.MergePolicy, bool, ...project.AutonomyPolicy) (execution.Run, bool, error)
 }
@@ -408,6 +422,12 @@ func (starter *RemoteLeadStarter) StartWithModels(
 	if storedFeature.State != feature.StateReady {
 		return execution.Run{}, false, ErrFeatureNotReady
 	}
+	if err := storedFeature.Steps.Validate(); err != nil {
+		return execution.Run{}, false, err
+	}
+	if !supportedSteps(storedFeature.Steps) {
+		return execution.Run{}, false, ErrStepsUnsupported
+	}
 	brief, err := starter.handoffBrief(ctx, featureID)
 	if err != nil {
 		return execution.Run{}, false, err
@@ -436,7 +456,13 @@ func (starter *RemoteLeadStarter) StartWithModels(
 	}
 	var run execution.Run
 	var created bool
-	if acceptanceExecutions, ok := starter.executions.(remoteLeadAcceptanceExecution); ok {
+	if stepsExecutions, ok := starter.executions.(remoteLeadStepsExecution); ok {
+		run, created, err = stepsExecutions.CreateRunWithSteps(
+			ctx, runID, featureID, dialogueLimits.PlanningRounds,
+			dialogueLimits.ImplementationReviewRounds, agentProviders, agentModels,
+			mergePolicy, storedFeature.IndependentAcceptanceTests, storedFeature.Steps, autonomyPolicy,
+		)
+	} else if acceptanceExecutions, ok := starter.executions.(remoteLeadAcceptanceExecution); ok {
 		run, created, err = acceptanceExecutions.CreateRunWithModelsAndAcceptance(
 			ctx, runID, featureID, dialogueLimits.PlanningRounds,
 			dialogueLimits.ImplementationReviewRounds, agentProviders, agentModels,

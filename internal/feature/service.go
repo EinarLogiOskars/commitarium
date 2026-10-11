@@ -84,6 +84,7 @@ func (s *Service) Create(
 		MergePolicy:                settings.MergePolicy,
 		AutonomyPolicy:             settings.AutonomyPolicy,
 		IndependentAcceptanceTests: settings.IndependentAcceptanceTests,
+		Steps:                      settings.Steps,
 		CreatedAt:                  now,
 		UpdatedAt:                  now,
 	}
@@ -178,6 +179,16 @@ func resolveSettings(base Feature, overrides SettingsOverrides) (Feature, error)
 	}
 	if overrides.IndependentAcceptanceTests != nil {
 		base.IndependentAcceptanceTests = *overrides.IndependentAcceptanceTests
+	}
+	if overrides.Steps != nil {
+		base.Steps = *overrides.Steps
+	}
+	if err := base.Steps.Validate(); err != nil {
+		return Feature{}, err
+	}
+	if base.Steps.SkipReviewer {
+		// Acceptance tests are written by the reviewer.
+		base.IndependentAcceptanceTests = false
 	}
 	return base, nil
 }

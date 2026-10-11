@@ -37,6 +37,7 @@ type featureResponse struct {
 	MergePolicy                project.MergePolicy    `json:"merge_policy"`
 	AutonomyPolicy             project.AutonomyPolicy `json:"autonomy_policy"`
 	IndependentAcceptanceTests bool                   `json:"independent_acceptance_tests"`
+	Steps                      workStepsResponse      `json:"steps"`
 	CreatedAt                  time.Time              `json:"created_at"`
 	UpdatedAt                  time.Time              `json:"updated_at"`
 }
@@ -281,6 +282,7 @@ func newFeatureResponse(storedFeature feature.Feature) featureResponse {
 		MergePolicy:                mergePolicy,
 		AutonomyPolicy:             autonomyPolicy,
 		IndependentAcceptanceTests: storedFeature.IndependentAcceptanceTests,
+		Steps:                      newWorkStepsResponse(storedFeature.Steps),
 		CreatedAt:                  storedFeature.CreatedAt,
 		UpdatedAt:                  storedFeature.UpdatedAt,
 	}

@@ -43,6 +43,7 @@ type runResponse struct {
 	Intervention               *interventionResponse        `json:"intervention,omitempty"`
 	Recovery                   *recoveryResponse            `json:"recovery,omitempty"`
 	LoginRequired              *loginRequiredResponse       `json:"login_required,omitempty"`
+	Steps                      workStepsResponse            `json:"steps"`
 }
 
 // loginRequiredResponse names the agent a paused run waits for to log in
@@ -161,6 +162,24 @@ type startRunRequest struct {
 	AutonomyPolicy             *project.AutonomyPolicy `json:"autonomy_policy"`
 	MergePolicy                *project.MergePolicy    `json:"merge_policy"`
 	IndependentAcceptanceTests *bool                   `json:"independent_acceptance_tests"`
+	Steps                      *workStepsRequest       `json:"steps"`
+}
+
+// workStepsRequest names a work order's optional steps (ADR-018); an omitted
+// step keeps the work order's current choice.
+type workStepsRequest struct {
+	DocumentedPlan *bool `json:"documented_plan"`
+	Reviewer       *bool `json:"reviewer"`
+}
+
+// workStepsResponse reports which optional steps a work order or run takes.
+type workStepsResponse struct {
+	DocumentedPlan bool `json:"documented_plan"`
+	Reviewer       bool `json:"reviewer"`
+}
+
+func newWorkStepsResponse(steps project.WorkSteps) workStepsResponse {
+	return workStepsResponse{DocumentedPlan: !steps.SkipPlan, Reviewer: !steps.SkipReviewer}
 }
 
 type startSettingsChooser interface {
@@ -209,6 +228,16 @@ func (api *API) chooseStartSettings(
 	overrides.MergePolicy = request.MergePolicy
 	overrides.AutonomyPolicy = request.AutonomyPolicy
 	overrides.IndependentAcceptanceTests = request.IndependentAcceptanceTests
+	if request.Steps != nil {
+		steps := storedFeature.Steps
+		if request.Steps.DocumentedPlan != nil {
+			steps.SkipPlan = !*request.Steps.DocumentedPlan
+		}
+		if request.Steps.Reviewer != nil {
+			steps.SkipReviewer = !*request.Steps.Reviewer
+		}
+		overrides.Steps = &steps
+	}
 	chooser, ok := api.features.(startSettingsChooser)
 	if !ok {
 		writeError(w, http.StatusServiceUnavailable, "start_settings_unavailable", "choosing settings at Start is unavailable")
@@ -237,6 +266,8 @@ func (api *API) chooseStartSettings(
 			writeError(w, http.StatusBadRequest, "invalid_merge_policy", "merge_policy must be require_user_approval or auto_after_gates")
 		case errors.Is(err, project.ErrInvalidAutonomyPolicy):
 			writeError(w, http.StatusBadRequest, "invalid_autonomy_policy", "autonomy_policy must be review_each_phase or run_to_completion")
+		case errors.Is(err, project.ErrInvalidWorkSteps):
+			writeError(w, http.StatusBadRequest, "invalid_steps", "a reviewer requires a documented plan")
 		default:
 			log.Printf("choose start settings for feature %q: %v", storedFeature.ID, err)
 			writeError(w, http.StatusInternalServerError, "internal_error", "internal server error")
@@ -318,6 +349,8 @@ func (api *API) startRunHandler(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case errors.Is(err, execution.ErrRecordConflict):
 			writeError(w, http.StatusConflict, "idempotency_conflict", "Idempotency-Key was already used for a different run")
+		case errors.Is(err, orchestration.ErrStepsUnsupported):
+			writeError(w, http.StatusConflict, "steps_unsupported", "this combination of work-order steps is not supported yet")
 		case errors.Is(err, orchestration.ErrFeatureNotReady):
 			writeError(w, http.StatusConflict, "feature_not_startable", "only a ready work order with a handoff brief can be started")
 		case errors.Is(err, orchestration.ErrInvalidRunRequest):
@@ -430,6 +463,7 @@ func (api *API) newRunResponse(
 		},
 		MergePolicy: run.MergePolicy, AutonomyPolicy: run.AutonomyPolicy,
 		IndependentAcceptanceTests: run.IndependentAcceptanceTests,
+		Steps:                      newWorkStepsResponse(run.Steps),
 		PlanVersion:                run.PlanVersion,
 		StartedAt:                  run.StartedAt, UpdatedAt: run.UpdatedAt,
 		EndedAt: run.EndedAt, Sessions: make([]sessionResponse, 0, len(sessions)),

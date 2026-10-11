@@ -448,3 +448,26 @@ func TestServiceChoosesStartSettingsOnlyWhileReady(t *testing.T) {
 		t.Fatalf("settings were not saved: %+v", stored)
 	}
 }
+
+func TestStartSettingsStepsDropAcceptanceTestsWithoutAReviewer(t *testing.T) {
+	store := NewMemoryStore()
+	defaults := project.Project{ID: "prj_test", AgentProviders: project.DefaultAgentProviders(), IndependentAcceptanceTests: true}
+	service := NewService(store, &recordingProjectFinder{result: defaults})
+	created, err := service.Create(t.Context(), defaults.ID, "Readme", "", SettingsOverrides{})
+	if err != nil || !created.IndependentAcceptanceTests {
+		t.Fatalf("create feature: %+v err=%v", created, err)
+	}
+	ready := created
+	ready.State = StateReady
+	store.features[created.ID] = ready
+
+	quick := project.WorkSteps{SkipPlan: true, SkipReviewer: true}
+	chosen, err := service.ChooseStartSettings(t.Context(), defaults.ID, created.ID, SettingsOverrides{Steps: &quick})
+	if err != nil || chosen.Steps != quick || chosen.IndependentAcceptanceTests {
+		t.Fatalf("quick change settings = %+v err=%v", chosen, err)
+	}
+	invalid := project.WorkSteps{SkipPlan: true}
+	if _, err := service.ChooseStartSettings(t.Context(), defaults.ID, created.ID, SettingsOverrides{Steps: &invalid}); !errors.Is(err, project.ErrInvalidWorkSteps) {
+		t.Fatalf("reviewer without a plan error = %v", err)
+	}
+}
