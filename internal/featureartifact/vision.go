@@ -30,6 +30,9 @@ type VisionItem struct {
 	Items       []VisionItem `json:"items,omitempty"`
 	// FeatureID is the work order delivering a leaf item.
 	FeatureID string `json:"feature_id,omitempty"`
+	// Done marks a leaf item the project already delivers without a work
+	// order, such as one the code did before the vision was written.
+	Done bool `json:"done,omitempty"`
 }
 
 const (
@@ -90,8 +93,8 @@ func validateVisionItems(items []VisionItem, depth int, seen map[string]bool, co
 		if item.Description != strings.TrimSpace(item.Description) || len(item.Description) > MaxStepTextBytes {
 			return fmt.Errorf("%w: vision item %q description is invalid", ErrInvalidArtifact, item.ID)
 		}
-		if len(item.Items) > 0 && item.FeatureID != "" {
-			return fmt.Errorf("%w: vision item %q groups others, so it has no work order", ErrInvalidArtifact, item.ID)
+		if len(item.Items) > 0 && (item.FeatureID != "" || item.Done) {
+			return fmt.Errorf("%w: vision item %q groups others, so it has no work order and is done when they are", ErrInvalidArtifact, item.ID)
 		}
 		if err := validateVisionItems(item.Items, depth+1, seen, count); err != nil {
 			return err
@@ -119,6 +122,9 @@ func normalizeVisionItems(items []VisionItem, seen map[string]bool) []VisionItem
 		item.Title = strings.TrimSpace(item.Title)
 		item.Description = strings.TrimSpace(item.Description)
 		item.FeatureID = ""
+		if len(item.Items) > 0 {
+			item.Done = false
+		}
 		base := normalizeIDs([]string{item.Title}, "item")[0]
 		id, suffix := base, 2
 		for seen[id] {

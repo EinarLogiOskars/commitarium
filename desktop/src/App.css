@@ -3131,3 +3131,6 @@ button.danger:not(.ghost) {
   flex-direction: column;
   gap: 12px;
 }
+.vision__done {
+  margin: 0 6px;
+}

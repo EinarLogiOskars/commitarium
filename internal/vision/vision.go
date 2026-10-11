@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -22,6 +23,7 @@ import (
 	"github.com/EinarLogiOskars/commitarium/internal/featureartifact"
 	"github.com/EinarLogiOskars/commitarium/internal/project"
 	"github.com/EinarLogiOskars/commitarium/internal/workerhttp"
+	"github.com/EinarLogiOskars/commitarium/internal/workspace"
 )
 
 var (
@@ -94,11 +96,24 @@ type ProjectReader interface {
 	GetRepositoryOverview(context.Context, string) (project.RepositoryOverview, error)
 }
 
+// Checkouts clones a read-only copy of the project's repository for the
+// assistant to inspect; it is the coordinator's managed checkout root.
+type Checkouts interface {
+	Ensure(ctx context.Context, spec workspace.CheckoutSpec) error
+	Remove(ctx context.Context, workspaceID string) error
+}
+
+type Branches interface {
+	GetBranch(ctx context.Context, owner, repository, branch string) (workspace.Branch, error)
+}
+
 type Service struct {
 	root          string
 	workspaceRoot string
 	projects      ProjectReader
 	workers       func(agentID string) (workerhttp.Service, error)
+	checkouts     Checkouts
+	branches      Branches
 	now           func() time.Time
 	mu            sync.Mutex
 }
@@ -229,6 +244,46 @@ func setFeature(priorities []featureartifact.VisionPriority, itemID, featureID s
 
 // Start opens a conversation in which the assistant writes the vision, or
 // returns the one this key already started.
+// WithRepository lets the assistant inspect a checkout of the project's
+// default branch, so the plan reflects what the code already does.
+func (service *Service) WithRepository(checkouts Checkouts, branches Branches) *Service {
+	service.checkouts, service.branches = checkouts, branches
+	return service
+}
+
+// prepareWorkspace gives the session its working directory: a checkout of the
+// default branch when the project has a repository, else an empty directory.
+func (service *Service) prepareWorkspace(ctx context.Context, stored project.Project, id string) (bool, error) {
+	repository := stored.ForgejoRepository
+	if service.checkouts == nil || service.branches == nil || repository == nil {
+		if err := os.MkdirAll(filepath.Join(service.workspaceRoot, id), 0o700); err != nil {
+			return false, fmt.Errorf("%w: create the assistant's workspace", ErrUnavailable)
+		}
+		return false, nil
+	}
+	base, err := service.branches.GetBranch(ctx, repository.Owner, repository.Name, repository.DefaultBranch)
+	if err != nil {
+		return false, fmt.Errorf("%w: read the default branch: %v", ErrUnavailable, err)
+	}
+	if err := service.checkouts.Ensure(ctx, workspace.CheckoutSpec{
+		WorkspaceID: id, RepositoryOwner: repository.Owner, RepositoryName: repository.Name,
+		Branch: repository.DefaultBranch, BaseCommitID: base.CommitID,
+	}); err != nil {
+		return false, fmt.Errorf("%w: check the repository out: %v", ErrUnavailable, err)
+	}
+	return true, nil
+}
+
+// releaseWorkspace removes a finished session's checkout.
+func (service *Service) releaseWorkspace(ctx context.Context, id string) {
+	if service.checkouts == nil {
+		return
+	}
+	if err := service.checkouts.Remove(ctx, id); err != nil {
+		log.Printf("remove the vision assistant's checkout %s: %v", id, err)
+	}
+}
+
 func (service *Service) Start(
 	ctx context.Context,
 	projectID, agentID, model string,
@@ -268,8 +323,9 @@ func (service *Service) Start(
 		},
 		AttemptID: id + ":turn:1", Turn: 1, Keys: map[string]string{key: id + ":turn:1"},
 	}
-	if err := os.MkdirAll(filepath.Join(service.workspaceRoot, id), 0o700); err != nil {
-		return Session{}, false, fmt.Errorf("%w: create the assistant's workspace", ErrUnavailable)
+	checkedOut, err := service.prepareWorkspace(ctx, stored, id)
+	if err != nil {
+		return Session{}, false, err
 	}
 	if err := service.writeSession(record); err != nil {
 		return Session{}, false, err
@@ -287,8 +343,9 @@ func (service *Service) Start(
 			AgentProfileID: agentID, Model: model, ProjectID: projectID, FeatureID: id,
 			Role: workerhttp.RoleConsultant, WorkspaceID: id,
 		},
-		Instructions:   initialInstructions(stored.Name, mode, message, overview, current),
-		OutputContract: workerhttp.OutputContractVisionPlan,
+		Instructions:    initialInstructions(stored.Name, mode, message, overview, current, checkedOut),
+		OutputContract:  workerhttp.OutputContractVisionPlan,
+		WorkspaceAccess: workerhttp.WorkspaceAccessReadOnly,
 	})
 	if err != nil {
 		return Session{}, true, err
@@ -376,6 +433,7 @@ func (service *Service) Reply(ctx context.Context, projectID, id, message, idemp
 		ProviderSessionID: record.ProviderSessionID,
 		Instructions:      replyInstructions(message),
 		OutputContract:    workerhttp.OutputContractVisionPlan,
+		WorkspaceAccess:   workerhttp.WorkspaceAccessReadOnly,
 	})
 	if err != nil {
 		return Session{}, true, err
@@ -400,6 +458,7 @@ func (service *Service) refresh(ctx context.Context, record sessionRecord) (sess
 		if attempt.State == workerhttp.AttemptStateIndeterminate {
 			record.Status = StatusFailed
 			record.Messages = append(record.Messages, Message{Role: "assistant", Text: "The assistant's turn could not be recovered. Start again.", OccurredAt: service.now()})
+			service.releaseWorkspace(ctx, record.ID)
 		}
 		return record, service.writeSession(record)
 	}
@@ -430,6 +489,9 @@ func (service *Service) refresh(ctx context.Context, record sessionRecord) (sess
 	}
 	record.UpdatedAt = service.now()
 	record.Messages = append(record.Messages, Message{Role: "assistant", Text: reply, OccurredAt: record.UpdatedAt})
+	if record.Status == StatusWritten || record.Status == StatusFailed {
+		service.releaseWorkspace(ctx, record.ID)
+	}
 	return record, service.writeSession(record)
 }
 
@@ -534,6 +596,7 @@ func initialInstructions(
 	message string,
 	overview project.RepositoryOverview,
 	current *featureartifact.VisionPlan,
+	checkedOut bool,
 ) string {
 	var builder strings.Builder
 	builder.WriteString("You are Commitarium's project assistant. Write the vision for project " + projectName +
@@ -543,7 +606,14 @@ func initialInstructions(
 		"ones, and every item without sub-items becomes one work order that an agent builds in one go, so keep those " +
 		"focused and independently useful. Write titles as short imperative tasks and give each item a one or two " +
 		"sentence description of the outcome. Prefer a small plan that ships a useful first version over an " +
-		"exhaustive one. This is planning only: do not edit files, run commands, or begin implementation.\n\n")
+		"exhaustive one. This is planning only: do not edit files or begin implementation.\n\n")
+	if checkedOut {
+		builder.WriteString("The project's repository is checked out read-only in your working directory. Before " +
+			"you plan, inspect it (read the code, list directories, run read-only commands) to learn what the app " +
+			"already does. Plan the vision for the whole app, but set done to true on every item the code already " +
+			"delivers, so no work order repeats it; describe those items as they are. Base guesses and confidence " +
+			"on what you could not tell from the code or the user.\n\n")
+	}
 	if mode == ModeDescribe {
 		builder.WriteString("Write the vision now from what the user said, without asking questions (use action " +
 			"'propose'). Where you have to assume something, choose sensibly and list each assumption in guesses, " +

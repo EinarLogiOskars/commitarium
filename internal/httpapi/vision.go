@@ -138,8 +138,8 @@ func (api *API) startVisionWorkOrderHandler(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	item, label, found := vision.Find(stored.Plan, itemID)
-	if !found || len(item.Items) > 0 {
-		writeError(w, http.StatusConflict, "vision_item_not_startable", "only an item without sub-items starts a work order")
+	if !found || len(item.Items) > 0 || (item.Done && item.FeatureID == "") {
+		writeError(w, http.StatusConflict, "vision_item_not_startable", "only an item without sub-items that is not done starts a work order")
 		return
 	}
 	if item.FeatureID != "" {

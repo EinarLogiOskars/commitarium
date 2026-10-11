@@ -2368,7 +2368,8 @@ Only an item without sub-items starts a work order.
 - `GET /api/v1/projects/{id}/vision` answers the vision:
   `{"project_id", "plan", "source": "assistant"|"user", "revision", "updated_at"}`.
   The plan is `{"statement", "priorities": [{"level", "items": [{"id", "title",
-  "description", "items", "feature_id"}]}], "confidence", "guesses"}`.
+  "description", "items", "feature_id", "done"}]}], "confidence", "guesses"}`.
+  `done` marks an item without sub-items that the project already delivers.
   `404 vision_not_found` until one is written.
 - `PUT /api/v1/projects/{id}/vision` with `{"plan", "expected_revision"}` saves
   the user's edit. `409 vision_conflict` when the vision changed meanwhile;
@@ -2380,7 +2381,8 @@ Only an item without sub-items starts a work order.
   `converse` asks questions first. Answers a conversation:
   `{"id", "mode", "status": "running"|"waiting_for_user"|"written"|"failed",
   "messages": [{"role", "text", "occurred_at"}], ...}`.
-  `503 vision_unavailable` without real agents.
+  The assistant inspects a read-only checkout of the default branch, removed
+  when the conversation ends. `503 vision_unavailable` without real agents.
 - `GET /api/v1/projects/{id}/vision/assistant/{sessionID}` follows it. When the
   assistant proposes, the vision is saved with source `assistant`, keeping the
   work orders of items it kept by ID, and the status becomes `written`.
@@ -2390,7 +2392,7 @@ Only an item without sub-items starts a work order.
 - `POST /api/v1/projects/{id}/vision/items/{itemID}/work-order` creates the
   draft work order for an item without sub-items, links it, and answers
   `201 {"work_order", "vision"}`. An item that already has one answers it with
-  `200`. `409 vision_item_not_startable` for a group or an unknown item.
+  `200`. `409 vision_item_not_startable` for a group, a done item, or an unknown item.
 
 ## Merging an approved revision
 

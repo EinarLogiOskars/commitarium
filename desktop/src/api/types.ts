@@ -741,6 +741,8 @@ export interface VisionItem {
   description: string;
   items?: VisionItem[];
   feature_id?: string;
+  // Already delivered without a work order (e.g. built before the vision).
+  done?: boolean;
 }
 
 export interface VisionPriority {

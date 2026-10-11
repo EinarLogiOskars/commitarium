@@ -136,14 +136,21 @@ func OutputJSONSchema(contract OutputContract) any {
 		)
 	case OutputContractVisionPlan:
 		text := map[string]any{"type": "string"}
-		leaf := objectSchema(map[string]any{"title": text, "description": text}, []string{"title", "description"})
+		done := map[string]any{
+			"type":        "boolean",
+			"description": "True when the project already delivers this item; false for an item with sub-items.",
+		}
+		leaf := objectSchema(
+			map[string]any{"title": text, "description": text, "done": done},
+			[]string{"title", "description", "done"},
+		)
 		middle := objectSchema(
-			map[string]any{"title": text, "description": text, "items": map[string]any{"type": "array", "items": leaf}},
-			[]string{"title", "description", "items"},
+			map[string]any{"title": text, "description": text, "done": done, "items": map[string]any{"type": "array", "items": leaf}},
+			[]string{"title", "description", "done", "items"},
 		)
 		top := objectSchema(
-			map[string]any{"title": text, "description": text, "items": map[string]any{"type": "array", "items": middle}},
-			[]string{"title", "description", "items"},
+			map[string]any{"title": text, "description": text, "done": done, "items": map[string]any{"type": "array", "items": middle}},
+			[]string{"title", "description", "done", "items"},
 		)
 		priority := objectSchema(
 			map[string]any{

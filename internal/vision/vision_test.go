@@ -10,6 +10,7 @@ import (
 	"github.com/EinarLogiOskars/commitarium/internal/featureartifact"
 	"github.com/EinarLogiOskars/commitarium/internal/project"
 	"github.com/EinarLogiOskars/commitarium/internal/workerhttp"
+	"github.com/EinarLogiOskars/commitarium/internal/workspace"
 )
 
 type workerStub struct {
@@ -162,5 +163,73 @@ func TestWorkOrdersLinkToLeafItemsAndSurviveARewrite(t *testing.T) {
 	stored.Plan.Statement = "A calorie and exercise tracker."
 	if saved, err := service.Save(t.Context(), "prj_test", stored.Plan, 3); err != nil || saved.Source != "user" || saved.Revision != 4 {
 		t.Fatalf("edit = %+v err=%v", saved, err)
+	}
+}
+
+type checkoutsStub struct {
+	ensured []workspace.CheckoutSpec
+	removed []string
+}
+
+func (stub *checkoutsStub) Ensure(_ context.Context, spec workspace.CheckoutSpec) error {
+	stub.ensured = append(stub.ensured, spec)
+	return nil
+}
+
+func (stub *checkoutsStub) Remove(_ context.Context, id string) error {
+	stub.removed = append(stub.removed, id)
+	return nil
+}
+
+type branchesStub struct{}
+
+func (branchesStub) GetBranch(_ context.Context, _, _, branch string) (workspace.Branch, error) {
+	return workspace.Branch{Name: branch, CommitID: strings.Repeat("a", 40)}, nil
+}
+
+type repositoryProjectsStub struct{ projectsStub }
+
+func (repositoryProjectsStub) GetByID(_ context.Context, id string) (project.Project, error) {
+	return project.Project{ID: id, Name: "Calories", ForgejoRepository: &project.ForgejoRepository{
+		Owner: "commitarium", Name: "calories", DefaultBranch: "main",
+	}}, nil
+}
+
+func TestTheAssistantInspectsACheckoutAndMarksDeliveredItemsDone(t *testing.T) {
+	worker := &workerStub{}
+	checkouts := &checkoutsStub{}
+	service, err := NewService(t.TempDir(), t.TempDir(), repositoryProjectsStub{}, func(string) (workerhttp.Service, error) {
+		return worker, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service.WithRepository(checkouts, branchesStub{})
+	session, _, err := service.Start(t.Context(), "prj_test", "codex", "gpt-5", ModeDescribe, "A calorie tracker", "start-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(checkouts.ensured) != 1 || checkouts.ensured[0].WorkspaceID != session.ID ||
+		checkouts.ensured[0].Branch != "main" || checkouts.ensured[0].BaseCommitID != strings.Repeat("a", 40) {
+		t.Fatalf("checkout = %+v", checkouts.ensured)
+	}
+	first := worker.puts[0]
+	if first.WorkspaceAccess != workerhttp.WorkspaceAccessReadOnly || !strings.Contains(first.Instructions, "checked out read-only") {
+		t.Fatalf("the assistant cannot inspect the code: %+v", first)
+	}
+	plan := samplePlan()
+	plan.Priorities[0].Items[0].Items[0].Done = true
+	worker.finish(workerhttp.TerminalResult{
+		Outcome: workerhttp.OutcomeCompleted, Disposition: workerhttp.DispositionSucceeded, Summary: "Done.", VisionPlan: plan,
+	})
+	if _, err := service.GetSession(t.Context(), "prj_test", session.ID); err != nil {
+		t.Fatal(err)
+	}
+	if len(checkouts.removed) != 1 || checkouts.removed[0] != session.ID {
+		t.Fatalf("the finished session kept its checkout: %v", checkouts.removed)
+	}
+	stored, _ := service.Get(t.Context(), "prj_test")
+	if item, _, _ := Find(stored.Plan, "add-a-meal"); !item.Done {
+		t.Fatalf("the delivered item is not done: %+v", item)
 	}
 }

@@ -29,8 +29,10 @@ Vision page.
 - **The assistant writes it.** The user either describes the app ("Write it
   from my description", one turn) or lets the assistant ask what it needs to
   know first ("Talk it through"). Both use the structured `vision_plan` result
-  in a consultant conversation that reads the repository's README and
-  top-level files. The result carries a **confidence** (high, medium, or low)
+  in a consultant conversation with a read-only checkout of the default
+  branch, so it plans from what the code already does. Items the project
+  already delivers are kept in the plan and marked **done**, so no work order
+  repeats them; the user can change that mark when editing. The result carries a **confidence** (high, medium, or low)
   and the **guesses** the assistant had to make. The page warns when confidence
   is low, and "Answer these" continues as a conversation about the guesses.
 - **The user owns it.** The user can edit the statement and items, add or

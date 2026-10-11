@@ -449,7 +449,7 @@ function ItemList({
         const label = `${prefix}.${index + 1}`;
         const leaf = !item.items?.length;
         const linked = item.feature_id ? features.get(item.feature_id) : undefined;
-        const done = leaf ? linked?.state === "completed" : allDone(item, features);
+        const done = allDone(item, features);
         return (
           <li key={item.id} className="vision__item">
             <div className="vision__row">
@@ -464,6 +464,7 @@ function ItemList({
                   <span className="pill">{linked ? STATE_LABEL[linked.state] : "Work order"}</span>
                 )}
                 {leaf &&
+                  !(item.done && !item.feature_id) &&
                   (item.feature_id ? (
                     <button className="ghost" onClick={() => onOpen(item.feature_id!)}>
                       Open
@@ -492,9 +493,11 @@ function ItemList({
   );
 }
 
-// A group is done when every item under it is.
+// An item is done when the project already delivered it or its work order
+// merged; a group is done when every item under it is.
 function allDone(item: VisionItem, features: Map<string, Feature>): boolean {
-  if (!item.items?.length) return features.get(item.feature_id ?? "")?.state === "completed";
+  if (!item.items?.length)
+    return !!item.done || features.get(item.feature_id ?? "")?.state === "completed";
   return item.items.every((child) => allDone(child, features));
 }
 
@@ -648,7 +651,20 @@ function ItemEditor({
                 >
                   ↓
                 </button>
-                {depth < MAX_DEPTH && !item.feature_id && (
+                {!item.items?.length && (
+                  <label
+                    className="toggle vision__done"
+                    title="Already delivered; no work order needed"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={!!item.done}
+                      onChange={(e) => update(index, { ...item, done: e.target.checked })}
+                    />
+                    Done
+                  </label>
+                )}
+                {depth < MAX_DEPTH && !item.feature_id && !item.done && (
                   <button
                     className="ghost"
                     onClick={() =>
