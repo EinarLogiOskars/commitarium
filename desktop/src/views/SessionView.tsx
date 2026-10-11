@@ -148,7 +148,7 @@ export function SessionView({
             : "Your turn.";
 
   return (
-    <div className="order session">
+    <div className="order work-session">
       <section className="panel order-head">
         <div className="panel__head">
           <div className="session__title">
