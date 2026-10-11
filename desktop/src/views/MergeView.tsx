@@ -192,7 +192,7 @@ export function MergeView({
               message={
                 reviewed
                   ? "No validation is set up for this project. Merging relies on the two agents' approval alone — none of your own checks run against this revision."
-                  : "No validation is set up for this project, and this work order had no reviewer. Merging relies on the lead's word alone — nothing checks this revision."
+                  : "No validation is set up for this project. Merging relies on the lead's word alone — none of your own checks run against this revision."
               }
               onOpenValidation={onOpenValidation}
             />
@@ -202,7 +202,7 @@ export function MergeView({
               ? "Validation checks must pass before this revision can merge."
               : reviewed
                 ? `Both agents approved this revision. Review the PR if you like, then merge #${pr?.number} into the default branch to complete the work order.`
-                : `The lead finished this revision and there was no reviewer, so your merge is the approval. Review the PR, then merge #${pr?.number} into the default branch to complete the work order.`}
+                : `The lead finished this revision. Review the PR if you like, then merge #${pr?.number} into the default branch to complete the work order.`}
           </p>
           <div className="row">
             {!confirm ? (
