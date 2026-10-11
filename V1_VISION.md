@@ -41,29 +41,31 @@ when it starts.
 
 A continuous 1:1 conversation with an agent for many small edits, where the
 user sees each change before deciding to keep it. Not a run that goes start to
-finish and then brings the user in.
+finish and then brings the user in. Planned in
+[SESSIONS_PLAN.md](SESSIONS_PLAN.md) (ADR-019).
 
-- **Commits when the user says so.** Ending the session squashes the
-  work-in-progress into one or a few clean commits and goes through the merge
-  gate, or merges directly when the project's merge policy doesn't gate.
-  Every session should end merged into Forgejo's default branch.
-- **Pause and resume.** On pause, close, or idle, the agent's changes are
-  committed as work in progress and pushed to the session's own branch in
-  Forgejo. Nothing is left uncommitted, nothing is lost on a container restart,
-  and a paused session holds no clone or process. Resuming takes a fresh clone
-  of that branch.
-- **Catching up on resume.** Main moves while a session is paused. On resume,
+- **One click to start.** The session opens on its own branch and draft pull
+  request and greets the user; the first message starts the agent, and its
+  first reply names the session.
+- **Commits when the user says so.** The agent commits only when asked.
+  Finishing the session commits the rest as one commit and goes through the
+  merge gate, or merges directly when the project's merge policy doesn't gate.
+  Every session should end merged into Forgejo's default branch, and deleting
+  it discards everything.
+- **Idle is paused.** No process runs between turns. Work in progress stays in
+  the session's checkout on the host, which survives restarts.
+- **Catching up.** Main moves while a session is idle. On the next turn,
   main is merged into the session branch first; conflicts are resolved by the
   agent with the user present, which is when the user best remembers the
   intent.
 - **Agent context on resume.** Resume the provider's own conversation thread
   where possible; otherwise start from a short summary plus the branch's git
   log.
-- **Visible when paused.** Paused sessions appear in the planning view with how long
-  they have been paused. Leaving one open is the user's choice.
-- **Live preview** (scope open, see below): mount the session workspace into
-  the project's compose services so dev servers reload as the agent edits. Already
-  listed under "Later" in [PREVIEW_PLAN.md](PREVIEW_PLAN.md).
+- **Visible when idle.** Sessions appear in the planning view with how long
+  they have been idle. Leaving one open is the user's choice.
+- **Session preview:** run the project's compose services from the session's
+  checkout, so dev servers reload as the agent edits when the compose file
+  mounts the sources, and restart on request otherwise.
 
 ### Work order
 
@@ -214,7 +216,7 @@ public coordinator API, and every new action comes with an approval policy
 | Isolation | Done. Every new kind of work reuses it. |
 | Agents | Done ([AGENTS_PLAN.md](AGENTS_PLAN.md), ADR-016): one worker per provider account, serving both roles, chosen at Start. |
 | Flexible work orders | Done ([FLEXIBLE_WORK_ORDERS_PLAN.md](FLEXIBLE_WORK_ORDERS_PLAN.md), ADR-018): Full, Planned, and Quick change chosen at Start, and a Draft can start without clarifying. Turning a step on mid-run is a follow-up. |
-| Session | Missing: chat, pause and resume, catch-up on resume, live preview. |
+| Session | Planned ([SESSIONS_PLAN.md](SESSIONS_PLAN.md), ADR-019): one-click start, chat on the session branch, catch-up with main, session preview, one commit at finish through the merge gate. |
 | Project direction and assistant | Missing. The clarification chat and `SetupAssistant` are working templates. |
 | Builder mode, autopilot, Apps | Missing; after the parts above. |
 
@@ -243,8 +245,8 @@ concurrently on one worker, so one agent can serve several work orders.
 - Phase 7: rich review inside Commitarium, the pixel-art town
 - Phase 8: remote and phone access
 
-**Open:** live preview in sessions. Sessions work without it (preview after a
-commit), but the fix-the-wording use case is much better with it.
+**Decided:** sessions preview from their own checkout (SESSIONS_PLAN.md).
+Live reload depends on the project's compose file mounting its sources.
 
 ## Order
 
@@ -258,7 +260,8 @@ commit), but the fix-the-wording use case is much better with it.
 4. Flexible work orders: optional reviewer, documented plan, and
    clarification, with presets
    ([FLEXIBLE_WORK_ORDERS_PLAN.md](FLEXIBLE_WORK_ORDERS_PLAN.md)).
-5. Sessions: chat, pause and resume, catch-up, live preview.
+5. Sessions: chat, catch-up, session preview, one commit at finish
+   ([SESSIONS_PLAN.md](SESSIONS_PLAN.md)).
 6. Project direction: the priority plan and its mapping onto work orders and
    sessions.
 7. The project assistant with tools, and builder mode.
@@ -275,8 +278,8 @@ gives it something to plan against before it is trusted to act. Intermediate
 - **Agents**: recorded in ADR-016.
 - **Recoverable runs**: recorded in ADR-017.
 - **Flexible work orders**: optional steps per work order (ADR-018).
-- **Sessions** are work that doesn't go through the feature workflow state
-  model, which `PROJECT_PLAN.md` currently assumes for all work.
+- **Sessions** are work orders of kind `session` that reuse the work order's
+  branch, merge gate, and recovery (ADR-019, proposed).
 - **Autopilot and Apps**: the assistant acts only through the coordinator API
   with Commitarium permissions; system capabilities are separate, opt-in
   grants.
