@@ -159,18 +159,22 @@ function AcceptanceRow({ t }: { t: AcceptanceTest }) {
         >
           {m.ch}
         </span>
-        <span className="accept-test__title">{t.title}</span>
-        <span className={`muted accept-test__status accept-test__status--${m.tone}`}>
-          {m.label}
-        </span>
-        {t.coordinator_status && (
-          <span
-            className={`accept-test__own state--${t.coordinator_status === "passed" ? "ok" : "bad"}`}
-            title="Commitarium's own run of this test, by its exit code, apart from the reviewer"
-          >
-            Commitarium: {t.coordinator_status}
+        <div className="accept-test__body">
+          <span className="accept-test__title">{t.title}</span>
+          <span className="accept-test__meta">
+            <span className={`accept-test__status accept-test__status--${m.tone}`}>
+              Reviewer: {m.label}
+            </span>
+            {t.coordinator_status && (
+              <span
+                className={`accept-test__own state--${t.coordinator_status === "passed" ? "ok" : "bad"}`}
+                title="Commitarium's own run of this test, by its exit code, apart from the reviewer"
+              >
+                Commitarium: {t.coordinator_status}
+              </span>
+            )}
           </span>
-        )}
+        </div>
       </div>
       {t.note && (t.status === "failed" || t.status === "not_applicable") && (
         <p className="accept-test__note">{t.note}</p>

@@ -2825,7 +2825,7 @@ button.danger:not(.ghost) {
 }
 .accept-test__line {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 8px;
   font-size: 13px;
 }
@@ -2834,17 +2834,27 @@ button.danger:not(.ghost) {
   width: 16px;
   text-align: center;
 }
-.accept-test__title {
+/* Title on its own line, both results on a small line under it, so the title
+   gets the panel's full width. */
+.accept-test__body {
   flex: 1;
   min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.accept-test__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 12px;
+  font-size: 11px;
 }
 .accept-test--passed .accept-test__title,
 .accept-test--not_applicable .accept-test__title {
   color: var(--muted);
 }
 .accept-test__status {
-  flex: none;
-  font-size: 11px;
+  color: var(--muted);
 }
 .accept-test__status--ok {
   color: var(--ok);
@@ -3073,8 +3083,6 @@ button.danger:not(.ghost) {
 
 /* Commitarium's own run of an acceptance test, next to the reviewer's. */
 .accept-test__own {
-  margin-left: 8px;
-  font-size: 11px;
   white-space: nowrap;
 }
 
