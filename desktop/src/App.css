@@ -1637,6 +1637,19 @@ button.danger:not(.ghost) {
 .order-head__desc {
   margin: 3px 0 0;
   font-size: 12px;
+  white-space: pre-line;
+}
+.order-head__desc--clamped {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  overflow: hidden;
+}
+.order-head__more {
+  font-size: 12px;
+  padding: 0;
+  margin-top: 2px;
 }
 .order-head__usage {
   margin: 3px 0 0;

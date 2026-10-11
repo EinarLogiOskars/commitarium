@@ -217,7 +217,7 @@ export function FeatureView({
         <div className="panel__head">
           <div>
             <h2>{feature.title}</h2>
-            {feature.description && <p className="muted order-head__desc">{feature.description}</p>}
+            {feature.description && <OrderDescription text={feature.description} />}
             {usage && usage.roles.length > 0 && <UsageLine usage={usage} />}
           </div>
           <div className="row">
@@ -578,4 +578,31 @@ function body(
 function describe(e: unknown): string {
   if (e instanceof ApiError) return `${e.message} (${e.code})`;
   return String(e);
+}
+
+// A work order's description, kept to a few lines in the header unless the
+// user expands it.
+function OrderDescription({ text }: { text: string }) {
+  const ref = useRef<HTMLParagraphElement | null>(null);
+  const [expanded, setExpanded] = useState(false);
+  const [long, setLong] = useState(false);
+  useEffect(() => {
+    const el = ref.current;
+    if (el && !expanded) setLong(el.scrollHeight > el.clientHeight + 1);
+  }, [text, expanded]);
+  return (
+    <>
+      <p
+        ref={ref}
+        className={`muted order-head__desc ${expanded ? "" : "order-head__desc--clamped"}`}
+      >
+        {text}
+      </p>
+      {(long || expanded) && (
+        <button className="linkish order-head__more" onClick={() => setExpanded((v) => !v)}>
+          {expanded ? "Show less" : "Show more"}
+        </button>
+      )}
+    </>
+  );
 }
