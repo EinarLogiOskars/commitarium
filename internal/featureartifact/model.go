@@ -118,6 +118,9 @@ type AcceptanceTests struct {
 	TestCommitID           string           `json:"test_commit_id"`
 	ImplementationCommitID string           `json:"implementation_commit_id"`
 	Tests                  []AcceptanceTest `json:"tests"`
+	// CoordinatorCommitID is the implementation commit the coordinator last
+	// ran the tests against itself, apart from the reviewer.
+	CoordinatorCommitID string `json:"coordinator_commit_id,omitempty"`
 }
 
 type AcceptanceTest struct {
@@ -126,6 +129,12 @@ type AcceptanceTest struct {
 	Title    string               `json:"title"`
 	Status   AcceptanceTestStatus `json:"status"`
 	Note     string               `json:"note"`
+	// Command runs only this test from the repository root, so the
+	// coordinator can run it itself.
+	Command string `json:"command,omitempty"`
+	// CoordinatorStatus is the coordinator's own run of the test: passed or
+	// failed by its exit code, against CoordinatorCommitID.
+	CoordinatorStatus AcceptanceTestStatus `json:"coordinator_status,omitempty"`
 }
 
 func (kind Kind) IsValid() bool {
@@ -153,6 +162,7 @@ func (status AcceptanceTestStatus) IsValid() bool {
 func (tests AcceptanceTests) NormalizeInitial(planVersion int) (AcceptanceTests, error) {
 	tests.PlanVersion = planVersion
 	tests.ImplementationCommitID = ""
+	tests.CoordinatorCommitID = ""
 	tests.Tests = append([]AcceptanceTest(nil), tests.Tests...)
 	ids := make([]string, len(tests.Tests))
 	for index := range tests.Tests {
@@ -164,6 +174,8 @@ func (tests AcceptanceTests) NormalizeInitial(planVersion int) (AcceptanceTests,
 		tests.Tests[index].Position = index + 1
 		tests.Tests[index].Status = AcceptanceTestPending
 		tests.Tests[index].Note = ""
+		tests.Tests[index].Command = strings.TrimSpace(tests.Tests[index].Command)
+		tests.Tests[index].CoordinatorStatus = ""
 	}
 	if err := tests.Validate(); err != nil {
 		return AcceptanceTests{}, err
@@ -201,6 +213,15 @@ func (tests AcceptanceTests) Validate() error {
 		}
 		if !test.Status.IsValid() {
 			return fmt.Errorf("%w: acceptance test %q has invalid status %q", ErrInvalidArtifact, test.ID, test.Status)
+		}
+		if test.Command != strings.TrimSpace(test.Command) || len([]byte(test.Command)) > MaxStepTextBytes ||
+			strings.ContainsRune(test.Command, 0) {
+			return fmt.Errorf("%w: acceptance test %q command is invalid", ErrInvalidArtifact, test.ID)
+		}
+		switch test.CoordinatorStatus {
+		case "", AcceptanceTestPassed, AcceptanceTestFailed:
+		default:
+			return fmt.Errorf("%w: acceptance test %q has invalid coordinator status", ErrInvalidArtifact, test.ID)
 		}
 		if test.Note != strings.TrimSpace(test.Note) || len([]byte(test.Note)) > MaxStepTextBytes {
 			return fmt.Errorf("%w: acceptance test %q note is invalid", ErrInvalidArtifact, test.ID)

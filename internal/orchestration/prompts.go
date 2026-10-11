@@ -72,7 +72,9 @@ func acceptanceTestsInstructions(prepared workspace.Workspace) string {
 		"detail, so a small change needs only a few and a documentation-only change usually one. Do not alter production code. Run the tests against the " +
 		"baseline when practical; they are expected to expose missing behavior. Commit only the acceptance-test changes " +
 		"locally and do not push any branch or commit. Return action 'authored', a concise summary, the exact local test " +
-		"commit ID, and ordered stable test IDs and user-facing titles. If independent executable acceptance tests are " +
+		"commit ID, and ordered stable test IDs and user-facing titles. For each test also give the shell command, run " +
+		"from the repository root, that runs only that test and exits non-zero when it fails: Commitarium runs these " +
+		"commands itself against the implementation, apart from your review. If independent executable acceptance tests are " +
 		"not meaningful or cannot safely be authored, return action 'blocked' with no commit or tests.\n\n" +
 		"Current workflow phase: independent acceptance test authoring" +
 		"\nRepository: " + prepared.RepositoryOwner + "/" + prepared.RepositoryName +

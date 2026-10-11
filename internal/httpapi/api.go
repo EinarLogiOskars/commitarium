@@ -466,6 +466,7 @@ func newAPI(
 		mux.HandleFunc("POST /api/v1/validation-jobs/{id}/claim", api.claimValidationJobHandler)
 		mux.HandleFunc("POST /api/v1/validation-jobs/{id}/complete", api.completeValidationJobHandler)
 		mux.HandleFunc("POST /api/v1/validation-jobs/{id}/retry", api.retryValidationJobHandler)
+		mux.HandleFunc("GET /api/v1/acceptance-jobs/pending", api.listPendingAcceptanceJobsHandler)
 	}
 	mux.HandleFunc(
 		"POST /api/v1/projects",

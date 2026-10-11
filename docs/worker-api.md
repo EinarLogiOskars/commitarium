@@ -117,6 +117,9 @@ contracts:
   `clarification_required`, or `replanning_required`.
 - `toolchain_setup` returns a validated exact runtime proposal for project
   setup or imported-repository verification.
+- `acceptance_tests` items carry `command` as well as `id` and `title`: the
+  shell command, run from the repository root, that runs only that test and
+  exits non-zero when it fails. Commitarium runs these commands itself.
 - `session_opening` is a session's first turn (ADR-019). The lead returns its
   reply in `message` and a short `title` for the session. The terminal result
   carries the title as `session_title`, with whitespace collapsed and shortened

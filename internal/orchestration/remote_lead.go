@@ -4906,6 +4906,7 @@ func (starter *RemoteLeadStarter) startImplementationReview(
 	if strings.TrimSpace(leadSummary) == "" || round < 1 || publication.Validate() != nil {
 		return remoteLeadRequest{}, false, errors.New("implementation review subject is missing")
 	}
+	go starter.runAcceptanceTestsItself(starter.lifetime, run, storedFeature, publication.CommitID)
 	storedFeature, err := starter.featureForCurrentPlan(ctx, run, storedFeature)
 	if err != nil {
 		return remoteLeadRequest{}, false, err

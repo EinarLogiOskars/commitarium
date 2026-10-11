@@ -37,20 +37,38 @@ type CommandResult struct {
 	DurationMS int64  `json:"duration_ms"`
 }
 
+// JobKind tells a project's validation from a work order's acceptance tests.
+type JobKind string
+
+const (
+	// KindValidation runs the project's validation commands; a passing job
+	// for the approved commit opens the merge gate.
+	KindValidation JobKind = "validation"
+	// KindAcceptance is the coordinator's own run of the acceptance tests. It
+	// runs every command, each labelled by its test ID, and gates nothing.
+	KindAcceptance JobKind = "acceptance"
+)
+
 type Job struct {
-	ID          string          `json:"id"`
-	ProjectID   string          `json:"project_id"`
-	FeatureID   string          `json:"feature_id"`
-	RunID       string          `json:"run_id"`
-	WorkspaceID string          `json:"workspace_id"`
-	CommitID    string          `json:"commit_id"`
-	Commands    []string        `json:"commands"`
-	Status      Status          `json:"status"`
-	Results     []CommandResult `json:"results"`
-	Error       string          `json:"error,omitempty"`
-	CreatedAt   time.Time       `json:"created_at"`
-	UpdatedAt   time.Time       `json:"updated_at"`
-	CompletedAt *time.Time      `json:"completed_at,omitempty"`
+	ID   string  `json:"id"`
+	Kind JobKind `json:"kind"`
+	// Labels name each command for an acceptance job: its test ID.
+	Labels []string `json:"labels,omitempty"`
+	// MergeCommitID is the reviewer's private test commit, which the runner
+	// reads from the reviewer's checkout and merges into the commit first.
+	MergeCommitID string          `json:"merge_commit_id,omitempty"`
+	ProjectID     string          `json:"project_id"`
+	FeatureID     string          `json:"feature_id"`
+	RunID         string          `json:"run_id"`
+	WorkspaceID   string          `json:"workspace_id"`
+	CommitID      string          `json:"commit_id"`
+	Commands      []string        `json:"commands"`
+	Status        Status          `json:"status"`
+	Results       []CommandResult `json:"results"`
+	Error         string          `json:"error,omitempty"`
+	CreatedAt     time.Time       `json:"created_at"`
+	UpdatedAt     time.Time       `json:"updated_at"`
+	CompletedAt   *time.Time      `json:"completed_at,omitempty"`
 }
 
 func NormalizeCommands(commands []string) ([]string, error) {
@@ -85,6 +103,18 @@ func (job Job) Validate() error {
 	}
 	if _, err := NormalizeCommands(job.Commands); err != nil {
 		return err
+	}
+	switch job.Kind {
+	case KindValidation:
+		if len(job.Labels) != 0 || job.MergeCommitID != "" {
+			return ErrInvalid
+		}
+	case KindAcceptance:
+		if len(job.Labels) != len(job.Commands) || !workspace.ValidCommitID(job.MergeCommitID) {
+			return ErrInvalid
+		}
+	default:
+		return ErrInvalid
 	}
 	switch job.Status {
 	case StatusPending, StatusRunning, StatusPassed, StatusFailed:

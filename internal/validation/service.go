@@ -20,6 +20,7 @@ type Store interface {
 	CreateJob(context.Context, Job) (Job, bool, error)
 	GetJob(context.Context, string) (Job, error)
 	ListJobsByRun(context.Context, string) ([]Job, error)
+	ListPendingJobs(context.Context, JobKind) ([]Job, error)
 	TransitionJob(context.Context, string, Status, Status, []CommandResult, string, time.Time) (Job, bool, error)
 }
 
@@ -59,7 +60,7 @@ func (service *Service) EnsureJob(ctx context.Context, projectID, featureID, run
 	digest := validationDigest(runID, commitID, config.Commands)
 	now := service.now()
 	job := Job{
-		ID: "val_" + hex.EncodeToString(digest[:16]), ProjectID: projectID, FeatureID: featureID,
+		ID: "val_" + hex.EncodeToString(digest[:16]), Kind: KindValidation, ProjectID: projectID, FeatureID: featureID,
 		RunID: runID, WorkspaceID: workspaceID, CommitID: commitID,
 		Commands: append([]string(nil), config.Commands...), Status: StatusPending,
 		Results: []CommandResult{}, CreatedAt: now, UpdatedAt: now,
@@ -78,7 +79,7 @@ func (service *Service) Retry(ctx context.Context, id string) (Job, bool, error)
 	if err != nil {
 		return Job{}, false, err
 	}
-	if prior.Status != StatusFailed && prior.Status != StatusPassed {
+	if prior.Kind != KindValidation || (prior.Status != StatusFailed && prior.Status != StatusPassed) {
 		return Job{}, false, ErrConflict
 	}
 	baseJob, created, err := service.EnsureJob(
@@ -101,7 +102,7 @@ func (service *Service) Retry(ctx context.Context, id string) (Job, bool, error)
 	base := baseJob.ID
 	attempt := 0
 	for _, job := range jobs {
-		if job.CommitID == prior.CommitID && slices.Equal(job.Commands, config.Commands) {
+		if job.Kind == KindValidation && job.CommitID == prior.CommitID && slices.Equal(job.Commands, config.Commands) {
 			if job.Status == StatusPending || job.Status == StatusRunning || job.Status == StatusPassed {
 				return job, false, nil
 			}
@@ -110,7 +111,7 @@ func (service *Service) Retry(ctx context.Context, id string) (Job, bool, error)
 	}
 	now := service.now()
 	job := Job{
-		ID: fmt.Sprintf("%s_r%d", base, attempt), ProjectID: prior.ProjectID,
+		ID: fmt.Sprintf("%s_r%d", base, attempt), Kind: KindValidation, ProjectID: prior.ProjectID,
 		FeatureID: prior.FeatureID, RunID: prior.RunID, WorkspaceID: prior.WorkspaceID,
 		CommitID: prior.CommitID, Commands: append([]string(nil), config.Commands...),
 		Status: StatusPending, Results: []CommandResult{}, CreatedAt: now, UpdatedAt: now,
@@ -133,8 +134,63 @@ func (service *Service) GetJob(ctx context.Context, id string) (Job, error) {
 	return service.store.GetJob(ctx, id)
 }
 
+// JobsForRun lists a run's validation jobs, newest first.
 func (service *Service) JobsForRun(ctx context.Context, runID string) ([]Job, error) {
-	return service.store.ListJobsByRun(ctx, runID)
+	return service.jobsOfKind(ctx, runID, KindValidation)
+}
+
+// AcceptanceJobsForRun lists the coordinator's acceptance runs of a run,
+// newest first.
+func (service *Service) AcceptanceJobsForRun(ctx context.Context, runID string) ([]Job, error) {
+	return service.jobsOfKind(ctx, runID, KindAcceptance)
+}
+
+func (service *Service) jobsOfKind(ctx context.Context, runID string, kind JobKind) ([]Job, error) {
+	jobs, err := service.store.ListJobsByRun(ctx, runID)
+	if err != nil {
+		return nil, err
+	}
+	matching := make([]Job, 0, len(jobs))
+	for _, job := range jobs {
+		if job.Kind == kind {
+			matching = append(matching, job)
+		}
+	}
+	return matching, nil
+}
+
+// PendingAcceptanceJobs lists the acceptance runs waiting for the desktop to
+// run them.
+func (service *Service) PendingAcceptanceJobs(ctx context.Context) ([]Job, error) {
+	return service.store.ListPendingJobs(ctx, KindAcceptance)
+}
+
+// EnsureAcceptanceJob creates the coordinator's own run of a work order's
+// acceptance tests against an implementation commit: the runner merges the
+// reviewer's test commit into it, then runs each test's command.
+func (service *Service) EnsureAcceptanceJob(
+	ctx context.Context,
+	projectID, featureID, runID, workspaceID, commitID, testCommitID string,
+	testIDs []string,
+	commands []string,
+) (Job, bool, error) {
+	normalized, err := NormalizeCommands(commands)
+	if err != nil {
+		return Job{}, false, err
+	}
+	digest := validationDigest(runID, commitID+"\x00"+testCommitID, append(append([]string(nil), testIDs...), normalized...))
+	now := service.now()
+	job := Job{
+		ID: "acc_" + hex.EncodeToString(digest[:16]), Kind: KindAcceptance, ProjectID: projectID,
+		FeatureID: featureID, RunID: runID, WorkspaceID: workspaceID, CommitID: commitID,
+		Commands: normalized, Labels: append([]string(nil), testIDs...),
+		MergeCommitID: testCommitID,
+		Status:        StatusPending, Results: []CommandResult{}, CreatedAt: now, UpdatedAt: now,
+	}
+	if err := job.Validate(); err != nil {
+		return Job{}, false, err
+	}
+	return service.store.CreateJob(ctx, job)
 }
 
 func (service *Service) Claim(ctx context.Context, id string) (Job, bool, error) {
@@ -206,7 +262,7 @@ func (service *Service) RequirePassed(ctx context.Context, projectID, runID, com
 		return err
 	}
 	for _, job := range jobs {
-		if job.ProjectID == projectID && job.CommitID == commitID && job.Status == StatusPassed &&
+		if job.Kind == KindValidation && job.ProjectID == projectID && job.CommitID == commitID && job.Status == StatusPassed &&
 			slices.Equal(job.Commands, config.Commands) {
 			return nil
 		}

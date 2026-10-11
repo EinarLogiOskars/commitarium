@@ -63,13 +63,24 @@ func (store *ValidationStore) GetConfig(ctx context.Context, projectID string) (
 func (store *ValidationStore) CreateJob(ctx context.Context, job validation.Job) (validation.Job, bool, error) {
 	commands, _ := json.Marshal(job.Commands)
 	results, _ := json.Marshal(job.Results)
+	labels := job.Labels
+	if labels == nil {
+		labels = []string{}
+	}
+	labelsJSON, _ := json.Marshal(labels)
+	kind := job.Kind
+	if kind == "" {
+		kind = validation.KindValidation
+	}
 	result, err := store.db.ExecContext(ctx, `INSERT INTO validation_jobs (
 		id, project_id, feature_id, run_id, workspace_id, commit_id, commands_json,
-		status, results_json, error, created_at, updated_at, completed_at
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL) ON CONFLICT(id) DO NOTHING`,
+		status, results_json, error, created_at, updated_at, completed_at,
+		kind, labels_json, merge_commit_id
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?) ON CONFLICT(id) DO NOTHING`,
 		job.ID, job.ProjectID, job.FeatureID, job.RunID, job.WorkspaceID, job.CommitID,
 		string(commands), job.Status, string(results), job.Error,
-		formatExecutionTime(job.CreatedAt), formatExecutionTime(job.UpdatedAt))
+		formatExecutionTime(job.CreatedAt), formatExecutionTime(job.UpdatedAt),
+		kind, string(labelsJSON), job.MergeCommitID)
 	if err != nil {
 		return validation.Job{}, false, fmt.Errorf("create validation job: %w", err)
 	}
@@ -95,6 +106,25 @@ func (store *ValidationStore) GetJob(ctx context.Context, id string) (validation
 
 func (store *ValidationStore) ListJobsByRun(ctx context.Context, runID string) ([]validation.Job, error) {
 	rows, err := store.db.QueryContext(ctx, validationJobSelect+` WHERE run_id = ? ORDER BY created_at DESC, id`, runID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	jobs := make([]validation.Job, 0)
+	for rows.Next() {
+		job, err := scanValidationJob(rows)
+		if err != nil {
+			return nil, err
+		}
+		jobs = append(jobs, job)
+	}
+	return jobs, rows.Err()
+}
+
+// ListPendingJobs lists the pending jobs of one kind, oldest first.
+func (store *ValidationStore) ListPendingJobs(ctx context.Context, kind validation.JobKind) ([]validation.Job, error) {
+	rows, err := store.db.QueryContext(ctx, validationJobSelect+` WHERE status = ? AND kind = ? ORDER BY created_at, id`,
+		validation.StatusPending, kind)
 	if err != nil {
 		return nil, err
 	}
@@ -140,17 +170,25 @@ func (store *ValidationStore) TransitionJob(ctx context.Context, id string, from
 }
 
 const validationJobSelect = `SELECT id, project_id, feature_id, run_id, workspace_id, commit_id,
-	commands_json, status, results_json, error, created_at, updated_at, completed_at FROM validation_jobs`
+	commands_json, status, results_json, error, created_at, updated_at, completed_at,
+	kind, labels_json, merge_commit_id FROM validation_jobs`
 
 type validationScanner interface{ Scan(...any) error }
 
 func scanValidationJob(scanner validationScanner) (validation.Job, error) {
 	var job validation.Job
-	var commandsJSON, resultsJSON, createdAt, updatedAt string
+	var commandsJSON, resultsJSON, createdAt, updatedAt, labelsJSON string
 	var completedAt sql.NullString
 	if err := scanner.Scan(&job.ID, &job.ProjectID, &job.FeatureID, &job.RunID, &job.WorkspaceID,
-		&job.CommitID, &commandsJSON, &job.Status, &resultsJSON, &job.Error, &createdAt, &updatedAt, &completedAt); err != nil {
+		&job.CommitID, &commandsJSON, &job.Status, &resultsJSON, &job.Error, &createdAt, &updatedAt, &completedAt,
+		&job.Kind, &labelsJSON, &job.MergeCommitID); err != nil {
 		return validation.Job{}, err
+	}
+	if err := json.Unmarshal([]byte(labelsJSON), &job.Labels); err != nil {
+		return validation.Job{}, err
+	}
+	if len(job.Labels) == 0 {
+		job.Labels = nil
 	}
 	if err := json.Unmarshal([]byte(commandsJSON), &job.Commands); err != nil {
 		return validation.Job{}, err

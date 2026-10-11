@@ -274,3 +274,44 @@ func TestServiceUpsertHandoffBriefReusesMatchingDurableRevision(t *testing.T) {
 		t.Fatalf("matching retry wrote a new revision: %+v", store.receivedArtifact)
 	}
 }
+
+func TestServiceRecordsTheCoordinatorsAcceptanceRunOnTheLatestRevision(t *testing.T) {
+	currentDocument, err := json.Marshal(featureartifact.AcceptanceTests{
+		PlanVersion: 1, TestCommitID: "0123456789abcdef0123456789abcdef01234567",
+		ImplementationCommitID: "abcdef0123456789abcdef0123456789abcdef01",
+		Tests: []featureartifact.AcceptanceTest{
+			{ID: "exports-csv", Position: 1, Title: "Exports visible rows", Status: featureartifact.AcceptanceTestPassed, Command: "npm test -- csv"},
+			{ID: "empty-list", Position: 2, Title: "Handles an empty list", Status: featureartifact.AcceptanceTestPending, Command: "npm test -- empty"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := &recordingWorkflowStore{
+		currentArtifact: FeatureArtifact{
+			FeatureID: "fea_test", Kind: featureartifact.KindAcceptanceTests, Revision: 4,
+			Document: string(currentDocument), Actor: Actor{Kind: ActorKindAgent, ID: "reviewer"}, UpdatedAt: time.Now().UTC(),
+		},
+		artifactResult: FeatureArtifact{FeatureID: "fea_test", Kind: featureartifact.KindAcceptanceTests, Revision: 5},
+		artifactEvent:  validTestEvent(t),
+	}
+	_, err = NewService(store).RecordCoordinatorAcceptanceRun(
+		t.Context(), "fea_test", "abcdef0123456789abcdef0123456789abcdef01",
+		map[string]bool{"exports-csv": true, "empty-list": false},
+		Actor{Kind: ActorKindCoordinator, ID: "commitarium"}, "acc_job:results",
+	)
+	if err != nil {
+		t.Fatalf("record the coordinator's run: %v", err)
+	}
+	var updated featureartifact.AcceptanceTests
+	if err := json.Unmarshal([]byte(store.receivedArtifact.Document), &updated); err != nil {
+		t.Fatal(err)
+	}
+	if store.receivedArtifact.ExpectedRevision != 4 ||
+		updated.CoordinatorCommitID != "abcdef0123456789abcdef0123456789abcdef01" ||
+		updated.Tests[0].CoordinatorStatus != featureartifact.AcceptanceTestPassed ||
+		updated.Tests[1].CoordinatorStatus != featureartifact.AcceptanceTestFailed ||
+		updated.Tests[0].Status != featureartifact.AcceptanceTestPassed {
+		t.Fatalf("unexpected record: revision=%d %+v", store.receivedArtifact.ExpectedRevision, updated)
+	}
+}

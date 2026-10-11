@@ -235,6 +235,57 @@ func (s *Service) UpsertAcceptanceTests(
 	)
 }
 
+// RecordCoordinatorAcceptanceRun records the coordinator's own run of the
+// acceptance tests against a commit: each listed test passed or failed by its
+// command's exit code. It applies to the latest revision, so the reviewer's
+// concurrent results are kept, retrying when a revision lands in between.
+func (s *Service) RecordCoordinatorAcceptanceRun(
+	ctx context.Context,
+	featureID string,
+	commitID string,
+	passed map[string]bool,
+	actor Actor,
+	idempotencyKey string,
+) (FeatureArtifact, error) {
+	var lastErr error
+	for attempt := 0; attempt < 5; attempt++ {
+		current, err := s.GetFeatureArtifact(ctx, featureID, featureartifact.KindAcceptanceTests)
+		if err != nil {
+			return FeatureArtifact{}, err
+		}
+		var tests featureartifact.AcceptanceTests
+		if err := json.Unmarshal([]byte(current.Document), &tests); err != nil {
+			return FeatureArtifact{}, err
+		}
+		for index := range tests.Tests {
+			result, ran := passed[tests.Tests[index].ID]
+			if !ran {
+				continue
+			}
+			tests.Tests[index].CoordinatorStatus = featureartifact.AcceptanceTestFailed
+			if result {
+				tests.Tests[index].CoordinatorStatus = featureartifact.AcceptanceTestPassed
+			}
+		}
+		tests.CoordinatorCommitID = commitID
+		if err := tests.Validate(); err != nil {
+			return FeatureArtifact{}, err
+		}
+		if matches, _ := artifactDocumentMatches(current, tests); matches {
+			return current, nil
+		}
+		updated, err := s.putFeatureArtifact(
+			ctx, featureID, featureartifact.KindAcceptanceTests, current.Revision, tests, actor,
+			fmt.Sprintf("%s:%d", idempotencyKey, current.Revision),
+		)
+		if !errors.Is(err, ErrArtifactConflict) {
+			return updated, err
+		}
+		lastErr = err
+	}
+	return FeatureArtifact{}, lastErr
+}
+
 func (s *Service) TransitionAcceptanceTest(
 	ctx context.Context,
 	featureID string,

@@ -58,6 +58,16 @@ func (store *memoryStore) ListJobsByRun(_ context.Context, runID string) ([]Job,
 	return jobs, nil
 }
 
+func (store *memoryStore) ListPendingJobs(_ context.Context, kind JobKind) ([]Job, error) {
+	jobs := make([]Job, 0)
+	for _, job := range store.jobs {
+		if job.Status == StatusPending && job.Kind == kind {
+			jobs = append(jobs, job)
+		}
+	}
+	return jobs, nil
+}
+
 func (store *memoryStore) TransitionJob(_ context.Context, id string, from, to Status, results []CommandResult, detail string, occurredAt time.Time) (Job, bool, error) {
 	job, ok := store.jobs[id]
 	if !ok {
@@ -160,5 +170,30 @@ func TestRetryCreatesSeparateAttemptForSameConfiguration(t *testing.T) {
 	retry, created, err := service.Retry(ctx, job.ID)
 	if err != nil || !created || retry.ID == job.ID || retry.Status != StatusPending {
 		t.Fatalf("Retry = %#v, %v, %v", retry, created, err)
+	}
+}
+
+func TestAcceptanceJobsStayApartFromValidation(t *testing.T) {
+	store := &memoryStore{jobs: map[string]Job{}}
+	service := NewService(store)
+	commit := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	tests := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	job, created, err := service.EnsureAcceptanceJob(t.Context(), "prj", "fea", "run", "wsp", commit,
+		tests, []string{"export", "empty"}, []string{"npm test -- export", "npm test -- empty"})
+	if err != nil || !created || job.Kind != KindAcceptance || len(job.Labels) != 2 {
+		t.Fatalf("acceptance job = %+v created=%t err=%v", job, created, err)
+	}
+	if jobs, _ := service.JobsForRun(t.Context(), "run"); len(jobs) != 0 {
+		t.Fatalf("an acceptance job counts as validation: %+v", jobs)
+	}
+	if jobs, _ := service.AcceptanceJobsForRun(t.Context(), "run"); len(jobs) != 1 {
+		t.Fatalf("acceptance jobs = %+v", jobs)
+	}
+	if pending, _ := service.PendingAcceptanceJobs(t.Context()); len(pending) != 1 {
+		t.Fatalf("pending acceptance jobs = %+v", pending)
+	}
+	if _, _, err := service.EnsureAcceptanceJob(t.Context(), "prj", "fea", "run", "wsp", commit,
+		"not-a-commit", []string{"export"}, []string{"npm test"}); err == nil {
+		t.Fatal("an acceptance job accepted an invalid test commit")
 	}
 }

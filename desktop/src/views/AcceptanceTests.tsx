@@ -93,6 +93,9 @@ export function AcceptanceTestsPanel({
             {doc.implementation_commit_id
               ? ` · against ${doc.implementation_commit_id.slice(0, 12)}`
               : ""}
+            {doc.coordinator_commit_id
+              ? ` · Commitarium ran them against ${doc.coordinator_commit_id.slice(0, 12)}`
+              : ""}
           </p>
           {authoring ? (
             <p className="muted note">
@@ -156,6 +159,14 @@ function AcceptanceRow({ t }: { t: AcceptanceTest }) {
         <span className={`muted accept-test__status accept-test__status--${m.tone}`}>
           {m.label}
         </span>
+        {t.coordinator_status && (
+          <span
+            className={`accept-test__own state--${t.coordinator_status === "passed" ? "ok" : "bad"}`}
+            title="Commitarium's own run of this test, by its exit code, apart from the reviewer"
+          >
+            Commitarium: {t.coordinator_status}
+          </span>
+        )}
       </div>
       {t.note && (t.status === "failed" || t.status === "not_applicable") && (
         <p className="accept-test__note">{t.note}</p>

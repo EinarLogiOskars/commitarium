@@ -140,6 +140,13 @@ func (api *API) completeValidationJobHandler(w http.ResponseWriter, r *http.Requ
 		api.writeValidationError(w, err)
 		return
 	}
+	if job.Kind == validation.KindAcceptance {
+		// The coordinator's own acceptance run informs the work order; it
+		// publishes nothing and merges nothing.
+		api.recordAcceptanceRun(r.Context(), job)
+		writeJSON(w, http.StatusOK, job, "completed acceptance job")
+		return
+	}
 	statusSummary := validationSummary(job)
 	publicationWarning := ""
 	if publisher, ok := api.workspaces.(validationResultPublisher); ok {

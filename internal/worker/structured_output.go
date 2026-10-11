@@ -93,8 +93,12 @@ func OutputJSONSchema(contract OutputContract) any {
 			map[string]any{
 				"id":    idSchema,
 				"title": map[string]any{"type": "string"},
+				"command": map[string]any{
+					"type":        "string",
+					"description": "The shell command, run from the repository root, that runs only this test and exits non-zero when it fails.",
+				},
 			},
-			[]string{"id", "title"},
+			[]string{"id", "title", "command"},
 		)
 		return objectSchema(
 			map[string]any{
