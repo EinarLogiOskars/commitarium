@@ -10,6 +10,7 @@ import (
 	"github.com/EinarLogiOskars/commitarium/internal/feature"
 	"github.com/EinarLogiOskars/commitarium/internal/worker"
 	"github.com/EinarLogiOskars/commitarium/internal/workerhttp"
+	"github.com/EinarLogiOskars/commitarium/internal/workflow"
 	"github.com/EinarLogiOskars/commitarium/internal/workspace"
 )
 
@@ -28,9 +29,11 @@ const (
 	// branch and draft pull request, as for a quick change.
 	sessionPlanRecord = "Interactive session. There is no documented plan: the user directs each " +
 		"change in conversation with the agent."
-	sessionYourTurnReason = "Your turn."
-	sessionWorkingReason  = "The agent is working on your message."
-	untitledSessionPrefix = "Untitled session "
+	sessionYourTurnReason  = "Your turn."
+	sessionWorkingReason   = "The agent is working on your message."
+	sessionFinishingReason = "The agent is committing the session's work."
+	sessionFinishMessage   = "Finish the session."
+	untitledSessionPrefix  = "Untitled session "
 )
 
 type remoteLeadFirstTurnExecution interface {
@@ -39,6 +42,10 @@ type remoteLeadFirstTurnExecution interface {
 
 type remoteLeadSessionCatchUp interface {
 	SessionCatchUp(context.Context, string, string) (string, bool, error)
+}
+
+type remoteLeadMergeReadyClearer interface {
+	ClearMergeReady(context.Context, string, string) error
 }
 
 type remoteLeadFeatureRenamer interface {
@@ -116,8 +123,16 @@ func (starter *RemoteLeadStarter) SendSessionMessage(
 	if run.Status == execution.RunStatusRunning {
 		return execution.Run{}, ErrSessionBusy
 	}
-	if run.Status != execution.RunStatusWaitingForUser || run.Paused ||
-		storedFeature.State != feature.StateImplementing {
+	if run.Status != execution.RunStatusWaitingForUser || run.Paused {
+		return execution.Run{}, ErrCommandNotAllowed
+	}
+	if storedFeature.State == feature.StateReadyToMerge && run.WaitKind == execution.RunWaitKindMergeGate {
+		if err := starter.backToChatting(ctx, storedFeature, command.ID); err != nil {
+			return execution.Run{}, err
+		}
+		storedFeature.State = feature.StateImplementing
+	}
+	if storedFeature.State != feature.StateImplementing {
 		return execution.Run{}, ErrCommandNotAllowed
 	}
 	lead, err := starter.executions.GetSession(ctx, remoteLeadSessionID(run.ID))
@@ -172,7 +187,7 @@ func (starter *RemoteLeadStarter) SendSessionMessage(
 		if err := validateCompletedTurn(lead, checkpoint, prior); err != nil {
 			return execution.Run{}, err
 		}
-		turn, ok := sessionTurnNumber(lead.ID, checkpoint.AttemptID)
+		turn, ok := lastSessionTurn(lead.ID, checkpoint.AttemptID)
 		if !ok {
 			return execution.Run{}, fmt.Errorf("%w: the session's last turn is not a session turn", ErrCommandNotAllowed)
 		}
@@ -224,6 +239,156 @@ func (starter *RemoteLeadStarter) SendSessionMessage(
 		go starter.launch(request)
 	}
 	return starter.executions.GetRun(ctx, run.ID)
+}
+
+// lastSessionTurn numbers a session's last turn: a message turn, or the
+// finish turn that followed message turn n-1.
+func lastSessionTurn(sessionID, attemptID string) (int, bool) {
+	if turn, ok := sessionTurnNumber(sessionID, attemptID); ok {
+		return turn, true
+	}
+	return implementationTurnNumber(sessionID, attemptID)
+}
+
+// backToChatting reopens a session at the merge gate for more messages. Its
+// merge target is forgotten, so the next Finish pins a new commit.
+func (starter *RemoteLeadStarter) backToChatting(ctx context.Context, storedFeature feature.Feature, key string) error {
+	clearer, ok := starter.workspaces.(remoteLeadMergeReadyClearer)
+	if !ok {
+		return errors.New("a session cannot go back to chatting")
+	}
+	if err := clearer.ClearMergeReady(ctx, storedFeature.ProjectID, storedFeature.ID); err != nil {
+		return fmt.Errorf("reopen the session: %w", err)
+	}
+	if _, err := starter.planning.TransitionFeature(
+		ctx, storedFeature.ID, feature.StateImplementing,
+		workflow.Actor{Kind: workflow.ActorKindUser, ID: "local-user"}, key+":back-to-chatting",
+	); err != nil {
+		return fmt.Errorf("reopen the session: %w", err)
+	}
+	return nil
+}
+
+// FinishSession asks the agent to commit the session's work and publish it.
+// The published commit then goes through the merge gate like any work order
+// without a reviewer (ADR-019).
+func (starter *RemoteLeadStarter) FinishSession(
+	ctx context.Context,
+	runID string,
+	idempotencyKey string,
+) (execution.Run, error) {
+	run, err := starter.executions.GetRun(ctx, runID)
+	if err != nil {
+		return execution.Run{}, err
+	}
+	storedFeature, err := starter.features.GetByID(ctx, run.FeatureID)
+	if err != nil {
+		return execution.Run{}, err
+	}
+	if storedFeature.Kind != feature.KindSession {
+		return execution.Run{}, ErrNotASession
+	}
+	command := worker.Command{ID: idempotencyKey, Type: worker.CommandMessage, Message: sessionFinishMessage}
+	if err := command.Validate(); err != nil {
+		return execution.Run{}, fmt.Errorf("%w: %v", execution.ErrInvalidCommand, err)
+	}
+	if existing, err := starter.executions.GetCommand(ctx, command.ID); err == nil {
+		if existing.SessionID != remoteLeadSessionID(run.ID) || existing.Message != command.Message {
+			return execution.Run{}, execution.ErrCommandConflict
+		}
+		return run, nil
+	} else if !errors.Is(err, execution.ErrNotFound) {
+		return execution.Run{}, fmt.Errorf("look up session finish: %w", err)
+	}
+	if run.Status == execution.RunStatusRunning {
+		return execution.Run{}, ErrSessionBusy
+	}
+	if run.Status != execution.RunStatusWaitingForUser || run.Paused ||
+		storedFeature.State != feature.StateImplementing {
+		return execution.Run{}, ErrCommandNotAllowed
+	}
+	lead, err := starter.executions.GetSession(ctx, remoteLeadSessionID(run.ID))
+	if err != nil {
+		return execution.Run{}, err
+	}
+	if lead.Status != execution.SessionStatusWaitingForUser || lead.ProviderSessionID == "" {
+		// Nothing has happened in the session yet: there is nothing to finish.
+		return execution.Run{}, ErrCommandNotAllowed
+	}
+	checkpoint, err := starter.executions.GetWorkerAttempt(ctx, lead.ID)
+	if err != nil {
+		return execution.Run{}, fmt.Errorf("load the session's last turn: %w", err)
+	}
+	prior, err := starter.worker.GetAttempt(ctx, workerhttp.AttemptReference{SessionID: lead.ID, AttemptID: checkpoint.AttemptID})
+	if err != nil {
+		return execution.Run{}, fmt.Errorf("confirm the session's last turn: %w", err)
+	}
+	if err := validateCompletedTurn(lead, checkpoint, prior); err != nil {
+		return execution.Run{}, err
+	}
+	turn, ok := lastSessionTurn(lead.ID, checkpoint.AttemptID)
+	if !ok {
+		return execution.Run{}, fmt.Errorf("%w: the session's last turn is not a session turn", ErrCommandNotAllowed)
+	}
+	prepared, err := starter.workspaces.Get(ctx, storedFeature.ProjectID, storedFeature.ID)
+	if err != nil {
+		return execution.Run{}, fmt.Errorf("load session workspace: %w", err)
+	}
+	attemptID := implementationAttemptForVersion(lead.ID, run.PlanVersion, turn+1)
+	instructions := sessionFinishInstructions(prepared, attemptID)
+	if mainHead, behind := starter.sessionBehindMain(ctx, storedFeature); behind {
+		instructions = sessionCatchUpInstructions(prepared.BaseBranch, mainHead) + "\n\n" + instructions
+	}
+	request := remoteLeadRequest{
+		runID: run.ID, commandID: command.ID, agentName: "lead agent",
+		waitingReason: implementationReadyReason, waitKind: execution.RunWaitKindPhaseCheckpoint,
+		identity: workerhttp.MutationIdentity{
+			AttemptReference: workerhttp.AttemptReference{SessionID: lead.ID, AttemptID: attemptID},
+			IdempotencyKey:   attemptID + ":resume",
+		},
+		request: workerhttp.PutAttemptRequest{
+			Mode: workerhttp.AttemptModeResume,
+			Assignment: workerhttp.Assignment{
+				AgentProfileID: starter.profileID(run.AgentProviders.LeadAgent, worker.RoleLead),
+				Model:          run.AgentModels.Lead, ProjectID: storedFeature.ProjectID, FeatureID: storedFeature.ID,
+				Role: workerhttp.RoleLead, WorkspaceID: prepared.ID,
+			},
+			ProviderSessionID: lead.ProviderSessionID,
+			Instructions:      instructions,
+			OutputContract:    workerhttp.OutputContractImplementationLead,
+		},
+	}
+	if err := request.request.Validate(request.identity); err != nil {
+		return execution.Run{}, fmt.Errorf("%w: %v", ErrInvalidRunRequest, err)
+	}
+	if !starter.claim(run.ID) {
+		return execution.Run{}, ErrSessionBusy
+	}
+	_, admitted, err := starter.executions.BeginWorkerTurn(
+		ctx, command, lead.ID, checkpoint, attemptID, feature.StateImplementing, sessionFinishingReason,
+	)
+	if err != nil {
+		starter.release(run.ID)
+		if errors.Is(err, execution.ErrStateConflict) || errors.Is(err, execution.ErrWorkerAttemptConflict) {
+			return execution.Run{}, ErrSessionBusy
+		}
+		return execution.Run{}, err
+	}
+	if !admitted {
+		starter.release(run.ID)
+	} else {
+		go starter.launch(request)
+	}
+	return starter.executions.GetRun(ctx, run.ID)
+}
+
+// sessionFinishInstructions ask the agent to commit and publish the session's
+// work for the merge gate.
+func sessionFinishInstructions(prepared workspace.Workspace, attemptID string) string {
+	return "The user has finished this session. Commit the remaining work on the session branch as one " +
+		"commit whose imperative subject describes the whole session. Keep any commits the user asked for " +
+		"earlier as they are: do not squash or rewrite them. Then " +
+		implementationPublicationInstructions(prepared, attemptID)
 }
 
 // nameSession renames an untitled session after its first turn's title. A

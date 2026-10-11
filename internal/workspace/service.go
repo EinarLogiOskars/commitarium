@@ -214,6 +214,21 @@ func (service *Service) RecordMergeReady(
 	return service.store.MarkMergeReady(ctx, featureID, commitID, service.now().UTC())
 }
 
+// ClearMergeReady forgets an unmerged merge target, so a session that goes
+// back to chatting can finish again at a new commit (ADR-019).
+func (service *Service) ClearMergeReady(ctx context.Context, projectID string, featureID string) error {
+	if _, err := service.Get(ctx, projectID, featureID); err != nil {
+		return err
+	}
+	clearer, ok := service.store.(interface {
+		ClearMergeReady(context.Context, string) error
+	})
+	if !ok {
+		return errors.New("merge readiness cannot be cleared")
+	}
+	return clearer.ClearMergeReady(ctx, featureID)
+}
+
 // MergeApproved reconciles and merges only the commit previously pinned by
 // RecordMergeReady. Forgejo receives the same head SHA as a compare-and-swap
 // guard, and its resulting merge commit is recorded for restart recovery.

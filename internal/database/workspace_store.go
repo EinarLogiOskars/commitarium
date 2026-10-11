@@ -308,6 +308,21 @@ func (store *WorkspaceStore) MarkPullRequestReady(
 	return ready, nil
 }
 
+// ClearMergeReady forgets an unmerged merge target, for a session that goes
+// back to chatting before its merge (ADR-019).
+func (store *WorkspaceStore) ClearMergeReady(ctx context.Context, featureID string) error {
+	if _, err := store.db.ExecContext(
+		ctx,
+		`UPDATE feature_workspaces
+		 SET approved_commit_id = '', merge_ready_at = NULL, updated_at = ?
+		 WHERE feature_id = ? AND merge_commit_id = ''`,
+		formatWorkspaceTime(time.Now().UTC()), featureID,
+	); err != nil {
+		return fmt.Errorf("clear workspace merge readiness: %w", err)
+	}
+	return nil
+}
+
 func (store *WorkspaceStore) MarkMergeReady(
 	ctx context.Context,
 	featureID string,

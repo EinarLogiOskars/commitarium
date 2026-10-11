@@ -540,6 +540,10 @@ func newAPI(
 		"POST /api/v1/projects/{projectID}/features/{id}/messages",
 		api.sendSessionMessageHandler,
 	)
+	mux.HandleFunc(
+		"POST /api/v1/projects/{projectID}/features/{id}/finish",
+		api.finishSessionHandler,
+	)
 	if featureDeletion != nil {
 		mux.HandleFunc(
 			"DELETE /api/v1/projects/{projectID}/features/{id}",

@@ -76,9 +76,11 @@ func (state State) CanTransitionTo(next State) bool {
 		return next == StatePlanning ||
 			next == StateReady ||
 			next == StateReadyToMerge
+	// A session can go back to chatting before its merge (ADR-019).
 	case StateReadyToMerge:
 		return next == StatePlanning ||
 			next == StateReady ||
+			next == StateImplementing ||
 			next == StateReviewing ||
 			next == StateCompleted
 	default:
