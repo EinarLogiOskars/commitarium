@@ -228,6 +228,25 @@ func (s *Service) TransitionRun(
 	return run, nil
 }
 
+// RunReopener is implemented by stores that can reopen a failed run.
+type RunReopener interface {
+	ReopenFailedRun(ctx context.Context, runID string, reason string, occurredAt time.Time) (Run, error)
+}
+
+// ReopenRun turns a failed run back into a blocker pause at its last turn
+// (ADR-017), so the user can continue, message an agent, or start over.
+func (s *Service) ReopenRun(ctx context.Context, runID string) (Run, error) {
+	reopener, ok := s.store.(RunReopener)
+	if !ok {
+		return Run{}, ErrStateConflict
+	}
+	return reopener.ReopenFailedRun(
+		ctx, runID,
+		"The work order was reopened after it failed. Continue to retry the last turn, or message an agent.",
+		s.now().UTC(),
+	)
+}
+
 func (s *Service) ApplyRunPause(
 	ctx context.Context,
 	id string,

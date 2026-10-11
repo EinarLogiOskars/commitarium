@@ -623,6 +623,7 @@ func newAPI(
 		mux.HandleFunc("POST /api/v1/runs/{id}/pause", api.pauseRunHandler)
 		mux.HandleFunc("POST /api/v1/runs/{id}/resume", api.resumeRunHandler)
 		mux.HandleFunc("POST /api/v1/runs/{id}/recover", api.recoverRunHandler)
+		mux.HandleFunc("POST /api/v1/runs/{id}/reopen", api.reopenRunHandler)
 		mux.HandleFunc("POST /api/v1/runs/{id}/interventions", api.queueInterventionHandler)
 	}
 	mux.HandleFunc("GET /api/v1/runs/{id}", api.getRunHandler)

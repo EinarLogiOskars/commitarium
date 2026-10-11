@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { pauseRun, queueIntervention, resumeRun } from "../api/runs";
+import { pauseRun, queueIntervention, reopenRun, resumeRun } from "../api/runs";
 import { ApiError } from "../api/client";
 import { RecoveryPanel } from "./RecoveryPanel";
 import type { Intervention, InterventionTargetRole, Run } from "../api/types";
@@ -125,6 +125,39 @@ export function InterveneBar({
     if (text.trim()) void send();
     else if (running) void control(pauseRun);
   };
+
+  // An ended run takes no messages. A failed one can be reopened at its last
+  // turn (ADR-017); its conversations, branch, and plan are all still there.
+  if (run.status === "failed" || run.status === "stopped") {
+    return (
+      <div className="intervene">
+        <div className="intervene__row">
+          <span className="intervene__state intervene__state--paused">
+            {run.status === "failed" ? "This run failed." : "This run was stopped."}
+          </span>
+          <span className="intervene__actions">
+            {run.status === "failed" && (
+              <button
+                className="primary"
+                onClick={() => void control((id) => reopenRun(id))}
+                disabled={busy != null}
+              >
+                {busy === "control" ? "Reopening…" : "Reopen"}
+              </button>
+            )}
+          </span>
+        </div>
+        {run.reason && <p className="muted intervene__hint">{run.reason}</p>}
+        {error && <div className="banner banner--error">{error}</div>}
+        {run.status === "failed" && (
+          <p className="muted intervene__hint">
+            Reopening pauses the work order at its last turn. Then continue to retry that turn, or
+            message an agent first.
+          </p>
+        )}
+      </div>
+    );
+  }
 
   return (
     <div className="intervene">

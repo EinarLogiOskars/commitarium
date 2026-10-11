@@ -28,6 +28,34 @@ type directedRecoveryWorkflow interface {
 	RecoverBlockerWithDirective(context.Context, string, string, orchestration.RecoveryDirective) (execution.Run, bool, error)
 }
 
+type runReopener interface {
+	ReopenRun(context.Context, string) (execution.Run, error)
+}
+
+// reopenRunHandler turns a failed run back into a blocker pause (ADR-017).
+// It is idempotent: reopening a reopened run returns it unchanged.
+func (api *API) reopenRunHandler(w http.ResponseWriter, r *http.Request) {
+	reopener, ok := api.execution.(runReopener)
+	if !ok {
+		writeError(w, http.StatusServiceUnavailable, "reopen_unavailable", "reopening runs is unavailable")
+		return
+	}
+	run, err := reopener.ReopenRun(r.Context(), r.PathValue("id"))
+	if err != nil {
+		switch {
+		case errors.Is(err, execution.ErrNotFound):
+			writeError(w, http.StatusNotFound, "run_not_found", "run not found")
+		case errors.Is(err, execution.ErrStateConflict):
+			writeError(w, http.StatusConflict, "run_not_reopenable", "only a failed run of an unfinished work order can be reopened")
+		default:
+			log.Printf("reopen run %q: %v", r.PathValue("id"), err)
+			writeError(w, http.StatusInternalServerError, "internal_error", "internal server error")
+		}
+		return
+	}
+	api.writeRun(w, r, http.StatusOK, run)
+}
+
 func (api *API) pauseRunHandler(w http.ResponseWriter, r *http.Request) {
 	api.changeRunPause(w, r, true)
 }
