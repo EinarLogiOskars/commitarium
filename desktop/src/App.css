@@ -2696,6 +2696,52 @@ button.danger:not(.ghost) {
   max-height: 100%;
   overflow-y: auto;
 }
+.accept-tests__score,
+.accept-tests__label {
+  display: none;
+}
+/* Wide windows: collapsing folds the panel into a slim strip on the right, so
+   the phase view gets the width back. */
+@media (min-width: 1101px) {
+  .order__split > .accept-tests--collapsed {
+    width: 44px;
+    padding: 10px 0;
+    overflow: hidden;
+  }
+  .order__split > .accept-tests--collapsed .accept-tests__head {
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    margin: 0;
+    padding: 0;
+  }
+  .order__split > .accept-tests--collapsed h3,
+  .order__split > .accept-tests--collapsed .accept-tests__count {
+    display: none;
+  }
+  .order__split > .accept-tests--collapsed .accept-tests__chevron {
+    order: -1;
+    transform: rotate(90deg);
+  }
+  .order__split > .accept-tests:not(.accept-tests--collapsed) .accept-tests__chevron {
+    transform: rotate(-90deg);
+  }
+  .order__split > .accept-tests--collapsed .accept-tests__score {
+    display: block;
+    margin: 0;
+  }
+  .order__split > .accept-tests--collapsed .accept-tests__label {
+    display: block;
+    writing-mode: vertical-rl;
+    font-size: 12px;
+    letter-spacing: 0.02em;
+  }
+  .order__split > .accept-tests--collapsed .accept-tests__dots {
+    flex-direction: column;
+    align-items: center;
+    margin-top: 12px;
+  }
+}
 @media (max-width: 1100px) {
   .order__split {
     flex-direction: column;
