@@ -815,9 +815,9 @@ Logging in while an agent's worker is running happens inside that worker, as
 `/login` does in a provider session: no second container mounts the provider
 volume, and the worker's next provider process uses the new login, so an
 expired login can be renewed without stopping work. Otherwise a fixed-name
-helper container runs the login. Disconnecting is still rejected while the
-agent's worker is running, so credentials are never removed under an active
-agent; the user stops the stack first.
+helper container runs the login. Disconnecting a running agent also runs
+inside its worker; a work order then mid-turn pauses until the agent logs in
+again (ADR-017), so nothing is lost.
 
 **Progress event**
 

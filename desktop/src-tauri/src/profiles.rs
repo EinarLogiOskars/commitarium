@@ -567,11 +567,8 @@ pub async fn disconnect_profile(
     if manager.is_active(&spec.id) {
         return Err("cancel the login before disconnecting this profile".to_string());
     }
-    if service_is_running(&spec)? {
-        return Err(
-            "this provider worker is running; stop the stack before disconnecting it".to_string(),
-        );
-    }
+    // While the worker runs, the logout runs inside it. A work order mid-turn
+    // then pauses until the agent logs in again (ADR-017); nothing is lost.
     tauri::async_runtime::spawn_blocking(move || {
         if spec.provider == Provider::Claude {
             run_profile_command(
