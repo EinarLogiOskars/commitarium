@@ -46,10 +46,12 @@ type HealthResponse struct {
 }
 
 type CapabilitiesResponse struct {
-	ProtocolVersion       string       `json:"protocol_version"`
-	Provider              Provider     `json:"provider"`
-	Capabilities          []Capability `json:"capabilities"`
-	MaxConcurrentAttempts int          `json:"max_concurrent_attempts"`
+	ProtocolVersion string       `json:"protocol_version"`
+	Provider        Provider     `json:"provider"`
+	Capabilities    []Capability `json:"capabilities"`
+	// MaxConcurrentAttempts is the worker's limit on simultaneous attempts;
+	// 0 means it does not limit them (ADR-016).
+	MaxConcurrentAttempts int `json:"max_concurrent_attempts"`
 }
 
 type Model struct {

@@ -621,7 +621,10 @@ func TestFeatureSettingsMigrationBackfillsEffectiveValues(t *testing.T) {
 		t.Fatalf("get unstarted feature: %v", err)
 	}
 	if notStarted.DialogueLimits != (project.DialogueLimits{PlanningRounds: 2, ImplementationReviewRounds: 3}) ||
-		notStarted.AgentProviders != (project.AgentProviders{Lead: project.AgentProviderClaude, Reviewer: project.AgentProviderCodex}) ||
+		notStarted.AgentProviders != (project.AgentProviders{
+			Lead: project.AgentProviderClaude, Reviewer: project.AgentProviderCodex,
+			LeadAgent: "claude", ReviewerAgent: "codex",
+		}) ||
 		notStarted.MergePolicy != project.MergePolicyAutoAfterGates ||
 		notStarted.AutonomyPolicy != project.AutonomyPolicyRunToCompletion {
 		t.Fatalf("unstarted feature did not inherit project settings: %+v", notStarted)
@@ -631,7 +634,10 @@ func TestFeatureSettingsMigrationBackfillsEffectiveValues(t *testing.T) {
 		t.Fatalf("get started feature: %v", err)
 	}
 	if started.DialogueLimits != (project.DialogueLimits{PlanningRounds: 7, ImplementationReviewRounds: 0}) ||
-		started.AgentProviders != (project.AgentProviders{Lead: project.AgentProviderCodex, Reviewer: project.AgentProviderClaude}) ||
+		started.AgentProviders != (project.AgentProviders{
+			Lead: project.AgentProviderCodex, Reviewer: project.AgentProviderClaude,
+			LeadAgent: "codex", ReviewerAgent: "claude",
+		}) ||
 		started.MergePolicy != project.MergePolicyRequireUserApproval ||
 		started.AutonomyPolicy != project.AutonomyPolicyReviewEachPhase {
 		t.Fatalf("started feature did not preserve run settings: %+v", started)

@@ -7,7 +7,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/EinarLogiOskars/commitarium/internal/project"
 	"github.com/EinarLogiOskars/commitarium/internal/toolchain"
 )
 
@@ -19,7 +18,7 @@ type toolchainAssistantStub struct {
 	purpose  toolchain.AssistantPurpose
 }
 
-func (stub *toolchainAssistantStub) Start(_ context.Context, _ string, _ project.AgentProvider, _, _ string, purpose toolchain.AssistantPurpose, _ string) (toolchain.AssistantSession, bool, error) {
+func (stub *toolchainAssistantStub) Start(_ context.Context, _, _, _, _ string, purpose toolchain.AssistantPurpose, _ string) (toolchain.AssistantSession, bool, error) {
 	stub.purpose = purpose
 	return stub.session, true, stub.err
 }
@@ -36,7 +35,7 @@ func (stub *toolchainAssistantStub) Apply(context.Context, string, string) (tool
 
 func TestToolchainAssistantHTTPWorkflow(t *testing.T) {
 	stub := &toolchainAssistantStub{session: toolchain.AssistantSession{ID: "tcs_test", ProjectID: "prj_test",
-		Provider: project.AgentProviderCodex, Model: "gpt-5.6-sol", Status: toolchain.AssistantStatusRunning},
+		Agent: "codex", Model: "gpt-5.6-sol", Status: toolchain.AssistantStatusRunning},
 		manifest: toolchain.Manifest{ProjectID: "prj_test", Status: toolchain.StatusConfigured,
 			Source: toolchain.SourceAssistant, Tools: map[string]string{"python": "3.14.7"}, Services: []string{}}}
 	handler := newAPI(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, stub)

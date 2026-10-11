@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use tauri::{AppHandle, Manager, State};
 
-use crate::{bootstrap, preview, profiles};
+use crate::{agents, bootstrap, phase4, preview, profiles};
 
 /// Fixed Compose project name. Scoping every command to this project keeps the
 /// launcher from touching any other Compose stack on the host.
@@ -23,11 +23,15 @@ pub(crate) const PROJECT_NAME: &str = "commitarium";
 /// missing. A fixed, trusted URL — never sourced from runtime data.
 const DOCKER_INSTALL_URL: &str = "https://docs.docker.com/get-docker/";
 
-/// Every opt-in provider profile. Lifecycle and status commands include both
-/// so they can address any previously created role worker, while startup names
-/// the exact connected services it is allowed to run.
-pub(crate) const PROVIDER_PROFILES: &[&str] = &["real-codex", "real-claude"];
-const PROVIDER_SERVICES: &[&str] = &[
+/// Agent workers are generated without a Compose profile, so lifecycle and
+/// status commands address them without one; startup names the exact
+/// connected services it is allowed to run. The provider templates they are
+/// generated from sit in a profile that is never activated for running.
+pub(crate) const PROVIDER_PROFILES: &[&str] = &[];
+const TEMPLATE_SERVICES: &[&str] = &["codex-agent-template", "claude-agent-template"];
+
+/// Worker services from before agents (ADR-016); their containers are retired.
+const RETIRED_WORKER_SERVICES: &[&str] = &[
     "codex-worker",
     "codex-reviewer-worker",
     "claude-worker",
@@ -82,6 +86,10 @@ pub(crate) fn prepare_runtime(app: &AppHandle) -> Result<(), String> {
             runtime_dir.join("compose.environment.yml"),
         );
     }
+    agents::init_overlay_path(&runtime_dir);
+    // Best effort: a failed rewrite leaves the old overlay, whose role
+    // services are then only created to be retired.
+    let _ = phase4::migrate_environment_overlay();
     if std::env::var_os("COMMITARIUM_COMPOSE_FILE").is_some() || cfg!(debug_assertions) {
         return Ok(());
     }
@@ -141,6 +149,7 @@ pub(crate) fn compose_file() -> Result<PathBuf, String> {
 
 /// Resolve the complete Compose file set. Installed releases add the embedded
 /// release overlay, while development and tests normally use only compose.yml.
+/// The generated agents overlay comes before the approved-environment overlay.
 pub(crate) fn compose_files() -> Result<Vec<PathBuf>, String> {
     let mut files = vec![compose_file()?];
     if let Some(path) = std::env::var_os(COMPOSE_OVERRIDE_ENV) {
@@ -151,6 +160,9 @@ pub(crate) fn compose_files() -> Result<Vec<PathBuf>, String> {
                 path.display()
             ));
         }
+        files.push(path);
+    }
+    if let Some(path) = agents::existing_overlay() {
         files.push(path);
     }
     if let Some(path) = std::env::var_os(ENVIRONMENT_COMPOSE_ENV) {
@@ -169,17 +181,23 @@ pub(crate) fn environment_compose_file() -> Result<PathBuf, String> {
 }
 
 pub(crate) fn append_compose_files(command: &mut Command) -> Result<(), String> {
-    append_selected_compose_files(command, true)
+    append_selected_compose_files(command, true, true)
 }
 
 fn append_selected_compose_files(
     command: &mut Command,
     include_environment: bool,
+    include_agents: bool,
 ) -> Result<(), String> {
     let mut files = compose_files()?;
     if !include_environment {
         if let Some(environment) = std::env::var_os(ENVIRONMENT_COMPOSE_ENV).map(PathBuf::from) {
             files.retain(|path| path != &environment);
+        }
+    }
+    if !include_agents {
+        if let Some(overlay) = agents::existing_overlay() {
+            files.retain(|path| path != &overlay);
         }
     }
     for file in files {
@@ -198,27 +216,39 @@ pub(crate) fn release_mode() -> bool {
 /// Compose runner. Both profile names and service names come only from trusted
 /// constants or the fixed provider-profile table, never from the renderer.
 pub(crate) fn compose(profiles: &[&str], args: &[&str]) -> Result<String, String> {
-    compose_command(profiles, args, true)
+    compose_command(profiles, args, true, true)
 }
 
 /// Execute against the shipped/base definitions without the locally generated
 /// approved-environment overlay. Pulling base images and deriving a refreshed
 /// environment must not accidentally address the derivative image itself.
 pub(crate) fn compose_base(profiles: &[&str], args: &[&str]) -> Result<String, String> {
-    compose_command(profiles, args, false)
+    compose_command(profiles, args, false, true)
+}
+
+/// The resolved Compose model with the agent worker templates, including the
+/// approved-environment images but not the generated agents overlay itself.
+pub(crate) fn template_config(template_profile: &str) -> Result<String, String> {
+    compose_command(
+        &[template_profile],
+        &["config", "--format", "json"],
+        true,
+        false,
+    )
 }
 
 fn compose_command(
     profiles: &[&str],
     args: &[&str],
     include_environment: bool,
+    include_agents: bool,
 ) -> Result<String, String> {
     let mut command = docker_command();
     command.arg("compose");
     for profile in profiles {
         command.args(["--profile", profile]);
     }
-    append_selected_compose_files(&mut command, include_environment)?;
+    append_selected_compose_files(&mut command, include_environment, include_agents)?;
     command.args(["-p", PROJECT_NAME]).args(args);
 
     let output = command
@@ -241,10 +271,15 @@ fn compose_command(
 /// fixed service. Development definitions without an explicit image use
 /// Compose's deterministic project/service build tag.
 pub(crate) fn configured_service_image(service: &str) -> Result<String, String> {
-    if !PROVIDER_SERVICES.contains(&service) {
-        return Err("service is not a managed provider worker".to_string());
+    if !TEMPLATE_SERVICES.contains(&service) {
+        return Err("service is not an agent worker template".to_string());
     }
-    let configured = compose_base(PROVIDER_PROFILES, &["config", "--format", "json"])?;
+    let configured = compose_command(
+        &["agent-template"],
+        &["config", "--format", "json"],
+        false,
+        false,
+    )?;
     configured_service_image_from_json(&configured, service)
 }
 
@@ -509,7 +544,7 @@ pub(crate) fn stack_up_with_manager(manager: &profiles::ProfileManager) -> Resul
     let forgejo_changed = bootstrap::provision_forgejo(&file, PROJECT_NAME)?;
     let credentials_changed = transport_changed || forgejo_changed;
     start_core_services(credentials_changed)?;
-    reconcile_provider_workers(manager, credentials_changed)
+    reconcile_agent_workers(manager, credentials_changed)
 }
 
 /// Tear the whole Commitarium stack down (project-wide, all profiles).
@@ -521,7 +556,9 @@ pub async fn stack_down() -> Result<(), String> {
 }
 
 pub(crate) fn stack_down_blocking() -> Result<(), String> {
-    compose(PROVIDER_PROFILES, &["down"]).map(|_| ())
+    // Workers no longer defined (the pre-agent role workers, removed agents)
+    // would otherwise keep the project network in use.
+    compose(PROVIDER_PROFILES, &["down", "--remove-orphans"]).map(|_| ())
 }
 
 /// Update the stack: pull the latest images, then recreate in the background.
@@ -541,7 +578,7 @@ fn stack_update_with_manager(manager: &profiles::ProfileManager) -> Result<(), S
     let forgejo_changed = bootstrap::provision_forgejo(&file, PROJECT_NAME)?;
     let credentials_changed = transport_changed || forgejo_changed;
     start_core_services(credentials_changed)?;
-    reconcile_provider_workers(manager, credentials_changed)
+    reconcile_agent_workers(manager, credentials_changed)
 }
 
 fn start_forgejo() -> Result<(), String> {
@@ -565,15 +602,29 @@ fn start_core_services(force_recreate: bool) -> Result<(), String> {
     compose(&[], &args).map(|_| ())
 }
 
-pub(crate) fn reconcile_provider_workers(
+/// Give every agent its worker (ADR-016): read the agents from the running
+/// coordinator, provision each one's bearer token and Forgejo identity pair,
+/// regenerate the agents overlay, retire workers of removed agents and the
+/// fixed pre-agent workers, then run only the workers whose login is
+/// connected. A disconnected, expired, or failed login keeps only that
+/// agent's worker stopped.
+pub(crate) fn reconcile_agent_workers(
     manager: &profiles::ProfileManager,
     force_recreate: bool,
 ) -> Result<(), String> {
-    let connections = profiles::worker_connections(manager);
-    let stopped: Vec<_> = connections
+    let agents = agents::fetch(true)?;
+    let force_recreate = provision_agents(&agents, true)? || force_recreate;
+    let services: Vec<String> = agents
+        .iter()
+        .map(|agent| agents::worker_service(&agent.id))
+        .collect();
+    retire_stale_workers(&services)?;
+
+    let connections = profiles::worker_connections(manager, &agents);
+    let stopped: Vec<&str> = connections
         .iter()
         .filter(|connection| !connection.connected)
-        .map(|connection| connection.service)
+        .map(|connection| connection.service.as_str())
         .collect();
     if !stopped.is_empty() {
         let mut args = vec!["stop"];
@@ -589,10 +640,10 @@ pub(crate) fn reconcile_provider_workers(
         }
     }
 
-    let connected: Vec<_> = connections
+    let connected: Vec<&str> = connections
         .iter()
         .filter(|connection| connection.connected)
-        .map(|connection| connection.service)
+        .map(|connection| connection.service.as_str())
         .collect();
     if !connected.is_empty() {
         let mut args = vec!["up", "-d"];
@@ -606,6 +657,71 @@ pub(crate) fn reconcile_provider_workers(
         compose(PROVIDER_PROFILES, &args)?;
     }
     Ok(())
+}
+
+/// Make each agent's worker addressable: its bearer token, its Forgejo
+/// identity pair, and its service in the agents overlay. With `regenerate`
+/// the overlay is rebuilt from the templates (for example after an approved
+/// environment changed their images); otherwise only when agents changed.
+/// Returns whether any credential was created.
+pub(crate) fn provision_agents(agents: &[agents::Agent], regenerate: bool) -> Result<bool, String> {
+    let file = compose_file()?;
+    let tokens_changed = bootstrap::prepare_agent_worker_tokens(&file, agents)?;
+    let identities_changed =
+        bootstrap::provision_agent_identities(&file, PROJECT_NAME, agents, regenerate)?;
+    if regenerate || !agents::overlay_matches(agents) {
+        agents::write_overlay(agents)?;
+    }
+    Ok(tokens_changed || identities_changed)
+}
+
+/// Remove the containers of worker services that are no longer defined: the
+/// fixed pre-agent workers and the workers of removed agents. Their volumes
+/// are kept; only containers are removed.
+fn retire_stale_workers(current: &[String]) -> Result<(), String> {
+    let output = docker_command()
+        .args([
+            "ps",
+            "--all",
+            "--filter",
+            &format!("label=com.docker.compose.project={PROJECT_NAME}"),
+            "--format",
+            "{{.ID}} {{.Label \"com.docker.compose.service\"}}",
+        ])
+        .output()
+        .map_err(|e| format!("list Commitarium containers: {e}"))?;
+    if !output.status.success() {
+        return Err("could not list Commitarium containers".to_string());
+    }
+    let stale = stale_worker_containers(&String::from_utf8_lossy(&output.stdout), current);
+    if stale.is_empty() {
+        return Ok(());
+    }
+    let status = docker_command()
+        .args(["rm", "--force"])
+        .args(&stale)
+        .output()
+        .map_err(|e| format!("remove retired worker containers: {e}"))?;
+    if !status.status.success() {
+        return Err("could not remove retired worker containers".to_string());
+    }
+    Ok(())
+}
+
+fn stale_worker_containers(listing: &str, current: &[String]) -> Vec<String> {
+    listing
+        .lines()
+        .filter_map(|line| line.split_once(' '))
+        .filter(|(id, service)| {
+            !id.is_empty()
+                && id.bytes().all(|byte| byte.is_ascii_hexdigit())
+                && (RETIRED_WORKER_SERVICES.contains(service)
+                    || (service.starts_with("agent-")
+                        && service.ends_with("-worker")
+                        && !current.iter().any(|known| known == service)))
+        })
+        .map(|(id, _)| id.to_string())
+        .collect()
 }
 
 /// Report each Commitarium service's current Compose state.
@@ -738,24 +854,37 @@ mod tests {
         assert!(EMBEDDED_RELEASE_COMPOSE.contains("COMMITARIUM_RUNNER_MODE: real_agents"));
         assert_eq!(
             EMBEDDED_COMPOSE.matches("seccomp=unconfined").count(),
-            2,
-            "both Codex workers must allow the nested read-only bwrap sandbox"
+            1,
+            "the Codex agent worker template must allow the nested read-only bwrap sandbox"
         );
     }
 
     #[test]
     fn resolves_only_safe_base_service_images() {
-        let configured = r#"{"services":{"codex-worker":{"image":"ghcr.io/example/codex:1.2.3"},"claude-worker":{"build":{"context":"."}}}}"#;
+        let configured = r#"{"services":{"codex-agent-template":{"image":"ghcr.io/example/codex:1.2.3"},"claude-agent-template":{"build":{"context":"."}}}}"#;
         assert_eq!(
-            configured_service_image_from_json(configured, "codex-worker").unwrap(),
+            configured_service_image_from_json(configured, "codex-agent-template").unwrap(),
             "ghcr.io/example/codex:1.2.3"
         );
         assert_eq!(
-            configured_service_image_from_json(configured, "claude-worker").unwrap(),
-            "commitarium-claude-worker"
+            configured_service_image_from_json(configured, "claude-agent-template").unwrap(),
+            "commitarium-claude-agent-template"
         );
-        let unsafe_configured = r#"{"services":{"codex-worker":{"image":"safe;touch-host"}}}"#;
-        assert!(configured_service_image_from_json(unsafe_configured, "codex-worker").is_err());
+        let unsafe_configured =
+            r#"{"services":{"codex-agent-template":{"image":"safe;touch-host"}}}"#;
+        assert!(
+            configured_service_image_from_json(unsafe_configured, "codex-agent-template").is_err()
+        );
+    }
+
+    #[test]
+    fn retires_pre_agent_workers_and_workers_of_removed_agents() {
+        let listing = "aaa111 coordinator\nbbb222 codex-reviewer-worker\nccc333 agent-codex-worker\nddd444 agent-gone-worker\nzzz agent-gone-worker\n";
+        let current = vec!["agent-codex-worker".to_string()];
+        assert_eq!(
+            stale_worker_containers(listing, &current),
+            ["bbb222", "ddd444"]
+        );
     }
 
     #[test]
@@ -793,9 +922,9 @@ mod tests {
     #[ignore = "requires and mutates the local Commitarium Docker stack"]
     fn live_start_matches_each_provider_connection() {
         let manager = profiles::ProfileManager::new();
-        let expected = profiles::worker_connections(&manager);
 
         stack_up_with_manager(&manager).unwrap();
+        let expected = profiles::worker_connections(&manager, &agents::fetch(false).unwrap());
         let statuses = stack_status_blocking().unwrap();
 
         for core in ["forgejo", "coordinator", "simulated-codex-worker"] {

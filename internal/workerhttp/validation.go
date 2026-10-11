@@ -71,8 +71,8 @@ func (response CapabilitiesResponse) Validate() error {
 		}
 		seen[capability] = struct{}{}
 	}
-	if response.MaxConcurrentAttempts < 1 {
-		return invalid("maximum concurrent attempts must be positive")
+	if response.MaxConcurrentAttempts < 0 {
+		return invalid("maximum concurrent attempts cannot be negative")
 	}
 	return nil
 }

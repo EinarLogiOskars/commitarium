@@ -63,6 +63,8 @@ func (s *FeatureStore) Create(
 				implementation_review_round_limit,
 				lead_provider,
 				reviewer_provider,
+				lead_agent,
+				reviewer_agent,
 				lead_model,
 				reviewer_model,
 				merge_policy,
@@ -71,7 +73,7 @@ func (s *FeatureStore) Create(
 				created_at,
 				updated_at
 			)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT(id) DO NOTHING
 		`,
 		createdFeature.ID,
@@ -85,6 +87,8 @@ func (s *FeatureStore) Create(
 		createdFeature.DialogueLimits.ImplementationReviewRounds,
 		createdFeature.AgentProviders.Lead,
 		createdFeature.AgentProviders.Reviewer,
+		createdFeature.AgentProviders.LeadAgent,
+		createdFeature.AgentProviders.ReviewerAgent,
 		createdFeature.AgentModels.Lead,
 		createdFeature.AgentModels.Reviewer,
 		createdFeature.MergePolicy,
@@ -144,6 +148,8 @@ func (s *FeatureStore) GetByID(
 				implementation_review_round_limit,
 				lead_provider,
 				reviewer_provider,
+				lead_agent,
+				reviewer_agent,
 				lead_model,
 				reviewer_model,
 				merge_policy,
@@ -190,6 +196,8 @@ func (s *FeatureStore) ListByProjectID(
 				implementation_review_round_limit,
 				lead_provider,
 				reviewer_provider,
+				lead_agent,
+				reviewer_agent,
 				lead_model,
 				reviewer_model,
 				merge_policy,
@@ -245,6 +253,8 @@ func scanFeature(row featureScanner) (feature.Feature, error) {
 		&storedFeature.DialogueLimits.ImplementationReviewRounds,
 		&storedFeature.AgentProviders.Lead,
 		&storedFeature.AgentProviders.Reviewer,
+		&storedFeature.AgentProviders.LeadAgent,
+		&storedFeature.AgentProviders.ReviewerAgent,
 		&storedFeature.AgentModels.Lead,
 		&storedFeature.AgentModels.Reviewer,
 		&storedFeature.MergePolicy,

@@ -3,7 +3,8 @@ import { getModels, refreshModels } from "../api/projects";
 import { ApiError } from "../api/client";
 import type { AgentProvider, AgentRole, ModelCatalog, ModelInfo } from "../api/types";
 
-/** Load the provider+role model catalogs and expose a per-(provider,role) lookup. */
+/** Load the provider+role model catalogs, refreshed from the workers on open,
+ * and expose a per-(provider,role) lookup. */
 export function useModels() {
   const [catalogs, setCatalogs] = useState<ModelCatalog[]>([]);
   const [loading, setLoading] = useState(true);
@@ -22,8 +23,18 @@ export function useModels() {
     }
   }, []);
 
+  // Show the stored catalogs at once, then ask the agents' workers for their
+  // current models so a form always offers what the providers offer now.
   useEffect(() => {
-    void load();
+    let active = true;
+    void load().then(() =>
+      refreshModels()
+        .then((r) => active && setCatalogs(r.catalogs))
+        .catch(() => undefined),
+    );
+    return () => {
+      active = false;
+    };
   }, [load]);
 
   const modelsFor = useCallback(

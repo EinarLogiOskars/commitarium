@@ -58,19 +58,17 @@ func TestAssistantProjectDeletionRefusesActiveUnlessForcedAndKeepsOtherProjects(
 		t.Fatalf("create manager: %v", err)
 	}
 	worker := &assistantWorkerStub{}
-	assistant, err := NewAssistant(root, workspaces, reader, manager, map[project.AgentProvider]AssistantWorker{
-		project.AgentProviderCodex: {Service: worker, AgentProfileID: "profile_codex"},
-	})
+	assistant, err := NewAssistant(root, workspaces, reader, manager, onlyAgent("codex", worker))
 	if err != nil {
 		t.Fatalf("create assistant: %v", err)
 	}
-	first, _, err := assistant.Start(t.Context(), "prj_one", project.AgentProviderCodex,
+	first, _, err := assistant.Start(t.Context(), "prj_one", "codex",
 		"gpt-5.6-sol", "First", AssistantPurposeDesignStack, "start-one")
 	if err != nil {
 		t.Fatalf("start first assistant: %v", err)
 	}
 	reader.stored = project.Project{ID: "prj_two", Name: "Two"}
-	second, _, err := assistant.Start(t.Context(), "prj_two", project.AgentProviderCodex,
+	second, _, err := assistant.Start(t.Context(), "prj_two", "codex",
 		"gpt-5.6-sol", "Second", AssistantPurposeDesignStack, "start-two")
 	if err != nil {
 		t.Fatalf("start second assistant: %v", err)
@@ -113,14 +111,12 @@ func TestAssistantConversationAppliesValidatedProposal(t *testing.T) {
 		t.Fatalf("create manager: %v", err)
 	}
 	worker := &assistantWorkerStub{}
-	assistant, err := NewAssistant(root, workspaces, reader, manager, map[project.AgentProvider]AssistantWorker{
-		project.AgentProviderCodex: {Service: worker, AgentProfileID: "profile_codex"},
-	})
+	assistant, err := NewAssistant(root, workspaces, reader, manager, onlyAgent("codex", worker))
 	if err != nil {
 		t.Fatalf("create assistant: %v", err)
 	}
 
-	session, created, err := assistant.Start(t.Context(), "prj_test", project.AgentProviderCodex,
+	session, created, err := assistant.Start(t.Context(), "prj_test", "codex",
 		"gpt-5.6-sol", "A small web API", AssistantPurposeDesignStack, "start-1")
 	if err != nil || !created || session.Status != AssistantStatusRunning || len(worker.puts) != 1 {
 		t.Fatalf("start session=%+v created=%t puts=%d err=%v", session, created, len(worker.puts), err)
@@ -136,7 +132,7 @@ func TestAssistantConversationAppliesValidatedProposal(t *testing.T) {
 	if err != nil || !created || session.Status != AssistantStatusRunning || worker.puts[1].Mode != workerhttp.AttemptModeResume {
 		t.Fatalf("reply session=%+v created=%t err=%v", session, created, err)
 	}
-	if _, created, err := assistant.Start(t.Context(), "prj_test", project.AgentProviderCodex,
+	if _, created, err := assistant.Start(t.Context(), "prj_test", "codex",
 		"gpt-5.6-sol", "A small web API", AssistantPurposeDesignStack, "start-1"); err != nil || created {
 		t.Fatalf("original start was not replayable after reply: created=%t err=%v", created, err)
 	}
@@ -165,23 +161,21 @@ func TestAssistantStartIsDurablyIdempotent(t *testing.T) {
 	manager, _ := NewManager(root, reader)
 	worker := &assistantWorkerStub{}
 	newAssistant := func() *Assistant {
-		created, err := NewAssistant(root, workspaces, reader, manager, map[project.AgentProvider]AssistantWorker{
-			project.AgentProviderCodex: {Service: worker, AgentProfileID: "profile_codex"},
-		})
+		created, err := NewAssistant(root, workspaces, reader, manager, onlyAgent("codex", worker))
 		if err != nil {
 			t.Fatalf("create assistant: %v", err)
 		}
 		return created
 	}
-	first, _, err := newAssistant().Start(t.Context(), "prj_test", project.AgentProviderCodex, "gpt-5.6-sol", "API", AssistantPurposeDesignStack, "same-key")
+	first, _, err := newAssistant().Start(t.Context(), "prj_test", "codex", "gpt-5.6-sol", "API", AssistantPurposeDesignStack, "same-key")
 	if err != nil {
 		t.Fatalf("first start: %v", err)
 	}
-	second, created, err := newAssistant().Start(t.Context(), "prj_test", project.AgentProviderCodex, "gpt-5.6-sol", "API", AssistantPurposeDesignStack, "same-key")
+	second, created, err := newAssistant().Start(t.Context(), "prj_test", "codex", "gpt-5.6-sol", "API", AssistantPurposeDesignStack, "same-key")
 	if err != nil || created || first.ID != second.ID {
 		t.Fatalf("replay first=%+v second=%+v created=%t err=%v", first, second, created, err)
 	}
-	if _, _, err := newAssistant().Start(t.Context(), "prj_test", project.AgentProviderCodex, "gpt-5.6-sol", "different", AssistantPurposeDesignStack, "same-key"); err != ErrAssistantConflict {
+	if _, _, err := newAssistant().Start(t.Context(), "prj_test", "codex", "gpt-5.6-sol", "different", AssistantPurposeDesignStack, "same-key"); err != ErrAssistantConflict {
 		t.Fatalf("expected conflict, got %v", err)
 	}
 }
@@ -202,15 +196,13 @@ func TestAssistantVerifiesPinnedRepositoryEvidenceAndRejectsStaleApply(t *testin
 		t.Fatalf("create manager: %v", err)
 	}
 	worker := &assistantWorkerStub{}
-	assistant, err := NewAssistant(root, workspaces, reader, manager, map[project.AgentProvider]AssistantWorker{
-		project.AgentProviderClaude: {Service: worker, AgentProfileID: "profile_claude"},
-	})
+	assistant, err := NewAssistant(root, workspaces, reader, manager, onlyAgent("claude", worker))
 	if err != nil {
 		t.Fatalf("create assistant: %v", err)
 	}
 
 	session, created, err := assistant.Start(
-		t.Context(), "prj_test", project.AgentProviderClaude, "claude-opus-4-8",
+		t.Context(), "prj_test", "claude", "claude-opus-4-8",
 		"Please verify the detected stack.", AssistantPurposeVerifyRepository, "verify-1",
 	)
 	if err != nil || !created || session.Purpose != AssistantPurposeVerifyRepository ||
@@ -244,5 +236,14 @@ func TestAssistantVerifiesPinnedRepositoryEvidenceAndRejectsStaleApply(t *testin
 	manifest, err := assistant.Apply(t.Context(), "prj_test", session.ID)
 	if err != nil || manifest.Tools["python"] != "3.14.7" {
 		t.Fatalf("apply verified manifest=%+v err=%v", manifest, err)
+	}
+}
+
+func onlyAgent(agentID string, worker workerhttp.Service) func(string) (workerhttp.Service, error) {
+	return func(requested string) (workerhttp.Service, error) {
+		if requested != agentID {
+			return nil, errors.New("unknown agent")
+		}
+		return worker, nil
 	}
 }

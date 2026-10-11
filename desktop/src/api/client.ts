@@ -35,7 +35,7 @@ export class NetworkError extends Error {
 }
 
 interface RequestOptions {
-  method?: "GET" | "POST" | "PUT" | "DELETE";
+  method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
   body?: unknown;
   /** Sent as the Idempotency-Key header when the endpoint requires it. */
   idempotencyKey?: string;

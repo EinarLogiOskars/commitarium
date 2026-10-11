@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/EinarLogiOskars/commitarium/internal/agent"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -516,6 +517,7 @@ func TestProvisionForgejoRepositoryRequiresIdempotencyKey(t *testing.T) {
 func TestCreateProjectAcceptsIndependentAgentProviders(t *testing.T) {
 	want := project.AgentProviders{
 		Lead: project.AgentProviderClaude, Reviewer: project.AgentProviderCodex,
+		LeadAgent: "claude", ReviewerAgent: "codex",
 	}
 	service := &recordingProjectService{result: project.Project{
 		ID: "prj_test", Name: "Commitarium", AgentProviders: want, CreatedAt: time.Now().UTC(),
@@ -636,6 +638,7 @@ func TestCreateProjectRejectsIncompleteDialogueLimits(t *testing.T) {
 func TestUpdateProjectAgentProviders(t *testing.T) {
 	want := project.AgentProviders{
 		Lead: project.AgentProviderCodex, Reviewer: project.AgentProviderClaude,
+		LeadAgent: "codex", ReviewerAgent: "claude",
 	}
 	service := &recordingProjectService{updateResult: project.Project{
 		ID: "prj_test", Name: "Commitarium", AgentProviders: want, CreatedAt: time.Now().UTC(),
@@ -1259,5 +1262,42 @@ func TestBindForgejoRepositoryMapsExpectedErrors(t *testing.T) {
 				t.Fatalf("expected code %q, got %+v", test.code, body)
 			}
 		})
+	}
+}
+
+func TestProjectAgentSettingsResolveAgents(t *testing.T) {
+	agents := &recordingAgentService{agents: map[string]agent.Agent{
+		"claude-max": {ID: "claude-max", Name: "Claude Max", Provider: project.AgentProviderClaude},
+		"codex":      {ID: "codex", Name: "Codex", Provider: project.AgentProviderCodex},
+	}}
+	service := &recordingProjectService{updateResult: project.Project{ID: "prj_test", Name: "Commitarium"}}
+	handler := NewWithWorkspaceRealWorkflowDeletionAndModels(
+		service, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, agents,
+	)
+	put := func(body string) *httptest.ResponseRecorder {
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, httptest.NewRequest(
+			http.MethodPut, "/api/v1/projects/prj_test/agent-providers", strings.NewReader(body),
+		))
+		return recorder
+	}
+	if got := put(`{"lead_agent":"claude-max","reviewer_agent":"codex"}`); got.Code != http.StatusOK {
+		t.Fatalf("agents only: status=%d body=%s", got.Code, got.Body.String())
+	}
+	want := project.AgentProviders{
+		Lead: project.AgentProviderClaude, Reviewer: project.AgentProviderCodex,
+		LeadAgent: "claude-max", ReviewerAgent: "codex",
+	}
+	if service.receivedAgentProviders != want {
+		t.Fatalf("providers = %+v, want %+v", service.receivedAgentProviders, want)
+	}
+	for _, body := range []string{
+		`{"lead":"codex","lead_agent":"claude-max","reviewer_agent":"codex"}`,
+		`{"lead_agent":"claude-api","reviewer_agent":"codex"}`,
+		`{"lead":"claude","reviewer":"codex"}`,
+	} {
+		if got := put(body); got.Code != http.StatusBadRequest {
+			t.Fatalf("%s: status=%d, want 400", body, got.Code)
+		}
 	}
 }

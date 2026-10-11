@@ -3,7 +3,7 @@ set -eu
 
 action="${1:-run}"
 compose_override="scripts/compose.codex-worker-smoke.yml"
-worker_token_file="${COMMITARIUM_CODEX_WORKER_TOKEN_SOURCE:-.commitarium/internal/codex-lead-worker-token}"
+worker_token_file="${COMMITARIUM_CODEX_WORKER_TOKEN_SOURCE:-.commitarium/internal/agent-workers/agent-codex-worker-token}"
 if [ ! -f "$worker_token_file" ]; then
     echo "Codex worker token file is missing; start Commitarium once through the desktop launcher" >&2
     exit 1
@@ -11,7 +11,8 @@ fi
 worker_token=$(tr -d '[:space:]' <"$worker_token_file")
 
 run_codex_login() {
-    docker compose --profile real-codex run --rm --no-deps --entrypoint codex \
+    COMMITARIUM_CODEX_WORKER_PORT="${COMMITARIUM_CODEX_WORKER_PORT:-0}" \
+        docker compose -f compose.yml -f "$compose_override" run --rm --no-deps --entrypoint codex \
         codex-worker -c 'cli_auth_credentials_store="file"' login "$@"
 }
 
@@ -44,13 +45,13 @@ attempt_url="$base_url/sessions/$session_id/attempts/$attempt_id"
 events_file=$(mktemp "${TMPDIR:-/tmp}/commitarium-codex-events.XXXXXX")
 
 cleanup() {
-    docker compose -f compose.yml -f "$compose_override" --profile real-codex \
+    docker compose -f compose.yml -f "$compose_override" \
         stop codex-worker >/dev/null 2>&1 || true
     rm -f "$events_file"
 }
 trap cleanup EXIT INT TERM
 
-docker compose -f compose.yml -f "$compose_override" --profile real-codex \
+docker compose -f compose.yml -f "$compose_override" \
     up --build --detach --no-deps codex-worker
 
 attempts=0
@@ -68,7 +69,7 @@ import json, os
 print(json.dumps({
     "mode": "start",
     "assignment": {
-        "agent_profile_id": os.getenv("COMMITARIUM_CODEX_PROFILE_ID", "profile_local_codex"),
+        "agent_profile_id": os.getenv("COMMITARIUM_CODEX_PROFILE_ID", "codex"),
         "project_id": os.getenv("COMMITARIUM_CODEX_PROJECT_ID", "prj_commitarium"),
         "feature_id": os.getenv("COMMITARIUM_CODEX_FEATURE_ID", "fea_smoke"),
         "role": os.getenv("COMMITARIUM_CODEX_ROLE", "coder"),

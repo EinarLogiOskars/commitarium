@@ -15,18 +15,10 @@ services:
     build: !reset null
     image: ghcr.io/einarlogioskars/commitarium-worker:${COMMITARIUM_IMAGE_TAG:-0.6.0}
 
-  codex-worker:
+  codex-agent-template:
     build: !reset null
     image: ghcr.io/einarlogioskars/commitarium-codex-worker:${COMMITARIUM_IMAGE_TAG:-0.6.0}
 
-  codex-reviewer-worker:
-    build: !reset null
-    image: ghcr.io/einarlogioskars/commitarium-codex-worker:${COMMITARIUM_IMAGE_TAG:-0.6.0}
-
-  claude-worker:
-    build: !reset null
-    image: ghcr.io/einarlogioskars/commitarium-claude-worker:${COMMITARIUM_IMAGE_TAG:-0.6.0}
-
-  claude-reviewer-worker:
+  claude-agent-template:
     build: !reset null
     image: ghcr.io/einarlogioskars/commitarium-claude-worker:${COMMITARIUM_IMAGE_TAG:-0.6.0}

@@ -72,11 +72,11 @@ func (s *ProjectStore) Create(
 			INSERT INTO projects (
 				id, name, recovery_policy, merge_policy, autonomy_policy, independent_acceptance_tests,
 				planning_round_limit, implementation_review_round_limit,
-				lead_provider, reviewer_provider, lead_model, reviewer_model,
+				lead_provider, reviewer_provider, lead_agent, reviewer_agent, lead_model, reviewer_model,
 				forgejo_owner, forgejo_repository, forgejo_default_branch, forgejo_bound_at,
 				created_at
 			)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT(id) DO NOTHING
 		`,
 		createdProject.ID,
@@ -89,6 +89,8 @@ func (s *ProjectStore) Create(
 		createdProject.DialogueLimits.ImplementationReviewRounds,
 		createdProject.AgentProviders.Lead,
 		createdProject.AgentProviders.Reviewer,
+		createdProject.AgentProviders.LeadAgent,
+		createdProject.AgentProviders.ReviewerAgent,
 		createdProject.AgentModels.Lead,
 		createdProject.AgentModels.Reviewer,
 		forgejoOwner,
@@ -138,7 +140,7 @@ func (s *ProjectStore) GetByID(
 		`
 			SELECT id, name, recovery_policy, merge_policy, autonomy_policy, independent_acceptance_tests,
 			       planning_round_limit, implementation_review_round_limit,
-			       lead_provider, reviewer_provider, lead_model, reviewer_model,
+			       lead_provider, reviewer_provider, lead_agent, reviewer_agent, lead_model, reviewer_model,
 			       forgejo_owner, forgejo_repository, forgejo_default_branch, forgejo_bound_at,
 			       created_at
 			FROM projects
@@ -178,7 +180,7 @@ func (s *ProjectStore) List(ctx context.Context) ([]project.Project, error) {
 		ctx,
 		`SELECT id, name, recovery_policy, merge_policy, autonomy_policy, independent_acceptance_tests,
 		        planning_round_limit, implementation_review_round_limit,
-		        lead_provider, reviewer_provider, lead_model, reviewer_model,
+		        lead_provider, reviewer_provider, lead_agent, reviewer_agent, lead_model, reviewer_model,
 		        forgejo_owner, forgejo_repository, forgejo_default_branch, forgejo_bound_at,
 		        created_at
 		 FROM projects
@@ -311,9 +313,11 @@ func (s *ProjectStore) UpdateAgentProviders(
 	}
 	result, err := s.db.ExecContext(
 		ctx,
-		`UPDATE projects SET lead_provider = ?, reviewer_provider = ? WHERE id = ?`,
+		`UPDATE projects SET lead_provider = ?, reviewer_provider = ?, lead_agent = ?, reviewer_agent = ? WHERE id = ?`,
 		normalized.Lead,
 		normalized.Reviewer,
+		normalized.LeadAgent,
+		normalized.ReviewerAgent,
 		projectID,
 	)
 	if err != nil {
@@ -353,10 +357,13 @@ func (s *ProjectStore) UpdateAgentSettings(
 	result, err := s.db.ExecContext(
 		ctx,
 		`UPDATE projects
-		 SET lead_provider = ?, reviewer_provider = ?, lead_model = ?, reviewer_model = ?
+		 SET lead_provider = ?, reviewer_provider = ?, lead_agent = ?, reviewer_agent = ?,
+		     lead_model = ?, reviewer_model = ?
 		 WHERE id = ?`,
 		normalizedProviders.Lead,
 		normalizedProviders.Reviewer,
+		normalizedProviders.LeadAgent,
+		normalizedProviders.ReviewerAgent,
 		normalizedModels.Lead,
 		normalizedModels.Reviewer,
 		projectID,
@@ -432,7 +439,7 @@ func (s *ProjectStore) BindForgejoRepository(
 		ctx,
 		`SELECT id, name, recovery_policy, merge_policy, autonomy_policy, independent_acceptance_tests,
 		        planning_round_limit, implementation_review_round_limit,
-		        lead_provider, reviewer_provider, lead_model, reviewer_model,
+		        lead_provider, reviewer_provider, lead_agent, reviewer_agent, lead_model, reviewer_model,
 		        forgejo_owner, forgejo_repository, forgejo_default_branch, forgejo_bound_at,
 		        created_at
 		 FROM projects WHERE id = ?`,
@@ -506,6 +513,8 @@ func scanProject(scanner projectScanner) (project.Project, error) {
 		&storedProject.DialogueLimits.ImplementationReviewRounds,
 		&storedProject.AgentProviders.Lead,
 		&storedProject.AgentProviders.Reviewer,
+		&storedProject.AgentProviders.LeadAgent,
+		&storedProject.AgentProviders.ReviewerAgent,
 		&storedProject.AgentModels.Lead,
 		&storedProject.AgentModels.Reviewer,
 		&forgejoOwner,

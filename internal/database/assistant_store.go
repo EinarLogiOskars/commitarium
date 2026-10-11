@@ -8,11 +8,12 @@ import (
 	"time"
 
 	"github.com/EinarLogiOskars/commitarium/internal/assistant"
-	"github.com/EinarLogiOskars/commitarium/internal/project"
 	"github.com/EinarLogiOskars/commitarium/internal/workerhttp"
 )
 
-// AssistantStore persists work-order assistant sessions (ADR-015).
+// AssistantStore persists work-order assistant sessions (ADR-015). The
+// provider column holds the agent ID (ADR-016); sessions from before agents
+// hold a provider name, which is its migrated agent's ID.
 type AssistantStore struct {
 	db *sql.DB
 }
@@ -45,7 +46,7 @@ func (s *AssistantStore) CreateAssistantSession(
 		  provider_session_id, attempt_id, turn, created_at, updated_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT (feature_id) DO NOTHING`,
-		record.ID, record.ProjectID, record.FeatureID, string(record.Provider), record.Model,
+		record.ID, record.ProjectID, record.FeatureID, record.Agent, record.Model,
 		string(record.Status), record.Message, record.WorkspaceID, record.BaseCommitID,
 		record.ProviderSessionID, record.AttemptID, record.Turn,
 		formatExecutionTime(record.CreatedAt), formatExecutionTime(record.UpdatedAt),
@@ -71,7 +72,7 @@ func (s *AssistantStore) CreateAssistantSession(
 
 func (s *AssistantStore) GetAssistantSessionByFeature(ctx context.Context, featureID string) (assistant.Record, error) {
 	var record assistant.Record
-	var provider, status, createdAt, updatedAt string
+	var status, createdAt, updatedAt string
 	err := s.db.QueryRowContext(
 		ctx,
 		`SELECT id, project_id, feature_id, provider, model, status, message, workspace_id, base_commit_id,
@@ -79,7 +80,7 @@ func (s *AssistantStore) GetAssistantSessionByFeature(ctx context.Context, featu
 		   FROM assistant_sessions WHERE feature_id = ?`,
 		featureID,
 	).Scan(
-		&record.ID, &record.ProjectID, &record.FeatureID, &provider, &record.Model, &status, &record.Message,
+		&record.ID, &record.ProjectID, &record.FeatureID, &record.Agent, &record.Model, &status, &record.Message,
 		&record.WorkspaceID, &record.BaseCommitID, &record.ProviderSessionID, &record.AttemptID, &record.Turn,
 		&createdAt, &updatedAt,
 	)
@@ -89,7 +90,6 @@ func (s *AssistantStore) GetAssistantSessionByFeature(ctx context.Context, featu
 	if err != nil {
 		return assistant.Record{}, fmt.Errorf("get assistant session: %w", err)
 	}
-	record.Provider = project.AgentProvider(provider)
 	record.Status = assistant.Status(status)
 	if record.CreatedAt, err = parseExecutionTime(createdAt); err != nil {
 		return assistant.Record{}, err

@@ -11,13 +11,12 @@ import (
 
 	"github.com/EinarLogiOskars/commitarium/internal/assistant"
 	"github.com/EinarLogiOskars/commitarium/internal/feature"
-	"github.com/EinarLogiOskars/commitarium/internal/project"
 	"github.com/EinarLogiOskars/commitarium/internal/workspace"
 )
 
 // WorkOrderAssistant clarifies draft work orders into handoff briefs.
 type WorkOrderAssistant interface {
-	Start(ctx context.Context, projectID, featureID string, provider project.AgentProvider, model string) (assistant.Session, bool, error)
+	Start(ctx context.Context, projectID, featureID, agentID, model string) (assistant.Session, bool, error)
 	Get(ctx context.Context, projectID, featureID string) (assistant.Session, error)
 	Reply(ctx context.Context, projectID, featureID, message, idempotencyKey string) (assistant.Session, bool, error)
 	AcceptBrief(ctx context.Context, projectID, featureID, idempotencyKey string) (feature.Feature, error)
@@ -33,7 +32,7 @@ type assistantMessageResponse struct {
 type assistantSessionResponse struct {
 	ID        string                     `json:"id"`
 	FeatureID string                     `json:"feature_id"`
-	Provider  string                     `json:"provider"`
+	Agent     string                     `json:"agent"`
 	Model     string                     `json:"model"`
 	Status    string                     `json:"status"`
 	Message   string                     `json:"message"`
@@ -48,13 +47,16 @@ func newAssistantSessionResponse(session assistant.Session) assistantSessionResp
 		messages = append(messages, assistantMessageResponse{Role: message.Role, Text: message.Text, OccurredAt: message.OccurredAt})
 	}
 	return assistantSessionResponse{
-		ID: session.ID, FeatureID: session.FeatureID, Provider: string(session.Provider), Model: session.Model,
+		ID: session.ID, FeatureID: session.FeatureID, Agent: session.Agent, Model: session.Model,
 		Status: string(session.Status), Message: session.Message, Messages: messages,
 		CreatedAt: session.CreatedAt, UpdatedAt: session.UpdatedAt,
 	}
 }
 
+// startAssistantRequest picks the agent by ID or, before agents, by provider
+// name (its migrated agent).
 type startAssistantRequest struct {
+	Agent    string `json:"agent"`
 	Provider string `json:"provider"`
 	Model    string `json:"model"`
 }
@@ -64,8 +66,7 @@ type assistantReplyRequest struct {
 }
 
 // startAssistantHandler opens the work order's clarification. Without an
-// explicit choice the assistant runs on the work order's lead provider and
-// model.
+// explicit choice the assistant runs on the work order's lead agent and model.
 func (api *API) startAssistantHandler(w http.ResponseWriter, r *http.Request) {
 	projectID, featureID := r.PathValue("projectID"), r.PathValue("id")
 	storedFeature, err := api.features.GetByID(r.Context(), projectID, featureID)
@@ -80,15 +81,20 @@ func (api *API) startAssistantHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	provider := project.AgentProvider(strings.TrimSpace(request.Provider))
+	agentID := strings.TrimSpace(request.Agent)
+	if agentID == "" {
+		agentID = strings.TrimSpace(request.Provider)
+	}
 	model := strings.TrimSpace(request.Model)
-	if provider == "" {
-		provider = storedFeature.AgentProviders.Lead
+	if agentID == "" {
+		if providers, err := storedFeature.AgentProviders.Normalize(); err == nil {
+			agentID = providers.LeadAgent
+		}
 		if model == "" {
 			model = storedFeature.AgentModels.Lead
 		}
 	}
-	session, created, err := api.assistant.Start(r.Context(), projectID, featureID, provider, model)
+	session, created, err := api.assistant.Start(r.Context(), projectID, featureID, agentID, model)
 	if err != nil {
 		writeAssistantError(w, featureID, err)
 		return

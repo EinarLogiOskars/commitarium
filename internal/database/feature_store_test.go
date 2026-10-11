@@ -23,7 +23,10 @@ func TestFeatureStoreCreateAndGetByID(t *testing.T) {
 		Description:    "Persist feature data",
 		State:          feature.StateDraft,
 		DialogueLimits: project.DialogueLimits{PlanningRounds: 0, ImplementationReviewRounds: 4},
-		AgentProviders: project.AgentProviders{Lead: project.AgentProviderClaude, Reviewer: project.AgentProviderCodex},
+		AgentProviders: project.AgentProviders{
+			Lead: project.AgentProviderClaude, Reviewer: project.AgentProviderCodex,
+			LeadAgent: "claude-max", ReviewerAgent: "codex",
+		},
 		MergePolicy:    project.MergePolicyAutoAfterGates,
 		AutonomyPolicy: project.AutonomyPolicyRunToCompletion,
 		CreatedAt: time.Date(

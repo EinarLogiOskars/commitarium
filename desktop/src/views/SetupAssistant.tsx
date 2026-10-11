@@ -7,23 +7,17 @@ import {
 } from "../api/toolchains";
 import { ApiError } from "../api/client";
 import { useModels, pickModel } from "./useModels";
+import { useAgents } from "./useAgents";
 import { Markdown } from "./Markdown";
-import type {
-  AgentProvider,
-  AssistantPurpose,
-  AssistantSession,
-  ProjectToolchain,
-} from "../api/types";
+import type { AssistantPurpose, AssistantSession, ProjectToolchain } from "../api/types";
 import { RunSummary } from "./RunEditor";
 
 const POLL_MS = 2000;
-const PROVIDERS: AgentProvider[] = ["claude", "codex"];
-const LABEL: Record<AgentProvider, string> = { claude: "Claude", codex: "Codex" };
 
 /** "Ask an agent" — a bounded provider conversation that ends in an exact
  * toolchain proposal the user applies. Two purposes: design_stack (describe a
  * new project) and verify_repository (agent inspects an imported repo). Never
- * touches the repository. The provider/model is pinned once a session starts. */
+ * touches the repository. The agent/model is pinned once a session starts. */
 export function SetupAssistant({
   projectId,
   purpose = "design_stack",
@@ -33,21 +27,23 @@ export function SetupAssistant({
 }: {
   projectId: string;
   purpose?: AssistantPurpose;
-  /** Project's configured lead provider/model — the first choice when connected. */
-  preferred?: { provider?: AgentProvider; model?: string };
+  /** Project's configured lead agent/model — the first choice when connected. */
+  preferred?: { agent?: string; model?: string };
   onApplied: (t: ProjectToolchain) => void;
   onCancel: () => void;
 }) {
   const { modelsFor, loading: modelsLoading } = useModels();
+  const agents = useAgents();
   const verify = purpose === "verify_repository";
 
-  // A provider is usable only if its lead catalog has models (i.e. connected).
+  // An agent is usable only if its provider's lead catalog has models.
   const available = useMemo(
-    () => PROVIDERS.filter((p) => modelsFor(p, "lead").length > 0),
-    [modelsFor],
+    () => agents.filter((a) => modelsFor(a.provider, "lead").length > 0),
+    [agents, modelsFor],
   );
 
-  const [provider, setProvider] = useState<AgentProvider | null>(null);
+  const [agentId, setAgentId] = useState<string | null>(null);
+  const provider = available.find((a) => a.id === agentId)?.provider ?? null;
   const [model, setModel] = useState("");
   const [description, setDescription] = useState("");
   const [session, setSession] = useState<AssistantSession | null>(null);
@@ -56,17 +52,19 @@ export function SetupAssistant({
   const [error, setError] = useState<string | null>(null);
   const chatRef = useRef<HTMLDivElement | null>(null);
 
-  // Selection order: preferred (project lead) if connected, else first connected.
+  // Selection order: preferred (project lead) if usable, else the first usable.
+  const preferredAgent = preferred?.agent;
   useEffect(() => {
     if (modelsLoading || session) return;
-    setProvider((cur) => {
-      if (cur && available.includes(cur)) return cur;
-      if (preferred?.provider && available.includes(preferred.provider)) return preferred.provider;
-      return available[0] ?? null;
+    const usable = (id?: string | null): id is string => !!id && available.some((a) => a.id === id);
+    setAgentId((cur) => {
+      if (usable(cur)) return cur;
+      if (usable(preferredAgent)) return preferredAgent;
+      return available[0]?.id ?? null;
     });
-  }, [modelsLoading, available, preferred?.provider, session]);
+  }, [modelsLoading, available, preferredAgent, session]);
 
-  // Keep the model valid for the chosen provider; seed from preferred when it fits.
+  // Keep the model valid for the chosen agent; seed from preferred when it fits.
   useEffect(() => {
     if (modelsLoading || !provider || session) return;
     setModel((m) => pickModel(modelsFor(provider, "lead"), m || preferred?.model || ""));
@@ -92,7 +90,7 @@ export function SetupAssistant({
   }, [session?.messages.length]);
 
   const start = async () => {
-    if (!provider || !model) return;
+    if (!agentId || !model) return;
     if (!verify && !description.trim()) return;
     setBusy(true);
     setError(null);
@@ -101,7 +99,7 @@ export function SetupAssistant({
         await startAssistantSession(
           projectId,
           {
-            provider,
+            agent: agentId,
             model,
             purpose,
             ...(verify ? {} : { message: description.trim() }),
@@ -174,15 +172,15 @@ export function SetupAssistant({
     }
   };
 
-  // No connected provider — agent assistance isn't possible.
+  // No connected agent — agent assistance isn't possible.
   if (!modelsLoading && available.length === 0 && !session) {
     return (
       <div className="assistant">
         {error && <div className="banner banner--error">{error}</div>}
         <p>
-          No agent provider is connected, so an agent can't{" "}
-          {verify ? "verify this repository" : "help choose a stack"} yet. Connect Codex or Claude
-          under Providers, or choose a stack manually.
+          No agent is connected, so an agent can't{" "}
+          {verify ? "verify this repository" : "help choose a stack"} yet. Connect one under Agents,
+          or choose a stack manually.
         </p>
         <div className="assistant__actions">
           <button className="primary" onClick={onCancel} disabled={busy}>
@@ -209,13 +207,13 @@ export function SetupAssistant({
           <label>
             Agent
             <select
-              value={provider ?? ""}
-              onChange={(e) => setProvider(e.target.value as AgentProvider)}
+              value={agentId ?? ""}
+              onChange={(e) => setAgentId(e.target.value)}
               disabled={busy}
             >
-              {available.map((p) => (
-                <option key={p} value={p}>
-                  {LABEL[p]}
+              {available.map((a) => (
+                <option key={a.id} value={a.id}>
+                  {a.name}
                 </option>
               ))}
             </select>

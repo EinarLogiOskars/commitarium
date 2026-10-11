@@ -16,7 +16,6 @@ import {
   type RunDraft,
 } from "./RunEditor";
 import type {
-  AgentProvider,
   ProjectToolchain,
   ProvisioningStatus,
   ToolchainPreset,
@@ -41,7 +40,7 @@ export function StackPicker({
   onSaved,
 }: {
   projectId: string;
-  preferred?: { provider?: AgentProvider; model?: string };
+  preferred?: { agent?: string; model?: string };
   onSaved: (t: ProjectToolchain) => void;
 }) {
   const [presets, setPresets] = useState<ToolchainPreset[]>([]);

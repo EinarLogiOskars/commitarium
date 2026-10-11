@@ -53,18 +53,19 @@ type AssistantWorker struct {
 }
 
 type AssistantSession struct {
-	ID               string                `json:"id"`
-	ProjectID        string                `json:"project_id"`
-	Provider         project.AgentProvider `json:"provider"`
-	Model            string                `json:"model"`
-	Purpose          AssistantPurpose      `json:"purpose"`
-	VerifiedCommitID string                `json:"verified_commit_id,omitempty"`
-	Status           AssistantStatus       `json:"status"`
-	Message          string                `json:"message,omitempty"`
-	Proposal         *Suggestion           `json:"proposal,omitempty"`
-	Messages         []AssistantMessage    `json:"messages"`
-	CreatedAt        time.Time             `json:"created_at"`
-	UpdatedAt        time.Time             `json:"updated_at"`
+	ID        string `json:"id"`
+	ProjectID string `json:"project_id"`
+	// Agent is the agent whose worker runs the conversation (ADR-016).
+	Agent            string             `json:"agent"`
+	Model            string             `json:"model"`
+	Purpose          AssistantPurpose   `json:"purpose"`
+	VerifiedCommitID string             `json:"verified_commit_id,omitempty"`
+	Status           AssistantStatus    `json:"status"`
+	Message          string             `json:"message,omitempty"`
+	Proposal         *Suggestion        `json:"proposal,omitempty"`
+	Messages         []AssistantMessage `json:"messages"`
+	CreatedAt        time.Time          `json:"created_at"`
+	UpdatedAt        time.Time          `json:"updated_at"`
 }
 
 type AssistantMessage struct {
@@ -75,6 +76,9 @@ type AssistantMessage struct {
 
 type assistantRecord struct {
 	AssistantSession
+	// LegacyProvider is read from records written before agents; the
+	// provider's name is its migrated agent's ID.
+	LegacyProvider       string                               `json:"provider,omitempty"`
 	VerificationEvidence *project.RepositoryToolchainEvidence `json:"verification_evidence,omitempty"`
 	AttemptID            string                               `json:"attempt_id"`
 	ProviderSessionID    string                               `json:"provider_session_id,omitempty"`
@@ -96,22 +100,19 @@ type Assistant struct {
 	workspaceRoot   string
 	projects        ProjectReader
 	toolchains      *Manager
-	workers         map[project.AgentProvider]AssistantWorker
+	workers         func(agentID string) (workerhttp.Service, error)
 	now             func() time.Time
 	mu              sync.Mutex
 	deletedProjects map[string]struct{}
 }
 
-func NewAssistant(root, workspaceRoot string, projects ProjectReader, toolchains *Manager, workers map[project.AgentProvider]AssistantWorker) (*Assistant, error) {
+// NewAssistant creates the setup assistant; workers resolves an agent ID to
+// its worker (ADR-016).
+func NewAssistant(root, workspaceRoot string, projects ProjectReader, toolchains *Manager, workers func(agentID string) (workerhttp.Service, error)) (*Assistant, error) {
 	root = filepath.Clean(strings.TrimSpace(root))
 	workspaceRoot = filepath.Clean(strings.TrimSpace(workspaceRoot))
-	if !filepath.IsAbs(root) || !filepath.IsAbs(workspaceRoot) || projects == nil || toolchains == nil || len(workers) == 0 {
+	if !filepath.IsAbs(root) || !filepath.IsAbs(workspaceRoot) || projects == nil || toolchains == nil || workers == nil {
 		return nil, fmt.Errorf("%w: roots, projects, toolchains, and workers are required", ErrAssistantUnavailable)
-	}
-	for provider, configured := range workers {
-		if !provider.IsValid() || configured.Service == nil || strings.TrimSpace(configured.AgentProfileID) == "" {
-			return nil, fmt.Errorf("%w: invalid worker for %q", ErrAssistantUnavailable, provider)
-		}
 	}
 	if err := os.MkdirAll(filepath.Join(root, "assistants"), 0o700); err != nil {
 		return nil, fmt.Errorf("%w: create assistant storage", ErrAssistantUnavailable)
@@ -120,10 +121,22 @@ func NewAssistant(root, workspaceRoot string, projects ProjectReader, toolchains
 		workers: workers, now: func() time.Time { return time.Now().UTC() }, deletedProjects: make(map[string]struct{})}, nil
 }
 
+// worker resolves an agent's worker; the agent's ID is its worker profile.
+func (assistant *Assistant) worker(agentID string) (AssistantWorker, bool) {
+	if !project.ValidAgentID(agentID) {
+		return AssistantWorker{}, false
+	}
+	resolved, err := assistant.workers(agentID)
+	if err != nil || resolved == nil {
+		return AssistantWorker{}, false
+	}
+	return AssistantWorker{Service: resolved, AgentProfileID: agentID}, true
+}
+
 func (assistant *Assistant) Start(
 	ctx context.Context,
 	projectID string,
-	provider project.AgentProvider,
+	agentID string,
 	model string,
 	message string,
 	purpose AssistantPurpose,
@@ -141,15 +154,15 @@ func (assistant *Assistant) Start(
 	if err != nil {
 		return AssistantSession{}, false, err
 	}
-	worker, ok := assistant.workers[provider]
+	worker, ok := assistant.worker(agentID)
 	message, model, key := strings.TrimSpace(message), strings.TrimSpace(model), strings.TrimSpace(idempotencyKey)
 	purpose = normalizeAssistantPurpose(purpose)
 	if !ok || message == "" || key == "" || !validAssistantModel(model) || !purpose.IsValid() {
-		return AssistantSession{}, false, fmt.Errorf("%w: provider, exact model, message, and idempotency key are required", ErrInvalidManifest)
+		return AssistantSession{}, false, fmt.Errorf("%w: agent, exact model, message, and idempotency key are required", ErrInvalidManifest)
 	}
 	sessionID := assistantID(stored.ID, key)
-	digest := assistantDigest(string(provider), model, message, string(purpose))
-	legacyDigest := assistantDigest(string(provider), model, message)
+	digest := assistantDigest(agentID, model, message, string(purpose))
+	legacyDigest := assistantDigest(agentID, model, message)
 	record, err := assistant.readRecord(sessionID)
 	created := false
 	if errors.Is(err, ErrAssistantNotFound) {
@@ -163,7 +176,7 @@ func (assistant *Assistant) Start(
 		}
 		now := assistant.now()
 		record = assistantRecord{AssistantSession: AssistantSession{ID: sessionID, ProjectID: stored.ID,
-			Provider: provider, Model: model, Purpose: purpose, Status: AssistantStatusRunning,
+			Agent: agentID, Model: model, Purpose: purpose, Status: AssistantStatusRunning,
 			Messages: []AssistantMessage{{Role: "user", Text: message, OccurredAt: now}}, CreatedAt: now, UpdatedAt: now},
 			VerificationEvidence: verificationEvidence,
 			AttemptID:            sessionID + ":turn:1", Turn: 1, InitialKey: key, InitialDigest: digest,
@@ -238,7 +251,7 @@ func (assistant *Assistant) DeleteProject(
 	assistant.deletedProjects[projectID] = struct{}{}
 	for _, record := range records {
 		if record.Status == AssistantStatusRunning {
-			configured, ok := assistant.workers[record.Provider]
+			configured, ok := assistant.worker(record.Agent)
 			if !ok {
 				return ErrAssistantUnavailable
 			}
@@ -390,7 +403,10 @@ func (assistant *Assistant) Reply(ctx context.Context, projectID, sessionID, mes
 			return AssistantSession{}, false, err
 		}
 	}
-	configured := assistant.workers[record.Provider]
+	configured, ok := assistant.worker(record.Agent)
+	if !ok {
+		return AssistantSession{}, false, ErrAssistantUnavailable
+	}
 	attempt, created, err := configured.Service.PutAttempt(ctx, workerhttp.MutationIdentity{
 		AttemptReference: workerhttp.AttemptReference{SessionID: record.ID, AttemptID: record.AttemptID}, IdempotencyKey: key,
 	}, workerhttp.PutAttemptRequest{Mode: workerhttp.AttemptModeResume, Assignment: workerhttp.Assignment{
@@ -455,7 +471,7 @@ func (assistant *Assistant) Apply(ctx context.Context, projectID, sessionID stri
 }
 
 func (assistant *Assistant) refresh(ctx context.Context, record assistantRecord) (assistantRecord, error) {
-	configured, ok := assistant.workers[record.Provider]
+	configured, ok := assistant.worker(record.Agent)
 	if !ok {
 		return record, ErrAssistantUnavailable
 	}
@@ -539,6 +555,9 @@ func (assistant *Assistant) readRecord(sessionID string) (assistantRecord, error
 	var record assistantRecord
 	if json.Unmarshal(contents, &record) != nil {
 		return assistantRecord{}, ErrAssistantUnavailable
+	}
+	if record.Agent == "" {
+		record.Agent, record.LegacyProvider = record.LegacyProvider, ""
 	}
 	if record.Purpose == "" {
 		record.Purpose = AssistantPurposeDesignStack

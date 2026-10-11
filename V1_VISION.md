@@ -171,18 +171,15 @@ is where paused sessions are visible. See
 | Planning view | In progress: Draft and Ready states, handoff briefs, Start with a freshness check ([READY_WORK_ORDERS_PLAN.md](READY_WORK_ORDERS_PLAN.md)). |
 | Escalation | Done: wait reasons, the attention inbox, native notifications, the intervene bar. |
 | Isolation | Done. Every new kind of work reuses it. |
-| Agents | Missing. Today: four fixed role profiles and containers. |
+| Agents | Done, awaiting user testing ([AGENTS_PLAN.md](AGENTS_PLAN.md), ADR-016): one worker per provider account, serving both roles, chosen per work order. |
 | Task | Missing. No single-agent runner outside the work-order orchestrator. |
 | Session | Missing: chat, pause and resume, catch-up on resume, live preview. |
 | Project assistant | Missing. `SetupAssistant` is a working template for a 1:1 chat ending in a proposal. |
 | Work order without reviewer | Missing. The reviewer stages in `internal/orchestration/remote_lead.go` must become skippable. |
 
-Worker concurrency: workers already run several attempts at once (one provider
-process per attempt), and nothing in the worker or coordinator limits it. The
-worker still advertises `MaxConcurrentAttempts: 1`, which nothing enforces or
-reads, and no test covers two concurrent attempts on one worker. Since
-unlimited concurrency becomes a product promise, the advertised value should
-match the behavior and a test should prove it.
+Worker concurrency: workers run several attempts at once (one provider process
+per attempt), advertise no attempt limit, and a test runs two attempts
+concurrently on one worker, so one agent can serve several work orders.
 
 ## Scope
 
@@ -211,8 +208,9 @@ commit), but the fix-the-wording use case is much better with it.
    ([EFFICIENT_DIALOGUE_PLAN.md](EFFICIENT_DIALOGUE_PLAN.md)). Done.
 2. Ready work orders: Draft and Ready states, handoff briefs written with the
    first piece of the project assistant, and Start with a freshness check
-   ([READY_WORK_ORDERS_PLAN.md](READY_WORK_ORDERS_PLAN.md)).
-3. Agents, including the worker concurrency test and honest capability value.
+   ([READY_WORK_ORDERS_PLAN.md](READY_WORK_ORDERS_PLAN.md)). Done.
+3. Agents, including the worker concurrency test and honest capability value
+   ([AGENTS_PLAN.md](AGENTS_PLAN.md)).
 4. Tasks, which introduce the single-agent runner.
 5. Sessions, on the same runner, adding chat and pause/resume.
 6. The rest of the project assistant, growing from the clarification chat.

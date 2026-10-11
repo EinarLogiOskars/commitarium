@@ -2,14 +2,17 @@ package httpapi
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"strings"
 	"time"
 
+	"github.com/EinarLogiOskars/commitarium/internal/agent"
 	"github.com/EinarLogiOskars/commitarium/internal/modelcatalog"
 	"github.com/EinarLogiOskars/commitarium/internal/project"
 )
@@ -51,14 +54,28 @@ type dialogueLimitsResponse struct {
 	ImplementationReviewRounds int `json:"implementation_review_rounds"`
 }
 
+// agentProvidersRequest names the lead and reviewer agents (ADR-016). An
+// agent determines its provider, so lead and reviewer may be omitted when the
+// agents are given; without agents, the providers name the migrated agents.
 type agentProvidersRequest struct {
-	Lead     *project.AgentProvider `json:"lead"`
-	Reviewer *project.AgentProvider `json:"reviewer"`
+	Lead          *project.AgentProvider `json:"lead"`
+	Reviewer      *project.AgentProvider `json:"reviewer"`
+	LeadAgent     *string                `json:"lead_agent"`
+	ReviewerAgent *string                `json:"reviewer_agent"`
 }
 
 type agentProvidersResponse struct {
-	Lead     project.AgentProvider `json:"lead"`
-	Reviewer project.AgentProvider `json:"reviewer"`
+	Lead          project.AgentProvider `json:"lead"`
+	Reviewer      project.AgentProvider `json:"reviewer"`
+	LeadAgent     string                `json:"lead_agent"`
+	ReviewerAgent string                `json:"reviewer_agent"`
+}
+
+func newAgentProvidersResponse(providers project.AgentProviders) agentProvidersResponse {
+	return agentProvidersResponse{
+		Lead: providers.Lead, Reviewer: providers.Reviewer,
+		LeadAgent: providers.LeadAgent, ReviewerAgent: providers.ReviewerAgent,
+	}
 }
 
 type agentModelsRequest struct {
@@ -147,7 +164,7 @@ func (api *API) importProjectHandler(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_dialogue_limits", "dialogue_limits must include non-negative planning_rounds and implementation_review_rounds; zero means unlimited")
 		return
 	}
-	agentProviders, err := decodeAgentProviders(metadata.AgentProviders, true)
+	agentProviders, err := api.decodeAgentProviders(r.Context(), metadata.AgentProviders, true)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_agent_providers", "agent_providers must include lead and reviewer set to codex or claude")
 		return
@@ -254,7 +271,7 @@ func (api *API) createProjectHandler(
 		)
 		return
 	}
-	agentProviders, err := decodeAgentProviders(request.AgentProviders, true)
+	agentProviders, err := api.decodeAgentProviders(r.Context(), request.AgentProviders, true)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_agent_providers", "agent_providers must include lead and reviewer set to codex or claude")
 		return
@@ -523,7 +540,7 @@ func (api *API) updateProjectAgentProvidersHandler(w http.ResponseWriter, r *htt
 		writeError(w, http.StatusBadRequest, "invalid_json", "request body must contain exactly one valid JSON object with no unknown fields")
 		return
 	}
-	providers, err := decodeAgentProviders(&request, false)
+	providers, err := api.decodeAgentProviders(r.Context(), &request, false)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_agent_providers", "request must include lead and reviewer set to codex or claude")
 		return
@@ -562,17 +579,31 @@ func (api *API) updateProjectAgentProvidersHandler(w http.ResponseWriter, r *htt
 	}
 }
 
-func decodeAgentProviders(
+// decodeAgentProviders resolves the requested agents and their providers.
+// Each role needs an agent or a provider; a given provider must match the
+// agent's. When agents are configured, the resolved agents must exist.
+func (api *API) decodeAgentProviders(
+	ctx context.Context,
 	request *agentProvidersRequest,
 	useDefaultsWhenOmitted bool,
 ) (project.AgentProviders, error) {
 	if request == nil && useDefaultsWhenOmitted {
-		return project.DefaultAgentProviders(), nil
+		request = &agentProvidersRequest{}
+		defaults := project.DefaultAgentProviders()
+		request.Lead, request.Reviewer = &defaults.Lead, &defaults.Reviewer
 	}
-	if request == nil || request.Lead == nil || request.Reviewer == nil {
+	if request == nil {
 		return project.AgentProviders{}, project.ErrInvalidAgentProviders
 	}
-	return project.AgentProviders{Lead: *request.Lead, Reviewer: *request.Reviewer}.Normalize()
+	var providers project.AgentProviders
+	var err error
+	if providers.Lead, providers.LeadAgent, err = api.resolveAgent(ctx, request.Lead, request.LeadAgent); err != nil {
+		return project.AgentProviders{}, err
+	}
+	if providers.Reviewer, providers.ReviewerAgent, err = api.resolveAgent(ctx, request.Reviewer, request.ReviewerAgent); err != nil {
+		return project.AgentProviders{}, err
+	}
+	return providers.Normalize()
 }
 
 func decodeAgentModels(request *agentModelsRequest, useEmptyWhenOmitted bool) (project.AgentModels, error) {
@@ -602,7 +633,7 @@ func (api *API) updateProjectAgentSettingsHandler(w http.ResponseWriter, r *http
 		writeError(w, http.StatusBadRequest, "invalid_json", "request body must contain exactly one valid JSON object with no unknown fields")
 		return
 	}
-	providers, err := decodeAgentProviders(&request.AgentProviders, false)
+	providers, err := api.decodeAgentProviders(r.Context(), &request.AgentProviders, false)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_agent_providers", "agent_providers must include lead and reviewer set to codex or claude")
 		return
@@ -777,9 +808,7 @@ func newProjectResponse(storedProject project.Project) projectResponse {
 			PlanningRounds:             storedProject.DialogueLimits.PlanningRounds,
 			ImplementationReviewRounds: storedProject.DialogueLimits.ImplementationReviewRounds,
 		},
-		AgentProviders: agentProvidersResponse{
-			Lead: agentProviders.Lead, Reviewer: agentProviders.Reviewer,
-		},
+		AgentProviders: newAgentProvidersResponse(agentProviders),
 		AgentModels: agentModelsResponse{
 			Lead: storedProject.AgentModels.Lead, Reviewer: storedProject.AgentModels.Reviewer,
 		},
@@ -796,4 +825,42 @@ func newProjectResponse(storedProject project.Project) projectResponse {
 		}
 	}
 	return response
+}
+
+// resolveAgent returns an agent and its provider from an agent ID, a provider
+// (naming its migrated agent), or both, which must then agree.
+func (api *API) resolveAgent(
+	ctx context.Context,
+	provider *project.AgentProvider,
+	agentID *string,
+) (project.AgentProvider, string, error) {
+	var resolvedProvider project.AgentProvider
+	var resolvedAgent string
+	if provider != nil {
+		resolvedProvider = *provider
+		resolvedAgent = string(*provider)
+	}
+	if agentID != nil {
+		resolvedAgent = strings.TrimSpace(*agentID)
+	}
+	if resolvedAgent == "" {
+		return "", "", project.ErrInvalidAgentProviders
+	}
+	if api.agents == nil {
+		if resolvedProvider == "" {
+			return "", "", project.ErrInvalidAgentProviders
+		}
+		return resolvedProvider, resolvedAgent, nil
+	}
+	stored, err := api.agents.Get(ctx, resolvedAgent)
+	if errors.Is(err, agent.ErrNotFound) || errors.Is(err, agent.ErrInvalid) {
+		return "", "", fmt.Errorf("%w: agent %q does not exist", project.ErrInvalidAgentProviders, resolvedAgent)
+	}
+	if err != nil {
+		return "", "", err
+	}
+	if resolvedProvider != "" && resolvedProvider != stored.Provider {
+		return "", "", fmt.Errorf("%w: agent %q uses %s", project.ErrInvalidAgentProviders, resolvedAgent, stored.Provider)
+	}
+	return stored.Provider, stored.ID, nil
 }

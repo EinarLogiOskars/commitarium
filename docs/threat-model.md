@@ -71,7 +71,12 @@ The boundary protects three things:
 The Docker boundary is the main containment mechanism. Workers run as non-root
 users and do not receive the host Docker socket, the original repository path,
 or upstream credentials. They receive managed workspaces, their own provider
-state, and credentials for internal Forgejo.
+state, and credentials for internal Forgejo. Each agent (one provider account,
+ADR-016) has one worker holding its lead and reviewer Forgejo tokens; a turn
+receives only its role's token, so an agent's reviewer approves under its own
+identity and the audit trail shows which account wrote and which approved.
+Lead and reviewer of one agent share the account's provider state but run as
+separate sessions.
 
 Import, local synchronization, and upstream publication cross the boundary
 through narrow Tauri operations. These operations verify repository state and
@@ -92,8 +97,8 @@ operating-system package, the lead returns a structured request and waits for
 the user. Approval changes Commitarium's managed worker images, not the host
 system. The trusted Tauri backend fetches the approved names from the
 coordinator; the renderer cannot supply package names or Docker arguments to the
-native command. The approved package union is applied to all real lead and
-reviewer images so the managed roles do not silently use different systems.
+native command. The approved package union is applied to the Codex and Claude
+agent worker images so agents do not silently use different systems.
 
 The assigned provider state and internal Forgejo credential are working tools,
 not boundary failures. Managed workspaces and internal Git exist so agents can

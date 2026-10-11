@@ -67,7 +67,7 @@ func (api *API) createFeatureHandler(
 		overrides.DialogueLimits = &limits
 	}
 	if request.AgentProviders != nil {
-		providers, err := decodeAgentProviders(request.AgentProviders, false)
+		providers, err := api.decodeAgentProviders(r.Context(), request.AgentProviders, false)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, "invalid_agent_providers", "agent_providers must include lead and reviewer set to codex or claude")
 			return
@@ -276,7 +276,7 @@ func newFeatureResponse(storedFeature feature.Feature) featureResponse {
 			PlanningRounds:             storedFeature.DialogueLimits.PlanningRounds,
 			ImplementationReviewRounds: storedFeature.DialogueLimits.ImplementationReviewRounds,
 		},
-		AgentProviders:             agentProvidersResponse{Lead: agentProviders.Lead, Reviewer: agentProviders.Reviewer},
+		AgentProviders:             newAgentProvidersResponse(agentProviders),
 		AgentModels:                agentModelsResponse{Lead: storedFeature.AgentModels.Lead, Reviewer: storedFeature.AgentModels.Reviewer},
 		MergePolicy:                mergePolicy,
 		AutonomyPolicy:             autonomyPolicy,

@@ -18,7 +18,7 @@ use std::thread;
 use std::time::Duration;
 use zeroize::Zeroizing;
 
-use crate::docker;
+use crate::{agents, docker};
 
 const FORGEJO_READY_ATTEMPTS: usize = 60;
 const FORGEJO_READY_DELAY: Duration = Duration::from_millis(250);
@@ -35,89 +35,84 @@ struct SecretLocation {
     relative_path: &'static str,
 }
 
-const TRANSPORT_SECRETS: &[SecretLocation] = &[
-    SecretLocation {
-        source_variable: "COMMITARIUM_SIMULATED_WORKER_TOKEN_SOURCE",
-        relative_path: ".commitarium/internal/simulated-worker-token",
-    },
-    SecretLocation {
-        source_variable: "COMMITARIUM_CODEX_WORKER_TOKEN_SOURCE",
-        relative_path: ".commitarium/internal/codex-lead-worker-token",
-    },
-    SecretLocation {
-        source_variable: "COMMITARIUM_CODEX_REVIEWER_WORKER_TOKEN_SOURCE",
-        relative_path: ".commitarium/internal/codex-reviewer-worker-token",
-    },
-    SecretLocation {
-        source_variable: "COMMITARIUM_CLAUDE_WORKER_TOKEN_SOURCE",
-        relative_path: ".commitarium/internal/claude-lead-worker-token",
-    },
-    SecretLocation {
-        source_variable: "COMMITARIUM_CLAUDE_REVIEWER_WORKER_TOKEN_SOURCE",
-        relative_path: ".commitarium/internal/claude-reviewer-worker-token",
-    },
-];
+const TRANSPORT_SECRETS: &[SecretLocation] = &[SecretLocation {
+    source_variable: "COMMITARIUM_SIMULATED_WORKER_TOKEN_SOURCE",
+    relative_path: ".commitarium/internal/simulated-worker-token",
+}];
 
+/// Bearer tokens for agent workers live in one directory that the coordinator
+/// mounts, so a new agent's token is readable without a restart (ADR-016).
+const AGENT_WORKER_TOKEN_DIR: SecretLocation = SecretLocation {
+    source_variable: "COMMITARIUM_AGENT_WORKER_TOKEN_DIR_SOURCE",
+    relative_path: ".commitarium/internal/agent-workers",
+};
+
+const ADMIN_TOKEN: SecretLocation = SecretLocation {
+    source_variable: "COMMITARIUM_FORGEJO_TOKEN_SOURCE",
+    relative_path: ".commitarium/forgejo-token",
+};
+const ADMIN_USERNAME: &str = "commitarium_admin";
+const ADMIN_SCOPES: &str = "write:admin,write:user,write:repository,write:issue";
+const AGENT_SCOPES: &str = "write:repository,write:issue";
+
+/// One Forgejo user Commitarium owns and the private file holding its token.
 struct ForgejoIdentity {
-    username: &'static str,
-    email: &'static str,
+    username: String,
+    email: String,
     admin: bool,
-    token: SecretLocation,
+    token_path: PathBuf,
     scopes: &'static str,
 }
 
-const FORGEJO_IDENTITIES: &[ForgejoIdentity] = &[
+fn admin_identity(root: &Path) -> ForgejoIdentity {
     ForgejoIdentity {
-        username: "commitarium_admin",
-        email: "admin@commitarium.local",
+        username: ADMIN_USERNAME.to_string(),
+        email: "admin@commitarium.local".to_string(),
         admin: true,
-        token: SecretLocation {
-            source_variable: "COMMITARIUM_FORGEJO_TOKEN_SOURCE",
-            relative_path: ".commitarium/forgejo-token",
-        },
-        scopes: "write:admin,write:user,write:repository,write:issue",
-    },
-    ForgejoIdentity {
-        username: "codex-lead",
-        email: "codex-lead@commitarium.local",
-        admin: false,
-        token: SecretLocation {
-            source_variable: "COMMITARIUM_CODEX_FORGEJO_TOKEN_SOURCE",
-            relative_path: ".commitarium/agents/codex-lead/forgejo-token",
-        },
-        scopes: "write:repository,write:issue",
-    },
-    ForgejoIdentity {
-        username: "codex-reviewer",
-        email: "codex-reviewer@commitarium.local",
-        admin: false,
-        token: SecretLocation {
-            source_variable: "COMMITARIUM_CODEX_REVIEWER_FORGEJO_TOKEN_SOURCE",
-            relative_path: ".commitarium/agents/codex-reviewer/forgejo-token",
-        },
-        scopes: "write:repository,write:issue",
-    },
-    ForgejoIdentity {
-        username: "claude-lead",
-        email: "claude-lead@commitarium.local",
-        admin: false,
-        token: SecretLocation {
-            source_variable: "COMMITARIUM_CLAUDE_FORGEJO_TOKEN_SOURCE",
-            relative_path: ".commitarium/agents/claude-lead/forgejo-token",
-        },
-        scopes: "write:repository,write:issue",
-    },
-    ForgejoIdentity {
-        username: "claude-reviewer",
-        email: "claude-reviewer@commitarium.local",
-        admin: false,
-        token: SecretLocation {
-            source_variable: "COMMITARIUM_CLAUDE_REVIEWER_FORGEJO_TOKEN_SOURCE",
-            relative_path: ".commitarium/agents/claude-reviewer/forgejo-token",
-        },
-        scopes: "write:repository,write:issue",
-    },
-];
+        token_path: secret_path(root, &ADMIN_TOKEN),
+        scopes: ADMIN_SCOPES,
+    }
+}
+
+/// Each agent has a lead and a reviewer identity (ADR-016): Forgejo refuses an
+/// approval from the pull request's author, and the pair keeps the audit trail
+/// showing which account wrote and which approved. The agents migrated from
+/// the provider profiles keep those profiles' users and token files.
+fn agent_identities(root: &Path, agents: &[agents::Agent]) -> Vec<ForgejoIdentity> {
+    agents
+        .iter()
+        .flat_map(|agent| {
+            ["lead", "reviewer"].map(|role| {
+                let username = format!("{}-{role}", agent.id);
+                ForgejoIdentity {
+                    email: format!("{username}@commitarium.local"),
+                    admin: false,
+                    token_path: agent_forgejo_token_path(root, &agent.id, role),
+                    scopes: AGENT_SCOPES,
+                    username,
+                }
+            })
+        })
+        .collect()
+}
+
+/// The Forgejo token file for an agent's role, relative to the Compose root
+/// as the generated worker service mounts it.
+pub(crate) fn agent_forgejo_token_relative_path(agent_id: &str, role: &str) -> String {
+    format!(".commitarium/agents/{agent_id}-{role}/forgejo-token")
+}
+
+fn agent_forgejo_token_path(root: &Path, agent_id: &str, role: &str) -> PathBuf {
+    root.join(agent_forgejo_token_relative_path(agent_id, role))
+}
+
+/// The directory holding agent worker bearer tokens.
+pub(crate) fn agent_worker_token_dir(compose_file: &Path) -> Result<PathBuf, String> {
+    Ok(secret_path(
+        compose_root(compose_file)?,
+        &AGENT_WORKER_TOKEN_DIR,
+    ))
+}
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -224,7 +219,7 @@ fn validate_viewer_password(password: &str) -> Result<(), String> {
 impl ForgejoApi {
     async fn new(compose_file: &Path) -> Result<Self, String> {
         let root = compose_root(compose_file)?;
-        let token_path = secret_path(root, &FORGEJO_IDENTITIES[0].token);
+        let token_path = secret_path(root, &ADMIN_TOKEN);
         let token = tokio::fs::read(&token_path)
             .await
             .map(Zeroizing::new)
@@ -377,7 +372,7 @@ impl ForgejoApi {
     }
 
     async fn owned_repositories(&self) -> Result<Vec<ForgejoRepository>, String> {
-        let owner = FORGEJO_IDENTITIES[0].username;
+        let owner = ADMIN_USERNAME;
         let mut repositories = Vec::new();
         for page in 1..=FORGEJO_MAX_REPOSITORY_PAGES {
             let mut url = self.endpoint(&["user", "repos"])?;
@@ -495,34 +490,61 @@ pub(crate) fn prepare_transport_secrets(compose_file: &Path) -> Result<bool, Str
     let root = compose_root(compose_file)?;
     let mut changed = false;
     for location in TRANSPORT_SECRETS {
-        let path = secret_path(root, location);
-        if secret_is_ready(&path)? {
-            continue;
-        }
-        let mut bytes = Zeroizing::new(vec![0_u8; 32]);
-        random_fill(bytes.as_mut_slice())
-            .map_err(|_| "secure randomness is unavailable".to_string())?;
-        let mut token = Zeroizing::new(String::with_capacity(bytes.len() * 2));
-        for byte in bytes.iter() {
-            use std::fmt::Write as _;
-            write!(&mut *token, "{byte:02x}")
-                .map_err(|_| "could not encode an internal credential".to_string())?;
-        }
-        write_secret(&path, token.as_bytes())?;
-        changed = true;
+        changed |= ensure_random_secret(&secret_path(root, location))?;
+    }
+    let directory = secret_path(root, &AGENT_WORKER_TOKEN_DIR);
+    fs::create_dir_all(&directory)
+        .map_err(|_| format!("could not create private directory {}", directory.display()))?;
+    set_private_directory_permissions(&directory)?;
+    Ok(changed)
+}
+
+/// Ensure each agent worker has a bearer token, named as the coordinator
+/// expects (`agent-<id>-worker-token`). Returns whether any token was created.
+pub(crate) fn prepare_agent_worker_tokens(
+    compose_file: &Path,
+    agents: &[agents::Agent],
+) -> Result<bool, String> {
+    let directory = agent_worker_token_dir(compose_file)?;
+    let mut changed = false;
+    for agent in agents {
+        changed |= ensure_random_secret(&directory.join(agents::worker_token_file(&agent.id)))?;
     }
     Ok(changed)
+}
+
+/// Create a random private token at path unless a valid one is already there.
+fn ensure_random_secret(path: &Path) -> Result<bool, String> {
+    if secret_is_ready(path)? {
+        return Ok(false);
+    }
+    let mut bytes = Zeroizing::new(vec![0_u8; 32]);
+    random_fill(bytes.as_mut_slice())
+        .map_err(|_| "secure randomness is unavailable".to_string())?;
+    let mut token = Zeroizing::new(String::with_capacity(bytes.len() * 2));
+    for byte in bytes.iter() {
+        use std::fmt::Write as _;
+        write!(&mut *token, "{byte:02x}")
+            .map_err(|_| "could not encode an internal credential".to_string())?;
+    }
+    write_secret(path, token.as_bytes())?;
+    Ok(true)
 }
 
 /// Ensure Forgejo credential bind sources are regular private files before a
 /// restore creates all service containers. The files intentionally remain
 /// empty: after Forgejo data is restored, ordinary bootstrap replaces them
 /// with newly generated tokens for the restored identities.
-pub(crate) fn prepare_forgejo_secret_mounts(compose_file: &Path) -> Result<(), String> {
+pub(crate) fn prepare_forgejo_secret_mounts(
+    compose_file: &Path,
+    agents: &[agents::Agent],
+) -> Result<(), String> {
     let root = compose_root(compose_file)?;
-    for identity in FORGEJO_IDENTITIES {
-        let path = secret_path(root, &identity.token);
-        if secret_is_ready(&path)? {
+    let mut identities = vec![admin_identity(root)];
+    identities.extend(agent_identities(root, agents));
+    for identity in &identities {
+        let path = &identity.token_path;
+        if secret_is_ready(path)? {
             continue;
         }
         let parent = path
@@ -535,9 +557,9 @@ pub(crate) fn prepare_forgejo_secret_mounts(compose_file: &Path) -> Result<(), S
             .write(true)
             .create(true)
             .truncate(true)
-            .open(&path)
+            .open(path)
             .map_err(|_| format!("could not create private file {}", path.display()))?;
-        set_private_file_permissions(&path)?;
+        set_private_file_permissions(path)?;
     }
     Ok(())
 }
@@ -549,7 +571,35 @@ pub(crate) fn provision_forgejo(compose_file: &Path, project_name: &str) -> Resu
     let root = compose_root(compose_file)?;
     let mut admin = DockerForgejoAdmin::new(compose_file, project_name);
     let users = wait_for_users(&mut admin)?;
-    ensure_forgejo_credentials(root, &mut admin, users)
+    ensure_forgejo_credentials(&mut admin, users, &[admin_identity(root)])
+}
+
+/// Create any missing lead and reviewer identities for the agents, with their
+/// scoped tokens. Forgejo is asked only when some token is missing, so this
+/// is cheap for agents that are already set up; it must then be running
+/// (`wait` allows for it still starting).
+pub(crate) fn provision_agent_identities(
+    compose_file: &Path,
+    project_name: &str,
+    agents: &[agents::Agent],
+    wait: bool,
+) -> Result<bool, String> {
+    let root = compose_root(compose_file)?;
+    let identities = agent_identities(root, agents);
+    let mut ready = true;
+    for identity in &identities {
+        ready &= token_scopes_are_ready(&identity.token_path, identity.scopes)?;
+    }
+    if ready {
+        return Ok(false);
+    }
+    let mut admin = DockerForgejoAdmin::new(compose_file, project_name);
+    let users = if wait {
+        wait_for_users(&mut admin)?
+    } else {
+        admin.list_users()?
+    };
+    ensure_forgejo_credentials(&mut admin, users, &identities)
 }
 
 trait ForgejoAdmin {
@@ -575,27 +625,27 @@ fn wait_for_users(admin: &mut impl ForgejoAdmin) -> Result<HashSet<String>, Stri
 }
 
 fn ensure_forgejo_credentials(
-    root: &Path,
     admin: &mut impl ForgejoAdmin,
     mut users: HashSet<String>,
+    identities: &[ForgejoIdentity],
 ) -> Result<bool, String> {
     let mut changed = false;
-    for identity in FORGEJO_IDENTITIES {
-        let created = if users.contains(identity.username) {
+    for identity in identities {
+        let created = if users.contains(&identity.username) {
             false
         } else {
             admin.create_user(identity)?;
-            users.insert(identity.username.to_string());
+            users.insert(identity.username.clone());
             true
         };
-        let path = secret_path(root, &identity.token);
-        if !created && token_scopes_are_ready(&path, identity.scopes)? {
+        let path = &identity.token_path;
+        if !created && token_scopes_are_ready(path, identity.scopes)? {
             continue;
         }
-        let token = admin.generate_token(identity.username, identity.scopes)?;
+        let token = admin.generate_token(&identity.username, identity.scopes)?;
         validate_secret_bytes(&token)?;
-        write_secret(&path, &token)?;
-        write_secret(&token_scope_marker_path(&path), identity.scopes.as_bytes())?;
+        write_secret(path, &token)?;
+        write_secret(&token_scope_marker_path(path), identity.scopes.as_bytes())?;
         changed = true;
     }
     Ok(changed)
@@ -665,9 +715,9 @@ impl ForgejoAdmin for DockerForgejoAdmin {
             "user",
             "create",
             "--username",
-            identity.username,
+            &identity.username,
             "--email",
-            identity.email,
+            &identity.email,
             "--random-password",
             "--must-change-password=false",
         ]);
@@ -912,12 +962,66 @@ mod tests {
         }
     }
 
-    fn write_current_forgejo_token(root: &Path, identity: &ForgejoIdentity, token: &[u8]) {
-        let path = secret_path(root, &identity.token);
+    fn write_current_forgejo_token(identity: &ForgejoIdentity, token: &[u8]) {
+        let path = &identity.token_path;
         fs::create_dir_all(path.parent().expect("token parent")).expect("create token parent");
-        write_secret(&path, token).expect("write token");
-        write_secret(&token_scope_marker_path(&path), identity.scopes.as_bytes())
+        write_secret(path, token).expect("write token");
+        write_secret(&token_scope_marker_path(path), identity.scopes.as_bytes())
             .expect("write token scopes");
+    }
+
+    fn test_agents() -> Vec<agents::Agent> {
+        vec![
+            agents::Agent::new("codex", "Codex", agents::Provider::Codex),
+            agents::Agent::new("claude-max", "Claude Max", agents::Provider::Claude),
+        ]
+    }
+
+    /// The administrator followed by each agent's lead and reviewer.
+    fn test_identities(root: &Path) -> Vec<ForgejoIdentity> {
+        let mut identities = vec![admin_identity(root)];
+        identities.extend(agent_identities(root, &test_agents()));
+        identities
+    }
+
+    #[test]
+    fn agents_get_a_lead_and_reviewer_identity_at_stable_paths() {
+        let root = Path::new("/runtime");
+        let identities = agent_identities(root, &test_agents());
+        let names: Vec<_> = identities
+            .iter()
+            .map(|identity| identity.username.as_str())
+            .collect();
+        assert_eq!(
+            names,
+            [
+                "codex-lead",
+                "codex-reviewer",
+                "claude-max-lead",
+                "claude-max-reviewer"
+            ]
+        );
+        // The migrated agent keeps the provider profile's token file.
+        assert_eq!(
+            identities[0].token_path,
+            root.join(".commitarium/agents/codex-lead/forgejo-token")
+        );
+        assert!(identities
+            .iter()
+            .all(|identity| !identity.admin && identity.scopes == AGENT_SCOPES));
+    }
+
+    #[test]
+    fn agent_worker_tokens_are_created_once_per_agent() {
+        let root = tempfile::tempdir().expect("temp root");
+        let compose_file = root.path().join("compose.yml");
+        fs::write(&compose_file, "services: {}").expect("compose file");
+        prepare_transport_secrets(&compose_file).expect("transport secrets");
+        assert!(prepare_agent_worker_tokens(&compose_file, &test_agents()).expect("first"));
+        assert!(!prepare_agent_worker_tokens(&compose_file, &test_agents()).expect("second"));
+        let directory = agent_worker_token_dir(&compose_file).expect("token directory");
+        assert!(directory.join("agent-claude-max-worker-token").is_file());
+        assert!(directory.join("agent-codex-worker-token").is_file());
     }
 
     #[test]
@@ -954,15 +1058,17 @@ mod tests {
         let root = tempfile::tempdir().expect("temp root");
         let compose_file = root.path().join("compose.yml");
         fs::write(&compose_file, "services: {}").expect("compose file");
-        let preserved = secret_path(root.path(), &FORGEJO_IDENTITIES[0].token);
+        let identities = test_identities(root.path());
+        let preserved = &identities[0].token_path;
         fs::create_dir_all(preserved.parent().expect("parent")).expect("parent");
-        fs::write(&preserved, b"existing-token").expect("existing token");
+        fs::write(preserved, b"existing-token").expect("existing token");
 
-        prepare_forgejo_secret_mounts(&compose_file).expect("prepare restore mounts");
+        prepare_forgejo_secret_mounts(&compose_file, &test_agents())
+            .expect("prepare restore mounts");
 
         assert_eq!(fs::read(preserved).expect("token"), b"existing-token");
-        for identity in &FORGEJO_IDENTITIES[1..] {
-            let path = secret_path(root.path(), &identity.token);
+        for identity in &identities[1..] {
+            let path = &identity.token_path;
             assert!(path.is_file());
             assert!(fs::read(path).expect("placeholder").is_empty());
         }
@@ -971,41 +1077,41 @@ mod tests {
     #[test]
     fn forgejo_bootstrap_adopts_users_repairs_empty_mount_directories_and_is_idempotent() {
         let root = tempfile::tempdir().expect("temp root");
-        let existing = &FORGEJO_IDENTITIES[0];
-        let existing_path = secret_path(root.path(), &existing.token);
-        write_current_forgejo_token(root.path(), existing, b"existing-token");
+        let identities = test_identities(root.path());
+        let existing = &identities[0];
+        write_current_forgejo_token(existing, b"existing-token");
 
-        let broken = &FORGEJO_IDENTITIES[1];
-        fs::create_dir_all(secret_path(root.path(), &broken.token)).expect("empty mount directory");
+        let broken = &identities[1];
+        fs::create_dir_all(&broken.token_path).expect("empty mount directory");
 
         let mut admin = FakeAdmin::default();
-        admin.users.insert(existing.username.to_string());
+        admin.users.insert(existing.username.clone());
         let users = admin.users.clone();
         assert!(
-            ensure_forgejo_credentials(root.path(), &mut admin, users).expect("first bootstrap")
+            ensure_forgejo_credentials(&mut admin, users, &identities).expect("first bootstrap")
         );
 
         assert_eq!(
-            fs::read(existing_path).expect("existing token"),
+            fs::read(&existing.token_path).expect("existing token"),
             b"existing-token"
         );
-        assert_eq!(admin.created.len(), FORGEJO_IDENTITIES.len() - 1);
-        assert_eq!(admin.generated.len(), FORGEJO_IDENTITIES.len() - 1);
+        assert_eq!(admin.created.len(), identities.len() - 1);
+        assert_eq!(admin.generated.len(), identities.len() - 1);
         assert!(admin
             .generated
             .iter()
             .all(|(_, scopes)| !scopes.contains("all")));
-        assert!(FORGEJO_IDENTITIES[0]
+        assert!(identities[0]
             .scopes
             .split(',')
             .any(|scope| scope == "write:admin"));
-        assert!(secret_path(root.path(), &broken.token).is_file());
+        assert!(broken.token_path.is_file());
 
         let created = admin.created.len();
         let generated = admin.generated.len();
         let users = admin.users.clone();
         assert!(
-            !ensure_forgejo_credentials(root.path(), &mut admin, users).expect("second bootstrap")
+            !ensure_forgejo_credentials(&mut admin, users, &identities).expect("second bootstrap")
         );
         assert_eq!(admin.created.len(), created);
         assert_eq!(admin.generated.len(), generated);
@@ -1014,23 +1120,24 @@ mod tests {
     #[test]
     fn forgejo_bootstrap_rotates_a_token_when_its_scope_marker_is_missing() {
         let root = tempfile::tempdir().expect("temp root");
+        let identities = test_identities(root.path());
         let mut admin = FakeAdmin::default();
-        for identity in FORGEJO_IDENTITIES {
-            admin.users.insert(identity.username.to_string());
-            write_current_forgejo_token(root.path(), identity, b"current-token");
+        for identity in &identities {
+            admin.users.insert(identity.username.clone());
+            write_current_forgejo_token(identity, b"current-token");
         }
 
-        let administrator = &FORGEJO_IDENTITIES[0];
-        let administrator_path = secret_path(root.path(), &administrator.token);
+        let administrator = &identities[0];
+        let administrator_path = administrator.token_path.clone();
         fs::remove_file(token_scope_marker_path(&administrator_path)).expect("remove old marker");
         admin.tokens.insert(
-            administrator.username.to_string(),
+            administrator.username.clone(),
             b"upgraded-admin-token".to_vec(),
         );
 
         let users = admin.users.clone();
         assert!(
-            ensure_forgejo_credentials(root.path(), &mut admin, users).expect("upgrade old token")
+            ensure_forgejo_credentials(&mut admin, users, &identities).expect("upgrade old token")
         );
         assert_eq!(
             admin.generated,

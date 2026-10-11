@@ -107,7 +107,7 @@ func TestNewServerValidatesConfiguration(t *testing.T) {
 		{name: "unknown provider", config: withServerProvider(validConfig, "unknown"), service: service},
 		{name: "no capabilities", config: withServerCapabilities(validConfig, nil), service: service},
 		{name: "duplicate capabilities", config: withServerCapabilities(validConfig, []Capability{CapabilityStart, CapabilityStart}), service: service},
-		{name: "nonpositive concurrency", config: withServerConcurrency(validConfig, 0), service: service},
+		{name: "negative concurrency", config: withServerConcurrency(validConfig, -1), service: service},
 	}
 
 	for _, test := range tests {

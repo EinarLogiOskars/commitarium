@@ -234,7 +234,10 @@ func TestServiceCreateResolvesPerOrderOverrides(t *testing.T) {
 		MergePolicy:    project.MergePolicyRequireUserApproval,
 		AutonomyPolicy: project.AutonomyPolicyReviewEachPhase,
 	}
-	overrideProviders := project.AgentProviders{Lead: project.AgentProviderClaude, Reviewer: project.AgentProviderCodex}
+	overrideProviders := project.AgentProviders{
+		Lead: project.AgentProviderClaude, Reviewer: project.AgentProviderCodex,
+		LeadAgent: "claude-max", ReviewerAgent: "codex",
+	}
 	overrideAutonomy := project.AutonomyPolicyRunToCompletion
 	store := &recordingStore{}
 	service := NewService(store, &recordingProjectFinder{result: defaults})

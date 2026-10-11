@@ -1075,3 +1075,45 @@ func (clock *stepClock) Now() time.Time {
 	clock.now = clock.now.Add(time.Millisecond)
 	return clock.now
 }
+
+// An agent's worker serves several work orders at once: each attempt is its
+// own provider session, and starting one never waits for another (ADR-016).
+func TestJournalBackedServiceRunsAttemptsConcurrently(t *testing.T) {
+	provider := worker.NewRepeatingScriptedAdapter("codex", map[worker.Role]worker.Script{
+		worker.RoleCoder: {
+			Events:      []worker.Event{{Type: worker.EventMessage, Text: "working"}},
+			Disposition: worker.DispositionSucceeded, Summary: "finished",
+		},
+	})
+	harness := newHTTPHarness(t, filepath.Join(t.TempDir(), "worker.db"), provider, newStepClock())
+	identities := []workerhttp.MutationIdentity{
+		validLaunchIdentity("ses_order_one", "att_order_one", "launch_order_one"),
+		validLaunchIdentity("ses_order_two", "att_order_two", "launch_order_two"),
+	}
+	for _, identity := range identities {
+		attempt, created, err := harness.client.PutAttempt(t.Context(), identity, validPutRequest())
+		if err != nil || !created || attempt.State != workerhttp.AttemptStateRunning {
+			t.Fatalf("start %s: attempt=%+v created=%t err=%v", identity.SessionID, attempt, created, err)
+		}
+	}
+	for _, identity := range identities {
+		attempt, err := harness.client.GetAttempt(t.Context(), identity.AttemptReference)
+		if err != nil || attempt.State != workerhttp.AttemptStateRunning {
+			t.Fatalf("%s is not running alongside the other: attempt=%+v err=%v", identity.SessionID, attempt, err)
+		}
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for _, identity := range identities {
+		for {
+			attempt, err := harness.client.GetAttempt(t.Context(), identity.AttemptReference)
+			if err == nil && attempt.State == workerhttp.AttemptStateTerminal {
+				break
+			}
+			_ = provider.Advance(t.Context(), identity.SessionID)
+			if time.Now().After(deadline) {
+				t.Fatalf("%s did not finish: attempt=%+v err=%v", identity.SessionID, attempt, err)
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+}
