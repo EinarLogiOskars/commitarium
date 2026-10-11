@@ -1143,6 +1143,12 @@ textarea {
   flex: 1;
   min-width: 0;
 }
+.wait-banner--login .agent-login {
+  flex-basis: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
 .agent-add {
   display: flex;
   flex-direction: column;

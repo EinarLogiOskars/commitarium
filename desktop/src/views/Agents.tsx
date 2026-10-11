@@ -38,6 +38,128 @@ function tone(s: ProfileStatus): "ok" | "bad" | "warn" | "muted" {
   return "warn";
 }
 
+function isActive(status: ProfileStatus): boolean {
+  return [
+    "starting",
+    "waiting_for_browser",
+    "waiting_for_code",
+    "waiting_for_api_key",
+    "verifying",
+  ].includes(status);
+}
+
+/** Once an agent is connected, start its worker with the rest of the stack and
+ * let work orders that paused on its expired login continue (ADR-017). */
+export async function afterAgentConnected(agentId: string): Promise<void> {
+  await stackUp();
+  await agentLoggedIn(agentId);
+}
+
+/** The steps of a login in progress: the provider's login page and device
+ * code, Claude's paste-back code, an API key, and Cancel. Renders nothing
+ * while no login is active. */
+export function LoginSteps({ profile, onChanged }: { profile: Profile; onChanged: () => void }) {
+  const [code, setCode] = useState("");
+  const [apiKey, setApiKey] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const openedUrl = useRef<string | null>(null);
+  const s = profile.status;
+
+  // Auto-open the provider login page once when it appears.
+  useEffect(() => {
+    const url = profile.detail?.browserUrl;
+    if (url && openedUrl.current !== url) {
+      openedUrl.current = url;
+      void openExternal(url);
+    }
+  }, [profile.detail?.browserUrl]);
+
+  const run = async (fn: () => Promise<unknown>) => {
+    setBusy(true);
+    setError(null);
+    try {
+      await fn();
+      onChanged();
+    } catch (e) {
+      setError(describe(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (!isActive(s) && !profile.detail?.browserUrl) return null;
+  return (
+    <>
+      {error && <div className="banner banner--error">{error}</div>}
+      {profile.detail?.deviceCode && (
+        <p className="profile-row__code">
+          Enter this code on the page: <span className="mono">{profile.detail.deviceCode}</span>
+        </p>
+      )}
+      {profile.detail?.browserUrl && isActive(s) && (
+        <div className="row">
+          <button onClick={() => void openExternal(profile.detail!.browserUrl!)}>
+            Open login page
+          </button>
+        </div>
+      )}
+      {profile.provider === "claude" &&
+        ["starting", "waiting_for_browser", "waiting_for_code"].includes(s) && (
+          <div className="row">
+            <input
+              type="text"
+              placeholder="Paste the code from the browser"
+              value={code}
+              onChange={(e) => setCode(e.target.value)}
+              disabled={busy}
+            />
+            <button
+              className="primary"
+              onClick={() =>
+                run(() => submitLoginCode(profile.id, code.trim())).then(() => setCode(""))
+              }
+              disabled={busy || !code.trim()}
+            >
+              Submit code
+            </button>
+          </div>
+        )}
+      {s === "waiting_for_api_key" && (
+        <div className="api-key">
+          <input
+            type="password"
+            placeholder="Paste your API key"
+            value={apiKey}
+            onChange={(e) => setApiKey(e.target.value)}
+            disabled={busy}
+          />
+          <button
+            className="primary"
+            onClick={() =>
+              run(() => submitApiKey(profile.id, apiKey.trim())).then(() => setApiKey(""))
+            }
+            disabled={busy || !apiKey.trim()}
+          >
+            Save key
+          </button>
+        </div>
+      )}
+      {isActive(s) && (
+        <div className="row">
+          <button
+            className="ghost"
+            onClick={() => void run(() => cancelLogin(profile.id))}
+            disabled={busy}
+          >
+            Cancel login
+          </button>
+        </div>
+      )}
+    </>
+  );
+}
+
 /** Agents (ADR-016): one per provider account. Each signs in once and can lead
  * or review any number of work orders. */
 export function Agents({ onClose }: { onClose: () => void }) {
@@ -66,12 +188,8 @@ export function Agents({ onClose }: { onClose: () => void }) {
           x.id === p.profileId ? { ...x, status: p.status, detail: p.detail } : x,
         ),
       );
-      // A newly connected agent's worker starts with the rest of the stack,
-      // and work orders that paused on its expired login continue.
       if (p.status === "connected")
-        void stackUp()
-          .then(() => agentLoggedIn(p.profileId))
-          .catch((e) => setError(String(e)));
+        void afterAgentConnected(p.profileId).catch((e) => setError(String(e)));
     });
     return () => {
       void unlisten.then((fn) => fn());
@@ -179,29 +297,11 @@ function ProfileRow({
 }) {
   const [renaming, setRenaming] = useState<string | null>(null);
   const [picking, setPicking] = useState(false);
-  const [code, setCode] = useState("");
-  const [apiKey, setApiKey] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const openedUrl = useRef<string | null>(null);
 
   const s = profile.status;
-  const active = [
-    "starting",
-    "waiting_for_browser",
-    "waiting_for_code",
-    "waiting_for_api_key",
-    "verifying",
-  ].includes(s);
-
-  // Auto-open the provider login page once when it appears.
-  useEffect(() => {
-    const url = profile.detail?.browserUrl;
-    if (url && openedUrl.current !== url) {
-      openedUrl.current = url;
-      void openExternal(url);
-    }
-  }, [profile.detail?.browserUrl]);
+  const active = isActive(s);
 
   const run = async (fn: () => Promise<unknown>) => {
     setBusy(true);
@@ -328,74 +428,7 @@ function ProfileRow({
         </div>
       )}
 
-      {/* Active login states */}
-      {profile.detail?.deviceCode && (
-        <p className="profile-row__code">
-          Enter this code on the page: <span className="mono">{profile.detail.deviceCode}</span>
-        </p>
-      )}
-      {profile.detail?.browserUrl && (
-        <div className="row">
-          <button onClick={() => void openExternal(profile.detail!.browserUrl!)}>
-            Open login page
-          </button>
-        </div>
-      )}
-
-      {profile.provider === "claude" &&
-        ["starting", "waiting_for_browser", "waiting_for_code"].includes(s) && (
-          <div className="row">
-            <input
-              type="text"
-              placeholder="Paste the code from the browser"
-              value={code}
-              onChange={(e) => setCode(e.target.value)}
-              disabled={busy}
-            />
-            <button
-              className="primary"
-              onClick={() =>
-                run(() => submitLoginCode(profile.id, code.trim())).then(() => setCode(""))
-              }
-              disabled={busy || !code.trim()}
-            >
-              Submit code
-            </button>
-          </div>
-        )}
-
-      {s === "waiting_for_api_key" && (
-        <div className="api-key">
-          <input
-            type="password"
-            placeholder="Paste your API key"
-            value={apiKey}
-            onChange={(e) => setApiKey(e.target.value)}
-            disabled={busy}
-          />
-          <button
-            className="primary"
-            onClick={() =>
-              run(() => submitApiKey(profile.id, apiKey.trim())).then(() => setApiKey(""))
-            }
-            disabled={busy || !apiKey.trim()}
-          >
-            Save key
-          </button>
-        </div>
-      )}
-
-      {active && (
-        <div className="row">
-          <button
-            className="ghost"
-            onClick={() => void run(() => cancelLogin(profile.id))}
-            disabled={busy}
-          >
-            Cancel login
-          </button>
-        </div>
-      )}
+      <LoginSteps profile={profile} onChanged={onChanged} />
     </div>
   );
 }
