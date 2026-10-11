@@ -296,8 +296,9 @@ function ReadyView({
 }) {
   const [busy, setBusy] = useState<null | "start" | "reopen">(null);
   const [error, setError] = useState<string | null>(null);
-  // Agents, models, and workflow settings are chosen here, at Start.
-  const [settings, setSettings] = useState<StartSettingsValue | null>(null);
+  // Agents, models, and workflow settings are chosen here, at Start,
+  // starting from the work order's current settings (its project's defaults).
+  const [settings, setSettings] = useState<StartSettingsValue>(() => startSettingsFrom(feature));
 
   const run = async (action: "start" | "reopen") => {
     setBusy(action);
@@ -311,7 +312,7 @@ function ReadyView({
           projectId,
           feature.id,
           `start-${feature.id}-${feature.updated_at}`,
-          settings ?? undefined,
+          settings,
         );
       } else {
         await reopenWorkOrder(projectId, feature.id, crypto.randomUUID());
@@ -332,16 +333,17 @@ function ReadyView({
         The lead and reviewer start from this brief. The lead first checks it against what has
         changed on main since it was written, then plans the commits with the reviewer.
       </p>
-      {brief && (
-        <BriefEditor
-          projectId={projectId}
-          featureId={feature.id}
-          brief={brief}
-          revision={briefRevision}
-          disabled={busy !== null}
-        />
-      )}
-      {settings ? (
+      {/* The brief and the settings scroll together; Start stays in view. */}
+      <div className="ready__scroll">
+        {brief && (
+          <BriefEditor
+            projectId={projectId}
+            featureId={feature.id}
+            brief={brief}
+            revision={briefRevision}
+            disabled={busy !== null}
+          />
+        )}
         <div className="start-settings">
           <span className="neworder__heading">Start with</span>
           <StartSettings
@@ -351,29 +353,16 @@ function ReadyView({
             onOpenValidation={onOpenValidation}
             disabled={busy !== null}
           />
-          <div className="row">
-            <button className="primary" onClick={() => void run("start")} disabled={busy !== null}>
-              {busy === "start" ? "Starting…" : "Start work order"}
-            </button>
-            <button className="ghost" onClick={() => setSettings(null)} disabled={busy !== null}>
-              Cancel
-            </button>
-          </div>
         </div>
-      ) : (
-        <div className="row">
-          <button
-            className="primary"
-            onClick={() => setSettings(startSettingsFrom(feature))}
-            disabled={busy !== null}
-          >
-            Start…
-          </button>
-          <button className="ghost" onClick={() => void run("reopen")} disabled={busy !== null}>
-            {busy === "reopen" ? "Reopening…" : "Reopen for clarification"}
-          </button>
-        </div>
-      )}
+      </div>
+      <div className="row">
+        <button className="primary" onClick={() => void run("start")} disabled={busy !== null}>
+          {busy === "start" ? "Starting…" : "Start"}
+        </button>
+        <button className="ghost" onClick={() => void run("reopen")} disabled={busy !== null}>
+          {busy === "reopen" ? "Reopening…" : "Reopen for clarification"}
+        </button>
+      </div>
     </section>
   );
 }

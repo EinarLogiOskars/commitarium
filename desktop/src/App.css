@@ -2868,24 +2868,24 @@ button.danger:not(.ghost) {
 .brief--editing textarea {
   width: 100%;
 }
-/* In the fixed-height Ready panel the brief scrolls inside it, so Start and
-   Reopen stay in view however long the brief is. */
-.panel--phase > .brief {
+/* In the fixed-height Ready panel the brief and the start settings scroll
+   together, so Start and Reopen stay in view however long the brief is. */
+.ready__scroll {
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
   padding-right: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
 }
-.panel--phase > .brief > .linkish {
+.ready__scroll .brief > .linkish {
   align-self: flex-start;
 }
 .panel--phase > .row {
   flex: none;
 }
-.panel--phase > .start-settings {
-  flex: none;
-  max-height: 70%;
-  overflow-y: auto;
+.start-settings {
   display: flex;
   flex-direction: column;
   gap: 10px;
