@@ -70,6 +70,14 @@ func (stopper *RunStopper) StopWorkOrderRuns(ctx context.Context, featureID, req
 	)
 }
 
+// StopWorkOrderRunsForReady stops a work order's runs before it returns to
+// Ready; the runs stay in its history (ADR-017).
+func (stopper *RunStopper) StopWorkOrderRunsForReady(ctx context.Context, featureID, requestKey string) error {
+	return stopper.stopFeatureRuns(
+		ctx, featureID, requestKey, "The user returned this work order to Ready to start over.",
+	)
+}
+
 func (stopper *RunStopper) stopFeatureRuns(
 	ctx context.Context,
 	featureID string,

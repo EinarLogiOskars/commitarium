@@ -388,6 +388,14 @@ without comparing human-readable messages. Connection failures and malformed
 responses use separate errors, so they cannot be mistaken for a deliberate
 worker decision.
 
+A failed provider turn ends its attempt with `outcome: "failed"` and an
+`error` naming the provider's reason. When the provider says its login can no
+longer be used — an expired subscription session or an invalid API key — the
+code is `provider_login_required` (retryable), so the coordinator waits for
+the agent to log in again instead of retrying a turn that cannot succeed
+(ADR-017). Other provider failures use `internal_error` with the provider's
+message.
+
 ## Current boundary
 
 The HTTP handler depends on a small process-control service interface plus a

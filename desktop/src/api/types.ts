@@ -354,6 +354,8 @@ export interface Run {
   // Non-terminal lead/reviewer sessions a message may target (empty on terminal
   // runs). `intervention` describes the latest request once one has been made.
   intervention_targets?: InterventionTarget[];
+  // Set while the run waits for an agent's provider login to be renewed.
+  login_required?: { agent: string; role: "lead" | "reviewer" };
   intervention?: Intervention;
   // Present on the immediate response to an explicit recovery action. Normal
   // run reads remain unchanged.

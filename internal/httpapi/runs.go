@@ -39,6 +39,18 @@ type runResponse struct {
 	InterventionTargets        []interventionTargetResponse `json:"intervention_targets"`
 	Intervention               *interventionResponse        `json:"intervention,omitempty"`
 	Recovery                   *recoveryResponse            `json:"recovery,omitempty"`
+	LoginRequired              *loginRequiredResponse       `json:"login_required,omitempty"`
+}
+
+// loginRequiredResponse names the agent a paused run waits for to log in
+// again (ADR-017).
+type loginRequiredResponse struct {
+	Agent string      `json:"agent"`
+	Role  worker.Role `json:"role"`
+}
+
+type runLoginWaits interface {
+	LoginWaitForRun(context.Context, string) (execution.LoginWait, error)
 }
 
 type recoveryResponse struct {
@@ -322,6 +334,16 @@ func (api *API) newRunResponse(
 	}
 	for _, session := range sessions {
 		response.Sessions = append(response.Sessions, newSessionResponse(session))
+	}
+	if waits, ok := api.execution.(runLoginWaits); ok &&
+		run.Status == execution.RunStatusWaitingForUser && run.WaitKind == execution.RunWaitKindBlocker {
+		wait, err := waits.LoginWaitForRun(ctx, run.ID)
+		if err != nil {
+			return runResponse{}, err
+		}
+		if wait.AgentID != "" {
+			response.LoginRequired = &loginRequiredResponse{Agent: wait.AgentID, Role: wait.Role}
+		}
 	}
 	targets, err := api.execution.InterventionTargetsForRun(ctx, run.ID)
 	if err != nil {

@@ -414,6 +414,10 @@ func (service *Service) finishAttempt(
 			Message:   result.Summary,
 			Retryable: false,
 		}
+		if result.LoginRequired {
+			terminalResult.Error.Code = workerhttp.ErrorProviderLoginRequired
+			terminalResult.Error.Retryable = true
+		}
 	}
 	_ = service.completeAttemptLocked(service.lifetime, attempt, terminalResult)
 }

@@ -56,10 +56,9 @@ with the implementation and public API documentation they describe.
   device codes. Raw provider output and credentials are never emitted.
 - Subscription and API-key setup both write only to the agent's private
   provider-state volume, which its worker uses for lead and reviewer work.
-- A login runs inside the agent's worker while it runs, so an expired login can
-  be renewed without stopping the stack. A running agent worker must be
-  stopped before its login is removed.
-  This is an intentional volume-ownership and active-work safety rule.
+- Logging in and disconnecting run inside the agent's worker while it runs, so
+  no second container mounts its provider volume. A work order that loses its
+  agent's login pauses until the agent logs in again (ADR-017).
 
 ### Profile-aware stack lifecycle
 

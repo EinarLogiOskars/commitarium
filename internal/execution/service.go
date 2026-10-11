@@ -228,6 +228,72 @@ func (s *Service) TransitionRun(
 	return run, nil
 }
 
+// LoginWait names the agent whose provider login a paused run waits for.
+type LoginWait struct {
+	AgentID string
+	Role    worker.Role
+}
+
+// LoginWaitStore is implemented by stores that record runs waiting for an
+// agent to log in again (ADR-017).
+type LoginWaitStore interface {
+	RecordLoginWait(ctx context.Context, runID, agentID string, role worker.Role, occurredAt time.Time) error
+	ClearLoginWait(ctx context.Context, runID string) error
+	LoginWaitForRun(ctx context.Context, runID string) (LoginWait, error)
+	RunsAwaitingLogin(ctx context.Context, agentID string) ([]string, error)
+}
+
+// RecordLoginWait notes that a run waits for an agent to log in again.
+func (s *Service) RecordLoginWait(ctx context.Context, runID, agentID string, role worker.Role) error {
+	if waits, ok := s.store.(LoginWaitStore); ok {
+		return waits.RecordLoginWait(ctx, runID, agentID, role, s.now().UTC())
+	}
+	return nil
+}
+
+// ClearLoginWait forgets a run's login wait, if any.
+func (s *Service) ClearLoginWait(ctx context.Context, runID string) error {
+	if waits, ok := s.store.(LoginWaitStore); ok {
+		return waits.ClearLoginWait(ctx, runID)
+	}
+	return nil
+}
+
+// LoginWaitForRun returns the agent a run waits on to log in, if any.
+func (s *Service) LoginWaitForRun(ctx context.Context, runID string) (LoginWait, error) {
+	if waits, ok := s.store.(LoginWaitStore); ok {
+		return waits.LoginWaitForRun(ctx, runID)
+	}
+	return LoginWait{}, nil
+}
+
+// RunsAwaitingLogin lists the runs waiting for an agent to log in again.
+func (s *Service) RunsAwaitingLogin(ctx context.Context, agentID string) ([]string, error) {
+	if waits, ok := s.store.(LoginWaitStore); ok {
+		return waits.RunsAwaitingLogin(ctx, agentID)
+	}
+	return nil, nil
+}
+
+// RunReopener is implemented by stores that can reopen a failed run.
+type RunReopener interface {
+	ReopenFailedRun(ctx context.Context, runID string, reason string, occurredAt time.Time) (Run, error)
+}
+
+// ReopenRun turns a failed run back into a blocker pause at its last turn
+// (ADR-017), so the user can continue, message an agent, or start over.
+func (s *Service) ReopenRun(ctx context.Context, runID string) (Run, error) {
+	reopener, ok := s.store.(RunReopener)
+	if !ok {
+		return Run{}, ErrStateConflict
+	}
+	return reopener.ReopenFailedRun(
+		ctx, runID,
+		"The work order was reopened after it failed. Continue to retry the last turn, or message an agent.",
+		s.now().UTC(),
+	)
+}
+
 func (s *Service) ApplyRunPause(
 	ctx context.Context,
 	id string,

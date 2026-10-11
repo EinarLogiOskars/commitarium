@@ -44,6 +44,8 @@ type session struct {
 	usageBaseline        *tokenUsageBreakdown
 	usageLatest          *tokenUsageBreakdown
 	result               worker.Result
+	lastError            string
+	lastErrorLogin       bool
 	waitErr              error
 	finished             bool
 }
@@ -285,6 +287,10 @@ type scopedNotification struct {
 	Turn      turnRecord `json:"turn"`
 	Item      threadItem `json:"item"`
 	WillRetry bool       `json:"willRetry"`
+	Error     struct {
+		Message        string          `json:"message"`
+		CodexErrorInfo json.RawMessage `json:"codexErrorInfo"`
+	} `json:"error"`
 }
 
 type agentMessageDelta struct {
@@ -439,6 +445,13 @@ func (session *session) translate(
 			text := "Codex reported an error."
 			if params.WillRetry {
 				text = "Codex reported a temporary error and will retry."
+			} else {
+				message := strings.TrimSpace(params.Error.Message)
+				session.mu.Lock()
+				session.lastError = message
+				session.lastErrorLogin = worker.IsLoginFailure(message) ||
+					strings.Contains(strings.ToLower(string(params.Error.CodexErrorInfo)), "unauthorized")
+				session.mu.Unlock()
 			}
 			return events(event(worker.EventActivity, text)), false, worker.Result{}, nil
 		case "turn/completed":
@@ -747,11 +760,19 @@ func (session *session) completedTurn(
 			Usage:             session.turnUsage(),
 		}, nil
 	case "failed":
+		session.mu.Lock()
+		cause, login := session.lastError, session.lastErrorLogin
+		session.mu.Unlock()
+		summary := "Codex reported that the turn failed."
+		if cause != "" {
+			summary = "Codex reported that the turn failed: " + cause
+		}
 		return nil, true, worker.Result{
 			Outcome:           worker.OutcomeFailed,
 			ProviderSessionID: session.threadID,
-			Summary:           "Codex reported that the turn failed.",
+			Summary:           summary,
 			Usage:             session.turnUsage(),
+			LoginRequired:     login,
 		}, nil
 	default:
 		return nil, false, worker.Result{}, fmt.Errorf(

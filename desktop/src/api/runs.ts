@@ -45,6 +45,10 @@ export const mergeRun = (runId: string, key: string): Promise<Run> =>
 // stops automatic handoffs at the next safe boundary; resume clears it (and,
 // under run_to_completion, dispatches any retained checkpoint). Reusing a key
 // for the opposite action returns 409 idempotency_conflict, so keys differ.
+/** Reopen a failed run as a recovery pause at its last turn (ADR-017). */
+export const reopenRun = (runId: string): Promise<Run> =>
+  request(`${runPath(runId)}/reopen`, { method: "POST" });
+
 export const pauseRun = (runId: string, key: string): Promise<Run> =>
   request(`${runPath(runId)}/pause`, { method: "POST", idempotencyKey: key });
 

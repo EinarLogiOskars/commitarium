@@ -1,7 +1,9 @@
 import { useState } from "react";
-import { pauseRun, queueIntervention, resumeRun } from "../api/runs";
+import { pauseRun, queueIntervention, reopenRun, resumeRun } from "../api/runs";
 import { ApiError } from "../api/client";
 import { RecoveryPanel } from "./RecoveryPanel";
+import { AgentLogin } from "./AgentLogin";
+import { agentName, useAgents } from "./useAgents";
 import type { Intervention, InterventionTargetRole, Run } from "../api/types";
 
 // The single, always-present intervention surface. It reflects the true run
@@ -39,6 +41,7 @@ export function InterveneBar({
   const [text, setText] = useState("");
   const [busy, setBusy] = useState<null | "send" | "control">(null);
   const [error, setError] = useState<string | null>(null);
+  const agents = useAgents();
 
   const paused = run.paused === true;
   const pausing = paused && run.status === "running";
@@ -48,6 +51,9 @@ export function InterveneBar({
   // state. Re-check reconciles the durable attempt without a new agent.
   const blocked =
     !suppressRecover && !paused && run.status === "waiting_for_user" && run.wait_kind === "blocker";
+  // Waiting on an agent's login: the login banner is the one action needed,
+  // and the run continues by itself once the agent is connected.
+  const loginWait = blocked && run.login_required != null;
 
   // Prefer the backend's authoritative target list; fall back to the sessions.
   const targets = run.intervention_targets;
@@ -126,6 +132,39 @@ export function InterveneBar({
     else if (running) void control(pauseRun);
   };
 
+  // An ended run takes no messages. A failed one can be reopened at its last
+  // turn (ADR-017); its conversations, branch, and plan are all still there.
+  if (run.status === "failed" || run.status === "stopped") {
+    return (
+      <div className="intervene">
+        <div className="intervene__row">
+          <span className="intervene__state intervene__state--paused">
+            {run.status === "failed" ? "This run failed." : "This run was stopped."}
+          </span>
+          <span className="intervene__actions">
+            {run.status === "failed" && (
+              <button
+                className="primary"
+                onClick={() => void control((id) => reopenRun(id))}
+                disabled={busy != null}
+              >
+                {busy === "control" ? "Reopening…" : "Reopen"}
+              </button>
+            )}
+          </span>
+        </div>
+        {run.reason && <p className="muted intervene__hint">{run.reason}</p>}
+        {error && <div className="banner banner--error">{error}</div>}
+        {run.status === "failed" && (
+          <p className="muted intervene__hint">
+            Reopening pauses the work order at its last turn. Then continue to retry that turn, or
+            message an agent first.
+          </p>
+        )}
+      </div>
+    );
+  }
+
   return (
     <div className="intervene">
       <div className="intervene__row">
@@ -153,7 +192,7 @@ export function InterveneBar({
             >
               Cancel pause
             </button>
-          ) : action ? (
+          ) : action && !blocked ? (
             <button
               className="primary"
               onClick={action.onClick}
@@ -167,7 +206,23 @@ export function InterveneBar({
 
       {error && <div className="banner banner--error">{error}</div>}
 
-      {blocked && <RecoveryPanel run={run} onChanged={onChanged} />}
+      {loginWait && run.login_required && (
+        <div className="wait-banner wait-banner--warn wait-banner--login">
+          <span className="wait-banner__kind">
+            {agentName(agents, run.login_required.agent)} login expired
+          </span>
+          <span>
+            The {run.login_required.role} can't continue until this agent is connected again. The
+            work order continues by itself once you log in.
+          </span>
+          <AgentLogin
+            agentId={run.login_required.agent}
+            agentName={agentName(agents, run.login_required.agent)}
+          />
+        </div>
+      )}
+
+      {blocked && !loginWait && <RecoveryPanel run={run} onChanged={onChanged} />}
 
       {iv && !iv.resolved_at && (
         <div className={`intervene__queued ${answered ? "intervene__queued--done" : ""}`}>

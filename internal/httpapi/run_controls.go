@@ -28,6 +28,53 @@ type directedRecoveryWorkflow interface {
 	RecoverBlockerWithDirective(context.Context, string, string, orchestration.RecoveryDirective) (execution.Run, bool, error)
 }
 
+type loginResumer interface {
+	ResumeAfterLogin(context.Context, string) (int, error)
+}
+
+// resumeAfterLoginHandler continues the runs that paused because the agent's
+// provider login expired, once the desktop reports the agent connected.
+func (api *API) resumeAfterLoginHandler(w http.ResponseWriter, r *http.Request) {
+	resumer, ok := api.realWorkflow.(loginResumer)
+	if !ok {
+		writeJSON(w, http.StatusOK, map[string]int{"resumed": 0}, "login resume")
+		return
+	}
+	resumed, err := resumer.ResumeAfterLogin(r.Context(), r.PathValue("id"))
+	if err != nil {
+		log.Printf("resume runs after agent %q logged in: %v", r.PathValue("id"), err)
+	}
+	writeJSON(w, http.StatusOK, map[string]int{"resumed": resumed}, "login resume")
+}
+
+type runReopener interface {
+	ReopenRun(context.Context, string) (execution.Run, error)
+}
+
+// reopenRunHandler turns a failed run back into a blocker pause (ADR-017).
+// It is idempotent: reopening a reopened run returns it unchanged.
+func (api *API) reopenRunHandler(w http.ResponseWriter, r *http.Request) {
+	reopener, ok := api.execution.(runReopener)
+	if !ok {
+		writeError(w, http.StatusServiceUnavailable, "reopen_unavailable", "reopening runs is unavailable")
+		return
+	}
+	run, err := reopener.ReopenRun(r.Context(), r.PathValue("id"))
+	if err != nil {
+		switch {
+		case errors.Is(err, execution.ErrNotFound):
+			writeError(w, http.StatusNotFound, "run_not_found", "run not found")
+		case errors.Is(err, execution.ErrStateConflict):
+			writeError(w, http.StatusConflict, "run_not_reopenable", "only a failed run of an unfinished work order can be reopened")
+		default:
+			log.Printf("reopen run %q: %v", r.PathValue("id"), err)
+			writeError(w, http.StatusInternalServerError, "internal_error", "internal server error")
+		}
+		return
+	}
+	api.writeRun(w, r, http.StatusOK, run)
+}
+
 func (api *API) pauseRunHandler(w http.ResponseWriter, r *http.Request) {
 	api.changeRunPause(w, r, true)
 }

@@ -130,7 +130,16 @@ pub(crate) fn fetch(wait: bool) -> Result<Vec<Agent>, String> {
         if attempt > 0 {
             thread::sleep(LIST_DELAY);
         }
-        match tauri::async_runtime::block_on(fetch_once()) {
+        // Callers include async commands running on the runtime's own
+        // threads, where blocking on it would panic; a scoped thread is
+        // always safe to block.
+        let fetched = thread::scope(|scope| {
+            scope
+                .spawn(|| tauri::async_runtime::block_on(fetch_once()))
+                .join()
+                .unwrap_or_else(|_| Err("could not reach the coordinator".to_string()))
+        });
+        match fetched {
             Ok(agents) => {
                 save_cache(&agents);
                 return Ok(agents);

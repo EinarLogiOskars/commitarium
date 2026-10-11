@@ -1,6 +1,7 @@
 import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import {
   deleteFeature,
+  returnToReady,
   getFeature,
   getFeatureEvents,
   getFeatureUsage,
@@ -58,6 +59,8 @@ export function FeatureView({
   const [error, setError] = useState<string | null>(null);
   // null = follow the current phase; a number = the user pinned that phase.
   const [pinnedIndex, setPinnedIndex] = useState<number | null>(null);
+  const [confirmReady, setConfirmReady] = useState<string | null>(null);
+  const [resetting, setResetting] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [forceDelete, setForceDelete] = useState(false);
   const [deleteKey, setDeleteKey] = useState("");
@@ -135,6 +138,26 @@ export function FeatureView({
     setError(null);
   };
 
+  // A started, unmerged order can start over from its brief.
+  const restartable = ["planning", "implementing", "reviewing", "ready_to_merge"].includes(
+    feature.state,
+  );
+  const runReturnToReady = async () => {
+    if (!confirmReady) return;
+    setResetting(true);
+    setError(null);
+    try {
+      await returnToReady(projectId, featureId, confirmReady);
+      setConfirmReady(null);
+      setPinnedIndex(null);
+      await load();
+    } catch (e) {
+      setError(describe(e));
+    } finally {
+      setResetting(false);
+    }
+  };
+
   const runDelete = async () => {
     setDeleting(true);
     setError(null);
@@ -176,12 +199,45 @@ export function FeatureView({
             {feature.description && <p className="muted order-head__desc">{feature.description}</p>}
             {usage && usage.roles.length > 0 && <UsageLine usage={usage} />}
           </div>
-          {onDeleted && !confirmDelete && (
-            <button className="ghost danger" onClick={openDeleteConfirm} disabled={deleting}>
-              Delete
-            </button>
-          )}
+          <div className="row">
+            {restartable && !confirmDelete && !confirmReady && (
+              <button
+                className="ghost"
+                onClick={() => setConfirmReady(crypto.randomUUID())}
+                disabled={deleting || resetting}
+              >
+                Back to Ready
+              </button>
+            )}
+            {onDeleted && !confirmDelete && !confirmReady && (
+              <button className="ghost danger" onClick={openDeleteConfirm} disabled={deleting}>
+                Delete
+              </button>
+            )}
+          </div>
         </div>
+
+        {confirmReady && (
+          <div className="delete-confirm">
+            <span className="muted">
+              Start this work order over from its brief? Its run stops and its branch and pull
+              request are closed; the conversations stay in its history. The brief is kept, and you
+              can edit it before starting again.
+            </span>
+            <div className="row">
+              <button
+                className="primary"
+                onClick={() => void runReturnToReady()}
+                disabled={resetting}
+              >
+                {resetting ? "Returning…" : "Back to Ready"}
+              </button>
+              <button className="ghost" onClick={() => setConfirmReady(null)} disabled={resetting}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
 
         {confirmDelete && (
           <div className="delete-confirm">

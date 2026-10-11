@@ -26,6 +26,10 @@ func TestValidateTransitionAllowsWorkflowEdges(t *testing.T) {
 		{name: "accept the brief", current: StateDraft, next: StateReady},
 		{name: "reopen a ready order", current: StateReady, next: StateDraft},
 		{name: "start a ready order", current: StateReady, next: StatePlanning},
+		{name: "return planning to ready", current: StatePlanning, next: StateReady},
+		{name: "return implementation to ready", current: StateImplementing, next: StateReady},
+		{name: "return review to ready", current: StateReviewing, next: StateReady},
+		{name: "return the merge gate to ready", current: StateReadyToMerge, next: StateReady},
 		{
 			name:    "return planning to goal drafting",
 			current: StatePlanning,
@@ -119,7 +123,6 @@ func TestValidateTransitionRejectsInvalidEdges(t *testing.T) {
 	}{
 		{name: "skip planning", current: StateDraft, next: StateImplementing},
 		{name: "implement a ready order", current: StateReady, next: StateImplementing},
-		{name: "planning back to ready", current: StatePlanning, next: StateReady},
 		{name: "skip implementation", current: StatePlanning, next: StateReviewing},
 		{name: "skip review", current: StateImplementing, next: StateReadyToMerge},
 		{name: "merge before ready", current: StateReviewing, next: StateCompleted},
