@@ -13,6 +13,12 @@ import (
 
 var ErrTitleRequired = errors.New("feature title is required")
 
+// ErrInvalidKind rejects a kind of work other than a work order or a session.
+var ErrInvalidKind = errors.New("kind must be work_order or session")
+
+// NewSessionTitle names a session until its first turn names it.
+const NewSessionTitle = "New session"
+
 type ProjectFinder interface {
 	GetByID(ctx context.Context, id string) (project.Project, error)
 }
@@ -44,9 +50,23 @@ func (s *Service) Create(
 	description string,
 	overrides SettingsOverrides,
 ) (Feature, error) {
+	kind := overrides.Kind
+	if kind == "" {
+		kind = KindWorkOrder
+	}
+	if !kind.IsValid() {
+		return Feature{}, ErrInvalidKind
+	}
 	sanitizedTitle := strings.TrimSpace(title)
+	if sanitizedTitle == "" && kind == KindSession {
+		// The first turn names a session after what the user asked for.
+		sanitizedTitle = NewSessionTitle
+	}
 	if sanitizedTitle == "" {
 		return Feature{}, ErrTitleRequired
+	}
+	if kind == KindSession {
+		overrides.Steps = &project.WorkSteps{SkipPlan: true, SkipReviewer: true}
 	}
 
 	storedProject, err := s.projects.GetByID(ctx, projectID)
@@ -85,6 +105,7 @@ func (s *Service) Create(
 		AutonomyPolicy:             settings.AutonomyPolicy,
 		IndependentAcceptanceTests: settings.IndependentAcceptanceTests,
 		Steps:                      settings.Steps,
+		Kind:                       kind,
 		CreatedAt:                  now,
 		UpdatedAt:                  now,
 	}

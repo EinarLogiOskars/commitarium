@@ -271,9 +271,14 @@ export interface Feature {
   autonomy_policy?: AutonomyPolicy;
   merge_policy?: MergePolicy;
   steps?: WorkSteps;
+  // "session" is an interactive session with one agent (ADR-019); absent on
+  // older coordinators, which only have work orders.
+  kind?: WorkKind;
   created_at: string;
   updated_at: string;
 }
+
+export type WorkKind = "work_order" | "session";
 
 export interface CreateFeatureInput {
   title: string;

@@ -17,6 +17,7 @@ func TestFeatureStoreCreateAndGetByID(t *testing.T) {
 	createFeatureTestProject(t, projects, "prj_test")
 
 	expected := feature.Feature{
+		Kind:           feature.KindWorkOrder,
 		ID:             "fea_test",
 		ProjectID:      "prj_test",
 		Title:          "Durable features",
@@ -70,6 +71,7 @@ func TestFeatureStoreCreateRejectsDuplicateID(t *testing.T) {
 	createFeatureTestProject(t, projects, "prj_test")
 
 	original := feature.Feature{
+		Kind:           feature.KindWorkOrder,
 		ID:             "fea_same",
 		ProjectID:      "prj_test",
 		Title:          "Original",
@@ -175,6 +177,7 @@ func TestFeatureStoreListsProjectFeaturesByRecentActivity(t *testing.T) {
 		},
 	}
 	for index := range features {
+		features[index].Kind = feature.KindWorkOrder
 		features[index].DialogueLimits = project.DefaultDialogueLimits()
 		features[index].AgentProviders = project.DefaultAgentProviders()
 		features[index].MergePolicy = project.DefaultMergePolicy()
@@ -297,8 +300,16 @@ func TestFeatureAndRunStoresKeepWorkSteps(t *testing.T) {
 	run, _ := createExecutionRecords(t, db, executions)
 	features := NewFeatureStore(db)
 	stored, err := features.GetByID(t.Context(), run.FeatureID)
-	if err != nil || stored.Steps != (project.WorkSteps{}) {
-		t.Fatalf("existing work order steps = %+v err=%v", stored.Steps, err)
+	if err != nil || stored.Steps != (project.WorkSteps{}) || stored.Kind != feature.KindWorkOrder {
+		t.Fatalf("existing work order steps = %+v kind=%q err=%v", stored.Steps, stored.Kind, err)
+	}
+	session := stored
+	session.ID, session.Kind = "fea_session", feature.KindSession
+	if err := features.Create(t.Context(), session); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	if reloaded, err := features.GetByID(t.Context(), session.ID); err != nil || reloaded.Kind != feature.KindSession {
+		t.Fatalf("session kind = %q err=%v", reloaded.Kind, err)
 	}
 	if _, err := db.ExecContext(t.Context(), `UPDATE features SET state = 'ready' WHERE id = ?`, stored.ID); err != nil {
 		t.Fatalf("make ready: %v", err)

@@ -64,8 +64,10 @@ work and merges it into the default branch through the merge gate (ADR-019).
      push, or touch the pull request unless the user asks it to commit.
    - Work in progress stays in the checkout between turns. The checkout is on
      the host and survives restarts.
-   - After a turn the run waits with a new wait kind, `session` ("Your
-     turn").
+   - After a turn the run waits with the existing `clarification` wait kind,
+     which already means the agent is waiting for the user's reply, as "Your
+     turn". A new wait kind would mean rebuilding the `runs` table to change
+     its CHECK constraint.
 4. **Messages.** `POST .../features/{id}/messages` (idempotent, body
    `{message}`) starts the next turn. It is refused while a turn runs
    (`409 session_busy`). Stopping a running turn uses the existing force
@@ -120,7 +122,7 @@ work and merges it into the default branch through the merge gate (ADR-019).
 | # | Commit | Contents |
 | --- | --- | --- |
 | S1 | `docs: plan sessions` | ADR-019, this plan, vision update. |
-| S2 | `feat: record sessions` | Migration adding `features.kind`; feature and run responses carry `kind`; `session` wait kind. |
+| S2 | `feat: record sessions` | Migration adding `features.kind`; create with `kind: "session"` (no title needed, no plan or reviewer); feature responses carry `kind`. |
 | S3 | `feat(worker): name sessions` | `session_opening` output contract and structured output (reply, title) for Claude and Codex. Needs a worker rebuild. |
 | S4 | `feat(orchestration): run sessions` | Create-and-start (branch, PR, lead session with no turn yet); `messages` endpoint; first turn with the session instructions and the title, then plain resumed turns; `session_busy`; recovery of an in-flight turn and of an idle session. |
 | S5 | `feat(orchestration): catch sessions up with main` | Base tracking; merge-main instructions when the default branch moved; conflict hand-off to the user. |

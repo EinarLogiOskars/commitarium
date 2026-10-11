@@ -21,6 +21,8 @@ type createFeatureRequest struct {
 	MergePolicy                *project.MergePolicy    `json:"merge_policy"`
 	DialogueLimits             *dialogueLimitsRequest  `json:"dialogue_limits"`
 	IndependentAcceptanceTests *bool                   `json:"independent_acceptance_tests"`
+	// Kind is "work_order" (the default) or "session" (ADR-019).
+	Kind feature.Kind `json:"kind"`
 }
 
 type featureResponse struct {
@@ -38,6 +40,7 @@ type featureResponse struct {
 	AutonomyPolicy             project.AutonomyPolicy `json:"autonomy_policy"`
 	IndependentAcceptanceTests bool                   `json:"independent_acceptance_tests"`
 	Steps                      workStepsResponse      `json:"steps"`
+	Kind                       feature.Kind           `json:"kind"`
 	CreatedAt                  time.Time              `json:"created_at"`
 	UpdatedAt                  time.Time              `json:"updated_at"`
 }
@@ -86,6 +89,7 @@ func (api *API) createFeatureHandler(
 	overrides.MergePolicy = request.MergePolicy
 	overrides.AutonomyPolicy = request.AutonomyPolicy
 	overrides.IndependentAcceptanceTests = request.IndependentAcceptanceTests
+	overrides.Kind = request.Kind
 	if api.toolchains != nil {
 		manifest, err := api.toolchains.Get(r.Context(), projectID)
 		if err != nil {
@@ -129,6 +133,8 @@ func (api *API) createFeatureHandler(
 	)
 	if err != nil {
 		switch {
+		case errors.Is(err, feature.ErrInvalidKind):
+			writeError(w, http.StatusBadRequest, "invalid_kind", "kind must be work_order or session")
 		case errors.Is(err, feature.ErrTitleRequired):
 			writeError(
 				w,
@@ -283,7 +289,17 @@ func newFeatureResponse(storedFeature feature.Feature) featureResponse {
 		AutonomyPolicy:             autonomyPolicy,
 		IndependentAcceptanceTests: storedFeature.IndependentAcceptanceTests,
 		Steps:                      newWorkStepsResponse(storedFeature.Steps),
+		Kind:                       featureKind(storedFeature.Kind),
 		CreatedAt:                  storedFeature.CreatedAt,
 		UpdatedAt:                  storedFeature.UpdatedAt,
 	}
+}
+
+// featureKind reports a work order's kind; one without a stored kind is a work
+// order.
+func featureKind(kind feature.Kind) feature.Kind {
+	if kind == "" {
+		return feature.KindWorkOrder
+	}
+	return kind
 }

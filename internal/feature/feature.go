@@ -21,8 +21,22 @@ type Feature struct {
 	AutonomyPolicy             project.AutonomyPolicy
 	IndependentAcceptanceTests bool
 	Steps                      project.WorkSteps
+	Kind                       Kind
 	CreatedAt                  time.Time
 	UpdatedAt                  time.Time
+}
+
+// Kind is the kind of work: a work order that runs on its own, or an
+// interactive session with one agent (ADR-019).
+type Kind string
+
+const (
+	KindWorkOrder Kind = "work_order"
+	KindSession   Kind = "session"
+)
+
+func (kind Kind) IsValid() bool {
+	return kind == KindWorkOrder || kind == KindSession
 }
 
 // SettingsOverrides contains the optional setting categories supplied when a
@@ -35,4 +49,7 @@ type SettingsOverrides struct {
 	AutonomyPolicy             *project.AutonomyPolicy
 	IndependentAcceptanceTests *bool
 	Steps                      *project.WorkSteps
+	// Kind is the kind of work to create; empty is a work order. A session
+	// has neither a plan nor a reviewer.
+	Kind Kind
 }
