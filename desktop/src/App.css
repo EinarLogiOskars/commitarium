@@ -3019,3 +3019,15 @@ button.danger:not(.ghost) {
   gap: 8px;
   align-items: center;
 }
+
+/* Agent CLI updates in the Agents dialog. */
+.cli-updates {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.cli-updates__row {
+  justify-content: space-between;
+  align-items: center;
+}

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { coordinatorReachable } from "./api/health";
 import { useAttention } from "./attention/useAttention";
+import { useAgentCliUpdates } from "./views/useAgentCliUpdates";
 import { useAutoValidation } from "./attention/useAutoValidation";
 import { useNotifier } from "./attention/useNotifier";
 import { useDesktopSettings } from "./settings/useDesktopSettings";
@@ -44,6 +45,8 @@ function App() {
   // Only poll from inside the workspace: the launcher has nowhere to show it.
   const attention = useAttention(entered && reachable);
   const refreshAttention = attention.refresh;
+  // Newer agent CLIs, checked when the stack comes up.
+  const cliUpdates = useAgentCliUpdates(entered && reachable);
   // Auto-merge work orders run their validation without waiting for a click.
   useAutoValidation(attention.items, refreshAttention);
   // Signed desktop updates: check once the stack is usable; the install flow
@@ -166,7 +169,13 @@ function App() {
 
         <Launcher onStackChanged={() => void checkHealth()} />
 
-        {showAgents && <Agents onClose={() => setShowAgents(false)} />}
+        {showAgents && (
+          <Agents
+            onClose={() => setShowAgents(false)}
+            cliUpdates={cliUpdates}
+            runningWork={attention.running.length}
+          />
+        )}
         {showViewer && <ForgejoViewer onClose={() => setShowViewer(false)} />}
         {exitDialog}
       </main>
@@ -227,8 +236,13 @@ function App() {
             <span className="topbar__update-dot" aria-hidden />
           </button>
         )}
-        <button className="ghost" onClick={() => setShowAgents(true)}>
+        <button
+          className="ghost topbar__update"
+          onClick={() => setShowAgents(true)}
+          title={cliUpdates.available.length > 0 ? "Agent updates are available" : undefined}
+        >
           Agents
+          {cliUpdates.available.length > 0 && <span className="topbar__update-dot" aria-hidden />}
         </button>
         <button className="ghost" onClick={() => setShowViewer(true)}>
           Audit viewer
@@ -246,7 +260,13 @@ function App() {
       </header>
 
       {exitDialog}
-      {showAgents && <Agents onClose={() => setShowAgents(false)} />}
+      {showAgents && (
+        <Agents
+          onClose={() => setShowAgents(false)}
+          cliUpdates={cliUpdates}
+          runningWork={attention.running.length}
+        />
+      )}
       {showViewer && <ForgejoViewer onClose={() => setShowViewer(false)} />}
       {showUpdate && <UpdateModal u={update} onClose={() => setShowUpdate(false)} />}
       {showSettings && (

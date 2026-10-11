@@ -9,6 +9,8 @@ import {
   onLoginProgress,
   openExternal,
   stackUp,
+  updateAgentCli,
+  type CliStatus,
   type Profile,
   type ProfileStatus,
 } from "../ipc";
@@ -16,6 +18,7 @@ import { agentLoggedIn, createAgent, deleteAgent, renameAgent } from "../api/age
 import { ApiError } from "../api/client";
 import type { AgentProvider } from "../api/types";
 import { reloadAgents } from "./useAgents";
+import type { AgentCliUpdates } from "./useAgentCliUpdates";
 
 const PROVIDER_LABEL: Record<AgentProvider, string> = { codex: "Codex", claude: "Claude" };
 
@@ -162,7 +165,16 @@ export function LoginSteps({ profile, onChanged }: { profile: Profile; onChanged
 
 /** Agents (ADR-016): one per provider account. Each signs in once and can lead
  * or review any number of work orders. */
-export function Agents({ onClose }: { onClose: () => void }) {
+export function Agents({
+  onClose,
+  cliUpdates,
+  runningWork = 0,
+}: {
+  onClose: () => void;
+  cliUpdates?: AgentCliUpdates;
+  /** Work running now; updating a CLI restarts the agents' workers. */
+  runningWork?: number;
+}) {
   const [profiles, setProfiles] = useState<Profile[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -205,6 +217,9 @@ export function Agents({ onClose }: { onClose: () => void }) {
           lead or reviewer; secrets go straight to a private volume and never touch the coordinator.
         </p>
         {error && <div className="banner banner--error">{error}</div>}
+        {cliUpdates && cliUpdates.available.length > 0 && (
+          <CliUpdates updates={cliUpdates} runningWork={runningWork} />
+        )}
 
         <div className="profiles">
           {profiles === null ? (
@@ -226,6 +241,56 @@ export function Agents({ onClose }: { onClose: () => void }) {
           </button>
         </div>
       </div>
+    </div>
+  );
+}
+
+// Newer Codex and Claude Code releases, installed for every agent of that
+// provider. They often bring newer models.
+function CliUpdates({ updates, runningWork }: { updates: AgentCliUpdates; runningWork: number }) {
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const update = async (status: CliStatus) => {
+    if (!status.latest) return;
+    setBusy(status.provider);
+    setError(null);
+    try {
+      await updateAgentCli(status.provider, status.latest);
+      await updates.refresh();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  return (
+    <div className="banner banner--info cli-updates">
+      {error && <div className="banner banner--error">{error}</div>}
+      {updates.available.map((status) => (
+        <div className="row cli-updates__row" key={status.provider}>
+          <span>
+            {PROVIDER_LABEL[status.provider]} {status.provider === "claude" ? "Code" : "CLI"}{" "}
+            {status.latest} is available (the agents run {status.installed}).
+          </span>
+          <button
+            className="primary"
+            onClick={() => void update(status)}
+            disabled={busy !== null || runningWork > 0}
+            title={
+              runningWork > 0
+                ? "Updating restarts the agents; wait until no work is running."
+                : undefined
+            }
+          >
+            {busy === status.provider ? "Updating…" : "Update"}
+          </button>
+        </div>
+      ))}
+      {runningWork > 0 && (
+        <p className="muted">Updating restarts the agents, so it waits until no work is running.</p>
+      )}
     </div>
   );
 }

@@ -601,3 +601,25 @@ export const onLoginProgress = (
     "login_progress",
     (event) => handler(event.payload),
   );
+
+// --- Agent CLI updates ---
+// Workers prefer a provider CLI installed in their shared CLI volume, so an
+// update installs the new version there and restarts the workers.
+
+export interface CliStatus {
+  provider: "codex" | "claude";
+  installed: string | null;
+  latest: string | null;
+  updateAvailable: boolean;
+}
+
+/** The installed and newest version of each provider CLI with a running worker. */
+export const checkAgentCliUpdates = (): Promise<CliStatus[]> => invoke("check_agent_cli_updates");
+
+/** Install `version` of the provider's CLI for its workers and restart them. */
+export const updateAgentCli = (provider: CliStatus["provider"], version: string): Promise<void> =>
+  invoke("update_agent_cli", { provider, version });
+
+/** Remove the previews of the project's sessions that are no longer open. */
+export const pruneSessionPreviews = (projectId: string, openSessions: string[]): Promise<void> =>
+  invoke("prune_session_previews", { projectId, openSessions });

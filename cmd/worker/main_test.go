@@ -458,3 +458,17 @@ func TestLoadConfigBuildsAnAgentWorkerForBothRoles(t *testing.T) {
 		t.Fatal("an agent worker without a reviewer workspace root was accepted")
 	}
 }
+
+func TestClaudeModelDisplayNames(t *testing.T) {
+	for id, want := range map[string]string{
+		"claude-opus-5":             "Claude Opus 5",
+		"claude-opus-5-2":           "Claude Opus 5.2",
+		"claude-haiku-4-5-20251001": "Claude Haiku 4.5",
+		"claude-sonnet-6-20270101":  "Claude Sonnet 6",
+		"gpt-5":                     "gpt-5",
+	} {
+		if got := staticModelDisplayName(id); got != want {
+			t.Errorf("%s = %q, want %q", id, got, want)
+		}
+	}
+}
