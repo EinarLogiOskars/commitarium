@@ -7,6 +7,7 @@ import {
   startAssistant,
   updateHandoffBrief,
 } from "../api/features";
+import { StartSettings, startSettingsFrom, type StartSettingsValue } from "./StartSettings";
 import { startRun } from "../api/runs";
 import { ApiError } from "../api/client";
 import { Transcript, type TranscriptEntry } from "./Transcript";
@@ -24,11 +25,13 @@ export function ClarifyView({
   feature,
   hasRepo,
   onChanged,
+  onOpenValidation,
 }: {
   projectId: string;
   feature: Feature;
   hasRepo?: boolean;
   onChanged: () => void;
+  onOpenValidation?: () => void;
 }) {
   const { artifact: brief } = useFeatureArtifact<HandoffBriefDocument>(
     projectId,
@@ -56,6 +59,7 @@ export function ClarifyView({
         brief={brief?.document ?? null}
         briefRevision={brief?.revision ?? 0}
         onChanged={onChanged}
+        onOpenValidation={onOpenValidation}
       />
     );
   }
@@ -281,15 +285,19 @@ function ReadyView({
   brief,
   briefRevision,
   onChanged,
+  onOpenValidation,
 }: {
   projectId: string;
   feature: Feature;
   brief: HandoffBriefDocument | null;
   briefRevision: number;
   onChanged: () => void;
+  onOpenValidation?: () => void;
 }) {
   const [busy, setBusy] = useState<null | "start" | "reopen">(null);
   const [error, setError] = useState<string | null>(null);
+  // Agents, models, and workflow settings are chosen here, at Start.
+  const [settings, setSettings] = useState<StartSettingsValue | null>(null);
 
   const run = async (action: "start" | "reopen") => {
     setBusy(action);
@@ -299,7 +307,12 @@ function ReadyView({
         // One key per Ready state: a repeated click or retry joins the same
         // run, while a work order returned to Ready (its updated_at moved)
         // starts a new one.
-        await startRun(projectId, feature.id, `start-${feature.id}-${feature.updated_at}`);
+        await startRun(
+          projectId,
+          feature.id,
+          `start-${feature.id}-${feature.updated_at}`,
+          settings ?? undefined,
+        );
       } else {
         await reopenWorkOrder(projectId, feature.id, crypto.randomUUID());
       }
@@ -328,14 +341,39 @@ function ReadyView({
           disabled={busy !== null}
         />
       )}
-      <div className="row">
-        <button className="primary" onClick={() => void run("start")} disabled={busy !== null}>
-          {busy === "start" ? "Starting…" : "Start"}
-        </button>
-        <button className="ghost" onClick={() => void run("reopen")} disabled={busy !== null}>
-          {busy === "reopen" ? "Reopening…" : "Reopen for clarification"}
-        </button>
-      </div>
+      {settings ? (
+        <div className="start-settings">
+          <span className="neworder__heading">Start with</span>
+          <StartSettings
+            projectId={projectId}
+            value={settings}
+            onChange={setSettings}
+            onOpenValidation={onOpenValidation}
+            disabled={busy !== null}
+          />
+          <div className="row">
+            <button className="primary" onClick={() => void run("start")} disabled={busy !== null}>
+              {busy === "start" ? "Starting…" : "Start work order"}
+            </button>
+            <button className="ghost" onClick={() => setSettings(null)} disabled={busy !== null}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div className="row">
+          <button
+            className="primary"
+            onClick={() => setSettings(startSettingsFrom(feature))}
+            disabled={busy !== null}
+          >
+            Start…
+          </button>
+          <button className="ghost" onClick={() => void run("reopen")} disabled={busy !== null}>
+            {busy === "reopen" ? "Reopening…" : "Reopen for clarification"}
+          </button>
+        </div>
+      )}
     </section>
   );
 }

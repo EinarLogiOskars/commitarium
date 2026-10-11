@@ -2882,3 +2882,13 @@ button.danger:not(.ghost) {
 .panel--phase > .row {
   flex: none;
 }
+.panel--phase > .start-settings {
+  flex: none;
+  max-height: 70%;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+}
