@@ -28,6 +28,25 @@ type directedRecoveryWorkflow interface {
 	RecoverBlockerWithDirective(context.Context, string, string, orchestration.RecoveryDirective) (execution.Run, bool, error)
 }
 
+type loginResumer interface {
+	ResumeAfterLogin(context.Context, string) (int, error)
+}
+
+// resumeAfterLoginHandler continues the runs that paused because the agent's
+// provider login expired, once the desktop reports the agent connected.
+func (api *API) resumeAfterLoginHandler(w http.ResponseWriter, r *http.Request) {
+	resumer, ok := api.realWorkflow.(loginResumer)
+	if !ok {
+		writeJSON(w, http.StatusOK, map[string]int{"resumed": 0}, "login resume")
+		return
+	}
+	resumed, err := resumer.ResumeAfterLogin(r.Context(), r.PathValue("id"))
+	if err != nil {
+		log.Printf("resume runs after agent %q logged in: %v", r.PathValue("id"), err)
+	}
+	writeJSON(w, http.StatusOK, map[string]int{"resumed": resumed}, "login resume")
+}
+
 type runReopener interface {
 	ReopenRun(context.Context, string) (execution.Run, error)
 }

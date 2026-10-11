@@ -246,6 +246,14 @@ type RemoteLeadConfig struct {
 	ReportError         func(error)
 }
 
+// RemoteLeadLoginWaits records runs that wait for an agent to log in again
+// (ADR-017).
+type RemoteLeadLoginWaits interface {
+	RecordLoginWait(ctx context.Context, runID, agentID string, role worker.Role) error
+	ClearLoginWait(ctx context.Context, runID string) error
+	RunsAwaitingLogin(ctx context.Context, agentID string) ([]string, error)
+}
+
 // RemoteLeadBriefReader reads a work order's handoff brief at Start.
 type RemoteLeadBriefReader interface {
 	GetFeatureArtifact(context.Context, string, featureartifact.Kind) (workflow.FeatureArtifact, error)
@@ -849,6 +857,11 @@ func (starter *RemoteLeadStarter) RecoverBlockerWithDirective(
 	policy := project.RecoveryPolicyAutomatic
 	if directive.Action == RecoveryActionRecheck {
 		policy = project.RecoveryPolicyApprovalRequired
+	} else if waits, ok := starter.executions.(RemoteLeadLoginWaits); ok {
+		// Continuing retries the turn; a login failure records a new wait.
+		if err := waits.ClearLoginWait(ctx, run.ID); err != nil {
+			starter.reportError(err)
+		}
 	}
 	err = starter.recoverWithDirective(
 		context.WithoutCancel(ctx), rechecking, storedFeature, policy, directive,
@@ -871,6 +884,40 @@ func (starter *RemoteLeadStarter) RecoverBlockerWithDirective(
 		return execution.Run{}, false, err
 	}
 	return current, true, nil
+}
+
+// ResumeAfterLogin continues every run that paused because the agent's
+// provider login expired, now that the agent is connected again. It returns
+// how many runs it continued.
+func (starter *RemoteLeadStarter) ResumeAfterLogin(ctx context.Context, agentID string) (int, error) {
+	waits, ok := starter.executions.(RemoteLeadLoginWaits)
+	if !ok {
+		return 0, nil
+	}
+	runIDs, err := waits.RunsAwaitingLogin(ctx, agentID)
+	if err != nil {
+		return 0, err
+	}
+	resumed := 0
+	var failures []error
+	for _, runID := range runIDs {
+		actionID := runID + ":login:" + strconv.FormatInt(time.Now().UnixNano(), 10)
+		_, admitted, err := starter.RecoverBlockerWithDirective(
+			ctx, runID, actionID, RecoveryDirective{Action: RecoveryActionContinue},
+		)
+		switch {
+		case errors.Is(err, ErrRecoveryNotAllowed):
+			// The run moved on (the user continued or stopped it).
+			if clearErr := waits.ClearLoginWait(ctx, runID); clearErr != nil {
+				failures = append(failures, clearErr)
+			}
+		case err != nil:
+			failures = append(failures, err)
+		case admitted:
+			resumed++
+		}
+	}
+	return resumed, errors.Join(failures...)
 }
 
 func (starter *RemoteLeadStarter) recoverIdleReadyToMergeRun(
@@ -5709,6 +5756,20 @@ func (starter *RemoteLeadStarter) pauseFailedTurn(
 	}
 	reason := "The " + request.agentName + "'s turn failed: " + cause +
 		". The work order is paused; continue to retry the turn in the same conversation."
+	if attempt.Result.Error != nil && attempt.Result.Error.Code == workerhttp.ErrorProviderLoginRequired {
+		run, err := starter.executions.GetRun(ctx, request.runID)
+		if err != nil {
+			return err
+		}
+		agent := agentForSession(run, session.Role)
+		reason = "The " + request.agentName + "'s agent " + agent + " must log in again: " + cause +
+			". The work order continues once the agent is connected."
+		if waits, ok := starter.executions.(RemoteLeadLoginWaits); ok {
+			if err := waits.RecordLoginWait(ctx, run.ID, agent, session.Role); err != nil {
+				return err
+			}
+		}
+	}
 	if _, err := starter.executions.RecordSessionEventWithID(
 		ctx, session.ID+":"+attempt.AttemptID+":turn-failed", session.ID,
 		worker.Event{

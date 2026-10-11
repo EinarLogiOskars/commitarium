@@ -2,6 +2,8 @@ import { useState } from "react";
 import { pauseRun, queueIntervention, reopenRun, resumeRun } from "../api/runs";
 import { ApiError } from "../api/client";
 import { RecoveryPanel } from "./RecoveryPanel";
+import { Agents } from "./Agents";
+import { agentName, useAgents } from "./useAgents";
 import type { Intervention, InterventionTargetRole, Run } from "../api/types";
 
 // The single, always-present intervention surface. It reflects the true run
@@ -39,6 +41,8 @@ export function InterveneBar({
   const [text, setText] = useState("");
   const [busy, setBusy] = useState<null | "send" | "control">(null);
   const [error, setError] = useState<string | null>(null);
+  const [loggingIn, setLoggingIn] = useState(false);
+  const agents = useAgents();
 
   const paused = run.paused === true;
   const pausing = paused && run.status === "running";
@@ -199,6 +203,29 @@ export function InterveneBar({
       </div>
 
       {error && <div className="banner banner--error">{error}</div>}
+
+      {blocked && run.login_required && (
+        <div className="wait-banner wait-banner--warn">
+          <span className="wait-banner__kind">
+            {agentName(agents, run.login_required.agent)} login expired
+          </span>
+          <span>
+            The {run.login_required.role} can't continue until this agent is connected again. The
+            work order continues by itself once you log in.
+          </span>
+          <button className="primary" onClick={() => setLoggingIn(true)}>
+            Log in
+          </button>
+        </div>
+      )}
+      {loggingIn && (
+        <Agents
+          onClose={() => {
+            setLoggingIn(false);
+            onChanged();
+          }}
+        />
+      )}
 
       {blocked && <RecoveryPanel run={run} onChanged={onChanged} />}
 

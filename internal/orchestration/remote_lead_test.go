@@ -2974,9 +2974,15 @@ func copyScriptedAttempt(
 	stub.initial[to], stub.terminal[to], stub.events[to] = initial, terminal, events
 }
 
-func TestRemoteFailedTurnPausesAndContinueRetriesItInTheSameConversation(t *testing.T) {
+// startFailingPlanningRun starts a run whose first planning turn fails with
+// the given error; its successor turn completes.
+func startFailingPlanningRun(
+	t *testing.T,
+	runID string,
+	code workerhttp.ErrorCode,
+) (*RemoteLeadStarter, *execution.Service, *conversationalRemoteLeadWorker) {
+	t.Helper()
 	db, executions, storedProject, storedFeature := newRemoteLeadExecution(t)
-	runID := "run_remote_failed_turn"
 	stub := newConversationalRemoteLeadWorker(runID, storedProject.ID, storedFeature.ID)
 	addCompletedPlanningAttempt(stub, runID, storedProject.ID, storedFeature.ID)
 	leadID := remoteLeadSessionID(runID)
@@ -2985,16 +2991,13 @@ func TestRemoteFailedTurnPausesAndContinueRetriesItInTheSameConversation(t *test
 	if err != nil {
 		t.Fatalf("successor identity: %v", err)
 	}
-	// The successor completes the planning turn the first attempt could not.
 	copyScriptedAttempt(stub, failedRef, workerhttp.AttemptReference{SessionID: leadID, AttemptID: successorID})
 	stub.mu.Lock()
 	failed := stub.terminal[failedRef]
 	failed.Result = &workerhttp.TerminalResult{
 		Outcome: workerhttp.OutcomeFailed,
 		Summary: "Failed to authenticate: OAuth session expired",
-		Error: &workerhttp.ProtocolError{
-			Code: workerhttp.ErrorInternal, Message: "Failed to authenticate: OAuth session expired",
-		},
+		Error:   &workerhttp.ProtocolError{Code: code, Message: "Failed to authenticate: OAuth session expired"},
 	}
 	stub.terminal[failedRef] = failed
 	stub.mu.Unlock()
@@ -3026,14 +3029,39 @@ func TestRemoteFailedTurnPausesAndContinueRetriesItInTheSameConversation(t *test
 		t.Fatalf("start lead: %v", err)
 	}
 	waitForRemoteLeadStatus(t, executions, runID, execution.RunStatusWaitingForUser)
+	return starter, executions, stub
+}
+
+func waitForRetriedTurn(t *testing.T, executions *execution.Service, runID string) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		current, err := executions.GetRun(t.Context(), runID)
+		if err == nil && current.Status == execution.RunStatusWaitingForUser &&
+			current.WaitKind != execution.RunWaitKindBlocker {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("retried turn did not complete: %+v err=%v", current, err)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func TestRemoteFailedTurnPausesAndContinueRetriesItInTheSameConversation(t *testing.T) {
+	runID := "run_remote_failed_turn"
+	starter, executions, stub := startFailingPlanningRun(t, runID, workerhttp.ErrorInternal)
 	paused, err := executions.GetRun(t.Context(), runID)
 	if err != nil || paused.WaitKind != execution.RunWaitKindBlocker ||
 		!strings.Contains(paused.Reason, "OAuth session expired") {
 		t.Fatalf("failed turn did not pause the run as a blocker: %+v err=%v", paused, err)
 	}
-	lead, err := executions.GetSession(t.Context(), leadID)
+	lead, err := executions.GetSession(t.Context(), remoteLeadSessionID(runID))
 	if err != nil || lead.Status.IsTerminal() {
 		t.Fatalf("failed turn ended its session: %+v err=%v", lead, err)
+	}
+	if wait, err := executions.LoginWaitForRun(t.Context(), runID); err != nil || wait.AgentID != "" {
+		t.Fatalf("an ordinary failure recorded a login wait: %+v err=%v", wait, err)
 	}
 
 	if _, admitted, err := starter.RecoverBlockerWithDirective(
@@ -3041,23 +3069,36 @@ func TestRemoteFailedTurnPausesAndContinueRetriesItInTheSameConversation(t *test
 	); err != nil || !admitted {
 		t.Fatalf("continue failed turn: admitted=%t err=%v", admitted, err)
 	}
-	deadline := time.Now().Add(2 * time.Second)
-	for {
-		current, err := executions.GetRun(t.Context(), runID)
-		if err == nil && current.Status == execution.RunStatusWaitingForUser &&
-			current.WaitKind != execution.RunWaitKindBlocker {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("retried turn did not complete: %+v err=%v", current, err)
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+	waitForRetriedTurn(t, executions, runID)
 	stub.mu.Lock()
 	defer stub.mu.Unlock()
 	retry := stub.putRequests[len(stub.putRequests)-1]
 	if retry.Mode != workerhttp.AttemptModeResume || retry.ProviderSessionID != "codex-thread-test" ||
 		!strings.Contains(retry.Instructions, "OAuth session expired") {
 		t.Fatalf("retry did not resume the same conversation with the failure context: %+v", retry)
+	}
+}
+
+func TestRemoteExpiredLoginWaitsForTheAgentAndResumesAfterLogin(t *testing.T) {
+	runID := "run_remote_expired_login"
+	starter, executions, _ := startFailingPlanningRun(t, runID, workerhttp.ErrorProviderLoginRequired)
+	paused, err := executions.GetRun(t.Context(), runID)
+	if err != nil || paused.WaitKind != execution.RunWaitKindBlocker ||
+		!strings.Contains(paused.Reason, "must log in again") {
+		t.Fatalf("expired login did not pause for login: %+v err=%v", paused, err)
+	}
+	wait, err := executions.LoginWaitForRun(t.Context(), runID)
+	if err != nil || wait.AgentID != "codex" || wait.Role != worker.RoleLead {
+		t.Fatalf("login wait = %+v err=%v", wait, err)
+	}
+	if resumed, err := starter.ResumeAfterLogin(t.Context(), "claude"); err != nil || resumed != 0 {
+		t.Fatalf("another agent's login resumed the run: %d err=%v", resumed, err)
+	}
+	if resumed, err := starter.ResumeAfterLogin(t.Context(), "codex"); err != nil || resumed != 1 {
+		t.Fatalf("resume after login: %d err=%v", resumed, err)
+	}
+	waitForRetriedTurn(t, executions, runID)
+	if wait, err := executions.LoginWaitForRun(t.Context(), runID); err != nil || wait.AgentID != "" {
+		t.Fatalf("login wait was not cleared: %+v err=%v", wait, err)
 	}
 }

@@ -14,3 +14,8 @@ export const renameAgent = (id: string, name: string): Promise<Agent> =>
 
 export const deleteAgent = (id: string): Promise<void> =>
   request(`/api/v1/agents/${encodeURIComponent(id)}`, { method: "DELETE" });
+
+/** Tell the coordinator an agent is connected again, so runs that paused on
+ * its expired login continue (ADR-017). */
+export const agentLoggedIn = (id: string): Promise<{ resumed: number }> =>
+  request(`/api/v1/agents/${encodeURIComponent(id)}/logged-in`, { method: "POST" });

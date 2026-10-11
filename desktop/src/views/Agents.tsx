@@ -12,7 +12,7 @@ import {
   type Profile,
   type ProfileStatus,
 } from "../ipc";
-import { createAgent, deleteAgent, renameAgent } from "../api/agents";
+import { agentLoggedIn, createAgent, deleteAgent, renameAgent } from "../api/agents";
 import { ApiError } from "../api/client";
 import type { AgentProvider } from "../api/types";
 import { reloadAgents } from "./useAgents";
@@ -66,8 +66,12 @@ export function Agents({ onClose }: { onClose: () => void }) {
           x.id === p.profileId ? { ...x, status: p.status, detail: p.detail } : x,
         ),
       );
-      // A newly connected agent's worker starts with the rest of the stack.
-      if (p.status === "connected") void stackUp().catch((e) => setError(String(e)));
+      // A newly connected agent's worker starts with the rest of the stack,
+      // and work orders that paused on its expired login continue.
+      if (p.status === "connected")
+        void stackUp()
+          .then(() => agentLoggedIn(p.profileId))
+          .catch((e) => setError(String(e)));
     });
     return () => {
       void unlisten.then((fn) => fn());
