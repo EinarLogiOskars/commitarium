@@ -45,10 +45,12 @@ type RunTerminator interface {
 }
 
 type Service struct {
-	store     Store
-	forgejo   ForgejoCleaner
-	runs      RunTerminator
-	checkouts []CheckoutCleaner
+	store       Store
+	forgejo     ForgejoCleaner
+	runs        RunTerminator
+	checkouts   []CheckoutCleaner
+	reset       ResetStore
+	transitions FeatureTransitioner
 }
 
 func NewService(store Store, forgejo ForgejoCleaner, checkouts ...CheckoutCleaner) *Service {
@@ -81,44 +83,8 @@ func (service *Service) Delete(
 		MergedChangesRemain: deletion.Feature.State == feature.StateCompleted,
 	}
 	if deletion.Workspace != nil {
-		stored := *deletion.Workspace
-		if err := validateArtifacts(deletion.Feature, stored); err != nil {
+		if err := service.removeArtifacts(ctx, deletion.Feature, *deletion.Workspace); err != nil {
 			return Result{}, err
-		}
-		if stored.PullRequestNumber > 0 && deletion.Feature.State != feature.StateCompleted {
-			if service.forgejo == nil {
-				return Result{}, ErrUnsafeArtifacts
-			}
-			if err := service.forgejo.ClosePullRequest(
-				ctx, stored.RepositoryOwner, stored.RepositoryName,
-				stored.PullRequestNumber, stored.BaseBranch, stored.Branch,
-				"<!-- commitarium-feature: "+deletion.Feature.ID+" -->",
-			); err != nil {
-				return Result{}, fmt.Errorf("close managed pull request: %w", err)
-			}
-		}
-		if stored.BranchCreatedAt != nil {
-			if service.forgejo == nil {
-				return Result{}, ErrUnsafeArtifacts
-			}
-			if err := service.forgejo.DeleteBranch(
-				ctx, stored.RepositoryOwner, stored.RepositoryName, stored.Branch,
-			); err != nil {
-				return Result{}, fmt.Errorf("delete managed feature branch: %w", err)
-			}
-		}
-		if stored.CheckoutCreatedAt != nil {
-			if len(service.checkouts) == 0 {
-				return Result{}, ErrUnsafeArtifacts
-			}
-			for _, checkouts := range service.checkouts {
-				if checkouts == nil {
-					continue
-				}
-				if err := checkouts.Remove(ctx, stored.ID); err != nil {
-					return Result{}, fmt.Errorf("remove managed checkout: %w", err)
-				}
-			}
 		}
 	}
 	if err := service.store.FinishDeletion(ctx, projectID, featureID); err != nil {
@@ -143,6 +109,55 @@ func (service *Service) ForceDelete(
 		return Result{}, fmt.Errorf("%w: stop active agent work: %v", ErrUnavailable, err)
 	}
 	return service.Delete(ctx, projectID, featureID)
+}
+
+// removeArtifacts closes the work order's unmerged pull request, deletes its
+// feature branch, and removes its managed checkouts. It never names the
+// default branch in a mutating operation.
+func (service *Service) removeArtifacts(
+	ctx context.Context,
+	storedFeature feature.Feature,
+	stored workspace.Workspace,
+) error {
+	if err := validateArtifacts(storedFeature, stored); err != nil {
+		return err
+	}
+	if stored.PullRequestNumber > 0 && storedFeature.State != feature.StateCompleted {
+		if service.forgejo == nil {
+			return ErrUnsafeArtifacts
+		}
+		if err := service.forgejo.ClosePullRequest(
+			ctx, stored.RepositoryOwner, stored.RepositoryName,
+			stored.PullRequestNumber, stored.BaseBranch, stored.Branch,
+			"<!-- commitarium-feature: "+storedFeature.ID+" -->",
+		); err != nil {
+			return fmt.Errorf("close managed pull request: %w", err)
+		}
+	}
+	if stored.BranchCreatedAt != nil {
+		if service.forgejo == nil {
+			return ErrUnsafeArtifacts
+		}
+		if err := service.forgejo.DeleteBranch(
+			ctx, stored.RepositoryOwner, stored.RepositoryName, stored.Branch,
+		); err != nil {
+			return fmt.Errorf("delete managed feature branch: %w", err)
+		}
+	}
+	if stored.CheckoutCreatedAt != nil {
+		if len(service.checkouts) == 0 {
+			return ErrUnsafeArtifacts
+		}
+		for _, checkouts := range service.checkouts {
+			if checkouts == nil {
+				continue
+			}
+			if err := checkouts.Remove(ctx, stored.ID); err != nil {
+				return fmt.Errorf("remove managed checkout: %w", err)
+			}
+		}
+	}
+	return nil
 }
 
 func validateArtifacts(storedFeature feature.Feature, stored workspace.Workspace) error {

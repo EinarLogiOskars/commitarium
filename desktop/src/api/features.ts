@@ -123,6 +123,19 @@ export interface DeleteFeatureResult {
   merged_changes_remain: boolean;
 }
 
+/** Set a started work order back to Ready to start over from its brief
+ * (ADR-017): its runs stop, its branch and pull request are closed, and the
+ * brief is kept. Safe to retry with the same key. */
+export const returnToReady = (
+  projectId: string,
+  featureId: string,
+  idempotencyKey: string,
+): Promise<Feature> =>
+  request(
+    `/api/v1/projects/${encodeURIComponent(projectId)}/features/${encodeURIComponent(featureId)}/return-to-ready`,
+    { method: "POST", idempotencyKey },
+  );
+
 /** Delete a work order and its isolated internal artifacts. Never touches the
  * default branch. A forced delete stops exact active attempts first. */
 export const deleteFeature = (

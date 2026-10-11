@@ -411,10 +411,11 @@ func run(ctx context.Context, coordinatorConfig config) error {
 	runStopper := projectdeletion.NewRunStopper(
 		executionService, deletionWorker, sessionController, deletionLiveSessions,
 	)
+	featureDeletionStore := coordinatordatabase.NewFeatureDeletionStore(db)
 	featureDeletionService := workorder.NewServiceWithRunTerminator(
-		coordinatordatabase.NewFeatureDeletionStore(db), forgejoClient, runStopper,
+		featureDeletionStore, forgejoClient, runStopper,
 		checkoutManager, reviewerCheckoutManager,
-	)
+	).WithReset(featureDeletionStore, workflowService)
 	projectDeletionService := projectdeletion.NewService(
 		coordinatordatabase.NewProjectDeletionStore(db),
 		featureDeletionService,

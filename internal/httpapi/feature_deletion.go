@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"errors"
 	"io"
 	"log"
@@ -64,4 +65,47 @@ func (api *API) deleteFeatureHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, result, "feature deletion")
+}
+
+type workOrderResetter interface {
+	ReturnToReady(ctx context.Context, projectID, featureID, requestKey string) (feature.Feature, error)
+}
+
+// returnToReadyHandler sets a started work order back to Ready, keeping its
+// handoff brief (ADR-017). Agent work is stopped first, so the request needs
+// an Idempotency-Key and is safe to retry.
+func (api *API) returnToReadyHandler(w http.ResponseWriter, r *http.Request) {
+	resetter, ok := api.featureDeletion.(workOrderResetter)
+	if !ok {
+		writeError(w, http.StatusServiceUnavailable, "return_to_ready_unavailable", "returning work orders to Ready is unavailable")
+		return
+	}
+	key := strings.TrimSpace(r.Header.Get("Idempotency-Key"))
+	if key == "" {
+		writeError(w, http.StatusBadRequest, "idempotency_key_required", "Idempotency-Key header is required")
+		return
+	}
+	projectID, featureID := r.PathValue("projectID"), r.PathValue("id")
+	reset, err := resetter.ReturnToReady(r.Context(), projectID, featureID, key)
+	if err != nil {
+		switch {
+		case errors.Is(err, feature.ErrNotFound):
+			writeError(w, http.StatusNotFound, "feature_not_found", "feature not found")
+		case errors.Is(err, workorder.ErrNotStarted):
+			writeError(w, http.StatusConflict, "feature_not_started", "only a started work order that has not merged can return to Ready")
+		case errors.Is(err, workorder.ErrActive):
+			writeError(w, http.StatusConflict, "feature_active", "agent work is still stopping; retry with the same Idempotency-Key")
+		case errors.Is(err, workorder.ErrUnsafeArtifacts),
+			errors.Is(err, workspace.ErrConflict):
+			writeError(w, http.StatusConflict, "feature_reset_conflict", "the work order's isolated artifacts could not be safely identified")
+		case errors.Is(err, workorder.ErrUnavailable),
+			errors.Is(err, project.ErrForgejoUnavailable):
+			writeError(w, http.StatusServiceUnavailable, "return_to_ready_unavailable", "returning to Ready is temporarily unavailable; retry with the same Idempotency-Key")
+		default:
+			log.Printf("return feature %q of project %q to Ready: %v", featureID, projectID, err)
+			writeError(w, http.StatusInternalServerError, "internal_error", "internal server error")
+		}
+		return
+	}
+	writeJSON(w, http.StatusOK, newFeatureResponse(reset), "feature")
 }

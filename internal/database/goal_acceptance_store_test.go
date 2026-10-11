@@ -76,3 +76,47 @@ func moveExecutionToUserWait(
 		t.Fatalf("move run to user wait: %v", err)
 	}
 }
+
+func TestReturnToReadyClearsGoalAcceptanceSoTheWorkOrderCanStartAgain(t *testing.T) {
+	store, features := newTestWorkflowStore(t)
+	resets := NewFeatureDeletionStore(features.db)
+	created := createWorkflowTestFeature(t, features)
+	service := workflow.NewService(store)
+	user := workflow.Actor{Kind: workflow.ActorKindUser, ID: "local-user"}
+	if _, err := service.TransitionFeature(t.Context(), created.ID, feature.StateReady, user, "make-ready"); err != nil {
+		t.Fatalf("make ready: %v", err)
+	}
+	if _, err := resets.BeginReturnToReady(t.Context(), created.ProjectID, created.ID); err != nil {
+		t.Fatalf("a Ready work order should finish returning to Ready: %v", err)
+	}
+	acceptance := workflow.GoalAcceptance{
+		EventID: "evt_goal", FeatureID: created.ID, SessionID: "run_first:lead",
+		Goal: "Export reports as CSV.", Actor: user,
+		OccurredAt: created.CreatedAt.Add(time.Hour), IdempotencyKey: "run_first:start-goal",
+	}
+	if _, err := store.AcceptGoalAtStart(t.Context(), acceptance); err != nil {
+		t.Fatalf("accept goal: %v", err)
+	}
+	if _, err := service.TransitionFeature(t.Context(), created.ID, feature.StatePlanning, user, "start"); err != nil {
+		t.Fatalf("start planning: %v", err)
+	}
+
+	claimed, err := resets.BeginReturnToReady(t.Context(), created.ProjectID, created.ID)
+	if err != nil || claimed.Feature.State != feature.StatePlanning || claimed.Workspace != nil {
+		t.Fatalf("claim return to Ready: %+v err=%v", claimed, err)
+	}
+	if err := resets.FinishReturnToReady(t.Context(), created.ProjectID, created.ID); err != nil {
+		t.Fatalf("finish return to Ready: %v", err)
+	}
+	if _, err := service.TransitionFeature(t.Context(), created.ID, feature.StateReady, user, "back-to-ready"); err != nil {
+		t.Fatalf("transition back to Ready: %v", err)
+	}
+	second := acceptance
+	second.EventID, second.SessionID, second.IdempotencyKey = "evt_goal_second", "run_second:lead", "run_second:start-goal"
+	if _, err := store.AcceptGoalAtStart(t.Context(), second); err != nil {
+		t.Fatalf("the restarted work order could not accept its goal again: %v", err)
+	}
+	if _, err := resets.BeginReturnToReady(t.Context(), "prj_other", created.ID); !errors.Is(err, feature.ErrNotFound) {
+		t.Fatalf("other project error = %v", err)
+	}
+}

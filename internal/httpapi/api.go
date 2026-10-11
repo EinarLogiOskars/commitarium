@@ -537,6 +537,10 @@ func newAPI(
 			"DELETE /api/v1/projects/{projectID}/features/{id}",
 			api.deleteFeatureHandler,
 		)
+		mux.HandleFunc(
+			"POST /api/v1/projects/{projectID}/features/{id}/return-to-ready",
+			api.returnToReadyHandler,
+		)
 	}
 	mux.HandleFunc(
 		"POST /api/v1/projects/{projectID}/features/{id}/transitions",

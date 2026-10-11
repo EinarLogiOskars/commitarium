@@ -59,17 +59,23 @@ func (state State) CanTransitionTo(next State) bool {
 	case StateReady:
 		return next == StateDraft ||
 			next == StatePlanning
+	// A started work order can return to Ready to start over from its brief
+	// (ADR-017).
 	case StatePlanning:
 		return next == StateDraft ||
+			next == StateReady ||
 			next == StateImplementing
 	case StateImplementing:
 		return next == StatePlanning ||
+			next == StateReady ||
 			next == StateReviewing
 	case StateReviewing:
 		return next == StatePlanning ||
+			next == StateReady ||
 			next == StateReadyToMerge
 	case StateReadyToMerge:
 		return next == StatePlanning ||
+			next == StateReady ||
 			next == StateReviewing ||
 			next == StateCompleted
 	default:
