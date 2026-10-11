@@ -196,6 +196,8 @@ type Result struct {
 	EnvironmentRequest *EnvironmentRequest
 	HandoffBrief       *featureartifact.HandoffBrief
 	Usage              *TokenUsage
+	// LoginRequired marks a failed turn whose provider login must be renewed.
+	LoginRequired bool
 }
 
 // TokenUsage is the provider-reported token consumption of one turn.

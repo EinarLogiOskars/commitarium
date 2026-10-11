@@ -854,6 +854,7 @@ func (code ErrorCode) IsValid() bool {
 		ErrorModelCatalogUnavailable,
 		ErrorConfigurationMismatch,
 		ErrorIncompleteResult,
+		ErrorProviderLoginRequired,
 		ErrorUnsafeConcurrency,
 		ErrorIndeterminateState,
 		ErrorRedactionFailed,

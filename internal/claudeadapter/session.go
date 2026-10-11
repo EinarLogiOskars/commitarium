@@ -699,6 +699,7 @@ func (session *session) translateResult(
 			ProviderSessionID: session.providerSessionID,
 			Summary:           summary,
 			Usage:             message.Usage.tokenUsage(),
+			LoginRequired:     worker.IsLoginFailure(summary),
 		}, nil
 	}
 	if session.outputContract != "" {

@@ -384,6 +384,7 @@ const (
 	ErrorModelCatalogUnavailable ErrorCode = "model_catalog_unavailable"
 	ErrorConfigurationMismatch   ErrorCode = "configuration_mismatch"
 	ErrorIncompleteResult        ErrorCode = "incomplete_result"
+	ErrorProviderLoginRequired   ErrorCode = "provider_login_required"
 	ErrorUnsafeConcurrency       ErrorCode = "unsafe_concurrency"
 	ErrorIndeterminateState      ErrorCode = "indeterminate_state"
 	ErrorRedactionFailed         ErrorCode = "redaction_failed"
