@@ -88,6 +88,9 @@ type conversationalRemoteLeadWorker struct {
 	initial            map[workerhttp.AttemptReference]workerhttp.Attempt
 	terminal           map[workerhttp.AttemptReference]workerhttp.Attempt
 	events             map[workerhttp.AttemptReference][]workerhttp.Event
+	// unsent attempts are unknown to the worker until they are PUT, like a
+	// turn that never reached a worker.
+	unsent map[workerhttp.AttemptReference]bool
 }
 
 func (stub *conversationalRemoteLeadWorker) PutAttempt(
@@ -105,6 +108,7 @@ func (stub *conversationalRemoteLeadWorker) PutAttempt(
 	if !ok {
 		return workerhttp.Attempt{}, false, errors.New("unexpected attempt identity")
 	}
+	delete(stub.unsent, identity.AttemptReference)
 	stub.putRequests = append(stub.putRequests, request)
 	return attempt, true, nil
 }
@@ -152,7 +156,7 @@ func (stub *conversationalRemoteLeadWorker) GetAttempt(
 	stub.mu.Lock()
 	defer stub.mu.Unlock()
 	attempt, ok := stub.terminal[reference]
-	if !ok {
+	if !ok || stub.unsent[reference] {
 		return workerhttp.Attempt{}, errors.New("unexpected attempt identity")
 	}
 	return attempt, nil
@@ -3605,5 +3609,87 @@ func TestRemoteLeadRunsASessionMessageByMessage(t *testing.T) {
 	}
 	if workspaceStub.mergeCalls != 1 || len(workspaceStub.mergeApprovalNotes) != 1 {
 		t.Fatalf("the session did not merge with the merge gate's approval: %+v", workspaceStub)
+	}
+}
+
+func TestRemoteLeadResendsASessionTurnThatNeverReachedItsWorker(t *testing.T) {
+	db, executions, storedProject, storedFeature := newRemoteLeadExecution(t)
+	if _, err := db.ExecContext(t.Context(),
+		`UPDATE features SET kind = 'session', title = 'Untitled session 1', skip_plan = 1, skip_reviewer = 1 WHERE id = ?`,
+		storedFeature.ID,
+	); err != nil {
+		t.Fatalf("make the work order a session: %v", err)
+	}
+	runID := "run_session_down"
+	stub := newConversationalRemoteLeadWorker(runID, storedProject.ID, storedFeature.ID)
+	workflowService := workflow.NewService(database.NewWorkflowStore(db))
+	checkoutAt := time.Date(2026, time.October, 11, 17, 0, 0, 0, time.UTC)
+	workspaceStub := &remoteLeadWorkspaceStub{prepared: workspace.Workspace{
+		ID: "wsp_session", ProjectID: storedProject.ID, FeatureID: storedFeature.ID,
+		RepositoryOwner: "commitarium", RepositoryName: "session-test",
+		BaseBranch: "main", Branch: "commitarium/" + storedFeature.ID,
+		BaseCommitID: "0123456789abcdef0123456789abcdef01234567", Status: workspace.StatusPreparing,
+		CheckoutRelativePath: "wsp_session", CheckoutCreatedAt: &checkoutAt,
+	}}
+	features := database.NewFeatureStore(db)
+	starter, err := NewRemoteLeadStarter(RemoteLeadConfig{
+		Executions: executions, Features: features, Goals: workflowService,
+		Planning: workflowService, Briefs: workflowService, Workspaces: workspaceStub, Worker: stub,
+		Pump:     &conversationalRemoteLeadPump{executions: executions, worker: stub},
+		Lifetime: t.Context(),
+	})
+	if err != nil {
+		t.Fatalf("create starter: %v", err)
+	}
+	readyRemoteLeadFeature(t, workflowService, storedFeature.ID)
+	if _, _, err := starter.Start(
+		t.Context(), runID, storedProject.ID, storedFeature.ID, storedFeature.Title,
+		storedProject.DialogueLimits, storedProject.AgentProviders,
+		storedProject.MergePolicy, storedProject.AutonomyPolicy,
+	); err != nil {
+		t.Fatalf("start the session: %v", err)
+	}
+	// The worker is down: the first turn cannot reach it.
+	if _, err := starter.SendSessionMessage(t.Context(), runID, worker.Command{
+		ID: "msg-1", Type: worker.CommandMessage, Message: "Make the accent colour deep red.",
+	}); err != nil {
+		t.Fatalf("send the first message: %v", err)
+	}
+	waitForRemoteLeadStatus(t, executions, runID, execution.RunStatusWaitingForUser)
+	if run, _ := executions.GetRun(t.Context(), runID); run.WaitKind != execution.RunWaitKindBlocker {
+		t.Fatalf("an unreachable worker did not pause the session: %+v", run)
+	}
+
+	// The worker is back; Continue sends the same turn again.
+	stub.mu.Lock()
+	addCompletedSessionTurn(stub, runID, storedProject.ID, storedFeature.ID, 1, "Done: the accent is now deep red.", "Deep red accent")
+	stub.unsent = map[workerhttp.AttemptReference]bool{{
+		SessionID: remoteLeadSessionID(runID), AttemptID: sessionTurnAttemptID(remoteLeadSessionID(runID), 1),
+	}: true}
+	stub.mu.Unlock()
+	if _, _, err := starter.RecoverBlockerWithDirective(t.Context(), runID, "continue-1", RecoveryDirective{Action: RecoveryActionContinue}); err != nil {
+		t.Fatalf("continue the session: %v", err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		run, _ := executions.GetRun(t.Context(), runID)
+		if run.Status == execution.RunStatusWaitingForUser && run.WaitKind == execution.RunWaitKindClarification {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if run, _ := executions.GetRun(t.Context(), runID); run.WaitKind != execution.RunWaitKindClarification ||
+		run.Reason != sessionYourTurnReason {
+		t.Fatalf("the resent turn did not complete: %+v", run)
+	}
+	if renamed, _ := features.GetByID(t.Context(), storedFeature.ID); renamed.Title != "Deep red accent" {
+		t.Fatalf("the resent first turn did not name the session: %q", renamed.Title)
+	}
+	stub.mu.Lock()
+	last := stub.putRequests[len(stub.putRequests)-1]
+	stub.mu.Unlock()
+	if last.OutputContract != workerhttp.OutputContractSessionOpening ||
+		!strings.HasSuffix(last.Instructions, "Make the accent colour deep red.") {
+		t.Fatalf("the resent turn lost its message: %+v", last)
 	}
 }

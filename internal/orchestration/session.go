@@ -142,38 +142,10 @@ func (starter *RemoteLeadStarter) SendSessionMessage(
 	if lead.Status != execution.SessionStatusWaitingForUser {
 		return execution.Run{}, ErrSessionBusy
 	}
-	prepared, err := starter.workspaces.Get(ctx, storedFeature.ProjectID, storedFeature.ID)
-	if err != nil {
-		return execution.Run{}, fmt.Errorf("load session workspace: %w", err)
-	}
-	request := remoteLeadRequest{
-		runID: run.ID, commandID: command.ID, agentName: "lead agent",
-		waitingReason: sessionYourTurnReason, waitKind: execution.RunWaitKindClarification,
-		request: workerhttp.PutAttemptRequest{
-			Assignment: workerhttp.Assignment{
-				AgentProfileID: starter.profileID(run.AgentProviders.LeadAgent, worker.RoleLead),
-				Model:          run.AgentModels.Lead, ProjectID: storedFeature.ProjectID, FeatureID: storedFeature.ID,
-				Role: workerhttp.RoleLead, WorkspaceID: prepared.ID,
-			},
-		},
-	}
 	first := lead.ProviderSessionID == ""
 	var checkpoint execution.WorkerAttemptCheckpoint
-	if first {
-		previewContext, err := starter.previewRunInstructions(ctx, storedFeature.ProjectID)
-		if err != nil {
-			return execution.Run{}, err
-		}
-		attemptID := sessionTurnAttemptID(lead.ID, 1)
-		request.identity = workerhttp.MutationIdentity{
-			AttemptReference: workerhttp.AttemptReference{SessionID: lead.ID, AttemptID: attemptID},
-			IdempotencyKey:   attemptID + ":start",
-		}
-		request.request.Mode = workerhttp.AttemptModeStart
-		request.request.Instructions = sessionInstructions(prepared) + previewContext +
-			"\n\nThe user's first message:\n" + command.Message
-		request.request.OutputContract = workerhttp.OutputContractSessionOpening
-	} else {
+	attemptID := sessionTurnAttemptID(lead.ID, 1)
+	if !first {
 		checkpoint, err = starter.executions.GetWorkerAttempt(ctx, lead.ID)
 		if err != nil {
 			return execution.Run{}, fmt.Errorf("load the session's last turn: %w", err)
@@ -191,18 +163,11 @@ func (starter *RemoteLeadStarter) SendSessionMessage(
 		if !ok {
 			return execution.Run{}, fmt.Errorf("%w: the session's last turn is not a session turn", ErrCommandNotAllowed)
 		}
-		attemptID := sessionTurnAttemptID(lead.ID, turn+1)
-		request.identity = workerhttp.MutationIdentity{
-			AttemptReference: workerhttp.AttemptReference{SessionID: lead.ID, AttemptID: attemptID},
-			IdempotencyKey:   attemptID + ":resume",
-		}
-		request.request.Mode = workerhttp.AttemptModeResume
-		request.request.ProviderSessionID = lead.ProviderSessionID
-		request.request.Instructions = command.Message
-		if mainHead, behind := starter.sessionBehindMain(ctx, storedFeature); behind {
-			request.request.Instructions = sessionCatchUpInstructions(prepared.BaseBranch, mainHead) +
-				"\n\nThe user's message:\n" + command.Message
-		}
+		attemptID = sessionTurnAttemptID(lead.ID, turn+1)
+	}
+	request, err := starter.sessionTurnRequest(ctx, run, storedFeature, lead, attemptID, command)
+	if err != nil {
+		return execution.Run{}, err
 	}
 	if err := request.request.Validate(request.identity); err != nil {
 		return execution.Run{}, fmt.Errorf("%w: %v", ErrInvalidRunRequest, err)
@@ -239,6 +204,94 @@ func (starter *RemoteLeadStarter) SendSessionMessage(
 		go starter.launch(request)
 	}
 	return starter.executions.GetRun(ctx, run.ID)
+}
+
+// sessionTurnRequest builds a session turn for the user's message. A lead
+// session without a provider conversation starts one with the session's
+// instructions; otherwise the turn resumes it, catching up with main first
+// when it moved.
+func (starter *RemoteLeadStarter) sessionTurnRequest(
+	ctx context.Context,
+	run execution.Run,
+	storedFeature feature.Feature,
+	lead execution.Session,
+	attemptID string,
+	command worker.Command,
+) (remoteLeadRequest, error) {
+	prepared, err := starter.workspaces.Get(ctx, storedFeature.ProjectID, storedFeature.ID)
+	if err != nil {
+		return remoteLeadRequest{}, fmt.Errorf("load session workspace: %w", err)
+	}
+	request := remoteLeadRequest{
+		runID: run.ID, commandID: command.ID, agentName: "lead agent",
+		waitingReason: sessionYourTurnReason, waitKind: execution.RunWaitKindClarification,
+		identity: workerhttp.MutationIdentity{
+			AttemptReference: workerhttp.AttemptReference{SessionID: lead.ID, AttemptID: attemptID},
+		},
+		request: workerhttp.PutAttemptRequest{
+			Assignment: workerhttp.Assignment{
+				AgentProfileID: starter.profileID(run.AgentProviders.LeadAgent, worker.RoleLead),
+				Model:          run.AgentModels.Lead, ProjectID: storedFeature.ProjectID, FeatureID: storedFeature.ID,
+				Role: workerhttp.RoleLead, WorkspaceID: prepared.ID,
+			},
+		},
+	}
+	if lead.ProviderSessionID == "" {
+		previewContext, err := starter.previewRunInstructions(ctx, storedFeature.ProjectID)
+		if err != nil {
+			return remoteLeadRequest{}, err
+		}
+		request.identity.IdempotencyKey = attemptID + ":start"
+		request.request.Mode = workerhttp.AttemptModeStart
+		request.request.Instructions = sessionInstructions(prepared) + previewContext +
+			"\n\nThe user's first message:\n" + command.Message
+		request.request.OutputContract = workerhttp.OutputContractSessionOpening
+	} else {
+		request.identity.IdempotencyKey = attemptID + ":resume"
+		request.request.Mode = workerhttp.AttemptModeResume
+		request.request.ProviderSessionID = lead.ProviderSessionID
+		request.request.Instructions = command.Message
+		if mainHead, behind := starter.sessionBehindMain(ctx, storedFeature); behind {
+			request.request.Instructions = sessionCatchUpInstructions(prepared.BaseBranch, mainHead) +
+				"\n\nThe user's message:\n" + command.Message
+		}
+	}
+	return request, nil
+}
+
+// rebuildSessionTurn rebuilds an admitted session turn from its stored
+// message, for a turn that never reached a worker, for example because the
+// agent's worker was down. It reports false for any other turn.
+func (starter *RemoteLeadStarter) rebuildSessionTurn(
+	ctx context.Context,
+	request remoteLeadRequest,
+) (remoteLeadRequest, bool) {
+	if _, ok := sessionTurnNumber(request.identity.SessionID, request.identity.AttemptID); !ok {
+		return remoteLeadRequest{}, false
+	}
+	run, err := starter.executions.GetRun(ctx, request.runID)
+	if err != nil {
+		return remoteLeadRequest{}, false
+	}
+	storedFeature, err := starter.features.GetByID(ctx, run.FeatureID)
+	if err != nil || storedFeature.Kind != feature.KindSession {
+		return remoteLeadRequest{}, false
+	}
+	lead, err := starter.executions.GetSession(ctx, request.identity.SessionID)
+	if err != nil {
+		return remoteLeadRequest{}, false
+	}
+	pending, err := starter.executions.PendingCommandsForSession(ctx, lead.ID)
+	if err != nil || len(pending) != 1 || pending[0].Type != worker.CommandMessage {
+		return remoteLeadRequest{}, false
+	}
+	rebuilt, err := starter.sessionTurnRequest(ctx, run, storedFeature, lead, request.identity.AttemptID, worker.Command{
+		ID: pending[0].ID, Type: pending[0].Type, Message: pending[0].Message,
+	})
+	if err != nil {
+		return remoteLeadRequest{}, false
+	}
+	return rebuilt, true
 }
 
 // lastSessionTurn numbers a session's last turn: a message turn, or the

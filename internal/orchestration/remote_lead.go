@@ -795,7 +795,8 @@ func (starter *RemoteLeadStarter) recoverWithDirective(
 		acceptanceVersion, _, authoring := workflowAttemptVersionAndTurn(
 			session.ID, "acceptance", checkpoint.AttemptID,
 		)
-		validLead := isLead && implementing && attemptVersion == run.PlanVersion
+		_, sessionTurn := sessionTurnNumber(session.ID, checkpoint.AttemptID)
+		validLead := isLead && ((implementing && attemptVersion == run.PlanVersion) || sessionTurn)
 		validReviewer := run.IndependentAcceptanceTests && isReviewer && authoring && acceptanceVersion == run.PlanVersion
 		if !validLead && !validReviewer {
 			return fmt.Errorf("%w: implementing feature has an unexpected active attempt", ErrInvalidRunRequest)
@@ -3763,6 +3764,12 @@ func (starter *RemoteLeadStarter) reattach(request remoteLeadRequest) {
 	ctx := starter.lifetime
 	attempt, err := starter.worker.GetAttempt(ctx, request.identity.AttemptReference)
 	if err != nil {
+		// A session turn that never reached its worker is sent again with the
+		// same identity, so a worker that did receive it is not asked twice.
+		if rebuilt, ok := starter.rebuildSessionTurn(ctx, request); ok {
+			starter.launchAdmitted(rebuilt)
+			return
+		}
 		starter.requireReview(ctx, request, fmt.Errorf("inspect interrupted worker attempt: %w", err))
 		return
 	}
