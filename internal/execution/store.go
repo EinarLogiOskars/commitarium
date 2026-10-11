@@ -173,6 +173,9 @@ type WorkerTurnAdmission struct {
 	ExpectedFeatureState      feature.State
 	RunReason                 string
 	OccurredAt                time.Time
+	// FirstTurn starts a session's first provider conversation (ADR-019): the
+	// session has no provider conversation and no previous attempt yet.
+	FirstTurn bool
 }
 
 type WorkerTurnAdmissionResult struct {

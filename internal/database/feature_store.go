@@ -316,6 +316,23 @@ func scanFeature(row featureScanner) (feature.Feature, error) {
 	return storedFeature, nil
 }
 
+// Rename changes a work order's title.
+func (s *FeatureStore) Rename(ctx context.Context, id string, title string) error {
+	result, err := s.db.ExecContext(
+		ctx, `UPDATE features SET title = ?, updated_at = ? WHERE id = ?`,
+		title, time.Now().UTC().Format(time.RFC3339Nano), id,
+	)
+	if err != nil {
+		return fmt.Errorf("rename feature %q: %w", id, err)
+	}
+	if updated, err := result.RowsAffected(); err != nil {
+		return fmt.Errorf("rename feature %q: %w", id, err)
+	} else if updated != 1 {
+		return feature.ErrNotFound
+	}
+	return nil
+}
+
 // UpdateReadySettings saves the settings a Ready work order starts with.
 func (s *FeatureStore) UpdateReadySettings(ctx context.Context, chosen feature.Feature) error {
 	result, err := s.db.ExecContext(

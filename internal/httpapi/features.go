@@ -175,6 +175,16 @@ func (api *API) createFeatureHandler(
 		return
 	}
 
+	if createdFeature.Kind == feature.KindSession && api.starter != nil {
+		// Creating a session starts it (ADR-019): its branch and pull request
+		// open and it waits for the user's first message.
+		if _, ok := api.startFeature(w, r, createdFeature, "session-"+createdFeature.ID, nil); !ok {
+			return
+		}
+		if started, err := api.features.GetByID(r.Context(), projectID, createdFeature.ID); err == nil {
+			createdFeature = started
+		}
+	}
 	response := newFeatureResponse(createdFeature)
 	w.Header().Set(
 		"Location",

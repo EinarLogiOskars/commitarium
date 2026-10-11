@@ -249,6 +249,30 @@ type SettingsStore interface {
 // ChooseStartSettings records the agents, models, and policies a Ready work
 // order starts with. Settings are chosen at Start, not while drafting; until
 // then the work order carries its project's defaults.
+// RenameStore renames work orders.
+type RenameStore interface {
+	Rename(ctx context.Context, id string, title string) error
+}
+
+// Rename changes a work order's title.
+func (s *Service) Rename(ctx context.Context, projectID string, featureID string, title string) (Feature, error) {
+	title = strings.TrimSpace(title)
+	if title == "" {
+		return Feature{}, ErrTitleRequired
+	}
+	if _, err := s.GetByID(ctx, projectID, featureID); err != nil {
+		return Feature{}, err
+	}
+	renamer, ok := s.store.(RenameStore)
+	if !ok {
+		return Feature{}, errors.New("work orders cannot be renamed")
+	}
+	if err := renamer.Rename(ctx, featureID, title); err != nil {
+		return Feature{}, err
+	}
+	return s.GetByID(ctx, projectID, featureID)
+}
+
 func (s *Service) ChooseStartSettings(
 	ctx context.Context,
 	projectID string,

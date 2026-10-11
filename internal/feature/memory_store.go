@@ -72,6 +72,19 @@ func (s *MemoryStore) ListByProjectID(
 	return features, nil
 }
 
+// Rename changes a work order's title.
+func (s *MemoryStore) Rename(_ context.Context, id string, title string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	stored, exists := s.features[id]
+	if !exists {
+		return ErrNotFound
+	}
+	stored.Title = title
+	s.features[id] = stored
+	return nil
+}
+
 // UpdateReadySettings saves the settings a Ready work order starts with.
 func (s *MemoryStore) UpdateReadySettings(_ context.Context, chosen Feature) error {
 	s.mu.Lock()

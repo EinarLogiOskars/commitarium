@@ -532,6 +532,14 @@ func newAPI(
 		"GET /api/v1/projects/{projectID}/features/{id}",
 		api.getFeatureByIDHandler,
 	)
+	mux.HandleFunc(
+		"PATCH /api/v1/projects/{projectID}/features/{id}",
+		api.renameFeatureHandler,
+	)
+	mux.HandleFunc(
+		"POST /api/v1/projects/{projectID}/features/{id}/messages",
+		api.sendSessionMessageHandler,
+	)
 	if featureDeletion != nil {
 		mux.HandleFunc(
 			"DELETE /api/v1/projects/{projectID}/features/{id}",

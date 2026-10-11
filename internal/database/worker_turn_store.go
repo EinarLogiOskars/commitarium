@@ -55,7 +55,8 @@ func (s *ExecutionStore) BeginWorkerTurn(
 	if err != nil {
 		return execution.WorkerTurnAdmissionResult{}, false, fmt.Errorf("select session for worker turn: %w", err)
 	}
-	if session.Status != execution.SessionStatusWaitingForUser || session.ProviderSessionID == "" {
+	if session.Status != execution.SessionStatusWaitingForUser ||
+		(session.ProviderSessionID == "") != admission.FirstTurn {
 		return execution.WorkerTurnAdmissionResult{}, false, execution.ErrStateConflict
 	}
 	run, err := scanExecutionRun(tx.QueryRowContext(
@@ -97,11 +98,14 @@ func (s *ExecutionStore) BeginWorkerTurn(
 		 FROM worker_attempt_checkpoints WHERE session_id = ?`,
 		session.ID,
 	))
-	if err != nil {
+	switch {
+	case admission.FirstTurn && errors.Is(err, sql.ErrNoRows):
+	case admission.FirstTurn && err == nil:
+		return execution.WorkerTurnAdmissionResult{}, false, execution.ErrWorkerAttemptConflict
+	case err != nil:
 		return execution.WorkerTurnAdmissionResult{}, false, fmt.Errorf("select worker checkpoint for new turn: %w", err)
-	}
-	if checkpoint.AttemptID != admission.PreviousAttemptID ||
-		checkpoint.LastEventSequence != admission.PreviousLastEventSequence {
+	case checkpoint.AttemptID != admission.PreviousAttemptID ||
+		checkpoint.LastEventSequence != admission.PreviousLastEventSequence:
 		return execution.WorkerTurnAdmissionResult{}, false, execution.ErrWorkerAttemptConflict
 	}
 
@@ -149,19 +153,31 @@ func (s *ExecutionStore) BeginWorkerTurn(
 	next := admission.NextAttempt
 	next.CreatedAt = next.CreatedAt.UTC()
 	next.UpdatedAt = next.UpdatedAt.UTC()
-	result, err := tx.ExecContext(
-		ctx,
-		`UPDATE worker_attempt_checkpoints
-		 SET attempt_id = ?, last_event_sequence = 0, created_at = ?, updated_at = ?
-		 WHERE session_id = ? AND attempt_id = ? AND last_event_sequence = ?`,
-		next.AttemptID, formatExecutionTime(next.CreatedAt), formatExecutionTime(next.UpdatedAt),
-		next.SessionID, admission.PreviousAttemptID, admission.PreviousLastEventSequence,
-	)
-	if err != nil {
-		return execution.WorkerTurnAdmissionResult{}, false, fmt.Errorf("replace worker attempt checkpoint: %w", err)
-	}
-	if err := requireExecutionUpdate(result, "worker attempt", admission.PreviousAttemptID); err != nil {
-		return execution.WorkerTurnAdmissionResult{}, false, err
+	if admission.FirstTurn {
+		if _, err := tx.ExecContext(
+			ctx,
+			`INSERT INTO worker_attempt_checkpoints (
+				session_id, attempt_id, last_event_sequence, created_at, updated_at
+			 ) VALUES (?, ?, 0, ?, ?)`,
+			next.SessionID, next.AttemptID, formatExecutionTime(next.CreatedAt), formatExecutionTime(next.UpdatedAt),
+		); err != nil {
+			return execution.WorkerTurnAdmissionResult{}, false, fmt.Errorf("insert first worker attempt checkpoint: %w", err)
+		}
+	} else {
+		result, err := tx.ExecContext(
+			ctx,
+			`UPDATE worker_attempt_checkpoints
+			 SET attempt_id = ?, last_event_sequence = 0, created_at = ?, updated_at = ?
+			 WHERE session_id = ? AND attempt_id = ? AND last_event_sequence = ?`,
+			next.AttemptID, formatExecutionTime(next.CreatedAt), formatExecutionTime(next.UpdatedAt),
+			next.SessionID, admission.PreviousAttemptID, admission.PreviousLastEventSequence,
+		)
+		if err != nil {
+			return execution.WorkerTurnAdmissionResult{}, false, fmt.Errorf("replace worker attempt checkpoint: %w", err)
+		}
+		if err := requireExecutionUpdate(result, "worker attempt", admission.PreviousAttemptID); err != nil {
+			return execution.WorkerTurnAdmissionResult{}, false, err
+		}
 	}
 
 	session.Status = execution.SessionStatusRunning
@@ -169,7 +185,7 @@ func (s *ExecutionStore) BeginWorkerTurn(
 	if err := session.Validate(); err != nil {
 		return execution.WorkerTurnAdmissionResult{}, false, err
 	}
-	result, err = tx.ExecContext(
+	result, err := tx.ExecContext(
 		ctx,
 		`UPDATE sessions SET status = ?, updated_at = ? WHERE id = ? AND status = ?`,
 		session.Status, formatExecutionTime(session.UpdatedAt), session.ID,
@@ -224,8 +240,8 @@ func validateWorkerTurnAdmission(admission execution.WorkerTurnAdmission) error 
 		return fmt.Errorf("%w: worker turn records must share a session", execution.ErrInvalidWorkerAttempt)
 	case admission.UserEvent.Text != admission.Command.Message:
 		return fmt.Errorf("%w: worker turn event must preserve the command message", execution.ErrInvalidEvent)
-	case strings.TrimSpace(admission.PreviousAttemptID) == "":
-		return fmt.Errorf("%w: previous attempt ID is required", execution.ErrInvalidWorkerAttempt)
+	case (strings.TrimSpace(admission.PreviousAttemptID) == "") != admission.FirstTurn:
+		return fmt.Errorf("%w: only a first turn has no previous attempt", execution.ErrInvalidWorkerAttempt)
 	case admission.PreviousLastEventSequence < 0:
 		return fmt.Errorf("%w: previous event sequence cannot be negative", execution.ErrInvalidWorkerAttempt)
 	case admission.NextAttempt.AttemptID == admission.PreviousAttemptID:
