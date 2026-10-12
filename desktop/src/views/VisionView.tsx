@@ -14,7 +14,7 @@ import { listFeatures } from "../api/features";
 import { getToolchainPresets } from "../api/toolchains";
 import { ApiError } from "../api/client";
 import { startAutopilot } from "../api/assistant";
-import { ASSISTANT_CHANGED } from "./AssistantDrawer";
+import { ASSISTANT_CHANGED, WORK_CHANGED } from "./AssistantDrawer";
 import { Markdown } from "./Markdown";
 import { rememberIdea, rememberedIdea } from "./visionSession";
 import type {
@@ -93,6 +93,18 @@ export function VisionView({
       .then(setSession)
       .catch(() => undefined);
   }, [projectId, loadVision]);
+
+  // Work orders move on by themselves (agents, autopilot), and items join
+  // the vision from the assistant: the page follows, as the rail does.
+  useEffect(() => {
+    const refresh = () => void loadVision();
+    const timer = setInterval(refresh, 10_000);
+    window.addEventListener(WORK_CHANGED, refresh);
+    return () => {
+      clearInterval(timer);
+      window.removeEventListener(WORK_CHANGED, refresh);
+    };
+  }, [loadVision]);
 
   // Follow the assistant while it works.
   const sessionId = session?.id;
@@ -287,7 +299,7 @@ export function VisionView({
 }
 
 // Work done outside the plan: every work order and session not linked to a
-// vision item, derived so it is never out of date. One that turns out to be
+// vision item (closed ones aside), derived so it is never out of date. One that turns out to be
 // real direction can join the vision as an item.
 function OtherWork({
   projectId,
@@ -312,7 +324,7 @@ function OtherWork({
     });
   plan.priorities.forEach((p) => collect(p.items));
   const other = [...features.values()]
-    .filter((f) => !f.background && !linked.has(f.id))
+    .filter((f) => !f.background && f.state !== "cancelled" && !linked.has(f.id))
     .sort((a, b) => b.updated_at.localeCompare(a.updated_at));
   if (other.length === 0) return null;
   const shown = showAll ? other : other.slice(0, 6);
