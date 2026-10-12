@@ -129,3 +129,7 @@ export const startAutopilot = (scope: string, level: number): Promise<Conversati
 
 export const stopAutopilot = (scope: string): Promise<Conversation> =>
   request(`${conversationPath(scope)}/autopilot`, { method: "DELETE" });
+
+/** The autopilot goals that are on, by project ID. */
+export const listAutopilotGoals = (): Promise<{ goals: Record<string, AutopilotGoal> }> =>
+  request("/api/v1/assistant/autopilot");
