@@ -215,6 +215,17 @@ func (service *Service) autopilotActions(scope string) ([]Action, error) {
 			orders[item.WorkOrderID] = true
 		}
 	}
+	// One work order per item: an item that has one, or whose create autopilot
+	// already applied, takes no other.
+	claimed := map[string]bool{}
+	for _, item := range stored.Goal.Items {
+		claimed[item.ID] = item.WorkOrderID != ""
+	}
+	for _, action := range stored.Actions {
+		if action.Type == featureartifact.AssistantCreateWorkOrder && action.Status == ActionApplied {
+			claimed[action.VisionItemID] = true
+		}
+	}
 	now := service.now()
 	apply, noted := make([]Action, 0), false
 	for index := range stored.Actions {
@@ -246,11 +257,20 @@ func (service *Service) autopilotActions(scope string) ([]Action, error) {
 			}
 			stored.Goal.Continues[action.WorkOrderID]++
 		}
+		if action.Type == featureartifact.AssistantCreateWorkOrder && claimed[action.VisionItemID] {
+			stored.addEvent(fmt.Sprintf("Autopilot left %s for you: its vision item already has a work order.",
+				actionName(action.AssistantAction)), now)
+			noted = true
+			continue
+		}
 		if len(action.Premium) > 0 {
 			stored.addEvent(fmt.Sprintf("Autopilot left %s for you: it uses %s, which needs your approval.",
 				actionName(action.AssistantAction), strings.Join(action.Premium, " and ")), now)
 			noted = true
 			continue
+		}
+		if action.Type == featureartifact.AssistantCreateWorkOrder {
+			claimed[action.VisionItemID] = true
 		}
 		apply = append(apply, *action)
 	}
@@ -313,7 +333,8 @@ func goalInstructions(goal *Goal) string {
 		builder.WriteString(fmt.Sprintf("- %s %s (item %s): %s\n", item.Label, item.Title, item.ID, state))
 	}
 	builder.WriteString("Drive these items to merged. Propose create_work_order with the item's vision_item_id for " +
-		"an item without a work order, start_work_order for one that is drafted, and change_models when a run " +
+		"an item without a work order and without a create card already waiting (autopilot applies a waiting one; " +
+		"never propose a second for the same item), start_work_order for one that is drafted, and change_models when a run " +
 		"needs a different model. Commitarium applies your actions for these items at once, without the user's " +
 		"approval, except those using a premium model. Start an item only once the items it builds on have " +
 		"merged; at most two of the goal's work orders run at a time. When one is blocked or failed, find out " +

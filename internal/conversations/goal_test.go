@@ -178,3 +178,44 @@ func TestTheAssistantHearsWhatBecameOfItsActions(t *testing.T) {
 		t.Fatalf("recent actions = %q", text)
 	}
 }
+
+func TestAutopilotCreatesOneWorkOrderPerItem(t *testing.T) {
+	service, worker := newTestService(t)
+	service.config.Visions = &visionStub{plan: featureartifact.VisionPlan{Priorities: []featureartifact.VisionPriority{
+		{Level: 1, Items: []featureartifact.VisionItem{{ID: "goal", Title: "Calorie goal"}, {ID: "repeat", Title: "Repeat meals"}}},
+	}}}
+	service.config.Features = &featuresStub{}
+	// A draft card proposed before autopilot, and the same item again in its
+	// first turn.
+	if _, err := service.Send(t.Context(), "prj_test", "Plan P1.1", "msg-1"); err != nil {
+		t.Fatal(err)
+	}
+	create := func(title string) featureartifact.AssistantAction {
+		return featureartifact.AssistantAction{Type: featureartifact.AssistantCreateWorkOrder, Reason: "Next", Title: title,
+			VisionItemID: "goal", Steps: "quick"}
+	}
+	worker.finish(workerhttp.TerminalResult{Outcome: workerhttp.OutcomeCompleted, Disposition: workerhttp.DispositionSucceeded,
+		Summary: "Drafted.", AssistantTurn: &featureartifact.AssistantTurn{Actions: []featureartifact.AssistantAction{create("Goal, first")}}})
+	if _, err := service.Get(t.Context(), "prj_test"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.StartGoal(t.Context(), "prj_test", 1); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Send(t.Context(), "prj_test", "Go", "msg-2"); err != nil {
+		t.Fatal(err)
+	}
+	worker.finish(workerhttp.TerminalResult{Outcome: workerhttp.OutcomeCompleted, Disposition: workerhttp.DispositionSucceeded,
+		Summary: "Starting.", AssistantTurn: &featureartifact.AssistantTurn{Actions: []featureartifact.AssistantAction{create("Goal, again")}}})
+	if _, err := service.Get(t.Context(), "prj_test"); err != nil {
+		t.Fatal(err)
+	}
+	apply, err := service.autopilotActions("prj_test")
+	if err != nil || len(apply) != 1 || apply[0].Title != "Goal, first" {
+		t.Fatalf("autopilot applied %+v err=%v", apply, err)
+	}
+	conversation, _ := service.Get(t.Context(), "prj_test")
+	if last := conversation.Messages[len(conversation.Messages)-1].Text; !strings.Contains(last, "already has a work order") {
+		t.Fatalf("the second create was not left for the user: %q", last)
+	}
+}
