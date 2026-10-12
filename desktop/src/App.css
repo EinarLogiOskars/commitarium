@@ -3358,3 +3358,8 @@ button.danger:not(.ghost) {
 .order-meta .usage-toggle {
   margin-left: 0;
 }
+.order-meta .order-head__usage {
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+}
