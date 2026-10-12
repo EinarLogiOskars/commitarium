@@ -21,6 +21,16 @@ const SESSION_GROUPS: { label: string; states: FeatureState[] }[] = [
   { label: "Closed", states: ["cancelled"] },
 ];
 
+const CLOSED_OPEN_KEY = "commitarium.rail.closedOpen";
+
+function readClosedOpen(): boolean {
+  try {
+    return localStorage.getItem(CLOSED_OPEN_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
 // Sessions change as agents reply, so the session list follows them.
 const RAIL_POLL_MS = 3000;
 
@@ -40,6 +50,15 @@ export function WorkOrderRail({
   onSelect: (featureId: string) => void;
 }) {
   const [features, setFeatures] = useState<Feature[] | null>(null);
+  const [closedOpen, setClosedOpen] = useState(readClosedOpen);
+  const toggleClosed = () => {
+    setClosedOpen(!closedOpen);
+    try {
+      localStorage.setItem(CLOSED_OPEN_KEY, closedOpen ? "0" : "1");
+    } catch {
+      // The choice lasts until the window closes.
+    }
+  };
   // Bumped when a session is marked seen, to recolor its dot.
   const [, setSeenVersion] = useState(0);
 
@@ -84,10 +103,26 @@ export function WorkOrderRail({
       {groups.map((group) => {
         const items = ofKind.filter((f) => group.states.includes(f.state));
         if (items.length === 0) return null;
+        // Closed work folds away; the one on screen stays listed.
+        const folding = group.label === "Closed";
+        const shown = folding && !closedOpen ? items.filter((f) => f.id === selectedId) : items;
         return (
           <div key={group.label}>
-            <div className="rail__section">{group.label}</div>
-            {items.map((f) => (
+            {folding ? (
+              <button
+                className="rail__section rail__section--toggle"
+                onClick={() => toggleClosed()}
+                aria-expanded={closedOpen}
+              >
+                {group.label} ({items.length})
+                <span className="rail__fold" aria-hidden>
+                  {closedOpen ? "⌄" : "›"}
+                </span>
+              </button>
+            ) : (
+              <div className="rail__section">{group.label}</div>
+            )}
+            {shown.map((f) => (
               <button
                 key={f.id}
                 className={`rail__item ${selectedId === f.id ? "rail__item--active" : ""}`}

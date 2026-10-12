@@ -4159,3 +4159,24 @@ select:focus {
   top: 0;
   z-index: 6;
 }
+
+/* The Closed group folds: its heading is the toggle. */
+.rail__section--toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: calc(100% - 12px);
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: pointer;
+  text-align: left;
+}
+.rail__section--toggle:hover {
+  color: var(--text);
+}
+.rail__fold {
+  margin-left: auto;
+  font-size: 13px;
+  line-height: 1;
+}
