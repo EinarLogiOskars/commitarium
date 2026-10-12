@@ -140,7 +140,7 @@ export function AssistantDrawer({
     if (replies > seenReplies.current) setUnseen(true);
   }, [conversation, replies, open]);
 
-  const count = conversation?.messages.length ?? 0;
+  const count = (conversation?.messages.length ?? 0) + (conversation?.queued?.length ?? 0);
   useEffect(() => {
     const el = chatRef.current;
     if (el) el.scrollTop = el.scrollHeight;
@@ -267,6 +267,19 @@ export function AssistantDrawer({
                   ),
                 )}
                 {running && <p className="muted status-line">The assistant is thinking…</p>}
+                {(conversation.queued ?? []).map((message) => (
+                  <div key={message.id} className="assistant__turn assistant__turn--queued">
+                    <div className="msg msg--user">
+                      <span className="msg__who">You · queued</span>
+                      <div className="msg__text">
+                        <Markdown text={message.text} />
+                      </div>
+                    </div>
+                    <p className="muted note assistant__queued-note">
+                      The assistant answers when it's free.
+                    </p>
+                  </div>
+                ))}
               </div>
               {error && <div className="banner banner--error">{error}</div>}
               <div className="composer">
@@ -275,20 +288,21 @@ export function AssistantDrawer({
                     rows={2}
                     value={draft}
                     autoFocus
-                    placeholder="Ask the assistant…"
+                    placeholder={
+                      running
+                        ? "The assistant is busy; write anyway, it answers next…"
+                        : "Ask the assistant…"
+                    }
                     onChange={(e) => setDraft(e.target.value)}
                     onKeyDown={(e) => {
                       if (e.key === "Escape") setOpen(false);
                       if (e.key !== "Enter" || e.shiftKey) return;
                       e.preventDefault();
-                      if (!running && !sending && draft.trim()) void send();
+                      if (!sending && draft.trim()) void send();
                     }}
                     disabled={sending}
                   />
-                  <button
-                    onClick={() => void send()}
-                    disabled={running || sending || !draft.trim()}
-                  >
+                  <button onClick={() => void send()} disabled={sending || !draft.trim()}>
                     {sending ? "Sending…" : "Send"}
                   </button>
                 </div>

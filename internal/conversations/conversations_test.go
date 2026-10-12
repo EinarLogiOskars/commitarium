@@ -109,8 +109,9 @@ func TestAnAssistantTurnProposesActionsAndKeepsNotes(t *testing.T) {
 		!strings.Contains(first.Instructions, "fable, astra") {
 		t.Fatalf("unexpected first turn: %+v", first)
 	}
-	if _, err := service.Send(t.Context(), "prj_test", "Hello?", "msg-2"); !errors.Is(err, ErrBusy) {
-		t.Fatalf("a second message while answering = %v", err)
+	if queued, err := service.Send(t.Context(), "prj_test", "Hello?", "msg-2"); err != nil ||
+		len(queued.Queued) != 1 || queued.Queued[0].Text != "Hello?" || len(worker.puts) != 1 {
+		t.Fatalf("a message while answering was not queued: %+v err=%v", queued, err)
 	}
 
 	worker.finish(workerhttp.TerminalResult{

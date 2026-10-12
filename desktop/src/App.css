@@ -4311,3 +4311,13 @@ select:focus {
 .rail__back:hover {
   color: var(--accent);
 }
+
+/* A message waiting for the assistant to finish its current turn. */
+.assistant__turn--queued .msg {
+  opacity: 0.75;
+  border-style: dashed;
+}
+.assistant__queued-note {
+  margin: 4px 0 0;
+  text-align: right;
+}

@@ -73,6 +73,9 @@ export interface Conversation {
   actions: AssistantAction[];
   notes: string;
   goal?: AutopilotGoal;
+  /** The user's messages sent while the assistant answered; they start its
+   * next turn. */
+  queued?: AssistantMessage[];
   /** A new app being set up, until it starts building (APPS_PLAN.md). */
   launch?: { stage: LaunchStage; started_at: string };
   updated_at: string;
