@@ -220,7 +220,7 @@ export function FeatureView({
             <h2>{feature.title}</h2>
             {feature.description && <OrderDescription text={feature.description} />}
             {usage && usage.roles.length > 0 && <UsageLine usage={usage} />}
-            <AgentsAtWork run={run} />
+            <AgentsAtWork run={run} onChanged={() => void load()} />
           </div>
           <div className="row">
             {restartable && !confirmDelete && !confirmReady && (

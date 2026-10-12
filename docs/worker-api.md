@@ -78,7 +78,8 @@ falls back to displaying the ID unchanged. Floating aliases are rejected by
 the contract.
 
 Every start/resume assignment may include `assignment.model`. The coordinator
-fills it from the immutable run snapshot before routing, and the worker passes
+fills it from the run's current model before routing (the user may switch it
+while the run works, ADR-021), and the worker passes
 that exact value to Codex `thread/start`/`thread/resume` or Claude Code
 `--model`. There is no fallback. Claude verifies its `system/init` model and
 fails the attempt if it differs from the request.

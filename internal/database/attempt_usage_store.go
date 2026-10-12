@@ -16,13 +16,13 @@ func (s *ExecutionStore) RecordAttemptUsage(ctx context.Context, usage execution
 	if _, err := s.db.ExecContext(
 		ctx,
 		`INSERT INTO attempt_token_usage
-		 (session_id, attempt_id, input_tokens, cached_input_tokens, cache_write_tokens, output_tokens, recorded_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)
+		 (session_id, attempt_id, input_tokens, cached_input_tokens, cache_write_tokens, output_tokens, recorded_at, model)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT (session_id, attempt_id) DO NOTHING`,
 		usage.SessionID, usage.AttemptID,
 		usage.Usage.InputTokens, usage.Usage.CachedInputTokens,
 		usage.Usage.CacheWriteTokens, usage.Usage.OutputTokens,
-		formatExecutionTime(usage.RecordedAt),
+		formatExecutionTime(usage.RecordedAt), usage.Model,
 	); err != nil {
 		return fmt.Errorf("record attempt token usage: %w", err)
 	}
@@ -35,7 +35,7 @@ func (s *ExecutionStore) RecordAttemptUsage(ctx context.Context, usage execution
 func (s *ExecutionStore) FeatureAttemptUsage(ctx context.Context, featureID string) ([]execution.RoleAttemptUsage, error) {
 	rows, err := s.db.QueryContext(
 		ctx,
-		`SELECT sessions.role, usage.session_id, usage.attempt_id,
+		`SELECT sessions.role, usage.session_id, usage.attempt_id, usage.model,
 		        usage.input_tokens, usage.cached_input_tokens,
 		        usage.cache_write_tokens, usage.output_tokens
 		   FROM attempt_token_usage AS usage
@@ -43,7 +43,7 @@ func (s *ExecutionStore) FeatureAttemptUsage(ctx context.Context, featureID stri
 		   JOIN runs ON runs.id = sessions.run_id
 		  WHERE runs.feature_id = ?
 		 UNION ALL
-		 SELECT 'assistant', usage.session_id, usage.attempt_id,
+		 SELECT 'assistant', usage.session_id, usage.attempt_id, '',
 		        usage.input_tokens, usage.cached_input_tokens,
 		        usage.cache_write_tokens, usage.output_tokens
 		   FROM assistant_turn_usage AS usage
@@ -60,7 +60,7 @@ func (s *ExecutionStore) FeatureAttemptUsage(ctx context.Context, featureID stri
 	for rows.Next() {
 		var attempt execution.RoleAttemptUsage
 		if err := rows.Scan(
-			&attempt.Role, &attempt.SessionID, &attempt.AttemptID,
+			&attempt.Role, &attempt.SessionID, &attempt.AttemptID, &attempt.Model,
 			&attempt.Usage.InputTokens, &attempt.Usage.CachedInputTokens,
 			&attempt.Usage.CacheWriteTokens, &attempt.Usage.OutputTokens,
 		); err != nil {

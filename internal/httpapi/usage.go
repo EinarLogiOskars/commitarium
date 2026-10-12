@@ -29,8 +29,17 @@ type phaseUsageResponse struct {
 	tokenUsageResponse
 }
 
+// modelUsageResponse is one model's share of a role, when a run's model was
+// switched while it worked.
+type modelUsageResponse struct {
+	Role  string `json:"role"`
+	Model string `json:"model"`
+	tokenUsageResponse
+}
+
 type featureUsageResponse struct {
 	Roles  []roleUsageResponse  `json:"roles"`
+	Models []modelUsageResponse `json:"models"`
 	Phases []phaseUsageResponse `json:"phases"`
 	Total  tokenUsageResponse   `json:"total"`
 }
@@ -103,11 +112,17 @@ func (api *API) getFeatureUsageHandler(w http.ResponseWriter, r *http.Request) {
 	type phaseKey struct{ phase, role string }
 	roles := map[string]execution.TokenUsage{}
 	phases := map[phaseKey]execution.TokenUsage{}
+	type modelKey struct{ role, model string }
+	models := map[modelKey]execution.TokenUsage{}
 	total := execution.TokenUsage{}
 	for _, attempt := range attempts {
 		roles[attempt.Role] = roles[attempt.Role].Add(attempt.Usage)
 		key := phaseKey{attemptPhase(attempt.SessionID, attempt.AttemptID), attempt.Role}
 		phases[key] = phases[key].Add(attempt.Usage)
+		if attempt.Model != "" {
+			key := modelKey{attempt.Role, attempt.Model}
+			models[key] = models[key].Add(attempt.Usage)
+		}
 		total = total.Add(attempt.Usage)
 	}
 	response := featureUsageResponse{
@@ -119,6 +134,18 @@ func (api *API) getFeatureUsageHandler(w http.ResponseWriter, r *http.Request) {
 		response.Roles = append(response.Roles, roleUsageResponse{Role: role, tokenUsageResponse: newTokenUsageResponse(usage)})
 	}
 	sort.Slice(response.Roles, func(i, j int) bool { return response.Roles[i].Role < response.Roles[j].Role })
+	response.Models = make([]modelUsageResponse, 0, len(models))
+	for key, usage := range models {
+		response.Models = append(response.Models, modelUsageResponse{
+			Role: key.role, Model: key.model, tokenUsageResponse: newTokenUsageResponse(usage),
+		})
+	}
+	sort.Slice(response.Models, func(i, j int) bool {
+		if response.Models[i].Role != response.Models[j].Role {
+			return response.Models[i].Role < response.Models[j].Role
+		}
+		return response.Models[i].Model < response.Models[j].Model
+	})
 	for key, usage := range phases {
 		response.Phases = append(response.Phases, phaseUsageResponse{
 			Phase: key.phase, Role: key.role, tokenUsageResponse: newTokenUsageResponse(usage),

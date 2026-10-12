@@ -3241,3 +3241,34 @@ button.danger:not(.ghost) {
   background: var(--warn);
   animation: dot-pulse 1.6s ease-in-out infinite;
 }
+.agents-at-work__change,
+.session__change-model {
+  margin-left: 10px;
+  padding: 0;
+  font-size: 12px;
+}
+.agents-at-work--idle {
+  border-color: var(--border);
+  background: none;
+}
+
+/* Switching a working run's model. */
+.change-model {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 10px;
+  margin: 8px 0 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+.change-model__role {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+}
+.change-model .banner {
+  flex-basis: 100%;
+}

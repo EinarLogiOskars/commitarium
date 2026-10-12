@@ -2182,6 +2182,8 @@ type remoteLeadRequest struct {
 	allowRecoveryContinuation bool
 	forceFreshRecovery        bool
 	recoveryMessage           string
+	// modelSwitch resumes a turn the user stopped to switch models.
+	modelSwitch bool
 }
 
 func interventionAttemptID(sessionID, interventionID string) string {
@@ -3913,7 +3915,8 @@ func (starter *RemoteLeadStarter) continueFailedAttempt(
 	// Any failed turn can be retried (ADR-017); an incomplete structured result
 	// is one kind of failure.
 	failed := attempt.State == workerhttp.AttemptStateTerminal && attempt.Result != nil &&
-		attempt.Result.Outcome == workerhttp.OutcomeFailed
+		(attempt.Result.Outcome == workerhttp.OutcomeFailed ||
+			request.modelSwitch && attempt.Result.Outcome == workerhttp.OutcomeStopped)
 	if !failed && attempt.State != workerhttp.AttemptStateIndeterminate {
 		return false, nil
 	}
@@ -4302,13 +4305,14 @@ func (starter *RemoteLeadStarter) observe(
 func (starter *RemoteLeadStarter) recordUsage(
 	ctx context.Context,
 	reference workerhttp.AttemptReference,
+	model string,
 	usage *workerhttp.TokenUsage,
 ) {
 	if starter.usage == nil || usage == nil {
 		return
 	}
 	err := starter.usage.RecordAttemptUsage(ctx, execution.AttemptUsage{
-		SessionID: reference.SessionID, AttemptID: reference.AttemptID,
+		SessionID: reference.SessionID, AttemptID: reference.AttemptID, Model: model,
 		Usage:      execution.TokenUsage(*usage),
 		RecordedAt: time.Now().UTC(),
 	})
@@ -4350,7 +4354,7 @@ func (starter *RemoteLeadStarter) finish(
 		starter.requireReview(ctx, request, errors.New("terminal worker attempt has no result"))
 		return
 	}
-	starter.recordUsage(ctx, request.identity.AttemptReference, attempt.Result.Usage)
+	starter.recordUsage(ctx, request.identity.AttemptReference, attempt.Assignment.Model, attempt.Result.Usage)
 	if err := starter.captureProviderSession(ctx, request.identity.SessionID, attempt); err != nil {
 		starter.requireReview(ctx, request, err)
 		return
@@ -4596,7 +4600,15 @@ func (starter *RemoteLeadStarter) finish(
 		}
 		err = starter.waitRun(ctx, request.runID, request.waitingReason, request.waitKind)
 	case workerhttp.OutcomeStopped:
-		err = starter.failSession(ctx, session, execution.SessionStatusStopped, attempt, "The "+request.agentName+" was stopped.")
+		switched, switchErr := starter.takeModelSwitch(ctx, request.runID, attempt.AttemptID)
+		switch {
+		case switchErr != nil:
+			err = switchErr
+		case switched:
+			err = starter.resumeAfterModelSwitch(ctx, request, session, attempt)
+		default:
+			err = starter.failSession(ctx, session, execution.SessionStatusStopped, attempt, "The "+request.agentName+" was stopped.")
+		}
 	case workerhttp.OutcomeFailed:
 		if attempt.Result.Error != nil && attempt.Result.Error.Code == workerhttp.ErrorIncompleteResult {
 			err = fmt.Errorf("%s ended before returning its required structured result: %s", request.agentName, attempt.Result.Error.Message)

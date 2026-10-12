@@ -26,8 +26,10 @@ func (usage TokenUsage) Add(other TokenUsage) TokenUsage {
 
 // AttemptUsage is the usage of one worker attempt.
 type AttemptUsage struct {
-	SessionID  string
-	AttemptID  string
+	SessionID string
+	AttemptID string
+	// Model is the model the attempt ran on; a run's models can change.
+	Model      string
 	Usage      TokenUsage
 	RecordedAt time.Time
 }
@@ -51,5 +53,6 @@ type RoleAttemptUsage struct {
 	Role      string
 	SessionID string
 	AttemptID string
+	Model     string
 	Usage     TokenUsage
 }
