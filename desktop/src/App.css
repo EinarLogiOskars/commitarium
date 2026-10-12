@@ -4343,3 +4343,12 @@ select:focus {
 .usage-bars__seen {
   margin: 2px 0 0;
 }
+
+/* In an app, what the assistant set going: a quiet line under its reply. */
+.assistant__applied {
+  margin: 4px 0 0 2px;
+  font-size: 13px;
+}
+.assistant__applied--failed {
+  color: var(--bad);
+}

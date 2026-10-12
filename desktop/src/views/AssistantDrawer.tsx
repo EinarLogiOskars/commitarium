@@ -53,6 +53,7 @@ export function AssistantDrawer({
   docked,
   onGoalChange,
   onLaunchChange,
+  appMode = false,
 }: {
   scope: string;
   scopeLabel: string;
@@ -61,6 +62,9 @@ export function AssistantDrawer({
   onOpenChange: (open: boolean) => void;
   /** Beside the page rather than over it. */
   docked: boolean;
+  /** In an app's window the assistant drives: work it applies by itself
+   * shows as a line, not a card to approve (ADR-024). */
+  appMode?: boolean;
   /** The conversation's autopilot goal while it is on, else null. */
   onGoalChange?: (goal: AutopilotGoal | null) => void;
   /** A new app's launch stage while it is planned or set up, else null. */
@@ -266,16 +270,20 @@ export function AssistantDrawer({
                           <Markdown text={message.text} />
                         </div>
                       </div>
-                      {(byMessage.get(message.id) ?? []).map((action) => (
-                        <ActionCard
-                          key={action.id}
-                          scope={scope}
-                          action={action}
-                          onChanged={setConversation}
-                          onOpenOrder={onOpenOrder}
-                          visionLabel={visionItems.get(action.vision_item_id)}
-                        />
-                      ))}
+                      {(byMessage.get(message.id) ?? []).map((action) =>
+                        appMode && appliesItself(action) ? (
+                          <AppliedLine key={action.id} action={action} />
+                        ) : (
+                          <ActionCard
+                            key={action.id}
+                            scope={scope}
+                            action={action}
+                            onChanged={setConversation}
+                            onOpenOrder={onOpenOrder}
+                            visionLabel={visionItems.get(action.vision_item_id)}
+                          />
+                        ),
+                      )}
                     </div>
                   ),
                 )}
@@ -674,4 +682,39 @@ function useAskBefore(): string[] {
 function isPremium(model: string, families: string[]): boolean {
   const name = model.toLowerCase();
   return !!name && families.some((family) => family && name.includes(family.toLowerCase()));
+}
+
+// Work an app's autopilot applies without asking (ADR-024): the assistant's
+// work actions, except those that need the user's approval of a premium
+// model. Closing is left as a card: only autopilot's own duplicates close by
+// themselves.
+function appliesItself(action: AssistantAction): boolean {
+  const work = ["create_work_order", "start_work_order", "change_models", "continue_work_order"];
+  return (
+    work.includes(action.type) &&
+    (action.premium ?? []).length === 0 &&
+    action.status !== "dismissed"
+  );
+}
+
+// In an app, what the assistant set going, said in a line.
+function AppliedLine({ action }: { action: AssistantAction }) {
+  const what = action.title || "the work";
+  const failed = action.status === "failed";
+  const done = action.status === "applied";
+  const verb =
+    action.type === "change_models"
+      ? "Switching models"
+      : action.type === "continue_work_order"
+        ? "Picking the work back up"
+        : "Starting";
+  return (
+    <p className={`muted assistant__applied ${failed ? "assistant__applied--failed" : ""}`}>
+      {failed
+        ? `Couldn't start: ${what}`
+        : done
+          ? `✓ ${verb === "Starting" ? "Started" : verb}: ${what}`
+          : `${verb}: ${what}…`}
+    </p>
+  );
 }
