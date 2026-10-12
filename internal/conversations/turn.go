@@ -45,7 +45,18 @@ func (service *Service) Send(ctx context.Context, scope, message, key string) (C
 			return Conversation{}, err
 		}
 		if stored.Status == StatusRunning {
-			return Conversation{}, ErrBusy
+			// The assistant is answering: the message waits for its next
+			// turn, which starts as soon as this one ends.
+			if stored.Keys == nil {
+				stored.Keys = map[string]string{}
+			}
+			stored.Keys[key] = "queued"
+			stored.Queued = append(stored.Queued, Message{
+				ID: fmt.Sprintf("queued_%s_%d", stored.Scope, stored.Turn*100+len(stored.Queued)+1), Role: "user",
+				Text: message, OccurredAt: service.now(),
+			})
+			stored.UpdatedAt = service.now()
+			return stored.Conversation, service.write(stored)
 		}
 	}
 	stored.Messages = append(stored.Messages, Message{
@@ -214,6 +225,10 @@ func (service *Service) refresh(ctx context.Context, stored record) (record, err
 	}
 	stored.Status = StatusIdle
 	stored.UpdatedAt = now
+	if len(stored.Queued) > 0 || len(stored.PendingEvents) > 0 {
+		// What waited for this turn starts the next one.
+		service.nudgeWatcher()
+	}
 	return stored, service.write(stored)
 }
 

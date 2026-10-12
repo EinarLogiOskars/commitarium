@@ -2417,7 +2417,9 @@ actions, and its notes.
   a merge, a failure, a blocker, a merge approval, or a question for the user
   also starts a turn, one at a time (ADR-023).
 - `POST .../{scope}/messages` with `{"message"}` and an `Idempotency-Key` starts
-  a turn; `409 assistant_busy` while one runs.
+  a turn. While one runs, the message is queued in the conversation's `queued`
+  and starts the next turn, with any events that waited, as soon as the
+  current one ends.
 - `PUT .../{scope}/notes` with `{"notes"}` replaces the notes with the user's
   edit.
 - An action is `{"id", "type": "create_work_order"|"start_work_order"|
