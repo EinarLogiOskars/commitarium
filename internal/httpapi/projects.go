@@ -485,6 +485,38 @@ func (api *API) updateProjectIndependentAcceptanceTestsHandler(w http.ResponseWr
 	writeJSON(w, http.StatusOK, newProjectResponse(updated), "project")
 }
 
+type renameProjectRequest struct {
+	Name string `json:"name"`
+}
+
+// renameProjectHandler gives a project (or app) a new name; its repository
+// keeps its own.
+func (api *API) renameProjectHandler(w http.ResponseWriter, r *http.Request) {
+	request := renameProjectRequest{}
+	if !decodeSingleJSON(w, r, &request) {
+		return
+	}
+	settings, ok := api.projects.(ProjectAppService)
+	if !ok {
+		writeError(w, http.StatusServiceUnavailable, "rename_unavailable", "renaming is unavailable")
+		return
+	}
+	renamed, err := settings.Rename(r.Context(), r.PathValue("id"), request.Name)
+	if err != nil {
+		switch {
+		case errors.Is(err, project.ErrNotFound):
+			writeError(w, http.StatusNotFound, "project_not_found", "project not found")
+		case errors.Is(err, project.ErrNameRequired):
+			writeError(w, http.StatusBadRequest, "invalid_name", "a name is required (at most 120 characters)")
+		default:
+			log.Printf("rename project %q: %v", r.PathValue("id"), err)
+			writeError(w, http.StatusInternalServerError, "internal_error", "internal server error")
+		}
+		return
+	}
+	writeJSON(w, http.StatusOK, newProjectResponse(renamed), "project")
+}
+
 type projectAppRequest struct {
 	App *bool `json:"app"`
 }

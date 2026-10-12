@@ -134,11 +134,11 @@ func TestAnAssistantTurnProposesActionsAndKeepsNotes(t *testing.T) {
 	if len(conversation.Actions[0].Premium) != 0 || len(conversation.Actions[1].Premium) != 1 {
 		t.Fatalf("premium marks = %+v / %+v", conversation.Actions[0].Premium, conversation.Actions[1].Premium)
 	}
-	resolved, err := service.Resolve(t.Context(), "prj_test", conversation.Actions[0].ID, ActionApplied, "Created the work order Log a meal.", "fea_log")
+	resolved, err := service.Resolve(t.Context(), "prj_test", conversation.Actions[0].ID, ActionApplied, "Created the work order Log a meal.", Created{WorkOrderID: "fea_log"})
 	if err != nil || resolved.Actions[0].Status != ActionApplied || resolved.Actions[0].Result == "" || resolved.Actions[0].WorkOrderID != "fea_log" {
 		t.Fatalf("resolve = %+v err=%v", resolved, err)
 	}
-	if _, err := service.Resolve(t.Context(), "prj_test", conversation.Actions[0].ID, ActionDismissed, "", ""); !errors.Is(err, ErrNotPending) {
+	if _, err := service.Resolve(t.Context(), "prj_test", conversation.Actions[0].ID, ActionDismissed, "", Created{}); !errors.Is(err, ErrNotPending) {
 		t.Fatalf("an applied action was resolved again: %v", err)
 	}
 }

@@ -6,6 +6,7 @@ import {
   updateAutonomyPolicy,
   updateIndependentAcceptanceTests,
   setProjectApp,
+  renameProject,
   updateMergePolicy,
   updateProjectValidation,
 } from "../api/projects";
@@ -33,6 +34,7 @@ export function ProjectSettings({
 }) {
   return (
     <>
+      <Name project={project} onUpdated={onUpdated} />
       <UseAsApp project={project} onUpdated={onUpdated} />
       <Agents project={project} onUpdated={onUpdated} />
       <Autonomy project={project} onUpdated={onUpdated} />
@@ -432,6 +434,44 @@ function UseAsApp({ project, onUpdated }: { project: Project; onUpdated: (p: Pro
         />
         Use as an app
       </label>
+    </section>
+  );
+}
+
+// The project's (or app's) name. Its repository keeps the name it was made
+// with.
+function Name({ project, onUpdated }: { project: Project; onUpdated: (p: Project) => void }) {
+  const [name, setName] = useState(project.name);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const changed = name.trim() !== "" && name.trim() !== project.name;
+  const save = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      onUpdated(await renameProject(project.id, name.trim()));
+    } catch (e) {
+      setError(describe(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <section className="panel">
+      <h2>Name</h2>
+      {error && <div className="banner banner--error">{error}</div>}
+      <form
+        className="row"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (changed) void save();
+        }}
+      >
+        <input value={name} onChange={(e) => setName(e.target.value)} disabled={busy} />
+        <button className="primary" type="submit" disabled={busy || !changed}>
+          {busy ? "Saving…" : "Rename"}
+        </button>
+      </form>
     </section>
   );
 }

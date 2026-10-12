@@ -36,9 +36,10 @@ type ProjectIndependentAcceptanceTestsService interface {
 	UpdateIndependentAcceptanceTests(ctx context.Context, projectID string, enabled bool) (project.Project, error)
 }
 
-// ProjectAppService marks projects as apps (APPS_PLAN.md).
+// ProjectAppService marks projects as apps (APPS_PLAN.md) and renames them.
 type ProjectAppService interface {
 	UpdateApp(ctx context.Context, projectID string, app bool) (project.Project, error)
+	Rename(ctx context.Context, projectID, name string) (project.Project, error)
 }
 
 type ProjectAgentModelCreator interface {
@@ -284,6 +285,8 @@ type API struct {
 	agents             AgentService
 	visions            VisionService
 	conversations      ConversationService
+	// mux serves the API's own routes, for actions that reuse them.
+	mux http.Handler
 }
 
 func New(
@@ -440,6 +443,7 @@ func newAPI(
 	api.projectImporter, _ = projects.(ProjectImporter)
 
 	mux := http.NewServeMux()
+	api.mux = mux
 	mux.HandleFunc("GET /health", api.healthHandler)
 	if visions != nil && projects != nil && features != nil {
 		mux.HandleFunc("GET /api/v1/projects/{id}/vision", api.getVisionHandler)
@@ -558,6 +562,7 @@ func newAPI(
 		api.updateProjectIndependentAcceptanceTestsHandler,
 	)
 	mux.HandleFunc("PUT /api/v1/projects/{id}/app", api.updateProjectAppHandler)
+	mux.HandleFunc("PUT /api/v1/projects/{id}/name", api.renameProjectHandler)
 	mux.HandleFunc(
 		"PUT /api/v1/projects/{id}/forgejo-repository",
 		api.bindForgejoRepositoryHandler,

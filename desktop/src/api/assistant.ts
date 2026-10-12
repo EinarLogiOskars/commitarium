@@ -25,7 +25,8 @@ export type AssistantActionType =
   | "add_vision_item"
   | "start_autopilot"
   | "continue_work_order"
-  | "close_work_order";
+  | "close_work_order"
+  | "create_app";
 
 export interface AssistantAction {
   id: string;
@@ -50,6 +51,8 @@ export interface AssistantAction {
   status: "proposed" | "applied" | "dismissed" | "failed";
   premium?: string[];
   result?: string;
+  /** The project a create_app action created. */
+  project_id?: string;
   /** Autopilot took it over. */
   auto_tried?: boolean;
 }

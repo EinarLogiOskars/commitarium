@@ -483,6 +483,28 @@ func (s *Service) UpdateIndependentAcceptanceTests(
 	return updated, nil
 }
 
+// Rename gives a project a new name; its repository keeps its own.
+func (s *Service) Rename(ctx context.Context, projectID, name string) (Project, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return Project{}, ErrNameRequired
+	}
+	if len(name) > 120 {
+		return Project{}, fmt.Errorf("%w: at most 120 characters", ErrNameRequired)
+	}
+	store, ok := s.store.(interface {
+		Rename(context.Context, string, string) (Project, error)
+	})
+	if !ok {
+		return Project{}, errors.New("project store does not support renaming")
+	}
+	renamed, err := store.Rename(ctx, projectID, name)
+	if err != nil {
+		return Project{}, fmt.Errorf("rename project %q: %w", projectID, err)
+	}
+	return renamed, nil
+}
+
 // UpdateApp marks a project as an app, or as a project only.
 func (s *Service) UpdateApp(ctx context.Context, projectID string, app bool) (Project, error) {
 	settings, ok := s.store.(interface {

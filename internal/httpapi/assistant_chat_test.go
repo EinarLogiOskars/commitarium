@@ -68,7 +68,7 @@ func (stub *conversationStub) StopGoal(_ context.Context, scope string) (convers
 	return conversations.Conversation{Scope: scope}, nil
 }
 
-func (stub *conversationStub) Resolve(_ context.Context, _ string, _ string, status conversations.ActionStatus, result, _ string) (conversations.Conversation, error) {
+func (stub *conversationStub) Resolve(_ context.Context, _ string, _ string, status conversations.ActionStatus, result string, _ conversations.Created) (conversations.Conversation, error) {
 	stub.resolvedStatus, stub.resolvedResult = status, result
 	return conversations.Conversation{}, nil
 }
@@ -204,5 +204,30 @@ func TestStartingAWorkOrderJudgesPremiumOnTheModelsThatWillRun(t *testing.T) {
 	// then fails in this stub, past the premium check.
 	if recorder := approve(`{"start":true,"reviewer_model":"claude-opus-5-5"}`); strings.Contains(recorder.Body.String(), "premium_approval_required") {
 		t.Fatalf("the user's non-premium choice was still held: %d %s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestTheTopLevelCreatesAppsAndProjectsDoTheRest(t *testing.T) {
+	for name, test := range map[string]struct {
+		scope  string
+		action featureartifact.AssistantActionType
+	}{
+		"a work order at the top level": {"commitarium", featureartifact.AssistantCreateWorkOrder},
+		"an app inside a project":       {"prj_test", featureartifact.AssistantCreateApp},
+	} {
+		stub := &conversationStub{action: conversations.Action{
+			ID: "act_1", Status: conversations.ActionProposed,
+			AssistantAction: featureartifact.AssistantAction{
+				Type: test.action, Reason: "Asked", Title: "Tips", Description: "A tip calculator.", Steps: "quick",
+			},
+		}}
+		projects := &recordingProjectService{getByIDResult: project.Project{ID: "prj_test"}}
+		handler := NewWithWorkspaceRealWorkflowDeletionAndModels(projects, &recordingFeatureService{}, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, stub)
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost,
+			"/api/v1/assistant/conversations/"+test.scope+"/actions/act_1/approve", strings.NewReader(`{}`)))
+		if recorder.Code != http.StatusConflict || !strings.Contains(recorder.Body.String(), "action_needs_project") {
+			t.Errorf("%s: %d %s", name, recorder.Code, recorder.Body.String())
+		}
 	}
 }

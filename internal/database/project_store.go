@@ -267,6 +267,22 @@ func (s *ProjectStore) UpdateIndependentAcceptanceTests(
 	return s.GetByID(ctx, projectID)
 }
 
+// Rename gives a project a new name.
+func (s *ProjectStore) Rename(ctx context.Context, projectID, name string) (project.Project, error) {
+	result, err := s.db.ExecContext(ctx, `UPDATE projects SET name = ? WHERE id = ?`, name, projectID)
+	if err != nil {
+		return project.Project{}, fmt.Errorf("rename project %q: %w", projectID, err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return project.Project{}, fmt.Errorf("read rename count for project %q: %w", projectID, err)
+	}
+	if rowsAffected == 0 {
+		return project.Project{}, project.ErrNotFound
+	}
+	return s.GetByID(ctx, projectID)
+}
+
 // UpdateApp marks a project as an app, or as a project only.
 func (s *ProjectStore) UpdateApp(ctx context.Context, projectID string, app bool) (project.Project, error) {
 	result, err := s.db.ExecContext(ctx, `UPDATE projects SET is_app = ? WHERE id = ?`, app, projectID)
