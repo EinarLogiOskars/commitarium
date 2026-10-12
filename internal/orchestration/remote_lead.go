@@ -93,6 +93,12 @@ type RecoveryDirective struct {
 	Message string
 }
 
+// answersBlocker reports whether the user chose to move the work on, which
+// also answers an agent that stopped to ask for help.
+func (directive RecoveryDirective) answersBlocker() bool {
+	return directive.Action == RecoveryActionContinue || directive.Action == RecoveryActionReplace
+}
+
 // RemoteLeadExecution is the durable coordinator state used by the first real
 // lead turn. It deliberately contains no workflow transition: goal
 // clarification leaves the feature in draft.
@@ -717,7 +723,7 @@ func (starter *RemoteLeadStarter) recoverWithDirective(
 				starter.release(run.ID)
 				return checkpointErr
 			}
-			request := remoteLeadRequest{runID: run.ID, allowRecoveryContinuation: recoveryPolicy == project.RecoveryPolicyAutomatic, forceFreshRecovery: directive.Action == RecoveryActionReplace, recoveryMessage: directive.Message, identity: workerhttp.MutationIdentity{AttemptReference: workerhttp.AttemptReference{SessionID: active.ID, AttemptID: checkpoint.AttemptID}}}
+			request := remoteLeadRequest{runID: run.ID, allowRecoveryContinuation: recoveryPolicy == project.RecoveryPolicyAutomatic, forceFreshRecovery: directive.Action == RecoveryActionReplace, recoveryMessage: directive.Message, answerBlocker: directive.answersBlocker(), identity: workerhttp.MutationIdentity{AttemptReference: workerhttp.AttemptReference{SessionID: active.ID, AttemptID: checkpoint.AttemptID}}}
 			switch {
 			case active.Role == worker.RoleLead:
 				version, _, ok := workflowAttemptVersionAndTurn(active.ID, "implementation", checkpoint.AttemptID)
@@ -832,6 +838,7 @@ func (starter *RemoteLeadStarter) recoverWithDirective(
 		allowRecoveryContinuation: recoveryPolicy == project.RecoveryPolicyAutomatic,
 		forceFreshRecovery:        directive.Action == RecoveryActionReplace,
 		recoveryMessage:           directive.Message,
+		answerBlocker:             directive.answersBlocker(),
 		agentName:                 "lead agent",
 		waitingReason:             waitingReasonForAttempt(session, checkpoint.AttemptID),
 		waitKind:                  waitKindForAttempt(session, checkpoint.AttemptID),
@@ -2184,6 +2191,10 @@ type remoteLeadRequest struct {
 	recoveryMessage           string
 	// modelSwitch resumes a turn the user stopped to switch models.
 	modelSwitch bool
+	// answerBlocker lets the user's Continue start the next turn of an agent
+	// that stopped to ask for help, in the same conversation. Automatic
+	// recovery never does this: only the user can answer a blocker.
+	answerBlocker bool
 }
 
 func interventionAttemptID(sessionID, interventionID string) string {
@@ -3914,9 +3925,21 @@ func (starter *RemoteLeadStarter) continueFailedAttempt(
 ) (bool, error) {
 	// Any failed turn can be retried (ADR-017); an incomplete structured result
 	// is one kind of failure.
+	// The user's Continue also answers an agent that stopped to ask for help.
+	answered := request.answerBlocker && attempt.State == workerhttp.AttemptStateTerminal &&
+		attempt.Result != nil && attempt.Result.Outcome == workerhttp.OutcomeCompleted &&
+		attempt.Result.Disposition == workerhttp.DispositionInputRequired
+	if answered {
+		guidance := "The user reviewed the blocker you reported and asked you to continue. Check whether " +
+			"it still holds, then carry on with the same work."
+		if strings.TrimSpace(request.recoveryMessage) != "" {
+			guidance += " The user added: " + strings.TrimSpace(request.recoveryMessage)
+		}
+		request.recoveryMessage = guidance
+	}
 	failed := attempt.State == workerhttp.AttemptStateTerminal && attempt.Result != nil &&
 		(attempt.Result.Outcome == workerhttp.OutcomeFailed ||
-			request.modelSwitch && attempt.Result.Outcome == workerhttp.OutcomeStopped)
+			request.modelSwitch && attempt.Result.Outcome == workerhttp.OutcomeStopped) || answered
 	if !failed && attempt.State != workerhttp.AttemptStateIndeterminate {
 		return false, nil
 	}

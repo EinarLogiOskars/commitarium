@@ -75,3 +75,33 @@ func TestAStoppedTurnWithoutASwitchStillEndsTheRun(t *testing.T) {
 		t.Fatalf("a plain stop no longer ends the run: %+v", run)
 	}
 }
+
+func TestContinueAnswersAnAgentThatAskedForHelp(t *testing.T) {
+	runID := "run_answer_blocker"
+	starter, executions, stub := startFailingPlanningRun(t, runID, workerhttp.ErrorInternal)
+	leadID := remoteLeadSessionID(runID)
+	ref := workerhttp.AttemptReference{SessionID: leadID, AttemptID: planningAttemptID(leadID)}
+	stub.mu.Lock()
+	asked := stub.terminal[ref]
+	asked.Result = &workerhttp.TerminalResult{
+		Outcome: workerhttp.OutcomeCompleted, Disposition: workerhttp.DispositionInputRequired,
+		Summary: "The coordinator refused the step's start; it must resolve the conflict.",
+	}
+	stub.terminal[ref] = asked
+	stub.mu.Unlock()
+
+	if _, admitted, err := starter.RecoverBlockerWithDirective(
+		t.Context(), runID, "continue-after-question", RecoveryDirective{Action: RecoveryActionContinue, Message: "Retry it now."},
+	); err != nil || !admitted {
+		t.Fatalf("continue: admitted=%t err=%v", admitted, err)
+	}
+	waitForRetriedTurn(t, executions, runID)
+	stub.mu.Lock()
+	defer stub.mu.Unlock()
+	resumed := stub.putRequests[len(stub.putRequests)-1]
+	if resumed.Mode != workerhttp.AttemptModeResume || resumed.ProviderSessionID != "codex-thread-test" ||
+		!strings.Contains(resumed.Instructions, "reviewed the blocker you reported") ||
+		!strings.Contains(resumed.Instructions, "Retry it now.") {
+		t.Fatalf("Continue did not answer the agent in its conversation: %+v", resumed)
+	}
+}
