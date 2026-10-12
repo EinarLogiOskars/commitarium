@@ -9,11 +9,13 @@ type Project struct {
 	MergePolicy                MergePolicy
 	AutonomyPolicy             AutonomyPolicy
 	IndependentAcceptanceTests bool
-	DialogueLimits             DialogueLimits
-	AgentProviders             AgentProviders
-	AgentModels                AgentModels
-	ForgejoRepository          *ForgejoRepository
-	CreatedAt                  time.Time
+	// App marks a project the user uses as an app (APPS_PLAN.md).
+	App               bool
+	DialogueLimits    DialogueLimits
+	AgentProviders    AgentProviders
+	AgentModels       AgentModels
+	ForgejoRepository *ForgejoRepository
+	CreatedAt         time.Time
 }
 
 // ForgejoRepository is the verified internal repository identity for a

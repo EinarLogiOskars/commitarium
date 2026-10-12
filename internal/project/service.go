@@ -483,6 +483,21 @@ func (s *Service) UpdateIndependentAcceptanceTests(
 	return updated, nil
 }
 
+// UpdateApp marks a project as an app, or as a project only.
+func (s *Service) UpdateApp(ctx context.Context, projectID string, app bool) (Project, error) {
+	settings, ok := s.store.(interface {
+		UpdateApp(context.Context, string, bool) (Project, error)
+	})
+	if !ok {
+		return Project{}, errors.New("project store does not support apps")
+	}
+	updated, err := settings.UpdateApp(ctx, projectID, app)
+	if err != nil {
+		return Project{}, fmt.Errorf("update app flag for project %q: %w", projectID, err)
+	}
+	return updated, nil
+}
+
 func (s *Service) UpdateMergePolicy(
 	ctx context.Context,
 	projectID string,

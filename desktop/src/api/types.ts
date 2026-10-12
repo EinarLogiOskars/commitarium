@@ -107,6 +107,8 @@ export interface Project {
   merge_policy?: MergePolicy;
   autonomy_policy?: AutonomyPolicy;
   independent_acceptance_tests?: boolean; // project default for future work orders
+  /** The user uses it as an app (APPS_PLAN.md). */
+  app?: boolean;
   forgejo_repository?: ForgejoRepository;
   repository_status?: RepositoryStatus;
   created_at: string;

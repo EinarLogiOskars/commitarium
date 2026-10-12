@@ -74,6 +74,10 @@ export const updateIndependentAcceptanceTests = (id: string, enabled: boolean): 
     body: { enabled },
   });
 
+/** Mark a project as an app, or as a project only (APPS_PLAN.md). */
+export const setProjectApp = (id: string, app: boolean): Promise<Project> =>
+  request(`${projectPath(id)}/app`, { method: "PUT", body: { app } });
+
 // Optional project validation: when configured, this ordered, non-empty list
 // runs in a disposable worker and must pass for the exact approved commit.
 export interface ValidationConfig {
