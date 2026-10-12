@@ -55,9 +55,9 @@ RUN apt-get update && \
 RUN groupadd --gid 65532 commitarium && \
     useradd --uid 65532 --gid 65532 --home-dir /var/lib/commitarium-provider \
         --no-create-home --shell /usr/sbin/nologin commitarium && \
-    mkdir -p /var/lib/commitarium-provider /var/lib/commitarium-worker /var/lib/commitarium-toolchains /workspaces /run/commitarium-agent && \
+    mkdir -p /var/lib/commitarium-provider /var/lib/commitarium-worker /var/lib/commitarium-toolchains /workspaces /run/commitarium-agent /opt/commitarium-cli && \
     chown -R commitarium:commitarium \
-        /var/lib/commitarium-provider /var/lib/commitarium-worker /var/lib/commitarium-toolchains /workspaces && \
+        /var/lib/commitarium-provider /var/lib/commitarium-worker /var/lib/commitarium-toolchains /workspaces /opt/commitarium-cli && \
     chmod 0700 /var/lib/commitarium-provider /var/lib/commitarium-worker
 
 COPY --from=build-stage /worker /worker

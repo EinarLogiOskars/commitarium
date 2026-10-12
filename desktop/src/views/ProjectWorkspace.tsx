@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { getProject } from "../api/projects";
-import { createSession } from "../api/features";
+import { createSession, listFeatures } from "../api/features";
+import { pruneSessionPreviews } from "../ipc";
 import { getProjectToolchain } from "../api/toolchains";
 import { ApiError } from "../api/client";
 import { FeatureView } from "./FeatureView";
@@ -47,6 +48,26 @@ export function ProjectWorkspace({
   const preview = usePreview(id);
   // Follows the background preview setup even when the Preview page is closed.
   const previewSetup = usePreviewSetup(id, preview);
+
+  // A session's preview goes away once the session merges or is discarded.
+  useEffect(() => {
+    const prune = () =>
+      listFeatures(id)
+        .then((features) =>
+          pruneSessionPreviews(
+            id,
+            features
+              .filter(
+                (f) => f.kind === "session" && f.state !== "completed" && f.state !== "cancelled",
+              )
+              .map((f) => f.id),
+          ),
+        )
+        .catch(() => undefined);
+    void prune();
+    const timer = setInterval(() => void prune(), 60000);
+    return () => clearInterval(timer);
+  }, [id, reloadKey]);
   const [orderDraft, setOrderDraft] = useState<OrderDraft>();
   // Stable so it doesn't re-trigger FeatureView's load effect; refreshes the
   // rail's work-order grouping when a feature's state changes.

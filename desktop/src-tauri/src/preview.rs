@@ -506,7 +506,100 @@ pub(crate) async fn delete_project_data(
     manager: PreviewManager,
     project_id: &str,
 ) -> Result<(), String> {
+    prune_sessions(app, manager.clone(), project_id, &[]).await?;
     cleanup_preview_data(app, manager, project_id, true).await
+}
+
+/// Removes the previews of the project's sessions that are no longer open:
+/// their containers, networks, data, and images (ADR-019).
+#[tauri::command]
+pub async fn prune_session_previews(
+    app: AppHandle,
+    manager: State<'_, PreviewManager>,
+    project_id: String,
+    open_sessions: Vec<String>,
+) -> Result<(), String> {
+    validate_identifier("project ID", &project_id)?;
+    for feature_id in &open_sessions {
+        validate_record_id("work order ID", feature_id)?;
+    }
+    prune_sessions(&app, manager.inner().clone(), &project_id, &open_sessions).await
+}
+
+async fn prune_sessions(
+    app: &AppHandle,
+    manager: PreviewManager,
+    project_id: &str,
+    open_sessions: &[String],
+) -> Result<(), String> {
+    let keep: HashSet<String> = open_sessions
+        .iter()
+        .map(|feature_id| {
+            preview_compose::project_name(&session_compose_id(project_id, feature_id))
+        })
+        .collect::<Result<_, _>>()?;
+    // Running previews of closed sessions stop first.
+    let prefix = format!("{project_id}#");
+    let closed_keys = manager
+        .inner
+        .lock()
+        .map_err(|_| "preview state is unavailable")?
+        .projects
+        .keys()
+        .filter(|key| {
+            key.strip_prefix(&prefix).is_some_and(|feature_id| {
+                preview_compose::project_name(&session_compose_id(project_id, feature_id))
+                    .is_ok_and(|name| !keep.contains(&name))
+            })
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    for key in closed_keys {
+        stop_project(app, manager.clone(), &key).await?;
+    }
+    let session_prefix = format!("{PREVIEW_TEMP_PREFIX}{project_id}-");
+    tauri::async_runtime::spawn_blocking(move || {
+        for project in compose_projects() {
+            if !project.starts_with(&session_prefix) || keep.contains(&project) {
+                continue;
+            }
+            for kind in ["container", "network", "volume", "image"] {
+                remove_labeled_resources(kind, &project);
+            }
+        }
+    })
+    .await
+    .map_err(|_| "preview cleanup stopped unexpectedly".to_string())
+}
+
+/// The Compose projects that own containers or volumes.
+fn compose_projects() -> HashSet<String> {
+    let mut projects = HashSet::new();
+    for (kind, list) in [("container", ["ps", "-a"]), ("volume", ["volume", "ls"])] {
+        let Ok(output) = docker::docker_command()
+            .args(list)
+            .args(["--filter", &format!("label={COMPOSE_PROJECT_LABEL}")])
+            .args([
+                "--format",
+                &format!("{{{{.Label \"{COMPOSE_PROJECT_LABEL}\"}}}}"),
+            ])
+            .output()
+        else {
+            continue;
+        };
+        if !output.status.success() {
+            eprintln!("[preview] list {kind} projects failed");
+            continue;
+        }
+        projects.extend(
+            String::from_utf8_lossy(&output.stdout)
+                .lines()
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+                .map(str::to_string),
+        );
+    }
+    projects
 }
 
 #[tauri::command]

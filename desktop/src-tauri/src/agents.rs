@@ -52,7 +52,27 @@ impl Provider {
             Provider::Claude => "claude",
         }
     }
+
+    /// The npm package of the provider's CLI.
+    pub(crate) fn package(self) -> &'static str {
+        match self {
+            Provider::Codex => "@openai/codex",
+            Provider::Claude => "@anthropic-ai/claude-code",
+        }
+    }
+
+    /// The volume holding an updated CLI, shared by the provider's workers.
+    pub(crate) fn cli_volume(self) -> &'static str {
+        match self {
+            Provider::Codex => "codex-cli",
+            Provider::Claude => "claude-cli",
+        }
+    }
 }
+
+/// Where workers find an updated provider CLI; the image's own is used until
+/// an update is installed there.
+pub(crate) const CLI_DIRECTORY: &str = "/opt/commitarium-cli";
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub(crate) struct Agent {
@@ -287,6 +307,7 @@ fn overlay(agents: &[Agent], templates: &Value) -> Result<Value, String> {
         let (profile, journal) = volumes(&agent.id);
         declared_volumes.insert(profile, json!({}));
         declared_volumes.insert(journal, json!({}));
+        declared_volumes.insert(agent.provider.cli_volume().into(), json!({}));
     }
     Ok(json!({ "services": services, "volumes": declared_volumes }))
 }
@@ -395,6 +416,7 @@ fn agent_service(agent: &Agent, template: &Map<String, Value>) -> Value {
                 false,
             ),
             { "type": "volume", "source": "commitarium-toolchains", "target": "/var/lib/commitarium-toolchains" },
+            { "type": "volume", "source": agent.provider.cli_volume(), "target": CLI_DIRECTORY },
         ]),
     );
     Value::Object(service)

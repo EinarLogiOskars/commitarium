@@ -13,6 +13,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 	"unicode"
@@ -310,7 +311,7 @@ func loadCodexConfig(getenv func(string) string) (codexConfig, error) {
 	}
 	executable := strings.TrimSpace(getenv("COMMITARIUM_CODEX_EXECUTABLE"))
 	if executable == "" {
-		executable = defaultCodexBinary
+		executable = preferUpdatedCLI(defaultCodexBinary)
 	}
 	sandbox := strings.TrimSpace(getenv("COMMITARIUM_CODEX_SANDBOX"))
 	if sandbox == "" {
@@ -385,7 +386,7 @@ func loadClaudeConfig(getenv func(string) string) (claudeConfig, error) {
 	}
 	executable := strings.TrimSpace(getenv("COMMITARIUM_CLAUDE_EXECUTABLE"))
 	if executable == "" {
-		executable = defaultClaudeBinary
+		executable = preferUpdatedCLI(defaultClaudeBinary)
 	}
 	permissionMode := strings.TrimSpace(getenv("COMMITARIUM_CLAUDE_PERMISSION_MODE"))
 	if permissionMode == "" {
@@ -560,7 +561,7 @@ func newClaudeRuntime(config claudeConfig) (runtime, error) {
 			workerhttp.CapabilityEventReplay,
 		},
 		description: "Claude worker",
-		modelSource: staticModelSource(config.availableModels...),
+		modelSource: claudeModelSource(provider, baseVariables, config.availableModels),
 	}, nil
 }
 
@@ -604,6 +605,63 @@ func optionalHTTPURL(value string) (string, error) {
 	return value, nil
 }
 
+// updatedCLIDirectory holds provider CLIs the desktop updated after the image
+// was built; a CLI found there is used instead of the image's.
+const updatedCLIDirectory = "/opt/commitarium-cli/bin"
+
+func preferUpdatedCLI(bundled string) string {
+	updated := filepath.Join(updatedCLIDirectory, filepath.Base(bundled))
+	if info, err := os.Stat(updated); err == nil && !info.IsDir() {
+		return updated
+	}
+	return bundled
+}
+
+// claudeModelRefresh is how long resolved Claude models are reused.
+const claudeModelRefresh = 24 * time.Hour
+
+// claudeModelSource lists the models Claude Code's aliases resolve to, newest
+// of each family, followed by the configured ones. Resolving runs Claude
+// Code briefly, so it is cached; without a login the configured list stands.
+func claudeModelSource(provider *claudeadapter.Adapter, environment []string, configured []string) workerhttp.ModelSource {
+	var mu sync.Mutex
+	var cached []workerhttp.Model
+	var resolvedAt time.Time
+	return workerhttp.ModelSourceFunc(func(ctx context.Context) ([]workerhttp.Model, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		if cached != nil && time.Since(resolvedAt) < claudeModelRefresh {
+			return cached, nil
+		}
+		resolved, err := provider.ResolveModelAliases(ctx, os.TempDir(), environment, claudeadapter.ModelAliases)
+		if err != nil {
+			if cached != nil {
+				return cached, nil
+			}
+			return staticModels(configured), nil
+		}
+		ids := make([]string, 0, len(resolved)+len(configured))
+		seen := make(map[string]struct{}, len(resolved)+len(configured))
+		for _, id := range append(append([]string(nil), resolved...), configured...) {
+			if _, exists := seen[id]; exists || project.ValidateExactModelID(id) != nil {
+				continue
+			}
+			seen[id] = struct{}{}
+			ids = append(ids, id)
+		}
+		cached, resolvedAt = staticModels(ids), time.Now()
+		return cached, nil
+	})
+}
+
+func staticModels(ids []string) []workerhttp.Model {
+	models := make([]workerhttp.Model, len(ids))
+	for index, id := range ids {
+		models[index] = workerhttp.Model{ID: id, DisplayName: staticModelDisplayName(id)}
+	}
+	return models
+}
+
 func staticModelSource(ids ...string) workerhttp.ModelSource {
 	return workerhttp.ModelSourceFunc(func(context.Context) ([]workerhttp.Model, error) {
 		models := make([]workerhttp.Model, len(ids))
@@ -624,7 +682,24 @@ func staticModelDisplayName(id string) string {
 	}[id]; ok {
 		return displayName
 	}
-	return id
+	return claudeDisplayName(id)
+}
+
+// claudeDisplayName names a Claude model ID such as "claude-opus-5-2" or
+// "claude-haiku-4-5-20251001" as "Claude Opus 5.2" or "Claude Haiku 4.5".
+func claudeDisplayName(id string) string {
+	parts := strings.Split(strings.TrimPrefix(id, "claude-"), "-")
+	if !strings.HasPrefix(id, "claude-") || len(parts) < 2 {
+		return id
+	}
+	if last := parts[len(parts)-1]; len(last) == 8 && strings.Trim(last, "0123456789") == "" {
+		parts = parts[:len(parts)-1]
+	}
+	family := parts[0]
+	if family == "" {
+		return id
+	}
+	return "Claude " + strings.ToUpper(family[:1]) + family[1:] + " " + strings.Join(parts[1:], ".")
 }
 
 // The deterministic worker has no provider credentials or repository
