@@ -1664,11 +1664,17 @@ button.danger:not(.ghost) {
   min-width: 0;
 }
 .order-head__top .stepper__cell {
-  flex: 0 1 auto;
+  flex: none;
 }
+/* Beside the labels, not above them: no upward offset, and never over a
+   label. */
 .order-head__top .stepper__line {
-  flex: 0 0 18px;
-  margin: 0 4px;
+  flex: 0 0 16px;
+  margin: 0 2px;
+  align-self: center;
+}
+.order-head__top .stepper__label {
+  overflow: visible;
 }
 .order-head__top .stepper__step {
   flex-direction: row;
