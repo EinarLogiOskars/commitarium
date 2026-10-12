@@ -1,6 +1,10 @@
 import { useState } from "react";
 import { pickFolder, inspectFolder, importProject, type FolderInfo } from "../ipc";
-import { detectProjectToolchain, updateProjectToolchain } from "../api/toolchains";
+import {
+  detectProjectToolchain,
+  getProjectToolchain,
+  updateProjectToolchain,
+} from "../api/toolchains";
 import { ApiError } from "../api/client";
 import { SetupAssistant } from "./SetupAssistant";
 import { useModels } from "./useModels";
@@ -62,6 +66,16 @@ export function ImportProject({
         rest,
       );
       setImported(project.id);
+      // Reading the stack detects and saves it when detection is confident;
+      // then there is nothing to review.
+      try {
+        if ((await getProjectToolchain(project.id)).status === "configured") {
+          onImported(project.id);
+          return;
+        }
+      } catch {
+        /* review the detection below */
+      }
       // Shallow, non-mutating scan of the imported repo. Failure isn't fatal —
       // the user can still choose a stack in the workspace.
       try {

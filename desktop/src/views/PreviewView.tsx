@@ -5,7 +5,8 @@ import { updateProjectToolchain } from "../api/toolchains";
 import { ApiError } from "../api/client";
 import type { ProjectToolchain } from "../api/types";
 import { PREVIEW_STATE, type PreviewHandle } from "./usePreview";
-import type { OrderDraft } from "./NewWorkOrder";
+import type { PreviewSetupHandle } from "./usePreviewSetup";
+import { createSession, sendSessionTurn } from "../api/features";
 import {
   OpenTargetFields,
   runDraftFrom,
@@ -20,33 +21,18 @@ const HEAD_POLL_MS = 15000;
 // Names `docker compose` finds at the repository root by default.
 const COMPOSE_FILES = ["compose.yaml", "compose.yml", "docker-compose.yaml", "docker-compose.yml"];
 
-// Preview setup is mostly boilerplate whose real test is running the preview,
-// so these orders skip reviewer tests. Merging follows the project's policy.
-const LIGHT = { independentTests: false };
-
-const PREVIEW_RULES = `- One service per part the app needs (for example frontend, API, database). Servers listen on 0.0.0.0.
+// The rules a preview's compose file follows; the coordinator's background
+// setup gives agents the same ones.
+const PREVIEW_RULES = `- One compose file at the repository root (compose.yaml), with one service per part the app needs (for example frontend, API, database). Servers listen on 0.0.0.0.
+- Run the app for development with live reload: dev servers that reload on change, with the source folders they watch bind-mounted (not dependency folders such as node_modules).
 - Keep data in named volumes.
-- Bind mounts, build contexts, and Dockerfiles stay inside the repository. No privileged mode, host networking, added capabilities, devices, secrets, or external volumes or networks.
-- The frontend reaches the API through a relative-path dev proxy (for example /api), not a hardcoded localhost port.`;
+- Bind mounts, build contexts, and Dockerfiles stay inside the repository. No privileged mode, host networking, added capabilities, devices, secrets, env_file, or external volumes or networks.
+- The frontend reaches the API through a relative-path dev proxy (for example /api), not a hardcoded localhost port.
+- Publish the port the user opens, and name it at the top level: x-commitarium-preview: { service: <service>, port: <container port> }.`;
 
-/** Work order the Preview page offers when the repository has no compose file. */
-const PREVIEW_SETUP_ORDER: OrderDraft = {
-  ...LIGHT,
-  title: "Set up the preview",
-  description: `Add a compose file at the repository root (compose.yaml) that runs this project for Commitarium's preview.
-
-${PREVIEW_RULES}
-- Mention in the README that \`docker compose up\` runs the project locally.
-
-When you're done, say which service and container port the preview should open.`,
-};
-
-/** Follow-up work order for a preview that failed to start. */
-function previewFixOrder(error: string): OrderDraft {
-  return {
-    ...LIGHT,
-    title: "Fix the preview",
-    description: `The preview failed to start. Fix the compose setup or the app so it starts, keeping the preview rules:
+/** The first message of a session that fixes a preview with the user. */
+function previewFixMessage(error: string): string {
+  return `The preview fails to start. Let's fix the compose setup or the app together so it starts, keeping these rules:
 
 ${PREVIEW_RULES}
 
@@ -54,9 +40,12 @@ Error and recent output:
 
 \`\`\`
 ${error}
-\`\`\``,
-  };
+\`\`\``;
 }
+
+// The preview could not tell which service to open.
+const needsOpenTarget = (error: string | null | undefined) =>
+  !!error && /choose which service the preview opens|x-commitarium-preview must name/.test(error);
 
 /** The project's preview: what it runs, controls, and output (ADR-014). */
 export function PreviewView({
@@ -65,19 +54,20 @@ export function PreviewView({
   toolchain,
   hasRepo,
   onOpenStack,
-  onStartOrder,
+  onOpenOrder,
   onToolchainSaved,
+  setup,
 }: {
   projectId: string;
   preview: PreviewHandle;
   toolchain: ProjectToolchain | null;
   hasRepo: boolean;
   onOpenStack: () => void;
-  /** Open New work order with this draft. */
-  onStartOrder: (draft: OrderDraft) => void;
+  /** Opens a work order or session. */
+  onOpenOrder: (featureId: string) => void;
   onToolchainSaved: (t: ProjectToolchain) => void;
+  setup: PreviewSetupHandle;
 }) {
-  const runnable = !!toolchain?.run;
   const { status, error, start, stop, resetData } = preview;
   const state = status?.state ?? "stopped";
   const shown = PREVIEW_STATE[state];
@@ -89,6 +79,24 @@ export function PreviewView({
   const logRef = useRef<HTMLPreElement>(null);
   const [hasCompose, setHasCompose] = useState<boolean | null>(null);
   const [confirmReset, setConfirmReset] = useState(false);
+  const [fixing, setFixing] = useState(false);
+  const [fixError, setFixError] = useState<string | null>(null);
+
+  // A session fixes the preview with the user once the automatic fixes are
+  // used up, or whenever the user wants to.
+  const fixWithAgent = async (failure: string) => {
+    setFixing(true);
+    setFixError(null);
+    try {
+      const session = await createSession(projectId);
+      await sendSessionTurn(projectId, session.id, previewFixMessage(failure), crypto.randomUUID());
+      onOpenOrder(session.id);
+    } catch (e) {
+      setFixError(e instanceof ApiError ? e.message : String(e));
+    } finally {
+      setFixing(false);
+    }
+  };
 
   // Checked against the canonical head; a merged work order may add it.
   useEffect(() => {
@@ -166,23 +174,42 @@ export function PreviewView({
       {!hasRepo ? (
         <p className="muted">This project has no repository yet, so there is nothing to preview.</p>
       ) : hasCompose === false ? (
-        <div className="run__empty">
-          <div>
-            <strong>No compose file yet</strong>
-            <p className="muted">
-              Preview runs your project with Docker Compose. The agents can add a{" "}
-              <code>compose.yaml</code> to the project in a work order, which you review like any
-              other change. It becomes part of your repository, so you can also run it yourself with{" "}
-              <code>docker compose up</code>. Commitarium checks the file and runs it isolated from
-              the rest of your machine.
-            </p>
+        setup.active ? (
+          <div className="run__empty">
+            <div>
+              <strong className="row preview__setting-up">
+                <span className="spinner" aria-hidden /> Setting up the preview…
+              </strong>
+              <p className="muted">
+                An agent is adding a <code>compose.yaml</code> that runs this project with live
+                reload. It merges by itself, and the preview starts when it lands.
+              </p>
+            </div>
+            <div className="run__empty-actions">
+              <button className="ghost" onClick={() => onOpenOrder(setup.active!.id)}>
+                View the setup work order
+              </button>
+            </div>
           </div>
-          <div className="run__empty-actions">
-            <button className="primary" onClick={() => onStartOrder(PREVIEW_SETUP_ORDER)}>
-              Set up preview
-            </button>
+        ) : (
+          <div className="run__empty">
+            <div>
+              <strong>No compose file yet</strong>
+              <p className="muted">
+                Preview runs your project with Docker Compose. An agent can add a{" "}
+                <code>compose.yaml</code> in the background; it merges by itself and the preview
+                starts when it lands. You can also run it yourself with{" "}
+                <code>docker compose up</code>.
+              </p>
+              {setup.error && <div className="banner banner--error">{setup.error}</div>}
+            </div>
+            <div className="run__empty-actions">
+              <button className="primary" onClick={() => void setup.start()}>
+                Set up preview
+              </button>
+            </div>
           </div>
-        </div>
+        )
       ) : toolchain?.status !== "configured" ? (
         <p className="muted">
           Choose a stack for this project first.{" "}
@@ -190,7 +217,7 @@ export function PreviewView({
             Open stack
           </button>
         </p>
-      ) : !runnable ? (
+      ) : needsOpenTarget(status?.error ?? error) ? (
         <OpenTargetSetup
           projectId={projectId}
           toolchain={toolchain}
@@ -208,6 +235,22 @@ export function PreviewView({
           </p>
 
           {error && <div className="banner banner--error">{error}</div>}
+          {fixError && <div className="banner banner--error">{fixError}</div>}
+          {setup.active && (
+            <div className="banner banner--info">
+              <span className="spinner" aria-hidden /> Commitarium is fixing the preview in the
+              background.{" "}
+              <button className="ghost" onClick={() => onOpenOrder(setup.active!.id)}>
+                View
+              </button>
+            </div>
+          )}
+          {setup.exhausted && state === "failed" && !setup.active && (
+            <div className="banner banner--warn">
+              The automatic fixes didn&apos;t get the preview running. Fix it together with an agent
+              in a session.
+            </div>
+          )}
           {behind && (
             <div className="banner banner--info">
               New work has merged since this preview started.{" "}
@@ -255,12 +298,13 @@ export function PreviewView({
                 {state === "failed" ? "Try again" : "Run preview"}
               </button>
             )}
-            {state === "failed" && status?.error && (
+            {state === "failed" && status?.error && !setup.active && (
               <button
-                className="ghost"
-                onClick={() => onStartOrder(previewFixOrder(status.error!))}
+                className={setup.exhausted ? "primary" : "ghost"}
+                onClick={() => void fixWithAgent(status.error!)}
+                disabled={fixing}
               >
-                Fix with agents
+                {fixing ? "Starting a session…" : "Fix with an agent"}
               </button>
             )}
             <button className="ghost" onClick={() => setShowLogs((v) => !v)}>

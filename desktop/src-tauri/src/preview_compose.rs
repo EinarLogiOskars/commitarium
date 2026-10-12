@@ -86,7 +86,14 @@ pub(crate) struct PreparedCompose {
     pub(crate) project_name: String,
     pub(crate) model: Value,
     pub(crate) published_ports: Vec<PublishedPort>,
+    /// The service and port the preview opens: the stack's, or the one the
+    /// Compose file declares when the stack has none.
+    pub(crate) open: OpenTarget,
 }
+
+/// The top-level extension field naming the service and container port a
+/// preview opens.
+const PREVIEW_DECLARATION: &str = "x-commitarium-preview";
 
 pub(crate) fn project_name(project_id: &str) -> Result<String, String> {
     if project_id.is_empty()
@@ -132,7 +139,7 @@ pub(crate) fn find_compose_file(checkout: &Path) -> Result<PathBuf, String> {
 pub(crate) fn normalize_and_rewrite(
     checkout: &Path,
     project_id: &str,
-    open: &OpenTarget,
+    open: Option<&OpenTarget>,
 ) -> Result<PreparedCompose, String> {
     let compose_file = find_compose_file(checkout)?;
     validate_raw_compose(&compose_file)?;
@@ -157,13 +164,26 @@ pub(crate) fn normalize_and_rewrite(
     }
     let model: Value = serde_json::from_slice(&output.stdout)
         .map_err(|e| format!("decode normalized project Compose file: {e}"))?;
-    validate_and_rewrite(checkout, project_id, open, model)
+    validate_and_rewrite_with(checkout, project_id, open, model)
 }
 
+#[cfg(test)]
 pub(crate) fn validate_and_rewrite(
     checkout: &Path,
     project_id: &str,
     open: &OpenTarget,
+    model: Value,
+) -> Result<PreparedCompose, String> {
+    validate_and_rewrite_with(checkout, project_id, Some(open), model)
+}
+
+/// Validates and rewrites a normalized Compose model. Without an open target,
+/// the preview opens what the file declares in `x-commitarium-preview`, or its
+/// only published TCP port.
+pub(crate) fn validate_and_rewrite_with(
+    checkout: &Path,
+    project_id: &str,
+    open: Option<&OpenTarget>,
     mut model: Value,
 ) -> Result<PreparedCompose, String> {
     let checkout = checkout
@@ -184,6 +204,7 @@ pub(crate) fn validate_and_rewrite(
     if let Some(networks) = root.get_mut("networks") {
         validate_top_networks(networks, &compose_project)?;
     }
+    let declared = root.get(PREVIEW_DECLARATION).cloned();
 
     let services = root
         .get_mut("services")
@@ -192,12 +213,6 @@ pub(crate) fn validate_and_rewrite(
         .ok_or_else(|| "Compose services must be an object".to_string())?;
     if services.is_empty() {
         return Err("Compose document has no services".into());
-    }
-    if !services.contains_key(&open.service) {
-        return Err(format!(
-            "preview open service {:?} is not defined by the Compose file",
-            open.service
-        ));
     }
 
     let mut published = Vec::new();
@@ -231,6 +246,16 @@ pub(crate) fn validate_and_rewrite(
         service.insert("pids_limit".into(), json!(512));
     }
 
+    let open = match open {
+        Some(open) => open.clone(),
+        None => infer_open_target(declared.as_ref(), &published)?,
+    };
+    if !services.contains_key(&open.service) {
+        return Err(format!(
+            "preview open service {:?} is not defined by the Compose file",
+            open.service
+        ));
+    }
     if !published.iter().any(|port| {
         port.service == open.service && port.target == open.port && port.protocol == "tcp"
     }) {
@@ -244,7 +269,47 @@ pub(crate) fn validate_and_rewrite(
         project_name: compose_project,
         model,
         published_ports: published,
+        open,
     })
+}
+
+/// The open target of a Compose file whose stack names none: its
+/// `x-commitarium-preview` declaration, or its only published TCP port.
+fn infer_open_target(
+    declared: Option<&Value>,
+    published: &[PublishedPort],
+) -> Result<OpenTarget, String> {
+    if let Some(declared) = declared {
+        let service = declared.get("service").and_then(Value::as_str);
+        let port = declared
+            .get("port")
+            .and_then(|port| match port {
+                Value::Number(number) => number.as_u64(),
+                Value::String(text) => text.trim().parse().ok(),
+                _ => None,
+            })
+            .and_then(|port| u16::try_from(port).ok())
+            .filter(|port| *port != 0);
+        return match (service, port) {
+            (Some(service), Some(port)) if !service.trim().is_empty() => Ok(OpenTarget {
+                service: service.trim().to_string(),
+                port,
+            }),
+            _ => Err(format!(
+                "{PREVIEW_DECLARATION} must name a service and a container port"
+            )),
+        };
+    }
+    let mut tcp = published.iter().filter(|port| port.protocol == "tcp");
+    match (tcp.next(), tcp.next()) {
+        (Some(only), None) => Ok(OpenTarget {
+            service: only.service.clone(),
+            port: only.target,
+        }),
+        _ => Err(format!(
+            "choose which service the preview opens: the Compose file publishes several ports and has no {PREVIEW_DECLARATION}"
+        )),
+    }
 }
 
 pub(crate) fn write_rewritten(prepared: &PreparedCompose, path: &Path) -> Result<(), String> {
@@ -774,6 +839,39 @@ fn bounded(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn port(service: &str, target: u16) -> PublishedPort {
+        PublishedPort {
+            service: service.into(),
+            target,
+            protocol: "tcp".into(),
+        }
+    }
+
+    #[test]
+    fn the_open_target_comes_from_the_declaration_or_the_only_port() {
+        let declared = json!({"service": "frontend", "port": "5173"});
+        assert_eq!(
+            infer_open_target(
+                Some(&declared),
+                &[port("backend", 8000), port("frontend", 5173)]
+            )
+            .unwrap(),
+            OpenTarget {
+                service: "frontend".into(),
+                port: 5173
+            }
+        );
+        assert_eq!(
+            infer_open_target(None, &[port("web", 3000)]).unwrap(),
+            OpenTarget {
+                service: "web".into(),
+                port: 3000
+            }
+        );
+        assert!(infer_open_target(None, &[port("web", 3000), port("api", 8000)]).is_err());
+        assert!(infer_open_target(Some(&json!({"service": "web"})), &[port("web", 3000)]).is_err());
+    }
 
     fn full_stack(root: &Path) -> Value {
         fs::create_dir_all(root.join("web")).unwrap();

@@ -23,7 +23,7 @@ func (api *API) listToolchainPresetsHandler(w http.ResponseWriter, _ *http.Reque
 }
 
 func (api *API) getProjectToolchainHandler(w http.ResponseWriter, r *http.Request) {
-	manifest, err := api.toolchains.Get(r.Context(), r.PathValue("id"))
+	manifest, err := api.projectToolchain(r.Context(), r.PathValue("id"))
 	if err != nil {
 		api.writeToolchainError(w, r.PathValue("id"), "read", err)
 		return
@@ -50,6 +50,7 @@ func (api *API) configureProjectToolchainHandler(w http.ResponseWriter, r *http.
 		api.writeToolchainError(w, r.PathValue("id"), "configure", err)
 		return
 	}
+	api.ensurePreviewSetupLater(r.PathValue("id"))
 	writeJSON(w, http.StatusOK, manifest, "project toolchain")
 }
 

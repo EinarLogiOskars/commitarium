@@ -111,6 +111,7 @@ func (s *Service) Create(
 		IndependentAcceptanceTests: settings.IndependentAcceptanceTests,
 		Steps:                      settings.Steps,
 		Kind:                       kind,
+		Background:                 overrides.Background,
 		CreatedAt:                  now,
 		UpdatedAt:                  now,
 	}

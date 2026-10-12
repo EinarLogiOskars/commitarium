@@ -57,6 +57,8 @@ export function StackPicker({
   const [detecting, setDetecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [helping, setHelping] = useState(false);
+  // A configured stack shows as a summary until the user changes it.
+  const [editing, setEditing] = useState(false);
 
   useEffect(() => {
     let live = true;
@@ -154,14 +156,15 @@ export function StackPicker({
     setBusy(true);
     setError(null);
     try {
-      onSaved(
-        await updateProjectToolchain(projectId, {
-          source,
-          tools,
-          services,
-          run: runFromDraft(run),
-        }),
-      );
+      const saved = await updateProjectToolchain(projectId, {
+        source,
+        tools,
+        services,
+        run: runFromDraft(run),
+      });
+      setCurrent(saved);
+      setEditing(false);
+      onSaved(saved);
     } catch (e) {
       setError(describe(e));
     } finally {
@@ -186,13 +189,50 @@ export function StackPicker({
     );
   }
 
+  if (current?.status === "configured" && !editing) {
+    return (
+      <section className="panel">
+        <div className="panel__head">
+          <h2>Stack</h2>
+          <button className="ghost" onClick={() => setEditing(true)}>
+            Change
+          </button>
+        </div>
+        <p className="stack__summary">
+          {Object.entries(current.tools)
+            .map(([tool, version]) => `${tool} ${version}`)
+            .join(" · ")}{" "}
+          <span className="muted">· {SOURCE_LABEL[current.source ?? "picker"]}</span>
+        </p>
+        {current.services.length > 0 && (
+          <p className="muted">Services: {current.services.join(", ")}</p>
+        )}
+        {current.run && (
+          <p className="muted">
+            The preview opens {current.run.open.service} on port {current.run.open.port}.
+          </p>
+        )}
+        {provisioning && (
+          <ProvisioningBanner status={provisioning} message={current.provisioning_message} />
+        )}
+      </section>
+    );
+  }
+
   return (
     <section className="panel">
       <div className="panel__head">
         <h2>Stack</h2>
-        <button className="ghost" onClick={() => setHelping(true)} disabled={busy}>
-          Ask an agent
-        </button>
+        <div className="row">
+          <button className="ghost" onClick={() => setHelping(true)} disabled={busy}>
+            Ask an agent
+          </button>
+          {current?.status === "configured" && (
+            <button className="ghost" onClick={() => setEditing(false)} disabled={busy}>
+              Cancel
+            </button>
+          )}
+        </div>
       </div>
       {current?.status === "needs_setup" && (
         <p className="muted">
@@ -325,6 +365,13 @@ export function StackPicker({
     </section>
   );
 }
+
+const SOURCE_LABEL: Record<ToolchainSource, string> = {
+  detected: "detected from the repository",
+  picker: "chosen by you",
+  assistant: "set up by an agent",
+  runtime: "from the repository's tool versions",
+};
 
 function ProvisioningBanner({ status, message }: { status: ProvisioningStatus; message?: string }) {
   const cls =

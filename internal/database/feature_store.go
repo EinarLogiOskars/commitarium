@@ -73,10 +73,11 @@ func (s *FeatureStore) Create(
 				skip_plan,
 				skip_reviewer,
 				kind,
+				background,
 				created_at,
 				updated_at
 			)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT(id) DO NOTHING
 		`,
 		createdFeature.ID,
@@ -100,6 +101,7 @@ func (s *FeatureStore) Create(
 		createdFeature.Steps.SkipPlan,
 		createdFeature.Steps.SkipReviewer,
 		storedFeatureKind(createdFeature.Kind),
+		createdFeature.Background,
 		createdFeature.CreatedAt.UTC().Format(time.RFC3339Nano),
 		createdFeature.UpdatedAt.UTC().Format(time.RFC3339Nano),
 	)
@@ -164,6 +166,7 @@ func (s *FeatureStore) GetByID(
 				skip_plan,
 				skip_reviewer,
 				kind,
+				background,
 				created_at,
 				updated_at
 			FROM features
@@ -215,6 +218,7 @@ func (s *FeatureStore) ListByProjectID(
 				skip_plan,
 				skip_reviewer,
 				kind,
+				background,
 				created_at,
 				updated_at
 			FROM features
@@ -276,6 +280,7 @@ func scanFeature(row featureScanner) (feature.Feature, error) {
 		&storedFeature.Steps.SkipPlan,
 		&storedFeature.Steps.SkipReviewer,
 		&storedKind,
+		&storedFeature.Background,
 		&createdAt,
 		&updatedAt,
 	); err != nil {

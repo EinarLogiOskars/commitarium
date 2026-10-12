@@ -22,8 +22,11 @@ type Feature struct {
 	IndependentAcceptanceTests bool
 	Steps                      project.WorkSteps
 	Kind                       Kind
-	CreatedAt                  time.Time
-	UpdatedAt                  time.Time
+	// Background marks a work order Commitarium started by itself, such as
+	// the preview setup; it is not listed with the user's work.
+	Background bool
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
 }
 
 // Kind is the kind of work: a work order that runs on its own, or an
@@ -52,4 +55,6 @@ type SettingsOverrides struct {
 	// Kind is the kind of work to create; empty is a work order. A session
 	// has neither a plan nor a reviewer.
 	Kind Kind
+	// Background creates a work order Commitarium runs by itself.
+	Background bool
 }

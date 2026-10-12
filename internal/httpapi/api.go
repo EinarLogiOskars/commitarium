@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"sync"
 
 	"github.com/EinarLogiOskars/commitarium/internal/execution"
 	"github.com/EinarLogiOskars/commitarium/internal/feature"
@@ -254,6 +255,8 @@ type RealWorkflowStarter interface {
 }
 
 type API struct {
+	// previewSetup serializes starting background preview setups and fixes.
+	previewSetup       sync.Mutex
 	projects           ProjectService
 	projectImporter    ProjectImporter
 	features           FeatureService
@@ -435,6 +438,8 @@ func newAPI(
 		mux.HandleFunc("GET /api/v1/projects/{id}/toolchain", api.getProjectToolchainHandler)
 		mux.HandleFunc("PUT /api/v1/projects/{id}/toolchain", api.configureProjectToolchainHandler)
 		mux.HandleFunc("POST /api/v1/projects/{id}/toolchain/detect", api.detectProjectToolchainHandler)
+		mux.HandleFunc("POST /api/v1/projects/{id}/preview-setup", api.startPreviewSetupHandler)
+		mux.HandleFunc("POST /api/v1/projects/{id}/preview-setup/failed", api.previewFailedHandler)
 	}
 	if toolchainAssistant != nil {
 		mux.HandleFunc("POST /api/v1/projects/{id}/toolchain/assistant-sessions", api.startToolchainAssistantHandler)

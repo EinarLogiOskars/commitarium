@@ -274,6 +274,9 @@ export interface Feature {
   // "session" is an interactive session with one agent (ADR-019); absent on
   // older coordinators, which only have work orders.
   kind?: WorkKind;
+  // A work order Commitarium runs by itself, such as the preview setup; not
+  // listed with the user's work.
+  background?: boolean;
   // A session's agent activity, in feature lists only: working on a message,
   // or idle since `updated_at`.
   session?: { working: boolean; updated_at: string };

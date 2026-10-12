@@ -88,7 +88,9 @@ export function ProjectDashboard({
     }
   };
 
-  const items = (features ?? []).map((f) => describe(f, runs[f.id]));
+  // Background work, such as the preview setup, shows on the Preview page.
+  const own = (features ?? []).filter((f) => !f.background);
+  const items = own.map((f) => describe(f, runs[f.id]));
   const actionable = attention.filter((i) => i.actionable);
   const waiting = new Set(actionable.map((i) => i.feature_id));
   // Sessions show their own activity in the rail's Sessions tab (ADR-019).
@@ -96,7 +98,7 @@ export function ProjectDashboard({
     (i) => !waiting.has(i.feature.id) && i.activity === "working" && i.feature.kind !== "session",
   );
   const phaseOf = new Map(items.map((i) => [i.feature.id, i.phase] as const));
-  const completed = (features ?? []).filter((f) => f.state === "completed");
+  const completed = own.filter((f) => f.state === "completed");
   const repo = project.forgejo_repository;
 
   return (

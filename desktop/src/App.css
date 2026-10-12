@@ -3009,3 +3009,13 @@ button.danger:not(.ghost) {
   overflow: auto;
   font-size: 12px;
 }
+
+/* The Stack page's summary of a configured stack. */
+.stack__summary {
+  margin: 4px 0 8px;
+  font-size: 15px;
+}
+.preview__setting-up {
+  gap: 8px;
+  align-items: center;
+}

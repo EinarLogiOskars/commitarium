@@ -13,6 +13,7 @@ import { StackPicker } from "./StackPicker";
 import { PreviewRailItem } from "./PreviewRailItem";
 import { PreviewView } from "./PreviewView";
 import { usePreview } from "./usePreview";
+import { usePreviewSetup } from "./usePreviewSetup";
 import { WORK } from "../vocab";
 import type { AttentionItem, Project, ProjectToolchain, WorkKind } from "../api/types";
 
@@ -44,6 +45,8 @@ export function ProjectWorkspace({
   // The rail lists one kind of work at a time: work orders or sessions.
   const [railKind, setRailKind] = useState<WorkKind>("work_order");
   const preview = usePreview(id);
+  // Follows the background preview setup even when the Preview page is closed.
+  const previewSetup = usePreviewSetup(id, preview);
   const [orderDraft, setOrderDraft] = useState<OrderDraft>();
   // Stable so it doesn't re-trigger FeatureView's load effect; refreshes the
   // rail's work-order grouping when a feature's state changes.
@@ -307,11 +310,8 @@ export function ProjectWorkspace({
               hasRepo={!!project.forgejo_repository}
               onToolchainSaved={setToolchain}
               onOpenStack={() => setMode("stack")}
-              onStartOrder={(draft) => {
-                setOrderDraft(draft);
-                setOrderId(null);
-                setMode(needsStack ? "stack" : "new");
-              }}
+              onOpenOrder={openOrder}
+              setup={previewSetup}
             />
           )}
 

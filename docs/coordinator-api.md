@@ -2305,6 +2305,39 @@ work order.
 `PATCH /api/v1/projects/{projectID}/features/{featureID}` with `{"title": ...}`
 renames a work order or session.
 
+## Background preview setup
+
+Reading a project's stack (`GET /api/v1/projects/{id}/toolchain`, and the
+toolchain check before a work order is created) detects and saves the stack
+when none is saved and detection is confident.
+
+When a project has a stack but its repository has no compose file at the root,
+the coordinator starts a **background work order**, "Set up the preview". It is
+a quick change with automatic merge and `run_to_completion`. Feature responses
+mark it `"background": true`; the desktop leaves it out of the user's lists.
+
+- `POST /api/v1/projects/{id}/preview-setup` starts the setup on request. It
+  answers `{"work_order": {...}}` with the running background work order.
+  - `409 preview_has_compose` when the repository already has a compose file.
+  - `503 preview_setup_unavailable` without real agents.
+- `POST /api/v1/projects/{id}/preview-setup/failed` with `{"error": "..."}`
+  reports a preview that failed to start. It starts a background "Fix the
+  preview" with the error, at most two after the latest setup, and answers
+  like the setup. Once the fixes are used up it answers
+  `409 preview_fixes_exhausted`.
+
+The setup asks the agent to name what the preview opens at the top level of
+the compose file:
+
+```yaml
+x-commitarium-preview:
+  service: frontend
+  port: 5173
+```
+
+A stack without an open target uses it, or the compose file's only published
+port, and the desktop saves it on the stack.
+
 ## Merging an approved revision
 
 This endpoint and automatic merge execution are available in the opt-in

@@ -183,6 +183,16 @@ under its own Compose project with no host environment. The user starts it
 explicitly, and it runs code the user is actively directing. Its working copy
 is never removed by the preview.
 
+## Background work orders
+
+Commitarium starts some quick changes by itself, such as setting up a
+project's preview. They merge without the user looking: no reviewer, the
+automatic merge policy, and the merge gate identity's approval. They are bound
+by the same agent isolation, project validation, and branch protection as any
+work order. Their prompts come only from the coordinator, with a failed
+preview's own output as the only outside text. They stay visible as work
+orders with pull requests in Forgejo.
+
 ## Backup and restore boundary
 
 Backup and restore are trusted-host operations implemented behind fixed Tauri

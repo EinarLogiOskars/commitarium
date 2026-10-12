@@ -124,7 +124,7 @@ struct RunConfig {
     open: RunOpen,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 struct RunOpen {
     service: String,
     port: u16,
@@ -134,6 +134,12 @@ struct RunOpen {
 struct ToolchainManifest {
     status: String,
     run: Option<RunConfig>,
+    #[serde(default)]
+    source: String,
+    #[serde(default)]
+    tools: serde_json::Map<String, serde_json::Value>,
+    #[serde(default)]
+    services: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -372,10 +378,12 @@ pub async fn start_preview(
     if manifest.status != "configured" {
         return Err("choose a project stack before starting a preview".into());
     }
-    let run = manifest
-        .run
-        .ok_or("this project's stack has no preview open target")?;
-    validate_run(&run)?;
+    // Without an open target on the stack, the preview opens what the
+    // Compose file declares, and the stack then remembers it.
+    let run = manifest.run.clone();
+    if let Some(run) = &run {
+        validate_run(run)?;
+    }
     let (source, commit_id, compose_id) = match &feature_id {
         None => {
             let handoff: ProjectHandoff = coordinator_json(
@@ -454,6 +462,11 @@ pub async fn start_preview(
             )
         })
         .await;
+        if let Ok(Some(open)) = &result {
+            if let Err(error) = remember_open_target(&client, &project_id, &manifest, open).await {
+                eprintln!("[preview] remember the preview open target: {error}");
+            }
+        }
         if result.is_err() {
             fail_preview(
                 &task_app,
@@ -594,9 +607,9 @@ fn launch_preview(
     project_id: String,
     generation: u64,
     preview_source: PreviewSource,
-    run: RunConfig,
+    run: Option<RunConfig>,
     compose_id: String,
-) {
+) -> Option<RunOpen> {
     // `project_id` here is the preview's registry key; `root` holds the
     // generated Compose files and is removed on stop. A session's working
     // copy is used in place and never removed.
@@ -614,26 +627,27 @@ fn launch_preview(
         Ok(paths) => paths,
         Err(error) => {
             fail_preview(&app, &manager, &project_id, generation, &error, None);
-            return;
+            return None;
         }
     };
-    let open = preview_compose::OpenTarget {
+    let configured = run.as_ref().map(|run| preview_compose::OpenTarget {
         service: run.open.service.clone(),
         port: run.open.port,
-    };
-    let prepared = match preview_compose::normalize_and_rewrite(&source, &compose_id, &open) {
-        Ok(prepared) => prepared,
-        Err(error) => {
-            fail_preview(&app, &manager, &project_id, generation, &error, None);
-            remove_source(&root);
-            return;
-        }
-    };
+    });
+    let prepared =
+        match preview_compose::normalize_and_rewrite(&source, &compose_id, configured.as_ref()) {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                fail_preview(&app, &manager, &project_id, generation, &error, None);
+                remove_source(&root);
+                return None;
+            }
+        };
     let compose_file = root.join("preview.compose.json");
     if let Err(error) = preview_compose::write_rewritten(&prepared, &compose_file) {
         fail_preview(&app, &manager, &project_id, generation, &error, None);
         remove_source(&root);
-        return;
+        return None;
     }
     let environment_file = root.join("preview.env");
     if let Err(error) = fs::write(&environment_file, []) {
@@ -646,7 +660,7 @@ fn launch_preview(
             None,
         );
         remove_source(&root);
-        return;
+        return None;
     }
     let runtime = ComposeRuntime {
         project_name: prepared.project_name.clone(),
@@ -656,7 +670,7 @@ fn launch_preview(
     };
     if !manager.attach(&project_id, generation, runtime.clone()) {
         remove_source(&runtime.source_root);
-        return;
+        return None;
     }
     manager.append_log(
         &project_id,
@@ -668,20 +682,24 @@ fn launch_preview(
         Err(error) => {
             manager.append_log(&project_id, generation, format!("[preview] {error}"));
             fail_preview(&app, &manager, &project_id, generation, &error, None);
-            return;
+            return None;
         }
     }
     if !manager.active(&project_id, generation, PreviewState::Starting) {
         let _ = compose_down(&runtime, false, false);
         remove_source(&runtime.source_root);
-        return;
+        return None;
     }
 
-    let urls = match resolve_urls(&runtime, &prepared.published_ports, &run.open) {
+    let open = RunOpen {
+        service: prepared.open.service.clone(),
+        port: prepared.open.port,
+    };
+    let urls = match resolve_urls(&runtime, &prepared.published_ports, &open) {
         Ok(urls) => urls,
         Err(error) => {
             fail_preview(&app, &manager, &project_id, generation, &error, None);
-            return;
+            return None;
         }
     };
     let Some(open_url) = urls.iter().find(|url| url.open) else {
@@ -693,18 +711,18 @@ fn launch_preview(
             "the preview open target has no URL",
             None,
         );
-        return;
+        return None;
     };
     if let Err(error) = wait_for_http(
         &manager,
         &project_id,
         generation,
         &runtime,
-        &run.open.service,
+        &open.service,
         &open_url.url,
     ) {
         fail_preview(&app, &manager, &project_id, generation, &error, None);
-        return;
+        return None;
     }
     if let Some(status) = manager.running(&project_id, generation, urls) {
         let _ = app.emit(STATUS_EVENT, status);
@@ -714,11 +732,15 @@ fn launch_preview(
             project_id,
             generation,
             runtime,
-            run.open.service,
+            open.service.clone(),
         );
+        // A target inferred from the Compose file is reported back so the
+        // stack remembers it.
+        run.is_none().then_some(open)
     } else {
         let _ = compose_down(&runtime, false, false);
         remove_source(&runtime.source_root);
+        None
     }
 }
 
@@ -786,6 +808,41 @@ fn prepare_source(handoff: &ProjectHandoff) -> Result<PathBuf, String> {
         "check out preview commit",
     )?;
     Ok(temporary.keep())
+}
+
+/// Saves an open target inferred from the Compose file on the project's
+/// stack, keeping its tools and services.
+async fn remember_open_target(
+    client: &reqwest::Client,
+    project_id: &str,
+    manifest: &ToolchainManifest,
+    open: &RunOpen,
+) -> Result<(), String> {
+    let source = if manifest.source.is_empty() {
+        "runtime"
+    } else {
+        manifest.source.as_str()
+    };
+    let response = client
+        .put(coordinator_url(&format!(
+            "/api/v1/projects/{project_id}/toolchain"
+        )))
+        .json(&serde_json::json!({
+            "source": source,
+            "tools": manifest.tools,
+            "services": manifest.services,
+            "run": { "open": open },
+        }))
+        .send()
+        .await
+        .map_err(|e| format!("save the preview open target: {e}"))?;
+    if !response.status().is_success() {
+        return Err(format!(
+            "the coordinator refused the open target: HTTP {}",
+            response.status()
+        ));
+    }
+    Ok(())
 }
 
 fn compose_command(runtime: &ComposeRuntime) -> Command {

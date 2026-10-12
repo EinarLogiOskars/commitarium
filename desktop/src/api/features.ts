@@ -184,3 +184,22 @@ export const renameFeature = (
   title: string,
 ): Promise<Feature> =>
   request(featurePath(projectId, featureId), { method: "PATCH", body: { title } });
+
+// --- Background preview setup ---
+
+export interface PreviewSetup {
+  /** The background work order setting the preview up, when one runs. */
+  work_order?: Feature;
+}
+
+/** Set the preview up in the background: a quick change adds a compose file. */
+export const startPreviewSetup = (projectId: string): Promise<PreviewSetup> =>
+  request(`/api/v1/projects/${encodeURIComponent(projectId)}/preview-setup`, { method: "POST" });
+
+/** Report a preview that failed to start, so a background fix can start.
+ * Answers 409 preview_fixes_exhausted once the automatic fixes are used up. */
+export const reportPreviewFailure = (projectId: string, error: string): Promise<PreviewSetup> =>
+  request(`/api/v1/projects/${encodeURIComponent(projectId)}/preview-setup/failed`, {
+    method: "POST",
+    body: { error },
+  });
