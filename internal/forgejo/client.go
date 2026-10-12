@@ -1519,6 +1519,11 @@ func (client *Client) findPullRequest(
 		if err != nil {
 			return workspace.PullRequest{}, false, err
 		}
+		// A pull request closed without merging belongs to an earlier run that
+		// was abandoned (Back to Ready reuses the branch name), not to this one.
+		if candidate.State == "closed" && !candidate.Merged {
+			continue
+		}
 		if candidate.BaseBranch == spec.BaseBranch && candidate.HeadBranch == spec.HeadBranch {
 			matches = append(matches, candidate)
 		}
