@@ -127,6 +127,10 @@ type record struct {
 	SessionAgent string            `json:"session_agent,omitempty"`
 	SessionModel string            `json:"session_model,omitempty"`
 	Keys         map[string]string `json:"keys,omitempty"`
+	// Watched is the project's work as last seen, by work order, and
+	// PendingEvents what the assistant has yet to hear (events.go).
+	Watched       map[string]string `json:"watched,omitempty"`
+	PendingEvents []string          `json:"pending_events,omitempty"`
 }
 
 // maxSessionTurns bounds a provider session; the next turn starts fresh.

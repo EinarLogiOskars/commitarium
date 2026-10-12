@@ -372,6 +372,10 @@ func run(ctx context.Context, coordinatorConfig config) error {
 			return fmt.Errorf("create the assistant: %w", err)
 		}
 		conversationService = projectAssistant
+		// Changes in the projects' work wake the assistant (events).
+		go conversations.Watcher{
+			Service: projectAssistant, Features: featureService, Runs: executionService, LimitWaits: executionService,
+		}.Run(ctx)
 		assistant, err := toolchain.NewAssistant(
 			coordinatorConfig.toolchainRoot, coordinatorConfig.workspaceRoot, projectService, toolchainService,
 			func(agentID string) (workerhttp.Service, error) { return agentWorkers.Client(agentID) },
