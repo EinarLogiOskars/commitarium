@@ -37,7 +37,6 @@ export function useWorkLayout(hasRail: boolean) {
     return () => window.removeEventListener("resize", onResize);
   }, []);
 
-
   const width = assistantWidth(windowWidth);
   const rail = hasRail ? RAIL : 0;
   const collapsedRail = hasRail ? RAIL_COLLAPSED : 0;
