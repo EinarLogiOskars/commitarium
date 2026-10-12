@@ -9,6 +9,13 @@ import type { ImplementationPlanDocument, PlanStep, Run } from "../api/types";
 
 const SHOWN = new Set(["message", "activity"]);
 
+// A plan step's dot in the folded checklist.
+const STEP_DOT: Record<string, string> = {
+  completed: "ok",
+  in_progress: "warn",
+  pending: "muted",
+};
+
 // Implementation phase: the lead writes the code per the agreed plan. The
 // checklist sidebar tracks the durable implementation_plan artifact — each
 // commit-sized step advances pending → in_progress → completed live (no user
@@ -34,6 +41,9 @@ export function ImplementationView({
   onChanged: () => void;
 }) {
   const feedRef = useRef<HTMLDivElement | null>(null);
+  // The checklist folds into a slim strip, like the acceptance tests, to give
+  // the conversation room.
+  const [sideOpen, setSideOpen] = useState(true);
   const pinned = useRef(true);
 
   const { artifact: plan } = useFeatureArtifact<ImplementationPlanDocument>(
@@ -69,9 +79,38 @@ export function ImplementationView({
       {error && <div className="banner banner--error">{error}</div>}
 
       <div className="impl">
-        <aside className="impl__side">
-          <PlanChecklist plan={plan?.document ?? null} />
-        </aside>
+        {/* A quick change has no plan, so there is no checklist to show. */}
+        {plan?.document &&
+          (sideOpen ? (
+            <aside className="impl__side">
+              <button
+                className="impl__fold"
+                onClick={() => setSideOpen(false)}
+                title="Fold the checklist away"
+                aria-label="Fold the checklist away"
+              >
+                ‹
+              </button>
+              <PlanChecklist plan={plan.document} />
+            </aside>
+          ) : (
+            <button
+              className="impl__strip"
+              onClick={() => setSideOpen(true)}
+              title="Show the implementation checklist"
+            >
+              <span className="impl__strip-chevron">›</span>
+              <span className="muted note">
+                {plan.document.steps.filter((step) => step.status === "completed").length}/
+                {plan.document.steps.length}
+              </span>
+              <span className="impl__strip-dots" aria-hidden>
+                {plan.document.steps.map((step) => (
+                  <span key={step.id} className={`dot dot--${STEP_DOT[step.status] ?? "muted"}`} />
+                ))}
+              </span>
+            </button>
+          ))}
         <div className="impl__main">
           <div
             className="chat"

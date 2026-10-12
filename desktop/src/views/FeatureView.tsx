@@ -215,13 +215,8 @@ export function FeatureView({
       )}
 
       <section className="panel order-head">
-        <div className="panel__head">
-          <div>
-            <h2>{feature.title}</h2>
-            {feature.description && <OrderDescription text={feature.description} />}
-            {usage && usage.roles.length > 0 && <UsageLine usage={usage} />}
-            <AgentsAtWork run={run} onChanged={() => void load()} />
-          </div>
+        <div className="panel__head order-head__top">
+          <h2>{feature.title}</h2>
           <div className="row">
             {restartable && !confirmDelete && !confirmReady && (
               <button
@@ -288,6 +283,7 @@ export function FeatureView({
           onSelect={select}
           paused={run?.paused}
         />
+        {feature.description && <OrderDescription text={feature.description} />}
 
         {/* The top orients: what phase, and why the run is waiting. Actions —
             the message composer and pause/continue — live below the transcript. */}
@@ -331,8 +327,22 @@ export function FeatureView({
             review → evidence at merge). Hidden in Clarify/Plan — no baseline
             yet. Still self-gates on the artifact, so absent unless independent
             tests are enabled. */}
-        <AcceptanceTestsPanel projectId={projectId} featureId={feature.id} enabled={viewed >= 2} />
+        <AcceptanceTestsPanel
+          projectId={projectId}
+          featureId={feature.id}
+          enabled={viewed >= 2}
+          openByDefault={viewed >= 3}
+        />
       </div>
+
+      {/* Who works on which model, and what it has cost, out of the way of the
+          work itself. */}
+      {(run || (usage && usage.roles.length > 0)) && (
+        <footer className="order-meta">
+          <AgentsAtWork run={run} onChanged={() => void load()} />
+          {usage && usage.roles.length > 0 && <UsageLine usage={usage} />}
+        </footer>
+      )}
     </div>
   );
 }
@@ -582,29 +592,16 @@ function describe(e: unknown): string {
   return String(e);
 }
 
-// A work order's description, kept to a few lines in the header unless the
-// user expands it.
+// A work order's description, folded under the phases until the user wants
+// it: the phases and the conversation matter more while work runs.
 function OrderDescription({ text }: { text: string }) {
-  const ref = useRef<HTMLParagraphElement | null>(null);
-  const [expanded, setExpanded] = useState(false);
-  const [long, setLong] = useState(false);
-  useEffect(() => {
-    const el = ref.current;
-    if (el && !expanded) setLong(el.scrollHeight > el.clientHeight + 1);
-  }, [text, expanded]);
+  const [open, setOpen] = useState(false);
   return (
-    <>
-      <p
-        ref={ref}
-        className={`muted order-head__desc ${expanded ? "" : "order-head__desc--clamped"}`}
-      >
-        {text}
-      </p>
-      {(long || expanded) && (
-        <button className="linkish order-head__more" onClick={() => setExpanded((v) => !v)}>
-          {expanded ? "Show less" : "Show more"}
-        </button>
-      )}
-    </>
+    <div className="order-head__details">
+      <button className="linkish order-head__more" onClick={() => setOpen((v) => !v)}>
+        {open ? "▾ Details" : "▸ Details"}
+      </button>
+      {open && <p className="muted order-head__desc">{text}</p>}
+    </div>
   );
 }

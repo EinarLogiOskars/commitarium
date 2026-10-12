@@ -1639,12 +1639,11 @@ button.danger:not(.ghost) {
   font-size: 12px;
   white-space: pre-line;
 }
-.order-head__desc--clamped {
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 3;
-  line-clamp: 3;
-  overflow: hidden;
+.order-head__top {
+  align-items: center;
+}
+.order-head__details {
+  margin-top: 6px;
 }
 .order-head__more {
   font-size: 12px;
@@ -3271,4 +3270,67 @@ button.danger:not(.ghost) {
 }
 .change-model .banner {
   flex-basis: 100%;
+}
+
+/* The implementation checklist folds into a slim strip beside the
+   conversation, like the acceptance tests. */
+.impl__side {
+  position: relative;
+}
+.impl__fold {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border-radius: 50%;
+  line-height: 1;
+}
+.impl__strip {
+  flex: none;
+  width: 44px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 0;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  cursor: pointer;
+}
+.impl__strip-chevron {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.impl__strip-dots {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+}
+
+/* A work order's models and token use, in a slim bar under the work. */
+.order-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 16px;
+  padding: 2px 4px;
+  font-size: 12px;
+}
+.order-meta .agents-at-work {
+  margin: 0;
+}
+.order-meta .change-model {
+  flex-basis: 100%;
+}
+.impl__side .plan__head {
+  padding-right: 28px;
 }

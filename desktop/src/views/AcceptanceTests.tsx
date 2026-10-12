@@ -15,10 +15,13 @@ export function AcceptanceTestsPanel({
   projectId,
   featureId,
   enabled = true,
+  openByDefault = true,
 }: {
   projectId: string;
   featureId: string;
   enabled?: boolean;
+  /** Folded while they're being written (implementation), open from review. */
+  openByDefault?: boolean;
 }) {
   const { artifact } = useFeatureArtifact<AcceptanceTestsDocument>(
     projectId,
@@ -27,16 +30,20 @@ export function AcceptanceTestsPanel({
     enabled,
   );
   // Auto-collapse on narrow windows; the user can override either way after.
-  const [open, setOpen] = useState(() => !isNarrow());
+  const [open, setOpen] = useState(() => openByDefault && !isNarrow());
   const touched = useRef(false);
+  // Opens by itself when review starts, unless the user chose otherwise.
+  useEffect(() => {
+    if (!touched.current) setOpen(openByDefault && !isNarrow());
+  }, [openByDefault]);
   useEffect(() => {
     const mq = window.matchMedia("(max-width: 1100px)");
     const on = () => {
-      if (!touched.current) setOpen(!mq.matches);
+      if (!touched.current) setOpen(openByDefault && !mq.matches);
     };
     mq.addEventListener("change", on);
     return () => mq.removeEventListener("change", on);
-  }, []);
+  }, [openByDefault]);
 
   if (!artifact) return null;
   const doc = artifact.document;
