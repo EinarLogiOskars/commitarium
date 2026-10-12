@@ -73,8 +73,12 @@ export interface Conversation {
   actions: AssistantAction[];
   notes: string;
   goal?: AutopilotGoal;
+  /** A new app being set up, until it starts building (APPS_PLAN.md). */
+  launch?: { stage: LaunchStage; started_at: string };
   updated_at: string;
 }
+
+export type LaunchStage = "vision" | "setup" | "building";
 
 const conversationPath = (scope: string) =>
   `/api/v1/assistant/conversations/${encodeURIComponent(scope)}`;
@@ -131,6 +135,14 @@ export const startAutopilot = (scope: string, level: number): Promise<Conversati
 export const stopAutopilot = (scope: string): Promise<Conversation> =>
   request(`${conversationPath(scope)}/autopilot`, { method: "DELETE" });
 
-/** The autopilot goals that are on, by project ID. */
-export const listAutopilotGoals = (): Promise<{ goals: Record<string, AutopilotGoal> }> =>
-  request("/api/v1/assistant/autopilot");
+/** The autopilot goals that are on, and the apps still being set up, by
+ * project ID. */
+export const listAutopilotGoals = (): Promise<{
+  goals: Record<string, AutopilotGoal>;
+  launches?: Record<string, LaunchStage>;
+}> => request("/api/v1/assistant/autopilot");
+
+/** Launch a new app: once its vision is written, the coordinator sets up
+ * its stack and builds the whole vision on autopilot. */
+export const startLaunch = (scope: string): Promise<Conversation> =>
+  request(`${conversationPath(scope)}/launch`, { method: "POST" });

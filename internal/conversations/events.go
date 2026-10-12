@@ -45,6 +45,9 @@ type Watcher struct {
 	// actions autopilot takes over, as the user's approval would.
 	Visions VisionReader
 	Apply   func(ctx context.Context, scope, actionID string) error
+	// SetUp sets a new app up on the stack its vision recommends, as the
+	// project's own setup does (launch.go).
+	SetUp func(ctx context.Context, projectID string, presets []string, frameworks string) error
 	// LimitWaits, when set, tells a usage-limit wait from a blocker: it
 	// resumes on its own, so it does not wake the assistant.
 	LimitWaits LimitWaitReader
@@ -75,6 +78,7 @@ func (watcher Watcher) Tick(ctx context.Context) {
 		if err := watcher.Service.observe(ctx, scope, watcher.snapshot); err != nil {
 			log.Printf("assistant events for %s: %v", scope, err)
 		}
+		watcher.launch(ctx, scope)
 		watcher.autopilot(ctx, scope)
 	}
 }
@@ -85,7 +89,7 @@ func (watcher Watcher) autopilot(ctx context.Context, scope string) {
 	if watcher.Apply == nil {
 		return
 	}
-	actions, err := watcher.Service.autopilotActions(scope)
+	actions, err := watcher.Service.autopilotActions(ctx, scope)
 	if err != nil {
 		log.Printf("autopilot for %s: %v", scope, err)
 		return

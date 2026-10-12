@@ -78,7 +78,7 @@ func TestAutopilotDrivesAGoalAndEndsWhenItIsDone(t *testing.T) {
 	if _, err := service.Get(t.Context(), "prj_test"); err != nil {
 		t.Fatal(err)
 	}
-	apply, err := service.autopilotActions("prj_test")
+	apply, err := service.autopilotActions(t.Context(), "prj_test")
 	if err != nil || len(apply) != 1 || apply[0].Title != "Show the log" {
 		t.Fatalf("autopilot takes over %+v err=%v", apply, err)
 	}
@@ -86,7 +86,7 @@ func TestAutopilotDrivesAGoalAndEndsWhenItIsDone(t *testing.T) {
 	if last := conversation.Messages[len(conversation.Messages)-1].Text; !strings.Contains(last, "claude-fable-5-1") {
 		t.Fatalf("the premium action was not left for the user: %q", last)
 	}
-	if again, _ := service.autopilotActions("prj_test"); len(again) != 0 {
+	if again, _ := service.autopilotActions(t.Context(), "prj_test"); len(again) != 0 {
 		t.Fatalf("autopilot took an action over twice: %+v", again)
 	}
 
@@ -123,7 +123,7 @@ func TestStoppingAutopilotLeavesActionsForTheUser(t *testing.T) {
 	if err != nil || conversation.Goal.Status != GoalStopped {
 		t.Fatalf("stop = %+v err=%v", conversation.Goal, err)
 	}
-	if apply, _ := service.autopilotActions("prj_test"); len(apply) != 0 {
+	if apply, _ := service.autopilotActions(t.Context(), "prj_test"); len(apply) != 0 {
 		t.Fatalf("a stopped autopilot applied %+v", apply)
 	}
 	if goals, _ := service.ActiveGoals(t.Context()); len(goals) != 0 {
@@ -154,7 +154,7 @@ func TestAutopilotContinuesABlockedWorkOrderAtMostTwice(t *testing.T) {
 		if _, err := service.Get(t.Context(), "prj_test"); err != nil {
 			t.Fatal(err)
 		}
-		apply, err := service.autopilotActions("prj_test")
+		apply, err := service.autopilotActions(t.Context(), "prj_test")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -210,7 +210,7 @@ func TestAutopilotCreatesOneWorkOrderPerItem(t *testing.T) {
 	if _, err := service.Get(t.Context(), "prj_test"); err != nil {
 		t.Fatal(err)
 	}
-	apply, err := service.autopilotActions("prj_test")
+	apply, err := service.autopilotActions(t.Context(), "prj_test")
 	if err != nil || len(apply) != 1 || apply[0].Title != "Goal, first" {
 		t.Fatalf("autopilot applied %+v err=%v", apply, err)
 	}
@@ -249,7 +249,7 @@ func TestAutopilotClosesOnlyItsOwnDuplicates(t *testing.T) {
 	if err := service.write(stored); err != nil {
 		t.Fatal(err)
 	}
-	apply, err := service.autopilotActions("prj_test")
+	apply, err := service.autopilotActions(t.Context(), "prj_test")
 	if err != nil || len(apply) != 1 || apply[0].ID != "act_close_dup" {
 		t.Fatalf("autopilot closes %+v err=%v", apply, err)
 	}

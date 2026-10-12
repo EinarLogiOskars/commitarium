@@ -2448,7 +2448,14 @@ actions, and its notes.
   closes the goal when every item is done. `409 autopilot_active` while one is
   on; `400` when the priority has nothing left. `DELETE .../{scope}/autopilot`
   stops it. `GET /api/v1/assistant/autopilot` answers `{"goals": {projectID:
-  goal}}` for every project with autopilot on.
+  goal}, "launches": {projectID: stage}}` for every project with autopilot on
+  and every app still being launched.
+- `POST .../{scope}/launch` (empty body) launches a new app (ADR-024): once
+  its vision is written, the coordinator sets up the stack it recommends and,
+  when the setup merges, starts autopilot on the whole vision. The
+  conversation's `launch` is `{"stage": "vision"|"setup"|"building",
+  "started_at"}`. In a project marked as an app, autopilot applies the
+  assistant's work actions without a goal.
 
 ## Project vision
 

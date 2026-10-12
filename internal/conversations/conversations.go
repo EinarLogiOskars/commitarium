@@ -115,7 +115,9 @@ type Conversation struct {
 	Actions  []Action  `json:"actions"`
 	Notes    string    `json:"notes"`
 	// Goal is the autopilot goal, the latest one even once it ended.
-	Goal      *Goal     `json:"goal,omitempty"`
+	Goal *Goal `json:"goal,omitempty"`
+	// Launch is a new app's launch while it is set up (launch.go).
+	Launch    *Launch   `json:"launch,omitempty"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
@@ -135,6 +137,9 @@ type record struct {
 	// PendingEvents what the assistant has yet to hear (events.go).
 	Watched       map[string]string `json:"watched,omitempty"`
 	PendingEvents []string          `json:"pending_events,omitempty"`
+	// AutoContinues counts the blocked work orders autopilot continued, by
+	// work order; past maxAutoContinues the next one waits for the user.
+	AutoContinues map[string]int `json:"auto_continues,omitempty"`
 }
 
 // maxSessionTurns bounds a provider session; the next turn starts fresh.

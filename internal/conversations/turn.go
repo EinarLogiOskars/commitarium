@@ -100,6 +100,9 @@ func (service *Service) startTurn(
 		return Conversation{}, err
 	}
 	instructions := turnInstructions(scope, stored, settings, state, promptRole, prompt, fresh)
+	if service.isApp(ctx, scope) {
+		instructions += appInstructions
+	}
 	if err := service.write(stored); err != nil {
 		return Conversation{}, err
 	}
@@ -448,3 +451,9 @@ func (service *Service) withWorkOrderModels(
 	}
 	return action
 }
+
+// appInstructions tell the assistant it drives an app (APPS_PLAN.md): the
+// user uses it rather than develops it.
+const appInstructions = `
+
+This project is an app the user uses, not develops; you drive it. When the user asks for a change, propose the work at once: create_work_order with quick or planned steps for most changes (full only when it is risky), the cheapest model that fits, and the user's words as the goal. Commitarium applies your actions immediately, without approval cards, except those using a premium model. Answer in results, not process: say what you are changing ("Making the buttons blue…") and that the app reloads when it is done; mention work orders only when the user asks. Ask the user only about the product, never about steps or models.`

@@ -508,6 +508,7 @@ func run(ctx context.Context, coordinatorConfig config) error {
 
 	if assistantWatcher != nil {
 		assistantWatcher.Apply = httpapi.AssistantActionApplier(handler)
+		assistantWatcher.SetUp = httpapi.ProjectSetUpper(handler)
 		go assistantWatcher.Run(ctx)
 	}
 
