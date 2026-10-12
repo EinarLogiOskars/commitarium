@@ -11,6 +11,7 @@ import { onExitConfirmationRequested } from "./ipc";
 import { AppSettings } from "./views/AppSettings";
 import { ExitConfirm } from "./views/ExitConfirm";
 import { Inbox } from "./views/Inbox";
+import { AssistantDrawer } from "./views/AssistantDrawer";
 import { Launcher } from "./views/Launcher";
 import { Projects } from "./views/Projects";
 import { ProjectWorkspace } from "./views/ProjectWorkspace";
@@ -311,6 +312,14 @@ function App() {
           onClose={() => setShowInbox(false)}
         />
       )}
+
+      {/* The assistant follows where the user is: the open project's
+          conversation, or the top-level one. */}
+      <AssistantDrawer
+        scope={projectId ?? "commitarium"}
+        scopeLabel={projectId ? (projectName ?? "") : "All projects"}
+        onOpenOrder={projectId ? (featureId) => openFromInbox(projectId, featureId) : undefined}
+      />
 
       <div className="shell__body">
         {projectId ? (

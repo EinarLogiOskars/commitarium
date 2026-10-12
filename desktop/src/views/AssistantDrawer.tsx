@@ -21,22 +21,29 @@ const STEPS_LABEL: Record<string, string> = {
   quick: "Quick change",
 };
 
-// The project's assistant (ASSISTANT_PLAN.md): one continuous conversation in
-// which it answers and proposes actions. Each action is a card the user
-// approves; a premium model needs an explicit tick first.
-export function AssistantView({
+// The assistant (ASSISTANT_PLAN.md) in a drawer over the right half of the
+// window, opened from a round button in the top-right corner and minimized
+// back to it, so the user keeps their place. It follows where the user is: a
+// project's conversation inside a project, the top-level one elsewhere. The
+// button pulses while it answers and shows a dot for a reply not yet seen.
+export function AssistantDrawer({
   scope,
+  scopeLabel,
   onOpenOrder,
 }: {
   scope: string;
+  scopeLabel: string;
   onOpenOrder?: (featureId: string) => void;
 }) {
+  const [open, setOpen] = useState(false);
   const [conversation, setConversation] = useState<Conversation | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
   const [notesOpen, setNotesOpen] = useState(false);
+  const [unseen, setUnseen] = useState(false);
   const chatRef = useRef<HTMLDivElement | null>(null);
+  const seenReplies = useRef<number | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -49,6 +56,9 @@ export function AssistantView({
 
   useEffect(() => {
     setConversation(null);
+    setNotesOpen(false);
+    setUnseen(false);
+    seenReplies.current = null;
     void load();
   }, [load]);
 
@@ -59,11 +69,23 @@ export function AssistantView({
     return () => clearInterval(timer);
   }, [running, load]);
 
+  // A reply that arrives while the drawer is closed marks the button.
+  const replies = conversation?.messages.filter((m) => m.role !== "user").length ?? 0;
+  useEffect(() => {
+    if (!conversation) return;
+    if (seenReplies.current === null || open) {
+      seenReplies.current = replies;
+      if (open) setUnseen(false);
+      return;
+    }
+    if (replies > seenReplies.current) setUnseen(true);
+  }, [conversation, replies, open]);
+
   const count = conversation?.messages.length ?? 0;
   useEffect(() => {
     const el = chatRef.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [count, running]);
+  }, [count, running, open, notesOpen]);
 
   const send = async () => {
     const text = draft.trim();
@@ -80,102 +102,128 @@ export function AssistantView({
     }
   };
 
-  if (!conversation) {
-    return error ? (
-      <div className="banner banner--error">{error}</div>
-    ) : (
-      <p className="muted">Loading…</p>
-    );
-  }
-
   const byMessage = new Map<string, AssistantAction[]>();
-  for (const action of conversation.actions) {
+  for (const action of conversation?.actions ?? []) {
     byMessage.set(action.message_id, [...(byMessage.get(action.message_id) ?? []), action]);
   }
 
   return (
-    <div className="order assistant">
-      <section className="panel order-head">
-        <div className="order-head__top">
-          <h2>Assistant</h2>
-          <div className="row order-head__actions">
-            <button className="ghost" onClick={() => setNotesOpen((v) => !v)}>
+    <>
+      {!open && (
+        <button
+          className={`assistant-fab ${running ? "assistant-fab--working" : ""}`}
+          onClick={() => setOpen(true)}
+          title={running ? "The assistant is answering" : "Open the assistant"}
+          aria-label="Open the assistant"
+        >
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" aria-hidden>
+            <path
+              d="M12 3l1.8 4.6L18.5 9l-4.7 1.6L12 15l-1.8-4.4L5.5 9l4.7-1.4L12 3zM18 15l.9 2.1 2.1.9-2.1.9L18 21l-.9-2.1L15 18l2.1-.9L18 15z"
+              fill="currentColor"
+            />
+          </svg>
+          {unseen && <span className="assistant-fab__dot" aria-label="A reply you have not seen" />}
+        </button>
+      )}
+      {open && (
+        <aside className="assistant-drawer" aria-label="Assistant">
+          <header className="assistant-drawer__head">
+            <div className="assistant-drawer__title">
+              <strong>Assistant</strong>
+              <span className="muted">{scopeLabel}</span>
+            </div>
+            <button
+              className={`ghost ${notesOpen ? "ghost--on" : ""}`}
+              onClick={() => setNotesOpen((v) => !v)}
+            >
               Notes
             </button>
-          </div>
-        </div>
-      </section>
-
-      <div className="order__split">
-        <section className="panel panel--phase order__body assistant__body">
-          <div className="chat" ref={chatRef}>
-            {conversation.messages.length === 0 && (
-              <p className="muted assistant__empty">
-                Ask about the project, what to build next, or have it draft work orders. It
-                proposes; nothing happens until you approve.
-              </p>
-            )}
-            {conversation.messages.map((message) =>
-              message.role === "event" ? (
-                <p key={message.id} className="muted assistant__event">
-                  {message.text}
-                </p>
-              ) : (
-                <div key={message.id} className="assistant__turn">
-                  <div className={`msg ${message.role === "user" ? "msg--user" : "msg--lead"}`}>
-                    <span className="msg__who">
-                      {message.role === "user" ? "You" : "Assistant"}
-                    </span>
-                    <div className="msg__text">
-                      <Markdown text={message.text} />
+            <button
+              className="ghost assistant-drawer__close"
+              onClick={() => setOpen(false)}
+              aria-label="Minimize the assistant"
+              title="Minimize"
+            >
+              ⌄
+            </button>
+          </header>
+          {!conversation ? (
+            error ? (
+              <div className="banner banner--error">{error}</div>
+            ) : (
+              <p className="muted">Loading…</p>
+            )
+          ) : notesOpen ? (
+            <Notes scope={scope} notes={conversation.notes} onSaved={setConversation} />
+          ) : (
+            <>
+              <div className="chat assistant-drawer__chat" ref={chatRef}>
+                {conversation.messages.length === 0 && (
+                  <p className="muted assistant__empty">
+                    {scope === "commitarium"
+                      ? "Ask about your projects. Open a project to have it draft work there."
+                      : "Ask about the project, what to build next, or have it draft work orders. It proposes; nothing happens until you approve."}
+                  </p>
+                )}
+                {conversation.messages.map((message) =>
+                  message.role === "event" ? (
+                    <p key={message.id} className="muted assistant__event">
+                      {message.text}
+                    </p>
+                  ) : (
+                    <div key={message.id} className="assistant__turn">
+                      <div className={`msg ${message.role === "user" ? "msg--user" : "msg--lead"}`}>
+                        <span className="msg__who">
+                          {message.role === "user" ? "You" : "Assistant"}
+                        </span>
+                        <div className="msg__text">
+                          <Markdown text={message.text} />
+                        </div>
+                      </div>
+                      {(byMessage.get(message.id) ?? []).map((action) => (
+                        <ActionCard
+                          key={action.id}
+                          scope={scope}
+                          action={action}
+                          onChanged={setConversation}
+                          onOpenOrder={onOpenOrder}
+                        />
+                      ))}
                     </div>
-                  </div>
-                  {(byMessage.get(message.id) ?? []).map((action) => (
-                    <ActionCard
-                      key={action.id}
-                      scope={scope}
-                      action={action}
-                      onChanged={setConversation}
-                      onOpenOrder={onOpenOrder}
-                    />
-                  ))}
+                  ),
+                )}
+                {running && <p className="muted status-line">The assistant is thinking…</p>}
+              </div>
+              {error && <div className="banner banner--error">{error}</div>}
+              <div className="composer">
+                <div className="reply">
+                  <textarea
+                    rows={2}
+                    value={draft}
+                    autoFocus
+                    placeholder="Ask the assistant…"
+                    onChange={(e) => setDraft(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Escape") setOpen(false);
+                      if (e.key !== "Enter" || e.shiftKey) return;
+                      e.preventDefault();
+                      if (!running && !sending && draft.trim()) void send();
+                    }}
+                    disabled={sending}
+                  />
+                  <button
+                    onClick={() => void send()}
+                    disabled={running || sending || !draft.trim()}
+                  >
+                    {sending ? "Sending…" : "Send"}
+                  </button>
                 </div>
-              ),
-            )}
-            {running && <p className="muted status-line">The assistant is thinking…</p>}
-          </div>
-          {error && <div className="banner banner--error">{error}</div>}
-          <div className="composer">
-            <div className="reply">
-              <textarea
-                rows={2}
-                value={draft}
-                placeholder="Ask the assistant…"
-                onChange={(e) => setDraft(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key !== "Enter" || e.shiftKey) return;
-                  e.preventDefault();
-                  if (!running && !sending && draft.trim()) void send();
-                }}
-                disabled={sending}
-              />
-              <button onClick={() => void send()} disabled={running || sending || !draft.trim()}>
-                {sending ? "Sending…" : "Send"}
-              </button>
-            </div>
-          </div>
-        </section>
-
-        {notesOpen && (
-          <Notes
-            scope={scope}
-            notes={conversation.notes}
-            onSaved={setConversation}
-            onClose={() => setNotesOpen(false)}
-          />
-        )}
-      </div>
-    </div>
+              </div>
+            </>
+          )}
+        </aside>
+      )}
+    </>
   );
 }
 
@@ -322,12 +370,10 @@ function Notes({
   scope,
   notes,
   onSaved,
-  onClose,
 }: {
   scope: string;
   notes: string;
   onSaved: (conversation: Conversation) => void;
-  onClose: () => void;
 }) {
   const [editing, setEditing] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -346,49 +392,39 @@ function Notes({
     }
   };
   return (
-    <aside className="panel order-side">
-      <div className="order-side__head">
-        <div className="order-side__tabs">
-          <span className="order-side__tab order-side__tab--on">Notes</span>
-        </div>
-        <button className="order-side__chevron" onClick={onClose} aria-label="Close notes">
-          ›
-        </button>
-      </div>
-      <div className="order-side__body">
-        <p className="muted note">
-          What the assistant keeps for itself: decisions, your preferences, and reusable work. You
-          can edit them.
-        </p>
-        {editing === null ? (
-          <>
-            {notes ? <Markdown text={notes} /> : <p className="muted">No notes yet.</p>}
-            <button className="ghost" onClick={() => setEditing(notes)}>
-              Edit
+    <div className="assistant-drawer__notes">
+      <p className="muted note">
+        What the assistant keeps for itself: decisions, your preferences, and reusable work. You can
+        edit them.
+      </p>
+      {editing === null ? (
+        <>
+          {notes ? <Markdown text={notes} /> : <p className="muted">No notes yet.</p>}
+          <button className="ghost" onClick={() => setEditing(notes)}>
+            Edit
+          </button>
+        </>
+      ) : (
+        <>
+          <textarea
+            className="assistant__notes-edit"
+            rows={14}
+            value={editing}
+            onChange={(e) => setEditing(e.target.value)}
+            disabled={saving}
+          />
+          {error && <div className="banner banner--error">{error}</div>}
+          <div className="row">
+            <button className="primary" onClick={() => void save()} disabled={saving}>
+              {saving ? "Saving…" : "Save"}
             </button>
-          </>
-        ) : (
-          <>
-            <textarea
-              className="assistant__notes-edit"
-              rows={14}
-              value={editing}
-              onChange={(e) => setEditing(e.target.value)}
-              disabled={saving}
-            />
-            {error && <div className="banner banner--error">{error}</div>}
-            <div className="row">
-              <button className="primary" onClick={() => void save()} disabled={saving}>
-                {saving ? "Saving…" : "Save"}
-              </button>
-              <button className="ghost" onClick={() => setEditing(null)} disabled={saving}>
-                Cancel
-              </button>
-            </div>
-          </>
-        )}
-      </div>
-    </aside>
+            <button className="ghost" onClick={() => setEditing(null)} disabled={saving}>
+              Cancel
+            </button>
+          </div>
+        </>
+      )}
+    </div>
   );
 }
 

@@ -153,8 +153,8 @@ that hits a limit as failed, until phase 2 replaces them.
 Built on `feat/assistant` (ADR-022), with these differences: the actions are
 create work order (with Create as draft or Create and start), start work
 order, and change models; writing the vision and starting the project setup
-stay on their pages for now. The top-level conversation exists in the API but
-has no page yet, since it has nothing to act on until Apps. The reference
+stay on their pages for now. The top-level conversation opens from the project
+list, for questions across projects; it proposes actions only in a project. The reference
 catalog and UI preferences live in the notes, by instruction. The
 single-purpose assistants are unchanged, and a deleted project's conversation
 file is left behind.
@@ -178,9 +178,12 @@ file is left behind.
   each project owns its code and no project depends on another.
 - **Model policy:** the "Ask before using" mark per model on the Agents page,
   checked by the coordinator for every assistant tool that sets a model.
-- **Desktop:** an Assistant item at the top of the project rail opening the
-  conversation, with approval cards inline; a top-level entry for
-  Commitarium-scoped conversations.
+- **Desktop:** a drawer over the right half of the window, opened from a round
+  button in the top-right corner and minimized back to it, so the user keeps
+  their place. It follows where the user is (the open project's conversation,
+  or the top-level one on the project list), pulses while the assistant
+  answers, and marks a reply not yet seen. Approval cards sit under the reply;
+  the notes open in the drawer. Apps use the same drawer for "change this".
 - **Docs:** an ADR for the assistant (scoping, tools, approval, model policy).
 
 ### Phase 3: Autopilot

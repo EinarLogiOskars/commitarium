@@ -3722,3 +3722,89 @@ button.danger:not(.ghost) {
   margin: 0;
   padding: 0 4px;
 }
+
+/* The assistant's drawer and its button, over the app. */
+.assistant-fab {
+  position: fixed;
+  top: 14px;
+  right: 16px;
+  z-index: 40;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  color: var(--accent);
+  background: var(--panel);
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border));
+  box-shadow: 0 4px 14px rgb(0 0 0 / 0.35);
+}
+.assistant-fab--working {
+  animation: dot-pulse 1.6s ease-in-out infinite;
+}
+.assistant-fab__dot {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--ok);
+  border: 2px solid var(--panel);
+}
+.assistant-drawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 40;
+  width: min(50vw, 720px);
+  min-width: min(420px, 100vw);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 16px 16px;
+  background: var(--bg);
+  border-left: 1px solid var(--border);
+  box-shadow: -12px 0 32px rgb(0 0 0 / 0.35);
+}
+.assistant-drawer__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.assistant-drawer__title {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.assistant-drawer__close {
+  font-size: 18px;
+  line-height: 1;
+  padding: 4px 10px;
+}
+.assistant-drawer__chat {
+  flex: 1;
+  min-height: 0;
+}
+.assistant-drawer__notes {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+/* Keep the top-right corner clear for the assistant's button. */
+.main {
+  padding-right: 68px;
+}
+.main:has(.main__inner--fill) {
+  padding-right: 64px;
+}
+.topbar {
+  padding-right: 68px;
+}
