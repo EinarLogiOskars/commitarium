@@ -334,14 +334,15 @@ function App() {
       )}
     </button>
   );
+  // Leaving a project is an explicit way back to where the user came from.
+  const backLabel = area === "projects" ? "Projects" : "Apps";
   const projectSwitch = projectId && (
-    <button className="rail__switch" onClick={exitProject} title="Switch project">
-      <span className="rail__brand">Commitarium</span>
-      <span className="rail__project">
-        {projectName ?? "…"}
-        <span className="topbar__caret">▾</span>
-      </span>
-    </button>
+    <div className="rail__switch rail__switch--static">
+      <button className="rail__back" onClick={exitProject}>
+        ← {backLabel}
+      </button>
+      <span className="rail__project">{projectName ?? "…"}</span>
+    </div>
   );
 
   return (
@@ -440,6 +441,8 @@ function App() {
             railHeader={projectSwitch}
             systemNav={systemNav}
             railStrip={railStrip}
+            onExit={exitProject}
+            exitLabel={backLabel}
             autopilot={
               goal ? (
                 <AutopilotBanner scope={projectId} goal={goal} />

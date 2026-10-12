@@ -4290,3 +4290,24 @@ select:focus {
 .app-window__item--done {
   color: var(--text);
 }
+
+/* The rail's head: an explicit way back, then the project's name. */
+.rail__switch--static {
+  cursor: default;
+  gap: 4px;
+}
+.rail__switch--static:hover .rail__project {
+  color: inherit;
+}
+.rail__back {
+  border: none;
+  background: none;
+  padding: 2px 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  cursor: pointer;
+}
+.rail__back:hover {
+  color: var(--accent);
+}
