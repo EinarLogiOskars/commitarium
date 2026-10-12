@@ -27,6 +27,7 @@ import (
 	"github.com/EinarLogiOskars/commitarium/internal/projectenvironment"
 	"github.com/EinarLogiOskars/commitarium/internal/toolchain"
 	"github.com/EinarLogiOskars/commitarium/internal/validation"
+	"github.com/EinarLogiOskars/commitarium/internal/vision"
 	"github.com/EinarLogiOskars/commitarium/internal/workerhttp"
 	"github.com/EinarLogiOskars/commitarium/internal/workeringest"
 	"github.com/EinarLogiOskars/commitarium/internal/workflow"
@@ -278,6 +279,7 @@ func run(ctx context.Context, coordinatorConfig config) error {
 	var modelCatalogService httpapi.ModelCatalogService
 	var toolchainAssistantService httpapi.ToolchainAssistantService
 	var workOrderAssistant httpapi.WorkOrderAssistant
+	var visionService httpapi.VisionService
 	var deletionWorker projectdeletion.WorkerStopper
 	var deletionLiveSessions projectdeletion.LiveSessionRegistry
 	var assistantCleaner projectdeletion.AssistantCleaner
@@ -325,6 +327,14 @@ func run(ctx context.Context, coordinatorConfig config) error {
 		}
 		go catalog.Run(ctx, 30*time.Minute, func(err error) { log.Printf("refresh model catalog: %v", err) })
 		modelCatalogService = catalog
+		visions, err := vision.NewService(
+			coordinatorConfig.toolchainRoot, coordinatorConfig.workspaceRoot, projectService,
+			func(agentID string) (workerhttp.Service, error) { return agentWorkers.Client(agentID) },
+		)
+		if err != nil {
+			return fmt.Errorf("create project visions: %w", err)
+		}
+		visionService = visions.WithRepository(checkoutManager, forgejoClient)
 		assistant, err := toolchain.NewAssistant(
 			coordinatorConfig.toolchainRoot, coordinatorConfig.workspaceRoot, projectService, toolchainService,
 			func(agentID string) (workerhttp.Service, error) { return agentWorkers.Client(agentID) },
@@ -443,6 +453,7 @@ func run(ctx context.Context, coordinatorConfig config) error {
 		executionStore,
 		workOrderAssistant,
 		agentService,
+		visionService,
 	)
 
 	log.Print("Listening...")

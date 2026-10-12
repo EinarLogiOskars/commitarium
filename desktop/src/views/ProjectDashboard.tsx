@@ -17,6 +17,7 @@ export function ProjectDashboard({
   attention,
   needsStack,
   onOpenStack,
+  onOpenVision,
   onOpenOrder,
   onNewOrder,
   onSettings,
@@ -26,6 +27,7 @@ export function ProjectDashboard({
   attention: AttentionItem[];
   needsStack?: boolean;
   onOpenStack: () => void;
+  onOpenVision?: () => void;
   onOpenOrder: (featureId: string) => void;
   onNewOrder: () => void;
   onSettings: () => void;
@@ -148,15 +150,22 @@ export function ProjectDashboard({
       {needsStack && (
         <section className="panel dash__cta">
           <div>
-            <h2>Choose a stack to start</h2>
+            <h2>Set the project up</h2>
             <p className="muted">
-              Pick the runtime this project's agents build with — a preset, your own tools, or let
-              an agent propose one. Required before you can create work orders.
+              Describe the app on the Vision page: the assistant recommends a stack, and Commitarium
+              scaffolds the app with its preview. Or pick the stack yourself.
             </p>
           </div>
-          <button className="primary" onClick={onOpenStack}>
-            Set up stack
-          </button>
+          <div className="row">
+            {onOpenVision && (
+              <button className="primary" onClick={onOpenVision}>
+                Start from the vision
+              </button>
+            )}
+            <button className={onOpenVision ? "" : "primary"} onClick={onOpenStack}>
+              Set up stack
+            </button>
+          </div>
         </section>
       )}
 

@@ -13,12 +13,16 @@ import { RepositoryCard } from "./RepositoryCard";
 import { StackPicker } from "./StackPicker";
 import { PreviewRailItem } from "./PreviewRailItem";
 import { PreviewView } from "./PreviewView";
+import { VisionView } from "./VisionView";
+import { rememberedIdea } from "./visionSession";
+import { getOpenVisionSession } from "../api/vision";
 import { usePreview } from "./usePreview";
 import { usePreviewSetup } from "./usePreviewSetup";
 import { WORK } from "../vocab";
 import type { AttentionItem, Project, ProjectToolchain, WorkKind } from "../api/types";
 
-type Mode = "overview" | "repository" | "stack" | "new" | "order" | "settings" | "preview";
+type Mode =
+  "overview" | "vision" | "repository" | "stack" | "new" | "order" | "settings" | "preview";
 
 /** Project workspace shell: work-order rail + master/detail main pane. */
 export function ProjectWorkspace({
@@ -85,7 +89,18 @@ export function ProjectWorkspace({
     // Toolchain is a separate record; absent on older coordinators (404/other) —
     // leave it null and treat the project as unconstrained (no creation gate).
     try {
-      setToolchain(await getProjectToolchain(id));
+      const t = await getProjectToolchain(id);
+      setToolchain(t);
+      // A project just created from an idea opens on its vision conversation.
+      if (t.status === "needs_setup") {
+        const open =
+          !!rememberedIdea(id) ||
+          (await getOpenVisionSession(id).then(
+            () => true,
+            () => false,
+          ));
+        if (open) setMode("vision");
+      }
     } catch {
       setToolchain(null);
     }
@@ -158,6 +173,17 @@ export function ProjectWorkspace({
         >
           Overview
         </button>
+        {project?.forgejo_repository && (
+          <button
+            className={`rail__item ${mode === "vision" ? "rail__item--active" : ""}`}
+            onClick={() => {
+              setMode("vision");
+              setOrderId(null);
+            }}
+          >
+            Vision
+          </button>
+        )}
         {project?.forgejo_repository && (
           <button
             className={`rail__item ${mode === "repository" ? "rail__item--active" : ""}`}
@@ -265,12 +291,39 @@ export function ProjectWorkspace({
                 setMode("stack");
                 setOrderId(null);
               }}
+              onOpenVision={() => {
+                setMode("vision");
+                setOrderId(null);
+              }}
               attention={attention}
               onOpenOrder={openOrder}
               onNewOrder={startNewOrder}
               onSettings={() => {
                 setMode("settings");
                 setOrderId(null);
+              }}
+            />
+          )}
+
+          {mode === "vision" && project && (
+            <VisionView
+              projectId={id}
+              setup={
+                needsStack
+                  ? {
+                      onStarted: (fid, t) => {
+                        setToolchain(t);
+                        setReloadKey((k) => k + 1);
+                        setRailKind("work_order");
+                        openOrder(fid);
+                      },
+                    }
+                  : undefined
+              }
+              onOpenOrder={(fid) => {
+                setReloadKey((k) => k + 1);
+                setRailKind("work_order");
+                openOrder(fid);
               }}
             />
           )}

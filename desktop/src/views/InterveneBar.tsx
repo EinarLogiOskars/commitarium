@@ -4,6 +4,7 @@ import { ApiError } from "../api/client";
 import { RecoveryPanel } from "./RecoveryPanel";
 import { AgentLogin } from "./AgentLogin";
 import { agentName, useAgents } from "./useAgents";
+import { useModelName } from "./useModelName";
 import type { Intervention, InterventionTargetRole, Run } from "../api/types";
 
 // The single, always-present intervention surface. It reflects the true run
@@ -43,6 +44,7 @@ export function InterveneBar({
   const [error, setError] = useState<string | null>(null);
   const agents = useAgents();
 
+  const modelName = useModelName();
   const paused = run.paused === true;
   const pausing = paused && run.status === "running";
   const pausedWaiting = paused && run.status === "waiting_for_user";
@@ -257,7 +259,11 @@ export function InterveneBar({
         <textarea
           className="intervene__text"
           rows={2}
-          placeholder={`Message the ${agent}…`}
+          placeholder={
+            run.agent_models?.[agent]
+              ? `Message the ${agent} (${modelName(run.agent_models[agent])})…`
+              : `Message the ${agent}…`
+          }
           value={text}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => {

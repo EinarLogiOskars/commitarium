@@ -29,6 +29,7 @@ type StructuredOutput struct {
 	EnvironmentRequest *EnvironmentRequest
 	HandoffBrief       *featureartifact.HandoffBrief
 	SessionTitle       string
+	VisionPlan         *featureartifact.VisionPlan
 }
 
 // MaxSessionTitleRunes bounds a session title; longer titles are shortened.
@@ -132,6 +133,53 @@ func OutputJSONSchema(contract OutputContract) any {
 				"open_questions": list,
 			},
 			[]string{"action", "message", "goal", "areas", "considerations", "open_questions"},
+		)
+	case OutputContractVisionPlan:
+		text := map[string]any{"type": "string"}
+		done := map[string]any{
+			"type":        "boolean",
+			"description": "True when the project already delivers this item; false for an item with sub-items.",
+		}
+		leaf := objectSchema(
+			map[string]any{"title": text, "description": text, "done": done},
+			[]string{"title", "description", "done"},
+		)
+		middle := objectSchema(
+			map[string]any{"title": text, "description": text, "done": done, "items": map[string]any{"type": "array", "items": leaf}},
+			[]string{"title", "description", "done", "items"},
+		)
+		top := objectSchema(
+			map[string]any{"title": text, "description": text, "done": done, "items": map[string]any{"type": "array", "items": middle}},
+			[]string{"title", "description", "done", "items"},
+		)
+		priority := objectSchema(
+			map[string]any{
+				"level": map[string]any{"type": "integer", "description": "0 for P0 (needed first), 1 for P1, and so on."},
+				"items": map[string]any{"type": "array", "items": top},
+			},
+			[]string{"level", "items"},
+		)
+		return objectSchema(
+			map[string]any{
+				"action":     map[string]any{"type": "string", "enum": []string{"ask", "propose"}},
+				"message":    text,
+				"statement":  text,
+				"confidence": map[string]any{"type": "string", "enum": []string{"high", "medium", "low"}},
+				"guesses":    map[string]any{"type": "array", "items": text},
+				"priorities": map[string]any{"type": "array", "items": priority},
+				"stack": objectSchema(
+					map[string]any{
+						"presets": map[string]any{
+							"type": "array", "items": text,
+							"description": "Runtime preset IDs for a project without code yet; empty otherwise.",
+						},
+						"frameworks": text,
+						"reason":     text,
+					},
+					[]string{"presets", "frameworks", "reason"},
+				),
+			},
+			[]string{"action", "message", "statement", "confidence", "guesses", "priorities", "stack"},
 		)
 	case OutputContractSessionOpening:
 		return objectSchema(
@@ -465,6 +513,44 @@ func ResolveStructuredOutput(
 			}, nil
 		default:
 			return StructuredOutput{}, invalidStructuredOutput("work order brief response has an unknown action")
+		}
+
+	case OutputContractVisionPlan:
+		var response struct {
+			Action     string                           `json:"action"`
+			Message    string                           `json:"message"`
+			Statement  string                           `json:"statement"`
+			Confidence string                           `json:"confidence"`
+			Guesses    []string                         `json:"guesses"`
+			Priorities []featureartifact.VisionPriority `json:"priorities"`
+			Stack      *featureartifact.VisionStack     `json:"stack"`
+		}
+		if err := decodeStructuredOutput(raw, &response); err != nil {
+			return StructuredOutput{}, err
+		}
+		response.Message = strings.TrimSpace(response.Message)
+		if response.Message == "" {
+			return StructuredOutput{}, invalidStructuredOutput("vision response has no message")
+		}
+		switch response.Action {
+		case "ask":
+			return StructuredOutput{
+				Event: Event{Type: EventInputRequired, Text: response.Message}, Disposition: DispositionInputRequired,
+			}, nil
+		case "propose":
+			plan, err := featureartifact.VisionPlan{
+				Statement: response.Statement, Priorities: response.Priorities,
+				Confidence: response.Confidence, Guesses: response.Guesses, Stack: response.Stack,
+			}.NormalizeProposed()
+			if err != nil {
+				return StructuredOutput{}, invalidStructuredOutput("vision plan: %v", err)
+			}
+			return StructuredOutput{
+				Event: Event{Type: EventMessage, Text: response.Message}, Disposition: DispositionSucceeded,
+				VisionPlan: &plan,
+			}, nil
+		default:
+			return StructuredOutput{}, invalidStructuredOutput("vision response has an unknown action")
 		}
 
 	case OutputContractSessionOpening:

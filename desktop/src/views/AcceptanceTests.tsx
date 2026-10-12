@@ -56,12 +56,16 @@ export function AcceptanceTestsPanel({
         className="accept-tests__head"
         onClick={toggle}
         aria-expanded={open}
-        title={open ? "Collapse" : "Expand"}
+        title={open ? "Collapse" : "Show the acceptance tests"}
       >
         <h3>Independent acceptance tests</h3>
         <span className="accept-tests__count muted note">
           {failed > 0 ? `${failed} failed · ` : ""}
           {passed}/{ran || doc.tests.length} passed
+        </span>
+        {/* Collapsed into the side strip on wide windows: just the score. */}
+        <span className="accept-tests__score muted note" aria-hidden>
+          {passed}/{ran || doc.tests.length}
         </span>
         <span className="accept-tests__chevron" aria-hidden>
           <svg viewBox="0 0 16 16" width="14" height="14" fill="none">
@@ -155,18 +159,22 @@ function AcceptanceRow({ t }: { t: AcceptanceTest }) {
         >
           {m.ch}
         </span>
-        <span className="accept-test__title">{t.title}</span>
-        <span className={`muted accept-test__status accept-test__status--${m.tone}`}>
-          {m.label}
-        </span>
-        {t.coordinator_status && (
-          <span
-            className={`accept-test__own state--${t.coordinator_status === "passed" ? "ok" : "bad"}`}
-            title="Commitarium's own run of this test, by its exit code, apart from the reviewer"
-          >
-            Commitarium: {t.coordinator_status}
+        <div className="accept-test__body">
+          <span className="accept-test__title">{t.title}</span>
+          <span className="accept-test__meta">
+            <span className={`accept-test__status accept-test__status--${m.tone}`}>
+              Reviewer: {m.label}
+            </span>
+            {t.coordinator_status && (
+              <span
+                className={`accept-test__own state--${t.coordinator_status === "passed" ? "ok" : "bad"}`}
+                title="Commitarium's own run of this test, by its exit code, apart from the reviewer"
+              >
+                Commitarium: {t.coordinator_status}
+              </span>
+            )}
           </span>
-        )}
+        </div>
       </div>
       {t.note && (t.status === "failed" || t.status === "not_applicable") && (
         <p className="accept-test__note">{t.note}</p>

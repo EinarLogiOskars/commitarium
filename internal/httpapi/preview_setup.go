@@ -112,6 +112,11 @@ func (api *API) ensurePreviewSetup(ctx context.Context, projectID string) (*feat
 	if repositoryHasCompose(overview) {
 		return nil, errPreviewHasCompose
 	}
+	if !overview.HasCode() {
+		// Nothing to preview yet. Reading the stack checks again, so the setup
+		// starts once the first code is merged.
+		return nil, nil
+	}
 	started, err := api.startBackgroundWorkOrder(ctx, projectID, previewSetupTitle, previewSetupDescription())
 	if err != nil {
 		return nil, err
@@ -197,18 +202,30 @@ func repositoryHasCompose(overview project.RepositoryOverview) bool {
 }
 
 // startBackgroundWorkOrder creates and starts a quick change Commitarium runs
-// by itself: no clarification, plan, or reviewer, and an automatic merge once
-// validation passes.
+// by itself and leaves out of the user's lists.
 func (api *API) startBackgroundWorkOrder(
 	ctx context.Context,
 	projectID string,
 	title string,
 	description string,
 ) (feature.Feature, error) {
+	return api.startQuickChange(ctx, projectID, title, description, true)
+}
+
+// startQuickChange creates and starts a quick change Commitarium starts
+// itself: no clarification, plan, or reviewer, and an automatic merge once
+// validation passes.
+func (api *API) startQuickChange(
+	ctx context.Context,
+	projectID string,
+	title string,
+	description string,
+	background bool,
+) (feature.Feature, error) {
 	merge := project.MergePolicyAutoAfterGates
 	autonomy := project.AutonomyPolicyRunToCompletion
 	created, err := api.features.Create(ctx, projectID, title, description, feature.SettingsOverrides{
-		Background: true, Steps: &project.WorkSteps{SkipPlan: true, SkipReviewer: true},
+		Background: background, Steps: &project.WorkSteps{SkipPlan: true, SkipReviewer: true},
 		MergePolicy: &merge, AutonomyPolicy: &autonomy,
 	})
 	if err != nil {

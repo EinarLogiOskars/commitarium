@@ -2359,6 +2359,65 @@ x-commitarium-preview:
 A stack without an open target uses it, or the compose file's only published
 port, and the desktop saves it on the stack.
 
+## Project vision
+
+A project's vision (ADR-020) is a statement and a prioritized plan. Items nest
+at most three levels, have stable IDs, and are numbered by position (P0.2.1).
+Only an item without sub-items starts a work order.
+
+- `GET /api/v1/projects/{id}/vision` answers the vision:
+  `{"project_id", "plan", "source": "assistant"|"user", "revision", "updated_at"}`.
+  The plan is `{"statement", "priorities": [{"level", "items": [{"id", "title",
+  "description", "items", "feature_id", "done"}]}], "confidence", "guesses"}`.
+  `done` marks an item without sub-items that the project already delivers.
+  For a repository without code, the plan also has the recommended
+  `"stack": {"presets": ["node-lts"], "frameworks": "React with Vite", "reason"}`,
+  naming runtime presets from `GET /api/v1/toolchain-presets`.
+  `404 vision_not_found` until one is written.
+- `PUT /api/v1/projects/{id}/vision` with `{"plan", "expected_revision"}` saves
+  the user's edit. `409 vision_conflict` when the vision changed meanwhile;
+  `400 invalid_vision` for an invalid plan.
+- `POST /api/v1/projects/{id}/vision/assistant` with
+  `{"mode": "describe"|"converse", "message"}` and an `Idempotency-Key` starts
+  the assistant on the project's lead agent and model (`agent` and `model`
+  override them). `describe` writes the vision at once and lists its guesses;
+  `converse` asks questions first. Answers a conversation:
+  `{"id", "mode", "status": "running"|"waiting_for_user"|"written"|"failed",
+  "messages": [{"role", "text", "occurred_at"}], ...}`.
+  The assistant inspects a read-only checkout of the default branch, removed
+  when the conversation ends. `503 vision_unavailable` without real agents.
+- `GET /api/v1/projects/{id}/vision/assistant` answers the project's most
+  recent conversation that is still `running` or `waiting_for_user`, or
+  `404 vision_not_found`.
+- `GET /api/v1/projects/{id}/vision/assistant/{sessionID}` follows it. When the
+  assistant proposes, the vision is saved with source `assistant`, keeping the
+  work orders of items it kept by ID, and the status becomes `written`.
+- `POST /api/v1/projects/{id}/vision/assistant/{sessionID}/messages` with
+  `{"message"}` and an `Idempotency-Key` answers the assistant.
+  `409 vision_assistant_busy` unless it is `waiting_for_user`.
+- `POST /api/v1/projects/{id}/vision/items/{itemID}/work-order` creates the
+  draft work order for an item without sub-items, links it, and answers
+  `201 {"work_order", "vision"}`. An item that already has one answers it with
+  `200`. `409 vision_item_not_startable` for a group, a done item, or an unknown item.
+
+## Setting a new project up
+
+`POST /api/v1/projects/{id}/setup` with `{"presets": ["node-lts", "python"],
+"frameworks": "React with Vite; FastAPI"}` sets up a project whose repository
+has no code yet. It saves the stack from the runtime presets and starts the
+visible quick change "Set the project up", with automatic merge: it scaffolds a
+minimal app on the stack with a test runner and one test, and writes the
+preview's compose file. It answers `201 {"work_order", "toolchain"}`, or `200`
+with the setup already running.
+
+- `400 invalid_stack` for no runtime, an unknown one, or two versions of a tool.
+- `409 project_has_code` once the repository has code; its stack is set on the
+  Stack page.
+- `503 project_setup_unavailable` without real agents.
+
+The background preview setup waits for a repository with code, so it never
+starts on a new project's empty repository.
+
 ## Merging an approved revision
 
 This endpoint and automatic merge execution are available in the opt-in

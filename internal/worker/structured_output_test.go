@@ -261,3 +261,34 @@ func TestResolveSessionOpening(t *testing.T) {
 		t.Fatalf("preview field = %q", field)
 	}
 }
+
+func TestResolveVisionPlan(t *testing.T) {
+	asked, err := ResolveStructuredOutput(OutputContractVisionPlan, []byte(
+		`{"action":"ask","message":"Who uses it?","statement":"","confidence":"low","guesses":[],"priorities":[]}`,
+	))
+	if err != nil || asked.Disposition != DispositionInputRequired || asked.VisionPlan != nil {
+		t.Fatalf("question = %+v err=%v", asked, err)
+	}
+	proposed, err := ResolveStructuredOutput(OutputContractVisionPlan, []byte(`{
+		"action":"propose","message":"Here is the plan.",
+		"statement":"A calorie tracker for one person.","confidence":"medium","guesses":["Metric units"],
+		"priorities":[{"level":0,"items":[
+			{"title":"Log meals","description":"","items":[
+				{"title":"Add a meal","description":"Name and calories.","items":[]},
+				{"title":"Add a meal","description":"Again.","items":[{"title":"Quick add","description":""}]}
+			]}
+		]}]}`))
+	if err != nil || proposed.VisionPlan == nil || proposed.Disposition != DispositionSucceeded {
+		t.Fatalf("proposal = %+v err=%v", proposed, err)
+	}
+	items := proposed.VisionPlan.Priorities[0].Items
+	if items[0].ID != "log-meals" || items[0].Items[0].ID != "add-a-meal" || items[0].Items[1].ID != "add-a-meal-2" ||
+		items[0].Items[1].Items[0].ID != "quick-add" {
+		t.Fatalf("item IDs = %+v", items)
+	}
+	if _, err := ResolveStructuredOutput(OutputContractVisionPlan, []byte(
+		`{"action":"propose","message":"x","statement":"","confidence":"high","guesses":[],"priorities":[]}`,
+	)); !errors.Is(err, ErrInvalidStructuredOutput) {
+		t.Fatalf("a vision without a statement: %v", err)
+	}
+}

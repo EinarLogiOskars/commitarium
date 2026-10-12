@@ -3,13 +3,15 @@ import { listProjects, createProject, repairRepository } from "../api/projects";
 import { deleteProject } from "../ipc";
 import { ApiError } from "../api/client";
 import { ImportProject } from "./ImportProject";
+import { startVisionAssistant } from "../api/vision";
+import { rememberIdea } from "./visionSession";
 import { useModels } from "./useModels";
 import {
   ProjectDefaultsFields,
   initialProjectDefaults,
   projectDefaultsPayload,
 } from "./ProjectDefaultsFields";
-import type { Project } from "../api/types";
+import type { Project, VisionMode } from "../api/types";
 
 // Absent repository_status means a pre-slice-1 coordinator that always bound a
 // repo on create — treat as ready.
@@ -26,6 +28,7 @@ export function Projects({
   const [projects, setProjects] = useState<Project[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [name, setName] = useState("");
+  const [idea, setIdea] = useState("");
   const [defaults, setDefaults] = useState(initialProjectDefaults());
   const [showDefaults, setShowDefaults] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -47,8 +50,9 @@ export function Projects({
     void load();
   }, [load]);
 
-  const submit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  // A project created with an idea starts the vision assistant on it, which
+  // also recommends the stack; the project opens on that conversation.
+  const submit = async (mode: VisionMode | null) => {
     if (!name.trim()) return;
     setCreating(true);
     setError(null);
@@ -57,7 +61,18 @@ export function Projects({
         { name: name.trim(), ...projectDefaultsPayload(defaults) },
         crypto.randomUUID(),
       );
+      const description = idea.trim();
+      if (mode && description) {
+        rememberIdea(created.id, description);
+        try {
+          await startVisionAssistant(created.id, mode, description, crypto.randomUUID());
+          rememberIdea(created.id, null);
+        } catch {
+          // The project opens on Vision with the idea filled in to retry.
+        }
+      }
       setName("");
+      setIdea("");
       await load();
       onSelect(created.id);
     } catch (e) {
@@ -139,7 +154,13 @@ export function Projects({
         </ul>
       )}
 
-      <form className="create create--feature" onSubmit={submit}>
+      <form
+        className="create create--feature"
+        onSubmit={(e) => {
+          e.preventDefault();
+          void submit(idea.trim() ? "describe" : null);
+        }}
+      >
         <input
           type="text"
           placeholder="New project name"
@@ -147,6 +168,14 @@ export function Projects({
           onChange={(e) => setName(e.target.value)}
           disabled={creating}
           autoFocus
+        />
+
+        <textarea
+          rows={3}
+          placeholder="What are you building? Optional: the assistant writes the vision from it and recommends a stack."
+          value={idea}
+          onChange={(e) => setIdea(e.target.value)}
+          disabled={creating}
         />
 
         <div className="neworder__options">
@@ -174,9 +203,21 @@ export function Projects({
           )}
         </div>
 
-        <button className="primary" type="submit" disabled={creating || !name.trim()}>
-          {creating ? "Creating…" : "Create"}
-        </button>
+        <div className="row">
+          <button className="primary" type="submit" disabled={creating || !name.trim()}>
+            {creating ? "Creating…" : idea.trim() ? "Create and write the vision" : "Create"}
+          </button>
+          {idea.trim() && (
+            <button
+              type="button"
+              onClick={() => void submit("converse")}
+              disabled={creating || !name.trim()}
+              title="The assistant asks what it needs to know first."
+            >
+              Create and talk it through
+            </button>
+          )}
+        </div>
       </form>
     </section>
   );

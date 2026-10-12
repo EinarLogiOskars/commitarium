@@ -1637,6 +1637,19 @@ button.danger:not(.ghost) {
 .order-head__desc {
   margin: 3px 0 0;
   font-size: 12px;
+  white-space: pre-line;
+}
+.order-head__desc--clamped {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  overflow: hidden;
+}
+.order-head__more {
+  font-size: 12px;
+  padding: 0;
+  margin-top: 2px;
 }
 .order-head__usage {
   margin: 3px 0 0;
@@ -2696,6 +2709,45 @@ button.danger:not(.ghost) {
   max-height: 100%;
   overflow-y: auto;
 }
+.accept-tests__score {
+  display: none;
+}
+/* Wide windows: collapsing folds the panel into a slim strip on the right, so
+   the phase view gets the width back. */
+@media (min-width: 1101px) {
+  .order__split > .accept-tests--collapsed {
+    width: 44px;
+    padding: 10px 0;
+    overflow: hidden;
+  }
+  .order__split > .accept-tests--collapsed .accept-tests__head {
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    margin: 0;
+    padding: 0;
+  }
+  .order__split > .accept-tests--collapsed h3,
+  .order__split > .accept-tests--collapsed .accept-tests__count {
+    display: none;
+  }
+  .order__split > .accept-tests--collapsed .accept-tests__chevron {
+    order: -1;
+    transform: rotate(90deg);
+  }
+  .order__split > .accept-tests:not(.accept-tests--collapsed) .accept-tests__chevron {
+    transform: rotate(-90deg);
+  }
+  .order__split > .accept-tests--collapsed .accept-tests__score {
+    display: block;
+    margin: 0;
+  }
+  .order__split > .accept-tests--collapsed .accept-tests__dots {
+    flex-direction: column;
+    align-items: center;
+    margin-top: 12px;
+  }
+}
 @media (max-width: 1100px) {
   .order__split {
     flex-direction: column;
@@ -2786,7 +2838,7 @@ button.danger:not(.ghost) {
 }
 .accept-test__line {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 8px;
   font-size: 13px;
 }
@@ -2795,17 +2847,27 @@ button.danger:not(.ghost) {
   width: 16px;
   text-align: center;
 }
-.accept-test__title {
+/* Title on its own line, both results on a small line under it, so the title
+   gets the panel's full width. */
+.accept-test__body {
   flex: 1;
   min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.accept-test__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 12px;
+  font-size: 11px;
 }
 .accept-test--passed .accept-test__title,
 .accept-test--not_applicable .accept-test__title {
   color: var(--muted);
 }
 .accept-test__status {
-  flex: none;
-  font-size: 11px;
+  color: var(--muted);
 }
 .accept-test__status--ok {
   color: var(--ok);
@@ -3034,7 +3096,148 @@ button.danger:not(.ghost) {
 
 /* Commitarium's own run of an acceptance test, next to the reviewer's. */
 .accept-test__own {
-  margin-left: 8px;
-  font-size: 11px;
   white-space: nowrap;
+}
+
+/* Vision page (ADR-020): statement on top, the numbered plan below. */
+.vision {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.vision__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.vision__head h2,
+.vision__head h3 {
+  margin: 0;
+}
+.vision__statement {
+  font-size: 15px;
+}
+.vision__source {
+  font-size: 12px;
+  margin: 8px 0 0;
+}
+.vision__guesses ul {
+  margin: 4px 0 10px;
+  padding-left: 20px;
+}
+.vision__guesses p {
+  margin: 0;
+}
+.vision__priority h3 {
+  margin: 0 0 8px;
+}
+.vision__items {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.vision__items .vision__items {
+  margin-top: 6px;
+  padding-left: 28px;
+}
+.vision__row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+.vision__label {
+  flex: none;
+  min-width: 52px;
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+  color: var(--muted);
+  padding-top: 2px;
+}
+.vision__text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.vision__text p {
+  margin: 0;
+  font-size: 13px;
+}
+.vision__actions {
+  flex: none;
+  align-items: center;
+}
+.vision__actions--edit {
+  display: flex;
+  gap: 4px;
+}
+.vision__write textarea {
+  width: 100%;
+  margin: 8px 0 10px;
+}
+.vision__conversation {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 320px;
+}
+.vision__editor {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.vision__done {
+  margin: 0 6px;
+}
+.vision__setup {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+}
+.vision__setup h3 {
+  margin: 0 0 6px;
+}
+.vision__setup .field {
+  max-width: 480px;
+}
+.vision__presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 10px 0 12px;
+}
+.vision__preset {
+  border-radius: 999px;
+  padding: 4px 12px;
+  font-size: 12px;
+}
+.vision__preset--on {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--text);
+}
+
+/* The model working right now, in a work order's header. */
+.agents-at-work {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 6px 0 0;
+  padding: 3px 10px;
+  width: fit-content;
+  font-size: 12px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--warn) 45%, transparent);
+  background: color-mix(in srgb, var(--warn) 10%, transparent);
+}
+.agents-at-work__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--warn);
+  animation: dot-pulse 1.6s ease-in-out infinite;
 }
