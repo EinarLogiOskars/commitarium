@@ -25,6 +25,16 @@ import { UpdateModal } from "./views/UpdateModal";
 import { useDesktopUpdate } from "./update/useDesktopUpdate";
 import "./App.css";
 
+const AREA_KEY = "commitarium.area";
+
+function readArea(): "apps" | "projects" {
+  try {
+    return localStorage.getItem(AREA_KEY) === "projects" ? "projects" : "apps";
+  } catch {
+    return "apps";
+  }
+}
+
 function App() {
   const boot = useBoot();
   const [reachable, setReachable] = useState(false);
@@ -48,8 +58,17 @@ function App() {
   const [foreground, setForeground] = useState<string | null>(null);
   // How the rail and the open assistant share the window.
   const layout = useWorkLayout(projectId !== null);
-  // Outside a project: the project list, or the Apps area (APPS_PLAN.md).
-  const [area, setArea] = useState<"projects" | "apps">("projects");
+  // Outside a project: the Apps area (the default way in, APPS_PLAN.md) or
+  // the project list; the last one chosen is remembered.
+  const [area, setAreaState] = useState<"apps" | "projects">(readArea);
+  const setArea = (next: "apps" | "projects") => {
+    setAreaState(next);
+    try {
+      localStorage.setItem(AREA_KEY, next);
+    } catch {
+      // The choice lasts until the window closes.
+    }
+  };
   // The open project's autopilot goal while it is on, as the assistant reports it.
   const [goal, setGoal] = useState<AutopilotGoal | null>(null);
   const [launch, setLaunch] = useState<LaunchStage | null>(null);
@@ -308,7 +327,7 @@ function App() {
         <header className="topbar">
           <span className="topbar__brand">Commitarium</span>
           <span className="view-switch" role="tablist">
-            {(["projects", "apps"] as const).map((value) => (
+            {(["apps", "projects"] as const).map((value) => (
               <button
                 key={value}
                 role="tab"
