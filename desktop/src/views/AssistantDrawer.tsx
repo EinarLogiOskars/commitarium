@@ -9,6 +9,8 @@ import {
   type Conversation,
 } from "../api/assistant";
 import { ApiError } from "../api/client";
+import { getVision } from "../api/vision";
+import type { VisionItem, VisionPriority } from "../api/types";
 import { Markdown } from "./Markdown";
 import { useModelName } from "./useModelName";
 import { agentName, useAgents } from "./useAgents";
@@ -48,12 +50,19 @@ export function AssistantDrawer({
   const chatRef = useRef<HTMLDivElement | null>(null);
   const seenReplies = useRef<number | null>(null);
 
+  // Vision items by ID, labelled "P0.2 Title", for the cards.
+  const [visionItems, setVisionItems] = useState<Map<string, string>>(new Map());
   const load = useCallback(async () => {
     try {
       setConversation(await getConversation(scope));
       setError(null);
     } catch (e) {
       setError(describe(e));
+    }
+    if (scope !== "commitarium") {
+      getVision(scope)
+        .then((vision) => setVisionItems(visionLabels(vision.plan.priorities)))
+        .catch(() => setVisionItems(new Map()));
     }
   }, [scope]);
 
@@ -201,6 +210,7 @@ export function AssistantDrawer({
                           action={action}
                           onChanged={setConversation}
                           onOpenOrder={onOpenOrder}
+                          visionLabel={visionItems.get(action.vision_item_id)}
                         />
                       ))}
                     </div>
@@ -246,9 +256,12 @@ function ActionCard({
   action,
   onChanged,
   onOpenOrder,
+  visionLabel,
 }: {
   scope: string;
   action: AssistantAction;
+  /** "P0.2 Title" for the vision item a new work order delivers. */
+  visionLabel?: string;
   onChanged: (conversation: Conversation) => void;
   onOpenOrder?: (featureId: string) => void;
 }) {
@@ -308,6 +321,13 @@ function ActionCard({
           <li key={line as string}>{line}</li>
         ))}
         {action.independent_tests && <li>Independent acceptance tests</li>}
+        {action.type === "create_work_order" && (
+          <li>
+            {action.vision_item_id
+              ? `Part of the vision: ${visionLabel ?? action.vision_item_id}`
+              : "Outside the vision"}
+          </li>
+        )}
         {action.work_order_id && (
           <li>
             Work order{" "}
@@ -456,4 +476,16 @@ function describe(e: unknown): string {
     return e.message;
   }
   return String(e);
+}
+
+function visionLabels(priorities: VisionPriority[]): Map<string, string> {
+  const labels = new Map<string, string>();
+  const walk = (items: VisionItem[], prefix: string) =>
+    items.forEach((item, index) => {
+      const label = `${prefix}.${index + 1}`;
+      labels.set(item.id, `${label} ${item.title}`);
+      walk(item.items ?? [], label);
+    });
+  priorities.forEach((p) => walk(p.items, `P${p.level}`));
+  return labels;
 }
