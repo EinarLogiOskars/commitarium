@@ -54,6 +54,7 @@ export function RecoveryPanel({ run, onChanged }: { run: Run; onChanged: () => v
   const cls = result ? CLASSIFY[result.classification] : null;
 
   const canGuide = offered.includes("continue") || offered.includes("replace");
+  const reasonText = run.reason ?? "";
 
   // Compact so the composer below stays in view: the reason and the actions
   // share one row, and guidance opens on request.
@@ -65,7 +66,9 @@ export function RecoveryPanel({ run, onChanged }: { run: Run; onChanged: () => v
         ) : (
           <span className="chip chip--bad">Blocked</span>
         )}
-        <span className="recover__reason">
+        <span
+          className={`recover__reason ${reasonText.length > 140 ? "recover__reason--long" : ""}`}
+        >
           {result?.missing_result
             ? `The last turn's ${result.missing_result.replace(/_/g, " ")} couldn't be confirmed.`
             : (run.reason ??

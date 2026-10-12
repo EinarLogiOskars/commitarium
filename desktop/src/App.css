@@ -3598,3 +3598,8 @@ button.danger:not(.ghost) {
   padding: 7px 0;
   border: 1px solid transparent;
 }
+
+/* A long reason takes the whole row; the actions wrap below it. */
+.recover__row .recover__reason--long {
+  flex-basis: 100%;
+}

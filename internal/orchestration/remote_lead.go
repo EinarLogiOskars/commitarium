@@ -761,7 +761,7 @@ func (starter *RemoteLeadStarter) recoverWithDirective(
 			return starter.recoverIdleReadyToMergeRun(ctx, run)
 		}
 		if storedFeature.State == feature.StateImplementing {
-			return starter.recoverIdleImplementationRun(ctx, run)
+			return starter.recoverIdleImplementationRun(ctx, run, directive)
 		}
 		if storedFeature.State == feature.StateReviewing {
 			return starter.recoverIdleReviewingRun(ctx, run)
@@ -1736,7 +1736,8 @@ func (starter *RemoteLeadStarter) advanceWaitingRun(ctx context.Context, runID s
 		_, err = starter.recoverIdlePlanningRun(ctx, run, storedFeature)
 		return err
 	case feature.StateImplementing:
-		return starter.recoverIdleImplementationRun(ctx, run)
+		// Advancing on its own never answers an agent's question.
+		return starter.recoverIdleImplementationRun(ctx, run, RecoveryDirective{})
 	case feature.StateReviewing:
 		return starter.recoverIdleReviewingRun(ctx, run)
 	case feature.StateReadyToMerge:
@@ -1778,6 +1779,7 @@ func (starter *RemoteLeadStarter) recordMergeBlocked(ctx context.Context, runID 
 func (starter *RemoteLeadStarter) recoverIdleImplementationRun(
 	ctx context.Context,
 	run execution.Run,
+	directive RecoveryDirective,
 ) error {
 	lead, err := starter.executions.GetSession(ctx, remoteLeadSessionID(run.ID))
 	if err != nil {
@@ -1818,7 +1820,35 @@ func (starter *RemoteLeadStarter) recoverIdleImplementationRun(
 		return errors.New("completed implementation attempt has no result")
 	}
 	if attempt.Result.Disposition == workerhttp.DispositionInputRequired {
-		return starter.handleInputRequired(ctx, remoteLeadRequest{runID: run.ID, identity: workerhttp.MutationIdentity{AttemptReference: attempt.AttemptReference}}, *attempt.Result)
+		if !directive.answersBlocker() {
+			return starter.handleInputRequired(ctx, remoteLeadRequest{runID: run.ID, identity: workerhttp.MutationIdentity{AttemptReference: attempt.AttemptReference}}, *attempt.Result)
+		}
+		// The user's Continue answers the lead that asked for help: its next
+		// turn runs in the same conversation.
+		if !starter.claim(run.ID) {
+			return fmt.Errorf("%w: %q", ErrRunAlreadyActive, run.ID)
+		}
+		answer := remoteLeadRequest{
+			runID: run.ID, agentName: "lead agent", allowRecoveryContinuation: true,
+			answerBlocker: true, forceFreshRecovery: directive.Action == RecoveryActionReplace,
+			recoveryMessage: directive.Message,
+			identity: workerhttp.MutationIdentity{AttemptReference: workerhttp.AttemptReference{
+				SessionID: lead.ID, AttemptID: checkpoint.AttemptID,
+			}},
+			request: workerhttp.PutAttemptRequest{OutputContract: workerhttp.OutputContractImplementationLead},
+		}
+		go func() {
+			defer starter.release(run.ID)
+			ctx := starter.lifetime
+			continued, err := starter.continueFailedAttempt(ctx, answer, attempt)
+			if err == nil && !continued {
+				err = errors.New("the lead that asked for help could not be continued")
+			}
+			if err != nil {
+				starter.requireReview(ctx, answer, err)
+			}
+		}()
+		return nil
 	}
 	request := remoteLeadRequest{
 		runID: run.ID,
