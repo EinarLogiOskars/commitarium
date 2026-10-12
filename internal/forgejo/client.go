@@ -868,7 +868,9 @@ func (client *Client) ClosePullRequest(
 	if stored.State == "closed" {
 		return nil
 	}
-	if stored.State != "open" || !stored.Draft {
+	// A pull request at the merge gate is no longer a draft; its branches and
+	// marker already prove it is the work order's own.
+	if stored.State != "open" {
 		return workspace.ErrPullRequestConflict
 	}
 	status, body, err := client.doJSON(

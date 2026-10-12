@@ -212,6 +212,25 @@ func TestClientClosesManagedPullRequestAndDeletesFeatureBranch(t *testing.T) {
 	}
 }
 
+func TestClientClosesAPullRequestAtTheMergeGate(t *testing.T) {
+	pullRequest := managedPullRequest(testPullRequestSpec())
+	pullRequest.Draft = false
+	calls := 0
+	client := newBranchTestClient(t, func(request *http.Request) (*http.Response, error) {
+		calls++
+		if calls == 2 {
+			pullRequest.State = "closed"
+		}
+		return pullRequestJSONResponse(t, http.StatusOK, pullRequest), nil
+	})
+	if err := client.ClosePullRequest(
+		t.Context(), "owner", "repository", pullRequest.Number,
+		pullRequest.BaseBranch, pullRequest.HeadBranch, testPullRequestSpec().FeatureMarker,
+	); err != nil || calls != 2 {
+		t.Fatalf("a pull request ready to merge was not closed: calls=%d err=%v", calls, err)
+	}
+}
+
 func TestClientRejectsMergedPullRequestDeletion(t *testing.T) {
 	pullRequest := managedPullRequest(testPullRequestSpec())
 	pullRequest.State = "closed"

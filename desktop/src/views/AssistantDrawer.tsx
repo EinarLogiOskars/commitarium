@@ -375,7 +375,9 @@ function ActionCard({
             ? `Autopilot: finish P${action.priority}`
             : action.type === "continue_work_order"
               ? "Continue a work order"
-              : "Switch models";
+              : action.type === "close_work_order"
+                ? "Close a work order"
+                : "Switch models";
   const models = [
     action.lead_model &&
       `Lead ${action.lead_agent ? agentName(agents, action.lead_agent) + " · " : ""}${modelName(action.lead_model)}`,

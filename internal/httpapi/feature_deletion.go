@@ -172,8 +172,10 @@ func writeCloseError(w http.ResponseWriter, projectID, featureID string, err err
 		writeError(w, http.StatusConflict, "feature_ended", "the work order has already merged")
 	case errors.Is(err, workorder.ErrActive):
 		writeError(w, http.StatusConflict, "feature_active", "agent work is still stopping; retry with the same Idempotency-Key")
-	case errors.Is(err, workorder.ErrUnsafeArtifacts), errors.Is(err, workspace.ErrConflict):
-		writeError(w, http.StatusConflict, "feature_close_conflict", "the work order's isolated artifacts could not be safely identified")
+	case errors.Is(err, workorder.ErrUnsafeArtifacts), errors.Is(err, workspace.ErrConflict),
+		errors.Is(err, workspace.ErrBranchConflict), errors.Is(err, workspace.ErrCheckoutConflict),
+		errors.Is(err, workspace.ErrPullRequestConflict):
+		writeError(w, http.StatusConflict, "feature_close_conflict", "the work order's branch or pull request could not be safely identified, so nothing was closed")
 	case errors.Is(err, workorder.ErrUnavailable), errors.Is(err, project.ErrForgejoUnavailable):
 		writeError(w, http.StatusServiceUnavailable, "close_unavailable", "closing is temporarily unavailable; retry with the same Idempotency-Key")
 	default:
