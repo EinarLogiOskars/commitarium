@@ -10,6 +10,7 @@ import { startVisionAssistant } from "../api/vision";
 import { ApiError } from "../api/client";
 import { openAppWindow } from "../ipc";
 import { initialProjectDefaults, projectDefaultsPayload } from "./ProjectDefaultsFields";
+import { useCatalogModels } from "./useModelName";
 import type { AttentionItem, Project, RunningWorkOrder } from "../api/types";
 
 // The Apps area (APPS_PLAN.md): the projects the user uses as apps, one tile
@@ -27,6 +28,9 @@ export function AppsView({
   onShowWork: (projectId: string) => void;
 }) {
   const [apps, setApps] = useState<Project[] | null>(null);
+  // A new app takes its agents and models from the newest project that has
+  // them: the user's current choice.
+  const [template, setTemplate] = useState<Project | null>(null);
   const [goals, setGoals] = useState<Record<string, AutopilotGoal>>({});
   const [launches, setLaunches] = useState<Record<string, LaunchStage>>({});
   const [error, setError] = useState<string | null>(null);
@@ -34,7 +38,13 @@ export function AppsView({
 
   const load = useCallback(() => {
     listProjects()
-      .then((projects) => setApps(projects.filter((p) => p.app)))
+      .then((projects) => {
+        setApps(projects.filter((p) => p.app));
+        const configured = projects
+          .filter((p) => p.agent_models?.lead && p.agent_providers)
+          .sort((a, b) => (b.created_at ?? "").localeCompare(a.created_at ?? ""));
+        setTemplate(configured[0] ?? null);
+      })
       .catch((e) => setError(String(e)));
     listAutopilotGoals()
       .then((r) => {
@@ -69,6 +79,7 @@ export function AppsView({
       {error && <div className="banner banner--error">{error}</div>}
       {creating && (
         <NewApp
+          template={template}
           onCancel={() => setCreating(false)}
           onCreated={(app) => {
             setCreating(false);
@@ -167,9 +178,12 @@ function iconColor(name: string): string {
 // assistant writes its vision from the sentence, and the coordinator takes
 // it from there: the stack, then the whole vision on autopilot.
 function NewApp({
+  template,
   onCancel,
   onCreated,
 }: {
+  /** The project whose agents and models a new app takes. */
+  template: Project | null;
   onCancel: () => void;
   onCreated: (app: Project) => void;
 }) {
@@ -177,24 +191,47 @@ function NewApp({
   const [idea, setIdea] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const modelsFor = useCatalogModels();
+  const [made, setMade] = useState<Project | null>(null);
+  const [visionKey] = useState(() => crypto.randomUUID());
 
   const build = async () => {
     if (!name.trim() || !idea.trim()) return;
     setBusy(true);
     setError(null);
     try {
+      const initial = initialProjectDefaults();
+      const providers = template?.agent_providers ?? initial.providers;
+      // The vision assistant runs on the lead's model, so a new app always
+      // has one: the template's, else the first its provider offers.
+      const models = {
+        lead: template?.agent_models?.lead || modelsFor(providers.lead, "lead")[0]?.id || "",
+        reviewer:
+          template?.agent_models?.reviewer ||
+          modelsFor(providers.reviewer, "reviewer")[0]?.id ||
+          "",
+      };
+      if (!models.lead) {
+        throw new Error("No models are available yet. Check the Agents page, then try again.");
+      }
       const defaults = {
-        ...initialProjectDefaults(),
+        ...initial,
+        providers,
+        models,
         autonomy_policy: "run_to_completion" as const,
         merge_policy: "auto_after_gates" as const,
       };
-      const created = await createProject(
-        { name: name.trim(), ...projectDefaultsPayload(defaults) },
-        crypto.randomUUID(),
-      );
+      // A retry after a failed step goes on with the app already created.
+      const created =
+        made ??
+        (await createProject(
+          { name: name.trim(), ...projectDefaultsPayload(defaults) },
+          crypto.randomUUID(),
+        ));
+      setMade(created);
       const app = await setProjectApp(created.id, true);
       await startLaunch(created.id);
-      await startVisionAssistant(created.id, "describe", idea.trim(), crypto.randomUUID());
+      await startVisionAssistant(created.id, "describe", idea.trim(), visionKey);
       onCreated(app);
     } catch (e) {
       setError(e instanceof ApiError ? e.message : String(e));
