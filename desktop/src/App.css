@@ -1,29 +1,57 @@
-/* Warm neutral palette — workshop identity (kraft/wood/clay), light default. */
+/* Cream and violet (G): warm off-white surfaces, deep violet for actions,
+   lavender (#ceb5ff) for highlights. Light is the default; Settings chooses
+   light, dark, or the system's appearance (settings/theme.ts). */
 :root {
-  --bg: #f4efe7;
-  --panel: #fdfbf6;
-  --border: #e6ddcf;
-  --text: #2a231b;
-  --muted: #877c6c;
-  --accent: #b5552e;
-  --accent-text: #fff7f0;
-  --ok: #5c8a49;
-  --bad: #b64f36;
-  --warn: #b07d1e;
+  --bg: #faf8f3;
+  --panel: #ffffff;
+  --border: #e9e4da;
+  --text: #221f2a;
+  --muted: #7a7484;
+  --accent: #6b46e0;
+  --accent-text: #ffffff;
+  --lavender: #ceb5ff;
+  --ok: #2e8f57;
+  --bad: #d64a3a;
+  --warn: #c98a12;
+  /* Soft on cream: a hint of depth, not a smudge. */
+  --side-shadow: -6px 0 20px rgb(60 45 90 / 0.07);
+  --float-shadow: 0 2px 10px rgb(60 45 90 / 0.12);
+  color-scheme: light;
+}
+
+:root[data-theme="dark"] {
+  --bg: #16141c;
+  --panel: #1f1c27;
+  --border: #2e2a39;
+  --text: #ece8f4;
+  --muted: #a49fb2;
+  --accent: #a78bfa;
+  --accent-text: #1a1033;
+  --lavender: #5b45a8;
+  --ok: #6cc08a;
+  --bad: #f0706a;
+  --warn: #e3b04b;
+  --side-shadow: -12px 0 32px rgb(0 0 0 / 0.35);
+  --float-shadow: 0 4px 14px rgb(0 0 0 / 0.35);
+  color-scheme: dark;
 }
 
 @media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #17130f;
-    --panel: #201b15;
-    --border: #322a22;
-    --text: #ece4d8;
-    --muted: #a49685;
-    --accent: #d0764a;
-    --accent-text: #1a140f;
-    --ok: #7fae6a;
-    --bad: #d47159;
-    --warn: #d6a24a;
+  :root[data-theme="system"] {
+    --bg: #16141c;
+    --panel: #1f1c27;
+    --border: #2e2a39;
+    --text: #ece8f4;
+    --muted: #a49fb2;
+    --accent: #a78bfa;
+    --accent-text: #1a1033;
+    --lavender: #5b45a8;
+    --ok: #6cc08a;
+    --bad: #f0706a;
+    --warn: #e3b04b;
+    --side-shadow: -12px 0 32px rgb(0 0 0 / 0.35);
+    --float-shadow: 0 4px 14px rgb(0 0 0 / 0.35);
+    color-scheme: dark;
   }
 }
 
@@ -3738,7 +3766,7 @@ button.danger:not(.ghost) {
   color: var(--accent);
   background: var(--panel);
   border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border));
-  box-shadow: 0 4px 14px rgb(0 0 0 / 0.35);
+  box-shadow: var(--float-shadow);
 }
 .assistant-fab--working {
   animation: dot-pulse 1.6s ease-in-out infinite;
@@ -3767,7 +3795,7 @@ button.danger:not(.ghost) {
   padding: 14px 16px 16px;
   background: var(--bg);
   border-left: 1px solid var(--border);
-  box-shadow: -12px 0 32px rgb(0 0 0 / 0.35);
+  box-shadow: var(--side-shadow);
 }
 .assistant-drawer__head {
   display: flex;
@@ -4047,8 +4075,80 @@ button.danger:not(.ghost) {
   width: min(340px, 85%);
   max-height: none;
   order: 0;
-  box-shadow: -12px 0 32px rgb(0 0 0 / 0.35);
+  box-shadow: var(--side-shadow);
 }
 .order__split--overlay > .order-side__strip {
   align-self: flex-start;
+}
+
+/* A choice of a few, side by side (Settings › Appearance). */
+.set__segments {
+  display: inline-flex;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+}
+.set__segment {
+  border: none;
+  background: none;
+  padding: 5px 14px;
+  border-radius: 7px;
+  color: var(--muted);
+}
+.set__segment--on {
+  background: var(--panel);
+  color: var(--text);
+  box-shadow: 0 1px 3px rgb(0 0 0 / 0.12);
+}
+
+/* Lavender marks where you are and what is on: the selected page, tab, or
+   icon, and the autopilot banner. */
+.rail__item--active,
+.rail__icon--active,
+.rail__tab--on,
+.order-side__tab--on {
+  background: color-mix(in srgb, var(--lavender) 45%, transparent);
+  border-color: var(--lavender);
+}
+.autopilot-banner {
+  border-color: var(--lavender);
+  background: color-mix(in srgb, var(--lavender) 22%, var(--panel));
+}
+
+/* Autopilot on a project in the project list. */
+.pill--autopilot {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-right: auto;
+  margin-left: 10px;
+  color: var(--text);
+  border: 1px solid var(--lavender);
+  background: color-mix(in srgb, var(--lavender) 30%, transparent);
+}
+
+/* Focus shows in the accent, not the system's blue. */
+:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 70%, transparent);
+  outline-offset: 1px;
+}
+input:focus,
+textarea:focus,
+select:focus {
+  outline: 2px solid color-mix(in srgb, var(--accent) 55%, transparent);
+  outline-offset: 0;
+}
+/* The badge and name keep one line; the repository path gives way. */
+.pill--autopilot,
+.list__item .list__title {
+  flex: none;
+  white-space: nowrap;
+}
+.list__item > .muted {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }

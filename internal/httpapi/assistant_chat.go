@@ -33,6 +33,18 @@ type ConversationService interface {
 	Resolve(ctx context.Context, scope, actionID string, status conversations.ActionStatus, result, workOrderID string) (conversations.Conversation, error)
 	StartGoal(ctx context.Context, scope string, level int) (conversations.Conversation, error)
 	StopGoal(ctx context.Context, scope string) (conversations.Conversation, error)
+	ActiveGoals(ctx context.Context) (map[string]conversations.Goal, error)
+}
+
+// listAutopilotHandler answers the autopilot goals that are on, by project,
+// for the project list.
+func (api *API) listAutopilotHandler(w http.ResponseWriter, r *http.Request) {
+	goals, err := api.conversations.ActiveGoals(r.Context())
+	if err != nil {
+		writeConversationError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"goals": goals}, "autopilot goals")
 }
 
 type startAutopilotRequest struct {

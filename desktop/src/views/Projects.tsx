@@ -6,6 +6,7 @@ import { ImportProject } from "./ImportProject";
 import { startVisionAssistant } from "../api/vision";
 import { rememberIdea } from "./visionSession";
 import { useModels } from "./useModels";
+import { listAutopilotGoals, type AutopilotGoal } from "../api/assistant";
 import {
   ProjectDefaultsFields,
   initialProjectDefaults,
@@ -49,6 +50,19 @@ export function Projects({
   useEffect(() => {
     void load();
   }, [load]);
+
+  // Projects where autopilot is on say so, refreshed while the list is open.
+  const [goals, setGoals] = useState<Record<string, AutopilotGoal>>({});
+  useEffect(() => {
+    if (!reachable) return;
+    const refresh = () =>
+      listAutopilotGoals()
+        .then((r) => setGoals(r.goals))
+        .catch(() => setGoals({}));
+    void refresh();
+    const timer = setInterval(() => void refresh(), 20_000);
+    return () => clearInterval(timer);
+  }, [reachable]);
 
   // A project created with an idea starts the vision assistant on it, which
   // also recommends the stack; the project opens on that conversation.
@@ -144,6 +158,7 @@ export function Projects({
             <ProjectRow
               key={p.id}
               project={p}
+              goal={goals[p.id]}
               onOpen={() => onSelect(p.id)}
               onRepair={() => void repair(p.id)}
               repairing={repairing === p.id}
@@ -227,6 +242,7 @@ export function Projects({
 // and an explicit force step when the coordinator reports an active run.
 function ProjectRow({
   project: p,
+  goal,
   onOpen,
   onRepair,
   repairing,
@@ -234,6 +250,8 @@ function ProjectRow({
   onDeleted,
 }: {
   project: Project;
+  /** Its autopilot goal while autopilot is on. */
+  goal?: AutopilotGoal;
   onOpen: () => void;
   onRepair: () => void;
   repairing: boolean;
@@ -319,6 +337,13 @@ function ProjectRow({
       ) : (
         <button className="list__item" onClick={onOpen}>
           <span className="list__title">{p.name}</span>
+          {goal && (
+            <span className="pill pill--autopilot">
+              <span className="autopilot-banner__dot" aria-hidden />
+              Autopilot · {goal.title} · {goal.items.filter((i) => i.done).length} of{" "}
+              {goal.items.length}
+            </span>
+          )}
           <span className="muted">
             {p.forgejo_repository
               ? `${p.forgejo_repository.owner}/${p.forgejo_repository.name}`

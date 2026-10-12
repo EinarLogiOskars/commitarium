@@ -10,6 +10,7 @@ import {
 } from "../ipc";
 import { BackupSection } from "./BackupSection";
 import { Fact } from "./Fact";
+import { readTheme, saveTheme, type Theme } from "../settings/theme";
 import type { DesktopSettingsState } from "../settings/useDesktopSettings";
 import type { RunningWorkOrder } from "../api/types";
 import type { DesktopUpdate } from "../update/useDesktopUpdate";
@@ -84,6 +85,8 @@ export function AppSettings({
         </div>
 
         {error && <div className="banner banner--error">{error}</div>}
+
+        <Appearance />
 
         <section className="set__section">
           <h3 className="set__heading">Notifications</h3>
@@ -252,5 +255,37 @@ function UpdateLine({ update, onOpenUpdate }: { update: DesktopUpdate; onOpenUpd
         </button>
       )}
     </div>
+  );
+}
+
+const THEMES: { value: Theme; label: string }[] = [
+  { value: "light", label: "Light" },
+  { value: "dark", label: "Dark" },
+  { value: "system", label: "System" },
+];
+
+function Appearance() {
+  const [theme, setTheme] = useState<Theme>(readTheme);
+  return (
+    <section className="set__section">
+      <h3 className="set__heading">Appearance</h3>
+      <div className="set__segments" role="radiogroup" aria-label="Appearance">
+        {THEMES.map(({ value, label }) => (
+          <button
+            key={value}
+            role="radio"
+            aria-checked={theme === value}
+            className={`set__segment ${theme === value ? "set__segment--on" : ""}`}
+            onClick={() => {
+              setTheme(value);
+              saveTheme(value);
+            }}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+      <p className="muted set__note">System follows your computer's light or dark appearance.</p>
+    </section>
   );
 }

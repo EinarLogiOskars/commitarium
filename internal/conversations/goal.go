@@ -111,6 +111,23 @@ func (service *Service) StartGoal(ctx context.Context, scope string, level int) 
 	return stored.Conversation, nil
 }
 
+// ActiveGoals lists the autopilot goals that are on, by project.
+func (service *Service) ActiveGoals(_ context.Context) (map[string]Goal, error) {
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	goals := map[string]Goal{}
+	for _, scope := range service.projectScopes() {
+		stored, err := service.read(scope)
+		if err != nil {
+			return nil, err
+		}
+		if stored.Goal.active() {
+			goals[scope] = *stored.Goal
+		}
+	}
+	return goals, nil
+}
+
 // StopGoal turns autopilot off; the work it started carries on.
 func (service *Service) StopGoal(ctx context.Context, scope string) (Conversation, error) {
 	if err := service.checkScope(ctx, scope); err != nil {

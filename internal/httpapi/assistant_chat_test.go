@@ -52,6 +52,10 @@ func (stub *conversationStub) StartGoal(_ context.Context, scope string, level i
 	return conversations.Conversation{Scope: scope}, nil
 }
 
+func (stub *conversationStub) ActiveGoals(context.Context) (map[string]conversations.Goal, error) {
+	return map[string]conversations.Goal{}, nil
+}
+
 func (stub *conversationStub) StopGoal(_ context.Context, scope string) (conversations.Conversation, error) {
 	return conversations.Conversation{Scope: scope}, nil
 }

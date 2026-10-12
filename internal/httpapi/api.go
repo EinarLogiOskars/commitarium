@@ -454,6 +454,7 @@ func newAPI(
 		mux.HandleFunc("PUT /api/v1/assistant/conversations/{scope}/notes", api.saveConversationNotesHandler)
 		mux.HandleFunc("POST /api/v1/assistant/conversations/{scope}/actions/{actionID}/approve", api.approveConversationActionHandler)
 		mux.HandleFunc("POST /api/v1/assistant/conversations/{scope}/actions/{actionID}/dismiss", api.dismissConversationActionHandler)
+		mux.HandleFunc("GET /api/v1/assistant/autopilot", api.listAutopilotHandler)
 		mux.HandleFunc("POST /api/v1/assistant/conversations/{scope}/autopilot", api.startAutopilotHandler)
 		mux.HandleFunc("DELETE /api/v1/assistant/conversations/{scope}/autopilot", api.stopAutopilotHandler)
 	}

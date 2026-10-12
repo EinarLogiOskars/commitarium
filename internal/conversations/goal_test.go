@@ -116,12 +116,18 @@ func TestStoppingAutopilotLeavesActionsForTheUser(t *testing.T) {
 	if _, err := service.StartGoal(t.Context(), "prj_test", 0); err != nil {
 		t.Fatal(err)
 	}
+	if goals, err := service.ActiveGoals(t.Context()); err != nil || goals["prj_test"].Title != "Finish P0" {
+		t.Fatalf("active goals = %+v err=%v", goals, err)
+	}
 	conversation, err := service.StopGoal(t.Context(), "prj_test")
 	if err != nil || conversation.Goal.Status != GoalStopped {
 		t.Fatalf("stop = %+v err=%v", conversation.Goal, err)
 	}
 	if apply, _ := service.autopilotActions("prj_test"); len(apply) != 0 {
 		t.Fatalf("a stopped autopilot applied %+v", apply)
+	}
+	if goals, _ := service.ActiveGoals(t.Context()); len(goals) != 0 {
+		t.Fatalf("a stopped goal is still listed: %+v", goals)
 	}
 }
 
