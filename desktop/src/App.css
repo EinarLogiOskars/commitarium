@@ -3836,3 +3836,13 @@ button.danger:not(.ghost) {
 .vision__add .banner {
   flex-basis: 100%;
 }
+
+/* A draft work order's description, in its Clarify card. */
+.clarify__description {
+  margin: 4px 0 14px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  max-width: 900px;
+}
