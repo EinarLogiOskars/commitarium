@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/EinarLogiOskars/commitarium/internal/execution"
 	"github.com/EinarLogiOskars/commitarium/internal/feature"
 	"github.com/EinarLogiOskars/commitarium/internal/featureartifact"
 	"github.com/EinarLogiOskars/commitarium/internal/workflow"
@@ -244,5 +245,32 @@ func TestFeatureArtifactErrors(t *testing.T) {
 				t.Fatalf("expected code %q, got %q", test.code, response.Error.Code)
 			}
 		})
+	}
+}
+
+func TestPlanStepKeysBelongToTheCurrentRun(t *testing.T) {
+	service := &artifactWorkflowService{
+		recordingWorkflowService: &recordingWorkflowService{},
+		artifact: workflow.FeatureArtifact{
+			FeatureID: "fea_test", Kind: featureartifact.KindImplementationPlan, Revision: 1,
+			Document: `{}`, Actor: workflow.Actor{Kind: workflow.ActorKindAgent, ID: "implementation-lead"},
+			UpdatedAt: time.Now().UTC(),
+		},
+	}
+	features := &recordingFeatureService{getResult: feature.Feature{ID: "fea_test", ProjectID: "prj_test"}}
+	now := time.Now().UTC()
+	executions := &recordingExecutionService{runs: []execution.Run{
+		{ID: "run_abandoned", FeatureID: "fea_test", StartedAt: now.Add(-time.Hour)},
+		{ID: "run_current", FeatureID: "fea_test", StartedAt: now},
+	}}
+	request := httptest.NewRequest(http.MethodPost,
+		"/api/v1/projects/prj_test/features/fea_test/implementation-plan/steps/api/transitions",
+		strings.NewReader(`{"plan_version":1,"status":"in_progress"}`))
+	request.Header.Set("Idempotency-Key", "artifact-start-api")
+	recorder := httptest.NewRecorder()
+	New(nil, features, service, executions, nil, nil).ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK || service.artifactKey != "artifact-start-api:run_current" {
+		t.Fatalf("status %d key %q: a restarted work order's step key can collide with its abandoned run",
+			recorder.Code, service.artifactKey)
 	}
 }

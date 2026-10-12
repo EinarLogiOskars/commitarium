@@ -56,9 +56,8 @@ func (router *AgentRoutedWorker) PutAttempt(
 	if role == workerhttp.RoleReviewer {
 		model = run.AgentModels.Reviewer
 	}
-	if model != "" && request.Assignment.Model != "" && request.Assignment.Model != model {
-		return workerhttp.Attempt{}, false, errors.New("assignment model does not match run snapshot")
-	}
+	// The run's current model wins: the user may have switched it since the
+	// request was built, and every new turn runs on the latest choice.
 	if model != "" {
 		request.Assignment.Model = model
 	}

@@ -1630,9 +1630,20 @@ A successful response is `202 Accepted` and points to the run resource:
 The run settings shown above are copied from the feature's immutable effective
 settings, not re-read from the project. They therefore remain the values chosen
 when the work order was created even if project defaults change before the run
-is admitted. Every real-provider start and resume carries the exact role model
-from this run snapshot. Workers never select a fallback; Claude also rejects an
+is admitted. Every real-provider start and resume carries the run's current
+role model. Workers never select a fallback; Claude also rejects an
 initialization event that reports a different model.
+
+`POST /api/v1/runs/{runID}/models` with
+`{"lead_model": "...", "reviewer_model": "...", "when": "now"|"next_turn"}`
+switches a working run's models (ADR-021). Name one or both roles; each keeps
+its agent, and the models must be in that agent's catalog. `next_turn` lets a
+turn in progress finish and applies the new model from the role's next turn.
+`now` also stops an agent working on a changed role: a work order resumes the
+same conversation on the new model, told it was interrupted, and a session
+hands the turn back to the user. The change is noted in the role's transcript,
+and feature usage reports each role's tokens per model under `models`. It
+answers the run; `409 run_not_changeable` once the run has ended.
 
 `GET /api/v1/runs/{runID}` returns the current run status and every session
 created so far. Each session ID links to its detail, history, stream, and

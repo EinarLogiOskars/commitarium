@@ -17,7 +17,7 @@ import { ImplementationView } from "./ImplementationView";
 import { ReviewView } from "./ReviewView";
 import { MergeView } from "./MergeView";
 import { EnvironmentApproval } from "./EnvironmentApproval";
-import { AcceptanceTestsPanel } from "./AcceptanceTests";
+import { OrderSidebar } from "./OrderSidebar";
 import { PhaseStepper, currentPhaseIndex } from "./PhaseStepper";
 import { phaseIntervals, type Interval } from "./phaseWindows";
 import { WORK } from "../vocab";
@@ -60,6 +60,8 @@ export function FeatureView({
 }) {
   const [feature, setFeature] = useState<Feature | null>(null);
   const [run, setRun] = useState<Run | null>(null);
+  // The header's Details button opens the side card on the description.
+  const [detailsRequest, setDetailsRequest] = useState(0);
   const [events, setEvents] = useState<WorkflowEvent[]>([]);
   const [usage, setUsage] = useState<FeatureUsage | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -215,14 +217,20 @@ export function FeatureView({
       )}
 
       <section className="panel order-head">
-        <div className="panel__head">
-          <div>
-            <h2>{feature.title}</h2>
-            {feature.description && <OrderDescription text={feature.description} />}
-            {usage && usage.roles.length > 0 && <UsageLine usage={usage} />}
-            <AgentsAtWork run={run} />
-          </div>
-          <div className="row">
+        <div className="order-head__top">
+          <h2>{feature.title}</h2>
+          <PhaseStepper
+            feature={feature}
+            viewedIndex={viewed}
+            onSelect={select}
+            paused={run?.paused}
+          />
+          <div className="row order-head__actions">
+            {feature.description && (
+              <button className="ghost" onClick={() => setDetailsRequest((n) => n + 1)}>
+                Details
+              </button>
+            )}
             {restartable && !confirmDelete && !confirmReady && (
               <button
                 className="ghost"
@@ -282,16 +290,15 @@ export function FeatureView({
           </div>
         )}
 
-        <PhaseStepper
-          feature={feature}
-          viewedIndex={viewed}
-          onSelect={select}
-          paused={run?.paused}
-        />
-
         {/* The top orients: what phase, and why the run is waiting. Actions —
             the message composer and pause/continue — live below the transcript. */}
-        {run && !terminal && current > 0 && waitBanner(run, feature.state)}
+        {/* A recovery blocker is explained by the recovery bar above the
+            composer, so the header doesn't repeat it. */}
+        {run &&
+          !terminal &&
+          current > 0 &&
+          run.wait_kind !== "blocker" &&
+          waitBanner(run, feature.state)}
         {pinnedIndex !== null && pinnedIndex !== current && (
           <button className="linkish" onClick={() => setPinnedIndex(null)}>
             Viewing an earlier phase — jump to the current phase →
@@ -331,8 +338,23 @@ export function FeatureView({
             review → evidence at merge). Hidden in Clarify/Plan — no baseline
             yet. Still self-gates on the artifact, so absent unless independent
             tests are enabled. */}
-        <AcceptanceTestsPanel projectId={projectId} featureId={feature.id} enabled={viewed >= 2} />
+        <OrderSidebar
+          projectId={projectId}
+          featureId={feature.id}
+          phase={viewed}
+          description={feature.description}
+          detailsRequest={detailsRequest}
+        />
       </div>
+
+      {/* Who works on which model, and what it has cost, out of the way of the
+          work itself. */}
+      {(run || (usage && usage.roles.length > 0)) && (
+        <footer className="order-meta">
+          <AgentsAtWork run={run} onChanged={() => void load()} />
+          {usage && usage.roles.length > 0 && <UsageLine usage={usage} />}
+        </footer>
+      )}
     </div>
   );
 }
@@ -580,31 +602,4 @@ function body(
 function describe(e: unknown): string {
   if (e instanceof ApiError) return `${e.message} (${e.code})`;
   return String(e);
-}
-
-// A work order's description, kept to a few lines in the header unless the
-// user expands it.
-function OrderDescription({ text }: { text: string }) {
-  const ref = useRef<HTMLParagraphElement | null>(null);
-  const [expanded, setExpanded] = useState(false);
-  const [long, setLong] = useState(false);
-  useEffect(() => {
-    const el = ref.current;
-    if (el && !expanded) setLong(el.scrollHeight > el.clientHeight + 1);
-  }, [text, expanded]);
-  return (
-    <>
-      <p
-        ref={ref}
-        className={`muted order-head__desc ${expanded ? "" : "order-head__desc--clamped"}`}
-      >
-        {text}
-      </p>
-      {(long || expanded) && (
-        <button className="linkish order-head__more" onClick={() => setExpanded((v) => !v)}>
-          {expanded ? "Show less" : "Show more"}
-        </button>
-      )}
-    </>
-  );
 }

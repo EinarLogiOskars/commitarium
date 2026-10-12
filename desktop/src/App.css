@@ -1625,7 +1625,7 @@ button.danger:not(.ghost) {
 /* Work-order head: title/description, then the phase timeline. Kept compact so
    the transcript gets the vertical space. */
 .order-head {
-  padding: 14px 18px;
+  padding: 10px 16px;
 }
 .order-head .panel__head {
   align-items: flex-start;
@@ -1639,12 +1639,108 @@ button.danger:not(.ghost) {
   font-size: 12px;
   white-space: pre-line;
 }
-.order-head__desc--clamped {
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 3;
-  line-clamp: 3;
+/* One row: title, the phases, then the actions. */
+.order-head__top {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+}
+.order-head__top h2 {
+  margin: 0;
+  flex: 0 1 auto;
+  min-width: 0;
+  white-space: nowrap;
   overflow: hidden;
+  text-overflow: ellipsis;
+}
+.order-head__actions {
+  flex: none;
+  margin-left: auto;
+}
+/* One flat row of steps and dashes, the same gap between every item. Each
+   dash and its step were wrapped in a cell, and WebKit sized those cells a
+   little too narrow, pushing the label into the dash. */
+.order-head__top .stepper {
+  flex: 1 1 auto;
+  justify-content: center;
+  align-items: center;
+  gap: 10px;
+  margin: 0;
+  min-width: 0;
+}
+.order-head__top .stepper__cell {
+  display: contents;
+}
+/* Beside the labels, not above them: no upward offset, and never over a
+   label. */
+.order-head__top .stepper__line {
+  flex: 0 0 14px;
+  margin: 0;
+  align-self: center;
+}
+/* The step keeps its full measured width, and the label a little air, so a
+   label's last letter never meets the next line. */
+.order-head__top .stepper__step {
+  flex: none;
+  min-width: max-content;
+}
+/* WebKit sizes a button laid out as a flex row a little narrower than its
+   text, by a different amount per label. Laid out inline instead, the marker
+   and label measure exactly, so the spacing between phases stays even. */
+.order-head__top .stepper__step {
+  display: inline-block;
+  white-space: nowrap;
+  padding: 2px 4px;
+}
+.order-head__top .stepper__marker {
+  display: inline-grid;
+  vertical-align: middle;
+  margin-right: 6px;
+}
+.order-head__top .stepper__label {
+  vertical-align: middle;
+}
+.order-head__top .stepper__marker {
+  width: 18px;
+  height: 18px;
+  font-size: 10px;
+}
+.order-head__top .stepper__label {
+  font-size: 12px;
+}
+.ghost--on {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
+/* A work order's description, in a sidebar the user closes. */
+.order__split > .order-details {
+  flex: none;
+  width: 340px;
+  align-self: flex-start;
+  max-height: 100%;
+  overflow-y: auto;
+  margin: 0;
+}
+.order-details__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.order-details__head h3 {
+  margin: 0;
+  font-size: 14px;
+}
+.order-details__close {
+  padding: 2px 8px;
+}
+.order-details__text {
+  white-space: pre-line;
+  font-size: 13px;
+  margin: 10px 0 0;
+}
+.order-head__details {
+  margin-top: 6px;
 }
 .order-head__more {
   font-size: 12px;
@@ -1860,15 +1956,13 @@ button.danger:not(.ghost) {
 
 /* Intervention dock: the pinned footer of a phase card — advance CTA + run
    state + agent composer. Styled as a footer (top divider), not a nested card. */
+/* The composer dock stays whole and in view: the conversation above is the
+   only thing that scrolls. */
 .intervene {
   flex: none;
-  margin-top: 12px;
-  padding-top: 12px;
+  margin-top: 10px;
+  padding-top: 10px;
   border-top: 1px solid var(--border);
-  /* Banners and recovery controls can outgrow the phase panel; the dock
-     then scrolls inside it rather than spilling past its edge. */
-  max-height: 60%;
-  overflow-y: auto;
 }
 .intervene__row {
   display: flex;
@@ -2383,15 +2477,6 @@ button.danger:not(.ghost) {
   min-width: 0;
   display: flex;
   flex-direction: column;
-}
-.impl__side {
-  width: 320px;
-  flex: none;
-  overflow-y: auto;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 14px;
 }
 
 .plan h3 {
@@ -3240,4 +3325,281 @@ button.danger:not(.ghost) {
   border-radius: 50%;
   background: var(--warn);
   animation: dot-pulse 1.6s ease-in-out infinite;
+}
+.agents-at-work__change,
+.session__change-model {
+  margin-left: 10px;
+  padding: 0;
+  font-size: 12px;
+}
+.agents-at-work--idle {
+  border-color: var(--border);
+  background: none;
+}
+
+/* Switching a working run's model. */
+.change-model {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 10px;
+  margin: 8px 0 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+.change-model__role {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+}
+.change-model .banner {
+  flex-basis: 100%;
+}
+
+/* A work order's models and token use: one thin line of small text tucked
+   under the work, so it takes as little height as possible. */
+.order > .order-meta {
+  margin-top: -10px;
+}
+.order-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 16px;
+  padding: 0 4px;
+  font-size: 11px;
+  line-height: 1.4;
+}
+.order-meta .change-model {
+  flex-basis: 100%;
+}
+
+/* In the bottom line the models read as plain text, not a pill. */
+.order-meta > *,
+.order-meta .agents-at-work,
+.order-meta .order-head__usage,
+.order-meta .usage-toggle {
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: none;
+  font-size: 11px;
+  line-height: 1.4;
+}
+.order-meta .agents-at-work__change {
+  margin: 0 0 0 8px;
+  padding: 0;
+  font-size: 11px;
+  line-height: 1.4;
+}
+.order-meta .order-head__usage .usage-table {
+  margin-top: 4px;
+}
+
+/* With a project open, the rail carries the app: the project switcher on top
+   and the app's own controls at the bottom, so the work gets full height. */
+.rail__switch {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  padding: 6px 10px 10px;
+  margin-bottom: 6px;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
+  background: none;
+  text-align: left;
+  color: inherit;
+  cursor: pointer;
+}
+.rail__brand {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.rail__project {
+  font-size: 15px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.rail__switch:hover .rail__project {
+  color: var(--accent);
+}
+.rail__system {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+.rail__system .system-nav__item {
+  justify-content: flex-start;
+  text-align: left;
+  width: 100%;
+  font-size: 13px;
+  padding: 5px 10px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.rail__system .pill {
+  align-self: flex-start;
+  margin: 6px 10px 0;
+}
+
+/* Recovery, compact: the reason and the actions on one row. */
+.recover {
+  margin-top: 0;
+  margin-bottom: 8px;
+  padding: 8px 12px;
+}
+.recover__row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+}
+.recover__row .recover__reason {
+  flex: 1 1 260px;
+  min-width: 0;
+  margin: 0;
+  font-size: 13px;
+}
+.recover__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+.recover__facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  margin-top: 6px;
+  font-size: 12px;
+}
+.recover__guidance {
+  width: 100%;
+  margin-top: 8px;
+}
+
+/* A work order or session uses the window's height: less padding around it. */
+.main:has(.main__inner--fill) {
+  padding: 12px 16px;
+}
+
+/* The work order's side card: the checklist, the tests, or the details,
+   beside the conversation, folding into a slim strip. */
+.order__split > .order-side {
+  flex: none;
+  width: 340px;
+  align-self: stretch;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  margin: 0;
+  padding: 10px 14px 14px;
+}
+.order-side__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+.order-side__tabs {
+  display: flex;
+  gap: 4px;
+  flex: 1;
+}
+.order-side__tab {
+  background: none;
+  border: none;
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+  cursor: pointer;
+}
+.order-side__tab--on {
+  color: var(--text);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+.order-side__chevron {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  background: none;
+  color: var(--muted);
+}
+.order-side__body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding-top: 10px;
+}
+.order-side__details {
+  white-space: pre-line;
+  font-size: 13px;
+  margin: 0;
+}
+.order__split > .order-side__strip {
+  flex: none;
+  width: 44px;
+  align-self: flex-start;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 0;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  cursor: pointer;
+  color: inherit;
+}
+.order-side__dots {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+}
+@media (max-width: 1100px) {
+  .order__split > .order-side {
+    width: auto;
+    align-self: stretch;
+    order: -1;
+    max-height: 40vh;
+  }
+}
+
+/* Add guidance sits on the same line as the recovery buttons. */
+.recover__actions .linkish {
+  margin: 0;
+  line-height: inherit;
+  padding: 7px 0;
+  border: 1px solid transparent;
+}
+
+/* A long reason takes the whole row; the actions wrap below it. */
+.recover__row .recover__reason--long {
+  flex-basis: 100%;
 }

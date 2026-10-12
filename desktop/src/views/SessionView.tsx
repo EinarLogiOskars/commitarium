@@ -9,6 +9,7 @@ import { PREVIEW_STATE, primaryUrl, usePreview, type PreviewHandle } from "./use
 import { openExternal } from "../ipc";
 import { markSessionSeen } from "./sessionSeen";
 import { useModelName } from "./useModelName";
+import { ChangeModel } from "./ChangeModel";
 import type { Feature, Run } from "../api/types";
 
 const GREETING = "Hey, what can I help you with?";
@@ -43,6 +44,7 @@ export function SessionView({
   const [error, setError] = useState<string | null>(null);
   const [renaming, setRenaming] = useState<string | null>(null);
   const [confirmDiscard, setConfirmDiscard] = useState(false);
+  const [changingModel, setChangingModel] = useState(false);
   const [forceDiscard, setForceDiscard] = useState(false);
   const chatRef = useRef<HTMLDivElement | null>(null);
   const pinnedToBottom = useRef(true);
@@ -301,7 +303,27 @@ export function SessionView({
         )}
         {!done && (
           <div className="composer">
-            {status && <p className="muted status-line">{status}</p>}
+            {status && (
+              <p className="muted status-line">
+                {status}
+                {run && !done && run.agent_models?.lead && (
+                  <button
+                    className="linkish session__change-model"
+                    onClick={() => setChangingModel((v) => !v)}
+                  >
+                    Change model
+                  </button>
+                )}
+              </p>
+            )}
+            {changingModel && run && (
+              <ChangeModel
+                run={run}
+                roles={["lead"]}
+                onChanged={onChanged}
+                onClose={() => setChangingModel(false)}
+              />
+            )}
             <div className="reply">
               <textarea
                 placeholder={model ? `Message ${model}…` : "Message the agent…"}

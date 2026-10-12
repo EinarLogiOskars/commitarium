@@ -93,6 +93,12 @@ type RecoveryDirective struct {
 	Message string
 }
 
+// answersBlocker reports whether the user chose to move the work on, which
+// also answers an agent that stopped to ask for help.
+func (directive RecoveryDirective) answersBlocker() bool {
+	return directive.Action == RecoveryActionContinue || directive.Action == RecoveryActionReplace
+}
+
 // RemoteLeadExecution is the durable coordinator state used by the first real
 // lead turn. It deliberately contains no workflow transition: goal
 // clarification leaves the feature in draft.
@@ -717,7 +723,7 @@ func (starter *RemoteLeadStarter) recoverWithDirective(
 				starter.release(run.ID)
 				return checkpointErr
 			}
-			request := remoteLeadRequest{runID: run.ID, allowRecoveryContinuation: recoveryPolicy == project.RecoveryPolicyAutomatic, forceFreshRecovery: directive.Action == RecoveryActionReplace, recoveryMessage: directive.Message, identity: workerhttp.MutationIdentity{AttemptReference: workerhttp.AttemptReference{SessionID: active.ID, AttemptID: checkpoint.AttemptID}}}
+			request := remoteLeadRequest{runID: run.ID, allowRecoveryContinuation: recoveryPolicy == project.RecoveryPolicyAutomatic, forceFreshRecovery: directive.Action == RecoveryActionReplace, recoveryMessage: directive.Message, answerBlocker: directive.answersBlocker(), identity: workerhttp.MutationIdentity{AttemptReference: workerhttp.AttemptReference{SessionID: active.ID, AttemptID: checkpoint.AttemptID}}}
 			switch {
 			case active.Role == worker.RoleLead:
 				version, _, ok := workflowAttemptVersionAndTurn(active.ID, "implementation", checkpoint.AttemptID)
@@ -755,7 +761,7 @@ func (starter *RemoteLeadStarter) recoverWithDirective(
 			return starter.recoverIdleReadyToMergeRun(ctx, run)
 		}
 		if storedFeature.State == feature.StateImplementing {
-			return starter.recoverIdleImplementationRun(ctx, run)
+			return starter.recoverIdleImplementationRun(ctx, run, directive)
 		}
 		if storedFeature.State == feature.StateReviewing {
 			return starter.recoverIdleReviewingRun(ctx, run)
@@ -832,6 +838,7 @@ func (starter *RemoteLeadStarter) recoverWithDirective(
 		allowRecoveryContinuation: recoveryPolicy == project.RecoveryPolicyAutomatic,
 		forceFreshRecovery:        directive.Action == RecoveryActionReplace,
 		recoveryMessage:           directive.Message,
+		answerBlocker:             directive.answersBlocker(),
 		agentName:                 "lead agent",
 		waitingReason:             waitingReasonForAttempt(session, checkpoint.AttemptID),
 		waitKind:                  waitKindForAttempt(session, checkpoint.AttemptID),
@@ -1729,7 +1736,8 @@ func (starter *RemoteLeadStarter) advanceWaitingRun(ctx context.Context, runID s
 		_, err = starter.recoverIdlePlanningRun(ctx, run, storedFeature)
 		return err
 	case feature.StateImplementing:
-		return starter.recoverIdleImplementationRun(ctx, run)
+		// Advancing on its own never answers an agent's question.
+		return starter.recoverIdleImplementationRun(ctx, run, RecoveryDirective{})
 	case feature.StateReviewing:
 		return starter.recoverIdleReviewingRun(ctx, run)
 	case feature.StateReadyToMerge:
@@ -1771,6 +1779,7 @@ func (starter *RemoteLeadStarter) recordMergeBlocked(ctx context.Context, runID 
 func (starter *RemoteLeadStarter) recoverIdleImplementationRun(
 	ctx context.Context,
 	run execution.Run,
+	directive RecoveryDirective,
 ) error {
 	lead, err := starter.executions.GetSession(ctx, remoteLeadSessionID(run.ID))
 	if err != nil {
@@ -1811,7 +1820,35 @@ func (starter *RemoteLeadStarter) recoverIdleImplementationRun(
 		return errors.New("completed implementation attempt has no result")
 	}
 	if attempt.Result.Disposition == workerhttp.DispositionInputRequired {
-		return starter.handleInputRequired(ctx, remoteLeadRequest{runID: run.ID, identity: workerhttp.MutationIdentity{AttemptReference: attempt.AttemptReference}}, *attempt.Result)
+		if !directive.answersBlocker() {
+			return starter.handleInputRequired(ctx, remoteLeadRequest{runID: run.ID, identity: workerhttp.MutationIdentity{AttemptReference: attempt.AttemptReference}}, *attempt.Result)
+		}
+		// The user's Continue answers the lead that asked for help: its next
+		// turn runs in the same conversation.
+		if !starter.claim(run.ID) {
+			return fmt.Errorf("%w: %q", ErrRunAlreadyActive, run.ID)
+		}
+		answer := remoteLeadRequest{
+			runID: run.ID, agentName: "lead agent", allowRecoveryContinuation: true,
+			answerBlocker: true, forceFreshRecovery: directive.Action == RecoveryActionReplace,
+			recoveryMessage: directive.Message,
+			identity: workerhttp.MutationIdentity{AttemptReference: workerhttp.AttemptReference{
+				SessionID: lead.ID, AttemptID: checkpoint.AttemptID,
+			}},
+			request: workerhttp.PutAttemptRequest{OutputContract: workerhttp.OutputContractImplementationLead},
+		}
+		go func() {
+			defer starter.release(run.ID)
+			ctx := starter.lifetime
+			continued, err := starter.continueFailedAttempt(ctx, answer, attempt)
+			if err == nil && !continued {
+				err = errors.New("the lead that asked for help could not be continued")
+			}
+			if err != nil {
+				starter.requireReview(ctx, answer, err)
+			}
+		}()
+		return nil
 	}
 	request := remoteLeadRequest{
 		runID: run.ID,
@@ -2182,6 +2219,12 @@ type remoteLeadRequest struct {
 	allowRecoveryContinuation bool
 	forceFreshRecovery        bool
 	recoveryMessage           string
+	// modelSwitch resumes a turn the user stopped to switch models.
+	modelSwitch bool
+	// answerBlocker lets the user's Continue start the next turn of an agent
+	// that stopped to ask for help, in the same conversation. Automatic
+	// recovery never does this: only the user can answer a blocker.
+	answerBlocker bool
 }
 
 func interventionAttemptID(sessionID, interventionID string) string {
@@ -3912,8 +3955,21 @@ func (starter *RemoteLeadStarter) continueFailedAttempt(
 ) (bool, error) {
 	// Any failed turn can be retried (ADR-017); an incomplete structured result
 	// is one kind of failure.
+	// The user's Continue also answers an agent that stopped to ask for help.
+	answered := request.answerBlocker && attempt.State == workerhttp.AttemptStateTerminal &&
+		attempt.Result != nil && attempt.Result.Outcome == workerhttp.OutcomeCompleted &&
+		attempt.Result.Disposition == workerhttp.DispositionInputRequired
+	if answered {
+		guidance := "The user reviewed the blocker you reported and asked you to continue. Check whether " +
+			"it still holds, then carry on with the same work."
+		if strings.TrimSpace(request.recoveryMessage) != "" {
+			guidance += " The user added: " + strings.TrimSpace(request.recoveryMessage)
+		}
+		request.recoveryMessage = guidance
+	}
 	failed := attempt.State == workerhttp.AttemptStateTerminal && attempt.Result != nil &&
-		attempt.Result.Outcome == workerhttp.OutcomeFailed
+		(attempt.Result.Outcome == workerhttp.OutcomeFailed ||
+			request.modelSwitch && attempt.Result.Outcome == workerhttp.OutcomeStopped) || answered
 	if !failed && attempt.State != workerhttp.AttemptStateIndeterminate {
 		return false, nil
 	}
@@ -3976,7 +4032,14 @@ func (starter *RemoteLeadStarter) continueFailedAttempt(
 	if err != nil {
 		return false, err
 	}
-	admitted, err := starter.executions.BeginChainedTurnInState(
+	admit := starter.executions.BeginChainedTurnInState
+	// During implementation the reviewer authors private acceptance tests in
+	// parallel, so the successor is admitted alongside it.
+	if parallel, ok := starter.executions.(remoteLeadParallelChains); ok &&
+		run.IndependentAcceptanceTests && storedFeature.State == feature.StateImplementing {
+		admit = parallel.BeginChainedTurnAlongside
+	}
+	admitted, err := admit(
 		ctx, session.ID, checkpoint, nextAttemptID, storedFeature.State,
 		"The "+request.agentName+" is completing the missing result from a fenced attempt.",
 	)
@@ -4302,13 +4365,14 @@ func (starter *RemoteLeadStarter) observe(
 func (starter *RemoteLeadStarter) recordUsage(
 	ctx context.Context,
 	reference workerhttp.AttemptReference,
+	model string,
 	usage *workerhttp.TokenUsage,
 ) {
 	if starter.usage == nil || usage == nil {
 		return
 	}
 	err := starter.usage.RecordAttemptUsage(ctx, execution.AttemptUsage{
-		SessionID: reference.SessionID, AttemptID: reference.AttemptID,
+		SessionID: reference.SessionID, AttemptID: reference.AttemptID, Model: model,
 		Usage:      execution.TokenUsage(*usage),
 		RecordedAt: time.Now().UTC(),
 	})
@@ -4350,7 +4414,7 @@ func (starter *RemoteLeadStarter) finish(
 		starter.requireReview(ctx, request, errors.New("terminal worker attempt has no result"))
 		return
 	}
-	starter.recordUsage(ctx, request.identity.AttemptReference, attempt.Result.Usage)
+	starter.recordUsage(ctx, request.identity.AttemptReference, attempt.Assignment.Model, attempt.Result.Usage)
 	if err := starter.captureProviderSession(ctx, request.identity.SessionID, attempt); err != nil {
 		starter.requireReview(ctx, request, err)
 		return
@@ -4596,7 +4660,15 @@ func (starter *RemoteLeadStarter) finish(
 		}
 		err = starter.waitRun(ctx, request.runID, request.waitingReason, request.waitKind)
 	case workerhttp.OutcomeStopped:
-		err = starter.failSession(ctx, session, execution.SessionStatusStopped, attempt, "The "+request.agentName+" was stopped.")
+		switched, switchErr := starter.hasModelSwitch(ctx, request.runID, attempt.AttemptID)
+		switch {
+		case switchErr != nil:
+			err = switchErr
+		case switched:
+			err = starter.resumeAfterModelSwitch(ctx, request, session, attempt)
+		default:
+			err = starter.failSession(ctx, session, execution.SessionStatusStopped, attempt, "The "+request.agentName+" was stopped.")
+		}
 	case workerhttp.OutcomeFailed:
 		if attempt.Result.Error != nil && attempt.Result.Error.Code == workerhttp.ErrorIncompleteResult {
 			err = fmt.Errorf("%s ended before returning its required structured result: %s", request.agentName, attempt.Result.Error.Message)

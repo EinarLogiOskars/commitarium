@@ -2,20 +2,24 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Transcript } from "./Transcript";
 import { InterveneBar } from "./InterveneBar";
 import { Markdown } from "./Markdown";
-import { useFeatureArtifact } from "./useFeatureArtifact";
 import { useSessionEvents, type SessionRef } from "./useSessionEvents";
 import { scopeToPhase, type Interval } from "./phaseWindows";
 import type { ImplementationPlanDocument, PlanStep, Run } from "../api/types";
 
 const SHOWN = new Set(["message", "activity"]);
 
+// A plan step's dot in the folded checklist.
+export const STEP_DOT: Record<string, string> = {
+  completed: "ok",
+  in_progress: "warn",
+  pending: "muted",
+};
+
 // Implementation phase: the lead writes the code per the agreed plan. The
 // checklist sidebar tracks the durable implementation_plan artifact — each
 // commit-sized step advances pending → in_progress → completed live (no user
 // gate between commits). The transcript shows the lead's activity.
 export function ImplementationView({
-  projectId,
-  featureId,
   run,
   live = true,
   intervals = [],
@@ -35,12 +39,6 @@ export function ImplementationView({
 }) {
   const feedRef = useRef<HTMLDivElement | null>(null);
   const pinned = useRef(true);
-
-  const { artifact: plan } = useFeatureArtifact<ImplementationPlanDocument>(
-    projectId,
-    featureId,
-    "implementation_plan",
-  );
 
   // Only the lead acts during implementation; stream its transcript live.
   const sessions = useMemo<SessionRef[]>(() => {
@@ -65,13 +63,9 @@ export function ImplementationView({
 
   return (
     <section className="panel panel--phase">
-      <h2>Implementation</h2>
       {error && <div className="banner banner--error">{error}</div>}
 
       <div className="impl">
-        <aside className="impl__side">
-          <PlanChecklist plan={plan?.document ?? null} />
-        </aside>
         <div className="impl__main">
           <div
             className="chat"
@@ -93,7 +87,7 @@ export function ImplementationView({
   );
 }
 
-function PlanChecklist({ plan }: { plan: ImplementationPlanDocument | null }) {
+export function PlanChecklist({ plan }: { plan: ImplementationPlanDocument | null }) {
   // One step open at a time (accordion). Auto-follows the active step until the
   // user picks a step themselves, after which their choice is respected.
   const [openId, setOpenId] = useState<string | null>(null);

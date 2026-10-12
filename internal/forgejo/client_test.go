@@ -1954,3 +1954,31 @@ func TestClientApprovesOnceBeforeMergingAWorkOrderWithoutAReviewer(t *testing.T)
 		t.Fatalf("repeated approval: approvals=%d err=%v", approvals, err)
 	}
 }
+
+func TestClientCreatesDraftPullRequestBesideAnAbandonedOne(t *testing.T) {
+	spec := testPullRequestSpec()
+	abandoned := managedPullRequest(spec)
+	abandoned.Number = 5
+	abandoned.State = "closed"
+	calls := 0
+	client := newBranchTestClient(t, func(request *http.Request) (*http.Response, error) {
+		calls++
+		switch calls {
+		case 1:
+			return jsonResponse(http.StatusOK, "["+pullRequestJSON(t, abandoned)+"]"), nil
+		case 2:
+			if request.Method != http.MethodPost {
+				t.Fatalf("expected creation request, got %s", request.Method)
+			}
+			return pullRequestJSONResponse(t, http.StatusCreated, managedPullRequest(spec)), nil
+		default:
+			t.Fatalf("unexpected request %d", calls)
+			return nil, nil
+		}
+	})
+
+	created, err := client.EnsureDraftPullRequest(t.Context(), "owner", "repository", spec)
+	if err != nil || created.Number != 7 || calls != 2 {
+		t.Fatalf("a closed pull request of an abandoned run blocked a new one: %+v calls=%d err=%v", created, calls, err)
+	}
+}

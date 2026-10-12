@@ -98,3 +98,15 @@ func TestBriefBecomesThePlanningGoalWithAFreshnessCheck(t *testing.T) {
 		t.Fatalf("unmoved-base freshness asks for history:\n%s", current)
 	}
 }
+
+func TestPlanningPromptsSayTheCounterpartIsReachedBetweenTurns(t *testing.T) {
+	for _, prompt := range []string{
+		leadPlanningResponseInstructions("R1 resolved.", "Claude"),
+		reviewerResponseInstructions("Changed step 2.", "Codex"),
+	} {
+		if !strings.Contains(prompt, "separate agent that Commitarium runs") ||
+			!strings.Contains(prompt, "never present their views as") {
+			t.Fatalf("a planning prompt lets the agent stand in for its counterpart: %s", prompt)
+		}
+	}
+}

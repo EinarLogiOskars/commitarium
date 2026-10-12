@@ -196,6 +196,10 @@ type AutonomousTurnAdmission struct {
 	RunReason                 string
 	OccurredAt                time.Time
 	RunAlreadyActive          bool
+	// AlongsideParallelWork admits the turn while the run's other agent works
+	// in parallel: the lead implementing while the reviewer authors private
+	// acceptance tests.
+	AlongsideParallelWork bool
 }
 
 // ParallelImplementationAdmission is the one intentional concurrent boundary

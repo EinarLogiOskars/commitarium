@@ -31,6 +31,8 @@ export function ProjectWorkspace({
   attention,
   openOrder: openOrderTarget,
   onForeground,
+  railHeader,
+  systemNav,
 }: {
   id: string;
   onLoaded?: (name: string) => void;
@@ -40,6 +42,10 @@ export function ProjectWorkspace({
   openOrder: { featureId: string; nonce: number } | null;
   /** Reports the work order on screen, so its own news isn't also notified. */
   onForeground?: (featureId: string | null) => void;
+  /** The project switcher, at the top of the rail. */
+  railHeader?: React.ReactNode;
+  /** The app's own controls, at the bottom of the rail. */
+  systemNav?: React.ReactNode;
 }) {
   const [project, setProject] = useState<Project | null>(null);
   const [toolchain, setToolchain] = useState<ProjectToolchain | null>(null);
@@ -164,6 +170,7 @@ export function ProjectWorkspace({
   return (
     <>
       <nav className="rail">
+        {railHeader}
         <button
           className={`rail__item ${mode === "overview" ? "rail__item--active" : ""}`}
           onClick={() => {
@@ -275,8 +282,9 @@ export function ProjectWorkspace({
             setOrderId(null);
           }}
         >
-          Settings
+          Project settings
         </button>
+        {systemNav && <div className="rail__system">{systemNav}</div>}
       </nav>
 
       <main className="main">

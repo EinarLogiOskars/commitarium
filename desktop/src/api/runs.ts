@@ -106,3 +106,11 @@ export const ensureValidationJob = (runId: string): Promise<ValidationJob> =>
 // Create a new pending job from a terminal one; returns the new job to run.
 export const retryValidationJob = (jobId: string): Promise<ValidationJob> =>
   request(`/api/v1/validation-jobs/${encodeURIComponent(jobId)}/retry`, { method: "POST" });
+
+/** Switch a working run's models without resetting it. "now" stops the agent
+ * and resumes it on the new model; "next_turn" lets the current turn finish.
+ * Each role keeps its agent; only the model changes. */
+export const changeRunModels = (
+  runId: string,
+  change: { lead_model?: string; reviewer_model?: string; when: "now" | "next_turn" },
+): Promise<Run> => request(`${runPath(runId)}/models`, { method: "POST", body: change });
