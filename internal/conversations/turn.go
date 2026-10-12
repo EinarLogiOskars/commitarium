@@ -187,10 +187,13 @@ func (service *Service) refresh(ctx context.Context, stored record) (record, err
 					ID: fmt.Sprintf("act_%s_%d_%d", stored.Scope, stored.Turn, index+1), MessageID: reply.ID,
 					AssistantAction: proposed, Status: ActionProposed, UpdatedAt: now,
 				}
-				if proposed.Type == featureartifact.AssistantCreateWorkOrder {
+				switch proposed.Type {
+				case featureartifact.AssistantCreateWorkOrder:
 					proposed = service.withProjectDefaults(ctx, stored.Scope, proposed)
-					action.AssistantAction = proposed
+				case featureartifact.AssistantStartWorkOrder:
+					proposed = service.withWorkOrderModels(ctx, stored.Scope, proposed)
 				}
+				action.AssistantAction = proposed
 				for _, model := range []string{proposed.LeadModel, proposed.ReviewerModel} {
 					if settings.RequiresApproval(model) {
 						action.Premium = append(action.Premium, model)
@@ -403,4 +406,44 @@ func recentActions(actions []Action) string {
 		builder.WriteString(line + "\n")
 	}
 	return strings.TrimRight(builder.String(), "\n")
+}
+
+// withWorkOrderModels fills a start's empty agents and models with the work
+// order's own, so its card (and the premium check) show what will run.
+func (service *Service) withWorkOrderModels(
+	ctx context.Context, scope string, action featureartifact.AssistantAction,
+) featureartifact.AssistantAction {
+	if service.config.Features == nil || scope == TopLevel {
+		return action
+	}
+	features, err := service.config.Features.List(ctx, scope)
+	if err != nil {
+		return action
+	}
+	for _, item := range features {
+		if item.ID != action.WorkOrderID {
+			continue
+		}
+		if action.LeadAgent == "" {
+			action.LeadAgent = item.AgentProviders.LeadAgent
+		}
+		if action.LeadModel == "" {
+			action.LeadModel = item.AgentModels.Lead
+		}
+		if action.Steps == "" {
+			action.Steps = stepsName(item.Steps)
+		}
+		if action.Steps == "quick" || action.Steps == "planned" {
+			action.ReviewerAgent, action.ReviewerModel = "", ""
+			return action
+		}
+		if action.ReviewerAgent == "" {
+			action.ReviewerAgent = item.AgentProviders.ReviewerAgent
+		}
+		if action.ReviewerModel == "" {
+			action.ReviewerModel = item.AgentModels.Reviewer
+		}
+		return action
+	}
+	return action
 }

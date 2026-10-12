@@ -24,7 +24,7 @@ type conversationStub struct {
 }
 
 func (stub *conversationStub) Settings(context.Context) (conversations.Settings, error) {
-	return conversations.Settings{}, nil
+	return conversations.Settings{AskBefore: conversations.DefaultAskBefore}, nil
 }
 
 func (stub *conversationStub) SaveSettings(_ context.Context, settings conversations.Settings) (conversations.Settings, error) {
@@ -66,6 +66,7 @@ func TestApprovingAnAssistantActionRunsItAndPremiumNeedsConfirmation(t *testing.
 		ID: "act_1", Status: conversations.ActionProposed, Premium: []string{"claude-fable-5-1"},
 		AssistantAction: featureartifact.AssistantAction{
 			Type: featureartifact.AssistantCreateWorkOrder, Reason: "Tricky", Title: "Sync meals", Steps: "quick",
+			LeadModel: "claude-fable-5-1",
 		},
 	}}
 	features := &recordingFeatureService{createResult: feature.Feature{ID: "fea_sync", ProjectID: "prj_test", Title: "Sync meals", State: feature.StateDraft}}
@@ -100,6 +101,7 @@ func TestAutopilotAppliesActionsThroughTheSameApproval(t *testing.T) {
 		ID: "act_1", Status: conversations.ActionProposed, Premium: []string{"claude-fable-5-1"},
 		AssistantAction: featureartifact.AssistantAction{
 			Type: featureartifact.AssistantCreateWorkOrder, Reason: "Tricky", Title: "Sync meals", Steps: "quick",
+			LeadModel: "claude-fable-5-1",
 		},
 	}}
 	features := &recordingFeatureService{createResult: feature.Feature{ID: "fea_sync", ProjectID: "prj_test", Title: "Sync meals", State: feature.StateDraft}}
@@ -159,5 +161,36 @@ func TestContinuingAWorkOrderRecoversItsNewestRunWithGuidance(t *testing.T) {
 	if err := AssistantActionApplier(handler)(t.Context(), "prj_test", "act_1"); err == nil ||
 		!strings.Contains(err.Error(), "not waiting on a blocker") {
 		t.Fatalf("continuing a run that is not blocked = %v", err)
+	}
+}
+
+func TestStartingAWorkOrderJudgesPremiumOnTheModelsThatWillRun(t *testing.T) {
+	stub := &conversationStub{action: conversations.Action{
+		ID: "act_1", Status: conversations.ActionProposed,
+		AssistantAction: featureartifact.AssistantAction{
+			Type: featureartifact.AssistantStartWorkOrder, Reason: "Next", WorkOrderID: "fea_edit",
+		},
+	}}
+	features := &recordingFeatureService{getResult: feature.Feature{
+		ID: "fea_edit", ProjectID: "prj_test", Title: "Correct entries", State: feature.StateDraft,
+		AgentModels: project.AgentModels{Lead: "gpt-5.6-sol", Reviewer: "claude-fable-5-1"},
+	}}
+	projects := &recordingProjectService{getByIDResult: project.Project{ID: "prj_test"}}
+	handler := NewWithWorkspaceRealWorkflowDeletionAndModels(projects, features, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, stub)
+	approve := func(body string) *httptest.ResponseRecorder {
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost,
+			"/api/v1/assistant/conversations/prj_test/actions/act_1/approve", strings.NewReader(body)))
+		return recorder
+	}
+
+	if recorder := approve(`{"start":true}`); recorder.Code != http.StatusConflict ||
+		!strings.Contains(recorder.Body.String(), "claude-fable-5-1") {
+		t.Fatalf("a start on the work order's premium reviewer was not held: %d %s", recorder.Code, recorder.Body.String())
+	}
+	// Choosing another reviewer needs no premium approval; the start itself
+	// then fails in this stub, past the premium check.
+	if recorder := approve(`{"start":true,"reviewer_model":"claude-opus-5-5"}`); strings.Contains(recorder.Body.String(), "premium_approval_required") {
+		t.Fatalf("the user's non-premium choice was still held: %d %s", recorder.Code, recorder.Body.String())
 	}
 }

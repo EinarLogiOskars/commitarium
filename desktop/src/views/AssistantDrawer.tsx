@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   approveAssistantAction,
   dismissAssistantAction,
+  getAssistantSettings,
   getConversation,
   saveAssistantNotes,
   sendToAssistant,
@@ -13,8 +14,9 @@ import { ApiError } from "../api/client";
 import { getVision } from "../api/vision";
 import type { VisionItem, VisionPriority } from "../api/types";
 import { Markdown } from "./Markdown";
-import { useModelName } from "./useModelName";
+import { useCatalogModels, useModelName } from "./useModelName";
 import { agentName, useAgents } from "./useAgents";
+import type { AgentRole } from "../api/types";
 
 const IDLE_POLL_MS = 20_000;
 const POLL_MS = 2000;
@@ -110,7 +112,7 @@ export function AssistantDrawer({
     setUnseen(false);
     seenReplies.current = null;
     void load();
-  }, [load]);
+  }, [load, setConversation]);
 
   const running = conversation?.status === "running";
   // Quickly while it answers; slowly otherwise, for the turns that project
@@ -309,11 +311,23 @@ function ActionCard({
 }) {
   const modelName = useModelName();
   const agents = useAgents();
+  const modelsFor = useCatalogModels();
+  const askBefore = useAskBefore();
   const [confirmed, setConfirmed] = useState(false);
   const [busy, setBusy] = useState<null | "approve" | "start" | "dismiss">(null);
   const [error, setError] = useState<string | null>(null);
-  const premium = action.premium ?? [];
   const pending = action.status === "proposed";
+  // A new or started work order's models are the user's to change before
+  // approving; premium is judged on what they choose.
+  const choosable =
+    pending && (action.type === "create_work_order" || action.type === "start_work_order");
+  const [chosen, setChosen] = useState<Record<AgentRole, string>>({
+    lead: action.lead_model,
+    reviewer: action.reviewer_model,
+  });
+  const premium = choosable
+    ? [chosen.lead, chosen.reviewer].filter((model) => isPremium(model, askBefore))
+    : (action.premium ?? []);
 
   const run = async (kind: NonNullable<typeof busy>, fn: () => Promise<Conversation>) => {
     setBusy(kind);
@@ -340,7 +354,14 @@ function ActionCard({
   };
   const approve = (start: boolean) =>
     run(start ? "start" : "approve", () =>
-      approveAssistantAction(scope, action.id, { start, confirm_premium: confirmed }),
+      approveAssistantAction(scope, action.id, {
+        start,
+        confirm_premium: confirmed,
+        ...(choosable && chosen.lead !== action.lead_model ? { lead_model: chosen.lead } : {}),
+        ...(choosable && chosen.reviewer !== action.reviewer_model
+          ? { reviewer_model: chosen.reviewer }
+          : {}),
+      }),
     );
 
   const heading =
@@ -377,9 +398,40 @@ function ActionCard({
       )}
       <ul className="assistant-action__facts">
         {action.steps && <li>{STEPS_LABEL[action.steps]}</li>}
-        {models.map((line) => (
-          <li key={line as string}>{line}</li>
-        ))}
+        {choosable
+          ? (["lead", "reviewer"] as const)
+              .filter((role) => action[`${role}_model`])
+              .map((role) => {
+                const agentId = action[`${role}_agent`];
+                const provider = agents.find((agent) => agent.id === agentId)?.provider;
+                const options = provider ? modelsFor(provider, role) : [];
+                return (
+                  <li key={role} className="assistant-action__model">
+                    {role === "lead" ? "Lead" : "Reviewer"}{" "}
+                    {agentId ? agentName(agents, agentId) + " · " : ""}
+                    {options.length > 0 ? (
+                      <select
+                        value={chosen[role]}
+                        onChange={(e) => setChosen((c) => ({ ...c, [role]: e.target.value }))}
+                        disabled={busy !== null}
+                        aria-label={`${role === "lead" ? "Lead" : "Reviewer"} model`}
+                      >
+                        {!options.some((m) => m.id === chosen[role]) && (
+                          <option value={chosen[role]}>{modelName(chosen[role])}</option>
+                        )}
+                        {options.map((m) => (
+                          <option key={m.id} value={m.id}>
+                            {m.display_name}
+                          </option>
+                        ))}
+                      </select>
+                    ) : (
+                      modelName(chosen[role])
+                    )}
+                  </li>
+                );
+              })
+          : models.map((line) => <li key={line as string}>{line}</li>)}
         {action.independent_tests && <li>Independent acceptance tests</li>}
         {action.type === "create_work_order" && (
           <li>
@@ -557,4 +609,30 @@ function visionLabels(priorities: VisionPriority[]): Map<string, string> {
     });
   priorities.forEach((p) => walk(p.items, `P${p.level}`));
   return labels;
+}
+
+// The model families the user asked to approve first, fetched once.
+let askBeforeCache: Promise<string[]> | null = null;
+
+function useAskBefore(): string[] {
+  const [families, setFamilies] = useState<string[]>(["fable", "astra"]);
+  useEffect(() => {
+    let active = true;
+    askBeforeCache ??= getAssistantSettings()
+      .then((settings) => settings.ask_before)
+      .catch(() => {
+        askBeforeCache = null;
+        return ["fable", "astra"];
+      });
+    void askBeforeCache.then((loaded) => active && setFamilies(loaded));
+    return () => {
+      active = false;
+    };
+  }, []);
+  return families;
+}
+
+function isPremium(model: string, families: string[]): boolean {
+  const name = model.toLowerCase();
+  return !!name && families.some((family) => family && name.includes(family.toLowerCase()));
 }

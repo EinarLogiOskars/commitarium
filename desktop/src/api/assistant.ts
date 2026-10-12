@@ -106,7 +106,13 @@ export const saveAssistantNotes = (scope: string, notes: string): Promise<Conver
 export const approveAssistantAction = (
   scope: string,
   actionId: string,
-  options: { start?: boolean; confirm_premium?: boolean },
+  options: {
+    start?: boolean;
+    confirm_premium?: boolean;
+    /** The user's choice over the card's models, for a new or started work order. */
+    lead_model?: string;
+    reviewer_model?: string;
+  },
 ): Promise<Conversation> =>
   request(`${conversationPath(scope)}/actions/${encodeURIComponent(actionId)}/approve`, {
     method: "POST",

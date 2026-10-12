@@ -179,6 +179,10 @@ type approveActionRequest struct {
 	// ConfirmPremium is the user's explicit approval of the premium models the
 	// action uses; without it such an action is refused.
 	ConfirmPremium bool `json:"confirm_premium"`
+	// LeadModel and ReviewerModel replace the models a new or started work
+	// order runs on: the user's choice over the assistant's.
+	LeadModel     string `json:"lead_model,omitempty"`
+	ReviewerModel string `json:"reviewer_model,omitempty"`
 }
 
 // approveConversationActionHandler runs one action the assistant proposed,
@@ -198,13 +202,31 @@ func (api *API) approveConversationActionHandler(w http.ResponseWriter, r *http.
 		writeError(w, http.StatusConflict, "action_not_pending", "the action is no longer waiting for approval")
 		return
 	}
-	if len(action.Premium) > 0 && !body.ConfirmPremium {
-		writeError(w, http.StatusConflict, "premium_approval_required",
-			"this action uses "+strings.Join(action.Premium, ", ")+", which needs your explicit approval")
-		return
-	}
 	if scope == conversations.TopLevel {
 		writeError(w, http.StatusConflict, "action_needs_project", "actions run in a project's conversation")
+		return
+	}
+	chosen := make([]string, 0, 2)
+	if action.Type == featureartifact.AssistantCreateWorkOrder || action.Type == featureartifact.AssistantStartWorkOrder {
+		if model := strings.TrimSpace(body.LeadModel); model != "" && model != action.LeadModel {
+			action.LeadModel = model
+			chosen = append(chosen, "lead "+model)
+		}
+		if model := strings.TrimSpace(body.ReviewerModel); model != "" && model != action.ReviewerModel {
+			action.ReviewerModel = model
+			chosen = append(chosen, "reviewer "+model)
+		}
+	}
+	// Premium is judged on the models that will run, not only those the card
+	// names: a started work order keeps its own unless the card replaces them.
+	premium, err := api.premiumModels(r.Context(), scope, action)
+	if err != nil {
+		writeConversationError(w, err)
+		return
+	}
+	if len(premium) > 0 && !body.ConfirmPremium {
+		writeError(w, http.StatusConflict, "premium_approval_required",
+			"this action uses "+strings.Join(premium, ", ")+", which needs your explicit approval")
 		return
 	}
 	var result string
@@ -235,6 +257,9 @@ func (api *API) approveConversationActionHandler(w http.ResponseWriter, r *http.
 	}
 	if !ok {
 		return
+	}
+	if len(chosen) > 0 {
+		result += " The user chose " + strings.Join(chosen, " and ") + "."
 	}
 	conversation, err := api.conversations.Resolve(r.Context(), scope, actionID, conversations.ActionApplied, result, workOrderID)
 	if err != nil {
@@ -389,6 +414,35 @@ func (api *API) applyChangeModels(
 		return "", false
 	}
 	return fmt.Sprintf("Switched the models of “%s”.", stored.Title), true
+}
+
+// premiumModels lists the models an action would run on that need the
+// user's explicit approval.
+func (api *API) premiumModels(ctx context.Context, projectID string, action conversations.Action) ([]string, error) {
+	settings, err := api.conversations.Settings(ctx)
+	if err != nil {
+		return nil, err
+	}
+	models := []string{action.LeadModel, action.ReviewerModel}
+	if action.Type == featureartifact.AssistantStartWorkOrder {
+		stored, err := api.features.GetByID(ctx, projectID, action.WorkOrderID)
+		if err != nil {
+			return nil, err
+		}
+		if action.LeadModel == "" {
+			models[0] = stored.AgentModels.Lead
+		}
+		if action.ReviewerModel == "" && !stored.Steps.SkipReviewer {
+			models[1] = stored.AgentModels.Reviewer
+		}
+	}
+	premium := make([]string, 0)
+	for _, model := range models {
+		if settings.RequiresApproval(model) {
+			premium = append(premium, model)
+		}
+	}
+	return premium, nil
 }
 
 // applyContinueWorkOrder continues a work order whose run waits on a
