@@ -27,7 +27,10 @@ export function AppsView({
 
   const load = useCallback(() => {
     listProjects()
-      .then((projects) => setApps(projects.filter((p) => p.app)))
+      .then((projects) => {
+        setApps(projects.filter((p) => p.app));
+        setError(null);
+      })
       .catch((e) => setError(String(e)));
     listAutopilotGoals()
       .then((r) => {
