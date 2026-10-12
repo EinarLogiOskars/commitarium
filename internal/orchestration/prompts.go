@@ -11,6 +11,12 @@ import (
 	"github.com/EinarLogiOskars/commitarium/internal/workspace"
 )
 
+// forgejoTokenNote keeps Forgejo writes from failing quietly. The token file
+// has no trailing newline, so a shell `read` of it fails under `set -e`.
+const forgejoTokenNote = "Read the token with token=\"$(cat \"$COMMITARIUM_FORGEJO_TOKEN_FILE\")\", not the shell's read, " +
+	"which fails on a file without a trailing newline. A write counts only once you have read it back from Forgejo; " +
+	"if it did not land, fix the request and retry rather than finishing."
+
 func interventionInstructions(state feature.State, message string) string {
 	return fmt.Sprintf(`The user paused the Commitarium workflow during the %s phase and sent this intervention:
 
@@ -122,7 +128,7 @@ func implementationPublicationInstructions(
 	return "commit all intended work " +
 		"on the assigned feature branch, push that exact HEAD to the 'commitarium' remote, and post one " +
 		"Forgejo pull-request comment using the worker-provided Forgejo URL and token-file environment " +
-		"variables. Never print, log, commit, or include the token in a URL. The comment must be exactly " +
+		"variables. Never print, log, commit, or include the token in a URL. " + forgejoTokenNote + " The comment must be exactly " +
 		"the marker below, a blank line, the heading " +
 		"'## Implementation summary', another blank line, and your concise summary. Check existing PR " +
 		"comments for the marker before posting so a retry never duplicates the audit entry. Do not " +
@@ -162,7 +168,7 @@ func implementationContinuationInstructions(
 		"When you decide the result is ready for independent review, " +
 		"commit the intended work, push the exact HEAD to the 'commitarium' remote, and post one Forgejo " +
 		"PR comment using the worker-provided URL and token-file environment variables. Never print, log, " +
-		"commit, or include the token in a URL. The comment must contain exactly the audit " +
+		"commit, or include the token in a URL. " + forgejoTokenNote + " The comment must contain exactly the audit " +
 		"marker below, a blank line, '## Implementation summary', another blank " +
 		"line, and your concise summary. Check for the marker before posting so retries do not duplicate " +
 		"it. Do not change the PR body or merge. Return action 'published' with that same summary, exact " +
@@ -355,7 +361,7 @@ func implementationReviewInstructions(
 		"If you find material problems, submit one formal Forgejo review with event REQUEST_CHANGES. If the " +
 		"implementation is correct and sufficiently tested, tell the lead that you think the exact revision is " +
 		"ready to merge and submit one review with event APPROVED. Use the worker-provided " +
-		"Forgejo URL and token-file environment variables; never print, log, commit, or put the token in a URL. " +
+		"Forgejo URL and token-file environment variables; never print, log, commit, or put the token in a URL. " + forgejoTokenNote + " " +
 		"Set commit_id on the review to the exact commit below. The review body must begin with exactly the marker below, " +
 		"a blank line, '## Review', and another blank line, followed by your structured findings or approval. " +
 		"Check existing reviews for the marker before posting so recovery never duplicates it. Return action " +
@@ -388,7 +394,7 @@ func implementationCorrectionInstructions(
 		implementationToolchainInstructions + "When the " +
 		"correction is ready, create a new commit descended from the reviewed commit, push that exact HEAD to " +
 		"the 'commitarium' remote, and post one pull-request comment using the worker-provided Forgejo URL and " +
-		"token-file environment variables. Never print, log, commit, or include the token in a URL. The comment " +
+		"token-file environment variables. Never print, log, commit, or include the token in a URL. " + forgejoTokenNote + " The comment " +
 		"must be exactly the marker below, a blank line, '## Review response', another blank line, and your " +
 		"answer to each finding by number, with how it was tested. Check existing comments for the marker " +
 		"before posting so recovery never duplicates it. Do not change the PR body or merge. Return action " +
@@ -421,7 +427,7 @@ func implementationReadinessInstructions(
 		"material blocker remains, give the merge green light. If you do not agree, state the concrete " +
 		"remaining concern. For either decision, post one pull-request comment using the worker-provided " +
 		"Forgejo URL and token-file environment variables. Never print, log, commit, or include the token " +
-		"in a URL. The comment must be exactly the marker below, a blank line, '## Merge readiness', " +
+		"in a URL. " + forgejoTokenNote + " The comment must be exactly the marker below, a blank line, '## Merge readiness', " +
 		"another blank line, and your concise decision summary. Check existing comments for the marker " +
 		"before posting so recovery never duplicates it. Return action 'ready_to_merge' with that same " +
 		"summary when you agree, or action 'concern' with the same summary when you do not. If state is " +
