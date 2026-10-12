@@ -200,66 +200,86 @@ function App() {
     setShowInbox(false);
   };
 
+  // The app's own controls. With a project open they sit at the bottom of the
+  // project's rail, so the work gets the window's full height; the project
+  // list keeps them in a top bar.
+  const systemNav = (
+    <>
+      {attention.supported && (
+        <button className="ghost topbar__inbox system-nav__item" onClick={() => setShowInbox(true)}>
+          Inbox
+          {attention.actionable.length > 0 && (
+            <span className="topbar__badge">{attention.actionable.length}</span>
+          )}
+        </button>
+      )}
+      {updateNotice && (
+        <button
+          className="ghost topbar__update system-nav__item"
+          onClick={() => setShowUpdate(true)}
+          title={
+            update.status === "installing"
+              ? "Update in progress"
+              : `Update available${update.update ? ` — ${update.update.version}` : ""}`
+          }
+        >
+          {update.status === "installing" ? "Updating…" : "Update"}
+          <span className="topbar__update-dot" aria-hidden />
+        </button>
+      )}
+      <button
+        className="ghost topbar__update system-nav__item"
+        onClick={() => setShowAgents(true)}
+        title={cliUpdates.available.length > 0 ? "Agent updates are available" : undefined}
+      >
+        Agents
+        {cliUpdates.available.length > 0 && <span className="topbar__update-dot" aria-hidden />}
+      </button>
+      <button className="ghost system-nav__item" onClick={() => setShowViewer(true)}>
+        Audit viewer
+      </button>
+      <button className="ghost system-nav__item" onClick={() => setShowSettings(true)}>
+        Settings
+      </button>
+      <button
+        className={`${pillClass} pill--button`}
+        onClick={() => setEntered(false)}
+        title="Back to the system screen"
+      >
+        {pillInner}
+      </button>
+    </>
+  );
+  const projectSwitch = projectId && (
+    <button className="rail__switch" onClick={exitProject} title="Switch project">
+      <span className="rail__brand">Commitarium</span>
+      <span className="rail__project">
+        {projectName ?? "…"}
+        <span className="topbar__caret">▾</span>
+      </span>
+    </button>
+  );
+
   return (
     <div className="shell">
-      <header className="topbar">
-        <span className="topbar__brand">Commitarium</span>
-        {projectId && (
-          <button
-            className="topbar__project topbar__switch"
-            onClick={exitProject}
-            title="Switch project"
-          >
-            <span className="topbar__sep">/</span>
-            {projectName ?? "…"}
-            <span className="topbar__caret">▾</span>
-          </button>
-        )}
-        <span className="topbar__spacer" />
-        {attention.supported && (
-          <button className="ghost topbar__inbox" onClick={() => setShowInbox(true)}>
-            Inbox
-            {attention.actionable.length > 0 && (
-              <span className="topbar__badge">{attention.actionable.length}</span>
-            )}
-          </button>
-        )}
-        {updateNotice && (
-          <button
-            className="ghost topbar__update"
-            onClick={() => setShowUpdate(true)}
-            title={
-              update.status === "installing"
-                ? "Update in progress"
-                : `Update available${update.update ? ` — ${update.update.version}` : ""}`
-            }
-          >
-            {update.status === "installing" ? "Updating…" : "Update"}
-            <span className="topbar__update-dot" aria-hidden />
-          </button>
-        )}
-        <button
-          className="ghost topbar__update"
-          onClick={() => setShowAgents(true)}
-          title={cliUpdates.available.length > 0 ? "Agent updates are available" : undefined}
-        >
-          Agents
-          {cliUpdates.available.length > 0 && <span className="topbar__update-dot" aria-hidden />}
-        </button>
-        <button className="ghost" onClick={() => setShowViewer(true)}>
-          Audit viewer
-        </button>
-        <button className="ghost" onClick={() => setShowSettings(true)}>
-          Settings
-        </button>
-        <button
-          className={`${pillClass} pill--button`}
-          onClick={() => setEntered(false)}
-          title="Back to the system screen"
-        >
-          {pillInner}
-        </button>
-      </header>
+      {!projectId && (
+        <header className="topbar">
+          <span className="topbar__brand">Commitarium</span>
+          {projectId && (
+            <button
+              className="topbar__project topbar__switch"
+              onClick={exitProject}
+              title="Switch project"
+            >
+              <span className="topbar__sep">/</span>
+              {projectName ?? "…"}
+              <span className="topbar__caret">▾</span>
+            </button>
+          )}
+          <span className="topbar__spacer" />
+          {systemNav}
+        </header>
+      )}
 
       {exitDialog}
       {showAgents && (
@@ -300,6 +320,8 @@ function App() {
             attention={attention.items.filter((i) => i.project_id === projectId)}
             openOrder={orderTarget}
             onForeground={setForeground}
+            railHeader={projectSwitch}
+            systemNav={systemNav}
           />
         ) : (
           <main className="main">

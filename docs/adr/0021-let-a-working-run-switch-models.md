@@ -31,7 +31,7 @@ recorded with its time and models, noted in the role's transcript, and token
 usage is kept per model.
 
 Switching agents (for example from Codex to Claude) is not part of this: it
-cannot keep the conversation, and recovery's "Continue with replacement" is the
+cannot keep the conversation, and recovery's "Fresh conversation" is the
 path for starting over with a fresh conversation.
 
 ## Consequences

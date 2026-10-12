@@ -75,7 +75,6 @@ export function ImplementationView({
 
   return (
     <section className="panel panel--phase">
-      <h2>Implementation</h2>
       {error && <div className="banner banner--error">{error}</div>}
 
       <div className="impl">

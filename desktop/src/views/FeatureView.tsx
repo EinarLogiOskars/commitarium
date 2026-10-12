@@ -60,6 +60,9 @@ export function FeatureView({
 }) {
   const [feature, setFeature] = useState<Feature | null>(null);
   const [run, setRun] = useState<Run | null>(null);
+  // The description opens in a sidebar the user closes; it is reference, not
+  // the work.
+  const [detailsOpen, setDetailsOpen] = useState(false);
   const [events, setEvents] = useState<WorkflowEvent[]>([]);
   const [usage, setUsage] = useState<FeatureUsage | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -215,9 +218,23 @@ export function FeatureView({
       )}
 
       <section className="panel order-head">
-        <div className="panel__head order-head__top">
+        <div className="order-head__top">
           <h2>{feature.title}</h2>
-          <div className="row">
+          <PhaseStepper
+            feature={feature}
+            viewedIndex={viewed}
+            onSelect={select}
+            paused={run?.paused}
+          />
+          <div className="row order-head__actions">
+            {feature.description && (
+              <button
+                className={`ghost ${detailsOpen ? "ghost--on" : ""}`}
+                onClick={() => setDetailsOpen((v) => !v)}
+              >
+                Details
+              </button>
+            )}
             {restartable && !confirmDelete && !confirmReady && (
               <button
                 className="ghost"
@@ -277,17 +294,15 @@ export function FeatureView({
           </div>
         )}
 
-        <PhaseStepper
-          feature={feature}
-          viewedIndex={viewed}
-          onSelect={select}
-          paused={run?.paused}
-        />
-        {feature.description && <OrderDescription text={feature.description} />}
-
         {/* The top orients: what phase, and why the run is waiting. Actions —
             the message composer and pause/continue — live below the transcript. */}
-        {run && !terminal && current > 0 && waitBanner(run, feature.state)}
+        {/* A recovery blocker is explained by the recovery bar above the
+            composer, so the header doesn't repeat it. */}
+        {run &&
+          !terminal &&
+          current > 0 &&
+          run.wait_kind !== "blocker" &&
+          waitBanner(run, feature.state)}
         {pinnedIndex !== null && pinnedIndex !== current && (
           <button className="linkish" onClick={() => setPinnedIndex(null)}>
             Viewing an earlier phase — jump to the current phase →
@@ -327,6 +342,21 @@ export function FeatureView({
             review → evidence at merge). Hidden in Clarify/Plan — no baseline
             yet. Still self-gates on the artifact, so absent unless independent
             tests are enabled. */}
+        {detailsOpen && feature.description && (
+          <aside className="panel order-details">
+            <div className="order-details__head">
+              <h3>Details</h3>
+              <button
+                className="ghost order-details__close"
+                onClick={() => setDetailsOpen(false)}
+                aria-label="Close details"
+              >
+                ✕
+              </button>
+            </div>
+            <p className="order-details__text">{feature.description}</p>
+          </aside>
+        )}
         <AcceptanceTestsPanel
           projectId={projectId}
           featureId={feature.id}
@@ -590,18 +620,4 @@ function body(
 function describe(e: unknown): string {
   if (e instanceof ApiError) return `${e.message} (${e.code})`;
   return String(e);
-}
-
-// A work order's description, folded under the phases until the user wants
-// it: the phases and the conversation matter more while work runs.
-function OrderDescription({ text }: { text: string }) {
-  const [open, setOpen] = useState(false);
-  return (
-    <div className="order-head__details">
-      <button className="linkish order-head__more" onClick={() => setOpen((v) => !v)}>
-        {open ? "▾ Details" : "▸ Details"}
-      </button>
-      {open && <p className="muted order-head__desc">{text}</p>}
-    </div>
-  );
 }

@@ -136,7 +136,7 @@ export function PlanningView({
 
   return (
     <section className="panel panel--phase">
-      <h2>Planning{revised ? ` · revised v${planVersion}` : ""}</h2>
+      {revised && <p className="muted note">Revised plan, v{planVersion}</p>}
       {(error || streamError) && <div className="banner banner--error">{error || streamError}</div>}
 
       <div

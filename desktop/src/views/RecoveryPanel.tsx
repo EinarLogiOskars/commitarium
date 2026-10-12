@@ -19,6 +19,7 @@ import type { RecoveryAction, RecoveryStatus, Run } from "../api/types";
 export function RecoveryPanel({ run, onChanged }: { run: Run; onChanged: () => void }) {
   const [result, setResult] = useState<RecoveryStatus | null>(null);
   const [message, setMessage] = useState("");
+  const [guiding, setGuiding] = useState(false);
   const [busy, setBusy] = useState<RecoveryAction | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -52,23 +53,62 @@ export function RecoveryPanel({ run, onChanged }: { run: Run; onChanged: () => v
 
   const cls = result ? CLASSIFY[result.classification] : null;
 
+  const canGuide = offered.includes("continue") || offered.includes("replace");
+
+  // Compact so the composer below stays in view: the reason and the actions
+  // share one row, and guidance opens on request.
   return (
     <div className="recover">
-      <div className="recover__head">
-        <span className="recover__title">Recovery</span>
+      <div className="recover__row">
         {cls ? (
           <span className={`chip chip--${cls.tone}`}>{cls.label}</span>
         ) : (
           <span className="chip chip--bad">Blocked</span>
         )}
+        <span className="recover__reason">
+          {result?.missing_result
+            ? `The last turn's ${result.missing_result.replace(/_/g, " ")} couldn't be confirmed.`
+            : (run.reason ??
+              "The coordinator couldn't confirm the last agent turn. Re-check the durable state, or continue.")}
+        </span>
+        <span className="recover__actions">
+          {canGuide && !guiding && (
+            <button className="linkish" onClick={() => setGuiding(true)} disabled={busy != null}>
+              Add guidance
+            </button>
+          )}
+          {offered.includes("recheck") && (
+            <button
+              className="ghost"
+              onClick={() => void run_recover("recheck")}
+              disabled={busy != null}
+              title="Inspect durable Git, Forgejo, artifact, and checklist effects only — no new agent turn"
+            >
+              {busy === "recheck" ? "Re-checking…" : "Re-check"}
+            </button>
+          )}
+          {offered.includes("replace") && (
+            <button
+              className="ghost"
+              onClick={() => void run_recover("replace")}
+              disabled={busy != null}
+              title="Start one fresh conversation from the confirmed checkpoint, once the old attempt is proven to have no live process"
+            >
+              {busy === "replace" ? "Replacing…" : "Fresh conversation"}
+            </button>
+          )}
+          {offered.includes("continue") && (
+            <button
+              className="primary"
+              onClick={() => void run_recover("continue")}
+              disabled={busy != null}
+              title="Confirm from durable effects, else resume the same conversation from the confirmed checkpoint (or start fresh if resume is unavailable)"
+            >
+              {busy === "continue" ? "Continuing…" : "Continue"}
+            </button>
+          )}
+        </span>
       </div>
-
-      <p className="recover__reason">
-        {result?.missing_result
-          ? `The last turn's ${result.missing_result.replace(/_/g, " ")} couldn't be confirmed.`
-          : (run.reason ??
-            "The coordinator couldn't confirm the last agent turn. Re-check the durable state, or continue.")}
-      </p>
 
       {result && (
         <div className="recover__facts">
@@ -82,68 +122,27 @@ export function RecoveryPanel({ run, onChanged }: { run: Run; onChanged: () => v
           {result.successor !== "none" && (
             <span className="recover__fact">{SUCCESSOR[result.successor]}</span>
           )}
-        </div>
-      )}
-
-      {result && result.evidence.length > 0 && (
-        <ul className="recover__evidence">
           {result.evidence.map((e, i) => (
-            <li key={i}>{e}</li>
+            <span key={i} className="recover__fact">
+              {e}
+            </span>
           ))}
-        </ul>
+        </div>
       )}
 
       {error && <div className="banner banner--error">{error}</div>}
 
-      {(offered.includes("continue") || offered.includes("replace")) && (
+      {canGuide && guiding && (
         <textarea
           className="recover__guidance"
           rows={2}
-          placeholder="Optional guidance for the agent when continuing (e.g. re-read the goal before returning the missing result)…"
+          autoFocus
+          placeholder="Guidance for the agent when it continues (e.g. re-read the goal before returning the missing result)…"
           value={message}
           onChange={(e) => setMessage(e.target.value)}
           disabled={busy != null}
         />
       )}
-
-      <div className="recover__actions">
-        {offered.includes("recheck") && (
-          <button
-            className="ghost"
-            onClick={() => void run_recover("recheck")}
-            disabled={busy != null}
-            title="Inspect durable Git, Forgejo, artifact, and checklist effects only — no new agent turn"
-          >
-            {busy === "recheck" ? "Re-checking…" : "Re-check"}
-          </button>
-        )}
-        {offered.includes("continue") && (
-          <button
-            className="primary"
-            onClick={() => void run_recover("continue")}
-            disabled={busy != null}
-            title="Confirm from durable effects, else resume the same conversation (or start fresh if resume is unavailable)"
-          >
-            {busy === "continue" ? "Continuing…" : "Continue"}
-          </button>
-        )}
-        {offered.includes("replace") && (
-          <button
-            className="ghost"
-            onClick={() => void run_recover("replace")}
-            disabled={busy != null}
-            title="Supersede the old attempt once it's proven to have no live process, then start one fresh conversation"
-          >
-            {busy === "replace" ? "Replacing…" : "Continue with replacement"}
-          </button>
-        )}
-      </div>
-
-      <p className="muted recover__hint">
-        Re-check only inspects what's already durable. Continue resumes the agent from the confirmed
-        checkpoint; replacement starts a fresh conversation after proving the old attempt is dead.
-        Nothing starts a second writer while the original may still be alive.
-      </p>
     </div>
   );
 }
