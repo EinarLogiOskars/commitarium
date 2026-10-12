@@ -17,7 +17,7 @@ import { ImplementationView } from "./ImplementationView";
 import { ReviewView } from "./ReviewView";
 import { MergeView } from "./MergeView";
 import { EnvironmentApproval } from "./EnvironmentApproval";
-import { AcceptanceTestsPanel } from "./AcceptanceTests";
+import { OrderSidebar } from "./OrderSidebar";
 import { PhaseStepper, currentPhaseIndex } from "./PhaseStepper";
 import { phaseIntervals, type Interval } from "./phaseWindows";
 import { WORK } from "../vocab";
@@ -60,9 +60,8 @@ export function FeatureView({
 }) {
   const [feature, setFeature] = useState<Feature | null>(null);
   const [run, setRun] = useState<Run | null>(null);
-  // The description opens in a sidebar the user closes; it is reference, not
-  // the work.
-  const [detailsOpen, setDetailsOpen] = useState(false);
+  // The header's Details button opens the side card on the description.
+  const [detailsRequest, setDetailsRequest] = useState(0);
   const [events, setEvents] = useState<WorkflowEvent[]>([]);
   const [usage, setUsage] = useState<FeatureUsage | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -228,10 +227,7 @@ export function FeatureView({
           />
           <div className="row order-head__actions">
             {feature.description && (
-              <button
-                className={`ghost ${detailsOpen ? "ghost--on" : ""}`}
-                onClick={() => setDetailsOpen((v) => !v)}
-              >
+              <button className="ghost" onClick={() => setDetailsRequest((n) => n + 1)}>
                 Details
               </button>
             )}
@@ -342,26 +338,12 @@ export function FeatureView({
             review → evidence at merge). Hidden in Clarify/Plan — no baseline
             yet. Still self-gates on the artifact, so absent unless independent
             tests are enabled. */}
-        {detailsOpen && feature.description && (
-          <aside className="panel order-details">
-            <div className="order-details__head">
-              <h3>Details</h3>
-              <button
-                className="ghost order-details__close"
-                onClick={() => setDetailsOpen(false)}
-                aria-label="Close details"
-              >
-                ✕
-              </button>
-            </div>
-            <p className="order-details__text">{feature.description}</p>
-          </aside>
-        )}
-        <AcceptanceTestsPanel
+        <OrderSidebar
           projectId={projectId}
           featureId={feature.id}
-          enabled={viewed >= 2}
-          openByDefault={viewed >= 3}
+          phase={viewed}
+          description={feature.description}
+          detailsRequest={detailsRequest}
         />
       </div>
 

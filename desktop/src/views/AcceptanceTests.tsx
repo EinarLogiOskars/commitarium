@@ -1,142 +1,7 @@
-import { useEffect, useRef, useState } from "react";
-import { useFeatureArtifact } from "./useFeatureArtifact";
 import type { AcceptanceTest, AcceptanceTestsDocument } from "../api/types";
 
-// The reviewer's private, blind acceptance-test checklist, live over the feature
-// artifact SSE. Shown during review (results) and while the reviewer authors
-// them (all pending, implementation not yet pinned). Returns null until the
-// artifact exists — so it only appears when independent tests are enabled.
-//
-// It lives in the review view's right column where there's room; the list can be
-// long (one row per criterion, plus failure/n-a notes), so it collapses to a
-// compact dot strip — one dot per test, colored by status — and auto-collapses
-// on narrow windows. The header toggles it either way.
-export function AcceptanceTestsPanel({
-  projectId,
-  featureId,
-  enabled = true,
-  openByDefault = true,
-}: {
-  projectId: string;
-  featureId: string;
-  enabled?: boolean;
-  /** Folded while they're being written (implementation), open from review. */
-  openByDefault?: boolean;
-}) {
-  const { artifact } = useFeatureArtifact<AcceptanceTestsDocument>(
-    projectId,
-    featureId,
-    "acceptance_tests",
-    enabled,
-  );
-  // Auto-collapse on narrow windows; the user can override either way after.
-  const [open, setOpen] = useState(() => openByDefault && !isNarrow());
-  const touched = useRef(false);
-  // Opens by itself when review starts, unless the user chose otherwise.
-  useEffect(() => {
-    if (!touched.current) setOpen(openByDefault && !isNarrow());
-  }, [openByDefault]);
-  useEffect(() => {
-    const mq = window.matchMedia("(max-width: 1100px)");
-    const on = () => {
-      if (!touched.current) setOpen(openByDefault && !mq.matches);
-    };
-    mq.addEventListener("change", on);
-    return () => mq.removeEventListener("change", on);
-  }, [openByDefault]);
-
-  if (!artifact) return null;
-  const doc = artifact.document;
-  const authoring = !doc.implementation_commit_id;
-  const passed = doc.tests.filter((t) => t.status === "passed").length;
-  const ran = doc.tests.filter((t) => t.status === "passed" || t.status === "failed").length;
-  const failed = doc.tests.filter((t) => t.status === "failed").length;
-
-  const toggle = () => {
-    touched.current = true;
-    setOpen((v) => !v);
-  };
-
-  return (
-    <aside className={`panel accept-tests ${open ? "" : "accept-tests--collapsed"}`}>
-      <button
-        className="accept-tests__head"
-        onClick={toggle}
-        aria-expanded={open}
-        title={open ? "Collapse" : "Show the acceptance tests"}
-      >
-        <h3>Independent acceptance tests</h3>
-        <span className="accept-tests__count muted note">
-          {failed > 0 ? `${failed} failed · ` : ""}
-          {passed}/{ran || doc.tests.length} passed
-        </span>
-        {/* Collapsed into the side strip on wide windows: just the score. */}
-        <span className="accept-tests__score muted note" aria-hidden>
-          {passed}/{ran || doc.tests.length}
-        </span>
-        <span className="accept-tests__chevron" aria-hidden>
-          <svg viewBox="0 0 16 16" width="14" height="14" fill="none">
-            <path
-              d="M4 6l4 4 4-4"
-              stroke="currentColor"
-              strokeWidth="1.75"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-          </svg>
-        </span>
-      </button>
-
-      <div className="accept-tests__dots" aria-hidden>
-        {doc.tests.map((t) => (
-          <span
-            key={t.id}
-            className={`dot dot--${DOT[t.status]}`}
-            title={`${t.title} — ${t.status}`}
-          />
-        ))}
-      </div>
-
-      {open && (
-        <>
-          <p className="muted note accept-tests__meta">
-            plan v{doc.plan_version}
-            {doc.implementation_commit_id
-              ? ` · against ${doc.implementation_commit_id.slice(0, 12)}`
-              : ""}
-            {doc.coordinator_commit_id
-              ? ` · Commitarium ran them against ${doc.coordinator_commit_id.slice(0, 12)}`
-              : ""}
-          </p>
-          {authoring ? (
-            <p className="muted note">
-              The reviewer is preparing these privately from the plan baseline — blind to the
-              implementation. Review starts once they're ready.
-            </p>
-          ) : (
-            <p className="muted note">
-              Run against the exact published commit as the first input to review — a result is
-              review evidence, not an approval.
-            </p>
-          )}
-          <ol className="accept-tests__list">
-            {doc.tests.map((t) => (
-              <AcceptanceRow key={t.id} t={t} />
-            ))}
-          </ol>
-        </>
-      )}
-    </aside>
-  );
-}
-
-function isNarrow(): boolean {
-  try {
-    return window.matchMedia("(max-width: 1100px)").matches;
-  } catch {
-    return false;
-  }
-}
+// The reviewer's private, blind acceptance-test checklist, shown in the work
+// order's side card from review on (see OrderSidebar).
 
 const MARK: Record<AcceptanceTest["status"], { ch: string; tone: string; label: string }> = {
   pending: { ch: "○", tone: "muted", label: "pending" },
@@ -147,7 +12,7 @@ const MARK: Record<AcceptanceTest["status"], { ch: string; tone: string; label: 
 };
 
 // Dot color per status: gray pending/n-a, amber running, green passed, red failed.
-const DOT: Record<AcceptanceTest["status"], string> = {
+export const DOT: Record<AcceptanceTest["status"], string> = {
   pending: "muted",
   running: "warn",
   passed: "ok",
@@ -187,5 +52,33 @@ function AcceptanceRow({ t }: { t: AcceptanceTest }) {
         <p className="accept-test__note">{t.note}</p>
       )}
     </li>
+  );
+}
+
+/** The acceptance tests' content, for the work order's side card. */
+export function AcceptanceTestsList({ doc }: { doc: AcceptanceTestsDocument }) {
+  const authoring = !doc.implementation_commit_id;
+  return (
+    <>
+      <p className="muted note accept-tests__meta">
+        plan v{doc.plan_version}
+        {doc.implementation_commit_id
+          ? ` · against ${doc.implementation_commit_id.slice(0, 12)}`
+          : ""}
+        {doc.coordinator_commit_id
+          ? ` · Commitarium ran them against ${doc.coordinator_commit_id.slice(0, 12)}`
+          : ""}
+      </p>
+      <p className="muted note">
+        {authoring
+          ? "The reviewer is preparing these privately from the plan baseline — blind to the implementation. Review starts once they're ready."
+          : "Run against the exact published commit as the first input to review — a result is review evidence, not an approval."}
+      </p>
+      <ol className="accept-tests__list">
+        {doc.tests.map((t) => (
+          <AcceptanceRow key={t.id} t={t} />
+        ))}
+      </ol>
+    </>
   );
 }

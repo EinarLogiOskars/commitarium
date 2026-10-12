@@ -2453,15 +2453,6 @@ button.danger:not(.ghost) {
   display: flex;
   flex-direction: column;
 }
-.impl__side {
-  width: 320px;
-  flex: none;
-  overflow-y: auto;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 14px;
-}
 
 .plan h3 {
   margin: 0;
@@ -3342,50 +3333,6 @@ button.danger:not(.ghost) {
   flex-basis: 100%;
 }
 
-/* The implementation checklist folds into a slim strip beside the
-   conversation, like the acceptance tests. */
-.impl__side {
-  position: relative;
-}
-.impl__fold {
-  position: absolute;
-  top: 8px;
-  right: 8px;
-  width: 24px;
-  height: 24px;
-  padding: 0;
-  border-radius: 50%;
-  line-height: 1;
-}
-.impl__strip {
-  flex: none;
-  width: 44px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 10px;
-  padding: 10px 0;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  cursor: pointer;
-}
-.impl__strip-chevron {
-  width: 24px;
-  height: 24px;
-  border-radius: 50%;
-  border: 1px solid var(--border);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-}
-.impl__strip-dots {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 5px;
-}
-
 /* A work order's models and token use: one thin line of small text tucked
    under the work, so it takes as little height as possible. */
 .order > .order-meta {
@@ -3402,9 +3349,6 @@ button.danger:not(.ghost) {
 }
 .order-meta .change-model {
   flex-basis: 100%;
-}
-.impl__side .plan__head {
-  padding-right: 28px;
 }
 
 /* In the bottom line the models read as plain text, not a pill. */
@@ -3525,4 +3469,99 @@ button.danger:not(.ghost) {
 /* A work order or session uses the window's height: less padding around it. */
 .main:has(.main__inner--fill) {
   padding: 12px 16px;
+}
+
+/* The work order's side card: the checklist, the tests, or the details,
+   beside the conversation, folding into a slim strip. */
+.order__split > .order-side {
+  flex: none;
+  width: 340px;
+  align-self: stretch;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  margin: 0;
+  padding: 10px 14px 14px;
+}
+.order-side__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+.order-side__tabs {
+  display: flex;
+  gap: 4px;
+  flex: 1;
+}
+.order-side__tab {
+  background: none;
+  border: none;
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+  cursor: pointer;
+}
+.order-side__tab--on {
+  color: var(--text);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+.order-side__chevron {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  background: none;
+  color: var(--muted);
+}
+.order-side__body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding-top: 10px;
+}
+.order-side__details {
+  white-space: pre-line;
+  font-size: 13px;
+  margin: 0;
+}
+.order__split > .order-side__strip {
+  flex: none;
+  width: 44px;
+  align-self: flex-start;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 0;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  cursor: pointer;
+  color: inherit;
+}
+.order-side__dots {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+}
+@media (max-width: 1100px) {
+  .order__split > .order-side {
+    width: auto;
+    align-self: stretch;
+    order: -1;
+    max-height: 40vh;
+  }
 }
