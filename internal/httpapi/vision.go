@@ -20,6 +20,7 @@ type VisionService interface {
 	Get(ctx context.Context, projectID string) (vision.Vision, error)
 	Save(ctx context.Context, projectID string, plan featureartifact.VisionPlan, expectedRevision int) (vision.Vision, error)
 	LinkWorkOrder(ctx context.Context, projectID, itemID, featureID string) (vision.Vision, error)
+	AddItem(ctx context.Context, projectID string, level int, title, description, featureID, source string) (vision.Vision, string, error)
 	Start(ctx context.Context, projectID, agentID, model string, mode vision.Mode, message, idempotencyKey string) (vision.Session, bool, error)
 	GetSession(ctx context.Context, projectID, sessionID string) (vision.Session, error)
 	OpenSession(ctx context.Context, projectID string) (vision.Session, error)
@@ -208,4 +209,40 @@ func writeVisionError(w http.ResponseWriter, projectID string, err error) {
 		log.Printf("vision for project %q: %v", projectID, err)
 		writeError(w, http.StatusInternalServerError, "internal_error", "internal server error")
 	}
+}
+
+type addVisionItemRequest struct {
+	Priority    int    `json:"priority"`
+	Title       string `json:"title"`
+	Description string `json:"description"`
+	// WorkOrderID links an existing work order, done outside the plan, to the
+	// new item.
+	WorkOrderID string `json:"work_order_id,omitempty"`
+}
+
+type addVisionItemResponse struct {
+	Vision vision.Vision `json:"vision"`
+	ItemID string        `json:"item_id"`
+}
+
+// addVisionItemHandler adds a top-level item to a priority of the vision, as
+// when work done outside the plan joins it.
+func (api *API) addVisionItemHandler(w http.ResponseWriter, r *http.Request) {
+	projectID := r.PathValue("id")
+	var body addVisionItemRequest
+	if !decodeSingleJSON(w, r, &body) {
+		return
+	}
+	if body.WorkOrderID != "" {
+		if _, err := api.features.GetByID(r.Context(), projectID, body.WorkOrderID); err != nil {
+			writeError(w, http.StatusNotFound, "feature_not_found", "work order not found")
+			return
+		}
+	}
+	stored, itemID, err := api.visions.AddItem(r.Context(), projectID, body.Priority, body.Title, body.Description, body.WorkOrderID, "user")
+	if err != nil {
+		writeVisionError(w, projectID, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, addVisionItemResponse{Vision: stored, ItemID: itemID}, "vision item")
 }

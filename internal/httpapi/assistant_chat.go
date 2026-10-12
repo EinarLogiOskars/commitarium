@@ -149,6 +149,8 @@ func (api *API) approveConversationActionHandler(w http.ResponseWriter, r *http.
 		result, ok = api.applyStartWorkOrder(w, r, scope, action)
 	case featureartifact.AssistantChangeModels:
 		result, ok = api.applyChangeModels(w, r, scope, action)
+	case featureartifact.AssistantAddVisionItem:
+		result, ok = api.applyAddVisionItem(w, r, scope, action)
 	default:
 		writeError(w, http.StatusBadRequest, "unknown_action", "the action is not one Commitarium can run")
 		return
@@ -390,4 +392,25 @@ func writeConversationError(w http.ResponseWriter, err error) {
 		log.Printf("assistant: %v", err)
 		writeError(w, http.StatusInternalServerError, "internal_error", "internal server error")
 	}
+}
+
+func (api *API) applyAddVisionItem(
+	w http.ResponseWriter, r *http.Request, projectID string, action conversations.Action,
+) (string, bool) {
+	if api.visions == nil {
+		writeError(w, http.StatusServiceUnavailable, "vision_unavailable", "the vision is unavailable")
+		return "", false
+	}
+	if action.WorkOrderID != "" {
+		if _, err := api.features.GetByID(r.Context(), projectID, action.WorkOrderID); err != nil {
+			writeConversationError(w, err)
+			return "", false
+		}
+	}
+	_, _, err := api.visions.AddItem(r.Context(), projectID, action.Priority, action.Title, action.Description, action.WorkOrderID, "assistant")
+	if err != nil {
+		writeVisionError(w, projectID, err)
+		return "", false
+	}
+	return fmt.Sprintf("Added \u201c%s\u201d to the vision as P%d.", action.Title, action.Priority), true
 }

@@ -134,6 +134,7 @@ func (describer StateDescriber) writeProject(ctx context.Context, builder *strin
 	for _, item := range features {
 		byID[item.ID] = item
 	}
+	linked := map[string]bool{}
 	if describer.Visions != nil {
 		stored, err := describer.Visions.Get(ctx, current.ID)
 		switch {
@@ -143,6 +144,7 @@ func (describer StateDescriber) writeProject(ctx context.Context, builder *strin
 			builder.WriteString("\n### Vision\n" + stored.Plan.Statement + "\n")
 			for _, priority := range stored.Plan.Priorities {
 				writeVisionItems(builder, priority.Items, fmt.Sprintf("P%d", priority.Level), "", byID)
+				collectLinked(priority.Items, linked)
 			}
 		}
 	}
@@ -163,10 +165,14 @@ func (describer StateDescriber) writeProject(ctx context.Context, builder *strin
 		if item.Kind == feature.KindSession {
 			kind = "session"
 		}
-		builder.WriteString(fmt.Sprintf("- %s %q (%s): %s, steps %s, lead %s on %s, reviewer %s on %s\n",
+		outside := ""
+		if !linked[item.ID] {
+			outside = " — outside the vision"
+		}
+		builder.WriteString(fmt.Sprintf("- %s %q (%s): %s, steps %s, lead %s on %s, reviewer %s on %s%s\n",
 			kind, item.Title, item.ID, item.State, stepsName(item.Steps),
 			item.AgentProviders.LeadAgent, item.AgentModels.Lead,
-			item.AgentProviders.ReviewerAgent, item.AgentModels.Reviewer))
+			item.AgentProviders.ReviewerAgent, item.AgentModels.Reviewer, outside))
 	}
 	if listed == 0 {
 		builder.WriteString("- none yet\n")
@@ -213,4 +219,13 @@ func firstLine(text string) string {
 		text = text[:200] + "…"
 	}
 	return text
+}
+
+func collectLinked(items []featureartifact.VisionItem, linked map[string]bool) {
+	for _, item := range items {
+		if item.FeatureID != "" {
+			linked[item.FeatureID] = true
+		}
+		collectLinked(item.Items, linked)
+	}
 }

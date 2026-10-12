@@ -25,6 +25,9 @@ const (
 	AssistantStartWorkOrder AssistantActionType = "start_work_order"
 	// AssistantChangeModels switches a working run's models.
 	AssistantChangeModels AssistantActionType = "change_models"
+	// AssistantAddVisionItem adds an item to the vision at a priority,
+	// optionally linking a work order done outside the plan.
+	AssistantAddVisionItem AssistantActionType = "add_vision_item"
 )
 
 // AssistantAction is one proposed action. Fields that do not apply to its
@@ -45,8 +48,11 @@ type AssistantAction struct {
 	LeadModel     string `json:"lead_model"`
 	ReviewerAgent string `json:"reviewer_agent"`
 	ReviewerModel string `json:"reviewer_model"`
-	// start_work_order and change_models
+	// start_work_order, change_models, and add_vision_item (optional)
 	WorkOrderID string `json:"work_order_id"`
+	// Priority is the level of a new vision item: 0 for P0, 1 for P1, and so
+	// on.
+	Priority int `json:"priority"`
 	// When is "now" or "next_turn", for change_models.
 	When string `json:"when"`
 }
@@ -98,6 +104,13 @@ func (action AssistantAction) validate() error {
 	case AssistantStartWorkOrder:
 		if action.WorkOrderID == "" {
 			return fmt.Errorf("start needs a work order")
+		}
+	case AssistantAddVisionItem:
+		if action.Title == "" || len(action.Title) > MaxStepTextBytes || len(action.Description) > MaxStepTextBytes {
+			return fmt.Errorf("a vision item needs a title and a short description")
+		}
+		if action.Priority < 0 || action.Priority > maxVisionPriority {
+			return fmt.Errorf("priority runs from 0 to %d", maxVisionPriority)
 		}
 	case AssistantChangeModels:
 		if action.WorkOrderID == "" || (action.LeadModel == "" && action.ReviewerModel == "") {

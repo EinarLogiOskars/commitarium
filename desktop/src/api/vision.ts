@@ -73,3 +73,11 @@ export const setUpProject = (
     method: "POST",
     body: { presets, frameworks },
   });
+
+/** Add a top-level item to a priority of the vision, optionally linking a
+ * work order done outside the plan. */
+export const addVisionItem = (
+  id: string,
+  item: { priority: number; title: string; description: string; work_order_id?: string },
+): Promise<{ vision: Vision; item_id: string }> =>
+  request(`${visionPath(id)}/items`, { method: "POST", body: item });

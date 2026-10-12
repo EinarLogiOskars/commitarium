@@ -2400,7 +2400,7 @@ actions, and its notes.
 - `PUT .../{scope}/notes` with `{"notes"}` replaces the notes with the user's
   edit.
 - An action is `{"id", "type": "create_work_order"|"start_work_order"|
-  "change_models", "reason", "title", "description", "vision_item_id",
+  "change_models"|"add_vision_item", "priority", "reason", "title", "description", "vision_item_id",
   "steps", "independent_tests", "lead_agent", "lead_model", "reviewer_agent",
   "reviewer_model", "work_order_id", "when", "status", "premium", "result"}`.
   `premium` lists its models in an `ask_before` family.
@@ -2450,6 +2450,11 @@ Only an item without sub-items starts a work order.
   draft work order for an item without sub-items, links it, and answers
   `201 {"work_order", "vision"}`. An item that already has one answers it with
   `200`. `409 vision_item_not_startable` for a group, a done item, or an unknown item.
+- `POST /api/v1/projects/{id}/vision/items` with `{"priority", "title",
+  "description", "work_order_id"}` adds a top-level item to that priority
+  (creating the priority), optionally linking a work order done outside the
+  plan, and answers `201 {"vision", "item_id"}`. The Vision page lists every
+  unlinked work order and session as Other work.
 
 ## Setting a new project up
 

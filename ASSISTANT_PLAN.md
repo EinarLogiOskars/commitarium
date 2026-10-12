@@ -152,8 +152,10 @@ that hits a limit as failed, until phase 2 replaces them.
 
 Built on `feat/assistant` (ADR-022), with these differences: the actions are
 create work order (with Create as draft or Create and start), start work
-order, and change models; writing the vision and starting the project setup
-stay on their pages for now. The top-level conversation opens from the project
+order, change models, and add a vision item (optionally linking work done
+outside the plan); rewriting the vision and starting the project setup stay on
+their pages for now. The Vision page lists work outside the vision as Other
+work, with Add to vision. The top-level conversation opens from the project
 list, for questions across projects; it proposes actions only in a project. The reference
 catalog and UI preferences live in the notes, by instruction. The
 single-purpose assistants are unchanged, and a deleted project's conversation

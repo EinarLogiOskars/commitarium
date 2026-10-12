@@ -18,7 +18,8 @@ export interface AssistantMessage {
   occurred_at: string;
 }
 
-export type AssistantActionType = "create_work_order" | "start_work_order" | "change_models";
+export type AssistantActionType =
+  "create_work_order" | "start_work_order" | "change_models" | "add_vision_item";
 
 export interface AssistantAction {
   id: string;
@@ -36,6 +37,8 @@ export interface AssistantAction {
   reviewer_model: string;
   work_order_id: string;
   when: "" | "now" | "next_turn";
+  /** For add_vision_item: 0 for P0, 1 for P1, and so on. */
+  priority: number;
   status: "proposed" | "applied" | "dismissed" | "failed";
   premium?: string[];
   result?: string;

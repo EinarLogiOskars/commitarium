@@ -2,6 +2,7 @@ package featureartifact
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 )
 
@@ -182,4 +183,51 @@ func trimmedVisionTexts(values []string) []string {
 		}
 	}
 	return trimmed
+}
+
+// AddItem appends a top-level item to a priority, creating the priority when
+// the plan has none at that level, and returns the item's new ID. A work
+// order can be linked to it at once, as when work done outside the plan
+// joins it.
+func (plan VisionPlan) AddItem(level int, title, description, featureID string) (VisionPlan, string, error) {
+	title, description = strings.TrimSpace(title), strings.TrimSpace(description)
+	if level < 0 || level > maxVisionPriority {
+		return VisionPlan{}, "", fmt.Errorf("%w: priorities run from P0 to P%d", ErrInvalidArtifact, maxVisionPriority)
+	}
+	seen := map[string]bool{}
+	var collect func([]VisionItem)
+	collect = func(items []VisionItem) {
+		for _, item := range items {
+			seen[item.ID] = true
+			collect(item.Items)
+		}
+	}
+	for _, priority := range plan.Priorities {
+		collect(priority.Items)
+	}
+	base := normalizeIDs([]string{title}, "item")[0]
+	id, suffix := base, 2
+	for seen[id] {
+		id = fmt.Sprintf("%s-%d", base, suffix)
+		suffix++
+	}
+	item := VisionItem{ID: id, Title: title, Description: description, FeatureID: strings.TrimSpace(featureID)}
+	priorities := make([]VisionPriority, 0, len(plan.Priorities)+1)
+	added := false
+	for _, priority := range plan.Priorities {
+		if priority.Level == level {
+			priority.Items = append(append([]VisionItem(nil), priority.Items...), item)
+			added = true
+		}
+		priorities = append(priorities, priority)
+	}
+	if !added {
+		priorities = append(priorities, VisionPriority{Level: level, Items: []VisionItem{item}})
+		sort.Slice(priorities, func(i, j int) bool { return priorities[i].Level < priorities[j].Level })
+	}
+	plan.Priorities = priorities
+	if err := plan.Validate(); err != nil {
+		return VisionPlan{}, "", err
+	}
+	return plan, id, nil
 }

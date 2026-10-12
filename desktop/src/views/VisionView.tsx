@@ -8,6 +8,7 @@ import {
   startVisionAssistant,
   startVisionWorkOrder,
   setUpProject,
+  addVisionItem,
 } from "../api/vision";
 import { listFeatures } from "../api/features";
 import { getToolchainPresets } from "../api/toolchains";
@@ -269,9 +270,159 @@ export function VisionView({
                   />
                 </section>
               ))}
+            <OtherWork
+              projectId={projectId}
+              plan={plan}
+              features={features}
+              onOpen={onOpenOrder}
+              onAdded={setVision}
+            />
           </>
         )
       )}
+    </div>
+  );
+}
+
+// Work done outside the plan: every work order and session not linked to a
+// vision item, derived so it is never out of date. One that turns out to be
+// real direction can join the vision as an item.
+function OtherWork({
+  projectId,
+  plan,
+  features,
+  onOpen,
+  onAdded,
+}: {
+  projectId: string;
+  plan: VisionPlan;
+  features: Map<string, Feature>;
+  onOpen: (featureId: string) => void;
+  onAdded: (vision: Vision) => void;
+}) {
+  const [adding, setAdding] = useState<string | null>(null);
+  const [showAll, setShowAll] = useState(false);
+  const linked = new Set<string>();
+  const collect = (items: VisionItem[]) =>
+    items.forEach((item) => {
+      if (item.feature_id) linked.add(item.feature_id);
+      collect(item.items ?? []);
+    });
+  plan.priorities.forEach((p) => collect(p.items));
+  const other = [...features.values()]
+    .filter((f) => !f.background && !linked.has(f.id))
+    .sort((a, b) => b.updated_at.localeCompare(a.updated_at));
+  if (other.length === 0) return null;
+  const shown = showAll ? other : other.slice(0, 6);
+  return (
+    <section className="panel vision__priority vision__other">
+      <h3>Other work</h3>
+      <p className="muted note">Work orders and sessions outside the vision.</p>
+      <ul className="vision__other-list">
+        {shown.map((f) => (
+          <li key={f.id}>
+            <div className="vision__row">
+              <div className="vision__text">
+                <strong>{f.title}</strong>
+                <span className="muted note">
+                  {f.kind === "session" ? "Session · " : ""}
+                  {STATE_LABEL[f.state]}
+                </span>
+              </div>
+              <div className="row vision__actions">
+                <button className="ghost" onClick={() => onOpen(f.id)}>
+                  Open
+                </button>
+                {f.kind !== "session" && (
+                  <button
+                    className="ghost"
+                    onClick={() => setAdding(adding === f.id ? null : f.id)}
+                  >
+                    Add to vision
+                  </button>
+                )}
+              </div>
+            </div>
+            {adding === f.id && (
+              <AddToVision
+                projectId={projectId}
+                plan={plan}
+                work={f}
+                onAdded={(v) => {
+                  setAdding(null);
+                  onAdded(v);
+                }}
+                onCancel={() => setAdding(null)}
+              />
+            )}
+          </li>
+        ))}
+      </ul>
+      {other.length > shown.length && (
+        <button className="linkish" onClick={() => setShowAll(true)}>
+          Show all {other.length}
+        </button>
+      )}
+    </section>
+  );
+}
+
+function AddToVision({
+  projectId,
+  plan,
+  work,
+  onAdded,
+  onCancel,
+}: {
+  projectId: string;
+  plan: VisionPlan;
+  work: Feature;
+  onAdded: (vision: Vision) => void;
+  onCancel: () => void;
+}) {
+  const levels = plan.priorities.map((p) => p.level).sort((a, b) => a - b);
+  const next = levels.length ? levels[levels.length - 1] + 1 : 0;
+  const [priority, setPriority] = useState(levels.length ? levels[levels.length - 1] : 0);
+  const [title, setTitle] = useState(work.title);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const add = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const { vision } = await addVisionItem(projectId, {
+        priority,
+        title: title.trim(),
+        description: "",
+        work_order_id: work.id,
+      });
+      onAdded(vision);
+    } catch (e) {
+      setError(describe(e));
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="vision__add">
+      <select
+        value={priority}
+        onChange={(e) => setPriority(Number(e.target.value))}
+        disabled={busy}
+      >
+        {[...levels, ...(next <= 9 ? [next] : [])].map((level) => (
+          <option key={level} value={level}>
+            P{level}
+          </option>
+        ))}
+      </select>
+      <input type="text" value={title} onChange={(e) => setTitle(e.target.value)} disabled={busy} />
+      <button className="primary" onClick={() => void add()} disabled={busy || !title.trim()}>
+        {busy ? "Adding…" : "Add"}
+      </button>
+      <button className="ghost" onClick={onCancel} disabled={busy}>
+        Cancel
+      </button>
+      {error && <div className="banner banner--error">{error}</div>}
     </div>
   );
 }

@@ -267,7 +267,9 @@ function ActionCard({
       ? `New work order: ${action.title}`
       : action.type === "start_work_order"
         ? "Start a work order"
-        : "Switch models";
+        : action.type === "add_vision_item"
+          ? `Add to the vision as P${action.priority}: ${action.title}`
+          : "Switch models";
   const models = [
     action.lead_model &&
       `Lead ${action.lead_agent ? agentName(agents, action.lead_agent) + " · " : ""}${modelName(action.lead_model)}`,
@@ -339,11 +341,7 @@ function ActionCard({
               onClick={() => void approve(false)}
               disabled={busy !== null || blocked}
             >
-              {busy === "approve"
-                ? "Applying…"
-                : action.type === "start_work_order"
-                  ? "Start"
-                  : "Switch"}
+              {busy === "approve" ? "Applying…" : APPLY_LABEL[action.type]}
             </button>
           )}
           <button
@@ -358,6 +356,13 @@ function ActionCard({
     </div>
   );
 }
+
+const APPLY_LABEL: Record<AssistantAction["type"], string> = {
+  create_work_order: "Create",
+  start_work_order: "Start",
+  change_models: "Switch",
+  add_vision_item: "Add to vision",
+};
 
 const STATUS_LABEL: Record<AssistantAction["status"], string> = {
   proposed: "Proposed",
