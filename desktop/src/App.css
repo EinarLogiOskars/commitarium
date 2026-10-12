@@ -1669,9 +1669,11 @@ button.danger:not(.ghost) {
 }
 /* Beside the labels, not above them: no upward offset, and never over a
    label. */
+/* Room before each line: WebKit can measure a button a few pixels narrower
+   than its text draws, and that overflow must land in empty space. */
 .order-head__top .stepper__line {
   flex: 0 0 14px;
-  margin: 0;
+  margin: 0 0 0 10px;
   align-self: center;
 }
 /* The step keeps its full measured width, and the label a little air, so a
