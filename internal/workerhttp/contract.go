@@ -139,6 +139,7 @@ const (
 	OutputContractToolchainSetup          OutputContract = "toolchain_setup"
 	OutputContractSessionOpening          OutputContract = "session_opening"
 	OutputContractVisionPlan              OutputContract = "vision_plan"
+	OutputContractAssistantTurn           OutputContract = "assistant_turn"
 )
 
 type AttemptState string
@@ -192,6 +193,7 @@ type TerminalResult struct {
 	HandoffBrief       *featureartifact.HandoffBrief       `json:"handoff_brief,omitempty"`
 	SessionTitle       string                              `json:"session_title,omitempty"`
 	VisionPlan         *featureartifact.VisionPlan         `json:"vision_plan,omitempty"`
+	AssistantTurn      *featureartifact.AssistantTurn      `json:"assistant_turn,omitempty"`
 	Usage              *TokenUsage                         `json:"usage,omitempty"`
 	Error              *ProtocolError                      `json:"error,omitempty"`
 }

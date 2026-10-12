@@ -1,0 +1,393 @@
+package httpapi
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log"
+	"net/http"
+	"strings"
+
+	"github.com/EinarLogiOskars/commitarium/internal/conversations"
+	"github.com/EinarLogiOskars/commitarium/internal/execution"
+	"github.com/EinarLogiOskars/commitarium/internal/feature"
+	"github.com/EinarLogiOskars/commitarium/internal/featureartifact"
+	"github.com/EinarLogiOskars/commitarium/internal/project"
+	"github.com/EinarLogiOskars/commitarium/internal/toolchain"
+	"github.com/EinarLogiOskars/commitarium/internal/vision"
+)
+
+// ConversationService is the assistant (ASSISTANT_PLAN.md): conversations at
+// the top level and per project, its settings, and the actions it proposes.
+type ConversationService interface {
+	Settings(ctx context.Context) (conversations.Settings, error)
+	SaveSettings(ctx context.Context, settings conversations.Settings) (conversations.Settings, error)
+	Get(ctx context.Context, scope string) (conversations.Conversation, error)
+	Send(ctx context.Context, scope, message, key string) (conversations.Conversation, error)
+	SaveNotes(ctx context.Context, scope, notes string) (conversations.Conversation, error)
+	Action(ctx context.Context, scope, actionID string) (conversations.Action, error)
+	Resolve(ctx context.Context, scope, actionID string, status conversations.ActionStatus, result string) (conversations.Conversation, error)
+}
+
+func (api *API) getAssistantSettingsHandler(w http.ResponseWriter, r *http.Request) {
+	settings, err := api.conversations.Settings(r.Context())
+	if err != nil {
+		writeConversationError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, settings, "assistant settings")
+}
+
+func (api *API) saveAssistantSettingsHandler(w http.ResponseWriter, r *http.Request) {
+	var body conversations.Settings
+	if !decodeSingleJSON(w, r, &body) {
+		return
+	}
+	saved, err := api.conversations.SaveSettings(r.Context(), body)
+	if err != nil {
+		writeConversationError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, saved, "assistant settings")
+}
+
+func (api *API) getConversationHandler(w http.ResponseWriter, r *http.Request) {
+	conversation, err := api.conversations.Get(r.Context(), r.PathValue("scope"))
+	if err != nil {
+		writeConversationError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, conversation, "assistant conversation")
+}
+
+func (api *API) sendConversationHandler(w http.ResponseWriter, r *http.Request) {
+	key := strings.TrimSpace(r.Header.Get("Idempotency-Key"))
+	if key == "" {
+		writeError(w, http.StatusBadRequest, "idempotency_key_required", "Idempotency-Key header is required")
+		return
+	}
+	var body sessionMessageRequest
+	if !decodeSingleJSON(w, r, &body) {
+		return
+	}
+	conversation, err := api.conversations.Send(r.Context(), r.PathValue("scope"), body.Message, key)
+	if err != nil {
+		writeConversationError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, conversation, "assistant conversation")
+}
+
+type conversationNotesRequest struct {
+	Notes string `json:"notes"`
+}
+
+func (api *API) saveConversationNotesHandler(w http.ResponseWriter, r *http.Request) {
+	var body conversationNotesRequest
+	if !decodeSingleJSON(w, r, &body) {
+		return
+	}
+	conversation, err := api.conversations.SaveNotes(r.Context(), r.PathValue("scope"), body.Notes)
+	if err != nil {
+		writeConversationError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, conversation, "assistant conversation")
+}
+
+func (api *API) dismissConversationActionHandler(w http.ResponseWriter, r *http.Request) {
+	conversation, err := api.conversations.Resolve(
+		r.Context(), r.PathValue("scope"), r.PathValue("actionID"), conversations.ActionDismissed, "",
+	)
+	if err != nil {
+		writeConversationError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, conversation, "assistant conversation")
+}
+
+type approveActionRequest struct {
+	// Start also starts a created work order.
+	Start bool `json:"start"`
+	// ConfirmPremium is the user's explicit approval of the premium models the
+	// action uses; without it such an action is refused.
+	ConfirmPremium bool `json:"confirm_premium"`
+}
+
+// approveConversationActionHandler runs one action the assistant proposed,
+// through the same paths as the app's own buttons.
+func (api *API) approveConversationActionHandler(w http.ResponseWriter, r *http.Request) {
+	scope, actionID := r.PathValue("scope"), r.PathValue("actionID")
+	var body approveActionRequest
+	if !decodeSingleJSON(w, r, &body) {
+		return
+	}
+	action, err := api.conversations.Action(r.Context(), scope, actionID)
+	if err != nil {
+		writeConversationError(w, err)
+		return
+	}
+	if action.Status != conversations.ActionProposed {
+		writeError(w, http.StatusConflict, "action_not_pending", "the action is no longer waiting for approval")
+		return
+	}
+	if len(action.Premium) > 0 && !body.ConfirmPremium {
+		writeError(w, http.StatusConflict, "premium_approval_required",
+			"this action uses "+strings.Join(action.Premium, ", ")+", which needs your explicit approval")
+		return
+	}
+	if scope == conversations.TopLevel {
+		writeError(w, http.StatusConflict, "action_needs_project", "actions run in a project's conversation")
+		return
+	}
+	var result string
+	var ok bool
+	switch action.Type {
+	case featureartifact.AssistantCreateWorkOrder:
+		result, ok = api.applyCreateWorkOrder(w, r, scope, action, body.Start)
+	case featureartifact.AssistantStartWorkOrder:
+		result, ok = api.applyStartWorkOrder(w, r, scope, action)
+	case featureartifact.AssistantChangeModels:
+		result, ok = api.applyChangeModels(w, r, scope, action)
+	default:
+		writeError(w, http.StatusBadRequest, "unknown_action", "the action is not one Commitarium can run")
+		return
+	}
+	if !ok {
+		return
+	}
+	conversation, err := api.conversations.Resolve(r.Context(), scope, actionID, conversations.ActionApplied, result)
+	if err != nil {
+		writeConversationError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, conversation, "assistant conversation")
+}
+
+func (api *API) applyCreateWorkOrder(
+	w http.ResponseWriter, r *http.Request, projectID string, action conversations.Action, start bool,
+) (string, bool) {
+	ctx := r.Context()
+	if api.toolchains != nil {
+		manifest, err := api.projectToolchain(ctx, projectID)
+		if err != nil {
+			api.writeToolchainError(w, projectID, "check before an assistant work order", err)
+			return "", false
+		}
+		if manifest.Status != toolchain.StatusConfigured {
+			writeError(w, http.StatusConflict, "project_toolchain_required", "choose or detect the project toolchain before creating a work order")
+			return "", false
+		}
+	}
+	stored, err := api.projects.GetByID(ctx, projectID)
+	if err != nil {
+		writeConversationError(w, err)
+		return "", false
+	}
+	overrides, err := api.assistantSettings(ctx, stored, action.AssistantAction)
+	if err != nil {
+		writeAssistantSettingsError(w, err)
+		return "", false
+	}
+	description := action.Description
+	if action.VisionItemID != "" && api.visions != nil {
+		if current, err := api.visions.Get(ctx, projectID); err == nil {
+			if _, label, found := vision.Find(current.Plan, action.VisionItemID); found {
+				description = strings.TrimSpace(description + "\n\nPart of the project's vision as " + label + ".")
+			}
+		}
+	}
+	created, err := api.features.Create(ctx, projectID, action.Title, description, overrides)
+	if err != nil {
+		log.Printf("create the assistant's work order %q: %v", action.Title, err)
+		writeError(w, http.StatusInternalServerError, "internal_error", "internal server error")
+		return "", false
+	}
+	if action.VisionItemID != "" && api.visions != nil {
+		if _, err := api.visions.LinkWorkOrder(ctx, projectID, action.VisionItemID, created.ID); err != nil {
+			log.Printf("link work order %q to vision item %q: %v", created.ID, action.VisionItemID, err)
+		}
+	}
+	result := "Created the work order “" + created.Title + "” (" + created.ID + ")."
+	if !start {
+		return result, true
+	}
+	clarification := false
+	if _, ok := api.startFeature(w, r, created, "assistant-"+action.ID, &startRunRequest{
+		Steps: &workStepsRequest{Clarification: &clarification},
+	}); !ok {
+		return "", false
+	}
+	return "Created and started the work order “" + created.Title + "” (" + created.ID + ").", true
+}
+
+func (api *API) applyStartWorkOrder(
+	w http.ResponseWriter, r *http.Request, projectID string, action conversations.Action,
+) (string, bool) {
+	ctx := r.Context()
+	stored, err := api.features.GetByID(ctx, projectID, action.WorkOrderID)
+	if err != nil {
+		writeConversationError(w, err)
+		return "", false
+	}
+	current, err := api.projects.GetByID(ctx, projectID)
+	if err != nil {
+		writeConversationError(w, err)
+		return "", false
+	}
+	request := &startRunRequest{}
+	clarification := false
+	request.Steps = &workStepsRequest{Clarification: &clarification}
+	if action.Steps != "" {
+		plan, reviewer := action.Steps != "quick", action.Steps == "full"
+		request.Steps.DocumentedPlan, request.Steps.Reviewer = &plan, &reviewer
+	}
+	if action.IndependentTests {
+		tests := true
+		request.IndependentAcceptanceTests = &tests
+	}
+	if action.LeadAgent != "" || action.ReviewerAgent != "" {
+		lead, reviewer := orDefault(action.LeadAgent, stored.AgentProviders.LeadAgent), orDefault(action.ReviewerAgent, stored.AgentProviders.ReviewerAgent)
+		request.AgentProviders = &agentProvidersRequest{LeadAgent: &lead, ReviewerAgent: &reviewer}
+	}
+	if action.LeadModel != "" || action.ReviewerModel != "" {
+		lead := orDefault(action.LeadModel, orDefault(stored.AgentModels.Lead, current.AgentModels.Lead))
+		reviewer := orDefault(action.ReviewerModel, orDefault(stored.AgentModels.Reviewer, current.AgentModels.Reviewer))
+		request.AgentModels = &agentModelsRequest{Lead: &lead, Reviewer: &reviewer}
+	}
+	if _, ok := api.startFeature(w, r, stored, "assistant-"+action.ID, request); !ok {
+		return "", false
+	}
+	return "Started the work order “" + stored.Title + "”.", true
+}
+
+func (api *API) applyChangeModels(
+	w http.ResponseWriter, r *http.Request, projectID string, action conversations.Action,
+) (string, bool) {
+	ctx := r.Context()
+	changer, ok := api.realWorkflow.(runModelChanger)
+	if !ok {
+		writeError(w, http.StatusServiceUnavailable, "model_change_unavailable", "changing models needs real agents")
+		return "", false
+	}
+	stored, err := api.features.GetByID(ctx, projectID, action.WorkOrderID)
+	if err != nil {
+		writeConversationError(w, err)
+		return "", false
+	}
+	runs, err := api.execution.RunsForFeature(ctx, stored.ID)
+	if err != nil || len(runs) == 0 {
+		writeError(w, http.StatusConflict, "run_not_changeable", "the work order has no run to change")
+		return "", false
+	}
+	latest := runs[0]
+	for _, run := range runs[1:] {
+		if run.StartedAt.After(latest.StartedAt) {
+			latest = run
+		}
+	}
+	if latest.Status.IsTerminal() {
+		writeError(w, http.StatusConflict, "run_not_changeable", "the work order's run has ended")
+		return "", false
+	}
+	models := project.AgentModels{Lead: action.LeadModel, Reviewer: action.ReviewerModel}
+	if api.modelCatalog != nil {
+		selection := latest.AgentModels
+		if models.Lead != "" {
+			selection.Lead = models.Lead
+		}
+		if models.Reviewer != "" {
+			selection.Reviewer = models.Reviewer
+		}
+		if err := api.modelCatalog.ValidateSelection(ctx, latest.AgentProviders, selection); err != nil {
+			writeModelSelectionError(w, err)
+			return "", false
+		}
+	}
+	if _, err := changer.ChangeModels(ctx, latest.ID, models, action.When == "now"); err != nil {
+		writeRunModelsError(w, latest.ID, err)
+		return "", false
+	}
+	return fmt.Sprintf("Switched the models of “%s”.", stored.Title), true
+}
+
+// assistantSettings turns an action's steps, agents, models, and tests into
+// a work order's settings, filling the rest from the project's defaults.
+func (api *API) assistantSettings(
+	ctx context.Context, stored project.Project, action featureartifact.AssistantAction,
+) (feature.SettingsOverrides, error) {
+	var overrides feature.SettingsOverrides
+	switch action.Steps {
+	case "quick":
+		overrides.Steps = &project.WorkSteps{SkipPlan: true, SkipReviewer: true}
+	case "planned":
+		overrides.Steps = &project.WorkSteps{SkipReviewer: true}
+	case "full":
+		overrides.Steps = &project.WorkSteps{}
+	}
+	if action.IndependentTests {
+		tests := true
+		overrides.IndependentAcceptanceTests = &tests
+	}
+	providers := stored.AgentProviders
+	if action.LeadAgent != "" || action.ReviewerAgent != "" {
+		lead := orDefault(action.LeadAgent, stored.AgentProviders.LeadAgent)
+		reviewer := orDefault(action.ReviewerAgent, stored.AgentProviders.ReviewerAgent)
+		decoded, err := api.decodeAgentProviders(ctx, &agentProvidersRequest{LeadAgent: &lead, ReviewerAgent: &reviewer}, false)
+		if err != nil {
+			return feature.SettingsOverrides{}, errInvalidAssistantAgents
+		}
+		providers = decoded
+		overrides.AgentProviders = &providers
+	}
+	if action.LeadModel != "" || action.ReviewerModel != "" {
+		models := project.AgentModels{
+			Lead:     orDefault(action.LeadModel, stored.AgentModels.Lead),
+			Reviewer: orDefault(action.ReviewerModel, stored.AgentModels.Reviewer),
+		}
+		if api.modelCatalog != nil {
+			if err := api.modelCatalog.ValidateSelection(ctx, providers, models); err != nil {
+				return feature.SettingsOverrides{}, err
+			}
+		}
+		overrides.AgentModels = &models
+	}
+	return overrides, nil
+}
+
+var errInvalidAssistantAgents = errors.New("the action names agents that are not connected")
+
+func writeAssistantSettingsError(w http.ResponseWriter, err error) {
+	if errors.Is(err, errInvalidAssistantAgents) {
+		writeError(w, http.StatusBadRequest, "invalid_agent_providers", err.Error())
+		return
+	}
+	writeModelSelectionError(w, err)
+}
+
+func orDefault(value, fallback string) string {
+	if strings.TrimSpace(value) != "" {
+		return value
+	}
+	return fallback
+}
+
+func writeConversationError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, conversations.ErrNotFound), errors.Is(err, project.ErrNotFound), errors.Is(err, feature.ErrNotFound):
+		writeError(w, http.StatusNotFound, "not_found", "not found")
+	case errors.Is(err, conversations.ErrBusy):
+		writeError(w, http.StatusConflict, "assistant_busy", err.Error())
+	case errors.Is(err, conversations.ErrNotPending):
+		writeError(w, http.StatusConflict, "action_not_pending", err.Error())
+	case errors.Is(err, conversations.ErrInvalid):
+		writeError(w, http.StatusBadRequest, "invalid_assistant_request", err.Error())
+	case errors.Is(err, conversations.ErrUnavailable):
+		writeError(w, http.StatusServiceUnavailable, "assistant_unavailable", err.Error())
+	case errors.Is(err, execution.ErrNotFound):
+		writeError(w, http.StatusNotFound, "run_not_found", "run not found")
+	default:
+		log.Printf("assistant: %v", err)
+		writeError(w, http.StatusInternalServerError, "internal_error", "internal server error")
+	}
+}

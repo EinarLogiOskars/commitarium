@@ -292,3 +292,24 @@ func TestResolveVisionPlan(t *testing.T) {
 		t.Fatalf("a vision without a statement: %v", err)
 	}
 }
+
+func TestResolveAssistantTurn(t *testing.T) {
+	resolved, err := ResolveStructuredOutput(OutputContractAssistantTurn, []byte(`{
+		"message": "Two work orders would finish P0.",
+		"actions": [{"type":"create_work_order","reason":"Small form change","title":"Log a meal","description":"Form.",
+			"vision_item_id":"log-a-meal","steps":"quick","independent_tests":false,"lead_agent":"","lead_model":"gpt-6-luna",
+			"reviewer_agent":"","reviewer_model":"","work_order_id":"","when":""}],
+		"notes": "Prefers quick changes for copy edits."}`))
+	if err != nil || resolved.AssistantTurn == nil || len(resolved.AssistantTurn.Actions) != 1 ||
+		resolved.Event.Text != "Two work orders would finish P0." || resolved.AssistantTurn.Notes == "" {
+		t.Fatalf("resolved = %+v err=%v", resolved, err)
+	}
+	if _, err := ResolveStructuredOutput(OutputContractAssistantTurn, []byte(`{"message":"x","actions":[{"type":"change_models",
+		"reason":"r","title":"","description":"","vision_item_id":"","steps":"","independent_tests":false,"lead_agent":"",
+		"lead_model":"","reviewer_agent":"","reviewer_model":"","work_order_id":"fea_1","when":"now"}],"notes":""}`)); err == nil {
+		t.Fatal("a model change without a model was accepted")
+	}
+	if OutputJSONSchema(OutputContractAssistantTurn) == nil {
+		t.Fatal("no schema")
+	}
+}
