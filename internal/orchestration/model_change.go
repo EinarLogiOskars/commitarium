@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/EinarLogiOskars/commitarium/internal/execution"
+	"github.com/EinarLogiOskars/commitarium/internal/feature"
 	"github.com/EinarLogiOskars/commitarium/internal/project"
 	"github.com/EinarLogiOskars/commitarium/internal/worker"
 	"github.com/EinarLogiOskars/commitarium/internal/workerhttp"
@@ -20,7 +21,12 @@ var ErrModelChangeUnavailable = errors.New("changing a run's models is not avail
 
 type remoteLeadModelChanges interface {
 	ChangeRunModels(ctx context.Context, runID string, models project.AgentModels, stopAttempts []string) (execution.Run, []execution.ModelChange, error)
+	HasModelSwitch(ctx context.Context, runID, attemptID string) (bool, error)
 	TakeModelSwitch(ctx context.Context, runID, attemptID string) (bool, error)
+}
+
+type remoteLeadParallelChains interface {
+	BeginChainedTurnAlongside(context.Context, string, execution.WorkerAttemptCheckpoint, string, feature.State, string) (bool, error)
 }
 
 // ChangeModels switches a run's models. With now, an agent working on a
@@ -157,7 +163,10 @@ func (starter *RemoteLeadStarter) resumeAfterModelSwitch(
 		); err != nil {
 			return err
 		}
-		return starter.waitRun(ctx, request.runID, sessionYourTurnReason, execution.RunWaitKindClarification)
+		if err := starter.waitRun(ctx, request.runID, sessionYourTurnReason, execution.RunWaitKindClarification); err != nil {
+			return err
+		}
+		return starter.clearModelSwitch(ctx, request.runID, attempt.AttemptID)
 	}
 	request.modelSwitch = true
 	request.allowRecoveryContinuation = true
@@ -170,15 +179,26 @@ func (starter *RemoteLeadStarter) resumeAfterModelSwitch(
 	if !continued {
 		return errors.New("the turn stopped for a model switch could not be resumed")
 	}
-	return nil
+	// Only a resumed turn clears the mark: until then, recovery's Continue
+	// still resumes the stopped turn on the new model.
+	return starter.clearModelSwitch(ctx, request.runID, attempt.AttemptID)
 }
 
-// takeModelSwitch reports whether a stopped attempt was stopped to switch
+// hasModelSwitch reports whether a stopped attempt was stopped to switch
 // models.
-func (starter *RemoteLeadStarter) takeModelSwitch(ctx context.Context, runID, attemptID string) (bool, error) {
+func (starter *RemoteLeadStarter) hasModelSwitch(ctx context.Context, runID, attemptID string) (bool, error) {
 	changer, ok := starter.executions.(remoteLeadModelChanges)
 	if !ok {
 		return false, nil
 	}
-	return changer.TakeModelSwitch(ctx, runID, attemptID)
+	return changer.HasModelSwitch(ctx, runID, attemptID)
+}
+
+func (starter *RemoteLeadStarter) clearModelSwitch(ctx context.Context, runID, attemptID string) error {
+	changer, ok := starter.executions.(remoteLeadModelChanges)
+	if !ok {
+		return nil
+	}
+	_, err := changer.TakeModelSwitch(ctx, runID, attemptID)
+	return err
 }

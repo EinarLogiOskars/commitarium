@@ -96,7 +96,7 @@ func (s *ExecutionStore) BeginAutonomousTurn(
 		checkpoint.LastEventSequence != admission.PreviousLastEventSequence {
 		return false, execution.ErrWorkerAttemptConflict
 	}
-	if admission.RunAlreadyActive {
+	if admission.RunAlreadyActive && !admission.AlongsideParallelWork {
 		var activeCount int
 		if err := tx.QueryRowContext(
 			ctx,

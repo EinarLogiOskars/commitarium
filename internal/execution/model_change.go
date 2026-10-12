@@ -30,6 +30,7 @@ type ModelChangeStore interface {
 	// TakeModelSwitch removes an attempt's switch mark and reports whether it
 	// had one.
 	TakeModelSwitch(ctx context.Context, runID, attemptID string) (bool, error)
+	HasModelSwitch(ctx context.Context, runID, attemptID string) (bool, error)
 	ModelChangesForRun(ctx context.Context, runID string) ([]ModelChange, error)
 }
 
@@ -82,6 +83,15 @@ func (s *Service) ChangeRunModels(
 func (s *Service) TakeModelSwitch(ctx context.Context, runID, attemptID string) (bool, error) {
 	if store, ok := s.store.(ModelChangeStore); ok {
 		return store.TakeModelSwitch(ctx, runID, attemptID)
+	}
+	return false, nil
+}
+
+// HasModelSwitch reports whether an attempt was stopped to switch models,
+// keeping the mark.
+func (s *Service) HasModelSwitch(ctx context.Context, runID, attemptID string) (bool, error) {
+	if store, ok := s.store.(ModelChangeStore); ok {
+		return store.HasModelSwitch(ctx, runID, attemptID)
 	}
 	return false, nil
 }

@@ -261,6 +261,21 @@ func TestExecutionStoreBeginsChainedTurnWhileRunStaysActive(t *testing.T) {
 	if _, err := store.BeginAutonomousTurn(t.Context(), admission); !errors.Is(err, execution.ErrStateConflict) {
 		t.Fatalf("expected active-session conflict, got %v", err)
 	}
+	// Alongside parallel work, the other agent may keep working.
+	alongside := admission
+	alongside.AlongsideParallelWork = true
+	if _, err := store.BeginAutonomousTurn(t.Context(), alongside); err != nil {
+		t.Fatalf("a turn alongside parallel work was refused: %v", err)
+	}
+	if _, err := db.ExecContext(t.Context(),
+		`UPDATE worker_attempt_checkpoints SET attempt_id = ?, last_event_sequence = ? WHERE session_id = ?`,
+		checkpoint.AttemptID, checkpoint.LastEventSequence, session.ID); err != nil {
+		t.Fatalf("restore the checkpoint: %v", err)
+	}
+	if _, err := db.ExecContext(t.Context(), `UPDATE sessions SET status = ? WHERE id = ?`,
+		execution.SessionStatusWaitingForUser, session.ID); err != nil {
+		t.Fatalf("restore the session: %v", err)
+	}
 	if _, err := store.TransitionSession(t.Context(), execution.SessionTransition{
 		SessionID: blocker.ID, Expected: execution.SessionStatusRunning,
 		Status: execution.SessionStatusWaitingForUser, OccurredAt: turnAt,

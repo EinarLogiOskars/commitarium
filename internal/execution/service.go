@@ -892,6 +892,31 @@ func (s *Service) BeginChainedTurnInState(
 	expectedFeatureState feature.State,
 	runReason string,
 ) (bool, error) {
+	return s.beginChainedTurn(ctx, sessionID, previous, nextAttemptID, expectedFeatureState, runReason, false)
+}
+
+// BeginChainedTurnAlongside admits a chained turn while the run's other agent
+// works in parallel (implementation alongside private acceptance tests).
+func (s *Service) BeginChainedTurnAlongside(
+	ctx context.Context,
+	sessionID string,
+	previous WorkerAttemptCheckpoint,
+	nextAttemptID string,
+	expectedFeatureState feature.State,
+	runReason string,
+) (bool, error) {
+	return s.beginChainedTurn(ctx, sessionID, previous, nextAttemptID, expectedFeatureState, runReason, true)
+}
+
+func (s *Service) beginChainedTurn(
+	ctx context.Context,
+	sessionID string,
+	previous WorkerAttemptCheckpoint,
+	nextAttemptID string,
+	expectedFeatureState feature.State,
+	runReason string,
+	alongside bool,
+) (bool, error) {
 	now := s.now().UTC()
 	admitted, err := s.store.BeginAutonomousTurn(ctx, AutonomousTurnAdmission{
 		SessionID:                 sessionID,
@@ -901,10 +926,11 @@ func (s *Service) BeginChainedTurnInState(
 			SessionID: sessionID, AttemptID: nextAttemptID,
 			CreatedAt: now, UpdatedAt: now,
 		},
-		ExpectedFeatureState: expectedFeatureState,
-		RunReason:            runReason,
-		OccurredAt:           now,
-		RunAlreadyActive:     true,
+		ExpectedFeatureState:  expectedFeatureState,
+		RunReason:             runReason,
+		OccurredAt:            now,
+		RunAlreadyActive:      true,
+		AlongsideParallelWork: alongside,
 	})
 	if err != nil {
 		return false, fmt.Errorf("begin chained turn for session %q: %w", sessionID, err)

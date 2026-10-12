@@ -3979,7 +3979,14 @@ func (starter *RemoteLeadStarter) continueFailedAttempt(
 	if err != nil {
 		return false, err
 	}
-	admitted, err := starter.executions.BeginChainedTurnInState(
+	admit := starter.executions.BeginChainedTurnInState
+	// During implementation the reviewer authors private acceptance tests in
+	// parallel, so the successor is admitted alongside it.
+	if parallel, ok := starter.executions.(remoteLeadParallelChains); ok &&
+		run.IndependentAcceptanceTests && storedFeature.State == feature.StateImplementing {
+		admit = parallel.BeginChainedTurnAlongside
+	}
+	admitted, err := admit(
 		ctx, session.ID, checkpoint, nextAttemptID, storedFeature.State,
 		"The "+request.agentName+" is completing the missing result from a fenced attempt.",
 	)
@@ -4600,7 +4607,7 @@ func (starter *RemoteLeadStarter) finish(
 		}
 		err = starter.waitRun(ctx, request.runID, request.waitingReason, request.waitKind)
 	case workerhttp.OutcomeStopped:
-		switched, switchErr := starter.takeModelSwitch(ctx, request.runID, attempt.AttemptID)
+		switched, switchErr := starter.hasModelSwitch(ctx, request.runID, attempt.AttemptID)
 		switch {
 		case switchErr != nil:
 			err = switchErr

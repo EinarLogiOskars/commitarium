@@ -73,6 +73,17 @@ func (s *ExecutionStore) TakeModelSwitch(ctx context.Context, runID, attemptID s
 	return count > 0, err
 }
 
+// HasModelSwitch reports whether an attempt carries a switch mark.
+func (s *ExecutionStore) HasModelSwitch(ctx context.Context, runID, attemptID string) (bool, error) {
+	var count int
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM run_model_switches WHERE run_id = ? AND attempt_id = ?`, runID, attemptID,
+	).Scan(&count); err != nil {
+		return false, fmt.Errorf("read model switch of attempt %q: %w", attemptID, err)
+	}
+	return count > 0, nil
+}
+
 // ModelChangesForRun lists a run's model changes, oldest first.
 func (s *ExecutionStore) ModelChangesForRun(ctx context.Context, runID string) ([]execution.ModelChange, error) {
 	rows, err := s.db.QueryContext(ctx,
