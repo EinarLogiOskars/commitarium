@@ -1680,12 +1680,17 @@ button.danger:not(.ghost) {
   flex: none;
 }
 .order-head__top .stepper__label {
-  padding-right: 2px;
+  padding-right: 0;
 }
+/* WebKit leaves a flex gap out of a button's width and clips the label, so
+   the marker is spaced with a margin instead. */
 .order-head__top .stepper__step {
   flex-direction: row;
-  gap: 6px;
+  gap: 0;
   padding: 2px 6px;
+}
+.order-head__top .stepper__marker {
+  margin-right: 6px;
 }
 .order-head__top .stepper__marker {
   width: 18px;
