@@ -46,8 +46,12 @@ type session struct {
 	result               worker.Result
 	lastError            string
 	lastErrorLogin       bool
-	waitErr              error
-	finished             bool
+	lastErrorLimit       bool
+	// limitWindows is the latest rate-limit state Codex reported for the
+	// account, read for when a reached limit resets.
+	limitWindows []rateLimitWindow
+	waitErr      error
+	finished     bool
 }
 
 var _ worker.ForceStoppableSession = (*session)(nil)
@@ -455,8 +459,11 @@ func (session *session) translate(
 				message := strings.TrimSpace(params.Error.Message)
 				session.mu.Lock()
 				session.lastError = message
+				info := strings.ToLower(string(params.Error.CodexErrorInfo))
 				session.lastErrorLogin = worker.IsLoginFailure(message) ||
-					strings.Contains(strings.ToLower(string(params.Error.CodexErrorInfo)), "unauthorized")
+					strings.Contains(info, "unauthorized")
+				session.lastErrorLimit = strings.Contains(info, "usagelimitexceeded") ||
+					strings.Contains(info, "ratelimitexceeded") || worker.IsUsageLimit(message)
 				session.mu.Unlock()
 			}
 			return events(event(worker.EventActivity, text)), false, worker.Result{}, nil
@@ -478,6 +485,26 @@ func (session *session) translate(
 			return nil, false, worker.Result{}, fmt.Errorf("%w: agent message delta omitted item ID", ErrProtocol)
 		}
 		session.acceptMessageDelta(params.ItemID, params.Delta)
+		return nil, false, worker.Result{}, nil
+	case "account/rateLimits/updated":
+		// Advisory like usage: kept to tell when a reached limit resets.
+		var params struct {
+			RateLimits struct {
+				Primary   *rateLimitWindow `json:"primary"`
+				Secondary *rateLimitWindow `json:"secondary"`
+			} `json:"rateLimits"`
+		}
+		if decodeParams(message, &params) == nil {
+			windows := make([]rateLimitWindow, 0, 2)
+			for _, window := range []*rateLimitWindow{params.RateLimits.Primary, params.RateLimits.Secondary} {
+				if window != nil {
+					windows = append(windows, *window)
+				}
+			}
+			session.mu.Lock()
+			session.limitWindows = windows
+			session.mu.Unlock()
+		}
 		return nil, false, worker.Result{}, nil
 	case "thread/tokenUsage/updated":
 		// Usage is advisory: a malformed update or one for another turn is
@@ -774,7 +801,8 @@ func (session *session) completedTurn(
 		}, nil
 	case "failed":
 		session.mu.Lock()
-		cause, login := session.lastError, session.lastErrorLogin
+		cause, login, limited := session.lastError, session.lastErrorLogin, session.lastErrorLimit
+		resetsAt := limitResetTime(session.limitWindows)
 		session.mu.Unlock()
 		summary := "Codex reported that the turn failed."
 		if cause != "" {
@@ -786,6 +814,8 @@ func (session *session) completedTurn(
 			Summary:           summary,
 			Usage:             session.turnUsage(),
 			LoginRequired:     login,
+			UsageLimited:      limited && !login,
+			LimitResetsAt:     resetsAt,
 		}, nil
 	default:
 		return nil, false, worker.Result{}, fmt.Errorf(
@@ -865,4 +895,36 @@ func decodeParams(message protocolMessage, destination any) error {
 
 func event(eventType worker.EventType, text string) *worker.Event {
 	return &worker.Event{Type: eventType, Text: text}
+}
+
+// rateLimitWindow is one of the account's usage limits, as Codex reports it.
+type rateLimitWindow struct {
+	UsedPercent int    `json:"usedPercent"`
+	ResetsAt    *int64 `json:"resetsAt"`
+}
+
+// limitResetTime is when the account's reached limit resets: the latest
+// reset among the windows that are used up, or else the latest of any.
+func limitResetTime(windows []rateLimitWindow) *time.Time {
+	var exhausted, any int64
+	for _, window := range windows {
+		if window.ResetsAt == nil || *window.ResetsAt <= 0 {
+			continue
+		}
+		if *window.ResetsAt > any {
+			any = *window.ResetsAt
+		}
+		if window.UsedPercent >= 100 && *window.ResetsAt > exhausted {
+			exhausted = *window.ResetsAt
+		}
+	}
+	chosen := exhausted
+	if chosen == 0 {
+		chosen = any
+	}
+	if chosen == 0 {
+		return nil
+	}
+	resetsAt := time.Unix(chosen, 0).UTC()
+	return &resetsAt
 }

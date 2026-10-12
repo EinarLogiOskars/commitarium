@@ -19,3 +19,14 @@ export const deleteAgent = (id: string): Promise<void> =>
  * its expired login continue (ADR-017). */
 export const agentLoggedIn = (id: string): Promise<{ resumed: number }> =>
   request(`/api/v1/agents/${encodeURIComponent(id)}/logged-in`, { method: "POST" });
+
+/** An agent whose usage limit has paused work, with when it resets. */
+export interface AgentLimit {
+  agent: string;
+  resets_at?: string;
+  waiting: number;
+}
+
+/** The agents at their usage limit right now. */
+export const getAgentLimits = (): Promise<{ limits: AgentLimit[] }> =>
+  request("/api/v1/agents/limits");

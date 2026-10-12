@@ -771,3 +771,20 @@ func helperWaitForever() {
 		time.Sleep(time.Hour)
 	}
 }
+
+func TestClaudeUsageLimitFailsTheTurnWithItsResetTime(t *testing.T) {
+	session := &session{providerSessionID: "ses_limit", initialized: true}
+	if _, _, err := session.translate([]byte(`{"type":"rate_limit_event","rate_limit_info":{"status":"rejected","resetsAt":1791810000,"rateLimitType":"five_hour"}}`)); err != nil {
+		t.Fatal(err)
+	}
+	_, result, err := session.translate([]byte(`{"type":"result","subtype":"error_during_execution","session_id":"ses_limit","is_error":true,"result":"Claude usage limit reached."}`))
+	if err != nil || result == nil {
+		t.Fatalf("result = %+v err=%v", result, err)
+	}
+	if !result.UsageLimited || result.LimitResetsAt == nil || result.LimitResetsAt.Unix() != 1791810000 {
+		t.Fatalf("limit result = %+v", result)
+	}
+	if reset := legacyLimitReset("Claude AI usage limit reached|1791810000"); reset == nil || reset.Unix() != 1791810000 {
+		t.Fatalf("legacy reset = %v", reset)
+	}
+}

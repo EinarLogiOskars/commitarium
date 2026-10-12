@@ -418,6 +418,10 @@ func run(ctx context.Context, coordinatorConfig config) error {
 	if recoveredRuns > 0 {
 		log.Printf("recovering %d interrupted workflow(s)", recoveredRuns)
 	}
+	// Runs paused on an agent's usage limit continue when it resets.
+	if resumer, ok := realWorkflowStarter.(interface{ RunLimitResumer(context.Context) }); ok {
+		go resumer.RunLimitResumer(ctx)
+	}
 	runStopper := projectdeletion.NewRunStopper(
 		executionService, deletionWorker, sessionController, deletionLiveSessions,
 	)

@@ -790,3 +790,15 @@ func withRecoveryAssessment(event Event, assessment *RecoveryAssessment) Event {
 	event.RecoveryAssessment = assessment
 	return event
 }
+
+func TestOnlyAUsageLimitErrorCarriesAResetTime(t *testing.T) {
+	resetsAt := time.Date(2026, 10, 12, 14, 0, 0, 0, time.UTC)
+	limit := ProtocolError{Code: ErrorUsageLimit, Message: "Usage limit reached.", Retryable: true, ResetsAt: &resetsAt}
+	if err := limit.Validate(); err != nil {
+		t.Fatalf("usage limit error: %v", err)
+	}
+	other := ProtocolError{Code: ErrorInternal, Message: "Failed.", ResetsAt: &resetsAt}
+	if err := other.Validate(); err == nil {
+		t.Fatal("an internal error carried a reset time")
+	}
+}

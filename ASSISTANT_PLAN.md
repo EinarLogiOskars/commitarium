@@ -1,6 +1,7 @@
 # Assistant: Implementation Plan
 
-**Status:** planned; nothing built yet.
+**Status:** phase 1 (usage limits) implemented on `feat/usage-limits`; phases 2
+and 3 planned.
 
 ## Goal
 
@@ -126,6 +127,12 @@ assistant, and autopilot.
 ## Phases
 
 ### Phase 1: Usage limits
+
+Built as below, with three differences: a run on an agent at its limit is not
+held back in advance (its next turn pauses on the provider's immediate
+rejection, which costs nothing); the Agents page shows the limit and reset but
+not usage percentages yet; and the single-purpose assistants still end a turn
+that hits a limit as failed, until phase 2 replaces them.
 
 - **Adapters:** recognize the limit signals above and end the attempt with a
   new `ErrorUsageLimit` carrying the reset time. Keep the latest limit

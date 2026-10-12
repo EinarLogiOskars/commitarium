@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -45,6 +46,11 @@ type session struct {
 	tools            map[string]pendingTool
 	result           worker.Result
 	waitErr          error
+	// limitRejected and limitResetsAt are the latest usage-limit state Claude
+	// Code reported: whether the account's limit was reached, and when it
+	// resets.
+	limitRejected bool
+	limitResetsAt *time.Time
 }
 
 var _ worker.ForceStoppableSession = (*session)(nil)
@@ -291,6 +297,13 @@ type streamMessage struct {
 	ToolUseResult    json.RawMessage `json:"tool_use_result"`
 	Event            json.RawMessage `json:"event"`
 	Usage            *resultUsage    `json:"usage"`
+	RateLimitInfo    *rateLimitInfo  `json:"rate_limit_info"`
+}
+
+// rateLimitInfo is the account's usage-limit state on a rate_limit_event.
+type rateLimitInfo struct {
+	Status   string `json:"status"`
+	ResetsAt int64  `json:"resetsAt"`
 }
 
 // resultUsage is the turn total Claude Code reports on its result record.
@@ -423,7 +436,19 @@ func (session *session) translate(raw []byte) ([]worker.Event, *worker.Result, e
 			return nil, nil, fmt.Errorf("%w: decode stream event", ErrProtocol)
 		}
 		return nil, nil, nil
-	case "rate_limit_event", "tool_progress", "auth_status":
+	case "rate_limit_event":
+		// Advisory: kept to tell a failed turn's reached limit and its reset.
+		if info := message.RateLimitInfo; info != nil {
+			session.mu.Lock()
+			session.limitRejected = info.Status == "rejected"
+			if info.ResetsAt > 0 {
+				resetsAt := time.Unix(info.ResetsAt, 0).UTC()
+				session.limitResetsAt = &resetsAt
+			}
+			session.mu.Unlock()
+		}
+		return nil, nil, nil
+	case "tool_progress", "auth_status":
 		return nil, nil, nil
 	default:
 		// Claude Code uses semantic versioning for this stream. Unknown records
@@ -697,12 +722,22 @@ func (session *session) translateResult(
 		if summary == "" {
 			summary = "Claude reported that the turn failed."
 		}
+		login := worker.IsLoginFailure(summary)
+		session.mu.Lock()
+		limited := session.limitRejected || worker.IsUsageLimit(summary)
+		resetsAt := session.limitResetsAt
+		session.mu.Unlock()
+		if limited && resetsAt == nil {
+			resetsAt = legacyLimitReset(summary)
+		}
 		return nil, &worker.Result{
 			Outcome:           worker.OutcomeFailed,
 			ProviderSessionID: session.providerSessionID,
 			Summary:           summary,
 			Usage:             message.Usage.tokenUsage(),
-			LoginRequired:     worker.IsLoginFailure(summary),
+			LoginRequired:     login,
+			UsageLimited:      limited && !login,
+			LimitResetsAt:     resetsAt,
 		}, nil
 	}
 	if session.outputContract != "" {
@@ -852,4 +887,19 @@ func finishedToolText(name string, failed bool) string {
 	default:
 		return "Claude " + result + " a command or tool."
 	}
+}
+
+// legacyLimitReset reads the reset time from Claude Code's older limit
+// message, "Claude AI usage limit reached|<unix seconds>".
+func legacyLimitReset(summary string) *time.Time {
+	_, after, found := strings.Cut(summary, "|")
+	if !found {
+		return nil
+	}
+	seconds, err := strconv.ParseInt(strings.TrimSpace(after), 10, 64)
+	if err != nil || seconds <= 0 {
+		return nil
+	}
+	resetsAt := time.Unix(seconds, 0).UTC()
+	return &resetsAt
 }

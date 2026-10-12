@@ -3,6 +3,7 @@ import { pauseRun, queueIntervention, reopenRun, resumeRun } from "../api/runs";
 import { ApiError } from "../api/client";
 import { RecoveryPanel } from "./RecoveryPanel";
 import { AgentLogin } from "./AgentLogin";
+import { UsageLimitBanner } from "./UsageLimitBanner";
 import { agentName, useAgents } from "./useAgents";
 import { useModelName } from "./useModelName";
 import type { Intervention, InterventionTargetRole, Run } from "../api/types";
@@ -56,6 +57,8 @@ export function InterveneBar({
   // Waiting on an agent's login: the login banner is the one action needed,
   // and the run continues by itself once the agent is connected.
   const loginWait = blocked && run.login_required != null;
+  // Waiting on an agent's usage limit: it continues by itself at the reset.
+  const limitWait = blocked && !loginWait && run.usage_limit != null;
 
   // Prefer the backend's authoritative target list; fall back to the sessions.
   const targets = run.intervention_targets;
@@ -224,7 +227,15 @@ export function InterveneBar({
         </div>
       )}
 
-      {blocked && !loginWait && <RecoveryPanel run={run} onChanged={onChanged} />}
+      {limitWait && run.usage_limit && (
+        <UsageLimitBanner
+          run={run}
+          agentLabel={agentName(agents, run.usage_limit.agent)}
+          onChanged={onChanged}
+        />
+      )}
+
+      {blocked && !loginWait && !limitWait && <RecoveryPanel run={run} onChanged={onChanged} />}
 
       {iv && !iv.resolved_at && (
         <div className={`intervene__queued ${answered ? "intervene__queued--done" : ""}`}>

@@ -3603,3 +3603,22 @@ button.danger:not(.ghost) {
 .recover__row .recover__reason--long {
   flex-basis: 100%;
 }
+
+/* An agent at its usage limit: calm, it resumes by itself. */
+.usage-limit {
+  align-items: center;
+  flex-wrap: wrap;
+}
+.usage-limit button {
+  margin-left: auto;
+}
+.usage-limit__error {
+  flex-basis: 100%;
+  color: var(--bad);
+  font-size: 12px;
+}
+.profile-row__limit {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--warn);
+}

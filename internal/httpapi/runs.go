@@ -45,6 +45,7 @@ type runResponse struct {
 	Intervention               *interventionResponse        `json:"intervention,omitempty"`
 	Recovery                   *recoveryResponse            `json:"recovery,omitempty"`
 	LoginRequired              *loginRequiredResponse       `json:"login_required,omitempty"`
+	UsageLimit                 *usageLimitResponse          `json:"usage_limit,omitempty"`
 	Steps                      workStepsResponse            `json:"steps"`
 }
 
@@ -57,6 +58,19 @@ type loginRequiredResponse struct {
 
 type runLoginWaits interface {
 	LoginWaitForRun(context.Context, string) (execution.LoginWait, error)
+}
+
+// usageLimitResponse names the agent whose usage limit a paused run waits
+// on, and when it resets, when known.
+type usageLimitResponse struct {
+	Agent    string      `json:"agent"`
+	Role     worker.Role `json:"role"`
+	ResetsAt *time.Time  `json:"resets_at,omitempty"`
+}
+
+type runLimitWaits interface {
+	LimitWaitForRun(context.Context, string) (execution.LimitWait, error)
+	LimitWaits(context.Context) ([]execution.LimitWait, error)
 }
 
 type recoveryResponse struct {
@@ -500,6 +514,16 @@ func (api *API) newRunResponse(
 		}
 		if wait.AgentID != "" {
 			response.LoginRequired = &loginRequiredResponse{Agent: wait.AgentID, Role: wait.Role}
+		}
+	}
+	if waits, ok := api.execution.(runLimitWaits); ok &&
+		run.Status == execution.RunStatusWaitingForUser && run.WaitKind == execution.RunWaitKindBlocker {
+		wait, err := waits.LimitWaitForRun(ctx, run.ID)
+		if err != nil {
+			return runResponse{}, err
+		}
+		if wait.AgentID != "" {
+			response.UsageLimit = &usageLimitResponse{Agent: wait.AgentID, Role: wait.Role, ResetsAt: wait.ResetsAt}
 		}
 	}
 	targets, err := api.execution.InterventionTargetsForRun(ctx, run.ID)

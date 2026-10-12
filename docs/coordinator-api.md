@@ -1634,6 +1634,16 @@ is admitted. Every real-provider start and resume carries the run's current
 role model. Workers never select a fallback; Claude also rejects an
 initialization event that reports a different model.
 
+**Usage limits.** A turn that fails because its agent reached its provider
+usage limit (worker error `usage_limit`, with `resets_at` when the provider
+says) pauses the run as a blocker instead of failing it. The run then carries
+`"usage_limit": {"agent", "role", "resets_at"}`, and the coordinator continues
+it on its own a minute after `resets_at`, or every 15 minutes when the reset is
+unknown; a limit still reached pauses it again. Recovery's `continue` tries at
+once. `GET /api/v1/agents/limits` answers
+`{"limits": [{"agent", "resets_at", "waiting"}]}` for the agents whose limit has
+paused work. The attention item is `usage_limit`, informational.
+
 `POST /api/v1/runs/{runID}/models` with
 `{"lead_model": "...", "reviewer_model": "...", "when": "now"|"next_turn"}`
 switches a working run's models (ADR-021). Name one or both roles; each keeps
