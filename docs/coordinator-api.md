@@ -2404,10 +2404,13 @@ actions, and its notes.
 - `PUT .../{scope}/notes` with `{"notes"}` replaces the notes with the user's
   edit.
 - An action is `{"id", "type": "create_work_order"|"start_work_order"|
-  "change_models"|"add_vision_item"|"start_autopilot", "priority", "reason", "title", "description", "vision_item_id",
+  "change_models"|"add_vision_item"|"start_autopilot"|"continue_work_order", "priority", "reason", "title", "description", "vision_item_id",
   "steps", "independent_tests", "lead_agent", "lead_model", "reviewer_agent",
-  "reviewer_model", "work_order_id", "when", "status", "premium", "result",
-  "auto_tried"}`. `premium` lists its models in an `ask_before` family;
+  "reviewer_model", "work_order_id", "when", "guidance", "status", "premium",
+  "result", "auto_tried"}`. `continue_work_order` continues the work order's
+  newest run when it waits on a blocker, with `guidance` for its agents, as
+  the run's Continue and Add guidance do (`409 recovery_not_allowed`
+  otherwise). `premium` lists its models in an `ask_before` family;
   `auto_tried` marks one autopilot took over.
 - `POST .../{scope}/actions/{actionID}/approve` with `{"start", "confirm_premium"}`
   runs it through the same paths as the app's own buttons and records the
@@ -2419,8 +2422,9 @@ actions, and its notes.
   does the same. `goal` is then `{"title", "level", "items": [{"id", "label",
   "title", "work_order_id", "done"}], "status": "active"|"done"|"stopped",
   "started_at", "ended_at"}`. While it is active, the coordinator approves the
-  assistant's create, start, and change-models actions for the goal's items as
-  the user would (with a new work order started), except premium ones, and
+  assistant's create, start, change-models, and continue actions for the goal's
+  items as the user would (with a new work order started, and at most two
+  continues per work order), except premium ones, and
   closes the goal when every item is done. `409 autopilot_active` while one is
   on; `400` when the priority has nothing left. `DELETE .../{scope}/autopilot`
   stops it.

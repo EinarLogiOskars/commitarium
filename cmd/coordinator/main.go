@@ -356,7 +356,7 @@ func run(ctx context.Context, coordinatorConfig config) error {
 			Projects: projectService, Agents: agentService,
 			Describer: conversations.StateDescriber{
 				Projects: projectService, Agents: agentService, Features: featureService,
-				Visions: visions, Toolchains: toolchainService, Models: models,
+				Visions: visions, Toolchains: toolchainService, Models: models, Runs: executionService,
 			},
 			Workers: func(agentID string) (workerhttp.Service, error) { return agentWorkers.Client(agentID) },
 			DefaultModel: func(ctx context.Context, provider project.AgentProvider) string {

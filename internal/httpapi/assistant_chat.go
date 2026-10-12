@@ -15,6 +15,7 @@ import (
 	"github.com/EinarLogiOskars/commitarium/internal/execution"
 	"github.com/EinarLogiOskars/commitarium/internal/feature"
 	"github.com/EinarLogiOskars/commitarium/internal/featureartifact"
+	"github.com/EinarLogiOskars/commitarium/internal/orchestration"
 	"github.com/EinarLogiOskars/commitarium/internal/project"
 	"github.com/EinarLogiOskars/commitarium/internal/toolchain"
 	"github.com/EinarLogiOskars/commitarium/internal/vision"
@@ -220,6 +221,8 @@ func (api *API) approveConversationActionHandler(w http.ResponseWriter, r *http.
 		result, ok = api.applyChangeModels(w, r, scope, action)
 	case featureartifact.AssistantAddVisionItem:
 		result, ok = api.applyAddVisionItem(w, r, scope, action)
+	case featureartifact.AssistantContinueWorkOrder:
+		result, ok = api.applyContinueWorkOrder(w, r, scope, action)
 	case featureartifact.AssistantStartAutopilot:
 		if _, err := api.conversations.StartGoal(r.Context(), scope, action.Priority); err != nil {
 			writeConversationError(w, err)
@@ -386,6 +389,46 @@ func (api *API) applyChangeModels(
 		return "", false
 	}
 	return fmt.Sprintf("Switched the models of “%s”.", stored.Title), true
+}
+
+// applyContinueWorkOrder continues a work order whose run waits on a
+// blocker, as the Continue and Add guidance buttons do.
+func (api *API) applyContinueWorkOrder(
+	w http.ResponseWriter, r *http.Request, projectID string, action conversations.Action,
+) (string, bool) {
+	ctx := r.Context()
+	directed, ok := api.realWorkflow.(directedRecoveryWorkflow)
+	if !ok {
+		writeError(w, http.StatusServiceUnavailable, "recovery_unavailable", "continuing a work order needs real agents")
+		return "", false
+	}
+	stored, err := api.features.GetByID(ctx, projectID, action.WorkOrderID)
+	if err != nil {
+		writeConversationError(w, err)
+		return "", false
+	}
+	runs, err := api.execution.RunsForFeature(ctx, stored.ID)
+	if err != nil || len(runs) == 0 {
+		writeError(w, http.StatusConflict, "recovery_not_allowed", "the work order has no run to continue")
+		return "", false
+	}
+	latest := newestRun(runs)
+	if _, _, err := directed.RecoverBlockerWithDirective(ctx, latest.ID, runActionIDForKey("assistant-"+action.ID),
+		orchestration.RecoveryDirective{Action: orchestration.RecoveryActionContinue, Message: action.Guidance},
+	); err != nil {
+		switch {
+		case errors.Is(err, orchestration.ErrRecoveryNotAllowed):
+			writeError(w, http.StatusConflict, "recovery_not_allowed", "the work order is not waiting on a blocker")
+		default:
+			log.Printf("continue the assistant's work order %q: %v", stored.ID, err)
+			writeError(w, http.StatusInternalServerError, "internal_error", "internal server error")
+		}
+		return "", false
+	}
+	if action.Guidance != "" {
+		return fmt.Sprintf("Continued “%s” with guidance.", stored.Title), true
+	}
+	return fmt.Sprintf("Continued “%s”.", stored.Title), true
 }
 
 // assistantSettings turns an action's steps, agents, models, and tests into

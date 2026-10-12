@@ -43,7 +43,14 @@ type Goal struct {
 	Status    GoalStatus `json:"status"`
 	StartedAt time.Time  `json:"started_at"`
 	EndedAt   *time.Time `json:"ended_at,omitempty"`
+	// Continues counts the blocked work orders autopilot continued, by
+	// work order; past maxAutoContinues the next one waits for the user.
+	Continues map[string]int `json:"continues,omitempty"`
 }
+
+// maxAutoContinues bounds how often autopilot continues one work order, so
+// a failure it cannot fix comes back to the user.
+const maxAutoContinues = 2
 
 func (goal *Goal) active() bool {
 	return goal != nil && goal.Status == GoalActive
@@ -198,13 +205,26 @@ func (service *Service) autopilotActions(scope string) ([]Action, error) {
 		switch action.Type {
 		case featureartifact.AssistantCreateWorkOrder:
 			inGoal = items[action.VisionItemID]
-		case featureartifact.AssistantStartWorkOrder, featureartifact.AssistantChangeModels:
+		case featureartifact.AssistantStartWorkOrder, featureartifact.AssistantChangeModels,
+			featureartifact.AssistantContinueWorkOrder:
 			inGoal = orders[action.WorkOrderID]
 		}
 		if !inGoal {
 			continue
 		}
 		action.AutoTried = true
+		if action.Type == featureartifact.AssistantContinueWorkOrder {
+			if stored.Goal.Continues[action.WorkOrderID] >= maxAutoContinues {
+				stored.addEvent(fmt.Sprintf("Autopilot has continued %s %d times; the next try is yours to approve.",
+					action.WorkOrderID, maxAutoContinues), now)
+				noted = true
+				continue
+			}
+			if stored.Goal.Continues == nil {
+				stored.Goal.Continues = map[string]int{}
+			}
+			stored.Goal.Continues[action.WorkOrderID]++
+		}
 		if len(action.Premium) > 0 {
 			stored.addEvent(fmt.Sprintf("Autopilot left %s for you: it uses %s, which needs your approval.",
 				actionName(action.AssistantAction), strings.Join(action.Premium, " and ")), now)
@@ -275,8 +295,10 @@ func goalInstructions(goal *Goal) string {
 		"an item without a work order, start_work_order for one that is drafted, and change_models when a run " +
 		"needs a different model. Commitarium applies your actions for these items at once, without the user's " +
 		"approval, except those using a premium model. Start an item only once the items it builds on have " +
-		"merged; at most two of the goal's work orders run at a time. When a work order needs the user (a " +
-		"blocker, a question, a merge approval), tell the user exactly what it needs. Propose nothing outside the " +
-		"goal unless the user asks; such actions still wait for approval.")
+		"merged; at most two of the goal's work orders run at a time. When one is blocked or failed, find out " +
+		"why (its reason, its pull request, the code) and propose continue_work_order with guidance that fixes " +
+		"it; Commitarium continues a work order on its own at most twice. When a work order needs the user (a " +
+		"question about the product, a merge approval, a blocker you cannot fix), tell the user exactly what it " +
+		"needs. Propose nothing outside the goal unless the user asks; such actions still wait for approval.")
 	return builder.String()
 }

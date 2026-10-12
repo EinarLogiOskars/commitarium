@@ -31,6 +31,9 @@ const (
 	// AssistantStartAutopilot hands the assistant a goal: the open items of
 	// one vision priority, which it then drives to merged on its own.
 	AssistantStartAutopilot AssistantActionType = "start_autopilot"
+	// AssistantContinueWorkOrder continues a work order whose run waits on a
+	// blocker, with optional guidance for its agents.
+	AssistantContinueWorkOrder AssistantActionType = "continue_work_order"
 )
 
 // AssistantAction is one proposed action. Fields that do not apply to its
@@ -58,6 +61,8 @@ type AssistantAction struct {
 	Priority int `json:"priority"`
 	// When is "now" or "next_turn", for change_models.
 	When string `json:"when"`
+	// Guidance is what continue_work_order tells the agents; empty retries.
+	Guidance string `json:"guidance"`
 }
 
 const (
@@ -79,7 +84,7 @@ func (turn AssistantTurn) Normalize() (AssistantTurn, error) {
 		for _, field := range []*string{
 			&action.Reason, &action.Title, &action.Description, &action.VisionItemID, &action.Steps,
 			&action.LeadAgent, &action.LeadModel, &action.ReviewerAgent, &action.ReviewerModel,
-			&action.WorkOrderID, &action.When,
+			&action.WorkOrderID, &action.When, &action.Guidance,
 		} {
 			*field = strings.TrimSpace(*field)
 		}
@@ -114,6 +119,10 @@ func (action AssistantAction) validate() error {
 		}
 		if action.Priority < 0 || action.Priority > maxVisionPriority {
 			return fmt.Errorf("priority runs from 0 to %d", maxVisionPriority)
+		}
+	case AssistantContinueWorkOrder:
+		if action.WorkOrderID == "" || len(action.Guidance) > MaxGoalBytes {
+			return fmt.Errorf("continuing needs a work order and bounded guidance")
 		}
 	case AssistantStartAutopilot:
 		if action.Priority < 0 || action.Priority > maxVisionPriority {

@@ -343,7 +343,9 @@ function ActionCard({
           ? `Add to the vision as P${action.priority}: ${action.title}`
           : action.type === "start_autopilot"
             ? `Autopilot: finish P${action.priority}`
-            : "Switch models";
+            : action.type === "continue_work_order"
+              ? "Continue a work order"
+              : "Switch models";
   const models = [
     action.lead_model &&
       `Lead ${action.lead_agent ? agentName(agents, action.lead_agent) + " · " : ""}${modelName(action.lead_model)}`,
@@ -359,6 +361,11 @@ function ActionCard({
         {!pending && <span className="pill">{STATUS_LABEL[action.status]}</span>}
       </div>
       {action.description && <p className="assistant-action__desc">{action.description}</p>}
+      {action.type === "continue_work_order" && (
+        <p className="assistant-action__desc">
+          {action.guidance ? `Guidance: ${action.guidance}` : "Retries without guidance."}
+        </p>
+      )}
       <ul className="assistant-action__facts">
         {action.steps && <li>{STEPS_LABEL[action.steps]}</li>}
         {models.map((line) => (
@@ -451,6 +458,7 @@ const APPLY_LABEL: Record<AssistantAction["type"], string> = {
   change_models: "Switch",
   add_vision_item: "Add to vision",
   start_autopilot: "Start autopilot",
+  continue_work_order: "Continue",
 };
 
 const STATUS_LABEL: Record<AssistantAction["status"], string> = {

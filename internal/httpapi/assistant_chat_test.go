@@ -6,10 +6,13 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/EinarLogiOskars/commitarium/internal/conversations"
+	"github.com/EinarLogiOskars/commitarium/internal/execution"
 	"github.com/EinarLogiOskars/commitarium/internal/feature"
 	"github.com/EinarLogiOskars/commitarium/internal/featureartifact"
+	"github.com/EinarLogiOskars/commitarium/internal/orchestration"
 	"github.com/EinarLogiOskars/commitarium/internal/project"
 )
 
@@ -120,5 +123,41 @@ func TestAutopilotAppliesActionsThroughTheSameApproval(t *testing.T) {
 	}
 	if stub.goalLevel != 1 || stub.resolvedStatus != conversations.ActionApplied || !strings.Contains(stub.resolvedResult, "P1") {
 		t.Fatalf("goal level %d, resolved %s %q", stub.goalLevel, stub.resolvedStatus, stub.resolvedResult)
+	}
+}
+
+func TestContinuingAWorkOrderRecoversItsNewestRunWithGuidance(t *testing.T) {
+	stub := &conversationStub{action: conversations.Action{
+		ID: "act_1", Status: conversations.ActionProposed,
+		AssistantAction: featureartifact.AssistantAction{
+			Type: featureartifact.AssistantContinueWorkOrder, Reason: "The audit comment is missing",
+			WorkOrderID: "fea_log", Guidance: "Post the audit comment, then finish.",
+		},
+	}}
+	features := &recordingFeatureService{getResult: feature.Feature{ID: "fea_log", ProjectID: "prj_test", Title: "Show the log"}}
+	projects := &recordingProjectService{getByIDResult: project.Project{ID: "prj_test"}}
+	now := time.Now()
+	executions := &recordingExecutionService{runs: []execution.Run{
+		{ID: "run_old", StartedAt: now.Add(-time.Hour)}, {ID: "run_new", StartedAt: now},
+	}}
+	workflow := &planningStarterStub{run: execution.Run{ID: "run_new"}}
+	handler := NewWithWorkspaceRealWorkflowDeletionAndModels(projects, features, nil, executions, nil, nil, nil, workflow, nil, nil, nil, nil, stub)
+
+	if err := AssistantActionApplier(handler)(t.Context(), "prj_test", "act_1"); err != nil {
+		t.Fatal(err)
+	}
+	if workflow.receivedRunID != "run_new" || workflow.receivedRecovery.Action != orchestration.RecoveryActionContinue ||
+		workflow.receivedRecovery.Message != "Post the audit comment, then finish." {
+		t.Fatalf("recovered %q with %+v", workflow.receivedRunID, workflow.receivedRecovery)
+	}
+	if stub.resolvedStatus != conversations.ActionApplied || !strings.Contains(stub.resolvedResult, "with guidance") {
+		t.Fatalf("resolved = %s %q", stub.resolvedStatus, stub.resolvedResult)
+	}
+
+	workflow.err = orchestration.ErrRecoveryNotAllowed
+	stub.action.Status = conversations.ActionProposed
+	if err := AssistantActionApplier(handler)(t.Context(), "prj_test", "act_1"); err == nil ||
+		!strings.Contains(err.Error(), "not waiting on a blocker") {
+		t.Fatalf("continuing a run that is not blocked = %v", err)
 	}
 }

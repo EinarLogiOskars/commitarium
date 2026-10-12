@@ -23,9 +23,10 @@ run without the user.
 - **Autopilot is a goal, not a mode.** The user turns it on for the open items
   of one vision priority, from the Vision page or by approving the
   assistant's `start_autopilot` card. While the goal is active, the
-  coordinator approves the assistant's create, start, and change-models
-  actions for the goal's items through the same API path as the Approve
-  button. Everything else still waits for the user: actions outside the goal,
+  coordinator approves the assistant's create, start, change-models, and
+  continue actions for the goal's items through the same API path as the
+  Approve button. A blocked work order is continued, with the assistant's
+  guidance, at most twice; after that it waits for the user. Everything else still waits for the user: actions outside the goal,
   vision changes, and any action using a premium model, which gets a note.
 - **The coordinator ends it.** It closes the goal once every item is done (or
   gone from the vision), and wakes the assistant to report. The user can stop

@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/EinarLogiOskars/commitarium/internal/agent"
+	"github.com/EinarLogiOskars/commitarium/internal/execution"
 	"github.com/EinarLogiOskars/commitarium/internal/feature"
 	"github.com/EinarLogiOskars/commitarium/internal/featureartifact"
 	"github.com/EinarLogiOskars/commitarium/internal/project"
@@ -42,6 +43,9 @@ type StateDescriber struct {
 	Visions    VisionReader
 	Toolchains ToolchainReader
 	Models     func(ctx context.Context) []ModelChoice
+	// Runs, when set, adds what an unfinished work order's run is doing or
+	// waiting for, and why.
+	Runs RunReader
 }
 
 // maxWorkOrders bounds the work orders listed for a project.
@@ -169,10 +173,10 @@ func (describer StateDescriber) writeProject(ctx context.Context, builder *strin
 		if !linked[item.ID] {
 			outside = " — outside the vision"
 		}
-		builder.WriteString(fmt.Sprintf("- %s %q (%s): %s, steps %s, lead %s on %s, reviewer %s on %s%s\n",
+		builder.WriteString(fmt.Sprintf("- %s %q (%s): %s, steps %s, lead %s on %s, reviewer %s on %s%s%s\n",
 			kind, item.Title, item.ID, item.State, stepsName(item.Steps),
 			item.AgentProviders.LeadAgent, item.AgentModels.Lead,
-			item.AgentProviders.ReviewerAgent, item.AgentModels.Reviewer, outside))
+			item.AgentProviders.ReviewerAgent, item.AgentModels.Reviewer, outside, describer.runNote(ctx, item)))
 	}
 	if listed == 0 {
 		builder.WriteString("- none yet\n")
@@ -228,4 +232,31 @@ func collectLinked(items []featureartifact.VisionItem, linked map[string]bool) {
 		}
 		collectLinked(item.Items, linked)
 	}
+}
+
+// runNote says what an unfinished work order's newest run is doing or
+// waiting for, and why.
+func (describer StateDescriber) runNote(ctx context.Context, item feature.Feature) string {
+	if describer.Runs == nil || item.State.IsTerminal() {
+		return ""
+	}
+	runs, err := describer.Runs.RunsForFeature(ctx, item.ID)
+	if err != nil {
+		return ""
+	}
+	run, ok := newest(runs)
+	if !ok {
+		return ""
+	}
+	note := "; run " + string(run.Status)
+	if run.WaitKind != "" && run.Status == execution.RunStatusWaitingForUser {
+		note += " (" + string(run.WaitKind) + ")"
+	}
+	if reason := strings.TrimSpace(run.Reason); reason != "" && run.Status != execution.RunStatusRunning {
+		if len(reason) > 600 {
+			reason = reason[:600] + "…"
+		}
+		note += ": " + strings.ReplaceAll(reason, "\n", " ")
+	}
+	return note
 }

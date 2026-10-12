@@ -124,3 +124,38 @@ func TestStoppingAutopilotLeavesActionsForTheUser(t *testing.T) {
 		t.Fatalf("a stopped autopilot applied %+v", apply)
 	}
 }
+
+func TestAutopilotContinuesABlockedWorkOrderAtMostTwice(t *testing.T) {
+	service, worker := newTestService(t)
+	service.config.Visions = &visionStub{plan: featureartifact.VisionPlan{Priorities: []featureartifact.VisionPriority{
+		{Level: 0, Items: []featureartifact.VisionItem{{ID: "list", Title: "Show the log", FeatureID: "fea_list"}}},
+	}}}
+	service.config.Features = &featuresStub{features: []feature.Feature{{ID: "fea_list", State: feature.StateImplementing}}}
+	if _, err := service.StartGoal(t.Context(), "prj_test", 0); err != nil {
+		t.Fatal(err)
+	}
+	continues := 0
+	for turn := 1; turn <= 3; turn++ {
+		if _, err := service.Send(t.Context(), "prj_test", "Go on", "msg-"+string(rune('0'+turn))); err != nil {
+			t.Fatal(err)
+		}
+		worker.finish(workerhttp.TerminalResult{
+			Outcome: workerhttp.OutcomeCompleted, Disposition: workerhttp.DispositionSucceeded, Summary: "Retrying.",
+			AssistantTurn: &featureartifact.AssistantTurn{Actions: []featureartifact.AssistantAction{
+				{Type: featureartifact.AssistantContinueWorkOrder, Reason: "Blocked", WorkOrderID: "fea_list", Guidance: "Fix it."},
+			}},
+		})
+		if _, err := service.Get(t.Context(), "prj_test"); err != nil {
+			t.Fatal(err)
+		}
+		apply, err := service.autopilotActions("prj_test")
+		if err != nil {
+			t.Fatal(err)
+		}
+		continues += len(apply)
+	}
+	conversation, _ := service.Get(t.Context(), "prj_test")
+	if continues != 2 || !strings.Contains(conversation.Messages[len(conversation.Messages)-1].Text, "yours to approve") {
+		t.Fatalf("continues = %d, last = %q", continues, conversation.Messages[len(conversation.Messages)-1].Text)
+	}
+}
