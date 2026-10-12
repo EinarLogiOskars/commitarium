@@ -222,6 +222,9 @@ func (item work) event() (Event, bool) {
 		return Event{Text: name + " merged.", Wake: true}, true
 	case item.State.IsTerminal():
 		return Event{}, false
+	case item.State == feature.StateReady && item.RunStatus == execution.RunStatusStopped:
+		// Returned to Ready to start over: under autopilot it starts again.
+		return Event{Text: name + " is back in Ready to start over.", Wake: true}, true
 	case item.RunStatus == execution.RunStatusFailed:
 		return Event{Text: with(name + " failed"), Wake: true}, true
 	case item.RunStatus != execution.RunStatusWaitingForUser:

@@ -100,3 +100,11 @@ func TestEventsWakeTheAssistantOneTurnAtATime(t *testing.T) {
 		t.Fatalf("the waiting event was not delivered: %+v", conversation)
 	}
 }
+
+func TestAWorkOrderBackInReadyWakesTheAssistant(t *testing.T) {
+	events := changes(map[string]string{"fea_1": "ready_to_merge|run_1|waiting_for_user|blocker|"},
+		map[string]work{"fea_1": {Title: "Practice", State: feature.StateReady, RunID: "run_1", RunStatus: execution.RunStatusStopped}})
+	if len(events) != 1 || !events[0].Wake || !strings.Contains(events[0].Text, "back in Ready") {
+		t.Fatalf("events = %+v", events)
+	}
+}
