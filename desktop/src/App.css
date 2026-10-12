@@ -3846,3 +3846,15 @@ button.danger:not(.ghost) {
   background: var(--bg);
   max-width: 900px;
 }
+
+/* The corner button stays above the open drawer, as its close button. */
+.assistant-fab {
+  z-index: 41;
+}
+.assistant-fab--open {
+  color: var(--text);
+  box-shadow: none;
+}
+.assistant-drawer__head {
+  padding-right: 52px;
+}

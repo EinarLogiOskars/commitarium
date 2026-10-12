@@ -112,22 +112,41 @@ export function AssistantDrawer({
 
   return (
     <>
-      {!open && (
-        <button
-          className={`assistant-fab ${running ? "assistant-fab--working" : ""}`}
-          onClick={() => setOpen(true)}
-          title={running ? "The assistant is answering" : "Open the assistant"}
-          aria-label="Open the assistant"
-        >
+      {/* One button in the corner opens and closes the drawer. */}
+      <button
+        className={`assistant-fab ${open ? "assistant-fab--open" : ""} ${running && !open ? "assistant-fab--working" : ""}`}
+        onClick={() => setOpen((v) => !v)}
+        title={
+          open
+            ? "Close the assistant"
+            : running
+              ? "The assistant is answering"
+              : "Open the assistant"
+        }
+        aria-label={open ? "Close the assistant" : "Open the assistant"}
+        aria-expanded={open}
+      >
+        {open ? (
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" aria-hidden>
+            <path
+              d="M6 6l12 12M18 6L6 18"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+            />
+          </svg>
+        ) : (
           <svg viewBox="0 0 24 24" width="20" height="20" fill="none" aria-hidden>
             <path
               d="M12 3l1.8 4.6L18.5 9l-4.7 1.6L12 15l-1.8-4.4L5.5 9l4.7-1.4L12 3zM18 15l.9 2.1 2.1.9-2.1.9L18 21l-.9-2.1L15 18l2.1-.9L18 15z"
               fill="currentColor"
             />
           </svg>
-          {unseen && <span className="assistant-fab__dot" aria-label="A reply you have not seen" />}
-        </button>
-      )}
+        )}
+        {unseen && !open && (
+          <span className="assistant-fab__dot" aria-label="A reply you have not seen" />
+        )}
+      </button>
       {open && (
         <aside className="assistant-drawer" aria-label="Assistant">
           <header className="assistant-drawer__head">
@@ -140,14 +159,6 @@ export function AssistantDrawer({
               onClick={() => setNotesOpen((v) => !v)}
             >
               Notes
-            </button>
-            <button
-              className="ghost assistant-drawer__close"
-              onClick={() => setOpen(false)}
-              aria-label="Minimize the assistant"
-              title="Minimize"
-            >
-              ⌄
             </button>
           </header>
           {!conversation ? (
