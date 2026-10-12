@@ -311,7 +311,9 @@ func (service *Service) Action(ctx context.Context, scope, actionID string) (Act
 
 // Resolve records the outcome of a proposed action: applied with what it did,
 // failed with why, or dismissed. Only a proposed action can be resolved.
-func (service *Service) Resolve(ctx context.Context, scope, actionID string, status ActionStatus, result string) (Conversation, error) {
+// Resolve records an action's outcome. workOrderID names the work order an
+// applied action created, so the app can open it.
+func (service *Service) Resolve(ctx context.Context, scope, actionID string, status ActionStatus, result, workOrderID string) (Conversation, error) {
 	if status != ActionApplied && status != ActionFailed && status != ActionDismissed {
 		return Conversation{}, ErrInvalid
 	}
@@ -335,6 +337,9 @@ func (service *Service) Resolve(ctx context.Context, scope, actionID string, sta
 		// The outcome shows on the action's card; the assistant reads the
 		// work it changed from the project's state on its next turn.
 		action.Status, action.Result, action.UpdatedAt = status, strings.TrimSpace(result), service.now()
+		if workOrderID != "" {
+			action.WorkOrderID = workOrderID
+		}
 		stored.UpdatedAt = action.UpdatedAt
 		return stored.Conversation, service.write(stored)
 	}

@@ -26,7 +26,7 @@ type ConversationService interface {
 	Send(ctx context.Context, scope, message, key string) (conversations.Conversation, error)
 	SaveNotes(ctx context.Context, scope, notes string) (conversations.Conversation, error)
 	Action(ctx context.Context, scope, actionID string) (conversations.Action, error)
-	Resolve(ctx context.Context, scope, actionID string, status conversations.ActionStatus, result string) (conversations.Conversation, error)
+	Resolve(ctx context.Context, scope, actionID string, status conversations.ActionStatus, result, workOrderID string) (conversations.Conversation, error)
 }
 
 func (api *API) getAssistantSettingsHandler(w http.ResponseWriter, r *http.Request) {
@@ -97,7 +97,7 @@ func (api *API) saveConversationNotesHandler(w http.ResponseWriter, r *http.Requ
 
 func (api *API) dismissConversationActionHandler(w http.ResponseWriter, r *http.Request) {
 	conversation, err := api.conversations.Resolve(
-		r.Context(), r.PathValue("scope"), r.PathValue("actionID"), conversations.ActionDismissed, "",
+		r.Context(), r.PathValue("scope"), r.PathValue("actionID"), conversations.ActionDismissed, "", "",
 	)
 	if err != nil {
 		writeConversationError(w, err)
@@ -142,9 +142,12 @@ func (api *API) approveConversationActionHandler(w http.ResponseWriter, r *http.
 	}
 	var result string
 	var ok bool
+	// The work order the action touched, for the app to open; a new one's ID
+	// is known only once it exists.
+	workOrderID := action.WorkOrderID
 	switch action.Type {
 	case featureartifact.AssistantCreateWorkOrder:
-		result, ok = api.applyCreateWorkOrder(w, r, scope, action, body.Start)
+		result, workOrderID, ok = api.applyCreateWorkOrder(w, r, scope, action, body.Start)
 	case featureartifact.AssistantStartWorkOrder:
 		result, ok = api.applyStartWorkOrder(w, r, scope, action)
 	case featureartifact.AssistantChangeModels:
@@ -158,7 +161,7 @@ func (api *API) approveConversationActionHandler(w http.ResponseWriter, r *http.
 	if !ok {
 		return
 	}
-	conversation, err := api.conversations.Resolve(r.Context(), scope, actionID, conversations.ActionApplied, result)
+	conversation, err := api.conversations.Resolve(r.Context(), scope, actionID, conversations.ActionApplied, result, workOrderID)
 	if err != nil {
 		writeConversationError(w, err)
 		return
@@ -168,28 +171,28 @@ func (api *API) approveConversationActionHandler(w http.ResponseWriter, r *http.
 
 func (api *API) applyCreateWorkOrder(
 	w http.ResponseWriter, r *http.Request, projectID string, action conversations.Action, start bool,
-) (string, bool) {
+) (string, string, bool) {
 	ctx := r.Context()
 	if api.toolchains != nil {
 		manifest, err := api.projectToolchain(ctx, projectID)
 		if err != nil {
 			api.writeToolchainError(w, projectID, "check before an assistant work order", err)
-			return "", false
+			return "", "", false
 		}
 		if manifest.Status != toolchain.StatusConfigured {
 			writeError(w, http.StatusConflict, "project_toolchain_required", "choose or detect the project toolchain before creating a work order")
-			return "", false
+			return "", "", false
 		}
 	}
 	stored, err := api.projects.GetByID(ctx, projectID)
 	if err != nil {
 		writeConversationError(w, err)
-		return "", false
+		return "", "", false
 	}
 	overrides, err := api.assistantSettings(ctx, stored, action.AssistantAction)
 	if err != nil {
 		writeAssistantSettingsError(w, err)
-		return "", false
+		return "", "", false
 	}
 	description := action.Description
 	if action.VisionItemID != "" && api.visions != nil {
@@ -203,7 +206,7 @@ func (api *API) applyCreateWorkOrder(
 	if err != nil {
 		log.Printf("create the assistant's work order %q: %v", action.Title, err)
 		writeError(w, http.StatusInternalServerError, "internal_error", "internal server error")
-		return "", false
+		return "", "", false
 	}
 	if action.VisionItemID != "" && api.visions != nil {
 		if _, err := api.visions.LinkWorkOrder(ctx, projectID, action.VisionItemID, created.ID); err != nil {
@@ -212,15 +215,15 @@ func (api *API) applyCreateWorkOrder(
 	}
 	result := "Created the work order “" + created.Title + "” (" + created.ID + ")."
 	if !start {
-		return result, true
+		return result, created.ID, true
 	}
 	clarification := false
 	if _, ok := api.startFeature(w, r, created, "assistant-"+action.ID, &startRunRequest{
 		Steps: &workStepsRequest{Clarification: &clarification},
 	}); !ok {
-		return "", false
+		return "", "", false
 	}
-	return "Created and started the work order “" + created.Title + "” (" + created.ID + ").", true
+	return "Created and started the work order “" + created.Title + "” (" + created.ID + ").", created.ID, true
 }
 
 func (api *API) applyStartWorkOrder(

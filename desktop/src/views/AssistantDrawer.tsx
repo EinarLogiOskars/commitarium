@@ -19,6 +19,8 @@ const POLL_MS = 2000;
 
 /** Fired when an approved assistant action changed the project's work. */
 export const WORK_CHANGED = "commitarium:work-changed";
+/** Asks the open project to show its Vision page. */
+export const OPEN_VISION = "commitarium:open-vision";
 
 const STEPS_LABEL: Record<string, string> = {
   full: "Full (plan, review)",
@@ -287,10 +289,19 @@ function ActionCard({
     setBusy(kind);
     setError(null);
     try {
-      onChanged(await fn());
-      // An approved action may have created or started work: the open
-      // project's lists reload.
-      if (kind !== "dismiss") window.dispatchEvent(new Event(WORK_CHANGED));
+      const conversation = await fn();
+      onChanged(conversation);
+      if (kind !== "dismiss") {
+        // An approved action may have created or started work: the open
+        // project's lists reload, and the app goes to what changed.
+        window.dispatchEvent(new Event(WORK_CHANGED));
+        const applied = conversation.actions?.find((a) => a.id === action.id);
+        if (applied?.type === "add_vision_item") {
+          window.dispatchEvent(new Event(OPEN_VISION));
+        } else if (applied?.work_order_id) {
+          onOpenOrder?.(applied.work_order_id);
+        }
+      }
     } catch (e) {
       setError(describe(e));
     } finally {

@@ -43,7 +43,7 @@ func (stub *conversationStub) Action(context.Context, string, string) (conversat
 	return stub.action, nil
 }
 
-func (stub *conversationStub) Resolve(_ context.Context, _ string, _ string, status conversations.ActionStatus, result string) (conversations.Conversation, error) {
+func (stub *conversationStub) Resolve(_ context.Context, _ string, _ string, status conversations.ActionStatus, result, _ string) (conversations.Conversation, error) {
 	stub.resolvedStatus, stub.resolvedResult = status, result
 	return conversations.Conversation{}, nil
 }
