@@ -5,6 +5,7 @@ import {
   updateAgentSettings,
   updateAutonomyPolicy,
   updateIndependentAcceptanceTests,
+  setProjectApp,
   updateMergePolicy,
   updateProjectValidation,
 } from "../api/projects";
@@ -32,6 +33,7 @@ export function ProjectSettings({
 }) {
   return (
     <>
+      <UseAsApp project={project} onUpdated={onUpdated} />
       <Agents project={project} onUpdated={onUpdated} />
       <Autonomy project={project} onUpdated={onUpdated} />
       <Merge project={project} onUpdated={onUpdated} />
@@ -393,6 +395,43 @@ function Recovery({ project }: { project: Project }) {
       <h2>Recovery policy</h2>
       <p>{project.recovery_policy === "automatic" ? "Automatic recovery" : "Approval required"}</p>
       <p className="muted note">Set when the project is created; not editable yet.</p>
+    </section>
+  );
+}
+
+// Use the project as an app (APPS_PLAN.md): it shows in the Apps area and
+// opens in its own window. Saved at once; a project can switch back.
+function UseAsApp({ project, onUpdated }: { project: Project; onUpdated: (p: Project) => void }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const change = async (app: boolean) => {
+    setBusy(true);
+    setError(null);
+    try {
+      onUpdated(await setProjectApp(project.id, app));
+    } catch (e) {
+      setError(describe(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <section className="panel">
+      <h2>App</h2>
+      {error && <div className="banner banner--error">{error}</div>}
+      <p className="muted">
+        Use this project as an app: it shows in the Apps area and opens in its own window, rebuilt
+        whenever its work merges.
+      </p>
+      <label className="toggle">
+        <input
+          type="checkbox"
+          checked={!!project.app}
+          onChange={(e) => void change(e.target.checked)}
+          disabled={busy}
+        />
+        Use as an app
+      </label>
     </section>
   );
 }

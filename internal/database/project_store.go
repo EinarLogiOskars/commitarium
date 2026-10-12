@@ -138,7 +138,7 @@ func (s *ProjectStore) GetByID(
 	storedProject, err := scanProject(s.db.QueryRowContext(
 		ctx,
 		`
-			SELECT id, name, recovery_policy, merge_policy, autonomy_policy, independent_acceptance_tests,
+			SELECT id, name, recovery_policy, merge_policy, autonomy_policy, independent_acceptance_tests, is_app,
 			       planning_round_limit, implementation_review_round_limit,
 			       lead_provider, reviewer_provider, lead_agent, reviewer_agent, lead_model, reviewer_model,
 			       forgejo_owner, forgejo_repository, forgejo_default_branch, forgejo_bound_at,
@@ -178,7 +178,7 @@ func (s *ProjectStore) ProjectDeletionPending(ctx context.Context, projectID str
 func (s *ProjectStore) List(ctx context.Context) ([]project.Project, error) {
 	rows, err := s.db.QueryContext(
 		ctx,
-		`SELECT id, name, recovery_policy, merge_policy, autonomy_policy, independent_acceptance_tests,
+		`SELECT id, name, recovery_policy, merge_policy, autonomy_policy, independent_acceptance_tests, is_app,
 		        planning_round_limit, implementation_review_round_limit,
 		        lead_provider, reviewer_provider, lead_agent, reviewer_agent, lead_model, reviewer_model,
 		        forgejo_owner, forgejo_repository, forgejo_default_branch, forgejo_bound_at,
@@ -263,6 +263,22 @@ func (s *ProjectStore) UpdateIndependentAcceptanceTests(
 	}
 	if rowsAffected != 1 {
 		return project.Project{}, fmt.Errorf("update independent acceptance tests for project %q: expected one affected row, got %d", projectID, rowsAffected)
+	}
+	return s.GetByID(ctx, projectID)
+}
+
+// UpdateApp marks a project as an app, or as a project only.
+func (s *ProjectStore) UpdateApp(ctx context.Context, projectID string, app bool) (project.Project, error) {
+	result, err := s.db.ExecContext(ctx, `UPDATE projects SET is_app = ? WHERE id = ?`, app, projectID)
+	if err != nil {
+		return project.Project{}, fmt.Errorf("update app flag for project %q: %w", projectID, err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return project.Project{}, fmt.Errorf("read app flag update count for project %q: %w", projectID, err)
+	}
+	if rowsAffected == 0 {
+		return project.Project{}, project.ErrNotFound
 	}
 	return s.GetByID(ctx, projectID)
 }
@@ -437,7 +453,7 @@ func (s *ProjectStore) BindForgejoRepository(
 
 	storedProject, err := scanProject(tx.QueryRowContext(
 		ctx,
-		`SELECT id, name, recovery_policy, merge_policy, autonomy_policy, independent_acceptance_tests,
+		`SELECT id, name, recovery_policy, merge_policy, autonomy_policy, independent_acceptance_tests, is_app,
 		        planning_round_limit, implementation_review_round_limit,
 		        lead_provider, reviewer_provider, lead_agent, reviewer_agent, lead_model, reviewer_model,
 		        forgejo_owner, forgejo_repository, forgejo_default_branch, forgejo_bound_at,
@@ -509,6 +525,7 @@ func scanProject(scanner projectScanner) (project.Project, error) {
 		&storedProject.MergePolicy,
 		&storedProject.AutonomyPolicy,
 		&storedProject.IndependentAcceptanceTests,
+		&storedProject.App,
 		&storedProject.DialogueLimits.PlanningRounds,
 		&storedProject.DialogueLimits.ImplementationReviewRounds,
 		&storedProject.AgentProviders.Lead,

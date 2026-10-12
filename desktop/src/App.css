@@ -4180,3 +4180,93 @@ select:focus {
   font-size: 13px;
   line-height: 1;
 }
+
+/* An app's own window: the app fills it; Commitarium only floats the
+   assistant's button over it. */
+.app-window {
+  position: fixed;
+  inset: 0;
+  background: var(--bg);
+}
+.app-window__frame {
+  width: 100%;
+  height: 100%;
+  border: none;
+  display: block;
+  background: #fff;
+}
+.app-window__state {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  text-align: center;
+  padding: 24px;
+}
+.app-window__state h1 {
+  margin: 0;
+  font-size: 22px;
+}
+.app-window__starting {
+  animation: dot-pulse 1.6s ease-in-out infinite;
+}
+
+/* The Apps area: an app per tile. */
+.apps {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 14px;
+}
+.apps__tile {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 16px;
+  border-radius: 14px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  text-align: left;
+  color: inherit;
+  cursor: pointer;
+}
+.apps__tile:hover {
+  border-color: var(--lavender);
+}
+.apps__icon {
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
+  display: grid;
+  place-items: center;
+  font-weight: 700;
+  font-size: 18px;
+  color: #fff;
+}
+.apps__name {
+  font-weight: 600;
+}
+.apps__state {
+  font-size: 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.view-switch {
+  display: inline-flex;
+  gap: 2px;
+  margin-left: 18px;
+}
+.view-switch__item {
+  border: none;
+  background: none;
+  padding: 5px 12px;
+  border-radius: 8px;
+  color: var(--muted);
+}
+.view-switch__item--on {
+  color: var(--text);
+  background: color-mix(in srgb, var(--lavender) 45%, transparent);
+}

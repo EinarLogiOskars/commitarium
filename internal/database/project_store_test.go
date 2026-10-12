@@ -356,3 +356,24 @@ func newTestProjectStore(t *testing.T) *ProjectStore {
 
 	return NewProjectStore(db)
 }
+
+func TestProjectStoreMarksAProjectAsAnApp(t *testing.T) {
+	store := newTestProjectStore(t)
+	created := project.Project{ID: "prj_app", Name: "Calories", CreatedAt: time.Now().UTC()}
+	if err := store.Create(t.Context(), created); err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	if fresh, err := store.GetByID(t.Context(), created.ID); err != nil || fresh.App {
+		t.Fatalf("a new project is an app: project=%+v err=%v", fresh, err)
+	}
+	if updated, err := store.UpdateApp(t.Context(), created.ID, true); err != nil || !updated.App {
+		t.Fatalf("mark as app: project=%+v err=%v", updated, err)
+	}
+	listed, err := store.List(t.Context())
+	if err != nil || len(listed) != 1 || !listed[0].App {
+		t.Fatalf("list after marking: %+v err=%v", listed, err)
+	}
+	if _, err := store.UpdateApp(t.Context(), "prj_missing", true); !errors.Is(err, project.ErrNotFound) {
+		t.Fatalf("missing project error = %v", err)
+	}
+}

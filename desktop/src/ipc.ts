@@ -464,6 +464,10 @@ export interface PreviewStatus {
   error: string | null; // set when "failed"
 }
 
+/** Open an app's own window (APPS_PLAN.md), or bring it to the front. */
+export const openAppWindow = (projectId: string, title: string): Promise<void> =>
+  invoke("open_app_window", { projectId, title });
+
 /** Start a preview, replacing any running one for the project. Returns in
  * "starting"; progress arrives via onPreviewStatusChanged. */
 export const startPreview = (

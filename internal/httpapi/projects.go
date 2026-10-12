@@ -36,6 +36,7 @@ type projectResponse struct {
 	MergePolicy                project.MergePolicy        `json:"merge_policy"`
 	AutonomyPolicy             project.AutonomyPolicy     `json:"autonomy_policy"`
 	IndependentAcceptanceTests bool                       `json:"independent_acceptance_tests"`
+	App                        bool                       `json:"app"`
 	DialogueLimits             dialogueLimitsResponse     `json:"dialogue_limits"`
 	AgentProviders             agentProvidersResponse     `json:"agent_providers"`
 	AgentModels                agentModelsResponse        `json:"agent_models"`
@@ -484,6 +485,38 @@ func (api *API) updateProjectIndependentAcceptanceTestsHandler(w http.ResponseWr
 	writeJSON(w, http.StatusOK, newProjectResponse(updated), "project")
 }
 
+type projectAppRequest struct {
+	App *bool `json:"app"`
+}
+
+// updateProjectAppHandler marks a project as an app, or as a project only.
+func (api *API) updateProjectAppHandler(w http.ResponseWriter, r *http.Request) {
+	request := projectAppRequest{}
+	if !decodeSingleJSON(w, r, &request) {
+		return
+	}
+	if request.App == nil {
+		writeError(w, http.StatusBadRequest, "invalid_json", "app is required")
+		return
+	}
+	settings, ok := api.projects.(ProjectAppService)
+	if !ok {
+		writeError(w, http.StatusServiceUnavailable, "apps_unavailable", "apps are unavailable")
+		return
+	}
+	updated, err := settings.UpdateApp(r.Context(), r.PathValue("id"), *request.App)
+	if err != nil {
+		if errors.Is(err, project.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "project_not_found", "project not found")
+			return
+		}
+		log.Printf("update project app flag %q: %v", r.PathValue("id"), err)
+		writeError(w, http.StatusInternalServerError, "internal_error", "internal server error")
+		return
+	}
+	writeJSON(w, http.StatusOK, newProjectResponse(updated), "project")
+}
+
 func (api *API) updateProjectAutonomyPolicyHandler(w http.ResponseWriter, r *http.Request) {
 	request := autonomyPolicyRequest{}
 	decoder := json.NewDecoder(r.Body)
@@ -804,6 +837,7 @@ func newProjectResponse(storedProject project.Project) projectResponse {
 		MergePolicy:                storedProject.MergePolicy,
 		AutonomyPolicy:             storedProject.AutonomyPolicy,
 		IndependentAcceptanceTests: storedProject.IndependentAcceptanceTests,
+		App:                        storedProject.App,
 		DialogueLimits: dialogueLimitsResponse{
 			PlanningRounds:             storedProject.DialogueLimits.PlanningRounds,
 			ImplementationReviewRounds: storedProject.DialogueLimits.ImplementationReviewRounds,

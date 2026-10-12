@@ -56,7 +56,7 @@ func (store *ProjectDeletionStore) BeginDeletion(
 	}
 
 	storedProject, err := scanProject(tx.QueryRowContext(ctx, `
-		SELECT id, name, recovery_policy, merge_policy, autonomy_policy, independent_acceptance_tests,
+		SELECT id, name, recovery_policy, merge_policy, autonomy_policy, independent_acceptance_tests, is_app,
 		       planning_round_limit, implementation_review_round_limit,
 		       lead_provider, reviewer_provider, lead_agent, reviewer_agent, lead_model, reviewer_model,
 		       forgejo_owner, forgejo_repository, forgejo_default_branch, forgejo_bound_at,

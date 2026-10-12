@@ -36,6 +36,11 @@ type ProjectIndependentAcceptanceTestsService interface {
 	UpdateIndependentAcceptanceTests(ctx context.Context, projectID string, enabled bool) (project.Project, error)
 }
 
+// ProjectAppService marks projects as apps (APPS_PLAN.md).
+type ProjectAppService interface {
+	UpdateApp(ctx context.Context, projectID string, app bool) (project.Project, error)
+}
+
 type ProjectAgentModelCreator interface {
 	CreateWithAgentModels(ctx context.Context, name string, recoveryPolicy project.RecoveryPolicy, dialogueLimits project.DialogueLimits, agentProviders project.AgentProviders, agentModels project.AgentModels, mergePolicy project.MergePolicy, autonomyPolicy ...project.AutonomyPolicy) (project.Project, error)
 }
@@ -551,6 +556,7 @@ func newAPI(
 		"PUT /api/v1/projects/{id}/independent-acceptance-tests",
 		api.updateProjectIndependentAcceptanceTestsHandler,
 	)
+	mux.HandleFunc("PUT /api/v1/projects/{id}/app", api.updateProjectAppHandler)
 	mux.HandleFunc(
 		"PUT /api/v1/projects/{id}/forgejo-repository",
 		api.bindForgejoRepositoryHandler,

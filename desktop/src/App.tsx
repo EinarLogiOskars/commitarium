@@ -14,6 +14,7 @@ import { Inbox } from "./views/Inbox";
 import { AssistantDrawer } from "./views/AssistantDrawer";
 import { useWorkLayout } from "./views/useWorkLayout";
 import { AutopilotBanner } from "./views/AutopilotBanner";
+import { AppsView } from "./views/AppsView";
 import type { AutopilotGoal } from "./api/assistant";
 import { Launcher } from "./views/Launcher";
 import { Projects } from "./views/Projects";
@@ -47,6 +48,8 @@ function App() {
   const [foreground, setForeground] = useState<string | null>(null);
   // How the rail and the open assistant share the window.
   const layout = useWorkLayout(projectId !== null);
+  // Outside a project: the project list, or the Apps area (APPS_PLAN.md).
+  const [area, setArea] = useState<"projects" | "apps">("projects");
   // The open project's autopilot goal while it is on, as the assistant reports it.
   const [goal, setGoal] = useState<AutopilotGoal | null>(null);
 
@@ -303,6 +306,19 @@ function App() {
       {!projectId && (
         <header className="topbar">
           <span className="topbar__brand">Commitarium</span>
+          <span className="view-switch" role="tablist">
+            {(["projects", "apps"] as const).map((value) => (
+              <button
+                key={value}
+                role="tab"
+                aria-selected={area === value}
+                className={`view-switch__item ${area === value ? "view-switch__item--on" : ""}`}
+                onClick={() => setArea(value)}
+              >
+                {value === "projects" ? "Projects" : "Apps"}
+              </button>
+            ))}
+          </span>
           {projectId && (
             <button
               className="topbar__project topbar__switch"
@@ -380,7 +396,16 @@ function App() {
         ) : (
           <main className="main">
             <div className="main__inner">
-              <Projects reachable={reachable} onSelect={setProjectId} />
+              {area === "apps" ? (
+                <AppsView
+                  reachable={reachable}
+                  attention={attention.items}
+                  running={attention.running}
+                  onShowWork={setProjectId}
+                />
+              ) : (
+                <Projects reachable={reachable} onSelect={setProjectId} />
+              )}
             </div>
           </main>
         )}

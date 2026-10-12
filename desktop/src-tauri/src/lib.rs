@@ -1,4 +1,5 @@
 mod agents;
+mod apps;
 mod bootstrap;
 mod cli_updates;
 mod docker;
@@ -46,6 +47,7 @@ pub fn run() {
         // set is the trust boundary: no arbitrary shell, Docker, or filesystem
         // access reaches the untrusted UI.
         .invoke_handler(tauri::generate_handler![
+            apps::open_app_window,
             cli_updates::check_agent_cli_updates,
             preview::prune_session_previews,
             cli_updates::update_agent_cli,
