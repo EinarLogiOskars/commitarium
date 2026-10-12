@@ -26,21 +26,28 @@ const STEPS_LABEL: Record<string, string> = {
   quick: "Quick change",
 };
 
-// The assistant (ASSISTANT_PLAN.md) in a drawer over the right half of the
-// window, opened from a round button in the top-right corner and minimized
-// back to it, so the user keeps their place. It follows where the user is: a
+// The assistant (ASSISTANT_PLAN.md) in a drawer on the right of the window,
+// opened from a round button in the top-right corner and minimized back to
+// it, so the user keeps their place. Docked, the page narrows beside it;
+// otherwise it lies over the page. It follows where the user is: a
 // project's conversation inside a project, the top-level one elsewhere. The
 // button pulses while it answers and shows a dot for a reply not yet seen.
 export function AssistantDrawer({
   scope,
   scopeLabel,
   onOpenOrder,
+  open,
+  onOpenChange: setOpen,
+  docked,
 }: {
   scope: string;
   scopeLabel: string;
   onOpenOrder?: (featureId: string) => void;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  /** Beside the page rather than over it. */
+  docked: boolean;
 }) {
-  const [open, setOpen] = useState(false);
   const [conversation, setConversation] = useState<Conversation | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
@@ -124,7 +131,7 @@ export function AssistantDrawer({
       {/* One button in the corner opens and closes the drawer. */}
       <button
         className={`assistant-fab ${open ? "assistant-fab--open" : ""} ${running && !open ? "assistant-fab--working" : ""}`}
-        onClick={() => setOpen((v) => !v)}
+        onClick={() => setOpen(!open)}
         title={
           open
             ? "Close the assistant"
@@ -157,7 +164,10 @@ export function AssistantDrawer({
         )}
       </button>
       {open && (
-        <aside className="assistant-drawer" aria-label="Assistant">
+        <aside
+          className={`assistant-drawer ${docked ? "assistant-drawer--docked" : ""}`}
+          aria-label="Assistant"
+        >
           <header className="assistant-drawer__head">
             <div className="assistant-drawer__title">
               <strong>Assistant</strong>

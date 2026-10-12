@@ -3858,3 +3858,49 @@ button.danger:not(.ghost) {
 .assistant-drawer__head {
   padding-right: 52px;
 }
+
+/* The rail folds to a strip; its toggle sits beside the project switcher. */
+.rail__top {
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
+  margin-bottom: 6px;
+  border-bottom: 1px solid var(--border);
+}
+.rail__top .rail__switch {
+  flex: 1;
+  min-width: 0;
+  margin-bottom: 0;
+  border-bottom: none;
+}
+.rail__toggle {
+  flex: none;
+  padding: 6px;
+  margin-top: 2px;
+  color: var(--muted);
+  display: grid;
+  place-items: center;
+}
+.rail__toggle:hover {
+  color: var(--text);
+}
+.rail--collapsed {
+  width: 52px;
+  padding: 12px 8px;
+  align-items: center;
+  overflow: hidden;
+}
+
+/* Docked, the assistant takes a column of its own and the page narrows. */
+.shell--docked {
+  padding-right: var(--assistant-width);
+}
+.assistant-drawer--docked {
+  width: var(--assistant-width);
+  min-width: 0;
+  box-shadow: none;
+}
+.shell--docked .main,
+.shell--docked .topbar {
+  padding-right: 28px;
+}

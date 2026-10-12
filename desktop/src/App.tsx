@@ -12,6 +12,7 @@ import { AppSettings } from "./views/AppSettings";
 import { ExitConfirm } from "./views/ExitConfirm";
 import { Inbox } from "./views/Inbox";
 import { AssistantDrawer } from "./views/AssistantDrawer";
+import { useWorkLayout } from "./views/useWorkLayout";
 import { Launcher } from "./views/Launcher";
 import { Projects } from "./views/Projects";
 import { ProjectWorkspace } from "./views/ProjectWorkspace";
@@ -42,6 +43,8 @@ function App() {
   // The work order on screen, if any — notifications skip what is already
   // visible. Stable setter, so it doesn't re-fire the workspace's report.
   const [foreground, setForeground] = useState<string | null>(null);
+  // How the rail and the open assistant share the window.
+  const layout = useWorkLayout(projectId !== null);
 
   // Only poll from inside the workspace: the launcher has nowhere to show it.
   const attention = useAttention(entered && reachable);
@@ -262,7 +265,10 @@ function App() {
   );
 
   return (
-    <div className="shell">
+    <div
+      className={`shell ${layout.docked ? "shell--docked" : ""}`}
+      style={{ "--assistant-width": `${layout.assistantWidth}px` } as React.CSSProperties}
+    >
       {!projectId && (
         <header className="topbar">
           <span className="topbar__brand">Commitarium</span>
@@ -319,6 +325,9 @@ function App() {
         scope={projectId ?? "commitarium"}
         scopeLabel={projectId ? (projectName ?? "") : "All projects"}
         onOpenOrder={projectId ? (featureId) => openFromInbox(projectId, featureId) : undefined}
+        open={layout.assistantOpen}
+        onOpenChange={layout.setAssistantOpen}
+        docked={layout.docked}
       />
 
       <div className="shell__body">
@@ -331,6 +340,8 @@ function App() {
             onForeground={setForeground}
             railHeader={projectSwitch}
             systemNav={systemNav}
+            railCollapsed={layout.railCollapsed}
+            onToggleRail={layout.toggleRail}
           />
         ) : (
           <main className="main">
