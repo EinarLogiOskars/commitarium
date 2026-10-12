@@ -4140,3 +4140,15 @@ select:focus {
   outline: 2px solid color-mix(in srgb, var(--accent) 55%, transparent);
   outline-offset: 0;
 }
+/* The badge and name keep one line; the repository path gives way. */
+.pill--autopilot,
+.list__item .list__title {
+  flex: none;
+  white-space: nowrap;
+}
+.list__item > .muted {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
