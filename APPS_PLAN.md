@@ -1,6 +1,6 @@
 # Apps: Implementation Plan
 
-**Status:** draft for review. Builds on the assistant (ASSISTANT_PLAN.md,
+**Status:** agreed 2026-10-12; phase 1 in progress on `feat/apps`. Builds on the assistant (ASSISTANT_PLAN.md,
 ADR-022) and autopilot (ADR-023).
 
 ## Goal
@@ -29,8 +29,8 @@ them into one flow and gives the result a place to live.
 3. **An app runs in its own window, not the browser.** It runs on the existing
    preview runtime: Docker Compose from a fresh copy of the default branch,
    with its data in volumes that survive restarts. A Tauri window opens a
-   Commitarium page that frames the app full-size and floats a "Change this"
-   button over it.
+   Commitarium page that frames the app full-size and floats the assistant's
+   round button over it, the same one as everywhere else.
 4. **The app never touches Commitarium.** The app's page is in a frame from
    its own local address; the button and chat belong to Commitarium's page
    around it. The app gets no Tauri commands and no coordinator access.
@@ -51,8 +51,9 @@ them into one flow and gives the result a place to live.
    own: the assistant adds it to the vision, and autopilot builds it. The same
    safeguards hold as in ADR-023: premium models wait for approval, reviews
    and merge gates run, and work that needs the user reaches them.
-8. **"Change this" is the assistant's conversation for the app.** The button
-   opens the drawer over the app window, scoped to the app. The user can
+8. **The assistant's round button is how the user changes the app.** It opens
+   the drawer over the app window, scoped to the app; no separate "Change
+   this" control. The user can
    point at what they mean later (a screenshot of the window attached to the
    message); the first version is text.
 
@@ -73,8 +74,8 @@ them into one flow and gives the result a place to live.
   or when created as an app.
 - **Desktop:** the Apps area (tiles, state from the project's runs and
   preview); "Open" starts the preview if needed and opens the app window
-  (WebviewWindow with the framing page); the window reloads when the
-  preview restarts.
+  (WebviewWindow with the framing page and the assistant's button); the
+  window reloads when the preview restarts.
 - **Updates:** a merged work order for an app rebuilds its preview and
   reloads its window.
 
@@ -85,14 +86,13 @@ them into one flow and gives the result a place to live.
 - **Apps mode:** the app's goal is always on; a change request becomes a
   vision item and a goal; the assistant's instructions say it drives and
   reports results.
-- **App window:** the "Change this" button and drawer; progress while
-  building; needs-you prompts.
+- **App window:** progress while building; needs-you prompts.
 
 ## Open questions
 
-- **Several apps at once:** each preview takes ports and memory. Start apps
-  on demand and stop idle ones after a while?
-- **App icons and names:** generate an icon, or use initials on a color?
+- **Several apps at once:** each preview takes ports and memory. Apps start
+  on demand; stopping idle ones comes later if needed.
+- **App icons and names:** initials on a color first; generated icons later.
 - **Sharing data between apps** (a meal planner reading the calorie
   tracker): later, if at all.
 - **The UI library** (ASSISTANT_PLAN.md): apps start looking like one family
