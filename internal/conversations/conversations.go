@@ -189,6 +189,9 @@ type Service struct {
 	config Config
 	now    func() time.Time
 	mu     sync.Mutex
+	// nudge asks the watcher to look now, as when a turn proposed actions
+	// autopilot may take over.
+	nudge chan struct{}
 }
 
 var scopePattern = regexp.MustCompile(`^(commitarium|prj_[A-Za-z0-9]{1,64})$`)
@@ -203,7 +206,7 @@ func NewService(config Config) (*Service, error) {
 	if err := os.MkdirAll(filepath.Join(config.Root, "conversations"), 0o700); err != nil {
 		return nil, fmt.Errorf("%w: create the assistant's storage", ErrUnavailable)
 	}
-	return &Service{config: config, now: func() time.Time { return time.Now().UTC() }}, nil
+	return &Service{config: config, now: func() time.Time { return time.Now().UTC() }, nudge: make(chan struct{}, 1)}, nil
 }
 
 // Settings returns the assistant's settings, filling in the default agent

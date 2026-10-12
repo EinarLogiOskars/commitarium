@@ -63,6 +63,8 @@ func (watcher Watcher) Run(ctx context.Context) {
 			return
 		case <-ticker.C:
 			watcher.Tick(ctx)
+		case <-watcher.Service.nudge:
+			watcher.Tick(ctx)
 		}
 	}
 }
@@ -241,6 +243,14 @@ func (item work) event() (Event, bool) {
 		return Event{Text: with(name + " is blocked"), Wake: true}, true
 	default:
 		return Event{Text: with(name + " is waiting for the user"), Wake: true}, true
+	}
+}
+
+// nudgeWatcher asks the watcher to look now rather than at its next tick.
+func (service *Service) nudgeWatcher() {
+	select {
+	case service.nudge <- struct{}{}:
+	default:
 	}
 }
 

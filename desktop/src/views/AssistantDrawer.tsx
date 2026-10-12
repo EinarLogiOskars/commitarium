@@ -58,10 +58,19 @@ export function AssistantDrawer({
   onGoalChange?: (goal: AutopilotGoal | null) => void;
 }) {
   const [conversation, setConversationState] = useState<Conversation | null>(null);
+  // Work autopilot changed reloads the project's lists, as the user's own
+  // approvals do.
+  const autoApplied = useRef<number | null>(null);
   const setConversation = useCallback(
     (next: Conversation | null) => {
       setConversationState(next);
       onGoalChange?.(next?.goal?.status === "active" ? next.goal : null);
+      const applied =
+        next?.actions.filter((a) => a.auto_tried && a.status === "applied").length ?? null;
+      if (applied !== null && autoApplied.current !== null && applied > autoApplied.current) {
+        window.dispatchEvent(new Event(WORK_CHANGED));
+      }
+      autoApplied.current = applied;
     },
     [onGoalChange],
   );

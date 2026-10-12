@@ -104,7 +104,11 @@ func (service *Service) StartGoal(ctx context.Context, scope string, level int) 
 	stored.addEvent(text, now)
 	stored.PendingEvents = append(stored.PendingEvents, text+" Start driving its items to merged.")
 	stored.UpdatedAt = now
-	return stored.Conversation, service.write(stored)
+	if err := service.write(stored); err != nil {
+		return Conversation{}, err
+	}
+	service.nudgeWatcher()
+	return stored.Conversation, nil
 }
 
 // StopGoal turns autopilot off; the work it started carries on.

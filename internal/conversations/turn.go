@@ -201,6 +201,9 @@ func (service *Service) refresh(ctx context.Context, stored record) (record, err
 			if turn.Notes != "" {
 				stored.Notes = turn.Notes
 			}
+			if len(turn.Actions) > 0 && stored.Goal.active() {
+				service.nudgeWatcher()
+			}
 		}
 	}
 	stored.Status = StatusIdle
