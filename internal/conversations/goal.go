@@ -365,7 +365,9 @@ func goalInstructions(goal *Goal) string {
 		"never propose a second for the same item), start_work_order for one that is drafted, and change_models when a run " +
 		"needs a different model. Commitarium applies your actions for these items at once, without the user's " +
 		"approval, except those using a premium model. Start an item only once the items it builds on have " +
-		"merged; at most two of the goal's work orders run at a time. When one is blocked or failed, find out " +
+		"merged; at most two of the goal's work orders run at a time, and only when they touch different parts of " +
+		"the app (two that both change the same screens, navigation, or shared files run one after the other, or " +
+		"the second cannot merge). Restart a goal item that is back in Ready. When one is blocked or failed, find out " +
 		"why (its reason, its pull request, the code) and propose continue_work_order with guidance that fixes " +
 		"it; Commitarium continues a work order on its own at most twice. When a work order needs the user (a " +
 		"question about the product, a merge approval, a blocker you cannot fix), tell the user exactly what it " +

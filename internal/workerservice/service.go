@@ -657,7 +657,7 @@ func (service *Service) launchProvider(
 		FeatureID:         request.Assignment.FeatureID,
 		Role:              worker.Role(request.Assignment.Role),
 		Model:             request.Assignment.Model,
-		Instructions:      request.Instructions,
+		Instructions:      request.Instructions + userLanguageNote,
 		OutputContract:    worker.OutputContract(request.OutputContract),
 		WorkspaceAccess:   worker.WorkspaceAccess(request.WorkspaceAccess),
 		LaunchEnvironment: launchEnvironment.Clone(),
@@ -673,6 +673,13 @@ func (service *Service) launchProvider(
 	}
 	return service.provider.Start(service.lifetime, sessionRequest)
 }
+
+// userLanguageNote keeps what agents write for people in the user's
+// language, even when the project's own content or interface uses another
+// (a Spanish app is still discussed in English).
+const userLanguageNote = "\n\nWrite everything meant for people (messages, plans, summaries, reviews, " +
+	"pull request text, and comments) in English, the user's language, even when the project's own content " +
+	"or interface is in another language. Code and the app's own text follow the project."
 
 func (service *Service) failLaunch(
 	ctx context.Context,
