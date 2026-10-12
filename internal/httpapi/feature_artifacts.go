@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -105,7 +106,7 @@ func (api *API) transitionImplementationPlanStepHandler(w http.ResponseWriter, r
 	artifact, err := api.artifacts.TransitionImplementationPlanStep(
 		r.Context(), featureID, request.PlanVersion, r.PathValue("stepID"),
 		request.Status, request.CommitID,
-		workflow.Actor{Kind: workflow.ActorKindAgent, ID: "implementation-lead"}, key,
+		workflow.Actor{Kind: workflow.ActorKindAgent, ID: "implementation-lead"}, api.runScopedKey(r.Context(), featureID, key),
 	)
 	if err != nil {
 		writeFeatureArtifactError(w, featureID, err)
@@ -137,13 +138,34 @@ func (api *API) transitionAcceptanceTestHandler(w http.ResponseWriter, r *http.R
 	artifact, err := acceptance.TransitionAcceptanceTest(
 		r.Context(), featureID, request.PlanVersion, r.PathValue("testID"),
 		request.Status, request.Note, request.ImplementationCommitID,
-		workflow.Actor{Kind: workflow.ActorKindAgent, ID: "implementation-reviewer"}, key,
+		workflow.Actor{Kind: workflow.ActorKindAgent, ID: "implementation-reviewer"}, api.runScopedKey(r.Context(), featureID, key),
 	)
 	if err != nil {
 		writeFeatureArtifactError(w, featureID, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, newFeatureArtifactResponse(artifact), "acceptance test")
+}
+
+// runScopedKey ties an agent's artifact update to the work order's current
+// run. The agents' keys name only the work order, plan version, and step, so
+// after Back to Ready a new run repeats them and would collide with the
+// abandoned run's updates.
+func (api *API) runScopedKey(ctx context.Context, featureID, key string) string {
+	if api.execution == nil {
+		return key
+	}
+	runs, err := api.execution.RunsForFeature(ctx, featureID)
+	if err != nil || len(runs) == 0 {
+		return key
+	}
+	latest := runs[0]
+	for _, run := range runs[1:] {
+		if run.StartedAt.After(latest.StartedAt) {
+			latest = run
+		}
+	}
+	return key + ":" + latest.ID
 }
 
 func decodeArtifactJSONBody(r *http.Request, destination any) error {
