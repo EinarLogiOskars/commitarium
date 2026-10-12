@@ -2427,7 +2427,8 @@ actions, and its notes.
   continues per work order), except premium ones, and
   closes the goal when every item is done. `409 autopilot_active` while one is
   on; `400` when the priority has nothing left. `DELETE .../{scope}/autopilot`
-  stops it.
+  stops it. `GET /api/v1/assistant/autopilot` answers `{"goals": {projectID:
+  goal}}` for every project with autopilot on.
 
 ## Project vision
 
