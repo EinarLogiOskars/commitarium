@@ -1827,8 +1827,12 @@ func (starter *RemoteLeadStarter) recoverIdleImplementationRun(
 	if attempt.Result == nil {
 		return errors.New("completed implementation attempt has no result")
 	}
-	if attempt.Result.Disposition == workerhttp.DispositionInputRequired {
-		if !directive.answersBlocker() {
+	// Guidance with Continue goes to a lead whose finished turn could not be
+	// accepted; Continue alone checks that turn again below.
+	guided := directive.answersBlocker() && directive.Message != "" &&
+		attempt.Result.Disposition != workerhttp.DispositionInputRequired
+	if attempt.Result.Disposition == workerhttp.DispositionInputRequired || guided {
+		if !guided && !directive.answersBlocker() {
 			return starter.handleInputRequired(ctx, remoteLeadRequest{runID: run.ID, identity: workerhttp.MutationIdentity{AttemptReference: attempt.AttemptReference}}, *attempt.Result)
 		}
 		// The user's Continue answers the lead that asked for help: its next
@@ -1838,7 +1842,7 @@ func (starter *RemoteLeadStarter) recoverIdleImplementationRun(
 		}
 		answer := remoteLeadRequest{
 			runID: run.ID, agentName: "lead agent", allowRecoveryContinuation: true,
-			answerBlocker: true, forceFreshRecovery: directive.Action == RecoveryActionReplace,
+			answerBlocker: true, guided: guided, forceFreshRecovery: directive.Action == RecoveryActionReplace,
 			recoveryMessage: directive.Message,
 			identity: workerhttp.MutationIdentity{AttemptReference: workerhttp.AttemptReference{
 				SessionID: lead.ID, AttemptID: checkpoint.AttemptID,
@@ -2233,6 +2237,11 @@ type remoteLeadRequest struct {
 	// that stopped to ask for help, in the same conversation. Automatic
 	// recovery never does this: only the user can answer a blocker.
 	answerBlocker bool
+	// guided lets the user's Continue with guidance start the next turn of
+	// an agent whose finished turn the coordinator could not accept, such
+	// as a publication that failed verification. Without guidance, Continue
+	// only checks that turn again.
+	guided bool
 }
 
 func interventionAttemptID(sessionID, interventionID string) string {
@@ -3966,8 +3975,12 @@ func (starter *RemoteLeadStarter) continueFailedAttempt(
 	// The user's Continue also answers an agent that stopped to ask for help.
 	answered := request.answerBlocker && attempt.State == workerhttp.AttemptStateTerminal &&
 		attempt.Result != nil && attempt.Result.Outcome == workerhttp.OutcomeCompleted &&
-		attempt.Result.Disposition == workerhttp.DispositionInputRequired
-	if answered {
+		(attempt.Result.Disposition == workerhttp.DispositionInputRequired || request.guided)
+	if answered && request.guided && attempt.Result.Disposition != workerhttp.DispositionInputRequired {
+		request.recoveryMessage = "Your previous turn finished, but Commitarium could not accept its result, so " +
+			"the work order was blocked. The user asked you to continue with this guidance: " +
+			strings.TrimSpace(request.recoveryMessage) + " Then finish the turn as before."
+	} else if answered {
 		guidance := "The user reviewed the blocker you reported and asked you to continue. Check whether " +
 			"it still holds, then carry on with the same work."
 		if strings.TrimSpace(request.recoveryMessage) != "" {
@@ -6264,6 +6277,13 @@ func (starter *RemoteLeadStarter) requireReview(
 	starter.reportError(fmt.Errorf("observe agent run %q: %w", request.runID, cause))
 	text := "The coordinator could not complete the " + request.agentName + " turn. " +
 		"The work order is paused so its durable work can be checked and continued safely."
+	// What failed, so the user (and the assistant) can tell the agent what to fix.
+	if detail := strings.TrimSpace(cause.Error()); detail != "" {
+		if len(detail) > 400 {
+			detail = detail[:400] + "…"
+		}
+		text += " What failed: " + detail + "."
+	}
 	_, _ = starter.executions.RecordSessionEventWithID(
 		ctx, request.identity.AttemptID+":recovery:review-required",
 		request.identity.SessionID,
