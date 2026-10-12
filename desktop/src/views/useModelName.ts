@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { getModels } from "../api/projects";
-import type { ModelCatalog } from "../api/types";
+import type { AgentProvider, AgentRole, ModelCatalog, ModelInfo } from "../api/types";
 
 // The stored model catalogs, fetched once and shared, to show a model's
 // display name wherever an agent is named.
@@ -34,4 +34,19 @@ export function useModelName(): (modelId: string | undefined) => string {
     };
   }, []);
   return (modelId) => (modelId ? (names.get(modelId) ?? modelId) : "");
+}
+
+/** The stored model catalogs (shared and cached), as a lookup of the models
+ * an agent's provider offers for a role. */
+export function useCatalogModels(): (provider: AgentProvider, role: AgentRole) => ModelInfo[] {
+  const [loaded, setLoaded] = useState<ModelCatalog[]>([]);
+  useEffect(() => {
+    let active = true;
+    void loadCatalogs().then((catalogs) => active && setLoaded(catalogs));
+    return () => {
+      active = false;
+    };
+  }, []);
+  return (provider, role) =>
+    loaded.find((catalog) => catalog.provider === provider && catalog.role === role)?.models ?? [];
 }

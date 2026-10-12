@@ -1,7 +1,8 @@
 # Assistant: Implementation Plan
 
 **Status:** phases 1 (usage limits) and 2 (the assistant) merged; phase 3 in two
-parts: events on `feat/assistant-events`, then goals and autopilot.
+parts: events on `feat/assistant-events`, then goals and autopilot on
+`feat/autopilot`.
 
 ## Goal
 
@@ -202,7 +203,11 @@ file is left behind.
   first look at a project only records it.
 - **Goals:** a durable autopilot goal per project (items, status, started and
   ended), set from the chat or the Vision page; acting tools skip approval
-  cards only for items in the open goal.
+  cards only for items in the open goal. As built (ADR-023): the goal is the
+  open leaf items of one priority, kept with the conversation; the watcher
+  approves the assistant's create, start, and change-models actions for those
+  items through the same API path as the Approve button, with the work order
+  started, and leaves premium ones for the user with a note.
 - **Ending:** the coordinator closes the goal when its last item merges, turns
   autopilot off, and wakes the assistant to report.
 - **Desktop:** the autopilot banner with progress and Stop.

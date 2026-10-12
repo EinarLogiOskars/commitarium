@@ -13,6 +13,8 @@ import {
 import { listFeatures } from "../api/features";
 import { getToolchainPresets } from "../api/toolchains";
 import { ApiError } from "../api/client";
+import { startAutopilot } from "../api/assistant";
+import { ASSISTANT_CHANGED } from "./AssistantDrawer";
 import { Markdown } from "./Markdown";
 import { rememberIdea, rememberedIdea } from "./visionSession";
 import type {
@@ -259,7 +261,7 @@ export function VisionView({
               .sort((a, b) => a.level - b.level)
               .map((priority) => (
                 <section className="panel vision__priority" key={priority.level}>
-                  <h3>P{priority.level}</h3>
+                  <PriorityAutopilot projectId={projectId} level={priority.level} />
                   <ItemList
                     items={priority.items}
                     prefix={`P${priority.level}`}
@@ -956,4 +958,57 @@ function describe(e: unknown): string {
     return e.message;
   }
   return String(e);
+}
+
+// A priority's heading, with autopilot: the assistant finishes the
+// priority's open items, creating and starting their work orders itself.
+function PriorityAutopilot({ projectId, level }: { projectId: string; level: number }) {
+  const [confirming, setConfirming] = useState(false);
+  const [starting, setStarting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const start = async () => {
+    setStarting(true);
+    setError(null);
+    try {
+      await startAutopilot(projectId, level);
+      setConfirming(false);
+      window.dispatchEvent(new Event(ASSISTANT_CHANGED));
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : String(e));
+    } finally {
+      setStarting(false);
+    }
+  };
+
+  return (
+    <>
+      <div className="vision__priority-head">
+        <h3>P{level}</h3>
+        {!confirming && (
+          <button className="ghost" onClick={() => setConfirming(true)}>
+            Autopilot
+          </button>
+        )}
+      </div>
+      {confirming && (
+        <div className="vision__autopilot">
+          <p className="muted note">
+            Let the assistant finish P{level}? It creates and starts work orders for the open items
+            without asking, except with premium models, and tells you when one needs you. You can
+            stop it at any time.
+          </p>
+          <div className="row">
+            <button className="primary" onClick={() => void start()} disabled={starting}>
+              {starting ? "Starting…" : "Start autopilot"}
+            </button>
+            <button className="ghost" onClick={() => setConfirming(false)} disabled={starting}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+      {error && <div className="banner banner--error">{error}</div>}
+    </>
+  );
 }

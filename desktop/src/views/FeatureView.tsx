@@ -34,6 +34,9 @@ import type {
 
 const POLL_MS = 2500;
 
+// Below this width, the work order's side card lies over the conversation.
+const SIDE_OVERLAY_BELOW = 980;
+
 // The work-order shell: a phase timeline on top, one phase's own view below.
 // The body follows the run as the backend auto-advances; the user can click any
 // reached phase to inspect only that phase's activity, then jump back to live.
@@ -62,6 +65,19 @@ export function FeatureView({
   const [run, setRun] = useState<Run | null>(null);
   // The header's Details button opens the side card on the description.
   const [detailsRequest, setDetailsRequest] = useState(0);
+  // A narrow work order (beside the docked assistant, say) lays its side
+  // card over the conversation instead of beside it.
+  const [splitWidth, setSplitWidth] = useState(0);
+  const splitObserver = useRef<ResizeObserver | null>(null);
+  const splitRef = useCallback((element: HTMLDivElement | null) => {
+    splitObserver.current?.disconnect();
+    splitObserver.current = null;
+    if (!element) return;
+    const observer = new ResizeObserver(([entry]) => setSplitWidth(entry.contentRect.width));
+    observer.observe(element);
+    splitObserver.current = observer;
+  }, []);
+  const sideOverlay = splitWidth > 0 && splitWidth < SIDE_OVERLAY_BELOW;
   const [events, setEvents] = useState<WorkflowEvent[]>([]);
   const [usage, setUsage] = useState<FeatureUsage | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -307,7 +323,7 @@ export function FeatureView({
         {error && <div className="banner banner--error">{error}</div>}
       </section>
 
-      <div className="order__split">
+      <div ref={splitRef} className={`order__split ${sideOverlay ? "order__split--overlay" : ""}`}>
         <div className="order__body">
           {run && (
             <EnvironmentApproval
@@ -344,6 +360,7 @@ export function FeatureView({
           phase={viewed}
           description={feature.description}
           detailsRequest={detailsRequest}
+          overlay={sideOverlay}
         />
       </div>
 

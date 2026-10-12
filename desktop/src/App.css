@@ -3993,3 +3993,62 @@ button.danger:not(.ghost) {
     justify-content: flex-start;
   }
 }
+
+/* Autopilot is on: above every page of the project. */
+.autopilot-banner {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 14px;
+  padding: 8px 8px 8px 14px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border));
+  background: color-mix(in srgb, var(--accent) 10%, var(--panel));
+}
+.autopilot-banner__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: dot-pulse 1.6s ease-in-out infinite;
+}
+.autopilot-banner button {
+  margin-left: auto;
+}
+.autopilot-banner__error {
+  color: var(--bad);
+}
+.vision__priority-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.vision__autopilot {
+  margin: 4px 0 12px;
+}
+.vision__autopilot .note {
+  margin: 0 0 8px;
+}
+
+/* A narrow work order: the side card folds to its strip and opens over the
+   conversation, so the conversation and its composer keep the width. */
+.order__split--overlay {
+  position: relative;
+  flex-direction: row;
+}
+.order__split > .order-side.order-side--overlay {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 5;
+  width: min(340px, 85%);
+  max-height: none;
+  order: 0;
+  box-shadow: -12px 0 32px rgb(0 0 0 / 0.35);
+}
+.order__split--overlay > .order-side__strip {
+  align-self: flex-start;
+}

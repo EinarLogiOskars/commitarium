@@ -2392,23 +2392,42 @@ actions, and its notes.
   "updated_at"}`; without saved settings, the first agent on its provider's
   first model, and `ask_before` `["fable", "astra"]`. `PUT` saves them.
 - `GET /api/v1/assistant/conversations/{scope}` answers `{"scope", "status":
-  "idle"|"running", "agent", "model", "messages", "actions", "notes"}`. A
+  "idle"|"running", "agent", "model", "messages", "actions", "notes", "goal"}`. A
   message's `role` is `user`, `assistant`, or `event` (an outcome from
-  Commitarium). A finished turn is folded in on read.
+  Commitarium, or something that happened in the project's work). A finished
+  turn is folded in on read. Every 20 seconds the coordinator compares each
+  project's work with what it last saw and notes changes as `event` messages;
+  a merge, a failure, a blocker, a merge approval, or a question for the user
+  also starts a turn, one at a time (ADR-023).
 - `POST .../{scope}/messages` with `{"message"}` and an `Idempotency-Key` starts
   a turn; `409 assistant_busy` while one runs.
 - `PUT .../{scope}/notes` with `{"notes"}` replaces the notes with the user's
   edit.
 - An action is `{"id", "type": "create_work_order"|"start_work_order"|
-  "change_models"|"add_vision_item", "priority", "reason", "title", "description", "vision_item_id",
+  "change_models"|"add_vision_item"|"start_autopilot"|"continue_work_order", "priority", "reason", "title", "description", "vision_item_id",
   "steps", "independent_tests", "lead_agent", "lead_model", "reviewer_agent",
-  "reviewer_model", "work_order_id", "when", "status", "premium", "result"}`.
-  `premium` lists its models in an `ask_before` family.
+  "reviewer_model", "work_order_id", "when", "guidance", "status", "premium",
+  "result", "auto_tried"}`. `continue_work_order` continues the work order's
+  newest run when it waits on a blocker, with `guidance` for its agents, as
+  the run's Continue and Add guidance do (`409 recovery_not_allowed`
+  otherwise). `premium` lists its models in an `ask_before` family;
+  `auto_tried` marks one autopilot took over.
 - `POST .../{scope}/actions/{actionID}/approve` with `{"start", "confirm_premium"}`
   runs it through the same paths as the app's own buttons and records the
   outcome. `409 premium_approval_required` without `confirm_premium` for a
   premium action; `409 action_not_pending` once resolved.
 - `POST .../{scope}/actions/{actionID}/dismiss` dismisses it.
+- `POST .../{scope}/autopilot` with `{"level"}` turns autopilot on for the open
+  items of that vision priority (ADR-023); approving a `start_autopilot` action
+  does the same. `goal` is then `{"title", "level", "items": [{"id", "label",
+  "title", "work_order_id", "done"}], "status": "active"|"done"|"stopped",
+  "started_at", "ended_at"}`. While it is active, the coordinator approves the
+  assistant's create, start, change-models, and continue actions for the goal's
+  items as the user would (with a new work order started, and at most two
+  continues per work order), except premium ones, and
+  closes the goal when every item is done. `409 autopilot_active` while one is
+  on; `400` when the priority has nothing left. `DELETE .../{scope}/autopilot`
+  stops it.
 
 ## Project vision
 

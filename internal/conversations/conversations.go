@@ -98,20 +98,24 @@ type Action struct {
 	featureartifact.AssistantAction
 	Status ActionStatus `json:"status"`
 	// Premium names the models in it that need explicit approval.
-	Premium   []string  `json:"premium,omitempty"`
-	Result    string    `json:"result,omitempty"`
+	Premium []string `json:"premium,omitempty"`
+	Result  string   `json:"result,omitempty"`
+	// AutoTried marks an action autopilot took over, applied or not.
+	AutoTried bool      `json:"auto_tried,omitempty"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // Conversation is what the user sees of a scope's conversation.
 type Conversation struct {
-	Scope     string    `json:"scope"`
-	Status    Status    `json:"status"`
-	Agent     string    `json:"agent"`
-	Model     string    `json:"model"`
-	Messages  []Message `json:"messages"`
-	Actions   []Action  `json:"actions"`
-	Notes     string    `json:"notes"`
+	Scope    string    `json:"scope"`
+	Status   Status    `json:"status"`
+	Agent    string    `json:"agent"`
+	Model    string    `json:"model"`
+	Messages []Message `json:"messages"`
+	Actions  []Action  `json:"actions"`
+	Notes    string    `json:"notes"`
+	// Goal is the autopilot goal, the latest one even once it ended.
+	Goal      *Goal     `json:"goal,omitempty"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
@@ -175,12 +179,19 @@ type Config struct {
 	DefaultModel func(ctx context.Context, provider project.AgentProvider) string
 	Checkouts    Checkouts
 	Branches     Branches
+	// Visions and Features, when set, let the user hand the assistant an
+	// autopilot goal.
+	Visions  VisionReader
+	Features FeatureLister
 }
 
 type Service struct {
 	config Config
 	now    func() time.Time
 	mu     sync.Mutex
+	// nudge asks the watcher to look now, as when a turn proposed actions
+	// autopilot may take over.
+	nudge chan struct{}
 }
 
 var scopePattern = regexp.MustCompile(`^(commitarium|prj_[A-Za-z0-9]{1,64})$`)
@@ -195,7 +206,7 @@ func NewService(config Config) (*Service, error) {
 	if err := os.MkdirAll(filepath.Join(config.Root, "conversations"), 0o700); err != nil {
 		return nil, fmt.Errorf("%w: create the assistant's storage", ErrUnavailable)
 	}
-	return &Service{config: config, now: func() time.Time { return time.Now().UTC() }}, nil
+	return &Service{config: config, now: func() time.Time { return time.Now().UTC() }, nudge: make(chan struct{}, 1)}, nil
 }
 
 // Settings returns the assistant's settings, filling in the default agent

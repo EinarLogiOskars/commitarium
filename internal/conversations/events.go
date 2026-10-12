@@ -12,6 +12,7 @@ import (
 
 	"github.com/EinarLogiOskars/commitarium/internal/execution"
 	"github.com/EinarLogiOskars/commitarium/internal/feature"
+	"github.com/EinarLogiOskars/commitarium/internal/featureartifact"
 	"github.com/EinarLogiOskars/commitarium/internal/project"
 )
 
@@ -40,6 +41,10 @@ type Watcher struct {
 	Service  *Service
 	Features FeatureLister
 	Runs     RunReader
+	// Visions lets the watcher follow an autopilot goal, and Apply runs the
+	// actions autopilot takes over, as the user's approval would.
+	Visions VisionReader
+	Apply   func(ctx context.Context, scope, actionID string) error
 	// LimitWaits, when set, tells a usage-limit wait from a blocker: it
 	// resumes on its own, so it does not wake the assistant.
 	LimitWaits LimitWaitReader
@@ -58,6 +63,8 @@ func (watcher Watcher) Run(ctx context.Context) {
 			return
 		case <-ticker.C:
 			watcher.Tick(ctx)
+		case <-watcher.Service.nudge:
+			watcher.Tick(ctx)
 		}
 	}
 }
@@ -67,6 +74,26 @@ func (watcher Watcher) Tick(ctx context.Context) {
 	for _, scope := range watcher.Service.projectScopes() {
 		if err := watcher.Service.observe(ctx, scope, watcher.snapshot); err != nil {
 			log.Printf("assistant events for %s: %v", scope, err)
+		}
+		watcher.autopilot(ctx, scope)
+	}
+}
+
+// autopilot applies the actions autopilot takes over. One that fails stays
+// a card for the user, with a note saying why.
+func (watcher Watcher) autopilot(ctx context.Context, scope string) {
+	if watcher.Apply == nil {
+		return
+	}
+	actions, err := watcher.Service.autopilotActions(scope)
+	if err != nil {
+		log.Printf("autopilot for %s: %v", scope, err)
+		return
+	}
+	for _, action := range actions {
+		if err := watcher.Apply(ctx, scope, action.ID); err != nil {
+			_ = watcher.Service.note(scope, fmt.Sprintf(
+				"Autopilot could not apply %s: %v. It waits for your approval.", actionName(action.AssistantAction), err))
 		}
 	}
 }
@@ -91,36 +118,49 @@ func (item work) signature() string {
 	}, "|")
 }
 
-func (watcher Watcher) snapshot(ctx context.Context, projectID string) (map[string]work, error) {
+// view is a project as the watcher sees it: its work by work order, and
+// its vision plan when it has one.
+type view struct {
+	Work map[string]work
+	Plan *featureartifact.VisionPlan
+}
+
+func (watcher Watcher) snapshot(ctx context.Context, projectID string) (view, error) {
+	seen := view{}
+	if watcher.Visions != nil {
+		if current, err := watcher.Visions.Get(ctx, projectID); err == nil {
+			seen.Plan = &current.Plan
+		}
+	}
 	features, err := watcher.Features.List(ctx, projectID)
 	if err != nil {
-		return nil, err
+		return view{}, err
 	}
-	current := make(map[string]work, len(features))
+	seen.Work = make(map[string]work, len(features))
 	for _, item := range features {
 		if item.Background {
 			continue
 		}
-		seen := work{Title: item.Title, Session: item.Kind == feature.KindSession, State: item.State}
+		current := work{Title: item.Title, Session: item.Kind == feature.KindSession, State: item.State}
 		if !item.State.IsTerminal() {
 			runs, err := watcher.Runs.RunsForFeature(ctx, item.ID)
 			if err != nil {
-				return nil, err
+				return view{}, err
 			}
 			if run, ok := newest(runs); ok {
-				seen.RunID, seen.RunStatus, seen.WaitKind, seen.Reason = run.ID, run.Status, run.WaitKind, run.Reason
-				seen.AutoMerge = run.MergePolicy == project.MergePolicyAutoAfterGates
+				current.RunID, current.RunStatus, current.WaitKind, current.Reason = run.ID, run.Status, run.WaitKind, run.Reason
+				current.AutoMerge = run.MergePolicy == project.MergePolicyAutoAfterGates
 				if watcher.LimitWaits != nil && run.Status == execution.RunStatusWaitingForUser &&
 					run.WaitKind == execution.RunWaitKindBlocker {
 					if wait, err := watcher.LimitWaits.LimitWaitForRun(ctx, run.ID); err == nil {
-						seen.LimitAgent = wait.AgentID
+						current.LimitAgent = wait.AgentID
 					}
 				}
 			}
 		}
-		current[item.ID] = seen
+		seen.Work[item.ID] = current
 	}
-	return current, nil
+	return seen, nil
 }
 
 func newest(runs []execution.Run) (execution.Run, bool) {
@@ -206,6 +246,14 @@ func (item work) event() (Event, bool) {
 	}
 }
 
+// nudgeWatcher asks the watcher to look now rather than at its next tick.
+func (service *Service) nudgeWatcher() {
+	select {
+	case service.nudge <- struct{}{}:
+	default:
+	}
+}
+
 // projectScopes are the projects whose conversation exists.
 func (service *Service) projectScopes() []string {
 	entries, err := os.ReadDir(filepath.Join(service.config.Root, "conversations"))
@@ -225,12 +273,13 @@ func (service *Service) projectScopes() []string {
 // observe records a project's work, notes what changed, and wakes the
 // assistant for it when it is free.
 func (service *Service) observe(
-	ctx context.Context, scope string, snapshot func(context.Context, string) (map[string]work, error),
+	ctx context.Context, scope string, snapshot func(context.Context, string) (view, error),
 ) error {
-	current, err := snapshot(ctx, scope)
+	seen, err := snapshot(ctx, scope)
 	if err != nil {
 		return err
 	}
+	current := seen.Work
 	service.mu.Lock()
 	defer service.mu.Unlock()
 	stored, err := service.read(scope)
@@ -245,6 +294,14 @@ func (service *Service) observe(
 	changed := !sameSignatures(stored.Watched, watched)
 	stored.Watched = watched
 	now := service.now()
+	if stored.Goal.active() && seen.Plan != nil {
+		before := fmt.Sprint(stored.Goal.Items)
+		if stored.Goal.progress(*seen.Plan, current) {
+			stored.Goal.Status, stored.Goal.EndedAt = GoalDone, &now
+			events = append(events, Event{Text: "Autopilot finished: " + stored.Goal.Title + " is done.", Wake: true})
+		}
+		changed = changed || before != fmt.Sprint(stored.Goal.Items) || !stored.Goal.active()
+	}
 	for _, event := range events {
 		stored.Messages = append(stored.Messages, Message{
 			ID: messageID(stored, len(stored.Messages)), Role: "event", Text: event.Text, OccurredAt: now,

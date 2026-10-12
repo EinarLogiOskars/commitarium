@@ -19,7 +19,12 @@ export interface AssistantMessage {
 }
 
 export type AssistantActionType =
-  "create_work_order" | "start_work_order" | "change_models" | "add_vision_item";
+  | "create_work_order"
+  | "start_work_order"
+  | "change_models"
+  | "add_vision_item"
+  | "start_autopilot"
+  | "continue_work_order";
 
 export interface AssistantAction {
   id: string;
@@ -37,11 +42,25 @@ export interface AssistantAction {
   reviewer_model: string;
   work_order_id: string;
   when: "" | "now" | "next_turn";
-  /** For add_vision_item: 0 for P0, 1 for P1, and so on. */
+  /** For continue_work_order: what to tell its agents; empty retries. */
+  guidance?: string;
+  /** For add_vision_item and start_autopilot: 0 for P0, 1 for P1, and so on. */
   priority: number;
   status: "proposed" | "applied" | "dismissed" | "failed";
   premium?: string[];
   result?: string;
+  /** Autopilot took it over. */
+  auto_tried?: boolean;
+}
+
+/** An autopilot goal: the open items of one vision priority. */
+export interface AutopilotGoal {
+  title: string;
+  level: number;
+  items: { id: string; label: string; title: string; work_order_id?: string; done: boolean }[];
+  status: "active" | "done" | "stopped";
+  started_at: string;
+  ended_at?: string;
 }
 
 export interface Conversation {
@@ -52,6 +71,7 @@ export interface Conversation {
   messages: AssistantMessage[];
   actions: AssistantAction[];
   notes: string;
+  goal?: AutopilotGoal;
   updated_at: string;
 }
 
@@ -86,7 +106,13 @@ export const saveAssistantNotes = (scope: string, notes: string): Promise<Conver
 export const approveAssistantAction = (
   scope: string,
   actionId: string,
-  options: { start?: boolean; confirm_premium?: boolean },
+  options: {
+    start?: boolean;
+    confirm_premium?: boolean;
+    /** The user's choice over the card's models, for a new or started work order. */
+    lead_model?: string;
+    reviewer_model?: string;
+  },
 ): Promise<Conversation> =>
   request(`${conversationPath(scope)}/actions/${encodeURIComponent(actionId)}/approve`, {
     method: "POST",
@@ -97,3 +123,9 @@ export const dismissAssistantAction = (scope: string, actionId: string): Promise
   request(`${conversationPath(scope)}/actions/${encodeURIComponent(actionId)}/dismiss`, {
     method: "POST",
   });
+
+export const startAutopilot = (scope: string, level: number): Promise<Conversation> =>
+  request(`${conversationPath(scope)}/autopilot`, { method: "POST", body: { level } });
+
+export const stopAutopilot = (scope: string): Promise<Conversation> =>
+  request(`${conversationPath(scope)}/autopilot`, { method: "DELETE" });

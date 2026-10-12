@@ -20,7 +20,7 @@ const SESSION_GROUPS: { label: string; states: FeatureState[] }[] = [
 ];
 
 // Sessions change as agents reply, so the session list follows them.
-const SESSION_POLL_MS = 3000;
+const RAIL_POLL_MS = 3000;
 
 /** Compact list of one kind of work for the workspace rail. `reloadKey` bumps
  * to refetch. */
@@ -53,9 +53,11 @@ export function WorkOrderRail({
     void load();
   }, [load, reloadKey]);
 
+  // Work moves on by itself (agents finish phases, autopilot starts work
+  // orders), so the list refetches now and then.
   useEffect(() => {
-    if (kind !== "session") return;
-    const id = setInterval(() => void load(), SESSION_POLL_MS);
+    const id = setInterval(() => void load(), RAIL_POLL_MS);
+    if (kind !== "session") return () => clearInterval(id);
     const unsubscribe = onSessionSeen(() => setSeenVersion((v) => v + 1));
     return () => {
       clearInterval(id);

@@ -454,6 +454,8 @@ func newAPI(
 		mux.HandleFunc("PUT /api/v1/assistant/conversations/{scope}/notes", api.saveConversationNotesHandler)
 		mux.HandleFunc("POST /api/v1/assistant/conversations/{scope}/actions/{actionID}/approve", api.approveConversationActionHandler)
 		mux.HandleFunc("POST /api/v1/assistant/conversations/{scope}/actions/{actionID}/dismiss", api.dismissConversationActionHandler)
+		mux.HandleFunc("POST /api/v1/assistant/conversations/{scope}/autopilot", api.startAutopilotHandler)
+		mux.HandleFunc("DELETE /api/v1/assistant/conversations/{scope}/autopilot", api.stopAutopilotHandler)
 	}
 	if toolchainService != nil && projects != nil && features != nil {
 		mux.HandleFunc("POST /api/v1/projects/{id}/setup", api.setUpProjectHandler)

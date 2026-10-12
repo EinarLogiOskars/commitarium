@@ -62,7 +62,7 @@ func TestEventsWakeTheAssistantOneTurnAtATime(t *testing.T) {
 	}
 	worker.finish(workerhttp.TerminalResult{Outcome: workerhttp.OutcomeCompleted, Disposition: workerhttp.DispositionSucceeded, Summary: "Hello."})
 	current := map[string]work{"fea_1": {Title: "Log", State: feature.StateImplementing, RunID: "run_1", RunStatus: execution.RunStatusRunning}}
-	snapshot := func(context.Context, string) (map[string]work, error) { return current, nil }
+	snapshot := func(context.Context, string) (view, error) { return view{Work: current}, nil }
 	observe := func() Conversation {
 		t.Helper()
 		if err := service.observe(t.Context(), "prj_test", snapshot); err != nil {

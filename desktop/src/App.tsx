@@ -13,6 +13,8 @@ import { ExitConfirm } from "./views/ExitConfirm";
 import { Inbox } from "./views/Inbox";
 import { AssistantDrawer } from "./views/AssistantDrawer";
 import { useWorkLayout } from "./views/useWorkLayout";
+import { AutopilotBanner } from "./views/AutopilotBanner";
+import type { AutopilotGoal } from "./api/assistant";
 import { Launcher } from "./views/Launcher";
 import { Projects } from "./views/Projects";
 import { ProjectWorkspace } from "./views/ProjectWorkspace";
@@ -45,6 +47,8 @@ function App() {
   const [foreground, setForeground] = useState<string | null>(null);
   // How the rail and the open assistant share the window.
   const layout = useWorkLayout(projectId !== null);
+  // The open project's autopilot goal while it is on, as the assistant reports it.
+  const [goal, setGoal] = useState<AutopilotGoal | null>(null);
 
   // Only poll from inside the workspace: the launcher has nowhere to show it.
   const attention = useAttention(entered && reachable);
@@ -355,6 +359,7 @@ function App() {
         open={layout.assistantOpen}
         onOpenChange={layout.setAssistantOpen}
         docked={layout.docked}
+        onGoalChange={setGoal}
       />
 
       <div className="shell__body">
@@ -368,6 +373,7 @@ function App() {
             railHeader={projectSwitch}
             systemNav={systemNav}
             railStrip={railStrip}
+            autopilot={goal && <AutopilotBanner scope={projectId} goal={goal} />}
             railCollapsed={layout.railCollapsed}
             onToggleRail={layout.toggleRail}
           />

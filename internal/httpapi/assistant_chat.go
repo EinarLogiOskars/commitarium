@@ -1,17 +1,21 @@
 package httpapi
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/EinarLogiOskars/commitarium/internal/conversations"
 	"github.com/EinarLogiOskars/commitarium/internal/execution"
 	"github.com/EinarLogiOskars/commitarium/internal/feature"
 	"github.com/EinarLogiOskars/commitarium/internal/featureartifact"
+	"github.com/EinarLogiOskars/commitarium/internal/orchestration"
 	"github.com/EinarLogiOskars/commitarium/internal/project"
 	"github.com/EinarLogiOskars/commitarium/internal/toolchain"
 	"github.com/EinarLogiOskars/commitarium/internal/vision"
@@ -27,7 +31,70 @@ type ConversationService interface {
 	SaveNotes(ctx context.Context, scope, notes string) (conversations.Conversation, error)
 	Action(ctx context.Context, scope, actionID string) (conversations.Action, error)
 	Resolve(ctx context.Context, scope, actionID string, status conversations.ActionStatus, result, workOrderID string) (conversations.Conversation, error)
+	StartGoal(ctx context.Context, scope string, level int) (conversations.Conversation, error)
+	StopGoal(ctx context.Context, scope string) (conversations.Conversation, error)
 }
+
+type startAutopilotRequest struct {
+	Level int `json:"level"`
+}
+
+func (api *API) startAutopilotHandler(w http.ResponseWriter, r *http.Request) {
+	var body startAutopilotRequest
+	if !decodeSingleJSON(w, r, &body) {
+		return
+	}
+	conversation, err := api.conversations.StartGoal(r.Context(), r.PathValue("scope"), body.Level)
+	if err != nil {
+		writeConversationError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, conversation, "assistant conversation")
+}
+
+func (api *API) stopAutopilotHandler(w http.ResponseWriter, r *http.Request) {
+	conversation, err := api.conversations.StopGoal(r.Context(), r.PathValue("scope"))
+	if err != nil {
+		writeConversationError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, conversation, "assistant conversation")
+}
+
+// AssistantActionApplier approves assistant actions through handler exactly
+// as the user's Approve button does, with a new work order started: how
+// autopilot takes over an action. The error carries the API's message.
+func AssistantActionApplier(handler http.Handler) func(ctx context.Context, scope, actionID string) error {
+	return func(ctx context.Context, scope, actionID string) error {
+		request, err := http.NewRequestWithContext(ctx, http.MethodPost,
+			"/api/v1/assistant/conversations/"+url.PathEscape(scope)+"/actions/"+url.PathEscape(actionID)+"/approve",
+			strings.NewReader(`{"start":true}`))
+		if err != nil {
+			return err
+		}
+		request.Header.Set("Content-Type", "application/json")
+		response := &recordedResponse{header: http.Header{}, status: http.StatusOK}
+		handler.ServeHTTP(response, request)
+		if response.status == http.StatusOK {
+			return nil
+		}
+		var failure errorResponse
+		if json.Unmarshal(response.body.Bytes(), &failure) == nil && failure.Error.Message != "" {
+			return errors.New(failure.Error.Message)
+		}
+		return fmt.Errorf("HTTP %d", response.status)
+	}
+}
+
+type recordedResponse struct {
+	header http.Header
+	status int
+	body   bytes.Buffer
+}
+
+func (response *recordedResponse) Header() http.Header            { return response.header }
+func (response *recordedResponse) Write(data []byte) (int, error) { return response.body.Write(data) }
+func (response *recordedResponse) WriteHeader(status int)         { response.status = status }
 
 func (api *API) getAssistantSettingsHandler(w http.ResponseWriter, r *http.Request) {
 	settings, err := api.conversations.Settings(r.Context())
@@ -112,6 +179,10 @@ type approveActionRequest struct {
 	// ConfirmPremium is the user's explicit approval of the premium models the
 	// action uses; without it such an action is refused.
 	ConfirmPremium bool `json:"confirm_premium"`
+	// LeadModel and ReviewerModel replace the models a new or started work
+	// order runs on: the user's choice over the assistant's.
+	LeadModel     string `json:"lead_model,omitempty"`
+	ReviewerModel string `json:"reviewer_model,omitempty"`
 }
 
 // approveConversationActionHandler runs one action the assistant proposed,
@@ -131,13 +202,31 @@ func (api *API) approveConversationActionHandler(w http.ResponseWriter, r *http.
 		writeError(w, http.StatusConflict, "action_not_pending", "the action is no longer waiting for approval")
 		return
 	}
-	if len(action.Premium) > 0 && !body.ConfirmPremium {
-		writeError(w, http.StatusConflict, "premium_approval_required",
-			"this action uses "+strings.Join(action.Premium, ", ")+", which needs your explicit approval")
-		return
-	}
 	if scope == conversations.TopLevel {
 		writeError(w, http.StatusConflict, "action_needs_project", "actions run in a project's conversation")
+		return
+	}
+	chosen := make([]string, 0, 2)
+	if action.Type == featureartifact.AssistantCreateWorkOrder || action.Type == featureartifact.AssistantStartWorkOrder {
+		if model := strings.TrimSpace(body.LeadModel); model != "" && model != action.LeadModel {
+			action.LeadModel = model
+			chosen = append(chosen, "lead "+model)
+		}
+		if model := strings.TrimSpace(body.ReviewerModel); model != "" && model != action.ReviewerModel {
+			action.ReviewerModel = model
+			chosen = append(chosen, "reviewer "+model)
+		}
+	}
+	// Premium is judged on the models that will run, not only those the card
+	// names: a started work order keeps its own unless the card replaces them.
+	premium, err := api.premiumModels(r.Context(), scope, action)
+	if err != nil {
+		writeConversationError(w, err)
+		return
+	}
+	if len(premium) > 0 && !body.ConfirmPremium {
+		writeError(w, http.StatusConflict, "premium_approval_required",
+			"this action uses "+strings.Join(premium, ", ")+", which needs your explicit approval")
 		return
 	}
 	var result string
@@ -154,12 +243,23 @@ func (api *API) approveConversationActionHandler(w http.ResponseWriter, r *http.
 		result, ok = api.applyChangeModels(w, r, scope, action)
 	case featureartifact.AssistantAddVisionItem:
 		result, ok = api.applyAddVisionItem(w, r, scope, action)
+	case featureartifact.AssistantContinueWorkOrder:
+		result, ok = api.applyContinueWorkOrder(w, r, scope, action)
+	case featureartifact.AssistantStartAutopilot:
+		if _, err := api.conversations.StartGoal(r.Context(), scope, action.Priority); err != nil {
+			writeConversationError(w, err)
+			return
+		}
+		result, ok = fmt.Sprintf("Autopilot is on: finish P%d.", action.Priority), true
 	default:
 		writeError(w, http.StatusBadRequest, "unknown_action", "the action is not one Commitarium can run")
 		return
 	}
 	if !ok {
 		return
+	}
+	if len(chosen) > 0 {
+		result += " The user chose " + strings.Join(chosen, " and ") + "."
 	}
 	conversation, err := api.conversations.Resolve(r.Context(), scope, actionID, conversations.ActionApplied, result, workOrderID)
 	if err != nil {
@@ -316,6 +416,75 @@ func (api *API) applyChangeModels(
 	return fmt.Sprintf("Switched the models of “%s”.", stored.Title), true
 }
 
+// premiumModels lists the models an action would run on that need the
+// user's explicit approval.
+func (api *API) premiumModels(ctx context.Context, projectID string, action conversations.Action) ([]string, error) {
+	settings, err := api.conversations.Settings(ctx)
+	if err != nil {
+		return nil, err
+	}
+	models := []string{action.LeadModel, action.ReviewerModel}
+	if action.Type == featureartifact.AssistantStartWorkOrder {
+		stored, err := api.features.GetByID(ctx, projectID, action.WorkOrderID)
+		if err != nil {
+			return nil, err
+		}
+		if action.LeadModel == "" {
+			models[0] = stored.AgentModels.Lead
+		}
+		if action.ReviewerModel == "" && !stored.Steps.SkipReviewer {
+			models[1] = stored.AgentModels.Reviewer
+		}
+	}
+	premium := make([]string, 0)
+	for _, model := range models {
+		if settings.RequiresApproval(model) {
+			premium = append(premium, model)
+		}
+	}
+	return premium, nil
+}
+
+// applyContinueWorkOrder continues a work order whose run waits on a
+// blocker, as the Continue and Add guidance buttons do.
+func (api *API) applyContinueWorkOrder(
+	w http.ResponseWriter, r *http.Request, projectID string, action conversations.Action,
+) (string, bool) {
+	ctx := r.Context()
+	directed, ok := api.realWorkflow.(directedRecoveryWorkflow)
+	if !ok {
+		writeError(w, http.StatusServiceUnavailable, "recovery_unavailable", "continuing a work order needs real agents")
+		return "", false
+	}
+	stored, err := api.features.GetByID(ctx, projectID, action.WorkOrderID)
+	if err != nil {
+		writeConversationError(w, err)
+		return "", false
+	}
+	runs, err := api.execution.RunsForFeature(ctx, stored.ID)
+	if err != nil || len(runs) == 0 {
+		writeError(w, http.StatusConflict, "recovery_not_allowed", "the work order has no run to continue")
+		return "", false
+	}
+	latest := newestRun(runs)
+	if _, _, err := directed.RecoverBlockerWithDirective(ctx, latest.ID, runActionIDForKey("assistant-"+action.ID),
+		orchestration.RecoveryDirective{Action: orchestration.RecoveryActionContinue, Message: action.Guidance},
+	); err != nil {
+		switch {
+		case errors.Is(err, orchestration.ErrRecoveryNotAllowed):
+			writeError(w, http.StatusConflict, "recovery_not_allowed", "the work order is not waiting on a blocker")
+		default:
+			log.Printf("continue the assistant's work order %q: %v", stored.ID, err)
+			writeError(w, http.StatusInternalServerError, "internal_error", "internal server error")
+		}
+		return "", false
+	}
+	if action.Guidance != "" {
+		return fmt.Sprintf("Continued “%s” with guidance.", stored.Title), true
+	}
+	return fmt.Sprintf("Continued “%s”.", stored.Title), true
+}
+
 // assistantSettings turns an action's steps, agents, models, and tests into
 // a work order's settings, filling the rest from the project's defaults.
 func (api *API) assistantSettings(
@@ -381,6 +550,8 @@ func writeConversationError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, conversations.ErrNotFound), errors.Is(err, project.ErrNotFound), errors.Is(err, feature.ErrNotFound):
 		writeError(w, http.StatusNotFound, "not_found", "not found")
+	case errors.Is(err, conversations.ErrGoalActive):
+		writeError(w, http.StatusConflict, "autopilot_active", "autopilot is already on; stop it first")
 	case errors.Is(err, conversations.ErrBusy):
 		writeError(w, http.StatusConflict, "assistant_busy", err.Error())
 	case errors.Is(err, conversations.ErrNotPending):
