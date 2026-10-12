@@ -13,9 +13,9 @@ import { ExitConfirm } from "./views/ExitConfirm";
 import { Inbox } from "./views/Inbox";
 import { AssistantDrawer } from "./views/AssistantDrawer";
 import { useWorkLayout } from "./views/useWorkLayout";
-import { AutopilotBanner } from "./views/AutopilotBanner";
+import { AutopilotBanner, LaunchBanner } from "./views/AutopilotBanner";
 import { AppsView } from "./views/AppsView";
-import type { AutopilotGoal } from "./api/assistant";
+import type { AutopilotGoal, LaunchStage } from "./api/assistant";
 import { Launcher } from "./views/Launcher";
 import { Projects } from "./views/Projects";
 import { ProjectWorkspace } from "./views/ProjectWorkspace";
@@ -52,6 +52,7 @@ function App() {
   const [area, setArea] = useState<"projects" | "apps">("projects");
   // The open project's autopilot goal while it is on, as the assistant reports it.
   const [goal, setGoal] = useState<AutopilotGoal | null>(null);
+  const [launch, setLaunch] = useState<LaunchStage | null>(null);
 
   // Only poll from inside the workspace: the launcher has nowhere to show it.
   const attention = useAttention(entered && reachable);
@@ -376,6 +377,7 @@ function App() {
         onOpenChange={layout.setAssistantOpen}
         docked={layout.docked}
         onGoalChange={setGoal}
+        onLaunchChange={setLaunch}
       />
 
       <div className="shell__body">
@@ -389,7 +391,13 @@ function App() {
             railHeader={projectSwitch}
             systemNav={systemNav}
             railStrip={railStrip}
-            autopilot={goal && <AutopilotBanner scope={projectId} goal={goal} />}
+            autopilot={
+              goal ? (
+                <AutopilotBanner scope={projectId} goal={goal} />
+              ) : launch ? (
+                <LaunchBanner stage={launch} />
+              ) : null
+            }
             railCollapsed={layout.railCollapsed}
             onToggleRail={layout.toggleRail}
           />
