@@ -1,7 +1,7 @@
 # Assistant: Implementation Plan
 
-**Status:** phase 1 (usage limits) merged; phase 2 (the assistant) implemented on
-`feat/assistant`; phase 3 planned.
+**Status:** phases 1 (usage limits) and 2 (the assistant) merged; phase 3 in two
+parts: events on `feat/assistant-events`, then goals and autopilot.
 
 ## Goal
 
@@ -192,7 +192,14 @@ file is left behind.
 
 - **Events:** the coordinator records project events and wakes the project's
   conversation with a turn, at most one at a time per conversation; events
-  that arrive meanwhile are batched into its next turn.
+  that arrive meanwhile are batched into its next turn. As built: a watcher
+  compares each project's work (state, newest run, wait) every 20 seconds
+  with what it last saw, kept in the conversation, for projects whose
+  conversation the user has started. A merge, a failure, a blocker, a merge
+  approval, or a question for the user is noted in the chat and wakes the
+  assistant; a usage-limit wait is only noted; auto-merge gates, sessions
+  waiting for their next message, and pauses the user made are skipped. The
+  first look at a project only records it.
 - **Goals:** a durable autopilot goal per project (items, status, started and
   ended), set from the chat or the Vision page; acting tools skip approval
   cards only for items in the open goal.

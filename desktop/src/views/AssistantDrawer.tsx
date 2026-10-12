@@ -15,6 +15,7 @@ import { Markdown } from "./Markdown";
 import { useModelName } from "./useModelName";
 import { agentName, useAgents } from "./useAgents";
 
+const IDLE_POLL_MS = 20_000;
 const POLL_MS = 2000;
 
 /** Fired when an approved assistant action changed the project's work. */
@@ -84,9 +85,10 @@ export function AssistantDrawer({
   }, [load]);
 
   const running = conversation?.status === "running";
+  // Quickly while it answers; slowly otherwise, for the turns that project
+  // events start on their own.
   useEffect(() => {
-    if (!running) return;
-    const timer = setInterval(() => void load(), POLL_MS);
+    const timer = setInterval(() => void load(), running ? POLL_MS : IDLE_POLL_MS);
     return () => clearInterval(timer);
   }, [running, load]);
 
