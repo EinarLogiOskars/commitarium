@@ -259,7 +259,7 @@ function App() {
     <button
       className="ghost rail__icon"
       onClick={() => setShowInbox(true)}
-      title="Inbox"
+      data-tip="Inbox"
       aria-label="Inbox"
     >
       <svg

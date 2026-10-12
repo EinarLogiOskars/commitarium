@@ -206,7 +206,7 @@ export function ProjectWorkspace({
                 setMode(page.mode);
                 setOrderId(null);
               }}
-              title={page.label}
+              data-tip={page.label}
               aria-label={page.label}
             >
               <RailIcon name={page.mode} />
@@ -465,7 +465,8 @@ function RailToggle({ collapsed, onToggle }: { collapsed: boolean; onToggle?: ()
     <button
       className="ghost rail__toggle"
       onClick={onToggle}
-      title={collapsed ? "Show the sidebar" : "Hide the sidebar"}
+      title={collapsed ? undefined : "Hide the sidebar"}
+      data-tip={collapsed ? "Show the sidebar" : undefined}
       aria-label={collapsed ? "Show the sidebar" : "Hide the sidebar"}
       aria-expanded={!collapsed}
     >
