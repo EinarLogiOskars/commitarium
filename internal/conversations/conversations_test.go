@@ -134,7 +134,7 @@ func TestAnAssistantTurnProposesActionsAndKeepsNotes(t *testing.T) {
 		t.Fatalf("premium marks = %+v / %+v", conversation.Actions[0].Premium, conversation.Actions[1].Premium)
 	}
 	resolved, err := service.Resolve(t.Context(), "prj_test", conversation.Actions[0].ID, ActionApplied, "Created the work order Log a meal.")
-	if err != nil || resolved.Actions[0].Status != ActionApplied || resolved.Messages[len(resolved.Messages)-1].Role != "event" {
+	if err != nil || resolved.Actions[0].Status != ActionApplied || resolved.Actions[0].Result == "" {
 		t.Fatalf("resolve = %+v err=%v", resolved, err)
 	}
 	if _, err := service.Resolve(t.Context(), "prj_test", conversation.Actions[0].ID, ActionDismissed, ""); !errors.Is(err, ErrNotPending) {

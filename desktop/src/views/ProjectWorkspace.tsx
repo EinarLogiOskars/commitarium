@@ -14,6 +14,7 @@ import { StackPicker } from "./StackPicker";
 import { PreviewRailItem } from "./PreviewRailItem";
 import { PreviewView } from "./PreviewView";
 import { VisionView } from "./VisionView";
+import { WORK_CHANGED } from "./AssistantDrawer";
 import { rememberedIdea } from "./visionSession";
 import { getOpenVisionSession } from "../api/vision";
 import { usePreview } from "./usePreview";
@@ -82,6 +83,11 @@ export function ProjectWorkspace({
   // Stable so it doesn't re-trigger FeatureView's load effect; refreshes the
   // rail's work-order grouping when a feature's state changes.
   const bumpRail = useCallback(() => setReloadKey((k) => k + 1), []);
+  // Work the assistant created or started shows up at once.
+  useEffect(() => {
+    window.addEventListener(WORK_CHANGED, bumpRail);
+    return () => window.removeEventListener(WORK_CHANGED, bumpRail);
+  }, [bumpRail]);
 
   const load = useCallback(async () => {
     setError(null);

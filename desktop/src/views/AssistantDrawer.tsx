@@ -15,6 +15,9 @@ import { agentName, useAgents } from "./useAgents";
 
 const POLL_MS = 2000;
 
+/** Fired when an approved assistant action changed the project's work. */
+export const WORK_CHANGED = "commitarium:work-changed";
+
 const STEPS_LABEL: Record<string, string> = {
   full: "Full (plan, review)",
   planned: "Planned (no reviewer)",
@@ -251,6 +254,9 @@ function ActionCard({
     setError(null);
     try {
       onChanged(await fn());
+      // An approved action may have created or started work: the open
+      // project's lists reload.
+      if (kind !== "dismiss") window.dispatchEvent(new Event(WORK_CHANGED));
     } catch (e) {
       setError(describe(e));
     } finally {

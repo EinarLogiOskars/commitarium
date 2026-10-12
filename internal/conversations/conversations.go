@@ -332,12 +332,9 @@ func (service *Service) Resolve(ctx context.Context, scope, actionID string, sta
 		if action.Status != ActionProposed {
 			return Conversation{}, ErrNotPending
 		}
+		// The outcome shows on the action's card; the assistant reads the
+		// work it changed from the project's state on its next turn.
 		action.Status, action.Result, action.UpdatedAt = status, strings.TrimSpace(result), service.now()
-		if action.Result != "" && status != ActionDismissed {
-			stored.Messages = append(stored.Messages, Message{
-				ID: messageID(stored, len(stored.Messages)), Role: "event", Text: action.Result, OccurredAt: action.UpdatedAt,
-			})
-		}
 		stored.UpdatedAt = action.UpdatedAt
 		return stored.Conversation, service.write(stored)
 	}
