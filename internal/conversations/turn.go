@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/EinarLogiOskars/commitarium/internal/featureartifact"
 	"os"
 	"path/filepath"
 	"strings"
@@ -169,6 +170,10 @@ func (service *Service) refresh(ctx context.Context, stored record) (record, err
 					ID: fmt.Sprintf("act_%s_%d_%d", stored.Scope, stored.Turn, index+1), MessageID: reply.ID,
 					AssistantAction: proposed, Status: ActionProposed, UpdatedAt: now,
 				}
+				if proposed.Type == featureartifact.AssistantCreateWorkOrder {
+					proposed = service.withProjectDefaults(ctx, stored.Scope, proposed)
+					action.AssistantAction = proposed
+				}
 				for _, model := range []string{proposed.LeadModel, proposed.ReviewerModel} {
 					if settings.RequiresApproval(model) {
 						action.Premium = append(action.Premium, model)
@@ -300,8 +305,40 @@ How you act:
 - create_work_order drafts a work order: a short imperative title, a description of the outcome, vision_item_id when it delivers an item of the vision, steps (quick for a small, clear change; planned for a real feature that benefits from a commit-ordered plan without review; full when a reviewer, plan review, and code review are worth it), independent_tests only when the work is worth checking thoroughly (data, money, auth, migrations, tricky logic), and the agents and models.
 - Choose the cheapest model that fits each task, and give the reason. Models whose names contain any of these are premium and need the user's explicit approval: ` + premium + `. Propose one only with a clear reason.
 - start_work_order starts a draft or ready work order; change_models switches a working run's models (when: now stops and resumes it, next_turn waits).
-- Leave fields that do not apply empty. Use agent and model IDs exactly as the state lists them; empty keeps the project's defaults.
+- For a new work order always name the lead agent and model, and the reviewer agent and model when its steps are full, even when they are the project's defaults, and say in the reason why each fits. Leave other fields that do not apply empty. Use agent and model IDs exactly as the state lists them.
 - The repository is checked out read-only in your working directory when the project has one; inspect it as needed, but do not modify anything.
 - Keep notes in notes: decisions, the user's preferences (including how they like their UIs to look), and a short catalog of reusable work across projects (what, which project, which files). Return your full notes when they change, otherwise leave notes empty.
 - Be brief and concrete.`
+}
+
+// withProjectDefaults fills a new work order's empty agents and models with
+// the project's defaults, so its card shows exactly what will run. A work
+// order without a reviewer names none.
+func (service *Service) withProjectDefaults(
+	ctx context.Context, scope string, action featureartifact.AssistantAction,
+) featureartifact.AssistantAction {
+	if scope == TopLevel {
+		return action
+	}
+	current, err := service.config.Projects.GetByID(ctx, scope)
+	if err != nil {
+		return action
+	}
+	if action.LeadAgent == "" {
+		action.LeadAgent = current.AgentProviders.LeadAgent
+	}
+	if action.LeadModel == "" {
+		action.LeadModel = current.AgentModels.Lead
+	}
+	if action.Steps == "quick" || action.Steps == "planned" {
+		action.ReviewerAgent, action.ReviewerModel = "", ""
+		return action
+	}
+	if action.ReviewerAgent == "" {
+		action.ReviewerAgent = current.AgentProviders.ReviewerAgent
+	}
+	if action.ReviewerModel == "" {
+		action.ReviewerModel = current.AgentModels.Reviewer
+	}
+	return action
 }

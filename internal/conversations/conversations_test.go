@@ -51,7 +51,11 @@ func (worker *workerStub) finish(result workerhttp.TerminalResult) {
 type projectsStub struct{}
 
 func (projectsStub) GetByID(_ context.Context, id string) (project.Project, error) {
-	return project.Project{ID: id, Name: "Calories"}, nil
+	return project.Project{
+		ID: id, Name: "Calories",
+		AgentProviders: project.AgentProviders{LeadAgent: "codex", ReviewerAgent: "claude"},
+		AgentModels:    project.AgentModels{Lead: "gpt-5.6-sol", Reviewer: "claude-opus-5-5"},
+	}, nil
 }
 
 func (projectsStub) List(context.Context) ([]project.Project, error) {
@@ -120,6 +124,11 @@ func TestAnAssistantTurnProposesActionsAndKeepsNotes(t *testing.T) {
 	conversation, err = service.Get(t.Context(), "prj_test")
 	if err != nil || conversation.Status != StatusIdle || len(conversation.Actions) != 2 || conversation.Notes != "Prefers quick changes." {
 		t.Fatalf("after the turn = %+v err=%v", conversation, err)
+	}
+	quick, full := conversation.Actions[0], conversation.Actions[1]
+	if quick.LeadAgent != "codex" || quick.LeadModel != "gpt-6-luna" || quick.ReviewerModel != "" ||
+		full.LeadModel != "claude-fable-5-1" || full.ReviewerAgent != "claude" || full.ReviewerModel != "claude-opus-5-5" {
+		t.Fatalf("a new work order's card does not show what will run: %+v / %+v", quick.AssistantAction, full.AssistantAction)
 	}
 	if len(conversation.Actions[0].Premium) != 0 || len(conversation.Actions[1].Premium) != 1 {
 		t.Fatalf("premium marks = %+v / %+v", conversation.Actions[0].Premium, conversation.Actions[1].Premium)
