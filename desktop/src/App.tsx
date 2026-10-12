@@ -254,6 +254,33 @@ function App() {
       </button>
     </>
   );
+  // What of the app's own controls the collapsed rail keeps: the inbox.
+  const railStrip = attention.supported && (
+    <button
+      className="ghost rail__icon"
+      onClick={() => setShowInbox(true)}
+      title="Inbox"
+      aria-label="Inbox"
+    >
+      <svg
+        viewBox="0 0 24 24"
+        width="18"
+        height="18"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        aria-hidden
+      >
+        <path d="M4 13l2.5-7.5h11L20 13v5a1.5 1.5 0 01-1.5 1.5h-13A1.5 1.5 0 014 18v-5z" />
+        <path d="M4 13h4.5l1 2h5l1-2H20" />
+      </svg>
+      {attention.actionable.length > 0 && (
+        <span className="rail__icon-badge">{attention.actionable.length}</span>
+      )}
+    </button>
+  );
   const projectSwitch = projectId && (
     <button className="rail__switch" onClick={exitProject} title="Switch project">
       <span className="rail__brand">Commitarium</span>
@@ -340,6 +367,7 @@ function App() {
             onForeground={setForeground}
             railHeader={projectSwitch}
             systemNav={systemNav}
+            railStrip={railStrip}
             railCollapsed={layout.railCollapsed}
             onToggleRail={layout.toggleRail}
           />

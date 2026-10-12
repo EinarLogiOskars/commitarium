@@ -36,6 +36,7 @@ export function ProjectWorkspace({
   systemNav,
   railCollapsed = false,
   onToggleRail,
+  railStrip,
 }: {
   id: string;
   onLoaded?: (name: string) => void;
@@ -52,6 +53,8 @@ export function ProjectWorkspace({
   /** The rail folded to a strip with only its expand button. */
   railCollapsed?: boolean;
   onToggleRail?: () => void;
+  /** The app's controls kept on the collapsed strip. */
+  railStrip?: React.ReactNode;
 }) {
   const [project, setProject] = useState<Project | null>(null);
   const [toolchain, setToolchain] = useState<ProjectToolchain | null>(null);
@@ -178,11 +181,42 @@ export function ProjectWorkspace({
     }
   };
 
+  // The pages the collapsed rail keeps, as icons; work orders and sessions
+  // stay in the full rail.
+  const repo = !!project?.forgejo_repository;
+  const stripPages: { mode: Mode; label: string }[] = [
+    { mode: "overview", label: "Overview" },
+    ...(repo ? [{ mode: "vision" as Mode, label: "Vision" }] : []),
+    ...(repo ? [{ mode: "repository" as Mode, label: "Repository" }] : []),
+    ...(toolchain ? [{ mode: "stack" as Mode, label: "Stack" }] : []),
+    ...(repo ? [{ mode: "preview" as Mode, label: "Preview" }] : []),
+    { mode: "settings", label: "Project settings" },
+  ];
+
   return (
     <>
       {railCollapsed ? (
         <nav className="rail rail--collapsed">
           <RailToggle collapsed onToggle={onToggleRail} />
+          {stripPages.map((page) => (
+            <button
+              key={page.mode}
+              className={`ghost rail__icon ${mode === page.mode ? "rail__icon--active" : ""}`}
+              onClick={() => {
+                setMode(page.mode);
+                setOrderId(null);
+              }}
+              title={page.label}
+              aria-label={page.label}
+            >
+              <RailIcon name={page.mode} />
+              {page.mode === "stack" && needsStack && (
+                <span className="rail__icon-dot" aria-label="Needs setting up" />
+              )}
+            </button>
+          ))}
+          <div className="rail__spacer" />
+          {railStrip}
         </nav>
       ) : (
         <nav className="rail">
@@ -448,5 +482,63 @@ function RailToggle({ collapsed, onToggle }: { collapsed: boolean; onToggle?: ()
         <path d="M9.5 4.5v15" stroke="currentColor" strokeWidth="1.6" />
       </svg>
     </button>
+  );
+}
+
+// Outline icons for the collapsed rail, drawn on a 24px grid.
+const RAIL_ICONS: Partial<Record<Mode, React.ReactNode>> = {
+  overview: (
+    <>
+      <rect x="4" y="4" width="7" height="7" rx="1.5" />
+      <rect x="13" y="4" width="7" height="7" rx="1.5" />
+      <rect x="4" y="13" width="7" height="7" rx="1.5" />
+      <rect x="13" y="13" width="7" height="7" rx="1.5" />
+    </>
+  ),
+  vision: (
+    <>
+      <circle cx="12" cy="12" r="8" />
+      <circle cx="12" cy="12" r="4.5" />
+      <circle cx="12" cy="12" r="1" />
+    </>
+  ),
+  repository: (
+    <>
+      <circle cx="7" cy="6" r="2" />
+      <circle cx="7" cy="18" r="2" />
+      <circle cx="17" cy="8" r="2" />
+      <path d="M7 8v8M17 10c0 4-10 2-10 6" />
+    </>
+  ),
+  stack: (
+    <>
+      <path d="M12 4l8 4-8 4-8-4 8-4z" />
+      <path d="M4 12l8 4 8-4M4 16l8 4 8-4" />
+    </>
+  ),
+  preview: <path d="M8 5.5v13l10.5-6.5L8 5.5z" />,
+  settings: (
+    <>
+      <circle cx="12" cy="12" r="3" />
+      <path d="M12 3.5v2.5M12 18v2.5M3.5 12H6M18 12h2.5M6 6l1.8 1.8M16.2 16.2L18 18M6 18l1.8-1.8M16.2 7.8L18 6" />
+    </>
+  ),
+};
+
+function RailIcon({ name }: { name: Mode }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      width="18"
+      height="18"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.6"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      {RAIL_ICONS[name]}
+    </svg>
   );
 }

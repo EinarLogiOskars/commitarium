@@ -3904,3 +3904,46 @@ button.danger:not(.ghost) {
 .shell--docked .topbar {
   padding-right: 28px;
 }
+.rail__icon {
+  position: relative;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+  border-radius: 8px;
+}
+.rail__icon:hover {
+  color: var(--text);
+}
+.rail__icon--active {
+  color: var(--text);
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+}
+.rail__icon-dot {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--warn);
+}
+.rail__icon-badge {
+  position: absolute;
+  top: 1px;
+  right: 0;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  font-size: 10px;
+  line-height: 16px;
+  text-align: center;
+  color: var(--bg);
+  background: var(--accent);
+}
+.rail--collapsed .rail__toggle {
+  margin: 0 0 8px;
+}
