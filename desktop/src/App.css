@@ -3316,17 +3316,19 @@ button.danger:not(.ghost) {
   gap: 5px;
 }
 
-/* A work order's models and token use, in a slim bar under the work. */
+/* A work order's models and token use: one thin line of small text tucked
+   under the work, so it takes as little height as possible. */
+.order > .order-meta {
+  margin-top: -10px;
+}
 .order-meta {
   display: flex;
   flex-wrap: wrap;
-  align-items: center;
-  gap: 6px 16px;
-  padding: 2px 4px;
-  font-size: 12px;
-}
-.order-meta .agents-at-work {
-  margin: 0;
+  align-items: baseline;
+  gap: 0 16px;
+  padding: 0 4px;
+  font-size: 11px;
+  line-height: 1.4;
 }
 .order-meta .change-model {
   flex-basis: 100%;
@@ -3334,32 +3336,25 @@ button.danger:not(.ghost) {
 .impl__side .plan__head {
   padding-right: 28px;
 }
-/* One line: the models pill and the token total share a centre line. */
+
+/* In the bottom line the models read as plain text, not a pill. */
 .order-meta > *,
+.order-meta .agents-at-work,
 .order-meta .order-head__usage,
 .order-meta .usage-toggle {
   margin: 0;
-}
-.order-meta .agents-at-work,
-.order-meta .order-head__usage {
-  min-height: 28px;
-  display: flex;
-  align-items: center;
-}
-.order-meta .usage-toggle,
-.order-meta .agents-at-work__change {
-  font-size: 12px;
-  line-height: 1.4;
   padding: 0;
-  margin: 0 0 0 10px;
   border: none;
   background: none;
+  font-size: 11px;
+  line-height: 1.4;
 }
-.order-meta .usage-toggle {
-  margin-left: 0;
+.order-meta .agents-at-work__change {
+  margin: 0 0 0 8px;
+  padding: 0;
+  font-size: 11px;
+  line-height: 1.4;
 }
-.order-meta .order-head__usage {
-  flex-direction: column;
-  align-items: flex-start;
-  justify-content: center;
+.order-meta .order-head__usage .usage-table {
+  margin-top: 4px;
 }
