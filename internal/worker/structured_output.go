@@ -30,6 +30,7 @@ type StructuredOutput struct {
 	HandoffBrief       *featureartifact.HandoffBrief
 	SessionTitle       string
 	VisionPlan         *featureartifact.VisionPlan
+	AssistantTurn      *featureartifact.AssistantTurn
 }
 
 // MaxSessionTitleRunes bounds a session title; longer titles are shortened.
@@ -133,6 +134,40 @@ func OutputJSONSchema(contract OutputContract) any {
 				"open_questions": list,
 			},
 			[]string{"action", "message", "goal", "areas", "considerations", "open_questions"},
+		)
+	case OutputContractAssistantTurn:
+		text := map[string]any{"type": "string"}
+		action := objectSchema(
+			map[string]any{
+				"type": map[string]any{
+					"type": "string", "enum": []string{"create_work_order", "start_work_order", "change_models", "add_vision_item"},
+				},
+				"reason":            text,
+				"title":             text,
+				"description":       text,
+				"vision_item_id":    text,
+				"steps":             map[string]any{"type": "string", "enum": []string{"", "full", "planned", "quick"}},
+				"independent_tests": map[string]any{"type": "boolean"},
+				"lead_agent":        text,
+				"lead_model":        text,
+				"reviewer_agent":    text,
+				"reviewer_model":    text,
+				"work_order_id":     text,
+				"when":              map[string]any{"type": "string", "enum": []string{"", "now", "next_turn"}},
+				"priority":          map[string]any{"type": "integer", "description": "For add_vision_item: the priority level, 0 for P0 through 9 for P9; any level the vision has or a new one. Otherwise 0."},
+			},
+			[]string{
+				"type", "reason", "title", "description", "vision_item_id", "steps", "independent_tests",
+				"lead_agent", "lead_model", "reviewer_agent", "reviewer_model", "work_order_id", "when", "priority",
+			},
+		)
+		return objectSchema(
+			map[string]any{
+				"message": text,
+				"actions": map[string]any{"type": "array", "items": action},
+				"notes":   map[string]any{"type": "string", "description": "Your full notes, replacing the old ones; empty keeps them."},
+			},
+			[]string{"message", "actions", "notes"},
 		)
 	case OutputContractVisionPlan:
 		text := map[string]any{"type": "string"}
@@ -514,6 +549,28 @@ func ResolveStructuredOutput(
 		default:
 			return StructuredOutput{}, invalidStructuredOutput("work order brief response has an unknown action")
 		}
+
+	case OutputContractAssistantTurn:
+		var response struct {
+			Message string                            `json:"message"`
+			Actions []featureartifact.AssistantAction `json:"actions"`
+			Notes   string                            `json:"notes"`
+		}
+		if err := decodeStructuredOutput(raw, &response); err != nil {
+			return StructuredOutput{}, err
+		}
+		response.Message = strings.TrimSpace(response.Message)
+		if response.Message == "" {
+			return StructuredOutput{}, invalidStructuredOutput("assistant response has no message")
+		}
+		turn, err := featureartifact.AssistantTurn{Actions: response.Actions, Notes: response.Notes}.Normalize()
+		if err != nil {
+			return StructuredOutput{}, invalidStructuredOutput("assistant turn: %v", err)
+		}
+		return StructuredOutput{
+			Event: Event{Type: EventMessage, Text: response.Message}, Disposition: DispositionSucceeded,
+			AssistantTurn: &turn,
+		}, nil
 
 	case OutputContractVisionPlan:
 		var response struct {

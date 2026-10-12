@@ -278,6 +278,7 @@ type API struct {
 	assistant          WorkOrderAssistant
 	agents             AgentService
 	visions            VisionService
+	conversations      ConversationService
 }
 
 func New(
@@ -383,8 +384,11 @@ func newAPI(
 	var workOrderAssistant WorkOrderAssistant
 	var agents AgentService
 	var visions VisionService
+	var assistantConversations ConversationService
 	for _, extra := range extras {
 		switch typed := extra.(type) {
+		case ConversationService:
+			assistantConversations = typed
 		case VisionService:
 			visions = typed
 		case AgentService:
@@ -425,6 +429,7 @@ func newAPI(
 		assistant:          workOrderAssistant,
 		agents:             agents,
 		visions:            visions,
+		conversations:      assistantConversations,
 	}
 	api.artifacts, _ = workflow.(FeatureArtifactService)
 	api.projectImporter, _ = projects.(ProjectImporter)
@@ -439,6 +444,16 @@ func newAPI(
 		mux.HandleFunc("GET /api/v1/projects/{id}/vision/assistant/{sessionID}", api.getVisionSessionHandler)
 		mux.HandleFunc("POST /api/v1/projects/{id}/vision/assistant/{sessionID}/messages", api.replyVisionHandler)
 		mux.HandleFunc("POST /api/v1/projects/{id}/vision/items/{itemID}/work-order", api.startVisionWorkOrderHandler)
+		mux.HandleFunc("POST /api/v1/projects/{id}/vision/items", api.addVisionItemHandler)
+	}
+	if assistantConversations != nil && projects != nil && features != nil {
+		mux.HandleFunc("GET /api/v1/assistant/settings", api.getAssistantSettingsHandler)
+		mux.HandleFunc("PUT /api/v1/assistant/settings", api.saveAssistantSettingsHandler)
+		mux.HandleFunc("GET /api/v1/assistant/conversations/{scope}", api.getConversationHandler)
+		mux.HandleFunc("POST /api/v1/assistant/conversations/{scope}/messages", api.sendConversationHandler)
+		mux.HandleFunc("PUT /api/v1/assistant/conversations/{scope}/notes", api.saveConversationNotesHandler)
+		mux.HandleFunc("POST /api/v1/assistant/conversations/{scope}/actions/{actionID}/approve", api.approveConversationActionHandler)
+		mux.HandleFunc("POST /api/v1/assistant/conversations/{scope}/actions/{actionID}/dismiss", api.dismissConversationActionHandler)
 	}
 	if toolchainService != nil && projects != nil && features != nil {
 		mux.HandleFunc("POST /api/v1/projects/{id}/setup", api.setUpProjectHandler)

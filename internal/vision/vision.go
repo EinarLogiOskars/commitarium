@@ -183,6 +183,32 @@ func (service *Service) Save(ctx context.Context, projectID string, plan feature
 
 // LinkWorkOrder records the work order delivering an item without sub-items.
 // It answers the item's label (such as "P0.2.1") and the item.
+// AddItem adds a top-level item to a priority of the project's vision,
+// optionally linked to an existing work order, and answers the vision with the
+// new item's ID. source names who added it: "user" or "assistant".
+func (service *Service) AddItem(
+	ctx context.Context, projectID string, level int, title, description, featureID, source string,
+) (Vision, string, error) {
+	if _, err := service.projects.GetByID(ctx, projectID); err != nil {
+		return Vision{}, "", err
+	}
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	current, err := service.read(projectID)
+	if err != nil {
+		return Vision{}, "", err
+	}
+	plan, itemID, err := current.Plan.AddItem(level, title, description, featureID)
+	if err != nil {
+		return Vision{}, "", fmt.Errorf("%w: %v", ErrInvalid, err)
+	}
+	current.Plan = plan
+	current.Source = source
+	current.Revision++
+	stored, err := service.write(current)
+	return stored, itemID, err
+}
+
 func (service *Service) LinkWorkOrder(ctx context.Context, projectID, itemID, featureID string) (Vision, error) {
 	if _, err := service.projects.GetByID(ctx, projectID); err != nil {
 		return Vision{}, err

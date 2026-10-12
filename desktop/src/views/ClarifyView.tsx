@@ -1,3 +1,4 @@
+import { Markdown } from "./Markdown";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   acceptBrief,
@@ -232,6 +233,12 @@ function AssistantChat({
       <section className="panel panel--phase">
         <h2>Clarify</h2>
         {error && <div className="banner banner--error">{error}</div>}
+        {/* What is being decided on: the work order as written. */}
+        {feature.description && (
+          <div className="clarify__description">
+            <Markdown text={feature.description} />
+          </div>
+        )}
         <p className="muted">
           The assistant can look into the code with you and turn this {WORK.short} into a handoff
           brief. For a small, clear change, start right away: the title and description become the

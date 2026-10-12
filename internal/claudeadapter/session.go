@@ -526,6 +526,8 @@ func isStructuredEnvelope(contract worker.OutputContract, text string) bool {
 		discriminator = "effect"
 	case worker.OutputContractSessionOpening:
 		discriminator = "title"
+	case worker.OutputContractAssistantTurn:
+		discriminator = "actions"
 	}
 	_, ok := object[discriminator]
 	return ok
@@ -764,6 +766,7 @@ func (session *session) translateResult(
 			HandoffBrief:       resolved.HandoffBrief,
 			SessionTitle:       resolved.SessionTitle,
 			VisionPlan:         resolved.VisionPlan,
+			AssistantTurn:      resolved.AssistantTurn,
 			Usage:              message.Usage.tokenUsage(),
 		}, nil
 	}

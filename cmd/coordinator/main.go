@@ -7,9 +7,11 @@ import (
 	"github.com/EinarLogiOskars/commitarium/internal/agent"
 	"github.com/EinarLogiOskars/commitarium/internal/agentworker"
 	workorderassistant "github.com/EinarLogiOskars/commitarium/internal/assistant"
+	"github.com/EinarLogiOskars/commitarium/internal/conversations"
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -280,6 +282,7 @@ func run(ctx context.Context, coordinatorConfig config) error {
 	var toolchainAssistantService httpapi.ToolchainAssistantService
 	var workOrderAssistant httpapi.WorkOrderAssistant
 	var visionService httpapi.VisionService
+	var conversationService httpapi.ConversationService
 	var deletionWorker projectdeletion.WorkerStopper
 	var deletionLiveSessions projectdeletion.LiveSessionRegistry
 	var assistantCleaner projectdeletion.AssistantCleaner
@@ -335,6 +338,40 @@ func run(ctx context.Context, coordinatorConfig config) error {
 			return fmt.Errorf("create project visions: %w", err)
 		}
 		visionService = visions.WithRepository(checkoutManager, forgejoClient)
+		models := func(ctx context.Context) []conversations.ModelChoice {
+			choices := make([]conversations.ModelChoice, 0)
+			for _, listed := range catalog.List(ctx) {
+				if listed.Role != modelcatalog.RoleLead {
+					continue
+				}
+				for _, model := range listed.Models {
+					choices = append(choices, conversations.ModelChoice{Provider: listed.Provider, ID: model.ID, Display: model.DisplayName})
+				}
+			}
+			return choices
+		}
+		projectAssistant, err := conversations.NewService(conversations.Config{
+			Root: filepath.Join(coordinatorConfig.toolchainRoot, "assistant"), WorkspaceRoot: coordinatorConfig.workspaceRoot,
+			Projects: projectService, Agents: agentService,
+			Describer: conversations.StateDescriber{
+				Projects: projectService, Agents: agentService, Features: featureService,
+				Visions: visions, Toolchains: toolchainService, Models: models,
+			},
+			Workers: func(agentID string) (workerhttp.Service, error) { return agentWorkers.Client(agentID) },
+			DefaultModel: func(ctx context.Context, provider project.AgentProvider) string {
+				for _, choice := range models(ctx) {
+					if choice.Provider == provider {
+						return choice.ID
+					}
+				}
+				return ""
+			},
+			Checkouts: checkoutManager, Branches: forgejoClient,
+		})
+		if err != nil {
+			return fmt.Errorf("create the assistant: %w", err)
+		}
+		conversationService = projectAssistant
 		assistant, err := toolchain.NewAssistant(
 			coordinatorConfig.toolchainRoot, coordinatorConfig.workspaceRoot, projectService, toolchainService,
 			func(agentID string) (workerhttp.Service, error) { return agentWorkers.Client(agentID) },
@@ -458,6 +495,7 @@ func run(ctx context.Context, coordinatorConfig config) error {
 		workOrderAssistant,
 		agentService,
 		visionService,
+		conversationService,
 	)
 
 	log.Print("Listening...")

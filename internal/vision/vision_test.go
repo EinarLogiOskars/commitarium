@@ -275,3 +275,32 @@ func TestTheOpenConversationIsFoundWithoutItsID(t *testing.T) {
 		t.Fatalf("another project's conversation was found: %v", err)
 	}
 }
+
+func TestWorkOutsideThePlanCanJoinTheVision(t *testing.T) {
+	service, worker := newTestService(t)
+	session, _, _ := service.Start(t.Context(), "prj_test", "codex", "gpt-5", ModeDescribe, "A calorie tracker", "start-1")
+	worker.finish(workerhttp.TerminalResult{
+		Outcome: workerhttp.OutcomeCompleted, Disposition: workerhttp.DispositionSucceeded, Summary: "Done.", VisionPlan: samplePlan(),
+	})
+	if _, err := service.GetSession(t.Context(), "prj_test", session.ID); err != nil {
+		t.Fatal(err)
+	}
+	stored, itemID, err := service.AddItem(t.Context(), "prj_test", 2, "Export to CSV", "Download the log.", "fea_export", "user")
+	if err != nil {
+		t.Fatalf("add item: %v", err)
+	}
+	item, label, found := Find(stored.Plan, itemID)
+	if !found || label != "P2.1" || item.FeatureID != "fea_export" || stored.Source != "user" {
+		t.Fatalf("item = %+v %q found=%t source=%s", item, label, found, stored.Source)
+	}
+	again, secondID, err := service.AddItem(t.Context(), "prj_test", 0, "Export to CSV", "", "", "assistant")
+	if err != nil || secondID == itemID {
+		t.Fatalf("second item = %q err=%v", secondID, err)
+	}
+	if _, label, _ := Find(again.Plan, secondID); label != "P0.2" {
+		t.Fatalf("second label = %q", label)
+	}
+	if _, _, err := service.AddItem(t.Context(), "prj_test", 12, "Too low", "", "", "user"); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("an out-of-range priority was accepted: %v", err)
+	}
+}

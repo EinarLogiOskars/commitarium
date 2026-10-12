@@ -14,6 +14,7 @@ import { StackPicker } from "./StackPicker";
 import { PreviewRailItem } from "./PreviewRailItem";
 import { PreviewView } from "./PreviewView";
 import { VisionView } from "./VisionView";
+import { OPEN_VISION, WORK_CHANGED } from "./AssistantDrawer";
 import { rememberedIdea } from "./visionSession";
 import { getOpenVisionSession } from "../api/vision";
 import { usePreview } from "./usePreview";
@@ -33,6 +34,9 @@ export function ProjectWorkspace({
   onForeground,
   railHeader,
   systemNav,
+  railCollapsed = false,
+  onToggleRail,
+  railStrip,
 }: {
   id: string;
   onLoaded?: (name: string) => void;
@@ -46,6 +50,11 @@ export function ProjectWorkspace({
   railHeader?: React.ReactNode;
   /** The app's own controls, at the bottom of the rail. */
   systemNav?: React.ReactNode;
+  /** The rail folded to a strip with only its expand button. */
+  railCollapsed?: boolean;
+  onToggleRail?: () => void;
+  /** The app's controls kept on the collapsed strip. */
+  railStrip?: React.ReactNode;
 }) {
   const [project, setProject] = useState<Project | null>(null);
   const [toolchain, setToolchain] = useState<ProjectToolchain | null>(null);
@@ -82,6 +91,19 @@ export function ProjectWorkspace({
   // Stable so it doesn't re-trigger FeatureView's load effect; refreshes the
   // rail's work-order grouping when a feature's state changes.
   const bumpRail = useCallback(() => setReloadKey((k) => k + 1), []);
+  // Work the assistant created or started shows up at once.
+  useEffect(() => {
+    window.addEventListener(WORK_CHANGED, bumpRail);
+    return () => window.removeEventListener(WORK_CHANGED, bumpRail);
+  }, [bumpRail]);
+  useEffect(() => {
+    const showVision = () => {
+      setMode("vision");
+      setOrderId(null);
+    };
+    window.addEventListener(OPEN_VISION, showVision);
+    return () => window.removeEventListener(OPEN_VISION, showVision);
+  }, []);
 
   const load = useCallback(async () => {
     setError(null);
@@ -167,125 +189,165 @@ export function ProjectWorkspace({
     }
   };
 
+  // The pages the collapsed rail keeps, as icons; work orders and sessions
+  // stay in the full rail.
+  const repo = !!project?.forgejo_repository;
+  const stripPages: { mode: Mode; label: string }[] = [
+    { mode: "overview", label: "Overview" },
+    ...(repo ? [{ mode: "vision" as Mode, label: "Vision" }] : []),
+    ...(repo ? [{ mode: "repository" as Mode, label: "Repository" }] : []),
+    ...(toolchain ? [{ mode: "stack" as Mode, label: "Stack" }] : []),
+    ...(repo ? [{ mode: "preview" as Mode, label: "Preview" }] : []),
+    { mode: "settings", label: "Project settings" },
+  ];
+
   return (
     <>
-      <nav className="rail">
-        {railHeader}
-        <button
-          className={`rail__item ${mode === "overview" ? "rail__item--active" : ""}`}
-          onClick={() => {
-            setMode("overview");
-            setOrderId(null);
-          }}
-        >
-          Overview
-        </button>
-        {project?.forgejo_repository && (
-          <button
-            className={`rail__item ${mode === "vision" ? "rail__item--active" : ""}`}
-            onClick={() => {
-              setMode("vision");
-              setOrderId(null);
-            }}
-          >
-            Vision
-          </button>
-        )}
-        {project?.forgejo_repository && (
-          <button
-            className={`rail__item ${mode === "repository" ? "rail__item--active" : ""}`}
-            onClick={() => {
-              setMode("repository");
-              setOrderId(null);
-            }}
-          >
-            Repository
-          </button>
-        )}
-        {toolchain && (
-          <button
-            className={`rail__item ${mode === "stack" ? "rail__item--active" : ""}`}
-            onClick={() => {
-              setMode("stack");
-              setOrderId(null);
-            }}
-          >
-            Stack
-            {needsStack && <span className="pill pill--warn rail__badge">Set up</span>}
-          </button>
-        )}
-
-        <div className="rail__section-head">
-          <span className="rail__tabs" role="tablist">
+      {railCollapsed ? (
+        <nav className="rail rail--collapsed">
+          <RailToggle collapsed onToggle={onToggleRail} />
+          {stripPages.map((page) => (
             <button
-              role="tab"
-              aria-selected={railKind === "work_order"}
-              className={`rail__tab ${railKind === "work_order" ? "rail__tab--on" : ""}`}
-              onClick={() => setRailKind("work_order")}
+              key={page.mode}
+              className={`ghost rail__icon ${mode === page.mode ? "rail__icon--active" : ""}`}
+              onClick={() => {
+                setMode(page.mode);
+                setOrderId(null);
+              }}
+              data-tip={page.label}
+              aria-label={page.label}
             >
-              {WORK.Plural}
+              <RailIcon name={page.mode} />
+              {page.mode === "stack" && needsStack && (
+                <span className="rail__icon-dot" aria-label="Needs setting up" />
+              )}
             </button>
-            {hasRepo && (
-              <button
-                role="tab"
-                aria-selected={railKind === "session"}
-                className={`rail__tab ${railKind === "session" ? "rail__tab--on" : ""}`}
-                onClick={() => setRailKind("session")}
-              >
-                Sessions
-              </button>
-            )}
-          </span>
-          {railKind === "session" ? (
+          ))}
+          <div className="rail__spacer" />
+          {railStrip}
+        </nav>
+      ) : (
+        <nav className="rail">
+          <div className="rail__top">
+            {railHeader}
+            {onToggleRail && <RailToggle collapsed={false} onToggle={onToggleRail} />}
+          </div>
+          <button
+            className={`rail__item ${mode === "overview" ? "rail__item--active" : ""}`}
+            onClick={() => {
+              setMode("overview");
+              setOrderId(null);
+            }}
+          >
+            Overview
+          </button>
+          {project?.forgejo_repository && (
             <button
-              className="rail__new"
-              title={needsStack ? "Choose a stack first" : "Start a session with an agent"}
-              onClick={() => void startSession()}
-              disabled={startingSession}
+              className={`rail__item ${mode === "vision" ? "rail__item--active" : ""}`}
+              onClick={() => {
+                setMode("vision");
+                setOrderId(null);
+              }}
             >
-              {startingSession ? "Starting…" : "+ New"}
-            </button>
-          ) : (
-            <button
-              className="rail__new"
-              title={needsStack ? "Choose a stack first" : WORK.newAction}
-              onClick={startNewOrder}
-            >
-              + New
+              Vision
             </button>
           )}
-        </div>
-        <WorkOrderRail
-          kind={railKind}
-          projectId={id}
-          selectedId={mode === "order" ? orderId : null}
-          reloadKey={reloadKey}
-          onSelect={openOrder}
-        />
+          {project?.forgejo_repository && (
+            <button
+              className={`rail__item ${mode === "repository" ? "rail__item--active" : ""}`}
+              onClick={() => {
+                setMode("repository");
+                setOrderId(null);
+              }}
+            >
+              Repository
+            </button>
+          )}
+          {toolchain && (
+            <button
+              className={`rail__item ${mode === "stack" ? "rail__item--active" : ""}`}
+              onClick={() => {
+                setMode("stack");
+                setOrderId(null);
+              }}
+            >
+              Stack
+              {needsStack && <span className="pill pill--warn rail__badge">Set up</span>}
+            </button>
+          )}
 
-        <div className="rail__spacer" />
-        {project?.forgejo_repository && (
-          <PreviewRailItem
-            preview={preview}
-            runnable={!!toolchain?.run}
-            active={mode === "preview"}
-            onOpenPage={() => {
-              setMode("preview");
+          <div className="rail__section-head">
+            <span className="rail__tabs" role="tablist">
+              <button
+                role="tab"
+                aria-selected={railKind === "work_order"}
+                className={`rail__tab ${railKind === "work_order" ? "rail__tab--on" : ""}`}
+                onClick={() => setRailKind("work_order")}
+              >
+                {WORK.Plural}
+              </button>
+              {hasRepo && (
+                <button
+                  role="tab"
+                  aria-selected={railKind === "session"}
+                  className={`rail__tab ${railKind === "session" ? "rail__tab--on" : ""}`}
+                  onClick={() => setRailKind("session")}
+                >
+                  Sessions
+                </button>
+              )}
+            </span>
+            {railKind === "session" ? (
+              <button
+                className="rail__new"
+                title={needsStack ? "Choose a stack first" : "Start a session with an agent"}
+                onClick={() => void startSession()}
+                disabled={startingSession}
+              >
+                {startingSession ? "Starting…" : "+ New"}
+              </button>
+            ) : (
+              <button
+                className="rail__new"
+                title={needsStack ? "Choose a stack first" : WORK.newAction}
+                onClick={startNewOrder}
+              >
+                + New
+              </button>
+            )}
+          </div>
+          <WorkOrderRail
+            kind={railKind}
+            projectId={id}
+            selectedId={mode === "order" ? orderId : null}
+            reloadKey={reloadKey}
+            onSelect={openOrder}
+          />
+
+          <div className="rail__spacer" />
+          {project?.forgejo_repository && (
+            <PreviewRailItem
+              preview={preview}
+              runnable={!!toolchain?.run}
+              active={mode === "preview"}
+              onOpenPage={() => {
+                setMode("preview");
+                setOrderId(null);
+              }}
+            />
+          )}
+          <button
+            className={`rail__item ${mode === "settings" ? "rail__item--active" : ""}`}
+            onClick={() => {
+              setMode("settings");
               setOrderId(null);
             }}
-          />
-        )}
-        <button
-          className={`rail__item ${mode === "settings" ? "rail__item--active" : ""}`}
-          onClick={() => {
-            setMode("settings");
-            setOrderId(null);
-          }}
-        >
-          Project settings
-        </button>
-        {systemNav && <div className="rail__system">{systemNav}</div>}
-      </nav>
+          >
+            Project settings
+          </button>
+          {systemNav && <div className="rail__system">{systemNav}</div>}
+        </nav>
+      )}
 
       <main className="main">
         <div className={`main__inner ${mode === "order" ? "main__inner--fill" : ""}`}>
@@ -403,5 +465,89 @@ export function ProjectWorkspace({
         </div>
       </main>
     </>
+  );
+}
+
+function RailToggle({ collapsed, onToggle }: { collapsed: boolean; onToggle?: () => void }) {
+  return (
+    <button
+      className="ghost rail__toggle"
+      onClick={onToggle}
+      title={collapsed ? undefined : "Hide the sidebar"}
+      data-tip={collapsed ? "Show the sidebar" : undefined}
+      aria-label={collapsed ? "Show the sidebar" : "Hide the sidebar"}
+      aria-expanded={!collapsed}
+    >
+      <svg viewBox="0 0 24 24" width="18" height="18" fill="none" aria-hidden>
+        <rect
+          x="3.5"
+          y="4.5"
+          width="17"
+          height="15"
+          rx="2.5"
+          stroke="currentColor"
+          strokeWidth="1.6"
+        />
+        <path d="M9.5 4.5v15" stroke="currentColor" strokeWidth="1.6" />
+      </svg>
+    </button>
+  );
+}
+
+// Outline icons for the collapsed rail, drawn on a 24px grid.
+const RAIL_ICONS: Partial<Record<Mode, React.ReactNode>> = {
+  overview: (
+    <>
+      <rect x="4" y="4" width="7" height="7" rx="1.5" />
+      <rect x="13" y="4" width="7" height="7" rx="1.5" />
+      <rect x="4" y="13" width="7" height="7" rx="1.5" />
+      <rect x="13" y="13" width="7" height="7" rx="1.5" />
+    </>
+  ),
+  vision: (
+    <>
+      <circle cx="12" cy="12" r="8" />
+      <circle cx="12" cy="12" r="4.5" />
+      <circle cx="12" cy="12" r="1" />
+    </>
+  ),
+  repository: (
+    <>
+      <circle cx="7" cy="6" r="2" />
+      <circle cx="7" cy="18" r="2" />
+      <circle cx="17" cy="8" r="2" />
+      <path d="M7 8v8M17 10c0 4-10 2-10 6" />
+    </>
+  ),
+  stack: (
+    <>
+      <path d="M12 4l8 4-8 4-8-4 8-4z" />
+      <path d="M4 12l8 4 8-4M4 16l8 4 8-4" />
+    </>
+  ),
+  preview: <path d="M8 5.5v13l10.5-6.5L8 5.5z" />,
+  settings: (
+    <>
+      <circle cx="12" cy="12" r="3" />
+      <path d="M12 3.5v2.5M12 18v2.5M3.5 12H6M18 12h2.5M6 6l1.8 1.8M16.2 16.2L18 18M6 18l1.8-1.8M16.2 7.8L18 6" />
+    </>
+  ),
+};
+
+function RailIcon({ name }: { name: Mode }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      width="18"
+      height="18"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.6"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      {RAIL_ICONS[name]}
+    </svg>
   );
 }

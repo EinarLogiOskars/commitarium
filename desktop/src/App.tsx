@@ -11,6 +11,8 @@ import { onExitConfirmationRequested } from "./ipc";
 import { AppSettings } from "./views/AppSettings";
 import { ExitConfirm } from "./views/ExitConfirm";
 import { Inbox } from "./views/Inbox";
+import { AssistantDrawer } from "./views/AssistantDrawer";
+import { useWorkLayout } from "./views/useWorkLayout";
 import { Launcher } from "./views/Launcher";
 import { Projects } from "./views/Projects";
 import { ProjectWorkspace } from "./views/ProjectWorkspace";
@@ -41,6 +43,8 @@ function App() {
   // The work order on screen, if any — notifications skip what is already
   // visible. Stable setter, so it doesn't re-fire the workspace's report.
   const [foreground, setForeground] = useState<string | null>(null);
+  // How the rail and the open assistant share the window.
+  const layout = useWorkLayout(projectId !== null);
 
   // Only poll from inside the workspace: the launcher has nowhere to show it.
   const attention = useAttention(entered && reachable);
@@ -250,6 +254,33 @@ function App() {
       </button>
     </>
   );
+  // What of the app's own controls the collapsed rail keeps: the inbox.
+  const railStrip = attention.supported && (
+    <button
+      className="ghost rail__icon"
+      onClick={() => setShowInbox(true)}
+      data-tip="Inbox"
+      aria-label="Inbox"
+    >
+      <svg
+        viewBox="0 0 24 24"
+        width="18"
+        height="18"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        aria-hidden
+      >
+        <path d="M4 13l2.5-7.5h11L20 13v5a1.5 1.5 0 01-1.5 1.5h-13A1.5 1.5 0 014 18v-5z" />
+        <path d="M4 13h4.5l1 2h5l1-2H20" />
+      </svg>
+      {attention.actionable.length > 0 && (
+        <span className="rail__icon-badge">{attention.actionable.length}</span>
+      )}
+    </button>
+  );
   const projectSwitch = projectId && (
     <button className="rail__switch" onClick={exitProject} title="Switch project">
       <span className="rail__brand">Commitarium</span>
@@ -261,7 +292,10 @@ function App() {
   );
 
   return (
-    <div className="shell">
+    <div
+      className={`shell ${layout.docked ? "shell--docked" : ""}`}
+      style={{ "--assistant-width": `${layout.assistantWidth}px` } as React.CSSProperties}
+    >
       {!projectId && (
         <header className="topbar">
           <span className="topbar__brand">Commitarium</span>
@@ -312,6 +346,17 @@ function App() {
         />
       )}
 
+      {/* The assistant follows where the user is: the open project's
+          conversation, or the top-level one. */}
+      <AssistantDrawer
+        scope={projectId ?? "commitarium"}
+        scopeLabel={projectId ? (projectName ?? "") : "All projects"}
+        onOpenOrder={projectId ? (featureId) => openFromInbox(projectId, featureId) : undefined}
+        open={layout.assistantOpen}
+        onOpenChange={layout.setAssistantOpen}
+        docked={layout.docked}
+      />
+
       <div className="shell__body">
         {projectId ? (
           <ProjectWorkspace
@@ -322,6 +367,9 @@ function App() {
             onForeground={setForeground}
             railHeader={projectSwitch}
             systemNav={systemNav}
+            railStrip={railStrip}
+            railCollapsed={layout.railCollapsed}
+            onToggleRail={layout.toggleRail}
           />
         ) : (
           <main className="main">

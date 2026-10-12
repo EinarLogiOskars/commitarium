@@ -200,7 +200,8 @@ func (request PutAttemptRequest) Validate(identity MutationIdentity) error {
 		request.OutputContract != OutputContractPlanApproval &&
 		request.OutputContract != OutputContractWorkOrderBrief &&
 		request.OutputContract != OutputContractSessionOpening &&
-		request.OutputContract != OutputContractVisionPlan {
+		request.OutputContract != OutputContractVisionPlan &&
+		request.OutputContract != OutputContractAssistantTurn {
 		return invalid("output contract %q is not recognized", request.OutputContract)
 	}
 	if (request.OutputContract == OutputContractPlanningLead ||
@@ -213,7 +214,8 @@ func (request PutAttemptRequest) Validate(identity MutationIdentity) error {
 	}
 	if (request.OutputContract == OutputContractToolchainSetup ||
 		request.OutputContract == OutputContractWorkOrderBrief ||
-		request.OutputContract == OutputContractVisionPlan) &&
+		request.OutputContract == OutputContractVisionPlan ||
+		request.OutputContract == OutputContractAssistantTurn) &&
 		request.Assignment.Role != RoleLead && request.Assignment.Role != RoleConsultant {
 		return invalid("toolchain setup output contract requires a consultation role")
 	}
@@ -421,6 +423,9 @@ func (result TerminalResult) Validate() error {
 		}
 		if result.VisionPlan != nil && result.Disposition != DispositionSucceeded {
 			return invalid("vision plan requires a successful disposition")
+		}
+		if result.AssistantTurn != nil && result.Disposition != DispositionSucceeded {
+			return invalid("assistant turn requires a successful disposition")
 		}
 		if result.SessionTitle != "" && result.Disposition != DispositionSucceeded {
 			return invalid("session title requires a successful disposition")
