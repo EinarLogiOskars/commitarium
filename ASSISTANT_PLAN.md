@@ -1,7 +1,7 @@
 # Assistant: Implementation Plan
 
-**Status:** phase 1 (usage limits) implemented on `feat/usage-limits`; phases 2
-and 3 planned.
+**Status:** phase 1 (usage limits) merged; phase 2 (the assistant) implemented on
+`feat/assistant`; phase 3 planned.
 
 ## Goal
 
@@ -149,6 +149,15 @@ that hits a limit as failed, until phase 2 replaces them.
   limit and resumes at the reset.
 
 ### Phase 2: The assistant
+
+Built on `feat/assistant` (ADR-022), with these differences: the actions are
+create work order (with Create as draft or Create and start), start work
+order, and change models; writing the vision and starting the project setup
+stay on their pages for now. The top-level conversation exists in the API but
+has no page yet, since it has nothing to act on until Apps. The reference
+catalog and UI preferences live in the notes, by instruction. The
+single-purpose assistants are unchanged, and a deleted project's conversation
+file is left behind.
 
 - **Agent role:** an assistant agent and model on the Agents page, stored with
   the app's agents.

@@ -2380,6 +2380,36 @@ x-commitarium-preview:
 A stack without an open target uses it, or the compose file's only published
 port, and the desktop saves it on the stack.
 
+## The assistant
+
+The assistant (ADR-022, ASSISTANT_PLAN.md) keeps one conversation per scope:
+`commitarium` for the top level, or a project ID. Each turn runs on the
+assistant's agent as a consultant with a read-only checkout of the project's
+default branch, and returns the `assistant_turn` result: its reply, proposed
+actions, and its notes.
+
+- `GET /api/v1/assistant/settings` answers `{"agent", "model", "ask_before",
+  "updated_at"}`; without saved settings, the first agent on its provider's
+  first model, and `ask_before` `["fable", "astra"]`. `PUT` saves them.
+- `GET /api/v1/assistant/conversations/{scope}` answers `{"scope", "status":
+  "idle"|"running", "agent", "model", "messages", "actions", "notes"}`. A
+  message's `role` is `user`, `assistant`, or `event` (an outcome from
+  Commitarium). A finished turn is folded in on read.
+- `POST .../{scope}/messages` with `{"message"}` and an `Idempotency-Key` starts
+  a turn; `409 assistant_busy` while one runs.
+- `PUT .../{scope}/notes` with `{"notes"}` replaces the notes with the user's
+  edit.
+- An action is `{"id", "type": "create_work_order"|"start_work_order"|
+  "change_models", "reason", "title", "description", "vision_item_id",
+  "steps", "independent_tests", "lead_agent", "lead_model", "reviewer_agent",
+  "reviewer_model", "work_order_id", "when", "status", "premium", "result"}`.
+  `premium` lists its models in an `ask_before` family.
+- `POST .../{scope}/actions/{actionID}/approve` with `{"start", "confirm_premium"}`
+  runs it through the same paths as the app's own buttons and records the
+  outcome. `409 premium_approval_required` without `confirm_premium` for a
+  premium action; `409 action_not_pending` once resolved.
+- `POST .../{scope}/actions/{actionID}/dismiss` dismisses it.
+
 ## Project vision
 
 A project's vision (ADR-020) is a statement and a prioritized plan. Items nest

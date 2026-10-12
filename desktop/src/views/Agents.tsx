@@ -23,6 +23,7 @@ import {
   type AgentLimit,
 } from "../api/agents";
 import { resetLabel } from "./UsageLimitBanner";
+import { AssistantSettingsSection } from "./AssistantSettings";
 import { ApiError } from "../api/client";
 import type { AgentProvider } from "../api/types";
 import { reloadAgents } from "./useAgents";
@@ -253,6 +254,8 @@ export function Agents({
         </div>
 
         <AddAgent onAdded={changed} />
+
+        {profiles && profiles.length > 0 && <AssistantSettingsSection />}
 
         <div className="modal__footer">
           <button className="ghost" onClick={onClose}>

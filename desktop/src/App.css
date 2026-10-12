@@ -3622,3 +3622,103 @@ button.danger:not(.ghost) {
   font-size: 12px;
   color: var(--warn);
 }
+
+/* The assistant (ASSISTANT_PLAN.md). */
+.assistant__body {
+  min-height: 0;
+}
+.assistant__empty {
+  margin: auto;
+  max-width: 460px;
+  text-align: center;
+}
+.assistant__event {
+  font-size: 12px;
+  text-align: center;
+  margin: 2px 0;
+}
+.assistant__turn {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.assistant-action {
+  max-width: 640px;
+  margin-left: 14px;
+  padding: 10px 14px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border));
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.assistant-action--applied,
+.assistant-action--dismissed {
+  border-color: var(--border);
+  background: none;
+  opacity: 0.85;
+}
+.assistant-action__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.assistant-action__desc {
+  margin: 0;
+  font-size: 13px;
+  white-space: pre-line;
+}
+.assistant-action__facts {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 12px;
+}
+.assistant-action__reason {
+  margin: 0;
+  font-size: 12px;
+}
+.assistant-action__premium {
+  margin: 2px 0;
+  color: var(--warn);
+}
+.assistant__notes-edit {
+  width: 100%;
+  font: inherit;
+}
+.assistant-settings {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+.assistant-settings h3 {
+  margin: 0 0 4px;
+}
+.assistant-settings__row {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.assistant-settings__row .field {
+  flex: 1 1 200px;
+}
+.assistant-settings__families {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.assistant-settings__family {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 4px 2px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  font-size: 12px;
+}
+.assistant-settings__family .linkish {
+  margin: 0;
+  padding: 0 4px;
+}

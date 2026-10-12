@@ -14,6 +14,7 @@ import { StackPicker } from "./StackPicker";
 import { PreviewRailItem } from "./PreviewRailItem";
 import { PreviewView } from "./PreviewView";
 import { VisionView } from "./VisionView";
+import { AssistantView } from "./AssistantView";
 import { rememberedIdea } from "./visionSession";
 import { getOpenVisionSession } from "../api/vision";
 import { usePreview } from "./usePreview";
@@ -22,7 +23,15 @@ import { WORK } from "../vocab";
 import type { AttentionItem, Project, ProjectToolchain, WorkKind } from "../api/types";
 
 type Mode =
-  "overview" | "vision" | "repository" | "stack" | "new" | "order" | "settings" | "preview";
+  | "assistant"
+  | "overview"
+  | "vision"
+  | "repository"
+  | "stack"
+  | "new"
+  | "order"
+  | "settings"
+  | "preview";
 
 /** Project workspace shell: work-order rail + master/detail main pane. */
 export function ProjectWorkspace({
@@ -172,6 +181,15 @@ export function ProjectWorkspace({
       <nav className="rail">
         {railHeader}
         <button
+          className={`rail__item ${mode === "assistant" ? "rail__item--active" : ""}`}
+          onClick={() => {
+            setMode("assistant");
+            setOrderId(null);
+          }}
+        >
+          Assistant
+        </button>
+        <button
           className={`rail__item ${mode === "overview" ? "rail__item--active" : ""}`}
           onClick={() => {
             setMode("overview");
@@ -288,7 +306,9 @@ export function ProjectWorkspace({
       </nav>
 
       <main className="main">
-        <div className={`main__inner ${mode === "order" ? "main__inner--fill" : ""}`}>
+        <div
+          className={`main__inner ${mode === "order" || mode === "assistant" ? "main__inner--fill" : ""}`}
+        >
           {error && <div className="banner banner--error">{error}</div>}
 
           {mode === "overview" && project && (
@@ -309,6 +329,17 @@ export function ProjectWorkspace({
               onSettings={() => {
                 setMode("settings");
                 setOrderId(null);
+              }}
+            />
+          )}
+
+          {mode === "assistant" && project && (
+            <AssistantView
+              scope={id}
+              onOpenOrder={(fid) => {
+                setReloadKey((k) => k + 1);
+                setRailKind("work_order");
+                openOrder(fid);
               }}
             />
           )}
