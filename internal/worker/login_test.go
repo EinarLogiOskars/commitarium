@@ -18,3 +18,23 @@ func TestIsLoginFailureRecognizesExpiredProviderLogins(t *testing.T) {
 		}
 	}
 }
+
+func TestUsageLimitTextMatchesOnlyAccountLimits(t *testing.T) {
+	for _, text := range []string{
+		"You've hit your usage limit. Try again at 3:45 PM.",
+		"Claude AI usage limit reached|1791810000",
+		"429 Too Many Requests",
+	} {
+		if !IsUsageLimit(text) {
+			t.Errorf("%q is a usage limit", text)
+		}
+	}
+	for _, text := range []string{
+		"Context window limit reached; start a new conversation.",
+		"The command exceeded its time limit.",
+	} {
+		if IsUsageLimit(text) {
+			t.Errorf("%q is not a usage limit", text)
+		}
+	}
+}

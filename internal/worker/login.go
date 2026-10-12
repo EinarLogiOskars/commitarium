@@ -35,12 +35,13 @@ func IsLoginFailure(text string) bool {
 
 // usageLimitMarkers are phrases provider CLIs use when an account reached
 // its usage or rate limit.
+// Only phrases that mean an account limit: a looser "limit reached" would also
+// match a context-window error, which retrying never fixes.
 var usageLimitMarkers = []string{
 	"usage limit",
 	"hit your limit",
 	"rate limit reached",
 	"rate_limit_error",
-	"limit reached",
 	"429 too many requests",
 }
 
