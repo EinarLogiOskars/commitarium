@@ -23,6 +23,7 @@ export function OrderSidebar({
   phase,
   description,
   detailsRequest,
+  overlay = false,
 }: {
   projectId: string;
   featureId: string;
@@ -31,6 +32,9 @@ export function OrderSidebar({
   description?: string;
   /** Bumped by the header's Details button to open the Details tab. */
   detailsRequest: number;
+  /** Too narrow to sit beside the conversation: it starts folded and opens
+   * over it. */
+  overlay?: boolean;
 }) {
   const { artifact: plan } = useFeatureArtifact<ImplementationPlanDocument>(
     projectId,
@@ -57,11 +61,17 @@ export function OrderSidebar({
   const [tab, setTab] = useState<Tab | null>(null);
   const touched = useRef(false);
 
-  // A phase with work to follow opens on it, unless the user chose otherwise.
+  // A phase with work to follow opens on it, unless the user chose otherwise
+  // or it would cover the conversation.
   useEffect(() => {
-    if (!touched.current) setOpen(!!work);
+    if (!touched.current) setOpen(!!work && !overlay);
     setTab(null);
   }, [phase, !!work]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Becoming narrow folds it away; it opens over the conversation on demand.
+  useEffect(() => {
+    if (overlay) setOpen(false);
+    else if (!touched.current) setOpen(!!work);
+  }, [overlay]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (detailsRequest === 0) return;
@@ -119,7 +129,7 @@ export function OrderSidebar({
   }
 
   return (
-    <aside className="panel order-side">
+    <aside className={`panel order-side ${overlay ? "order-side--overlay" : ""}`}>
       <div className="order-side__head">
         <div className="order-side__tabs" role="tablist">
           {tabs.map((t) => (

@@ -159,3 +159,16 @@ func TestAutopilotContinuesABlockedWorkOrderAtMostTwice(t *testing.T) {
 		t.Fatalf("continues = %d, last = %q", continues, conversation.Messages[len(conversation.Messages)-1].Text)
 	}
 }
+
+func TestTheAssistantHearsWhatBecameOfItsActions(t *testing.T) {
+	text := recentActions([]Action{
+		{AssistantAction: featureartifact.AssistantAction{Type: featureartifact.AssistantContinueWorkOrder, WorkOrderID: "fea_log"},
+			Status: ActionApplied, AutoTried: true, Result: "Continued “Show the log” with guidance."},
+		{AssistantAction: featureartifact.AssistantAction{Type: featureartifact.AssistantCreateWorkOrder, Title: "Sync"},
+			Status: ActionProposed},
+	})
+	if !strings.Contains(text, "applied by autopilot — Continued “Show the log” with guidance.") ||
+		!strings.Contains(text, `"Sync" at 00:00 UTC: waiting for the user's approval`) {
+		t.Fatalf("recent actions = %q", text)
+	}
+}

@@ -4031,3 +4031,24 @@ button.danger:not(.ghost) {
 .vision__autopilot .note {
   margin: 0 0 8px;
 }
+
+/* A narrow work order: the side card folds to its strip and opens over the
+   conversation, so the conversation and its composer keep the width. */
+.order__split--overlay {
+  position: relative;
+  flex-direction: row;
+}
+.order__split > .order-side.order-side--overlay {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 5;
+  width: min(340px, 85%);
+  max-height: none;
+  order: 0;
+  box-shadow: -12px 0 32px rgb(0 0 0 / 0.35);
+}
+.order__split--overlay > .order-side__strip {
+  align-self: flex-start;
+}
