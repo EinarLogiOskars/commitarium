@@ -4109,3 +4109,27 @@ button.danger:not(.ghost) {
   border-color: var(--lavender);
   background: color-mix(in srgb, var(--lavender) 22%, var(--panel));
 }
+
+/* Autopilot on a project in the project list. */
+.pill--autopilot {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-right: auto;
+  margin-left: 10px;
+  color: var(--text);
+  border: 1px solid var(--lavender);
+  background: color-mix(in srgb, var(--lavender) 30%, transparent);
+}
+
+/* Focus shows in the accent, not the system's blue. */
+:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 70%, transparent);
+  outline-offset: 1px;
+}
+input:focus,
+textarea:focus,
+select:focus {
+  outline: 2px solid color-mix(in srgb, var(--accent) 55%, transparent);
+  outline-offset: 0;
+}
