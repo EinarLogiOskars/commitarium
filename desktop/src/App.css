@@ -4152,3 +4152,10 @@ select:focus {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* Autopilot stays in sight while the page scrolls. */
+.autopilot-banner {
+  position: sticky;
+  top: 0;
+  z-index: 6;
+}
