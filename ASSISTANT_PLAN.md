@@ -155,6 +155,11 @@ assistant, and autopilot.
 - **Tools, act (approval cards):** write the vision, draft a work order with
   steps, models, and tests; start a work order; change a running work order's
   model; start the project setup.
+- **Reuse across projects:** the top-level notes keep a catalog of solid
+  reference implementations (what, which project, which files) and the user's
+  UI preferences. When drafting a work order, the assistant puts the relevant
+  reference code and preferences into the brief; the dev agent adapts them, so
+  each project owns its code and no project depends on another.
 - **Model policy:** the "Ask before using" mark per model on the Agents page,
   checked by the coordinator for every assistant tool that sets a model.
 - **Desktop:** an Assistant item at the top of the project rail opening the
@@ -182,4 +187,7 @@ assistant, and autopilot.
   conversation; opt-in, later).
 - The Apps area itself, beyond the assistant being ready to serve it.
 - Per-project assistant agent overrides.
+- A shared UI library (low priority, with Apps): once the user's UI
+  preferences settle, turn them into a versioned package of design tokens and
+  base components that apps pin, so apps look like one family.
 
