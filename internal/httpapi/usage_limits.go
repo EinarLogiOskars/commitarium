@@ -1,10 +1,13 @@
 package httpapi
 
 import (
+	"context"
 	"log"
 	"net/http"
 	"sort"
 	"time"
+
+	"github.com/EinarLogiOskars/commitarium/internal/workerhttp"
 )
 
 // agentLimitResponse is one agent at its usage limit: when it resets, when
@@ -47,4 +50,31 @@ func (api *API) agentLimitsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	sort.Slice(limits, func(i, j int) bool { return limits[i].Agent < limits[j].Agent })
 	writeJSON(w, http.StatusOK, map[string]any{"limits": limits}, "agent limits")
+}
+
+// AgentUsage is one agent's latest report of its account's usage limits.
+type AgentUsage struct {
+	Agent      string                   `json:"agent"`
+	Windows    []workerhttp.UsageWindow `json:"windows"`
+	ObservedAt *time.Time               `json:"observed_at,omitempty"`
+}
+
+// AgentUsageService reports each connected agent's usage limits as its
+// worker last saw them.
+type AgentUsageService interface {
+	AgentUsage(ctx context.Context) ([]AgentUsage, error)
+}
+
+// agentUsageHandler answers each agent's usage windows, for the Agents page.
+func (api *API) agentUsageHandler(w http.ResponseWriter, r *http.Request) {
+	usage := make([]AgentUsage, 0)
+	if api.agentUsage != nil {
+		reported, err := api.agentUsage.AgentUsage(r.Context())
+		if err != nil {
+			log.Printf("agent usage: %v", err)
+		} else {
+			usage = reported
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"agents": usage}, "agent usage")
 }

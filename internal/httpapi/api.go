@@ -285,6 +285,7 @@ type API struct {
 	agents             AgentService
 	visions            VisionService
 	conversations      ConversationService
+	agentUsage         AgentUsageService
 	// mux serves the API's own routes, for actions that reuse them.
 	mux http.Handler
 }
@@ -393,8 +394,11 @@ func newAPI(
 	var agents AgentService
 	var visions VisionService
 	var assistantConversations ConversationService
+	var agentUsage AgentUsageService
 	for _, extra := range extras {
 		switch typed := extra.(type) {
+		case AgentUsageService:
+			agentUsage = typed
 		case ConversationService:
 			assistantConversations = typed
 		case VisionService:
@@ -438,6 +442,7 @@ func newAPI(
 		agents:             agents,
 		visions:            visions,
 		conversations:      assistantConversations,
+		agentUsage:         agentUsage,
 	}
 	api.artifacts, _ = workflow.(FeatureArtifactService)
 	api.projectImporter, _ = projects.(ProjectImporter)
@@ -654,6 +659,7 @@ func newAPI(
 	if agents != nil {
 		mux.HandleFunc("GET /api/v1/agents", api.listAgentsHandler)
 		mux.HandleFunc("GET /api/v1/agents/limits", api.agentLimitsHandler)
+		mux.HandleFunc("GET /api/v1/agents/usage", api.agentUsageHandler)
 		mux.HandleFunc("POST /api/v1/agents", api.createAgentHandler)
 		mux.HandleFunc("PATCH /api/v1/agents/{id}", api.renameAgentHandler)
 		mux.HandleFunc("DELETE /api/v1/agents/{id}", api.deleteAgentHandler)

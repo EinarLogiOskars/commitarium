@@ -84,6 +84,7 @@ type runtime struct {
 	environmentResolver workerservice.EnvironmentResolver
 	capabilities        []workerhttp.Capability
 	modelSource         workerhttp.ModelSource
+	usage               *worker.UsageTracker
 	description         string
 }
 
@@ -205,6 +206,7 @@ func run(ctx context.Context, workerConfig config) error {
 		MaxConcurrentAttempts: 0,
 		EventSource:           service,
 		ModelSource:           workerRuntime.modelSource,
+		UsageSource:           usageSource(workerRuntime.usage),
 	}, service)
 	if err != nil {
 		return fmt.Errorf("create worker HTTP server: %w", err)
@@ -509,6 +511,7 @@ func newCodexRuntime(config codexConfig) (runtime, error) {
 		},
 		description: "Codex worker",
 		modelSource: modelSource,
+		usage:       &codexadapter.Usage,
 	}, nil
 }
 
@@ -562,6 +565,7 @@ func newClaudeRuntime(config claudeConfig) (runtime, error) {
 		},
 		description: "Claude worker",
 		modelSource: claudeModelSource(provider, baseVariables, config.availableModels),
+		usage:       &claudeadapter.Usage,
 	}, nil
 }
 
@@ -955,4 +959,21 @@ func forgejoRoleEnvironment(
 		roots[role] = identity.workspaceRoot
 	}
 	return variables, roots, nil
+}
+
+// usageSource serves an adapter's latest usage report, when it keeps one.
+func usageSource(tracker *worker.UsageTracker) func() ([]workerhttp.UsageWindow, *time.Time) {
+	if tracker == nil {
+		return nil
+	}
+	return func() ([]workerhttp.UsageWindow, *time.Time) {
+		windows, observedAt := tracker.Latest()
+		reported := make([]workerhttp.UsageWindow, 0, len(windows))
+		for _, window := range windows {
+			reported = append(reported, workerhttp.UsageWindow{
+				Name: window.Name, UsedPercent: window.UsedPercent, ResetsAt: window.ResetsAt, Limited: window.Limited,
+			})
+		}
+		return reported, observedAt
+	}
 }

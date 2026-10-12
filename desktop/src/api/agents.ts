@@ -30,3 +30,22 @@ export interface AgentLimit {
 /** The agents at their usage limit right now. */
 export const getAgentLimits = (): Promise<{ limits: AgentLimit[] }> =>
   request("/api/v1/agents/limits");
+
+/** One of an agent's account usage limits, as it last reported while working. */
+export interface UsageWindow {
+  name: string;
+  used_percent?: number;
+  resets_at?: string;
+  limited: boolean;
+}
+
+export interface AgentUsage {
+  agent: string;
+  windows: UsageWindow[];
+  /** When the agent last reported; absent until it has worked. */
+  observed_at?: string;
+}
+
+/** Each connected agent's latest usage report. */
+export const getAgentUsage = (): Promise<{ agents: AgentUsage[] }> =>
+  request("/api/v1/agents/usage");

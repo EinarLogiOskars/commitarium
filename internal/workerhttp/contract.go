@@ -61,6 +61,23 @@ type Model struct {
 	SupportedReasoningEfforts []string `json:"supported_reasoning_efforts,omitempty"`
 }
 
+// UsageWindow is one of the provider account's usage limits as the agent
+// last reported it while working.
+type UsageWindow struct {
+	Name        string     `json:"name"`
+	UsedPercent *float64   `json:"used_percent,omitempty"`
+	ResetsAt    *time.Time `json:"resets_at,omitempty"`
+	Limited     bool       `json:"limited"`
+}
+
+// UsageResponse is the agent's latest usage report; ObservedAt is unset
+// before the agent has worked since it started.
+type UsageResponse struct {
+	Provider   Provider      `json:"provider"`
+	Windows    []UsageWindow `json:"windows"`
+	ObservedAt *time.Time    `json:"observed_at,omitempty"`
+}
+
 type ModelsResponse struct {
 	ProtocolVersion string    `json:"protocol_version"`
 	Provider        Provider  `json:"provider"`

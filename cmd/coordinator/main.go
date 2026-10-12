@@ -284,6 +284,7 @@ func run(ctx context.Context, coordinatorConfig config) error {
 	var visionService httpapi.VisionService
 	var conversationService httpapi.ConversationService
 	var assistantWatcher *conversations.Watcher
+	var agentWorkerRegistry *agentworker.Registry
 	var projectConversations *conversations.Service
 	var deletionWorker projectdeletion.WorkerStopper
 	var deletionLiveSessions projectdeletion.LiveSessionRegistry
@@ -311,6 +312,7 @@ func run(ctx context.Context, coordinatorConfig config) error {
 		if err != nil {
 			return fmt.Errorf("create agent worker registry: %w", err)
 		}
+		agentWorkerRegistry = agentWorkers
 		modelSource := func(provider project.AgentProvider) modelcatalog.Source {
 			return agentworker.ModelSource{Workers: agentWorkers.Models, Agents: agentService, Provider: provider}
 		}
@@ -509,6 +511,7 @@ func run(ctx context.Context, coordinatorConfig config) error {
 		agentService,
 		visionService,
 		conversationService,
+		agentUsageReader{agents: agentService, workers: agentWorkerRegistry},
 	)
 
 	if assistantWatcher != nil {
@@ -523,4 +526,40 @@ func run(ctx context.Context, coordinatorConfig config) error {
 	}
 
 	return nil
+}
+
+// agentUsageReader asks each connected agent's worker for its latest usage
+// report; an agent whose worker cannot be reached is left out.
+type agentUsageReader struct {
+	agents interface {
+		List(context.Context) ([]agent.Agent, error)
+	}
+	workers *agentworker.Registry
+}
+
+func (reader agentUsageReader) AgentUsage(ctx context.Context) ([]httpapi.AgentUsage, error) {
+	if reader.workers == nil {
+		return nil, nil
+	}
+	agents, err := reader.agents.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	usage := make([]httpapi.AgentUsage, 0, len(agents))
+	for _, candidate := range agents {
+		client, err := reader.workers.Client(candidate.ID)
+		if err != nil {
+			continue
+		}
+		asked, cancel := context.WithTimeout(ctx, 3*time.Second)
+		reported, err := client.Usage(asked)
+		cancel()
+		if err != nil {
+			continue
+		}
+		usage = append(usage, httpapi.AgentUsage{
+			Agent: candidate.ID, Windows: reported.Windows, ObservedAt: reported.ObservedAt,
+		})
+	}
+	return usage, nil
 }

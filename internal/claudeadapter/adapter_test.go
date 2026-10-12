@@ -788,3 +788,14 @@ func TestClaudeUsageLimitFailsTheTurnWithItsResetTime(t *testing.T) {
 		t.Fatalf("legacy reset = %v", reset)
 	}
 }
+
+func TestARateLimitEventBecomesAUsageWindow(t *testing.T) {
+	utilization := 0.375
+	window := rateLimitInfo{Status: "allowed_warning", ResetsAt: 1791810000, RateLimitType: "five_hour", Utilization: &utilization}.usageWindow()
+	if window.Name != "5-hour" || window.UsedPercent == nil || *window.UsedPercent != 37.5 || window.Limited || window.ResetsAt == nil {
+		t.Fatalf("window = %+v", window)
+	}
+	if rejected := (rateLimitInfo{Status: "rejected"}).usageWindow(); !rejected.Limited || rejected.Name != "Usage" {
+		t.Fatalf("rejected window = %+v", rejected)
+	}
+}
