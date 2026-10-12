@@ -1665,15 +1665,14 @@ button.danger:not(.ghost) {
 }
 .order-head__top .stepper__cell {
   flex: none;
-  gap: 8px;
+  gap: 0;
 }
 /* Beside the labels, not above them: no upward offset, and never over a
    label. */
-/* Room before each line: WebKit can measure a button a few pixels narrower
-   than its text draws, and that overflow must land in empty space. */
+/* Even spacing on both sides of each line. */
 .order-head__top .stepper__line {
   flex: 0 0 14px;
-  margin: 0 0 0 10px;
+  margin: 0 10px;
   align-self: center;
 }
 /* The step keeps its full measured width, and the label a little air, so a
@@ -1681,18 +1680,21 @@ button.danger:not(.ghost) {
 .order-head__top .stepper__step {
   flex: none;
 }
-.order-head__top .stepper__label {
-  padding-right: 0;
-}
-/* WebKit leaves a flex gap out of a button's width and clips the label, so
-   the marker is spaced with a margin instead. */
+/* WebKit sizes a button laid out as a flex row a little narrower than its
+   text, by a different amount per label. Laid out inline instead, the marker
+   and label measure exactly, so the spacing between phases stays even. */
 .order-head__top .stepper__step {
-  flex-direction: row;
-  gap: 0;
-  padding: 2px 6px;
+  display: inline-block;
+  white-space: nowrap;
+  padding: 2px 4px;
 }
 .order-head__top .stepper__marker {
+  display: inline-grid;
+  vertical-align: middle;
   margin-right: 6px;
+}
+.order-head__top .stepper__label {
+  vertical-align: middle;
 }
 .order-head__top .stepper__marker {
   width: 18px;
