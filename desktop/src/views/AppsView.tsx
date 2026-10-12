@@ -25,7 +25,8 @@ export function AppsView({
   reachable: boolean;
   attention: AttentionItem[];
   running: RunningWorkOrder[];
-  onShowWork: (projectId: string) => void;
+  /** Opens the project behind an app; only in developer mode. */
+  onShowWork?: (projectId: string) => void;
 }) {
   const [apps, setApps] = useState<Project[] | null>(null);
   // A new app takes its agents and models from the newest project that has
@@ -91,10 +92,7 @@ export function AppsView({
       {apps === null ? (
         <p className="muted">Loading…</p>
       ) : apps.length === 0 ? (
-        <p className="muted">
-          No apps yet. Describe one with New app, or turn on “Use as an app” in a project's
-          settings.
-        </p>
+        <p className="muted">No apps yet. Describe one with New app.</p>
       ) : (
         <div className="apps">
           {apps.map((app) => {
@@ -120,15 +118,17 @@ export function AppsView({
                   <span className={`dot dot--${state.tone}`} aria-hidden />
                   {state.label}
                 </span>
-                <button
-                  className="linkish"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onShowWork(app.id);
-                  }}
-                >
-                  Show the work
-                </button>
+                {onShowWork && (
+                  <button
+                    className="linkish"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onShowWork(app.id);
+                    }}
+                  >
+                    Show the work
+                  </button>
+                )}
               </div>
             );
           })}
