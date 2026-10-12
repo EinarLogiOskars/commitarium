@@ -328,7 +328,7 @@ func (service *Service) observe(
 		}
 		changed = true
 	}
-	if len(stored.PendingEvents) == 0 {
+	if len(stored.PendingEvents) == 0 && len(stored.Queued) == 0 {
 		if changed || len(events) > 0 {
 			return service.write(stored)
 		}
@@ -338,11 +338,36 @@ func (service *Service) observe(
 	if err != nil || settings.Agent == "" || settings.Model == "" {
 		return service.write(stored)
 	}
-	prompt := eventsPrompt(stored.PendingEvents) +
-		"\n\nTell the user briefly what this means and what comes next. Propose actions only when they help; " +
-		"the user approves them as usual. When nothing needs the user, say so in a line."
-	stored.PendingEvents = nil
-	_, err = service.startTurn(ctx, stored, settings, fmt.Sprintf("events:%d", stored.Turn+1), "event", prompt)
+	return service.startWaitingTurn(ctx, stored, settings)
+}
+
+// startWaitingTurn starts the turn for what waited while the assistant was
+// busy: the user's queued messages, and the events it has yet to hear.
+func (service *Service) startWaitingTurn(ctx context.Context, stored record, settings Settings) error {
+	key := fmt.Sprintf("events:%d", stored.Turn+1)
+	if len(stored.Queued) == 0 {
+		prompt := eventsPrompt(stored.PendingEvents) +
+			"\n\nTell the user briefly what this means and what comes next. Propose actions only when they help; " +
+			"the user approves them as usual. When nothing needs the user, say so in a line."
+		stored.PendingEvents = nil
+		_, err := service.startTurn(ctx, stored, settings, key, "event", prompt)
+		return err
+	}
+	texts := make([]string, 0, len(stored.Queued))
+	now := service.now()
+	for _, queued := range stored.Queued {
+		texts = append(texts, queued.Text)
+		stored.Messages = append(stored.Messages, Message{
+			ID: messageID(stored, len(stored.Messages)), Role: "user", Text: queued.Text, OccurredAt: now,
+		})
+	}
+	stored.Queued = nil
+	prompt := "The user says:\n" + strings.Join(texts, "\n\n")
+	if len(stored.PendingEvents) > 0 {
+		prompt = eventsPrompt(stored.PendingEvents) + "\n\n" + prompt
+		stored.PendingEvents = nil
+	}
+	_, err := service.startTurn(ctx, stored, settings, "queued:"+key, "user", prompt)
 	return err
 }
 

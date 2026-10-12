@@ -101,6 +101,30 @@ func TestEventsWakeTheAssistantOneTurnAtATime(t *testing.T) {
 	}
 }
 
+func TestAQueuedMessageStartsTheNextTurn(t *testing.T) {
+	service, worker := newTestService(t)
+	if _, err := service.Send(t.Context(), "prj_test", "Build it", "msg-1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Send(t.Context(), "prj_test", "Is the device voice enough?", "msg-2"); err != nil {
+		t.Fatal(err)
+	}
+	worker.finish(workerhttp.TerminalResult{Outcome: workerhttp.OutcomeCompleted, Disposition: workerhttp.DispositionSucceeded, Summary: "Building."})
+	if _, err := service.Get(t.Context(), "prj_test"); err != nil {
+		t.Fatal(err)
+	}
+	snapshot := func(context.Context, string) (view, error) { return view{Work: map[string]work{}}, nil }
+	if err := service.observe(t.Context(), "prj_test", snapshot); err != nil {
+		t.Fatal(err)
+	}
+	conversation, _ := service.Get(t.Context(), "prj_test")
+	if len(worker.puts) != 2 || !strings.Contains(worker.puts[1].Instructions, "Is the device voice enough?") ||
+		len(conversation.Queued) != 0 || conversation.Status != StatusRunning ||
+		conversation.Messages[len(conversation.Messages)-1].Text != "Is the device voice enough?" {
+		t.Fatalf("the queued message did not start the next turn: puts=%d %+v", len(worker.puts), conversation)
+	}
+}
+
 func TestAWorkOrderBackInReadyWakesTheAssistant(t *testing.T) {
 	events := changes(map[string]string{"fea_1": "ready_to_merge|run_1|waiting_for_user|blocker|"},
 		map[string]work{"fea_1": {Title: "Practice", State: feature.StateReady, RunID: "run_1", RunStatus: execution.RunStatusStopped}})

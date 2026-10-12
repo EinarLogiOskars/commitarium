@@ -116,6 +116,9 @@ type Conversation struct {
 	Notes    string    `json:"notes"`
 	// Goal is the autopilot goal, the latest one even once it ended.
 	Goal *Goal `json:"goal,omitempty"`
+	// Queued are the user's messages sent while the assistant answered; they
+	// start its next turn.
+	Queued []Message `json:"queued,omitempty"`
 	// Launch is a new app's launch while it is set up (launch.go).
 	Launch    *Launch   `json:"launch,omitempty"`
 	UpdatedAt time.Time `json:"updated_at"`
