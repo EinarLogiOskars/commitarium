@@ -219,3 +219,38 @@ func TestAutopilotCreatesOneWorkOrderPerItem(t *testing.T) {
 		t.Fatalf("the second create was not left for the user: %q", last)
 	}
 }
+
+func TestAutopilotClosesOnlyItsOwnDuplicates(t *testing.T) {
+	service, _ := newTestService(t)
+	service.config.Visions = &visionStub{plan: featureartifact.VisionPlan{Priorities: []featureartifact.VisionPriority{
+		{Level: 1, Items: []featureartifact.VisionItem{{ID: "goal", Title: "Calorie goal", FeatureID: "fea_real"}}},
+	}}}
+	service.config.Features = &featuresStub{features: []feature.Feature{{ID: "fea_real", State: feature.StateImplementing}}}
+	if _, err := service.StartGoal(t.Context(), "prj_test", 1); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := service.read("prj_test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	closeCard := func(id, workOrder string) Action {
+		return Action{ID: id, Status: ActionProposed, AssistantAction: featureartifact.AssistantAction{
+			Type: featureartifact.AssistantCloseWorkOrder, Reason: "Duplicate", WorkOrderID: workOrder}}
+	}
+	stored.Actions = append(stored.Actions,
+		Action{ID: "act_made_real", Status: ActionApplied, AutoTried: true, AssistantAction: featureartifact.AssistantAction{
+			Type: featureartifact.AssistantCreateWorkOrder, VisionItemID: "goal", WorkOrderID: "fea_real"}},
+		Action{ID: "act_made_dup", Status: ActionApplied, AutoTried: true, AssistantAction: featureartifact.AssistantAction{
+			Type: featureartifact.AssistantCreateWorkOrder, VisionItemID: "goal", WorkOrderID: "fea_dup"}},
+		closeCard("act_close_dup", "fea_dup"),
+		closeCard("act_close_real", "fea_real"),
+		closeCard("act_close_users", "fea_users"),
+	)
+	if err := service.write(stored); err != nil {
+		t.Fatal(err)
+	}
+	apply, err := service.autopilotActions("prj_test")
+	if err != nil || len(apply) != 1 || apply[0].ID != "act_close_dup" {
+		t.Fatalf("autopilot closes %+v err=%v", apply, err)
+	}
+}

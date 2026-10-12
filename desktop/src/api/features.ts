@@ -136,6 +136,19 @@ export const returnToReady = (
     { method: "POST", idempotencyKey },
   );
 
+/** Close a work order without merging it: started work returns to Ready
+ * first (its runs stop, its branch and pull request close), then it is
+ * cancelled. Its history stays. Safe to retry with the same key. */
+export const closeWorkOrder = (
+  projectId: string,
+  featureId: string,
+  idempotencyKey: string,
+): Promise<Feature> =>
+  request(
+    `/api/v1/projects/${encodeURIComponent(projectId)}/features/${encodeURIComponent(featureId)}/close`,
+    { method: "POST", idempotencyKey },
+  );
+
 /** Delete a work order and its isolated internal artifacts. Never touches the
  * default branch. A forced delete stops exact active attempts first. */
 export const deleteFeature = (

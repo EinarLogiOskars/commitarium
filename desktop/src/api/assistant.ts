@@ -24,7 +24,8 @@ export type AssistantActionType =
   | "change_models"
   | "add_vision_item"
   | "start_autopilot"
-  | "continue_work_order";
+  | "continue_work_order"
+  | "close_work_order";
 
 export interface AssistantAction {
   id: string;

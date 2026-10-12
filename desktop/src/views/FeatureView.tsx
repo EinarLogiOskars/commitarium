@@ -2,6 +2,7 @@ import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import {
   deleteFeature,
   returnToReady,
+  closeWorkOrder,
   getFeature,
   getFeatureEvents,
   getFeatureUsage,
@@ -84,6 +85,8 @@ export function FeatureView({
   // null = follow the current phase; a number = the user pinned that phase.
   const [pinnedIndex, setPinnedIndex] = useState<number | null>(null);
   const [confirmReady, setConfirmReady] = useState<string | null>(null);
+  const [confirmClose, setConfirmClose] = useState<string | null>(null);
+  const [closing, setClosing] = useState(false);
   const [resetting, setResetting] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [forceDelete, setForceDelete] = useState(false);
@@ -198,6 +201,22 @@ export function FeatureView({
     }
   };
 
+  const runClose = async () => {
+    if (!confirmClose) return;
+    setClosing(true);
+    setError(null);
+    try {
+      await closeWorkOrder(projectId, featureId, confirmClose);
+      setConfirmClose(null);
+      setPinnedIndex(null);
+      await load();
+    } catch (e) {
+      setError(describe(e));
+    } finally {
+      setClosing(false);
+    }
+  };
+
   const runDelete = async () => {
     setDeleting(true);
     setError(null);
@@ -247,7 +266,7 @@ export function FeatureView({
                 Details
               </button>
             )}
-            {restartable && !confirmDelete && !confirmReady && (
+            {restartable && !confirmDelete && !confirmReady && !confirmClose && (
               <button
                 className="ghost"
                 onClick={() => setConfirmReady(crypto.randomUUID())}
@@ -256,13 +275,39 @@ export function FeatureView({
                 Back to Ready
               </button>
             )}
-            {onDeleted && !confirmDelete && !confirmReady && (
+            {!finished && !confirmDelete && !confirmReady && !confirmClose && (
+              <button
+                className="ghost"
+                onClick={() => setConfirmClose(crypto.randomUUID())}
+                disabled={deleting || resetting || closing}
+              >
+                Close
+              </button>
+            )}
+            {onDeleted && !confirmDelete && !confirmReady && !confirmClose && (
               <button className="ghost danger" onClick={openDeleteConfirm} disabled={deleting}>
                 Delete
               </button>
             )}
           </div>
         </div>
+
+        {confirmClose && (
+          <div className="delete-confirm">
+            <span className="muted">
+              Close this {WORK.short} without merging it? Its run stops and its branch and pull
+              request are closed. It moves to Closed and keeps its history.
+            </span>
+            <div className="row">
+              <button className="primary" onClick={() => void runClose()} disabled={closing}>
+                {closing ? "Closing…" : "Close"}
+              </button>
+              <button className="ghost" onClick={() => setConfirmClose(null)} disabled={closing}>
+                Keep it
+              </button>
+            </div>
+          </div>
+        )}
 
         {confirmReady && (
           <div className="delete-confirm">

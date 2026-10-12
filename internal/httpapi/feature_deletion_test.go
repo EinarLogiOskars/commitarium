@@ -127,3 +127,44 @@ func TestForceDeleteFeatureValidatesForceAndIdempotencyKey(t *testing.T) {
 		t.Fatalf("unexpected missing key response: %d %s", response.Code, response.Body.String())
 	}
 }
+
+type resettingDeletionStub struct {
+	featureDeletionStub
+	resets int
+}
+
+func (stub *resettingDeletionStub) ReturnToReady(_ context.Context, _, _, _ string) (feature.Feature, error) {
+	stub.resets++
+	return feature.Feature{}, nil
+}
+
+func TestClosingAWorkOrderStopsStartedWorkThenCancelsIt(t *testing.T) {
+	for name, test := range map[string]struct {
+		state  feature.State
+		resets int
+		code   int
+	}{
+		"a draft is cancelled":                {feature.StateDraft, 0, http.StatusOK},
+		"started work returns to Ready first": {feature.StateImplementing, 1, http.StatusOK},
+		"a merged one cannot close":           {feature.StateCompleted, 0, http.StatusConflict},
+	} {
+		features := &recordingFeatureService{getResult: feature.Feature{ID: "fea_dup", ProjectID: "prj_test", State: test.state}}
+		workflowService := &recordingWorkflowService{}
+		deletion := &resettingDeletionStub{}
+		handler := NewWithWorkspaceRealWorkflowAndDeletionService(
+			nil, features, workflowService, nil, nil, nil, nil, nil, deletion,
+		)
+		request := httptest.NewRequest(http.MethodPost, "/api/v1/projects/prj_test/features/fea_dup/close", nil)
+		request.Header.Set("Idempotency-Key", "close-1")
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+
+		if response.Code != test.code || deletion.resets != test.resets {
+			t.Errorf("%s: code %d resets %d: %s", name, response.Code, deletion.resets, response.Body.String())
+			continue
+		}
+		if test.code == http.StatusOK && (workflowService.state != feature.StateCancelled || workflowService.featureID != "fea_dup") {
+			t.Errorf("%s: transitioned %q to %q", name, workflowService.featureID, workflowService.state)
+		}
+	}
+}
