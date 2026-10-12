@@ -1657,28 +1657,32 @@ button.danger:not(.ghost) {
   flex: none;
   margin-left: auto;
 }
+/* One flat row of steps and dashes, the same gap between every item. Each
+   dash and its step were wrapped in a cell, and WebKit sized those cells a
+   little too narrow, pushing the label into the dash. */
 .order-head__top .stepper {
   flex: 1 1 auto;
   justify-content: center;
+  align-items: center;
+  gap: 10px;
   margin: 0;
   min-width: 0;
 }
 .order-head__top .stepper__cell {
-  flex: none;
-  gap: 0;
+  display: contents;
 }
 /* Beside the labels, not above them: no upward offset, and never over a
    label. */
-/* Even spacing on both sides of each line. */
 .order-head__top .stepper__line {
   flex: 0 0 14px;
-  margin: 0 10px;
+  margin: 0;
   align-self: center;
 }
 /* The step keeps its full measured width, and the label a little air, so a
    label's last letter never meets the next line. */
 .order-head__top .stepper__step {
   flex: none;
+  min-width: max-content;
 }
 /* WebKit sizes a button laid out as a flex row a little narrower than its
    text, by a different amount per label. Laid out inline instead, the marker
