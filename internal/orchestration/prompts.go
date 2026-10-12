@@ -55,7 +55,7 @@ func reviewerPlanningInstructions(
 		"Planning is read-only: do not modify files, install dependencies, commit, or push. Check the " +
 		"proposal against the accepted goal and the actual repository: missing steps, unsafe assumptions, " +
 		"scope problems, weak verification, and steps that should be merged or split. Reply to " + lead +
-		" directly. Number each concern (R1, R2, ...) so it can be answered by number, and leave out matters " +
+		" directly." + counterpartNote(lead) + " Number each concern (R1, R2, ...) so it can be answered by number, and leave out matters " +
 		"of taste. Where the plan is sound, say so briefly rather than restating it. End by stating whether " +
 		"you accept the plan as written. Durable repository and workflow state are authoritative over the " +
 		"proposal.\n\nAccepted goal:\n" + storedFeature.AcceptedGoal +
@@ -196,8 +196,19 @@ const implementationChecklistInstructions = "The coordinator owns a structured c
 	"and do not create or commit a local checklist file. The final published HEAD must be the commit recorded " +
 	"for the final checklist step. "
 
+// counterpartNote makes clear that the other agent is reached only through
+// Commitarium, between turns. An agent may consult helpers of its own for a
+// second opinion, but must not present them as its counterpart.
+func counterpartNote(counterpart string) string {
+	return " " + counterpart + " is a separate agent that Commitarium runs: end your turn with your " +
+		"message and Commitarium delivers it, and " + counterpart + "'s reply arrives as your next turn. " +
+		"You cannot reach " + counterpart + " during your turn. You may use helper agents of your own for " +
+		"a second opinion, but never present their views as " + counterpart + "'s."
+}
+
 func leadPlanningResponseInstructions(reviewerResponse string, reviewer string) string {
-	return "Continue planning as the lead. Reply to " + reviewer + " directly. Answer each numbered " +
+	return "Continue planning as the lead. Reply to " + reviewer + " directly." + counterpartNote(reviewer) +
+		" Answer each numbered " +
 		"point by its number: accepted, changed (say exactly what changes in the plan), or disputed " +
 		"(with repository evidence). Send only what changes, not the whole plan, and keep agreement " +
 		"brief. Planning is read-only and nothing has changed since your last turn, so inspect the " +
@@ -212,7 +223,8 @@ func leadPlanningResponseInstructions(reviewerResponse string, reviewer string) 
 }
 
 func reviewerResponseInstructions(leadResponse string, lead string) string {
-	return "Continue planning as the independent reviewer. Reply to " + lead + " directly. For each " +
+	return "Continue planning as the independent reviewer. Reply to " + lead + " directly." +
+		counterpartNote(lead) + " For each " +
 		"open point, say in a line whether it is resolved or still open and why; number any new concern " +
 		"after your last one. Do not restate the plan. Planning is read-only and nothing has changed since " +
 		"your last turn, so inspect the repository only to check a specific claim. When nothing is open, " +
@@ -223,7 +235,8 @@ func reviewerResponseInstructions(leadResponse string, lead string) string {
 func planningInstructions(storedFeature feature.Feature, prepared workspace.Workspace, reviewer string) string {
 	return "The goal is accepted and planning begins. You are the lead. Inspect the repository as " +
 		"needed to plan; planning is read-only, so do not modify files, install dependencies, commit, or " +
-		"push. Propose a concrete implementation plan to " + reviewer + ", who will review it with you. " +
+		"push. Propose a concrete implementation plan for " + reviewer + " to review with you." +
+		counterpartNote(reviewer) + " " +
 		"Split the work into ordered commit-sized steps, as few as the goal needs: a small change can be " +
 		"a single step. For each step give a short title, what to change, how to verify it, and the " +
 		"commit subject. Note assumptions and risks only where they matter. Durable repository and " +
