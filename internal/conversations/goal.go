@@ -19,6 +19,9 @@ import (
 
 var ErrGoalActive = errors.New("autopilot is already on")
 
+// AllPriorities is the level of a goal that finishes the whole vision.
+const AllPriorities = -1
+
 type GoalStatus string
 
 const (
@@ -43,9 +46,6 @@ type Goal struct {
 	Status    GoalStatus `json:"status"`
 	StartedAt time.Time  `json:"started_at"`
 	EndedAt   *time.Time `json:"ended_at,omitempty"`
-	// Continues counts the blocked work orders autopilot continued, by
-	// work order; past maxAutoContinues the next one waits for the user.
-	Continues map[string]int `json:"continues,omitempty"`
 }
 
 // maxAutoContinues bounds how often autopilot continues one work order, so
@@ -85,8 +85,12 @@ func (service *Service) StartGoal(ctx context.Context, scope string, level int) 
 			items = append(items, item)
 		}
 	}
+	name := fmt.Sprintf("P%d", level)
+	if level == AllPriorities {
+		name = "the vision"
+	}
 	if len(items) == 0 {
-		return Conversation{}, fmt.Errorf("%w: P%d has nothing left to do", ErrInvalid, level)
+		return Conversation{}, fmt.Errorf("%w: %s has nothing left to do", ErrInvalid, name)
 	}
 
 	service.mu.Lock()
@@ -99,8 +103,8 @@ func (service *Service) StartGoal(ctx context.Context, scope string, level int) 
 		return Conversation{}, ErrGoalActive
 	}
 	now := service.now()
-	stored.Goal = &Goal{Title: fmt.Sprintf("Finish P%d", level), Level: level, Items: items, Status: GoalActive, StartedAt: now}
-	text := fmt.Sprintf("Autopilot is on: finish P%d (%d %s).", level, len(items), plural(len(items), "item", "items"))
+	stored.Goal = &Goal{Title: "Finish " + name, Level: level, Items: items, Status: GoalActive, StartedAt: now}
+	text := fmt.Sprintf("Autopilot is on: finish %s (%d %s).", name, len(items), plural(len(items), "item", "items"))
 	stored.addEvent(text, now)
 	stored.PendingEvents = append(stored.PendingEvents, text+" Start driving its items to merged.")
 	stored.UpdatedAt = now
@@ -201,15 +205,22 @@ func priorityItems(plan featureartifact.VisionPlan, level int) []GoalItem {
 // autopilotActions marks the proposed actions autopilot takes over and
 // returns those it may apply: actions for the goal's items without a
 // premium model. One with a premium model is left for the user, with a note.
-func (service *Service) autopilotActions(scope string) ([]Action, error) {
+func (service *Service) autopilotActions(ctx context.Context, scope string) ([]Action, error) {
+	// An app is always on autopilot (apps mode): the assistant's work runs
+	// without cards, goal or not.
+	app := service.isApp(ctx, scope)
 	service.mu.Lock()
 	defer service.mu.Unlock()
 	stored, err := service.read(scope)
-	if err != nil || !stored.Goal.active() {
+	if err != nil || (!stored.Goal.active() && !app) {
 		return nil, err
 	}
+	var goalItems []GoalItem
+	if stored.Goal.active() {
+		goalItems = stored.Goal.Items
+	}
 	items, orders := map[string]bool{}, map[string]bool{}
-	for _, item := range stored.Goal.Items {
+	for _, item := range goalItems {
 		items[item.ID] = true
 		if item.WorkOrderID != "" {
 			orders[item.WorkOrderID] = true
@@ -218,7 +229,7 @@ func (service *Service) autopilotActions(scope string) ([]Action, error) {
 	// One work order per item: an item that has one, or whose create autopilot
 	// already applied, takes no other.
 	claimed := map[string]bool{}
-	for _, item := range stored.Goal.Items {
+	for _, item := range goalItems {
 		claimed[item.ID] = item.WorkOrderID != ""
 	}
 	// Work orders autopilot created: those not delivering an item (a
@@ -242,10 +253,10 @@ func (service *Service) autopilotActions(scope string) ([]Action, error) {
 		inGoal := false
 		switch action.Type {
 		case featureartifact.AssistantCreateWorkOrder:
-			inGoal = items[action.VisionItemID]
+			inGoal = items[action.VisionItemID] || app
 		case featureartifact.AssistantStartWorkOrder, featureartifact.AssistantChangeModels,
 			featureartifact.AssistantContinueWorkOrder:
-			inGoal = orders[action.WorkOrderID]
+			inGoal = orders[action.WorkOrderID] || app
 		case featureartifact.AssistantCloseWorkOrder:
 			inGoal = created[action.WorkOrderID] && !orders[action.WorkOrderID]
 		}
@@ -254,18 +265,18 @@ func (service *Service) autopilotActions(scope string) ([]Action, error) {
 		}
 		action.AutoTried = true
 		if action.Type == featureartifact.AssistantContinueWorkOrder {
-			if stored.Goal.Continues[action.WorkOrderID] >= maxAutoContinues {
+			if stored.AutoContinues[action.WorkOrderID] >= maxAutoContinues {
 				stored.addEvent(fmt.Sprintf("Autopilot has continued %s %d times; the next try is yours to approve.",
 					action.WorkOrderID, maxAutoContinues), now)
 				noted = true
 				continue
 			}
-			if stored.Goal.Continues == nil {
-				stored.Goal.Continues = map[string]int{}
+			if stored.AutoContinues == nil {
+				stored.AutoContinues = map[string]int{}
 			}
-			stored.Goal.Continues[action.WorkOrderID]++
+			stored.AutoContinues[action.WorkOrderID]++
 		}
-		if action.Type == featureartifact.AssistantCreateWorkOrder && claimed[action.VisionItemID] {
+		if action.Type == featureartifact.AssistantCreateWorkOrder && action.VisionItemID != "" && claimed[action.VisionItemID] {
 			stored.addEvent(fmt.Sprintf("Autopilot left %s for you: its vision item already has a work order.",
 				actionName(action.AssistantAction)), now)
 			noted = true
@@ -287,6 +298,15 @@ func (service *Service) autopilotActions(scope string) ([]Action, error) {
 	}
 	stored.UpdatedAt = now
 	return apply, service.write(stored)
+}
+
+// isApp reports whether a project is used as an app (APPS_PLAN.md).
+func (service *Service) isApp(ctx context.Context, scope string) bool {
+	if scope == TopLevel {
+		return false
+	}
+	stored, err := service.config.Projects.GetByID(ctx, scope)
+	return err == nil && stored.App
 }
 
 // note adds an event line to a scope's conversation.

@@ -4,6 +4,7 @@ import { listFeatures } from "../api/features";
 import { getPreviewStatus, onPreviewStatusChanged, startPreview, type PreviewStatus } from "../ipc";
 import { primaryUrl } from "./usePreview";
 import { AssistantDrawer } from "./AssistantDrawer";
+import { getConversation, type Conversation } from "../api/assistant";
 import type { Project } from "../api/types";
 import "../App.css";
 
@@ -78,6 +79,22 @@ export function AppWindow({ projectId }: { projectId: string }) {
     return () => clearInterval(timer);
   }, [projectId, start]);
 
+  // While the app is still being built, the window says how far along it is
+  // instead of showing a preview that has nothing to run yet.
+  const [conversation, setConversation] = useState<Conversation | null>(null);
+  useEffect(() => {
+    const look = () =>
+      getConversation(projectId)
+        .then(setConversation)
+        .catch(() => undefined);
+    void look();
+    const timer = setInterval(() => void look(), 10_000);
+    return () => clearInterval(timer);
+  }, [projectId]);
+  const launch = conversation?.launch?.stage;
+  const goal = conversation?.goal?.status === "active" ? conversation.goal : null;
+  const building = launch === "vision" || launch === "setup" || (launch === "building" && !!goal);
+
   const name = project?.name ?? "App";
   const url = status?.state === "running" ? primaryUrl(status) : null;
 
@@ -88,7 +105,29 @@ export function AppWindow({ projectId }: { projectId: string }) {
       ) : (
         <div className="app-window__state">
           <h1>{name}</h1>
-          {status?.state === "failed" || error ? (
+          {building ? (
+            <>
+              <p className="muted app-window__starting">
+                {launch === "vision"
+                  ? "Planning what to build…"
+                  : launch === "setup"
+                    ? "Setting it up…"
+                    : `Building · ${goal?.items.filter((i) => i.done).length ?? 0} of ${goal?.items.length ?? 0}`}
+              </p>
+              {goal && (
+                <ul className="app-window__items">
+                  {goal.items.map((item) => (
+                    <li key={item.id} className={item.done ? "app-window__item--done" : ""}>
+                      {item.done ? "✓" : "·"} {item.title}
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <p className="muted note">
+                It opens here as soon as it runs. The assistant asks if anything needs you.
+              </p>
+            </>
+          ) : status?.state === "failed" || error ? (
             <>
               <p className="muted">
                 {name} could not start{status?.error ? `: ${status.error}` : "."}

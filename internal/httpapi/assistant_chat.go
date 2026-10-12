@@ -34,6 +34,51 @@ type ConversationService interface {
 	StartGoal(ctx context.Context, scope string, level int) (conversations.Conversation, error)
 	StopGoal(ctx context.Context, scope string) (conversations.Conversation, error)
 	ActiveGoals(ctx context.Context) (map[string]conversations.Goal, error)
+	StartLaunch(ctx context.Context, scope string) (conversations.Conversation, error)
+	ActiveLaunches(ctx context.Context) (map[string]conversations.LaunchStage, error)
+}
+
+// startLaunchHandler marks a new app's launch (APPS_PLAN.md): the
+// coordinator then sets up the stack its vision recommends and builds the
+// whole vision on autopilot.
+func (api *API) startLaunchHandler(w http.ResponseWriter, r *http.Request) {
+	if !emptyBody(w, r) {
+		return
+	}
+	conversation, err := api.conversations.StartLaunch(r.Context(), r.PathValue("scope"))
+	if err != nil {
+		writeConversationError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, conversation, "assistant conversation")
+}
+
+// ProjectSetUpper sets a new app up through handler exactly as the project's
+// own setup request does: how a launch sets up the stack its vision
+// recommends.
+func ProjectSetUpper(handler http.Handler) func(ctx context.Context, projectID string, presets []string, frameworks string) error {
+	return func(ctx context.Context, projectID string, presets []string, frameworks string) error {
+		body, err := json.Marshal(projectSetupRequest{Presets: presets, Frameworks: frameworks})
+		if err != nil {
+			return err
+		}
+		request, err := http.NewRequestWithContext(ctx, http.MethodPost,
+			"/api/v1/projects/"+url.PathEscape(projectID)+"/setup", bytes.NewReader(body))
+		if err != nil {
+			return err
+		}
+		request.Header.Set("Content-Type", "application/json")
+		response := &recordedResponse{header: http.Header{}, status: http.StatusOK}
+		handler.ServeHTTP(response, request)
+		if response.status == http.StatusOK || response.status == http.StatusCreated {
+			return nil
+		}
+		var failure errorResponse
+		if json.Unmarshal(response.body.Bytes(), &failure) == nil && failure.Error.Message != "" {
+			return errors.New(failure.Error.Message)
+		}
+		return fmt.Errorf("HTTP %d", response.status)
+	}
 }
 
 // listAutopilotHandler answers the autopilot goals that are on, by project,
@@ -44,7 +89,12 @@ func (api *API) listAutopilotHandler(w http.ResponseWriter, r *http.Request) {
 		writeConversationError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"goals": goals}, "autopilot goals")
+	launches, err := api.conversations.ActiveLaunches(r.Context())
+	if err != nil {
+		writeConversationError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"goals": goals, "launches": launches}, "autopilot goals")
 }
 
 type startAutopilotRequest struct {

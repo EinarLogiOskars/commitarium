@@ -8,6 +8,7 @@ import {
   sendToAssistant,
   type AssistantAction,
   type AutopilotGoal,
+  type LaunchStage,
   type Conversation,
 } from "../api/assistant";
 import { ApiError } from "../api/client";
@@ -48,6 +49,7 @@ export function AssistantDrawer({
   onOpenChange: setOpen,
   docked,
   onGoalChange,
+  onLaunchChange,
 }: {
   scope: string;
   scopeLabel: string;
@@ -58,6 +60,8 @@ export function AssistantDrawer({
   docked: boolean;
   /** The conversation's autopilot goal while it is on, else null. */
   onGoalChange?: (goal: AutopilotGoal | null) => void;
+  /** A new app's launch stage while it is planned or set up, else null. */
+  onLaunchChange?: (stage: LaunchStage | null) => void;
 }) {
   const [conversation, setConversationState] = useState<Conversation | null>(null);
   // Work autopilot changed reloads the project's lists, as the user's own
@@ -67,6 +71,8 @@ export function AssistantDrawer({
     (next: Conversation | null) => {
       setConversationState(next);
       onGoalChange?.(next?.goal?.status === "active" ? next.goal : null);
+      const stage = next?.launch?.stage;
+      onLaunchChange?.(stage === "vision" || stage === "setup" ? stage : null);
       const applied =
         next?.actions.filter((a) => a.auto_tried && a.status === "applied").length ?? null;
       if (applied !== null && autoApplied.current !== null && applied > autoApplied.current) {
@@ -74,7 +80,7 @@ export function AssistantDrawer({
       }
       autoApplied.current = applied;
     },
-    [onGoalChange],
+    [onGoalChange, onLaunchChange],
   );
   const [error, setError] = useState<string | null>(null);
   const [draft, setDraft] = useState("");

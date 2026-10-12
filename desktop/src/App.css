@@ -4270,3 +4270,44 @@ select:focus {
   color: var(--text);
   background: color-mix(in srgb, var(--lavender) 45%, transparent);
 }
+.apps__new {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 18px;
+  max-width: 640px;
+}
+.apps__new .note {
+  margin: 0;
+}
+.app-window__items {
+  list-style: none;
+  margin: 8px 0;
+  padding: 0;
+  text-align: left;
+  color: var(--muted);
+}
+.app-window__item--done {
+  color: var(--text);
+}
+
+/* The rail's head: an explicit way back, then the project's name. */
+.rail__switch--static {
+  cursor: default;
+  gap: 4px;
+}
+.rail__switch--static:hover .rail__project {
+  color: inherit;
+}
+.rail__back {
+  border: none;
+  background: none;
+  padding: 2px 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  cursor: pointer;
+}
+.rail__back:hover {
+  color: var(--accent);
+}

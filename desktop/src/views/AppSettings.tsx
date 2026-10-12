@@ -35,6 +35,8 @@ export function AppSettings({
   update,
   onOpenUpdate,
   onClose,
+  devMode,
+  onDevModeChange,
 }: {
   desktop: DesktopSettingsState;
   /** Work orders the coordinator reports as in flight right now. */
@@ -44,6 +46,8 @@ export function AppSettings({
   /** Open the full update flow (modal). */
   onOpenUpdate: () => void;
   onClose: () => void;
+  devMode: boolean;
+  onDevModeChange: (on: boolean) => void;
 }) {
   const { settings, loaded, error, save, enableNotifications } = desktop;
   const on = settings.notifications_enabled;
@@ -87,6 +91,22 @@ export function AppSettings({
         {error && <div className="banner banner--error">{error}</div>}
 
         <Appearance />
+
+        <section className="set__section">
+          <h3 className="set__heading">Developer mode</h3>
+          <label className="set__row">
+            <input
+              type="checkbox"
+              checked={devMode}
+              onChange={(e) => onDevModeChange(e.target.checked)}
+            />
+            <span>Show projects, work orders, and the audit viewer</span>
+          </label>
+          <p className="muted set__note">
+            Off, Commitarium is your apps: ask for one, use it, and ask for changes. On, you also
+            see and steer the work behind them.
+          </p>
+        </section>
 
         <section className="set__section">
           <h3 className="set__heading">Notifications</h3>

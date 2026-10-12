@@ -1,6 +1,7 @@
 # Apps: Implementation Plan
 
-**Status:** agreed 2026-10-12; phase 1 in progress on `feat/apps`. Builds on the assistant (ASSISTANT_PLAN.md,
+**Status:** agreed 2026-10-12; phase 1 merged (PR #24); phase 2 on
+`feat/apps-phase-2` (ADR-024). Builds on the assistant (ASSISTANT_PLAN.md,
 ADR-022) and autopilot (ADR-023).
 
 ## Goal
@@ -47,8 +48,9 @@ them into one flow and gives the result a place to live.
    shows progress ("Building: 3 of 8") until the first item that runs merges,
    then the app itself.
 7. **Apps mode: the assistant drives.** In an app's conversation, autopilot is
-   always on for the app's goal, and a change request becomes a goal of its
-   own: the assistant adds it to the vision, and autopilot builds it. The same
+   always on: the assistant's work actions run without cards, goal or not,
+   so a change request becomes a work order that is built at once. (Simpler
+   than first planned: change requests do not become vision items.) The same
    safeguards hold as in ADR-023: premium models wait for approval, reviews
    and merge gates run, and work that needs the user reaches them.
 8. **The assistant's round button is how the user changes the app.** It opens

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { stopAutopilot, type AutopilotGoal } from "../api/assistant";
+import { stopAutopilot, type AutopilotGoal, type LaunchStage } from "../api/assistant";
 import { ApiError } from "../api/client";
 import { ASSISTANT_CHANGED } from "./AssistantDrawer";
 
@@ -35,6 +35,21 @@ export function AutopilotBanner({ scope, goal }: { scope: string; goal: Autopilo
       <button className="ghost" onClick={() => void stop()} disabled={stopping}>
         {stopping ? "Stopping…" : "Stop"}
       </button>
+    </div>
+  );
+}
+
+// While a new app is planned and set up, before autopilot builds it, the
+// project says it is building on its own.
+export function LaunchBanner({ stage }: { stage: LaunchStage }) {
+  return (
+    <div className="autopilot-banner" role="status">
+      <span className="autopilot-banner__dot" aria-hidden />
+      <strong>Building the app</strong>
+      <span className="muted">
+        {stage === "vision" ? "Planning what to build" : "Setting it up"} · then autopilot builds
+        the whole vision
+      </span>
     </div>
   );
 }

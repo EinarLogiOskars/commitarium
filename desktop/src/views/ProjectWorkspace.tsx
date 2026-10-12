@@ -38,6 +38,8 @@ export function ProjectWorkspace({
   onToggleRail,
   railStrip,
   autopilot,
+  onExit,
+  exitLabel = "Projects",
 }: {
   id: string;
   onLoaded?: (name: string) => void;
@@ -58,6 +60,9 @@ export function ProjectWorkspace({
   railStrip?: React.ReactNode;
   /** The autopilot banner while it is on. */
   autopilot?: React.ReactNode;
+  /** Back to the project list or the apps; the collapsed rail's top icon. */
+  onExit?: () => void;
+  exitLabel?: string;
 }) {
   const [project, setProject] = useState<Project | null>(null);
   const [toolchain, setToolchain] = useState<ProjectToolchain | null>(null);
@@ -208,6 +213,16 @@ export function ProjectWorkspace({
     <>
       {railCollapsed ? (
         <nav className="rail rail--collapsed">
+          {onExit && (
+            <button
+              className="ghost rail__icon"
+              onClick={onExit}
+              data-tip={`Back to ${exitLabel}`}
+              aria-label={`Back to ${exitLabel}`}
+            >
+              ←
+            </button>
+          )}
           <RailToggle collapsed onToggle={onToggleRail} />
           {stripPages.map((page) => (
             <button

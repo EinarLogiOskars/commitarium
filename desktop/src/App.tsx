@@ -13,9 +13,9 @@ import { ExitConfirm } from "./views/ExitConfirm";
 import { Inbox } from "./views/Inbox";
 import { AssistantDrawer } from "./views/AssistantDrawer";
 import { useWorkLayout } from "./views/useWorkLayout";
-import { AutopilotBanner } from "./views/AutopilotBanner";
+import { AutopilotBanner, LaunchBanner } from "./views/AutopilotBanner";
 import { AppsView } from "./views/AppsView";
-import type { AutopilotGoal } from "./api/assistant";
+import type { AutopilotGoal, LaunchStage } from "./api/assistant";
 import { Launcher } from "./views/Launcher";
 import { Projects } from "./views/Projects";
 import { ProjectWorkspace } from "./views/ProjectWorkspace";
@@ -24,6 +24,25 @@ import { ForgejoViewer } from "./views/ForgejoViewer";
 import { UpdateModal } from "./views/UpdateModal";
 import { useDesktopUpdate } from "./update/useDesktopUpdate";
 import "./App.css";
+
+const AREA_KEY = "commitarium.area";
+const DEV_MODE_KEY = "commitarium.devMode";
+
+function readFlag(key: string): boolean {
+  try {
+    return localStorage.getItem(key) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function readArea(): "apps" | "projects" {
+  try {
+    return localStorage.getItem(AREA_KEY) === "projects" ? "projects" : "apps";
+  } catch {
+    return "apps";
+  }
+}
 
 function App() {
   const boot = useBoot();
@@ -48,10 +67,33 @@ function App() {
   const [foreground, setForeground] = useState<string | null>(null);
   // How the rail and the open assistant share the window.
   const layout = useWorkLayout(projectId !== null);
-  // Outside a project: the project list, or the Apps area (APPS_PLAN.md).
-  const [area, setArea] = useState<"projects" | "apps">("projects");
+  // Outside a project: the Apps area (the default way in, APPS_PLAN.md) or
+  // the project list; the last one chosen is remembered.
+  const [chosenArea, setAreaState] = useState<"apps" | "projects">(readArea);
+  // Developer mode shows the projects, the audit viewer, and the system's
+  // status; without it Commitarium is the apps (the default for people).
+  const [devMode, setDevModeState] = useState(() => readFlag(DEV_MODE_KEY));
+  const setDevMode = (on: boolean) => {
+    setDevModeState(on);
+    if (!on) setProjectId(null);
+    try {
+      localStorage.setItem(DEV_MODE_KEY, on ? "1" : "0");
+    } catch {
+      // The choice lasts until the window closes.
+    }
+  };
+  const area = devMode ? chosenArea : "apps";
+  const setArea = (next: "apps" | "projects") => {
+    setAreaState(next);
+    try {
+      localStorage.setItem(AREA_KEY, next);
+    } catch {
+      // The choice lasts until the window closes.
+    }
+  };
   // The open project's autopilot goal while it is on, as the assistant reports it.
   const [goal, setGoal] = useState<AutopilotGoal | null>(null);
+  const [launch, setLaunch] = useState<LaunchStage | null>(null);
 
   // Only poll from inside the workspace: the launcher has nowhere to show it.
   const attention = useAttention(entered && reachable);
@@ -246,19 +288,23 @@ function App() {
         Agents
         {cliUpdates.available.length > 0 && <span className="topbar__update-dot" aria-hidden />}
       </button>
-      <button className="ghost system-nav__item" onClick={() => setShowViewer(true)}>
-        Audit viewer
-      </button>
+      {devMode && (
+        <button className="ghost system-nav__item" onClick={() => setShowViewer(true)}>
+          Audit viewer
+        </button>
+      )}
       <button className="ghost system-nav__item" onClick={() => setShowSettings(true)}>
         Settings
       </button>
-      <button
-        className={`${pillClass} pill--button`}
-        onClick={() => setEntered(false)}
-        title="Back to the system screen"
-      >
-        {pillInner}
-      </button>
+      {(devMode || !reachable) && (
+        <button
+          className={`${pillClass} pill--button`}
+          onClick={() => setEntered(false)}
+          title="Back to the system screen"
+        >
+          {pillInner}
+        </button>
+      )}
     </>
   );
   // What of the app's own controls the collapsed rail keeps: the inbox.
@@ -288,14 +334,15 @@ function App() {
       )}
     </button>
   );
+  // Leaving a project is an explicit way back to where the user came from.
+  const backLabel = area === "projects" ? "Projects" : "Apps";
   const projectSwitch = projectId && (
-    <button className="rail__switch" onClick={exitProject} title="Switch project">
-      <span className="rail__brand">Commitarium</span>
-      <span className="rail__project">
-        {projectName ?? "…"}
-        <span className="topbar__caret">▾</span>
-      </span>
-    </button>
+    <div className="rail__switch rail__switch--static">
+      <button className="rail__back" onClick={exitProject}>
+        ← {backLabel}
+      </button>
+      <span className="rail__project">{projectName ?? "…"}</span>
+    </div>
   );
 
   return (
@@ -306,19 +353,21 @@ function App() {
       {!projectId && (
         <header className="topbar">
           <span className="topbar__brand">Commitarium</span>
-          <span className="view-switch" role="tablist">
-            {(["projects", "apps"] as const).map((value) => (
-              <button
-                key={value}
-                role="tab"
-                aria-selected={area === value}
-                className={`view-switch__item ${area === value ? "view-switch__item--on" : ""}`}
-                onClick={() => setArea(value)}
-              >
-                {value === "projects" ? "Projects" : "Apps"}
-              </button>
-            ))}
-          </span>
+          {devMode && (
+            <span className="view-switch" role="tablist">
+              {(["apps", "projects"] as const).map((value) => (
+                <button
+                  key={value}
+                  role="tab"
+                  aria-selected={area === value}
+                  className={`view-switch__item ${area === value ? "view-switch__item--on" : ""}`}
+                  onClick={() => setArea(value)}
+                >
+                  {value === "projects" ? "Projects" : "Apps"}
+                </button>
+              ))}
+            </span>
+          )}
           {projectId && (
             <button
               className="topbar__project topbar__switch"
@@ -355,6 +404,8 @@ function App() {
             setShowUpdate(true);
           }}
           onClose={() => setShowSettings(false)}
+          devMode={devMode}
+          onDevModeChange={setDevMode}
         />
       )}
       {showInbox && (
@@ -376,6 +427,7 @@ function App() {
         onOpenChange={layout.setAssistantOpen}
         docked={layout.docked}
         onGoalChange={setGoal}
+        onLaunchChange={setLaunch}
       />
 
       <div className="shell__body">
@@ -389,7 +441,15 @@ function App() {
             railHeader={projectSwitch}
             systemNav={systemNav}
             railStrip={railStrip}
-            autopilot={goal && <AutopilotBanner scope={projectId} goal={goal} />}
+            onExit={exitProject}
+            exitLabel={backLabel}
+            autopilot={
+              goal ? (
+                <AutopilotBanner scope={projectId} goal={goal} />
+              ) : launch ? (
+                <LaunchBanner stage={launch} />
+              ) : null
+            }
             railCollapsed={layout.railCollapsed}
             onToggleRail={layout.toggleRail}
           />
@@ -401,7 +461,7 @@ function App() {
                   reachable={reachable}
                   attention={attention.items}
                   running={attention.running}
-                  onShowWork={setProjectId}
+                  onShowWork={devMode ? setProjectId : undefined}
                 />
               ) : (
                 <Projects reachable={reachable} onSelect={setProjectId} />

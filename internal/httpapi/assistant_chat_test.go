@@ -56,6 +56,14 @@ func (stub *conversationStub) ActiveGoals(context.Context) (map[string]conversat
 	return map[string]conversations.Goal{}, nil
 }
 
+func (stub *conversationStub) StartLaunch(_ context.Context, scope string) (conversations.Conversation, error) {
+	return conversations.Conversation{Scope: scope}, nil
+}
+
+func (stub *conversationStub) ActiveLaunches(context.Context) (map[string]conversations.LaunchStage, error) {
+	return map[string]conversations.LaunchStage{}, nil
+}
+
 func (stub *conversationStub) StopGoal(_ context.Context, scope string) (conversations.Conversation, error) {
 	return conversations.Conversation{Scope: scope}, nil
 }
