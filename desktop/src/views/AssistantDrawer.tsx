@@ -520,6 +520,7 @@ const APPLY_LABEL: Record<AssistantAction["type"], string> = {
   add_vision_item: "Add to vision",
   start_autopilot: "Start autopilot",
   continue_work_order: "Continue",
+  close_work_order: "Close",
 };
 
 const STATUS_LABEL: Record<AssistantAction["status"], string> = {

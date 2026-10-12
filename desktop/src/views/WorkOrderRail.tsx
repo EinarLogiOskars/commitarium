@@ -7,7 +7,8 @@ const WORK_ORDER_GROUPS: { label: string; states: FeatureState[] }[] = [
   { label: "Draft", states: ["draft"] },
   { label: "Ready", states: ["ready"] },
   { label: "In progress", states: ["planning", "implementing", "reviewing", "ready_to_merge"] },
-  { label: "Done", states: ["completed", "cancelled"] },
+  { label: "Done", states: ["completed"] },
+  { label: "Closed", states: ["cancelled"] },
 ];
 
 // A session is open until it merges or is closed (ADR-019).
@@ -16,7 +17,8 @@ const SESSION_GROUPS: { label: string; states: FeatureState[] }[] = [
     label: "Open",
     states: ["draft", "ready", "planning", "implementing", "reviewing", "ready_to_merge"],
   },
-  { label: "Done", states: ["completed", "cancelled"] },
+  { label: "Done", states: ["completed"] },
+  { label: "Closed", states: ["cancelled"] },
 ];
 
 // Sessions change as agents reply, so the session list follows them.

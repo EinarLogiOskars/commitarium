@@ -74,6 +74,7 @@ this API beyond the host loopback interface is unsupported.
 | `POST` | `/api/v1/runs/{runID}/reopen` | Reopen a failed run as a recovery blocker at its last turn |
 | `POST` | `/api/v1/agents/{agentID}/logged-in` | Continue the runs that paused on the agent's expired login |
 | `POST` | `/api/v1/projects/{projectID}/features/{featureID}/return-to-ready` | Stop a started work order and return it to Ready, keeping its brief |
+| `POST` | `/api/v1/projects/{projectID}/features/{featureID}/close` | Close a work order without merging it, keeping its history |
 | `POST` | `/api/v1/runs/{runID}/interventions` | Queue a user message for the lead or reviewer and stop at the next safe boundary |
 | `GET` | `/api/v1/runs/{runID}/planning/messages` | Retrieve the ordered lead/reviewer planning messages |
 | `GET` | `/api/v1/runs/{runID}/planning/messages/stream` | Replay and stream ordered planning messages with SSE |
@@ -1274,6 +1275,21 @@ at the default branch's current head, with the agents and models chosen then.
 Repeating the request with the same `Idempotency-Key` finishes an interrupted
 attempt. A work order that has not started returns `409 feature_not_started`.
 
+## Closing a work order
+
+A work order that will not merge, such as a duplicate, can be closed instead
+of deleted:
+
+```http
+POST /api/v1/projects/prj_example/features/fea_example/close
+Idempotency-Key: close-1
+```
+
+A started work order first returns to Ready as above (its runs stop, its pull
+request closes, its branch is deleted); then it moves to `cancelled`, shown as
+Closed. Its runs and conversations stay in its history. Closing a closed work
+order answers it unchanged; a merged one returns `409 feature_ended`.
+
 ## Deleting a work order
 
 Delete a work order and its isolated internal artifacts with an empty request:
@@ -2404,13 +2420,15 @@ actions, and its notes.
 - `PUT .../{scope}/notes` with `{"notes"}` replaces the notes with the user's
   edit.
 - An action is `{"id", "type": "create_work_order"|"start_work_order"|
-  "change_models"|"add_vision_item"|"start_autopilot"|"continue_work_order", "priority", "reason", "title", "description", "vision_item_id",
+  "change_models"|"add_vision_item"|"start_autopilot"|"continue_work_order"|
+  "close_work_order", "priority", "reason", "title", "description", "vision_item_id",
   "steps", "independent_tests", "lead_agent", "lead_model", "reviewer_agent",
   "reviewer_model", "work_order_id", "when", "guidance", "status", "premium",
   "result", "auto_tried"}`. `continue_work_order` continues the work order's
   newest run when it waits on a blocker, with `guidance` for its agents, as
   the run's Continue and Add guidance do (`409 recovery_not_allowed`
-  otherwise). `premium` lists its models in an `ask_before` family;
+  otherwise). `close_work_order` closes the work order (see Closing a work
+  order). `premium` lists its models in an `ask_before` family;
   `auto_tried` marks one autopilot took over.
 - `POST .../{scope}/actions/{actionID}/approve` with `{"start", "confirm_premium"}`
   runs it through the same paths as the app's own buttons and records the
@@ -2423,8 +2441,9 @@ actions, and its notes.
   "title", "work_order_id", "done"}], "status": "active"|"done"|"stopped",
   "started_at", "ended_at"}`. While it is active, the coordinator approves the
   assistant's create, start, change-models, and continue actions for the goal's
-  items as the user would (with a new work order started, and at most two
-  continues per work order), except premium ones, and
+  items as the user would (with a new work order started, one per item, and at
+  most two continues per work order), and closes duplicates it created itself,
+  except premium ones, and
   closes the goal when every item is done. `409 autopilot_active` while one is
   on; `400` when the priority has nothing left. `DELETE .../{scope}/autopilot`
   stops it. `GET /api/v1/assistant/autopilot` answers `{"goals": {projectID:

@@ -594,6 +594,10 @@ func newAPI(
 			"POST /api/v1/projects/{projectID}/features/{id}/return-to-ready",
 			api.returnToReadyHandler,
 		)
+		mux.HandleFunc(
+			"POST /api/v1/projects/{projectID}/features/{id}/close",
+			api.closeWorkOrderHandler,
+		)
 	}
 	mux.HandleFunc(
 		"POST /api/v1/projects/{projectID}/features/{id}/transitions",

@@ -34,6 +34,9 @@ const (
 	// AssistantContinueWorkOrder continues a work order whose run waits on a
 	// blocker, with optional guidance for its agents.
 	AssistantContinueWorkOrder AssistantActionType = "continue_work_order"
+	// AssistantCloseWorkOrder ends a work order without merging it, keeping
+	// its history: a duplicate, or work the user no longer wants.
+	AssistantCloseWorkOrder AssistantActionType = "close_work_order"
 )
 
 // AssistantAction is one proposed action. Fields that do not apply to its
@@ -119,6 +122,10 @@ func (action AssistantAction) validate() error {
 		}
 		if action.Priority < 0 || action.Priority > maxVisionPriority {
 			return fmt.Errorf("priority runs from 0 to %d", maxVisionPriority)
+		}
+	case AssistantCloseWorkOrder:
+		if action.WorkOrderID == "" {
+			return fmt.Errorf("closing needs a work order")
 		}
 	case AssistantContinueWorkOrder:
 		if action.WorkOrderID == "" || len(action.Guidance) > MaxGoalBytes {

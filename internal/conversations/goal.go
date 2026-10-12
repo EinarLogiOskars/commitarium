@@ -221,9 +221,15 @@ func (service *Service) autopilotActions(scope string) ([]Action, error) {
 	for _, item := range stored.Goal.Items {
 		claimed[item.ID] = item.WorkOrderID != ""
 	}
+	// Work orders autopilot created: those not delivering an item (a
+	// duplicate) are its own to close.
+	created := map[string]bool{}
 	for _, action := range stored.Actions {
 		if action.Type == featureartifact.AssistantCreateWorkOrder && action.Status == ActionApplied {
 			claimed[action.VisionItemID] = true
+			if action.AutoTried && action.WorkOrderID != "" {
+				created[action.WorkOrderID] = true
+			}
 		}
 	}
 	now := service.now()
@@ -240,6 +246,8 @@ func (service *Service) autopilotActions(scope string) ([]Action, error) {
 		case featureartifact.AssistantStartWorkOrder, featureartifact.AssistantChangeModels,
 			featureartifact.AssistantContinueWorkOrder:
 			inGoal = orders[action.WorkOrderID]
+		case featureartifact.AssistantCloseWorkOrder:
+			inGoal = created[action.WorkOrderID] && !orders[action.WorkOrderID]
 		}
 		if !inGoal {
 			continue
@@ -341,6 +349,8 @@ func goalInstructions(goal *Goal) string {
 		"why (its reason, its pull request, the code) and propose continue_work_order with guidance that fixes " +
 		"it; Commitarium continues a work order on its own at most twice. When a work order needs the user (a " +
 		"question about the product, a merge approval, a blocker you cannot fix), tell the user exactly what it " +
-		"needs. Propose nothing outside the goal unless the user asks; such actions still wait for approval.")
+		"needs. When autopilot made a duplicate work order for an item, propose close_work_order for the one that " +
+		"does not deliver it; autopilot closes its own duplicates. Propose nothing outside the goal unless the " +
+		"user asks; such actions still wait for approval.")
 	return builder.String()
 }

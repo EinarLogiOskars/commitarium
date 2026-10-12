@@ -257,6 +257,13 @@ func (api *API) approveConversationActionHandler(w http.ResponseWriter, r *http.
 		result, ok = api.applyAddVisionItem(w, r, scope, action)
 	case featureartifact.AssistantContinueWorkOrder:
 		result, ok = api.applyContinueWorkOrder(w, r, scope, action)
+	case featureartifact.AssistantCloseWorkOrder:
+		closed, err := api.closeWorkOrder(r.Context(), scope, action.WorkOrderID, "assistant-"+action.ID)
+		if err != nil {
+			writeCloseError(w, scope, action.WorkOrderID, err)
+			return
+		}
+		result, ok = fmt.Sprintf("Closed “%s”.", closed.Title), true
 	case featureartifact.AssistantStartAutopilot:
 		if _, err := api.conversations.StartGoal(r.Context(), scope, action.Priority); err != nil {
 			writeConversationError(w, err)

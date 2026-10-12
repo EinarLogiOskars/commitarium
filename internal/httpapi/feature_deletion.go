@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/EinarLogiOskars/commitarium/internal/feature"
 	"github.com/EinarLogiOskars/commitarium/internal/project"
+	"github.com/EinarLogiOskars/commitarium/internal/workflow"
 	"github.com/EinarLogiOskars/commitarium/internal/workorder"
 	"github.com/EinarLogiOskars/commitarium/internal/workspace"
 )
@@ -108,4 +110,74 @@ func (api *API) returnToReadyHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, newFeatureResponse(reset), "feature")
+}
+
+var errWorkOrderEnded = errors.New("the work order has already ended")
+
+// closeWorkOrder ends a work order without merging it, keeping its history:
+// started work first returns to Ready (its agents stop and its branch and
+// pull request close), then it is cancelled. Closing a closed one is a no-op.
+func (api *API) closeWorkOrder(ctx context.Context, projectID, featureID, key string) (feature.Feature, error) {
+	stored, err := api.features.GetByID(ctx, projectID, featureID)
+	if err != nil {
+		return feature.Feature{}, err
+	}
+	switch {
+	case stored.State == feature.StateCancelled:
+		return stored, nil
+	case stored.State.IsTerminal():
+		return feature.Feature{}, errWorkOrderEnded
+	}
+	if stored.State != feature.StateDraft && stored.State != feature.StateReady {
+		resetter, ok := api.featureDeletion.(workOrderResetter)
+		if !ok {
+			return feature.Feature{}, fmt.Errorf("%w: closing started work is unavailable", workorder.ErrUnavailable)
+		}
+		if _, err := resetter.ReturnToReady(ctx, projectID, featureID, key+":ready"); err != nil {
+			return feature.Feature{}, err
+		}
+	}
+	if api.workflow == nil {
+		return feature.Feature{}, fmt.Errorf("%w: closing is unavailable", workorder.ErrUnavailable)
+	}
+	if _, err := api.workflow.TransitionFeature(ctx, featureID, feature.StateCancelled,
+		workflow.Actor{Kind: workflow.ActorKindUser, ID: localUserID}, key+":close"); err != nil {
+		return feature.Feature{}, err
+	}
+	return api.features.GetByID(ctx, projectID, featureID)
+}
+
+// closeWorkOrderHandler closes a work order (closeWorkOrder). Agent work is
+// stopped first, so the request needs an Idempotency-Key and is safe to retry.
+func (api *API) closeWorkOrderHandler(w http.ResponseWriter, r *http.Request) {
+	key := strings.TrimSpace(r.Header.Get("Idempotency-Key"))
+	if key == "" {
+		writeError(w, http.StatusBadRequest, "idempotency_key_required", "Idempotency-Key header is required")
+		return
+	}
+	projectID, featureID := r.PathValue("projectID"), r.PathValue("id")
+	closed, err := api.closeWorkOrder(r.Context(), projectID, featureID, key)
+	if err != nil {
+		writeCloseError(w, projectID, featureID, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, newFeatureResponse(closed), "feature")
+}
+
+func writeCloseError(w http.ResponseWriter, projectID, featureID string, err error) {
+	switch {
+	case errors.Is(err, feature.ErrNotFound):
+		writeError(w, http.StatusNotFound, "feature_not_found", "feature not found")
+	case errors.Is(err, errWorkOrderEnded):
+		writeError(w, http.StatusConflict, "feature_ended", "the work order has already merged")
+	case errors.Is(err, workorder.ErrActive):
+		writeError(w, http.StatusConflict, "feature_active", "agent work is still stopping; retry with the same Idempotency-Key")
+	case errors.Is(err, workorder.ErrUnsafeArtifacts), errors.Is(err, workspace.ErrConflict):
+		writeError(w, http.StatusConflict, "feature_close_conflict", "the work order's isolated artifacts could not be safely identified")
+	case errors.Is(err, workorder.ErrUnavailable), errors.Is(err, project.ErrForgejoUnavailable):
+		writeError(w, http.StatusServiceUnavailable, "close_unavailable", "closing is temporarily unavailable; retry with the same Idempotency-Key")
+	default:
+		log.Printf("close feature %q of project %q: %v", featureID, projectID, err)
+		writeError(w, http.StatusInternalServerError, "internal_error", "internal server error")
+	}
 }
