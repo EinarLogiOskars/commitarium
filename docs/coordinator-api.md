@@ -75,6 +75,7 @@ this API beyond the host loopback interface is unsupported.
 | `POST` | `/api/v1/agents/{agentID}/logged-in` | Continue the runs that paused on the agent's expired login |
 | `POST` | `/api/v1/projects/{projectID}/features/{featureID}/return-to-ready` | Stop a started work order and return it to Ready, keeping its brief |
 | `POST` | `/api/v1/projects/{projectID}/features/{featureID}/close` | Close a work order without merging it, keeping its history |
+| `PUT` | `/api/v1/projects/{id}/name` | Rename a project or app (`{"name"}`, at most 120 characters); its repository keeps its own name |
 | `PUT` | `/api/v1/projects/{id}/app` | Mark a project as an app (`{"app": true}`) or a project only; projects answer `app` |
 | `POST` | `/api/v1/runs/{runID}/interventions` | Queue a user message for the lead or reviewer and stop at the next safe boundary |
 | `GET` | `/api/v1/runs/{runID}/planning/messages` | Retrieve the ordered lead/reviewer planning messages |
@@ -2424,14 +2425,18 @@ actions, and its notes.
   edit.
 - An action is `{"id", "type": "create_work_order"|"start_work_order"|
   "change_models"|"add_vision_item"|"start_autopilot"|"continue_work_order"|
-  "close_work_order", "priority", "reason", "title", "description", "vision_item_id",
+  "close_work_order"|"create_app", "priority", "reason", "title", "description", "vision_item_id",
   "steps", "independent_tests", "lead_agent", "lead_model", "reviewer_agent",
   "reviewer_model", "work_order_id", "when", "guidance", "status", "premium",
   "result", "auto_tried"}`. `continue_work_order` continues the work order's
   newest run when it waits on a blocker, with `guidance` for its agents, as
   the run's Continue and Add guidance do (`409 recovery_not_allowed`
   otherwise). `close_work_order` closes the work order (see Closing a work
-  order). `premium` lists its models in an `ask_before` family;
+  order). `create_app` is the only action at the top level (`commitarium`):
+  approving it creates a project as an app named by `title`, launches it, and
+  has the vision written from `description`; the action's `project_id` names
+  the new project. Any other action there, or `create_app` in a project,
+  returns `409 action_needs_project`. `premium` lists its models in an `ask_before` family;
   `auto_tried` marks one autopilot took over.
 - `POST .../{scope}/actions/{actionID}/approve` with `{"start", "confirm_premium"}`
   runs it through the same paths as the app's own buttons and records the
