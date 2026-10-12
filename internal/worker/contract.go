@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/EinarLogiOskars/commitarium/internal/featureartifact"
 )
@@ -206,6 +207,10 @@ type Result struct {
 	Usage              *TokenUsage
 	// LoginRequired marks a failed turn whose provider login must be renewed.
 	LoginRequired bool
+	// UsageLimited marks a failed turn whose agent reached its provider usage
+	// limit; LimitResetsAt is when the limit resets, when the provider says.
+	UsageLimited  bool
+	LimitResetsAt *time.Time
 }
 
 // TokenUsage is the provider-reported token consumption of one turn.

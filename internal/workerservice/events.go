@@ -420,6 +420,14 @@ func (service *Service) finishAttempt(
 			terminalResult.Error.Code = workerhttp.ErrorProviderLoginRequired
 			terminalResult.Error.Retryable = true
 		}
+		if result.UsageLimited && !result.LoginRequired {
+			terminalResult.Error.Code = workerhttp.ErrorUsageLimit
+			terminalResult.Error.Retryable = true
+			if result.LimitResetsAt != nil {
+				resetsAt := result.LimitResetsAt.UTC()
+				terminalResult.Error.ResetsAt = &resetsAt
+			}
+		}
 	}
 	_ = service.completeAttemptLocked(service.lifetime, attempt, terminalResult)
 }

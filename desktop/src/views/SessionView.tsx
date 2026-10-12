@@ -10,6 +10,8 @@ import { openExternal } from "../ipc";
 import { markSessionSeen } from "./sessionSeen";
 import { useModelName } from "./useModelName";
 import { ChangeModel } from "./ChangeModel";
+import { UsageLimitBanner } from "./UsageLimitBanner";
+import { agentName, useAgents } from "./useAgents";
 import type { Feature, Run } from "../api/types";
 
 const GREETING = "Hey, what can I help you with?";
@@ -45,6 +47,7 @@ export function SessionView({
   const [renaming, setRenaming] = useState<string | null>(null);
   const [confirmDiscard, setConfirmDiscard] = useState(false);
   const [changingModel, setChangingModel] = useState(false);
+  const agents = useAgents();
   const [forceDiscard, setForceDiscard] = useState(false);
   const chatRef = useRef<HTMLDivElement | null>(null);
   const pinnedToBottom = useRef(true);
@@ -262,7 +265,14 @@ export function SessionView({
             Preview: {preview.error ?? preview.status?.error ?? "it stopped."}
           </div>
         )}
-        {blocked && run && (
+        {blocked && run?.usage_limit && (
+          <UsageLimitBanner
+            run={run}
+            agentLabel={agentName(agents, run.usage_limit.agent)}
+            onChanged={onChanged}
+          />
+        )}
+        {blocked && run && !run.usage_limit && (
           <div className="banner banner--warn session__blocked">
             <span>{run.reason || "The session stopped."}</span>
             <button

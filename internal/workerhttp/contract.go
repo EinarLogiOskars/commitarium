@@ -389,6 +389,7 @@ const (
 	ErrorConfigurationMismatch   ErrorCode = "configuration_mismatch"
 	ErrorIncompleteResult        ErrorCode = "incomplete_result"
 	ErrorProviderLoginRequired   ErrorCode = "provider_login_required"
+	ErrorUsageLimit              ErrorCode = "usage_limit"
 	ErrorUnsafeConcurrency       ErrorCode = "unsafe_concurrency"
 	ErrorIndeterminateState      ErrorCode = "indeterminate_state"
 	ErrorRedactionFailed         ErrorCode = "redaction_failed"
@@ -400,6 +401,8 @@ type ProtocolError struct {
 	Code      ErrorCode `json:"code"`
 	Message   string    `json:"message"`
 	Retryable bool      `json:"retryable"`
+	// ResetsAt is when a usage_limit error's limit resets, when known.
+	ResetsAt *time.Time `json:"resets_at,omitempty"`
 }
 
 type ErrorResponse struct {

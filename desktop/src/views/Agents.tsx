@@ -14,7 +14,15 @@ import {
   type Profile,
   type ProfileStatus,
 } from "../ipc";
-import { agentLoggedIn, createAgent, deleteAgent, renameAgent } from "../api/agents";
+import {
+  agentLoggedIn,
+  createAgent,
+  deleteAgent,
+  getAgentLimits,
+  renameAgent,
+  type AgentLimit,
+} from "../api/agents";
+import { resetLabel } from "./UsageLimitBanner";
 import { ApiError } from "../api/client";
 import type { AgentProvider } from "../api/types";
 import { reloadAgents } from "./useAgents";
@@ -176,6 +184,7 @@ export function Agents({
   runningWork?: number;
 }) {
   const [profiles, setProfiles] = useState<Profile[] | null>(null);
+  const [limits, setLimits] = useState<AgentLimit[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
@@ -184,6 +193,10 @@ export function Agents({
     } catch (e) {
       setError(String(e));
     }
+    // Limits are a convenience; the agents show without them.
+    getAgentLimits()
+      .then((r) => setLimits(r.limits))
+      .catch(() => undefined);
   }, []);
 
   // Agent changes also refresh the pickers in other views.
@@ -228,7 +241,13 @@ export function Agents({
             <p className="muted">No agents yet. Add one for each account you want to use.</p>
           ) : (
             profiles.map((p) => (
-              <ProfileRow key={p.id} profile={p} onChanged={refresh} onAgentsChanged={changed} />
+              <ProfileRow
+                key={p.id}
+                profile={p}
+                limit={limits.find((l) => l.agent === p.id)}
+                onChanged={refresh}
+                onAgentsChanged={changed}
+              />
             ))
           )}
         </div>
@@ -353,10 +372,13 @@ function describe(e: unknown): string {
 
 function ProfileRow({
   profile,
+  limit,
   onChanged,
   onAgentsChanged,
 }: {
   profile: Profile;
+  /** Set while the agent's usage limit pauses work. */
+  limit?: AgentLimit;
   onChanged: () => void;
   onAgentsChanged: () => Promise<void>;
 }) {
@@ -405,6 +427,13 @@ function ProfileRow({
 
       {profile.detail?.message && (
         <p className="muted profile-row__msg">{profile.detail.message}</p>
+      )}
+      {limit && (
+        <p className="profile-row__limit">
+          Usage limit reached
+          {resetLabel(limit.resets_at) ? ` · resets ${resetLabel(limit.resets_at)}` : ""} ·{" "}
+          {limit.waiting} {limit.waiting === 1 ? "run waits" : "runs wait"} and continue by itself
+        </p>
       )}
       {error && <div className="banner banner--error">{error}</div>}
 

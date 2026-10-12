@@ -385,6 +385,9 @@ export interface Run {
   intervention_targets?: InterventionTarget[];
   // Set while the run waits for an agent's provider login to be renewed.
   login_required?: { agent: string; role: "lead" | "reviewer" };
+  // Set while the run waits for an agent's usage limit to reset; it continues
+  // by itself at resets_at (or every 15 minutes when unknown).
+  usage_limit?: { agent: string; role: "lead" | "reviewer"; resets_at?: string };
   intervention?: Intervention;
   // Present on the immediate response to an explicit recovery action. Normal
   // run reads remain unchanged.
@@ -696,7 +699,9 @@ export type AttentionKind =
   | "validation_running"
   | "validation_failed"
   | "run_failed"
-  | "auto_merge_completed";
+  | "auto_merge_completed"
+  // An agent reached its usage limit; the run continues by itself at the reset.
+  | "usage_limit";
 
 export interface AttentionItem {
   id: string;

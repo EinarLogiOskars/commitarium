@@ -1167,3 +1167,27 @@ func TestNotificationsForAnotherThreadAreIgnored(t *testing.T) {
 		t.Fatalf("another turn on our own thread was accepted: %v", err)
 	}
 }
+
+func TestAUsageLimitFailsTheTurnWithItsResetTime(t *testing.T) {
+	session := newSession(nil, nil, "thr_limit", t.TempDir(), time.Second, 1, "")
+	session.turnID = "turn_limit"
+	translate := func(method, params string) (bool, worker.Result) {
+		t.Helper()
+		_, terminal, result, err := session.translate(protocolMessage{Method: method, Params: json.RawMessage(params)})
+		if err != nil {
+			t.Fatalf("%s: %v", method, err)
+		}
+		return terminal, result
+	}
+	translate("account/rateLimits/updated",
+		`{"rateLimits":{"primary":{"usedPercent":100,"resetsAt":1791810000},"secondary":{"usedPercent":40,"resetsAt":1792000000}}}`)
+	translate("error", `{"threadId":"thr_limit","turnId":"turn_limit","willRetry":false,`+
+		`"error":{"message":"You've hit your usage limit.","codexErrorInfo":"usageLimitExceeded"}}`)
+	terminal, result := translate("turn/completed", `{"threadId":"thr_limit","turn":{"id":"turn_limit","status":"failed"}}`)
+	if !terminal || result.Outcome != worker.OutcomeFailed || !result.UsageLimited || result.LoginRequired {
+		t.Fatalf("limit result = %+v", result)
+	}
+	if result.LimitResetsAt == nil || result.LimitResetsAt.Unix() != 1791810000 {
+		t.Fatalf("reset time = %v, want the used-up window's", result.LimitResetsAt)
+	}
+}

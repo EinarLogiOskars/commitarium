@@ -865,6 +865,7 @@ func (code ErrorCode) IsValid() bool {
 		ErrorConfigurationMismatch,
 		ErrorIncompleteResult,
 		ErrorProviderLoginRequired,
+		ErrorUsageLimit,
 		ErrorUnsafeConcurrency,
 		ErrorIndeterminateState,
 		ErrorRedactionFailed,
@@ -879,6 +880,9 @@ func (code ErrorCode) IsValid() bool {
 func (protocolError ProtocolError) Validate() error {
 	if !protocolError.Code.IsValid() {
 		return invalid("error code %q is not recognized", protocolError.Code)
+	}
+	if protocolError.ResetsAt != nil && protocolError.Code != ErrorUsageLimit {
+		return invalid("only a usage_limit error carries a reset time")
 	}
 	return validateRequiredText("error message", protocolError.Message, maxErrorMessageBytes)
 }

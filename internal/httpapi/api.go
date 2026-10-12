@@ -619,6 +619,7 @@ func newAPI(
 	)
 	if agents != nil {
 		mux.HandleFunc("GET /api/v1/agents", api.listAgentsHandler)
+		mux.HandleFunc("GET /api/v1/agents/limits", api.agentLimitsHandler)
 		mux.HandleFunc("POST /api/v1/agents", api.createAgentHandler)
 		mux.HandleFunc("PATCH /api/v1/agents/{id}", api.renameAgentHandler)
 		mux.HandleFunc("DELETE /api/v1/agents/{id}", api.deleteAgentHandler)

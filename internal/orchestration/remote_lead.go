@@ -987,6 +987,14 @@ func (starter *RemoteLeadStarter) RecoverBlockerWithDirective(
 			starter.reportError(err)
 		}
 	}
+	if directive.Action != RecoveryActionRecheck {
+		// Likewise a limit that is still reached records a new wait.
+		if waits, ok := starter.executions.(remoteLeadLimitWaits); ok {
+			if err := waits.ClearLimitWait(ctx, run.ID); err != nil {
+				starter.reportError(err)
+			}
+		}
+	}
 	err = starter.recoverWithDirective(
 		context.WithoutCancel(ctx), rechecking, storedFeature, policy, directive,
 	)
@@ -6203,6 +6211,19 @@ func (starter *RemoteLeadStarter) pauseFailedTurn(
 			". The work order continues once the agent is connected."
 		if waits, ok := starter.executions.(RemoteLeadLoginWaits); ok {
 			if err := waits.RecordLoginWait(ctx, run.ID, agent, session.Role); err != nil {
+				return err
+			}
+		}
+	}
+	if attempt.Result.Error != nil && attempt.Result.Error.Code == workerhttp.ErrorUsageLimit {
+		run, err := starter.executions.GetRun(ctx, request.runID)
+		if err != nil {
+			return err
+		}
+		agent := agentForSession(run, session.Role)
+		reason = usageLimitReason(agent, attempt.Result.Error.ResetsAt)
+		if waits, ok := starter.executions.(remoteLeadLimitWaits); ok {
+			if err := waits.RecordLimitWait(ctx, run.ID, agent, session.Role, attempt.Result.Error.ResetsAt); err != nil {
 				return err
 			}
 		}

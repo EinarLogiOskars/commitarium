@@ -77,6 +77,12 @@ retaining exact IDs such as `claude-opus-4-8`; an operator-supplied custom ID
 falls back to displaying the ID unchanged. Floating aliases are rejected by
 the contract.
 
+A failed attempt whose provider reported its usage limit carries error code
+`usage_limit` (retryable) and, when known, `error.resets_at`. Codex reports it
+as an error with `codexErrorInfo` `usageLimitExceeded` or `rateLimitExceeded`,
+and its reset from `account/rateLimits/updated`; Claude Code as a
+`rate_limit_event` with status `rejected` and `resetsAt`.
+
 Every start/resume assignment may include `assignment.model`. The coordinator
 fills it from the run's current model before routing (the user may switch it
 while the run works, ADR-021), and the worker passes

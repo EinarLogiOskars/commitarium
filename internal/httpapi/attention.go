@@ -205,6 +205,22 @@ func (api *API) attentionForFeature(
 			return []attentionItem{item}, nil, nil
 		}
 	}
+	// A usage limit resumes on its own: worth knowing, nothing to decide.
+	if waits, ok := api.execution.(runLimitWaits); ok && currentRun.WaitKind == execution.RunWaitKindBlocker {
+		wait, err := waits.LimitWaitForRun(ctx, currentRun.ID)
+		if err != nil {
+			return nil, nil, err
+		}
+		if wait.AgentID != "" {
+			base.ID = "usage_limit:" + currentRun.ID + ":" + currentRun.UpdatedAt.Format(time.RFC3339Nano)
+			base.Kind = "usage_limit"
+			base.Severity = "info"
+			base.Actionable = false
+			base.Title = "Waiting for " + wait.AgentID + "'s usage limit"
+			base.Detail = detailOr(currentRun.Reason, "The work continues when the limit resets.")
+			return []attentionItem{base}, nil, nil
+		}
+	}
 	return []attentionItem{runWaitAttention(base, currentRun)}, nil, nil
 }
 
