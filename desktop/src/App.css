@@ -3334,3 +3334,27 @@ button.danger:not(.ghost) {
 .impl__side .plan__head {
   padding-right: 28px;
 }
+/* One line: the models pill and the token total share a centre line. */
+.order-meta > *,
+.order-meta .order-head__usage,
+.order-meta .usage-toggle {
+  margin: 0;
+}
+.order-meta .agents-at-work,
+.order-meta .order-head__usage {
+  min-height: 28px;
+  display: flex;
+  align-items: center;
+}
+.order-meta .usage-toggle,
+.order-meta .agents-at-work__change {
+  font-size: 12px;
+  line-height: 1.4;
+  padding: 0;
+  margin: 0 0 0 10px;
+  border: none;
+  background: none;
+}
+.order-meta .usage-toggle {
+  margin-left: 0;
+}
