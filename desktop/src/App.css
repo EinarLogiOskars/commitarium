@@ -3031,3 +3031,10 @@ button.danger:not(.ghost) {
   justify-content: space-between;
   align-items: center;
 }
+
+/* Commitarium's own run of an acceptance test, next to the reviewer's. */
+.accept-test__own {
+  margin-left: 8px;
+  font-size: 11px;
+  white-space: nowrap;
+}

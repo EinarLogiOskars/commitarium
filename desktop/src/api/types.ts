@@ -554,6 +554,10 @@ export interface AcceptanceTest {
   title: string;
   status: AcceptanceTestStatus;
   note: string;
+  // The command that runs only this test.
+  command?: string;
+  // Commitarium's own run of the test, by its exit code.
+  coordinator_status?: "passed" | "failed";
 }
 
 export interface AcceptanceTestsDocument {
@@ -561,6 +565,8 @@ export interface AcceptanceTestsDocument {
   test_commit_id: string;
   implementation_commit_id: string; // pinned at review handoff; "" while authoring
   tests: AcceptanceTest[];
+  // The commit Commitarium last ran the tests against itself.
+  coordinator_commit_id?: string;
 }
 
 export interface GoalDraftDocument {

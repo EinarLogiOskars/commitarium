@@ -2305,6 +2305,27 @@ work order.
 `PATCH /api/v1/projects/{projectID}/features/{featureID}` with `{"title": ...}`
 renames a work order or session.
 
+## Commitarium's own acceptance-test run
+
+When a work order has independent acceptance tests, the reviewer gives each
+test a `command` that runs only that test. When an implementation commit goes
+to review, the coordinator queues its own run of those tests, apart from the
+reviewer's. This is a validation job with `"kind": "acceptance"`:
+
+- `labels` are the test IDs, in the order of `commands`.
+- `merge_commit_id` is the reviewer's private test commit.
+
+The desktop's isolated runner reads the test commit from the reviewer's
+checkout and merges it into the implementation commit, without network
+access. It then runs every command, whatever the others did. Each exit code
+becomes that test's `coordinator_status` (`passed` or `failed`), and
+`coordinator_commit_id` on the acceptance-test artifact records the commit.
+
+The run informs review; it neither gates nor merges. Acceptance jobs are left
+out of a run's validation jobs and the merge gate.
+`GET /api/v1/acceptance-jobs/pending` lists the ones waiting for the desktop,
+which runs them through the usual claim and complete endpoints.
+
 ## Background preview setup
 
 Reading a project's stack (`GET /api/v1/projects/{id}/toolchain`, and the

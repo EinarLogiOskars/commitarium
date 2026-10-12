@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { request } from "../api/client";
 import { runValidationJob } from "../ipc";
 import type { AttentionItem } from "../api/types";
 
@@ -19,4 +20,29 @@ export function useAutoValidation(items: AttentionItem[], refresh: () => void) {
         .finally(refresh);
     }
   }, [items, refresh]);
+}
+
+const ACCEPTANCE_POLL_MS = 10000;
+
+/** Runs Commitarium's own runs of the reviewers' acceptance tests as they
+ * appear. They inform the work order and need nobody's click. */
+export function useAutoAcceptanceRuns(enabled: boolean) {
+  const started = useRef(new Set<string>());
+  useEffect(() => {
+    if (!enabled) return;
+    const poll = () =>
+      request<{ jobs: { id: string }[] }>("/api/v1/acceptance-jobs/pending").then(
+        ({ jobs }) => {
+          for (const job of jobs) {
+            if (started.current.has(job.id)) continue;
+            started.current.add(job.id);
+            void runValidationJob(job.id).catch(() => undefined);
+          }
+        },
+        () => undefined,
+      );
+    void poll();
+    const timer = setInterval(() => void poll(), ACCEPTANCE_POLL_MS);
+    return () => clearInterval(timer);
+  }, [enabled]);
 }
