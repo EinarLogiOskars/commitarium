@@ -6,6 +6,7 @@ import {
   saveAssistantNotes,
   sendToAssistant,
   type AssistantAction,
+  type AutopilotGoal,
   type Conversation,
 } from "../api/assistant";
 import { ApiError } from "../api/client";
@@ -22,6 +23,8 @@ const POLL_MS = 2000;
 export const WORK_CHANGED = "commitarium:work-changed";
 /** Asks the open project to show its Vision page. */
 export const OPEN_VISION = "commitarium:open-vision";
+/** Asks the assistant to reload its conversation, as after autopilot starts or stops. */
+export const ASSISTANT_CHANGED = "commitarium:assistant-changed";
 
 const STEPS_LABEL: Record<string, string> = {
   full: "Full (plan, review)",
@@ -42,6 +45,7 @@ export function AssistantDrawer({
   open,
   onOpenChange: setOpen,
   docked,
+  onGoalChange,
 }: {
   scope: string;
   scopeLabel: string;
@@ -50,8 +54,17 @@ export function AssistantDrawer({
   onOpenChange: (open: boolean) => void;
   /** Beside the page rather than over it. */
   docked: boolean;
+  /** The conversation's autopilot goal while it is on, else null. */
+  onGoalChange?: (goal: AutopilotGoal | null) => void;
 }) {
-  const [conversation, setConversation] = useState<Conversation | null>(null);
+  const [conversation, setConversationState] = useState<Conversation | null>(null);
+  const setConversation = useCallback(
+    (next: Conversation | null) => {
+      setConversationState(next);
+      onGoalChange?.(next?.goal?.status === "active" ? next.goal : null);
+    },
+    [onGoalChange],
+  );
   const [error, setError] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
@@ -74,7 +87,13 @@ export function AssistantDrawer({
         .then((vision) => setVisionItems(visionLabels(vision.plan.priorities)))
         .catch(() => setVisionItems(new Map()));
     }
-  }, [scope]);
+  }, [scope, setConversation]);
+
+  useEffect(() => {
+    const reload = () => void load();
+    window.addEventListener(ASSISTANT_CHANGED, reload);
+    return () => window.removeEventListener(ASSISTANT_CHANGED, reload);
+  }, [load]);
 
   useEffect(() => {
     setConversation(null);
@@ -322,7 +341,9 @@ function ActionCard({
         ? "Start a work order"
         : action.type === "add_vision_item"
           ? `Add to the vision as P${action.priority}: ${action.title}`
-          : "Switch models";
+          : action.type === "start_autopilot"
+            ? `Autopilot: finish P${action.priority}`
+            : "Switch models";
   const models = [
     action.lead_model &&
       `Lead ${action.lead_agent ? agentName(agents, action.lead_agent) + " · " : ""}${modelName(action.lead_model)}`,
@@ -366,6 +387,13 @@ function ActionCard({
         {action.when && (
           <li>{action.when === "now" ? "Stop now and switch" : "From the next turn"}</li>
         )}
+        {action.type === "start_autopilot" && (
+          <li>
+            The assistant creates and starts work orders for P{action.priority}'s open items without
+            asking, except with premium models. You can stop it at any time.
+          </li>
+        )}
+        {action.auto_tried && action.status === "applied" && <li>Applied by autopilot</li>}
       </ul>
       <p className="muted assistant-action__reason">Why: {action.reason}</p>
       {action.result && <p className="muted">{action.result}</p>}
@@ -422,6 +450,7 @@ const APPLY_LABEL: Record<AssistantAction["type"], string> = {
   start_work_order: "Start",
   change_models: "Switch",
   add_vision_item: "Add to vision",
+  start_autopilot: "Start autopilot",
 };
 
 const STATUS_LABEL: Record<AssistantAction["status"], string> = {

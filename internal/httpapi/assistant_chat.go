@@ -1,11 +1,14 @@
 package httpapi
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/EinarLogiOskars/commitarium/internal/conversations"
@@ -27,7 +30,70 @@ type ConversationService interface {
 	SaveNotes(ctx context.Context, scope, notes string) (conversations.Conversation, error)
 	Action(ctx context.Context, scope, actionID string) (conversations.Action, error)
 	Resolve(ctx context.Context, scope, actionID string, status conversations.ActionStatus, result, workOrderID string) (conversations.Conversation, error)
+	StartGoal(ctx context.Context, scope string, level int) (conversations.Conversation, error)
+	StopGoal(ctx context.Context, scope string) (conversations.Conversation, error)
 }
+
+type startAutopilotRequest struct {
+	Level int `json:"level"`
+}
+
+func (api *API) startAutopilotHandler(w http.ResponseWriter, r *http.Request) {
+	var body startAutopilotRequest
+	if !decodeSingleJSON(w, r, &body) {
+		return
+	}
+	conversation, err := api.conversations.StartGoal(r.Context(), r.PathValue("scope"), body.Level)
+	if err != nil {
+		writeConversationError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, conversation, "assistant conversation")
+}
+
+func (api *API) stopAutopilotHandler(w http.ResponseWriter, r *http.Request) {
+	conversation, err := api.conversations.StopGoal(r.Context(), r.PathValue("scope"))
+	if err != nil {
+		writeConversationError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, conversation, "assistant conversation")
+}
+
+// AssistantActionApplier approves assistant actions through handler exactly
+// as the user's Approve button does, with a new work order started: how
+// autopilot takes over an action. The error carries the API's message.
+func AssistantActionApplier(handler http.Handler) func(ctx context.Context, scope, actionID string) error {
+	return func(ctx context.Context, scope, actionID string) error {
+		request, err := http.NewRequestWithContext(ctx, http.MethodPost,
+			"/api/v1/assistant/conversations/"+url.PathEscape(scope)+"/actions/"+url.PathEscape(actionID)+"/approve",
+			strings.NewReader(`{"start":true}`))
+		if err != nil {
+			return err
+		}
+		request.Header.Set("Content-Type", "application/json")
+		response := &recordedResponse{header: http.Header{}, status: http.StatusOK}
+		handler.ServeHTTP(response, request)
+		if response.status == http.StatusOK {
+			return nil
+		}
+		var failure errorResponse
+		if json.Unmarshal(response.body.Bytes(), &failure) == nil && failure.Error.Message != "" {
+			return errors.New(failure.Error.Message)
+		}
+		return fmt.Errorf("HTTP %d", response.status)
+	}
+}
+
+type recordedResponse struct {
+	header http.Header
+	status int
+	body   bytes.Buffer
+}
+
+func (response *recordedResponse) Header() http.Header            { return response.header }
+func (response *recordedResponse) Write(data []byte) (int, error) { return response.body.Write(data) }
+func (response *recordedResponse) WriteHeader(status int)         { response.status = status }
 
 func (api *API) getAssistantSettingsHandler(w http.ResponseWriter, r *http.Request) {
 	settings, err := api.conversations.Settings(r.Context())
@@ -154,6 +220,12 @@ func (api *API) approveConversationActionHandler(w http.ResponseWriter, r *http.
 		result, ok = api.applyChangeModels(w, r, scope, action)
 	case featureartifact.AssistantAddVisionItem:
 		result, ok = api.applyAddVisionItem(w, r, scope, action)
+	case featureartifact.AssistantStartAutopilot:
+		if _, err := api.conversations.StartGoal(r.Context(), scope, action.Priority); err != nil {
+			writeConversationError(w, err)
+			return
+		}
+		result, ok = fmt.Sprintf("Autopilot is on: finish P%d.", action.Priority), true
 	default:
 		writeError(w, http.StatusBadRequest, "unknown_action", "the action is not one Commitarium can run")
 		return
@@ -381,6 +453,8 @@ func writeConversationError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, conversations.ErrNotFound), errors.Is(err, project.ErrNotFound), errors.Is(err, feature.ErrNotFound):
 		writeError(w, http.StatusNotFound, "not_found", "not found")
+	case errors.Is(err, conversations.ErrGoalActive):
+		writeError(w, http.StatusConflict, "autopilot_active", "autopilot is already on; stop it first")
 	case errors.Is(err, conversations.ErrBusy):
 		writeError(w, http.StatusConflict, "assistant_busy", err.Error())
 	case errors.Is(err, conversations.ErrNotPending):

@@ -140,7 +140,7 @@ func OutputJSONSchema(contract OutputContract) any {
 		action := objectSchema(
 			map[string]any{
 				"type": map[string]any{
-					"type": "string", "enum": []string{"create_work_order", "start_work_order", "change_models", "add_vision_item"},
+					"type": "string", "enum": []string{"create_work_order", "start_work_order", "change_models", "add_vision_item", "start_autopilot"},
 				},
 				"reason":            text,
 				"title":             text,
@@ -154,7 +154,7 @@ func OutputJSONSchema(contract OutputContract) any {
 				"reviewer_model":    text,
 				"work_order_id":     text,
 				"when":              map[string]any{"type": "string", "enum": []string{"", "now", "next_turn"}},
-				"priority":          map[string]any{"type": "integer", "description": "For add_vision_item: the priority level, 0 for P0 through 9 for P9; any level the vision has or a new one. Otherwise 0."},
+				"priority":          map[string]any{"type": "integer", "description": "For add_vision_item: the priority level, 0 for P0 through 9 for P9; any level the vision has or a new one. For start_autopilot: the priority to finish. Otherwise 0."},
 			},
 			[]string{
 				"type", "reason", "title", "description", "vision_item_id", "steps", "independent_tests",

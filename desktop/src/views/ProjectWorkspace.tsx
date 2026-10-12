@@ -37,6 +37,7 @@ export function ProjectWorkspace({
   railCollapsed = false,
   onToggleRail,
   railStrip,
+  autopilot,
 }: {
   id: string;
   onLoaded?: (name: string) => void;
@@ -55,6 +56,8 @@ export function ProjectWorkspace({
   onToggleRail?: () => void;
   /** The app's controls kept on the collapsed strip. */
   railStrip?: React.ReactNode;
+  /** The autopilot banner while it is on. */
+  autopilot?: React.ReactNode;
 }) {
   const [project, setProject] = useState<Project | null>(null);
   const [toolchain, setToolchain] = useState<ProjectToolchain | null>(null);
@@ -351,6 +354,7 @@ export function ProjectWorkspace({
 
       <main className="main">
         <div className={`main__inner ${mode === "order" ? "main__inner--fill" : ""}`}>
+          {autopilot}
           {error && <div className="banner banner--error">{error}</div>}
 
           {mode === "overview" && project && (

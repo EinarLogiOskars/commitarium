@@ -28,6 +28,9 @@ const (
 	// AssistantAddVisionItem adds an item to the vision at a priority,
 	// optionally linking a work order done outside the plan.
 	AssistantAddVisionItem AssistantActionType = "add_vision_item"
+	// AssistantStartAutopilot hands the assistant a goal: the open items of
+	// one vision priority, which it then drives to merged on its own.
+	AssistantStartAutopilot AssistantActionType = "start_autopilot"
 )
 
 // AssistantAction is one proposed action. Fields that do not apply to its
@@ -50,8 +53,8 @@ type AssistantAction struct {
 	ReviewerModel string `json:"reviewer_model"`
 	// start_work_order, change_models, and add_vision_item (optional)
 	WorkOrderID string `json:"work_order_id"`
-	// Priority is the level of a new vision item: 0 for P0, 1 for P1, and so
-	// on.
+	// Priority is the level of a new vision item, or of the priority an
+	// autopilot goal finishes: 0 for P0, 1 for P1, and so on.
 	Priority int `json:"priority"`
 	// When is "now" or "next_turn", for change_models.
 	When string `json:"when"`
@@ -109,6 +112,10 @@ func (action AssistantAction) validate() error {
 		if action.Title == "" || len(action.Title) > MaxStepTextBytes || len(action.Description) > MaxStepTextBytes {
 			return fmt.Errorf("a vision item needs a title and a short description")
 		}
+		if action.Priority < 0 || action.Priority > maxVisionPriority {
+			return fmt.Errorf("priority runs from 0 to %d", maxVisionPriority)
+		}
+	case AssistantStartAutopilot:
 		if action.Priority < 0 || action.Priority > maxVisionPriority {
 			return fmt.Errorf("priority runs from 0 to %d", maxVisionPriority)
 		}

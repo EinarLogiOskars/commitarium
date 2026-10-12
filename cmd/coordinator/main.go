@@ -283,6 +283,7 @@ func run(ctx context.Context, coordinatorConfig config) error {
 	var workOrderAssistant httpapi.WorkOrderAssistant
 	var visionService httpapi.VisionService
 	var conversationService httpapi.ConversationService
+	var assistantWatcher *conversations.Watcher
 	var deletionWorker projectdeletion.WorkerStopper
 	var deletionLiveSessions projectdeletion.LiveSessionRegistry
 	var assistantCleaner projectdeletion.AssistantCleaner
@@ -367,15 +368,18 @@ func run(ctx context.Context, coordinatorConfig config) error {
 				return ""
 			},
 			Checkouts: checkoutManager, Branches: forgejoClient,
+			Visions: visions, Features: featureService,
 		})
 		if err != nil {
 			return fmt.Errorf("create the assistant: %w", err)
 		}
 		conversationService = projectAssistant
-		// Changes in the projects' work wake the assistant (events).
-		go conversations.Watcher{
+		// Changes in the projects' work wake the assistant (events), and
+		// autopilot runs its actions; it starts once the API exists.
+		assistantWatcher = &conversations.Watcher{
 			Service: projectAssistant, Features: featureService, Runs: executionService, LimitWaits: executionService,
-		}.Run(ctx)
+			Visions: visions,
+		}
 		assistant, err := toolchain.NewAssistant(
 			coordinatorConfig.toolchainRoot, coordinatorConfig.workspaceRoot, projectService, toolchainService,
 			func(agentID string) (workerhttp.Service, error) { return agentWorkers.Client(agentID) },
@@ -501,6 +505,11 @@ func run(ctx context.Context, coordinatorConfig config) error {
 		visionService,
 		conversationService,
 	)
+
+	if assistantWatcher != nil {
+		assistantWatcher.Apply = httpapi.AssistantActionApplier(handler)
+		go assistantWatcher.Run(ctx)
+	}
 
 	log.Print("Listening...")
 	if err := http.ListenAndServe(":8080", handler); err != nil {

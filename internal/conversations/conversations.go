@@ -98,20 +98,24 @@ type Action struct {
 	featureartifact.AssistantAction
 	Status ActionStatus `json:"status"`
 	// Premium names the models in it that need explicit approval.
-	Premium   []string  `json:"premium,omitempty"`
-	Result    string    `json:"result,omitempty"`
+	Premium []string `json:"premium,omitempty"`
+	Result  string   `json:"result,omitempty"`
+	// AutoTried marks an action autopilot took over, applied or not.
+	AutoTried bool      `json:"auto_tried,omitempty"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // Conversation is what the user sees of a scope's conversation.
 type Conversation struct {
-	Scope     string    `json:"scope"`
-	Status    Status    `json:"status"`
-	Agent     string    `json:"agent"`
-	Model     string    `json:"model"`
-	Messages  []Message `json:"messages"`
-	Actions   []Action  `json:"actions"`
-	Notes     string    `json:"notes"`
+	Scope    string    `json:"scope"`
+	Status   Status    `json:"status"`
+	Agent    string    `json:"agent"`
+	Model    string    `json:"model"`
+	Messages []Message `json:"messages"`
+	Actions  []Action  `json:"actions"`
+	Notes    string    `json:"notes"`
+	// Goal is the autopilot goal, the latest one even once it ended.
+	Goal      *Goal     `json:"goal,omitempty"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
@@ -175,6 +179,10 @@ type Config struct {
 	DefaultModel func(ctx context.Context, provider project.AgentProvider) string
 	Checkouts    Checkouts
 	Branches     Branches
+	// Visions and Features, when set, let the user hand the assistant an
+	// autopilot goal.
+	Visions  VisionReader
+	Features FeatureLister
 }
 
 type Service struct {

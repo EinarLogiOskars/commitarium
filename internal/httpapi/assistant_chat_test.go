@@ -17,6 +17,7 @@ type conversationStub struct {
 	action         conversations.Action
 	resolvedStatus conversations.ActionStatus
 	resolvedResult string
+	goalLevel      int
 }
 
 func (stub *conversationStub) Settings(context.Context) (conversations.Settings, error) {
@@ -41,6 +42,15 @@ func (stub *conversationStub) SaveNotes(context.Context, string, string) (conver
 
 func (stub *conversationStub) Action(context.Context, string, string) (conversations.Action, error) {
 	return stub.action, nil
+}
+
+func (stub *conversationStub) StartGoal(_ context.Context, scope string, level int) (conversations.Conversation, error) {
+	stub.goalLevel = level
+	return conversations.Conversation{Scope: scope}, nil
+}
+
+func (stub *conversationStub) StopGoal(_ context.Context, scope string) (conversations.Conversation, error) {
+	return conversations.Conversation{Scope: scope}, nil
 }
 
 func (stub *conversationStub) Resolve(_ context.Context, _ string, _ string, status conversations.ActionStatus, result, _ string) (conversations.Conversation, error) {
@@ -79,5 +89,36 @@ func TestApprovingAnAssistantActionRunsItAndPremiumNeedsConfirmation(t *testing.
 	}
 	if stub.resolvedStatus != conversations.ActionApplied || !strings.Contains(stub.resolvedResult, "Sync meals") {
 		t.Fatalf("resolved = %s %q", stub.resolvedStatus, stub.resolvedResult)
+	}
+}
+
+func TestAutopilotAppliesActionsThroughTheSameApproval(t *testing.T) {
+	stub := &conversationStub{action: conversations.Action{
+		ID: "act_1", Status: conversations.ActionProposed, Premium: []string{"claude-fable-5-1"},
+		AssistantAction: featureartifact.AssistantAction{
+			Type: featureartifact.AssistantCreateWorkOrder, Reason: "Tricky", Title: "Sync meals", Steps: "quick",
+		},
+	}}
+	features := &recordingFeatureService{createResult: feature.Feature{ID: "fea_sync", ProjectID: "prj_test", Title: "Sync meals", State: feature.StateDraft}}
+	projects := &recordingProjectService{getByIDResult: project.Project{ID: "prj_test"}}
+	handler := NewWithWorkspaceRealWorkflowDeletionAndModels(projects, features, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, stub)
+	apply := AssistantActionApplier(handler)
+
+	if err := apply(t.Context(), "prj_test", "act_1"); err == nil || !strings.Contains(err.Error(), "explicit approval") ||
+		features.createCalls != 0 {
+		t.Fatalf("autopilot got past the premium approval: %v", err)
+	}
+
+	stub.action = conversations.Action{
+		ID: "act_1", Status: conversations.ActionProposed,
+		AssistantAction: featureartifact.AssistantAction{
+			Type: featureartifact.AssistantStartAutopilot, Reason: "Finish the core", Priority: 1,
+		},
+	}
+	if err := apply(t.Context(), "prj_test", "act_1"); err != nil {
+		t.Fatal(err)
+	}
+	if stub.goalLevel != 1 || stub.resolvedStatus != conversations.ActionApplied || !strings.Contains(stub.resolvedResult, "P1") {
+		t.Fatalf("goal level %d, resolved %s %q", stub.goalLevel, stub.resolvedStatus, stub.resolvedResult)
 	}
 }
