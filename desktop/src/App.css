@@ -1665,16 +1665,22 @@ button.danger:not(.ghost) {
 }
 .order-head__top .stepper__cell {
   flex: none;
+  gap: 8px;
 }
 /* Beside the labels, not above them: no upward offset, and never over a
    label. */
 .order-head__top .stepper__line {
-  flex: 0 0 16px;
-  margin: 0 2px;
+  flex: 0 0 14px;
+  margin: 0;
   align-self: center;
 }
+/* The step keeps its full measured width, and the label a little air, so a
+   label's last letter never meets the next line. */
+.order-head__top .stepper__step {
+  flex: none;
+}
 .order-head__top .stepper__label {
-  overflow: visible;
+  padding-right: 2px;
 }
 .order-head__top .stepper__step {
   flex-direction: row;
@@ -3570,4 +3576,12 @@ button.danger:not(.ghost) {
     order: -1;
     max-height: 40vh;
   }
+}
+
+/* Add guidance sits on the same line as the recovery buttons. */
+.recover__actions .linkish {
+  margin: 0;
+  line-height: inherit;
+  padding: 7px 0;
+  border: 1px solid transparent;
 }
