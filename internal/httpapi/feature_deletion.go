@@ -177,6 +177,7 @@ func writeCloseError(w http.ResponseWriter, projectID, featureID string, err err
 		errors.Is(err, workspace.ErrPullRequestConflict):
 		writeError(w, http.StatusConflict, "feature_close_conflict", "the work order's branch or pull request could not be safely identified, so nothing was closed")
 	case errors.Is(err, workorder.ErrUnavailable), errors.Is(err, project.ErrForgejoUnavailable):
+		log.Printf("close feature %q of project %q: %v", featureID, projectID, err)
 		writeError(w, http.StatusServiceUnavailable, "close_unavailable", "closing is temporarily unavailable; retry with the same Idempotency-Key")
 	default:
 		log.Printf("close feature %q of project %q: %v", featureID, projectID, err)
