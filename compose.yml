@@ -17,6 +17,10 @@ services:
       COMMITARIUM_WORKSPACE_ROOT: /workspaces
       COMMITARIUM_REVIEWER_WORKSPACE_ROOT: /reviewer-workspaces
       COMMITARIUM_TOOLCHAIN_ROOT: /var/lib/commitarium-toolchains
+      # Marketplace sign-in (MARKETPLACE_PLAN.md). The credentials volume is
+      # deliberately not part of backups (ADR-011).
+      COMMITARIUM_MARKETPLACE_URL: ${COMMITARIUM_MARKETPLACE_URL:-https://commitarium-marketplace.einarlogi.is}
+      COMMITARIUM_CREDENTIALS_ROOT: /var/lib/commitarium-credentials
       # Agent workers are addressed by convention (ADR-016): service
       # agent-<id>-worker, bearer token agent-<id>-worker-token in this directory.
       COMMITARIUM_AGENT_WORKER_TOKEN_DIR: /run/commitarium-agent-workers
@@ -27,6 +31,7 @@ services:
       - ${COMMITARIUM_WORKSPACE_SOURCE:-./.commitarium/workspaces}:/workspaces
       - ${COMMITARIUM_REVIEWER_WORKSPACE_SOURCE:-./.commitarium/reviewer-workspaces}:/reviewer-workspaces
       - commitarium-toolchains:/var/lib/commitarium-toolchains
+      - commitarium-credentials:/var/lib/commitarium-credentials
     ports:
       - "127.0.0.1:${COMMITARIUM_COORDINATOR_PORT:-8080}:8080"
 
@@ -106,6 +111,7 @@ services:
 
 volumes:
   coordinator-data:
+  commitarium-credentials:
   forgejo-data:
   simulated-codex-worker-journal:
   # The codex and claude agents keep the volumes of the lead profiles they

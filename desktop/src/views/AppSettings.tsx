@@ -14,6 +14,7 @@ import { readTheme, saveTheme, type Theme } from "../settings/theme";
 import type { DesktopSettingsState } from "../settings/useDesktopSettings";
 import type { RunningWorkOrder } from "../api/types";
 import type { DesktopUpdate } from "../update/useDesktopUpdate";
+import { MarketplaceAccountSection } from "./MarketplaceAccount";
 
 function gigabytes(bytes: number): string {
   return `${(bytes / 1024 ** 3).toFixed(1)} GB`;
@@ -91,6 +92,8 @@ export function AppSettings({
         {error && <div className="banner banner--error">{error}</div>}
 
         <Appearance />
+
+        <MarketplaceAccountSection />
 
         <section className="set__section">
           <h3 className="set__heading">Developer mode</h3>

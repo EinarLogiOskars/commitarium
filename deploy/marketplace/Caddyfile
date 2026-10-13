@@ -1,0 +1,8 @@
+{$DOMAIN} {
+	handle /commitarium/* {
+		reverse_proxy signup:8090
+	}
+	handle {
+		reverse_proxy forgejo:3000
+	}
+}

@@ -1,0 +1,41 @@
+# The Commitarium marketplace (MARKETPLACE_PLAN.md): Forgejo stores apps and
+# accounts, Caddy serves HTTPS, and marketplace-signup creates accounts for
+# Commitarium's own sign-up screen. Lives in /opt/marketplace on the server.
+services:
+  forgejo:
+    image: codeberg.org/forgejo/forgejo:15
+    restart: unless-stopped
+    environment:
+      - FORGEJO__server__DOMAIN=${DOMAIN}
+      - FORGEJO__server__ROOT_URL=https://${DOMAIN}/
+      - FORGEJO__server__DISABLE_SSH=true
+      - FORGEJO__database__DB_TYPE=sqlite3
+      - FORGEJO__service__DISABLE_REGISTRATION=false
+      - FORGEJO__service__REGISTER_MANUAL_CONFIRM=true
+      - FORGEJO__service__ENABLE_CAPTCHA=true
+      - FORGEJO__service__REQUIRE_SIGNIN_VIEW=true
+    volumes:
+      - ./forgejo:/data
+    ports:
+      - 127.0.0.1:3000:3000
+  signup:
+    image: commitarium-marketplace-signup:latest
+    restart: unless-stopped
+    environment:
+      - FORGEJO_URL=http://forgejo:3000
+      - FORGEJO_ADMIN_TOKEN_FILE=/run/secrets/forgejo-admin-token
+    volumes:
+      - ./secrets/forgejo-admin-token:/run/secrets/forgejo-admin-token:ro
+    depends_on:
+      - forgejo
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    environment:
+      - DOMAIN=${DOMAIN}
+    ports:
+      - 80:80
+      - 443:443
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile
+      - ./caddy:/data

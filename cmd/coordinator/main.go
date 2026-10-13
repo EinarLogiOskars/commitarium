@@ -22,6 +22,7 @@ import (
 	"github.com/EinarLogiOskars/commitarium/internal/gitimport"
 	"github.com/EinarLogiOskars/commitarium/internal/gitworkspace"
 	"github.com/EinarLogiOskars/commitarium/internal/httpapi"
+	"github.com/EinarLogiOskars/commitarium/internal/marketplace"
 	"github.com/EinarLogiOskars/commitarium/internal/modelcatalog"
 	"github.com/EinarLogiOskars/commitarium/internal/orchestration"
 	"github.com/EinarLogiOskars/commitarium/internal/project"
@@ -52,6 +53,8 @@ const (
 	defaultReviewerWorkspaceRoot  = "/reviewer-workspaces"
 	defaultToolchainRoot          = "/var/lib/commitarium-toolchains"
 	defaultAgentWorkerTokenDir    = "/run/commitarium-agent-workers"
+	defaultCredentialsRoot        = "/var/lib/commitarium-credentials"
+	marketplaceTimeout            = 15 * time.Second
 )
 
 type config struct {
@@ -72,6 +75,11 @@ type config struct {
 	reviewerWorkspaceRoot  string
 	toolchainRoot          string
 	gitExecutable          string
+	// marketplaceURL is the app marketplace (MARKETPLACE_PLAN.md); empty
+	// leaves the marketplace off. Its token lives in credentialsRoot, which
+	// backups leave out.
+	marketplaceURL  string
+	credentialsRoot string
 }
 
 func main() {
@@ -127,6 +135,13 @@ func loadConfig(getenv func(string) string) (config, error) {
 		gitExecutable:          "git",
 		agentWorkerURLTemplate: agentworker.DefaultURLTemplate,
 		agentWorkerTokenDir:    defaultAgentWorkerTokenDir,
+		credentialsRoot:        defaultCredentialsRoot,
+	}
+	if value := strings.TrimSpace(getenv("COMMITARIUM_MARKETPLACE_URL")); value != "" {
+		loaded.marketplaceURL = value
+	}
+	if value := strings.TrimSpace(getenv("COMMITARIUM_CREDENTIALS_ROOT")); value != "" {
+		loaded.credentialsRoot = value
 	}
 	if value := strings.TrimSpace(getenv("COMMITARIUM_FORGEJO_URL")); value != "" {
 		loaded.forgejoURL = value
@@ -490,6 +505,14 @@ func run(ctx context.Context, coordinatorConfig config) error {
 	if projectConversations != nil {
 		projectDeletionService.WithConversations(projectConversations)
 	}
+	var marketplaceService httpapi.MarketplaceService
+	if coordinatorConfig.marketplaceURL != "" {
+		connected, err := marketplace.NewService(coordinatorConfig.marketplaceURL, coordinatorConfig.credentialsRoot, marketplaceTimeout)
+		if err != nil {
+			return fmt.Errorf("connect the marketplace: %w", err)
+		}
+		marketplaceService = connected
+	}
 	handler := httpapi.NewWithWorkspaceRealWorkflowDeletionAndModels(
 		projectService,
 		featureService,
@@ -512,6 +535,7 @@ func run(ctx context.Context, coordinatorConfig config) error {
 		visionService,
 		conversationService,
 		agentUsageReader{agents: agentService, workers: agentWorkerRegistry},
+		marketplaceService,
 	)
 
 	if assistantWatcher != nil {
