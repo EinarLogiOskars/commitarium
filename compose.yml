@@ -81,7 +81,7 @@ services:
     environment:
       COMMITARIUM_WORKER_ADAPTER: claude_code
       COMMITARIUM_CLAUDE_MODEL: ${COMMITARIUM_CLAUDE_MODEL:-}
-      COMMITARIUM_CLAUDE_AVAILABLE_MODELS: ${COMMITARIUM_CLAUDE_AVAILABLE_MODELS:-claude-fable-5-1,claude-opus-5,claude-opus-4-8,claude-sonnet-5,claude-haiku-4-5-20251001}
+      COMMITARIUM_CLAUDE_AVAILABLE_MODELS: ${COMMITARIUM_CLAUDE_AVAILABLE_MODELS:-claude-opus-5-5,claude-sonnet-5-5,claude-haiku-5-5,claude-fable-5-1,claude-opus-5,claude-opus-4-8,claude-sonnet-5,claude-haiku-4-5-20251001}
       # Claude's permission prompts cannot be answered in a headless worker.
       # The unprivileged container, scoped mounts, and internal forge are the
       # security boundary for this profile.
