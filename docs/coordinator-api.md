@@ -795,6 +795,10 @@ request tied to the project, feature, run, session, and attempt. Ordinary
   images. The renderer never sends that package list.
 - Trusted Tauri reports `{ "resolved_packages": {"libvips-dev":"..."} }`
   to `/complete`, or `{ "reason": "..." }` to `/fail`.
+- `GET /api/v1/environment/approved-packages` returns
+  `{ "approved_packages": [...] }`, the same union, without changing any
+  request. Trusted Tauri uses it to rebuild the managed images when their base
+  worker images change.
 
 Statuses are `requested`, `approved`, `provisioning`, `ready`, `rejected`, and
 `failed`. Completion records exact versions and resumes the same lead provider

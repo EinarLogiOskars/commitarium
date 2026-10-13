@@ -505,6 +505,7 @@ func newAPI(
 		mux.HandleFunc("POST /api/v1/environment-requests/{id}/provision", api.beginEnvironmentProvisioningHandler)
 		mux.HandleFunc("POST /api/v1/environment-requests/{id}/complete", api.completeEnvironmentProvisioningHandler)
 		mux.HandleFunc("POST /api/v1/environment-requests/{id}/fail", api.failEnvironmentProvisioningHandler)
+		mux.HandleFunc("GET /api/v1/environment/approved-packages", api.approvedEnvironmentPackagesHandler)
 	}
 	if validations != nil {
 		mux.HandleFunc("GET /api/v1/projects/{id}/validation", api.getValidationConfigHandler)

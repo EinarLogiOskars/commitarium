@@ -83,9 +83,14 @@ credentials.
 
 - Provisioning currently restarts shared provider workers and therefore must be
   scheduled at a workflow pause.
-- After a stack image update, the desktop must replay the newest ready
-  environment request so derivative images are rebuilt from the new base. Base
-  pulls bypass the derivative overlay, and the replay is idempotent.
+- Derivative images must follow their base worker images. Each derivative
+  records the ID of the base image it was built from (the
+  `commitarium.base-image` label); the desktop's background task compares it
+  with the current base at launch, after the stack comes up or updates, and
+  periodically, rebuilds stale derivatives with the approved package union
+  (read from the coordinator without touching any request), and recreates the
+  workers once none is running a turn. Base pulls bypass the derivative
+  overlay.
 - Approved packages increase all real worker images, even when only one project
   needs them.
 - Removing a project or rejecting an unneeded request does not yet shrink an

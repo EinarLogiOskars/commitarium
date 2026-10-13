@@ -86,6 +86,18 @@ func (api *API) beginEnvironmentProvisioningHandler(w http.ResponseWriter, r *ht
 	writeJSON(w, http.StatusOK, map[string]any{"request": request, "approved_packages": packages}, "environment provisioning specification")
 }
 
+// approvedEnvironmentPackagesHandler returns the installation-wide approved
+// package union without touching any request, so trusted Tauri can rebuild the
+// derivative images when their base worker images change.
+func (api *API) approvedEnvironmentPackagesHandler(w http.ResponseWriter, r *http.Request) {
+	packages, err := api.environments.ApprovedPackages(r.Context())
+	if err != nil {
+		api.writeEnvironmentError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"approved_packages": packages}, "approved environment packages")
+}
+
 func (api *API) completeEnvironmentProvisioningHandler(w http.ResponseWriter, r *http.Request) {
 	var body environmentCompletionRequest
 	if !decodeSingleJSON(w, r, &body) {

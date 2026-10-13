@@ -7,9 +7,14 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, MutexGuard};
 use tauri::State;
 
+use crate::agents::Provider;
 use crate::{docker, profiles};
+
+/// The ID of the base worker image a derivative was built from.
+const BASE_IMAGE_LABEL: &str = "commitarium.base-image";
 
 const ENVIRONMENT_DOCKERFILE: &str = r#"ARG BASE_IMAGE
 FROM ${BASE_IMAGE}
@@ -243,8 +248,20 @@ fn provision_images(
     manager: &profiles::ProfileManager,
     packages: &[String],
 ) -> Result<(BTreeMap<String, String>, String, String), String> {
-    let codex_base = compose_image("codex-agent-template")?;
-    let claude_base = compose_image("claude-agent-template")?;
+    let _images = environment_images_lock();
+    let built = build_environment_images(packages)?;
+    docker::reconcile_agent_workers(manager, true)?;
+    Ok(built)
+}
+
+/// Build both derivative images from the current base worker images, check
+/// they installed the same versions, and point the environment overlay at
+/// them. The workers pick them up on their next reconcile.
+fn build_environment_images(
+    packages: &[String],
+) -> Result<(BTreeMap<String, String>, String, String), String> {
+    let codex_base = compose_image(Provider::Codex.template_service())?;
+    let claude_base = compose_image(Provider::Claude.template_service())?;
     let package_text = packages.join(" ");
     let codex_image = derivative_tag("codex", &codex_base, packages);
     let claude_image = derivative_tag("claude", &claude_base, packages);
@@ -255,8 +272,16 @@ fn provision_images(
         return Err("Codex and Claude images resolved different system-package versions".into());
     }
     write_environment_overlay(&codex_image, &claude_image)?;
-    docker::reconcile_agent_workers(manager, true)?;
     Ok((resolved, codex_image, claude_image))
+}
+
+/// Provisioning and the background refresh both build the derivative images,
+/// rewrite the overlay, and recreate the workers; they take turns.
+fn environment_images_lock() -> MutexGuard<'static, ()> {
+    static IMAGES: Mutex<()> = Mutex::new(());
+    IMAGES
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 fn compose_image(service: &str) -> Result<String, String> {
@@ -275,6 +300,11 @@ fn derivative_tag(provider: &str, base: &str, packages: &[String]) -> String {
 }
 
 fn build_derivative(base: &str, tag: &str, packages: &str) -> Result<(), String> {
+    // The tag follows the base's reference, which a rebuilt or updated base
+    // keeps; the label records which image it actually was.
+    let base_id = inspect_image(base)?
+        .ok_or_else(|| format!("the base worker image {base} is missing"))?
+        .id;
     let directory =
         tempfile::tempdir().map_err(|e| format!("create environment build directory: {e}"))?;
     fs::write(directory.path().join("Dockerfile"), ENVIRONMENT_DOCKERFILE)
@@ -284,6 +314,8 @@ fn build_derivative(base: &str, tag: &str, packages: &str) -> Result<(), String>
         .arg(format!("BASE_IMAGE={base}"))
         .args(["--build-arg"])
         .arg(format!("SYSTEM_PACKAGES={packages}"))
+        .arg("--label")
+        .arg(format!("{BASE_IMAGE_LABEL}={base_id}"))
         .args(["--tag", tag, "--file"])
         .arg(directory.path().join("Dockerfile"))
         .arg(directory.path())
@@ -380,15 +412,16 @@ pub(crate) fn migrate_environment_overlay() -> Result<(), String> {
         return Ok(());
     }
     match (
-        legacy_overlay_image(&contents, "codex-worker"),
-        legacy_overlay_image(&contents, "claude-worker"),
+        overlay_image(&contents, "codex-worker"),
+        overlay_image(&contents, "claude-worker"),
     ) {
         (Some(codex), Some(claude)) => write_environment_overlay(&codex, &claude),
         _ => Err("the approved-environment overlay has an unexpected form".into()),
     }
 }
 
-fn legacy_overlay_image(contents: &str, service: &str) -> Option<String> {
+/// The image an environment overlay (current or legacy) sets for `service`.
+fn overlay_image(contents: &str, service: &str) -> Option<String> {
     let header = format!("  {service}:");
     let mut lines = contents
         .lines()
@@ -405,6 +438,183 @@ fn legacy_overlay_image(contents: &str, service: &str) -> Option<String> {
                         || matches!(byte, b':' | b'-' | b'_' | b'.' | b'/' | b'@')
                 })
         })
+}
+
+// --- Keeping the approved environment on the current base worker images ---
+//
+// A derivative image is built FROM its provider's base worker image as it was
+// then. When the base changes (rebuilt in development, pulled by a stack
+// update), the workers would keep running the old worker code until the next
+// approved request. The CLI updater's background task (cli_updates.rs) checks
+// this alongside the CLIs: it rebuilds stale derivatives with the approved
+// package union and recreates the workers once none is running a turn.
+
+/// One provider's environment images, as Docker has them now.
+#[derive(Debug, Default)]
+pub(crate) struct EnvironmentImages {
+    /// The ID of the provider's base worker image, unless it is missing.
+    base: Option<String>,
+    /// The ID of the derivative image the overlay selects, unless missing.
+    derivative: Option<String>,
+    /// The base image ID recorded on the derivative; derivatives built
+    /// before the label have none.
+    built_from: Option<String>,
+    /// The image IDs of the provider's running workers.
+    workers: Vec<String>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum EnvironmentPlan {
+    /// No approved environment, or it and its workers follow the bases.
+    Current,
+    /// A derivative was built from another base image (or is gone).
+    Rebuild,
+    /// The derivatives are current, but a worker still runs an older image.
+    Recreate,
+}
+
+/// What the approved environment needs; `images` is None without one.
+pub(crate) fn environment_plan(images: Option<&[EnvironmentImages]>) -> EnvironmentPlan {
+    let Some(images) = images else {
+        return EnvironmentPlan::Current;
+    };
+    // A missing base cannot be built from; bringing the stack up restores it.
+    if images.iter().any(|provider| {
+        provider.base.is_some()
+            && (provider.derivative.is_none() || provider.built_from != provider.base)
+    }) {
+        return EnvironmentPlan::Rebuild;
+    }
+    if images.iter().any(|provider| {
+        provider
+            .derivative
+            .as_ref()
+            .is_some_and(|derivative| provider.workers.iter().any(|image| image != derivative))
+    }) {
+        return EnvironmentPlan::Recreate;
+    }
+    EnvironmentPlan::Current
+}
+
+/// Inspect each provider's environment images, given its running worker
+/// containers. None when no environment has been approved.
+pub(crate) fn inspect_environment(
+    workers: &[(Provider, Vec<String>)],
+) -> Result<Option<Vec<EnvironmentImages>>, String> {
+    let Ok(contents) = fs::read_to_string(docker::environment_compose_file()?) else {
+        return Ok(None);
+    };
+    let mut images = Vec::new();
+    for (provider, containers) in workers {
+        let service = provider.template_service();
+        let derivative = overlay_image(&contents, service)
+            .ok_or("the approved-environment overlay has an unexpected form")?;
+        let base = inspect_image(&compose_image(service)?)?;
+        let derivative = inspect_image(&derivative)?;
+        let mut running = Vec::new();
+        for container in containers {
+            running.extend(container_image(container)?);
+        }
+        images.push(EnvironmentImages {
+            base: base.map(|image| image.id),
+            built_from: derivative
+                .as_ref()
+                .and_then(|image| image.built_from.clone()),
+            derivative: derivative.map(|image| image.id),
+            workers: running,
+        });
+    }
+    Ok(Some(images))
+}
+
+/// The approved package union, read without touching any request.
+pub(crate) async fn approved_packages() -> Result<Vec<String>, String> {
+    #[derive(Deserialize)]
+    struct Approved {
+        approved_packages: Vec<String>,
+    }
+    let approved: Approved = response_json(
+        reqwest::Client::new()
+            .get(coordinator_url("/api/v1/environment/approved-packages"))
+            .send()
+            .await
+            .map_err(|e| format!("read the approved system packages: {e}"))?,
+    )
+    .await?;
+    if approved.approved_packages.is_empty()
+        || !approved
+            .approved_packages
+            .iter()
+            .all(|item| safe_package(item))
+    {
+        return Err("coordinator returned an unsafe approved package list".into());
+    }
+    Ok(approved.approved_packages)
+}
+
+/// Rebuild both derivatives from the current base images and rewrite the
+/// overlay. Running workers keep their image until they are recreated.
+pub(crate) fn rebuild_environment_images(packages: &[String]) -> Result<(), String> {
+    let _images = environment_images_lock();
+    build_environment_images(packages).map(|_| ())
+}
+
+/// Recreate the workers onto the current derivative images.
+pub(crate) fn recreate_environment_workers(
+    manager: &profiles::ProfileManager,
+) -> Result<(), String> {
+    let _images = environment_images_lock();
+    docker::reconcile_agent_workers(manager, true)
+}
+
+struct ImageInfo {
+    id: String,
+    built_from: Option<String>,
+}
+
+/// The image's ID and recorded base, or None when Docker has no such image.
+fn inspect_image(reference: &str) -> Result<Option<ImageInfo>, String> {
+    let output = docker::docker_command()
+        .args([
+            "image",
+            "inspect",
+            "--format",
+            "{{json .Id}} {{json .Config.Labels}}",
+            reference,
+        ])
+        .output()
+        .map_err(|e| format!("inspect image {reference}: {e}"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if stderr.contains("No such image") {
+            return Ok(None);
+        }
+        return Err(format!("inspect image {reference}: {}", stderr.trim()));
+    }
+    image_info(&String::from_utf8_lossy(&output.stdout))
+        .map(Some)
+        .ok_or_else(|| format!("inspect image {reference}: unexpected answer"))
+}
+
+/// Parse `"<id>" <labels JSON or null>`.
+fn image_info(output: &str) -> Option<ImageInfo> {
+    let (id, labels) = output.trim().split_once(' ')?;
+    let id: String = serde_json::from_str(id).ok()?;
+    let labels: Option<BTreeMap<String, String>> = serde_json::from_str(labels).ok()?;
+    let built_from = labels
+        .and_then(|mut labels| labels.remove(BASE_IMAGE_LABEL))
+        .filter(|base| !base.is_empty());
+    (!id.is_empty()).then_some(ImageInfo { id, built_from })
+}
+
+/// The image ID a container runs, unless the container is gone.
+fn container_image(container: &str) -> Result<Option<String>, String> {
+    let output = docker::docker_command()
+        .args(["inspect", "--format", "{{.Image}}", container])
+        .output()
+        .map_err(|e| format!("inspect a worker: {e}"))?;
+    let image = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    Ok((output.status.success() && !image.is_empty()).then_some(image))
 }
 
 #[tauri::command]
@@ -682,20 +892,85 @@ mod tests {
     fn legacy_environment_overlays_yield_their_images() {
         let legacy = "services:\n  codex-worker:\n    build: !reset null\n    image: commitarium-codex-environment:abc\n  codex-reviewer-worker:\n    build: !reset null\n    image: commitarium-codex-environment:abc\n  claude-worker:\n    build: !reset null\n    image: commitarium-claude-environment:def\n";
         assert_eq!(
-            legacy_overlay_image(legacy, "codex-worker").as_deref(),
+            overlay_image(legacy, "codex-worker").as_deref(),
             Some("commitarium-codex-environment:abc")
         );
         assert_eq!(
-            legacy_overlay_image(legacy, "claude-worker").as_deref(),
+            overlay_image(legacy, "claude-worker").as_deref(),
             Some("commitarium-claude-environment:def")
         );
         assert_eq!(
-            legacy_overlay_image(
+            overlay_image(
                 "services:\n  codex-worker:\n    image: bad;rm\n",
                 "codex-worker"
             ),
             None
         );
+    }
+
+    fn images(base: &str, built_from: Option<&str>, workers: &[&str]) -> EnvironmentImages {
+        EnvironmentImages {
+            base: Some(base.into()),
+            derivative: Some("sha256:derived".into()),
+            built_from: built_from.map(str::to_string),
+            workers: workers.iter().map(|image| image.to_string()).collect(),
+        }
+    }
+
+    #[test]
+    fn environments_follow_their_base_images() {
+        // No approved environment: the workers run the bases themselves.
+        assert_eq!(environment_plan(None), EnvironmentPlan::Current);
+        let current = images("sha256:base", Some("sha256:base"), &["sha256:derived"]);
+        assert_eq!(environment_plan(Some(&[current])), EnvironmentPlan::Current);
+        // The base was rebuilt or pulled since.
+        let changed = images("sha256:new", Some("sha256:base"), &["sha256:derived"]);
+        assert_eq!(environment_plan(Some(&[changed])), EnvironmentPlan::Rebuild);
+        // Built before derivatives recorded their base.
+        let unlabelled = images("sha256:base", None, &["sha256:derived"]);
+        assert_eq!(
+            environment_plan(Some(&[unlabelled])),
+            EnvironmentPlan::Rebuild
+        );
+        // The overlay's image was removed.
+        let removed = EnvironmentImages {
+            derivative: None,
+            ..images("sha256:base", None, &[])
+        };
+        assert_eq!(environment_plan(Some(&[removed])), EnvironmentPlan::Rebuild);
+        // A missing base cannot be built from.
+        let no_base = EnvironmentImages {
+            base: None,
+            ..images("sha256:base", None, &["sha256:derived"])
+        };
+        assert_eq!(environment_plan(Some(&[no_base])), EnvironmentPlan::Current);
+    }
+
+    #[test]
+    fn workers_on_an_older_derivative_are_recreated() {
+        let rebuilt = images("sha256:base", Some("sha256:base"), &["sha256:old"]);
+        let current = images("sha256:base", Some("sha256:base"), &["sha256:derived"]);
+        assert_eq!(
+            environment_plan(Some(&[current, rebuilt])),
+            EnvironmentPlan::Recreate
+        );
+        // A rebuild comes first; the recreate follows it.
+        let changed = images("sha256:new", Some("sha256:base"), &["sha256:old"]);
+        assert_eq!(environment_plan(Some(&[changed])), EnvironmentPlan::Rebuild);
+    }
+
+    #[test]
+    fn image_inspection_reads_the_recorded_base() {
+        let labelled = image_info(
+            "\"sha256:derived\" {\"commitarium.base-image\":\"sha256:base\",\"other\":\"x\"}\n",
+        )
+        .unwrap();
+        assert_eq!(labelled.id, "sha256:derived");
+        assert_eq!(labelled.built_from.as_deref(), Some("sha256:base"));
+        let unlabelled = image_info("\"sha256:derived\" {\"other\":\"x\"}").unwrap();
+        assert_eq!(unlabelled.built_from, None);
+        assert_eq!(image_info("\"sha256:base\" null").unwrap().built_from, None);
+        assert!(image_info("garbage").is_none());
     }
 
     #[test]

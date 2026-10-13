@@ -17,6 +17,7 @@ import (
 
 type attentionEnvironmentService struct {
 	requests []projectenvironment.Request
+	packages []string
 }
 
 func (service *attentionEnvironmentService) Get(context.Context, string) (projectenvironment.Request, error) {
@@ -41,7 +42,7 @@ func (service *attentionEnvironmentService) Fail(context.Context, string, string
 	return projectenvironment.Request{}, false, nil
 }
 func (service *attentionEnvironmentService) ApprovedPackages(context.Context) ([]string, error) {
-	return nil, nil
+	return service.packages, nil
 }
 
 type attentionValidationService struct {
