@@ -191,7 +191,7 @@ type RemoteLeadWorkspaceService interface {
 	PublishRevisedPlan(context.Context, string, string, string, string, string) (workspace.Workspace, bool, error)
 	VerifyPublishedPlan(context.Context, string, string, string, string) (workspace.Workspace, error)
 	VerifyRevisedPublishedPlan(context.Context, string, string, string, string, string) (workspace.Workspace, error)
-	VerifyImplementationContinuation(context.Context, string, string, string, string) (workspace.Workspace, error)
+	VerifyImplementationContinuation(context.Context, string, string, string, string, string) (workspace.Workspace, error)
 	PrepareReplanningBaseline(context.Context, string, string, string, string) (workspace.Workspace, string, error)
 	VerifyImplementationPublication(context.Context, string, string, string, string, string, string, string, int64, string) (workspace.Workspace, error)
 	VerifyRevisedImplementationPublication(context.Context, string, string, string, string, string, string, string, int64, string, string) (workspace.Workspace, error)
@@ -3815,17 +3815,20 @@ func (starter *RemoteLeadStarter) implementationContinuationRequest(
 	if _, err := starter.featureForCurrentPlan(ctx, run, storedFeature); err != nil {
 		return remoteLeadRequest{}, err
 	}
+	// The lead may have committed locally earlier in this turn, so the checkout
+	// only has to descend from the plan's baseline; the remote branch must not
+	// have moved.
 	var prepared workspace.Workspace
 	if run.PlanVersion == 1 {
 		prepared, err = starter.workspaces.VerifyImplementationContinuation(
-			ctx, storedFeature.ProjectID, storedFeature.ID, plan.ID, plan.Text,
+			ctx, storedFeature.ProjectID, storedFeature.ID, plan.ID, plan.Text, "",
 		)
 	} else {
 		revision, revisionErr := starter.executions.GetPlanRevision(ctx, run.ID, run.PlanVersion)
 		if revisionErr != nil {
 			return remoteLeadRequest{}, revisionErr
 		}
-		prepared, err = starter.workspaces.VerifyRevisedPublishedPlan(
+		prepared, err = starter.workspaces.VerifyImplementationContinuation(
 			ctx, storedFeature.ProjectID, storedFeature.ID, plan.ID, plan.Text,
 			revision.BaselineCommitID,
 		)

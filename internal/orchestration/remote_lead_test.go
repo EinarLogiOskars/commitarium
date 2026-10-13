@@ -536,10 +536,12 @@ func (stub *remoteLeadWorkspaceStub) VerifyImplementationContinuation(
 	_ string,
 	eventID string,
 	plan string,
+	baselineCommitID string,
 ) (workspace.Workspace, error) {
 	stub.continuationVerifyCalls++
 	stub.publishedEventID = eventID
 	stub.publishedPlan = plan
+	stub.publishedBaseline = baselineCommitID
 	return stub.prepared, stub.verifyErr
 }
 

@@ -731,7 +731,7 @@ func (service *Service) PublishPlan(
 	if _, err := service.prepareAgreedPlanWorkspace(ctx, projectID, featureID); err != nil {
 		return Workspace{}, false, err
 	}
-	return service.reconcileSubmittedPlan(ctx, projectID, featureID, eventID, plan, "", true, true)
+	return service.reconcileSubmittedPlan(ctx, projectID, featureID, eventID, plan, "", true, true, false)
 }
 
 // PublishRevisedPlan appends a later agreed plan to the existing pull request.
@@ -746,7 +746,7 @@ func (service *Service) PublishRevisedPlan(
 	baselineCommitID string,
 ) (Workspace, bool, error) {
 	return service.reconcileSubmittedPlan(
-		ctx, projectID, featureID, eventID, plan, baselineCommitID, true, false,
+		ctx, projectID, featureID, eventID, plan, baselineCommitID, true, false, false,
 	)
 }
 
@@ -889,7 +889,7 @@ func (service *Service) VerifyPublishedPlan(
 	plan string,
 ) (Workspace, error) {
 	stored, _, err := service.reconcileSubmittedPlan(
-		ctx, projectID, featureID, eventID, plan, "", false, true,
+		ctx, projectID, featureID, eventID, plan, "", false, true, false,
 	)
 	return stored, err
 }
@@ -903,7 +903,7 @@ func (service *Service) VerifyRevisedPublishedPlan(
 	baselineCommitID string,
 ) (Workspace, error) {
 	stored, _, err := service.reconcileSubmittedPlan(
-		ctx, projectID, featureID, eventID, plan, baselineCommitID, false, false,
+		ctx, projectID, featureID, eventID, plan, baselineCommitID, false, false, false,
 	)
 	return stored, err
 }
@@ -911,16 +911,19 @@ func (service *Service) VerifyRevisedPublishedPlan(
 // VerifyImplementationContinuation confirms that the original branch, pull
 // request, and accepted plan are still intact without requiring the managed
 // checkout to be clean. Local edits and descendant commits are expected here:
-// they may be work from the previous agent turn or from the user.
+// they may be work from the previous agent turn or from the user. The remote
+// branch must still be at the plan's baseline (the recorded base commit when
+// baselineCommitID is empty); only the local checkout may have advanced.
 func (service *Service) VerifyImplementationContinuation(
 	ctx context.Context,
 	projectID string,
 	featureID string,
 	eventID string,
 	plan string,
+	baselineCommitID string,
 ) (Workspace, error) {
 	stored, _, err := service.reconcileSubmittedPlan(
-		ctx, projectID, featureID, eventID, plan, "", false, false,
+		ctx, projectID, featureID, eventID, plan, baselineCommitID, false, false, true,
 	)
 	return stored, err
 }
@@ -1411,6 +1414,7 @@ func (service *Service) reconcileSubmittedPlan(
 	expectedHeadCommitID string,
 	publishMissing bool,
 	requireCleanBaseline bool,
+	allowDescendantHead bool,
 ) (Workspace, bool, error) {
 	eventID = strings.TrimSpace(eventID)
 	plan = strings.TrimSpace(plan)
@@ -1461,6 +1465,7 @@ func (service *Service) reconcileSubmittedPlan(
 		WorkspaceID: stored.ID, RepositoryOwner: stored.RepositoryOwner,
 		RepositoryName: stored.RepositoryName, Branch: stored.Branch,
 		BaseCommitID: stored.BaseCommitID, ExpectedHeadCommitID: expectedHeadCommitID,
+		AllowDescendantHead:  allowDescendantHead,
 		AlreadyReady:         true,
 		RequireCleanBaseline: requireCleanBaseline,
 	}); err != nil {

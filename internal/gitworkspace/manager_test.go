@@ -149,6 +149,63 @@ func TestManagerVerifiesExactReplanningHeadWithoutCleaningLocalEdits(t *testing.
 	}
 }
 
+func TestManagerAllowsUnpublishedCommitsWhenResumingFromExpectedHead(t *testing.T) {
+	manager, root := newTestManager(t, nil)
+	spec := initializeCheckout(t, root)
+	if err := manager.Ensure(t.Context(), spec); err != nil {
+		t.Fatalf("ensure new checkout: %v", err)
+	}
+	target := filepath.Join(root, spec.WorkspaceID)
+	if err := os.WriteFile(filepath.Join(target, "backend.txt"), []byte("done\n"), 0o644); err != nil {
+		t.Fatalf("write local commit: %v", err)
+	}
+	testGit(t, target, "add", "backend.txt")
+	testGit(t, target, "commit", "-m", "backend")
+	if err := os.WriteFile(filepath.Join(target, "partial.txt"), []byte("preserve me\n"), 0o644); err != nil {
+		t.Fatalf("write partial change: %v", err)
+	}
+
+	spec.AlreadyReady = true
+	spec.ExpectedHeadCommitID = spec.BaseCommitID
+	if err := manager.Ensure(t.Context(), spec); !errors.Is(err, workspace.ErrCheckoutConflict) {
+		t.Fatalf("expected exact head check to reject local commits, got %v", err)
+	}
+	spec.AllowDescendantHead = true
+	if err := manager.Ensure(t.Context(), spec); err != nil {
+		t.Fatalf("verify continuation with local commits: %v", err)
+	}
+}
+
+func TestManagerRejectsResumedHeadThatDoesNotDescendFromExpectedHead(t *testing.T) {
+	manager, root := newTestManager(t, nil)
+	spec := initializeCheckout(t, root)
+	if err := manager.Ensure(t.Context(), spec); err != nil {
+		t.Fatalf("ensure new checkout: %v", err)
+	}
+	target := filepath.Join(root, spec.WorkspaceID)
+	if err := os.WriteFile(filepath.Join(target, "first.txt"), []byte("first\n"), 0o644); err != nil {
+		t.Fatalf("write first commit: %v", err)
+	}
+	testGit(t, target, "add", "first.txt")
+	testGit(t, target, "commit", "-m", "first")
+	expected := testGit(t, target, "rev-parse", "HEAD")
+	// Rewind to the recorded base and diverge: HEAD still contains the base
+	// commit but no longer contains the expected head.
+	testGit(t, target, "reset", "--hard", spec.BaseCommitID)
+	if err := os.WriteFile(filepath.Join(target, "other.txt"), []byte("other\n"), 0o644); err != nil {
+		t.Fatalf("write divergent commit: %v", err)
+	}
+	testGit(t, target, "add", "other.txt")
+	testGit(t, target, "commit", "-m", "other")
+
+	spec.AlreadyReady = true
+	spec.ExpectedHeadCommitID = expected
+	spec.AllowDescendantHead = true
+	if err := manager.Ensure(t.Context(), spec); !errors.Is(err, workspace.ErrCheckoutConflict) {
+		t.Fatalf("expected divergent head conflict, got %v", err)
+	}
+}
+
 func TestManagerRequiresCleanPlanningBaselineWhenRequested(t *testing.T) {
 	manager, root := newTestManager(t, nil)
 	spec := initializeCheckout(t, root)

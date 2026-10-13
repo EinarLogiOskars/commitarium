@@ -1077,15 +1077,65 @@ func TestServiceVerifiesImplementationContinuationWithoutRequiringCleanCheckout(
 	)
 
 	got, err := service.VerifyImplementationContinuation(
-		t.Context(), "prj_test", "fea_test", "sev_final_plan", "Final plan",
+		t.Context(), "prj_test", "fea_test", "sev_final_plan", "Final plan", "",
 	)
 	if err != nil || got != stored {
 		t.Fatalf("verify implementation continuation: workspace=%+v err=%v", got, err)
 	}
 	if branches.getCalls != 1 || len(checkout.specs) != 1 ||
-		checkout.specs[0].RequireCleanBaseline || len(pullRequests.planSpecs) != 0 ||
+		checkout.specs[0].RequireCleanBaseline ||
+		checkout.specs[0].ExpectedHeadCommitID != stored.BaseCommitID ||
+		!checkout.specs[0].AllowDescendantHead || len(pullRequests.planSpecs) != 0 ||
 		len(pullRequests.verifiedPlanSpecs) != 1 {
 		t.Fatalf("continuation verification did not preserve local work: branches=%d checkout=%+v published=%+v verified=%+v", branches.getCalls, checkout.specs, pullRequests.planSpecs, pullRequests.verifiedPlanSpecs)
+	}
+}
+
+func TestServiceVerifiesRevisedImplementationContinuationAtRecordedBaseline(t *testing.T) {
+	now := time.Date(2026, time.September, 12, 14, 30, 0, 0, time.UTC)
+	stored := readyTestWorkspace(now)
+	pullRequestReadyAt := now.Add(time.Minute)
+	stored.PullRequestNumber = 12
+	stored.PullRequestURL = "http://localhost:3001/owner/repository/pulls/12"
+	stored.PullRequestRecordedAt = &pullRequestReadyAt
+	stored.UpdatedAt = pullRequestReadyAt
+	baseline := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	branches := &recordingBranches{base: Branch{Name: stored.Branch, CommitID: baseline}}
+	checkout := &recordingCheckout{}
+	pullRequests := &recordingPullRequests{planResult: PullRequest{
+		Number: 12, URL: stored.PullRequestURL, Title: "WIP: Test feature",
+		Body: "existing plan history", State: "open", Draft: true,
+		BaseBranch: stored.BaseBranch, HeadBranch: stored.Branch,
+		HeadCommitID: baseline, CreatedAt: pullRequestReadyAt,
+	}}
+	accepted := acceptedTestFeature(now)
+	accepted.State = feature.StateImplementing
+	service := NewServiceWithPreparation(
+		&memoryStore{stored: stored}, fixedFeatureFinder{stored: accepted},
+		fixedProjectFinder{stored: project.Project{
+			ID: "prj_test", ForgejoRepository: testRepository(now),
+		}}, branches, checkout, pullRequests,
+	)
+
+	if _, err := service.VerifyImplementationContinuation(
+		t.Context(), "prj_test", "fea_test", "sev_revised_plan", "Revised plan", baseline,
+	); err != nil {
+		t.Fatalf("verify revised implementation continuation: %v", err)
+	}
+	if len(checkout.specs) != 1 || checkout.specs[0].ExpectedHeadCommitID != baseline ||
+		!checkout.specs[0].AllowDescendantHead || checkout.specs[0].RequireCleanBaseline ||
+		len(pullRequests.verifiedPlanSpecs) != 1 ||
+		pullRequests.verifiedPlanSpecs[0].HeadCommitID != baseline {
+		t.Fatalf("revised continuation was not pinned to its baseline: checkout=%+v verified=%+v", checkout.specs, pullRequests.verifiedPlanSpecs)
+	}
+
+	// The remote branch is still authoritative: only the local checkout may
+	// carry unpublished commits beyond the baseline.
+	branches.base.CommitID = "cccccccccccccccccccccccccccccccccccccccc"
+	if _, err := service.VerifyImplementationContinuation(
+		t.Context(), "prj_test", "fea_test", "sev_revised_plan", "Revised plan", baseline,
+	); !errors.Is(err, ErrBranchConflict) {
+		t.Fatalf("expected %v for a moved remote branch, got %v", ErrBranchConflict, err)
 	}
 }
 

@@ -312,7 +312,12 @@ func (manager *Manager) reconcile(
 			}
 		}
 		if spec.ExpectedHeadCommitID != "" && head != spec.ExpectedHeadCommitID {
-			return manager.localConflict(ctx, "checkout HEAD does not match the agent's reported commit")
+			if !spec.AllowDescendantHead {
+				return manager.localConflict(ctx, "checkout HEAD does not match the agent's reported commit")
+			}
+			if _, err := run("merge-base", "--is-ancestor", spec.ExpectedHeadCommitID, head); err != nil {
+				return manager.localConflict(ctx, "checkout HEAD does not descend from the expected commit")
+			}
 		}
 		if spec.RequireCleanBaseline || spec.RequireClean {
 			status, err := run("status", "--porcelain=v1", "--untracked-files=all")
