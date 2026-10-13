@@ -159,7 +159,15 @@ func transitionAcceptance(
 		return err
 	}
 	request.Header.Set("Content-Type", "application/json")
-	digest := sha256.Sum256([]byte(featureID + "\x00" + fmt.Sprint(tests.PlanVersion) + "\x00" + testID + "\x00" + string(status) + "\x00" + strings.TrimSpace(note) + "\x00" + tests.ImplementationCommitID))
+	// The test's current status is part of the key, so running a failed test
+	// again is a new transition rather than a replay of its first run.
+	var current featureartifact.AcceptanceTestStatus
+	for _, test := range tests.Tests {
+		if test.ID == testID {
+			current = test.Status
+		}
+	}
+	digest := sha256.Sum256([]byte(featureID + "\x00" + fmt.Sprint(tests.PlanVersion) + "\x00" + testID + "\x00" + string(status) + "\x00" + strings.TrimSpace(note) + "\x00" + tests.ImplementationCommitID + "\x00" + string(current)))
 	request.Header.Set("Idempotency-Key", "artifact-"+hex.EncodeToString(digest[:]))
 	response, err := client.Do(request)
 	if err != nil {

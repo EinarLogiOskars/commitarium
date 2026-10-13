@@ -315,3 +315,44 @@ func TestServiceRecordsTheCoordinatorsAcceptanceRunOnTheLatestRevision(t *testin
 		t.Fatalf("unexpected record: revision=%d %+v", store.receivedArtifact.ExpectedRevision, updated)
 	}
 }
+
+func TestServiceRunsAFailedAcceptanceTestAgain(t *testing.T) {
+	for _, current := range []struct {
+		status featureartifact.AcceptanceTestStatus
+		note   string
+		allows bool
+	}{
+		{featureartifact.AcceptanceTestFailed, "the count regex missed jsdom's text", true},
+		{featureartifact.AcceptanceTestPassed, "", false},
+	} {
+		document, err := json.Marshal(featureartifact.AcceptanceTests{
+			PlanVersion: 1, TestCommitID: "0123456789abcdef0123456789abcdef01234567",
+			ImplementationCommitID: "abcdef0123456789abcdef0123456789abcdef01",
+			Tests: []featureartifact.AcceptanceTest{{
+				ID: "backup-round-trip", Position: 1, Title: "Restores a backup", Status: current.status, Note: current.note,
+			}},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		artifact := FeatureArtifact{
+			FeatureID: "fea_test", Kind: featureartifact.KindAcceptanceTests, Revision: 2, Document: string(document),
+			Actor: Actor{Kind: ActorKindAgent, ID: "reviewer"}, UpdatedAt: time.Now().UTC(),
+		}
+		store := &recordingWorkflowStore{currentArtifact: artifact, artifactResult: artifact, artifactEvent: validTestEvent(t)}
+		nexts := []featureartifact.AcceptanceTestStatus{featureartifact.AcceptanceTestRunning}
+		if current.allows {
+			nexts = append(nexts, featureartifact.AcceptanceTestPassed)
+		}
+		for _, next := range nexts {
+			_, err = NewService(store).TransitionAcceptanceTest(
+				t.Context(), "fea_test", 1, "backup-round-trip", next,
+				"", "abcdef0123456789abcdef0123456789abcdef01",
+				Actor{Kind: ActorKindAgent, ID: "reviewer"}, "acceptance-rerun",
+			)
+			if (err == nil) != current.allows {
+				t.Fatalf("a %s test to %s: err=%v, want allowed=%v", current.status, next, err, current.allows)
+			}
+		}
+	}
+}

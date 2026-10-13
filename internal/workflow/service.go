@@ -331,15 +331,21 @@ func (s *Service) TransitionAcceptanceTest(
 	}
 	switch status {
 	case featureartifact.AcceptanceTestRunning:
-		if entry.Status != featureartifact.AcceptanceTestPending || note != "" {
+		// A failed test runs again, or takes a new result directly, when the
+		// reviewer finds the test, not the implementation, was wrong; the new
+		// result replaces the failure.
+		if (entry.Status != featureartifact.AcceptanceTestPending && entry.Status != featureartifact.AcceptanceTestFailed) ||
+			note != "" {
 			return FeatureArtifact{}, featureartifact.ErrInvalidArtifact
 		}
 	case featureartifact.AcceptanceTestPassed:
-		if entry.Status != featureartifact.AcceptanceTestRunning || note != "" {
+		if (entry.Status != featureartifact.AcceptanceTestRunning && entry.Status != featureartifact.AcceptanceTestFailed) ||
+			note != "" {
 			return FeatureArtifact{}, featureartifact.ErrInvalidArtifact
 		}
 	case featureartifact.AcceptanceTestFailed:
-		if entry.Status != featureartifact.AcceptanceTestRunning || note == "" {
+		if (entry.Status != featureartifact.AcceptanceTestRunning && entry.Status != featureartifact.AcceptanceTestFailed) ||
+			note == "" {
 			return FeatureArtifact{}, featureartifact.ErrInvalidArtifact
 		}
 	case featureartifact.AcceptanceTestNotApplicable:
