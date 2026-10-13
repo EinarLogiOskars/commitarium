@@ -39,20 +39,25 @@ as is or make it yours.
 
 ### What a release carries
 
-7. **A manifest makes an app portable.** `commitarium.json` at the repository
-   root holds what lives outside the repository today: the stack manifest
-   (tools, services, what to open) and a copy of the vision (ADR-020), plus a
-   name and one-line description. Release writes it; install reads it.
+7. **A `.commitarium/` folder makes an app portable.** It holds what lives
+   outside the repository today, in the formats Commitarium already uses:
+   `stack.json` (the project's stack manifest without machine state) and
+   `vision.json` (a snapshot of the vision; the vision record stays the
+   source of truth, ADR-020). What to open is already in the compose file
+   (`x-commitarium-preview`); name and description come from the
+   marketplace repository. Release writes the folder; install and the
+   existing project import read it.
 8. **No conversations, work-order history, environment approvals, data
    volumes or secrets.** Release refuses if a secret scan of the tree finds
    one.
 
 ### Installing
 
-9. **Install is an import of the newest tag.** The desktop clones the newest
-   release tag from the marketplace (history kept), runs the existing
-   project import, marks the project as an app, and applies the manifest
-   (stack and vision). The app then opens like any other.
+9. **Install copies the repository into the local forge.** The local Forgejo
+   migrates the app from the marketplace (history kept), the project starts
+   at the newest release tag, is marked as an app, and gets the manifest
+   (stack and vision). The app then opens like any other; nothing touches
+   the user's own folders.
 10. **An installed app remembers its origin** (marketplace repository and
     tag), so it can show "Based on <app> by <user>" and, later, offer
     updates.
@@ -75,24 +80,46 @@ as is or make it yours.
     approval". Pasting a token is the fallback (two-factor accounts). OAuth
     replaces this later.
 
+## Manual test (2026-10-13)
+
+The marketplace runs at `commitarium-marketplace.einarlogi.is` (Hetzner
+CAX11, Forgejo 15 LTS, Caddy; sign-up with admin activation). Sleep-log was
+pushed by hand (`main` and `v1`), cloned back, and imported as a folder: the
+stack was detected from the repository, the compose file's
+`x-commitarium-preview` picked the service and port, and it opened as an app
+with no manual steps. What it lacked:
+
+- **No vision.** The assistant knows nothing about the app; "Ask an agent"
+  for the stack relies on it. `vision.json` fixes this.
+- **Stack detection worked here** but is not guaranteed for every stack;
+  `stack.json` makes it certain.
+- **The project name came from the folder.** Install takes it from the
+  marketplace repository.
+
+Found along the way, outside the marketplace: "Verify repository" on import
+failed (desktop stopped sending the message the coordinator requires), and
+importing a plain folder that contains a git repository produces an empty
+project with a broken submodule pointer.
+
 ## Slices
 
-1. **VPS.** Forgejo and Caddy in compose on the existing VPS; sign-up with
-   admin activation and captcha, sign-in required; nightly backup. Manual test: push
-   an app's repository by hand, clone it on another machine, import it,
-   mark it as an app, set up the stack, launch. What had to be redone by
-   hand confirms the manifest's contents.
+1. **VPS.** Done, see Manual test.
 2. **Account.** An Account section in Settings: create account (sign-up
    page in a Commitarium window), sign in (creates and stores a token),
    waiting for approval, signed in as, sign out. Release and install ask
    the user to sign in when there is no account.
-3. **Manifest.** Write `commitarium.json` from the stack manifest and vision;
-   read it back into a project. Covered by tests both ways.
+3. **Manifest.** Write `.commitarium/stack.json` and `vision.json` from the
+   project; read them back on import and install. Covered by tests both
+   ways.
 4. **Release.** The button on an app: create the repository on first
    release, write and commit the manifest, tag, push `main` and the tag,
    secret scan first. Shows the released version on the app.
-5. **Install from URL.** Paste a marketplace repository URL: clone the newest
-   tag, import, mark as app, apply the manifest, record the origin, open.
+5. **Install from URL.** Paste a marketplace repository URL: the local
+   Forgejo migrates the repository straight from the marketplace (Forgejo
+   migrate API, history and tags kept; the marketplace domain in the local
+   Forgejo's allowed migration domains), the coordinator binds it to a new
+   app project at the newest tag, applies the manifest, records the origin,
+   and opens it. Nothing is written to the user's own folders.
 6. **Release suggestions.** When an app has merged changes since its last
    release, the assistant proposes "Release v3?" with a short changelog; one
    tap approves (ADR-022).
