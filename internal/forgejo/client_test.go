@@ -891,6 +891,38 @@ func TestClientGetsBranch(t *testing.T) {
 	}
 }
 
+func TestClientGetsCommitParentsFirstParentFirst(t *testing.T) {
+	first := strings.Repeat("a", 40)
+	second := strings.Repeat("b", 40)
+	client := newBranchTestClient(t, func(request *http.Request) (*http.Response, error) {
+		if request.Method != http.MethodGet ||
+			request.URL.Path != "/api/v1/repos/owner/repository/git/commits/"+forgejoTestCommitID {
+			t.Fatalf("unexpected request %s %s", request.Method, request.URL)
+		}
+		return jsonResponse(http.StatusOK, `{"sha":"`+forgejoTestCommitID+`","parents":[{"sha":"`+
+			first+`"},{"sha":"`+second+`"}]}`), nil
+	})
+
+	parents, err := client.GetCommitParents(t.Context(), "owner", "repository", forgejoTestCommitID)
+	if err != nil {
+		t.Fatalf("get commit parents: %v", err)
+	}
+	if len(parents) != 2 || parents[0] != first || parents[1] != second {
+		t.Fatalf("unexpected parents %v", parents)
+	}
+}
+
+func TestClientReportsMissingCommit(t *testing.T) {
+	client := newBranchTestClient(t, func(*http.Request) (*http.Response, error) {
+		return jsonResponse(http.StatusNotFound, `{"message":"not found"}`), nil
+	})
+
+	_, err := client.GetCommitParents(t.Context(), "owner", "repository", forgejoTestCommitID)
+	if !errors.Is(err, workspace.ErrCommitNotFound) {
+		t.Fatalf("expected missing commit, got %v", err)
+	}
+}
+
 func TestClientCreatesBranchFromExactCommit(t *testing.T) {
 	client := newBranchTestClient(t, func(request *http.Request) (*http.Response, error) {
 		if request.Method != http.MethodPost ||

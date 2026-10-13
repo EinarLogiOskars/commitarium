@@ -97,6 +97,8 @@ export function AppWindow({ projectId }: { projectId: string }) {
 
   const name = project?.name ?? "App";
   const url = status?.state === "running" ? primaryUrl(status) : null;
+  // A start that threw is the latest attempt, so its reason comes first.
+  const failure = error ?? (status?.state === "failed" ? status.error : null);
 
   return (
     <div className="app-window">
@@ -130,7 +132,7 @@ export function AppWindow({ projectId }: { projectId: string }) {
           ) : status?.state === "failed" || error ? (
             <>
               <p className="muted">
-                {name} could not start{status?.error ? `: ${status.error}` : "."}
+                {name} could not start{failure ? `: ${failure}` : "."}
               </p>
               <button className="primary" onClick={() => void start()}>
                 Try again

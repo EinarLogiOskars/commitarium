@@ -126,6 +126,27 @@ default-branch commit. It must not overwrite an existing repository or branch
 and must reconcile a partially completed create/push from its durable receipt.
 Local-only remains a complete supported outcome.
 
+### Note: completed work that merged in parallel (2026-10-13)
+
+The project handoff originally required completed work orders to form a chain
+of recorded identities: each work order's recorded base had to be the previous
+one's merge commit. Work orders that run at the same time start from the same
+base, and work brought up to date with the default branch (ADR-025) keeps the
+base it started from, so a valid default branch could not be described and the
+handoff stopped for user review.
+
+The coordinator now orders completed work by following the default branch's
+first-parent history back from its head. Every commit on that walk, until all
+completed work is accounted for, must be exactly one completed work order's
+merge commit; a commit made outside a work order, a completed merge that is not
+on the branch, or a merge commit Forgejo does not know still stops for user
+review. Each item's `base_commit_id` in the project handoff is its merge
+commit's first parent: the default-branch state the merge was applied onto.
+Consecutive items are therefore always linked, and each item's net change is
+exactly what its merge added to the branch, so the trusted desktop's existing
+chain validation and watermark-to-head sync are unchanged. The recorded base a
+work order's branch started from remains in its workspace record.
+
 ## Consequences
 
 ### Positive
