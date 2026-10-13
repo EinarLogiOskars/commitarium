@@ -618,6 +618,9 @@ export interface CliStatus {
   /** The version being updated to, unless the CLI is current. */
   target: string | null;
   state: "current" | "updating" | "waiting" | "behind";
+  /** Whether the latest check reached the npm registry; when it did not, a
+   * current CLI may still have a newer release, and the check is retried. */
+  checked: boolean;
 }
 
 /** The CLI of each provider with a running worker, and any update in progress. */

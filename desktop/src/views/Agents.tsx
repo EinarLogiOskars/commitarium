@@ -292,7 +292,9 @@ function CliVersions() {
                   ? `${name} update to ${status.target} waits for running work to finish.`
                   : status.state === "behind"
                     ? `${name} ${status.installed}; updating to ${status.target} failed and will be retried.`
-                    : `${name} ${status.installed} · up to date`}
+                    : status.checked
+                      ? `${name} ${status.installed} · up to date`
+                      : `${name} ${status.installed} · couldn't check for updates (will retry)`}
             </span>
           </div>
         );

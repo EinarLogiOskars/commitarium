@@ -79,10 +79,13 @@ type UsageResponse struct {
 }
 
 // ActivityResponse is whether the worker is launching or running provider
-// turns, and how many; restarting an idle worker cuts nothing off.
+// turns, and how many; restarting an idle worker cuts nothing off. CLIVersion
+// is the provider CLI version the worker resolved at startup, so the desktop
+// can tell whether a CLI installed since needs a restart.
 type ActivityResponse struct {
-	Busy     bool `json:"busy"`
-	Attempts int  `json:"attempts"`
+	Busy       bool   `json:"busy"`
+	Attempts   int    `json:"attempts"`
+	CLIVersion string `json:"cli_version,omitempty"`
 }
 
 type ModelsResponse struct {

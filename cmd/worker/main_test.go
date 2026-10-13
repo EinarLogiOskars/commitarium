@@ -373,15 +373,55 @@ func TestCheckActivityReadsActiveAttempts(t *testing.T) {
 			w.WriteHeader(http.StatusUnauthorized)
 			return
 		}
-		_, _ = w.Write([]byte(`{"busy":true,"attempts":3}`))
+		_, _ = w.Write([]byte(`{"busy":true,"attempts":3,"cli_version":"2.1.296"}`))
 	}))
 	defer server.Close()
-	active, err := checkActivity(t.Context(), server.URL, "test-token")
-	if err != nil || active != 3 {
-		t.Fatalf("activity = %d, %v; want 3", active, err)
+	activity, err := checkActivity(t.Context(), server.URL, "test-token")
+	if err != nil || activity.Attempts != 3 || activity.CLIVersion != "2.1.296" {
+		t.Fatalf("activity = %#v, %v; want 3 attempts on 2.1.296", activity, err)
 	}
 	if _, err := checkActivity(t.Context(), server.URL, "wrong-token"); err == nil {
 		t.Fatal("expected a rejected activity check to fail")
+	}
+}
+
+func TestStartupCLIVersionReadsTheCLIOnce(t *testing.T) {
+	executable := filepath.Join(t.TempDir(), "claude")
+	if err := os.WriteFile(executable, []byte("#!/bin/sh\necho '2.1.296 (Claude Code)'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if version := startupCLIVersion(t.Context(), executable); version != "2.1.296" {
+		t.Fatalf("startup version = %q; want 2.1.296", version)
+	}
+	// No CLI to report, or one that cannot answer, reports nothing.
+	if version := startupCLIVersion(t.Context(), ""); version != "" {
+		t.Fatalf("startup version without a CLI = %q", version)
+	}
+	if version := startupCLIVersion(t.Context(), filepath.Join(t.TempDir(), "missing")); version != "" {
+		t.Fatalf("startup version of a missing CLI = %q", version)
+	}
+}
+
+func TestFirstVersionMatchesTheDesktop(t *testing.T) {
+	for output, want := range map[string]string{
+		"2.1.270 (Claude Code)":  "2.1.270",
+		"codex-cli 0.153.4\n":    "0.153.4",
+		"v1.2.3-beta.1":          "1.2.3-beta.1",
+		"version 1.2 or 1.2.3.4": "",
+		"unknown":                "",
+	} {
+		if got := firstVersion(output); got != want {
+			t.Errorf("firstVersion(%q) = %q; want %q", output, got, want)
+		}
+	}
+}
+
+func TestOnlyTheUpdatedCLIReportsItsVersion(t *testing.T) {
+	if got := updatableCLI(defaultClaudeBinary, defaultClaudeBinary); got != defaultClaudeBinary {
+		t.Fatalf("bundled CLI = %q", got)
+	}
+	if got := updatableCLI("/opt/custom/claude", defaultClaudeBinary); got != "" {
+		t.Fatalf("overridden CLI = %q; want none", got)
 	}
 }
 

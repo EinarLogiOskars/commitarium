@@ -59,6 +59,9 @@ pub struct CliStatus {
     /// The version being updated to, unless the CLI is current.
     target: Option<String>,
     state: CliState,
+    /// Whether this pass reached the npm registry. When it did not, a current
+    /// CLI may yet have a newer release; the check is retried.
+    checked: bool,
 }
 
 /// The updater's shared state. A single background task does every update,
@@ -66,7 +69,8 @@ pub struct CliStatus {
 #[derive(Default)]
 pub(crate) struct CliUpdater {
     statuses: Mutex<Vec<CliStatus>>,
-    /// Versions installed whose workers still wait for a restart.
+    /// Versions installed whose workers still wait for a restart. Only
+    /// workers that do not report the CLI version they started with need it.
     restart_pending: Mutex<Vec<(Provider, String)>>,
     /// When a failed environment rebuild may be tried again.
     rebuild_after: Mutex<Option<Instant>>,
@@ -203,7 +207,7 @@ async fn environment_plan(workers: &[(Provider, Vec<String>)]) -> Result<Environ
 /// checked.
 async fn cli_pass(app: &AppHandle) -> Result<bool, String> {
     let mut settled = true;
-    let mut checked = false;
+    let mut inspected = false;
     for provider in PROVIDERS {
         let containers = blocking(move || running_workers(provider)).await??;
         let Some(first) = containers.first().cloned() else {
@@ -219,7 +223,7 @@ async fn cli_pass(app: &AppHandle) -> Result<bool, String> {
             settled = false;
             continue;
         };
-        checked = true;
+        inspected = true;
         let latest = match latest_version(provider).await {
             Ok(latest) => Some(latest),
             Err(error) => {
@@ -228,22 +232,36 @@ async fn cli_pass(app: &AppHandle) -> Result<bool, String> {
                 None
             }
         };
-        let pending = pending_restart(app, provider);
-        let target = match plan(&installed, latest.as_deref(), pending.as_deref()) {
-            Plan::Nothing => {
-                set_pending_restart(app, provider, None);
-                set_status(app, provider, Some(current(provider, &installed)));
-                continue;
+        let checked = latest.is_some();
+        let started = blocking({
+            let containers = containers.clone();
+            move || {
+                containers
+                    .iter()
+                    .map(|container| worker_activity(container).cli_version)
+                    .collect::<Vec<_>>()
             }
-            Plan::Install(version) | Plan::Restart(version) => version,
-        };
+        })
+        .await?;
+        let pending = pending_restart(app, provider);
+        let (target, needs_install) =
+            match plan(&installed, latest.as_deref(), &started, pending.as_deref()) {
+                Plan::Nothing => {
+                    set_pending_restart(app, provider, None);
+                    set_status(app, provider, Some(current(provider, &installed, checked)));
+                    continue;
+                }
+                Plan::Install(version) => (version, true),
+                Plan::Restart(version) => (version, false),
+            };
         let status = |state| CliStatus {
             provider,
             installed: installed.clone(),
             target: Some(target.clone()),
             state,
+            checked,
         };
-        if pending.as_deref() != Some(target.as_str()) {
+        if needs_install {
             set_status(app, provider, Some(status(CliState::Updating)));
             let result = blocking({
                 let (first, version) = (first.clone(), target.clone());
@@ -282,17 +300,18 @@ async fn cli_pass(app: &AppHandle) -> Result<bool, String> {
             continue;
         }
         set_pending_restart(app, provider, None);
-        set_status(app, provider, Some(current(provider, &target)));
+        set_status(app, provider, Some(current(provider, &target, checked)));
     }
-    Ok(settled && checked)
+    Ok(settled && inspected)
 }
 
-fn current(provider: Provider, installed: &str) -> CliStatus {
+fn current(provider: Provider, installed: &str, checked: bool) -> CliStatus {
     CliStatus {
         provider,
         installed: installed.to_string(),
         target: None,
         state: CliState::Current,
+        checked,
     }
 }
 
@@ -307,16 +326,29 @@ enum Plan {
 }
 
 /// `installed` is the version in the CLI volume (or the image's), so after an
-/// install it already reads the new version while the workers still wait for
-/// the restart recorded in `pending`. Without the registry (offline) a
-/// pending restart still runs.
-fn plan(installed: &str, latest: Option<&str>, pending: Option<&str>) -> Plan {
-    match latest {
-        Some(latest) if newer(latest, installed) => Plan::Install(latest.to_string()),
-        _ => match pending {
-            Some(pending) if !newer(installed, pending) => Plan::Restart(pending.to_string()),
-            _ => Plan::Nothing,
-        },
+/// install it already reads the new version while the workers still run the
+/// one they started with. `started` is that version for each worker, measured
+/// rather than remembered, so a restart the app quit before still runs; a
+/// worker built before it reports none and relies on the restart recorded in
+/// `pending` instead. Without the registry (offline) a needed restart still
+/// runs.
+fn plan(
+    installed: &str,
+    latest: Option<&str>,
+    started: &[Option<String>],
+    pending: Option<&str>,
+) -> Plan {
+    if let Some(latest) = latest.filter(|latest| newer(latest, installed)) {
+        return Plan::Install(latest.to_string());
+    }
+    if started.iter().flatten().any(|version| version != installed) {
+        return Plan::Restart(installed.to_string());
+    }
+    match pending {
+        Some(pending) if started.iter().any(Option::is_none) && !newer(installed, pending) => {
+            Plan::Restart(pending.to_string())
+        }
+        _ => Plan::Nothing,
     }
 }
 
@@ -403,18 +435,35 @@ fn install(container: &str, provider: Provider, version: &str) -> Result<(), Str
 /// Whether no worker is launching or running a turn. A worker that cannot
 /// answer counts as busy.
 fn workers_idle(containers: &[String]) -> bool {
-    containers.iter().all(|container| {
-        if answers_activity(container) {
-            docker::docker_command()
-                .args(["exec", container, "/worker", "activity"])
-                .output()
-                .ok()
-                .filter(|output| output.status.success())
-                .is_some_and(|output| idle_answer(&String::from_utf8_lossy(&output.stdout)))
-        } else {
-            processes_idle(container)
-        }
-    })
+    containers
+        .iter()
+        .all(|container| worker_activity(container).idle)
+}
+
+/// What a worker is doing, and the CLI version it started with.
+#[derive(Debug, Default, Eq, PartialEq)]
+struct Activity {
+    idle: bool,
+    /// Workers built before they report it say nothing.
+    cli_version: Option<String>,
+}
+
+/// A worker that cannot answer counts as busy.
+fn worker_activity(container: &str) -> Activity {
+    if !answers_activity(container) {
+        return Activity {
+            idle: processes_idle(container),
+            cli_version: None,
+        };
+    }
+    docker::docker_command()
+        .args(["exec", "--env", "COMMITARIUM_ACTIVITY_FORMAT=json"])
+        .args([container, "/worker", "activity"])
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .and_then(|output| activity_answer(&String::from_utf8_lossy(&output.stdout)))
+        .unwrap_or_default()
 }
 
 /// Whether no agent's worker, of any provider, is launching or running a turn.
@@ -448,9 +497,30 @@ fn answers_activity(container: &str) -> bool {
         .is_ok_and(|output| output.status.success())
 }
 
-/// A worker's `activity` answer is the number of attempts in flight.
-fn idle_answer(output: &str) -> bool {
-    output.trim().parse::<u64>() == Ok(0)
+/// A worker's `activity` answer: JSON with the number of attempts in flight
+/// and the CLI version it started with, or, from a worker built before it,
+/// just the number.
+fn activity_answer(output: &str) -> Option<Activity> {
+    #[derive(serde::Deserialize)]
+    struct Answer {
+        attempts: u64,
+        #[serde(default)]
+        cli_version: Option<String>,
+    }
+    let output = output.trim();
+    let answer = match output.parse::<u64>() {
+        Ok(attempts) => Answer {
+            attempts,
+            cli_version: None,
+        },
+        Err(_) => serde_json::from_str(output).ok()?,
+    };
+    Some(Activity {
+        idle: answer.attempts == 0,
+        cli_version: answer
+            .cli_version
+            .filter(|version| parse_version(version).is_some()),
+    })
 }
 
 /// The fallback for workers without `activity`, read from outside with
@@ -640,44 +710,106 @@ mod tests {
         assert!(!newer("garbage", "0.1.0"));
     }
 
+    fn started(versions: &[&str]) -> Vec<Option<String>> {
+        versions.iter().map(|v| Some(v.to_string())).collect()
+    }
+
     #[test]
     fn a_newer_release_is_installed_and_then_restarted_onto() {
         assert_eq!(
-            plan("2.1.270", Some("2.2.0"), None),
+            plan("2.1.270", Some("2.2.0"), &started(&["2.1.270"]), None),
             Plan::Install("2.2.0".into())
         );
-        // Installed, but the workers have not restarted yet.
+        // Installed, but the workers still run the CLI they started with,
+        // whether or not this run of the app did the install.
         assert_eq!(
-            plan("2.2.0", Some("2.2.0"), Some("2.2.0")),
+            plan("2.2.0", Some("2.2.0"), &started(&["2.1.270"]), None),
+            Plan::Restart("2.2.0".into())
+        );
+        assert_eq!(
+            plan("2.2.0", None, &started(&["2.2.0", "2.1.270"]), None),
             Plan::Restart("2.2.0".into())
         );
         // An even newer release while the restart waited replaces it.
         assert_eq!(
-            plan("2.2.0", Some("2.3.0"), Some("2.2.0")),
+            plan("2.2.0", Some("2.3.0"), &started(&["2.1.270"]), None),
             Plan::Install("2.3.0".into())
         );
     }
 
     #[test]
-    fn current_or_unknown_releases_change_nothing() {
-        assert_eq!(plan("2.2.0", Some("2.2.0"), None), Plan::Nothing);
-        assert_eq!(plan("2.3.0", Some("2.2.0"), None), Plan::Nothing);
-        // Offline: nothing new to install, but a pending restart still runs.
-        assert_eq!(plan("2.2.0", None, None), Plan::Nothing);
+    fn workers_on_the_installed_release_change_nothing() {
         assert_eq!(
-            plan("2.2.0", None, Some("2.2.0")),
-            Plan::Restart("2.2.0".into())
+            plan("2.2.0", Some("2.2.0"), &started(&["2.2.0", "2.2.0"]), None),
+            Plan::Nothing
         );
-        // The volume moved past the pending version (the image was rebuilt).
-        assert_eq!(plan("2.4.0", None, Some("2.2.0")), Plan::Nothing);
+        assert_eq!(
+            plan("2.3.0", Some("2.2.0"), &started(&["2.3.0"]), None),
+            Plan::Nothing
+        );
+        // Offline: nothing new to install.
+        assert_eq!(
+            plan("2.2.0", None, &started(&["2.2.0"]), None),
+            Plan::Nothing
+        );
+        // A remembered restart the workers already reflect is done.
+        assert_eq!(
+            plan("2.2.0", None, &started(&["2.2.0"]), Some("2.2.0")),
+            Plan::Nothing
+        );
     }
 
     #[test]
-    fn only_a_zero_activity_answer_is_idle() {
-        assert!(idle_answer("0\n"));
-        assert!(!idle_answer("2\n"));
-        assert!(!idle_answer(""));
-        assert!(!idle_answer("unknown command"));
+    fn a_current_cli_says_whether_the_registry_was_reached() {
+        // Offline, the Agents page says it could not check rather than "up
+        // to date".
+        let offline = serde_json::to_value(current(Provider::Claude, "2.1.296", false)).unwrap();
+        assert_eq!(offline["state"], "current");
+        assert_eq!(offline["checked"], false);
+        let online = serde_json::to_value(current(Provider::Claude, "2.1.296", true)).unwrap();
+        assert_eq!(online["checked"], true);
+    }
+
+    #[test]
+    fn workers_that_do_not_report_their_cli_rely_on_the_remembered_restart() {
+        assert_eq!(plan("2.2.0", Some("2.2.0"), &[None], None), Plan::Nothing);
+        assert_eq!(plan("2.3.0", Some("2.2.0"), &[None], None), Plan::Nothing);
+        // Offline: nothing new to install, but a pending restart still runs.
+        assert_eq!(plan("2.2.0", None, &[None], None), Plan::Nothing);
+        assert_eq!(
+            plan("2.2.0", None, &[None], Some("2.2.0")),
+            Plan::Restart("2.2.0".into())
+        );
+        // The volume moved past the pending version (the image was rebuilt).
+        assert_eq!(plan("2.4.0", None, &[None], Some("2.2.0")), Plan::Nothing);
+    }
+
+    #[test]
+    fn activity_answers_old_and_new_are_read() {
+        let answer = |idle, version: Option<&str>| {
+            Some(Activity {
+                idle,
+                cli_version: version.map(str::to_string),
+            })
+        };
+        // Workers before the CLI version answer with the bare count.
+        assert_eq!(activity_answer("0\n"), answer(true, None));
+        assert_eq!(activity_answer("2\n"), answer(false, None));
+        assert_eq!(
+            activity_answer("{\"busy\":false,\"attempts\":0,\"cli_version\":\"2.1.296\"}\n"),
+            answer(true, Some("2.1.296"))
+        );
+        assert_eq!(
+            activity_answer("{\"busy\":true,\"attempts\":1}\n"),
+            answer(false, None)
+        );
+        // A version that is not one is no version.
+        assert_eq!(
+            activity_answer("{\"busy\":false,\"attempts\":0,\"cli_version\":\"x\"}"),
+            answer(true, None)
+        );
+        assert_eq!(activity_answer(""), None);
+        assert_eq!(activity_answer("unknown command"), None);
     }
 
     #[test]

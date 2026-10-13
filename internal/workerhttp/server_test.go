@@ -560,6 +560,7 @@ func TestModelsEndpointReturnsAuthenticatedExactCatalog(t *testing.T) {
 func TestActivityEndpointReportsAuthenticatedActiveAttempts(t *testing.T) {
 	config := testServerConfig()
 	config.ActivitySource = func() int { return 2 }
+	config.CLIVersion = "2.1.296"
 	handler := newTestServer(t, config, &recordingService{attempt: validServerAttempt()})
 	unauthenticated := serve(handler, httptest.NewRequest(http.MethodGet, APIBasePath+"/activity", nil))
 	if unauthenticated.Code != http.StatusUnauthorized {
@@ -571,7 +572,7 @@ func TestActivityEndpointReportsAuthenticatedActiveAttempts(t *testing.T) {
 	}
 	var response ActivityResponse
 	decodeTestResponse(t, recorder, &response)
-	if !response.Busy || response.Attempts != 2 {
+	if !response.Busy || response.Attempts != 2 || response.CLIVersion != "2.1.296" {
 		t.Fatalf("activity response = %#v", response)
 	}
 }
