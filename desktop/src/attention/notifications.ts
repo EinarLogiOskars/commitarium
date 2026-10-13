@@ -4,8 +4,9 @@ import type { NativeNotification } from "../ipc";
 // Which attention kinds are worth interrupting for, and how the native layer
 // should categorize them. Everything absent here is deliberately quiet:
 // `validation_pending` / `validation_running` / `environment_provisioning` are
-// ordinary progress, `paused` is something the user did themselves, and
-// `usage_limit` resumes by itself at the reset.
+// ordinary progress, `paused` is something the user did themselves,
+// `usage_limit` resumes by itself at the reset, and `autopilot_handling` is
+// autopilot's until it gives up.
 const NOTIFY: Partial<Record<AttentionKind, NativeNotification["kind"]>> = {
   clarification: "attention",
   phase_checkpoint: "attention",

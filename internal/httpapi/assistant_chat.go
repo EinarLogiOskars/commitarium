@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/EinarLogiOskars/commitarium/internal/conversations"
 	"github.com/EinarLogiOskars/commitarium/internal/execution"
@@ -36,6 +37,7 @@ type ConversationService interface {
 	ActiveGoals(ctx context.Context) (map[string]conversations.Goal, error)
 	StartLaunch(ctx context.Context, scope string) (conversations.Conversation, error)
 	ActiveLaunches(ctx context.Context) (map[string]conversations.LaunchStage, error)
+	AutopilotHandles(ctx context.Context, scope, workOrderID string, blockedAt time.Time) bool
 }
 
 // startLaunchHandler marks a new app's launch (APPS_PLAN.md): the
@@ -542,7 +544,9 @@ func (api *API) applyContinueWorkOrder(
 	}
 	latest := newestRun(runs)
 	if _, _, err := directed.RecoverBlockerWithDirective(ctx, latest.ID, runActionIDForKey("assistant-"+action.ID),
-		orchestration.RecoveryDirective{Action: orchestration.RecoveryActionContinue, Message: action.Guidance},
+		orchestration.RecoveryDirective{
+			Action: orchestration.RecoveryActionContinue, Message: action.Guidance, FromAssistant: true,
+		},
 	); err != nil {
 		switch {
 		case errors.Is(err, orchestration.ErrRecoveryNotAllowed):

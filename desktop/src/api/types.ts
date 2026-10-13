@@ -703,7 +703,10 @@ export type AttentionKind =
   | "run_failed"
   | "auto_merge_completed"
   // An agent reached its usage limit; the run continues by itself at the reset.
-  | "usage_limit";
+  | "usage_limit"
+  // A blocked or failed run autopilot is still continuing; it becomes a
+  // `blocker` / `run_failed` item (a new ID) if autopilot gives up.
+  | "autopilot_handling";
 
 export interface AttentionItem {
   id: string;

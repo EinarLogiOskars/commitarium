@@ -545,7 +545,7 @@ func (starter *RemoteLeadStarter) continueOrVerifyLeadTurn(
 		answer := remoteLeadRequest{
 			runID: run.ID, agentName: "lead agent", allowRecoveryContinuation: true,
 			answerBlocker: true, guided: guided, forceFreshRecovery: directive.Action == RecoveryActionReplace,
-			recoveryMessage: directive.Message,
+			recoveryMessage: directive.Message, guidanceFromAssistant: directive.FromAssistant,
 			identity: workerhttp.MutationIdentity{AttemptReference: workerhttp.AttemptReference{
 				SessionID: lead.ID, AttemptID: checkpoint.AttemptID,
 			}},

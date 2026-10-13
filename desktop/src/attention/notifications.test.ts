@@ -99,6 +99,27 @@ describe("planNotifications", () => {
     );
   });
 
+  it("stays quiet while autopilot handles a blocker and notifies once it gives up", () => {
+    const handling = [
+      item({
+        id: "autopilot:run_wait:run_one:blocker:t1",
+        kind: "autopilot_handling",
+        actionable: false,
+      }),
+    ];
+    expect(
+      planNotifications({ items: handling, seen: new Set(), foreground: null, primed: true }),
+    ).toEqual([]);
+    const gaveUp = [item({ id: "run_wait:run_one:blocker:t1", kind: "blocker" })];
+    const planned = planNotifications({
+      items: gaveUp,
+      seen: seenIds(handling),
+      foreground: null,
+      primed: true,
+    });
+    expect(planned.map((p) => p.event_id)).toEqual(["run_wait:run_one:blocker:t1"]);
+  });
+
   it("categorizes failures and automatic merges apart from attention", () => {
     const items = [
       item({ id: "run_failed:run_one", kind: "run_failed", severity: "error" }),

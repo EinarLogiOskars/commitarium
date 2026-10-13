@@ -21,6 +21,12 @@ type conversationStub struct {
 	resolvedStatus conversations.ActionStatus
 	resolvedResult string
 	goalLevel      int
+	// handling names the work orders autopilot is on.
+	handling map[string]bool
+}
+
+func (stub *conversationStub) AutopilotHandles(_ context.Context, _, workOrderID string, _ time.Time) bool {
+	return stub.handling[workOrderID]
 }
 
 func (stub *conversationStub) Settings(context.Context) (conversations.Settings, error) {

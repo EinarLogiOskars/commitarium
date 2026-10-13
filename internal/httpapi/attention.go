@@ -183,7 +183,7 @@ func (api *API) attentionForFeature(
 		base.Severity = "error"
 		base.Title = "Run failed"
 		base.Detail = detailOr(currentRun.Reason, "The run failed and needs inspection.")
-		return []attentionItem{base}, nil, nil
+		return []attentionItem{api.autopilotAttention(ctx, base, currentRun)}, nil, nil
 	}
 	if currentRun.Status != execution.RunStatusWaitingForUser {
 		return nil, nil, nil
@@ -221,7 +221,24 @@ func (api *API) attentionForFeature(
 			return []attentionItem{base}, nil, nil
 		}
 	}
-	return []attentionItem{runWaitAttention(base, currentRun)}, nil, nil
+	return []attentionItem{api.autopilotAttention(ctx, runWaitAttention(base, currentRun), currentRun)}, nil, nil
+}
+
+// autopilotAttention quiets a blocked or failed run that autopilot is still
+// on: the assistant is finding out why and continuing it. The item is not
+// actionable and has its own kind and ID, so the inbox asks the user, and the
+// desktop notifies, only once autopilot gives up.
+func (api *API) autopilotAttention(ctx context.Context, item attentionItem, run execution.Run) attentionItem {
+	if api.conversations == nil || (item.Kind != "blocker" && item.Kind != "run_failed") ||
+		!api.conversations.AutopilotHandles(ctx, item.ProjectID, item.FeatureID, run.UpdatedAt) {
+		return item
+	}
+	item.ID = "autopilot:" + item.ID
+	item.Kind = "autopilot_handling"
+	item.Severity = "info"
+	item.Actionable = false
+	item.Title = "Autopilot is handling this"
+	return item
 }
 
 func mergedTitle(currentFeature feature.Feature) string {

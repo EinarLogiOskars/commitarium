@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -295,6 +296,40 @@ func TestAttentionAsksToAutoRunValidationOnlyUnderAutoMerge(t *testing.T) {
 		want := policy == project.MergePolicyAutoAfterGates
 		if len(response.Items) != 1 || response.Items[0].Kind != "validation_pending" || response.Items[0].AutoRun != want {
 			t.Fatalf("%s: unexpected attention response: %+v", policy, response.Items)
+		}
+	}
+}
+
+// A blocker autopilot is still on is shown quietly, under its own kind and ID,
+// so the inbox asks (and the desktop notifies) only once autopilot gives up.
+func TestAttentionQuietsABlockerAutopilotIsHandling(t *testing.T) {
+	now := time.Date(2026, time.October, 13, 12, 0, 0, 0, time.UTC)
+	for _, handling := range []bool{true, false} {
+		projects := &recordingProjectService{listResult: []project.Project{{ID: "prj_one", Name: "One"}}}
+		features := &recordingFeatureService{listResult: []feature.Feature{{
+			ID: "fea_one", ProjectID: "prj_one", Title: "Polish mobile", State: feature.StateImplementing,
+		}}}
+		executions := &recordingExecutionService{runs: []execution.Run{{
+			ID: "run_one", FeatureID: "fea_one", Status: execution.RunStatusWaitingForUser,
+			WaitKind: execution.RunWaitKindBlocker, Reason: "The lead ended early.", StartedAt: now, UpdatedAt: now,
+		}}}
+		stub := &conversationStub{handling: map[string]bool{"fea_one": handling}}
+		handler := NewWithWorkspaceRealWorkflowDeletionAndModels(
+			projects, features, nil, executions, nil, nil, nil, nil, nil, nil, nil, nil, stub,
+		)
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/v1/attention", nil))
+		var response attentionResponse
+		if err := json.NewDecoder(recorder.Body).Decode(&response); err != nil {
+			t.Fatalf("decode attention response: %v", err)
+		}
+		if len(response.Items) != 1 {
+			t.Fatalf("handling=%t: items = %+v", handling, response.Items)
+		}
+		item := response.Items[0]
+		quiet := item.Kind == "autopilot_handling" && !item.Actionable && strings.HasPrefix(item.ID, "autopilot:")
+		if quiet != handling || (!handling && (item.Kind != "blocker" || !item.Actionable)) {
+			t.Fatalf("handling=%t: item = %+v", handling, item)
 		}
 	}
 }

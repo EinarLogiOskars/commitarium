@@ -6,6 +6,7 @@ import (
 
 	"github.com/EinarLogiOskars/commitarium/internal/execution"
 	"github.com/EinarLogiOskars/commitarium/internal/project"
+	"github.com/EinarLogiOskars/commitarium/internal/worker"
 	"github.com/EinarLogiOskars/commitarium/internal/workerhttp"
 )
 
@@ -104,4 +105,22 @@ func TestContinueAnswersAnAgentThatAskedForHelp(t *testing.T) {
 		!strings.Contains(resumed.Instructions, "Retry it now.") {
 		t.Fatalf("Continue did not answer the agent in its conversation: %+v", resumed)
 	}
+	assertGuidanceShown(t, executions, leadID, "user", "Retry it now.")
+}
+
+// assertGuidanceShown checks that a continuation's guidance is in the agent's
+// transcript as a message from its author.
+func assertGuidanceShown(t *testing.T, executions *execution.Service, sessionID, author, guidance string) {
+	t.Helper()
+	events, err := executions.EventsForSession(t.Context(), sessionID)
+	if err != nil {
+		t.Fatalf("load session events: %v", err)
+	}
+	for _, event := range events {
+		if event.Type == worker.EventUserMessage && strings.HasSuffix(event.ID, ":guidance:"+author) &&
+			event.Text == guidance {
+			return
+		}
+	}
+	t.Fatalf("the %s's guidance %q is not in the transcript: %+v", author, guidance, events)
 }

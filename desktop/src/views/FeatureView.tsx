@@ -50,10 +50,13 @@ export function FeatureView({
   onDeleted,
   onOpenValidation,
   onKind,
+  autopilotHandling = false,
 }: {
   projectId: string;
   featureId: string;
   hasRepo?: boolean;
+  /** Autopilot is continuing this blocked or failed work order itself. */
+  autopilotHandling?: boolean;
   onBack?: () => void;
   onChanged?: () => void;
   onDeleted?: () => void;
@@ -360,6 +363,15 @@ export function FeatureView({
           current > 0 &&
           run.wait_kind !== "blocker" &&
           waitBanner(run, feature.state)}
+        {run && autopilotHandling && (
+          <div className="wait-banner wait-banner--warn">
+            <span className="wait-banner__kind">Autopilot is handling this</span>
+            <span className="wait-banner__reason">
+              The assistant is finding out why this stopped and continuing it. It asks you if it
+              can&apos;t fix it.
+            </span>
+          </div>
+        )}
         {pinnedIndex !== null && pinnedIndex !== current && (
           <button className="linkish" onClick={() => setPinnedIndex(null)}>
             Viewing an earlier phase — jump to the current phase →

@@ -93,6 +93,9 @@ const (
 type RecoveryDirective struct {
 	Action  RecoveryAction
 	Message string
+	// FromAssistant says the assistant wrote Message (a continue_work_order
+	// action), not the user; the agent's transcript shows who it was.
+	FromAssistant bool
 	// blockedReason is the reason of the blocker the user is answering.
 	blockedReason string
 }
@@ -727,7 +730,7 @@ func (starter *RemoteLeadStarter) recoverWithDirective(
 				starter.release(run.ID)
 				return checkpointErr
 			}
-			request := remoteLeadRequest{runID: run.ID, allowRecoveryContinuation: recoveryPolicy == project.RecoveryPolicyAutomatic, forceFreshRecovery: directive.Action == RecoveryActionReplace, recoveryMessage: directive.Message, answerBlocker: directive.answersBlocker(), identity: workerhttp.MutationIdentity{AttemptReference: workerhttp.AttemptReference{SessionID: active.ID, AttemptID: checkpoint.AttemptID}}}
+			request := remoteLeadRequest{runID: run.ID, allowRecoveryContinuation: recoveryPolicy == project.RecoveryPolicyAutomatic, forceFreshRecovery: directive.Action == RecoveryActionReplace, recoveryMessage: directive.Message, guidanceFromAssistant: directive.FromAssistant, answerBlocker: directive.answersBlocker(), identity: workerhttp.MutationIdentity{AttemptReference: workerhttp.AttemptReference{SessionID: active.ID, AttemptID: checkpoint.AttemptID}}}
 			switch {
 			case active.Role == worker.RoleLead:
 				version, _, ok := workflowAttemptVersionAndTurn(active.ID, "implementation", checkpoint.AttemptID)
@@ -846,6 +849,7 @@ func (starter *RemoteLeadStarter) recoverWithDirective(
 		allowRecoveryContinuation: recoveryPolicy == project.RecoveryPolicyAutomatic,
 		forceFreshRecovery:        directive.Action == RecoveryActionReplace,
 		recoveryMessage:           directive.Message,
+		guidanceFromAssistant:     directive.FromAssistant,
 		answerBlocker:             directive.answersBlocker(),
 		agentName:                 "lead agent",
 		waitingReason:             waitingReasonForAttempt(session, checkpoint.AttemptID),
@@ -2146,7 +2150,7 @@ func (starter *RemoteLeadStarter) continueOrVerifyReviewTurn(
 		answer := remoteLeadRequest{
 			runID: run.ID, agentName: "reviewer", allowRecoveryContinuation: true,
 			answerBlocker: true, guided: guided, forceFreshRecovery: directive.Action == RecoveryActionReplace,
-			recoveryMessage: directive.Message, refusal: refusal,
+			recoveryMessage: directive.Message, guidanceFromAssistant: directive.FromAssistant, refusal: refusal,
 			identity: workerhttp.MutationIdentity{AttemptReference: workerhttp.AttemptReference{
 				SessionID: reviewer.ID, AttemptID: checkpoint.AttemptID,
 			}},
@@ -2408,6 +2412,9 @@ type remoteLeadRequest struct {
 	allowRecoveryContinuation bool
 	forceFreshRecovery        bool
 	recoveryMessage           string
+	// guidanceFromAssistant says the assistant, not the user, wrote the
+	// guidance in recoveryMessage.
+	guidanceFromAssistant bool
 	// modelSwitch resumes a turn the user stopped to switch models.
 	modelSwitch bool
 	// answerBlocker lets the user's Continue start the next turn of an agent
@@ -4199,6 +4206,12 @@ func (starter *RemoteLeadStarter) continueFailedAttempt(
 	request remoteLeadRequest,
 	attempt workerhttp.Attempt,
 ) (bool, error) {
+	// The guidance as its author wrote it, before it is framed for the agent;
+	// a model switch's note is Commitarium's own.
+	guidance := ""
+	if !request.modelSwitch {
+		guidance = strings.TrimSpace(request.recoveryMessage)
+	}
 	// Any failed turn can be retried (ADR-017); an incomplete structured result
 	// is one kind of failure.
 	// The user's Continue also answers an agent that stopped to ask for help.
@@ -4329,8 +4342,29 @@ func (starter *RemoteLeadStarter) continueFailedAttempt(
 	if err := request.request.Validate(request.identity); err != nil {
 		return false, err
 	}
+	if guidance != "" {
+		starter.recordGuidance(ctx, session.ID, nextAttemptID, guidance, request.guidanceFromAssistant)
+	}
 	starter.launchRecoverySuccessor(ctx, request, session, storedFeature, briefing)
 	return true, nil
+}
+
+// recordGuidance shows the guidance a continuation carries in the agent's
+// transcript, as a message to it from whoever wrote it. The event ID's suffix
+// names the author, and makes recording it again a no-op.
+func (starter *RemoteLeadStarter) recordGuidance(
+	ctx context.Context, sessionID, attemptID, guidance string, fromAssistant bool,
+) {
+	author := "user"
+	if fromAssistant {
+		author = "assistant"
+	}
+	if _, err := starter.executions.RecordSessionEventWithID(
+		ctx, attemptID+":guidance:"+author, sessionID,
+		worker.Event{Type: worker.EventUserMessage, Text: guidance},
+	); err != nil {
+		starter.reportError(fmt.Errorf("record continue guidance for session %q: %w", sessionID, err))
+	}
 }
 
 func agentForSession(run execution.Run, role worker.Role) string {

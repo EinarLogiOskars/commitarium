@@ -40,7 +40,13 @@ export function useSessionEvents(
     setPreviewByKey({});
     setError(null);
 
-    const roleFor = (role: string, type: string) => (type === "user_message" ? "user" : role);
+    const roleFor = (role: string, e: SessionEvent) =>
+      e.type !== "user_message"
+        ? role
+        : // Guidance the assistant (autopilot) wrote for a Continue.
+          e.id.endsWith(":guidance:assistant")
+          ? "assistant_guidance"
+          : "user";
     const previewKey = (sessionId: string, streamId: string) => `${sessionId}::${streamId}`;
 
     const addDurable = (sessionId: string, role: string, e: SessionEvent) => {
@@ -48,7 +54,7 @@ export function useSessionEvents(
         ...cur,
         [e.id]: {
           key: e.id,
-          role: roleFor(role, e.type),
+          role: roleFor(role, e),
           type: e.type,
           text: e.text,
           activity: e.activity,

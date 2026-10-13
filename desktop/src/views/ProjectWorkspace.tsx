@@ -454,6 +454,9 @@ export function ProjectWorkspace({
               projectId={id}
               featureId={orderId}
               hasRepo={hasRepo}
+              autopilotHandling={attention.some(
+                (item) => item.feature_id === orderId && item.kind === "autopilot_handling",
+              )}
               onOpenValidation={() => setMode("settings")}
               onChanged={bumpRail}
               onKind={setRailKind}
