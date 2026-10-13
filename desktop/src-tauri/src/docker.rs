@@ -45,6 +45,7 @@ const CORE_SERVICES: &[&str] = &["coordinator", "simulated-codex-worker"];
 const COMPOSE_OVERRIDE_ENV: &str = "COMMITARIUM_COMPOSE_OVERRIDE_FILE";
 const ENVIRONMENT_COMPOSE_ENV: &str = "COMMITARIUM_ENVIRONMENT_COMPOSE_FILE";
 const RELEASE_MODE_ENV: &str = "COMMITARIUM_RELEASE_MODE";
+const RUNNER_MODE_ENV: &str = "COMMITARIUM_RUNNER_MODE";
 const EMBEDDED_COMPOSE: &str = include_str!("../../../compose.yml");
 const EMBEDDED_RELEASE_COMPOSE: &str = include_str!("../../../compose.release.yml");
 
@@ -250,6 +251,12 @@ fn compose_command(
     }
     append_selected_compose_files(&mut command, include_environment, include_agents)?;
     command.args(["-p", PROJECT_NAME]).args(args);
+    // The desktop drives real agents, in development as in releases; the
+    // simulation stays the default only for the stack run without it. An
+    // explicit COMMITARIUM_RUNNER_MODE in the environment still wins.
+    if std::env::var_os(RUNNER_MODE_ENV).is_none() {
+        command.env(RUNNER_MODE_ENV, "real_agents");
+    }
 
     let output = command
         .output()
