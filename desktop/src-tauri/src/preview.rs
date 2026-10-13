@@ -837,7 +837,14 @@ fn launch_preview(
     }
 }
 
+// The preview runs the exact canonical commit, fetched as an archive from the
+// internal Forgejo and unpacked with the system's tar, so running an app does
+// not need Git or Apple's developer tools on the user's machine.
 fn prepare_source(handoff: &ProjectHandoff) -> Result<PathBuf, String> {
+    let commit = &handoff.source.head_commit_id;
+    if !safe_commit(commit) {
+        return Err("the canonical preview commit is invalid".into());
+    }
     let temporary = tempfile::Builder::new()
         .prefix(PREVIEW_TEMP_PREFIX)
         .tempdir()
@@ -845,16 +852,7 @@ fn prepare_source(handoff: &ProjectHandoff) -> Result<PathBuf, String> {
     let root = temporary.path().to_path_buf();
     let source = root.join("source");
     fs::create_dir_all(&source).map_err(|e| format!("create preview checkout: {e}"))?;
-    run_checked(
-        Command::new("git").arg("init").arg(&source),
-        "initialize preview checkout",
-    )?;
-    let reference = format!("refs/heads/{}", handoff.source.default_branch);
-    run_checked(
-        Command::new("git").args(["check-ref-format", &reference]),
-        "validate preview branch",
-    )?;
-    let repository = internal_repository_url(&handoff.source.repository)?;
+    let archive_url = internal_archive_url(&handoff.source.repository, commit)?;
     let token_path = forgejo_token_path()?;
     let token =
         fs::read_to_string(token_path).map_err(|_| "read internal Forgejo token".to_string())?;
@@ -862,45 +860,60 @@ fn prepare_source(handoff: &ProjectHandoff) -> Result<PathBuf, String> {
     if token.is_empty() || token.chars().any(char::is_whitespace) {
         return Err("internal Forgejo token is invalid".into());
     }
-    let refspec = format!("+{reference}:refs/heads/commitarium-preview");
-    let mut fetch = Command::new("git");
-    fetch
-        .current_dir(&source)
+    let archive = root.join("source.tar.gz");
+    // The token goes to curl on stdin, never on its command line.
+    let mut download = Command::new("curl")
         .args([
-            "fetch",
-            "--depth=1",
-            "--no-tags",
-            "--force",
-            "--",
-            &repository,
-            &refspec,
+            "--fail",
+            "--silent",
+            "--show-error",
+            "--config",
+            "-",
+            "--output",
         ])
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .env("GIT_CONFIG_COUNT", "2")
-        .env("GIT_CONFIG_KEY_0", "http.extraHeader")
-        .env(
-            "GIT_CONFIG_VALUE_0",
-            format!("Authorization: token {token}"),
-        )
-        .env("GIT_CONFIG_KEY_1", "credential.helper")
-        .env("GIT_CONFIG_VALUE_1", "");
-    run_checked(&mut fetch, "fetch canonical preview source")?;
-    let fetched = command_line(
-        Command::new("git")
-            .current_dir(&source)
-            .args(["rev-parse", "refs/heads/commitarium-preview"]),
-        "inspect preview commit",
-    )?;
-    if fetched != handoff.source.head_commit_id {
-        return Err("the canonical branch advanced while the preview was starting; retry".into());
+        .arg(&archive)
+        .arg(&archive_url)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("fetch canonical preview source: {e}"))?;
+    if let Some(mut stdin) = download.stdin.take() {
+        writeln!(stdin, "header = \"Authorization: token {token}\"")
+            .map_err(|e| format!("fetch canonical preview source: {e}"))?;
     }
+    let output = download
+        .wait_with_output()
+        .map_err(|e| format!("fetch canonical preview source: {e}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "fetch canonical preview source: {}",
+            bounded(&String::from_utf8_lossy(&output.stderr))
+        ));
+    }
+    // Forgejo wraps the files in one top-level folder named after the
+    // repository.
     run_checked(
-        Command::new("git")
-            .current_dir(&source)
-            .args(["checkout", "--detach", &fetched]),
-        "check out preview commit",
+        Command::new("tar")
+            .arg("-xzf")
+            .arg(&archive)
+            .arg("-C")
+            .arg(&source)
+            .arg("--strip-components=1"),
+        "unpack canonical preview source",
     )?;
+    let _ = fs::remove_file(&archive);
     Ok(temporary.keep())
+}
+
+fn internal_archive_url(repository: &Repository, commit: &str) -> Result<String, String> {
+    validate_coordinate("repository owner", &repository.owner)?;
+    validate_coordinate("repository name", &repository.name)?;
+    let port = std::env::var("COMMITARIUM_FORGEJO_PORT").unwrap_or_else(|_| "3001".into());
+    Ok(format!(
+        "http://127.0.0.1:{port}/api/v1/repos/{}/{}/archive/{commit}.tar.gz",
+        repository.owner, repository.name
+    ))
 }
 
 /// Saves an open target inferred from the Compose file on the project's
@@ -1332,16 +1345,6 @@ fn coordinator_url(path: &str) -> String {
     format!("http://127.0.0.1:{port}{path}")
 }
 
-fn internal_repository_url(repository: &Repository) -> Result<String, String> {
-    validate_coordinate("repository owner", &repository.owner)?;
-    validate_coordinate("repository name", &repository.name)?;
-    let port = std::env::var("COMMITARIUM_FORGEJO_PORT").unwrap_or_else(|_| "3001".into());
-    Ok(format!(
-        "http://127.0.0.1:{port}/{}/{}.git",
-        repository.owner, repository.name
-    ))
-}
-
 fn forgejo_token_path() -> Result<PathBuf, String> {
     if let Ok(configured) = std::env::var("COMMITARIUM_FORGEJO_TOKEN_FILE") {
         let path = PathBuf::from(configured);
@@ -1472,18 +1475,6 @@ fn run_checked(command: &mut Command, action: &str) -> Result<(), String> {
     let output = command.output().map_err(|e| format!("{action}: {e}"))?;
     if output.status.success() {
         Ok(())
-    } else {
-        Err(format!(
-            "{action}: {}",
-            bounded(&String::from_utf8_lossy(&output.stderr))
-        ))
-    }
-}
-
-fn command_line(command: &mut Command, action: &str) -> Result<String, String> {
-    let output = command.output().map_err(|e| format!("{action}: {e}"))?;
-    if output.status.success() {
-        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
     } else {
         Err(format!(
             "{action}: {}",
