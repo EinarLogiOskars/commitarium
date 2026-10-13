@@ -272,6 +272,17 @@ type remoteLeadWorkspaceStub struct {
 	responseVerifyErr             error
 	reviewVerifyErr               error
 	readinessVerifyErr            error
+	// mergeErrs are returned, in order, by the next merges instead of merging.
+	mergeErrs     []error
+	mergedCommits []string
+	// stillBehind keeps mainHead after a verified update onto main, as if main
+	// moved again meanwhile.
+	stillBehind            bool
+	baseUpdateVerifyCalls  int
+	baseUpdateVerifyCommit string
+	baseUpdateVerifyErr    error
+	// failReviewVerifyCall makes that review verification fail once.
+	failReviewVerifyCall int
 }
 
 func (stub *remoteLeadWorkspaceStub) PrepareReplanningBaseline(
@@ -295,6 +306,10 @@ func (stub *remoteLeadWorkspaceStub) RecordMergeReady(
 	pullRequestNumber int64,
 ) (workspace.Workspace, error) {
 	stub.mergeReadyCalls++
+	if stub.prepared.ApprovedCommitID != "" && stub.prepared.ApprovedCommitID != commitID {
+		// Like the store, a pinned merge target is never silently replaced.
+		return workspace.Workspace{}, workspace.ErrConflict
+	}
 	stub.prepared.ApprovedCommitID = commitID
 	readyAt := time.Now().UTC()
 	stub.prepared.MergeReadyAt = &readyAt
@@ -325,7 +340,13 @@ func (stub *remoteLeadWorkspaceStub) MergeApproved(
 ) (workspace.Workspace, bool, error) {
 	stub.mergeCalls++
 	stub.mergeApprovalNotes = append(stub.mergeApprovalNotes, approvalNote...)
+	if len(stub.mergeErrs) > 0 {
+		err := stub.mergeErrs[0]
+		stub.mergeErrs = stub.mergeErrs[1:]
+		return workspace.Workspace{}, false, err
+	}
 	if stub.prepared.MergeCommitID == "" {
+		stub.mergedCommits = append(stub.mergedCommits, stub.prepared.ApprovedCommitID)
 		stub.prepared.MergeCommitID = "dddddddddddddddddddddddddddddddddddddddd"
 		mergedAt := time.Now().UTC()
 		stub.prepared.MergedAt = &mergedAt
@@ -414,7 +435,36 @@ func (stub *remoteLeadWorkspaceStub) VerifyImplementationReview(
 	string,
 ) (workspace.Workspace, error) {
 	stub.reviewVerifyCalls++
+	if stub.reviewVerifyCalls == stub.failReviewVerifyCall {
+		return workspace.Workspace{}, errors.New("the reviewer's review could not be confirmed")
+	}
 	return stub.prepared, stub.reviewVerifyErr
+}
+
+func (stub *remoteLeadWorkspaceStub) VerifyImplementationBaseUpdate(
+	_ context.Context,
+	_ string,
+	_ string,
+	_ string,
+	_ string,
+	_ string,
+	_ string,
+	commitID string,
+	_ int64,
+	_ string,
+) (workspace.Workspace, error) {
+	stub.baseUpdateVerifyCalls++
+	stub.baseUpdateVerifyCommit = commitID
+	if stub.baseUpdateVerifyErr != nil {
+		return workspace.Workspace{}, stub.baseUpdateVerifyErr
+	}
+	if stub.prepared.ApprovedCommitID == "" || stub.prepared.ApprovedCommitID == commitID {
+		return workspace.Workspace{}, errors.New("base update does not follow an approved commit")
+	}
+	if !stub.stillBehind {
+		stub.mainHead = ""
+	}
+	return stub.prepared, nil
 }
 
 func (stub *remoteLeadWorkspaceStub) VerifyImplementationReviewResponse(
@@ -2840,7 +2890,7 @@ func TestDialogueRoundLimitsAndReviewRouting(t *testing.T) {
 
 func TestImplementationReviewInstructionsUseForgejoApprovalEvent(t *testing.T) {
 	instructions := implementationReviewInstructions(
-		workspace.Workspace{}, "summary", "commit", "attempt", "",
+		workspace.Workspace{}, "summary", "commit", "attempt", "", false,
 	)
 	if !strings.Contains(instructions, "submit one review with event APPROVED.") {
 		t.Fatalf("review instructions do not use Forgejo's APPROVED event: %q", instructions)
@@ -2861,7 +2911,7 @@ func TestIndependentAcceptanceInstructionsKeepAuthoringBlindAndReviewLocal(t *te
 	}
 	review := implementationReviewInstructions(
 		workspace.Workspace{}, "summary",
-		strings.Repeat("b", 40), "attempt", "", strings.Repeat("c", 40),
+		strings.Repeat("b", 40), "attempt", "", false, strings.Repeat("c", 40),
 	)
 	for _, required := range []string{"Reset this disposable private checkout", "merge that exact commit locally", "acceptance start <test-id>", "acceptance not-applicable <test-id> <note>", "Never push your private test commit"} {
 		if !strings.Contains(review, required) {
@@ -3001,6 +3051,14 @@ func TestRecoveryPublicationInstructionsUseSuccessorIdentity(t *testing.T) {
 				implementationReadinessAttemptForVersion(lead, 2, 4),
 			),
 			heading: "## Merge readiness",
+		},
+		{
+			name: "update", sessionID: lead,
+			attemptID: baseUpdateAttemptForVersion(lead, 2, 3),
+			marker: workspace.ImplementationPublicationBaseUpdate.Marker(
+				baseUpdateAttemptForVersion(lead, 2, 3),
+			),
+			heading: "## Base update",
 		},
 		{
 			name: "review", sessionID: reviewer,

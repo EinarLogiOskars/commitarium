@@ -1338,7 +1338,11 @@ func (client *Client) MergePullRequest(
 		return workspace.PullRequest{}, reconcileErr
 	}
 	switch status {
-	case http.StatusConflict, http.StatusMethodNotAllowed, http.StatusNotFound:
+	case http.StatusConflict, http.StatusMethodNotAllowed:
+		// Forgejo refuses a pull request it cannot merge, for example one
+		// whose base branch moved into conflicting changes.
+		return workspace.PullRequest{}, workspace.ErrPullRequestNotMergeable
+	case http.StatusNotFound:
 		return workspace.PullRequest{}, workspace.ErrPullRequestConflict
 	default:
 		return workspace.PullRequest{}, fmt.Errorf(

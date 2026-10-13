@@ -16,13 +16,17 @@ const (
 	ImplementationPublicationInitial        ImplementationPublicationKind = "implementation"
 	ImplementationPublicationReviewResponse ImplementationPublicationKind = "review-response"
 	ImplementationPublicationMergeReadiness ImplementationPublicationKind = "merge-readiness"
+	// ImplementationPublicationBaseUpdate audits the lead bringing the moved
+	// default branch into an approved feature branch.
+	ImplementationPublicationBaseUpdate ImplementationPublicationKind = "base-update"
 )
 
 func (kind ImplementationPublicationKind) Validate() error {
 	switch kind {
 	case ImplementationPublicationInitial,
 		ImplementationPublicationReviewResponse,
-		ImplementationPublicationMergeReadiness:
+		ImplementationPublicationMergeReadiness,
+		ImplementationPublicationBaseUpdate:
 		return nil
 	default:
 		return errors.New("implementation publication kind is not recognized")
@@ -37,6 +41,8 @@ func (kind ImplementationPublicationKind) CommentHeading() string {
 		return "Review response"
 	case ImplementationPublicationMergeReadiness:
 		return "Merge readiness"
+	case ImplementationPublicationBaseUpdate:
+		return "Base update"
 	default:
 		return ""
 	}

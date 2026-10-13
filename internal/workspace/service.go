@@ -29,6 +29,11 @@ var ErrCheckoutUnavailable = errors.New("managed checkout is unavailable")
 var ErrPullRequestConflict = errors.New("managed Forgejo pull request conflicts with its durable workspace")
 var ErrPullRequestUnavailable = errors.New("managed Forgejo pull request service is unavailable")
 
+// ErrPullRequestNotMergeable is Forgejo refusing to merge the pull request,
+// for example because the default branch moved and the approved revision no
+// longer merges cleanly. It still matches ErrPullRequestConflict.
+var ErrPullRequestNotMergeable = fmt.Errorf("%w: Forgejo refused the merge", ErrPullRequestConflict)
+
 type FeatureFinder interface {
 	GetByID(ctx context.Context, projectID, featureID string) (feature.Feature, error)
 	List(ctx context.Context, projectID string) ([]feature.Feature, error)
@@ -117,8 +122,9 @@ type ValidationResultPublisher interface {
 }
 
 // SessionCatchUp reports whether the default branch has moved past a
-// session's checkout (ADR-019), and its current head. The session's next turn
-// then merges it in first.
+// work order's checkout, and its current head. A session's next turn then
+// merges it in first (ADR-019); an approved work order whose merge Forgejo
+// refused has the lead bring it in (ADR-025).
 func (service *Service) SessionCatchUp(
 	ctx context.Context,
 	projectID string,
@@ -1176,6 +1182,56 @@ func (service *Service) VerifyImplementationMergeReadiness(
 		AttemptID: attemptID, Summary: summary, CommitID: commitID,
 		PullRequestNumber: pullRequestNumber, ExpectedAuthor: expectedAuthor,
 		PublicationKind: ImplementationPublicationMergeReadiness,
+	})
+}
+
+// VerifyImplementationBaseUpdate confirms the lead brought the moved default
+// branch into the approved feature branch (ADR-025): a new clean commit that
+// descends from the exact approved commit, so the update cannot rebase or
+// drop approved work, with a marker-owned Forgejo audit comment. The approved
+// commit stays pinned until this check passes.
+func (service *Service) VerifyImplementationBaseUpdate(
+	ctx context.Context,
+	projectID string,
+	featureID string,
+	planEventID string,
+	plan string,
+	attemptID string,
+	summary string,
+	commitID string,
+	pullRequestNumber int64,
+	expectedAuthor string,
+) (Workspace, error) {
+	for _, value := range []string{
+		planEventID, plan, attemptID, summary, commitID, expectedAuthor,
+	} {
+		if strings.TrimSpace(value) == "" || value != strings.TrimSpace(value) {
+			return Workspace{}, errors.New("base update identities are required and must be trimmed")
+		}
+	}
+	storedFeature, err := service.features.GetByID(ctx, projectID, featureID)
+	if err != nil {
+		return Workspace{}, err
+	}
+	if storedFeature.State != feature.StateImplementing && storedFeature.State != feature.StateReviewing {
+		return Workspace{}, ErrFeatureNotReviewing
+	}
+	stored, err := service.Get(ctx, projectID, featureID)
+	if err != nil {
+		return Workspace{}, err
+	}
+	if !ValidCommitID(stored.ApprovedCommitID) || stored.MergeCommitID != "" {
+		return Workspace{}, ErrConflict
+	}
+	if commitID == stored.ApprovedCommitID {
+		return Workspace{}, errors.New("base update must publish a new commit")
+	}
+	return service.verifyImplementationAudit(ctx, storedFeature, implementationAuditVerification{
+		ProjectID: projectID, PlanEventID: planEventID, Plan: plan,
+		AttemptID: attemptID, Summary: summary, CommitID: commitID,
+		PullRequestNumber: pullRequestNumber, ExpectedAuthor: expectedAuthor,
+		PublicationKind:      ImplementationPublicationBaseUpdate,
+		CheckoutBaseCommitID: stored.ApprovedCommitID,
 	})
 }
 

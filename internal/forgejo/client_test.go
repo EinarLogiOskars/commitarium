@@ -1330,6 +1330,7 @@ func TestClientVerifiesTypedLeadAuditHeadings(t *testing.T) {
 	}{
 		{name: "review response", kind: workspace.ImplementationPublicationReviewResponse, summary: "Added and tested the missing failure path."},
 		{name: "merge readiness", kind: workspace.ImplementationPublicationMergeReadiness, summary: "I agree that the approved commit is ready to merge."},
+		{name: "base update", kind: workspace.ImplementationPublicationBaseUpdate, summary: "Merged main cleanly; the focused tests pass."},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			spec := testImplementationPublicationSpec()
@@ -1999,5 +2000,48 @@ func TestClientCreatesDraftPullRequestBesideAnAbandonedOne(t *testing.T) {
 	created, err := client.EnsureDraftPullRequest(t.Context(), "owner", "repository", spec)
 	if err != nil || created.Number != 7 || calls != 2 {
 		t.Fatalf("a closed pull request of an abandoned run blocked a new one: %+v calls=%d err=%v", created, calls, err)
+	}
+}
+
+func TestClientReportsARefusedMergeAsNotMergeable(t *testing.T) {
+	for _, test := range []struct {
+		status int
+		want   error
+	}{
+		{status: http.StatusMethodNotAllowed, want: workspace.ErrPullRequestNotMergeable},
+		{status: http.StatusConflict, want: workspace.ErrPullRequestNotMergeable},
+		{status: http.StatusNotFound, want: workspace.ErrPullRequestConflict},
+	} {
+		t.Run(http.StatusText(test.status), func(t *testing.T) {
+			spec := workspace.PullRequestMergeSpec{
+				Number: 7, FeatureMarker: "<!-- commitarium-feature: fea_test -->",
+				BaseBranch: "main", HeadBranch: "commitarium/fea_test",
+				HeadCommitID: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			}
+			remote := managedPullRequest(testPullRequestSpec())
+			remote.Title = "Test feature"
+			remote.Draft = false
+			remote.HeadCommitID = spec.HeadCommitID
+			merges := 0
+			client := newBranchTestClient(t, func(request *http.Request) (*http.Response, error) {
+				switch request.Method + " " + request.URL.Path {
+				case "GET /api/v1/repos/owner/repository/pulls/7":
+					return pullRequestJSONResponse(t, http.StatusOK, remote), nil
+				case "POST /api/v1/repos/owner/repository/pulls/7/merge":
+					merges++
+					return jsonResponse(test.status, `{}`), nil
+				default:
+					t.Fatalf("unexpected request %s %s", request.Method, request.URL)
+					return nil, nil
+				}
+			})
+			_, err := client.MergePullRequest(t.Context(), "owner", "repository", spec)
+			if !errors.Is(err, test.want) || !errors.Is(err, workspace.ErrPullRequestConflict) || merges != 1 {
+				t.Fatalf("refused merge: merges=%d err=%v, want %v", merges, err, test.want)
+			}
+			if test.status == http.StatusNotFound && errors.Is(err, workspace.ErrPullRequestNotMergeable) {
+				t.Fatalf("a missing pull request was reported as not mergeable: %v", err)
+			}
+		})
 	}
 }

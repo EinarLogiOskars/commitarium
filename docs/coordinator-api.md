@@ -2569,6 +2569,26 @@ the verified lead green light is durable. Automatic mode has no weaker path or
 different checks. A conflict or unavailable dependency records visible merge-
 blocked activity and leaves the run waiting for user review.
 
+When Forgejo refuses the merge (`405`/`409`) and the default branch has moved
+past the work order's checkout, the lead brings main in instead (ADR-025). Its
+`update` turn merges, never rebases, the default branch into the feature
+branch, resolves conflicts, runs the tests, pushes, and posts a `## Base update`
+audit comment. The run's reason is then "Main moved after this revision was
+approved. The lead is merging main into the feature branch, …". The updated
+commit must descend from the approved one and passes every gate again:
+publication verification, a re-review of the merge and the lead's readiness
+acknowledgement when the work order has a reviewer, validation of the new
+commit when configured, and the merge itself. The merge route does this too:
+for a work order behind main it returns `200` with the run, now `running`,
+instead of `409 merge_not_ready`. Automatic merges bring main in at most three
+times per plan version; after that the run waits as a blocker with the reason
+"Main moved and the approved revision no longer merges cleanly. Continue
+(optionally with guidance) …". `continue` on that blocker starts another update
+with the guidance in the lead's instructions. A refused merge while the
+work order is up to date with main, or a moved feature branch, keeps the plain
+merge-blocked reason, and `continue` retries the merge. Sessions are not
+updated this way; their next message catches up with main (ADR-019).
+
 Retries and coordinator restarts reconcile before writing. In particular, if
 Forgejo completed a merge but its HTTP response was lost, the next attempt
 adopts the already-merged PR and records its merge commit instead of issuing a
