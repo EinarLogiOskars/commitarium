@@ -34,7 +34,10 @@ func (reader *projectReaderStub) ReadRepositoryBlob(_ context.Context, _ string,
 	return reader.blobs[blobID], nil
 }
 
-func (reader *projectReaderStub) ReadRepositoryFile(_ context.Context, _ string, filePath string, _ int64) ([]byte, error) {
+func (reader *projectReaderStub) ReadRepositoryFile(_ context.Context, _ string, filePath string, maxBytes int64) ([]byte, error) {
+	if maxBytes > project.RepositoryDetectionFileMaxBytes { // the forge refuses larger reads
+		return nil, project.ErrForgejoUnavailable
+	}
 	if contents, ok := reader.files[filePath]; ok {
 		return contents, nil
 	}

@@ -350,7 +350,10 @@ type portableProjectsStub struct {
 	reads int
 }
 
-func (stub *portableProjectsStub) ReadRepositoryFile(_ context.Context, _ string, filePath string, _ int64) ([]byte, error) {
+func (stub *portableProjectsStub) ReadRepositoryFile(_ context.Context, _ string, filePath string, maxBytes int64) ([]byte, error) {
+	if maxBytes > project.RepositoryDetectionFileMaxBytes { // the forge refuses larger reads
+		return nil, project.ErrForgejoUnavailable
+	}
 	stub.reads++
 	if contents, ok := stub.files[filePath]; ok {
 		return contents, nil

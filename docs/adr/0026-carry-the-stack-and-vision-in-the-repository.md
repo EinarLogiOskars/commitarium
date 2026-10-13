@@ -30,6 +30,8 @@ it.
 
 - Any import of a repository with the folder, not only marketplace installs,
   starts configured and with a vision.
-- An invalid file is ignored and detection falls back to the other files.
+- An invalid file is ignored: detection falls back to the other files, and
+  the project simply has no vision yet. Each file is read up to 64 KiB, the
+  limit for repository files the coordinator inspects.
 - A vision edited after a release is not in the repository until the next
   release.

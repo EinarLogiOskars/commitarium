@@ -3,9 +3,12 @@ package vision
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log"
 
 	"github.com/EinarLogiOskars/commitarium/internal/featureartifact"
+	"github.com/EinarLogiOskars/commitarium/internal/project"
 )
 
 // PortableVisionPath is where a copy of the vision travels with the
@@ -15,8 +18,6 @@ const PortableVisionPath = ".commitarium/vision.json"
 
 // SourceRepository marks a vision seeded from PortableVisionPath.
 const SourceRepository = "repository"
-
-const portableVisionMaxBytes = 256 * 1024
 
 type repositoryFileReader interface {
 	ReadRepositoryFile(ctx context.Context, projectID, filePath string, maxBytes int64) ([]byte, error)
@@ -75,15 +76,25 @@ func (service *Service) seedFromRepository(ctx context.Context, projectID string
 	if !ok {
 		return Vision{}, ErrNotFound
 	}
-	if _, checked := service.seedChecked.LoadOrStore(projectID, true); checked {
+	if _, checked := service.seedChecked.Load(projectID); checked {
 		return Vision{}, ErrNotFound
 	}
-	contents, err := reader.ReadRepositoryFile(ctx, projectID, PortableVisionPath, portableVisionMaxBytes)
+	contents, err := reader.ReadRepositoryFile(ctx, projectID, PortableVisionPath, project.RepositoryDetectionFileMaxBytes)
 	if err != nil {
+		// Only a definite answer is remembered; an unreachable forge is asked
+		// again on the next read.
+		if errors.Is(err, project.ErrRepositoryFileNotFound) || errors.Is(err, project.ErrRepositoryContentTooLarge) ||
+			errors.Is(err, project.ErrForgejoRepositoryNotReady) {
+			service.seedChecked.Store(projectID, true)
+		} else {
+			log.Printf("read %s for project %q: %v", PortableVisionPath, projectID, err)
+		}
 		return Vision{}, ErrNotFound
 	}
+	service.seedChecked.Store(projectID, true)
 	plan, err := ParsePortablePlan(contents)
 	if err != nil {
+		log.Printf("ignore %s for project %q: %v", PortableVisionPath, projectID, err)
 		return Vision{}, ErrNotFound
 	}
 	return service.write(Vision{ProjectID: projectID, Plan: plan, Source: SourceRepository, Revision: 1})
