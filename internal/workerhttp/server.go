@@ -52,6 +52,8 @@ type ServerConfig struct {
 	EventStreamHeartbeat    time.Duration
 	EventStreamWriteTimeout time.Duration
 	ModelSource             ModelSource
+	// UsageSource, when set, reports the account's usage limits.
+	UsageSource func() ([]UsageWindow, *time.Time)
 }
 
 type ModelSource interface {
@@ -110,6 +112,7 @@ type Server struct {
 	heartbeat    time.Duration
 	writeTimeout time.Duration
 	modelSource  ModelSource
+	usageSource  func() ([]UsageWindow, *time.Time)
 	mux          *http.ServeMux
 }
 
@@ -148,6 +151,7 @@ func NewServer(config ServerConfig, service Service) (http.Handler, error) {
 		heartbeat:    heartbeat,
 		writeTimeout: writeTimeout,
 		modelSource:  config.ModelSource,
+		usageSource:  config.UsageSource,
 		mux:          http.NewServeMux(),
 	}
 	server.routes()
@@ -163,6 +167,9 @@ func (server *Server) routes() {
 	server.mux.HandleFunc(APIBasePath+"/capabilities", server.authenticate(server.requireMethod(http.MethodGet, server.getCapabilities)))
 	if server.modelSource != nil {
 		server.mux.HandleFunc(APIBasePath+"/models", server.authenticate(server.requireMethod(http.MethodGet, server.getModels)))
+	}
+	if server.usageSource != nil {
+		server.mux.HandleFunc(APIBasePath+"/usage", server.authenticate(server.requireMethod(http.MethodGet, server.getUsage)))
 	}
 	server.mux.HandleFunc(
 		APIBasePath+"/sessions/{sessionID}/attempts/{attemptID}",
@@ -217,6 +224,16 @@ func (server *Server) getModels(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	server.writeResponse(w, http.StatusOK, response)
+}
+
+func (server *Server) getUsage(w http.ResponseWriter, _ *http.Request) {
+	windows, observedAt := server.usageSource()
+	if windows == nil {
+		windows = []UsageWindow{}
+	}
+	server.writeResponse(w, http.StatusOK, UsageResponse{
+		Provider: server.capabilities.Provider, Windows: windows, ObservedAt: observedAt,
+	})
 }
 
 func (server *Server) attempt(w http.ResponseWriter, r *http.Request) {

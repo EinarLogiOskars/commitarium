@@ -1661,6 +1661,12 @@ unknown; a limit still reached pauses it again. Recovery's `continue` tries at
 once. `GET /api/v1/agents/limits` answers
 `{"limits": [{"agent", "resets_at", "waiting"}]}` for the agents whose limit has
 paused work. The attention item is `usage_limit`, informational.
+`GET /api/v1/agents/usage` answers `{"agents": [{"agent", "windows": [{"name",
+"used_percent", "resets_at", "limited"}], "observed_at"}]}`: each connected
+agent's account usage as its worker last saw it (Codex reports percentages
+per window; Claude what its rate-limit events carry). Providers report only
+while working, so `observed_at` says how old it is; an unreachable worker is
+left out. Each worker serves its own report at `GET /internal/v1/usage`.
 
 `POST /api/v1/runs/{runID}/models` with
 `{"lead_model": "...", "reviewer_model": "...", "when": "now"|"next_turn"}`

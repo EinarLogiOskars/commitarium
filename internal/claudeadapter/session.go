@@ -304,6 +304,36 @@ type streamMessage struct {
 type rateLimitInfo struct {
 	Status   string `json:"status"`
 	ResetsAt int64  `json:"resetsAt"`
+	// RateLimitType names the window ("five_hour", "seven_day", …) and
+	// Utilization how much of it is used (0–1), when Claude Code says.
+	RateLimitType string   `json:"rateLimitType"`
+	Utilization   *float64 `json:"utilization"`
+}
+
+// Usage is the account's usage limits as the adapter's sessions last saw
+// them, for the Agents page.
+var Usage worker.UsageTracker
+
+func (info rateLimitInfo) usageWindow() worker.UsageWindow {
+	names := map[string]string{"five_hour": "5-hour", "seven_day": "Weekly", "seven_day_opus": "Weekly (Opus)",
+		"seven_day_sonnet": "Weekly (Sonnet)"}
+	name := names[info.RateLimitType]
+	if name == "" {
+		name = strings.ReplaceAll(info.RateLimitType, "_", " ")
+	}
+	if name == "" {
+		name = "Usage"
+	}
+	window := worker.UsageWindow{Name: name, Limited: info.Status == "rejected"}
+	if info.Utilization != nil {
+		used := *info.Utilization * 100
+		window.UsedPercent = &used
+	}
+	if info.ResetsAt > 0 {
+		resetsAt := time.Unix(info.ResetsAt, 0).UTC()
+		window.ResetsAt = &resetsAt
+	}
+	return window
 }
 
 // resultUsage is the turn total Claude Code reports on its result record.
@@ -439,6 +469,7 @@ func (session *session) translate(raw []byte) ([]worker.Event, *worker.Result, e
 	case "rate_limit_event":
 		// Advisory: kept to tell a failed turn's reached limit and its reset.
 		if info := message.RateLimitInfo; info != nil {
+			Usage.Merge(info.usageWindow())
 			session.mu.Lock()
 			session.limitRejected = info.Status == "rejected"
 			if info.ResetsAt > 0 {

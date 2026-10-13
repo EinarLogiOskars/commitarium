@@ -152,6 +152,19 @@ func (client *Client) Models(ctx context.Context) (ModelsResponse, error) {
 	return response, nil
 }
 
+// Usage is the agent's latest report of its account's usage limits.
+func (client *Client) Usage(ctx context.Context) (UsageResponse, error) {
+	var response UsageResponse
+	status, _, err := client.do(ctx, http.MethodGet, APIBasePath+"/usage", true, "", nil, &response)
+	if err != nil {
+		return UsageResponse{}, err
+	}
+	if status != http.StatusOK {
+		return UsageResponse{}, invalidClientResponse("usage status", nil)
+	}
+	return response, nil
+}
+
 func (client *Client) PutAttempt(
 	ctx context.Context,
 	identity MutationIdentity,
