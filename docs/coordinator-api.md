@@ -729,7 +729,9 @@ no Forgejo token or Git publishing identity.
 
 For an imported repository, first call the fast detector and show its result.
 If the user asks an agent to verify it, start a session with
-`purpose: "verify_repository"`. The coordinator reads the exact committed
+`purpose: "verify_repository"`. `message` is optional for this purpose; when
+it is empty the coordinator uses its fixed verification instruction. The
+coordinator reads the exact committed
 default-branch head and builds a bounded evidence packet containing recognized
 runtime manifests, lockfiles, build configuration, the root README, and source
 language file counts. It searches recursively, ignores dependency/build
