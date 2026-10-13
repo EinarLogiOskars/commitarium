@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/EinarLogiOskars/commitarium/internal/featureartifact"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -119,6 +120,7 @@ func (service *Service) startTurn(
 	}
 	worker, err := service.config.Workers(settings.Agent)
 	if err != nil || worker == nil {
+		log.Printf("assistant worker for agent %q: %v", settings.Agent, err)
 		return Conversation{}, ErrUnavailable
 	}
 	request := workerhttp.PutAttemptRequest{
@@ -141,6 +143,7 @@ func (service *Service) startTurn(
 		IdempotencyKey:   stored.AttemptID,
 	}, request)
 	if err != nil {
+		log.Printf("assistant turn %q on agent %q (model %q): %v", stored.AttemptID, settings.Agent, settings.Model, err)
 		stored.Status = StatusIdle
 		stored.Messages = append(stored.Messages, Message{
 			ID: messageID(stored, len(stored.Messages)), Role: "event", OccurredAt: service.now(),
