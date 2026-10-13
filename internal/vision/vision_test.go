@@ -304,3 +304,42 @@ func TestWorkOutsideThePlanCanJoinTheVision(t *testing.T) {
 		t.Fatalf("an out-of-range priority was accepted: %v", err)
 	}
 }
+
+// lateBranches lists the default branch only after a few looks, like Forgejo
+// right after it created a repository.
+type lateBranches struct{ missing int }
+
+func (stub *lateBranches) GetBranch(_ context.Context, _, _, branch string) (workspace.Branch, error) {
+	if stub.missing > 0 {
+		stub.missing--
+		return workspace.Branch{}, workspace.ErrBranchNotFound
+	}
+	return workspace.Branch{Name: branch, CommitID: strings.Repeat("a", 40)}, nil
+}
+
+func TestAVisionWaitsForANewRepositorysBranch(t *testing.T) {
+	newTestRepositoryService := func(t *testing.T, branches Branches) *Service {
+		worker := &workerStub{}
+		service, err := NewService(t.TempDir(), t.TempDir(), repositoryProjectsStub{}, func(string) (workerhttp.Service, error) {
+			return worker, nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return service.WithRepository(&checkoutsStub{}, branches)
+	}
+	if _, _, err := newTestRepositoryService(t, &lateBranches{missing: 2}).Start(
+		t.Context(), "prj_test", "codex", "gpt-5", ModeDescribe, "A Funko Pop tracker", "start-1",
+	); err != nil {
+		t.Fatalf("a branch that appears shortly was not waited for: %v", err)
+	}
+
+	previous := newBranchWait
+	newBranchWait = 0
+	t.Cleanup(func() { newBranchWait = previous })
+	if _, _, err := newTestRepositoryService(t, &lateBranches{missing: 1}).Start(
+		t.Context(), "prj_test", "codex", "gpt-5", ModeDescribe, "A Funko Pop tracker", "start-1",
+	); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("a missing branch past the wait = %v, want unavailable", err)
+	}
+}
