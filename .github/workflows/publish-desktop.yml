@@ -98,7 +98,7 @@ jobs:
           generateReleaseNotes: true
           uploadUpdaterJson: true
           retryAttempts: 2
-          releaseAssetNamePattern: Commitarium_[version]_[platform]_[arch][setup].[ext]
+          releaseAssetNamePattern: Commitarium_[version]_[platform]_[arch][setup][ext]
           args: ${{ matrix.args }}
 
   verify-updater:
