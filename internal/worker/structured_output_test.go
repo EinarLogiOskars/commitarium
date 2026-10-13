@@ -213,6 +213,68 @@ func TestResolveStructuredEnvironmentRequestExplainsInvalidField(t *testing.T) {
 	}
 }
 
+func TestResolveImplementationLeadExplainsEachRejectedField(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{
+			name: "pull request",
+			raw:  `{"action":"published","summary":"Done","commit_id":"0123456789abcdef0123456789abcdef01234567","pull_request_number":0,"system_packages":[],"environment_reason":""}`,
+			want: "missing its pull_request_number",
+		},
+		{
+			name: "packages",
+			raw:  `{"action":"published","summary":"Done","commit_id":"0123456789abcdef0123456789abcdef01234567","pull_request_number":7,"system_packages":["libvips-dev"],"environment_reason":""}`,
+			want: "system_packages must be empty unless action is environment_required",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := ResolveStructuredOutput(OutputContractImplementationLead, []byte(test.raw))
+			if !errors.Is(err, ErrInvalidStructuredOutput) || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("error=%v, want invalid structured output containing %q", err, test.want)
+			}
+		})
+	}
+}
+
+// Unused environment fields filled with a placeholder or a stray note do not
+// reject finished work: placeholders are empty and a note joins the summary.
+func TestResolveImplementationLeadForgivesUnusedEnvironmentFields(t *testing.T) {
+	published, err := ResolveStructuredOutput(OutputContractImplementationLead, []byte(
+		`{"action":"published","summary":"Polished the mobile layout.","commit_id":"0123456789abcdef0123456789abcdef01234567","pull_request_number":7,"system_packages":["none"],"environment_reason":"Live browser inspection was unavailable, so layouts were checked in tests."}`,
+	))
+	if err != nil {
+		t.Fatalf("resolve published lead result: %v", err)
+	}
+	want := "Polished the mobile layout.\n\nNote: Live browser inspection was unavailable, so layouts were checked in tests."
+	if published.Event.Text != want || published.Publication == nil || published.EnvironmentRequest != nil {
+		t.Fatalf("published = %+v", published)
+	}
+	for _, placeholder := range []string{"", "none", "N/A", "na", "-", "null"} {
+		raw := `{"action":"blocked","summary":"Needs a decision.","commit_id":"` + placeholder +
+			`","pull_request_number":7,"system_packages":[],"environment_reason":"` + placeholder + `"}`
+		blocked, err := ResolveStructuredOutput(OutputContractImplementationLead, []byte(raw))
+		if err != nil || blocked.Event.Text != "Needs a decision." || blocked.Disposition != DispositionInputRequired {
+			t.Fatalf("placeholder %q: blocked=%+v err=%v", placeholder, blocked, err)
+		}
+	}
+	review, err := ResolveStructuredOutput(OutputContractImplementationReview, []byte(
+		`{"action":"blocked","summary":"Cannot reach the PR.","commit_id":"n/a","pull_request_number":7,"review_id":0}`,
+	))
+	if err != nil || review.Disposition != DispositionInputRequired {
+		t.Fatalf("blocked review with placeholder commit: %+v err=%v", review, err)
+	}
+	_, err = ResolveStructuredOutput(OutputContractImplementationReview, []byte(
+		`{"action":"approved","summary":"Good.","commit_id":"0123456789abcdef0123456789abcdef01234567","pull_request_number":0,"review_id":3}`,
+	))
+	if !errors.Is(err, ErrInvalidStructuredOutput) || !strings.Contains(err.Error(), "missing its pull_request_number") {
+		t.Fatalf("review without pull request: %v", err)
+	}
+}
+
 func TestResolveWorkOrderBrief(t *testing.T) {
 	ask, err := ResolveStructuredOutput(OutputContractWorkOrderBrief, []byte(
 		`{"action":"ask","message":"Should overdue items be highlighted?","goal":"","areas":[],"considerations":[],"open_questions":[]}`,
