@@ -196,8 +196,10 @@ pnpm tauri dev
 ```
 
 Development builds use [`compose.yml`](compose.yml) directly and build service
-images from the local Dockerfiles; their coordinator defaults to the
-deterministic simulation unless configured otherwise. Installed releases
+images from the local Dockerfiles. The desktop runs the coordinator with the
+real Codex/Claude workflow; set `COMMITARIUM_RUNNER_MODE=simulated` in the
+environment that launches it for the deterministic simulation, which is also
+the default for the stack started without the desktop. Installed releases
 combine that file with [`compose.release.yml`](compose.release.yml), enable the
 real Codex/Claude workflow, pull versioned GHCR images, and disable local
 builds.
