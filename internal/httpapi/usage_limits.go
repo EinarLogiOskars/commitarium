@@ -72,8 +72,15 @@ func (api *API) agentUsageHandler(w http.ResponseWriter, r *http.Request) {
 		reported, err := api.agentUsage.AgentUsage(r.Context())
 		if err != nil {
 			log.Printf("agent usage: %v", err)
-		} else {
+		} else if reported != nil {
 			usage = reported
+		}
+	}
+	// An agent that has not worked yet reports no windows: an empty list,
+	// never null.
+	for index := range usage {
+		if usage[index].Windows == nil {
+			usage[index].Windows = []workerhttp.UsageWindow{}
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"agents": usage}, "agent usage")

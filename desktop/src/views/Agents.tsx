@@ -202,7 +202,7 @@ export function Agents({
       .then((r) => setLimits(r.limits))
       .catch(() => undefined);
     getAgentUsage()
-      .then((r) => setUsage(r.agents))
+      .then((r) => setUsage(r.agents ?? []))
       .catch(() => undefined);
   }, []);
 
@@ -448,7 +448,7 @@ function ProfileRow({
           {limit.waiting} {limit.waiting === 1 ? "run waits" : "runs wait"} and continue by itself
         </p>
       )}
-      {usage && usage.windows.length > 0 && <UsageBars usage={usage} />}
+      {usage?.windows?.length ? <UsageBars usage={usage} /> : null}
       {error && <div className="banner banner--error">{error}</div>}
 
       {renaming !== null && (
