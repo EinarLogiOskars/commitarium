@@ -185,6 +185,7 @@ func (service *Service) refresh(ctx context.Context, stored record) (record, err
 	case attempt.State != workerhttp.AttemptStateTerminal:
 		return stored, service.write(stored)
 	case attempt.Result == nil || attempt.Result.Outcome != workerhttp.OutcomeCompleted:
+		logFailedTurn(stored.AttemptID, attempt.Result)
 		note(failureText(attempt.Result))
 		// The next turn starts a fresh provider session from the state.
 		stored.ProviderSessionID = ""
@@ -233,6 +234,19 @@ func (service *Service) refresh(ctx context.Context, stored record) (record, err
 		service.nudgeWatcher()
 	}
 	return stored, service.write(stored)
+}
+
+// logFailedTurn records why a turn ended without a reply; the conversation
+// only tells the user to try again.
+func logFailedTurn(attemptID string, result *workerhttp.TerminalResult) {
+	switch {
+	case result == nil:
+		log.Printf("assistant turn %q ended without a result", attemptID)
+	case result.Error != nil:
+		log.Printf("assistant turn %q ended %s: %s: %s", attemptID, result.Outcome, result.Error.Code, result.Error.Message)
+	default:
+		log.Printf("assistant turn %q ended %s: %s", attemptID, result.Outcome, result.Summary)
+	}
 }
 
 func failureText(result *workerhttp.TerminalResult) string {
