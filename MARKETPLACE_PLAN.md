@@ -46,7 +46,7 @@ as is or make it yours.
    source of truth, ADR-020). What to open is already in the compose file
    (`x-commitarium-preview`); name and description come from the
    marketplace repository. Release writes the folder; install and the
-   existing project import read it.
+   existing project import read it (ADR-026).
 8. **No conversations, work-order history, environment approvals, data
    volumes or secrets.** Release refuses if a secret scan of the tree finds
    one.
@@ -108,9 +108,9 @@ project with a broken submodule pointer.
    page in a Commitarium window), sign in (creates and stores a token),
    waiting for approval, signed in as, sign out. Release and install ask
    the user to sign in when there is no account.
-3. **Manifest.** Write `.commitarium/stack.json` and `vision.json` from the
-   project; read them back on import and install. Covered by tests both
-   ways.
+3. **Manifest.** Done (ADR-026): the formats and their reading on import;
+   Release (slice 4) writes them with `toolchain.PortableStack` and
+   `vision.PortablePlan`.
 4. **Release.** The button on an app: create the repository on first
    release, write and commit the manifest, tag, push `main` and the tag,
    secret scan first. Shows the released version on the app.

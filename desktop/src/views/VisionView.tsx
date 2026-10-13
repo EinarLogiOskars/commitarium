@@ -41,6 +41,11 @@ const STATE_LABEL: Record<FeatureState, string> = {
   completed: "Done",
   cancelled: "Cancelled",
 };
+const VISION_SOURCE_LABELS: Record<Vision["source"], string> = {
+  assistant: "Written by the assistant",
+  user: "Edited by you",
+  repository: "Came with the app",
+};
 
 // The Vision page (ADR-020): the project's vision statement on top and the
 // prioritized plan below. The assistant writes it from a description or after
@@ -237,7 +242,7 @@ export function VisionView({
             <section className="panel vision__statement">
               <Markdown text={plan.statement} />
               <p className="muted vision__source">
-                {vision.source === "assistant" ? "Written by the assistant" : "Edited by you"} ·{" "}
+                {VISION_SOURCE_LABELS[vision.source]} ·{" "}
                 {new Date(vision.updated_at).toLocaleString()}
               </p>
             </section>

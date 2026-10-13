@@ -343,3 +343,52 @@ func TestAVisionWaitsForANewRepositorysBranch(t *testing.T) {
 		t.Fatalf("a missing branch past the wait = %v, want unavailable", err)
 	}
 }
+
+type portableProjectsStub struct {
+	projectsStub
+	files map[string][]byte
+	reads int
+}
+
+func (stub *portableProjectsStub) ReadRepositoryFile(_ context.Context, _ string, filePath string, _ int64) ([]byte, error) {
+	stub.reads++
+	if contents, ok := stub.files[filePath]; ok {
+		return contents, nil
+	}
+	return nil, project.ErrRepositoryFileNotFound
+}
+
+func TestPortableVisionDropsWorkOrdersAndSeedsACopy(t *testing.T) {
+	plan := samplePlan()
+	plan.Priorities[0].Items[0].Items[0].FeatureID = "feat_delivered"
+	plan.Priorities[0].Items[0].Items[1].FeatureID = "feat_open"
+	encoded, err := PortablePlan(*plan, func(featureID string) bool { return featureID == "feat_delivered" })
+	if err != nil {
+		t.Fatalf("encode vision: %v", err)
+	}
+	if strings.Contains(string(encoded), "feat_") || plan.Priorities[0].Items[0].Items[0].FeatureID != "feat_delivered" {
+		t.Fatalf("work orders leaked or source plan changed:\n%s", encoded)
+	}
+
+	projects := &portableProjectsStub{files: map[string][]byte{PortableVisionPath: encoded}}
+	service, err := NewService(t.TempDir(), t.TempDir(), projects, func(string) (workerhttp.Service, error) {
+		return &workerStub{}, nil
+	})
+	if err != nil {
+		t.Fatalf("create service: %v", err)
+	}
+	seeded, err := service.Get(t.Context(), "prj_copy")
+	items := seeded.Plan.Priorities[0].Items[0].Items
+	if err != nil || seeded.Source != SourceRepository || seeded.Revision != 1 || !items[0].Done || items[1].Done {
+		t.Fatalf("seeded vision=%+v err=%v", seeded, err)
+	}
+
+	projects.files = nil
+	if _, err := service.Get(t.Context(), "prj_without"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("missing vision error=%v", err)
+	}
+	reads := projects.reads
+	if _, err := service.Get(t.Context(), "prj_without"); !errors.Is(err, ErrNotFound) || projects.reads != reads {
+		t.Fatalf("repository read again for a checked project: err=%v reads=%d", err, projects.reads)
+	}
+}

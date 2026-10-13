@@ -786,7 +786,7 @@ export interface VisionStack {
 export interface Vision {
   project_id: string;
   plan: VisionPlan;
-  source: "assistant" | "user";
+  source: "assistant" | "user" | "repository";
   revision: number;
   updated_at: string;
 }

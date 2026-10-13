@@ -62,7 +62,7 @@ func (api *API) projectToolchain(ctx context.Context, projectID string) (toolcha
 		return manifest, nil
 	}
 	configured, err := api.toolchains.Configure(ctx, projectID, toolchain.Manifest{
-		Source: toolchain.SourceDetected, Tools: suggestion.Tools, Services: suggestion.Services,
+		Source: toolchain.SourceDetected, Tools: suggestion.Tools, Services: suggestion.Services, Run: suggestion.Run,
 	})
 	if err != nil {
 		log.Printf("save detected stack for project %q: %v", projectID, err)
