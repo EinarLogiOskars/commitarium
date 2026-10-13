@@ -31,6 +31,10 @@ a new revision.
   of only the merge and the lead's readiness acknowledgement; independent
   acceptance tests reset for it; validation of it when configured; and the
   merge by policy or by the user.
+- The pull request stays a draft until it merges. A merge marks it ready
+  first, so when Forgejo then refuses the merge the draft title is put back;
+  verifying the update also returns the pull request to draft, in case that
+  failed.
 - The automatic merge, including the one after validation passes, brings
   main in at most three times per plan version, then blocks with a reason
   that says main moved. The user's Merge and Continue on that blocker start

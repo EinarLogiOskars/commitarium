@@ -106,6 +106,14 @@ type PullRequestManager interface {
 		repository string,
 		spec PullRequestMergeSpec,
 	) (PullRequest, error)
+	// ReturnPullRequestToDraft marks the managed pull request a draft again
+	// after a refused merge left it ready. An existing draft is unchanged.
+	ReturnPullRequestToDraft(
+		ctx context.Context,
+		owner string,
+		repository string,
+		spec PullRequestDraftSpec,
+	) (PullRequest, error)
 }
 
 type RepositoryAccessManager interface {
@@ -1235,6 +1243,9 @@ func (service *Service) VerifyImplementationBaseUpdate(
 		PullRequestNumber: pullRequestNumber, ExpectedAuthor: expectedAuthor,
 		PublicationKind:      ImplementationPublicationBaseUpdate,
 		CheckoutBaseCommitID: stored.ApprovedCommitID,
+		// The refused merge that started this update may have left the pull
+		// request marked ready; it is a draft again until the next merge.
+		ReturnToDraft: true,
 	})
 }
 
@@ -1249,6 +1260,7 @@ type implementationAuditVerification struct {
 	ExpectedAuthor       string
 	PublicationKind      ImplementationPublicationKind
 	CheckoutBaseCommitID string
+	ReturnToDraft        bool
 }
 
 func (service *Service) verifyImplementationAudit(
@@ -1293,12 +1305,24 @@ func (service *Service) verifyImplementationAudit(
 	}); err != nil {
 		return Workspace{}, fmt.Errorf("verify implementation audit checkout: %w", err)
 	}
+	featureMarker := "<!-- commitarium-feature: " + storedFeature.ID + " -->"
+	if verification.ReturnToDraft {
+		if _, err := service.pullRequests.ReturnPullRequestToDraft(
+			ctx, stored.RepositoryOwner, stored.RepositoryName,
+			PullRequestDraftSpec{
+				Number: stored.PullRequestNumber, FeatureMarker: featureMarker,
+				BaseBranch: stored.BaseBranch, HeadBranch: stored.Branch,
+			},
+		); err != nil {
+			return Workspace{}, fmt.Errorf("return pull request to draft: %w", err)
+		}
+	}
 	planDigest := sha256.Sum256([]byte(verification.PlanEventID))
 	pullRequest, err := service.pullRequests.VerifyPullRequestImplementation(
 		ctx, stored.RepositoryOwner, stored.RepositoryName,
 		ImplementationPublicationSpec{
 			Number:                stored.PullRequestNumber,
-			FeatureMarker:         "<!-- commitarium-feature: " + storedFeature.ID + " -->",
+			FeatureMarker:         featureMarker,
 			PlanPublicationMarker: "<!-- commitarium-plan: " + hex.EncodeToString(planDigest[:]) + " -->",
 			Plan:                  verification.Plan, PublicationKind: verification.PublicationKind,
 			AttemptID: verification.AttemptID, Summary: verification.Summary,
