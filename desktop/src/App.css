@@ -4352,3 +4352,22 @@ select:focus {
 .assistant__applied--failed {
   color: var(--bad);
 }
+
+/* Running from source: the coordinator was built before the code was pulled. */
+.coordinator-banner {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  flex: none;
+  margin: 0;
+  padding: 6px 8px 6px 18px;
+  border-radius: 0;
+  border-width: 0 0 1px;
+}
+.coordinator-banner button {
+  margin-left: auto;
+}
+.coordinator-banner__error {
+  color: var(--bad);
+}

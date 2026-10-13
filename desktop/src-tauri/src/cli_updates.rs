@@ -417,6 +417,16 @@ fn workers_idle(containers: &[String]) -> bool {
     })
 }
 
+/// Whether no agent's worker, of any provider, is launching or running a turn.
+pub(crate) fn all_workers_idle() -> Result<bool, String> {
+    for provider in PROVIDERS {
+        if !workers_idle(&running_workers(provider)?) {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
 /// Whether the worker binary has the `activity` subcommand. Workers built
 /// before it must never be asked: their binary ignores the argument and
 /// starts a second worker service, whose startup recovery runs against the

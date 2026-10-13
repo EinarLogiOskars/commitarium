@@ -2,6 +2,7 @@ mod agents;
 mod apps;
 mod bootstrap;
 mod cli_updates;
+mod coordinator_build;
 mod docker;
 mod git_providers;
 mod handoff;
@@ -30,6 +31,7 @@ pub fn run() {
         .manage(phase5::BackupCoordinator::default())
         .manage(updater::UpdateCoordinator::default())
         .manage(cli_updates::CliUpdater::default())
+        .manage(coordinator_build::CoordinatorBuild::default())
         .plugin(tauri_plugin_opener::init())
         // HTTP client for the frontend to reach the local coordinator. The
         // capability scope (see capabilities/default.json) restricts it to the
@@ -52,6 +54,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             apps::open_app_window,
             cli_updates::agent_cli_status,
+            coordinator_build::coordinator_freshness,
+            coordinator_build::rebuild_coordinator,
             preview::prune_session_previews,
             docker::docker_probe,
             docker::launch_docker_desktop,
