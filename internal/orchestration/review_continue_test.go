@@ -194,31 +194,35 @@ func TestContinueAloneChecksAReviewRefusedForAnotherReasonAgain(t *testing.T) {
 	}
 }
 
-func TestReviewRetriesKeepTheirRound(t *testing.T) {
+func TestRoundTurnRetriesKeepTheirRound(t *testing.T) {
 	sessionID := "run_retry:reviewer"
-	for _, version := range []int{1, 3} {
-		first := implementationReviewAttemptForVersion(sessionID, version, 2)
-		second, err := recoverySuccessorAttemptID(sessionID, first)
-		if err != nil || second != reviewRetryAttemptID(sessionID, version, 2, 2) {
-			t.Fatalf("v%d review successor=%q err=%v", version, second, err)
+	for _, kind := range roundKinds {
+		for _, version := range []int{1, 3} {
+			first := workflowAttemptForVersion(sessionID, kind, version, 2)
+			second, err := recoverySuccessorAttemptID(sessionID, first)
+			if err != nil || second != roundRetryAttemptID(sessionID, kind, version, 2, 2) {
+				t.Fatalf("v%d %s successor=%q err=%v", version, kind, second, err)
+			}
+			third, err := recoverySuccessorAttemptID(sessionID, second)
+			if err != nil || third != roundRetryAttemptID(sessionID, kind, version, 2, 3) {
+				t.Fatalf("v%d second %s successor=%q err=%v", version, kind, third, err)
+			}
+			gotVersion, round, try, ok := workflowAttemptCoordinates(sessionID, kind, third)
+			if !ok || gotVersion != version || round != 2 || try != 3 {
+				t.Fatalf("v%d %s retry coordinates=%d,%d,%d,%t", version, kind, gotVersion, round, try, ok)
+			}
 		}
-		third, err := recoverySuccessorAttemptID(sessionID, second)
-		if err != nil || third != reviewRetryAttemptID(sessionID, version, 2, 3) {
-			t.Fatalf("v%d second review successor=%q err=%v", version, third, err)
-		}
-		gotVersion, round, try, ok := workflowAttemptCoordinates(sessionID, "review", third)
-		if !ok || gotVersion != version || round != 2 || try != 3 {
-			t.Fatalf("v%d retry coordinates=%d,%d,%d,%t", version, gotVersion, round, try, ok)
-		}
+	}
+	// Other turns still take the next turn number.
+	if next, err := recoverySuccessorAttemptID(sessionID, sessionID+":implementation:1"); err != nil ||
+		next != sessionID+":implementation:2" {
+		t.Fatalf("implementation successor=%q err=%v", next, err)
 	}
 	for _, invalid := range []string{
 		sessionID + ":review:2:1", sessionID + ":review:2:x", sessionID + ":review:v1:2",
-		sessionID + ":review:2:2:2", sessionID + ":correction:2:2",
+		sessionID + ":review:2:2:2", sessionID + ":correction:2:1", sessionID + ":implementation:2:2",
 	} {
-		kind := "review"
-		if strings.Contains(invalid, ":correction:") {
-			kind = "correction"
-		}
+		kind, _, _ := strings.Cut(strings.TrimPrefix(invalid, sessionID+":"), ":")
 		if _, _, ok := workflowAttemptVersionAndTurn(sessionID, kind, invalid); ok {
 			t.Fatalf("%q parsed as a %s attempt", invalid, kind)
 		}

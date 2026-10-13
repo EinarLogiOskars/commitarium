@@ -58,3 +58,43 @@ func IsUsageLimit(text string) bool {
 	}
 	return false
 }
+
+// transientFailureMarkers are phrases provider CLIs use when a turn failed
+// for the provider's or the network's sake, not the work's: an overloaded or
+// erroring API, or a dropped connection.
+var transientFailureMarkers = []string{
+	"overloaded",
+	"api error: 5",
+	"internal server error",
+	"bad gateway",
+	"service unavailable",
+	"gateway timeout",
+	"connection error",
+	"connection reset",
+	"connection refused",
+	"econnreset",
+	"econnrefused",
+	"etimedout",
+	"socket hang up",
+	"network error",
+	"fetch failed",
+	"stream disconnected",
+	"error sending request",
+}
+
+// IsTransientFailure reports whether a provider's failure text says the turn
+// was cut off by the provider or the network, so trying it again later can
+// succeed. A login or usage-limit failure is not transient: it waits for the
+// user or the reset instead.
+func IsTransientFailure(text string) bool {
+	if IsLoginFailure(text) || IsUsageLimit(text) {
+		return false
+	}
+	text = strings.ToLower(text)
+	for _, marker := range transientFailureMarkers {
+		if strings.Contains(text, marker) {
+			return true
+		}
+	}
+	return false
+}

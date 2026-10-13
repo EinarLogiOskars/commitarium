@@ -390,6 +390,9 @@ export interface Run {
   // Set while the run waits for an agent's usage limit to reset; it continues
   // by itself at resets_at (or every 15 minutes when unknown).
   usage_limit?: { agent: string; role: "lead" | "reviewer"; resets_at?: string };
+  // Set while an interrupted turn (a worker restart, a lost connection) waits
+  // for its automatic retry, retry of `of`, due at due_at.
+  retrying?: { cause: string; retry: number; of: number; due_at: string };
   intervention?: Intervention;
   // Present on the immediate response to an explicit recovery action. Normal
   // run reads remain unchanged.
@@ -704,6 +707,9 @@ export type AttentionKind =
   | "auto_merge_completed"
   // An agent reached its usage limit; the run continues by itself at the reset.
   | "usage_limit"
+  // An interrupted turn retries by itself; it becomes a `blocker` if the
+  // retries run out.
+  | "retrying"
   // A blocked or failed run autopilot is still continuing; it becomes a
   // `blocker` / `run_failed` item (a new ID) if autopilot gives up.
   | "autopilot_handling"

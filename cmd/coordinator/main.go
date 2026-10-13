@@ -382,7 +382,7 @@ func run(ctx context.Context, coordinatorConfig config) error {
 		// autopilot runs its actions; it starts once the API exists.
 		assistantWatcher = &conversations.Watcher{
 			Service: projectAssistant, Features: featureService, Runs: executionService, LimitWaits: executionService,
-			Visions: visions,
+			RetryWaits: executionService, Visions: visions,
 		}
 		assistant, err := toolchain.NewAssistant(
 			coordinatorConfig.toolchainRoot, coordinatorConfig.workspaceRoot, projectService, toolchainService,
@@ -470,6 +470,10 @@ func run(ctx context.Context, coordinatorConfig config) error {
 	// Runs paused on an agent's usage limit continue when it resets.
 	if resumer, ok := realWorkflowStarter.(interface{ RunLimitResumer(context.Context) }); ok {
 		go resumer.RunLimitResumer(ctx)
+	}
+	// Turns that infrastructure cut off retry by themselves, on schedule.
+	if resumer, ok := realWorkflowStarter.(interface{ RunRetryResumer(context.Context) }); ok {
+		go resumer.RunRetryResumer(ctx)
 	}
 	runStopper := projectdeletion.NewRunStopper(
 		executionService, deletionWorker, sessionController, deletionLiveSessions,

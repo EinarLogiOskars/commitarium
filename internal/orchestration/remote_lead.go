@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -98,12 +99,17 @@ type RecoveryDirective struct {
 	FromAssistant bool
 	// blockedReason is the reason of the blocker the user is answering.
 	blockedReason string
+	// interruption says what cut off the turn an automatic retry continues
+	// (interrupted_turn.go).
+	interruption string
 }
 
 // answersBlocker reports whether the user chose to move the work on, which
-// also answers an agent that stopped to ask for help.
+// also answers an agent that stopped to ask for help. An automatic retry
+// does not: only the user can answer a blocker.
 func (directive RecoveryDirective) answersBlocker() bool {
-	return directive.Action == RecoveryActionContinue || directive.Action == RecoveryActionReplace
+	return directive.interruption == "" &&
+		(directive.Action == RecoveryActionContinue || directive.Action == RecoveryActionReplace)
 }
 
 // RemoteLeadExecution is the durable coordinator state used by the first real
@@ -730,7 +736,7 @@ func (starter *RemoteLeadStarter) recoverWithDirective(
 				starter.release(run.ID)
 				return checkpointErr
 			}
-			request := remoteLeadRequest{runID: run.ID, allowRecoveryContinuation: recoveryPolicy == project.RecoveryPolicyAutomatic, forceFreshRecovery: directive.Action == RecoveryActionReplace, recoveryMessage: directive.Message, guidanceFromAssistant: directive.FromAssistant, answerBlocker: directive.answersBlocker(), identity: workerhttp.MutationIdentity{AttemptReference: workerhttp.AttemptReference{SessionID: active.ID, AttemptID: checkpoint.AttemptID}}}
+			request := remoteLeadRequest{runID: run.ID, allowRecoveryContinuation: recoveryPolicy == project.RecoveryPolicyAutomatic, forceFreshRecovery: directive.Action == RecoveryActionReplace, recoveryMessage: directive.Message, guidanceFromAssistant: directive.FromAssistant, answerBlocker: directive.answersBlocker(), interruption: directive.interruption, identity: workerhttp.MutationIdentity{AttemptReference: workerhttp.AttemptReference{SessionID: active.ID, AttemptID: checkpoint.AttemptID}}}
 			switch {
 			case active.Role == worker.RoleLead:
 				version, _, ok := workflowAttemptVersionAndTurn(active.ID, "implementation", checkpoint.AttemptID)
@@ -851,6 +857,7 @@ func (starter *RemoteLeadStarter) recoverWithDirective(
 		recoveryMessage:           directive.Message,
 		guidanceFromAssistant:     directive.FromAssistant,
 		answerBlocker:             directive.answersBlocker(),
+		interruption:              directive.interruption,
 		agentName:                 "lead agent",
 		waitingReason:             waitingReasonForAttempt(session, checkpoint.AttemptID),
 		waitKind:                  waitKindForAttempt(session, checkpoint.AttemptID),
@@ -1009,6 +1016,10 @@ func (starter *RemoteLeadStarter) RecoverBlockerWithDirective(
 				starter.reportError(err)
 			}
 		}
+	}
+	if directive.interruption == "" {
+		// The user's own continue starts automatic retries afresh.
+		starter.clearRetryWait(ctx, run.ID)
 	}
 	directive.blockedReason = run.Reason
 	err = starter.recoverWithDirective(
@@ -2429,6 +2440,8 @@ type remoteLeadRequest struct {
 	// refusal says why the coordinator could not accept a guided agent's
 	// finished turn, so its next turn knows what to fix.
 	refusal string
+	// interruption says what cut off the turn an automatic retry continues.
+	interruption string
 }
 
 func interventionAttemptID(sessionID, interventionID string) string {
@@ -2550,8 +2563,8 @@ func workflowAttemptVersionAndTurn(sessionID string, kind string, attemptID stri
 }
 
 // workflowAttemptCoordinates also reports which try of its turn an attempt
-// is. Only a review is tried again within its round (see
-// reviewRetryAttemptID); every other attempt is its turn's first try.
+// is. Only the round kinds are tried again within their round (see
+// roundRetryAttemptID); every other attempt is its turn's first try.
 func workflowAttemptCoordinates(sessionID string, kind string, attemptID string) (int, int, int, bool) {
 	value, found := strings.CutPrefix(attemptID, sessionID+":"+kind+":")
 	if !found {
@@ -2567,7 +2580,7 @@ func workflowAttemptCoordinates(sessionID string, kind string, attemptID string)
 		version, parts = parsed, parts[1:]
 	}
 	try := 1
-	if kind == "review" && len(parts) == 2 {
+	if slices.Contains(roundKinds, kind) && len(parts) == 2 {
 		parsed, err := strconv.Atoi(parts[1])
 		if err != nil || parsed < 2 {
 			return 0, 0, 0, false
@@ -2584,11 +2597,18 @@ func workflowAttemptCoordinates(sessionID string, kind string, attemptID string)
 	return version, turn, try, true
 }
 
-// reviewRetryAttemptID names another try at the same review round. Review N
-// answers lead response N-1 and is answered by correction or readiness N, so
-// a review that is tried again keeps its round rather than taking the next.
+// roundKinds are the turns numbered by review round. Review N answers lead
+// response N-1 and is answered by correction or readiness N.
+var roundKinds = []string{"review", "correction", "readiness"}
+
+// roundRetryAttemptID names another try at the same round, so a turn that is
+// tried again keeps its round rather than taking the next.
+func roundRetryAttemptID(sessionID, kind string, version, round, try int) string {
+	return workflowAttemptForVersion(sessionID, kind, version, round) + ":" + strconv.Itoa(try)
+}
+
 func reviewRetryAttemptID(sessionID string, version, round, try int) string {
-	return workflowAttemptForVersion(sessionID, "review", version, round) + ":" + strconv.Itoa(try)
+	return roundRetryAttemptID(sessionID, "review", version, round, try)
 }
 
 func planningTurnNumber(sessionID, attemptID string) (int, bool) {
@@ -4066,6 +4086,10 @@ func (starter *RemoteLeadStarter) reattach(request remoteLeadRequest) {
 			starter.launchAdmitted(rebuilt)
 			return
 		}
+		if resent, ok := starter.interruptedTurn(ctx, request, err); ok {
+			starter.launchAdmitted(resent)
+			return
+		}
 		starter.requireReview(ctx, request, fmt.Errorf("inspect interrupted worker attempt: %w", err))
 		return
 	}
@@ -4082,7 +4106,7 @@ func (starter *RemoteLeadStarter) reattach(request remoteLeadRequest) {
 		return
 	}
 	if attempt.State == workerhttp.AttemptStateIndeterminate {
-		starter.requireReview(ctx, request, errors.New("worker reports an indeterminate provider attempt"))
+		starter.requireReview(ctx, request, errInterruptedAttempt)
 		return
 	}
 	if err := starter.applyReply(ctx, request); err != nil {
@@ -4135,7 +4159,7 @@ func (starter *RemoteLeadStarter) reattachAdmitted(request remoteLeadRequest) {
 		return
 	}
 	if attempt.State == workerhttp.AttemptStateIndeterminate {
-		starter.requireReview(ctx, request, errors.New("worker reports an indeterminate provider attempt"))
+		starter.requireReview(ctx, request, errInterruptedAttempt)
 		return
 	}
 	if err := starter.captureProviderSession(ctx, request.identity.SessionID, attempt); err != nil {
@@ -4301,6 +4325,12 @@ func (starter *RemoteLeadStarter) continueFailedAttempt(
 	if err != nil {
 		return false, err
 	}
+	if request.interruption != "" {
+		briefing += interruptionBriefing(request.interruption)
+		if len(briefing) > workerhttp.MaxInstructionsBytes {
+			return false, errors.New("recovery briefing exceeds the worker instruction limit")
+		}
+	}
 	admit := starter.executions.BeginChainedTurnInState
 	// During implementation the reviewer authors private acceptance tests in
 	// parallel, so the successor is admitted alongside it.
@@ -4390,10 +4420,14 @@ func recoverySuccessorAttemptID(sessionID, attemptID string) (string, error) {
 	if version, turn, ok := planningAttemptVersionAndTurn(sessionID, attemptID); ok {
 		return planningRecoveryAttemptID(sessionID, version, turn, 1), nil
 	}
-	if version, round, try, ok := workflowAttemptCoordinates(sessionID, "review", attemptID); ok {
-		return reviewRetryAttemptID(sessionID, version, round, try+1), nil
+	// A review, and the lead's correction or readiness answering it, keep
+	// their round, so the rounds still pair up after a retry.
+	for _, kind := range roundKinds {
+		if version, round, try, ok := workflowAttemptCoordinates(sessionID, kind, attemptID); ok {
+			return roundRetryAttemptID(sessionID, kind, version, round, try+1), nil
+		}
 	}
-	for _, kind := range []string{"implementation", "acceptance", "correction", "readiness", "update", "approval", "session"} {
+	for _, kind := range []string{"implementation", "acceptance", "update", "approval", "session"} {
 		if version, turn, ok := workflowAttemptVersionAndTurn(sessionID, kind, attemptID); ok {
 			return workflowAttemptForVersion(sessionID, kind, version, turn+1), nil
 		}
@@ -4637,13 +4671,17 @@ func (starter *RemoteLeadStarter) observe(
 		return
 	}
 	if attempt.State == workerhttp.AttemptStateIndeterminate {
-		starter.requireReview(ctx, request, errors.New("worker reports an indeterminate provider attempt"))
+		starter.requireReview(ctx, request, errInterruptedAttempt)
 		return
 	}
 
 	result, err := starter.pump.Run(ctx, request.identity.SessionID)
 	if err != nil {
 		starter.requireReview(ctx, request, err)
+		return
+	}
+	if result.AttemptInspected && result.Attempt.State == workerhttp.AttemptStateIndeterminate {
+		starter.requireReview(ctx, request, errInterruptedAttempt)
 		return
 	}
 	if !result.AttemptInspected || result.Attempt.State != workerhttp.AttemptStateTerminal {
@@ -4708,6 +4746,9 @@ func (starter *RemoteLeadStarter) finish(
 		return
 	}
 	starter.recordUsage(ctx, request.identity.AttemptReference, attempt.Assignment.Model, attempt.Result.Usage)
+	if attempt.Result.Outcome != workerhttp.OutcomeFailed {
+		starter.turnEnded(ctx, request.runID, request.identity.SessionID)
+	}
 	if err := starter.captureProviderSession(ctx, request.identity.SessionID, attempt); err != nil {
 		starter.requireReview(ctx, request, err)
 		return
@@ -6538,6 +6579,16 @@ func (starter *RemoteLeadStarter) pauseFailedTurn(
 	}
 	reason := "The " + request.agentName + "'s turn failed: " + cause +
 		". The work order is paused; continue to retry the turn in the same conversation."
+	retrying := false
+	if interrupted := providerInterruption(attempt.Result); interrupted != "" {
+		if scheduled, spent, ok := starter.scheduleRetry(ctx, request, interrupted); ok {
+			reason, retrying = scheduled, true
+		} else {
+			reason += spentRetries(spent)
+		}
+	} else {
+		starter.turnEnded(ctx, request.runID, request.identity.SessionID)
+	}
 	if attempt.Result.Error != nil && attempt.Result.Error.Code == workerhttp.ErrorProviderLoginRequired {
 		run, err := starter.executions.GetRun(ctx, request.runID)
 		if err != nil {
@@ -6569,7 +6620,7 @@ func (starter *RemoteLeadStarter) pauseFailedTurn(
 		ctx, session.ID+":"+attempt.AttemptID+":turn-failed", session.ID,
 		worker.Event{
 			Type: worker.EventRecoveryAssessment, Text: reason,
-			RecoveryAssessment: &worker.RecoveryAssessment{Consistent: true, RequiresUserReview: true},
+			RecoveryAssessment: &worker.RecoveryAssessment{Consistent: true, RequiresUserReview: !retrying},
 		},
 	); err != nil {
 		return err
@@ -6599,8 +6650,20 @@ func (starter *RemoteLeadStarter) requireReview(
 	cause error,
 ) {
 	starter.reportError(fmt.Errorf("observe agent run %q: %w", request.runID, cause))
+	retries := 0
+	if interrupted := interruption(cause); interrupted != "" {
+		reason, spent, scheduled := starter.scheduleRetry(ctx, request, interrupted)
+		if scheduled {
+			starter.awaitRetry(ctx, request, reason, spent+1)
+			return
+		}
+		retries = spent
+	} else {
+		starter.turnEnded(ctx, request.runID, request.identity.SessionID)
+	}
 	text := "The coordinator could not complete the " + request.agentName + " turn. " +
-		"The work order is paused so its durable work can be checked and continued safely."
+		"The work order is paused so its durable work can be checked and continued safely." +
+		spentRetries(retries)
 	// What failed, so the user (and the assistant) can tell the agent what to fix.
 	if detail := strings.TrimSpace(cause.Error()); detail != "" {
 		if len(detail) > 400 {

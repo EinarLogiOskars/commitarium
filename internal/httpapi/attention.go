@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -209,6 +210,18 @@ func (api *API) attentionForFeature(
 				currentRun.MergePolicy == project.MergePolicyAutoAfterGates
 			return []attentionItem{item}, nil, nil
 		}
+	}
+	// An interrupted turn retries on its own: worth knowing, nothing to decide.
+	if retrying, err := retryingFor(ctx, api.execution, currentRun); err != nil {
+		return nil, nil, err
+	} else if retrying != nil {
+		base.ID = "retrying:" + currentRun.ID + ":" + strconv.Itoa(retrying.Retry)
+		base.Kind = "retrying"
+		base.Severity = "info"
+		base.Actionable = false
+		base.Title = "Interrupted, retrying automatically"
+		base.Detail = detailOr(currentRun.Reason, "The interrupted turn is retried automatically.")
+		return []attentionItem{base}, nil, nil
 	}
 	// A usage limit resumes on its own: worth knowing, nothing to decide.
 	if waits, ok := api.execution.(runLimitWaits); ok && currentRun.WaitKind == execution.RunWaitKindBlocker {

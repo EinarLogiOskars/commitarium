@@ -17,6 +17,8 @@ func TestChangesWakeTheAssistantOnlyForWhatMatters(t *testing.T) {
 	}
 	limited := waiting(execution.RunWaitKindBlocker)
 	limited.LimitAgent = "codex"
+	retrying := waiting(execution.RunWaitKindBlocker)
+	retrying.Retrying = true
 	autoMerge := waiting(execution.RunWaitKindMergeGate)
 	autoMerge.AutoMerge = true
 	session := waiting(execution.RunWaitKindClarification)
@@ -30,6 +32,7 @@ func TestChangesWakeTheAssistantOnlyForWhatMatters(t *testing.T) {
 		"blocked":          {waiting(execution.RunWaitKindBlocker), `"Log" is blocked: Needs a decision.`, true},
 		"merge approval":   {waiting(execution.RunWaitKindMergeGate), `"Log" is ready to merge and waits for the user's approval.`, true},
 		"usage limit":      {limited, `"Log" is waiting for codex's usage limit to reset.`, false},
+		"retrying":         {retrying, `"Log" was interrupted and is retrying automatically.`, false},
 		"auto merge gate":  {autoMerge, "", false},
 		"session waiting":  {session, "", false},
 		"paused by a user": {waiting(execution.RunWaitKindPaused), "", false},

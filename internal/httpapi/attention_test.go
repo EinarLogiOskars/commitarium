@@ -410,3 +410,41 @@ func TestAttentionSurfacesAutopilotThatHasNotFinished(t *testing.T) {
 		})
 	}
 }
+
+type retryingExecutionService struct {
+	*recordingExecutionService
+	wait execution.RetryWait
+}
+
+func (service retryingExecutionService) RetryWaitForRun(context.Context, string) (execution.RetryWait, error) {
+	return service.wait, nil
+}
+
+func TestAttentionQuietsAnInterruptedTurnThatRetries(t *testing.T) {
+	now := time.Date(2026, time.September, 23, 12, 0, 0, 0, time.UTC)
+	dueAt := now.Add(2 * time.Minute)
+	handler := New(
+		&recordingProjectService{listResult: []project.Project{{ID: "prj_one", Name: "One"}}},
+		&recordingFeatureService{listResult: []feature.Feature{{
+			ID: "fea_one", ProjectID: "prj_one", Title: "Ship it", State: feature.StateImplementing,
+		}}}, nil,
+		retryingExecutionService{
+			recordingExecutionService: &recordingExecutionService{runs: []execution.Run{{
+				ID: "run_one", FeatureID: "fea_one", Status: execution.RunStatusWaitingForUser,
+				WaitKind: execution.RunWaitKindBlocker, StartedAt: now, UpdatedAt: now,
+				Reason: "The lead agent's turn was interrupted (the worker restarted). Retrying automatically in 2 minutes (2 of 3).",
+			}}},
+			wait: execution.RetryWait{RunID: "run_one", Retries: 1, Cause: "the worker restarted", DueAt: &dueAt},
+		}, nil, nil,
+	)
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/v1/attention", nil))
+	var response attentionResponse
+	if err := json.NewDecoder(recorder.Body).Decode(&response); err != nil {
+		t.Fatalf("decode attention response: %v", err)
+	}
+	if len(response.Items) != 1 || response.Items[0].Kind != "retrying" || response.Items[0].Actionable ||
+		response.Items[0].ID != "retrying:run_one:2" {
+		t.Fatalf("an interrupted turn that retries asked for the user: %+v", response.Items)
+	}
+}

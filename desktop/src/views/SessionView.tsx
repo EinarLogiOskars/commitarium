@@ -11,6 +11,7 @@ import { markSessionSeen } from "./sessionSeen";
 import { useModelName } from "./useModelName";
 import { ChangeModel } from "./ChangeModel";
 import { UsageLimitBanner } from "./UsageLimitBanner";
+import { RetryingBanner } from "./RetryingBanner";
 import { agentName, useAgents } from "./useAgents";
 import type { Feature, Run } from "../api/types";
 
@@ -272,7 +273,10 @@ export function SessionView({
             onChanged={onChanged}
           />
         )}
-        {blocked && run && !run.usage_limit && (
+        {blocked && run && !run.usage_limit && run.retrying && (
+          <RetryingBanner run={run} onChanged={onChanged} />
+        )}
+        {blocked && run && !run.usage_limit && !run.retrying && (
           <div className="banner banner--warn session__blocked">
             <span>{run.reason || "The session stopped."}</span>
             <button

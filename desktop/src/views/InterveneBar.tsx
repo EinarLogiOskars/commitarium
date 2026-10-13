@@ -4,6 +4,7 @@ import { ApiError } from "../api/client";
 import { RecoveryPanel } from "./RecoveryPanel";
 import { AgentLogin } from "./AgentLogin";
 import { UsageLimitBanner } from "./UsageLimitBanner";
+import { RetryingBanner } from "./RetryingBanner";
 import { agentName, useAgents } from "./useAgents";
 import { useModelName } from "./useModelName";
 import type { Intervention, InterventionTargetRole, Run } from "../api/types";
@@ -59,6 +60,8 @@ export function InterveneBar({
   const loginWait = blocked && run.login_required != null;
   // Waiting on an agent's usage limit: it continues by itself at the reset.
   const limitWait = blocked && !loginWait && run.usage_limit != null;
+  // An interrupted turn waiting for its automatic retry.
+  const retryWait = blocked && !loginWait && !limitWait && run.retrying != null;
 
   // Prefer the backend's authoritative target list; fall back to the sessions.
   const targets = run.intervention_targets;
@@ -235,7 +238,11 @@ export function InterveneBar({
         />
       )}
 
-      {blocked && !loginWait && !limitWait && <RecoveryPanel run={run} onChanged={onChanged} />}
+      {retryWait && <RetryingBanner run={run} onChanged={onChanged} />}
+
+      {blocked && !loginWait && !limitWait && !retryWait && (
+        <RecoveryPanel run={run} onChanged={onChanged} />
+      )}
 
       {iv && !iv.resolved_at && (
         <div className={`intervene__queued ${answered ? "intervene__queued--done" : ""}`}>

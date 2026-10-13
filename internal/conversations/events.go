@@ -29,6 +29,10 @@ type LimitWaitReader interface {
 	LimitWaitForRun(ctx context.Context, runID string) (execution.LimitWait, error)
 }
 
+type RetryWaitReader interface {
+	RetryWaitForRun(ctx context.Context, runID string) (execution.RetryWait, error)
+}
+
 // Event is something that happened in a project. Wake asks for the
 // assistant's turn; otherwise it is only noted in the conversation.
 type Event struct {
@@ -51,6 +55,10 @@ type Watcher struct {
 	// LimitWaits, when set, tells a usage-limit wait from a blocker: it
 	// resumes on its own, so it does not wake the assistant.
 	LimitWaits LimitWaitReader
+	// RetryWaits, when set, tells an interrupted turn that retries on its own
+	// from a blocker, so it neither wakes the assistant nor spends
+	// autopilot's continues.
+	RetryWaits RetryWaitReader
 }
 
 // watchEvery is how often the watcher looks at the projects' work.
@@ -107,6 +115,7 @@ type work struct {
 	Title, Reason, LimitAgent string
 	Session                   bool
 	AutoMerge                 bool
+	Retrying                  bool
 	State                     feature.State
 	RunID                     string
 	RunStatus                 execution.RunStatus
@@ -117,9 +126,14 @@ func (item work) signature() string {
 	if item.State.IsTerminal() || item.RunID == "" {
 		return string(item.State)
 	}
-	return strings.Join([]string{
+	signature := strings.Join([]string{
 		string(item.State), item.RunID, string(item.RunStatus), string(item.WaitKind), item.LimitAgent,
 	}, "|")
+	// Only when retrying, so the signatures already stored stay the same.
+	if item.Retrying {
+		signature += "|retrying"
+	}
+	return signature
 }
 
 // view is a project as the watcher sees it: its work by work order, and
@@ -158,6 +172,12 @@ func (watcher Watcher) snapshot(ctx context.Context, projectID string) (view, er
 					run.WaitKind == execution.RunWaitKindBlocker {
 					if wait, err := watcher.LimitWaits.LimitWaitForRun(ctx, run.ID); err == nil {
 						current.LimitAgent = wait.AgentID
+					}
+				}
+				if watcher.RetryWaits != nil && run.Status == execution.RunStatusWaitingForUser &&
+					run.WaitKind == execution.RunWaitKindBlocker && !run.Paused {
+					if wait, err := watcher.RetryWaits.RetryWaitForRun(ctx, run.ID); err == nil {
+						current.Retrying = wait.DueAt != nil
 					}
 				}
 			}
@@ -231,6 +251,8 @@ func (item work) event() (Event, bool) {
 		return Event{}, false
 	case item.LimitAgent != "":
 		return Event{Text: name + " is waiting for " + item.LimitAgent + "'s usage limit to reset."}, true
+	case item.Retrying:
+		return Event{Text: name + " was interrupted and is retrying automatically."}, true
 	}
 	switch item.WaitKind {
 	case execution.RunWaitKindPaused:

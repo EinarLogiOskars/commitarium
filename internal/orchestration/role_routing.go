@@ -119,6 +119,26 @@ func (router *AgentRoutedWorker) Supersede(
 	return client.Supersede(ctx, identity, request)
 }
 
+// Reachable reports whether the worker for a session's agent answers, so an
+// automatic retry waits for a worker that is down instead of failing again.
+// A worker that cannot say counts as reachable.
+func (router *AgentRoutedWorker) Reachable(ctx context.Context, sessionID string) error {
+	run, role, err := router.runAndRole(ctx, sessionID)
+	if err != nil {
+		return err
+	}
+	client, err := router.forAssignment(run.AgentProviders, role)
+	if err != nil {
+		return err
+	}
+	if health, ok := client.(interface {
+		Health(context.Context) (workerhttp.HealthResponse, error)
+	}); ok {
+		_, err = health.Health(ctx)
+	}
+	return err
+}
+
 func (router *AgentRoutedWorker) runAndRole(
 	ctx context.Context,
 	sessionID string,
