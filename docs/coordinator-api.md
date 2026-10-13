@@ -356,8 +356,9 @@ no provider turn. Codex workers use authenticated App Server `model/list`.
 Claude Code has no supported headless list command, so each Claude worker
 exposes its explicit comma-separated
 `COMMITARIUM_CLAUDE_AVAILABLE_MODELS` configuration. The bundled exact catalog
-is `claude-fable-5-1`, `claude-opus-5`, `claude-opus-4-8`, `claude-sonnet-5`,
-and `claude-haiku-4-5-20251001`. Its entries include UI-friendly display names
+is `claude-opus-5-5`, `claude-sonnet-5-5`, `claude-haiku-5-5`,
+`claude-fable-5-1`, `claude-opus-5`, `claude-opus-4-8`, `claude-sonnet-5`, and
+`claude-haiku-4-5-20251001`. Its entries include UI-friendly display names
 such as `Claude Opus 4.8`; custom configured IDs use the ID as their display
 name. No alias scraping, provider turn, or secret exposure is involved.
 
