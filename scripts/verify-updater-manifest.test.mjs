@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { verifyUpdaterManifest } from "./verify-updater-manifest.mjs";
+import { rewriteUpdaterUrls, verifyUpdaterManifest } from "./verify-updater-manifest.mjs";
 
 function validManifest() {
   const platforms = {};
@@ -46,4 +46,27 @@ test("rejects unsigned or insecure platform entries", () => {
     "linux-x86_64 has no update signature",
     "windows-x86_64 has no secure download URL",
   ]);
+});
+
+test("requires plain release downloads when the repository is given", () => {
+  assert.deepEqual(verifyUpdaterManifest(validManifest(), "v0.5.0", "example/project"), [
+    "darwin-aarch64 does not download from the v0.5.0 release",
+    "darwin-x86_64 does not download from the v0.5.0 release",
+    "linux-x86_64 does not download from the v0.5.0 release",
+    "windows-x86_64 does not download from the v0.5.0 release",
+  ]);
+});
+
+test("rewrites API asset URLs to release downloads", () => {
+  const manifest = validManifest();
+  const assets = Object.keys(manifest.platforms).map((platform) => ({
+    name: `Project_0.5.0_${platform}.tar.gz`,
+    apiUrl: `https://api.github.com/repos/example/project/releases/assets/${platform}`,
+  }));
+  rewriteUpdaterUrls(manifest, assets, "example/project", "v0.5.0");
+  assert.equal(
+    manifest.platforms["darwin-aarch64"].url,
+    "https://github.com/example/project/releases/download/v0.5.0/Project_0.5.0_darwin-aarch64.tar.gz",
+  );
+  assert.deepEqual(verifyUpdaterManifest(manifest, "v0.5.0", "example/project"), []);
 });
