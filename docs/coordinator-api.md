@@ -2964,3 +2964,36 @@ assessment mirroring to Forgejo is not implemented yet.
 
 Run `./scripts/test-compose-recovery.sh` for the repeatable isolated
 container-level interruption test.
+
+## Marketplace
+
+Present when `COMMITARIUM_MARKETPLACE_URL` is set (MARKETPLACE_PLAN.md).
+
+- `GET /api/v1/marketplace` answers `{"url", "account": null | {"username", "admin"}}`.
+- `POST /api/v1/marketplace/sign-up` with `{"username", "email", "password"}`
+  requests an account; `202` means it waits for the admin's approval. A taken
+  name or address answers `409 marketplace_username_taken` /
+  `marketplace_email_taken`.
+- `POST /api/v1/marketplace/sign-in` with `{"username", "password"}` creates
+  and stores an access token; the password is not kept. `401
+  marketplace_invalid_credentials`, `403 marketplace_pending_approval`.
+- `POST /api/v1/marketplace/sign-out` forgets the token (`204`).
+- Admin only (`403 marketplace_not_admin` otherwise):
+  `GET /api/v1/marketplace/pending-users` answers `{"users": [{"username",
+  "email", "requested_at"}]}`; `POST
+  /api/v1/marketplace/pending-users/{username}/approve` and `/decline`.
+
+### Releasing an app
+
+- `GET /api/v1/projects/{id}/release` answers `{"latest": null | {"version",
+  "commit", "source_commit", "released_at", "released_by", "repository_url"},
+  "unreleased"}`; `unreleased` is true when the default branch moved since the
+  latest release, or it was never released.
+- `POST /api/v1/projects/{id}/release` releases the default branch as the next
+  `vN` and answers `201` with the version. The release commit carries the
+  `.commitarium` folder (ADR-026) and is pushed as the marketplace `main`; the
+  local branch is untouched. Errors: `409 release_not_an_app`,
+  `release_stack_required`, `release_nothing_new`, `release_diverged` (the
+  marketplace repository holds unrelated work), `release_secret_found` (a
+  likely secret anywhere in the history; nothing is pushed),
+  `401 marketplace_not_signed_in`.

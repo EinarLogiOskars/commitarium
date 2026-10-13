@@ -25,11 +25,16 @@ as is or make it yours.
 
 ### Releasing
 
-3. **Only a release leaves the machine.** A Release button on an app writes
-   the manifest, commits it, tags `main` (`v1`, `v2`, …), and pushes `main`
-   and the tag to the marketplace. No push mirror: agent branches and
-   unfinished work stay local, and a failed push shows at once in
-   Commitarium.
+3. **Only a release leaves the machine.** A Release button on an app makes
+   a release commit beside the default branch: the branch's tree plus the
+   `.commitarium` folder, with the marketplace's previous `main` and the
+   branch as parents. It is tagged (`v1`, `v2`, … past every version on
+   either side) and pushed as the marketplace's `main`, always a
+   fast-forward and never forced. The local branch is untouched (it is
+   protected; work arrives only through work orders), agent branches stay
+   local, and a failed push shows at once in Commitarium. A marketplace
+   `main` that is neither in the app's history nor an earlier release of it
+   is never overwritten.
 4. **The first release creates the repository** on the marketplace under
    the user's account, public to signed-in users, with the `commitarium-app`
    topic.
@@ -115,9 +120,10 @@ project with a broken submodule pointer.
 3. **Manifest.** Done (ADR-026): the formats and their reading on import;
    Release (slice 4) writes them with `toolchain.PortableStack` and
    `vision.PortablePlan`.
-4. **Release.** The button on an app: create the repository on first
-   release, write and commit the manifest, tag, push `main` and the tag,
-   secret scan first. Shows the released version on the app.
+4. **Release.** The Marketplace panel on an app's overview: latest
+   version, whether the app changed since, and Release. Creates the
+   repository on the first release (`internal/release`). The secret scan is
+   deferred: the four users are trusted and only release their own apps.
 5. **Install from URL.** Paste a marketplace repository URL: the local
    Forgejo migrates the repository straight from the marketplace (Forgejo
    migrate API, history and tags kept; the marketplace domain in the local
