@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/EinarLogiOskars/commitarium/internal/worker"
@@ -87,6 +88,9 @@ type Service struct {
 	activeMu sync.RWMutex
 	active   map[workerhttp.AttemptReference]*activeProviderSession
 	unfenced map[workerhttp.AttemptReference]struct{}
+	// launching counts launches not yet in active, so a launch in progress
+	// also keeps the worker busy.
+	launching atomic.Int64
 
 	eventMu          sync.Mutex
 	subscribers      map[workerhttp.AttemptReference]map[uint64]*eventSubscriber
@@ -273,6 +277,8 @@ func (service *Service) PutAttempt(
 	if err := ctx.Err(); err != nil {
 		return workerhttp.Attempt{}, false, err
 	}
+	service.launching.Add(1)
+	defer service.launching.Add(-1)
 	digest, err := workerjournal.DigestRequest(request)
 	if err != nil {
 		return workerhttp.Attempt{}, false, fmt.Errorf("digest worker launch request: %w", err)
@@ -935,6 +941,14 @@ func (service *Service) markIndeterminateLocked(
 		service.closeSubscribersLocked(current.AttemptReference)
 	}
 	return err
+}
+
+// ActiveAttempts is how many provider turns are launching or running, so the
+// desktop restarts a worker only when none would be cut off.
+func (service *Service) ActiveAttempts() int {
+	service.activeMu.RLock()
+	defer service.activeMu.RUnlock()
+	return len(service.active) + int(service.launching.Load())
 }
 
 func (service *Service) activeSession(

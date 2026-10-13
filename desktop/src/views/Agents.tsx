@@ -9,7 +9,8 @@ import {
   onLoginProgress,
   openExternal,
   stackUp,
-  updateAgentCli,
+  agentCliStatus,
+  onAgentCliStatus,
   type CliStatus,
   type Profile,
   type ProfileStatus,
@@ -29,7 +30,6 @@ import { AssistantSettingsSection } from "./AssistantSettings";
 import { ApiError } from "../api/client";
 import type { AgentProvider } from "../api/types";
 import { reloadAgents } from "./useAgents";
-import type { AgentCliUpdates } from "./useAgentCliUpdates";
 
 const PROVIDER_LABEL: Record<AgentProvider, string> = { codex: "Codex", claude: "Claude" };
 
@@ -176,16 +176,7 @@ export function LoginSteps({ profile, onChanged }: { profile: Profile; onChanged
 
 /** Agents (ADR-016): one per provider account. Each signs in once and can lead
  * or review any number of work orders. */
-export function Agents({
-  onClose,
-  cliUpdates,
-  runningWork = 0,
-}: {
-  onClose: () => void;
-  cliUpdates?: AgentCliUpdates;
-  /** Work running now; updating a CLI restarts the agents' workers. */
-  runningWork?: number;
-}) {
+export function Agents({ onClose }: { onClose: () => void }) {
   const [profiles, setProfiles] = useState<Profile[] | null>(null);
   const [limits, setLimits] = useState<AgentLimit[]>([]);
   const [usage, setUsage] = useState<AgentUsage[]>([]);
@@ -237,9 +228,7 @@ export function Agents({
           lead or reviewer; secrets go straight to a private volume and never touch the coordinator.
         </p>
         {error && <div className="banner banner--error">{error}</div>}
-        {cliUpdates && cliUpdates.available.length > 0 && (
-          <CliUpdates updates={cliUpdates} runningWork={runningWork} />
-        )}
+        <CliVersions />
 
         <div className="profiles">
           {profiles === null ? (
@@ -274,52 +263,40 @@ export function Agents({
   );
 }
 
-// Newer Codex and Claude Code releases, installed for every agent of that
-// provider. They often bring newer models.
-function CliUpdates({ updates, runningWork }: { updates: AgentCliUpdates; runningWork: number }) {
-  const [busy, setBusy] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+// The agents' Codex and Claude Code versions. They update on their own; a
+// restart onto a new version waits until no agent is running a turn.
+function CliVersions() {
+  const [statuses, setStatuses] = useState<CliStatus[]>([]);
 
-  const update = async (status: CliStatus) => {
-    if (!status.latest) return;
-    setBusy(status.provider);
-    setError(null);
-    try {
-      await updateAgentCli(status.provider, status.latest);
-      await updates.refresh();
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setBusy(null);
-    }
-  };
+  useEffect(() => {
+    agentCliStatus()
+      .then(setStatuses)
+      .catch(() => undefined);
+    const unlisten = onAgentCliStatus(setStatuses);
+    return () => {
+      void unlisten.then((fn) => fn());
+    };
+  }, []);
 
+  if (statuses.length === 0) return null;
   return (
-    <div className="banner banner--info cli-updates">
-      {error && <div className="banner banner--error">{error}</div>}
-      {updates.available.map((status) => (
-        <div className="row cli-updates__row" key={status.provider}>
-          <span>
-            {PROVIDER_LABEL[status.provider]} {status.provider === "claude" ? "Code" : "CLI"}{" "}
-            {status.latest} is available (the agents run {status.installed}).
-          </span>
-          <button
-            className="primary"
-            onClick={() => void update(status)}
-            disabled={busy !== null || runningWork > 0}
-            title={
-              runningWork > 0
-                ? "Updating restarts the agents; wait until no work is running."
-                : undefined
-            }
-          >
-            {busy === status.provider ? "Updating…" : "Update"}
-          </button>
-        </div>
-      ))}
-      {runningWork > 0 && (
-        <p className="muted">Updating restarts the agents, so it waits until no work is running.</p>
-      )}
+    <div className="cli-updates muted">
+      {statuses.map((status) => {
+        const name = status.provider === "claude" ? "Claude Code" : "Codex CLI";
+        return (
+          <div className="row cli-updates__row" key={status.provider}>
+            <span>
+              {status.state === "updating"
+                ? `Updating ${name} to ${status.target}…`
+                : status.state === "waiting"
+                  ? `${name} update to ${status.target} waits for running work to finish.`
+                  : status.state === "behind"
+                    ? `${name} ${status.installed}; updating to ${status.target} failed and will be retried.`
+                    : `${name} ${status.installed} · up to date`}
+            </span>
+          </div>
+        );
+      })}
     </div>
   );
 }

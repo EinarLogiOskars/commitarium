@@ -44,6 +44,9 @@ func TestJournalBackedServiceRunsControlsAndReplaysThroughHTTP(t *testing.T) {
 	if attempt.State != workerhttp.AttemptStateRunning || attempt.ProviderSessionID == "" {
 		t.Fatalf("started attempt = %+v", attempt)
 	}
+	if active := first.service.ActiveAttempts(); active != 1 {
+		t.Fatalf("active attempts while running = %d, want 1", active)
+	}
 	retried, created, err := first.client.PutAttempt(t.Context(), identity, request)
 	if err != nil || created || !reflect.DeepEqual(retried, attempt) {
 		t.Fatalf("retry launch: attempt=%+v created=%t error=%v", retried, created, err)
@@ -101,6 +104,10 @@ func TestJournalBackedServiceRunsControlsAndReplaysThroughHTTP(t *testing.T) {
 	if terminal.Result == nil || terminal.Result.Outcome != workerhttp.OutcomeCompleted ||
 		terminal.Result.Disposition != workerhttp.DispositionSucceeded {
 		t.Fatalf("terminal attempt = %+v", terminal)
+	}
+	waitForNoActiveSession(t, first.service, attempt.AttemptReference)
+	if active := first.service.ActiveAttempts(); active != 0 {
+		t.Fatalf("active attempts after the turn = %d, want 0", active)
 	}
 	first.close(t)
 
@@ -299,6 +306,55 @@ func TestJournalBackedServiceRecordsProviderReportedFailure(t *testing.T) {
 		terminal.Result.Error.Retryable ||
 		terminal.Result.Summary != provider.result.Summary {
 		t.Fatalf("stored provider failure = %+v", terminal.Result)
+	}
+	// The provider process exited, so the worker is idle again.
+	waitForNoActiveSession(t, harness.service, attempt.AttemptReference)
+	if active := harness.service.ActiveAttempts(); active != 0 {
+		t.Fatalf("active attempts after the process exited = %d, want 0", active)
+	}
+}
+
+func TestActiveAttemptsCountsConcurrentAttemptsUntilEachEnds(t *testing.T) {
+	provider := worker.NewRepeatingScriptedAdapter("codex", map[worker.Role]worker.Script{
+		worker.RoleCoder: {
+			Events:      []worker.Event{{Type: worker.EventMessage, Text: "done"}},
+			Disposition: worker.DispositionSucceeded,
+			Summary:     "completed deterministic provider work",
+		},
+	})
+	harness := newHTTPHarness(t, filepath.Join(t.TempDir(), "worker.db"), provider, newStepClock())
+	defer harness.close(t)
+	if active := harness.service.ActiveAttempts(); active != 0 {
+		t.Fatalf("active attempts before any launch = %d, want 0", active)
+	}
+	first := validLaunchIdentity("ses_first", "att_first", "launch_first")
+	second := validLaunchIdentity("ses_second", "att_second", "launch_second")
+	for _, identity := range []workerhttp.MutationIdentity{first, second} {
+		attempt, created, err := harness.client.PutAttempt(t.Context(), identity, validPutRequest())
+		if err != nil || !created || attempt.State != workerhttp.AttemptStateRunning {
+			t.Fatalf("start %s: attempt=%+v created=%t error=%v", identity.SessionID, attempt, created, err)
+		}
+	}
+	if active := harness.service.ActiveAttempts(); active != 2 {
+		t.Fatalf("active attempts with two running = %d, want 2", active)
+	}
+
+	if err := provider.Advance(t.Context(), first.SessionID); err != nil {
+		t.Fatalf("finish the first attempt: %v", err)
+	}
+	waitForAttemptState(t, harness.client, first.AttemptReference, workerhttp.AttemptStateTerminal)
+	waitForNoActiveSession(t, harness.service, first.AttemptReference)
+	if active := harness.service.ActiveAttempts(); active != 1 {
+		t.Fatalf("active attempts after one ended = %d, want 1", active)
+	}
+
+	if err := provider.Advance(t.Context(), second.SessionID); err != nil {
+		t.Fatalf("finish the second attempt: %v", err)
+	}
+	waitForAttemptState(t, harness.client, second.AttemptReference, workerhttp.AttemptStateTerminal)
+	waitForNoActiveSession(t, harness.service, second.AttemptReference)
+	if active := harness.service.ActiveAttempts(); active != 0 {
+		t.Fatalf("active attempts after both ended = %d, want 0", active)
 	}
 }
 
