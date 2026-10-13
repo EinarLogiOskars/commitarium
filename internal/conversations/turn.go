@@ -279,10 +279,10 @@ func (service *Service) prepareWorkspace(ctx context.Context, scope, workspaceID
 	return nil
 }
 
+// projectIDFor names the project a turn runs for. The top-level
+// conversation belongs to no project, but workers require a path-safe ID, so
+// it runs under its own scope name, which no project ID can take.
 func projectIDFor(scope string) string {
-	if scope == TopLevel {
-		return ""
-	}
 	return scope
 }
 
