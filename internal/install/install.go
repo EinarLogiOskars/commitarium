@@ -38,11 +38,17 @@ type Origin struct {
 	InstalledAt time.Time `json:"installed_at"`
 }
 
-// Download is a fetched release, ready for the project import.
+// Download is a fetched release, ready for the project import, with the
+// .commitarium files it carries (ADR-026) keyed by path.
 type Download struct {
 	App    marketplace.App
 	Bundle string
+	Files  map[string][]byte
 }
+
+// PortableFiles are the .commitarium files an install applies directly, so
+// it does not wait for the forge to index the imported repository.
+var PortableFiles = []string{".commitarium/stack.json", ".commitarium/vision.json", marketplace.AppManifestPath}
 
 type Service struct {
 	market        Marketplace
@@ -103,7 +109,15 @@ func (service *Service) Download(ctx context.Context, owner, name string) (Downl
 		cleanup()
 		return Download{}, nil, fmt.Errorf("%w: package the app: %v", ErrUnavailable, err)
 	}
-	return Download{App: app, Bundle: bundle}, cleanup, nil
+	files := map[string][]byte{}
+	for _, path := range PortableFiles {
+		command := exec.CommandContext(ctx, service.gitExecutable, "show", "main:"+path)
+		command.Dir = repository
+		if contents, err := command.Output(); err == nil {
+			files[path] = contents
+		}
+	}
+	return Download{App: app, Bundle: bundle, Files: files}, cleanup, nil
 }
 
 // Record remembers that projectID is an install of app.

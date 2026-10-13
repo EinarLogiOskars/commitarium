@@ -13,6 +13,8 @@ import (
 	"github.com/EinarLogiOskars/commitarium/internal/install"
 	"github.com/EinarLogiOskars/commitarium/internal/marketplace"
 	"github.com/EinarLogiOskars/commitarium/internal/project"
+	"github.com/EinarLogiOskars/commitarium/internal/toolchain"
+	"github.com/EinarLogiOskars/commitarium/internal/vision"
 )
 
 // InstallService fetches marketplace apps and remembers what was installed.
@@ -110,7 +112,7 @@ func (api *API) installMarketplaceAppHandler(w http.ResponseWriter, r *http.Requ
 
 	spec := project.ImportSpec{
 		ImportID:       "marketplace-" + safeIDPart(owner) + "-" + safeIDPart(name) + "-" + strconv.FormatInt(time.Now().UnixNano(), 36),
-		Name:           download.App.Title,
+		Name:           appName(download),
 		RecoveryPolicy: project.RecoveryPolicyApprovalRequired,
 		MergePolicy:    project.MergePolicyAutoAfterGates,
 		AutonomyPolicy: project.AutonomyPolicyRunToCompletion,
@@ -134,12 +136,7 @@ func (api *API) installMarketplaceAppHandler(w http.ResponseWriter, r *http.Requ
 	if err := api.installs.Record(imported.ID, download.App); err != nil {
 		log.Printf("install %s/%s: %v", owner, name, err)
 	}
-	// The stack comes from the release's .commitarium folder (ADR-026).
-	if api.toolchains != nil {
-		if _, err := api.projectToolchain(ctx, imported.ID); err != nil {
-			log.Printf("install %s/%s: configure the stack: %v", owner, name, err)
-		}
-	}
+	api.applyPortableFiles(ctx, imported.ID, download.Files)
 	writeJSON(w, http.StatusCreated, map[string]string{"project_id": imported.ID, "version": download.App.Version}, "install")
 }
 
@@ -175,4 +172,41 @@ func writeInstallError(w http.ResponseWriter, err error) {
 		log.Printf("install: %v", err)
 		writeError(w, http.StatusInternalServerError, "internal_error", "internal server error")
 	}
+}
+
+type visionSeeder interface {
+	Seed(ctx context.Context, projectID string, contents []byte) (vision.Vision, error)
+}
+
+// applyPortableFiles gives an installed app the stack and vision its release
+// carries (ADR-026), from the fetched files rather than the forge, which may
+// still be indexing the import.
+func (api *API) applyPortableFiles(ctx context.Context, projectID string, files map[string][]byte) {
+	if contents, ok := files[toolchain.PortableStackPath]; ok && api.toolchains != nil {
+		if manifest, err := toolchain.ParsePortableStack(contents); err != nil {
+			log.Printf("install %s: ignore the release's stack: %v", projectID, err)
+		} else if _, err := api.toolchains.Configure(ctx, projectID, manifest); err != nil {
+			log.Printf("install %s: configure the stack: %v", projectID, err)
+		} else {
+			api.ensurePreviewSetupLater(projectID)
+		}
+	}
+	if contents, ok := files[vision.PortableVisionPath]; ok {
+		if seeder, ok := api.visions.(visionSeeder); ok {
+			if _, err := seeder.Seed(ctx, projectID, contents); err != nil {
+				log.Printf("install %s: seed the vision: %v", projectID, err)
+			}
+		}
+	}
+}
+
+// appName is the installed app's name: the one its release carries, else
+// the marketplace's title for it.
+func appName(download install.Download) string {
+	if contents, ok := download.Files[marketplace.AppManifestPath]; ok {
+		if manifest, err := marketplace.ParseAppManifest(contents); err == nil {
+			return manifest.Name
+		}
+	}
+	return download.App.Title
 }

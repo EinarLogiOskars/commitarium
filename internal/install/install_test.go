@@ -13,7 +13,9 @@ import (
 
 type marketStub struct{ app marketplace.App }
 
-func (stub marketStub) App(context.Context, string, string) (marketplace.App, error) { return stub.app, nil }
+func (stub marketStub) App(context.Context, string, string) (marketplace.App, error) {
+	return stub.app, nil
+}
 
 func (marketStub) Credentials(context.Context) (marketplace.Credentials, error) {
 	return marketplace.Credentials{Username: "sigga", Token: "t"}, nil

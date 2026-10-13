@@ -506,13 +506,14 @@ const AppDescriptionSuffix = " — a Commitarium app"
 
 // App is a released app on the marketplace.
 type App struct {
-	Owner     string    `json:"owner"`
-	Name      string    `json:"name"`
-	Title     string    `json:"title"`
-	Version   string    `json:"version"`
-	Stars     int       `json:"stars"`
-	UpdatedAt time.Time `json:"updated_at"`
-	CloneURL  string    `json:"-"`
+	Owner       string    `json:"owner"`
+	Name        string    `json:"name"`
+	Title       string    `json:"title"`
+	Description string    `json:"description"`
+	Version     string    `json:"version"`
+	Stars       int       `json:"stars"`
+	UpdatedAt   time.Time `json:"updated_at"`
+	CloneURL    string    `json:"-"`
 }
 
 var versionTag = regexp.MustCompile(`^v([1-9][0-9]*)$`)
@@ -564,12 +565,16 @@ func (service *Service) Apps(ctx context.Context) ([]App, error) {
 			if version == "" {
 				continue
 			}
-			title := strings.TrimSuffix(repository.Description, AppDescriptionSuffix)
+			title, description := strings.TrimSuffix(repository.Description, AppDescriptionSuffix), ""
+			if manifest, ok := service.appManifest(ctx, auth, repository.Owner.Login, repository.Name); ok {
+				title, description = manifest.Name, manifest.Description
+			}
 			if strings.TrimSpace(title) == "" {
 				title = repository.Name
 			}
 			apps = append(apps, App{Owner: repository.Owner.Login, Name: repository.Name, Title: title,
-				Version: version, Stars: repository.Stars, UpdatedAt: repository.UpdatedAt, CloneURL: repository.CloneURL})
+				Description: description, Version: version, Stars: repository.Stars, UpdatedAt: repository.UpdatedAt,
+				CloneURL: repository.CloneURL})
 		}
 		if len(found.Data) < 50 {
 			break
@@ -590,6 +595,17 @@ func (service *Service) App(ctx context.Context, owner, name string) (App, error
 		}
 	}
 	return App{}, ErrAppNotFound
+}
+
+// appManifest reads an app's released AppManifestPath, if it has one.
+func (service *Service) appManifest(ctx context.Context, auth func(*http.Request), owner, name string) (AppManifest, bool) {
+	status, body, err := service.call(ctx, http.MethodGet,
+		"/api/v1/repos/"+url.PathEscape(owner)+"/"+url.PathEscape(name)+"/raw/"+AppManifestPath+"?ref=main", auth, nil)
+	if err != nil || status != http.StatusOK {
+		return AppManifest{}, false
+	}
+	manifest, err := ParseAppManifest(body)
+	return manifest, err == nil
 }
 
 func (service *Service) latestVersion(ctx context.Context, auth func(*http.Request), owner, name string) (string, error) {

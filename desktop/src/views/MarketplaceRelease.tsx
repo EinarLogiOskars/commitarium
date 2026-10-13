@@ -45,7 +45,7 @@ export function MarketplaceRelease({ projectId }: { projectId: string }) {
       </div>
       <button
         className={status.unreleased ? "primary" : ""}
-        disabled={busy || !status.unreleased}
+        disabled={busy}
         onClick={() => void release()}
       >
         {busy ? "Releasing…" : latest ? "Release an update" : "Release"}
