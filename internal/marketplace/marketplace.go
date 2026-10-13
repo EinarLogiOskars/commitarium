@@ -205,8 +205,9 @@ func (service *Service) SignIn(ctx context.Context, username, password string) (
 	return Status{URL: service.baseURL, Account: &Account{Username: user.Login, Admin: user.IsAdmin}}, nil
 }
 
-// signInRejection reads Forgejo's refusal of a password: an account that is
-// not activated yet is waiting for approval.
+// signInRejection reads Forgejo's refusal of a password. An account that is
+// not activated yet gets 403 "This account is prohibited from signing in"
+// (verified on Forgejo 15): it is waiting for approval.
 func signInRejection(status int, body []byte) error {
 	if status < 400 {
 		return nil
@@ -217,8 +218,8 @@ func signInRejection(status int, body []byte) error {
 	_ = json.Unmarshal(body, &rejection)
 	message := strings.ToLower(rejection.Message)
 	switch {
-	case (status == http.StatusUnauthorized || status == http.StatusForbidden) &&
-		(strings.Contains(message, "not activated") || strings.Contains(message, "activate")):
+	case status == http.StatusForbidden &&
+		(strings.Contains(message, "prohibited") || strings.Contains(message, "activat")):
 		return ErrPendingApproval
 	case status == http.StatusUnauthorized || status == http.StatusForbidden:
 		return ErrInvalidCredentials

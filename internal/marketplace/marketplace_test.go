@@ -49,7 +49,7 @@ func (market *fakeMarketplace) ServeHTTP(w http.ResponseWriter, r *http.Request)
 		}
 		if !user.active {
 			w.WriteHeader(http.StatusForbidden)
-			_, _ = io.WriteString(w, `{"message":"user is not activated"}`)
+			_, _ = io.WriteString(w, `{"message":"This account is prohibited from signing in, please contact your site administrator."}`)
 			return
 		}
 		login = username
