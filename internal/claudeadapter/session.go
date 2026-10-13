@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -297,7 +298,7 @@ type streamMessage struct {
 	ToolUseResult    json.RawMessage `json:"tool_use_result"`
 	Event            json.RawMessage `json:"event"`
 	Usage            *resultUsage    `json:"usage"`
-	RateLimitInfo    *rateLimitInfo  `json:"rate_limit_info"`
+	RateLimitInfo    json.RawMessage `json:"rate_limit_info"`
 }
 
 // rateLimitInfo is the account's usage-limit state on a rate_limit_event.
@@ -468,7 +469,11 @@ func (session *session) translate(raw []byte) ([]worker.Event, *worker.Result, e
 		return nil, nil, nil
 	case "rate_limit_event":
 		// Advisory: kept to tell a failed turn's reached limit and its reset.
-		if info := message.RateLimitInfo; info != nil {
+		var info rateLimitInfo
+		if len(message.RateLimitInfo) > 0 && json.Unmarshal(message.RateLimitInfo, &info) == nil {
+			// Logged whole, to learn which windows and how much of them Claude
+			// Code reports, and how often (usage-based agent choice needs it).
+			log.Printf("claude usage event: %s", message.RateLimitInfo)
 			Usage.Merge(info.usageWindow())
 			session.mu.Lock()
 			session.limitRejected = info.Status == "rejected"
