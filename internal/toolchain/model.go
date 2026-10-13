@@ -38,8 +38,8 @@ var (
 	safeService        = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,63}$`)
 	safeComposeService = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$`)
 	allowedTools       = map[string]struct{}{
-		"bun": {}, "deno": {}, "go": {}, "gradle": {}, "java": {},
-		"maven": {}, "node": {}, "php": {}, "python": {}, "ruby": {}, "rust": {},
+		"bun": {}, "deno": {}, "go": {}, "gradle": {}, "java": {}, "maven": {},
+		"node": {}, "php": {}, "pnpm": {}, "python": {}, "ruby": {}, "rust": {}, "uv": {},
 	}
 )
 
@@ -96,6 +96,28 @@ func Presets() []Preset {
 		{ID: "go", DisplayName: "Go", Description: "Current stable Go toolchain", Tools: map[string]string{"go": "1.27.1"}},
 		{ID: "rust", DisplayName: "Rust", Description: "Current stable Rust toolchain", Tools: map[string]string{"rust": "1.98.1"}},
 	}
+}
+
+// SupportedTools lists the accepted tool keys in a stable order, for prompts
+// and messages that must not drift from the allowlist.
+func SupportedTools() []string {
+	tools := make([]string, 0, len(allowedTools))
+	for tool := range allowedTools {
+		tools = append(tools, tool)
+	}
+	sort.Strings(tools)
+	return tools
+}
+
+// ProposedService reduces an agent-written service entry such as
+// "postgis (PostgreSQL 18 + PostGIS 3)" to its bare name. Services are
+// planning metadata only, so an entry with no usable name is dropped.
+func ProposedService(entry string) (string, bool) {
+	name := strings.ToLower(strings.TrimSpace(entry))
+	if cut := strings.IndexAny(name, " (:@,"); cut >= 0 {
+		name = name[:cut]
+	}
+	return name, safeService.MatchString(name)
 }
 
 func ValidateRequirement(tool, version string) (string, string, error) {

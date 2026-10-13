@@ -282,3 +282,43 @@ func TestAssistantVerifyRepositoryDefaultsMissingMessage(t *testing.T) {
 		t.Fatalf("design_stack without message error=%v", err)
 	}
 }
+
+func TestAssistantProposalsKeepDescriptiveServicesAndExplainRejections(t *testing.T) {
+	root, workspaces := t.TempDir(), t.TempDir()
+	reader := &projectReaderStub{stored: project.Project{ID: "prj_test", Name: "Example"}}
+	manager, _ := NewManager(root, reader)
+	worker := &assistantWorkerStub{}
+	assistant, err := NewAssistant(root, workspaces, reader, manager, onlyAgent("claude", worker))
+	if err != nil {
+		t.Fatalf("create assistant: %v", err)
+	}
+	propose := func(key string, tools map[string]string, services []string) AssistantSession {
+		t.Helper()
+		session, _, err := assistant.Start(t.Context(), "prj_test", "claude", "claude-opus-4-8", "A web app",
+			AssistantPurposeDesignStack, key)
+		if err != nil {
+			t.Fatalf("start %s: %v", key, err)
+		}
+		worker.attempt.State = workerhttp.AttemptStateTerminal
+		worker.attempt.Result = &workerhttp.TerminalResult{Outcome: workerhttp.OutcomeCompleted,
+			Disposition: workerhttp.DispositionSucceeded, Summary: "Proposal.",
+			ToolchainProposal: &workerhttp.ToolchainProposal{Tools: tools, Services: services}}
+		session, err = assistant.Get(t.Context(), "prj_test", session.ID)
+		if err != nil {
+			t.Fatalf("get %s: %v", key, err)
+		}
+		return session
+	}
+
+	session := propose("described", map[string]string{"node": "24.21.0", "pnpm": "10.23.0", "uv": "0.8.17"},
+		[]string{"postgis (PostgreSQL 18 + PostGIS 3)", "MinIO: storage", "???"})
+	if session.Status != AssistantStatusProposalReady || session.Proposal.Tools["pnpm"] != "10.23.0" ||
+		strings.Join(session.Proposal.Services, ",") != "minio,postgis" {
+		t.Fatalf("described proposal session=%+v", session)
+	}
+
+	session = propose("unsupported", map[string]string{"node": "24.21.0", "yarn": "4.9.0"}, nil)
+	if session.Status != AssistantStatusFailed || !strings.Contains(session.Message, `tool "yarn" is not supported`) {
+		t.Fatalf("unsupported proposal session=%+v", session)
+	}
+}

@@ -656,7 +656,7 @@ Content-Type: application/json
 removes it.
 
 Supported tool names are `bun`, `deno`, `go`, `gradle`, `java`, `maven`, `node`,
-`php`, `python`, `ruby`, and `rust`. Every version must be explicit; `latest`
+`php`, `pnpm`, `python`, `ruby`, `rust`, and `uv`. Every version must be explicit; `latest`
 and `system` are rejected. `source` must be `picker`, `detected`, `assistant`,
 or `runtime`. Invalid input returns `400 invalid_toolchain`; an unknown project
 returns `404 project_not_found`. `PUT` is an idempotent replacement.

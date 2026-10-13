@@ -146,9 +146,11 @@ export const TOOL_NAMES = [
   "maven",
   "node",
   "php",
+  "pnpm",
   "python",
   "ruby",
   "rust",
+  "uv",
 ] as const;
 export type ToolName = (typeof TOOL_NAMES)[number];
 export type ToolchainStatus = "needs_setup" | "configured";
