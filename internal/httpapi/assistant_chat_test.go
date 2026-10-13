@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/EinarLogiOskars/commitarium/internal/agent"
 	"github.com/EinarLogiOskars/commitarium/internal/conversations"
 	"github.com/EinarLogiOskars/commitarium/internal/execution"
 	"github.com/EinarLogiOskars/commitarium/internal/feature"
@@ -25,6 +26,16 @@ type conversationStub struct {
 	handling map[string]bool
 	// blockedAt is the blocker time attention last asked about.
 	blockedAt time.Time
+	// settings are the assistant's; an empty agent means not set up.
+	settings conversations.Settings
+}
+
+// testAgents are a Codex and a Claude agent, both connected.
+func testAgents() *recordingAgentService {
+	return &recordingAgentService{agents: map[string]agent.Agent{
+		"codex":  {ID: "codex", Name: "Codex", Provider: project.AgentProviderCodex},
+		"claude": {ID: "claude", Name: "Claude", Provider: project.AgentProviderClaude},
+	}}
 }
 
 func (stub *conversationStub) AutopilotHandles(_ context.Context, _, workOrderID string, blockedAt time.Time) bool {
@@ -33,7 +44,9 @@ func (stub *conversationStub) AutopilotHandles(_ context.Context, _, workOrderID
 }
 
 func (stub *conversationStub) Settings(context.Context) (conversations.Settings, error) {
-	return conversations.Settings{AskBefore: conversations.DefaultAskBefore}, nil
+	settings := stub.settings
+	settings.AskBefore = conversations.DefaultAskBefore
+	return settings, nil
 }
 
 func (stub *conversationStub) SaveSettings(_ context.Context, settings conversations.Settings) (conversations.Settings, error) {
@@ -87,12 +100,12 @@ func TestApprovingAnAssistantActionRunsItAndPremiumNeedsConfirmation(t *testing.
 		ID: "act_1", Status: conversations.ActionProposed, Premium: []string{"claude-fable-5-1"},
 		AssistantAction: featureartifact.AssistantAction{
 			Type: featureartifact.AssistantCreateWorkOrder, Reason: "Tricky", Title: "Sync meals", Steps: "quick",
-			LeadModel: "claude-fable-5-1",
+			LeadAgent: "claude", LeadModel: "claude-fable-5-1",
 		},
 	}}
 	features := &recordingFeatureService{createResult: feature.Feature{ID: "fea_sync", ProjectID: "prj_test", Title: "Sync meals", State: feature.StateDraft}}
 	projects := &recordingProjectService{getByIDResult: project.Project{ID: "prj_test"}}
-	handler := NewWithWorkspaceRealWorkflowDeletionAndModels(projects, features, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, stub)
+	handler := NewWithWorkspaceRealWorkflowDeletionAndModels(projects, features, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, stub, testAgents())
 	approve := func(body string) *httptest.ResponseRecorder {
 		recorder := httptest.NewRecorder()
 		handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost,
@@ -112,6 +125,11 @@ func TestApprovingAnAssistantActionRunsItAndPremiumNeedsConfirmation(t *testing.
 		!features.receivedOverrides.Steps.SkipPlan || !features.receivedOverrides.Steps.SkipReviewer {
 		t.Fatalf("work order = %q %+v", features.receivedTitle, features.receivedOverrides)
 	}
+	// The assistant's choice, with the lead named for the skipped reviewer.
+	if chosen := features.receivedOverrides.AgentProviders; chosen == nil || chosen.LeadAgent != "claude" ||
+		chosen.ReviewerAgent != "claude" || features.receivedOverrides.AgentModels.Reviewer != "claude-fable-5-1" {
+		t.Fatalf("agents = %+v models = %+v", chosen, features.receivedOverrides.AgentModels)
+	}
 	if stub.resolvedStatus != conversations.ActionApplied || !strings.Contains(stub.resolvedResult, "Sync meals") {
 		t.Fatalf("resolved = %s %q", stub.resolvedStatus, stub.resolvedResult)
 	}
@@ -122,12 +140,12 @@ func TestAutopilotAppliesActionsThroughTheSameApproval(t *testing.T) {
 		ID: "act_1", Status: conversations.ActionProposed, Premium: []string{"claude-fable-5-1"},
 		AssistantAction: featureartifact.AssistantAction{
 			Type: featureartifact.AssistantCreateWorkOrder, Reason: "Tricky", Title: "Sync meals", Steps: "quick",
-			LeadModel: "claude-fable-5-1",
+			LeadAgent: "claude", LeadModel: "claude-fable-5-1",
 		},
 	}}
 	features := &recordingFeatureService{createResult: feature.Feature{ID: "fea_sync", ProjectID: "prj_test", Title: "Sync meals", State: feature.StateDraft}}
 	projects := &recordingProjectService{getByIDResult: project.Project{ID: "prj_test"}}
-	handler := NewWithWorkspaceRealWorkflowDeletionAndModels(projects, features, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, stub)
+	handler := NewWithWorkspaceRealWorkflowDeletionAndModels(projects, features, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, stub, testAgents())
 	apply := AssistantActionApplier(handler)
 
 	if err := apply(t.Context(), "prj_test", "act_1"); err == nil || !strings.Contains(err.Error(), "explicit approval") ||

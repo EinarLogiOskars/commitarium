@@ -10,8 +10,11 @@ type Project struct {
 	AutonomyPolicy             AutonomyPolicy
 	IndependentAcceptanceTests bool
 	// App marks a project the user uses as an app (APPS_PLAN.md).
-	App               bool
-	DialogueLimits    DialogueLimits
+	App            bool
+	DialogueLimits DialogueLimits
+	// AgentProviders and AgentModels are deprecated (ADR-027): projects no
+	// longer choose agents or models for new work. New projects leave them
+	// zero; older ones keep what they stored, which nothing uses as a default.
 	AgentProviders    AgentProviders
 	AgentModels       AgentModels
 	ForgejoRepository *ForgejoRepository

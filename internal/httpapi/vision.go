@@ -57,7 +57,7 @@ func (api *API) saveVisionHandler(w http.ResponseWriter, r *http.Request) {
 type startVisionRequest struct {
 	Mode    vision.Mode `json:"mode"`
 	Message string      `json:"message"`
-	// Agent and Model default to the project's lead agent and model.
+	// Agent and Model default to the assistant's agent and model.
 	Agent string `json:"agent,omitempty"`
 	Model string `json:"model,omitempty"`
 }
@@ -73,16 +73,23 @@ func (api *API) startVisionHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if body.Agent == "" || body.Model == "" {
-		stored, err := api.projects.GetByID(r.Context(), r.PathValue("id"))
-		if err != nil {
+		if _, err := api.projects.GetByID(r.Context(), r.PathValue("id")); err != nil {
 			writeVisionError(w, r.PathValue("id"), err)
 			return
 		}
+		// The assistant writes the vision on its own agent (ADR-027).
+		providers, model, err := api.assistantAgent(r.Context())
+		if err != nil {
+			if !writeChoiceError(w, err) {
+				writeVisionError(w, r.PathValue("id"), err)
+			}
+			return
+		}
 		if body.Agent == "" {
-			body.Agent = stored.AgentProviders.LeadAgent
+			body.Agent = providers.LeadAgent
 		}
 		if body.Model == "" {
-			body.Model = stored.AgentModels.Lead
+			body.Model = model
 		}
 	}
 	session, created, err := api.visions.Start(r.Context(), r.PathValue("id"), body.Agent, body.Model, body.Mode, body.Message, key)

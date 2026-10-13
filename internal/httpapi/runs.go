@@ -360,16 +360,8 @@ func (api *API) chooseStartSettings(
 		writeError(w, http.StatusServiceUnavailable, "start_settings_unavailable", "choosing settings at Start is unavailable")
 		return feature.Feature{}, false
 	}
-	if api.modelCatalog != nil && overrides.AgentModels != nil {
-		providers := storedFeature.AgentProviders
-		if overrides.AgentProviders != nil {
-			providers = *overrides.AgentProviders
-		}
-		if err := api.modelCatalog.ValidateSelection(r.Context(), providers, *overrides.AgentModels); err != nil {
-			writeModelSelectionError(w, err)
-			return feature.Feature{}, false
-		}
-	}
+	// The models were checked against the agents' workers before (startChoice
+	// and checkWorkChoice).
 	chosen, err := chooser.ChooseStartSettings(r.Context(), storedFeature.ProjectID, storedFeature.ID, overrides)
 	if err != nil {
 		switch {
@@ -601,9 +593,27 @@ func (api *API) startFeature(
 ) (execution.Run, bool) {
 	runID := runIDForKey(idempotencyKey)
 	projectID, featureID := storedFeature.ProjectID, storedFeature.ID
+	readies := storedFeature.State == feature.StateDraft &&
+		(request.skipsClarification() || storedFeature.Kind == feature.KindSession)
+	if storedFeature.State != feature.StateReady && !readies {
+		writeError(w, http.StatusConflict, "feature_not_startable", "only a ready work order can be started")
+		return execution.Run{}, false
+	}
+	// The choice of agents and models is checked before anything changes, so
+	// a refused Start leaves a draft a draft (ADR-027).
+	providers, models, skipReviewer, ok := api.startChoice(w, r, storedFeature, request)
+	if !ok {
+		return execution.Run{}, false
+	}
+	if err := api.checkWorkChoice(r.Context(), providers, models, skipReviewer); err != nil {
+		if !writeChoiceError(w, err) {
+			log.Printf("check the agents of feature %q: %v", storedFeature.ID, err)
+			writeError(w, http.StatusInternalServerError, "internal_error", "internal server error")
+		}
+		return execution.Run{}, false
+	}
 	var err error
-	if storedFeature.State == feature.StateDraft &&
-		(request.skipsClarification() || storedFeature.Kind == feature.KindSession) {
+	if readies {
 		readied, err := api.readyWithoutClarification(r.Context(), storedFeature, idempotencyKey)
 		switch {
 		case errors.Is(err, featureartifact.ErrInvalidArtifact):
@@ -624,7 +634,7 @@ func (api *API) startFeature(
 		return execution.Run{}, false
 	}
 	// Agents, models, and policies are chosen at Start; an empty body starts
-	// with the work order's current settings (its project's defaults).
+	// with the work order's current settings, which must name its agents.
 	chosen, ok := api.chooseStartSettings(w, r, storedFeature, request)
 	if !ok {
 		return execution.Run{}, false

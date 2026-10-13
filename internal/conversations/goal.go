@@ -309,7 +309,7 @@ func (service *Service) autopilotActions(ctx context.Context, scope string) ([]A
 // user.
 func (service *Service) AutopilotHandles(ctx context.Context, scope, workOrderID string, blockedAt time.Time) bool {
 	app := service.isApp(ctx, scope)
-	if settings, err := service.Settings(ctx); err != nil || settings.Agent == "" || settings.Model == "" {
+	if _, err := service.Readiness(ctx); err != nil {
 		return false
 	}
 	service.mu.Lock()

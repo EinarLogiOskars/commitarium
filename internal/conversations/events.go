@@ -103,11 +103,48 @@ func (watcher Watcher) autopilot(ctx context.Context, scope string) {
 		return
 	}
 	for _, action := range actions {
-		if err := watcher.Apply(ctx, scope, action.ID); err != nil {
-			_ = watcher.Service.note(scope, fmt.Sprintf(
-				"Autopilot could not apply %s: %v. It waits for your approval.", actionName(action.AssistantAction), err))
+		err := watcher.Apply(ctx, scope, action.ID)
+		if err := watcher.Service.autopilotOutcome(scope, action, err); err != nil {
+			log.Printf("autopilot outcome for %s: %v", scope, err)
 		}
 	}
+}
+
+// maxRefusals bounds how often in a row the assistant hears that autopilot
+// could not apply its action, so a choice it cannot fix comes back to the
+// user instead of spending turns.
+const maxRefusals = 2
+
+// autopilotOutcome records what became of an action autopilot applied. A
+// refused one stays a card for the user, with a note saying why, and wakes
+// the assistant with the reason so it can choose again (ADR-027: the
+// coordinator refuses agents that cannot run, but never picks others).
+func (service *Service) autopilotOutcome(scope string, action Action, applyErr error) error {
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	stored, err := service.read(scope)
+	if err != nil {
+		return err
+	}
+	if applyErr == nil {
+		if stored.Refusals == 0 {
+			return nil
+		}
+		stored.Refusals = 0
+		return service.write(stored)
+	}
+	now := service.now()
+	name := actionName(action.AssistantAction)
+	stored.addEvent(fmt.Sprintf("Autopilot could not apply %s: %v. It waits for your approval.", name, applyErr), now)
+	stored.Refusals++
+	if stored.Refusals <= maxRefusals {
+		stored.PendingEvents = append(stored.PendingEvents, fmt.Sprintf(
+			"Commitarium could not apply your action %s: %v. Propose it again with a choice that can run, "+
+				"or tell the user plainly what is needed.", name, applyErr))
+		service.nudgeWatcher()
+	}
+	stored.UpdatedAt = now
+	return service.write(stored)
 }
 
 // work is a work order or session as the watcher sees it.
@@ -356,7 +393,7 @@ func (service *Service) observe(
 		}
 		return nil
 	}
-	settings, err := service.Settings(ctx)
+	settings, err := service.Readiness(ctx)
 	if err != nil || settings.Agent == "" || settings.Model == "" {
 		return service.write(stored)
 	}

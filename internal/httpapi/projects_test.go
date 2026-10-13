@@ -267,7 +267,7 @@ func TestImportProject(t *testing.T) {
 	}
 	if service.importSpec.ImportID != "desktop-1" || service.importSpec.Name != "Commitarium" ||
 		service.importSpec.DefaultBranch != "main" || service.importSpec.DialogueLimits != project.DefaultDialogueLimits() ||
-		service.importSpec.AgentProviders != project.DefaultAgentProviders() ||
+		!service.importSpec.AgentProviders.IsZero() || service.importSpec.AgentModels != (project.AgentModels{}) ||
 		service.importSpec.MergePolicy != "" ||
 		service.importBundle != "git bundle bytes" {
 		t.Fatalf("unexpected import request spec=%+v bundle=%q", service.importSpec, service.importBundle)
@@ -415,8 +415,8 @@ func TestCreateProject(t *testing.T) {
 	if service.receivedDialogueLimits != project.DefaultDialogueLimits() {
 		t.Errorf("expected default dialogue limits, got %+v", service.receivedDialogueLimits)
 	}
-	if service.receivedAgentProviders != project.DefaultAgentProviders() {
-		t.Errorf("expected default agent providers, got %+v", service.receivedAgentProviders)
+	if !service.receivedAgentProviders.IsZero() {
+		t.Errorf("a new project named agents (ADR-027): %+v", service.receivedAgentProviders)
 	}
 	if service.receivedMergePolicy != "" {
 		t.Errorf("expected blank policy to be normalized by the service, got %q", service.receivedMergePolicy)
@@ -469,7 +469,8 @@ func TestCreateProjectProvisionsRepositoryWithIdempotencyKey(t *testing.T) {
 	if recorder.Code != http.StatusCreated {
 		t.Fatalf("status = %d: %s", recorder.Code, recorder.Body.String())
 	}
-	if service.requestKey != "desktop-create-1" || service.receivedAgentModels.Lead != "gpt-5.6-sol" {
+	// Models from older clients are ignored: a project chooses none (ADR-027).
+	if service.requestKey != "desktop-create-1" || service.receivedAgentModels != (project.AgentModels{}) {
 		t.Fatalf("unexpected provisioned create request key=%q models=%+v", service.requestKey, service.receivedAgentModels)
 	}
 	var response projectResponse
@@ -514,32 +515,32 @@ func TestProvisionForgejoRepositoryRequiresIdempotencyKey(t *testing.T) {
 	}
 }
 
-func TestCreateProjectAcceptsIndependentAgentProviders(t *testing.T) {
-	want := project.AgentProviders{
-		Lead: project.AgentProviderClaude, Reviewer: project.AgentProviderCodex,
-		LeadAgent: "claude", ReviewerAgent: "codex",
-	}
+// A project no longer chooses agents (ADR-027): agents sent by an older
+// client are ignored rather than refused, so it keeps working.
+func TestCreateProjectIgnoresAgentProviders(t *testing.T) {
 	service := &recordingProjectService{result: project.Project{
-		ID: "prj_test", Name: "Commitarium", AgentProviders: want, CreatedAt: time.Now().UTC(),
+		ID: "prj_test", Name: "Commitarium", CreatedAt: time.Now().UTC(),
 	}}
 	request := httptest.NewRequest(
 		http.MethodPost,
 		"/api/v1/projects",
-		strings.NewReader(`{"name":"Commitarium","agent_providers":{"lead":"claude","reviewer":"codex"}}`),
+		strings.NewReader(`{"name":"Commitarium","agent_providers":{"lead":"claude","reviewer":"codex"},"agent_models":{"lead":"gone","reviewer":"gone"}}`),
 	)
 	recorder := httptest.NewRecorder()
-	New(service, nil, nil, nil, nil, nil).ServeHTTP(recorder, request)
+	// No agent exists: a project is created anyway.
+	NewWithWorkspaceRealWorkflowDeletionAndModels(service, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil,
+		&recordingAgentService{agents: map[string]agent.Agent{}}).ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusCreated {
 		t.Fatalf("status = %d: %s", recorder.Code, recorder.Body.String())
 	}
-	if service.receivedAgentProviders != want {
-		t.Fatalf("received providers = %+v, want %+v", service.receivedAgentProviders, want)
+	if !service.receivedAgentProviders.IsZero() {
+		t.Fatalf("received providers = %+v, want none", service.receivedAgentProviders)
 	}
 	var response projectResponse
 	if err := json.NewDecoder(recorder.Body).Decode(&response); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if response.AgentProviders.Lead != want.Lead || response.AgentProviders.Reviewer != want.Reviewer {
+	if response.AgentProviders != (agentProvidersResponse{}) {
 		t.Fatalf("response providers = %+v", response.AgentProviders)
 	}
 }

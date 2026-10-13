@@ -87,8 +87,9 @@ func (s *Service) Create(
 	// older clients are ignored.
 	dialogueLimits := project.DefaultDialogueLimits()
 
+	// Agents and models are never project defaults (ADR-027): a work order
+	// has none until it is created or started with a choice.
 	settings, err := resolveSettings(Feature{
-		AgentProviders: storedProject.AgentProviders, AgentModels: storedProject.AgentModels,
 		MergePolicy: storedProject.MergePolicy, AutonomyPolicy: storedProject.AutonomyPolicy,
 		IndependentAcceptanceTests: storedProject.IndependentAcceptanceTests,
 	}, overrides)
@@ -195,7 +196,7 @@ func resolveSettings(base Feature, overrides SettingsOverrides) (Feature, error)
 			return Feature{}, project.ErrInvalidAgentProviders
 		}
 	}
-	if base.AgentProviders, err = base.AgentProviders.Normalize(); err != nil {
+	if base.AgentProviders, err = base.AgentProviders.NormalizeChosen(); err != nil {
 		return Feature{}, err
 	}
 	if overrides.AgentModels != nil {
@@ -247,9 +248,6 @@ type SettingsStore interface {
 	UpdateReadySettings(ctx context.Context, feature Feature) error
 }
 
-// ChooseStartSettings records the agents, models, and policies a Ready work
-// order starts with. Settings are chosen at Start, not while drafting; until
-// then the work order carries its project's defaults.
 // RenameStore renames work orders.
 type RenameStore interface {
 	Rename(ctx context.Context, id string, title string) error
@@ -274,6 +272,10 @@ func (s *Service) Rename(ctx context.Context, projectID string, featureID string
 	return s.GetByID(ctx, projectID, featureID)
 }
 
+// ChooseStartSettings records the agents, models, and policies a Ready work
+// order starts with. Settings are chosen at Start, not while drafting; until
+// then the work order keeps what it was created with, which may name no
+// agents (ADR-027).
 func (s *Service) ChooseStartSettings(
 	ctx context.Context,
 	projectID string,

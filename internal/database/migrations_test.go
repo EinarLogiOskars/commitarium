@@ -644,6 +644,59 @@ func TestFeatureSettingsMigrationBackfillsEffectiveValues(t *testing.T) {
 	}
 }
 
+// An install that already had projects when agents arrived keeps its two
+// subscriptions as agents; a new install starts with none (ADR-027).
+func TestAgentsMigrationSeedsOnlyInstallsWithProjects(t *testing.T) {
+	migrations, err := fs.Sub(migrationFiles, "migrations")
+	if err != nil {
+		t.Fatalf("open embedded migrations: %v", err)
+	}
+	count := func(db *sql.DB) int {
+		var agents int
+		if err := db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM agents`).Scan(&agents); err != nil {
+			t.Fatalf("count agents: %v", err)
+		}
+		return agents
+	}
+
+	fresh, err := OpenSQLite(t.Context(), filepath.Join(t.TempDir(), "fresh.db"))
+	if err != nil {
+		t.Fatalf("open SQLite database: %v", err)
+	}
+	defer fresh.Close()
+	if err := Migrate(t.Context(), fresh); err != nil {
+		t.Fatalf("migrate a new install: %v", err)
+	}
+	if agents := count(fresh); agents != 0 {
+		t.Fatalf("a new install starts with %d agents, want none", agents)
+	}
+
+	existing, err := OpenSQLite(t.Context(), filepath.Join(t.TempDir(), "existing.db"))
+	if err != nil {
+		t.Fatalf("open SQLite database: %v", err)
+	}
+	defer existing.Close()
+	provider, err := goose.NewProvider(goose.DialectSQLite3, existing, migrations)
+	if err != nil {
+		t.Fatalf("create migration provider: %v", err)
+	}
+	if _, err := provider.UpTo(t.Context(), 38); err != nil {
+		t.Fatalf("migrate the schema before agents: %v", err)
+	}
+	if _, err := existing.ExecContext(t.Context(), `
+		INSERT INTO projects (id, name, recovery_policy, lead_provider, reviewer_provider, created_at)
+		VALUES ('prj_existing', 'Existing', 'approval_required', 'claude', 'codex', ?)`,
+		time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+		t.Fatalf("insert existing project: %v", err)
+	}
+	if err := Migrate(t.Context(), existing); err != nil {
+		t.Fatalf("migrate an existing install: %v", err)
+	}
+	if agents := count(existing); agents != 2 {
+		t.Fatalf("an existing install has %d agents, want its two subscriptions", agents)
+	}
+}
+
 func TestMigrateReturnsCanceledContext(t *testing.T) {
 	db, err := OpenSQLite(
 		t.Context(),

@@ -628,6 +628,9 @@ func (service *recordingFeatureService) ChooseStartSettings(
 	if overrides.AgentProviders != nil {
 		chosen.AgentProviders = *overrides.AgentProviders
 	}
+	if overrides.AgentModels != nil {
+		chosen.AgentModels = *overrides.AgentModels
+	}
 	if overrides.AutonomyPolicy != nil {
 		chosen.AutonomyPolicy = *overrides.AutonomyPolicy
 	}

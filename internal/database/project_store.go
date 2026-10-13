@@ -43,7 +43,7 @@ func (s *ProjectStore) Create(
 	if err := createdProject.DialogueLimits.Validate(); err != nil {
 		return err
 	}
-	agentProviders, err := createdProject.AgentProviders.Normalize()
+	agentProviders, err := createdProject.AgentProviders.NormalizeChosen()
 	if err != nil {
 		return err
 	}
@@ -87,8 +87,8 @@ func (s *ProjectStore) Create(
 		createdProject.IndependentAcceptanceTests,
 		createdProject.DialogueLimits.PlanningRounds,
 		createdProject.DialogueLimits.ImplementationReviewRounds,
-		createdProject.AgentProviders.Lead,
-		createdProject.AgentProviders.Reviewer,
+		storedProvider(createdProject.AgentProviders.Lead),
+		storedProvider(createdProject.AgentProviders.Reviewer),
 		createdProject.AgentProviders.LeadAgent,
 		createdProject.AgentProviders.ReviewerAgent,
 		createdProject.AgentModels.Lead,
@@ -571,7 +571,7 @@ func scanProject(scanner projectScanner) (project.Project, error) {
 		return project.Project{}, err
 	}
 	storedProject.AutonomyPolicy = autonomyPolicy
-	providers, err := storedProject.AgentProviders.Normalize()
+	providers, err := chosenProviders(storedProject.AgentProviders)
 	if err != nil {
 		return project.Project{}, err
 	}
@@ -605,4 +605,24 @@ func scanProject(scanner projectScanner) (project.Project, error) {
 
 func sameRepository(left, right project.ForgejoRepository) bool {
 	return strings.EqualFold(left.Owner, right.Owner) && strings.EqualFold(left.Name, right.Name)
+}
+
+// storedProvider is the provider column value for a role: the column requires
+// a provider, so a zero assignment (ADR-027) stores the historical default and
+// its empty agent marks it unchosen.
+func storedProvider(provider project.AgentProvider) project.AgentProvider {
+	if provider == "" {
+		return project.AgentProviderCodex
+	}
+	return provider
+}
+
+// chosenProviders reads a stored assignment. Every row written before ADR-027
+// names its agents (migration 00040 set them), so empty agents mean none were
+// chosen, whatever the provider columns hold.
+func chosenProviders(stored project.AgentProviders) (project.AgentProviders, error) {
+	if stored.LeadAgent == "" && stored.ReviewerAgent == "" {
+		return project.AgentProviders{}, nil
+	}
+	return stored.Normalize()
 }

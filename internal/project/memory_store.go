@@ -28,7 +28,7 @@ func (s *MemoryStore) Create(
 	if err := createdProject.DialogueLimits.Validate(); err != nil {
 		return err
 	}
-	providers, err := createdProject.AgentProviders.Normalize()
+	providers, err := createdProject.AgentProviders.NormalizeChosen()
 	if err != nil {
 		return err
 	}

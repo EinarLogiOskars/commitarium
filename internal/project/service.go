@@ -369,7 +369,7 @@ func (s *Service) newProject(
 	if err := dialogueLimits.Validate(); err != nil {
 		return Project{}, err
 	}
-	agentProviders, err = agentProviders.Normalize()
+	agentProviders, err = agentProviders.NormalizeChosen()
 	if err != nil {
 		return Project{}, err
 	}

@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	coordinatordatabase "github.com/EinarLogiOskars/commitarium/internal/database"
@@ -371,12 +372,24 @@ func run(ctx context.Context, coordinatorConfig config) error {
 			}
 			return choices
 		}
+		// The assistant chooses work orders' agents from their usage and
+		// models (ADR-027), and names the agent it runs on itself.
+		usage := agentUsageReader{agents: agentService, workers: agentWorkers}
+		var settingsOf *conversations.Service
 		projectAssistant, err := conversations.NewService(conversations.Config{
 			Root: filepath.Join(coordinatorConfig.toolchainRoot, "assistant"), WorkspaceRoot: coordinatorConfig.workspaceRoot,
 			Projects: projectService, Agents: agentService,
 			Describer: conversations.StateDescriber{
 				Projects: projectService, Agents: agentService, Features: featureService,
 				Visions: visions, Toolchains: toolchainService, Models: models, Runs: executionService,
+				Usage: func(ctx context.Context) []agent.Usage {
+					reported, err := usage.AgentUsage(ctx)
+					if err != nil {
+						return nil
+					}
+					return reported
+				},
+				Settings: func(ctx context.Context) (conversations.Settings, error) { return settingsOf.Settings(ctx) },
 			},
 			Workers: func(agentID string) (workerhttp.Service, error) { return agentWorkers.Client(agentID) },
 			DefaultModel: func(ctx context.Context, provider project.AgentProvider) string {
@@ -393,6 +406,7 @@ func run(ctx context.Context, coordinatorConfig config) error {
 		if err != nil {
 			return fmt.Errorf("create the assistant: %w", err)
 		}
+		settingsOf = projectAssistant
 		conversationService = projectAssistant
 		projectConversations = projectAssistant
 		// Changes in the projects' work wake the assistant (events), and
@@ -601,21 +615,33 @@ func (reader agentUsageReader) AgentUsage(ctx context.Context) ([]httpapi.AgentU
 	if err != nil {
 		return nil, err
 	}
-	usage := make([]httpapi.AgentUsage, 0, len(agents))
-	for _, candidate := range agents {
+	// The workers are asked at once: the assistant's state and every Start
+	// read this, and a stopped worker takes up to the timeout to give up.
+	answers := make([]*httpapi.AgentUsage, len(agents))
+	var asking sync.WaitGroup
+	for index, candidate := range agents {
 		client, err := reader.workers.Client(candidate.ID)
 		if err != nil {
 			continue
 		}
-		asked, cancel := context.WithTimeout(ctx, 3*time.Second)
-		reported, err := client.Usage(asked)
-		cancel()
-		if err != nil {
-			continue
+		asking.Add(1)
+		go func() {
+			defer asking.Done()
+			asked, cancel := context.WithTimeout(ctx, 3*time.Second)
+			defer cancel()
+			if reported, err := client.Usage(asked); err == nil {
+				answers[index] = &httpapi.AgentUsage{
+					Agent: candidate.ID, Windows: reported.Windows, ObservedAt: reported.ObservedAt,
+				}
+			}
+		}()
+	}
+	asking.Wait()
+	usage := make([]httpapi.AgentUsage, 0, len(agents))
+	for _, answer := range answers {
+		if answer != nil {
+			usage = append(usage, *answer)
 		}
-		usage = append(usage, httpapi.AgentUsage{
-			Agent: candidate.ID, Windows: reported.Windows, ObservedAt: reported.ObservedAt,
-		})
 	}
 	return usage, nil
 }

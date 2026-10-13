@@ -10,13 +10,50 @@ import (
 	"github.com/EinarLogiOskars/commitarium/internal/project"
 )
 
-func TestAgentStoreSeedsCreatesRenamesAndRemoves(t *testing.T) {
+// A project and a draft work order created without agents (ADR-027) read
+// back without any, not as the historical Codex default, and hold no agent.
+func TestProjectsAndWorkOrdersWithoutAgentsStayWithout(t *testing.T) {
+	db, _ := newTestExecutionStore(t)
+	now := time.Now().UTC()
+	projects, features := NewProjectStore(db), NewFeatureStore(db)
+	if err := projects.Create(t.Context(), project.Project{
+		ID: "prj_plain", Name: "Plain", RecoveryPolicy: project.RecoveryPolicyApprovalRequired,
+		DialogueLimits: project.DefaultDialogueLimits(), CreatedAt: now,
+	}); err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	if err := features.Create(t.Context(), feature.Feature{
+		ID: "fea_plain", ProjectID: "prj_plain", Title: "Draft", State: feature.StateDraft,
+		DialogueLimits: project.DefaultDialogueLimits(), CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("create work order: %v", err)
+	}
+	stored, err := projects.GetByID(t.Context(), "prj_plain")
+	if err != nil || !stored.AgentProviders.IsZero() {
+		t.Fatalf("project agents = %+v err=%v", stored.AgentProviders, err)
+	}
+	draft, err := features.GetByID(t.Context(), "fea_plain")
+	if err != nil || !draft.AgentProviders.IsZero() {
+		t.Fatalf("work order agents = %+v err=%v", draft.AgentProviders, err)
+	}
+	service := agent.NewService(NewAgentStore(db))
+	codex, err := service.Create(t.Context(), "Codex", project.AgentProviderCodex)
+	if err != nil || codex.ID != "codex" {
+		t.Fatalf("create agent: %+v err=%v", codex, err)
+	}
+	if err := service.Delete(t.Context(), codex.ID); err != nil {
+		t.Fatalf("an agent no project chose could not be removed: %v", err)
+	}
+}
+
+func TestAgentStoreStartsEmptyCreatesRenamesAndRemoves(t *testing.T) {
 	db, _ := newTestExecutionStore(t)
 	service := agent.NewService(NewAgentStore(db))
 
+	// A new install has no agents (ADR-027); the user adds each one.
 	seeded, err := service.List(t.Context())
-	if err != nil || len(seeded) != 2 || seeded[0].Provider == seeded[1].Provider {
-		t.Fatalf("seeded agents=%+v err=%v", seeded, err)
+	if err != nil || len(seeded) != 0 {
+		t.Fatalf("a new install has agents=%+v err=%v", seeded, err)
 	}
 	first, err := service.Create(t.Context(), "Claude Max", project.AgentProviderClaude)
 	if err != nil || first.ID != "claude-max" {

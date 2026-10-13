@@ -7,6 +7,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/EinarLogiOskars/commitarium/internal/agent"
 	"github.com/EinarLogiOskars/commitarium/internal/workerhttp"
 )
 
@@ -53,14 +54,11 @@ func (api *API) agentLimitsHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // AgentUsage is one agent's latest report of its account's usage limits.
-type AgentUsage struct {
-	Agent      string                   `json:"agent"`
-	Windows    []workerhttp.UsageWindow `json:"windows"`
-	ObservedAt *time.Time               `json:"observed_at,omitempty"`
-}
+type AgentUsage = agent.Usage
 
 // AgentUsageService reports each connected agent's usage limits as its
-// worker last saw them.
+// worker last saw them. An agent whose worker does not answer is left out; a
+// nil list means the workers cannot be asked at all (the simulated runner).
 type AgentUsageService interface {
 	AgentUsage(ctx context.Context) ([]AgentUsage, error)
 }
