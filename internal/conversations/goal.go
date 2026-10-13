@@ -300,6 +300,54 @@ func (service *Service) autopilotActions(ctx context.Context, scope string) ([]A
 	return apply, service.write(stored)
 }
 
+// AutopilotHandles reports whether autopilot is still on a work order that
+// blocked or failed at blockedAt, so it need not ask for the user yet. It is
+// while the work order is autopilot's (a goal item, or any work in an app),
+// has continues left, and the assistant has yet to answer the blocker or has
+// proposed a continue that autopilot is about to apply. Once the assistant
+// answered without one, or left one for the user, the work order needs the
+// user.
+func (service *Service) AutopilotHandles(ctx context.Context, scope, workOrderID string, blockedAt time.Time) bool {
+	app := service.isApp(ctx, scope)
+	if settings, err := service.Settings(ctx); err != nil || settings.Agent == "" || settings.Model == "" {
+		return false
+	}
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	stored, err := service.read(scope)
+	if err != nil || stored.AutoContinues[workOrderID] >= maxAutoContinues {
+		return false
+	}
+	if _, watched := stored.Watched[workOrderID]; !watched {
+		return false
+	}
+	inGoal := app
+	if stored.Goal.active() {
+		for _, item := range stored.Goal.Items {
+			inGoal = inGoal || item.WorkOrderID == workOrderID
+		}
+	}
+	if !inGoal {
+		return false
+	}
+	for _, action := range stored.Actions {
+		if action.Type == featureartifact.AssistantContinueWorkOrder && action.WorkOrderID == workOrderID &&
+			action.Status == ActionProposed {
+			// Not yet tried, autopilot applies it; tried, it waits for the user.
+			return !action.AutoTried
+		}
+	}
+	if stored.Status == StatusRunning || len(stored.PendingEvents) > 0 {
+		return true
+	}
+	for _, message := range stored.Messages {
+		if message.Role == "assistant" && !message.OccurredAt.Before(blockedAt) {
+			return false
+		}
+	}
+	return true
+}
+
 // isApp reports whether a project is used as an app (APPS_PLAN.md).
 func (service *Service) isApp(ctx context.Context, scope string) bool {
 	if scope == TopLevel {

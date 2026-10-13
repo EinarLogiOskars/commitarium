@@ -6,7 +6,8 @@ import { useSessionEvents, type SessionRef } from "./useSessionEvents";
 import { scopeToPhase, type Interval } from "./phaseWindows";
 import type { ImplementationPlanDocument, PlanStep, Run } from "../api/types";
 
-const SHOWN = new Set(["message", "activity"]);
+// user_message: the user's messages and the guidance a Continue carried.
+const SHOWN = new Set(["message", "activity", "user_message"]);
 
 // A plan step's dot in the folded checklist.
 export const STEP_DOT: Record<string, string> = {

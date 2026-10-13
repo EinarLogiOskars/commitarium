@@ -146,7 +146,7 @@ func TestContinueWithGuidanceReachesAReviewerWhoseApprovalWasRefused(t *testing.
 	fixture, retryID := startRefusedReview(t, "run_review_guided_continue")
 	if _, admitted, err := fixture.starter.RecoverBlockerWithDirective(
 		t.Context(), fixture.runID, "continue-refused-review",
-		RecoveryDirective{Action: RecoveryActionContinue, Message: reviewContinueGuidance},
+		RecoveryDirective{Action: RecoveryActionContinue, Message: reviewContinueGuidance, FromAssistant: true},
 	); err != nil || !admitted {
 		t.Fatalf("continue: admitted=%t err=%v", admitted, err)
 	}
@@ -154,6 +154,7 @@ func TestContinueWithGuidanceReachesAReviewerWhoseApprovalWasRefused(t *testing.
 	if !strings.Contains(request.Instructions, "The user asked you to continue with this guidance: "+reviewContinueGuidance) {
 		t.Fatalf("the reviewer's new try did not carry the user's guidance:\n%s", request.Instructions)
 	}
+	assertGuidanceShown(t, fixture.executions, remoteReviewerSessionID(fixture.runID), "assistant", reviewContinueGuidance)
 }
 
 func TestContinueAloneTellsAReviewerWhyItsApprovalWasRefused(t *testing.T) {

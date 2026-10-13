@@ -385,7 +385,7 @@ func ResolveStructuredOutput(
 			return StructuredOutput{}, err
 		}
 		response.Summary = strings.TrimSpace(response.Summary)
-		response.CommitID = strings.TrimSpace(response.CommitID)
+		response.CommitID = withoutPlaceholder(response.CommitID)
 		if response.Summary == "" {
 			return StructuredOutput{}, invalidStructuredOutput("implementation lead response is incomplete")
 		}
@@ -402,8 +402,22 @@ func ResolveStructuredOutput(
 			}
 			return StructuredOutput{Event: Event{Type: EventInputRequired, Text: response.Summary}, Disposition: DispositionInputRequired, EnvironmentRequest: request}, nil
 		}
-		if response.PullRequestNumber < 1 || len(response.SystemPackages) != 0 || strings.TrimSpace(response.EnvironmentReason) != "" {
-			return StructuredOutput{}, invalidStructuredOutput("implementation lead response has contradictory environment fields")
+		if response.PullRequestNumber < 1 {
+			return StructuredOutput{}, invalidStructuredOutput("implementation lead response is missing its pull_request_number")
+		}
+		// Only an environment request uses the environment fields. Agents
+		// often fill them anyway, with a placeholder or a stray note, which is
+		// not worth rejecting finished work over: placeholders count as empty
+		// and a real note is kept in the summary.
+		for _, systemPackage := range response.SystemPackages {
+			if withoutPlaceholder(systemPackage) != "" {
+				return StructuredOutput{}, invalidStructuredOutput(
+					"implementation lead system_packages must be empty unless action is environment_required",
+				)
+			}
+		}
+		if note := withoutPlaceholder(response.EnvironmentReason); note != "" {
+			response.Summary += "\n\nNote: " + note
 		}
 		if response.Action == "blocked" {
 			if response.CommitID != "" {
@@ -440,7 +454,7 @@ func ResolveStructuredOutput(
 			return StructuredOutput{}, err
 		}
 		response.Summary = strings.TrimSpace(response.Summary)
-		response.TestCommitID = strings.TrimSpace(response.TestCommitID)
+		response.TestCommitID = withoutPlaceholder(response.TestCommitID)
 		if response.Summary == "" {
 			return StructuredOutput{}, invalidStructuredOutput("acceptance test response is incomplete")
 		}
@@ -478,12 +492,12 @@ func ResolveStructuredOutput(
 			return StructuredOutput{}, err
 		}
 		response.Summary = strings.TrimSpace(response.Summary)
-		response.CommitID = strings.TrimSpace(response.CommitID)
+		response.CommitID = withoutPlaceholder(response.CommitID)
 		if response.Summary == "" {
 			return StructuredOutput{}, invalidStructuredOutput("implementation review response is incomplete")
 		}
 		if response.PullRequestNumber < 1 {
-			return StructuredOutput{}, invalidStructuredOutput("implementation review response is incomplete")
+			return StructuredOutput{}, invalidStructuredOutput("implementation review response is missing its pull_request_number")
 		}
 		if response.Action == "blocked" {
 			if response.CommitID != "" || response.ReviewID != 0 {
@@ -787,6 +801,17 @@ func decodeStructuredOutput(raw []byte, destination any) error {
 
 func invalidStructuredOutput(format string, arguments ...any) error {
 	return fmt.Errorf("%w: %s", ErrInvalidStructuredOutput, fmt.Sprintf(format, arguments...))
+}
+
+// withoutPlaceholder trims a value and blanks the stand-ins agents write into
+// fields that do not apply, such as "none" or "n/a".
+func withoutPlaceholder(value string) string {
+	value = strings.TrimSpace(value)
+	switch strings.ToLower(strings.TrimSuffix(value, ".")) {
+	case "none", "n/a", "na", "-", "null", "nil":
+		return ""
+	}
+	return value
 }
 
 // trimmedItems drops blank list entries an agent may leave behind.

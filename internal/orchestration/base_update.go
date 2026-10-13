@@ -32,6 +32,10 @@ const baseUpdateRequested = "Main moved past the approved revision and it no lon
 
 const baseUpdateGuidancePrefix = baseUpdateRequested + " The user's guidance: "
 
+// baseUpdateAssistantGuidancePrefix marks guidance the assistant wrote (a
+// continue_work_order action), so the update shows who gave it.
+const baseUpdateAssistantGuidancePrefix = baseUpdateRequested + " The assistant's guidance: "
+
 func baseUpdateIntentID(attemptID string) string {
 	return attemptID + ":base-update-requested"
 }
@@ -84,27 +88,30 @@ func (starter *RemoteLeadStarter) baseUpdatesRequested(ctx context.Context, run 
 }
 
 // baseUpdateIntent returns the recorded request to bring main in after a lead
-// turn, with the user's guidance it carried.
+// turn, with the guidance it carried and whether the assistant wrote it.
 func (starter *RemoteLeadStarter) baseUpdateIntent(
 	ctx context.Context,
 	sessionID string,
 	attemptID string,
-) (string, bool, error) {
+) (string, bool, bool, error) {
 	events, err := starter.executions.EventsForSession(ctx, sessionID)
 	if err != nil {
-		return "", false, err
+		return "", false, false, err
 	}
 	for _, event := range events {
 		if event.ID != baseUpdateIntentID(attemptID) {
 			continue
 		}
+		if guidance, found := strings.CutPrefix(event.Text, baseUpdateAssistantGuidancePrefix); found {
+			return guidance, true, true, nil
+		}
 		guidance, _ := strings.CutPrefix(event.Text, baseUpdateGuidancePrefix)
 		if guidance == event.Text {
 			guidance = ""
 		}
-		return guidance, true, nil
+		return guidance, false, true, nil
 	}
-	return "", false, nil
+	return "", false, false, nil
 }
 
 // nextBaseUpdateTurn numbers a new update after every earlier one of the plan
@@ -135,12 +142,15 @@ func nextBaseUpdateTurn(
 
 // beginBaseUpdate starts the lead's update onto main. owned says the caller
 // already holds the run and runs the turn itself; otherwise the run is
-// claimed and the turn runs in the background.
-func (starter *RemoteLeadStarter) beginBaseUpdate(ctx context.Context, runID string, guidance string, owned bool) error {
+// claimed and the turn runs in the background. fromAssistant says the
+// assistant, not the user, wrote the guidance.
+func (starter *RemoteLeadStarter) beginBaseUpdate(
+	ctx context.Context, runID string, guidance string, fromAssistant bool, owned bool,
+) error {
 	if !owned && !starter.claim(runID) {
 		return fmt.Errorf("%w: %q", ErrRunAlreadyActive, runID)
 	}
-	request, admitted, err := starter.startBaseUpdate(ctx, runID, guidance)
+	request, admitted, err := starter.startBaseUpdate(ctx, runID, guidance, fromAssistant)
 	if err != nil || !admitted {
 		if !owned {
 			starter.release(runID)
@@ -163,11 +173,11 @@ func (starter *RemoteLeadStarter) resumeBaseUpdate(ctx context.Context, run exec
 	if err != nil {
 		return false, fmt.Errorf("load lead checkpoint: %w", err)
 	}
-	_, requested, err := starter.baseUpdateIntent(ctx, checkpoint.SessionID, checkpoint.AttemptID)
+	_, _, requested, err := starter.baseUpdateIntent(ctx, checkpoint.SessionID, checkpoint.AttemptID)
 	if err != nil || !requested {
 		return false, err
 	}
-	return true, starter.beginBaseUpdate(ctx, run.ID, "", false)
+	return true, starter.beginBaseUpdate(ctx, run.ID, "", false, false)
 }
 
 // startBaseUpdate admits the lead's turn that merges the moved default branch
@@ -177,11 +187,13 @@ func (starter *RemoteLeadStarter) resumeBaseUpdate(ctx context.Context, run exec
 // pinned, because the update is verified against it; it cannot be merged
 // meanwhile, because the work order is no longer ready to merge. Retrying is
 // safe: a recorded request keeps its guidance, and an admitted turn is not
-// admitted again.
+// admitted again. The admitted turn shows the guidance in the lead's
+// transcript, as a guided Continue does.
 func (starter *RemoteLeadStarter) startBaseUpdate(
 	ctx context.Context,
 	runID string,
 	guidance string,
+	fromAssistant bool,
 ) (remoteLeadRequest, bool, error) {
 	run, err := starter.executions.GetRun(ctx, runID)
 	if err != nil {
@@ -224,12 +236,12 @@ func (starter *RemoteLeadStarter) startBaseUpdate(
 	if version, ok := leadAttemptPlanVersion(lead.ID, checkpoint.AttemptID); !ok || version != run.PlanVersion {
 		return remoteLeadRequest{}, false, errors.New("lead checkpoint does not belong to the current plan")
 	}
-	storedGuidance, requested, err := starter.baseUpdateIntent(ctx, lead.ID, checkpoint.AttemptID)
+	storedGuidance, storedFromAssistant, requested, err := starter.baseUpdateIntent(ctx, lead.ID, checkpoint.AttemptID)
 	if err != nil {
 		return remoteLeadRequest{}, false, err
 	}
 	if requested {
-		guidance = storedGuidance
+		guidance, fromAssistant = storedGuidance, storedFromAssistant
 	} else if storedFeature.State != feature.StateReadyToMerge {
 		return remoteLeadRequest{}, false, fmt.Errorf(
 			"%w: no update onto main was requested", ErrImplementationNotAllowed,
@@ -279,7 +291,11 @@ func (starter *RemoteLeadStarter) startBaseUpdate(
 	if !requested {
 		text := baseUpdateRequested
 		if strings.TrimSpace(guidance) != "" {
-			text = baseUpdateGuidancePrefix + strings.TrimSpace(guidance)
+			prefix := baseUpdateGuidancePrefix
+			if fromAssistant {
+				prefix = baseUpdateAssistantGuidancePrefix
+			}
+			text = prefix + strings.TrimSpace(guidance)
 		}
 		if _, err := starter.executions.RecordSessionEventWithID(
 			ctx, baseUpdateIntentID(checkpoint.AttemptID), lead.ID,
@@ -306,6 +322,9 @@ func (starter *RemoteLeadStarter) startBaseUpdate(
 		admitted, err = starter.executions.BeginAutonomousTurn(
 			ctx, lead.ID, checkpoint, attemptID, target, implementationBaseUpdateRunningReason,
 		)
+	}
+	if err == nil && admitted && strings.TrimSpace(guidance) != "" {
+		starter.recordGuidance(ctx, lead.ID, attemptID, strings.TrimSpace(guidance), fromAssistant)
 	}
 	return request, admitted, err
 }
@@ -545,7 +564,7 @@ func (starter *RemoteLeadStarter) continueOrVerifyLeadTurn(
 		answer := remoteLeadRequest{
 			runID: run.ID, agentName: "lead agent", allowRecoveryContinuation: true,
 			answerBlocker: true, guided: guided, forceFreshRecovery: directive.Action == RecoveryActionReplace,
-			recoveryMessage: directive.Message,
+			recoveryMessage: directive.Message, guidanceFromAssistant: directive.FromAssistant,
 			identity: workerhttp.MutationIdentity{AttemptReference: workerhttp.AttemptReference{
 				SessionID: lead.ID, AttemptID: checkpoint.AttemptID,
 			}},

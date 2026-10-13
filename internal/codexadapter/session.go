@@ -846,7 +846,7 @@ func (session *session) completeStructuredResponse() (*worker.StructuredOutput, 
 	}
 	resolved, err := worker.ResolveStructuredOutput(session.outputContract, []byte(raw))
 	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrProtocol, err)
+		return nil, fmt.Errorf("%w: %w", ErrProtocol, err)
 	}
 	resolved.Event.StreamID = streamID
 	session.mu.Lock()

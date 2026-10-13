@@ -11,7 +11,8 @@ import type { Run, Workspace } from "../api/types";
 
 const POLL_MS = 2000;
 
-const SHOWN = new Set(["message", "activity"]);
+// user_message: the user's messages and the guidance a Continue carried.
+const SHOWN = new Set(["message", "activity", "user_message"]);
 
 // The automatic review / correction loop, scoped to the review window: the
 // reviewer's findings and the lead addressing them, interleaved. The formal

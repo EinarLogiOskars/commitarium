@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net/http"
 	"sort"
@@ -183,7 +184,11 @@ func (api *API) attentionForFeature(
 		base.Severity = "error"
 		base.Title = "Run failed"
 		base.Detail = detailOr(currentRun.Reason, "The run failed and needs inspection.")
-		return []attentionItem{base}, nil, nil
+		item, err := api.autopilotAttention(ctx, base, currentRun, currentProject.App)
+		if err != nil {
+			return nil, nil, err
+		}
+		return []attentionItem{item}, nil, nil
 	}
 	if currentRun.Status != execution.RunStatusWaitingForUser {
 		return nil, nil, nil
@@ -221,7 +226,80 @@ func (api *API) attentionForFeature(
 			return []attentionItem{base}, nil, nil
 		}
 	}
-	return []attentionItem{runWaitAttention(base, currentRun)}, nil, nil
+	item, err := api.autopilotAttention(ctx, runWaitAttention(base, currentRun), currentRun, currentProject.App)
+	if err != nil {
+		return nil, nil, err
+	}
+	return []attentionItem{item}, nil, nil
+}
+
+// autopilotStallAfter is how long autopilot handles a blocker quietly. Past
+// it, the user hears that autopilot has not finished, in plain words.
+const autopilotStallAfter = 10 * time.Minute
+
+// runStateSince is implemented by execution services that keep when a run
+// entered its current state.
+type runStateSince interface {
+	RunStateSince(ctx context.Context, runID string) (time.Time, error)
+}
+
+// autopilotAttention quiets a blocked or failed run that autopilot is still
+// on: the assistant is finding out why and continuing it. The item is not
+// actionable and has its own kind and ID, so the inbox asks the user, and the
+// desktop notifies, only once autopilot gives up. Should autopilot still be
+// on it autopilotStallAfter after the run blocked, the item becomes an
+// autopilot_stalled one (a new ID, so it notifies once) that sends the user
+// to the assistant rather than to the blocker's details. In an app, a
+// blocker autopilot gave up on reads plainly too.
+func (api *API) autopilotAttention(
+	ctx context.Context, item attentionItem, run execution.Run, app bool,
+) (attentionItem, error) {
+	if api.conversations == nil || (item.Kind != "blocker" && item.Kind != "run_failed") {
+		return item, nil
+	}
+	// When the run blocked: its updated_at moves on while it waits.
+	blockedAt := run.UpdatedAt
+	if states, ok := api.execution.(runStateSince); ok {
+		since, err := states.RunStateSince(ctx, run.ID)
+		if err != nil {
+			return attentionItem{}, err
+		}
+		if !since.IsZero() {
+			blockedAt = since
+		}
+	}
+	if !api.conversations.AutopilotHandles(ctx, item.ProjectID, item.FeatureID, blockedAt) {
+		if app {
+			item.Title = "This needs your help"
+			item.Detail = item.FeatureTitle + " stopped and needs your help. Check in with the assistant."
+		}
+		return item, nil
+	}
+	if stalledAt := blockedAt.Add(autopilotStallAfter); api.clock().After(stalledAt) {
+		item.ID = "autopilot-stalled:" + item.ID
+		item.Kind = "autopilot_stalled"
+		item.Severity = "warning"
+		item.Actionable = true
+		item.Title = "Autopilot hasn't finished this yet"
+		item.Detail = fmt.Sprintf("%s has been waiting for %d minutes. Check in with the assistant.",
+			item.FeatureTitle, int(autopilotStallAfter/time.Minute))
+		item.UpdatedAt = stalledAt
+		return item, nil
+	}
+	item.ID = "autopilot:" + item.ID
+	item.Kind = "autopilot_handling"
+	item.Severity = "info"
+	item.Actionable = false
+	item.Title = "Autopilot is handling this"
+	return item, nil
+}
+
+// clock is the API's time, which tests set.
+func (api *API) clock() time.Time {
+	if api.now != nil {
+		return api.now()
+	}
+	return time.Now()
 }
 
 func mergedTitle(currentFeature feature.Feature) string {

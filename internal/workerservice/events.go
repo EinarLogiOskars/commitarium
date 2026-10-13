@@ -104,17 +104,19 @@ func (service *Service) supervise(
 		service.removeActive(reference, live)
 		close(live.finished)
 	}()
-	providerSession := live.session
-	var previews <-chan worker.MessagePreview
-	if previewSession, ok := providerSession.(worker.PreviewSession); ok {
-		previews = previewSession.Previews()
-	}
+	providerSession := live.current()
+	previews := sessionPreviews(providerSession)
 	for {
 		select {
 		case <-service.lifetime.Done():
 			return
 		case event, open := <-providerSession.Events():
 			if !open {
+				if corrected := service.resubmitRejectedResult(reference, live); corrected != nil {
+					providerSession = corrected
+					previews = sessionPreviews(corrected)
+					continue
+				}
 				service.finishAttempt(reference, providerSession)
 				return
 			}
@@ -139,6 +141,82 @@ func (service *Service) supervise(
 			service.publishProviderPreview(reference, preview)
 		}
 	}
+}
+
+func sessionPreviews(providerSession worker.Session) <-chan worker.MessagePreview {
+	if previewSession, ok := providerSession.(worker.PreviewSession); ok {
+		return previewSession.Previews()
+	}
+	return nil
+}
+
+// maxResultCorrections bounds how often one turn's rejected structured result
+// goes back to the same provider conversation before the attempt fails.
+const maxResultCorrections = 2
+
+// resubmitRejectedResult hands a rejected structured result's validation error
+// back to the same provider conversation and asks only for a corrected result.
+// The correction stays inside the running attempt, so the coordinator sees
+// neither a failure nor a blocker while it happens. It returns nil when the
+// turn should end as it is.
+func (service *Service) resubmitRejectedResult(
+	reference workerhttp.AttemptReference,
+	live *activeProviderSession,
+) worker.Session {
+	previous := live.current()
+	// Wait before taking live.mu, so a hung provider can still be force-stopped.
+	_, err := previous.Wait(service.lifetime)
+	if !errors.Is(err, worker.ErrInvalidStructuredOutput) {
+		return nil
+	}
+	live.mu.Lock()
+	defer live.mu.Unlock()
+	if live.corrections >= maxResultCorrections || live.launch.OutputContract == "" {
+		return nil
+	}
+	attempt, getErr := service.journal.GetAttempt(service.lifetime, reference)
+	if getErr != nil || attempt.State != workerhttp.AttemptStateRunning ||
+		attempt.ProviderSessionID == "" || attempt.ProviderSessionID != previous.ProviderSessionID() {
+		return nil
+	}
+	rejection := rejectedResultReason(err)
+	if service.recordProviderEvent(reference, worker.Event{
+		Type: worker.EventActivity, Text: "Commitarium rejected the structured result (" + rejection +
+			") and asked the agent to correct it.",
+		Activity: &worker.Activity{Kind: worker.ActivityKindNarration},
+	}) != nil {
+		return nil
+	}
+	corrected, resumeErr := service.provider.Resume(service.lifetime, worker.ResumeRequest{
+		SessionRequest:    live.launch.Clone(),
+		ProviderSessionID: attempt.ProviderSessionID,
+		Recovery:          worker.RecoveryContext{Briefing: resultCorrectionPrompt(rejection)},
+	})
+	if resumeErr != nil || corrected == nil || corrected.ProviderSessionID() != attempt.ProviderSessionID {
+		service.stopUnownedSession(corrected)
+		return nil
+	}
+	live.corrections++
+	live.session = corrected
+	return corrected
+}
+
+// rejectedResultReason is the validation error without the provider and
+// package prefixes the agent has no use for.
+func rejectedResultReason(err error) string {
+	message := err.Error()
+	marker := worker.ErrInvalidStructuredOutput.Error() + ": "
+	if index := strings.Index(message, marker); index >= 0 {
+		message = message[index+len(marker):]
+	}
+	return strings.TrimSpace(message)
+}
+
+func resultCorrectionPrompt(rejection string) string {
+	return "Commitarium could not accept your final structured result: " + rejection + ". " +
+		"Do not redo or repeat any work, and do not repeat external effects such as commits, pushes, " +
+		"pull requests or reviews. Return only a corrected final structured result for the same outcome, " +
+		"following the output contract exactly."
 }
 
 func (service *Service) forceStopAfterSupervisionFailure(providerSession worker.Session) bool {

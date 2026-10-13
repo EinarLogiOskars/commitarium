@@ -378,6 +378,45 @@ func TestAutomaticUpdatesStopAtTheLimitAndContinueTakesGuidance(t *testing.T) {
 	}
 }
 
+// Guidance given with Continue on the behind-main blocker shows in the lead's
+// transcript as a message from whoever wrote it, as a guided Continue does.
+func TestContinueBehindMainShowsItsGuidance(t *testing.T) {
+	for _, author := range []string{"user", "assistant"} {
+		t.Run(author, func(t *testing.T) {
+			fixture := startBaseUpdateRun(t, "run_base_update_guidance_"+author, false, project.MergePolicyAutoAfterGates, 4,
+				func(fixture *baseUpdateFixture) {
+					fixture.workspace.mainHead = baseUpdateMainHead
+					fixture.workspace.stillBehind = true
+					fixture.workspace.mergeErrs = []error{baseUpdateNoMerge, baseUpdateNoMerge, baseUpdateNoMerge, baseUpdateNoMerge}
+				})
+			fixture.waitBlocked(t, implementationMergeBehindMainReason)
+			if _, admitted, err := fixture.starter.RecoverBlockerWithDirective(
+				t.Context(), fixture.runID, "continue-behind-main-"+author,
+				RecoveryDirective{Action: RecoveryActionContinue, Message: baseUpdateGuidance, FromAssistant: author == "assistant"},
+			); err != nil || !admitted {
+				t.Fatalf("continue behind main: admitted=%t err=%v", admitted, err)
+			}
+			fixture.waitMerged(t)
+			events, err := fixture.executions.EventsForSession(t.Context(), remoteLeadSessionID(fixture.runID))
+			if err != nil {
+				t.Fatalf("lead events: %v", err)
+			}
+			shown := 0
+			for _, event := range events {
+				if event.Type == worker.EventUserMessage {
+					shown++
+					if event.Text != baseUpdateGuidance || !strings.HasSuffix(event.ID, ":guidance:"+author) {
+						t.Fatalf("guidance shown as %+v", event)
+					}
+				}
+			}
+			if shown != 1 {
+				t.Fatalf("guidance shown %d times, want once", shown)
+			}
+		})
+	}
+}
+
 func TestRefusedMergeWithoutMainMovingKeepsThePlainBlocker(t *testing.T) {
 	t.Run("not mergeable while up to date", func(t *testing.T) {
 		fixture := startBaseUpdateRun(t, "run_not_mergeable_up_to_date", false, project.MergePolicyAutoAfterGates, 0,

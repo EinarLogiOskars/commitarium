@@ -22,6 +22,7 @@ import { OrderSidebar } from "./OrderSidebar";
 import { PhaseStepper, currentPhaseIndex } from "./PhaseStepper";
 import { phaseIntervals, type Interval } from "./phaseWindows";
 import { WORK } from "../vocab";
+import { askAssistantAbout } from "../attention/askAssistant";
 import type {
   Feature,
   FeatureUsage,
@@ -50,10 +51,14 @@ export function FeatureView({
   onDeleted,
   onOpenValidation,
   onKind,
+  autopilot,
 }: {
   projectId: string;
   featureId: string;
   hasRepo?: boolean;
+  /** Autopilot is continuing this blocked or failed work order itself
+   * ("handling"), or has been for a while without finishing ("stalled"). */
+  autopilot?: "handling" | "stalled";
   onBack?: () => void;
   onChanged?: () => void;
   onDeleted?: () => void;
@@ -360,6 +365,29 @@ export function FeatureView({
           current > 0 &&
           run.wait_kind !== "blocker" &&
           waitBanner(run, feature.state)}
+        {run && autopilot === "handling" && (
+          <div className="wait-banner wait-banner--warn">
+            <span className="wait-banner__kind">Autopilot is handling this</span>
+            <span className="wait-banner__reason">
+              The assistant is finding out why this stopped and continuing it. It asks you if it
+              can&apos;t fix it.
+            </span>
+          </div>
+        )}
+        {run && autopilot === "stalled" && (
+          <div className="wait-banner wait-banner--warn">
+            <span className="wait-banner__kind">Autopilot hasn&apos;t finished this yet</span>
+            <span className="wait-banner__reason">
+              It has been waiting for a while. Check in with the assistant to see what&apos;s
+              holding it up.
+            </span>
+            <div className="row">
+              <button className="primary" onClick={() => askAssistantAbout(feature.title)}>
+                Ask the assistant
+              </button>
+            </div>
+          </div>
+        )}
         {pinnedIndex !== null && pinnedIndex !== current && (
           <button className="linkish" onClick={() => setPinnedIndex(null)}>
             Viewing an earlier phase — jump to the current phase →

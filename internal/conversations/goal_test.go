@@ -5,7 +5,9 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/EinarLogiOskars/commitarium/internal/execution"
 	"github.com/EinarLogiOskars/commitarium/internal/feature"
 	"github.com/EinarLogiOskars/commitarium/internal/featureartifact"
 	"github.com/EinarLogiOskars/commitarium/internal/vision"
@@ -163,6 +165,74 @@ func TestAutopilotContinuesABlockedWorkOrderAtMostTwice(t *testing.T) {
 	conversation, _ := service.Get(t.Context(), "prj_test")
 	if continues != 2 || !strings.Contains(conversation.Messages[len(conversation.Messages)-1].Text, "yours to approve") {
 		t.Fatalf("continues = %d, last = %q", continues, conversation.Messages[len(conversation.Messages)-1].Text)
+	}
+}
+
+// Autopilot keeps a blocked goal item to itself until the assistant has
+// answered without continuing it, or its continues run out.
+func TestAutopilotHandlesABlockerUntilItGivesUp(t *testing.T) {
+	service, worker := newTestService(t)
+	plan := featureartifact.VisionPlan{Priorities: []featureartifact.VisionPriority{
+		{Level: 0, Items: []featureartifact.VisionItem{{ID: "list", Title: "Show the log", FeatureID: "fea_list"}}},
+	}}
+	service.config.Visions = &visionStub{plan: plan}
+	service.config.Features = &featuresStub{features: []feature.Feature{{ID: "fea_list", State: feature.StateImplementing}}}
+	if _, err := service.StartGoal(t.Context(), "prj_test", 0); err != nil {
+		t.Fatal(err)
+	}
+	running := work{Title: "Show the log", State: feature.StateImplementing, RunID: "run_1",
+		RunStatus: execution.RunStatusRunning}
+	current := map[string]work{"fea_list": running}
+	snapshot := func(context.Context, string) (view, error) { return view{Work: current, Plan: &plan}, nil }
+	observe := func() {
+		if err := service.observe(t.Context(), "prj_test", snapshot); err != nil {
+			t.Fatal(err)
+		}
+	}
+	answer := func(actions ...featureartifact.AssistantAction) {
+		worker.finish(workerhttp.TerminalResult{
+			Outcome: workerhttp.OutcomeCompleted, Disposition: workerhttp.DispositionSucceeded, Summary: "On it.",
+			AssistantTurn: &featureartifact.AssistantTurn{Actions: actions},
+		})
+		if _, err := service.Get(t.Context(), "prj_test"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	block := func() time.Time {
+		blockedAt := time.Now()
+		current["fea_list"] = work{Title: "Show the log", State: feature.StateImplementing, RunID: "run_1",
+			RunStatus: execution.RunStatusWaitingForUser, WaitKind: execution.RunWaitKindBlocker}
+		observe()
+		return blockedAt
+	}
+	observe()
+	answer()
+	if service.AutopilotHandles(t.Context(), "prj_test", "fea_other", time.Now()) {
+		t.Fatal("autopilot claims a work order outside its goal")
+	}
+
+	// The assistant hears of the block, then proposes a continue autopilot applies.
+	blockedAt := block()
+	if !service.AutopilotHandles(t.Context(), "prj_test", "fea_list", blockedAt) {
+		t.Fatal("a blocker the assistant has yet to answer was not autopilot's")
+	}
+	answer(featureartifact.AssistantAction{
+		Type: featureartifact.AssistantContinueWorkOrder, Reason: "Blocked", WorkOrderID: "fea_list", Guidance: "Fix it.",
+	})
+	if !service.AutopilotHandles(t.Context(), "prj_test", "fea_list", blockedAt) {
+		t.Fatal("a continue waiting to be applied was not autopilot's")
+	}
+	if apply, err := service.autopilotActions(t.Context(), "prj_test"); err != nil || len(apply) != 1 {
+		t.Fatalf("autopilot applied %+v err=%v", apply, err)
+	}
+
+	// It blocks again and the assistant answers without a continue: the user's.
+	current["fea_list"] = running
+	observe()
+	blockedAt = block()
+	answer()
+	if service.AutopilotHandles(t.Context(), "prj_test", "fea_list", blockedAt) {
+		t.Fatal("a blocker the assistant answered without a continue stayed autopilot's")
 	}
 }
 

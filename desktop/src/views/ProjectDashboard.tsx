@@ -4,6 +4,7 @@ import { getRun, recoverRun } from "../api/runs";
 import { currentPhaseIndex, PHASE_LABELS, PHASES } from "./PhaseStepper";
 import { ProjectSyncCard } from "./ProjectSyncCard";
 import { WORK } from "../vocab";
+import { askAssistantAbout } from "../attention/askAssistant";
 import type { AttentionItem, Feature, Project, Run } from "../api/types";
 
 const POLL_MS = 4000;
@@ -186,7 +187,11 @@ export function ProjectDashboard({
                 <div key={item.id} className="dash__attn-item">
                   <button
                     className="dash__row dash__row--attn"
-                    onClick={() => onOpenOrder(item.feature_id)}
+                    onClick={() =>
+                      item.kind === "autopilot_stalled"
+                        ? askAssistantAbout(item.feature_title)
+                        : onOpenOrder(item.feature_id)
+                    }
                     title={item.detail}
                   >
                     <span className={`state state--${tone}`}>
