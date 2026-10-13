@@ -57,6 +57,9 @@ type ServerConfig struct {
 	// ActivitySource, when set, reports how many attempts are launching or
 	// running.
 	ActivitySource func() int
+	// CLIVersion is the provider CLI version the worker started with, when
+	// known; the activity answer reports it.
+	CLIVersion string
 }
 
 type ModelSource interface {
@@ -117,6 +120,7 @@ type Server struct {
 	modelSource  ModelSource
 	usageSource  func() ([]UsageWindow, *time.Time)
 	activity     func() int
+	cliVersion   string
 	mux          *http.ServeMux
 }
 
@@ -157,6 +161,7 @@ func NewServer(config ServerConfig, service Service) (http.Handler, error) {
 		modelSource:  config.ModelSource,
 		usageSource:  config.UsageSource,
 		activity:     config.ActivitySource,
+		cliVersion:   config.CLIVersion,
 		mux:          http.NewServeMux(),
 	}
 	server.routes()
@@ -246,7 +251,9 @@ func (server *Server) getUsage(w http.ResponseWriter, _ *http.Request) {
 
 func (server *Server) getActivity(w http.ResponseWriter, _ *http.Request) {
 	attempts := server.activity()
-	server.writeResponse(w, http.StatusOK, ActivityResponse{Busy: attempts > 0, Attempts: attempts})
+	server.writeResponse(w, http.StatusOK, ActivityResponse{
+		Busy: attempts > 0, Attempts: attempts, CLIVersion: server.cliVersion,
+	})
 }
 
 func (server *Server) attempt(w http.ResponseWriter, r *http.Request) {

@@ -10,8 +10,10 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -87,6 +89,9 @@ type runtime struct {
 	modelSource         workerhttp.ModelSource
 	usage               *worker.UsageTracker
 	description         string
+	// cliExecutable is the provider CLI whose version the worker reports,
+	// when it is the one the desktop keeps updated.
+	cliExecutable string
 }
 
 func main() {
@@ -97,17 +102,25 @@ func main() {
 		return
 	}
 	// The desktop asks, through docker exec, whether restarting this worker
-	// would cut off a turn.
+	// would cut off a turn. Asked for JSON (an environment variable, which
+	// workers before it ignore), it also learns the CLI version the worker
+	// started with; otherwise the answer stays the bare attempt count.
 	if len(os.Args) == 2 && os.Args[1] == "activity" {
 		token, err := secretfile.RequiredPath(os.Getenv, "COMMITARIUM_WORKER_TOKEN_FILE", "worker API token")
 		if err != nil {
 			log.Fatal(err)
 		}
-		active, err := checkActivity(context.Background(), defaultActivityURL, token)
+		activity, err := checkActivity(context.Background(), defaultActivityURL, token)
 		if err != nil {
 			log.Fatal(err)
 		}
-		fmt.Println(active)
+		if os.Getenv("COMMITARIUM_ACTIVITY_FORMAT") == "json" {
+			if err := json.NewEncoder(os.Stdout).Encode(activity); err != nil {
+				log.Fatal(err)
+			}
+			return
+		}
+		fmt.Println(activity.Attempts)
 		return
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -223,6 +236,7 @@ func run(ctx context.Context, workerConfig config) error {
 		ModelSource:           workerRuntime.modelSource,
 		UsageSource:           usageSource(workerRuntime.usage),
 		ActivitySource:        service.ActiveAttempts,
+		CLIVersion:            startupCLIVersion(ctx, workerRuntime.cliExecutable),
 	}, service)
 	if err != nil {
 		return fmt.Errorf("create worker HTTP server: %w", err)
@@ -525,9 +539,10 @@ func newCodexRuntime(config codexConfig) (runtime, error) {
 			workerhttp.CapabilityForceStop,
 			workerhttp.CapabilityEventReplay,
 		},
-		description: "Codex worker",
-		modelSource: modelSource,
-		usage:       &codexadapter.Usage,
+		description:   "Codex worker",
+		modelSource:   modelSource,
+		usage:         &codexadapter.Usage,
+		cliExecutable: updatableCLI(config.executable, defaultCodexBinary),
 	}, nil
 }
 
@@ -579,9 +594,10 @@ func newClaudeRuntime(config claudeConfig) (runtime, error) {
 			workerhttp.CapabilityForceStop,
 			workerhttp.CapabilityEventReplay,
 		},
-		description: "Claude worker",
-		modelSource: claudeModelSource(provider, baseVariables, config.availableModels),
-		usage:       &claudeadapter.Usage,
+		description:   "Claude worker",
+		modelSource:   claudeModelSource(provider, baseVariables, config.availableModels),
+		usage:         &claudeadapter.Usage,
+		cliExecutable: updatableCLI(config.executable, defaultClaudeBinary),
 	}, nil
 }
 
@@ -635,6 +651,55 @@ func preferUpdatedCLI(bundled string) string {
 		return updated
 	}
 	return bundled
+}
+
+// updatableCLI is executable when it is the CLI the desktop keeps updated, and
+// empty when a configured executable overrides it: the desktop compares the
+// reported version with its updated CLI and would otherwise restart forever.
+func updatableCLI(executable string, bundled string) string {
+	if executable != preferUpdatedCLI(bundled) {
+		return ""
+	}
+	return executable
+}
+
+// startupCLIVersion is the version of the provider CLI this worker runs,
+// read once at startup. Long-running provider state (resolved model aliases,
+// a Codex app-server) keeps whatever it loaded, so a CLI installed later
+// needs a restart; the desktop compares this with the installed one.
+func startupCLIVersion(ctx context.Context, executable string) string {
+	if executable == "" {
+		return ""
+	}
+	versionContext, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	output, err := exec.CommandContext(versionContext, executable, "--version").Output()
+	if err != nil {
+		log.Printf("read the provider CLI version: %v", err)
+		return ""
+	}
+	return firstVersion(string(output))
+}
+
+// firstVersion is the first x.y.z version in a CLI's --version output, read
+// the way the desktop reads it.
+func firstVersion(output string) string {
+	for _, word := range strings.Fields(output) {
+		word = strings.TrimPrefix(word, "v")
+		core, _, _ := strings.Cut(word, "+")
+		core, _, _ = strings.Cut(core, "-")
+		parts := strings.Split(core, ".")
+		valid := len(parts) == 3
+		for _, part := range parts {
+			if _, err := strconv.ParseUint(part, 10, 64); err != nil {
+				valid = false
+			}
+		}
+		if valid {
+			return word
+		}
+	}
+	return ""
 }
 
 // claudeModelRefresh is how long resolved Claude models are reused.
@@ -855,28 +920,29 @@ func checkHealth(ctx context.Context, healthURL string) error {
 	return nil
 }
 
-// checkActivity is how many attempts the worker is launching or running.
-func checkActivity(ctx context.Context, activityURL string, token string) (int, error) {
+// checkActivity is how many attempts the worker is launching or running, and
+// the CLI version it started with.
+func checkActivity(ctx context.Context, activityURL string, token string) (workerhttp.ActivityResponse, error) {
 	requestContext, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 	request, err := http.NewRequestWithContext(requestContext, http.MethodGet, activityURL, nil)
 	if err != nil {
-		return 0, fmt.Errorf("create worker activity request: %w", err)
+		return workerhttp.ActivityResponse{}, fmt.Errorf("create worker activity request: %w", err)
 	}
 	request.Header.Set("Authorization", "Bearer "+token)
 	response, err := http.DefaultClient.Do(request)
 	if err != nil {
-		return 0, fmt.Errorf("request worker activity: %w", err)
+		return workerhttp.ActivityResponse{}, fmt.Errorf("request worker activity: %w", err)
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
-		return 0, fmt.Errorf("worker activity returned HTTP %d", response.StatusCode)
+		return workerhttp.ActivityResponse{}, fmt.Errorf("worker activity returned HTTP %d", response.StatusCode)
 	}
 	var activity workerhttp.ActivityResponse
 	if err := json.NewDecoder(io.LimitReader(response.Body, 16*1024)).Decode(&activity); err != nil {
-		return 0, fmt.Errorf("decode worker activity: %w", err)
+		return workerhttp.ActivityResponse{}, fmt.Errorf("decode worker activity: %w", err)
 	}
-	return activity.Attempts, nil
+	return activity, nil
 }
 
 // forgejoIdentity is one role's Forgejo account, Git author, and workspace
