@@ -288,7 +288,7 @@ func (service *Service) prepareWorkspace(ctx context.Context, stored project.Pro
 		}
 		return false, nil
 	}
-	base, err := service.branches.GetBranch(ctx, repository.Owner, repository.Name, repository.DefaultBranch)
+	base, err := service.defaultBranch(ctx, repository.Owner, repository.Name, repository.DefaultBranch)
 	if err != nil {
 		return false, fmt.Errorf("%w: read the default branch: %v", ErrUnavailable, err)
 	}
@@ -302,6 +302,26 @@ func (service *Service) prepareWorkspace(ctx context.Context, stored project.Pro
 }
 
 // releaseWorkspace removes a finished session's checkout.
+// newBranchWait bounds how long a vision waits for the default branch of a
+// repository created moments before (a new app writes its vision at once),
+// which Forgejo may not list yet.
+var newBranchWait = 10 * time.Second
+
+func (service *Service) defaultBranch(ctx context.Context, owner, name, branch string) (workspace.Branch, error) {
+	deadline := time.Now().Add(newBranchWait)
+	for {
+		base, err := service.branches.GetBranch(ctx, owner, name, branch)
+		if !errors.Is(err, workspace.ErrBranchNotFound) || time.Now().After(deadline) {
+			return base, err
+		}
+		select {
+		case <-ctx.Done():
+			return workspace.Branch{}, ctx.Err()
+		case <-time.After(500 * time.Millisecond):
+		}
+	}
+}
+
 func (service *Service) releaseWorkspace(ctx context.Context, id string) {
 	if service.checkouts == nil {
 		return
