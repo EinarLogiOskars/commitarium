@@ -72,6 +72,10 @@ pub(crate) struct CliUpdater {
     /// Versions installed whose workers still wait for a restart. Only
     /// workers that do not report the CLI version they started with need it.
     restart_pending: Mutex<Vec<(Provider, String)>>,
+    /// Versions each provider's workers were already restarted onto. If they
+    /// still report another version afterwards, the worker and the updater
+    /// read different binaries; restarting again would only loop.
+    restarted_onto: Mutex<Vec<(Provider, String)>>,
     /// When a failed environment rebuild may be tried again.
     rebuild_after: Mutex<Option<Instant>>,
     wake: Notify,
@@ -244,16 +248,34 @@ async fn cli_pass(app: &AppHandle) -> Result<bool, String> {
         })
         .await?;
         let pending = pending_restart(app, provider);
-        let (target, needs_install) =
-            match plan(&installed, latest.as_deref(), &started, pending.as_deref()) {
-                Plan::Nothing => {
+        let (target, needs_install) = match plan(
+            &installed,
+            latest.as_deref(),
+            &started,
+            pending.as_deref(),
+        ) {
+            Plan::Nothing => {
+                set_pending_restart(app, provider, None);
+                set_status(app, provider, Some(current(provider, &installed, checked)));
+                continue;
+            }
+            Plan::Install(version) => {
+                set_restarted_onto(app, provider, None);
+                (version, true)
+            }
+            Plan::Restart(version) => {
+                if restarted_onto(app, provider).as_deref() == Some(version.as_str()) {
+                    eprintln!(
+                            "[cli-updates] {} workers still report another CLI version after restarting onto {version}; not restarting again",
+                            provider.executable()
+                        );
                     set_pending_restart(app, provider, None);
                     set_status(app, provider, Some(current(provider, &installed, checked)));
                     continue;
                 }
-                Plan::Install(version) => (version, true),
-                Plan::Restart(version) => (version, false),
-            };
+                (version, false)
+            }
+        };
         let status = |state| CliStatus {
             provider,
             installed: installed.clone(),
@@ -300,6 +322,7 @@ async fn cli_pass(app: &AppHandle) -> Result<bool, String> {
             continue;
         }
         set_pending_restart(app, provider, None);
+        set_restarted_onto(app, provider, Some(target.clone()));
         set_status(app, provider, Some(current(provider, &target, checked)));
     }
     Ok(settled && inspected)
@@ -382,6 +405,24 @@ fn set_pending_restart(app: &AppHandle, provider: Provider, version: Option<Stri
     };
     pending.retain(|(p, _)| *p != provider);
     pending.extend(version.map(|version| (provider, version)));
+}
+
+fn restarted_onto(app: &AppHandle, provider: Provider) -> Option<String> {
+    let updater = app.state::<CliUpdater>();
+    let restarted = updater.restarted_onto.lock().ok()?;
+    restarted
+        .iter()
+        .find(|(p, _)| *p == provider)
+        .map(|(_, version)| version.clone())
+}
+
+fn set_restarted_onto(app: &AppHandle, provider: Provider, version: Option<String>) {
+    let updater = app.state::<CliUpdater>();
+    let Ok(mut restarted) = updater.restarted_onto.lock() else {
+        return;
+    };
+    restarted.retain(|(p, _)| *p != provider);
+    restarted.extend(version.map(|version| (provider, version)));
 }
 
 async fn blocking<T: Send + 'static>(
