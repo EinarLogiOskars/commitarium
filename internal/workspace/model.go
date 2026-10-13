@@ -503,6 +503,10 @@ type CheckoutSpec struct {
 	Branch               string
 	BaseCommitID         string
 	ExpectedHeadCommitID string
+	// AllowDescendantHead accepts a local HEAD that has advanced from
+	// ExpectedHeadCommitID, such as unpublished commits an agent made earlier
+	// in the same implementation turn.
+	AllowDescendantHead  bool
 	AlreadyReady         bool
 	RequireCleanBaseline bool
 	RequireClean         bool
@@ -546,6 +550,9 @@ func (spec CheckoutSpec) Validate() error {
 	}
 	if spec.ExpectedHeadCommitID != "" && !safeCommitID.MatchString(spec.ExpectedHeadCommitID) {
 		return errors.New("expected checkout head must be a lowercase commit ID")
+	}
+	if spec.AllowDescendantHead && (spec.ExpectedHeadCommitID == "" || spec.RequireCleanBaseline) {
+		return errors.New("a descendant head requires an expected head without a clean baseline check")
 	}
 	return (Branch{Name: spec.Branch, CommitID: spec.BaseCommitID}).Validate()
 }
