@@ -513,7 +513,22 @@ function formatTokens(n: number): string {
   return String(n);
 }
 
+// The coordinator's reason while the lead brings main into approved work
+// (ADR-025); the update then goes through review and the merge gate again.
+const UPDATING_ONTO_MAIN = /^Main moved after this revision was approved/;
+
 function waitBanner(run: Run, state: string) {
+  if (!run.paused && run.status === "running" && UPDATING_ONTO_MAIN.test(run.reason ?? "")) {
+    return (
+      <div className="wait-banner wait-banner--warn">
+        <span className="wait-banner__kind">Catching up with main</span>
+        <span className="wait-banner__reason">
+          Main changed after this was approved. The lead is merging it in; the result is checked
+          again, then it merges.
+        </span>
+      </div>
+    );
+  }
   // Pause state is shown by the InterveneBar; this banner covers the checkpoint
   // reasons the user must resolve (round cap, blocker, merge gate, clarification).
   if (run.paused || run.status !== "waiting_for_user") return null;
