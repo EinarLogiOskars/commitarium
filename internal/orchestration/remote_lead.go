@@ -5637,7 +5637,9 @@ func validateAcceptanceReviewResults(
 			return fmt.Errorf("acceptance test %q has no final result", test.ID)
 		case featureartifact.AcceptanceTestFailed:
 			if disposition == workerhttp.DispositionSucceeded {
-				return fmt.Errorf("approved review still has failed acceptance test %q", test.ID)
+				return fmt.Errorf(
+					"the reviewer approved while its acceptance test %q is recorded as failed; the reviewer must run the test again "+
+						"if the test was wrong, or request changes if the implementation is", test.ID)
 			}
 		}
 	}
