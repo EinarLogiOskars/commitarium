@@ -100,6 +100,8 @@ type Action struct {
 	// Premium names the models in it that need explicit approval.
 	Premium []string `json:"premium,omitempty"`
 	Result  string   `json:"result,omitempty"`
+	// ProjectID names the project a create_app action created.
+	ProjectID string `json:"project_id,omitempty"`
 	// AutoTried marks an action autopilot took over, applied or not.
 	AutoTried bool      `json:"auto_tried,omitempty"`
 	UpdatedAt time.Time `json:"updated_at"`
@@ -334,9 +336,13 @@ func (service *Service) Action(ctx context.Context, scope, actionID string) (Act
 
 // Resolve records the outcome of a proposed action: applied with what it did,
 // failed with why, or dismissed. Only a proposed action can be resolved.
-// Resolve records an action's outcome. workOrderID names the work order an
-// applied action created, so the app can open it.
-func (service *Service) Resolve(ctx context.Context, scope, actionID string, status ActionStatus, result, workOrderID string) (Conversation, error) {
+// Created names what an applied action created, so the app can open it.
+type Created struct {
+	WorkOrderID, ProjectID string
+}
+
+// Resolve records an action's outcome and what it created.
+func (service *Service) Resolve(ctx context.Context, scope, actionID string, status ActionStatus, result string, created Created) (Conversation, error) {
 	if status != ActionApplied && status != ActionFailed && status != ActionDismissed {
 		return Conversation{}, ErrInvalid
 	}
@@ -360,9 +366,10 @@ func (service *Service) Resolve(ctx context.Context, scope, actionID string, sta
 		// The outcome shows on the action's card; the assistant reads the
 		// work it changed from the project's state on its next turn.
 		action.Status, action.Result, action.UpdatedAt = status, strings.TrimSpace(result), service.now()
-		if workOrderID != "" {
-			action.WorkOrderID = workOrderID
+		if created.WorkOrderID != "" {
+			action.WorkOrderID = created.WorkOrderID
 		}
+		action.ProjectID = created.ProjectID
 		stored.UpdatedAt = action.UpdatedAt
 		return stored.Conversation, service.write(stored)
 	}

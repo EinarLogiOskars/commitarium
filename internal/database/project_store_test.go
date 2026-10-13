@@ -376,4 +376,8 @@ func TestProjectStoreMarksAProjectAsAnApp(t *testing.T) {
 	if _, err := store.UpdateApp(t.Context(), "prj_missing", true); !errors.Is(err, project.ErrNotFound) {
 		t.Fatalf("missing project error = %v", err)
 	}
+	if renamed, err := store.Rename(t.Context(), created.ID, "Calorie tracker"); err != nil ||
+		renamed.Name != "Calorie tracker" || !renamed.App {
+		t.Fatalf("rename: project=%+v err=%v", renamed, err)
+	}
 }

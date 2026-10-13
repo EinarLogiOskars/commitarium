@@ -284,6 +284,7 @@ func run(ctx context.Context, coordinatorConfig config) error {
 	var visionService httpapi.VisionService
 	var conversationService httpapi.ConversationService
 	var assistantWatcher *conversations.Watcher
+	var projectConversations *conversations.Service
 	var deletionWorker projectdeletion.WorkerStopper
 	var deletionLiveSessions projectdeletion.LiveSessionRegistry
 	var assistantCleaner projectdeletion.AssistantCleaner
@@ -374,6 +375,7 @@ func run(ctx context.Context, coordinatorConfig config) error {
 			return fmt.Errorf("create the assistant: %w", err)
 		}
 		conversationService = projectAssistant
+		projectConversations = projectAssistant
 		// Changes in the projects' work wake the assistant (events), and
 		// autopilot runs its actions; it starts once the API exists.
 		assistantWatcher = &conversations.Watcher{
@@ -483,6 +485,9 @@ func run(ctx context.Context, coordinatorConfig config) error {
 		assistantCleaner,
 		forgejoClient,
 	)
+	if projectConversations != nil {
+		projectDeletionService.WithConversations(projectConversations)
+	}
 	handler := httpapi.NewWithWorkspaceRealWorkflowDeletionAndModels(
 		projectService,
 		featureService,

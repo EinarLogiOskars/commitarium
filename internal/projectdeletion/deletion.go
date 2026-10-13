@@ -64,7 +64,16 @@ type Service struct {
 	toolchains   ToolchainCleaner
 	assistants   AssistantCleaner
 	repositories RepositoryCleaner
-	mu           sync.Mutex
+	// conversations forgets the project's assistant conversation.
+	conversations ToolchainCleaner
+	mu            sync.Mutex
+}
+
+// WithConversations makes deletion forget the project's assistant
+// conversation too.
+func (service *Service) WithConversations(conversations ToolchainCleaner) *Service {
+	service.conversations = conversations
+	return service
 }
 
 func NewService(
@@ -137,6 +146,11 @@ func (service *Service) Delete(
 	if service.toolchains != nil {
 		if err := service.toolchains.DeleteProject(ctx, projectID); err != nil {
 			return Result{}, fmt.Errorf("%w: remove project toolchain: %v", ErrUnavailable, err)
+		}
+	}
+	if service.conversations != nil {
+		if err := service.conversations.DeleteProject(ctx, projectID); err != nil {
+			return Result{}, fmt.Errorf("%w: remove the assistant's conversation: %v", ErrUnavailable, err)
 		}
 	}
 	if deletion.Repository != nil {

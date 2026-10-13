@@ -12,6 +12,7 @@ import {
   type Conversation,
 } from "../api/assistant";
 import { ApiError } from "../api/client";
+import { openAppWindow } from "../ipc";
 import { getVision } from "../api/vision";
 import type { VisionItem, VisionPriority } from "../api/types";
 import { Markdown } from "./Markdown";
@@ -26,6 +27,8 @@ const POLL_MS = 2000;
 export const WORK_CHANGED = "commitarium:work-changed";
 /** Asks the open project to show its Vision page. */
 export const OPEN_VISION = "commitarium:open-vision";
+/** Opens the assistant, optionally with a message started in its composer. */
+export const OPEN_ASSISTANT = "commitarium:open-assistant";
 /** Asks the assistant to reload its conversation, as after autopilot starts or stops. */
 export const ASSISTANT_CHANGED = "commitarium:assistant-changed";
 
@@ -111,6 +114,16 @@ export function AssistantDrawer({
     window.addEventListener(ASSISTANT_CHANGED, reload);
     return () => window.removeEventListener(ASSISTANT_CHANGED, reload);
   }, [load]);
+
+  useEffect(() => {
+    const openWith = (event: Event) => {
+      const started = (event as CustomEvent<{ draft?: string }>).detail?.draft;
+      if (started) setDraft(started);
+      setOpen(true);
+    };
+    window.addEventListener(OPEN_ASSISTANT, openWith);
+    return () => window.removeEventListener(OPEN_ASSISTANT, openWith);
+  }, [setOpen]);
 
   useEffect(() => {
     setConversation(null);
@@ -360,7 +373,9 @@ function ActionCard({
         // project's lists reload, and the app goes to what changed.
         window.dispatchEvent(new Event(WORK_CHANGED));
         const applied = conversation.actions?.find((a) => a.id === action.id);
-        if (applied?.type === "add_vision_item") {
+        if (applied?.type === "create_app" && applied.project_id) {
+          void openAppWindow(applied.project_id, applied.title);
+        } else if (applied?.type === "add_vision_item") {
           window.dispatchEvent(new Event(OPEN_VISION));
         } else if (applied?.work_order_id) {
           onOpenOrder?.(applied.work_order_id);
@@ -543,6 +558,7 @@ const APPLY_LABEL: Record<AssistantAction["type"], string> = {
   start_autopilot: "Start autopilot",
   continue_work_order: "Continue",
   close_work_order: "Close",
+  create_app: "Create app",
 };
 
 const STATUS_LABEL: Record<AssistantAction["status"], string> = {

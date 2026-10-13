@@ -63,6 +63,13 @@ func (stub cleanerStub) DeleteProject(_ context.Context, projectID string) error
 	return nil
 }
 
+type conversationCleanerStub struct{ order *[]string }
+
+func (stub conversationCleanerStub) DeleteProject(_ context.Context, projectID string) error {
+	*stub.order = append(*stub.order, "conversation:"+projectID)
+	return nil
+}
+
 type assistantCleanerStub struct {
 	order  *[]string
 	active bool
@@ -100,12 +107,14 @@ func TestDeleteUsesFeatureTeardownAndFinishesAfterRepository(t *testing.T) {
 	}}
 	repositories := &repositoryCleanerStub{order: &order}
 	service := NewService(store, featureDeleterStub{store: store, order: &order}, runStopperStub{&order},
-		cleanerStub{&order}, assistantCleanerStub{order: &order}, repositories)
+		cleanerStub{&order}, assistantCleanerStub{order: &order}, repositories).
+		WithConversations(conversationCleanerStub{&order})
 	result, err := service.Delete(t.Context(), "prj_test", "delete-1", false)
 	if err != nil || !result.Deleted || !store.finished {
 		t.Fatalf("delete result=%+v finished=%t err=%v", result, store.finished, err)
 	}
-	want := []string{"assistants:prj_test", "feature:fea_one", "feature:fea_two", "toolchain:prj_test", "repository:owner/repo"}
+	want := []string{"assistants:prj_test", "feature:fea_one", "feature:fea_two", "toolchain:prj_test",
+		"conversation:prj_test", "repository:owner/repo"}
 	if !reflect.DeepEqual(order, want) {
 		t.Fatalf("cleanup order=%v want=%v", order, want)
 	}
