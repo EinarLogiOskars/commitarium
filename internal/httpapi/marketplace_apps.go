@@ -34,6 +34,7 @@ type marketplaceAppResponse struct {
 func (api *API) registerMarketplaceAppRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/marketplace/apps", api.listMarketplaceAppsHandler)
 	mux.HandleFunc("POST /api/v1/marketplace/apps/{owner}/{name}/install", api.installMarketplaceAppHandler)
+	mux.HandleFunc("GET /api/v1/marketplace/installs", api.listMarketplaceInstallsHandler)
 }
 
 func (api *API) listMarketplaceAppsHandler(w http.ResponseWriter, r *http.Request) {
@@ -62,6 +63,16 @@ func (api *API) listMarketplaceAppsHandler(w http.ResponseWriter, r *http.Reques
 		response = append(response, item)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"apps": response}, "marketplace apps")
+}
+
+// listMarketplaceInstallsHandler answers where each installed app came from,
+// for the Apps area. It needs no sign-in.
+func (api *API) listMarketplaceInstallsHandler(w http.ResponseWriter, r *http.Request) {
+	installs := []install.Origin{}
+	for _, origin := range api.installedApps(r.Context()) {
+		installs = append(installs, origin)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"installs": installs}, "marketplace installs")
 }
 
 // installedApps answers the installs whose project still exists, newest per

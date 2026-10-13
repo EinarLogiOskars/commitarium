@@ -72,3 +72,16 @@ export const installMarketplaceApp = (owner: string, name: string) =>
     `/api/v1/marketplace/apps/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/install`,
     { method: "POST" },
   );
+
+export interface MarketplaceInstall {
+  project_id: string;
+  owner: string;
+  name: string;
+  version: string;
+  installed_at: string;
+}
+
+export const listMarketplaceInstalls = () =>
+  request<{ installs: MarketplaceInstall[] }>("/api/v1/marketplace/installs").then(
+    (r) => r.installs,
+  );

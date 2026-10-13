@@ -4394,3 +4394,19 @@ select:focus {
 .market__mark {
   margin-top: auto;
 }
+
+.apps__origin {
+  font-size: 12px;
+}
+.apps__actions {
+  display: flex;
+  gap: 14px;
+  margin-top: auto;
+}
+.apps__remove {
+  color: var(--muted);
+}
+.apps__tile--confirm {
+  cursor: default;
+  border-color: var(--bad);
+}

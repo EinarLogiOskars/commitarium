@@ -3008,3 +3008,6 @@ Present when `COMMITARIUM_MARKETPLACE_URL` is set (MARKETPLACE_PLAN.md).
   release with its history, imports it as a new app project (stack and vision
   from `.commitarium`), records the install, and answers `201 {"project_id",
   "version"}`. `404 marketplace_app_not_found`.
+- `GET /api/v1/marketplace/installs` answers `{"installs": [{"project_id",
+  "owner", "name", "version", "installed_at"}]}`: where each installed app
+  still on this machine came from. It needs no sign-in.
