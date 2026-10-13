@@ -6,42 +6,11 @@ import {
   stackUpdate,
   stackStatus,
   openExternal,
-  provisionEnvironmentRequest,
   type DockerProbe,
   type ServiceStatus,
 } from "../ipc";
-import { listProjects } from "../api/projects";
-import { listEnvironmentRequests } from "../api/environments";
 
 type Busy = null | "up" | "down" | "update";
-
-// A stack update pulls fresh base images, which drop the approved-package
-// derivative overlay. Re-provision the newest ready environment request (the
-// approved package union is installation-wide, so one request rebuilds it for
-// all workers). Best-effort: any failure just means a later manual retry.
-async function replayEnvironmentProvisioning(): Promise<void> {
-  try {
-    const projects = await listProjects();
-    let newestId: string | null = null;
-    let newestAt = "";
-    for (const p of projects) {
-      try {
-        const { requests } = await listEnvironmentRequests(p.id);
-        for (const r of requests) {
-          if (r.status === "ready" && r.updated_at > newestAt) {
-            newestAt = r.updated_at;
-            newestId = r.id;
-          }
-        }
-      } catch {
-        /* skip a project we can't read */
-      }
-    }
-    if (newestId) await provisionEnvironmentRequest(newestId);
-  } catch {
-    /* best-effort resume; nothing to surface */
-  }
-}
 
 /** Host readiness + Commitarium stack lifecycle (Slice 1). */
 export function Launcher({ onStackChanged }: { onStackChanged?: () => void }) {
@@ -155,15 +124,9 @@ export function Launcher({ onStackChanged }: { onStackChanged?: () => void }) {
                   {busy === "down" ? "Stopping…" : "Stop"}
                 </button>
                 <button
-                  onClick={() =>
-                    void act("update", async () => {
-                      await stackUpdate();
-                      // New base images drop the approved-package overlay; rebuild
-                      // the derivative env from the newest ready request so agents
-                      // keep their packages. Best-effort, installation-wide.
-                      await replayEnvironmentProvisioning();
-                    })
-                  }
+                  // The backend rebuilds an approved environment from the new
+                  // base images itself once the update is done.
+                  onClick={() => void act("update", stackUpdate)}
                   disabled={busy !== null}
                 >
                   {busy === "update" ? "Updating…" : "Update"}
