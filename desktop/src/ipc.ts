@@ -630,3 +630,15 @@ export const onAgentCliStatus = (handler: (statuses: CliStatus[]) => void): Prom
 /** Remove the previews of the project's sessions that are no longer open. */
 export const pruneSessionPreviews = (projectId: string, openSessions: string[]): Promise<void> =>
   invoke("prune_session_previews", { projectId, openSessions });
+
+// --- Coordinator freshness (development) ---
+// Running from source, the coordinator image is built locally; after a pull
+// it can be older than the code the desktop expects.
+
+export type CoordinatorFreshness = "fresh" | "stale" | "unknown";
+
+export const coordinatorFreshness = (): Promise<CoordinatorFreshness> =>
+  invoke("coordinator_freshness");
+
+/** Rebuild and restart the coordinator, unless an agent is running a turn ("busy"). */
+export const rebuildCoordinator = (): Promise<"rebuilt" | "busy"> => invoke("rebuild_coordinator");

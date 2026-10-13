@@ -311,6 +311,16 @@ fn workers_idle(containers: &[String]) -> bool {
     })
 }
 
+/// Whether no agent's worker, of any provider, is launching or running a turn.
+pub(crate) fn all_workers_idle() -> Result<bool, String> {
+    for provider in PROVIDERS {
+        if !workers_idle(&running_workers(provider)?) {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
 /// A worker's `activity` answer is the number of attempts in flight.
 fn idle_answer(output: &str) -> bool {
     output.trim().parse::<u64>() == Ok(0)
