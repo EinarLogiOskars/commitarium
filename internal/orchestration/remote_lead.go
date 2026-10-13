@@ -47,6 +47,8 @@ const (
 	implementationLeadOnlyReadyReason     = "The lead published and verified its implementation. This work order has no reviewer; the exact revision is ready for the merge gate."
 	implementationLeadOnlyMergedReason    = "Forgejo merged the lead's exact verified commit. This work order had no reviewer."
 	implementationMergeBlockedReason      = "The exact approved revision could not be merged safely. Inspect the merge activity and Forgejo pull request before retrying."
+	implementationBaseUpdateRunningReason = "Main moved after this revision was approved. The lead is merging main into the feature branch, resolving conflicts, and publishing an updated commit for review."
+	implementationMergeBehindMainReason   = "Main moved and the approved revision no longer merges cleanly. Continue (optionally with guidance) to have the lead bring main into the branch; the updated commit is checked again before merging."
 	interventionAnsweringReason           = "The selected agent is answering the user's intervention while the workflow remains paused."
 	interventionAnsweredReason            = "The selected agent answered the intervention. The workflow remains paused until the user explicitly continues it."
 	replanningRunningReason               = "The lead is reconciling the preserved feature branch and proposing a revised plan."
@@ -91,6 +93,8 @@ const (
 type RecoveryDirective struct {
 	Action  RecoveryAction
 	Message string
+	// blockedReason is the reason of the blocker the user is answering.
+	blockedReason string
 }
 
 // answersBlocker reports whether the user chose to move the work on, which
@@ -675,7 +679,7 @@ func (starter *RemoteLeadStarter) recoverWithDirective(
 	directive RecoveryDirective,
 ) error {
 	if storedFeature.State == feature.StateCompleted {
-		_, _, err := starter.Merge(ctx, run.ID, run.ID+":recovery-merge")
+		_, _, err := starter.merge(ctx, run.ID, run.ID+":recovery-merge")
 		return err
 	}
 	var unfinished *execution.Intervention
@@ -758,13 +762,13 @@ func (starter *RemoteLeadStarter) recoverWithDirective(
 		session = activeSessions[0]
 	} else if len(activeSessions) == 0 {
 		if storedFeature.State == feature.StateReadyToMerge {
-			return starter.recoverIdleReadyToMergeRun(ctx, run)
+			return starter.recoverIdleReadyToMergeRun(ctx, run, directive)
 		}
 		if storedFeature.State == feature.StateImplementing {
 			return starter.recoverIdleImplementationRun(ctx, run, directive)
 		}
 		if storedFeature.State == feature.StateReviewing {
-			return starter.recoverIdleReviewingRun(ctx, run)
+			return starter.recoverIdleReviewingRun(ctx, run, directive)
 		}
 		handled, idleErr := starter.recoverIdlePlanningRun(ctx, run, storedFeature)
 		if idleErr != nil || handled {
@@ -801,8 +805,10 @@ func (starter *RemoteLeadStarter) recoverWithDirective(
 		acceptanceVersion, _, authoring := workflowAttemptVersionAndTurn(
 			session.ID, "acceptance", checkpoint.AttemptID,
 		)
+		updateVersion, _, updating := workflowAttemptVersionAndTurn(session.ID, "update", checkpoint.AttemptID)
 		_, sessionTurn := sessionTurnNumber(session.ID, checkpoint.AttemptID)
-		validLead := isLead && ((implementing && attemptVersion == run.PlanVersion) || sessionTurn)
+		validLead := isLead && ((implementing && attemptVersion == run.PlanVersion) ||
+			(updating && updateVersion == run.PlanVersion) || sessionTurn)
 		validReviewer := run.IndependentAcceptanceTests && isReviewer && authoring && acceptanceVersion == run.PlanVersion
 		if !validLead && !validReviewer {
 			return fmt.Errorf("%w: implementing feature has an unexpected active attempt", ErrInvalidRunRequest)
@@ -812,10 +818,12 @@ func (starter *RemoteLeadStarter) recoverWithDirective(
 		reviewVersion, _, reviewing := workflowAttemptVersionAndTurn(session.ID, "review", checkpoint.AttemptID)
 		correctionVersion, _, correcting := workflowAttemptVersionAndTurn(session.ID, "correction", checkpoint.AttemptID)
 		readinessVersion, _, acknowledging := workflowAttemptVersionAndTurn(session.ID, "readiness", checkpoint.AttemptID)
+		updateVersion, _, updating := workflowAttemptVersionAndTurn(session.ID, "update", checkpoint.AttemptID)
 		reviewing = reviewing && reviewVersion == run.PlanVersion
 		correcting = correcting && correctionVersion == run.PlanVersion
 		acknowledging = acknowledging && readinessVersion == run.PlanVersion
-		if (!isReviewer || !reviewing) && (!isLead || (!correcting && !acknowledging)) {
+		updating = updating && updateVersion == run.PlanVersion
+		if (!isReviewer || !reviewing) && (!isLead || (!correcting && !acknowledging && !updating)) {
 			return fmt.Errorf("%w: reviewing feature has an unexpected active attempt", ErrInvalidRunRequest)
 		}
 	}
@@ -869,6 +877,9 @@ func (starter *RemoteLeadStarter) recoverWithDirective(
 			request.request.OutputContract = workerhttp.OutputContractImplementationLead
 		}
 		if _, correcting := implementationCorrectionTurnNumber(session.ID, checkpoint.AttemptID); correcting {
+			request.request.OutputContract = workerhttp.OutputContractImplementationLead
+		}
+		if _, updating := baseUpdateTurnNumber(session.ID, checkpoint.AttemptID); updating {
 			request.request.OutputContract = workerhttp.OutputContractImplementationLead
 		}
 		if _, acknowledging := implementationReadinessTurnNumber(session.ID, checkpoint.AttemptID); acknowledging {
@@ -995,6 +1006,7 @@ func (starter *RemoteLeadStarter) RecoverBlockerWithDirective(
 			}
 		}
 	}
+	directive.blockedReason = run.Reason
 	err = starter.recoverWithDirective(
 		context.WithoutCancel(ctx), rechecking, storedFeature, policy, directive,
 	)
@@ -1117,6 +1129,7 @@ func (starter *RemoteLeadStarter) confirmLeadOnlyMergeReady(ctx context.Context,
 func (starter *RemoteLeadStarter) recoverIdleReadyToMergeRun(
 	ctx context.Context,
 	run execution.Run,
+	directive RecoveryDirective,
 ) error {
 	// The lead's verified acknowledgement (or, without a reviewer, its verified
 	// publication) and the feature transition are durable before the run
@@ -1128,6 +1141,22 @@ func (starter *RemoteLeadStarter) recoverIdleReadyToMergeRun(
 	}
 	if err := confirm(ctx, run); err != nil {
 		return err
+	}
+	// An update onto main that was requested before a restart continues.
+	if resumed, err := starter.resumeBaseUpdate(ctx, run); err != nil || resumed {
+		return err
+	}
+	// The user's Continue on a work order blocked because main moved past it
+	// has the lead bring main in, with the user's guidance. It is the user's
+	// choice, so the limit on automatic updates does not apply (ADR-025).
+	if directive.answersBlocker() && directive.blockedReason == implementationMergeBehindMainReason {
+		storedFeature, err := starter.features.GetByID(ctx, run.FeatureID)
+		if err != nil {
+			return err
+		}
+		if _, behind := starter.behindMain(ctx, storedFeature); behind && storedFeature.Kind != feature.KindSession {
+			return starter.beginBaseUpdate(ctx, run.ID, directive.Message, false)
+		}
 	}
 	if starter.validation != nil {
 		storedFeature, err := starter.features.GetByID(ctx, run.FeatureID)
@@ -1158,19 +1187,113 @@ func (starter *RemoteLeadStarter) recoverIdleReadyToMergeRun(
 		}
 	}
 	if run.MergePolicy == project.MergePolicyAutoAfterGates {
-		if _, _, err := starter.Merge(ctx, run.ID, run.ID+":automatic-merge"); err != nil {
-			starter.recordMergeBlocked(ctx, run.ID, err)
-			return starter.waitRun(ctx, run.ID, implementationMergeBlockedReason, execution.RunWaitKindBlocker)
-		}
-		return nil
+		return starter.mergeAfterGates(ctx, run, false)
 	}
 	return starter.waitRun(ctx, run.ID, implementationApprovedReason, execution.RunWaitKindMergeGate)
 }
 
-// Merge performs the one final coordinator-owned external action. Both user
-// approval and automatic policy call this same method, so neither path can
-// bypass the exact approved-commit checks in the workspace service.
+// maxAutomaticBaseUpdates bounds how often a work order brings main in on its
+// own within one plan version before it waits for the user (ADR-025).
+const maxAutomaticBaseUpdates = 3
+
+// mergeAfterGates merges a work order whose policy merges once every gate
+// passed. When Forgejo refuses because main moved past the approved revision,
+// the lead brings main in and the updated commit goes through the gates
+// again, at most maxAutomaticBaseUpdates times per plan version; any other
+// refusal blocks the run. owned says the caller already holds the run, so an
+// update runs in the caller's goroutine.
+func (starter *RemoteLeadStarter) mergeAfterGates(ctx context.Context, run execution.Run, owned bool) error {
+	_, _, err := starter.merge(ctx, run.ID, run.ID+":automatic-merge")
+	if err == nil {
+		return nil
+	}
+	starter.recordMergeBlocked(ctx, run.ID, err)
+	if !starter.mergeBlockedByMovedBase(ctx, run, err) {
+		return starter.waitRun(ctx, run.ID, implementationMergeBlockedReason, execution.RunWaitKindBlocker)
+	}
+	requested, countErr := starter.baseUpdatesRequested(ctx, run)
+	if countErr != nil {
+		starter.reportError(fmt.Errorf("count updates onto main for run %q: %w", run.ID, countErr))
+	}
+	if countErr != nil || requested >= maxAutomaticBaseUpdates {
+		return starter.waitRun(ctx, run.ID, implementationMergeBehindMainReason, execution.RunWaitKindBlocker)
+	}
+	if paused, err := starter.stopAtPauseBoundary(ctx, run.ID, implementationMergeBehindMainReason); err != nil || paused {
+		return err
+	}
+	if err := starter.beginBaseUpdate(ctx, run.ID, "", owned); err != nil {
+		if errors.Is(err, ErrRunAlreadyActive) {
+			// Another coordinator operation owns the run and decides its state.
+			return err
+		}
+		starter.reportError(fmt.Errorf("start update onto main for run %q: %w", run.ID, err))
+		return starter.waitRun(ctx, run.ID, implementationMergeBehindMainReason, execution.RunWaitKindBlocker)
+	}
+	return nil
+}
+
+// MergeAfterValidation merges a work order whose isolated validation just
+// passed, when its policy merges automatically. It takes the same path as
+// every other automatic merge, so a work order that main moved past is
+// brought up to date rather than left at the gate (ADR-025).
+func (starter *RemoteLeadStarter) MergeAfterValidation(ctx context.Context, runID string) error {
+	run, err := starter.executions.GetRun(ctx, runID)
+	if err != nil {
+		return err
+	}
+	if run.MergePolicy != project.MergePolicyAutoAfterGates || run.Paused ||
+		run.Status != execution.RunStatusWaitingForUser || run.WaitKind != execution.RunWaitKindMergeGate {
+		return nil
+	}
+	storedFeature, err := starter.features.GetByID(ctx, run.FeatureID)
+	if err != nil {
+		return err
+	}
+	if storedFeature.State != feature.StateReadyToMerge {
+		return nil
+	}
+	return starter.mergeAfterGates(ctx, run, false)
+}
+
+// Merge performs the one final coordinator-owned external action for the
+// user. When Forgejo refuses because main moved past the approved revision,
+// the lead brings main in instead and the run is returned, running, without
+// an error; the updated commit goes through every gate again (ADR-025).
 func (starter *RemoteLeadStarter) Merge(
+	ctx context.Context,
+	runID string,
+	idempotencyKey string,
+) (execution.Run, bool, error) {
+	merged, mergedNow, err := starter.merge(ctx, runID, idempotencyKey)
+	if err == nil {
+		return merged, mergedNow, nil
+	}
+	run, getErr := starter.executions.GetRun(ctx, runID)
+	if getErr != nil || !starter.mergeBlockedByMovedBase(ctx, run, err) {
+		return execution.Run{}, false, err
+	}
+	starter.recordMergeBlocked(ctx, run.ID, err)
+	if updateErr := starter.beginBaseUpdate(ctx, run.ID, "", false); updateErr != nil {
+		if errors.Is(updateErr, ErrRunAlreadyActive) {
+			return execution.Run{}, false, err
+		}
+		// The update may already have left the merge gate, so the run waits
+		// where Continue can start it again.
+		starter.reportError(fmt.Errorf("start update onto main for run %q: %w", run.ID, updateErr))
+		if waitErr := starter.waitRun(
+			ctx, run.ID, implementationMergeBehindMainReason, execution.RunWaitKindBlocker,
+		); waitErr != nil {
+			return execution.Run{}, false, errors.Join(err, waitErr)
+		}
+	}
+	current, err := starter.executions.GetRun(ctx, run.ID)
+	return current, false, err
+}
+
+// merge performs the merge itself. The user's approval and the automatic
+// policy both call it, so neither path can bypass the exact approved-commit
+// checks in the workspace service.
+func (starter *RemoteLeadStarter) merge(
 	ctx context.Context,
 	runID string,
 	idempotencyKey string,
@@ -1214,7 +1337,7 @@ func (starter *RemoteLeadStarter) Merge(
 		// Branch protection still requires an approval; without a reviewer the
 		// coordinator gives it here and says why (ADR-018).
 		approver := "the user"
-		if idempotencyKey == run.ID+":automatic-merge" {
+		if idempotencyKey == run.ID+":automatic-merge" || idempotencyKey == run.ID+":automatic-validation-merge" {
 			approver = "the work order's auto-merge policy"
 		}
 		approvalNote = append(approvalNote, "This work order had no reviewer. Commitarium approved the lead's verified commit at the merge gate, as decided by "+approver+".")
@@ -1747,9 +1870,9 @@ func (starter *RemoteLeadStarter) advanceWaitingRun(ctx context.Context, runID s
 		// Advancing on its own never answers an agent's question.
 		return starter.recoverIdleImplementationRun(ctx, run, RecoveryDirective{})
 	case feature.StateReviewing:
-		return starter.recoverIdleReviewingRun(ctx, run)
+		return starter.recoverIdleReviewingRun(ctx, run, RecoveryDirective{})
 	case feature.StateReadyToMerge:
-		return starter.recoverIdleReadyToMergeRun(ctx, run)
+		return starter.recoverIdleReadyToMergeRun(ctx, run, RecoveryDirective{})
 	default:
 		return nil
 	}
@@ -1809,10 +1932,16 @@ func (starter *RemoteLeadStarter) recoverIdleImplementationRun(
 	if err != nil {
 		return fmt.Errorf("load implementation attempt: %w", err)
 	}
+	// An update onto main requested before a restart continues, rather than
+	// the approved commit being checked again (ADR-025).
+	if resumed, err := starter.resumeBaseUpdate(ctx, run); err != nil || resumed {
+		return err
+	}
 	attemptVersion, _, ok := workflowAttemptVersionAndTurn(
 		lead.ID, "implementation", checkpoint.AttemptID,
 	)
-	if !ok || attemptVersion != run.PlanVersion {
+	updateVersion, _, updating := workflowAttemptVersionAndTurn(lead.ID, "update", checkpoint.AttemptID)
+	if (!ok || attemptVersion != run.PlanVersion) && (!updating || updateVersion != run.PlanVersion) {
 		return fmt.Errorf("%w: idle implementation attempt is incomplete", ErrInvalidRunRequest)
 	}
 	if err := starter.confirmCompletedTurn(ctx, lead, checkpoint); err != nil {
@@ -1828,56 +1957,14 @@ func (starter *RemoteLeadStarter) recoverIdleImplementationRun(
 		return errors.New("completed implementation attempt has no result")
 	}
 	// Guidance with Continue goes to a lead whose finished turn could not be
-	// accepted; Continue alone checks that turn again below.
-	guided := directive.answersBlocker() && directive.Message != "" &&
-		attempt.Result.Disposition != workerhttp.DispositionInputRequired
-	if attempt.Result.Disposition == workerhttp.DispositionInputRequired || guided {
-		if !guided && !directive.answersBlocker() {
-			return starter.handleInputRequired(ctx, remoteLeadRequest{runID: run.ID, identity: workerhttp.MutationIdentity{AttemptReference: attempt.AttemptReference}}, *attempt.Result)
-		}
-		// The user's Continue answers the lead that asked for help: its next
-		// turn runs in the same conversation.
-		if !starter.claim(run.ID) {
-			return fmt.Errorf("%w: %q", ErrRunAlreadyActive, run.ID)
-		}
-		answer := remoteLeadRequest{
-			runID: run.ID, agentName: "lead agent", allowRecoveryContinuation: true,
-			answerBlocker: true, guided: guided, forceFreshRecovery: directive.Action == RecoveryActionReplace,
-			recoveryMessage: directive.Message,
-			identity: workerhttp.MutationIdentity{AttemptReference: workerhttp.AttemptReference{
-				SessionID: lead.ID, AttemptID: checkpoint.AttemptID,
-			}},
-			request: workerhttp.PutAttemptRequest{OutputContract: workerhttp.OutputContractImplementationLead},
-		}
-		go func() {
-			defer starter.release(run.ID)
-			ctx := starter.lifetime
-			continued, err := starter.continueFailedAttempt(ctx, answer, attempt)
-			if err == nil && !continued {
-				err = errors.New("the lead that asked for help could not be continued")
-			}
-			if err != nil {
-				starter.requireReview(ctx, answer, err)
-			}
-		}()
-		return nil
-	}
-	request := remoteLeadRequest{
-		runID: run.ID,
-		identity: workerhttp.MutationIdentity{AttemptReference: workerhttp.AttemptReference{
-			SessionID: lead.ID, AttemptID: checkpoint.AttemptID,
-		}},
-	}
-	if !starter.claim(run.ID) {
-		return fmt.Errorf("%w: %q", ErrRunAlreadyActive, run.ID)
-	}
-	go starter.launchImplementationPublicationVerification(request, *attempt.Result)
-	return nil
+	// accepted; Continue alone checks that turn again.
+	return starter.continueOrVerifyLeadTurn(ctx, run, lead, checkpoint, attempt, directive)
 }
 
 func (starter *RemoteLeadStarter) recoverIdleReviewingRun(
 	ctx context.Context,
 	run execution.Run,
+	directive RecoveryDirective,
 ) error {
 	reviewer, err := starter.executions.GetSession(ctx, remoteReviewerSessionID(run.ID))
 	if err != nil {
@@ -1898,6 +1985,21 @@ func (starter *RemoteLeadStarter) recoverIdleReviewingRun(
 	leadCheckpoint, err := starter.executions.GetWorkerAttempt(ctx, lead.ID)
 	if err != nil {
 		return fmt.Errorf("load reviewed implementation checkpoint: %w", err)
+	}
+	// An update onto main requested before a restart continues, rather than
+	// the approved commit being checked again (ADR-025).
+	if resumed, err := starter.resumeBaseUpdate(ctx, run); err != nil || resumed {
+		return err
+	}
+	if updateVersion, _, updating := workflowAttemptVersionAndTurn(
+		lead.ID, "update", leadCheckpoint.AttemptID,
+	); updating && updateVersion == run.PlanVersion {
+		handled, err := starter.recoverIdleBaseUpdate(
+			ctx, run, lead, leadCheckpoint, reviewer, reviewerCheckpoint, directive,
+		)
+		if err != nil || handled {
+			return err
+		}
 	}
 	reviewVersion, reviewRound, reviewing := workflowAttemptVersionAndTurn(reviewer.ID, "review", reviewerCheckpoint.AttemptID)
 	correctionVersion, correctionRound, correcting := workflowAttemptVersionAndTurn(lead.ID, "correction", leadCheckpoint.AttemptID)
@@ -2326,6 +2428,17 @@ func implementationReadinessAttemptForVersion(sessionID string, version int, tur
 	return workflowAttemptForVersion(sessionID, "readiness", version, turn)
 }
 
+// baseUpdateAttemptForVersion names the lead's turn that brings the moved
+// default branch into an approved feature branch (ADR-025).
+func baseUpdateAttemptForVersion(sessionID string, version int, turn int) string {
+	return workflowAttemptForVersion(sessionID, "update", version, turn)
+}
+
+func baseUpdateTurnNumber(sessionID, attemptID string) (int, bool) {
+	_, turn, found := workflowAttemptVersionAndTurn(sessionID, "update", attemptID)
+	return turn, found
+}
+
 func implementationCorrectionTurnNumber(sessionID, attemptID string) (int, bool) {
 	_, turn, found := workflowAttemptVersionAndTurn(sessionID, "correction", attemptID)
 	return turn, found
@@ -2428,6 +2541,9 @@ func waitKindForAttempt(session execution.Session, attemptID string) execution.R
 	if _, correcting := implementationCorrectionTurnNumber(session.ID, attemptID); correcting {
 		return execution.RunWaitKindPhaseCheckpoint
 	}
+	if _, updating := baseUpdateTurnNumber(session.ID, attemptID); updating {
+		return execution.RunWaitKindPhaseCheckpoint
+	}
 	if _, acknowledging := implementationReadinessTurnNumber(session.ID, attemptID); acknowledging {
 		return execution.RunWaitKindPhaseCheckpoint
 	}
@@ -2452,6 +2568,9 @@ func waitingReasonForAttempt(session execution.Session, attemptID string) string
 	}
 	if _, correcting := implementationCorrectionTurnNumber(session.ID, attemptID); session.Role == worker.RoleLead && correcting {
 		return implementationCorrectionRunningReason
+	}
+	if _, updating := baseUpdateTurnNumber(session.ID, attemptID); session.Role == worker.RoleLead && updating {
+		return implementationBaseUpdateRunningReason
 	}
 	if _, acknowledging := implementationReadinessTurnNumber(session.ID, attemptID); session.Role == worker.RoleLead && acknowledging {
 		return implementationReadinessRunningReason
@@ -4121,7 +4240,7 @@ func recoverySuccessorAttemptID(sessionID, attemptID string) (string, error) {
 	if version, turn, ok := planningAttemptVersionAndTurn(sessionID, attemptID); ok {
 		return planningRecoveryAttemptID(sessionID, version, turn, 1), nil
 	}
-	for _, kind := range []string{"implementation", "acceptance", "review", "correction", "readiness", "approval", "session"} {
+	for _, kind := range []string{"implementation", "acceptance", "review", "correction", "readiness", "update", "approval", "session"} {
 		if version, turn, ok := workflowAttemptVersionAndTurn(sessionID, kind, attemptID); ok {
 			return workflowAttemptForVersion(sessionID, kind, version, turn+1), nil
 		}
@@ -4658,6 +4777,10 @@ func (starter *RemoteLeadStarter) finish(
 				request.identity.SessionID, request.identity.AttemptID,
 			); correcting {
 				err = starter.verifyImplementationCorrection(ctx, request, *attempt.Result)
+			} else if _, updating := baseUpdateTurnNumber(
+				request.identity.SessionID, request.identity.AttemptID,
+			); updating {
+				err = starter.verifyImplementationBaseUpdate(ctx, request, *attempt.Result)
 			} else {
 				err = starter.verifyImplementationPublication(ctx, request, *attempt.Result)
 			}
@@ -4977,14 +5100,14 @@ func (starter *RemoteLeadStarter) durableAcceptanceTests(
 }
 
 // previousReviewedCommit returns the commit the reviewer's previous review
-// attempt approved or rejected. An empty result makes the next review a full
-// one, which is always safe.
-func (starter *RemoteLeadStarter) previousReviewedCommit(ctx context.Context, sessionID, attemptID string) string {
+// attempt approved or rejected, and whether it approved it. An empty result
+// makes the next review a full one, which is always safe.
+func (starter *RemoteLeadStarter) previousReviewedCommit(ctx context.Context, sessionID, attemptID string) (string, bool) {
 	attempt, err := starter.worker.GetAttempt(ctx, workerhttp.AttemptReference{SessionID: sessionID, AttemptID: attemptID})
 	if err != nil || attempt.Result == nil || attempt.Result.Review == nil {
-		return ""
+		return "", false
 	}
-	return attempt.Result.Review.CommitID
+	return attempt.Result.Review.CommitID, attempt.Result.Disposition == workerhttp.DispositionSucceeded
 }
 
 func (starter *RemoteLeadStarter) startImplementationReview(
@@ -5074,16 +5197,20 @@ func (starter *RemoteLeadStarter) startImplementationReview(
 	}
 	attemptID := implementationReviewAttemptForVersion(reviewer.ID, run.PlanVersion, round)
 	// The first review reads the whole feature and the preview rules. Later
-	// rounds review only the correction since the commit reviewed last.
+	// rounds review only the correction since the commit reviewed last, or,
+	// after an approved commit was brought up to date with main, only that
+	// merge (ADR-025).
 	previewContext := ""
 	previousReviewedCommitID := ""
+	previousApproved := false
 	if round == 1 {
 		previewContext, err = starter.previewRunInstructions(ctx, storedFeature.ProjectID)
 		if err != nil {
 			return remoteLeadRequest{}, false, err
 		}
 	} else {
-		previousReviewedCommitID = starter.previousReviewedCommit(ctx, reviewer.ID, checkpoint.AttemptID)
+		previousReviewedCommitID, previousApproved = starter.previousReviewedCommit(ctx, reviewer.ID, checkpoint.AttemptID)
+		previousApproved = previousApproved && previousReviewedCommitID != publication.CommitID
 	}
 	request := remoteLeadRequest{
 		runID: run.ID, agentName: "reviewer", waitingReason: implementationReviewRunningReason,
@@ -5101,7 +5228,7 @@ func (starter *RemoteLeadStarter) startImplementationReview(
 			ProviderSessionID: reviewer.ProviderSessionID,
 			Instructions: implementationReviewInstructions(
 				prepared, leadSummary,
-				publication.CommitID, attemptID, previousReviewedCommitID, acceptanceTestCommitID,
+				publication.CommitID, attemptID, previousReviewedCommitID, previousApproved, acceptanceTestCommitID,
 			) + previewContext,
 			OutputContract: workerhttp.OutputContractImplementationReview,
 		},
@@ -5162,6 +5289,12 @@ func (starter *RemoteLeadStarter) startImplementationCorrection(
 		lead.ID, "correction", checkpoint.AttemptID,
 	)
 	alreadyCorrecting = alreadyCorrecting && priorVersion == run.PlanVersion
+	// A review of the lead's update onto main can request changes too
+	// (ADR-025).
+	updated, err := starter.baseUpdatePrecedesReview(ctx, run, lead, checkpoint, review)
+	if err != nil {
+		return remoteLeadRequest{}, false, err
+	}
 	if alreadyCorrecting {
 		if priorRound >= round {
 			return remoteLeadRequest{}, false, nil
@@ -5175,11 +5308,11 @@ func (starter *RemoteLeadStarter) startImplementationCorrection(
 		if readinessRound != round-1 {
 			return remoteLeadRequest{}, false, errors.New("lead readiness checkpoint does not precede the requested correction round")
 		}
-	} else if round != 1 {
+	} else if !updated && round != 1 {
 		return remoteLeadRequest{}, false, errors.New("lead has no preceding correction round")
 	} else if implementationVersion, _, implementing := workflowAttemptVersionAndTurn(
 		lead.ID, "implementation", checkpoint.AttemptID,
-	); !implementing || implementationVersion != run.PlanVersion {
+	); !updated && (!implementing || implementationVersion != run.PlanVersion) {
 		return remoteLeadRequest{}, false, errors.New("lead has no completed implementation to correct")
 	}
 	if err := starter.confirmCompletedTurn(ctx, lead, checkpoint); err != nil {
@@ -5312,33 +5445,10 @@ func (starter *RemoteLeadStarter) verifyImplementationCorrection(
 	if implementationReviewRoundLimitReached(run.ImplementationReviewRoundLimit, round) {
 		return starter.waitRun(ctx, request.runID, implementationReviewLimitReason(run.ImplementationReviewRoundLimit), execution.RunWaitKindRoundCap)
 	}
-	if run.IndependentAcceptanceTests {
-		artifact, artifactErr := starter.artifacts.GetFeatureArtifact(ctx, run.FeatureID, featureartifact.KindAcceptanceTests)
-		if artifactErr != nil {
-			return artifactErr
-		}
-		tests := featureartifact.AcceptanceTests{}
-		if decodeErr := json.Unmarshal([]byte(artifact.Document), &tests); decodeErr != nil {
-			return decodeErr
-		}
-		tests.ImplementationCommitID = result.Publication.CommitID
-		for index := range tests.Tests {
-			if tests.Tests[index].Status != featureartifact.AcceptanceTestNotApplicable {
-				tests.Tests[index].Status = featureartifact.AcceptanceTestPending
-				tests.Tests[index].Note = ""
-			}
-		}
-		acceptanceArtifacts, ok := starter.artifacts.(remoteLeadAcceptanceArtifactService)
-		if !ok {
-			return errors.New("acceptance-test artifact service is unavailable")
-		}
-		if _, artifactErr := acceptanceArtifacts.UpsertAcceptanceTests(
-			ctx, run.FeatureID, tests,
-			workflow.Actor{Kind: workflow.ActorKindCoordinator, ID: coordinatorActorID},
-			request.identity.AttemptID+":reset-acceptance-tests",
-		); artifactErr != nil {
-			return artifactErr
-		}
+	if err := starter.resetAcceptanceTests(
+		ctx, run, result.Publication.CommitID, request.identity.AttemptID+":reset-acceptance-tests",
+	); err != nil {
+		return err
 	}
 	if paused, err := starter.stopAtPauseBoundary(
 		ctx, run.ID, "The correction is published and ready for another independent review.",
@@ -5355,6 +5465,45 @@ func (starter *RemoteLeadStarter) verifyImplementationCorrection(
 		starter.launchAdmitted(next)
 	}
 	return nil
+}
+
+// resetAcceptanceTests pins a run's independent acceptance tests to a new
+// implementation commit and sets them pending again, so the next review runs
+// them against that commit. Tests marked not applicable stay so.
+func (starter *RemoteLeadStarter) resetAcceptanceTests(
+	ctx context.Context,
+	run execution.Run,
+	commitID string,
+	idempotencyKey string,
+) error {
+	if !run.IndependentAcceptanceTests {
+		return nil
+	}
+	artifact, err := starter.artifacts.GetFeatureArtifact(ctx, run.FeatureID, featureartifact.KindAcceptanceTests)
+	if err != nil {
+		return err
+	}
+	tests := featureartifact.AcceptanceTests{}
+	if err := json.Unmarshal([]byte(artifact.Document), &tests); err != nil {
+		return err
+	}
+	tests.ImplementationCommitID = commitID
+	for index := range tests.Tests {
+		if tests.Tests[index].Status != featureartifact.AcceptanceTestNotApplicable {
+			tests.Tests[index].Status = featureartifact.AcceptanceTestPending
+			tests.Tests[index].Note = ""
+		}
+	}
+	acceptanceArtifacts, ok := starter.artifacts.(remoteLeadAcceptanceArtifactService)
+	if !ok {
+		return errors.New("acceptance-test artifact service is unavailable")
+	}
+	_, err = acceptanceArtifacts.UpsertAcceptanceTests(
+		ctx, run.FeatureID, tests,
+		workflow.Actor{Kind: workflow.ActorKindCoordinator, ID: coordinatorActorID},
+		idempotencyKey,
+	)
+	return err
 }
 
 func (starter *RemoteLeadStarter) launchImplementationReviewVerification(
@@ -5529,6 +5678,11 @@ func (starter *RemoteLeadStarter) startImplementationReadiness(
 		lead.ID, "readiness", checkpoint.AttemptID,
 	); acknowledging && readinessVersion == run.PlanVersion {
 		priorRound = readinessRound
+	} else if updated, err := starter.baseUpdatePrecedesReview(ctx, run, lead, checkpoint, review); err != nil {
+		return remoteLeadRequest{}, false, err
+	} else if updated {
+		// The approval was of the lead's update onto main (ADR-025).
+		priorRound = round - 1
 	} else if implementationVersion, _, implementing := workflowAttemptVersionAndTurn(
 		lead.ID, "implementation", checkpoint.AttemptID,
 	); !implementing || implementationVersion != run.PlanVersion {
@@ -5642,11 +5796,7 @@ func (starter *RemoteLeadStarter) enterMergeGate(
 		}
 	}
 	if run.MergePolicy == project.MergePolicyAutoAfterGates {
-		if _, _, err := starter.Merge(ctx, run.ID, run.ID+":automatic-merge"); err != nil {
-			starter.recordMergeBlocked(ctx, run.ID, err)
-			return starter.waitRun(ctx, request.runID, implementationMergeBlockedReason, execution.RunWaitKindBlocker)
-		}
-		return nil
+		return starter.mergeAfterGates(ctx, run, true)
 	}
 	return starter.waitRun(ctx, request.runID, readyReason, execution.RunWaitKindMergeGate)
 }

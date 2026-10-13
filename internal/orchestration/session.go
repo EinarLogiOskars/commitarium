@@ -251,7 +251,7 @@ func (starter *RemoteLeadStarter) sessionTurnRequest(
 		request.request.Mode = workerhttp.AttemptModeResume
 		request.request.ProviderSessionID = lead.ProviderSessionID
 		request.request.Instructions = command.Message
-		if mainHead, behind := starter.sessionBehindMain(ctx, storedFeature); behind {
+		if mainHead, behind := starter.behindMain(ctx, storedFeature); behind {
 			request.request.Instructions = sessionCatchUpInstructions(prepared.BaseBranch, mainHead) +
 				"\n\nThe user's message:\n" + command.Message
 		}
@@ -389,7 +389,7 @@ func (starter *RemoteLeadStarter) FinishSession(
 	}
 	attemptID := implementationAttemptForVersion(lead.ID, run.PlanVersion, turn+1)
 	instructions := sessionFinishInstructions(prepared, attemptID)
-	if mainHead, behind := starter.sessionBehindMain(ctx, storedFeature); behind {
+	if mainHead, behind := starter.behindMain(ctx, storedFeature); behind {
 		instructions = sessionCatchUpInstructions(prepared.BaseBranch, mainHead) + "\n\n" + instructions
 	}
 	request := remoteLeadRequest{
@@ -467,17 +467,18 @@ func (starter *RemoteLeadStarter) nameSession(ctx context.Context, runID string,
 	}
 }
 
-// sessionBehindMain reports whether the default branch moved past the
-// session's checkout. A failed check is reported and skipped: the turn goes
-// ahead without catching up, and the next one checks again.
-func (starter *RemoteLeadStarter) sessionBehindMain(ctx context.Context, storedFeature feature.Feature) (string, bool) {
+// behindMain reports whether the default branch moved past the work order's
+// checkout, and main's head. A failed check is reported and counts as not
+// behind: a session turn goes ahead without catching up and the next one
+// checks again; a refused merge stays a plain blocker.
+func (starter *RemoteLeadStarter) behindMain(ctx context.Context, storedFeature feature.Feature) (string, bool) {
 	catchUp, ok := starter.workspaces.(remoteLeadSessionCatchUp)
 	if !ok {
 		return "", false
 	}
 	mainHead, behind, err := catchUp.SessionCatchUp(ctx, storedFeature.ProjectID, storedFeature.ID)
 	if err != nil {
-		starter.reportError(fmt.Errorf("check whether session %q is behind main: %w", storedFeature.ID, err))
+		starter.reportError(fmt.Errorf("check whether work order %q is behind main: %w", storedFeature.ID, err))
 		return "", false
 	}
 	return mainHead, behind

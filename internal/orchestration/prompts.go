@@ -310,6 +310,9 @@ func recoveryPublicationInstructions(sessionID, attemptID string) string {
 	} else if _, ok := implementationReadinessTurnNumber(sessionID, attemptID); ok {
 		marker = workspace.ImplementationPublicationMergeReadiness.Marker(attemptID)
 		heading = "Merge readiness"
+	} else if _, ok := baseUpdateTurnNumber(sessionID, attemptID); ok {
+		marker = workspace.ImplementationPublicationBaseUpdate.Marker(attemptID)
+		heading = workspace.ImplementationPublicationBaseUpdate.CommentHeading()
 	} else if _, ok := implementationReviewTurnNumber(sessionID, attemptID); ok {
 		marker = implementationReviewMarker(attemptID)
 		heading = "Review"
@@ -330,6 +333,7 @@ func implementationReviewInstructions(
 	commitID string,
 	attemptID string,
 	previousReviewedCommitID string,
+	previousApproved bool,
 	acceptanceTestCommitIDs ...string,
 ) string {
 	marker := implementationReviewMarker(attemptID)
@@ -356,6 +360,15 @@ func implementationReviewInstructions(
 			"as fixed or not fixed, and look beyond the diff only where the change touches code outside your " +
 			"findings. Re-run the relevant tests. Number any new finding after your last one. "
 	}
+	if rereview && previousApproved {
+		scope = "You approved commit " + previousReviewedCommitID + ", but the base branch moved before it could " +
+			"merge, so the lead merged the base branch into the feature branch as commit " + commitID + ". The " +
+			"base branch's own changes were reviewed when they merged there, so review only this merge: run " +
+			"'git show --remerge-diff " + commitID + "' to see how the lead resolved each conflict (no output " +
+			"means it merged cleanly). Confirm that nothing you approved in " + previousReviewedCommitID + " was " +
+			"lost or changed in meaning and that the resolutions keep both sides' intent. Re-run the relevant " +
+			"tests, since main's changes may interact with the feature. Number any finding after your last one. "
+	}
 	return "Continue the same provider conversation as the independent reviewer. " + scope +
 		workspaceRules + acceptanceInstructions +
 		"If you find material problems, submit one formal Forgejo review with event REQUEST_CHANGES. If the " +
@@ -376,6 +389,56 @@ func implementationReviewInstructions(
 		"\nPlanning baseline commit: " + prepared.BaseCommitID + "\nExact implementation commit: " + commitID +
 		fmt.Sprintf("\nDraft pull request: #%d (%s)", prepared.PullRequestNumber, prepared.PullRequestURL) +
 		"\nReview audit marker:\n" + marker
+}
+
+// implementationBaseUpdateInstructions ask the lead to bring the moved default
+// branch into the approved feature branch (ADR-025). The result must descend
+// from the approved commit, so it is checked like any new revision.
+func implementationBaseUpdateInstructions(
+	prepared workspace.Workspace,
+	approvedCommitID string,
+	mainHead string,
+	guidance string,
+	attemptID string,
+) string {
+	marker := workspace.ImplementationPublicationBaseUpdate.Marker(attemptID)
+	moved := "The base branch '" + prepared.BaseBranch + "' moved after the exact approved commit below, and " +
+		"Forgejo can no longer merge it. "
+	if mainHead != "" {
+		moved = "The base branch '" + prepared.BaseBranch + "' moved to " + mainHead + " after the exact " +
+			"approved commit below, and Forgejo can no longer merge it. "
+	}
+	instructions := "Continue the same provider conversation as the lead. " + moved + "Bring the base " +
+		"branch into the feature branch. First check Git HEAD and status: HEAD should be the approved commit " +
+		"with a clean checkout; if it is neither that nor your own earlier merge of the base branch into it, " +
+		"stop and explain without making changes. Run 'git fetch commitarium " +
+		prepared.BaseBranch + "' and 'git merge --no-edit FETCH_HEAD'. Never rebase, squash, amend, reset, or " +
+		"force-push: the result must be a new commit that descends from the approved commit, or Commitarium " +
+		"rejects it. Resolve each conflict so both sides keep their intent: keep the approved feature and " +
+		"adapt it to the base branch's changes. Change nothing unrelated to the merge. " +
+		implementationToolchainInstructions + "Run the relevant tests. Then push that exact HEAD to the " +
+		"'commitarium' remote and post one pull-request comment using the worker-provided Forgejo URL and " +
+		"token-file environment variables. Never print, log, commit, or include the token in a URL. " +
+		forgejoTokenNote + " The comment must be exactly the marker below, a blank line, '## " +
+		workspace.ImplementationPublicationBaseUpdate.CommentHeading() + "', another blank line, and which " +
+		"conflicts you resolved and how (or that it merged cleanly), with the test results. Check existing " +
+		"comments for the marker before posting so recovery never duplicates it. Do not change the PR body or " +
+		"merge. Return action 'published' with that same summary, the new lowercase Git HEAD in commit_id, and " +
+		"the PR number. If resolving a conflict needs a product decision you cannot make from the agreed plan, " +
+		"or state is contradictory, or publication cannot be confirmed, return action 'blocked', leave " +
+		"commit_id empty, and explain what the user must decide. Durable Git, Forgejo, and coordinator state are " +
+		"authoritative over conversational memory.\n\n" +
+		"Current workflow phase: bringing the base branch into the approved feature branch"
+	if strings.TrimSpace(guidance) != "" {
+		instructions += "\n\nUser guidance: " + strings.TrimSpace(guidance)
+	}
+	return instructions +
+		"\n\nRepository: " + prepared.RepositoryOwner + "/" + prepared.RepositoryName +
+		"\nBase branch: " + prepared.BaseBranch + "\nFeature branch: " + prepared.Branch +
+		"\nPlanning baseline commit: " + prepared.BaseCommitID +
+		"\nExact approved commit: " + approvedCommitID +
+		fmt.Sprintf("\nDraft pull request: #%d (%s)", prepared.PullRequestNumber, prepared.PullRequestURL) +
+		"\nBase-update audit marker:\n" + marker
 }
 
 func implementationCorrectionInstructions(

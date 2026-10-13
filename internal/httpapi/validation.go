@@ -186,7 +186,13 @@ func (api *API) completeValidationJobHandler(w http.ResponseWriter, r *http.Requ
 		}
 		run, getErr := api.execution.GetRun(r.Context(), job.RunID)
 		if getErr == nil && run.MergePolicy == project.MergePolicyAutoAfterGates {
-			if _, _, mergeErr := api.realWorkflow.Merge(r.Context(), run.ID, run.ID+":automatic-validation-merge"); mergeErr != nil {
+			// The workflow's own automatic merge brings a work order that main
+			// moved past up to date, or blocks it (ADR-025).
+			if merger, ok := api.realWorkflow.(validatedMerger); ok {
+				if mergeErr := merger.MergeAfterValidation(context.WithoutCancel(r.Context()), run.ID); mergeErr != nil {
+					log.Printf("automatic merge after validation job %q: %v", job.ID, mergeErr)
+				}
+			} else if _, _, mergeErr := api.realWorkflow.Merge(r.Context(), run.ID, run.ID+":automatic-validation-merge"); mergeErr != nil {
 				log.Printf("automatic merge after validation job %q: %v", job.ID, mergeErr)
 			}
 		}
@@ -201,6 +207,12 @@ func (api *API) completeValidationJobHandler(w http.ResponseWriter, r *http.Requ
 // isolated validation passes.
 type validationPassedRecorder interface {
 	ValidationPassed(ctx context.Context, runID string) error
+}
+
+// validatedMerger merges a run by its automatic policy once its isolated
+// validation passed.
+type validatedMerger interface {
+	MergeAfterValidation(ctx context.Context, runID string) error
 }
 
 func validationSummary(job validation.Job) string {

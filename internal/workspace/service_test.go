@@ -1774,3 +1774,89 @@ func TestServicePrepareForStartRequiresAReadyOrder(t *testing.T) {
 		t.Fatalf("draft start error=%v", err)
 	}
 }
+
+func TestServiceVerifiesBaseUpdateAsDescendantOfApprovedCommit(t *testing.T) {
+	now := time.Date(2026, time.October, 12, 9, 0, 0, 0, time.UTC)
+	approvedCommit := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	updatedCommit := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	newService := func(state feature.State, approved string, checkout *recordingCheckout, pullRequests *recordingPullRequests) *Service {
+		stored := readyTestWorkspace(now)
+		pullRequestReadyAt := now.Add(3 * time.Minute)
+		stored.PullRequestNumber = 8
+		stored.PullRequestURL = "http://localhost:3001/owner/repository/pulls/8"
+		stored.PullRequestRecordedAt = &pullRequestReadyAt
+		stored.ApprovedCommitID = approved
+		if approved != "" {
+			readyAt := now.Add(4 * time.Minute)
+			stored.MergeReadyAt = &readyAt
+		}
+		stored.UpdatedAt = pullRequestReadyAt
+		updating := acceptedTestFeature(now)
+		updating.State = state
+		return NewServiceWithPreparation(
+			&memoryStore{stored: stored}, fixedFeatureFinder{stored: updating},
+			fixedProjectFinder{stored: project.Project{ID: "prj_test", ForgejoRepository: testRepository(now)}},
+			&recordingBranches{base: Branch{Name: stored.Branch, CommitID: updatedCommit}}, checkout, pullRequests,
+		)
+	}
+	verify := func(service *Service, commitID string) error {
+		_, err := service.VerifyImplementationBaseUpdate(
+			t.Context(), "prj_test", "fea_test", "sev_final_plan", "Final plan",
+			"att_update_1", "Merged main; resolved one conflict in the exporter; tests pass.",
+			commitID, 8, "codex-lead",
+		)
+		return err
+	}
+	pullRequest := PullRequest{
+		Number: 8, URL: "http://localhost:3001/owner/repository/pulls/8", State: "open", Draft: true,
+		BaseBranch: "main", HeadBranch: "commitarium/fea_test", HeadCommitID: updatedCommit,
+	}
+
+	for _, state := range []feature.State{feature.StateReviewing, feature.StateImplementing} {
+		checkout := &recordingCheckout{}
+		pullRequests := &recordingPullRequests{planResult: pullRequest}
+		if err := verify(newService(state, approvedCommit, checkout, pullRequests), updatedCommit); err != nil {
+			t.Fatalf("verify base update while %s: %v", state, err)
+		}
+		if len(checkout.specs) != 1 || checkout.specs[0].BaseCommitID != approvedCommit ||
+			checkout.specs[0].ExpectedHeadCommitID != updatedCommit || !checkout.specs[0].RequireClean {
+			t.Fatalf("base update was not checked as a clean descendant of the approved commit: %+v", checkout.specs)
+		}
+		if len(pullRequests.implementationSpecs) != 1 ||
+			pullRequests.implementationSpecs[0].PublicationKind != ImplementationPublicationBaseUpdate ||
+			pullRequests.implementationSpecs[0].HeadCommitID != updatedCommit {
+			t.Fatalf("unexpected base update audit spec %+v", pullRequests.implementationSpecs)
+		}
+	}
+
+	if err := verify(newService(feature.StateReviewing, approvedCommit, &recordingCheckout{}, &recordingPullRequests{planResult: pullRequest}), approvedCommit); err == nil {
+		t.Fatal("base update accepted the approved commit itself")
+	}
+	// A rebase does not descend from the approved commit, and the checkout
+	// refuses it.
+	rebased := &recordingCheckout{ensureErr: ErrCheckoutConflict}
+	if err := verify(newService(feature.StateReviewing, approvedCommit, rebased, &recordingPullRequests{planResult: pullRequest}), updatedCommit); !errors.Is(err, ErrCheckoutConflict) {
+		t.Fatalf("base update accepted a commit that does not descend from the approved one: %v", err)
+	}
+	if err := verify(newService(feature.StateReadyToMerge, approvedCommit, &recordingCheckout{}, &recordingPullRequests{planResult: pullRequest}), updatedCommit); !errors.Is(err, ErrFeatureNotReviewing) {
+		t.Fatalf("base update was verified at the merge gate: %v", err)
+	}
+	if err := verify(newService(feature.StateReviewing, "", &recordingCheckout{}, &recordingPullRequests{planResult: pullRequest}), updatedCommit); !errors.Is(err, ErrConflict) {
+		t.Fatalf("base update was verified without an approved commit: %v", err)
+	}
+	missingComment := &recordingPullRequests{planResult: pullRequest, planErr: ErrPullRequestConflict}
+	if err := verify(newService(feature.StateReviewing, approvedCommit, &recordingCheckout{}, missingComment), updatedCommit); !errors.Is(err, ErrPullRequestConflict) {
+		t.Fatalf("base update was verified without its audit comment: %v", err)
+	}
+}
+
+func TestPullRequestNotMergeableIsAPullRequestConflict(t *testing.T) {
+	if !errors.Is(ErrPullRequestNotMergeable, ErrPullRequestConflict) {
+		t.Fatal("a refused merge no longer matches ErrPullRequestConflict")
+	}
+	if ImplementationPublicationBaseUpdate.Validate() != nil ||
+		ImplementationPublicationBaseUpdate.CommentHeading() != "Base update" ||
+		!strings.HasPrefix(ImplementationPublicationBaseUpdate.Marker("att_update_1"), "<!-- commitarium-base-update: ") {
+		t.Fatal("base update publication kind has no audit format")
+	}
+}

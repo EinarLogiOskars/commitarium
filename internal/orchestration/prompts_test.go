@@ -110,3 +110,108 @@ func TestPlanningPromptsSayTheCounterpartIsReachedBetweenTurns(t *testing.T) {
 		}
 	}
 }
+
+func TestBaseUpdateInstructionsMergeMainWithoutRewritingHistory(t *testing.T) {
+	prepared := workspace.Workspace{
+		RepositoryOwner: "owner", RepositoryName: "repo", BaseBranch: "main",
+		Branch: "commitarium/fea_x", PullRequestNumber: 7,
+	}
+	approved, mainHead := strings.Repeat("a", 40), strings.Repeat("c", 40)
+	attemptID := baseUpdateAttemptForVersion("run_x:lead", 1, 1)
+	instructions := implementationBaseUpdateInstructions(prepared, approved, mainHead, "", attemptID)
+	for _, required := range []string{
+		workspace.ImplementationPublicationBaseUpdate.Marker(attemptID),
+		"'## Base update'",
+		"git fetch commitarium main",
+		"git merge --no-edit FETCH_HEAD",
+		"Never rebase",
+		"descends from the approved commit",
+		"both sides keep their intent",
+		"Check existing comments for the marker",
+		"Exact approved commit: " + approved,
+		"moved to " + mainHead,
+		"return action 'blocked'",
+		forgejoTokenNote,
+	} {
+		if !strings.Contains(instructions, required) {
+			t.Fatalf("base update instructions omit %q:\n%s", required, instructions)
+		}
+	}
+	if strings.Contains(instructions, "User guidance") {
+		t.Fatalf("unguided update mentions guidance:\n%s", instructions)
+	}
+	guided := implementationBaseUpdateInstructions(prepared, approved, "", "Keep the new date format from main.", attemptID)
+	if !strings.Contains(guided, "User guidance: Keep the new date format from main.") {
+		t.Fatalf("guided update omits the user's guidance:\n%s", guided)
+	}
+}
+
+func TestReviewAfterBaseUpdateReviewsOnlyTheMerge(t *testing.T) {
+	prepared := workspace.Workspace{BaseBranch: "main"}
+	approved, updated := strings.Repeat("a", 40), strings.Repeat("b", 40)
+	rereview := implementationReviewInstructions(prepared, "Merged main.", updated, "attempt", approved, true)
+	for _, required := range []string{
+		"You approved commit " + approved,
+		"git show --remerge-diff " + updated,
+		"nothing you approved in " + approved + " was lost",
+		"Re-run the relevant tests",
+	} {
+		if !strings.Contains(rereview, required) {
+			t.Fatalf("re-review after an update omits %q:\n%s", required, rereview)
+		}
+	}
+	correction := implementationReviewInstructions(prepared, "Fixed F1.", updated, "attempt", approved, false)
+	if strings.Contains(correction, "remerge-diff") || !strings.Contains(correction, "git diff "+approved+" "+updated) {
+		t.Fatalf("re-review of a correction lost its scope:\n%s", correction)
+	}
+}
+
+func TestBaseUpdateAttemptsHaveTheirOwnIdentity(t *testing.T) {
+	lead := execution.Session{ID: "run_x:lead", Role: worker.RoleLead}
+	first := baseUpdateAttemptForVersion(lead.ID, 1, 1)
+	revised := baseUpdateAttemptForVersion(lead.ID, 2, 3)
+	if first != "run_x:lead:update:1" || revised != "run_x:lead:update:v2:3" {
+		t.Fatalf("update attempt IDs = %q, %q", first, revised)
+	}
+	if turn, ok := baseUpdateTurnNumber(lead.ID, revised); !ok || turn != 3 {
+		t.Fatalf("revised update parsed as turn %d ok=%v", turn, ok)
+	}
+	if _, ok := baseUpdateTurnNumber(lead.ID, implementationReadinessAttemptForVersion(lead.ID, 1, 1)); ok {
+		t.Fatal("a readiness turn parsed as an update")
+	}
+	successor, err := recoverySuccessorAttemptID(lead.ID, revised)
+	if err != nil || successor != baseUpdateAttemptForVersion(lead.ID, 2, 4) {
+		t.Fatalf("update successor = %q err=%v", successor, err)
+	}
+	if kind := waitKindForAttempt(lead, first); kind != execution.RunWaitKindPhaseCheckpoint {
+		t.Fatalf("update wait kind = %q", kind)
+	}
+	if reason := waitingReasonForAttempt(lead, first); reason != implementationBaseUpdateRunningReason {
+		t.Fatalf("update waiting reason = %q", reason)
+	}
+	if version, ok := leadAttemptPlanVersion(lead.ID, revised); !ok || version != 2 {
+		t.Fatalf("update plan version = %d ok=%v", version, ok)
+	}
+}
+
+func TestNextBaseUpdateFollowsEveryEarlierUpdate(t *testing.T) {
+	lead := "run_x:lead"
+	readiness := execution.WorkerAttemptCheckpoint{SessionID: lead, AttemptID: implementationReadinessAttemptForVersion(lead, 1, 3)}
+	if turn := nextBaseUpdateTurn(nil, lead, 1, readiness); turn != 1 {
+		t.Fatalf("first update turn = %d", turn)
+	}
+	// The second update of the version follows the first one's recovery
+	// successor, which the run returned from verified.
+	events := []execution.Event{
+		{ID: baseUpdateIntentID(implementationReadinessAttemptForVersion(lead, 1, 2))},
+		{ID: baseUpdateAttemptForVersion(lead, 1, 2) + ":publication-verified"},
+		{ID: baseUpdateAttemptForVersion(lead, 2, 7) + ":publication-verified"},
+	}
+	if turn := nextBaseUpdateTurn(events, lead, 1, readiness); turn != 3 {
+		t.Fatalf("second update turn = %d", turn)
+	}
+	leadOnly := execution.WorkerAttemptCheckpoint{SessionID: lead, AttemptID: baseUpdateAttemptForVersion(lead, 1, 4)}
+	if turn := nextBaseUpdateTurn(events, lead, 1, leadOnly); turn != 5 {
+		t.Fatalf("update after a lead-only update = %d", turn)
+	}
+}
