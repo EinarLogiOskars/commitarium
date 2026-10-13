@@ -50,3 +50,38 @@ export const declineMarketplaceUser = (username: string) =>
   request<void>(`/api/v1/marketplace/pending-users/${encodeURIComponent(username)}/decline`, {
     method: "POST",
   });
+
+export interface MarketplaceApp {
+  owner: string;
+  name: string;
+  title: string;
+  version: string;
+  stars: number;
+  updated_at: string;
+  /** Released by the signed-in user. */
+  yours: boolean;
+  installed_project_id?: string;
+  installed_version?: string;
+}
+
+export const listMarketplaceApps = () =>
+  request<{ apps: MarketplaceApp[] }>("/api/v1/marketplace/apps").then((r) => r.apps);
+
+export const installMarketplaceApp = (owner: string, name: string) =>
+  request<{ project_id: string; version: string }>(
+    `/api/v1/marketplace/apps/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/install`,
+    { method: "POST" },
+  );
+
+export interface MarketplaceInstall {
+  project_id: string;
+  owner: string;
+  name: string;
+  version: string;
+  installed_at: string;
+}
+
+export const listMarketplaceInstalls = () =>
+  request<{ installs: MarketplaceInstall[] }>("/api/v1/marketplace/installs").then(
+    (r) => r.installs,
+  );

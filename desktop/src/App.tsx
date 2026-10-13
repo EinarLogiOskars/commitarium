@@ -14,6 +14,7 @@ import { AssistantDrawer } from "./views/AssistantDrawer";
 import { useWorkLayout } from "./views/useWorkLayout";
 import { AutopilotBanner, LaunchBanner } from "./views/AutopilotBanner";
 import { AppsView } from "./views/AppsView";
+import { MarketplaceView } from "./views/MarketplaceView";
 import { CoordinatorBanner } from "./views/CoordinatorBanner";
 import type { AutopilotGoal, LaunchStage } from "./api/assistant";
 import { Launcher } from "./views/Launcher";
@@ -36,9 +37,18 @@ function readFlag(key: string): boolean {
   }
 }
 
-function readArea(): "apps" | "projects" {
+type Area = "apps" | "marketplace" | "projects";
+
+const AREA_LABELS: Record<Area, string> = {
+  apps: "Apps",
+  marketplace: "Marketplace",
+  projects: "Projects",
+};
+
+function readArea(): Area {
   try {
-    return localStorage.getItem(AREA_KEY) === "projects" ? "projects" : "apps";
+    const stored = localStorage.getItem(AREA_KEY);
+    return stored === "projects" || stored === "marketplace" ? stored : "apps";
   } catch {
     return "apps";
   }
@@ -69,7 +79,7 @@ function App() {
   const layout = useWorkLayout(projectId !== null);
   // Outside a project: the Apps area (the default way in, APPS_PLAN.md) or
   // the project list; the last one chosen is remembered.
-  const [chosenArea, setAreaState] = useState<"apps" | "projects">(readArea);
+  const [chosenArea, setAreaState] = useState<Area>(readArea);
   // Developer mode shows the projects, the audit viewer, and the system's
   // status; without it Commitarium is the apps (the default for people).
   const [devMode, setDevModeState] = useState(() => readFlag(DEV_MODE_KEY));
@@ -82,8 +92,9 @@ function App() {
       // The choice lasts until the window closes.
     }
   };
-  const area = devMode ? chosenArea : "apps";
-  const setArea = (next: "apps" | "projects") => {
+  // The marketplace is for everyone; projects only in developer mode.
+  const area: Area = devMode || chosenArea !== "projects" ? chosenArea : "apps";
+  const setArea = (next: Area) => {
     setAreaState(next);
     try {
       localStorage.setItem(AREA_KEY, next);
@@ -340,21 +351,22 @@ function App() {
       {!projectId && (
         <header className="topbar">
           <span className="topbar__brand">Commitarium</span>
-          {devMode && (
-            <span className="view-switch" role="tablist">
-              {(["apps", "projects"] as const).map((value) => (
-                <button
-                  key={value}
-                  role="tab"
-                  aria-selected={area === value}
-                  className={`view-switch__item ${area === value ? "view-switch__item--on" : ""}`}
-                  onClick={() => setArea(value)}
-                >
-                  {value === "projects" ? "Projects" : "Apps"}
-                </button>
-              ))}
-            </span>
-          )}
+          <span className="view-switch" role="tablist">
+            {(devMode
+              ? (["apps", "marketplace", "projects"] as const)
+              : (["apps", "marketplace"] as const)
+            ).map((value) => (
+              <button
+                key={value}
+                role="tab"
+                aria-selected={area === value}
+                className={`view-switch__item ${area === value ? "view-switch__item--on" : ""}`}
+                onClick={() => setArea(value)}
+              >
+                {AREA_LABELS[value]}
+              </button>
+            ))}
+          </span>
           {projectId && (
             <button
               className="topbar__project topbar__switch"
@@ -439,7 +451,9 @@ function App() {
         ) : (
           <main className="main">
             <div className="main__inner">
-              {area === "apps" ? (
+              {area === "marketplace" ? (
+                <MarketplaceView reachable={reachable} />
+              ) : area === "apps" ? (
                 <AppsView
                   reachable={reachable}
                   attention={attention.items}

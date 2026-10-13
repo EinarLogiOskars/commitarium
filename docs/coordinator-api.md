@@ -2997,3 +2997,17 @@ Present when `COMMITARIUM_MARKETPLACE_URL` is set (MARKETPLACE_PLAN.md).
   marketplace repository holds unrelated work), `release_secret_found` (a
   likely secret anywhere in the history; nothing is pushed),
   `401 marketplace_not_signed_in`.
+
+### Browsing and installing apps
+
+- `GET /api/v1/marketplace/apps` answers `{"apps": [{"owner", "name", "title",
+  "version", "stars", "updated_at", "yours", "installed_project_id",
+  "installed_version"}]}`: released apps (the `commitarium-app` topic with a
+  `vN` tag). `401 marketplace_not_signed_in` when signed out.
+- `POST /api/v1/marketplace/apps/{owner}/{name}/install` fetches the latest
+  release with its history, imports it as a new app project (stack and vision
+  from `.commitarium`), records the install, and answers `201 {"project_id",
+  "version"}`. `404 marketplace_app_not_found`.
+- `GET /api/v1/marketplace/installs` answers `{"installs": [{"project_id",
+  "owner", "name", "version", "installed_at"}]}`: where each installed app
+  still on this machine came from. It needs no sign-in.

@@ -15,6 +15,8 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -27,6 +29,7 @@ var (
 	ErrNotAdmin           = errors.New("only the marketplace admin can do this")
 	ErrUnavailable        = errors.New("the marketplace is unavailable")
 	ErrUserNotFound       = errors.New("marketplace user not found")
+	ErrAppNotFound        = errors.New("marketplace app not found")
 )
 
 // SignupError is the sign-up service's own answer, such as a taken username.
@@ -450,15 +453,28 @@ func (service *Service) EnsureAppRepository(ctx context.Context, name, descripti
 		return AppRepository{}, repositoryRejection("read the app's repository", status)
 	}
 	var repository struct {
-		Name     string `json:"name"`
-		CloneURL string `json:"clone_url"`
-		HTMLURL  string `json:"html_url"`
-		Owner    struct {
+		Name        string `json:"name"`
+		Description string `json:"description"`
+		CloneURL    string `json:"clone_url"`
+		HTMLURL     string `json:"html_url"`
+		Owner       struct {
 			Login string `json:"login"`
 		} `json:"owner"`
 	}
 	if json.Unmarshal(body, &repository) != nil || repository.CloneURL == "" {
 		return AppRepository{}, fmt.Errorf("%w: unreadable repository", ErrUnavailable)
+	}
+	// The app's name is read from the description; one created by hand has none.
+	if strings.TrimSpace(repository.Description) == "" && description != "" {
+		status, _, err = service.call(ctx, http.MethodPatch,
+			"/api/v1/repos/"+url.PathEscape(repository.Owner.Login)+"/"+url.PathEscape(repository.Name),
+			auth, map[string]string{"description": description})
+		if err != nil {
+			return AppRepository{}, err
+		}
+		if status != http.StatusOK {
+			return AppRepository{}, repositoryRejection("describe the app", status)
+		}
 	}
 	status, _, err = service.call(ctx, http.MethodPut,
 		"/api/v1/repos/"+url.PathEscape(repository.Owner.Login)+"/"+url.PathEscape(repository.Name)+"/topics/"+AppTopic,
@@ -482,4 +498,141 @@ func repositoryRejection(action string, status int) error {
 	default:
 		return fmt.Errorf("%w: %s returned HTTP %d", ErrUnavailable, action, status)
 	}
+}
+
+// AppDescriptionSuffix ends the description a first release gives an app's
+// repository, after the app's name.
+const AppDescriptionSuffix = " — a Commitarium app"
+
+// App is a released app on the marketplace.
+type App struct {
+	Owner       string    `json:"owner"`
+	Name        string    `json:"name"`
+	Title       string    `json:"title"`
+	Description string    `json:"description"`
+	Version     string    `json:"version"`
+	Stars       int       `json:"stars"`
+	UpdatedAt   time.Time `json:"updated_at"`
+	CloneURL    string    `json:"-"`
+}
+
+var versionTag = regexp.MustCompile(`^v([1-9][0-9]*)$`)
+
+// Apps lists the marketplace's released apps: repositories with the app topic
+// and at least one vN tag.
+func (service *Service) Apps(ctx context.Context) ([]App, error) {
+	service.mu.Lock()
+	stored, err := service.read()
+	service.mu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+	auth := func(request *http.Request) { request.Header.Set("Authorization", "token "+stored.Token) }
+	apps := []App{}
+	for page := 1; page <= 10; page++ {
+		status, body, err := service.call(ctx, http.MethodGet,
+			fmt.Sprintf("/api/v1/repos/search?q=%s&topic=true&limit=50&page=%d", AppTopic, page), auth, nil)
+		if err != nil {
+			return nil, err
+		}
+		if status != http.StatusOK {
+			return nil, repositoryRejection("list apps", status)
+		}
+		var found struct {
+			Data []struct {
+				Name        string    `json:"name"`
+				Description string    `json:"description"`
+				Stars       int       `json:"stars_count"`
+				UpdatedAt   time.Time `json:"updated_at"`
+				CloneURL    string    `json:"clone_url"`
+				Empty       bool      `json:"empty"`
+				Owner       struct {
+					Login string `json:"login"`
+				} `json:"owner"`
+			} `json:"data"`
+		}
+		if json.Unmarshal(body, &found) != nil {
+			return nil, fmt.Errorf("%w: unreadable app list", ErrUnavailable)
+		}
+		for _, repository := range found.Data {
+			if repository.Empty {
+				continue
+			}
+			version, err := service.latestVersion(ctx, auth, repository.Owner.Login, repository.Name)
+			if err != nil {
+				return nil, err
+			}
+			if version == "" {
+				continue
+			}
+			title, description := strings.TrimSuffix(repository.Description, AppDescriptionSuffix), ""
+			if manifest, ok := service.appManifest(ctx, auth, repository.Owner.Login, repository.Name); ok {
+				title, description = manifest.Name, manifest.Description
+			}
+			if strings.TrimSpace(title) == "" {
+				title = repository.Name
+			}
+			apps = append(apps, App{Owner: repository.Owner.Login, Name: repository.Name, Title: title,
+				Description: description, Version: version, Stars: repository.Stars, UpdatedAt: repository.UpdatedAt,
+				CloneURL: repository.CloneURL})
+		}
+		if len(found.Data) < 50 {
+			break
+		}
+	}
+	return apps, nil
+}
+
+// App answers one released app.
+func (service *Service) App(ctx context.Context, owner, name string) (App, error) {
+	apps, err := service.Apps(ctx)
+	if err != nil {
+		return App{}, err
+	}
+	for _, app := range apps {
+		if strings.EqualFold(app.Owner, owner) && strings.EqualFold(app.Name, name) {
+			return app, nil
+		}
+	}
+	return App{}, ErrAppNotFound
+}
+
+// appManifest reads an app's released AppManifestPath, if it has one.
+func (service *Service) appManifest(ctx context.Context, auth func(*http.Request), owner, name string) (AppManifest, bool) {
+	status, body, err := service.call(ctx, http.MethodGet,
+		"/api/v1/repos/"+url.PathEscape(owner)+"/"+url.PathEscape(name)+"/raw/"+AppManifestPath+"?ref=main", auth, nil)
+	if err != nil || status != http.StatusOK {
+		return AppManifest{}, false
+	}
+	manifest, err := ParseAppManifest(body)
+	return manifest, err == nil
+}
+
+func (service *Service) latestVersion(ctx context.Context, auth func(*http.Request), owner, name string) (string, error) {
+	status, body, err := service.call(ctx, http.MethodGet,
+		"/api/v1/repos/"+url.PathEscape(owner)+"/"+url.PathEscape(name)+"/tags?limit=50", auth, nil)
+	if err != nil {
+		return "", err
+	}
+	if status != http.StatusOK {
+		return "", repositoryRejection("read an app's versions", status)
+	}
+	var tags []struct {
+		Name string `json:"name"`
+	}
+	if json.Unmarshal(body, &tags) != nil {
+		return "", fmt.Errorf("%w: unreadable versions", ErrUnavailable)
+	}
+	highest := 0
+	for _, tag := range tags {
+		if match := versionTag.FindStringSubmatch(tag.Name); match != nil {
+			if number, err := strconv.Atoi(match[1]); err == nil && number > highest {
+				highest = number
+			}
+		}
+	}
+	if highest == 0 {
+		return "", nil
+	}
+	return "v" + strconv.Itoa(highest), nil
 }

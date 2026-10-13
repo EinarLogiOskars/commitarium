@@ -136,6 +136,9 @@ func TestReleasesBuildOnEachOtherWithoutTouchingTheApp(t *testing.T) {
 	if !strings.Contains(vision, `"done": true`) || strings.Contains(vision, "feat_done") {
 		t.Fatalf("released vision:\n%s", vision)
 	}
+	if app := git(t, f.remote, "show", "v1:.commitarium/app.json"); !strings.Contains(app, `"name": "Sleep Log"`) {
+		t.Fatalf("released app manifest:\n%s", app)
+	}
 	if stack := git(t, f.remote, "show", "v1:.commitarium/stack.json"); !strings.Contains(stack, `"port": 5173`) {
 		t.Fatalf("released stack:\n%s", stack)
 	}

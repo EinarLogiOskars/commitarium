@@ -14,6 +14,9 @@ and relied on stack detection, which is exact only for some stacks.
 
 A repository may carry a `.commitarium/` folder:
 
+- `app.json` — the app's name and description, as the marketplace shows
+  them and as an install names the project.
+
 - `stack.json` — the project's stack (`tools`, `services`, `run`) without
   machine state such as provisioning. Stack detection reads it first; a
   valid file is exact and is saved like any confident detection.

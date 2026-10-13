@@ -289,6 +289,7 @@ type API struct {
 	agentUsage         AgentUsageService
 	marketplace        MarketplaceService
 	releases           ReleaseService
+	installs           InstallService
 	// now is the API's clock; nil is time.Now.
 	now func() time.Time
 	// mux serves the API's own routes, for actions that reuse them.
@@ -402,8 +403,11 @@ func newAPI(
 	var agentUsage AgentUsageService
 	var marketplaceService MarketplaceService
 	var releaseService ReleaseService
+	var installService InstallService
 	for _, extra := range extras {
 		switch typed := extra.(type) {
+		case InstallService:
+			installService = typed
 		case ReleaseService:
 			releaseService = typed
 		case MarketplaceService:
@@ -456,6 +460,7 @@ func newAPI(
 		agentUsage:         agentUsage,
 		marketplace:        marketplaceService,
 		releases:           releaseService,
+		installs:           installService,
 	}
 	api.artifacts, _ = workflow.(FeatureArtifactService)
 	api.projectImporter, _ = projects.(ProjectImporter)
@@ -468,6 +473,9 @@ func newAPI(
 	}
 	if releaseService != nil {
 		api.registerReleaseRoutes(mux)
+	}
+	if marketplaceService != nil && installService != nil {
+		api.registerMarketplaceAppRoutes(mux)
 	}
 	if visions != nil && projects != nil && features != nil {
 		mux.HandleFunc("GET /api/v1/projects/{id}/vision", api.getVisionHandler)

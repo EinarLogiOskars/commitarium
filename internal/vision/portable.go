@@ -69,6 +69,26 @@ func portableItems(items []featureartifact.VisionItem, delivered func(string) bo
 	return copied
 }
 
+// Seed gives a project without a vision the plan in contents, a
+// PortableVisionPath file; a project that has a vision keeps it.
+func (service *Service) Seed(ctx context.Context, projectID string, contents []byte) (Vision, error) {
+	if _, err := service.projects.GetByID(ctx, projectID); err != nil {
+		return Vision{}, err
+	}
+	plan, err := ParsePortablePlan(contents)
+	if err != nil {
+		return Vision{}, err
+	}
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	if current, err := service.read(projectID); err == nil {
+		return current, nil
+	} else if !errors.Is(err, ErrNotFound) {
+		return Vision{}, err
+	}
+	return service.write(Vision{ProjectID: projectID, Plan: plan, Source: SourceRepository, Revision: 1})
+}
+
 // seedFromRepository gives a project without a vision the one its repository
 // carries, if any. Callers hold service.mu.
 func (service *Service) seedFromRepository(ctx context.Context, projectID string) (Vision, error) {

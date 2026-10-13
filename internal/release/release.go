@@ -168,7 +168,7 @@ func (service *Service) Release(ctx context.Context, projectID string) (Version,
 	if repository == nil || repository.DefaultBranch == "" {
 		return Version{}, ErrRepositoryMissing
 	}
-	files, err := service.portableFiles(ctx, projectID)
+	files, err := service.portableFiles(ctx, projectID, stored.Name)
 	if err != nil {
 		return Version{}, err
 	}
@@ -187,7 +187,7 @@ func (service *Service) Release(ctx context.Context, projectID string) (Version,
 	if name == "" {
 		name = repositoryName(stored.Name)
 	}
-	remote, err := service.marketplace.EnsureAppRepository(ctx, name, stored.Name+" — a Commitarium app")
+	remote, err := service.marketplace.EnsureAppRepository(ctx, name, stored.Name+marketplace.AppDescriptionSuffix)
 	if err != nil {
 		return Version{}, err
 	}
@@ -214,10 +214,6 @@ func (service *Service) Release(ctx context.Context, projectID string) (Version,
 	if err != nil {
 		return Version{}, fmt.Errorf("%w: read the app's head: %v", ErrUnavailable, err)
 	}
-	if len(saved.Versions) > 0 && saved.Versions[len(saved.Versions)-1].SourceCommit == source {
-		return Version{}, ErrNothingToRelease
-	}
-
 	if findings := scanForSecrets(git, source); len(findings) > 0 {
 		return Version{}, &SecretError{Findings: findings}
 	}
@@ -247,6 +243,13 @@ func (service *Service) Release(ctx context.Context, projectID string) (Version,
 	tree, err := treeWithFiles(git, source, files)
 	if err != nil {
 		return Version{}, err
+	}
+	// Nothing new when the marketplace already has exactly these files: the
+	// same code and the same name, stack, and vision.
+	if remoteMain != "" {
+		if released, err := git.run("rev-parse", remoteMain+"^{tree}"); err == nil && released == tree {
+			return Version{}, ErrNothingToRelease
+		}
 	}
 	version := nextVersion(saved, remoteTags)
 	identity := []string{"GIT_AUTHOR_NAME=Commitarium", "GIT_AUTHOR_EMAIL=commitarium@local.invalid",
@@ -282,7 +285,7 @@ func (service *Service) Release(ctx context.Context, projectID string) (Version,
 
 // portableFiles answers the .commitarium files (ADR-026). The stack is
 // required; an app without a vision releases without one.
-func (service *Service) portableFiles(ctx context.Context, projectID string) (map[string][]byte, error) {
+func (service *Service) portableFiles(ctx context.Context, projectID, appName string) (map[string][]byte, error) {
 	manifest, err := service.toolchains.Get(ctx, projectID)
 	if err != nil {
 		return nil, err
@@ -294,7 +297,11 @@ func (service *Service) portableFiles(ctx context.Context, projectID string) (ma
 	if err != nil {
 		return nil, ErrStackRequired
 	}
-	files := map[string][]byte{toolchain.PortableStackPath: stack}
+	app, err := marketplace.EncodeAppManifest(marketplace.AppManifest{Name: appName})
+	if err != nil {
+		return nil, err
+	}
+	files := map[string][]byte{toolchain.PortableStackPath: stack, marketplace.AppManifestPath: app}
 	if service.visions == nil {
 		return files, nil
 	}

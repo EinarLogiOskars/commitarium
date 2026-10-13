@@ -19,6 +19,7 @@ type MarketplaceService interface {
 	PendingUsers(ctx context.Context) ([]marketplace.PendingUser, error)
 	Approve(ctx context.Context, username string) error
 	Decline(ctx context.Context, username string) error
+	Apps(ctx context.Context) ([]marketplace.App, error)
 }
 
 func (api *API) registerMarketplaceRoutes(mux *http.ServeMux) {

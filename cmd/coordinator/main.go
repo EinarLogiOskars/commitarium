@@ -22,6 +22,7 @@ import (
 	"github.com/EinarLogiOskars/commitarium/internal/gitimport"
 	"github.com/EinarLogiOskars/commitarium/internal/gitworkspace"
 	"github.com/EinarLogiOskars/commitarium/internal/httpapi"
+	"github.com/EinarLogiOskars/commitarium/internal/install"
 	"github.com/EinarLogiOskars/commitarium/internal/marketplace"
 	"github.com/EinarLogiOskars/commitarium/internal/modelcatalog"
 	"github.com/EinarLogiOskars/commitarium/internal/orchestration"
@@ -508,6 +509,7 @@ func run(ctx context.Context, coordinatorConfig config) error {
 	}
 	var marketplaceService httpapi.MarketplaceService
 	var releaseService httpapi.ReleaseService
+	var installService httpapi.InstallService
 	if coordinatorConfig.marketplaceURL != "" {
 		connected, err := marketplace.NewService(coordinatorConfig.marketplaceURL, coordinatorConfig.credentialsRoot, marketplaceTimeout)
 		if err != nil {
@@ -531,6 +533,11 @@ func run(ctx context.Context, coordinatorConfig config) error {
 			return fmt.Errorf("set up releases: %w", err)
 		}
 		releaseService = releases
+		installs, err := install.NewService(connected, coordinatorConfig.gitExecutable, coordinatorConfig.toolchainRoot)
+		if err != nil {
+			return fmt.Errorf("set up installs: %w", err)
+		}
+		installService = installs
 	}
 	handler := httpapi.NewWithWorkspaceRealWorkflowDeletionAndModels(
 		projectService,
@@ -556,6 +563,7 @@ func run(ctx context.Context, coordinatorConfig config) error {
 		agentUsageReader{agents: agentService, workers: agentWorkerRegistry},
 		marketplaceService,
 		releaseService,
+		installService,
 	)
 
 	if assistantWatcher != nil {

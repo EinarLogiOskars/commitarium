@@ -58,11 +58,11 @@ as is or make it yours.
 
 ### Installing
 
-9. **Install copies the repository into the local forge.** The local Forgejo
-   migrates the app from the marketplace (history kept), the project starts
-   at the newest release tag, is marked as an app, and gets the manifest
-   (stack and vision). The app then opens like any other; nothing touches
-   the user's own folders.
+9. **Install copies the repository into the local forge.** The coordinator
+   fetches the newest release with its history and runs it through the
+   ordinary project import, so the local repository is set up like any other;
+   the project is marked as an app and gets the manifest (stack and vision).
+   The app then opens like any other; nothing touches the user's own folders.
 10. **An installed app remembers its origin** (marketplace repository and
     tag), so it can show "Based on <app> by <user>" and, later, offer
     updates.
@@ -124,23 +124,23 @@ project with a broken submodule pointer.
    version, whether the app changed since, and Release. Creates the
    repository on the first release (`internal/release`). The secret scan is
    deferred: the four users are trusted and only release their own apps.
-5. **Install from URL.** Paste a marketplace repository URL: the local
-   Forgejo migrates the repository straight from the marketplace (Forgejo
-   migrate API, history and tags kept; the marketplace domain in the local
-   Forgejo's allowed migration domains), the coordinator binds it to a new
-   app project at the newest tag, applies the manifest, records the origin,
-   and opens it. Nothing is written to the user's own folders.
+5. **Marketplace view and install** (slices 5 and 7 together). A
+   Marketplace tab next to Apps, for everyone, lists released apps (the
+   `commitarium-app` topic with a `vN` tag): name, who released it,
+   version, stars; "Yours" on the user's own, "Open" on installed ones.
+   Install fetches the release with its history and hands it to the
+   ordinary project import (`internal/install`), so the local repository is
+   set up like any import; the project is marked an app, its stack and
+   vision come from `.commitarium`, and the install is recorded for
+   "Installed" and later update offers.
 6. **Release suggestions.** When an app has merged changes since its last
    release, the assistant proposes "Release v3?" with a short changelog; one
    tap approves (ADR-022).
 
-Browsing is the Marketplace tab (slice 7), Commitarium's own view of the
-apps; until it exists, apps are installed by URL.
+Browsing is the Marketplace tab, Commitarium's own view of the apps.
 
 ## Later, if needed
 
-7. A Marketplace tab in Apps: list `commitarium-app` repositories with stars
-   and an install button.
 8. The assistant searches the marketplace before building a new app from
    scratch.
 9. Update offers for installed apps when a newer tag exists.
