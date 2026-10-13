@@ -115,8 +115,12 @@ export function ImportProject({
     !branch.trim() ||
     (info?.is_git_repo === true && (info.dirty || !info.has_commits));
 
+  // Once the project exists, closing still lands in it; the stack can be
+  // chosen in the workspace.
+  const close = () => (imported ? onImported(imported) : onClose());
+
   return (
-    <div className="modal" onClick={onClose}>
+    <div className="modal" onClick={close}>
       <div className="modal__card" onClick={(e) => e.stopPropagation()}>
         <h2>Import a project</h2>
         <p className="muted">
@@ -227,8 +231,8 @@ export function ImportProject({
         )}
 
         <div className="modal__footer">
-          <button className="ghost" onClick={onClose} disabled={busy}>
-            Cancel
+          <button className="ghost" onClick={close} disabled={busy}>
+            {imported ? "Close" : "Cancel"}
           </button>
         </div>
       </div>

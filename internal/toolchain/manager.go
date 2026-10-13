@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -21,6 +22,7 @@ type ProjectReader interface {
 	GetRepositoryOverview(context.Context, string) (project.RepositoryOverview, error)
 	ReadRepositoryBlob(context.Context, string, string, int64) ([]byte, error)
 	GetRepositoryToolchainEvidence(context.Context, string) (project.RepositoryToolchainEvidence, error)
+	ReadRepositoryFile(context.Context, string, string, int64) ([]byte, error)
 }
 
 type projectDeletionReader interface {
@@ -221,6 +223,18 @@ func (manager *Manager) Detect(ctx context.Context, projectID string) (Suggestio
 	files := make(map[string]project.RepositoryTreeEntry, len(overview.Tree))
 	for _, entry := range overview.Tree {
 		files[strings.ToLower(entry.Path)] = entry
+	}
+	// A stack that travels with the repository is exact, so it wins over
+	// guessing from files.
+	if entry, exists := files[path.Dir(PortableStackPath)]; exists && entry.Type == "dir" {
+		contents, readErr := manager.projects.ReadRepositoryFile(ctx, projectID, PortableStackPath,
+			project.RepositoryDetectionFileMaxBytes)
+		if readErr == nil {
+			if stack, parseErr := ParsePortableStack(contents); parseErr == nil {
+				return Suggestion{Tools: stack.Tools, Services: stack.Services, Run: stack.Run,
+					Evidence: []string{PortableStackPath}, Confidence: "high"}, nil
+			}
+		}
 	}
 	suggestion := Suggestion{Tools: map[string]string{}, Services: []string{}, Evidence: []string{}, Confidence: "low"}
 	detect := func(tool, version string, names ...string) {

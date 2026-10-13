@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -17,6 +18,7 @@ type projectReaderStub struct {
 	overview        project.RepositoryOverview
 	evidence        project.RepositoryToolchainEvidence
 	blobs           map[string][]byte
+	files           map[string][]byte
 	deletionPending bool
 }
 
@@ -30,6 +32,16 @@ func (reader *projectReaderStub) GetRepositoryOverview(context.Context, string) 
 
 func (reader *projectReaderStub) ReadRepositoryBlob(_ context.Context, _ string, blobID string, _ int64) ([]byte, error) {
 	return reader.blobs[blobID], nil
+}
+
+func (reader *projectReaderStub) ReadRepositoryFile(_ context.Context, _ string, filePath string, maxBytes int64) ([]byte, error) {
+	if maxBytes > project.RepositoryDetectionFileMaxBytes { // the forge refuses larger reads
+		return nil, project.ErrForgejoUnavailable
+	}
+	if contents, ok := reader.files[filePath]; ok {
+		return contents, nil
+	}
+	return nil, project.ErrRepositoryFileNotFound
 }
 
 func (reader *projectReaderStub) GetRepositoryToolchainEvidence(context.Context, string) (project.RepositoryToolchainEvidence, error) {
@@ -270,5 +282,41 @@ func TestDeleteProjectRemovesOnlyPerProjectFilesAndKeepsSharedCache(t *testing.T
 	}
 	if err := manager.DeleteProject(t.Context(), "prj_one"); err != nil {
 		t.Fatalf("idempotent toolchain delete: %v", err)
+	}
+}
+
+func TestPortableStackRoundTripsAndWinsDetection(t *testing.T) {
+	encoded, err := PortableStack(Manifest{Source: SourcePicker, Tools: map[string]string{"node": "24.21.0", "pnpm": "10.23.0"},
+		Services: []string{"postgresql"}, Run: &Run{Open: RunOpen{Service: "frontend", Port: 5173}},
+		ProvisioningStatus: ProvisioningReady, ProvisioningMessage: "machine state"})
+	if err != nil {
+		t.Fatalf("encode stack: %v", err)
+	}
+	if strings.Contains(string(encoded), "provisioning") || strings.Contains(string(encoded), "project_id") {
+		t.Fatalf("stack carries machine state:\n%s", encoded)
+	}
+
+	reader := &projectReaderStub{
+		stored: project.Project{ID: "prj_test"},
+		overview: project.RepositoryOverview{Tree: []project.RepositoryTreeEntry{
+			{Path: ".commitarium", Type: "dir"}, {Path: "package.json", Type: "file"},
+		}},
+		files: map[string][]byte{PortableStackPath: encoded},
+	}
+	manager, err := NewManager(t.TempDir(), reader)
+	if err != nil {
+		t.Fatalf("create manager: %v", err)
+	}
+	suggestion, err := manager.Detect(t.Context(), "prj_test")
+	if err != nil || suggestion.Confidence != "high" || suggestion.Tools["pnpm"] != "10.23.0" ||
+		suggestion.Run == nil || suggestion.Run.Open.Port != 5173 || len(suggestion.Services) != 1 ||
+		len(suggestion.Evidence) != 1 || suggestion.Evidence[0] != PortableStackPath {
+		t.Fatalf("suggestion=%+v err=%v", suggestion, err)
+	}
+
+	reader.files[PortableStackPath] = []byte(`{"tools":{"node":"latest"}}`)
+	suggestion, err = manager.Detect(t.Context(), "prj_test")
+	if err != nil || suggestion.Tools["node"] != "24.21.0" || suggestion.Evidence[0] != "package.json" {
+		t.Fatalf("invalid portable stack should fall back to detection: suggestion=%+v err=%v", suggestion, err)
 	}
 }

@@ -250,6 +250,16 @@ fn build_bundle(dir: &Path, default_branch: &str, bundle_path: &Path) -> Result<
         "git init",
     )?;
     check(run(&["add", "-A"])?, "git add")?;
+    // A nested repository is staged as a bare commit pointer, not its files,
+    // so the import would silently arrive empty.
+    let staged = run(&["ls-files", "--stage"])?;
+    let nested = nested_repositories(&String::from_utf8_lossy(&staged.stdout));
+    if !nested.is_empty() {
+        return Err(format!(
+            "this folder contains a separate Git repository at {} — import that folder directly instead",
+            nested.join(", ")
+        ));
+    }
     check(
         run(&[
             "-c",
@@ -276,6 +286,15 @@ fn build_bundle(dir: &Path, default_branch: &str, bundle_path: &Path) -> Result<
     }
     let commit = String::from_utf8_lossy(&head.stdout).trim().to_string();
     Ok(commit)
+}
+
+/// Paths that `git ls-files --stage` lists as gitlinks (mode 160000).
+fn nested_repositories(stage: &str) -> Vec<String> {
+    stage
+        .lines()
+        .filter(|line| line.starts_with("160000 "))
+        .filter_map(|line| line.split_once('\t').map(|(_, path)| format!("{path}/")))
+        .collect()
 }
 
 fn slugify(input: &str) -> String {
@@ -709,6 +728,25 @@ mod tests {
         let commit = build_bundle(&folder, "main", &folder_bundle).unwrap();
         assert!(matches!(commit.len(), 40 | 64));
         assert!(commit.bytes().all(|byte| byte.is_ascii_hexdigit()));
+        assert!(!folder.join(".git").exists());
+    }
+
+    #[test]
+    fn plain_folders_containing_a_repository_are_refused() {
+        let root = tempfile::tempdir().expect("temp root");
+        let folder = root.path().join("folder");
+        let inner = folder.join("app");
+        std::fs::create_dir_all(&inner).expect("inner dir");
+        checked(&inner, &["init", "--initial-branch=main"]);
+        checked(&inner, &["config", "user.name", "Importer"]);
+        checked(&inner, &["config", "user.email", "import@example.test"]);
+        std::fs::write(inner.join("README.md"), "app\n").expect("inner file");
+        checked(&inner, &["add", "README.md"]);
+        checked(&inner, &["commit", "-m", "Initial"]);
+
+        let error = build_bundle(&folder, "main", &root.path().join("folder.bundle"))
+            .expect_err("nested repository refused");
+        assert!(error.contains("app/"), "{error}");
         assert!(!folder.join(".git").exists());
     }
 }

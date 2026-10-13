@@ -117,6 +117,9 @@ type Service struct {
 	branches      Branches
 	now           func() time.Time
 	mu            sync.Mutex
+	// seedChecked holds projects whose repository was already checked for a
+	// vision to seed, so reading a missing vision stays cheap.
+	seedChecked sync.Map
 }
 
 var (
@@ -157,7 +160,11 @@ func (service *Service) Get(ctx context.Context, projectID string) (Vision, erro
 	}
 	service.mu.Lock()
 	defer service.mu.Unlock()
-	return service.read(projectID)
+	stored, err := service.read(projectID)
+	if errors.Is(err, ErrNotFound) {
+		return service.seedFromRepository(ctx, projectID)
+	}
+	return stored, err
 }
 
 // Save replaces the vision with the user's edit, when nobody changed it since

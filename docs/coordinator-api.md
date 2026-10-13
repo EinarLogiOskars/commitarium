@@ -656,7 +656,7 @@ Content-Type: application/json
 removes it.
 
 Supported tool names are `bun`, `deno`, `go`, `gradle`, `java`, `maven`, `node`,
-`php`, `python`, `ruby`, and `rust`. Every version must be explicit; `latest`
+`php`, `pnpm`, `python`, `ruby`, `rust`, and `uv`. Every version must be explicit; `latest`
 and `system` are rejected. `source` must be `picker`, `detected`, `assistant`,
 or `runtime`. Invalid input returns `400 invalid_toolchain`; an unknown project
 returns `404 project_not_found`. `PUT` is an idempotent replacement.
@@ -2388,7 +2388,8 @@ which runs them through the usual claim and complete endpoints.
 
 Reading a project's stack (`GET /api/v1/projects/{id}/toolchain`, and the
 toolchain check before a work order is created) detects and saves the stack
-when none is saved and detection is confident.
+when none is saved and detection is confident. A valid `.commitarium/stack.json`
+in the repository (ADR-026) is read first and is exact; its `run` is saved too.
 
 When a project has a stack but its repository has no compose file at the root,
 the coordinator starts a **background work order**, "Set up the preview". It is
@@ -2490,14 +2491,16 @@ at most three levels, have stable IDs, and are numbered by position (P0.2.1).
 Only an item without sub-items starts a work order.
 
 - `GET /api/v1/projects/{id}/vision` answers the vision:
-  `{"project_id", "plan", "source": "assistant"|"user", "revision", "updated_at"}`.
+  `{"project_id", "plan", "source": "assistant"|"user"|"repository", "revision", "updated_at"}`.
   The plan is `{"statement", "priorities": [{"level", "items": [{"id", "title",
   "description", "items", "feature_id", "done"}]}], "confidence", "guesses"}`.
   `done` marks an item without sub-items that the project already delivers.
   For a repository without code, the plan also has the recommended
   `"stack": {"presets": ["node-lts"], "frameworks": "React with Vite", "reason"}`,
   naming runtime presets from `GET /api/v1/toolchain-presets`.
-  `404 vision_not_found` until one is written.
+  `404 vision_not_found` until one is written. A project without a vision
+  whose repository has a valid `.commitarium/vision.json` (ADR-026) gets that
+  plan on first read, with source `repository`.
 - `PUT /api/v1/projects/{id}/vision` with `{"plan", "expected_revision"}` saves
   the user's edit. `409 vision_conflict` when the vision changed meanwhile;
   `400 invalid_vision` for an invalid plan.
