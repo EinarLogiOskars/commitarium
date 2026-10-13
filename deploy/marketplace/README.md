@@ -7,7 +7,10 @@ Runs in `/opt/marketplace` on the marketplace VPS (Hetzner CAX11, arm64).
   admin backdoor; Commitarium uses only its API.
 - **marketplace-signup** creates accounts for Commitarium's sign-up screen.
   Forgejo has no public sign-up API, so it holds an admin token
-  (`secrets/forgejo-admin-token`, scope `write:admin`, readable by uid 65532)
+  (`secrets/forgejo-admin-token`, readable by uid 65532). Create it as the
+  admin with repository access **All** and **admin: Read and write**; a
+  "Public only" token is refused admin actions ("user should be the site
+  admin")
   and creates each account inactive until the admin activates it.
 - **Caddy** serves HTTPS and sends `/commitarium/*` to marketplace-signup.
 
