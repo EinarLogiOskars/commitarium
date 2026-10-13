@@ -19,6 +19,10 @@ type workerStub struct {
 }
 
 func (worker *workerStub) PutAttempt(_ context.Context, identity workerhttp.MutationIdentity, request workerhttp.PutAttemptRequest) (workerhttp.Attempt, bool, error) {
+	// A real worker refuses a request that fails its contract.
+	if err := request.Validate(identity); err != nil {
+		return workerhttp.Attempt{}, false, err
+	}
 	worker.puts = append(worker.puts, request)
 	worker.attempt = workerhttp.Attempt{
 		AttemptReference: identity.AttemptReference, Mode: request.Mode, Assignment: request.Assignment,
@@ -192,5 +196,16 @@ func TestPremiumFamiliesMatchAnyVersion(t *testing.T) {
 		if settings.RequiresApproval(model) != premium {
 			t.Errorf("%q premium = %t", model, !premium)
 		}
+	}
+}
+
+func TestTheTopLevelConversationReachesItsAgent(t *testing.T) {
+	service, worker := newTestService(t)
+	conversation, err := service.Send(t.Context(), TopLevel, "I'd like a new app: a Funko Pop tracker", "msg-1")
+	if err != nil || conversation.Status != StatusRunning || len(worker.puts) != 1 {
+		t.Fatalf("top-level send = %+v err=%v puts=%d", conversation, err, len(worker.puts))
+	}
+	if projectID := worker.puts[0].Assignment.ProjectID; projectID != TopLevel {
+		t.Fatalf("top-level project ID = %q, want %q", projectID, TopLevel)
 	}
 }
