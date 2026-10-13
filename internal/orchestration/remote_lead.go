@@ -2029,17 +2029,9 @@ func (starter *RemoteLeadStarter) recoverIdleReviewingRun(
 		if attempt.Result == nil {
 			return errors.New("completed review attempt has no result")
 		}
-		if attempt.Result.Disposition == workerhttp.DispositionInputRequired {
-			return starter.handleInputRequired(ctx, remoteLeadRequest{runID: run.ID, identity: workerhttp.MutationIdentity{AttemptReference: attempt.AttemptReference}}, *attempt.Result)
-		}
-		request := remoteLeadRequest{runID: run.ID, agentName: "reviewer", identity: workerhttp.MutationIdentity{
-			AttemptReference: workerhttp.AttemptReference{SessionID: reviewer.ID, AttemptID: reviewerCheckpoint.AttemptID},
-		}}
-		if !starter.claim(run.ID) {
-			return fmt.Errorf("%w: %q", ErrRunAlreadyActive, run.ID)
-		}
-		go starter.launchImplementationReviewVerification(request, *attempt.Result)
-		return nil
+		// Guidance with Continue goes to a reviewer whose finished review
+		// could not be accepted; Re-check checks that review again.
+		return starter.continueOrVerifyReviewTurn(ctx, run, reviewer, reviewerCheckpoint, attempt, directive)
 	}
 	if leadResponding {
 		if err := starter.confirmCompletedTurn(ctx, lead, leadCheckpoint); err != nil {
@@ -2097,6 +2089,89 @@ func (starter *RemoteLeadStarter) recoverIdleReviewingRun(
 	go starter.launchImplementationPublicationVerification(request, *attempt.Result)
 	return nil
 }
+
+// continueOrVerifyReviewTurn handles the reviewer's finished review, as
+// continueOrVerifyLeadTurn does the lead's turn. The user's Continue answers a
+// reviewer that asked for help. A review the coordinator could not accept is
+// tried again in the same round and conversation when the user gave guidance
+// or chose a fresh conversation, or when its acceptance results stop it:
+// checking that review again can never pass, so plain Continue tells the
+// reviewer what to put right. Otherwise, and always for Re-check, the review
+// is checked again.
+func (starter *RemoteLeadStarter) continueOrVerifyReviewTurn(
+	ctx context.Context,
+	run execution.Run,
+	reviewer execution.Session,
+	checkpoint execution.WorkerAttemptCheckpoint,
+	attempt workerhttp.Attempt,
+	directive RecoveryDirective,
+) error {
+	inputRequired := attempt.Result.Disposition == workerhttp.DispositionInputRequired
+	if inputRequired && !directive.answersBlocker() {
+		return starter.handleInputRequired(ctx, remoteLeadRequest{runID: run.ID, identity: workerhttp.MutationIdentity{AttemptReference: attempt.AttemptReference}}, *attempt.Result)
+	}
+	guided, refusal := false, ""
+	if !inputRequired && directive.answersBlocker() {
+		// A verified review was accepted: the blocker came later, and
+		// checking again continues from it.
+		verified, err := starter.sessionActivityRecorded(
+			ctx, reviewer.ID, implementationReviewVerificationEventID(checkpoint.AttemptID),
+		)
+		if err != nil {
+			return fmt.Errorf("load review verification: %w", err)
+		}
+		if !verified {
+			refused, err := starter.acceptanceReviewRefusal(ctx, run, *attempt.Result)
+			if err != nil {
+				return err
+			}
+			var incomplete acceptanceResultsIncomplete
+			switch {
+			case errors.As(refused, &incomplete):
+				refusal = strings.TrimSuffix(refused.Error(), ".") + ". " + acceptanceResultsGuidance
+			case refused != nil:
+				refusal = refused.Error()
+			default:
+				// The blocker recorded what failed (see requireReview).
+				_, refusal, _ = strings.Cut(directive.blockedReason, "What failed: ")
+			}
+			guided = directive.Message != "" || directive.Action == RecoveryActionReplace ||
+				errors.As(refused, &incomplete)
+		}
+	}
+	if inputRequired || guided {
+		if !starter.claim(run.ID) {
+			return fmt.Errorf("%w: %q", ErrRunAlreadyActive, run.ID)
+		}
+		answer := remoteLeadRequest{
+			runID: run.ID, agentName: "reviewer", allowRecoveryContinuation: true,
+			answerBlocker: true, guided: guided, forceFreshRecovery: directive.Action == RecoveryActionReplace,
+			recoveryMessage: directive.Message, refusal: refusal,
+			identity: workerhttp.MutationIdentity{AttemptReference: workerhttp.AttemptReference{
+				SessionID: reviewer.ID, AttemptID: checkpoint.AttemptID,
+			}},
+			request: workerhttp.PutAttemptRequest{OutputContract: workerhttp.OutputContractImplementationReview},
+		}
+		go starter.launchBlockerAnswer(answer, attempt)
+		return nil
+	}
+	request := remoteLeadRequest{runID: run.ID, agentName: "reviewer", identity: workerhttp.MutationIdentity{
+		AttemptReference: workerhttp.AttemptReference{SessionID: reviewer.ID, AttemptID: checkpoint.AttemptID},
+	}}
+	if !starter.claim(run.ID) {
+		return fmt.Errorf("%w: %q", ErrRunAlreadyActive, run.ID)
+	}
+	go starter.launchImplementationReviewVerification(request, *attempt.Result)
+	return nil
+}
+
+// acceptanceResultsGuidance tells a reviewer whose review was refused for its
+// acceptance results how to put them right.
+const acceptanceResultsGuidance = "Run the affected acceptance tests again against the same exact commit and " +
+	"record each new result: `commitarium-artifact acceptance start <test-id>`, then `acceptance pass <test-id>` " +
+	"or `acceptance fail <test-id> <note>`; a new result replaces a failure. Then post a new review of that " +
+	"commit with the new marker: approve only when no acceptance test is recorded as failed, and request " +
+	"changes if the implementation is wrong."
 
 // recoverIdlePlanningRun handles the safe points between provider turns. The
 // run intentionally remains active across the lead-to-reviewer handoff, so a
@@ -2344,6 +2419,9 @@ type remoteLeadRequest struct {
 	// as a publication that failed verification. Without guidance, Continue
 	// only checks that turn again.
 	guided bool
+	// refusal says why the coordinator could not accept a guided agent's
+	// finished turn, so its next turn knows what to fix.
+	refusal string
 }
 
 func interventionAttemptID(sessionID, interventionID string) string {
@@ -2460,21 +2538,50 @@ func implementationTurnNumber(sessionID, attemptID string) (int, bool) {
 }
 
 func workflowAttemptVersionAndTurn(sessionID string, kind string, attemptID string) (int, int, bool) {
+	version, turn, _, ok := workflowAttemptCoordinates(sessionID, kind, attemptID)
+	return version, turn, ok
+}
+
+// workflowAttemptCoordinates also reports which try of its turn an attempt
+// is. Only a review is tried again within its round (see
+// reviewRetryAttemptID); every other attempt is its turn's first try.
+func workflowAttemptCoordinates(sessionID string, kind string, attemptID string) (int, int, int, bool) {
 	value, found := strings.CutPrefix(attemptID, sessionID+":"+kind+":")
 	if !found {
-		return 0, 0, false
+		return 0, 0, 0, false
 	}
-	if strings.HasPrefix(value, "v") {
-		parts := strings.Split(value, ":")
-		if len(parts) != 2 {
-			return 0, 0, false
+	parts := strings.Split(value, ":")
+	version := 1
+	if strings.HasPrefix(parts[0], "v") {
+		parsed, err := strconv.Atoi(strings.TrimPrefix(parts[0], "v"))
+		if err != nil || parsed < 2 {
+			return 0, 0, 0, false
 		}
-		version, versionErr := strconv.Atoi(strings.TrimPrefix(parts[0], "v"))
-		turn, turnErr := strconv.Atoi(parts[1])
-		return version, turn, versionErr == nil && version > 1 && turnErr == nil && turn > 0
+		version, parts = parsed, parts[1:]
 	}
-	turn, err := strconv.Atoi(value)
-	return 1, turn, err == nil && turn > 0
+	try := 1
+	if kind == "review" && len(parts) == 2 {
+		parsed, err := strconv.Atoi(parts[1])
+		if err != nil || parsed < 2 {
+			return 0, 0, 0, false
+		}
+		try, parts = parsed, parts[:1]
+	}
+	if len(parts) != 1 {
+		return 0, 0, 0, false
+	}
+	turn, err := strconv.Atoi(parts[0])
+	if err != nil || turn < 1 {
+		return 0, 0, 0, false
+	}
+	return version, turn, try, true
+}
+
+// reviewRetryAttemptID names another try at the same review round. Review N
+// answers lead response N-1 and is answered by correction or readiness N, so
+// a review that is tried again keeps its round rather than taking the next.
+func reviewRetryAttemptID(sessionID string, version, round, try int) string {
+	return workflowAttemptForVersion(sessionID, "review", version, round) + ":" + strconv.Itoa(try)
 }
 
 func planningTurnNumber(sessionID, attemptID string) (int, bool) {
@@ -4099,9 +4206,15 @@ func (starter *RemoteLeadStarter) continueFailedAttempt(
 		attempt.Result != nil && attempt.Result.Outcome == workerhttp.OutcomeCompleted &&
 		(attempt.Result.Disposition == workerhttp.DispositionInputRequired || request.guided)
 	if answered && request.guided && attempt.Result.Disposition != workerhttp.DispositionInputRequired {
-		request.recoveryMessage = "Your previous turn finished, but Commitarium could not accept its result, so " +
-			"the work order was blocked. The user asked you to continue with this guidance: " +
-			strings.TrimSpace(request.recoveryMessage) + " Then finish the turn as before."
+		guidance := "Your previous turn finished, but Commitarium could not accept its result, so " +
+			"the work order was blocked."
+		if refusal := strings.TrimSpace(request.refusal); refusal != "" {
+			guidance += " Commitarium refused it because: " + refusal
+		}
+		if message := strings.TrimSpace(request.recoveryMessage); message != "" {
+			guidance += " The user asked you to continue with this guidance: " + message
+		}
+		request.recoveryMessage = guidance + " Then finish the turn as before."
 	} else if answered {
 		guidance := "The user reviewed the blocker you reported and asked you to continue. Check whether " +
 			"it still holds, then carry on with the same work."
@@ -4243,7 +4356,10 @@ func recoverySuccessorAttemptID(sessionID, attemptID string) (string, error) {
 	if version, turn, ok := planningAttemptVersionAndTurn(sessionID, attemptID); ok {
 		return planningRecoveryAttemptID(sessionID, version, turn, 1), nil
 	}
-	for _, kind := range []string{"implementation", "acceptance", "review", "correction", "readiness", "update", "approval", "session"} {
+	if version, round, try, ok := workflowAttemptCoordinates(sessionID, "review", attemptID); ok {
+		return reviewRetryAttemptID(sessionID, version, round, try+1), nil
+	}
+	for _, kind := range []string{"implementation", "acceptance", "correction", "readiness", "update", "approval", "session"} {
 		if version, turn, ok := workflowAttemptVersionAndTurn(sessionID, kind, attemptID); ok {
 			return workflowAttemptForVersion(sessionID, kind, version, turn+1), nil
 		}
@@ -5548,20 +5664,10 @@ func (starter *RemoteLeadStarter) verifyImplementationReview(
 	if len(messages) == 0 || messages[len(messages)-1].Event.Type != worker.EventPlanSubmitted {
 		return errors.New("implementation review has no durable agreed plan")
 	}
-	if run.IndependentAcceptanceTests {
-		artifact, artifactErr := starter.artifacts.GetFeatureArtifact(ctx, run.FeatureID, featureartifact.KindAcceptanceTests)
-		if artifactErr != nil {
-			return fmt.Errorf("load acceptance results before review verification: %w", artifactErr)
-		}
-		tests := featureartifact.AcceptanceTests{}
-		if decodeErr := json.Unmarshal([]byte(artifact.Document), &tests); decodeErr != nil {
-			return fmt.Errorf("decode acceptance results before review verification: %w", decodeErr)
-		}
-		if validateErr := validateAcceptanceReviewResults(
-			tests, run.PlanVersion, result.Review.CommitID, result.Disposition,
-		); validateErr != nil {
-			return validateErr
-		}
+	if refusal, err := starter.acceptanceReviewRefusal(ctx, run, result); err != nil {
+		return err
+	} else if refusal != nil {
+		return refusal
 	}
 	expectedState := "APPROVED"
 	if result.Disposition == workerhttp.DispositionChangesRequested {
@@ -5634,16 +5740,45 @@ func validateAcceptanceReviewResults(
 	for _, test := range tests.Tests {
 		switch test.Status {
 		case featureartifact.AcceptanceTestPending, featureartifact.AcceptanceTestRunning:
-			return fmt.Errorf("acceptance test %q has no final result", test.ID)
+			return acceptanceResultsIncomplete(fmt.Sprintf("acceptance test %q has no final result", test.ID))
 		case featureartifact.AcceptanceTestFailed:
 			if disposition == workerhttp.DispositionSucceeded {
-				return fmt.Errorf(
+				return acceptanceResultsIncomplete(fmt.Sprintf(
 					"the reviewer approved while its acceptance test %q is recorded as failed; the reviewer must run the test again "+
-						"if the test was wrong, or request changes if the implementation is", test.ID)
+						"if the test was wrong, or request changes if the implementation is", test.ID))
 			}
 		}
 	}
 	return nil
+}
+
+// acceptanceResultsIncomplete refuses a review whose acceptance results only
+// the reviewer can put right, by recording them for the reviewed commit.
+// Checking the same review again can never pass.
+type acceptanceResultsIncomplete string
+
+func (refusal acceptanceResultsIncomplete) Error() string { return string(refusal) }
+
+// acceptanceReviewRefusal checks a finished review against the acceptance
+// results recorded for its commit. It returns why the review cannot be
+// accepted, or a separate error when the results cannot be read.
+func (starter *RemoteLeadStarter) acceptanceReviewRefusal(
+	ctx context.Context,
+	run execution.Run,
+	result workerhttp.TerminalResult,
+) (refusal error, err error) {
+	if !run.IndependentAcceptanceTests || result.Review == nil {
+		return nil, nil
+	}
+	artifact, err := starter.artifacts.GetFeatureArtifact(ctx, run.FeatureID, featureartifact.KindAcceptanceTests)
+	if err != nil {
+		return nil, fmt.Errorf("load acceptance results before review verification: %w", err)
+	}
+	tests := featureartifact.AcceptanceTests{}
+	if err := json.Unmarshal([]byte(artifact.Document), &tests); err != nil {
+		return nil, fmt.Errorf("decode acceptance results before review verification: %w", err)
+	}
+	return validateAcceptanceReviewResults(tests, run.PlanVersion, result.Review.CommitID, result.Disposition), nil
 }
 
 func (starter *RemoteLeadStarter) startImplementationReadiness(

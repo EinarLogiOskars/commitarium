@@ -91,6 +91,9 @@ type conversationalRemoteLeadWorker struct {
 	// unsent attempts are unknown to the worker until they are PUT, like a
 	// turn that never reached a worker.
 	unsent map[workerhttp.AttemptReference]bool
+	// onPut runs when a turn is sent, before it is observed, like work the
+	// agent does during its turn.
+	onPut func(workerhttp.AttemptReference)
 }
 
 func (stub *conversationalRemoteLeadWorker) PutAttempt(
@@ -110,6 +113,9 @@ func (stub *conversationalRemoteLeadWorker) PutAttempt(
 	}
 	delete(stub.unsent, identity.AttemptReference)
 	stub.putRequests = append(stub.putRequests, request)
+	if stub.onPut != nil {
+		stub.onPut(identity.AttemptReference)
+	}
 	return attempt, true, nil
 }
 
@@ -257,6 +263,7 @@ type remoteLeadWorkspaceStub struct {
 	replanningEventID             string
 	replanningPlan                string
 	reviewVerifyCalls             int
+	reviewVerifyAttempts          []string
 	readinessVerifyCalls          int
 	mergeReadyCalls               int
 	mergeCalls                    int
@@ -421,20 +428,21 @@ func (stub *remoteLeadWorkspaceStub) VerifyRevisedImplementationPublication(
 }
 
 func (stub *remoteLeadWorkspaceStub) VerifyImplementationReview(
-	context.Context,
-	string,
-	string,
-	string,
-	string,
-	string,
-	string,
-	string,
-	int64,
-	int64,
-	string,
-	string,
+	_ context.Context,
+	_ string,
+	_ string,
+	_ string,
+	_ string,
+	attemptID string,
+	_ string,
+	_ string,
+	_ int64,
+	_ int64,
+	_ string,
+	_ string,
 ) (workspace.Workspace, error) {
 	stub.reviewVerifyCalls++
+	stub.reviewVerifyAttempts = append(stub.reviewVerifyAttempts, attemptID)
 	if stub.reviewVerifyCalls == stub.failReviewVerifyCall {
 		return workspace.Workspace{}, errors.New("the reviewer's review could not be confirmed")
 	}

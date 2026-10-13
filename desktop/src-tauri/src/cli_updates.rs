@@ -4,6 +4,10 @@
 //! installs a newer CLI into the provider's shared CLI volume (the workers
 //! prefer it), and restarts the provider's workers once none of them is
 //! running a turn. New CLI versions also bring new models.
+//!
+//! The same task keeps an approved environment's derivative images (ADR-0010)
+//! built from the current base worker images, so the workers do not keep
+//! running old worker code after the bases are rebuilt or updated.
 
 use std::sync::Mutex;
 use std::thread;
@@ -14,7 +18,8 @@ use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::Notify;
 
 use crate::agents::{self, Provider, CLI_DIRECTORY};
-use crate::docker;
+use crate::phase4::{self, EnvironmentPlan};
+use crate::{docker, profiles};
 
 const REGISTRY_TIMEOUT: Duration = Duration::from_secs(10);
 /// How often the CLIs are checked once they are current.
@@ -22,6 +27,9 @@ const CHECK_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
 /// How soon a pass is retried while an update waits for running work, failed,
 /// or no worker was up to check.
 const RETRY_INTERVAL: Duration = Duration::from_secs(3 * 60);
+/// How soon a failed environment rebuild (a package that no longer installs,
+/// say) is tried again, unless the stack comes up or updates first.
+const REBUILD_RETRY_INTERVAL: Duration = Duration::from_secs(30 * 60);
 const HEALTHY_TIMEOUT: Duration = Duration::from_secs(120);
 const HEALTH_POLL: Duration = Duration::from_secs(1);
 pub(crate) const STATUS_EVENT: &str = "agent_cli_status";
@@ -60,6 +68,8 @@ pub(crate) struct CliUpdater {
     statuses: Mutex<Vec<CliStatus>>,
     /// Versions installed whose workers still wait for a restart.
     restart_pending: Mutex<Vec<(Provider, String)>>,
+    /// When a failed environment rebuild may be tried again.
+    rebuild_after: Mutex<Option<Instant>>,
     wake: Notify,
 }
 
@@ -74,8 +84,14 @@ pub fn agent_cli_status(updater: tauri::State<'_, CliUpdater>) -> Vec<CliStatus>
 }
 
 /// Check now, for example because the stack (and so the workers) just came up.
+/// New base images may also have arrived, so a failed environment rebuild is
+/// tried again at once.
 pub(crate) fn wake(app: &AppHandle) {
-    app.state::<CliUpdater>().wake.notify_one();
+    let updater = app.state::<CliUpdater>();
+    if let Ok(mut rebuild_after) = updater.rebuild_after.lock() {
+        *rebuild_after = None;
+    }
+    updater.wake.notify_one();
 }
 
 /// Start the background updater. It never blocks startup; a failed pass is
@@ -97,9 +113,95 @@ pub(crate) fn spawn(app: AppHandle) {
     });
 }
 
-/// One pass over both providers. Returns whether everything is settled: each
-/// provider with a running worker is current and at least one was checked.
+/// One pass: the approved environment first, so a recreate it needs comes
+/// before any CLI restart, then the CLIs. Returns whether everything is
+/// settled.
 async fn update_pass(app: &AppHandle) -> Result<bool, String> {
+    let environment = match environment_pass(app).await {
+        Ok(settled) => settled,
+        Err(error) => {
+            eprintln!("[environment-images] {error}");
+            false
+        }
+    };
+    Ok(cli_pass(app).await? && environment)
+}
+
+/// Keep the approved environment on the current base worker images: rebuild
+/// stale derivatives with the approved package union, then recreate the
+/// workers once none is running a turn. Returns whether it is settled.
+async fn environment_pass(app: &AppHandle) -> Result<bool, String> {
+    let workers = blocking(|| {
+        PROVIDERS
+            .into_iter()
+            .map(|provider| running_workers(provider).map(|containers| (provider, containers)))
+            .collect::<Result<Vec<_>, String>>()
+    })
+    .await??;
+    // Bringing the stack up wakes this pass once there are workers to follow.
+    if workers.iter().all(|(_, containers)| containers.is_empty()) {
+        return Ok(true);
+    }
+    let mut plan = environment_plan(&workers).await?;
+    if plan == EnvironmentPlan::Rebuild {
+        let deferred = app
+            .state::<CliUpdater>()
+            .rebuild_after
+            .lock()
+            .ok()
+            .and_then(|after| *after)
+            .is_some_and(|after| Instant::now() < after);
+        if deferred {
+            return Ok(false);
+        }
+        // The same union provisioning builds, read without touching a request.
+        let packages = phase4::approved_packages().await?;
+        eprintln!(
+            "[environment-images] a base worker image changed; rebuilding the approved environment"
+        );
+        let rebuilt = blocking(move || phase4::rebuild_environment_images(&packages)).await?;
+        if let Err(error) = rebuilt {
+            if let Ok(mut after) = app.state::<CliUpdater>().rebuild_after.lock() {
+                *after = Some(Instant::now() + REBUILD_RETRY_INTERVAL);
+            }
+            return Err(error);
+        }
+        plan = environment_plan(&workers).await?;
+    }
+    match plan {
+        EnvironmentPlan::Current => Ok(true),
+        // A base changed again during the rebuild; the next pass follows it.
+        EnvironmentPlan::Rebuild => Ok(false),
+        EnvironmentPlan::Recreate => {
+            let containers: Vec<String> = workers
+                .into_iter()
+                .flat_map(|(_, containers)| containers)
+                .collect();
+            // Recreating ends running turns; wait until there are none.
+            if !blocking(move || workers_idle(&containers)).await? {
+                return Ok(false);
+            }
+            let manager = app.state::<profiles::ProfileManager>().inner().clone();
+            blocking(move || phase4::recreate_environment_workers(&manager)).await??;
+            eprintln!("[environment-images] the workers now run the rebuilt environment");
+            Ok(true)
+        }
+    }
+}
+
+async fn environment_plan(workers: &[(Provider, Vec<String>)]) -> Result<EnvironmentPlan, String> {
+    let workers = workers.to_vec();
+    blocking(move || {
+        phase4::inspect_environment(&workers)
+            .map(|images| phase4::environment_plan(images.as_deref()))
+    })
+    .await?
+}
+
+/// One pass over both providers' CLIs. Returns whether everything is settled:
+/// each provider with a running worker is current and at least one was
+/// checked.
+async fn cli_pass(app: &AppHandle) -> Result<bool, String> {
     let mut settled = true;
     let mut checked = false;
     for provider in PROVIDERS {
@@ -299,15 +401,19 @@ fn install(container: &str, provider: Provider, version: &str) -> Result<(), Str
 }
 
 /// Whether no worker is launching or running a turn. A worker that cannot
-/// answer (an image without the activity check, say) counts as busy.
+/// answer counts as busy.
 fn workers_idle(containers: &[String]) -> bool {
     containers.iter().all(|container| {
-        docker::docker_command()
-            .args(["exec", container, "/worker", "activity"])
-            .output()
-            .ok()
-            .filter(|output| output.status.success())
-            .is_some_and(|output| idle_answer(&String::from_utf8_lossy(&output.stdout)))
+        if answers_activity(container) {
+            docker::docker_command()
+                .args(["exec", container, "/worker", "activity"])
+                .output()
+                .ok()
+                .filter(|output| output.status.success())
+                .is_some_and(|output| idle_answer(&String::from_utf8_lossy(&output.stdout)))
+        } else {
+            processes_idle(container)
+        }
     })
 }
 
@@ -321,9 +427,59 @@ pub(crate) fn all_workers_idle() -> Result<bool, String> {
     Ok(true)
 }
 
+/// Whether the worker binary has the `activity` subcommand. Workers built
+/// before it must never be asked: their binary ignores the argument and
+/// starts a second worker service, whose startup recovery runs against the
+/// live worker's journal before it fails to bind the port. Its activity URL
+/// is compiled into the binary, so a plain search tells them apart without
+/// running it.
+fn answers_activity(container: &str) -> bool {
+    docker::docker_command()
+        .args([
+            "exec",
+            container,
+            "grep",
+            "-q",
+            "-F",
+            "/internal/v1/activity",
+            "/worker",
+        ])
+        .output()
+        .is_ok_and(|output| output.status.success())
+}
+
 /// A worker's `activity` answer is the number of attempts in flight.
 fn idle_answer(output: &str) -> bool {
     output.trim().parse::<u64>() == Ok(0)
+}
+
+/// The fallback for workers without `activity`, read from outside with
+/// `docker top` so nothing runs inside the container. Each turn runs its
+/// provider CLI (and git) as child processes of the worker service, so a
+/// worker running only its service and health checks is idle. The coordinator
+/// has no single view of everything running on an agent (runs, assistant,
+/// vision, and setup turns are tracked apart), so the container is the
+/// sounder witness. A turn still being launched, before its process starts,
+/// is the one moment this misses.
+fn processes_idle(container: &str) -> bool {
+    docker::docker_command()
+        .args(["top", container, "-o", "pid,args"])
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .is_some_and(|output| idle_processes(&String::from_utf8_lossy(&output.stdout)))
+}
+
+/// `docker top -o pid,args` output: a header, then `<pid> <command line>`.
+fn idle_processes(listing: &str) -> bool {
+    let mut lines = listing.lines().filter(|line| !line.trim().is_empty());
+    lines.next().is_some_and(|header| header.contains("PID"))
+        && lines.all(|line| {
+            matches!(
+                line.trim().split_once(char::is_whitespace),
+                Some((_, command)) if matches!(command.trim(), "/worker" | "/worker healthcheck")
+            )
+        })
 }
 
 fn restart(containers: &[String]) -> Result<(), String> {
@@ -522,5 +678,23 @@ mod tests {
         assert!(!idle_answer("2\n"));
         assert!(!idle_answer(""));
         assert!(!idle_answer("unknown command"));
+    }
+
+    #[test]
+    fn a_worker_without_activity_is_idle_only_when_running_nothing_else() {
+        assert!(idle_processes("PID   COMMAND\n95361   /worker\n"));
+        // Health checks come and go every few seconds.
+        assert!(idle_processes(
+            "PID   COMMAND\n95361   /worker\n95420   /worker healthcheck\n"
+        ));
+        assert!(!idle_processes(
+            "PID   COMMAND\n95361   /worker\n95500   node /usr/local/bin/codex exec --json\n"
+        ));
+        assert!(!idle_processes(
+            "PID   COMMAND\n95361   /worker\n95501   git -C /workspaces/x fetch\n"
+        ));
+        // No answer at all is not an idle answer.
+        assert!(!idle_processes(""));
+        assert!(!idle_processes("Error: No such container"));
     }
 }

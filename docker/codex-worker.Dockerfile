@@ -26,13 +26,34 @@ FROM node:22-bookworm-slim AS build-release-stage
 ARG CODEX_VERSION=0.153.4
 ARG MISE_VERSION=2026.9.5
 
+# Agents check web apps in a headless browser (Playwright's Chromium), which
+# needs these system libraries and fonts; without them every project had to
+# approve the same packages first.
 RUN apt-get update && \
     apt-get install --yes --no-install-recommends \
         build-essential \
         ca-certificates \
         curl \
+        fontconfig \
+        fonts-dejavu-core \
         git \
         jq \
+        libasound2 \
+        libatk1.0-0 \
+        libatspi2.0-0 \
+        libdbus-1-3 \
+        libgbm1 \
+        libglib2.0-0 \
+        libnspr4 \
+        libnss3 \
+        libx11-6 \
+        libxcb1 \
+        libxcomposite1 \
+        libxdamage1 \
+        libxext6 \
+        libxfixes3 \
+        libxkbcommon0 \
+        libxrandr2 \
         openssh-client \
         pkg-config \
         python-is-python3 \
