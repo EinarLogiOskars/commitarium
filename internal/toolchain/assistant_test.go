@@ -247,3 +247,38 @@ func onlyAgent(agentID string, worker workerhttp.Service) func(string) (workerht
 		return worker, nil
 	}
 }
+
+func TestAssistantVerifyRepositoryDefaultsMissingMessage(t *testing.T) {
+	root, workspaces := t.TempDir(), t.TempDir()
+	reader := &projectReaderStub{
+		stored:   project.Project{ID: "prj_test", Name: "Imported app"},
+		overview: project.RepositoryOverview{Head: project.RepositoryHead{CommitID: "commit_one"}},
+		evidence: project.RepositoryToolchainEvidence{DefaultBranch: "main", CommitID: "commit_one",
+			Files: []project.RepositoryEvidenceFile{{Path: "go.mod", Content: "module app\n"}}},
+	}
+	manager, err := NewManager(root, reader)
+	if err != nil {
+		t.Fatalf("create manager: %v", err)
+	}
+	worker := &assistantWorkerStub{}
+	assistant, err := NewAssistant(root, workspaces, reader, manager, onlyAgent("claude", worker))
+	if err != nil {
+		t.Fatalf("create assistant: %v", err)
+	}
+
+	session, created, err := assistant.Start(t.Context(), "prj_test", "claude", "claude-opus-4-8",
+		"  ", AssistantPurposeVerifyRepository, "verify-1")
+	if err != nil || !created || len(session.Messages) != 1 || session.Messages[0].Text != RepositoryVerificationMessage ||
+		!strings.Contains(worker.puts[0].Instructions, RepositoryVerificationMessage) {
+		t.Fatalf("start session=%+v created=%t err=%v", session, created, err)
+	}
+	// Sessions started by clients that sent the fixed text keep the same digest.
+	if _, created, err := assistant.Start(t.Context(), "prj_test", "claude", "claude-opus-4-8",
+		RepositoryVerificationMessage, AssistantPurposeVerifyRepository, "verify-1"); err != nil || created {
+		t.Fatalf("replay with explicit message created=%t err=%v", created, err)
+	}
+	if _, _, err := assistant.Start(t.Context(), "prj_test", "claude", "claude-opus-4-8",
+		"", AssistantPurposeDesignStack, "design-1"); !errors.Is(err, ErrInvalidManifest) {
+		t.Fatalf("design_stack without message error=%v", err)
+	}
+}

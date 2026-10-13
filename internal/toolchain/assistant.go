@@ -47,6 +47,12 @@ const (
 	AssistantPurposeVerifyRepository AssistantPurpose = "verify_repository"
 )
 
+// RepositoryVerificationMessage is the opening instruction for a
+// verify_repository session when the client sends no message. The coordinator
+// owns it so clients cannot drift; the text must stay byte-identical, since
+// existing sessions' idempotency digests were computed from it.
+const RepositoryVerificationMessage = "Inspect the committed repository and verify its exact runtime stack and requirements."
+
 type AssistantWorker struct {
 	Service        workerhttp.Service
 	AgentProfileID string
@@ -157,6 +163,9 @@ func (assistant *Assistant) Start(
 	worker, ok := assistant.worker(agentID)
 	message, model, key := strings.TrimSpace(message), strings.TrimSpace(model), strings.TrimSpace(idempotencyKey)
 	purpose = normalizeAssistantPurpose(purpose)
+	if message == "" && purpose == AssistantPurposeVerifyRepository {
+		message = RepositoryVerificationMessage
+	}
 	if !ok || message == "" || key == "" || !validAssistantModel(model) || !purpose.IsValid() {
 		return AssistantSession{}, false, fmt.Errorf("%w: agent, exact model, message, and idempotency key are required", ErrInvalidManifest)
 	}
