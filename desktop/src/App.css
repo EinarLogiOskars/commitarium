@@ -2706,6 +2706,9 @@ button.danger:not(.ghost) {
   gap: 9px;
   font-size: 13px;
 }
+.set__warn {
+  color: var(--bad);
+}
 .set__row input:disabled + span {
   color: var(--muted);
 }

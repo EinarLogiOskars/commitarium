@@ -138,6 +138,12 @@ export function MarketplaceAccountSection() {
                 onChange={(e) => setPassword(e.target.value)}
                 disabled={busy}
               />
+              {mode === "sign-up" && (
+                <span className={password && password.length < 8 ? "set__warn" : undefined}>
+                  At least 8 characters
+                  {password && password.length < 8 ? ` (${8 - password.length} more)` : ""}
+                </span>
+              )}
             </label>
           </div>
           <div className="row">

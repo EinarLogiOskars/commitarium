@@ -122,7 +122,7 @@ func writeMarketplaceError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusNotFound, "marketplace_user_not_found", "that account no longer exists")
 	case errors.Is(err, marketplace.ErrUnavailable):
 		log.Printf("marketplace: %v", err)
-		writeError(w, http.StatusServiceUnavailable, "marketplace_unavailable", "the marketplace can't be reached right now")
+		writeError(w, http.StatusServiceUnavailable, "marketplace_unavailable", "the marketplace couldn't do this right now; try again later")
 	default:
 		log.Printf("marketplace: %v", err)
 		writeError(w, http.StatusInternalServerError, "internal_error", "internal server error")
