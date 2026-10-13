@@ -191,6 +191,7 @@ func (access *recordingRepositoryAccess) EnsureRepositoryAccess(
 
 type recordingBranches struct {
 	base        Branch
+	parents     map[string][]string
 	getCalls    int
 	ensureCalls int
 	ensured     Branch
@@ -322,6 +323,19 @@ func (checkout *recordingCheckout) Remove(_ context.Context, workspaceID string)
 func (branches *recordingBranches) GetBranch(context.Context, string, string, string) (Branch, error) {
 	branches.getCalls++
 	return branches.base, nil
+}
+
+func (branches *recordingBranches) GetCommitParents(
+	_ context.Context,
+	_ string,
+	_ string,
+	commitID string,
+) ([]string, error) {
+	parents, found := branches.parents[commitID]
+	if !found {
+		return nil, ErrCommitNotFound
+	}
+	return parents, nil
 }
 
 func (branches *recordingBranches) EnsureBranch(
@@ -1673,6 +1687,8 @@ func TestGetProjectHandoffReturnsCanonicalHeadAndCompletedWork(t *testing.T) {
 	stored.UpdatedAt = mergedAt
 	branches := &recordingBranches{base: Branch{
 		Name: "main", CommitID: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+	}, parents: map[string][]string{
+		"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb": {stored.BaseCommitID, stored.ApprovedCommitID},
 	}}
 	service := NewService(
 		&memoryStore{stored: stored},
@@ -1689,28 +1705,134 @@ func TestGetProjectHandoffReturnsCanonicalHeadAndCompletedWork(t *testing.T) {
 	}
 	if got.ProjectID != "prj_test" || got.HeadCommitID != branches.base.CommitID ||
 		len(got.Completed) != 1 || got.Completed[0].FeatureID != completed.ID ||
-		got.Completed[0].Title != completed.Title || got.Completed[0].MergeCommitID != stored.MergeCommitID {
+		got.Completed[0].Title != completed.Title || got.Completed[0].MergeCommitID != stored.MergeCommitID ||
+		got.Completed[0].BaseCommitID != stored.BaseCommitID {
 		t.Fatalf("unexpected project handoff %+v", got)
 	}
 }
 
+func commitOf(letter string) string {
+	return strings.Repeat(letter, 40)
+}
+
+// orderTestHistory returns a parent lookup over a fixed commit graph.
+func orderTestHistory(graph map[string][]string) func(context.Context, string) ([]string, error) {
+	return func(_ context.Context, commitID string) ([]string, error) {
+		parents, found := graph[commitID]
+		if !found {
+			return nil, ErrCommitNotFound
+		}
+		return parents, nil
+	}
+}
+
+func assertHandoffOrder(t *testing.T, ordered []CompletedProjectHandoff, want ...[2]string) {
+	t.Helper()
+	if len(ordered) != len(want) {
+		t.Fatalf("expected %d items, got %+v", len(want), ordered)
+	}
+	for index, item := range ordered {
+		if item.FeatureID != want[index][0] || item.BaseCommitID != want[index][1] {
+			t.Fatalf("item %d: expected %s on %s, got %+v", index, want[index][0], want[index][1], item)
+		}
+	}
+}
+
 func TestCompletedProjectHandoffsFollowGitChainRatherThanTimestamps(t *testing.T) {
-	a := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-	b := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-	c := "cccccccccccccccccccccccccccccccccccccccc"
+	a, b, c := commitOf("a"), commitOf("b"), commitOf("c")
 	now := time.Date(2026, time.September, 13, 10, 0, 0, 0, time.UTC)
 	second := CompletedProjectHandoff{FeatureID: "fea_two", BaseCommitID: b, MergeCommitID: c, MergedAt: now}
-	first := CompletedProjectHandoff{FeatureID: "fea_one", BaseCommitID: a, MergeCommitID: b, MergedAt: now}
+	first := CompletedProjectHandoff{FeatureID: "fea_one", BaseCommitID: a, MergeCommitID: b, MergedAt: now.Add(time.Hour)}
+	history := orderTestHistory(map[string][]string{b: {a, commitOf("1")}, c: {b, commitOf("2")}})
 
-	ordered, err := orderCompletedProjectHandoffs([]CompletedProjectHandoff{second, first}, c)
+	ordered, err := orderCompletedProjectHandoffs(t.Context(), []CompletedProjectHandoff{second, first}, c, history)
 	if err != nil {
 		t.Fatalf("order completed handoffs: %v", err)
 	}
-	if len(ordered) != 2 || ordered[0].FeatureID != "fea_one" || ordered[1].FeatureID != "fea_two" {
-		t.Fatalf("unexpected order %+v", ordered)
+	assertHandoffOrder(t, ordered, [2]string{"fea_one", a}, [2]string{"fea_two", b})
+}
+
+func TestCompletedProjectHandoffsAcceptWorkMergedInParallel(t *testing.T) {
+	// Both work orders branched from x. A merged first as m1; B then merged
+	// onto m1 as m2, so B's recorded base x is not m2's first parent.
+	x, m1, m2 := commitOf("a"), commitOf("b"), commitOf("c")
+	featureA := CompletedProjectHandoff{FeatureID: "fea_a", BaseCommitID: x, MergeCommitID: m1}
+	featureB := CompletedProjectHandoff{FeatureID: "fea_b", BaseCommitID: x, MergeCommitID: m2}
+	history := orderTestHistory(map[string][]string{m1: {x, commitOf("1")}, m2: {m1, commitOf("2")}})
+
+	ordered, err := orderCompletedProjectHandoffs(
+		t.Context(), []CompletedProjectHandoff{featureB, featureA}, m2, history,
+	)
+	if err != nil {
+		t.Fatalf("order parallel handoffs: %v", err)
 	}
-	if _, err := orderCompletedProjectHandoffs([]CompletedProjectHandoff{first}, c); !errors.Is(err, ErrConflict) {
-		t.Fatalf("expected conflict for disconnected head, got %v", err)
+	assertHandoffOrder(t, ordered, [2]string{"fea_a", x}, [2]string{"fea_b", m1})
+}
+
+func TestCompletedProjectHandoffsAcceptWorkBroughtUpToDate(t *testing.T) {
+	// B started from x; A merged as m1; B was then brought up to date with
+	// m1 (its new head merges m1) and merged as m2. B's recorded base stays x.
+	x, m1, m2, updatedB := commitOf("a"), commitOf("b"), commitOf("c"), commitOf("3")
+	featureA := CompletedProjectHandoff{FeatureID: "fea_a", BaseCommitID: x, MergeCommitID: m1}
+	featureB := CompletedProjectHandoff{FeatureID: "fea_b", BaseCommitID: x, MergeCommitID: m2}
+	history := orderTestHistory(map[string][]string{
+		m1: {x, commitOf("1")}, m2: {m1, updatedB}, updatedB: {commitOf("2"), m1},
+	})
+
+	ordered, err := orderCompletedProjectHandoffs(
+		t.Context(), []CompletedProjectHandoff{featureA, featureB}, m2, history,
+	)
+	if err != nil {
+		t.Fatalf("order updated handoffs: %v", err)
+	}
+	assertHandoffOrder(t, ordered, [2]string{"fea_a", x}, [2]string{"fea_b", m1})
+}
+
+func TestCompletedProjectHandoffsRejectHistoryOutsideCompletedWork(t *testing.T) {
+	x, m1, m2, other := commitOf("a"), commitOf("b"), commitOf("c"), commitOf("d")
+	featureA := CompletedProjectHandoff{FeatureID: "fea_a", BaseCommitID: x, MergeCommitID: m1}
+	featureB := CompletedProjectHandoff{FeatureID: "fea_b", BaseCommitID: x, MergeCommitID: m2}
+	tests := []struct {
+		name      string
+		completed []CompletedProjectHandoff
+		head      string
+		graph     map[string][]string
+	}{
+		{
+			// A's merge is not on the branch: the walk from m2 reaches x.
+			name: "completed merge not on branch", completed: []CompletedProjectHandoff{featureA, featureB},
+			head: m2, graph: map[string][]string{m1: {x}, m2: {x}},
+		},
+		{
+			name: "head is not completed work", completed: []CompletedProjectHandoff{featureA},
+			head: other, graph: map[string][]string{other: {m1}, m1: {x}},
+		},
+		{
+			name: "commit between completed work", completed: []CompletedProjectHandoff{featureA, featureB},
+			head: m2, graph: map[string][]string{m2: {other}, other: {m1}, m1: {x}},
+		},
+		{
+			name: "merge commit unknown to Forgejo", completed: []CompletedProjectHandoff{featureA},
+			head: m1, graph: map[string][]string{},
+		},
+		{
+			name: "merge commit without parents", completed: []CompletedProjectHandoff{featureA},
+			head: m1, graph: map[string][]string{m1: {}},
+		},
+		{
+			name: "duplicate merge commit", completed: []CompletedProjectHandoff{featureA, featureA},
+			head: m1, graph: map[string][]string{m1: {x}},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := orderCompletedProjectHandoffs(
+				t.Context(), test.completed, test.head, orderTestHistory(test.graph),
+			)
+			if !errors.Is(err, ErrConflict) {
+				t.Fatalf("expected conflict, got %v", err)
+			}
+		})
 	}
 }
 

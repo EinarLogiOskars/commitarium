@@ -23,6 +23,7 @@ var ErrFeatureNotReplannable = errors.New("feature cannot be replanned from its 
 var ErrHandoffNotReady = errors.New("completed feature handoff is not ready")
 var ErrProjectRepositoryNotBound = errors.New("project has no Forgejo repository binding")
 var ErrBranchNotFound = errors.New("Forgejo branch not found")
+var ErrCommitNotFound = errors.New("Forgejo commit not found")
 var ErrBranchConflict = errors.New("Forgejo feature branch exists at a different commit")
 var ErrCheckoutConflict = errors.New("managed checkout conflicts with its durable workspace")
 var ErrCheckoutUnavailable = errors.New("managed checkout is unavailable")
@@ -52,6 +53,12 @@ type BranchManager interface {
 		branch string,
 		baseCommitID string,
 	) (Branch, error)
+}
+
+// CommitHistoryReader reads a commit's exact parents, first parent first, so
+// the project handoff can follow the default branch's first-parent history.
+type CommitHistoryReader interface {
+	GetCommitParents(ctx context.Context, owner, repository, commitID string) ([]string, error)
 }
 
 type CheckoutManager interface {
@@ -454,7 +461,11 @@ func (service *Service) GetCompletedHandoff(
 }
 
 // GetProjectHandoff returns the canonical default-branch head plus every
-// completed work order that contributed to it. The trusted desktop combines
+// completed work order that contributed to it, in the order their merges
+// appear on the default branch's first-parent history. Each item's base is
+// the default-branch commit its merge was applied onto (see
+// orderCompletedProjectHandoffs), not necessarily the base its branch was
+// created from. The trusted desktop combines
 // this provider-neutral description with its private local source mapping and
 // sync receipts; host paths and upstream credentials never enter coordinator
 // storage.
@@ -470,7 +481,8 @@ func (service *Service) GetProjectHandoff(
 	if repository == nil {
 		return ProjectHandoff{}, ErrProjectRepositoryNotBound
 	}
-	if service.branches == nil {
+	history, ok := service.branches.(CommitHistoryReader)
+	if !ok {
 		return ProjectHandoff{}, project.ErrForgejoUnavailable
 	}
 	head, err := service.branches.GetBranch(
@@ -515,7 +527,12 @@ func (service *Service) GetProjectHandoff(
 			MergedAt:      *stored.MergedAt,
 		})
 	}
-	ordered, err := orderCompletedProjectHandoffs(completed, head.CommitID)
+	ordered, err := orderCompletedProjectHandoffs(
+		ctx, completed, head.CommitID,
+		func(ctx context.Context, commitID string) ([]string, error) {
+			return history.GetCommitParents(ctx, repository.Owner, repository.Name, commitID)
+		},
+	)
 	if err != nil {
 		return ProjectHandoff{}, err
 	}
@@ -529,29 +546,53 @@ func (service *Service) GetProjectHandoff(
 	}, nil
 }
 
+// orderCompletedProjectHandoffs walks the default branch's first-parent
+// history back from its head. Every commit on that walk, until all completed
+// work orders are accounted for, must be exactly one completed work order's
+// merge commit; anything else (a commit made outside a work order, or a
+// completed work order whose merge is not on the branch) is a conflict.
+//
+// Each item's BaseCommitID is set to its merge commit's first parent: the
+// default-branch state the merge was applied onto. Consecutive items are then
+// linked (item i's base is item i-1's merge) even when work orders started
+// from the same base and merged one after another, or were brought up to date
+// with the default branch after they started, so the net change of every item
+// is exactly what its merge added to the branch.
 func orderCompletedProjectHandoffs(
+	ctx context.Context,
 	completed []CompletedProjectHandoff,
 	headCommitID string,
+	parents func(ctx context.Context, commitID string) ([]string, error),
 ) ([]CompletedProjectHandoff, error) {
-	remaining := append([]CompletedProjectHandoff(nil), completed...)
-	ordered := make([]CompletedProjectHandoff, len(remaining))
-	cursor := headCommitID
-	for index := len(ordered) - 1; index >= 0; index-- {
-		match := -1
-		for candidate := range remaining {
-			if remaining[candidate].MergeCommitID == cursor {
-				if match != -1 {
-					return nil, ErrConflict
-				}
-				match = candidate
-			}
-		}
-		if match == -1 {
+	byMerge := make(map[string]int, len(completed))
+	for index, item := range completed {
+		if _, duplicate := byMerge[item.MergeCommitID]; duplicate {
 			return nil, ErrConflict
 		}
-		ordered[index] = remaining[match]
-		cursor = remaining[match].BaseCommitID
-		remaining = append(remaining[:match], remaining[match+1:]...)
+		byMerge[item.MergeCommitID] = index
+	}
+	ordered := make([]CompletedProjectHandoff, len(completed))
+	cursor := headCommitID
+	for index := len(ordered) - 1; index >= 0; index-- {
+		match, found := byMerge[cursor]
+		if !found {
+			return nil, ErrConflict
+		}
+		delete(byMerge, cursor)
+		mergeParents, err := parents(ctx, cursor)
+		if errors.Is(err, ErrCommitNotFound) {
+			return nil, ErrConflict
+		}
+		if err != nil {
+			return nil, err
+		}
+		if len(mergeParents) == 0 || !ValidCommitID(mergeParents[0]) {
+			return nil, ErrConflict
+		}
+		item := completed[match]
+		item.BaseCommitID = mergeParents[0]
+		ordered[index] = item
+		cursor = mergeParents[0]
 	}
 	return ordered, nil
 }

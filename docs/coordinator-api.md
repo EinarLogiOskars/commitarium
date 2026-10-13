@@ -1489,9 +1489,15 @@ internal default branch:
 }
 ```
 
-Completed work orders are ordered by their exact base-to-merge Git chain ending
-at the current default-branch head. Missing, duplicated, or disconnected links
-are treated as contradictory state. The ordered identities let the desktop list
+Completed work orders are ordered by where their merge commits sit on the
+default branch's first-parent history, walking back from the current head.
+Each `base_commit_id` is that merge commit's first parent (the default-branch
+state the merge was applied onto), so each item's base is the previous item's
+merge even when work orders ran in parallel or were brought up to date; it is
+not necessarily the base the work order's branch started from. A commit on that
+walk that is not a completed work order's merge, a completed merge that is not
+on it, or a duplicated merge is treated as contradictory state. The ordered
+identities let the desktop list
 the work orders after a destination's private sync watermark. The current head
 is read from Forgejo on every request; completed feature identities come from
 durable coordinator state. The desktop must fetch and verify the named Git

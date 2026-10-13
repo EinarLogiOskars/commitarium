@@ -673,6 +673,65 @@ func (client *Client) GetBranch(
 	}
 }
 
+var _ workspace.CommitHistoryReader = (*Client)(nil)
+
+// GetCommitParents returns the exact parent object IDs of one commit, first
+// parent first. It is read-only and is used to walk a default branch's
+// first-parent history.
+func (client *Client) GetCommitParents(
+	ctx context.Context,
+	owner string,
+	repository string,
+	commitID string,
+) ([]string, error) {
+	var err error
+	owner, repository, err = project.NormalizeRepositoryCoordinate(owner, repository)
+	if err != nil {
+		return nil, err
+	}
+	if !workspace.ValidCommitID(commitID) {
+		return nil, errors.New("commit ID must be a lowercase SHA-1 or SHA-256 object ID")
+	}
+	status, body, err := client.doJSON(
+		ctx,
+		http.MethodGet,
+		"/api/v1/repos/"+url.PathEscape(owner)+"/"+url.PathEscape(repository)+
+			"/git/commits/"+commitID+"?stat=false&verification=false&files=false",
+		nil,
+	)
+	if err != nil {
+		return nil, err
+	}
+	switch status {
+	case http.StatusOK:
+	case http.StatusNotFound:
+		return nil, workspace.ErrCommitNotFound
+	default:
+		return nil, fmt.Errorf("%w: commit request returned HTTP %d", project.ErrForgejoUnavailable, status)
+	}
+	var decoded struct {
+		SHA     string `json:"sha"`
+		Parents []struct {
+			SHA string `json:"sha"`
+		} `json:"parents"`
+	}
+	if err := json.Unmarshal(body, &decoded); err != nil {
+		return nil, fmt.Errorf("%w: commit response is invalid JSON", project.ErrForgejoUnavailable)
+	}
+	if strings.TrimSpace(decoded.SHA) != commitID {
+		return nil, fmt.Errorf("%w: commit response returned a different commit", project.ErrForgejoUnavailable)
+	}
+	parents := make([]string, 0, len(decoded.Parents))
+	for _, parent := range decoded.Parents {
+		parentID := strings.TrimSpace(parent.SHA)
+		if !workspace.ValidCommitID(parentID) {
+			return nil, fmt.Errorf("%w: commit response has an invalid parent", project.ErrForgejoUnavailable)
+		}
+		parents = append(parents, parentID)
+	}
+	return parents, nil
+}
+
 func (client *Client) EnsureBranch(
 	ctx context.Context,
 	owner string,
