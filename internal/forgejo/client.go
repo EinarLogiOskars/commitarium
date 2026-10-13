@@ -1260,7 +1260,10 @@ func (client *Client) MergePullRequest(
 	if stored.Merged {
 		return stored, nil
 	}
+	// draftTitle is the title to put back if Forgejo then refuses the merge.
+	draftTitle := ""
 	if stored.Draft {
+		draftTitle = stored.Title
 		readyTitle, found := strings.CutPrefix(stored.Title, "WIP:")
 		readyTitle = strings.TrimSpace(readyTitle)
 		if !found || readyTitle == "" {
@@ -1340,7 +1343,24 @@ func (client *Client) MergePullRequest(
 	switch status {
 	case http.StatusConflict, http.StatusMethodNotAllowed:
 		// Forgejo refuses a pull request it cannot merge, for example one
-		// whose base branch moved into conflicting changes.
+		// whose base branch moved into conflicting changes. The work goes
+		// back through the gates (ADR-025), which expect a draft, so the
+		// title marked ready above is put back. If that fails, verification
+		// of the update returns the pull request to draft instead.
+		if !stored.Draft {
+			if draftTitle == "" {
+				draftTitle = "WIP: " + stored.Title
+			}
+			if _, err := client.markDraft(ctx, owner, repository, workspace.PullRequestDraftSpec{
+				Number: spec.Number, FeatureMarker: spec.FeatureMarker,
+				BaseBranch: spec.BaseBranch, HeadBranch: spec.HeadBranch,
+			}, draftTitle); err != nil {
+				return workspace.PullRequest{}, errors.Join(
+					workspace.ErrPullRequestNotMergeable,
+					fmt.Errorf("return pull request to draft: %w", err),
+				)
+			}
+		}
 		return workspace.PullRequest{}, workspace.ErrPullRequestNotMergeable
 	case http.StatusNotFound:
 		return workspace.PullRequest{}, workspace.ErrPullRequestConflict
@@ -1351,6 +1371,92 @@ func (client *Client) MergePullRequest(
 			status,
 		)
 	}
+}
+
+// ReturnPullRequestToDraft marks the exact open managed pull request a draft
+// again by restoring the "WIP: " title prefix. It is idempotent: a pull
+// request that is already a draft is returned unchanged. The feature marker
+// and both branches identify it, as for a merge; a closed or merged pull
+// request is refused.
+func (client *Client) ReturnPullRequestToDraft(
+	ctx context.Context,
+	owner string,
+	repository string,
+	spec workspace.PullRequestDraftSpec,
+) (workspace.PullRequest, error) {
+	var err error
+	owner, repository, err = project.NormalizeRepositoryCoordinate(owner, repository)
+	if err != nil {
+		return workspace.PullRequest{}, err
+	}
+	if err := spec.Validate(); err != nil {
+		return workspace.PullRequest{}, err
+	}
+	stored, err := client.getPullRequest(ctx, owner, repository, spec.Number)
+	if err != nil {
+		return workspace.PullRequest{}, err
+	}
+	if err := validateDraftPullRequest(stored, spec); err != nil {
+		return workspace.PullRequest{}, err
+	}
+	if stored.Draft {
+		return stored, nil
+	}
+	return client.markDraft(ctx, owner, repository, spec, "WIP: "+stored.Title)
+}
+
+// markDraft sets the draft title and trusts only the pull request read back
+// afterwards, as the merge path does when it marks one ready.
+func (client *Client) markDraft(
+	ctx context.Context,
+	owner string,
+	repository string,
+	spec workspace.PullRequestDraftSpec,
+	draftTitle string,
+) (workspace.PullRequest, error) {
+	updateStatus, _, updateErr := client.doJSON(
+		ctx,
+		http.MethodPatch,
+		fmt.Sprintf("%s/%d", pullRequestsPath(owner, repository), spec.Number),
+		struct {
+			Title string `json:"title"`
+		}{Title: draftTitle},
+	)
+	stored, err := client.getPullRequest(ctx, owner, repository, spec.Number)
+	if err != nil {
+		if updateErr != nil {
+			return workspace.PullRequest{}, updateErr
+		}
+		return workspace.PullRequest{}, err
+	}
+	if err := validateDraftPullRequest(stored, spec); err != nil {
+		return workspace.PullRequest{}, err
+	}
+	if stored.Draft && stored.Title == draftTitle {
+		return stored, nil
+	}
+	if updateErr != nil {
+		return workspace.PullRequest{}, updateErr
+	}
+	if updateStatus == http.StatusOK || updateStatus == http.StatusNotFound {
+		return workspace.PullRequest{}, workspace.ErrPullRequestConflict
+	}
+	return workspace.PullRequest{}, fmt.Errorf(
+		"%w: pull request draft update returned HTTP %d",
+		project.ErrForgejoUnavailable, updateStatus,
+	)
+}
+
+func validateDraftPullRequest(
+	pullRequest workspace.PullRequest,
+	spec workspace.PullRequestDraftSpec,
+) error {
+	if pullRequest.Number != spec.Number || pullRequest.State != "open" || pullRequest.Merged ||
+		pullRequest.BaseBranch != spec.BaseBranch || pullRequest.HeadBranch != spec.HeadBranch ||
+		strings.Count(pullRequest.Body, spec.FeatureMarker) != 1 {
+		return workspace.ErrPullRequestConflict
+	}
+	return nil
 }
 
 // approvePullRequest approves the exact head commit as the coordinator's own

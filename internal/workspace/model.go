@@ -312,6 +312,28 @@ func (spec PullRequestMergeSpec) Validate() error {
 	return nil
 }
 
+// PullRequestDraftSpec identifies the managed pull request to return to a
+// draft. A managed pull request stays a draft until it is merged; only the
+// merge itself marks it ready (ADR-025).
+type PullRequestDraftSpec struct {
+	Number        int64
+	FeatureMarker string
+	BaseBranch    string
+	HeadBranch    string
+}
+
+func (spec PullRequestDraftSpec) Validate() error {
+	if spec.Number < 1 {
+		return errors.New("draft pull request number is required")
+	}
+	for _, value := range []string{spec.FeatureMarker, spec.BaseBranch, spec.HeadBranch} {
+		if strings.TrimSpace(value) == "" || value != strings.TrimSpace(value) {
+			return errors.New("draft pull request fields are required and must be trimmed")
+		}
+	}
+	return nil
+}
+
 // PlanPublicationSpec describes the one curated planning artifact that belongs
 // in the managed pull request. PublicationMarker is stable across retries, so
 // the remote pull request can prove that this exact submission was applied.

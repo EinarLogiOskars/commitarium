@@ -220,11 +220,16 @@ type recordingPullRequests struct {
 	implementationSpecs []ImplementationPublicationSpec
 	reviewSpecs         []ReviewPublicationSpec
 	mergeSpecs          []PullRequestMergeSpec
-	result              PullRequest
-	planResult          PullRequest
-	planPublished       bool
-	err                 error
-	planErr             error
+	draftSpecs          []PullRequestDraftSpec
+	// leftReady models a pull request a refused merge left marked ready:
+	// implementation verification refuses it until it is a draft again.
+	leftReady     bool
+	draftErr      error
+	result        PullRequest
+	planResult    PullRequest
+	planPublished bool
+	err           error
+	planErr       error
 }
 
 func (pullRequests *recordingPullRequests) MergePullRequest(
@@ -235,6 +240,20 @@ func (pullRequests *recordingPullRequests) MergePullRequest(
 ) (PullRequest, error) {
 	pullRequests.mergeSpecs = append(pullRequests.mergeSpecs, spec)
 	return pullRequests.planResult, pullRequests.planErr
+}
+
+func (pullRequests *recordingPullRequests) ReturnPullRequestToDraft(
+	_ context.Context,
+	_ string,
+	_ string,
+	spec PullRequestDraftSpec,
+) (PullRequest, error) {
+	pullRequests.draftSpecs = append(pullRequests.draftSpecs, spec)
+	if pullRequests.draftErr != nil {
+		return PullRequest{}, pullRequests.draftErr
+	}
+	pullRequests.leftReady = false
+	return pullRequests.planResult, nil
 }
 
 func (pullRequests *recordingPullRequests) VerifyPullRequestReview(
@@ -254,6 +273,9 @@ func (pullRequests *recordingPullRequests) VerifyPullRequestImplementation(
 	spec ImplementationPublicationSpec,
 ) (PullRequest, error) {
 	pullRequests.implementationSpecs = append(pullRequests.implementationSpecs, spec)
+	if pullRequests.leftReady {
+		return PullRequest{}, ErrPullRequestConflict
+	}
 	return pullRequests.planResult, pullRequests.planErr
 }
 
@@ -1847,6 +1869,23 @@ func TestServiceVerifiesBaseUpdateAsDescendantOfApprovedCommit(t *testing.T) {
 	missingComment := &recordingPullRequests{planResult: pullRequest, planErr: ErrPullRequestConflict}
 	if err := verify(newService(feature.StateReviewing, approvedCommit, &recordingCheckout{}, missingComment), updatedCommit); !errors.Is(err, ErrPullRequestConflict) {
 		t.Fatalf("base update was verified without its audit comment: %v", err)
+	}
+	// A refused merge that left the pull request marked ready does not block
+	// the update: verification returns it to draft first.
+	leftReady := &recordingPullRequests{planResult: pullRequest, leftReady: true}
+	if err := verify(newService(feature.StateReviewing, approvedCommit, &recordingCheckout{}, leftReady), updatedCommit); err != nil {
+		t.Fatalf("base update was refused for a pull request left ready by a refused merge: %v", err)
+	}
+	if len(leftReady.draftSpecs) != 1 || leftReady.draftSpecs[0] != (PullRequestDraftSpec{
+		Number: 8, FeatureMarker: "<!-- commitarium-feature: fea_test -->",
+		BaseBranch: "main", HeadBranch: "commitarium/fea_test",
+	}) {
+		t.Fatalf("unexpected draft spec %+v", leftReady.draftSpecs)
+	}
+	stuck := &recordingPullRequests{planResult: pullRequest, leftReady: true, draftErr: ErrPullRequestConflict}
+	if err := verify(newService(feature.StateReviewing, approvedCommit, &recordingCheckout{}, stuck), updatedCommit); !errors.Is(err, ErrPullRequestConflict) ||
+		len(stuck.implementationSpecs) != 0 {
+		t.Fatalf("base update was verified although its pull request could not return to draft: %v", err)
 	}
 }
 

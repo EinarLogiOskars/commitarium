@@ -2030,6 +2030,8 @@ func TestClientReportsARefusedMergeAsNotMergeable(t *testing.T) {
 				case "POST /api/v1/repos/owner/repository/pulls/7/merge":
 					merges++
 					return jsonResponse(test.status, `{}`), nil
+				case "PATCH /api/v1/repos/owner/repository/pulls/7":
+					return patchPullRequestTitle(t, request, &remote), nil
 				default:
 					t.Fatalf("unexpected request %s %s", request.Method, request.URL)
 					return nil, nil
@@ -2042,6 +2044,139 @@ func TestClientReportsARefusedMergeAsNotMergeable(t *testing.T) {
 			if test.status == http.StatusNotFound && errors.Is(err, workspace.ErrPullRequestNotMergeable) {
 				t.Fatalf("a missing pull request was reported as not mergeable: %v", err)
 			}
+			// A pull request Forgejo cannot merge goes back through the
+			// gates as a draft (ADR-025).
+			if test.want == workspace.ErrPullRequestNotMergeable &&
+				(!remote.Draft || remote.Title != "WIP: Test feature") {
+				t.Fatalf("refused merge left the pull request ready: %+v", remote)
+			}
 		})
+	}
+}
+
+// patchPullRequestTitle applies a title update the way Forgejo does: the
+// "WIP:" prefix is what makes a pull request a draft.
+func patchPullRequestTitle(t *testing.T, request *http.Request, remote *workspace.PullRequest) *http.Response {
+	t.Helper()
+	var payload struct {
+		Title string `json:"title"`
+	}
+	if err := json.NewDecoder(request.Body).Decode(&payload); err != nil || payload.Title == "" {
+		t.Fatalf("unexpected title payload %+v err=%v", payload, err)
+	}
+	remote.Title = payload.Title
+	remote.Draft = strings.HasPrefix(payload.Title, "WIP:")
+	return pullRequestJSONResponse(t, http.StatusOK, *remote)
+}
+
+func TestClientRestoresTheDraftWhenAMergeIsRefused(t *testing.T) {
+	for _, restore := range []int{http.StatusOK, http.StatusInternalServerError} {
+		t.Run(http.StatusText(restore), func(t *testing.T) {
+			spec := workspace.PullRequestMergeSpec{
+				Number: 7, FeatureMarker: "<!-- commitarium-feature: fea_test -->",
+				BaseBranch: "main", HeadBranch: "commitarium/fea_test",
+				HeadCommitID: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			}
+			remote := managedPullRequest(testPullRequestSpec())
+			remote.Title = "WIP:  Test feature"
+			remote.HeadCommitID = spec.HeadCommitID
+			var titles []string
+			client := newBranchTestClient(t, func(request *http.Request) (*http.Response, error) {
+				switch request.Method + " " + request.URL.Path {
+				case "GET /api/v1/repos/owner/repository/pulls/7":
+					return pullRequestJSONResponse(t, http.StatusOK, remote), nil
+				case "POST /api/v1/repos/owner/repository/pulls/7/merge":
+					return jsonResponse(http.StatusMethodNotAllowed, `{}`), nil
+				case "PATCH /api/v1/repos/owner/repository/pulls/7":
+					if len(titles) == 1 && restore != http.StatusOK {
+						titles = append(titles, "refused")
+						return jsonResponse(restore, `{}`), nil
+					}
+					response := patchPullRequestTitle(t, request, &remote)
+					titles = append(titles, remote.Title)
+					return response, nil
+				default:
+					t.Fatalf("unexpected request %s %s", request.Method, request.URL)
+					return nil, nil
+				}
+			})
+
+			_, err := client.MergePullRequest(t.Context(), "owner", "repository", spec)
+			if !errors.Is(err, workspace.ErrPullRequestNotMergeable) || len(titles) != 2 ||
+				titles[0] != "Test feature" {
+				t.Fatalf("refused merge: titles=%q err=%v", titles, err)
+			}
+			if restore == http.StatusOK {
+				// The title is put back exactly as it was before the merge.
+				if err != workspace.ErrPullRequestNotMergeable || titles[1] != "WIP:  Test feature" ||
+					!remote.Draft || remote.Title != "WIP:  Test feature" {
+					t.Fatalf("draft was not restored: titles=%q remote=%+v err=%v", titles, remote, err)
+				}
+				return
+			}
+			// Verification of the update returns it to draft instead.
+			if !errors.Is(err, project.ErrForgejoUnavailable) || remote.Draft {
+				t.Fatalf("failed restore: remote=%+v err=%v", remote, err)
+			}
+		})
+	}
+}
+
+func TestClientReturnsAPullRequestToDraft(t *testing.T) {
+	spec := workspace.PullRequestDraftSpec{
+		Number: 7, FeatureMarker: "<!-- commitarium-feature: fea_test -->",
+		BaseBranch: "main", HeadBranch: "commitarium/fea_test",
+	}
+	newClient := func(remote *workspace.PullRequest, patches *int) *Client {
+		return newBranchTestClient(t, func(request *http.Request) (*http.Response, error) {
+			switch request.Method + " " + request.URL.Path {
+			case "GET /api/v1/repos/owner/repository/pulls/7":
+				return pullRequestJSONResponse(t, http.StatusOK, *remote), nil
+			case "PATCH /api/v1/repos/owner/repository/pulls/7":
+				*patches++
+				return patchPullRequestTitle(t, request, remote), nil
+			default:
+				t.Fatalf("unexpected request %s %s", request.Method, request.URL)
+				return nil, nil
+			}
+		})
+	}
+
+	ready := managedPullRequest(testPullRequestSpec())
+	ready.Title = "Test feature"
+	ready.Draft = false
+	patches := 0
+	client := newClient(&ready, &patches)
+	drafted, err := client.ReturnPullRequestToDraft(t.Context(), "owner", "repository", spec)
+	if err != nil || patches != 1 || !drafted.Draft || drafted.Title != "WIP: Test feature" {
+		t.Fatalf("return to draft: pull_request=%+v patches=%d err=%v", drafted, patches, err)
+	}
+	// Retrying leaves the draft alone.
+	again, err := client.ReturnPullRequestToDraft(t.Context(), "owner", "repository", spec)
+	if err != nil || patches != 1 || !again.Draft || again.Title != "WIP: Test feature" {
+		t.Fatalf("retried return to draft: pull_request=%+v patches=%d err=%v", again, patches, err)
+	}
+
+	mergedAt := ready.CreatedAt.Add(time.Hour)
+	for name, mutate := range map[string]func(*workspace.PullRequest){
+		"closed": func(pullRequest *workspace.PullRequest) { pullRequest.State = "closed" },
+		"merged": func(pullRequest *workspace.PullRequest) {
+			pullRequest.State = "closed"
+			pullRequest.Merged = true
+			pullRequest.MergeCommitID = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+			pullRequest.MergedAt = &mergedAt
+		},
+		"other branch":  func(pullRequest *workspace.PullRequest) { pullRequest.HeadBranch = "commitarium/fea_other" },
+		"other feature": func(pullRequest *workspace.PullRequest) { pullRequest.Body = "<!-- commitarium-feature: fea_other -->" },
+	} {
+		remote := managedPullRequest(testPullRequestSpec())
+		remote.Title = "Test feature"
+		remote.Draft = false
+		mutate(&remote)
+		patches := 0
+		_, err := newClient(&remote, &patches).ReturnPullRequestToDraft(t.Context(), "owner", "repository", spec)
+		if !errors.Is(err, workspace.ErrPullRequestConflict) || patches != 0 {
+			t.Fatalf("%s pull request was returned to draft: patches=%d err=%v", name, patches, err)
+		}
 	}
 }
