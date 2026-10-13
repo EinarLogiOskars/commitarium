@@ -453,15 +453,28 @@ func (service *Service) EnsureAppRepository(ctx context.Context, name, descripti
 		return AppRepository{}, repositoryRejection("read the app's repository", status)
 	}
 	var repository struct {
-		Name     string `json:"name"`
-		CloneURL string `json:"clone_url"`
-		HTMLURL  string `json:"html_url"`
-		Owner    struct {
+		Name        string `json:"name"`
+		Description string `json:"description"`
+		CloneURL    string `json:"clone_url"`
+		HTMLURL     string `json:"html_url"`
+		Owner       struct {
 			Login string `json:"login"`
 		} `json:"owner"`
 	}
 	if json.Unmarshal(body, &repository) != nil || repository.CloneURL == "" {
 		return AppRepository{}, fmt.Errorf("%w: unreadable repository", ErrUnavailable)
+	}
+	// The app's name is read from the description; one created by hand has none.
+	if strings.TrimSpace(repository.Description) == "" && description != "" {
+		status, _, err = service.call(ctx, http.MethodPatch,
+			"/api/v1/repos/"+url.PathEscape(repository.Owner.Login)+"/"+url.PathEscape(repository.Name),
+			auth, map[string]string{"description": description})
+		if err != nil {
+			return AppRepository{}, err
+		}
+		if status != http.StatusOK {
+			return AppRepository{}, repositoryRejection("describe the app", status)
+		}
 	}
 	status, _, err = service.call(ctx, http.MethodPut,
 		"/api/v1/repos/"+url.PathEscape(repository.Owner.Login)+"/"+url.PathEscape(repository.Name)+"/topics/"+AppTopic,
