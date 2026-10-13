@@ -496,11 +496,14 @@ func (session *session) translate(
 		}
 		if decodeParams(message, &params) == nil {
 			windows := make([]rateLimitWindow, 0, 2)
-			for _, window := range []*rateLimitWindow{params.RateLimits.Primary, params.RateLimits.Secondary} {
+			names := make([]string, 0, 2)
+			for index, window := range []*rateLimitWindow{params.RateLimits.Primary, params.RateLimits.Secondary} {
 				if window != nil {
 					windows = append(windows, *window)
+					names = append(names, []string{"Short", "Long"}[index])
 				}
 			}
+			recordUsage(windows, names)
 			session.mu.Lock()
 			session.limitWindows = windows
 			session.mu.Unlock()
@@ -901,8 +904,31 @@ func event(eventType worker.EventType, text string) *worker.Event {
 
 // rateLimitWindow is one of the account's usage limits, as Codex reports it.
 type rateLimitWindow struct {
-	UsedPercent int    `json:"usedPercent"`
-	ResetsAt    *int64 `json:"resetsAt"`
+	UsedPercent        int    `json:"usedPercent"`
+	ResetsAt           *int64 `json:"resetsAt"`
+	WindowDurationMins int    `json:"windowDurationMins"`
+}
+
+// Usage is the account's usage limits as the adapter's sessions last saw
+// them, for the Agents page.
+var Usage worker.UsageTracker
+
+func recordUsage(windows []rateLimitWindow, names []string) {
+	reported := make([]worker.UsageWindow, 0, len(windows))
+	for index, window := range windows {
+		name := worker.WindowName(window.WindowDurationMins)
+		if name == "" {
+			name = names[index]
+		}
+		used := float64(window.UsedPercent)
+		usage := worker.UsageWindow{Name: name, UsedPercent: &used, Limited: window.UsedPercent >= 100}
+		if window.ResetsAt != nil && *window.ResetsAt > 0 {
+			resetsAt := time.Unix(*window.ResetsAt, 0).UTC()
+			usage.ResetsAt = &resetsAt
+		}
+		reported = append(reported, usage)
+	}
+	Usage.Record(reported)
 }
 
 // limitResetTime is when the account's reached limit resets: the latest

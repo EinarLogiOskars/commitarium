@@ -479,7 +479,13 @@ export function ProjectWorkspace({
           )}
 
           {mode === "settings" && project && (
-            <ProjectSettings project={project} onUpdated={setProject} />
+            <ProjectSettings
+              project={project}
+              onUpdated={(updated) => {
+                setProject(updated);
+                onLoaded?.(updated.name);
+              }}
+            />
           )}
         </div>
       </main>

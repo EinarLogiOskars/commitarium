@@ -37,6 +37,9 @@ const (
 	// AssistantCloseWorkOrder ends a work order without merging it, keeping
 	// its history: a duplicate, or work the user no longer wants.
 	AssistantCloseWorkOrder AssistantActionType = "close_work_order"
+	// AssistantCreateApp creates a new app at the top level: a project used
+	// as an app, named by Title and built from Description (APPS_PLAN.md).
+	AssistantCreateApp AssistantActionType = "create_app"
 )
 
 // AssistantAction is one proposed action. Fields that do not apply to its
@@ -122,6 +125,10 @@ func (action AssistantAction) validate() error {
 		}
 		if action.Priority < 0 || action.Priority > maxVisionPriority {
 			return fmt.Errorf("priority runs from 0 to %d", maxVisionPriority)
+		}
+	case AssistantCreateApp:
+		if action.Title == "" || len(action.Title) > 80 || action.Description == "" || len(action.Description) > MaxGoalBytes {
+			return fmt.Errorf("an app needs a short name and a description")
 		}
 	case AssistantCloseWorkOrder:
 		if action.WorkOrderID == "" {

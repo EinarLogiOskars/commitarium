@@ -12,6 +12,7 @@ import {
   type Conversation,
 } from "../api/assistant";
 import { ApiError } from "../api/client";
+import { openAppWindow } from "../ipc";
 import { getVision } from "../api/vision";
 import type { VisionItem, VisionPriority } from "../api/types";
 import { Markdown } from "./Markdown";
@@ -26,6 +27,8 @@ const POLL_MS = 2000;
 export const WORK_CHANGED = "commitarium:work-changed";
 /** Asks the open project to show its Vision page. */
 export const OPEN_VISION = "commitarium:open-vision";
+/** Opens the assistant, optionally with a message started in its composer. */
+export const OPEN_ASSISTANT = "commitarium:open-assistant";
 /** Asks the assistant to reload its conversation, as after autopilot starts or stops. */
 export const ASSISTANT_CHANGED = "commitarium:assistant-changed";
 
@@ -50,6 +53,7 @@ export function AssistantDrawer({
   docked,
   onGoalChange,
   onLaunchChange,
+  appMode = false,
 }: {
   scope: string;
   scopeLabel: string;
@@ -58,6 +62,9 @@ export function AssistantDrawer({
   onOpenChange: (open: boolean) => void;
   /** Beside the page rather than over it. */
   docked: boolean;
+  /** In an app's window the assistant drives: work it applies by itself
+   * shows as a line, not a card to approve (ADR-024). */
+  appMode?: boolean;
   /** The conversation's autopilot goal while it is on, else null. */
   onGoalChange?: (goal: AutopilotGoal | null) => void;
   /** A new app's launch stage while it is planned or set up, else null. */
@@ -111,6 +118,16 @@ export function AssistantDrawer({
     window.addEventListener(ASSISTANT_CHANGED, reload);
     return () => window.removeEventListener(ASSISTANT_CHANGED, reload);
   }, [load]);
+
+  useEffect(() => {
+    const openWith = (event: Event) => {
+      const started = (event as CustomEvent<{ draft?: string }>).detail?.draft;
+      if (started) setDraft(started);
+      setOpen(true);
+    };
+    window.addEventListener(OPEN_ASSISTANT, openWith);
+    return () => window.removeEventListener(OPEN_ASSISTANT, openWith);
+  }, [setOpen]);
 
   useEffect(() => {
     setConversation(null);
@@ -253,16 +270,20 @@ export function AssistantDrawer({
                           <Markdown text={message.text} />
                         </div>
                       </div>
-                      {(byMessage.get(message.id) ?? []).map((action) => (
-                        <ActionCard
-                          key={action.id}
-                          scope={scope}
-                          action={action}
-                          onChanged={setConversation}
-                          onOpenOrder={onOpenOrder}
-                          visionLabel={visionItems.get(action.vision_item_id)}
-                        />
-                      ))}
+                      {(byMessage.get(message.id) ?? []).map((action) =>
+                        appMode && appliesItself(action) ? (
+                          <AppliedLine key={action.id} action={action} />
+                        ) : (
+                          <ActionCard
+                            key={action.id}
+                            scope={scope}
+                            action={action}
+                            onChanged={setConversation}
+                            onOpenOrder={onOpenOrder}
+                            visionLabel={visionItems.get(action.vision_item_id)}
+                          />
+                        ),
+                      )}
                     </div>
                   ),
                 )}
@@ -360,7 +381,9 @@ function ActionCard({
         // project's lists reload, and the app goes to what changed.
         window.dispatchEvent(new Event(WORK_CHANGED));
         const applied = conversation.actions?.find((a) => a.id === action.id);
-        if (applied?.type === "add_vision_item") {
+        if (applied?.type === "create_app" && applied.project_id) {
+          void openAppWindow(applied.project_id, applied.title);
+        } else if (applied?.type === "add_vision_item") {
           window.dispatchEvent(new Event(OPEN_VISION));
         } else if (applied?.work_order_id) {
           onOpenOrder?.(applied.work_order_id);
@@ -543,6 +566,7 @@ const APPLY_LABEL: Record<AssistantAction["type"], string> = {
   start_autopilot: "Start autopilot",
   continue_work_order: "Continue",
   close_work_order: "Close",
+  create_app: "Create app",
 };
 
 const STATUS_LABEL: Record<AssistantAction["status"], string> = {
@@ -658,4 +682,39 @@ function useAskBefore(): string[] {
 function isPremium(model: string, families: string[]): boolean {
   const name = model.toLowerCase();
   return !!name && families.some((family) => family && name.includes(family.toLowerCase()));
+}
+
+// Work an app's autopilot applies without asking (ADR-024): the assistant's
+// work actions, except those that need the user's approval of a premium
+// model. Closing is left as a card: only autopilot's own duplicates close by
+// themselves.
+function appliesItself(action: AssistantAction): boolean {
+  const work = ["create_work_order", "start_work_order", "change_models", "continue_work_order"];
+  return (
+    work.includes(action.type) &&
+    (action.premium ?? []).length === 0 &&
+    action.status !== "dismissed"
+  );
+}
+
+// In an app, what the assistant set going, said in a line.
+function AppliedLine({ action }: { action: AssistantAction }) {
+  const what = action.title || "the work";
+  const failed = action.status === "failed";
+  const done = action.status === "applied";
+  const verb =
+    action.type === "change_models"
+      ? "Switching models"
+      : action.type === "continue_work_order"
+        ? "Picking the work back up"
+        : "Starting";
+  return (
+    <p className={`muted assistant__applied ${failed ? "assistant__applied--failed" : ""}`}>
+      {failed
+        ? `Couldn't start: ${what}`
+        : done
+          ? `✓ ${verb === "Starting" ? "Started" : verb}: ${what}`
+          : `${verb}: ${what}…`}
+    </p>
+  );
 }

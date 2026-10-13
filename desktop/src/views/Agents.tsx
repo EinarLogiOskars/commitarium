@@ -19,6 +19,8 @@ import {
   createAgent,
   deleteAgent,
   getAgentLimits,
+  getAgentUsage,
+  type AgentUsage,
   renameAgent,
   type AgentLimit,
 } from "../api/agents";
@@ -186,6 +188,7 @@ export function Agents({
 }) {
   const [profiles, setProfiles] = useState<Profile[] | null>(null);
   const [limits, setLimits] = useState<AgentLimit[]>([]);
+  const [usage, setUsage] = useState<AgentUsage[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
@@ -197,6 +200,9 @@ export function Agents({
     // Limits are a convenience; the agents show without them.
     getAgentLimits()
       .then((r) => setLimits(r.limits))
+      .catch(() => undefined);
+    getAgentUsage()
+      .then((r) => setUsage(r.agents))
       .catch(() => undefined);
   }, []);
 
@@ -246,6 +252,7 @@ export function Agents({
                 key={p.id}
                 profile={p}
                 limit={limits.find((l) => l.agent === p.id)}
+                usage={usage.find((u) => u.agent === p.id)}
                 onChanged={refresh}
                 onAgentsChanged={changed}
               />
@@ -376,12 +383,15 @@ function describe(e: unknown): string {
 function ProfileRow({
   profile,
   limit,
+  usage,
   onChanged,
   onAgentsChanged,
 }: {
   profile: Profile;
   /** Set while the agent's usage limit pauses work. */
   limit?: AgentLimit;
+  /** The account's usage as the agent last reported it. */
+  usage?: AgentUsage;
   onChanged: () => void;
   onAgentsChanged: () => Promise<void>;
 }) {
@@ -438,6 +448,7 @@ function ProfileRow({
           {limit.waiting} {limit.waiting === 1 ? "run waits" : "runs wait"} and continue by itself
         </p>
       )}
+      {usage && usage.windows.length > 0 && <UsageBars usage={usage} />}
       {error && <div className="banner banner--error">{error}</div>}
 
       {renaming !== null && (
@@ -526,6 +537,45 @@ function ProfileRow({
       )}
 
       <LoginSteps profile={profile} onChanged={onChanged} />
+    </div>
+  );
+}
+
+// The account's usage limits, one bar per window, as the agent last reported
+// them while working; providers only report during work, so it says when.
+function UsageBars({ usage }: { usage: AgentUsage }) {
+  return (
+    <div className="usage-bars">
+      {usage.windows.map((window) => {
+        const used = window.used_percent;
+        const reset = resetLabel(window.resets_at);
+        return (
+          <div key={window.name} className="usage-bars__row">
+            <span className="usage-bars__name">{window.name}</span>
+            <span className="usage-bars__track" aria-hidden>
+              <span
+                className={`usage-bars__fill ${window.limited || (used ?? 0) >= 90 ? "usage-bars__fill--high" : ""}`}
+                style={{
+                  width: `${Math.min(100, Math.max(0, used ?? (window.limited ? 100 : 0)))}%`,
+                }}
+              />
+            </span>
+            <span className="muted usage-bars__value">
+              {used !== undefined ? `${Math.round(used)}%` : window.limited ? "limit reached" : "—"}
+              {reset ? ` · resets ${reset}` : ""}
+            </span>
+          </div>
+        );
+      })}
+      {usage.observed_at && (
+        <p className="muted note usage-bars__seen">
+          As of{" "}
+          {new Date(usage.observed_at).toLocaleTimeString([], {
+            hour: "2-digit",
+            minute: "2-digit",
+          })}
+        </p>
+      )}
     </div>
   );
 }

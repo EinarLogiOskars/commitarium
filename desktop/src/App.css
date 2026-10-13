@@ -4270,16 +4270,6 @@ select:focus {
   color: var(--text);
   background: color-mix(in srgb, var(--lavender) 45%, transparent);
 }
-.apps__new {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  margin-bottom: 18px;
-  max-width: 640px;
-}
-.apps__new .note {
-  margin: 0;
-}
 .app-window__items {
   list-style: none;
   margin: 8px 0;
@@ -4320,4 +4310,45 @@ select:focus {
 .assistant__queued-note {
   margin: 4px 0 0;
   text-align: right;
+}
+
+/* An agent's account usage, one bar per limit window. */
+.usage-bars {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 6px 0 2px;
+}
+.usage-bars__row {
+  display: grid;
+  grid-template-columns: 110px minmax(80px, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+}
+.usage-bars__track {
+  height: 6px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--muted) 20%, transparent);
+  overflow: hidden;
+}
+.usage-bars__fill {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+}
+.usage-bars__fill--high {
+  background: var(--bad);
+}
+.usage-bars__seen {
+  margin: 2px 0 0;
+}
+
+/* In an app, what the assistant set going: a quiet line under its reply. */
+.assistant__applied {
+  margin: 4px 0 0 2px;
+  font-size: 13px;
+}
+.assistant__applied--failed {
+  color: var(--bad);
 }

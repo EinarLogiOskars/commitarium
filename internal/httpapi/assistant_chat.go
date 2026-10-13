@@ -30,7 +30,7 @@ type ConversationService interface {
 	Send(ctx context.Context, scope, message, key string) (conversations.Conversation, error)
 	SaveNotes(ctx context.Context, scope, notes string) (conversations.Conversation, error)
 	Action(ctx context.Context, scope, actionID string) (conversations.Action, error)
-	Resolve(ctx context.Context, scope, actionID string, status conversations.ActionStatus, result, workOrderID string) (conversations.Conversation, error)
+	Resolve(ctx context.Context, scope, actionID string, status conversations.ActionStatus, result string, created conversations.Created) (conversations.Conversation, error)
 	StartGoal(ctx context.Context, scope string, level int) (conversations.Conversation, error)
 	StopGoal(ctx context.Context, scope string) (conversations.Conversation, error)
 	ActiveGoals(ctx context.Context) (map[string]conversations.Goal, error)
@@ -226,7 +226,7 @@ func (api *API) saveConversationNotesHandler(w http.ResponseWriter, r *http.Requ
 
 func (api *API) dismissConversationActionHandler(w http.ResponseWriter, r *http.Request) {
 	conversation, err := api.conversations.Resolve(
-		r.Context(), r.PathValue("scope"), r.PathValue("actionID"), conversations.ActionDismissed, "", "",
+		r.Context(), r.PathValue("scope"), r.PathValue("actionID"), conversations.ActionDismissed, "", conversations.Created{},
 	)
 	if err != nil {
 		writeConversationError(w, err)
@@ -264,8 +264,10 @@ func (api *API) approveConversationActionHandler(w http.ResponseWriter, r *http.
 		writeError(w, http.StatusConflict, "action_not_pending", "the action is no longer waiting for approval")
 		return
 	}
-	if scope == conversations.TopLevel {
-		writeError(w, http.StatusConflict, "action_needs_project", "actions run in a project's conversation")
+	// At the top level the assistant only creates apps; everything else acts
+	// in a project.
+	if (scope == conversations.TopLevel) != (action.Type == featureartifact.AssistantCreateApp) {
+		writeError(w, http.StatusConflict, "action_needs_project", "this action runs in a project's conversation, and a new app at the top level")
 		return
 	}
 	chosen := make([]string, 0, 2)
@@ -296,7 +298,10 @@ func (api *API) approveConversationActionHandler(w http.ResponseWriter, r *http.
 	// The work order the action touched, for the app to open; a new one's ID
 	// is known only once it exists.
 	workOrderID := action.WorkOrderID
+	projectID := ""
 	switch action.Type {
+	case featureartifact.AssistantCreateApp:
+		result, projectID, ok = api.applyCreateApp(w, r, action)
 	case featureartifact.AssistantCreateWorkOrder:
 		result, workOrderID, ok = api.applyCreateWorkOrder(w, r, scope, action, body.Start)
 	case featureartifact.AssistantStartWorkOrder:
@@ -330,7 +335,7 @@ func (api *API) approveConversationActionHandler(w http.ResponseWriter, r *http.
 	if len(chosen) > 0 {
 		result += " The user chose " + strings.Join(chosen, " and ") + "."
 	}
-	conversation, err := api.conversations.Resolve(r.Context(), scope, actionID, conversations.ActionApplied, result, workOrderID)
+	conversation, err := api.conversations.Resolve(r.Context(), scope, actionID, conversations.ActionApplied, result, conversations.Created{WorkOrderID: workOrderID, ProjectID: projectID})
 	if err != nil {
 		writeConversationError(w, err)
 		return

@@ -36,9 +36,10 @@ type ProjectIndependentAcceptanceTestsService interface {
 	UpdateIndependentAcceptanceTests(ctx context.Context, projectID string, enabled bool) (project.Project, error)
 }
 
-// ProjectAppService marks projects as apps (APPS_PLAN.md).
+// ProjectAppService marks projects as apps (APPS_PLAN.md) and renames them.
 type ProjectAppService interface {
 	UpdateApp(ctx context.Context, projectID string, app bool) (project.Project, error)
+	Rename(ctx context.Context, projectID, name string) (project.Project, error)
 }
 
 type ProjectAgentModelCreator interface {
@@ -284,6 +285,9 @@ type API struct {
 	agents             AgentService
 	visions            VisionService
 	conversations      ConversationService
+	agentUsage         AgentUsageService
+	// mux serves the API's own routes, for actions that reuse them.
+	mux http.Handler
 }
 
 func New(
@@ -390,8 +394,11 @@ func newAPI(
 	var agents AgentService
 	var visions VisionService
 	var assistantConversations ConversationService
+	var agentUsage AgentUsageService
 	for _, extra := range extras {
 		switch typed := extra.(type) {
+		case AgentUsageService:
+			agentUsage = typed
 		case ConversationService:
 			assistantConversations = typed
 		case VisionService:
@@ -435,11 +442,13 @@ func newAPI(
 		agents:             agents,
 		visions:            visions,
 		conversations:      assistantConversations,
+		agentUsage:         agentUsage,
 	}
 	api.artifacts, _ = workflow.(FeatureArtifactService)
 	api.projectImporter, _ = projects.(ProjectImporter)
 
 	mux := http.NewServeMux()
+	api.mux = mux
 	mux.HandleFunc("GET /health", api.healthHandler)
 	if visions != nil && projects != nil && features != nil {
 		mux.HandleFunc("GET /api/v1/projects/{id}/vision", api.getVisionHandler)
@@ -558,6 +567,7 @@ func newAPI(
 		api.updateProjectIndependentAcceptanceTestsHandler,
 	)
 	mux.HandleFunc("PUT /api/v1/projects/{id}/app", api.updateProjectAppHandler)
+	mux.HandleFunc("PUT /api/v1/projects/{id}/name", api.renameProjectHandler)
 	mux.HandleFunc(
 		"PUT /api/v1/projects/{id}/forgejo-repository",
 		api.bindForgejoRepositoryHandler,
@@ -649,6 +659,7 @@ func newAPI(
 	if agents != nil {
 		mux.HandleFunc("GET /api/v1/agents", api.listAgentsHandler)
 		mux.HandleFunc("GET /api/v1/agents/limits", api.agentLimitsHandler)
+		mux.HandleFunc("GET /api/v1/agents/usage", api.agentUsageHandler)
 		mux.HandleFunc("POST /api/v1/agents", api.createAgentHandler)
 		mux.HandleFunc("PATCH /api/v1/agents/{id}", api.renameAgentHandler)
 		mux.HandleFunc("DELETE /api/v1/agents/{id}", api.deleteAgentHandler)

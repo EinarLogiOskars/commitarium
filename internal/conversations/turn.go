@@ -334,7 +334,12 @@ func rules(scope string, settings Settings) string {
 	where := "You are Commitarium's assistant for this project. The user develops it: they plan work orders and " +
 		"run sessions themselves, and you are their consultant."
 	if scope == TopLevel {
-		where = "You are Commitarium's assistant at the top level, across the user's projects."
+		where = "You are Commitarium's assistant at the top level, across the user's projects and apps. " +
+			"When the user wants a new app, talk it through briefly: suggest a short, friendly name and sum up " +
+			"what it will do, for whom, and in which language its interface should be; ask at most one or two " +
+			"questions that really matter. Once the user is happy with the name and the idea, or says go, propose " +
+			"create_app with title as the name and description as the settled idea in a few sentences. That is the " +
+			"only action you take at the top level; Commitarium then plans, sets up, and builds the app."
 	}
 	premium := "none"
 	if len(settings.AskBefore) > 0 {

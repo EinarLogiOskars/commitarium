@@ -1191,3 +1191,16 @@ func TestAUsageLimitFailsTheTurnWithItsResetTime(t *testing.T) {
 		t.Fatalf("reset time = %v, want the used-up window's", result.LimitResetsAt)
 	}
 }
+
+func TestRateLimitWindowsBecomeUsage(t *testing.T) {
+	resetsAt := int64(1791810000)
+	recordUsage([]rateLimitWindow{
+		{UsedPercent: 42, ResetsAt: &resetsAt, WindowDurationMins: 300},
+		{UsedPercent: 100, WindowDurationMins: 10080},
+	}, []string{"Short", "Long"})
+	windows, observed := Usage.Latest()
+	if len(windows) != 2 || windows[0].Name != "5-hour" || *windows[0].UsedPercent != 42 ||
+		windows[0].ResetsAt == nil || windows[1].Name != "Weekly" || !windows[1].Limited || observed == nil {
+		t.Fatalf("usage = %+v", windows)
+	}
+}

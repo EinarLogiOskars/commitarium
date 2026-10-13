@@ -74,6 +74,10 @@ export const updateIndependentAcceptanceTests = (id: string, enabled: boolean): 
     body: { enabled },
   });
 
+/** Rename a project or app; its repository keeps its own name. */
+export const renameProject = (id: string, name: string): Promise<Project> =>
+  request(`${projectPath(id)}/name`, { method: "PUT", body: { name } });
+
 /** Mark a project as an app, or as a project only (APPS_PLAN.md). */
 export const setProjectApp = (id: string, app: boolean): Promise<Project> =>
   request(`${projectPath(id)}/app`, { method: "PUT", body: { app } });
