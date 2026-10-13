@@ -607,22 +607,25 @@ export const onLoginProgress = (
   );
 
 // --- Agent CLI updates ---
-// Workers prefer a provider CLI installed in their shared CLI volume, so an
-// update installs the new version there and restarts the workers.
+// The agents' provider CLIs stay on the newest release on their own: the
+// desktop installs a newer one into the workers' shared CLI volume and
+// restarts the workers once none of them is running a turn.
 
 export interface CliStatus {
   provider: "codex" | "claude";
-  installed: string | null;
-  latest: string | null;
-  updateAvailable: boolean;
+  /** The version installed for the workers. */
+  installed: string;
+  /** The version being updated to, unless the CLI is current. */
+  target: string | null;
+  state: "current" | "updating" | "waiting" | "behind";
 }
 
-/** The installed and newest version of each provider CLI with a running worker. */
-export const checkAgentCliUpdates = (): Promise<CliStatus[]> => invoke("check_agent_cli_updates");
+/** The CLI of each provider with a running worker, and any update in progress. */
+export const agentCliStatus = (): Promise<CliStatus[]> => invoke("agent_cli_status");
 
-/** Install `version` of the provider's CLI for its workers and restart them. */
-export const updateAgentCli = (provider: CliStatus["provider"], version: string): Promise<void> =>
-  invoke("update_agent_cli", { provider, version });
+/** Subscribe to CLI update progress. Returns an unlisten function. */
+export const onAgentCliStatus = (handler: (statuses: CliStatus[]) => void): Promise<UnlistenFn> =>
+  listen<CliStatus[]>("agent_cli_status", (event) => handler(event.payload));
 
 /** Remove the previews of the project's sessions that are no longer open. */
 export const pruneSessionPreviews = (projectId: string, openSessions: string[]): Promise<void> =>

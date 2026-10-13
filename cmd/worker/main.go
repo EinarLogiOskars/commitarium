@@ -33,6 +33,7 @@ const (
 	defaultListenAddress = ":8081"
 	defaultStepDelay     = 250 * time.Millisecond
 	defaultHealthURL     = "http://127.0.0.1:8081/internal/v1/health"
+	defaultActivityURL   = "http://127.0.0.1:8081/internal/v1/activity"
 	defaultAdapter       = "simulated"
 	defaultCodexBinary   = "/usr/local/bin/codex"
 	defaultCodexSandbox  = "read-only"
@@ -93,6 +94,20 @@ func main() {
 		if err := checkHealth(context.Background(), defaultHealthURL); err != nil {
 			log.Fatal(err)
 		}
+		return
+	}
+	// The desktop asks, through docker exec, whether restarting this worker
+	// would cut off a turn.
+	if len(os.Args) == 2 && os.Args[1] == "activity" {
+		token, err := secretfile.RequiredPath(os.Getenv, "COMMITARIUM_WORKER_TOKEN_FILE", "worker API token")
+		if err != nil {
+			log.Fatal(err)
+		}
+		active, err := checkActivity(context.Background(), defaultActivityURL, token)
+		if err != nil {
+			log.Fatal(err)
+		}
+		fmt.Println(active)
 		return
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -207,6 +222,7 @@ func run(ctx context.Context, workerConfig config) error {
 		EventSource:           service,
 		ModelSource:           workerRuntime.modelSource,
 		UsageSource:           usageSource(workerRuntime.usage),
+		ActivitySource:        service.ActiveAttempts,
 	}, service)
 	if err != nil {
 		return fmt.Errorf("create worker HTTP server: %w", err)
@@ -837,6 +853,30 @@ func checkHealth(ctx context.Context, healthURL string) error {
 		return fmt.Errorf("validate worker health: %w", err)
 	}
 	return nil
+}
+
+// checkActivity is how many attempts the worker is launching or running.
+func checkActivity(ctx context.Context, activityURL string, token string) (int, error) {
+	requestContext, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	request, err := http.NewRequestWithContext(requestContext, http.MethodGet, activityURL, nil)
+	if err != nil {
+		return 0, fmt.Errorf("create worker activity request: %w", err)
+	}
+	request.Header.Set("Authorization", "Bearer "+token)
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		return 0, fmt.Errorf("request worker activity: %w", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return 0, fmt.Errorf("worker activity returned HTTP %d", response.StatusCode)
+	}
+	var activity workerhttp.ActivityResponse
+	if err := json.NewDecoder(io.LimitReader(response.Body, 16*1024)).Decode(&activity); err != nil {
+		return 0, fmt.Errorf("decode worker activity: %w", err)
+	}
+	return activity.Attempts, nil
 }
 
 // forgejoIdentity is one role's Forgejo account, Git author, and workspace

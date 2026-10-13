@@ -55,6 +55,7 @@ are not cached.
 | `GET` | `/internal/v1/health` | Report process health and protocol version |
 | `GET` | `/internal/v1/capabilities` | Report the provider and supported operations |
 | `GET` | `/internal/v1/models` | Discover exact model IDs available to this role worker |
+| `GET` | `/internal/v1/activity` | Count the attempts launching or running, so the desktop restarts the worker only when idle |
 | `PUT` | `/internal/v1/sessions/{sessionID}/attempts/{attemptID}` | Start or resume one exact provider attempt |
 | `GET` | `/internal/v1/sessions/{sessionID}/attempts/{attemptID}` | Inspect the current state of that attempt |
 | `GET` | `/internal/v1/sessions/{sessionID}/attempts/{attemptID}/events/stream` | Replay and follow the attempt's safe activity events |

@@ -557,6 +557,25 @@ func TestModelsEndpointReturnsAuthenticatedExactCatalog(t *testing.T) {
 	}
 }
 
+func TestActivityEndpointReportsAuthenticatedActiveAttempts(t *testing.T) {
+	config := testServerConfig()
+	config.ActivitySource = func() int { return 2 }
+	handler := newTestServer(t, config, &recordingService{attempt: validServerAttempt()})
+	unauthenticated := serve(handler, httptest.NewRequest(http.MethodGet, APIBasePath+"/activity", nil))
+	if unauthenticated.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated status = %d", unauthenticated.Code)
+	}
+	recorder := serve(handler, authorizedRequest(http.MethodGet, APIBasePath+"/activity", ""))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var response ActivityResponse
+	decodeTestResponse(t, recorder, &response)
+	if !response.Busy || response.Attempts != 2 {
+		t.Fatalf("activity response = %#v", response)
+	}
+}
+
 func newTestServer(t *testing.T, config ServerConfig, service Service) http.Handler {
 	t.Helper()
 	server, err := NewServer(config, service)

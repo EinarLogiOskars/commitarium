@@ -54,6 +54,9 @@ type ServerConfig struct {
 	ModelSource             ModelSource
 	// UsageSource, when set, reports the account's usage limits.
 	UsageSource func() ([]UsageWindow, *time.Time)
+	// ActivitySource, when set, reports how many attempts are launching or
+	// running.
+	ActivitySource func() int
 }
 
 type ModelSource interface {
@@ -113,6 +116,7 @@ type Server struct {
 	writeTimeout time.Duration
 	modelSource  ModelSource
 	usageSource  func() ([]UsageWindow, *time.Time)
+	activity     func() int
 	mux          *http.ServeMux
 }
 
@@ -152,6 +156,7 @@ func NewServer(config ServerConfig, service Service) (http.Handler, error) {
 		writeTimeout: writeTimeout,
 		modelSource:  config.ModelSource,
 		usageSource:  config.UsageSource,
+		activity:     config.ActivitySource,
 		mux:          http.NewServeMux(),
 	}
 	server.routes()
@@ -170,6 +175,9 @@ func (server *Server) routes() {
 	}
 	if server.usageSource != nil {
 		server.mux.HandleFunc(APIBasePath+"/usage", server.authenticate(server.requireMethod(http.MethodGet, server.getUsage)))
+	}
+	if server.activity != nil {
+		server.mux.HandleFunc(APIBasePath+"/activity", server.authenticate(server.requireMethod(http.MethodGet, server.getActivity)))
 	}
 	server.mux.HandleFunc(
 		APIBasePath+"/sessions/{sessionID}/attempts/{attemptID}",
@@ -234,6 +242,11 @@ func (server *Server) getUsage(w http.ResponseWriter, _ *http.Request) {
 	server.writeResponse(w, http.StatusOK, UsageResponse{
 		Provider: server.capabilities.Provider, Windows: windows, ObservedAt: observedAt,
 	})
+}
+
+func (server *Server) getActivity(w http.ResponseWriter, _ *http.Request) {
+	attempts := server.activity()
+	server.writeResponse(w, http.StatusOK, ActivityResponse{Busy: attempts > 0, Attempts: attempts})
 }
 
 func (server *Server) attempt(w http.ResponseWriter, r *http.Request) {

@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"slices"
@@ -362,6 +364,24 @@ func TestSimulatedScriptsCoverEveryWorkerRole(t *testing.T) {
 func TestCheckHealthRejectsUnreachableWorker(t *testing.T) {
 	if err := checkHealth(t.Context(), "http://127.0.0.1:1/internal/v1/health"); err == nil {
 		t.Fatal("expected unreachable worker health check to fail")
+	}
+}
+
+func TestCheckActivityReadsActiveAttempts(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer test-token" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		_, _ = w.Write([]byte(`{"busy":true,"attempts":3}`))
+	}))
+	defer server.Close()
+	active, err := checkActivity(t.Context(), server.URL, "test-token")
+	if err != nil || active != 3 {
+		t.Fatalf("activity = %d, %v; want 3", active, err)
+	}
+	if _, err := checkActivity(t.Context(), server.URL, "wrong-token"); err == nil {
+		t.Fatal("expected a rejected activity check to fail")
 	}
 }
 

@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use tauri::{AppHandle, Manager, State};
 
-use crate::{agents, bootstrap, phase4, preview, profiles};
+use crate::{agents, bootstrap, cli_updates, phase4, preview, profiles};
 
 /// Fixed Compose project name. Scoping every command to this project keeps the
 /// launcher from touching any other Compose stack on the host.
@@ -531,11 +531,17 @@ pub fn launch_docker_desktop() -> Result<(), String> {
 /// exact provider profile. A disconnected, expired, or failed profile keeps
 /// only its matching worker stopped; it does not prevent the app from opening.
 #[tauri::command]
-pub async fn stack_up(manager: State<'_, profiles::ProfileManager>) -> Result<(), String> {
+pub async fn stack_up(
+    app: AppHandle,
+    manager: State<'_, profiles::ProfileManager>,
+) -> Result<(), String> {
     let manager = manager.inner().clone();
     tauri::async_runtime::spawn_blocking(move || stack_up_with_manager(&manager))
         .await
-        .map_err(|_| "could not start the Commitarium stack".to_string())?
+        .map_err(|_| "could not start the Commitarium stack".to_string())??;
+    // The workers are up: check their CLIs now rather than at the next retry.
+    cli_updates::wake(&app);
+    Ok(())
 }
 
 pub(crate) fn stack_up_with_manager(manager: &profiles::ProfileManager) -> Result<(), String> {
@@ -570,11 +576,16 @@ pub(crate) fn stack_down_blocking() -> Result<(), String> {
 
 /// Update the stack: pull the latest images, then recreate in the background.
 #[tauri::command]
-pub async fn stack_update(manager: State<'_, profiles::ProfileManager>) -> Result<(), String> {
+pub async fn stack_update(
+    app: AppHandle,
+    manager: State<'_, profiles::ProfileManager>,
+) -> Result<(), String> {
     let manager = manager.inner().clone();
     tauri::async_runtime::spawn_blocking(move || stack_update_with_manager(&manager))
         .await
-        .map_err(|_| "could not update the Commitarium stack".to_string())?
+        .map_err(|_| "could not update the Commitarium stack".to_string())??;
+    cli_updates::wake(&app);
+    Ok(())
 }
 
 fn stack_update_with_manager(manager: &profiles::ProfileManager) -> Result<(), String> {

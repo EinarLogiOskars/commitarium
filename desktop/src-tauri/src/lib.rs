@@ -29,6 +29,7 @@ pub fn run() {
         .manage(phase5::NotificationCoordinator::default())
         .manage(phase5::BackupCoordinator::default())
         .manage(updater::UpdateCoordinator::default())
+        .manage(cli_updates::CliUpdater::default())
         .plugin(tauri_plugin_opener::init())
         // HTTP client for the frontend to reach the local coordinator. The
         // capability scope (see capabilities/default.json) restricts it to the
@@ -41,6 +42,8 @@ pub fn run() {
         .setup(|app| {
             docker::prepare_runtime(app.handle()).map_err(std::io::Error::other)?;
             preview::sweep_leftovers();
+            // The agents' CLIs stay current in the background, from launch on.
+            cli_updates::spawn(app.handle().clone());
             Ok(())
         })
         // The renderer can invoke ONLY the commands listed here. This explicit
@@ -48,9 +51,8 @@ pub fn run() {
         // access reaches the untrusted UI.
         .invoke_handler(tauri::generate_handler![
             apps::open_app_window,
-            cli_updates::check_agent_cli_updates,
+            cli_updates::agent_cli_status,
             preview::prune_session_previews,
-            cli_updates::update_agent_cli,
             docker::docker_probe,
             docker::launch_docker_desktop,
             docker::stack_up,

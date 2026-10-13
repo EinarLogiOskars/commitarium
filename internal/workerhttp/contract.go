@@ -78,6 +78,13 @@ type UsageResponse struct {
 	ObservedAt *time.Time    `json:"observed_at,omitempty"`
 }
 
+// ActivityResponse is whether the worker is launching or running provider
+// turns, and how many; restarting an idle worker cuts nothing off.
+type ActivityResponse struct {
+	Busy     bool `json:"busy"`
+	Attempts int  `json:"attempts"`
+}
+
 type ModelsResponse struct {
 	ProtocolVersion string    `json:"protocol_version"`
 	Provider        Provider  `json:"provider"`
