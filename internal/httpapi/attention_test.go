@@ -303,7 +303,8 @@ func TestAttentionAsksToAutoRunValidationOnlyUnderAutoMerge(t *testing.T) {
 // A blocker autopilot is still on is shown quietly, under its own kind and ID,
 // so the inbox asks (and the desktop notifies) only once autopilot gives up.
 func TestAttentionQuietsABlockerAutopilotIsHandling(t *testing.T) {
-	now := time.Date(2026, time.October, 13, 12, 0, 0, 0, time.UTC)
+	// Blocked just now: autopilot has yet to run out of time.
+	now := time.Now().UTC()
 	for _, handling := range []bool{true, false} {
 		projects := &recordingProjectService{listResult: []project.Project{{ID: "prj_one", Name: "One"}}}
 		features := &recordingFeatureService{listResult: []feature.Feature{{
@@ -331,5 +332,81 @@ func TestAttentionQuietsABlockerAutopilotIsHandling(t *testing.T) {
 		if quiet != handling || (!handling && (item.Kind != "blocker" || !item.Actionable)) {
 			t.Fatalf("handling=%t: item = %+v", handling, item)
 		}
+	}
+}
+
+// stateSinceExecutions keeps when its runs blocked, apart from updated_at.
+type stateSinceExecutions struct {
+	*recordingExecutionService
+	since map[string]time.Time
+}
+
+func (service stateSinceExecutions) RunStateSince(_ context.Context, runID string) (time.Time, error) {
+	return service.since[runID], nil
+}
+
+// Autopilot handles a blocker quietly for autopilotStallAfter from when the
+// run blocked (not its updated_at, which a model change moves on); past it,
+// the user hears so plainly, under a new kind and ID that sends them to the
+// assistant. A blocker autopilot gave up on stays a blocker, worded plainly
+// in an app.
+func TestAttentionSurfacesAutopilotThatHasNotFinished(t *testing.T) {
+	blockedAt := time.Date(2026, time.October, 13, 12, 0, 0, 0, time.UTC)
+	cases := []struct {
+		name     string
+		handling bool
+		app      bool
+		now      time.Time
+		kind     string
+		id       string
+		title    string
+	}{
+		{"handling", true, false, blockedAt.Add(autopilotStallAfter - time.Second), "autopilot_handling", "autopilot:", "Autopilot is handling this"},
+		{"stalled", true, false, blockedAt.Add(autopilotStallAfter + time.Second), "autopilot_stalled", "autopilot-stalled:", "Autopilot hasn't finished this yet"},
+		{"gave up", false, false, blockedAt.Add(time.Hour), "blocker", "run_wait:", "Run blocked"},
+		{"gave up in an app", false, true, blockedAt.Add(time.Hour), "blocker", "run_wait:", "This needs your help"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			// The model was changed while it waited.
+			updatedAt := blockedAt.Add(8 * time.Minute)
+			executions := stateSinceExecutions{
+				recordingExecutionService: &recordingExecutionService{runs: []execution.Run{{
+					ID: "run_one", FeatureID: "fea_one", Status: execution.RunStatusWaitingForUser,
+					WaitKind: execution.RunWaitKindBlocker, Reason: "The lead ended early.",
+					StartedAt: blockedAt.Add(-time.Hour), UpdatedAt: updatedAt,
+				}}},
+				since: map[string]time.Time{"run_one": blockedAt},
+			}
+			stub := &conversationStub{handling: map[string]bool{"fea_one": tc.handling}}
+			api := &API{
+				projects: &recordingProjectService{listResult: []project.Project{{ID: "prj_one", Name: "One", App: tc.app}}},
+				features: &recordingFeatureService{listResult: []feature.Feature{{
+					ID: "fea_one", ProjectID: "prj_one", Title: "Polish mobile", State: feature.StateImplementing,
+				}}},
+				execution: executions, conversations: stub,
+				now: func() time.Time { return tc.now },
+			}
+			items, _, err := api.collectAttention(t.Context())
+			if err != nil {
+				t.Fatalf("collect attention: %v", err)
+			}
+			if !stub.blockedAt.Equal(blockedAt) {
+				t.Fatalf("asked autopilot about a blocker at %v, want %v", stub.blockedAt, blockedAt)
+			}
+			if len(items) != 1 {
+				t.Fatalf("items = %+v", items)
+			}
+			item := items[0]
+			if item.Kind != tc.kind || !strings.HasPrefix(item.ID, tc.id) || item.Title != tc.title ||
+				item.Actionable != (tc.kind != "autopilot_handling") {
+				t.Fatalf("item = %+v", item)
+			}
+			if tc.kind == "autopilot_stalled" &&
+				(item.Detail != "Polish mobile has been waiting for 10 minutes. Check in with the assistant." ||
+					item.ID != "autopilot-stalled:run_wait:run_one:blocker:"+updatedAt.Format(time.RFC3339Nano)) {
+				t.Fatalf("stalled item = %+v", item)
+			}
+		})
 	}
 }

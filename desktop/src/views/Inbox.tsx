@@ -1,4 +1,5 @@
 import type { AttentionItem } from "../api/types";
+import { askAssistantAbout } from "../attention/askAssistant";
 
 /** Maps the coordinator's severity onto the shared state-dot tones. */
 const TONE: Record<AttentionItem["severity"], "bad" | "warn" | "ok"> = {
@@ -19,7 +20,8 @@ function when(iso: string): string {
 
 // The cross-project review inbox. It renders the coordinator's snapshot as-is:
 // ordering, severity and wording are backend decisions, so the same state never
-// reads differently here than it does on a project dashboard.
+// reads differently here than it does on a project dashboard. Work autopilot
+// has not finished opens with the project's assistant, to check in there.
 export function Inbox({
   items,
   loaded,
@@ -78,10 +80,14 @@ function Row({
   onOpen: (projectId: string, featureId: string) => void;
 }) {
   const tone = TONE[item.severity];
+  const stalled = item.kind === "autopilot_stalled";
   return (
     <button
       className={`inbox__item ${item.actionable ? "" : "inbox__item--muted"}`}
-      onClick={() => onOpen(item.project_id, item.feature_id)}
+      onClick={() => {
+        onOpen(item.project_id, item.feature_id);
+        if (stalled) askAssistantAbout(item.feature_title);
+      }}
     >
       <span className="inbox__top">
         <span className={`state state--${tone}`}>
@@ -94,6 +100,7 @@ function Row({
         {item.project_name} · {item.feature_title}
       </span>
       {item.detail && <span className="inbox__detail">{item.detail}</span>}
+      {stalled && <span className="inbox__detail">Ask the assistant →</span>}
     </button>
   );
 }

@@ -1159,7 +1159,7 @@ func (starter *RemoteLeadStarter) recoverIdleReadyToMergeRun(
 			return err
 		}
 		if _, behind := starter.behindMain(ctx, storedFeature); behind && storedFeature.Kind != feature.KindSession {
-			return starter.beginBaseUpdate(ctx, run.ID, directive.Message, false)
+			return starter.beginBaseUpdate(ctx, run.ID, directive.Message, directive.FromAssistant, false)
 		}
 	}
 	if starter.validation != nil {
@@ -1225,7 +1225,7 @@ func (starter *RemoteLeadStarter) mergeAfterGates(ctx context.Context, run execu
 	if paused, err := starter.stopAtPauseBoundary(ctx, run.ID, implementationMergeBehindMainReason); err != nil || paused {
 		return err
 	}
-	if err := starter.beginBaseUpdate(ctx, run.ID, "", owned); err != nil {
+	if err := starter.beginBaseUpdate(ctx, run.ID, "", false, owned); err != nil {
 		if errors.Is(err, ErrRunAlreadyActive) {
 			// Another coordinator operation owns the run and decides its state.
 			return err
@@ -1277,7 +1277,7 @@ func (starter *RemoteLeadStarter) Merge(
 		return execution.Run{}, false, err
 	}
 	starter.recordMergeBlocked(ctx, run.ID, err)
-	if updateErr := starter.beginBaseUpdate(ctx, run.ID, "", false); updateErr != nil {
+	if updateErr := starter.beginBaseUpdate(ctx, run.ID, "", false, false); updateErr != nil {
 		if errors.Is(updateErr, ErrRunAlreadyActive) {
 			return execution.Run{}, false, err
 		}

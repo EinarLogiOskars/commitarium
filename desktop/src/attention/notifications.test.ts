@@ -120,6 +120,35 @@ describe("planNotifications", () => {
     expect(planned.map((p) => p.event_id)).toEqual(["run_wait:run_one:blocker:t1"]);
   });
 
+  it("notifies once when autopilot has not finished a blocker in time", () => {
+    const handling = [
+      item({
+        id: "autopilot:run_wait:run_one:blocker:t1",
+        kind: "autopilot_handling",
+        actionable: false,
+      }),
+    ];
+    const stalled = [
+      item({
+        id: "autopilot-stalled:run_wait:run_one:blocker:t1",
+        kind: "autopilot_stalled",
+        title: "Autopilot hasn't finished this yet",
+      }),
+    ];
+    const planned = planNotifications({
+      items: stalled,
+      seen: seenIds(handling),
+      foreground: null,
+      primed: true,
+    });
+    expect(planned.map((p) => [p.event_id, p.kind])).toEqual([
+      ["autopilot-stalled:run_wait:run_one:blocker:t1", "attention"],
+    ]);
+    expect(
+      planNotifications({ items: stalled, seen: seenIds(stalled), foreground: null, primed: true }),
+    ).toEqual([]);
+  });
+
   it("categorizes failures and automatic merges apart from attention", () => {
     const items = [
       item({ id: "run_failed:run_one", kind: "run_failed", severity: "error" }),

@@ -454,9 +454,7 @@ export function ProjectWorkspace({
               projectId={id}
               featureId={orderId}
               hasRepo={hasRepo}
-              autopilotHandling={attention.some(
-                (item) => item.feature_id === orderId && item.kind === "autopilot_handling",
-              )}
+              autopilot={autopilotOn(attention, orderId)}
               onOpenValidation={() => setMode("settings")}
               onChanged={bumpRail}
               onKind={setRailKind}
@@ -578,4 +576,17 @@ function RailIcon({ name }: { name: Mode }) {
       {RAIL_ICONS[name]}
     </svg>
   );
+}
+
+/** How autopilot stands on a blocked or failed work order, from the inbox. */
+function autopilotOn(
+  attention: AttentionItem[],
+  featureId: string,
+): "handling" | "stalled" | undefined {
+  for (const item of attention) {
+    if (item.feature_id !== featureId) continue;
+    if (item.kind === "autopilot_stalled") return "stalled";
+    if (item.kind === "autopilot_handling") return "handling";
+  }
+  return undefined;
 }

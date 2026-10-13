@@ -17,6 +17,7 @@ const NOTIFY: Partial<Record<AttentionKind, NativeNotification["kind"]>> = {
   environment_failed: "failure",
   validation_failed: "failure",
   run_failed: "failure",
+  autopilot_stalled: "attention",
   auto_merge_completed: "auto_merge",
 };
 

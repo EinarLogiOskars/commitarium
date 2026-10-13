@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/EinarLogiOskars/commitarium/internal/execution"
 	"github.com/EinarLogiOskars/commitarium/internal/feature"
@@ -286,6 +287,8 @@ type API struct {
 	visions            VisionService
 	conversations      ConversationService
 	agentUsage         AgentUsageService
+	// now is the API's clock; nil is time.Now.
+	now func() time.Time
 	// mux serves the API's own routes, for actions that reuse them.
 	mux http.Handler
 }

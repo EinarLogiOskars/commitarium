@@ -1063,3 +1063,19 @@ func (s *Service) SubscribeSessionPreviews(
 ) (<-chan MessagePreview, func()) {
 	return s.previews.subscribe(sessionID)
 }
+
+// StateSinceStore is implemented by stores that keep when a run entered its
+// current status, wait and reason.
+type StateSinceStore interface {
+	RunStateSince(ctx context.Context, runID string) (time.Time, error)
+}
+
+// RunStateSince returns when a run entered its current status, wait and
+// reason (for a blocked run, when it blocked), or the zero time when the
+// store does not keep it.
+func (s *Service) RunStateSince(ctx context.Context, runID string) (time.Time, error) {
+	if store, ok := s.store.(StateSinceStore); ok {
+		return store.RunStateSince(ctx, runID)
+	}
+	return time.Time{}, nil
+}
