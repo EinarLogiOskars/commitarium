@@ -779,7 +779,7 @@ func (session *session) translateResult(
 		}
 		resolved, err := worker.ResolveStructuredOutput(session.outputContract, message.StructuredOutput)
 		if err != nil {
-			return nil, nil, fmt.Errorf("%w: %v", ErrProtocol, err)
+			return nil, nil, fmt.Errorf("%w: %w", ErrProtocol, err)
 		}
 		session.mu.Lock()
 		session.lastAgentMessage = resolved.Event.Text

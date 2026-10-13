@@ -1145,6 +1145,17 @@ func TestTurnUsageExcludesEarlierTurnsAndRepeatedUpdates(t *testing.T) {
 	}
 }
 
+// The worker resubmits a rejected result only when it can tell the rejection
+// apart from other protocol failures.
+func TestRejectedStructuredResultKeepsItsValidationError(t *testing.T) {
+	session := newSession(nil, nil, "thr_main", t.TempDir(), time.Second, 1, worker.OutputContractImplementationLead)
+	session.pendingMessage = `{"action":"published","summary":"Done","commit_id":"","pull_request_number":0,"system_packages":[],"environment_reason":""}`
+	_, err := session.completeStructuredResponse()
+	if !errors.Is(err, ErrProtocol) || !errors.Is(err, worker.ErrInvalidStructuredOutput) {
+		t.Fatalf("rejected result error = %v, want ErrProtocol wrapping ErrInvalidStructuredOutput", err)
+	}
+}
+
 func TestNotificationsForAnotherThreadAreIgnored(t *testing.T) {
 	session := newSession(nil, nil, "thr_main", t.TempDir(), time.Second, 1, "")
 	session.turnID = "turn_main"

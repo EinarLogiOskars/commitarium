@@ -64,10 +64,23 @@ type Config struct {
 }
 
 type activeProviderSession struct {
+	// mu guards session, which a rejected-result correction replaces with
+	// the resumed provider conversation.
+	mu      sync.Mutex
 	session worker.Session
+	// launch is the request that started this turn, reused to resume the
+	// same provider conversation when its structured result is rejected.
+	launch      worker.SessionRequest
+	corrections int
 	// finished closes only after the normal watcher has persisted the final
 	// attempt state, not merely after the operating-system process exits.
 	finished chan struct{}
+}
+
+func (live *activeProviderSession) current() worker.Session {
+	live.mu.Lock()
+	defer live.mu.Unlock()
+	return live.session
 }
 
 type eventSubscriber struct {
@@ -198,15 +211,16 @@ func (service *Service) resumeInterruptedAttempt(
 	if err != nil {
 		return fmt.Errorf("load interrupted provider events: %w", err)
 	}
+	sessionRequest := worker.SessionRequest{
+		SessionID: candidate.Attempt.SessionID, AttemptID: candidate.Attempt.AttemptID,
+		FeatureID: request.Assignment.FeatureID, Role: worker.Role(request.Assignment.Role),
+		Model: request.Assignment.Model, Instructions: request.Instructions,
+		OutputContract:    worker.OutputContract(request.OutputContract),
+		WorkspaceAccess:   worker.WorkspaceAccess(request.WorkspaceAccess),
+		LaunchEnvironment: launchEnvironment.Clone(),
+	}
 	providerSession, err := service.provider.Resume(service.lifetime, worker.ResumeRequest{
-		SessionRequest: worker.SessionRequest{
-			SessionID: candidate.Attempt.SessionID, AttemptID: candidate.Attempt.AttemptID,
-			FeatureID: request.Assignment.FeatureID, Role: worker.Role(request.Assignment.Role),
-			Model: request.Assignment.Model, Instructions: request.Instructions,
-			OutputContract:    worker.OutputContract(request.OutputContract),
-			WorkspaceAccess:   worker.WorkspaceAccess(request.WorkspaceAccess),
-			LaunchEnvironment: launchEnvironment.Clone(),
-		},
+		SessionRequest:    sessionRequest.Clone(),
 		ProviderSessionID: candidate.Attempt.ProviderSessionID,
 		Recovery: worker.RecoveryContext{
 			Briefing: request.Instructions, CompletedEvents: workerEvents(completed),
@@ -220,7 +234,7 @@ func (service *Service) resumeInterruptedAttempt(
 		service.stopUnownedSession(providerSession)
 		return errors.New("resumed provider returned a different session identity")
 	}
-	live := &activeProviderSession{session: providerSession, finished: make(chan struct{})}
+	live := &activeProviderSession{session: providerSession, launch: sessionRequest, finished: make(chan struct{})}
 	service.activeMu.Lock()
 	if _, exists := service.active[candidate.Attempt.AttemptReference]; exists {
 		service.activeMu.Unlock()
@@ -344,11 +358,8 @@ func (service *Service) PutAttempt(
 		}
 		return failed, true, nil
 	}
-	providerSession, launchErr := service.launchProvider(
-		request,
-		identity.AttemptReference,
-		launchEnvironment.Clone(),
-	)
+	sessionRequest := providerSessionRequest(request, identity.AttemptReference, launchEnvironment.Clone())
+	providerSession, launchErr := service.launchProvider(request, sessionRequest.Clone())
 	if launchErr != nil {
 		if providerSession != nil {
 			uncertain, transitionErr := service.uncertainLaunch(ctx, attempt, providerSession.ProviderSessionID())
@@ -396,7 +407,7 @@ func (service *Service) PutAttempt(
 	if err != nil {
 		return workerhttp.Attempt{}, false, service.journalError(err)
 	}
-	live := &activeProviderSession{session: providerSession, finished: make(chan struct{})}
+	live := &activeProviderSession{session: providerSession, launch: sessionRequest, finished: make(chan struct{})}
 	service.activeMu.Lock()
 	service.active[running.AttemptReference] = live
 	service.activeMu.Unlock()
@@ -486,7 +497,7 @@ func (service *Service) SendCommand(
 		Type:    worker.CommandType(request.Type),
 		Message: request.Message,
 	}
-	if err := live.session.Send(ctx, command); err != nil {
+	if err := live.current().Send(ctx, command); err != nil {
 		return workerhttp.Attempt{}, service.handleCommandFailure(ctx, identity, prepared, request.Type, err)
 	}
 	if err := service.resolveMutation(ctx, identity, workerjournal.MutationApplied); err != nil {
@@ -538,8 +549,7 @@ func (service *Service) ForceStop(
 	if !ok {
 		return workerhttp.Attempt{}, service.handleMissingForceStopSession(ctx, identity, attempt)
 	}
-	forceStoppable, ok := live.session.(worker.ForceStoppableSession)
-	if !ok {
+	if _, ok := live.current().(worker.ForceStoppableSession); !ok {
 		_ = service.resolveMutation(context.WithoutCancel(ctx), identity, workerjournal.MutationRejected)
 		return workerhttp.Attempt{}, unsupportedForceStopError()
 	}
@@ -554,6 +564,12 @@ func (service *Service) ForceStop(
 	// rather than the request context, own delivery and final persistence.
 	operationCtx, cancel := context.WithTimeout(service.lifetime, service.forceStopTimeout)
 	defer cancel()
+	// Read the session only now: once stop is requested, no rejected-result
+	// correction replaces it.
+	forceStoppable, ok := live.current().(worker.ForceStoppableSession)
+	if !ok {
+		return workerhttp.Attempt{}, service.handleForceStopFailure(identity, prepared, unsupportedForceStopError())
+	}
 	if err := forceStoppable.ForceStop(operationCtx, request.Reason); err != nil {
 		return workerhttp.Attempt{}, service.handleForceStopFailure(identity, prepared, err)
 	}
@@ -652,12 +668,12 @@ func (service *Service) Supersede(
 	return closed, nil
 }
 
-func (service *Service) launchProvider(
+func providerSessionRequest(
 	request workerhttp.PutAttemptRequest,
 	reference workerhttp.AttemptReference,
 	launchEnvironment worker.LaunchEnvironment,
-) (worker.Session, error) {
-	sessionRequest := worker.SessionRequest{
+) worker.SessionRequest {
+	return worker.SessionRequest{
 		SessionID:         reference.SessionID,
 		AttemptID:         reference.AttemptID,
 		FeatureID:         request.Assignment.FeatureID,
@@ -666,8 +682,14 @@ func (service *Service) launchProvider(
 		Instructions:      request.Instructions + userLanguageNote,
 		OutputContract:    worker.OutputContract(request.OutputContract),
 		WorkspaceAccess:   worker.WorkspaceAccess(request.WorkspaceAccess),
-		LaunchEnvironment: launchEnvironment.Clone(),
+		LaunchEnvironment: launchEnvironment,
 	}
+}
+
+func (service *Service) launchProvider(
+	request workerhttp.PutAttemptRequest,
+	sessionRequest worker.SessionRequest,
+) (worker.Session, error) {
 	if request.Mode == workerhttp.AttemptModeResume {
 		return service.provider.Resume(service.lifetime, worker.ResumeRequest{
 			SessionRequest:    sessionRequest,
