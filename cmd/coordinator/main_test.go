@@ -143,3 +143,17 @@ func TestLoadConfigRejectsIncompleteOrUnknownRunner(t *testing.T) {
 		}
 	}
 }
+
+func TestLoadConfigLeavesTheMarketplaceOffUntilConfigured(t *testing.T) {
+	values := map[string]string{"COMMITARIUM_DATABASE_PATH": "/state/coordinator.db"}
+	loaded, err := loadConfig(func(name string) string { return values[name] })
+	if err != nil || loaded.marketplaceURL != "" || loaded.credentialsRoot != defaultCredentialsRoot {
+		t.Fatalf("defaults = %+v err=%v", loaded, err)
+	}
+	values["COMMITARIUM_MARKETPLACE_URL"] = "https://market.example"
+	values["COMMITARIUM_CREDENTIALS_ROOT"] = "/secrets"
+	loaded, err = loadConfig(func(name string) string { return values[name] })
+	if err != nil || loaded.marketplaceURL != "https://market.example" || loaded.credentialsRoot != "/secrets" {
+		t.Fatalf("overrides = %+v err=%v", loaded, err)
+	}
+}

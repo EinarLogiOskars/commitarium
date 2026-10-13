@@ -67,18 +67,22 @@ as is or make it yours.
 
 ### Account
 
-12. **The Commitarium account is the marketplace's Forgejo account.** No
-    separate identity system. An account is needed only to release or
-    install; the rest of Commitarium works without one.
-13. **Create account in Commitarium.** It opens the marketplace's sign-up
-    page in a Commitarium window; the account waits for the admin to
-    activate it.
-14. **Sign in creates a token.** Commitarium uses the username and password
-    once to create an access token through the Forgejo API, keeps the token
-    like other credentials (never in the coordinator's backups), and forgets
-    the password. An account not yet activated shows as "waiting for
-    approval". Pasting a token is the fallback (two-factor accounts). OAuth
-    replaces this later.
+12. **Commitarium is the interface; Forgejo is the backend.** Every
+    marketplace screen is Commitarium's own, built on Forgejo's API. Forgejo's
+    website stays reachable as the admin's backdoor.
+13. **The Commitarium account is the marketplace's Forgejo account.** Needed
+    only to release or install; the rest of Commitarium works without one.
+14. **Creating an account goes through a small sign-up service** next to
+    Forgejo (`cmd/marketplace-signup`, `deploy/marketplace/`), because
+    Forgejo has no public sign-up API. It holds an admin token, creates the
+    account inactive, and is rate-limited; the admin's approval is the gate.
+15. **Sign in creates a token.** The coordinator uses the username and
+    password once to create an access token, keeps it in a credentials
+    volume that backups leave out (ADR-011), and forgets the password. An
+    account not yet approved shows as waiting for approval. Forgejo only
+    lets a password delete tokens, so signing out forgets the token locally.
+16. **The admin approves in Commitarium.** Signed in as an admin, Settings
+    lists account requests with Approve and Decline.
 
 ## Manual test (2026-10-13)
 
@@ -104,10 +108,10 @@ project with a broken submodule pointer.
 ## Slices
 
 1. **VPS.** Done, see Manual test.
-2. **Account.** An Account section in Settings: create account (sign-up
-   page in a Commitarium window), sign in (creates and stores a token),
-   waiting for approval, signed in as, sign out. Release and install ask
-   the user to sign in when there is no account.
+2. **Account.** The sign-up service on the VPS; the coordinator's
+   marketplace routes; a Marketplace section in Settings: create account,
+   sign in, waiting for approval, signed in as, sign out, and account
+   requests for the admin.
 3. **Manifest.** Done (ADR-026): the formats and their reading on import;
    Release (slice 4) writes them with `toolchain.PortableStack` and
    `vision.PortablePlan`.
@@ -124,7 +128,8 @@ project with a broken submodule pointer.
    release, the assistant proposes "Release v3?" with a short changelog; one
    tap approves (ADR-022).
 
-Browsing is the Forgejo website until slice 7 earns its place.
+Browsing is the Marketplace tab (slice 7), Commitarium's own view of the
+apps; until it exists, apps are installed by URL.
 
 ## Later, if needed
 
@@ -133,8 +138,7 @@ Browsing is the Forgejo website until slice 7 earns its place.
 8. The assistant searches the marketplace before building a new app from
    scratch.
 9. Update offers for installed apps when a newer tag exists.
-10. OAuth sign-in; Commitarium profile as the marketplace identity.
-11. Opening to the public: deterministic checks that block (secrets, compose
+10. Opening to the public: deterministic checks that block (secrets, compose
     rules, manifest) and an advisory LLM review, on the server and at
     install.
 

@@ -29,8 +29,9 @@ RUN apk add --no-cache ca-certificates git && \
 COPY --from=build-stage /coordinator /coordinator
 COPY --chown=commitarium:commitarium --from=build-stage /state /var/lib/commitarium
 
-RUN mkdir -p /workspaces /var/lib/commitarium-toolchains && \
-    chown commitarium:commitarium /workspaces /var/lib/commitarium-toolchains
+RUN mkdir -p /workspaces /var/lib/commitarium-toolchains /var/lib/commitarium-credentials && \
+    chown commitarium:commitarium /workspaces /var/lib/commitarium-toolchains && \
+    chown commitarium:commitarium /var/lib/commitarium-credentials && chmod 700 /var/lib/commitarium-credentials
 
 EXPOSE 8080
 
