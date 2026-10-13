@@ -4386,3 +4386,11 @@ select:focus {
 .coordinator-banner__error {
   color: var(--bad);
 }
+
+.market__tile {
+  cursor: default;
+}
+.market__tile > button,
+.market__mark {
+  margin-top: auto;
+}

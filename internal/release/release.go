@@ -187,7 +187,7 @@ func (service *Service) Release(ctx context.Context, projectID string) (Version,
 	if name == "" {
 		name = repositoryName(stored.Name)
 	}
-	remote, err := service.marketplace.EnsureAppRepository(ctx, name, stored.Name+" — a Commitarium app")
+	remote, err := service.marketplace.EnsureAppRepository(ctx, name, stored.Name+marketplace.AppDescriptionSuffix)
 	if err != nil {
 		return Version{}, err
 	}

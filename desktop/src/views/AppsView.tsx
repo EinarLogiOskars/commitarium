@@ -144,14 +144,14 @@ function appState(
   return { label: "Ready", tone: "ok" };
 }
 
-function initials(name: string): string {
+export function initials(name: string): string {
   const words = name.trim().split(/\s+/).filter(Boolean);
   const letters = words.length > 1 ? words[0][0] + words[1][0] : (words[0] ?? "?").slice(0, 2);
   return letters.toUpperCase();
 }
 
 // A stable color per app name, from the same family of saturations.
-function iconColor(name: string): string {
+export function iconColor(name: string): string {
   let hash = 0;
   for (const char of name) hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
   return `hsl(${hash % 360} 55% 50%)`;
