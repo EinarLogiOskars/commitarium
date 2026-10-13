@@ -38,3 +38,26 @@ func TestUsageLimitTextMatchesOnlyAccountLimits(t *testing.T) {
 		}
 	}
 }
+
+func TestTransientFailureTextMatchesOnlyProviderAndNetworkErrors(t *testing.T) {
+	for _, text := range []string{
+		`API Error: 529 {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}`,
+		"API Error: 500 Internal server error",
+		"stream disconnected before completion: error sending request for url",
+		"fetch failed: ECONNRESET",
+	} {
+		if !IsTransientFailure(text) {
+			t.Errorf("%q is transient", text)
+		}
+	}
+	for _, text := range []string{
+		"Claude AI usage limit reached|1791810000",
+		"Failed to authenticate. API Error: 401 OAuth token has expired",
+		"Context window limit reached; start a new conversation.",
+		"Codex reported that the turn failed.",
+	} {
+		if IsTransientFailure(text) {
+			t.Errorf("%q is not transient", text)
+		}
+	}
+}

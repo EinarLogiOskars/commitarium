@@ -1674,6 +1674,18 @@ unknown; a limit still reached pauses it again. Recovery's `continue` tries at
 once. `GET /api/v1/agents/limits` answers
 `{"limits": [{"agent", "resets_at", "waiting"}]}` for the agents whose limit has
 paused work. The attention item is `usage_limit`, informational.
+
+**Interrupted turns.** A turn cut off by infrastructure (the worker attempt
+left indeterminate by a worker restart, the worker unreachable, or a provider
+failure such as an overloaded API or a dropped connection) is retried
+automatically up to 3 times, 30 seconds, 2 minutes, and 5 minutes apart,
+waiting for the worker to answer before each. Meanwhile the run waits as a
+blocker carrying `"retrying": {"cause", "retry", "of", "due_at"}`, and its
+attention item is `retrying`, informational. A retry resumes the same
+conversation in a fenced successor attempt; recovery's `continue` retries at
+once and starts the count afresh. Once the retries are spent the run blocks as
+before, its reason saying how many ran. Failed checks, refused results, an
+agent's question, usage limits, and expired logins are never retried this way.
 `GET /api/v1/agents/usage` answers `{"agents": [{"agent", "windows": [{"name",
 "used_percent", "resets_at", "limited"}], "observed_at"}]}`: each connected
 agent's account usage as its worker last saw it (Codex reports percentages

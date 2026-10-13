@@ -46,6 +46,7 @@ type runResponse struct {
 	Recovery                   *recoveryResponse            `json:"recovery,omitempty"`
 	LoginRequired              *loginRequiredResponse       `json:"login_required,omitempty"`
 	UsageLimit                 *usageLimitResponse          `json:"usage_limit,omitempty"`
+	Retrying                   *retryingResponse            `json:"retrying,omitempty"`
 	Steps                      workStepsResponse            `json:"steps"`
 }
 
@@ -66,6 +67,35 @@ type usageLimitResponse struct {
 	Agent    string      `json:"agent"`
 	Role     worker.Role `json:"role"`
 	ResetsAt *time.Time  `json:"resets_at,omitempty"`
+}
+
+// retryingResponse is the automatic retry an interrupted turn waits for:
+// which one, of how many, why, and when it is due.
+type retryingResponse struct {
+	Cause string    `json:"cause"`
+	Retry int       `json:"retry"`
+	Of    int       `json:"of"`
+	DueAt time.Time `json:"due_at"`
+}
+
+type runRetryWaits interface {
+	RetryWaitForRun(context.Context, string) (execution.RetryWait, error)
+}
+
+// retryingFor returns the automatic retry a blocked run waits for, if any.
+func retryingFor(ctx context.Context, executions any, run execution.Run) (*retryingResponse, error) {
+	waits, ok := executions.(runRetryWaits)
+	if !ok || run.Status != execution.RunStatusWaitingForUser || run.Paused ||
+		run.WaitKind != execution.RunWaitKindBlocker {
+		return nil, nil
+	}
+	wait, err := waits.RetryWaitForRun(ctx, run.ID)
+	if err != nil || wait.DueAt == nil {
+		return nil, err
+	}
+	return &retryingResponse{
+		Cause: wait.Cause, Retry: wait.Retries + 1, Of: orchestration.AutomaticRetries, DueAt: *wait.DueAt,
+	}, nil
 }
 
 type runLimitWaits interface {
@@ -525,6 +555,9 @@ func (api *API) newRunResponse(
 		if wait.AgentID != "" {
 			response.UsageLimit = &usageLimitResponse{Agent: wait.AgentID, Role: wait.Role, ResetsAt: wait.ResetsAt}
 		}
+	}
+	if response.Retrying, err = retryingFor(ctx, api.execution, run); err != nil {
+		return runResponse{}, err
 	}
 	targets, err := api.execution.InterventionTargetsForRun(ctx, run.ID)
 	if err != nil {
