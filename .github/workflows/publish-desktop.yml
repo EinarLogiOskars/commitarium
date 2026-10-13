@@ -112,5 +112,15 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh release download "${GITHUB_REF_NAME}" --pattern latest.json --dir "${RUNNER_TEMP}/updater"
 
+      # The generated manifest names GitHub API asset URLs, which answer an
+      # installed app's plain download with JSON about the file.
+      - name: Point the manifest at release downloads
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release view "${GITHUB_REF_NAME}" --json assets > "${RUNNER_TEMP}/updater/assets.json"
+          node ./scripts/verify-updater-manifest.mjs rewrite "${RUNNER_TEMP}/updater/latest.json" "${RUNNER_TEMP}/updater/assets.json" "${GITHUB_REPOSITORY}" "${GITHUB_REF_NAME}"
+          gh release upload "${GITHUB_REF_NAME}" "${RUNNER_TEMP}/updater/latest.json" --clobber
+
       - name: Verify signed updater coverage
-        run: node ./scripts/verify-updater-manifest.mjs "${RUNNER_TEMP}/updater/latest.json" "${GITHUB_REF_NAME}"
+        run: node ./scripts/verify-updater-manifest.mjs "${RUNNER_TEMP}/updater/latest.json" "${GITHUB_REF_NAME}" "${GITHUB_REPOSITORY}"

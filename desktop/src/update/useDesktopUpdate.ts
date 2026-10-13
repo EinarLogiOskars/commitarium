@@ -105,10 +105,11 @@ export function useDesktopUpdate(enabled: boolean, runningCount: number): Deskto
       }
     } catch (e) {
       // The seen release may have changed under us (the backend rejects a stale
-      // expectedVersion), or discovery failed — surface it and re-check.
-      setError(String(e));
+      // expectedVersion), or discovery failed — re-check, then show why it
+      // failed; the re-check clears errors, so the reason is set after it.
       setStatus("error");
-      void check();
+      await check();
+      setError(String(e));
     } finally {
       attempting.current = false;
     }
