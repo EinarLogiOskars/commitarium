@@ -646,7 +646,9 @@ pub(crate) fn reconcile_agent_workers(
         .map(|connection| connection.service.as_str())
         .collect();
     if !connected.is_empty() {
-        let mut args = vec!["up", "-d"];
+        // Wait until the workers are healthy, so whoever reconciled them (an
+        // approved environment resuming its run, say) can reach them at once.
+        let mut args = vec!["up", "-d", "--wait", "--wait-timeout", "120"];
         if release_mode() {
             args.push("--no-build");
         }
