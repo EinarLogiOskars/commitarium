@@ -407,3 +407,79 @@ func (service *Service) write(stored storedCredentials) error {
 	}
 	return nil
 }
+
+// AppTopic marks a marketplace repository as a Commitarium app.
+const AppTopic = "commitarium-app"
+
+// AppRepository is an app's repository on the marketplace.
+type AppRepository struct {
+	Owner    string `json:"owner"`
+	Name     string `json:"name"`
+	CloneURL string `json:"clone_url"`
+	WebURL   string `json:"web_url"`
+}
+
+// EnsureAppRepository answers the signed-in user's repository called name,
+// creating it public and empty on the first release, and tags it as an app.
+func (service *Service) EnsureAppRepository(ctx context.Context, name, description string) (AppRepository, error) {
+	service.mu.Lock()
+	stored, err := service.read()
+	service.mu.Unlock()
+	if err != nil {
+		return AppRepository{}, err
+	}
+	auth := func(request *http.Request) { request.Header.Set("Authorization", "token "+stored.Token) }
+	path := "/api/v1/repos/" + url.PathEscape(stored.Username) + "/" + url.PathEscape(name)
+	status, body, err := service.call(ctx, http.MethodGet, path, auth, nil)
+	if err != nil {
+		return AppRepository{}, err
+	}
+	switch status {
+	case http.StatusOK:
+	case http.StatusNotFound:
+		status, body, err = service.call(ctx, http.MethodPost, "/api/v1/user/repos", auth, map[string]any{
+			"name": name, "description": description, "private": false, "auto_init": false, "default_branch": "main",
+		})
+		if err != nil {
+			return AppRepository{}, err
+		}
+		if status != http.StatusCreated {
+			return AppRepository{}, repositoryRejection("create the app's repository", status)
+		}
+	default:
+		return AppRepository{}, repositoryRejection("read the app's repository", status)
+	}
+	var repository struct {
+		Name     string `json:"name"`
+		CloneURL string `json:"clone_url"`
+		HTMLURL  string `json:"html_url"`
+		Owner    struct {
+			Login string `json:"login"`
+		} `json:"owner"`
+	}
+	if json.Unmarshal(body, &repository) != nil || repository.CloneURL == "" {
+		return AppRepository{}, fmt.Errorf("%w: unreadable repository", ErrUnavailable)
+	}
+	status, _, err = service.call(ctx, http.MethodPut,
+		"/api/v1/repos/"+url.PathEscape(repository.Owner.Login)+"/"+url.PathEscape(repository.Name)+"/topics/"+AppTopic,
+		auth, nil)
+	if err != nil {
+		return AppRepository{}, err
+	}
+	if status != http.StatusNoContent && status != http.StatusOK {
+		return AppRepository{}, repositoryRejection("mark the repository as an app", status)
+	}
+	return AppRepository{Owner: repository.Owner.Login, Name: repository.Name, CloneURL: repository.CloneURL,
+		WebURL: repository.HTMLURL}, nil
+}
+
+func repositoryRejection(action string, status int) error {
+	switch status {
+	case http.StatusUnauthorized:
+		return ErrNotSignedIn
+	case http.StatusForbidden:
+		return fmt.Errorf("%w: the marketplace refused to %s", ErrUnavailable, action)
+	default:
+		return fmt.Errorf("%w: %s returned HTTP %d", ErrUnavailable, action, status)
+	}
+}

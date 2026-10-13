@@ -3,6 +3,7 @@ import { listFeatures, listFeatureRuns } from "../api/features";
 import { getRun, recoverRun } from "../api/runs";
 import { currentPhaseIndex, PHASE_LABELS, PHASES } from "./PhaseStepper";
 import { ProjectSyncCard } from "./ProjectSyncCard";
+import { MarketplaceRelease } from "./MarketplaceRelease";
 import { WORK } from "../vocab";
 import { askAssistantAbout } from "../attention/askAssistant";
 import type { AttentionItem, Feature, Project, Run } from "../api/types";
@@ -169,6 +170,8 @@ export function ProjectDashboard({
           </div>
         </section>
       )}
+
+      {project.app && !needsStack && <MarketplaceRelease projectId={project.id} />}
 
       {error && <div className="banner banner--error">{error}</div>}
       {recoveryNotice && <div className="banner">{recoveryNotice}</div>}

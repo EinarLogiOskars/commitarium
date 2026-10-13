@@ -28,6 +28,7 @@ import (
 	"github.com/EinarLogiOskars/commitarium/internal/project"
 	"github.com/EinarLogiOskars/commitarium/internal/projectdeletion"
 	"github.com/EinarLogiOskars/commitarium/internal/projectenvironment"
+	"github.com/EinarLogiOskars/commitarium/internal/release"
 	"github.com/EinarLogiOskars/commitarium/internal/toolchain"
 	"github.com/EinarLogiOskars/commitarium/internal/validation"
 	"github.com/EinarLogiOskars/commitarium/internal/vision"
@@ -506,12 +507,30 @@ func run(ctx context.Context, coordinatorConfig config) error {
 		projectDeletionService.WithConversations(projectConversations)
 	}
 	var marketplaceService httpapi.MarketplaceService
+	var releaseService httpapi.ReleaseService
 	if coordinatorConfig.marketplaceURL != "" {
 		connected, err := marketplace.NewService(coordinatorConfig.marketplaceURL, coordinatorConfig.credentialsRoot, marketplaceTimeout)
 		if err != nil {
 			return fmt.Errorf("connect the marketplace: %w", err)
 		}
 		marketplaceService = connected
+		var releaseVisions release.Visions
+		if visionService != nil {
+			releaseVisions = visionService
+		}
+		releases, err := release.NewService(release.Config{
+			LocalBaseURL: coordinatorConfig.forgejoURL, LocalOwner: coordinatorConfig.forgejoOwner,
+			LocalTokenFile: coordinatorConfig.forgejoTokenFile, GitExecutable: coordinatorConfig.gitExecutable,
+			StateRoot: coordinatorConfig.toolchainRoot,
+		}, projectService, toolchainService, releaseVisions, featureService, connected,
+			func(ctx context.Context, owner, name, branch string) (string, error) {
+				head, err := forgejoClient.GetBranch(ctx, owner, name, branch)
+				return head.CommitID, err
+			})
+		if err != nil {
+			return fmt.Errorf("set up releases: %w", err)
+		}
+		releaseService = releases
 	}
 	handler := httpapi.NewWithWorkspaceRealWorkflowDeletionAndModels(
 		projectService,
@@ -536,6 +555,7 @@ func run(ctx context.Context, coordinatorConfig config) error {
 		conversationService,
 		agentUsageReader{agents: agentService, workers: agentWorkerRegistry},
 		marketplaceService,
+		releaseService,
 	)
 
 	if assistantWatcher != nil {

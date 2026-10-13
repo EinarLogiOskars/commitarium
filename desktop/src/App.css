@@ -2470,6 +2470,18 @@ button.danger:not(.ghost) {
   border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
   background: color-mix(in srgb, var(--accent) 8%, var(--panel));
 }
+.dash__release {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+.dash__release h2 {
+  margin: 0 0 4px;
+}
+.dash__release > button {
+  flex: none;
+}
 .dash__cta h2 {
   margin: 0 0 4px;
 }
