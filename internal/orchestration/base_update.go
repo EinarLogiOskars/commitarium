@@ -551,17 +551,7 @@ func (starter *RemoteLeadStarter) continueOrVerifyLeadTurn(
 			}},
 			request: workerhttp.PutAttemptRequest{OutputContract: workerhttp.OutputContractImplementationLead},
 		}
-		go func() {
-			defer starter.release(run.ID)
-			ctx := starter.lifetime
-			continued, err := starter.continueFailedAttempt(ctx, answer, attempt)
-			if err == nil && !continued {
-				err = errors.New("the lead that asked for help could not be continued")
-			}
-			if err != nil {
-				starter.requireReview(ctx, answer, err)
-			}
-		}()
+		go starter.launchBlockerAnswer(answer, attempt)
 		return nil
 	}
 	request := remoteLeadRequest{
@@ -579,4 +569,18 @@ func (starter *RemoteLeadStarter) continueOrVerifyLeadTurn(
 		go starter.launchImplementationPublicationVerification(request, *attempt.Result)
 	}
 	return nil
+}
+
+// launchBlockerAnswer starts the next turn of an agent the user answered with
+// Continue, in the same conversation. The caller has claimed the run.
+func (starter *RemoteLeadStarter) launchBlockerAnswer(answer remoteLeadRequest, attempt workerhttp.Attempt) {
+	defer starter.release(answer.runID)
+	ctx := starter.lifetime
+	continued, err := starter.continueFailedAttempt(ctx, answer, attempt)
+	if err == nil && !continued {
+		err = errors.New("the " + answer.agentName + " could not be continued in a new turn")
+	}
+	if err != nil {
+		starter.requireReview(ctx, answer, err)
+	}
 }
