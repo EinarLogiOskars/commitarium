@@ -556,22 +556,9 @@ func (starter *RemoteLeadStarter) continueOrVerifyLeadTurn(
 		if !guided && !directive.answersBlocker() {
 			return starter.handleInputRequired(ctx, remoteLeadRequest{runID: run.ID, identity: workerhttp.MutationIdentity{AttemptReference: attempt.AttemptReference}}, *attempt.Result)
 		}
-		// The user's Continue answers the lead that asked for help: its next
-		// turn runs in the same conversation.
-		if !starter.claim(run.ID) {
-			return fmt.Errorf("%w: %q", ErrRunAlreadyActive, run.ID)
-		}
-		answer := remoteLeadRequest{
-			runID: run.ID, agentName: "lead agent", allowRecoveryContinuation: true,
-			answerBlocker: true, guided: guided, forceFreshRecovery: directive.Action == RecoveryActionReplace,
-			recoveryMessage: directive.Message, guidanceFromAssistant: directive.FromAssistant,
-			identity: workerhttp.MutationIdentity{AttemptReference: workerhttp.AttemptReference{
-				SessionID: lead.ID, AttemptID: checkpoint.AttemptID,
-			}},
-			request: workerhttp.PutAttemptRequest{OutputContract: workerhttp.OutputContractImplementationLead},
-		}
-		go starter.launchBlockerAnswer(answer, attempt)
-		return nil
+		return starter.answerLeadBlocker(
+			ctx, run, lead, checkpoint, attempt, directive, guided, workerhttp.OutputContractImplementationLead,
+		)
 	}
 	request := remoteLeadRequest{
 		runID: run.ID, agentName: "lead agent",
@@ -587,6 +574,35 @@ func (starter *RemoteLeadStarter) continueOrVerifyLeadTurn(
 	} else {
 		go starter.launchImplementationPublicationVerification(request, *attempt.Result)
 	}
+	return nil
+}
+
+// answerLeadBlocker has the user's Continue answer a lead whose finished turn
+// asked for help or could not be accepted: its next turn runs in the same
+// conversation, as the next try of that turn.
+func (starter *RemoteLeadStarter) answerLeadBlocker(
+	ctx context.Context,
+	run execution.Run,
+	lead execution.Session,
+	checkpoint execution.WorkerAttemptCheckpoint,
+	attempt workerhttp.Attempt,
+	directive RecoveryDirective,
+	guided bool,
+	contract workerhttp.OutputContract,
+) error {
+	if !starter.claim(run.ID) {
+		return fmt.Errorf("%w: %q", ErrRunAlreadyActive, run.ID)
+	}
+	answer := remoteLeadRequest{
+		runID: run.ID, agentName: "lead agent", allowRecoveryContinuation: true,
+		answerBlocker: true, guided: guided, forceFreshRecovery: directive.Action == RecoveryActionReplace,
+		recoveryMessage: directive.Message, guidanceFromAssistant: directive.FromAssistant,
+		identity: workerhttp.MutationIdentity{AttemptReference: workerhttp.AttemptReference{
+			SessionID: lead.ID, AttemptID: checkpoint.AttemptID,
+		}},
+		request: workerhttp.PutAttemptRequest{OutputContract: contract},
+	}
+	go starter.launchBlockerAnswer(answer, attempt)
 	return nil
 }
 

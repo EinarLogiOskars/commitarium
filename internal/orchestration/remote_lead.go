@@ -1098,6 +1098,9 @@ func (starter *RemoteLeadStarter) confirmReviewedMergeReady(ctx context.Context,
 	if err != nil {
 		return fmt.Errorf("load approved lead checkpoint: %w", err)
 	}
+	if checkpoint, err = starter.workflowCheckpoint(ctx, lead, checkpoint); err != nil {
+		return err
+	}
 	readinessVersion, _, acknowledging := workflowAttemptVersionAndTurn(
 		lead.ID, "readiness", checkpoint.AttemptID,
 	)
@@ -1130,6 +1133,9 @@ func (starter *RemoteLeadStarter) confirmLeadOnlyMergeReady(ctx context.Context,
 	checkpoint, err := starter.executions.GetWorkerAttempt(ctx, lead.ID)
 	if err != nil {
 		return fmt.Errorf("load lead implementation checkpoint: %w", err)
+	}
+	if checkpoint, err = starter.workflowCheckpoint(ctx, lead, checkpoint); err != nil {
+		return err
 	}
 	verified, err := starter.sessionActivityRecorded(ctx, lead.ID, checkpoint.AttemptID+":publication-verified")
 	if err != nil {
@@ -1949,6 +1955,9 @@ func (starter *RemoteLeadStarter) recoverIdleImplementationRun(
 	if err != nil {
 		return fmt.Errorf("load implementation attempt: %w", err)
 	}
+	if checkpoint, err = starter.workflowCheckpoint(ctx, lead, checkpoint); err != nil {
+		return err
+	}
 	// An update onto main requested before a restart continues, rather than
 	// the approved commit being checked again (ADR-025).
 	if resumed, err := starter.resumeBaseUpdate(ctx, run); err != nil || resumed {
@@ -2002,6 +2011,12 @@ func (starter *RemoteLeadStarter) recoverIdleReviewingRun(
 	leadCheckpoint, err := starter.executions.GetWorkerAttempt(ctx, lead.ID)
 	if err != nil {
 		return fmt.Errorf("load reviewed implementation checkpoint: %w", err)
+	}
+	if reviewerCheckpoint, err = starter.workflowCheckpoint(ctx, reviewer, reviewerCheckpoint); err != nil {
+		return err
+	}
+	if leadCheckpoint, err = starter.workflowCheckpoint(ctx, lead, leadCheckpoint); err != nil {
+		return err
 	}
 	// An update onto main requested before a restart continues, rather than
 	// the approved commit being checked again (ADR-025).
@@ -2064,7 +2079,16 @@ func (starter *RemoteLeadStarter) recoverIdleReviewingRun(
 			return errors.New("completed lead review response has no result")
 		}
 		if attempt.Result.Disposition == workerhttp.DispositionInputRequired {
-			return starter.handleInputRequired(ctx, remoteLeadRequest{runID: run.ID, identity: workerhttp.MutationIdentity{AttemptReference: attempt.AttemptReference}}, *attempt.Result)
+			if !directive.answersBlocker() {
+				return starter.handleInputRequired(ctx, remoteLeadRequest{runID: run.ID, identity: workerhttp.MutationIdentity{AttemptReference: attempt.AttemptReference}}, *attempt.Result)
+			}
+			// The user's Continue answers a lead that asked for help while
+			// answering a review: it tries the same round again.
+			contract := workerhttp.OutputContractImplementationLead
+			if acknowledging {
+				contract = workerhttp.OutputContractImplementationReadiness
+			}
+			return starter.answerLeadBlocker(ctx, run, lead, leadCheckpoint, attempt, directive, false, contract)
 		}
 		request := remoteLeadRequest{runID: run.ID, agentName: "lead agent", identity: workerhttp.MutationIdentity{
 			AttemptReference: workerhttp.AttemptReference{SessionID: lead.ID, AttemptID: leadCheckpoint.AttemptID},
@@ -2449,6 +2473,43 @@ type remoteLeadRequest struct {
 func interventionAttemptID(sessionID, interventionID string) string {
 	digest := sha256.Sum256([]byte(interventionID))
 	return sessionID + ":intervention:" + hex.EncodeToString(digest[:16])
+}
+
+func isInterventionAttempt(sessionID, attemptID string) bool {
+	return strings.HasPrefix(attemptID, sessionID+":intervention:")
+}
+
+// workflowCheckpoint looks past an answered intervention. The user's message
+// becomes the conversation's latest attempt, but the workflow still rests on
+// the turn before it, so recovery checks and continues that turn. Any other
+// checkpoint is returned as it is.
+func (starter *RemoteLeadStarter) workflowCheckpoint(
+	ctx context.Context,
+	session execution.Session,
+	checkpoint execution.WorkerAttemptCheckpoint,
+) (execution.WorkerAttemptCheckpoint, error) {
+	if !isInterventionAttempt(session.ID, checkpoint.AttemptID) {
+		return checkpoint, nil
+	}
+	events, err := starter.executions.EventsForSession(ctx, session.ID)
+	if err != nil {
+		return execution.WorkerAttemptCheckpoint{}, fmt.Errorf("load the turn before an intervention: %w", err)
+	}
+	prior := execution.WorkerAttemptCheckpoint{SessionID: session.ID}
+	for _, event := range events {
+		if event.WorkerAttemptID != "" && !isInterventionAttempt(session.ID, event.WorkerAttemptID) {
+			prior.AttemptID = event.WorkerAttemptID
+		}
+	}
+	if prior.AttemptID == "" {
+		return checkpoint, nil
+	}
+	for _, event := range events {
+		if event.WorkerAttemptID == prior.AttemptID {
+			prior.LastEventSequence = max(prior.LastEventSequence, event.WorkerEventSequence)
+		}
+	}
+	return prior, nil
 }
 
 func replyAttemptID(sessionID, commandID string) string {
@@ -3933,8 +3994,14 @@ func (starter *RemoteLeadStarter) implementationContinuationRequest(
 		storedFeature.GoalAcceptedAt == nil || starter.workspaces == nil {
 		return remoteLeadRequest{}, ErrCommandNotAllowed
 	}
+	// A reply after an answered intervention continues the implementation
+	// turn before it.
+	prior, err := starter.workflowCheckpoint(ctx, lead, checkpoint)
+	if err != nil {
+		return remoteLeadRequest{}, err
+	}
 	attemptVersion, turn, implementing := workflowAttemptVersionAndTurn(
-		lead.ID, "implementation", checkpoint.AttemptID,
+		lead.ID, "implementation", prior.AttemptID,
 	)
 	if !implementing || attemptVersion != run.PlanVersion {
 		return remoteLeadRequest{}, ErrCommandNotAllowed
@@ -4331,7 +4398,14 @@ func (starter *RemoteLeadStarter) continueFailedAttempt(
 	if err != nil {
 		return false, err
 	}
-	nextAttemptID, err := recoverySuccessorAttemptID(session.ID, checkpoint.AttemptID)
+	// The conversation's latest attempt may be an answered intervention; the
+	// successor still continues the workflow turn before it, and takes that
+	// turn's next identity.
+	predecessor := checkpoint.AttemptID
+	if attempt.AttemptID != checkpoint.AttemptID && isInterventionAttempt(session.ID, checkpoint.AttemptID) {
+		predecessor = attempt.AttemptID
+	}
+	nextAttemptID, err := recoverySuccessorAttemptID(session.ID, predecessor)
 	if err != nil {
 		return false, err
 	}
@@ -6734,6 +6808,46 @@ func (starter *RemoteLeadStarter) handleInputRequired(
 			strings.Join(result.EnvironmentRequest.SystemPackages, ", ")+". Review the request before provisioning.",
 		execution.RunWaitKindBlocker,
 	)
+}
+
+// ResumeAfterEnvironmentRejection tells the lead that the packages it asked
+// for were declined and gets it going again. A lead resting on the turn that
+// asked gets the message as its next turn, as any reply. Otherwise the run is
+// blocked on something it cannot take a reply for (a later turn that failed,
+// or a turn of another kind), and the message goes with the user's Continue
+// instead, so a rejection never leaves the lead stranded. A run that is not
+// blocked (working again, paused by the user, or past the request) is not
+// waiting on it and needs nothing.
+func (starter *RemoteLeadStarter) ResumeAfterEnvironmentRejection(
+	ctx context.Context,
+	request projectenvironment.Request,
+	message string,
+) error {
+	commandID := request.ID + ":rejected"
+	_, err := starter.SendCommand(ctx, request.SessionID, worker.Command{
+		ID: commandID, Type: worker.CommandMessage, Message: message,
+	})
+	if err == nil || !errors.Is(err, ErrCommandNotAllowed) {
+		return err
+	}
+	run, getErr := starter.executions.GetRun(ctx, request.RunID)
+	if getErr != nil {
+		return errors.Join(err, getErr)
+	}
+	if run.Status != execution.RunStatusWaitingForUser || run.Paused ||
+		run.WaitKind != execution.RunWaitKindBlocker {
+		return nil
+	}
+	_, admitted, recoverErr := starter.RecoverBlockerWithDirective(ctx, run.ID, commandID, RecoveryDirective{
+		Action: RecoveryActionContinue, Message: message,
+	})
+	if recoverErr != nil {
+		return recoverErr
+	}
+	if !admitted {
+		return err
+	}
+	return nil
 }
 
 func (starter *RemoteLeadStarter) waitRun(
