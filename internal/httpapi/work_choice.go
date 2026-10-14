@@ -20,8 +20,8 @@ import (
 // Start form, or the assistant in its actions. The coordinator never picks
 // for them; it only refuses a choice that cannot run, with a reason the
 // assistant (or the user) can act on: no agents named, an agent that is gone,
-// signed out, not connected, or at its usage limit, or a model its worker
-// does not offer. Premium models still need the user's approval on the
+// signed out, or at its usage limit, or a model its worker does not offer. A
+// worker that does not answer does not block: it may only be restarting. Premium models still need the user's approval on the
 // assistant's actions (premiumModels).
 
 // choiceError is a refused choice of agents and models.
@@ -82,8 +82,8 @@ func (api *API) checkWorkChoice(
 	return nil
 }
 
-// agentReady refuses an agent that is gone, signed out, not connected, or at
-// its usage limit. usage is the agents' latest reports; nil skips what only
+// agentReady refuses an agent that is gone, signed out, or at its usage
+// limit. usage is the agents' latest reports; nil skips what only
 // the workers know.
 func (api *API) agentReady(ctx context.Context, agentID string, usage []AgentUsage) error {
 	if api.agents != nil {
@@ -117,8 +117,9 @@ func (api *API) agentReady(ctx context.Context, agentID string, usage []AgentUsa
 	}
 	index := slices.IndexFunc(usage, func(reported AgentUsage) bool { return reported.Agent == agentID })
 	if index < 0 {
-		return &choiceError{status: http.StatusConflict, code: "agent_not_connected",
-			message: fmt.Sprintf("agent %q is not connected right now; connect it on the Agents page, or choose another agent", agentID)}
+		// A worker that did not answer may only be restarting (a CLI update,
+		// say); the run's own retry waits for it (#50), so it does not block.
+		return nil
 	}
 	if limited, until := usage[index].LimitedUntil(now); limited {
 		return atLimit(agentID, until)

@@ -644,9 +644,9 @@ func TestFeatureSettingsMigrationBackfillsEffectiveValues(t *testing.T) {
 	}
 }
 
-// An install that already had projects when agents arrived keeps its two
-// subscriptions as agents; a new install starts with none (ADR-027).
-func TestAgentsMigrationSeedsOnlyInstallsWithProjects(t *testing.T) {
+// An install with projects keeps the two seeded agents; one with no projects,
+// new or not, ends with none (ADR-027).
+func TestUnusedSeededAgentsAreRemoved(t *testing.T) {
 	migrations, err := fs.Sub(migrationFiles, "migrations")
 	if err != nil {
 		t.Fatalf("open embedded migrations: %v", err)
@@ -680,8 +680,11 @@ func TestAgentsMigrationSeedsOnlyInstallsWithProjects(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create migration provider: %v", err)
 	}
-	if _, err := provider.UpTo(t.Context(), 38); err != nil {
-		t.Fatalf("migrate the schema before agents: %v", err)
+	if _, err := provider.UpTo(t.Context(), 50); err != nil {
+		t.Fatalf("migrate the schema before removing unused agents: %v", err)
+	}
+	if agents := count(existing); agents != 2 {
+		t.Fatalf("before the removal the install has %d agents, want the two seeded", agents)
 	}
 	if _, err := existing.ExecContext(t.Context(), `
 		INSERT INTO projects (id, name, recovery_policy, lead_provider, reviewer_provider, created_at)

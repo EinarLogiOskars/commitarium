@@ -18,9 +18,10 @@ which tells a non-technical user nothing.
 
 **Agents start empty.** A new install has no agents; the Agents page starts
 with adding one (a name and Codex or Claude) and goes straight on to its
-sign-in. Installs that already had projects keep their two agents: the
-migration that created them now seeds them only when projects exist, and no
-agent is ever deleted.
+sign-in. Installs that already had projects keep their two agents. The
+migration that created them is left as it was; a later one (00051) removes
+the two seeded agents only where no project exists, so nothing was ever built
+with them.
 
 **Guidance instead of failures.** With no agent, the assistant (and New app,
 which opens it) says in plain words to add one, with an "Add an agent"
@@ -57,9 +58,10 @@ none ("not chosen") until it starts with a choice.
 **The coordinator never picks.** It only refuses a choice that cannot run,
 before anything changes, with a reason the assistant or the user can act on:
 no agents named, an agent that is gone, signed out (a run waits on its
-login), not connected (its worker does not answer), or at its usage limit (a
-run waits on it, or its latest report says so), or a model its worker does
-not offer. Premium models still need the user's approval on the assistant's
+login), or at its usage limit (a run waits on it, or its latest report says
+so), or a model its worker does not offer. A worker that does not answer does
+not block a Start: it may only be restarting, and the run's own retry of
+interrupted turns waits for it. Premium models still need the user's approval on the assistant's
 actions. When autopilot's action is refused, the assistant hears why and may
 choose again, at most twice in a row before the card is left to the user.
 A work order without a reviewer step names its lead for the unused reviewer
@@ -71,9 +73,9 @@ role, which never runs. There is no per-project agent pinning.
   provisioning writes an empty overlay; approved environment images are built
   for the providers whose worker image is present and the rest once an agent
   of that provider brings it; the CLI updater follows whatever workers run.
-- Every Start asks the agents' workers for their usage; a worker that is
-  restarting is briefly "not connected" and the Start is refused with that
-  reason.
+- Every Start asks the agents' workers for their usage; one that does not
+  answer is not refused, so a Start can begin on a worker that is down and
+  wait in the run's automatic retry.
 - Ready work orders from before this change keep their agents and models; one
   that never had models (from before model selection) must have them chosen
   at Start.

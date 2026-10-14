@@ -99,7 +99,7 @@ func TestTheCoordinatorRefusesAChoiceThatCannotRun(t *testing.T) {
 		"no models chosen":        {providers: codexAndClaude, usage: connected, code: "agents_not_chosen"},
 		"an agent that is gone":   {providers: project.AgentProviders{Lead: project.AgentProviderCodex, Reviewer: project.AgentProviderClaude, LeadAgent: "codex-old", ReviewerAgent: "claude"}, models: models, usage: connected, code: "agent_not_found"},
 		"a signed-out agent":      {providers: codexAndClaude, models: models, usage: connected, logins: map[string][]string{"claude": {"run_1"}}, code: "agent_signed_out"},
-		"an unconnected agent":    {providers: codexAndClaude, models: models, usage: connected[:1], code: "agent_not_connected"},
+		"an unanswering worker":   {providers: codexAndClaude, models: models, usage: connected[:1]},
 		"a run waits on a limit":  {providers: codexAndClaude, models: models, usage: connected, limits: []execution.LimitWait{{AgentID: "codex", ResetsAt: &later}}, code: "agent_at_limit"},
 		"a reset limit wait":      {providers: codexAndClaude, models: models, usage: connected, limits: []execution.LimitWait{{AgentID: "codex", ResetsAt: &now}}},
 		"a limited usage window":  {providers: codexAndClaude, models: models, usage: stubAgentUsage{connected[0], {Agent: "claude", Windows: []workerhttp.UsageWindow{{Name: "weekly", Limited: true, ResetsAt: &later}}}}, code: "agent_at_limit"},

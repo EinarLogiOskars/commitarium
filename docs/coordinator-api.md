@@ -1616,7 +1616,6 @@ refuses a choice that cannot run, each with a message that says what to do:
   the steps have a reviewer).
 - `409 agent_not_found`: a named agent does not exist.
 - `409 agent_signed_out`: a run waits for the agent to log in again.
-- `409 agent_not_connected`: the agent's worker does not answer.
 - `409 agent_at_limit`: the agent is at its usage limit, as a run waiting on
   it or its latest usage report says, with the reset time when known.
 - `400 model_unavailable` or `503 model_catalog_unavailable`: the agent's
