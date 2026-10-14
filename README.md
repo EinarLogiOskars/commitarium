@@ -9,60 +9,77 @@ and ship software together—without taking control away from you.**
 
 ![Commitarium workshop](desktop/src/assets/loading/workshop.png)
 
-Commitarium turns multi-agent coding into a visible, durable workflow. A lead
-agent helps refine the goal and implement it, a separate reviewer challenges
-the plan and code, and you choose where human approval is required. Work stays
-on your machine inside a Docker-managed environment with an internal Forgejo
-instance for branches, pull requests, reviews, and audit history.
+Commitarium builds and keeps your own apps. Describe what you want in a
+sentence ("a shelf for my Funko Pops", "a calorie tracker") and its assistant
+plans the app, hands the work to coding agents, checks the result, and opens
+the finished app in its own window. To change it later, ask: "make the buttons
+blue".
+
+Behind that, it is a full software workshop for developers too: a lead agent
+builds, a reviewer from a different provider checks the plan and the code,
+every change goes through a pull request, and you decide how much the
+assistant may do on its own. Everything runs on your machine, in Docker, with
+a private Forgejo instance keeping the history.
 
 > [!IMPORTANT]
-> Commitarium is currently pre-1.0 early-access software. The core workflow is
-> functional and tested, but operating-system code signing, broader platform
-> testing, and some product polish are still in progress. Use it on repositories
-> you can recover.
+> Commitarium is pre-1.0 early-access software. The core is in daily use and
+> tested, but expect rough edges. Use it on repositories you can recover.
 
 ## What it does
 
-- **Structured agent collaboration** — move work from goal clarification
-  through planning, implementation, independent review, and merge.
-- **Codex and Claude support** — choose either provider independently for the
-  lead and reviewer roles.
-- **Human control** — pause a run, intervene in an existing agent conversation,
-  require review at each phase, or opt into bounded run-to-completion behavior.
-- **Independent review** — reviewer sessions, credentials, worker state, and
-  Forgejo identities stay separate from the implementing agent.
-- **Durable recovery** — sessions, workflow transitions, and delivery attempts
-  survive application and container restarts.
-- **Local audit trail** — an internal Forgejo instance records branches, pull
-  requests, review decisions, comments, and agent authorship.
-- **Controlled handoff** — accepted work can be synchronized into your local
-  repository as one clean commit; publishing it upstream remains an explicit
-  action.
-- **Local-first runtime** — the desktop app manages a versioned Docker Compose
-  stack without giving agent containers your Docker socket or upstream Git
-  credentials.
+- **Apps from a sentence.** The Apps area is where Commitarium opens. **New
+  app** turns a description into a project with a written plan, a chosen
+  stack, and work under way. A finished app opens in its own window.
+- **One assistant.** It writes the project's vision, breaks it into work
+  orders, picks agents and models for each, and starts them. Every project has
+  one of two modes:
+  - **Assists me** (the default): the assistant proposes and you approve. Your
+    own work orders stay yours.
+  - **Builds everything for me**: the assistant owns the project end to end.
+    It writes the vision, sets up the stack and the preview, and creates,
+    starts, and finishes the work, including drafts you add. Apps made through
+    New app start in this mode.
+- **Autopilot that recovers.** Interrupted turns retry on their own, approved
+  work is brought up to date with main before it merges, and a failure pauses
+  a work order instead of ending it. When the assistant can't fix something,
+  it tells you in plain words with one thing to do.
+- **Independent review.** Lead and reviewer run as separate sessions, ideally
+  on different providers, so no model signs off on its own work.
+- **Work that fits the task.** A work order can run in full (clarify, plan,
+  implement, review), planned, or as a quick change. Sessions let you steer an
+  agent turn by turn for small edits.
+- **Agents you add.** Sign in to Codex or Claude accounts on the Agents page.
+  Commitarium shows each account's usage limits and keeps the CLIs up to date;
+  the assistant spreads work by what is left.
+- **Verified previews.** Commitarium runs the app's setup before calling it
+  ready. If the app doesn't start, the lead gets the evidence and up to three
+  tries to fix it.
+- **Packages you approve.** Agents ask for the system packages they need; you
+  approve or decline them, and the workers' images are rebuilt to include
+  them.
+- **Marketplace (early).** Release an app to a shared marketplace and install
+  other people's apps as your own copy.
+- **Developer mode.** Shows the projects, the work order pages, the Forgejo
+  history, and the system's status. Without it, Commitarium is just the apps.
 
-## The workflow
+## How a change happens
 
 ```text
-Describe the work
+You ask (or the assistant proposes)
        ↓
-Clarify the goal with the lead
+The assistant writes it up as a work order and picks the agents
        ↓
-Lead proposal ↔ independent reviewer
+Lead plans ↔ reviewer challenges the plan
        ↓
-Approve the plan
+Lead implements → reviewer checks the code → corrections
        ↓
-Implementation → code review → corrections
+Brought up to date with main, then merged (by you or by policy)
        ↓
-Human-approved or policy-approved merge
-       ↓
-Sync one clean commit to your local repository
+The app's preview updates; developers can sync the result to their own repository
 ```
 
-Every important transition is explicit and persisted. Commitarium can automate
-routine handoffs, but goal changes, safety limits, blockers, and required merge
-approval always return control to you.
+Every step is recorded and survives restarts. How many of these steps need
+your approval depends on the project's mode and merge policy.
 
 ## Install
 
@@ -70,8 +87,10 @@ approval always return control to you.
 
 - Docker Desktop with Docker Compose on macOS or Windows
 - Docker Engine with the Compose v2 plugin on Linux
-- A Codex or Claude account for each provider assigned to a lead or reviewer
-  role
+- A Codex or Claude account (both work best: lead and reviewer then come
+  from different providers)
+- Git on the host. On macOS, the first use prompts you to install Apple's
+  Command Line Tools
 
 Supported operating-system and Docker versions are listed in
 [the support matrix](docs/support-matrix.md).
@@ -94,7 +113,7 @@ Start Docker, then open Commitarium. On launch, the app:
 3. pulls the matching versioned service images from GHCR;
 4. initializes the private local services and credentials;
 5. waits for the core stack to become healthy; and
-6. opens directly into Projects.
+6. opens on Apps.
 
 Service images are available for both `linux/amd64` and `linux/arm64`. Apple
 Silicon therefore runs native ARM containers rather than emulating Intel
@@ -123,25 +142,24 @@ To report a security problem, see [the security policy](SECURITY.md).
 
 ## Getting started
 
-1. Open **Providers** and connect the lead and reviewer profiles you want to
-   use. Lead and reviewer profiles remain separate even when both use the same
-   provider account.
-2. Import an existing clean Git repository.
-3. Create a work order and describe the outcome you want.
-4. Refine and accept the goal, then follow the planning and implementation
-   checkpoints.
-5. After an approved merge, synchronize the result to your local repository.
+1. Open **Agents** and add an agent: give it a name, choose Codex or Claude,
+   and sign in. Add a second one from the other provider if you can.
+2. In **Apps**, choose **New app** and describe what you want. The assistant
+   takes it from there and opens the app when it is ready.
+3. To work on an existing repository instead, turn on **Developer mode** in
+   Settings, import a clean Git repository under **Projects**, and talk to the
+   project's assistant or create a work order yourself.
 
-Commitarium keeps agent-side iteration in its internal forge. Your ordinary
-repository receives the accepted result only through the explicit sync flow,
-and pushing that result to GitHub, GitLab, or another remote is separate.
+Agents iterate in Commitarium's internal Forgejo. Your own repository receives
+an accepted result only through the explicit sync, and pushing it to GitHub,
+GitLab, or another remote is a separate step.
 
 ## Architecture
 
 ```text
 ┌────────────────────────────────────────────────────────────┐
 │ Native desktop app (Tauri + React)                         │
-│ Docker lifecycle · provider login · approvals · local Git  │
+│ Docker lifecycle · agent login · previews · CLI updates    │
 └───────────────────────────┬────────────────────────────────┘
                             │ narrow local APIs
 ┌───────────────────────────▼────────────────────────────────┐
@@ -154,15 +172,15 @@ and pushing that result to GitHub, GitLab, or another remote is separate.
 └────────────────────────────────────────────────────────────┘
 ```
 
-The Go coordinator owns the workflow state machine and restart recovery.
-Forgejo is the durable collaboration record. Provider workers supervise exact
+The Go coordinator owns the workflow state machine, the assistant, autopilot,
+and restart recovery. Forgejo is the durable collaboration record. Provider workers supervise exact
 CLI sessions and expose a narrow authenticated API to the coordinator. The
-Tauri backend is the trusted boundary for Docker, provider authentication, and
-explicit host-side Git operations.
+Tauri backend is the trusted boundary for Docker, agent sign-in, running
+previews, and explicit host-side Git operations.
 
-See the [product and architecture plan](PROJECT_PLAN.md) and the
-[architecture decision records](docs/adr) for the reasoning behind these
-boundaries.
+See the [1.0 vision](V1_VISION.md), the [product and architecture
+plan](PROJECT_PLAN.md), and the [architecture decision records](docs/adr) for
+the reasoning behind these boundaries.
 
 ## Security and data boundaries
 
@@ -240,7 +258,9 @@ and Rust formatting, Clippy and tests for every pull request and push to `main`.
 
 | Document | Purpose |
 | --- | --- |
-| [Product and architecture plan](PROJECT_PLAN.md) | Product principles, scope, and system design |
+| [1.0 vision](V1_VISION.md) | Where Commitarium is going: assistant, work orders, sessions, apps |
+| [Product and architecture plan](PROJECT_PLAN.md) | Product principles, scope, and the foundation's system design |
+| [Apps](APPS_PLAN.md) · [Assistant](ASSISTANT_PLAN.md) · [Previews](PREVIEW_PLAN.md) · [Marketplace](MARKETPLACE_PLAN.md) | Plans for the main areas |
 | [Security policy](SECURITY.md) | Supported versions, reporting, and what counts as a vulnerability |
 | [Support matrix](docs/support-matrix.md) | Supported host operating systems, Docker, and Compose |
 | [Threat model](docs/threat-model.md) | Trust assumptions, protected assets, and boundaries |
