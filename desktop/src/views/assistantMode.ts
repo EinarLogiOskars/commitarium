@@ -34,7 +34,13 @@ export function assistantModeNote(mode: AssistantMode): string {
 // made, say), which stay cards. Closing is left as a card: only autopilot's
 // own duplicates close by themselves.
 export function appliesItself(action: AssistantAction): boolean {
-  const work = ["create_work_order", "start_work_order", "change_models", "continue_work_order"];
+  const work = [
+    "create_work_order",
+    "start_work_order",
+    "change_models",
+    "continue_work_order",
+    "set_up_preview",
+  ];
   const leftForUser = action.status === "proposed" && !!action.auto_tried;
   return (
     work.includes(action.type) &&

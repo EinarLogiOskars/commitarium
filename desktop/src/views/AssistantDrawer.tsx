@@ -499,7 +499,9 @@ function ActionCard({
                 ? "Close a work order"
                 : action.type === "create_app"
                   ? `New app: ${action.title}`
-                  : "Switch models";
+                  : action.type === "set_up_preview"
+                    ? "Set up the app's preview"
+                    : "Switch models";
   const models = [
     action.lead_model &&
       `Lead ${action.lead_agent ? agentName(agents, action.lead_agent) + " · " : ""}${modelName(action.lead_model)}`,
@@ -518,6 +520,12 @@ function ActionCard({
       {action.type === "continue_work_order" && (
         <p className="assistant-action__desc">
           {action.guidance ? `Guidance: ${action.guidance}` : "Retries without guidance."}
+        </p>
+      )}
+      {action.type === "set_up_preview" && (
+        <p className="assistant-action__desc">
+          An agent adjusts the app&apos;s setup; it merges once Commitarium has started the app for
+          real.{action.guidance ? ` What fails: ${action.guidance}` : ""}
         </p>
       )}
       <ul className="assistant-action__facts">
@@ -646,6 +654,7 @@ const APPLY_LABEL: Record<AssistantAction["type"], string> = {
   continue_work_order: "Continue",
   close_work_order: "Close",
   create_app: "Create app",
+  set_up_preview: "Set up preview",
 };
 
 const STATUS_LABEL: Record<AssistantAction["status"], string> = {
@@ -765,7 +774,7 @@ function isPremium(model: string, families: string[]): boolean {
 
 // Where it builds everything, what the assistant set going, said in a line.
 function AppliedLine({ action }: { action: AssistantAction }) {
-  const what = action.title || "the work";
+  const what = action.title || (action.type === "set_up_preview" ? "the app's setup" : "the work");
   const failed = action.status === "failed";
   const done = action.status === "applied";
   const verb =
@@ -773,7 +782,9 @@ function AppliedLine({ action }: { action: AssistantAction }) {
       ? "Switching models"
       : action.type === "continue_work_order"
         ? "Picking the work back up"
-        : "Starting";
+        : action.type === "set_up_preview"
+          ? "Fixing"
+          : "Starting";
   return (
     <p className={`muted assistant__applied ${failed ? "assistant__applied--failed" : ""}`}>
       {failed

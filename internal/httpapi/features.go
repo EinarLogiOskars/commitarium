@@ -50,6 +50,9 @@ type featureResponse struct {
 	// CreatedBy is "user" for a work order the user made by hand, which the
 	// assistant never acts on by itself, or "assistant" (ADR-027).
 	CreatedBy feature.Creator `json:"created_by"`
+	// PreviewCheck marks a work order that merges only once Commitarium's
+	// preview check of its commit passed (ADR-028).
+	PreviewCheck bool `json:"preview_check,omitempty"`
 	// Session reports a session's agent activity in feature lists (ADR-019).
 	Session   *sessionActivityResponse `json:"session,omitempty"`
 	CreatedAt time.Time                `json:"created_at"`
@@ -312,6 +315,7 @@ func newFeatureResponse(storedFeature feature.Feature) featureResponse {
 		Kind:                       featureKind(storedFeature.Kind),
 		Background:                 storedFeature.Background,
 		CreatedBy:                  featureCreator(storedFeature.CreatedBy),
+		PreviewCheck:               storedFeature.PreviewCheck,
 		CreatedAt:                  storedFeature.CreatedAt,
 		UpdatedAt:                  storedFeature.UpdatedAt,
 	}

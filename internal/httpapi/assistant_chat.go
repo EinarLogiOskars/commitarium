@@ -339,6 +339,8 @@ func (api *API) approveConversationActionHandler(w http.ResponseWriter, r *http.
 		result, ok = api.applyAddVisionItem(w, r, scope, action)
 	case featureartifact.AssistantContinueWorkOrder:
 		result, ok = api.applyContinueWorkOrder(w, r, scope, action)
+	case featureartifact.AssistantSetUpPreview:
+		result, workOrderID, ok = api.applySetUpPreview(w, r, scope, action)
 	case featureartifact.AssistantCloseWorkOrder:
 		closed, err := api.closeWorkOrder(r.Context(), scope, action.WorkOrderID, "assistant-"+action.ID)
 		if err != nil {
@@ -612,6 +614,29 @@ func (api *API) premiumModels(ctx context.Context, projectID string, action conv
 
 // applyContinueWorkOrder continues a work order whose run waits on a
 // blocker, as the Continue and Add guidance buttons do.
+// applySetUpPreview starts the "Set up preview" flow for the assistant: a
+// fix of the app's preview, or its setup when the repository has no compose
+// file yet. One that already runs is answered as it is.
+func (api *API) applySetUpPreview(
+	w http.ResponseWriter, r *http.Request, projectID string, action conversations.Action,
+) (string, string, bool) {
+	if api.toolchains == nil {
+		writePreviewSetupError(w, projectID, errPreviewSetupUnavailable)
+		return "", "", false
+	}
+	started, err := api.setUpPreview(r.Context(), projectID, action.Guidance, nil)
+	if err != nil {
+		writePreviewSetupError(w, projectID, err)
+		return "", "", false
+	}
+	if started == nil {
+		writeError(w, http.StatusConflict, "preview_nothing_to_run", "the project has no code to preview yet")
+		return "", "", false
+	}
+	return fmt.Sprintf("Setting the preview up in “%s” (%s); it merges once Commitarium's check shows the app runs.",
+		started.Title, started.ID), started.ID, true
+}
+
 func (api *API) applyContinueWorkOrder(
 	w http.ResponseWriter, r *http.Request, projectID string, action conversations.Action,
 ) (string, bool) {

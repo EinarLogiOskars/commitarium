@@ -287,6 +287,7 @@ type API struct {
 	toolchainAssistant ToolchainAssistantService
 	environments       ProjectEnvironmentService
 	validations        ValidationService
+	previewChecks      PreviewCheckService
 	usage              FeatureUsageService
 	assistant          WorkOrderAssistant
 	agents             AgentService
@@ -401,6 +402,7 @@ func newAPI(
 	var projectDeletion ProjectDeletionService
 	var environments ProjectEnvironmentService
 	var validations ValidationService
+	var previewChecks PreviewCheckService
 	var usage FeatureUsageService
 	var workOrderAssistant WorkOrderAssistant
 	var agents AgentService
@@ -412,6 +414,8 @@ func newAPI(
 	var installService InstallService
 	for _, extra := range extras {
 		switch typed := extra.(type) {
+		case PreviewCheckService:
+			previewChecks = typed
 		case InstallService:
 			installService = typed
 		case ReleaseService:
@@ -458,6 +462,7 @@ func newAPI(
 		toolchainAssistant: toolchainAssistant,
 		environments:       environments,
 		validations:        validations,
+		previewChecks:      previewChecks,
 		usage:              usage,
 		assistant:          workOrderAssistant,
 		agents:             agents,
@@ -523,6 +528,15 @@ func newAPI(
 		mux.HandleFunc("POST /api/v1/projects/{id}/toolchain/detect", api.detectProjectToolchainHandler)
 		mux.HandleFunc("POST /api/v1/projects/{id}/preview-setup", api.startPreviewSetupHandler)
 		mux.HandleFunc("POST /api/v1/projects/{id}/preview-setup/failed", api.previewFailedHandler)
+	}
+	if projects != nil {
+		mux.HandleFunc("POST /api/v1/projects/{id}/preview-failure", api.reportPreviewFailureHandler)
+	}
+	if previewChecks != nil && features != nil && executionService != nil {
+		mux.HandleFunc("GET /api/v1/preview-checks/pending", api.listPendingPreviewChecksHandler)
+		mux.HandleFunc("POST /api/v1/preview-checks/{id}/claim", api.claimPreviewCheckHandler)
+		mux.HandleFunc("POST /api/v1/preview-checks/{id}/complete", api.completePreviewCheckHandler)
+		mux.HandleFunc("GET /api/v1/projects/{projectID}/features/{id}/preview-checks", api.listFeaturePreviewChecksHandler)
 	}
 	if toolchainAssistant != nil {
 		mux.HandleFunc("POST /api/v1/projects/{id}/toolchain/assistant-sessions", api.startToolchainAssistantHandler)

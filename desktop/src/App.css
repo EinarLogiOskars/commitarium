@@ -631,6 +631,28 @@ body {
   overflow: auto;
   white-space: pre-wrap;
 }
+/* What each container of a failed preview or preview check did. */
+.evidence {
+  list-style: none;
+  margin: 8px 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  text-align: left;
+  width: 100%;
+}
+.evidence__service summary {
+  cursor: pointer;
+  padding: 2px 0;
+}
+.evidence__service--bad summary strong {
+  color: var(--bad);
+}
+.evidence__service pre {
+  margin-top: 4px;
+  max-height: 240px;
+}
 .run {
   display: flex;
   flex-direction: column;

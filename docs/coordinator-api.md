@@ -2444,7 +2444,56 @@ mark it `"background": true`; the desktop leaves it out of the user's lists.
   reports a preview that failed to start. It starts a background "Fix the
   preview" with the error, at most two after the latest setup, and answers
   like the setup. Once the fixes are used up it answers
-  `409 preview_fixes_exhausted`.
+  `409 preview_fixes_exhausted`. An optional `evidence` (the preview check's
+  shape below: each container's state, exit code, health, and last log lines)
+  goes into the fix's description. `"chosen": true` is the user's "Set up
+  preview": it starts a fix whatever the count, or the setup when the
+  repository has no compose file.
+- `POST /api/v1/projects/{id}/preview-failure` with the same body tells the
+  project's assistant that the preview failed to start, with what each
+  container did, and wakes it; it starts nothing and answers `204`. A project
+  whose assistant conversation was never started has nobody to tell.
+
+Every such work order, and a project's "Set the project up", carries
+`"preview_check": true` and merges only once a preview check of its exact
+commit passed (ADR-028).
+
+### Preview checks
+
+When a `preview_check` work order reaches the merge gate, the coordinator
+records a check of the exact commit and waits (`merge_gate`, "Commitarium is
+checking that the app runs…"). The desktop runs it:
+
+- `GET /api/v1/preview-checks/pending` lists the checks waiting for it,
+  oldest first, as `{"checks": [...]}`.
+- `POST /api/v1/preview-checks/{id}/claim` (empty body) marks one `running`
+  and answers it. A check already running or finished is answered as it is.
+- `POST /api/v1/preview-checks/{id}/complete` with
+  `{"passed": bool, "evidence": {...}}` records the result and moves the work
+  order on. A finished check is answered as it is, so a repeated completion
+  changes nothing.
+- `GET /api/v1/projects/{projectID}/features/{id}/preview-checks` lists a
+  work order's checks, newest first.
+
+A check is `{id, project_id, feature_id, run_id, commit_id, attempt, status,
+evidence, created_at, updated_at, claimed_at, completed_at}`, with `status`
+`pending`, `running`, `passed`, `failed`, or `expired` (replaced by a newer
+attempt for the same commit). Its `evidence` is `{stage, reason, open, output,
+services}`: `stage` is how far it got (`source`, `setup`, `build`, `start`,
+`ready`), `open` the `service:port` it opened, `output` the end of the build
+output, and each service `{service, state, exit_code, health, logs}` with its
+last 60 log lines. Text is cut to its end: 16 KiB of output and of each log.
+
+A pass goes on to isolated validation, when configured, and the merge by the
+work order's policy; merging before it answers `409 merge_not_ready`. A
+failure leaves the merge gate and hands the evidence to the same lead
+conversation, at most three times; the run stays `running` meanwhile. After
+that the run blocks with one plain reason ("The app's setup couldn't be made
+to run. Here's what's failing: …"); Continue gives the lead one more try with
+the user's guidance. A check no desktop picks up within 15 minutes (or does
+not finish within 45) blocks the run with "Open Commitarium to finish
+checking the app's setup."; a desktop that opens later still finishes it, and
+Continue asks for a new attempt.
 
 The setup asks the agent to name what the preview opens at the top level of
 the compose file:

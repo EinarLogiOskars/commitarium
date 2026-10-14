@@ -2,6 +2,7 @@ package conversations
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -193,7 +194,9 @@ func (watcher Watcher) snapshot(ctx context.Context, projectID string) (view, er
 	}
 	seen.Work = make(map[string]work, len(features))
 	for _, item := range features {
-		if item.Background {
+		// Background work is Commitarium's own, except setting the preview
+		// up, which the assistant can start and must hear about (ADR-028).
+		if item.Background && !item.PreviewCheck {
 			continue
 		}
 		current := work{Title: item.Title, Session: item.Kind == feature.KindSession, State: item.State}
@@ -440,6 +443,42 @@ func sameSignatures(a, b map[string]string) bool {
 		}
 	}
 	return true
+}
+
+// Report tells a project's assistant about something Commitarium saw outside
+// the project's work, such as an app that failed to start, and wakes it. A
+// project whose conversation was never started has nobody to tell.
+func (service *Service) Report(_ context.Context, scope, text string) error {
+	text = strings.TrimSpace(text)
+	if scope == TopLevel || !scopePattern.MatchString(scope) || text == "" {
+		return ErrNotFound
+	}
+	service.mu.Lock()
+	if _, err := os.Stat(service.path(scope)); errors.Is(err, os.ErrNotExist) {
+		service.mu.Unlock()
+		return nil
+	}
+	stored, err := service.read(scope)
+	if err != nil {
+		service.mu.Unlock()
+		return err
+	}
+	// The same report from two windows is told once.
+	if count := len(stored.Messages); count > 0 && stored.Messages[count-1].Role == "event" &&
+		stored.Messages[count-1].Text == text {
+		service.mu.Unlock()
+		return nil
+	}
+	now := service.now()
+	stored.addEvent(text, now)
+	stored.PendingEvents = append(stored.PendingEvents, text)
+	stored.UpdatedAt = now
+	err = service.write(stored)
+	service.mu.Unlock()
+	if err == nil {
+		service.nudgeWatcher()
+	}
+	return err
 }
 
 func eventsPrompt(events []string) string {

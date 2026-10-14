@@ -10,6 +10,7 @@ mod import;
 mod phase4;
 mod phase5;
 mod preview;
+mod preview_check;
 mod preview_compose;
 mod profiles;
 mod store;
@@ -101,6 +102,7 @@ pub fn run() {
             preview::reset_preview_data,
             preview::get_preview_status,
             preview::get_preview_logs,
+            preview_check::run_preview_check,
             profiles::list_profiles,
             profiles::begin_login,
             profiles::submit_login_code,

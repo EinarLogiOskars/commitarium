@@ -44,7 +44,7 @@ func TestPreviewSetupStartsABackgroundQuickChangeWithoutACompose(t *testing.T) {
 		t.Fatalf("setup = %+v err=%v", started, err)
 	}
 	overrides := features.receivedOverrides
-	if !overrides.Background || overrides.Steps == nil || !overrides.Steps.SkipPlan || !overrides.Steps.SkipReviewer ||
+	if !overrides.Background || !overrides.PreviewCheck || overrides.Steps == nil || !overrides.Steps.SkipPlan || !overrides.Steps.SkipReviewer ||
 		overrides.MergePolicy == nil || *overrides.MergePolicy != project.MergePolicyAutoAfterGates ||
 		!strings.Contains(features.receivedDescription, "x-commitarium-preview") ||
 		!strings.Contains(features.receivedDescription, "live reload") {
@@ -102,11 +102,11 @@ func TestPreviewFixesStopAfterTheAttemptsSinceTheLastSetup(t *testing.T) {
 		t.Fatalf("fixes since setup = %d", fixes)
 	}
 	api, features, _ := previewSetupAPI(nil, append(history, done(previewFixTitle, 5)))
-	if _, err := api.fixPreview(t.Context(), "prj_test", "boom"); !errors.Is(err, errPreviewFixesExhausted) || features.createCalls != 0 {
+	if _, err := api.fixPreview(t.Context(), "prj_test", "boom", nil, false); !errors.Is(err, errPreviewFixesExhausted) || features.createCalls != 0 {
 		t.Fatalf("a third fix started: err=%v creates=%d", err, features.createCalls)
 	}
 	api, features, _ = previewSetupAPI(nil, history)
-	if _, err := api.fixPreview(t.Context(), "prj_test", "port 5173 is not published"); err != nil ||
+	if _, err := api.fixPreview(t.Context(), "prj_test", "port 5173 is not published", nil, false); err != nil ||
 		features.receivedTitle != previewFixTitle || !strings.Contains(features.receivedDescription, "port 5173 is not published") {
 		t.Fatalf("the fix did not start: err=%v %q", err, features.receivedDescription)
 	}

@@ -1,11 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getProject } from "../api/projects";
-import { listFeatures } from "../api/features";
+import { listFeatures, setUpPreview, tellAssistantPreviewFailed } from "../api/features";
 import { getPreviewStatus, onPreviewStatusChanged, startPreview, type PreviewStatus } from "../ipc";
 import { primaryUrl } from "./usePreview";
 import { AssistantDrawer } from "./AssistantDrawer";
 import { getConversation, type Conversation } from "../api/assistant";
-import type { Project } from "../api/types";
+import type { Feature, Project } from "../api/types";
+import { ContainerEvidence } from "./ContainerEvidence";
+import { plainFailure } from "./previewEvidence";
+import { isPreviewWork } from "./usePreviewSetup";
 import "../App.css";
 
 // How often the window looks for newly merged work to reload.
@@ -59,14 +62,19 @@ export function AppWindow({ projectId }: { projectId: string }) {
   }, [projectId, start]);
 
   // Work that merges reaches the app: rebuild it from the new head. Its data
-  // volumes are kept.
+  // volumes are kept. The work fixing the app's setup is followed too.
   const merged = useRef<Set<string> | null>(null);
+  const [fixingWork, setFixingWork] = useState<Feature | null>(null);
   useEffect(() => {
     const look = async () => {
       try {
-        const done = new Set(
-          (await listFeatures(projectId)).filter((f) => f.state === "completed").map((f) => f.id),
+        const features = await listFeatures(projectId);
+        setFixingWork(
+          features.find(
+            (f) => isPreviewWork(f) && f.state !== "completed" && f.state !== "cancelled",
+          ) ?? null,
         );
+        const done = new Set(features.filter((f) => f.state === "completed").map((f) => f.id));
         const seen = merged.current;
         merged.current = done;
         if (seen && [...done].some((id) => !seen.has(id))) void start();
@@ -99,6 +107,31 @@ export function AppWindow({ projectId }: { projectId: string }) {
   const url = status?.state === "running" ? primaryUrl(status) : null;
   // A start that threw is the latest attempt, so its reason comes first.
   const failure = error ?? (status?.state === "failed" ? status.error : null);
+  // What each container did, when the app stopped after its containers ran.
+  const services = !error && status?.state === "failed" ? status.services : undefined;
+
+  // The assistant hears of each failure once, with what each container did,
+  // so it can fix the app's setup itself (ADR-028).
+  const told = useRef<string | null>(null);
+  useEffect(() => {
+    if (!failure) return;
+    const key = `${status?.commitId ?? ""}\n${failure}`;
+    if (told.current === key) return;
+    told.current = key;
+    void tellAssistantPreviewFailed(projectId, failure, services).catch(() => undefined);
+  }, [projectId, failure, services, status?.commitId]);
+
+  // "Let the assistant fix it": a checked fix of the app's setup.
+  const [fixError, setFixError] = useState<string | null>(null);
+  const fix = async () => {
+    setFixError(null);
+    try {
+      const setup = await setUpPreview(projectId, failure ?? "", services);
+      if (setup.work_order) setFixingWork(setup.work_order);
+    } catch (e) {
+      setFixError(String(e));
+    }
+  };
 
   return (
     <div className="app-window">
@@ -132,11 +165,29 @@ export function AppWindow({ projectId }: { projectId: string }) {
           ) : status?.state === "failed" || error ? (
             <>
               <p className="muted">
-                {name} could not start{failure ? `: ${failure}` : "."}
+                {name} could not start
+                {plainFailure(services)
+                  ? `. ${plainFailure(services)}`
+                  : failure
+                    ? `: ${failure.split("\n")[0]}`
+                    : "."}
               </p>
-              <button className="primary" onClick={() => void start()}>
-                Try again
-              </button>
+              {services && services.length > 0 && <ContainerEvidence services={services} />}
+              {fixingWork ? (
+                <p className="muted app-window__starting">
+                  Fixing the app&apos;s setup… It opens here once it runs.
+                </p>
+              ) : (
+                <div className="row">
+                  <button className="primary" onClick={() => void fix()}>
+                    Let the assistant fix it
+                  </button>
+                  <button className="ghost" onClick={() => void start()}>
+                    Try again
+                  </button>
+                </div>
+              )}
+              {fixError && <p className="muted">{fixError}</p>}
             </>
           ) : (
             <p className="muted app-window__starting">Starting {name}…</p>

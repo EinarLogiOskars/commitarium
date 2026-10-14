@@ -1,15 +1,24 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { listFeatures, reportPreviewFailure, startPreviewSetup } from "../api/features";
+import {
+  listFeatures,
+  reportPreviewFailure,
+  setUpPreview,
+  startPreviewSetup,
+  tellAssistantPreviewFailed,
+} from "../api/features";
 import { ApiError } from "../api/client";
-import type { Feature } from "../api/types";
+import type { Feature, ServiceEvidence } from "../api/types";
 import type { PreviewHandle } from "./usePreview";
 
 const POLL_MS = 5000;
 
-/** The project's background preview setup: the work order setting the preview
- * up, if one runs. When one merges, the preview starts by itself; when that
- * start fails, a background fix is asked for, until the fixes are used up and
- * the user is offered a session instead. */
+/** The project's preview setup: the work order setting the preview up, if one
+ * runs (Commitarium's background setup or fix, or the project's own setup).
+ * Each merges only once Commitarium's preview check showed the app runs
+ * (ADR-028). When one merges, the preview starts by itself; when that start
+ * fails, a background fix is asked for, until the automatic fixes are used
+ * up. "Set up preview" (fix) always starts one, and every failure is told to
+ * the project's assistant, with what each container did. */
 export function usePreviewSetup(projectId: string, preview: PreviewHandle) {
   const [active, setActive] = useState<Feature | null>(null);
   const [exhausted, setExhausted] = useState(false);
@@ -23,7 +32,7 @@ export function usePreviewSetup(projectId: string, preview: PreviewHandle) {
   const load = useCallback(async () => {
     try {
       const features = await listFeatures(projectId);
-      const running = features.find((f) => f.background && !isDone(f)) ?? null;
+      const running = features.find((f) => isPreviewWork(f) && !isDone(f)) ?? null;
       const before = previous.current;
       previous.current = running;
       setActive(running);
@@ -53,6 +62,16 @@ export function usePreviewSetup(projectId: string, preview: PreviewHandle) {
   // A preview the setup started that fails asks for a background fix.
   const state = preview.status?.state;
   const failure = preview.status?.error ?? preview.error;
+  const services = preview.status?.services;
+  // The assistant hears of each failure once, so it can fix it itself.
+  const told = useRef<string | null>(null);
+  useEffect(() => {
+    if (state !== "failed" || !failure) return;
+    const key = `${preview.status?.commitId ?? ""}\n${failure}`;
+    if (told.current === key) return;
+    told.current = key;
+    void tellAssistantPreviewFailed(projectId, failure, services).catch(() => undefined);
+  }, [projectId, state, failure, services, preview.status?.commitId]);
   useEffect(() => {
     if (!autoStarted.current) return;
     if (state === "running") {
@@ -61,7 +80,7 @@ export function usePreviewSetup(projectId: string, preview: PreviewHandle) {
     }
     if (state !== "failed" || !failure) return;
     autoStarted.current = false;
-    reportPreviewFailure(projectId, failure).then(
+    reportPreviewFailure(projectId, failure, services).then(
       (setup) => {
         if (setup.work_order) {
           previous.current = setup.work_order;
@@ -72,7 +91,7 @@ export function usePreviewSetup(projectId: string, preview: PreviewHandle) {
         if (e instanceof ApiError && e.code === "preview_fixes_exhausted") setExhausted(true);
       },
     );
-  }, [projectId, state, failure]);
+  }, [projectId, state, failure, services]);
 
   const start = useCallback(async () => {
     setError(null);
@@ -87,11 +106,34 @@ export function usePreviewSetup(projectId: string, preview: PreviewHandle) {
     }
   }, [projectId]);
 
-  return { active, exhausted, error, start };
+  // "Set up preview" on a preview that fails: a checked fix, whatever the
+  // automatic fixes did.
+  const fix = useCallback(
+    async (failed: string, evidence?: ServiceEvidence[]) => {
+      setError(null);
+      try {
+        const setup = await setUpPreview(projectId, failed, evidence);
+        if (setup.work_order) {
+          previous.current = setup.work_order;
+          setActive(setup.work_order);
+        }
+      } catch (e) {
+        setError(e instanceof ApiError ? e.message : String(e));
+      }
+    },
+    [projectId],
+  );
+
+  return { active, exhausted, error, start, fix };
 }
 
 export type PreviewSetupHandle = ReturnType<typeof usePreviewSetup>;
 
 function isDone(f: Feature): boolean {
   return f.state === "completed" || f.state === "cancelled";
+}
+
+/** Work that sets the preview up: Commitarium's own, or checked (ADR-028). */
+export function isPreviewWork(f: Feature): boolean {
+  return !!f.background || !!f.preview_check;
 }

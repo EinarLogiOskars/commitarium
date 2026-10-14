@@ -119,6 +119,7 @@ func (s *Service) Create(
 		Kind:                       kind,
 		Background:                 overrides.Background,
 		CreatedBy:                  createdBy,
+		PreviewCheck:               overrides.PreviewCheck,
 		CreatedAt:                  now,
 		UpdatedAt:                  now,
 	}

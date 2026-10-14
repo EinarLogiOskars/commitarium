@@ -17,6 +17,7 @@ import { PlanningView } from "./PlanningView";
 import { ImplementationView } from "./ImplementationView";
 import { ReviewView } from "./ReviewView";
 import { MergeView } from "./MergeView";
+import { PreviewChecks } from "./PreviewChecks";
 import { EnvironmentApproval } from "./EnvironmentApproval";
 import { OrderSidebar } from "./OrderSidebar";
 import { PhaseStepper, currentPhaseIndex } from "./PhaseStepper";
@@ -405,6 +406,11 @@ export function FeatureView({
               onResolved={load}
               onActiveChange={setEnvActive}
             />
+          )}
+          {/* A preview-setup work order merges once Commitarium's check shows
+              the app runs (ADR-028); this is what each check saw. */}
+          {run && feature.preview_check && (
+            <PreviewChecks projectId={projectId} featureId={feature.id} />
           )}
 
           {body(

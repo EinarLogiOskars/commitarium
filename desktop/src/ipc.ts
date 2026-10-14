@@ -16,6 +16,7 @@ import type {
   Project,
   ProjectDeletionResult,
   RecoveryPolicy,
+  ServiceEvidence,
   ValidationRunResult,
 } from "./api/types";
 
@@ -235,6 +236,11 @@ export const getProjectSource = (projectId: string): Promise<string | null> =>
 // ID; Tauri does the fixed Docker work (claim/build/run) itself.
 export const runValidationJob = (jobId: string): Promise<ValidationRunResult> =>
   invoke("run_validation_job", { jobId });
+
+/** Run Commitarium's preview check of a work order's commit (ADR-028): Tauri
+ * claims it, builds and starts the app in isolation, and reports back. */
+export const runPreviewCheck = (checkId: string): Promise<{ check_id: string; status: string }> =>
+  invoke("run_preview_check", { checkId });
 
 export const provisionEnvironmentRequest = (
   requestId: string,
@@ -462,6 +468,9 @@ export interface PreviewStatus {
   state: PreviewState;
   urls: PreviewUrl[]; // one per published port, filled once "running"
   error: string | null; // set when "failed"
+  /** What each container did, when a preview failed after its containers
+   * were created (ADR-028). */
+  services?: ServiceEvidence[];
 }
 
 /** Open an app's own window (APPS_PLAN.md), or bring it to the front. */

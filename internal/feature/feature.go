@@ -28,8 +28,11 @@ type Feature struct {
 	// CreatedBy is who created it: the assistant acts on its own only on its
 	// own work (ADR-027).
 	CreatedBy Creator
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	// PreviewCheck makes the work order merge only once Commitarium's
+	// preview check of its exact commit passed (ADR-028).
+	PreviewCheck bool
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
 }
 
 // Creator is who created a work order: the user by hand, or the assistant
@@ -72,4 +75,7 @@ type SettingsOverrides struct {
 	Background bool
 	// CreatedBy is who creates it; empty is the user.
 	CreatedBy Creator
+	// PreviewCheck checks that the app's preview runs before the work order
+	// merges.
+	PreviewCheck bool
 }

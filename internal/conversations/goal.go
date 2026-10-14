@@ -288,6 +288,10 @@ func (service *Service) autopilotActions(ctx context.Context, scope string) ([]A
 		case featureartifact.AssistantStartAutopilot:
 			// Building everything, the assistant may finish the vision.
 			inGoal = builds && !stored.Goal.active()
+		case featureartifact.AssistantSetUpPreview:
+			// An app that does not run is the assistant's to fix when it builds
+			// everything (ADR-024, ADR-028); it creates its own work order.
+			inGoal = builds
 		}
 		if !inGoal {
 			continue
