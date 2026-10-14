@@ -2,10 +2,12 @@ package project
 
 import "errors"
 
-// AssistantMode is how the assistant works in a project (ADR-027): it builds
-// everything, applying its own actions without cards (apps' default), or it
-// assists, proposing cards the user approves (projects' default). Either way
-// it acts on its own only on work it created.
+// AssistantMode is how the assistant works in a project (ADR-027). It
+// assists by default: it proposes cards the user approves and acts on its own
+// only on work it created or was handed. Building everything is opt-in, and on
+// for a project or app the user asked the top-level assistant to create: it
+// owns the whole project, applies its actions without cards, and takes over
+// work orders the user creates too.
 type AssistantMode string
 
 const (
@@ -15,12 +17,9 @@ const (
 
 var ErrInvalidAssistantMode = errors.New("assistant mode must be builds or assists")
 
-// DefaultAssistantMode is the mode a project starts with: an app's assistant
-// builds everything, a project's assists.
-func DefaultAssistantMode(app bool) AssistantMode {
-	if app {
-		return AssistantModeBuilds
-	}
+// DefaultAssistantMode is the mode a project starts with: the assistant
+// assists.
+func DefaultAssistantMode() AssistantMode {
 	return AssistantModeAssists
 }
 
@@ -29,12 +28,12 @@ func (mode AssistantMode) IsValid() bool {
 }
 
 // Assistant is how the assistant works in the project: its stored mode, or
-// the default for its app flag when none is stored.
+// the default when none is stored.
 func (project Project) Assistant() AssistantMode {
 	if project.AssistantMode.IsValid() {
 		return project.AssistantMode
 	}
-	return DefaultAssistantMode(project.App)
+	return DefaultAssistantMode()
 }
 
 // AssistantBuilds reports whether the assistant builds everything in the

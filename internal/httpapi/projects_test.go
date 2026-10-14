@@ -595,8 +595,8 @@ func (service *assistantModeProjects) UpdateAssistantMode(
 	return project.Project{ID: projectID, Name: "Sleep Log", App: true, AssistantMode: mode}, nil
 }
 
-// Projects answer how the assistant works, apps building everything by
-// default, and the user may change it (ADR-027).
+// Projects answer how the assistant works, assisting by default, and the
+// user may change it (ADR-027).
 func TestProjectsAnswerAndChangeHowTheAssistantWorks(t *testing.T) {
 	service := &assistantModeProjects{recordingProjectService: &recordingProjectService{
 		getByIDResult: project.Project{ID: "prj_app", Name: "Sleep Log", App: true},
@@ -605,7 +605,7 @@ func TestProjectsAnswerAndChangeHowTheAssistantWorks(t *testing.T) {
 	get := httptest.NewRecorder()
 	handler.ServeHTTP(get, httptest.NewRequest(http.MethodGet, "/api/v1/projects/prj_app", nil))
 	var response projectResponse
-	if err := json.NewDecoder(get.Body).Decode(&response); err != nil || response.AssistantMode != project.AssistantModeBuilds {
+	if err := json.NewDecoder(get.Body).Decode(&response); err != nil || response.AssistantMode != project.AssistantModeAssists {
 		t.Fatalf("an app's assistant = %q err=%v", response.AssistantMode, err)
 	}
 

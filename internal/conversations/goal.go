@@ -350,9 +350,12 @@ func (service *Service) workOrders(ctx context.Context, scope string) (map[strin
 	if err != nil {
 		return ours, titles
 	}
+	// Building everything, the assistant owns every work order, the user's
+	// too.
+	builds := service.assistantBuilds(ctx, scope)
 	for _, item := range features {
 		titles[item.ID] = item.Title
-		if item.CreatedBy == feature.CreatedByAssistant {
+		if builds || item.CreatedBy == feature.CreatedByAssistant {
 			ours[item.ID] = true
 		}
 	}
