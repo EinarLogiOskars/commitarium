@@ -25,6 +25,8 @@ type createProjectRequest struct {
 	MergePolicy    project.MergePolicy    `json:"merge_policy"`
 	AutonomyPolicy project.AutonomyPolicy `json:"autonomy_policy"`
 	DialogueLimits *dialogueLimitsRequest `json:"dialogue_limits"`
+	// AgentProviders and AgentModels are deprecated and ignored (ADR-027):
+	// a project no longer chooses agents or models for its work.
 	AgentProviders *agentProvidersRequest `json:"agent_providers"`
 	AgentModels    *agentModelsRequest    `json:"agent_models"`
 }
@@ -37,6 +39,7 @@ type projectResponse struct {
 	AutonomyPolicy             project.AutonomyPolicy     `json:"autonomy_policy"`
 	IndependentAcceptanceTests bool                       `json:"independent_acceptance_tests"`
 	App                        bool                       `json:"app"`
+	AssistantMode              project.AssistantMode      `json:"assistant_mode"`
 	DialogueLimits             dialogueLimitsResponse     `json:"dialogue_limits"`
 	AgentProviders             agentProvidersResponse     `json:"agent_providers"`
 	AgentModels                agentModelsResponse        `json:"agent_models"`
@@ -127,6 +130,7 @@ type importProjectMetadata struct {
 	MergePolicy    project.MergePolicy    `json:"merge_policy"`
 	AutonomyPolicy project.AutonomyPolicy `json:"autonomy_policy"`
 	DialogueLimits *dialogueLimitsRequest `json:"dialogue_limits"`
+	// AgentProviders and AgentModels are deprecated and ignored (ADR-027).
 	AgentProviders *agentProvidersRequest `json:"agent_providers"`
 	AgentModels    *agentModelsRequest    `json:"agent_models"`
 	DefaultBranch  string                 `json:"default_branch"`
@@ -165,22 +169,6 @@ func (api *API) importProjectHandler(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_dialogue_limits", "dialogue_limits must include non-negative planning_rounds and implementation_review_rounds; zero means unlimited")
 		return
 	}
-	agentProviders, err := api.decodeAgentProviders(r.Context(), metadata.AgentProviders, true)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_agent_providers", "agent_providers must include lead and reviewer set to codex or claude")
-		return
-	}
-	agentModels, err := decodeAgentModels(metadata.AgentModels, true)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_agent_models", "agent_models must include explicit lead and reviewer model IDs")
-		return
-	}
-	if metadata.AgentModels != nil && api.modelCatalog != nil {
-		if err := api.modelCatalog.ValidateSelection(r.Context(), agentProviders, agentModels); err != nil {
-			writeModelSelectionError(w, err)
-			return
-		}
-	}
 	bundle, err := r.MultipartForm.File["bundle"][0].Open()
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_git_bundle", "Git bundle cannot be read")
@@ -192,8 +180,6 @@ func (api *API) importProjectHandler(w http.ResponseWriter, r *http.Request) {
 		RecoveryPolicy: metadata.RecoveryPolicy, MergePolicy: metadata.MergePolicy,
 		AutonomyPolicy: metadata.AutonomyPolicy,
 		DialogueLimits: limits,
-		AgentProviders: agentProviders,
-		AgentModels:    agentModels,
 		DefaultBranch:  metadata.DefaultBranch,
 	}, bundle)
 	if err != nil {
@@ -272,44 +258,20 @@ func (api *API) createProjectHandler(
 		)
 		return
 	}
-	agentProviders, err := api.decodeAgentProviders(r.Context(), request.AgentProviders, true)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_agent_providers", "agent_providers must include lead and reviewer set to codex or claude")
-		return
-	}
-	agentModels, err := decodeAgentModels(request.AgentModels, true)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_agent_models", "agent_models must include explicit lead and reviewer model IDs")
-		return
-	}
-	if request.AgentModels != nil && api.modelCatalog != nil {
-		if err := api.modelCatalog.ValidateSelection(r.Context(), agentProviders, agentModels); err != nil {
-			writeModelSelectionError(w, err)
-			return
-		}
-	}
-
+	// A project names no agents or models (ADR-027): each work order's are
+	// chosen when it is created or started. Older clients may still send
+	// them; they are ignored.
 	var createdProject project.Project
 	if creator, ok := api.projects.(ProvisionedProjectCreator); ok {
 		createdProject, err = creator.CreateProvisionedWithAgentModels(
 			r.Context(), strings.TrimSpace(r.Header.Get("Idempotency-Key")),
-			request.Name, request.RecoveryPolicy, dialogueLimits, agentProviders,
-			agentModels, request.MergePolicy, request.AutonomyPolicy,
-		)
-	} else if request.AgentModels != nil {
-		creator, ok := api.projects.(ProjectAgentModelCreator)
-		if !ok {
-			writeError(w, http.StatusServiceUnavailable, "agent_models_unavailable", "project model settings are unavailable")
-			return
-		}
-		createdProject, err = creator.CreateWithAgentModels(
-			r.Context(), request.Name, request.RecoveryPolicy, dialogueLimits,
-			agentProviders, agentModels, request.MergePolicy, request.AutonomyPolicy,
+			request.Name, request.RecoveryPolicy, dialogueLimits, project.AgentProviders{},
+			project.AgentModels{}, request.MergePolicy, request.AutonomyPolicy,
 		)
 	} else {
 		createdProject, err = api.projects.Create(
 			r.Context(), request.Name, request.RecoveryPolicy, dialogueLimits,
-			agentProviders, request.MergePolicy, request.AutonomyPolicy,
+			project.AgentProviders{}, request.MergePolicy, request.AutonomyPolicy,
 		)
 	}
 	if err != nil {
@@ -549,6 +511,38 @@ func (api *API) updateProjectAppHandler(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, newProjectResponse(updated), "project")
 }
 
+type assistantModeRequest struct {
+	AssistantMode project.AssistantMode `json:"assistant_mode"`
+}
+
+// updateProjectAssistantModeHandler sets how the assistant works in a
+// project: it builds everything, or it assists (ADR-027).
+func (api *API) updateProjectAssistantModeHandler(w http.ResponseWriter, r *http.Request) {
+	request := assistantModeRequest{}
+	if !decodeSingleJSON(w, r, &request) {
+		return
+	}
+	settings, ok := api.projects.(ProjectAssistantModeService)
+	if !ok {
+		writeError(w, http.StatusServiceUnavailable, "assistant_mode_unavailable", "the assistant's mode cannot be changed")
+		return
+	}
+	updated, err := settings.UpdateAssistantMode(r.Context(), r.PathValue("id"), request.AssistantMode)
+	if err != nil {
+		switch {
+		case errors.Is(err, project.ErrNotFound):
+			writeError(w, http.StatusNotFound, "project_not_found", "project not found")
+		case errors.Is(err, project.ErrInvalidAssistantMode):
+			writeError(w, http.StatusBadRequest, "invalid_assistant_mode", "assistant_mode must be builds or assists")
+		default:
+			log.Printf("update project assistant mode %q: %v", r.PathValue("id"), err)
+			writeError(w, http.StatusInternalServerError, "internal_error", "internal server error")
+		}
+		return
+	}
+	writeJSON(w, http.StatusOK, newProjectResponse(updated), "project")
+}
+
 func (api *API) updateProjectAutonomyPolicyHandler(w http.ResponseWriter, r *http.Request) {
 	request := autonomyPolicyRequest{}
 	decoder := json.NewDecoder(r.Body)
@@ -597,6 +591,9 @@ func (api *API) updateProjectMergePolicyHandler(w http.ResponseWriter, r *http.R
 	writeJSON(w, http.StatusOK, newProjectResponse(updated), "project")
 }
 
+// updateProjectAgentProvidersHandler and updateProjectAgentSettingsHandler
+// are deprecated (ADR-027): what they store is no longer a default for any
+// work. They stay so older clients keep working.
 func (api *API) updateProjectAgentProvidersHandler(w http.ResponseWriter, r *http.Request) {
 	request := agentProvidersRequest{}
 	decoder := json.NewDecoder(r.Body)
@@ -859,7 +856,7 @@ func (api *API) bindForgejoRepositoryHandler(w http.ResponseWriter, r *http.Requ
 }
 
 func newProjectResponse(storedProject project.Project) projectResponse {
-	agentProviders, err := storedProject.AgentProviders.Normalize()
+	agentProviders, err := storedProject.AgentProviders.NormalizeChosen()
 	if err != nil {
 		agentProviders = storedProject.AgentProviders
 	}
@@ -870,6 +867,7 @@ func newProjectResponse(storedProject project.Project) projectResponse {
 		AutonomyPolicy:             storedProject.AutonomyPolicy,
 		IndependentAcceptanceTests: storedProject.IndependentAcceptanceTests,
 		App:                        storedProject.App,
+		AssistantMode:              storedProject.Assistant(),
 		DialogueLimits: dialogueLimitsResponse{
 			PlanningRounds:             storedProject.DialogueLimits.PlanningRounds,
 			ImplementationReviewRounds: storedProject.DialogueLimits.ImplementationReviewRounds,

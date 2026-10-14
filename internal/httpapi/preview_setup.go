@@ -224,9 +224,25 @@ func (api *API) startQuickChange(
 ) (feature.Feature, error) {
 	merge := project.MergePolicyAutoAfterGates
 	autonomy := project.AutonomyPolicyRunToCompletion
+	// It runs on the assistant's agent and model (ADR-027); without a
+	// reviewer, the lead is named for both roles.
+	providers, model, err := api.assistantAgent(ctx)
+	if err != nil {
+		return feature.Feature{}, err
+	}
+	models := project.AgentModels{Lead: model, Reviewer: model}
+	if err := api.checkWorkChoice(ctx, providers, models, true); err != nil {
+		return feature.Feature{}, err
+	}
+	modelStarter, ok := api.starter.(ModelRunStarter)
+	if !ok {
+		return feature.Feature{}, errPreviewSetupUnavailable
+	}
+	// Commitarium's own work runs on the assistant's agent, and the assistant
+	// may see it through (ADR-027).
 	created, err := api.features.Create(ctx, projectID, title, description, feature.SettingsOverrides{
-		Background: background, Steps: &project.WorkSteps{SkipPlan: true, SkipReviewer: true},
-		MergePolicy: &merge, AutonomyPolicy: &autonomy,
+		Background: background, CreatedBy: feature.CreatedByAssistant, Steps: &project.WorkSteps{SkipPlan: true, SkipReviewer: true},
+		MergePolicy: &merge, AutonomyPolicy: &autonomy, AgentProviders: &providers, AgentModels: &models,
 	})
 	if err != nil {
 		return feature.Feature{}, err
@@ -237,21 +253,10 @@ func (api *API) startQuickChange(
 		return feature.Feature{}, err
 	}
 	goal := readied.Title + ": " + readied.Description
-	if readied.AgentModels.Lead != "" || readied.AgentModels.Reviewer != "" {
-		modelStarter, ok := api.starter.(ModelRunStarter)
-		if !ok {
-			return feature.Feature{}, errPreviewSetupUnavailable
-		}
-		_, _, err = modelStarter.StartWithModels(
-			ctx, runIDForKey(key), projectID, readied.ID, goal, project.DefaultDialogueLimits(),
-			readied.AgentProviders, readied.AgentModels, readied.MergePolicy, readied.AutonomyPolicy,
-		)
-	} else {
-		_, _, err = api.starter.Start(
-			ctx, runIDForKey(key), projectID, readied.ID, goal, project.DefaultDialogueLimits(),
-			readied.AgentProviders, readied.MergePolicy, readied.AutonomyPolicy,
-		)
-	}
+	_, _, err = modelStarter.StartWithModels(
+		ctx, runIDForKey(key), projectID, readied.ID, goal, project.DefaultDialogueLimits(),
+		readied.AgentProviders, readied.AgentModels, readied.MergePolicy, readied.AutonomyPolicy,
+	)
 	if err != nil {
 		return feature.Feature{}, err
 	}
@@ -298,6 +303,7 @@ func (api *API) writePreviewSetup(w http.ResponseWriter, projectID string, start
 			response.WorkOrder = &item
 		}
 		writeJSON(w, http.StatusOK, response, "preview setup")
+	case writeChoiceError(w, err):
 	case errors.Is(err, errPreviewHasCompose):
 		writeError(w, http.StatusConflict, "preview_has_compose", err.Error())
 	case errors.Is(err, errPreviewFixesExhausted):

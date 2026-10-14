@@ -87,7 +87,7 @@ func normalizeImportSpec(spec ImportSpec) (ImportSpec, error) {
 	if err := spec.DialogueLimits.Validate(); err != nil {
 		return ImportSpec{}, err
 	}
-	providers, err := spec.AgentProviders.Normalize()
+	providers, err := spec.AgentProviders.NormalizeChosen()
 	if err != nil {
 		return ImportSpec{}, err
 	}

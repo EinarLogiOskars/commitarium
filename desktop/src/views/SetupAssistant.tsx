@@ -27,7 +27,7 @@ export function SetupAssistant({
 }: {
   projectId: string;
   purpose?: AssistantPurpose;
-  /** Project's configured lead agent/model — the first choice when connected. */
+  /** The assistant's agent and model — the first choice when connected. */
   preferred?: { agent?: string; model?: string };
   onApplied: (t: ProjectToolchain) => void;
   onCancel: () => void;
@@ -52,7 +52,7 @@ export function SetupAssistant({
   const [error, setError] = useState<string | null>(null);
   const chatRef = useRef<HTMLDivElement | null>(null);
 
-  // Selection order: preferred (project lead) if usable, else the first usable.
+  // Selection order: preferred (the assistant's agent) if usable, else the first usable.
   const preferredAgent = preferred?.agent;
   useEffect(() => {
     if (modelsLoading || session) return;

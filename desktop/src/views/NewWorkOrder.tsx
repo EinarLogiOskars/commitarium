@@ -39,8 +39,8 @@ export function NewWorkOrder({
       const created = await createFeature(project.id, {
         title: title.trim(),
         description: description.trim(),
-        // Agents, models, and workflow settings are chosen at Start; a draft
-        // carries the project's defaults until then.
+        // Agents, models, and workflow settings are chosen at Start, from a
+        // suggestion the user can change (ADR-027); a draft has none.
         ...(initial?.independentTests !== undefined
           ? { independent_acceptance_tests: initial.independentTests }
           : {}),

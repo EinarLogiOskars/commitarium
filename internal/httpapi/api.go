@@ -43,6 +43,12 @@ type ProjectAppService interface {
 	Rename(ctx context.Context, projectID, name string) (project.Project, error)
 }
 
+// ProjectAssistantModeService sets how the assistant works in a project
+// (ADR-027).
+type ProjectAssistantModeService interface {
+	UpdateAssistantMode(ctx context.Context, projectID string, mode project.AssistantMode) (project.Project, error)
+}
+
 type ProjectAgentModelCreator interface {
 	CreateWithAgentModels(ctx context.Context, name string, recoveryPolicy project.RecoveryPolicy, dialogueLimits project.DialogueLimits, agentProviders project.AgentProviders, agentModels project.AgentModels, mergePolicy project.MergePolicy, autonomyPolicy ...project.AutonomyPolicy) (project.Project, error)
 }
@@ -595,6 +601,7 @@ func newAPI(
 		api.updateProjectIndependentAcceptanceTestsHandler,
 	)
 	mux.HandleFunc("PUT /api/v1/projects/{id}/app", api.updateProjectAppHandler)
+	mux.HandleFunc("PUT /api/v1/projects/{id}/assistant-mode", api.updateProjectAssistantModeHandler)
 	mux.HandleFunc("PUT /api/v1/projects/{id}/name", api.renameProjectHandler)
 	mux.HandleFunc(
 		"PUT /api/v1/projects/{id}/forgejo-repository",

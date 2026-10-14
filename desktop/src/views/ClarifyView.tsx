@@ -8,7 +8,12 @@ import {
   startAssistant,
   updateHandoffBrief,
 } from "../api/features";
-import { StartSettings, startSettingsFrom, type StartSettingsValue } from "./StartSettings";
+import {
+  StartSettings,
+  startBody,
+  startSettingsFrom,
+  type StartSettingsValue,
+} from "./StartSettings";
 import { startRun } from "../api/runs";
 import { ApiError } from "../api/client";
 import { Transcript, type TranscriptEntry } from "./Transcript";
@@ -346,7 +351,7 @@ function ReadyView({
   const [busy, setBusy] = useState<null | "start" | "reopen">(null);
   const [error, setError] = useState<string | null>(null);
   // Agents, models, and workflow settings are chosen here, at Start,
-  // starting from the work order's current settings (its project's defaults).
+  // starting from the work order's own or a suggestion (ADR-027).
   const [settings, setSettings] = useState<StartSettingsValue>(() => startSettingsFrom(feature));
 
   const run = async (action: "start" | "reopen") => {
@@ -361,7 +366,7 @@ function ReadyView({
           projectId,
           feature.id,
           `start-${feature.id}-${feature.updated_at}`,
-          settings,
+          startBody(settings),
         );
       } else {
         await reopenWorkOrder(projectId, feature.id, crypto.randomUUID());
@@ -449,7 +454,12 @@ function StartWithoutClarifying({
     setBusy(true);
     setError(null);
     try {
-      await startRun(projectId, feature.id, `start-${feature.id}-${feature.updated_at}`, settings);
+      await startRun(
+        projectId,
+        feature.id,
+        `start-${feature.id}-${feature.updated_at}`,
+        startBody(settings),
+      );
       onChanged();
     } catch (e) {
       setError(describe(e));

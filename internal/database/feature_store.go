@@ -28,7 +28,7 @@ func (s *FeatureStore) Create(
 	if err := createdFeature.DialogueLimits.Validate(); err != nil {
 		return err
 	}
-	agentProviders, err := createdFeature.AgentProviders.Normalize()
+	agentProviders, err := createdFeature.AgentProviders.NormalizeChosen()
 	if err != nil {
 		return err
 	}
@@ -74,10 +74,11 @@ func (s *FeatureStore) Create(
 				skip_reviewer,
 				kind,
 				background,
+				created_by,
 				created_at,
 				updated_at
 			)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT(id) DO NOTHING
 		`,
 		createdFeature.ID,
@@ -89,8 +90,8 @@ func (s *FeatureStore) Create(
 		formatOptionalExecutionTime(createdFeature.GoalAcceptedAt),
 		createdFeature.DialogueLimits.PlanningRounds,
 		createdFeature.DialogueLimits.ImplementationReviewRounds,
-		createdFeature.AgentProviders.Lead,
-		createdFeature.AgentProviders.Reviewer,
+		storedProvider(createdFeature.AgentProviders.Lead),
+		storedProvider(createdFeature.AgentProviders.Reviewer),
 		createdFeature.AgentProviders.LeadAgent,
 		createdFeature.AgentProviders.ReviewerAgent,
 		createdFeature.AgentModels.Lead,
@@ -102,6 +103,7 @@ func (s *FeatureStore) Create(
 		createdFeature.Steps.SkipReviewer,
 		storedFeatureKind(createdFeature.Kind),
 		createdFeature.Background,
+		storedCreator(createdFeature.CreatedBy),
 		createdFeature.CreatedAt.UTC().Format(time.RFC3339Nano),
 		createdFeature.UpdatedAt.UTC().Format(time.RFC3339Nano),
 	)
@@ -167,6 +169,7 @@ func (s *FeatureStore) GetByID(
 				skip_reviewer,
 				kind,
 				background,
+				created_by,
 				created_at,
 				updated_at
 			FROM features
@@ -219,6 +222,7 @@ func (s *FeatureStore) ListByProjectID(
 				skip_reviewer,
 				kind,
 				background,
+				created_by,
 				created_at,
 				updated_at
 			FROM features
@@ -281,6 +285,7 @@ func scanFeature(row featureScanner) (feature.Feature, error) {
 		&storedFeature.Steps.SkipReviewer,
 		&storedKind,
 		&storedFeature.Background,
+		&storedFeature.CreatedBy,
 		&createdAt,
 		&updatedAt,
 	); err != nil {
@@ -289,6 +294,10 @@ func scanFeature(row featureScanner) (feature.Feature, error) {
 
 	storedFeature.State = feature.State(storedState)
 	storedFeature.Kind = feature.Kind(storedKind)
+	if storedFeature.AgentProviders.LeadAgent == "" && storedFeature.AgentProviders.ReviewerAgent == "" {
+		// Agents not chosen yet (ADR-027); the provider columns hold a placeholder.
+		storedFeature.AgentProviders = project.AgentProviders{}
+	}
 	if goalAcceptedAt.Valid {
 		parsed, err := time.Parse(time.RFC3339Nano, goalAcceptedAt.String)
 		if err != nil {
@@ -321,6 +330,28 @@ func scanFeature(row featureScanner) (feature.Feature, error) {
 	return storedFeature, nil
 }
 
+// storedCreator stores an unset creator as the user's.
+func storedCreator(creator feature.Creator) feature.Creator {
+	if creator == feature.CreatedByAssistant {
+		return creator
+	}
+	return feature.CreatedByUser
+}
+
+// MarkCreatedByAssistant records that the assistant created a project's
+// work orders.
+func (s *FeatureStore) MarkCreatedByAssistant(ctx context.Context, projectID string, featureIDs []string) error {
+	for _, id := range featureIDs {
+		if _, err := s.db.ExecContext(ctx,
+			`UPDATE features SET created_by = 'assistant' WHERE id = ? AND project_id = ? AND created_by <> 'assistant'`,
+			id, projectID,
+		); err != nil {
+			return fmt.Errorf("mark work order %q as the assistant's: %w", id, err)
+		}
+	}
+	return nil
+}
+
 // Rename changes a work order's title.
 func (s *FeatureStore) Rename(ctx context.Context, id string, title string) error {
 	result, err := s.db.ExecContext(
@@ -347,7 +378,7 @@ func (s *FeatureStore) UpdateReadySettings(ctx context.Context, chosen feature.F
 		        lead_model = ?, reviewer_model = ?, merge_policy = ?, autonomy_policy = ?,
 		        independent_acceptance_tests = ?, skip_plan = ?, skip_reviewer = ?
 		  WHERE id = ? AND state = ?`,
-		chosen.AgentProviders.Lead, chosen.AgentProviders.Reviewer,
+		storedProvider(chosen.AgentProviders.Lead), storedProvider(chosen.AgentProviders.Reviewer),
 		chosen.AgentProviders.LeadAgent, chosen.AgentProviders.ReviewerAgent,
 		chosen.AgentModels.Lead, chosen.AgentModels.Reviewer,
 		chosen.MergePolicy, chosen.AutonomyPolicy, chosen.IndependentAcceptanceTests,

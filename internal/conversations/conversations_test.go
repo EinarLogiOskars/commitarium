@@ -82,11 +82,24 @@ func (describerStub) Describe(context.Context, string) (string, error) {
 	return "## This project: Calories", nil
 }
 
+// newTestService is an assistant the user set up on the codex agent.
 func newTestService(t *testing.T) (*Service, *workerStub) {
+	t.Helper()
+	service, worker := newUnsetService(t, agentsStub{})
+	if _, err := service.SaveSettings(t.Context(), Settings{
+		Agent: "codex", Model: "codex-default", AskBefore: DefaultAskBefore,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return service, worker
+}
+
+// newUnsetService is an assistant whose agent the user has not chosen.
+func newUnsetService(t *testing.T, agents AgentLister) (*Service, *workerStub) {
 	t.Helper()
 	worker := &workerStub{}
 	service, err := NewService(Config{
-		Root: t.TempDir(), WorkspaceRoot: t.TempDir(), Projects: projectsStub{}, Agents: agentsStub{},
+		Root: t.TempDir(), WorkspaceRoot: t.TempDir(), Projects: projectsStub{}, Agents: agents,
 		Describer: describerStub{},
 		Workers:   func(string) (workerhttp.Service, error) { return worker, nil },
 		DefaultModel: func(_ context.Context, provider project.AgentProvider) string {
@@ -97,6 +110,48 @@ func newTestService(t *testing.T) (*Service, *workerStub) {
 		t.Fatal(err)
 	}
 	return service, worker
+}
+
+type noAgents struct{}
+
+func (noAgents) List(context.Context) ([]agent.Agent, error) { return []agent.Agent{}, nil }
+
+// Without an agent, or without one chosen for it, the assistant says what to
+// set up instead of failing a turn (ADR-027).
+func TestTheAssistantSaysWhatToSetUp(t *testing.T) {
+	empty, worker := newUnsetService(t, noAgents{})
+	if _, err := empty.Send(t.Context(), TopLevel, "Hi", "msg-1"); !errors.Is(err, ErrNoAgents) || len(worker.puts) != 0 {
+		t.Fatalf("send without agents: err=%v puts=%d", err, len(worker.puts))
+	}
+	unset, worker := newUnsetService(t, agentsStub{})
+	if settings, err := unset.Settings(t.Context()); err != nil || settings.Agent != "" || settings.Model != "" {
+		t.Fatalf("an assistant nobody set up picked an agent: %+v err=%v", settings, err)
+	}
+	if _, err := unset.Send(t.Context(), TopLevel, "Hi", "msg-1"); !errors.Is(err, ErrNotSetUp) || len(worker.puts) != 0 {
+		t.Fatalf("send without a chosen agent: err=%v puts=%d", err, len(worker.puts))
+	}
+	if _, err := unset.SaveSettings(t.Context(), Settings{Agent: "claude", Model: "claude-sonnet-5-5"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := unset.Send(t.Context(), TopLevel, "Hi", "msg-2"); err != nil || len(worker.puts) != 1 {
+		t.Fatalf("send once set up: err=%v puts=%d", err, len(worker.puts))
+	}
+}
+
+// An assistant that answered before ADR-027 without a saved choice keeps the
+// default it had then, saved once.
+func TestAnAssistantThatAnsweredKeepsItsEarlierDefault(t *testing.T) {
+	service, _ := newUnsetService(t, agentsStub{})
+	if err := service.write(record{Conversation: Conversation{Scope: "prj_test", Status: StatusIdle}, Turn: 3}); err != nil {
+		t.Fatal(err)
+	}
+	settings, err := service.Settings(t.Context())
+	if err != nil || settings.Agent != "codex" || settings.Model != "codex-default" {
+		t.Fatalf("earlier default = %+v err=%v", settings, err)
+	}
+	if _, err := service.Readiness(t.Context()); err != nil {
+		t.Fatalf("an assistant on its earlier default is not ready: %v", err)
+	}
 }
 
 func TestAnAssistantTurnProposesActionsAndKeepsNotes(t *testing.T) {
@@ -122,8 +177,10 @@ func TestAnAssistantTurnProposesActionsAndKeepsNotes(t *testing.T) {
 		Outcome: workerhttp.OutcomeCompleted, Disposition: workerhttp.DispositionSucceeded,
 		Summary: "Two work orders finish P0.",
 		AssistantTurn: &featureartifact.AssistantTurn{Notes: "Prefers quick changes.", Actions: []featureartifact.AssistantAction{
-			{Type: featureartifact.AssistantCreateWorkOrder, Reason: "Small form", Title: "Log a meal", Steps: "quick", LeadModel: "gpt-6-luna"},
-			{Type: featureartifact.AssistantCreateWorkOrder, Reason: "Tricky sync", Title: "Sync", Steps: "full", LeadModel: "claude-fable-5-1"},
+			{Type: featureartifact.AssistantCreateWorkOrder, Reason: "Small form", Title: "Log a meal", Steps: "quick",
+				LeadAgent: "codex", LeadModel: "gpt-6-luna", ReviewerAgent: "claude", ReviewerModel: "claude-opus-5-5"},
+			{Type: featureartifact.AssistantCreateWorkOrder, Reason: "Tricky sync", Title: "Sync", Steps: "full",
+				LeadAgent: "claude", LeadModel: "claude-fable-5-1", ReviewerAgent: "codex", ReviewerModel: "gpt-6-luna"},
 		}},
 	})
 	conversation, err = service.Get(t.Context(), "prj_test")
@@ -131,8 +188,10 @@ func TestAnAssistantTurnProposesActionsAndKeepsNotes(t *testing.T) {
 		t.Fatalf("after the turn = %+v err=%v", conversation, err)
 	}
 	quick, full := conversation.Actions[0], conversation.Actions[1]
-	if quick.LeadAgent != "codex" || quick.LeadModel != "gpt-6-luna" || quick.ReviewerModel != "" ||
-		full.LeadModel != "claude-fable-5-1" || full.ReviewerAgent != "claude" || full.ReviewerModel != "claude-opus-5-5" {
+	// The cards show the assistant's own choice; a skipped reviewer is dropped
+	// and nothing comes from the project (ADR-027).
+	if quick.LeadAgent != "codex" || quick.LeadModel != "gpt-6-luna" || quick.ReviewerAgent != "" || quick.ReviewerModel != "" ||
+		full.LeadAgent != "claude" || full.LeadModel != "claude-fable-5-1" || full.ReviewerAgent != "codex" || full.ReviewerModel != "gpt-6-luna" {
 		t.Fatalf("a new work order's card does not show what will run: %+v / %+v", quick.AssistantAction, full.AssistantAction)
 	}
 	if len(conversation.Actions[0].Premium) != 0 || len(conversation.Actions[1].Premium) != 1 {

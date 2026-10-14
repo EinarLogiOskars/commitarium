@@ -43,7 +43,7 @@ func (s *ProjectStore) Create(
 	if err := createdProject.DialogueLimits.Validate(); err != nil {
 		return err
 	}
-	agentProviders, err := createdProject.AgentProviders.Normalize()
+	agentProviders, err := createdProject.AgentProviders.NormalizeChosen()
 	if err != nil {
 		return err
 	}
@@ -70,13 +70,13 @@ func (s *ProjectStore) Create(
 		ctx,
 		`
 			INSERT INTO projects (
-				id, name, recovery_policy, merge_policy, autonomy_policy, independent_acceptance_tests,
+				id, name, recovery_policy, merge_policy, autonomy_policy, independent_acceptance_tests, assistant_mode,
 				planning_round_limit, implementation_review_round_limit,
 				lead_provider, reviewer_provider, lead_agent, reviewer_agent, lead_model, reviewer_model,
 				forgejo_owner, forgejo_repository, forgejo_default_branch, forgejo_bound_at,
 				created_at
 			)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT(id) DO NOTHING
 		`,
 		createdProject.ID,
@@ -85,10 +85,11 @@ func (s *ProjectStore) Create(
 		createdProject.MergePolicy,
 		createdProject.AutonomyPolicy,
 		createdProject.IndependentAcceptanceTests,
+		createdProject.Assistant(),
 		createdProject.DialogueLimits.PlanningRounds,
 		createdProject.DialogueLimits.ImplementationReviewRounds,
-		createdProject.AgentProviders.Lead,
-		createdProject.AgentProviders.Reviewer,
+		storedProvider(createdProject.AgentProviders.Lead),
+		storedProvider(createdProject.AgentProviders.Reviewer),
 		createdProject.AgentProviders.LeadAgent,
 		createdProject.AgentProviders.ReviewerAgent,
 		createdProject.AgentModels.Lead,
@@ -138,7 +139,7 @@ func (s *ProjectStore) GetByID(
 	storedProject, err := scanProject(s.db.QueryRowContext(
 		ctx,
 		`
-			SELECT id, name, recovery_policy, merge_policy, autonomy_policy, independent_acceptance_tests, is_app,
+			SELECT id, name, recovery_policy, merge_policy, autonomy_policy, independent_acceptance_tests, is_app, assistant_mode,
 			       planning_round_limit, implementation_review_round_limit,
 			       lead_provider, reviewer_provider, lead_agent, reviewer_agent, lead_model, reviewer_model,
 			       forgejo_owner, forgejo_repository, forgejo_default_branch, forgejo_bound_at,
@@ -178,7 +179,7 @@ func (s *ProjectStore) ProjectDeletionPending(ctx context.Context, projectID str
 func (s *ProjectStore) List(ctx context.Context) ([]project.Project, error) {
 	rows, err := s.db.QueryContext(
 		ctx,
-		`SELECT id, name, recovery_policy, merge_policy, autonomy_policy, independent_acceptance_tests, is_app,
+		`SELECT id, name, recovery_policy, merge_policy, autonomy_policy, independent_acceptance_tests, is_app, assistant_mode,
 		        planning_round_limit, implementation_review_round_limit,
 		        lead_provider, reviewer_provider, lead_agent, reviewer_agent, lead_model, reviewer_model,
 		        forgejo_owner, forgejo_repository, forgejo_default_branch, forgejo_bound_at,
@@ -283,15 +284,40 @@ func (s *ProjectStore) Rename(ctx context.Context, projectID, name string) (proj
 	return s.GetByID(ctx, projectID)
 }
 
-// UpdateApp marks a project as an app, or as a project only.
+// UpdateApp marks a project as an app, or as a project only. A project that
+// changes takes that kind's assistant mode.
 func (s *ProjectStore) UpdateApp(ctx context.Context, projectID string, app bool) (project.Project, error) {
-	result, err := s.db.ExecContext(ctx, `UPDATE projects SET is_app = ? WHERE id = ?`, app, projectID)
+	result, err := s.db.ExecContext(ctx, `
+		UPDATE projects
+		   SET assistant_mode = CASE WHEN is_app = ? THEN assistant_mode ELSE ? END, is_app = ?
+		 WHERE id = ?`, app, project.DefaultAssistantMode(app), app, projectID)
 	if err != nil {
 		return project.Project{}, fmt.Errorf("update app flag for project %q: %w", projectID, err)
 	}
 	rowsAffected, err := result.RowsAffected()
 	if err != nil {
 		return project.Project{}, fmt.Errorf("read app flag update count for project %q: %w", projectID, err)
+	}
+	if rowsAffected == 0 {
+		return project.Project{}, project.ErrNotFound
+	}
+	return s.GetByID(ctx, projectID)
+}
+
+// UpdateAssistantMode sets how the assistant works in a project.
+func (s *ProjectStore) UpdateAssistantMode(
+	ctx context.Context, projectID string, mode project.AssistantMode,
+) (project.Project, error) {
+	if !mode.IsValid() {
+		return project.Project{}, project.ErrInvalidAssistantMode
+	}
+	result, err := s.db.ExecContext(ctx, `UPDATE projects SET assistant_mode = ? WHERE id = ?`, mode, projectID)
+	if err != nil {
+		return project.Project{}, fmt.Errorf("update assistant mode for project %q: %w", projectID, err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return project.Project{}, fmt.Errorf("read assistant mode update count for project %q: %w", projectID, err)
 	}
 	if rowsAffected == 0 {
 		return project.Project{}, project.ErrNotFound
@@ -469,7 +495,7 @@ func (s *ProjectStore) BindForgejoRepository(
 
 	storedProject, err := scanProject(tx.QueryRowContext(
 		ctx,
-		`SELECT id, name, recovery_policy, merge_policy, autonomy_policy, independent_acceptance_tests, is_app,
+		`SELECT id, name, recovery_policy, merge_policy, autonomy_policy, independent_acceptance_tests, is_app, assistant_mode,
 		        planning_round_limit, implementation_review_round_limit,
 		        lead_provider, reviewer_provider, lead_agent, reviewer_agent, lead_model, reviewer_model,
 		        forgejo_owner, forgejo_repository, forgejo_default_branch, forgejo_bound_at,
@@ -542,6 +568,7 @@ func scanProject(scanner projectScanner) (project.Project, error) {
 		&storedProject.AutonomyPolicy,
 		&storedProject.IndependentAcceptanceTests,
 		&storedProject.App,
+		&storedProject.AssistantMode,
 		&storedProject.DialogueLimits.PlanningRounds,
 		&storedProject.DialogueLimits.ImplementationReviewRounds,
 		&storedProject.AgentProviders.Lead,
@@ -571,7 +598,7 @@ func scanProject(scanner projectScanner) (project.Project, error) {
 		return project.Project{}, err
 	}
 	storedProject.AutonomyPolicy = autonomyPolicy
-	providers, err := storedProject.AgentProviders.Normalize()
+	providers, err := chosenProviders(storedProject.AgentProviders)
 	if err != nil {
 		return project.Project{}, err
 	}
@@ -605,4 +632,24 @@ func scanProject(scanner projectScanner) (project.Project, error) {
 
 func sameRepository(left, right project.ForgejoRepository) bool {
 	return strings.EqualFold(left.Owner, right.Owner) && strings.EqualFold(left.Name, right.Name)
+}
+
+// storedProvider is the provider column value for a role: the column requires
+// a provider, so a zero assignment (ADR-027) stores the historical default and
+// its empty agent marks it unchosen.
+func storedProvider(provider project.AgentProvider) project.AgentProvider {
+	if provider == "" {
+		return project.AgentProviderCodex
+	}
+	return provider
+}
+
+// chosenProviders reads a stored assignment. Every row written before ADR-027
+// names its agents (migration 00040 set them), so empty agents mean none were
+// chosen, whatever the provider columns hold.
+func chosenProviders(stored project.AgentProviders) (project.AgentProviders, error) {
+	if stored.LeadAgent == "" && stored.ReviewerAgent == "" {
+		return project.AgentProviders{}, nil
+	}
+	return stored.Normalize()
 }

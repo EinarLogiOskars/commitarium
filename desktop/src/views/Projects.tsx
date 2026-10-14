@@ -5,7 +5,6 @@ import { ApiError } from "../api/client";
 import { ImportProject } from "./ImportProject";
 import { startVisionAssistant } from "../api/vision";
 import { rememberIdea } from "./visionSession";
-import { useModels } from "./useModels";
 import { listAutopilotGoals, type AutopilotGoal } from "../api/assistant";
 import {
   ProjectDefaultsFields,
@@ -35,7 +34,6 @@ export function Projects({
   const [creating, setCreating] = useState(false);
   const [importing, setImporting] = useState(false);
   const [repairing, setRepairing] = useState<string | null>(null);
-  const { modelsFor, loading: modelsLoading } = useModels();
 
   const load = useCallback(async () => {
     if (!reachable) return;
@@ -201,20 +199,10 @@ export function Projects({
           >
             <span className="activity-group__chevron">{showDefaults ? "▼" : "▶"}</span>
             Project defaults
-            {!showDefaults && (
-              <span className="neworder__summary">
-                Agents, models, autonomy, merge, recovery, rounds
-              </span>
-            )}
+            {!showDefaults && <span className="neworder__summary">Autonomy, merge, recovery</span>}
           </button>
           {showDefaults && (
-            <ProjectDefaultsFields
-              value={defaults}
-              onChange={setDefaults}
-              modelsFor={modelsFor}
-              modelsLoading={modelsLoading}
-              disabled={creating}
-            />
+            <ProjectDefaultsFields value={defaults} onChange={setDefaults} disabled={creating} />
           )}
         </div>
 

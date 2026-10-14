@@ -28,9 +28,31 @@ type recordingRunStarter struct {
 	providers      project.AgentProviders
 	mergePolicy    project.MergePolicy
 	autonomyPolicy project.AutonomyPolicy
+	models         project.AgentModels
 	result         execution.Run
 	err            error
 }
+
+// StartWithModels starts a run on chosen models, as every Start now does
+// (ADR-027).
+func (s *recordingRunStarter) StartWithModels(
+	ctx context.Context,
+	runID string,
+	projectID string,
+	featureID string,
+	goal string,
+	dialogueLimits project.DialogueLimits,
+	agentProviders project.AgentProviders,
+	agentModels project.AgentModels,
+	mergePolicy project.MergePolicy,
+	autonomyPolicies ...project.AutonomyPolicy,
+) (execution.Run, bool, error) {
+	s.models = agentModels
+	return s.Start(ctx, runID, projectID, featureID, goal, dialogueLimits, agentProviders, mergePolicy, autonomyPolicies...)
+}
+
+// chosenModels are the models the work orders in these tests were given.
+var chosenModels = project.AgentModels{Lead: "gpt-6-luna", Reviewer: "claude-sonnet-5-5"}
 
 func (s *recordingRunStarter) Start(
 	_ context.Context,
@@ -76,7 +98,7 @@ func TestStartRunReturnsDurableAcceptedRun(t *testing.T) {
 	features := &recordingFeatureService{getResult: feature.Feature{
 		ID: "fea_test", ProjectID: "prj_test", Title: "Build coordinator",
 		Description: "Exercise its deterministic workflow", State: feature.StateReady,
-		DialogueLimits: limits, AgentProviders: providers,
+		DialogueLimits: limits, AgentProviders: providers, AgentModels: chosenModels,
 		MergePolicy:    project.MergePolicyAutoAfterGates,
 		AutonomyPolicy: project.AutonomyPolicyRunToCompletion,
 	}}
@@ -232,6 +254,7 @@ func TestStartRunMapsSelectedProjectWorkspaceErrors(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			features := &recordingFeatureService{getResult: feature.Feature{
 				ID: "fea_test", ProjectID: "prj_test", Title: "Test", State: feature.StateReady,
+				AgentProviders: project.DefaultAgentProviders(), AgentModels: chosenModels,
 			}}
 			executions := &recordingExecutionService{runErr: execution.ErrNotFound}
 			projects := &recordingProjectService{getByIDResult: project.Project{ID: "prj_test"}}
@@ -424,7 +447,7 @@ func TestStartRunUsesTheSettingsChosenAtStart(t *testing.T) {
 	starter := &recordingRunStarter{}
 	request := httptest.NewRequest(
 		http.MethodPost, "/api/v1/projects/prj_test/features/fea_test/runs",
-		strings.NewReader(`{"agent_providers":{"lead":"codex","reviewer":"claude"},"autonomy_policy":"review_each_phase"}`),
+		strings.NewReader(`{"agent_providers":{"lead":"codex","reviewer":"claude"},"agent_models":{"lead":"gpt-6-luna","reviewer":"claude-sonnet-5-5"},"autonomy_policy":"review_each_phase"}`),
 	)
 	request.Header.Set("Idempotency-Key", "start-with-settings")
 	recorder := httptest.NewRecorder()
@@ -492,7 +515,7 @@ func TestStartRunWithoutClarificationReadiesTheDraft(t *testing.T) {
 		recordingFeatureService: &recordingFeatureService{getResult: feature.Feature{
 			ID: "fea_test", ProjectID: "prj_test", Title: "Update the README",
 			Description: "Mention the new export button.", State: feature.StateDraft,
-			AgentProviders: project.DefaultAgentProviders(),
+			AgentProviders: project.DefaultAgentProviders(), AgentModels: chosenModels,
 		}},
 		workflow: workflowService,
 	}

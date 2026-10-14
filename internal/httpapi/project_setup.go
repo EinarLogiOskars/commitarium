@@ -48,6 +48,7 @@ func (api *API) setUpProjectHandler(w http.ResponseWriter, r *http.Request) {
 			status = http.StatusCreated
 		}
 		writeJSON(w, status, projectSetupResponse{WorkOrder: newFeatureResponse(started), Toolchain: manifest}, "project setup")
+	case writeChoiceError(w, err):
 	case errors.Is(err, errPreviewSetupUnavailable):
 		writeError(w, http.StatusServiceUnavailable, "project_setup_unavailable", "setting a project up needs real agents")
 	case errors.Is(err, errProjectHasCode):

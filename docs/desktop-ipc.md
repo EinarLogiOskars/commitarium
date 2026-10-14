@@ -198,6 +198,7 @@ Project import (host-side git):
   imports may carry the same project defaults as project creation. Omitted
   values use coordinator defaults; supplied values are validated by the
   coordinator with the same rules and error codes as its HTTP project APIs.
+  `agentProviders` and `agentModels` are deprecated and ignored (ADR-027).
 - `get_project_source(projectId) -> string | null`
 - `delete_project(projectId, idempotencyKey, force?) -> ProjectDeletionResult`
   — invokes resumable coordinator deletion and then atomically removes only

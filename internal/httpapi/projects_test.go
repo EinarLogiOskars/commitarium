@@ -267,7 +267,7 @@ func TestImportProject(t *testing.T) {
 	}
 	if service.importSpec.ImportID != "desktop-1" || service.importSpec.Name != "Commitarium" ||
 		service.importSpec.DefaultBranch != "main" || service.importSpec.DialogueLimits != project.DefaultDialogueLimits() ||
-		service.importSpec.AgentProviders != project.DefaultAgentProviders() ||
+		!service.importSpec.AgentProviders.IsZero() || service.importSpec.AgentModels != (project.AgentModels{}) ||
 		service.importSpec.MergePolicy != "" ||
 		service.importBundle != "git bundle bytes" {
 		t.Fatalf("unexpected import request spec=%+v bundle=%q", service.importSpec, service.importBundle)
@@ -415,8 +415,8 @@ func TestCreateProject(t *testing.T) {
 	if service.receivedDialogueLimits != project.DefaultDialogueLimits() {
 		t.Errorf("expected default dialogue limits, got %+v", service.receivedDialogueLimits)
 	}
-	if service.receivedAgentProviders != project.DefaultAgentProviders() {
-		t.Errorf("expected default agent providers, got %+v", service.receivedAgentProviders)
+	if !service.receivedAgentProviders.IsZero() {
+		t.Errorf("a new project named agents (ADR-027): %+v", service.receivedAgentProviders)
 	}
 	if service.receivedMergePolicy != "" {
 		t.Errorf("expected blank policy to be normalized by the service, got %q", service.receivedMergePolicy)
@@ -469,7 +469,8 @@ func TestCreateProjectProvisionsRepositoryWithIdempotencyKey(t *testing.T) {
 	if recorder.Code != http.StatusCreated {
 		t.Fatalf("status = %d: %s", recorder.Code, recorder.Body.String())
 	}
-	if service.requestKey != "desktop-create-1" || service.receivedAgentModels.Lead != "gpt-5.6-sol" {
+	// Models from older clients are ignored: a project chooses none (ADR-027).
+	if service.requestKey != "desktop-create-1" || service.receivedAgentModels != (project.AgentModels{}) {
 		t.Fatalf("unexpected provisioned create request key=%q models=%+v", service.requestKey, service.receivedAgentModels)
 	}
 	var response projectResponse
@@ -514,32 +515,32 @@ func TestProvisionForgejoRepositoryRequiresIdempotencyKey(t *testing.T) {
 	}
 }
 
-func TestCreateProjectAcceptsIndependentAgentProviders(t *testing.T) {
-	want := project.AgentProviders{
-		Lead: project.AgentProviderClaude, Reviewer: project.AgentProviderCodex,
-		LeadAgent: "claude", ReviewerAgent: "codex",
-	}
+// A project no longer chooses agents (ADR-027): agents sent by an older
+// client are ignored rather than refused, so it keeps working.
+func TestCreateProjectIgnoresAgentProviders(t *testing.T) {
 	service := &recordingProjectService{result: project.Project{
-		ID: "prj_test", Name: "Commitarium", AgentProviders: want, CreatedAt: time.Now().UTC(),
+		ID: "prj_test", Name: "Commitarium", CreatedAt: time.Now().UTC(),
 	}}
 	request := httptest.NewRequest(
 		http.MethodPost,
 		"/api/v1/projects",
-		strings.NewReader(`{"name":"Commitarium","agent_providers":{"lead":"claude","reviewer":"codex"}}`),
+		strings.NewReader(`{"name":"Commitarium","agent_providers":{"lead":"claude","reviewer":"codex"},"agent_models":{"lead":"gone","reviewer":"gone"}}`),
 	)
 	recorder := httptest.NewRecorder()
-	New(service, nil, nil, nil, nil, nil).ServeHTTP(recorder, request)
+	// No agent exists: a project is created anyway.
+	NewWithWorkspaceRealWorkflowDeletionAndModels(service, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil,
+		&recordingAgentService{agents: map[string]agent.Agent{}}).ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusCreated {
 		t.Fatalf("status = %d: %s", recorder.Code, recorder.Body.String())
 	}
-	if service.receivedAgentProviders != want {
-		t.Fatalf("received providers = %+v, want %+v", service.receivedAgentProviders, want)
+	if !service.receivedAgentProviders.IsZero() {
+		t.Fatalf("received providers = %+v, want none", service.receivedAgentProviders)
 	}
 	var response projectResponse
 	if err := json.NewDecoder(recorder.Body).Decode(&response); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if response.AgentProviders.Lead != want.Lead || response.AgentProviders.Reviewer != want.Reviewer {
+	if response.AgentProviders != (agentProvidersResponse{}) {
 		t.Fatalf("response providers = %+v", response.AgentProviders)
 	}
 }
@@ -574,6 +575,53 @@ func TestCreateAndUpdateProjectMergePolicy(t *testing.T) {
 	if err := json.NewDecoder(update.Body).Decode(&response); err != nil ||
 		response.MergePolicy != project.MergePolicyRequireUserApproval {
 		t.Fatalf("decode policy response: response=%+v err=%v", response, err)
+	}
+}
+
+// assistantModeProjects is a project service that also sets the assistant's
+// mode.
+type assistantModeProjects struct {
+	*recordingProjectService
+	received project.AssistantMode
+}
+
+func (service *assistantModeProjects) UpdateAssistantMode(
+	_ context.Context, projectID string, mode project.AssistantMode,
+) (project.Project, error) {
+	if !mode.IsValid() {
+		return project.Project{}, project.ErrInvalidAssistantMode
+	}
+	service.received = mode
+	return project.Project{ID: projectID, Name: "Sleep Log", App: true, AssistantMode: mode}, nil
+}
+
+// Projects answer how the assistant works, apps building everything by
+// default, and the user may change it (ADR-027).
+func TestProjectsAnswerAndChangeHowTheAssistantWorks(t *testing.T) {
+	service := &assistantModeProjects{recordingProjectService: &recordingProjectService{
+		getByIDResult: project.Project{ID: "prj_app", Name: "Sleep Log", App: true},
+	}}
+	handler := New(service, nil, nil, nil, nil, nil)
+	get := httptest.NewRecorder()
+	handler.ServeHTTP(get, httptest.NewRequest(http.MethodGet, "/api/v1/projects/prj_app", nil))
+	var response projectResponse
+	if err := json.NewDecoder(get.Body).Decode(&response); err != nil || response.AssistantMode != project.AssistantModeBuilds {
+		t.Fatalf("an app's assistant = %q err=%v", response.AssistantMode, err)
+	}
+
+	update := httptest.NewRecorder()
+	handler.ServeHTTP(update, httptest.NewRequest(http.MethodPut, "/api/v1/projects/prj_app/assistant-mode",
+		strings.NewReader(`{"assistant_mode":"assists"}`)))
+	if err := json.NewDecoder(update.Body).Decode(&response); err != nil || update.Code != http.StatusOK ||
+		service.received != project.AssistantModeAssists || response.AssistantMode != project.AssistantModeAssists {
+		t.Fatalf("update status=%d mode=%q err=%v", update.Code, response.AssistantMode, err)
+	}
+
+	invalid := httptest.NewRecorder()
+	handler.ServeHTTP(invalid, httptest.NewRequest(http.MethodPut, "/api/v1/projects/prj_app/assistant-mode",
+		strings.NewReader(`{"assistant_mode":"sometimes"}`)))
+	if invalid.Code != http.StatusBadRequest || !strings.Contains(invalid.Body.String(), "invalid_assistant_mode") {
+		t.Fatalf("an unknown mode: %d %s", invalid.Code, invalid.Body.String())
 	}
 }
 

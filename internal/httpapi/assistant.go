@@ -66,7 +66,8 @@ type assistantReplyRequest struct {
 }
 
 // startAssistantHandler opens the work order's clarification. Without an
-// explicit choice the assistant runs on the work order's lead agent and model.
+// explicit choice the assistant runs on the work order's lead agent and model,
+// or on the assistant's own while the work order has none.
 func (api *API) startAssistantHandler(w http.ResponseWriter, r *http.Request) {
 	projectID, featureID := r.PathValue("projectID"), r.PathValue("id")
 	storedFeature, err := api.features.GetByID(r.Context(), projectID, featureID)
@@ -87,11 +88,26 @@ func (api *API) startAssistantHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	model := strings.TrimSpace(request.Model)
 	if agentID == "" {
-		if providers, err := storedFeature.AgentProviders.Normalize(); err == nil {
+		if providers, err := storedFeature.AgentProviders.NormalizeChosen(); err == nil && !providers.IsZero() &&
+			storedFeature.AgentModels.Lead != "" {
 			agentID = providers.LeadAgent
-		}
-		if model == "" {
-			model = storedFeature.AgentModels.Lead
+			if model == "" {
+				model = storedFeature.AgentModels.Lead
+			}
+		} else {
+			// A work order without agents yet is clarified on the
+			// assistant's own agent (ADR-027).
+			providers, assistantModel, err := api.assistantAgent(r.Context())
+			if err != nil {
+				if !writeChoiceError(w, err) {
+					writeAssistantError(w, featureID, err)
+				}
+				return
+			}
+			agentID = providers.LeadAgent
+			if model == "" {
+				model = assistantModel
+			}
 		}
 	}
 	session, created, err := api.assistant.Start(r.Context(), projectID, featureID, agentID, model)

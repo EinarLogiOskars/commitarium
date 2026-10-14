@@ -54,8 +54,9 @@ type AssistantAction struct {
 	// Steps is "full", "planned", or "quick" (ADR-018).
 	Steps            string `json:"steps"`
 	IndependentTests bool   `json:"independent_tests"`
-	// Agents and models, for create, start, and change; empty keeps the
-	// project's defaults or the run's current choice.
+	// Agents and models, for create, start, and change: the assistant's
+	// choice (ADR-027). Empty keeps the work order's own choice or the run's
+	// current one; a project has no defaults.
 	LeadAgent     string `json:"lead_agent"`
 	LeadModel     string `json:"lead_model"`
 	ReviewerAgent string `json:"reviewer_agent"`

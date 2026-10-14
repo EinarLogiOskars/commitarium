@@ -1,8 +1,6 @@
 import { request, ApiError } from "./client";
 import type {
-  AgentModels,
-  AgentProviders,
-  AgentProvider,
+  AssistantMode,
   AutonomyPolicy,
   CreateProjectInput,
   MergePolicy,
@@ -82,6 +80,10 @@ export const renameProject = (id: string, name: string): Promise<Project> =>
 export const setProjectApp = (id: string, app: boolean): Promise<Project> =>
   request(`${projectPath(id)}/app`, { method: "PUT", body: { app } });
 
+/** How the assistant works in the project: it builds everything or assists. */
+export const setAssistantMode = (id: string, assistant_mode: AssistantMode): Promise<Project> =>
+  request(`${projectPath(id)}/assistant-mode`, { method: "PUT", body: { assistant_mode } });
+
 // Optional project validation: when configured, this ordered, non-empty list
 // runs in a disposable worker and must pass for the exact approved commit.
 export interface ValidationConfig {
@@ -108,28 +110,6 @@ export const updateProjectValidation = (
 
 export const disableProjectValidation = (id: string): Promise<void> =>
   request(`${projectPath(id)}/validation`, { method: "DELETE" });
-
-export const updateAgentProviders = (
-  id: string,
-  lead: AgentProvider,
-  reviewer: AgentProvider,
-): Promise<Project> =>
-  request(`${projectPath(id)}/agent-providers`, {
-    method: "PUT",
-    body: { lead, reviewer },
-  });
-
-/** Atomically set default providers AND exact models for future work orders.
- * The combined route validates each provider/model pair. */
-export const updateAgentSettings = (
-  id: string,
-  agent_providers: AgentProviders,
-  agent_models: AgentModels,
-): Promise<Project> =>
-  request(`${projectPath(id)}/agent-settings`, {
-    method: "PUT",
-    body: { agent_providers, agent_models },
-  });
 
 export const updateMergePolicy = (id: string, merge_policy: MergePolicy): Promise<Project> =>
   request(`${projectPath(id)}/merge-policy`, {

@@ -16,6 +16,7 @@ import (
 	"github.com/EinarLogiOskars/commitarium/internal/execution"
 	"github.com/EinarLogiOskars/commitarium/internal/feature"
 	"github.com/EinarLogiOskars/commitarium/internal/featureartifact"
+	"github.com/EinarLogiOskars/commitarium/internal/modelcatalog"
 	"github.com/EinarLogiOskars/commitarium/internal/orchestration"
 	"github.com/EinarLogiOskars/commitarium/internal/project"
 	"github.com/EinarLogiOskars/commitarium/internal/toolchain"
@@ -125,11 +126,22 @@ func (api *API) stopAutopilotHandler(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, conversation, "assistant conversation")
 }
 
+// autopilotApproval marks an approval autopilot makes for the assistant,
+// not the user: it may not act on the user's own work orders (ADR-027).
+type autopilotApproval struct{}
+
+func approvedByAutopilot(ctx context.Context) bool {
+	marked, _ := ctx.Value(autopilotApproval{}).(bool)
+	return marked
+}
+
 // AssistantActionApplier approves assistant actions through handler exactly
 // as the user's Approve button does, with a new work order started: how
-// autopilot takes over an action. The error carries the API's message.
+// autopilot takes over an action. Unlike the user's approval, it is refused
+// on a work order the user created. The error carries the API's message.
 func AssistantActionApplier(handler http.Handler) func(ctx context.Context, scope, actionID string) error {
 	return func(ctx context.Context, scope, actionID string) error {
+		ctx = context.WithValue(ctx, autopilotApproval{}, true)
 		request, err := http.NewRequestWithContext(ctx, http.MethodPost,
 			"/api/v1/assistant/conversations/"+url.PathEscape(scope)+"/actions/"+url.PathEscape(actionID)+"/approve",
 			strings.NewReader(`{"start":true}`))
@@ -272,6 +284,19 @@ func (api *API) approveConversationActionHandler(w http.ResponseWriter, r *http.
 		writeError(w, http.StatusConflict, "action_needs_project", "this action runs in a project's conversation, and a new app at the top level")
 		return
 	}
+	// The user's approval may act on any work order; autopilot's only on the
+	// assistant's own (ADR-027).
+	if approvedByAutopilot(r.Context()) {
+		refusal, err := api.usersWorkOrder(r.Context(), scope, action)
+		if err != nil {
+			writeConversationError(w, err)
+			return
+		}
+		if refusal != "" {
+			writeError(w, http.StatusConflict, "work_order_is_users", refusal)
+			return
+		}
+	}
 	chosen := make([]string, 0, 2)
 	if action.Type == featureartifact.AssistantCreateWorkOrder || action.Type == featureartifact.AssistantStartWorkOrder {
 		if model := strings.TrimSpace(body.LeadModel); model != "" && model != action.LeadModel {
@@ -345,6 +370,42 @@ func (api *API) approveConversationActionHandler(w http.ResponseWriter, r *http.
 	writeJSON(w, http.StatusOK, conversation, "assistant conversation")
 }
 
+// usersWorkOrder says why the assistant may not act on its own on the work
+// order an action names, when the user created it by hand and did not hand
+// it over with an autopilot goal; empty when it may.
+func (api *API) usersWorkOrder(ctx context.Context, scope string, action conversations.Action) (string, error) {
+	switch action.Type {
+	case featureartifact.AssistantStartWorkOrder, featureartifact.AssistantChangeModels,
+		featureartifact.AssistantContinueWorkOrder, featureartifact.AssistantCloseWorkOrder,
+		featureartifact.AssistantAddVisionItem:
+	default:
+		return "", nil
+	}
+	if action.WorkOrderID == "" {
+		return "", nil
+	}
+	stored, err := api.features.GetByID(ctx, scope, action.WorkOrderID)
+	if errors.Is(err, feature.ErrNotFound) {
+		// The action's own path answers a missing work order.
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	if stored.CreatedBy == feature.CreatedByAssistant {
+		return "", nil
+	}
+	conversation, err := api.conversations.Get(ctx, scope)
+	if err != nil {
+		return "", err
+	}
+	if conversation.Goal.Hands(stored.ID) {
+		return "", nil
+	}
+	return fmt.Sprintf("“%s” is the user's work order: Commitarium does not start, continue, change, or close it "+
+		"on its own. Tell the user it is waiting for them; your card stays for their approval.", stored.Title), nil
+}
+
 func (api *API) applyCreateWorkOrder(
 	w http.ResponseWriter, r *http.Request, projectID string, action conversations.Action, start bool,
 ) (string, string, bool) {
@@ -360,15 +421,30 @@ func (api *API) applyCreateWorkOrder(
 			return "", "", false
 		}
 	}
-	stored, err := api.projects.GetByID(ctx, projectID)
-	if err != nil {
+	if _, err := api.projects.GetByID(ctx, projectID); err != nil {
 		writeConversationError(w, err)
 		return "", "", false
 	}
-	overrides, err := api.assistantSettings(ctx, stored, action.AssistantAction)
+	overrides, err := api.assistantSettings(ctx, action.AssistantAction)
 	if err != nil {
-		writeAssistantSettingsError(w, err)
+		if !writeChoiceError(w, err) {
+			writeConversationError(w, err)
+		}
 		return "", "", false
+	}
+	if start {
+		// A work order the action starts must run: refuse before creating it.
+		if overrides.AgentProviders == nil {
+			writeChoiceError(w, errIncompleteAssistantChoice)
+			return "", "", false
+		}
+		skipReviewer := overrides.Steps != nil && overrides.Steps.SkipReviewer
+		if err := api.checkWorkChoice(ctx, *overrides.AgentProviders, *overrides.AgentModels, skipReviewer); err != nil {
+			if !writeChoiceError(w, err) {
+				writeConversationError(w, err)
+			}
+			return "", "", false
+		}
 	}
 	description := action.Description
 	if action.VisionItemID != "" && api.visions != nil {
@@ -378,6 +454,8 @@ func (api *API) applyCreateWorkOrder(
 			}
 		}
 	}
+	// The assistant's work order is its own to drive (ADR-027).
+	overrides.CreatedBy = feature.CreatedByAssistant
 	created, err := api.features.Create(ctx, projectID, action.Title, description, overrides)
 	if err != nil {
 		log.Printf("create the assistant's work order %q: %v", action.Title, err)
@@ -411,11 +489,6 @@ func (api *API) applyStartWorkOrder(
 		writeConversationError(w, err)
 		return "", false
 	}
-	current, err := api.projects.GetByID(ctx, projectID)
-	if err != nil {
-		writeConversationError(w, err)
-		return "", false
-	}
 	request := &startRunRequest{}
 	clarification := false
 	request.Steps = &workStepsRequest{Clarification: &clarification}
@@ -427,14 +500,26 @@ func (api *API) applyStartWorkOrder(
 		tests := true
 		request.IndependentAcceptanceTests = &tests
 	}
+	// The action's agents and models replace the work order's own; a role the
+	// action leaves out keeps the work order's. Nothing comes from the
+	// project (ADR-027); a reviewer the steps skip is the lead.
+	skipReviewer := stored.Steps.SkipReviewer
+	if action.Steps != "" {
+		skipReviewer = action.Steps != "full"
+	}
 	if action.LeadAgent != "" || action.ReviewerAgent != "" {
-		lead, reviewer := orDefault(action.LeadAgent, stored.AgentProviders.LeadAgent), orDefault(action.ReviewerAgent, stored.AgentProviders.ReviewerAgent)
-		request.AgentProviders = &agentProvidersRequest{LeadAgent: &lead, ReviewerAgent: &reviewer}
+		lead := orDefault(action.LeadAgent, stored.AgentProviders.LeadAgent)
+		request.AgentProviders = &agentProvidersRequest{LeadAgent: &lead}
+		if reviewer := orDefault(action.ReviewerAgent, stored.AgentProviders.ReviewerAgent); reviewer != "" && !skipReviewer {
+			request.AgentProviders.ReviewerAgent = &reviewer
+		}
 	}
 	if action.LeadModel != "" || action.ReviewerModel != "" {
-		lead := orDefault(action.LeadModel, orDefault(stored.AgentModels.Lead, current.AgentModels.Lead))
-		reviewer := orDefault(action.ReviewerModel, orDefault(stored.AgentModels.Reviewer, current.AgentModels.Reviewer))
-		request.AgentModels = &agentModelsRequest{Lead: &lead, Reviewer: &reviewer}
+		lead := orDefault(action.LeadModel, stored.AgentModels.Lead)
+		request.AgentModels = &agentModelsRequest{Lead: &lead}
+		if reviewer := orDefault(action.ReviewerModel, stored.AgentModels.Reviewer); reviewer != "" && !skipReviewer {
+			request.AgentModels.Reviewer = &reviewer
+		}
 	}
 	if _, ok := api.startFeature(w, r, stored, "assistant-"+action.ID, request); !ok {
 		return "", false
@@ -564,9 +649,11 @@ func (api *API) applyContinueWorkOrder(
 }
 
 // assistantSettings turns an action's steps, agents, models, and tests into
-// a work order's settings, filling the rest from the project's defaults.
+// a work order's settings. The agents and models are the assistant's choice
+// (ADR-027): an action names them all, or none for a draft whose agents are
+// chosen at Start; nothing is filled from the project.
 func (api *API) assistantSettings(
-	ctx context.Context, stored project.Project, action featureartifact.AssistantAction,
+	ctx context.Context, action featureartifact.AssistantAction,
 ) (feature.SettingsOverrides, error) {
 	var overrides feature.SettingsOverrides
 	switch action.Steps {
@@ -581,41 +668,40 @@ func (api *API) assistantSettings(
 		tests := true
 		overrides.IndependentAcceptanceTests = &tests
 	}
-	providers := stored.AgentProviders
-	if action.LeadAgent != "" || action.ReviewerAgent != "" {
-		lead := orDefault(action.LeadAgent, stored.AgentProviders.LeadAgent)
-		reviewer := orDefault(action.ReviewerAgent, stored.AgentProviders.ReviewerAgent)
-		decoded, err := api.decodeAgentProviders(ctx, &agentProvidersRequest{LeadAgent: &lead, ReviewerAgent: &reviewer}, false)
-		if err != nil {
-			return feature.SettingsOverrides{}, errInvalidAssistantAgents
-		}
-		providers = decoded
-		overrides.AgentProviders = &providers
+	if action.LeadAgent == "" && action.ReviewerAgent == "" && action.LeadModel == "" && action.ReviewerModel == "" {
+		return overrides, nil
 	}
-	if action.LeadModel != "" || action.ReviewerModel != "" {
-		models := project.AgentModels{
-			Lead:     orDefault(action.LeadModel, stored.AgentModels.Lead),
-			Reviewer: orDefault(action.ReviewerModel, stored.AgentModels.Reviewer),
-		}
-		if api.modelCatalog != nil {
-			if err := api.modelCatalog.ValidateSelection(ctx, providers, models); err != nil {
-				return feature.SettingsOverrides{}, err
-			}
-		}
-		overrides.AgentModels = &models
+	skipReviewer := overrides.Steps != nil && overrides.Steps.SkipReviewer
+	if action.LeadAgent == "" || action.LeadModel == "" ||
+		(!skipReviewer && (action.ReviewerAgent == "" || action.ReviewerModel == "")) {
+		return feature.SettingsOverrides{}, errIncompleteAssistantChoice
 	}
+	request := &agentProvidersRequest{LeadAgent: &action.LeadAgent}
+	models := &agentModelsRequest{Lead: &action.LeadModel}
+	if !skipReviewer {
+		request.ReviewerAgent, models.Reviewer = &action.ReviewerAgent, &action.ReviewerModel
+	}
+	fillSkippedReviewer(request, models, skipReviewer)
+	providers, err := api.decodeAgentProviders(ctx, request, false)
+	if err != nil {
+		return feature.SettingsOverrides{}, &choiceError{status: http.StatusBadRequest, code: "agent_not_found",
+			message: "the action names an agent that does not exist; use agent IDs exactly as the state lists them"}
+	}
+	chosen := project.AgentModels{Lead: *models.Lead, Reviewer: *models.Reviewer}
+	if err := api.modelOffered(ctx, providers.LeadAgent, providers.Lead, modelcatalog.RoleLead, chosen.Lead); err != nil {
+		return feature.SettingsOverrides{}, err
+	}
+	if !skipReviewer {
+		if err := api.modelOffered(ctx, providers.ReviewerAgent, providers.Reviewer, modelcatalog.RoleReviewer, chosen.Reviewer); err != nil {
+			return feature.SettingsOverrides{}, err
+		}
+	}
+	overrides.AgentProviders, overrides.AgentModels = &providers, &chosen
 	return overrides, nil
 }
 
-var errInvalidAssistantAgents = errors.New("the action names agents that are not connected")
-
-func writeAssistantSettingsError(w http.ResponseWriter, err error) {
-	if errors.Is(err, errInvalidAssistantAgents) {
-		writeError(w, http.StatusBadRequest, "invalid_agent_providers", err.Error())
-		return
-	}
-	writeModelSelectionError(w, err)
-}
+var errIncompleteAssistantChoice = &choiceError{status: http.StatusBadRequest, code: "agents_not_chosen",
+	message: "name lead_agent and lead_model, and reviewer_agent and reviewer_model when the steps are full"}
 
 func orDefault(value, fallback string) string {
 	if strings.TrimSpace(value) != "" {
@@ -628,6 +714,10 @@ func writeConversationError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, conversations.ErrNotFound), errors.Is(err, project.ErrNotFound), errors.Is(err, feature.ErrNotFound):
 		writeError(w, http.StatusNotFound, "not_found", "not found")
+	case errors.Is(err, conversations.ErrNoAgents):
+		writeError(w, http.StatusConflict, "no_agents", err.Error())
+	case errors.Is(err, conversations.ErrNotSetUp):
+		writeError(w, http.StatusConflict, "assistant_not_set_up", err.Error())
 	case errors.Is(err, conversations.ErrGoalActive):
 		writeError(w, http.StatusConflict, "autopilot_active", "autopilot is already on; stop it first")
 	case errors.Is(err, conversations.ErrBusy):

@@ -130,12 +130,6 @@ func (api *API) installMarketplaceAppHandler(w http.ResponseWriter, r *http.Requ
 		DialogueLimits: project.DefaultDialogueLimits(),
 		DefaultBranch:  "main",
 	}
-	if template, ok := api.newestConfiguredProject(ctx); ok {
-		spec.AgentProviders, spec.AgentModels = template.AgentProviders, template.AgentModels
-	} else if spec.AgentProviders, err = api.decodeAgentProviders(ctx, nil, true); err != nil {
-		writeInstallError(w, err)
-		return
-	}
 	imported, _, err := api.projectImporter.Import(ctx, spec, bundle)
 	if err != nil {
 		writeInstallError(w, err)

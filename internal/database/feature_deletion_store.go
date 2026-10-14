@@ -40,7 +40,7 @@ func (store *FeatureDeletionStore) BeginDeletion(
 		       planning_round_limit, implementation_review_round_limit,
 		       lead_provider, reviewer_provider, lead_agent, reviewer_agent, lead_model, reviewer_model,
 		       merge_policy, autonomy_policy, independent_acceptance_tests, skip_plan, skip_reviewer,
-		       kind, background, created_at, updated_at
+		       kind, background, created_by, created_at, updated_at
 		FROM features WHERE id = ?`, featureID))
 	if errors.Is(err, sql.ErrNoRows) || (err == nil && storedFeature.ProjectID != projectID) {
 		return workorder.Deletion{}, feature.ErrNotFound
