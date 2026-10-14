@@ -225,7 +225,7 @@ func (s *Service) Import(ctx context.Context, spec ImportSpec, bundle io.Reader)
 		ID: projectID, Name: normalized.Name, RecoveryPolicy: normalized.RecoveryPolicy,
 		MergePolicy: normalized.MergePolicy, AutonomyPolicy: normalized.AutonomyPolicy,
 		DialogueLimits: normalized.DialogueLimits, AgentProviders: normalized.AgentProviders,
-		AgentModels: normalized.AgentModels, AssistantMode: DefaultAssistantMode(false),
+		AgentModels: normalized.AgentModels, AssistantMode: DefaultAssistantMode(),
 		ForgejoRepository: &repository, CreatedAt: s.now().UTC(),
 	}
 	if err := s.store.Create(ctx, created); err != nil {
@@ -387,7 +387,7 @@ func (s *Service) newProject(
 		DialogueLimits: dialogueLimits,
 		AgentProviders: agentProviders,
 		AgentModels:    agentModels,
-		AssistantMode:  DefaultAssistantMode(false),
+		AssistantMode:  DefaultAssistantMode(),
 		CreatedAt:      s.now(),
 	}
 	return project, nil

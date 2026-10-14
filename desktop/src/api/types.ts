@@ -78,9 +78,10 @@ export type MergePolicy = "require_user_approval" | "auto_after_gates";
 // clarification) still stop in both modes.
 export type AutonomyPolicy = "review_each_phase" | "run_to_completion";
 
-/** How the assistant works in a project (ADR-027): it builds everything,
- * applying its own actions without cards, or it assists, proposing cards the
- * user approves. Either way it never acts on work orders the user made. */
+/** How the assistant works in a project (ADR-027): it assists by default,
+ * proposing cards the user approves and leaving the user's work orders to
+ * them; or it builds everything (on for a project the top-level assistant
+ * created), owning the whole project, the user's work orders included. */
 export type AssistantMode = "builds" | "assists";
 
 export interface DialogueLimits {

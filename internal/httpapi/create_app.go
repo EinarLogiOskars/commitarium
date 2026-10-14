@@ -46,6 +46,9 @@ func (api *API) applyCreateApp(w http.ResponseWriter, r *http.Request, action co
 		method, path, key string
 		body              any
 	}{
+		// The user asked the assistant to create it, so the assistant builds
+		// everything (ADR-027).
+		{http.MethodPut, base + "/assistant-mode", "", map[string]project.AssistantMode{"assistant_mode": project.AssistantModeBuilds}},
 		{http.MethodPut, base + "/app", "", map[string]bool{"app": true}},
 		{http.MethodPost, "/api/v1/assistant/conversations/" + url.PathEscape(created.ID) + "/launch", "", nil},
 		{http.MethodPost, base + "/vision/assistant", key + ":vision", map[string]string{"mode": "describe", "message": action.Description}},

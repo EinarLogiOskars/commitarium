@@ -110,9 +110,6 @@ func (s *MemoryStore) UpdateApp(_ context.Context, projectID string, app bool) (
 	if !exists {
 		return Project{}, ErrNotFound
 	}
-	if storedProject.App != app {
-		storedProject.AssistantMode = DefaultAssistantMode(app)
-	}
 	storedProject.App = app
 	s.projects[projectID] = cloneProject(storedProject)
 	return cloneProject(storedProject), nil

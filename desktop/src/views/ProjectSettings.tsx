@@ -365,9 +365,9 @@ function UseAsApp({ project, onUpdated }: { project: Project; onUpdated: (p: Pro
   );
 }
 
-// How the assistant works here (ADR-027): it builds everything on its own,
-// or assists with cards the user approves. Either way it leaves the work
-// orders the user made to the user. Saved at once; the drawer follows.
+// How the assistant works here (ADR-027): it assists with cards the user
+// approves, or builds everything on its own, taking over the user's work
+// orders too. Saved at once; the drawer follows.
 function HowTheAssistantWorks({
   project,
   onUpdated,
