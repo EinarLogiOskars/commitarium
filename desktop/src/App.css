@@ -4247,6 +4247,11 @@ select:focus {
   font-size: 13px;
   line-height: 1;
 }
+/* Done shows its most recent few; the rest are a click away. */
+.rail__more {
+  margin: 2px 0 4px 10px;
+  font-size: 12px;
+}
 
 /* An app's own window: the app fills it; Commitarium only floats the
    assistant's button over it. */
