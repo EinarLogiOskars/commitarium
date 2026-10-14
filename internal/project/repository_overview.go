@@ -98,3 +98,19 @@ func (overview RepositoryOverview) HasCode() bool {
 	}
 	return false
 }
+
+// composeFileNames are the compose files a preview runs from (ADR-014).
+var composeFileNames = []string{"compose.yaml", "compose.yml", "docker-compose.yaml", "docker-compose.yml"}
+
+// HasCompose reports whether the repository has a compose file at its root,
+// which the app's preview runs.
+func (overview RepositoryOverview) HasCompose() bool {
+	for _, entry := range overview.Tree {
+		for _, name := range composeFileNames {
+			if entry.Path == name {
+				return true
+			}
+		}
+	}
+	return false
+}

@@ -243,7 +243,7 @@ func TestTheAssistantHearsWhatBecameOfItsActions(t *testing.T) {
 			Status: ActionApplied, AutoTried: true, Result: "Continued “Show the log” with guidance."},
 		{AssistantAction: featureartifact.AssistantAction{Type: featureartifact.AssistantCreateWorkOrder, Title: "Sync"},
 			Status: ActionProposed},
-	})
+	}, nil)
 	if !strings.Contains(text, "applied by autopilot — Continued “Show the log” with guidance.") ||
 		!strings.Contains(text, `"Sync" at 00:00 UTC: waiting for the user's approval`) {
 		t.Fatalf("recent actions = %q", text)

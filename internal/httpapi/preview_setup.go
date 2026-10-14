@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/EinarLogiOskars/commitarium/internal/conversations"
 	"github.com/EinarLogiOskars/commitarium/internal/feature"
 	"github.com/EinarLogiOskars/commitarium/internal/previewcheck"
 	"github.com/EinarLogiOskars/commitarium/internal/project"
@@ -132,7 +133,7 @@ func (api *API) ensurePreviewSetupLocked(ctx context.Context, projectID string) 
 	if err != nil {
 		return nil, err
 	}
-	if repositoryHasCompose(overview) {
+	if overview.HasCompose() {
 		return nil, errPreviewHasCompose
 	}
 	if !overview.HasCode() {
@@ -203,7 +204,7 @@ func (api *API) setUpPreview(
 	if err != nil {
 		return nil, err
 	}
-	if repositoryHasCompose(overview) {
+	if overview.HasCompose() {
 		return api.fixPreviewLocked(ctx, projectID, failure, evidence, true)
 	}
 	return api.ensurePreviewSetupLocked(ctx, projectID)
@@ -243,19 +244,6 @@ func previewFixesSinceSetup(features []feature.Feature) int {
 		fixes++
 	}
 	return fixes
-}
-
-var composeFileNames = []string{"compose.yaml", "compose.yml", "docker-compose.yaml", "docker-compose.yml"}
-
-func repositoryHasCompose(overview project.RepositoryOverview) bool {
-	for _, entry := range overview.Tree {
-		for _, name := range composeFileNames {
-			if entry.Path == name {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 // startBackgroundWorkOrder creates and starts a quick change Commitarium runs
@@ -409,7 +397,7 @@ func (api *API) reportPreviewFailureHandler(w http.ResponseWriter, r *http.Reque
 // previewFailureEvent is what the assistant hears about a preview that
 // failed to start.
 func previewFailureEvent(failure string, evidence *previewcheck.Evidence) string {
-	text := "The app's preview failed to start"
+	text := conversations.PreviewFailure
 	detail := ""
 	if evidence != nil && len(evidence.Services) > 0 {
 		text += ": " + evidence.Plain()

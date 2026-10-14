@@ -45,6 +45,13 @@ const (
 	// preview check of its commit passes (ADR-028). Guidance says what is
 	// failing, for its agent.
 	AssistantSetUpPreview AssistantActionType = "set_up_preview"
+	// AssistantWriteVision has Commitarium write the project's vision on the
+	// assistant's agent from Description: what the project is for, in the
+	// user's words (ADR-020), where the assistant builds everything.
+	AssistantWriteVision AssistantActionType = "write_vision"
+	// AssistantSetUpStack sets the project up on the stack its vision
+	// recommends, or detects the stack of the code it has.
+	AssistantSetUpStack AssistantActionType = "set_up_stack"
 )
 
 // AssistantAction is one proposed action. Fields that do not apply to its
@@ -76,6 +83,11 @@ type AssistantAction struct {
 	// Guidance is what continue_work_order tells the agents; empty retries.
 	// For set_up_preview it is what fails, if the assistant knows.
 	Guidance string `json:"guidance"`
+	// After, for a work order to create or start, names work it must follow:
+	// a work order's ID, or the title of another of the assistant's actions.
+	// Autopilot starts it only once that work has merged, so two changes to
+	// the same part of the app do not run at once.
+	After string `json:"after"`
 }
 
 const (
@@ -97,7 +109,7 @@ func (turn AssistantTurn) Normalize() (AssistantTurn, error) {
 		for _, field := range []*string{
 			&action.Reason, &action.Title, &action.Description, &action.VisionItemID, &action.Steps,
 			&action.LeadAgent, &action.LeadModel, &action.ReviewerAgent, &action.ReviewerModel,
-			&action.WorkOrderID, &action.When, &action.Guidance,
+			&action.WorkOrderID, &action.When, &action.Guidance, &action.After,
 		} {
 			*field = strings.TrimSpace(*field)
 		}
@@ -111,6 +123,9 @@ func (turn AssistantTurn) Normalize() (AssistantTurn, error) {
 func (action AssistantAction) validate() error {
 	if action.Reason == "" || len(action.Reason) > MaxStepTextBytes {
 		return fmt.Errorf("a reason is required")
+	}
+	if len(action.After) > MaxStepTextBytes {
+		return fmt.Errorf("after is too long")
 	}
 	switch action.Steps {
 	case "", "full", "planned", "quick":
@@ -149,6 +164,11 @@ func (action AssistantAction) validate() error {
 		if len(action.Guidance) > MaxGoalBytes {
 			return fmt.Errorf("the preview's guidance is too long")
 		}
+	case AssistantWriteVision:
+		if action.Description == "" || len(action.Description) > MaxGoalBytes {
+			return fmt.Errorf("writing the vision needs a bounded description of the project")
+		}
+	case AssistantSetUpStack:
 	case AssistantStartAutopilot:
 		if action.Priority < 0 || action.Priority > maxVisionPriority {
 			return fmt.Errorf("priority runs from 0 to %d", maxVisionPriority)

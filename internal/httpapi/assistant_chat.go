@@ -255,9 +255,13 @@ type approveActionRequest struct {
 	// ConfirmPremium is the user's explicit approval of the premium models the
 	// action uses; without it such an action is refused.
 	ConfirmPremium bool `json:"confirm_premium"`
-	// LeadModel and ReviewerModel replace the models a new or started work
-	// order runs on: the user's choice over the assistant's.
+	// LeadAgent, LeadModel, ReviewerAgent, and ReviewerModel replace the
+	// agents and models a new or started work order runs on: the user's
+	// choice over the assistant's, refused like any choice that cannot run
+	// (ADR-027).
+	LeadAgent     string `json:"lead_agent,omitempty"`
 	LeadModel     string `json:"lead_model,omitempty"`
+	ReviewerAgent string `json:"reviewer_agent,omitempty"`
 	ReviewerModel string `json:"reviewer_model,omitempty"`
 }
 
@@ -297,15 +301,21 @@ func (api *API) approveConversationActionHandler(w http.ResponseWriter, r *http.
 			return
 		}
 	}
-	chosen := make([]string, 0, 2)
+	chosen := make([]string, 0, 4)
 	if action.Type == featureartifact.AssistantCreateWorkOrder || action.Type == featureartifact.AssistantStartWorkOrder {
-		if model := strings.TrimSpace(body.LeadModel); model != "" && model != action.LeadModel {
-			action.LeadModel = model
-			chosen = append(chosen, "lead "+model)
-		}
-		if model := strings.TrimSpace(body.ReviewerModel); model != "" && model != action.ReviewerModel {
-			action.ReviewerModel = model
-			chosen = append(chosen, "reviewer "+model)
+		for _, choice := range []struct {
+			name           string
+			value, current *string
+		}{
+			{"lead agent ", &body.LeadAgent, &action.LeadAgent},
+			{"lead ", &body.LeadModel, &action.LeadModel},
+			{"reviewer agent ", &body.ReviewerAgent, &action.ReviewerAgent},
+			{"reviewer ", &body.ReviewerModel, &action.ReviewerModel},
+		} {
+			if value := strings.TrimSpace(*choice.value); value != "" && value != *choice.current {
+				*choice.current = value
+				chosen = append(chosen, choice.name+value)
+			}
 		}
 	}
 	// Premium is judged on the models that will run, not only those the card
@@ -341,6 +351,10 @@ func (api *API) approveConversationActionHandler(w http.ResponseWriter, r *http.
 		result, ok = api.applyContinueWorkOrder(w, r, scope, action)
 	case featureartifact.AssistantSetUpPreview:
 		result, workOrderID, ok = api.applySetUpPreview(w, r, scope, action)
+	case featureartifact.AssistantWriteVision:
+		result, ok = api.applyWriteVision(w, r, scope, action)
+	case featureartifact.AssistantSetUpStack:
+		result, workOrderID, ok = api.applySetUpStack(w, r, scope)
 	case featureartifact.AssistantCloseWorkOrder:
 		closed, err := api.closeWorkOrder(r.Context(), scope, action.WorkOrderID, "assistant-"+action.ID)
 		if err != nil {

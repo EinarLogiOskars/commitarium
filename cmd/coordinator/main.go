@@ -421,6 +421,30 @@ func run(ctx context.Context, coordinatorConfig config) error {
 		assistantWatcher = &conversations.Watcher{
 			Service: projectAssistant, Features: featureService, Runs: executionService, LimitWaits: executionService,
 			RetryWaits: executionService, Visions: visions,
+			Toolchains: toolchainService, VisionSessions: visions,
+			// The gap check does not wake an assistant whose agent is at its
+			// usage limit: a run waits on it, or its latest report says so.
+			AgentLimited: func(ctx context.Context, agentID string) bool {
+				now := time.Now()
+				if waits, err := executionService.LimitWaits(ctx); err == nil {
+					for _, wait := range waits {
+						if wait.AgentID == agentID && (wait.ResetsAt == nil || wait.ResetsAt.After(now)) {
+							return true
+						}
+					}
+				}
+				reported, err := usage.AgentUsage(ctx)
+				if err != nil {
+					return false
+				}
+				for _, current := range reported {
+					if current.Agent == agentID {
+						limited, _ := current.LimitedUntil(now)
+						return limited
+					}
+				}
+				return false
+			},
 		}
 		assistant, err := toolchain.NewAssistant(
 			coordinatorConfig.toolchainRoot, coordinatorConfig.workspaceRoot, projectService, toolchainService,

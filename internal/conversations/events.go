@@ -60,6 +60,12 @@ type Watcher struct {
 	// from a blocker, so it neither wakes the assistant nor spends
 	// autopilot's continues.
 	RetryWaits RetryWaitReader
+	// Toolchains and VisionSessions let the gap check see a project's stack
+	// and a vision being written, and AgentLimited, when set, tells it the
+	// assistant's agent is at its usage limit (gaps.go).
+	Toolchains     ToolchainReader
+	VisionSessions VisionSessions
+	AgentLimited   func(ctx context.Context, agentID string) bool
 }
 
 // watchEvery is how often the watcher looks at the projects' work.
@@ -89,6 +95,7 @@ func (watcher Watcher) Tick(ctx context.Context) {
 		}
 		watcher.launch(ctx, scope)
 		watcher.autopilot(ctx, scope)
+		watcher.gapCheck(ctx, scope)
 	}
 }
 
@@ -410,7 +417,8 @@ func (service *Service) startWaitingTurn(ctx context.Context, stored record, set
 	if len(stored.Queued) == 0 {
 		prompt := eventsPrompt(stored.PendingEvents) +
 			"\n\nTell the user briefly what this means and what comes next. Propose actions only when they help; " +
-			"the user approves them as usual. When nothing needs the user, say so in a line."
+			"the user approves them as usual, unless you build everything here. When nothing needs the user, say so " +
+			"in a line."
 		stored.PendingEvents = nil
 		_, err := service.startTurn(ctx, stored, settings, key, "event", prompt)
 		return err
@@ -471,6 +479,65 @@ func (service *Service) Report(_ context.Context, scope, text string) error {
 	}
 	now := service.now()
 	stored.addEvent(text, now)
+	stored.PendingEvents = append(stored.PendingEvents, text)
+	if strings.HasPrefix(text, PreviewFailure) {
+		stored.PreviewFailedAt = &now
+	}
+	stored.UpdatedAt = now
+	err = service.write(stored)
+	service.mu.Unlock()
+	if err == nil {
+		service.nudgeWatcher()
+	}
+	return err
+}
+
+// PreviewFailure starts what the assistant hears when the app's preview
+// failed to start, so the gap check knows it fails until a fix merges.
+const PreviewFailure = "The app's preview failed to start"
+
+// Wake tells a project's assistant about something the user did that it
+// acts on where it builds everything (ADR-027), such as a work order the user
+// created by hand, and wakes it for one turn. Unlike Report, it starts the
+// project's conversation when there is none yet: building everything, the
+// assistant owns the project whether or not the user opened it. note is the
+// line the user sees; text what the assistant hears.
+func (service *Service) Wake(ctx context.Context, scope, note, text string) error {
+	return service.wake(ctx, scope, note, text, false)
+}
+
+// HandOver records that the user switched the project to building
+// everything and wakes the assistant to take the project over. Cards the
+// user dismissed before no longer stand: switching hands the work over.
+func (service *Service) HandOver(ctx context.Context, scope string) error {
+	return service.wake(ctx, scope, "You handed the project to the assistant: it builds everything from here.",
+		"The user switched this project to Builds everything: you own it now. Take it over: write the vision "+
+			"if there is none, set up the stack, start autopilot on the vision's open items, and start or queue "+
+			"the waiting work orders, the user's too. Cards the user dismissed before this switch no longer "+
+			"stand. Commitarium reports what is still missing as you go.", true)
+}
+
+func (service *Service) wake(ctx context.Context, scope, note, text string, handOver bool) error {
+	text = strings.TrimSpace(text)
+	if scope == TopLevel || !scopePattern.MatchString(scope) || text == "" {
+		return ErrNotFound
+	}
+	if err := service.checkScope(ctx, scope); err != nil {
+		return err
+	}
+	service.mu.Lock()
+	stored, err := service.read(scope)
+	if err != nil {
+		service.mu.Unlock()
+		return err
+	}
+	now := service.now()
+	if handOver {
+		stored.BuildsSince = &now
+		// What was missing is told afresh to the new owner.
+		stored.Gaps = nil
+	}
+	stored.addEvent(note, now)
 	stored.PendingEvents = append(stored.PendingEvents, text)
 	stored.UpdatedAt = now
 	err = service.write(stored)

@@ -194,6 +194,8 @@ func (api *API) createFeatureHandler(
 			createdFeature = started
 		}
 	}
+	// Building everything, the assistant takes over what the user adds.
+	api.wakeForUsersWorkOrder(r.Context(), createdFeature)
 	response := newFeatureResponse(createdFeature)
 	w.Header().Set(
 		"Location",

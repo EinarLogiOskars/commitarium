@@ -107,7 +107,10 @@ type Action struct {
 	// ProjectID names the project a create_app action created.
 	ProjectID string `json:"project_id,omitempty"`
 	// AutoTried marks an action autopilot took over, applied or not.
-	AutoTried bool      `json:"auto_tried,omitempty"`
+	AutoTried bool `json:"auto_tried,omitempty"`
+	// Queued marks an action autopilot holds until the work it follows
+	// (After) has merged.
+	Queued    bool      `json:"queued,omitempty"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
@@ -152,6 +155,15 @@ type record struct {
 	// Refusals counts autopilot's refused actions since one last applied;
 	// past maxRefusals they no longer wake the assistant.
 	Refusals int `json:"refusals,omitempty"`
+	// BuildsSince is when the user last switched the project to building
+	// everything: cards dismissed before it no longer stand (gaps.go).
+	BuildsSince *time.Time `json:"builds_since,omitempty"`
+	// Gaps are what the gap check last told the assistant was missing, by
+	// kind, so it tells each at most once per gapEvery (gaps.go).
+	Gaps map[string]gapTold `json:"gaps,omitempty"`
+	// PreviewFailedAt is when the app's preview last failed to start, as the
+	// desktop reported it; a preview work order merged since fixes it.
+	PreviewFailedAt *time.Time `json:"preview_failed_at,omitempty"`
 }
 
 // maxSessionTurns bounds a provider session; the next turn starts fresh.

@@ -231,7 +231,7 @@ func priorityItems(plan featureartifact.VisionPlan, level int) []GoalItem {
 // work order the user created, is left for the user, with a note.
 func (service *Service) autopilotActions(ctx context.Context, scope string) ([]Action, error) {
 	builds := service.assistantBuilds(ctx, scope)
-	ours, titles := service.workOrders(ctx, scope)
+	ours, titles, states := service.workOrders(ctx, scope)
 	service.mu.Lock()
 	defer service.mu.Unlock()
 	stored, err := service.read(scope)
@@ -288,14 +288,28 @@ func (service *Service) autopilotActions(ctx context.Context, scope string) ([]A
 		case featureartifact.AssistantStartAutopilot:
 			// Building everything, the assistant may finish the vision.
 			inGoal = builds && !stored.Goal.active()
-		case featureartifact.AssistantSetUpPreview:
-			// An app that does not run is the assistant's to fix when it builds
-			// everything (ADR-024, ADR-028); it creates its own work order.
+		case featureartifact.AssistantSetUpPreview, featureartifact.AssistantWriteVision,
+			featureartifact.AssistantSetUpStack:
+			// An app that does not run, a project without a vision or a stack,
+			// is the assistant's to fix when it builds everything (ADR-024,
+			// ADR-027, ADR-028).
 			inGoal = builds
 		}
 		if !inGoal {
 			continue
 		}
+		// Work that follows other work waits until that has merged, so two
+		// changes to the same part of the app do not run at once.
+		if follows, waiting := stored.waitsFor(*action, titles, states); waiting {
+			if !action.Queued {
+				action.Queued = true
+				stored.addEvent(fmt.Sprintf("Autopilot queued %s: it starts once “%s” has merged.",
+					actionName(action.AssistantAction), follows), now)
+				noted = true
+			}
+			continue
+		}
+		action.Queued = false
 		action.AutoTried = true
 		if target != "" && !stored.mayAct(target, ours) {
 			title := titles[target]
@@ -344,26 +358,67 @@ func (service *Service) autopilotActions(ctx context.Context, scope string) ([]A
 }
 
 // workOrders lists a project's work orders the assistant created, as stored
-// with each (ADR-027), and every work order's title.
-func (service *Service) workOrders(ctx context.Context, scope string) (map[string]bool, map[string]string) {
-	ours, titles := map[string]bool{}, map[string]string{}
+// with each (ADR-027), and every work order's title and state.
+func (service *Service) workOrders(
+	ctx context.Context, scope string,
+) (map[string]bool, map[string]string, map[string]feature.State) {
+	ours, titles, states := map[string]bool{}, map[string]string{}, map[string]feature.State{}
 	if service.config.Features == nil || scope == TopLevel {
-		return ours, titles
+		return ours, titles, states
 	}
 	features, err := service.config.Features.List(ctx, scope)
 	if err != nil {
-		return ours, titles
+		return ours, titles, states
 	}
 	// Building everything, the assistant owns every work order, the user's
 	// too.
 	builds := service.assistantBuilds(ctx, scope)
 	for _, item := range features {
-		titles[item.ID] = item.Title
+		titles[item.ID], states[item.ID] = item.Title, item.State
 		if builds || item.CreatedBy == feature.CreatedByAssistant {
 			ours[item.ID] = true
 		}
 	}
-	return ours, titles
+	return ours, titles, states
+}
+
+// waitsFor reports whether an action must wait for the work it follows
+// (After): a work order, named by its ID or title, that has not merged or
+// closed yet, or another of the assistant's actions not yet applied. It
+// returns the title of what it waits for. Work it cannot find does not hold
+// it back.
+func (stored record) waitsFor(
+	action Action, titles map[string]string, states map[string]feature.State,
+) (string, bool) {
+	after := strings.TrimSpace(action.After)
+	if after == "" || (action.Type != featureartifact.AssistantCreateWorkOrder &&
+		action.Type != featureartifact.AssistantStartWorkOrder) {
+		return "", false
+	}
+	unfinished := func(id string) (string, bool) {
+		state, known := states[id]
+		return titles[id], known && !state.IsTerminal()
+	}
+	if _, known := states[after]; known {
+		return unfinished(after)
+	}
+	for _, other := range stored.Actions {
+		if other.ID == action.ID || !strings.EqualFold(strings.TrimSpace(other.Title), after) {
+			continue
+		}
+		switch {
+		case other.Status == ActionApplied && other.WorkOrderID != "":
+			return unfinished(other.WorkOrderID)
+		case other.Status == ActionProposed:
+			return other.Title, true
+		}
+	}
+	for id, title := range titles {
+		if strings.EqualFold(title, after) {
+			return unfinished(id)
+		}
+	}
+	return "", false
 }
 
 // CreatorMarker records that the assistant created work orders.
@@ -428,7 +483,7 @@ func (stored record) mayAct(workOrderID string, ours map[string]bool) bool {
 // user.
 func (service *Service) AutopilotHandles(ctx context.Context, scope, workOrderID string, blockedAt time.Time) bool {
 	builds := service.assistantBuilds(ctx, scope)
-	ours, _ := service.workOrders(ctx, scope)
+	ours, _, _ := service.workOrders(ctx, scope)
 	if _, err := service.Readiness(ctx); err != nil {
 		return false
 	}
