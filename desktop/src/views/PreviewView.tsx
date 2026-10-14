@@ -7,6 +7,8 @@ import type { ProjectToolchain } from "../api/types";
 import { PREVIEW_STATE, type PreviewHandle } from "./usePreview";
 import type { PreviewSetupHandle } from "./usePreviewSetup";
 import { createSession, sendSessionTurn } from "../api/features";
+import { ContainerEvidence } from "./ContainerEvidence";
+import { plainFailure } from "./previewEvidence";
 import {
   OpenTargetFields,
   runDraftFrom,
@@ -239,16 +241,17 @@ export function PreviewView({
           {setup.active && (
             <div className="banner banner--info">
               <span className="spinner" aria-hidden /> Commitarium is fixing the preview in the
-              background.{" "}
+              background. It merges once Commitarium has started the app for real.{" "}
               <button className="ghost" onClick={() => onOpenOrder(setup.active!.id)}>
                 View
               </button>
             </div>
           )}
+          {setup.error && <div className="banner banner--error">{setup.error}</div>}
           {setup.exhausted && state === "failed" && !setup.active && (
             <div className="banner banner--warn">
-              The automatic fixes didn&apos;t get the preview running. Fix it together with an agent
-              in a session.
+              The automatic fixes didn&apos;t get the preview running. Set up preview tries again
+              with what failed, or fix it together with an agent in a session.
             </div>
           )}
           {behind && (
@@ -266,7 +269,13 @@ export function PreviewView({
           )}
           {/* The backend appends recent output to the error; the logs below show it. */}
           {state === "failed" && status?.error && (
-            <div className="banner banner--error">{status.error.split("\n")[0]}</div>
+            <div className="banner banner--error">
+              {plainFailure(status.services) ?? status.error.split("\n")[0]}
+            </div>
+          )}
+          {/* A container that stopped says why in its own log (ADR-028). */}
+          {state === "failed" && status?.services && status.services.length > 0 && (
+            <ContainerEvidence services={status.services} />
           )}
 
           {state === "running" && status && status.urls.length > 0 && (
@@ -294,18 +303,30 @@ export function PreviewView({
                 </button>
               </>
             ) : (
-              <button className="primary" onClick={() => void start()}>
+              <button
+                className={state === "failed" ? "ghost" : "primary"}
+                onClick={() => void start()}
+              >
                 {state === "failed" ? "Try again" : "Run preview"}
               </button>
             )}
             {state === "failed" && status?.error && !setup.active && (
-              <button
-                className={setup.exhausted ? "primary" : "ghost"}
-                onClick={() => void fixWithAgent(status.error!)}
-                disabled={fixing}
-              >
-                {fixing ? "Starting a session…" : "Fix with an agent"}
-              </button>
+              <>
+                <button
+                  className="primary"
+                  onClick={() => void setup.fix(status.error!, status.services)}
+                  title="An agent fixes the app's setup; it merges once Commitarium has started the app for real"
+                >
+                  Set up preview
+                </button>
+                <button
+                  className="ghost"
+                  onClick={() => void fixWithAgent(status.error!)}
+                  disabled={fixing}
+                >
+                  {fixing ? "Starting a session…" : "Fix with an agent"}
+                </button>
+              </>
             )}
             <button className="ghost" onClick={() => setShowLogs((v) => !v)}>
               {showLogs ? "Hide logs" : "Show logs"}

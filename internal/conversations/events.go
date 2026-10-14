@@ -426,6 +426,12 @@ func (service *Service) Report(_ context.Context, scope, text string) error {
 		service.mu.Unlock()
 		return err
 	}
+	// The same report from two windows is told once.
+	if count := len(stored.Messages); count > 0 && stored.Messages[count-1].Role == "event" &&
+		stored.Messages[count-1].Text == text {
+		service.mu.Unlock()
+		return nil
+	}
 	now := service.now()
 	stored.addEvent(text, now)
 	stored.PendingEvents = append(stored.PendingEvents, text)

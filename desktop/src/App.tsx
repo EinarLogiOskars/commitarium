@@ -1,7 +1,11 @@
 import { useCallback, useEffect, useState } from "react";
 import { coordinatorReachable } from "./api/health";
 import { useAttention } from "./attention/useAttention";
-import { useAutoAcceptanceRuns, useAutoValidation } from "./attention/useAutoValidation";
+import {
+  useAutoAcceptanceRuns,
+  useAutoPreviewChecks,
+  useAutoValidation,
+} from "./attention/useAutoValidation";
 import { useNotifier } from "./attention/useNotifier";
 import { useDesktopSettings } from "./settings/useDesktopSettings";
 import { useBoot } from "./boot/useBoot";
@@ -113,6 +117,8 @@ function App() {
   useAutoValidation(attention.items, refreshAttention);
   // Commitarium's own acceptance-test runs need no click either.
   useAutoAcceptanceRuns(entered && reachable);
+  // So do its preview checks of the app's setup (ADR-028).
+  useAutoPreviewChecks(entered && reachable);
   // Signed desktop updates: check once the stack is usable; the install flow
   // uses the live `running` count to know when a restart is safe.
   const update = useDesktopUpdate(entered && reachable, attention.running.length);

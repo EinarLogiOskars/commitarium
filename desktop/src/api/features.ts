@@ -7,7 +7,9 @@ import type {
   FeatureUsage,
   WorkOrderAssistantSession,
   HandoffBriefDocument,
+  PreviewCheck,
   Run,
+  ServiceEvidence,
   WorkflowEvent,
   Workspace,
 } from "./types";
@@ -211,8 +213,48 @@ export const startPreviewSetup = (projectId: string): Promise<PreviewSetup> =>
 
 /** Report a preview that failed to start, so a background fix can start.
  * Answers 409 preview_fixes_exhausted once the automatic fixes are used up. */
-export const reportPreviewFailure = (projectId: string, error: string): Promise<PreviewSetup> =>
+export const reportPreviewFailure = (
+  projectId: string,
+  error: string,
+  services?: ServiceEvidence[],
+): Promise<PreviewSetup> =>
   request(`/api/v1/projects/${encodeURIComponent(projectId)}/preview-setup/failed`, {
     method: "POST",
-    body: { error },
+    body: { error, ...failureEvidence(services) },
   });
+
+/** "Set up preview": fix the preview that fails, or set it up when there is
+ * no compose file, in a work order that merges only once Commitarium checked
+ * the app runs (ADR-028). Starts even when the automatic fixes are used up. */
+export const setUpPreview = (
+  projectId: string,
+  error: string,
+  services?: ServiceEvidence[],
+): Promise<PreviewSetup> =>
+  request(`/api/v1/projects/${encodeURIComponent(projectId)}/preview-setup/failed`, {
+    method: "POST",
+    body: { error, chosen: true, ...failureEvidence(services) },
+  });
+
+/** Tell the project's assistant that the preview failed to start, with what
+ * each container did, so it can set the preview up itself. */
+export const tellAssistantPreviewFailed = (
+  projectId: string,
+  error: string,
+  services?: ServiceEvidence[],
+): Promise<void> =>
+  request(`/api/v1/projects/${encodeURIComponent(projectId)}/preview-failure`, {
+    method: "POST",
+    body: { error, ...failureEvidence(services) },
+  });
+
+const failureEvidence = (services?: ServiceEvidence[]) =>
+  services && services.length > 0 ? { evidence: { stage: "start", services } } : {};
+
+/** A work order's preview checks, newest first. */
+export const listPreviewChecks = async (
+  projectId: string,
+  featureId: string,
+): Promise<PreviewCheck[]> =>
+  (await request<{ checks: PreviewCheck[] }>(`${featurePath(projectId, featureId)}/preview-checks`))
+    .checks;

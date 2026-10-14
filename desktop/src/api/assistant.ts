@@ -26,7 +26,8 @@ export type AssistantActionType =
   | "start_autopilot"
   | "continue_work_order"
   | "close_work_order"
-  | "create_app";
+  | "create_app"
+  | "set_up_preview";
 
 export interface AssistantAction {
   id: string;
@@ -44,7 +45,8 @@ export interface AssistantAction {
   reviewer_model: string;
   work_order_id: string;
   when: "" | "now" | "next_turn";
-  /** For continue_work_order: what to tell its agents; empty retries. */
+  /** For continue_work_order: what to tell its agents; empty retries. For
+   * set_up_preview: what fails, when the assistant knows. */
   guidance?: string;
   /** For add_vision_item and start_autopilot: 0 for P0, 1 for P1, and so on. */
   priority: number;

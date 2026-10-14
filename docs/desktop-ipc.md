@@ -107,6 +107,17 @@ validation boundary. The backend implementation lands before its frontend.
   coordinator-created job, resolves its managed workspace and exact commit,
   runs the coordinator-owned command list in a disposable validation container,
   and reports the bounded result. The renderer supplies only the opaque job ID.
+- `run_preview_check(checkId) -> {check_id, status}` claims one preview check
+  (ADR-028), fetches its exact commit from the internal Forgejo, validates and
+  rewrites its compose file as a preview does, builds and starts it as the
+  temporary compose project `commitarium-preview-<project>-check`, waits until
+  every service stays up, healthchecks pass, and the open target answers HTTP,
+  collects each service's state, exit code, health, and last 60 log lines,
+  removes its containers, network, and volumes, and reports back. The renderer
+  supplies only the opaque check ID; checks run one at a time.
+
+A preview that fails after its containers were created carries the same
+per-service evidence in `PreviewStatus.services`.
 
 Neither command accepts package names, shell text, paths, image names, resource
 limits, environment variables, volume specifications, or Docker arguments from

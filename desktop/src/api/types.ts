@@ -281,6 +281,9 @@ export interface Feature {
   // A work order Commitarium runs by itself, such as the preview setup; not
   // listed with the user's work.
   background?: boolean;
+  // Merges only once Commitarium's preview check of its commit passed: the
+  // preview setup and fixes, and a project's setup (ADR-028).
+  preview_check?: boolean;
   // A session's agent activity, in feature lists only: working on a message,
   // or idle since `updated_at`.
   session?: { working: boolean; updated_at: string };
@@ -658,6 +661,38 @@ export interface ValidationJob {
 }
 
 // Returned by the native run_validation_job command (Tauri claims + runs it).
+// --- Preview checks (ADR-028) ---
+
+/** What one compose service did: from a preview that failed, or from
+ * Commitarium's preview check. */
+export interface ServiceEvidence {
+  service: string;
+  state: string;
+  exit_code: number;
+  health?: string;
+  logs?: string;
+}
+
+export interface PreviewCheckEvidence {
+  stage: "source" | "setup" | "build" | "start" | "ready";
+  reason?: string;
+  /** "service:port" the check opened. */
+  open?: string;
+  /** The end of the build and start output. */
+  output?: string;
+  services: ServiceEvidence[];
+}
+
+export interface PreviewCheck {
+  id: string;
+  commit_id: string;
+  attempt: number;
+  status: "pending" | "running" | "passed" | "failed" | "expired";
+  evidence?: PreviewCheckEvidence;
+  created_at: string;
+  completed_at?: string;
+}
+
 export interface ValidationRunResult {
   job: ValidationJob;
 }
