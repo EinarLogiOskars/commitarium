@@ -173,10 +173,11 @@ func fillSkippedReviewer(providers *agentProvidersRequest, models *agentModelsRe
 	if !skipReviewer {
 		return
 	}
-	if providers != nil && providers.ReviewerAgent == nil && providers.Reviewer == nil {
+	empty := func(value *string) bool { return value == nil || *value == "" }
+	if providers != nil && empty(providers.ReviewerAgent) && (providers.Reviewer == nil || *providers.Reviewer == "") {
 		providers.ReviewerAgent, providers.Reviewer = providers.LeadAgent, providers.Lead
 	}
-	if models != nil && models.Reviewer == nil {
+	if models != nil && empty(models.Reviewer) {
 		models.Reviewer = models.Lead
 	}
 }

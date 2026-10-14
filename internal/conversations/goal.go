@@ -365,6 +365,11 @@ func (service *Service) note(scope, text string) error {
 	if err != nil {
 		return err
 	}
+	// A step the watcher retries each look (a launch whose setup is refused
+	// until an agent has usage again, say) is noted once, not every time.
+	if last := len(stored.Messages) - 1; last >= 0 && stored.Messages[last].Role == "event" && stored.Messages[last].Text == text {
+		return nil
+	}
 	now := service.now()
 	stored.addEvent(text, now)
 	stored.UpdatedAt = now
