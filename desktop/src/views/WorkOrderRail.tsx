@@ -145,7 +145,12 @@ export function WorkOrderRail({
                 className={`rail__item ${selectedId === f.id ? "rail__item--active" : ""}`}
                 onClick={() => onSelect(f.id)}
               >
-                <span className="rail__item-title">{f.title}</span>
+                <span className="rail__item-text">
+                  <span className="rail__item-title">{f.title}</span>
+                  {f.queued_after && (
+                    <span className="rail__item-note">Queued after {f.queued_after}</span>
+                  )}
+                </span>
                 {kind === "session" ? (
                   <SessionMark session={f} />
                 ) : (

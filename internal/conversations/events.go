@@ -134,14 +134,39 @@ func (service *Service) autopilotOutcome(scope string, action Action, applyErr e
 	if err != nil {
 		return err
 	}
+	now := service.now()
 	if applyErr == nil {
-		if stored.Refusals == 0 {
+		changed := stored.Refusals != 0
+		stored.Refusals = 0
+		if action.HoldStart {
+			// The work order exists as a draft; queue its start behind the
+			// work it follows.
+			for _, applied := range stored.Actions {
+				if applied.ID != action.ID || applied.WorkOrderID == "" {
+					continue
+				}
+				start := applied.AssistantAction
+				start.Type = featureartifact.AssistantStartWorkOrder
+				stored.Actions = append(stored.Actions, Action{
+					ID: action.ID + "_start", MessageID: action.MessageID, AssistantAction: start,
+					Status: ActionProposed, Queued: true, UpdatedAt: now,
+				})
+				changed = true
+				break
+			}
+		}
+		if !changed {
 			return nil
 		}
-		stored.Refusals = 0
+		stored.UpdatedAt = now
 		return service.write(stored)
 	}
-	now := service.now()
+	// A card the user approves later starts what it creates.
+	for index := range stored.Actions {
+		if stored.Actions[index].ID == action.ID {
+			stored.Actions[index].HoldStart = false
+		}
+	}
 	name := actionName(action.AssistantAction)
 	stored.addEvent(fmt.Sprintf("Autopilot could not apply %s: %v. It waits for your approval.", name, applyErr), now)
 	stored.Refusals++

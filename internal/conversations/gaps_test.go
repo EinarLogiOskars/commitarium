@@ -2,6 +2,7 @@ package conversations
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -264,9 +265,83 @@ func TestHandingOverWakesTheAssistant(t *testing.T) {
 	}
 }
 
-// Work that follows other work waits for it to merge: autopilot queues it,
-// says so once, and starts it after.
+// Work that follows other work waits for it to merge: autopilot creates it
+// at once, so it shows as a draft, queues its start, says so once, and
+// starts it after.
 func TestAutopilotQueuesWorkThatFollowsOtherWork(t *testing.T) {
+	service, features := queuedCountsAfterSort(t)
+	if queued, err := service.QueuedStarts(t.Context(), "prj_test"); err != nil || queued["fea_count"] != "Add sort by" {
+		t.Fatalf("queued starts = %v err=%v", queued, err)
+	}
+	if apply, _ := service.autopilotActions(t.Context(), "prj_test"); len(apply) != 0 {
+		t.Fatalf("the counts started beside the sort: %+v", apply)
+	}
+	conversation, _ := service.Get(t.Context(), "prj_test")
+	queued := 0
+	for _, message := range conversation.Messages {
+		if strings.Contains(message.Text, "queued") {
+			queued++
+		}
+	}
+	if queued != 1 {
+		t.Fatalf("the queue was noted %d times", queued)
+	}
+	features.features[0].State = feature.StateCompleted
+	apply, err := service.autopilotActions(t.Context(), "prj_test")
+	if err != nil || len(apply) != 1 || apply[0].ID != "act_count_start" || apply[0].WorkOrderID != "fea_count" ||
+		apply[0].Type != featureartifact.AssistantStartWorkOrder {
+		t.Fatalf("after the sort merged, applied %+v err=%v", apply, err)
+	}
+}
+
+// A queued work order the user starts themselves no longer waits, and
+// autopilot does not start it again.
+func TestAQueuedWorkOrderTheUserStartsNoLongerWaits(t *testing.T) {
+	service, features := queuedCountsAfterSort(t)
+	features.features[1].State = feature.StatePlanning
+	if apply, _ := service.autopilotActions(t.Context(), "prj_test"); len(apply) != 0 {
+		t.Fatalf("autopilot acted on a work order the user started: %+v", apply)
+	}
+	if queued, _ := service.QueuedStarts(t.Context(), "prj_test"); len(queued) != 0 {
+		t.Fatalf("still queued: %v", queued)
+	}
+	conversation, _ := service.Get(t.Context(), "prj_test")
+	if last := conversation.Messages[len(conversation.Messages)-1]; !strings.Contains(last.Text, "You started “Show counts”, so it no longer waits for “Add sort by”") {
+		t.Fatalf("last note = %q", last.Text)
+	}
+	features.features[0].State = feature.StateCompleted
+	if apply, _ := service.autopilotActions(t.Context(), "prj_test"); len(apply) != 0 {
+		t.Fatalf("autopilot started it again after the sort merged: %+v", apply)
+	}
+}
+
+// A held create autopilot could not apply becomes an ordinary card: the
+// user's approval starts what it creates.
+func TestARefusedHeldCreateStartsWhenTheUserApproves(t *testing.T) {
+	service, _ := newTestService(t)
+	stored, err := service.read("prj_test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	action := Action{ID: "act_count", Status: ActionProposed, HoldStart: true, AssistantAction: featureartifact.AssistantAction{
+		Type: featureartifact.AssistantCreateWorkOrder, Title: "Show counts", After: "Add sort by"}}
+	stored.Actions = append(stored.Actions, action)
+	if err := service.write(stored); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.autopilotOutcome("prj_test", action, errors.New("the agent is signed out")); err != nil {
+		t.Fatal(err)
+	}
+	if card, err := service.Action(t.Context(), "prj_test", "act_count"); err != nil || card.HoldStart {
+		t.Fatalf("card = %+v err=%v", card, err)
+	}
+}
+
+// queuedCountsAfterSort has autopilot, building everything, take over two
+// changes where the counts follow the sort: both are created, the sort runs,
+// and the counts' start is queued.
+func queuedCountsAfterSort(t *testing.T) (*Service, *featuresStub) {
+	t.Helper()
 	service, _ := newTestService(t)
 	service.config.Projects = gapProjects{mode: project.AssistantModeBuilds}
 	features := &featuresStub{}
@@ -284,30 +359,24 @@ func TestAutopilotQueuesWorkThatFollowsOtherWork(t *testing.T) {
 		t.Fatal(err)
 	}
 	apply, err := service.autopilotActions(t.Context(), "prj_test")
-	if err != nil || len(apply) != 1 || apply[0].ID != "act_sort" {
-		t.Fatalf("applied %+v err=%v, want only the sort", apply, err)
+	if err != nil || len(apply) != 2 || apply[0].ID != "act_sort" || apply[0].HoldStart ||
+		apply[1].ID != "act_count" || !apply[1].HoldStart {
+		t.Fatalf("applied %+v err=%v, want the sort and the counts created without starting", apply, err)
 	}
-	// The sort is created and runs: the counts still wait, noted once.
-	if _, err := service.Resolve(t.Context(), "prj_test", "act_sort", ActionApplied, "Created", Created{WorkOrderID: "fea_sort"}); err != nil {
-		t.Fatal(err)
-	}
-	features.features = []feature.Feature{{ID: "fea_sort", Title: "Add sort by", State: feature.StateImplementing}}
-	if apply, _ := service.autopilotActions(t.Context(), "prj_test"); len(apply) != 0 {
-		t.Fatalf("the counts started beside the sort: %+v", apply)
-	}
-	conversation, _ := service.Get(t.Context(), "prj_test")
-	queued := 0
-	for _, message := range conversation.Messages {
-		if strings.Contains(message.Text, "queued") {
-			queued++
+	for _, created := range []struct{ action, workOrder string }{{"act_sort", "fea_sort"}, {"act_count", "fea_count"}} {
+		if _, err := service.Resolve(t.Context(), "prj_test", created.action, ActionApplied, "Created",
+			Created{WorkOrderID: created.workOrder}); err != nil {
+			t.Fatal(err)
 		}
 	}
-	if queued != 1 {
-		t.Fatalf("the queue was noted %d times", queued)
+	for _, applied := range apply {
+		if err := service.autopilotOutcome("prj_test", applied, nil); err != nil {
+			t.Fatal(err)
+		}
 	}
-	features.features[0].State = feature.StateCompleted
-	apply, err = service.autopilotActions(t.Context(), "prj_test")
-	if err != nil || len(apply) != 1 || apply[0].ID != "act_count" {
-		t.Fatalf("after the sort merged, applied %+v err=%v", apply, err)
+	features.features = []feature.Feature{
+		{ID: "fea_sort", Title: "Add sort by", State: feature.StateImplementing},
+		{ID: "fea_count", Title: "Show counts", State: feature.StateDraft},
 	}
+	return service, features
 }

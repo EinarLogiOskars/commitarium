@@ -30,6 +30,12 @@ type conversationStub struct {
 	settings conversations.Settings
 	// goal is the conversation's autopilot goal.
 	goal *conversations.Goal
+	// queued names the work each work order's queued start waits for.
+	queued map[string]string
+}
+
+func (stub *conversationStub) QueuedStarts(context.Context, string) (map[string]string, error) {
+	return stub.queued, nil
 }
 
 // testAgents are a Codex and a Claude agent, both connected.
@@ -169,6 +175,40 @@ func TestAutopilotAppliesActionsThroughTheSameApproval(t *testing.T) {
 	}
 	if stub.goalLevel != 1 || stub.resolvedStatus != conversations.ActionApplied || !strings.Contains(stub.resolvedResult, "P1") {
 		t.Fatalf("goal level %d, resolved %s %q", stub.goalLevel, stub.resolvedStatus, stub.resolvedResult)
+	}
+}
+
+// A work order queued behind other work is created without starting, and
+// the work order list says what it waits for.
+func TestAHeldCreateIsNotStartedAndListsWhatItWaitsFor(t *testing.T) {
+	stub := &conversationStub{
+		action: conversations.Action{
+			ID: "act_1", Status: conversations.ActionProposed, HoldStart: true,
+			AssistantAction: featureartifact.AssistantAction{
+				Type: featureartifact.AssistantCreateWorkOrder, Reason: "Same form", Title: "Show notes", Steps: "quick",
+				LeadAgent: "codex", LeadModel: "gpt-5.5", After: "Add mood",
+			},
+		},
+		queued: map[string]string{"fea_notes": "Add mood"},
+	}
+	features := &recordingFeatureService{
+		createResult: feature.Feature{ID: "fea_notes", ProjectID: "prj_test", Title: "Show notes", State: feature.StateDraft},
+		listResult:   []feature.Feature{{ID: "fea_notes", ProjectID: "prj_test", Title: "Show notes", State: feature.StateDraft}},
+	}
+	projects := &recordingProjectService{getByIDResult: project.Project{ID: "prj_test"}}
+	handler := NewWithWorkspaceRealWorkflowDeletionAndModels(projects, features, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, stub, testAgents())
+
+	if err := AssistantActionApplier(handler)(t.Context(), "prj_test", "act_1"); err != nil {
+		t.Fatal(err)
+	}
+	if features.createCalls != 1 || stub.resolvedStatus != conversations.ActionApplied ||
+		strings.Contains(stub.resolvedResult, "started") {
+		t.Fatalf("created %d, resolved %s %q", features.createCalls, stub.resolvedStatus, stub.resolvedResult)
+	}
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/v1/projects/prj_test/features", nil))
+	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), `"queued_after":"Add mood"`) {
+		t.Fatalf("list %d: %s", recorder.Code, recorder.Body.String())
 	}
 }
 

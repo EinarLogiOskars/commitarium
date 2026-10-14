@@ -295,19 +295,41 @@ func (service *Service) autopilotActions(ctx context.Context, scope string) ([]A
 			// ADR-027, ADR-028).
 			inGoal = builds
 		}
+		// A queued start the user did themselves is done: the work order no
+		// longer waits.
+		if action.Type == featureartifact.AssistantStartWorkOrder && action.Queued && target != "" {
+			if state, known := states[target]; known && state != feature.StateDraft && state != feature.StateReady {
+				action.Status, action.Queued, action.UpdatedAt = ActionApplied, false, now
+				action.Result = "The user started it."
+				stored.addEvent(fmt.Sprintf("You started “%s”, so it no longer waits for “%s”.",
+					titles[target], followsName(action.After, titles)), now)
+				noted = true
+				continue
+			}
+		}
 		if !inGoal {
 			continue
 		}
 		// Work that follows other work waits until that has merged, so two
-		// changes to the same part of the app do not run at once.
+		// changes to the same part of the app do not run at once. A new work
+		// order is created at once, so it shows as a draft; only its start
+		// waits.
+		holdStart := false
 		if follows, waiting := stored.waitsFor(*action, titles, states); waiting {
-			if !action.Queued {
-				action.Queued = true
-				stored.addEvent(fmt.Sprintf("Autopilot queued %s: it starts once “%s” has merged.",
+			if action.Type == featureartifact.AssistantCreateWorkOrder {
+				holdStart = true
+				stored.addEvent(fmt.Sprintf("Autopilot created %s and queued its start: it starts once “%s” has merged.",
 					actionName(action.AssistantAction), follows), now)
 				noted = true
+			} else {
+				if !action.Queued {
+					action.Queued = true
+					stored.addEvent(fmt.Sprintf("Autopilot queued %s: it starts once “%s” has merged.",
+						actionName(action.AssistantAction), follows), now)
+					noted = true
+				}
+				continue
 			}
-			continue
 		}
 		action.Queued = false
 		action.AutoTried = true
@@ -348,6 +370,7 @@ func (service *Service) autopilotActions(ctx context.Context, scope string) ([]A
 		if action.Type == featureartifact.AssistantCreateWorkOrder {
 			claimed[action.VisionItemID] = true
 		}
+		action.HoldStart = holdStart
 		apply = append(apply, *action)
 	}
 	if len(apply) == 0 && !noted {
@@ -419,6 +442,40 @@ func (stored record) waitsFor(
 		}
 	}
 	return "", false
+}
+
+// QueuedStarts names, by work order, the work each of a project's work
+// orders waits for before autopilot starts it: a queued start action. The
+// user may still start one; it then no longer waits.
+func (service *Service) QueuedStarts(ctx context.Context, scope string) (map[string]string, error) {
+	service.mu.Lock()
+	stored, err := service.read(scope)
+	service.mu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+	queued := map[string]string{}
+	var titles map[string]string
+	for _, action := range stored.Actions {
+		if action.Type != featureartifact.AssistantStartWorkOrder || action.Status != ActionProposed ||
+			!action.Queued || action.WorkOrderID == "" {
+			continue
+		}
+		if titles == nil {
+			_, titles, _ = service.workOrders(ctx, scope)
+		}
+		queued[action.WorkOrderID] = followsName(action.After, titles)
+	}
+	return queued, nil
+}
+
+// followsName is the title of the work an action follows, as After names
+// it by ID or title.
+func followsName(after string, titles map[string]string) string {
+	if title := titles[strings.TrimSpace(after)]; title != "" {
+		return title
+	}
+	return strings.TrimSpace(after)
 }
 
 // CreatorMarker records that the assistant created work orders.

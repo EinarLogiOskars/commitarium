@@ -15,6 +15,7 @@ import {
   type StartSettingsValue,
 } from "./StartSettings";
 import { startRun } from "../api/runs";
+import { QueuedNote, QueuedStart } from "./QueuedStart";
 import { ApiError } from "../api/client";
 import { Transcript, type TranscriptEntry } from "./Transcript";
 import { useFeatureArtifact } from "./useFeatureArtifact";
@@ -238,6 +239,7 @@ function AssistantChat({
       <section className="panel panel--phase">
         <h2>Clarify</h2>
         {error && <div className="banner banner--error">{error}</div>}
+        <QueuedNote feature={feature} />
         {/* What is being decided on: the work order as written. */}
         {feature.description && (
           <div className="clarify__description">
@@ -383,6 +385,7 @@ function ReadyView({
     <section className="panel panel--phase">
       <h2>Ready</h2>
       {error && <div className="banner banner--error">{error}</div>}
+      <QueuedNote feature={feature} />
       <p className="muted">{startIntro(settings)}</p>
       {/* The brief and the settings scroll together; Start stays in view. */}
       <div className="ready__scroll">
@@ -407,9 +410,7 @@ function ReadyView({
         </div>
       </div>
       <div className="row">
-        <button className="primary" onClick={() => void run("start")} disabled={busy !== null}>
-          {busy === "start" ? "Starting…" : "Start"}
-        </button>
+        <QueuedStart feature={feature} busy={busy !== null} onStart={() => void run("start")} />
         <button className="ghost" onClick={() => void run("reopen")} disabled={busy !== null}>
           {busy === "reopen" ? "Reopening…" : "Reopen for clarification"}
         </button>
@@ -472,6 +473,7 @@ function StartWithoutClarifying({
     <section className="panel panel--phase">
       <h2>Start without clarifying</h2>
       {error && <div className="banner banner--error">{error}</div>}
+      <QueuedNote feature={feature} />
       <p className="muted">{startIntro(settings)}</p>
       <div className="ready__scroll">
         <div className="brief">
@@ -493,9 +495,7 @@ function StartWithoutClarifying({
         </div>
       </div>
       <div className="row">
-        <button className="primary" onClick={() => void start()} disabled={busy}>
-          {busy ? "Starting…" : "Start"}
-        </button>
+        <QueuedStart feature={feature} busy={busy} onStart={() => void start()} />
         <button className="ghost" onClick={onBack} disabled={busy}>
           Back
         </button>

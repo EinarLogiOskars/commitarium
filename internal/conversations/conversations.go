@@ -110,7 +110,11 @@ type Action struct {
 	AutoTried bool `json:"auto_tried,omitempty"`
 	// Queued marks an action autopilot holds until the work it follows
 	// (After) has merged.
-	Queued    bool      `json:"queued,omitempty"`
+	Queued bool `json:"queued,omitempty"`
+	// HoldStart marks a work order autopilot creates without starting it,
+	// because it follows work that has not merged: it shows as a draft at
+	// once, and a queued start action starts it once that work has merged.
+	HoldStart bool      `json:"hold_start,omitempty"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
 

@@ -340,7 +340,9 @@ func (api *API) approveConversationActionHandler(w http.ResponseWriter, r *http.
 	case featureartifact.AssistantCreateApp:
 		result, projectID, ok = api.applyCreateApp(w, r, action)
 	case featureartifact.AssistantCreateWorkOrder:
-		result, workOrderID, ok = api.applyCreateWorkOrder(w, r, scope, action, body.Start)
+		// A work order queued behind other work is created now and started
+		// later (HoldStart).
+		result, workOrderID, ok = api.applyCreateWorkOrder(w, r, scope, action, body.Start && !action.HoldStart)
 	case featureartifact.AssistantStartWorkOrder:
 		result, ok = api.applyStartWorkOrder(w, r, scope, action)
 	case featureartifact.AssistantChangeModels:

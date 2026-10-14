@@ -131,8 +131,10 @@ where it builds everything:
 Two changes to the same part of the app do not run at once: an action that
 creates or starts a work order may name, in `after`, the work order or the
 other action it follows, and autopilot holds it until that work has merged.
-Which parts work touches is the assistant's judgment; the hold is the
-coordinator's. The user may also change a card's agents, not only its
+A work order it creates exists at once, as a draft the rail marks "Queued
+after …"; only its start waits. The user may start it anyway, after a
+warning whose default keeps it queued; it then leaves the queue. Which parts
+work touches is the assistant's judgment; the hold is the coordinator's. The user may also change a card's agents, not only its
 models, before approving it; the choice is refused like any other that
 cannot run.
 
