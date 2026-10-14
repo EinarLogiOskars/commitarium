@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, State};
 
 const STATUS_EVENT: &str = "preview-status-changed";
-const PREVIEW_TEMP_PREFIX: &str = "commitarium-preview-";
+pub(crate) const PREVIEW_TEMP_PREFIX: &str = "commitarium-preview-";
 const COMPOSE_PROJECT_LABEL: &str = "com.docker.compose.project";
 const READY_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 const LOG_LIMIT: usize = 400;
@@ -108,6 +108,16 @@ pub struct PreviewUrl {
     open: bool,
 }
 
+impl PreviewUrl {
+    /// The loopback port of the URL the preview opens.
+    pub(crate) fn open_port(&self) -> Option<u16> {
+        if !self.open {
+            return None;
+        }
+        self.url.rsplit_once(':')?.1.parse().ok()
+    }
+}
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PreviewStatus {
@@ -117,23 +127,44 @@ pub struct PreviewStatus {
     state: PreviewState,
     urls: Vec<PreviewUrl>,
     error: Option<String>,
+    /// What each container did, for a preview that failed after its
+    /// containers were created (ADR-028).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    services: Vec<ServiceEvidence>,
 }
 
+/// What one compose service did: its state, exit code, health, and last log
+/// lines. The preview shows it when it fails, and the preview check reports
+/// it to the coordinator.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub(crate) struct ServiceEvidence {
+    pub(crate) service: String,
+    pub(crate) state: String,
+    pub(crate) exit_code: i64,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub(crate) health: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub(crate) logs: String,
+}
+
+/// The last log lines kept for each service.
+pub(crate) const EVIDENCE_LOG_LINES: usize = 60;
+
 #[derive(Clone, Debug, Deserialize)]
-struct RunConfig {
-    open: RunOpen,
+pub(crate) struct RunConfig {
+    pub(crate) open: RunOpen,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-struct RunOpen {
-    service: String,
-    port: u16,
+pub(crate) struct RunOpen {
+    pub(crate) service: String,
+    pub(crate) port: u16,
 }
 
 #[derive(Deserialize)]
-struct ToolchainManifest {
-    status: String,
-    run: Option<RunConfig>,
+pub(crate) struct ToolchainManifest {
+    pub(crate) status: String,
+    pub(crate) run: Option<RunConfig>,
     #[serde(default)]
     source: String,
     #[serde(default)]
@@ -143,30 +174,30 @@ struct ToolchainManifest {
 }
 
 #[derive(Deserialize)]
-struct ProjectHandoff {
+pub(crate) struct ProjectHandoff {
     project_id: String,
-    source: ProjectHandoffSource,
+    pub(crate) source: ProjectHandoffSource,
 }
 
 #[derive(Deserialize)]
-struct ProjectHandoffSource {
-    repository: Repository,
+pub(crate) struct ProjectHandoffSource {
+    pub(crate) repository: Repository,
     default_branch: String,
     head_commit_id: String,
 }
 
-#[derive(Deserialize)]
-struct Repository {
+#[derive(Clone, Deserialize)]
+pub(crate) struct Repository {
     owner: String,
     name: String,
 }
 
 #[derive(Clone)]
-struct ComposeRuntime {
-    project_name: String,
-    compose_file: PathBuf,
-    environment_file: PathBuf,
-    source_root: PathBuf,
+pub(crate) struct ComposeRuntime {
+    pub(crate) project_name: String,
+    pub(crate) compose_file: PathBuf,
+    pub(crate) environment_file: PathBuf,
+    pub(crate) source_root: PathBuf,
 }
 
 struct PreviewRecord {
@@ -282,11 +313,21 @@ impl PreviewManager {
         Some(record.status.clone())
     }
 
+    /// The runtime of a preview that is still starting or running.
+    fn runtime(&self, project_id: &str, generation: u64) -> Option<ComposeRuntime> {
+        let registry = self.inner.lock().ok()?;
+        let record = registry.projects.get(project_id)?;
+        (record.generation == generation && record.status.state != PreviewState::Stopped)
+            .then(|| record.runtime.clone())
+            .flatten()
+    }
+
     fn fail(
         &self,
         project_id: &str,
         generation: u64,
         fallback: &str,
+        services: Vec<ServiceEvidence>,
     ) -> Option<(PreviewStatus, Option<ComposeRuntime>)> {
         let mut registry = self.inner.lock().ok()?;
         let record = registry.projects.get_mut(project_id)?;
@@ -316,6 +357,7 @@ impl PreviewManager {
         record.status.state = PreviewState::Failed;
         record.status.error = Some(detail);
         record.status.urls.clear();
+        record.status.services = services;
         Some((record.status.clone(), record.runtime.take()))
     }
 
@@ -330,6 +372,7 @@ impl PreviewManager {
         record.status.state = PreviewState::Stopped;
         record.status.urls.clear();
         record.status.error = None;
+        record.status.services.clear();
         Ok(Some(StoppedPreview {
             status: record.status.clone(),
             runtime: record.runtime.take(),
@@ -442,6 +485,7 @@ pub async fn start_preview(
         state: PreviewState::Starting,
         urls: Vec::new(),
         error: None,
+        services: Vec::new(),
     };
     let generation = owned.begin(&key, status.clone())?;
     let _ = app.emit(STATUS_EVENT, status.clone());
@@ -507,6 +551,14 @@ pub(crate) async fn delete_project_data(
     project_id: &str,
 ) -> Result<(), String> {
     prune_sessions(app, manager.clone(), project_id, &[]).await?;
+    let check = preview_compose::project_name(&crate::preview_check::check_compose_id(project_id))?;
+    tauri::async_runtime::spawn_blocking(move || {
+        for kind in ["container", "network", "volume", "image"] {
+            remove_labeled_resources(kind, &check);
+        }
+    })
+    .await
+    .map_err(|_| "preview check cleanup stopped unexpectedly".to_string())?;
     cleanup_preview_data(app, manager, project_id, true).await
 }
 
@@ -532,12 +584,17 @@ async fn prune_sessions(
     project_id: &str,
     open_sessions: &[String],
 ) -> Result<(), String> {
-    let keep: HashSet<String> = open_sessions
+    let mut keep: HashSet<String> = open_sessions
         .iter()
         .map(|feature_id| {
             preview_compose::project_name(&session_compose_id(project_id, feature_id))
         })
         .collect::<Result<_, _>>()?;
+    // A running preview check is not a session; deleting the project removes
+    // its leftovers itself.
+    keep.insert(preview_compose::project_name(
+        &crate::preview_check::check_compose_id(project_id),
+    )?);
     // Running previews of closed sessions stop first.
     let prefix = format!("{project_id}#");
     let closed_keys = manager
@@ -708,7 +765,8 @@ fn launch_preview(
     // copy is used in place and never removed.
     let prepared_root = match preview_source {
         PreviewSource::Canonical(handoff) => {
-            prepare_source(&handoff).map(|root| (root.clone(), root.join("source")))
+            prepare_commit_source(&handoff.source.repository, &handoff.source.head_commit_id)
+                .map(|root| (root.clone(), root.join("source")))
         }
         PreviewSource::Checkout(checkout) => tempfile::Builder::new()
             .prefix(PREVIEW_TEMP_PREFIX)
@@ -837,13 +895,17 @@ fn launch_preview(
     }
 }
 
-// The preview runs the exact canonical commit, fetched as an archive from the
-// internal Forgejo and unpacked with the system's tar, so running an app does
-// not need Git or Apple's developer tools on the user's machine.
-fn prepare_source(handoff: &ProjectHandoff) -> Result<PathBuf, String> {
-    let commit = &handoff.source.head_commit_id;
+// The preview runs the exact canonical commit, and a preview check the exact
+// commit it checks, fetched as an archive from the internal Forgejo and
+// unpacked with the system's tar, so running an app does not need Git or
+// Apple's developer tools on the user's machine. The files land in `source`
+// under the returned directory.
+pub(crate) fn prepare_commit_source(
+    repository: &Repository,
+    commit: &str,
+) -> Result<PathBuf, String> {
     if !safe_commit(commit) {
-        return Err("the canonical preview commit is invalid".into());
+        return Err("the preview commit is invalid".into());
     }
     let temporary = tempfile::Builder::new()
         .prefix(PREVIEW_TEMP_PREFIX)
@@ -852,7 +914,7 @@ fn prepare_source(handoff: &ProjectHandoff) -> Result<PathBuf, String> {
     let root = temporary.path().to_path_buf();
     let source = root.join("source");
     fs::create_dir_all(&source).map_err(|e| format!("create preview checkout: {e}"))?;
-    let archive_url = internal_archive_url(&handoff.source.repository, commit)?;
+    let archive_url = internal_archive_url(repository, commit)?;
     let token_path = forgejo_token_path()?;
     let token =
         fs::read_to_string(token_path).map_err(|_| "read internal Forgejo token".to_string())?;
@@ -951,7 +1013,7 @@ async fn remember_open_target(
     Ok(())
 }
 
-fn compose_command(runtime: &ComposeRuntime) -> Command {
+pub(crate) fn compose_command(runtime: &ComposeRuntime) -> Command {
     let mut command = docker::docker_command();
     preview_compose::sanitize_compose_command(&mut command, &runtime.source_root);
     command
@@ -963,7 +1025,7 @@ fn compose_command(runtime: &ComposeRuntime) -> Command {
     command
 }
 
-fn compose_capture(
+pub(crate) fn compose_capture(
     runtime: &ComposeRuntime,
     args: &[&str],
     action: &str,
@@ -1019,7 +1081,7 @@ fn compose_stream_up(
     }
 }
 
-fn spawn_log_reader<R: Read + Send + 'static>(output: R, sender: mpsc::Sender<String>) {
+pub(crate) fn spawn_log_reader<R: Read + Send + 'static>(output: R, sender: mpsc::Sender<String>) {
     std::thread::spawn(move || {
         for line in BufReader::new(output).lines().map_while(Result::ok) {
             let _ = sender.send(line);
@@ -1032,7 +1094,7 @@ fn compose_down(runtime: &ComposeRuntime, volumes: bool, images: bool) -> Result
     compose_capture(runtime, &args, "stop preview stack").map(|_| ())
 }
 
-fn compose_down_args(volumes: bool, images: bool) -> Vec<&'static str> {
+pub(crate) fn compose_down_args(volumes: bool, images: bool) -> Vec<&'static str> {
     let mut args = vec!["down", "--remove-orphans"];
     if volumes {
         args.push("-v");
@@ -1043,7 +1105,7 @@ fn compose_down_args(volumes: bool, images: bool) -> Vec<&'static str> {
     args
 }
 
-fn resolve_urls(
+pub(crate) fn resolve_urls(
     runtime: &ComposeRuntime,
     ports: &[preview_compose::PublishedPort],
     open: &RunOpen,
@@ -1098,7 +1160,7 @@ fn wait_for_http(
     Err("the preview HTTP port did not become ready within 10 minutes".into())
 }
 
-fn http_responds(port: u16) -> bool {
+pub(crate) fn http_responds(port: u16) -> bool {
     let address = SocketAddr::from(([127, 0, 0, 1], port));
     let Ok(mut stream) = TcpStream::connect_timeout(&address, Duration::from_millis(500)) else {
         return false;
@@ -1142,34 +1204,139 @@ fn watch_stack(
 }
 
 fn stack_failure(runtime: &ComposeRuntime, open_service: &str) -> Result<Option<String>, String> {
+    let services = compose_states(runtime)?;
+    Ok(stack_problem(&services, open_service).or_else(|| {
+        (!services
+            .iter()
+            .any(|service| service.service == open_service && service.state == "running"))
+        .then(|| format!("the preview open service {open_service:?} stopped"))
+    }))
+}
+
+/// The containers of a running or starting compose project.
+pub(crate) fn compose_states(runtime: &ComposeRuntime) -> Result<Vec<ComposeServiceState>, String> {
     let output = compose_capture(
         runtime,
         &["ps", "--all", "--format", "json"],
         "inspect preview stack",
     )?;
-    let services = parse_compose_ps(&output)?;
-    if services.iter().any(|service| service.exit_code != 0) {
-        return Ok(Some("a preview service exited with an error".into()));
+    parse_compose_ps(&output)
+}
+
+/// Why a stack is failing, naming the service: one that exited with an
+/// error or keeps restarting, or the open service that stopped. A service that finished with exit code 0 (a one-off job)
+/// is fine, unless it is the one the preview opens.
+pub(crate) fn stack_problem(
+    services: &[ComposeServiceState],
+    open_service: &str,
+) -> Option<String> {
+    for service in services {
+        let name = &service.service;
+        if service.state == "restarting" {
+            return Some(format!(
+                "the preview service {name:?} keeps restarting (exit code {})",
+                service.exit_code
+            ));
+        }
+        if service.exit_code != 0 {
+            return Some(format!(
+                "the preview service {name:?} exited with code {}",
+                service.exit_code
+            ));
+        }
+        if service.state == "dead" {
+            return Some(format!("the preview service {name:?} died"));
+        }
     }
-    let open_running = services
+    services
         .iter()
-        .any(|service| service.service == open_service && service.state == "running");
-    if !open_running {
-        return Ok(Some("the preview open service stopped".into()));
-    }
-    Ok(None)
+        .find(|service| service.service == open_service && service.state == "exited")
+        .map(|_| format!("the preview open service {open_service:?} stopped"))
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq)]
 #[serde(rename_all = "PascalCase")]
-struct ComposeServiceState {
-    service: String,
-    state: String,
+pub(crate) struct ComposeServiceState {
+    pub(crate) service: String,
+    pub(crate) state: String,
     #[serde(default)]
-    exit_code: i64,
+    pub(crate) exit_code: i64,
+    /// starting, healthy, or unhealthy; empty without a healthcheck.
+    #[serde(default)]
+    pub(crate) health: String,
 }
 
-fn parse_compose_ps(output: &str) -> Result<Vec<ComposeServiceState>, String> {
+/// What each container did, with its last log lines. A service whose logs
+/// cannot be read is still listed.
+pub(crate) fn collect_evidence(runtime: &ComposeRuntime) -> Vec<ServiceEvidence> {
+    let Ok(services) = compose_states(runtime) else {
+        return Vec::new();
+    };
+    let tail = EVIDENCE_LOG_LINES.to_string();
+    let mut evidence = Vec::new();
+    for state in dedupe_services(services) {
+        let logs = compose_capture(
+            runtime,
+            &[
+                "logs",
+                "--no-color",
+                "--no-log-prefix",
+                "--tail",
+                &tail,
+                &state.service,
+            ],
+            "read preview service logs",
+        )
+        .map(|logs| last_lines(&logs, EVIDENCE_LOG_LINES))
+        .unwrap_or_default();
+        evidence.push(ServiceEvidence {
+            service: state.service,
+            state: state.state,
+            exit_code: state.exit_code,
+            health: state.health,
+            logs,
+        });
+    }
+    evidence
+}
+
+/// One entry per service, a failing container first when a service has
+/// several.
+pub(crate) fn dedupe_services(services: Vec<ComposeServiceState>) -> Vec<ComposeServiceState> {
+    let mut kept: Vec<ComposeServiceState> = Vec::new();
+    for service in services {
+        match kept.iter_mut().find(|kept| kept.service == service.service) {
+            Some(existing) => {
+                if existing.exit_code == 0 && service.exit_code != 0 {
+                    *existing = service;
+                }
+            }
+            None => kept.push(service),
+        }
+    }
+    kept
+}
+
+/// The last `count` lines of `text`, at most 16 KiB, ending in a newline.
+pub(crate) fn last_lines(text: &str, count: usize) -> String {
+    let lines: Vec<&str> = text.lines().collect();
+    let start = lines.len().saturating_sub(count);
+    let mut kept = lines[start..].join("\n");
+    const LIMIT: usize = 16 * 1024;
+    if kept.len() > LIMIT {
+        let mut cut = kept.len() - LIMIT;
+        while !kept.is_char_boundary(cut) {
+            cut += 1;
+        }
+        kept = kept[cut..].to_string();
+    }
+    if !kept.is_empty() {
+        kept.push('\n');
+    }
+    kept
+}
+
+pub(crate) fn parse_compose_ps(output: &str) -> Result<Vec<ComposeServiceState>, String> {
     if let Ok(services) = serde_json::from_str::<Vec<ComposeServiceState>>(output) {
         return Ok(services);
     }
@@ -1193,7 +1360,13 @@ fn fail_preview(
     error: &str,
     fallback_runtime: Option<ComposeRuntime>,
 ) {
-    if let Some((status, runtime)) = manager.fail(project_id, generation, &bounded(error)) {
+    // Why a container stopped is in its own log, not in the build output.
+    let services = manager
+        .runtime(project_id, generation)
+        .map(|runtime| collect_evidence(&runtime))
+        .unwrap_or_default();
+    if let Some((status, runtime)) = manager.fail(project_id, generation, &bounded(error), services)
+    {
         let _ = app.emit(STATUS_EVENT, status);
         if let Some(runtime) = runtime.or(fallback_runtime) {
             let _ = compose_down(&runtime, false, false);
@@ -1215,7 +1388,7 @@ fn compose_logs(runtime: &ComposeRuntime) -> Result<Vec<String>, String> {
     Ok(output.lines().map(str::to_string).collect())
 }
 
-fn remove_source(path: &Path) {
+pub(crate) fn remove_source(path: &Path) {
     let _ = fs::remove_dir_all(path);
 }
 
@@ -1245,10 +1418,14 @@ pub(crate) fn sweep_leftovers() {
     for project in projects {
         remove_labeled_resources("container", &project);
         remove_labeled_resources("network", &project);
+        // A preview check keeps no data.
+        if project.ends_with(crate::preview_check::CHECK_SUFFIX) {
+            remove_labeled_resources("volume", &project);
+        }
     }
 }
 
-fn remove_labeled_resources(kind: &str, project: &str) {
+pub(crate) fn remove_labeled_resources(kind: &str, project: &str) {
     let Ok(output) = docker::docker_command()
         .args([
             kind,
@@ -1320,7 +1497,7 @@ pub(crate) fn stop_all(manager: &PreviewManager) {
     sweep_leftovers();
 }
 
-async fn coordinator_json<T: for<'de> Deserialize<'de>>(
+pub(crate) async fn coordinator_json<T: for<'de> Deserialize<'de>>(
     response: reqwest::Response,
     name: &str,
 ) -> Result<T, String> {
@@ -1340,7 +1517,7 @@ async fn coordinator_json<T: for<'de> Deserialize<'de>>(
         .map_err(|e| format!("decode {name}: {e}"))
 }
 
-fn coordinator_url(path: &str) -> String {
+pub(crate) fn coordinator_url(path: &str) -> String {
     let port = std::env::var("COMMITARIUM_COORDINATOR_PORT").unwrap_or_else(|_| "8080".into());
     format!("http://127.0.0.1:{port}{path}")
 }
@@ -1375,7 +1552,7 @@ fn forgejo_token_path() -> Result<PathBuf, String> {
     }
 }
 
-fn validate_handoff(handoff: &ProjectHandoff, project_id: &str) -> Result<(), String> {
+pub(crate) fn validate_handoff(handoff: &ProjectHandoff, project_id: &str) -> Result<(), String> {
     if handoff.project_id != project_id {
         return Err("coordinator returned a handoff for another project".into());
     }
@@ -1393,7 +1570,7 @@ fn validate_handoff(handoff: &ProjectHandoff, project_id: &str) -> Result<(), St
     Ok(())
 }
 
-fn validate_run(run: &RunConfig) -> Result<(), String> {
+pub(crate) fn validate_run(run: &RunConfig) -> Result<(), String> {
     if run.open.port == 0 || !safe_service_name(&run.open.service) {
         return Err("preview open target is invalid".into());
     }
@@ -1427,7 +1604,7 @@ fn validate_record_id(name: &str, value: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn validate_identifier(name: &str, value: &str) -> Result<(), String> {
+pub(crate) fn validate_identifier(name: &str, value: &str) -> Result<(), String> {
     if value.is_empty()
         || value.len() > 80
         || !value
@@ -1453,14 +1630,14 @@ fn validate_coordinate(name: &str, value: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn safe_commit(value: &str) -> bool {
+pub(crate) fn safe_commit(value: &str) -> bool {
     matches!(value.len(), 40 | 64)
         && value
             .bytes()
             .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
 }
 
-fn parse_published_port(output: &str) -> Result<u16, String> {
+pub(crate) fn parse_published_port(output: &str) -> Result<u16, String> {
     output
         .lines()
         .find_map(|line| {
@@ -1483,7 +1660,7 @@ fn run_checked(command: &mut Command, action: &str) -> Result<(), String> {
     }
 }
 
-fn bounded(value: &str) -> String {
+pub(crate) fn bounded(value: &str) -> String {
     value.chars().take(4000).collect()
 }
 
@@ -1537,6 +1714,67 @@ mod tests {
             }
         })
         .is_err());
+    }
+
+    fn ps(service: &str, state: &str, exit_code: i64) -> ComposeServiceState {
+        ComposeServiceState {
+            service: service.into(),
+            state: state.into(),
+            exit_code,
+            health: String::new(),
+        }
+    }
+
+    #[test]
+    fn a_stopped_container_is_named_with_its_exit_code() {
+        let running = [ps("web", "running", 0), ps("migrate", "exited", 0)];
+        assert_eq!(stack_problem(&running, "web"), None);
+        let crashed = [ps("web", "running", 0), ps("api", "exited", 1)];
+        assert_eq!(
+            stack_problem(&crashed, "web").as_deref(),
+            Some("the preview service \"api\" exited with code 1")
+        );
+        let restarting = [ps("api", "restarting", 2)];
+        assert_eq!(
+            stack_problem(&restarting, "web").as_deref(),
+            Some("the preview service \"api\" keeps restarting (exit code 2)")
+        );
+        let open_done = [ps("web", "exited", 0)];
+        assert_eq!(
+            stack_problem(&open_done, "web").as_deref(),
+            Some("the preview open service \"web\" stopped")
+        );
+    }
+
+    #[test]
+    fn evidence_keeps_one_entry_per_service_and_the_last_log_lines() {
+        let kept = dedupe_services(vec![
+            ps("api", "running", 0),
+            ps("web", "running", 0),
+            ps("api", "exited", 3),
+        ]);
+        assert_eq!(kept, vec![ps("api", "exited", 3), ps("web", "running", 0)]);
+        let logs = (1..=100)
+            .map(|n| format!("line {n}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let tail = last_lines(&logs, EVIDENCE_LOG_LINES);
+        assert!(tail.starts_with("line 41\n") && tail.ends_with("line 100\n"));
+        assert_eq!(last_lines("", 60), "");
+        assert!(last_lines(&"é".repeat(20_000), 60).len() <= 16 * 1024 + 1);
+    }
+
+    #[test]
+    fn compose_ps_reads_health_and_the_open_port() {
+        let output = r#"{"Service":"db","State":"running","ExitCode":0,"Health":"starting"}"#;
+        assert_eq!(parse_compose_ps(output).unwrap()[0].health, "starting");
+        let url = PreviewUrl {
+            service: "web".into(),
+            url: "http://127.0.0.1:49153".into(),
+            open: true,
+        };
+        assert_eq!(url.open_port(), Some(49153));
+        assert_eq!(PreviewUrl { open: false, ..url }.open_port(), None);
     }
 
     #[test]
