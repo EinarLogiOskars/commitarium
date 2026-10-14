@@ -200,7 +200,6 @@ export function AppWindow({ projectId }: { projectId: string }) {
         open={assistantOpen}
         onOpenChange={setAssistantOpen}
         docked={false}
-        appMode
       />
     </div>
   );

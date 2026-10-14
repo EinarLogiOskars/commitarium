@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/EinarLogiOskars/commitarium/internal/agent"
+	"github.com/EinarLogiOskars/commitarium/internal/conversations"
 	"github.com/EinarLogiOskars/commitarium/internal/feature"
 	"github.com/EinarLogiOskars/commitarium/internal/project"
 	"github.com/EinarLogiOskars/commitarium/internal/toolchain"
@@ -27,6 +29,9 @@ func previewSetupAPI(tree []project.RepositoryTreeEntry, existing []feature.Feat
 		projects: &recordingProjectService{overviewResult: project.RepositoryOverview{Tree: tree}},
 		features: features, workflow: workflowService, artifacts: workflowService,
 		starter: starter, realWorkflow: &planningStarterStub{},
+		// Background work runs on the assistant's agent (ADR-027).
+		conversations: &conversationStub{settings: conversations.Settings{Agent: "codex", Model: "gpt-6-luna"}},
+		agents:        testAgents(),
 	}, features, starter
 }
 
@@ -47,6 +52,24 @@ func TestPreviewSetupStartsABackgroundQuickChangeWithoutACompose(t *testing.T) {
 	}
 	if starter.featureID != "fea_setup" || starter.mergePolicy != project.MergePolicyAutoAfterGates {
 		t.Fatalf("the setup did not start: %+v", starter)
+	}
+	if overrides.AgentProviders == nil || overrides.AgentProviders.LeadAgent != "codex" ||
+		overrides.AgentModels == nil || overrides.AgentModels.Lead != "gpt-6-luna" {
+		t.Fatalf("the setup does not run on the assistant's agent: %+v", overrides)
+	}
+}
+
+// Without an agent for the assistant, background work says what to set up
+// and creates nothing (ADR-027).
+func TestPreviewSetupWaitsForTheAssistantsAgent(t *testing.T) {
+	api, features, _ := previewSetupAPI([]project.RepositoryTreeEntry{{Path: "package.json", Type: "blob"}}, nil)
+	api.conversations = &conversationStub{}
+	if _, err := api.ensurePreviewSetup(t.Context(), "prj_test"); err != errAssistantNotSetUp || features.createCalls != 0 {
+		t.Fatalf("setup without the assistant's agent: err=%v creates=%d", err, features.createCalls)
+	}
+	api.agents = &recordingAgentService{agents: map[string]agent.Agent{}}
+	if _, err := api.ensurePreviewSetup(t.Context(), "prj_test"); err != errNoAgents || features.createCalls != 0 {
+		t.Fatalf("setup without agents: err=%v creates=%d", err, features.createCalls)
 	}
 }
 

@@ -9,6 +9,7 @@ import type { PreviewSetupHandle } from "./usePreviewSetup";
 import { createSession, sendSessionTurn } from "../api/features";
 import { ContainerEvidence } from "./ContainerEvidence";
 import { plainFailure } from "./previewEvidence";
+import { requireWorkSuggestion } from "./useWorkSuggestion";
 import {
   OpenTargetFields,
   runDraftFrom,
@@ -90,11 +91,11 @@ export function PreviewView({
     setFixing(true);
     setFixError(null);
     try {
-      const session = await createSession(projectId);
+      const session = await createSession(projectId, await requireWorkSuggestion());
       await sendSessionTurn(projectId, session.id, previewFixMessage(failure), crypto.randomUUID());
       onOpenOrder(session.id);
     } catch (e) {
-      setFixError(e instanceof ApiError ? e.message : String(e));
+      setFixError(e instanceof Error ? e.message : String(e));
     } finally {
       setFixing(false);
     }

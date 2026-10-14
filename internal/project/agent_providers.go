@@ -77,6 +77,19 @@ func (providers AgentProviders) Normalize() (AgentProviders, error) {
 	return providers, nil
 }
 
+// IsZero reports an assignment that names no agents (ADR-027): a project, which
+// no longer carries agent defaults, or a work order whose agents are not chosen
+// yet. Normalize would read it as the historical Codex default.
+func (providers AgentProviders) IsZero() bool { return providers == AgentProviders{} }
+
+// NormalizeChosen normalizes a chosen assignment and keeps a zero one zero.
+func (providers AgentProviders) NormalizeChosen() (AgentProviders, error) {
+	if providers.IsZero() {
+		return providers, nil
+	}
+	return providers.Normalize()
+}
+
 func (providers AgentProviders) Validate() error {
 	_, err := providers.Normalize()
 	return err

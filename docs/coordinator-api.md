@@ -76,7 +76,8 @@ this API beyond the host loopback interface is unsupported.
 | `POST` | `/api/v1/projects/{projectID}/features/{featureID}/return-to-ready` | Stop a started work order and return it to Ready, keeping its brief |
 | `POST` | `/api/v1/projects/{projectID}/features/{featureID}/close` | Close a work order without merging it, keeping its history |
 | `PUT` | `/api/v1/projects/{id}/name` | Rename a project or app (`{"name"}`, at most 120 characters); its repository keeps its own name |
-| `PUT` | `/api/v1/projects/{id}/app` | Mark a project as an app (`{"app": true}`) or a project only; projects answer `app` |
+| `PUT` | `/api/v1/projects/{id}/app` | Mark a project as an app (`{"app": true}`) or a project only; projects answer `app`. A project that changes kind takes that kind's assistant mode |
+| `PUT` | `/api/v1/projects/{id}/assistant-mode` | Set how the assistant works (`{"assistant_mode": "builds"}` or `"assists"`, ADR-027); projects answer `assistant_mode`, `builds` for apps and `assists` for projects by default |
 | `POST` | `/api/v1/runs/{runID}/interventions` | Queue a user message for the lead or reviewer and stop at the next safe boundary |
 | `GET` | `/api/v1/runs/{runID}/planning/messages` | Retrieve the ordered lead/reviewer planning messages |
 | `GET` | `/api/v1/runs/{runID}/planning/messages/stream` | Replay and stream ordered planning messages with SSE |
@@ -285,7 +286,12 @@ One agent may play both roles: the lead and reviewer are separate sessions on
 the agent's worker, under the Forgejo identities `<agent>-lead` and
 `<agent>-reviewer`.
 
-Replace both default choices for future work orders with:
+Deprecated (ADR-027): projects no longer choose agents or models. Project
+creation and imports ignore `agent_providers` and `agent_models`; a new
+project's response carries empty strings; and what the routes below store is
+not used for any new work. They remain so older clients keep working.
+
+Replace both stored choices with:
 
 ```http
 PUT /api/v1/projects/prj_example/agent-providers
@@ -906,7 +912,10 @@ Content-Type: application/json
 }
 ```
 
-Any omitted category falls back to the project's current value. When present,
+Any omitted policy falls back to the project's current value. Agents and
+models do not (ADR-027): omitted, the work order has none until Start names
+them, and `agent_models` without `agent_providers` returns
+`400 agents_not_chosen`. When present,
 `agent_providers`, `agent_models`, and `dialogue_limits` must each be complete objects and use
 the same validation as project settings. Limits are non-negative and zero
 means unlimited. Invalid categories return `400` with
@@ -918,7 +927,7 @@ validation applies after resolving the complete effective pair.
 The coordinator stores the resulting effective values on the feature at
 creation. This is the immutable work-order configuration: project-setting
 changes made later do not affect it. A title/description-only request behaves
-as before and captures pure project defaults. The run admitted for the feature
+as before and captures the project's policy defaults, with no agents. The run admitted for the feature
 then snapshots these effective feature values, so automatic goal clarification
 cannot race a later settings update.
 
@@ -1023,9 +1032,10 @@ Content-Type: application/json
 The ID is derived from the name and numbered when taken (`claude-max-2`); it
 names the agent's worker, volumes, and Forgejo identities, so it never
 changes. `PATCH /api/v1/agents/{id}` with `{"name": "…"}` renames the agent.
-`DELETE` returns `204`, or `409 agent_in_use` while a project default, a
-draft or ready work order, or an unfinished run uses the agent. The two subscriptions configured before agents
-existed are the agents `codex` and `claude`. `provider` is `codex` or
+`DELETE` returns `204`, or `409 agent_in_use` while a project's stored
+choice or an unfinished run uses the agent. A new install starts with no
+agents (ADR-027); an install that had projects when agents arrived kept its
+two subscriptions as the agents `codex` and `claude`. `provider` is `codex` or
 `claude`; anything else returns `400 invalid_agent`.
 
 ## Work-order clarification
@@ -1574,8 +1584,9 @@ work order's handoff brief (see below).
 
 A work order's agents, models, and workflow settings are chosen at Start, not
 while drafting. The optional body names them; every field is optional and an
-omitted one keeps the work order's current setting, which is its project's
-default until a Start chose another:
+omitted one keeps the work order's current setting. Agents and models never
+come from the project (ADR-027): a work order created without them has none
+until a Start names them:
 
 ```http
 POST /api/v1/projects/prj_example/features/fea_example/runs
@@ -1595,7 +1606,24 @@ Content-Type: application/json
 The chosen settings are saved on the work order, then snapshotted by the run.
 Unknown fields return `400 invalid_json`; agents, models, and policies are
 validated as for project settings. An empty body starts with the current
-settings.
+settings. Without a reviewer step the reviewer may be omitted; the lead is
+then named for that role, which never runs.
+
+The coordinator never picks agents or models for the user or the assistant
+(ADR-027). Before anything changes (a refused Start leaves a draft a draft) it
+refuses a choice that cannot run, each with a message that says what to do:
+
+- `400 agents_not_chosen`: no lead agent and model (or no reviewer's, when
+  the steps have a reviewer).
+- `409 agent_not_found`: a named agent does not exist.
+- `409 agent_signed_out`: a run waits for the agent to log in again.
+- `409 agent_at_limit`: the agent is at its usage limit, as a run waiting on
+  it or its latest usage report says, with the reset time when known.
+- `400 model_unavailable` or `503 model_catalog_unavailable`: the agent's
+  worker does not offer the model, or its models are not known yet.
+
+Premium models still need the user's approval on the assistant's actions
+(`409 premium_approval_required`).
 
 `steps` chooses the work order's optional steps (ADR-018). Both default to
 `true`, and a reviewer requires a documented plan, so `{"documented_plan":
@@ -2488,8 +2516,24 @@ default branch, and returns the `assistant_turn` result: its reply, proposed
 actions, and its notes.
 
 - `GET /api/v1/assistant/settings` answers `{"agent", "model", "ask_before",
-  "updated_at"}`; without saved settings, the first agent on its provider's
-  first model, and `ask_before` `["fable", "astra"]`. `PUT` saves them.
+  "updated_at"}`; without saved settings, an empty agent and model (ADR-027:
+  the user chooses them) and `ask_before` `["fable", "astra"]`. An assistant
+  that had answered before keeps the default it had then (the first agent on
+  its provider's first model), saved once. `PUT` saves them.
+- Until it can answer, sending a message returns `409 no_agents` (no agent
+  exists yet) or `409 assistant_not_set_up` (none is chosen for it, or the
+  chosen one is gone), each with a plain message for the user. Work
+  Commitarium starts by itself (writing a vision, clarifying a work order
+  without agents, setting a project or its preview up) runs on the
+  assistant's agent and model and answers the same codes.
+- The assistant chooses each work order's agents and models in its actions
+  (ADR-027); its state lists every agent with its provider, the models it
+  offers, and its usage left and reset times (or that it is not connected or
+  at its limit). A `create_work_order` or `start_work_order` that names some
+  but not all of them returns `400 agents_not_chosen`; one the coordinator
+  refuses at Start returns the Start's code. When autopilot's action is
+  refused, the assistant hears why and may choose again, at most twice in a
+  row.
 - `GET /api/v1/assistant/conversations/{scope}` answers `{"scope", "status":
   "idle"|"running", "agent", "model", "messages", "actions", "notes", "goal"}`. A
   message's `role` is `user`, `assistant`, or `event` (an outcome from

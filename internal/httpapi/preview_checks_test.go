@@ -90,7 +90,7 @@ func TestSetUpPreviewActionStartsTheCheckedFix(t *testing.T) {
 	}
 	api, features, starter := previewSetupAPI([]project.RepositoryTreeEntry{{Path: "compose.yaml", Type: "blob"}}, history)
 	api.toolchains = &recordingToolchainService{}
-	stub := &conversationStub{action: conversations.Action{
+	stub := &conversationStub{settings: conversations.Settings{Agent: "codex", Model: "gpt-6-luna"}, action: conversations.Action{
 		ID: "act_preview", Status: conversations.ActionProposed,
 		AssistantAction: featureartifact.AssistantAction{
 			Type: featureartifact.AssistantSetUpPreview, Reason: "The app does not open",
@@ -108,7 +108,10 @@ func TestSetUpPreviewActionStartsTheCheckedFix(t *testing.T) {
 		!strings.Contains(stub.resolvedResult, "fea_setup") {
 		t.Fatalf("set up preview = %d %s, resolved %s %q", recorder.Code, recorder.Body.String(), stub.resolvedStatus, stub.resolvedResult)
 	}
+	// Commitarium's setup work is the assistant's, on its agent (ADR-027).
 	if features.receivedTitle != previewFixTitle || !features.receivedOverrides.PreviewCheck ||
+		features.receivedOverrides.CreatedBy != feature.CreatedByAssistant ||
+		features.receivedOverrides.AgentModels == nil || features.receivedOverrides.AgentModels.Lead != "gpt-6-luna" ||
 		!features.receivedOverrides.Background ||
 		!strings.Contains(features.receivedDescription, "ModuleNotFoundError: fastapi") || starter.featureID != "fea_setup" {
 		t.Fatalf("the checked fix did not start: %q %+v %q", features.receivedTitle, features.receivedOverrides, features.receivedDescription)

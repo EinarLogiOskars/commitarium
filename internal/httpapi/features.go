@@ -10,6 +10,7 @@ import (
 
 	"github.com/EinarLogiOskars/commitarium/internal/execution"
 	"github.com/EinarLogiOskars/commitarium/internal/feature"
+	"github.com/EinarLogiOskars/commitarium/internal/modelcatalog"
 	"github.com/EinarLogiOskars/commitarium/internal/project"
 	"github.com/EinarLogiOskars/commitarium/internal/toolchain"
 )
@@ -46,6 +47,9 @@ type featureResponse struct {
 	// Background marks a work order Commitarium runs by itself, such as the
 	// preview setup.
 	Background bool `json:"background,omitempty"`
+	// CreatedBy is "user" for a work order the user made by hand, which the
+	// assistant never acts on by itself, or "assistant" (ADR-027).
+	CreatedBy feature.Creator `json:"created_by"`
 	// PreviewCheck marks a work order that merges only once Commitarium's
 	// preview check of its commit passed (ADR-028).
 	PreviewCheck bool `json:"preview_check,omitempty"`
@@ -80,6 +84,13 @@ func (api *API) createFeatureHandler(
 		}
 		overrides.DialogueLimits = &limits
 	}
+	// A work order may be created without agents; they are then chosen at
+	// Start (ADR-027). Models name no agent on their own.
+	fillSkippedReviewer(request.AgentProviders, request.AgentModels, request.Kind == feature.KindSession)
+	if request.AgentModels != nil && request.AgentProviders == nil {
+		writeError(w, http.StatusBadRequest, "agents_not_chosen", "agent_models need agent_providers naming the agents that run them")
+		return
+	}
 	if request.AgentProviders != nil {
 		providers, err := api.decodeAgentProviders(r.Context(), request.AgentProviders, false)
 		if err != nil {
@@ -111,26 +122,14 @@ func (api *API) createFeatureHandler(
 			return
 		}
 	}
-	if api.modelCatalog != nil {
-		storedProject, err := api.projects.GetByID(r.Context(), projectID)
+	if overrides.AgentProviders != nil && overrides.AgentModels != nil {
+		providers, models := *overrides.AgentProviders, *overrides.AgentModels
+		err := api.modelOffered(r.Context(), providers.LeadAgent, providers.Lead, modelcatalog.RoleLead, models.Lead)
+		if err == nil && request.Kind != feature.KindSession {
+			err = api.modelOffered(r.Context(), providers.ReviewerAgent, providers.Reviewer, modelcatalog.RoleReviewer, models.Reviewer)
+		}
 		if err != nil {
-			if errors.Is(err, project.ErrNotFound) {
-				writeError(w, http.StatusNotFound, "project_not_found", "project not found")
-			} else {
-				writeError(w, http.StatusInternalServerError, "internal_error", "internal server error")
-			}
-			return
-		}
-		effectiveProviders := storedProject.AgentProviders
-		if overrides.AgentProviders != nil {
-			effectiveProviders = *overrides.AgentProviders
-		}
-		effectiveModels := storedProject.AgentModels
-		if overrides.AgentModels != nil {
-			effectiveModels = *overrides.AgentModels
-		}
-		if err := api.modelCatalog.ValidateSelection(r.Context(), effectiveProviders, effectiveModels); err != nil {
-			writeModelSelectionError(w, err)
+			writeChoiceError(w, err)
 			return
 		}
 	}
@@ -162,7 +161,7 @@ func (api *API) createFeatureHandler(
 		case errors.Is(err, project.ErrInvalidAgentProviders):
 			writeError(w, http.StatusBadRequest, "invalid_agent_providers", "agent_providers must include lead and reviewer set to codex or claude")
 		case errors.Is(err, project.ErrInvalidAgentModels):
-			writeError(w, http.StatusBadRequest, "invalid_agent_models", "effective lead and reviewer models must be explicit model IDs; configure project defaults or provide agent_models")
+			writeError(w, http.StatusBadRequest, "invalid_agent_models", "lead and reviewer models must be explicit model IDs")
 		case errors.Is(err, project.ErrInvalidAutonomyPolicy):
 			writeError(w, http.StatusBadRequest, "invalid_autonomy_policy", "autonomy_policy must be review_each_phase or run_to_completion")
 		case errors.Is(err, project.ErrInvalidMergePolicy):
@@ -283,7 +282,7 @@ func (api *API) getFeatureByIDHandler(
 }
 
 func newFeatureResponse(storedFeature feature.Feature) featureResponse {
-	agentProviders, err := storedFeature.AgentProviders.Normalize()
+	agentProviders, err := storedFeature.AgentProviders.NormalizeChosen()
 	if err != nil {
 		agentProviders = storedFeature.AgentProviders
 	}
@@ -315,10 +314,20 @@ func newFeatureResponse(storedFeature feature.Feature) featureResponse {
 		Steps:                      newWorkStepsResponse(storedFeature.Steps),
 		Kind:                       featureKind(storedFeature.Kind),
 		Background:                 storedFeature.Background,
+		CreatedBy:                  featureCreator(storedFeature.CreatedBy),
 		PreviewCheck:               storedFeature.PreviewCheck,
 		CreatedAt:                  storedFeature.CreatedAt,
 		UpdatedAt:                  storedFeature.UpdatedAt,
 	}
+}
+
+// featureCreator reports who created a work order; one without a stored
+// creator is the user's.
+func featureCreator(creator feature.Creator) feature.Creator {
+	if creator == feature.CreatedByAssistant {
+		return creator
+	}
+	return feature.CreatedByUser
 }
 
 // featureKind reports a work order's kind; one without a stored kind is a work

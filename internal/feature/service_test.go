@@ -115,12 +115,14 @@ func TestServiceCreate(t *testing.T) {
 		Description:    "Persist feature data",
 		State:          StateDraft,
 		DialogueLimits: project.DefaultDialogueLimits(),
-		AgentProviders: project.DefaultAgentProviders(),
+		// No agents until they are chosen (ADR-027).
 		MergePolicy:    project.DefaultMergePolicy(),
 		AutonomyPolicy: project.DefaultAutonomyPolicy(),
 		Kind:           KindWorkOrder,
-		CreatedAt:      fixedTime,
-		UpdatedAt:      fixedTime,
+		// The user's, unless the assistant creates it (ADR-027).
+		CreatedBy: CreatedByUser,
+		CreatedAt: fixedTime,
+		UpdatedAt: fixedTime,
 	}
 
 	if projects.receivedID != expected.ProjectID {

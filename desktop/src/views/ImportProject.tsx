@@ -7,7 +7,6 @@ import {
 } from "../api/toolchains";
 import { ApiError } from "../api/client";
 import { SetupAssistant } from "./SetupAssistant";
-import { useModels } from "./useModels";
 import {
   ProjectDefaultsFields,
   initialProjectDefaults,
@@ -27,7 +26,6 @@ export function ImportProject({
   const [branch, setBranch] = useState("");
   const [defaults, setDefaults] = useState(initialProjectDefaults());
   const [showDefaults, setShowDefaults] = useState(false);
-  const { modelsFor, loading: modelsLoading } = useModels();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // After import: run toolchain detection and let the user accept it before
@@ -203,19 +201,11 @@ export function ImportProject({
                 <span className="activity-group__chevron">{showDefaults ? "▼" : "▶"}</span>
                 Project defaults
                 {!showDefaults && (
-                  <span className="neworder__summary">
-                    Agents, models, autonomy, merge, recovery
-                  </span>
+                  <span className="neworder__summary">Autonomy, merge, recovery</span>
                 )}
               </button>
               {showDefaults && (
-                <ProjectDefaultsFields
-                  value={defaults}
-                  onChange={setDefaults}
-                  modelsFor={modelsFor}
-                  modelsLoading={modelsLoading}
-                  disabled={busy}
-                />
+                <ProjectDefaultsFields value={defaults} onChange={setDefaults} disabled={busy} />
               )}
             </div>
 

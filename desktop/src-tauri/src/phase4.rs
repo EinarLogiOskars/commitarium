@@ -254,25 +254,53 @@ fn provision_images(
     Ok(built)
 }
 
-/// Build both derivative images from the current base worker images, check
-/// they installed the same versions, and point the environment overlay at
-/// them. The workers pick them up on their next reconcile.
+/// Build a derivative image for each provider whose base worker image is
+/// here, check they installed the same versions, and point the environment
+/// overlay at them. The workers pick them up on their next reconcile. A new
+/// install has no agents (ADR-027), and a provider without agents may never
+/// have had its base pulled; it is left out until one of its agents brings
+/// the base, and the background refresh then builds it. The images are
+/// returned per provider, empty when left out.
 fn build_environment_images(
     packages: &[String],
 ) -> Result<(BTreeMap<String, String>, String, String), String> {
-    let codex_base = compose_image(Provider::Codex.template_service())?;
-    let claude_base = compose_image(Provider::Claude.template_service())?;
     let package_text = packages.join(" ");
-    let codex_image = derivative_tag("codex", &codex_base, packages);
-    let claude_image = derivative_tag("claude", &claude_base, packages);
-    build_derivative(&codex_base, &codex_image, &package_text)?;
-    build_derivative(&claude_base, &claude_image, &package_text)?;
-    let resolved = resolve_packages(&codex_image, packages)?;
-    if resolve_packages(&claude_image, packages)? != resolved {
-        return Err("Codex and Claude images resolved different system-package versions".into());
+    let mut built: Vec<(Provider, String)> = Vec::new();
+    for provider in [Provider::Codex, Provider::Claude] {
+        let base = compose_image(provider.template_service())?;
+        if inspect_image(&base)?.is_none() {
+            continue;
+        }
+        let image = derivative_tag(provider.executable(), &base, packages);
+        build_derivative(&base, &image, &package_text)?;
+        built.push((provider, image));
     }
-    write_environment_overlay(&codex_image, &claude_image)?;
-    Ok((resolved, codex_image, claude_image))
+    let Some((_, first)) = built.first() else {
+        return Err(
+            "no agent worker image is here yet; add and connect an agent, then try again".into(),
+        );
+    };
+    let resolved = resolve_packages(first, packages)?;
+    for (_, image) in &built[1..] {
+        if resolve_packages(image, packages)? != resolved {
+            return Err(
+                "Codex and Claude images resolved different system-package versions".into(),
+            );
+        }
+    }
+    write_environment_overlay(&built)?;
+    let image_of = |wanted: Provider| {
+        built
+            .iter()
+            .find(|(provider, _)| *provider == wanted)
+            .map(|(_, image)| image.clone())
+            .unwrap_or_default()
+    };
+    Ok((
+        resolved,
+        image_of(Provider::Codex),
+        image_of(Provider::Claude),
+    ))
 }
 
 /// Provisioning and the background refresh both build the derivative images,
@@ -367,7 +395,7 @@ fn resolve_packages(image: &str, packages: &[String]) -> Result<BTreeMap<String,
     Ok(resolved)
 }
 
-fn write_environment_overlay(codex: &str, claude: &str) -> Result<(), String> {
+fn write_environment_overlay(images: &[(Provider, String)]) -> Result<(), String> {
     let path = docker::environment_compose_file()?;
     let parent = path
         .parent()
@@ -375,16 +403,7 @@ fn write_environment_overlay(codex: &str, claude: &str) -> Result<(), String> {
     fs::create_dir_all(parent).map_err(|e| format!("create environment Compose directory: {e}"))?;
     // The agent worker templates carry the images; agent workers generated
     // from them pick the approved environment up on the next reconcile.
-    let contents = format!(
-        r#"services:
-  codex-agent-template:
-    build: !reset null
-    image: {codex}
-  claude-agent-template:
-    build: !reset null
-    image: {claude}
-"#
-    );
+    let contents = environment_overlay(images);
     let mut temporary = tempfile::NamedTempFile::new_in(parent)
         .map_err(|e| format!("create environment Compose update: {e}"))?;
     temporary
@@ -415,9 +434,24 @@ pub(crate) fn migrate_environment_overlay() -> Result<(), String> {
         overlay_image(&contents, "codex-worker"),
         overlay_image(&contents, "claude-worker"),
     ) {
-        (Some(codex), Some(claude)) => write_environment_overlay(&codex, &claude),
+        (Some(codex), Some(claude)) => {
+            write_environment_overlay(&[(Provider::Codex, codex), (Provider::Claude, claude)])
+        }
         _ => Err("the approved-environment overlay has an unexpected form".into()),
     }
+}
+
+/// The overlay pointing each built provider's worker template at its
+/// derivative image.
+fn environment_overlay(images: &[(Provider, String)]) -> String {
+    let mut contents = String::from("services:\n");
+    for (provider, image) in images {
+        contents.push_str(&format!(
+            "  {}:\n    build: !reset null\n    image: {image}\n",
+            provider.template_service()
+        ));
+    }
+    contents
 }
 
 /// The image an environment overlay (current or legacy) sets for `service`.
@@ -507,10 +541,13 @@ pub(crate) fn inspect_environment(
     let mut images = Vec::new();
     for (provider, containers) in workers {
         let service = provider.template_service();
-        let derivative = overlay_image(&contents, service)
-            .ok_or("the approved-environment overlay has an unexpected form")?;
+        // A provider the overlay leaves out had no base when it was built;
+        // with its base here now, the plan rebuilds it.
         let base = inspect_image(&compose_image(service)?)?;
-        let derivative = inspect_image(&derivative)?;
+        let derivative = match overlay_image(&contents, service) {
+            Some(derivative) => inspect_image(&derivative)?,
+            None => None,
+        };
         let mut running = Vec::new();
         for container in containers {
             running.extend(container_image(container)?);
@@ -971,6 +1008,39 @@ mod tests {
         assert_eq!(unlabelled.built_from, None);
         assert_eq!(image_info("\"sha256:base\" null").unwrap().built_from, None);
         assert!(image_info("garbage").is_none());
+    }
+
+    #[test]
+    fn the_overlay_names_only_the_built_providers() {
+        let both = environment_overlay(&[
+            (Provider::Codex, "commitarium-codex-environment:a".into()),
+            (Provider::Claude, "commitarium-claude-environment:b".into()),
+        ]);
+        assert_eq!(
+            overlay_image(&both, "codex-agent-template").as_deref(),
+            Some("commitarium-codex-environment:a")
+        );
+        assert_eq!(
+            overlay_image(&both, "claude-agent-template").as_deref(),
+            Some("commitarium-claude-environment:b")
+        );
+        let claude_only =
+            environment_overlay(&[(Provider::Claude, "commitarium-claude-environment:b".into())]);
+        assert_eq!(overlay_image(&claude_only, "codex-agent-template"), None);
+        assert!(claude_only.contains("build: !reset null"));
+    }
+
+    #[test]
+    fn a_provider_left_out_is_rebuilt_once_its_base_is_here() {
+        let left_out = EnvironmentImages {
+            derivative: None,
+            built_from: None,
+            ..images("sha256:base", None, &[])
+        };
+        assert_eq!(
+            environment_plan(Some(&[left_out])),
+            EnvironmentPlan::Rebuild
+        );
     }
 
     #[test]

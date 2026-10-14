@@ -33,6 +33,10 @@ var (
 	ErrBusy        = errors.New("the assistant is still answering")
 	ErrInvalid     = errors.New("invalid assistant request")
 	ErrNotPending  = errors.New("the action is no longer waiting for approval")
+	// ErrNoAgents and ErrNotSetUp say, in the user's words, why the assistant
+	// cannot answer yet (ADR-027).
+	ErrNoAgents = errors.New("the assistant needs an AI account to work with. Add one on the Agents page, then come back here")
+	ErrNotSetUp = errors.New("the assistant is not set up yet. Choose which of your agents it works with in the assistant settings")
 )
 
 // TopLevel is the scope of the Commitarium-wide conversation; a project's
@@ -145,6 +149,9 @@ type record struct {
 	// AutoContinues counts the blocked work orders autopilot continued, by
 	// work order; past maxAutoContinues the next one waits for the user.
 	AutoContinues map[string]int `json:"auto_continues,omitempty"`
+	// Refusals counts autopilot's refused actions since one last applied;
+	// past maxRefusals they no longer wake the assistant.
+	Refusals int `json:"refusals,omitempty"`
 }
 
 // maxSessionTurns bounds a provider session; the next turn starts fresh.
@@ -219,14 +226,15 @@ func NewService(config Config) (*Service, error) {
 	return &Service{config: config, now: func() time.Time { return time.Now().UTC() }, nudge: make(chan struct{}, 1)}, nil
 }
 
-// Settings returns the assistant's settings, filling in the default agent
-// (the first connected one, on its provider's default model) and the default
-// premium families.
+// Settings returns the assistant's settings with the default premium
+// families. The agent and model are the user's choice (ADR-027): until they
+// choose, both are empty and the assistant asks to be set up.
 func (service *Service) Settings(ctx context.Context) (Settings, error) {
 	settings := Settings{AskBefore: append([]string(nil), DefaultAskBefore...)}
 	contents, err := os.ReadFile(service.settingsPath())
 	switch {
 	case errors.Is(err, os.ErrNotExist):
+		return service.earlierDefault(ctx, settings)
 	case err != nil:
 		return Settings{}, ErrUnavailable
 	default:
@@ -234,19 +242,71 @@ func (service *Service) Settings(ctx context.Context) (Settings, error) {
 			return Settings{}, ErrUnavailable
 		}
 	}
-	if settings.Agent == "" {
-		agents, err := service.config.Agents.List(ctx)
-		if err != nil {
-			return Settings{}, err
+	return settings, nil
+}
+
+// earlierDefault keeps an assistant that already answered on the default it
+// had before ADR-027, when it took the first agent on its provider's default
+// model without the user saving a choice: that choice is saved once, so it
+// keeps working. A new assistant has none.
+func (service *Service) earlierDefault(ctx context.Context, settings Settings) (Settings, error) {
+	if !service.answeredBefore() {
+		return settings, nil
+	}
+	agents, err := service.config.Agents.List(ctx)
+	if err != nil {
+		return Settings{}, err
+	}
+	if len(agents) == 0 || service.config.DefaultModel == nil {
+		return settings, nil
+	}
+	model := service.config.DefaultModel(ctx, agents[0].Provider)
+	if model == "" {
+		return settings, nil
+	}
+	settings.Agent, settings.Model, settings.UpdatedAt = agents[0].ID, model, service.now()
+	return settings, writeJSON(service.settingsPath(), settings)
+}
+
+// answeredBefore reports whether any conversation has had a turn.
+func (service *Service) answeredBefore() bool {
+	entries, err := os.ReadDir(filepath.Join(service.config.Root, "conversations"))
+	if err != nil {
+		return false
+	}
+	for _, entry := range entries {
+		scope, ok := strings.CutSuffix(entry.Name(), ".json")
+		if !ok || !scopePattern.MatchString(scope) {
+			continue
 		}
-		if len(agents) > 0 {
-			settings.Agent = agents[0].ID
-			if settings.Model == "" && service.config.DefaultModel != nil {
-				settings.Model = service.config.DefaultModel(ctx, agents[0].Provider)
-			}
+		if stored, err := service.read(scope); err == nil && stored.Turn > 0 {
+			return true
 		}
 	}
-	return settings, nil
+	return false
+}
+
+// Readiness says whether the assistant can answer: ErrNoAgents when no agent
+// exists yet, ErrNotSetUp when none is chosen for it (or the chosen one is
+// gone), nil when it is set up.
+func (service *Service) Readiness(ctx context.Context) (Settings, error) {
+	settings, err := service.Settings(ctx)
+	if err != nil {
+		return Settings{}, err
+	}
+	agents, err := service.config.Agents.List(ctx)
+	if err != nil {
+		return Settings{}, err
+	}
+	if len(agents) == 0 {
+		return settings, ErrNoAgents
+	}
+	for _, candidate := range agents {
+		if candidate.ID == settings.Agent && settings.Model != "" {
+			return settings, nil
+		}
+	}
+	return settings, ErrNotSetUp
 }
 
 // SaveSettings stores the assistant's agent, model, and premium families.

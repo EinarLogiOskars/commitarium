@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/EinarLogiOskars/commitarium/internal/agent"
 	"github.com/EinarLogiOskars/commitarium/internal/execution"
@@ -46,6 +48,14 @@ type StateDescriber struct {
 	// Runs, when set, adds what an unfinished work order's run is doing or
 	// waiting for, and why.
 	Runs RunReader
+	// Usage, when set, reports each agent's account usage as its worker last
+	// saw it, leaving out agents whose worker does not answer; nil means the
+	// workers cannot be asked. The assistant weighs it when it chooses agents
+	// (ADR-027).
+	Usage func(ctx context.Context) []agent.Usage
+	// Settings, when set, names the agent and model the assistant runs on.
+	Settings func(ctx context.Context) (Settings, error)
+	Now      func() time.Time
 }
 
 // maxWorkOrders bounds the work orders listed for a project.
@@ -90,28 +100,102 @@ func (describer StateDescriber) Describe(ctx context.Context, scope string) (str
 
 func (describer StateDescriber) writeAgents(ctx context.Context, builder *strings.Builder, agents []agent.Agent) {
 	builder.WriteString("## Agents and models\n")
+	if len(agents) == 0 {
+		builder.WriteString("- none: the user has not added an agent yet, so no work can start. Tell the user to add " +
+			"one on the Agents page; propose no work until then.\n")
+		return
+	}
 	var models []ModelChoice
 	if describer.Models != nil {
 		models = describer.Models(ctx)
 	}
+	var usage []agent.Usage
+	if describer.Usage != nil {
+		usage = describer.Usage(ctx)
+	}
+	now := time.Now()
+	if describer.Now != nil {
+		now = describer.Now()
+	}
+	providers := map[project.AgentProvider]bool{}
 	for _, candidate := range agents {
+		providers[candidate.Provider] = true
 		offered := make([]string, 0)
 		for _, model := range models {
 			if model.Provider == candidate.Provider {
 				offered = append(offered, model.ID+" ("+model.Display+")")
 			}
 		}
-		builder.WriteString(fmt.Sprintf("- agent %s (%s, %s): %s\n",
-			candidate.ID, candidate.Name, candidate.Provider, strings.Join(offered, ", ")))
+		list := strings.Join(offered, ", ")
+		if list == "" {
+			list = "not known yet"
+		}
+		builder.WriteString(fmt.Sprintf("- agent %s (%s, %s): %s; models: %s\n",
+			candidate.ID, candidate.Name, candidate.Provider, usageNote(candidate.ID, usage, now), list))
+	}
+	if len(providers) > 1 {
+		builder.WriteString("Agents of more than one provider are connected: give each full work order a lead and a " +
+			"reviewer of different providers.\n")
+	}
+	if describer.Settings != nil {
+		if settings, err := describer.Settings(ctx); err == nil && settings.Agent != "" {
+			builder.WriteString(fmt.Sprintf("You, the assistant, run on agent %s with %s; your turns use its usage too.\n",
+				settings.Agent, settings.Model))
+		}
 	}
 }
 
+// usageNote says what is known of an agent's usage: not connected, at its
+// limit, or how much is left and when its limits reset.
+func usageNote(agentID string, usage []agent.Usage, now time.Time) string {
+	if usage == nil {
+		return "usage unknown"
+	}
+	index := slices.IndexFunc(usage, func(reported agent.Usage) bool { return reported.Agent == agentID })
+	if index < 0 {
+		return "not connected right now (its worker does not answer), do not choose it"
+	}
+	reported := usage[index]
+	if limited, until := reported.LimitedUntil(now); limited {
+		if until != nil {
+			return "at its usage limit until " + until.UTC().Format(usageTime) + ", do not choose it"
+		}
+		return "at its usage limit, do not choose it"
+	}
+	if reported.ObservedAt == nil || len(reported.Windows) == 0 {
+		return "usage not reported yet (it has not worked since it started)"
+	}
+	windows := make([]string, 0, len(reported.Windows))
+	for _, window := range reported.Windows {
+		text := window.Name
+		if window.UsedPercent != nil {
+			text += fmt.Sprintf(" %.0f%% used", *window.UsedPercent)
+		}
+		if window.ResetsAt != nil {
+			text += ", resets " + window.ResetsAt.UTC().Format(usageTime)
+		}
+		windows = append(windows, text)
+	}
+	note := strings.Join(windows, "; ")
+	if left, known := reported.Remaining(now); known {
+		note = fmt.Sprintf("%.0f%% left (%s)", left, note)
+	}
+	return "usage " + note + ", as of " + reported.ObservedAt.UTC().Format(usageTime)
+}
+
+const usageTime = "Jan 2 15:04 UTC"
+
 func (describer StateDescriber) writeProject(ctx context.Context, builder *strings.Builder, current project.Project) {
 	builder.WriteString(fmt.Sprintf("\n## This project: %s (%s)\n", current.Name, current.ID))
-	builder.WriteString(fmt.Sprintf("Defaults: lead %s on %s, reviewer %s on %s; merge %s; autonomy %s; independent tests %t.\n",
-		current.AgentProviders.LeadAgent, current.AgentModels.Lead,
-		current.AgentProviders.ReviewerAgent, current.AgentModels.Reviewer,
+	builder.WriteString(fmt.Sprintf("Defaults: merge %s; autonomy %s; independent tests %t.\n",
 		current.MergePolicy, current.AutonomyPolicy, current.IndependentAcceptanceTests))
+	if current.AssistantBuilds() {
+		builder.WriteString("How you work here: you build everything. Your actions apply without cards, except " +
+			"those using a premium model and those on the user's own work orders.\n")
+	} else {
+		builder.WriteString("How you work here: you assist. Each of your actions waits for the user's approval " +
+			"as a card.\n")
+	}
 	if current.ForgejoRepository != nil {
 		if overview, err := describer.Projects.GetRepositoryOverview(ctx, current.ID); err == nil {
 			builder.WriteString(fmt.Sprintf("Repository default branch %s at %s.\n", overview.DefaultBranch, overview.Head.CommitID))
@@ -175,14 +259,36 @@ func (describer StateDescriber) writeProject(ctx context.Context, builder *strin
 		} else if !linked[item.ID] {
 			outside = " — outside the vision"
 		}
-		builder.WriteString(fmt.Sprintf("- %s %q (%s): %s, steps %s, lead %s on %s, reviewer %s on %s%s%s\n",
-			kind, item.Title, item.ID, item.State, stepsName(item.Steps),
-			item.AgentProviders.LeadAgent, item.AgentModels.Lead,
-			item.AgentProviders.ReviewerAgent, item.AgentModels.Reviewer, outside, describer.runNote(ctx, item)))
+		builder.WriteString(fmt.Sprintf("- %s %q (%s, %s): %s, steps %s, %s%s%s\n",
+			kind, item.Title, item.ID, creatorNote(item), item.State, stepsName(item.Steps),
+			agentsNote(item), outside, describer.runNote(ctx, item)))
 	}
 	if listed == 0 {
 		builder.WriteString("- none yet\n")
 	}
+}
+
+// creatorNote says whose a work order is (ADR-027): the assistant acts on
+// its own only on its own.
+func creatorNote(item feature.Feature) string {
+	if item.CreatedBy == feature.CreatedByAssistant {
+		return "yours"
+	}
+	return "the user's"
+}
+
+// agentsNote names a work order's agents and models, or says they are not
+// chosen yet.
+func agentsNote(item feature.Feature) string {
+	if item.AgentProviders.IsZero() || item.AgentModels.Lead == "" {
+		return "agents not chosen yet"
+	}
+	if item.Steps.SkipReviewer {
+		return fmt.Sprintf("lead %s on %s", item.AgentProviders.LeadAgent, item.AgentModels.Lead)
+	}
+	return fmt.Sprintf("lead %s on %s, reviewer %s on %s",
+		item.AgentProviders.LeadAgent, item.AgentModels.Lead,
+		item.AgentProviders.ReviewerAgent, item.AgentModels.Reviewer)
 }
 
 func writeVisionItems(builder *strings.Builder, items []featureartifact.VisionItem, prefix, indent string, byID map[string]feature.Feature) {

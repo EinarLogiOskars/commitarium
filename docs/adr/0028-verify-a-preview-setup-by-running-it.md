@@ -30,8 +30,10 @@ preview ("Set up preview" on the Preview page, "Let the assistant fix it" in
 the app window) or the assistant starts with the new `set_up_preview` action.
 They carry `preview_check` on the work order and keep everything else the
 existing flow had: no plan, no reviewer, `run_to_completion`, automatic merge,
-the preview rules in the description, one at a time per project. No new
-per-project defaults.
+the preview rules in the description, one at a time per project. As
+Commitarium's own setup work they are the assistant's (`created_by:
+assistant`) and run on the assistant's agent and model (ADR-027); there are no
+new per-project defaults.
 
 **The check.** The coordinator records a check at the merge gate, before
 isolated validation, pinned to the approved commit. It reuses the lifecycle of

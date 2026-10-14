@@ -7,6 +7,7 @@ import {
 import { ApiError } from "../api/client";
 import { useAgents } from "./useAgents";
 import { useModels } from "./useModels";
+import { defaultModel } from "./workChoice";
 
 // The assistant's agent and model, for the whole app, and the model families
 // it must ask before using (ASSISTANT_PLAN.md decisions 7 and 14). One
@@ -58,21 +59,26 @@ export function AssistantSettingsSection() {
       <h3>Assistant</h3>
       <p className="muted note">
         The agent the assistant runs on, for every project. It shares that agent&apos;s usage limit
-        with any work orders on it.
+        with any work orders on it. The assistant chooses the agents and models of the work it
+        starts, preferring the agent with the most usage left.
       </p>
       <div className="assistant-settings__row">
         <label className="field">
           <span>Agent</span>
           <select
-            value={settings.agent}
+            value={agent ? settings.agent : ""}
             onChange={(e) => {
               const next = agents.find((a) => a.id === e.target.value);
               update({
                 agent: e.target.value,
-                model: next ? (modelsFor(next.provider, "lead")[0]?.id ?? "") : "",
+                model: next
+                  ? defaultModel(modelsFor(next.provider, "lead"), settings.ask_before)
+                  : "",
               });
             }}
           >
+            {/* Nothing is chosen for the user (ADR-027). */}
+            {!agent && <option value="">Choose an agent…</option>}
             {agents.map((a) => (
               <option key={a.id} value={a.id}>
                 {a.name}

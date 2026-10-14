@@ -15,9 +15,15 @@ export async function reloadAgents(): Promise<Agent[]> {
 
 /** The configured agents; empty until the coordinator answers. */
 export function useAgents(): Agent[] {
-  const [agents, setAgents] = useState<Agent[]>(cache ?? []);
+  return useAgentList() ?? [];
+}
+
+/** The configured agents, or null until the coordinator answers: an empty
+ * list means there are none (ADR-027). */
+export function useAgentList(): Agent[] | null {
+  const [agents, setAgents] = useState<Agent[] | null>(cache);
   useEffect(() => {
-    const listener = () => setAgents(cache ?? []);
+    const listener = () => setAgents(cache);
     listeners.add(listener);
     if (cache === null) void reloadAgents().catch(() => undefined);
     return () => {

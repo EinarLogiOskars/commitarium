@@ -25,12 +25,25 @@ type Feature struct {
 	// Background marks a work order Commitarium started by itself, such as
 	// the preview setup; it is not listed with the user's work.
 	Background bool
+	// CreatedBy is who created it: the assistant acts on its own only on its
+	// own work (ADR-027).
+	CreatedBy Creator
 	// PreviewCheck makes the work order merge only once Commitarium's
 	// preview check of its exact commit passed (ADR-028).
 	PreviewCheck bool
 	CreatedAt    time.Time
 	UpdatedAt    time.Time
 }
+
+// Creator is who created a work order: the user by hand, or the assistant
+// (its actions, and Commitarium's own setup work, which runs on the
+// assistant's agent).
+type Creator string
+
+const (
+	CreatedByUser      Creator = "user"
+	CreatedByAssistant Creator = "assistant"
+)
 
 // Kind is the kind of work: a work order that runs on its own, or an
 // interactive session with one agent (ADR-019).
@@ -60,6 +73,8 @@ type SettingsOverrides struct {
 	Kind Kind
 	// Background creates a work order Commitarium runs by itself.
 	Background bool
+	// CreatedBy is who creates it; empty is the user.
+	CreatedBy Creator
 	// PreviewCheck checks that the app's preview runs before the work order
 	// merges.
 	PreviewCheck bool

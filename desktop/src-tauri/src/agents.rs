@@ -545,6 +545,14 @@ mod tests {
     }
 
     #[test]
+    fn a_new_install_without_agents_has_an_empty_overlay() {
+        // A new install starts with no agents (ADR-027): no workers, and
+        // Compose still reads the overlay.
+        let overlay = overlay(&[], &templates()).unwrap();
+        assert_eq!(overlay, json!({ "services": {}, "volumes": {} }));
+    }
+
+    #[test]
     fn overlay_rejects_unsafe_ids_and_missing_templates() {
         let unsafe_agent = [Agent::new("../x", "X", Provider::Codex)];
         assert!(overlay(&unsafe_agent, &templates()).is_err());

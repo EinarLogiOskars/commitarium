@@ -87,13 +87,19 @@ func (s *Service) Create(
 	// older clients are ignored.
 	dialogueLimits := project.DefaultDialogueLimits()
 
+	// Agents and models are never project defaults (ADR-027): a work order
+	// has none until it is created or started with a choice.
 	settings, err := resolveSettings(Feature{
-		AgentProviders: storedProject.AgentProviders, AgentModels: storedProject.AgentModels,
 		MergePolicy: storedProject.MergePolicy, AutonomyPolicy: storedProject.AutonomyPolicy,
 		IndependentAcceptanceTests: storedProject.IndependentAcceptanceTests,
 	}, overrides)
 	if err != nil {
 		return Feature{}, err
+	}
+
+	createdBy := overrides.CreatedBy
+	if createdBy != CreatedByAssistant {
+		createdBy = CreatedByUser
 	}
 
 	now := s.now()
@@ -112,6 +118,7 @@ func (s *Service) Create(
 		Steps:                      settings.Steps,
 		Kind:                       kind,
 		Background:                 overrides.Background,
+		CreatedBy:                  createdBy,
 		PreviewCheck:               overrides.PreviewCheck,
 		CreatedAt:                  now,
 		UpdatedAt:                  now,
@@ -196,7 +203,7 @@ func resolveSettings(base Feature, overrides SettingsOverrides) (Feature, error)
 			return Feature{}, project.ErrInvalidAgentProviders
 		}
 	}
-	if base.AgentProviders, err = base.AgentProviders.Normalize(); err != nil {
+	if base.AgentProviders, err = base.AgentProviders.NormalizeChosen(); err != nil {
 		return Feature{}, err
 	}
 	if overrides.AgentModels != nil {
@@ -248,9 +255,6 @@ type SettingsStore interface {
 	UpdateReadySettings(ctx context.Context, feature Feature) error
 }
 
-// ChooseStartSettings records the agents, models, and policies a Ready work
-// order starts with. Settings are chosen at Start, not while drafting; until
-// then the work order carries its project's defaults.
 // RenameStore renames work orders.
 type RenameStore interface {
 	Rename(ctx context.Context, id string, title string) error
@@ -275,6 +279,29 @@ func (s *Service) Rename(ctx context.Context, projectID string, featureID string
 	return s.GetByID(ctx, projectID, featureID)
 }
 
+// CreatorStore records who created work orders.
+type CreatorStore interface {
+	MarkCreatedByAssistant(ctx context.Context, projectID string, featureIDs []string) error
+}
+
+// MarkCreatedByAssistant records that the assistant created a project's
+// work orders, as its conversation's applied actions show for work orders
+// from before their creator was stored. It never makes one the user's.
+func (s *Service) MarkCreatedByAssistant(ctx context.Context, projectID string, featureIDs []string) error {
+	if len(featureIDs) == 0 {
+		return nil
+	}
+	marker, ok := s.store.(CreatorStore)
+	if !ok {
+		return errors.New("work orders' creators cannot be recorded")
+	}
+	return marker.MarkCreatedByAssistant(ctx, projectID, featureIDs)
+}
+
+// ChooseStartSettings records the agents, models, and policies a Ready work
+// order starts with. Settings are chosen at Start, not while drafting; until
+// then the work order keeps what it was created with, which may name no
+// agents (ADR-027).
 func (s *Service) ChooseStartSettings(
 	ctx context.Context,
 	projectID string,
