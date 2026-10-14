@@ -190,8 +190,9 @@ func (describer StateDescriber) writeProject(ctx context.Context, builder *strin
 	builder.WriteString(fmt.Sprintf("Defaults: merge %s; autonomy %s; independent tests %t.\n",
 		current.MergePolicy, current.AutonomyPolicy, current.IndependentAcceptanceTests))
 	if current.AssistantBuilds() {
-		builder.WriteString("How you work here: you build everything. Your actions apply without cards, except " +
-			"those using a premium model and those on the user's own work orders.\n")
+		builder.WriteString("How you work here: you build everything. You own the whole project: write the vision, " +
+			"set up the stack, create and start the work orders, and take over work orders the user creates too. " +
+			"Your actions apply without cards, except those using a premium model.\n")
 	} else {
 		builder.WriteString("How you work here: you assist. Each of your actions waits for the user's approval " +
 			"as a card.\n")

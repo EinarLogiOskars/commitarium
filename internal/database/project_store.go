@@ -284,13 +284,10 @@ func (s *ProjectStore) Rename(ctx context.Context, projectID, name string) (proj
 	return s.GetByID(ctx, projectID)
 }
 
-// UpdateApp marks a project as an app, or as a project only. A project that
-// changes takes that kind's assistant mode.
+// UpdateApp marks a project as an app, or as a project only. How the
+// assistant works stays as the user set it.
 func (s *ProjectStore) UpdateApp(ctx context.Context, projectID string, app bool) (project.Project, error) {
-	result, err := s.db.ExecContext(ctx, `
-		UPDATE projects
-		   SET assistant_mode = CASE WHEN is_app = ? THEN assistant_mode ELSE ? END, is_app = ?
-		 WHERE id = ?`, app, project.DefaultAssistantMode(app), app, projectID)
+	result, err := s.db.ExecContext(ctx, `UPDATE projects SET is_app = ? WHERE id = ?`, app, projectID)
 	if err != nil {
 		return project.Project{}, fmt.Errorf("update app flag for project %q: %w", projectID, err)
 	}

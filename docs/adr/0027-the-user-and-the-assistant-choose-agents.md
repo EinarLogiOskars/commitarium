@@ -88,17 +88,22 @@ action as a card; the user's approval of a card is allowed on any work order,
 which is how the user hands one over.
 
 **How the assistant works is a project setting.** `assistant_mode` (migration
-00053) is `builds` ("Builds everything": the assistant proposes and starts its
-own work, may finish the vision with autopilot, and its actions apply without
-cards, except premium models and the user's work orders) or `assists`
-("Assists me": every action is a card the user approves; autopilot goals the
-user starts still run). Apps default to `builds` and projects to `assists`;
-existing rows follow their app flag, and a project that changes kind takes
-that kind's default. Only this setting decides the assistant's autonomy; the
-app flag still decides app windows and how the assistant speaks to an app's
-user. Projects answer it and `PUT /api/v1/projects/{id}/assistant-mode`
-changes it; the desktop shows it in Project settings and in the assistant
-drawer.
+00053) is `assists` ("Assists me", the default for every project and app: the
+user works themselves; every action is a card the user approves, and only
+work the assistant created or was handed runs on its own; autopilot goals the
+user starts still run) or `builds` ("Builds everything", opt-in: the
+assistant owns the whole project — it writes the vision, sets up the stack,
+creates and starts the work orders until the app runs, and takes over work
+orders the user creates too, applying its actions without cards except
+premium models). A project or app the user asks the top-level assistant to
+create starts on `builds`; every other project (created by hand, imported,
+installed from the marketplace) starts on `assists`. Rows from before keep
+the mode their app flag gave them, and changing a project's kind keeps the
+user's choice. The ownership rule above applies only while assisting. Only
+this setting decides the assistant's autonomy; the app flag still decides app
+windows and how the assistant speaks to an app's user. Projects answer it and
+`PUT /api/v1/projects/{id}/assistant-mode` changes it; the desktop shows it in
+Project settings and in the assistant drawer.
 
 ## Consequences
 
@@ -114,8 +119,8 @@ drawer.
   at Start.
 - Assistant settings saved before keep working; an install whose assistant
   never answered must set it up once.
-- An app's assistant no longer drives work the user made by hand, even in
-  apps mode; such a work order waits for the user, and the inbox asks the
-  user about its blockers at once.
+- While assisting, the assistant no longer drives work the user made by
+  hand; such a work order waits for the user, and the inbox asks the user
+  about its blockers at once. Building everything, it takes such work over.
 - An existing app whose assistant should only suggest, or a project whose
   assistant should build everything, is one setting away.

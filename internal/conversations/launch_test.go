@@ -14,7 +14,8 @@ type appProjectsStub struct{ projectsStub }
 
 func (appProjectsStub) GetByID(ctx context.Context, id string) (project.Project, error) {
 	stored, err := projectsStub{}.GetByID(ctx, id)
-	stored.App = true
+	// An app the top-level assistant created builds everything.
+	stored.App, stored.AssistantMode = true, project.AssistantModeBuilds
 	return stored, err
 }
 

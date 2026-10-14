@@ -175,7 +175,7 @@ func TestCreatingAnAppNeedsNoTemplateProject(t *testing.T) {
 			Type: featureartifact.AssistantCreateApp, Reason: "Asked", Title: "Tips", Description: "A tip calculator.",
 		},
 	}
-	approve := func(stub *conversationStub, agents *recordingAgentService, projects *recordingProjectService) *httptest.ResponseRecorder {
+	approve := func(stub *conversationStub, agents *recordingAgentService, projects ProjectService) *httptest.ResponseRecorder {
 		handler := NewWithWorkspaceRealWorkflowDeletionAndModels(projects, &recordingFeatureService{}, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, stub, agents)
 		recorder := httptest.NewRecorder()
 		handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost,
@@ -194,8 +194,13 @@ func TestCreatingAnAppNeedsNoTemplateProject(t *testing.T) {
 	}
 
 	stub := &conversationStub{action: action, settings: conversations.Settings{Agent: "claude", Model: "claude-sonnet-5-5"}}
-	approve(stub, testAgents(), projects)
+	modes := &assistantModeProjects{recordingProjectService: projects}
+	approve(stub, testAgents(), modes)
 	if projects.receivedName != "Tips" || !projects.receivedAgentProviders.IsZero() {
 		t.Fatalf("the app was not created on its own: name=%q agents=%+v", projects.receivedName, projects.receivedAgentProviders)
+	}
+	// The user asked the top-level assistant for it, so it builds everything.
+	if modes.received != project.AssistantModeBuilds {
+		t.Fatalf("the new app's assistant = %q, want builds", modes.received)
 	}
 }

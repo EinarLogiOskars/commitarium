@@ -7,13 +7,13 @@ export const ASSISTANT_MODES: { value: AssistantMode; label: string; description
     value: "builds",
     label: "Builds everything",
     description:
-      "The assistant plans, starts, and finishes its own work without asking, and can build the whole vision. It still asks before premium models.",
+      "The assistant owns this project: it writes the vision, sets up the stack, and creates and starts the work, including work orders you add, until it runs. It still asks before premium models.",
   },
   {
     value: "assists",
     label: "Assists me",
     description:
-      "The assistant suggests work as cards; nothing happens until you approve. Autopilot you start yourself still runs on its own.",
+      "You work yourself; the assistant suggests work as cards and acts only when you approve or hand it something. Autopilot you start still runs on its own.",
   },
 ];
 

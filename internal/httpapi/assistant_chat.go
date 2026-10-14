@@ -397,6 +397,10 @@ func (api *API) usersWorkOrder(ctx context.Context, scope string, action convers
 	if stored.CreatedBy == feature.CreatedByAssistant {
 		return "", nil
 	}
+	// Building everything, the assistant takes over the user's work orders.
+	if owner, err := api.projects.GetByID(ctx, scope); err == nil && owner.AssistantBuilds() {
+		return "", nil
+	}
 	conversation, err := api.conversations.Get(ctx, scope)
 	if err != nil {
 		return "", err

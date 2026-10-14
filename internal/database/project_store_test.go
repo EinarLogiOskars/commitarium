@@ -384,8 +384,9 @@ func TestProjectStoreMarksAProjectAsAnApp(t *testing.T) {
 	}
 }
 
-// A project's assistant assists and an app's builds everything, until the
-// user chooses otherwise; marking it again keeps the choice (ADR-027).
+// Every project's assistant assists until the user (or the top-level
+// assistant creating it) chooses otherwise; marking it an app or a project
+// keeps the choice (ADR-027).
 func TestProjectStoreKeepsHowTheAssistantWorks(t *testing.T) {
 	store := newTestProjectStore(t)
 	created := project.Project{ID: "prj_mode", Name: "Sleep Log", CreatedAt: time.Now().UTC()}
@@ -395,18 +396,15 @@ func TestProjectStoreKeepsHowTheAssistantWorks(t *testing.T) {
 	if fresh, _ := store.GetByID(t.Context(), created.ID); fresh.AssistantMode != project.AssistantModeAssists {
 		t.Fatalf("a new project's assistant = %q", fresh.AssistantMode)
 	}
-	if app, _ := store.UpdateApp(t.Context(), created.ID, true); app.AssistantMode != project.AssistantModeBuilds {
-		t.Fatalf("an app's assistant = %q", app.AssistantMode)
+	if app, _ := store.UpdateApp(t.Context(), created.ID, true); app.AssistantMode != project.AssistantModeAssists {
+		t.Fatalf("an app's assistant = %q, want assists", app.AssistantMode)
 	}
-	if chosen, err := store.UpdateAssistantMode(t.Context(), created.ID, project.AssistantModeAssists); err != nil ||
-		chosen.AssistantMode != project.AssistantModeAssists || !chosen.App {
-		t.Fatalf("choose assists: %+v err=%v", chosen, err)
+	if chosen, err := store.UpdateAssistantMode(t.Context(), created.ID, project.AssistantModeBuilds); err != nil ||
+		chosen.AssistantMode != project.AssistantModeBuilds || !chosen.App {
+		t.Fatalf("choose builds: %+v err=%v", chosen, err)
 	}
-	if again, _ := store.UpdateApp(t.Context(), created.ID, true); again.AssistantMode != project.AssistantModeAssists {
-		t.Fatalf("marking an app again changed the user's choice to %q", again.AssistantMode)
-	}
-	if back, _ := store.UpdateApp(t.Context(), created.ID, false); back.AssistantMode != project.AssistantModeAssists {
-		t.Fatalf("a project again = %q", back.AssistantMode)
+	if back, _ := store.UpdateApp(t.Context(), created.ID, false); back.AssistantMode != project.AssistantModeBuilds {
+		t.Fatalf("a project again changed the user's choice to %q", back.AssistantMode)
 	}
 	if _, err := store.UpdateAssistantMode(t.Context(), created.ID, "sometimes"); !errors.Is(err, project.ErrInvalidAssistantMode) {
 		t.Fatalf("an unknown mode: %v", err)
