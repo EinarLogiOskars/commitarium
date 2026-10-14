@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   getPreviewStatus,
   onPreviewStatusChanged,
+  openAppWindow,
   openExternal,
   resetPreviewData,
   startPreview,
@@ -27,9 +28,10 @@ export const primaryUrl = (s: PreviewStatus | null) =>
   s?.urls.find((u) => u.open)?.url ?? s?.urls[0]?.url ?? null;
 
 /** One project's preview: live status from the backend, plus start/stop. A
- * user-started preview opens in the browser once it's running (the port
- * changes on every start, so restarts open again too). */
-export function usePreview(projectId: string, featureId?: string) {
+ * user-started preview opens once it's running (the port changes on every
+ * start, so restarts open again too): an app in its own window, any other
+ * project in the browser. */
+export function usePreview(projectId: string, featureId?: string, appName?: string) {
   const [status, setStatus] = useState<PreviewStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   const openWhenRunning = useRef(false);
@@ -59,13 +61,14 @@ export function usePreview(projectId: string, featureId?: string) {
     if (status?.state === "running" && openWhenRunning.current) {
       openWhenRunning.current = false;
       const url = primaryUrl(status);
-      if (url) void openExternal(url);
+      if (appName && !featureId) void openAppWindow(projectId, appName).catch(() => {});
+      else if (url) void openExternal(url);
     } else if (status?.state === "failed") {
       // Not "stopped": starting again first stops the old preview, and that
       // event must not cancel opening the new one. stop() clears it itself.
       openWhenRunning.current = false;
     }
-  }, [status]);
+  }, [status, appName, featureId, projectId]);
 
   const start = useCallback(async () => {
     setError(null);

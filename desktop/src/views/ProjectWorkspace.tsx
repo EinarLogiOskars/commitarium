@@ -74,7 +74,8 @@ export function ProjectWorkspace({
   const [reloadKey, setReloadKey] = useState(0);
   // The rail lists one kind of work at a time: work orders or sessions.
   const [railKind, setRailKind] = useState<WorkKind>("work_order");
-  const preview = usePreview(id);
+  // An app's preview opens in its own window, not the browser.
+  const preview = usePreview(id, undefined, project?.app ? project.name : undefined);
   // Follows the background preview setup even when the Preview page is closed.
   const previewSetup = usePreviewSetup(id, preview);
 
