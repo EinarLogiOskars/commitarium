@@ -157,7 +157,7 @@ func (describer StateDescriber) writeProject(ctx context.Context, builder *strin
 	sort.Slice(features, func(i, j int) bool { return features[i].UpdatedAt.After(features[j].UpdatedAt) })
 	listed := 0
 	for _, item := range features {
-		if item.Background {
+		if item.Background && !item.PreviewCheck {
 			continue
 		}
 		if listed == maxWorkOrders {
@@ -170,7 +170,9 @@ func (describer StateDescriber) writeProject(ctx context.Context, builder *strin
 			kind = "session"
 		}
 		outside := ""
-		if !linked[item.ID] {
+		if item.PreviewCheck {
+			outside = " — sets the app's preview up; merges once Commitarium's preview check passes"
+		} else if !linked[item.ID] {
 			outside = " — outside the vision"
 		}
 		builder.WriteString(fmt.Sprintf("- %s %q (%s): %s, steps %s, lead %s on %s, reviewer %s on %s%s%s\n",

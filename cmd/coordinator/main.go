@@ -26,6 +26,7 @@ import (
 	"github.com/EinarLogiOskars/commitarium/internal/marketplace"
 	"github.com/EinarLogiOskars/commitarium/internal/modelcatalog"
 	"github.com/EinarLogiOskars/commitarium/internal/orchestration"
+	"github.com/EinarLogiOskars/commitarium/internal/previewcheck"
 	"github.com/EinarLogiOskars/commitarium/internal/project"
 	"github.com/EinarLogiOskars/commitarium/internal/projectdeletion"
 	"github.com/EinarLogiOskars/commitarium/internal/projectenvironment"
@@ -290,6 +291,7 @@ func run(ctx context.Context, coordinatorConfig config) error {
 	executionService := execution.NewService(executionStore)
 	environmentService := projectenvironment.NewService(coordinatordatabase.NewProjectEnvironmentStore(db))
 	validationService := validation.NewService(coordinatordatabase.NewValidationStore(db))
+	previewCheckService := previewcheck.NewService(coordinatordatabase.NewPreviewCheckStore(db))
 	activeSessions := orchestration.NewActiveSessions()
 	var sessionController httpapi.SessionController
 	var runStarter httpapi.RunStarter
@@ -456,6 +458,7 @@ func run(ctx context.Context, coordinatorConfig config) error {
 			Pump:                pumpRouter,
 			EnvironmentRequests: environmentService,
 			Validation:          validationService,
+			PreviewChecks:       previewCheckService,
 			Toolchains:          toolchainService,
 			Usage:               executionStore,
 			Lifetime:            ctx,
@@ -491,6 +494,11 @@ func run(ctx context.Context, coordinatorConfig config) error {
 	// Turns that infrastructure cut off retry by themselves, on schedule.
 	if resumer, ok := realWorkflowStarter.(interface{ RunRetryResumer(context.Context) }); ok {
 		go resumer.RunRetryResumer(ctx)
+	}
+	// Preview checks no desktop picked up block their work order with a
+	// reason that says to open the app (ADR-028).
+	if watcher, ok := realWorkflowStarter.(interface{ RunPreviewCheckWatcher(context.Context) }); ok {
+		go watcher.RunPreviewCheckWatcher(ctx)
 	}
 	runStopper := projectdeletion.NewRunStopper(
 		executionService, deletionWorker, sessionController, deletionLiveSessions,
@@ -568,6 +576,7 @@ func run(ctx context.Context, coordinatorConfig config) error {
 		marketplaceService,
 		releaseService,
 		installService,
+		previewCheckService,
 	)
 
 	if assistantWatcher != nil {

@@ -193,7 +193,19 @@ const implementationToolchainInstructions = "If an additional supported language
 	"mise use, floating versions such as latest, or repository mise configuration to provision tools. " +
 	"You have no Docker or other container runtime and cannot get one: never request docker or container packages. " +
 	"Verify with the project's tests and tools directly; Commitarium runs the app's containers itself in its " +
-	"preview and isolated validation. "
+	"preview and isolated validation. Never rebuild or emulate container or Compose steps by hand to check them " +
+	"(do not install a Dockerfile's packages or replay its commands to imitate the image), and never block or ask " +
+	"for help because Docker is unavailable: write the compose and Dockerfile changes, publish, and Commitarium's " +
+	"preview check reports the real result. "
+
+// previewCheckInstructions tell the lead of a preview-setup work order how
+// its result is checked (ADR-028).
+const previewCheckInstructions = "\n\nThis work order sets the app's preview up and runs to completion without " +
+	"the user. After you publish, Commitarium's preview check builds and starts the compose setup of your exact " +
+	"commit in an isolated copy on the user's computer, and the work order merges only when every service stays " +
+	"up, its healthchecks pass, and the preview's open target answers HTTP. If the check fails, its evidence " +
+	"(each service's state, exit code, health, and last log lines) comes back to you in this conversation to fix. " +
+	"Do not wait for the user, emulate the containers, or block because you cannot run Docker."
 
 const implementationChecklistInstructions = "The coordinator owns a structured commit-sized checklist. " +
 	"Run 'commitarium-artifact plan show' before changing files. Work through its steps in order without " +

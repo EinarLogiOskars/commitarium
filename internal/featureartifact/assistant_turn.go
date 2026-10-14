@@ -40,6 +40,11 @@ const (
 	// AssistantCreateApp creates a new app at the top level: a project used
 	// as an app, named by Title and built from Description (APPS_PLAN.md).
 	AssistantCreateApp AssistantActionType = "create_app"
+	// AssistantSetUpPreview sets the app's preview up, or fixes one that
+	// fails to start, in a work order that merges only once Commitarium's
+	// preview check of its commit passes (ADR-028). Guidance says what is
+	// failing, for its agent.
+	AssistantSetUpPreview AssistantActionType = "set_up_preview"
 )
 
 // AssistantAction is one proposed action. Fields that do not apply to its
@@ -68,6 +73,7 @@ type AssistantAction struct {
 	// When is "now" or "next_turn", for change_models.
 	When string `json:"when"`
 	// Guidance is what continue_work_order tells the agents; empty retries.
+	// For set_up_preview it is what fails, if the assistant knows.
 	Guidance string `json:"guidance"`
 }
 
@@ -137,6 +143,10 @@ func (action AssistantAction) validate() error {
 	case AssistantContinueWorkOrder:
 		if action.WorkOrderID == "" || len(action.Guidance) > MaxGoalBytes {
 			return fmt.Errorf("continuing needs a work order and bounded guidance")
+		}
+	case AssistantSetUpPreview:
+		if len(action.Guidance) > MaxGoalBytes {
+			return fmt.Errorf("the preview's guidance is too long")
 		}
 	case AssistantStartAutopilot:
 		if action.Priority < 0 || action.Priority > maxVisionPriority {

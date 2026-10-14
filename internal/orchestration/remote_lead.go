@@ -16,6 +16,7 @@ import (
 	"github.com/EinarLogiOskars/commitarium/internal/execution"
 	"github.com/EinarLogiOskars/commitarium/internal/feature"
 	"github.com/EinarLogiOskars/commitarium/internal/featureartifact"
+	"github.com/EinarLogiOskars/commitarium/internal/previewcheck"
 	"github.com/EinarLogiOskars/commitarium/internal/project"
 	"github.com/EinarLogiOskars/commitarium/internal/projectenvironment"
 	"github.com/EinarLogiOskars/commitarium/internal/toolchain"
@@ -102,6 +103,9 @@ type RecoveryDirective struct {
 	// interruption says what cut off the turn an automatic retry continues
 	// (interrupted_turn.go).
 	interruption string
+	// previewCheck is what a failed preview check saw, which Commitarium
+	// hands to the lead to fix (preview_check.go).
+	previewCheck string
 }
 
 // answersBlocker reports whether the user chose to move the work on, which
@@ -275,10 +279,13 @@ type RemoteLeadConfig struct {
 	Pump                RemoteLeadPump
 	EnvironmentRequests RemoteLeadEnvironmentRequests
 	Validation          RemoteLeadValidationGate
-	Toolchains          RemoteLeadToolchainReader
-	Usage               RemoteLeadUsageRecorder
-	Lifetime            context.Context
-	ReportError         func(error)
+	// PreviewChecks, when set, checks that the app runs before a
+	// preview-setup work order merges (ADR-028).
+	PreviewChecks RemoteLeadPreviewChecks
+	Toolchains    RemoteLeadToolchainReader
+	Usage         RemoteLeadUsageRecorder
+	Lifetime      context.Context
+	ReportError   func(error)
 }
 
 // RemoteLeadLoginWaits records runs that wait for an agent to log in again
@@ -319,6 +326,7 @@ type RemoteLeadStarter struct {
 	pump                RemoteLeadPump
 	environmentRequests RemoteLeadEnvironmentRequests
 	validation          RemoteLeadValidationGate
+	previewChecks       RemoteLeadPreviewChecks
 	toolchains          RemoteLeadToolchainReader
 	usage               RemoteLeadUsageRecorder
 	lifetime            context.Context
@@ -350,7 +358,8 @@ func NewRemoteLeadStarter(config RemoteLeadConfig) (*RemoteLeadStarter, error) {
 		planning: config.Planning, artifacts: config.Artifacts, briefs: config.Briefs, workspaces: config.Workspaces,
 		worker: config.Worker, pump: config.Pump,
 		environmentRequests: config.EnvironmentRequests, validation: config.Validation, toolchains: config.Toolchains,
-		usage: config.Usage, lifetime: config.Lifetime, reportError: reportError,
+		previewChecks: config.PreviewChecks,
+		usage:         config.Usage, lifetime: config.Lifetime, reportError: reportError,
 		active: make(map[string]struct{}),
 	}, nil
 }
@@ -1179,6 +1188,21 @@ func (starter *RemoteLeadStarter) recoverIdleReadyToMergeRun(
 			return starter.beginBaseUpdate(ctx, run.ID, directive.Message, directive.FromAssistant, false)
 		}
 	}
+	// A preview-setup work order merges only once the app's preview check
+	// of the approved commit passed (ADR-028).
+	if storedFeature, err := starter.features.GetByID(ctx, run.FeatureID); err != nil {
+		return err
+	} else if starter.previewCheckApplies(storedFeature) {
+		prepared, err := starter.workspaces.Get(ctx, storedFeature.ProjectID, storedFeature.ID)
+		if err != nil {
+			return err
+		}
+		if handled, err := starter.previewCheckGate(
+			ctx, run, storedFeature, prepared.ApprovedCommitID, false, directive,
+		); err != nil || handled {
+			return err
+		}
+	}
 	if starter.validation != nil {
 		storedFeature, err := starter.features.GetByID(ctx, run.FeatureID)
 		if err != nil {
@@ -1341,6 +1365,19 @@ func (starter *RemoteLeadStarter) merge(
 	storedFeature, err := starter.features.GetByID(ctx, run.FeatureID)
 	if err != nil {
 		return execution.Run{}, false, err
+	}
+	if starter.previewCheckApplies(storedFeature) {
+		prepared, err := starter.workspaces.Get(ctx, storedFeature.ProjectID, storedFeature.ID)
+		if err != nil {
+			return execution.Run{}, false, err
+		}
+		check, found, err := starter.previewChecks.Latest(ctx, run.ID, prepared.ApprovedCommitID)
+		if err != nil {
+			return execution.Run{}, false, err
+		}
+		if !found || check.Status != previewcheck.StatusPassed {
+			return execution.Run{}, false, ErrPreviewCheckRequired
+		}
 	}
 	if starter.validation != nil {
 		prepared, err := starter.workspaces.Get(ctx, storedFeature.ProjectID, storedFeature.ID)
@@ -2468,6 +2505,9 @@ type remoteLeadRequest struct {
 	refusal string
 	// interruption says what cut off the turn an automatic retry continues.
 	interruption string
+	// previewCheck is the evidence of a failed preview check the lead's next
+	// turn fixes.
+	previewCheck string
 }
 
 func interventionAttemptID(sessionID, interventionID string) string {
@@ -3622,6 +3662,9 @@ func (starter *RemoteLeadStarter) implementationRequest(
 	if run.Steps.SkipPlan {
 		instructions = planlessImplementationInstructions(storedFeature, prepared, attemptID)
 	}
+	if starter.previewCheckApplies(storedFeature) {
+		instructions += previewCheckInstructions
+	}
 	request := remoteLeadRequest{
 		runID: run.ID, agentName: "lead agent", waitingReason: implementationReadyReason,
 		identity: workerhttp.MutationIdentity{
@@ -4329,7 +4372,13 @@ func (starter *RemoteLeadStarter) continueFailedAttempt(
 	answered := request.answerBlocker && attempt.State == workerhttp.AttemptStateTerminal &&
 		attempt.Result != nil && attempt.Result.Outcome == workerhttp.OutcomeCompleted &&
 		(attempt.Result.Disposition == workerhttp.DispositionInputRequired || request.guided)
-	if answered && request.guided && attempt.Result.Disposition != workerhttp.DispositionInputRequired {
+	if answered && request.previewCheck != "" {
+		guidance := request.previewCheck
+		if message := strings.TrimSpace(request.recoveryMessage); message != "" {
+			guidance += "\n\nThe user continued the work order with this guidance: " + message
+		}
+		request.recoveryMessage = guidance
+	} else if answered && request.guided && attempt.Result.Disposition != workerhttp.DispositionInputRequired {
 		guidance := "Your previous turn finished, but Commitarium could not accept its result, so " +
 			"the work order was blocked."
 		if refusal := strings.TrimSpace(request.refusal); refusal != "" {
@@ -4432,10 +4481,11 @@ func (starter *RemoteLeadStarter) continueFailedAttempt(
 		run.IndependentAcceptanceTests && storedFeature.State == feature.StateImplementing {
 		admit = parallel.BeginChainedTurnAlongside
 	}
-	admitted, err := admit(
-		ctx, session.ID, checkpoint, nextAttemptID, storedFeature.State,
-		"The "+request.agentName+" is completing the missing result from a fenced attempt.",
-	)
+	admitReason := "The " + request.agentName + " is completing the missing result from a fenced attempt."
+	if request.previewCheck != "" {
+		admitReason = previewCheckFixingReason
+	}
+	admitted, err := admit(ctx, session.ID, checkpoint, nextAttemptID, storedFeature.State, admitReason)
 	if err != nil {
 		return false, err
 	}
@@ -4628,7 +4678,11 @@ func (starter *RemoteLeadStarter) launchRecoverySuccessor(
 	briefing string,
 ) {
 	if request.recoveryMessage != "" {
-		briefing += "\n\nUser recovery guidance:\n" + request.recoveryMessage
+		heading := "User recovery guidance:"
+		if request.previewCheck != "" {
+			heading = "Commitarium's preview check:"
+		}
+		briefing += "\n\n" + heading + "\n" + request.recoveryMessage
 		if len(briefing) > workerhttp.MaxInstructionsBytes {
 			starter.requireReview(ctx, request, errors.New("recovery briefing and user guidance exceed the worker instruction limit"))
 			return
@@ -6077,6 +6131,9 @@ func (starter *RemoteLeadStarter) enterMergeGate(
 		return fmt.Errorf("advance approved implementation to ready to merge: %w", err)
 	}
 	if paused, err := starter.stopAtPauseBoundary(ctx, run.ID, readyReason); err != nil || paused {
+		return err
+	}
+	if handled, err := starter.previewCheckGate(ctx, run, storedFeature, commitID, true, RecoveryDirective{}); err != nil || handled {
 		return err
 	}
 	if starter.validation != nil {

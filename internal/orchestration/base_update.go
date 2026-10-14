@@ -550,7 +550,7 @@ func (starter *RemoteLeadStarter) continueOrVerifyLeadTurn(
 	attempt workerhttp.Attempt,
 	directive RecoveryDirective,
 ) error {
-	guided := directive.answersBlocker() && directive.Message != "" &&
+	guided := directive.answersBlocker() && (directive.Message != "" || directive.previewCheck != "") &&
 		attempt.Result.Disposition != workerhttp.DispositionInputRequired
 	if attempt.Result.Disposition == workerhttp.DispositionInputRequired || guided {
 		if !guided && !directive.answersBlocker() {
@@ -597,6 +597,7 @@ func (starter *RemoteLeadStarter) answerLeadBlocker(
 		runID: run.ID, agentName: "lead agent", allowRecoveryContinuation: true,
 		answerBlocker: true, guided: guided, forceFreshRecovery: directive.Action == RecoveryActionReplace,
 		recoveryMessage: directive.Message, guidanceFromAssistant: directive.FromAssistant,
+		previewCheck: directive.previewCheck,
 		identity: workerhttp.MutationIdentity{AttemptReference: workerhttp.AttemptReference{
 			SessionID: lead.ID, AttemptID: checkpoint.AttemptID,
 		}},

@@ -259,6 +259,9 @@ func (service *Service) autopilotActions(ctx context.Context, scope string) ([]A
 			inGoal = orders[action.WorkOrderID] || app
 		case featureartifact.AssistantCloseWorkOrder:
 			inGoal = created[action.WorkOrderID] && !orders[action.WorkOrderID]
+		case featureartifact.AssistantSetUpPreview:
+			// An app that does not run is the assistant's to fix (ADR-024).
+			inGoal = app
 		}
 		if !inGoal {
 			continue

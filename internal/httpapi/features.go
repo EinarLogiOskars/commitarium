@@ -46,6 +46,9 @@ type featureResponse struct {
 	// Background marks a work order Commitarium runs by itself, such as the
 	// preview setup.
 	Background bool `json:"background,omitempty"`
+	// PreviewCheck marks a work order that merges only once Commitarium's
+	// preview check of its commit passed (ADR-028).
+	PreviewCheck bool `json:"preview_check,omitempty"`
 	// Session reports a session's agent activity in feature lists (ADR-019).
 	Session   *sessionActivityResponse `json:"session,omitempty"`
 	CreatedAt time.Time                `json:"created_at"`
@@ -312,6 +315,7 @@ func newFeatureResponse(storedFeature feature.Feature) featureResponse {
 		Steps:                      newWorkStepsResponse(storedFeature.Steps),
 		Kind:                       featureKind(storedFeature.Kind),
 		Background:                 storedFeature.Background,
+		PreviewCheck:               storedFeature.PreviewCheck,
 		CreatedAt:                  storedFeature.CreatedAt,
 		UpdatedAt:                  storedFeature.UpdatedAt,
 	}

@@ -112,6 +112,7 @@ func (s *Service) Create(
 		Steps:                      settings.Steps,
 		Kind:                       kind,
 		Background:                 overrides.Background,
+		PreviewCheck:               overrides.PreviewCheck,
 		CreatedAt:                  now,
 		UpdatedAt:                  now,
 	}

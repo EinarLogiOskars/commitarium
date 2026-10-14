@@ -10,13 +10,17 @@ import (
 	"time"
 
 	"github.com/EinarLogiOskars/commitarium/internal/feature"
+	"github.com/EinarLogiOskars/commitarium/internal/previewcheck"
 	"github.com/EinarLogiOskars/commitarium/internal/project"
 	"github.com/EinarLogiOskars/commitarium/internal/toolchain"
 )
 
 // Project setup without friction: a project's stack is detected when it has
 // none, and a project without a compose file gets one from a background quick
-// change that Commitarium starts, merges, and retries by itself.
+// change that Commitarium starts, merges, and retries by itself. Each such
+// work order merges only once Commitarium's preview check of its commit
+// passed (ADR-028): the desktop builds and starts the app for real, and a
+// failure goes back to the agent with what each container did.
 
 const (
 	previewSetupTitle = "Set up the preview"
@@ -44,9 +48,24 @@ func previewSetupDescription() string {
 		previewRules + "\n- Mention in the README that `docker compose up` runs the project locally."
 }
 
-func previewFixDescription(failure string) string {
-	return "The preview failed to start. Fix the compose setup or the app so it starts, keeping the preview rules:\n\n" +
-		previewRules + "\n\nError and recent output:\n\n```\n" + strings.TrimSpace(failure) + "\n```"
+func previewFixDescription(failure string, evidence *previewcheck.Evidence) string {
+	description := "The preview failed to start. Fix the compose setup or the app so it starts, keeping the preview rules:\n\n" +
+		previewRules
+	if failure = strings.TrimSpace(failure); failure != "" {
+		description += "\n\nError and recent output:\n\n```\n" + failure + "\n```"
+	}
+	if evidence != nil && len(evidence.Services) > 0 {
+		description += "\n\nWhat each container did:\n\n" + boundedText(evidence.Technical(), 24*1024)
+	}
+	return description
+}
+
+// boundedText keeps the start of text, at most limit bytes.
+func boundedText(text string, limit int) string {
+	if len(text) <= limit {
+		return text
+	}
+	return strings.ToValidUTF8(text[:limit], "") + "\n[cut]"
 }
 
 // projectToolchain reads a project's stack. A project without one gets its
@@ -102,7 +121,11 @@ func (api *API) ensurePreviewSetup(ctx context.Context, projectID string) (*feat
 	}
 	api.previewSetup.Lock()
 	defer api.previewSetup.Unlock()
-	if active, err := api.activeBackgroundWorkOrder(ctx, projectID); err != nil || active != nil {
+	return api.ensurePreviewSetupLocked(ctx, projectID)
+}
+
+func (api *API) ensurePreviewSetupLocked(ctx context.Context, projectID string) (*feature.Feature, error) {
+	if active, err := api.activePreviewWorkOrder(ctx, projectID); err != nil || active != nil {
 		return active, err
 	}
 	overview, err := api.projects.GetRepositoryOverview(ctx, projectID)
@@ -125,24 +148,34 @@ func (api *API) ensurePreviewSetup(ctx context.Context, projectID string) (*feat
 }
 
 // fixPreview starts a background fix for a preview that failed to start,
-// unless one is running or the fixes since the last setup are used up.
-func (api *API) fixPreview(ctx context.Context, projectID string, failure string) (*feature.Feature, error) {
+// unless one is running. A fix Commitarium asks for by itself stops once the
+// fixes since the last setup are used up; one the user or the assistant
+// asks for (chosen) always starts.
+func (api *API) fixPreview(
+	ctx context.Context, projectID string, failure string, evidence *previewcheck.Evidence, chosen bool,
+) (*feature.Feature, error) {
 	if !api.canSetUpPreviews() {
 		return nil, errPreviewSetupUnavailable
 	}
 	api.previewSetup.Lock()
 	defer api.previewSetup.Unlock()
-	if active, err := api.activeBackgroundWorkOrder(ctx, projectID); err != nil || active != nil {
+	return api.fixPreviewLocked(ctx, projectID, failure, evidence, chosen)
+}
+
+func (api *API) fixPreviewLocked(
+	ctx context.Context, projectID string, failure string, evidence *previewcheck.Evidence, chosen bool,
+) (*feature.Feature, error) {
+	if active, err := api.activePreviewWorkOrder(ctx, projectID); err != nil || active != nil {
 		return active, err
 	}
 	features, err := api.features.List(ctx, projectID)
 	if err != nil {
 		return nil, err
 	}
-	if previewFixesSinceSetup(features) >= maxPreviewFixAttempts {
+	if !chosen && previewFixesSinceSetup(features) >= maxPreviewFixAttempts {
 		return nil, errPreviewFixesExhausted
 	}
-	started, err := api.startBackgroundWorkOrder(ctx, projectID, previewFixTitle, previewFixDescription(failure))
+	started, err := api.startBackgroundWorkOrder(ctx, projectID, previewFixTitle, previewFixDescription(failure, evidence))
 	if err != nil {
 		return nil, err
 	}
@@ -155,13 +188,37 @@ func (api *API) canSetUpPreviews() bool {
 	return api.starter != nil && api.realWorkflow != nil && api.features != nil && api.projects != nil
 }
 
-func (api *API) activeBackgroundWorkOrder(ctx context.Context, projectID string) (*feature.Feature, error) {
+// setUpPreview is the "Set up preview" flow the user or the assistant
+// starts: a fix of a preview that fails, when the repository has a compose
+// file, or its setup when it has none.
+func (api *API) setUpPreview(
+	ctx context.Context, projectID string, failure string, evidence *previewcheck.Evidence,
+) (*feature.Feature, error) {
+	if !api.canSetUpPreviews() {
+		return nil, errPreviewSetupUnavailable
+	}
+	api.previewSetup.Lock()
+	defer api.previewSetup.Unlock()
+	overview, err := api.projects.GetRepositoryOverview(ctx, projectID)
+	if err != nil {
+		return nil, err
+	}
+	if repositoryHasCompose(overview) {
+		return api.fixPreviewLocked(ctx, projectID, failure, evidence, true)
+	}
+	return api.ensurePreviewSetupLocked(ctx, projectID)
+}
+
+// activePreviewWorkOrder is the unfinished work order setting the preview
+// up: Commitarium's background setup or fix, or a project's setup, which
+// writes the compose file too.
+func (api *API) activePreviewWorkOrder(ctx context.Context, projectID string) (*feature.Feature, error) {
 	features, err := api.features.List(ctx, projectID)
 	if err != nil {
 		return nil, err
 	}
 	for index := range features {
-		if features[index].Background && !features[index].State.IsTerminal() {
+		if (features[index].Background || features[index].PreviewCheck) && !features[index].State.IsTerminal() {
 			return &features[index], nil
 		}
 	}
@@ -214,7 +271,8 @@ func (api *API) startBackgroundWorkOrder(
 
 // startQuickChange creates and starts a quick change Commitarium starts
 // itself: no clarification, plan, or reviewer, and an automatic merge once
-// validation passes.
+// its preview check and validation pass. Every such change writes the
+// app's compose setup, so each is checked (ADR-028).
 func (api *API) startQuickChange(
 	ctx context.Context,
 	projectID string,
@@ -226,7 +284,7 @@ func (api *API) startQuickChange(
 	autonomy := project.AutonomyPolicyRunToCompletion
 	created, err := api.features.Create(ctx, projectID, title, description, feature.SettingsOverrides{
 		Background: background, Steps: &project.WorkSteps{SkipPlan: true, SkipReviewer: true},
-		MergePolicy: &merge, AutonomyPolicy: &autonomy,
+		MergePolicy: &merge, AutonomyPolicy: &autonomy, PreviewCheck: true,
 	})
 	if err != nil {
 		return feature.Feature{}, err
@@ -272,32 +330,110 @@ func (api *API) startPreviewSetupHandler(w http.ResponseWriter, r *http.Request)
 
 type previewFailureRequest struct {
 	Error string `json:"error"`
+	// Evidence is what each container did, when the preview started its
+	// containers before it failed.
+	Evidence *previewcheck.Evidence `json:"evidence,omitempty"`
+	// Chosen says the user asked for the fix ("Set up preview"), so it
+	// starts even when the automatic fixes are used up.
+	Chosen bool `json:"chosen,omitempty"`
+}
+
+func (body *previewFailureRequest) bound() {
+	if len(body.Error) > 16*1024 {
+		body.Error = body.Error[len(body.Error)-16*1024:]
+	}
+	if body.Evidence != nil {
+		bounded := body.Evidence.Bounded()
+		body.Evidence = &bounded
+	}
 }
 
 // previewFailedHandler takes a preview that failed to start and starts a
-// background fix, until the fixes are used up.
+// background fix, until the automatic fixes are used up.
 func (api *API) previewFailedHandler(w http.ResponseWriter, r *http.Request) {
 	var body previewFailureRequest
 	if !decodeSingleJSON(w, r, &body) {
 		return
 	}
-	failure := body.Error
-	if len(failure) > 16*1024 {
-		failure = failure[len(failure)-16*1024:]
+	body.bound()
+	projectID := r.PathValue("id")
+	var started *feature.Feature
+	var err error
+	if body.Chosen {
+		started, err = api.setUpPreview(r.Context(), projectID, body.Error, body.Evidence)
+	} else {
+		started, err = api.fixPreview(r.Context(), projectID, body.Error, body.Evidence, false)
 	}
-	started, err := api.fixPreview(r.Context(), r.PathValue("id"), failure)
-	api.writePreviewSetup(w, r.PathValue("id"), started, err)
+	api.writePreviewSetup(w, projectID, started, err)
+}
+
+// previewFailureReporter tells a project's assistant about something
+// outside its work orders.
+type previewFailureReporter interface {
+	Report(ctx context.Context, scope, text string) error
+}
+
+// reportPreviewFailureHandler tells the project's assistant that its app's
+// preview failed to start, with what each container did, so it can start
+// the preview setup itself. It starts nothing.
+func (api *API) reportPreviewFailureHandler(w http.ResponseWriter, r *http.Request) {
+	var body previewFailureRequest
+	if !decodeSingleJSON(w, r, &body) {
+		return
+	}
+	body.bound()
+	projectID := r.PathValue("id")
+	if _, err := api.projects.GetByID(r.Context(), projectID); err != nil {
+		if errors.Is(err, project.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "project_not_found", "project not found")
+			return
+		}
+		log.Printf("report the preview failure of project %q: %v", projectID, err)
+		writeError(w, http.StatusInternalServerError, "internal_error", "internal server error")
+		return
+	}
+	if reporter, ok := api.conversations.(previewFailureReporter); ok {
+		if err := reporter.Report(r.Context(), projectID, previewFailureEvent(body.Error, body.Evidence)); err != nil {
+			log.Printf("tell the assistant of project %q about its preview: %v", projectID, err)
+		}
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// previewFailureEvent is what the assistant hears about a preview that
+// failed to start.
+func previewFailureEvent(failure string, evidence *previewcheck.Evidence) string {
+	text := "The app's preview failed to start"
+	detail := ""
+	if evidence != nil && len(evidence.Services) > 0 {
+		text += ": " + evidence.Plain()
+		detail = evidence.Technical()
+	} else if line := strings.TrimSpace(strings.SplitN(strings.TrimSpace(failure), "\n", 2)[0]); line != "" {
+		text += ": " + line
+		detail = strings.TrimSpace(failure)
+	}
+	text += ". Propose set_up_preview to have an agent fix it and Commitarium check it for real."
+	if detail != "" {
+		text += "\n" + boundedText(detail, 4*1024)
+	}
+	return text
 }
 
 func (api *API) writePreviewSetup(w http.ResponseWriter, projectID string, started *feature.Feature, err error) {
+	if err != nil {
+		writePreviewSetupError(w, projectID, err)
+		return
+	}
+	response := previewSetupResponse{}
+	if started != nil {
+		item := newFeatureResponse(*started)
+		response.WorkOrder = &item
+	}
+	writeJSON(w, http.StatusOK, response, "preview setup")
+}
+
+func writePreviewSetupError(w http.ResponseWriter, projectID string, err error) {
 	switch {
-	case err == nil:
-		response := previewSetupResponse{}
-		if started != nil {
-			item := newFeatureResponse(*started)
-			response.WorkOrder = &item
-		}
-		writeJSON(w, http.StatusOK, response, "preview setup")
 	case errors.Is(err, errPreviewHasCompose):
 		writeError(w, http.StatusConflict, "preview_has_compose", err.Error())
 	case errors.Is(err, errPreviewFixesExhausted):

@@ -25,8 +25,11 @@ type Feature struct {
 	// Background marks a work order Commitarium started by itself, such as
 	// the preview setup; it is not listed with the user's work.
 	Background bool
-	CreatedAt  time.Time
-	UpdatedAt  time.Time
+	// PreviewCheck makes the work order merge only once Commitarium's
+	// preview check of its exact commit passed (ADR-028).
+	PreviewCheck bool
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
 }
 
 // Kind is the kind of work: a work order that runs on its own, or an
@@ -57,4 +60,7 @@ type SettingsOverrides struct {
 	Kind Kind
 	// Background creates a work order Commitarium runs by itself.
 	Background bool
+	// PreviewCheck checks that the app's preview runs before the work order
+	// merges.
+	PreviewCheck bool
 }
