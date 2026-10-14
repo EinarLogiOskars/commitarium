@@ -126,11 +126,22 @@ func (api *API) stopAutopilotHandler(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, conversation, "assistant conversation")
 }
 
+// autopilotApproval marks an approval autopilot makes for the assistant,
+// not the user: it may not act on the user's own work orders (ADR-027).
+type autopilotApproval struct{}
+
+func approvedByAutopilot(ctx context.Context) bool {
+	marked, _ := ctx.Value(autopilotApproval{}).(bool)
+	return marked
+}
+
 // AssistantActionApplier approves assistant actions through handler exactly
 // as the user's Approve button does, with a new work order started: how
-// autopilot takes over an action. The error carries the API's message.
+// autopilot takes over an action. Unlike the user's approval, it is refused
+// on a work order the user created. The error carries the API's message.
 func AssistantActionApplier(handler http.Handler) func(ctx context.Context, scope, actionID string) error {
 	return func(ctx context.Context, scope, actionID string) error {
+		ctx = context.WithValue(ctx, autopilotApproval{}, true)
 		request, err := http.NewRequestWithContext(ctx, http.MethodPost,
 			"/api/v1/assistant/conversations/"+url.PathEscape(scope)+"/actions/"+url.PathEscape(actionID)+"/approve",
 			strings.NewReader(`{"start":true}`))
@@ -273,6 +284,19 @@ func (api *API) approveConversationActionHandler(w http.ResponseWriter, r *http.
 		writeError(w, http.StatusConflict, "action_needs_project", "this action runs in a project's conversation, and a new app at the top level")
 		return
 	}
+	// The user's approval may act on any work order; autopilot's only on the
+	// assistant's own (ADR-027).
+	if approvedByAutopilot(r.Context()) {
+		refusal, err := api.usersWorkOrder(r.Context(), scope, action)
+		if err != nil {
+			writeConversationError(w, err)
+			return
+		}
+		if refusal != "" {
+			writeError(w, http.StatusConflict, "work_order_is_users", refusal)
+			return
+		}
+	}
 	chosen := make([]string, 0, 2)
 	if action.Type == featureartifact.AssistantCreateWorkOrder || action.Type == featureartifact.AssistantStartWorkOrder {
 		if model := strings.TrimSpace(body.LeadModel); model != "" && model != action.LeadModel {
@@ -346,6 +370,42 @@ func (api *API) approveConversationActionHandler(w http.ResponseWriter, r *http.
 	writeJSON(w, http.StatusOK, conversation, "assistant conversation")
 }
 
+// usersWorkOrder says why the assistant may not act on its own on the work
+// order an action names, when the user created it by hand and did not hand
+// it over with an autopilot goal; empty when it may.
+func (api *API) usersWorkOrder(ctx context.Context, scope string, action conversations.Action) (string, error) {
+	switch action.Type {
+	case featureartifact.AssistantStartWorkOrder, featureartifact.AssistantChangeModels,
+		featureartifact.AssistantContinueWorkOrder, featureartifact.AssistantCloseWorkOrder,
+		featureartifact.AssistantAddVisionItem:
+	default:
+		return "", nil
+	}
+	if action.WorkOrderID == "" {
+		return "", nil
+	}
+	stored, err := api.features.GetByID(ctx, scope, action.WorkOrderID)
+	if errors.Is(err, feature.ErrNotFound) {
+		// The action's own path answers a missing work order.
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	if stored.CreatedBy == feature.CreatedByAssistant {
+		return "", nil
+	}
+	conversation, err := api.conversations.Get(ctx, scope)
+	if err != nil {
+		return "", err
+	}
+	if conversation.Goal.Hands(stored.ID) {
+		return "", nil
+	}
+	return fmt.Sprintf("“%s” is the user's work order: Commitarium does not start, continue, change, or close it "+
+		"on its own. Tell the user it is waiting for them; your card stays for their approval.", stored.Title), nil
+}
+
 func (api *API) applyCreateWorkOrder(
 	w http.ResponseWriter, r *http.Request, projectID string, action conversations.Action, start bool,
 ) (string, string, bool) {
@@ -394,6 +454,8 @@ func (api *API) applyCreateWorkOrder(
 			}
 		}
 	}
+	// The assistant's work order is its own to drive (ADR-027).
+	overrides.CreatedBy = feature.CreatedByAssistant
 	created, err := api.features.Create(ctx, projectID, action.Title, description, overrides)
 	if err != nil {
 		log.Printf("create the assistant's work order %q: %v", action.Title, err)

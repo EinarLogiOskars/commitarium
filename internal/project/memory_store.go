@@ -110,7 +110,22 @@ func (s *MemoryStore) UpdateApp(_ context.Context, projectID string, app bool) (
 	if !exists {
 		return Project{}, ErrNotFound
 	}
+	if storedProject.App != app {
+		storedProject.AssistantMode = DefaultAssistantMode(app)
+	}
 	storedProject.App = app
+	s.projects[projectID] = cloneProject(storedProject)
+	return cloneProject(storedProject), nil
+}
+
+func (s *MemoryStore) UpdateAssistantMode(_ context.Context, projectID string, mode AssistantMode) (Project, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	storedProject, exists := s.projects[projectID]
+	if !exists {
+		return Project{}, ErrNotFound
+	}
+	storedProject.AssistantMode = mode
 	s.projects[projectID] = cloneProject(storedProject)
 	return cloneProject(storedProject), nil
 }

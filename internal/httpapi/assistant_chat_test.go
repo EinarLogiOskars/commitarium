@@ -28,6 +28,8 @@ type conversationStub struct {
 	blockedAt time.Time
 	// settings are the assistant's; an empty agent means not set up.
 	settings conversations.Settings
+	// goal is the conversation's autopilot goal.
+	goal *conversations.Goal
 }
 
 // testAgents are a Codex and a Claude agent, both connected.
@@ -54,7 +56,7 @@ func (stub *conversationStub) SaveSettings(_ context.Context, settings conversat
 }
 
 func (stub *conversationStub) Get(context.Context, string) (conversations.Conversation, error) {
-	return conversations.Conversation{}, nil
+	return conversations.Conversation{Goal: stub.goal}, nil
 }
 
 func (stub *conversationStub) Send(context.Context, string, string, string) (conversations.Conversation, error) {
@@ -121,6 +123,9 @@ func TestApprovingAnAssistantActionRunsItAndPremiumNeedsConfirmation(t *testing.
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("status %d: %s", recorder.Code, recorder.Body.String())
 	}
+	if features.receivedOverrides.CreatedBy != feature.CreatedByAssistant {
+		t.Fatalf("the assistant's work order is created by %q", features.receivedOverrides.CreatedBy)
+	}
 	if features.receivedTitle != "Sync meals" || features.receivedOverrides.Steps == nil ||
 		!features.receivedOverrides.Steps.SkipPlan || !features.receivedOverrides.Steps.SkipReviewer {
 		t.Fatalf("work order = %q %+v", features.receivedTitle, features.receivedOverrides)
@@ -167,6 +172,47 @@ func TestAutopilotAppliesActionsThroughTheSameApproval(t *testing.T) {
 	}
 }
 
+// Autopilot never acts on a work order the user created by hand, unless the
+// user handed it over with a goal; the user's own approval of the same card
+// may (ADR-027).
+func TestAutopilotLeavesTheUsersWorkOrdersToTheUser(t *testing.T) {
+	stub := &conversationStub{action: conversations.Action{
+		ID: "act_1", Status: conversations.ActionProposed,
+		AssistantAction: featureartifact.AssistantAction{
+			Type: featureartifact.AssistantContinueWorkOrder, Reason: "The draft has been waiting", WorkOrderID: "fea_users",
+		},
+	}}
+	features := &recordingFeatureService{getResult: feature.Feature{
+		ID: "fea_users", ProjectID: "prj_test", Title: "Prevent logging future nights", CreatedBy: feature.CreatedByUser,
+	}}
+	projects := &recordingProjectService{getByIDResult: project.Project{ID: "prj_test", App: true}}
+	executions := &recordingExecutionService{runs: []execution.Run{{ID: "run_1", StartedAt: time.Now()}}}
+	workflow := &planningStarterStub{run: execution.Run{ID: "run_1"}}
+	handler := NewWithWorkspaceRealWorkflowDeletionAndModels(projects, features, nil, executions, nil, nil, nil, workflow, nil, nil, nil, nil, stub)
+	apply := AssistantActionApplier(handler)
+
+	err := apply(t.Context(), "prj_test", "act_1")
+	if err == nil || !strings.Contains(err.Error(), "“Prevent logging future nights” is the user's work order") ||
+		!strings.Contains(err.Error(), "waiting for them") || workflow.receivedRunID != "" || stub.resolvedStatus != "" {
+		t.Fatalf("autopilot acted on the user's work order: %v (run %q)", err, workflow.receivedRunID)
+	}
+
+	// The user approves the same card: it runs.
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost,
+		"/api/v1/assistant/conversations/prj_test/actions/act_1/approve", strings.NewReader(`{}`)))
+	if recorder.Code != http.StatusOK || workflow.receivedRunID != "run_1" || stub.resolvedStatus != conversations.ActionApplied {
+		t.Fatalf("the user's approval: %d %s", recorder.Code, recorder.Body.String())
+	}
+
+	// Handed over with a goal, it is autopilot's too.
+	stub.resolvedStatus, workflow.receivedRunID = "", ""
+	stub.goal = &conversations.Goal{Status: conversations.GoalActive, Handed: []string{"fea_users"}}
+	if err := apply(t.Context(), "prj_test", "act_1"); err != nil || workflow.receivedRunID != "run_1" {
+		t.Fatalf("a handed work order: %v (run %q)", err, workflow.receivedRunID)
+	}
+}
+
 func TestContinuingAWorkOrderRecoversItsNewestRunWithGuidance(t *testing.T) {
 	stub := &conversationStub{action: conversations.Action{
 		ID: "act_1", Status: conversations.ActionProposed,
@@ -175,7 +221,9 @@ func TestContinuingAWorkOrderRecoversItsNewestRunWithGuidance(t *testing.T) {
 			WorkOrderID: "fea_log", Guidance: "Post the audit comment, then finish.",
 		},
 	}}
-	features := &recordingFeatureService{getResult: feature.Feature{ID: "fea_log", ProjectID: "prj_test", Title: "Show the log"}}
+	features := &recordingFeatureService{getResult: feature.Feature{
+		ID: "fea_log", ProjectID: "prj_test", Title: "Show the log", CreatedBy: feature.CreatedByAssistant,
+	}}
 	projects := &recordingProjectService{getByIDResult: project.Project{ID: "prj_test"}}
 	now := time.Now()
 	executions := &recordingExecutionService{runs: []execution.Run{

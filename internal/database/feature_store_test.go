@@ -18,6 +18,7 @@ func TestFeatureStoreCreateAndGetByID(t *testing.T) {
 
 	expected := feature.Feature{
 		Kind:           feature.KindWorkOrder,
+		CreatedBy:      feature.CreatedByUser,
 		ID:             "fea_test",
 		ProjectID:      "prj_test",
 		Title:          "Durable features",
@@ -72,6 +73,7 @@ func TestFeatureStoreCreateRejectsDuplicateID(t *testing.T) {
 
 	original := feature.Feature{
 		Kind:           feature.KindWorkOrder,
+		CreatedBy:      feature.CreatedByUser,
 		ID:             "fea_same",
 		ProjectID:      "prj_test",
 		Title:          "Original",
@@ -178,6 +180,7 @@ func TestFeatureStoreListsProjectFeaturesByRecentActivity(t *testing.T) {
 	}
 	for index := range features {
 		features[index].Kind = feature.KindWorkOrder
+		features[index].CreatedBy = feature.CreatedByUser
 		features[index].DialogueLimits = project.DefaultDialogueLimits()
 		features[index].AgentProviders = project.DefaultAgentProviders()
 		features[index].MergePolicy = project.DefaultMergePolicy()

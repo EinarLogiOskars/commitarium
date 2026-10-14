@@ -78,6 +78,11 @@ export type MergePolicy = "require_user_approval" | "auto_after_gates";
 // clarification) still stop in both modes.
 export type AutonomyPolicy = "review_each_phase" | "run_to_completion";
 
+/** How the assistant works in a project (ADR-027): it builds everything,
+ * applying its own actions without cards, or it assists, proposing cards the
+ * user approves. Either way it never acts on work orders the user made. */
+export type AssistantMode = "builds" | "assists";
+
 export interface DialogueLimits {
   planning_rounds: number;
   implementation_review_rounds: number;
@@ -111,6 +116,8 @@ export interface Project {
   independent_acceptance_tests?: boolean; // project default for future work orders
   /** The user uses it as an app (APPS_PLAN.md). */
   app?: boolean;
+  /** Absent on older coordinators: read it through assistantMode(). */
+  assistant_mode?: AssistantMode;
   forgejo_repository?: ForgejoRepository;
   repository_status?: RepositoryStatus;
   created_at: string;
@@ -280,6 +287,9 @@ export interface Feature {
   // A work order Commitarium runs by itself, such as the preview setup; not
   // listed with the user's work.
   background?: boolean;
+  // "user" for a work order made by hand, which the assistant never acts on
+  // by itself; "assistant" for its own (ADR-027). Absent on older coordinators.
+  created_by?: "user" | "assistant";
   // A session's agent activity, in feature lists only: working on a message,
   // or idle since `updated_at`.
   session?: { working: boolean; updated_at: string };

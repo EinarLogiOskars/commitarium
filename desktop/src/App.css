@@ -3844,6 +3844,19 @@ button.danger:not(.ghost) {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.assistant-mode {
+  align-items: flex-start;
+}
+.assistant-mode__note {
+  display: block;
+  font-size: 12px;
+}
+.assistant-drawer__mode {
+  flex: none;
+  padding: 2px 8px;
+  white-space: nowrap;
+  color: var(--muted);
+}
 .assistant-drawer__close {
   font-size: 18px;
   line-height: 1;

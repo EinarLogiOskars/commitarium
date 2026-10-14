@@ -238,8 +238,10 @@ func (api *API) startQuickChange(
 	if !ok {
 		return feature.Feature{}, errPreviewSetupUnavailable
 	}
+	// Commitarium's own work runs on the assistant's agent, and the assistant
+	// may see it through (ADR-027).
 	created, err := api.features.Create(ctx, projectID, title, description, feature.SettingsOverrides{
-		Background: background, Steps: &project.WorkSteps{SkipPlan: true, SkipReviewer: true},
+		Background: background, CreatedBy: feature.CreatedByAssistant, Steps: &project.WorkSteps{SkipPlan: true, SkipReviewer: true},
 		MergePolicy: &merge, AutonomyPolicy: &autonomy, AgentProviders: &providers, AgentModels: &models,
 	})
 	if err != nil {

@@ -78,12 +78,13 @@ func TestTheStateListsEachAgentsUsageAndModels(t *testing.T) {
 }
 
 // A project lends its work orders no agents; one without a choice says so.
+// Each work order says whose it is, and the project how the assistant works.
 func TestAWorkOrderWithoutAgentsSaysSo(t *testing.T) {
 	describer := StateDescriber{
 		Projects: projectsStub{}, Agents: agentsStub{},
 		Features: &featuresStub{features: []feature.Feature{
 			{ID: "fea_new", Title: "New", State: feature.StateDraft},
-			{ID: "fea_set", Title: "Set", State: feature.StateReady,
+			{ID: "fea_set", Title: "Set", State: feature.StateReady, CreatedBy: feature.CreatedByAssistant,
 				AgentProviders: project.AgentProviders{Lead: project.AgentProviderCodex, Reviewer: project.AgentProviderClaude,
 					LeadAgent: "codex", ReviewerAgent: "claude"},
 				AgentModels: project.AgentModels{Lead: "gpt-6-luna", Reviewer: "claude-sonnet-5-5"}},
@@ -93,7 +94,9 @@ func TestAWorkOrderWithoutAgentsSaysSo(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(state, `"New" (fea_new): draft, steps full, agents not chosen yet`) ||
+	if !strings.Contains(state, `"New" (fea_new, the user's): draft, steps full, agents not chosen yet`) ||
+		!strings.Contains(state, `"Set" (fea_set, yours): ready`) ||
+		!strings.Contains(state, "How you work here: you assist.") ||
 		!strings.Contains(state, "lead codex on gpt-6-luna, reviewer claude on claude-sonnet-5-5") ||
 		strings.Contains(state, "Defaults: lead") {
 		t.Fatalf("work orders in the state:\n%s", state)

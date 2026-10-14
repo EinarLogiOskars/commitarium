@@ -119,8 +119,10 @@ func TestServiceCreate(t *testing.T) {
 		MergePolicy:    project.DefaultMergePolicy(),
 		AutonomyPolicy: project.DefaultAutonomyPolicy(),
 		Kind:           KindWorkOrder,
-		CreatedAt:      fixedTime,
-		UpdatedAt:      fixedTime,
+		// The user's, unless the assistant creates it (ADR-027).
+		CreatedBy: CreatedByUser,
+		CreatedAt: fixedTime,
+		UpdatedAt: fixedTime,
 	}
 
 	if projects.receivedID != expected.ProjectID {

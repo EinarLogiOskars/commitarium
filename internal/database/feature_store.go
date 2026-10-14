@@ -74,10 +74,11 @@ func (s *FeatureStore) Create(
 				skip_reviewer,
 				kind,
 				background,
+				created_by,
 				created_at,
 				updated_at
 			)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT(id) DO NOTHING
 		`,
 		createdFeature.ID,
@@ -102,6 +103,7 @@ func (s *FeatureStore) Create(
 		createdFeature.Steps.SkipReviewer,
 		storedFeatureKind(createdFeature.Kind),
 		createdFeature.Background,
+		storedCreator(createdFeature.CreatedBy),
 		createdFeature.CreatedAt.UTC().Format(time.RFC3339Nano),
 		createdFeature.UpdatedAt.UTC().Format(time.RFC3339Nano),
 	)
@@ -167,6 +169,7 @@ func (s *FeatureStore) GetByID(
 				skip_reviewer,
 				kind,
 				background,
+				created_by,
 				created_at,
 				updated_at
 			FROM features
@@ -219,6 +222,7 @@ func (s *FeatureStore) ListByProjectID(
 				skip_reviewer,
 				kind,
 				background,
+				created_by,
 				created_at,
 				updated_at
 			FROM features
@@ -281,6 +285,7 @@ func scanFeature(row featureScanner) (feature.Feature, error) {
 		&storedFeature.Steps.SkipReviewer,
 		&storedKind,
 		&storedFeature.Background,
+		&storedFeature.CreatedBy,
 		&createdAt,
 		&updatedAt,
 	); err != nil {
@@ -323,6 +328,28 @@ func scanFeature(row featureScanner) (feature.Feature, error) {
 		)
 	}
 	return storedFeature, nil
+}
+
+// storedCreator stores an unset creator as the user's.
+func storedCreator(creator feature.Creator) feature.Creator {
+	if creator == feature.CreatedByAssistant {
+		return creator
+	}
+	return feature.CreatedByUser
+}
+
+// MarkCreatedByAssistant records that the assistant created a project's
+// work orders.
+func (s *FeatureStore) MarkCreatedByAssistant(ctx context.Context, projectID string, featureIDs []string) error {
+	for _, id := range featureIDs {
+		if _, err := s.db.ExecContext(ctx,
+			`UPDATE features SET created_by = 'assistant' WHERE id = ? AND project_id = ? AND created_by <> 'assistant'`,
+			id, projectID,
+		); err != nil {
+			return fmt.Errorf("mark work order %q as the assistant's: %w", id, err)
+		}
+	}
+	return nil
 }
 
 // Rename changes a work order's title.

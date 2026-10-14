@@ -72,6 +72,20 @@ func (s *MemoryStore) ListByProjectID(
 	return features, nil
 }
 
+// MarkCreatedByAssistant records that the assistant created a project's
+// work orders.
+func (s *MemoryStore) MarkCreatedByAssistant(_ context.Context, projectID string, featureIDs []string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, id := range featureIDs {
+		if stored, exists := s.features[id]; exists && stored.ProjectID == projectID {
+			stored.CreatedBy = CreatedByAssistant
+			s.features[id] = stored
+		}
+	}
+	return nil
+}
+
 // Rename changes a work order's title.
 func (s *MemoryStore) Rename(_ context.Context, id string, title string) error {
 	s.mu.Lock()

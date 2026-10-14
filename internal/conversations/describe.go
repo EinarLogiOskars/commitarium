@@ -189,6 +189,13 @@ func (describer StateDescriber) writeProject(ctx context.Context, builder *strin
 	builder.WriteString(fmt.Sprintf("\n## This project: %s (%s)\n", current.Name, current.ID))
 	builder.WriteString(fmt.Sprintf("Defaults: merge %s; autonomy %s; independent tests %t.\n",
 		current.MergePolicy, current.AutonomyPolicy, current.IndependentAcceptanceTests))
+	if current.AssistantBuilds() {
+		builder.WriteString("How you work here: you build everything. Your actions apply without cards, except " +
+			"those using a premium model and those on the user's own work orders.\n")
+	} else {
+		builder.WriteString("How you work here: you assist. Each of your actions waits for the user's approval " +
+			"as a card.\n")
+	}
 	if current.ForgejoRepository != nil {
 		if overview, err := describer.Projects.GetRepositoryOverview(ctx, current.ID); err == nil {
 			builder.WriteString(fmt.Sprintf("Repository default branch %s at %s.\n", overview.DefaultBranch, overview.Head.CommitID))
@@ -250,13 +257,22 @@ func (describer StateDescriber) writeProject(ctx context.Context, builder *strin
 		if !linked[item.ID] {
 			outside = " — outside the vision"
 		}
-		builder.WriteString(fmt.Sprintf("- %s %q (%s): %s, steps %s, %s%s%s\n",
-			kind, item.Title, item.ID, item.State, stepsName(item.Steps),
+		builder.WriteString(fmt.Sprintf("- %s %q (%s, %s): %s, steps %s, %s%s%s\n",
+			kind, item.Title, item.ID, creatorNote(item), item.State, stepsName(item.Steps),
 			agentsNote(item), outside, describer.runNote(ctx, item)))
 	}
 	if listed == 0 {
 		builder.WriteString("- none yet\n")
 	}
+}
+
+// creatorNote says whose a work order is (ADR-027): the assistant acts on
+// its own only on its own.
+func creatorNote(item feature.Feature) string {
+	if item.CreatedBy == feature.CreatedByAssistant {
+		return "yours"
+	}
+	return "the user's"
 }
 
 // agentsNote names a work order's agents and models, or says they are not

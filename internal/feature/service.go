@@ -97,6 +97,11 @@ func (s *Service) Create(
 		return Feature{}, err
 	}
 
+	createdBy := overrides.CreatedBy
+	if createdBy != CreatedByAssistant {
+		createdBy = CreatedByUser
+	}
+
 	now := s.now()
 	createdFeature := Feature{
 		ID:                         s.generateID(),
@@ -113,6 +118,7 @@ func (s *Service) Create(
 		Steps:                      settings.Steps,
 		Kind:                       kind,
 		Background:                 overrides.Background,
+		CreatedBy:                  createdBy,
 		CreatedAt:                  now,
 		UpdatedAt:                  now,
 	}
@@ -270,6 +276,25 @@ func (s *Service) Rename(ctx context.Context, projectID string, featureID string
 		return Feature{}, err
 	}
 	return s.GetByID(ctx, projectID, featureID)
+}
+
+// CreatorStore records who created work orders.
+type CreatorStore interface {
+	MarkCreatedByAssistant(ctx context.Context, projectID string, featureIDs []string) error
+}
+
+// MarkCreatedByAssistant records that the assistant created a project's
+// work orders, as its conversation's applied actions show for work orders
+// from before their creator was stored. It never makes one the user's.
+func (s *Service) MarkCreatedByAssistant(ctx context.Context, projectID string, featureIDs []string) error {
+	if len(featureIDs) == 0 {
+		return nil
+	}
+	marker, ok := s.store.(CreatorStore)
+	if !ok {
+		return errors.New("work orders' creators cannot be recorded")
+	}
+	return marker.MarkCreatedByAssistant(ctx, projectID, featureIDs)
 }
 
 // ChooseStartSettings records the agents, models, and policies a Ready work

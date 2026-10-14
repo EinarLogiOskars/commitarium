@@ -76,7 +76,8 @@ this API beyond the host loopback interface is unsupported.
 | `POST` | `/api/v1/projects/{projectID}/features/{featureID}/return-to-ready` | Stop a started work order and return it to Ready, keeping its brief |
 | `POST` | `/api/v1/projects/{projectID}/features/{featureID}/close` | Close a work order without merging it, keeping its history |
 | `PUT` | `/api/v1/projects/{id}/name` | Rename a project or app (`{"name"}`, at most 120 characters); its repository keeps its own name |
-| `PUT` | `/api/v1/projects/{id}/app` | Mark a project as an app (`{"app": true}`) or a project only; projects answer `app` |
+| `PUT` | `/api/v1/projects/{id}/app` | Mark a project as an app (`{"app": true}`) or a project only; projects answer `app`. A project that changes kind takes that kind's assistant mode |
+| `PUT` | `/api/v1/projects/{id}/assistant-mode` | Set how the assistant works (`{"assistant_mode": "builds"}` or `"assists"`, ADR-027); projects answer `assistant_mode`, `builds` for apps and `assists` for projects by default |
 | `POST` | `/api/v1/runs/{runID}/interventions` | Queue a user message for the lead or reviewer and stop at the next safe boundary |
 | `GET` | `/api/v1/runs/{runID}/planning/messages` | Retrieve the ordered lead/reviewer planning messages |
 | `GET` | `/api/v1/runs/{runID}/planning/messages/stream` | Replay and stream ordered planning messages with SSE |

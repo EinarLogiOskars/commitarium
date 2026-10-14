@@ -47,6 +47,9 @@ type featureResponse struct {
 	// Background marks a work order Commitarium runs by itself, such as the
 	// preview setup.
 	Background bool `json:"background,omitempty"`
+	// CreatedBy is "user" for a work order the user made by hand, which the
+	// assistant never acts on by itself, or "assistant" (ADR-027).
+	CreatedBy feature.Creator `json:"created_by"`
 	// Session reports a session's agent activity in feature lists (ADR-019).
 	Session   *sessionActivityResponse `json:"session,omitempty"`
 	CreatedAt time.Time                `json:"created_at"`
@@ -308,9 +311,19 @@ func newFeatureResponse(storedFeature feature.Feature) featureResponse {
 		Steps:                      newWorkStepsResponse(storedFeature.Steps),
 		Kind:                       featureKind(storedFeature.Kind),
 		Background:                 storedFeature.Background,
+		CreatedBy:                  featureCreator(storedFeature.CreatedBy),
 		CreatedAt:                  storedFeature.CreatedAt,
 		UpdatedAt:                  storedFeature.UpdatedAt,
 	}
+}
+
+// featureCreator reports who created a work order; one without a stored
+// creator is the user's.
+func featureCreator(creator feature.Creator) feature.Creator {
+	if creator == feature.CreatedByAssistant {
+		return creator
+	}
+	return feature.CreatedByUser
 }
 
 // featureKind reports a work order's kind; one without a stored kind is a work

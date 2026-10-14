@@ -578,6 +578,53 @@ func TestCreateAndUpdateProjectMergePolicy(t *testing.T) {
 	}
 }
 
+// assistantModeProjects is a project service that also sets the assistant's
+// mode.
+type assistantModeProjects struct {
+	*recordingProjectService
+	received project.AssistantMode
+}
+
+func (service *assistantModeProjects) UpdateAssistantMode(
+	_ context.Context, projectID string, mode project.AssistantMode,
+) (project.Project, error) {
+	if !mode.IsValid() {
+		return project.Project{}, project.ErrInvalidAssistantMode
+	}
+	service.received = mode
+	return project.Project{ID: projectID, Name: "Sleep Log", App: true, AssistantMode: mode}, nil
+}
+
+// Projects answer how the assistant works, apps building everything by
+// default, and the user may change it (ADR-027).
+func TestProjectsAnswerAndChangeHowTheAssistantWorks(t *testing.T) {
+	service := &assistantModeProjects{recordingProjectService: &recordingProjectService{
+		getByIDResult: project.Project{ID: "prj_app", Name: "Sleep Log", App: true},
+	}}
+	handler := New(service, nil, nil, nil, nil, nil)
+	get := httptest.NewRecorder()
+	handler.ServeHTTP(get, httptest.NewRequest(http.MethodGet, "/api/v1/projects/prj_app", nil))
+	var response projectResponse
+	if err := json.NewDecoder(get.Body).Decode(&response); err != nil || response.AssistantMode != project.AssistantModeBuilds {
+		t.Fatalf("an app's assistant = %q err=%v", response.AssistantMode, err)
+	}
+
+	update := httptest.NewRecorder()
+	handler.ServeHTTP(update, httptest.NewRequest(http.MethodPut, "/api/v1/projects/prj_app/assistant-mode",
+		strings.NewReader(`{"assistant_mode":"assists"}`)))
+	if err := json.NewDecoder(update.Body).Decode(&response); err != nil || update.Code != http.StatusOK ||
+		service.received != project.AssistantModeAssists || response.AssistantMode != project.AssistantModeAssists {
+		t.Fatalf("update status=%d mode=%q err=%v", update.Code, response.AssistantMode, err)
+	}
+
+	invalid := httptest.NewRecorder()
+	handler.ServeHTTP(invalid, httptest.NewRequest(http.MethodPut, "/api/v1/projects/prj_app/assistant-mode",
+		strings.NewReader(`{"assistant_mode":"sometimes"}`)))
+	if invalid.Code != http.StatusBadRequest || !strings.Contains(invalid.Body.String(), "invalid_assistant_mode") {
+		t.Fatalf("an unknown mode: %d %s", invalid.Code, invalid.Body.String())
+	}
+}
+
 func TestUpdateProjectMergePolicyRejectsUnknownValue(t *testing.T) {
 	service := &recordingProjectService{updateErr: project.ErrInvalidMergePolicy}
 	recorder := httptest.NewRecorder()

@@ -10,7 +10,10 @@ type Project struct {
 	AutonomyPolicy             AutonomyPolicy
 	IndependentAcceptanceTests bool
 	// App marks a project the user uses as an app (APPS_PLAN.md).
-	App            bool
+	App bool
+	// AssistantMode is how the assistant works here (ADR-027); read it through
+	// Assistant, which fills in the default for an unset one.
+	AssistantMode  AssistantMode
 	DialogueLimits DialogueLimits
 	// AgentProviders and AgentModels are deprecated (ADR-027): projects no
 	// longer choose agents or models for new work. New projects leave them

@@ -407,6 +407,11 @@ func run(ctx context.Context, coordinatorConfig config) error {
 			return fmt.Errorf("create the assistant: %w", err)
 		}
 		settingsOf = projectAssistant
+		// Work orders from before their creator was stored are the user's,
+		// except those the assistant's conversations show it created (ADR-027).
+		if err := projectAssistant.MarkCreatedWork(ctx, featureService); err != nil {
+			log.Printf("record the assistant's work orders: %v", err)
+		}
 		conversationService = projectAssistant
 		projectConversations = projectAssistant
 		// Changes in the projects' work wake the assistant (events), and

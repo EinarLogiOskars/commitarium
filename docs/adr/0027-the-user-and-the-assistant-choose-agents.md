@@ -67,6 +67,39 @@ choose again, at most twice in a row before the card is left to the user.
 A work order without a reviewer step names its lead for the unused reviewer
 role, which never runs. There is no per-project agent pinning.
 
+**The user's work orders are the user's.** In every project and mode, the
+assistant (and autopilot, and an app's assistant) acts on its own only on its
+own work: the work orders it created (its create_work_order and create_app
+work, and Commitarium's own setup work, which runs on its agent) and those the
+user handed it with an autopilot goal (the work orders the goal's items had
+when the user started it). It never starts, continues, changes the models of,
+or closes a work order the user created by hand; it may only mention it
+("<title> is waiting for you to start it"). Each work order stores who created
+it (`created_by`, `user` or `assistant`, migration 00052). Existing rows are
+the user's, except Commitarium's own setup work; at start the coordinator
+marks as the assistant's every work order its conversations show it created
+(an applied create_work_order with that work order's ID), since the
+conversations are kept outside the database and are the only durable record
+of it. The assistant's state marks each work order "the user's" or "yours".
+Autopilot leaves an action on the user's work order as a card, with a note,
+and the coordinator refuses one it is asked to apply anyway, with a reason the
+assistant can act on. When the user asks for it, the assistant proposes the
+action as a card; the user's approval of a card is allowed on any work order,
+which is how the user hands one over.
+
+**How the assistant works is a project setting.** `assistant_mode` (migration
+00053) is `builds` ("Builds everything": the assistant proposes and starts its
+own work, may finish the vision with autopilot, and its actions apply without
+cards, except premium models and the user's work orders) or `assists`
+("Assists me": every action is a card the user approves; autopilot goals the
+user starts still run). Apps default to `builds` and projects to `assists`;
+existing rows follow their app flag, and a project that changes kind takes
+that kind's default. Only this setting decides the assistant's autonomy; the
+app flag still decides app windows and how the assistant speaks to an app's
+user. Projects answer it and `PUT /api/v1/projects/{id}/assistant-mode`
+changes it; the desktop shows it in Project settings and in the assistant
+drawer.
+
 ## Consequences
 
 - A fresh install works with zero, one, or several agents: worker
@@ -81,3 +114,8 @@ role, which never runs. There is no per-project agent pinning.
   at Start.
 - Assistant settings saved before keep working; an install whose assistant
   never answered must set it up once.
+- An app's assistant no longer drives work the user made by hand, even in
+  apps mode; such a work order waits for the user, and the inbox asks the
+  user about its blockers at once.
+- An existing app whose assistant should only suggest, or a project whose
+  assistant should build everything, is one setting away.

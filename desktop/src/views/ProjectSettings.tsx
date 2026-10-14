@@ -5,12 +5,15 @@ import {
   updateAutonomyPolicy,
   updateIndependentAcceptanceTests,
   setProjectApp,
+  setAssistantMode,
   renameProject,
   updateMergePolicy,
   updateProjectValidation,
 } from "../api/projects";
 import { ApiError } from "../api/client";
 import type { AutonomyPolicy, MergePolicy, Project } from "../api/types";
+import { ASSISTANT_CHANGED } from "./AssistantDrawer";
+import { ASSISTANT_MODES, assistantMode } from "./assistantMode";
 
 // Project preferences. Agents and models are not among them (ADR-027): each
 // work order's are chosen when it starts. Each section maps to its own PUT endpoint and saves
@@ -28,6 +31,7 @@ export function ProjectSettings({
     <>
       <Name project={project} onUpdated={onUpdated} />
       <UseAsApp project={project} onUpdated={onUpdated} />
+      <HowTheAssistantWorks project={project} onUpdated={onUpdated} />
       <Autonomy project={project} onUpdated={onUpdated} />
       <Merge project={project} onUpdated={onUpdated} />
       <IndependentTests project={project} onUpdated={onUpdated} />
@@ -332,6 +336,8 @@ function UseAsApp({ project, onUpdated }: { project: Project; onUpdated: (p: Pro
     setError(null);
     try {
       onUpdated(await setProjectApp(project.id, app));
+      // Changing kind changes how the assistant works too.
+      window.dispatchEvent(new Event(ASSISTANT_CHANGED));
     } catch (e) {
       setError(describe(e));
     } finally {
@@ -355,6 +361,58 @@ function UseAsApp({ project, onUpdated }: { project: Project; onUpdated: (p: Pro
         />
         Use as an app
       </label>
+    </section>
+  );
+}
+
+// How the assistant works here (ADR-027): it builds everything on its own,
+// or assists with cards the user approves. Either way it leaves the work
+// orders the user made to the user. Saved at once; the drawer follows.
+function HowTheAssistantWorks({
+  project,
+  onUpdated,
+}: {
+  project: Project;
+  onUpdated: (p: Project) => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const current = assistantMode(project);
+  const change = async (mode: (typeof ASSISTANT_MODES)[number]["value"]) => {
+    setBusy(true);
+    setError(null);
+    try {
+      onUpdated(await setAssistantMode(project.id, mode));
+      window.dispatchEvent(new Event(ASSISTANT_CHANGED));
+    } catch (e) {
+      setError(describe(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <section className="panel">
+      <h2>How the assistant works</h2>
+      {error && <div className="banner banner--error">{error}</div>}
+      {ASSISTANT_MODES.map(({ value, label, description }) => (
+        <label key={value} className="toggle assistant-mode">
+          <input
+            type="radio"
+            name={`assistant-mode-${project.id}`}
+            checked={current === value}
+            onChange={() => void change(value)}
+            disabled={busy}
+          />
+          <span>
+            {label}
+            <span className="muted assistant-mode__note">{description}</span>
+          </span>
+        </label>
+      ))}
+      <p className="muted note">
+        Work orders you create yourself stay yours: the assistant only reminds you of them, and acts
+        on one only when you ask and approve its card.
+      </p>
     </section>
   );
 }

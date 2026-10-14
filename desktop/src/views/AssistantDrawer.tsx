@@ -15,7 +15,9 @@ import {
 import { ApiError } from "../api/client";
 import { openAppWindow } from "../ipc";
 import { getVision } from "../api/vision";
-import type { VisionItem, VisionPriority } from "../api/types";
+import { getProject } from "../api/projects";
+import type { AssistantMode, VisionItem, VisionPriority } from "../api/types";
+import { appliesItself, assistantMode, assistantModeNote } from "./assistantMode";
 import { Markdown } from "./Markdown";
 import { useCatalogModels, useModelName } from "./useModelName";
 import { agentName, reloadAgents, useAgentList, useAgents } from "./useAgents";
@@ -56,7 +58,6 @@ export function AssistantDrawer({
   docked,
   onGoalChange,
   onLaunchChange,
-  appMode = false,
 }: {
   scope: string;
   scopeLabel: string;
@@ -65,9 +66,6 @@ export function AssistantDrawer({
   onOpenChange: (open: boolean) => void;
   /** Beside the page rather than over it. */
   docked: boolean;
-  /** In an app's window the assistant drives: work it applies by itself
-   * shows as a line, not a card to approve (ADR-024). */
-  appMode?: boolean;
   /** The conversation's autopilot goal while it is on, else null. */
   onGoalChange?: (goal: AutopilotGoal | null) => void;
   /** A new app's launch stage while it is planned or set up, else null. */
@@ -107,6 +105,27 @@ export function AssistantDrawer({
   const [settings, setSettings] = useState<AssistantSettings | null>(null);
   const guidance = assistantGuidance(agents, settings);
   const [setUp, setSetUp] = useState<null | "agents" | "assistant">(null);
+
+  // How the assistant works in the project (ADR-027). Where it builds
+  // everything, work it applies by itself shows as a line, not a card to
+  // approve. Read when the scope changes and when the assistant reloads.
+  const [mode, setMode] = useState<AssistantMode | null>(null);
+  const loadMode = useCallback(() => {
+    if (scope === "commitarium") {
+      setMode(null);
+      return;
+    }
+    getProject(scope)
+      .then((project) => setMode(assistantMode(project)))
+      .catch(() => undefined);
+  }, [scope]);
+  useEffect(() => {
+    setMode(null);
+    loadMode();
+    window.addEventListener(ASSISTANT_CHANGED, loadMode);
+    return () => window.removeEventListener(ASSISTANT_CHANGED, loadMode);
+  }, [loadMode]);
+  const builds = mode === "builds";
 
   // Vision items by ID, labelled "P0.2 Title", for the cards.
   const [visionItems, setVisionItems] = useState<Map<string, string>>(new Map());
@@ -250,6 +269,18 @@ export function AssistantDrawer({
               <strong>Assistant</strong>
               <span className="muted">{scopeLabel}</span>
             </div>
+            {mode && (
+              <span
+                className="pill assistant-drawer__mode"
+                title={
+                  builds
+                    ? "It starts and finishes its own work without asking. Change this in the project's settings."
+                    : "It suggests; nothing happens until you approve. Change this in the project's settings."
+                }
+              >
+                {assistantModeNote(mode)}
+              </span>
+            )}
             <button
               className={`ghost ${notesOpen ? "ghost--on" : ""}`}
               onClick={() => setNotesOpen((v) => !v)}
@@ -272,7 +303,9 @@ export function AssistantDrawer({
                   <p className="muted assistant__empty">
                     {scope === "commitarium"
                       ? "Ask about your projects. Open a project to have it draft work there."
-                      : "Ask about the project, what to build next, or have it draft work orders. It proposes; nothing happens until you approve."}
+                      : builds
+                        ? "Ask for a change and it builds it. It asks before premium models, and leaves your own work orders to you."
+                        : "Ask about the project, what to build next, or have it draft work orders. It proposes; nothing happens until you approve."}
                   </p>
                 )}
                 {conversation.messages.map((message) =>
@@ -291,7 +324,7 @@ export function AssistantDrawer({
                         </div>
                       </div>
                       {(byMessage.get(message.id) ?? []).map((action) =>
-                        appMode && appliesItself(action) ? (
+                        builds && appliesItself(action) ? (
                           <AppliedLine key={action.id} action={action} />
                         ) : (
                           <ActionCard
@@ -730,20 +763,7 @@ function isPremium(model: string, families: string[]): boolean {
   return !!name && families.some((family) => family && name.includes(family.toLowerCase()));
 }
 
-// Work an app's autopilot applies without asking (ADR-024): the assistant's
-// work actions, except those that need the user's approval of a premium
-// model. Closing is left as a card: only autopilot's own duplicates close by
-// themselves.
-function appliesItself(action: AssistantAction): boolean {
-  const work = ["create_work_order", "start_work_order", "change_models", "continue_work_order"];
-  return (
-    work.includes(action.type) &&
-    (action.premium ?? []).length === 0 &&
-    action.status !== "dismissed"
-  );
-}
-
-// In an app, what the assistant set going, said in a line.
+// Where it builds everything, what the assistant set going, said in a line.
 function AppliedLine({ action }: { action: AssistantAction }) {
   const what = action.title || "the work";
   const failed = action.status === "failed";

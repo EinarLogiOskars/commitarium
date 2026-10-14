@@ -225,7 +225,7 @@ func (s *Service) Import(ctx context.Context, spec ImportSpec, bundle io.Reader)
 		ID: projectID, Name: normalized.Name, RecoveryPolicy: normalized.RecoveryPolicy,
 		MergePolicy: normalized.MergePolicy, AutonomyPolicy: normalized.AutonomyPolicy,
 		DialogueLimits: normalized.DialogueLimits, AgentProviders: normalized.AgentProviders,
-		AgentModels:       normalized.AgentModels,
+		AgentModels: normalized.AgentModels, AssistantMode: DefaultAssistantMode(false),
 		ForgejoRepository: &repository, CreatedAt: s.now().UTC(),
 	}
 	if err := s.store.Create(ctx, created); err != nil {
@@ -387,6 +387,7 @@ func (s *Service) newProject(
 		DialogueLimits: dialogueLimits,
 		AgentProviders: agentProviders,
 		AgentModels:    agentModels,
+		AssistantMode:  DefaultAssistantMode(false),
 		CreatedAt:      s.now(),
 	}
 	return project, nil
@@ -505,7 +506,8 @@ func (s *Service) Rename(ctx context.Context, projectID, name string) (Project, 
 	return renamed, nil
 }
 
-// UpdateApp marks a project as an app, or as a project only.
+// UpdateApp marks a project as an app, or as a project only. A project that
+// changes takes that kind's assistant mode; the user may change it after.
 func (s *Service) UpdateApp(ctx context.Context, projectID string, app bool) (Project, error) {
 	settings, ok := s.store.(interface {
 		UpdateApp(context.Context, string, bool) (Project, error)
@@ -516,6 +518,24 @@ func (s *Service) UpdateApp(ctx context.Context, projectID string, app bool) (Pr
 	updated, err := settings.UpdateApp(ctx, projectID, app)
 	if err != nil {
 		return Project{}, fmt.Errorf("update app flag for project %q: %w", projectID, err)
+	}
+	return updated, nil
+}
+
+// UpdateAssistantMode sets how the assistant works in a project.
+func (s *Service) UpdateAssistantMode(ctx context.Context, projectID string, mode AssistantMode) (Project, error) {
+	if !mode.IsValid() {
+		return Project{}, ErrInvalidAssistantMode
+	}
+	settings, ok := s.store.(interface {
+		UpdateAssistantMode(context.Context, string, AssistantMode) (Project, error)
+	})
+	if !ok {
+		return Project{}, errors.New("project store does not support assistant modes")
+	}
+	updated, err := settings.UpdateAssistantMode(ctx, projectID, mode)
+	if err != nil {
+		return Project{}, fmt.Errorf("update assistant mode for project %q: %w", projectID, err)
 	}
 	return updated, nil
 }

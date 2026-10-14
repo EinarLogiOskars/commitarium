@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/EinarLogiOskars/commitarium/internal/feature"
 	"github.com/EinarLogiOskars/commitarium/internal/project"
 	"github.com/pressly/goose/v3"
 )
@@ -697,6 +698,78 @@ func TestUnusedSeededAgentsAreRemoved(t *testing.T) {
 	}
 	if agents := count(existing); agents != 2 {
 		t.Fatalf("an existing install has %d agents, want its two subscriptions", agents)
+	}
+}
+
+// Existing work orders are the user's, except Commitarium's own setup work;
+// existing projects' assistants build everything in apps and assist in
+// projects (ADR-027).
+func TestOwnershipAndAssistantModeMigrationsBackfillExistingRows(t *testing.T) {
+	db, err := OpenSQLite(t.Context(), filepath.Join(t.TempDir(), "coordinator.db"))
+	if err != nil {
+		t.Fatalf("open SQLite database: %v", err)
+	}
+	defer db.Close()
+	migrations, err := fs.Sub(migrationFiles, "migrations")
+	if err != nil {
+		t.Fatalf("open embedded migrations: %v", err)
+	}
+	provider, err := goose.NewProvider(goose.DialectSQLite3, db, migrations)
+	if err != nil {
+		t.Fatalf("create migration provider: %v", err)
+	}
+	if _, err := provider.UpTo(t.Context(), 51); err != nil {
+		t.Fatalf("migrate the schema before ownership: %v", err)
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	for _, row := range []struct {
+		id  string
+		app int
+	}{{"prj_app", 1}, {"prj_project", 0}} {
+		if _, err := db.ExecContext(t.Context(), `
+			INSERT INTO projects (id, name, recovery_policy, lead_provider, reviewer_provider, is_app, created_at)
+			VALUES (?, 'Existing', 'approval_required', 'claude', 'codex', ?, ?)`, row.id, row.app, now); err != nil {
+			t.Fatalf("insert project %q: %v", row.id, err)
+		}
+	}
+	for _, row := range []struct {
+		id, title  string
+		background int
+	}{{"fea_hand", "Prevent logging future nights", 0}, {"fea_setup", "Set the project up", 0}, {"fea_preview", "Set up the preview", 1}} {
+		if _, err := db.ExecContext(t.Context(), `
+			INSERT INTO features (id, project_id, title, description, state, background, created_at, updated_at)
+			VALUES (?, 'prj_app', ?, '', 'draft', ?, ?, ?)`, row.id, row.title, row.background, now, now); err != nil {
+			t.Fatalf("insert work order %q: %v", row.id, err)
+		}
+	}
+	if err := Migrate(t.Context(), db); err != nil {
+		t.Fatalf("apply the ownership migrations: %v", err)
+	}
+
+	features := NewFeatureStore(db)
+	want := map[string]feature.Creator{
+		"fea_hand": feature.CreatedByUser, "fea_setup": feature.CreatedByAssistant, "fea_preview": feature.CreatedByAssistant,
+	}
+	for id, creator := range want {
+		if stored, err := features.GetByID(t.Context(), id); err != nil || stored.CreatedBy != creator {
+			t.Fatalf("%s created by %q (err %v), want %q", id, stored.CreatedBy, err, creator)
+		}
+	}
+	// The assistant's conversations mark what it created; never the reverse.
+	if err := features.MarkCreatedByAssistant(t.Context(), "prj_app", []string{"fea_hand"}); err != nil {
+		t.Fatal(err)
+	}
+	if stored, _ := features.GetByID(t.Context(), "fea_hand"); stored.CreatedBy != feature.CreatedByAssistant {
+		t.Fatalf("marked work order created by %q", stored.CreatedBy)
+	}
+
+	projects := NewProjectStore(db)
+	for id, mode := range map[string]project.AssistantMode{
+		"prj_app": project.AssistantModeBuilds, "prj_project": project.AssistantModeAssists,
+	} {
+		if stored, err := projects.GetByID(t.Context(), id); err != nil || stored.AssistantMode != mode {
+			t.Fatalf("%s assistant mode %q (err %v), want %q", id, stored.AssistantMode, err, mode)
+		}
 	}
 }
 

@@ -39,6 +39,7 @@ type projectResponse struct {
 	AutonomyPolicy             project.AutonomyPolicy     `json:"autonomy_policy"`
 	IndependentAcceptanceTests bool                       `json:"independent_acceptance_tests"`
 	App                        bool                       `json:"app"`
+	AssistantMode              project.AssistantMode      `json:"assistant_mode"`
 	DialogueLimits             dialogueLimitsResponse     `json:"dialogue_limits"`
 	AgentProviders             agentProvidersResponse     `json:"agent_providers"`
 	AgentModels                agentModelsResponse        `json:"agent_models"`
@@ -510,6 +511,38 @@ func (api *API) updateProjectAppHandler(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, newProjectResponse(updated), "project")
 }
 
+type assistantModeRequest struct {
+	AssistantMode project.AssistantMode `json:"assistant_mode"`
+}
+
+// updateProjectAssistantModeHandler sets how the assistant works in a
+// project: it builds everything, or it assists (ADR-027).
+func (api *API) updateProjectAssistantModeHandler(w http.ResponseWriter, r *http.Request) {
+	request := assistantModeRequest{}
+	if !decodeSingleJSON(w, r, &request) {
+		return
+	}
+	settings, ok := api.projects.(ProjectAssistantModeService)
+	if !ok {
+		writeError(w, http.StatusServiceUnavailable, "assistant_mode_unavailable", "the assistant's mode cannot be changed")
+		return
+	}
+	updated, err := settings.UpdateAssistantMode(r.Context(), r.PathValue("id"), request.AssistantMode)
+	if err != nil {
+		switch {
+		case errors.Is(err, project.ErrNotFound):
+			writeError(w, http.StatusNotFound, "project_not_found", "project not found")
+		case errors.Is(err, project.ErrInvalidAssistantMode):
+			writeError(w, http.StatusBadRequest, "invalid_assistant_mode", "assistant_mode must be builds or assists")
+		default:
+			log.Printf("update project assistant mode %q: %v", r.PathValue("id"), err)
+			writeError(w, http.StatusInternalServerError, "internal_error", "internal server error")
+		}
+		return
+	}
+	writeJSON(w, http.StatusOK, newProjectResponse(updated), "project")
+}
+
 func (api *API) updateProjectAutonomyPolicyHandler(w http.ResponseWriter, r *http.Request) {
 	request := autonomyPolicyRequest{}
 	decoder := json.NewDecoder(r.Body)
@@ -834,6 +867,7 @@ func newProjectResponse(storedProject project.Project) projectResponse {
 		AutonomyPolicy:             storedProject.AutonomyPolicy,
 		IndependentAcceptanceTests: storedProject.IndependentAcceptanceTests,
 		App:                        storedProject.App,
+		AssistantMode:              storedProject.Assistant(),
 		DialogueLimits: dialogueLimitsResponse{
 			PlanningRounds:             storedProject.DialogueLimits.PlanningRounds,
 			ImplementationReviewRounds: storedProject.DialogueLimits.ImplementationReviewRounds,
