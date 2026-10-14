@@ -3,6 +3,7 @@ import {
   approveAssistantAction,
   dismissAssistantAction,
   getAssistantSettings,
+  type AssistantSettings,
   getConversation,
   saveAssistantNotes,
   sendToAssistant,
@@ -17,8 +18,10 @@ import { getVision } from "../api/vision";
 import type { VisionItem, VisionPriority } from "../api/types";
 import { Markdown } from "./Markdown";
 import { useCatalogModels, useModelName } from "./useModelName";
-import { agentName, useAgents } from "./useAgents";
+import { agentName, reloadAgents, useAgentList, useAgents } from "./useAgents";
 import type { AgentRole } from "../api/types";
+import { Agents } from "./Agents";
+import { assistantGuidance, GUIDANCE } from "./setupGuidance";
 
 const IDLE_POLL_MS = 20_000;
 const POLL_MS = 2000;
@@ -97,9 +100,20 @@ export function AssistantDrawer({
   const chatRef = useRef<HTMLDivElement | null>(null);
   const seenReplies = useRef<number | null>(null);
 
+  // What the user must set up before the assistant can answer (ADR-027): an
+  // agent, then the assistant's choice of one. The Agents page opens over the
+  // drawer, so it works in an app's own window too.
+  const agents = useAgentList();
+  const [settings, setSettings] = useState<AssistantSettings | null>(null);
+  const guidance = assistantGuidance(agents, settings);
+  const [setUp, setSetUp] = useState<null | "agents" | "assistant">(null);
+
   // Vision items by ID, labelled "P0.2 Title", for the cards.
   const [visionItems, setVisionItems] = useState<Map<string, string>>(new Map());
   const load = useCallback(async () => {
+    getAssistantSettings()
+      .then(setSettings)
+      .catch(() => undefined);
     try {
       setConversation(await getConversation(scope));
       setError(null);
@@ -172,7 +186,13 @@ export function AssistantDrawer({
       setConversation(await sendToAssistant(scope, text, crypto.randomUUID()));
       setDraft("");
     } catch (e) {
-      setError(describe(e));
+      if (e instanceof ApiError && (e.code === "no_agents" || e.code === "assistant_not_set_up")) {
+        // The guidance shows what to set up; the message waits in the box.
+        void reloadAgents().catch(() => undefined);
+        void load();
+      } else {
+        setError(describe(e));
+      }
     } finally {
       setSending(false);
     }
@@ -287,6 +307,17 @@ export function AssistantDrawer({
                     </div>
                   ),
                 )}
+                {guidance && (
+                  <div className="banner banner--info assistant__setup">
+                    <span>{GUIDANCE[guidance].text}</span>
+                    <button
+                      className="primary"
+                      onClick={() => setSetUp(guidance === "add_agent" ? "agents" : "assistant")}
+                    >
+                      {GUIDANCE[guidance].action}
+                    </button>
+                  </div>
+                )}
                 {running && <p className="muted status-line">The assistant is thinking…</p>}
                 {(conversation.queued ?? []).map((message) => (
                   <div key={message.id} className="assistant__turn assistant__turn--queued">
@@ -319,11 +350,14 @@ export function AssistantDrawer({
                       if (e.key === "Escape") setOpen(false);
                       if (e.key !== "Enter" || e.shiftKey) return;
                       e.preventDefault();
-                      if (!sending && draft.trim()) void send();
+                      if (!sending && !guidance && draft.trim()) void send();
                     }}
                     disabled={sending}
                   />
-                  <button onClick={() => void send()} disabled={sending || !draft.trim()}>
+                  <button
+                    onClick={() => void send()}
+                    disabled={sending || !!guidance || !draft.trim()}
+                  >
                     {sending ? "Sending…" : "Send"}
                   </button>
                 </div>
@@ -331,6 +365,16 @@ export function AssistantDrawer({
             </>
           )}
         </aside>
+      )}
+      {setUp && (
+        <Agents
+          focus={setUp === "assistant" ? "assistant" : undefined}
+          onClose={() => {
+            setSetUp(null);
+            void reloadAgents().catch(() => undefined);
+            void load();
+          }}
+        />
       )}
     </>
   );

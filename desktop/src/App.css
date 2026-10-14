@@ -1183,6 +1183,15 @@ textarea {
   gap: 8px;
   margin-top: 14px;
 }
+/* A new install has no agents (ADR-027): adding one is the page's first step. */
+.agents-empty {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.agents-empty p {
+  margin: 0;
+}
 .agent-add input {
   flex: 1;
   min-width: 0;
@@ -3674,6 +3683,14 @@ button.danger:not(.ghost) {
   margin: auto;
   max-width: 460px;
   text-align: center;
+}
+/* What to set up before the assistant can answer, with the one button. */
+.assistant__setup {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 8px 0;
 }
 .assistant__event {
   font-size: 12px;

@@ -128,10 +128,6 @@ export function ProjectDashboard({
         </div>
         <div className="dash__facts">
           <Fact
-            label="Agents"
-            value={`${cap(project.agent_providers?.lead ?? "codex")} lead · ${cap(project.agent_providers?.reviewer ?? "codex")} reviewer`}
-          />
-          <Fact
             label="Autonomy"
             value={
               project.autonomy_policy === "run_to_completion"

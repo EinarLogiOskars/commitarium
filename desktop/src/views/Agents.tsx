@@ -175,12 +175,21 @@ export function LoginSteps({ profile, onChanged }: { profile: Profile; onChanged
 }
 
 /** Agents (ADR-016): one per provider account. Each signs in once and can lead
- * or review any number of work orders. */
-export function Agents({ onClose }: { onClose: () => void }) {
+ * or review any number of work orders. A new install has none (ADR-027): the
+ * page starts with adding one. `focus` scrolls to the assistant's settings. */
+export function Agents({ onClose, focus }: { onClose: () => void; focus?: "assistant" }) {
   const [profiles, setProfiles] = useState<Profile[] | null>(null);
   const [limits, setLimits] = useState<AgentLimit[]>([]);
   const [usage, setUsage] = useState<AgentUsage[]>([]);
   const [error, setError] = useState<string | null>(null);
+  // The agent just added goes straight on to signing in.
+  const [added, setAdded] = useState<string | null>(null);
+  const assistantRef = useRef<HTMLDivElement | null>(null);
+  const hasAgents = (profiles?.length ?? 0) > 0;
+  useEffect(() => {
+    if (focus === "assistant" && hasAgents)
+      assistantRef.current?.scrollIntoView({ block: "start" });
+  }, [focus, hasAgents]);
 
   const refresh = useCallback(async () => {
     try {
@@ -234,7 +243,14 @@ export function Agents({ onClose }: { onClose: () => void }) {
           {profiles === null ? (
             <p className="muted">Loading…</p>
           ) : profiles.length === 0 ? (
-            <p className="muted">No agents yet. Add one for each account you want to use.</p>
+            <div className="agents-empty">
+              <strong>Add your first agent</strong>
+              <p className="muted">
+                An agent is one of your AI accounts: a Claude or ChatGPT (Codex) subscription, or an
+                API key. Name it, choose which kind it is, then sign in. The assistant and all the
+                work it starts run on your agents.
+              </p>
+            </div>
           ) : (
             profiles.map((p) => (
               <ProfileRow
@@ -242,6 +258,7 @@ export function Agents({ onClose }: { onClose: () => void }) {
                 profile={p}
                 limit={limits.find((l) => l.agent === p.id)}
                 usage={usage.find((u) => u.agent === p.id)}
+                signIn={p.id === added}
                 onChanged={refresh}
                 onAgentsChanged={changed}
               />
@@ -249,9 +266,19 @@ export function Agents({ onClose }: { onClose: () => void }) {
           )}
         </div>
 
-        <AddAgent onAdded={changed} />
+        <AddAgent
+          first={profiles !== null && profiles.length === 0}
+          onAdded={async (id) => {
+            setAdded(id);
+            await changed();
+          }}
+        />
 
-        {profiles && profiles.length > 0 && <AssistantSettingsSection />}
+        {hasAgents && (
+          <div ref={assistantRef}>
+            <AssistantSettingsSection />
+          </div>
+        )}
 
         <div className="modal__footer">
           <button className="ghost" onClick={onClose}>
@@ -303,7 +330,14 @@ function CliVersions() {
   );
 }
 
-function AddAgent({ onAdded }: { onAdded: () => Promise<void> }) {
+function AddAgent({
+  first,
+  onAdded,
+}: {
+  /** No agent exists yet: the form is the page's main action. */
+  first: boolean;
+  onAdded: (id: string) => Promise<void>;
+}) {
   const [name, setName] = useState("");
   const [provider, setProvider] = useState<AgentProvider>("claude");
   const [busy, setBusy] = useState(false);
@@ -315,9 +349,9 @@ function AddAgent({ onAdded }: { onAdded: () => Promise<void> }) {
     setBusy(true);
     setError(null);
     try {
-      await createAgent(name.trim(), provider);
+      const created = await createAgent(name.trim(), provider);
       setName("");
-      await onAdded();
+      await onAdded(created.id);
     } catch (e) {
       setError(describe(e));
     } finally {
@@ -345,7 +379,7 @@ function AddAgent({ onAdded }: { onAdded: () => Promise<void> }) {
           <option value="codex">Codex</option>
         </select>
         <button className="primary" type="submit" disabled={busy || !name.trim()}>
-          Add agent
+          {first ? "Add an agent" : "Add agent"}
         </button>
       </div>
     </form>
@@ -363,10 +397,13 @@ function ProfileRow({
   profile,
   limit,
   usage,
+  signIn = false,
   onChanged,
   onAgentsChanged,
 }: {
   profile: Profile;
+  /** Just added: offer the ways to sign in at once. */
+  signIn?: boolean;
   /** Set while the agent's usage limit pauses work. */
   limit?: AgentLimit;
   /** The account's usage as the agent last reported it. */
@@ -375,7 +412,7 @@ function ProfileRow({
   onAgentsChanged: () => Promise<void>;
 }) {
   const [renaming, setRenaming] = useState<string | null>(null);
-  const [picking, setPicking] = useState(false);
+  const [picking, setPicking] = useState(signIn && profile.status !== "connected");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 

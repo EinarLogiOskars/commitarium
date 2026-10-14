@@ -2,7 +2,6 @@ import { useEffect, useState } from "react";
 import {
   disableProjectValidation,
   getProjectValidation,
-  updateAgentSettings,
   updateAutonomyPolicy,
   updateIndependentAcceptanceTests,
   setProjectApp,
@@ -11,17 +10,10 @@ import {
   updateProjectValidation,
 } from "../api/projects";
 import { ApiError } from "../api/client";
-import { AgentModelFields } from "./AgentModelFields";
-import { useModels, pickModel } from "./useModels";
-import type {
-  AgentModels,
-  AgentProviders,
-  AutonomyPolicy,
-  MergePolicy,
-  Project,
-} from "../api/types";
+import type { AutonomyPolicy, MergePolicy, Project } from "../api/types";
 
-// Project preferences. Each section maps to its own PUT endpoint and saves
+// Project preferences. Agents and models are not among them (ADR-027): each
+// work order's are chosen when it starts. Each section maps to its own PUT endpoint and saves
 // independently. Recovery policy is create-only (no update endpoint), so it is
 // shown read-only. Fields may be absent on older coordinators — defaults fill in
 // and saves take effect once the coordinator is rebuilt.
@@ -36,7 +28,6 @@ export function ProjectSettings({
     <>
       <Name project={project} onUpdated={onUpdated} />
       <UseAsApp project={project} onUpdated={onUpdated} />
-      <Agents project={project} onUpdated={onUpdated} />
       <Autonomy project={project} onUpdated={onUpdated} />
       <Merge project={project} onUpdated={onUpdated} />
       <IndependentTests project={project} onUpdated={onUpdated} />
@@ -229,76 +220,6 @@ function Validation({ project }: { project: Project }) {
 function describe(e: unknown): string {
   if (e instanceof ApiError) return `${e.message} (${e.code})`;
   return String(e);
-}
-
-function Agents({ project, onUpdated }: { project: Project; onUpdated: (p: Project) => void }) {
-  const { modelsFor, loading, error: catalogError, refresh } = useModels();
-  const [providers, setProviders] = useState<AgentProviders>({
-    lead: project.agent_providers?.lead ?? "codex",
-    reviewer: project.agent_providers?.reviewer ?? "codex",
-    lead_agent: project.agent_providers?.lead_agent,
-    reviewer_agent: project.agent_providers?.reviewer_agent,
-  });
-  const [models, setModels] = useState<AgentModels>({
-    lead: project.agent_models?.lead ?? "",
-    reviewer: project.agent_models?.reviewer ?? "",
-  });
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  // Once catalogs load, resolve each role's model to a valid choice (default the
-  // first when the project has none yet, or the stored one is no longer offered).
-  useEffect(() => {
-    if (loading) return;
-    setModels((m) => ({
-      lead: pickModel(modelsFor(providers.lead, "lead"), m.lead),
-      reviewer: pickModel(modelsFor(providers.reviewer, "reviewer"), m.reviewer),
-    }));
-  }, [loading, modelsFor, providers.lead, providers.reviewer]);
-
-  const save = async () => {
-    setBusy(true);
-    setError(null);
-    try {
-      onUpdated(await updateAgentSettings(project.id, providers, models));
-    } catch (e) {
-      setError(describe(e));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <section className="panel">
-      <div className="panel__head">
-        <h2>Agents & models</h2>
-        <button className="ghost" onClick={() => void refresh()} disabled={busy || loading}>
-          {loading ? "Loading models…" : "Refresh models"}
-        </button>
-      </div>
-      {error && <div className="banner banner--error">{error}</div>}
-      {catalogError && <p className="muted note">Model catalog unavailable — {catalogError}</p>}
-      <div className="settings-row settings-row--agents">
-        <AgentModelFields
-          providers={providers}
-          models={models}
-          modelsFor={modelsFor}
-          onChange={(p, m) => {
-            setProviders(p);
-            setModels(m);
-          }}
-          disabled={busy}
-        />
-      </div>
-      <button
-        className="primary"
-        onClick={() => void save()}
-        disabled={busy || loading || !models.lead || !models.reviewer}
-      >
-        {busy ? "Saving…" : "Save agents & models"}
-      </button>
-    </section>
-  );
 }
 
 function Autonomy({ project, onUpdated }: { project: Project; onUpdated: (p: Project) => void }) {

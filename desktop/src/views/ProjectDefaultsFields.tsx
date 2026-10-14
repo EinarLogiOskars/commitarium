@@ -1,25 +1,16 @@
-import { useEffect } from "react";
-import { AgentModelFields } from "./AgentModelFields";
-import { pickModel } from "./useModels";
 import type {
-  AgentModels,
-  AgentProvider,
-  AgentProviders,
-  AgentRole,
   AutonomyPolicy,
   CreateProjectInput,
   MergePolicy,
-  ModelInfo,
   Project,
   RecoveryPolicy,
 } from "../api/types";
 
 /** The project-level defaults a new project can carry. New work orders inherit
- * these and may override them per order. */
+ * these and may override them per order. Agents and models are not among
+ * them (ADR-027): each work order's are chosen when it starts. */
 export interface ProjectDefaults {
   recovery_policy: RecoveryPolicy;
-  providers: AgentProviders;
-  models: AgentModels;
   autonomy_policy: AutonomyPolicy;
   merge_policy: MergePolicy;
 }
@@ -28,8 +19,6 @@ export interface ProjectDefaults {
 export function initialProjectDefaults(): ProjectDefaults {
   return {
     recovery_policy: "approval_required",
-    providers: { lead: "codex", reviewer: "codex", lead_agent: "codex", reviewer_agent: "codex" },
-    models: { lead: "", reviewer: "" },
     autonomy_policy: "review_each_phase",
     merge_policy: "require_user_approval",
   };
@@ -40,20 +29,15 @@ export function projectDefaultsFrom(p: Project): ProjectDefaults {
   const d = initialProjectDefaults();
   return {
     recovery_policy: p.recovery_policy ?? d.recovery_policy,
-    providers: p.agent_providers ?? d.providers,
-    models: { lead: p.agent_models?.lead ?? "", reviewer: p.agent_models?.reviewer ?? "" },
     autonomy_policy: p.autonomy_policy ?? d.autonomy_policy,
     merge_policy: p.merge_policy ?? d.merge_policy,
   };
 }
 
-/** Turn defaults into the create/import payload extras. agent_models is omitted
- * when unresolved so the backend applies its own model defaults. */
+/** Turn defaults into the create/import payload extras. */
 export function projectDefaultsPayload(d: ProjectDefaults): Omit<CreateProjectInput, "name"> {
   return {
     recovery_policy: d.recovery_policy,
-    agent_providers: d.providers,
-    ...(d.models.lead && d.models.reviewer ? { agent_models: d.models } : {}),
     autonomy_policy: d.autonomy_policy,
     merge_policy: d.merge_policy,
   };
@@ -62,39 +46,14 @@ export function projectDefaultsPayload(d: ProjectDefaults): Omit<CreateProjectIn
 export function ProjectDefaultsFields({
   value,
   onChange,
-  modelsFor,
-  modelsLoading,
   disabled,
 }: {
   value: ProjectDefaults;
   onChange: (d: ProjectDefaults) => void;
-  modelsFor: (provider: AgentProvider, role: AgentRole) => ModelInfo[];
-  modelsLoading: boolean;
   disabled?: boolean;
 }) {
-  // Resolve each role's model to a valid choice once catalogs load or a provider
-  // changes; keep the current pick when it's still offered.
-  useEffect(() => {
-    if (modelsLoading) return;
-    const lead = pickModel(modelsFor(value.providers.lead, "lead"), value.models.lead);
-    const reviewer = pickModel(
-      modelsFor(value.providers.reviewer, "reviewer"),
-      value.models.reviewer,
-    );
-    if (lead !== value.models.lead || reviewer !== value.models.reviewer) {
-      onChange({ ...value, models: { lead, reviewer } });
-    }
-  }, [modelsLoading, modelsFor, value, onChange]);
-
   return (
     <div className="neworder__grid">
-      <AgentModelFields
-        providers={value.providers}
-        models={value.models}
-        modelsFor={modelsFor}
-        onChange={(providers, models) => onChange({ ...value, providers, models })}
-        disabled={disabled}
-      />
       <label>
         Autonomy
         <select

@@ -3,6 +3,8 @@ import { getProjectValidation } from "../api/projects";
 import { AgentModelFields } from "./AgentModelFields";
 import { NoValidationWarning } from "./NoValidationWarning";
 import { pickModel, useModels } from "./useModels";
+import { useWorkSuggestion } from "./useWorkSuggestion";
+import { choiceMade } from "./workChoice";
 import type {
   AgentModels,
   AgentProviders,
@@ -51,20 +53,40 @@ const PRESETS: { id: string; label: string; steps: WorkSteps; hint: string }[] =
   },
 ];
 
-/** The work order's current settings — its project's defaults until a Start
- * chose others — as the starting point for the form. */
+/** Not chosen yet: the form fills in a suggestion (ADR-027). */
+const UNCHOSEN: AgentProviders = {
+  lead: "codex",
+  reviewer: "codex",
+  lead_agent: "",
+  reviewer_agent: "",
+};
+
+/** The work order's current settings as the starting point for the form. A
+ * work order whose agents are not chosen yet starts from a suggestion the
+ * user can change; a project has no defaults. */
 export function startSettingsFrom(feature: Feature): StartSettingsValue {
+  const chosen = choiceMade(feature.agent_providers, feature.agent_models);
   return {
-    agent_providers: feature.agent_providers ?? { lead: "codex", reviewer: "codex" },
+    agent_providers: chosen && feature.agent_providers ? feature.agent_providers : UNCHOSEN,
     agent_models: {
-      lead: feature.agent_models?.lead ?? "",
-      reviewer: feature.agent_models?.reviewer ?? "",
+      lead: chosen ? (feature.agent_models?.lead ?? "") : "",
+      reviewer: chosen ? (feature.agent_models?.reviewer ?? "") : "",
     },
     autonomy_policy: feature.autonomy_policy ?? "review_each_phase",
     merge_policy: feature.merge_policy ?? "require_user_approval",
     independent_acceptance_tests: feature.independent_acceptance_tests ?? false,
     steps: feature.steps ?? { documented_plan: true, reviewer: true },
   };
+}
+
+/** What a Start sends: agents and models only once they are chosen, so a
+ * Start without any is refused with a reason rather than sent half-made. */
+export function startBody(value: StartSettingsValue): Partial<StartSettingsValue> {
+  if (choiceMade(value.agent_providers, value.agent_models)) return value;
+  const rest: Partial<StartSettingsValue> = { ...value };
+  delete rest.agent_providers;
+  delete rest.agent_models;
+  return rest;
 }
 
 /** Agents, models, and workflow settings for a Start. Controlled. */
@@ -82,6 +104,9 @@ export function StartSettings({
   disabled?: boolean;
 }) {
   const { modelsFor, loading: modelsLoading } = useModels();
+  // Agents and models not chosen yet start from a suggestion (ADR-027):
+  // the freshest agent leads, another provider reviews.
+  const suggestion = useWorkSuggestion();
   // null while unknown; only warn once we positively know none is configured.
   const [hasValidation, setHasValidation] = useState<boolean | null>(null);
 
@@ -101,7 +126,11 @@ export function StartSettings({
     (p) => p.steps.documented_plan === steps.documented_plan && p.steps.reviewer === steps.reviewer,
   );
   useEffect(() => {
-    if (modelsLoading) return;
+    if (suggestion && !choiceMade(value.agent_providers, value.agent_models))
+      onChange({ ...value, ...suggestion });
+  }, [suggestion, value, onChange]);
+  useEffect(() => {
+    if (modelsLoading || !providers.lead_agent) return;
     const lead = pickModel(modelsFor(providers.lead, "lead"), models.lead);
     const reviewer = pickModel(modelsFor(providers.reviewer, "reviewer"), models.reviewer);
     if (lead !== models.lead || reviewer !== models.reviewer)
@@ -147,6 +176,12 @@ export function StartSettings({
       </div>
       <div className="neworder__group">
         <span className="neworder__heading">Agents</span>
+        {suggestion === null && !providers.lead_agent && (
+          <p className="muted note">
+            No agent can take this work right now. Add or connect one on the Agents page, or wait
+            for a usage limit to reset.
+          </p>
+        )}
         <div className="neworder__grid">
           <AgentModelFields
             providers={providers}

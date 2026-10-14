@@ -14,7 +14,7 @@ export const startRun = (
   projectId: string,
   featureId: string,
   idempotencyKey: string,
-  settings?: StartSettingsValue,
+  settings?: Partial<StartSettingsValue>,
 ): Promise<Run> =>
   request(
     `/api/v1/projects/${encodeURIComponent(projectId)}/features/${encodeURIComponent(featureId)}/runs`,

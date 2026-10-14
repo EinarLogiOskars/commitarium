@@ -102,6 +102,8 @@ export interface Project {
   recovery_policy: RecoveryPolicy;
   // Absent on coordinators built before these fields existed; guard on read.
   dialogue_limits?: DialogueLimits;
+  /** Deprecated (ADR-027): a project no longer chooses agents or models; new
+   * projects have none and older ones' are not used for new work. */
   agent_providers?: AgentProviders;
   agent_models?: AgentModels;
   merge_policy?: MergePolicy;
@@ -120,13 +122,10 @@ export interface ProjectDeletionResult {
 }
 
 // POST /projects accepts these project defaults; each also has a PUT endpoint to
-// change it later. agent_models requires agent_providers; omit models when they
-// can't be resolved from the catalog so the backend applies its own defaults.
+// change it later. Agents and models are not project defaults (ADR-027).
 export interface CreateProjectInput {
   name: string;
   recovery_policy?: RecoveryPolicy;
-  agent_providers?: AgentProviders;
-  agent_models?: AgentModels;
   autonomy_policy?: AutonomyPolicy;
   merge_policy?: MergePolicy;
   dialogue_limits?: DialogueLimits;
@@ -268,8 +267,8 @@ export interface Feature {
   accepted_goal?: string;
   goal_accepted_at?: string;
   independent_acceptance_tests?: boolean;
-  // The settings it starts with: its project's defaults until a Start chose
-  // others. The run snapshots them.
+  // The settings it starts with. Agents and models are empty until it is
+  // created or started with a choice (ADR-027); the run snapshots them.
   agent_providers?: AgentProviders;
   agent_models?: AgentModels;
   autonomy_policy?: AutonomyPolicy;
@@ -295,12 +294,10 @@ export interface CreateFeatureInput {
   // "session" creates and starts a session (ADR-019); its title may be empty.
   kind?: WorkKind;
   description?: string;
-  // Optional per-order overrides. Each omitted field falls back to the project
-  // default; the run snapshots the effective values. (Backend handling lands
-  // with the per-order-overrides slice; the coordinator ignores these until.)
+  // Optional per-order settings. Agents and models are the user's choice
+  // (ADR-027); omitted, they are chosen at Start. agent_models needs
+  // agent_providers; the coordinator checks each model against its agent.
   agent_providers?: AgentProviders;
-  // Exact model IDs per role. Complete object when present. Backend validates
-  // the resolved provider/model pair.
   agent_models?: AgentModels;
   autonomy_policy?: AutonomyPolicy;
   merge_policy?: MergePolicy;

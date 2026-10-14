@@ -164,10 +164,12 @@ export const deleteFeature = (
 
 // --- Sessions (ADR-019): work orders of kind "session" ---
 
-/** Create a session. It starts at once: its branch and pull request open and it
- * waits for the first message. */
-export const createSession = (projectId: string): Promise<Feature> =>
-  createFeature(projectId, { title: "", kind: "session" });
+/** Create a session on the chosen agent and model (ADR-027). It starts at
+ * once: its branch and pull request open and it waits for the first message. */
+export const createSession = (
+  projectId: string,
+  choice: Pick<CreateFeatureInput, "agent_providers" | "agent_models">,
+): Promise<Feature> => createFeature(projectId, { title: "", kind: "session", ...choice });
 
 /** Start the session's next agent turn. Refused with session_busy while the
  * agent is still working. */
