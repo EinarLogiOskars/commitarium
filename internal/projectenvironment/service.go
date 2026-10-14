@@ -58,9 +58,15 @@ func (service *Service) Approve(ctx context.Context, id string) (Request, bool, 
 	return service.store.Transition(ctx, id, StatusRequested, StatusApproved, map[string]string{}, "", service.now())
 }
 
+// DefaultRejectionReason is recorded when the user declines without saying why.
+const DefaultRejectionReason = "The user declined these packages."
+
 func (service *Service) Reject(ctx context.Context, id, reason string) (Request, bool, error) {
 	reason = strings.TrimSpace(reason)
-	if reason == "" || len(reason) > 1000 {
+	if reason == "" {
+		reason = DefaultRejectionReason
+	}
+	if len(reason) > 1000 {
 		return Request{}, false, ErrInvalid
 	}
 	request, err := service.Get(ctx, id)

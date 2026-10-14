@@ -2,6 +2,7 @@ package worker
 
 import (
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -262,5 +263,17 @@ func TestResultValidate(t *testing.T) {
 		if err := result.Validate(); !errors.Is(err, ErrInvalidResult) {
 			t.Errorf("expected error %v for %+v, got %v", ErrInvalidResult, result, err)
 		}
+	}
+}
+
+func TestEnvironmentRequestRefusesContainerTooling(t *testing.T) {
+	for _, name := range []string{"docker.io", "docker-compose-v2", "docker-ce", "containerd", "podman"} {
+		err := EnvironmentRequest{SystemPackages: []string{"libvips-dev", name}, Reason: "Run integration checks."}.Validate()
+		if err == nil || !strings.Contains(err.Error(), "container tooling") {
+			t.Fatalf("%s: err = %v, want a container-tooling refusal", name, err)
+		}
+	}
+	if err := (EnvironmentRequest{SystemPackages: []string{"libnss3", "fontconfig"}, Reason: "Browser checks."}).Validate(); err != nil {
+		t.Fatalf("ordinary packages refused: %v", err)
 	}
 }

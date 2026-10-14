@@ -108,3 +108,16 @@ func TestReadyProvisioningRequestCanReplay(t *testing.T) {
 		t.Fatalf("replay ready provisioning = %#v, %t, %v", replayed, changed, err)
 	}
 }
+
+func TestRejectingWithoutAReasonRecordsTheDefault(t *testing.T) {
+	store := &memoryStore{requests: map[string]Request{}}
+	service := NewService(store)
+	request, _, err := service.Request(t.Context(), newTestRequest("unexplained"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, changed, err := service.Reject(t.Context(), request.ID, "  ")
+	if err != nil || !changed || request.Status != StatusRejected || request.Error != DefaultRejectionReason {
+		t.Fatalf("Reject without a reason = %#v, %t, %v", request, changed, err)
+	}
+}
