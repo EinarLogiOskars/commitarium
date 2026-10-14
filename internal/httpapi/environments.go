@@ -58,9 +58,12 @@ func (api *API) rejectEnvironmentRequestHandler(w http.ResponseWriter, r *http.R
 		api.writeEnvironmentError(w, err)
 		return
 	}
+	message := "The user declined the requested system packages. Continue in the existing managed environment, choose an alternative that does not require them, or explain why the work remains blocked."
+	if request.Error != "" && request.Error != projectenvironment.DefaultRejectionReason {
+		message += " The user's reason: " + request.Error
+	}
 	if _, err := api.controller.SendCommand(r.Context(), request.SessionID, worker.Command{
-		ID: request.ID + ":rejected", Type: worker.CommandMessage,
-		Message: "The user declined the requested system packages. Continue in the existing managed environment, choose an alternative that does not require them, or explain why the work remains blocked.",
+		ID: request.ID + ":rejected", Type: worker.CommandMessage, Message: message,
 	}); err != nil {
 		log.Printf("resume run after environment rejection %q: %v", request.ID, err)
 		writeError(w, http.StatusConflict, "environment_resume_failed", "the request was rejected but the agent conversation could not resume yet; retry this operation")

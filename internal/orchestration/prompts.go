@@ -190,7 +190,10 @@ const implementationToolchainInstructions = "If an additional supported language
 	"do not run apt. Return action 'environment_required', leave commit_id empty and pull_request_number zero, " +
 	"and provide only the Debian package names in system_packages plus a concise environment_reason. Commitarium " +
 	"will ask the user and provision the same package set for lead, reviewer, and isolated validation. Do not use " +
-	"mise use, floating versions such as latest, or repository mise configuration to provision tools. "
+	"mise use, floating versions such as latest, or repository mise configuration to provision tools. " +
+	"You have no Docker or other container runtime and cannot get one: never request docker or container packages. " +
+	"Verify with the project's tests and tools directly; Commitarium runs the app's containers itself in its " +
+	"preview and isolated validation. "
 
 const implementationChecklistInstructions = "The coordinator owns a structured commit-sized checklist. " +
 	"Run 'commitarium-artifact plan show' before changing files. Work through its steps in order without " +
