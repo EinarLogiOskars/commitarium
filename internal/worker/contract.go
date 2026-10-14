@@ -642,9 +642,31 @@ func (request EnvironmentRequest) Validate() error {
 		if _, exists := seen[name]; exists {
 			return fmt.Errorf("environment package %q is duplicated", name)
 		}
+		if containerTooling(name) {
+			return fmt.Errorf(
+				"environment package %q is container tooling: agents never get Docker or a container runtime, "+
+					"and Commitarium runs the app's containers in its own preview and validation; verify without them",
+				name,
+			)
+		}
 		seen[name] = struct{}{}
 	}
 	return nil
+}
+
+// containerTooling reports a package that would give an agent a container
+// runtime or client. Workers have no Docker socket by design (ADR-010), so
+// such a request could never help and must not reach the user.
+func containerTooling(name string) bool {
+	if strings.HasPrefix(name, "docker") {
+		return true
+	}
+	switch name {
+	case "containerd", "containerd.io", "podman", "podman-compose", "buildah", "skopeo",
+		"runc", "crun", "cri-o", "nerdctl", "lxc", "lxd":
+		return true
+	}
+	return false
 }
 
 func (publication ImplementationPublication) Validate() error {
