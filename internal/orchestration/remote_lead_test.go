@@ -1999,6 +1999,163 @@ func TestRemotePlanningLoopUsesRunLimitSnapshot(t *testing.T) {
 	}
 }
 
+// A pause during the planning discussion stops the run after the lead's
+// response. Continue planning then starts the reviewer's answer to it, in the
+// reviewer's conversation, and the discussion goes on as a normal round.
+func TestContinuePlanningAfterAPausedLeadResponseStartsTheReviewer(t *testing.T) {
+	for _, policy := range []project.AutonomyPolicy{
+		project.AutonomyPolicyReviewEachPhase, project.AutonomyPolicyRunToCompletion,
+	} {
+		t.Run(string(policy), func(t *testing.T) {
+			testContinuePlanningAfterAPausedLeadResponse(t, policy)
+		})
+	}
+}
+
+func testContinuePlanningAfterAPausedLeadResponse(t *testing.T, policy project.AutonomyPolicy) {
+	db, executions, storedProject, storedFeature := newRemoteLeadExecution(t)
+	projects := database.NewProjectStore(db)
+	limits := project.DialogueLimits{PlanningRounds: 3, ImplementationReviewRounds: 4}
+	storedProject, err := projects.UpdateDialogueLimits(t.Context(), storedProject.ID, limits)
+	if err != nil {
+		t.Fatalf("set project dialogue limits: %v", err)
+	}
+	if storedProject, err = projects.UpdateAutonomyPolicy(t.Context(), storedProject.ID, policy); err != nil {
+		t.Fatalf("set autonomy policy: %v", err)
+	}
+	runID := "run_continue_after_lead"
+	leadID, reviewerID := remoteLeadSessionID(runID), remoteReviewerSessionID(runID)
+	stub := newConversationalRemoteLeadWorker(runID, storedProject.ID, storedFeature.ID)
+	addCompletedPlanningAttempt(stub, runID, storedProject.ID, storedFeature.ID)
+	addCompletedReviewerPlanningAttempt(stub, runID, storedProject.ID, storedFeature.ID)
+	for turn := 2; turn <= limits.PlanningRounds; turn++ {
+		addCompletedPlanningCorrectionAttempt(
+			stub, leadID, storedProject.ID, storedFeature.ID,
+			workerhttp.RoleLead, "codex-thread-test", turn,
+			workerhttp.EventMessage, fmt.Sprintf("Lead planning response %d", turn),
+		)
+		addCompletedPlanningCorrectionAttempt(
+			stub, reviewerID, storedProject.ID, storedFeature.ID,
+			workerhttp.RoleReviewer, "codex-review-thread-test", turn,
+			workerhttp.EventMessage, fmt.Sprintf("Reviewer planning response %d", turn),
+		)
+	}
+	workflowService := workflow.NewService(database.NewWorkflowStore(db))
+	checkoutAt := time.Date(2026, time.September, 9, 23, 0, 0, 0, time.UTC)
+	prAt := checkoutAt.Add(time.Second)
+	workspaceStub := &remoteLeadWorkspaceStub{prepared: workspace.Workspace{
+		ID: "wsp_managed_feature", ProjectID: storedProject.ID, FeatureID: storedFeature.ID,
+		RepositoryOwner: "commitarium", RepositoryName: "continue-after-lead-test",
+		BaseBranch: "main", Branch: "commitarium/" + storedFeature.ID,
+		BaseCommitID: "0123456789abcdef0123456789abcdef01234567",
+		Status:       workspace.StatusBranchReady, CheckoutRelativePath: "wsp_managed_feature",
+		CheckoutCreatedAt: &checkoutAt, PullRequestNumber: 8,
+		PullRequestURL: "http://forgejo.test/pulls/8", PullRequestRecordedAt: &prAt,
+	}}
+	starter, err := NewRemoteLeadStarter(RemoteLeadConfig{
+		Executions: executions, Features: database.NewFeatureStore(db), Goals: workflowService,
+		Planning: workflowService, Briefs: workflowService, Workspaces: workspaceStub, Worker: stub,
+		Pump:     &conversationalRemoteLeadPump{executions: executions, worker: stub},
+		Lifetime: t.Context(),
+	})
+	if err != nil {
+		t.Fatalf("create planning starter: %v", err)
+	}
+	// The user pauses while the lead writes its second planning response.
+	leadResponse := workerhttp.AttemptReference{SessionID: leadID, AttemptID: planningTurnAttemptID(leadID, 2)}
+	stub.onPut = func(reference workerhttp.AttemptReference) {
+		if reference == leadResponse {
+			if _, _, err := starter.Pause(context.WithoutCancel(t.Context()), runID, "pause-during-lead"); err != nil {
+				t.Errorf("pause during the lead's response: %v", err)
+			}
+		}
+	}
+	readyRemoteLeadFeature(t, workflowService, storedFeature.ID)
+	if _, _, err := starter.Start(
+		t.Context(), runID, storedProject.ID, storedFeature.ID, storedFeature.Title,
+		storedProject.DialogueLimits, storedProject.AgentProviders,
+		storedProject.MergePolicy, storedProject.AutonomyPolicy,
+	); err != nil {
+		t.Fatalf("start lead: %v", err)
+	}
+	if policy != project.AutonomyPolicyRunToCompletion {
+		waitForRemoteLeadStatus(t, executions, runID, execution.RunStatusWaitingForUser)
+		waitForRemoteLeadIdle(t, starter, runID)
+		if _, _, err := starter.StartPlanningReview(t.Context(), runID, "start-reviewer"); err != nil {
+			t.Fatalf("start reviewer: %v", err)
+		}
+		waitForRemoteLeadStatus(t, executions, runID, execution.RunStatusWaitingForUser)
+		waitForRemoteLeadIdle(t, starter, runID)
+		if _, admitted, err := starter.StartPlanningRound(t.Context(), runID, "start-loop"); err != nil || !admitted {
+			t.Fatalf("start planning loop: admitted=%t err=%v", admitted, err)
+		}
+	}
+
+	// The run stops after the lead's response, with the lead speaking last.
+	deadline := time.Now().Add(2 * time.Second)
+	var run execution.Run
+	for {
+		run, err = executions.GetRun(t.Context(), runID)
+		if err == nil && run.Status == execution.RunStatusWaitingForUser && run.Paused {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("run did not stop at the pause: run=%+v err=%v", run, err)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	waitForRemoteLeadIdle(t, starter, runID)
+	messages, err := executions.PlanningMessagesForRun(t.Context(), runID)
+	if err != nil || len(messages) != 3 || messages[2].Role != worker.RoleLead {
+		t.Fatalf("expected the lead to speak last: len=%d err=%v messages=%+v", len(messages), err, messages)
+	}
+	stub.mu.Lock()
+	requestsBefore := len(stub.putRequests)
+	stub.mu.Unlock()
+	if _, _, err := starter.Resume(t.Context(), runID, "resume-after-lead"); err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+	if policy != project.AutonomyPolicyRunToCompletion {
+		run, err = executions.GetRun(t.Context(), runID)
+		if err != nil || run.Paused || run.Status != execution.RunStatusWaitingForUser ||
+			run.WaitKind != execution.RunWaitKindPhaseCheckpoint {
+			t.Fatalf("expected a resumed phase checkpoint: run=%+v err=%v", run, err)
+		}
+		if _, admitted, err := starter.StartPlanningRound(t.Context(), runID, "continue-after-lead"); err != nil || !admitted {
+			t.Fatalf("continue planning after the lead spoke last: admitted=%t err=%v", admitted, err)
+		}
+	}
+
+	// The reviewer answers in its own conversation, then the lead, until the cap.
+	waitForRemoteLeadStatus(t, executions, runID, execution.RunStatusWaitingForUser)
+	stub.mu.Lock()
+	requests := append([]workerhttp.PutAttemptRequest(nil), stub.putRequests...)
+	stub.mu.Unlock()
+	if len(requests) != requestsBefore+3 {
+		t.Fatalf("expected the reviewer, lead and reviewer turns after continuing, got %d new requests", len(requests)-requestsBefore)
+	}
+	next := requests[requestsBefore]
+	if next.Assignment.Role != workerhttp.RoleReviewer || next.Mode != workerhttp.AttemptModeResume ||
+		next.ProviderSessionID != "codex-review-thread-test" ||
+		!strings.Contains(next.Instructions, "Lead planning response 2") {
+		t.Fatalf("expected the reviewer to answer the lead in its conversation: %+v", next)
+	}
+	if requests[requestsBefore+1].Assignment.Role != workerhttp.RoleLead ||
+		requests[requestsBefore+2].Assignment.Role != workerhttp.RoleReviewer {
+		t.Fatalf("the discussion did not continue in turn: %+v", requests[requestsBefore:])
+	}
+	messages, err = executions.PlanningMessagesForRun(t.Context(), runID)
+	if err != nil || len(messages) != limits.PlanningRounds*2 ||
+		messages[len(messages)-1].Role != worker.RoleReviewer {
+		t.Fatalf("unexpected planning history: len=%d err=%v messages=%+v", len(messages), err, messages)
+	}
+	run, err = executions.GetRun(t.Context(), runID)
+	if err != nil || run.WaitKind != execution.RunWaitKindRoundCap ||
+		run.Reason != planningLimitReason(limits.PlanningRounds) {
+		t.Fatalf("expected the planning round cap: run=%+v err=%v", run, err)
+	}
+}
+
 func TestRemoteLeadRecoveryReattachesToPlanningAttempt(t *testing.T) {
 	db, executions, storedProject, storedFeature := newRemoteLeadExecution(t)
 	runID := "run_remote_planning_recovery"

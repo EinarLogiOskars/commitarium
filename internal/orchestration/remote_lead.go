@@ -1875,7 +1875,9 @@ func (starter *RemoteLeadStarter) advanceWaitingRun(ctx context.Context, runID s
 		} else if err != nil {
 			return err
 		}
-		if len(messages) == 2 && messages[len(messages)-1].Role == worker.RoleReviewer {
+		// The discussion continues with whoever did not speak last; a pause
+		// can stop it after either agent's response.
+		if len(messages) >= 2 && messages[len(messages)-1].Event.Type != worker.EventPlanSubmitted {
 			_, _, err = starter.StartPlanningRound(ctx, run.ID, run.ID+":autonomy:planning-loop")
 			return err
 		}
@@ -2272,7 +2274,7 @@ func (starter *RemoteLeadStarter) recoverIdlePlanningRun(
 	var request remoteLeadRequest
 	var admitted bool
 	if last.Role == worker.RoleLead {
-		request, admitted, err = starter.startReviewerResponse(ctx, run, storedFeature, messages)
+		request, admitted, err = starter.startReviewerResponse(ctx, run, storedFeature, messages, true)
 	} else if last.Role == worker.RoleReviewer {
 		request, admitted, err = starter.startLeadResponse(ctx, run, storedFeature, messages, true)
 	} else {
@@ -3169,7 +3171,11 @@ func (starter *RemoteLeadStarter) StartPlanningRound(
 		go starter.launchPlanPublication(run.ID, submitted)
 		return running, true, nil
 	}
-	if len(messages) < 2 || messages[len(messages)-1].Role != worker.RoleReviewer {
+	// The planning discussion continues with whoever did not speak last: the
+	// lead answers the reviewer, and the reviewer answers the lead's response
+	// (a pause between the two leaves the run waiting on the reviewer's turn).
+	if len(messages) < 2 || (messages[len(messages)-1].Role != worker.RoleReviewer &&
+		messages[len(messages)-1].Role != worker.RoleLead) {
 		if claimed {
 			starter.release(run.ID)
 		}
@@ -3178,7 +3184,13 @@ func (starter *RemoteLeadStarter) StartPlanningRound(
 	if !claimed && !starter.claim(run.ID) {
 		return execution.Run{}, false, ErrPlanningNotAllowed
 	}
-	request, admitted, err := starter.startLeadResponse(ctx, run, storedFeature, messages, false)
+	var request remoteLeadRequest
+	var admitted bool
+	if messages[len(messages)-1].Role == worker.RoleLead {
+		request, admitted, err = starter.startReviewerResponse(ctx, run, storedFeature, messages, false)
+	} else {
+		request, admitted, err = starter.startLeadResponse(ctx, run, storedFeature, messages, false)
+	}
 	if err != nil {
 		starter.release(run.ID)
 		if errors.Is(err, execution.ErrStateConflict) ||
@@ -3688,6 +3700,7 @@ func (starter *RemoteLeadStarter) startReviewerResponse(
 	run execution.Run,
 	storedFeature feature.Feature,
 	messages []execution.PlanningMessage,
+	chained bool,
 ) (remoteLeadRequest, bool, error) {
 	if len(messages) < 3 || planningRoundLimitReached(run.PlanningRoundLimit, len(messages)) ||
 		messages[len(messages)-1].Role != worker.RoleLead ||
@@ -3728,9 +3741,16 @@ func (starter *RemoteLeadStarter) startReviewerResponse(
 	if err != nil {
 		return remoteLeadRequest{}, false, err
 	}
-	admitted, err := starter.executions.BeginChainedTurn(
-		ctx, reviewer.ID, checkpoint, nextAttemptID,
-		"The reviewer is evaluating the lead's latest planning response.",
+	const evaluatingReason = "The reviewer is evaluating the lead's latest planning response."
+	if chained {
+		admitted, err := starter.executions.BeginChainedTurn(
+			ctx, reviewer.ID, checkpoint, nextAttemptID, evaluatingReason,
+		)
+		return request, admitted, err
+	}
+	// A user's Continue planning starts the turn from a waiting run.
+	admitted, err := starter.executions.BeginAutonomousTurn(
+		ctx, reviewer.ID, checkpoint, nextAttemptID, feature.StatePlanning, evaluatingReason,
 	)
 	return request, admitted, err
 }
@@ -4911,14 +4931,9 @@ func (starter *RemoteLeadStarter) finish(
 			}
 			startNext := starter.startReviewerResponse
 			if run.Steps.SkipReviewer {
-				startNext = func(
-					ctx context.Context, run execution.Run, storedFeature feature.Feature,
-					messages []execution.PlanningMessage,
-				) (remoteLeadRequest, bool, error) {
-					return starter.startLeadResponse(ctx, run, storedFeature, messages, true)
-				}
+				startNext = starter.startLeadResponse
 			}
-			next, admitted, startErr := startNext(ctx, run, storedFeature, messages)
+			next, admitted, startErr := startNext(ctx, run, storedFeature, messages, true)
 			if startErr != nil {
 				err = startErr
 				break
