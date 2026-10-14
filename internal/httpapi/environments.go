@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -16,6 +17,12 @@ type environmentDecisionRequest struct {
 }
 type environmentCompletionRequest struct {
 	ResolvedPackages map[string]string `json:"resolved_packages"`
+}
+
+// environmentRejectionResumer gets the lead going again after a rejection,
+// even when its conversation cannot take the message as a reply.
+type environmentRejectionResumer interface {
+	ResumeAfterEnvironmentRejection(context.Context, projectenvironment.Request, string) error
 }
 
 func (api *API) listEnvironmentRequestsHandler(w http.ResponseWriter, r *http.Request) {
@@ -62,9 +69,14 @@ func (api *API) rejectEnvironmentRequestHandler(w http.ResponseWriter, r *http.R
 	if request.Error != "" && request.Error != projectenvironment.DefaultRejectionReason {
 		message += " The user's reason: " + request.Error
 	}
-	if _, err := api.controller.SendCommand(r.Context(), request.SessionID, worker.Command{
-		ID: request.ID + ":rejected", Type: worker.CommandMessage, Message: message,
-	}); err != nil {
+	if resumer, ok := api.controller.(environmentRejectionResumer); ok {
+		err = resumer.ResumeAfterEnvironmentRejection(r.Context(), request, message)
+	} else {
+		_, err = api.controller.SendCommand(r.Context(), request.SessionID, worker.Command{
+			ID: request.ID + ":rejected", Type: worker.CommandMessage, Message: message,
+		})
+	}
+	if err != nil {
 		log.Printf("resume run after environment rejection %q: %v", request.ID, err)
 		writeError(w, http.StatusConflict, "environment_resume_failed", "the request was rejected but the agent conversation could not resume yet; retry this operation")
 		return
