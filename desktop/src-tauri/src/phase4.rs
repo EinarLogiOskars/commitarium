@@ -8,6 +8,7 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
+use std::time::{Duration, Instant};
 use tauri::State;
 
 use crate::agents::Provider;
@@ -39,6 +40,55 @@ if [ -n "${COMMITARIUM_TEST_COMMIT:-}" ]; then
 fi
 # Commands run from the repository root, as they do for the agents.
 cd /workspace
+# The project's dependencies, installed while the container is still online:
+# the agents install theirs outside the repository, so a copy has none.
+cache=/workspace/.commitarium-cache
+export npm_config_cache="$cache/npm" GOMODCACHE="$cache/gomod" GOCACHE="$cache/gobuild" GOTOOLCHAIN=local
+install_dependencies() {
+    if ls requirements*.txt pyproject.toml setup.py >/dev/null 2>&1; then
+        python3 -m venv /workspace/.commitarium-venv
+        for file in requirements*.txt; do
+            [ -f "$file" ] && /workspace/.commitarium-venv/bin/pip install --quiet --disable-pip-version-check -r "$file"
+        done
+        if [ -f pyproject.toml ] || [ -f setup.py ]; then
+            /workspace/.commitarium-venv/bin/pip install --quiet --disable-pip-version-check -e '.[test,tests,dev]' ||
+                /workspace/.commitarium-venv/bin/pip install --quiet --disable-pip-version-check -e . ||
+                echo "(the package itself could not be installed; its requirements are)"
+        fi
+    fi
+    if [ -f package.json ] && [ ! -d node_modules ]; then
+        if [ -f pnpm-lock.yaml ]; then pnpm install --frozen-lockfile || corepack pnpm install --frozen-lockfile
+        elif [ -f yarn.lock ]; then yarn install --frozen-lockfile || corepack yarn install --frozen-lockfile
+        elif [ -f package-lock.json ]; then npm ci
+        else npm install
+        fi
+    fi
+    if [ -f go.mod ]; then go mod download; fi
+}
+set +e
+install_dependencies > /tmp/install.log 2>&1
+installed=$?
+set -e
+if [ "$installed" -ne 0 ]; then
+    tail -c 4000 /tmp/install.log > /output/install-error
+    exit 0
+fi
+if [ -d /workspace/.commitarium-venv ]; then
+    export VIRTUAL_ENV=/workspace/.commitarium-venv PATH="/workspace/.commitarium-venv/bin:$PATH"
+fi
+# The desktop takes the container offline, then says so; the tests run only
+# once no route out is left.
+: > /output/installed
+waited=0
+while [ ! -f /output/offline ]; do
+    waited=$((waited+1))
+    if [ "$waited" -gt 600 ]; then echo "the desktop never took validation offline" >&2; exit 3; fi
+    sleep 0.2
+done
+if awk 'NR > 1 && $2 == "00000000"' /proc/net/route | grep -q .; then
+    echo "validation is still online; refusing to run the tests" >&2
+    exit 4
+fi
 results='[]'
 printf '%s\n' "$results" > /output/results.json
 count=$(jq '.commands | length' /spec/job.json)
@@ -47,7 +97,9 @@ while [ "$index" -lt "$count" ]; do
     command=$(jq -r ".commands[$index]" /spec/job.json)
     started=$(date +%s%3N)
     set +e
-    timeout 30m /bin/sh -lc "$command" > /tmp/validation-command.log 2>&1
+    # Not a login shell: /etc/profile would reset PATH to the image's own
+    # tools, past the project's toolchain and its dependencies.
+    timeout 30m /bin/sh -c "$command" > /tmp/validation-command.log 2>&1
     exit_code=$?
     set -e
     finished=$(date +%s%3N)
@@ -739,9 +791,11 @@ fn execute_validation(job: &ValidationJob) -> Result<Vec<ValidationCommandResult
     command
         .args([
             "run",
-            "--rm",
+            "--detach",
+            // Online only to install the project's dependencies: the desktop
+            // disconnects it before any test runs (wait_offline).
             "--network",
-            "none",
+            VALIDATION_NETWORK,
             "--cpus",
             "2",
             "--memory",
@@ -837,14 +891,191 @@ fn execute_validation(job: &ValidationJob) -> Result<Vec<ValidationCommandResult
         .map_err(|e| format!("launch isolated validation: {e}"))?;
     if !output.status.success() {
         return Err(format!(
-            "isolated validation container failed: {}",
+            "isolated validation container failed to start: {}",
             String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    let container = ValidationContainer::new(&String::from_utf8_lossy(&output.stdout))?;
+    install_then_go_offline(&container, output_dir.path())?;
+    let exit_code = container.wait()?;
+    if exit_code != 0 {
+        return Err(format!(
+            "isolated validation container failed: {}",
+            container.log_tail()
         ));
     }
     let contents = fs::read(output_dir.path().join("results.json"))
         .map_err(|e| format!("read isolated validation results: {e}"))?;
-    serde_json::from_slice(&contents)
-        .map_err(|e| format!("decode isolated validation results: {e}"))
+    let results: Vec<ValidationCommandResult> = serde_json::from_slice(&contents)
+        .map_err(|e| format!("decode isolated validation results: {e}"))?;
+    if let Some(missing) = missing_dependency(&results, &workspace) {
+        return Err(format!(
+            "Commitarium could not run the tests: the project's environment lacks {missing}"
+        ));
+    }
+    Ok(results)
+}
+
+/// The Docker network a validation run starts on, to install dependencies.
+const VALIDATION_NETWORK: &str = "bridge";
+/// How long installing the project's dependencies may take.
+const INSTALL_TIMEOUT: Duration = Duration::from_secs(20 * 60);
+
+/// A detached validation container, removed when dropped.
+struct ValidationContainer {
+    id: String,
+}
+
+impl ValidationContainer {
+    fn new(stdout: &str) -> Result<Self, String> {
+        let id = stdout.trim().to_string();
+        if id.is_empty() || !id.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return Err("isolated validation container has no valid ID".into());
+        }
+        Ok(Self { id })
+    }
+
+    fn running(&self) -> bool {
+        docker::docker_command()
+            .args(["inspect", "--format", "{{.State.Running}}", &self.id])
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim() == "true")
+            .unwrap_or(false)
+    }
+
+    fn wait(&self) -> Result<i32, String> {
+        let output = docker::docker_command()
+            .args(["wait", &self.id])
+            .output()
+            .map_err(|e| format!("wait for isolated validation: {e}"))?;
+        String::from_utf8_lossy(&output.stdout)
+            .trim()
+            .parse()
+            .map_err(|_| {
+                format!(
+                    "isolated validation ended without an exit code: {}",
+                    self.log_tail()
+                )
+            })
+    }
+
+    fn log_tail(&self) -> String {
+        docker::docker_command()
+            .args(["logs", "--tail", "40", &self.id])
+            .output()
+            .map(|o| {
+                let mut text = String::from_utf8_lossy(&o.stdout).to_string();
+                text.push_str(&String::from_utf8_lossy(&o.stderr));
+                text.trim().to_string()
+            })
+            .unwrap_or_default()
+    }
+}
+
+impl Drop for ValidationContainer {
+    fn drop(&mut self) {
+        let _ = docker::docker_command()
+            .args(["rm", "--force", &self.id])
+            .output();
+    }
+}
+
+/// Waits while the container installs the project's dependencies, then
+/// takes it offline and tells it so; it runs no test while a route out is
+/// left. An install that fails ends the run: the tests could not run.
+fn install_then_go_offline(container: &ValidationContainer, output: &Path) -> Result<(), String> {
+    let started = Instant::now();
+    loop {
+        if let Ok(log) = fs::read_to_string(output.join("install-error")) {
+            return Err(format!(
+                "Commitarium could not install the project's dependencies to run the tests:\n{}",
+                log.trim()
+            ));
+        }
+        if output.join("installed").exists() {
+            break;
+        }
+        if !container.running() {
+            return Err(format!(
+                "isolated validation stopped before its tests: {}",
+                container.log_tail()
+            ));
+        }
+        if started.elapsed() > INSTALL_TIMEOUT {
+            return Err("installing the project's dependencies took longer than 20 minutes".into());
+        }
+        std::thread::sleep(Duration::from_millis(500));
+    }
+    let disconnected = docker::docker_command()
+        .args([
+            "network",
+            "disconnect",
+            "--force",
+            VALIDATION_NETWORK,
+            &container.id,
+        ])
+        .output()
+        .map_err(|e| format!("take isolated validation offline: {e}"))?;
+    if !disconnected.status.success() {
+        return Err(format!(
+            "could not take isolated validation offline: {}",
+            String::from_utf8_lossy(&disconnected.stderr).trim()
+        ));
+    }
+    fs::write(output.join("offline"), b"")
+        .map_err(|e| format!("tell isolated validation it is offline: {e}"))
+}
+
+/// What the environment lacks when every command failed on something from
+/// outside the project: a Python module, Node package, or command the
+/// repository does not hold. A missing module of the project itself is a
+/// real failure, never this.
+fn missing_dependency(results: &[ValidationCommandResult], repository: &Path) -> Option<String> {
+    if results.is_empty() || results.iter().any(|r| r.exit_code == 0) {
+        return None;
+    }
+    let mut first = None;
+    for result in results {
+        let missing = result.output.lines().find_map(missing_name)?;
+        let top = missing
+            .split(['.', '/'])
+            .find(|part| !part.is_empty() && *part != "@")
+            .unwrap_or(&missing);
+        let inside = repository.join(top).exists()
+            || repository.join(format!("{top}.py")).exists()
+            || missing.starts_with('.');
+        if inside {
+            return None;
+        }
+        first.get_or_insert(missing);
+    }
+    first
+}
+
+/// The module, package, or command a line of output says is missing.
+fn missing_name(line: &str) -> Option<String> {
+    let quoted = |text: &str| -> Option<String> {
+        let text = text.trim();
+        let quote = text.chars().next().filter(|c| matches!(c, '\'' | '"'))?;
+        let rest = &text[1..];
+        Some(rest[..rest.find(quote)?].to_string())
+    };
+    if let Some((_, rest)) = line.split_once("No module named ") {
+        return quoted(rest).or_else(|| rest.split_whitespace().next().map(str::to_string));
+    }
+    if let Some((_, rest)) = line.split_once("Cannot find module ") {
+        return quoted(rest);
+    }
+    if let Some((_, rest)) = line.split_once("Cannot find package ") {
+        return quoted(rest);
+    }
+    if let Some(command) = line
+        .strip_suffix(": not found")
+        .or_else(|| line.strip_suffix(": command not found"))
+    {
+        return command.rsplit(": ").next().map(|c| c.trim().to_string());
+    }
+    None
 }
 
 fn managed_workspace(workspace_id: &str) -> Result<PathBuf, String> {
@@ -892,6 +1123,72 @@ fn bounded_error(error: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn failed(output: &str) -> ValidationCommandResult {
+        ValidationCommandResult {
+            command: "test".into(),
+            exit_code: 1,
+            output: output.into(),
+            duration_ms: 10,
+        }
+    }
+
+    #[test]
+    fn reads_what_is_missing_from_each_toolchain() {
+        assert_eq!(
+            missing_name("/usr/bin/python: No module named pytest").as_deref(),
+            Some("pytest")
+        );
+        assert_eq!(
+            missing_name("ModuleNotFoundError: No module named 'django.contrib'").as_deref(),
+            Some("django.contrib")
+        );
+        assert_eq!(
+            missing_name("Error: Cannot find module 'vitest'").as_deref(),
+            Some("vitest")
+        );
+        assert_eq!(
+            missing_name("/bin/sh: 1: pytest: not found").as_deref(),
+            Some("pytest")
+        );
+        assert_eq!(
+            missing_name("sh: cargo: command not found").as_deref(),
+            Some("cargo")
+        );
+        assert_eq!(missing_name("AssertionError: 2 != 3"), None);
+    }
+
+    #[test]
+    fn only_an_outside_dependency_missing_from_every_command_is_an_environment_failure() {
+        let repository = tempfile::tempdir().unwrap();
+        fs::create_dir(repository.path().join("core")).unwrap();
+        let pytest = [
+            failed("/usr/bin/python: No module named pytest"),
+            failed("No module named pytest"),
+        ];
+        assert_eq!(
+            missing_dependency(&pytest, repository.path()).as_deref(),
+            Some("pytest")
+        );
+        // The project's own module missing is the implementation's failure.
+        let own = [failed("ModuleNotFoundError: No module named 'core.setup'")];
+        assert_eq!(missing_dependency(&own, repository.path()), None);
+        let relative = [failed("Error: Cannot find module './setup'")];
+        assert_eq!(missing_dependency(&relative, repository.path()), None);
+        // One real result, or one ordinary failure, means the tests ran.
+        let mixed = [failed("No module named pytest"), failed("AssertionError")];
+        assert_eq!(missing_dependency(&mixed, repository.path()), None);
+        let mut passing = failed("ok");
+        passing.exit_code = 0;
+        assert_eq!(
+            missing_dependency(
+                &[failed("No module named pytest"), passing],
+                repository.path()
+            ),
+            None
+        );
+        assert_eq!(missing_dependency(&[], repository.path()), None);
+    }
 
     #[test]
     fn commands_run_from_the_repository_root() {

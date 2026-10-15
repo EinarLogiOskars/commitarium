@@ -66,7 +66,9 @@ export function AcceptanceTestsList({ doc }: { doc: AcceptanceTestsDocument }) {
           ? ` · against ${doc.implementation_commit_id.slice(0, 12)}`
           : ""}
         {doc.coordinator_commit_id
-          ? ` · Commitarium ran them against ${doc.coordinator_commit_id.slice(0, 12)}`
+          ? doc.coordinator_error
+            ? ` · Commitarium tried them against ${doc.coordinator_commit_id.slice(0, 12)}`
+            : ` · Commitarium ran them against ${doc.coordinator_commit_id.slice(0, 12)}`
           : ""}
       </p>
       <p className="muted note">
@@ -74,11 +76,30 @@ export function AcceptanceTestsList({ doc }: { doc: AcceptanceTestsDocument }) {
           ? "The reviewer is preparing these privately from the plan baseline — blind to the implementation. Review starts once they're ready."
           : "Run against the exact published commit as the first input to review — a result is review evidence, not an approval."}
       </p>
+      {doc.coordinator_error && <RunError error={doc.coordinator_error} />}
       <ol className="accept-tests__list">
         {doc.tests.map((t) => (
           <AcceptanceRow key={t.id} t={t} />
         ))}
       </ol>
     </>
+  );
+}
+
+// Why Commitarium could not run the tests: the reason first, what the
+// install printed behind a toggle.
+function RunError({ error }: { error: string }) {
+  const [reason, ...rest] = error.split("\n");
+  const detail = rest.join("\n").trim();
+  return (
+    <div className="banner banner--warn accept-tests__run-error">
+      <p>{reason}</p>
+      {detail && (
+        <details>
+          <summary>What happened</summary>
+          <pre>{detail}</pre>
+        </details>
+      )}
+    </div>
   );
 }

@@ -592,6 +592,10 @@ export interface AcceptanceTestsDocument {
   tests: AcceptanceTest[];
   // The commit Commitarium last ran the tests against itself.
   coordinator_commit_id?: string;
+  // Why Commitarium's own run could not run the tests (dependencies would
+  // not install, or the environment lacks one); its tests then have no
+  // coordinator_status.
+  coordinator_error?: string;
 }
 
 export interface GoalDraftDocument {
