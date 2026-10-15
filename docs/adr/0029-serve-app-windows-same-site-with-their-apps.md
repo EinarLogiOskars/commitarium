@@ -53,5 +53,12 @@ the building and failure screens.
 - A new Tauri command must be added to `lib.rs`, `build.rs`, and the
   `main-window` set (a test checks they agree), and to `app-page` only if the
   app window uses it.
+- Over plain http, WebKit drops cookies marked `Secure` (and so every
+  `SameSite=None` cookie), even on 127.0.0.1 and even with no frame; Chrome
+  makes an exception for loopback, so such an app works in a browser and not
+  here. Checked with WKWebView: `SameSite=Lax` and plain `SameSite=None`
+  cookies stick in the same-site frame, `Secure; SameSite=None` ones nowhere.
+  Agents are told to keep sign-in cookies on their framework's http defaults
+  (the preview conventions every lead gets, and the preview setup rules).
 - The workaround agents wrote into apps ("open the app in your browser to sign
   in") is no longer needed and can be removed from those apps.

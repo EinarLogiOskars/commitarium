@@ -34,7 +34,7 @@ const (
 
 // previewRules are the rules a preview's compose file must follow. They match
 // the desktop's preview validation.
-const previewRules = `- Put one compose file at the repository root (compose.yaml), with one service per part the app needs (for example frontend, API, database). Servers listen on 0.0.0.0.
+const previewRules = `- Put one compose file at the repository root (compose.yaml), with one service per part the app needs (for example frontend, API, database). Servers listen on 0.0.0.0. The app opens over plain http://127.0.0.1 in a WebKit window that frames it: keep sign-in cookies on the framework's defaults for http (SameSite=Lax, not Secure, no __Host- or __Secure- names).
 - Run the app for development with live reload: start dev servers that reload on change (for example Vite's dev server, uvicorn --reload, nodemon) and bind-mount the source folders they watch (for example ./frontend/src:/app/src). Do not mount over dependency folders such as node_modules.
 - Keep data in named volumes.
 - Bind mounts, build contexts, and Dockerfiles stay inside the repository. No privileged mode, host networking, added capabilities, devices, secrets, env_file, or external volumes or networks. Every environment variable has an explicit value.
