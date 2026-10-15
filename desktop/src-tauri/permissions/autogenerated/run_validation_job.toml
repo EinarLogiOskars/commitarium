@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-run-validation-job"
+description = "Enables the run_validation_job command without any pre-configured scope."
+commands.allow = ["run_validation_job"]
+
+[[permission]]
+identifier = "deny-run-validation-job"
+description = "Denies the run_validation_job command without any pre-configured scope."
+commands.deny = ["run_validation_job"]

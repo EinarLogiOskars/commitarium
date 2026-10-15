@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-prune-session-previews"
+description = "Enables the prune_session_previews command without any pre-configured scope."
+commands.allow = ["prune_session_previews"]
+
+[[permission]]
+identifier = "deny-prune-session-previews"
+description = "Denies the prune_session_previews command without any pre-configured scope."
+commands.deny = ["prune_session_previews"]

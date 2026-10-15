@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-preview-upstream-branch"
+description = "Enables the preview_upstream_branch command without any pre-configured scope."
+commands.allow = ["preview_upstream_branch"]
+
+[[permission]]
+identifier = "deny-preview-upstream-branch"
+description = "Denies the preview_upstream_branch command without any pre-configured scope."
+commands.deny = ["preview_upstream_branch"]

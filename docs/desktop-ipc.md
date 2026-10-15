@@ -14,6 +14,15 @@ This is the Tauri `invoke` command surface plus emitted events. It is separate
 from the coordinator HTTP API ([`coordinator-api.md`](coordinator-api.md)),
 which the frontend reaches directly over loopback.
 
+**Who may call what.** The app manifest in `src-tauri/build.rs` gives every
+command an `allow-` permission, and `src-tauri/permissions/windows.toml`
+groups them: the main window (`capabilities/default.json`) gets the
+`main-window` set, every command; an app's window gets only the `app-page`
+set (its preview, agent sign-in, `stack_up`), granted at runtime to the exact
+`http://127.0.0.1:<port>` origin its page is served from (ADR-029). A new
+command goes in `lib.rs`, `build.rs`, and `main-window`; a test fails until
+all three agree.
+
 Phase 4 keeps the same ownership split: the coordinator owns requests and
 results, Tauri performs fixed Docker operations, and the renderer only chooses
 approve/reject/run and displays progress. See ADR-010.

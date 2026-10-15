@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-disconnect-profile"
+description = "Enables the disconnect_profile command without any pre-configured scope."
+commands.allow = ["disconnect_profile"]
+
+[[permission]]
+identifier = "deny-disconnect-profile"
+description = "Denies the disconnect_profile command without any pre-configured scope."
+commands.deny = ["disconnect_profile"]

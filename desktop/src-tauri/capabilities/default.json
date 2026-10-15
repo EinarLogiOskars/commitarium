@@ -1,16 +1,23 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Capability for the main window and the apps' windows",
-  "windows": ["main", "app-*"],
+  "description": "Capability for the main window; the apps' windows get theirs at runtime (app_pages.rs)",
+  "windows": [
+    "main"
+  ],
   "permissions": [
+    "main-window",
     "core:default",
     "opener:default",
     "dialog:allow-open",
     "notification:default",
     {
       "identifier": "http:default",
-      "allow": [{ "url": "http://127.0.0.1:8080/*" }],
+      "allow": [
+        {
+          "url": "http://127.0.0.1:8080/*"
+        }
+      ],
       "deny": []
     }
   ]

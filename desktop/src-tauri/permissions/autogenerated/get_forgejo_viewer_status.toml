@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-get-forgejo-viewer-status"
+description = "Enables the get_forgejo_viewer_status command without any pre-configured scope."
+commands.allow = ["get_forgejo_viewer_status"]
+
+[[permission]]
+identifier = "deny-get-forgejo-viewer-status"
+description = "Denies the get_forgejo_viewer_status command without any pre-configured scope."
+commands.deny = ["get_forgejo_viewer_status"]

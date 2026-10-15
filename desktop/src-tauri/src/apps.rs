@@ -1,9 +1,12 @@
 //! Apps (APPS_PLAN.md): a project the user uses as an app runs in its own
 //! window. The window loads Commitarium's own page, told which app it shows;
 //! that page frames the running app, so the app's code never reaches
-//! Commitarium.
+//! Commitarium. The page is served from 127.0.0.1, same-site with the app,
+//! so the app's sign-in works (app_pages.rs, ADR-029).
 
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
+
+use crate::app_pages::AppPages;
 
 /// A window label for an app: `app-` and the project ID, which is already
 /// limited to letters, digits, and underscores.
@@ -31,7 +34,11 @@ pub fn open_app_window(app: AppHandle, project_id: String, title: String) -> Res
     let title = if title.is_empty() { "App" } else { title };
     // The ID is validated above, so it is safe inside the script.
     let script = format!("window.__COMMITARIUM_APP__ = \"{project_id}\";");
-    WebviewWindowBuilder::new(&app, &label, WebviewUrl::App("index.html".into()))
+    let page = app
+        .try_state::<AppPages>()
+        .ok_or("app windows are unavailable; see the desktop's log")?
+        .page();
+    WebviewWindowBuilder::new(&app, &label, WebviewUrl::External(page))
         .title(title)
         .inner_size(1100.0, 780.0)
         .min_inner_size(480.0, 360.0)

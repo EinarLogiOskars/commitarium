@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-load-ui-state"
+description = "Enables the load_ui_state command without any pre-configured scope."
+commands.allow = ["load_ui_state"]
+
+[[permission]]
+identifier = "deny-load-ui-state"
+description = "Denies the load_ui_state command without any pre-configured scope."
+commands.deny = ["load_ui_state"]

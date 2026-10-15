@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-synchronize-feature-locally"
+description = "Enables the synchronize_feature_locally command without any pre-configured scope."
+commands.allow = ["synchronize_feature_locally"]
+
+[[permission]]
+identifier = "deny-synchronize-feature-locally"
+description = "Denies the synchronize_feature_locally command without any pre-configured scope."
+commands.deny = ["synchronize_feature_locally"]
