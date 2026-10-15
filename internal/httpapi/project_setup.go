@@ -41,13 +41,19 @@ func (api *API) setUpProjectHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	projectID := r.PathValue("id")
 	started, manifest, created, err := api.setUpProject(r.Context(), projectID, body.Presets, body.Frameworks)
+	if err != nil {
+		writeProjectSetupError(w, api, projectID, err)
+		return
+	}
+	status := http.StatusOK
+	if created {
+		status = http.StatusCreated
+	}
+	writeJSON(w, status, projectSetupResponse{WorkOrder: newFeatureResponse(started), Toolchain: manifest}, "project setup")
+}
+
+func writeProjectSetupError(w http.ResponseWriter, api *API, projectID string, err error) {
 	switch {
-	case err == nil:
-		status := http.StatusOK
-		if created {
-			status = http.StatusCreated
-		}
-		writeJSON(w, status, projectSetupResponse{WorkOrder: newFeatureResponse(started), Toolchain: manifest}, "project setup")
 	case writeChoiceError(w, err):
 	case errors.Is(err, errPreviewSetupUnavailable):
 		writeError(w, http.StatusServiceUnavailable, "project_setup_unavailable", "setting a project up needs real agents")

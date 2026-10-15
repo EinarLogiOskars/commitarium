@@ -2550,10 +2550,16 @@ actions, and its notes.
   edit.
 - An action is `{"id", "type": "create_work_order"|"start_work_order"|
   "change_models"|"add_vision_item"|"start_autopilot"|"continue_work_order"|
-  "close_work_order"|"create_app", "priority", "reason", "title", "description", "vision_item_id",
+  "close_work_order"|"create_app"|"set_up_preview"|"write_vision"|"set_up_stack", "priority", "reason",
+  "title", "description", "vision_item_id",
   "steps", "independent_tests", "lead_agent", "lead_model", "reviewer_agent",
-  "reviewer_model", "work_order_id", "when", "guidance", "status", "premium",
-  "result", "auto_tried"}`. `continue_work_order` continues the work order's
+  "reviewer_model", "work_order_id", "when", "guidance", "after", "status", "premium",
+  "result", "auto_tried", "queued"}`. `write_vision` has the vision written on the
+  assistant's agent from `description` (`409 vision_exists` when there is one);
+  `set_up_stack` detects the stack of the code, or sets the project up on the
+  stack its vision recommends (`409 stack_unknown` without either). `after`,
+  on a create or start, names a work order ID or another action's title it
+  follows: autopilot holds it (`queued`) until that work has merged. `continue_work_order` continues the work order's
   newest run when it waits on a blocker, with `guidance` for its agents, as
   the run's Continue and Add guidance do (`409 recovery_not_allowed`
   otherwise). `close_work_order` closes the work order (see Closing a work
@@ -2565,7 +2571,9 @@ actions, and its notes.
   `auto_tried` marks one autopilot took over.
 - `POST .../{scope}/actions/{actionID}/approve` with `{"start", "confirm_premium"}`
   runs it through the same paths as the app's own buttons and records the
-  outcome. `409 premium_approval_required` without `confirm_premium` for a
+  outcome. On a create or start, `lead_agent`, `lead_model`, `reviewer_agent`,
+  and `reviewer_model` replace the card's choice, checked like any other
+  (ADR-027). `409 premium_approval_required` without `confirm_premium` for a
   premium action; `409 action_not_pending` once resolved.
 - `POST .../{scope}/actions/{actionID}/dismiss` dismisses it.
 - `POST .../{scope}/autopilot` with `{"level"}` turns autopilot on for the open
@@ -2588,6 +2596,13 @@ actions, and its notes.
   conversation's `launch` is `{"stage": "vision"|"setup"|"building",
   "started_at"}`. In a project marked as an app, autopilot applies the
   assistant's work actions without a goal.
+- Where the assistant builds everything (ADR-027), switching a project to
+  `builds` and creating a work order by hand wake it, and each look the
+  coordinator checks, without the model, what the project still lacks to run
+  (a vision, a stack, autopilot on open vision items, work orders nobody
+  starts, an app's preview) and wakes it with the list, each gap at most once
+  per ten minutes and three times in a row, never while it answers, has
+  events waiting, or its agent is at its usage limit.
 
 ## Project vision
 

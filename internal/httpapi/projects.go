@@ -527,7 +527,16 @@ func (api *API) updateProjectAssistantModeHandler(w http.ResponseWriter, r *http
 		writeError(w, http.StatusServiceUnavailable, "assistant_mode_unavailable", "the assistant's mode cannot be changed")
 		return
 	}
+	before, err := api.projects.GetByID(r.Context(), r.PathValue("id"))
+	if err != nil && !errors.Is(err, project.ErrNotFound) {
+		log.Printf("read project %q before its assistant mode: %v", r.PathValue("id"), err)
+	}
 	updated, err := settings.UpdateAssistantMode(r.Context(), r.PathValue("id"), request.AssistantMode)
+	if err == nil && updated.AssistantBuilds() && !before.AssistantBuilds() {
+		// Switching to building everything hands the project over: the
+		// assistant takes it from here at once.
+		api.handOverToAssistant(r.Context(), updated.ID)
+	}
 	if err != nil {
 		switch {
 		case errors.Is(err, project.ErrNotFound):

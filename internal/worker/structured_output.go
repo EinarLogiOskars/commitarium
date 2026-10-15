@@ -140,7 +140,7 @@ func OutputJSONSchema(contract OutputContract) any {
 		action := objectSchema(
 			map[string]any{
 				"type": map[string]any{
-					"type": "string", "enum": []string{"create_work_order", "start_work_order", "change_models", "add_vision_item", "start_autopilot", "continue_work_order", "close_work_order", "create_app", "set_up_preview"},
+					"type": "string", "enum": []string{"create_work_order", "start_work_order", "change_models", "add_vision_item", "start_autopilot", "continue_work_order", "close_work_order", "create_app", "set_up_preview", "write_vision", "set_up_stack"},
 				},
 				"reason":            text,
 				"title":             text,
@@ -156,10 +156,11 @@ func OutputJSONSchema(contract OutputContract) any {
 				"when":              map[string]any{"type": "string", "enum": []string{"", "now", "next_turn"}},
 				"guidance":          map[string]any{"type": "string", "description": "For continue_work_order: what to tell the work order's agents; empty retries as is."},
 				"priority":          map[string]any{"type": "integer", "description": "For add_vision_item: the priority level, 0 for P0 through 9 for P9; any level the vision has or a new one. For start_autopilot: the priority to finish. Otherwise 0."},
+				"after":             map[string]any{"type": "string", "description": "For create_work_order and start_work_order: the work order ID, or the exact title of another of your actions, that this one must wait for because both change the same part of the app; it starts once that one merges. Otherwise empty."},
 			},
 			[]string{
 				"type", "reason", "title", "description", "vision_item_id", "steps", "independent_tests",
-				"lead_agent", "lead_model", "reviewer_agent", "reviewer_model", "work_order_id", "when", "priority", "guidance",
+				"lead_agent", "lead_model", "reviewer_agent", "reviewer_model", "work_order_id", "when", "priority", "guidance", "after",
 			},
 		)
 		return objectSchema(

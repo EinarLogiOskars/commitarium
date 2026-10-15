@@ -382,6 +382,27 @@ body {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.rail__item-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.rail__item-note {
+  font-size: 12px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.queued-start {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.queued-start p {
+  margin: 0;
+}
 .rail__item .dot {
   flex: none;
 }
@@ -4246,6 +4267,11 @@ select:focus {
   margin-left: auto;
   font-size: 13px;
   line-height: 1;
+}
+/* Done shows its most recent few; the rest are a click away. */
+.rail__more {
+  margin: 2px 0 4px 10px;
+  font-size: 12px;
 }
 
 /* An app's own window: the app fills it; Commitarium only floats the

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { listFeatures } from "../api/features";
 import { onSessionSeen, sessionSeenAt } from "./sessionSeen";
+import { DONE_SHOWN, doneShown, readDoneOpen, writeDoneOpen } from "./railDone";
 import type { Feature, FeatureState, WorkKind } from "../api/types";
 
 const WORK_ORDER_GROUPS: { label: string; states: FeatureState[] }[] = [
@@ -59,6 +60,16 @@ export function WorkOrderRail({
       // The choice lasts until the window closes.
     }
   };
+  // Done work shows only its most recent few until expanded, per project.
+  const [doneChoice, setDoneChoice] = useState(() => ({
+    projectId,
+    open: readDoneOpen(projectId),
+  }));
+  const doneOpen = doneChoice.projectId === projectId ? doneChoice.open : readDoneOpen(projectId);
+  const toggleDone = () => {
+    writeDoneOpen(projectId, !doneOpen);
+    setDoneChoice({ projectId, open: !doneOpen });
+  };
   // Bumped when a session is marked seen, to recolor its dot.
   const [, setSeenVersion] = useState(0);
 
@@ -103,9 +114,15 @@ export function WorkOrderRail({
       {groups.map((group) => {
         const items = ofKind.filter((f) => group.states.includes(f.state));
         if (items.length === 0) return null;
-        // Closed work folds away; the one on screen stays listed.
+        // Closed work folds away, and Done shows its most recent few; the
+        // one on screen stays listed.
         const folding = group.label === "Closed";
-        const shown = folding && !closedOpen ? items.filter((f) => f.id === selectedId) : items;
+        const done = group.label === "Done" ? doneShown(items, doneOpen, selectedId) : null;
+        const shown = done
+          ? done.shown
+          : folding && !closedOpen
+            ? items.filter((f) => f.id === selectedId)
+            : items;
         return (
           <div key={group.label}>
             {folding ? (
@@ -128,7 +145,12 @@ export function WorkOrderRail({
                 className={`rail__item ${selectedId === f.id ? "rail__item--active" : ""}`}
                 onClick={() => onSelect(f.id)}
               >
-                <span className="rail__item-title">{f.title}</span>
+                <span className="rail__item-text">
+                  <span className="rail__item-title">{f.title}</span>
+                  {f.queued_after && (
+                    <span className="rail__item-note">Queued after {f.queued_after}</span>
+                  )}
+                </span>
                 {kind === "session" ? (
                   <SessionMark session={f} />
                 ) : (
@@ -136,6 +158,11 @@ export function WorkOrderRail({
                 )}
               </button>
             ))}
+            {done && (done.hidden > 0 || (doneOpen && items.length > DONE_SHOWN)) && (
+              <button className="rail__more linkish" onClick={toggleDone} aria-expanded={doneOpen}>
+                {doneOpen ? "Show fewer" : `Show ${done.hidden} more`}
+              </button>
+            )}
           </div>
         );
       })}

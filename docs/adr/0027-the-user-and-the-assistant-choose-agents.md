@@ -105,6 +105,39 @@ windows and how the assistant speaks to an app's user. Projects answer it and
 `PUT /api/v1/projects/{id}/assistant-mode` changes it; the desktop shows it in
 Project settings and in the assistant drawer.
 
+**Building everything wakes the assistant by itself.** The assistant acts
+only when woken, and there is no model heartbeat: turns spend usage. So
+where it builds everything:
+
+- Switching a project to `builds` hands it over and wakes the assistant
+  once (not while Commitarium sets a new app up, whose launch moves it
+  along). Cards the user dismissed before the switch no longer stand: the
+  assistant hears so, and they do not hide waiting work from the gap check.
+- A work order the user creates by hand wakes it to take the work order
+  over.
+- Each watcher look runs a gap check in code, without the model: no vision
+  (the new `write_vision` action), no stack (the new `set_up_stack` action:
+  detected from the code, or the stack the vision recommends), open vision
+  items with autopilot off, drafts or ready work orders while nothing runs
+  and no action of the assistant waits on them, and only in an app, a
+  preview that is not set up (no compose file), whose setup work is stuck,
+  or that the desktop reported failing with no preview work merged since.
+  It wakes the assistant with the list of gaps that are due: each at most
+  once per ten minutes and three times in a row while it stays, and never
+  while the assistant answers, has events or messages waiting, a new app is
+  still launching, or its agent is at its usage limit (a run waits on it,
+  or its latest report says so). What it told is kept in the conversation.
+
+Two changes to the same part of the app do not run at once: an action that
+creates or starts a work order may name, in `after`, the work order or the
+other action it follows, and autopilot holds it until that work has merged.
+A work order it creates exists at once, as a draft the rail marks "Queued
+after …"; only its start waits. The user may start it anyway, after a
+warning whose default keeps it queued; it then leaves the queue. Which parts
+work touches is the assistant's judgment; the hold is the coordinator's. The user may also change a card's agents, not only its
+models, before approving it; the choice is refused like any other that
+cannot run.
+
 ## Consequences
 
 - A fresh install works with zero, one, or several agents: worker

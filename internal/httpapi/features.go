@@ -53,6 +53,9 @@ type featureResponse struct {
 	// PreviewCheck marks a work order that merges only once Commitarium's
 	// preview check of its commit passed (ADR-028).
 	PreviewCheck bool `json:"preview_check,omitempty"`
+	// QueuedAfter names the work this one waits for before autopilot starts
+	// it, so two changes to the same part of the app do not run at once.
+	QueuedAfter string `json:"queued_after,omitempty"`
 	// Session reports a session's agent activity in feature lists (ADR-019).
 	Session   *sessionActivityResponse `json:"session,omitempty"`
 	CreatedAt time.Time                `json:"created_at"`
@@ -194,6 +197,8 @@ func (api *API) createFeatureHandler(
 			createdFeature = started
 		}
 	}
+	// Building everything, the assistant takes over what the user adds.
+	api.wakeForUsersWorkOrder(r.Context(), createdFeature)
 	response := newFeatureResponse(createdFeature)
 	w.Header().Set(
 		"Location",
@@ -220,9 +225,11 @@ func (api *API) listFeaturesHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	queued := api.queuedStarts(r.Context(), projectID)
 	response := make([]featureResponse, 0, len(features))
 	for _, storedFeature := range features {
 		item := newFeatureResponse(storedFeature)
+		item.QueuedAfter = queued[storedFeature.ID]
 		if storedFeature.Kind == feature.KindSession {
 			item.Session = api.sessionActivity(r.Context(), storedFeature.ID)
 		}
@@ -273,12 +280,30 @@ func (api *API) getFeatureByIDHandler(
 	}
 
 	response := newFeatureResponse(storedFeature)
+	response.QueuedAfter = api.queuedStarts(r.Context(), projectID)[storedFeature.ID]
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 
 	if err := json.NewEncoder(w).Encode(response); err != nil {
 		log.Printf("encode feature response: %v", err)
 	}
+}
+
+// queuedStarts names the work each of a project's work orders waits for
+// before autopilot starts it; none when it cannot tell.
+func (api *API) queuedStarts(ctx context.Context, projectID string) map[string]string {
+	starts, ok := api.conversations.(interface {
+		QueuedStarts(ctx context.Context, scope string) (map[string]string, error)
+	})
+	if !ok {
+		return nil
+	}
+	queued, err := starts.QueuedStarts(ctx, projectID)
+	if err != nil {
+		log.Printf("queued starts for project %q: %v", projectID, err)
+		return nil
+	}
+	return queued
 }
 
 func newFeatureResponse(storedFeature feature.Feature) featureResponse {

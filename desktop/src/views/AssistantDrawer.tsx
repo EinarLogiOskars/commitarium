@@ -24,6 +24,7 @@ import { agentName, reloadAgents, useAgentList, useAgents } from "./useAgents";
 import type { AgentRole } from "../api/types";
 import { Agents } from "./Agents";
 import { assistantGuidance, GUIDANCE } from "./setupGuidance";
+import { appliedWhat, chooseAgent, choiceOverrides, type RoleChoice } from "./actionCard";
 
 const IDLE_POLL_MS = 20_000;
 const POLL_MS = 2000;
@@ -304,7 +305,7 @@ export function AssistantDrawer({
                     {scope === "commitarium"
                       ? "Ask about your projects. Open a project to have it draft work there."
                       : builds
-                        ? "Ask for a change and it builds it. It asks before premium models, and leaves your own work orders to you."
+                        ? "Ask for a change and it builds it, along with work orders you add yourself. It asks before premium models."
                         : "Ask about the project, what to build next, or have it draft work orders. It proposes; nothing happens until you approve."}
                   </p>
                 )}
@@ -435,17 +436,22 @@ function ActionCard({
   const [busy, setBusy] = useState<null | "approve" | "start" | "dismiss">(null);
   const [error, setError] = useState<string | null>(null);
   const pending = action.status === "proposed";
-  // A new or started work order's models are the user's to change before
-  // approving; premium is judged on what they choose.
+  // A new or started work order's agents and models are the user's to
+  // change before approving (ADR-027); another agent moves its model to one
+  // its provider offers. Premium is judged on what they choose.
   const choosable =
     pending && (action.type === "create_work_order" || action.type === "start_work_order");
-  const [chosen, setChosen] = useState<Record<AgentRole, string>>({
-    lead: action.lead_model,
-    reviewer: action.reviewer_model,
-  });
+  const proposed: Record<AgentRole, RoleChoice> = {
+    lead: { agent: action.lead_agent, model: action.lead_model },
+    reviewer: { agent: action.reviewer_agent, model: action.reviewer_model },
+  };
+  const [chosen, setChosen] = useState(proposed);
+  const roles = (["lead", "reviewer"] as const).filter((role) => action[`${role}_model`]);
   const premium = choosable
-    ? [chosen.lead, chosen.reviewer].filter((model) => isPremium(model, askBefore))
+    ? roles.map((role) => chosen[role].model).filter((model) => isPremium(model, askBefore))
     : (action.premium ?? []);
+  // An agent whose models are not known yet leaves its model to choose.
+  const unchosen = choosable && roles.some((role) => !chosen[role].model);
 
   const run = async (kind: NonNullable<typeof busy>, fn: () => Promise<Conversation>) => {
     setBusy(kind);
@@ -477,10 +483,7 @@ function ActionCard({
       approveAssistantAction(scope, action.id, {
         start,
         confirm_premium: confirmed,
-        ...(choosable && chosen.lead !== action.lead_model ? { lead_model: chosen.lead } : {}),
-        ...(choosable && chosen.reviewer !== action.reviewer_model
-          ? { reviewer_model: chosen.reviewer }
-          : {}),
+        ...(choosable ? choiceOverrides(proposed, chosen) : {}),
       }),
     );
 
@@ -501,14 +504,18 @@ function ActionCard({
                   ? `New app: ${action.title}`
                   : action.type === "set_up_preview"
                     ? "Set up the app's preview"
-                    : "Switch models";
+                    : action.type === "write_vision"
+                      ? "Write the vision"
+                      : action.type === "set_up_stack"
+                        ? "Set up the stack"
+                        : "Switch models";
   const models = [
     action.lead_model &&
       `Lead ${action.lead_agent ? agentName(agents, action.lead_agent) + " · " : ""}${modelName(action.lead_model)}`,
     action.reviewer_model &&
       `Reviewer ${action.reviewer_agent ? agentName(agents, action.reviewer_agent) + " · " : ""}${modelName(action.reviewer_model)}`,
   ].filter(Boolean);
-  const blocked = premium.length > 0 && !confirmed;
+  const blocked = (premium.length > 0 && !confirmed) || unchosen;
 
   return (
     <div className={`assistant-action assistant-action--${action.status}`}>
@@ -531,38 +538,74 @@ function ActionCard({
       <ul className="assistant-action__facts">
         {action.steps && <li>{STEPS_LABEL[action.steps]}</li>}
         {choosable
-          ? (["lead", "reviewer"] as const)
-              .filter((role) => action[`${role}_model`])
-              .map((role) => {
-                const agentId = action[`${role}_agent`];
-                const provider = agents.find((agent) => agent.id === agentId)?.provider;
-                const options = provider ? modelsFor(provider, role) : [];
-                return (
-                  <li key={role} className="assistant-action__model">
-                    {role === "lead" ? "Lead" : "Reviewer"}{" "}
-                    {agentId ? agentName(agents, agentId) + " · " : ""}
-                    {options.length > 0 ? (
-                      <select
-                        value={chosen[role]}
-                        onChange={(e) => setChosen((c) => ({ ...c, [role]: e.target.value }))}
-                        disabled={busy !== null}
-                        aria-label={`${role === "lead" ? "Lead" : "Reviewer"} model`}
-                      >
-                        {!options.some((m) => m.id === chosen[role]) && (
-                          <option value={chosen[role]}>{modelName(chosen[role])}</option>
-                        )}
-                        {options.map((m) => (
-                          <option key={m.id} value={m.id}>
-                            {m.display_name}
-                          </option>
-                        ))}
-                      </select>
-                    ) : (
-                      modelName(chosen[role])
-                    )}
-                  </li>
-                );
-              })
+          ? roles.map((role) => {
+              const label = role === "lead" ? "Lead" : "Reviewer";
+              const current = chosen[role];
+              const provider = agents.find((agent) => agent.id === current.agent)?.provider;
+              const options = provider ? modelsFor(provider, role) : [];
+              return (
+                <li key={role} className="assistant-action__model">
+                  {label}{" "}
+                  {agents.length > 1 ? (
+                    <select
+                      value={current.agent}
+                      onChange={(e) =>
+                        setChosen((c) => ({
+                          ...c,
+                          [role]: chooseAgent(
+                            c[role],
+                            e.target.value,
+                            agents,
+                            modelsFor,
+                            role,
+                            askBefore,
+                          ),
+                        }))
+                      }
+                      disabled={busy !== null}
+                      aria-label={`${label} agent`}
+                    >
+                      {!agents.some((agent) => agent.id === current.agent) && (
+                        <option value={current.agent}>{current.agent}</option>
+                      )}
+                      {agents.map((agent) => (
+                        <option key={agent.id} value={agent.id}>
+                          {agent.name}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    agentName(agents, current.agent)
+                  )}
+                  {" · "}
+                  {options.length > 0 ? (
+                    <select
+                      value={current.model}
+                      onChange={(e) =>
+                        setChosen((c) => ({ ...c, [role]: { ...c[role], model: e.target.value } }))
+                      }
+                      disabled={busy !== null}
+                      aria-label={`${label} model`}
+                    >
+                      {!options.some((m) => m.id === current.model) && (
+                        <option value={current.model}>
+                          {current.model ? modelName(current.model) : "Choose a model"}
+                        </option>
+                      )}
+                      {options.map((m) => (
+                        <option key={m.id} value={m.id}>
+                          {m.display_name}
+                        </option>
+                      ))}
+                    </select>
+                  ) : current.model ? (
+                    modelName(current.model)
+                  ) : (
+                    <span className="muted">its models are not known yet</span>
+                  )}
+                </li>
+              );
+            })
           : models.map((line) => <li key={line as string}>{line}</li>)}
         {action.independent_tests && <li>Independent acceptance tests</li>}
         {action.type === "create_work_order" && (
@@ -583,6 +626,16 @@ function ActionCard({
               action.work_order_id
             )}
           </li>
+        )}
+        {action.after && (
+          <li>
+            {action.queued
+              ? `Queued: starts once ${action.after} has merged`
+              : `Best after ${action.after}: it changes the same part of the app`}
+          </li>
+        )}
+        {action.type === "set_up_stack" && (
+          <li>The stack the vision recommends, or the one the code already uses</li>
         )}
         {action.when && (
           <li>{action.when === "now" ? "Stop now and switch" : "From the next turn"}</li>
@@ -655,6 +708,8 @@ const APPLY_LABEL: Record<AssistantAction["type"], string> = {
   close_work_order: "Close",
   create_app: "Create app",
   set_up_preview: "Set up preview",
+  write_vision: "Write vision",
+  set_up_stack: "Set up stack",
 };
 
 const STATUS_LABEL: Record<AssistantAction["status"], string> = {
@@ -774,24 +829,40 @@ function isPremium(model: string, families: string[]): boolean {
 
 // Where it builds everything, what the assistant set going, said in a line.
 function AppliedLine({ action }: { action: AssistantAction }) {
-  const what = action.title || (action.type === "set_up_preview" ? "the app's setup" : "the work");
+  const what =
+    appliedWhat(action.title) ||
+    (action.type === "set_up_preview"
+      ? "the app's setup"
+      : action.type === "set_up_stack"
+        ? "the stack"
+        : action.type === "write_vision"
+          ? "the vision"
+          : "the work");
   const failed = action.status === "failed";
   const done = action.status === "applied";
-  const verb =
+  const [verb, past] =
     action.type === "change_models"
-      ? "Switching models"
+      ? ["Switching models", "Switched models"]
       : action.type === "continue_work_order"
-        ? "Picking the work back up"
+        ? ["Picking the work back up", "Picked the work back up"]
         : action.type === "set_up_preview"
-          ? "Fixing"
-          : "Starting";
+          ? ["Fixing", "Fixing"]
+          : action.type === "write_vision"
+            ? ["Writing", "Writing"]
+            : action.type === "set_up_stack"
+              ? ["Setting up", "Setting up"]
+              : action.hold_start
+                ? ["Creating", "Created"]
+                : ["Starting", "Started"];
   return (
     <p className={`muted assistant__applied ${failed ? "assistant__applied--failed" : ""}`}>
       {failed
         ? `Couldn't start: ${what}`
         : done
-          ? `✓ ${verb === "Starting" ? "Started" : verb}: ${what}`
-          : `${verb}: ${what}…`}
+          ? `✓ ${past}: ${what}`
+          : action.queued
+            ? `Queued: ${what}, after ${action.after}`
+            : `${verb}: ${what}…`}
     </p>
   );
 }

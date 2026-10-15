@@ -195,6 +195,7 @@ func (api *API) startVisionWorkOrderHandler(w http.ResponseWriter, r *http.Reque
 		writeVisionError(w, projectID, err)
 		return
 	}
+	api.wakeForUsersWorkOrder(r.Context(), created)
 	writeJSON(w, http.StatusCreated, visionWorkOrderResponse{WorkOrder: newFeatureResponse(created), Vision: linked}, "vision work order")
 }
 

@@ -27,7 +27,9 @@ export type AssistantActionType =
   | "continue_work_order"
   | "close_work_order"
   | "create_app"
-  | "set_up_preview";
+  | "set_up_preview"
+  | "write_vision"
+  | "set_up_stack";
 
 export interface AssistantAction {
   id: string;
@@ -50,6 +52,9 @@ export interface AssistantAction {
   guidance?: string;
   /** For add_vision_item and start_autopilot: 0 for P0, 1 for P1, and so on. */
   priority: number;
+  /** For a work order to create or start: the work order ID, or the title of
+   * another action, it waits for; it starts once that has merged. */
+  after?: string;
   status: "proposed" | "applied" | "dismissed" | "failed";
   premium?: string[];
   result?: string;
@@ -57,6 +62,10 @@ export interface AssistantAction {
   project_id?: string;
   /** Autopilot took it over. */
   auto_tried?: boolean;
+  /** Autopilot holds it until the work it follows (after) has merged. */
+  queued?: boolean;
+  /** Autopilot created the work order without starting it; a queued start follows. */
+  hold_start?: boolean;
 }
 
 /** An autopilot goal: the open items of one vision priority. */
@@ -122,8 +131,11 @@ export const approveAssistantAction = (
   options: {
     start?: boolean;
     confirm_premium?: boolean;
-    /** The user's choice over the card's models, for a new or started work order. */
+    /** The user's choice over the card's agents and models, for a new or
+     * started work order. */
+    lead_agent?: string;
     lead_model?: string;
+    reviewer_agent?: string;
     reviewer_model?: string;
   },
 ): Promise<Conversation> =>

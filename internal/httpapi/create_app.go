@@ -42,6 +42,9 @@ func (api *API) applyCreateApp(w http.ResponseWriter, r *http.Request, action co
 		return "", "", false
 	}
 	base := "/api/v1/projects/" + url.PathEscape(created.ID)
+	// Its launch moves the new app along; setting it to build everything
+	// hands nothing over yet.
+	ctx = context.WithValue(ctx, ownSetup{}, true)
 	steps := []struct {
 		method, path, key string
 		body              any

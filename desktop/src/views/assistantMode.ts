@@ -40,6 +40,8 @@ export function appliesItself(action: AssistantAction): boolean {
     "change_models",
     "continue_work_order",
     "set_up_preview",
+    "write_vision",
+    "set_up_stack",
   ];
   const leftForUser = action.status === "proposed" && !!action.auto_tried;
   return (

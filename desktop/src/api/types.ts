@@ -294,6 +294,10 @@ export interface Feature {
   // Merges only once Commitarium's preview check of its commit passed: the
   // preview setup and fixes, and a project's setup (ADR-028).
   preview_check?: boolean;
+  // The work this one waits for before the assistant starts it, so two
+  // changes to the same part of the app don't run at once. The user may
+  // still start it, after a warning.
+  queued_after?: string;
   // A session's agent activity, in feature lists only: working on a message,
   // or idle since `updated_at`.
   session?: { working: boolean; updated_at: string };
