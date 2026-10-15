@@ -16,7 +16,9 @@ export default defineConfig(() => ({
   server: {
     port: 1420,
     strictPort: true,
-    host: host || false,
+    // 127.0.0.1, not localhost: app windows load their page from there, so
+    // the apps they frame (also on 127.0.0.1) are same-site (ADR-029).
+    host: host || "127.0.0.1",
     hmr: host
       ? {
           protocol: "ws",

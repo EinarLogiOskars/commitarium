@@ -240,6 +240,7 @@ pub(crate) fn validate_and_rewrite_with(
             rewrite_ports(ports, service_name, &mut published)?;
         }
         rewrite_labels(service, &compose_project)?;
+        mark_preview_environment(service)?;
         service.insert("security_opt".into(), json!(["no-new-privileges:true"]));
         service.insert("cpus".into(), json!(2.0));
         service.insert("mem_limit".into(), json!("4g"));
@@ -614,6 +615,30 @@ fn parse_port(value: &Value, service: &str) -> Result<(u16, String), String> {
     .ok_or_else(|| format!("service {service:?} has an invalid published port"))
 }
 
+/// Tells the app it runs in Commitarium's preview (`COMMITARIUM_PREVIEW=1`):
+/// served over plain http on 127.0.0.1 in a WebKit window, where cookies
+/// marked Secure are dropped. An app keeps its production settings and
+/// switches only on this flag, which production never sets (ADR-029).
+fn mark_preview_environment(service: &mut Map<String, Value>) -> Result<(), String> {
+    let environment = service.entry("environment").or_insert_with(|| json!({}));
+    if environment.is_array() {
+        let mut normalized = Map::new();
+        for entry in environment.as_array().into_iter().flatten() {
+            let entry = entry
+                .as_str()
+                .ok_or_else(|| "service environment entries must be strings".to_string())?;
+            let (key, value) = entry.split_once('=').unwrap_or((entry, ""));
+            normalized.insert(key.to_string(), Value::String(value.to_string()));
+        }
+        *environment = Value::Object(normalized);
+    }
+    environment
+        .as_object_mut()
+        .ok_or_else(|| "service environment must be an object or array".to_string())?
+        .insert("COMMITARIUM_PREVIEW".into(), Value::String("1".into()));
+    Ok(())
+}
+
 fn rewrite_labels(service: &mut Map<String, Value>, project: &str) -> Result<(), String> {
     let labels = service.entry("labels").or_insert_with(|| json!({}));
     if labels.is_array() {
@@ -927,6 +952,10 @@ mod tests {
         assert_eq!(web["ports"][0]["published"], "0");
         assert_eq!(web["security_opt"][0], "no-new-privileges:true");
         assert_eq!(web["labels"]["commitarium.preview"], "true");
+        assert_eq!(web["environment"]["COMMITARIUM_PREVIEW"], "1");
+        let api = &prepared.model["services"]["api"]["environment"];
+        assert_eq!(api["COMMITARIUM_PREVIEW"], "1");
+        assert_eq!(api["DATABASE_URL"], "postgres://postgres@db/app");
         assert!(web["labels"].get("com.docker.compose.project").is_none());
         assert_eq!(web["labels"]["app.example.role"], "frontend");
         assert_eq!(web["pids_limit"], 512);

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-save-desktop-settings"
+description = "Enables the save_desktop_settings command without any pre-configured scope."
+commands.allow = ["save_desktop_settings"]
+
+[[permission]]
+identifier = "deny-save-desktop-settings"
+description = "Denies the save_desktop_settings command without any pre-configured scope."
+commands.deny = ["save_desktop_settings"]

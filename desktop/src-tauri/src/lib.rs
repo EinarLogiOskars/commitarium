@@ -1,4 +1,5 @@
 mod agents;
+mod app_pages;
 mod apps;
 mod bootstrap;
 mod cli_updates;
@@ -47,6 +48,8 @@ pub fn run() {
             preview::sweep_leftovers();
             // The agents' CLIs stay current in the background, from launch on.
             cli_updates::spawn(app.handle().clone());
+            // App windows' pages, served same-site with the apps (ADR-029).
+            app_pages::start(app.handle());
             Ok(())
         })
         // The renderer can invoke ONLY the commands listed here. This explicit

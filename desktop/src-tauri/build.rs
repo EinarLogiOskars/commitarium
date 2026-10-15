@@ -1,3 +1,71 @@
+// Every command the renderer may invoke, as `lib.rs` registers them: the app
+// manifest gives each an `allow-` permission, so the main window and the
+// apps' pages are each granted exactly theirs (permissions/windows.toml).
+// A test keeps this list, the handler, and the main window's set the same.
+const COMMANDS: &[&str] = &[
+    "open_app_window",
+    "agent_cli_status",
+    "coordinator_freshness",
+    "rebuild_coordinator",
+    "prune_session_previews",
+    "docker_probe",
+    "launch_docker_desktop",
+    "stack_up",
+    "stack_down",
+    "stack_update",
+    "stack_status",
+    "get_forgejo_viewer_status",
+    "configure_forgejo_viewer",
+    "provision_environment_request",
+    "run_validation_job",
+    "load_desktop_settings",
+    "save_desktop_settings",
+    "confirm_exit",
+    "cancel_exit",
+    "notify_attention",
+    "disk_space_probe",
+    "create_backup",
+    "inspect_backup",
+    "restore_backup",
+    "check_desktop_update",
+    "install_desktop_update",
+    "load_ui_state",
+    "save_ui_state",
+    "inspect_folder",
+    "import_project",
+    "get_project_source",
+    "delete_project",
+    "probe_git_providers",
+    "create_project_remote",
+    "synchronize_feature_locally",
+    "synchronize_feature_to_folder",
+    "get_project_sync_state",
+    "get_git_identity",
+    "initialize_project_local_repository",
+    "synchronize_project_locally",
+    "preview_project_upstream_branch",
+    "publish_project_upstream_branch",
+    "preview_upstream_branch",
+    "publish_upstream_branch",
+    "start_preview",
+    "stop_preview",
+    "reset_preview_data",
+    "get_preview_status",
+    "get_preview_logs",
+    "run_preview_check",
+    "list_profiles",
+    "begin_login",
+    "submit_login_code",
+    "submit_api_key",
+    "cancel_login",
+    "verify_profile",
+    "disconnect_profile",
+];
+
 fn main() {
-    tauri_build::build()
+    tauri_build::try_build(
+        tauri_build::Attributes::new()
+            .app_manifest(tauri_build::AppManifest::new().commands(COMMANDS)),
+    )
+    .expect("failed to run tauri-build");
 }

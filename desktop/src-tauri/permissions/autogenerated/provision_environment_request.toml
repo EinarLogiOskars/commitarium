@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-provision-environment-request"
+description = "Enables the provision_environment_request command without any pre-configured scope."
+commands.allow = ["provision_environment_request"]
+
+[[permission]]
+identifier = "deny-provision-environment-request"
+description = "Denies the provision_environment_request command without any pre-configured scope."
+commands.deny = ["provision_environment_request"]

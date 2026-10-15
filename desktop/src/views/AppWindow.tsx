@@ -136,7 +136,16 @@ export function AppWindow({ projectId }: { projectId: string }) {
   return (
     <div className="app-window">
       {url ? (
-        <iframe key={url} className="app-window__frame" src={url} title={name} />
+        <iframe
+          key={url}
+          className="app-window__frame"
+          src={url}
+          title={name}
+          // Same-site with this page (ADR-029), so it may not navigate it
+          // away: everything but top navigation.
+          sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals allow-downloads allow-pointer-lock"
+          allow="clipboard-read; clipboard-write; fullscreen"
+        />
       ) : (
         <div className="app-window__state">
           <h1>{name}</h1>

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-agent-cli-status"
+description = "Enables the agent_cli_status command without any pre-configured scope."
+commands.allow = ["agent_cli_status"]
+
+[[permission]]
+identifier = "deny-agent-cli-status"
+description = "Denies the agent_cli_status command without any pre-configured scope."
+commands.deny = ["agent_cli_status"]

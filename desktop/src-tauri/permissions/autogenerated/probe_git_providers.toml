@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-probe-git-providers"
+description = "Enables the probe_git_providers command without any pre-configured scope."
+commands.allow = ["probe_git_providers"]
+
+[[permission]]
+identifier = "deny-probe-git-providers"
+description = "Denies the probe_git_providers command without any pre-configured scope."
+commands.deny = ["probe_git_providers"]
