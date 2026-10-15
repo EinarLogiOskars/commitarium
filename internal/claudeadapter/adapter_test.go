@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -789,13 +790,33 @@ func TestClaudeUsageLimitFailsTheTurnWithItsResetTime(t *testing.T) {
 	}
 }
 
-func TestARateLimitEventBecomesAUsageWindow(t *testing.T) {
+func TestARateLimitEventBecomesUsageWindows(t *testing.T) {
 	utilization := 0.375
-	window := rateLimitInfo{Status: "allowed_warning", ResetsAt: 1791810000, RateLimitType: "five_hour", Utilization: &utilization}.usageWindow()
-	if window.Name != "5-hour" || window.UsedPercent == nil || *window.UsedPercent != 37.5 || window.Limited || window.ResetsAt == nil {
-		t.Fatalf("window = %+v", window)
+	windows := rateLimitInfo{Status: "allowed_warning", ResetsAt: 1791810000, RateLimitType: "five_hour", Utilization: &utilization}.usageWindows()
+	if len(windows) != 1 || windows[0].Name != "5-hour" || windows[0].UsedPercent == nil || *windows[0].UsedPercent != 37.5 || windows[0].Limited || windows[0].ResetsAt == nil {
+		t.Fatalf("windows = %+v", windows)
 	}
-	if rejected := (rateLimitInfo{Status: "rejected"}).usageWindow(); !rejected.Limited || rejected.Name != "Usage" {
-		t.Fatalf("rejected window = %+v", rejected)
+	if rejected := (rateLimitInfo{Status: "rejected"}).usageWindows(); len(rejected) != 1 || !rejected[0].Limited || rejected[0].Name != "Usage" {
+		t.Fatalf("rejected windows = %+v", rejected)
+	}
+}
+
+func TestUnifiedWindowsGiveEveryWindowItsUse(t *testing.T) {
+	// As Claude Code sends it: no top-level utilization, each window's use nested.
+	raw := `{"status":"rejected","resetsAt":1792003200,"rateLimitType":"five_hour","unifiedWindows":{"five_hour":{"utilization":0.14,"resetsAt":1792003200},"seven_day":{"utilization":0.25,"resetsAt":1792389600}}}`
+	var info rateLimitInfo
+	if err := json.Unmarshal([]byte(raw), &info); err != nil {
+		t.Fatal(err)
+	}
+	windows := info.usageWindows()
+	if len(windows) != 2 {
+		t.Fatalf("windows = %+v", windows)
+	}
+	fiveHour, weekly := windows[0], windows[1]
+	if fiveHour.Name != "5-hour" || fiveHour.UsedPercent == nil || math.Abs(*fiveHour.UsedPercent-14) > 1e-9 || !fiveHour.Limited || fiveHour.ResetsAt.Unix() != 1792003200 {
+		t.Fatalf("5-hour = %+v", fiveHour)
+	}
+	if weekly.Name != "Weekly" || weekly.UsedPercent == nil || math.Abs(*weekly.UsedPercent-25) > 1e-9 || weekly.Limited || weekly.ResetsAt.Unix() != 1792389600 {
+		t.Fatalf("weekly = %+v", weekly)
 	}
 }

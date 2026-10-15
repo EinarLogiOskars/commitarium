@@ -7,9 +7,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -309,30 +309,67 @@ type rateLimitInfo struct {
 	// Utilization how much of it is used (0–1), when Claude Code says.
 	RateLimitType string   `json:"rateLimitType"`
 	Utilization   *float64 `json:"utilization"`
+	// UnifiedWindows is where Claude Code reports every window's use: the
+	// top-level Utilization is usually missing.
+	UnifiedWindows map[string]unifiedWindow `json:"unifiedWindows"`
+}
+
+type unifiedWindow struct {
+	Utilization *float64 `json:"utilization"`
+	ResetsAt    int64    `json:"resetsAt"`
 }
 
 // Usage is the account's usage limits as the adapter's sessions last saw
 // them, for the Agents page.
 var Usage worker.UsageTracker
 
-func (info rateLimitInfo) usageWindow() worker.UsageWindow {
+// usageWindows is every window the event reports, the one it is about
+// marked limited when Claude Code rejected the turn.
+func (info rateLimitInfo) usageWindows() []worker.UsageWindow {
+	if len(info.UnifiedWindows) == 0 {
+		return []worker.UsageWindow{usageWindow(info.RateLimitType, info.Utilization, info.ResetsAt, info.Status == "rejected")}
+	}
+	types := make([]string, 0, len(info.UnifiedWindows))
+	for rateLimitType := range info.UnifiedWindows {
+		types = append(types, rateLimitType)
+	}
+	sort.Strings(types)
+	windows := make([]worker.UsageWindow, 0, len(types))
+	for _, rateLimitType := range types {
+		unified := info.UnifiedWindows[rateLimitType]
+		utilization, resetsAt := unified.Utilization, unified.ResetsAt
+		if rateLimitType == info.RateLimitType {
+			if utilization == nil {
+				utilization = info.Utilization
+			}
+			if resetsAt == 0 {
+				resetsAt = info.ResetsAt
+			}
+		}
+		limited := info.Status == "rejected" && rateLimitType == info.RateLimitType
+		windows = append(windows, usageWindow(rateLimitType, utilization, resetsAt, limited))
+	}
+	return windows
+}
+
+func usageWindow(rateLimitType string, utilization *float64, resetsAt int64, limited bool) worker.UsageWindow {
 	names := map[string]string{"five_hour": "5-hour", "seven_day": "Weekly", "seven_day_opus": "Weekly (Opus)",
 		"seven_day_sonnet": "Weekly (Sonnet)"}
-	name := names[info.RateLimitType]
+	name := names[rateLimitType]
 	if name == "" {
-		name = strings.ReplaceAll(info.RateLimitType, "_", " ")
+		name = strings.ReplaceAll(rateLimitType, "_", " ")
 	}
 	if name == "" {
 		name = "Usage"
 	}
-	window := worker.UsageWindow{Name: name, Limited: info.Status == "rejected"}
-	if info.Utilization != nil {
-		used := *info.Utilization * 100
+	window := worker.UsageWindow{Name: name, Limited: limited}
+	if utilization != nil {
+		used := *utilization * 100
 		window.UsedPercent = &used
 	}
-	if info.ResetsAt > 0 {
-		resetsAt := time.Unix(info.ResetsAt, 0).UTC()
-		window.ResetsAt = &resetsAt
+	if resetsAt > 0 {
+		at := time.Unix(resetsAt, 0).UTC()
+		window.ResetsAt = &at
 	}
 	return window
 }
@@ -471,10 +508,9 @@ func (session *session) translate(raw []byte) ([]worker.Event, *worker.Result, e
 		// Advisory: kept to tell a failed turn's reached limit and its reset.
 		var info rateLimitInfo
 		if len(message.RateLimitInfo) > 0 && json.Unmarshal(message.RateLimitInfo, &info) == nil {
-			// Logged whole, to learn which windows and how much of them Claude
-			// Code reports, and how often (usage-based agent choice needs it).
-			log.Printf("claude usage event: %s", message.RateLimitInfo)
-			Usage.Merge(info.usageWindow())
+			for _, window := range info.usageWindows() {
+				Usage.Merge(window)
+			}
 			session.mu.Lock()
 			session.limitRejected = info.Status == "rejected"
 			if info.ResetsAt > 0 {
