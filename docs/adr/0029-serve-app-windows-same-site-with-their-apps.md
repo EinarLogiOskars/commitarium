@@ -58,7 +58,13 @@ the building and failure screens.
   makes an exception for loopback, so such an app works in a browser and not
   here. Checked with WKWebView: `SameSite=Lax` and plain `SameSite=None`
   cookies stick in the same-site frame, `Secure; SameSite=None` ones nowhere.
-  Agents are told to keep sign-in cookies on their framework's http defaults
-  (the preview conventions every lead gets, and the preview setup rules).
+  Safari fails the same way. An imported project may rightly use Secure
+  cookies in production, so Commitarium does not ask apps to drop them: it
+  sets `COMMITARIUM_PREVIEW=1` in every preview container (the compose
+  rewrite), and agents keep production's cookies while using plain-http ones
+  (SameSite=Lax, not Secure) when the flag is set, through the framework's
+  own switch where it has one. Every lead and the preview setup are told so;
+  the assistant knows the symptom ("sign-in does not stick here, but works in
+  Chrome") and proposes that change in plain words.
 - The workaround agents wrote into apps ("open the app in your browser to sign
   in") is no longer needed and can be removed from those apps.
