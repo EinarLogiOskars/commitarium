@@ -64,6 +64,8 @@ export interface AssistantAction {
   auto_tried?: boolean;
   /** Autopilot holds it until the work it follows (after) has merged. */
   queued?: boolean;
+  /** Autopilot created the work order without starting it; a queued start follows. */
+  hold_start?: boolean;
 }
 
 /** An autopilot goal: the open items of one vision priority. */

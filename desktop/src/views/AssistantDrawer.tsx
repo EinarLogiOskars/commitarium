@@ -851,7 +851,9 @@ function AppliedLine({ action }: { action: AssistantAction }) {
             ? ["Writing", "Writing"]
             : action.type === "set_up_stack"
               ? ["Setting up", "Setting up"]
-              : ["Starting", "Started"];
+              : action.hold_start
+                ? ["Creating", "Created"]
+                : ["Starting", "Started"];
   return (
     <p className={`muted assistant__applied ${failed ? "assistant__applied--failed" : ""}`}>
       {failed
