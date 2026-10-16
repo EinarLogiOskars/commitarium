@@ -121,6 +121,10 @@ type AcceptanceTests struct {
 	// CoordinatorCommitID is the implementation commit the coordinator last
 	// ran the tests against itself, apart from the reviewer.
 	CoordinatorCommitID string `json:"coordinator_commit_id,omitempty"`
+	// CoordinatorError says why the coordinator's run could not run the
+	// tests (their dependencies would not install, or the environment lacks
+	// one); its tests then have no coordinator status.
+	CoordinatorError string `json:"coordinator_error,omitempty"`
 }
 
 type AcceptanceTest struct {
@@ -163,6 +167,7 @@ func (tests AcceptanceTests) NormalizeInitial(planVersion int) (AcceptanceTests,
 	tests.PlanVersion = planVersion
 	tests.ImplementationCommitID = ""
 	tests.CoordinatorCommitID = ""
+	tests.CoordinatorError = ""
 	tests.Tests = append([]AcceptanceTest(nil), tests.Tests...)
 	ids := make([]string, len(tests.Tests))
 	for index := range tests.Tests {

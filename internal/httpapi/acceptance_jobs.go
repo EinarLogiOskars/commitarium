@@ -18,7 +18,7 @@ type pendingAcceptanceJobs interface {
 }
 
 type coordinatorAcceptanceRecorder interface {
-	RecordCoordinatorAcceptanceRun(context.Context, string, string, map[string]bool, workflow.Actor, string) (workflow.FeatureArtifact, error)
+	RecordCoordinatorAcceptanceRun(context.Context, string, string, map[string]bool, string, workflow.Actor, string) (workflow.FeatureArtifact, error)
 }
 
 // listPendingAcceptanceJobsHandler lists the acceptance runs waiting for the
@@ -39,7 +39,8 @@ func (api *API) listPendingAcceptanceJobsHandler(w http.ResponseWriter, r *http.
 
 // recordAcceptanceRun records each test's result from the coordinator's run on
 // the work order's acceptance tests, by the exit code of its command. A test
-// without a result did not run and counts as failed.
+// without a result did not run and counts as failed, unless the run could not
+// run the tests at all: then the run's error is recorded and no verdict.
 func (api *API) recordAcceptanceRun(ctx context.Context, job validation.Job) {
 	recorder, ok := api.artifacts.(coordinatorAcceptanceRecorder)
 	if !ok {
@@ -50,7 +51,7 @@ func (api *API) recordAcceptanceRun(ctx context.Context, job validation.Job) {
 		passed[testID] = index < len(job.Results) && job.Results[index].ExitCode == 0
 	}
 	if _, err := recorder.RecordCoordinatorAcceptanceRun(
-		ctx, job.FeatureID, job.CommitID, passed,
+		ctx, job.FeatureID, job.CommitID, passed, job.Error,
 		workflow.Actor{Kind: workflow.ActorKindCoordinator, ID: "commitarium"}, job.ID+":results",
 	); err != nil {
 		log.Printf("record acceptance run %q: %v", job.ID, err)

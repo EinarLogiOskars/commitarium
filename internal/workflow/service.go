@@ -237,16 +237,23 @@ func (s *Service) UpsertAcceptanceTests(
 
 // RecordCoordinatorAcceptanceRun records the coordinator's own run of the
 // acceptance tests against a commit: each listed test passed or failed by its
-// command's exit code. It applies to the latest revision, so the reviewer's
-// concurrent results are kept, retrying when a revision lands in between.
+// command's exit code, or, when the run could not run them (runError), why,
+// and no verdict on any test. It applies to the latest revision, so the
+// reviewer's concurrent results are kept, retrying when a revision lands in
+// between.
 func (s *Service) RecordCoordinatorAcceptanceRun(
 	ctx context.Context,
 	featureID string,
 	commitID string,
 	passed map[string]bool,
+	runError string,
 	actor Actor,
 	idempotencyKey string,
 ) (FeatureArtifact, error) {
+	runError = strings.TrimSpace(runError)
+	if len(runError) > featureartifact.MaxStepTextBytes {
+		runError = strings.ToValidUTF8(runError[:featureartifact.MaxStepTextBytes], "")
+	}
 	var lastErr error
 	for attempt := 0; attempt < 5; attempt++ {
 		current, err := s.GetFeatureArtifact(ctx, featureID, featureartifact.KindAcceptanceTests)
@@ -258,6 +265,10 @@ func (s *Service) RecordCoordinatorAcceptanceRun(
 			return FeatureArtifact{}, err
 		}
 		for index := range tests.Tests {
+			if runError != "" {
+				tests.Tests[index].CoordinatorStatus = ""
+				continue
+			}
 			result, ran := passed[tests.Tests[index].ID]
 			if !ran {
 				continue
@@ -268,6 +279,7 @@ func (s *Service) RecordCoordinatorAcceptanceRun(
 			}
 		}
 		tests.CoordinatorCommitID = commitID
+		tests.CoordinatorError = runError
 		if err := tests.Validate(); err != nil {
 			return FeatureArtifact{}, err
 		}
