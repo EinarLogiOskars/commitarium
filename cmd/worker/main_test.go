@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -108,6 +109,60 @@ func TestNormalizeObservableEventPreservesRecoveryAssessment(t *testing.T) {
 	}
 }
 
+func TestRedactingNormalizerRemovesKnownSecrets(t *testing.T) {
+	normalize := redactingNormalizer([]string{"lead-secret", "reviewer-secret"})
+	normalized, err := normalize(t.Context(), worker.Event{
+		Type: worker.EventActivity,
+		Text: "GIT_CONFIG_VALUE_0=Authorization: token lead-secret and reviewer-secret",
+		Activity: &worker.Activity{
+			Kind: worker.ActivityKindCommand, Command: "curl -H 'Authorization: token lead-secret'",
+		},
+	})
+	if err != nil {
+		t.Fatalf("normalize activity: %v", err)
+	}
+	if normalized.Text != "GIT_CONFIG_VALUE_0=Authorization: token [REDACTED] and [REDACTED]" ||
+		normalized.Activity.Command != "curl -H 'Authorization: token [REDACTED]'" ||
+		normalized.Redaction.Count != 3 ||
+		!slices.Equal(normalized.Redaction.Categories, []workerhttp.RedactionCategory{workerhttp.RedactionCredential}) {
+		t.Fatalf("redacted activity = %+v, activity=%+v", normalized, normalized.Activity)
+	}
+	clean, err := normalize(t.Context(), worker.Event{Type: worker.EventMessage, Text: "nothing secret"})
+	if err != nil || clean.Text != "nothing secret" || clean.Redaction.Count != 0 {
+		t.Fatalf("clean message = %+v, error=%v", clean, err)
+	}
+}
+
+// assertGitReadsForgejoTokenFromFile proves a turn's Git authenticates to
+// Forgejo through the credential helper while the token itself stays out of
+// the environment an agent could print.
+func assertGitReadsForgejoTokenFromFile(t *testing.T, variables []string, login, token string) {
+	t.Helper()
+	for _, variable := range variables {
+		if strings.Contains(variable, token) {
+			t.Fatalf("launch environment exposes the Forgejo token in %q", strings.SplitN(variable, "=", 2)[0])
+		}
+	}
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is unavailable")
+	}
+	fill := func(host string) (string, error) {
+		command := exec.Command("git", "credential", "fill")
+		command.Env = append(slices.Clone(variables), "GIT_CONFIG_NOSYSTEM=1")
+		command.Stdin = strings.NewReader("protocol=http\nhost=" + host + "\n\n")
+		output, err := command.Output()
+		return string(output), err
+	}
+	output, err := fill("forgejo:3000")
+	if err != nil || !strings.Contains(output, "username="+login+"\n") ||
+		!strings.Contains(output, "password="+token+"\n") {
+		t.Fatalf("git credential fill for Forgejo = %q, error=%v", output, err)
+	}
+	if output, err := fill("example.com"); err == nil && strings.Contains(output, token) {
+		t.Fatalf("credential helper answered for another host: %q", output)
+	}
+}
+
 func TestLoadConfigBuildsCodexRuntimeSettings(t *testing.T) {
 	values := validCodexConfig(t.TempDir())
 	loaded, err := loadConfig(func(name string) string { return values[name] })
@@ -178,10 +233,10 @@ func TestCodexRuntimeUsesPrivateProfileAndRealCapabilities(t *testing.T) {
 		t.Fatalf("Codex launch environment = %+v", resolved)
 	}
 	if !slices.Contains(resolved.Variables, "COMMITARIUM_FORGEJO_LOGIN=codex-lead") ||
-		!slices.Contains(resolved.Variables, "GIT_AUTHOR_NAME=Commitarium Codex Lead") ||
-		!slices.Contains(resolved.Variables, "GIT_CONFIG_VALUE_0=Authorization: token codex-forgejo-test-token") {
+		!slices.Contains(resolved.Variables, "GIT_AUTHOR_NAME=Commitarium Codex Lead") {
 		t.Fatalf("lead launch environment omitted its scoped Forgejo identity: %+v", resolved)
 	}
+	assertGitReadsForgejoTokenFromFile(t, resolved.Variables, "codex-lead", "codex-forgejo-test-token")
 	assignment.Role = workerhttp.RoleReviewer
 	reviewerEnvironment, err := workerRuntime.environmentResolver.Resolve(t.Context(), assignment)
 	if err != nil {
@@ -295,10 +350,10 @@ func TestClaudeRuntimeUsesPrivateProfileAndBoundedTurnCapabilities(t *testing.T)
 		!slices.Contains(resolved.Variables, "CLAUDE_CONFIG_DIR="+root) ||
 		!slices.Contains(resolved.Variables, "HOME="+root) ||
 		!slices.Contains(resolved.Variables, "COMMITARIUM_FORGEJO_LOGIN=claude-reviewer") ||
-		!slices.Contains(resolved.Variables, "GIT_AUTHOR_NAME=Commitarium Claude Reviewer") ||
-		!slices.Contains(resolved.Variables, "GIT_CONFIG_VALUE_0=Authorization: token claude-forgejo-test-token") {
+		!slices.Contains(resolved.Variables, "GIT_AUTHOR_NAME=Commitarium Claude Reviewer") {
 		t.Fatalf("Claude launch environment = %+v", resolved)
 	}
+	assertGitReadsForgejoTokenFromFile(t, resolved.Variables, "claude-reviewer", "claude-forgejo-test-token")
 	assignment.Role = workerhttp.RoleLead
 	leadEnvironment, err := workerRuntime.environmentResolver.Resolve(t.Context(), assignment)
 	if err != nil {
