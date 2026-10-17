@@ -31,7 +31,12 @@ type AttemptUsage struct {
 	// Model is the model the attempt ran on; a run's models can change.
 	Model string
 	// Effort is the reasoning effort it ran at; empty is the model's default.
-	Effort     string
+	Effort string
+	// Billing is how the agent's account pays ("api_key", "subscription", or
+	// empty when unknown), and CostUSD the provider's own cost for the
+	// attempt, when it reported one.
+	Billing    string
+	CostUSD    *float64
 	Usage      TokenUsage
 	RecordedAt time.Time
 }
@@ -57,5 +62,7 @@ type RoleAttemptUsage struct {
 	AttemptID string
 	Model     string
 	Effort    string
+	Billing   string
+	CostUSD   *float64
 	Usage     TokenUsage
 }

@@ -43,10 +43,12 @@ type session struct {
 	forced               bool
 	usageBaseline        *tokenUsageBreakdown
 	usageLatest          *tokenUsageBreakdown
-	result               worker.Result
-	lastError            string
-	lastErrorLogin       bool
-	lastErrorLimit       bool
+	// billing is how the account pays, read once at launch.
+	billing        worker.Billing
+	result         worker.Result
+	lastError      string
+	lastErrorLogin bool
+	lastErrorLimit bool
 	// limitWindows is the latest rate-limit state Codex reported for the
 	// account, read for when a reached limit resets.
 	limitWindows []rateLimitWindow
@@ -363,7 +365,14 @@ func (session *session) turnUsage() *worker.TokenUsage {
 		CachedInputTokens: turn.CachedInputTokens,
 		CacheWriteTokens:  turn.CacheWriteInputTokens,
 		OutputTokens:      turn.OutputTokens,
+		Billing:           session.billing,
 	}
+}
+
+func (session *session) setBilling(billing worker.Billing) {
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	session.billing = billing
 }
 
 type turnRecord struct {

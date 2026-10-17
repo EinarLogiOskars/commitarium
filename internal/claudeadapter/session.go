@@ -37,11 +37,13 @@ type session struct {
 	events            chan worker.Event
 	done              chan struct{}
 
-	mu               sync.Mutex
-	finished         bool
-	stopRequested    bool
-	forced           bool
-	initialized      bool
+	mu            sync.Mutex
+	finished      bool
+	stopRequested bool
+	forced        bool
+	initialized   bool
+	// billing is how the session pays, from its init.
+	billing          worker.Billing
 	lastAgentMessage string
 	agentMessages    int
 	tools            map[string]pendingTool
@@ -299,6 +301,31 @@ type streamMessage struct {
 	Event            json.RawMessage `json:"event"`
 	Usage            *resultUsage    `json:"usage"`
 	RateLimitInfo    json.RawMessage `json:"rate_limit_info"`
+	// APIKeySource, on init, says where the session's credentials come from:
+	// "none" for a subscription login, otherwise an API key.
+	APIKeySource string `json:"apiKeySource"`
+	// TotalCostUSD, on result, is Claude Code's cost for the turn at API
+	// prices.
+	TotalCostUSD *float64 `json:"total_cost_usd"`
+}
+
+func (session *session) currentBilling() worker.Billing {
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	return session.billing
+}
+
+// billingOf reads how a Claude Code session pays from its init's
+// apiKeySource.
+func billingOf(apiKeySource string) worker.Billing {
+	switch strings.TrimSpace(apiKeySource) {
+	case "":
+		return ""
+	case "none":
+		return worker.BillingSubscription
+	default:
+		return worker.BillingAPIKey
+	}
 }
 
 // rateLimitInfo is the account's usage-limit state on a rate_limit_event.
@@ -382,7 +409,7 @@ type resultUsage struct {
 	OutputTokens             int64 `json:"output_tokens"`
 }
 
-func (usage *resultUsage) tokenUsage() *worker.TokenUsage {
+func (usage *resultUsage) tokenUsage(billing worker.Billing, cost *float64) *worker.TokenUsage {
 	if usage == nil {
 		return nil
 	}
@@ -391,6 +418,8 @@ func (usage *resultUsage) tokenUsage() *worker.TokenUsage {
 		CachedInputTokens: usage.CacheReadInputTokens,
 		CacheWriteTokens:  usage.CacheCreationInputTokens,
 		OutputTokens:      usage.OutputTokens,
+		Billing:           billing,
+		CostUSD:           cost,
 	}
 }
 
@@ -467,6 +496,7 @@ func (session *session) translate(raw []byte) ([]worker.Event, *worker.Result, e
 		}
 		session.mu.Lock()
 		session.initialized = true
+		session.billing = billingOf(message.APIKeySource)
 		session.mu.Unlock()
 		return []worker.Event{{Type: worker.EventActivity, Text: "Claude started working."}}, nil, nil
 
@@ -808,7 +838,7 @@ func (session *session) translateResult(
 			Outcome:           worker.OutcomeFailed,
 			ProviderSessionID: session.providerSessionID,
 			Summary:           summary,
-			Usage:             message.Usage.tokenUsage(),
+			Usage:             message.Usage.tokenUsage(session.currentBilling(), message.TotalCostUSD),
 			LoginRequired:     login,
 			UsageLimited:      limited && !login,
 			LimitResetsAt:     resetsAt,
@@ -839,7 +869,7 @@ func (session *session) translateResult(
 			SessionTitle:       resolved.SessionTitle,
 			VisionPlan:         resolved.VisionPlan,
 			AssistantTurn:      resolved.AssistantTurn,
-			Usage:              message.Usage.tokenUsage(),
+			Usage:              message.Usage.tokenUsage(session.currentBilling(), message.TotalCostUSD),
 		}, nil
 	}
 
@@ -865,7 +895,7 @@ func (session *session) translateResult(
 	return events, &worker.Result{
 		Outcome: worker.OutcomeCompleted, Disposition: worker.DispositionSucceeded,
 		ProviderSessionID: session.providerSessionID, Summary: lastMessage,
-		Usage: message.Usage.tokenUsage(),
+		Usage: message.Usage.tokenUsage(session.currentBilling(), message.TotalCostUSD),
 	}, nil
 }
 

@@ -204,9 +204,15 @@ func TestAdapterEmitsResultTextWhenAssistantRecordIsMissing(t *testing.T) {
 	if err != nil || result.Summary != "Result-only answer." {
 		t.Fatalf("result-only result=%+v error=%v", result, err)
 	}
-	wantUsage := worker.TokenUsage{InputTokens: 12, CachedInputTokens: 4000, CacheWriteTokens: 300, OutputTokens: 56}
-	if result.Usage == nil || *result.Usage != wantUsage {
-		t.Fatalf("result-only usage = %+v, want %+v", result.Usage, wantUsage)
+	wantUsage := worker.TokenUsage{InputTokens: 12, CachedInputTokens: 4000, CacheWriteTokens: 300, OutputTokens: 56,
+		Billing: worker.BillingSubscription}
+	if result.Usage == nil || result.Usage.CostUSD == nil || *result.Usage.CostUSD != 0.0125 {
+		t.Fatalf("result-only cost = %+v", result.Usage)
+	}
+	got := *result.Usage
+	got.CostUSD = nil
+	if got != wantUsage {
+		t.Fatalf("result-only usage = %+v, want %+v", got, wantUsage)
 	}
 	if observed := <-events; !slices.Equal(observed, []worker.Event{
 		{Type: worker.EventActivity, Text: "Claude started working."},
@@ -538,7 +544,7 @@ func TestClaudeCLIHelper(t *testing.T) {
 	}
 	helperWrite(writer, map[string]any{
 		"type": "system", "subtype": "init", "session_id": sessionID, "cwd": directory,
-		"model": "test-model",
+		"model": "test-model", "apiKeySource": "none",
 	})
 	if mode == "malformed" || mode == "mismatch" {
 		if mode == "malformed" {
@@ -608,7 +614,7 @@ func TestClaudeCLIHelper(t *testing.T) {
 	case "result-only":
 		helperWrite(writer, map[string]any{
 			"type": "result", "subtype": "success", "session_id": sessionID,
-			"is_error": false, "result": "Result-only answer.",
+			"is_error": false, "result": "Result-only answer.", "total_cost_usd": 0.0125,
 			"usage": map[string]any{
 				"input_tokens": 12, "cache_creation_input_tokens": 300,
 				"cache_read_input_tokens": 4000, "output_tokens": 56,
@@ -834,5 +840,16 @@ func TestClaudeTurnsPassTheirEffort(t *testing.T) {
 	)
 	if err != nil || slices.Contains(arguments, "--effort") {
 		t.Fatalf("default effort arguments = %v err=%v", arguments, err)
+	}
+}
+
+func TestClaudeBillingComesFromTheKeySource(t *testing.T) {
+	for source, want := range map[string]worker.Billing{
+		"none": worker.BillingSubscription, "apiKeyHelper": worker.BillingAPIKey,
+		"ANTHROPIC_API_KEY": worker.BillingAPIKey, "": "",
+	} {
+		if got := billingOf(source); got != want {
+			t.Errorf("billingOf(%q) = %q, want %q", source, got, want)
+		}
 	}
 }

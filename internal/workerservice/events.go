@@ -486,8 +486,11 @@ func (service *Service) finishAttempt(
 	terminalResult.VisionPlan = result.VisionPlan
 	terminalResult.AssistantTurn = result.AssistantTurn
 	if result.Usage != nil {
-		usage := workerhttp.TokenUsage(*result.Usage)
-		terminalResult.Usage = &usage
+		terminalResult.Usage = &workerhttp.TokenUsage{
+			InputTokens: result.Usage.InputTokens, CachedInputTokens: result.Usage.CachedInputTokens,
+			CacheWriteTokens: result.Usage.CacheWriteTokens, OutputTokens: result.Usage.OutputTokens,
+			Billing: string(result.Usage.Billing), CostUSD: result.Usage.CostUSD,
+		}
 	}
 	if result.Outcome == worker.OutcomeFailed {
 		terminalResult.Error = &workerhttp.ProtocolError{
