@@ -124,11 +124,19 @@ func (s *Service) Create(
 		UpdatedAt:                  now,
 	}
 
+	if overrides.PhaseChoices != nil {
+		if _, err := overrides.PhaseChoices.Normalize(); err != nil {
+			return Feature{}, err
+		}
+	}
 	if err := s.store.Create(ctx, createdFeature); err != nil {
 		return Feature{}, fmt.Errorf(
 			"store feature: %w",
 			err,
 		)
+	}
+	if err := s.savePhaseChoices(ctx, createdFeature.ID, overrides.PhaseChoices); err != nil {
+		return Feature{}, err
 	}
 
 	return createdFeature, nil
@@ -255,6 +263,61 @@ type SettingsStore interface {
 	UpdateReadySettings(ctx context.Context, feature Feature) error
 }
 
+// PhaseChoiceStore keeps work orders' choices by phase (ADR-031).
+type PhaseChoiceStore interface {
+	PhaseChoices(ctx context.Context, featureID string) (project.PhaseChoices, error)
+	SavePhaseChoices(ctx context.Context, featureID string, choices project.PhaseChoices) error
+}
+
+// savePhaseChoices stores the phase choices overrides name, if any.
+func (s *Service) savePhaseChoices(ctx context.Context, featureID string, choices *project.PhaseChoices) error {
+	if choices == nil {
+		return nil
+	}
+	normalized, err := choices.Normalize()
+	if err != nil {
+		return err
+	}
+	store, ok := s.store.(PhaseChoiceStore)
+	if !ok {
+		return errors.New("work orders' phase choices cannot be saved")
+	}
+	return store.SavePhaseChoices(ctx, featureID, normalized)
+}
+
+// DropPlanModels clears the planning model and effort of each role whose
+// model the user switched, so the new model runs every phase (ADR-031).
+func (s *Service) DropPlanModels(ctx context.Context, featureID string, lead, reviewer bool) error {
+	store, ok := s.store.(PhaseChoiceStore)
+	if !ok || (!lead && !reviewer) {
+		return nil
+	}
+	choices, err := store.PhaseChoices(ctx, featureID)
+	if err != nil {
+		return err
+	}
+	updated := choices
+	if lead {
+		updated = updated.WithoutPlanModel(false)
+	}
+	if reviewer {
+		updated = updated.WithoutPlanModel(true)
+	}
+	if updated == choices {
+		return nil
+	}
+	return store.SavePhaseChoices(ctx, featureID, updated)
+}
+
+// PhaseChoices returns a work order's choices by phase.
+func (s *Service) PhaseChoices(ctx context.Context, featureID string) (project.PhaseChoices, error) {
+	store, ok := s.store.(PhaseChoiceStore)
+	if !ok {
+		return project.PhaseChoices{}, nil
+	}
+	return store.PhaseChoices(ctx, featureID)
+}
+
 // RenameStore renames work orders.
 type RenameStore interface {
 	Rename(ctx context.Context, id string, title string) error
@@ -323,7 +386,15 @@ func (s *Service) ChooseStartSettings(
 	if !ok {
 		return Feature{}, errors.New("work-order settings cannot be saved")
 	}
+	if overrides.PhaseChoices != nil {
+		if _, err := overrides.PhaseChoices.Normalize(); err != nil {
+			return Feature{}, err
+		}
+	}
 	if err := settings.UpdateReadySettings(ctx, chosen); err != nil {
+		return Feature{}, err
+	}
+	if err := s.savePhaseChoices(ctx, featureID, overrides.PhaseChoices); err != nil {
 		return Feature{}, err
 	}
 	return chosen, nil

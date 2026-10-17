@@ -31,6 +31,34 @@ type remoteLeadForceStopper interface {
 type AgentRoutedWorker struct {
 	runs    ProviderRunFinder
 	workers AgentWorkers
+	phases  PhaseChoiceReader
+}
+
+// PhaseChoiceReader reads a work order's choices by phase (ADR-031).
+type PhaseChoiceReader interface {
+	PhaseChoices(ctx context.Context, featureID string) (project.PhaseChoices, error)
+}
+
+// WithPhaseChoices makes planning turns run on each role's planning model and
+// effort, and later turns on its effort (ADR-031).
+func (router *AgentRoutedWorker) WithPhaseChoices(phases PhaseChoiceReader) *AgentRoutedWorker {
+	router.phases = phases
+	return router
+}
+
+// planningAttempt reports whether an attempt is a planning turn: a planning
+// discussion turn, its recovery, or the reviewer's plan confirmation.
+func planningAttempt(sessionID, attemptID string) bool {
+	rest, found := strings.CutPrefix(attemptID, sessionID+":")
+	if !found {
+		return false
+	}
+	kind, _, _ := strings.Cut(rest, ":")
+	switch kind {
+	case "planning", "planning-recovery", "approval":
+		return true
+	}
+	return false
 }
 
 func NewAgentRoutedWorker(runs ProviderRunFinder, workers AgentWorkers) (*AgentRoutedWorker, error) {
@@ -58,6 +86,15 @@ func (router *AgentRoutedWorker) PutAttempt(
 	}
 	// The run's current model wins: the user may have switched it since the
 	// request was built, and every new turn runs on the latest choice.
+	if router.phases != nil {
+		choices, err := router.phases.PhaseChoices(ctx, run.FeatureID)
+		if err != nil {
+			return workerhttp.Attempt{}, false, err
+		}
+		model, request.Assignment.Effort = choices.For(
+			role == workerhttp.RoleReviewer, planningAttempt(identity.SessionID, identity.AttemptID), model,
+		)
+	}
 	if model != "" {
 		request.Assignment.Model = model
 	}

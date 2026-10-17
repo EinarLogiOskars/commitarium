@@ -220,7 +220,7 @@ func (service *Service) refresh(ctx context.Context, stored record) (record, err
 					proposed = service.withWorkOrderModels(ctx, stored.Scope, proposed)
 				}
 				action.AssistantAction = proposed
-				for _, model := range []string{proposed.LeadModel, proposed.ReviewerModel} {
+				for _, model := range []string{proposed.LeadModel, proposed.ReviewerModel, proposed.LeadPlanModel, proposed.ReviewerPlanModel} {
 					if service.RequiresApproval(ctx, model) {
 						action.Premium = append(action.Premium, model)
 					}

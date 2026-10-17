@@ -544,6 +544,7 @@ func (api *API) applyStartWorkOrder(
 			request.AgentModels.Reviewer = &reviewer
 		}
 	}
+	request.PhaseChoices = action.PhaseChoices()
 	if _, ok := api.startFeature(w, r, stored, "assistant-"+action.ID, request); !ok {
 		return "", false
 	}
@@ -597,13 +598,14 @@ func (api *API) applyChangeModels(
 		writeRunModelsError(w, latest.ID, err)
 		return "", false
 	}
+	api.dropPlanModels(ctx, stored.ID, models)
 	return fmt.Sprintf("Switched the models of “%s”.", stored.Title), true
 }
 
 // premiumModels lists the models an action would run on that need the
 // user's explicit approval.
 func (api *API) premiumModels(ctx context.Context, projectID string, action conversations.Action) ([]string, error) {
-	models := []string{action.LeadModel, action.ReviewerModel}
+	models := []string{action.LeadModel, action.ReviewerModel, action.LeadPlanModel, action.ReviewerPlanModel}
 	if action.Type == featureartifact.AssistantStartWorkOrder {
 		stored, err := api.features.GetByID(ctx, projectID, action.WorkOrderID)
 		if err != nil {
@@ -739,6 +741,12 @@ func (api *API) assistantSettings(
 		}
 	}
 	overrides.AgentProviders, overrides.AgentModels = &providers, &chosen
+	if choices := action.PhaseChoices(); choices != nil {
+		if err := api.checkPhaseChoices(ctx, providers, chosen, *choices, skipReviewer); err != nil {
+			return feature.SettingsOverrides{}, err
+		}
+		overrides.PhaseChoices = choices
+	}
 	return overrides, nil
 }
 

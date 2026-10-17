@@ -476,6 +476,35 @@ func TestStartRunUsesTheSettingsChosenAtStart(t *testing.T) {
 	}
 }
 
+// A Start may choose planning models and efforts by phase (ADR-031); bad
+// ones are refused before anything changes.
+func TestStartRunSavesPhaseChoices(t *testing.T) {
+	features := &recordingFeatureService{getResult: feature.Feature{
+		ID: "fea_test", ProjectID: "prj_test", Title: "Filter", State: feature.StateReady,
+		AgentProviders: project.DefaultAgentProviders(), AgentModels: chosenModels,
+	}}
+	start := func(key, body string) *httptest.ResponseRecorder {
+		request := httptest.NewRequest(http.MethodPost, "/api/v1/projects/prj_test/features/fea_test/runs", strings.NewReader(body))
+		request.Header.Set("Idempotency-Key", key)
+		recorder := httptest.NewRecorder()
+		New(&recordingProjectService{}, features, nil, &recordingExecutionService{runErr: execution.ErrNotFound}, nil, &recordingRunStarter{}).
+			ServeHTTP(recorder, request)
+		return recorder
+	}
+	recorder := start("phase-ok", `{"phase_choices":{"lead_plan_model":"gpt-6-astra","lead_plan_effort":"high","lead_effort":"medium"}}`)
+	if recorder.Code != http.StatusAccepted {
+		t.Fatalf("status %d: %s", recorder.Code, recorder.Body.String())
+	}
+	if choices := features.receivedOverrides.PhaseChoices; choices == nil ||
+		choices.LeadPlanModel != "gpt-6-astra" || choices.LeadEffort != "medium" {
+		t.Fatalf("phase choices = %+v", choices)
+	}
+	if recorder := start("phase-bad", `{"phase_choices":{"lead_effort":"Max!"}}`); recorder.Code != http.StatusBadRequest ||
+		!strings.Contains(recorder.Body.String(), "invalid_phase_choices") {
+		t.Fatalf("bad effort status %d: %s", recorder.Code, recorder.Body.String())
+	}
+}
+
 // readyingFeatureService reports the work order as Ready once the workflow
 // readied it.
 type readyingFeatureService struct {

@@ -1650,6 +1650,21 @@ refuses a choice that cannot run, each with a message that says what to do:
 Premium models still need the user's approval on the assistant's actions
 (`409 premium_approval_required`).
 
+`phase_choices` (optional, ADR-031) chooses models and efforts by phase:
+`{"lead_plan_model", "lead_plan_effort", "lead_effort", "reviewer_plan_model",
+"reviewer_plan_effort", "reviewer_effort"}`, each optional. Planning turns
+(the planning discussion, its recovery, and the reviewer's plan confirmation)
+run on a role's planning model and effort; later turns on its model and
+`*_effort`. An empty planning model or effort is the role's own; an empty
+effort is the model's default. The agent never changes, so a planning model
+must be one the role's agent offers (`400 model_unavailable`), and each
+effort one its model's catalog lists (`400 effort_unavailable`); a malformed
+value returns `400 invalid_phase_choices`. The choices are saved on the work
+order (a single work order's response carries `phase_choices` when it has
+any) and read whenever a turn is routed. Switching a role's model with
+`POST /api/v1/runs/{id}/models` clears that role's planning model and effort,
+so the new model runs every phase.
+
 `steps` chooses the work order's optional steps (ADR-018). Both default to
 `true`, and a reviewer requires a documented plan, so `{"documented_plan":
 false, "reviewer": true}` returns `400 invalid_steps`:
@@ -2603,7 +2618,11 @@ actions, and its notes.
   runs it through the same paths as the app's own buttons and records the
   outcome. On a create or start, `lead_agent`, `lead_model`, `reviewer_agent`,
   and `reviewer_model` replace the card's choice, checked like any other
-  (ADR-027). `409 premium_approval_required` without `confirm_premium` for a
+  (ADR-027). Create and start actions may also carry `lead_plan_model`,
+  `lead_plan_effort`, `lead_effort`, `reviewer_plan_model`,
+  `reviewer_plan_effort`, and `reviewer_effort`, applied and checked as a
+  Start's `phase_choices`; a planning model counts toward `premium`.
+  `409 premium_approval_required` without `confirm_premium` for a
   premium action; `409 action_not_pending` once resolved.
 - `POST .../{scope}/actions/{actionID}/dismiss` dismisses it.
 - `POST .../{scope}/autopilot` with `{"level"}` turns autopilot on for the open

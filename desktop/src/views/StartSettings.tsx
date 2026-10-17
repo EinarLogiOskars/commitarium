@@ -2,6 +2,11 @@ import { useEffect, useState } from "react";
 import { getProjectValidation } from "../api/projects";
 import { AgentModelFields } from "./AgentModelFields";
 import { NoValidationWarning } from "./NoValidationWarning";
+import {
+  applicablePhaseChoices,
+  keepSupportedEfforts,
+  PhaseChoiceFields,
+} from "./PhaseChoiceFields";
 import { pickModel, useModels } from "./useModels";
 import { useWorkSuggestion } from "./useWorkSuggestion";
 import { choiceMade } from "./workChoice";
@@ -11,6 +16,7 @@ import type {
   AutonomyPolicy,
   Feature,
   MergePolicy,
+  PhaseChoices,
   WorkSteps,
 } from "../api/types";
 
@@ -28,6 +34,8 @@ export interface StartSettingsValue {
   merge_policy: MergePolicy;
   independent_acceptance_tests: boolean;
   steps: StartSteps;
+  /** Efforts and planning models by phase (ADR-031). */
+  phase_choices: PhaseChoices;
 }
 
 /** The valid combinations of a work order's steps (ADR-018): a reviewer
@@ -76,14 +84,20 @@ export function startSettingsFrom(feature: Feature): StartSettingsValue {
     merge_policy: feature.merge_policy ?? "require_user_approval",
     independent_acceptance_tests: feature.independent_acceptance_tests ?? false,
     steps: feature.steps ?? { documented_plan: true, reviewer: true },
+    phase_choices: feature.phase_choices ?? {},
   };
 }
 
 /** What a Start sends: agents and models only once they are chosen, so a
  * Start without any is refused with a reason rather than sent half-made. */
 export function startBody(value: StartSettingsValue): Partial<StartSettingsValue> {
-  if (choiceMade(value.agent_providers, value.agent_models)) return value;
-  const rest: Partial<StartSettingsValue> = { ...value };
+  const roles: ("lead" | "reviewer")[] = value.steps.reviewer ? ["lead", "reviewer"] : ["lead"];
+  const phased = {
+    ...value,
+    phase_choices: applicablePhaseChoices(value.phase_choices, roles, value.steps.documented_plan),
+  };
+  if (choiceMade(value.agent_providers, value.agent_models)) return phased;
+  const rest: Partial<StartSettingsValue> = { ...phased };
   delete rest.agent_providers;
   delete rest.agent_models;
   return rest;
@@ -187,9 +201,26 @@ export function StartSettings({
             providers={providers}
             models={models}
             modelsFor={modelsFor}
-            onChange={(p, m) => onChange({ ...value, agent_providers: p, agent_models: m })}
+            onChange={(p, m) =>
+              onChange({
+                ...value,
+                agent_providers: p,
+                agent_models: m,
+                phase_choices: keepSupportedEfforts(value.phase_choices, p, m, modelsFor),
+              })
+            }
             disabled={disabled}
             roles={steps.reviewer ? ["lead", "reviewer"] : ["lead"]}
+          />
+          <PhaseChoiceFields
+            providers={providers}
+            models={models}
+            choices={value.phase_choices}
+            modelsFor={modelsFor}
+            onChange={(phase_choices) => onChange({ ...value, phase_choices })}
+            roles={steps.reviewer ? ["lead", "reviewer"] : ["lead"]}
+            planned={steps.documented_plan}
+            disabled={disabled}
           />
         </div>
       </div>

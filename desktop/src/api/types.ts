@@ -38,6 +38,18 @@ export interface AgentModels {
   reviewer: string;
 }
 
+/** A work order's optional choices by phase (ADR-031): the model and effort
+ * each role plans with, and its effort after the plan. Empty keeps the role's
+ * model and the model's default effort. */
+export interface PhaseChoices {
+  lead_plan_model?: string;
+  lead_plan_effort?: string;
+  lead_effort?: string;
+  reviewer_plan_model?: string;
+  reviewer_plan_effort?: string;
+  reviewer_effort?: string;
+}
+
 export type AgentRole = "lead" | "reviewer";
 
 /** One selectable model from a provider+role catalog. */
@@ -279,6 +291,8 @@ export interface Feature {
   // created or started with a choice (ADR-027); the run snapshots them.
   agent_providers?: AgentProviders;
   agent_models?: AgentModels;
+  /** On a single work order: its choices by phase, if any. */
+  phase_choices?: PhaseChoices;
   autonomy_policy?: AutonomyPolicy;
   merge_policy?: MergePolicy;
   steps?: WorkSteps;

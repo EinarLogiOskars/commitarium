@@ -56,6 +56,9 @@ type featureResponse struct {
 	// QueuedAfter names the work this one waits for before autopilot starts
 	// it, so two changes to the same part of the app do not run at once.
 	QueuedAfter string `json:"queued_after,omitempty"`
+	// PhaseChoices are its planning models and efforts (ADR-031), on a single
+	// work order's response.
+	PhaseChoices *project.PhaseChoices `json:"phase_choices,omitempty"`
 	// Session reports a session's agent activity in feature lists (ADR-019).
 	Session   *sessionActivityResponse `json:"session,omitempty"`
 	CreatedAt time.Time                `json:"created_at"`
@@ -281,6 +284,13 @@ func (api *API) getFeatureByIDHandler(
 
 	response := newFeatureResponse(storedFeature)
 	response.QueuedAfter = api.queuedStarts(r.Context(), projectID)[storedFeature.ID]
+	if phases, ok := api.features.(interface {
+		PhaseChoices(context.Context, string) (project.PhaseChoices, error)
+	}); ok {
+		if choices, err := phases.PhaseChoices(r.Context(), storedFeature.ID); err == nil && choices != (project.PhaseChoices{}) {
+			response.PhaseChoices = &choices
+		}
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 

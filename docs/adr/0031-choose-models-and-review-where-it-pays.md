@@ -59,11 +59,15 @@ the merged guide; its instructions carry the rules in
   steps) implementation; Strong code review.
 - Escalate one tier when a lead is stuck.
 
-**A role can use a different model and effort for planning.** A run stores an
-optional planning model and effort per role. When the plan is confirmed, the
-coordinator switches each role at its next turn, through ADR-021's
-mechanism. The agent does not change, so the switch stays within one
-provider.
+**A role can use a different model and effort for planning.** A work order
+stores an optional planning model and effort per role, and an effort for the
+rest, chosen at Start with its other settings. Each turn is routed by its
+phase: planning turns (the discussion, its recovery, and the plan
+confirmation) run on the planning choice, later turns on the role's model and
+effort. The conversation carries on across the switch as with ADR-021, and
+recovery follows the phase on its own. The agent does not change, so the
+switch stays within one provider. Switching a role's model clears its
+planning model.
 
 **Effort is chosen per turn and capped for the assistant.** Each turn carries
 an effort; empty keeps the model's default. An assistant setting holds the

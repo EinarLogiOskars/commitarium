@@ -71,7 +71,23 @@ func (api *API) changeRunModelsHandler(w http.ResponseWriter, r *http.Request) {
 		writeRunModelsError(w, runID, err)
 		return
 	}
+	api.dropPlanModels(r.Context(), run.FeatureID, models)
 	api.writeRun(w, r, http.StatusOK, changed)
+}
+
+// dropPlanModels clears the planning model of each role whose model was
+// switched, so the new model runs every phase (ADR-031). It is best effort:
+// the switch itself has happened.
+func (api *API) dropPlanModels(ctx context.Context, featureID string, models project.AgentModels) {
+	dropper, ok := api.features.(interface {
+		DropPlanModels(context.Context, string, bool, bool) error
+	})
+	if !ok {
+		return
+	}
+	if err := dropper.DropPlanModels(ctx, featureID, models.Lead != "", models.Reviewer != ""); err != nil {
+		log.Printf("clear the planning models of work order %q: %v", featureID, err)
+	}
 }
 
 func writeRunModelsError(w http.ResponseWriter, runID string, err error) {

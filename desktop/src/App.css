@@ -1469,6 +1469,21 @@ button.primary {
 .neworder__grid select {
   width: 100%;
 }
+/* A role's planning model and effort, folded away until wanted (ADR-031). */
+.phase-choice {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.phase-choice summary {
+  cursor: pointer;
+  padding: 2px 0;
+}
+.phase-choice[open] summary {
+  color: var(--text);
+}
 .neworder__check {
   display: flex;
   align-items: flex-start;

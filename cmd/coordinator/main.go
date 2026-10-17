@@ -486,6 +486,7 @@ func run(ctx context.Context, coordinatorConfig config) error {
 		if err != nil {
 			return fmt.Errorf("create agent worker router: %w", err)
 		}
+		workerRouter.WithPhaseChoices(featureService)
 		deletionWorker = workerRouter
 		pumpRouter, err := orchestration.NewAgentRoutedPump(
 			executionService,
