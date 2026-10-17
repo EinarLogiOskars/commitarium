@@ -5,7 +5,7 @@
 Replace the four fixed worker profiles (Codex lead, Codex reviewer, Claude
 lead, Claude reviewer) with **agents**. An agent is one provider account: a
 subscription or an API key, such as "Claude Max", "Claude API", or
-"Codex Pro". This is milestone 3 of [V1_VISION.md](V1_VISION.md).
+"Codex Pro". This is milestone 3 of [V1_VISION.md](../../V1_VISION.md).
 
 **Status:** implemented on `feat/agents` (A1–A9); awaiting user testing (see
 Verification).

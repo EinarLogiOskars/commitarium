@@ -206,7 +206,7 @@ rounds.
 ## Settings redesign
 
 Riding along because this plan adds settings. The app Settings
-([AppSettings.tsx](desktop/src/views/AppSettings.tsx)) is one long modal: every
+([AppSettings.tsx](../../desktop/src/views/AppSettings.tsx)) is one long modal: every
 section stacked under small uppercase headings, cramped, with no separation
 and weak keyboard and screen-reader support. It becomes a larger modal laid
 out like macOS System Settings: a sidebar of tabs on the left, the selected

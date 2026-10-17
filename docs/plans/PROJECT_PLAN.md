@@ -26,7 +26,7 @@ incomplete phase complete. Phase 2, Phase 4, and Phase 5 are closed.
 | Phase 8: Remote and phone access | Deferred |
 
 What 1.0 means, and the work between here and there, is recorded in
-[V1_VISION.md](V1_VISION.md).
+[V1_VISION.md](../../V1_VISION.md).
 
 ## Product vision
 
@@ -187,7 +187,7 @@ implementation, and review responses. The reviewer conversation continues from
 planning consultation through code review and resolution verification. These
 roles remain separate conversations and identities even when the user assigns
 the same provider to both. The coordinator routes their explicit messages; the
-workers do not contact or launch each other directly. See [ADR-007](docs/adr/0007-route-visible-agent-dialogue-and-mirror-audit-events.md).
+workers do not contact or launch each other directly. See [ADR-007](../adr/0007-route-visible-agent-dialogue-and-mirror-audit-events.md).
 
 ### Forgejo
 
@@ -257,7 +257,7 @@ mapping so later synchronization does not assume the two histories share commit
 IDs. Forgejo remains the detailed audit source. The optional operation uses the
 user's host-side Git credential helper or provider integration and does not pass
 credentials, arbitrary commands, or a writable host repository into a container.
-See [ADR-008](docs/adr/0008-export-completed-work-as-clean-host-commits.md).
+See [ADR-008](../adr/0008-export-completed-work-as-clean-host-commits.md).
 
 ## Multi-project workspace
 
@@ -485,7 +485,7 @@ Requirements:
 ## Security boundaries
 
 Commitarium's current security goal is deliberately narrow and is defined in
-[`docs/threat-model.md`](docs/threat-model.md): agent-controlled work must stay
+[`docs/threat-model.md`](../threat-model.md): agent-controlled work must stay
 inside its managed environment and must not directly affect the host system,
 the user's original repository, or an upstream repository.
 

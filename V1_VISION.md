@@ -7,7 +7,7 @@ Agreed direction, 2026-10-09; kinds of work and the order revised on
 stand" table says so. Detailed implementation plans and
 ADRs follow per milestone; this document records what 1.0 is and why.
 
-[PROJECT_PLAN.md](PROJECT_PLAN.md) remains the record of the foundation that
+[PROJECT_PLAN.md](docs/plans/PROJECT_PLAN.md) remains the record of the foundation that
 1.0 builds on: everything below extends it rather than replacing it.
 
 ## The idea
@@ -42,7 +42,7 @@ when it starts.
 A continuous 1:1 conversation with an agent for many small edits, where the
 user sees each change before deciding to keep it. Not a run that goes start to
 finish and then brings the user in. Planned in
-[SESSIONS_PLAN.md](SESSIONS_PLAN.md) (ADR-019).
+[SESSIONS_PLAN.md](docs/plans/SESSIONS_PLAN.md) (ADR-019).
 
 - **One click to start.** The session opens on its own branch and draft pull
   request and greets the user; the first message starts the agent, and its
@@ -165,7 +165,7 @@ against; at Start the lead first checks that the brief still holds, then plans
 the commits with the reviewer. A work order without clarification goes from
 Draft straight to In progress. Sessions join the same view, and it is where
 paused sessions are visible. See
-[READY_WORK_ORDERS_PLAN.md](READY_WORK_ORDERS_PLAN.md).
+[READY_WORK_ORDERS_PLAN.md](docs/plans/READY_WORK_ORDERS_PLAN.md).
 
 ## Where it leads
 
@@ -211,14 +211,15 @@ public coordinator API, and every new action comes with an approval policy
 | Part | Status |
 | --- | --- |
 | Work order (full) | Done. Today's product. |
-| Planning view | Draft and Ready states, handoff briefs, Start with a freshness check, and settings chosen at Start ([READY_WORK_ORDERS_PLAN.md](READY_WORK_ORDERS_PLAN.md)). |
-| Escalation | Done: wait reasons, the attention inbox, native notifications, the intervene bar. Failures pause instead of ending work orders ([RECOVERABLE_RUNS_PLAN.md](RECOVERABLE_RUNS_PLAN.md), ADR-017): retry, reopen, back to Ready, and resume after an expired login. |
+| Planning view | Draft and Ready states, handoff briefs, Start with a freshness check, and settings chosen at Start ([READY_WORK_ORDERS_PLAN.md](docs/plans/READY_WORK_ORDERS_PLAN.md)). |
+| Escalation | Done: wait reasons, the attention inbox, native notifications, the intervene bar. Failures pause instead of ending work orders ([RECOVERABLE_RUNS_PLAN.md](docs/plans/RECOVERABLE_RUNS_PLAN.md), ADR-017): retry, reopen, back to Ready, and resume after an expired login. |
 | Isolation | Done. Every new kind of work reuses it. |
-| Agents | Done ([AGENTS_PLAN.md](AGENTS_PLAN.md), ADR-016): one worker per provider account, serving both roles, chosen at Start. |
-| Flexible work orders | Done ([FLEXIBLE_WORK_ORDERS_PLAN.md](FLEXIBLE_WORK_ORDERS_PLAN.md), ADR-018): Full, Planned, and Quick change chosen at Start, and a Draft can start without clarifying. Turning a step on mid-run is a follow-up. |
-| Session | Done; awaiting testing ([SESSIONS_PLAN.md](SESSIONS_PLAN.md), ADR-019): one-click start, chat on the session branch, catch-up with main, session preview, one commit at finish through the merge gate. |
-| Project direction and assistant | Missing. The clarification chat and `SetupAssistant` are working templates. |
-| Builder mode, autopilot, Apps | Missing; after the parts above. |
+| Agents | Done ([AGENTS_PLAN.md](docs/plans/AGENTS_PLAN.md), ADR-016): one worker per provider account, serving both roles, chosen at Start. |
+| Flexible work orders | Done ([FLEXIBLE_WORK_ORDERS_PLAN.md](docs/plans/FLEXIBLE_WORK_ORDERS_PLAN.md), ADR-018): Full, Planned, and Quick change chosen at Start, and a Draft can start without clarifying. Turning a step on mid-run is a follow-up. |
+| Session | Done and tested in real use ([SESSIONS_PLAN.md](docs/plans/SESSIONS_PLAN.md), ADR-019): one-click start, chat on the session branch, catch-up with main, session preview, one commit at finish through the merge gate. |
+| Project direction and assistant | Done ([ASSISTANT_PLAN.md](docs/plans/ASSISTANT_PLAN.md), ADR-020, ADR-022): the Vision page with an assistant-written plan, one assistant at the top level and in each project that acts through approval cards, usage limits, and recovery of blocked work ([ASSISTANT_RECOVERY_PLAN.md](docs/plans/ASSISTANT_RECOVERY_PLAN.md), ADR-032). |
+| Builder mode, autopilot, Apps | Done: autopilot on a goal the user set (ADR-023); the Apps area, where a sentence starts a new app and the assistant drives ([APPS_PLAN.md](docs/plans/APPS_PLAN.md), ADR-024). AI for apps through a local gateway is proposed ([APP_AI_PLAN.md](docs/plans/APP_AI_PLAN.md), ADR-033). |
+| Marketplace | MVP done ([MARKETPLACE_PLAN.md](docs/plans/MARKETPLACE_PLAN.md)): a closed Forgejo marketplace with sign-up, releasing an app, and browsing and installing as a local copy. |
 
 Worker concurrency: workers run several attempts at once (one provider process
 per attempt), advertise no attempt limit, and a test runs two attempts
@@ -251,17 +252,17 @@ Live reload depends on the project's compose file mounting its sources.
 ## Order
 
 1. Efficient planning and review dialogue
-   ([EFFICIENT_DIALOGUE_PLAN.md](EFFICIENT_DIALOGUE_PLAN.md)). Done.
+   ([EFFICIENT_DIALOGUE_PLAN.md](docs/plans/EFFICIENT_DIALOGUE_PLAN.md)). Done.
 2. Ready work orders: Draft and Ready states, handoff briefs written with the
    first piece of the project assistant, and Start with a freshness check
-   ([READY_WORK_ORDERS_PLAN.md](READY_WORK_ORDERS_PLAN.md)). Done.
-3. Agents ([AGENTS_PLAN.md](AGENTS_PLAN.md)). Done, with recoverable runs and
+   ([READY_WORK_ORDERS_PLAN.md](docs/plans/READY_WORK_ORDERS_PLAN.md)). Done.
+3. Agents ([AGENTS_PLAN.md](docs/plans/AGENTS_PLAN.md)). Done, with recoverable runs and
    settings chosen at Start.
 4. Flexible work orders: optional reviewer, documented plan, and
    clarification, with presets
-   ([FLEXIBLE_WORK_ORDERS_PLAN.md](FLEXIBLE_WORK_ORDERS_PLAN.md)).
+   ([FLEXIBLE_WORK_ORDERS_PLAN.md](docs/plans/FLEXIBLE_WORK_ORDERS_PLAN.md)).
 5. Sessions: chat, catch-up, session preview, one commit at finish
-   ([SESSIONS_PLAN.md](SESSIONS_PLAN.md)).
+   ([SESSIONS_PLAN.md](docs/plans/SESSIONS_PLAN.md)).
 6. Project direction: the priority plan and its mapping onto work orders and
    sessions.
 7. The project assistant with tools, and builder mode.

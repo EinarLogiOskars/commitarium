@@ -110,6 +110,6 @@ After E7, re-run the baseline cases and compare token totals and outcomes:
 
 - **Effort selection.** Commitarium never passes effort, so Claude Code's
   default applies. Choosing it belongs with agents in
-  [V1_VISION.md](V1_VISION.md).
+  [V1_VISION.md](../../V1_VISION.md).
 - **Tasks.** The README case really belongs to a task. This plan makes work
   orders efficient; tasks remove the ceremony entirely.
