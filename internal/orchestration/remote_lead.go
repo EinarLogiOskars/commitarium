@@ -990,6 +990,7 @@ func (starter *RemoteLeadStarter) RecoverBlockerWithDirective(
 	if directive.Action == RecoveryActionLeavePaused {
 		return run, false, nil
 	}
+	starter.noteRecovery(ctx, run.ID, actionID, directive)
 	storedFeature, err := starter.features.GetByID(ctx, run.FeatureID)
 	if err != nil {
 		return execution.Run{}, false, err
@@ -1254,6 +1255,7 @@ func (starter *RemoteLeadStarter) mergeAfterGates(ctx context.Context, run execu
 	}
 	starter.recordMergeBlocked(ctx, run.ID, err)
 	if !starter.mergeBlockedByMovedBase(ctx, run, err) {
+		starter.noteBlocker(ctx, run.ID, execution.BlockerCheck, "merge", implementationMergeBlockedReason, implementationMergeBlockedReason)
 		return starter.waitRun(ctx, run.ID, implementationMergeBlockedReason, execution.RunWaitKindBlocker)
 	}
 	requested, countErr := starter.baseUpdatesRequested(ctx, run)
@@ -1261,6 +1263,7 @@ func (starter *RemoteLeadStarter) mergeAfterGates(ctx context.Context, run execu
 		starter.reportError(fmt.Errorf("count updates onto main for run %q: %w", run.ID, countErr))
 	}
 	if countErr != nil || requested >= maxAutomaticBaseUpdates {
+		starter.noteBlocker(ctx, run.ID, execution.BlockerCheck, "merge", implementationMergeBehindMainReason, implementationMergeBehindMainReason)
 		return starter.waitRun(ctx, run.ID, implementationMergeBehindMainReason, execution.RunWaitKindBlocker)
 	}
 	if paused, err := starter.stopAtPauseBoundary(ctx, run.ID, implementationMergeBehindMainReason); err != nil || paused {
@@ -1272,6 +1275,7 @@ func (starter *RemoteLeadStarter) mergeAfterGates(ctx context.Context, run execu
 			return err
 		}
 		starter.reportError(fmt.Errorf("start update onto main for run %q: %w", run.ID, err))
+		starter.noteBlocker(ctx, run.ID, execution.BlockerCheck, "merge", implementationMergeBehindMainReason, implementationMergeBehindMainReason)
 		return starter.waitRun(ctx, run.ID, implementationMergeBehindMainReason, execution.RunWaitKindBlocker)
 	}
 	return nil
@@ -6674,6 +6678,8 @@ func (starter *RemoteLeadStarter) requirePlanPublicationReview(
 			},
 		},
 	)
+	starter.noteBlocker(ctx, runID, execution.BlockerCheck, "plan publication",
+		planningPublicationReviewReason, planningPublicationReviewReason)
 	_ = starter.waitRun(ctx, runID, planningPublicationReviewReason, execution.RunWaitKindBlocker)
 }
 
@@ -6793,6 +6799,15 @@ func (starter *RemoteLeadStarter) pauseFailedTurn(
 			return err
 		}
 	}
+	kind := execution.BlockerAgent
+	switch {
+	case attempt.Result.Error != nil && attempt.Result.Error.Code == workerhttp.ErrorUsageLimit:
+		kind = execution.BlockerLimit
+	case attempt.Result.Error != nil && attempt.Result.Error.Code == workerhttp.ErrorProviderLoginRequired,
+		providerInterruption(attempt.Result) != "":
+		kind = execution.BlockerEnvironment
+	}
+	starter.noteBlocker(ctx, request.runID, kind, "", cause, reason)
 	return starter.waitRun(ctx, request.runID, reason, execution.RunWaitKindBlocker)
 }
 
@@ -6823,6 +6838,8 @@ func (starter *RemoteLeadStarter) requireReview(
 		}
 		text += " What failed: " + detail + "."
 	}
+	kind, check := classifyCause(cause)
+	starter.noteBlocker(ctx, request.runID, kind, check, cause.Error(), text)
 	_, _ = starter.executions.RecordSessionEventWithID(
 		ctx, request.identity.AttemptID+":recovery:review-required",
 		request.identity.SessionID,
@@ -6846,6 +6863,7 @@ func (starter *RemoteLeadStarter) handleInputRequired(
 	result workerhttp.TerminalResult,
 ) error {
 	if result.EnvironmentRequest == nil || starter.environmentRequests == nil {
+		starter.noteBlocker(ctx, request.runID, execution.BlockerAgent, "", result.Summary, result.Summary)
 		return starter.waitRun(ctx, request.runID, result.Summary, execution.RunWaitKindBlocker)
 	}
 	run, err := starter.executions.GetRun(ctx, request.runID)
@@ -6932,6 +6950,9 @@ func (starter *RemoteLeadStarter) waitRun(
 	}
 	if waitKind == "" {
 		waitKind = execution.RunWaitKindBlocker
+	}
+	if waitKind == execution.RunWaitKindBlocker {
+		starter.noteUnnamedBlocker(ctx, runID, reason)
 	}
 	if run.Status == execution.RunStatusWaitingForUser {
 		storedKind := run.WaitKind

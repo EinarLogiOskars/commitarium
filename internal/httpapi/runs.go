@@ -48,6 +48,32 @@ type runResponse struct {
 	UsageLimit                 *usageLimitResponse          `json:"usage_limit,omitempty"`
 	Retrying                   *retryingResponse            `json:"retrying,omitempty"`
 	Steps                      workStepsResponse            `json:"steps"`
+	// Blocker says what blocks a run waiting on one, and Recoveries what has
+	// been tried on it (ADR-032).
+	Blocker    *blockerResponse  `json:"blocker,omitempty"`
+	Recoveries []recoveryAttempt `json:"recoveries,omitempty"`
+}
+
+type blockerResponse struct {
+	Kind        execution.BlockerKind `json:"kind"`
+	Check       string                `json:"check,omitempty"`
+	Detail      string                `json:"detail"`
+	Fingerprint string                `json:"fingerprint"`
+	RecordedAt  time.Time             `json:"recorded_at"`
+}
+
+type recoveryAttempt struct {
+	How           execution.RecoveryHow `json:"how"`
+	Guidance      string                `json:"guidance,omitempty"`
+	FromAssistant bool                  `json:"from_assistant"`
+	Fingerprint   string                `json:"fingerprint"`
+	CreatedAt     time.Time             `json:"created_at"`
+}
+
+// runBlockers reads what blocked a run and the recoveries tried on it.
+type runBlockers interface {
+	RunBlocker(context.Context, string) (execution.Blocker, bool, error)
+	RunRecoveries(context.Context, string) ([]execution.Recovery, error)
 }
 
 // loginRequiredResponse names the agent a paused run waits for to log in
@@ -605,6 +631,26 @@ func (api *API) newRunResponse(
 		}
 	} else if !errors.Is(err, execution.ErrNotFound) {
 		return runResponse{}, err
+	}
+	if blockers, ok := api.execution.(runBlockers); ok && run.WaitKind == execution.RunWaitKindBlocker {
+		if blocker, found, err := blockers.RunBlocker(ctx, run.ID); err != nil {
+			return runResponse{}, err
+		} else if found {
+			response.Blocker = &blockerResponse{
+				Kind: blocker.Kind, Check: blocker.Check, Detail: blocker.Detail,
+				Fingerprint: blocker.Fingerprint, RecordedAt: blocker.RecordedAt,
+			}
+		}
+		recoveries, err := blockers.RunRecoveries(ctx, run.ID)
+		if err != nil {
+			return runResponse{}, err
+		}
+		for _, recovery := range recoveries {
+			response.Recoveries = append(response.Recoveries, recoveryAttempt{
+				How: recovery.How, Guidance: recovery.Guidance, FromAssistant: recovery.FromAssistant,
+				Fingerprint: recovery.Fingerprint, CreatedAt: recovery.CreatedAt,
+			})
+		}
 	}
 	return response, nil
 }
