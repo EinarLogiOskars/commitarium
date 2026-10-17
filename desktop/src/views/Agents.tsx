@@ -28,6 +28,9 @@ import {
 import { resetLabel } from "./UsageLimitBanner";
 import { AssistantSettingsSection } from "./AssistantSettings";
 import { ModelTiersSection } from "./ModelTiers";
+import { trapFocus } from "./AppSettings";
+
+type AgentsTab = "accounts" | "assistant" | "models";
 import { ApiError } from "../api/client";
 import type { AgentProvider } from "../api/types";
 import { reloadAgents } from "./useAgents";
@@ -177,7 +180,7 @@ export function LoginSteps({ profile, onChanged }: { profile: Profile; onChanged
 
 /** Agents (ADR-016): one per provider account. Each signs in once and can lead
  * or review any number of work orders. A new install has none (ADR-027): the
- * page starts with adding one. `focus` scrolls to the assistant's settings. */
+ * page starts with adding one. `focus` opens the assistant's tab. */
 export function Agents({ onClose, focus }: { onClose: () => void; focus?: "assistant" }) {
   const [profiles, setProfiles] = useState<Profile[] | null>(null);
   const [limits, setLimits] = useState<AgentLimit[]>([]);
@@ -185,12 +188,10 @@ export function Agents({ onClose, focus }: { onClose: () => void; focus?: "assis
   const [error, setError] = useState<string | null>(null);
   // The agent just added goes straight on to signing in.
   const [added, setAdded] = useState<string | null>(null);
-  const assistantRef = useRef<HTMLDivElement | null>(null);
   const hasAgents = (profiles?.length ?? 0) > 0;
-  useEffect(() => {
-    if (focus === "assistant" && hasAgents)
-      assistantRef.current?.scrollIntoView({ block: "start" });
-  }, [focus, hasAgents]);
+  const [tab, setTab] = useState<AgentsTab>(focus === "assistant" ? "assistant" : "accounts");
+  const cardRef = useRef<HTMLDivElement | null>(null);
+  const tabRefs = useRef<Partial<Record<AgentsTab, HTMLButtonElement | null>>>({});
 
   const refresh = useCallback(async () => {
     try {
@@ -229,15 +230,46 @@ export function Agents({ onClose, focus }: { onClose: () => void; focus?: "assis
     };
   }, [refresh]);
 
-  return (
-    <div className="modal" onClick={onClose}>
-      <div className="modal__card" onClick={(e) => e.stopPropagation()}>
-        <h2>Agents</h2>
+  // Accounts, the assistant, and the model guide each get a tab, laid out
+  // like Settings. Every panel stays mounted, so a sign-in in progress keeps
+  // going while another tab is open.
+  const tabs: { id: AgentsTab; label: string }[] = hasAgents
+    ? [
+        { id: "accounts", label: "Accounts" },
+        { id: "assistant", label: "Assistant" },
+        { id: "models", label: "Models" },
+      ]
+    : [{ id: "accounts", label: "Accounts" }];
+  const shown = tabs.some((t) => t.id === tab) ? tab : "accounts";
+  const onTabKey = (e: React.KeyboardEvent, index: number) => {
+    const last = tabs.length - 1;
+    const next =
+      e.key === "ArrowDown" || e.key === "ArrowRight"
+        ? index === last
+          ? 0
+          : index + 1
+        : e.key === "ArrowUp" || e.key === "ArrowLeft"
+          ? index === 0
+            ? last
+            : index - 1
+          : e.key === "Home"
+            ? 0
+            : e.key === "End"
+              ? last
+              : null;
+    if (next === null) return;
+    e.preventDefault();
+    setTab(tabs[next].id);
+    tabRefs.current[tabs[next].id]?.focus();
+  };
+
+  const panels: Record<AgentsTab, React.ReactNode> = {
+    accounts: (
+      <>
         <p className="muted">
           Connect each agent to its Codex or Claude account. An agent signs in once and serves as
           lead or reviewer; secrets go straight to a private volume and never touch the coordinator.
         </p>
-        {error && <div className="banner banner--error">{error}</div>}
         <CliVersions />
 
         <div className="profiles">
@@ -274,19 +306,72 @@ export function Agents({ onClose, focus }: { onClose: () => void; focus?: "assis
             await changed();
           }}
         />
+      </>
+    ),
+    assistant: hasAgents ? <AssistantSettingsSection /> : null,
+    models: hasAgents ? <ModelTiersSection /> : null,
+  };
 
-        {hasAgents && (
-          <div ref={assistantRef}>
-            <AssistantSettingsSection />
-          </div>
-        )}
-
-        {hasAgents && <ModelTiersSection />}
-
-        <div className="modal__footer">
+  return (
+    <div className="modal" onClick={onClose}>
+      <div
+        ref={cardRef}
+        className="modal__card settings agents-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="agents-title"
+        onClick={(e) => e.stopPropagation()}
+        onKeyDown={(e) => {
+          if (e.key === "Escape") {
+            e.stopPropagation();
+            onClose();
+          } else if (e.key === "Tab") {
+            trapFocus(e, cardRef.current);
+          }
+        }}
+      >
+        <div className="panel__head">
+          <h2 id="agents-title">Agents</h2>
           <button className="ghost" onClick={onClose}>
             Close
           </button>
+        </div>
+        {error && <div className="banner banner--error">{error}</div>}
+
+        <div className="settings__body">
+          <div className="settings__tabs" role="tablist" aria-label="Agents sections">
+            {tabs.map(({ id, label }, index) => (
+              <button
+                key={id}
+                ref={(element) => {
+                  tabRefs.current[id] = element;
+                }}
+                id={`agents-tab-${id}`}
+                role="tab"
+                aria-selected={shown === id}
+                aria-controls={`agents-panel-${id}`}
+                tabIndex={shown === id ? 0 : -1}
+                className={`settings__tab ${shown === id ? "settings__tab--on" : ""}`}
+                onClick={() => setTab(id)}
+                onKeyDown={(e) => onTabKey(e, index)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          {tabs.map(({ id }) => (
+            <div
+              key={id}
+              id={`agents-panel-${id}`}
+              role="tabpanel"
+              aria-labelledby={`agents-tab-${id}`}
+              className="settings__panel"
+              hidden={shown !== id}
+              tabIndex={0}
+            >
+              {panels[id]}
+            </div>
+          ))}
         </div>
       </div>
     </div>
