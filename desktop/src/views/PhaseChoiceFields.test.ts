@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { applicablePhaseChoices, keepSupportedEfforts } from "./PhaseChoiceFields";
-import type { AgentProvider, AgentRole, ModelInfo } from "../api/types";
+import type { AgentProvider, ModelInfo } from "../api/types";
 
 const catalog: Record<string, ModelInfo[]> = {
   codex: [
@@ -12,7 +12,7 @@ const catalog: Record<string, ModelInfo[]> = {
     { id: "gpt-6-astra", display_name: "Astra", supported_reasoning_efforts: ["medium", "xhigh"] },
   ],
 };
-const modelsFor = (provider: AgentProvider, _role: AgentRole) => catalog[provider] ?? [];
+const modelsFor = (provider: AgentProvider) => catalog[provider] ?? [];
 
 describe("phase choices", () => {
   it("keeps only the choices of roles and phases that run", () => {
