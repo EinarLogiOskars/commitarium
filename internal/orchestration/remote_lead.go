@@ -6738,7 +6738,14 @@ func (starter *RemoteLeadStarter) pauseFailedTurn(
 	reason := "The " + request.agentName + "'s turn failed: " + cause +
 		". The work order is paused; continue to retry the turn in the same conversation."
 	retrying := false
-	if interrupted := providerInterruption(attempt.Result); interrupted != "" {
+	// A login failure may pass: a refresh that failed once can work on the
+	// next turn. It retries like an interruption before it asks for a sign-in.
+	login := attempt.Result.Error != nil && attempt.Result.Error.Code == workerhttp.ErrorProviderLoginRequired
+	interrupted := providerInterruption(attempt.Result)
+	if login {
+		interrupted = "the provider did not accept the agent's login"
+	}
+	if interrupted != "" {
 		if scheduled, spent, ok := starter.scheduleRetry(ctx, request, interrupted); ok {
 			reason, retrying = scheduled, true
 		} else {
@@ -6747,7 +6754,7 @@ func (starter *RemoteLeadStarter) pauseFailedTurn(
 	} else {
 		starter.turnEnded(ctx, request.runID, request.identity.SessionID)
 	}
-	if attempt.Result.Error != nil && attempt.Result.Error.Code == workerhttp.ErrorProviderLoginRequired {
+	if login && !retrying {
 		run, err := starter.executions.GetRun(ctx, request.runID)
 		if err != nil {
 			return err

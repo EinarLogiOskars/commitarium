@@ -3547,26 +3547,51 @@ func TestRemoteFailedTurnPausesAndContinueRetriesItInTheSameConversation(t *test
 	}
 }
 
+// An expired login retries like an interruption first, since a refresh that
+// failed once can work on the next turn; only then does the run wait for the
+// agent's sign-in, and a sign-in resumes it.
 func TestRemoteExpiredLoginWaitsForTheAgentAndResumesAfterLogin(t *testing.T) {
-	runID := "run_remote_expired_login"
-	starter, executions, _ := startFailingPlanningRun(t, runID, workerhttp.ErrorProviderLoginRequired)
-	paused, err := executions.GetRun(t.Context(), runID)
-	if err != nil || paused.WaitKind != execution.RunWaitKindBlocker ||
-		!strings.Contains(paused.Reason, "must log in again") {
-		t.Fatalf("expired login did not pause for login: %+v err=%v", paused, err)
+	const expired = "Failed to authenticate: OAuth session expired"
+	run := startInterruptedPlanningRun(t, "run_remote_expired_login", func(run *interruptedRun) {
+		// The turn after the sign-in completes the planning.
+		leadID := remoteLeadSessionID(run.runID)
+		afterLogin, err := recoverySuccessorAttemptID(leadID, run.attempts[len(run.attempts)-1].AttemptID)
+		if err != nil {
+			t.Fatalf("successor identity: %v", err)
+		}
+		copyScriptedAttempt(run.stub, run.attempts[0], workerhttp.AttemptReference{SessionID: leadID, AttemptID: afterLogin})
+		for _, attempt := range run.attempts {
+			run.fail(attempt, workerhttp.ErrorProviderLoginRequired, expired)
+		}
+	})
+	waitForRunReason(t, run.executions, run.runID, "did not accept the agent's login")
+	if wait, err := run.executions.LoginWaitForRun(t.Context(), run.runID); err != nil || wait.AgentID != "" {
+		t.Fatalf("a login failure waited for a sign-in before retrying: %+v err=%v", wait, err)
 	}
-	wait, err := executions.LoginWaitForRun(t.Context(), runID)
+	for retry := 1; retry <= len(retryBackoff); retry++ {
+		if resumed, err := run.starter.ResumeDueRetries(t.Context(), later()); err != nil || resumed != 1 {
+			t.Fatalf("retry %d: %d err=%v", retry, resumed, err)
+		}
+		if retry < len(retryBackoff) {
+			waitForRunReason(t, run.executions, run.runID, fmt.Sprintf("(%d of 3)", retry+1))
+		}
+	}
+	paused := waitForRunReason(t, run.executions, run.runID, "must log in again")
+	if paused.WaitKind != execution.RunWaitKindBlocker {
+		t.Fatalf("expired login did not pause for login: %+v", paused)
+	}
+	wait, err := run.executions.LoginWaitForRun(t.Context(), run.runID)
 	if err != nil || wait.AgentID != "codex" || wait.Role != worker.RoleLead {
 		t.Fatalf("login wait = %+v err=%v", wait, err)
 	}
-	if resumed, err := starter.ResumeAfterLogin(t.Context(), "claude"); err != nil || resumed != 0 {
+	if resumed, err := run.starter.ResumeAfterLogin(t.Context(), "claude"); err != nil || resumed != 0 {
 		t.Fatalf("another agent's login resumed the run: %d err=%v", resumed, err)
 	}
-	if resumed, err := starter.ResumeAfterLogin(t.Context(), "codex"); err != nil || resumed != 1 {
+	if resumed, err := run.starter.ResumeAfterLogin(t.Context(), "codex"); err != nil || resumed != 1 {
 		t.Fatalf("resume after login: %d err=%v", resumed, err)
 	}
-	waitForRetriedTurn(t, executions, runID)
-	if wait, err := executions.LoginWaitForRun(t.Context(), runID); err != nil || wait.AgentID != "" {
+	waitForRetriedTurn(t, run.executions, run.runID)
+	if wait, err := run.executions.LoginWaitForRun(t.Context(), run.runID); err != nil || wait.AgentID != "" {
 		t.Fatalf("login wait was not cleared: %+v err=%v", wait, err)
 	}
 }
