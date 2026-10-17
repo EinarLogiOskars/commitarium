@@ -109,6 +109,13 @@ export function AssistantSettingsSection() {
           </select>
         </label>
       </div>
+      <p className="muted note">
+        <strong>Effort</strong> is how long a model thinks before it acts. More effort can catch
+        more on hard work, like planning or tricky logic, but each turn takes longer and uses more
+        of your agents&apos; limits. The assistant picks an effort for each phase of the work it
+        starts, usually high for planning and medium for implementing, and never above the highest
+        you set here. Your own work orders are not limited.
+      </p>
       {error && <div className="banner banner--error">{error}</div>}
       <div className="row">
         <button

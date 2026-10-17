@@ -4656,3 +4656,60 @@ select:focus {
   gap: 12px;
   margin-top: 8px;
 }
+
+/* One tier per tab on the Models section (ADR-031). */
+.model-tiers__tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  padding: 3px;
+  margin-top: 10px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+}
+.model-tiers__tab {
+  flex: 1 1 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: none;
+  background: none;
+  font: inherit;
+  font-size: 13px;
+  color: var(--muted);
+  padding: 6px 10px;
+  border-radius: 7px;
+  cursor: pointer;
+}
+.model-tiers__tab--on {
+  background: var(--panel);
+  color: var(--text);
+  font-weight: 600;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+}
+.model-tiers__tab:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.model-tiers__count {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--muted);
+}
+.model-tiers__panel {
+  padding-top: 8px;
+}
+.model-tiers__yours {
+  font-size: 12px;
+  color: var(--accent);
+}
+
+/* The Agents dialog's tabs hold whole sections; they need no rule above. */
+.agents-dialog .settings__panel .assistant-settings,
+.agents-dialog .settings__panel .model-tiers {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: none;
+}
