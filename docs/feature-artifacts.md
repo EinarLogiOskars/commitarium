@@ -94,6 +94,10 @@ review still evaluates the complete pull request.
 
 ## Independent acceptance tests
 
+New runs no longer write them (ADR-031): in 20 runs they caught no defect
+the lead's suite and code review missed. What follows describes runs started
+with them before, which finish as they started.
+
 Independent acceptance tests are off by default. Projects expose the default
 as `independent_acceptance_tests`; work-order creation may omit that field to
 inherit the project value or supply `true`/`false` as an override. Features and

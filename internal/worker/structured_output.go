@@ -147,7 +147,6 @@ func OutputJSONSchema(contract OutputContract) any {
 				"description":          text,
 				"vision_item_id":       text,
 				"steps":                map[string]any{"type": "string", "enum": []string{"", "full", "reviewed_plan", "planned", "quick"}},
-				"independent_tests":    map[string]any{"type": "boolean"},
 				"lead_agent":           text,
 				"lead_model":           text,
 				"reviewer_agent":       text,
@@ -165,7 +164,7 @@ func OutputJSONSchema(contract OutputContract) any {
 				"after":                map[string]any{"type": "string", "description": "For create_work_order and start_work_order: the work order ID, or the exact title of another of your actions, that this one must wait for because both change the same part of the app; it starts once that one merges. Otherwise empty."},
 			},
 			[]string{
-				"type", "reason", "title", "description", "vision_item_id", "steps", "independent_tests",
+				"type", "reason", "title", "description", "vision_item_id", "steps",
 				"lead_agent", "lead_model", "reviewer_agent", "reviewer_model",
 				"lead_plan_model", "lead_plan_effort", "lead_effort", "reviewer_plan_model", "reviewer_plan_effort", "reviewer_effort",
 				"work_order_id", "when", "priority", "guidance", "after",

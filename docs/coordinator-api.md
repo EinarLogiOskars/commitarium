@@ -228,9 +228,10 @@ Content-Type: application/json
 {"enabled":true}
 ```
 
-Work-order creation may supply `independent_acceptance_tests: true` or `false`;
-omission inherits the project default. Project responses expose the default,
-while feature and run responses expose the immutable effective snapshot.
+Independent acceptance tests are no longer written (ADR-031). Work-order
+creation, Start, and project settings still accept
+`independent_acceptance_tests` and ignore it: new work orders and runs report
+`false`. Runs started with them before finish as they started.
 
 With `review_each_phase`, the run waits after goal acceptance, after the lead's
 first planning proposal, after the reviewer's first planning response, and
@@ -1675,8 +1676,7 @@ so the new model runs every phase.
 false, "reviewer": true}` returns `400 invalid_steps`:
 
 - **Full** (`documented_plan` and `reviewer`): the lead and reviewer agree a
-  commit-ordered plan, the reviewer may write independent acceptance tests, and
-  code review and the lead's readiness acknowledgement precede the merge gate.
+  commit-ordered plan, and code review and the lead's readiness acknowledgement precede the merge gate.
 - **Reviewed plan** (`reviewer` with `code_review: false`, ADR-031): the lead
   and reviewer agree the plan as in Full; once the lead's implementation is
   verified the run goes straight to the merge gate, with no acceptance tests,

@@ -521,10 +521,6 @@ func (api *API) applyStartWorkOrder(
 		codeReview := action.Steps == "full"
 		request.Steps.DocumentedPlan, request.Steps.Reviewer, request.Steps.CodeReview = &plan, &reviewer, &codeReview
 	}
-	if action.IndependentTests {
-		tests := true
-		request.IndependentAcceptanceTests = &tests
-	}
 	// The action's agents and models replace the work order's own; a role the
 	// action leaves out keeps the work order's. Nothing comes from the
 	// project (ADR-027); a reviewer the steps skip is the lead.
@@ -717,10 +713,6 @@ func (api *API) assistantSettings(
 		overrides.Steps = &project.WorkSteps{SkipCodeReview: true}
 	case "full":
 		overrides.Steps = &project.WorkSteps{}
-	}
-	if action.IndependentTests {
-		tests := true
-		overrides.IndependentAcceptanceTests = &tests
 	}
 	if action.LeadAgent == "" && action.ReviewerAgent == "" && action.LeadModel == "" && action.ReviewerModel == "" {
 		return overrides, nil

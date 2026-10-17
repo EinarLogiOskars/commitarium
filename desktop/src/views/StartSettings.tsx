@@ -88,7 +88,8 @@ export function startSettingsFrom(feature: Feature): StartSettingsValue {
     },
     autonomy_policy: feature.autonomy_policy ?? "review_each_phase",
     merge_policy: feature.merge_policy ?? "require_user_approval",
-    independent_acceptance_tests: feature.independent_acceptance_tests ?? false,
+    // No longer written (ADR-031); sent as false for older coordinators.
+    independent_acceptance_tests: false,
     steps: feature.steps ?? { documented_plan: true, reviewer: true },
     phase_choices: feature.phase_choices ?? {},
   };
@@ -178,10 +179,6 @@ export function StartSettings({
                   onChange({
                     ...value,
                     steps: { ...steps, ...p.steps },
-                    // Acceptance tests are the reviewer's.
-                    independent_acceptance_tests: p.steps.code_review
-                      ? value.independent_acceptance_tests
-                      : false,
                   })
                 }
                 disabled={disabled}
@@ -263,23 +260,6 @@ export function StartSettings({
           </label>
         </div>
       </div>
-      {steps.reviewer && steps.code_review !== false && (
-        <label className="neworder__check">
-          <input
-            type="checkbox"
-            checked={value.independent_acceptance_tests}
-            onChange={(e) => onChange({ ...value, independent_acceptance_tests: e.target.checked })}
-            disabled={disabled}
-          />
-          <span>
-            Independent acceptance tests
-            <span className="neworder__hint">
-              The reviewer writes its own tests before seeing the code. Worth it when a wrong
-              understanding is costly; it roughly doubles the reviewer&apos;s work.
-            </span>
-          </span>
-        </label>
-      )}
       {value.merge_policy === "auto_after_gates" && hasValidation === false && (
         <NoValidationWarning
           message={

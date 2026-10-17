@@ -247,10 +247,9 @@ func resolveSettings(base Feature, overrides SettingsOverrides) (Feature, error)
 	if err := base.Steps.Validate(); err != nil {
 		return Feature{}, err
 	}
-	if !base.Steps.CodeReview() {
-		// Acceptance tests are written by the reviewer during code review.
-		base.IndependentAcceptanceTests = false
-	}
+	// Independent acceptance tests are no longer written (ADR-031); the
+	// setting from older clients and projects is accepted and ignored.
+	base.IndependentAcceptanceTests = false
 	return base, nil
 }
 

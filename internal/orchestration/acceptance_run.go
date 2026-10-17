@@ -81,3 +81,10 @@ func (starter *RemoteLeadStarter) runAcceptanceTestsItself(
 		)
 	}
 }
+
+// newRunsWriteAcceptanceTests is whether a new run has the reviewer write
+// independent acceptance tests: never (ADR-031). In 20 runs they caught no
+// defect the lead's suite and code review missed, and their failures were
+// mostly bugs in the tests themselves. Runs started with them finish as they
+// started.
+const newRunsWriteAcceptanceTests = false

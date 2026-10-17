@@ -490,13 +490,13 @@ func (starter *RemoteLeadStarter) StartWithModels(
 		run, created, err = stepsExecutions.CreateRunWithSteps(
 			ctx, runID, featureID, dialogueLimits.PlanningRounds,
 			dialogueLimits.ImplementationReviewRounds, agentProviders, agentModels,
-			mergePolicy, storedFeature.IndependentAcceptanceTests, storedFeature.Steps, autonomyPolicy,
+			mergePolicy, newRunsWriteAcceptanceTests, storedFeature.Steps, autonomyPolicy,
 		)
 	} else if acceptanceExecutions, ok := starter.executions.(remoteLeadAcceptanceExecution); ok {
 		run, created, err = acceptanceExecutions.CreateRunWithModelsAndAcceptance(
 			ctx, runID, featureID, dialogueLimits.PlanningRounds,
 			dialogueLimits.ImplementationReviewRounds, agentProviders, agentModels,
-			mergePolicy, storedFeature.IndependentAcceptanceTests, autonomyPolicy,
+			mergePolicy, newRunsWriteAcceptanceTests, autonomyPolicy,
 		)
 	} else {
 		run, created, err = starter.executions.CreateRunWithModels(
