@@ -403,6 +403,7 @@ func run(ctx context.Context, coordinatorConfig config) error {
 				},
 				Settings: func(ctx context.Context) (conversations.Settings, error) { return settingsOf.Settings(ctx) },
 				Guide:    modelGuide,
+				Blockers: executionStore,
 			},
 			Workers: func(agentID string) (workerhttp.Service, error) { return agentWorkers.Client(agentID) },
 			DefaultModel: func(ctx context.Context, provider project.AgentProvider) string {

@@ -73,3 +73,10 @@ type Recovery struct {
 	FromAssistant bool
 	CreatedAt     time.Time
 }
+
+// AgentMessage is one message an agent wrote in a run.
+type AgentMessage struct {
+	Role       string
+	Text       string
+	OccurredAt time.Time
+}

@@ -87,3 +87,35 @@ func (s *ExecutionStore) RunRecoveries(ctx context.Context, runID string) ([]exe
 	}
 	return recoveries, rows.Err()
 }
+
+// LatestAgentMessages returns a run's last agent messages, newest last, each
+// with the role that wrote it.
+func (s *ExecutionStore) LatestAgentMessages(ctx context.Context, runID string, limit int) ([]execution.AgentMessage, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT sessions.role, events.text, events.occurred_at
+		   FROM session_events AS events
+		   JOIN sessions ON sessions.id = events.session_id
+		  WHERE sessions.run_id = ? AND events.event_type = 'message'
+		  ORDER BY events.occurred_at DESC, events.sequence DESC
+		  LIMIT ?`, runID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list latest messages of run %q: %w", runID, err)
+	}
+	defer func() { _ = rows.Close() }()
+	messages := make([]execution.AgentMessage, 0, limit)
+	for rows.Next() {
+		var message execution.AgentMessage
+		var occurredAt string
+		if err := rows.Scan(&message.Role, &message.Text, &occurredAt); err != nil {
+			return nil, err
+		}
+		if message.OccurredAt, err = time.Parse(time.RFC3339Nano, occurredAt); err != nil {
+			return nil, err
+		}
+		messages = append(messages, message)
+	}
+	for left, right := 0, len(messages)-1; left < right; left, right = left+1, right-1 {
+		messages[left], messages[right] = messages[right], messages[left]
+	}
+	return messages, rows.Err()
+}
