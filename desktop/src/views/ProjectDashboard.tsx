@@ -1,3 +1,4 @@
+import { ProjectCost } from "./usage";
 import { useCallback, useEffect, useState } from "react";
 import { listFeatures, listFeatureRuns } from "../api/features";
 import { getRun, recoverRun } from "../api/runs";
@@ -268,6 +269,8 @@ export function ProjectDashboard({
       )}
 
       {repo && <ProjectSyncCard projectId={project.id} projectName={project.name} />}
+
+      <ProjectCost projectId={project.id} onOpenOrder={onOpenOrder} />
     </div>
   );
 }

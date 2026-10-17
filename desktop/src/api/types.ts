@@ -549,6 +549,19 @@ export interface ModelUsage extends TokenUsage {
   model: string;
   /** Empty or absent: the model's default effort. */
   effort?: string;
+  /** What its API-key turns cost; absent when none was priced (ADR-031). */
+  cost_usd?: number;
+}
+
+/** What usage cost (ADR-031): API-key turns in dollars; the rest in tokens. */
+export interface CostSummary {
+  api_cost_usd: number;
+  /** API-key turns on a model without a price. */
+  api_unpriced: TokenUsage;
+  subscription: TokenUsage;
+  /** Turns whose account did not say how it pays. */
+  unknown: TokenUsage;
+  prices_as_of?: string;
 }
 
 /** Provider-reported token totals for a work order, by role and by phase. */
@@ -557,6 +570,23 @@ export interface FeatureUsage {
   /** Absent on older coordinators. */
   phases?: PhaseUsage[];
   total: TokenUsage;
+  /** Absent on older coordinators. */
+  cost?: CostSummary;
+}
+
+export interface UsageEntry extends TokenUsage {
+  cost_usd?: number;
+}
+
+/** A project's usage across its work orders and its assistant. */
+export interface ProjectUsage {
+  total: TokenUsage;
+  cost: CostSummary;
+  /** Ordered by cost, then input tokens. */
+  models: (UsageEntry & { model: string })[];
+  work_orders: (UsageEntry & { id: string; title: string })[];
+  /** The assistant's own conversation turns in the project. */
+  assistant: UsageEntry;
 }
 
 export type FeatureArtifactKind =

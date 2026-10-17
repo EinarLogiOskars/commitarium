@@ -6,6 +6,7 @@ import type {
   MergePolicy,
   ModelsResponse,
   Project,
+  ProjectUsage,
 } from "./types";
 
 // Model catalogs per provider+role (last-successful, refreshed on the backend).
@@ -16,6 +17,10 @@ export const refreshModels = (): Promise<ModelsResponse> =>
   request("/api/v1/models/refresh", { method: "POST" });
 
 export const listProjects = (): Promise<Project[]> => request("/api/v1/projects");
+
+/** What the project's work and its assistant have used and cost (ADR-031). */
+export const getProjectUsage = (projectId: string): Promise<ProjectUsage> =>
+  request(`/api/v1/projects/${encodeURIComponent(projectId)}/usage`);
 
 // Read-only view of the internal repository (default-branch head, root tree,
 // optional capped README). Throws ApiError with code repository_unavailable |
