@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/EinarLogiOskars/commitarium/internal/agent"
+	"github.com/EinarLogiOskars/commitarium/internal/execution"
 	"github.com/EinarLogiOskars/commitarium/internal/project"
 )
 
@@ -88,5 +89,47 @@ func TestAgentRoutes(t *testing.T) {
 	agents.deleteErr = nil
 	if got := serve(http.MethodDelete, "/api/v1/agents/claude-max", ""); got.Code != http.StatusNoContent {
 		t.Fatalf("delete status=%d", got.Code)
+	}
+}
+
+// signInExecutions has one agent that needs a sign-in, with two runs waiting.
+type signInExecutions struct {
+	*recordingExecutionService
+}
+
+func (signInExecutions) AgentSignIns(context.Context) ([]execution.AgentSignIn, error) {
+	return []execution.AgentSignIn{{AgentID: "claude-max", Since: time.Date(2026, 10, 17, 12, 0, 0, 0, time.UTC)}}, nil
+}
+
+func (signInExecutions) RunsAwaitingLogin(context.Context, string) ([]string, error) {
+	return []string{"run_1", "run_2"}, nil
+}
+
+// The agents list says which agent needs a sign-in and what waits on it, not
+// "verified" credentials (LOGIN_RECOVERY_PLAN.md).
+func TestTheAgentsListSaysWhoNeedsASignIn(t *testing.T) {
+	agents := &recordingAgentService{agents: map[string]agent.Agent{
+		"claude-max": {ID: "claude-max", Name: "Claude Max", Provider: project.AgentProviderClaude},
+		"codex":      {ID: "codex", Name: "Codex", Provider: project.AgentProviderCodex},
+	}}
+	executions := signInExecutions{&recordingExecutionService{}}
+	handler := NewWithWorkspaceRealWorkflowDeletionAndModels(nil, nil, nil, executions, nil, nil, nil, nil, nil, nil, nil, nil, agents)
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/v1/agents", nil))
+	var listed []agentResponse
+	if err := json.NewDecoder(recorder.Body).Decode(&listed); err != nil || recorder.Code != http.StatusOK {
+		t.Fatalf("list: status=%d err=%v", recorder.Code, err)
+	}
+	for _, item := range listed {
+		switch item.ID {
+		case "claude-max":
+			if item.NeedsSignIn == nil || item.NeedsSignIn.Waiting != 2 {
+				t.Fatalf("claude-max = %+v", item)
+			}
+		case "codex":
+			if item.NeedsSignIn != nil {
+				t.Fatalf("codex needs no sign-in: %+v", item)
+			}
+		}
 	}
 }

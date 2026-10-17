@@ -89,6 +89,7 @@ func (watcher Watcher) Run(ctx context.Context) {
 
 // Tick looks once at every watched project.
 func (watcher Watcher) Tick(ctx context.Context) {
+	watcher.Service.RetryDueSignIns(ctx)
 	for _, scope := range watcher.Service.projectScopes() {
 		if err := watcher.Service.observe(ctx, scope, watcher.snapshot); err != nil {
 			log.Printf("assistant events for %s: %v", scope, err)
@@ -422,7 +423,9 @@ func (service *Service) observe(
 		}
 		changed = true
 	}
-	if len(stored.PendingEvents) == 0 && len(stored.Queued) == 0 {
+	if (len(stored.PendingEvents) == 0 && len(stored.Queued) == 0) || stored.SignIn != nil {
+		// Waiting for its agent's login, the assistant hears these with the
+		// turn it keeps (sign_in.go).
 		if changed || len(events) > 0 {
 			return service.write(stored)
 		}

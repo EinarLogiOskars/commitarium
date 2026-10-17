@@ -138,7 +138,18 @@ type Service struct {
 	workers     func(agentID string) (WorkerService, error)
 	now         func() time.Time
 	mu          sync.Mutex
+	// signIns, when set, hears of an agent whose login failed.
+	signIns SignInRecorder
 }
+
+// SignInRecorder records an agent that needs the user to sign in again
+// (LOGIN_RECOVERY_PLAN.md).
+type SignInRecorder interface {
+	MarkAgentNeedsSignIn(ctx context.Context, agentID, lastError string) error
+}
+
+// SetSignIns shares agents whose login failed with the rest of Commitarium.
+func (service *Service) SetSignIns(signIns SignInRecorder) { service.signIns = signIns }
 
 func NewService(config Config) (*Service, error) {
 	if config.Store == nil || config.Features == nil || config.Workspaces == nil || config.Briefs == nil ||
@@ -448,6 +459,12 @@ func (service *Service) refresh(ctx context.Context, record Record) (Record, err
 		}
 	}
 	switch {
+	case result != nil && result.Error != nil && result.Error.Code == workerhttp.ErrorProviderLoginRequired:
+		if service.signIns != nil {
+			_ = service.signIns.MarkAgentNeedsSignIn(ctx, attempt.Assignment.AgentProfileID, result.Error.Message)
+		}
+		return service.finish(ctx, record, StatusFailed,
+			"The assistant's agent needs you to sign in again. Sign it in on the Agents page, then send your message again.")
 	case result == nil || result.Outcome != workerhttp.OutcomeCompleted:
 		return service.finish(ctx, record, StatusFailed,
 			"The assistant's turn did not complete. Send a message to try again.")

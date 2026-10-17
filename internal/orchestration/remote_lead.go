@@ -330,7 +330,12 @@ type RemoteLeadStarter struct {
 	toolchains          RemoteLeadToolchainReader
 	usage               RemoteLeadUsageRecorder
 	lifetime            context.Context
-	reportError         func(error)
+	// signInCleared and signInTry let others waiting on an agent's sign-in
+	// (the assistant's conversations) follow it: the login works again, or
+	// it is the moment to try their waiting work too.
+	signInCleared func(agentID string)
+	signInTry     func(agentID string)
+	reportError   func(error)
 
 	activeMu sync.Mutex
 	active   map[string]struct{}
@@ -1063,6 +1068,15 @@ func (starter *RemoteLeadStarter) ResumeAfterLogin(ctx context.Context, agentID 
 	if !ok {
 		return 0, nil
 	}
+	if signIns, ok := starter.executions.(remoteLeadSignIns); ok {
+		if _, err := signIns.ClearAgentSignIn(ctx, agentID); err != nil {
+			return 0, err
+		}
+	}
+	// The assistant's conversations waiting on the agent go on too.
+	if starter.signInCleared != nil {
+		go starter.signInCleared(agentID)
+	}
 	runIDs, err := waits.RunsAwaitingLogin(ctx, agentID)
 	if err != nil {
 		return 0, err
@@ -1070,19 +1084,11 @@ func (starter *RemoteLeadStarter) ResumeAfterLogin(ctx context.Context, agentID 
 	resumed := 0
 	var failures []error
 	for _, runID := range runIDs {
-		actionID := runID + ":login:" + strconv.FormatInt(time.Now().UnixNano(), 10)
-		_, admitted, err := starter.RecoverBlockerWithDirective(
-			ctx, runID, actionID, RecoveryDirective{Action: RecoveryActionContinue},
-		)
-		switch {
-		case errors.Is(err, ErrRecoveryNotAllowed):
-			// The run moved on (the user continued or stopped it).
-			if clearErr := waits.ClearLoginWait(ctx, runID); clearErr != nil {
-				failures = append(failures, clearErr)
-			}
-		case err != nil:
+		admitted, err := starter.resumeLoginWait(ctx, waits, runID, "signed-in")
+		if err != nil {
 			failures = append(failures, err)
-		case admitted:
+		}
+		if admitted {
 			resumed++
 		}
 	}
@@ -4905,6 +4911,7 @@ func (starter *RemoteLeadStarter) finish(
 	starter.recordUsage(ctx, request.identity.AttemptReference, attempt.Assignment, attempt.Result.Usage)
 	if attempt.Result.Outcome != workerhttp.OutcomeFailed {
 		starter.turnEnded(ctx, request.runID, request.identity.SessionID)
+		starter.agentAnswered(ctx, attempt.Assignment.AgentProfileID)
 	}
 	if err := starter.captureProviderSession(ctx, request.identity.SessionID, attempt); err != nil {
 		starter.requireReview(ctx, request, err)
@@ -6738,7 +6745,18 @@ func (starter *RemoteLeadStarter) pauseFailedTurn(
 	reason := "The " + request.agentName + "'s turn failed: " + cause +
 		". The work order is paused; continue to retry the turn in the same conversation."
 	retrying := false
-	if interrupted := providerInterruption(attempt.Result); interrupted != "" {
+	// A login failure may pass: a refresh that failed once can work on the
+	// next turn. It retries like an interruption before it asks for a sign-in.
+	login := attempt.Result.Error != nil && attempt.Result.Error.Code == workerhttp.ErrorProviderLoginRequired
+	interrupted := providerInterruption(attempt.Result)
+	if login {
+		interrupted = "the provider did not accept the agent's login"
+		// An agent already known to need a sign-in waits at once.
+		if starter.agentNeedsSignIn(ctx, attempt.Assignment.AgentProfileID) {
+			interrupted = ""
+		}
+	}
+	if interrupted != "" {
 		if scheduled, spent, ok := starter.scheduleRetry(ctx, request, interrupted); ok {
 			reason, retrying = scheduled, true
 		} else {
@@ -6747,7 +6765,7 @@ func (starter *RemoteLeadStarter) pauseFailedTurn(
 	} else {
 		starter.turnEnded(ctx, request.runID, request.identity.SessionID)
 	}
-	if attempt.Result.Error != nil && attempt.Result.Error.Code == workerhttp.ErrorProviderLoginRequired {
+	if login && !retrying {
 		run, err := starter.executions.GetRun(ctx, request.runID)
 		if err != nil {
 			return err
@@ -6760,6 +6778,7 @@ func (starter *RemoteLeadStarter) pauseFailedTurn(
 				return err
 			}
 		}
+		starter.markNeedsSignIn(ctx, agent, cause)
 	}
 	if attempt.Result.Error != nil && attempt.Result.Error.Code == workerhttp.ErrorUsageLimit {
 		run, err := starter.executions.GetRun(ctx, request.runID)

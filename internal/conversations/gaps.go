@@ -110,7 +110,8 @@ func (watcher Watcher) gapCheck(ctx context.Context, scope string) {
 // moves on by itself (launch.go).
 func (stored record) free() bool {
 	launching := stored.Launch != nil && stored.Launch.Stage != LaunchBuilding
-	return stored.Status != StatusRunning && len(stored.PendingEvents) == 0 && len(stored.Queued) == 0 && !launching
+	return stored.Status != StatusRunning && len(stored.PendingEvents) == 0 && len(stored.Queued) == 0 && !launching &&
+		stored.SignIn == nil
 }
 
 func (watcher Watcher) projectState(ctx context.Context, current project.Project) (projectState, error) {

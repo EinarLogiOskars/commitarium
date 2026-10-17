@@ -303,6 +303,57 @@ func (s *Service) RunsAwaitingLogin(ctx context.Context, agentID string) ([]stri
 	return nil, nil
 }
 
+// AgentSignIn is an agent whose provider login failed past the automatic
+// retries: it needs the user to sign in again (LOGIN_RECOVERY_PLAN.md).
+type AgentSignIn struct {
+	AgentID     string
+	Since       time.Time
+	LastError   string
+	LastTriedAt time.Time
+}
+
+// AgentSignInStore is implemented by stores that record agents needing a
+// sign-in.
+type AgentSignInStore interface {
+	MarkAgentNeedsSignIn(ctx context.Context, agentID, lastError string, at time.Time) error
+	ClearAgentSignIn(ctx context.Context, agentID string) (bool, error)
+	TouchAgentSignIn(ctx context.Context, agentID string, at time.Time) error
+	AgentSignIns(ctx context.Context) ([]AgentSignIn, error)
+}
+
+// MarkAgentNeedsSignIn records that an agent needs the user to sign in.
+func (s *Service) MarkAgentNeedsSignIn(ctx context.Context, agentID, lastError string) error {
+	if signIns, ok := s.store.(AgentSignInStore); ok {
+		return signIns.MarkAgentNeedsSignIn(ctx, agentID, lastError, s.now().UTC())
+	}
+	return nil
+}
+
+// ClearAgentSignIn forgets that an agent needs a sign-in, reporting whether
+// it did.
+func (s *Service) ClearAgentSignIn(ctx context.Context, agentID string) (bool, error) {
+	if signIns, ok := s.store.(AgentSignInStore); ok {
+		return signIns.ClearAgentSignIn(ctx, agentID)
+	}
+	return false, nil
+}
+
+// TouchAgentSignIn records that the work waiting on an agent was tried.
+func (s *Service) TouchAgentSignIn(ctx context.Context, agentID string) error {
+	if signIns, ok := s.store.(AgentSignInStore); ok {
+		return signIns.TouchAgentSignIn(ctx, agentID, s.now().UTC())
+	}
+	return nil
+}
+
+// AgentSignIns lists the agents that need a sign-in.
+func (s *Service) AgentSignIns(ctx context.Context) ([]AgentSignIn, error) {
+	if signIns, ok := s.store.(AgentSignInStore); ok {
+		return signIns.AgentSignIns(ctx)
+	}
+	return nil, nil
+}
+
 // RunReopener is implemented by stores that can reopen a failed run.
 type RunReopener interface {
 	ReopenFailedRun(ctx context.Context, runID string, reason string, occurredAt time.Time) (Run, error)

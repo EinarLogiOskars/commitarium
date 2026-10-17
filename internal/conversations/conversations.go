@@ -150,6 +150,9 @@ type Conversation struct {
 	// Launch is a new app's launch while it is set up (launch.go).
 	Launch    *Launch   `json:"launch,omitempty"`
 	UpdatedAt time.Time `json:"updated_at"`
+	// SignIn is set while the last turn waits for its agent's login: the
+	// message is kept and sent once the agent works (sign_in.go).
+	SignIn *SignInWait `json:"sign_in,omitempty"`
 }
 
 type record struct {
@@ -164,6 +167,9 @@ type record struct {
 	SessionAgent string            `json:"session_agent,omitempty"`
 	SessionModel string            `json:"session_model,omitempty"`
 	Keys         map[string]string `json:"keys,omitempty"`
+	// LastTurn is the prompt the last turn started on, kept to start it
+	// again when its agent's login failed (sign_in.go).
+	LastTurn *turnInput `json:"last_turn,omitempty"`
 	// Watched is the project's work as last seen, by work order, and
 	// PendingEvents what the assistant has yet to hear (events.go).
 	Watched       map[string]string `json:"watched,omitempty"`
@@ -238,6 +244,9 @@ type Config struct {
 	// ChatUsage, when set, records each turn's token usage per scope, so a
 	// project's cost includes the assistant's own turns.
 	ChatUsage ChatUsageRecorder
+	// SignIns, when set, shares which agents need a sign-in with the work
+	// orders waiting on them (sign_in.go).
+	SignIns SignIns
 }
 
 // ChatUsage is one assistant turn's usage.

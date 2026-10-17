@@ -22,8 +22,8 @@ func (s *ExecutionStore) RecordLoginWait(
 	if _, err := s.db.ExecContext(
 		ctx,
 		`INSERT INTO run_login_waits (run_id, agent_id, role, created_at) VALUES (?, ?, ?, ?)
-		 ON CONFLICT (run_id) DO UPDATE SET agent_id = excluded.agent_id, role = excluded.role,
-		                                    created_at = excluded.created_at`,
+		 ON CONFLICT (run_id, role) DO UPDATE SET agent_id = excluded.agent_id,
+		                                          created_at = excluded.created_at`,
 		runID, agentID, string(role), formatExecutionTime(occurredAt),
 	); err != nil {
 		return fmt.Errorf("record login wait for run %q: %w", runID, err)
@@ -31,7 +31,7 @@ func (s *ExecutionStore) RecordLoginWait(
 	return nil
 }
 
-// ClearLoginWait forgets a run's login wait, if any.
+// ClearLoginWait forgets a run's login waits, if any.
 func (s *ExecutionStore) ClearLoginWait(ctx context.Context, runID string) error {
 	if _, err := s.db.ExecContext(ctx, `DELETE FROM run_login_waits WHERE run_id = ?`, runID); err != nil {
 		return fmt.Errorf("clear login wait for run %q: %w", runID, err)
@@ -39,12 +39,13 @@ func (s *ExecutionStore) ClearLoginWait(ctx context.Context, runID string) error
 	return nil
 }
 
-// LoginWaitForRun returns the agent a run waits on, or an empty wait.
+// LoginWaitForRun returns an agent a run waits on (the earliest, when both
+// its agents need a sign-in), or an empty wait.
 func (s *ExecutionStore) LoginWaitForRun(ctx context.Context, runID string) (execution.LoginWait, error) {
 	var wait execution.LoginWait
 	var role string
 	err := s.db.QueryRowContext(
-		ctx, `SELECT agent_id, role FROM run_login_waits WHERE run_id = ?`, runID,
+		ctx, `SELECT agent_id, role FROM run_login_waits WHERE run_id = ? ORDER BY created_at, role LIMIT 1`, runID,
 	).Scan(&wait.AgentID, &role)
 	if errors.Is(err, sql.ErrNoRows) {
 		return execution.LoginWait{}, nil
@@ -59,7 +60,7 @@ func (s *ExecutionStore) LoginWaitForRun(ctx context.Context, runID string) (exe
 // RunsAwaitingLogin lists the runs waiting for an agent to log in again.
 func (s *ExecutionStore) RunsAwaitingLogin(ctx context.Context, agentID string) ([]string, error) {
 	rows, err := s.db.QueryContext(
-		ctx, `SELECT run_id FROM run_login_waits WHERE agent_id = ? ORDER BY created_at, run_id`, agentID,
+		ctx, `SELECT run_id FROM run_login_waits WHERE agent_id = ? GROUP BY run_id ORDER BY MIN(created_at), run_id`, agentID,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("list runs awaiting login of agent %q: %w", agentID, err)

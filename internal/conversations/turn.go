@@ -63,6 +63,11 @@ func (service *Service) Send(ctx context.Context, scope, message, key string) (C
 		ID: messageID(stored, len(stored.Messages)), Role: "user", Text: message, OccurredAt: service.now(),
 	})
 	prompt := "The user says:\n" + message
+	if stored.SignIn != nil && stored.LastTurn != nil {
+		// The turn kept for its agent's login is still unanswered: this one
+		// carries it along.
+		prompt = stored.LastTurn.Prompt + "\n\n" + prompt
+	}
 	if len(stored.PendingEvents) > 0 {
 		// Events still waiting for a turn ride along with the user's.
 		prompt = eventsPrompt(stored.PendingEvents) + "\n\n" + prompt
@@ -99,6 +104,7 @@ func (service *Service) startTurn(
 		stored.Keys = map[string]string{}
 	}
 	stored.Keys[key] = stored.AttemptID
+	stored.LastTurn = &turnInput{Role: promptRole, Prompt: prompt}
 	stored.Status = StatusRunning
 	stored.UpdatedAt = now
 	if fresh {
@@ -203,12 +209,22 @@ func (service *Service) refresh(ctx context.Context, stored record) (record, err
 		note("The assistant's turn could not be recovered. Send your message again.")
 	case attempt.State != workerhttp.AttemptStateTerminal:
 		return stored, service.write(stored)
+	case loginFailed(attempt.Result):
+		// The turn waits for its agent's login, its prompt kept.
+		logFailedTurn(stored.AttemptID, attempt.Result)
+		service.waitForSignIn(ctx, &stored, attempt.Result, now)
 	case attempt.Result == nil || attempt.Result.Outcome != workerhttp.OutcomeCompleted:
 		logFailedTurn(stored.AttemptID, attempt.Result)
 		note(failureText(attempt.Result))
 		// The next turn starts a fresh provider session from the state.
 		stored.ProviderSessionID = ""
 	default:
+		if stored.SignIn != nil {
+			stored.SignIn = nil
+		}
+		if service.config.SignIns != nil {
+			service.config.SignIns.AgentAnswered(ctx, stored.Agent)
+		}
 		reply := Message{
 			ID: messageID(stored, len(stored.Messages)), Role: "assistant",
 			Text: strings.TrimSpace(attempt.Result.Summary), OccurredAt: now,
@@ -274,9 +290,6 @@ func failureText(result *workerhttp.TerminalResult) string {
 				result.Error.ResetsAt.UTC().Format(time.RFC3339) + ", or choose another agent on the Agents page."
 		}
 		return "The assistant's agent reached its usage limit. Try again later, or choose another agent on the Agents page."
-	}
-	if result != nil && result.Error != nil && result.Error.Code == workerhttp.ErrorProviderLoginRequired {
-		return "The assistant's agent must log in again on the Agents page."
 	}
 	return "The assistant's turn did not complete. Send your message again."
 }
