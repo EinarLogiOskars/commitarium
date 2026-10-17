@@ -52,6 +52,9 @@ type runResponse struct {
 	// been tried on it (ADR-032).
 	Blocker    *blockerResponse  `json:"blocker,omitempty"`
 	Recoveries []recoveryAttempt `json:"recoveries,omitempty"`
+	// RecoveryExhausted says recovering the blocker ran out: the user can
+	// report it or start over (ADR-032).
+	RecoveryExhausted bool `json:"recovery_exhausted,omitempty"`
 }
 
 type blockerResponse struct {
@@ -645,6 +648,7 @@ func (api *API) newRunResponse(
 		if err != nil {
 			return runResponse{}, err
 		}
+		_, response.RecoveryExhausted = api.recoveryExhausted(ctx, run.ID)
 		for _, recovery := range recoveries {
 			response.Recoveries = append(response.Recoveries, recoveryAttempt{
 				How: recovery.How, Guidance: recovery.Guidance, FromAssistant: recovery.FromAssistant,

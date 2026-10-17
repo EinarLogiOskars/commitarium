@@ -78,3 +78,33 @@ func TestRecoveringAWorkOrderIsBoundedByTheFailure(t *testing.T) {
 		t.Fatalf("past the cap = %v", err)
 	}
 }
+
+// Recovery runs out after four tries of one failure, eight in all, or a
+// check that keeps failing after a fresh conversation (ADR-032).
+func TestRecoveryRunsOutPlainly(t *testing.T) {
+	executions := &blockedExecutions{
+		recordingExecutionService: &recordingExecutionService{},
+		blocker:                   execution.Blocker{Kind: execution.BlockerCheck, Fingerprint: "fp1"},
+	}
+	api := &API{execution: executions}
+	if _, exhausted := api.recoveryExhausted(t.Context(), "run_1"); exhausted {
+		t.Fatal("exhausted without recoveries")
+	}
+	executions.recoveries = []execution.Recovery{{How: execution.RecoveryFreshConversation, Fingerprint: "fp1"}}
+	if _, exhausted := api.recoveryExhausted(t.Context(), "run_1"); !exhausted {
+		t.Fatal("a check failing after a fresh conversation is not exhausted")
+	}
+	executions.blocker.Kind = execution.BlockerAgent
+	if _, exhausted := api.recoveryExhausted(t.Context(), "run_1"); exhausted {
+		t.Fatal("an agent failure after one fresh conversation is exhausted")
+	}
+	for range 3 {
+		executions.recoveries = append(executions.recoveries, execution.Recovery{How: execution.RecoveryContinue, Fingerprint: "fp1"})
+	}
+	if _, exhausted := api.recoveryExhausted(t.Context(), "run_1"); !exhausted {
+		t.Fatal("four recoveries of one failure are not exhausted")
+	}
+	if detail := exhaustedDetail("Add audio", execution.BlockerCheck); !strings.Contains(detail, "a check on Commitarium's side keeps failing") {
+		t.Fatalf("detail = %q", detail)
+	}
+}

@@ -398,11 +398,34 @@ export interface Intervention {
   resolved_at?: string;
 }
 
+/** What blocks a run (ADR-032). */
+export interface RunBlocker {
+  kind: "agent" | "check" | "environment" | "limit" | "other";
+  check?: string;
+  detail: string;
+  fingerprint: string;
+  recorded_at: string;
+}
+
+/** A recovery tried on a blocked run. */
+export interface RunRecoveryAttempt {
+  how: "recheck" | "continue" | "message" | "fresh_conversation" | "back_to_ready";
+  guidance?: string;
+  from_assistant: boolean;
+  fingerprint: string;
+  created_at: string;
+}
+
 export interface Run {
   id: string;
   feature_id: string;
   status: RunStatus;
   reason?: string;
+  /** On a run waiting on a blocker; absent on older coordinators. */
+  blocker?: RunBlocker;
+  recoveries?: RunRecoveryAttempt[];
+  /** Recovering the blocker ran out: report it or start over. */
+  recovery_exhausted?: boolean;
   // Present on newer coordinators; guard on read. `wait_kind` is meaningful only
   // while waiting or paused.
   paused?: boolean;

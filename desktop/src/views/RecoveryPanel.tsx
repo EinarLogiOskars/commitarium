@@ -133,6 +133,8 @@ export function RecoveryPanel({ run, onChanged }: { run: Run; onChanged: () => v
         </div>
       )}
 
+      {run.recovery_exhausted && <ExhaustedNote run={run} />}
+
       {error && <div className="banner banner--error">{error}</div>}
 
       {canGuide && guiding && (
@@ -181,4 +183,52 @@ function recoverError(e: unknown): string {
     }
   }
   return String(e);
+}
+
+// When recovery ran out (ADR-032): say so plainly, and let the user copy a
+// report with what failed and what was tried, to send wherever they report
+// problems. Starting over is the work order's Back to Ready.
+function ExhaustedNote({ run }: { run: Run }) {
+  const [copied, setCopied] = useState(false);
+  const report = [
+    "Commitarium couldn't finish a work order.",
+    "",
+    `Run: ${run.id}`,
+    run.blocker
+      ? `Blocker: ${run.blocker.kind}${run.blocker.check ? ` (${run.blocker.check})` : ""}`
+      : "",
+    run.blocker ? `Detail: ${run.blocker.detail}` : `Reason: ${run.reason ?? ""}`,
+    "",
+    "Recoveries tried:",
+    ...(run.recoveries ?? []).map(
+      (r) =>
+        `- ${r.how} by ${r.from_assistant ? "the assistant" : "the user"}${
+          r.fingerprint === run.blocker?.fingerprint ? " (same failure)" : ""
+        }${r.guidance ? `: ${r.guidance}` : ""}`,
+    ),
+  ]
+    .filter((line, index, all) => line !== "" || all[index - 1] !== "")
+    .join("\n");
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(report);
+      setCopied(true);
+    } catch {
+      setCopied(false);
+    }
+  };
+  return (
+    <div className="banner banner--warn recover__exhausted" role="status">
+      <span>
+        Commitarium couldn&apos;t finish this:{" "}
+        {run.blocker?.kind === "check"
+          ? "a check on its side keeps failing."
+          : "its agents couldn't fix what went wrong."}{" "}
+        Copy a report to send, or start the work order over with Back to Ready.
+      </span>
+      <button className="ghost" onClick={() => void copy()}>
+        {copied ? "Copied" : "Copy a report"}
+      </button>
+    </div>
+  );
 }

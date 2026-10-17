@@ -167,3 +167,44 @@ func (api *API) recoveryRefusal(r *http.Request, runID string, how execution.Rec
 	}
 	return blocker.Fingerprint, ""
 }
+
+// recoveryExhausted reports whether recovering a blocked run has run out:
+// its failure had as many recoveries as it gets, the run as many in total,
+// or a coordinator check kept failing after a fresh conversation (ADR-032).
+// The user then hears it plainly, with a report to send or a start over.
+func (api *API) recoveryExhausted(ctx context.Context, runID string) (execution.Blocker, bool) {
+	blockers, ok := api.execution.(runBlockers)
+	if !ok {
+		return execution.Blocker{}, false
+	}
+	blocker, found, err := blockers.RunBlocker(ctx, runID)
+	if err != nil || !found {
+		return execution.Blocker{}, false
+	}
+	recoveries, err := blockers.RunRecoveries(ctx, runID)
+	if err != nil {
+		return blocker, false
+	}
+	onFailure, freshTried := 0, false
+	for _, recovery := range recoveries {
+		if recovery.Fingerprint == blocker.Fingerprint {
+			onFailure++
+			freshTried = freshTried || recovery.How == execution.RecoveryFreshConversation
+		}
+	}
+	exhausted := onFailure >= maxRecoveriesPerFailure || len(recoveries) >= maxRecoveriesPerRun ||
+		(blocker.Kind == execution.BlockerCheck && freshTried)
+	return blocker, exhausted
+}
+
+// exhaustedDetail says in plain words why Commitarium could not finish a
+// work order.
+func exhaustedDetail(title string, kind execution.BlockerKind) string {
+	switch kind {
+	case execution.BlockerCheck:
+		return title + ": a check on Commitarium's side keeps failing. Report it, or start the work order over."
+	case execution.BlockerAgent:
+		return title + ": its agents couldn't fix what went wrong. Report it, or start the work order over."
+	}
+	return title + " couldn't be finished. Report it, or start the work order over."
+}
