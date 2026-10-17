@@ -103,8 +103,9 @@ optional steps.
 
 Review was first all or nothing (ADR-018). ADR-031 split it into plan review
 and code review, so review is spent where it pays, and removed independent
-acceptance tests: they almost always passed, and code review now runs the
-suite on the exact revision instead.
+acceptance tests: they cost roughly a second implementation in tokens and
+almost never caught anything. Code review now runs the suite on the exact
+revision instead.
 
 The reviewer always runs as a separate session with its own context, so a
 model never reviews its own work. Cross-provider review (Claude reviewing
