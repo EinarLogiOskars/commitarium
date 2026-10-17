@@ -672,11 +672,10 @@ func goalInstructions(goal *Goal) string {
 		"approval, except those using a premium model. Start an item only once the items it builds on have " +
 		"merged; at most two of the goal's work orders run at a time, and only when they touch different parts of " +
 		"the app (two that both change the same screens, navigation, or shared files run one after the other, or " +
-		"the second cannot merge). Restart a goal item that is back in Ready. When one is blocked or failed, find out " +
-		"why (its reason, its pull request, the code) and propose continue_work_order with guidance that fixes " +
-		"it; Commitarium continues a work order on its own at most twice. When a work order needs the user (a " +
-		"question about the product, a merge approval, a blocker you cannot fix), tell the user exactly what it " +
-		"needs. When autopilot made a duplicate work order for an item, propose close_work_order for the one that " +
+		"the second cannot merge). Restart a goal item that is back in Ready. When one is blocked or failed, recover it " +
+		"with recover_work_order the way its blocker calls for (see How you recover blocked work). When a work " +
+		"order needs the user (a question about the product, a merge approval, a secret), tell the user exactly " +
+		"what it needs. When autopilot made a duplicate work order for an item, propose close_work_order for the one that " +
 		"does not deliver it; autopilot closes its own duplicates. Propose nothing outside the goal unless the " +
 		"user asks; such actions still wait for approval. A work order the user created by hand after the goal " +
 		"started is theirs, even on a goal item: actions on it wait for their approval.")

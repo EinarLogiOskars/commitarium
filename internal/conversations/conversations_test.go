@@ -399,3 +399,21 @@ func TestAFinishedTurnRecordsItsUsage(t *testing.T) {
 		t.Fatalf("recorded = %+v", got)
 	}
 }
+
+// The assistant is told how to recover blocked work by the failure's kind
+// (ADR-032).
+func TestTheAssistantIsToldHowToRecover(t *testing.T) {
+	service, worker := newTestService(t)
+	if _, err := service.Send(t.Context(), "prj_test", "Hi", "msg-1"); err != nil {
+		t.Fatal(err)
+	}
+	instructions := worker.puts[0].Instructions
+	for _, want := range []string{
+		"How you recover blocked work:", "recheck first", "quoting the detail's facts",
+		"Never repeat a way already tried on the same failure", "Never ask the user to approve a recovery they cannot judge",
+	} {
+		if !strings.Contains(instructions, want) {
+			t.Errorf("instructions lack %q", want)
+		}
+	}
+}
