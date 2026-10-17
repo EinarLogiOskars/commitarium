@@ -58,9 +58,10 @@ type Goal struct {
 	EndedAt   *time.Time `json:"ended_at,omitempty"`
 }
 
-// maxAutoContinues bounds how often autopilot continues one work order, so
-// a failure it cannot fix comes back to the user.
-const maxAutoContinues = 2
+// maxAutoContinues bounds how often autopilot recovers one work order across
+// its blockers, so a failure it cannot fix comes back to the user; the
+// coordinator also bounds recoveries of each failure (ADR-032).
+const maxAutoContinues = 8
 
 func (goal *Goal) active() bool {
 	return goal != nil && goal.Status == GoalActive
@@ -279,7 +280,7 @@ func (service *Service) autopilotActions(ctx context.Context, scope string) ([]A
 		case featureartifact.AssistantCreateWorkOrder:
 			inGoal = items[action.VisionItemID] || builds
 		case featureartifact.AssistantStartWorkOrder, featureartifact.AssistantChangeModels,
-			featureartifact.AssistantContinueWorkOrder:
+			featureartifact.AssistantContinueWorkOrder, featureartifact.AssistantRecoverWorkOrder:
 			inGoal, target = orders[action.WorkOrderID] || builds, action.WorkOrderID
 		case featureartifact.AssistantCloseWorkOrder:
 			inGoal, target = (created[action.WorkOrderID] || builds) && !orders[action.WorkOrderID], action.WorkOrderID
@@ -343,7 +344,14 @@ func (service *Service) autopilotActions(ctx context.Context, scope string) ([]A
 			noted = true
 			continue
 		}
-		if action.Type == featureartifact.AssistantContinueWorkOrder {
+		if action.Type == featureartifact.AssistantRecoverWorkOrder && action.How == "back_to_ready" {
+			// Back to Ready throws work away: always the user's call.
+			stored.addEvent(fmt.Sprintf("Autopilot left %s for you: sending work back to Ready needs your approval.",
+				actionName(action.AssistantAction)), now)
+			noted = true
+			continue
+		}
+		if action.Type == featureartifact.AssistantContinueWorkOrder || action.Type == featureartifact.AssistantRecoverWorkOrder {
 			if stored.AutoContinues[action.WorkOrderID] >= maxAutoContinues {
 				stored.addEvent(fmt.Sprintf("Autopilot has continued %s %d times; the next try is yours to approve.",
 					action.WorkOrderID, maxAutoContinues), now)
@@ -563,7 +571,8 @@ func (service *Service) AutopilotHandles(ctx context.Context, scope, workOrderID
 		return false
 	}
 	for _, action := range stored.Actions {
-		if action.Type == featureartifact.AssistantContinueWorkOrder && action.WorkOrderID == workOrderID &&
+		if (action.Type == featureartifact.AssistantContinueWorkOrder || action.Type == featureartifact.AssistantRecoverWorkOrder) &&
+			action.WorkOrderID == workOrderID &&
 			action.Status == ActionProposed {
 			// Not yet tried, autopilot applies it; tried, it waits for the user.
 			return !action.AutoTried
@@ -663,11 +672,10 @@ func goalInstructions(goal *Goal) string {
 		"approval, except those using a premium model. Start an item only once the items it builds on have " +
 		"merged; at most two of the goal's work orders run at a time, and only when they touch different parts of " +
 		"the app (two that both change the same screens, navigation, or shared files run one after the other, or " +
-		"the second cannot merge). Restart a goal item that is back in Ready. When one is blocked or failed, find out " +
-		"why (its reason, its pull request, the code) and propose continue_work_order with guidance that fixes " +
-		"it; Commitarium continues a work order on its own at most twice. When a work order needs the user (a " +
-		"question about the product, a merge approval, a blocker you cannot fix), tell the user exactly what it " +
-		"needs. When autopilot made a duplicate work order for an item, propose close_work_order for the one that " +
+		"the second cannot merge). Restart a goal item that is back in Ready. When one is blocked or failed, recover it " +
+		"with recover_work_order the way its blocker calls for (see How you recover blocked work). When a work " +
+		"order needs the user (a question about the product, a merge approval, a secret), tell the user exactly " +
+		"what it needs. When autopilot made a duplicate work order for an item, propose close_work_order for the one that " +
 		"does not deliver it; autopilot closes its own duplicates. Propose nothing outside the goal unless the " +
 		"user asks; such actions still wait for approval. A work order the user created by hand after the goal " +
 		"started is theirs, even on a goal item: actions on it wait for their approval.")

@@ -35,6 +35,9 @@ const (
 	// AssistantContinueWorkOrder continues a work order whose run waits on a
 	// blocker, with optional guidance for its agents.
 	AssistantContinueWorkOrder AssistantActionType = "continue_work_order"
+	// AssistantRecoverWorkOrder recovers a work order whose run waits on a
+	// blocker, in the way How names (ADR-032).
+	AssistantRecoverWorkOrder AssistantActionType = "recover_work_order"
 	// AssistantCloseWorkOrder ends a work order without merging it, keeping
 	// its history: a duplicate, or work the user no longer wants.
 	AssistantCloseWorkOrder AssistantActionType = "close_work_order"
@@ -92,6 +95,9 @@ type AssistantAction struct {
 	Priority int `json:"priority"`
 	// When is "now" or "next_turn", for change_models.
 	When string `json:"when"`
+	// How, for recover_work_order: "recheck", "continue", "message",
+	// "fresh_conversation", or "back_to_ready" (ADR-032).
+	How string `json:"how"`
 	// Guidance is what continue_work_order tells the agents; empty retries.
 	// For set_up_preview it is what fails, if the assistant knows.
 	Guidance string `json:"guidance"`
@@ -137,7 +143,7 @@ func (turn AssistantTurn) Normalize() (AssistantTurn, error) {
 			&action.LeadAgent, &action.LeadModel, &action.ReviewerAgent, &action.ReviewerModel,
 			&action.LeadPlanModel, &action.LeadPlanEffort, &action.LeadEffort,
 			&action.ReviewerPlanModel, &action.ReviewerPlanEffort, &action.ReviewerEffort,
-			&action.WorkOrderID, &action.When, &action.Guidance, &action.After,
+			&action.WorkOrderID, &action.When, &action.How, &action.Guidance, &action.After,
 		} {
 			*field = strings.TrimSpace(*field)
 		}
@@ -187,6 +193,19 @@ func (action AssistantAction) validate() error {
 	case AssistantContinueWorkOrder:
 		if action.WorkOrderID == "" || len(action.Guidance) > MaxGoalBytes {
 			return fmt.Errorf("continuing needs a work order and bounded guidance")
+		}
+	case AssistantRecoverWorkOrder:
+		if action.WorkOrderID == "" || len(action.Guidance) > MaxGoalBytes {
+			return fmt.Errorf("recovering needs a work order and bounded guidance")
+		}
+		switch action.How {
+		case "recheck", "continue", "fresh_conversation", "back_to_ready":
+		case "message":
+			if action.Guidance == "" {
+				return fmt.Errorf("a message to the agents needs its text in guidance")
+			}
+		default:
+			return fmt.Errorf("how must be recheck, continue, message, fresh_conversation, or back_to_ready")
 		}
 	case AssistantSetUpPreview:
 		if len(action.Guidance) > MaxGoalBytes {

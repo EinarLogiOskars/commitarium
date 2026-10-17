@@ -48,6 +48,23 @@ blocker reasons are recorded. The assistant just cannot see or use them.
 | R6 | `feat(assistant): escalate in plain words` | When the caps are reached, or a `check` failure repeats after `fresh_conversation`, the assistant stops and the inbox shows "Commitarium couldn't finish *title*: a check on its side keeps failing", with one action: Report (opens a prefilled issue with the run's blocker and recoveries) or Start over (Back to Ready). Assistant messages never ask the user to approve a recovery they cannot judge. | R4 |
 | R7 | `docs: record assistant-driven recovery` | ADR-032 accepted; ADR-017 and ADR-023 amended; coordinator API and this plan updated. | R1–R6 |
 
+## Status
+
+All slices landed on `feat/assistant-recovery`. Departures from the slices
+as first written:
+
+- R1: blockers are recorded in their own table and named where the failure
+  happens; a missing audit comment counts as the agent's (it fixes it once
+  told what to post where). The exact comments API path in the lead's
+  prompts came in with the folded fix.
+- R4: autopilot's per-work-order bound is eight recoveries across blockers;
+  Back to Ready is left to the user by autopilot rather than gated by
+  commits.
+- R6: instead of opening a prefilled issue, the blocked card offers a report
+  to copy, so nothing leaves the machine unless the user sends it.
+- The Castilian case is covered by unit tests of each step (classification,
+  state, refusal, exhaustion), not one end-to-end run.
+
 ## Verification
 
 - Re-run the Castilian case in a test: a lead that returns `published`

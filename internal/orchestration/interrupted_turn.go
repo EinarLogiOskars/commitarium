@@ -145,6 +145,7 @@ func (starter *RemoteLeadStarter) awaitRetry(ctx context.Context, request remote
 			ctx, session.ID, session.Status, execution.SessionStatusPauseRequested, session.ProviderSessionID,
 		)
 	}
+	starter.noteBlocker(ctx, request.runID, execution.BlockerEnvironment, "", reason, reason)
 	if err := starter.waitRun(ctx, request.runID, reason, execution.RunWaitKindBlocker); err != nil {
 		starter.reportError(err)
 	}
@@ -290,9 +291,10 @@ func (starter *RemoteLeadStarter) ResumeDueRetries(ctx context.Context, now time
 			run, getErr := starter.executions.GetRun(ctx, wait.RunID)
 			if getErr == nil && run.Status == execution.RunStatusWaitingForUser && !run.Paused &&
 				run.WaitKind == execution.RunWaitKindBlocker {
-				errs = append(errs, starter.waitRun(ctx, wait.RunID,
-					"The turn was interrupted ("+wait.Cause+") and its automatic retry could not start. "+
-						"Continue to try again.", execution.RunWaitKindBlocker))
+				reason := "The turn was interrupted (" + wait.Cause + ") and its automatic retry could not start. " +
+					"Continue to try again."
+				starter.noteBlocker(ctx, wait.RunID, execution.BlockerEnvironment, "", wait.Cause, reason)
+				errs = append(errs, starter.waitRun(ctx, wait.RunID, reason, execution.RunWaitKindBlocker))
 			}
 		default:
 			resumed++

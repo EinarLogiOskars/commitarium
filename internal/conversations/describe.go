@@ -61,7 +61,10 @@ type StateDescriber struct {
 	Settings func(ctx context.Context) (Settings, error)
 	// Guide, when set, rates the offered models (ADR-031).
 	Guide ModelGuide
-	Now   func() time.Time
+	// Blockers, when set, describe a blocked run in full (ADR-032): what
+	// failed, the agents' last messages, and the recoveries tried.
+	Blockers BlockerReader
+	Now      func() time.Time
 }
 
 // maxWorkOrders bounds the work orders listed for a project.
@@ -376,7 +379,69 @@ func (describer StateDescriber) runNote(ctx context.Context, item feature.Featur
 		}
 		note += ": " + strings.ReplaceAll(reason, "\n", " ")
 	}
+	if run.Status == execution.RunStatusWaitingForUser && run.WaitKind == execution.RunWaitKindBlocker {
+		note += describer.blockerNote(ctx, run.ID)
+	}
 	return note
+}
+
+// BlockerReader reads what blocked a run and what was tried (ADR-032).
+type BlockerReader interface {
+	RunBlocker(ctx context.Context, runID string) (execution.Blocker, bool, error)
+	RunRecoveries(ctx context.Context, runID string) ([]execution.Recovery, error)
+	LatestAgentMessages(ctx context.Context, runID string, limit int) ([]execution.AgentMessage, error)
+}
+
+// blockerNote describes a blocked run in full for recovery: the blocker's
+// kind, check, fingerprint, and detail, the agents' last three messages, and
+// the recoveries tried, marking those on the same failure.
+func (describer StateDescriber) blockerNote(ctx context.Context, runID string) string {
+	if describer.Blockers == nil {
+		return ""
+	}
+	blocker, found, err := describer.Blockers.RunBlocker(ctx, runID)
+	if err != nil || !found {
+		return ""
+	}
+	var builder strings.Builder
+	builder.WriteString(fmt.Sprintf("\n    Blocker: kind %s", blocker.Kind))
+	if blocker.Check != "" {
+		builder.WriteString(", check \"" + blocker.Check + "\"")
+	}
+	builder.WriteString(", fingerprint " + blocker.Fingerprint + "\n    Detail: " + clip(blocker.Detail, 2048))
+	if messages, err := describer.Blockers.LatestAgentMessages(ctx, runID, 3); err == nil && len(messages) > 0 {
+		builder.WriteString("\n    The agents' last messages:")
+		for _, message := range messages {
+			builder.WriteString("\n    - " + message.Role + ": " + clip(message.Text, 600))
+		}
+	}
+	if recoveries, err := describer.Blockers.RunRecoveries(ctx, runID); err == nil && len(recoveries) > 0 {
+		builder.WriteString("\n    Recoveries tried:")
+		for _, recovery := range recoveries {
+			who := "the user"
+			if recovery.FromAssistant {
+				who = "you"
+			}
+			line := "\n    - " + string(recovery.How) + " by " + who
+			if recovery.Fingerprint == blocker.Fingerprint {
+				line += " (on this same failure)"
+			}
+			if recovery.Guidance != "" {
+				line += ": " + clip(recovery.Guidance, 300)
+			}
+			builder.WriteString(line)
+		}
+	}
+	return builder.String()
+}
+
+// clip shortens text to one line of at most limit bytes.
+func clip(text string, limit int) string {
+	text = strings.Join(strings.Fields(text), " ")
+	if len(text) > limit {
+		return text[:limit] + "…"
+	}
+	return text
 }
 
 // writeModelGuide rates each offered model by the model guide (ADR-031), with

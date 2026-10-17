@@ -1063,6 +1063,9 @@ func (client *Client) VerifyPullRequestImplementation(
 			matches++
 		}
 	}
+	if matches == 0 {
+		return workspace.PullRequest{}, workspace.ErrAuditCommentMissing
+	}
 	if matches != 1 {
 		return workspace.PullRequest{}, workspace.ErrPullRequestConflict
 	}

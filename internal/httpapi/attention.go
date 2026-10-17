@@ -267,6 +267,19 @@ type runStateSince interface {
 func (api *API) autopilotAttention(
 	ctx context.Context, item attentionItem, run execution.Run, app bool,
 ) (attentionItem, error) {
+	if item.Kind == "blocker" {
+		// Recovery ran out: the user hears it plainly, whoever was on it
+		// (ADR-032).
+		if blocker, exhausted := api.recoveryExhausted(ctx, run.ID); exhausted {
+			item.ID = "recovery-exhausted:" + item.ID
+			item.Kind = "recovery_exhausted"
+			item.Severity = "warning"
+			item.Actionable = true
+			item.Title = "Commitarium couldn't finish this"
+			item.Detail = exhaustedDetail(item.FeatureTitle, blocker.Kind)
+			return item, nil
+		}
+	}
 	if api.conversations == nil || (item.Kind != "blocker" && item.Kind != "run_failed") {
 		return item, nil
 	}

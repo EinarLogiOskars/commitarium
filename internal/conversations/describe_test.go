@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/EinarLogiOskars/commitarium/internal/agent"
+	"github.com/EinarLogiOskars/commitarium/internal/execution"
 	"github.com/EinarLogiOskars/commitarium/internal/feature"
 	"github.com/EinarLogiOskars/commitarium/internal/featureartifact"
 	"github.com/EinarLogiOskars/commitarium/internal/modelguide"
@@ -159,6 +160,54 @@ func TestTheStateRatesOfferedModels(t *testing.T) {
 		"- claude-opus-5: frontier (the user's rating)", "- claude-new-9: unrated (needs approval)",
 	} {
 		if !strings.Contains(state, want) {
+			t.Errorf("state lacks %q:\n%s", want, state)
+		}
+	}
+}
+
+type blockersStub struct{}
+
+func (blockersStub) RunBlocker(context.Context, string) (execution.Blocker, bool, error) {
+	return execution.Blocker{Kind: execution.BlockerAgent, Check: "verify lead publication before review",
+		Detail: "the agent's audit comment with its marker is not on the Forgejo pull request", Fingerprint: "fp1"}, true, nil
+}
+
+func (blockersStub) RunRecoveries(context.Context, string) ([]execution.Recovery, error) {
+	return []execution.Recovery{
+		{How: execution.RecoveryContinue, Fingerprint: "fp1", FromAssistant: true, Guidance: "git fetch origin"},
+		{How: execution.RecoveryRecheck, Fingerprint: "fp0"},
+	}, nil
+}
+
+func (blockersStub) LatestAgentMessages(context.Context, string, int) ([]execution.AgentMessage, error) {
+	return []execution.AgentMessage{{Role: "lead", Text: "Pushed 056d768; the comment API returned 404."}}, nil
+}
+
+// A blocked work order shows the assistant the whole blocker: what failed,
+// the agents' last words, and what was tried on the same failure (ADR-032).
+func TestABlockedRunShowsTheWholeBlocker(t *testing.T) {
+	describer := StateDescriber{
+		Projects: projectsStub{}, Agents: agentsStub{}, Blockers: blockersStub{},
+		Features: &featuresStub{features: []feature.Feature{
+			{ID: "fea_audio", Title: "Add audio", State: feature.StateImplementing, CreatedBy: feature.CreatedByAssistant},
+		}},
+		Runs: runsStub{runs: map[string][]execution.Run{"fea_audio": {{
+			ID: "run_1", Status: execution.RunStatusWaitingForUser, WaitKind: execution.RunWaitKindBlocker,
+			Reason: "The coordinator could not complete the lead turn.",
+		}}}},
+	}
+	state, err := describer.Describe(t.Context(), "prj_test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"Blocker: kind agent, check \"verify lead publication before review\", fingerprint fp1",
+		"Detail: the agent's audit comment with its marker is not on the Forgejo pull request",
+		"- lead: Pushed 056d768; the comment API returned 404.",
+		"- continue by you (on this same failure): git fetch origin",
+		"- recheck by the user\n",
+	} {
+		if !strings.Contains(state+"\n", want) {
 			t.Errorf("state lacks %q:\n%s", want, state)
 		}
 	}

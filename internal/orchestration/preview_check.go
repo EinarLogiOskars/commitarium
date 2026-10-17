@@ -117,6 +117,7 @@ func (starter *RemoteLeadStarter) previewCheckGate(
 		return false, nil
 	case previewcheck.StatusFailed:
 		if fresh {
+			starter.noteBlocker(ctx, run.ID, execution.BlockerCheck, "preview", previewCheckBlockedReason(check), previewCheckBlockedReason(check))
 			return true, starter.waitRun(ctx, run.ID, previewCheckBlockedReason(check), execution.RunWaitKindBlocker)
 		}
 		return true, starter.previewCheckFailed(ctx, run, storedFeature, check, directive)
@@ -151,6 +152,7 @@ func (starter *RemoteLeadStarter) previewCheckFailed(
 	}
 	chosen := directive.answersBlocker() && strings.HasPrefix(directive.blockedReason, previewCheckBlockedPrefix)
 	if failures > maxPreviewFixes && !chosen {
+		starter.noteBlocker(ctx, run.ID, execution.BlockerCheck, "preview", blocked, blocked)
 		return starter.waitRun(ctx, run.ID, blocked, execution.RunWaitKindBlocker)
 	}
 	if paused, err := starter.stopAtPauseBoundary(ctx, run.ID, previewCheckFixingReason); err != nil || paused {
@@ -163,6 +165,7 @@ func (starter *RemoteLeadStarter) previewCheckFailed(
 		return err
 	}
 	if _, implementing := implementationTurnNumber(checkpoint.SessionID, checkpoint.AttemptID); !implementing {
+		starter.noteBlocker(ctx, run.ID, execution.BlockerCheck, "preview", blocked, blocked)
 		return starter.waitRun(ctx, run.ID, blocked, execution.RunWaitKindBlocker)
 	}
 	clearer, ok := starter.workspaces.(remoteLeadMergeReadyClearer)
@@ -220,6 +223,7 @@ func (starter *RemoteLeadStarter) previewCheckFailed(
 			return err
 		}
 		starter.reportError(fmt.Errorf("hand the preview check of run %q to its lead: %w", run.ID, err))
+		starter.noteBlocker(ctx, run.ID, execution.BlockerCheck, "preview", blocked, blocked)
 		return starter.waitRun(ctx, run.ID, blocked, execution.RunWaitKindBlocker)
 	}
 	return nil
@@ -324,6 +328,8 @@ func (starter *RemoteLeadStarter) BlockOverduePreviewChecks(ctx context.Context)
 		if latest, found, err := starter.previewChecks.Latest(ctx, run.ID, check.CommitID); err != nil || !found || latest.ID != check.ID {
 			continue
 		}
+		starter.noteBlocker(ctx, run.ID, execution.BlockerEnvironment, "preview",
+			previewCheckNoDesktopReason, previewCheckNoDesktopReason)
 		if err := starter.waitRun(ctx, run.ID, previewCheckNoDesktopReason, execution.RunWaitKindBlocker); err != nil {
 			errs = append(errs, err)
 			continue

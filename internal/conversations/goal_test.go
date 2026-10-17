@@ -3,6 +3,7 @@ package conversations
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -134,7 +135,9 @@ func TestStoppingAutopilotLeavesActionsForTheUser(t *testing.T) {
 	}
 }
 
-func TestAutopilotContinuesABlockedWorkOrderAtMostTwice(t *testing.T) {
+// Autopilot recovers one work order at most maxAutoContinues times across its
+// blockers; the coordinator bounds each failure itself (ADR-032).
+func TestAutopilotRecoversABlockedWorkOrderBoundedTimes(t *testing.T) {
 	service, worker := newTestService(t)
 	service.config.Visions = &visionStub{plan: featureartifact.VisionPlan{Priorities: []featureartifact.VisionPriority{
 		{Level: 0, Items: []featureartifact.VisionItem{{ID: "list", Title: "Show the log", FeatureID: "fea_list"}}},
@@ -144,8 +147,8 @@ func TestAutopilotContinuesABlockedWorkOrderAtMostTwice(t *testing.T) {
 		t.Fatal(err)
 	}
 	continues := 0
-	for turn := 1; turn <= 3; turn++ {
-		if _, err := service.Send(t.Context(), "prj_test", "Go on", "msg-"+string(rune('0'+turn))); err != nil {
+	for turn := 1; turn <= maxAutoContinues+1; turn++ {
+		if _, err := service.Send(t.Context(), "prj_test", "Go on", fmt.Sprintf("msg-%d", turn)); err != nil {
 			t.Fatal(err)
 		}
 		worker.finish(workerhttp.TerminalResult{
@@ -164,7 +167,7 @@ func TestAutopilotContinuesABlockedWorkOrderAtMostTwice(t *testing.T) {
 		continues += len(apply)
 	}
 	conversation, _ := service.Get(t.Context(), "prj_test")
-	if continues != 2 || !strings.Contains(conversation.Messages[len(conversation.Messages)-1].Text, "yours to approve") {
+	if continues != maxAutoContinues || !strings.Contains(conversation.Messages[len(conversation.Messages)-1].Text, "yours to approve") {
 		t.Fatalf("continues = %d, last = %q", continues, conversation.Messages[len(conversation.Messages)-1].Text)
 	}
 }
@@ -494,5 +497,35 @@ func TestTheAssistantsEarlierWorkOrdersAreMarkedAsItsOwn(t *testing.T) {
 	}
 	if len(marker.marked) != 1 || len(marker.marked["prj_test"]) != 1 || marker.marked["prj_test"][0] != "fea_made" {
 		t.Fatalf("marked = %v", marker.marked)
+	}
+}
+
+// Sending work back to Ready throws it away, so autopilot leaves it to the
+// user (ADR-032).
+func TestAutopilotLeavesBackToReadyToTheUser(t *testing.T) {
+	service, worker := newTestService(t)
+	service.config.Visions = &visionStub{plan: featureartifact.VisionPlan{Priorities: []featureartifact.VisionPriority{
+		{Level: 0, Items: []featureartifact.VisionItem{{ID: "list", Title: "Show the log", FeatureID: "fea_list"}}},
+	}}}
+	service.config.Features = &featuresStub{features: []feature.Feature{{ID: "fea_list", State: feature.StateImplementing}}}
+	if _, err := service.StartGoal(t.Context(), "prj_test", 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Send(t.Context(), "prj_test", "Go on", "msg-1"); err != nil {
+		t.Fatal(err)
+	}
+	worker.finish(workerhttp.TerminalResult{
+		Outcome: workerhttp.OutcomeCompleted, Disposition: workerhttp.DispositionSucceeded, Summary: "Starting over.",
+		AssistantTurn: &featureartifact.AssistantTurn{Actions: []featureartifact.AssistantAction{
+			{Type: featureartifact.AssistantRecoverWorkOrder, Reason: "Unusable", WorkOrderID: "fea_list", How: "back_to_ready"},
+		}},
+	})
+	if _, err := service.Get(t.Context(), "prj_test"); err != nil {
+		t.Fatal(err)
+	}
+	apply, err := service.autopilotActions(t.Context(), "prj_test")
+	conversation, _ := service.Get(t.Context(), "prj_test")
+	if err != nil || len(apply) != 0 || !strings.Contains(conversation.Messages[len(conversation.Messages)-1].Text, "needs your approval") {
+		t.Fatalf("apply = %+v err=%v last=%q", apply, err, conversation.Messages[len(conversation.Messages)-1].Text)
 	}
 }

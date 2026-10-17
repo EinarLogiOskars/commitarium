@@ -1,6 +1,6 @@
 # ADR-017: Pause work orders instead of failing them
 
-- Status: Accepted
+- Status: Accepted (amended by [ADR-032](0032-the-assistant-recovers-blocked-work.md): blockers record their kind and the recoveries tried; the assistant recovers by the failure)
 - Date: 2026-10-11
 
 ## Context
