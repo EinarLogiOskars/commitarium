@@ -14,7 +14,7 @@ use std::path::PathBuf;
 use std::thread;
 use std::time::Duration;
 
-use crate::{bootstrap, docker, phase4};
+use crate::{bootstrap, docker, environment};
 
 const AGENTS_COMPOSE_ENV: &str = "COMMITARIUM_AGENTS_COMPOSE_FILE";
 const TEMPLATE_PROFILE: &str = "agent-template";
@@ -175,7 +175,7 @@ async fn fetch_once() -> Result<Vec<Agent>, String> {
         .timeout(LIST_TIMEOUT)
         .build()
         .map_err(|_| "could not create the coordinator client".to_string())?
-        .get(phase4::coordinator_url("/api/v1/agents"))
+        .get(environment::coordinator_url("/api/v1/agents"))
         .send()
         .await
         .map_err(|_| "the coordinator is unavailable".to_string())?;
