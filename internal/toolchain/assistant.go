@@ -111,7 +111,18 @@ type Assistant struct {
 	now             func() time.Time
 	mu              sync.Mutex
 	deletedProjects map[string]struct{}
+	// signIns, when set, hears of an agent whose login failed.
+	signIns SignInRecorder
 }
+
+// SignInRecorder records an agent that needs the user to sign in again
+// (LOGIN_RECOVERY_PLAN.md).
+type SignInRecorder interface {
+	MarkAgentNeedsSignIn(ctx context.Context, agentID, lastError string) error
+}
+
+// SetSignIns shares agents whose login failed with the rest of Commitarium.
+func (assistant *Assistant) SetSignIns(signIns SignInRecorder) { assistant.signIns = signIns }
 
 // NewAssistant creates the setup assistant; workers resolves an agent ID to
 // its worker (ADR-016).
@@ -499,7 +510,14 @@ func (assistant *Assistant) refresh(ctx context.Context, record assistantRecord)
 	if attempt.State != workerhttp.AttemptStateTerminal {
 		return record, assistant.writeAndReturn(record)
 	}
-	if attempt.Result == nil || attempt.Result.Outcome != workerhttp.OutcomeCompleted {
+	if result := attempt.Result; result != nil && result.Error != nil &&
+		result.Error.Code == workerhttp.ErrorProviderLoginRequired {
+		if assistant.signIns != nil {
+			_ = assistant.signIns.MarkAgentNeedsSignIn(ctx, attempt.Assignment.AgentProfileID, result.Error.Message)
+		}
+		record.Status, record.Message = AssistantStatusFailed,
+			"The setup assistant's agent needs you to sign in again. Sign it in on the Agents page, then start the setup again."
+	} else if attempt.Result == nil || attempt.Result.Outcome != workerhttp.OutcomeCompleted {
 		record.Status, record.Message = AssistantStatusFailed, "The setup assistant turn did not complete safely."
 	} else if attempt.Result.Disposition == workerhttp.DispositionInputRequired {
 		record.Status, record.Message = AssistantStatusWaitingForUser, attempt.Result.Summary

@@ -371,6 +371,7 @@ func run(ctx context.Context, coordinatorConfig config) error {
 		if err != nil {
 			return fmt.Errorf("create project visions: %w", err)
 		}
+		visions.SetSignIns(agentSignIns)
 		visionService = visions.WithRepository(checkoutManager, forgejoClient)
 		models := func(ctx context.Context) []conversations.ModelChoice {
 			choices := make([]conversations.ModelChoice, 0)
@@ -470,6 +471,7 @@ func run(ctx context.Context, coordinatorConfig config) error {
 		if err != nil {
 			return fmt.Errorf("create project toolchain assistant: %w", err)
 		}
+		assistant.SetSignIns(agentSignIns)
 		toolchainAssistantService = assistant
 		assistantCleaner = assistant
 		clarifier, err := workorderassistant.NewService(workorderassistant.Config{
@@ -482,6 +484,7 @@ func run(ctx context.Context, coordinatorConfig config) error {
 		if err != nil {
 			return fmt.Errorf("create work-order assistant: %w", err)
 		}
+		clarifier.SetSignIns(agentSignIns)
 		workOrderAssistant = clarifier
 		ingestion := workeringest.NewService(executionService, workeringest.FilterFunc(
 			func(_ context.Context, event workerhttp.Event) (workerhttp.Event, error) {

@@ -2,7 +2,9 @@ package conversations
 
 import (
 	"context"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/EinarLogiOskars/commitarium/internal/feature"
 	"github.com/EinarLogiOskars/commitarium/internal/featureartifact"
@@ -97,5 +99,58 @@ func TestAnAppAppliesTheAssistantsWorkWithoutAGoal(t *testing.T) {
 	apply, err := service.autopilotActions(t.Context(), "prj_test")
 	if err != nil || len(apply) != 1 || apply[0].ID != "act_change" {
 		t.Fatalf("apps mode applied %+v err=%v", apply, err)
+	}
+}
+
+type writingVision struct{}
+
+func (writingVision) OpenSession(context.Context, string) (vision.Session, error) {
+	return vision.Session{}, nil
+}
+
+// A launch whose vision writer stopped short (a failed turn, a signed-out
+// agent) wakes the assistant to write it again, not before the writer had
+// time to begin, not while one writes, and at most every visionRestartEvery.
+func TestALaunchWhoseVisionStoppedWakesTheAssistant(t *testing.T) {
+	service, _ := newTestService(t)
+	clock := time.Now()
+	service.now = func() time.Time { return clock }
+	watcher := Watcher{Service: service, Visions: missingVision{}, VisionSessions: noVisionSession{}}
+	if _, err := service.StartLaunch(t.Context(), "prj_test"); err != nil {
+		t.Fatal(err)
+	}
+	pending := func() int {
+		stored, err := service.read("prj_test")
+		if err != nil {
+			t.Fatal(err)
+		}
+		count := 0
+		for _, event := range stored.PendingEvents {
+			if strings.Contains(event, "write_vision") {
+				count++
+			}
+		}
+		return count
+	}
+	watcher.launch(t.Context(), "prj_test")
+	if pending() != 0 {
+		t.Fatal("woke the assistant before the vision writer had time to begin")
+	}
+	clock = clock.Add(visionGrace + time.Second)
+	watcher.VisionSessions = writingVision{}
+	watcher.launch(t.Context(), "prj_test")
+	if pending() != 0 {
+		t.Fatal("woke the assistant while the vision was being written")
+	}
+	watcher.VisionSessions = noVisionSession{}
+	watcher.launch(t.Context(), "prj_test")
+	watcher.launch(t.Context(), "prj_test")
+	if pending() != 1 {
+		t.Fatalf("stopped vision woke the assistant %d times, want once", pending())
+	}
+	clock = clock.Add(visionRestartEvery + time.Second)
+	watcher.launch(t.Context(), "prj_test")
+	if pending() != 2 {
+		t.Fatalf("a vision still missing later did not wake the assistant again: %d", pending())
 	}
 }
