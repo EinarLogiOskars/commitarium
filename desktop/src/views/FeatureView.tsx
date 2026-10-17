@@ -24,6 +24,7 @@ import { PhaseStepper, currentPhaseIndex } from "./PhaseStepper";
 import { phaseIntervals, type Interval } from "./phaseWindows";
 import { WORK } from "../vocab";
 import { askAssistantAbout } from "../attention/askAssistant";
+import { useModelName } from "./useModelName";
 import type {
   Feature,
   FeatureUsage,
@@ -504,6 +505,7 @@ function UsageLine({ usage }: { usage: FeatureUsage }) {
 }
 
 function UsageTable({ phases, roles }: { phases: PhaseUsage[]; roles: string[] }) {
+  const modelName = useModelName();
   // Phases arrive in workflow order; keep the first occurrence of each.
   const order = phases.map((p) => p.phase).filter((p, i, all) => all.indexOf(p) === i);
   const cell = (phase: string, role: string) => {
@@ -514,6 +516,13 @@ function UsageTable({ phases, roles }: { phases: PhaseUsage[]; roles: string[] }
         {formatTokens(readTokens(u))} in
         <span className="muted"> ({formatTokens(u.cached_input_tokens)} cached)</span> ·{" "}
         {formatTokens(u.output_tokens)} out
+        {(u.models ?? []).map((m) => (
+          <span key={`${m.model}:${m.effort ?? ""}`} className="usage-table__model muted">
+            {modelName(m.model)}
+            {m.effort ? ` · ${m.effort}` : ""}
+            {(u.models ?? []).length > 1 ? ` · ${formatTokens(readTokens(m))} in` : ""}
+          </span>
+        ))}
       </td>
     );
   };

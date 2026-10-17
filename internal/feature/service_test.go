@@ -146,7 +146,9 @@ func TestServiceCreate(t *testing.T) {
 	}
 }
 
-func TestServiceCreateSnapshotsIndependentAcceptancePreferenceAndOverride(t *testing.T) {
+// Independent acceptance tests are no longer written (ADR-031): a project's
+// preference and an override are accepted and ignored.
+func TestServiceCreateIgnoresIndependentAcceptanceTests(t *testing.T) {
 	store := &recordingStore{}
 	projects := &recordingProjectFinder{result: project.Project{
 		ID: "prj_test", DialogueLimits: project.DefaultDialogueLimits(),
@@ -155,11 +157,11 @@ func TestServiceCreateSnapshotsIndependentAcceptancePreferenceAndOverride(t *tes
 	}}
 	service := NewService(store, projects)
 	created, err := service.Create(t.Context(), "prj_test", "Feature", "", SettingsOverrides{})
-	if err != nil || !created.IndependentAcceptanceTests {
+	if err != nil || created.IndependentAcceptanceTests {
 		t.Fatalf("inherited feature=%+v err=%v", created, err)
 	}
-	disabled := false
-	created, err = service.Create(t.Context(), "prj_test", "Override", "", SettingsOverrides{IndependentAcceptanceTests: &disabled})
+	enabled := true
+	created, err = service.Create(t.Context(), "prj_test", "Override", "", SettingsOverrides{IndependentAcceptanceTests: &enabled})
 	if err != nil || created.IndependentAcceptanceTests {
 		t.Fatalf("overridden feature=%+v err=%v", created, err)
 	}
@@ -452,12 +454,12 @@ func TestServiceChoosesStartSettingsOnlyWhileReady(t *testing.T) {
 	}
 }
 
-func TestStartSettingsStepsDropAcceptanceTestsWithoutAReviewer(t *testing.T) {
+func TestStartSettingsChooseStepsAndNoAcceptanceTests(t *testing.T) {
 	store := NewMemoryStore()
 	defaults := project.Project{ID: "prj_test", AgentProviders: project.DefaultAgentProviders(), IndependentAcceptanceTests: true}
 	service := NewService(store, &recordingProjectFinder{result: defaults})
 	created, err := service.Create(t.Context(), defaults.ID, "Readme", "", SettingsOverrides{})
-	if err != nil || !created.IndependentAcceptanceTests {
+	if err != nil || created.IndependentAcceptanceTests {
 		t.Fatalf("create feature: %+v err=%v", created, err)
 	}
 	ready := created

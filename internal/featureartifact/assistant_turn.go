@@ -2,6 +2,7 @@ package featureartifact
 
 import (
 	"fmt"
+	"github.com/EinarLogiOskars/commitarium/internal/project"
 	"strings"
 )
 
@@ -63,9 +64,12 @@ type AssistantAction struct {
 	Title        string `json:"title"`
 	Description  string `json:"description"`
 	VisionItemID string `json:"vision_item_id"`
-	// Steps is "full", "planned", or "quick" (ADR-018).
-	Steps            string `json:"steps"`
-	IndependentTests bool   `json:"independent_tests"`
+	// Steps is "full", "reviewed_plan", "planned", or "quick" (ADR-018,
+	// ADR-031).
+	Steps string `json:"steps"`
+	// IndependentTests is ignored: independent acceptance tests are no
+	// longer written (ADR-031). Kept so older stored actions still decode.
+	IndependentTests bool `json:"independent_tests,omitempty"`
 	// Agents and models, for create, start, and change: the assistant's
 	// choice (ADR-027). Empty keeps the work order's own choice or the run's
 	// current one; a project has no defaults.
@@ -73,6 +77,14 @@ type AssistantAction struct {
 	LeadModel     string `json:"lead_model"`
 	ReviewerAgent string `json:"reviewer_agent"`
 	ReviewerModel string `json:"reviewer_model"`
+	// Planning models and efforts by phase, for create and start (ADR-031).
+	// Empty keeps the role's model and the model's default effort.
+	LeadPlanModel      string `json:"lead_plan_model"`
+	LeadPlanEffort     string `json:"lead_plan_effort"`
+	LeadEffort         string `json:"lead_effort"`
+	ReviewerPlanModel  string `json:"reviewer_plan_model"`
+	ReviewerPlanEffort string `json:"reviewer_plan_effort"`
+	ReviewerEffort     string `json:"reviewer_effort"`
 	// start_work_order, change_models, and add_vision_item (optional)
 	WorkOrderID string `json:"work_order_id"`
 	// Priority is the level of a new vision item, or of the priority an
@@ -88,6 +100,20 @@ type AssistantAction struct {
 	// Autopilot starts it only once that work has merged, so two changes to
 	// the same part of the app do not run at once.
 	After string `json:"after"`
+}
+
+// PhaseChoices are the action's planning models and efforts (ADR-031); nil
+// when it names none.
+func (action AssistantAction) PhaseChoices() *project.PhaseChoices {
+	choices := project.PhaseChoices{
+		LeadPlanModel: action.LeadPlanModel, LeadPlanEffort: action.LeadPlanEffort, LeadEffort: action.LeadEffort,
+		ReviewerPlanModel: action.ReviewerPlanModel, ReviewerPlanEffort: action.ReviewerPlanEffort,
+		ReviewerEffort: action.ReviewerEffort,
+	}
+	if choices == (project.PhaseChoices{}) {
+		return nil
+	}
+	return &choices
 }
 
 const (
@@ -109,6 +135,8 @@ func (turn AssistantTurn) Normalize() (AssistantTurn, error) {
 		for _, field := range []*string{
 			&action.Reason, &action.Title, &action.Description, &action.VisionItemID, &action.Steps,
 			&action.LeadAgent, &action.LeadModel, &action.ReviewerAgent, &action.ReviewerModel,
+			&action.LeadPlanModel, &action.LeadPlanEffort, &action.LeadEffort,
+			&action.ReviewerPlanModel, &action.ReviewerPlanEffort, &action.ReviewerEffort,
 			&action.WorkOrderID, &action.When, &action.Guidance, &action.After,
 		} {
 			*field = strings.TrimSpace(*field)
@@ -128,7 +156,7 @@ func (action AssistantAction) validate() error {
 		return fmt.Errorf("after is too long")
 	}
 	switch action.Steps {
-	case "", "full", "planned", "quick":
+	case "", "full", "reviewed_plan", "planned", "quick":
 	default:
 		return fmt.Errorf("steps must be full, planned, or quick")
 	}

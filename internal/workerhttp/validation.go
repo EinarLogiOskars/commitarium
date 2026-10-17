@@ -152,8 +152,15 @@ func (assignment Assignment) Validate() error {
 			return err
 		}
 	}
+	if assignment.Effort != "" && !effortPattern.MatchString(assignment.Effort) {
+		return invalid("effort %q is not a reasoning effort", assignment.Effort)
+	}
 	return nil
 }
+
+// effortPattern accepts a provider's effort names, such as "medium" or
+// "xhigh"; the provider rejects one it does not support.
+var effortPattern = regexp.MustCompile(`^[a-z]{1,16}$`)
 
 func validateExplicitModelID(model string) error {
 	model = strings.TrimSpace(model)

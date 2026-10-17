@@ -27,6 +27,7 @@ import (
 // the top level and per project, its settings, and the actions it proposes.
 type ConversationService interface {
 	Settings(ctx context.Context) (conversations.Settings, error)
+	RequiresApproval(ctx context.Context, model string) bool
 	SaveSettings(ctx context.Context, settings conversations.Settings) (conversations.Settings, error)
 	Get(ctx context.Context, scope string) (conversations.Conversation, error)
 	Send(ctx context.Context, scope, message, key string) (conversations.Conversation, error)
@@ -515,19 +516,17 @@ func (api *API) applyStartWorkOrder(
 	clarification := false
 	request.Steps = &workStepsRequest{Clarification: &clarification}
 	if action.Steps != "" {
-		plan, reviewer := action.Steps != "quick", action.Steps == "full"
-		request.Steps.DocumentedPlan, request.Steps.Reviewer = &plan, &reviewer
-	}
-	if action.IndependentTests {
-		tests := true
-		request.IndependentAcceptanceTests = &tests
+		plan := action.Steps != "quick"
+		reviewer := action.Steps == "full" || action.Steps == "reviewed_plan"
+		codeReview := action.Steps == "full"
+		request.Steps.DocumentedPlan, request.Steps.Reviewer, request.Steps.CodeReview = &plan, &reviewer, &codeReview
 	}
 	// The action's agents and models replace the work order's own; a role the
 	// action leaves out keeps the work order's. Nothing comes from the
 	// project (ADR-027); a reviewer the steps skip is the lead.
 	skipReviewer := stored.Steps.SkipReviewer
 	if action.Steps != "" {
-		skipReviewer = action.Steps != "full"
+		skipReviewer = action.Steps != "full" && action.Steps != "reviewed_plan"
 	}
 	if action.LeadAgent != "" || action.ReviewerAgent != "" {
 		lead := orDefault(action.LeadAgent, stored.AgentProviders.LeadAgent)
@@ -542,6 +541,13 @@ func (api *API) applyStartWorkOrder(
 		if reviewer := orDefault(action.ReviewerModel, stored.AgentModels.Reviewer); reviewer != "" && !skipReviewer {
 			request.AgentModels.Reviewer = &reviewer
 		}
+	}
+	request.PhaseChoices = action.PhaseChoices()
+	if err := api.checkEffortCeiling(ctx, request.PhaseChoices); err != nil {
+		if !writeChoiceError(w, err) {
+			writeConversationError(w, err)
+		}
+		return "", false
 	}
 	if _, ok := api.startFeature(w, r, stored, "assistant-"+action.ID, request); !ok {
 		return "", false
@@ -596,17 +602,14 @@ func (api *API) applyChangeModels(
 		writeRunModelsError(w, latest.ID, err)
 		return "", false
 	}
+	api.dropPlanModels(ctx, stored.ID, models)
 	return fmt.Sprintf("Switched the models of “%s”.", stored.Title), true
 }
 
 // premiumModels lists the models an action would run on that need the
 // user's explicit approval.
 func (api *API) premiumModels(ctx context.Context, projectID string, action conversations.Action) ([]string, error) {
-	settings, err := api.conversations.Settings(ctx)
-	if err != nil {
-		return nil, err
-	}
-	models := []string{action.LeadModel, action.ReviewerModel}
+	models := []string{action.LeadModel, action.ReviewerModel, action.LeadPlanModel, action.ReviewerPlanModel}
 	if action.Type == featureartifact.AssistantStartWorkOrder {
 		stored, err := api.features.GetByID(ctx, projectID, action.WorkOrderID)
 		if err != nil {
@@ -621,7 +624,7 @@ func (api *API) premiumModels(ctx context.Context, projectID string, action conv
 	}
 	premium := make([]string, 0)
 	for _, model := range models {
-		if settings.RequiresApproval(model) {
+		if api.conversations.RequiresApproval(ctx, model) {
 			premium = append(premium, model)
 		}
 	}
@@ -706,12 +709,10 @@ func (api *API) assistantSettings(
 		overrides.Steps = &project.WorkSteps{SkipPlan: true, SkipReviewer: true}
 	case "planned":
 		overrides.Steps = &project.WorkSteps{SkipReviewer: true}
+	case "reviewed_plan":
+		overrides.Steps = &project.WorkSteps{SkipCodeReview: true}
 	case "full":
 		overrides.Steps = &project.WorkSteps{}
-	}
-	if action.IndependentTests {
-		tests := true
-		overrides.IndependentAcceptanceTests = &tests
 	}
 	if action.LeadAgent == "" && action.ReviewerAgent == "" && action.LeadModel == "" && action.ReviewerModel == "" {
 		return overrides, nil
@@ -742,11 +743,20 @@ func (api *API) assistantSettings(
 		}
 	}
 	overrides.AgentProviders, overrides.AgentModels = &providers, &chosen
+	if choices := action.PhaseChoices(); choices != nil {
+		if err := api.checkEffortCeiling(ctx, choices); err != nil {
+			return feature.SettingsOverrides{}, err
+		}
+		if err := api.checkPhaseChoices(ctx, providers, chosen, *choices, skipReviewer); err != nil {
+			return feature.SettingsOverrides{}, err
+		}
+		overrides.PhaseChoices = choices
+	}
 	return overrides, nil
 }
 
 var errIncompleteAssistantChoice = &choiceError{status: http.StatusBadRequest, code: "agents_not_chosen",
-	message: "name lead_agent and lead_model, and reviewer_agent and reviewer_model when the steps are full"}
+	message: "name lead_agent and lead_model, and reviewer_agent and reviewer_model when the steps have a reviewer"}
 
 func orDefault(value, fallback string) string {
 	if strings.TrimSpace(value) != "" {

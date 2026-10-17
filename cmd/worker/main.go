@@ -723,7 +723,7 @@ func claudeModelSource(provider *claudeadapter.Adapter, environment []string, co
 			if cached != nil {
 				return cached, nil
 			}
-			return staticModels(configured), nil
+			return withEfforts(staticModels(configured), claudeadapter.Efforts), nil
 		}
 		ids := make([]string, 0, len(resolved)+len(configured))
 		seen := make(map[string]struct{}, len(resolved)+len(configured))
@@ -734,9 +734,17 @@ func claudeModelSource(provider *claudeadapter.Adapter, environment []string, co
 			seen[id] = struct{}{}
 			ids = append(ids, id)
 		}
-		cached, resolvedAt = staticModels(ids), time.Now()
+		cached, resolvedAt = withEfforts(staticModels(ids), claudeadapter.Efforts), time.Now()
 		return cached, nil
 	})
+}
+
+// withEfforts lists the reasoning efforts each model accepts.
+func withEfforts(models []workerhttp.Model, efforts []string) []workerhttp.Model {
+	for index := range models {
+		models[index].SupportedReasoningEfforts = append([]string(nil), efforts...)
+	}
+	return models
 }
 
 func staticModels(ids []string) []workerhttp.Model {

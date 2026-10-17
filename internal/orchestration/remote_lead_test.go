@@ -1783,7 +1783,7 @@ func testRemoteLeadWithoutReviewer(t *testing.T, repliesFirst bool) {
 		t.Fatalf("merge: %v", err)
 	}
 	if workspaceStub.mergeCalls != 1 || len(workspaceStub.mergeApprovalNotes) != 1 ||
-		!strings.Contains(workspaceStub.mergeApprovalNotes[0], "no reviewer") {
+		!strings.Contains(workspaceStub.mergeApprovalNotes[0], "no code review") {
 		t.Fatalf("merge did not carry the coordinator's approval note: %+v", workspaceStub.mergeApprovalNotes)
 	}
 }

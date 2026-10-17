@@ -209,6 +209,8 @@ type startRunRequest struct {
 	MergePolicy                *project.MergePolicy    `json:"merge_policy"`
 	IndependentAcceptanceTests *bool                   `json:"independent_acceptance_tests"`
 	Steps                      *workStepsRequest       `json:"steps"`
+	// PhaseChoices are the optional planning models and efforts (ADR-031).
+	PhaseChoices *project.PhaseChoices `json:"phase_choices"`
 }
 
 // workStepsRequest names a work order's optional steps (ADR-018); an omitted
@@ -220,16 +222,20 @@ type workStepsRequest struct {
 	Clarification  *bool `json:"clarification"`
 	DocumentedPlan *bool `json:"documented_plan"`
 	Reviewer       *bool `json:"reviewer"`
+	// CodeReview false keeps the reviewer for the plan only ("Reviewed
+	// plan", ADR-031); it is ignored without a reviewer.
+	CodeReview *bool `json:"code_review"`
 }
 
 // workStepsResponse reports which optional steps a work order or run takes.
 type workStepsResponse struct {
 	DocumentedPlan bool `json:"documented_plan"`
 	Reviewer       bool `json:"reviewer"`
+	CodeReview     bool `json:"code_review"`
 }
 
 func newWorkStepsResponse(steps project.WorkSteps) workStepsResponse {
-	return workStepsResponse{DocumentedPlan: !steps.SkipPlan, Reviewer: !steps.SkipReviewer}
+	return workStepsResponse{DocumentedPlan: !steps.SkipPlan, Reviewer: !steps.SkipReviewer, CodeReview: steps.CodeReview()}
 }
 
 type startSettingsChooser interface {
@@ -353,7 +359,32 @@ func (api *API) chooseStartSettings(
 		if request.Steps.Reviewer != nil {
 			steps.SkipReviewer = !*request.Steps.Reviewer
 		}
+		if request.Steps.CodeReview != nil {
+			steps.SkipCodeReview = !*request.Steps.CodeReview
+		}
 		overrides.Steps = &steps
+	}
+	if request.PhaseChoices != nil {
+		providers := storedFeature.AgentProviders
+		if overrides.AgentProviders != nil {
+			providers = *overrides.AgentProviders
+		}
+		models := storedFeature.AgentModels
+		if overrides.AgentModels != nil {
+			models = *overrides.AgentModels
+		}
+		skipReviewer := storedFeature.Steps.SkipReviewer
+		if overrides.Steps != nil {
+			skipReviewer = overrides.Steps.SkipReviewer
+		}
+		if err := api.checkPhaseChoices(r.Context(), providers, models, *request.PhaseChoices, skipReviewer); err != nil {
+			if !writeChoiceError(w, err) {
+				log.Printf("check phase choices for feature %q: %v", storedFeature.ID, err)
+				writeError(w, http.StatusInternalServerError, "internal_error", "internal server error")
+			}
+			return feature.Feature{}, false
+		}
+		overrides.PhaseChoices = request.PhaseChoices
 	}
 	chooser, ok := api.features.(startSettingsChooser)
 	if !ok {
@@ -375,6 +406,8 @@ func (api *API) chooseStartSettings(
 			writeError(w, http.StatusBadRequest, "invalid_merge_policy", "merge_policy must be require_user_approval or auto_after_gates")
 		case errors.Is(err, project.ErrInvalidAutonomyPolicy):
 			writeError(w, http.StatusBadRequest, "invalid_autonomy_policy", "autonomy_policy must be review_each_phase or run_to_completion")
+		case errors.Is(err, project.ErrInvalidPhaseChoices):
+			writeError(w, http.StatusBadRequest, "invalid_phase_choices", err.Error())
 		case errors.Is(err, project.ErrInvalidWorkSteps):
 			writeError(w, http.StatusBadRequest, "invalid_steps", "a reviewer requires a documented plan")
 		default:

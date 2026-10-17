@@ -1,6 +1,6 @@
 # ADR-021: Let a working run switch models
 
-- Status: Accepted
+- Status: Accepted (amended by [ADR-031](0031-choose-models-and-review-where-it-pays.md): a role may also switch models by phase, and switching its model clears its planning model)
 - Date: 2026-10-12
 
 ## Context

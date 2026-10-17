@@ -10,6 +10,7 @@ import (
 	"github.com/EinarLogiOskars/commitarium/internal/agent"
 	"github.com/EinarLogiOskars/commitarium/internal/feature"
 	"github.com/EinarLogiOskars/commitarium/internal/featureartifact"
+	"github.com/EinarLogiOskars/commitarium/internal/modelguide"
 	"github.com/EinarLogiOskars/commitarium/internal/project"
 	"github.com/EinarLogiOskars/commitarium/internal/workerhttp"
 )
@@ -127,5 +128,38 @@ func TestARefusedAutopilotActionWakesTheAssistantAtMostTwice(t *testing.T) {
 	}
 	if stored, _ := service.read("prj_test"); stored.Refusals != 0 {
 		t.Fatalf("an applied action did not reset the refusals: %d", stored.Refusals)
+	}
+}
+
+// The state rates each offered model by the model guide, with its efforts,
+// so the assistant chooses by tier (ADR-031).
+func TestTheStateRatesOfferedModels(t *testing.T) {
+	guide, err := modelguide.NewService(&guideStore{overrides: map[string]modelguide.Override{
+		"claude-opus-5": {ModelID: "claude-opus-5", Tier: modelguide.TierFrontier, OfficialTier: modelguide.TierAvoid},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	describer := StateDescriber{
+		Projects: projectsStub{}, Agents: agentsStub{}, Features: &featuresStub{}, Guide: guide,
+		Models: func(context.Context) []ModelChoice {
+			return []ModelChoice{
+				{Provider: project.AgentProviderCodex, ID: "gpt-6.1-sol", Display: "Sol", Efforts: []string{"low", "high"}},
+				{Provider: project.AgentProviderClaude, ID: "claude-opus-5", Display: "Opus 5"},
+				{Provider: project.AgentProviderClaude, ID: "claude-new-9", Display: "New"},
+			}
+		},
+	}
+	state, err := describer.Describe(t.Context(), "prj_test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"Model guide (as of ", "- gpt-6.1-sol: strong; ", "efforts: low, high",
+		"- claude-opus-5: frontier (the user's rating)", "- claude-new-9: unrated (needs approval)",
+	} {
+		if !strings.Contains(state, want) {
+			t.Errorf("state lacks %q:\n%s", want, state)
+		}
 	}
 }

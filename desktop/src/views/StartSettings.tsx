@@ -2,6 +2,11 @@ import { useEffect, useState } from "react";
 import { getProjectValidation } from "../api/projects";
 import { AgentModelFields } from "./AgentModelFields";
 import { NoValidationWarning } from "./NoValidationWarning";
+import {
+  applicablePhaseChoices,
+  keepSupportedEfforts,
+  PhaseChoiceFields,
+} from "./PhaseChoiceFields";
 import { pickModel, useModels } from "./useModels";
 import { useWorkSuggestion } from "./useWorkSuggestion";
 import { choiceMade } from "./workChoice";
@@ -11,6 +16,7 @@ import type {
   AutonomyPolicy,
   Feature,
   MergePolicy,
+  PhaseChoices,
   WorkSteps,
 } from "../api/types";
 
@@ -28,27 +34,35 @@ export interface StartSettingsValue {
   merge_policy: MergePolicy;
   independent_acceptance_tests: boolean;
   steps: StartSteps;
+  /** Efforts and planning models by phase (ADR-031). */
+  phase_choices: PhaseChoices;
 }
 
 /** The valid combinations of a work order's steps (ADR-018): a reviewer
  * requires a documented plan. */
-const PRESETS: { id: string; label: string; steps: WorkSteps; hint: string }[] = [
+const PRESETS: { id: string; label: string; steps: Required<WorkSteps>; hint: string }[] = [
   {
     id: "full",
     label: "Full",
-    steps: { documented_plan: true, reviewer: true },
-    hint: "A reviewer checks the plan and the code before the merge gate.",
+    steps: { documented_plan: true, reviewer: true, code_review: true },
+    hint: "A reviewer checks the plan and the code. For data, money, auth, migrations, and concurrency.",
+  },
+  {
+    id: "reviewed_plan",
+    label: "Reviewed plan",
+    steps: { documented_plan: true, reviewer: true, code_review: false },
+    hint: "A reviewer checks the plan against the code base; the lead implements it. For most features.",
   },
   {
     id: "planned",
     label: "Planned",
-    steps: { documented_plan: true, reviewer: false },
+    steps: { documented_plan: true, reviewer: false, code_review: false },
     hint: "The lead plans the commits alone and implements them. You decide the merge.",
   },
   {
     id: "quick",
     label: "Quick change",
-    steps: { documented_plan: false, reviewer: false },
+    steps: { documented_plan: false, reviewer: false, code_review: false },
     hint: "The lead goes straight to the change in one turn. You decide the merge.",
   },
 ];
@@ -74,16 +88,23 @@ export function startSettingsFrom(feature: Feature): StartSettingsValue {
     },
     autonomy_policy: feature.autonomy_policy ?? "review_each_phase",
     merge_policy: feature.merge_policy ?? "require_user_approval",
-    independent_acceptance_tests: feature.independent_acceptance_tests ?? false,
+    // No longer written (ADR-031); sent as false for older coordinators.
+    independent_acceptance_tests: false,
     steps: feature.steps ?? { documented_plan: true, reviewer: true },
+    phase_choices: feature.phase_choices ?? {},
   };
 }
 
 /** What a Start sends: agents and models only once they are chosen, so a
  * Start without any is refused with a reason rather than sent half-made. */
 export function startBody(value: StartSettingsValue): Partial<StartSettingsValue> {
-  if (choiceMade(value.agent_providers, value.agent_models)) return value;
-  const rest: Partial<StartSettingsValue> = { ...value };
+  const roles: ("lead" | "reviewer")[] = value.steps.reviewer ? ["lead", "reviewer"] : ["lead"];
+  const phased = {
+    ...value,
+    phase_choices: applicablePhaseChoices(value.phase_choices, roles, value.steps.documented_plan),
+  };
+  if (choiceMade(value.agent_providers, value.agent_models)) return phased;
+  const rest: Partial<StartSettingsValue> = { ...phased };
   delete rest.agent_providers;
   delete rest.agent_models;
   return rest;
@@ -123,7 +144,10 @@ export function StartSettings({
   // Resolve each role's model to one the agent's provider offers.
   const { agent_providers: providers, agent_models: models, steps } = value;
   const preset = PRESETS.find(
-    (p) => p.steps.documented_plan === steps.documented_plan && p.steps.reviewer === steps.reviewer,
+    (p) =>
+      p.steps.documented_plan === steps.documented_plan &&
+      p.steps.reviewer === steps.reviewer &&
+      p.steps.code_review === (steps.reviewer && steps.code_review !== false),
   );
   useEffect(() => {
     if (suggestion && !choiceMade(value.agent_providers, value.agent_models))
@@ -155,10 +179,6 @@ export function StartSettings({
                   onChange({
                     ...value,
                     steps: { ...steps, ...p.steps },
-                    // Acceptance tests are the reviewer's.
-                    independent_acceptance_tests: p.steps.reviewer
-                      ? value.independent_acceptance_tests
-                      : false,
                   })
                 }
                 disabled={disabled}
@@ -166,7 +186,8 @@ export function StartSettings({
                 <span className="steps-choice__title">{p.label}</span>
                 <span className="steps-choice__parts">
                   <StepPart on={p.steps.documented_plan}>Plan</StepPart>
-                  <StepPart on={p.steps.reviewer}>Reviewer</StepPart>
+                  <StepPart on={p.steps.reviewer}>Plan review</StepPart>
+                  <StepPart on={p.steps.code_review}>Code review</StepPart>
                 </span>
                 <span className="steps-choice__hint">{p.hint}</span>
               </button>
@@ -187,9 +208,26 @@ export function StartSettings({
             providers={providers}
             models={models}
             modelsFor={modelsFor}
-            onChange={(p, m) => onChange({ ...value, agent_providers: p, agent_models: m })}
+            onChange={(p, m) =>
+              onChange({
+                ...value,
+                agent_providers: p,
+                agent_models: m,
+                phase_choices: keepSupportedEfforts(value.phase_choices, p, m, modelsFor),
+              })
+            }
             disabled={disabled}
             roles={steps.reviewer ? ["lead", "reviewer"] : ["lead"]}
+          />
+          <PhaseChoiceFields
+            providers={providers}
+            models={models}
+            choices={value.phase_choices}
+            modelsFor={modelsFor}
+            onChange={(phase_choices) => onChange({ ...value, phase_choices })}
+            roles={steps.reviewer ? ["lead", "reviewer"] : ["lead"]}
+            planned={steps.documented_plan}
+            disabled={disabled}
           />
         </div>
       </div>
@@ -222,29 +260,12 @@ export function StartSettings({
           </label>
         </div>
       </div>
-      {steps.reviewer && (
-        <label className="neworder__check">
-          <input
-            type="checkbox"
-            checked={value.independent_acceptance_tests}
-            onChange={(e) => onChange({ ...value, independent_acceptance_tests: e.target.checked })}
-            disabled={disabled}
-          />
-          <span>
-            Independent acceptance tests
-            <span className="neworder__hint">
-              The reviewer writes its own tests before seeing the code. Worth it when a wrong
-              understanding is costly; it roughly doubles the reviewer&apos;s work.
-            </span>
-          </span>
-        </label>
-      )}
       {value.merge_policy === "auto_after_gates" && hasValidation === false && (
         <NoValidationWarning
           message={
-            steps.reviewer
+            steps.reviewer && steps.code_review !== false
               ? "No validation is set up for this project. This order will merge automatically on the two agents' approval alone — none of your own checks will run first."
-              : "No validation is set up for this project, and this order has no reviewer. It will merge automatically on the lead's word alone — nothing will check it first."
+              : "No validation is set up for this project, and no reviewer checks this order's code. It will merge automatically on the lead's word alone — nothing will check it first."
           }
           onOpenValidation={onOpenValidation ?? (() => undefined)}
         />

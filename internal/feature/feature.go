@@ -68,6 +68,8 @@ type SettingsOverrides struct {
 	AutonomyPolicy             *project.AutonomyPolicy
 	IndependentAcceptanceTests *bool
 	Steps                      *project.WorkSteps
+	// PhaseChoices are the optional planning models and efforts (ADR-031).
+	PhaseChoices *project.PhaseChoices
 	// Kind is the kind of work to create; empty is a work order. A session
 	// has neither a plan nor a reviewer.
 	Kind Kind

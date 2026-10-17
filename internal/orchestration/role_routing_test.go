@@ -15,6 +15,7 @@ import (
 type routingWorkerStub struct {
 	puts, gets int
 	models     []string
+	efforts    []string
 }
 
 func (stub *routingWorkerStub) PutAttempt(
@@ -22,6 +23,7 @@ func (stub *routingWorkerStub) PutAttempt(
 ) (workerhttp.Attempt, bool, error) {
 	stub.puts++
 	stub.models = append(stub.models, request.Assignment.Model)
+	stub.efforts = append(stub.efforts, request.Assignment.Effort)
 	return workerhttp.Attempt{}, true, nil
 }
 
@@ -151,5 +153,56 @@ func TestAgentRoutersRejectUnknownOrMismatchedSessions(t *testing.T) {
 	}
 	if _, err := router.GetAttempt(t.Context(), workerhttp.AttemptReference{SessionID: "run_missing:lead"}); !errors.Is(err, execution.ErrNotFound) {
 		t.Fatalf("expected missing run error, got %v", err)
+	}
+}
+
+type phaseChoiceStub map[string]project.PhaseChoices
+
+func (stub phaseChoiceStub) PhaseChoices(_ context.Context, featureID string) (project.PhaseChoices, error) {
+	return stub[featureID], nil
+}
+
+// Planning turns run on each role's planning model and effort; later turns on
+// its model and effort (ADR-031).
+func TestAgentRouterUsesPhaseChoices(t *testing.T) {
+	codex := &routingWorkerStub{}
+	finder := routingRunFinder{runs: map[string]execution.Run{
+		"run_one": {FeatureID: "feat_one", AgentProviders: project.AgentProviders{
+			Lead: project.AgentProviderCodex, Reviewer: project.AgentProviderCodex,
+			LeadAgent: "codex", ReviewerAgent: "codex",
+		}, AgentModels: project.AgentModels{Lead: "gpt-6.1-sol", Reviewer: "gpt-6.1-sol"}},
+	}}
+	router, err := NewAgentRoutedWorker(finder, routeTo(map[string]RemoteLeadWorker{"codex": codex}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	router.WithPhaseChoices(phaseChoiceStub{"feat_one": {
+		LeadPlanModel: "gpt-6-astra", LeadPlanEffort: "high", LeadEffort: "medium",
+		ReviewerPlanEffort: "xhigh",
+	}})
+	for _, turn := range []struct {
+		session, attempt string
+		role             workerhttp.Role
+	}{
+		{"run_one:lead", "run_one:lead:planning:1", workerhttp.RoleLead},
+		{"run_one:reviewer", "run_one:reviewer:approval:1", workerhttp.RoleReviewer},
+		{"run_one:lead", "run_one:lead:planning-recovery:2:1", workerhttp.RoleLead},
+		{"run_one:lead", "run_one:lead:implementation:1", workerhttp.RoleLead},
+		{"run_one:reviewer", "run_one:reviewer:review:1:1:1", workerhttp.RoleReviewer},
+	} {
+		identity := workerhttp.MutationIdentity{AttemptReference: workerhttp.AttemptReference{
+			SessionID: turn.session, AttemptID: turn.attempt,
+		}}
+		if _, _, err := router.PutAttempt(t.Context(), identity, workerhttp.PutAttemptRequest{
+			Assignment: workerhttp.Assignment{Role: turn.role},
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := strings.Join(codex.models, ","); got != "gpt-6-astra,gpt-6.1-sol,gpt-6-astra,gpt-6.1-sol,gpt-6.1-sol" {
+		t.Fatalf("models = %s", got)
+	}
+	if got := strings.Join(codex.efforts, ","); got != "high,xhigh,high,medium," {
+		t.Fatalf("efforts = %s", got)
 	}
 }

@@ -23,11 +23,13 @@ const (
 )
 
 type SessionRequest struct {
-	SessionID         string
-	AttemptID         string
-	FeatureID         string
-	Role              Role
-	Model             string
+	SessionID string
+	AttemptID string
+	FeatureID string
+	Role      Role
+	Model     string
+	// Effort is the turn's reasoning effort; empty keeps the model's default.
+	Effort            string
 	Instructions      string
 	OutputContract    OutputContract
 	WorkspaceAccess   WorkspaceAccess

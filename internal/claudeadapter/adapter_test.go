@@ -820,3 +820,19 @@ func TestUnifiedWindowsGiveEveryWindowItsUse(t *testing.T) {
 		t.Fatalf("weekly = %+v", weekly)
 	}
 }
+
+func TestClaudeTurnsPassTheirEffort(t *testing.T) {
+	adapter := &Adapter{permissionMode: "default"}
+	arguments, err := adapter.commandArguments(
+		"claude-sonnet-5-5", "high", worker.OutputContract(""), worker.WorkspaceAccessReadWrite, testSessionID, false, "Go.",
+	)
+	if err != nil || !helperHasPair(arguments, "--effort", "high") {
+		t.Fatalf("arguments = %v err=%v", arguments, err)
+	}
+	arguments, err = adapter.commandArguments(
+		"claude-sonnet-5-5", "", worker.OutputContract(""), worker.WorkspaceAccessReadWrite, testSessionID, false, "Go.",
+	)
+	if err != nil || slices.Contains(arguments, "--effort") {
+		t.Fatalf("default effort arguments = %v err=%v", arguments, err)
+	}
+}

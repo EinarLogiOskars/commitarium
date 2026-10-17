@@ -66,12 +66,6 @@ const projectPath = (id: string) => `/api/v1/projects/${encodeURIComponent(id)}`
 
 // Project default: whether the reviewer writes blind acceptance tests before the
 // lead implements. Off by default; per-order override lives on CreateFeatureInput.
-export const updateIndependentAcceptanceTests = (id: string, enabled: boolean): Promise<Project> =>
-  request(`${projectPath(id)}/independent-acceptance-tests`, {
-    method: "PUT",
-    body: { enabled },
-  });
-
 /** Rename a project or app; its repository keeps its own name. */
 export const renameProject = (id: string, name: string): Promise<Project> =>
   request(`${projectPath(id)}/name`, { method: "PUT", body: { name } });

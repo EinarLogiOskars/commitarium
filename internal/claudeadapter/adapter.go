@@ -160,7 +160,8 @@ func (adapter *Adapter) launch(
 		return nil, fmt.Errorf("%w: exact model ID is required", worker.ErrInvalidSessionRequest)
 	}
 	arguments, err := adapter.commandArguments(
-		model, request.OutputContract, request.WorkspaceAccess, providerSessionID, resume, prompt,
+		model, strings.TrimSpace(request.Effort), request.OutputContract, request.WorkspaceAccess,
+		providerSessionID, resume, prompt,
 	)
 	if err != nil {
 		return nil, err
@@ -192,6 +193,7 @@ func (adapter *Adapter) launch(
 
 func (adapter *Adapter) commandArguments(
 	model string,
+	effort string,
 	contract worker.OutputContract,
 	access worker.WorkspaceAccess,
 	providerSessionID string,
@@ -214,6 +216,9 @@ func (adapter *Adapter) commandArguments(
 	}
 	if model != "" {
 		arguments = append(arguments, "--model", model)
+	}
+	if effort != "" {
+		arguments = append(arguments, "--effort", effort)
 	}
 	if schema := worker.OutputJSONSchema(contract); schema != nil {
 		encoded, err := json.Marshal(schema)

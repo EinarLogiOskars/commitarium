@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { getAgentLimits, getAgentUsage, listAgents } from "../api/agents";
 import { getAssistantSettings } from "../api/assistant";
+import { getModelGuide } from "../api/modelGuide";
 import { getModels } from "../api/projects";
 import { suggestWorkChoice, type WorkChoice } from "./workChoice";
 
@@ -8,7 +9,7 @@ import { suggestWorkChoice, type WorkChoice } from "./workChoice";
  * can take the work. Usage, limits, and settings are conveniences; without
  * them the suggestion still names an agent. */
 export async function loadWorkSuggestion(): Promise<WorkChoice | null> {
-  const [agents, usage, limits, catalogs, askBefore] = await Promise.all([
+  const [agents, usage, limits, catalogs, askBefore, tiers] = await Promise.all([
     listAgents(),
     getAgentUsage()
       .then((r) => r.agents ?? [])
@@ -22,12 +23,16 @@ export async function loadWorkSuggestion(): Promise<WorkChoice | null> {
     getAssistantSettings()
       .then((s) => s.ask_before)
       .catch(() => ["fable", "astra"]),
+    getModelGuide()
+      .then((guide) => Object.fromEntries(guide.models.map((m) => [m.id, m.tier])))
+      .catch(() => undefined),
   ]);
   return suggestWorkChoice({
     agents,
     usage,
     limits,
     askBefore,
+    tiers,
     modelsFor: (provider, role) =>
       catalogs.find((c) => c.provider === provider && c.role === role)?.models ?? [],
   });

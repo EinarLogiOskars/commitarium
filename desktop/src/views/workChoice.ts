@@ -3,6 +3,7 @@
 // this suggestion, which the user can change. Pure, so it is tested alone.
 
 import type { AgentLimit, AgentUsage } from "../api/agents";
+import type { ModelTier } from "../api/modelGuide";
 import type {
   Agent,
   AgentModels,
@@ -25,8 +26,12 @@ export interface SuggestionInputs {
   /** The agents whose usage limit pauses work. */
   limits: AgentLimit[];
   modelsFor: (provider: AgentProvider, role: AgentRole) => ModelInfo[];
-  /** Model families that need the user's approval: never suggested first. */
+  /** Models (or, from older coordinators, families) that need the user's
+   * approval: never suggested first. */
   askBefore: string[];
+  /** The model guide's tiers by model ID (ADR-031); absent on older
+   * coordinators. */
+  tiers?: Record<string, ModelTier | undefined>;
   now?: number;
 }
 
@@ -60,11 +65,23 @@ export function atLimit(
   );
 }
 
-/** The model to suggest from a catalog: the first that needs no approval, as
- * the provider lists its default first. */
-export function defaultModel(models: ModelInfo[], askBefore: string[]): string {
+/** The model to suggest from a catalog: with the model guide's tiers, the
+ * first Strong model, else Frontier, else Light (ADR-031); without them, or
+ * when none is rated so, the first that needs no approval, as the provider
+ * lists its default first. */
+export function defaultModel(
+  models: ModelInfo[],
+  askBefore: string[],
+  tiers?: Record<string, ModelTier | undefined>,
+): string {
   const premium = (id: string) =>
     askBefore.some((family) => family && id.toLowerCase().includes(family.toLowerCase()));
+  if (tiers) {
+    for (const tier of ["strong", "frontier", "light"] as const) {
+      const rated = models.find((model) => tiers[model.id] === tier && !premium(model.id));
+      if (rated) return rated.id;
+    }
+  }
   return (models.find((model) => !premium(model.id)) ?? models[0])?.id ?? "";
 }
 
@@ -97,8 +114,12 @@ export function suggestWorkChoice(inputs: SuggestionInputs): WorkChoice | null {
       reviewer_agent: reviewer.id,
     },
     agent_models: {
-      lead: defaultModel(inputs.modelsFor(lead.provider, "lead"), inputs.askBefore),
-      reviewer: defaultModel(inputs.modelsFor(reviewer.provider, "reviewer"), inputs.askBefore),
+      lead: defaultModel(inputs.modelsFor(lead.provider, "lead"), inputs.askBefore, inputs.tiers),
+      reviewer: defaultModel(
+        inputs.modelsFor(reviewer.provider, "reviewer"),
+        inputs.askBefore,
+        inputs.tiers,
+      ),
     },
   };
 }

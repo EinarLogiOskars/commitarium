@@ -1,6 +1,6 @@
 # ADR-022: One assistant that proposes, and the user approves
 
-- Status: Accepted
+- Status: Accepted (amended by [ADR-031](0031-choose-models-and-review-where-it-pays.md): premium is the model guide's Premium tier, set per model)
 - Date: 2026-10-12
 
 ## Context

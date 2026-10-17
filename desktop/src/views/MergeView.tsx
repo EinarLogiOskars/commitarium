@@ -45,13 +45,14 @@ export function MergeView({
   const [valError, setValError] = useState<string | null>(null);
   // null while unknown; only warn once we positively know none is configured.
   const [hasValidation, setHasValidation] = useState<boolean | null>(null);
-  // Without a reviewer the lead alone approved the revision (ADR-018).
+  // Without code review the lead alone approved the revision (ADR-018,
+  // ADR-031).
   const [reviewed, setReviewed] = useState(true);
 
   const poll = useCallback(async () => {
     try {
       const run = await getRun(runId);
-      setReviewed(run.steps?.reviewer !== false);
+      setReviewed(run.steps?.reviewer !== false && run.steps?.code_review !== false);
       setWorkspace(await getWorkspace(projectId, featureId));
     } catch (e) {
       if (e instanceof ApiError) setError(`${e.message} (${e.code})`);

@@ -210,7 +210,7 @@ func (starter *RemoteLeadStarter) startBaseUpdate(
 		return remoteLeadRequest{}, false, err
 	}
 	target := feature.StateReviewing
-	if run.Steps.SkipReviewer {
+	if !run.Steps.CodeReview() {
 		target = feature.StateImplementing
 	}
 	if storedFeature.Kind == feature.KindSession ||
@@ -424,7 +424,7 @@ func (starter *RemoteLeadStarter) verifyImplementationBaseUpdate(
 			return fmt.Errorf("release the approved commit after an update onto main: %w", err)
 		}
 	}
-	if run.Steps.SkipReviewer {
+	if !run.Steps.CodeReview() {
 		return starter.enterMergeGate(
 			ctx, request, run, storedFeature, commitID,
 			result.Publication.PullRequestNumber, implementationLeadOnlyReadyReason,

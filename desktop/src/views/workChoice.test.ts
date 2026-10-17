@@ -126,3 +126,25 @@ describe("what the assistant needs set up", () => {
     expect(assistantGuidance([agent("codex", "codex")], settings)).toBeNull();
   });
 });
+
+describe("suggesting by the model guide", () => {
+  it("prefers a Strong model, then Frontier, then Light, never one that needs approval", () => {
+    const models = [
+      { id: "gpt-6-astra", display_name: "Astra" },
+      { id: "gpt-5.6-sol", display_name: "Old Sol" },
+      { id: "gpt-6.1-sol", display_name: "Sol" },
+      { id: "gpt-6-luna", display_name: "Luna" },
+    ];
+    const tiers = {
+      "gpt-6-astra": "premium",
+      "gpt-5.6-sol": "avoid",
+      "gpt-6.1-sol": "strong",
+      "gpt-6-luna": "light",
+    } as const;
+    expect(defaultModel(models, ["gpt-6-astra"], tiers)).toBe("gpt-6.1-sol");
+    expect(defaultModel(models.slice(0, 2).concat(models[3]), ["gpt-6-astra"], tiers)).toBe(
+      "gpt-6-luna",
+    );
+    expect(defaultModel(models, ["gpt-6-astra"])).toBe("gpt-5.6-sol");
+  });
+});

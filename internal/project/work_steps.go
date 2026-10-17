@@ -19,6 +19,15 @@ type WorkSteps struct {
 	// SkipReviewer drops plan review, independent acceptance tests, code
 	// review, and the readiness acknowledgement.
 	SkipReviewer bool
+	// SkipCodeReview keeps plan review but drops what follows the
+	// implementation: independent acceptance tests, code review, and the
+	// readiness acknowledgement (ADR-031). It needs no reviewer to skip.
+	SkipCodeReview bool
+}
+
+// CodeReview reports whether a reviewer reviews the implementation.
+func (steps WorkSteps) CodeReview() bool {
+	return !steps.SkipReviewer && !steps.SkipCodeReview
 }
 
 // Validate rejects a reviewer without a documented plan: plan review is part

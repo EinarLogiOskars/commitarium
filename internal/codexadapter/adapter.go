@@ -283,6 +283,8 @@ type turnStartParams struct {
 	ThreadID     string      `json:"threadId"`
 	Input        []textInput `json:"input"`
 	OutputSchema any         `json:"outputSchema,omitempty"`
+	// Effort overrides the reasoning effort for this turn and later ones.
+	Effort string `json:"effort,omitempty"`
 }
 
 type turnResponse struct {
@@ -391,6 +393,7 @@ func (adapter *Adapter) launch(
 		ThreadID:     threadID,
 		Input:        []textInput{{Type: "text", Text: prompt}},
 		OutputSchema: worker.OutputJSONSchema(request.OutputContract),
+		Effort:       strings.TrimSpace(request.Effort),
 	}, &turnStarted); err != nil {
 		providerSession.stopAfterFailedLaunch()
 		return providerSession, fmt.Errorf("start Codex turn: %w", err)

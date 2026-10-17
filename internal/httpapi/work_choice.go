@@ -167,6 +167,99 @@ func (api *API) modelOffered(
 		message: fmt.Sprintf("the models of agent %q are not known yet; try again once its worker is up", agentID)}
 }
 
+// checkPhaseChoices refuses planning models a role's agent does not offer and
+// efforts its models do not accept (ADR-031). A role that does not run, such
+// as the reviewer of a work order without one, is not checked.
+func (api *API) checkPhaseChoices(
+	ctx context.Context, providers project.AgentProviders, models project.AgentModels,
+	choices project.PhaseChoices, skipReviewer bool,
+) error {
+	choices, err := choices.Normalize()
+	if err != nil {
+		return &choiceError{status: http.StatusBadRequest, code: "invalid_phase_choices", message: err.Error()}
+	}
+	type role struct {
+		agentID            string
+		provider           project.AgentProvider
+		catalog            modelcatalog.Role
+		model, planModel   string
+		efforts            []string
+		planEffort, effort string
+	}
+	roles := []role{{providers.LeadAgent, providers.Lead, modelcatalog.RoleLead, models.Lead,
+		choices.LeadPlanModel, nil, choices.LeadPlanEffort, choices.LeadEffort}}
+	if !skipReviewer {
+		roles = append(roles, role{providers.ReviewerAgent, providers.Reviewer, modelcatalog.RoleReviewer, models.Reviewer,
+			choices.ReviewerPlanModel, nil, choices.ReviewerPlanEffort, choices.ReviewerEffort})
+	}
+	for _, chosen := range roles {
+		planModel := chosen.planModel
+		if planModel != "" {
+			if err := api.modelOffered(ctx, chosen.agentID, chosen.provider, chosen.catalog, planModel); err != nil {
+				return err
+			}
+		} else {
+			planModel = chosen.model
+		}
+		planEffort := chosen.planEffort
+		if planEffort == "" {
+			planEffort = chosen.effort
+		}
+		for _, pair := range [][2]string{{chosen.model, chosen.effort}, {planModel, planEffort}} {
+			if err := api.effortAccepted(ctx, chosen.provider, chosen.catalog, pair[0], pair[1]); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// checkEffortCeiling refuses an assistant's choice of an effort above the
+// highest the user allows it (ADR-031). The user's own choices are not
+// limited.
+func (api *API) checkEffortCeiling(ctx context.Context, choices *project.PhaseChoices) error {
+	if choices == nil || api.conversations == nil {
+		return nil
+	}
+	settings, err := api.conversations.Settings(ctx)
+	if err != nil {
+		return err
+	}
+	for _, effort := range choices.Efforts() {
+		if project.EffortAbove(effort, settings.MaxEffort) {
+			return &choiceError{status: http.StatusBadRequest, code: "effort_above_ceiling",
+				message: fmt.Sprintf("the effort %q is above the highest the user allows the assistant (%s); choose %s or lower, or leave it empty for the model's default",
+					effort, settings.MaxEffort, settings.MaxEffort)}
+		}
+	}
+	return nil
+}
+
+// effortAccepted refuses an effort the model's catalog entry does not list.
+// A model whose catalog lists no efforts accepts any, and the provider is the
+// final check.
+func (api *API) effortAccepted(
+	ctx context.Context, provider project.AgentProvider, role modelcatalog.Role, model, effort string,
+) error {
+	if effort == "" || model == "" || api.modelCatalog == nil {
+		return nil
+	}
+	for _, catalog := range api.modelCatalog.List(ctx) {
+		if catalog.Provider != provider || catalog.Role != role {
+			continue
+		}
+		for _, offered := range catalog.Models {
+			if offered.ID == model && len(offered.SupportedReasoningEfforts) > 0 &&
+				!slices.Contains(offered.SupportedReasoningEfforts, effort) {
+				return &choiceError{status: http.StatusBadRequest, code: "effort_unavailable",
+					message: fmt.Sprintf("the model %q does not accept the effort %q; choose one of %v",
+						model, effort, offered.SupportedReasoningEfforts)}
+			}
+		}
+	}
+	return nil
+}
+
 // fillSkippedReviewer names the lead as the reviewer of a work order whose
 // steps skip the reviewer, when the request names none. Runs record both
 // roles; this reviewer never runs, so nothing is chosen for the user.

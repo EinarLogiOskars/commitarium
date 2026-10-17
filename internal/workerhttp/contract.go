@@ -129,10 +129,13 @@ const (
 type Assignment struct {
 	AgentProfileID string `json:"agent_profile_id"`
 	Model          string `json:"model,omitempty"`
-	ProjectID      string `json:"project_id"`
-	FeatureID      string `json:"feature_id"`
-	Role           Role   `json:"role"`
-	WorkspaceID    string `json:"workspace_id"`
+	// Effort is the reasoning effort for the turn; empty keeps the model's
+	// default (ADR-031).
+	Effort      string `json:"effort,omitempty"`
+	ProjectID   string `json:"project_id"`
+	FeatureID   string `json:"feature_id"`
+	Role        Role   `json:"role"`
+	WorkspaceID string `json:"workspace_id"`
 }
 
 type PutAttemptRequest struct {

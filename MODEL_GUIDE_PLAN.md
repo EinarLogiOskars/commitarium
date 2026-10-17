@@ -142,8 +142,8 @@ stays within one provider (ADR-021).
   Premium overrides for matching catalog models, and default families the user
   removed into Frontier overrides; the setting is then ignored.
 - An override records the official tier it replaced. When a release changes
-  the official tier of an overridden model, the Agents page and inbox show one
-  notice per model ("The official guide now rates Opus 5 Strong; you have it
+  the official tier of an overridden model, the Agents page shows one notice
+  per model (the inbox lists only project work, so it stays out) ("The official guide now rates Opus 5 Strong; you have it
   as Frontier"), with Keep mine and Use official. Nothing else notifies.
 
 ## Effort
@@ -236,21 +236,34 @@ tab's settings on the right.
 
 `feat/model-guide`, from `main`.
 
+## Status
+
+All slices landed on `feat/model-guide`. Departures from the slices as first
+written:
+
+- G2: the changed-official-tier notice is on the Agents page only; the inbox
+  lists project work.
+- G4: phase choices live on the work order and the worker router picks each
+  turn's model and effort by its phase, instead of a switch scheduled at plan
+  confirmation; recovery follows on its own.
+- G11: the desktop's tests run without a DOM, so the dialog was checked by
+  hand.
+
 ## Slices
 
 | # | Commit | Contents | Depends on |
 | --- | --- | --- | --- |
 | G1 | `feat(coordinator): ship an official model guide` | `internal/modelguide` with the embedded guide, tiers, and `as_of`. Overrides table (migration): model ID, tier, official tier at the time, updated at. Merged view: `GET /api/v1/model-guide` (each entry with tier, note, source official/user/unrated); `PUT` and `DELETE /api/v1/model-guide/overrides/{model}`. Premium and unrated come from the merged guide instead of `ask_before`; migrate `ask_before` as above. Tests for merging, unrated, migration, and premium checks. Update `coordinator-api.md`. | — |
-| G2 | `feat(desktop): set model tiers on the Agents page` | Tier per model with reset; replaces "Ask before using". The changed-official-tier notice with Keep mine / Use official, on the Agents page and in the inbox. | G1 |
+| G2 | `feat(desktop): set model tiers on the Agents page` | Tier per model with reset; replaces "Ask before using". The changed-official-tier notice with Keep mine / Use official, on the Agents page. | G1 |
 | G3 | `feat(worker): pass reasoning effort per turn` | `effort` in the worker turn contract. Codex: pass it on the turn. Claude: report supported efforts in the catalog and pass the chosen one. Record effort with each attempt's usage (migration). Adapter and persistence tests; update `worker-api.md`. | — |
-| G4 | `feat(orchestration): choose models and effort per phase` | Runs store an optional planning model and effort per role, and an effort for the rest (migration). Empty planning model means the role's model. When the plan is confirmed, the coordinator switches each role at its next turn (ADR-021's mechanism, recorded as a model change). `create_work_order`, `start_work_order`, `change_models`, and the Start API accept the new fields; the Start form adds "Different model for planning" per role, collapsed by default. Recovery follows the phase the run is in. | G3 |
+| G4 | `feat(orchestration): choose models and effort per phase` | Work orders store an optional planning model and effort per role, and an effort for the rest (migration). Empty planning model means the role's model. The worker router picks each turn's model and effort by its phase (planning, its recovery, and plan confirmation use the planning choice), so recovery follows on its own. `create_work_order`, `start_work_order`, and the Start API accept the new fields; switching a role's model clears its planning model. The Start form adds each role's effort and "Different model for planning", collapsed by default. | G3 |
 | G5 | `feat(coordinator): cap the assistant's effort` | Assistant setting for the highest effort, default `high`; the coordinator refuses an assistant choice above it, with a reason. Settings UI. | G3 |
 | G6 | `feat(assistant): choose from the model guide` | The assistant's state lists the merged guide for offered models; its instructions replace the one-line model preference with the steps, phase, effort, and escalation rules above. The Start form's suggestion uses the guide (Strong lead, Strong reviewer on the other provider). Settings page recommends a Frontier model for the assistant. | G1, G4, G5 |
 | G7 | `feat(desktop): show models in the cost breakdown` | The usage API already returns totals per model; split them within role and phase, add effort, and show both on the work-order cost line. | G3 |
 | G8 | `feat(orchestration): split plan review from code review` | Runs record plan review and code review separately (migration; existing runs map `skip_reviewer` to both). Code review requires plan review. The orchestrator ends a Reviewed plan run after implementation at the merge gate, as Planned does. Presets gain Reviewed plan in the Start form, `create_work_order`, and the API. Recovery and the UI follow the recorded steps. Tests for each preset's stages and recovery. | — |
 | G9 | `feat(orchestration): remove independent acceptance tests` | New runs never author them; the toggle leaves the Start form, the assistant's actions, and its instructions; the API accepts and ignores the field. Runs started with them finish as they started. Update `feature-artifacts.md` and `coordinator-api.md`. | — |
 | G10 | `feat(orchestration): make code review one verification pass` | Code review prompt: suite and merge first, diff against the plan, throwaway reproductions for risky spots, block only on defects and missed requirements, name what could not be run. Clarification records repository facts. Update prompt assertions. | G9 |
-| G11 | `feat(desktop): redesign Settings with sidebar tabs` | Sidebar-tab Settings modal as above, reusing the existing sections; dialog and tablist accessibility; remembered tab; narrow-window layout. Component tests for tab switching, keyboard navigation, and Escape while a backup runs. | — |
+| G11 | `feat(desktop): redesign Settings with sidebar tabs` | Sidebar-tab Settings modal as above, reusing the existing sections; dialog and tablist accessibility; remembered tab; narrow-window layout. Every tab's panel stays mounted, so a running backup keeps reporting. (The desktop's tests run without a DOM, so the dialog is checked by hand.) | — |
 | G12 | `docs: record the model guide` | ADR-031 accepted; amend notes on ADR-018, ADR-022, ADR-027; mark this plan done. | G1–G11 |
 
 G1, G3, G8, G9, and G11 are independent and can land in any order. G6 lists the

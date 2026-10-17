@@ -35,13 +35,13 @@ func TestExecutionStoreChangesRunModelsAndMarksStoppedAttempts(t *testing.T) {
 	}
 
 	if err := store.RecordAttemptUsage(t.Context(), execution.AttemptUsage{
-		SessionID: coder.ID, AttemptID: "att_1", Model: "cheap-model",
+		SessionID: coder.ID, AttemptID: "att_1", Model: "cheap-model", Effort: "high",
 		Usage: execution.TokenUsage{InputTokens: 3}, RecordedAt: now,
 	}); err != nil {
 		t.Fatal(err)
 	}
 	usage, err := store.FeatureAttemptUsage(t.Context(), run.FeatureID)
-	if err != nil || len(usage) != 1 || usage[0].Model != "cheap-model" {
+	if err != nil || len(usage) != 1 || usage[0].Model != "cheap-model" || usage[0].Effort != "high" {
 		t.Fatalf("usage = %+v err=%v", usage, err)
 	}
 }

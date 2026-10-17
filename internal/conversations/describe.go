@@ -13,6 +13,7 @@ import (
 	"github.com/EinarLogiOskars/commitarium/internal/execution"
 	"github.com/EinarLogiOskars/commitarium/internal/feature"
 	"github.com/EinarLogiOskars/commitarium/internal/featureartifact"
+	"github.com/EinarLogiOskars/commitarium/internal/modelguide"
 	"github.com/EinarLogiOskars/commitarium/internal/project"
 	"github.com/EinarLogiOskars/commitarium/internal/toolchain"
 	"github.com/EinarLogiOskars/commitarium/internal/vision"
@@ -34,6 +35,9 @@ type ToolchainReader interface {
 type ModelChoice struct {
 	Provider    project.AgentProvider
 	ID, Display string
+	// Efforts are the reasoning efforts the model accepts; empty when the
+	// catalog lists none.
+	Efforts []string
 }
 
 // StateDescriber builds the assistant's picture of its scope from the
@@ -55,7 +59,9 @@ type StateDescriber struct {
 	Usage func(ctx context.Context) []agent.Usage
 	// Settings, when set, names the agent and model the assistant runs on.
 	Settings func(ctx context.Context) (Settings, error)
-	Now      func() time.Time
+	// Guide, when set, rates the offered models (ADR-031).
+	Guide ModelGuide
+	Now   func() time.Time
 }
 
 // maxWorkOrders bounds the work orders listed for a project.
@@ -137,6 +143,7 @@ func (describer StateDescriber) writeAgents(ctx context.Context, builder *string
 		builder.WriteString("Agents of more than one provider are connected: give each full work order a lead and a " +
 			"reviewer of different providers.\n")
 	}
+	describer.writeModelGuide(ctx, builder, models)
 	if describer.Settings != nil {
 		if settings, err := describer.Settings(ctx); err == nil && settings.Agent != "" {
 			builder.WriteString(fmt.Sprintf("You, the assistant, run on agent %s with %s; your turns use its usage too.\n",
@@ -318,6 +325,8 @@ func stepsName(steps project.WorkSteps) string {
 		return "quick"
 	case steps.SkipReviewer:
 		return "planned"
+	case steps.SkipCodeReview:
+		return "reviewed_plan"
 	default:
 		return "full"
 	}
@@ -368,4 +377,48 @@ func (describer StateDescriber) runNote(ctx context.Context, item feature.Featur
 		note += ": " + strings.ReplaceAll(reason, "\n", " ")
 	}
 	return note
+}
+
+// writeModelGuide rates each offered model by the model guide (ADR-031), with
+// the efforts it accepts, so the assistant chooses by tier.
+func (describer StateDescriber) writeModelGuide(ctx context.Context, builder *strings.Builder, models []ModelChoice) {
+	if describer.Guide == nil || len(models) == 0 {
+		return
+	}
+	ids := make([]string, 0, len(models))
+	for _, model := range models {
+		ids = append(ids, model.ID)
+	}
+	entries, err := describer.Guide.Entries(ctx, ids)
+	if err != nil {
+		return
+	}
+	byID := make(map[string]modelguide.Entry, len(entries))
+	for _, entry := range entries {
+		byID[entry.ID] = entry
+	}
+	builder.WriteString(fmt.Sprintf("Model guide (as of %s), for the models above:\n", describer.Guide.AsOf()))
+	seen := map[string]bool{}
+	for _, model := range models {
+		if seen[model.ID] {
+			continue
+		}
+		seen[model.ID] = true
+		entry := byID[model.ID]
+		tier := string(entry.Tier)
+		switch {
+		case entry.Source == modelguide.SourceUnrated:
+			tier = "unrated (needs approval)"
+		case entry.Source == modelguide.SourceUser:
+			tier += " (the user's rating)"
+		}
+		line := fmt.Sprintf("- %s: %s", model.ID, tier)
+		if entry.Note != "" {
+			line += "; " + entry.Note
+		}
+		if len(model.Efforts) > 0 {
+			line += "; efforts: " + strings.Join(model.Efforts, ", ")
+		}
+		builder.WriteString(line + "\n")
+	}
 }

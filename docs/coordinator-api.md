@@ -12,6 +12,9 @@ this API beyond the host loopback interface is unsupported.
 | `GET` | `/api/v1/attention` | Read one cross-project review-inbox and notification snapshot |
 | `GET` | `/api/v1/models` | List persisted exact model catalogs for each provider role |
 | `POST` | `/api/v1/models/refresh` | Refresh model catalogs from provider workers now |
+| `GET` | `/api/v1/model-guide` | Read the model guide: each model's tier, official or the user's |
+| `PUT` | `/api/v1/model-guide/overrides/{model}` | Rate a model for the user |
+| `DELETE` | `/api/v1/model-guide/overrides/{model}` | Return a model to the official guide |
 | `POST` | `/api/v1/projects` | Create a project |
 | `PUT` | `/api/v1/project-imports/{importID}` | Import committed Git history into a new private Forgejo-backed project |
 | `GET` | `/api/v1/projects` | List projects for switching/selecting |
@@ -225,9 +228,10 @@ Content-Type: application/json
 {"enabled":true}
 ```
 
-Work-order creation may supply `independent_acceptance_tests: true` or `false`;
-omission inherits the project default. Project responses expose the default,
-while feature and run responses expose the immutable effective snapshot.
+Independent acceptance tests are no longer written (ADR-031). Work-order
+creation, Start, and project settings still accept
+`independent_acceptance_tests` and ignore it: new work orders and runs report
+`false`. Runs started with them before finish as they started.
 
 With `review_each_phase`, the run waits after goal acceptance, after the lead's
 first planning proposal, after the reviewer's first planning response, and
@@ -367,6 +371,28 @@ is `claude-opus-5-5`, `claude-sonnet-5-5`, `claude-haiku-5-5`,
 `claude-haiku-4-5-20251001`. Its entries include UI-friendly display names
 such as `Claude Opus 4.8`; custom configured IDs use the ID as their display
 name. No alias scraping, provider turn, or secret exposure is involved.
+
+### Model guide
+
+The official model guide ships with the coordinator (ADR-031): one entry per
+exact model ID with a tier (`premium`, `frontier`, `strong`, `light`,
+`avoid`) and a note. The user overrides tiers per model; nothing is inferred
+from a model's name.
+
+- `GET /api/v1/model-guide` answers `{"as_of", "models": [...]}` with every
+  model the official guide lists, the user rated, or a connected agent
+  offers. Each entry is `{"id", "tier", "note", "source", "official_tier",
+  "official_changed"}`: `source` is `official`, `user`, or `unrated` (no
+  tier); `official_changed` marks a user override whose official tier has
+  changed since it was set.
+- `PUT /api/v1/model-guide/overrides/{model}` with `{"tier"}` rates the model
+  for the user and answers its entry; putting the tier it already has keeps
+  it and clears `official_changed`. An invalid ID or tier returns
+  `400 invalid_model_guide_request`.
+- `DELETE /api/v1/model-guide/overrides/{model}` returns it to the official
+  guide and answers its entry.
+
+The assistant must ask the user before using a `premium` or unrated model.
 
 ## Projects and Forgejo repositories
 
@@ -995,6 +1021,11 @@ feature's runs, by role, by workflow phase and role, and overall:
 `plan`, `plan_approval`, `implement`, `acceptance_tests`, `review`,
 `correction`, `readiness`, `intervention` (answers to user messages), and
 `other`.
+
+Each phase also lists `models`: `[{"model", "effort", ...tokens}]`, the
+models and reasoning efforts that spent it (an empty `effort` is the model's
+default; ADR-031). `models` at the top level totals the same by role, model,
+and effort. Turns recorded without a model are left out of both.
 
 `input_tokens` excludes cached reads and cache writes. Roles appear only once a
 turn with reported usage has finished, so a new feature returns an empty
@@ -1625,13 +1656,33 @@ refuses a choice that cannot run, each with a message that says what to do:
 Premium models still need the user's approval on the assistant's actions
 (`409 premium_approval_required`).
 
+`phase_choices` (optional, ADR-031) chooses models and efforts by phase:
+`{"lead_plan_model", "lead_plan_effort", "lead_effort", "reviewer_plan_model",
+"reviewer_plan_effort", "reviewer_effort"}`, each optional. Planning turns
+(the planning discussion, its recovery, and the reviewer's plan confirmation)
+run on a role's planning model and effort; later turns on its model and
+`*_effort`. An empty planning model or effort is the role's own; an empty
+effort is the model's default. The agent never changes, so a planning model
+must be one the role's agent offers (`400 model_unavailable`), and each
+effort one its model's catalog lists (`400 effort_unavailable`); a malformed
+value returns `400 invalid_phase_choices`. The choices are saved on the work
+order (a single work order's response carries `phase_choices` when it has
+any) and read whenever a turn is routed. Switching a role's model with
+`POST /api/v1/runs/{id}/models` clears that role's planning model and effort,
+so the new model runs every phase.
+
 `steps` chooses the work order's optional steps (ADR-018). Both default to
 `true`, and a reviewer requires a documented plan, so `{"documented_plan":
 false, "reviewer": true}` returns `400 invalid_steps`:
 
 - **Full** (`documented_plan` and `reviewer`): the lead and reviewer agree a
-  commit-ordered plan, the reviewer may write independent acceptance tests, and
-  code review and the lead's readiness acknowledgement precede the merge gate.
+  commit-ordered plan, and code review and the lead's readiness acknowledgement precede the merge gate.
+- **Reviewed plan** (`reviewer` with `code_review: false`, ADR-031): the lead
+  and reviewer agree the plan as in Full; once the lead's implementation is
+  verified the run goes straight to the merge gate, with no acceptance tests,
+  code review, or readiness turn, and the coordinator's merge approval says
+  the work order had no code review. `code_review` defaults to `true` and is
+  ignored without a reviewer.
 - **Planned** (`reviewer: false`): the lead submits its plan in its first
   planning turn, the coordinator publishes it without an approval turn, and
   after the published implementation is verified the run goes straight to the
@@ -2516,10 +2567,19 @@ default branch, and returns the `assistant_turn` result: its reply, proposed
 actions, and its notes.
 
 - `GET /api/v1/assistant/settings` answers `{"agent", "model", "ask_before",
-  "updated_at"}`; without saved settings, an empty agent and model (ADR-027:
-  the user chooses them) and `ask_before` `["fable", "astra"]`. An assistant
-  that had answered before keeps the default it had then (the first agent on
-  its provider's first model), saved once. `PUT` saves them.
+  "max_effort", "updated_at"}`; without saved settings, an empty agent and model (ADR-027:
+  the user chooses them). `ask_before` lists the models the model guide says
+  need approval: its `premium` models and the unrated models connected agents
+  offer. An assistant that had answered before keeps the default it had then
+  (the first agent on its provider's first model), saved once. `PUT` saves
+  the agent and model; `ask_before` is ignored, and tiers are set through the
+  model guide. Families saved before the guide are migrated into its
+  overrides once, when the agents' models are known: a marked model becomes
+  `premium`, an unmarked default (`fable`, `astra`) becomes `frontier`.
+  `max_effort` (`low`, `medium`, `high`, `xhigh`, `max`, or `ultra`; default
+  `high`) is the highest reasoning effort the assistant may choose (ADR-031):
+  applying an assistant action with a higher effort returns
+  `400 effort_above_ceiling`. The user's own Starts are not limited.
 - Until it can answer, sending a message returns `409 no_agents` (no agent
   exists yet) or `409 assistant_not_set_up` (none is chosen for it, or the
   chosen one is gone), each with a plain message for the user. Work
@@ -2567,13 +2627,17 @@ actions, and its notes.
   approving it creates a project as an app named by `title`, launches it, and
   has the vision written from `description`; the action's `project_id` names
   the new project. Any other action there, or `create_app` in a project,
-  returns `409 action_needs_project`. `premium` lists its models in an `ask_before` family;
+  returns `409 action_needs_project`. `premium` lists its models that need approval (`ask_before`);
   `auto_tried` marks one autopilot took over.
 - `POST .../{scope}/actions/{actionID}/approve` with `{"start", "confirm_premium"}`
   runs it through the same paths as the app's own buttons and records the
   outcome. On a create or start, `lead_agent`, `lead_model`, `reviewer_agent`,
   and `reviewer_model` replace the card's choice, checked like any other
-  (ADR-027). `409 premium_approval_required` without `confirm_premium` for a
+  (ADR-027). Create and start actions may also carry `lead_plan_model`,
+  `lead_plan_effort`, `lead_effort`, `reviewer_plan_model`,
+  `reviewer_plan_effort`, and `reviewer_effort`, applied and checked as a
+  Start's `phase_choices`; a planning model counts toward `premium`.
+  `409 premium_approval_required` without `confirm_premium` for a
   premium action; `409 action_not_pending` once resolved.
 - `POST .../{scope}/actions/{actionID}/dismiss` dismisses it.
 - `POST .../{scope}/autopilot` with `{"level"}` turns autopilot on for the open

@@ -214,7 +214,7 @@ func (service *Service) resumeInterruptedAttempt(
 	sessionRequest := worker.SessionRequest{
 		SessionID: candidate.Attempt.SessionID, AttemptID: candidate.Attempt.AttemptID,
 		FeatureID: request.Assignment.FeatureID, Role: worker.Role(request.Assignment.Role),
-		Model: request.Assignment.Model, Instructions: request.Instructions,
+		Model: request.Assignment.Model, Effort: request.Assignment.Effort, Instructions: request.Instructions,
 		OutputContract:    worker.OutputContract(request.OutputContract),
 		WorkspaceAccess:   worker.WorkspaceAccess(request.WorkspaceAccess),
 		LaunchEnvironment: launchEnvironment.Clone(),
@@ -679,6 +679,7 @@ func providerSessionRequest(
 		FeatureID:         request.Assignment.FeatureID,
 		Role:              worker.Role(request.Assignment.Role),
 		Model:             request.Assignment.Model,
+		Effort:            request.Assignment.Effort,
 		Instructions:      request.Instructions + userLanguageNote,
 		OutputContract:    worker.OutputContract(request.OutputContract),
 		WorkspaceAccess:   worker.WorkspaceAccess(request.WorkspaceAccess),
