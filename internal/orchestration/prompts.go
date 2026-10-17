@@ -363,10 +363,16 @@ func implementationReviewInstructions(
 		workspaceRules = "Reset this disposable private checkout to the exact private acceptance-test commit below, discarding only any prior local review merge. Fetch the exact implementation commit below without inspecting other lead history, then merge that exact commit locally into your private test commit. Resolve only mechanical merge conflicts; if a conflict changes test meaning, mark the affected test not applicable with a reason instead of silently rewriting it. Never push your private test commit, the local merge, or any test changes. Do not change the pull-request body or merge the pull request. "
 		acceptanceInstructions = "Run every pending private acceptance test against that local combination, using the test IDs listed by `commitarium-artifact acceptance show`. Run them together in one command where possible. Record the results right after that run, before any other check such as lint, typecheck, or build, so the user sees them as soon as they are known: in a single shell call, chain, for each test, `commitarium-artifact acceptance start <test-id>` followed by `acceptance pass <test-id>`, `acceptance fail <test-id> <note>`, or `acceptance not-applicable <test-id> <note>`; each tool call re-reads this whole conversation, so keep them few. A failed acceptance test is review evidence, not automatically proof that production code is wrong: inspect whether the implementation, the test, or the shared understanding is incorrect. If the test itself was wrong, correct it, run it again, and record the new result with `acceptance pass <test-id>` or `acceptance fail <test-id> <note>`, which replaces the failure; never approve while a test is recorded as failed. Private acceptance test commit: " + acceptanceTestCommitID + "\n"
 	}
-	scope := "The lead has now published an implementation for review. Inspect before judging: confirm the current branch, " +
-		"Git HEAD, status, diff from the planning baseline, and the exact pull-request head. Review only " +
-		"the exact commit below against the accepted goal and the agreed plan (read it with " +
-		"'commitarium-artifact plan show'), and run relevant tests when practical. Number each finding " +
+	scope := "The lead has now published an implementation for review. This is one verification pass, not " +
+		"another planning round: the plan is agreed. Inspect before judging: confirm the current branch, " +
+		"Git HEAD, status, and the exact pull-request head. Then verify the exact commit below: run the " +
+		"project's full test suite on it; check with a read-only 'git merge-tree' that it still merges cleanly " +
+		"into the latest base branch; read the diff from the planning baseline against the accepted goal and " +
+		"the agreed plan (read it with 'commitarium-artifact plan show'); and for the risky spots (concurrency, " +
+		"money and totals, data boundaries, auth) write a throwaway reproduction or targeted check and run it, " +
+		"without committing it. Request changes only for defects and missed requirements; put polish in " +
+		"non-blocking notes. If something the change depends on cannot be run here (for example Docker), say " +
+		"plainly that it is not verified instead of approving it by inspection. Number each finding " +
 		"(F1, F2, ...) so the lead can answer it by number. "
 	if rereview {
 		scope = "You requested changes to commit " + previousReviewedCommitID + " and the lead has published " +

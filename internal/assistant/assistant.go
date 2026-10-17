@@ -525,7 +525,9 @@ func initialInstructions(request string) string {
 		"action 'propose' with a short message and the brief: goal (what and why, self-contained, because " +
 		"the agents will not see this conversation), areas (files, modules, or components to touch, each " +
 		"with a few words on what changes), considerations (constraints, risks, existing patterns to " +
-		"follow, testing notes), and open_questions (only what the agents should settle while planning; " +
+		"follow, testing notes, and the repository facts the plan will depend on, checked in the code: " +
+		"schema constraints, how the framework or database behaves where it matters, and existing tests the " +
+		"change will touch), and open_questions (only what the agents should settle while planning; " +
 		"empty if none). Do not write a commit-by-commit plan; the agents do that.\n\nWork order:\n" + request
 }
 
