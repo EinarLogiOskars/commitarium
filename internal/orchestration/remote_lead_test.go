@@ -3584,6 +3584,10 @@ func TestRemoteExpiredLoginWaitsForTheAgentAndResumesAfterLogin(t *testing.T) {
 	if err != nil || wait.AgentID != "codex" || wait.Role != worker.RoleLead {
 		t.Fatalf("login wait = %+v err=%v", wait, err)
 	}
+	if signIns, err := run.executions.AgentSignIns(t.Context()); err != nil || len(signIns) != 1 ||
+		signIns[0].AgentID != "codex" || signIns[0].LastError == "" {
+		t.Fatalf("the agent was not marked as needing a sign-in: %+v err=%v", signIns, err)
+	}
 	if resumed, err := run.starter.ResumeAfterLogin(t.Context(), "claude"); err != nil || resumed != 0 {
 		t.Fatalf("another agent's login resumed the run: %d err=%v", resumed, err)
 	}
@@ -3593,6 +3597,9 @@ func TestRemoteExpiredLoginWaitsForTheAgentAndResumesAfterLogin(t *testing.T) {
 	waitForRetriedTurn(t, run.executions, run.runID)
 	if wait, err := run.executions.LoginWaitForRun(t.Context(), run.runID); err != nil || wait.AgentID != "" {
 		t.Fatalf("login wait was not cleared: %+v err=%v", wait, err)
+	}
+	if signIns, err := run.executions.AgentSignIns(t.Context()); err != nil || len(signIns) != 0 {
+		t.Fatalf("the sign-in was not cleared: %+v err=%v", signIns, err)
 	}
 }
 

@@ -51,6 +51,19 @@ func (api *API) applyRecoverWorkOrder(
 		return "", false
 	}
 	latest := newestRun(runs)
+	// A run waiting for a sign-in continues by itself once the agent works
+	// again; autopilot spends no recovery on it (the user may still).
+	if waits, ok := api.execution.(interface {
+		LoginWaitForRun(context.Context, string) (execution.LoginWait, error)
+	}); ok && approvedByAutopilot(ctx) {
+		if wait, err := waits.LoginWaitForRun(ctx, latest.ID); err == nil && wait.AgentID != "" {
+			writeError(w, http.StatusConflict, "waits_for_sign_in", fmt.Sprintf(
+				"“%s” waits for agent %s to sign in again and continues by itself once it works; "+
+					"no recovery helps. Tell the user once, plainly, that it needs them to sign in.",
+				stored.Title, wait.AgentID))
+			return "", false
+		}
+	}
 	fingerprint, refusal := api.recoveryRefusal(r, latest.ID, how)
 	if refusal != "" {
 		writeError(w, http.StatusConflict, "recovery_refused", refusal)

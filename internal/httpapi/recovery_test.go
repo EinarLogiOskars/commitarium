@@ -108,3 +108,39 @@ func TestRecoveryRunsOutPlainly(t *testing.T) {
 		t.Fatalf("detail = %q", detail)
 	}
 }
+
+// signedOutExecutions is a blocked run that waits for its agent's sign-in.
+type signedOutExecutions struct {
+	*blockedExecutions
+}
+
+func (stub *signedOutExecutions) LoginWaitForRun(context.Context, string) (execution.LoginWait, error) {
+	return execution.LoginWait{AgentID: "claude"}, nil
+}
+
+// Autopilot spends no recovery on a run waiting for a sign-in: it continues
+// by itself once the agent works (LOGIN_RECOVERY_PLAN.md).
+func TestAutopilotLeavesARunWaitingForASignIn(t *testing.T) {
+	stub := &conversationStub{action: conversations.Action{
+		ID: "act_1", Status: conversations.ActionProposed,
+		AssistantAction: featureartifact.AssistantAction{
+			Type: featureartifact.AssistantRecoverWorkOrder, Reason: "Try again",
+			WorkOrderID: "fea_log", How: "continue", Guidance: "Try again.",
+		},
+	}}
+	features := &recordingFeatureService{getResult: feature.Feature{
+		ID: "fea_log", ProjectID: "prj_test", Title: "Show the log", CreatedBy: feature.CreatedByAssistant,
+	}}
+	projects := &recordingProjectService{getByIDResult: project.Project{ID: "prj_test"}}
+	executions := &signedOutExecutions{&blockedExecutions{
+		recordingExecutionService: &recordingExecutionService{runs: []execution.Run{{ID: "run_1", StartedAt: time.Now()}}},
+		blocker:                   execution.Blocker{RunID: "run_1", Kind: execution.BlockerEnvironment, Fingerprint: "fp1"},
+	}}
+	workflow := &planningStarterStub{run: execution.Run{ID: "run_1"}}
+	handler := NewWithWorkspaceRealWorkflowDeletionAndModels(projects, features, nil, executions, nil, nil, nil, workflow, nil, nil, nil, nil, stub)
+	err := AssistantActionApplier(handler)(t.Context(), "prj_test", "act_1")
+	if err == nil || !strings.Contains(err.Error(), "waits for agent claude to sign in again") ||
+		workflow.receivedRecovery.Action != "" {
+		t.Fatalf("autopilot recovered a run waiting for a sign-in: %v %+v", err, workflow.receivedRecovery)
+	}
+}

@@ -548,6 +548,10 @@ func run(ctx context.Context, coordinatorConfig config) error {
 	if resumer, ok := realWorkflowStarter.(interface{ RunLimitResumer(context.Context) }); ok {
 		go resumer.RunLimitResumer(ctx)
 	}
+	// Work waiting on an agent's sign-in is tried again now and then.
+	if checker, ok := realWorkflowStarter.(interface{ RunSignInChecker(context.Context) }); ok {
+		go checker.RunSignInChecker(ctx)
+	}
 	// Turns that infrastructure cut off retry by themselves, on schedule.
 	if resumer, ok := realWorkflowStarter.(interface{ RunRetryResumer(context.Context) }); ok {
 		go resumer.RunRetryResumer(ctx)
