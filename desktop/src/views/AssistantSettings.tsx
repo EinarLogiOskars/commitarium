@@ -54,8 +54,9 @@ export function AssistantSettingsSection() {
       <p className="muted note">
         The agent the assistant runs on, for every project. It shares that agent&apos;s usage limit
         with any work orders on it. It writes the vision and every work order, so a Frontier model
-        pays off here. The assistant chooses the agents and models of the work it starts, preferring
-        the agent with the most usage left.
+        pays off here. The assistant chooses the agents, models, and efforts of the work it starts,
+        preferring the agent with the most usage left, and never an effort above the highest you set
+        here.
       </p>
       <div className="assistant-settings__row">
         <label className="field">
@@ -90,6 +91,19 @@ export function AssistantSettingsSection() {
             {models.map((m) => (
               <option key={m.id} value={m.id}>
                 {m.display_name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="field">
+          <span>Highest effort for its work</span>
+          <select
+            value={settings.max_effort ?? "high"}
+            onChange={(e) => update({ max_effort: e.target.value })}
+          >
+            {["low", "medium", "high", "xhigh", "max"].map((effort) => (
+              <option key={effort} value={effort}>
+                {effort}
               </option>
             ))}
           </select>

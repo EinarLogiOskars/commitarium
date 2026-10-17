@@ -545,6 +545,12 @@ func (api *API) applyStartWorkOrder(
 		}
 	}
 	request.PhaseChoices = action.PhaseChoices()
+	if err := api.checkEffortCeiling(ctx, request.PhaseChoices); err != nil {
+		if !writeChoiceError(w, err) {
+			writeConversationError(w, err)
+		}
+		return "", false
+	}
 	if _, ok := api.startFeature(w, r, stored, "assistant-"+action.ID, request); !ok {
 		return "", false
 	}
@@ -742,6 +748,9 @@ func (api *API) assistantSettings(
 	}
 	overrides.AgentProviders, overrides.AgentModels = &providers, &chosen
 	if choices := action.PhaseChoices(); choices != nil {
+		if err := api.checkEffortCeiling(ctx, choices); err != nil {
+			return feature.SettingsOverrides{}, err
+		}
 		if err := api.checkPhaseChoices(ctx, providers, chosen, *choices, skipReviewer); err != nil {
 			return feature.SettingsOverrides{}, err
 		}

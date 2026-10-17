@@ -38,3 +38,20 @@ func TestPhaseChoicesNormalize(t *testing.T) {
 		t.Fatalf("bad model err = %v", err)
 	}
 }
+
+func TestEffortAbove(t *testing.T) {
+	for _, test := range []struct {
+		effort, ceiling string
+		above           bool
+	}{
+		{"medium", "high", false}, {"high", "high", false}, {"xhigh", "high", true},
+		{"", "low", false}, {"max", "", false}, {"turbo", "max", true}, {"minimal", "low", false},
+	} {
+		if got := EffortAbove(test.effort, test.ceiling); got != test.above {
+			t.Errorf("EffortAbove(%q, %q) = %t", test.effort, test.ceiling, got)
+		}
+	}
+	if !ValidEffortCeiling("xhigh") || ValidEffortCeiling("none") || ValidEffortCeiling("") {
+		t.Fatal("effort ceilings")
+	}
+}

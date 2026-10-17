@@ -214,6 +214,27 @@ func (api *API) checkPhaseChoices(
 	return nil
 }
 
+// checkEffortCeiling refuses an assistant's choice of an effort above the
+// highest the user allows it (ADR-031). The user's own choices are not
+// limited.
+func (api *API) checkEffortCeiling(ctx context.Context, choices *project.PhaseChoices) error {
+	if choices == nil || api.conversations == nil {
+		return nil
+	}
+	settings, err := api.conversations.Settings(ctx)
+	if err != nil {
+		return err
+	}
+	for _, effort := range choices.Efforts() {
+		if project.EffortAbove(effort, settings.MaxEffort) {
+			return &choiceError{status: http.StatusBadRequest, code: "effort_above_ceiling",
+				message: fmt.Sprintf("the effort %q is above the highest the user allows the assistant (%s); choose %s or lower, or leave it empty for the model's default",
+					effort, settings.MaxEffort, settings.MaxEffort)}
+		}
+	}
+	return nil
+}
+
 // effortAccepted refuses an effort the model's catalog entry does not list.
 // A model whose catalog lists no efforts accepts any, and the provider is the
 // final check.

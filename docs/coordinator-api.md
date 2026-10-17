@@ -2556,7 +2556,7 @@ default branch, and returns the `assistant_turn` result: its reply, proposed
 actions, and its notes.
 
 - `GET /api/v1/assistant/settings` answers `{"agent", "model", "ask_before",
-  "updated_at"}`; without saved settings, an empty agent and model (ADR-027:
+  "max_effort", "updated_at"}`; without saved settings, an empty agent and model (ADR-027:
   the user chooses them). `ask_before` lists the models the model guide says
   need approval: its `premium` models and the unrated models connected agents
   offer. An assistant that had answered before keeps the default it had then
@@ -2565,6 +2565,10 @@ actions, and its notes.
   model guide. Families saved before the guide are migrated into its
   overrides once, when the agents' models are known: a marked model becomes
   `premium`, an unmarked default (`fable`, `astra`) becomes `frontier`.
+  `max_effort` (`low`, `medium`, `high`, `xhigh`, `max`, or `ultra`; default
+  `high`) is the highest reasoning effort the assistant may choose (ADR-031):
+  applying an assistant action with a higher effort returns
+  `400 effort_above_ceiling`. The user's own Starts are not limited.
 - Until it can answer, sending a message returns `409 no_agents` (no agent
   exists yet) or `409 assistant_not_set_up` (none is chosen for it, or the
   chosen one is gone), each with a plain message for the user. Work

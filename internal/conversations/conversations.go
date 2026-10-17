@@ -53,12 +53,18 @@ const TopLevel = "commitarium"
 // need approval; the families the user stored before are migrated into the
 // guide's overrides once, and AskBeforeMigrated records that.
 type Settings struct {
-	Agent             string    `json:"agent"`
-	Model             string    `json:"model"`
-	AskBefore         []string  `json:"ask_before"`
-	AskBeforeMigrated bool      `json:"ask_before_migrated,omitempty"`
-	UpdatedAt         time.Time `json:"updated_at"`
+	Agent             string   `json:"agent"`
+	Model             string   `json:"model"`
+	AskBefore         []string `json:"ask_before"`
+	AskBeforeMigrated bool     `json:"ask_before_migrated,omitempty"`
+	// MaxEffort is the highest reasoning effort the assistant may choose
+	// (ADR-031); the user's own choices are not limited.
+	MaxEffort string    `json:"max_effort"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
+
+// DefaultMaxEffort caps the assistant's efforts until the user chooses.
+const DefaultMaxEffort = "high"
 
 // DefaultAskBefore are the premium model families marked by default.
 var DefaultAskBefore = []string{"fable", "astra"}
@@ -289,7 +295,7 @@ func (service *Service) Settings(ctx context.Context) (Settings, error) {
 
 // storedSettings reads the settings file as it is stored.
 func (service *Service) storedSettings(ctx context.Context) (Settings, error) {
-	settings := Settings{AskBefore: append([]string(nil), DefaultAskBefore...)}
+	settings := Settings{AskBefore: append([]string(nil), DefaultAskBefore...), MaxEffort: DefaultMaxEffort}
 	contents, err := os.ReadFile(service.settingsPath())
 	switch {
 	case errors.Is(err, os.ErrNotExist):
@@ -300,6 +306,9 @@ func (service *Service) storedSettings(ctx context.Context) (Settings, error) {
 		if json.Unmarshal(contents, &settings) != nil {
 			return Settings{}, ErrUnavailable
 		}
+	}
+	if settings.MaxEffort == "" {
+		settings.MaxEffort = DefaultMaxEffort
 	}
 	return settings, nil
 }
@@ -423,6 +432,12 @@ func (service *Service) SaveSettings(ctx context.Context, settings Settings) (Se
 	settings.Agent, settings.Model = strings.TrimSpace(settings.Agent), strings.TrimSpace(settings.Model)
 	if !project.ValidAgentID(settings.Agent) || settings.Model == "" {
 		return Settings{}, fmt.Errorf("%w: choose an agent and a model", ErrInvalid)
+	}
+	if settings.MaxEffort = strings.TrimSpace(settings.MaxEffort); settings.MaxEffort == "" {
+		settings.MaxEffort = DefaultMaxEffort
+	}
+	if !project.ValidEffortCeiling(settings.MaxEffort) {
+		return Settings{}, fmt.Errorf("%w: the highest effort must be low, medium, high, xhigh, max, or ultra", ErrInvalid)
 	}
 	agents, err := service.config.Agents.List(ctx)
 	if err != nil {

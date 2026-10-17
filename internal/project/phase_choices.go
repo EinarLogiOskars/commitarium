@@ -78,3 +78,39 @@ func (choices PhaseChoices) WithoutPlanModel(reviewer bool) PhaseChoices {
 	}
 	return choices
 }
+
+// effortOrder ranks the reasoning efforts providers name, lowest first.
+var effortOrder = []string{"none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"}
+
+// EffortAbove reports whether effort is higher than ceiling. An effort not
+// ranked counts as the highest, so it is never let past a ceiling by mistake;
+// an empty effort (the model's default) or ceiling is never above.
+func EffortAbove(effort, ceiling string) bool {
+	if effort == "" || ceiling == "" {
+		return false
+	}
+	rank := func(value string) int {
+		for index, known := range effortOrder {
+			if known == value {
+				return index
+			}
+		}
+		return len(effortOrder)
+	}
+	return rank(effort) > rank(ceiling)
+}
+
+// Efforts lists the choices' efforts.
+func (choices PhaseChoices) Efforts() []string {
+	return []string{choices.LeadPlanEffort, choices.LeadEffort, choices.ReviewerPlanEffort, choices.ReviewerEffort}
+}
+
+// ValidEffortCeiling reports whether value can cap the assistant's efforts.
+func ValidEffortCeiling(value string) bool {
+	for _, known := range effortOrder[2:] {
+		if known == value {
+			return true
+		}
+	}
+	return false
+}

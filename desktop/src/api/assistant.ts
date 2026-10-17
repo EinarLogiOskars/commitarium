@@ -6,8 +6,11 @@ import { request } from "./client";
 export interface AssistantSettings {
   agent: string;
   model: string;
-  /** Model families that need explicit approval, e.g. "fable", "astra". */
+  /** The models that need explicit approval: the model guide's Premium and
+   * unrated models (ADR-031). Read-only; tiers are set in the model guide. */
   ask_before: string[];
+  /** The highest reasoning effort the assistant may choose. */
+  max_effort?: string;
   updated_at?: string;
 }
 

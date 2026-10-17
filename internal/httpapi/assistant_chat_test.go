@@ -327,6 +327,29 @@ func TestStartingAWorkOrderJudgesPremiumOnTheModelsThatWillRun(t *testing.T) {
 	}
 }
 
+// The assistant may not choose an effort above the user's highest (ADR-031).
+func TestAnAssistantStartAboveTheEffortCeilingIsRefused(t *testing.T) {
+	stub := &conversationStub{action: conversations.Action{
+		ID: "act_1", Status: conversations.ActionProposed,
+		AssistantAction: featureartifact.AssistantAction{
+			Type: featureartifact.AssistantStartWorkOrder, Reason: "Next", WorkOrderID: "fea_edit",
+			LeadEffort: "xhigh",
+		},
+	}, settings: conversations.Settings{MaxEffort: "high"}}
+	features := &recordingFeatureService{getResult: feature.Feature{
+		ID: "fea_edit", ProjectID: "prj_test", Title: "Correct entries", State: feature.StateReady,
+		AgentModels: project.AgentModels{Lead: "gpt-6.1-sol", Reviewer: "claude-sonnet-5-5"},
+	}}
+	projects := &recordingProjectService{getByIDResult: project.Project{ID: "prj_test"}}
+	handler := NewWithWorkspaceRealWorkflowDeletionAndModels(projects, features, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, stub)
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost,
+		"/api/v1/assistant/conversations/prj_test/actions/act_1/approve", strings.NewReader(`{"start":true}`)))
+	if recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), "effort_above_ceiling") {
+		t.Fatalf("status %d: %s", recorder.Code, recorder.Body.String())
+	}
+}
+
 func TestTheTopLevelCreatesAppsAndProjectsDoTheRest(t *testing.T) {
 	for name, test := range map[string]struct {
 		scope  string

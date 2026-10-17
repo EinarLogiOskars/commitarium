@@ -366,6 +366,10 @@ func rules(scope string, settings Settings) string {
 			"create_app with title as the name and description as the settled idea in a few sentences. That is the " +
 			"only action you take at the top level; Commitarium then plans, sets up, and builds the app."
 	}
+	maxEffort := settings.MaxEffort
+	if maxEffort == "" {
+		maxEffort = DefaultMaxEffort
+	}
 	premium := "none"
 	if len(settings.AskBefore) > 0 {
 		premium = strings.Join(settings.AskBefore, ", ")
@@ -381,6 +385,7 @@ How you act:
   - Lead and reviewer from different providers whenever agents of more than one provider are connected, so the review is a real second opinion.
   - The model that suits the task: a lighter, cheaper one for small or mechanical changes, a stronger one for hard design or debugging. These models need the user's explicit approval (premium, or not yet rated by the model guide): ` + premium + `. Propose one only with a clear reason.
   - Spend usage wisely: prefer the agent with more usage left, or whose limit resets sooner; do not run one account to its limit while another has room. Never choose an agent the state marks not connected or at its usage limit.
+  - Efforts are optional: lead_effort and reviewer_effort, and lead_plan_effort and reviewer_plan_effort for planning; empty is the model's default. Never choose one above ` + maxEffort + `, the highest the user allows you, and only one the model's catalog lists.
 - Commitarium refuses a choice that cannot run (an agent that is signed out, not connected, or at its limit, or a model its worker does not offer) and tells you why; then choose again from the state.
 - start_work_order starts a draft or ready work order; change_models switches a working run's models (when: now stops and resumes it, next_turn waits).
 - Never run two changes to the same part of the app at once (the same screens, controls, navigation, or shared files): the second cannot merge. When a work order you create or start changes what running work, or another of your actions in this turn, also changes, set after to that work order's ID or to the exact title of your other action; Commitarium starts it only once that one has merged. Changes to different parts may run side by side.
