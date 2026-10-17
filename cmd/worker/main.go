@@ -92,6 +92,9 @@ type runtime struct {
 	// cliExecutable is the provider CLI whose version the worker reports,
 	// when it is the one the desktop keeps updated.
 	cliExecutable string
+	// secrets are materialized credential values the worker removes from
+	// activity before it is spooled (ADR-006).
+	secrets []string
 }
 
 func main() {
@@ -211,7 +214,7 @@ func run(ctx context.Context, workerConfig config) error {
 		Journal:             workerjournal.NewStore(db),
 		Provider:            workerRuntime.provider,
 		EnvironmentResolver: workerRuntime.environmentResolver,
-		Normalizer:          workerservice.NormalizerFunc(normalizeObservableEvent),
+		Normalizer:          redactingNormalizer(workerRuntime.secrets),
 		Lifetime:            ctx,
 	})
 	if err != nil {
@@ -461,7 +464,7 @@ func newCodexRuntime(config codexConfig) (runtime, error) {
 	if err != nil || !providerState.IsDir() {
 		return runtime{}, errors.New("Codex provider-state directory is unavailable")
 	}
-	roleVariables, roleWorkspaceRoots, err := forgejoRoleEnvironment(config.forgejoURL, config.identities, "Codex")
+	roleVariables, roleWorkspaceRoots, tokens, err := forgejoRoleEnvironment(config.forgejoURL, config.identities, "Codex")
 	if err != nil {
 		return runtime{}, err
 	}
@@ -540,6 +543,7 @@ func newCodexRuntime(config codexConfig) (runtime, error) {
 			workerhttp.CapabilityEventReplay,
 		},
 		description:   "Codex worker",
+		secrets:       tokens,
 		modelSource:   modelSource,
 		usage:         &codexadapter.Usage,
 		cliExecutable: updatableCLI(config.executable, defaultCodexBinary),
@@ -551,7 +555,7 @@ func newClaudeRuntime(config claudeConfig) (runtime, error) {
 	if err != nil || !providerState.IsDir() {
 		return runtime{}, errors.New("Claude provider-state directory is unavailable")
 	}
-	roleVariables, roleWorkspaceRoots, err := forgejoRoleEnvironment(config.forgejoURL, config.identities, "Claude")
+	roleVariables, roleWorkspaceRoots, tokens, err := forgejoRoleEnvironment(config.forgejoURL, config.identities, "Claude")
 	if err != nil {
 		return runtime{}, err
 	}
@@ -595,6 +599,7 @@ func newClaudeRuntime(config claudeConfig) (runtime, error) {
 			workerhttp.CapabilityEventReplay,
 		},
 		description:   "Claude worker",
+		secrets:       tokens,
 		modelSource:   claudeModelSource(provider, baseVariables, config.availableModels),
 		usage:         &claudeadapter.Usage,
 		cliExecutable: updatableCLI(config.executable, defaultClaudeBinary),
@@ -864,6 +869,38 @@ func normalizeObservableEvent(
 	return normalized, nil
 }
 
+// redactingNormalizer replaces every known secret value in an observable
+// event with [REDACTED] before the event leaves the worker.
+func redactingNormalizer(secrets []string) workerservice.NormalizerFunc {
+	return func(ctx context.Context, event worker.Event) (workerservice.NormalizedEvent, error) {
+		normalized, err := normalizeObservableEvent(ctx, event)
+		if err != nil {
+			return normalized, err
+		}
+		count := 0
+		redact := func(value *string) {
+			for _, secret := range secrets {
+				if occurrences := strings.Count(*value, secret); occurrences > 0 {
+					count += occurrences
+					*value = strings.ReplaceAll(*value, secret, "[REDACTED]")
+				}
+			}
+		}
+		redact(&normalized.Text)
+		if normalized.Activity != nil {
+			redact(&normalized.Activity.Command)
+			redact(&normalized.Activity.Path)
+			redact(&normalized.Activity.OldPath)
+		}
+		if count > 0 {
+			normalized.Redaction = workerhttp.RedactionMetadata{
+				Count: count, Categories: []workerhttp.RedactionCategory{workerhttp.RedactionCredential},
+			}
+		}
+		return normalized, nil
+	}
+}
+
 func simulatedScripts() map[worker.Role]worker.Script {
 	return map[worker.Role]worker.Script{
 		worker.RoleLead: {
@@ -1040,26 +1077,35 @@ func loadForgejoIdentities(
 	return identities, nil
 }
 
+// forgejoCredentialHelper answers Git's credential requests for the Forgejo
+// origin from the role's token file, so the token itself never sits in the
+// agent's environment where an `env` dump would print it.
+const forgejoCredentialHelper = `!f() { if [ "$1" = get ]; then ` +
+	`printf 'username=%s\npassword=%s\n' "$COMMITARIUM_FORGEJO_LOGIN" "$(cat "$COMMITARIUM_FORGEJO_TOKEN_FILE")"; fi; }; f`
+
 // forgejoRoleEnvironment turns each role's identity into the variables its
 // turns receive (Forgejo access and Git author) and the workspace tree they
 // open. Roles without an identity, such as the assistants' consultant role,
-// get neither.
+// get neither. It also returns the tokens it read, which the worker redacts
+// from activity.
 func forgejoRoleEnvironment(
 	forgejoURL string,
 	identities map[worker.Role]forgejoIdentity,
 	label string,
-) (map[worker.Role][]string, map[worker.Role]string, error) {
+) (map[worker.Role][]string, map[worker.Role]string, []string, error) {
 	variables := make(map[worker.Role][]string, len(identities))
 	roots := make(map[worker.Role]string, len(identities))
+	tokens := make([]string, 0, len(identities))
 	for role, identity := range identities {
 		tokenBytes, err := os.ReadFile(identity.tokenFile)
 		if err != nil {
-			return nil, nil, fmt.Errorf("%s %s Forgejo token file is unavailable", label, role)
+			return nil, nil, nil, fmt.Errorf("%s %s Forgejo token file is unavailable", label, role)
 		}
 		token := strings.TrimSpace(string(tokenBytes))
 		if token == "" || strings.IndexFunc(token, unicode.IsSpace) >= 0 {
-			return nil, nil, fmt.Errorf("%s %s Forgejo token is empty or contains whitespace", label, role)
+			return nil, nil, nil, fmt.Errorf("%s %s Forgejo token is empty or contains whitespace", label, role)
 		}
+		tokens = append(tokens, token)
 		variables[role] = []string{
 			"COMMITARIUM_FORGEJO_URL=" + forgejoURL,
 			"COMMITARIUM_FORGEJO_TOKEN_FILE=" + identity.tokenFile,
@@ -1070,12 +1116,12 @@ func forgejoRoleEnvironment(
 			"GIT_COMMITTER_EMAIL=" + identity.gitAuthorEmail,
 			"GIT_TERMINAL_PROMPT=0",
 			"GIT_CONFIG_COUNT=1",
-			"GIT_CONFIG_KEY_0=http." + forgejoURL + "/.extraHeader",
-			"GIT_CONFIG_VALUE_0=Authorization: token " + token,
+			"GIT_CONFIG_KEY_0=credential." + forgejoURL + ".helper",
+			"GIT_CONFIG_VALUE_0=" + forgejoCredentialHelper,
 		}
 		roots[role] = identity.workspaceRoot
 	}
-	return variables, roots, nil
+	return variables, roots, tokens, nil
 }
 
 // usageSource serves an adapter's latest usage report, when it keeps one.

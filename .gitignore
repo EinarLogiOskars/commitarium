@@ -149,3 +149,7 @@ vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 .vite/
 .claude/worktrees/
+
+# Binaries from `go build ./cmd/...` at the repository root
+/worker
+/coordinator

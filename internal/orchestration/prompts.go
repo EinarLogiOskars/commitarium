@@ -12,8 +12,10 @@ import (
 )
 
 // forgejoTokenNote keeps Forgejo writes from failing quietly. The token file
-// has no trailing newline, so a shell `read` of it fails under `set -e`.
-const forgejoTokenNote = "Read the token with token=\"$(cat \"$COMMITARIUM_FORGEJO_TOKEN_FILE\")\", not the shell's read, " +
+// has no trailing newline, so a shell `read` of it fails under `set -e`. It
+// names the URL variable so agents don't dump the environment looking for it.
+const forgejoTokenNote = "The Forgejo base URL is in $COMMITARIUM_FORGEJO_URL; never dump the environment to find it. " +
+	"Read the token with token=\"$(cat \"$COMMITARIUM_FORGEJO_TOKEN_FILE\")\", not the shell's read, " +
 	"which fails on a file without a trailing newline. A write counts only once you have read it back from Forgejo; " +
 	"if it did not land, fix the request and retry rather than finishing."
 
