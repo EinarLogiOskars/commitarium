@@ -1354,6 +1354,34 @@ func TestClientRejectsImplementationAuditFromWrongAgent(t *testing.T) {
 	}
 }
 
+func TestClientReportsMissingImplementationAuditComment(t *testing.T) {
+	spec := testImplementationPublicationSpec()
+	stored := managedPullRequest(testPullRequestSpec())
+	stored.HeadCommitID = spec.HeadCommitID
+	stored.Body += "\n\n" + spec.PlanPublicationMarker +
+		"\n\n## Agreed implementation plan\n\n" + spec.Plan
+	client := newBranchTestClient(t, func(request *http.Request) (*http.Response, error) {
+		if request.URL.Path == "/api/v1/repos/owner/repository/pulls/7" {
+			return pullRequestJSONResponse(t, http.StatusOK, stored), nil
+		}
+		// The agent pushed but posted its comment to a mistyped repository
+		// path, so the pull request has no comments at all.
+		return jsonResponse(http.StatusOK, `[]`), nil
+	})
+
+	_, err := client.VerifyPullRequestImplementation(
+		t.Context(), "owner", "repository", spec,
+	)
+	if !errors.Is(err, workspace.ErrAuditCommentMissing) ||
+		!errors.Is(err, workspace.ErrPullRequestConflict) {
+		t.Fatalf("expected %v matching %v, got %v",
+			workspace.ErrAuditCommentMissing, workspace.ErrPullRequestConflict, err)
+	}
+	if strings.Contains(err.Error(), "conflicts") {
+		t.Fatalf("missing audit comment reads as a conflict: %v", err)
+	}
+}
+
 func TestClientVerifiesTypedLeadAuditHeadings(t *testing.T) {
 	for _, test := range []struct {
 		name    string

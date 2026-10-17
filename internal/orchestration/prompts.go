@@ -2,6 +2,7 @@ package orchestration
 
 import (
 	"fmt"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -18,6 +19,17 @@ const forgejoTokenNote = "The Forgejo base URL is in $COMMITARIUM_FORGEJO_URL; n
 	"Read the token with token=\"$(cat \"$COMMITARIUM_FORGEJO_TOKEN_FILE\")\", not the shell's read, " +
 	"which fails on a file without a trailing newline. A write counts only once you have read it back from Forgejo; " +
 	"if it did not land, fix the request and retry rather than finishing."
+
+// pullRequestCommentsAPI spells out where a lead posts its audit comment, so
+// the agent neither hunts for the endpoint nor retypes a repository name with
+// a random suffix: a mistyped path returns 404 and leaves the comment missing.
+func pullRequestCommentsAPI(prepared workspace.Workspace) string {
+	return fmt.Sprintf(
+		"\nPull-request comments API (pull-request comments are issue comments in Forgejo; list with GET, "+
+			"post with POST, and copy this path exactly): $COMMITARIUM_FORGEJO_URL/api/v1/repos/%s/%s/issues/%d/comments",
+		url.PathEscape(prepared.RepositoryOwner), url.PathEscape(prepared.RepositoryName), prepared.PullRequestNumber,
+	)
+}
 
 func interventionInstructions(state feature.State, message string) string {
 	return fmt.Sprintf(`The user paused the Commitarium workflow during the %s phase and sent this intervention:
@@ -144,6 +156,7 @@ func implementationPublicationInstructions(
 		"\nBase branch: " + prepared.BaseBranch + "\nFeature branch: " + prepared.Branch +
 		"\nPlanning baseline commit: " + prepared.BaseCommitID +
 		fmt.Sprintf("\nDraft pull request: #%d (%s)", prepared.PullRequestNumber, prepared.PullRequestURL) +
+		pullRequestCommentsAPI(prepared) +
 		"\nImplementation audit marker:\n" + marker
 }
 
@@ -183,6 +196,7 @@ func implementationContinuationInstructions(
 		"\nBase branch: " + prepared.BaseBranch + "\nFeature branch: " + prepared.Branch +
 		"\nPlanning baseline commit: " + prepared.BaseCommitID +
 		fmt.Sprintf("\nDraft pull request: #%d (%s)", prepared.PullRequestNumber, prepared.PullRequestURL) +
+		pullRequestCommentsAPI(prepared) +
 		"\nImplementation audit marker:\n" + marker
 }
 
@@ -461,6 +475,7 @@ func implementationBaseUpdateInstructions(
 		"\nPlanning baseline commit: " + prepared.BaseCommitID +
 		"\nExact approved commit: " + approvedCommitID +
 		fmt.Sprintf("\nDraft pull request: #%d (%s)", prepared.PullRequestNumber, prepared.PullRequestURL) +
+		pullRequestCommentsAPI(prepared) +
 		"\nBase-update audit marker:\n" + marker
 }
 
@@ -495,6 +510,7 @@ func implementationCorrectionInstructions(
 		"\nPlanning baseline commit: " + prepared.BaseCommitID +
 		"\nExact reviewed commit: " + reviewedCommitID +
 		fmt.Sprintf("\nFormal review: #%d\nDraft pull request: #%d (%s)", reviewID, prepared.PullRequestNumber, prepared.PullRequestURL) +
+		pullRequestCommentsAPI(prepared) +
 		"\nReview-response audit marker:\n" + marker
 }
 
@@ -527,6 +543,7 @@ func implementationReadinessInstructions(
 		"\nPlanning baseline commit: " + prepared.BaseCommitID +
 		"\nExact approved commit: " + commitID +
 		fmt.Sprintf("\nFormal review: #%d\nDraft pull request: #%d (%s)", reviewID, prepared.PullRequestNumber, prepared.PullRequestURL) +
+		pullRequestCommentsAPI(prepared) +
 		"\nMerge-readiness audit marker:\n" + marker
 }
 

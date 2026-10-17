@@ -35,6 +35,27 @@ var ErrPullRequestUnavailable = errors.New("managed Forgejo pull request service
 // longer merges cleanly. It still matches ErrPullRequestConflict.
 var ErrPullRequestNotMergeable = fmt.Errorf("%w: Forgejo refused the merge", ErrPullRequestConflict)
 
+// ErrAuditCommentMissing is an agent reporting a publication whose audit
+// comment is not on the pull request, for example because it posted to a
+// mistyped repository path. The agent can fix it by posting the comment, so
+// its message names that instead of a conflict. It still matches
+// ErrPullRequestConflict.
+var ErrAuditCommentMissing error = &refinedError{
+	text:   "the agent's audit comment with its marker is not on the Forgejo pull request",
+	parent: ErrPullRequestConflict,
+}
+
+// refinedError is a sentinel that reads on its own but still matches the
+// broader sentinel it refines.
+type refinedError struct {
+	text   string
+	parent error
+}
+
+func (refined *refinedError) Error() string { return refined.text }
+
+func (refined *refinedError) Unwrap() error { return refined.parent }
+
 type FeatureFinder interface {
 	GetByID(ctx context.Context, projectID, featureID string) (feature.Feature, error)
 	List(ctx context.Context, projectID string) ([]feature.Feature, error)

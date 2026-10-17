@@ -215,3 +215,23 @@ func TestNextBaseUpdateFollowsEveryEarlierUpdate(t *testing.T) {
 		t.Fatalf("update after a lead-only update = %d", turn)
 	}
 }
+
+func TestLeadAuditPromptsSpellOutTheCommentsAPI(t *testing.T) {
+	prepared := workspace.Workspace{
+		RepositoryOwner: "commitarium_admin", RepositoryName: "vamos-vikingo-4f2c2dd9aa1b",
+		BaseBranch: "main", Branch: "commitarium/fea_x", PullRequestNumber: 10,
+	}
+	commitID := strings.Repeat("a", 40)
+	path := "$COMMITARIUM_FORGEJO_URL/api/v1/repos/commitarium_admin/vamos-vikingo-4f2c2dd9aa1b/issues/10/comments"
+	for name, instructions := range map[string]string{
+		"implementation": implementationInstructions(prepared, "run_x:lead:implementation:1"),
+		"continuation":   implementationContinuationInstructions(prepared, "Post the comment.", "run_x:lead:implementation:2", true),
+		"base update":    implementationBaseUpdateInstructions(prepared, commitID, "", "", "run_x:lead:base:1"),
+		"correction":     implementationCorrectionInstructions(prepared, "1. Fix it.", commitID, 3, "run_x:lead:correction:1"),
+		"readiness":      implementationReadinessInstructions(prepared, "Ready.", commitID, 3, "run_x:lead:readiness:1"),
+	} {
+		if !strings.Contains(instructions, path) {
+			t.Errorf("%s instructions omit the exact comments API path %q:\n%s", name, path, instructions)
+		}
+	}
+}
