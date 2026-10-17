@@ -8,12 +8,21 @@ to give an app a model: the assistant asks the user "which service do you
 have a key for?", and the key would end up in the app's code or environment,
 once per app.
 
-The agents cannot serve this. They run the Claude Code and Codex CLIs on the
-user's accounts: a subscription is licensed for its owner's own use through
-those tools, not to power an app other people use; each turn starts a
-sandboxed coding session that takes seconds; app traffic would spend the
-limits the work orders need; and the app's AI would stop whenever Commitarium
-stops. An API key is the right way for an app to call a model.
+Apps use an API key rather than the agents, for practical reasons:
+
+- **Speed.** An agent turn starts a full Claude Code or Codex session, a few
+  seconds before the first word, with no streaming. An API call answers at
+  once and streams, which is what chat-like features need.
+- **Limits.** App use would spend the same subscription limits the work
+  orders need, and a busy app could stall the user's work.
+- **Fit.** The agents are coding sessions with a workspace and tools; an app
+  feature needs a plain model call.
+- **Control.** A key behind the gateway gets a per-app record and a monthly
+  cap; app use on a subscription would be mixed in with everything else.
+
+Apps run locally for their owner, so this is a design choice, not a
+licensing one. If users would rather run their apps' AI on their own agents,
+we will reconsider, and the gateway can put an agent behind the same API.
 
 ## Principles
 
@@ -35,6 +44,9 @@ stops. An API key is the right way for an app to call a model.
 - Allowed models: chosen from that provider's models in the model guide,
   each with its tier; Light-tier models are preselected.
 - A monthly spending cap, with the spend so far.
+- A short note saying why apps use a key rather than the agents: faster
+  replies that stream, no effect on the agents' limits, and a cap on what
+  apps spend.
 
 **A local AI gateway.** The coordinator serves the provider's own API shape on
 a separate port that serves nothing else: `/ai/anthropic/v1/messages` or
@@ -75,6 +87,8 @@ a button that opens the settings tab.
 
 ## Not in this plan
 
+- Running app AI on the user's agents. Possible behind the same gateway;
+  reconsider if users ask for it.
 - Reusing an API-key agent's key for apps (the agents' keys live in their
   worker volumes); add later if asked for.
 - Several keys or providers at once, per-app allowed models, and per-app caps.

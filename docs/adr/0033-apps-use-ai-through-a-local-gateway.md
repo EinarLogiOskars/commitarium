@@ -6,11 +6,11 @@
 ## Context
 
 Apps Commitarium builds may need a model for their own features, such as a
-chat partner. The agents run the provider CLIs on the user's accounts, often
-subscriptions licensed for the owner's own use; they are slow per turn,
-share limits with the work orders, and stop when Commitarium stops. Putting
-an API key into each app's code or environment spreads the secret and leaves
-spending unbounded.
+chat partner. Apps run locally for their owner, so the user's own agents
+could serve them, but an agent turn is a full CLI coding session: seconds
+before the first word and no streaming, spending the same limits as the work
+orders. Putting an API key into each app's code or environment instead
+spreads the secret and leaves spending unbounded.
 
 ## Decision
 
@@ -22,7 +22,9 @@ by a per-app token, injects the key, refuses models that are not allowed and
 requests past the cap, and records usage and cost per app. Apps receive the
 gateway's URL and their token as environment variables. The assistant builds
 app AI features on the gateway and tells the user when no allowed model fits
-the feature. Apps never use the agents for their AI.
+the feature. The settings explain why apps use a key rather than the agents.
+Running app AI on the agents is left out, as a design choice for speed and
+limits rather than a rule, and is reconsidered if users ask for it.
 
 ## Consequences
 
