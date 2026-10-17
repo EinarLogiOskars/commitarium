@@ -36,6 +36,9 @@ type phaseModelUsageResponse struct {
 	Model  string `json:"model"`
 	Effort string `json:"effort,omitempty"`
 	tokenUsageResponse
+	// CostUSD is what its API-key turns cost (ADR-031); absent when none
+	// was priced.
+	CostUSD *float64 `json:"cost_usd,omitempty"`
 }
 
 // modelUsageResponse is one model's (and effort's) share of a role: a run's
@@ -45,6 +48,7 @@ type modelUsageResponse struct {
 	Model  string `json:"model"`
 	Effort string `json:"effort,omitempty"`
 	tokenUsageResponse
+	CostUSD *float64 `json:"cost_usd,omitempty"`
 }
 
 type featureUsageResponse struct {
@@ -52,6 +56,9 @@ type featureUsageResponse struct {
 	Models []modelUsageResponse `json:"models"`
 	Phases []phaseUsageResponse `json:"phases"`
 	Total  tokenUsageResponse   `json:"total"`
+	// Cost is the total in dollars for API-key turns and tokens for the
+	// rest (ADR-031).
+	Cost costResponse `json:"cost"`
 }
 
 func newTokenUsageResponse(usage execution.TokenUsage) tokenUsageResponse {
@@ -124,21 +131,34 @@ func (api *API) getFeatureUsageHandler(w http.ResponseWriter, r *http.Request) {
 	phases := map[phaseKey]execution.TokenUsage{}
 	type modelKey struct{ role, model, effort string }
 	models := map[modelKey]execution.TokenUsage{}
+	modelCosts := map[modelKey]*usageBucket{}
+	var tally costTally
 	type phaseModelKey struct {
 		phase         phaseKey
 		model, effort string
 	}
 	phaseModels := map[phaseModelKey]execution.TokenUsage{}
+	phaseModelCosts := map[phaseModelKey]*usageBucket{}
 	total := execution.TokenUsage{}
 	for _, attempt := range attempts {
 		roles[attempt.Role] = roles[attempt.Role].Add(attempt.Usage)
 		key := phaseKey{attemptPhase(attempt.SessionID, attempt.AttemptID), attempt.Role}
 		phases[key] = phases[key].Add(attempt.Usage)
+		cost, priced := api.attemptCost(attempt)
+		tally.add(cost, priced, attempt)
 		if attempt.Model != "" {
 			model := modelKey{attempt.Role, attempt.Model, attempt.Effort}
 			models[model] = models[model].Add(attempt.Usage)
+			if modelCosts[model] == nil {
+				modelCosts[model] = &usageBucket{}
+			}
+			modelCosts[model].add(attempt.Usage, cost, priced)
 			split := phaseModelKey{key, attempt.Model, attempt.Effort}
 			phaseModels[split] = phaseModels[split].Add(attempt.Usage)
+			if phaseModelCosts[split] == nil {
+				phaseModelCosts[split] = &usageBucket{}
+			}
+			phaseModelCosts[split].add(attempt.Usage, cost, priced)
 		}
 		total = total.Add(attempt.Usage)
 	}
@@ -146,6 +166,7 @@ func (api *API) getFeatureUsageHandler(w http.ResponseWriter, r *http.Request) {
 		Roles:  make([]roleUsageResponse, 0, len(roles)),
 		Phases: make([]phaseUsageResponse, 0, len(phases)),
 		Total:  newTokenUsageResponse(total),
+		Cost:   tally.response(api.pricesAsOf()),
 	}
 	for role, usage := range roles {
 		response.Roles = append(response.Roles, roleUsageResponse{Role: role, tokenUsageResponse: newTokenUsageResponse(usage)})
@@ -155,6 +176,7 @@ func (api *API) getFeatureUsageHandler(w http.ResponseWriter, r *http.Request) {
 	for key, usage := range models {
 		response.Models = append(response.Models, modelUsageResponse{
 			Role: key.role, Model: key.model, Effort: key.effort, tokenUsageResponse: newTokenUsageResponse(usage),
+			CostUSD: costUSD(modelCosts[key].cost, modelCosts[key].priced),
 		})
 	}
 	sort.Slice(response.Models, func(i, j int) bool {
@@ -175,6 +197,7 @@ func (api *API) getFeatureUsageHandler(w http.ResponseWriter, r *http.Request) {
 			if split.phase == key {
 				phase.Models = append(phase.Models, phaseModelUsageResponse{
 					Model: split.model, Effort: split.effort, tokenUsageResponse: newTokenUsageResponse(splitUsage),
+					CostUSD: costUSD(phaseModelCosts[split].cost, phaseModelCosts[split].priced),
 				})
 			}
 		}

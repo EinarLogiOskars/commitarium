@@ -98,6 +98,12 @@ Codex `turn/start` `effort` or Claude Code `--effort`; the provider rejects one
 the model does not support. Without it the model's default applies. The
 coordinator records it with the attempt's token usage.
 
+A terminal result's `usage` may carry `billing` (`api_key` or `subscription`,
+from Claude Code's init `apiKeySource` or Codex's `account/read`) and
+`cost_usd`, the provider's own cost for the turn (Claude Code's
+`total_cost_usd`, at API prices whichever way the account pays; Codex reports
+none). Both are omitted when the provider does not say.
+
 Real-agent attempt requests also carry `workspace_access`. Clarification and
 every lead/reviewer planning turn use `read_only`; implementation and its review
 use `read_write`. The worker maps this to Codex's read-only sandbox or Claude's

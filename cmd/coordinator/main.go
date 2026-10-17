@@ -415,7 +415,7 @@ func run(ctx context.Context, coordinatorConfig config) error {
 			},
 			Checkouts: checkoutManager, Branches: forgejoClient,
 			Visions: visions, Features: featureService,
-			Guide: modelGuide, Models: models,
+			Guide: modelGuide, Models: models, ChatUsage: executionStore,
 		})
 		if err != nil {
 			return fmt.Errorf("create the assistant: %w", err)

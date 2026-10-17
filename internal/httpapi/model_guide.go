@@ -16,6 +16,8 @@ type ModelGuideService interface {
 	Entries(ctx context.Context, extra []string) ([]modelguide.Entry, error)
 	SetTier(ctx context.Context, id string, tier modelguide.Tier) (modelguide.Entry, error)
 	Reset(ctx context.Context, id string) (modelguide.Entry, error)
+	PriceOf(id string) (modelguide.Price, bool)
+	PricesAsOf() string
 }
 
 type modelGuideResponse struct {

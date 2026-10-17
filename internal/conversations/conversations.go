@@ -235,6 +235,21 @@ type Config struct {
 	// (ADR-031); Models lists the models the connected agents offer.
 	Guide  ModelGuide
 	Models func(ctx context.Context) []ModelChoice
+	// ChatUsage, when set, records each turn's token usage per scope, so a
+	// project's cost includes the assistant's own turns.
+	ChatUsage ChatUsageRecorder
+}
+
+// ChatUsage is one assistant turn's usage.
+type ChatUsage struct {
+	Scope, AttemptID, Agent, Model string
+	Usage                          workerhttp.TokenUsage
+	RecordedAt                     time.Time
+}
+
+// ChatUsageRecorder stores the assistant's turns' usage.
+type ChatUsageRecorder interface {
+	RecordAssistantChatUsage(ctx context.Context, usage ChatUsage) error
 }
 
 // ModelGuide is the official model guide merged with the user's overrides.

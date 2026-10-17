@@ -12,6 +12,7 @@ this API beyond the host loopback interface is unsupported.
 | `GET` | `/api/v1/attention` | Read one cross-project review-inbox and notification snapshot |
 | `GET` | `/api/v1/models` | List persisted exact model catalogs for each provider role |
 | `POST` | `/api/v1/models/refresh` | Refresh model catalogs from provider workers now |
+| `GET` | `/api/v1/projects/{projectID}/usage` | Total a project's token usage and cost, by model and work order |
 | `GET` | `/api/v1/model-guide` | Read the model guide: each model's tier, official or the user's |
 | `PUT` | `/api/v1/model-guide/overrides/{model}` | Rate a model for the user |
 | `DELETE` | `/api/v1/model-guide/overrides/{model}` | Return a model to the official guide |
@@ -1022,10 +1023,28 @@ feature's runs, by role, by workflow phase and role, and overall:
 `correction`, `readiness`, `intervention` (answers to user messages), and
 `other`.
 
-Each phase also lists `models`: `[{"model", "effort", ...tokens}]`, the
-models and reasoning efforts that spent it (an empty `effort` is the model's
-default; ADR-031). `models` at the top level totals the same by role, model,
-and effort. Turns recorded without a model are left out of both.
+Each phase also lists `models`: `[{"model", "effort", ...tokens, "cost_usd"}]`,
+the models and reasoning efforts that spent it (an empty `effort` is the
+model's default; ADR-031). `models` at the top level totals the same by role,
+model, and effort. Turns recorded without a model are left out of both.
+
+`cost` says what the usage cost: `{"api_cost_usd", "api_unpriced",
+"subscription", "unknown", "prices_as_of"}`. Workers report how each turn's
+account pays (Claude Code's `apiKeySource`, Codex's `account/read`). Turns on
+an API key are priced in dollars: by the provider's own cost when it reports
+one (Claude Code's `total_cost_usd`), otherwise by the model guide's price
+(`prices_as_of`). API-key turns on a model without a price, subscription
+turns, and turns whose account did not say how it pays are totalled in tokens
+(`api_unpriced`, `subscription`, `unknown`). `cost_usd` on a model entry is
+its priced share, absent when nothing in it was priced.
+
+`GET /api/v1/projects/{projectID}/usage` totals the same across a project:
+`{"total", "cost", "models": [{"model", ...tokens, "cost_usd"}],
+"work_orders": [{"id", "title", ...tokens, "cost_usd"}], "assistant": {...tokens,
+"cost_usd"}}`. It covers every work order's runs and clarification, and the
+assistant's own conversation turns in the project (`assistant`, recorded per
+turn from this release on). `models` and `work_orders` are ordered by cost,
+then by input tokens read. An unknown project returns `404 project_not_found`.
 
 `input_tokens` excludes cached reads and cache writes. Roles appear only once a
 turn with reported usage has finished, so a new feature returns an empty

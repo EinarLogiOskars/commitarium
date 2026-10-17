@@ -66,3 +66,11 @@ type RoleAttemptUsage struct {
 	CostUSD   *float64
 	Usage     TokenUsage
 }
+
+// ProjectAttemptUsage is one recorded attempt's usage in a project: a work
+// order's agent turn or clarification (FeatureID set), or an assistant
+// conversation turn (FeatureID empty, Role "assistant").
+type ProjectAttemptUsage struct {
+	FeatureID string
+	RoleAttemptUsage
+}
