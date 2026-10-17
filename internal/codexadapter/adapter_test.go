@@ -1215,3 +1215,14 @@ func TestRateLimitWindowsBecomeUsage(t *testing.T) {
 		t.Fatalf("usage = %+v", windows)
 	}
 }
+
+func TestCodexTurnsPassTheirEffort(t *testing.T) {
+	encoded, err := json.Marshal(turnStartParams{ThreadID: "thr", Effort: "medium"})
+	if err != nil || !strings.Contains(string(encoded), `"effort":"medium"`) {
+		t.Fatalf("turn params = %s err=%v", encoded, err)
+	}
+	encoded, _ = json.Marshal(turnStartParams{ThreadID: "thr"})
+	if strings.Contains(string(encoded), "effort") {
+		t.Fatalf("default effort params = %s", encoded)
+	}
+}

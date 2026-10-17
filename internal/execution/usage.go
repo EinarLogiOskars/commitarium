@@ -29,7 +29,9 @@ type AttemptUsage struct {
 	SessionID string
 	AttemptID string
 	// Model is the model the attempt ran on; a run's models can change.
-	Model      string
+	Model string
+	// Effort is the reasoning effort it ran at; empty is the model's default.
+	Effort     string
 	Usage      TokenUsage
 	RecordedAt time.Time
 }
@@ -54,5 +56,6 @@ type RoleAttemptUsage struct {
 	SessionID string
 	AttemptID string
 	Model     string
+	Effort    string
 	Usage     TokenUsage
 }

@@ -4844,14 +4844,15 @@ func (starter *RemoteLeadStarter) observe(
 func (starter *RemoteLeadStarter) recordUsage(
 	ctx context.Context,
 	reference workerhttp.AttemptReference,
-	model string,
+	assignment workerhttp.Assignment,
 	usage *workerhttp.TokenUsage,
 ) {
 	if starter.usage == nil || usage == nil {
 		return
 	}
 	err := starter.usage.RecordAttemptUsage(ctx, execution.AttemptUsage{
-		SessionID: reference.SessionID, AttemptID: reference.AttemptID, Model: model,
+		SessionID: reference.SessionID, AttemptID: reference.AttemptID,
+		Model: assignment.Model, Effort: assignment.Effort,
 		Usage:      execution.TokenUsage(*usage),
 		RecordedAt: time.Now().UTC(),
 	})
@@ -4893,7 +4894,7 @@ func (starter *RemoteLeadStarter) finish(
 		starter.requireReview(ctx, request, errors.New("terminal worker attempt has no result"))
 		return
 	}
-	starter.recordUsage(ctx, request.identity.AttemptReference, attempt.Assignment.Model, attempt.Result.Usage)
+	starter.recordUsage(ctx, request.identity.AttemptReference, attempt.Assignment, attempt.Result.Usage)
 	if attempt.Result.Outcome != workerhttp.OutcomeFailed {
 		starter.turnEnded(ctx, request.runID, request.identity.SessionID)
 	}

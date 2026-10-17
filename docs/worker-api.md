@@ -72,7 +72,8 @@ The authenticated model route starts no provider turn. Codex workers start an
 App Server discovery process and call `model/list`; Claude workers return the
 explicit `COMMITARIUM_CLAUDE_AVAILABLE_MODELS` configuration because Claude
 Code has no supported non-interactive list command. Results contain exact IDs
-and display names, plus Codex reasoning-effort metadata when available.
+and display names, plus reasoning-effort metadata: Codex's own, and for
+Claude the efforts Claude Code's `--effort` accepts (`low` to `max`).
 The bundled Claude catalog uses friendly names such as `Claude Opus 4.8` while
 retaining exact IDs such as `claude-opus-4-8`; an operator-supplied custom ID
 falls back to displaying the ID unchanged. Floating aliases are rejected by
@@ -90,6 +91,12 @@ while the run works, ADR-021), and the worker passes
 that exact value to Codex `thread/start`/`thread/resume` or Claude Code
 `--model`. There is no fallback. Claude verifies its `system/init` model and
 fails the attempt if it differs from the request.
+
+An assignment may also include `assignment.effort`, a reasoning effort such as
+`medium` or `xhigh` (lowercase letters only; ADR-031). The worker passes it as
+Codex `turn/start` `effort` or Claude Code `--effort`; the provider rejects one
+the model does not support. Without it the model's default applies. The
+coordinator records it with the attempt's token usage.
 
 Real-agent attempt requests also carry `workspace_access`. Clarification and
 every lead/reviewer planning turn use `read_only`; implementation and its review

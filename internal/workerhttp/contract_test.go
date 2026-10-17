@@ -101,6 +101,16 @@ func TestPutAttemptRequestValidate(t *testing.T) {
 		t.Fatalf("validate toolchain setup request: %v", err)
 	}
 
+	effort := start
+	effort.Assignment.Effort = "xhigh"
+	if err := effort.Validate(identity); err != nil {
+		t.Fatalf("validate a request with an effort: %v", err)
+	}
+	effort.Assignment.Effort = "High!"
+	if err := effort.Validate(identity); err == nil {
+		t.Fatal("an invalid effort was accepted")
+	}
+
 	resume := start
 	resume.Mode = AttemptModeResume
 	resume.ProviderSessionID = "provider_session_test"

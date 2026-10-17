@@ -15,6 +15,9 @@ import (
 // start-up, long before a turn would finish.
 const aliasProbeTimeout = 30 * time.Second
 
+// Efforts are the reasoning efforts Claude Code's --effort accepts.
+var Efforts = []string{"low", "medium", "high", "xhigh", "max"}
+
 // ModelAliases are the Claude Code model aliases that name the newest model
 // of each family.
 var ModelAliases = []string{"opus", "sonnet", "haiku"}
