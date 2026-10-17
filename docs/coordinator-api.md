@@ -1021,6 +1021,11 @@ feature's runs, by role, by workflow phase and role, and overall:
 `correction`, `readiness`, `intervention` (answers to user messages), and
 `other`.
 
+Each phase also lists `models`: `[{"model", "effort", ...tokens}]`, the
+models and reasoning efforts that spent it (an empty `effort` is the model's
+default; ADR-031). `models` at the top level totals the same by role, model,
+and effort. Turns recorded without a model are left out of both.
+
 `input_tokens` excludes cached reads and cache writes. Roles appear only once a
 turn with reported usage has finished, so a new feature returns an empty
 `roles` array and zero totals. Usage is recorded when the coordinator observes

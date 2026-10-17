@@ -3107,6 +3107,10 @@ button.danger:not(.ghost) {
   font-weight: 600;
   text-transform: capitalize;
 }
+/* Which models and efforts spent a cell (ADR-031). */
+.usage-table__model {
+  display: block;
+}
 
 .brief {
   display: flex;

@@ -538,6 +538,14 @@ export interface PhaseUsage extends TokenUsage {
    * correction, readiness, intervention, or other. */
   phase: string;
   role: string;
+  /** The models and efforts that spent it; absent on older coordinators. */
+  models?: ModelUsage[];
+}
+
+export interface ModelUsage extends TokenUsage {
+  model: string;
+  /** Empty or absent: the model's default effort. */
+  effort?: string;
 }
 
 /** Provider-reported token totals for a work order, by role and by phase. */

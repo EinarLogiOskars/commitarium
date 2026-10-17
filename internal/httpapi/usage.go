@@ -27,13 +27,23 @@ type phaseUsageResponse struct {
 	Phase string `json:"phase"`
 	Role  string `json:"role"`
 	tokenUsageResponse
+	// Models splits the phase by the models and efforts that spent it
+	// (ADR-031); attempts recorded without a model are left out.
+	Models []phaseModelUsageResponse `json:"models,omitempty"`
 }
 
-// modelUsageResponse is one model's share of a role, when a run's model was
-// switched while it worked.
+type phaseModelUsageResponse struct {
+	Model  string `json:"model"`
+	Effort string `json:"effort,omitempty"`
+	tokenUsageResponse
+}
+
+// modelUsageResponse is one model's (and effort's) share of a role: a run's
+// model can be switched while it works, and planning may use another.
 type modelUsageResponse struct {
-	Role  string `json:"role"`
-	Model string `json:"model"`
+	Role   string `json:"role"`
+	Model  string `json:"model"`
+	Effort string `json:"effort,omitempty"`
 	tokenUsageResponse
 }
 
@@ -112,16 +122,23 @@ func (api *API) getFeatureUsageHandler(w http.ResponseWriter, r *http.Request) {
 	type phaseKey struct{ phase, role string }
 	roles := map[string]execution.TokenUsage{}
 	phases := map[phaseKey]execution.TokenUsage{}
-	type modelKey struct{ role, model string }
+	type modelKey struct{ role, model, effort string }
 	models := map[modelKey]execution.TokenUsage{}
+	type phaseModelKey struct {
+		phase         phaseKey
+		model, effort string
+	}
+	phaseModels := map[phaseModelKey]execution.TokenUsage{}
 	total := execution.TokenUsage{}
 	for _, attempt := range attempts {
 		roles[attempt.Role] = roles[attempt.Role].Add(attempt.Usage)
 		key := phaseKey{attemptPhase(attempt.SessionID, attempt.AttemptID), attempt.Role}
 		phases[key] = phases[key].Add(attempt.Usage)
 		if attempt.Model != "" {
-			key := modelKey{attempt.Role, attempt.Model}
-			models[key] = models[key].Add(attempt.Usage)
+			model := modelKey{attempt.Role, attempt.Model, attempt.Effort}
+			models[model] = models[model].Add(attempt.Usage)
+			split := phaseModelKey{key, attempt.Model, attempt.Effort}
+			phaseModels[split] = phaseModels[split].Add(attempt.Usage)
 		}
 		total = total.Add(attempt.Usage)
 	}
@@ -137,19 +154,37 @@ func (api *API) getFeatureUsageHandler(w http.ResponseWriter, r *http.Request) {
 	response.Models = make([]modelUsageResponse, 0, len(models))
 	for key, usage := range models {
 		response.Models = append(response.Models, modelUsageResponse{
-			Role: key.role, Model: key.model, tokenUsageResponse: newTokenUsageResponse(usage),
+			Role: key.role, Model: key.model, Effort: key.effort, tokenUsageResponse: newTokenUsageResponse(usage),
 		})
 	}
 	sort.Slice(response.Models, func(i, j int) bool {
-		if response.Models[i].Role != response.Models[j].Role {
-			return response.Models[i].Role < response.Models[j].Role
+		left, right := response.Models[i], response.Models[j]
+		if left.Role != right.Role {
+			return left.Role < right.Role
 		}
-		return response.Models[i].Model < response.Models[j].Model
+		if left.Model != right.Model {
+			return left.Model < right.Model
+		}
+		return left.Effort < right.Effort
 	})
 	for key, usage := range phases {
-		response.Phases = append(response.Phases, phaseUsageResponse{
+		phase := phaseUsageResponse{
 			Phase: key.phase, Role: key.role, tokenUsageResponse: newTokenUsageResponse(usage),
+		}
+		for split, splitUsage := range phaseModels {
+			if split.phase == key {
+				phase.Models = append(phase.Models, phaseModelUsageResponse{
+					Model: split.model, Effort: split.effort, tokenUsageResponse: newTokenUsageResponse(splitUsage),
+				})
+			}
+		}
+		sort.Slice(phase.Models, func(i, j int) bool {
+			if phase.Models[i].Model != phase.Models[j].Model {
+				return phase.Models[i].Model < phase.Models[j].Model
+			}
+			return phase.Models[i].Effort < phase.Models[j].Effort
 		})
+		response.Phases = append(response.Phases, phase)
 	}
 	sort.Slice(response.Phases, func(i, j int) bool {
 		left, right := response.Phases[i], response.Phases[j]
