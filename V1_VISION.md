@@ -3,9 +3,10 @@
 ## Status
 
 Agreed direction, 2026-10-09; kinds of work and the order revised on
-2026-10-11. Nothing in this document is implemented yet unless the "Where we
-stand" table says so. Detailed implementation plans and
-ADRs follow per milestone; this document records what 1.0 is and why.
+2026-10-11. Last reconciled with the implementation on 2026-10-17: the
+"Where we stand" table says what is built. Detailed implementation plans and
+ADRs follow per milestone; this document records what 1.0 is and why, and
+the ADRs win where they have since refined it.
 
 [PROJECT_PLAN.md](docs/plans/PROJECT_PLAN.md) remains the record of the foundation that
 1.0 builds on: everything below extends it rather than replacing it.
@@ -14,8 +15,8 @@ ADRs follow per milestone; this document records what 1.0 is and why.
 
 Commitarium becomes a project workspace: a place to plan work, hand it to
 agents, and oversee the result. It still enforces the practices it enforces
-today (commit-sized slices implemented in order, independent acceptance tests,
-code review, no model reviewing its own work), but not every piece of work
+today (commit-sized slices implemented in order, plan and code review, no
+model reviewing its own work), but not every piece of work
 needs all of them. A README update should not cost the ceremony of a feature.
 
 The user is the project lead. A project assistant helps them plan and keep
@@ -41,7 +42,7 @@ when it starts.
 
 A continuous 1:1 conversation with an agent for many small edits, where the
 user sees each change before deciding to keep it. Not a run that goes start to
-finish and then brings the user in. Planned in
+finish and then brings the user in. See
 [SESSIONS_PLAN.md](docs/plans/SESSIONS_PLAN.md) (ADR-019).
 
 - **One click to start.** The session opens on its own branch and draft pull
@@ -69,17 +70,18 @@ finish and then brings the user in. Planned in
 
 ### Work order
 
-A work order has three optional steps, each on or off when it starts:
+A work order has optional steps, each on or off when it starts:
 
 | Step | On | Off |
 | --- | --- | --- |
 | **Clarification** | Drafted with the project assistant into a handoff brief, then Ready | Starts straight from the title and description |
 | **Documented plan** | The lead writes a commit-ordered plan and implements it commit by commit | The agent plans internally and implements |
-| **Reviewer** | Plan review, independent acceptance tests, code review | None of them |
+| **Plan review** | A reviewer checks the plan against the repository | None |
+| **Code review** | A reviewer verifies the finished code (requires plan review) | None |
 
 Presets cover the common cases:
 
-- **Quick change**: all three off. For small, well-understood changes such as a
+- **Quick change**: all steps off. For small, well-understood changes such as a
   README update, a small fix, or a config change; the user sees the result at
   the merge gate, or after merge when the merge isn't gated. Motivation: a
   README update run as a full work order produced a three-to-four commit plan
@@ -87,7 +89,9 @@ Presets cover the common cases:
 - **Planned**: clarification and documented plan, no reviewer. The plan keeps
   the agent on track, lets it manage context commit by commit, and makes sure
   the plan goes all the way through.
-- **Full**: all three. Today's flow.
+- **Reviewed plan**: Planned plus plan review, no code review. For real
+  features (ADR-031).
+- **Full**: every step. For data, money, auth, migrations, and concurrency.
 
 If a quick change turns out to be bigger than it looked, the agent asks to
 turn on the plan or the reviewer for the same work order, keeping its context.
@@ -95,12 +99,12 @@ An earlier draft of this vision had a separate kind, the task, for quick
 changes; it was folded into the work order because it differed only in these
 optional steps.
 
-### Review is all or nothing
+### Review where it pays
 
-A work order either has a reviewer or it doesn't. With a reviewer it gets the
-whole flow: plan review, independent acceptance tests, and code review. Without
-one it gets none of them, including acceptance tests. There are no per-check
-toggles.
+Review was first all or nothing (ADR-018). ADR-031 split it into plan review
+and code review, so review is spent where it pays, and removed independent
+acceptance tests: they almost always passed, and code review now runs the
+suite on the exact revision instead.
 
 The reviewer always runs as a separate session with its own context, so a
 model never reviews its own work. Cross-provider review (Claude reviewing
@@ -117,11 +121,13 @@ subscription or an API key. For example: "Claude Max", "Claude API",
   orders at once. Commitarium does not cap concurrency; the user can see
   which agent each running item uses and knows they share one quota.
 - **The model is chosen per item.** The agent says which account pays; the
-  model says which model does the work.
-- **Cost by billing type.** Work orders already show token usage by phase and
-  role. Once an agent knows whether it is a subscription or an API key, API
-  agents can also show an estimated dollar cost; subscription agents keep
-  tokens, since they are limited by usage rather than billed per token.
+  model says which model does the work. The assistant chooses both for the
+  work it creates, by the model guide and the user's tiers (ADR-027,
+  ADR-031); the user can always choose at Start.
+- **Cost by billing type.** API-key turns show an estimated dollar cost;
+  subscription turns show tokens, since they are limited by usage rather than
+  billed per token. A finished work order and the project overview show the
+  cost.
 - **Lead and reviewer may be the same agent.** They are still separate
   sessions with separate contexts.
 - **Not personas.** Named characters with personalities were considered and
@@ -151,8 +157,8 @@ job (a README update becomes a quick-change work order).
   choice.
 - **Isolation:** same as the agents; its write access is limited to
   Commitarium's own data.
-- **Agent and model:** defaults to the project's lead choice, with an
-  override.
+- **Agent and model:** its own app-wide setting (ADR-022); premium models
+  need the user's approval.
 - Project setup and imports through the assistant come after 1.0.
 
 ## Planning view
@@ -176,19 +182,18 @@ assistant can use them on the user's behalf.
   the assistant beside them: it proposes the priority plan, drafts and starts
   work orders and sessions, and coordinates agents, while everything stays
   visible and the user steers. This is how trust is earned before automation.
-- **Autopilot.** Turned on per app (or globally): the assistant builds by
-  itself from a request such as "I need a calorie tracker". The user approves
-  the first priority plan, sets a budget, and is notified when something needs
-  them; turning it off stops it from starting anything new. It acts only
-  through the coordinator API, with Commitarium permissions, not system
-  permissions.
-- **Apps.** The top layer the user opens Commitarium to. An app is a project
-  that keeps running in Commitarium's own Docker stack (like a preview that
-  stays up), is rebuilt from the default branch after each merge, and keeps its
-  data in its own volume. It opens in a Commitarium window with a button for
-  changes: the user writes "make the buttons blue", the assistant runs a
-  quick-change work order, and the app reloads when it is done. Nothing is
-  installed on the host system.
+- **Autopilot.** A goal, not a mode (ADR-023): the user hands the assistant
+  the open items of one vision priority, and it creates, starts, and continues
+  their work orders without asking until they are done. Anything outside the
+  goal, vision changes, and premium models still wait for the user; stopping
+  it starts nothing new. It acts only through the coordinator API, with
+  Commitarium permissions, not system permissions.
+- **Apps.** The top layer the user opens Commitarium to (ADR-024). An app is
+  a project with an app flag, running on its preview in its own Commitarium
+  window. A new app starts from a sentence: the assistant writes its vision
+  and autopilot builds it. In an app the assistant drives: the user writes
+  "make the buttons blue", the work runs without approval cards, and the app
+  reloads when it is done. Nothing is installed on the host system.
 - **System capabilities (after 1.0).** Anything beyond Commitarium, such as
   managing other services on the user's machine, is opt-in, granted one
   capability at a time, and made very clear about what it allows.
@@ -211,11 +216,11 @@ public coordinator API, and every new action comes with an approval policy
 | Part | Status |
 | --- | --- |
 | Work order (full) | Done. Today's product. |
-| Planning view | Draft and Ready states, handoff briefs, Start with a freshness check, and settings chosen at Start ([READY_WORK_ORDERS_PLAN.md](docs/plans/READY_WORK_ORDERS_PLAN.md)). |
+| Planning view | Done: Draft and Ready states, handoff briefs, Start with a freshness check, and settings chosen at Start ([READY_WORK_ORDERS_PLAN.md](docs/plans/READY_WORK_ORDERS_PLAN.md)). |
 | Escalation | Done: wait reasons, the attention inbox, native notifications, the intervene bar. Failures pause instead of ending work orders ([RECOVERABLE_RUNS_PLAN.md](docs/plans/RECOVERABLE_RUNS_PLAN.md), ADR-017): retry, reopen, back to Ready, and resume after an expired login. |
 | Isolation | Done. Every new kind of work reuses it. |
 | Agents | Done ([AGENTS_PLAN.md](docs/plans/AGENTS_PLAN.md), ADR-016): one worker per provider account, serving both roles, chosen at Start. |
-| Flexible work orders | Done ([FLEXIBLE_WORK_ORDERS_PLAN.md](docs/plans/FLEXIBLE_WORK_ORDERS_PLAN.md), ADR-018): Full, Planned, and Quick change chosen at Start, and a Draft can start without clarifying. Turning a step on mid-run is a follow-up. |
+| Flexible work orders | Done ([FLEXIBLE_WORK_ORDERS_PLAN.md](docs/plans/FLEXIBLE_WORK_ORDERS_PLAN.md), ADR-018, ADR-031): Quick change, Planned, Reviewed plan, and Full chosen at Start, and a Draft can start without clarifying. Turning a step on mid-run is a follow-up. |
 | Session | Done and tested in real use ([SESSIONS_PLAN.md](docs/plans/SESSIONS_PLAN.md), ADR-019): one-click start, chat on the session branch, catch-up with main, session preview, one commit at finish through the merge gate. |
 | Project direction and assistant | Done ([ASSISTANT_PLAN.md](docs/plans/ASSISTANT_PLAN.md), ADR-020, ADR-022): the Vision page with an assistant-written plan, one assistant at the top level and in each project that acts through approval cards, usage limits, and recovery of blocked work ([ASSISTANT_RECOVERY_PLAN.md](docs/plans/ASSISTANT_RECOVERY_PLAN.md), ADR-032). |
 | Builder mode, autopilot, Apps | Done: autopilot on a goal the user set (ADR-023); the Apps area, where a sentence starts a new app and the assistant drives ([APPS_PLAN.md](docs/plans/APPS_PLAN.md), ADR-024). AI for apps through a local gateway is proposed ([APP_AI_PLAN.md](docs/plans/APP_AI_PLAN.md), ADR-033). |
@@ -232,15 +237,18 @@ concurrently on one worker, so one agent can serve several work orders.
 - Agents
 - Planning view: Draft, Ready, In progress, Done, with handoff briefs
 - Sessions (with pause, resume, and catch-up)
-- Flexible work orders: optional reviewer, documented plan, and clarification
+- Flexible work orders: clarification, documented plan, plan review, and
+  code review
 - The project assistant with project direction, planning and creating all
   kinds of work, and builder mode
+- Autopilot and Apps, which landed ahead of 1.0
 - Finishing Phase 6: automatic chaining of local synchronization and upstream
-  publication
+  publication (still open)
 
 **After 1.0:**
 
-- Autopilot and Apps (unless they land in a 1.x)
+- The marketplace beyond its MVP for a small group
+- AI for apps through a local gateway (ADR-033, proposed)
 - Opt-in system capabilities
 - Project setup and imports through the assistant
 - Phase 7: rich review inside Commitarium, the pixel-art town
@@ -260,14 +268,16 @@ Live reload depends on the project's compose file mounting its sources.
    settings chosen at Start.
 4. Flexible work orders: optional reviewer, documented plan, and
    clarification, with presets
-   ([FLEXIBLE_WORK_ORDERS_PLAN.md](docs/plans/FLEXIBLE_WORK_ORDERS_PLAN.md)).
+   ([FLEXIBLE_WORK_ORDERS_PLAN.md](docs/plans/FLEXIBLE_WORK_ORDERS_PLAN.md)). Done.
 5. Sessions: chat, catch-up, session preview, one commit at finish
-   ([SESSIONS_PLAN.md](docs/plans/SESSIONS_PLAN.md)).
+   ([SESSIONS_PLAN.md](docs/plans/SESSIONS_PLAN.md)). Done.
 6. Project direction: the priority plan and its mapping onto work orders and
-   sessions.
-7. The project assistant with tools, and builder mode.
-8. Autopilot.
-9. Apps, with the change button.
+   sessions. Done (ADR-020).
+7. The project assistant with tools, and builder mode. Done (ADR-022).
+8. Autopilot. Done (ADR-023).
+9. Apps, with the change button. Done (ADR-024).
+
+Left for 1.0: finishing Phase 6.
 
 Each step builds on the ones before: flexible work orders give the assistant
 cheap work to run, sessions add the interactive kind, and project direction
@@ -281,6 +291,12 @@ gives it something to plan against before it is trusted to act. Intermediate
 - **Flexible work orders**: optional steps per work order (ADR-018).
 - **Sessions** are work orders of kind `session` that reuse the work order's
   branch, merge gate, and recovery (ADR-019).
-- **Autopilot and Apps**: the assistant acts only through the coordinator API
-  with Commitarium permissions; system capabilities are separate, opt-in
-  grants.
+- **Project direction**: the vision is a Commitarium record (ADR-020).
+- **Assistant**: one assistant that proposes and the user approves (ADR-022);
+  the user and the assistant choose agents (ADR-027).
+- **Autopilot and Apps**: autopilot acts only on a goal the user set
+  (ADR-023); in an app the assistant drives (ADR-024). Both act only through
+  the coordinator API with Commitarium permissions; system capabilities are
+  separate, opt-in grants.
+- **Review where it pays**: plan and code review split, acceptance tests
+  removed (ADR-031).
