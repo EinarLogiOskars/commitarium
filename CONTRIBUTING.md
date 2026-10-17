@@ -121,8 +121,8 @@ Also update, as applicable:
 - `docs/coordinator-api.md` for public coordinator behavior;
 - `docs/worker-api.md` for coordinator-to-worker behavior;
 - `docs/desktop-ipc.md` for the trusted Tauri boundary;
-- `PROJECT_PLAN.md` when product scope, phase status, or workflow timing changes;
-  and
+- `docs/plans/PROJECT_PLAN.md` when product scope, phase status, or workflow
+  timing changes; and
 - `docs/threat-model.md` when a change affects host mounts, Docker access,
   upstream credentials, privileged host operations, Forgejo permissions, or the
   supported local-user assumptions.

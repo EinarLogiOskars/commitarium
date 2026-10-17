@@ -15,7 +15,7 @@ Make three steps of a work order optional, chosen at Start (ADR-018):
 
 Presets: **Quick change** (all off), **Planned** (clarification and plan),
 **Full** (all on). This replaces the separate task kind in
-[V1_VISION.md](V1_VISION.md) (step 4).
+[V1_VISION.md](../../V1_VISION.md) (step 4).
 
 ## What exists today
 

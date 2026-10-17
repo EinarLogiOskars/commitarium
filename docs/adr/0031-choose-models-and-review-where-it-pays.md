@@ -50,7 +50,7 @@ approval for both, as before; the user's own choices are never gated.
 
 **The assistant chooses by role, phase, and kind of work.** Its state carries
 the merged guide; its instructions carry the rules in
-[MODEL_GUIDE_PLAN.md](../../MODEL_GUIDE_PLAN.md):
+[MODEL_GUIDE_PLAN.md](../plans/MODEL_GUIDE_PLAN.md):
 
 - Quick for docs and trivial changes, Planned for small low-risk changes,
   Reviewed plan for real features, Full for data, money, auth, migrations,

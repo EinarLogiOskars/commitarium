@@ -5,7 +5,7 @@
 Living plan for the desktop UI, built to **trail the settled backend**. The UI
 consumes the coordinator's HTTP + SSE API and never drives backend shape by
 side effect. When a screen needs a contract change, that is a conversation with
-the backend and an update to [`docs/coordinator-api.md`](docs/coordinator-api.md)
+the backend and an update to [`docs/coordinator-api.md`](../coordinator-api.md)
 — not a quiet edit to Go.
 
 ## Desktop app shell & boot sequence (redesign in progress)
@@ -110,14 +110,14 @@ UI is built one settled layer behind it:
 
 Two coordination artifacts, with distinct jobs:
 
-- [`docs/ui-backend-status.md`](docs/ui-backend-status.md) — the **readiness
+- [`docs/ui-backend-status.md`](../ui-backend-status.md) — the **readiness
   board**: which backend behavior is Settled / In-progress / Planned. This is
   the authority on *what the UI may build against now*. It carries its own
   move-rules (an item goes Settled only in the commit that finishes and
   documents it; a settled contract that must change moves back to In-progress
   first; backend commits touching the UI must update it). Check it before
   starting any UI work.
-- [`docs/coordinator-api.md`](docs/coordinator-api.md) — the **wire contract**:
+- [`docs/coordinator-api.md`](../coordinator-api.md) — the **wire contract**:
   exact routes, requests, responses. Build screens against this.
 
 This plan does not re-classify endpoints — that duplicates the readiness board

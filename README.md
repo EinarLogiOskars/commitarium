@@ -179,8 +179,8 @@ Tauri backend is the trusted boundary for Docker, agent sign-in, running
 previews, and explicit host-side Git operations.
 
 See the [1.0 vision](V1_VISION.md), the [product and architecture
-plan](PROJECT_PLAN.md), and the [architecture decision records](docs/adr) for
-the reasoning behind these boundaries.
+plan](docs/plans/PROJECT_PLAN.md), and the [architecture decision
+records](docs/adr) for the reasoning behind these boundaries.
 
 ## Security and data boundaries
 
@@ -259,8 +259,8 @@ and Rust formatting, Clippy and tests for every pull request and push to `main`.
 | Document | Purpose |
 | --- | --- |
 | [1.0 vision](V1_VISION.md) | Where Commitarium is going: assistant, work orders, sessions, apps |
-| [Product and architecture plan](PROJECT_PLAN.md) | Product principles, scope, and the foundation's system design |
-| [Apps](APPS_PLAN.md) · [Assistant](ASSISTANT_PLAN.md) · [Previews](PREVIEW_PLAN.md) · [Marketplace](MARKETPLACE_PLAN.md) | Plans for the main areas |
+| [Product and architecture plan](docs/plans/PROJECT_PLAN.md) | Product principles, scope, and the foundation's system design |
+| [Apps](docs/plans/APPS_PLAN.md) · [Assistant](docs/plans/ASSISTANT_PLAN.md) · [Previews](docs/plans/PREVIEW_PLAN.md) · [Marketplace](docs/plans/MARKETPLACE_PLAN.md) | Plans for the main areas |
 | [Security policy](SECURITY.md) | Supported versions, reporting, and what counts as a vulnerability |
 | [Support matrix](docs/support-matrix.md) | Supported host operating systems, Docker, and Compose |
 | [Threat model](docs/threat-model.md) | Trust assumptions, protected assets, and boundaries |

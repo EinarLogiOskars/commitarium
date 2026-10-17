@@ -36,7 +36,7 @@ update channel without an Apple or Microsoft developer account.
 The operating-system installers themselves use ad-hoc signing on macOS and no
 commercial signing certificate on Windows, by design. Commitarium is a
 personal, source-available project; production code-signing certificates are
-out of scope (see the Phase 5 entry in [the plan](../PROJECT_PLAN.md)). The
+out of scope (see the Phase 5 entry in [the plan](plans/PROJECT_PLAN.md)). The
 README documents the one-time Gatekeeper/SmartScreen approval. If the project
 is ever distributed broadly, add Apple Developer ID signing and notarization
 and Windows code signing without removing updater signatures.

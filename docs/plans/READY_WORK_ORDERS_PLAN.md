@@ -4,7 +4,7 @@
 
 Work orders become planned work. You create one, clarify it with the project
 assistant, and it ends up **Ready** with a handoff brief. Agents only start
-when you press **Start**. This is milestone 2 of [V1_VISION.md](V1_VISION.md)
+when you press **Start**. This is milestone 2 of [V1_VISION.md](../../V1_VISION.md)
 and the first piece of the project assistant.
 
 | Status | Meaning |
