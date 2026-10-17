@@ -58,9 +58,10 @@ type Goal struct {
 	EndedAt   *time.Time `json:"ended_at,omitempty"`
 }
 
-// maxAutoContinues bounds how often autopilot continues one work order, so
-// a failure it cannot fix comes back to the user.
-const maxAutoContinues = 2
+// maxAutoContinues bounds how often autopilot recovers one work order across
+// its blockers, so a failure it cannot fix comes back to the user; the
+// coordinator also bounds recoveries of each failure (ADR-032).
+const maxAutoContinues = 8
 
 func (goal *Goal) active() bool {
 	return goal != nil && goal.Status == GoalActive
@@ -279,7 +280,7 @@ func (service *Service) autopilotActions(ctx context.Context, scope string) ([]A
 		case featureartifact.AssistantCreateWorkOrder:
 			inGoal = items[action.VisionItemID] || builds
 		case featureartifact.AssistantStartWorkOrder, featureartifact.AssistantChangeModels,
-			featureartifact.AssistantContinueWorkOrder:
+			featureartifact.AssistantContinueWorkOrder, featureartifact.AssistantRecoverWorkOrder:
 			inGoal, target = orders[action.WorkOrderID] || builds, action.WorkOrderID
 		case featureartifact.AssistantCloseWorkOrder:
 			inGoal, target = (created[action.WorkOrderID] || builds) && !orders[action.WorkOrderID], action.WorkOrderID
@@ -343,7 +344,14 @@ func (service *Service) autopilotActions(ctx context.Context, scope string) ([]A
 			noted = true
 			continue
 		}
-		if action.Type == featureartifact.AssistantContinueWorkOrder {
+		if action.Type == featureartifact.AssistantRecoverWorkOrder && action.How == "back_to_ready" {
+			// Back to Ready throws work away: always the user's call.
+			stored.addEvent(fmt.Sprintf("Autopilot left %s for you: sending work back to Ready needs your approval.",
+				actionName(action.AssistantAction)), now)
+			noted = true
+			continue
+		}
+		if action.Type == featureartifact.AssistantContinueWorkOrder || action.Type == featureartifact.AssistantRecoverWorkOrder {
 			if stored.AutoContinues[action.WorkOrderID] >= maxAutoContinues {
 				stored.addEvent(fmt.Sprintf("Autopilot has continued %s %d times; the next try is yours to approve.",
 					action.WorkOrderID, maxAutoContinues), now)
@@ -563,7 +571,8 @@ func (service *Service) AutopilotHandles(ctx context.Context, scope, workOrderID
 		return false
 	}
 	for _, action := range stored.Actions {
-		if action.Type == featureartifact.AssistantContinueWorkOrder && action.WorkOrderID == workOrderID &&
+		if (action.Type == featureartifact.AssistantContinueWorkOrder || action.Type == featureartifact.AssistantRecoverWorkOrder) &&
+			action.WorkOrderID == workOrderID &&
 			action.Status == ActionProposed {
 			// Not yet tried, autopilot applies it; tried, it waits for the user.
 			return !action.AutoTried

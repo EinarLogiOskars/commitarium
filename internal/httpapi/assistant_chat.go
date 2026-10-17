@@ -17,7 +17,6 @@ import (
 	"github.com/EinarLogiOskars/commitarium/internal/feature"
 	"github.com/EinarLogiOskars/commitarium/internal/featureartifact"
 	"github.com/EinarLogiOskars/commitarium/internal/modelcatalog"
-	"github.com/EinarLogiOskars/commitarium/internal/orchestration"
 	"github.com/EinarLogiOskars/commitarium/internal/project"
 	"github.com/EinarLogiOskars/commitarium/internal/toolchain"
 	"github.com/EinarLogiOskars/commitarium/internal/vision"
@@ -351,7 +350,10 @@ func (api *API) approveConversationActionHandler(w http.ResponseWriter, r *http.
 	case featureartifact.AssistantAddVisionItem:
 		result, ok = api.applyAddVisionItem(w, r, scope, action)
 	case featureartifact.AssistantContinueWorkOrder:
-		result, ok = api.applyContinueWorkOrder(w, r, scope, action)
+		action.How = "continue"
+		result, ok = api.applyRecoverWorkOrder(w, r, scope, action)
+	case featureartifact.AssistantRecoverWorkOrder:
+		result, ok = api.applyRecoverWorkOrder(w, r, scope, action)
 	case featureartifact.AssistantSetUpPreview:
 		result, workOrderID, ok = api.applySetUpPreview(w, r, scope, action)
 	case featureartifact.AssistantWriteVision:
@@ -395,7 +397,8 @@ func (api *API) approveConversationActionHandler(w http.ResponseWriter, r *http.
 func (api *API) usersWorkOrder(ctx context.Context, scope string, action conversations.Action) (string, error) {
 	switch action.Type {
 	case featureartifact.AssistantStartWorkOrder, featureartifact.AssistantChangeModels,
-		featureartifact.AssistantContinueWorkOrder, featureartifact.AssistantCloseWorkOrder,
+		featureartifact.AssistantContinueWorkOrder, featureartifact.AssistantRecoverWorkOrder,
+		featureartifact.AssistantCloseWorkOrder,
 		featureartifact.AssistantAddVisionItem:
 	default:
 		return "", nil
@@ -631,8 +634,6 @@ func (api *API) premiumModels(ctx context.Context, projectID string, action conv
 	return premium, nil
 }
 
-// applyContinueWorkOrder continues a work order whose run waits on a
-// blocker, as the Continue and Add guidance buttons do.
 // applySetUpPreview starts the "Set up preview" flow for the assistant: a
 // fix of the app's preview, or its setup when the repository has no compose
 // file yet. One that already runs is answered as it is.
@@ -654,46 +655,6 @@ func (api *API) applySetUpPreview(
 	}
 	return fmt.Sprintf("Setting the preview up in “%s” (%s); it merges once Commitarium's check shows the app runs.",
 		started.Title, started.ID), started.ID, true
-}
-
-func (api *API) applyContinueWorkOrder(
-	w http.ResponseWriter, r *http.Request, projectID string, action conversations.Action,
-) (string, bool) {
-	ctx := r.Context()
-	directed, ok := api.realWorkflow.(directedRecoveryWorkflow)
-	if !ok {
-		writeError(w, http.StatusServiceUnavailable, "recovery_unavailable", "continuing a work order needs real agents")
-		return "", false
-	}
-	stored, err := api.features.GetByID(ctx, projectID, action.WorkOrderID)
-	if err != nil {
-		writeConversationError(w, err)
-		return "", false
-	}
-	runs, err := api.execution.RunsForFeature(ctx, stored.ID)
-	if err != nil || len(runs) == 0 {
-		writeError(w, http.StatusConflict, "recovery_not_allowed", "the work order has no run to continue")
-		return "", false
-	}
-	latest := newestRun(runs)
-	if _, _, err := directed.RecoverBlockerWithDirective(ctx, latest.ID, runActionIDForKey("assistant-"+action.ID),
-		orchestration.RecoveryDirective{
-			Action: orchestration.RecoveryActionContinue, Message: action.Guidance, FromAssistant: true,
-		},
-	); err != nil {
-		switch {
-		case errors.Is(err, orchestration.ErrRecoveryNotAllowed):
-			writeError(w, http.StatusConflict, "recovery_not_allowed", "the work order is not waiting on a blocker")
-		default:
-			log.Printf("continue the assistant's work order %q: %v", stored.ID, err)
-			writeError(w, http.StatusInternalServerError, "internal_error", "internal server error")
-		}
-		return "", false
-	}
-	if action.Guidance != "" {
-		return fmt.Sprintf("Continued “%s” with guidance.", stored.Title), true
-	}
-	return fmt.Sprintf("Continued “%s”.", stored.Title), true
 }
 
 // assistantSettings turns an action's steps, agents, models, and tests into
