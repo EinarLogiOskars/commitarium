@@ -30,7 +30,7 @@ import { AssistantSettingsSection } from "./AssistantSettings";
 import { ModelTiersSection } from "./ModelTiers";
 import { trapFocus } from "./AppSettings";
 
-type AgentsTab = "accounts" | "assistant" | "models";
+type AgentsTab = "agents" | "assistant" | "models";
 import { ApiError } from "../api/client";
 import type { AgentProvider } from "../api/types";
 import { reloadAgents } from "./useAgents";
@@ -189,7 +189,7 @@ export function Agents({ onClose, focus }: { onClose: () => void; focus?: "assis
   // The agent just added goes straight on to signing in.
   const [added, setAdded] = useState<string | null>(null);
   const hasAgents = (profiles?.length ?? 0) > 0;
-  const [tab, setTab] = useState<AgentsTab>(focus === "assistant" ? "assistant" : "accounts");
+  const [tab, setTab] = useState<AgentsTab>(focus === "assistant" ? "assistant" : "agents");
   const cardRef = useRef<HTMLDivElement | null>(null);
   const tabRefs = useRef<Partial<Record<AgentsTab, HTMLButtonElement | null>>>({});
 
@@ -230,17 +230,17 @@ export function Agents({ onClose, focus }: { onClose: () => void; focus?: "assis
     };
   }, [refresh]);
 
-  // Accounts, the assistant, and the model guide each get a tab, laid out
+  // The agents, the assistant, and the model guide each get a tab, laid out
   // like Settings. Every panel stays mounted, so a sign-in in progress keeps
   // going while another tab is open.
   const tabs: { id: AgentsTab; label: string }[] = hasAgents
     ? [
-        { id: "accounts", label: "Accounts" },
+        { id: "agents", label: "Agents" },
         { id: "assistant", label: "Assistant" },
         { id: "models", label: "Models" },
       ]
-    : [{ id: "accounts", label: "Accounts" }];
-  const shown = tabs.some((t) => t.id === tab) ? tab : "accounts";
+    : [{ id: "agents", label: "Agents" }];
+  const shown = tabs.some((t) => t.id === tab) ? tab : "agents";
   const onTabKey = (e: React.KeyboardEvent, index: number) => {
     const last = tabs.length - 1;
     const next =
@@ -264,11 +264,12 @@ export function Agents({ onClose, focus }: { onClose: () => void; focus?: "assis
   };
 
   const panels: Record<AgentsTab, React.ReactNode> = {
-    accounts: (
+    agents: (
       <>
         <p className="muted">
-          Connect each agent to its Codex or Claude account. An agent signs in once and serves as
-          lead or reviewer; secrets go straight to a private volume and never touch the coordinator.
+          An agent is one of your AI accounts, named as you like: add one, choose its provider, then
+          connect it. It signs in once and can lead or review any work; its secrets go straight to a
+          private volume and never touch the coordinator.
         </p>
         <CliVersions />
 
@@ -279,9 +280,9 @@ export function Agents({ onClose, focus }: { onClose: () => void; focus?: "assis
             <div className="agents-empty">
               <strong>Add your first agent</strong>
               <p className="muted">
-                An agent is one of your AI accounts: a Claude or ChatGPT (Codex) subscription, or an
-                API key. Name it, choose which kind it is, then sign in. The assistant and all the
-                work it starts run on your agents.
+                An agent is one of your AI accounts, such as a Claude or ChatGPT (Codex)
+                subscription, or an API key. Name it, choose its provider, then connect it. The
+                assistant and all the work it starts run on your agents.
               </p>
             </div>
           ) : (
