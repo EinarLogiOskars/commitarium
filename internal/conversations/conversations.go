@@ -239,6 +239,7 @@ type Config struct {
 
 // ModelGuide is the official model guide merged with the user's overrides.
 type ModelGuide interface {
+	AsOf() string
 	RequiresApproval(ctx context.Context, model string) (bool, error)
 	Entries(ctx context.Context, extra []string) ([]modelguide.Entry, error)
 	MigrateAskBefore(ctx context.Context, families, models []string) error

@@ -756,7 +756,7 @@ func (api *API) assistantSettings(
 }
 
 var errIncompleteAssistantChoice = &choiceError{status: http.StatusBadRequest, code: "agents_not_chosen",
-	message: "name lead_agent and lead_model, and reviewer_agent and reviewer_model when the steps are full"}
+	message: "name lead_agent and lead_model, and reviewer_agent and reviewer_model when the steps have a reviewer"}
 
 func orDefault(value, fallback string) string {
 	if strings.TrimSpace(value) != "" {

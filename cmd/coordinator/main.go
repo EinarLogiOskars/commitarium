@@ -376,7 +376,10 @@ func run(ctx context.Context, coordinatorConfig config) error {
 					continue
 				}
 				for _, model := range listed.Models {
-					choices = append(choices, conversations.ModelChoice{Provider: listed.Provider, ID: model.ID, Display: model.DisplayName})
+					choices = append(choices, conversations.ModelChoice{
+						Provider: listed.Provider, ID: model.ID, Display: model.DisplayName,
+						Efforts: model.SupportedReasoningEfforts,
+					})
 				}
 			}
 			return choices
@@ -399,6 +402,7 @@ func run(ctx context.Context, coordinatorConfig config) error {
 					return reported
 				},
 				Settings: func(ctx context.Context) (conversations.Settings, error) { return settingsOf.Settings(ctx) },
+				Guide:    modelGuide,
 			},
 			Workers: func(agentID string) (workerhttp.Service, error) { return agentWorkers.Client(agentID) },
 			DefaultModel: func(ctx context.Context, provider project.AgentProvider) string {
