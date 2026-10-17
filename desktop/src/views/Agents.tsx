@@ -27,6 +27,7 @@ import {
 } from "../api/agents";
 import { resetLabel } from "./UsageLimitBanner";
 import { AssistantSettingsSection } from "./AssistantSettings";
+import { ModelTiersSection } from "./ModelTiers";
 import { ApiError } from "../api/client";
 import type { AgentProvider } from "../api/types";
 import { reloadAgents } from "./useAgents";
@@ -279,6 +280,8 @@ export function Agents({ onClose, focus }: { onClose: () => void; focus?: "assis
             <AssistantSettingsSection />
           </div>
         )}
+
+        {hasAgents && <ModelTiersSection />}
 
         <div className="modal__footer">
           <button className="ghost" onClick={onClose}>

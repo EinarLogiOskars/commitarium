@@ -142,8 +142,8 @@ stays within one provider (ADR-021).
   Premium overrides for matching catalog models, and default families the user
   removed into Frontier overrides; the setting is then ignored.
 - An override records the official tier it replaced. When a release changes
-  the official tier of an overridden model, the Agents page and inbox show one
-  notice per model ("The official guide now rates Opus 5 Strong; you have it
+  the official tier of an overridden model, the Agents page shows one notice
+  per model (the inbox lists only project work, so it stays out) ("The official guide now rates Opus 5 Strong; you have it
   as Frontier"), with Keep mine and Use official. Nothing else notifies.
 
 ## Effort
@@ -241,7 +241,7 @@ tab's settings on the right.
 | # | Commit | Contents | Depends on |
 | --- | --- | --- | --- |
 | G1 | `feat(coordinator): ship an official model guide` | `internal/modelguide` with the embedded guide, tiers, and `as_of`. Overrides table (migration): model ID, tier, official tier at the time, updated at. Merged view: `GET /api/v1/model-guide` (each entry with tier, note, source official/user/unrated); `PUT` and `DELETE /api/v1/model-guide/overrides/{model}`. Premium and unrated come from the merged guide instead of `ask_before`; migrate `ask_before` as above. Tests for merging, unrated, migration, and premium checks. Update `coordinator-api.md`. | — |
-| G2 | `feat(desktop): set model tiers on the Agents page` | Tier per model with reset; replaces "Ask before using". The changed-official-tier notice with Keep mine / Use official, on the Agents page and in the inbox. | G1 |
+| G2 | `feat(desktop): set model tiers on the Agents page` | Tier per model with reset; replaces "Ask before using". The changed-official-tier notice with Keep mine / Use official, on the Agents page. | G1 |
 | G3 | `feat(worker): pass reasoning effort per turn` | `effort` in the worker turn contract. Codex: pass it on the turn. Claude: report supported efforts in the catalog and pass the chosen one. Record effort with each attempt's usage (migration). Adapter and persistence tests; update `worker-api.md`. | — |
 | G4 | `feat(orchestration): choose models and effort per phase` | Runs store an optional planning model and effort per role, and an effort for the rest (migration). Empty planning model means the role's model. When the plan is confirmed, the coordinator switches each role at its next turn (ADR-021's mechanism, recorded as a model change). `create_work_order`, `start_work_order`, `change_models`, and the Start API accept the new fields; the Start form adds "Different model for planning" per role, collapsed by default. Recovery follows the phase the run is in. | G3 |
 | G5 | `feat(coordinator): cap the assistant's effort` | Assistant setting for the highest effort, default `high`; the coordinator refuses an assistant choice above it, with a reason. Settings UI. | G3 |

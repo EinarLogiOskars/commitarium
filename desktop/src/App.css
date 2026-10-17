@@ -3806,24 +3806,46 @@ button.danger:not(.ghost) {
 .assistant-settings__row .field {
   flex: 1 1 200px;
 }
-.assistant-settings__families {
+/* The model guide's tiers, on the Agents page (ADR-031). */
+.model-tiers {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+.model-tiers h3 {
+  margin: 0 0 4px;
+}
+.model-tiers__changed {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 6px;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 8px 0;
 }
-.assistant-settings__family {
-  display: inline-flex;
+.model-tiers__list {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+}
+.model-tiers__row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto 3.5em;
   align-items: center;
-  gap: 4px;
-  padding: 2px 4px 2px 10px;
-  border-radius: 999px;
-  border: 1px solid var(--border);
-  font-size: 12px;
+  gap: 12px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
 }
-.assistant-settings__family .linkish {
+.model-tiers__row:last-child {
+  border-bottom: none;
+}
+.model-tiers__name {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.model-tiers__name .note {
   margin: 0;
-  padding: 0 4px;
 }
 
 /* The assistant's drawer and its button, over the app. */

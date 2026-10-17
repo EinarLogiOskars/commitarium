@@ -9,14 +9,14 @@ import { useAgents } from "./useAgents";
 import { useModels } from "./useModels";
 import { defaultModel } from "./workChoice";
 
-// The assistant's agent and model, for the whole app, and the model families
-// it must ask before using (ASSISTANT_PLAN.md decisions 7 and 14). One
-// subscription can drive both the assistant and the dev team.
+// The assistant's agent and model, for the whole app (ASSISTANT_PLAN.md
+// decision 7). One subscription can drive both the assistant and the dev team.
+// Which models it must ask before using is the model guide's Premium tier
+// (ADR-031), set in the Models section.
 export function AssistantSettingsSection() {
   const agents = useAgents();
   const { modelsFor } = useModels();
   const [settings, setSettings] = useState<Settings | null>(null);
-  const [family, setFamily] = useState("");
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -47,20 +47,15 @@ export function AssistantSettingsSection() {
       setSaving(false);
     }
   };
-  const addFamily = () => {
-    const name = family.trim().toLowerCase();
-    if (name && !settings.ask_before.includes(name))
-      update({ ask_before: [...settings.ask_before, name] });
-    setFamily("");
-  };
 
   return (
     <section className="assistant-settings">
       <h3>Assistant</h3>
       <p className="muted note">
         The agent the assistant runs on, for every project. It shares that agent&apos;s usage limit
-        with any work orders on it. The assistant chooses the agents and models of the work it
-        starts, preferring the agent with the most usage left.
+        with any work orders on it. It writes the vision and every work order, so a Frontier model
+        pays off here. The assistant chooses the agents and models of the work it starts, preferring
+        the agent with the most usage left.
       </p>
       <div className="assistant-settings__row">
         <label className="field">
@@ -99,40 +94,6 @@ export function AssistantSettingsSection() {
             ))}
           </select>
         </label>
-      </div>
-      <div className="field">
-        <span>Ask before using</span>
-        <p className="muted note">
-          The assistant can only use models whose names contain these after you approve each use.
-        </p>
-        <div className="assistant-settings__families">
-          {settings.ask_before.map((name) => (
-            <span key={name} className="assistant-settings__family">
-              {name}
-              <button
-                className="linkish"
-                onClick={() =>
-                  update({ ask_before: settings.ask_before.filter((f) => f !== name) })
-                }
-                aria-label={`Stop asking before ${name}`}
-              >
-                ×
-              </button>
-            </span>
-          ))}
-          <input
-            type="text"
-            value={family}
-            placeholder="Add a family, e.g. opus"
-            onChange={(e) => setFamily(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") {
-                e.preventDefault();
-                addFamily();
-              }
-            }}
-          />
-        </div>
       </div>
       {error && <div className="banner banner--error">{error}</div>}
       <div className="row">
