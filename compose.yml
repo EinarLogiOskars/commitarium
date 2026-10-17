@@ -67,11 +67,16 @@ services:
       COMMITARIUM_CODEX_MODEL: ${COMMITARIUM_CODEX_MODEL:-}
       COMMITARIUM_CODEX_AVAILABLE_MODELS: ${COMMITARIUM_CODEX_AVAILABLE_MODELS:-}
       # Docker remains the boundary for write-capable turns. Read-only turns
-      # additionally use Codex's bwrap sandbox, enabled below without granting
-      # SYS_ADMIN, privileged mode, or access to the Docker socket.
+      # additionally use Codex's bwrap sandbox. Its seccomp profile is Docker's
+      # default plus the namespace syscalls bwrap needs (see
+      # scripts/generate-codex-seccomp.py), without SYS_ADMIN, privileged mode,
+      # or access to the Docker socket.
       COMMITARIUM_CODEX_SANDBOX: danger-full-access
+    cap_drop:
+      - ALL
     security_opt:
-      - seccomp=unconfined
+      - seccomp=docker/codex-seccomp.json
+      - no-new-privileges:true
     expose:
       - "8081"
 
@@ -91,6 +96,10 @@ services:
       # The unprivileged container, scoped mounts, and internal forge are the
       # security boundary for this profile.
       COMMITARIUM_CLAUDE_PERMISSION_MODE: bypassPermissions
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
     expose:
       - "8081"
 
