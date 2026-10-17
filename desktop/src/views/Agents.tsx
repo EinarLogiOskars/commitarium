@@ -268,8 +268,7 @@ export function Agents({ onClose, focus }: { onClose: () => void; focus?: "assis
       <>
         <p className="muted">
           An agent is one of your AI accounts, named as you like: add one, choose its provider, then
-          connect it. It signs in once and can lead or review any work; its secrets go straight to a
-          private volume and never touch the coordinator.
+          connect it. It signs in once and can lead or review any work.
         </p>
         <CliVersions />
 
