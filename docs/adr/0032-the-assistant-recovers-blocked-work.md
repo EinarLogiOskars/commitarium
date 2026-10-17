@@ -1,6 +1,6 @@
 # ADR-032: The assistant recovers blocked work by what failed
 
-- Status: Proposed (amends [ADR-017](0017-pause-work-orders-instead-of-failing.md) and [ADR-023](0023-autopilot-acts-only-on-a-goal-the-user-set.md))
+- Status: Accepted (amends [ADR-017](0017-pause-work-orders-instead-of-failing.md) and [ADR-023](0023-autopilot-acts-only-on-a-goal-the-user-set.md))
 - Date: 2026-10-17
 
 ## Context
@@ -31,8 +31,9 @@ fingerprint, caps recoveries per fingerprint and per work order, and treats
 Back to Ready on work with commits as needing the user's approval.
 
 **The user hears only what is theirs.** When recovery runs out, the inbox
-says in plain words that Commitarium could not finish the work order and
-offers one action (Report or Start over), instead of a technical card.
+says in plain words that Commitarium could not finish the work order, and the
+work order offers a report to copy (what failed and what was tried) beside
+Back to Ready, instead of a technical card.
 
 ## Consequences
 

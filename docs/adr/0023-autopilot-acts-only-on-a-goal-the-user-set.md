@@ -1,6 +1,6 @@
 # ADR-023: Autopilot acts only on a goal the user set
 
-- Status: Accepted
+- Status: Accepted (amended by [ADR-032](0032-the-assistant-recovers-blocked-work.md): autopilot recovers blocked work by the failure, bounded per failure, and leaves Back to Ready to the user)
 - Date: 2026-10-12
 
 ## Context

@@ -1782,7 +1782,20 @@ blocker carrying `"retrying": {"cause", "retry", "of", "due_at"}`, and its
 attention item is `retrying`, informational. A retry resumes the same
 conversation in a fenced successor attempt; recovery's `continue` retries at
 once and starts the count afresh. Once the retries are spent the run blocks as
-before, its reason saying how many ran. Failed checks, refused results, an
+before, its reason saying how many ran.
+
+**Blockers and recoveries (ADR-032).** A run waiting on a blocker carries
+`"blocker": {"kind", "check", "detail", "fingerprint", "recorded_at"}`. `kind`
+is `agent` (the agent gave up, broke something, misunderstood, or skipped a
+step, such as its audit comment), `check` (a coordinator check of git or
+Forgejo failed), `environment` (an interrupted turn, a login, no desktop),
+`limit`, or `other`. `fingerprint` recognises the same failure when it
+repeats. `recoveries` lists each recovery chosen for the run (`how`,
+`guidance`, `from_assistant`, `fingerprint`, `created_at`); automatic retries
+are not listed. `recovery_exhausted` is set once the blocker's failure has
+had four recoveries, the run eight, or a `check` failure still blocks after a
+fresh conversation; its attention item is then `recovery_exhausted`,
+actionable, titled "Commitarium couldn't finish this", with a plain reason. Failed checks, refused results, an
 agent's question, usage limits, and expired logins are never retried this way.
 `GET /api/v1/agents/usage` answers `{"agents": [{"agent", "windows": [{"name",
 "used_percent", "resets_at", "limited"}], "observed_at"}]}`: each connected
@@ -2629,19 +2642,26 @@ actions, and its notes.
   edit.
 - An action is `{"id", "type": "create_work_order"|"start_work_order"|
   "change_models"|"add_vision_item"|"start_autopilot"|"continue_work_order"|
-  "close_work_order"|"create_app"|"set_up_preview"|"write_vision"|"set_up_stack", "priority", "reason",
+  "recover_work_order"|"close_work_order"|"create_app"|"set_up_preview"|"write_vision"|"set_up_stack", "priority", "reason",
   "title", "description", "vision_item_id",
   "steps", "independent_tests", "lead_agent", "lead_model", "reviewer_agent",
-  "reviewer_model", "work_order_id", "when", "guidance", "after", "status", "premium",
+  "reviewer_model", "work_order_id", "when", "how", "guidance", "after", "status", "premium",
   "result", "auto_tried", "queued"}`. `write_vision` has the vision written on the
   assistant's agent from `description` (`409 vision_exists` when there is one);
   `set_up_stack` detects the stack of the code, or sets the project up on the
   stack its vision recommends (`409 stack_unknown` without either). `after`,
   on a create or start, names a work order ID or another action's title it
-  follows: autopilot holds it (`queued`) until that work has merged. `continue_work_order` continues the work order's
-  newest run when it waits on a blocker, with `guidance` for its agents, as
-  the run's Continue and Add guidance do (`409 recovery_not_allowed`
-  otherwise). `close_work_order` closes the work order (see Closing a work
+  follows: autopilot holds it (`queued`) until that work has merged. `recover_work_order` recovers the work order's
+  newest run when it waits on a blocker, the way `how` names (ADR-032):
+  `recheck`, `continue` (with `guidance` for its agents), `message` (`guidance`
+  is a message to the lead, queued as an intervention), `fresh_conversation`
+  (with `guidance`), or `back_to_ready`. `continue_work_order` is the same with
+  `how: continue`. The coordinator refuses, with `409 recovery_refused` and a
+  reason, a `how` already tried on the same failure (the blocker's
+  fingerprint), or any recovery once that failure has had four or the run
+  eight; `409 recovery_not_allowed` when the run is not waiting on a blocker.
+  Autopilot recovers a work order at most eight times across its blockers and
+  always leaves `back_to_ready` to the user. `close_work_order` closes the work order (see Closing a work
   order). `create_app` is the only action at the top level (`commitarium`):
   approving it creates a project as an app named by `title`, launches it, and
   has the vision written from `description`; the action's `project_id` names
