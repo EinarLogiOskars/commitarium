@@ -157,3 +157,21 @@ func TestMigrateAskBeforeTurnsFamiliesIntoOverrides(t *testing.T) {
 		}
 	}
 }
+
+func TestPricesCostTurns(t *testing.T) {
+	service, err := NewService(&memoryStore{overrides: map[string]Override{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	price, ok := service.PriceOf("gpt-6.1-sol")
+	if !ok || service.PricesAsOf() == "" {
+		t.Fatalf("price = %+v %t", price, ok)
+	}
+	// 1M uncached input at $2, 1M cached at $0.10, 1M output at $10.
+	if got := price.Cost(1_000_000, 1_000_000, 0, 1_000_000); got < 12.0999 || got > 12.1001 {
+		t.Fatalf("cost = %v", got)
+	}
+	if _, ok := service.PriceOf("claude-opus-5-5"); ok {
+		t.Fatal("Claude reports its own cost; the guide has no price for it")
+	}
+}

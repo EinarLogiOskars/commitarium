@@ -4853,7 +4853,11 @@ func (starter *RemoteLeadStarter) recordUsage(
 	err := starter.usage.RecordAttemptUsage(ctx, execution.AttemptUsage{
 		SessionID: reference.SessionID, AttemptID: reference.AttemptID,
 		Model: assignment.Model, Effort: assignment.Effort,
-		Usage:      execution.TokenUsage(*usage),
+		Billing: usage.Billing, CostUSD: usage.CostUSD,
+		Usage: execution.TokenUsage{
+			InputTokens: usage.InputTokens, CachedInputTokens: usage.CachedInputTokens,
+			CacheWriteTokens: usage.CacheWriteTokens, OutputTokens: usage.OutputTokens,
+		},
 		RecordedAt: time.Now().UTC(),
 	})
 	if err != nil {

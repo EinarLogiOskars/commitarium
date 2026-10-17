@@ -704,8 +704,17 @@ func TestCodexAppServerHelper(t *testing.T) {
 	}
 	helpNotify(writer, "thread/started", map[string]any{"thread": map[string]any{"id": threadID}})
 
+	accountRequest := helperRead(scanner)
+	if accountRequest.Method != "account/read" || accountRequest.ID != 3 {
+		os.Exit(97)
+	}
+	helperWrite(writer, map[string]any{
+		"id":     accountRequest.ID,
+		"result": map[string]any{"account": map[string]any{"type": "apiKey"}, "requiresOpenaiAuth": true},
+	})
+
 	turnRequest := helperRead(scanner)
-	if turnRequest.Method != "turn/start" || turnRequest.ID != 3 ||
+	if turnRequest.Method != "turn/start" || turnRequest.ID != 4 ||
 		!helperTurnPromptMatches(turnRequest.Params, os.Getenv(helperPromptEnvironment)) {
 		os.Exit(86)
 	}
@@ -867,12 +876,12 @@ func TestCodexAppServerHelper(t *testing.T) {
 		helperWaitForever()
 	case "controls":
 		steer := helperRead(scanner)
-		if steer.Method != "turn/steer" || steer.ID != 4 || !helperSteerMatches(steer.Params) {
+		if steer.Method != "turn/steer" || steer.ID != 5 || !helperSteerMatches(steer.Params) {
 			os.Exit(87)
 		}
 		helperWrite(writer, map[string]any{"id": steer.ID, "result": map[string]any{"turnId": "turn_test"}})
 		interrupt := helperRead(scanner)
-		if interrupt.Method != "turn/interrupt" || interrupt.ID != 5 {
+		if interrupt.Method != "turn/interrupt" || interrupt.ID != 6 {
 			os.Exit(88)
 		}
 		helperWrite(writer, map[string]any{"id": interrupt.ID, "result": map[string]any{}})

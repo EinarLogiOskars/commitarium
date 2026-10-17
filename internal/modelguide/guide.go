@@ -53,12 +53,31 @@ type Model struct {
 	ID   string `json:"id"`
 	Tier Tier   `json:"tier"`
 	Note string `json:"note"`
+	// Price is its API price, for providers whose CLI does not report a
+	// turn's cost (Codex); nil when the guide has none.
+	Price *Price `json:"price,omitempty"`
+}
+
+// Price is a model's API price in US dollars per million tokens.
+type Price struct {
+	Input       float64 `json:"input"`
+	CachedInput float64 `json:"cached_input"`
+	Output      float64 `json:"output"`
+}
+
+// Cost prices a turn's tokens. Input excludes cached reads; cache writes are
+// priced as input.
+func (price Price) Cost(input, cachedInput, cacheWrite, output int64) float64 {
+	return (float64(input+cacheWrite)*price.Input + float64(cachedInput)*price.CachedInput +
+		float64(output)*price.Output) / 1_000_000
 }
 
 // Guide is the official model guide.
 type Guide struct {
-	AsOf   string  `json:"as_of"`
-	Models []Model `json:"models"`
+	AsOf string `json:"as_of"`
+	// PricesAsOf dates the prices.
+	PricesAsOf string  `json:"prices_as_of"`
+	Models     []Model `json:"models"`
 }
 
 //go:embed guide.json
@@ -83,8 +102,20 @@ func mustParse(contents []byte) Guide {
 
 // Official returns the official guide.
 func Official() Guide {
-	return Guide{AsOf: official.AsOf, Models: slices.Clone(official.Models)}
+	return Guide{AsOf: official.AsOf, PricesAsOf: official.PricesAsOf, Models: slices.Clone(official.Models)}
 }
+
+// PriceOf returns a model's API price from the official guide.
+func (service *Service) PriceOf(id string) (Price, bool) {
+	model, ok := service.guide.model(id)
+	if !ok || model.Price == nil {
+		return Price{}, false
+	}
+	return *model.Price, true
+}
+
+// PricesAsOf dates the guide's prices.
+func (service *Service) PricesAsOf() string { return service.guide.PricesAsOf }
 
 func (guide Guide) model(id string) (Model, bool) {
 	for _, model := range guide.Models {

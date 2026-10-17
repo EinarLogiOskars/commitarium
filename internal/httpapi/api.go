@@ -294,6 +294,7 @@ type API struct {
 	visions            VisionService
 	conversations      ConversationService
 	modelGuide         ModelGuideService
+	projectUsage       ProjectUsageService
 	agentUsage         AgentUsageService
 	marketplace        MarketplaceService
 	releases           ReleaseService
@@ -414,7 +415,11 @@ func newAPI(
 	var releaseService ReleaseService
 	var installService InstallService
 	var modelGuide ModelGuideService
+	var projectUsage ProjectUsageService
 	for _, extra := range extras {
+		if typed, ok := extra.(ProjectUsageService); ok {
+			projectUsage = typed
+		}
 		switch typed := extra.(type) {
 		case ModelGuideService:
 			modelGuide = typed
@@ -473,6 +478,7 @@ func newAPI(
 		visions:            visions,
 		conversations:      assistantConversations,
 		modelGuide:         modelGuide,
+		projectUsage:       projectUsage,
 		agentUsage:         agentUsage,
 		marketplace:        marketplaceService,
 		releases:           releaseService,
@@ -735,6 +741,9 @@ func newAPI(
 			"GET /api/v1/projects/{projectID}/features/{id}/usage",
 			api.getFeatureUsageHandler,
 		)
+	}
+	if projectUsage != nil {
+		mux.HandleFunc("GET /api/v1/projects/{projectID}/usage", api.getProjectUsageHandler)
 	}
 	if workspaces != nil {
 		mux.HandleFunc(

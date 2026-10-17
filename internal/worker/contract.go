@@ -227,7 +227,21 @@ type TokenUsage struct {
 	CachedInputTokens int64
 	CacheWriteTokens  int64
 	OutputTokens      int64
+	// Billing is how the account pays: per token with an API key, or by
+	// subscription; empty when the provider did not say.
+	Billing Billing
+	// CostUSD is the provider's own cost for the turn, when it reports one
+	// (Claude Code does, at API prices, whichever way the account pays).
+	CostUSD *float64
 }
+
+// Billing is how a provider account pays for its turns.
+type Billing string
+
+const (
+	BillingAPIKey       Billing = "api_key"
+	BillingSubscription Billing = "subscription"
+)
 
 type ToolchainProposal struct {
 	Tools    map[string]string

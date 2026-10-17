@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   deleteFeature,
   returnToReady,
@@ -24,17 +24,8 @@ import { PhaseStepper, currentPhaseIndex } from "./PhaseStepper";
 import { phaseIntervals, type Interval } from "./phaseWindows";
 import { WORK } from "../vocab";
 import { askAssistantAbout } from "../attention/askAssistant";
-import { useModelName } from "./useModelName";
-import type {
-  Feature,
-  FeatureUsage,
-  PhaseUsage,
-  Run,
-  TokenUsage,
-  WaitKind,
-  WorkflowEvent,
-  WorkKind,
-} from "../api/types";
+import { formatTokens, readTokens, UsageTable, WorkOrderCost } from "./usage";
+import type { Feature, FeatureUsage, Run, WaitKind, WorkflowEvent, WorkKind } from "../api/types";
 
 const POLL_MS = 2500;
 
@@ -456,23 +447,6 @@ export function FeatureView({
   );
 }
 
-// Input is everything the provider read: fresh, cached, and cache writes.
-// Cached reads are listed separately because they are much cheaper.
-const readTokens = (u: TokenUsage) => u.input_tokens + u.cached_input_tokens + u.cache_write_tokens;
-
-const PHASE_LABELS: Record<string, string> = {
-  clarify: "Clarify",
-  plan: "Plan",
-  plan_approval: "Plan approval",
-  implement: "Implement",
-  acceptance_tests: "Acceptance tests",
-  review: "Review",
-  correction: "Correction",
-  readiness: "Readiness",
-  intervention: "Your messages",
-  other: "Other",
-};
-
 function UsageLine({ usage }: { usage: FeatureUsage }) {
   const [open, setOpen] = useState(false);
   const phases = usage.phases ?? [];
@@ -502,58 +476,6 @@ function UsageLine({ usage }: { usage: FeatureUsage }) {
       {open && <UsageTable phases={phases} roles={usage.roles.map((r) => r.role)} />}
     </div>
   );
-}
-
-function UsageTable({ phases, roles }: { phases: PhaseUsage[]; roles: string[] }) {
-  const modelName = useModelName();
-  // Phases arrive in workflow order; keep the first occurrence of each.
-  const order = phases.map((p) => p.phase).filter((p, i, all) => all.indexOf(p) === i);
-  const cell = (phase: string, role: string) => {
-    const u = phases.find((p) => p.phase === phase && p.role === role);
-    if (!u) return <td className="muted">—</td>;
-    return (
-      <td>
-        {formatTokens(readTokens(u))} in
-        <span className="muted"> ({formatTokens(u.cached_input_tokens)} cached)</span> ·{" "}
-        {formatTokens(u.output_tokens)} out
-        {(u.models ?? []).map((m) => (
-          <span key={`${m.model}:${m.effort ?? ""}`} className="usage-table__model muted">
-            {modelName(m.model)}
-            {m.effort ? ` · ${m.effort}` : ""}
-            {(u.models ?? []).length > 1 ? ` · ${formatTokens(readTokens(m))} in` : ""}
-          </span>
-        ))}
-      </td>
-    );
-  };
-  return (
-    <table className="usage-table">
-      <thead>
-        <tr>
-          <th>Phase</th>
-          {roles.map((r) => (
-            <th key={r}>{r}</th>
-          ))}
-        </tr>
-      </thead>
-      <tbody>
-        {order.map((phase) => (
-          <tr key={phase}>
-            <td>{PHASE_LABELS[phase] ?? phase}</td>
-            {roles.map((r) => (
-              <Fragment key={r}>{cell(phase, r)}</Fragment>
-            ))}
-          </tr>
-        ))}
-      </tbody>
-    </table>
-  );
-}
-
-function formatTokens(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
-  return String(n);
 }
 
 // The coordinator's reason while the lead brings main into approved work
@@ -707,15 +629,18 @@ function body(
   }
   // Merge — PR status + the human merge gate.
   return (
-    <MergeView
-      projectId={projectId}
-      featureId={feature.id}
-      runId={run.id}
-      state={feature.state}
-      live={live}
-      onAdvanced={reload}
-      onOpenValidation={onOpenValidation}
-    />
+    <>
+      <MergeView
+        projectId={projectId}
+        featureId={feature.id}
+        runId={run.id}
+        state={feature.state}
+        live={live}
+        onAdvanced={reload}
+        onOpenValidation={onOpenValidation}
+      />
+      <WorkOrderCost projectId={projectId} featureId={feature.id} />
+    </>
   );
 }
 

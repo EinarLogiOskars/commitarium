@@ -205,11 +205,11 @@ func (s *AssistantStore) RecordAssistantUsage(
 	if _, err := s.db.ExecContext(
 		ctx,
 		`INSERT INTO assistant_turn_usage
-		 (session_id, attempt_id, input_tokens, cached_input_tokens, cache_write_tokens, output_tokens, recorded_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)
+		 (session_id, attempt_id, input_tokens, cached_input_tokens, cache_write_tokens, output_tokens, recorded_at, billing, cost_usd)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT (session_id, attempt_id) DO NOTHING`,
 		sessionID, attemptID, usage.InputTokens, usage.CachedInputTokens,
-		usage.CacheWriteTokens, usage.OutputTokens, formatExecutionTime(recordedAt),
+		usage.CacheWriteTokens, usage.OutputTokens, formatExecutionTime(recordedAt), usage.Billing, usage.CostUSD,
 	); err != nil {
 		return fmt.Errorf("record assistant token usage: %w", err)
 	}

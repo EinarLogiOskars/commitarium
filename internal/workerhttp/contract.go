@@ -235,6 +235,11 @@ type TokenUsage struct {
 	CachedInputTokens int64 `json:"cached_input_tokens"`
 	CacheWriteTokens  int64 `json:"cache_write_tokens"`
 	OutputTokens      int64 `json:"output_tokens"`
+	// Billing is "api_key" or "subscription" when the provider says how the
+	// account pays; CostUSD the provider's own cost for the turn, when it
+	// reports one.
+	Billing string   `json:"billing,omitempty"`
+	CostUSD *float64 `json:"cost_usd,omitempty"`
 }
 
 type ToolchainProposal struct {

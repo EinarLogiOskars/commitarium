@@ -366,3 +366,36 @@ func TestTheModelGuideDecidesApprovalsAndMigratesFamilies(t *testing.T) {
 		t.Fatalf("saved = %+v", stored)
 	}
 }
+
+type chatUsageStub struct{ recorded []ChatUsage }
+
+func (stub *chatUsageStub) RecordAssistantChatUsage(_ context.Context, usage ChatUsage) error {
+	stub.recorded = append(stub.recorded, usage)
+	return nil
+}
+
+// Each finished assistant turn's usage is recorded under its scope, so a
+// project's cost includes the assistant (ADR-031).
+func TestAFinishedTurnRecordsItsUsage(t *testing.T) {
+	service, worker := newTestService(t)
+	recorder := &chatUsageStub{}
+	service.config.ChatUsage = recorder
+	if _, err := service.Send(t.Context(), "prj_test", "Hi", "msg-1"); err != nil {
+		t.Fatal(err)
+	}
+	worker.finish(workerhttp.TerminalResult{
+		Outcome: workerhttp.OutcomeCompleted, Disposition: workerhttp.DispositionSucceeded, Summary: "Hello.",
+		Usage: &workerhttp.TokenUsage{InputTokens: 12, OutputTokens: 3, Billing: "subscription"},
+	})
+	if _, err := service.Get(t.Context(), "prj_test"); err != nil {
+		t.Fatal(err)
+	}
+	if len(recorder.recorded) == 0 {
+		t.Fatal("the turn's usage was not recorded")
+	}
+	got := recorder.recorded[0]
+	if got.Scope != "prj_test" || got.Agent != "codex" || got.Model != "codex-default" ||
+		got.Usage.InputTokens != 12 || got.Usage.Billing != "subscription" || got.AttemptID == "" {
+		t.Fatalf("recorded = %+v", got)
+	}
+}

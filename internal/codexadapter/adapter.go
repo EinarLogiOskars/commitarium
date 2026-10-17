@@ -388,6 +388,7 @@ func (adapter *Adapter) launch(
 		adapter.eventBuffer,
 		request.OutputContract,
 	)
+	providerSession.setBilling(readBilling(operationCtx, client))
 	var turnStarted turnResponse
 	if err := client.request(operationCtx, "turn/start", turnStartParams{
 		ThreadID:     threadID,
@@ -421,4 +422,31 @@ func (adapter *Adapter) sandboxFor(access worker.WorkspaceAccess) string {
 
 func validSandbox(value string) bool {
 	return value == "read-only" || value == "workspace-write" || value == "danger-full-access"
+}
+
+type accountReadResponse struct {
+	Account *struct {
+		Type string `json:"type"`
+	} `json:"account"`
+}
+
+// readBilling asks the App Server how the account pays: "apiKey" is billed
+// per token, "chatgpt" by subscription. It is advisory: a failure, or another
+// account type, leaves it unknown.
+func readBilling(ctx context.Context, client *protocolClient) worker.Billing {
+	var response accountReadResponse
+	if err := client.request(ctx, "account/read", struct{}{}, &response); err != nil || response.Account == nil {
+		return ""
+	}
+	return billingOf(response.Account.Type)
+}
+
+func billingOf(accountType string) worker.Billing {
+	switch accountType {
+	case "apiKey":
+		return worker.BillingAPIKey
+	case "chatgpt":
+		return worker.BillingSubscription
+	}
+	return ""
 }

@@ -386,6 +386,16 @@ func (result TerminalResult) Validate() error {
 		result.Usage.CacheWriteTokens < 0 || result.Usage.OutputTokens < 0) {
 		return invalid("token usage cannot be negative")
 	}
+	if result.Usage != nil {
+		switch result.Usage.Billing {
+		case "", "api_key", "subscription":
+		default:
+			return invalid("billing %q is not api_key or subscription", result.Usage.Billing)
+		}
+		if result.Usage.CostUSD != nil && *result.Usage.CostUSD < 0 {
+			return invalid("cost cannot be negative")
+		}
+	}
 	switch result.Outcome {
 	case OutcomeCompleted:
 		if !result.Disposition.IsValid() {

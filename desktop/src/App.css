@@ -4618,3 +4618,32 @@ select:focus {
     white-space: nowrap;
   }
 }
+
+/* What a work order or project cost (ADR-031). */
+.panel.cost {
+  margin-top: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.cost__parts dd .muted {
+  font-size: 12px;
+}
+.cost__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+}
+.cost__list li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+.cost__list li .linkish {
+  text-align: left;
+  padding: 0;
+}

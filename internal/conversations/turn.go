@@ -183,6 +183,16 @@ func (service *Service) refresh(ctx context.Context, stored record) (record, err
 		stored.ProviderSessionID = attempt.ProviderSessionID
 	}
 	now := service.now()
+	if attempt.State == workerhttp.AttemptStateTerminal && attempt.Result != nil && attempt.Result.Usage != nil &&
+		service.config.ChatUsage != nil {
+		// Accounting only: a failure is logged and never blocks the turn.
+		if err := service.config.ChatUsage.RecordAssistantChatUsage(ctx, ChatUsage{
+			Scope: stored.Scope, AttemptID: stored.AttemptID, Agent: stored.Agent, Model: stored.Model,
+			Usage: *attempt.Result.Usage, RecordedAt: now,
+		}); err != nil {
+			log.Printf("record the assistant's usage for %s: %v", stored.AttemptID, err)
+		}
+	}
 	note := func(text string) {
 		stored.Messages = append(stored.Messages, Message{
 			ID: messageID(stored, len(stored.Messages)), Role: "event", Text: text, OccurredAt: now,

@@ -16,13 +16,13 @@ func (s *ExecutionStore) RecordAttemptUsage(ctx context.Context, usage execution
 	if _, err := s.db.ExecContext(
 		ctx,
 		`INSERT INTO attempt_token_usage
-		 (session_id, attempt_id, input_tokens, cached_input_tokens, cache_write_tokens, output_tokens, recorded_at, model, effort)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 (session_id, attempt_id, input_tokens, cached_input_tokens, cache_write_tokens, output_tokens, recorded_at, model, effort, billing, cost_usd)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT (session_id, attempt_id) DO NOTHING`,
 		usage.SessionID, usage.AttemptID,
 		usage.Usage.InputTokens, usage.Usage.CachedInputTokens,
 		usage.Usage.CacheWriteTokens, usage.Usage.OutputTokens,
-		formatExecutionTime(usage.RecordedAt), usage.Model, usage.Effort,
+		formatExecutionTime(usage.RecordedAt), usage.Model, usage.Effort, usage.Billing, usage.CostUSD,
 	); err != nil {
 		return fmt.Errorf("record attempt token usage: %w", err)
 	}
@@ -36,6 +36,7 @@ func (s *ExecutionStore) FeatureAttemptUsage(ctx context.Context, featureID stri
 	rows, err := s.db.QueryContext(
 		ctx,
 		`SELECT sessions.role, usage.session_id, usage.attempt_id, usage.model, usage.effort,
+		        usage.billing, usage.cost_usd,
 		        usage.input_tokens, usage.cached_input_tokens,
 		        usage.cache_write_tokens, usage.output_tokens
 		   FROM attempt_token_usage AS usage
@@ -43,7 +44,8 @@ func (s *ExecutionStore) FeatureAttemptUsage(ctx context.Context, featureID stri
 		   JOIN runs ON runs.id = sessions.run_id
 		  WHERE runs.feature_id = ?
 		 UNION ALL
-		 SELECT 'assistant', usage.session_id, usage.attempt_id, '', '',
+		 SELECT 'assistant', usage.session_id, usage.attempt_id, assistant_sessions.model, '',
+		        usage.billing, usage.cost_usd,
 		        usage.input_tokens, usage.cached_input_tokens,
 		        usage.cache_write_tokens, usage.output_tokens
 		   FROM assistant_turn_usage AS usage
@@ -61,6 +63,7 @@ func (s *ExecutionStore) FeatureAttemptUsage(ctx context.Context, featureID stri
 		var attempt execution.RoleAttemptUsage
 		if err := rows.Scan(
 			&attempt.Role, &attempt.SessionID, &attempt.AttemptID, &attempt.Model, &attempt.Effort,
+			&attempt.Billing, &attempt.CostUSD,
 			&attempt.Usage.InputTokens, &attempt.Usage.CachedInputTokens,
 			&attempt.Usage.CacheWriteTokens, &attempt.Usage.OutputTokens,
 		); err != nil {
@@ -70,6 +73,59 @@ func (s *ExecutionStore) FeatureAttemptUsage(ctx context.Context, featureID stri
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("read feature token usage: %w", err)
+	}
+	return usage, nil
+}
+
+// ProjectAttemptUsage lists recorded usage across a project: every work
+// order's runs and clarification, and the assistant's own conversation turns
+// in the project.
+func (s *ExecutionStore) ProjectAttemptUsage(ctx context.Context, projectID string) ([]execution.ProjectAttemptUsage, error) {
+	rows, err := s.db.QueryContext(
+		ctx,
+		`SELECT runs.feature_id, sessions.role, usage.session_id, usage.attempt_id, usage.model, usage.effort,
+		        usage.billing, usage.cost_usd,
+		        usage.input_tokens, usage.cached_input_tokens, usage.cache_write_tokens, usage.output_tokens
+		   FROM attempt_token_usage AS usage
+		   JOIN sessions ON sessions.id = usage.session_id
+		   JOIN runs ON runs.id = sessions.run_id
+		   JOIN features ON features.id = runs.feature_id
+		  WHERE features.project_id = ?
+		 UNION ALL
+		 SELECT assistant_sessions.feature_id, 'assistant', usage.session_id, usage.attempt_id, assistant_sessions.model, '',
+		        usage.billing, usage.cost_usd,
+		        usage.input_tokens, usage.cached_input_tokens, usage.cache_write_tokens, usage.output_tokens
+		   FROM assistant_turn_usage AS usage
+		   JOIN assistant_sessions ON assistant_sessions.id = usage.session_id
+		  WHERE assistant_sessions.project_id = ?
+		 UNION ALL
+		 SELECT '', 'assistant', usage.scope, usage.attempt_id, usage.model, '',
+		        usage.billing, usage.cost_usd,
+		        usage.input_tokens, usage.cached_input_tokens, usage.cache_write_tokens, usage.output_tokens
+		   FROM assistant_chat_usage AS usage
+		  WHERE usage.scope = ?
+		  ORDER BY 1, 3, 4`,
+		projectID, projectID, projectID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list project token usage: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	usage := make([]execution.ProjectAttemptUsage, 0)
+	for rows.Next() {
+		var attempt execution.ProjectAttemptUsage
+		if err := rows.Scan(
+			&attempt.FeatureID, &attempt.Role, &attempt.SessionID, &attempt.AttemptID, &attempt.Model, &attempt.Effort,
+			&attempt.Billing, &attempt.CostUSD,
+			&attempt.Usage.InputTokens, &attempt.Usage.CachedInputTokens,
+			&attempt.Usage.CacheWriteTokens, &attempt.Usage.OutputTokens,
+		); err != nil {
+			return nil, fmt.Errorf("scan project token usage: %w", err)
+		}
+		usage = append(usage, attempt)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read project token usage: %w", err)
 	}
 	return usage, nil
 }
