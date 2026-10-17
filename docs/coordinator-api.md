@@ -1677,6 +1677,12 @@ false, "reviewer": true}` returns `400 invalid_steps`:
 - **Full** (`documented_plan` and `reviewer`): the lead and reviewer agree a
   commit-ordered plan, the reviewer may write independent acceptance tests, and
   code review and the lead's readiness acknowledgement precede the merge gate.
+- **Reviewed plan** (`reviewer` with `code_review: false`, ADR-031): the lead
+  and reviewer agree the plan as in Full; once the lead's implementation is
+  verified the run goes straight to the merge gate, with no acceptance tests,
+  code review, or readiness turn, and the coordinator's merge approval says
+  the work order had no code review. `code_review` defaults to `true` and is
+  ignored without a reviewer.
 - **Planned** (`reviewer: false`): the lead submits its plan in its first
   planning turn, the coordinator publishes it without an approval turn, and
   after the published implementation is verified the run goes straight to the

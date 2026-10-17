@@ -43,7 +43,7 @@ export function currentPhaseIndex(f: Feature): number {
  * (ADR-018). Indices stay fixed, so a skipped phase is simply not shown. */
 export function phaseTaken(f: Feature, phase: Phase): boolean {
   if (phase === "plan") return f.steps?.documented_plan !== false;
-  if (phase === "review") return f.steps?.reviewer !== false;
+  if (phase === "review") return f.steps?.reviewer !== false && f.steps?.code_review !== false;
   return true;
 }
 

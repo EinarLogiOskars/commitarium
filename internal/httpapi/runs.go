@@ -222,16 +222,20 @@ type workStepsRequest struct {
 	Clarification  *bool `json:"clarification"`
 	DocumentedPlan *bool `json:"documented_plan"`
 	Reviewer       *bool `json:"reviewer"`
+	// CodeReview false keeps the reviewer for the plan only ("Reviewed
+	// plan", ADR-031); it is ignored without a reviewer.
+	CodeReview *bool `json:"code_review"`
 }
 
 // workStepsResponse reports which optional steps a work order or run takes.
 type workStepsResponse struct {
 	DocumentedPlan bool `json:"documented_plan"`
 	Reviewer       bool `json:"reviewer"`
+	CodeReview     bool `json:"code_review"`
 }
 
 func newWorkStepsResponse(steps project.WorkSteps) workStepsResponse {
-	return workStepsResponse{DocumentedPlan: !steps.SkipPlan, Reviewer: !steps.SkipReviewer}
+	return workStepsResponse{DocumentedPlan: !steps.SkipPlan, Reviewer: !steps.SkipReviewer, CodeReview: steps.CodeReview()}
 }
 
 type startSettingsChooser interface {
@@ -354,6 +358,9 @@ func (api *API) chooseStartSettings(
 		}
 		if request.Steps.Reviewer != nil {
 			steps.SkipReviewer = !*request.Steps.Reviewer
+		}
+		if request.Steps.CodeReview != nil {
+			steps.SkipCodeReview = !*request.Steps.CodeReview
 		}
 		overrides.Steps = &steps
 	}

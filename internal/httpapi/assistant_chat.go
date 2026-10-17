@@ -516,8 +516,10 @@ func (api *API) applyStartWorkOrder(
 	clarification := false
 	request.Steps = &workStepsRequest{Clarification: &clarification}
 	if action.Steps != "" {
-		plan, reviewer := action.Steps != "quick", action.Steps == "full"
-		request.Steps.DocumentedPlan, request.Steps.Reviewer = &plan, &reviewer
+		plan := action.Steps != "quick"
+		reviewer := action.Steps == "full" || action.Steps == "reviewed_plan"
+		codeReview := action.Steps == "full"
+		request.Steps.DocumentedPlan, request.Steps.Reviewer, request.Steps.CodeReview = &plan, &reviewer, &codeReview
 	}
 	if action.IndependentTests {
 		tests := true
@@ -528,7 +530,7 @@ func (api *API) applyStartWorkOrder(
 	// project (ADR-027); a reviewer the steps skip is the lead.
 	skipReviewer := stored.Steps.SkipReviewer
 	if action.Steps != "" {
-		skipReviewer = action.Steps != "full"
+		skipReviewer = action.Steps != "full" && action.Steps != "reviewed_plan"
 	}
 	if action.LeadAgent != "" || action.ReviewerAgent != "" {
 		lead := orDefault(action.LeadAgent, stored.AgentProviders.LeadAgent)
@@ -711,6 +713,8 @@ func (api *API) assistantSettings(
 		overrides.Steps = &project.WorkSteps{SkipPlan: true, SkipReviewer: true}
 	case "planned":
 		overrides.Steps = &project.WorkSteps{SkipReviewer: true}
+	case "reviewed_plan":
+		overrides.Steps = &project.WorkSteps{SkipCodeReview: true}
 	case "full":
 		overrides.Steps = &project.WorkSteps{}
 	}

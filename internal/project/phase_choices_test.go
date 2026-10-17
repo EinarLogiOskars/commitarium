@@ -55,3 +55,19 @@ func TestEffortAbove(t *testing.T) {
 		t.Fatal("effort ceilings")
 	}
 }
+
+func TestCodeReviewNeedsTheReviewer(t *testing.T) {
+	for _, test := range []struct {
+		steps WorkSteps
+		want  bool
+	}{
+		{WorkSteps{}, true},
+		{WorkSteps{SkipCodeReview: true}, false},
+		{WorkSteps{SkipReviewer: true}, false},
+		{WorkSteps{SkipPlan: true, SkipReviewer: true}, false},
+	} {
+		if got := test.steps.CodeReview(); got != test.want {
+			t.Errorf("%+v.CodeReview() = %t", test.steps, got)
+		}
+	}
+}

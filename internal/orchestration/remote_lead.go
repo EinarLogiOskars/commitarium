@@ -46,8 +46,8 @@ const (
 	implementationReadinessRunningReason  = "The lead is deciding whether it agrees with the reviewer's approval of the exact commit."
 	implementationApprovedReason          = "The reviewer and lead agreed that the exact verified revision is ready for the merge gate."
 	implementationMergedReason            = "Forgejo merged the exact commit approved by the reviewer and lead."
-	implementationLeadOnlyReadyReason     = "The lead published and verified its implementation. This work order has no reviewer; the exact revision is ready for the merge gate."
-	implementationLeadOnlyMergedReason    = "Forgejo merged the lead's exact verified commit. This work order had no reviewer."
+	implementationLeadOnlyReadyReason     = "The lead published and verified its implementation. This work order has no code review; the exact revision is ready for the merge gate."
+	implementationLeadOnlyMergedReason    = "Forgejo merged the lead's exact verified commit. This work order had no code review."
 	implementationMergeBlockedReason      = "The exact approved revision could not be merged safely. Inspect the merge activity and Forgejo pull request before retrying."
 	implementationBaseUpdateRunningReason = "Main moved after this revision was approved. The lead is merging main into the feature branch, resolving conflicts, and publishing an updated commit for review."
 	implementationMergeBehindMainReason   = "Main moved and the approved revision no longer merges cleanly. Continue (optionally with guidance) to have the lead bring main into the branch; the updated commit is checked again before merging."
@@ -1166,7 +1166,7 @@ func (starter *RemoteLeadStarter) recoverIdleReadyToMergeRun(
 	// returns to its user gate. Once both exist, recovery must not depend on a
 	// worker container that has no more work to perform.
 	confirm := starter.confirmReviewedMergeReady
-	if run.Steps.SkipReviewer {
+	if !run.Steps.CodeReview() {
 		confirm = starter.confirmLeadOnlyMergeReady
 	}
 	if err := confirm(ctx, run); err != nil {
@@ -1391,14 +1391,14 @@ func (starter *RemoteLeadStarter) merge(
 		}
 	}
 	var approvalNote []string
-	if run.Steps.SkipReviewer {
-		// Branch protection still requires an approval; without a reviewer the
-		// coordinator gives it here and says why (ADR-018).
+	if !run.Steps.CodeReview() {
+		// Branch protection still requires an approval; without code review
+		// the coordinator gives it here and says why (ADR-018, ADR-031).
 		approver := "the user"
 		if idempotencyKey == run.ID+":automatic-merge" || idempotencyKey == run.ID+":automatic-validation-merge" {
 			approver = "the work order's auto-merge policy"
 		}
-		approvalNote = append(approvalNote, "This work order had no reviewer. Commitarium approved the lead's verified commit at the merge gate, as decided by "+approver+".")
+		approvalNote = append(approvalNote, "This work order had no code review. Commitarium approved the lead's verified commit at the merge gate, as decided by "+approver+".")
 	}
 	mergedWorkspace, mergedNow, err := starter.workspaces.MergeApproved(
 		ctx, storedFeature.ProjectID, storedFeature.ID, approvalNote...,
@@ -1427,7 +1427,7 @@ func (starter *RemoteLeadStarter) merge(
 		return execution.Run{}, false, fmt.Errorf("record completed merge activity: %w", err)
 	}
 	mergedReason := implementationMergedReason
-	if run.Steps.SkipReviewer {
+	if !run.Steps.CodeReview() {
 		mergedReason = implementationLeadOnlyMergedReason
 	}
 	completed, err := starter.executions.TransitionRun(
@@ -5247,9 +5247,10 @@ func (starter *RemoteLeadStarter) verifyImplementationPublication(
 	if err != nil {
 		return fmt.Errorf("record verified implementation publication: %w", err)
 	}
-	if run.Steps.SkipReviewer {
-		// Without a reviewer (ADR-018) the lead's verified publication is the
-		// work order's result; the merge gate and validation still apply.
+	if !run.Steps.CodeReview() {
+		// Without code review (ADR-018, ADR-031) the lead's verified
+		// publication is the work order's result; the merge gate and
+		// validation still apply.
 		return starter.enterMergeGate(
 			ctx, request, run, storedFeature, result.Publication.CommitID,
 			result.Publication.PullRequestNumber, implementationLeadOnlyReadyReason,

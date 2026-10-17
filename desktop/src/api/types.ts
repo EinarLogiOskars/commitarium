@@ -276,6 +276,9 @@ export type FeatureState =
 export interface WorkSteps {
   documented_plan: boolean;
   reviewer: boolean;
+  /** False keeps the reviewer for the plan only ("Reviewed plan", ADR-031);
+   * absent on older coordinators, where a reviewer always reviews code. */
+  code_review?: boolean;
 }
 
 export interface Feature {

@@ -64,7 +64,8 @@ type AssistantAction struct {
 	Title        string `json:"title"`
 	Description  string `json:"description"`
 	VisionItemID string `json:"vision_item_id"`
-	// Steps is "full", "planned", or "quick" (ADR-018).
+	// Steps is "full", "reviewed_plan", "planned", or "quick" (ADR-018,
+	// ADR-031).
 	Steps            string `json:"steps"`
 	IndependentTests bool   `json:"independent_tests"`
 	// Agents and models, for create, start, and change: the assistant's
@@ -153,7 +154,7 @@ func (action AssistantAction) validate() error {
 		return fmt.Errorf("after is too long")
 	}
 	switch action.Steps {
-	case "", "full", "planned", "quick":
+	case "", "full", "reviewed_plan", "planned", "quick":
 	default:
 		return fmt.Errorf("steps must be full, planned, or quick")
 	}

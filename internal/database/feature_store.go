@@ -72,6 +72,7 @@ func (s *FeatureStore) Create(
 				independent_acceptance_tests,
 				skip_plan,
 				skip_reviewer,
+				skip_code_review,
 				kind,
 				background,
 				created_by,
@@ -79,7 +80,7 @@ func (s *FeatureStore) Create(
 				created_at,
 				updated_at
 			)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT(id) DO NOTHING
 		`,
 		createdFeature.ID,
@@ -102,6 +103,7 @@ func (s *FeatureStore) Create(
 		createdFeature.IndependentAcceptanceTests,
 		createdFeature.Steps.SkipPlan,
 		createdFeature.Steps.SkipReviewer,
+		createdFeature.Steps.SkipCodeReview,
 		storedFeatureKind(createdFeature.Kind),
 		createdFeature.Background,
 		storedCreator(createdFeature.CreatedBy),
@@ -169,6 +171,7 @@ func (s *FeatureStore) GetByID(
 				independent_acceptance_tests,
 				skip_plan,
 				skip_reviewer,
+				skip_code_review,
 				kind,
 				background,
 				created_by,
@@ -223,6 +226,7 @@ func (s *FeatureStore) ListByProjectID(
 				independent_acceptance_tests,
 				skip_plan,
 				skip_reviewer,
+				skip_code_review,
 				kind,
 				background,
 				created_by,
@@ -287,6 +291,7 @@ func scanFeature(row featureScanner) (feature.Feature, error) {
 		&storedFeature.IndependentAcceptanceTests,
 		&storedFeature.Steps.SkipPlan,
 		&storedFeature.Steps.SkipReviewer,
+		&storedFeature.Steps.SkipCodeReview,
 		&storedKind,
 		&storedFeature.Background,
 		&storedFeature.CreatedBy,
@@ -381,13 +386,13 @@ func (s *FeatureStore) UpdateReadySettings(ctx context.Context, chosen feature.F
 		`UPDATE features
 		    SET lead_provider = ?, reviewer_provider = ?, lead_agent = ?, reviewer_agent = ?,
 		        lead_model = ?, reviewer_model = ?, merge_policy = ?, autonomy_policy = ?,
-		        independent_acceptance_tests = ?, skip_plan = ?, skip_reviewer = ?
+		        independent_acceptance_tests = ?, skip_plan = ?, skip_reviewer = ?, skip_code_review = ?
 		  WHERE id = ? AND state = ?`,
 		storedProvider(chosen.AgentProviders.Lead), storedProvider(chosen.AgentProviders.Reviewer),
 		chosen.AgentProviders.LeadAgent, chosen.AgentProviders.ReviewerAgent,
 		chosen.AgentModels.Lead, chosen.AgentModels.Reviewer,
 		chosen.MergePolicy, chosen.AutonomyPolicy, chosen.IndependentAcceptanceTests,
-		chosen.Steps.SkipPlan, chosen.Steps.SkipReviewer,
+		chosen.Steps.SkipPlan, chosen.Steps.SkipReviewer, chosen.Steps.SkipCodeReview,
 		chosen.ID, feature.StateReady,
 	)
 	if err != nil {

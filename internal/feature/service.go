@@ -247,8 +247,8 @@ func resolveSettings(base Feature, overrides SettingsOverrides) (Feature, error)
 	if err := base.Steps.Validate(); err != nil {
 		return Feature{}, err
 	}
-	if base.Steps.SkipReviewer {
-		// Acceptance tests are written by the reviewer.
+	if !base.Steps.CodeReview() {
+		// Acceptance tests are written by the reviewer during code review.
 		base.IndependentAcceptanceTests = false
 	}
 	return base, nil

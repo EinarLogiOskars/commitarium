@@ -146,7 +146,7 @@ func OutputJSONSchema(contract OutputContract) any {
 				"title":                text,
 				"description":          text,
 				"vision_item_id":       text,
-				"steps":                map[string]any{"type": "string", "enum": []string{"", "full", "planned", "quick"}},
+				"steps":                map[string]any{"type": "string", "enum": []string{"", "full", "reviewed_plan", "planned", "quick"}},
 				"independent_tests":    map[string]any{"type": "boolean"},
 				"lead_agent":           text,
 				"lead_model":           text,

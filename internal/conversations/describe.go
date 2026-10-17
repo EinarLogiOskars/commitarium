@@ -318,6 +318,8 @@ func stepsName(steps project.WorkSteps) string {
 		return "quick"
 	case steps.SkipReviewer:
 		return "planned"
+	case steps.SkipCodeReview:
+		return "reviewed_plan"
 	default:
 		return "full"
 	}

@@ -40,23 +40,29 @@ export interface StartSettingsValue {
 
 /** The valid combinations of a work order's steps (ADR-018): a reviewer
  * requires a documented plan. */
-const PRESETS: { id: string; label: string; steps: WorkSteps; hint: string }[] = [
+const PRESETS: { id: string; label: string; steps: Required<WorkSteps>; hint: string }[] = [
   {
     id: "full",
     label: "Full",
-    steps: { documented_plan: true, reviewer: true },
-    hint: "A reviewer checks the plan and the code before the merge gate.",
+    steps: { documented_plan: true, reviewer: true, code_review: true },
+    hint: "A reviewer checks the plan and the code. For data, money, auth, migrations, and concurrency.",
+  },
+  {
+    id: "reviewed_plan",
+    label: "Reviewed plan",
+    steps: { documented_plan: true, reviewer: true, code_review: false },
+    hint: "A reviewer checks the plan against the code base; the lead implements it. For most features.",
   },
   {
     id: "planned",
     label: "Planned",
-    steps: { documented_plan: true, reviewer: false },
+    steps: { documented_plan: true, reviewer: false, code_review: false },
     hint: "The lead plans the commits alone and implements them. You decide the merge.",
   },
   {
     id: "quick",
     label: "Quick change",
-    steps: { documented_plan: false, reviewer: false },
+    steps: { documented_plan: false, reviewer: false, code_review: false },
     hint: "The lead goes straight to the change in one turn. You decide the merge.",
   },
 ];
@@ -137,7 +143,10 @@ export function StartSettings({
   // Resolve each role's model to one the agent's provider offers.
   const { agent_providers: providers, agent_models: models, steps } = value;
   const preset = PRESETS.find(
-    (p) => p.steps.documented_plan === steps.documented_plan && p.steps.reviewer === steps.reviewer,
+    (p) =>
+      p.steps.documented_plan === steps.documented_plan &&
+      p.steps.reviewer === steps.reviewer &&
+      p.steps.code_review === (steps.reviewer && steps.code_review !== false),
   );
   useEffect(() => {
     if (suggestion && !choiceMade(value.agent_providers, value.agent_models))
@@ -170,7 +179,7 @@ export function StartSettings({
                     ...value,
                     steps: { ...steps, ...p.steps },
                     // Acceptance tests are the reviewer's.
-                    independent_acceptance_tests: p.steps.reviewer
+                    independent_acceptance_tests: p.steps.code_review
                       ? value.independent_acceptance_tests
                       : false,
                   })
@@ -180,7 +189,8 @@ export function StartSettings({
                 <span className="steps-choice__title">{p.label}</span>
                 <span className="steps-choice__parts">
                   <StepPart on={p.steps.documented_plan}>Plan</StepPart>
-                  <StepPart on={p.steps.reviewer}>Reviewer</StepPart>
+                  <StepPart on={p.steps.reviewer}>Plan review</StepPart>
+                  <StepPart on={p.steps.code_review}>Code review</StepPart>
                 </span>
                 <span className="steps-choice__hint">{p.hint}</span>
               </button>
@@ -253,7 +263,7 @@ export function StartSettings({
           </label>
         </div>
       </div>
-      {steps.reviewer && (
+      {steps.reviewer && steps.code_review !== false && (
         <label className="neworder__check">
           <input
             type="checkbox"
@@ -273,9 +283,9 @@ export function StartSettings({
       {value.merge_policy === "auto_after_gates" && hasValidation === false && (
         <NoValidationWarning
           message={
-            steps.reviewer
+            steps.reviewer && steps.code_review !== false
               ? "No validation is set up for this project. This order will merge automatically on the two agents' approval alone — none of your own checks will run first."
-              : "No validation is set up for this project, and this order has no reviewer. It will merge automatically on the lead's word alone — nothing will check it first."
+              : "No validation is set up for this project, and no reviewer checks this order's code. It will merge automatically on the lead's word alone — nothing will check it first."
           }
           onOpenValidation={onOpenValidation ?? (() => undefined)}
         />

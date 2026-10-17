@@ -499,6 +499,11 @@ func TestStartRunSavesPhaseChoices(t *testing.T) {
 		choices.LeadPlanModel != "gpt-6-astra" || choices.LeadEffort != "medium" {
 		t.Fatalf("phase choices = %+v", choices)
 	}
+	if recorder := start("reviewed-plan", `{"steps":{"documented_plan":true,"reviewer":true,"code_review":false}}`); recorder.Code != http.StatusAccepted ||
+		features.receivedOverrides.Steps == nil || !features.receivedOverrides.Steps.SkipCodeReview ||
+		features.receivedOverrides.Steps.SkipReviewer {
+		t.Fatalf("reviewed plan status %d steps %+v", recorder.Code, features.receivedOverrides.Steps)
+	}
 	if recorder := start("phase-bad", `{"phase_choices":{"lead_effort":"Max!"}}`); recorder.Code != http.StatusBadRequest ||
 		!strings.Contains(recorder.Body.String(), "invalid_phase_choices") {
 		t.Fatalf("bad effort status %d: %s", recorder.Code, recorder.Body.String())
