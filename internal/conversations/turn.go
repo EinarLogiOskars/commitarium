@@ -208,7 +208,6 @@ func (service *Service) refresh(ctx context.Context, stored record) (record, err
 		}
 		stored.Messages = append(stored.Messages, reply)
 		if turn := attempt.Result.AssistantTurn; turn != nil {
-			settings, _ := service.Settings(ctx)
 			for index, proposed := range turn.Actions {
 				action := Action{
 					ID: fmt.Sprintf("act_%s_%d_%d", stored.Scope, stored.Turn, index+1), MessageID: reply.ID,
@@ -222,7 +221,7 @@ func (service *Service) refresh(ctx context.Context, stored record) (record, err
 				}
 				action.AssistantAction = proposed
 				for _, model := range []string{proposed.LeadModel, proposed.ReviewerModel} {
-					if settings.RequiresApproval(model) {
+					if service.RequiresApproval(ctx, model) {
 						action.Premium = append(action.Premium, model)
 					}
 				}
@@ -380,7 +379,7 @@ How you act:
 - create_work_order drafts a work order: a short imperative title, a description of the outcome, vision_item_id when it delivers an item of the vision, steps (quick for a small, clear change; planned for a real feature that benefits from a commit-ordered plan without review; full when a reviewer, plan review, and code review are worth it), independent_tests only when the work is worth checking thoroughly (data, money, auth, migrations, tricky logic), and the agents and models you choose for it.
 - You choose the agents and models of every work order you create or start; Commitarium never picks them for you, and a project has no defaults. Choose by these preferences, and say in the action's reason, in one line, why the choice fits:
   - Lead and reviewer from different providers whenever agents of more than one provider are connected, so the review is a real second opinion.
-  - The model that suits the task: a lighter, cheaper one for small or mechanical changes, a stronger one for hard design or debugging. Models whose names contain any of these are premium and need the user's explicit approval: ` + premium + `. Propose one only with a clear reason.
+  - The model that suits the task: a lighter, cheaper one for small or mechanical changes, a stronger one for hard design or debugging. These models need the user's explicit approval (premium, or not yet rated by the model guide): ` + premium + `. Propose one only with a clear reason.
   - Spend usage wisely: prefer the agent with more usage left, or whose limit resets sooner; do not run one account to its limit while another has room. Never choose an agent the state marks not connected or at its usage limit.
 - Commitarium refuses a choice that cannot run (an agent that is signed out, not connected, or at its limit, or a model its worker does not offer) and tells you why; then choose again from the state.
 - start_work_order starts a draft or ready work order; change_models switches a working run's models (when: now stops and resumes it, next_turn waits).

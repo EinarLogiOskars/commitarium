@@ -26,6 +26,7 @@ import (
 	"github.com/EinarLogiOskars/commitarium/internal/install"
 	"github.com/EinarLogiOskars/commitarium/internal/marketplace"
 	"github.com/EinarLogiOskars/commitarium/internal/modelcatalog"
+	"github.com/EinarLogiOskars/commitarium/internal/modelguide"
 	"github.com/EinarLogiOskars/commitarium/internal/orchestration"
 	"github.com/EinarLogiOskars/commitarium/internal/previewcheck"
 	"github.com/EinarLogiOskars/commitarium/internal/project"
@@ -293,6 +294,12 @@ func run(ctx context.Context, coordinatorConfig config) error {
 	environmentService := projectenvironment.NewService(coordinatordatabase.NewProjectEnvironmentStore(db))
 	validationService := validation.NewService(coordinatordatabase.NewValidationStore(db))
 	previewCheckService := previewcheck.NewService(coordinatordatabase.NewPreviewCheckStore(db))
+	// The official model guide and the user's overrides decide which models
+	// the assistant must ask about (ADR-031).
+	modelGuide, err := modelguide.NewService(coordinatordatabase.NewModelGuideStore(db))
+	if err != nil {
+		return fmt.Errorf("create the model guide: %w", err)
+	}
 	activeSessions := orchestration.NewActiveSessions()
 	var sessionController httpapi.SessionController
 	var runStarter httpapi.RunStarter
@@ -404,6 +411,7 @@ func run(ctx context.Context, coordinatorConfig config) error {
 			},
 			Checkouts: checkoutManager, Branches: forgejoClient,
 			Visions: visions, Features: featureService,
+			Guide: modelGuide, Models: models,
 		})
 		if err != nil {
 			return fmt.Errorf("create the assistant: %w", err)
@@ -620,6 +628,7 @@ func run(ctx context.Context, coordinatorConfig config) error {
 		releaseService,
 		installService,
 		previewCheckService,
+		modelGuide,
 	)
 
 	if assistantWatcher != nil {

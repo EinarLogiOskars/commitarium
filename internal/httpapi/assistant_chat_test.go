@@ -57,6 +57,11 @@ func (stub *conversationStub) Settings(context.Context) (conversations.Settings,
 	return settings, nil
 }
 
+func (stub *conversationStub) RequiresApproval(ctx context.Context, model string) bool {
+	settings, _ := stub.Settings(ctx)
+	return settings.RequiresApproval(model)
+}
+
 func (stub *conversationStub) SaveSettings(_ context.Context, settings conversations.Settings) (conversations.Settings, error) {
 	return settings, nil
 }

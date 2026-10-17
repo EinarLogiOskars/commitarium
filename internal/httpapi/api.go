@@ -293,6 +293,7 @@ type API struct {
 	agents             AgentService
 	visions            VisionService
 	conversations      ConversationService
+	modelGuide         ModelGuideService
 	agentUsage         AgentUsageService
 	marketplace        MarketplaceService
 	releases           ReleaseService
@@ -412,8 +413,11 @@ func newAPI(
 	var marketplaceService MarketplaceService
 	var releaseService ReleaseService
 	var installService InstallService
+	var modelGuide ModelGuideService
 	for _, extra := range extras {
 		switch typed := extra.(type) {
+		case ModelGuideService:
+			modelGuide = typed
 		case PreviewCheckService:
 			previewChecks = typed
 		case InstallService:
@@ -468,6 +472,7 @@ func newAPI(
 		agents:             agents,
 		visions:            visions,
 		conversations:      assistantConversations,
+		modelGuide:         modelGuide,
 		agentUsage:         agentUsage,
 		marketplace:        marketplaceService,
 		releases:           releaseService,
@@ -516,6 +521,11 @@ func newAPI(
 	}
 	if projects != nil && features != nil && executionService != nil {
 		mux.HandleFunc("GET /api/v1/attention", api.listAttentionHandler)
+	}
+	if modelGuide != nil {
+		mux.HandleFunc("GET /api/v1/model-guide", api.getModelGuideHandler)
+		mux.HandleFunc("PUT /api/v1/model-guide/overrides/{model}", api.setModelGuideTierHandler)
+		mux.HandleFunc("DELETE /api/v1/model-guide/overrides/{model}", api.resetModelGuideTierHandler)
 	}
 	if modelCatalog != nil {
 		mux.HandleFunc("GET /api/v1/models", api.listModelsHandler)

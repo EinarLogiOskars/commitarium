@@ -27,6 +27,7 @@ import (
 // the top level and per project, its settings, and the actions it proposes.
 type ConversationService interface {
 	Settings(ctx context.Context) (conversations.Settings, error)
+	RequiresApproval(ctx context.Context, model string) bool
 	SaveSettings(ctx context.Context, settings conversations.Settings) (conversations.Settings, error)
 	Get(ctx context.Context, scope string) (conversations.Conversation, error)
 	Send(ctx context.Context, scope, message, key string) (conversations.Conversation, error)
@@ -602,10 +603,6 @@ func (api *API) applyChangeModels(
 // premiumModels lists the models an action would run on that need the
 // user's explicit approval.
 func (api *API) premiumModels(ctx context.Context, projectID string, action conversations.Action) ([]string, error) {
-	settings, err := api.conversations.Settings(ctx)
-	if err != nil {
-		return nil, err
-	}
 	models := []string{action.LeadModel, action.ReviewerModel}
 	if action.Type == featureartifact.AssistantStartWorkOrder {
 		stored, err := api.features.GetByID(ctx, projectID, action.WorkOrderID)
@@ -621,7 +618,7 @@ func (api *API) premiumModels(ctx context.Context, projectID string, action conv
 	}
 	premium := make([]string, 0)
 	for _, model := range models {
-		if settings.RequiresApproval(model) {
+		if api.conversations.RequiresApproval(ctx, model) {
 			premium = append(premium, model)
 		}
 	}

@@ -1,0 +1,20 @@
+{
+  "as_of": "2026-10-17",
+  "models": [
+    {"id": "claude-fable-5-1", "tier": "premium", "note": "Hardest design and debugging; approval first"},
+    {"id": "gpt-6-astra", "tier": "premium", "note": "OpenAI's top tier; approval first"},
+    {"id": "claude-opus-5-5", "tier": "frontier", "note": "Best planner and plan reviewer"},
+    {"id": "claude-opus-4-8", "tier": "frontier", "note": "Previous Opus; still strong, prefer Opus 5.5"},
+    {"id": "claude-sonnet-5-5", "tier": "strong", "note": "Near Opus on implementation and review at lower cost"},
+    {"id": "gpt-6.1-sol", "tier": "strong", "note": "Good value lead and reviewer; weaker on long terminal tasks"},
+    {"id": "claude-haiku-5-5", "tier": "light", "note": "Mechanical changes only"},
+    {"id": "gpt-6-luna", "tier": "light", "note": "Mechanical changes; decent cheap reviewer"},
+    {"id": "claude-opus-5", "tier": "avoid", "note": "Superseded by Opus 5.5"},
+    {"id": "claude-sonnet-5", "tier": "avoid", "note": "Superseded by Sonnet 5.5"},
+    {"id": "claude-haiku-4-5-20251001", "tier": "avoid", "note": "Superseded by Haiku 5.5"},
+    {"id": "gpt-6-sol", "tier": "avoid", "note": "Superseded by 6.1 Sol at the same price"},
+    {"id": "gpt-5.6-sol", "tier": "avoid", "note": "Superseded by 6.1 Sol: stronger at agentic coding, half the price"},
+    {"id": "gpt-5.6-terra", "tier": "avoid", "note": "Previous generation"},
+    {"id": "gpt-5.6-luna", "tier": "avoid", "note": "Previous generation"}
+  ]
+}

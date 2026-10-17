@@ -3,12 +3,14 @@ package conversations
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/EinarLogiOskars/commitarium/internal/agent"
 	"github.com/EinarLogiOskars/commitarium/internal/featureartifact"
+	"github.com/EinarLogiOskars/commitarium/internal/modelguide"
 	"github.com/EinarLogiOskars/commitarium/internal/project"
 	"github.com/EinarLogiOskars/commitarium/internal/workerhttp"
 )
@@ -266,5 +268,101 @@ func TestTheTopLevelConversationReachesItsAgent(t *testing.T) {
 	}
 	if projectID := worker.puts[0].Assignment.ProjectID; projectID != TopLevel {
 		t.Fatalf("top-level project ID = %q, want %q", projectID, TopLevel)
+	}
+}
+
+type guideStore struct {
+	overrides map[string]modelguide.Override
+}
+
+func (store *guideStore) ListModelGuideOverrides(context.Context) ([]modelguide.Override, error) {
+	listed := make([]modelguide.Override, 0, len(store.overrides))
+	for _, override := range store.overrides {
+		listed = append(listed, override)
+	}
+	return listed, nil
+}
+
+func (store *guideStore) SaveModelGuideOverride(_ context.Context, override modelguide.Override) error {
+	store.overrides[override.ModelID] = override
+	return nil
+}
+
+func (store *guideStore) DeleteModelGuideOverride(_ context.Context, id string) error {
+	delete(store.overrides, id)
+	return nil
+}
+
+// With a model guide, approvals follow its Premium and unrated models, and
+// the families the user stored before are migrated into it once (ADR-031).
+func TestTheModelGuideDecidesApprovalsAndMigratesFamilies(t *testing.T) {
+	store := &guideStore{overrides: map[string]modelguide.Override{}}
+	guide, err := modelguide.NewService(store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	offered := []ModelChoice{}
+	root := t.TempDir()
+	service, err := NewService(Config{
+		Root: root, WorkspaceRoot: t.TempDir(), Projects: projectsStub{}, Agents: agentsStub{},
+		Describer: describerStub{},
+		Workers:   func(string) (workerhttp.Service, error) { return &workerStub{}, nil },
+		Guide:     guide,
+		Models:    func(context.Context) []ModelChoice { return offered },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Settings saved before the guide: the user added "opus".
+	if err := writeJSON(service.settingsPath(), Settings{
+		Agent: "codex", Model: "codex-default", AskBefore: []string{"fable", "astra", "opus"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Until the agents' models are known, the families wait.
+	if settings, err := service.Settings(t.Context()); err != nil || settings.AskBeforeMigrated || len(store.overrides) != 0 {
+		t.Fatalf("early settings = %+v err=%v overrides=%+v", settings, err, store.overrides)
+	}
+
+	offered = []ModelChoice{
+		{Provider: project.AgentProviderClaude, ID: "claude-opus-5-5"},
+		{Provider: project.AgentProviderClaude, ID: "claude-sonnet-5-5"},
+		{Provider: project.AgentProviderCodex, ID: "brand-new-model"},
+	}
+	settings, err := service.Settings(t.Context())
+	if err != nil || !settings.AskBeforeMigrated {
+		t.Fatalf("settings = %+v err=%v", settings, err)
+	}
+	if store.overrides["claude-opus-5-5"].Tier != modelguide.TierPremium {
+		t.Fatalf("overrides = %+v", store.overrides)
+	}
+	for _, want := range []string{"claude-fable-5-1", "gpt-6-astra", "claude-opus-5-5", "brand-new-model"} {
+		if !slices.Contains(settings.AskBefore, want) {
+			t.Errorf("ask_before %v lacks %s", settings.AskBefore, want)
+		}
+	}
+	if slices.Contains(settings.AskBefore, "claude-sonnet-5-5") {
+		t.Errorf("ask_before %v has sonnet", settings.AskBefore)
+	}
+	for model, want := range map[string]bool{
+		"claude-opus-5-5": true, "claude-sonnet-5-5": false, "brand-new-model": true, "": false,
+	} {
+		if got := service.RequiresApproval(t.Context(), model); got != want {
+			t.Errorf("RequiresApproval(%q) = %t", model, got)
+		}
+	}
+
+	// The migration is recorded, and a later save keeps the stored families
+	// instead of the guide's list.
+	stored, err := service.storedSettings(t.Context())
+	if err != nil || !stored.AskBeforeMigrated {
+		t.Fatalf("stored = %+v err=%v", stored, err)
+	}
+	if _, err := service.SaveSettings(t.Context(), Settings{Agent: "codex", Model: "codex-default", AskBefore: settings.AskBefore}); err != nil {
+		t.Fatal(err)
+	}
+	if stored, _ := service.storedSettings(t.Context()); !stored.AskBeforeMigrated || slices.Contains(stored.AskBefore, "brand-new-model") {
+		t.Fatalf("saved = %+v", stored)
 	}
 }

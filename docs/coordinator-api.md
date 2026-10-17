@@ -12,6 +12,9 @@ this API beyond the host loopback interface is unsupported.
 | `GET` | `/api/v1/attention` | Read one cross-project review-inbox and notification snapshot |
 | `GET` | `/api/v1/models` | List persisted exact model catalogs for each provider role |
 | `POST` | `/api/v1/models/refresh` | Refresh model catalogs from provider workers now |
+| `GET` | `/api/v1/model-guide` | Read the model guide: each model's tier, official or the user's |
+| `PUT` | `/api/v1/model-guide/overrides/{model}` | Rate a model for the user |
+| `DELETE` | `/api/v1/model-guide/overrides/{model}` | Return a model to the official guide |
 | `POST` | `/api/v1/projects` | Create a project |
 | `PUT` | `/api/v1/project-imports/{importID}` | Import committed Git history into a new private Forgejo-backed project |
 | `GET` | `/api/v1/projects` | List projects for switching/selecting |
@@ -367,6 +370,28 @@ is `claude-opus-5-5`, `claude-sonnet-5-5`, `claude-haiku-5-5`,
 `claude-haiku-4-5-20251001`. Its entries include UI-friendly display names
 such as `Claude Opus 4.8`; custom configured IDs use the ID as their display
 name. No alias scraping, provider turn, or secret exposure is involved.
+
+### Model guide
+
+The official model guide ships with the coordinator (ADR-031): one entry per
+exact model ID with a tier (`premium`, `frontier`, `strong`, `light`,
+`avoid`) and a note. The user overrides tiers per model; nothing is inferred
+from a model's name.
+
+- `GET /api/v1/model-guide` answers `{"as_of", "models": [...]}` with every
+  model the official guide lists, the user rated, or a connected agent
+  offers. Each entry is `{"id", "tier", "note", "source", "official_tier",
+  "official_changed"}`: `source` is `official`, `user`, or `unrated` (no
+  tier); `official_changed` marks a user override whose official tier has
+  changed since it was set.
+- `PUT /api/v1/model-guide/overrides/{model}` with `{"tier"}` rates the model
+  for the user and answers its entry; putting the tier it already has keeps
+  it and clears `official_changed`. An invalid ID or tier returns
+  `400 invalid_model_guide_request`.
+- `DELETE /api/v1/model-guide/overrides/{model}` returns it to the official
+  guide and answers its entry.
+
+The assistant must ask the user before using a `premium` or unrated model.
 
 ## Projects and Forgejo repositories
 
@@ -2517,9 +2542,14 @@ actions, and its notes.
 
 - `GET /api/v1/assistant/settings` answers `{"agent", "model", "ask_before",
   "updated_at"}`; without saved settings, an empty agent and model (ADR-027:
-  the user chooses them) and `ask_before` `["fable", "astra"]`. An assistant
-  that had answered before keeps the default it had then (the first agent on
-  its provider's first model), saved once. `PUT` saves them.
+  the user chooses them). `ask_before` lists the models the model guide says
+  need approval: its `premium` models and the unrated models connected agents
+  offer. An assistant that had answered before keeps the default it had then
+  (the first agent on its provider's first model), saved once. `PUT` saves
+  the agent and model; `ask_before` is ignored, and tiers are set through the
+  model guide. Families saved before the guide are migrated into its
+  overrides once, when the agents' models are known: a marked model becomes
+  `premium`, an unmarked default (`fable`, `astra`) becomes `frontier`.
 - Until it can answer, sending a message returns `409 no_agents` (no agent
   exists yet) or `409 assistant_not_set_up` (none is chosen for it, or the
   chosen one is gone), each with a plain message for the user. Work
@@ -2567,7 +2597,7 @@ actions, and its notes.
   approving it creates a project as an app named by `title`, launches it, and
   has the vision written from `description`; the action's `project_id` names
   the new project. Any other action there, or `create_app` in a project,
-  returns `409 action_needs_project`. `premium` lists its models in an `ask_before` family;
+  returns `409 action_needs_project`. `premium` lists its models that need approval (`ask_before`);
   `auto_tried` marks one autopilot took over.
 - `POST .../{scope}/actions/{actionID}/approve` with `{"start", "confirm_premium"}`
   runs it through the same paths as the app's own buttons and records the

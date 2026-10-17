@@ -13,15 +13,18 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/EinarLogiOskars/commitarium/internal/agent"
 	"github.com/EinarLogiOskars/commitarium/internal/featureartifact"
+	"github.com/EinarLogiOskars/commitarium/internal/modelguide"
 	"github.com/EinarLogiOskars/commitarium/internal/project"
 	"github.com/EinarLogiOskars/commitarium/internal/workerhttp"
 	"github.com/EinarLogiOskars/commitarium/internal/workspace"
@@ -44,19 +47,25 @@ var (
 const TopLevel = "commitarium"
 
 // Settings are the assistant's app-wide choices: its agent and model, and the
-// model families it must ask before using (ASSISTANT_PLAN.md decision 14).
+// models it must ask before using (ASSISTANT_PLAN.md decision 14).
+//
+// With a model guide (ADR-031), AskBefore lists the models the guide says
+// need approval; the families the user stored before are migrated into the
+// guide's overrides once, and AskBeforeMigrated records that.
 type Settings struct {
-	Agent     string    `json:"agent"`
-	Model     string    `json:"model"`
-	AskBefore []string  `json:"ask_before"`
-	UpdatedAt time.Time `json:"updated_at"`
+	Agent             string    `json:"agent"`
+	Model             string    `json:"model"`
+	AskBefore         []string  `json:"ask_before"`
+	AskBeforeMigrated bool      `json:"ask_before_migrated,omitempty"`
+	UpdatedAt         time.Time `json:"updated_at"`
 }
 
 // DefaultAskBefore are the premium model families marked by default.
 var DefaultAskBefore = []string{"fable", "astra"}
 
 // RequiresApproval reports whether a model belongs to a family the user must
-// approve before the assistant may use it.
+// approve before the assistant may use it. Without a model guide it is the
+// whole check; Service.RequiresApproval asks the guide when there is one.
 func (settings Settings) RequiresApproval(model string) bool {
 	model = strings.ToLower(strings.TrimSpace(model))
 	if model == "" {
@@ -216,6 +225,17 @@ type Config struct {
 	// autopilot goal.
 	Visions  VisionReader
 	Features FeatureLister
+	// Guide, when set, decides which models need the user's approval
+	// (ADR-031); Models lists the models the connected agents offer.
+	Guide  ModelGuide
+	Models func(ctx context.Context) []ModelChoice
+}
+
+// ModelGuide is the official model guide merged with the user's overrides.
+type ModelGuide interface {
+	RequiresApproval(ctx context.Context, model string) (bool, error)
+	Entries(ctx context.Context, extra []string) ([]modelguide.Entry, error)
+	MigrateAskBefore(ctx context.Context, families, models []string) error
 }
 
 type Service struct {
@@ -246,6 +266,29 @@ func NewService(config Config) (*Service, error) {
 // families. The agent and model are the user's choice (ADR-027): until they
 // choose, both are empty and the assistant asks to be set up.
 func (service *Service) Settings(ctx context.Context) (Settings, error) {
+	settings, err := service.storedSettings(ctx)
+	if err != nil || service.config.Guide == nil {
+		return settings, err
+	}
+	offered := service.offeredModels(ctx)
+	if !settings.AskBeforeMigrated {
+		settings = service.migrateAskBefore(ctx, settings, offered)
+	}
+	entries, err := service.config.Guide.Entries(ctx, offered)
+	if err != nil {
+		return Settings{}, fmt.Errorf("%w: read the model guide", ErrUnavailable)
+	}
+	settings.AskBefore = make([]string, 0)
+	for _, entry := range entries {
+		if entry.NeedsApproval() {
+			settings.AskBefore = append(settings.AskBefore, entry.ID)
+		}
+	}
+	return settings, nil
+}
+
+// storedSettings reads the settings file as it is stored.
+func (service *Service) storedSettings(ctx context.Context) (Settings, error) {
 	settings := Settings{AskBefore: append([]string(nil), DefaultAskBefore...)}
 	contents, err := os.ReadFile(service.settingsPath())
 	switch {
@@ -259,6 +302,56 @@ func (service *Service) Settings(ctx context.Context) (Settings, error) {
 		}
 	}
 	return settings, nil
+}
+
+// offeredModels lists the models the connected agents offer.
+func (service *Service) offeredModels(ctx context.Context) []string {
+	if service.config.Models == nil {
+		return nil
+	}
+	choices := service.config.Models(ctx)
+	models := make([]string, 0, len(choices))
+	for _, choice := range choices {
+		models = append(models, choice.ID)
+	}
+	return models
+}
+
+// migrateAskBefore moves the families the user stored into the model guide's
+// overrides, once (ADR-031). Families that are still the defaults need
+// nothing; others wait until the agents' models are known, so no choice is
+// lost.
+func (service *Service) migrateAskBefore(ctx context.Context, settings Settings, offered []string) Settings {
+	defaults := slices.Equal(slices.Sorted(slices.Values(settings.AskBefore)), slices.Sorted(slices.Values(DefaultAskBefore)))
+	if !defaults {
+		if len(offered) == 0 {
+			return settings
+		}
+		if err := service.config.Guide.MigrateAskBefore(ctx, settings.AskBefore, offered); err != nil {
+			log.Printf("migrate the assistant's ask-before families: %v", err)
+			return settings
+		}
+	}
+	settings.AskBeforeMigrated = true
+	if _, err := os.Stat(service.settingsPath()); err == nil {
+		if err := writeJSON(service.settingsPath(), settings); err != nil {
+			log.Printf("record the ask-before migration: %v", err)
+		}
+	}
+	return settings
+}
+
+// RequiresApproval reports whether the assistant must ask the user before
+// using a model: the model guide's Premium and unrated models (ADR-031), or,
+// without a guide, the settings' families. When the guide cannot be read it
+// asks.
+func (service *Service) RequiresApproval(ctx context.Context, model string) bool {
+	if service.config.Guide == nil {
+		settings, err := service.Settings(ctx)
+		return err != nil || settings.RequiresApproval(model)
+	}
+	needed, err := service.config.Guide.RequiresApproval(ctx, model)
+	return err != nil || needed
 }
 
 // earlierDefault keeps an assistant that already answered on the default it
@@ -342,6 +435,15 @@ func (service *Service) SaveSettings(ctx context.Context, settings Settings) (Se
 	if !known {
 		return Settings{}, fmt.Errorf("%w: agent %q is not connected", ErrInvalid, settings.Agent)
 	}
+	if service.config.Guide != nil {
+		// The model guide decides approvals (ADR-031); the stored families
+		// only matter until they are migrated.
+		stored, err := service.storedSettings(ctx)
+		if err != nil {
+			return Settings{}, err
+		}
+		settings.AskBefore, settings.AskBeforeMigrated = stored.AskBefore, stored.AskBeforeMigrated
+	}
 	families := make([]string, 0, len(settings.AskBefore))
 	for _, family := range settings.AskBefore {
 		if family = strings.ToLower(strings.TrimSpace(family)); family != "" && len(family) <= 64 {
@@ -350,7 +452,10 @@ func (service *Service) SaveSettings(ctx context.Context, settings Settings) (Se
 	}
 	settings.AskBefore = families
 	settings.UpdatedAt = service.now()
-	return settings, writeJSON(service.settingsPath(), settings)
+	if err := writeJSON(service.settingsPath(), settings); err != nil || service.config.Guide == nil {
+		return settings, err
+	}
+	return service.Settings(ctx)
 }
 
 func (service *Service) settingsPath() string {
