@@ -465,7 +465,8 @@ mod tests {
                 "image": "ghcr.io/example/codex:1",
                 "command": null,
                 "environment": { "COMMITARIUM_WORKER_ADAPTER": "codex", "COMMITARIUM_CODEX_MODEL": "a$b" },
-                "security_opt": ["seccomp=unconfined"],
+                "cap_drop": ["ALL"],
+                "security_opt": ["seccomp=docker/codex-seccomp.json", "no-new-privileges:true"],
             },
             "claude-agent-template": {
                 "profiles": ["agent-template"],
@@ -509,7 +510,11 @@ mod tests {
         let codex = &overlay["services"]["agent-codex-worker"];
         assert_eq!(codex["image"], "ghcr.io/example/codex:1");
         assert!(codex.get("profiles").is_none() && codex.get("command").is_none());
-        assert_eq!(codex["security_opt"][0], "seccomp=unconfined");
+        assert_eq!(
+            codex["security_opt"][0],
+            "seccomp=docker/codex-seccomp.json"
+        );
+        assert_eq!(codex["cap_drop"][0], "ALL");
         let environment = &codex["environment"];
         assert_eq!(environment["COMMITARIUM_CODEX_MODEL"], "a$$b");
         assert_eq!(environment["COMMITARIUM_CODEX_PROFILE_ID"], "codex");

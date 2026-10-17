@@ -69,8 +69,10 @@ The boundary protects three things:
 ```
 
 The Docker boundary is the main containment mechanism. Workers run as non-root
-users and do not receive the host Docker socket, the original repository path,
-or upstream credentials. They receive managed workspaces, their own provider
+users with all capabilities dropped and `no-new-privileges` set, under Docker's
+default seccomp profile (Codex workers add only the namespace syscalls its
+read-only sandbox needs). They do not receive the host Docker socket, the
+original repository path, or upstream credentials. They receive managed workspaces, their own provider
 state, and credentials for internal Forgejo. Each agent (one provider account,
 ADR-016) has one worker holding its lead and reviewer Forgejo tokens; a turn
 receives only its role's token, so an agent's reviewer approves under its own
