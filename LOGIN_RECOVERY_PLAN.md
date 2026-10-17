@@ -44,6 +44,13 @@ that waits for a sign-in, which fails again.
   (non-technical users): "Claude needs you to sign in again. Your message
   is kept and will be sent after." Autopilot never spends recoveries on it.
 
+## Status
+
+L1–L4 and L6 are built (ADR-034). L5, the desktop's sign-in in place, is
+next. L4 is thinner than planned: the vision, clarification, and setup chats
+say to sign in and record the agent, but the user starts them again; New
+app's launch does restart its vision by itself.
+
 ## Slices
 
 | # | Commit | Contents | Depends on |
