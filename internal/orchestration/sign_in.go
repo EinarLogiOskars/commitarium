@@ -63,29 +63,33 @@ func (starter *RemoteLeadStarter) markNeedsSignIn(ctx context.Context, agentID, 
 	}
 }
 
-// agentAnswered notes a turn on the agent that worked: if the agent was
-// waiting for a sign-in, its login works again, so everything waiting on it
-// resumes.
+// AgentNeedsSignIn reports whether the agent is known to need a sign-in.
+func (starter *RemoteLeadStarter) AgentNeedsSignIn(ctx context.Context, agentID string) bool {
+	return starter.agentNeedsSignIn(ctx, agentID)
+}
+
+// MarkAgentNeedsSignIn records that the agent needs the user to sign in.
+func (starter *RemoteLeadStarter) MarkAgentNeedsSignIn(ctx context.Context, agentID, cause string) error {
+	starter.markNeedsSignIn(ctx, agentID, cause)
+	return nil
+}
+
+// AgentAnswered notes a turn on the agent that worked, here or in the
+// assistant: if the agent was waiting for a sign-in, its login works again,
+// so everything waiting on it resumes.
+func (starter *RemoteLeadStarter) AgentAnswered(ctx context.Context, agentID string) {
+	starter.agentAnswered(ctx, agentID)
+}
+
 func (starter *RemoteLeadStarter) agentAnswered(ctx context.Context, agentID string) {
-	signIns, ok := starter.executions.(remoteLeadSignIns)
-	if !ok || agentID == "" {
+	if !starter.agentNeedsSignIn(ctx, agentID) {
 		return
 	}
-	cleared, err := signIns.ClearAgentSignIn(ctx, agentID)
-	if err != nil {
-		starter.reportError(err)
-		return
-	}
-	if cleared {
-		go func() {
-			if _, err := starter.ResumeAfterLogin(starter.lifetime, agentID); err != nil {
-				starter.reportError(err)
-			}
-		}()
-		if starter.signInCleared != nil {
-			starter.signInCleared(agentID)
+	go func() {
+		if _, err := starter.ResumeAfterLogin(starter.lifetime, agentID); err != nil {
+			starter.reportError(err)
 		}
-	}
+	}()
 }
 
 // RunSignInChecker tries the work waiting on each agent that needs a sign-in

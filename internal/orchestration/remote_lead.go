@@ -1073,6 +1073,10 @@ func (starter *RemoteLeadStarter) ResumeAfterLogin(ctx context.Context, agentID 
 			return 0, err
 		}
 	}
+	// The assistant's conversations waiting on the agent go on too.
+	if starter.signInCleared != nil {
+		go starter.signInCleared(agentID)
+	}
 	runIDs, err := waits.RunsAwaitingLogin(ctx, agentID)
 	if err != nil {
 		return 0, err

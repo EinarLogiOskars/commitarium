@@ -51,12 +51,21 @@ func TestAnAgentKnownToNeedASignInWaitsAtOnce(t *testing.T) {
 func TestATurnThatWorksClearsTheSignInAndResumesTheRest(t *testing.T) {
 	run := startSignedOutRun(t, "run_signed_in_elsewhere")
 	waitForRunReason(t, run.executions, run.runID, "must log in again")
-	cleared := ""
-	run.starter.FollowSignIns(func(agentID string) { cleared = agentID }, nil)
-	// A turn on the same agent worked, here or in another work order.
-	run.starter.agentAnswered(t.Context(), "codex")
-	if _, needs := signInOf(t, run.executions, "codex"); needs || cleared != "codex" {
-		t.Fatalf("a working turn did not clear the sign-in: needs=%t followers heard %q", needs, cleared)
+	cleared := make(chan string, 1)
+	run.starter.FollowSignIns(func(agentID string) { cleared <- agentID }, nil)
+	// A turn on the same agent worked, here, in another work order, or in
+	// the assistant.
+	run.starter.AgentAnswered(t.Context(), "codex")
+	select {
+	case agentID := <-cleared:
+		if agentID != "codex" {
+			t.Fatalf("followers heard %q", agentID)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("the assistant's conversations did not hear the agent works again")
+	}
+	if _, needs := signInOf(t, run.executions, "codex"); needs {
+		t.Fatal("a working turn did not clear the sign-in")
 	}
 	waitForRetriedTurn(t, run.executions, run.runID)
 }
