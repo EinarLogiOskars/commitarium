@@ -1,6 +1,6 @@
 # ADR-027: The user and the assistant choose agents; the coordinator only refuses
 
-- Status: Accepted (amends [ADR-016](0016-run-agents-per-provider-account.md) and [ADR-022](0022-one-assistant-that-proposes-and-the-user-approves.md))
+- Status: Accepted (amends [ADR-016](0016-run-agents-per-provider-account.md) and [ADR-022](0022-one-assistant-that-proposes-and-the-user-approves.md); amended by [ADR-031](0031-choose-models-and-review-where-it-pays.md): the assistant chooses by the model guide, and its efforts are capped)
 - Date: 2026-10-14
 
 ## Context

@@ -236,6 +236,19 @@ tab's settings on the right.
 
 `feat/model-guide`, from `main`.
 
+## Status
+
+All slices landed on `feat/model-guide`. Departures from the slices as first
+written:
+
+- G2: the changed-official-tier notice is on the Agents page only; the inbox
+  lists project work.
+- G4: phase choices live on the work order and the worker router picks each
+  turn's model and effort by its phase, instead of a switch scheduled at plan
+  confirmation; recovery follows on its own.
+- G11: the desktop's tests run without a DOM, so the dialog was checked by
+  hand.
+
 ## Slices
 
 | # | Commit | Contents | Depends on |

@@ -1,6 +1,6 @@
 # ADR-018: Choose a work order's steps at Start
 
-- Status: Accepted
+- Status: Accepted (amended by [ADR-031](0031-choose-models-and-review-where-it-pays.md): the reviewer step splits into plan review and code review, with a Reviewed plan preset)
 - Date: 2026-10-11
 
 ## Context

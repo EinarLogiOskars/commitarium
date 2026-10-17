@@ -1,6 +1,6 @@
 # ADR-031: Choose models from a model guide and review where it pays
 
-- Status: Proposed (amends [ADR-018](0018-choose-work-order-steps-at-start.md), [ADR-021](0021-let-a-working-run-switch-models.md), [ADR-022](0022-one-assistant-that-proposes-and-the-user-approves.md) and [ADR-027](0027-the-user-and-the-assistant-choose-agents.md))
+- Status: Accepted (amends [ADR-018](0018-choose-work-order-steps-at-start.md), [ADR-021](0021-let-a-working-run-switch-models.md), [ADR-022](0022-one-assistant-that-proposes-and-the-user-approves.md) and [ADR-027](0027-the-user-and-the-assistant-choose-agents.md))
 - Date: 2026-10-16
 
 ## Context
