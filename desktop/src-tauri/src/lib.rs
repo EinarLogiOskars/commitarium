@@ -4,12 +4,12 @@ mod apps;
 mod bootstrap;
 mod cli_updates;
 mod coordinator_build;
+mod desktop_services;
 mod docker;
+mod environment;
 mod git_providers;
 mod handoff;
 mod import;
-mod phase4;
-mod phase5;
 mod preview;
 mod preview_check;
 mod preview_compose;
@@ -28,9 +28,9 @@ pub fn run() {
     tauri::Builder::default()
         .manage(profiles)
         .manage(previews)
-        .manage(phase5::ExitCoordinator::default())
-        .manage(phase5::NotificationCoordinator::default())
-        .manage(phase5::BackupCoordinator::default())
+        .manage(desktop_services::ExitCoordinator::default())
+        .manage(desktop_services::NotificationCoordinator::default())
+        .manage(desktop_services::BackupCoordinator::default())
         .manage(updater::UpdateCoordinator::default())
         .manage(cli_updates::CliUpdater::default())
         .manage(coordinator_build::CoordinatorBuild::default())
@@ -69,17 +69,17 @@ pub fn run() {
             docker::stack_status,
             bootstrap::get_forgejo_viewer_status,
             bootstrap::configure_forgejo_viewer,
-            phase4::provision_environment_request,
-            phase4::run_validation_job,
-            phase5::load_desktop_settings,
-            phase5::save_desktop_settings,
-            phase5::confirm_exit,
-            phase5::cancel_exit,
-            phase5::notify_attention,
-            phase5::disk_space_probe,
-            phase5::create_backup,
-            phase5::inspect_backup,
-            phase5::restore_backup,
+            environment::provision_environment_request,
+            environment::run_validation_job,
+            desktop_services::load_desktop_settings,
+            desktop_services::save_desktop_settings,
+            desktop_services::confirm_exit,
+            desktop_services::cancel_exit,
+            desktop_services::notify_attention,
+            desktop_services::disk_space_probe,
+            desktop_services::create_backup,
+            desktop_services::inspect_backup,
+            desktop_services::restore_backup,
             updater::check_desktop_update,
             updater::install_desktop_update,
             store::load_ui_state,
@@ -118,25 +118,26 @@ pub fn run() {
         .expect("error while building tauri application")
         .run(move |app, event| match event {
             tauri::RunEvent::ExitRequested { api, .. }
-                if phase5::exit_behavior(app) == phase5::ExitBehavior::StopStack
+                if desktop_services::exit_behavior(app)
+                    == desktop_services::ExitBehavior::StopStack
                     && !updater::is_restarting(app) =>
             {
-                let coordinator = app.state::<phase5::ExitCoordinator>();
-                match phase5::begin_exit_stop(&coordinator) {
-                    phase5::ExitRequestAction::Prompt(request_id) => {
+                let coordinator = app.state::<desktop_services::ExitCoordinator>();
+                match desktop_services::begin_exit_stop(&coordinator) {
+                    desktop_services::ExitRequestAction::Prompt(request_id) => {
                         api.prevent_exit();
                         let _ = app.emit(
-                            phase5::EXIT_CONFIRMATION_EVENT,
-                            phase5::ExitConfirmationRequested::new(),
+                            desktop_services::EXIT_CONFIRMATION_EVENT,
+                            desktop_services::ExitConfirmationRequested::new(),
                         );
-                        phase5::schedule_exit_timeout(
+                        desktop_services::schedule_exit_timeout(
                             app.clone(),
                             shutdown_profiles.clone(),
                             request_id,
                         );
                     }
-                    phase5::ExitRequestAction::Wait => api.prevent_exit(),
-                    phase5::ExitRequestAction::Allow => {}
+                    desktop_services::ExitRequestAction::Wait => api.prevent_exit(),
+                    desktop_services::ExitRequestAction::Allow => {}
                 }
             }
             tauri::RunEvent::Exit | tauri::RunEvent::ExitRequested { .. } => {

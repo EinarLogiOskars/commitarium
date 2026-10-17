@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, State};
 
-use crate::{cli_updates, docker, phase4};
+use crate::{cli_updates, docker, environment};
 
 const SERVICE: &str = "coordinator";
 /// What the coordinator image is built from, as docker/coordinator.Dockerfile
@@ -196,7 +196,7 @@ async fn wait_until_reachable() -> Result<(), String> {
     let deadline = Instant::now() + HEALTH_TIMEOUT;
     loop {
         let healthy = client
-            .get(phase4::coordinator_url("/health"))
+            .get(environment::coordinator_url("/health"))
             .send()
             .await
             .is_ok_and(|response| response.status().is_success());

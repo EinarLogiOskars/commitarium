@@ -1,4 +1,5 @@
-//! Phase 5 trusted-desktop services.
+//! Trusted desktop services: settings, exit, notifications, disk space, and
+//! backups.
 //!
 //! The renderer can manage typed presentation preferences, submit a bounded
 //! notification, inspect local disk readiness, and select a backup directory.
