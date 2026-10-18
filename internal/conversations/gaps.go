@@ -53,7 +53,8 @@ type gap struct {
 	Text string
 }
 
-// VisionSessions tells whether a project's vision is being written.
+// VisionSessions tells whether a project's vision is being written, and
+// reading the open session stores a vision the assistant has finished.
 type VisionSessions interface {
 	OpenSession(ctx context.Context, projectID string) (vision.Session, error)
 }
