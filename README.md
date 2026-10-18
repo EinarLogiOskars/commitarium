@@ -1,31 +1,43 @@
 # Commitarium
 
-**A local-first desktop workspace where coding agents plan, implement, review,
-and ship software together—without taking control away from you.**
+**You describe it. Commitarium builds it.**
 
 [![CI](https://github.com/EinarLogiOskars/commitarium/actions/workflows/ci.yml/badge.svg)](https://github.com/EinarLogiOskars/commitarium/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/EinarLogiOskars/commitarium?label=release)](https://github.com/EinarLogiOskars/commitarium/releases)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-![Commitarium workshop](desktop/src/assets/loading/workshop.png)
+![Commitarium building an app from one sentence, then changing it on request](docs/media/commitarium.gif)
 
-Commitarium builds and keeps your own apps. Describe what you want in a
-sentence ("a shelf for my Funko Pops", "a calorie tracker") and its assistant
-plans the app, hands the work to coding agents, checks the result, and opens
-the finished app in its own window. To change it later, ask: "make the buttons
-blue".
+<sub>*Sped up. In reality, an app like this takes about half an hour to build,
+and a small change a few minutes.*</sub>
 
-Behind that, it is a full software workshop for developers too: a lead agent
-builds, a reviewer from a different provider checks the plan and the code,
-every change goes through a pull request, and you decide how much the
-assistant may do on its own. Everything runs on your machine, in Docker, with
-a private Forgejo instance keeping the history.
+Want an app that does exactly what you need? Tell Commitarium in a sentence.
+Its assistant plans the app, hands the work to coding agents, checks what they
+make, and opens the finished app on your computer. Want it different? Ask, and
+it changes.
+
+- **No coding needed.** You talk to one assistant in plain words. It takes care
+  of the plan, the code, the setup, and the fixes when something breaks.
+- **Yours, on your computer.** Your apps and their data stay on your machine.
+- **Uses the AI you already have.** Sign in with your Claude or Codex account.
+  Commitarium keeps an eye on your usage limits and spreads the work to fit.
+- **Checked, not just generated.** A second agent, ideally from another
+  provider, reviews every plan and every change before it lands.
+
+**[Download for macOS, Windows, or Linux](https://github.com/EinarLogiOskars/commitarium/releases)**
+· needs [Docker](#requirements) and a Claude or Codex account.
 
 > [!IMPORTANT]
 > Commitarium is pre-1.0 early-access software. The core is in daily use and
 > tested, but expect rough edges. Use it on repositories you can recover.
 
 ## What it does
+
+Behind the apps, Commitarium is a full software workshop for developers too: a
+lead agent builds, a reviewer from a different provider checks the plan and the
+code, every change goes through a pull request, and you decide how much the
+assistant may do on its own. Everything runs on your machine, in Docker, with
+a private Forgejo instance keeping the history.
 
 - **Apps from a sentence.** The Apps area is where Commitarium opens. **New
   app** turns a description into a project with a written plan, a chosen
