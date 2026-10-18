@@ -170,7 +170,7 @@ GitLab, or another remote is a separate step.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/media/architecture-dark.png">
-  <img alt="The desktop app talks over narrow local APIs to Docker Compose, where the coordinator and the agent workers both write to a local Forgejo, all on your computer" src="docs/media/architecture-light.png">
+  <img alt="On your computer, the desktop app talks over narrow local APIs to Docker Compose. There the coordinator starts and steers the agent workers, and both keep their work in a local Forgejo." src="docs/media/architecture-light.png">
 </picture>
 
 The Go coordinator owns the workflow state machine, the assistant, autopilot,

@@ -4,7 +4,10 @@ import { AbsoluteFill } from "remotion";
 // light and dark tokens), rendered as a still for each GitHub theme.
 
 export const ARCHITECTURE_WIDTH = 1200;
-export const ARCHITECTURE_HEIGHT = 580;
+export const ARCHITECTURE_HEIGHT = 724;
+
+// The space between the coordinator and the workers, for the arrow and its label.
+const GAP = 220;
 
 const THEMES = {
   light: {
@@ -66,7 +69,6 @@ export function Architecture({ theme }: { theme: "light" | "dark" }) {
 
         <div
           style={{
-            flex: 1,
             background: `color-mix(in srgb, ${t.accent} 5%, ${t.bg})`,
             border: `1.5px solid ${t.border}`,
             borderRadius: 18,
@@ -76,25 +78,39 @@ export function Architecture({ theme }: { theme: "light" | "dark" }) {
           }}
         >
           <Label t={t}>Docker Compose</Label>
-          <div style={{ flex: 1, display: "flex", alignItems: "stretch", marginTop: 16 }}>
+          {/* The coordinator drives the workers; both keep their work in Forgejo. */}
+          <div style={{ display: "flex", alignItems: "stretch", marginTop: 16 }}>
             <Box t={t} style={{ flex: 1 }}>
               <Title>Coordinator</Title>
               <Sub t={t}>Go + SQLite</Sub>
               <Note t={t}>Workflow, assistant, autopilot, recovery</Note>
             </Box>
-            <Arrow t={t} direction="right" length={70} />
-            <Box t={t} style={{ flex: 1 }}>
-              <Title>Forgejo</Title>
-              <Sub t={t}>Local Git</Sub>
-              <Note t={t}>The durable record of every change</Note>
-            </Box>
-            <Arrow t={t} direction="left" length={70} />
+            <div style={{ width: GAP, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 8 }}>
+              <span style={{ color: t.muted, fontSize: 16, textAlign: "center", lineHeight: 1.3 }}>
+                starts and steers
+                <br />
+                agent turns
+              </span>
+              <Arrow t={t} direction="right" length={GAP - 40} />
+            </div>
             <Box t={t} style={{ flex: 1 }}>
               <Title>Agent workers</Title>
               <Sub t={t}>Codex · Claude</Sub>
               <Note t={t}>Supervised CLI sessions</Note>
             </Box>
           </div>
+          <div style={{ display: "flex", height: 84 }}>
+            <Down t={t} label="repositories, pull requests, merges" />
+            <div style={{ width: GAP }} />
+            <Down t={t} label="pushes commits" />
+          </div>
+          <Box t={t}>
+            <div style={{ display: "flex", alignItems: "baseline", gap: 14 }}>
+              <Title>Forgejo</Title>
+              <Sub t={t}>Local Git</Sub>
+              <span style={{ fontSize: 16, color: t.muted, marginLeft: 6 }}>The durable record of every change</span>
+            </div>
+          </Box>
         </div>
       </div>
     </AbsoluteFill>
@@ -135,6 +151,16 @@ const Label = ({ t, children }: { t: Theme; children: React.ReactNode }) => (
     {children}
   </div>
 );
+
+// A labelled arrow down from the box above, centred under it.
+function Down({ t, label }: { t: Theme; label: string }) {
+  return (
+    <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 12 }}>
+      <Arrow t={t} direction="down" length={64} />
+      <span style={{ color: t.muted, fontSize: 16 }}>{label}</span>
+    </div>
+  );
+}
 
 function Chips({ t, items }: { t: Theme; items: string[] }) {
   return (
