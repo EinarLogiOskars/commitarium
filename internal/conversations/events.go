@@ -61,7 +61,8 @@ type Watcher struct {
 	// autopilot's continues.
 	RetryWaits RetryWaitReader
 	// Toolchains and VisionSessions let the gap check see a project's stack
-	// and a vision being written, and AgentLimited, when set, tells it the
+	// and a vision being written; VisionSessions also lets each look store a
+	// vision the assistant has finished writing. AgentLimited, when set, tells it the
 	// assistant's agent is at its usage limit (gaps.go).
 	Toolchains     ToolchainReader
 	VisionSessions VisionSessions
@@ -90,12 +91,23 @@ func (watcher Watcher) Run(ctx context.Context) {
 // Tick looks once at every watched project.
 func (watcher Watcher) Tick(ctx context.Context) {
 	for _, scope := range watcher.Service.projectScopes() {
+		watcher.settleVision(ctx, scope)
 		if err := watcher.Service.observe(ctx, scope, watcher.snapshot); err != nil {
 			log.Printf("assistant events for %s: %v", scope, err)
 		}
 		watcher.launch(ctx, scope)
 		watcher.autopilot(ctx, scope)
 		watcher.gapCheck(ctx, scope)
+	}
+}
+
+// settleVision stores a vision the assistant has finished writing: the
+// vision service stores it only when its conversation is read, and nothing
+// else here reads it while the Vision page is closed. A new app's launch,
+// autopilot and the assistant's turns then see the vision once it is written.
+func (watcher Watcher) settleVision(ctx context.Context, scope string) {
+	if watcher.VisionSessions != nil {
+		_, _ = watcher.VisionSessions.OpenSession(ctx, scope)
 	}
 }
 
@@ -495,6 +507,12 @@ func (service *Service) Report(_ context.Context, scope, text string) error {
 	if err != nil {
 		service.mu.Unlock()
 		return err
+	}
+	// A new app's preview fails until its setup creates the stack; the launch
+	// moves along by itself, so the assistant is not woken over it.
+	if strings.HasPrefix(text, PreviewFailure) && stored.launching() {
+		service.mu.Unlock()
+		return nil
 	}
 	// The same report from two windows is told once.
 	if count := len(stored.Messages); count > 0 && stored.Messages[count-1].Role == "event" &&

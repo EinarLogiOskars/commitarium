@@ -44,6 +44,26 @@ func TestAPreviewFailureReportWakesTheAssistant(t *testing.T) {
 	}
 }
 
+// A new app's preview fails until its setup creates the stack, so a failure
+// reported while it launches is not told to the assistant.
+func TestAPreviewFailureDuringALaunchIsNotTold(t *testing.T) {
+	service, _ := newTestService(t)
+	if _, err := service.StartLaunch(t.Context(), "prj_test"); err != nil {
+		t.Fatal(err)
+	}
+	text := "The app's preview failed to start: choose a project stack before starting a preview."
+	for _, stage := range []LaunchStage{LaunchVision, LaunchSetup, LaunchBuilding} {
+		service.setLaunchStage("prj_test", stage, "")
+		if err := service.Report(t.Context(), "prj_test", text); err != nil {
+			t.Fatal(err)
+		}
+		stored, _ := service.read("prj_test")
+		if told := len(stored.PendingEvents) > 0; told != (stage == LaunchBuilding) {
+			t.Fatalf("at %s the failure was told: %t", stage, told)
+		}
+	}
+}
+
 func TestTheAssistantFollowsThePreviewSetupButNotOtherBackgroundWork(t *testing.T) {
 	service, _ := newTestService(t)
 	features := &featuresStub{features: []feature.Feature{
