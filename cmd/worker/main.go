@@ -647,22 +647,37 @@ func optionalHTTPURL(value string) (string, error) {
 }
 
 // updatedCLIDirectory holds provider CLIs the desktop updated after the image
-// was built; a CLI found there is used instead of the image's.
+// was built; a CLI found there is used instead of the image's when it runs.
 const updatedCLIDirectory = "/opt/commitarium-cli/bin"
 
 func preferUpdatedCLI(bundled string) string {
-	updated := filepath.Join(updatedCLIDirectory, filepath.Base(bundled))
-	if info, err := os.Stat(updated); err == nil && !info.IsDir() {
-		return updated
-	}
-	return bundled
+	return preferUpdatedCLIIn(updatedCLIDirectory, bundled)
 }
 
-// updatableCLI is executable when it is the CLI the desktop keeps updated, and
-// empty when a configured executable overrides it: the desktop compares the
-// reported version with its updated CLI and would otherwise restart forever.
+// preferUpdatedCLIIn falls back to the bundled CLI when the updated one cannot
+// even report its version, so a broken update cannot fail every turn. The
+// desktop runs logins and version checks by the same rule (agents.rs).
+func preferUpdatedCLIIn(directory string, bundled string) string {
+	updated := filepath.Join(directory, filepath.Base(bundled))
+	info, err := os.Stat(updated)
+	if err != nil || info.IsDir() {
+		return bundled
+	}
+	versionContext, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := exec.CommandContext(versionContext, updated, "--version").Run(); err != nil {
+		log.Printf("updated provider CLI %s does not run, using %s: %v", updated, bundled, err)
+		return bundled
+	}
+	return updated
+}
+
+// updatableCLI is executable when it is the CLI the desktop keeps updated, or
+// the image's one it falls back to, and empty when a configured executable
+// overrides it: the desktop compares the reported version with its updated CLI
+// and would otherwise restart forever.
 func updatableCLI(executable string, bundled string) string {
-	if executable != preferUpdatedCLI(bundled) {
+	if executable != bundled && executable != filepath.Join(updatedCLIDirectory, filepath.Base(bundled)) {
 		return ""
 	}
 	return executable

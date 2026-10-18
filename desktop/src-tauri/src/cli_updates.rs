@@ -664,15 +664,20 @@ fn running_workers(provider: Provider) -> Result<Vec<String>, String> {
     Ok(containers)
 }
 
-/// The CLI version a worker runs: an updated one when installed, else the
-/// image's.
+/// The CLI version a worker runs: an updated one when installed and working,
+/// else the image's.
 fn installed_version(container: &str, provider: Provider) -> Option<String> {
-    let executable = provider.executable();
-    let script = format!(
-        "if [ -x {CLI_DIRECTORY}/bin/{executable} ]; then {CLI_DIRECTORY}/bin/{executable} --version; else {executable} --version; fi"
-    );
+    let script = agents::cli_script(provider);
     let output = docker::docker_command()
-        .args(["exec", container, "sh", "-c", &script])
+        .args([
+            "exec",
+            container,
+            "sh",
+            "-c",
+            &script,
+            provider.executable(),
+            "--version",
+        ])
         .output()
         .ok()?;
     if !output.status.success() {

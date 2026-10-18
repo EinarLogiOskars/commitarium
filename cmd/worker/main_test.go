@@ -475,8 +475,31 @@ func TestOnlyTheUpdatedCLIReportsItsVersion(t *testing.T) {
 	if got := updatableCLI(defaultClaudeBinary, defaultClaudeBinary); got != defaultClaudeBinary {
 		t.Fatalf("bundled CLI = %q", got)
 	}
+	if got := updatableCLI("/opt/commitarium-cli/bin/claude", defaultClaudeBinary); got != "/opt/commitarium-cli/bin/claude" {
+		t.Fatalf("updated CLI = %q", got)
+	}
 	if got := updatableCLI("/opt/custom/claude", defaultClaudeBinary); got != "" {
 		t.Fatalf("overridden CLI = %q; want none", got)
+	}
+}
+
+func TestABrokenUpdatedCLIFallsBackToTheBundledOne(t *testing.T) {
+	directory := t.TempDir()
+	if got := preferUpdatedCLIIn(directory, defaultClaudeBinary); got != defaultClaudeBinary {
+		t.Fatalf("without an updated CLI = %q; want the bundled one", got)
+	}
+	updated := filepath.Join(directory, "claude")
+	if err := os.WriteFile(updated, []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if got := preferUpdatedCLIIn(directory, defaultClaudeBinary); got != defaultClaudeBinary {
+		t.Fatalf("with a broken updated CLI = %q; want the bundled one", got)
+	}
+	if err := os.WriteFile(updated, []byte("#!/bin/sh\necho '2.1.302 (Claude Code)'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if got := preferUpdatedCLIIn(directory, defaultClaudeBinary); got != updated {
+		t.Fatalf("with a working updated CLI = %q; want %q", got, updated)
 	}
 }
 
