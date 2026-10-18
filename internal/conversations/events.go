@@ -508,6 +508,12 @@ func (service *Service) Report(_ context.Context, scope, text string) error {
 		service.mu.Unlock()
 		return err
 	}
+	// A new app's preview fails until its setup creates the stack; the launch
+	// moves along by itself, so the assistant is not woken over it.
+	if strings.HasPrefix(text, PreviewFailure) && stored.launching() {
+		service.mu.Unlock()
+		return nil
+	}
 	// The same report from two windows is told once.
 	if count := len(stored.Messages); count > 0 && stored.Messages[count-1].Role == "event" &&
 		stored.Messages[count-1].Text == text {

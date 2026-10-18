@@ -110,8 +110,12 @@ func (watcher Watcher) gapCheck(ctx context.Context, scope string) {
 // running, no events or messages waiting, and no new app's launch, which
 // moves on by itself (launch.go).
 func (stored record) free() bool {
-	launching := stored.Launch != nil && stored.Launch.Stage != LaunchBuilding
-	return stored.Status != StatusRunning && len(stored.PendingEvents) == 0 && len(stored.Queued) == 0 && !launching
+	return stored.Status != StatusRunning && len(stored.PendingEvents) == 0 && len(stored.Queued) == 0 && !stored.launching()
+}
+
+// launching reports whether a new app's launch has not yet reached building.
+func (stored record) launching() bool {
+	return stored.Launch != nil && stored.Launch.Stage != LaunchBuilding
 }
 
 func (watcher Watcher) projectState(ctx context.Context, current project.Project) (projectState, error) {
