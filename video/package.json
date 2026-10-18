@@ -1,0 +1,20 @@
+{
+  "name": "commitarium-video",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "studio": "remotion studio src/index.ts",
+    "render:readme": "pnpm run render:mp4 && remotion ffmpeg -v error -y -i ../docs/media/commitarium.mp4 -r 25 -vf \"scale=960:-1:flags=lanczos,split[a][b];[a]palettegen=stats_mode=diff[p];[b][p]paletteuse=dither=none:diff_mode=rectangle\" ../docs/media/commitarium.gif",
+    "render:mp4": "remotion render src/index.ts ReadmeLoop ../docs/media/commitarium.mp4 --codec=h264 --crf=20"
+  },
+  "dependencies": {
+    "@remotion/cli": "4.0.531",
+    "react": "19.1.0",
+    "react-dom": "19.1.0",
+    "remotion": "4.0.531"
+  },
+  "devDependencies": {
+    "@types/react": "19.1.8",
+    "typescript": "5.8.3"
+  }
+}
