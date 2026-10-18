@@ -74,6 +74,20 @@ impl Provider {
 /// an update is installed there.
 pub(crate) const CLI_DIRECTORY: &str = "/opt/commitarium-cli";
 
+/// A `sh -c` script that runs the provider CLI the worker runs, by the
+/// worker's rule (`preferUpdatedCLI` in cmd/worker): the updated one when it
+/// answers `--version`, else the image's. Run it as
+/// `sh -c <script> <executable> <arguments>...`, so logins, login checks and
+/// turns never use different CLIs.
+pub(crate) fn cli_script(provider: Provider) -> String {
+    let executable = provider.executable();
+    format!(
+        "updated={CLI_DIRECTORY}/bin/{executable}; \
+         if [ -x \"$updated\" ] && \"$updated\" --version >/dev/null 2>&1; then exec \"$updated\" \"$@\"; fi; \
+         exec {executable} \"$@\""
+    )
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub(crate) struct Agent {
     pub(crate) id: String,
@@ -457,6 +471,37 @@ fn write_atomic(path: &std::path::Path, contents: &[u8]) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cli_script_prefers_a_working_updated_cli_like_the_worker() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let (updated, image) = (root.path().join("bin"), root.path().join("image"));
+        std::fs::create_dir(&updated).unwrap();
+        std::fs::create_dir(&image).unwrap();
+        let install = |directory: &std::path::Path, body: &str| {
+            let path = directory.join("claude");
+            std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        };
+        let script =
+            cli_script(Provider::Claude).replace(CLI_DIRECTORY, &root.path().to_string_lossy());
+        let run = || {
+            let output = std::process::Command::new("sh")
+                .args(["-c", &script, "claude", "auth", "status"])
+                .env("PATH", format!("{}:/usr/bin:/bin", image.display()))
+                .output()
+                .unwrap();
+            String::from_utf8(output.stdout).unwrap()
+        };
+        install(&image, "echo \"image $*\"");
+        assert_eq!(run(), "image auth status\n");
+        // An updated CLI that cannot even report its version is skipped.
+        install(&updated, "exit 1");
+        assert_eq!(run(), "image auth status\n");
+        install(&updated, "echo \"updated $*\"");
+        assert_eq!(run(), "updated auth status\n");
+    }
 
     fn templates() -> Value {
         json!({ "services": {

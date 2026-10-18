@@ -6,6 +6,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -372,7 +374,7 @@ func (service *Service) PutAttempt(
 			ctx,
 			attempt,
 			workerhttp.ErrorInternal,
-			"provider session could not be started",
+			launchFailureSummary(launchErr),
 			true,
 			launchErr,
 		)
@@ -710,6 +712,18 @@ const userLanguageNote = "\n\nWrite everything meant for people (messages, plans
 	"pull request text, and comments) in English, the user's language, even when the project's own content " +
 	"or interface is in another language. Code and the app's own text follow the project."
 
+// launchFailureSummary names why the provider CLI could not run when the
+// operating system refused it (a missing or wrong-architecture executable),
+// since that is safe to show and points at the fix.
+func launchFailureSummary(cause error) string {
+	const summary = "provider session could not be started"
+	var pathErr *os.PathError
+	if errors.As(cause, &pathErr) {
+		return summary + ": " + pathErr.Err.Error()
+	}
+	return summary
+}
+
 func (service *Service) failLaunch(
 	ctx context.Context,
 	attempt workerhttp.Attempt,
@@ -718,6 +732,10 @@ func (service *Service) failLaunch(
 	retryable bool,
 	cause error,
 ) (workerhttp.Attempt, error) {
+	// The summary is all the attempt records; the cause goes to the worker's
+	// log so `docker logs` shows why. Launch errors carry the executable path,
+	// never its arguments, so no prompt text is logged.
+	log.Printf("attempt %s: %s: %v", attempt.AttemptReference.AttemptID, summary, cause)
 	failed, err := service.journal.TransitionAttempt(ctx, workerjournal.AttemptTransition{
 		Reference:  attempt.AttemptReference,
 		Expected:   workerhttp.AttemptStateStarting,
