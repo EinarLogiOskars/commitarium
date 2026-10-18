@@ -168,21 +168,10 @@ GitLab, or another remote is a separate step.
 
 ## Architecture
 
-```text
-┌────────────────────────────────────────────────────────────┐
-│ Native desktop app (Tauri + React)                         │
-│ Docker lifecycle · agent login · previews · CLI updates    │
-└───────────────────────────┬────────────────────────────────┘
-                            │ narrow local APIs
-┌───────────────────────────▼────────────────────────────────┐
-│ Docker Compose                                             │
-│                                                            │
-│  ┌─────────────┐     ┌───────────┐     ┌─────────────────┐ │
-│  │ Coordinator │────▶│  Forgejo  │◀────│ Agent workers   │ │
-│  │ Go + SQLite │     │ local Git │     │ Codex / Claude  │ │
-│  └─────────────┘     └───────────┘     └─────────────────┘ │
-└────────────────────────────────────────────────────────────┘
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/media/architecture-dark.png">
+  <img alt="The desktop app talks over narrow local APIs to Docker Compose, where the coordinator and the agent workers both write to a local Forgejo, all on your computer" src="docs/media/architecture-light.png">
+</picture>
 
 The Go coordinator owns the workflow state machine, the assistant, autopilot,
 and restart recovery. Forgejo is the durable collaboration record. Provider workers supervise exact

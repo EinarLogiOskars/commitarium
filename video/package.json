@@ -5,7 +5,8 @@
   "scripts": {
     "studio": "remotion studio src/index.ts",
     "render:readme": "pnpm run render:mp4 && remotion ffmpeg -v error -y -i ../docs/media/commitarium.mp4 -r 25 -vf \"scale=960:-1:flags=lanczos,split[a][b];[a]palettegen=stats_mode=diff[p];[b][p]paletteuse=dither=none:diff_mode=rectangle\" ../docs/media/commitarium.gif",
-    "render:mp4": "remotion render src/index.ts ReadmeLoop ../docs/media/commitarium.mp4 --codec=h264 --crf=20"
+    "render:mp4": "remotion render src/index.ts ReadmeLoop ../docs/media/commitarium.mp4 --codec=h264 --crf=20",
+    "render:architecture": "remotion still src/index.ts Architecture-light ../docs/media/architecture-light.png --scale=2 && remotion still src/index.ts Architecture-dark ../docs/media/architecture-dark.png --scale=2"
   },
   "dependencies": {
     "@remotion/cli": "4.0.531",
