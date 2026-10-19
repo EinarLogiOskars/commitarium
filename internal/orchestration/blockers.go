@@ -28,6 +28,15 @@ const maxBlockerDetail = 4 * 1024
 func (starter *RemoteLeadStarter) noteBlocker(
 	ctx context.Context, runID string, kind execution.BlockerKind, check, detail, reason string,
 ) {
+	starter.noteBlockerFingerprinted(ctx, runID, kind, check, detail, detail, reason)
+}
+
+// noteBlockerFingerprinted is noteBlocker for a detail that varies with
+// state while the failure stays the same: fingerprintDetail, not detail,
+// recognises repeats.
+func (starter *RemoteLeadStarter) noteBlockerFingerprinted(
+	ctx context.Context, runID string, kind execution.BlockerKind, check, detail, fingerprintDetail, reason string,
+) {
 	store, ok := starter.executions.(blockerStore)
 	if !ok {
 		return
@@ -38,7 +47,7 @@ func (starter *RemoteLeadStarter) noteBlocker(
 	}
 	if err := store.RecordRunBlocker(ctx, execution.Blocker{
 		RunID: runID, Kind: kind, Check: check, Detail: detail, Reason: reason,
-		Fingerprint: execution.BlockerFingerprint(kind, check, detail), RecordedAt: time.Now().UTC(),
+		Fingerprint: execution.BlockerFingerprint(kind, check, fingerprintDetail), RecordedAt: time.Now().UTC(),
 	}); err != nil {
 		starter.reportError(err)
 	}
@@ -55,6 +64,16 @@ func (starter *RemoteLeadStarter) noteUnnamedBlocker(ctx context.Context, runID,
 		return
 	}
 	starter.noteBlocker(ctx, runID, execution.BlockerOther, "", reason, reason)
+}
+
+// blockerFingerprintDetail is the part of cause that recognises a repeat of
+// the same failure: a checklist mismatch is one failure however many steps
+// its detail names.
+func blockerFingerprintDetail(cause error) string {
+	if errors.Is(cause, errImplementationChecklist) {
+		return errImplementationChecklist.Error()
+	}
+	return cause.Error()
 }
 
 // classifyCause names what a coordinator-side failure was: a check of git
@@ -74,7 +93,7 @@ func classifyCause(cause error) (execution.BlockerKind, string) {
 	case errors.Is(cause, workspace.ErrPullRequestConflict), errors.Is(cause, workspace.ErrCheckoutConflict),
 		strings.HasPrefix(text, "verify "):
 		return execution.BlockerCheck, check
-	case strings.Contains(text, "without structured"), strings.Contains(text, "checklist is incomplete"),
+	case strings.Contains(text, "without structured"), errors.Is(cause, errImplementationChecklist),
 		strings.Contains(text, "no durable agreed plan"):
 		return execution.BlockerAgent, check
 	}

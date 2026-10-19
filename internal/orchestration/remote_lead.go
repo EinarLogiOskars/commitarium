@@ -5180,6 +5180,55 @@ func (starter *RemoteLeadStarter) finish(
 	}
 }
 
+// errImplementationChecklist is a lead's checklist not matching its
+// publication. Its text is the blocker's stable fingerprint; the wrapped
+// detail says what to fix.
+var errImplementationChecklist = errors.New("implementation checklist is incomplete or does not end at the published commit")
+
+// checkImplementationChecklist reports how checklist falls short of a
+// publication at publishedCommit for planVersion, naming each unfinished
+// step and the command that records it, so the lead can fix it in one turn.
+func checkImplementationChecklist(
+	checklist featureartifact.ImplementationPlan, planVersion int, publishedCommit string,
+) error {
+	if checklist.PlanVersion != planVersion {
+		return fmt.Errorf("%w: the checklist is for plan version %d but the agreed plan is version %d",
+			errImplementationChecklist, checklist.PlanVersion, planVersion)
+	}
+	if len(checklist.Steps) == 0 {
+		return fmt.Errorf("%w: the checklist has no steps", errImplementationChecklist)
+	}
+	var unfinished []string
+	for index, step := range checklist.Steps {
+		if step.Status == featureartifact.StepCompleted {
+			continue
+		}
+		commit := "<lowercase-commit-id>"
+		if index == len(checklist.Steps)-1 {
+			commit = strings.ToLower(publishedCommit)
+		}
+		complete := fmt.Sprintf("'commitarium-artifact plan complete %s %s'", step.ID, commit)
+		if step.Status == featureartifact.StepPending {
+			unfinished = append(unfinished, fmt.Sprintf(
+				"step %d %q is pending: run 'commitarium-artifact plan start %s', then %s",
+				step.Position, step.ID, step.ID, complete))
+		} else {
+			unfinished = append(unfinished, fmt.Sprintf(
+				"step %d %q is %s: record its commit with %s", step.Position, step.ID, step.Status, complete))
+		}
+	}
+	if len(unfinished) > 0 {
+		return fmt.Errorf("%w: %s", errImplementationChecklist, strings.Join(unfinished, "; "))
+	}
+	last := checklist.Steps[len(checklist.Steps)-1]
+	if last.CommitID != publishedCommit {
+		return fmt.Errorf("%w: the last step %q is recorded at commit %s but the published commit is %s; "+
+			"the published head must be the commit recorded for the last step",
+			errImplementationChecklist, last.ID, last.CommitID, publishedCommit)
+	}
+	return nil
+}
+
 func (starter *RemoteLeadStarter) verifyImplementationPublication(
 	ctx context.Context,
 	request remoteLeadRequest,
@@ -5216,9 +5265,8 @@ func (starter *RemoteLeadStarter) verifyImplementationPublication(
 			if decodeErr := json.Unmarshal([]byte(artifact.Document), &checklist); decodeErr != nil {
 				return fmt.Errorf("decode implementation checklist: %w", decodeErr)
 			}
-			if checklist.PlanVersion != run.PlanVersion || !checklist.Complete() ||
-				checklist.Steps[len(checklist.Steps)-1].CommitID != result.Publication.CommitID {
-				return errors.New("implementation checklist is incomplete or does not end at the published commit")
+			if err := checkImplementationChecklist(checklist, run.PlanVersion, result.Publication.CommitID); err != nil {
+				return err
 			}
 		}
 	}
@@ -6858,7 +6906,7 @@ func (starter *RemoteLeadStarter) requireReview(
 		text += " What failed: " + detail + "."
 	}
 	kind, check := classifyCause(cause)
-	starter.noteBlocker(ctx, request.runID, kind, check, cause.Error(), text)
+	starter.noteBlockerFingerprinted(ctx, request.runID, kind, check, cause.Error(), blockerFingerprintDetail(cause), text)
 	_, _ = starter.executions.RecordSessionEventWithID(
 		ctx, request.identity.AttemptID+":recovery:review-required",
 		request.identity.SessionID,
