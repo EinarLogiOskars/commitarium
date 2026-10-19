@@ -15,7 +15,7 @@ use crate::agents::Provider;
 use crate::{docker, profiles};
 
 /// The ID of the base worker image a derivative was built from.
-const BASE_IMAGE_LABEL: &str = "commitarium.base-image";
+pub(crate) const BASE_IMAGE_LABEL: &str = "commitarium.base-image";
 
 const ENVIRONMENT_DOCKERFILE: &str = r#"ARG BASE_IMAGE
 FROM ${BASE_IMAGE}
@@ -357,7 +357,7 @@ fn build_environment_images(
 
 /// Provisioning and the background refresh both build the derivative images,
 /// rewrite the overlay, and recreate the workers; they take turns.
-fn environment_images_lock() -> MutexGuard<'static, ()> {
+pub(crate) fn environment_images_lock() -> MutexGuard<'static, ()> {
     static IMAGES: Mutex<()> = Mutex::new(());
     IMAGES
         .lock()
@@ -491,6 +491,26 @@ pub(crate) fn migrate_environment_overlay() -> Result<(), String> {
         }
         _ => Err("the approved-environment overlay has an unexpected form".into()),
     }
+}
+
+/// The derivative images the environment overlay selects, none without an
+/// approved environment.
+pub(crate) fn approved_environment_images() -> Result<Vec<String>, String> {
+    let contents = match fs::read_to_string(docker::environment_compose_file()?) {
+        Ok(contents) => contents,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(format!("read the environment overlay: {error}")),
+    };
+    // A legacy overlay names the role workers until it is migrated.
+    Ok([
+        Provider::Codex.template_service(),
+        Provider::Claude.template_service(),
+        "codex-worker",
+        "claude-worker",
+    ]
+    .into_iter()
+    .filter_map(|service| overlay_image(&contents, service))
+    .collect())
 }
 
 /// The overlay pointing each built provider's worker template at its

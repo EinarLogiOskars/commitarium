@@ -829,7 +829,8 @@ fn launch_preview(
         "[preview] Building and starting the Compose stack.".into(),
     );
     match compose_stream_up(&runtime, &manager, &project_id, generation) {
-        Ok(()) => {}
+        // A rebuild leaves the preview's previous images untagged.
+        Ok(()) => crate::cleanup::spawn(),
         Err(error) => {
             manager.append_log(&project_id, generation, format!("[preview] {error}"));
             fail_preview(&app, &manager, &project_id, generation, &error, None);

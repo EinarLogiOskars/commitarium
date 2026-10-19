@@ -2,6 +2,7 @@ mod agents;
 mod app_pages;
 mod apps;
 mod bootstrap;
+mod cleanup;
 mod cli_updates;
 mod coordinator_build;
 mod desktop_services;
