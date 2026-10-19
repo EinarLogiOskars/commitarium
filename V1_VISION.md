@@ -93,8 +93,12 @@ Presets cover the common cases:
   features (ADR-031).
 - **Full**: every step. For data, money, auth, migrations, and concurrency.
 
-If a quick change turns out to be bigger than it looked, the agent asks to
-turn on the plan or the reviewer for the same work order, keeping its context.
+~~If a quick change turns out to be bigger than it looked, the agent asks to
+turn on the plan or the reviewer for the same work order, keeping its context.~~
+Cancelled 2026-10-19: it would rarely trigger, since the assistant picks the
+preset, and a quick change that grows still finishes or is replaced by a
+Planned work order (autopilot does this when one gets stuck); changing a
+running work order's steps would touch the workflow's core.
 An earlier draft of this vision had a separate kind, the task, for quick
 changes; it was folded into the work order because it differed only in these
 optional steps.
@@ -221,7 +225,7 @@ public coordinator API, and every new action comes with an approval policy
 | Escalation | Done: wait reasons, the attention inbox, native notifications, the intervene bar. Failures pause instead of ending work orders ([RECOVERABLE_RUNS_PLAN.md](docs/plans/RECOVERABLE_RUNS_PLAN.md), ADR-017): retry, reopen, back to Ready, and resume after an expired login. A login failure waits for a sign-in instead of failing, and work resumes once the agent works again ([LOGIN_RECOVERY_PLAN.md](docs/plans/LOGIN_RECOVERY_PLAN.md), ADR-034). |
 | Isolation | Done. Every new kind of work reuses it. Agents' Forgejo tokens are kept out of their environment and redacted from activity (PR #77). |
 | Agents | Done ([AGENTS_PLAN.md](docs/plans/AGENTS_PLAN.md), ADR-016): one worker per provider account, serving both roles, chosen at Start. |
-| Flexible work orders | Done ([FLEXIBLE_WORK_ORDERS_PLAN.md](docs/plans/FLEXIBLE_WORK_ORDERS_PLAN.md), ADR-018, ADR-031): Quick change, Planned, Reviewed plan, and Full chosen at Start, and a Draft can start without clarifying. Turning a step on mid-run is a follow-up. |
+| Flexible work orders | Done ([FLEXIBLE_WORK_ORDERS_PLAN.md](docs/plans/FLEXIBLE_WORK_ORDERS_PLAN.md), ADR-018, ADR-031): Quick change, Planned, Reviewed plan, and Full chosen at Start, and a Draft can start without clarifying. Turning a step on mid-run was cancelled (see Work order). |
 | Session | Done and tested in real use ([SESSIONS_PLAN.md](docs/plans/SESSIONS_PLAN.md), ADR-019): one-click start, chat on the session branch, catch-up with main, session preview, one commit at finish through the merge gate. |
 | Project direction and assistant | Done ([ASSISTANT_PLAN.md](docs/plans/ASSISTANT_PLAN.md), ADR-020, ADR-022): the Vision page with an assistant-written plan, one assistant at the top level and in each project that acts through approval cards, usage limits, and recovery of blocked work ([ASSISTANT_RECOVERY_PLAN.md](docs/plans/ASSISTANT_RECOVERY_PLAN.md), ADR-032), including replacing a goal's work order once its recovery has run out. |
 | Builder mode, autopilot, Apps | Done: autopilot on a goal the user set (ADR-023); the Apps area, where a sentence starts a new app and the assistant drives ([APPS_PLAN.md](docs/plans/APPS_PLAN.md), ADR-024). AI for apps through a local gateway is proposed ([APP_AI_PLAN.md](docs/plans/APP_AI_PLAN.md), ADR-033). |

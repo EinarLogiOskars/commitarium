@@ -97,7 +97,8 @@ throughout:
    - The intervention bar offers only the lead when there is no reviewer.
 7. **Escalation mid-run is out of scope here.** A quick change that turns out
    bigger goes Back to Ready (ADR-017) and starts again with the plan or the
-   reviewer on. Turning steps on for a running work order is a follow-up.
+   reviewer on. Turning steps on for a running work order was cancelled on
+   2026-10-19 (V1_VISION.md).
 
 ## Slices
 
