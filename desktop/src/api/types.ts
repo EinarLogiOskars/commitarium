@@ -68,6 +68,9 @@ export interface Agent {
   provider: AgentProvider;
   created_at: string;
   updated_at: string;
+  /** Set while the agent's login fails past the automatic retries: the user
+   * signs it in again, and `waiting` work orders continue then. */
+  needs_sign_in?: { since: string; waiting: number };
 }
 
 /** The persisted last-successful model list for a provider+role worker. */

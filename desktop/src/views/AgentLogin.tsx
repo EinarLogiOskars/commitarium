@@ -2,10 +2,19 @@ import { useCallback, useEffect, useState } from "react";
 import { beginLogin, listProfiles, onLoginProgress, type Profile } from "../ipc";
 import { afterAgentConnected, LoginSteps } from "./Agents";
 
-/** Logs one agent back in where its work order paused (ADR-017). Log in
+/** Signs one agent back in where its work paused (ADR-017, ADR-034). Sign in
  * starts the provider's login right away; once the agent is connected, the
- * work orders waiting on it continue by themselves. */
-export function AgentLogin({ agentId, agentName }: { agentId: string; agentName: string }) {
+ * work waiting on it continues by itself. */
+export function AgentLogin({
+  agentId,
+  agentName,
+  continuing = "the work order is continuing",
+}: {
+  agentId: string;
+  agentName: string;
+  /** What goes on once the agent is connected, after "<agent> is connected; ". */
+  continuing?: string;
+}) {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -50,11 +59,13 @@ export function AgentLogin({ agentId, agentName }: { agentId: string; agentName:
     <div className="agent-login">
       {error && <div className="banner banner--error">{error}</div>}
       {status === "connected" ? (
-        <p className="muted">{agentName} is connected; the work order is continuing.</p>
+        <p className="muted">
+          {agentName} is connected; {continuing}.
+        </p>
       ) : !loggingIn ? (
         <div className="row">
           <button className="primary" onClick={() => void start("subscription")} disabled={busy}>
-            {busy ? "Starting…" : "Log in"}
+            {busy ? "Starting…" : "Sign in"}
           </button>
           <button className="ghost" onClick={() => void start("api_key")} disabled={busy}>
             Use an API key

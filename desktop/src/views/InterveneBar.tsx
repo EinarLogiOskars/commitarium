@@ -217,11 +217,11 @@ export function InterveneBar({
       {loginWait && run.login_required && (
         <div className="wait-banner wait-banner--warn wait-banner--login">
           <span className="wait-banner__kind">
-            {agentName(agents, run.login_required.agent)} login expired
+            {agentName(agents, run.login_required.agent)} needs you to sign in again
           </span>
           <span>
-            The {run.login_required.role} can't continue until this agent is connected again. The
-            work order continues by itself once you log in.
+            The {run.login_required.role} can't go on until it works again. The work order continues
+            by itself once you sign in.
           </span>
           <AgentLogin
             agentId={run.login_required.agent}
