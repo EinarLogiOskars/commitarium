@@ -11,7 +11,7 @@ Last reconciled with the implementation: 2026-09-24.
 
 Remaining milestones are completed in numeric order. Work that already landed
 out of order remains recorded in its owning phase; it does not make an earlier
-incomplete phase complete. Phase 2, Phase 4, and Phase 5 are closed.
+incomplete phase complete. Phase 2, Phase 4, Phase 5, and Phase 6 are closed.
 
 | Phase | Status |
 | --- | --- |
@@ -21,7 +21,7 @@ incomplete phase complete. Phase 2, Phase 4, and Phase 5 are closed.
 | Phase 3: Git and Forgejo workflow | Complete |
 | Phase 4: Project environments and isolated validation | Complete |
 | Phase 5: Desktop application | Complete |
-| Phase 6: Trusted host handoff | Substantially complete |
+| Phase 6: Trusted host handoff | Complete |
 | Phase 7: Rich review and visualization | Planned |
 | Phase 8: Remote and phone access | Deferred |
 
@@ -47,7 +47,7 @@ The first supported collaboration is between Codex CLI and Claude Code. The desi
    protecting the host and the user's upstream repository. Projects may add
    disposable, credential-free validation workers as an independent merge
    gate; without them, the UI explicitly warns that merge relies on the agents.
-7. **Controlled handoff:** Iterative agent activity stays in the internal forge. The trusted host converts accepted work into one clean local commit, and pushing that commit to any external Git provider is a separate user-controlled action; users may explicitly chain the two.
+7. **Controlled handoff:** Iterative agent activity stays in the internal forge. The trusted host converts accepted work into one clean local commit, and pushing that commit to any external Git provider is a separate user-controlled action.
 8. **Provider choice:** The user chooses which agent codes and which reviews, and can configure subscription-backed or API-backed authentication explicitly.
 9. **No silent billing changes:** The system never silently switches from subscription usage to API billing, or between billing profiles.
 10. **One workspace, many projects:** One Commitarium installation manages all projects imported by the user.
@@ -415,9 +415,9 @@ The coordinator merges the approved internal pull request into Forgejo's protect
 
 The trusted host may first synchronize a completed feature into the user's local
 repository as one clean user-authored commit, then separately push that exact
-commit to any configured external Git repository. The user can request either
-step manually or opt into chaining them. Containerized services neither receive
-external credentials nor perform external pushes. Internal and clean commit IDs
+commit to any configured external Git repository. The user requests each
+step; chaining them automatically was cancelled (see Phase 6). Containerized
+services neither receive external credentials nor perform external pushes. Internal and clean commit IDs
 differ and are connected by a verified local handoff record; external activity
 does not change whether the internal feature is complete.
 
@@ -716,17 +716,19 @@ and the renderer.
 
 ### Phase 6: Trusted host handoff
 
-**Status: Substantially complete.** Exact local synchronization, receipt-backed
-upstream publication, guarded retries, and provider-neutral Git pushing are
-implemented. Automatic synchronization-to-publication chaining remains before
-phase completion. Provider-specific pull-request creation after publication is
-an optional later enhancement, not a handoff blocker.
+**Status: Complete.** Exact local synchronization, receipt-backed upstream
+publication, guarded retries, and provider-neutral Git pushing are
+implemented. Automatic synchronization-to-publication chaining was cancelled
+on 2026-10-19: pushing upstream is the one step where work leaves the user's
+machine, so it stays an action the user starts. Provider-specific
+pull-request creation after publication is an optional later enhancement, not
+a handoff blocker.
 
 - Synchronize an exact completed feature into a temporary host worktree as one
   clean commit using the user's configured Git identity.
 - Record and verify the internal revision to clean local commit mapping.
-- Keep local synchronization and upstream push as separate actions, with an
-  option to chain them automatically.
+- Keep local synchronization and upstream push as separate actions. ~~An
+  option to chain them automatically.~~ Cancelled; see the status above.
 - Add provider-neutral host Git pushing. Provider-specific pull-request
   integration is deferred as the optional enhancement described above.
 - Refuse dirty, diverged, contradictory, or ambiguous state and never

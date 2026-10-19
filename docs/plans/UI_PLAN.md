@@ -504,7 +504,7 @@ bleeding-edge canvas/CSS features without confirming they work in WKWebView.
 
 - Clean-commit sync into the user's selected local repo (trusted host step).
 - Separate, explicit user-controlled push to an external Git remote.
-- Never chain the two silently; chaining is an explicit user choice.
+- Never chain the two. (Chaining as a user choice was cancelled; see ADR-008.)
 
 ## Non-goals for the first UI
 

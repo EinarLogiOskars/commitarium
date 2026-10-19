@@ -1,7 +1,8 @@
 # Recoverable Runs: Implementation Plan
 
-**Status:** implemented on `feat/recoverable-runs` (R1–R7); awaiting user
-testing.
+**Status:** merged (PR #6) and in daily use. Extended by assistant-driven
+recovery (ASSISTANT_RECOVERY_PLAN.md, ADR-032) and login recovery
+(LOGIN_RECOVERY_PLAN.md, ADR-034).
 
 ## Goal
 

@@ -1,7 +1,7 @@
 # Apps: Implementation Plan
 
-**Status:** agreed 2026-10-12; phase 1 merged (PR #24); phase 2 on
-`feat/apps-phase-2` (ADR-024). Builds on the assistant (ASSISTANT_PLAN.md,
+**Status:** agreed 2026-10-12; phase 1 merged (PR #24), phase 2 merged
+(PR #25) (ADR-024). Builds on the assistant (ASSISTANT_PLAN.md,
 ADR-022) and autopilot (ADR-023).
 
 ## Goal

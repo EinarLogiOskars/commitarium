@@ -3,7 +3,7 @@
 ## Status
 
 Agreed direction, 2026-10-09; kinds of work and the order revised on
-2026-10-11. Last reconciled with the implementation on 2026-10-17: the
+2026-10-11. Last reconciled with the implementation on 2026-10-19: the
 "Where we stand" table says what is built. Detailed implementation plans and
 ADRs follow per milestone; this document records what 1.0 is and why, and
 the ADRs win where they have since refined it.
@@ -218,12 +218,12 @@ public coordinator API, and every new action comes with an approval policy
 | --- | --- |
 | Work order (full) | Done. Today's product. |
 | Planning view | Done: Draft and Ready states, handoff briefs, Start with a freshness check, and settings chosen at Start ([READY_WORK_ORDERS_PLAN.md](docs/plans/READY_WORK_ORDERS_PLAN.md)). |
-| Escalation | Done: wait reasons, the attention inbox, native notifications, the intervene bar. Failures pause instead of ending work orders ([RECOVERABLE_RUNS_PLAN.md](docs/plans/RECOVERABLE_RUNS_PLAN.md), ADR-017): retry, reopen, back to Ready, and resume after an expired login. |
-| Isolation | Done. Every new kind of work reuses it. |
+| Escalation | Done: wait reasons, the attention inbox, native notifications, the intervene bar. Failures pause instead of ending work orders ([RECOVERABLE_RUNS_PLAN.md](docs/plans/RECOVERABLE_RUNS_PLAN.md), ADR-017): retry, reopen, back to Ready, and resume after an expired login. A login failure waits for a sign-in instead of failing, and work resumes once the agent works again ([LOGIN_RECOVERY_PLAN.md](docs/plans/LOGIN_RECOVERY_PLAN.md), ADR-034). |
+| Isolation | Done. Every new kind of work reuses it. Agents' Forgejo tokens are kept out of their environment and redacted from activity (PR #77). |
 | Agents | Done ([AGENTS_PLAN.md](docs/plans/AGENTS_PLAN.md), ADR-016): one worker per provider account, serving both roles, chosen at Start. |
 | Flexible work orders | Done ([FLEXIBLE_WORK_ORDERS_PLAN.md](docs/plans/FLEXIBLE_WORK_ORDERS_PLAN.md), ADR-018, ADR-031): Quick change, Planned, Reviewed plan, and Full chosen at Start, and a Draft can start without clarifying. Turning a step on mid-run is a follow-up. |
 | Session | Done and tested in real use ([SESSIONS_PLAN.md](docs/plans/SESSIONS_PLAN.md), ADR-019): one-click start, chat on the session branch, catch-up with main, session preview, one commit at finish through the merge gate. |
-| Project direction and assistant | Done ([ASSISTANT_PLAN.md](docs/plans/ASSISTANT_PLAN.md), ADR-020, ADR-022): the Vision page with an assistant-written plan, one assistant at the top level and in each project that acts through approval cards, usage limits, and recovery of blocked work ([ASSISTANT_RECOVERY_PLAN.md](docs/plans/ASSISTANT_RECOVERY_PLAN.md), ADR-032). |
+| Project direction and assistant | Done ([ASSISTANT_PLAN.md](docs/plans/ASSISTANT_PLAN.md), ADR-020, ADR-022): the Vision page with an assistant-written plan, one assistant at the top level and in each project that acts through approval cards, usage limits, and recovery of blocked work ([ASSISTANT_RECOVERY_PLAN.md](docs/plans/ASSISTANT_RECOVERY_PLAN.md), ADR-032), including replacing a goal's work order once its recovery has run out. |
 | Builder mode, autopilot, Apps | Done: autopilot on a goal the user set (ADR-023); the Apps area, where a sentence starts a new app and the assistant drives ([APPS_PLAN.md](docs/plans/APPS_PLAN.md), ADR-024). AI for apps through a local gateway is proposed ([APP_AI_PLAN.md](docs/plans/APP_AI_PLAN.md), ADR-033). |
 | Marketplace | MVP done ([MARKETPLACE_PLAN.md](docs/plans/MARKETPLACE_PLAN.md)): a closed Forgejo marketplace with sign-up, releasing an app, and browsing and installing as a local copy. |
 
@@ -243,8 +243,10 @@ concurrently on one worker, so one agent can serve several work orders.
 - The project assistant with project direction, planning and creating all
   kinds of work, and builder mode
 - Autopilot and Apps, which landed ahead of 1.0
-- Finishing Phase 6: automatic chaining of local synchronization and upstream
-  publication (still open)
+- ~~Finishing Phase 6: automatic chaining of local synchronization and upstream
+  publication~~ Cancelled 2026-10-19: pushing upstream stays a user action
+  (see [Unchanged](#unchanged)), so local synchronization and upstream
+  publication remain two separate steps the user starts.
 
 **After 1.0:**
 
@@ -278,7 +280,8 @@ Live reload depends on the project's compose file mounting its sources.
 8. Autopilot. Done (ADR-023).
 9. Apps, with the change button. Done (ADR-024).
 
-Left for 1.0: finishing Phase 6.
+Nothing in this scope is left for 1.0; the automatic publication that
+finished Phase 6 was cancelled (see [Scope](#scope)).
 
 Each step builds on the ones before: flexible work orders give the assistant
 cheap work to run, sessions add the interactive kind, and project direction
@@ -301,3 +304,5 @@ gives it something to plan against before it is trusted to act. Intermediate
   separate, opt-in grants.
 - **Review where it pays**: plan and code review split, acceptance tests
   removed (ADR-031).
+- **Upstream publication stays manual**: chaining local synchronization into
+  an automatic upstream push was cancelled; ADR-008 is amended.
