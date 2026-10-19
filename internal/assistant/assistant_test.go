@@ -118,7 +118,7 @@ func newAssistant(t *testing.T) (*assistant.Service, *scriptedWorker, *workflow.
 
 func TestAssistantClarifiesAWorkOrderIntoAHandoffBrief(t *testing.T) {
 	service, worker, briefs, storedFeature := newAssistant(t)
-	session, created, err := service.Start(t.Context(), storedFeature.ProjectID, storedFeature.ID, "claude", "")
+	session, created, err := service.Start(t.Context(), storedFeature.ProjectID, storedFeature.ID, "claude", "", "")
 	if err != nil || !created || session.Status != assistant.StatusRunning {
 		t.Fatalf("start: session=%+v created=%v err=%v", session, created, err)
 	}
@@ -130,7 +130,7 @@ func TestAssistantClarifiesAWorkOrderIntoAHandoffBrief(t *testing.T) {
 		!strings.Contains(first.Instructions, "Let users set a due date on to-dos.") {
 		t.Fatalf("first turn request: %+v", first)
 	}
-	if again, created, err := service.Start(t.Context(), storedFeature.ProjectID, storedFeature.ID, "claude", ""); err != nil ||
+	if again, created, err := service.Start(t.Context(), storedFeature.ProjectID, storedFeature.ID, "claude", "", ""); err != nil ||
 		created || again.ID != session.ID || len(worker.puts) != 1 {
 		t.Fatalf("restart: session=%+v created=%v err=%v puts=%d", again, created, err, len(worker.puts))
 	}
@@ -199,5 +199,21 @@ func TestAssistantCannotAcceptWithoutABrief(t *testing.T) {
 	service, _, _, storedFeature := newAssistant(t)
 	if _, err := service.AcceptBrief(t.Context(), storedFeature.ProjectID, storedFeature.ID, "accept-1"); !errors.Is(err, assistant.ErrNotReady) {
 		t.Fatalf("accept without a brief: %v", err)
+	}
+}
+
+// Seeded with what Commitarium's assistant gathered, the brief writer writes
+// the brief at once and asks only what it must (ADR-035).
+func TestTheBriefWriterWritesAtOnceFromAGatheredDescription(t *testing.T) {
+	service, worker, _, storedFeature := newAssistant(t)
+	if _, _, err := service.Start(t.Context(), storedFeature.ProjectID, storedFeature.ID, "claude", "",
+		"Overdue to-dos turn red; no reminders."); err != nil {
+		t.Fatal(err)
+	}
+	instructions := worker.puts[0].Instructions
+	if !strings.Contains(instructions, "write the brief now without asking") ||
+		!strings.Contains(instructions, "Overdue to-dos turn red; no reminders.") ||
+		strings.Contains(instructions, "Ask only questions whose answers would change the work") {
+		t.Fatalf("instructions = %s", instructions)
 	}
 }

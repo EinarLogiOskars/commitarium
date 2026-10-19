@@ -59,6 +59,13 @@ const (
 	// AssistantAnswerHelper answers a helper the assistant started (ADR-035):
 	// Guidance is the answer to the question Helper asked.
 	AssistantAnswerHelper AssistantActionType = "answer_helper"
+	// AssistantWriteBrief has the brief writer write a draft work order's
+	// brief from Description, what the assistant gathered (ADR-035).
+	AssistantWriteBrief AssistantActionType = "write_brief"
+	// AssistantAcceptBrief accepts the brief the brief writer proposed, which
+	// makes the work order Ready. Commitarium proposes it from the helper's
+	// result; the assistant never does.
+	AssistantAcceptBrief AssistantActionType = "accept_brief"
 )
 
 // AssistantAction is one proposed action. Fields that do not apply to its
@@ -109,8 +116,12 @@ type AssistantAction struct {
 	// Autopilot starts it only once that work has merged, so two changes to
 	// the same part of the app do not run at once.
 	After string `json:"after"`
-	// Helper, for answer_helper, names the helper that asked.
+	// Helper, for answer_helper, names the helper that asked; for a card
+	// from a helper's result, the helper that proposed it.
 	Helper string `json:"helper"`
+	// Brief, for create_work_order, has the new work order's brief written
+	// from Description before it starts (ADR-035): it is created as a draft.
+	Brief bool `json:"brief,omitempty"`
 }
 
 // PhaseChoices are the action's planning models and efforts (ADR-031); nil
@@ -224,6 +235,10 @@ func (action AssistantAction) validate() error {
 	case AssistantAnswerHelper:
 		if action.Helper == "" || action.Guidance == "" || len(action.Guidance) > MaxGoalBytes {
 			return fmt.Errorf("answering a helper needs the helper and a bounded answer in guidance")
+		}
+	case AssistantWriteBrief:
+		if action.WorkOrderID == "" || action.Description == "" || len(action.Description) > MaxGoalBytes {
+			return fmt.Errorf("writing a brief needs a work order and a bounded description")
 		}
 	case AssistantStartAutopilot:
 		if action.Priority < 0 || action.Priority > maxVisionPriority {

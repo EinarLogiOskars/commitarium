@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/EinarLogiOskars/commitarium/internal/conversations"
+	"github.com/EinarLogiOskars/commitarium/internal/feature"
 	"github.com/EinarLogiOskars/commitarium/internal/featureartifact"
 	"github.com/EinarLogiOskars/commitarium/internal/project"
 	"github.com/EinarLogiOskars/commitarium/internal/vision"
@@ -152,5 +153,69 @@ func TestTheHelperReaderReadsAQuestion(t *testing.T) {
 	visions.notFound = true
 	if state, err := read(t.Context(), "prj_test", helper); err != nil || state.Status != conversations.HelperFinished {
 		t.Fatalf("a gone helper: %+v, %v", state, err)
+	}
+}
+
+func briefHandler(stub ConversationService, clarifier *recordingWorkOrderAssistant) http.Handler {
+	features := &recordingFeatureService{getResult: feature.Feature{
+		ID: "fea_sort", ProjectID: "prj_test", Title: "Sort the shelf", State: feature.StateDraft,
+	}}
+	features.createResult = features.getResult
+	projects := &recordingProjectService{getByIDResult: project.Project{ID: "prj_test"}}
+	return NewWithWorkspaceRealWorkflowDeletionAndModels(projects, features, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil,
+		stub, clarifier, testAgents())
+}
+
+func approveCard(t *testing.T, handler http.Handler, body string) {
+	t.Helper()
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost,
+		"/api/v1/assistant/conversations/prj_test/actions/act_1/approve", strings.NewReader(body)))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", recorder.Code, recorder.Body.String())
+	}
+}
+
+// write_brief starts the brief writer on the assistant's agent with what
+// the assistant gathered, and follows it as a helper; so does a new work
+// order whose brief is written first, which is created without starting.
+func TestWritingABriefStartsTheBriefWriter(t *testing.T) {
+	for name, card := range map[string]featureartifact.AssistantAction{
+		"write_brief": {Type: featureartifact.AssistantWriteBrief, Reason: "Settled", WorkOrderID: "fea_sort",
+			Description: "Sort by date, newest first."},
+		"a new work order with a brief": {Type: featureartifact.AssistantCreateWorkOrder, Reason: "Asked",
+			Title: "Sort the shelf", Description: "Sort by date, newest first.", Steps: "planned", Brief: true,
+			LeadAgent: "codex", LeadModel: "gpt-6-luna"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			stub := &helperConversations{conversationStub: &conversationStub{
+				settings: conversations.Settings{Agent: "codex", Model: "gpt-6-luna"},
+				action:   conversations.Action{ID: "act_1", Status: conversations.ActionProposed, AssistantAction: card},
+			}}
+			clarifier := &recordingWorkOrderAssistant{}
+			approveCard(t, briefHandler(stub, clarifier), `{"start":true}`)
+			if clarifier.agent != "codex" || clarifier.model != "gpt-6-luna" || clarifier.description != "Sort by date, newest first." {
+				t.Fatalf("brief writer on %s %s with %q", clarifier.agent, clarifier.model, clarifier.description)
+			}
+			if helper := stub.started; helper == nil || helper.Kind != conversations.HelperBrief || helper.ID != "ast_test" ||
+				helper.WorkOrderID != "fea_sort" || stub.resolvedResult != "Writing the brief for “Sort the shelf”." {
+				t.Fatalf("helper = %+v, result = %q", helper, stub.resolvedResult)
+			}
+		})
+	}
+}
+
+// A brief card's Accept makes the work order Ready through its own accept.
+func TestAcceptingABriefCardMakesTheWorkOrderReady(t *testing.T) {
+	stub := &helperConversations{conversationStub: &conversationStub{action: conversations.Action{
+		ID: "act_1", Status: conversations.ActionProposed, AssistantAction: featureartifact.AssistantAction{
+			Type: featureartifact.AssistantAcceptBrief, Reason: "Written", WorkOrderID: "fea_sort", Title: "Sort the shelf",
+			Helper: "ast_test", Description: "Sort the shelf by date.",
+		},
+	}}}
+	clarifier := &recordingWorkOrderAssistant{}
+	approveCard(t, briefHandler(stub, clarifier), `{}`)
+	if clarifier.acceptKey != "assistant-act_1" || stub.resolvedResult != "“Sort the shelf” is ready to start." {
+		t.Fatalf("accept key %q, result %q", clarifier.acceptKey, stub.resolvedResult)
 	}
 }

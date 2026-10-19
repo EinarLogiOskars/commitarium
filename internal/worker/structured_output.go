@@ -140,7 +140,7 @@ func OutputJSONSchema(contract OutputContract) any {
 		action := objectSchema(
 			map[string]any{
 				"type": map[string]any{
-					"type": "string", "enum": []string{"create_work_order", "start_work_order", "change_models", "add_vision_item", "start_autopilot", "continue_work_order", "recover_work_order", "close_work_order", "create_app", "set_up_preview", "write_vision", "set_up_stack", "answer_helper"},
+					"type": "string", "enum": []string{"create_work_order", "start_work_order", "change_models", "add_vision_item", "start_autopilot", "continue_work_order", "recover_work_order", "close_work_order", "create_app", "set_up_preview", "write_vision", "set_up_stack", "answer_helper", "write_brief"},
 				},
 				"reason":               text,
 				"title":                text,
@@ -164,12 +164,13 @@ func OutputJSONSchema(contract OutputContract) any {
 				"priority":             map[string]any{"type": "integer", "description": "For add_vision_item: the priority level, 0 for P0 through 9 for P9; any level the vision has or a new one. For start_autopilot: the priority to finish. Otherwise 0."},
 				"after":                map[string]any{"type": "string", "description": "For create_work_order and start_work_order: the work order ID, or the exact title of another of your actions, that this one must wait for because both change the same part of the app; it starts once that one merges. Otherwise empty."},
 				"helper":               map[string]any{"type": "string", "description": "For answer_helper: the helper that asked, as Commitarium named it. Otherwise empty."},
+				"brief":                map[string]any{"type": "boolean", "description": "For create_work_order: true has its brief written from description before it starts; it is created as a draft. False for quick changes. Otherwise false."},
 			},
 			[]string{
 				"type", "reason", "title", "description", "vision_item_id", "steps",
 				"lead_agent", "lead_model", "reviewer_agent", "reviewer_model",
 				"lead_plan_model", "lead_plan_effort", "lead_effort", "reviewer_plan_model", "reviewer_plan_effort", "reviewer_effort",
-				"work_order_id", "when", "how", "priority", "guidance", "after", "helper",
+				"work_order_id", "when", "how", "priority", "guidance", "after", "helper", "brief",
 			},
 		)
 		return objectSchema(

@@ -239,6 +239,20 @@ export function AssistantDrawer({
     byMessage.set(action.message_id, [...(byMessage.get(action.message_id) ?? []), action]);
   }
 
+  const renderAction = (action: AssistantAction) =>
+    (builds || action.type === "answer_helper") && appliesItself(action) ? (
+      <AppliedLine key={action.id} action={action} />
+    ) : (
+      <ActionCard
+        key={action.id}
+        scope={scope}
+        action={action}
+        onChanged={setConversation}
+        onOpenOrder={onOpenOrder}
+        visionLabel={visionItems.get(action.vision_item_id)}
+      />
+    );
+
   return (
     <>
       {/* One button in the corner opens and closes the drawer. */}
@@ -327,9 +341,11 @@ export function AssistantDrawer({
                 )}
                 {conversation.messages.map((message) =>
                   message.role === "event" ? (
-                    <p key={message.id} className="muted assistant__event">
-                      {message.text}
-                    </p>
+                    <div key={message.id}>
+                      <p className="muted assistant__event">{message.text}</p>
+                      {/* A helper's result comes back as a card under its line. */}
+                      {(byMessage.get(message.id) ?? []).map(renderAction)}
+                    </div>
                   ) : (
                     <div key={message.id} className="assistant__turn">
                       <div className={`msg ${message.role === "user" ? "msg--user" : "msg--lead"}`}>
@@ -340,20 +356,7 @@ export function AssistantDrawer({
                           <Markdown text={message.text} />
                         </div>
                       </div>
-                      {(byMessage.get(message.id) ?? []).map((action) =>
-                        (builds || action.type === "answer_helper") && appliesItself(action) ? (
-                          <AppliedLine key={action.id} action={action} />
-                        ) : (
-                          <ActionCard
-                            key={action.id}
-                            scope={scope}
-                            action={action}
-                            onChanged={setConversation}
-                            onOpenOrder={onOpenOrder}
-                            visionLabel={visionItems.get(action.vision_item_id)}
-                          />
-                        ),
-                      )}
+                      {(byMessage.get(message.id) ?? []).map(renderAction)}
                     </div>
                   ),
                 )}
@@ -533,7 +536,11 @@ function ActionCard({
                         ? "Set up the stack"
                         : action.type === "answer_helper"
                           ? "Answer a question about the work"
-                          : "Switch models";
+                          : action.type === "write_brief"
+                            ? "Write the brief for a work order"
+                            : action.type === "accept_brief"
+                              ? `Brief: ${action.title}`
+                              : "Switch models";
   const models = [
     action.lead_model &&
       `Lead ${action.lead_agent ? agentName(agents, action.lead_agent) + " · " : ""}${modelName(action.lead_model)}`,
@@ -548,7 +555,14 @@ function ActionCard({
         <strong>{heading}</strong>
         {!pending && <span className="pill">{STATUS_LABEL[action.status]}</span>}
       </div>
-      {action.description && <p className="assistant-action__desc">{action.description}</p>}
+      {action.description &&
+        (action.type === "accept_brief" ? (
+          <div className="assistant-action__desc">
+            <Markdown text={action.description} />
+          </div>
+        ) : (
+          <p className="assistant-action__desc">{action.description}</p>
+        ))}
       {action.type === "continue_work_order" && (
         <p className="assistant-action__desc">
           {action.guidance ? `Guidance: ${action.guidance}` : "Retries without guidance."}
@@ -662,6 +676,10 @@ function ActionCard({
               : `Best after ${action.after}: it changes the same part of the app`}
           </li>
         )}
+        {action.type === "create_work_order" && action.brief && (
+          <li>Its brief is written first; you review it before it starts</li>
+        )}
+        {action.type === "accept_brief" && <li>Accepting makes the work order ready to start</li>}
         {action.type === "set_up_stack" && (
           <li>The stack the vision recommends, or the one the code already uses</li>
         )}
@@ -691,7 +709,30 @@ function ActionCard({
       {error && <div className="banner banner--error">{error}</div>}
       {pending && (
         <div className="row">
-          {action.type === "create_work_order" ? (
+          {action.type === "create_work_order" && action.brief ? (
+            <button
+              className="primary"
+              onClick={() => void approve(false)}
+              disabled={busy !== null || blocked}
+            >
+              {busy === "approve" ? "Creating…" : "Create and write brief"}
+            </button>
+          ) : action.type === "accept_brief" ? (
+            <>
+              <button
+                className="primary"
+                onClick={() => void approve(false)}
+                disabled={busy !== null || blocked}
+              >
+                {busy === "approve" ? "Accepting…" : "Accept"}
+              </button>
+              {onOpenOrder && (
+                <button onClick={() => onOpenOrder(action.work_order_id)} disabled={busy !== null}>
+                  Edit
+                </button>
+              )}
+            </>
+          ) : action.type === "create_work_order" ? (
             <>
               <button
                 className="primary"
@@ -739,6 +780,8 @@ const APPLY_LABEL: Record<AssistantAction["type"], string> = {
   write_vision: "Write vision",
   set_up_stack: "Set up stack",
   answer_helper: "Send answer",
+  write_brief: "Write brief",
+  accept_brief: "Accept",
 };
 
 const STATUS_LABEL: Record<AssistantAction["status"], string> = {
@@ -865,6 +908,18 @@ function AppliedLine({ action }: { action: AssistantAction }) {
       </p>
     );
   }
+  if (action.type === "write_brief" || action.type === "accept_brief") {
+    const done = action.status === "applied";
+    return (
+      <p className="muted assistant__applied">
+        {action.type === "accept_brief"
+          ? `${done ? "✓ Accepted" : "Accepting"} the brief: ${action.title}`
+          : done
+            ? "✓ Writing the brief"
+            : "Writing the brief…"}
+      </p>
+    );
+  }
   const what =
     appliedWhat(action.title) ||
     (action.type === "set_up_preview"
@@ -887,7 +942,7 @@ function AppliedLine({ action }: { action: AssistantAction }) {
             ? ["Writing", "Writing"]
             : action.type === "set_up_stack"
               ? ["Setting up", "Setting up"]
-              : action.hold_start
+              : action.hold_start || action.brief
                 ? ["Creating", "Created"]
                 : ["Starting", "Started"];
   return (

@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/EinarLogiOskars/commitarium/internal/feature"
 	"github.com/EinarLogiOskars/commitarium/internal/featureartifact"
 	"github.com/EinarLogiOskars/commitarium/internal/project"
 )
@@ -120,6 +121,53 @@ func TestAnAnswerToAHelperIsSentWithoutApproval(t *testing.T) {
 		}
 		if strings.Join(ids, " ") != want {
 			t.Fatalf("%s: applied %v, want %s", mode, ids, want)
+		}
+	}
+}
+
+// A brief writer's proposal becomes a brief card under the line that
+// announces it; a newer proposal replaces a card still waiting. Assisting,
+// the card waits for the user; building everything, autopilot applies it.
+func TestABriefBecomesACardApprovedAsTheModeSays(t *testing.T) {
+	for _, mode := range []project.AssistantMode{project.AssistantModeAssists, project.AssistantModeBuilds} {
+		service, _ := newTestService(t)
+		service.config.Projects = gapProjects{mode: mode}
+		service.config.Features = &featuresStub{features: []feature.Feature{
+			{ID: "fea_sort", Title: "Sort the shelf", State: feature.StateDraft},
+		}}
+		startedHelper(t, service, Helper{ID: "ast_1", Kind: HelperBrief, WorkOrderID: "fea_sort", Title: "Sort the shelf"})
+		state := HelperState{Status: HelperProposes, Turn: 2, Text: "Sort the shelf by date."}
+		watcher := Watcher{Service: service, Helpers: func(context.Context, string, Helper) (HelperState, error) {
+			return state, nil
+		}}
+		watcher.followHelpers(t.Context(), "prj_test")
+		state = HelperState{Status: HelperProposes, Turn: 4, Text: "Sort the shelf by date, newest first."}
+		watcher.followHelpers(t.Context(), "prj_test")
+		stored, _ := service.read("prj_test")
+		cards := stored.Actions[1:]
+		if len(cards) != 2 || cards[0].Status != ActionDismissed || cards[1].Status != ActionProposed ||
+			cards[1].Type != featureartifact.AssistantAcceptBrief || cards[1].WorkOrderID != "fea_sort" ||
+			cards[1].Description != "Sort the shelf by date, newest first." ||
+			cards[1].MessageID != stored.Messages[len(stored.Messages)-1].ID ||
+			stored.Messages[len(stored.Messages)-1].Text != "The brief for “Sort the shelf” is ready." {
+			t.Fatalf("cards = %+v", cards)
+		}
+		if !stored.handles("fea_sort") {
+			t.Fatal("the gap check would start a work order whose brief is being written")
+		}
+		applied, err := service.autopilotActions(t.Context(), "prj_test")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if builds := mode == project.AssistantModeBuilds; (len(applied) == 1 && applied[0].ID == cards[1].ID) != builds {
+			t.Fatalf("%s: autopilot applied %+v", mode, applied)
+		}
+		// Accepting the brief ends the helper's work.
+		if _, err := service.Resolve(t.Context(), "prj_test", cards[1].ID, ActionApplied, "Ready.", Created{}); err != nil {
+			t.Fatal(err)
+		}
+		if stored, _ := service.read("prj_test"); !stored.Helpers[0].Done {
+			t.Fatal("the brief writer is still followed after its brief was accepted")
 		}
 	}
 }

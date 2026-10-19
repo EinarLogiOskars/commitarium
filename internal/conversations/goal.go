@@ -341,6 +341,8 @@ func (service *Service) autopilotActions(ctx context.Context, scope string) ([]A
 			// is the assistant's to fix when it builds everything (ADR-024,
 			// ADR-027, ADR-028).
 			inGoal = builds
+		case featureartifact.AssistantWriteBrief, featureartifact.AssistantAcceptBrief:
+			inGoal, target = builds, action.WorkOrderID
 		case featureartifact.AssistantAnswerHelper:
 			// Answering a helper the assistant started changes nothing in
 			// the project: it is sent at once, assisting too (ADR-035).

@@ -603,6 +603,14 @@ func (service *Service) Resolve(ctx context.Context, scope, actionID string, sta
 		if status == ActionApplied && created.Helper != nil {
 			stored.follow(*created.Helper)
 		}
+		if status == ActionApplied && action.Type == featureartifact.AssistantAcceptBrief {
+			// An accepted result ends its helper's work.
+			for index := range stored.Helpers {
+				if stored.Helpers[index].ID == action.Helper {
+					stored.Helpers[index].Done = true
+				}
+			}
+		}
 		if status == ActionApplied && action.Type == featureartifact.AssistantCreateWorkOrder && stored.Goal.active() {
 			// The goal item follows its new work order, a replacement too, at
 			// once rather than at the next look at the vision.

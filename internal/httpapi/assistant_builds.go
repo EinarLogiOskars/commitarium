@@ -11,8 +11,10 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/EinarLogiOskars/commitarium/internal/assistant"
 	"github.com/EinarLogiOskars/commitarium/internal/conversations"
 	"github.com/EinarLogiOskars/commitarium/internal/feature"
+	"github.com/EinarLogiOskars/commitarium/internal/featureartifact"
 	"github.com/EinarLogiOskars/commitarium/internal/toolchain"
 	"github.com/EinarLogiOskars/commitarium/internal/vision"
 )
@@ -99,6 +101,71 @@ func (api *API) applyWriteVision(
 	return "Writing the vision.", &conversations.Helper{ID: session.ID, Kind: conversations.HelperVision}, true
 }
 
+// applyWriteBrief has the brief writer write a draft work order's brief on
+// the assistant's agent from what the assistant gathered (ADR-035). A brief
+// writer that already stopped, asked, or proposed one hears the description
+// as its next message, so it proposes the brief again.
+func (api *API) applyWriteBrief(
+	w http.ResponseWriter, r *http.Request, projectID, workOrderID, description, key string,
+) (string, *conversations.Helper, bool) {
+	ctx := r.Context()
+	if api.assistant == nil {
+		writeError(w, http.StatusServiceUnavailable, "assistant_unavailable", "writing briefs needs real agents")
+		return "", nil, false
+	}
+	stored, err := api.features.GetByID(ctx, projectID, workOrderID)
+	if err != nil {
+		writeConversationError(w, err)
+		return "", nil, false
+	}
+	if stored.State != feature.StateDraft {
+		writeError(w, http.StatusConflict, "feature_not_draft", "only a draft work order gets a brief written")
+		return "", nil, false
+	}
+	helper := conversations.Helper{Kind: conversations.HelperBrief, WorkOrderID: stored.ID, Title: stored.Title}
+	path := helperPath(projectID, helper)
+	var session assistantSessionResponse
+	found, err := readOwn(ctx, api.mux, path, &session)
+	switch {
+	case err != nil:
+	case found && session.Status == string(assistant.StatusRunning):
+		writeError(w, http.StatusConflict, "brief_writer_busy", "the brief writer is still working on it")
+		return "", nil, false
+	case found:
+		err = api.callOwn(ctx, http.MethodPost, path+"/messages", key, map[string]string{"message": description}, &session)
+	default:
+		providers, model, choiceErr := api.assistantAgent(ctx)
+		if choiceErr != nil {
+			if !writeChoiceError(w, choiceErr) {
+				writeConversationError(w, choiceErr)
+			}
+			return "", nil, false
+		}
+		err = api.callOwn(ctx, http.MethodPost, path, key, startAssistantRequest{
+			Agent: providers.LeadAgent, Model: model, Message: description,
+		}, &session)
+	}
+	if err != nil {
+		writeError(w, http.StatusConflict, "brief_not_started", "the brief could not be started: "+err.Error())
+		return "", nil, false
+	}
+	helper.ID = session.ID
+	return fmt.Sprintf("Writing the brief for “%s”.", stored.Title), &helper, true
+}
+
+// applyAcceptBrief accepts the brief the brief writer proposed, as the
+// work order's own Accept does: it becomes Ready.
+func (api *API) applyAcceptBrief(
+	w http.ResponseWriter, r *http.Request, projectID string, action conversations.Action,
+) (string, bool) {
+	path := "/api/v1/projects/" + url.PathEscape(projectID) + "/features/" + url.PathEscape(action.WorkOrderID) + "/accept"
+	if err := api.callOwn(r.Context(), http.MethodPost, path, "assistant-"+action.ID, nil, nil); err != nil {
+		writeError(w, http.StatusConflict, "brief_not_accepted", "the brief could not be accepted: "+err.Error())
+		return "", false
+	}
+	return fmt.Sprintf("“%s” is ready to start.", action.Title), true
+}
+
 // helperFinder finds a helper the assistant started.
 type helperFinder interface {
 	LookUpHelper(ctx context.Context, scope, id string) (conversations.Helper, error)
@@ -168,9 +235,53 @@ func HelperReader(handler http.Handler) conversations.HelperReader {
 				state.Status = conversations.HelperWorking
 			}
 			return state, nil
+		case conversations.HelperBrief:
+			var current featureResponse
+			if found, err := readOwn(ctx, handler, "/api/v1/projects/"+url.PathEscape(projectID)+"/features/"+
+				url.PathEscape(helper.WorkOrderID), &current); err != nil || !found || current.State != feature.StateDraft {
+				// A work order that left Draft no longer needs its brief.
+				return conversations.HelperState{Status: conversations.HelperFinished}, err
+			}
+			var session assistantSessionResponse
+			if found, err := readOwn(ctx, handler, helperPath(projectID, helper), &session); err != nil || !found {
+				return conversations.HelperState{Status: conversations.HelperFinished}, err
+			}
+			state := conversations.HelperState{Turn: len(session.Messages)}
+			switch assistant.Status(session.Status) {
+			case assistant.StatusWaitingForUser:
+				state.Status, state.Text = conversations.HelperAsks, session.Message
+			case assistant.StatusProposalReady:
+				var brief struct {
+					Document featureartifact.HandoffBrief `json:"document"`
+				}
+				if _, err := readOwn(ctx, handler, "/api/v1/projects/"+url.PathEscape(projectID)+"/features/"+
+					url.PathEscape(helper.WorkOrderID)+"/artifacts/handoff_brief", &brief); err != nil {
+					return conversations.HelperState{}, err
+				}
+				state.Status, state.Text = conversations.HelperProposes, briefText(brief.Document)
+			case assistant.StatusFailed:
+				state.Status = conversations.HelperFailed
+			default:
+				state.Status = conversations.HelperWorking
+			}
+			return state, nil
 		}
 		return conversations.HelperState{}, fmt.Errorf("unknown helper kind %q", helper.Kind)
 	}
+}
+
+// briefText is a brief in plain words, for its card.
+func briefText(brief featureartifact.HandoffBrief) string {
+	text := brief.Goal
+	for _, part := range []struct {
+		heading string
+		items   []string
+	}{{"Where it changes", brief.Areas}, {"To keep in mind", brief.Considerations}, {"Left to settle", brief.OpenQuestions}} {
+		if len(part.items) > 0 {
+			text += "\n\n**" + part.heading + "**\n- " + strings.Join(part.items, "\n- ")
+		}
+	}
+	return text
 }
 
 func lastReply(messages []vision.Message) string {

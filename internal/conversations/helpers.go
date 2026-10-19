@@ -4,8 +4,12 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"slices"
+	"time"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/EinarLogiOskars/commitarium/internal/featureartifact"
 )
 
 // Helpers (ADR-035): the brief writer, the vision writer, and the stack
@@ -152,6 +156,8 @@ func (service *Service) helpersChanged(scope string, states map[string]HelperSta
 				"%s (helper %s) asks: %s\nAnswer it with answer_helper (helper %s) from what you know of the project. "+
 					"If only the user can answer, ask them in your message, and answer the helper on your next turn.",
 				capitalized(name), helper.ID, state.Text, helper.ID))
+		case HelperProposes:
+			stored.propose(*helper, state.Text, now)
 		case HelperFinished:
 			helper.Done = true
 		case HelperFailed:
@@ -173,6 +179,41 @@ func (service *Service) helpersChanged(scope string, states map[string]HelperSta
 		service.nudgeWatcher()
 	}
 	return service.write(stored)
+}
+
+// propose turns a helper's result into a card, approved as the project's
+// mode says: by the user, or by autopilot where the assistant builds
+// everything. A newer result replaces an older card still waiting.
+func (stored *record) propose(helper Helper, text string, now time.Time) {
+	card := featureartifact.AssistantAction{Helper: helper.ID, Description: text}
+	switch helper.Kind {
+	case HelperBrief:
+		card.Type, card.WorkOrderID, card.Title = featureartifact.AssistantAcceptBrief, helper.WorkOrderID, helper.Title
+		card.Reason = "The brief writer wrote it from what you and the assistant settled."
+		stored.addEvent(fmt.Sprintf("The brief for “%s” is ready.", helper.Title), now)
+	default:
+		return
+	}
+	for index := range stored.Actions {
+		older := &stored.Actions[index]
+		if older.Helper == helper.ID && older.Type == card.Type && older.Status == ActionProposed {
+			older.Status, older.Result, older.UpdatedAt = ActionDismissed, "A newer proposal replaced it.", now
+		}
+	}
+	// The card follows the line that announces it.
+	message := stored.Messages[len(stored.Messages)-1].ID
+	stored.Actions = append(stored.Actions, Action{
+		ID: fmt.Sprintf("act_%s_%s_%d", stored.Scope, helper.ID, len(stored.Actions)+1), MessageID: message,
+		AssistantAction: card, Status: ActionProposed, UpdatedAt: now,
+	})
+}
+
+// writing reports whether a helper the assistant started still works on the
+// work order.
+func (stored record) writing(workOrderID string) bool {
+	return slices.ContainsFunc(stored.Helpers, func(helper Helper) bool {
+		return helper.WorkOrderID == workOrderID && !helper.Done
+	})
 }
 
 func capitalized(text string) string {

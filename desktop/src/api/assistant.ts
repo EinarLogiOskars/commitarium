@@ -33,7 +33,9 @@ export type AssistantActionType =
   | "set_up_preview"
   | "write_vision"
   | "set_up_stack"
-  | "answer_helper";
+  | "answer_helper"
+  | "write_brief"
+  | "accept_brief";
 
 export interface AssistantAction {
   id: string;
@@ -55,8 +57,11 @@ export interface AssistantAction {
    * set_up_preview: what fails, when the assistant knows. For answer_helper:
    * the assistant's answer. */
   guidance?: string;
-  /** For answer_helper: the helper it answers (ADR-035). */
+  /** For answer_helper: the helper it answers; for a card from a helper's
+   * result, the helper that proposed it (ADR-035). */
   helper?: string;
+  /** For create_work_order: its brief is written before it starts. */
+  brief?: boolean;
   /** For add_vision_item and start_autopilot: 0 for P0, 1 for P1, and so on. */
   priority: number;
   /** For a work order to create or start: the work order ID, or the title of

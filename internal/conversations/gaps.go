@@ -255,8 +255,12 @@ func waitingWork(features []feature.Feature, stored record) []string {
 }
 
 // handles reports whether one of the assistant's actions on a work order
-// waits, or the user turned one down since the assistant builds everything.
+// waits, one of its helpers works on it, or the user turned one down since
+// the assistant builds everything.
 func (stored record) handles(workOrderID string) bool {
+	if stored.writing(workOrderID) {
+		return true
+	}
 	for _, action := range stored.Actions {
 		if action.WorkOrderID != workOrderID {
 			continue

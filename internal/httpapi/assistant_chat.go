@@ -345,7 +345,15 @@ func (api *API) approveConversationActionHandler(w http.ResponseWriter, r *http.
 	case featureartifact.AssistantCreateWorkOrder:
 		// A work order queued behind other work is created now and started
 		// later (HoldStart).
-		result, workOrderID, ok = api.applyCreateWorkOrder(w, r, scope, action, body.Start && !action.HoldStart)
+		// One whose brief is written first is created as a draft (ADR-035).
+		result, workOrderID, ok = api.applyCreateWorkOrder(w, r, scope, action, body.Start && !action.HoldStart && !action.Brief)
+		if ok && action.Brief {
+			result, helper, ok = api.applyWriteBrief(w, r, scope, workOrderID, action.Description, "assistant-"+action.ID)
+		}
+	case featureartifact.AssistantWriteBrief:
+		result, helper, ok = api.applyWriteBrief(w, r, scope, action.WorkOrderID, action.Description, "assistant-"+action.ID)
+	case featureartifact.AssistantAcceptBrief:
+		result, ok = api.applyAcceptBrief(w, r, scope, action)
 	case featureartifact.AssistantStartWorkOrder:
 		result, ok = api.applyStartWorkOrder(w, r, scope, action)
 	case featureartifact.AssistantChangeModels:
@@ -403,7 +411,7 @@ func (api *API) usersWorkOrder(ctx context.Context, scope string, action convers
 	switch action.Type {
 	case featureartifact.AssistantStartWorkOrder, featureartifact.AssistantChangeModels,
 		featureartifact.AssistantContinueWorkOrder, featureartifact.AssistantRecoverWorkOrder,
-		featureartifact.AssistantCloseWorkOrder,
+		featureartifact.AssistantCloseWorkOrder, featureartifact.AssistantWriteBrief, featureartifact.AssistantAcceptBrief,
 		featureartifact.AssistantAddVisionItem:
 	default:
 		return "", nil
