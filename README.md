@@ -1,6 +1,9 @@
 # Commitarium
 
-**You describe it. Commitarium builds it.**
+**Think it, and it’s yours.**
+
+Describe any app. Commitarium builds it, runs it, and changes it whenever you
+want.
 
 [![CI](https://github.com/EinarLogiOskars/commitarium/actions/workflows/ci.yml/badge.svg)](https://github.com/EinarLogiOskars/commitarium/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/EinarLogiOskars/commitarium?label=release)](https://github.com/EinarLogiOskars/commitarium/releases)
