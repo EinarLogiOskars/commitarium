@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"slices"
 	"time"
 
 	"github.com/EinarLogiOskars/commitarium/internal/workerhttp"
@@ -138,8 +139,12 @@ func (service *Service) retrySignIn(ctx context.Context, scope string, force boo
 }
 
 // AgentSignedIn starts again every conversation's turn that waits on the
-// agent: its login works again.
+// agent: its login works again. The helpers it stopped are started again
+// first, so a turn kept for the sign-in hears of them too.
 func (service *Service) AgentSignedIn(ctx context.Context, agentID string) {
+	for _, scope := range service.helperSignInScopes(agentID) {
+		service.restartHelpers(scope, agentID)
+	}
 	for _, scope := range service.signInScopes(agentID, false) {
 		if err := service.retrySignIn(ctx, scope, true, service.now()); err != nil {
 			log.Printf("resume the assistant in %s after %q signed in: %v", scope, agentID, err)
@@ -152,6 +157,10 @@ func (service *Service) AgentSignedIn(ctx context.Context, agentID string) {
 func (service *Service) TrySignIn(ctx context.Context, agentID string) {
 	scopes := service.signInScopes(agentID, true)
 	if len(scopes) == 0 {
+		// No turn waits: a helper the login stopped is the try.
+		if helpers := service.helperSignInScopes(agentID); len(helpers) > 0 {
+			service.restartHelpers(helpers[0], agentID)
+		}
 		return
 	}
 	if err := service.retrySignIn(ctx, scopes[0], true, service.now()); err != nil {
@@ -195,6 +204,76 @@ func (service *Service) signInScopes(agentID string, needsUser bool) []string {
 	scopes := make([]string, 0, len(found))
 	for _, item := range found {
 		scopes = append(scopes, item.scope)
+	}
+	return scopes
+}
+
+// Helpers the assistant started run in the background on its agent
+// (ADR-035), so a login failure would stop them unseen. A helper that stops
+// on its agent's login waits like a turn: the assistant hears why and tells
+// the user, and once the agent works again it is woken to start the helper
+// again from what it gathered.
+
+// waitsForSignIn reports whether a helper stopped on its agent's login, and
+// if so keeps it waiting for the sign-in and tells the assistant.
+func (service *Service) waitsForSignIn(
+	ctx context.Context, stored *record, helper *Helper, state HelperState, now time.Time,
+) bool {
+	if state.Agent == "" || service.config.SignIns == nil || !service.config.SignIns.AgentNeedsSignIn(ctx, state.Agent) {
+		return false
+	}
+	helper.SignIn = state.Agent
+	agent := service.agentName(ctx, state.Agent)
+	stored.addEvent(fmt.Sprintf("%s stopped: %s needs you to sign in again. It starts again once the agent works.",
+		capitalized(helper.Name()), agent), now)
+	stored.PendingEvents = append(stored.PendingEvents, fmt.Sprintf(
+		"%s (helper %s) stopped because its agent, %s, needs the user to sign in again. Do not start it again now: "+
+			"Commitarium tells you once the agent works, and you start it again then. Tell the user plainly to "+
+			"sign %s in again on the Agents page.", capitalized(helper.Name()), helper.ID, agent, agent))
+	return true
+}
+
+// restartHelpers wakes the assistant to start again the helpers in the scope
+// that the agent's login stopped.
+func (service *Service) restartHelpers(scope, agentID string) {
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	stored, err := service.read(scope)
+	if err != nil {
+		return
+	}
+	now, restarted := service.now(), false
+	for index := range stored.Helpers {
+		helper := &stored.Helpers[index]
+		if helper.SignIn != agentID {
+			continue
+		}
+		helper.SignIn, restarted = "", true
+		stored.addEvent(capitalized(helper.Name())+" can go on: its agent works again.", now)
+		stored.PendingEvents = append(stored.PendingEvents, fmt.Sprintf(
+			"The agent works again, so %s can go on: start it again now with %s, from what you gathered before.",
+			helper.Name(), helper.restart()))
+	}
+	if !restarted {
+		return
+	}
+	stored.UpdatedAt = now
+	if service.write(stored) == nil {
+		service.nudgeWatcher()
+	}
+}
+
+// helperSignInScopes lists the projects with a helper the agent's login
+// stopped.
+func (service *Service) helperSignInScopes(agentID string) []string {
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	scopes := make([]string, 0)
+	for _, scope := range service.projectScopes() {
+		stored, err := service.read(scope)
+		if err == nil && slices.ContainsFunc(stored.Helpers, func(helper Helper) bool { return helper.SignIn == agentID }) {
+			scopes = append(scopes, scope)
+		}
 	}
 	return scopes
 }

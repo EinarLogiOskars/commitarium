@@ -293,7 +293,7 @@ func HelperReader(handler http.Handler) conversations.HelperReader {
 			if found, err := readOwn(ctx, handler, helperPath(projectID, helper), &session); err != nil || !found {
 				return conversations.HelperState{Status: conversations.HelperFinished}, err
 			}
-			state := conversations.HelperState{Turn: len(session.Messages)}
+			state := conversations.HelperState{Turn: len(session.Messages), Agent: session.Agent}
 			switch session.Status {
 			case vision.StatusWaitingForUser:
 				state.Status, state.Text = conversations.HelperAsks, lastReply(session.Messages)
@@ -316,7 +316,7 @@ func HelperReader(handler http.Handler) conversations.HelperReader {
 			if found, err := readOwn(ctx, handler, helperPath(projectID, helper), &session); err != nil || !found {
 				return conversations.HelperState{Status: conversations.HelperFinished}, err
 			}
-			state := conversations.HelperState{Turn: len(session.Messages)}
+			state := conversations.HelperState{Turn: len(session.Messages), Agent: session.Agent}
 			switch assistant.Status(session.Status) {
 			case assistant.StatusWaitingForUser:
 				state.Status, state.Text = conversations.HelperAsks, session.Message
@@ -340,7 +340,7 @@ func HelperReader(handler http.Handler) conversations.HelperReader {
 			if found, err := readOwn(ctx, handler, helperPath(projectID, helper), &session); err != nil || !found {
 				return conversations.HelperState{Status: conversations.HelperFinished}, err
 			}
-			state := conversations.HelperState{Turn: len(session.Messages)}
+			state := conversations.HelperState{Turn: len(session.Messages), Agent: session.Agent}
 			switch session.Status {
 			case toolchain.AssistantStatusWaitingForUser:
 				state.Status, state.Text = conversations.HelperAsks, session.Message

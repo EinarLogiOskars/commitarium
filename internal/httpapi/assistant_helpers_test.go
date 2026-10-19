@@ -70,7 +70,7 @@ func (stub *helperVisions) Reply(_ context.Context, _, id, message, _ string) (v
 }
 
 func waitingVision() *helperVisions {
-	return &helperVisions{session: vision.Session{ID: "vis_1", ProjectID: "prj_test", Status: vision.StatusWaitingForUser,
+	return &helperVisions{session: vision.Session{ID: "vis_1", ProjectID: "prj_test", Agent: "codex", Status: vision.StatusWaitingForUser,
 		Messages: []vision.Message{{Role: "user", Text: "A meal planner."}, {Role: "assistant", Text: "For families?"}}}}
 }
 
@@ -148,7 +148,8 @@ func TestTheHelperReaderReadsAQuestion(t *testing.T) {
 		nil, nil, nil, nil, nil, nil, visions))
 	helper := conversations.Helper{ID: "vis_1", Kind: conversations.HelperVision}
 	state, err := read(t.Context(), "prj_test", helper)
-	if err != nil || state.Status != conversations.HelperAsks || state.Text != "For families?" || state.Turn != 2 {
+	if err != nil || state.Status != conversations.HelperAsks || state.Text != "For families?" || state.Turn != 2 ||
+		state.Agent != "codex" {
 		t.Fatalf("state = %+v, %v", state, err)
 	}
 	visions.notFound = true

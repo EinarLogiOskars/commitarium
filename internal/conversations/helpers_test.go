@@ -203,3 +203,66 @@ func TestAStackSuggestionBecomesACardApprovedAsTheModeSays(t *testing.T) {
 		}
 	}
 }
+
+// A helper that stops on its agent's login waits for the sign-in instead of
+// failing unseen: the assistant hears why and is told not to start it again
+// yet, and once the agent works it is woken to start the helper again.
+func TestAHelperStoppedByALoginStartsAgainOnceTheAgentWorks(t *testing.T) {
+	service, _ := newTestService(t)
+	signIns := &signInsStub{known: true}
+	service.config.SignIns = signIns
+	startedHelper(t, service, Helper{ID: "tcs_1", Kind: HelperStack})
+	watcher := Watcher{Service: service, Helpers: func(context.Context, string, Helper) (HelperState, error) {
+		return HelperState{Status: HelperFailed, Turn: 2, Agent: "codex"}, nil
+	}}
+	watcher.followHelpers(t.Context(), "prj_test")
+	stored, _ := service.read("prj_test")
+	if len(stored.PendingEvents) != 1 || !strings.Contains(stored.PendingEvents[0], "Do not start it again now") ||
+		stored.Helpers[0].SignIn != "codex" || !stored.designing() ||
+		!strings.Contains(lastEvent(stored.Conversation), "needs you to sign in again") {
+		t.Fatalf("pending = %v helpers = %+v last = %q", stored.PendingEvents, stored.Helpers, lastEvent(stored.Conversation))
+	}
+	stored.PendingEvents = nil
+	if err := service.write(stored); err != nil {
+		t.Fatal(err)
+	}
+
+	// Another agent working again changes nothing.
+	service.AgentSignedIn(t.Context(), "claude")
+	if stored, _ := service.read("prj_test"); len(stored.PendingEvents) != 0 {
+		t.Fatalf("another agent restarted the helper: %v", stored.PendingEvents)
+	}
+	service.AgentSignedIn(t.Context(), "codex")
+	stored, _ = service.read("prj_test")
+	if len(stored.PendingEvents) != 1 || !strings.Contains(stored.PendingEvents[0], "start it again now with design_stack") ||
+		stored.Helpers[0].SignIn != "" || stored.designing() {
+		t.Fatalf("pending = %v helpers = %+v", stored.PendingEvents, stored.Helpers)
+	}
+	// It is restarted once.
+	service.AgentSignedIn(t.Context(), "codex")
+	if stored, _ := service.read("prj_test"); len(stored.PendingEvents) != 1 {
+		t.Fatalf("restarted twice: %v", stored.PendingEvents)
+	}
+}
+
+// With no turn waiting on the agent, the coordinator's try of the signed-out
+// work starts a stopped helper again: if the login works, it goes on.
+func TestTheCoordinatorsTryRestartsAStoppedHelper(t *testing.T) {
+	service, _ := newTestService(t)
+	service.config.SignIns = &signInsStub{known: true}
+	startedHelper(t, service, Helper{ID: "ast_1", Kind: HelperBrief, WorkOrderID: "fea_sort", Title: "Sort the shelf"})
+	watcher := Watcher{Service: service, Helpers: func(context.Context, string, Helper) (HelperState, error) {
+		return HelperState{Status: HelperFailed, Turn: 2, Agent: "codex"}, nil
+	}}
+	watcher.followHelpers(t.Context(), "prj_test")
+	stored, _ := service.read("prj_test")
+	stored.PendingEvents = nil
+	if err := service.write(stored); err != nil {
+		t.Fatal(err)
+	}
+	service.TrySignIn(t.Context(), "codex")
+	stored, _ = service.read("prj_test")
+	if len(stored.PendingEvents) != 1 || !strings.Contains(stored.PendingEvents[0], "write_brief for “Sort the shelf” (fea_sort)") {
+		t.Fatalf("pending = %v", stored.PendingEvents)
+	}
+}

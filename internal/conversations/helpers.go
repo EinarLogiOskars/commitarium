@@ -38,6 +38,9 @@ type Helper struct {
 	// Seen is the helper's state as last followed; Done ends following it.
 	Seen string `json:"seen,omitempty"`
 	Done bool   `json:"done,omitempty"`
+	// SignIn names the agent whose login stopped the helper: the assistant
+	// starts it again once the agent works (sign_in.go).
+	SignIn string `json:"sign_in,omitempty"`
 }
 
 type HelperStatus string
@@ -52,11 +55,13 @@ const (
 
 // HelperState is a helper as its service reports it. Turn counts its turns,
 // so a new question or proposal differs from the last; Text is the question,
-// the proposal in plain words, or why it stopped.
+// the proposal in plain words, or why it stopped. Agent is the agent it runs
+// on.
 type HelperState struct {
 	Status HelperStatus
 	Turn   int
 	Text   string
+	Agent  string
 }
 
 // HelperReader reads a helper's state through its service.
@@ -71,6 +76,18 @@ func (helper Helper) Name() string {
 		return "the vision writer"
 	default:
 		return "the stack designer"
+	}
+}
+
+// restart is how the assistant starts the helper again.
+func (helper Helper) restart() string {
+	switch helper.Kind {
+	case HelperBrief:
+		return fmt.Sprintf("write_brief for “%s” (%s)", helper.Title, helper.WorkOrderID)
+	case HelperVision:
+		return "write_vision"
+	default:
+		return "design_stack"
 	}
 }
 
@@ -94,7 +111,7 @@ func (service *Service) LookUpHelper(_ context.Context, scope, id string) (Helpe
 func (stored *record) follow(helper Helper) {
 	for index := range stored.Helpers {
 		if stored.Helpers[index].ID == helper.ID {
-			stored.Helpers[index].Done = false
+			stored.Helpers[index].Done, stored.Helpers[index].SignIn = false, ""
 			return
 		}
 	}
@@ -127,12 +144,12 @@ func (watcher Watcher) followHelpers(ctx context.Context, scope string) {
 	if len(states) == 0 {
 		return
 	}
-	if err := watcher.Service.helpersChanged(scope, states); err != nil {
+	if err := watcher.Service.helpersChanged(ctx, scope, states); err != nil {
 		log.Printf("helpers of %s: %v", scope, err)
 	}
 }
 
-func (service *Service) helpersChanged(scope string, states map[string]HelperState) error {
+func (service *Service) helpersChanged(ctx context.Context, scope string, states map[string]HelperState) error {
 	service.mu.Lock()
 	defer service.mu.Unlock()
 	stored, err := service.read(scope)
@@ -162,6 +179,9 @@ func (service *Service) helpersChanged(scope string, states map[string]HelperSta
 			helper.Done = true
 		case HelperFailed:
 			helper.Done = true
+			if service.waitsForSignIn(ctx, &stored, helper, state, now) {
+				continue
+			}
 			text := capitalized(name) + " stopped before it finished."
 			if state.Text != "" {
 				text += " " + state.Text
@@ -213,17 +233,18 @@ func (stored *record) propose(helper Helper, text string, now time.Time) {
 }
 
 // writing reports whether a helper the assistant started still works on the
-// work order.
+// work order, or waits to start again after a sign-in.
 func (stored record) writing(workOrderID string) bool {
 	return slices.ContainsFunc(stored.Helpers, func(helper Helper) bool {
-		return helper.WorkOrderID == workOrderID && !helper.Done
+		return helper.WorkOrderID == workOrderID && (!helper.Done || helper.SignIn != "")
 	})
 }
 
-// designing reports whether the stack designer still works on the stack.
+// designing reports whether the stack designer still works on the stack, or
+// waits to start again after a sign-in.
 func (stored record) designing() bool {
 	return slices.ContainsFunc(stored.Helpers, func(helper Helper) bool {
-		return helper.Kind == HelperStack && !helper.Done
+		return helper.Kind == HelperStack && (!helper.Done || helper.SignIn != "")
 	})
 }
 
