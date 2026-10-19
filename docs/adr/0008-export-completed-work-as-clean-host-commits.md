@@ -1,6 +1,6 @@
 # ADR-008: Export completed work as clean host commits
 
-- Status: Accepted
+- Status: Accepted; amended 2026-10-19 (no automatic chaining)
 - Date: 2026-09-09
 
 ## Context
@@ -33,9 +33,11 @@ operations:
 2. **Push upstream** sends only that previously verified local export commit to
    the user's configured Git remote.
 
-A user preference may chain these operations into one action. The second
-operation begins only after the first has durably identified its exact result.
-Retrying either operation must be idempotent.
+Each operation is started by the user. (An earlier version of this decision
+allowed a user preference to chain them; that was cancelled on 2026-10-19,
+see the amendment below.) Push upstream begins only from a local export the
+first operation has durably identified. Retrying either operation must be
+idempotent.
 
 The default export is one commit per completed feature. It is created from the
 net change between the feature's recorded internal base and its exact approved
@@ -187,7 +189,8 @@ Git boundary, and is difficult to recover idempotently after interruption.
 ### Synchronize locally and always push immediately
 
 This removes the user's chance to inspect or amend the local result before an
-external side effect. Chaining remains available as an explicit preference.
+external side effect. (Chaining as an explicit preference was also cancelled;
+see the amendment.)
 
 ### Give agents external-repository credentials
 
@@ -202,3 +205,14 @@ user-authored clean commit without weakening the trust boundary, or if reliable
 content/base mapping proves too confusing. Any replacement must preserve
 separate local-sync and external-push consent and must not expose upstream
 credentials to containers.
+
+## Amendment, 2026-10-19: no automatic chaining
+
+The option to chain local synchronization into an automatic upstream push was
+never built and is cancelled. Pushing upstream is the one step where
+Commitarium's work leaves the user's machine and becomes visible to others,
+and the 1.0 vision keeps it a user action. Developers usually want to see the
+clean local commit before it is published, and apps users never use the
+handoff at all, so the option would add a setting without a clear need. If
+two separate actions prove clumsy in use, a single user-started "sync and
+push" action is the alternative to consider, not an automatic one.

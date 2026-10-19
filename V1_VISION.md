@@ -3,7 +3,7 @@
 ## Status
 
 Agreed direction, 2026-10-09; kinds of work and the order revised on
-2026-10-11. Last reconciled with the implementation on 2026-10-17: the
+2026-10-11. Last reconciled with the implementation on 2026-10-19: the
 "Where we stand" table says what is built. Detailed implementation plans and
 ADRs follow per milestone; this document records what 1.0 is and why, and
 the ADRs win where they have since refined it.
@@ -243,8 +243,10 @@ concurrently on one worker, so one agent can serve several work orders.
 - The project assistant with project direction, planning and creating all
   kinds of work, and builder mode
 - Autopilot and Apps, which landed ahead of 1.0
-- Finishing Phase 6: automatic chaining of local synchronization and upstream
-  publication (still open)
+- ~~Finishing Phase 6: automatic chaining of local synchronization and upstream
+  publication~~ Cancelled 2026-10-19: pushing upstream stays a user action
+  (see [Unchanged](#unchanged)), so local synchronization and upstream
+  publication remain two separate steps the user starts.
 
 **After 1.0:**
 
@@ -278,7 +280,8 @@ Live reload depends on the project's compose file mounting its sources.
 8. Autopilot. Done (ADR-023).
 9. Apps, with the change button. Done (ADR-024).
 
-Left for 1.0: finishing Phase 6.
+Nothing in this scope is left for 1.0; the automatic publication that
+finished Phase 6 was cancelled (see [Scope](#scope)).
 
 Each step builds on the ones before: flexible work orders give the assistant
 cheap work to run, sessions add the interactive kind, and project direction
@@ -301,3 +304,5 @@ gives it something to plan against before it is trusted to act. Intermediate
   separate, opt-in grants.
 - **Review where it pays**: plan and code review split, acceptance tests
   removed (ADR-031).
+- **Upstream publication stays manual**: chaining local synchronization into
+  an automatic upstream push was cancelled; ADR-008 is amended.

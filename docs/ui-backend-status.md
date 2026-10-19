@@ -636,8 +636,8 @@ No current backend contract area is reserved by the versioned-replanning work.
 - Start, observe, and stop a project-defined development environment and open
   its local browser preview.
 - Provider-specific pull-request creation after publishing a protected
-  `commitarium/` branch; optionally allow the user to chain sync, branch
-  publication, and PR creation later.
+  `commitarium/` branch. Chaining sync and publication automatically was
+  cancelled (ADR-008).
 
 These trusted-host operations must remain outside agent containers. Agent
 containers receive scoped Forgejo credentials, never the user's GitHub or host
