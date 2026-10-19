@@ -169,8 +169,10 @@ export function useBoot() {
         if (cancelled) return;
         // Compose may report an error after creating some containers, so give
         // the reconciled stack a short chance to become healthy before
-        // surfacing the exact failure.
+        // surfacing the exact failure. Keep it in the log either way, so a
+        // failed step behind a healthy stack is not lost.
         startupError = String(e);
+        console.warn("[boot] stack startup reported an error:", startupError);
       }
 
       setPhase("checking");
