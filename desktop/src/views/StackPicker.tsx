@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { openAssistantOn } from "../attention/askAssistant";
 import {
   detectProjectToolchain,
   getProjectToolchain,
@@ -224,8 +225,14 @@ export function StackPicker({
       <div className="panel__head">
         <h2>Stack</h2>
         <div className="row">
-          <button className="ghost" onClick={() => setHelping(true)} disabled={busy}>
-            Ask an agent
+          <button
+            className="ghost"
+            onClick={() =>
+              openAssistantOn({ kind: "stack" }, "Help me choose the stack for this project.")
+            }
+            disabled={busy}
+          >
+            Ask the assistant
           </button>
           {current?.status === "configured" && (
             <button className="ghost" onClick={() => setEditing(false)} disabled={busy}>

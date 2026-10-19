@@ -153,6 +153,8 @@ type Conversation struct {
 	// SignIn is set while the last turn waits for its agent's login: the
 	// message is kept and sent once the agent works (sign_in.go).
 	SignIn *SignInWait `json:"sign_in,omitempty"`
+	// Focus is the item the user opened the assistant on (focus.go).
+	Focus *Focus `json:"focus,omitempty"`
 }
 
 type record struct {

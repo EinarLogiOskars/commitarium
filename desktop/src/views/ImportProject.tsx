@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { openAssistantOn } from "../attention/askAssistant";
 import { pickFolder, inspectFolder, importProject, type FolderInfo } from "../ipc";
 import {
   detectProjectToolchain,
@@ -142,7 +143,16 @@ export function ImportProject({
               detection={detection}
               saving={saving}
               onUse={() => void applyDetected()}
-              onVerify={() => setVerifying(true)}
+              onVerify={() => {
+                // The assistant has the repository checked (ADR-035) once the
+                // project opens.
+                onImported(imported);
+                openAssistantOn(
+                  { kind: "stack" },
+                  "Check the stack this repository uses and set it up.",
+                  imported,
+                );
+              }}
               onManual={() => onImported(imported)}
             />
           )

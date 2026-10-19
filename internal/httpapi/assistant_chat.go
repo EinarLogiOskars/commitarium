@@ -238,6 +238,34 @@ func (api *API) saveConversationNotesHandler(w http.ResponseWriter, r *http.Requ
 	writeJSON(w, http.StatusOK, conversation, "assistant conversation")
 }
 
+// focusSetter focuses a project's conversation on an item (ADR-035).
+type focusSetter interface {
+	SetFocus(ctx context.Context, scope string, focus *conversations.Focus) (conversations.Conversation, error)
+}
+
+// setConversationFocusHandler focuses the conversation on what the user
+// opened the assistant from; DELETE clears it.
+func (api *API) setConversationFocusHandler(w http.ResponseWriter, r *http.Request) {
+	setter, ok := api.conversations.(focusSetter)
+	if !ok {
+		writeError(w, http.StatusServiceUnavailable, "assistant_unavailable", "the assistant's focus is unavailable")
+		return
+	}
+	var focus *conversations.Focus
+	if r.Method != http.MethodDelete {
+		focus = &conversations.Focus{}
+		if !decodeSingleJSON(w, r, focus) {
+			return
+		}
+	}
+	conversation, err := setter.SetFocus(r.Context(), r.PathValue("scope"), focus)
+	if err != nil {
+		writeConversationError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, conversation, "assistant conversation")
+}
+
 func (api *API) dismissConversationActionHandler(w http.ResponseWriter, r *http.Request) {
 	conversation, err := api.conversations.Resolve(
 		r.Context(), r.PathValue("scope"), r.PathValue("actionID"), conversations.ActionDismissed, "", conversations.Created{},

@@ -5,7 +5,6 @@ import {
   getAssistant,
   reopenWorkOrder,
   replyToAssistant,
-  startAssistant,
   updateHandoffBrief,
 } from "../api/features";
 import {
@@ -20,6 +19,7 @@ import { ApiError } from "../api/client";
 import { Transcript, type TranscriptEntry } from "./Transcript";
 import { useFeatureArtifact } from "./useFeatureArtifact";
 import { WORK } from "../vocab";
+import { openAssistantOn } from "../attention/askAssistant";
 import type { WorkOrderAssistantSession, Feature, HandoffBriefDocument } from "../api/types";
 
 const POLL_MS = 1500;
@@ -169,16 +169,6 @@ function AssistantChat({
     }
   };
 
-  const clarify = async () => {
-    setChoice(null);
-    try {
-      setSession(await startAssistant(projectId, feature.id));
-      setError(null);
-    } catch (startError) {
-      setError(describe(startError));
-    }
-  };
-
   const canReply = !!session && !running && busy === null;
 
   // Enter sends; Shift+Enter or Alt+Enter starts a new line.
@@ -247,12 +237,20 @@ function AssistantChat({
           </div>
         )}
         <p className="muted">
-          The assistant can look into the code with you and turn this {WORK.short} into a handoff
-          brief. For a small, clear change, start right away: the title and description become the
-          goal.
+          The assistant can talk this {WORK.short} through with you and have its brief written from
+          the code. For a small, clear change, start right away: the title and description become
+          the goal.
         </p>
         <div className="row">
-          <button className="primary" onClick={() => void clarify()}>
+          <button
+            className="primary"
+            onClick={() =>
+              openAssistantOn(
+                { kind: "work_order", work_order_id: feature.id },
+                `Help me clarify “${feature.title}” so its brief can be written.`,
+              )
+            }
+          >
             Clarify with the assistant
           </button>
           <button onClick={() => setChoice("start")}>Start without clarifying</button>

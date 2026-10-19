@@ -7,6 +7,8 @@ import {
   getConversation,
   saveAssistantNotes,
   sendToAssistant,
+  setAssistantFocus,
+  type AssistantFocus,
   type AssistantAction,
   type AutopilotGoal,
   type LaunchStage,
@@ -158,18 +160,57 @@ export function AssistantDrawer({
     return () => window.removeEventListener(ASSISTANT_CHANGED, reload);
   }, [load]);
 
+  // Opened on an item (ADR-035): the conversation is focused on it and the
+  // message that starts it is sent. One for a project the app is about to
+  // open waits until the drawer follows it there.
+  const pendingFocus = useRef<{ focus: AssistantFocus; send?: string; scope?: string } | null>(
+    null,
+  );
+  const focusOn = useCallback(
+    async (focus: AssistantFocus, send?: string) => {
+      setError(null);
+      try {
+        setConversation(await setAssistantFocus(scope, focus));
+        if (send) setConversation(await sendToAssistant(scope, send, crypto.randomUUID()));
+      } catch (e) {
+        setError(describe(e));
+      }
+    },
+    [scope, setConversation],
+  );
+  useEffect(() => {
+    const pending = pendingFocus.current;
+    if (!pending || (pending.scope && pending.scope !== scope)) return;
+    pendingFocus.current = null;
+    void focusOn(pending.focus, pending.send);
+  }, [scope, focusOn]);
+
   useEffect(() => {
     const openWith = (event: Event) => {
-      const started = (event as CustomEvent<{ draft?: string }>).detail?.draft;
-      if (started) {
-        setDraft(started);
+      const detail = (
+        event as CustomEvent<{
+          draft?: string;
+          focus?: AssistantFocus;
+          send?: string;
+          scope?: string;
+        }>
+      ).detail;
+      if (detail?.draft) {
+        setDraft(detail.draft);
         caretToEnd.current = true;
+      }
+      if (detail?.focus) {
+        if (detail.scope && detail.scope !== scope) {
+          pendingFocus.current = { focus: detail.focus, send: detail.send, scope: detail.scope };
+        } else {
+          void focusOn(detail.focus, detail.send);
+        }
       }
       setOpen(true);
     };
     window.addEventListener(OPEN_ASSISTANT, openWith);
     return () => window.removeEventListener(OPEN_ASSISTANT, openWith);
-  }, [setOpen]);
+  }, [setOpen, scope, focusOn]);
 
   useEffect(() => {
     const composer = composerRef.current;
@@ -394,6 +435,24 @@ export function AssistantDrawer({
               </div>
               {error && <div className="banner banner--error">{error}</div>}
               <div className="composer">
+                {conversation.focus && (
+                  <div className="assistant__focus">
+                    <span className="pill" title="What this conversation is about">
+                      About: {conversation.focus.label}
+                    </span>
+                    <button
+                      className="ghost"
+                      aria-label="Clear what this conversation is about"
+                      onClick={() =>
+                        void setAssistantFocus(scope, null)
+                          .then(setConversation)
+                          .catch((e) => setError(describe(e)))
+                      }
+                    >
+                      ×
+                    </button>
+                  </div>
+                )}
                 <div className="reply">
                   <textarea
                     ref={composerRef}

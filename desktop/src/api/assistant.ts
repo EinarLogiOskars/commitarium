@@ -110,6 +110,16 @@ export interface Conversation {
   /** Set while the last turn waits for its agent's login: the message is
    * kept and sent once the agent works (needs_user: the user signs in). */
   sign_in?: { agent: string; since: string; needs_user?: boolean; retry_at?: string };
+  /** The item the user opened the assistant on (ADR-035). */
+  focus?: AssistantFocus;
+}
+
+/** What the conversation is about: a work order, the vision, or the stack. */
+export interface AssistantFocus {
+  kind: "work_order" | "vision" | "stack";
+  work_order_id?: string;
+  /** What the chip says; the coordinator fills it in. */
+  label?: string;
 }
 
 export type LaunchStage = "vision" | "setup" | "building";
@@ -136,6 +146,15 @@ export const sendToAssistant = (
     body: { message },
     idempotencyKey: key,
   });
+
+/** Focus the conversation on an item, or clear the focus with null. */
+export const setAssistantFocus = (
+  scope: string,
+  focus: AssistantFocus | null,
+): Promise<Conversation> =>
+  focus
+    ? request(`${conversationPath(scope)}/focus`, { method: "PUT", body: focus })
+    : request(`${conversationPath(scope)}/focus`, { method: "DELETE" });
 
 export const saveAssistantNotes = (scope: string, notes: string): Promise<Conversation> =>
   request(`${conversationPath(scope)}/notes`, { method: "PUT", body: { notes } });

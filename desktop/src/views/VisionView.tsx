@@ -5,7 +5,6 @@ import {
   getVisionSession,
   replyToVisionAssistant,
   saveVision,
-  startVisionAssistant,
   startVisionWorkOrder,
   setUpProject,
   addVisionItem,
@@ -16,6 +15,7 @@ import { ApiError } from "../api/client";
 import { startAutopilot } from "../api/assistant";
 import { ASSISTANT_CHANGED, WORK_CHANGED } from "./AssistantDrawer";
 import { Markdown } from "./Markdown";
+import { openAssistantOn } from "../attention/askAssistant";
 import { rememberIdea, rememberedIdea } from "./visionSession";
 import type {
   Feature,
@@ -131,19 +131,17 @@ export function VisionView({
     return () => clearInterval(timer);
   }, [projectId, sessionId, sessionRunning, loadVision]);
 
-  const start = async (mode: VisionMode, message: string) => {
-    setBusy(mode);
-    setError(null);
-    try {
-      const s = await startVisionAssistant(projectId, mode, message, crypto.randomUUID());
-      rememberIdea(projectId, null);
-      setSession(s);
-      setDraft(null);
-    } catch (e) {
-      setError(describe(e));
-    } finally {
-      setBusy(null);
-    }
+  // The vision is written through the assistant (ADR-035): it talks it
+  // through as far as needed and has the vision writer write it.
+  const start = (mode: VisionMode, message: string) => {
+    rememberIdea(projectId, null);
+    setRewriting(false);
+    openAssistantOn(
+      { kind: "vision" },
+      mode === "describe"
+        ? `Write the vision from my description:\n\n${message}`
+        : `Let's talk the vision through. My idea:\n\n${message}`,
+    );
   };
 
   const startOrder = async (item: VisionItem) => {
@@ -214,7 +212,7 @@ export function VisionView({
           rewriting={!!vision}
           initial={vision ? "" : (rememberedIdea(projectId) ?? "")}
           busy={busy}
-          onStart={(mode, message) => void start(mode, message)}
+          onStart={(mode, message) => start(mode, message)}
           onCancel={vision ? () => setRewriting(false) : undefined}
         />
       ) : draft ? (
@@ -262,14 +260,14 @@ export function VisionView({
                 </ul>
                 <button
                   onClick={() =>
-                    void start(
+                    start(
                       "converse",
                       "Go through the guesses in the current vision with me, then rewrite it with my answers.",
                     )
                   }
                   disabled={busy !== null}
                 >
-                  {busy === "converse" ? "Starting…" : "Answer these"}
+                  Answer these
                 </button>
               </div>
             )}
@@ -565,14 +563,14 @@ function WriteVision({
           disabled={!message || busy !== null}
           title="The assistant writes it at once and lists what it had to guess."
         >
-          {busy === "describe" ? "Starting…" : "Write it from my description"}
+          Write it from my description
         </button>
         <button
           onClick={() => onStart("converse", message)}
           disabled={!message || busy !== null}
           title="The assistant asks what it needs to know first."
         >
-          {busy === "converse" ? "Starting…" : "Talk it through"}
+          Talk it through
         </button>
         {onCancel && (
           <button className="ghost" onClick={onCancel} disabled={busy !== null}>

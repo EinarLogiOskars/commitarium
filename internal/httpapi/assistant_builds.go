@@ -72,8 +72,8 @@ func (api *API) wakeForUsersWorkOrder(ctx context.Context, created feature.Featu
 	}
 }
 
-// applyWriteVision has the vision written on the assistant's agent from the
-// action's description, as a new app's is. The vision writer is the
+// applyWriteVision has the vision written, or the one there is rewritten, on
+// the assistant's agent from the action's description, as a new app's is. The vision writer is the
 // assistant's helper: its questions go to the assistant (ADR-035).
 func (api *API) applyWriteVision(
 	w http.ResponseWriter, r *http.Request, projectID string, action conversations.Action,
@@ -83,10 +83,10 @@ func (api *API) applyWriteVision(
 		writeError(w, http.StatusServiceUnavailable, "vision_unavailable", "the vision is unavailable")
 		return "", nil, false
 	}
+	result := "Writing the vision."
 	if _, err := api.visions.Get(ctx, projectID); err == nil {
-		writeError(w, http.StatusConflict, "vision_exists",
-			"the project has a vision already; propose add_vision_item to add to it")
-		return "", nil, false
+		// The writer revises the vision there is, keeping its work orders.
+		result = "Rewriting the vision."
 	} else if !errors.Is(err, vision.ErrNotFound) {
 		writeVisionError(w, projectID, err)
 		return "", nil, false
@@ -98,7 +98,7 @@ func (api *API) applyWriteVision(
 		writeError(w, http.StatusConflict, "vision_not_started", "the vision could not be started: "+err.Error())
 		return "", nil, false
 	}
-	return "Writing the vision.", &conversations.Helper{ID: session.ID, Kind: conversations.HelperVision}, true
+	return result, &conversations.Helper{ID: session.ID, Kind: conversations.HelperVision}, true
 }
 
 // applyWriteBrief has the brief writer write a draft work order's brief on

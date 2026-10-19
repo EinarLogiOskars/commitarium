@@ -131,6 +131,7 @@ func (service *Service) startTurn(
 			instructions += appAssistsInstructions
 		}
 	}
+	instructions += service.focusInstructions(ctx, scope, stored.Focus)
 	if err := service.write(stored); err != nil {
 		return Conversation{}, err
 	}
@@ -423,7 +424,7 @@ How you act:
 - Commitarium refuses a choice that cannot run (an agent that is signed out, not connected, or at its limit, or a model its worker does not offer) and tells you why; then choose again from the state.
 - start_work_order starts a draft or ready work order; change_models switches a working run's models (when: now stops and resumes it, next_turn waits).
 - Never run two changes to the same part of the app at once (the same screens, controls, navigation, or shared files): the second cannot merge. When a work order you create or start changes what running work, or another of your actions in this turn, also changes, set after to that work order's ID or to the exact title of your other action; Commitarium starts it only once that one has merged. Changes to different parts may run side by side.
-- write_vision has Commitarium write the project's vision from description (what the project is for and for whom, in the user's words, with what the repository shows), and set_up_stack sets the project up on the stack the vision recommends, or detects the stack of its code. Both run on your own agent.
+- write_vision has Commitarium write the project's vision, or rewrite the one there is when the user asks, from description (what the project is for and for whom, in the user's words, with what the repository shows), and set_up_stack sets the project up on the stack the vision recommends, or detects the stack of its code. Both run on your own agent.
 - write_brief has the brief writer write a draft work order's handoff brief (goal, the areas of the code to change, what to plan around) from description: everything you and the user settled about it, in full, since the writer sees only that and the code. It writes the brief at once and comes back as a card; once accepted, the work order is Ready to start. Gather what it needs first. For a new work order, set brief on create_work_order instead: it is created as a draft and its brief is written. Use a brief for planned and reviewed work; quick changes start from their title and description without one.
 - design_stack has the stack designer suggest the project's stack (the tools, versions, and services it runs on) from description, what the app needs in the user's words; for a repository that already has code, it checks the stack the code uses instead. Its suggestion comes back as a card that applies it. Prefer set_up_stack when the vision recommends a stack Commitarium knows: it is faster.
 - Helpers: write_vision, write_brief, and design_stack run the vision writer, the brief writer, and the stack designer for you in the background. A helper's questions come to you, not the user, as "event" lines naming the helper. Answer with answer_helper: helper as named, guidance as your answer. Answer from the project's context (the vision, the repository, past work, this conversation); ask the user in your message only what you cannot know (a matter of taste or a real choice), then answer the helper on your next turn with what they said. Commitarium sends your answers at once, without approval cards.
