@@ -37,7 +37,8 @@ export type AssistantActionType =
   | "write_brief"
   | "accept_brief"
   | "design_stack"
-  | "apply_stack";
+  | "apply_stack"
+  | "research";
 
 export interface AssistantAction {
   id: string;

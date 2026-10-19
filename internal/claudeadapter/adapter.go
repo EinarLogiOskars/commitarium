@@ -160,7 +160,7 @@ func (adapter *Adapter) launch(
 		return nil, fmt.Errorf("%w: exact model ID is required", worker.ErrInvalidSessionRequest)
 	}
 	arguments, err := adapter.commandArguments(
-		model, strings.TrimSpace(request.Effort), request.OutputContract, request.WorkspaceAccess,
+		model, strings.TrimSpace(request.Effort), request.OutputContract, request.WorkspaceAccess, request.Web,
 		providerSessionID, resume, prompt,
 	)
 	if err != nil {
@@ -196,6 +196,7 @@ func (adapter *Adapter) commandArguments(
 	effort string,
 	contract worker.OutputContract,
 	access worker.WorkspaceAccess,
+	web bool,
 	providerSessionID string,
 	resume bool,
 	prompt string,
@@ -219,6 +220,10 @@ func (adapter *Adapter) commandArguments(
 	}
 	if effort != "" {
 		arguments = append(arguments, "--effort", effort)
+	}
+	if web {
+		// Research searches and reads the web without a prompt to allow it.
+		arguments = append(arguments, "--allowedTools", "WebSearch,WebFetch")
 	}
 	if schema := worker.OutputJSONSchema(contract); schema != nil {
 		encoded, err := json.Marshal(schema)

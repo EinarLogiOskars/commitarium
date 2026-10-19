@@ -291,3 +291,35 @@ func TestTheHelperReaderReadsAStackSuggestion(t *testing.T) {
 		t.Fatalf("state = %+v, %v", state, err)
 	}
 }
+
+// researchConversations starts research as the assistant's service does.
+type researchConversations struct {
+	*helperConversations
+	questions []string
+}
+
+func (stub *researchConversations) StartResearch(_ context.Context, scope, actionID, title, question string) (conversations.Helper, error) {
+	stub.questions = append(stub.questions, scope+": "+question)
+	return conversations.Helper{ID: "rsc_1", Kind: conversations.HelperResearch, Title: title, Agent: "codex"}, nil
+}
+
+// research runs at the top level as in a project, and follows its helper.
+func TestResearchStartsAHelperAnywhere(t *testing.T) {
+	for _, scope := range []string{conversations.TopLevel, "prj_test"} {
+		stub := &researchConversations{helperConversations: &helperConversations{conversationStub: &conversationStub{
+			action: conversations.Action{ID: "act_1", Status: conversations.ActionProposed, AssistantAction: featureartifact.AssistantAction{
+				Type: featureartifact.AssistantResearch, Reason: "A fact", Title: "VAT rates", Description: "Which VAT rates apply?",
+			}},
+		}}}
+		projects := &recordingProjectService{getByIDResult: project.Project{ID: "prj_test"}}
+		handler := NewWithWorkspaceRealWorkflowDeletionAndModels(projects, &recordingFeatureService{}, nil, nil, nil, nil, nil,
+			nil, nil, nil, nil, nil, stub)
+		if err := AssistantActionApplier(handler)(t.Context(), scope, "act_1"); err != nil {
+			t.Fatalf("%s: %v", scope, err)
+		}
+		if len(stub.questions) != 1 || stub.questions[0] != scope+": Which VAT rates apply?" ||
+			stub.started == nil || stub.started.ID != "rsc_1" || stub.resolvedResult != "Looking up “VAT rates”." {
+			t.Fatalf("%s: questions = %v started = %+v result = %q", scope, stub.questions, stub.started, stub.resolvedResult)
+		}
+	}
+}

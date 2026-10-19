@@ -260,7 +260,7 @@ func (service *Service) refresh(ctx context.Context, stored record) (record, err
 				stored.Notes = turn.Notes
 			}
 			answers := slices.ContainsFunc(turn.Actions, func(action featureartifact.AssistantAction) bool {
-				return action.Type == featureartifact.AssistantAnswerHelper
+				return talksToHelper(action.Type)
 			})
 			if len(turn.Actions) > 0 && (answers || stored.Goal.active() || service.assistantBuilds(ctx, stored.Scope)) {
 				service.nudgeWatcher()
@@ -393,7 +393,7 @@ func rules(scope string, settings Settings) string {
 			"what it will do, for whom, and in which language its interface should be; ask at most one or two " +
 			"questions that really matter. Once the user is happy with the name and the idea, or says go, propose " +
 			"create_app with title as the name and description as the settled idea in a few sentences. That is the " +
-			"only action you take at the top level; Commitarium then plans, sets up, and builds the app."
+			"only action you take at the top level, besides research; Commitarium then plans, sets up, and builds the app."
 	}
 	maxEffort := settings.MaxEffort
 	if maxEffort == "" {
@@ -429,6 +429,7 @@ How you act:
 - write_brief has the brief writer write a draft work order's handoff brief (goal, the areas of the code to change, what to plan around) from description: everything you and the user settled about it, in full, since the writer sees only that and the code. It writes the brief at once and comes back as a card; once accepted, the work order is Ready to start. Gather what it needs first. For a new work order, set brief on create_work_order instead: it is created as a draft and its brief is written. Use a brief for planned and reviewed work; quick changes start from their title and description without one.
 - design_stack has the stack designer suggest the project's stack (the tools, versions, and services it runs on) from description, what the app needs in the user's words; for a repository that already has code, it checks the stack the code uses instead. Its suggestion comes back as a card that applies it. Prefer set_up_stack when the vision recommends a stack Commitarium knows: it is faster.
 - Helpers: write_vision, write_brief, and design_stack run the vision writer, the brief writer, and the stack designer for you in the background. A helper's questions come to you, not the user, as "event" lines naming the helper. Answer with answer_helper: helper as named, guidance as your answer. Answer from the project's context (the vision, the repository, past work, this conversation); ask the user in your message only what you cannot know (a matter of taste or a real choice), then answer the helper on your next turn with what they said. Commitarium sends your answers at once, without approval cards.
+- research has a research helper look a question of fact up on the web: title names it in a few words, description is the question and what the answer is for. Use it for facts the user should not have to supply (tax rules, official requirements, standards, file formats), not for what you know well or what is the user's to choose. Its findings and sources come back to you as an "event"; tell the user in plain words what matters and ask them to confirm only what is a choice. Commitarium starts it at once, without a card.
 - Work orders the user created by hand are theirs; the state marks each work order as the user's or yours. Never start, continue, change the models of, or close one of the user's on your own initiative: only mention it ("<title> is waiting for you to start it"). When the user asks you in this conversation to act on one of theirs, propose that action; it always waits for their approval as a card. Work orders you created, and those an autopilot goal the user started handed you, are yours to drive.
 - close_work_order ends a work order without merging it (its agents stop, its branch and pull request close, its history stays): for a duplicate, or work the user no longer wants.
 - set_up_preview sets the app's preview up, or fixes it when the app does not start (Commitarium reports "The app's preview failed to start" with what each container did): an agent adjusts compose.yaml and the Dockerfiles, and the work merges only once Commitarium has built and started the app for real. Put what fails in guidance when you know it. Prefer it over a work order of your own for anything about getting the app to run; one runs at a time.

@@ -281,7 +281,8 @@ export function AssistantDrawer({
   }
 
   const renderAction = (action: AssistantAction) =>
-    (builds || action.type === "answer_helper") && appliesItself(action) ? (
+    (builds || action.type === "answer_helper" || action.type === "research") &&
+    appliesItself(action) ? (
       <AppliedLine key={action.id} action={action} />
     ) : (
       <ActionCard
@@ -603,7 +604,9 @@ function ActionCard({
                                 ? "Design the stack"
                                 : action.type === "apply_stack"
                                   ? "Suggested stack"
-                                  : "Switch models";
+                                  : action.type === "research"
+                                    ? `Look up: ${action.title}`
+                                    : "Switch models";
   const models = [
     action.lead_model &&
       `Lead ${action.lead_agent ? agentName(agents, action.lead_agent) + " · " : ""}${modelName(action.lead_model)}`,
@@ -850,6 +853,7 @@ const APPLY_LABEL: Record<AssistantAction["type"], string> = {
   accept_brief: "Accept",
   design_stack: "Design stack",
   apply_stack: "Apply",
+  research: "Look it up",
 };
 
 const STATUS_LABEL: Record<AssistantAction["status"], string> = {
@@ -973,6 +977,13 @@ function AppliedLine({ action }: { action: AssistantAction }) {
     return (
       <p className="muted assistant__applied">
         {action.status === "applied" ? "✓ Answered" : "Answering"}: {action.guidance}
+      </p>
+    );
+  }
+  if (action.type === "research") {
+    return (
+      <p className="muted assistant__applied">
+        {action.status === "applied" ? "✓ Looking up" : "Looking up"}: {action.title}
       </p>
     );
   }

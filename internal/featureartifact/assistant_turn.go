@@ -74,6 +74,10 @@ const (
 	// Commitarium proposes it from the helper's result; the assistant never
 	// does.
 	AssistantApplyStack AssistantActionType = "apply_stack"
+	// AssistantResearch has a research helper look up Description, a
+	// question of fact, on the web (ADR-035); Title names it in a few
+	// words. Its findings and sources come back to the assistant.
+	AssistantResearch AssistantActionType = "research"
 )
 
 // AssistantAction is one proposed action. Fields that do not apply to its
@@ -251,6 +255,11 @@ func (action AssistantAction) validate() error {
 	case AssistantDesignStack:
 		if len(action.Description) > MaxGoalBytes {
 			return fmt.Errorf("the stack's description is too long")
+		}
+	case AssistantResearch:
+		if action.Title == "" || len(action.Title) > MaxStepTextBytes ||
+			action.Description == "" || len(action.Description) > MaxGoalBytes {
+			return fmt.Errorf("research needs a short title and the question in description")
 		}
 	case AssistantStartAutopilot:
 		if action.Priority < 0 || action.Priority > maxVisionPriority {

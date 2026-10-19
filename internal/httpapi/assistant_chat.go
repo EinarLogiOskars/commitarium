@@ -311,8 +311,9 @@ func (api *API) approveConversationActionHandler(w http.ResponseWriter, r *http.
 		return
 	}
 	// At the top level the assistant only creates apps; everything else acts
-	// in a project.
-	if (scope == conversations.TopLevel) != (action.Type == featureartifact.AssistantCreateApp) {
+	// in a project, except research, which needs none.
+	if action.Type != featureartifact.AssistantResearch &&
+		(scope == conversations.TopLevel) != (action.Type == featureartifact.AssistantCreateApp) {
 		writeError(w, http.StatusConflict, "action_needs_project", "this action runs in a project's conversation, and a new app at the top level")
 		return
 	}
@@ -403,6 +404,8 @@ func (api *API) approveConversationActionHandler(w http.ResponseWriter, r *http.
 		result, helper, ok = api.applyWriteVision(w, r, scope, action)
 	case featureartifact.AssistantAnswerHelper:
 		result, ok = api.applyAnswerHelper(w, r, scope, action)
+	case featureartifact.AssistantResearch:
+		result, helper, ok = api.applyResearch(w, r, scope, action)
 	case featureartifact.AssistantSetUpStack:
 		result, workOrderID, ok = api.applySetUpStack(w, r, scope)
 	case featureartifact.AssistantCloseWorkOrder:

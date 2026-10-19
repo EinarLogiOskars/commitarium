@@ -109,6 +109,39 @@ func (watcher Watcher) Tick(ctx context.Context) {
 		watcher.autopilot(ctx, scope)
 		watcher.gapCheck(ctx, scope)
 	}
+	// The top level has no project's work, but research it started comes
+	// back to it, and is sent without a card (research.go).
+	watcher.followHelpers(ctx, TopLevel)
+	watcher.autopilot(ctx, TopLevel)
+	if err := watcher.Service.wakeIfWaiting(ctx, TopLevel); err != nil {
+		log.Printf("assistant events for %s: %v", TopLevel, err)
+	}
+}
+
+// wakeIfWaiting starts the turn for what waits in a conversation with no
+// project's work to observe: the top level, where research comes back and
+// the user's messages queue while the assistant answers.
+func (service *Service) wakeIfWaiting(ctx context.Context, scope string) error {
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	stored, err := service.read(scope)
+	if err != nil {
+		return err
+	}
+	if stored.Status == StatusRunning {
+		// refresh writes what it folds in.
+		if stored, err = service.refresh(ctx, stored); err != nil || stored.Status == StatusRunning {
+			return err
+		}
+	}
+	if (len(stored.PendingEvents) == 0 && len(stored.Queued) == 0) || stored.SignIn != nil {
+		return nil
+	}
+	settings, err := service.Readiness(ctx)
+	if err != nil || settings.Agent == "" || settings.Model == "" {
+		return err
+	}
+	return service.startWaitingTurn(ctx, stored, settings)
 }
 
 // settleVision stores a vision the assistant has finished writing: the

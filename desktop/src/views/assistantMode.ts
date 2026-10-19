@@ -29,7 +29,8 @@ export function assistantModeNote(mode: AssistantMode): string {
 }
 
 // Work the assistant applies without asking where it builds everything: its
-// work actions (and, everywhere, its answers to its helpers' questions),
+// work actions (and, everywhere, its answers to its helpers' questions and
+// its research),
 // except those that need the user's approval of a premium model, and those
 // autopilot left for the user (on a work order the user made, say), which
 // stay cards. Closing is left as a card: only autopilot's
@@ -48,6 +49,7 @@ export function appliesItself(action: AssistantAction): boolean {
     "accept_brief",
     "design_stack",
     "apply_stack",
+    "research",
   ];
   const leftForUser = action.status === "proposed" && !!action.auto_tried;
   return (

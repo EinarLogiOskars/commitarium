@@ -269,7 +269,7 @@ func (service *Service) helperSignInScopes(agentID string) []string {
 	service.mu.Lock()
 	defer service.mu.Unlock()
 	scopes := make([]string, 0)
-	for _, scope := range service.projectScopes() {
+	for _, scope := range append(service.projectScopes(), TopLevel) {
 		stored, err := service.read(scope)
 		if err == nil && slices.ContainsFunc(stored.Helpers, func(helper Helper) bool { return helper.SignIn == agentID }) {
 			scopes = append(scopes, scope)

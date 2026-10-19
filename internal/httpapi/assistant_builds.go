@@ -269,6 +269,29 @@ func (api *API) applyAnswerHelper(
 	return "Answered " + helper.Name() + ".", true
 }
 
+// researcher starts research for the assistant.
+type researcher interface {
+	StartResearch(ctx context.Context, scope, actionID, title, question string) (conversations.Helper, error)
+}
+
+// applyResearch starts a research helper on the action's question, on the
+// assistant's agent with the web and no repository (ADR-035).
+func (api *API) applyResearch(
+	w http.ResponseWriter, r *http.Request, scope string, action conversations.Action,
+) (string, *conversations.Helper, bool) {
+	starter, ok := api.conversations.(researcher)
+	if !ok {
+		writeError(w, http.StatusServiceUnavailable, "assistant_unavailable", "research needs real agents")
+		return "", nil, false
+	}
+	helper, err := starter.StartResearch(r.Context(), scope, action.ID, action.Title, action.Description)
+	if err != nil {
+		writeError(w, http.StatusConflict, "research_not_started", "the research could not be started: "+err.Error())
+		return "", nil, false
+	}
+	return fmt.Sprintf("Looking up “%s”.", action.Title), &helper, true
+}
+
 // helperPath is the route of a helper's session.
 func helperPath(projectID string, helper conversations.Helper) string {
 	base := "/api/v1/projects/" + url.PathEscape(projectID)
