@@ -7,7 +7,6 @@ import {
   updateProjectToolchain,
 } from "../api/toolchains";
 import { ApiError } from "../api/client";
-import { SetupAssistant } from "./SetupAssistant";
 import {
   ProjectDefaultsFields,
   initialProjectDefaults,
@@ -35,7 +34,6 @@ export function ImportProject({
   const [imported, setImported] = useState<string | null>(null);
   const [detection, setDetection] = useState<ToolchainSuggestion | null>(null);
   const [saving, setSaving] = useState(false);
-  const [verifying, setVerifying] = useState(false);
 
   const choose = async () => {
     setError(null);
@@ -131,31 +129,22 @@ export function ImportProject({
         {error && <div className="banner banner--error">{error}</div>}
 
         {imported ? (
-          verifying ? (
-            <SetupAssistant
-              projectId={imported}
-              purpose="verify_repository"
-              onApplied={() => onImported(imported)}
-              onCancel={() => setVerifying(false)}
-            />
-          ) : (
-            <DetectionReview
-              detection={detection}
-              saving={saving}
-              onUse={() => void applyDetected()}
-              onVerify={() => {
-                // The assistant has the repository checked (ADR-035) once the
-                // project opens.
-                onImported(imported);
-                openAssistantOn(
-                  { kind: "stack" },
-                  "Check the stack this repository uses and set it up.",
-                  imported,
-                );
-              }}
-              onManual={() => onImported(imported)}
-            />
-          )
+          <DetectionReview
+            detection={detection}
+            saving={saving}
+            onUse={() => void applyDetected()}
+            onVerify={() => {
+              // The assistant has the repository checked (ADR-035) once the
+              // project opens.
+              onImported(imported);
+              openAssistantOn(
+                { kind: "stack" },
+                "Check the stack this repository uses and set it up.",
+                imported,
+              );
+            }}
+            onManual={() => onImported(imported)}
+          />
         ) : !info ? (
           <button className="primary" onClick={() => void choose()}>
             Choose folder…

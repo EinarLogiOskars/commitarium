@@ -18,7 +18,6 @@ import { VisionView } from "./VisionView";
 import { OPEN_VISION, WORK_CHANGED } from "./AssistantDrawer";
 import { rememberedIdea } from "./visionSession";
 import { getOpenVisionSession } from "../api/vision";
-import { getAssistantSettings } from "../api/assistant";
 import { usePreview } from "./usePreview";
 import { usePreviewSetup } from "./usePreviewSetup";
 import { WORK } from "../vocab";
@@ -178,14 +177,6 @@ export function ProjectWorkspace({
     setOrderId(null);
     setMode(needsStack ? "stack" : "new");
   };
-  // The stack assistant starts on the assistant's own agent and model, the
-  // user's choice; a project has none (ADR-027).
-  const [assistantAgent, setAssistantAgent] = useState<{ agent?: string; model?: string }>({});
-  useEffect(() => {
-    getAssistantSettings()
-      .then((s) => setAssistantAgent({ agent: s.agent || undefined, model: s.model || undefined }))
-      .catch(() => undefined);
-  }, []);
   // A session starts at once and opens on its greeting (ADR-019).
   const [startingSession, setStartingSession] = useState(false);
   const startSession = async () => {
@@ -440,7 +431,6 @@ export function ProjectWorkspace({
           {mode === "stack" && project && (
             <StackPicker
               projectId={id}
-              preferred={assistantAgent}
               onSaved={(t) => {
                 setToolchain(t);
                 setMode("overview"); // return to where the flow was most likely initiated

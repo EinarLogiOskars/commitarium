@@ -3,8 +3,7 @@ import { listProjects, createProject, repairRepository } from "../api/projects";
 import { deleteProject } from "../ipc";
 import { ApiError } from "../api/client";
 import { ImportProject } from "./ImportProject";
-import { startVisionAssistant } from "../api/vision";
-import { rememberIdea } from "./visionSession";
+import { openAssistantOn } from "../attention/askAssistant";
 import { listAutopilotGoals, type AutopilotGoal } from "../api/assistant";
 import {
   ProjectDefaultsFields,
@@ -62,8 +61,8 @@ export function Projects({
     return () => clearInterval(timer);
   }, [reachable]);
 
-  // A project created with an idea starts the vision assistant on it, which
-  // also recommends the stack; the project opens on that conversation.
+  // A project created with an idea opens with the assistant on its vision,
+  // which also recommends the stack.
   const submit = async (mode: VisionMode | null) => {
     if (!name.trim()) return;
     setCreating(true);
@@ -74,19 +73,21 @@ export function Projects({
         crypto.randomUUID(),
       );
       const description = idea.trim();
-      if (mode && description) {
-        rememberIdea(created.id, description);
-        try {
-          await startVisionAssistant(created.id, mode, description, crypto.randomUUID());
-          rememberIdea(created.id, null);
-        } catch {
-          // The project opens on Vision with the idea filled in to retry.
-        }
-      }
       setName("");
       setIdea("");
       await load();
       onSelect(created.id);
+      if (mode && description) {
+        // The assistant writes the vision with the user (ADR-035) once the
+        // project is open.
+        openAssistantOn(
+          { kind: "vision" },
+          mode === "describe"
+            ? `Write the vision from my description:\n\n${description}`
+            : `Let's talk the vision through. My idea:\n\n${description}`,
+          created.id,
+        );
+      }
     } catch (e) {
       // The project is durable even when repo provisioning was unavailable —
       // reload so it shows with a Set-up action instead of vanishing on error.
