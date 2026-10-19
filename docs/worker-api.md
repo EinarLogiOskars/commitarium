@@ -529,11 +529,15 @@ session owns an exact supervised process handle; it does not advertise
 pause/continue because App Server cannot provide the required safe boundary.
 Write-capable Codex turns run with the internal process sandbox disabled, so
 Docker and the service's explicit mounts are their security boundary. Read-only
-turns select Codex's `read-only` sandbox. The Codex services relax Docker's
-default seccomp profile so the bundled `bwrap` can create an unprivileged user
-namespace; they do not receive `SYS_ADMIN`, privileged mode, or the Docker
-socket. The nested sandbox then enforces read-only repository access for
-clarification and planning.
+turns select Codex's `read-only` sandbox. The Codex services use
+`docker/codex-seccomp.json`: Docker's default seccomp profile plus `clone`,
+`unshare`, `mount`, `umount2`, and `pivot_root`, so the bundled `bwrap` can
+create an unprivileged user namespace. Every other default rule stays in
+force. Both agent worker templates drop all capabilities and set
+`no-new-privileges`; they never receive `SYS_ADMIN`, privileged mode, or the
+Docker socket. The nested sandbox then enforces read-only repository access
+for clarification and planning. `scripts/generate-codex-seccomp.py`
+regenerates the profile from a pinned upstream version.
 The dedicated smoke-test child remains overlaid read-only, while coordinator-
 prepared feature children may be selected for write-capable implementation.
 

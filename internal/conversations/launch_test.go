@@ -72,6 +72,47 @@ func TestALaunchGoesFromVisionToSetupToBuildingTheWholeVision(t *testing.T) {
 	}
 }
 
+// The vision service stores a finished vision only when its conversation is
+// read. The watcher reads it itself, so a launch moves on with the Vision page
+// closed.
+func TestALaunchMovesOnWithoutTheVisionPageOpen(t *testing.T) {
+	service, _ := newTestService(t)
+	visions := &writtenOnRead{}
+	var setUp []string
+	watcher := Watcher{Service: service, Features: &featuresStub{}, Runs: runsStub{},
+		Visions: visions, VisionSessions: visions,
+		SetUp: func(_ context.Context, _ string, presets []string, _ string) error {
+			setUp = append(setUp, presets...)
+			return nil
+		}}
+	if _, err := service.StartLaunch(t.Context(), "prj_test"); err != nil {
+		t.Fatal(err)
+	}
+
+	watcher.Tick(t.Context())
+	conversation, _ := service.Get(t.Context(), "prj_test")
+	if len(setUp) != 1 || setUp[0] != "node-lts" || conversation.Launch.Stage != LaunchSetup {
+		t.Fatalf("stack set up = %v launch = %+v", setUp, conversation.Launch)
+	}
+}
+
+// writtenOnRead is a vision whose finished conversation is stored once read.
+type writtenOnRead struct{ written bool }
+
+func (stub *writtenOnRead) Get(context.Context, string) (vision.Vision, error) {
+	if !stub.written {
+		return vision.Vision{}, vision.ErrNotFound
+	}
+	return vision.Vision{Plan: featureartifact.VisionPlan{
+		Stack: &featureartifact.VisionStack{Presets: []string{"node-lts"}},
+	}}, nil
+}
+
+func (stub *writtenOnRead) OpenSession(context.Context, string) (vision.Session, error) {
+	stub.written = true
+	return vision.Session{Status: vision.StatusWritten}, nil
+}
+
 type missingVision struct{}
 
 func (missingVision) Get(context.Context, string) (vision.Vision, error) {

@@ -134,6 +134,11 @@ func (watcher Watcher) restartVision(ctx context.Context, scope string, launch L
 	if _, err := watcher.VisionSessions.OpenSession(ctx, scope); !errors.Is(err, vision.ErrNotFound) {
 		return // Being written, or waiting for the user.
 	}
+	// Reading the session stores a vision it just finished: then none is
+	// missing.
+	if _, err := watcher.Visions.Get(ctx, scope); !errors.Is(err, vision.ErrNotFound) {
+		return
+	}
 	service := watcher.Service
 	service.mu.Lock()
 	defer service.mu.Unlock()

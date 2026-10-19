@@ -1,31 +1,43 @@
 # Commitarium
 
-**A local-first desktop workspace where coding agents plan, implement, review,
-and ship software together—without taking control away from you.**
+**You describe it. Commitarium builds it.**
 
 [![CI](https://github.com/EinarLogiOskars/commitarium/actions/workflows/ci.yml/badge.svg)](https://github.com/EinarLogiOskars/commitarium/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/EinarLogiOskars/commitarium?label=release)](https://github.com/EinarLogiOskars/commitarium/releases)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-![Commitarium workshop](desktop/src/assets/loading/workshop.png)
+![Commitarium building an app from one sentence, then changing it on request](docs/media/commitarium.gif)
 
-Commitarium builds and keeps your own apps. Describe what you want in a
-sentence ("a shelf for my Funko Pops", "a calorie tracker") and its assistant
-plans the app, hands the work to coding agents, checks the result, and opens
-the finished app in its own window. To change it later, ask: "make the buttons
-blue".
+<sub>*Sped up. In reality, an app like this takes about half an hour to build,
+and a small change a few minutes.*</sub>
 
-Behind that, it is a full software workshop for developers too: a lead agent
-builds, a reviewer from a different provider checks the plan and the code,
-every change goes through a pull request, and you decide how much the
-assistant may do on its own. Everything runs on your machine, in Docker, with
-a private Forgejo instance keeping the history.
+Want an app that does exactly what you need? Tell Commitarium in a sentence.
+Its assistant plans the app, hands the work to coding agents, checks what they
+make, and opens the finished app on your computer. Want it different? Ask, and
+it changes.
+
+- **No coding needed.** You talk to one assistant in plain words. It takes care
+  of the plan, the code, the setup, and the fixes when something breaks.
+- **Yours, on your computer.** Your apps and their data stay on your machine.
+- **Uses the AI you already have.** Sign in with your Claude or Codex account.
+  Commitarium keeps an eye on your usage limits and spreads the work to fit.
+- **Checked, not just generated.** A second agent, ideally from another
+  provider, reviews every plan and every change before it lands.
+
+**[Download for macOS, Windows, or Linux](https://github.com/EinarLogiOskars/commitarium/releases)**
+· needs [Docker](#requirements) and a Claude or Codex account.
 
 > [!IMPORTANT]
 > Commitarium is pre-1.0 early-access software. The core is in daily use and
 > tested, but expect rough edges. Use it on repositories you can recover.
 
 ## What it does
+
+Behind the apps, Commitarium is a full software workshop for developers too: a
+lead agent builds, a reviewer from a different provider checks the plan and the
+code, every change goes through a pull request, and you decide how much the
+assistant may do on its own. Everything runs on your machine, in Docker, with
+a private Forgejo instance keeping the history.
 
 - **Apps from a sentence.** The Apps area is where Commitarium opens. **New
   app** turns a description into a project with a written plan, a chosen
@@ -156,21 +168,10 @@ GitLab, or another remote is a separate step.
 
 ## Architecture
 
-```text
-┌────────────────────────────────────────────────────────────┐
-│ Native desktop app (Tauri + React)                         │
-│ Docker lifecycle · agent login · previews · CLI updates    │
-└───────────────────────────┬────────────────────────────────┘
-                            │ narrow local APIs
-┌───────────────────────────▼────────────────────────────────┐
-│ Docker Compose                                             │
-│                                                            │
-│  ┌─────────────┐     ┌───────────┐     ┌─────────────────┐ │
-│  │ Coordinator │────▶│  Forgejo  │◀────│ Agent workers   │ │
-│  │ Go + SQLite │     │ local Git │     │ Codex / Claude  │ │
-│  └─────────────┘     └───────────┘     └─────────────────┘ │
-└────────────────────────────────────────────────────────────┘
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/media/architecture-dark.png">
+  <img alt="On your computer, the desktop app talks over narrow local APIs to Docker Compose. There the coordinator starts and steers the agent workers, and both keep their work in a local Forgejo." src="docs/media/architecture-light.png">
+</picture>
 
 The Go coordinator owns the workflow state machine, the assistant, autopilot,
 and restart recovery. Forgejo is the durable collaboration record. Provider workers supervise exact
@@ -179,8 +180,8 @@ Tauri backend is the trusted boundary for Docker, agent sign-in, running
 previews, and explicit host-side Git operations.
 
 See the [1.0 vision](V1_VISION.md), the [product and architecture
-plan](PROJECT_PLAN.md), and the [architecture decision records](docs/adr) for
-the reasoning behind these boundaries.
+plan](docs/plans/PROJECT_PLAN.md), and the [architecture decision
+records](docs/adr) for the reasoning behind these boundaries.
 
 ## Security and data boundaries
 
@@ -259,8 +260,8 @@ and Rust formatting, Clippy and tests for every pull request and push to `main`.
 | Document | Purpose |
 | --- | --- |
 | [1.0 vision](V1_VISION.md) | Where Commitarium is going: assistant, work orders, sessions, apps |
-| [Product and architecture plan](PROJECT_PLAN.md) | Product principles, scope, and the foundation's system design |
-| [Apps](APPS_PLAN.md) · [Assistant](ASSISTANT_PLAN.md) · [Previews](PREVIEW_PLAN.md) · [Marketplace](MARKETPLACE_PLAN.md) | Plans for the main areas |
+| [Product and architecture plan](docs/plans/PROJECT_PLAN.md) | Product principles, scope, and the foundation's system design |
+| [Apps](docs/plans/APPS_PLAN.md) · [Assistant](docs/plans/ASSISTANT_PLAN.md) · [Previews](docs/plans/PREVIEW_PLAN.md) · [Marketplace](docs/plans/MARKETPLACE_PLAN.md) | Plans for the main areas |
 | [Security policy](SECURITY.md) | Supported versions, reporting, and what counts as a vulnerability |
 | [Support matrix](docs/support-matrix.md) | Supported host operating systems, Docker, and Compose |
 | [Threat model](docs/threat-model.md) | Trust assumptions, protected assets, and boundaries |

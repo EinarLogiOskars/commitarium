@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"io"
 	"net/http/httptest"
 	"os"
@@ -1171,5 +1172,19 @@ func TestJournalBackedServiceRunsAttemptsConcurrently(t *testing.T) {
 			}
 			time.Sleep(10 * time.Millisecond)
 		}
+	}
+}
+
+func TestLaunchFailureSummaryNamesOnlyTheOperatingSystemReason(t *testing.T) {
+	refused := fmt.Errorf("start Claude Code: start child process: %w", &os.PathError{
+		Op:   "fork/exec",
+		Path: "/opt/commitarium-cli/bin/claude",
+		Err:  errors.New("exec format error"),
+	})
+	if got := launchFailureSummary(refused); got != "provider session could not be started: exec format error" {
+		t.Fatalf("summary of a refused executable = %q", got)
+	}
+	if got := launchFailureSummary(errors.New("generate Claude session ID: no entropy")); got != "provider session could not be started" {
+		t.Fatalf("summary of another launch failure = %q", got)
 	}
 }

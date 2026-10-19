@@ -1092,7 +1092,7 @@ two subscriptions as the agents `codex` and `claude`. `provider` is `codex` or
 whose provider login failed past the automatic retries: the user has to sign
 it in again, and `waiting` work orders wait on it. It goes once a sign-in
 finishes in the desktop or any turn on the agent works
-(LOGIN_RECOVERY_PLAN.md, ADR-034).
+([LOGIN_RECOVERY_PLAN.md](plans/LOGIN_RECOVERY_PLAN.md), ADR-034).
 
 ## Work-order clarification
 

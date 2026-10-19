@@ -9,7 +9,7 @@ On 2026-10-14 three assistant turns failed in fifteen minutes with Claude's
 "OAuth session expired and could not be refreshed", though the saved login
 was fine: the next turn refreshed it. The assistant dropped the user's
 message and said to log in again; the Agents page still said the login was
-verified. An audit of every place an agent runs (LOGIN_RECOVERY_PLAN.md)
+verified. An audit of every place an agent runs ([LOGIN_RECOVERY_PLAN.md](../plans/LOGIN_RECOVERY_PLAN.md))
 found work orders resumed only after a sign-in inside the app, assistant
 messages and wake-ups dropped, the vision and setup chats silent about the
 login, and a new app's launch stalled at its vision for good.

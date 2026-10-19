@@ -14,7 +14,7 @@ use std::path::PathBuf;
 use std::thread;
 use std::time::Duration;
 
-use crate::{bootstrap, docker, phase4};
+use crate::{bootstrap, docker, environment};
 
 const AGENTS_COMPOSE_ENV: &str = "COMMITARIUM_AGENTS_COMPOSE_FILE";
 const TEMPLATE_PROFILE: &str = "agent-template";
@@ -73,6 +73,20 @@ impl Provider {
 /// Where workers find an updated provider CLI; the image's own is used until
 /// an update is installed there.
 pub(crate) const CLI_DIRECTORY: &str = "/opt/commitarium-cli";
+
+/// A `sh -c` script that runs the provider CLI the worker runs, by the
+/// worker's rule (`preferUpdatedCLI` in cmd/worker): the updated one when it
+/// answers `--version`, else the image's. Run it as
+/// `sh -c <script> <executable> <arguments>...`, so logins, login checks and
+/// turns never use different CLIs.
+pub(crate) fn cli_script(provider: Provider) -> String {
+    let executable = provider.executable();
+    format!(
+        "updated={CLI_DIRECTORY}/bin/{executable}; \
+         if [ -x \"$updated\" ] && \"$updated\" --version >/dev/null 2>&1; then exec \"$updated\" \"$@\"; fi; \
+         exec {executable} \"$@\""
+    )
+}
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub(crate) struct Agent {
@@ -175,7 +189,7 @@ async fn fetch_once() -> Result<Vec<Agent>, String> {
         .timeout(LIST_TIMEOUT)
         .build()
         .map_err(|_| "could not create the coordinator client".to_string())?
-        .get(phase4::coordinator_url("/api/v1/agents"))
+        .get(environment::coordinator_url("/api/v1/agents"))
         .send()
         .await
         .map_err(|_| "the coordinator is unavailable".to_string())?;
@@ -458,6 +472,37 @@ fn write_atomic(path: &std::path::Path, contents: &[u8]) -> Result<(), String> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn cli_script_prefers_a_working_updated_cli_like_the_worker() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let (updated, image) = (root.path().join("bin"), root.path().join("image"));
+        std::fs::create_dir(&updated).unwrap();
+        std::fs::create_dir(&image).unwrap();
+        let install = |directory: &std::path::Path, body: &str| {
+            let path = directory.join("claude");
+            std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        };
+        let script =
+            cli_script(Provider::Claude).replace(CLI_DIRECTORY, &root.path().to_string_lossy());
+        let run = || {
+            let output = std::process::Command::new("sh")
+                .args(["-c", &script, "claude", "auth", "status"])
+                .env("PATH", format!("{}:/usr/bin:/bin", image.display()))
+                .output()
+                .unwrap();
+            String::from_utf8(output.stdout).unwrap()
+        };
+        install(&image, "echo \"image $*\"");
+        assert_eq!(run(), "image auth status\n");
+        // An updated CLI that cannot even report its version is skipped.
+        install(&updated, "exit 1");
+        assert_eq!(run(), "image auth status\n");
+        install(&updated, "echo \"updated $*\"");
+        assert_eq!(run(), "updated auth status\n");
+    }
+
     fn templates() -> Value {
         json!({ "services": {
             "codex-agent-template": {
@@ -465,7 +510,8 @@ mod tests {
                 "image": "ghcr.io/example/codex:1",
                 "command": null,
                 "environment": { "COMMITARIUM_WORKER_ADAPTER": "codex", "COMMITARIUM_CODEX_MODEL": "a$b" },
-                "security_opt": ["seccomp=unconfined"],
+                "cap_drop": ["ALL"],
+                "security_opt": ["seccomp=docker/codex-seccomp.json", "no-new-privileges:true"],
             },
             "claude-agent-template": {
                 "profiles": ["agent-template"],
@@ -509,7 +555,11 @@ mod tests {
         let codex = &overlay["services"]["agent-codex-worker"];
         assert_eq!(codex["image"], "ghcr.io/example/codex:1");
         assert!(codex.get("profiles").is_none() && codex.get("command").is_none());
-        assert_eq!(codex["security_opt"][0], "seccomp=unconfined");
+        assert_eq!(
+            codex["security_opt"][0],
+            "seccomp=docker/codex-seccomp.json"
+        );
+        assert_eq!(codex["cap_drop"][0], "ALL");
         let environment = &codex["environment"];
         assert_eq!(environment["COMMITARIUM_CODEX_MODEL"], "a$$b");
         assert_eq!(environment["COMMITARIUM_CODEX_PROFILE_ID"], "codex");

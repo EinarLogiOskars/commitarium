@@ -1202,12 +1202,16 @@ fn compose_command(
     running_service: bool,
     login_container: Option<&str>,
 ) -> Result<Command, String> {
+    // The provider CLI runs through the worker's choice of CLI, so a login
+    // verified here is one the agent's turns can use.
+    let provider_cli = executable == spec.executable();
+    let entrypoint = if provider_cli { "/bin/sh" } else { executable };
     let mut command = docker::docker_command();
     command.arg("compose");
     docker::append_compose_files(&mut command)?;
     command.args(["-p", docker::PROJECT_NAME]);
     if running_service {
-        command.args(["exec", "-T", &spec.service, executable]);
+        command.args(["exec", "-T", &spec.service, entrypoint]);
     } else {
         command.args(["run", "--rm", "--no-deps"]);
         if docker::release_mode() {
@@ -1216,7 +1220,10 @@ fn compose_command(
         if let Some(container) = login_container {
             command.args(["--name", container]);
         }
-        command.args(["--entrypoint", executable, &spec.service]);
+        command.args(["--entrypoint", entrypoint, &spec.service]);
+    }
+    if provider_cli {
+        command.args(["-c", &agents::cli_script(spec.provider), executable]);
     }
     Ok(command)
 }
@@ -1435,15 +1442,30 @@ mod tests {
             .get_args()
             .map(|argument| argument.to_string_lossy().into_owned())
             .collect();
+        // The CLI runs through the worker's choice of CLI, not the image's.
         assert!(arguments
             .windows(2)
-            .any(|pair| pair == ["--entrypoint", "claude"]));
+            .any(|pair| pair == ["--entrypoint", "/bin/sh"]));
+        assert_eq!(
+            arguments[arguments.len() - 4..],
+            [
+                "agent-claude-worker".to_string(),
+                "-c".to_string(),
+                agents::cli_script(Provider::Claude),
+                "claude".to_string(),
+            ]
+        );
         assert!(arguments
             .windows(2)
             .any(|pair| { pair == ["--name", "commitarium-login-claude"] }));
+        let helper = compose_command(&spec("claude", Provider::Claude), "/bin/sh", true, None)
+            .unwrap()
+            .get_args()
+            .map(|argument| argument.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
         assert_eq!(
-            arguments.last().map(String::as_str),
-            Some("agent-claude-worker")
+            helper[helper.len() - 2..],
+            ["agent-claude-worker", "/bin/sh"]
         );
         std::env::remove_var("COMMITARIUM_COMPOSE_FILE");
     }

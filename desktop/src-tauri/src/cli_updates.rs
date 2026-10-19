@@ -18,7 +18,7 @@ use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::Notify;
 
 use crate::agents::{self, Provider, CLI_DIRECTORY};
-use crate::phase4::{self, EnvironmentPlan};
+use crate::environment::{self, EnvironmentPlan};
 use crate::{docker, profiles};
 
 const REGISTRY_TIMEOUT: Duration = Duration::from_secs(10);
@@ -163,11 +163,11 @@ async fn environment_pass(app: &AppHandle) -> Result<bool, String> {
             return Ok(false);
         }
         // The same union provisioning builds, read without touching a request.
-        let packages = phase4::approved_packages().await?;
+        let packages = environment::approved_packages().await?;
         eprintln!(
             "[environment-images] a base worker image changed; rebuilding the approved environment"
         );
-        let rebuilt = blocking(move || phase4::rebuild_environment_images(&packages)).await?;
+        let rebuilt = blocking(move || environment::rebuild_environment_images(&packages)).await?;
         if let Err(error) = rebuilt {
             if let Ok(mut after) = app.state::<CliUpdater>().rebuild_after.lock() {
                 *after = Some(Instant::now() + REBUILD_RETRY_INTERVAL);
@@ -190,7 +190,7 @@ async fn environment_pass(app: &AppHandle) -> Result<bool, String> {
                 return Ok(false);
             }
             let manager = app.state::<profiles::ProfileManager>().inner().clone();
-            blocking(move || phase4::recreate_environment_workers(&manager)).await??;
+            blocking(move || environment::recreate_environment_workers(&manager)).await??;
             eprintln!("[environment-images] the workers now run the rebuilt environment");
             Ok(true)
         }
@@ -200,8 +200,8 @@ async fn environment_pass(app: &AppHandle) -> Result<bool, String> {
 async fn environment_plan(workers: &[(Provider, Vec<String>)]) -> Result<EnvironmentPlan, String> {
     let workers = workers.to_vec();
     blocking(move || {
-        phase4::inspect_environment(&workers)
-            .map(|images| phase4::environment_plan(images.as_deref()))
+        environment::inspect_environment(&workers)
+            .map(|images| environment::environment_plan(images.as_deref()))
     })
     .await?
 }
@@ -664,15 +664,20 @@ fn running_workers(provider: Provider) -> Result<Vec<String>, String> {
     Ok(containers)
 }
 
-/// The CLI version a worker runs: an updated one when installed, else the
-/// image's.
+/// The CLI version a worker runs: an updated one when installed and working,
+/// else the image's.
 fn installed_version(container: &str, provider: Provider) -> Option<String> {
-    let executable = provider.executable();
-    let script = format!(
-        "if [ -x {CLI_DIRECTORY}/bin/{executable} ]; then {CLI_DIRECTORY}/bin/{executable} --version; else {executable} --version; fi"
-    );
+    let script = agents::cli_script(provider);
     let output = docker::docker_command()
-        .args(["exec", container, "sh", "-c", &script])
+        .args([
+            "exec",
+            container,
+            "sh",
+            "-c",
+            &script,
+            provider.executable(),
+            "--version",
+        ])
         .output()
         .ok()?;
     if !output.status.success() {

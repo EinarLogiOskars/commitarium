@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use tauri::{AppHandle, Manager, State};
 
-use crate::{agents, bootstrap, cli_updates, phase4, preview, profiles};
+use crate::{agents, bootstrap, cli_updates, environment, preview, profiles};
 
 /// Fixed Compose project name. Scoping every command to this project keeps the
 /// launcher from touching any other Compose stack on the host.
@@ -48,6 +48,9 @@ const RELEASE_MODE_ENV: &str = "COMMITARIUM_RELEASE_MODE";
 const RUNNER_MODE_ENV: &str = "COMMITARIUM_RUNNER_MODE";
 const EMBEDDED_COMPOSE: &str = include_str!("../../../compose.yml");
 const EMBEDDED_RELEASE_COMPOSE: &str = include_str!("../../../compose.release.yml");
+/// Referenced by the Codex agent worker template relative to the Compose file.
+const EMBEDDED_CODEX_SECCOMP: &str = include_str!("../../../docker/codex-seccomp.json");
+const CODEX_SECCOMP_PATH: &str = "docker/codex-seccomp.json";
 
 /// Result of probing the host for Docker and Compose readiness.
 #[derive(Serialize)]
@@ -90,7 +93,7 @@ pub(crate) fn prepare_runtime(app: &AppHandle) -> Result<(), String> {
     agents::init_overlay_path(&runtime_dir);
     // Best effort: a failed rewrite leaves the old overlay, whose role
     // services are then only created to be retired.
-    let _ = phase4::migrate_environment_overlay();
+    let _ = environment::migrate_environment_overlay();
     if std::env::var_os("COMMITARIUM_COMPOSE_FILE").is_some() || cfg!(debug_assertions) {
         return Ok(());
     }
@@ -112,6 +115,12 @@ fn materialize_release_compose(runtime_dir: &Path) -> Result<(PathBuf, PathBuf),
         .map_err(|e| format!("write embedded Compose definition: {e}"))?;
     fs::write(&release_file, EMBEDDED_RELEASE_COMPOSE)
         .map_err(|e| format!("write embedded release Compose definition: {e}"))?;
+    let seccomp_file = runtime_dir.join(CODEX_SECCOMP_PATH);
+    if let Some(parent) = seccomp_file.parent() {
+        fs::create_dir_all(parent).map_err(|e| format!("create seccomp profile directory: {e}"))?;
+    }
+    fs::write(&seccomp_file, EMBEDDED_CODEX_SECCOMP)
+        .map_err(|e| format!("write embedded Codex seccomp profile: {e}"))?;
     Ok((compose_file, release_file))
 }
 
@@ -873,9 +882,20 @@ mod tests {
         assert!(EMBEDDED_RELEASE_COMPOSE.contains("ghcr.io/einarlogioskars"));
         assert!(EMBEDDED_RELEASE_COMPOSE.contains("COMMITARIUM_RUNNER_MODE: real_agents"));
         assert_eq!(
-            EMBEDDED_COMPOSE.matches("seccomp=unconfined").count(),
+            fs::read_to_string(root.path().join(CODEX_SECCOMP_PATH)).unwrap(),
+            EMBEDDED_CODEX_SECCOMP
+        );
+        assert!(!EMBEDDED_COMPOSE.contains("seccomp=unconfined"));
+        assert_eq!(
+            EMBEDDED_COMPOSE
+                .matches(&format!("seccomp={CODEX_SECCOMP_PATH}"))
+                .count(),
             1,
             "the Codex agent worker template must allow the nested read-only bwrap sandbox"
+        );
+        assert_eq!(
+            EMBEDDED_COMPOSE.matches("no-new-privileges:true").count(),
+            2
         );
     }
 
