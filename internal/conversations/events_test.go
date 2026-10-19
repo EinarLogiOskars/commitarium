@@ -7,6 +7,7 @@ import (
 
 	"github.com/EinarLogiOskars/commitarium/internal/execution"
 	"github.com/EinarLogiOskars/commitarium/internal/feature"
+	"github.com/EinarLogiOskars/commitarium/internal/project"
 	"github.com/EinarLogiOskars/commitarium/internal/workerhttp"
 )
 
@@ -81,12 +82,13 @@ func TestEventsWakeTheAssistantOneTurnAtATime(t *testing.T) {
 	if conversation := observe(); conversation.Status != StatusIdle || len(worker.puts) != 1 {
 		t.Fatalf("the first look woke the assistant: %+v", conversation)
 	}
-	current = map[string]work{"fea_1": {Title: "Log", State: feature.StateCompleted}}
+	current = map[string]work{"fea_1": {Title: "Log", State: feature.StateImplementing, RunID: "run_1",
+		RunStatus: execution.RunStatusWaitingForUser, WaitKind: execution.RunWaitKindClarification}}
 	conversation := observe()
 	if conversation.Status != StatusRunning || len(worker.puts) != 2 ||
-		!strings.Contains(worker.puts[1].Instructions, `"Log" merged.`) ||
-		conversation.Messages[len(conversation.Messages)-1].Text != `"Log" merged.` {
-		t.Fatalf("a merge did not wake the assistant: %+v", conversation)
+		!strings.Contains(worker.puts[1].Instructions, `"Log" is waiting for the user's answer.`) ||
+		conversation.Messages[len(conversation.Messages)-1].Text != `"Log" is waiting for the user's answer.` {
+		t.Fatalf("a question did not wake the assistant: %+v", conversation)
 	}
 
 	// While it answers, a new event waits for the next turn.
@@ -101,6 +103,44 @@ func TestEventsWakeTheAssistantOneTurnAtATime(t *testing.T) {
 	if conversation := observe(); conversation.Status != StatusRunning || len(worker.puts) != 3 ||
 		!strings.Contains(worker.puts[2].Instructions, `"Sync" failed: Tests failed.`) {
 		t.Fatalf("the waiting event was not delivered: %+v", conversation)
+	}
+}
+
+// News (a merge, work back in Ready) stays a line in the chat where the
+// assistant only assists: it would repeat it on the user's next message.
+// Where it drives the work, it wakes it to move on.
+func TestNewsWakesTheAssistantOnlyWhereItDrivesTheWork(t *testing.T) {
+	for _, mode := range []project.AssistantMode{project.AssistantModeAssists, project.AssistantModeBuilds} {
+		service, worker := newTestService(t)
+		service.config.Projects = gapProjects{mode: mode}
+		current := map[string]work{"fea_1": {Title: "Log", State: feature.StateImplementing, RunID: "run_1",
+			RunStatus: execution.RunStatusRunning}}
+		snapshot := func(context.Context, string) (view, error) { return view{Work: current}, nil }
+		if err := service.observe(t.Context(), "prj_test", snapshot); err != nil {
+			t.Fatal(err)
+		}
+		current = map[string]work{"fea_1": {Title: "Log", State: feature.StateCompleted}}
+		if err := service.observe(t.Context(), "prj_test", snapshot); err != nil {
+			t.Fatal(err)
+		}
+		stored, _ := service.read("prj_test")
+		if lastEvent(stored.Conversation) != `"Log" merged.` {
+			t.Fatalf("%s: the merge is not in the chat: %+v", mode, stored.Messages)
+		}
+		woke := len(worker.puts) == 1
+		if woke != (mode == project.AssistantModeBuilds) || len(stored.PendingEvents) != 0 {
+			t.Fatalf("%s: woke = %v, pending = %v", mode, woke, stored.PendingEvents)
+		}
+		if mode == project.AssistantModeBuilds {
+			continue
+		}
+		// The user's next message does not recap it.
+		if _, err := service.Send(t.Context(), "prj_test", "A new idea", "msg-1"); err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(worker.puts[0].Instructions, "Commitarium reports what happened") {
+			t.Fatalf("the user's turn recaps old news: %s", worker.puts[0].Instructions)
+		}
 	}
 }
 

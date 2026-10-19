@@ -35,10 +35,15 @@ type RetryWaitReader interface {
 }
 
 // Event is something that happened in a project. Wake asks for the
-// assistant's turn; otherwise it is only noted in the conversation.
+// assistant's turn; otherwise it is only noted in the conversation, where
+// the drawer's dot shows it, and the assistant reads the project's current
+// state on its next turn anyway. News wakes it only where it drives the work
+// (an autopilot goal, or building everything): there it moves on from it;
+// elsewhere it would only repeat it.
 type Event struct {
 	Text string
 	Wake bool
+	News bool
 }
 
 // Watcher turns changes in the projects' work into events.
@@ -328,12 +333,12 @@ func (item work) event() (Event, bool) {
 	}
 	switch {
 	case item.State == feature.StateCompleted:
-		return Event{Text: name + " merged.", Wake: true}, true
+		return Event{Text: name + " merged.", Wake: true, News: true}, true
 	case item.State.IsTerminal():
 		return Event{}, false
 	case item.State == feature.StateReady && item.RunStatus == execution.RunStatusStopped:
 		// Returned to Ready to start over: under autopilot it starts again.
-		return Event{Text: name + " is back in Ready to start over.", Wake: true}, true
+		return Event{Text: name + " is back in Ready to start over.", Wake: true, News: true}, true
 	case item.RunStatus == execution.RunStatusFailed:
 		return Event{Text: with(name + " failed"), Wake: true}, true
 	case item.RunStatus != execution.RunStatusWaitingForUser:
@@ -412,6 +417,7 @@ func (service *Service) observe(
 	changed := !sameSignatures(stored.Watched, watched)
 	stored.Watched = watched
 	now := service.now()
+	driving := stored.Goal.active() || service.assistantBuilds(ctx, scope)
 	if stored.Goal.active() && seen.Plan != nil {
 		before := fmt.Sprint(stored.Goal.Items)
 		if stored.Goal.progress(*seen.Plan, current) {
@@ -424,7 +430,7 @@ func (service *Service) observe(
 		stored.Messages = append(stored.Messages, Message{
 			ID: messageID(stored, len(stored.Messages)), Role: "event", Text: event.Text, OccurredAt: now,
 		})
-		if event.Wake {
+		if event.Wake && (!event.News || driving) {
 			stored.PendingEvents = append(stored.PendingEvents, event.Text)
 		}
 		stored.UpdatedAt = now

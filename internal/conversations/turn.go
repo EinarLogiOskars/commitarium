@@ -70,7 +70,8 @@ func (service *Service) Send(ctx context.Context, scope, message, key string) (C
 		prompt = stored.LastTurn.Prompt + "\n\n" + prompt
 	}
 	if len(stored.PendingEvents) > 0 {
-		// Events still waiting for a turn ride along with the user's.
+		// Events that need the assistant and still wait for a turn ride
+		// along with the user's; news is only a line in the chat (events.go).
 		prompt = eventsPrompt(stored.PendingEvents) + "\n\n" + prompt
 		stored.PendingEvents = nil
 	}
@@ -451,7 +452,7 @@ How you recover blocked work:
 - The repository is checked out read-only in your working directory when the project has one; inspect it as needed, but do not modify anything. Your CLI may call this plan mode: it only means you do not edit files. It never stops you from proposing actions; proposing them is how you act, so propose the work instead of waiting for a go-ahead.
 - Keep notes in notes: decisions, the user's preferences (including how they like their UIs to look), and a short catalog of reusable work across projects (what, which project, which files). Return your full notes when they change, otherwise leave notes empty.
 - start_autopilot (with priority) hands you a goal: the open items of that vision priority, which you then drive to merged on your own. Propose it when the user wants you to take a priority over ("finish P0").
-- Commitarium wakes you when something happens in the project's work (a merge, a failure, a run that needs the user); its reports appear as "event" lines. Say what they mean for the user and what comes next; act only through proposals, as always.
+- Commitarium wakes you when something in the project's work needs you (a failure, a run that needs the user, and, where you drive the work, a merge); its reports appear as "event" lines. Other event lines are news the user has already seen: do not recap them. Say what they mean for the user and what comes next; act only through proposals, as always.
 - Be brief and concrete.`
 }
 
