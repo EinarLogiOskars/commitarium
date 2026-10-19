@@ -297,7 +297,8 @@ func TestOnlyInfrastructureFailuresRetry(t *testing.T) {
 		{workerhttp.ErrorInternal, `API Error: 529 {"type":"overloaded_error"}`, true},
 		{workerhttp.ErrorInternal, "The tests still fail after the change.", false},
 		{workerhttp.ErrorUsageLimit, "You've hit your usage limit.", false},
-		{workerhttp.ErrorProviderLoginRequired, "Failed to authenticate: OAuth session expired", false},
+		// A login failure may pass on the next turn, so it retries before asking for a sign-in.
+		{workerhttp.ErrorProviderLoginRequired, "Failed to authenticate: OAuth session expired", true},
 		{workerhttp.ErrorIncompleteResult, "the turn ended without its structured result", false},
 	} {
 		run := startInterruptedPlanningRun(t, "run_failure_"+string(tc.code), func(run *interruptedRun) {

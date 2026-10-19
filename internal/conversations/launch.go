@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/EinarLogiOskars/commitarium/internal/feature"
+	"github.com/EinarLogiOskars/commitarium/internal/vision"
 )
 
 // Launching a new app (APPS_PLAN.md phase 2): the user describes the app in
@@ -27,7 +28,17 @@ const (
 type Launch struct {
 	Stage     LaunchStage `json:"stage"`
 	StartedAt time.Time   `json:"started_at"`
+	// VisionRestartedAt is when the launch last woke the assistant to write
+	// the vision again, after the vision writer stopped without one.
+	VisionRestartedAt *time.Time `json:"vision_restarted_at,omitempty"`
 }
+
+// visionGrace is how long a launch waits for its vision writer to begin, and
+// visionRestartEvery how long between wake-ups when it stopped short.
+const (
+	visionGrace        = 2 * time.Minute
+	visionRestartEvery = 10 * time.Minute
+)
 
 // projectSetupTitle names the work order that scaffolds a new project on its
 // stack (httpapi's project setup).
@@ -77,7 +88,11 @@ func (watcher Watcher) launch(ctx context.Context, scope string) {
 		}
 		current, err := watcher.Visions.Get(ctx, scope)
 		if err != nil {
-			return // The vision is still being written.
+			// The vision is still being written, or its writer stopped short.
+			if errors.Is(err, vision.ErrNotFound) {
+				watcher.restartVision(ctx, scope, *stored.Launch)
+			}
+			return
 		}
 		stack := current.Plan.Stack
 		if stack == nil || len(stack.Presets) == 0 || watcher.SetUp == nil {
@@ -102,6 +117,42 @@ func (watcher Watcher) launch(ctx context.Context, scope string) {
 				return
 			}
 		}
+	}
+}
+
+// restartVision wakes the assistant to write the vision again when the
+// launch's vision writer stopped without one: its turn failed (an agent's
+// login, a provider error) and no session is writing or waiting for the
+// user. An assistant whose own agent is signed out waits for the sign-in
+// like any turn (sign_in.go).
+func (watcher Watcher) restartVision(ctx context.Context, scope string, launch Launch) {
+	now := watcher.Service.now()
+	if watcher.VisionSessions == nil || now.Sub(launch.StartedAt) < visionGrace ||
+		(launch.VisionRestartedAt != nil && now.Sub(*launch.VisionRestartedAt) < visionRestartEvery) {
+		return
+	}
+	if _, err := watcher.VisionSessions.OpenSession(ctx, scope); !errors.Is(err, vision.ErrNotFound) {
+		return // Being written, or waiting for the user.
+	}
+	// Reading the session stores a vision it just finished: then none is
+	// missing.
+	if _, err := watcher.Visions.Get(ctx, scope); !errors.Is(err, vision.ErrNotFound) {
+		return
+	}
+	service := watcher.Service
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	stored, err := service.read(scope)
+	if err != nil || stored.Launch == nil || stored.Launch.Stage != LaunchVision {
+		return
+	}
+	stored.Launch.VisionRestartedAt = &now
+	stored.addEvent("Writing the app's plan stopped before it was done; the assistant starts it again.", now)
+	stored.PendingEvents = append(stored.PendingEvents,
+		"Writing this new app's vision stopped before it was done. Write it again with write_vision.")
+	stored.UpdatedAt = now
+	if service.write(stored) == nil {
+		service.nudgeWatcher()
 	}
 }
 

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/EinarLogiOskars/commitarium/internal/agent"
+	"github.com/EinarLogiOskars/commitarium/internal/execution"
 	"github.com/EinarLogiOskars/commitarium/internal/project"
 )
 
@@ -29,6 +30,36 @@ type agentResponse struct {
 	Provider  string    `json:"provider"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
+	// NeedsSignIn is set while the agent's login fails past the automatic
+	// retries: since when, and how many work orders wait on it.
+	NeedsSignIn *agentSignInResponse `json:"needs_sign_in,omitempty"`
+}
+
+type agentSignInResponse struct {
+	Since   time.Time `json:"since"`
+	Waiting int       `json:"waiting"`
+}
+
+// agentSignIns says which agents need a sign-in, and what waits on each.
+func (api *API) agentSignIns(ctx context.Context) map[string]*agentSignInResponse {
+	store, ok := api.execution.(interface {
+		AgentSignIns(context.Context) ([]execution.AgentSignIn, error)
+		RunsAwaitingLogin(context.Context, string) ([]string, error)
+	})
+	if !ok {
+		return nil
+	}
+	signIns, err := store.AgentSignIns(ctx)
+	if err != nil {
+		log.Printf("list agents that need a sign-in: %v", err)
+		return nil
+	}
+	needs := make(map[string]*agentSignInResponse, len(signIns))
+	for _, signIn := range signIns {
+		runs, _ := store.RunsAwaitingLogin(ctx, signIn.AgentID)
+		needs[signIn.AgentID] = &agentSignInResponse{Since: signIn.Since, Waiting: len(runs)}
+	}
+	return needs
 }
 
 func newAgentResponse(a agent.Agent) agentResponse {
@@ -46,9 +77,12 @@ func (api *API) listAgentsHandler(w http.ResponseWriter, r *http.Request) {
 		writeAgentError(w, "", err)
 		return
 	}
+	needs := api.agentSignIns(r.Context())
 	response := make([]agentResponse, 0, len(agents))
 	for _, stored := range agents {
-		response = append(response, newAgentResponse(stored))
+		item := newAgentResponse(stored)
+		item.NeedsSignIn = needs[stored.ID]
+		response = append(response, item)
 	}
 	writeJSON(w, http.StatusOK, response, "agent list")
 }

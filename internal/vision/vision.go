@@ -120,6 +120,29 @@ type Service struct {
 	// seedChecked holds projects whose repository was already checked for a
 	// vision to seed, so reading a missing vision stays cheap.
 	seedChecked sync.Map
+	// signIns, when set, hears of an agent whose login failed.
+	signIns SignInRecorder
+}
+
+// SignInRecorder records an agent that needs the user to sign in again
+// (LOGIN_RECOVERY_PLAN.md).
+type SignInRecorder interface {
+	MarkAgentNeedsSignIn(ctx context.Context, agentID, lastError string) error
+}
+
+// SetSignIns shares agents whose login failed with the rest of Commitarium.
+func (service *Service) SetSignIns(signIns SignInRecorder) { service.signIns = signIns }
+
+// signInReply says, for a turn that failed on its agent's login, what the
+// user does; the agent is recorded as needing a sign-in.
+func (service *Service) signInReply(ctx context.Context, agentID string, result *workerhttp.TerminalResult) (string, bool) {
+	if result == nil || result.Error == nil || result.Error.Code != workerhttp.ErrorProviderLoginRequired {
+		return "", false
+	}
+	if service.signIns != nil {
+		_ = service.signIns.MarkAgentNeedsSignIn(ctx, agentID, result.Error.Message)
+	}
+	return "The assistant's agent needs you to sign in again. Sign it in on the Agents page, then start again.", true
 }
 
 var (
@@ -551,6 +574,9 @@ func (service *Service) refresh(ctx context.Context, record sessionRecord) (sess
 	switch {
 	case attempt.Result == nil || attempt.Result.Outcome != workerhttp.OutcomeCompleted:
 		record.Status = StatusFailed
+		if signIn, ok := service.signInReply(ctx, record.Agent, attempt.Result); ok {
+			reply = signIn
+		}
 	case attempt.Result.Disposition == workerhttp.DispositionInputRequired:
 		record.Status, reply = StatusWaitingForUser, attempt.Result.Summary
 	case attempt.Result.VisionPlan != nil:

@@ -1088,6 +1088,12 @@ agents (ADR-027); an install that had projects when agents arrived kept its
 two subscriptions as the agents `codex` and `claude`. `provider` is `codex` or
 `claude`; anything else returns `400 invalid_agent`.
 
+`GET /api/v1/agents` adds `"needs_sign_in": {"since", "waiting"}` to an agent
+whose provider login failed past the automatic retries: the user has to sign
+it in again, and `waiting` work orders wait on it. It goes once a sign-in
+finishes in the desktop or any turn on the agent works
+([LOGIN_RECOVERY_PLAN.md](plans/LOGIN_RECOVERY_PLAN.md), ADR-034).
+
 ## Work-order clarification
 
 A draft work order is clarified with the project assistant (ADR-015) before
@@ -1853,8 +1859,12 @@ conversation starts one from the durable briefing. A turn the user force
 stopped still stops.
 
 When the failure was an expired provider login (the worker's
-`provider_login_required`), the run response includes the agent and role it
-waits for:
+`provider_login_required`), the turn first retries like an interrupted one
+(30 s, 2 min, 5 min), since a refresh that failed once can work on the next
+turn; an agent already known to need a sign-in skips the retries. Then the
+agent is marked as needing a sign-in, and the run response includes the agent
+and role it waits for (a run waiting on both its agents is found by either
+sign-in):
 
 ```json
 {"status": "waiting_for_user", "wait_kind": "blocker", "login_required": {"agent": "claude", "role": "reviewer"}}
@@ -1863,7 +1873,11 @@ waits for:
 Once the agent is connected again, the desktop calls
 `POST /api/v1/agents/{agentID}/logged-in`; the coordinator continues every
 run waiting on that agent as if the user chose `continue`, and responds with
-`{"resumed": 1}`. The user can also continue such a run directly.
+`{"resumed": 1}`. The same happens when any turn on the agent works, and the
+coordinator tries the longest-waiting run itself every 5 minutes (every 30
+after an hour), so a login fixed outside the desktop resumes the work too. A
+paused run keeps its wait for when it is unpaused. The user can also continue
+such a run directly; autopilot spends no recovery on it.
 
 A run that failed before this behavior existed still has its conversations,
 branch, and plan. `POST /api/v1/runs/{runID}/reopen` turns a `failed` run of
@@ -2638,6 +2652,14 @@ actions, and its notes.
   a turn. While one runs, the message is queued in the conversation's `queued`
   and starts the next turn, with any events that waited, as soon as the
   current one ends.
+- A turn whose agent's login failed is kept, not dropped: the conversation's
+  `sign_in` is `{"agent", "since", "needs_user", "retries", "retry_at"}`. It
+  tries again by itself (30 s, 2 min, 5 min), then `needs_user` is set and the
+  agent marked as needing a sign-in; the kept turn runs again once the agent
+  works (a sign-in, any turn on it that works, the coordinator's own try) or
+  the user picks another agent. Events and new messages ride along with it.
+  A new app's launch whose vision writer stopped without a vision wakes the
+  assistant to write it again (`write_vision`), at most every ten minutes.
 - `PUT .../{scope}/notes` with `{"notes"}` replaces the notes with the user's
   edit.
 - An action is `{"id", "type": "create_work_order"|"start_work_order"|

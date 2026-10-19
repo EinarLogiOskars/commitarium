@@ -316,6 +316,9 @@ func run(ctx context.Context, coordinatorConfig config) error {
 	var deletionWorker projectdeletion.WorkerStopper
 	var deletionLiveSessions projectdeletion.LiveSessionRegistry
 	var assistantCleaner projectdeletion.AssistantCleaner
+	// The assistant shares agents' sign-ins with the work orders, whose runner
+	// is created after it (LOGIN_RECOVERY_PLAN.md).
+	agentSignIns := &lateSignIns{}
 	switch coordinatorConfig.runnerMode {
 	case defaultRunnerMode:
 		deletionLiveSessions = activeSessions
@@ -368,6 +371,7 @@ func run(ctx context.Context, coordinatorConfig config) error {
 		if err != nil {
 			return fmt.Errorf("create project visions: %w", err)
 		}
+		visions.SetSignIns(agentSignIns)
 		visionService = visions.WithRepository(checkoutManager, forgejoClient)
 		models := func(ctx context.Context) []conversations.ModelChoice {
 			choices := make([]conversations.ModelChoice, 0)
@@ -417,6 +421,7 @@ func run(ctx context.Context, coordinatorConfig config) error {
 			Checkouts: checkoutManager, Branches: forgejoClient,
 			Visions: visions, Features: featureService,
 			Guide: modelGuide, Models: models, ChatUsage: executionStore,
+			SignIns: agentSignIns,
 		})
 		if err != nil {
 			return fmt.Errorf("create the assistant: %w", err)
@@ -466,6 +471,7 @@ func run(ctx context.Context, coordinatorConfig config) error {
 		if err != nil {
 			return fmt.Errorf("create project toolchain assistant: %w", err)
 		}
+		assistant.SetSignIns(agentSignIns)
 		toolchainAssistantService = assistant
 		assistantCleaner = assistant
 		clarifier, err := workorderassistant.NewService(workorderassistant.Config{
@@ -478,6 +484,7 @@ func run(ctx context.Context, coordinatorConfig config) error {
 		if err != nil {
 			return fmt.Errorf("create work-order assistant: %w", err)
 		}
+		clarifier.SetSignIns(agentSignIns)
 		workOrderAssistant = clarifier
 		ingestion := workeringest.NewService(executionService, workeringest.FilterFunc(
 			func(_ context.Context, event workerhttp.Event) (workerhttp.Event, error) {
@@ -528,6 +535,14 @@ func run(ctx context.Context, coordinatorConfig config) error {
 		runRecoverer = remoteStarter
 		sessionController = remoteStarter
 		realWorkflowStarter = remoteStarter
+		agentSignIns.target = remoteStarter
+		if projectConversations != nil {
+			assistant := projectConversations
+			remoteStarter.FollowSignIns(
+				func(agentID string) { assistant.AgentSignedIn(ctx, agentID) },
+				func(agentID string) { assistant.TrySignIn(ctx, agentID) },
+			)
+		}
 	default:
 		return fmt.Errorf("unsupported coordinator runner mode %q", coordinatorConfig.runnerMode)
 	}
@@ -547,6 +562,10 @@ func run(ctx context.Context, coordinatorConfig config) error {
 	// Runs paused on an agent's usage limit continue when it resets.
 	if resumer, ok := realWorkflowStarter.(interface{ RunLimitResumer(context.Context) }); ok {
 		go resumer.RunLimitResumer(ctx)
+	}
+	// Work waiting on an agent's sign-in is tried again now and then.
+	if checker, ok := realWorkflowStarter.(interface{ RunSignInChecker(context.Context) }); ok {
+		go checker.RunSignInChecker(ctx)
 	}
 	// Turns that infrastructure cut off retry by themselves, on schedule.
 	if resumer, ok := realWorkflowStarter.(interface{ RunRetryResumer(context.Context) }); ok {
@@ -697,4 +716,27 @@ func (reader agentUsageReader) AgentUsage(ctx context.Context) ([]httpapi.AgentU
 		}
 	}
 	return usage, nil
+}
+
+// lateSignIns passes the assistant's sign-in questions to the work order
+// runner once it exists; until then no agent is known to need a sign-in.
+type lateSignIns struct {
+	target conversations.SignIns
+}
+
+func (late *lateSignIns) MarkAgentNeedsSignIn(ctx context.Context, agentID, lastError string) error {
+	if late.target == nil {
+		return nil
+	}
+	return late.target.MarkAgentNeedsSignIn(ctx, agentID, lastError)
+}
+
+func (late *lateSignIns) AgentNeedsSignIn(ctx context.Context, agentID string) bool {
+	return late.target != nil && late.target.AgentNeedsSignIn(ctx, agentID)
+}
+
+func (late *lateSignIns) AgentAnswered(ctx context.Context, agentID string) {
+	if late.target != nil {
+		late.target.AgentAnswered(ctx, agentID)
+	}
 }
