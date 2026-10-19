@@ -391,6 +391,6 @@ func (api *API) sessionActivity(ctx context.Context, featureID string) *sessionA
 	if err != nil || len(runs) == 0 {
 		return nil
 	}
-	run := newestRun(runs)
+	run := execution.NewestRun(runs)
 	return &sessionActivityResponse{Working: run.Status == execution.RunStatusRunning, UpdatedAt: run.UpdatedAt}
 }

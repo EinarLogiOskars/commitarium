@@ -16,16 +16,6 @@ import (
 	"github.com/EinarLogiOskars/commitarium/internal/workorder"
 )
 
-// Recovery limits on the assistant's choices (ADR-032). The user's own
-// buttons are never limited.
-const (
-	// maxRecoveriesPerFailure is how many recoveries one failure (blocker
-	// fingerprint) gets before the user hears of it.
-	maxRecoveriesPerFailure = 4
-	// maxRecoveriesPerRun bounds a run whose failures keep changing.
-	maxRecoveriesPerRun = 8
-)
-
 // applyRecoverWorkOrder recovers a blocked work order the way the assistant
 // chose: re-check, continue with guidance, a message to the lead, a fresh
 // conversation, or Back to Ready (ADR-032). The coordinator refuses a way
@@ -50,7 +40,7 @@ func (api *API) applyRecoverWorkOrder(
 		writeError(w, http.StatusConflict, "recovery_not_allowed", "the work order has no run to recover")
 		return "", false
 	}
-	latest := newestRun(runs)
+	latest := execution.NewestRun(runs)
 	// A run waiting for a sign-in continues by itself once the agent works
 	// again; autopilot spends no recovery on it (the user may still).
 	if waits, ok := api.execution.(interface {
@@ -175,7 +165,7 @@ func (api *API) recoveryRefusal(r *http.Request, runID string, how execution.Rec
 				"%s was already tried on this same failure and it came back; choose another way, or tell the user plainly that Commitarium could not finish it", how)
 		}
 	}
-	if onFailure >= maxRecoveriesPerFailure || len(recoveries) >= maxRecoveriesPerRun {
+	if onFailure >= execution.MaxRecoveriesPerFailure || len(recoveries) >= execution.MaxRecoveriesPerRun {
 		return blocker.Fingerprint, "this work order has had as many recoveries as it gets; tell the user plainly that Commitarium could not finish it, and let them report it or start over"
 	}
 	return blocker.Fingerprint, ""
@@ -198,16 +188,7 @@ func (api *API) recoveryExhausted(ctx context.Context, runID string) (execution.
 	if err != nil {
 		return blocker, false
 	}
-	onFailure, freshTried := 0, false
-	for _, recovery := range recoveries {
-		if recovery.Fingerprint == blocker.Fingerprint {
-			onFailure++
-			freshTried = freshTried || recovery.How == execution.RecoveryFreshConversation
-		}
-	}
-	exhausted := onFailure >= maxRecoveriesPerFailure || len(recoveries) >= maxRecoveriesPerRun ||
-		(blocker.Kind == execution.BlockerCheck && freshTried)
-	return blocker, exhausted
+	return blocker, execution.RecoveryExhausted(blocker, recoveries)
 }
 
 // exhaustedDetail says in plain words why Commitarium could not finish a

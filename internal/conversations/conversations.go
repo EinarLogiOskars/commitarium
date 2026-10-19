@@ -247,6 +247,10 @@ type Config struct {
 	// SignIns, when set, shares which agents need a sign-in with the work
 	// orders waiting on them (sign_in.go).
 	SignIns SignIns
+	// RecoveryExhausted, when set, reports whether a work order's latest run
+	// ran out of recovery (ADR-032): autopilot may then close it, even on a
+	// goal item, so the assistant can replace it.
+	RecoveryExhausted func(ctx context.Context, workOrderID string) bool
 }
 
 // ChatUsage is one assistant turn's usage.
@@ -591,6 +595,11 @@ func (service *Service) Resolve(ctx context.Context, scope, actionID string, sta
 			action.WorkOrderID = created.WorkOrderID
 		}
 		action.ProjectID = created.ProjectID
+		if status == ActionApplied && action.Type == featureartifact.AssistantCreateWorkOrder && stored.Goal.active() {
+			// The goal item follows its new work order, a replacement too, at
+			// once rather than at the next look at the vision.
+			stored.Goal.follow(action.VisionItemID, action.WorkOrderID)
+		}
 		stored.UpdatedAt = action.UpdatedAt
 		return stored.Conversation, service.write(stored)
 	}

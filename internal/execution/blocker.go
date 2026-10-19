@@ -80,3 +80,40 @@ type AgentMessage struct {
 	Text       string
 	OccurredAt time.Time
 }
+
+// Recovery limits on the assistant's choices (ADR-032). The user's own
+// buttons are never limited.
+const (
+	// MaxRecoveriesPerFailure is how many recoveries one failure (blocker
+	// fingerprint) gets before the user hears of it.
+	MaxRecoveriesPerFailure = 4
+	// MaxRecoveriesPerRun bounds a run whose failures keep changing.
+	MaxRecoveriesPerRun = 8
+)
+
+// RecoveryExhausted reports whether recovering a run's blocker has run out:
+// its failure had as many recoveries as it gets, the run as many in total,
+// or a coordinator check kept failing after a fresh conversation (ADR-032).
+func RecoveryExhausted(blocker Blocker, recoveries []Recovery) bool {
+	onFailure, freshTried := 0, false
+	for _, recovery := range recoveries {
+		if recovery.Fingerprint == blocker.Fingerprint {
+			onFailure++
+			freshTried = freshTried || recovery.How == RecoveryFreshConversation
+		}
+	}
+	return onFailure >= MaxRecoveriesPerFailure || len(recoveries) >= MaxRecoveriesPerRun ||
+		(blocker.Kind == BlockerCheck && freshTried)
+}
+
+// NewestRun is the run started last; runs must not be empty.
+func NewestRun(runs []Run) Run {
+	newest := runs[0]
+	for _, candidate := range runs[1:] {
+		if candidate.StartedAt.After(newest.StartedAt) ||
+			(candidate.StartedAt.Equal(newest.StartedAt) && candidate.ID < newest.ID) {
+			newest = candidate
+		}
+	}
+	return newest
+}

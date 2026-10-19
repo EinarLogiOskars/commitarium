@@ -529,3 +529,120 @@ func TestAutopilotLeavesBackToReadyToTheUser(t *testing.T) {
 		t.Fatalf("apply = %+v err=%v last=%q", apply, err, conversation.Messages[len(conversation.Messages)-1].Text)
 	}
 }
+
+// replacementSetup starts a goal whose one item is delivered by fea_old, and
+// proposes the assistant's replacement: a fresh work order for the item, and
+// closing the old one, in that order.
+func replacementSetup(t *testing.T, old feature.Feature, exhausted bool) *Service {
+	t.Helper()
+	service, _ := newTestService(t)
+	service.config.Visions = &visionStub{plan: featureartifact.VisionPlan{Priorities: []featureartifact.VisionPriority{
+		{Level: 0, Items: []featureartifact.VisionItem{{ID: "edit", Title: "Edit and delete single items", FeatureID: old.ID}}},
+	}}}
+	service.config.Features = &featuresStub{features: []feature.Feature{old}}
+	service.config.RecoveryExhausted = func(_ context.Context, workOrderID string) bool {
+		return exhausted && workOrderID == old.ID
+	}
+	if _, err := service.StartGoal(t.Context(), "prj_test", 0); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := service.read("prj_test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored.Actions = append(stored.Actions,
+		Action{ID: "act_rebuild", Status: ActionProposed, AssistantAction: featureartifact.AssistantAction{
+			Type: featureartifact.AssistantCreateWorkOrder, Reason: "Replace it", Title: "Edit and delete single items (rebuild)",
+			VisionItemID: "edit", Steps: "quick"}},
+		Action{ID: "act_close_old", Status: ActionProposed, AssistantAction: featureartifact.AssistantAction{
+			Type: featureartifact.AssistantCloseWorkOrder, Reason: "Recovery ran out", WorkOrderID: old.ID}},
+	)
+	if err := service.write(stored); err != nil {
+		t.Fatal(err)
+	}
+	return service
+}
+
+func TestAutopilotReplacesAGoalWorkOrderWhoseRecoveryRanOut(t *testing.T) {
+	old := feature.Feature{ID: "fea_old", Title: "Edit and delete single items", State: feature.StateImplementing}
+	service := replacementSetup(t, old, true)
+	apply, err := service.autopilotActions(t.Context(), "prj_test")
+	if err != nil || len(apply) != 2 || apply[0].ID != "act_close_old" || apply[1].ID != "act_rebuild" || apply[1].HoldStart {
+		t.Fatalf("autopilot applies %+v err=%v, want the close, then the replacement created and started", apply, err)
+	}
+	// The watcher applies them in order; the goal item follows the new one.
+	if _, err := service.Resolve(t.Context(), "prj_test", "act_close_old", ActionApplied, "Closed.", Created{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Resolve(t.Context(), "prj_test", "act_rebuild", ActionApplied, "Created and started.",
+		Created{WorkOrderID: "fea_new", ProjectID: "prj_test"}); err != nil {
+		t.Fatal(err)
+	}
+	conversation, _ := service.Get(t.Context(), "prj_test")
+	if item := conversation.Goal.Items[0]; item.WorkOrderID != "fea_new" {
+		t.Fatalf("the goal item follows %q, want the replacement", item.WorkOrderID)
+	}
+}
+
+func TestAutopilotDoesNotCloseAHealthyGoalWorkOrder(t *testing.T) {
+	old := feature.Feature{ID: "fea_old", Title: "Edit and delete single items", State: feature.StateImplementing}
+	service := replacementSetup(t, old, false)
+	apply, err := service.autopilotActions(t.Context(), "prj_test")
+	if err != nil || len(apply) != 0 {
+		t.Fatalf("autopilot applies %+v err=%v, want nothing", apply, err)
+	}
+	conversation, _ := service.Get(t.Context(), "prj_test")
+	if last := conversation.Messages[len(conversation.Messages)-1].Text; !strings.Contains(last, "already has a work order") {
+		t.Fatalf("the replacement was not left for the user: %q", last)
+	}
+}
+
+func TestAutopilotLeavesClosingTheUsersOwnWorkOrderToTheUser(t *testing.T) {
+	users := feature.Feature{ID: "fea_users", Title: "Edit and delete single items", State: feature.StateImplementing,
+		CreatedBy: feature.CreatedByUser}
+	service := replacementSetup(t, feature.Feature{ID: "fea_gone"}, true)
+	service.config.Features = &featuresStub{features: []feature.Feature{users}}
+	service.config.RecoveryExhausted = func(context.Context, string) bool { return true }
+	// The user created the item's work order by hand after the goal started.
+	stored, err := service.read("prj_test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored.Goal.Items[0].WorkOrderID = users.ID
+	stored.Actions[len(stored.Actions)-1].WorkOrderID = users.ID
+	if err := service.write(stored); err != nil {
+		t.Fatal(err)
+	}
+	apply, err := service.autopilotActions(t.Context(), "prj_test")
+	if err != nil || len(apply) != 0 {
+		t.Fatalf("autopilot applies %+v err=%v, want nothing", apply, err)
+	}
+	conversation, _ := service.Get(t.Context(), "prj_test")
+	var text strings.Builder
+	for _, message := range conversation.Messages {
+		text.WriteString(message.Text + "\n")
+	}
+	if !strings.Contains(text.String(), "“Edit and delete single items” is your work order") {
+		t.Fatalf("closing the user's work order was not left for them: %q", text.String())
+	}
+}
+
+func TestAClosedWorkOrderNoLongerClaimsItsVisionItem(t *testing.T) {
+	old := feature.Feature{ID: "fea_old", Title: "Edit and delete single items", State: feature.StateCancelled}
+	service := replacementSetup(t, old, false)
+	stored, err := service.read("prj_test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// An earlier create autopilot applied for the item, now closed.
+	stored.Actions = append(stored.Actions[:len(stored.Actions)-1], Action{ID: "act_made_old", Status: ActionApplied,
+		AutoTried: true, AssistantAction: featureartifact.AssistantAction{
+			Type: featureartifact.AssistantCreateWorkOrder, VisionItemID: "edit", WorkOrderID: old.ID}})
+	if err := service.write(stored); err != nil {
+		t.Fatal(err)
+	}
+	apply, err := service.autopilotActions(t.Context(), "prj_test")
+	if err != nil || len(apply) != 1 || apply[0].ID != "act_rebuild" {
+		t.Fatalf("autopilot applies %+v err=%v, want the replacement", apply, err)
+	}
+}

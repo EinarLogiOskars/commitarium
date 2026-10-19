@@ -422,6 +422,19 @@ func run(ctx context.Context, coordinatorConfig config) error {
 			Visions: visions, Features: featureService,
 			Guide: modelGuide, Models: models, ChatUsage: executionStore,
 			SignIns: agentSignIns,
+			RecoveryExhausted: func(ctx context.Context, workOrderID string) bool {
+				runs, err := executionService.RunsForFeature(ctx, workOrderID)
+				if err != nil || len(runs) == 0 {
+					return false
+				}
+				runID := execution.NewestRun(runs).ID
+				blocker, found, err := executionStore.RunBlocker(ctx, runID)
+				if err != nil || !found {
+					return false
+				}
+				recoveries, err := executionStore.RunRecoveries(ctx, runID)
+				return err == nil && execution.RecoveryExhausted(blocker, recoveries)
+			},
 		})
 		if err != nil {
 			return fmt.Errorf("create the assistant: %w", err)
