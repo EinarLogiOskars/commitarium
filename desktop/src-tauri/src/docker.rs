@@ -692,7 +692,9 @@ pub(crate) fn reconcile_agent_workers(
 /// identity pair, and its service in the agents overlay. With `regenerate`
 /// the overlay is rebuilt from the templates (for example after an approved
 /// environment changed their images); otherwise only when agents changed.
-/// Returns whether any credential was created.
+/// Only `regenerate` (the reconcile path, which recreates the workers) also
+/// replaces existing Forgejo tokens that are out of date. Returns whether any
+/// credential was created.
 pub(crate) fn provision_agents(agents: &[agents::Agent], regenerate: bool) -> Result<bool, String> {
     let file = compose_file()?;
     let tokens_changed = bootstrap::prepare_agent_worker_tokens(&file, agents)?;

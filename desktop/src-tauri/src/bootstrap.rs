@@ -54,6 +54,13 @@ const ADMIN_TOKEN: SecretLocation = SecretLocation {
 const ADMIN_USERNAME: &str = "commitarium_admin";
 const ADMIN_SCOPES: &str = "write:admin,write:user,write:repository,write:issue";
 const AGENT_SCOPES: &str = "write:repository,write:issue";
+/// Every Commitarium-generated token carries this name prefix, so bootstrap
+/// can revoke the ones a newer token supersedes.
+const TOKEN_NAME_PREFIX: &str = "commitarium-bootstrap-";
+/// Releases up to v0.7.2 put agent tokens in the worker environment, where an
+/// agent could print them into its transcript. Bumping this rotates every
+/// agent token once.
+const AGENT_TOKEN_ROTATION: &str = "1";
 
 /// One Forgejo user Commitarium owns and the private file holding its token.
 struct ForgejoIdentity {
@@ -62,6 +69,8 @@ struct ForgejoIdentity {
     admin: bool,
     token_path: PathBuf,
     scopes: &'static str,
+    /// The rotation the token must have been generated at, if any.
+    rotation: Option<&'static str>,
 }
 
 fn admin_identity(root: &Path) -> ForgejoIdentity {
@@ -71,6 +80,7 @@ fn admin_identity(root: &Path) -> ForgejoIdentity {
         admin: true,
         token_path: secret_path(root, &ADMIN_TOKEN),
         scopes: ADMIN_SCOPES,
+        rotation: None,
     }
 }
 
@@ -89,6 +99,7 @@ fn agent_identities(root: &Path, agents: &[agents::Agent]) -> Vec<ForgejoIdentit
                     admin: false,
                     token_path: agent_forgejo_token_path(root, &agent.id, role),
                     scopes: AGENT_SCOPES,
+                    rotation: Some(AGENT_TOKEN_ROTATION),
                     username,
                 }
             })
@@ -571,35 +582,43 @@ pub(crate) fn provision_forgejo(compose_file: &Path, project_name: &str) -> Resu
     let root = compose_root(compose_file)?;
     let mut admin = DockerForgejoAdmin::new(compose_file, project_name);
     let users = wait_for_users(&mut admin)?;
-    ensure_forgejo_credentials(&mut admin, users, &[admin_identity(root)])
+    ensure_forgejo_credentials(&mut admin, users, &[admin_identity(root)], true)
 }
 
 /// Create any missing lead and reviewer identities for the agents, with their
 /// scoped tokens. Forgejo is asked only when some token is missing, so this
-/// is cheap for agents that are already set up; it must then be running
-/// (`wait` allows for it still starting).
+/// is cheap for agents that are already set up; it must then be running.
+/// With `refresh` (the reconcile path, which allows for Forgejo still
+/// starting and recreates the workers afterwards) existing tokens whose
+/// scopes or rotation are out of date are replaced too. Without it they are
+/// left alone: a running worker keeps the token file it mounted, so it must
+/// be recreated to see a new one.
 pub(crate) fn provision_agent_identities(
     compose_file: &Path,
     project_name: &str,
     agents: &[agents::Agent],
-    wait: bool,
+    refresh: bool,
 ) -> Result<bool, String> {
     let root = compose_root(compose_file)?;
     let identities = agent_identities(root, agents);
     let mut ready = true;
     for identity in &identities {
-        ready &= token_scopes_are_ready(&identity.token_path, identity.scopes)?;
+        ready &= if refresh {
+            token_is_current(identity)?
+        } else {
+            secret_is_ready(&identity.token_path)?
+        };
     }
     if ready {
         return Ok(false);
     }
     let mut admin = DockerForgejoAdmin::new(compose_file, project_name);
-    let users = if wait {
+    let users = if refresh {
         wait_for_users(&mut admin)?
     } else {
         admin.list_users()?
     };
-    ensure_forgejo_credentials(&mut admin, users, &identities)
+    ensure_forgejo_credentials(&mut admin, users, &identities, refresh)
 }
 
 trait ForgejoAdmin {
@@ -608,8 +627,11 @@ trait ForgejoAdmin {
     fn generate_token(
         &mut self,
         username: &str,
+        token_name: &str,
         scopes: &str,
     ) -> Result<Zeroizing<Vec<u8>>, String>;
+    /// Delete the user's Commitarium tokens other than `keep`.
+    fn revoke_tokens_except(&mut self, username: &str, keep: &str) -> Result<(), String>;
 }
 
 fn wait_for_users(admin: &mut impl ForgejoAdmin) -> Result<HashSet<String>, String> {
@@ -624,10 +646,15 @@ fn wait_for_users(admin: &mut impl ForgejoAdmin) -> Result<HashSet<String>, Stri
     Err(last_error)
 }
 
+/// Give each identity a user and a current token. A new token is written
+/// before the ones it supersedes are revoked, so the identity always has a
+/// working token; its markers are written only once the revocation worked,
+/// so a failed revocation is retried with a fresh token on the next start.
 fn ensure_forgejo_credentials(
     admin: &mut impl ForgejoAdmin,
     mut users: HashSet<String>,
     identities: &[ForgejoIdentity],
+    refresh: bool,
 ) -> Result<bool, String> {
     let mut changed = false;
     for identity in identities {
@@ -639,36 +666,78 @@ fn ensure_forgejo_credentials(
             true
         };
         let path = &identity.token_path;
-        if !created && token_scopes_are_ready(path, identity.scopes)? {
+        if !created && secret_is_ready(path)? && (!refresh || token_is_current(identity)?) {
             continue;
         }
-        let token = admin.generate_token(&identity.username, identity.scopes)?;
+        let token_name = format!("{TOKEN_NAME_PREFIX}{}", random_hex(8)?);
+        let token = admin.generate_token(&identity.username, &token_name, identity.scopes)?;
         validate_secret_bytes(&token)?;
         write_secret(path, &token)?;
-        write_secret(&token_scope_marker_path(path), identity.scopes.as_bytes())?;
         changed = true;
+        let scope_marker = token_scope_marker_path(path);
+        let rotation_marker = token_rotation_marker_path(path);
+        remove_marker(&scope_marker)?;
+        remove_marker(&rotation_marker)?;
+        // A user created just now has no older tokens to revoke.
+        if !created {
+            if let Err(error) = admin.revoke_tokens_except(&identity.username, &token_name) {
+                eprintln!("[bootstrap] {error}; retrying on the next start");
+                continue;
+            }
+        }
+        write_secret(&scope_marker, identity.scopes.as_bytes())?;
+        if let Some(rotation) = identity.rotation {
+            write_secret(&rotation_marker, rotation.as_bytes())?;
+        }
     }
     Ok(changed)
 }
 
 fn token_scope_marker_path(token_path: &Path) -> PathBuf {
+    token_marker_path(token_path, ".scopes")
+}
+
+fn token_rotation_marker_path(token_path: &Path) -> PathBuf {
+    token_marker_path(token_path, ".rotation")
+}
+
+fn token_marker_path(token_path: &Path, suffix: &str) -> PathBuf {
     let mut marker = token_path.as_os_str().to_os_string();
-    marker.push(".scopes");
+    marker.push(suffix);
     PathBuf::from(marker)
 }
 
-fn token_scopes_are_ready(token_path: &Path, scopes: &str) -> Result<bool, String> {
-    if !secret_is_ready(token_path)? {
+fn remove_marker(marker: &Path) -> Result<(), String> {
+    match fs::remove_file(marker) {
+        Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(format!(
+            "could not remove private file {}",
+            marker.display()
+        )),
+        _ => Ok(()),
+    }
+}
+
+/// Whether the identity's token exists with its current scopes and rotation.
+fn token_is_current(identity: &ForgejoIdentity) -> Result<bool, String> {
+    let path = &identity.token_path;
+    if !secret_is_ready(path)? || !marker_matches(&token_scope_marker_path(path), identity.scopes)?
+    {
         return Ok(false);
     }
-    let marker = token_scope_marker_path(token_path);
-    if !secret_is_ready(&marker)? {
+    match identity.rotation {
+        Some(rotation) => marker_matches(&token_rotation_marker_path(path), rotation),
+        None => Ok(true),
+    }
+}
+
+fn marker_matches(marker: &Path, expected: &str) -> Result<bool, String> {
+    if !secret_is_ready(marker)? {
         return Ok(false);
     }
-    let stored = fs::read(&marker)
+    let stored = fs::read(marker)
         .map(Zeroizing::new)
         .map_err(|_| format!("could not read private file {}", marker.display()))?;
-    Ok(trim_ascii_whitespace(&stored) == scopes.as_bytes())
+    Ok(trim_ascii_whitespace(&stored) == expected.as_bytes())
 }
 
 struct DockerForgejoAdmin {
@@ -743,9 +812,9 @@ impl ForgejoAdmin for DockerForgejoAdmin {
     fn generate_token(
         &mut self,
         username: &str,
+        token_name: &str,
         scopes: &str,
     ) -> Result<Zeroizing<Vec<u8>>, String> {
-        let token_name = format!("commitarium-bootstrap-{}", random_hex(8)?);
         let output = self
             .command()
             .args([
@@ -755,7 +824,7 @@ impl ForgejoAdmin for DockerForgejoAdmin {
                 "--username",
                 username,
                 "--token-name",
-                &token_name,
+                token_name,
                 "--scopes",
                 scopes,
                 "--raw",
@@ -770,6 +839,124 @@ impl ForgejoAdmin for DockerForgejoAdmin {
         }
         Ok(stdout)
     }
+
+    /// Forgejo lists and deletes a user's tokens only with that user's basic
+    /// auth, and the bot users' random passwords were never kept, so a fresh
+    /// one is set and used once. It is never written anywhere.
+    fn revoke_tokens_except(&mut self, username: &str, keep: &str) -> Result<(), String> {
+        let failed = || format!("could not revoke older Forgejo tokens for {username}");
+        let password = Zeroizing::new(random_hex(32)?);
+        let status = self
+            .command()
+            .args([
+                "admin",
+                "user",
+                "change-password",
+                "--username",
+                username,
+                "--password",
+                password.as_str(),
+                "--must-change-password=false",
+            ])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map_err(|_| failed())?;
+        if !status.success() {
+            return Err(failed());
+        }
+        let base_url = forgejo_host_base_url()?;
+        let username = username.to_string();
+        let keep = keep.to_string();
+        // Callers include async commands running on the runtime's own
+        // threads, where blocking on it would panic; a scoped thread is
+        // always safe to block.
+        thread::scope(|scope| {
+            scope
+                .spawn(|| {
+                    tauri::async_runtime::block_on(revoke_tokens_over_api(
+                        base_url, &username, &password, &keep,
+                    ))
+                })
+                .join()
+                .unwrap_or_else(|_| Err("the request stopped".to_string()))
+        })
+        .map_err(|error| format!("{} ({error})", failed()))
+    }
+}
+
+/// Delete every `commitarium-bootstrap-` token of the user except `keep`,
+/// authenticating as the user.
+async fn revoke_tokens_over_api(
+    base_url: Url,
+    username: &str,
+    password: &str,
+    keep: &str,
+) -> Result<(), String> {
+    #[derive(Deserialize)]
+    struct AccessToken {
+        id: u64,
+        name: String,
+    }
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(FORGEJO_REQUEST_TIMEOUT)
+        .build()
+        .map_err(|_| "the Forgejo client could not start".to_string())?;
+    let endpoint = |segments: &[&str]| {
+        let mut url = base_url.clone();
+        url.path_segments_mut()
+            .map_err(|_| "the Forgejo URL cannot be used for API requests".to_string())?
+            .pop_if_empty()
+            .extend(["api", "v1", "users", username, "tokens"])
+            .extend(segments);
+        Ok::<_, String>(url)
+    };
+    let mut superseded = Vec::new();
+    for page in 1..=FORGEJO_MAX_REPOSITORY_PAGES {
+        let mut url = endpoint(&[])?;
+        url.query_pairs_mut()
+            .append_pair("page", &page.to_string())
+            .append_pair("limit", &FORGEJO_REPOSITORY_PAGE_SIZE.to_string());
+        let response = client
+            .get(url)
+            .basic_auth(username, Some(password))
+            .send()
+            .await
+            .map_err(|_| "Forgejo is unavailable".to_string())?;
+        if response.status() != StatusCode::OK {
+            return Err(format!("HTTP {}", response.status()));
+        }
+        let tokens: Vec<AccessToken> = response
+            .json()
+            .await
+            .map_err(|_| "Forgejo returned an invalid token list".to_string())?;
+        let last = tokens.len() < FORGEJO_REPOSITORY_PAGE_SIZE;
+        superseded.extend(
+            tokens
+                .into_iter()
+                .filter(|token| token.name.starts_with(TOKEN_NAME_PREFIX) && token.name != keep)
+                .map(|token| token.id),
+        );
+        if last {
+            break;
+        }
+    }
+    for id in superseded {
+        let response = client
+            .delete(endpoint(&[&id.to_string()])?)
+            .basic_auth(username, Some(password))
+            .send()
+            .await
+            .map_err(|_| "Forgejo is unavailable".to_string())?;
+        if !matches!(
+            response.status(),
+            StatusCode::NO_CONTENT | StatusCode::NOT_FOUND
+        ) {
+            return Err(format!("HTTP {}", response.status()));
+        }
+    }
+    Ok(())
 }
 
 fn parse_usernames(output: &str) -> HashSet<String> {
@@ -933,6 +1120,9 @@ mod tests {
         created: Vec<String>,
         generated: Vec<(String, String)>,
         tokens: HashMap<String, Vec<u8>>,
+        /// The names of each user's tokens Forgejo still accepts.
+        live: HashMap<String, Vec<String>>,
+        fail_revoke: bool,
     }
 
     impl ForgejoAdmin for FakeAdmin {
@@ -949,16 +1139,31 @@ mod tests {
         fn generate_token(
             &mut self,
             username: &str,
+            token_name: &str,
             scopes: &str,
         ) -> Result<Zeroizing<Vec<u8>>, String> {
             self.generated
                 .push((username.to_string(), scopes.to_string()));
+            self.live
+                .entry(username.to_string())
+                .or_default()
+                .push(token_name.to_string());
             Ok(Zeroizing::new(
                 self.tokens
                     .get(username)
                     .cloned()
                     .unwrap_or_else(|| format!("token-{username}").into_bytes()),
             ))
+        }
+
+        fn revoke_tokens_except(&mut self, username: &str, keep: &str) -> Result<(), String> {
+            if self.fail_revoke {
+                return Err("Forgejo is unavailable".to_string());
+            }
+            if let Some(names) = self.live.get_mut(username) {
+                names.retain(|name| !name.starts_with(TOKEN_NAME_PREFIX) || name == keep);
+            }
+            Ok(())
         }
     }
 
@@ -968,6 +1173,25 @@ mod tests {
         write_secret(path, token).expect("write token");
         write_secret(&token_scope_marker_path(path), identity.scopes.as_bytes())
             .expect("write token scopes");
+        if let Some(rotation) = identity.rotation {
+            write_secret(&token_rotation_marker_path(path), rotation.as_bytes())
+                .expect("write token rotation");
+        }
+    }
+
+    /// An identity as a release before the rotation left it: a token, its
+    /// scopes marker, and an older Commitarium token still live in Forgejo.
+    fn write_unrotated_forgejo_token(admin: &mut FakeAdmin, identity: &ForgejoIdentity) {
+        admin.users.insert(identity.username.clone());
+        admin.live.insert(
+            identity.username.clone(),
+            vec![
+                format!("{TOKEN_NAME_PREFIX}old"),
+                "personal-token".to_string(),
+            ],
+        );
+        write_current_forgejo_token(identity, b"exposed-token");
+        let _ = fs::remove_file(token_rotation_marker_path(&identity.token_path));
     }
 
     fn test_agents() -> Vec<agents::Agent> {
@@ -1088,7 +1312,8 @@ mod tests {
         admin.users.insert(existing.username.clone());
         let users = admin.users.clone();
         assert!(
-            ensure_forgejo_credentials(&mut admin, users, &identities).expect("first bootstrap")
+            ensure_forgejo_credentials(&mut admin, users, &identities, true)
+                .expect("first bootstrap")
         );
 
         assert_eq!(
@@ -1111,7 +1336,8 @@ mod tests {
         let generated = admin.generated.len();
         let users = admin.users.clone();
         assert!(
-            !ensure_forgejo_credentials(&mut admin, users, &identities).expect("second bootstrap")
+            !ensure_forgejo_credentials(&mut admin, users, &identities, true)
+                .expect("second bootstrap")
         );
         assert_eq!(admin.created.len(), created);
         assert_eq!(admin.generated.len(), generated);
@@ -1137,7 +1363,8 @@ mod tests {
 
         let users = admin.users.clone();
         assert!(
-            ensure_forgejo_credentials(&mut admin, users, &identities).expect("upgrade old token")
+            ensure_forgejo_credentials(&mut admin, users, &identities, true)
+                .expect("upgrade old token")
         );
         assert_eq!(
             admin.generated,
@@ -1150,6 +1377,109 @@ mod tests {
             fs::read(administrator_path).expect("upgraded token"),
             b"upgraded-admin-token"
         );
+    }
+
+    #[test]
+    fn a_new_token_revokes_the_identitys_older_commitarium_tokens() {
+        let root = tempfile::tempdir().expect("temp root");
+        let identities = test_identities(root.path());
+        let lead = &identities[1];
+        let mut admin = FakeAdmin::default();
+        write_unrotated_forgejo_token(&mut admin, lead);
+        fs::remove_file(token_scope_marker_path(&lead.token_path)).expect("remove marker");
+
+        let users = admin.users.clone();
+        assert!(
+            ensure_forgejo_credentials(&mut admin, users, &identities[1..2], true)
+                .expect("replace token")
+        );
+
+        let live = &admin.live[&lead.username];
+        assert_eq!(live.len(), 2);
+        assert!(live.contains(&"personal-token".to_string()));
+        assert!(live
+            .iter()
+            .any(|name| name.starts_with(TOKEN_NAME_PREFIX) && !name.ends_with("old")));
+        assert_eq!(
+            fs::read(&lead.token_path).expect("new token"),
+            format!("token-{}", lead.username).as_bytes()
+        );
+        assert!(token_is_current(lead).expect("current"));
+    }
+
+    #[test]
+    fn agent_tokens_rotate_once_and_only_where_workers_are_recreated() {
+        let root = tempfile::tempdir().expect("temp root");
+        let identities = test_identities(root.path());
+        let mut admin = FakeAdmin::default();
+        write_current_forgejo_token(&identities[0], b"admin-token");
+        admin.users.insert(identities[0].username.clone());
+        for identity in &identities[1..] {
+            write_unrotated_forgejo_token(&mut admin, identity);
+        }
+
+        // Paths that do not recreate the workers leave existing tokens alone.
+        let users = admin.users.clone();
+        assert!(
+            !ensure_forgejo_credentials(&mut admin, users, &identities, false).expect("no refresh")
+        );
+        assert!(admin.generated.is_empty());
+
+        let users = admin.users.clone();
+        assert!(ensure_forgejo_credentials(&mut admin, users, &identities, true).expect("rotate"));
+        let rotated: Vec<_> = admin.generated.iter().map(|(user, _)| user).collect();
+        let agents: Vec<_> = identities[1..].iter().map(|i| &i.username).collect();
+        assert_eq!(rotated, agents);
+        for identity in &identities[1..] {
+            assert_ne!(
+                fs::read(&identity.token_path).expect("token"),
+                b"exposed-token"
+            );
+            assert!(!admin.live[&identity.username].contains(&format!("{TOKEN_NAME_PREFIX}old")));
+        }
+
+        let users = admin.users.clone();
+        assert!(
+            !ensure_forgejo_credentials(&mut admin, users, &identities, true)
+                .expect("second start")
+        );
+        assert_eq!(admin.generated.len(), agents.len());
+    }
+
+    #[test]
+    fn a_failed_revocation_keeps_the_new_token_and_retries_next_start() {
+        let root = tempfile::tempdir().expect("temp root");
+        let identities = test_identities(root.path());
+        let lead = &identities[1];
+        let mut admin = FakeAdmin::default();
+        write_unrotated_forgejo_token(&mut admin, lead);
+        admin.fail_revoke = true;
+
+        let users = admin.users.clone();
+        assert!(
+            ensure_forgejo_credentials(&mut admin, users, &identities[1..2], true)
+                .expect("revocation failure is not fatal")
+        );
+        // The new token is in place and the old one still works, so the
+        // worker is never left without a working token.
+        assert_eq!(
+            fs::read(&lead.token_path).expect("new token"),
+            format!("token-{}", lead.username).as_bytes()
+        );
+        assert_eq!(admin.live[&lead.username].len(), 3);
+        let first_new = admin.live[&lead.username][2].clone();
+        assert!(!token_is_current(lead).expect("not yet current"));
+
+        admin.fail_revoke = false;
+        let users = admin.users.clone();
+        assert!(
+            ensure_forgejo_credentials(&mut admin, users, &identities[1..2], true).expect("retry")
+        );
+        let live = &admin.live[&lead.username];
+        assert_eq!(live.len(), 2);
+        assert!(live.contains(&"personal-token".to_string()));
+        assert!(!live.contains(&first_new));
+        assert!(token_is_current(lead).expect("current"));
     }
 
     #[test]
