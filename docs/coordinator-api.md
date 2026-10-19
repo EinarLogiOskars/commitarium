@@ -2646,12 +2646,22 @@ actions, and its notes.
   Commitarium, or something that happened in the project's work). A finished
   turn is folded in on read. Every 20 seconds the coordinator compares each
   project's work with what it last saw and notes changes as `event` messages;
-  a merge, a failure, a blocker, a merge approval, or a question for the user
-  also starts a turn, one at a time (ADR-023).
-- `POST .../{scope}/messages` with `{"message"}` and an `Idempotency-Key` starts
-  a turn. While one runs, the message is queued in the conversation's `queued`
-  and starts the next turn, with any events that waited, as soon as the
-  current one ends.
+  a failure, a blocker, a merge approval, or a question for the user also
+  starts a turn, one at a time (ADR-023). A merge, or a work order back in
+  Ready, starts one only where the assistant drives the work (an autopilot
+  goal, or `builds`); elsewhere it stays an event line and is not repeated
+  to the assistant on the user's next message (ADR-035).
+- `POST .../{scope}/messages` with `{"message", "developer_mode"}` and an
+  `Idempotency-Key` starts a turn. While one runs, the message is queued in
+  the conversation's `queued` and starts the next turn, with any events that
+  waited, as soon as the current one ends. `developer_mode` (optional) says
+  whether the desktop shows Developer mode; without it, a new app the
+  top-level assistant plans stays self-contained (ADR-035).
+- `PUT .../{scope}/focus` with `{"kind": "work_order"|"vision"|"stack",
+  "work_order_id", "label"}` opens a project's conversation on an item: the
+  assistant's turns name it and how to carry it through, and the
+  conversation's `focus` echoes it for the chip above the composer. `DELETE`
+  clears it. The top level has no focus.
 - A turn whose agent's login failed is kept, not dropped: the conversation's
   `sign_in` is `{"agent", "since", "needs_user", "retries", "retry_at"}`. It
   tries again by itself (30 s, 2 min, 5 min), then `needs_user` is set and the
@@ -2660,18 +2670,43 @@ actions, and its notes.
   the user picks another agent. Events and new messages ride along with it.
   A new app's launch whose vision writer stopped without a vision wakes the
   assistant to write it again (`write_vision`), at most every ten minutes.
+- Helpers (ADR-035): `write_vision`, `write_brief`, `design_stack`, and
+  `research` run the vision writer, the brief writer, the stack designer,
+  and a research helper on the assistant's agent in the background. The
+  coordinator follows the helpers the assistant started (not those the user
+  starts elsewhere): a helper's question wakes the assistant, which answers
+  with `answer_helper`; a brief or a stack comes back as an `accept_brief` or
+  `apply_stack` card; research's findings come back as an event. A helper
+  that stops on its agent's login waits on the agents' sign-in record, and
+  the assistant is woken to start it again once the agent works.
 - `PUT .../{scope}/notes` with `{"notes"}` replaces the notes with the user's
   edit.
 - An action is `{"id", "type": "create_work_order"|"start_work_order"|
   "change_models"|"add_vision_item"|"start_autopilot"|"continue_work_order"|
-  "recover_work_order"|"close_work_order"|"create_app"|"set_up_preview"|"write_vision"|"set_up_stack", "priority", "reason",
+  "recover_work_order"|"close_work_order"|"create_app"|"set_up_preview"|"write_vision"|"set_up_stack"|
+  "answer_helper"|"write_brief"|"accept_brief"|"design_stack"|"apply_stack"|"research", "priority", "reason",
   "title", "description", "vision_item_id",
   "steps", "independent_tests", "lead_agent", "lead_model", "reviewer_agent",
-  "reviewer_model", "work_order_id", "when", "how", "guidance", "after", "status", "premium",
-  "result", "auto_tried", "queued"}`. `write_vision` has the vision written on the
-  assistant's agent from `description` (`409 vision_exists` when there is one);
+  "reviewer_model", "work_order_id", "when", "how", "guidance", "after", "helper", "brief",
+  "app_brief", "assumptions", "status", "premium",
+  "result", "auto_tried", "queued"}`. `write_vision` has the vision written, or
+  the one there is rewritten, on the assistant's agent from `description`;
   `set_up_stack` detects the stack of the code, or sets the project up on the
-  stack its vision recommends (`409 stack_unknown` without either). `after`,
+  stack its vision recommends (`409 stack_unknown` without either).
+  `write_brief` has the brief writer write a Draft's brief from
+  `description` (`409 feature_not_draft`, `409 brief_writer_busy`); a
+  `create_work_order` with `brief` creates the work order as a Draft and does
+  the same. `design_stack` has the stack designer suggest a stack from
+  `description`, or check the stack of a repository with code (`409
+  stack_exists` once one is configured). `accept_brief` and `apply_stack` are
+  proposed by Commitarium from a helper's result (`helper` names it) and
+  accept the brief (the work order becomes Ready) or apply the stack.
+  `answer_helper` sends `guidance` to the helper `helper` names (`404
+  helper_not_found` for one the assistant did not start). `research` looks
+  `description` up on the web in a read-only attempt with no repository,
+  named by `title`; it runs at the top level too. `answer_helper` and
+  `research` change nothing in the project, so the coordinator applies them
+  at once in every mode, without a card. `after`,
   on a create or start, names a work order ID or another action's title it
   follows: autopilot holds it (`queued`) until that work has merged. `recover_work_order` recovers the work order's
   newest run when it waits on a blocker, the way `how` names (ADR-032):
@@ -2684,11 +2719,14 @@ actions, and its notes.
   eight; `409 recovery_not_allowed` when the run is not waiting on a blocker.
   Autopilot recovers a work order at most eight times across its blockers and
   always leaves `back_to_ready` to the user. `close_work_order` closes the work order (see Closing a work
-  order). `create_app` is the only action at the top level (`commitarium`):
-  approving it creates a project as an app named by `title`, launches it, and
-  has the vision written from `description`; the action's `project_id` names
-  the new project. Any other action there, or `create_app` in a project,
-  returns `409 action_needs_project`. `premium` lists its models that need approval (`ask_before`);
+  order). `create_app` is the top level's (`commitarium`) only action besides
+  `research`: approving it creates a project as an app named by `title`,
+  saves `app_brief` (everything the assistant gathered) as the new app's
+  assistant notes, launches it, and has the vision written from
+  `description`, `app_brief`, and `assumptions` (what the assistant guessed,
+  listed on the card); the action's `project_id` names the new project. Any
+  other action there, or `create_app` in a project, returns
+  `409 action_needs_project`. `premium` lists its models that need approval (`ask_before`);
   `auto_tried` marks one autopilot took over.
 - `POST .../{scope}/actions/{actionID}/approve` with `{"start", "confirm_premium"}`
   runs it through the same paths as the app's own buttons and records the

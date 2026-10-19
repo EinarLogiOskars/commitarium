@@ -164,6 +164,12 @@ job (a README update becomes a quick-change work order).
   Commitarium's own data.
 - **Agent and model:** its own app-wide setting (ADR-022); premium models
   need the user's approval.
+- **One conversation** (ADR-035): the user talks to the assistant, and the
+  assistant to the agents. Clarifying a Draft, writing the vision, and
+  designing the stack happen in its chat: it starts the brief writer, the
+  vision writer, the stack designer, or research as helpers, answers their
+  questions, and brings their results back as cards. The intervene bar and
+  sessions stay direct.
 - Project setup and imports through the assistant come after 1.0.
 
 ## Planning view
@@ -227,7 +233,7 @@ public coordinator API, and every new action comes with an approval policy
 | Agents | Done ([AGENTS_PLAN.md](docs/plans/AGENTS_PLAN.md), ADR-016): one worker per provider account, serving both roles, chosen at Start. |
 | Flexible work orders | Done ([FLEXIBLE_WORK_ORDERS_PLAN.md](docs/plans/FLEXIBLE_WORK_ORDERS_PLAN.md), ADR-018, ADR-031): Quick change, Planned, Reviewed plan, and Full chosen at Start, and a Draft can start without clarifying. Turning a step on mid-run was cancelled (see Work order). |
 | Session | Done and tested in real use ([SESSIONS_PLAN.md](docs/plans/SESSIONS_PLAN.md), ADR-019): one-click start, chat on the session branch, catch-up with main, session preview, one commit at finish through the merge gate. |
-| Project direction and assistant | Done ([ASSISTANT_PLAN.md](docs/plans/ASSISTANT_PLAN.md), ADR-020, ADR-022): the Vision page with an assistant-written plan, one assistant at the top level and in each project that acts through approval cards, usage limits, and recovery of blocked work ([ASSISTANT_RECOVERY_PLAN.md](docs/plans/ASSISTANT_RECOVERY_PLAN.md), ADR-032), including replacing a goal's work order once its recovery has run out. |
+| Project direction and assistant | Done ([ASSISTANT_PLAN.md](docs/plans/ASSISTANT_PLAN.md), ADR-020, ADR-022): the Vision page with an assistant-written plan, one assistant at the top level and in each project that acts through approval cards, usage limits, and recovery of blocked work ([ASSISTANT_RECOVERY_PLAN.md](docs/plans/ASSISTANT_RECOVERY_PLAN.md), ADR-032), including replacing a goal's work order once its recovery has run out. One conversation ([ONE_CONVERSATION_PLAN.md](docs/plans/ONE_CONVERSATION_PLAN.md), ADR-035): the separate Clarify, Vision, and stack chats are gone; the assistant runs those helpers and research, and talks a new app through before building it. |
 | Builder mode, autopilot, Apps | Done: autopilot on a goal the user set (ADR-023); the Apps area, where a sentence starts a new app and the assistant drives ([APPS_PLAN.md](docs/plans/APPS_PLAN.md), ADR-024). AI for apps through a local gateway is proposed ([APP_AI_PLAN.md](docs/plans/APP_AI_PLAN.md), ADR-033). |
 | Marketplace | MVP done ([MARKETPLACE_PLAN.md](docs/plans/MARKETPLACE_PLAN.md)): a closed Forgejo marketplace with sign-up, releasing an app, and browsing and installing as a local copy. |
 
@@ -301,7 +307,8 @@ gives it something to plan against before it is trusted to act. Intermediate
   branch, merge gate, and recovery (ADR-019).
 - **Project direction**: the vision is a Commitarium record (ADR-020).
 - **Assistant**: one assistant that proposes and the user approves (ADR-022);
-  the user and the assistant choose agents (ADR-027).
+  the user and the assistant choose agents (ADR-027); the user talks to the
+  assistant and the assistant to the agents (ADR-035).
 - **Autopilot and Apps**: autopilot acts only on a goal the user set
   (ADR-023); in an app the assistant drives (ADR-024). Both act only through
   the coordinator API with Commitarium permissions; system capabilities are

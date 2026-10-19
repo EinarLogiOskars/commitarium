@@ -111,6 +111,11 @@ plan permission mode on each process launch, overriding the worker's writable
 implementation default. The zero value remains accepted only for compatibility
 with older internal callers.
 
+An attempt request may also set `web: true` (the assistant's research helper,
+ADR-035): Claude Code then runs with `--allowedTools WebSearch,WebFetch`, so
+a read-only turn searches and reads the web without asking. Codex keeps the
+web search setting of its own configuration.
+
 An attempt request may select one of seven provider-neutral structured-output
 contracts:
 
