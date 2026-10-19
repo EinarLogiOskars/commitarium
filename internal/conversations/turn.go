@@ -133,6 +133,9 @@ func (service *Service) startTurn(
 		}
 	}
 	instructions += service.focusInstructions(ctx, scope, stored.Focus)
+	if scope == TopLevel {
+		instructions += newAppInstructions(stored.Developer)
+	}
 	if err := service.write(stored); err != nil {
 		return Conversation{}, err
 	}
@@ -389,11 +392,9 @@ func rules(scope string, settings Settings) string {
 		"run sessions themselves, and you are their consultant."
 	if scope == TopLevel {
 		where = "You are Commitarium's assistant at the top level, across the user's projects and apps. " +
-			"When the user wants a new app, talk it through briefly: suggest a short, friendly name and sum up " +
-			"what it will do, for whom, and in which language its interface should be; ask at most one or two " +
-			"questions that really matter. Once the user is happy with the name and the idea, or says go, propose " +
-			"create_app with title as the name and description as the settled idea in a few sentences. That is the " +
-			"only action you take at the top level, besides research; Commitarium then plans, sets up, and builds the app."
+			"When the user wants a new app, you settle with them what to build, as the closing instructions of " +
+			"each turn say, and propose create_app. That is the only action you take at the top level, besides " +
+			"research; Commitarium then plans, sets up, and builds the app."
 	}
 	maxEffort := settings.MaxEffort
 	if maxEffort == "" {
@@ -559,6 +560,30 @@ const buildsInstructions = `
 
 The user chose that you build everything here: you own the whole project and drive it until it runs, the work orders the user creates by hand included. When the user asks for a change, propose the work at once: create_work_order with quick or planned steps for most changes (reviewed_plan for real features, full only for data, money, auth, migrations, or concurrency), the agents, models, and efforts the model guide's rules give (on the agent with the most usage left), and the user's words as the goal. Commitarium applies your actions immediately, without approval cards, except those using a premium model, which wait for the user.
 You act only when Commitarium wakes you, so it also tells you what the project still lacks to run. Fix each in turn, one step after what it depends on: no vision, write_vision; no stack, set_up_stack (after the vision, unless the repository has code), or design_stack when the vision names no stack; open vision items with autopilot off, start_autopilot for the first priority with open items; work orders nobody starts, start_work_order with the agents and models you choose, or after when they change the same part of the app as running work; for an app whose preview is not set up or fails, set_up_preview. A card the user dismissed before handing you the project no longer stands.`
+
+// newAppInstructions tell the assistant at the top level how to settle a
+// new app with the user before it is built (ADR-035): judge whether the
+// request is enough, ask in short rounds and research facts when it is not,
+// step back every few rounds, and build whenever the user says go. Without
+// Developer mode, an app stays self-contained.
+func newAppInstructions(developer bool) string {
+	reach := `
+- The user does not use Developer mode, so apps stand on their own: they run on the user's computer with the user's own data, and may still be complex. When a request reaches beyond that (signing in to other systems or services with credentials, a server that keeps running when the computer is off, several services working together), plan the best self-contained version instead (the user enters or imports the data, and the app makes the file to upload, say). Say plainly in your message what that leaves out, put it in app_brief and in assumptions, and mention that Developer mode, in Settings, can take on the full thing.`
+	if developer {
+		reach = `
+- The user uses Developer mode: when the request needs it, an app may also reach other systems, run as a server, or use several services. Say so plainly and plan for it in app_brief.`
+	}
+	return `
+
+New apps. When the user asks for one, first judge whether what they said is enough to build it well:
+- Clear and self-contained (a plant watering tracker, a habit log): propose create_app at once, with your sensible defaults as assumptions.
+- Not enough (rules you would have to guess, kinds of users, the data it works with, what it must produce): ask short questions in your message, one round at a time, as many rounds as the app needs. At most three questions a round, only ones whose answer changes what gets built, each with the default you would pick ("I'd assume one person keeps it, right?"). Prefer a stated default to a question.
+- Never ask what you asked before or what the user already said: this conversation and your notes are the record. Keep short notes of what is settled while you talk an app through.
+- Facts the user should not have to supply (tax rules, official requirements, standards, file formats): research them, in the same turn as your questions when you can, and then ask the user to confirm only what is a choice.
+- Every third round, step back: sum up in a few lines what you know, name what is still open, and either propose create_app with the open points as assumptions, or say in one line why one more answer matters.
+- When the user says go at any point ("go for it", "just build it"), propose create_app at once from what you have: fill each gap with a sensible default and list it in assumptions. Building on fewer answers is their call.` + reach + `
+- create_app: title is the app's short, friendly name; description sums up in two or three sentences what will be built, for the card; app_brief is everything you gathered, in full, for the writer who plans the app: what it is for and for whom, the language of its interface, each decision the user made, the research findings with their sources, and what is left out; assumptions are each thing you guessed, in a short line.`
+}
 
 // assistsInstructions tell the assistant it assists in the project
 // (ADR-027): each action is a proposal the user starts.

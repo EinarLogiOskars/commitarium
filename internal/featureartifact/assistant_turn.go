@@ -42,7 +42,9 @@ const (
 	// its history: a duplicate, or work the user no longer wants.
 	AssistantCloseWorkOrder AssistantActionType = "close_work_order"
 	// AssistantCreateApp creates a new app at the top level: a project used
-	// as an app, named by Title and built from Description (APPS_PLAN.md).
+	// as an app, named by Title and built from Description, the card's
+	// summary, and AppBrief, all the assistant gathered (APPS_PLAN.md,
+	// ADR-035).
 	AssistantCreateApp AssistantActionType = "create_app"
 	// AssistantSetUpPreview sets the app's preview up, or fixes one that
 	// fails to start, in a work order that merges only once Commitarium's
@@ -134,6 +136,12 @@ type AssistantAction struct {
 	// Brief, for create_work_order, has the new work order's brief written
 	// from Description before it starts (ADR-035): it is created as a draft.
 	Brief bool `json:"brief,omitempty"`
+	// AppBrief, for create_app, is what the assistant gathered with the user
+	// (what the app is for, decisions, research with sources, what is left
+	// out), handed in full to the writer who plans the app; Assumptions are
+	// what it guessed, shown on the card.
+	AppBrief    string   `json:"app_brief,omitempty"`
+	Assumptions []string `json:"assumptions,omitempty"`
 }
 
 // PhaseChoices are the action's planning models and efforts (ADR-031); nil
@@ -153,6 +161,10 @@ func (action AssistantAction) PhaseChoices() *project.PhaseChoices {
 const (
 	maxAssistantActions   = 8
 	MaxAssistantNoteBytes = 16 * 1024
+	// MaxAppBriefBytes bounds a new app's brief, so it fits the new app's
+	// notes with a line that introduces it.
+	MaxAppBriefBytes = 15 * 1024
+	maxAssumptions   = 20
 )
 
 // Normalize trims the turn and checks its actions.
@@ -172,9 +184,17 @@ func (turn AssistantTurn) Normalize() (AssistantTurn, error) {
 			&action.LeadPlanModel, &action.LeadPlanEffort, &action.LeadEffort,
 			&action.ReviewerPlanModel, &action.ReviewerPlanEffort, &action.ReviewerEffort,
 			&action.WorkOrderID, &action.When, &action.How, &action.Guidance, &action.After, &action.Helper,
+			&action.AppBrief,
 		} {
 			*field = strings.TrimSpace(*field)
 		}
+		assumptions := action.Assumptions[:0:0]
+		for _, assumption := range action.Assumptions {
+			if assumption = strings.TrimSpace(assumption); assumption != "" {
+				assumptions = append(assumptions, assumption)
+			}
+		}
+		action.Assumptions = assumptions
 		if err := action.validate(); err != nil {
 			return AssistantTurn{}, fmt.Errorf("%w: action %d: %v", ErrInvalidArtifact, index+1, err)
 		}
@@ -213,6 +233,14 @@ func (action AssistantAction) validate() error {
 	case AssistantCreateApp:
 		if action.Title == "" || len(action.Title) > 80 || action.Description == "" || len(action.Description) > MaxGoalBytes {
 			return fmt.Errorf("an app needs a short name and a description")
+		}
+		if len(action.AppBrief) > MaxAppBriefBytes || len(action.Assumptions) > maxAssumptions {
+			return fmt.Errorf("the app's brief is too long, or it lists more than %d assumptions", maxAssumptions)
+		}
+		for _, assumption := range action.Assumptions {
+			if len(assumption) > MaxStepTextBytes {
+				return fmt.Errorf("an assumption is too long")
+			}
 		}
 	case AssistantCloseWorkOrder:
 		if action.WorkOrderID == "" {

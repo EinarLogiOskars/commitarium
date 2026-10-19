@@ -193,6 +193,9 @@ type record struct {
 	PreviewFailedAt *time.Time `json:"preview_failed_at,omitempty"`
 	// Helpers are the helper sessions the assistant started (helpers.go).
 	Helpers []Helper `json:"helpers,omitempty"`
+	// Developer is whether the user's app shows Developer mode, as its last
+	// message said: without it, a new app stays self-contained (ADR-035).
+	Developer bool `json:"developer,omitempty"`
 }
 
 // maxSessionTurns bounds a provider session; the next turn starts fresh.
@@ -527,6 +530,21 @@ func (service *Service) Get(ctx context.Context, scope string) (Conversation, er
 		}
 	}
 	return stored.Conversation, nil
+}
+
+// SetDeveloperMode records whether the user's app shows Developer mode.
+func (service *Service) SetDeveloperMode(ctx context.Context, scope string, on bool) error {
+	if err := service.checkScope(ctx, scope); err != nil {
+		return err
+	}
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	stored, err := service.read(scope)
+	if err != nil || stored.Developer == on {
+		return err
+	}
+	stored.Developer = on
+	return service.write(stored)
 }
 
 // SaveNotes replaces a scope's notes with the user's edit.

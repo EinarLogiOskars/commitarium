@@ -16,6 +16,7 @@ import (
 	"github.com/EinarLogiOskars/commitarium/internal/featureartifact"
 	"github.com/EinarLogiOskars/commitarium/internal/modelcatalog"
 	"github.com/EinarLogiOskars/commitarium/internal/project"
+	"github.com/EinarLogiOskars/commitarium/internal/vision"
 	"github.com/EinarLogiOskars/commitarium/internal/workerhttp"
 )
 
@@ -202,5 +203,75 @@ func TestCreatingAnAppNeedsNoTemplateProject(t *testing.T) {
 	// The user asked the top-level assistant for it, so it builds everything.
 	if modes.received != project.AssistantModeBuilds {
 		t.Fatalf("the new app's assistant = %q, want builds", modes.received)
+	}
+}
+
+// briefConversations records the notes a new app's conversation is given.
+type briefConversations struct {
+	*conversationStub
+	notes map[string]string
+}
+
+func (stub *briefConversations) SaveNotes(_ context.Context, scope, notes string) (conversations.Conversation, error) {
+	stub.notes[scope] = notes
+	return conversations.Conversation{Scope: scope}, nil
+}
+
+// appProjects is a project service on which new apps are marked as apps.
+type appProjects struct{ *assistantModeProjects }
+
+func (service appProjects) UpdateApp(_ context.Context, projectID string, app bool) (project.Project, error) {
+	return project.Project{ID: projectID, App: app}, nil
+}
+
+func (service appProjects) Rename(_ context.Context, projectID, name string) (project.Project, error) {
+	return project.Project{ID: projectID, Name: name}, nil
+}
+
+// briefVisions records what the vision writer of a new app is told.
+type briefVisions struct {
+	VisionService
+	messages []string
+}
+
+func (stub *briefVisions) Get(context.Context, string) (vision.Vision, error) {
+	return vision.Vision{}, vision.ErrNotFound
+}
+
+func (stub *briefVisions) Start(_ context.Context, _, _, _ string, _ vision.Mode, message, _ string) (vision.Session, bool, error) {
+	stub.messages = append(stub.messages, message)
+	return vision.Session{ID: "vis_1"}, true, nil
+}
+
+// A new app's vision writer hears the whole brief the assistant gathered and
+// what it assumed, and the app's own assistant keeps the brief in its notes.
+func TestANewAppIsPlannedFromTheWholeBrief(t *testing.T) {
+	stub := &briefConversations{conversationStub: &conversationStub{
+		settings: conversations.Settings{Agent: "claude", Model: "claude-sonnet-5-5"},
+		action: conversations.Action{ID: "act_1", Status: conversations.ActionProposed, AssistantAction: featureartifact.AssistantAction{
+			Type: featureartifact.AssistantCreateApp, Reason: "Settled", Title: "VSK Kerfi",
+			Description: "Prepares Iceland's VAT return from the user's sales.",
+			AppBrief:    "For a sole trader. Rates 24% and 11% (skatturinn.is). Leaves out filing online.",
+			Assumptions: []string{"Returns are filed every two months"},
+		}},
+	}, notes: map[string]string{}}
+	visions := &briefVisions{}
+	projects := &recordingProjectService{result: project.Project{ID: "prj_vsk", Name: "VSK Kerfi"},
+		getByIDResult: project.Project{ID: "prj_vsk", Name: "VSK Kerfi"}}
+	handler := NewWithWorkspaceRealWorkflowDeletionAndModels(appProjects{&assistantModeProjects{recordingProjectService: projects}},
+		&recordingFeatureService{}, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, stub, testAgents(), visions)
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost,
+		"/api/v1/assistant/conversations/commitarium/actions/act_1/approve", strings.NewReader(`{}`)))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", recorder.Code, recorder.Body.String())
+	}
+	if len(visions.messages) != 1 || !strings.Contains(visions.messages[0], "Prepares Iceland's VAT return") ||
+		!strings.Contains(visions.messages[0], "Rates 24% and 11% (skatturinn.is)") ||
+		!strings.Contains(visions.messages[0], "- Returns are filed every two months") {
+		t.Fatalf("the vision writer heard %q", visions.messages)
+	}
+	if !strings.Contains(stub.notes["prj_vsk"], "Leaves out filing online.") {
+		t.Fatalf("notes = %v", stub.notes)
 	}
 }

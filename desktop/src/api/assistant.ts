@@ -1,3 +1,4 @@
+import { developerModeOn } from "../devMode";
 import { request } from "./client";
 
 // The assistant (ASSISTANT_PLAN.md): one conversation at the top level
@@ -65,6 +66,10 @@ export interface AssistantAction {
   helper?: string;
   /** For create_work_order: its brief is written before it starts. */
   brief?: boolean;
+  /** For create_app: all the assistant gathered, for the app's planner, and
+   * what it assumed where the user did not say (ADR-035). */
+  app_brief?: string;
+  assumptions?: string[];
   /** For add_vision_item and start_autopilot: 0 for P0, 1 for P1, and so on. */
   priority: number;
   /** For a work order to create or start: the work order ID, or the title of
@@ -144,7 +149,7 @@ export const sendToAssistant = (
 ): Promise<Conversation> =>
   request(`${conversationPath(scope)}/messages`, {
     method: "POST",
-    body: { message },
+    body: { message, developer_mode: developerModeOn() },
     idempotencyKey: key,
   });
 

@@ -96,3 +96,41 @@ func TestResearchThatFailsWakesTheAssistant(t *testing.T) {
 		t.Fatalf("pending = %v", stored.PendingEvents)
 	}
 }
+
+// At the top level, each turn says how to settle a new app before it is
+// built; without Developer mode, the app stays self-contained.
+func TestANewAppIsSettledBeforeItIsBuilt(t *testing.T) {
+	service, worker := newTestService(t)
+	if _, err := service.Send(t.Context(), TopLevel, "I'd like a new app: VAT returns", "msg-1"); err != nil {
+		t.Fatal(err)
+	}
+	first := worker.puts[0].Instructions
+	for _, want := range []string{"first judge whether what they said is enough", "Every third round, step back",
+		"Never ask what you asked before", "When the user says go", "does not use Developer mode", "app_brief"} {
+		if !strings.Contains(first, want) {
+			t.Fatalf("the top level's turn lacks %q", want)
+		}
+	}
+	worker.finish(workerhttp.TerminalResult{Outcome: workerhttp.OutcomeCompleted, Disposition: workerhttp.DispositionSucceeded,
+		Summary: "Who files it?"})
+	if _, err := service.Get(t.Context(), TopLevel); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.SetDeveloperMode(t.Context(), TopLevel, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Send(t.Context(), TopLevel, "Just me", "msg-2"); err != nil {
+		t.Fatal(err)
+	}
+	if next := worker.puts[1].Instructions; !strings.Contains(next, "The user uses Developer mode") ||
+		strings.Contains(next, "does not use Developer mode") {
+		t.Fatalf("Developer mode is not in the next turn: %s", next)
+	}
+	// A project's turns carry none of it.
+	if _, err := service.Send(t.Context(), "prj_test", "Hi", "msg-3"); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(worker.puts[2].Instructions, "New apps.") {
+		t.Fatal("a project's turn has the new-app instructions")
+	}
+}

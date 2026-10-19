@@ -165,12 +165,14 @@ func OutputJSONSchema(contract OutputContract) any {
 				"after":                map[string]any{"type": "string", "description": "For create_work_order and start_work_order: the work order ID, or the exact title of another of your actions, that this one must wait for because both change the same part of the app; it starts once that one merges. Otherwise empty."},
 				"helper":               map[string]any{"type": "string", "description": "For answer_helper: the helper that asked, as Commitarium named it. Otherwise empty."},
 				"brief":                map[string]any{"type": "boolean", "description": "For create_work_order: true has its brief written from description before it starts; it is created as a draft. False for quick changes. Otherwise false."},
+				"app_brief":            map[string]any{"type": "string", "description": "For create_app: everything you gathered with the user, in full, for the writer who plans the app. Otherwise empty."},
+				"assumptions":          map[string]any{"type": "array", "items": text, "description": "For create_app: each thing you assumed where the user did not say, in a short line. Otherwise empty."},
 			},
 			[]string{
 				"type", "reason", "title", "description", "vision_item_id", "steps",
 				"lead_agent", "lead_model", "reviewer_agent", "reviewer_model",
 				"lead_plan_model", "lead_plan_effort", "lead_effort", "reviewer_plan_model", "reviewer_plan_effort", "reviewer_effort",
-				"work_order_id", "when", "how", "priority", "guidance", "after", "helper", "brief",
+				"work_order_id", "when", "how", "priority", "guidance", "after", "helper", "brief", "app_brief", "assumptions",
 			},
 		)
 		return objectSchema(

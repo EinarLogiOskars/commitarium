@@ -203,15 +203,33 @@ func (api *API) getConversationHandler(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, conversation, "assistant conversation")
 }
 
+// conversationMessageRequest is the user's message, with whether the app
+// shows Developer mode, which decides how far a new app may reach (ADR-035).
+type conversationMessageRequest struct {
+	Message       string `json:"message"`
+	DeveloperMode *bool  `json:"developer_mode,omitempty"`
+}
+
+// developerModeSetter records whether the user uses Developer mode.
+type developerModeSetter interface {
+	SetDeveloperMode(ctx context.Context, scope string, on bool) error
+}
+
 func (api *API) sendConversationHandler(w http.ResponseWriter, r *http.Request) {
 	key := strings.TrimSpace(r.Header.Get("Idempotency-Key"))
 	if key == "" {
 		writeError(w, http.StatusBadRequest, "idempotency_key_required", "Idempotency-Key header is required")
 		return
 	}
-	var body sessionMessageRequest
+	var body conversationMessageRequest
 	if !decodeSingleJSON(w, r, &body) {
 		return
+	}
+	if setter, ok := api.conversations.(developerModeSetter); ok && body.DeveloperMode != nil {
+		if err := setter.SetDeveloperMode(r.Context(), r.PathValue("scope"), *body.DeveloperMode); err != nil {
+			writeConversationError(w, err)
+			return
+		}
 	}
 	conversation, err := api.conversations.Send(r.Context(), r.PathValue("scope"), body.Message, key)
 	if err != nil {

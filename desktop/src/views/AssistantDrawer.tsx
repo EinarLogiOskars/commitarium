@@ -629,6 +629,16 @@ function ActionCard({
         ) : (
           <p className="assistant-action__desc">{action.description}</p>
         ))}
+      {action.type === "create_app" && (action.assumptions ?? []).length > 0 && (
+        <div className="assistant-action__desc">
+          Assumed where you didn&apos;t say:
+          <ul>
+            {action.assumptions?.map((assumption) => (
+              <li key={assumption}>{assumption}</li>
+            ))}
+          </ul>
+        </div>
+      )}
       {action.type === "continue_work_order" && (
         <p className="assistant-action__desc">
           {action.guidance ? `Guidance: ${action.guidance}` : "Retries without guidance."}
