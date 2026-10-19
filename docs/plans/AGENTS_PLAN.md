@@ -7,8 +7,8 @@ lead, Claude reviewer) with **agents**. An agent is one provider account: a
 subscription or an API key, such as "Claude Max", "Claude API", or
 "Codex Pro". This is milestone 3 of [V1_VISION.md](../../V1_VISION.md).
 
-**Status:** implemented on `feat/agents` (A1–A9); awaiting user testing (see
-Verification).
+**Status:** merged (PR #5) and in daily use; later refined by the agents
+dialog and model guide (PRs #76, #81–#83).
 
 - An agent can be lead or reviewer, and can work on any number of work orders
   at once. Concurrency is not limited.

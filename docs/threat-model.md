@@ -80,6 +80,16 @@ identity and the audit trail shows which account wrote and which approved.
 Lead and reviewer of one agent share the account's provider state but run as
 separate sessions.
 
+A turn's role token reaches git through a credential helper that reads the
+token file only when git asks, so it is not in the agent's environment, and
+the worker redacts known token values from activity (PR #77). Agents still
+read the token file to call the Forgejo API, so the token is not secret from
+them; the aim is that it does not leak into transcripts. Up to v0.7.2 the
+token was in the environment, and agents that listed it put it into their
+provider transcripts. Forgejo listens only on loopback, so such a token is
+useful only on that machine; the exposed tokens were rotated on 2026-10-19,
+and the desktop rotating them for existing installs is in progress.
+
 Import, local synchronization, and upstream publication cross the boundary
 through narrow Tauri operations. These operations verify repository state and
 exact revisions, stop on dirty, diverged, conflicting, or ambiguous state, and

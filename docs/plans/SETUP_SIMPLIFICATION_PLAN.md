@@ -1,6 +1,6 @@
 # Setup Simplification: Implementation Plan
 
-**Status:** implemented on `feat/setup-simplification`; awaiting user testing.
+**Status:** merged (PR #10) and in daily use.
 
 ## Goal
 

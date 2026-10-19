@@ -1,6 +1,7 @@
 # Marketplace: Implementation Plan
 
-**Status:** draft 2026-10-13, MVP scope. Builds on Apps (APPS_PLAN.md,
+**Status:** MVP merged (PRs #52–#55): manifest, account, release, and browse
+and install. Beyond the MVP comes after 1.0. Builds on Apps (APPS_PLAN.md,
 ADR-024).
 
 ## Goal

@@ -1,7 +1,7 @@
 # Flexible Work Orders: Implementation Plan
 
-**Status:** implemented on `feat/flexible-work-orders` (F1–F8); awaiting user
-testing.
+**Status:** merged (PR #8) and in daily use. ADR-031 later added the Reviewed
+plan preset and removed independent acceptance tests.
 
 ## Goal
 

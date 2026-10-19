@@ -1,5 +1,7 @@
 # AI for Apps: Implementation Plan
 
+**Status:** proposed (ADR-033); not started. After 1.0 (V1_VISION.md).
+
 ## Problem
 
 Apps Commitarium builds sometimes need AI of their own. "¡Vamos, Vikingo!"

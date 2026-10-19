@@ -1,8 +1,7 @@
 # Assistant: Implementation Plan
 
-**Status:** phases 1 (usage limits) and 2 (the assistant) merged; phase 3 in two
-parts: events on `feat/assistant-events`, then goals and autopilot on
-`feat/autopilot`.
+**Status:** merged: phases 1 (usage limits) and 2 (the assistant), and phase 3
+in two parts, events (PR #18) and goals and autopilot (PR #19).
 
 ## Goal
 

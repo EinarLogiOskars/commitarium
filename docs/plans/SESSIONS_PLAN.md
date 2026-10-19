@@ -1,6 +1,6 @@
 # Sessions: Implementation Plan
 
-**Status:** implemented on `feat/sessions` (S1–S9); awaiting user testing.
+**Status:** merged (PR #9) and tested in real use.
 
 ## Goal
 
