@@ -171,3 +171,35 @@ func TestABriefBecomesACardApprovedAsTheModeSays(t *testing.T) {
 		}
 	}
 }
+
+// A stack designer's suggestion becomes a stack card: it waits for the user
+// where the assistant assists, and autopilot applies it where it builds
+// everything. While the designer works, the gap check does not ask for a
+// stack again.
+func TestAStackSuggestionBecomesACardApprovedAsTheModeSays(t *testing.T) {
+	for _, mode := range []project.AssistantMode{project.AssistantModeAssists, project.AssistantModeBuilds} {
+		service, _ := newTestService(t)
+		service.config.Projects = gapProjects{mode: mode}
+		startedHelper(t, service, Helper{ID: "tcs_1", Kind: HelperStack})
+		if stored, _ := service.read("prj_test"); !stored.designing() {
+			t.Fatal("the stack designer is not followed")
+		}
+		watcher := Watcher{Service: service, Helpers: func(context.Context, string, Helper) (HelperState, error) {
+			return HelperState{Status: HelperProposes, Turn: 2, Text: "**Tools:** node 24.1.0"}, nil
+		}}
+		watcher.followHelpers(t.Context(), "prj_test")
+		stored, _ := service.read("prj_test")
+		card := stored.Actions[len(stored.Actions)-1]
+		if card.Type != featureartifact.AssistantApplyStack || card.Helper != "tcs_1" || card.Status != ActionProposed ||
+			card.Description != "**Tools:** node 24.1.0" {
+			t.Fatalf("card = %+v", card)
+		}
+		applied, err := service.autopilotActions(t.Context(), "prj_test")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if builds := mode == project.AssistantModeBuilds; (len(applied) == 1 && applied[0].ID == card.ID) != builds {
+			t.Fatalf("%s: autopilot applied %+v", mode, applied)
+		}
+	}
+}

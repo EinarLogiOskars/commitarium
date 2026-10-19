@@ -540,7 +540,11 @@ function ActionCard({
                             ? "Write the brief for a work order"
                             : action.type === "accept_brief"
                               ? `Brief: ${action.title}`
-                              : "Switch models";
+                              : action.type === "design_stack"
+                                ? "Design the stack"
+                                : action.type === "apply_stack"
+                                  ? "Suggested stack"
+                                  : "Switch models";
   const models = [
     action.lead_model &&
       `Lead ${action.lead_agent ? agentName(agents, action.lead_agent) + " · " : ""}${modelName(action.lead_model)}`,
@@ -556,7 +560,7 @@ function ActionCard({
         {!pending && <span className="pill">{STATUS_LABEL[action.status]}</span>}
       </div>
       {action.description &&
-        (action.type === "accept_brief" ? (
+        (action.type === "accept_brief" || action.type === "apply_stack" ? (
           <div className="assistant-action__desc">
             <Markdown text={action.description} />
           </div>
@@ -680,6 +684,9 @@ function ActionCard({
           <li>Its brief is written first; you review it before it starts</li>
         )}
         {action.type === "accept_brief" && <li>Accepting makes the work order ready to start</li>}
+        {action.type === "design_stack" && (
+          <li>An agent suggests the tools and services the app runs on; you review it first</li>
+        )}
         {action.type === "set_up_stack" && (
           <li>The stack the vision recommends, or the one the code already uses</li>
         )}
@@ -782,6 +789,8 @@ const APPLY_LABEL: Record<AssistantAction["type"], string> = {
   answer_helper: "Send answer",
   write_brief: "Write brief",
   accept_brief: "Accept",
+  design_stack: "Design stack",
+  apply_stack: "Apply",
 };
 
 const STATUS_LABEL: Record<AssistantAction["status"], string> = {
@@ -905,6 +914,20 @@ function AppliedLine({ action }: { action: AssistantAction }) {
     return (
       <p className="muted assistant__applied">
         {action.status === "applied" ? "✓ Answered" : "Answering"}: {action.guidance}
+      </p>
+    );
+  }
+  if (action.type === "design_stack" || action.type === "apply_stack") {
+    const done = action.status === "applied";
+    return (
+      <p className="muted assistant__applied">
+        {action.type === "apply_stack"
+          ? done
+            ? "✓ Set up the stack"
+            : "Setting up the stack…"
+          : done
+            ? "✓ Designing the stack"
+            : "Designing the stack…"}
       </p>
     );
   }

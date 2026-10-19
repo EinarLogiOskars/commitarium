@@ -191,6 +191,10 @@ func (stored *record) propose(helper Helper, text string, now time.Time) {
 		card.Type, card.WorkOrderID, card.Title = featureartifact.AssistantAcceptBrief, helper.WorkOrderID, helper.Title
 		card.Reason = "The brief writer wrote it from what you and the assistant settled."
 		stored.addEvent(fmt.Sprintf("The brief for “%s” is ready.", helper.Title), now)
+	case HelperStack:
+		card.Type = featureartifact.AssistantApplyStack
+		card.Reason = "The stack designer suggested it for the project."
+		stored.addEvent("A stack is suggested for the project.", now)
 	default:
 		return
 	}
@@ -213,6 +217,13 @@ func (stored *record) propose(helper Helper, text string, now time.Time) {
 func (stored record) writing(workOrderID string) bool {
 	return slices.ContainsFunc(stored.Helpers, func(helper Helper) bool {
 		return helper.WorkOrderID == workOrderID && !helper.Done
+	})
+}
+
+// designing reports whether the stack designer still works on the stack.
+func (stored record) designing() bool {
+	return slices.ContainsFunc(stored.Helpers, func(helper Helper) bool {
+		return helper.Kind == HelperStack && !helper.Done
 	})
 }
 

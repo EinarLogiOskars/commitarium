@@ -336,7 +336,7 @@ func (service *Service) autopilotActions(ctx context.Context, scope string) ([]A
 			// Building everything, the assistant may finish the vision.
 			inGoal = builds && !stored.Goal.active()
 		case featureartifact.AssistantSetUpPreview, featureartifact.AssistantWriteVision,
-			featureartifact.AssistantSetUpStack:
+			featureartifact.AssistantSetUpStack, featureartifact.AssistantDesignStack, featureartifact.AssistantApplyStack:
 			// An app that does not run, a project without a vision or a stack,
 			// is the assistant's to fix when it builds everything (ADR-024,
 			// ADR-027, ADR-028).

@@ -176,9 +176,10 @@ func findGaps(state projectState, stored record) []gap {
 		gaps = append(gaps, gap{gapVision, "The project has no vision yet. Propose write_vision with what it is for, " +
 			"from the user's words, your notes, and the repository."})
 	}
-	if !state.StackReady && !state.SettingUp && (state.Vision != nil || state.HasCode) {
+	if !state.StackReady && !state.SettingUp && !stored.designing() && (state.Vision != nil || state.HasCode) {
 		gaps = append(gaps, gap{gapStack, "Its stack is not set up. Propose set_up_stack: it sets the project up on " +
-			"the stack the vision recommends, or detects the stack of the code."})
+			"the stack the vision recommends, or detects the stack of the code. When the vision names no stack, " +
+			"propose design_stack."})
 	}
 	if state.Vision != nil && state.StackReady && !stored.Goal.active() {
 		if level, open := openItems(*state.Vision, state.Features); open > 0 {

@@ -140,7 +140,7 @@ func OutputJSONSchema(contract OutputContract) any {
 		action := objectSchema(
 			map[string]any{
 				"type": map[string]any{
-					"type": "string", "enum": []string{"create_work_order", "start_work_order", "change_models", "add_vision_item", "start_autopilot", "continue_work_order", "recover_work_order", "close_work_order", "create_app", "set_up_preview", "write_vision", "set_up_stack", "answer_helper", "write_brief"},
+					"type": "string", "enum": []string{"create_work_order", "start_work_order", "change_models", "add_vision_item", "start_autopilot", "continue_work_order", "recover_work_order", "close_work_order", "create_app", "set_up_preview", "write_vision", "set_up_stack", "answer_helper", "write_brief", "design_stack"},
 				},
 				"reason":               text,
 				"title":                text,

@@ -603,7 +603,8 @@ func (service *Service) Resolve(ctx context.Context, scope, actionID string, sta
 		if status == ActionApplied && created.Helper != nil {
 			stored.follow(*created.Helper)
 		}
-		if status == ActionApplied && action.Type == featureartifact.AssistantAcceptBrief {
+		if status == ActionApplied && (action.Type == featureartifact.AssistantAcceptBrief ||
+			action.Type == featureartifact.AssistantApplyStack) {
 			// An accepted result ends its helper's work.
 			for index := range stored.Helpers {
 				if stored.Helpers[index].ID == action.Helper {

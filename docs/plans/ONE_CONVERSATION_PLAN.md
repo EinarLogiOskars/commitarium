@@ -1,6 +1,11 @@
 # One Conversation: Implementation Plan
 
 **Status:** proposed 2026-10-19 ([ADR-035](../adr/0035-talk-to-the-assistant-not-the-agents.md)).
+O1–O3 built, with three departures: `answer_helper` is sent without a card
+in both modes, since it changes nothing in the project; `create_work_order`
+takes `brief`, so a new work order is created as a draft and its brief
+written first; and brief and stack cards already render in the drawer,
+under the line that announces them (O4 keeps the focus).
 
 ## Problem
 

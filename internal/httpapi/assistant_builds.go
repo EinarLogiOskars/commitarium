@@ -166,6 +166,76 @@ func (api *API) applyAcceptBrief(
 	return fmt.Sprintf("“%s” is ready to start.", action.Title), true
 }
 
+// applyDesignStack has the stack designer suggest the project's stack on
+// the assistant's agent, or check the stack of the code an imported
+// repository has (ADR-035).
+func (api *API) applyDesignStack(
+	w http.ResponseWriter, r *http.Request, projectID string, action conversations.Action,
+) (string, *conversations.Helper, bool) {
+	ctx := r.Context()
+	if api.toolchains == nil || api.toolchainAssistant == nil {
+		writeError(w, http.StatusServiceUnavailable, "toolchain_assistant_unavailable", "designing a stack needs real agents")
+		return "", nil, false
+	}
+	manifest, err := api.projectToolchain(ctx, projectID)
+	if err != nil {
+		api.writeToolchainError(w, projectID, "design the stack for the assistant", err)
+		return "", nil, false
+	}
+	if manifest.Status == toolchain.StatusConfigured {
+		writeError(w, http.StatusConflict, "stack_exists", "the stack is set up already")
+		return "", nil, false
+	}
+	request := startToolchainAssistantRequest{Message: action.Description, Purpose: toolchain.AssistantPurposeDesignStack}
+	result := "Designing the stack."
+	if overview, err := api.projects.GetRepositoryOverview(ctx, projectID); err == nil && overview.HasCode() {
+		request.Purpose, result = toolchain.AssistantPurposeVerifyRepository, "Checking the stack the code uses."
+	} else if request.Message == "" {
+		writeError(w, http.StatusBadRequest, "stack_needs_description",
+			"describe in description what the app needs, so the stack designer can suggest a stack")
+		return "", nil, false
+	}
+	providers, model, err := api.assistantAgent(ctx)
+	if err != nil {
+		if !writeChoiceError(w, err) {
+			writeConversationError(w, err)
+		}
+		return "", nil, false
+	}
+	request.Agent, request.Model = providers.LeadAgent, model
+	var session toolchain.AssistantSession
+	if err := api.callOwn(ctx, http.MethodPost, "/api/v1/projects/"+url.PathEscape(projectID)+"/toolchain/assistant-sessions",
+		"assistant-"+action.ID, request, &session); err != nil {
+		writeError(w, http.StatusConflict, "stack_not_started", "the stack designer could not be started: "+err.Error())
+		return "", nil, false
+	}
+	return result, &conversations.Helper{ID: session.ID, Kind: conversations.HelperStack}, true
+}
+
+// applyStack applies the stack the stack designer suggested, as the Stack
+// page's Apply does.
+func (api *API) applyStack(
+	w http.ResponseWriter, r *http.Request, projectID string, action conversations.Action,
+) (string, bool) {
+	helper := conversations.Helper{ID: action.Helper, Kind: conversations.HelperStack}
+	var manifest toolchain.Manifest
+	if err := api.callOwn(r.Context(), http.MethodPost, helperPath(projectID, helper)+"/apply", "assistant-"+action.ID,
+		nil, &manifest); err != nil {
+		writeError(w, http.StatusConflict, "stack_not_applied", "the stack could not be applied: "+err.Error())
+		return "", false
+	}
+	return "The stack is set up: " + toolList(manifest.Tools) + ".", true
+}
+
+func toolList(tools map[string]string) string {
+	listed := make([]string, 0, len(tools))
+	for tool, version := range tools {
+		listed = append(listed, tool+" "+version)
+	}
+	sort.Strings(listed)
+	return strings.Join(listed, ", ")
+}
+
 // helperFinder finds a helper the assistant started.
 type helperFinder interface {
 	LookUpHelper(ctx context.Context, scope, id string) (conversations.Helper, error)
@@ -265,9 +335,40 @@ func HelperReader(handler http.Handler) conversations.HelperReader {
 				state.Status = conversations.HelperWorking
 			}
 			return state, nil
+		case conversations.HelperStack:
+			var session toolchain.AssistantSession
+			if found, err := readOwn(ctx, handler, helperPath(projectID, helper), &session); err != nil || !found {
+				return conversations.HelperState{Status: conversations.HelperFinished}, err
+			}
+			state := conversations.HelperState{Turn: len(session.Messages)}
+			switch session.Status {
+			case toolchain.AssistantStatusWaitingForUser:
+				state.Status, state.Text = conversations.HelperAsks, session.Message
+			case toolchain.AssistantStatusProposalReady:
+				state.Status, state.Text = conversations.HelperProposes, stackText(session)
+			case toolchain.AssistantStatusApplied:
+				state.Status = conversations.HelperFinished
+			case toolchain.AssistantStatusFailed:
+				state.Status, state.Text = conversations.HelperFailed, session.Message
+			default:
+				state.Status = conversations.HelperWorking
+			}
+			return state, nil
 		}
 		return conversations.HelperState{}, fmt.Errorf("unknown helper kind %q", helper.Kind)
 	}
+}
+
+// stackText is a suggested stack in plain words, for its card.
+func stackText(session toolchain.AssistantSession) string {
+	text := "**Tools:** " + toolList(session.Proposal.Tools)
+	if len(session.Proposal.Services) > 0 {
+		text += "\n\n**Services:** " + strings.Join(session.Proposal.Services, ", ")
+	}
+	if message := strings.TrimSpace(session.Message); message != "" {
+		text += "\n\n" + message
+	}
+	return text
 }
 
 // briefText is a brief in plain words, for its card.
@@ -327,12 +428,7 @@ func (api *API) applySetUpStack(
 		return "", "", false
 	}
 	if manifest.Status == toolchain.StatusConfigured {
-		tools := make([]string, 0, len(manifest.Tools))
-		for tool, version := range manifest.Tools {
-			tools = append(tools, tool+" "+version)
-		}
-		sort.Strings(tools)
-		return "The stack is set up: " + strings.Join(tools, ", ") + ".", "", true
+		return "The stack is set up: " + toolList(manifest.Tools) + ".", "", true
 	}
 	var presets []string
 	frameworks := ""

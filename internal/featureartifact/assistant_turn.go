@@ -66,6 +66,14 @@ const (
 	// makes the work order Ready. Commitarium proposes it from the helper's
 	// result; the assistant never does.
 	AssistantAcceptBrief AssistantActionType = "accept_brief"
+	// AssistantDesignStack has the stack designer suggest the project's
+	// stack from Description, or check the stack of an imported repository's
+	// code (ADR-035).
+	AssistantDesignStack AssistantActionType = "design_stack"
+	// AssistantApplyStack applies the stack the stack designer suggested.
+	// Commitarium proposes it from the helper's result; the assistant never
+	// does.
+	AssistantApplyStack AssistantActionType = "apply_stack"
 )
 
 // AssistantAction is one proposed action. Fields that do not apply to its
@@ -239,6 +247,10 @@ func (action AssistantAction) validate() error {
 	case AssistantWriteBrief:
 		if action.WorkOrderID == "" || action.Description == "" || len(action.Description) > MaxGoalBytes {
 			return fmt.Errorf("writing a brief needs a work order and a bounded description")
+		}
+	case AssistantDesignStack:
+		if len(action.Description) > MaxGoalBytes {
+			return fmt.Errorf("the stack's description is too long")
 		}
 	case AssistantStartAutopilot:
 		if action.Priority < 0 || action.Priority > maxVisionPriority {

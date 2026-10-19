@@ -354,6 +354,10 @@ func (api *API) approveConversationActionHandler(w http.ResponseWriter, r *http.
 		result, helper, ok = api.applyWriteBrief(w, r, scope, action.WorkOrderID, action.Description, "assistant-"+action.ID)
 	case featureartifact.AssistantAcceptBrief:
 		result, ok = api.applyAcceptBrief(w, r, scope, action)
+	case featureartifact.AssistantDesignStack:
+		result, helper, ok = api.applyDesignStack(w, r, scope, action)
+	case featureartifact.AssistantApplyStack:
+		result, ok = api.applyStack(w, r, scope, action)
 	case featureartifact.AssistantStartWorkOrder:
 		result, ok = api.applyStartWorkOrder(w, r, scope, action)
 	case featureartifact.AssistantChangeModels:

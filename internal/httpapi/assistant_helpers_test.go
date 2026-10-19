@@ -11,6 +11,7 @@ import (
 	"github.com/EinarLogiOskars/commitarium/internal/feature"
 	"github.com/EinarLogiOskars/commitarium/internal/featureartifact"
 	"github.com/EinarLogiOskars/commitarium/internal/project"
+	"github.com/EinarLogiOskars/commitarium/internal/toolchain"
 	"github.com/EinarLogiOskars/commitarium/internal/vision"
 )
 
@@ -217,5 +218,75 @@ func TestAcceptingABriefCardMakesTheWorkOrderReady(t *testing.T) {
 	approveCard(t, briefHandler(stub, clarifier), `{}`)
 	if clarifier.acceptKey != "assistant-act_1" || stub.resolvedResult != "“Sort the shelf” is ready to start." {
 		t.Fatalf("accept key %q, result %q", clarifier.acceptKey, stub.resolvedResult)
+	}
+}
+
+func stackHandler(stub ConversationService, designer *toolchainAssistantStub, overview project.RepositoryOverview) http.Handler {
+	projects := &recordingProjectService{getByIDResult: project.Project{ID: "prj_test"}, overviewResult: overview}
+	stacks := &recordingToolchainService{manifest: toolchain.Manifest{ProjectID: "prj_test", Status: toolchain.StatusNeedsSetup}}
+	return NewWithWorkspaceRealWorkflowDeletionAndModels(projects, &recordingFeatureService{}, nil, nil, nil, nil, nil, nil, nil,
+		nil, nil, nil, stub, stacks, designer, testAgents())
+}
+
+// design_stack starts the stack designer on the assistant's agent: it
+// suggests a stack from what the app needs, or checks the stack of the code
+// an imported repository has.
+func TestDesigningAStackStartsTheStackDesigner(t *testing.T) {
+	for name, test := range map[string]struct {
+		overview project.RepositoryOverview
+		purpose  toolchain.AssistantPurpose
+		result   string
+	}{
+		"a new app": {purpose: toolchain.AssistantPurposeDesignStack, result: "Designing the stack."},
+		"an imported repository": {overview: project.RepositoryOverview{Tree: []project.RepositoryTreeEntry{{Path: "go.mod"}}},
+			purpose: toolchain.AssistantPurposeVerifyRepository, result: "Checking the stack the code uses."},
+	} {
+		t.Run(name, func(t *testing.T) {
+			stub := &helperConversations{conversationStub: &conversationStub{
+				settings: conversations.Settings{Agent: "codex", Model: "gpt-6-luna"},
+				action: conversations.Action{ID: "act_1", Status: conversations.ActionProposed, AssistantAction: featureartifact.AssistantAction{
+					Type: featureartifact.AssistantDesignStack, Reason: "No stack", Description: "A meal planner with accounts.",
+				}},
+			}}
+			designer := &toolchainAssistantStub{session: toolchain.AssistantSession{ID: "tcs_1", Status: toolchain.AssistantStatusRunning}}
+			approveCard(t, stackHandler(stub, designer, test.overview), `{}`)
+			if designer.purpose != test.purpose || designer.agent != "codex" || designer.opening != "A meal planner with accounts." {
+				t.Fatalf("designer on %s for %s with %q", designer.agent, designer.purpose, designer.opening)
+			}
+			if helper := stub.started; helper == nil || helper.ID != "tcs_1" || helper.Kind != conversations.HelperStack ||
+				stub.resolvedResult != test.result {
+				t.Fatalf("helper = %+v, result = %q", helper, stub.resolvedResult)
+			}
+		})
+	}
+}
+
+// A stack card's Apply configures the suggested stack through the Stack
+// page's own apply.
+func TestApplyingAStackCardConfiguresTheStack(t *testing.T) {
+	stub := &helperConversations{conversationStub: &conversationStub{action: conversations.Action{
+		ID: "act_1", Status: conversations.ActionProposed, AssistantAction: featureartifact.AssistantAction{
+			Type: featureartifact.AssistantApplyStack, Reason: "Suggested", Helper: "tcs_1", Description: "**Tools:** node 24",
+		},
+	}}}
+	designer := &toolchainAssistantStub{manifest: toolchain.Manifest{ProjectID: "prj_test", Status: toolchain.StatusConfigured,
+		Tools: map[string]string{"node": "24.1.0", "python": "3.14.7"}}}
+	approveCard(t, stackHandler(stub, designer, project.RepositoryOverview{}), `{}`)
+	if designer.applied != 1 || stub.resolvedResult != "The stack is set up: node 24.1.0, python 3.14.7." {
+		t.Fatalf("applied %d, result %q", designer.applied, stub.resolvedResult)
+	}
+}
+
+// The watcher reads a stack designer's suggestion as a result for a card.
+func TestTheHelperReaderReadsAStackSuggestion(t *testing.T) {
+	designer := &toolchainAssistantStub{session: toolchain.AssistantSession{ID: "tcs_1", ProjectID: "prj_test",
+		Status: toolchain.AssistantStatusProposalReady, Message: "Node for the app, Postgres for accounts.",
+		Proposal: &toolchain.Suggestion{Tools: map[string]string{"node": "24.1.0"}, Services: []string{"postgresql"}},
+		Messages: []toolchain.AssistantMessage{{Role: "user"}, {Role: "assistant"}}}}
+	read := HelperReader(stackHandler(&conversationStub{}, designer, project.RepositoryOverview{}))
+	state, err := read(t.Context(), "prj_test", conversations.Helper{ID: "tcs_1", Kind: conversations.HelperStack})
+	if err != nil || state.Status != conversations.HelperProposes || state.Turn != 2 ||
+		state.Text != "**Tools:** node 24.1.0\n\n**Services:** postgresql\n\nNode for the app, Postgres for accounts." {
+		t.Fatalf("state = %+v, %v", state, err)
 	}
 }

@@ -35,7 +35,9 @@ export type AssistantActionType =
   | "set_up_stack"
   | "answer_helper"
   | "write_brief"
-  | "accept_brief";
+  | "accept_brief"
+  | "design_stack"
+  | "apply_stack";
 
 export interface AssistantAction {
   id: string;
