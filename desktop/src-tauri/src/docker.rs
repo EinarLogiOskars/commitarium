@@ -564,9 +564,10 @@ pub(crate) fn stack_up_with_manager(manager: &profiles::ProfileManager) -> Resul
     start_forgejo()?;
     preview::sweep_leftovers();
     let forgejo_changed = bootstrap::provision_forgejo(&file, PROJECT_NAME)?;
+    let agents_changed = refresh_agent_identities(&file);
     let credentials_changed = transport_changed || forgejo_changed;
     start_core_services(credentials_changed)?;
-    reconcile_agent_workers(manager, credentials_changed)
+    reconcile_agent_workers(manager, credentials_changed || agents_changed)
 }
 
 /// Tear the whole Commitarium stack down (project-wide, all profiles).
@@ -603,9 +604,26 @@ fn stack_update_with_manager(manager: &profiles::ProfileManager) -> Result<(), S
     compose_base(PROVIDER_PROFILES, &["pull"])?;
     start_forgejo()?;
     let forgejo_changed = bootstrap::provision_forgejo(&file, PROJECT_NAME)?;
+    let agents_changed = refresh_agent_identities(&file);
     let credentials_changed = transport_changed || forgejo_changed;
     start_core_services(credentials_changed)?;
-    reconcile_agent_workers(manager, credentials_changed)
+    reconcile_agent_workers(manager, credentials_changed || agents_changed)
+}
+
+/// Bring the known agents' Forgejo tokens up to date (scopes, the one-time
+/// rotation, revoking the tokens they replaced) as soon as Forgejo is ready,
+/// so it does not depend on the later startup steps succeeding. The agents
+/// come from the coordinator or, while it is still stopped, its last list;
+/// reconciling the workers repeats this for any agent missing here. A
+/// failure is logged and retried by that step and on the next start.
+fn refresh_agent_identities(file: &Path) -> bool {
+    let agents = agents::current().unwrap_or_default();
+    bootstrap::provision_agent_identities(file, PROJECT_NAME, &agents, true).unwrap_or_else(
+        |error| {
+            eprintln!("[bootstrap] could not refresh agent Forgejo tokens: {error}");
+            false
+        },
+    )
 }
 
 fn start_forgejo() -> Result<(), String> {

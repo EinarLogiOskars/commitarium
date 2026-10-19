@@ -605,6 +605,7 @@ pub(crate) fn provision_agent_identities(
     for identity in &identities {
         ready &= if refresh {
             token_is_current(identity)?
+                && !secret_is_ready(&token_superseded_path(&identity.token_path))?
         } else {
             secret_is_ready(&identity.token_path)?
         };
@@ -630,8 +631,8 @@ trait ForgejoAdmin {
         token_name: &str,
         scopes: &str,
     ) -> Result<Zeroizing<Vec<u8>>, String>;
-    /// Delete the user's Commitarium tokens other than `keep`.
-    fn revoke_tokens_except(&mut self, username: &str, keep: &str) -> Result<(), String>;
+    /// Delete the user's Commitarium tokens ending in one of `suffixes`.
+    fn revoke_tokens(&mut self, username: &str, suffixes: &[&str]) -> Result<(), String>;
 }
 
 fn wait_for_users(admin: &mut impl ForgejoAdmin) -> Result<HashSet<String>, String> {
@@ -646,10 +647,12 @@ fn wait_for_users(admin: &mut impl ForgejoAdmin) -> Result<HashSet<String>, Stri
     Err(last_error)
 }
 
-/// Give each identity a user and a current token. A new token is written
-/// before the ones it supersedes are revoked, so the identity always has a
-/// working token; its markers are written only once the revocation worked,
-/// so a failed revocation is retried with a fresh token on the next start.
+/// Give each identity a user and a current token. The token a new one
+/// replaces is recorded before the new one is written and revoked only
+/// after, so the identity always has a working token, and a failed
+/// revocation stays recorded and is retried on the next refresh. Only the
+/// replaced token is revoked: another installation sharing this Forgejo may
+/// use the identity's other tokens.
 fn ensure_forgejo_credentials(
     admin: &mut impl ForgejoAdmin,
     mut users: HashSet<String>,
@@ -666,31 +669,62 @@ fn ensure_forgejo_credentials(
             true
         };
         let path = &identity.token_path;
-        if !created && secret_is_ready(path)? && (!refresh || token_is_current(identity)?) {
-            continue;
-        }
-        let token_name = format!("{TOKEN_NAME_PREFIX}{}", random_hex(8)?);
-        let token = admin.generate_token(&identity.username, &token_name, identity.scopes)?;
-        validate_secret_bytes(&token)?;
-        write_secret(path, &token)?;
-        changed = true;
-        let scope_marker = token_scope_marker_path(path);
-        let rotation_marker = token_rotation_marker_path(path);
-        remove_marker(&scope_marker)?;
-        remove_marker(&rotation_marker)?;
-        // A user created just now has no older tokens to revoke.
-        if !created {
-            if let Err(error) = admin.revoke_tokens_except(&identity.username, &token_name) {
-                eprintln!("[bootstrap] {error}; retrying on the next start");
-                continue;
+        let superseded = token_superseded_path(path);
+        let present = secret_is_ready(path)?;
+        if created || !present || (refresh && !token_is_current(identity)?) {
+            if !created && present {
+                record_superseded_token(path, &superseded)?;
             }
+            let token_name = format!("{TOKEN_NAME_PREFIX}{}", random_hex(8)?);
+            let token = admin.generate_token(&identity.username, &token_name, identity.scopes)?;
+            validate_secret_bytes(&token)?;
+            write_secret(path, &token)?;
+            write_secret(&token_scope_marker_path(path), identity.scopes.as_bytes())?;
+            if let Some(rotation) = identity.rotation {
+                write_secret(&token_rotation_marker_path(path), rotation.as_bytes())?;
+            }
+            changed = true;
         }
-        write_secret(&scope_marker, identity.scopes.as_bytes())?;
-        if let Some(rotation) = identity.rotation {
-            write_secret(&rotation_marker, rotation.as_bytes())?;
+        if refresh && secret_is_ready(&superseded)? {
+            let recorded = fs::read_to_string(&superseded)
+                .map_err(|_| format!("could not read private file {}", superseded.display()))?;
+            let suffixes: Vec<&str> = recorded.trim().split(',').collect();
+            match admin.revoke_tokens(&identity.username, &suffixes) {
+                Ok(()) => remove_marker(&superseded)?,
+                Err(error) => eprintln!("[bootstrap] {error}; retrying on the next start"),
+            }
         }
     }
     Ok(changed)
+}
+
+/// Add the current token's last eight characters, which Forgejo lists for
+/// every token, to the identity's tokens awaiting revocation.
+fn record_superseded_token(token_path: &Path, superseded: &Path) -> Result<(), String> {
+    let token = fs::read(token_path)
+        .map(Zeroizing::new)
+        .map_err(|_| format!("could not read private file {}", token_path.display()))?;
+    let token = trim_ascii_whitespace(&token);
+    let suffix = String::from_utf8_lossy(&token[token.len().saturating_sub(8)..]).into_owned();
+    let mut recorded = if secret_is_ready(superseded)? {
+        fs::read_to_string(superseded)
+            .map_err(|_| format!("could not read private file {}", superseded.display()))?
+            .trim()
+            .to_string()
+    } else {
+        String::new()
+    };
+    if !recorded.split(',').any(|known| known == suffix) {
+        if !recorded.is_empty() {
+            recorded.push(',');
+        }
+        recorded.push_str(&suffix);
+    }
+    write_secret(superseded, recorded.as_bytes())
+}
+
+fn token_superseded_path(token_path: &Path) -> PathBuf {
+    token_marker_path(token_path, ".superseded")
 }
 
 fn token_scope_marker_path(token_path: &Path) -> PathBuf {
@@ -843,7 +877,7 @@ impl ForgejoAdmin for DockerForgejoAdmin {
     /// Forgejo lists and deletes a user's tokens only with that user's basic
     /// auth, and the bot users' random passwords were never kept, so a fresh
     /// one is set and used once. It is never written anywhere.
-    fn revoke_tokens_except(&mut self, username: &str, keep: &str) -> Result<(), String> {
+    fn revoke_tokens(&mut self, username: &str, suffixes: &[&str]) -> Result<(), String> {
         let failed = || format!("could not revoke older Forgejo tokens for {username}");
         let password = Zeroizing::new(random_hex(32)?);
         let status = self
@@ -867,7 +901,6 @@ impl ForgejoAdmin for DockerForgejoAdmin {
         }
         let base_url = forgejo_host_base_url()?;
         let username = username.to_string();
-        let keep = keep.to_string();
         // Callers include async commands running on the runtime's own
         // threads, where blocking on it would panic; a scoped thread is
         // always safe to block.
@@ -875,7 +908,7 @@ impl ForgejoAdmin for DockerForgejoAdmin {
             scope
                 .spawn(|| {
                     tauri::async_runtime::block_on(revoke_tokens_over_api(
-                        base_url, &username, &password, &keep,
+                        base_url, &username, &password, suffixes,
                     ))
                 })
                 .join()
@@ -885,18 +918,19 @@ impl ForgejoAdmin for DockerForgejoAdmin {
     }
 }
 
-/// Delete every `commitarium-bootstrap-` token of the user except `keep`,
-/// authenticating as the user.
+/// Delete the user's `commitarium-bootstrap-` tokens ending in one of
+/// `suffixes`, authenticating as the user.
 async fn revoke_tokens_over_api(
     base_url: Url,
     username: &str,
     password: &str,
-    keep: &str,
+    suffixes: &[&str],
 ) -> Result<(), String> {
     #[derive(Deserialize)]
     struct AccessToken {
         id: u64,
         name: String,
+        token_last_eight: String,
     }
     let client = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
@@ -935,7 +969,10 @@ async fn revoke_tokens_over_api(
         superseded.extend(
             tokens
                 .into_iter()
-                .filter(|token| token.name.starts_with(TOKEN_NAME_PREFIX) && token.name != keep)
+                .filter(|token| {
+                    token.name.starts_with(TOKEN_NAME_PREFIX)
+                        && suffixes.contains(&token.token_last_eight.as_str())
+                })
                 .map(|token| token.id),
         );
         if last {
@@ -1120,8 +1157,8 @@ mod tests {
         created: Vec<String>,
         generated: Vec<(String, String)>,
         tokens: HashMap<String, Vec<u8>>,
-        /// The names of each user's tokens Forgejo still accepts.
-        live: HashMap<String, Vec<String>>,
+        /// Each user's tokens Forgejo still accepts: name and last eight.
+        live: HashMap<String, Vec<(String, String)>>,
         fail_revoke: bool,
     }
 
@@ -1144,27 +1181,38 @@ mod tests {
         ) -> Result<Zeroizing<Vec<u8>>, String> {
             self.generated
                 .push((username.to_string(), scopes.to_string()));
+            let token = self.tokens.get(username).cloned().unwrap_or_else(|| {
+                format!("token-{username}-{:08}", self.generated.len()).into_bytes()
+            });
             self.live
                 .entry(username.to_string())
                 .or_default()
-                .push(token_name.to_string());
-            Ok(Zeroizing::new(
-                self.tokens
-                    .get(username)
-                    .cloned()
-                    .unwrap_or_else(|| format!("token-{username}").into_bytes()),
-            ))
+                .push((token_name.to_string(), last_eight(&token)));
+            Ok(Zeroizing::new(token))
         }
 
-        fn revoke_tokens_except(&mut self, username: &str, keep: &str) -> Result<(), String> {
+        fn revoke_tokens(&mut self, username: &str, suffixes: &[&str]) -> Result<(), String> {
             if self.fail_revoke {
                 return Err("Forgejo is unavailable".to_string());
             }
-            if let Some(names) = self.live.get_mut(username) {
-                names.retain(|name| !name.starts_with(TOKEN_NAME_PREFIX) || name == keep);
+            if let Some(tokens) = self.live.get_mut(username) {
+                tokens.retain(|(name, suffix)| {
+                    !name.starts_with(TOKEN_NAME_PREFIX) || !suffixes.contains(&suffix.as_str())
+                });
             }
             Ok(())
         }
+    }
+
+    fn last_eight(token: &[u8]) -> String {
+        String::from_utf8_lossy(&token[token.len() - 8..]).into_owned()
+    }
+
+    fn live_names(admin: &FakeAdmin, identity: &ForgejoIdentity) -> Vec<String> {
+        admin.live[&identity.username]
+            .iter()
+            .map(|(name, _)| name.clone())
+            .collect()
     }
 
     fn write_current_forgejo_token(identity: &ForgejoIdentity, token: &[u8]) {
@@ -1179,15 +1227,20 @@ mod tests {
         }
     }
 
-    /// An identity as a release before the rotation left it: a token, its
-    /// scopes marker, and an older Commitarium token still live in Forgejo.
+    /// An identity as a release before the rotation left it: its exposed
+    /// token and scopes marker on disk, and in Forgejo that token, another
+    /// installation's token, and a token Commitarium did not create.
     fn write_unrotated_forgejo_token(admin: &mut FakeAdmin, identity: &ForgejoIdentity) {
         admin.users.insert(identity.username.clone());
         admin.live.insert(
             identity.username.clone(),
             vec![
-                format!("{TOKEN_NAME_PREFIX}old"),
-                "personal-token".to_string(),
+                (
+                    format!("{TOKEN_NAME_PREFIX}old"),
+                    last_eight(b"exposed-token"),
+                ),
+                (format!("{TOKEN_NAME_PREFIX}other"), "0th3r1n5".to_string()),
+                ("personal".to_string(), "p3rs0na1".to_string()),
             ],
         );
         write_current_forgejo_token(identity, b"exposed-token");
@@ -1380,7 +1433,7 @@ mod tests {
     }
 
     #[test]
-    fn a_new_token_revokes_the_identitys_older_commitarium_tokens() {
+    fn a_new_token_revokes_only_the_token_it_replaced() {
         let root = tempfile::tempdir().expect("temp root");
         let identities = test_identities(root.path());
         let lead = &identities[1];
@@ -1394,17 +1447,18 @@ mod tests {
                 .expect("replace token")
         );
 
+        let new_token = fs::read(&lead.token_path).expect("new token");
+        assert_ne!(new_token, b"exposed-token");
         let live = &admin.live[&lead.username];
-        assert_eq!(live.len(), 2);
-        assert!(live.contains(&"personal-token".to_string()));
+        assert_eq!(live.len(), 3);
+        assert!(!live_names(&admin, lead).contains(&format!("{TOKEN_NAME_PREFIX}old")));
+        assert!(live_names(&admin, lead).contains(&format!("{TOKEN_NAME_PREFIX}other")));
+        assert!(live_names(&admin, lead).contains(&"personal".to_string()));
         assert!(live
             .iter()
-            .any(|name| name.starts_with(TOKEN_NAME_PREFIX) && !name.ends_with("old")));
-        assert_eq!(
-            fs::read(&lead.token_path).expect("new token"),
-            format!("token-{}", lead.username).as_bytes()
-        );
+            .any(|(_, suffix)| *suffix == last_eight(&new_token)));
         assert!(token_is_current(lead).expect("current"));
+        assert!(!token_superseded_path(&lead.token_path).exists());
     }
 
     #[test]
@@ -1435,7 +1489,7 @@ mod tests {
                 fs::read(&identity.token_path).expect("token"),
                 b"exposed-token"
             );
-            assert!(!admin.live[&identity.username].contains(&format!("{TOKEN_NAME_PREFIX}old")));
+            assert!(!live_names(&admin, identity).contains(&format!("{TOKEN_NAME_PREFIX}old")));
         }
 
         let users = admin.users.clone();
@@ -1460,26 +1514,27 @@ mod tests {
             ensure_forgejo_credentials(&mut admin, users, &identities[1..2], true)
                 .expect("revocation failure is not fatal")
         );
-        // The new token is in place and the old one still works, so the
-        // worker is never left without a working token.
-        assert_eq!(
+        // The new token is in place and current; the replaced one is still
+        // recorded for revocation.
+        assert_ne!(
             fs::read(&lead.token_path).expect("new token"),
-            format!("token-{}", lead.username).as_bytes()
+            b"exposed-token"
         );
-        assert_eq!(admin.live[&lead.username].len(), 3);
-        let first_new = admin.live[&lead.username][2].clone();
-        assert!(!token_is_current(lead).expect("not yet current"));
+        assert!(token_is_current(lead).expect("current"));
+        assert!(live_names(&admin, lead).contains(&format!("{TOKEN_NAME_PREFIX}old")));
+        assert!(token_superseded_path(&lead.token_path).is_file());
 
         admin.fail_revoke = false;
         let users = admin.users.clone();
         assert!(
-            ensure_forgejo_credentials(&mut admin, users, &identities[1..2], true).expect("retry")
+            !ensure_forgejo_credentials(&mut admin, users, &identities[1..2], true).expect("retry")
         );
-        let live = &admin.live[&lead.username];
-        assert_eq!(live.len(), 2);
-        assert!(live.contains(&"personal-token".to_string()));
-        assert!(!live.contains(&first_new));
-        assert!(token_is_current(lead).expect("current"));
+        assert_eq!(admin.generated.len(), 1);
+        let names = live_names(&admin, lead);
+        assert_eq!(names.len(), 3);
+        assert!(!names.contains(&format!("{TOKEN_NAME_PREFIX}old")));
+        assert!(names.contains(&format!("{TOKEN_NAME_PREFIX}other")));
+        assert!(!token_superseded_path(&lead.token_path).exists());
     }
 
     #[test]
