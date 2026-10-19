@@ -247,7 +247,10 @@ func (service *Service) autopilotActions(ctx context.Context, scope string) ([]A
 	service.mu.Lock()
 	defer service.mu.Unlock()
 	stored, err := service.read(scope)
-	if err != nil || (!stored.Goal.active() && !builds) {
+	answers := slices.ContainsFunc(stored.Actions, func(action Action) bool {
+		return action.Type == featureartifact.AssistantAnswerHelper && action.Status == ActionProposed && !action.AutoTried
+	})
+	if err != nil || (!stored.Goal.active() && !builds && !answers) {
 		return nil, err
 	}
 	var goalItems []GoalItem
@@ -338,6 +341,10 @@ func (service *Service) autopilotActions(ctx context.Context, scope string) ([]A
 			// is the assistant's to fix when it builds everything (ADR-024,
 			// ADR-027, ADR-028).
 			inGoal = builds
+		case featureartifact.AssistantAnswerHelper:
+			// Answering a helper the assistant started changes nothing in
+			// the project: it is sent at once, assisting too (ADR-035).
+			inGoal = true
 		}
 		// A queued start the user did themselves is done: the work order no
 		// longer waits.
@@ -681,6 +688,9 @@ func (stored *record) addEvent(text string, at time.Time) {
 }
 
 func actionName(action featureartifact.AssistantAction) string {
+	if action.Type == featureartifact.AssistantAnswerHelper {
+		return "your answer to a helper's question"
+	}
 	if action.Title != "" {
 		return fmt.Sprintf("%q", action.Title)
 	}

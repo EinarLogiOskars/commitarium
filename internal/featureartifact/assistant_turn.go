@@ -56,6 +56,9 @@ const (
 	// AssistantSetUpStack sets the project up on the stack its vision
 	// recommends, or detects the stack of the code it has.
 	AssistantSetUpStack AssistantActionType = "set_up_stack"
+	// AssistantAnswerHelper answers a helper the assistant started (ADR-035):
+	// Guidance is the answer to the question Helper asked.
+	AssistantAnswerHelper AssistantActionType = "answer_helper"
 )
 
 // AssistantAction is one proposed action. Fields that do not apply to its
@@ -106,6 +109,8 @@ type AssistantAction struct {
 	// Autopilot starts it only once that work has merged, so two changes to
 	// the same part of the app do not run at once.
 	After string `json:"after"`
+	// Helper, for answer_helper, names the helper that asked.
+	Helper string `json:"helper"`
 }
 
 // PhaseChoices are the action's planning models and efforts (ADR-031); nil
@@ -143,7 +148,7 @@ func (turn AssistantTurn) Normalize() (AssistantTurn, error) {
 			&action.LeadAgent, &action.LeadModel, &action.ReviewerAgent, &action.ReviewerModel,
 			&action.LeadPlanModel, &action.LeadPlanEffort, &action.LeadEffort,
 			&action.ReviewerPlanModel, &action.ReviewerPlanEffort, &action.ReviewerEffort,
-			&action.WorkOrderID, &action.When, &action.How, &action.Guidance, &action.After,
+			&action.WorkOrderID, &action.When, &action.How, &action.Guidance, &action.After, &action.Helper,
 		} {
 			*field = strings.TrimSpace(*field)
 		}
@@ -216,6 +221,10 @@ func (action AssistantAction) validate() error {
 			return fmt.Errorf("writing the vision needs a bounded description of the project")
 		}
 	case AssistantSetUpStack:
+	case AssistantAnswerHelper:
+		if action.Helper == "" || action.Guidance == "" || len(action.Guidance) > MaxGoalBytes {
+			return fmt.Errorf("answering a helper needs the helper and a bounded answer in guidance")
+		}
 	case AssistantStartAutopilot:
 		if action.Priority < 0 || action.Priority > maxVisionPriority {
 			return fmt.Errorf("priority runs from 0 to %d", maxVisionPriority)

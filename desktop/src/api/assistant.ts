@@ -32,7 +32,8 @@ export type AssistantActionType =
   | "create_app"
   | "set_up_preview"
   | "write_vision"
-  | "set_up_stack";
+  | "set_up_stack"
+  | "answer_helper";
 
 export interface AssistantAction {
   id: string;
@@ -51,8 +52,11 @@ export interface AssistantAction {
   work_order_id: string;
   when: "" | "now" | "next_turn";
   /** For continue_work_order: what to tell its agents; empty retries. For
-   * set_up_preview: what fails, when the assistant knows. */
+   * set_up_preview: what fails, when the assistant knows. For answer_helper:
+   * the assistant's answer. */
   guidance?: string;
+  /** For answer_helper: the helper it answers (ADR-035). */
+  helper?: string;
   /** For add_vision_item and start_autopilot: 0 for P0, 1 for P1, and so on. */
   priority: number;
   /** For a work order to create or start: the work order ID, or the title of

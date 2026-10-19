@@ -336,6 +336,9 @@ func (api *API) approveConversationActionHandler(w http.ResponseWriter, r *http.
 	// is known only once it exists.
 	workOrderID := action.WorkOrderID
 	projectID := ""
+	// A helper the action started, whose questions and results come back to
+	// the assistant (ADR-035).
+	var helper *conversations.Helper
 	switch action.Type {
 	case featureartifact.AssistantCreateApp:
 		result, projectID, ok = api.applyCreateApp(w, r, action)
@@ -357,7 +360,9 @@ func (api *API) approveConversationActionHandler(w http.ResponseWriter, r *http.
 	case featureartifact.AssistantSetUpPreview:
 		result, workOrderID, ok = api.applySetUpPreview(w, r, scope, action)
 	case featureartifact.AssistantWriteVision:
-		result, ok = api.applyWriteVision(w, r, scope, action)
+		result, helper, ok = api.applyWriteVision(w, r, scope, action)
+	case featureartifact.AssistantAnswerHelper:
+		result, ok = api.applyAnswerHelper(w, r, scope, action)
 	case featureartifact.AssistantSetUpStack:
 		result, workOrderID, ok = api.applySetUpStack(w, r, scope)
 	case featureartifact.AssistantCloseWorkOrder:
@@ -383,7 +388,7 @@ func (api *API) approveConversationActionHandler(w http.ResponseWriter, r *http.
 	if len(chosen) > 0 {
 		result += " The user chose " + strings.Join(chosen, " and ") + "."
 	}
-	conversation, err := api.conversations.Resolve(r.Context(), scope, actionID, conversations.ActionApplied, result, conversations.Created{WorkOrderID: workOrderID, ProjectID: projectID})
+	conversation, err := api.conversations.Resolve(r.Context(), scope, actionID, conversations.ActionApplied, result, conversations.Created{WorkOrderID: workOrderID, ProjectID: projectID, Helper: helper})
 	if err != nil {
 		writeConversationError(w, err)
 		return

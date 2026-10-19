@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -70,30 +71,133 @@ func (api *API) wakeForUsersWorkOrder(ctx context.Context, created feature.Featu
 }
 
 // applyWriteVision has the vision written on the assistant's agent from the
-// action's description, as a new app's is.
+// action's description, as a new app's is. The vision writer is the
+// assistant's helper: its questions go to the assistant (ADR-035).
 func (api *API) applyWriteVision(
 	w http.ResponseWriter, r *http.Request, projectID string, action conversations.Action,
-) (string, bool) {
+) (string, *conversations.Helper, bool) {
 	ctx := r.Context()
 	if api.visions == nil {
 		writeError(w, http.StatusServiceUnavailable, "vision_unavailable", "the vision is unavailable")
-		return "", false
+		return "", nil, false
 	}
 	if _, err := api.visions.Get(ctx, projectID); err == nil {
 		writeError(w, http.StatusConflict, "vision_exists",
 			"the project has a vision already; propose add_vision_item to add to it")
-		return "", false
+		return "", nil, false
 	} else if !errors.Is(err, vision.ErrNotFound) {
 		writeVisionError(w, projectID, err)
-		return "", false
+		return "", nil, false
 	}
+	var session vision.Session
 	err := api.callOwn(ctx, http.MethodPost, "/api/v1/projects/"+url.PathEscape(projectID)+"/vision/assistant",
-		"assistant-"+action.ID, map[string]string{"mode": string(vision.ModeDescribe), "message": action.Description}, nil)
+		"assistant-"+action.ID, map[string]string{"mode": string(vision.ModeDescribe), "message": action.Description}, &session)
 	if err != nil {
 		writeError(w, http.StatusConflict, "vision_not_started", "the vision could not be started: "+err.Error())
+		return "", nil, false
+	}
+	return "Writing the vision.", &conversations.Helper{ID: session.ID, Kind: conversations.HelperVision}, true
+}
+
+// helperFinder finds a helper the assistant started.
+type helperFinder interface {
+	LookUpHelper(ctx context.Context, scope, id string) (conversations.Helper, error)
+}
+
+// applyAnswerHelper sends the assistant's answer to a helper it started,
+// through the helper's own reply endpoint, as the helper's page would.
+func (api *API) applyAnswerHelper(
+	w http.ResponseWriter, r *http.Request, projectID string, action conversations.Action,
+) (string, bool) {
+	ctx := r.Context()
+	finder, ok := api.conversations.(helperFinder)
+	if !ok {
+		writeError(w, http.StatusServiceUnavailable, "assistant_unavailable", "helpers are unavailable")
 		return "", false
 	}
-	return "Writing the vision.", true
+	helper, err := finder.LookUpHelper(ctx, projectID, action.Helper)
+	if errors.Is(err, conversations.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "helper_not_found",
+			"no helper you started goes by that name; answer only the helpers Commitarium reports")
+		return "", false
+	} else if err != nil {
+		writeConversationError(w, err)
+		return "", false
+	}
+	if err := api.callOwn(ctx, http.MethodPost, helperPath(projectID, helper)+"/messages", "assistant-"+action.ID,
+		map[string]string{"message": action.Guidance}, nil); err != nil {
+		writeError(w, http.StatusConflict, "helper_not_answered", "the helper could not be answered: "+err.Error())
+		return "", false
+	}
+	return "Answered " + helper.Name() + ".", true
+}
+
+// helperPath is the route of a helper's session.
+func helperPath(projectID string, helper conversations.Helper) string {
+	base := "/api/v1/projects/" + url.PathEscape(projectID)
+	switch helper.Kind {
+	case conversations.HelperBrief:
+		return base + "/features/" + url.PathEscape(helper.WorkOrderID) + "/assistant"
+	case conversations.HelperStack:
+		return base + "/toolchain/assistant-sessions/" + url.PathEscape(helper.ID)
+	default:
+		return base + "/vision/assistant/" + url.PathEscape(helper.ID)
+	}
+}
+
+// HelperReader reads the helpers the assistant started through handler, as
+// their own pages do: how the watcher hears their questions and results
+// (ADR-035). A helper whose session is gone is finished.
+func HelperReader(handler http.Handler) conversations.HelperReader {
+	return func(ctx context.Context, projectID string, helper conversations.Helper) (conversations.HelperState, error) {
+		switch helper.Kind {
+		case conversations.HelperVision:
+			var session vision.Session
+			if found, err := readOwn(ctx, handler, helperPath(projectID, helper), &session); err != nil || !found {
+				return conversations.HelperState{Status: conversations.HelperFinished}, err
+			}
+			state := conversations.HelperState{Turn: len(session.Messages)}
+			switch session.Status {
+			case vision.StatusWaitingForUser:
+				state.Status, state.Text = conversations.HelperAsks, lastReply(session.Messages)
+			case vision.StatusWritten:
+				state.Status = conversations.HelperFinished
+			case vision.StatusFailed:
+				state.Status = conversations.HelperFailed
+			default:
+				state.Status = conversations.HelperWorking
+			}
+			return state, nil
+		}
+		return conversations.HelperState{}, fmt.Errorf("unknown helper kind %q", helper.Kind)
+	}
+}
+
+func lastReply(messages []vision.Message) string {
+	for index := len(messages) - 1; index >= 0; index-- {
+		if messages[index].Role == "assistant" {
+			return strings.TrimSpace(messages[index].Text)
+		}
+	}
+	return ""
+}
+
+// readOwn reads one of Commitarium's own routes through handler; found is
+// false when it answers 404.
+func readOwn(ctx context.Context, handler http.Handler, path string, into any) (bool, error) {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, path, nil)
+	if err != nil {
+		return false, err
+	}
+	response := &recordedResponse{header: http.Header{}, status: http.StatusOK}
+	handler.ServeHTTP(response, request)
+	switch {
+	case response.status == http.StatusNotFound:
+		return false, nil
+	case response.status >= 300:
+		return false, fmt.Errorf("HTTP %d: %s", response.status, strings.TrimSpace(response.body.String()))
+	}
+	return true, json.Unmarshal(response.body.Bytes(), into)
 }
 
 // applySetUpStack sets the project's stack up: detected from its code when

@@ -341,7 +341,7 @@ export function AssistantDrawer({
                         </div>
                       </div>
                       {(byMessage.get(message.id) ?? []).map((action) =>
-                        builds && appliesItself(action) ? (
+                        (builds || action.type === "answer_helper") && appliesItself(action) ? (
                           <AppliedLine key={action.id} action={action} />
                         ) : (
                           <ActionCard
@@ -531,7 +531,9 @@ function ActionCard({
                       ? "Write the vision"
                       : action.type === "set_up_stack"
                         ? "Set up the stack"
-                        : "Switch models";
+                        : action.type === "answer_helper"
+                          ? "Answer a question about the work"
+                          : "Switch models";
   const models = [
     action.lead_model &&
       `Lead ${action.lead_agent ? agentName(agents, action.lead_agent) + " · " : ""}${modelName(action.lead_model)}`,
@@ -551,6 +553,9 @@ function ActionCard({
         <p className="assistant-action__desc">
           {action.guidance ? `Guidance: ${action.guidance}` : "Retries without guidance."}
         </p>
+      )}
+      {action.type === "answer_helper" && action.guidance && (
+        <p className="assistant-action__desc">Answer: {action.guidance}</p>
       )}
       {action.type === "set_up_preview" && (
         <p className="assistant-action__desc">
@@ -733,6 +738,7 @@ const APPLY_LABEL: Record<AssistantAction["type"], string> = {
   set_up_preview: "Set up preview",
   write_vision: "Write vision",
   set_up_stack: "Set up stack",
+  answer_helper: "Send answer",
 };
 
 const STATUS_LABEL: Record<AssistantAction["status"], string> = {
@@ -852,6 +858,13 @@ function isPremium(model: string, families: string[]): boolean {
 
 // Where it builds everything, what the assistant set going, said in a line.
 function AppliedLine({ action }: { action: AssistantAction }) {
+  if (action.type === "answer_helper") {
+    return (
+      <p className="muted assistant__applied">
+        {action.status === "applied" ? "✓ Answered" : "Answering"}: {action.guidance}
+      </p>
+    );
+  }
   const what =
     appliedWhat(action.title) ||
     (action.type === "set_up_preview"

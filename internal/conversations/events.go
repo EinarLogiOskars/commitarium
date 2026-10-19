@@ -67,6 +67,9 @@ type Watcher struct {
 	Toolchains     ToolchainReader
 	VisionSessions VisionSessions
 	AgentLimited   func(ctx context.Context, agentID string) bool
+	// Helpers, when set, reads the helpers the assistant started, so their
+	// questions and results come back to it (helpers.go).
+	Helpers HelperReader
 }
 
 // watchEvery is how often the watcher looks at the projects' work.
@@ -93,6 +96,7 @@ func (watcher Watcher) Tick(ctx context.Context) {
 	watcher.Service.RetryDueSignIns(ctx)
 	for _, scope := range watcher.Service.projectScopes() {
 		watcher.settleVision(ctx, scope)
+		watcher.followHelpers(ctx, scope)
 		if err := watcher.Service.observe(ctx, scope, watcher.snapshot); err != nil {
 			log.Printf("assistant events for %s: %v", scope, err)
 		}

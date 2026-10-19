@@ -189,6 +189,8 @@ type record struct {
 	// PreviewFailedAt is when the app's preview last failed to start, as the
 	// desktop reported it; a preview work order merged since fixes it.
 	PreviewFailedAt *time.Time `json:"preview_failed_at,omitempty"`
+	// Helpers are the helper sessions the assistant started (helpers.go).
+	Helpers []Helper `json:"helpers,omitempty"`
 }
 
 // maxSessionTurns bounds a provider session; the next turn starts fresh.
@@ -564,6 +566,9 @@ func (service *Service) Action(ctx context.Context, scope, actionID string) (Act
 // Created names what an applied action created, so the app can open it.
 type Created struct {
 	WorkOrderID, ProjectID string
+	// Helper is a helper the action started, whose questions and results
+	// come back to the assistant (helpers.go).
+	Helper *Helper
 }
 
 // Resolve records an action's outcome and what it created.
@@ -595,6 +600,9 @@ func (service *Service) Resolve(ctx context.Context, scope, actionID string, sta
 			action.WorkOrderID = created.WorkOrderID
 		}
 		action.ProjectID = created.ProjectID
+		if status == ActionApplied && created.Helper != nil {
+			stored.follow(*created.Helper)
+		}
 		if status == ActionApplied && action.Type == featureartifact.AssistantCreateWorkOrder && stored.Goal.active() {
 			// The goal item follows its new work order, a replacement too, at
 			// once rather than at the next look at the vision.
