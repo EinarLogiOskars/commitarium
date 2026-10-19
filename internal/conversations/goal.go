@@ -199,6 +199,15 @@ func (goal *Goal) progress(plan featureartifact.VisionPlan, work map[string]work
 	return finished
 }
 
+// follow points a goal item at the work order created for it.
+func (goal *Goal) follow(itemID, workOrderID string) {
+	for index := range goal.Items {
+		if itemID != "" && workOrderID != "" && goal.Items[index].ID == itemID {
+			goal.Items[index].WorkOrderID = workOrderID
+		}
+	}
+}
+
 // priorityItems lists the leaf items of a priority (every priority for
 // level -1), labelled like P0.2.1, with their linked work order and whether
 // the vision marks them done.
@@ -229,7 +238,9 @@ func priorityItems(plan featureartifact.VisionPlan, level int) []GoalItem {
 // returns those it may apply: actions for the goal's items, or any of the
 // assistant's actions where it builds everything, without a premium model
 // and only on the assistant's own work. One with a premium model, or on a
-// work order the user created, is left for the user, with a note.
+// work order the user created, is left for the user, with a note. A goal
+// item's work order is closed only once its recovery ran out, and its
+// replacement may then be created in the same look.
 func (service *Service) autopilotActions(ctx context.Context, scope string) ([]Action, error) {
 	builds := service.assistantBuilds(ctx, scope)
 	ours, titles, states := service.workOrders(ctx, scope)
@@ -250,26 +261,55 @@ func (service *Service) autopilotActions(ctx context.Context, scope string) ([]A
 			orders[item.WorkOrderID] = true
 		}
 	}
-	// One work order per item: an item that has one, or whose create autopilot
-	// already applied, takes no other.
-	claimed := map[string]bool{}
+	// One work order per item: an item whose work order is still open, or
+	// whose create autopilot already applied for one still open, takes no
+	// other. A closed work order, or one this look closes, frees its item for
+	// a replacement.
+	claims := map[string][]string{}
 	for _, item := range goalItems {
-		claimed[item.ID] = item.WorkOrderID != ""
+		if item.WorkOrderID != "" {
+			claims[item.ID] = append(claims[item.ID], item.WorkOrderID)
+		}
 	}
 	// Work orders autopilot created: those not delivering an item (a
 	// duplicate) are its own to close.
 	created := map[string]bool{}
 	for _, action := range stored.Actions {
 		if action.Type == featureartifact.AssistantCreateWorkOrder && action.Status == ActionApplied {
-			claimed[action.VisionItemID] = true
+			claims[action.VisionItemID] = append(claims[action.VisionItemID], action.WorkOrderID)
 			if action.AutoTried && action.WorkOrderID != "" {
 				created[action.WorkOrderID] = true
 			}
 		}
 	}
+	closing := map[string]bool{}
+	claimed := func(itemID string) bool {
+		return slices.ContainsFunc(claims[itemID], func(workOrderID string) bool {
+			return workOrderID == "" || (!closing[workOrderID] && states[workOrderID] != feature.StateCancelled)
+		})
+	}
+	exhausted := func(workOrderID string) bool {
+		return service.config.RecoveryExhausted != nil && service.config.RecoveryExhausted(ctx, workOrderID)
+	}
+	// Closes go first, so a replacement proposed with one is not held back
+	// by the work order it replaces.
+	order := make([]int, len(stored.Actions))
+	for index := range order {
+		order[index] = index
+	}
+	slices.SortStableFunc(order, func(a, b int) int {
+		isClose := func(index int) bool { return stored.Actions[index].Type == featureartifact.AssistantCloseWorkOrder }
+		switch {
+		case isClose(a) && !isClose(b):
+			return -1
+		case isClose(b) && !isClose(a):
+			return 1
+		}
+		return 0
+	})
 	now := service.now()
 	apply, noted := make([]Action, 0), false
-	for index := range stored.Actions {
+	for _, index := range order {
 		action := &stored.Actions[index]
 		if action.Status != ActionProposed || action.AutoTried {
 			continue
@@ -283,7 +323,10 @@ func (service *Service) autopilotActions(ctx context.Context, scope string) ([]A
 			featureartifact.AssistantContinueWorkOrder, featureartifact.AssistantRecoverWorkOrder:
 			inGoal, target = orders[action.WorkOrderID] || builds, action.WorkOrderID
 		case featureartifact.AssistantCloseWorkOrder:
-			inGoal, target = (created[action.WorkOrderID] || builds) && !orders[action.WorkOrderID], action.WorkOrderID
+			// A goal item's work order is closed only once its recovery ran
+			// out, so a fresh one can replace it.
+			target = action.WorkOrderID
+			inGoal = ((created[target] || builds) && !orders[target]) || (orders[target] && exhausted(target))
 		case featureartifact.AssistantAddVisionItem:
 			inGoal, target = builds, action.WorkOrderID
 		case featureartifact.AssistantStartAutopilot:
@@ -363,7 +406,7 @@ func (service *Service) autopilotActions(ctx context.Context, scope string) ([]A
 			}
 			stored.AutoContinues[action.WorkOrderID]++
 		}
-		if action.Type == featureartifact.AssistantCreateWorkOrder && action.VisionItemID != "" && claimed[action.VisionItemID] {
+		if action.Type == featureartifact.AssistantCreateWorkOrder && action.VisionItemID != "" && claimed(action.VisionItemID) {
 			stored.addEvent(fmt.Sprintf("Autopilot left %s for you: its vision item already has a work order.",
 				actionName(action.AssistantAction)), now)
 			noted = true
@@ -375,8 +418,11 @@ func (service *Service) autopilotActions(ctx context.Context, scope string) ([]A
 			noted = true
 			continue
 		}
-		if action.Type == featureartifact.AssistantCreateWorkOrder {
-			claimed[action.VisionItemID] = true
+		switch action.Type {
+		case featureartifact.AssistantCreateWorkOrder:
+			claims[action.VisionItemID] = append(claims[action.VisionItemID], "")
+		case featureartifact.AssistantCloseWorkOrder:
+			closing[target] = true
 		}
 		action.HoldStart = holdStart
 		apply = append(apply, *action)
@@ -676,7 +722,9 @@ func goalInstructions(goal *Goal) string {
 		"with recover_work_order the way its blocker calls for (see How you recover blocked work). When a work " +
 		"order needs the user (a question about the product, a merge approval, a secret), tell the user exactly " +
 		"what it needs. When autopilot made a duplicate work order for an item, propose close_work_order for the one that " +
-		"does not deliver it; autopilot closes its own duplicates. Propose nothing outside the goal unless the " +
+		"does not deliver it; autopilot closes its own duplicates. When a goal item's work order has run out of " +
+		"recovery, propose close_work_order for it together with create_work_order for the same vision_item_id; " +
+		"autopilot replaces it. Propose nothing outside the goal unless the " +
 		"user asks; such actions still wait for approval. A work order the user created by hand after the goal " +
 		"started is theirs, even on a goal item: actions on it wait for their approval.")
 	return builder.String()

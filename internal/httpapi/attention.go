@@ -162,7 +162,7 @@ func (api *API) attentionForFeature(
 	if len(runs) == 0 {
 		return nil, nil, nil
 	}
-	currentRun := newestRun(runs)
+	currentRun := execution.NewestRun(runs)
 	base := attentionItem{
 		ProjectID: currentProject.ID, ProjectName: currentProject.Name,
 		FeatureID: currentFeature.ID, FeatureTitle: currentFeature.Title,
@@ -333,17 +333,6 @@ func mergedTitle(currentFeature feature.Feature) string {
 		return "Session merged"
 	}
 	return "Work order merged"
-}
-
-func newestRun(runs []execution.Run) execution.Run {
-	newest := runs[0]
-	for _, candidate := range runs[1:] {
-		if candidate.StartedAt.After(newest.StartedAt) ||
-			(candidate.StartedAt.Equal(newest.StartedAt) && candidate.ID < newest.ID) {
-			newest = candidate
-		}
-	}
-	return newest
 }
 
 func environmentNeedsAttention(status projectenvironment.Status) bool {
