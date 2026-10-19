@@ -23,6 +23,7 @@ import { useCatalogModels, useModelName } from "./useModelName";
 import { agentName, reloadAgents, useAgentList, useAgents } from "./useAgents";
 import type { AgentRole } from "../api/types";
 import { Agents } from "./Agents";
+import { AgentLogin } from "./AgentLogin";
 import { assistantGuidance, GUIDANCE } from "./setupGuidance";
 import { appliedWhat, chooseAgent, choiceOverrides, type RoleChoice } from "./actionCard";
 
@@ -353,6 +354,12 @@ export function AssistantDrawer({
                   </div>
                 )}
                 {running && <p className="muted status-line">The assistant is thinking…</p>}
+                {!running && conversation.sign_in?.needs_user && (
+                  <SignInNotice
+                    agentId={conversation.sign_in.agent}
+                    agentName={agentName(agents ?? [], conversation.sign_in.agent)}
+                  />
+                )}
                 {(conversation.queued ?? []).map((message) => (
                   <div key={message.id} className="assistant__turn assistant__turn--queued">
                     <div className="msg msg--user">
@@ -864,5 +871,21 @@ function AppliedLine({ action }: { action: AssistantAction }) {
             ? `Queued: ${what}, after ${action.after}`
             : `${verb}: ${what}…`}
     </p>
+  );
+}
+
+/** The assistant's last turn waits for its agent's login: sign in here, and
+ * the kept message is sent (LOGIN_RECOVERY_PLAN.md). */
+export function SignInNotice({ agentId, agentName }: { agentId: string; agentName: string }) {
+  return (
+    <div className="wait-banner wait-banner--warn wait-banner--login">
+      <span className="wait-banner__kind">{agentName} needs you to sign in again</span>
+      <span>Your message is kept and is sent as soon as {agentName} works again.</span>
+      <AgentLogin
+        agentId={agentId}
+        agentName={agentName}
+        continuing="the assistant is picking your message back up"
+      />
+    </div>
   );
 }

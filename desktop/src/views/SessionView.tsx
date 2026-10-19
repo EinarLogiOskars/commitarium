@@ -12,6 +12,7 @@ import { useModelName } from "./useModelName";
 import { ChangeModel } from "./ChangeModel";
 import { UsageLimitBanner } from "./UsageLimitBanner";
 import { RetryingBanner } from "./RetryingBanner";
+import { AgentLogin } from "./AgentLogin";
 import { agentName, useAgents } from "./useAgents";
 import type { Feature, Run } from "../api/types";
 
@@ -276,7 +277,20 @@ export function SessionView({
         {blocked && run && !run.usage_limit && run.retrying && (
           <RetryingBanner run={run} onChanged={onChanged} />
         )}
-        {blocked && run && !run.usage_limit && !run.retrying && (
+        {blocked && run && !run.usage_limit && !run.retrying && run.login_required && (
+          <div className="wait-banner wait-banner--warn wait-banner--login">
+            <span className="wait-banner__kind">
+              {agentName(agents, run.login_required.agent)} needs you to sign in again
+            </span>
+            <span>The session goes on by itself once you sign in.</span>
+            <AgentLogin
+              agentId={run.login_required.agent}
+              agentName={agentName(agents, run.login_required.agent)}
+              continuing="the session is going on"
+            />
+          </div>
+        )}
+        {blocked && run && !run.usage_limit && !run.retrying && !run.login_required && (
           <div className="banner banner--warn session__blocked">
             <span>{run.reason || "The session stopped."}</span>
             <button

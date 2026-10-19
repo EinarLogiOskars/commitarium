@@ -33,7 +33,7 @@ import { trapFocus } from "./AppSettings";
 type AgentsTab = "agents" | "assistant" | "models";
 import { ApiError } from "../api/client";
 import type { AgentProvider } from "../api/types";
-import { reloadAgents } from "./useAgents";
+import { reloadAgents, useAgents } from "./useAgents";
 
 const PROVIDER_LABEL: Record<AgentProvider, string> = { codex: "Codex", claude: "Claude" };
 
@@ -69,8 +69,14 @@ function isActive(status: ProfileStatus): boolean {
 /** Once an agent is connected, start its worker with the rest of the stack and
  * let work orders that paused on its expired login continue (ADR-017). */
 export async function afterAgentConnected(agentId: string): Promise<void> {
-  await stackUp();
-  await agentLoggedIn(agentId);
+  try {
+    await stackUp();
+  } finally {
+    // The work waiting on the agent continues even when starting the rest of
+    // the stack failed; the agents list then drops its "needs sign-in".
+    await agentLoggedIn(agentId);
+    await reloadAgents().catch(() => undefined);
+  }
 }
 
 /** The steps of a login in progress: the provider's login page and device
@@ -189,6 +195,8 @@ export function Agents({ onClose, focus }: { onClose: () => void; focus?: "assis
   // The agent just added goes straight on to signing in.
   const [added, setAdded] = useState<string | null>(null);
   const hasAgents = (profiles?.length ?? 0) > 0;
+  // The coordinator's view of each agent: which need a sign-in again.
+  const coordinatorAgents = useAgents();
   const [tab, setTab] = useState<AgentsTab>(focus === "assistant" ? "assistant" : "agents");
   const cardRef = useRef<HTMLDivElement | null>(null);
   const tabRefs = useRef<Partial<Record<AgentsTab, HTMLButtonElement | null>>>({});
@@ -199,6 +207,7 @@ export function Agents({ onClose, focus }: { onClose: () => void; focus?: "assis
     } catch (e) {
       setError(String(e));
     }
+    void reloadAgents().catch(() => undefined);
     // Limits are a convenience; the agents show without them.
     getAgentLimits()
       .then((r) => setLimits(r.limits))
@@ -290,6 +299,7 @@ export function Agents({ onClose, focus }: { onClose: () => void; focus?: "assis
                 key={p.id}
                 profile={p}
                 limit={limits.find((l) => l.agent === p.id)}
+                needsSignIn={coordinatorAgents.find((a) => a.id === p.id)?.needs_sign_in}
                 usage={usage.find((u) => u.agent === p.id)}
                 signIn={p.id === added}
                 onChanged={refresh}
@@ -484,6 +494,7 @@ function describe(e: unknown): string {
 function ProfileRow({
   profile,
   limit,
+  needsSignIn,
   usage,
   signIn = false,
   onChanged,
@@ -494,6 +505,8 @@ function ProfileRow({
   signIn?: boolean;
   /** Set while the agent's usage limit pauses work. */
   limit?: AgentLimit;
+  /** Set while the agent's login fails though its credentials look fine. */
+  needsSignIn?: { since: string; waiting: number };
   /** The account's usage as the agent last reported it. */
   usage?: AgentUsage;
   onChanged: () => void;
@@ -506,6 +519,8 @@ function ProfileRow({
 
   const s = profile.status;
   const active = isActive(s);
+  // Its stored login looks fine, but the provider stopped accepting it.
+  const signedOut = s === "connected" && !!needsSignIn;
 
   const run = async (fn: () => Promise<unknown>) => {
     setBusy(true);
@@ -536,14 +551,22 @@ function ProfileRow({
             autoFocus
           />
         )}
-        <span className={`state state--${tone(s)}`}>
-          <span className={`dot dot--${tone(s)}`} />
-          {STATUS_LABEL[s]}
+        <span className={`state state--${signedOut ? "warn" : tone(s)}`}>
+          <span className={`dot dot--${signedOut ? "warn" : tone(s)}`} />
+          {signedOut ? "Needs sign-in" : STATUS_LABEL[s]}
         </span>
       </div>
 
       {profile.detail?.message && (
         <p className="muted profile-row__msg">{profile.detail.message}</p>
+      )}
+      {signedOut && needsSignIn && (
+        <p className="profile-row__limit">
+          Its sign-in stopped working.{" "}
+          {needsSignIn.waiting > 0
+            ? `${needsSignIn.waiting} ${needsSignIn.waiting === 1 ? "work order waits" : "work orders wait"} and continue${needsSignIn.waiting === 1 ? "s" : ""} by itself once you sign in again.`
+            : "Sign in again so it can work."}
+        </p>
       )}
       {limit && (
         <p className="profile-row__limit">
@@ -577,7 +600,14 @@ function ProfileRow({
       )}
 
       {/* Idle: connect / disconnect */}
-      {!active && s === "connected" && renaming === null && (
+      {signedOut && !picking && renaming === null && (
+        <div className="row">
+          <button className="primary" onClick={() => setPicking(true)} disabled={busy}>
+            Sign in again
+          </button>
+        </div>
+      )}
+      {!active && s === "connected" && !signedOut && renaming === null && (
         <div className="row">
           <button onClick={() => void run(() => disconnectProfile(profile.id))} disabled={busy}>
             Disconnect
@@ -615,7 +645,7 @@ function ProfileRow({
           </button>
         </div>
       )}
-      {!active && s !== "connected" && picking && (
+      {!active && (s !== "connected" || signedOut) && picking && (
         <div className="row">
           <button
             className="primary"

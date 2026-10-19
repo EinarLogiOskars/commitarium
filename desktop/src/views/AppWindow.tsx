@@ -3,7 +3,8 @@ import { getProject } from "../api/projects";
 import { listFeatures, setUpPreview, tellAssistantPreviewFailed } from "../api/features";
 import { getPreviewStatus, onPreviewStatusChanged, startPreview, type PreviewStatus } from "../ipc";
 import { primaryUrl } from "./usePreview";
-import { AssistantDrawer } from "./AssistantDrawer";
+import { AssistantDrawer, SignInNotice } from "./AssistantDrawer";
+import { agentName, useAgents } from "./useAgents";
 import { getConversation, type Conversation } from "../api/assistant";
 import type { Feature, Project } from "../api/types";
 import { ContainerEvidence } from "./ContainerEvidence";
@@ -104,6 +105,7 @@ export function AppWindow({ projectId }: { projectId: string }) {
   const building = launch === "vision" || launch === "setup" || (launch === "building" && !!goal);
 
   const name = project?.name ?? "App";
+  const agents = useAgents();
   const url = status?.state === "running" ? primaryUrl(status) : null;
   // A start that threw is the latest attempt, so its reason comes first.
   const failure = error ?? (status?.state === "failed" ? status.error : null);
@@ -166,6 +168,12 @@ export function AppWindow({ projectId }: { projectId: string }) {
                     </li>
                   ))}
                 </ul>
+              )}
+              {conversation?.sign_in?.needs_user && (
+                <SignInNotice
+                  agentId={conversation.sign_in.agent}
+                  agentName={agentName(agents, conversation.sign_in.agent)}
+                />
               )}
               <p className="muted note">
                 It opens here as soon as it runs. The assistant asks if anything needs you.

@@ -96,6 +96,9 @@ export interface Conversation {
   /** A new app being set up, until it starts building (APPS_PLAN.md). */
   launch?: { stage: LaunchStage; started_at: string };
   updated_at: string;
+  /** Set while the last turn waits for its agent's login: the message is
+   * kept and sent once the agent works (needs_user: the user signs in). */
+  sign_in?: { agent: string; since: string; needs_user?: boolean; retry_at?: string };
 }
 
 export type LaunchStage = "vision" | "setup" | "building";
