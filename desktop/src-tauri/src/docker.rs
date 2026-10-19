@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use tauri::{AppHandle, Manager, State};
 
-use crate::{agents, bootstrap, cli_updates, environment, preview, profiles};
+use crate::{agents, bootstrap, cleanup, cli_updates, environment, preview, profiles};
 
 /// Fixed Compose project name. Scoping every command to this project keeps the
 /// launcher from touching any other Compose stack on the host.
@@ -703,6 +703,8 @@ pub(crate) fn reconcile_agent_workers(
         args.extend(connected);
         compose(PROVIDER_PROFILES, &args)?;
     }
+    // The stack is up on its current images; the ones it replaced can go.
+    cleanup::spawn();
     Ok(())
 }
 

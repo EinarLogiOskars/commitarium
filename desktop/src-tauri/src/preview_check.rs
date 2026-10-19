@@ -452,6 +452,8 @@ fn tear_down(runtime: &ComposeRuntime) {
     for kind in ["container", "network", "volume"] {
         preview::remove_labeled_resources(kind, &runtime.project_name);
     }
+    // A rebuilt check leaves its previous images untagged.
+    crate::cleanup::spawn();
 }
 
 /// What one look at the stack says.
