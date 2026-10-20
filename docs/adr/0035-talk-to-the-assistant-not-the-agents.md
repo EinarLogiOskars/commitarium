@@ -70,3 +70,18 @@ user in Developer mode meets four different chats.
   the top level, which happens in the assistant's own chat. Sending an
   answer to a helper, or starting research, needs no card in either mode:
   neither changes the project.
+
+## Follow-up: planning mode
+
+Phase 2 of the plan (P1–P5) extends the same conversation to planning a
+project in Developer mode. The line is what an app depends on, not how
+complex it is: without Developer mode an app stands on its own, and a
+request beyond that is scoped down with a plain note of what is left out.
+With it, the assistant can propose `plan_project`, and the project is
+planned in the planning workspace, where the plan is the vision being
+written: the assistant fills it in with `update_plan`, sent at once without
+a card like research, since it changes only the plan the user watches.
+Building it stays the user's decision: Build it in the workspace, or a
+`build_plan` card when they tell the assistant to go. Documents the user
+attaches are copied into every checkout, so helpers and agents read them
+without a new channel to the agents.
