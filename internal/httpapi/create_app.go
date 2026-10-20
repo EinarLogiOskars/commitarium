@@ -77,8 +77,9 @@ func (api *API) applyCreateApp(w http.ResponseWriter, r *http.Request, action co
 
 // applyPlanProject creates the project the user and the assistant agreed to
 // plan, in Developer mode (ADR-035): a project like one from New project,
-// whose assistant keeps the brief gathered so far in its notes and is woken
-// to plan it with the user. Nothing is built until they say so.
+// whose assistant keeps the brief gathered so far in its notes, and whose
+// vision is planned from its goal in the planning workspace. Nothing is
+// built until the user says so.
 func (api *API) applyPlanProject(w http.ResponseWriter, r *http.Request, action conversations.Action) (string, string, bool) {
 	ctx := r.Context()
 	key := "assistant-" + action.ID
@@ -100,15 +101,13 @@ func (api *API) applyPlanProject(w http.ResponseWriter, r *http.Request, action 
 			fmt.Sprintf("the project %q was created, but its planning could not start: %v", action.Title, err))
 		return "", "", false
 	}
-	if waker, ok := api.conversations.(assistantWaker); ok {
-		if err := waker.Wake(ctx, created.ID, "Planning the project with the assistant.",
-			"The user wants to plan this project with you before anything is built: the brief from the top level "+
-				"is in your notes. Open the conversation: sum up in a few lines what you know and ask the first round "+
-				"of what matters most."); err != nil {
-			writeError(w, http.StatusBadGateway, "project_not_started",
-				fmt.Sprintf("the project %q was created, but its planning could not start: %v", action.Title, err))
-			return "", "", false
-		}
+	// Its vision is planned from the goal; starting it wakes the project's
+	// assistant to plan it with the user.
+	if err := api.callOwn(ctx, http.MethodPost, "/api/v1/projects/"+url.PathEscape(created.ID)+"/vision/planning", "",
+		map[string]string{"goal": action.Description}, nil); err != nil {
+		writeError(w, http.StatusBadGateway, "project_not_started",
+			fmt.Sprintf("the project %q was created, but its planning could not start: %v", action.Title, err))
+		return "", "", false
 	}
 	return fmt.Sprintf("Created the project “%s”. Plan it with the assistant, then build it.", action.Title), created.ID, true
 }

@@ -140,7 +140,7 @@ func OutputJSONSchema(contract OutputContract) any {
 		action := objectSchema(
 			map[string]any{
 				"type": map[string]any{
-					"type": "string", "enum": []string{"create_work_order", "start_work_order", "change_models", "add_vision_item", "start_autopilot", "continue_work_order", "recover_work_order", "close_work_order", "create_app", "plan_project", "set_up_preview", "write_vision", "set_up_stack", "answer_helper", "write_brief", "design_stack", "research"},
+					"type": "string", "enum": []string{"create_work_order", "start_work_order", "change_models", "add_vision_item", "start_autopilot", "continue_work_order", "recover_work_order", "close_work_order", "create_app", "plan_project", "set_up_preview", "write_vision", "set_up_stack", "answer_helper", "write_brief", "design_stack", "research", "update_plan", "build_plan"},
 				},
 				"reason":               text,
 				"title":                text,
@@ -167,12 +167,25 @@ func OutputJSONSchema(contract OutputContract) any {
 				"brief":                map[string]any{"type": "boolean", "description": "For create_work_order: true has its brief written from description before it starts; it is created as a draft. False for quick changes. Otherwise false."},
 				"app_brief":            map[string]any{"type": "string", "description": "For create_app and plan_project: everything you gathered with the user, in full, for whoever plans it next. Otherwise empty."},
 				"assumptions":          map[string]any{"type": "array", "items": text, "description": "For create_app and plan_project: each thing you assumed where the user did not say, in a short line. Otherwise empty."},
+				"decisions":            map[string]any{"type": "array", "items": text, "description": "For update_plan: every decision made so far, in full, one short line each; it replaces the plan's list. Otherwise empty."},
+				"open_questions":       map[string]any{"type": "array", "items": text, "description": "For update_plan: every question still open, in full, one short line each; it replaces the plan's list. Otherwise empty."},
+				"plan_items": map[string]any{"type": "array", "description": "For update_plan: the whole build plan, in order, when it changes; empty keeps it. Otherwise empty.", "items": objectSchema(
+					map[string]any{
+						"priority":    map[string]any{"type": "integer", "description": "0 for P0 (needed first), 1 for P1, and so on."},
+						"title":       text,
+						"description": text,
+					},
+					[]string{"priority", "title", "description"},
+				)},
+				"stack_presets": map[string]any{"type": "array", "items": text, "description": "For update_plan: the runtime presets of the stack, by ID, when it is decided; empty keeps it. Otherwise empty."},
+				"frameworks":    map[string]any{"type": "string", "description": "For update_plan with stack_presets: the frameworks to build it with, in a few words. Otherwise empty."},
 			},
 			[]string{
 				"type", "reason", "title", "description", "vision_item_id", "steps",
 				"lead_agent", "lead_model", "reviewer_agent", "reviewer_model",
 				"lead_plan_model", "lead_plan_effort", "lead_effort", "reviewer_plan_model", "reviewer_plan_effort", "reviewer_effort",
 				"work_order_id", "when", "how", "priority", "guidance", "after", "helper", "brief", "app_brief", "assumptions",
+				"decisions", "open_questions", "plan_items", "stack_presets", "frameworks",
 			},
 		)
 		return objectSchema(

@@ -31,5 +31,8 @@ describe("assistant mode", () => {
     expect(appliesItself(action({ premium: ["claude-fable-5-1"] }))).toBe(false);
     expect(appliesItself(action({ type: "close_work_order" }))).toBe(false);
     expect(appliesItself(action({ status: "dismissed" }))).toBe(false);
+    // The plan being written fills in by itself; building it is the user's card.
+    expect(appliesItself(action({ type: "update_plan" }))).toBe(true);
+    expect(appliesItself(action({ type: "build_plan" }))).toBe(false);
   });
 });

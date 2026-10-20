@@ -43,6 +43,9 @@ type Vision struct {
 	Source    string    `json:"source"`
 	Revision  int       `json:"revision"`
 	UpdatedAt time.Time `json:"updated_at"`
+	// Planning is set once the vision is planned with the assistant in the
+	// planning workspace (planning.go); it stays, built, as its record.
+	Planning *Planning `json:"planning,omitempty"`
 }
 
 // Mode is how the assistant writes the vision.
@@ -208,7 +211,9 @@ func (service *Service) Save(ctx context.Context, projectID string, plan feature
 	if current.Revision != expectedRevision {
 		return Vision{}, ErrConflict
 	}
-	return service.write(Vision{ProjectID: projectID, Plan: plan, Source: "user", Revision: current.Revision + 1})
+	return service.write(Vision{
+		ProjectID: projectID, Plan: plan, Source: "user", Revision: current.Revision + 1, Planning: current.Planning,
+	})
 }
 
 // LinkWorkOrder records the work order delivering an item without sub-items.
@@ -591,6 +596,7 @@ func (service *Service) refresh(ctx context.Context, record sessionRecord) (sess
 		}
 		if _, err := service.write(Vision{
 			ProjectID: record.ProjectID, Plan: plan, Source: "assistant", Revision: previous.Revision + 1,
+			Planning: previous.Planning,
 		}); err != nil {
 			return record, err
 		}

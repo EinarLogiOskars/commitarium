@@ -239,6 +239,8 @@ func (describer StateDescriber) writeProject(ctx context.Context, builder *strin
 		switch {
 		case errors.Is(err, vision.ErrNotFound):
 			builder.WriteString("\nVision: none written yet.\n")
+		case err == nil && stored.Planning.Open():
+			writePlanning(builder, stored)
 		case err == nil:
 			builder.WriteString("\n### Vision\n" + stored.Plan.Statement + "\n")
 			for _, priority := range stored.Plan.Priorities {
@@ -300,6 +302,45 @@ func agentsNote(item feature.Feature) string {
 	return fmt.Sprintf("lead %s on %s, reviewer %s on %s",
 		item.AgentProviders.LeadAgent, item.AgentModels.Lead,
 		item.AgentProviders.ReviewerAgent, item.AgentModels.Reviewer)
+}
+
+// writePlanning describes a vision being planned with the user: the plan
+// as it stands in the planning workspace.
+func writePlanning(builder *strings.Builder, stored vision.Vision) {
+	planning := stored.Planning
+	builder.WriteString("\n### Vision (being planned)\nGoal: " + stored.Plan.Statement + "\n")
+	lines := func(title string, values []string) {
+		builder.WriteString(title + ":")
+		if len(values) == 0 {
+			builder.WriteString(" none yet\n")
+			return
+		}
+		builder.WriteString("\n")
+		for _, value := range values {
+			builder.WriteString("- " + value + "\n")
+		}
+	}
+	lines("Decisions", planning.Decisions)
+	lines("Open questions", planning.Questions)
+	research := make([]string, 0, len(planning.Research))
+	for _, note := range planning.Research {
+		research = append(research, note.Title+" ("+strings.Join(note.Sources, ", ")+")")
+	}
+	lines("Research", research)
+	presets := make([]string, 0)
+	for _, preset := range toolchain.Presets() {
+		presets = append(presets, preset.ID+" ("+preset.DisplayName+")")
+	}
+	if stack := stored.Plan.Stack; stack != nil {
+		builder.WriteString("Stack: " + strings.Join(stack.Presets, ", ") + "; " + stack.Frameworks + "\n")
+	} else {
+		builder.WriteString("Stack: not decided yet\n")
+	}
+	builder.WriteString("Runtime presets for the stack: " + strings.Join(presets, ", ") + "\n")
+	builder.WriteString("Build plan:\n")
+	for _, priority := range stored.Plan.Priorities {
+		writeVisionItems(builder, priority.Items, fmt.Sprintf("P%d", priority.Level), "", nil)
+	}
 }
 
 func writeVisionItems(builder *strings.Builder, items []featureartifact.VisionItem, prefix, indent string, byID map[string]feature.Feature) {

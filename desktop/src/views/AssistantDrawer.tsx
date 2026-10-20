@@ -281,7 +281,10 @@ export function AssistantDrawer({
   }
 
   const renderAction = (action: AssistantAction) =>
-    (builds || action.type === "answer_helper" || action.type === "research") &&
+    (builds ||
+      action.type === "answer_helper" ||
+      action.type === "research" ||
+      action.type === "update_plan") &&
     appliesItself(action) ? (
       <AppliedLine key={action.id} action={action} />
     ) : (
@@ -608,7 +611,11 @@ function ActionCard({
                                     ? "Suggested stack"
                                     : action.type === "research"
                                       ? `Look up: ${action.title}`
-                                      : "Switch models";
+                                      : action.type === "build_plan"
+                                        ? "Build it"
+                                        : action.type === "update_plan"
+                                          ? "Update the plan"
+                                          : "Switch models";
   const models = [
     action.lead_model &&
       `Lead ${action.lead_agent ? agentName(agents, action.lead_agent) + " · " : ""}${modelName(action.lead_model)}`,
@@ -868,6 +875,8 @@ const APPLY_LABEL: Record<AssistantAction["type"], string> = {
   design_stack: "Design stack",
   apply_stack: "Apply",
   research: "Look it up",
+  update_plan: "Update",
+  build_plan: "Build it",
 };
 
 const STATUS_LABEL: Record<AssistantAction["status"], string> = {
@@ -991,6 +1000,13 @@ function AppliedLine({ action }: { action: AssistantAction }) {
     return (
       <p className="muted assistant__applied">
         {action.status === "applied" ? "✓ Answered" : "Answering"}: {action.guidance}
+      </p>
+    );
+  }
+  if (action.type === "update_plan") {
+    return (
+      <p className="muted assistant__applied">
+        {action.status === "applied" ? "✓ Updated the plan" : "Updating the plan…"}
       </p>
     );
   }

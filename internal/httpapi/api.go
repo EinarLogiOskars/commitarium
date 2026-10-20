@@ -508,6 +508,9 @@ func newAPI(
 		mux.HandleFunc("POST /api/v1/projects/{id}/vision/assistant/{sessionID}/messages", api.replyVisionHandler)
 		mux.HandleFunc("POST /api/v1/projects/{id}/vision/items/{itemID}/work-order", api.startVisionWorkOrderHandler)
 		mux.HandleFunc("POST /api/v1/projects/{id}/vision/items", api.addVisionItemHandler)
+		mux.HandleFunc("POST /api/v1/projects/{id}/vision/planning", api.startPlanningHandler)
+		mux.HandleFunc("PUT /api/v1/projects/{id}/vision/planning", api.updatePlanningHandler)
+		mux.HandleFunc("POST /api/v1/projects/{id}/vision/planning/finish", api.finishPlanningHandler)
 	}
 	if assistantConversations != nil && projects != nil && features != nil {
 		mux.HandleFunc("GET /api/v1/assistant/settings", api.getAssistantSettingsHandler)

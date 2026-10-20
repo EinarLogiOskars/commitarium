@@ -40,7 +40,9 @@ export type AssistantActionType =
   | "accept_brief"
   | "design_stack"
   | "apply_stack"
-  | "research";
+  | "research"
+  | "update_plan"
+  | "build_plan";
 
 export interface AssistantAction {
   id: string;
@@ -71,6 +73,12 @@ export interface AssistantAction {
    * app's planner, and what it assumed where the user did not say (ADR-035). */
   app_brief?: string;
   assumptions?: string[];
+  /** For update_plan: the plan's sections (description is its goal). */
+  decisions?: string[];
+  open_questions?: string[];
+  plan_items?: { priority: number; title: string; description: string }[];
+  stack_presets?: string[];
+  frameworks?: string;
   /** For add_vision_item and start_autopilot: 0 for P0, 1 for P1, and so on. */
   priority: number;
   /** For a work order to create or start: the work order ID, or the title of

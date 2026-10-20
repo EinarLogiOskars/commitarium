@@ -303,7 +303,7 @@ func TestAProjectIsPlannedOnlyInDeveloperMode(t *testing.T) {
 	projects := &recordingProjectService{result: project.Project{ID: "prj_shop", Name: "Shop sync"},
 		getByIDResult: project.Project{ID: "prj_shop", Name: "Shop sync"}}
 	handler := NewWithWorkspaceRealWorkflowDeletionAndModels(projects, &recordingFeatureService{},
-		nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, stub, testAgents())
+		nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, stub, testAgents(), &planningVisions{})
 	approve := func() *httptest.ResponseRecorder {
 		recorder := httptest.NewRecorder()
 		handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost,

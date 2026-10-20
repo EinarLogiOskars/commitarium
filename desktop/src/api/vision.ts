@@ -74,6 +74,16 @@ export const setUpProject = (
     body: { presets, frameworks },
   });
 
+/** Plan the project's vision with the assistant, from goal when it has none
+ * yet; its assistant is woken to plan it with the user. */
+export const startPlanning = (id: string, goal: string): Promise<Vision> =>
+  request(`${visionPath(id)}/planning`, { method: "POST", body: { goal } });
+
+/** Build it: the vision is the plan as it stands. With autopilot, the
+ * assistant sets the project up and builds it; otherwise the user does. */
+export const finishPlanning = (id: string, autopilot: boolean): Promise<Vision> =>
+  request(`${visionPath(id)}/planning/finish`, { method: "POST", body: { autopilot } });
+
 /** Add a top-level item to a priority of the vision, optionally linking a
  * work order done outside the plan. */
 export const addVisionItem = (

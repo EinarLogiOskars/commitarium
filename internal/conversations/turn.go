@@ -135,6 +135,8 @@ func (service *Service) startTurn(
 	instructions += service.focusInstructions(ctx, scope, stored.Focus)
 	if scope == TopLevel {
 		instructions += newAppInstructions(stored.Developer)
+	} else if service.planning(ctx, scope) {
+		instructions += planningInstructions
 	}
 	if err := service.write(stored); err != nil {
 		return Conversation{}, err
@@ -263,7 +265,7 @@ func (service *Service) refresh(ctx context.Context, stored record) (record, err
 				stored.Notes = turn.Notes
 			}
 			answers := slices.ContainsFunc(turn.Actions, func(action featureartifact.AssistantAction) bool {
-				return talksToHelper(action.Type)
+				return sentAtOnce(action.Type)
 			})
 			if len(turn.Actions) > 0 && (answers || stored.Goal.active() || service.assistantBuilds(ctx, stored.Scope)) {
 				service.nudgeWatcher()

@@ -440,6 +440,10 @@ func (api *API) approveConversationActionHandler(w http.ResponseWriter, r *http.
 		result, ok = api.applyAnswerHelper(w, r, scope, action)
 	case featureartifact.AssistantResearch:
 		result, helper, ok = api.applyResearch(w, r, scope, action)
+	case featureartifact.AssistantUpdatePlan:
+		result, ok = api.applyUpdatePlan(w, r, scope, action)
+	case featureartifact.AssistantBuildPlan:
+		result, ok = api.applyBuildPlan(w, r, scope)
 	case featureartifact.AssistantSetUpStack:
 		result, workOrderID, ok = api.applySetUpStack(w, r, scope)
 	case featureartifact.AssistantCloseWorkOrder:

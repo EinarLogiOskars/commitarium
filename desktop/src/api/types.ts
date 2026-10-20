@@ -927,6 +927,20 @@ export interface Vision {
   source: "assistant" | "user" | "repository";
   revision: number;
   updated_at: string;
+  /** Set once the vision is planned with the assistant in the planning
+   * workspace; it stays, built, as its record. */
+  planning?: VisionPlanning;
+}
+
+/** A vision being planned: what the plan holds besides its goal (the
+ * statement), stack, and build plan (the items). */
+export interface VisionPlanning {
+  status: "planning" | "built";
+  decisions: string[];
+  open_questions: string[];
+  research: { title: string; findings: string; sources: string[]; added_at: string }[];
+  started_at: string;
+  built_at?: string;
 }
 
 export type VisionMode = "describe" | "converse";

@@ -62,9 +62,10 @@ type VisionSessions interface {
 // projectState is what the gap check reads of a project.
 type projectState struct {
 	App bool
-	// Vision is nil while none is written; Writing while one is.
-	Vision  *featureartifact.VisionPlan
-	Writing bool
+	// Vision is nil while none is written; Writing while one is, and
+	// Planning while the user plans it with the assistant.
+	Vision            *featureartifact.VisionPlan
+	Writing, Planning bool
 	// StackReady when the stack is configured; SettingUp while the project's
 	// setup work order runs.
 	StackReady, SettingUp bool
@@ -123,6 +124,9 @@ func (watcher Watcher) projectState(ctx context.Context, current project.Project
 	state := projectState{App: current.App, Runs: map[string]execution.Run{}}
 	plan, err := watcher.Visions.Get(ctx, current.ID)
 	switch {
+	case err == nil && plan.Planning.Open():
+		// Being planned with the user: nothing is missing until they build it.
+		state.Planning = true
 	case err == nil:
 		state.Vision = &plan.Plan
 	case errors.Is(err, vision.ErrNotFound):
@@ -172,6 +176,9 @@ func (watcher Watcher) projectState(ctx context.Context, current project.Project
 // assistant fixes it.
 func findGaps(state projectState, stored record) []gap {
 	gaps := make([]gap, 0)
+	if state.Planning {
+		return gaps
+	}
 	if state.Vision == nil && !state.Writing {
 		gaps = append(gaps, gap{gapVision, "The project has no vision yet. Propose write_vision with what it is for, " +
 			"from the user's words, your notes, and the repository."})
