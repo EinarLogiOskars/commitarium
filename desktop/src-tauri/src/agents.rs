@@ -487,7 +487,7 @@ mod tests {
         let script =
             cli_script(Provider::Claude).replace(CLI_DIRECTORY, &root.path().to_string_lossy());
         let run = || {
-            let output = std::process::Command::new("sh")
+            let output = crate::process::command("sh")
                 .args(["-c", &script, "claude", "auth", "status"])
                 .env("PATH", format!("{}:/usr/bin:/bin", image.display()))
                 .output()

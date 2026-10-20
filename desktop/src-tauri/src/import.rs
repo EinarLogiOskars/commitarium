@@ -12,7 +12,6 @@
 use serde::{Deserialize, Serialize};
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use tauri::{AppHandle, Manager, State};
 
 const COORDINATOR_BASE: &str = "http://127.0.0.1:8080";
@@ -80,7 +79,7 @@ fn import_metadata_json(metadata: ImportMetadata) -> Result<String, String> {
 }
 
 fn git(dir: &Path, args: &[&str]) -> Result<std::process::Output, String> {
-    Command::new("git")
+    crate::process::command("git")
         .arg("-C")
         .arg(dir)
         .args(args)
@@ -223,7 +222,7 @@ fn build_bundle(dir: &Path, default_branch: &str, bundle_path: &Path) -> Result<
     // Plain folder: snapshot into a temp repo without touching the folder.
     let git_dir = tempfile::tempdir().map_err(|e| format!("temp dir: {e}"))?;
     let run = |args: &[&str]| -> Result<std::process::Output, String> {
-        Command::new("git")
+        crate::process::command("git")
             .env("GIT_DIR", git_dir.path())
             .env("GIT_WORK_TREE", dir)
             .args(args)

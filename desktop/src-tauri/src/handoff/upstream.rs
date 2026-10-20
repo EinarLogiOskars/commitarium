@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+use std::process::{Output, Stdio};
 use tauri::{AppHandle, Manager};
 
 use super::{CompletedHandoff, HandoffReceipt};
@@ -207,7 +207,7 @@ fn verify_recorded_local_commit(repository: &Path, receipt: &HandoffReceipt) -> 
     super::verify_receipt_commit(repository, receipt)?;
     let target_ref = format!("refs/heads/{}", receipt.target_branch);
     let target = super::git_line(repository, &["rev-parse", "--verify", &target_ref])?;
-    let status = Command::new("git")
+    let status = crate::process::command("git")
         .arg("-C")
         .arg(repository)
         .args([
@@ -331,7 +331,7 @@ fn publish_repository(
     // Although Git names the option force-with-lease, it cannot overwrite an
     // existing reference because the expected old value is the empty value.
     let creation_lease = format!("--force-with-lease={full_ref}:");
-    let output = Command::new("git")
+    let output = crate::process::command("git")
         .arg("-C")
         .arg(repository)
         .args([
@@ -458,7 +458,7 @@ fn publish_repository(
 }
 
 pub(super) fn configured_remotes(repository: &Path) -> Result<Vec<RemoteIdentity>, String> {
-    let output = Command::new("git")
+    let output = crate::process::command("git")
         .arg("-C")
         .arg(repository)
         .arg("remote")
@@ -471,7 +471,7 @@ pub(super) fn configured_remotes(repository: &Path) -> Result<Vec<RemoteIdentity
     let mut remotes = Vec::new();
     for name in String::from_utf8_lossy(&output.stdout).lines() {
         validate_remote_name(name)?;
-        let url_output = Command::new("git")
+        let url_output = crate::process::command("git")
             .arg("-C")
             .arg(repository)
             .args(["remote", "get-url", "--push", "--", name])
@@ -529,7 +529,7 @@ fn choose_remote(
 
 pub(super) fn probe_remote_branch(repository: &Path, remote: &str, branch: &str) -> RemoteProbe {
     let reference = format!("refs/heads/{branch}");
-    let output = match Command::new("git")
+    let output = match crate::process::command("git")
         .arg("-C")
         .arg(repository)
         .args([
@@ -877,6 +877,7 @@ fn save_publication_receipts(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::process::Command;
 
     struct Fixture {
         _root: tempfile::TempDir,
@@ -904,7 +905,7 @@ mod tests {
         command(&repository, &["commit", "-m", "Clean handoff"]);
         let commit = line(&repository, &["rev-parse", "HEAD"]);
         checked(
-            Command::new("git")
+            crate::process::command("git")
                 .args(["init", "--bare", "--initial-branch=main"])
                 .arg(&remote),
         );

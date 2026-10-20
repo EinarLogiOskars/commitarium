@@ -925,7 +925,7 @@ pub(crate) fn prepare_commit_source(
     }
     let archive = root.join("source.tar.gz");
     // The token goes to curl on stdin, never on its command line.
-    let mut download = Command::new("curl")
+    let mut download = crate::process::command("curl")
         .args([
             "--fail",
             "--silent",
@@ -957,7 +957,7 @@ pub(crate) fn prepare_commit_source(
     // Forgejo wraps the files in one top-level folder named after the
     // repository.
     run_checked(
-        Command::new("tar")
+        crate::process::command("tar")
             .arg("-xzf")
             .arg(&archive)
             .arg("-C")

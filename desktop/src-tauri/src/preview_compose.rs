@@ -1249,7 +1249,7 @@ mod tests {
     #[test]
     fn compose_subprocess_environment_is_allowlisted() {
         let root = tempfile::tempdir().unwrap();
-        let mut command = Command::new("env");
+        let mut command = crate::process::command("env");
         command.env("PATH", "/safe/bin");
         command.env("AWS_SECRET_ACCESS_KEY", "must-not-survive");
         sanitize_compose_command(&mut command, root.path());

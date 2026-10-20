@@ -5,7 +5,6 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
@@ -175,7 +174,7 @@ fn newest_commit() -> Option<i64> {
         .ok()?
         .parent()
         .map(Path::to_path_buf)?;
-    let output = Command::new("git")
+    let output = crate::process::command("git")
         .arg("-C")
         .arg(&root)
         .args(["log", "-1", "--format=%ct", "--"])
