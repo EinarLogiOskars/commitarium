@@ -248,7 +248,7 @@ pub async fn get_git_identity(parent_path: Option<String>) -> Result<GitIdentity
             .map(Path::new)
             .filter(|path| path.is_dir());
         let read = |key: &str| {
-            let mut command = Command::new("git");
+            let mut command = crate::process::command("git");
             if let Some(directory) = directory {
                 command.arg("-C").arg(directory);
             }
@@ -513,7 +513,7 @@ fn create_bootstrap_repository(
     expected_tree: &str,
 ) -> Result<String, String> {
     run_checked(
-        Command::new("git")
+        crate::process::command("git")
             .args(["init", "--quiet", "--initial-branch"])
             .arg(&handoff.source.default_branch)
             .arg("--")
@@ -524,7 +524,7 @@ fn create_bootstrap_repository(
     let bootstrap_ref = "refs/commitarium/bootstrap";
     let refspec = format!("+{}:{bootstrap_ref}", handoff.source.head_commit_id);
     run_checked(
-        Command::new("git")
+        crate::process::command("git")
             .arg("-C")
             .arg(staging)
             .args([
@@ -546,7 +546,7 @@ fn create_bootstrap_repository(
         return Err("the fetched canonical tree changed while the workspace was prepared".into());
     }
 
-    let mut child = Command::new("git")
+    let mut child = crate::process::command("git")
         .arg("-C")
         .arg(staging)
         .args(["commit-tree", &tree, "-F", "-"])
@@ -1166,7 +1166,7 @@ fn prepare_project_material(
         tempfile::tempdir().map_err(|error| format!("create handoff temp dir: {error}"))?;
     let repository = temporary.path().join("internal.git");
     run_checked(
-        Command::new("git")
+        crate::process::command("git")
             .arg("init")
             .arg("--bare")
             .arg(&repository),
@@ -1179,7 +1179,7 @@ fn prepare_project_material(
         "validate internal branch",
     )?;
     let refspec = format!("+{reference}:refs/heads/commitarium-canonical");
-    let mut command = Command::new("git");
+    let mut command = crate::process::command("git");
     command
         .arg("--git-dir")
         .arg(&repository)
@@ -1234,7 +1234,7 @@ fn prepare_project_material(
         let path = temporary.path().join("canonical.patch");
         let file =
             File::create(&path).map_err(|error| format!("create temporary patch: {error}"))?;
-        let output = Command::new("git")
+        let output = crate::process::command("git")
             .arg("--git-dir")
             .arg(&repository)
             .args([
@@ -1420,7 +1420,7 @@ fn synchronize_project_folder(
 }
 
 fn reject_gitlinks(repository: &Path, commit: &str) -> Result<(), String> {
-    let output = Command::new("git")
+    let output = crate::process::command("git")
         .arg("--git-dir")
         .arg(repository)
         .args(["ls-tree", "-r", commit])
@@ -1536,7 +1536,7 @@ fn verify_completed_project_receipt(
             .ok_or("project sync receipt has no local commit")?;
         require_commit(source, local_commit, "recorded project sync commit")?;
         let head = git_line(source, &["rev-parse", "HEAD"])?;
-        let status = Command::new("git")
+        let status = crate::process::command("git")
             .arg("-C")
             .arg(source)
             .args(["merge-base", "--is-ancestor", local_commit, &head])
@@ -1699,7 +1699,7 @@ fn publish_project_upstream(
     let full_ref = format!("refs/heads/{branch_name}");
     let refspec = format!("{local_commit}:{full_ref}");
     let lease = format!("--force-with-lease={full_ref}:");
-    let output = Command::new("git")
+    let output = crate::process::command("git")
         .arg("-C")
         .arg(&repository)
         .args(["push", "--porcelain", &lease, "--", remote_name, &refspec])
@@ -2224,7 +2224,12 @@ mod tests {
     }
 
     fn command(repository: &Path, args: &[&str]) {
-        checked(Command::new("git").arg("-C").arg(repository).args(args));
+        checked(
+            crate::process::command("git")
+                .arg("-C")
+                .arg(repository)
+                .args(args),
+        );
     }
 
     fn line(repository: &Path, args: &[&str]) -> String {
@@ -2249,13 +2254,13 @@ mod tests {
         command(&source, &["commit", "-m", "Initial source"]);
         let initial = line(&source, &["rev-parse", "HEAD"]);
         checked(
-            Command::new("git")
+            crate::process::command("git")
                 .args(["clone", "--quiet", "--bare", "--"])
                 .arg(&source)
                 .arg(&internal),
         );
         checked(
-            Command::new("git")
+            crate::process::command("git")
                 .args(["clone", "--quiet", "--"])
                 .arg(&internal)
                 .arg(&internal_work),
@@ -2376,7 +2381,7 @@ mod tests {
             std::fs::read_to_string(destination.join("README.md")).unwrap(),
             "initial\n"
         );
-        assert!(!Command::new("git")
+        assert!(!crate::process::command("git")
             .arg("-C")
             .arg(&destination)
             .args(["cat-file", "-e", &format!("{}^{{commit}}", fixture.initial)])
@@ -2552,7 +2557,11 @@ mod tests {
         )
         .expect("project sync");
         let upstream = fixture._root.path().join("upstream.git");
-        checked(Command::new("git").args(["init", "--bare"]).arg(&upstream));
+        checked(
+            crate::process::command("git")
+                .args(["init", "--bare"])
+                .arg(&upstream),
+        );
         command(
             &fixture.source,
             &["remote", "add", "user", upstream.to_str().unwrap()],

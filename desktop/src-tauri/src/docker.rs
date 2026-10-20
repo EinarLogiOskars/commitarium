@@ -323,7 +323,7 @@ fn configured_service_image_from_json(configured: &str, service: &str) -> Result
 
 /// Run a plain command and return its trimmed stdout when it exits zero.
 fn probe(program: &str, args: &[&str]) -> Option<String> {
-    let output = Command::new(program).args(args).output().ok()?;
+    let output = crate::process::command(program).args(args).output().ok()?;
     if output.status.success() {
         Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
     } else {
@@ -402,7 +402,7 @@ fn docker_executable() -> Option<PathBuf> {
 /// in the desktop backend, including profile login and Forgejo bootstrap.
 pub(crate) fn docker_command() -> Command {
     let executable = docker_executable().unwrap_or_else(|| PathBuf::from("docker"));
-    let mut command = Command::new(&executable);
+    let mut command = crate::process::command(&executable);
 
     // Docker invokes credential helpers (for example
     // `docker-credential-osxkeychain`) by name. A packaged app's PATH commonly
@@ -519,16 +519,16 @@ pub fn launch_docker_desktop() -> Result<(), String> {
 
     #[cfg(target_os = "macos")]
     let mut command = {
-        let mut command = Command::new("/usr/bin/open");
+        let mut command = crate::process::command("/usr/bin/open");
         command.arg(path);
         command
     };
 
     #[cfg(any(target_os = "windows", target_os = "linux"))]
-    let mut command = Command::new(path);
+    let mut command = crate::process::command(path);
 
     #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
-    let mut command = Command::new(path);
+    let mut command = crate::process::command(path);
 
     command
         .spawn()

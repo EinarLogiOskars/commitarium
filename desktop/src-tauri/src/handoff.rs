@@ -427,7 +427,7 @@ fn prepare_internal_repository(
     token: Option<&str>,
 ) -> Result<(), String> {
     run_checked(
-        Command::new("git")
+        crate::process::command("git")
             .arg("init")
             .arg("--bare")
             .arg(repository),
@@ -452,7 +452,7 @@ fn prepare_internal_repository(
         "+refs/heads/{}:refs/heads/commitarium-base",
         handoff.source.base_branch
     );
-    let mut command = Command::new("git");
+    let mut command = crate::process::command("git");
     command
         .arg("--git-dir")
         .arg(repository)
@@ -526,7 +526,7 @@ fn verify_internal_history(repository: &Path, handoff: &CompletedHandoff) -> Res
 
 fn prepare_local_clone(source: &Path, clone: &Path, base: &str) -> Result<(), String> {
     run_checked(
-        Command::new("git")
+        crate::process::command("git")
             .args(["clone", "--quiet", "--no-hardlinks", "--no-checkout", "--"])
             .arg(source)
             .arg(clone),
@@ -554,7 +554,7 @@ fn import_internal_patch_objects(
         handoff.source.approved_commit_id
     );
     run_checked(
-        Command::new("git")
+        crate::process::command("git")
             .arg("-C")
             .arg(local_clone)
             .args([
@@ -577,7 +577,7 @@ fn write_approved_patch(
     patch_path: &Path,
 ) -> Result<(), String> {
     let patch = File::create(patch_path).map_err(|e| format!("create temporary patch: {e}"))?;
-    let output = Command::new("git")
+    let output = crate::process::command("git")
         .arg("--git-dir")
         .arg(internal)
         .args([
@@ -598,7 +598,7 @@ fn write_approved_patch(
 }
 
 fn apply_patch(repository: &Path, patch_path: &Path) -> Result<(), String> {
-    let output = Command::new("git")
+    let output = crate::process::command("git")
         .arg("-C")
         .arg(repository)
         .args([
@@ -640,7 +640,7 @@ fn create_clean_commit(
             "the recreated local source tree differs from the approved Forgejo tree".into(),
         );
     }
-    let mut command = Command::new("git");
+    let mut command = crate::process::command("git");
     command
         .arg("-C")
         .arg(repository)
@@ -679,7 +679,7 @@ fn create_clean_commit(
 
 fn import_clean_commit(source: &Path, clone: &Path, commit: &str) -> Result<(), String> {
     run_checked(
-        Command::new("git")
+        crate::process::command("git")
             .arg("-C")
             .arg(source)
             .args([
@@ -703,7 +703,7 @@ fn install_clean_commit(
 ) -> Result<bool, String> {
     require_target_head(repository, branch, expected_base)?;
     run_checked(
-        Command::new("git")
+        crate::process::command("git")
             .arg("-C")
             .arg(repository)
             .args(["-c", "core.hooksPath=/dev/null"])
@@ -738,7 +738,7 @@ fn verify_existing_receipt(
     }
     verify_receipt_commit(repository, receipt)?;
     let branch_head = git_line(repository, &["rev-parse", "HEAD"])?;
-    let status = Command::new("git")
+    let status = crate::process::command("git")
         .arg("-C")
         .arg(repository)
         .args([
@@ -940,7 +940,7 @@ fn require_ancestor(
     descendant: &str,
     message: &str,
 ) -> Result<(), String> {
-    let status = Command::new("git")
+    let status = crate::process::command("git")
         .arg("--git-dir")
         .arg(repository)
         .args(["merge-base", "--is-ancestor", ancestor, descendant])
@@ -953,7 +953,7 @@ fn require_ancestor(
 }
 
 fn git_line(repository: &Path, args: &[&str]) -> Result<String, String> {
-    let output = Command::new("git")
+    let output = crate::process::command("git")
         .arg("-C")
         .arg(repository)
         .args(args)
@@ -963,7 +963,7 @@ fn git_line(repository: &Path, args: &[&str]) -> Result<String, String> {
 }
 
 fn git_line_allow_empty(repository: &Path, args: &[&str]) -> Result<String, String> {
-    let output = Command::new("git")
+    let output = crate::process::command("git")
         .arg("-C")
         .arg(repository)
         .args(args)
@@ -976,7 +976,7 @@ fn git_line_allow_empty(repository: &Path, args: &[&str]) -> Result<String, Stri
 }
 
 fn git_dir_line(repository: &Path, args: &[&str]) -> Result<String, String> {
-    let output = Command::new("git")
+    let output = crate::process::command("git")
         .arg("--git-dir")
         .arg(repository)
         .args(args)
@@ -1003,14 +1003,17 @@ fn git_failure(args: &[&str], output: &Output) -> String {
 
 fn run_git_checked(repository: &Path, args: &[&str], action: &str) -> Result<(), String> {
     run_checked(
-        Command::new("git").arg("-C").arg(repository).args(args),
+        crate::process::command("git")
+            .arg("-C")
+            .arg(repository)
+            .args(args),
         action,
     )
 }
 
 fn run_git_dir_checked(repository: &Path, args: &[&str], action: &str) -> Result<(), String> {
     run_checked(
-        Command::new("git")
+        crate::process::command("git")
             .arg("--git-dir")
             .arg(repository)
             .args(args),
@@ -1063,13 +1066,13 @@ mod tests {
         let initial = line(&source, &["rev-parse", "HEAD"]);
 
         checked(
-            Command::new("git")
+            crate::process::command("git")
                 .args(["clone", "--quiet", "--bare", "--"])
                 .arg(&source)
                 .arg(&internal),
         );
         checked(
-            Command::new("git")
+            crate::process::command("git")
                 .args(["clone", "--quiet", "--"])
                 .arg(&internal)
                 .arg(&internal_work),
@@ -1202,7 +1205,7 @@ mod tests {
             )
             .expect("approved tree")
         );
-        assert!(!Command::new("git")
+        assert!(!crate::process::command("git")
             .arg("-C")
             .arg(&fixture.source)
             .args([
@@ -1289,7 +1292,7 @@ mod tests {
         .expect("first sync");
         let second = add_internal_feature(&fixture, "commitarium/two", "two.txt", "two\n");
         assert_eq!(second.source.base_commit_id, first.source.merge_commit_id);
-        assert!(!Command::new("git")
+        assert!(!crate::process::command("git")
             .arg("-C")
             .arg(&fixture.source)
             .args([
@@ -1335,7 +1338,7 @@ mod tests {
         );
         let handoff =
             add_internal_feature(&fixture, "commitarium/unrelated-base", "work.txt", "work\n");
-        assert!(!Command::new("git")
+        assert!(!crate::process::command("git")
             .arg("-C")
             .arg(&fixture.source)
             .args([

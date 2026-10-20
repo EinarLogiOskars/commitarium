@@ -268,7 +268,7 @@ fn prepare_internal_material(
 }
 
 fn reject_gitlinks(repository: &Path, commit: &str) -> Result<(), String> {
-    let output = Command::new("git")
+    let output = crate::process::command("git")
         .arg("--git-dir")
         .arg(repository)
         .args(["ls-tree", "-r", commit])
@@ -347,7 +347,7 @@ pub(super) fn apply_folder_patch(
 }
 
 fn plain_git_command(git_dir: &Path, folder: &Path) -> Command {
-    let mut command = Command::new("git");
+    let mut command = crate::process::command("git");
     // `git apply` resolves paths from the process directory even when
     // GIT_WORK_TREE is set, so pin both to the selected folder. Without this,
     // a patch could be applied relative to the desktop process directory.
@@ -541,7 +541,12 @@ mod tests {
     }
 
     fn command(repository: &Path, args: &[&str]) {
-        checked(Command::new("git").arg("-C").arg(repository).args(args));
+        checked(
+            crate::process::command("git")
+                .arg("-C")
+                .arg(repository)
+                .args(args),
+        );
     }
 
     fn line(repository: &Path, args: &[&str]) -> String {
@@ -572,7 +577,7 @@ mod tests {
         let seed = root.path().join("seed");
         std::fs::create_dir(&seed).expect("seed dir");
         checked(
-            Command::new("git")
+            crate::process::command("git")
                 .arg("-C")
                 .arg(&seed)
                 .args(["init", "--initial-branch=main"]),
@@ -586,13 +591,13 @@ mod tests {
         command(&seed, &["add", "-A"]);
         command(&seed, &["commit", "-m", "Import"]);
         checked(
-            Command::new("git")
+            crate::process::command("git")
                 .args(["clone", "--quiet", "--bare", "--"])
                 .arg(&seed)
                 .arg(&internal),
         );
         checked(
-            Command::new("git")
+            crate::process::command("git")
                 .args(["clone", "--quiet", "--"])
                 .arg(&internal)
                 .arg(&internal_work),

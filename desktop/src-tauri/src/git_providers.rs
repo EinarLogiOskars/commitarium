@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::ffi::OsString;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::Output;
 use std::sync::Mutex;
 use tauri::{AppHandle, Manager};
 
@@ -504,7 +504,7 @@ fn create_provider_repository(
                 _ => return Err("unsupported GitLab visibility".into()),
             };
             let branch = context.default_branch.as_str();
-            let output = Command::new(cli)
+            let output = crate::process::command(cli)
                 .current_dir(repository)
                 .env("GLAB_PROMPT_DISABLED", "1")
                 .args([
@@ -1101,7 +1101,7 @@ fn executable_names(name: &str) -> Vec<OsString> {
 }
 
 fn run(cli: &Path, args: &[&str]) -> Result<Output, String> {
-    Command::new(cli)
+    crate::process::command(cli)
         .args(args)
         .env("GH_PROMPT_DISABLED", "1")
         .env("GLAB_PROMPT_DISABLED", "1")
@@ -1128,7 +1128,7 @@ fn run_json(cli: &Path, args: &[&str]) -> Option<serde_json::Value> {
 }
 
 fn git(repository: &Path, args: &[&str]) -> Result<Output, String> {
-    Command::new("git")
+    crate::process::command("git")
         .arg("-C")
         .arg(repository)
         .args(args)

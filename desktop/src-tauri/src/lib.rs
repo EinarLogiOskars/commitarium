@@ -14,6 +14,7 @@ mod import;
 mod preview;
 mod preview_check;
 mod preview_compose;
+mod process;
 mod profiles;
 mod store;
 mod updater;
