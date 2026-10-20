@@ -119,7 +119,8 @@ type Action struct {
 	// Premium names the models in it that need explicit approval.
 	Premium []string `json:"premium,omitempty"`
 	Result  string   `json:"result,omitempty"`
-	// ProjectID names the project a create_app action created.
+	// ProjectID names the project a create_app or plan_project action
+	// created.
 	ProjectID string `json:"project_id,omitempty"`
 	// AutoTried marks an action autopilot took over, applied or not.
 	AutoTried bool `json:"auto_tried,omitempty"`
@@ -155,6 +156,10 @@ type Conversation struct {
 	SignIn *SignInWait `json:"sign_in,omitempty"`
 	// Focus is the item the user opened the assistant on (focus.go).
 	Focus *Focus `json:"focus,omitempty"`
+	// Developer is whether the user's app shows Developer mode, as its last
+	// message said: without it, a new app stays self-contained, and only
+	// with it may the assistant plan a project (ADR-035).
+	Developer bool `json:"developer,omitempty"`
 }
 
 type record struct {
@@ -193,9 +198,6 @@ type record struct {
 	PreviewFailedAt *time.Time `json:"preview_failed_at,omitempty"`
 	// Helpers are the helper sessions the assistant started (helpers.go).
 	Helpers []Helper `json:"helpers,omitempty"`
-	// Developer is whether the user's app shows Developer mode, as its last
-	// message said: without it, a new app stays self-contained (ADR-035).
-	Developer bool `json:"developer,omitempty"`
 }
 
 // maxSessionTurns bounds a provider session; the next turn starts fresh.

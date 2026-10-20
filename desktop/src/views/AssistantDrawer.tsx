@@ -588,25 +588,27 @@ function ActionCard({
                 ? "Close a work order"
                 : action.type === "create_app"
                   ? `New app: ${action.title}`
-                  : action.type === "set_up_preview"
-                    ? "Set up the app's preview"
-                    : action.type === "write_vision"
-                      ? "Write the vision"
-                      : action.type === "set_up_stack"
-                        ? "Set up the stack"
-                        : action.type === "answer_helper"
-                          ? "Answer a question about the work"
-                          : action.type === "write_brief"
-                            ? "Write the brief for a work order"
-                            : action.type === "accept_brief"
-                              ? `Brief: ${action.title}`
-                              : action.type === "design_stack"
-                                ? "Design the stack"
-                                : action.type === "apply_stack"
-                                  ? "Suggested stack"
-                                  : action.type === "research"
-                                    ? `Look up: ${action.title}`
-                                    : "Switch models";
+                  : action.type === "plan_project"
+                    ? `Plan a project: ${action.title}`
+                    : action.type === "set_up_preview"
+                      ? "Set up the app's preview"
+                      : action.type === "write_vision"
+                        ? "Write the vision"
+                        : action.type === "set_up_stack"
+                          ? "Set up the stack"
+                          : action.type === "answer_helper"
+                            ? "Answer a question about the work"
+                            : action.type === "write_brief"
+                              ? "Write the brief for a work order"
+                              : action.type === "accept_brief"
+                                ? `Brief: ${action.title}`
+                                : action.type === "design_stack"
+                                  ? "Design the stack"
+                                  : action.type === "apply_stack"
+                                    ? "Suggested stack"
+                                    : action.type === "research"
+                                      ? `Look up: ${action.title}`
+                                      : "Switch models";
   const models = [
     action.lead_model &&
       `Lead ${action.lead_agent ? agentName(agents, action.lead_agent) + " · " : ""}${modelName(action.lead_model)}`,
@@ -629,16 +631,17 @@ function ActionCard({
         ) : (
           <p className="assistant-action__desc">{action.description}</p>
         ))}
-      {action.type === "create_app" && (action.assumptions ?? []).length > 0 && (
-        <div className="assistant-action__desc">
-          Assumed where you didn&apos;t say:
-          <ul>
-            {action.assumptions?.map((assumption) => (
-              <li key={assumption}>{assumption}</li>
-            ))}
-          </ul>
-        </div>
-      )}
+      {(action.type === "create_app" || action.type === "plan_project") &&
+        (action.assumptions ?? []).length > 0 && (
+          <div className="assistant-action__desc">
+            Assumed where you didn&apos;t say:
+            <ul>
+              {action.assumptions?.map((assumption) => (
+                <li key={assumption}>{assumption}</li>
+              ))}
+            </ul>
+          </div>
+        )}
       {action.type === "continue_work_order" && (
         <p className="assistant-action__desc">
           {action.guidance ? `Guidance: ${action.guidance}` : "Retries without guidance."}
@@ -855,6 +858,7 @@ const APPLY_LABEL: Record<AssistantAction["type"], string> = {
   continue_work_order: "Continue",
   close_work_order: "Close",
   create_app: "Create app",
+  plan_project: "Plan it",
   set_up_preview: "Set up preview",
   write_vision: "Write vision",
   set_up_stack: "Set up stack",

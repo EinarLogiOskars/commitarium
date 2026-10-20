@@ -275,3 +275,54 @@ func TestANewAppIsPlannedFromTheWholeBrief(t *testing.T) {
 		t.Fatalf("notes = %v", stub.notes)
 	}
 }
+
+// plannedConversations records the notes a new project's conversation is
+// given and what its assistant is woken with.
+type plannedConversations struct {
+	*briefConversations
+	woken map[string]string
+}
+
+func (stub *plannedConversations) Wake(_ context.Context, scope, _, text string) error {
+	stub.woken[scope] = text
+	return nil
+}
+
+func (stub *plannedConversations) HandOver(context.Context, string) error { return nil }
+
+// A project is planned only in Developer mode: then it is created, its
+// assistant keeps the brief, and it is woken to plan it with the user.
+func TestAProjectIsPlannedOnlyInDeveloperMode(t *testing.T) {
+	stub := &plannedConversations{briefConversations: &briefConversations{conversationStub: &conversationStub{
+		settings: conversations.Settings{Agent: "claude", Model: "claude-sonnet-5-5"},
+		action: conversations.Action{ID: "act_1", Status: conversations.ActionProposed, AssistantAction: featureartifact.AssistantAction{
+			Type: featureartifact.AssistantPlanProject, Reason: "A real project", Title: "Shop sync",
+			Description: "Keeps two shops' stock in step with the accounts.", AppBrief: "Shopify and Regla, synced nightly.",
+		}},
+	}, notes: map[string]string{}}, woken: map[string]string{}}
+	projects := &recordingProjectService{result: project.Project{ID: "prj_shop", Name: "Shop sync"},
+		getByIDResult: project.Project{ID: "prj_shop", Name: "Shop sync"}}
+	handler := NewWithWorkspaceRealWorkflowDeletionAndModels(projects, &recordingFeatureService{},
+		nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, stub, testAgents())
+	approve := func() *httptest.ResponseRecorder {
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost,
+			"/api/v1/assistant/conversations/commitarium/actions/act_1/approve", strings.NewReader(`{}`)))
+		return recorder
+	}
+	if recorder := approve(); recorder.Code != http.StatusConflict ||
+		!strings.Contains(recorder.Body.String(), "developer_mode_required") || projects.receivedName != "" {
+		t.Fatalf("a project was planned without Developer mode: %d %s", recorder.Code, recorder.Body.String())
+	}
+	stub.developer = true
+	if recorder := approve(); recorder.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", recorder.Code, recorder.Body.String())
+	}
+	if projects.receivedName != "Shop sync" || !strings.Contains(stub.notes["prj_shop"], "Shopify and Regla") ||
+		!strings.Contains(stub.woken["prj_shop"], "plan this project with you") {
+		t.Fatalf("name=%q notes=%v woken=%v", projects.receivedName, stub.notes, stub.woken)
+	}
+	if !strings.Contains(stub.resolvedResult, "Plan it with the assistant") {
+		t.Fatalf("result = %q", stub.resolvedResult)
+	}
+}

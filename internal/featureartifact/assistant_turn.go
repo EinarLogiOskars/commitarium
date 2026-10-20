@@ -46,6 +46,12 @@ const (
 	// summary, and AppBrief, all the assistant gathered (APPS_PLAN.md,
 	// ADR-035).
 	AssistantCreateApp AssistantActionType = "create_app"
+	// AssistantPlanProject creates a project at the top level, in Developer
+	// mode only, for a request that is a real project rather than a
+	// self-contained app: named by Title, with Description its goal and
+	// AppBrief what the assistant gathered so far, it is planned with the
+	// user before anything is built (planning mode).
+	AssistantPlanProject AssistantActionType = "plan_project"
 	// AssistantSetUpPreview sets the app's preview up, or fixes one that
 	// fails to start, in a work order that merges only once Commitarium's
 	// preview check of its commit passes (ADR-028). Guidance says what is
@@ -136,7 +142,7 @@ type AssistantAction struct {
 	// Brief, for create_work_order, has the new work order's brief written
 	// from Description before it starts (ADR-035): it is created as a draft.
 	Brief bool `json:"brief,omitempty"`
-	// AppBrief, for create_app, is what the assistant gathered with the user
+	// AppBrief, for create_app and plan_project, is what the assistant gathered with the user
 	// (what the app is for, decisions, research with sources, what is left
 	// out), handed in full to the writer who plans the app; Assumptions are
 	// what it guessed, shown on the card.
@@ -230,9 +236,9 @@ func (action AssistantAction) validate() error {
 		if action.Priority < 0 || action.Priority > maxVisionPriority {
 			return fmt.Errorf("priority runs from 0 to %d", maxVisionPriority)
 		}
-	case AssistantCreateApp:
+	case AssistantCreateApp, AssistantPlanProject:
 		if action.Title == "" || len(action.Title) > 80 || action.Description == "" || len(action.Description) > MaxGoalBytes {
-			return fmt.Errorf("an app needs a short name and a description")
+			return fmt.Errorf("an app or a project needs a short name and a description")
 		}
 		if len(action.AppBrief) > MaxAppBriefBytes || len(action.Assumptions) > maxAssumptions {
 			return fmt.Errorf("the app's brief is too long, or it lists more than %d assumptions", maxAssumptions)

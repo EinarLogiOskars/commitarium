@@ -32,6 +32,8 @@ type conversationStub struct {
 	goal *conversations.Goal
 	// queued names the work each work order's queued start waits for.
 	queued map[string]string
+	// developer is whether the user's app shows Developer mode.
+	developer bool
 }
 
 func (stub *conversationStub) QueuedStarts(context.Context, string) (map[string]string, error) {
@@ -67,7 +69,7 @@ func (stub *conversationStub) SaveSettings(_ context.Context, settings conversat
 }
 
 func (stub *conversationStub) Get(context.Context, string) (conversations.Conversation, error) {
-	return conversations.Conversation{Goal: stub.goal}, nil
+	return conversations.Conversation{Goal: stub.goal, Developer: stub.developer}, nil
 }
 
 func (stub *conversationStub) Send(context.Context, string, string, string) (conversations.Conversation, error) {

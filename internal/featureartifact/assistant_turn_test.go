@@ -49,3 +49,20 @@ func TestResearchNeedsATitleAndAQuestion(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// A project to plan is named and described like a new app.
+func TestAProjectToPlanNeedsANameAndAGoal(t *testing.T) {
+	plan := AssistantAction{Type: AssistantPlanProject, Reason: "A real project", Title: "Shop sync"}
+	if _, err := (AssistantTurn{Actions: []AssistantAction{plan}}).Normalize(); !errors.Is(err, ErrInvalidArtifact) {
+		t.Fatalf("a project without a goal = %v", err)
+	}
+	plan.Description = "Keeps the shop's stock in step with the accounts."
+	plan.AppBrief = strings.Repeat("x", MaxAppBriefBytes+1)
+	if _, err := (AssistantTurn{Actions: []AssistantAction{plan}}).Normalize(); !errors.Is(err, ErrInvalidArtifact) {
+		t.Fatalf("an unbounded brief = %v", err)
+	}
+	plan.AppBrief = "Two shops, one accounting system."
+	if _, err := (AssistantTurn{Actions: []AssistantAction{plan}}).Normalize(); err != nil {
+		t.Fatal(err)
+	}
+}

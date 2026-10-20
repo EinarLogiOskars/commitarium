@@ -31,6 +31,7 @@ export type AssistantActionType =
   | "continue_work_order"
   | "close_work_order"
   | "create_app"
+  | "plan_project"
   | "set_up_preview"
   | "write_vision"
   | "set_up_stack"
@@ -66,8 +67,8 @@ export interface AssistantAction {
   helper?: string;
   /** For create_work_order: its brief is written before it starts. */
   brief?: boolean;
-  /** For create_app: all the assistant gathered, for the app's planner, and
-   * what it assumed where the user did not say (ADR-035). */
+  /** For create_app and plan_project: all the assistant gathered, for the
+   * app's planner, and what it assumed where the user did not say (ADR-035). */
   app_brief?: string;
   assumptions?: string[];
   /** For add_vision_item and start_autopilot: 0 for P0, 1 for P1, and so on. */
@@ -78,7 +79,7 @@ export interface AssistantAction {
   status: "proposed" | "applied" | "dismissed" | "failed";
   premium?: string[];
   result?: string;
-  /** The project a create_app action created. */
+  /** The project a create_app or plan_project action created. */
   project_id?: string;
   /** Autopilot took it over. */
   auto_tried?: boolean;

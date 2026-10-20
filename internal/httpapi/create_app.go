@@ -75,6 +75,44 @@ func (api *API) applyCreateApp(w http.ResponseWriter, r *http.Request, action co
 	return fmt.Sprintf("Created the app “%s”. It is being planned, set up, and built.", action.Title), created.ID, true
 }
 
+// applyPlanProject creates the project the user and the assistant agreed to
+// plan, in Developer mode (ADR-035): a project like one from New project,
+// whose assistant keeps the brief gathered so far in its notes and is woken
+// to plan it with the user. Nothing is built until they say so.
+func (api *API) applyPlanProject(w http.ResponseWriter, r *http.Request, action conversations.Action) (string, string, bool) {
+	ctx := r.Context()
+	key := "assistant-" + action.ID
+	if _, _, err := api.assistantAgent(ctx); err != nil {
+		if !writeChoiceError(w, err) {
+			writeConversationError(w, err)
+		}
+		return "", "", false
+	}
+	var created projectResponse
+	if err := api.callOwn(ctx, http.MethodPost, "/api/v1/projects", key+":project", map[string]any{"name": action.Title}, &created); err != nil {
+		writeError(w, http.StatusBadGateway, "project_not_created", "the project could not be created: "+err.Error())
+		return "", "", false
+	}
+	conversation := "/api/v1/assistant/conversations/" + url.PathEscape(created.ID)
+	if err := api.callOwn(ctx, http.MethodPut, conversation+"/notes", "",
+		map[string]string{"notes": "The project's brief, settled with the user before it was created:\n\n" + appBrief(action)}, nil); err != nil {
+		writeError(w, http.StatusBadGateway, "project_not_started",
+			fmt.Sprintf("the project %q was created, but its planning could not start: %v", action.Title, err))
+		return "", "", false
+	}
+	if waker, ok := api.conversations.(assistantWaker); ok {
+		if err := waker.Wake(ctx, created.ID, "Planning the project with the assistant.",
+			"The user wants to plan this project with you before anything is built: the brief from the top level "+
+				"is in your notes. Open the conversation: sum up in a few lines what you know and ask the first round "+
+				"of what matters most."); err != nil {
+			writeError(w, http.StatusBadGateway, "project_not_started",
+				fmt.Sprintf("the project %q was created, but its planning could not start: %v", action.Title, err))
+			return "", "", false
+		}
+	}
+	return fmt.Sprintf("Created the project “%s”. Plan it with the assistant, then build it.", action.Title), created.ID, true
+}
+
 // appBrief is what the vision writer hears of a new app: the summary, the
 // brief the assistant gathered, and what it assumed.
 func appBrief(action conversations.Action) string {

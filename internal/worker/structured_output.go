@@ -140,7 +140,7 @@ func OutputJSONSchema(contract OutputContract) any {
 		action := objectSchema(
 			map[string]any{
 				"type": map[string]any{
-					"type": "string", "enum": []string{"create_work_order", "start_work_order", "change_models", "add_vision_item", "start_autopilot", "continue_work_order", "recover_work_order", "close_work_order", "create_app", "set_up_preview", "write_vision", "set_up_stack", "answer_helper", "write_brief", "design_stack", "research"},
+					"type": "string", "enum": []string{"create_work_order", "start_work_order", "change_models", "add_vision_item", "start_autopilot", "continue_work_order", "recover_work_order", "close_work_order", "create_app", "plan_project", "set_up_preview", "write_vision", "set_up_stack", "answer_helper", "write_brief", "design_stack", "research"},
 				},
 				"reason":               text,
 				"title":                text,
@@ -165,8 +165,8 @@ func OutputJSONSchema(contract OutputContract) any {
 				"after":                map[string]any{"type": "string", "description": "For create_work_order and start_work_order: the work order ID, or the exact title of another of your actions, that this one must wait for because both change the same part of the app; it starts once that one merges. Otherwise empty."},
 				"helper":               map[string]any{"type": "string", "description": "For answer_helper: the helper that asked, as Commitarium named it. Otherwise empty."},
 				"brief":                map[string]any{"type": "boolean", "description": "For create_work_order: true has its brief written from description before it starts; it is created as a draft. False for quick changes. Otherwise false."},
-				"app_brief":            map[string]any{"type": "string", "description": "For create_app: everything you gathered with the user, in full, for the writer who plans the app. Otherwise empty."},
-				"assumptions":          map[string]any{"type": "array", "items": text, "description": "For create_app: each thing you assumed where the user did not say, in a short line. Otherwise empty."},
+				"app_brief":            map[string]any{"type": "string", "description": "For create_app and plan_project: everything you gathered with the user, in full, for whoever plans it next. Otherwise empty."},
+				"assumptions":          map[string]any{"type": "array", "items": text, "description": "For create_app and plan_project: each thing you assumed where the user did not say, in a short line. Otherwise empty."},
 			},
 			[]string{
 				"type", "reason", "title", "description", "vision_item_id", "steps",
