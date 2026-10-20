@@ -59,6 +59,24 @@ const SAFE_DOCKER_ENV: &[&str] = &[
     "DOCKER_HOST",
     "DOCKER_TLS_VERIFY",
 ];
+/// Windows' own variables, which programs there need to run at all: system
+/// folders, where Docker Desktop keeps its CLI plugins (compose among them),
+/// and the temp folders. They hold no secrets and do not exist elsewhere.
+/// Without them `docker compose` cannot find its plugin on Windows and fails
+/// with "unknown flag: --env-file".
+const WINDOWS_SYSTEM_ENV: &[&str] = &[
+    "SystemRoot",
+    "SystemDrive",
+    "windir",
+    "ProgramFiles",
+    "ProgramFiles(x86)",
+    "ProgramW6432",
+    "ProgramData",
+    "PATHEXT",
+    "ComSpec",
+    "TEMP",
+    "TMP",
+];
 const RAW_FILE_KEYS: &[&str] = &[
     "configs",
     "env_file",
@@ -822,15 +840,25 @@ pub(crate) fn sanitize_compose_command(command: &mut Command, safe_home: &Path) 
         .find(|(key, _)| *key == "PATH")
         .and_then(|(_, value)| value.map(OsString::from))
         .or_else(|| std::env::var_os("PATH"));
-    let docker_config = std::env::var_os("DOCKER_CONFIG").or_else(|| {
-        std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".docker").into_os_string())
-    });
+    let docker_config = docker_config_dir(
+        std::env::var_os("DOCKER_CONFIG"),
+        std::env::var_os("HOME"),
+        std::env::var_os("USERPROFILE"),
+    );
 
     command.env_clear();
     if let Some(path) = configured_path {
         command.env("PATH", path);
     }
+    // Windows reads the home folder from USERPROFILE; both point at the safe
+    // one, while Docker's own configuration stays the user's.
     command.env("HOME", safe_home);
+    command.env("USERPROFILE", safe_home);
+    for key in WINDOWS_SYSTEM_ENV {
+        if let Some(value) = std::env::var_os(key) {
+            command.env(key, value);
+        }
+    }
     if let Some(config) = docker_config {
         command.env("DOCKER_CONFIG", config);
     }
@@ -842,6 +870,19 @@ pub(crate) fn sanitize_compose_command(command: &mut Command, safe_home: &Path) 
             command.env(key, value);
         }
     }
+}
+
+/// The user's Docker configuration folder: DOCKER_CONFIG, else `.docker` in
+/// the home folder, which Windows names USERPROFILE when HOME is unset.
+fn docker_config_dir(
+    docker_config: Option<OsString>,
+    home: Option<OsString>,
+    userprofile: Option<OsString>,
+) -> Option<OsString> {
+    docker_config.or_else(|| {
+        home.or(userprofile)
+            .map(|home| PathBuf::from(home).join(".docker").into_os_string())
+    })
 }
 
 fn object_mut<'a>(value: &'a mut Value, name: &str) -> Result<&'a mut Map<String, Value>, String> {
@@ -1258,11 +1299,46 @@ mod tests {
             .map(|(key, _)| key.to_string_lossy().into_owned())
             .collect::<Vec<_>>();
         assert!(environment.contains(&"HOME".to_string()));
+        assert!(environment.contains(&"USERPROFILE".to_string()));
         assert!(environment.contains(&"PATH".to_string()));
         assert!(!environment.contains(&"AWS_SECRET_ACCESS_KEY".to_string()));
         assert!(environment.iter().all(|key| {
-            key == "HOME" || key == "PATH" || SAFE_DOCKER_ENV.contains(&key.as_str())
+            key == "HOME"
+                || key == "USERPROFILE"
+                || key == "PATH"
+                || SAFE_DOCKER_ENV.contains(&key.as_str())
+                || WINDOWS_SYSTEM_ENV.contains(&key.as_str())
         }));
+    }
+
+    #[test]
+    fn windows_keeps_the_variables_docker_needs_to_find_compose() {
+        // Docker Desktop's compose plugin lives under these on Windows.
+        for key in ["ProgramFiles", "ProgramData", "SystemRoot"] {
+            assert!(WINDOWS_SYSTEM_ENV.contains(&key), "{key}");
+        }
+    }
+
+    #[test]
+    fn the_docker_configuration_is_found_through_userprofile_on_windows() {
+        let path = |value: &str| Some(OsString::from(value));
+        assert_eq!(
+            docker_config_dir(None, None, path("C:/Users/ann")),
+            Some(
+                PathBuf::from("C:/Users/ann")
+                    .join(".docker")
+                    .into_os_string()
+            )
+        );
+        assert_eq!(
+            docker_config_dir(None, path("/home/ann"), path("C:/Users/ann")),
+            Some(PathBuf::from("/home/ann").join(".docker").into_os_string())
+        );
+        assert_eq!(
+            docker_config_dir(path("/custom"), path("/home/ann"), None),
+            path("/custom")
+        );
+        assert_eq!(docker_config_dir(None, None, None), None);
     }
 
     #[test]
