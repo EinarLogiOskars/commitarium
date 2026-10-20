@@ -3,6 +3,16 @@ import test from "node:test";
 
 import { rewriteUpdaterUrls, verifyUpdaterManifest } from "./verify-updater-manifest.mjs";
 
+// signature is a Tauri update signature's shape: base64 of minisign's
+// lines, its trusted comment naming the version it was signed for.
+function signature(platform, version = "0.5.0") {
+  const versionField = version === null ? "" : `\tversion:${version}`;
+  return Buffer.from(
+    `untrusted comment: signature from tauri secret key\nRUQ${platform}\n` +
+      `trusted comment: timestamp:1792438256\tfile:Commitarium_${platform}${versionField}\nglobal\n`,
+  ).toString("base64");
+}
+
 function validManifest() {
   const platforms = {};
   for (const platform of [
@@ -12,7 +22,7 @@ function validManifest() {
     "windows-x86_64",
   ]) {
     platforms[platform] = {
-      signature: `signature-${platform}`,
+      signature: signature(platform),
       url: `https://api.github.com/repos/example/project/releases/assets/${platform}`,
     };
   }
@@ -69,4 +79,16 @@ test("rewrites API asset URLs to release downloads", () => {
     "https://github.com/example/project/releases/download/v0.5.0/Project_0.5.0_darwin-aarch64.tar.gz",
   );
   assert.deepEqual(verifyUpdaterManifest(manifest, "v0.5.0", "example/project"), []);
+});
+
+test("rejects signatures not bound to the release's version", () => {
+  const manifest = validManifest();
+  // Signed by a Tauri CLI before 2.12: no version at all (0.8.1).
+  manifest.platforms["windows-x86_64"].signature = signature("windows-x86_64", null);
+  // Signed for another release.
+  manifest.platforms["linux-x86_64"].signature = signature("linux-x86_64", "0.4.0");
+  assert.deepEqual(verifyUpdaterManifest(manifest, "0.5.0"), [
+    "linux-x86_64's update signature is for version 0.4.0, not 0.5.0; installed apps refuse it",
+    "windows-x86_64's update signature is for version (none), not 0.5.0; installed apps refuse it",
+  ]);
 });

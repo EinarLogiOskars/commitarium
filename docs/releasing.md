@@ -115,6 +115,13 @@ manifest. A final workflow job downloads that manifest from the draft and
 checks its version, signatures, secure download URLs, and coverage for Apple
 Silicon macOS, Intel macOS, Windows x86-64, and Linux x86-64.
 
+Installed apps enforce `requireSignedVersion`: an update's signature must name
+the version it was signed for, in its trusted comment, or the app refuses to
+install it. Tauri CLI 2.12 and later write that when `tauri build` signs, so
+the lockfile must keep the CLI at 2.12 or newer; the manifest check fails a
+release whose signatures lack the version. Releases up to 0.8.1 were signed
+without it, which is why updating to them failed in the app.
+
 The artifacts remain on a draft regular release. This keeps a partially
 completed matrix or an untested artifact from becoming visible automatically,
 while publishing the approved draft makes it discoverable through GitHub's

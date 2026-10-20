@@ -29,6 +29,28 @@ export function rewriteUpdaterUrls(manifest, assets, repository, tag) {
   return manifest;
 }
 
+// signedVersion reads the version a Tauri update signature was signed for:
+// the `version:` field of its trusted comment, which Tauri CLI 2.12 and later
+// write. Installed apps (requireSignedVersion) refuse a signature without it,
+// or for another version. The comment's integrity is the updater's to check.
+export function signedVersion(signature) {
+  let text;
+  try {
+    text = Buffer.from(signature, "base64").toString("utf8");
+  } catch {
+    return null;
+  }
+  const comment = text
+    .split("\n")
+    .find((line) => line.startsWith("trusted comment: "));
+  if (!comment) return null;
+  const field = comment
+    .slice("trusted comment: ".length)
+    .split("\t")
+    .find((part) => part.startsWith("version:"));
+  return field ? field.slice("version:".length).trim() : null;
+}
+
 export function verifyUpdaterManifest(manifest, expectedVersion, repository) {
   const errors = [];
   const version = expectedVersion.replace(/^v/, "");
@@ -56,6 +78,13 @@ export function verifyUpdaterManifest(manifest, expectedVersion, repository) {
     }
     if (typeof entry.signature !== "string" || entry.signature.trim() === "") {
       errors.push(`${platform} has no update signature`);
+    } else {
+      const signed = signedVersion(entry.signature);
+      if (signed?.replace(/^v/, "") !== version) {
+        errors.push(
+          `${platform}'s update signature is for version ${signed ?? "(none)"}, not ${version}; installed apps refuse it`,
+        );
+      }
     }
     if (typeof entry.url !== "string" || !entry.url.startsWith("https://")) {
       errors.push(`${platform} has no secure download URL`);
