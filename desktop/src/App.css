@@ -3413,6 +3413,46 @@ button.danger:not(.ghost) {
   padding: 4px 12px;
   font-size: 12px;
 }
+/* The planning workspace: the plan's cards beside the assistant's drawer. */
+.planning__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 12px;
+}
+.planning h3 {
+  margin: 0 0 8px;
+}
+.planning__list {
+  margin: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.planning__list .vision__row {
+  list-style: none;
+  margin-left: -18px;
+}
+.planning__list summary {
+  cursor: pointer;
+}
+.planning__sources {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  margin-top: 4px;
+  font-size: 12px;
+}
+.planning__priority + .planning__priority {
+  margin-top: 12px;
+}
+.planning__priority .vision__items {
+  margin-top: 6px;
+}
+.planning__build {
+  align-items: center;
+  flex-wrap: wrap;
+}
 .vision__preset--on {
   border-color: var(--accent);
   background: color-mix(in srgb, var(--accent) 18%, transparent);

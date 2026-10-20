@@ -38,6 +38,8 @@ export const WORK_CHANGED = "commitarium:work-changed";
 export const OPEN_VISION = "commitarium:open-vision";
 /** Opens the assistant, optionally with a message started in its composer. */
 export const OPEN_ASSISTANT = "commitarium:open-assistant";
+/** Opens a project (detail: its ID), as one the assistant created to plan. */
+export const OPEN_PROJECT = "commitarium:open-project";
 /** Asks the assistant to reload its conversation, as after autopilot starts or stops. */
 export const ASSISTANT_CHANGED = "commitarium:assistant-changed";
 
@@ -555,6 +557,8 @@ function ActionCard({
         const applied = conversation.actions?.find((a) => a.id === action.id);
         if (applied?.type === "create_app" && applied.project_id) {
           void openAppWindow(applied.project_id, applied.title);
+        } else if (applied?.type === "plan_project" && applied.project_id) {
+          window.dispatchEvent(new CustomEvent(OPEN_PROJECT, { detail: applied.project_id }));
         } else if (applied?.type === "add_vision_item") {
           window.dispatchEvent(new Event(OPEN_VISION));
         } else if (applied?.work_order_id) {

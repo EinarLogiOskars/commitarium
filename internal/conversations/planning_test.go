@@ -34,13 +34,21 @@ func TestAPlannedProjectIsPlannedWithTheUser(t *testing.T) {
 	service, worker := newTestService(t)
 	visions := &plannedVision{}
 	service.config.Visions = visions
+	// Opened on the vision, it plans rather than has the vision written.
+	if _, err := service.SetFocus(t.Context(), "prj_test", &Focus{Kind: FocusVision}); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := service.Send(t.Context(), "prj_test", "Let's plan it", "msg-1"); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"Planning mode.", "update_plan", "propose build_plan", "Every third round, step back"} {
+	for _, want := range []string{"Planning mode.", "update_plan", "propose build_plan", "Every third round, step back",
+		"the plan being written in the planning workspace"} {
 		if !strings.Contains(worker.puts[0].Instructions, want) {
 			t.Fatalf("the planning turn lacks %q", want)
 		}
+	}
+	if strings.Contains(worker.puts[0].Instructions, "Then propose write_vision") {
+		t.Fatal("a planned vision is to be written by the vision writer")
 	}
 	worker.finish(workerhttp.TerminalResult{Outcome: workerhttp.OutcomeCompleted, Disposition: workerhttp.DispositionSucceeded,
 		Summary: "Noted.", AssistantTurn: &featureartifact.AssistantTurn{Actions: []featureartifact.AssistantAction{
