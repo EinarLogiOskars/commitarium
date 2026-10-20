@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/EinarLogiOskars/commitarium/internal/agent"
+	"github.com/EinarLogiOskars/commitarium/internal/documents"
 	"github.com/EinarLogiOskars/commitarium/internal/execution"
 	"github.com/EinarLogiOskars/commitarium/internal/feature"
 	"github.com/EinarLogiOskars/commitarium/internal/featureartifact"
@@ -25,6 +26,11 @@ type FeatureLister interface {
 
 type VisionReader interface {
 	Get(ctx context.Context, projectID string) (vision.Vision, error)
+}
+
+// DocumentLister lists the files attached to a project.
+type DocumentLister interface {
+	List(ctx context.Context, projectID string) ([]documents.Document, error)
 }
 
 type ToolchainReader interface {
@@ -64,7 +70,9 @@ type StateDescriber struct {
 	// Blockers, when set, describe a blocked run in full (ADR-032): what
 	// failed, the agents' last messages, and the recoveries tried.
 	Blockers BlockerReader
-	Now      func() time.Time
+	// Documents, when set, lists the files attached to the project.
+	Documents DocumentLister
+	Now       func() time.Time
 }
 
 // maxWorkOrders bounds the work orders listed for a project.
@@ -222,6 +230,16 @@ func (describer StateDescriber) writeProject(ctx context.Context, builder *strin
 			builder.WriteString("Stack: " + strings.Join(tools, ", ") + ".\n")
 		} else if err == nil {
 			builder.WriteString("Stack: not set up yet.\n")
+		}
+	}
+
+	if describer.Documents != nil {
+		if attached, err := describer.Documents.List(ctx, current.ID); err == nil && len(attached) > 0 {
+			builder.WriteString("Documents the user attached, in " + documents.Dir + "/ of your working directory and of " +
+				"every helper's and agent's checkout (not committed; name the ones a helper or a work order needs by path):\n")
+			for _, document := range attached {
+				builder.WriteString(fmt.Sprintf("- %s (%d KB)\n", document.Name, (document.Size+1023)/1024))
+			}
 		}
 	}
 

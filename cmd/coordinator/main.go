@@ -17,6 +17,7 @@ import (
 	"time"
 
 	coordinatordatabase "github.com/EinarLogiOskars/commitarium/internal/database"
+	"github.com/EinarLogiOskars/commitarium/internal/documents"
 	"github.com/EinarLogiOskars/commitarium/internal/execution"
 	"github.com/EinarLogiOskars/commitarium/internal/feature"
 	"github.com/EinarLogiOskars/commitarium/internal/forgejo"
@@ -263,12 +264,19 @@ func run(ctx context.Context, coordinatorConfig config) error {
 	featureStore := coordinatordatabase.NewFeatureStore(db)
 	featureService := feature.NewService(featureStore, projectService)
 	workspaceStore := coordinatordatabase.NewWorkspaceStore(db)
+	// The files attached to projects are copied into each checkout of their
+	// repositories, for the assistant, its helpers, and the agents.
+	documentStore, err := documents.NewStore(filepath.Join(coordinatorConfig.toolchainRoot, "documents"))
+	if err != nil {
+		return fmt.Errorf("create project documents: %w", err)
+	}
 	checkoutManager, err := gitworkspace.NewManager(gitworkspace.Config{
 		Root:            coordinatorConfig.workspaceRoot,
 		InternalBaseURL: coordinatorConfig.forgejoURL,
 		HostBaseURL:     coordinatorConfig.forgejoHostURL,
 		TokenFile:       coordinatorConfig.forgejoTokenFile,
 		GitExecutable:   coordinatorConfig.gitExecutable,
+		Ready:           documentStore.ForCheckouts(projectService),
 	})
 	if err != nil {
 		return fmt.Errorf("create managed-checkout service: %w", err)
@@ -279,6 +287,7 @@ func run(ctx context.Context, coordinatorConfig config) error {
 		HostBaseURL:     coordinatorConfig.forgejoHostURL,
 		TokenFile:       coordinatorConfig.forgejoTokenFile,
 		GitExecutable:   coordinatorConfig.gitExecutable,
+		Ready:           documentStore.ForCheckouts(projectService),
 	})
 	if err != nil {
 		return fmt.Errorf("create reviewer managed-checkout service: %w", err)
@@ -398,6 +407,7 @@ func run(ctx context.Context, coordinatorConfig config) error {
 			Describer: conversations.StateDescriber{
 				Projects: projectService, Agents: agentService, Features: featureService,
 				Visions: visions, Toolchains: toolchainService, Models: models, Runs: executionService,
+				Documents: documentStore,
 				Usage: func(ctx context.Context) []agent.Usage {
 					reported, err := usage.AgentUsage(ctx)
 					if err != nil {
@@ -608,6 +618,7 @@ func run(ctx context.Context, coordinatorConfig config) error {
 	if projectConversations != nil {
 		projectDeletionService.WithConversations(projectConversations)
 	}
+	projectDeletionService.WithDocuments(documentStore)
 	var marketplaceService httpapi.MarketplaceService
 	var releaseService httpapi.ReleaseService
 	var installService httpapi.InstallService
@@ -667,6 +678,7 @@ func run(ctx context.Context, coordinatorConfig config) error {
 		installService,
 		previewCheckService,
 		modelGuide,
+		documentStore,
 	)
 
 	if assistantWatcher != nil {

@@ -9,8 +9,42 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/EinarLogiOskars/commitarium/internal/documents"
 	"github.com/EinarLogiOskars/commitarium/internal/workspace"
 )
+
+// A checkout's Ready step runs once it is ready, and the project's documents
+// it copies in leave the checkout clean for git.
+func TestManagerReadiesCheckoutsWithTheProjectsDocuments(t *testing.T) {
+	manager, root := newTestManager(t, nil)
+	store, err := documents.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Add(t.Context(), "prj_shop", "spec.md", []byte("# Spec")); err != nil {
+		t.Fatal(err)
+	}
+	readied := 0
+	manager.ready = func(ctx context.Context, spec workspace.CheckoutSpec, directory string) error {
+		readied++
+		return store.CopyInto(ctx, "prj_shop", directory)
+	}
+	spec := initializeCheckout(t, root)
+	if err := manager.Ensure(t.Context(), spec); err != nil {
+		t.Fatalf("ensure: %v", err)
+	}
+	target := filepath.Join(root, spec.WorkspaceID)
+	if _, err := os.Stat(filepath.Join(target, documents.Dir, "spec.md")); err != nil || readied != 1 {
+		t.Fatalf("readied %d times: %v", readied, err)
+	}
+	if status := testGit(t, target, "status", "--porcelain=v1", "--untracked-files=all"); status != "" {
+		t.Fatalf("the documents show as changes: %q", status)
+	}
+	spec.AlreadyReady, spec.RequireCleanBaseline = true, true
+	if err := manager.Ensure(t.Context(), spec); err != nil {
+		t.Fatalf("a clean baseline with documents: %v", err)
+	}
+}
 
 const (
 	testInternalURL = "http://forgejo:3000"
