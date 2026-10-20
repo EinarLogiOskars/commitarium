@@ -23,8 +23,17 @@ fn app_window_label(project_id: &str) -> Result<String, String> {
 }
 
 /// Opens an app's window, or brings it to the front when it is open.
+///
+/// It must be async: a synchronous command runs on the main thread, and on
+/// Windows creating a window there deadlocks the event loop (Tauri's
+/// documented WebView2 limitation), leaving a blank window that cannot be
+/// closed and a main window that stops answering.
 #[tauri::command]
-pub fn open_app_window(app: AppHandle, project_id: String, title: String) -> Result<(), String> {
+pub async fn open_app_window(
+    app: AppHandle,
+    project_id: String,
+    title: String,
+) -> Result<(), String> {
     let label = app_window_label(&project_id)?;
     if let Some(window) = app.get_webview_window(&label) {
         let _ = window.unminimize();
