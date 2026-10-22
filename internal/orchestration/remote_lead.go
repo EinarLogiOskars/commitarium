@@ -2754,6 +2754,14 @@ func planningAttemptVersionAndTurn(sessionID, attemptID string) (int, int, bool)
 	return 1, turn, err == nil && turn > 0
 }
 
+// isPlanningTurn reports whether attemptID is the given planning turn of a
+// plan version, either as first started or as one of its recovery successors
+// (ADR-032), which keep the turn they replace.
+func isPlanningTurn(sessionID, attemptID string, version, turn int) bool {
+	attemptVersion, attemptTurn, ok := planningAttemptVersionAndTurn(sessionID, attemptID)
+	return ok && attemptVersion == version && attemptTurn == turn
+}
+
 func planningStageForAttempt(session execution.Session, attemptID string) planningStage {
 	if _, _, approving := planApprovalVersionAndTurn(session.ID, attemptID); approving && session.Role == worker.RoleReviewer {
 		return planningStagePlanApproval
@@ -2924,7 +2932,7 @@ func (starter *RemoteLeadStarter) StartPlanningReview(
 			return execution.Run{}, false, execution.ErrRecordConflict
 		}
 		checkpoint, checkpointErr := starter.executions.GetWorkerAttempt(ctx, existing.ID)
-		if checkpointErr != nil || checkpoint.AttemptID != planningAttemptID(existing.ID) {
+		if checkpointErr != nil || !isPlanningTurn(existing.ID, checkpoint.AttemptID, 1, 1) {
 			return execution.Run{}, false, execution.ErrRecordConflict
 		}
 		return run, false, nil
@@ -2945,7 +2953,7 @@ func (starter *RemoteLeadStarter) StartPlanningReview(
 	}
 	if lead.AgentID != agentID(run.AgentProviders.LeadAgent, worker.RoleLead) || lead.Role != worker.RoleLead ||
 		lead.Status != execution.SessionStatusWaitingForUser ||
-		leadCheckpoint.AttemptID != planningAttemptID(lead.ID) {
+		!isPlanningTurn(lead.ID, leadCheckpoint.AttemptID, 1, 1) {
 		return execution.Run{}, false, ErrPlanningNotAllowed
 	}
 	prior, err := starter.worker.GetAttempt(ctx, workerhttp.AttemptReference{
@@ -3024,9 +3032,8 @@ func (starter *RemoteLeadStarter) startReplanningReview(
 	if err != nil {
 		return execution.Run{}, false, err
 	}
-	wantLeadAttempt := planningAttemptForVersion(lead.ID, run.PlanVersion, 1)
 	if lead.Status != execution.SessionStatusWaitingForUser ||
-		leadCheckpoint.AttemptID != wantLeadAttempt ||
+		!isPlanningTurn(lead.ID, leadCheckpoint.AttemptID, run.PlanVersion, 1) ||
 		lead.ProviderSessionID == "" ||
 		lead.AgentID != agentID(run.AgentProviders.LeadAgent, worker.RoleLead) ||
 		lead.Role != worker.RoleLead {
@@ -3040,7 +3047,7 @@ func (starter *RemoteLeadStarter) startReplanningReview(
 		return execution.Run{}, false, err
 	}
 	nextAttemptID := planningAttemptForVersion(reviewer.ID, run.PlanVersion, 1)
-	if reviewerCheckpoint.AttemptID == nextAttemptID {
+	if isPlanningTurn(reviewer.ID, reviewerCheckpoint.AttemptID, run.PlanVersion, 1) {
 		return run, false, nil
 	}
 	if len(messages) != 1 {
