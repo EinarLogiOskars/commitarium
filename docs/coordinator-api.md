@@ -1799,7 +1799,7 @@ Forgejo failed), `environment` (an interrupted turn, a login, no desktop),
 repeats. `recoveries` lists each recovery chosen for the run (`how`,
 `guidance`, `from_assistant`, `fingerprint`, `created_at`); automatic retries
 are not listed. `recovery_exhausted` is set once the blocker's failure has
-had four recoveries, the run eight, or a `check` failure still blocks after a
+had four recoveries, the run eight, or the same failure still blocks after a
 fresh conversation; its attention item is then `recovery_exhausted`,
 actionable, titled "Commitarium couldn't finish this", with a plain reason. Failed checks, refused results, an
 agent's question, usage limits, and expired logins are never retried this way.

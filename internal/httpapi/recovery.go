@@ -173,7 +173,7 @@ func (api *API) recoveryRefusal(r *http.Request, runID string, how execution.Rec
 
 // recoveryExhausted reports whether recovering a blocked run has run out:
 // its failure had as many recoveries as it gets, the run as many in total,
-// or a coordinator check kept failing after a fresh conversation (ADR-032).
+// or the same failure came back after a fresh conversation (ADR-032).
 // The user then hears it plainly, with a report to send or a start over.
 func (api *API) recoveryExhausted(ctx context.Context, runID string) (execution.Blocker, bool) {
 	blockers, ok := api.execution.(runBlockers)

@@ -239,11 +239,13 @@ func priorityItems(plan featureartifact.VisionPlan, level int) []GoalItem {
 // assistant's actions where it builds everything, without a premium model
 // and only on the assistant's own work. One with a premium model, or on a
 // work order the user created, is left for the user, with a note. A goal
-// item's work order is closed only once its recovery ran out, and its
-// replacement may then be created in the same look.
+// item's work order is closed only once its recovery ran out or, where the
+// assistant builds everything, once it is blocked and the assistant proposes
+// its replacement with the close; the replacement is then created in the
+// same look.
 func (service *Service) autopilotActions(ctx context.Context, scope string) ([]Action, error) {
 	builds := service.assistantBuilds(ctx, scope)
-	ours, titles, states := service.workOrders(ctx, scope)
+	ours, titles, states, made := service.workOrders(ctx, scope)
 	service.mu.Lock()
 	defer service.mu.Unlock()
 	stored, err := service.read(scope)
@@ -291,6 +293,17 @@ func (service *Service) autopilotActions(ctx context.Context, scope string) ([]A
 	exhausted := func(workOrderID string) bool {
 		return service.config.RecoveryExhausted != nil && service.config.RecoveryExhausted(ctx, workOrderID)
 	}
+	blocked := func(workOrderID string) bool {
+		return service.config.Blocked != nil && service.config.Blocked(ctx, workOrderID)
+	}
+	// replaced reports whether a create for a vision item a work order
+	// claims waits to be applied: the work order's replacement.
+	replaced := func(workOrderID string) bool {
+		return slices.ContainsFunc(stored.Actions, func(action Action) bool {
+			return action.Type == featureartifact.AssistantCreateWorkOrder && action.Status == ActionProposed &&
+				!action.AutoTried && slices.Contains(claims[action.VisionItemID], workOrderID)
+		})
+	}
 	// Closes go first, so a replacement proposed with one is not held back
 	// by the work order it replaces.
 	order := make([]int, len(stored.Actions))
@@ -324,9 +337,12 @@ func (service *Service) autopilotActions(ctx context.Context, scope string) ([]A
 			inGoal, target = orders[action.WorkOrderID] || builds, action.WorkOrderID
 		case featureartifact.AssistantCloseWorkOrder:
 			// A goal item's work order is closed only once its recovery ran
-			// out, so a fresh one can replace it.
+			// out, or, building everything, once it is blocked and its
+			// replacement comes with the close: a fresh one replaces it. The
+			// user's own work order stays theirs.
 			target = action.WorkOrderID
-			inGoal = ((created[target] || builds) && !orders[target]) || (orders[target] && exhausted(target))
+			inGoal = ((created[target] || builds) && !orders[target]) || (orders[target] && (exhausted(target) ||
+				(builds && stored.mayAct(target, made) && replaced(target) && blocked(target))))
 		case featureartifact.AssistantAddVisionItem:
 			inGoal, target = builds, action.WorkOrderID
 		case featureartifact.AssistantStartAutopilot:
@@ -435,28 +451,30 @@ func (service *Service) autopilotActions(ctx context.Context, scope string) ([]A
 }
 
 // workOrders lists a project's work orders the assistant created, as stored
-// with each (ADR-027), and every work order's title and state.
+// with each (ADR-027) and, building everything, every work order; every
+// work order's title and state; and those the assistant created.
 func (service *Service) workOrders(
 	ctx context.Context, scope string,
-) (map[string]bool, map[string]string, map[string]feature.State) {
-	ours, titles, states := map[string]bool{}, map[string]string{}, map[string]feature.State{}
+) (map[string]bool, map[string]string, map[string]feature.State, map[string]bool) {
+	ours, titles, states, made := map[string]bool{}, map[string]string{}, map[string]feature.State{}, map[string]bool{}
 	if service.config.Features == nil || scope == TopLevel {
-		return ours, titles, states
+		return ours, titles, states, made
 	}
 	features, err := service.config.Features.List(ctx, scope)
 	if err != nil {
-		return ours, titles, states
+		return ours, titles, states, made
 	}
 	// Building everything, the assistant owns every work order, the user's
 	// too.
 	builds := service.assistantBuilds(ctx, scope)
 	for _, item := range features {
 		titles[item.ID], states[item.ID] = item.Title, item.State
+		made[item.ID] = item.CreatedBy == feature.CreatedByAssistant
 		if builds || item.CreatedBy == feature.CreatedByAssistant {
 			ours[item.ID] = true
 		}
 	}
-	return ours, titles, states
+	return ours, titles, states, made
 }
 
 // waitsFor reports whether an action must wait for the work it follows
@@ -516,7 +534,7 @@ func (service *Service) QueuedStarts(ctx context.Context, scope string) (map[str
 			continue
 		}
 		if titles == nil {
-			_, titles, _ = service.workOrders(ctx, scope)
+			_, titles, _, _ = service.workOrders(ctx, scope)
 		}
 		queued[action.WorkOrderID] = followsName(action.After, titles)
 	}
@@ -594,7 +612,7 @@ func (stored record) mayAct(workOrderID string, ours map[string]bool) bool {
 // user.
 func (service *Service) AutopilotHandles(ctx context.Context, scope, workOrderID string, blockedAt time.Time) bool {
 	builds := service.assistantBuilds(ctx, scope)
-	ours, _, _ := service.workOrders(ctx, scope)
+	ours, _, _, _ := service.workOrders(ctx, scope)
 	if _, err := service.Readiness(ctx); err != nil {
 		return false
 	}

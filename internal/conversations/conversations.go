@@ -251,6 +251,10 @@ type Config struct {
 	// ran out of recovery (ADR-032): autopilot may then close it, even on a
 	// goal item, so the assistant can replace it.
 	RecoveryExhausted func(ctx context.Context, workOrderID string) bool
+	// Blocked, when set, reports whether a work order's latest run waits for
+	// the user on a blocker: where the assistant builds everything,
+	// autopilot may then close it together with its replacement.
+	Blocked func(ctx context.Context, workOrderID string) bool
 }
 
 // ChatUsage is one assistant turn's usage.
