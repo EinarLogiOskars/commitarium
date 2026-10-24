@@ -105,4 +105,9 @@ func TestThePlanBeingWrittenIsDescribed(t *testing.T) {
 			t.Fatalf("the plan lacks %q:\n%s", want, text)
 		}
 	}
+	builder.Reset()
+	writePlanning(&builder, vision.Vision{Planning: &vision.Planning{Status: vision.PlanningPaused}})
+	if !strings.Contains(builder.String(), "Vision (planning stopped)") {
+		t.Fatalf("paused planning:\n%s", builder.String())
+	}
 }

@@ -2836,7 +2836,7 @@ Only an item without sub-items starts a work order.
 In Developer mode a project's vision can be planned with the assistant before
 anything is built (ONE_CONVERSATION_PLAN.md phase 2). The vision is the plan:
 its statement is the goal, its `stack` and items the stack and build plan,
-and `planning` holds the rest: `{"status": "planning"|"built",
+and `planning` holds the rest: `{"status": "planning"|"paused"|"built",
 "decisions", "open_questions", "research": [{"title", "findings",
 "sources", "added_at"}], "started_at", "built_at"}`. It stays, built, as
 the plan's record; the user's edits and the vision writer keep it.
@@ -2844,7 +2844,8 @@ the plan's record; the user's edits and the vision writer keep it.
 - `POST /api/v1/projects/{id}/vision/planning` with `{"goal"}` puts the
   vision in planning, or starts one from `goal` when there is none
   (`400 invalid_vision` without it), and wakes the project's assistant to
-  plan it with the user. A vision already being planned is answered as is.
+  plan it with the user. A vision already being planned is answered as is;
+  paused planning resumes with its plan as it was.
 - `PUT /api/v1/projects/{id}/vision/planning` with `{"goal", "decisions",
   "open_questions", "stack", "items": [{"priority", "title", "description"}]}`
   updates it: the lists replace those there are; an empty `goal`, no
@@ -2852,6 +2853,10 @@ the plan's record; the user's edits and the vision writer keep it.
   stack without a known runtime preset; `409 vision_not_planning` once it is
   built. Research the assistant starts while a vision is planned is added to
   `research`, with the URLs after its "Sources:".
+- `POST /api/v1/projects/{id}/vision/planning/pause` stops planning:
+  `planning` is `paused`, the plan is kept as it is, and nothing is built.
+  Planning turns and updates stop until planning starts again. `409
+  vision_not_planning` unless it is being planned.
 - `POST /api/v1/projects/{id}/vision/planning/finish` with `{"autopilot"}` is
   Build it: the open questions become the plan's `guesses`, and `planning`
   is `built`. With `autopilot`, the project is set to `builds` and launched,

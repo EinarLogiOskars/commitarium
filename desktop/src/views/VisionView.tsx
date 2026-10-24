@@ -201,6 +201,11 @@ export function VisionView({
         )}
       </div>
       {error && <div className="banner banner--error">{error}</div>}
+      {vision?.planning?.status === "paused" && (
+        <p className="muted">
+          Planning is stopped. The plan is kept as it is; resume it from the assistant.
+        </p>
+      )}
 
       {session ? (
         <VisionConversation

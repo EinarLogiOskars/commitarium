@@ -3981,6 +3981,12 @@ button.danger:not(.ghost) {
   white-space: nowrap;
   color: var(--muted);
 }
+/* While the project is planned (planning mode). */
+.assistant-drawer__mode.pill--planning {
+  color: var(--text);
+  border-color: var(--lavender);
+  background: color-mix(in srgb, var(--lavender) 30%, transparent);
+}
 .assistant-drawer__close {
   font-size: 18px;
   line-height: 1;

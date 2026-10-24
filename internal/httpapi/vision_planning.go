@@ -21,6 +21,7 @@ import (
 type visionPlanner interface {
 	StartPlanning(ctx context.Context, projectID, goal string) (vision.Vision, bool, error)
 	UpdatePlanning(ctx context.Context, projectID string, update vision.PlanningUpdate) (vision.Vision, error)
+	PausePlanning(ctx context.Context, projectID string) (vision.Vision, error)
 	FinishPlanning(ctx context.Context, projectID string) (vision.Vision, error)
 }
 
@@ -38,8 +39,8 @@ type startPlanningRequest struct {
 	Goal string `json:"goal"`
 }
 
-// startPlanningHandler puts the project's vision in planning and wakes its
-// assistant to plan it with the user.
+// startPlanningHandler puts the project's vision in planning, or resumes
+// paused planning, and wakes its assistant to plan it with the user.
 func (api *API) startPlanningHandler(w http.ResponseWriter, r *http.Request) {
 	projectID := r.PathValue("id")
 	var body startPlanningRequest
@@ -60,7 +61,8 @@ func (api *API) startPlanningHandler(w http.ResponseWriter, r *http.Request) {
 			"The user opened the planning workspace to plan this project with you before anything is built. "+
 				"Open the conversation like a first meeting: say in a line or two what you understood (your notes "+
 				"may hold what was settled before), fill the plan in with the goal and the agenda's topics as open "+
-				"questions, and ask one to three questions on the first topic still open."); err != nil {
+				"questions, and ask one to three questions on the first topic still open. If the plan already has "+
+				"decisions, planning was stopped and is resumed: pick up where you left off instead."); err != nil {
 			log.Printf("wake the assistant of project %q to plan it: %v", projectID, err)
 		}
 	}
@@ -80,6 +82,22 @@ func (api *API) updatePlanningHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	stored, err := planner.UpdatePlanning(r.Context(), projectID, body)
+	if err != nil {
+		writeVisionError(w, projectID, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, stored, "vision")
+}
+
+// pausePlanningHandler stops planning the vision: the plan is kept as it
+// is, nothing is built, and starting planning again resumes it.
+func (api *API) pausePlanningHandler(w http.ResponseWriter, r *http.Request) {
+	projectID := r.PathValue("id")
+	planner, ok := api.planner(w)
+	if !ok {
+		return
+	}
+	stored, err := planner.PausePlanning(r.Context(), projectID)
 	if err != nil {
 		writeVisionError(w, projectID, err)
 		return

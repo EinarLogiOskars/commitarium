@@ -22,8 +22,11 @@ import (
 type PlanningStatus string
 
 const (
-	PlanningOpen  PlanningStatus = "planning"
-	PlanningBuilt PlanningStatus = "built"
+	PlanningOpen PlanningStatus = "planning"
+	// PlanningPaused is planning the user stopped: the plan is kept as it
+	// is, nothing is built, and starting planning again resumes it.
+	PlanningPaused PlanningStatus = "paused"
+	PlanningBuilt  PlanningStatus = "built"
 )
 
 // ErrNotPlanning is returned for a planning change to a vision that is not
@@ -71,8 +74,14 @@ func (planning *Planning) Open() bool {
 	return planning != nil && planning.Status == PlanningOpen
 }
 
+// Paused reports whether the user stopped planning the vision.
+func (planning *Planning) Paused() bool {
+	return planning != nil && planning.Status == PlanningPaused
+}
+
 // StartPlanning puts the project's vision in planning, or starts one from
-// goal when it has none. started is false when it was already being planned.
+// goal when it has none; paused planning resumes as it was. started is false
+// when it was already being planned.
 func (service *Service) StartPlanning(ctx context.Context, projectID, goal string) (Vision, bool, error) {
 	// Reading first seeds a vision the repository carries.
 	if _, err := service.Get(ctx, projectID); err != nil && !errors.Is(err, ErrNotFound) {
@@ -94,6 +103,13 @@ func (service *Service) StartPlanning(ctx context.Context, projectID, goal strin
 		return Vision{}, false, err
 	case current.Planning.Open():
 		return current, false, nil
+	case current.Planning.Paused():
+		planning := *current.Planning
+		planning.Status = PlanningOpen
+		current.Planning = &planning
+		current.Revision++
+		stored, err := service.write(current)
+		return stored, err == nil, err
 	}
 	current.Planning = &Planning{
 		Status: PlanningOpen, Decisions: []string{}, Questions: []string{}, Research: []ResearchNote{},
@@ -151,6 +167,31 @@ func (service *Service) UpdatePlanning(ctx context.Context, projectID string, up
 	planning := *current.Planning
 	planning.Decisions, planning.Questions = decisions, questions
 	current.Plan, current.Planning, current.Source = plan, &planning, "assistant"
+	current.Revision++
+	return service.write(current)
+}
+
+// PausePlanning stops planning the vision: the plan is kept as it is and
+// nothing is built until planning resumes.
+func (service *Service) PausePlanning(ctx context.Context, projectID string) (Vision, error) {
+	if _, err := service.projects.GetByID(ctx, projectID); err != nil {
+		return Vision{}, err
+	}
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	current, err := service.read(projectID)
+	if err != nil {
+		return Vision{}, err
+	}
+	if current.Planning.Paused() {
+		return current, nil
+	}
+	if !current.Planning.Open() {
+		return Vision{}, ErrNotPlanning
+	}
+	planning := *current.Planning
+	planning.Status = PlanningPaused
+	current.Planning = &planning
 	current.Revision++
 	return service.write(current)
 }
