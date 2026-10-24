@@ -31,6 +31,16 @@ describe("assistant mode", () => {
     expect(appliesItself(action({ premium: ["claude-fable-5-1"] }))).toBe(false);
     expect(appliesItself(action({ type: "close_work_order" }))).toBe(false);
     expect(appliesItself(action({ status: "dismissed" }))).toBe(false);
+    // What is done is a result in a line, never a card that says "Done".
+    expect(appliesItself(action({ type: "close_work_order", status: "applied" }))).toBe(true);
+    expect(appliesItself(action({ type: "recover_work_order", how: "recheck" }))).toBe(true);
+    expect(
+      appliesItself(
+        action({ type: "recover_work_order", how: "recheck", status: "applied", auto_tried: true }),
+      ),
+    ).toBe(true);
+    // Sending work back to Ready is always the user's call.
+    expect(appliesItself(action({ type: "recover_work_order", how: "back_to_ready" }))).toBe(false);
     // The plan being written fills in by itself; building it is the user's card.
     expect(appliesItself(action({ type: "update_plan" }))).toBe(true);
     expect(appliesItself(action({ type: "build_plan" }))).toBe(false);

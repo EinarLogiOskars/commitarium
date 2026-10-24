@@ -297,6 +297,7 @@ export function AssistantDrawer({
         onChanged={setConversation}
         onOpenOrder={onOpenOrder}
         visionLabel={visionItems.get(action.vision_item_id)}
+        plain={builds}
       />
     );
 
@@ -511,11 +512,15 @@ function ActionCard({
   onChanged,
   onOpenOrder,
   visionLabel,
+  plain,
 }: {
   scope: string;
   action: AssistantAction;
   /** "P0.2 Title" for the vision item a new work order delivers. */
   visionLabel?: string;
+  /** Where the assistant builds everything, a card is only what needs the
+   * user: one plain question with one action, its details on hover. */
+  plain?: boolean;
   onChanged: (conversation: Conversation) => void;
   onOpenOrder?: (featureId: string) => void;
 }) {
@@ -591,35 +596,39 @@ function ActionCard({
             ? `Autopilot: finish P${action.priority}`
             : action.type === "continue_work_order"
               ? "Continue a work order"
-              : action.type === "close_work_order"
-                ? "Close a work order"
-                : action.type === "create_app"
-                  ? `New app: ${action.title}`
-                  : action.type === "plan_project"
-                    ? `Plan a project: ${action.title}`
-                    : action.type === "set_up_preview"
-                      ? "Set up the app's preview"
-                      : action.type === "write_vision"
-                        ? "Write the vision"
-                        : action.type === "set_up_stack"
-                          ? "Set up the stack"
-                          : action.type === "answer_helper"
-                            ? "Answer a question about the work"
-                            : action.type === "write_brief"
-                              ? "Write the brief for a work order"
-                              : action.type === "accept_brief"
-                                ? `Brief: ${action.title}`
-                                : action.type === "design_stack"
-                                  ? "Design the stack"
-                                  : action.type === "apply_stack"
-                                    ? "Suggested stack"
-                                    : action.type === "research"
-                                      ? `Look up: ${action.title}`
-                                      : action.type === "build_plan"
-                                        ? "Build it"
-                                        : action.type === "update_plan"
-                                          ? "Update the plan"
-                                          : "Switch models";
+              : action.type === "recover_work_order"
+                ? action.how === "back_to_ready"
+                  ? "Start a work order over"
+                  : "Recover a work order"
+                : action.type === "close_work_order"
+                  ? "Close a work order"
+                  : action.type === "create_app"
+                    ? `New app: ${action.title}`
+                    : action.type === "plan_project"
+                      ? `Plan a project: ${action.title}`
+                      : action.type === "set_up_preview"
+                        ? "Set up the app's preview"
+                        : action.type === "write_vision"
+                          ? "Write the vision"
+                          : action.type === "set_up_stack"
+                            ? "Set up the stack"
+                            : action.type === "answer_helper"
+                              ? "Answer a question about the work"
+                              : action.type === "write_brief"
+                                ? "Write the brief for a work order"
+                                : action.type === "accept_brief"
+                                  ? `Brief: ${action.title}`
+                                  : action.type === "design_stack"
+                                    ? "Design the stack"
+                                    : action.type === "apply_stack"
+                                      ? "Suggested stack"
+                                      : action.type === "research"
+                                        ? `Look up: ${action.title}`
+                                        : action.type === "build_plan"
+                                          ? "Build it"
+                                          : action.type === "update_plan"
+                                            ? "Update the plan"
+                                            : "Switch models";
   const models = [
     action.lead_model &&
       `Lead ${action.lead_agent ? agentName(agents, action.lead_agent) + " · " : ""}${modelName(action.lead_model)}`,
@@ -627,6 +636,51 @@ function ActionCard({
       `Reviewer ${action.reviewer_agent ? agentName(agents, action.reviewer_agent) + " · " : ""}${modelName(action.reviewer_model)}`,
   ].filter(Boolean);
   const blocked = (premium.length > 0 && !confirmed) || unchosen;
+
+  if (plain && pending) {
+    const what = appliedWhat(action.title) ? `“${appliedWhat(action.title)}”` : "the work order";
+    const [question, label] =
+      premium.length > 0
+        ? [
+            `Use ${premium.map(modelName).join(" and ")} for ${what}? You asked to approve it first.`,
+            "Use it",
+          ]
+        : action.type === "recover_work_order" && action.how === "back_to_ready"
+          ? [`Start ${what} over? What it has done so far is set aside.`, "Start over"]
+          : [`${APPLY_LABEL[action.type]} ${what}?`, APPLY_LABEL[action.type]];
+    return (
+      <div
+        className="assistant-action assistant-action--proposed"
+        title={[action.description, `Why: ${action.reason}`].filter(Boolean).join("\n\n")}
+      >
+        <p className="assistant-action__desc">{question}</p>
+        {error && <div className="banner banner--error">{error}</div>}
+        <div className="row">
+          <button
+            className="primary"
+            onClick={() =>
+              void run("approve", () =>
+                approveAssistantAction(scope, action.id, {
+                  start: true,
+                  confirm_premium: premium.length > 0,
+                }),
+              )
+            }
+            disabled={busy !== null || unchosen}
+          >
+            {busy === "approve" ? "Applying…" : label}
+          </button>
+          <button
+            className="ghost"
+            onClick={() => void run("dismiss", () => dismissAssistantAction(scope, action.id))}
+            disabled={busy !== null}
+          >
+            Not now
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className={`assistant-action assistant-action--${action.status}`}>
@@ -867,6 +921,7 @@ const APPLY_LABEL: Record<AssistantAction["type"], string> = {
   add_vision_item: "Add to vision",
   start_autopilot: "Start autopilot",
   continue_work_order: "Continue",
+  recover_work_order: "Recover",
   close_work_order: "Close",
   create_app: "Create app",
   plan_project: "Plan it",
@@ -998,8 +1053,20 @@ function isPremium(model: string, families: string[]): boolean {
   return !!name && families.some((family) => family && name.includes(family.toLowerCase()));
 }
 
-// Where it builds everything, what the assistant set going, said in a line.
+// Where it builds everything, what the assistant set going, said in a line;
+// why, and what came of it, show on hover.
 function AppliedLine({ action }: { action: AssistantAction }) {
+  return (
+    <div
+      className="assistant__applied-wrap"
+      title={[action.result, action.reason && `Why: ${action.reason}`].filter(Boolean).join("\n\n")}
+    >
+      <AppliedText action={action} />
+    </div>
+  );
+}
+
+function AppliedText({ action }: { action: AssistantAction }) {
   if (action.type === "answer_helper") {
     return (
       <p className="muted assistant__applied">
@@ -1044,6 +1111,30 @@ function AppliedLine({ action }: { action: AssistantAction }) {
           : done
             ? "✓ Writing the brief"
             : "Writing the brief…"}
+      </p>
+    );
+  }
+  if (
+    action.type === "recover_work_order" ||
+    action.type === "close_work_order" ||
+    action.type === "add_vision_item" ||
+    action.type === "start_autopilot" ||
+    action.type === "build_plan"
+  ) {
+    // These say what they did in their result ("Re-checked “Sort”.").
+    const fallback =
+      action.type === "close_work_order"
+        ? "Closing the work"
+        : action.type === "add_vision_item"
+          ? `Adding to the vision: ${action.title}`
+          : action.type === "start_autopilot"
+            ? `Turning autopilot on for P${action.priority}`
+            : action.type === "build_plan"
+              ? "Building the plan"
+              : "Picking the work back up";
+    return (
+      <p className="muted assistant__applied">
+        {action.status === "applied" ? `✓ ${action.result || fallback}` : `${fallback}…`}
       </p>
     );
   }
