@@ -812,3 +812,20 @@ func TestOnlyAUsageLimitErrorCarriesAResetTime(t *testing.T) {
 		t.Fatal("an internal error carried a reset time")
 	}
 }
+
+// A review response changes nothing only when every finding says so.
+func TestChangesNothingNeedsEveryFindingAnsweredWithoutAChange(t *testing.T) {
+	for _, test := range []struct {
+		answers []FindingAnswer
+		want    bool
+	}{
+		{nil, false},
+		{[]FindingAnswer{{Finding: "F1", Answer: "out_of_scope"}}, true},
+		{[]FindingAnswer{{Finding: "F1", Answer: "declined"}, {Finding: "F2", Answer: "already_fixed"}}, true},
+		{[]FindingAnswer{{Finding: "F1", Answer: "declined"}, {Finding: "F2", Answer: "fixed"}}, false},
+	} {
+		if got := ChangesNothing(test.answers); got != test.want {
+			t.Errorf("ChangesNothing(%+v) = %t, want %t", test.answers, got, test.want)
+		}
+	}
+}

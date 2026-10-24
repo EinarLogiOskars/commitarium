@@ -130,7 +130,10 @@ type Action struct {
 	// HoldStart marks a work order autopilot creates without starting it,
 	// because it follows work that has not merged: it shows as a draft at
 	// once, and a queued start action starts it once that work has merged.
-	HoldStart bool      `json:"hold_start,omitempty"`
+	HoldStart bool `json:"hold_start,omitempty"`
+	// Settled marks an action that was not needed any more: its work order
+	// already got where it leads (stale.go). It counts as applied.
+	Settled   bool      `json:"settled,omitempty"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
 

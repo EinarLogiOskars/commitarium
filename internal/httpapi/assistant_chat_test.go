@@ -21,11 +21,14 @@ type conversationStub struct {
 	action         conversations.Action
 	resolvedStatus conversations.ActionStatus
 	resolvedResult string
+	settled        bool
 	goalLevel      int
 	// handling names the work orders autopilot is on.
 	handling map[string]bool
 	// blockedAt is the blocker time attention last asked about.
 	blockedAt time.Time
+	// activeAt is when autopilot last moved each work order on.
+	activeAt map[string]time.Time
 	// settings are the assistant's; an empty agent means not set up.
 	settings conversations.Settings
 	// goal is the conversation's autopilot goal.
@@ -51,6 +54,10 @@ func testAgents() *recordingAgentService {
 func (stub *conversationStub) AutopilotHandles(_ context.Context, _, workOrderID string, blockedAt time.Time) bool {
 	stub.blockedAt = blockedAt
 	return stub.handling[workOrderID]
+}
+
+func (stub *conversationStub) AutopilotActiveAt(_ context.Context, _, workOrderID string) time.Time {
+	return stub.activeAt[workOrderID]
 }
 
 func (stub *conversationStub) Settings(context.Context) (conversations.Settings, error) {
@@ -107,6 +114,11 @@ func (stub *conversationStub) StopGoal(_ context.Context, scope string) (convers
 
 func (stub *conversationStub) Resolve(_ context.Context, _ string, _ string, status conversations.ActionStatus, result string, _ conversations.Created) (conversations.Conversation, error) {
 	stub.resolvedStatus, stub.resolvedResult = status, result
+	return conversations.Conversation{}, nil
+}
+
+func (stub *conversationStub) Settle(_ context.Context, _, _, result string) (conversations.Conversation, error) {
+	stub.resolvedStatus, stub.resolvedResult, stub.settled = conversations.ActionApplied, result, true
 	return conversations.Conversation{}, nil
 }
 
@@ -233,7 +245,7 @@ func TestAutopilotLeavesTheUsersWorkOrdersToTheUser(t *testing.T) {
 		ID: "fea_users", ProjectID: "prj_test", Title: "Prevent logging future nights", CreatedBy: feature.CreatedByUser,
 	}}
 	projects := &recordingProjectService{getByIDResult: project.Project{ID: "prj_test", App: true}}
-	executions := &recordingExecutionService{runs: []execution.Run{{ID: "run_1", StartedAt: time.Now()}}}
+	executions := &recordingExecutionService{runs: []execution.Run{{ID: "run_1", StartedAt: time.Now(), Status: execution.RunStatusWaitingForUser, WaitKind: execution.RunWaitKindBlocker}}}
 	workflow := &planningStarterStub{run: execution.Run{ID: "run_1"}}
 	handler := NewWithWorkspaceRealWorkflowDeletionAndModels(projects, features, nil, executions, nil, nil, nil, workflow, nil, nil, nil, nil, stub)
 	apply := AssistantActionApplier(handler)
@@ -274,7 +286,7 @@ func TestContinuingAWorkOrderRecoversItsNewestRunWithGuidance(t *testing.T) {
 	projects := &recordingProjectService{getByIDResult: project.Project{ID: "prj_test"}}
 	now := time.Now()
 	executions := &recordingExecutionService{runs: []execution.Run{
-		{ID: "run_old", StartedAt: now.Add(-time.Hour)}, {ID: "run_new", StartedAt: now},
+		{ID: "run_old", StartedAt: now.Add(-time.Hour)}, {ID: "run_new", StartedAt: now, Status: execution.RunStatusWaitingForUser, WaitKind: execution.RunWaitKindBlocker},
 	}}
 	workflow := &planningStarterStub{run: execution.Run{ID: "run_new"}}
 	handler := NewWithWorkspaceRealWorkflowDeletionAndModels(projects, features, nil, executions, nil, nil, nil, workflow, nil, nil, nil, nil, stub)
@@ -326,6 +338,42 @@ func TestStartingAWorkOrderJudgesPremiumOnTheModelsThatWillRun(t *testing.T) {
 	// then fails in this stub, past the premium check.
 	if recorder := approve(`{"start":true,"reviewer_model":"claude-opus-5-5"}`); strings.Contains(recorder.Body.String(), "premium_approval_required") {
 		t.Fatalf("the user's non-premium choice was still held: %d %s", recorder.Code, recorder.Body.String())
+	}
+}
+
+// A Start pressed on a work order that already started settles the card
+// rather than fail; autopilot's own try does the same, so nothing is left
+// waiting for the user's approval.
+func TestStartingAWorkOrderThatAlreadyStartedSettlesTheCard(t *testing.T) {
+	stub := &conversationStub{action: conversations.Action{
+		ID: "act_1", Status: conversations.ActionProposed,
+		AssistantAction: featureartifact.AssistantAction{
+			Type: featureartifact.AssistantStartWorkOrder, Reason: "Next", Title: "Start the beginner glossary",
+			WorkOrderID: "fea_glossary",
+		},
+	}}
+	features := &recordingFeatureService{getResult: feature.Feature{
+		ID: "fea_glossary", ProjectID: "prj_test", Title: "Add a beginner glossary", State: feature.StatePlanning,
+		CreatedBy: feature.CreatedByAssistant,
+	}}
+	projects := &recordingProjectService{getByIDResult: project.Project{ID: "prj_test"}}
+	executions := &recordingExecutionService{runs: []execution.Run{{ID: "run_1", StartedAt: time.Now()}}}
+	workflow := &planningStarterStub{run: execution.Run{ID: "run_1"}}
+	handler := NewWithWorkspaceRealWorkflowDeletionAndModels(projects, features, nil, executions, nil, nil, nil, workflow, nil, nil, nil, nil, stub)
+
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost,
+		"/api/v1/assistant/conversations/prj_test/actions/act_1/approve", strings.NewReader(`{"start":true}`)))
+	if recorder.Code != http.StatusOK || !stub.settled || stub.resolvedResult != "Already started." {
+		t.Fatalf("pressed Start late: %d %s (settled %v, %q)", recorder.Code, recorder.Body.String(), stub.settled, stub.resolvedResult)
+	}
+
+	// A continue on a run no longer blocked settles too, for autopilot.
+	stub.settled, stub.resolvedResult = false, ""
+	stub.action.Type, stub.action.Status = featureartifact.AssistantContinueWorkOrder, conversations.ActionProposed
+	if err := AssistantActionApplier(handler)(t.Context(), "prj_test", "act_1"); err != nil || !stub.settled ||
+		workflow.receivedRunID != "" {
+		t.Fatalf("autopilot's late continue: %v (settled %v, recovered %q)", err, stub.settled, workflow.receivedRunID)
 	}
 }
 

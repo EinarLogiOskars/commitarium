@@ -16,7 +16,7 @@ func TestOutputJSONSchemaCoversStructuredContracts(t *testing.T) {
 	}{
 		{OutputContractGoalClarification, []string{"action", "message", "goal", "open_questions"}},
 		{OutputContractPlanningLead, []string{"action", "content", "plan_title", "plan_subtitle", "steps"}},
-		{OutputContractImplementationLead, []string{"action", "summary", "commit_id", "pull_request_number", "system_packages", "environment_reason"}},
+		{OutputContractImplementationLead, []string{"action", "summary", "commit_id", "pull_request_number", "system_packages", "environment_reason", "finding_answers"}},
 		{OutputContractAcceptanceTests, []string{"action", "summary", "test_commit_id", "tests"}},
 		{OutputContractImplementationReview, []string{"action", "summary", "commit_id", "pull_request_number", "review_id"}},
 		{OutputContractImplementationReadiness, []string{"action", "summary"}},
@@ -86,6 +86,13 @@ func TestResolveStructuredOutput(t *testing.T) {
 			raw:   `{"action":"published","summary":"Done","commit_id":"0123456789abcdef0123456789abcdef01234567","pull_request_number":7}`,
 			event: Event{Type: EventMessage, Text: "Done"}, disposition: DispositionSucceeded,
 			publication: &ImplementationPublication{CommitID: "0123456789abcdef0123456789abcdef01234567", PullRequestNumber: 7},
+		},
+		{
+			name: "review response that changes nothing", contract: OutputContractImplementationLead,
+			raw:   `{"action":"published","summary":"F1 out of scope","commit_id":"0123456789abcdef0123456789abcdef01234567","pull_request_number":7,"system_packages":[],"environment_reason":"","finding_answers":[{"finding":"F1","answer":"out_of_scope"}]}`,
+			event: Event{Type: EventMessage, Text: "F1 out of scope"}, disposition: DispositionSucceeded,
+			publication: &ImplementationPublication{CommitID: "0123456789abcdef0123456789abcdef01234567", PullRequestNumber: 7,
+				FindingAnswers: []FindingAnswer{{Finding: "F1", Answer: FindingOutOfScope}}},
 		},
 		{
 			name: "implementation blocker", contract: OutputContractImplementationLead,

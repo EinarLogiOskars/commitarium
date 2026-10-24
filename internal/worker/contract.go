@@ -275,7 +275,25 @@ type EnvironmentRequest struct {
 type ImplementationPublication struct {
 	CommitID          string
 	PullRequestNumber int64
+	// FindingAnswers are the lead's answer to each finding of the review it
+	// responds to, by number; empty outside a review response.
+	FindingAnswers []FindingAnswer
 }
+
+// FindingAnswer is how the lead answered one numbered review finding:
+// FindingFixed in a new commit, or FindingAlreadyFixed, FindingDeclined, or
+// FindingOutOfScope, none of which changes the code.
+type FindingAnswer struct {
+	Finding string
+	Answer  string
+}
+
+const (
+	FindingFixed        = "fixed"
+	FindingAlreadyFixed = "already_fixed"
+	FindingDeclined     = "declined"
+	FindingOutOfScope   = "out_of_scope"
+)
 
 // ReviewPublication identifies the exact formal Forgejo review that a reviewer
 // says it submitted for one implementation commit. Result.Disposition carries

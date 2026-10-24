@@ -451,6 +451,10 @@ func (service *Service) finishAttempt(
 			CommitID:          result.Publication.CommitID,
 			PullRequestNumber: result.Publication.PullRequestNumber,
 		}
+		for _, answer := range result.Publication.FindingAnswers {
+			terminalResult.Publication.FindingAnswers = append(terminalResult.Publication.FindingAnswers,
+				workerhttp.FindingAnswer{Finding: answer.Finding, Answer: answer.Answer})
+		}
 	}
 	if result.Review != nil {
 		terminalResult.Review = &workerhttp.ReviewPublication{

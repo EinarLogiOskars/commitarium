@@ -30,17 +30,23 @@ export function assistantModeNote(mode: AssistantMode): string {
 
 // Work the assistant applies without asking where it builds everything: its
 // work actions (and, everywhere, its answers to its helpers' questions, its
-// research, and its updates to the plan being written),
-// except those that need the user's approval of a premium model, and those
-// autopilot left for the user (on a work order the user made, say), which
-// stay cards. Closing is left as a card: only autopilot's
-// own duplicates close by themselves.
+// research, and its updates to the plan being written), and whatever has
+// already been applied, which is a result in a line rather than a card. What
+// needs the user stays a card: a premium model, an action autopilot left for
+// them (on a work order they made, say), sending work back to Ready, and a
+// close autopilot does not take on (only its own duplicates and the stuck
+// work it replaces close by themselves).
 export function appliesItself(action: AssistantAction): boolean {
+  if (action.status === "dismissed") return false;
+  if (action.status === "applied") return true;
   const work = [
     "create_work_order",
     "start_work_order",
     "change_models",
     "continue_work_order",
+    "recover_work_order",
+    "add_vision_item",
+    "start_autopilot",
     "set_up_preview",
     "write_vision",
     "set_up_stack",
@@ -56,7 +62,7 @@ export function appliesItself(action: AssistantAction): boolean {
   return (
     work.includes(action.type) &&
     (action.premium ?? []).length === 0 &&
-    action.status !== "dismissed" &&
+    !(action.type === "recover_work_order" && action.how === "back_to_ready") &&
     !leftForUser
   );
 }

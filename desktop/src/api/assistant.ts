@@ -29,6 +29,7 @@ export type AssistantActionType =
   | "add_vision_item"
   | "start_autopilot"
   | "continue_work_order"
+  | "recover_work_order"
   | "close_work_order"
   | "create_app"
   | "plan_project"
@@ -64,6 +65,8 @@ export interface AssistantAction {
    * set_up_preview: what fails, when the assistant knows. For answer_helper:
    * the assistant's answer. */
   guidance?: string;
+  /** For recover_work_order: how it recovers the blocked run. */
+  how?: "" | "recheck" | "continue" | "message" | "fresh_conversation" | "back_to_ready";
   /** For answer_helper: the helper it answers; for a card from a helper's
    * result, the helper that proposed it (ADR-035). */
   helper?: string;
@@ -91,6 +94,9 @@ export interface AssistantAction {
   project_id?: string;
   /** Autopilot took it over. */
   auto_tried?: boolean;
+  /** Its work order already got where it leads, so it was not needed: it
+   * counts as applied, and result says why ("Already started."). */
+  settled?: boolean;
   /** Autopilot holds it until the work it follows (after) has merged. */
   queued?: boolean;
   /** Autopilot created the work order without starting it; a queued start follows. */

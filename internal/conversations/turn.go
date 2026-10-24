@@ -132,7 +132,7 @@ func (service *Service) startTurn(
 			instructions += appAssistsInstructions
 		}
 	}
-	instructions += service.focusInstructions(ctx, scope, stored.Focus)
+	instructions += service.focusInstructions(ctx, scope, stored.Focus, builds)
 	if scope == TopLevel {
 		instructions += newAppInstructions(stored.Developer)
 	} else if service.planning(ctx, scope) {
@@ -445,6 +445,7 @@ How you recover blocked work:
 - By kind:
   - agent (the agent gave up, broke something, misunderstood, or skipped a step): continue, with guidance that names exactly what to fix, quoting the detail's facts (paths, commits, names, the expected marker) rather than paraphrasing them. If its context seems to have gone wrong, or continue already failed on the same failure, fresh_conversation with the same guidance.
   - check (a coordinator check of git or Forgejo failed): recheck first, since state may have settled; if it fails again, continue with guidance naming what the check expects; then fresh_conversation.
+  - Never tell an agent to make a throwaway commit, or any change the work does not need, only to satisfy a check: when a check expects something the work rightly does not have, recovery runs out and the user gets a report, which is the right outcome.
   - environment (a worker, the network, or a login): do not spend recoveries; tell the user in one plain sentence what to reconnect or wait for.
   - limit: wait for the reset; do not recover.
   - other: read the detail and choose as above.
@@ -498,7 +499,10 @@ func recentActions(actions []Action, buildsSince *time.Time) string {
 			}
 		case ActionApplied:
 			outcome = "applied"
-			if action.AutoTried {
+			switch {
+			case action.Settled:
+				outcome = "settled without applying: its work order no longer needed it"
+			case action.AutoTried:
 				outcome = "applied by autopilot"
 			}
 		case ActionDismissed:
@@ -562,7 +566,8 @@ func (service *Service) withWorkOrderModels(
 const buildsInstructions = `
 
 The user chose that you build everything here: you own the whole project and drive it until it runs, the work orders the user creates by hand included. When the user asks for a change, propose the work at once: create_work_order with quick or planned steps for most changes (reviewed_plan for real features, full only for data, money, auth, migrations, or concurrency), the agents, models, and efforts the model guide's rules give (on the agent with the most usage left), and the user's words as the goal. Commitarium applies your actions immediately, without approval cards, except those using a premium model, which wait for the user.
-You act only when Commitarium wakes you, so it also tells you what the project still lacks to run. Fix each in turn, one step after what it depends on: no vision, write_vision; no stack, set_up_stack (after the vision, unless the repository has code), or design_stack when the vision names no stack; open vision items with autopilot off, start_autopilot for the first priority with open items; work orders nobody starts, start_work_order with the agents and models you choose, or after when they change the same part of the app as running work; for an app whose preview is not set up or fails, set_up_preview. A card the user dismissed before handing you the project no longer stands.`
+You act only when Commitarium wakes you, so it also tells you what the project still lacks to run. Fix each in turn, one step after what it depends on: no vision, write_vision; no stack, set_up_stack (after the vision, unless the repository has code), or design_stack when the vision names no stack; open vision items with autopilot off, start_autopilot for the first priority with open items; work orders nobody starts, start_work_order with the agents and models you choose, or after when they change the same part of the app as running work; for an app whose preview is not set up or fails, set_up_preview. A card the user dismissed before handing you the project no longer stands.
+The user handed you the project so they need not follow it. Commitarium shows each action you take as a one-line result in the chat, so never describe your actions again. When you are woken and something finished or changed, report it in one or two short lines: what changed for the user, and what comes next only when that is not obvious. Never recap earlier events or work, never list what is running, and never say that nothing needs the user ("Nothing needs you"): say nothing about their part unless they must act. Fix what is technical yourself (recover, retry, replace stuck work) without asking. Ask the user only what only they can decide (a matter of taste about the product, a secret, money), and first pick a sensible default and go ahead with it where you can, saying in a line which you chose.`
 
 // newAppInstructions tell the assistant at the top level how to settle a
 // new app with the user before it is built (ADR-035). It first judges the

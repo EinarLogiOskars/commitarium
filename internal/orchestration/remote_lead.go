@@ -208,7 +208,7 @@ type RemoteLeadWorkspaceService interface {
 	PrepareReplanningBaseline(context.Context, string, string, string, string) (workspace.Workspace, string, error)
 	VerifyImplementationPublication(context.Context, string, string, string, string, string, string, string, int64, string) (workspace.Workspace, error)
 	VerifyRevisedImplementationPublication(context.Context, string, string, string, string, string, string, string, int64, string, string) (workspace.Workspace, error)
-	VerifyImplementationReviewResponse(context.Context, string, string, string, string, string, string, string, string, int64, string) (workspace.Workspace, error)
+	VerifyImplementationReviewResponse(context.Context, string, string, string, string, string, string, string, string, int64, string, bool) (workspace.Workspace, error)
 	VerifyImplementationMergeReadiness(context.Context, string, string, string, string, string, string, string, int64, string) (workspace.Workspace, error)
 	VerifyImplementationReview(context.Context, string, string, string, string, string, string, string, int64, int64, string, string) (workspace.Workspace, error)
 	RecordMergeReady(context.Context, string, string, string, int64) (workspace.Workspace, error)
@@ -5838,16 +5838,25 @@ func (starter *RemoteLeadStarter) verifyImplementationCorrection(
 		ctx, storedFeature.ProjectID, storedFeature.ID, plan.ID, plan.Text,
 		request.identity.AttemptID, result.Summary, reviewAttempt.Result.Review.CommitID,
 		result.Publication.CommitID, result.Publication.PullRequestNumber, starter.forgejoAuthorFor(run, worker.RoleLead),
+		workerhttp.ChangesNothing(result.Publication.FindingAnswers),
 	); err != nil {
 		return fmt.Errorf("verify lead review response: %w", err)
 	}
-	if _, err := starter.executions.RecordSessionEventWithID(
-		ctx, request.identity.AttemptID+":response-verified", request.identity.SessionID,
-		worker.Event{Type: worker.EventActivity, Text: fmt.Sprintf(
-			"Verified lead response to review #%d: corrected commit %s is the head of Forgejo pull request #%d and its audit comment is attributed to %s.",
+	verified := fmt.Sprintf(
+		"Verified lead response to review #%d: corrected commit %s is the head of Forgejo pull request #%d and its audit comment is attributed to %s.",
+		reviewAttempt.Result.Review.ReviewID, result.Publication.CommitID,
+		result.Publication.PullRequestNumber, starter.forgejoAuthorFor(run, worker.RoleLead),
+	)
+	if result.Publication.CommitID == reviewAttempt.Result.Review.CommitID {
+		verified = fmt.Sprintf(
+			"Verified lead response to review #%d: it changes nothing, answering every finding as already fixed, declined, or out of scope; commit %s stays the head of Forgejo pull request #%d and its audit comment is attributed to %s.",
 			reviewAttempt.Result.Review.ReviewID, result.Publication.CommitID,
 			result.Publication.PullRequestNumber, starter.forgejoAuthorFor(run, worker.RoleLead),
-		)},
+		)
+	}
+	if _, err := starter.executions.RecordSessionEventWithID(
+		ctx, request.identity.AttemptID+":response-verified", request.identity.SessionID,
+		worker.Event{Type: worker.EventActivity, Text: verified},
 	); err != nil {
 		return fmt.Errorf("record verified implementation review response: %w", err)
 	}
