@@ -44,7 +44,8 @@ func TestAPlannedProjectIsPlannedWithTheUser(t *testing.T) {
 	if worker.puts[0].OutputContract != workerhttp.OutputContractAssistantPlanningTurn {
 		t.Fatalf("contract = %q, want the planning turn's", worker.puts[0].OutputContract)
 	}
-	for _, want := range []string{"Planning mode.", "Every reply carries the plan", "propose build_plan", "Every third round, step back",
+	for _, want := range []string{"Planning mode.", "Every reply carries the plan", "propose build_plan", "first meeting with a client",
+		"look and feel", "seed it with the agenda's topics", "Never ask what you asked before", "Do not push to build",
 		"the plan being written in the planning workspace"} {
 		if !strings.Contains(worker.puts[0].Instructions, want) {
 			t.Fatalf("the planning turn lacks %q", want)
