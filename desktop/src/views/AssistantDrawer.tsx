@@ -98,6 +98,10 @@ export function AssistantDrawer({
   const [notesOpen, setNotesOpen] = useState(false);
   const [unseen, setUnseen] = useState(false);
   const chatRef = useRef<HTMLDivElement | null>(null);
+  const composerRef = useRef<HTMLTextAreaElement | null>(null);
+  // Set when the drawer is opened with a started message ("I'd like a new
+  // app: "), so the cursor lands after it, ready to type.
+  const caretToEnd = useRef(false);
   const seenReplies = useRef<number | null>(null);
 
   // What the user must set up before the assistant can answer (ADR-027): an
@@ -157,12 +161,23 @@ export function AssistantDrawer({
   useEffect(() => {
     const openWith = (event: Event) => {
       const started = (event as CustomEvent<{ draft?: string }>).detail?.draft;
-      if (started) setDraft(started);
+      if (started) {
+        setDraft(started);
+        caretToEnd.current = true;
+      }
       setOpen(true);
     };
     window.addEventListener(OPEN_ASSISTANT, openWith);
     return () => window.removeEventListener(OPEN_ASSISTANT, openWith);
   }, [setOpen]);
+
+  useEffect(() => {
+    const composer = composerRef.current;
+    if (!caretToEnd.current || !open || !composer) return;
+    caretToEnd.current = false;
+    composer.focus();
+    composer.setSelectionRange(draft.length, draft.length);
+  }, [draft, open]);
 
   useEffect(() => {
     setConversation(null);
@@ -378,6 +393,7 @@ export function AssistantDrawer({
               <div className="composer">
                 <div className="reply">
                   <textarea
+                    ref={composerRef}
                     rows={2}
                     value={draft}
                     autoFocus
