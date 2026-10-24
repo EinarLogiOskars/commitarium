@@ -2877,6 +2877,10 @@ The assistant's state lists them.
   adds one, replacing one of the same name: `201` with the document.
   `400 invalid_document` for a name that is not a plain file name, or an
   empty or oversized file; `409 too_many_documents` past 30.
+- `GET /api/v1/projects/{id}/documents/{name}` answers `{"name", "preview",
+  "truncated"}`: the document's first 64 KB when it is text, for the
+  planning workspace to show; `preview` is empty for any other file.
+  `404 document_not_found` for a missing one.
 - `DELETE /api/v1/projects/{id}/documents/{name}` removes one (`204`;
   `404 document_not_found`). Deleting the project removes them all.
 

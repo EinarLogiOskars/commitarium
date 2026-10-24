@@ -1151,6 +1151,41 @@ textarea {
   margin: 0;
   font-size: 17px;
 }
+/* The full detail of something shown compactly (Overlay.tsx). */
+.modal__card.overlay {
+  max-width: 720px;
+}
+.overlay__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+.overlay__close {
+  flex: none;
+  font-size: 16px;
+  line-height: 1;
+  padding: 4px 10px;
+}
+.overlay h3 {
+  margin: 0 0 8px;
+  font-size: 14px;
+}
+.overlay__text {
+  margin: 0;
+  white-space: pre-wrap;
+}
+.overlay__preview {
+  margin: 0;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-x: auto;
+}
 .modal__footer {
   display: flex;
   justify-content: flex-end;
@@ -3433,15 +3468,22 @@ button.danger:not(.ghost) {
   list-style: none;
   margin-left: -18px;
 }
-.planning__list summary {
+/* A compact entry that opens its full detail in an overlay. */
+.planning__open {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  text-align: left;
   cursor: pointer;
 }
-.planning__sources {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px 10px;
-  margin-top: 4px;
-  font-size: 12px;
+.planning__open:hover {
+  color: var(--accent);
+}
+.planning__source {
+  color: var(--accent);
+  word-break: break-all;
 }
 .planning__priority + .planning__priority {
   margin-top: 12px;
