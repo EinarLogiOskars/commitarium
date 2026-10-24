@@ -105,8 +105,9 @@ func TestANewAppIsSettledBeforeItIsBuilt(t *testing.T) {
 		t.Fatal(err)
 	}
 	first := worker.puts[0].Instructions
-	for _, want := range []string{"first judge whether what they said is enough", "Every third round, step back",
-		"Never ask what you asked before", "When the user says go", "does not use Developer mode", "app_brief"} {
+	for _, want := range []string{"first judge its scope", "Every third round, step back",
+		"Never ask what you asked before", "When the user says go", "does not use Developer mode", "app_brief",
+		"never propose plan_project"} {
 		if !strings.Contains(first, want) {
 			t.Fatalf("the top level's turn lacks %q", want)
 		}
@@ -122,8 +123,8 @@ func TestANewAppIsSettledBeforeItIsBuilt(t *testing.T) {
 	if _, err := service.Send(t.Context(), TopLevel, "Just me", "msg-2"); err != nil {
 		t.Fatal(err)
 	}
-	if next := worker.puts[1].Instructions; !strings.Contains(next, "The user uses Developer mode") ||
-		strings.Contains(next, "does not use Developer mode") {
+	if next := worker.puts[1].Instructions; !strings.Contains(next, "only Developer mode allows (the user uses it)") ||
+		!strings.Contains(next, "- plan_project:") || strings.Contains(next, "does not use Developer mode") {
 		t.Fatalf("Developer mode is not in the next turn: %s", next)
 	}
 	// A project's turns carry none of it.

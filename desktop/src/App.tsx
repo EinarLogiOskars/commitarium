@@ -14,7 +14,7 @@ import { onExitConfirmationRequested } from "./ipc";
 import { AppSettings } from "./views/AppSettings";
 import { ExitConfirm } from "./views/ExitConfirm";
 import { Inbox } from "./views/Inbox";
-import { AssistantDrawer } from "./views/AssistantDrawer";
+import { AssistantDrawer, OPEN_PROJECT } from "./views/AssistantDrawer";
 import { useWorkLayout } from "./views/useWorkLayout";
 import { AutopilotBanner, LaunchBanner } from "./views/AutopilotBanner";
 import { AppsView } from "./views/AppsView";
@@ -106,6 +106,18 @@ function App() {
       // The choice lasts until the window closes.
     }
   };
+  // A project the assistant created to plan opens, among the projects.
+  useEffect(() => {
+    const open = (event: Event) => {
+      const id = (event as CustomEvent<string>).detail;
+      if (!id) return;
+      setAreaState("projects");
+      setProjectName(null);
+      setProjectId(id);
+    };
+    window.addEventListener(OPEN_PROJECT, open);
+    return () => window.removeEventListener(OPEN_PROJECT, open);
+  }, []);
   // The open project's autopilot goal while it is on, as the assistant reports it.
   const [goal, setGoal] = useState<AutopilotGoal | null>(null);
   const [launch, setLaunch] = useState<LaunchStage | null>(null);

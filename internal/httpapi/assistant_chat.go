@@ -328,12 +328,26 @@ func (api *API) approveConversationActionHandler(w http.ResponseWriter, r *http.
 		writeError(w, http.StatusConflict, "action_not_pending", "the action is no longer waiting for approval")
 		return
 	}
-	// At the top level the assistant only creates apps; everything else acts
-	// in a project, except research, which needs none.
-	if action.Type != featureartifact.AssistantResearch &&
-		(scope == conversations.TopLevel) != (action.Type == featureartifact.AssistantCreateApp) {
+	// At the top level the assistant only creates apps and projects to plan;
+	// everything else acts in a project, except research, which needs none.
+	topLevel := action.Type == featureartifact.AssistantCreateApp || action.Type == featureartifact.AssistantPlanProject
+	if action.Type != featureartifact.AssistantResearch && (scope == conversations.TopLevel) != topLevel {
 		writeError(w, http.StatusConflict, "action_needs_project", "this action runs in a project's conversation, and a new app at the top level")
 		return
+	}
+	// A project is planned only in Developer mode; without it, an app stays
+	// self-contained (ADR-035).
+	if action.Type == featureartifact.AssistantPlanProject {
+		conversation, err := api.conversations.Get(r.Context(), scope)
+		if err != nil {
+			writeConversationError(w, err)
+			return
+		}
+		if !conversation.Developer {
+			writeError(w, http.StatusConflict, "developer_mode_required",
+				"planning a project needs Developer mode, in Settings; without it the assistant builds a self-contained app")
+			return
+		}
 	}
 	// The user's approval may act on any work order; autopilot's only on the
 	// assistant's own (ADR-027).
@@ -389,6 +403,8 @@ func (api *API) approveConversationActionHandler(w http.ResponseWriter, r *http.
 	switch action.Type {
 	case featureartifact.AssistantCreateApp:
 		result, projectID, ok = api.applyCreateApp(w, r, action)
+	case featureartifact.AssistantPlanProject:
+		result, projectID, ok = api.applyPlanProject(w, r, action)
 	case featureartifact.AssistantCreateWorkOrder:
 		// A work order queued behind other work is created now and started
 		// later (HoldStart).
@@ -424,6 +440,10 @@ func (api *API) approveConversationActionHandler(w http.ResponseWriter, r *http.
 		result, ok = api.applyAnswerHelper(w, r, scope, action)
 	case featureartifact.AssistantResearch:
 		result, helper, ok = api.applyResearch(w, r, scope, action)
+	case featureartifact.AssistantUpdatePlan:
+		result, ok = api.applyUpdatePlan(w, r, scope, action)
+	case featureartifact.AssistantBuildPlan:
+		result, ok = api.applyBuildPlan(w, r, scope)
 	case featureartifact.AssistantSetUpStack:
 		result, workOrderID, ok = api.applySetUpStack(w, r, scope)
 	case featureartifact.AssistantCloseWorkOrder:

@@ -14,6 +14,7 @@ import { ApiError } from "../api/client";
 import { startAutopilot } from "../api/assistant";
 import { ASSISTANT_CHANGED, WORK_CHANGED } from "./AssistantDrawer";
 import { Markdown } from "./Markdown";
+import { PlanningWorkspace } from "./PlanningWorkspace";
 import { openAssistantOn } from "../attention/askAssistant";
 import { rememberIdea, rememberedIdea } from "./visionSession";
 import type {
@@ -176,6 +177,10 @@ export function VisionView({
   };
 
   if (!loaded) return <p className="muted">Loading…</p>;
+  // A vision being planned is the planning workspace (planning mode).
+  if (vision?.planning?.status === "planning") {
+    return <PlanningWorkspace projectId={projectId} vision={vision} onChanged={setVision} />;
+  }
 
   const plan = vision?.plan;
   const lowConfidence = plan && plan.confidence !== "high" && plan.guesses.length > 0;

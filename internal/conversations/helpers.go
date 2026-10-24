@@ -190,6 +190,7 @@ func (service *Service) helpersChanged(ctx context.Context, scope string, states
 		case HelperProposes:
 			if helper.Kind == HelperResearch {
 				stored.found(helper, state.Text, now)
+				service.noteResearch(ctx, scope, helper.Title, state.Text)
 				continue
 			}
 			stored.propose(*helper, state.Text, now)

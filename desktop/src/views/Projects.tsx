@@ -4,6 +4,7 @@ import { deleteProject } from "../ipc";
 import { ApiError } from "../api/client";
 import { ImportProject } from "./ImportProject";
 import { openAssistantOn } from "../attention/askAssistant";
+import { startPlanning } from "../api/vision";
 import { listAutopilotGoals, type AutopilotGoal } from "../api/assistant";
 import {
   ProjectDefaultsFields,
@@ -62,8 +63,9 @@ export function Projects({
   }, [reachable]);
 
   // A project created with an idea opens with the assistant on its vision,
-  // which also recommends the stack.
-  const submit = async (mode: VisionMode | null) => {
+  // which also recommends the stack, or in the planning workspace, where the
+  // user plans it with the assistant before anything is built.
+  const submit = async (mode: VisionMode | "plan" | null) => {
     if (!name.trim()) return;
     setCreating(true);
     setError(null);
@@ -76,8 +78,13 @@ export function Projects({
       setName("");
       setIdea("");
       await load();
+      if (mode === "plan" && description) {
+        // Planning starts from the idea and wakes the project's assistant;
+        // the project opens on the planning workspace.
+        await startPlanning(created.id, description);
+      }
       onSelect(created.id);
-      if (mode && description) {
+      if (mode && mode !== "plan" && description) {
         // The assistant writes the vision with the user (ADR-035) once the
         // project is open.
         openAssistantOn(
@@ -219,6 +226,16 @@ export function Projects({
               title="The assistant asks what it needs to know first."
             >
               Create and talk it through
+            </button>
+          )}
+          {idea.trim() && (
+            <button
+              type="button"
+              onClick={() => void submit("plan")}
+              disabled={creating || !name.trim()}
+              title="Plan it with the assistant beside a live plan, then build it."
+            >
+              Plan it with the assistant
             </button>
           )}
         </div>

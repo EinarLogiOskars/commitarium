@@ -2684,11 +2684,13 @@ actions, and its notes.
 - An action is `{"id", "type": "create_work_order"|"start_work_order"|
   "change_models"|"add_vision_item"|"start_autopilot"|"continue_work_order"|
   "recover_work_order"|"close_work_order"|"create_app"|"set_up_preview"|"write_vision"|"set_up_stack"|
-  "answer_helper"|"write_brief"|"accept_brief"|"design_stack"|"apply_stack"|"research", "priority", "reason",
+  "answer_helper"|"write_brief"|"accept_brief"|"design_stack"|"apply_stack"|"research"|
+  "plan_project"|"update_plan"|"build_plan", "priority", "reason",
   "title", "description", "vision_item_id",
   "steps", "independent_tests", "lead_agent", "lead_model", "reviewer_agent",
   "reviewer_model", "work_order_id", "when", "how", "guidance", "after", "helper", "brief",
-  "app_brief", "assumptions", "status", "premium",
+  "app_brief", "assumptions", "decisions", "open_questions", "plan_items", "stack_presets",
+  "frameworks", "status", "premium",
   "result", "auto_tried", "queued"}`. `write_vision` has the vision written, or
   the one there is rewritten, on the assistant's agent from `description`;
   `set_up_stack` detects the stack of the code, or sets the project up on the
@@ -2724,9 +2726,19 @@ actions, and its notes.
   saves `app_brief` (everything the assistant gathered) as the new app's
   assistant notes, launches it, and has the vision written from
   `description`, `app_brief`, and `assumptions` (what the assistant guessed,
-  listed on the card); the action's `project_id` names the new project. Any
-  other action there, or `create_app` in a project, returns
-  `409 action_needs_project`. `premium` lists its models that need approval (`ask_before`);
+  listed on the card); the action's `project_id` names the new project.
+  `plan_project`, the top level's other action, creates a project like New
+  project does, named by `title`, saves `app_brief` as its assistant's notes,
+  and starts planning its vision from `description` (see Planning a vision);
+  it is refused with `409 developer_mode_required` unless the conversation's
+  `developer` is set by a message's `developer_mode`. Any other action
+  there, or `create_app` or `plan_project` in a project, returns
+  `409 action_needs_project`. `update_plan` changes the vision being planned:
+  `description` is the goal, `decisions` and `open_questions` replace those
+  lists, and `plan_items` (`[{"priority", "title", "description"}]`) and
+  `stack_presets` with `frameworks` replace the build plan and the stack when
+  given; like `research`, it is applied at once in every mode. `build_plan`
+  is a card that finishes the plan with autopilot, as Build it does. `premium` lists its models that need approval (`ask_before`);
   `auto_tried` marks one autopilot took over.
 - `POST .../{scope}/actions/{actionID}/approve` with `{"start", "confirm_premium"}`
   runs it through the same paths as the app's own buttons and records the
@@ -2814,6 +2826,50 @@ Only an item without sub-items starts a work order.
   (creating the priority), optionally linking a work order done outside the
   plan, and answers `201 {"vision", "item_id"}`. The Vision page lists every
   unlinked work order and session as Other work.
+
+### Planning a vision
+
+In Developer mode a project's vision can be planned with the assistant before
+anything is built (ONE_CONVERSATION_PLAN.md phase 2). The vision is the plan:
+its statement is the goal, its `stack` and items the stack and build plan,
+and `planning` holds the rest: `{"status": "planning"|"built",
+"decisions", "open_questions", "research": [{"title", "findings",
+"sources", "added_at"}], "started_at", "built_at"}`. It stays, built, as
+the plan's record; the user's edits and the vision writer keep it.
+
+- `POST /api/v1/projects/{id}/vision/planning` with `{"goal"}` puts the
+  vision in planning, or starts one from `goal` when there is none
+  (`400 invalid_vision` without it), and wakes the project's assistant to
+  plan it with the user. A vision already being planned is answered as is.
+- `PUT /api/v1/projects/{id}/vision/planning` with `{"goal", "decisions",
+  "open_questions", "stack", "items": [{"priority", "title", "description"}]}`
+  updates it: the lists replace those there are; an empty `goal`, no
+  `stack`, and no `items` keep what there is. `400 invalid_vision` for a
+  stack without a known runtime preset; `409 vision_not_planning` once it is
+  built. Research the assistant starts while a vision is planned is added to
+  `research`, with the URLs after its "Sources:".
+- `POST /api/v1/projects/{id}/vision/planning/finish` with `{"autopilot"}` is
+  Build it: the open questions become the plan's `guesses`, and `planning`
+  is `built`. With `autopilot`, the project is set to `builds` and launched,
+  as a new app is. `400 invalid_vision` while the build plan has no items.
+
+## Project documents
+
+Files attached to a project (planning mode): specs, API docs, sample exports,
+at most 30 of at most 5 MB each. They are stored with the project in the
+coordinator, never committed, and copied into every managed checkout of its
+repository under `.commitarium/documents/` (ignored by git there) once the
+checkout is ready, so the assistant, its helpers, and the agents read them.
+The assistant's state lists them.
+
+- `GET /api/v1/projects/{id}/documents` answers `{"documents": [{"name",
+  "size", "added_at"}]}`.
+- `POST /api/v1/projects/{id}/documents` with `{"name", "content_base64"}`
+  adds one, replacing one of the same name: `201` with the document.
+  `400 invalid_document` for a name that is not a plain file name, or an
+  empty or oversized file; `409 too_many_documents` past 30.
+- `DELETE /api/v1/projects/{id}/documents/{name}` removes one (`204`;
+  `404 document_not_found`). Deleting the project removes them all.
 
 ## Setting a new project up
 

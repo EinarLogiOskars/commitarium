@@ -55,7 +55,11 @@ them into one flow and gives the result a place to live.
    assumptions, which the launch's vision writer receives in full. Without
    Developer mode, an app that depends on outside systems (credentials, a
    server, several services) is scoped down to a self-contained version,
-   with a plain note of what is left out (ONE_CONVERSATION_PLAN.md).
+   with a plain note of what is left out (ONE_CONVERSATION_PLAN.md). The
+   assistant judges the scope at one of three levels: build now; ask and
+   research, then build; or, in Developer mode only, plan it as a project
+   (`plan_project`), which opens the project's planning workspace instead of
+   building an app.
 7. **Apps mode: the assistant drives.** In an app's conversation, autopilot is
    always on: the assistant's work actions run without cards, goal or not,
    so a change request becomes a work order that is built at once. (Simpler

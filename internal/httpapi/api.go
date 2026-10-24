@@ -299,6 +299,7 @@ type API struct {
 	marketplace        MarketplaceService
 	releases           ReleaseService
 	installs           InstallService
+	documents          DocumentService
 	// now is the API's clock; nil is time.Now.
 	now func() time.Time
 	// mux serves the API's own routes, for actions that reuse them.
@@ -416,11 +417,14 @@ func newAPI(
 	var installService InstallService
 	var modelGuide ModelGuideService
 	var projectUsage ProjectUsageService
+	var documentService DocumentService
 	for _, extra := range extras {
 		if typed, ok := extra.(ProjectUsageService); ok {
 			projectUsage = typed
 		}
 		switch typed := extra.(type) {
+		case DocumentService:
+			documentService = typed
 		case ModelGuideService:
 			modelGuide = typed
 		case PreviewCheckService:
@@ -483,6 +487,7 @@ func newAPI(
 		marketplace:        marketplaceService,
 		releases:           releaseService,
 		installs:           installService,
+		documents:          documentService,
 	}
 	api.artifacts, _ = workflow.(FeatureArtifactService)
 	api.projectImporter, _ = projects.(ProjectImporter)
@@ -496,6 +501,9 @@ func newAPI(
 	if releaseService != nil {
 		api.registerReleaseRoutes(mux)
 	}
+	if documentService != nil {
+		api.registerDocumentRoutes(mux)
+	}
 	if marketplaceService != nil && installService != nil {
 		api.registerMarketplaceAppRoutes(mux)
 	}
@@ -508,6 +516,9 @@ func newAPI(
 		mux.HandleFunc("POST /api/v1/projects/{id}/vision/assistant/{sessionID}/messages", api.replyVisionHandler)
 		mux.HandleFunc("POST /api/v1/projects/{id}/vision/items/{itemID}/work-order", api.startVisionWorkOrderHandler)
 		mux.HandleFunc("POST /api/v1/projects/{id}/vision/items", api.addVisionItemHandler)
+		mux.HandleFunc("POST /api/v1/projects/{id}/vision/planning", api.startPlanningHandler)
+		mux.HandleFunc("PUT /api/v1/projects/{id}/vision/planning", api.updatePlanningHandler)
+		mux.HandleFunc("POST /api/v1/projects/{id}/vision/planning/finish", api.finishPlanningHandler)
 	}
 	if assistantConversations != nil && projects != nil && features != nil {
 		mux.HandleFunc("GET /api/v1/assistant/settings", api.getAssistantSettingsHandler)

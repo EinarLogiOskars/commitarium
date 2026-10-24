@@ -14,6 +14,11 @@ export function askAssistantAbout(workOrderTitle: string) {
   );
 }
 
+/** Opens the assistant as it is, as beside the planning workspace. */
+export function openAssistant() {
+  window.dispatchEvent(new CustomEvent(OPEN_ASSISTANT, { detail: {} }));
+}
+
 /**
  * Opens the project's assistant focused on an item (ADR-035), such as a
  * Draft to clarify or the stack to choose, and sends message to start the

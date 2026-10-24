@@ -38,6 +38,8 @@ export const WORK_CHANGED = "commitarium:work-changed";
 export const OPEN_VISION = "commitarium:open-vision";
 /** Opens the assistant, optionally with a message started in its composer. */
 export const OPEN_ASSISTANT = "commitarium:open-assistant";
+/** Opens a project (detail: its ID), as one the assistant created to plan. */
+export const OPEN_PROJECT = "commitarium:open-project";
 /** Asks the assistant to reload its conversation, as after autopilot starts or stops. */
 export const ASSISTANT_CHANGED = "commitarium:assistant-changed";
 
@@ -281,7 +283,10 @@ export function AssistantDrawer({
   }
 
   const renderAction = (action: AssistantAction) =>
-    (builds || action.type === "answer_helper" || action.type === "research") &&
+    (builds ||
+      action.type === "answer_helper" ||
+      action.type === "research" ||
+      action.type === "update_plan") &&
     appliesItself(action) ? (
       <AppliedLine key={action.id} action={action} />
     ) : (
@@ -552,6 +557,8 @@ function ActionCard({
         const applied = conversation.actions?.find((a) => a.id === action.id);
         if (applied?.type === "create_app" && applied.project_id) {
           void openAppWindow(applied.project_id, applied.title);
+        } else if (applied?.type === "plan_project" && applied.project_id) {
+          window.dispatchEvent(new CustomEvent(OPEN_PROJECT, { detail: applied.project_id }));
         } else if (applied?.type === "add_vision_item") {
           window.dispatchEvent(new Event(OPEN_VISION));
         } else if (applied?.work_order_id) {
@@ -588,25 +595,31 @@ function ActionCard({
                 ? "Close a work order"
                 : action.type === "create_app"
                   ? `New app: ${action.title}`
-                  : action.type === "set_up_preview"
-                    ? "Set up the app's preview"
-                    : action.type === "write_vision"
-                      ? "Write the vision"
-                      : action.type === "set_up_stack"
-                        ? "Set up the stack"
-                        : action.type === "answer_helper"
-                          ? "Answer a question about the work"
-                          : action.type === "write_brief"
-                            ? "Write the brief for a work order"
-                            : action.type === "accept_brief"
-                              ? `Brief: ${action.title}`
-                              : action.type === "design_stack"
-                                ? "Design the stack"
-                                : action.type === "apply_stack"
-                                  ? "Suggested stack"
-                                  : action.type === "research"
-                                    ? `Look up: ${action.title}`
-                                    : "Switch models";
+                  : action.type === "plan_project"
+                    ? `Plan a project: ${action.title}`
+                    : action.type === "set_up_preview"
+                      ? "Set up the app's preview"
+                      : action.type === "write_vision"
+                        ? "Write the vision"
+                        : action.type === "set_up_stack"
+                          ? "Set up the stack"
+                          : action.type === "answer_helper"
+                            ? "Answer a question about the work"
+                            : action.type === "write_brief"
+                              ? "Write the brief for a work order"
+                              : action.type === "accept_brief"
+                                ? `Brief: ${action.title}`
+                                : action.type === "design_stack"
+                                  ? "Design the stack"
+                                  : action.type === "apply_stack"
+                                    ? "Suggested stack"
+                                    : action.type === "research"
+                                      ? `Look up: ${action.title}`
+                                      : action.type === "build_plan"
+                                        ? "Build it"
+                                        : action.type === "update_plan"
+                                          ? "Update the plan"
+                                          : "Switch models";
   const models = [
     action.lead_model &&
       `Lead ${action.lead_agent ? agentName(agents, action.lead_agent) + " · " : ""}${modelName(action.lead_model)}`,
@@ -629,16 +642,17 @@ function ActionCard({
         ) : (
           <p className="assistant-action__desc">{action.description}</p>
         ))}
-      {action.type === "create_app" && (action.assumptions ?? []).length > 0 && (
-        <div className="assistant-action__desc">
-          Assumed where you didn&apos;t say:
-          <ul>
-            {action.assumptions?.map((assumption) => (
-              <li key={assumption}>{assumption}</li>
-            ))}
-          </ul>
-        </div>
-      )}
+      {(action.type === "create_app" || action.type === "plan_project") &&
+        (action.assumptions ?? []).length > 0 && (
+          <div className="assistant-action__desc">
+            Assumed where you didn&apos;t say:
+            <ul>
+              {action.assumptions?.map((assumption) => (
+                <li key={assumption}>{assumption}</li>
+              ))}
+            </ul>
+          </div>
+        )}
       {action.type === "continue_work_order" && (
         <p className="assistant-action__desc">
           {action.guidance ? `Guidance: ${action.guidance}` : "Retries without guidance."}
@@ -855,6 +869,7 @@ const APPLY_LABEL: Record<AssistantAction["type"], string> = {
   continue_work_order: "Continue",
   close_work_order: "Close",
   create_app: "Create app",
+  plan_project: "Plan it",
   set_up_preview: "Set up preview",
   write_vision: "Write vision",
   set_up_stack: "Set up stack",
@@ -864,6 +879,8 @@ const APPLY_LABEL: Record<AssistantAction["type"], string> = {
   design_stack: "Design stack",
   apply_stack: "Apply",
   research: "Look it up",
+  update_plan: "Update",
+  build_plan: "Build it",
 };
 
 const STATUS_LABEL: Record<AssistantAction["status"], string> = {
@@ -987,6 +1004,13 @@ function AppliedLine({ action }: { action: AssistantAction }) {
     return (
       <p className="muted assistant__applied">
         {action.status === "applied" ? "✓ Answered" : "Answering"}: {action.guidance}
+      </p>
+    );
+  }
+  if (action.type === "update_plan") {
+    return (
+      <p className="muted assistant__applied">
+        {action.status === "applied" ? "✓ Updated the plan" : "Updating the plan…"}
       </p>
     );
   }

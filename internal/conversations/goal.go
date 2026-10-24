@@ -250,7 +250,7 @@ func (service *Service) autopilotActions(ctx context.Context, scope string) ([]A
 	defer service.mu.Unlock()
 	stored, err := service.read(scope)
 	answers := slices.ContainsFunc(stored.Actions, func(action Action) bool {
-		return talksToHelper(action.Type) && action.Status == ActionProposed && !action.AutoTried
+		return sentAtOnce(action.Type) && action.Status == ActionProposed && !action.AutoTried
 	})
 	if err != nil || (!stored.Goal.active() && !builds && !answers) {
 		return nil, err
@@ -359,10 +359,11 @@ func (service *Service) autopilotActions(ctx context.Context, scope string) ([]A
 			inGoal = builds
 		case featureartifact.AssistantWriteBrief, featureartifact.AssistantAcceptBrief:
 			inGoal, target = builds, action.WorkOrderID
-		case featureartifact.AssistantAnswerHelper, featureartifact.AssistantResearch:
+		case featureartifact.AssistantAnswerHelper, featureartifact.AssistantResearch, featureartifact.AssistantUpdatePlan:
 			// Answering a helper the assistant started, or researching a
-			// question, changes nothing in the project: it is sent at once,
-			// assisting too (ADR-035).
+			// question, changes nothing in the project, and updating the plan
+			// only fills in what the user watches being planned: each is sent
+			// at once, assisting too (ADR-035).
 			inGoal = true
 		}
 		// A queued start the user did themselves is done: the work order no
@@ -708,10 +709,11 @@ func (stored *record) addEvent(text string, at time.Time) {
 	})
 }
 
-// talksToHelper reports whether an action only talks to a helper, so it is
-// sent without a card.
-func talksToHelper(kind featureartifact.AssistantActionType) bool {
-	return kind == featureartifact.AssistantAnswerHelper || kind == featureartifact.AssistantResearch
+// sentAtOnce reports whether an action is sent without a card: it only
+// talks to a helper, or updates the plan being written.
+func sentAtOnce(kind featureartifact.AssistantActionType) bool {
+	return kind == featureartifact.AssistantAnswerHelper || kind == featureartifact.AssistantResearch ||
+		kind == featureartifact.AssistantUpdatePlan
 }
 
 func actionName(action featureartifact.AssistantAction) string {

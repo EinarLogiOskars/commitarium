@@ -209,6 +209,8 @@ func writeVisionError(w http.ResponseWriter, projectID string, err error) {
 		writeError(w, http.StatusBadRequest, "invalid_vision", err.Error())
 	case errors.Is(err, vision.ErrConflict):
 		writeError(w, http.StatusConflict, "vision_conflict", err.Error())
+	case errors.Is(err, vision.ErrNotPlanning):
+		writeError(w, http.StatusConflict, "vision_not_planning", err.Error())
 	case errors.Is(err, vision.ErrNotReady):
 		writeError(w, http.StatusConflict, "vision_assistant_busy", err.Error())
 	case errors.Is(err, vision.ErrUnavailable):

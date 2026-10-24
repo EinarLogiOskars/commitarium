@@ -46,6 +46,12 @@ const (
 	// summary, and AppBrief, all the assistant gathered (APPS_PLAN.md,
 	// ADR-035).
 	AssistantCreateApp AssistantActionType = "create_app"
+	// AssistantPlanProject creates a project at the top level, in Developer
+	// mode only, for a request that is a real project rather than a
+	// self-contained app: named by Title, with Description its goal and
+	// AppBrief what the assistant gathered so far, it is planned with the
+	// user before anything is built (planning mode).
+	AssistantPlanProject AssistantActionType = "plan_project"
 	// AssistantSetUpPreview sets the app's preview up, or fixes one that
 	// fails to start, in a work order that merges only once Commitarium's
 	// preview check of its commit passes (ADR-028). Guidance says what is
@@ -80,7 +86,22 @@ const (
 	// question of fact, on the web (ADR-035); Title names it in a few
 	// words. Its findings and sources come back to the assistant.
 	AssistantResearch AssistantActionType = "research"
+	// AssistantUpdatePlan updates the vision being planned (planning mode):
+	// Description is the goal, and Decisions, OpenQuestions, PlanItems,
+	// StackPresets, and Frameworks the plan's other sections. Like research,
+	// it is applied at once: the user watches the plan fill in.
+	AssistantUpdatePlan AssistantActionType = "update_plan"
+	// AssistantBuildPlan finishes the vision being planned and hands it to
+	// autopilot, as the planning workspace's Build it does.
+	AssistantBuildPlan AssistantActionType = "build_plan"
 )
+
+// PlanItem is one item of the build plan at a priority, 0 for P0.
+type PlanItem struct {
+	Priority    int    `json:"priority"`
+	Title       string `json:"title"`
+	Description string `json:"description"`
+}
 
 // AssistantAction is one proposed action. Fields that do not apply to its
 // type are empty.
@@ -136,12 +157,20 @@ type AssistantAction struct {
 	// Brief, for create_work_order, has the new work order's brief written
 	// from Description before it starts (ADR-035): it is created as a draft.
 	Brief bool `json:"brief,omitempty"`
-	// AppBrief, for create_app, is what the assistant gathered with the user
+	// AppBrief, for create_app and plan_project, is what the assistant gathered with the user
 	// (what the app is for, decisions, research with sources, what is left
 	// out), handed in full to the writer who plans the app; Assumptions are
 	// what it guessed, shown on the card.
 	AppBrief    string   `json:"app_brief,omitempty"`
 	Assumptions []string `json:"assumptions,omitempty"`
+	// Decisions and OpenQuestions, for update_plan, replace the plan's lists
+	// in full; PlanItems, when any, replace its build plan, and
+	// StackPresets, when any, with Frameworks, its stack.
+	Decisions     []string   `json:"decisions,omitempty"`
+	OpenQuestions []string   `json:"open_questions,omitempty"`
+	PlanItems     []PlanItem `json:"plan_items,omitempty"`
+	StackPresets  []string   `json:"stack_presets,omitempty"`
+	Frameworks    string     `json:"frameworks,omitempty"`
 }
 
 // PhaseChoices are the action's planning models and efforts (ADR-031); nil
@@ -165,6 +194,8 @@ const (
 	// notes with a line that introduces it.
 	MaxAppBriefBytes = 15 * 1024
 	maxAssumptions   = 20
+	maxPlanItems     = 60
+	maxPlanLines     = 40
 )
 
 // Normalize trims the turn and checks its actions.
@@ -184,17 +215,23 @@ func (turn AssistantTurn) Normalize() (AssistantTurn, error) {
 			&action.LeadPlanModel, &action.LeadPlanEffort, &action.LeadEffort,
 			&action.ReviewerPlanModel, &action.ReviewerPlanEffort, &action.ReviewerEffort,
 			&action.WorkOrderID, &action.When, &action.How, &action.Guidance, &action.After, &action.Helper,
-			&action.AppBrief,
+			&action.AppBrief, &action.Frameworks,
 		} {
 			*field = strings.TrimSpace(*field)
 		}
-		assumptions := action.Assumptions[:0:0]
-		for _, assumption := range action.Assumptions {
-			if assumption = strings.TrimSpace(assumption); assumption != "" {
-				assumptions = append(assumptions, assumption)
+		for _, list := range []*[]string{&action.Assumptions, &action.Decisions, &action.OpenQuestions, &action.StackPresets} {
+			kept := (*list)[:0:0]
+			for _, line := range *list {
+				if line = strings.TrimSpace(line); line != "" {
+					kept = append(kept, line)
+				}
 			}
+			*list = kept
 		}
-		action.Assumptions = assumptions
+		for index := range action.PlanItems {
+			item := &action.PlanItems[index]
+			item.Title, item.Description = strings.TrimSpace(item.Title), strings.TrimSpace(item.Description)
+		}
 		if err := action.validate(); err != nil {
 			return AssistantTurn{}, fmt.Errorf("%w: action %d: %v", ErrInvalidArtifact, index+1, err)
 		}
@@ -230,9 +267,9 @@ func (action AssistantAction) validate() error {
 		if action.Priority < 0 || action.Priority > maxVisionPriority {
 			return fmt.Errorf("priority runs from 0 to %d", maxVisionPriority)
 		}
-	case AssistantCreateApp:
+	case AssistantCreateApp, AssistantPlanProject:
 		if action.Title == "" || len(action.Title) > 80 || action.Description == "" || len(action.Description) > MaxGoalBytes {
-			return fmt.Errorf("an app needs a short name and a description")
+			return fmt.Errorf("an app or a project needs a short name and a description")
 		}
 		if len(action.AppBrief) > MaxAppBriefBytes || len(action.Assumptions) > maxAssumptions {
 			return fmt.Errorf("the app's brief is too long, or it lists more than %d assumptions", maxAssumptions)
@@ -289,6 +326,24 @@ func (action AssistantAction) validate() error {
 			action.Description == "" || len(action.Description) > MaxGoalBytes {
 			return fmt.Errorf("research needs a short title and the question in description")
 		}
+	case AssistantUpdatePlan:
+		if len(action.Description) > MaxGoalBytes || len(action.Frameworks) > MaxStepTextBytes ||
+			len(action.Decisions) > maxPlanLines || len(action.OpenQuestions) > maxPlanLines ||
+			len(action.PlanItems) > maxPlanItems || len(action.StackPresets) > maxVisionStackPresets {
+			return fmt.Errorf("the plan's update is too long")
+		}
+		for _, line := range append(append([]string{}, action.Decisions...), action.OpenQuestions...) {
+			if len(line) > MaxStepTextBytes {
+				return fmt.Errorf("a decision or question is too long")
+			}
+		}
+		for _, item := range action.PlanItems {
+			if item.Title == "" || len(item.Title) > MaxStepTextBytes || len(item.Description) > MaxStepTextBytes ||
+				item.Priority < 0 || item.Priority > maxVisionPriority {
+				return fmt.Errorf("each item of the build plan needs a title and a priority from 0 to %d", maxVisionPriority)
+			}
+		}
+	case AssistantBuildPlan:
 	case AssistantStartAutopilot:
 		if action.Priority < 0 || action.Priority > maxVisionPriority {
 			return fmt.Errorf("priority runs from 0 to %d", maxVisionPriority)

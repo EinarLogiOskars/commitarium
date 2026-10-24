@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"net/url"
 	"os"
 	"os/exec"
@@ -26,6 +27,10 @@ type Config struct {
 	TokenFile       string
 	GitExecutable   string
 	Runner          CommandRunner
+	// Ready, when set, runs on each checkout Ensure leaves ready, as when the
+	// project's documents are copied in (internal/documents). Its failure is
+	// logged; the checkout stays usable.
+	Ready func(ctx context.Context, spec workspace.CheckoutSpec, directory string) error
 }
 
 type CommandRunner interface {
@@ -43,6 +48,7 @@ type Manager struct {
 	hostBaseURL     string
 	tokenFile       string
 	runner          CommandRunner
+	ready           func(ctx context.Context, spec workspace.CheckoutSpec, directory string) error
 }
 
 func NewManager(config Config) (*Manager, error) {
@@ -72,7 +78,7 @@ func NewManager(config Config) (*Manager, error) {
 	}
 	return &Manager{
 		root: root, internalBaseURL: internalBaseURL, hostBaseURL: hostBaseURL,
-		tokenFile: tokenFile, runner: runner,
+		tokenFile: tokenFile, runner: runner, ready: config.Ready,
 	}, nil
 }
 
@@ -102,7 +108,15 @@ func (manager *Manager) Ensure(ctx context.Context, spec workspace.CheckoutSpec)
 	case info.Mode()&os.ModeSymlink != 0 || !info.IsDir():
 		return fmt.Errorf("%w: checkout path is not an ordinary directory", workspace.ErrCheckoutConflict)
 	}
-	return manager.reconcile(ctx, spec, target)
+	if err := manager.reconcile(ctx, spec, target); err != nil {
+		return err
+	}
+	if manager.ready != nil {
+		if err := manager.ready(ctx, spec, target); err != nil {
+			log.Printf("prepare checkout %s: %v", spec.WorkspaceID, err)
+		}
+	}
+	return nil
 }
 
 // Contains reports whether a checkout's HEAD already contains a commit. A

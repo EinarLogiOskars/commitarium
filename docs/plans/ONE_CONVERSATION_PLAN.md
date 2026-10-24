@@ -1,8 +1,8 @@
 # One Conversation: Implementation Plan
 
 **Status:** phase 1 built 2026-10-19 (O1–O10), [ADR-035](../adr/0035-talk-to-the-assistant-not-the-agents.md)
-accepted; phase 2 (Planning mode) not started. Departures from the slices as
-written:
+accepted; phase 2 (Planning mode) built 2026-10-20 (P1–P5), with a follow-up
+note in ADR-035. Departures from the slices as written, phase 1:
 
 - **O1–O3:** `answer_helper` is sent without a card in both modes, since it
   changes nothing in the project; `create_work_order` takes `brief`, so a
@@ -34,6 +34,40 @@ written:
 - **Not verified with real agents:** web access from the workers (and
   Codex's web search), the clarifying rounds' behaviour, and a helper
   restarting after a real sign-in. Go and desktop tests cover the plumbing.
+
+Phase 2:
+
+- **P1:** the three levels reorganise O9's new-app rules; the scope-down was
+  already built there. The plan level is the new top-level action
+  `plan_project`, refused on approval unless the conversation is in
+  Developer mode (conversations now show `developer`).
+- **P2:** the vision's statement, stack, and items are the goal, stack, and
+  build plan; `planning` adds decisions, open questions, and research notes.
+  One new action, `update_plan`, sent at once like research; decisions and
+  open questions are replaced in full each time, while an update without
+  items or a stack keeps them. Build plan items are top-level items per
+  priority, so a planned rewrite of a vision with nested items flattens it.
+  Research a helper finishes is added to the plan by itself, with the URLs
+  after its "Sources:". A second new action, `build_plan`, is the Build it
+  card for "go for it"; at Build it the open questions become the vision's
+  guesses.
+- **P3:** documents are stored in the coordinator, not committed (the
+  default branch is protected), and copied into each managed checkout's
+  `.commitarium/documents/`, ignored through the checkout's own git
+  exclude file, when the checkout is ready. A checkout gets documents added
+  later only the next time it is readied (the assistant's own on its next
+  fresh session), and the research helper has no checkout. Agents are not
+  told of them separately: the assistant's state lists them and it names
+  the ones a brief needs.
+- **P4:** the workspace is the Vision page while the vision is planned, with
+  the assistant's drawer opened beside it, rather than a new page. Build it
+  hands over to autopilot (the project is set to build everything and
+  launched like a new app); "I'll build it myself" finishes the plan for the
+  project's own flow.
+- **Not verified:** nothing in phase 2 was tried with real agents or in the
+  running app: the scope judgement, the planning conversation, live cards,
+  document uploads from the desktop, and Build it's launch. Go and desktop
+  tests cover the plumbing.
 
 ## Problem
 

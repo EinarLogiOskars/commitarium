@@ -17,7 +17,7 @@ import { PreviewView } from "./PreviewView";
 import { VisionView } from "./VisionView";
 import { OPEN_VISION, WORK_CHANGED } from "./AssistantDrawer";
 import { rememberedIdea } from "./visionSession";
-import { getOpenVisionSession } from "../api/vision";
+import { getOpenVisionSession, getVision } from "../api/vision";
 import { usePreview } from "./usePreview";
 import { usePreviewSetup } from "./usePreviewSetup";
 import { WORK } from "../vocab";
@@ -142,6 +142,12 @@ export function ProjectWorkspace({
     } catch {
       setToolchain(null);
     }
+    // A project being planned opens on its planning workspace.
+    getVision(id)
+      .then((vision) => {
+        if (vision.planning?.status === "planning") setMode("vision");
+      })
+      .catch(() => undefined);
   }, [id, onLoaded]);
 
   useEffect(() => {

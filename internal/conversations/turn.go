@@ -135,6 +135,8 @@ func (service *Service) startTurn(
 	instructions += service.focusInstructions(ctx, scope, stored.Focus)
 	if scope == TopLevel {
 		instructions += newAppInstructions(stored.Developer)
+	} else if service.planning(ctx, scope) {
+		instructions += planningInstructions
 	}
 	if err := service.write(stored); err != nil {
 		return Conversation{}, err
@@ -263,7 +265,7 @@ func (service *Service) refresh(ctx context.Context, stored record) (record, err
 				stored.Notes = turn.Notes
 			}
 			answers := slices.ContainsFunc(turn.Actions, func(action featureartifact.AssistantAction) bool {
-				return talksToHelper(action.Type)
+				return sentAtOnce(action.Type)
 			})
 			if len(turn.Actions) > 0 && (answers || stored.Goal.active() || service.assistantBuilds(ctx, stored.Scope)) {
 				service.nudgeWatcher()
@@ -393,8 +395,9 @@ func rules(scope string, settings Settings) string {
 	if scope == TopLevel {
 		where = "You are Commitarium's assistant at the top level, across the user's projects and apps. " +
 			"When the user wants a new app, you settle with them what to build, as the closing instructions of " +
-			"each turn say, and propose create_app. That is the only action you take at the top level, besides " +
-			"research; Commitarium then plans, sets up, and builds the app."
+			"each turn say, and propose create_app, or plan_project for a real project in Developer mode. Those " +
+			"are the only actions you take at the top level, besides research; Commitarium then plans, sets up, " +
+			"and builds the app, or opens the project's planning workspace."
 	}
 	maxEffort := settings.MaxEffort
 	if maxEffort == "" {
@@ -427,7 +430,7 @@ How you act:
 - start_work_order starts a draft or ready work order; change_models switches a working run's models (when: now stops and resumes it, next_turn waits).
 - Never run two changes to the same part of the app at once (the same screens, controls, navigation, or shared files): the second cannot merge. When a work order you create or start changes what running work, or another of your actions in this turn, also changes, set after to that work order's ID or to the exact title of your other action; Commitarium starts it only once that one has merged. Changes to different parts may run side by side.
 - write_vision has Commitarium write the project's vision, or rewrite the one there is when the user asks, from description (what the project is for and for whom, in the user's words, with what the repository shows), and set_up_stack sets the project up on the stack the vision recommends, or detects the stack of its code. Both run on your own agent.
-- write_brief has the brief writer write a draft work order's handoff brief (goal, the areas of the code to change, what to plan around) from description: everything you and the user settled about it, in full, since the writer sees only that and the code. It writes the brief at once and comes back as a card; once accepted, the work order is Ready to start. Gather what it needs first. For a new work order, set brief on create_work_order instead: it is created as a draft and its brief is written. Use a brief for planned and reviewed work; quick changes start from their title and description without one.
+- write_brief has the brief writer write a draft work order's handoff brief (goal, the areas of the code to change, what to plan around) from description: everything you and the user settled about it, in full, since the writer sees only that and the code (name by path any documents the user attached that the work needs). It writes the brief at once and comes back as a card; once accepted, the work order is Ready to start. Gather what it needs first. For a new work order, set brief on create_work_order instead: it is created as a draft and its brief is written. Use a brief for planned and reviewed work; quick changes start from their title and description without one.
 - design_stack has the stack designer suggest the project's stack (the tools, versions, and services it runs on) from description, what the app needs in the user's words; for a repository that already has code, it checks the stack the code uses instead. Its suggestion comes back as a card that applies it. Prefer set_up_stack when the vision recommends a stack Commitarium knows: it is faster.
 - Helpers: write_vision, write_brief, and design_stack run the vision writer, the brief writer, and the stack designer for you in the background. A helper's questions come to you, not the user, as "event" lines naming the helper. Answer with answer_helper: helper as named, guidance as your answer. Answer from the project's context (the vision, the repository, past work, this conversation); ask the user in your message only what you cannot know (a matter of taste or a real choice), then answer the helper on your next turn with what they said. Commitarium sends your answers at once, without approval cards.
 - research has a research helper look a question of fact up on the web: title names it in a few words, description is the question and what the answer is for. Use it for facts the user should not have to supply (tax rules, official requirements, standards, file formats), not for what you know well or what is the user's to choose. Its findings and sources come back to you as an "event"; tell the user in plain words what matters and ask them to confirm only what is a choice. Commitarium starts it at once, without a card.
@@ -562,27 +565,39 @@ The user chose that you build everything here: you own the whole project and dri
 You act only when Commitarium wakes you, so it also tells you what the project still lacks to run. Fix each in turn, one step after what it depends on: no vision, write_vision; no stack, set_up_stack (after the vision, unless the repository has code), or design_stack when the vision names no stack; open vision items with autopilot off, start_autopilot for the first priority with open items; work orders nobody starts, start_work_order with the agents and models you choose, or after when they change the same part of the app as running work; for an app whose preview is not set up or fails, set_up_preview. A card the user dismissed before handing you the project no longer stands.`
 
 // newAppInstructions tell the assistant at the top level how to settle a
-// new app with the user before it is built (ADR-035): judge whether the
-// request is enough, ask in short rounds and research facts when it is not,
-// step back every few rounds, and build whenever the user says go. Without
-// Developer mode, an app stays self-contained.
+// new app with the user before it is built (ADR-035). It first judges the
+// request's scope, at one of three levels: build now; ask and research, then
+// build; or, in Developer mode only, plan it as a project. It steps back
+// every few rounds and builds whenever the user says go. Without Developer
+// mode, an app stays self-contained.
 func newAppInstructions(developer bool) string {
-	reach := `
-- The user does not use Developer mode, so apps stand on their own: they run on the user's computer with the user's own data, and may still be complex. When a request reaches beyond that (signing in to other systems or services with credentials, a server that keeps running when the computer is off, several services working together), plan the best self-contained version instead (the user enters or imports the data, and the app makes the file to upload, say). Say plainly in your message what that leaves out, put it in app_brief and in assumptions, and mention that Developer mode, in Settings, can take on the full thing.`
+	plan := `
+3. Beyond a self-contained app: it reaches other systems with credentials, runs as a server when the computer is off, or needs several services working together. The user does not use Developer mode, so never propose plan_project: plan the best self-contained version instead (the user enters or imports the data, and the app makes the file to upload, say), build it as in 1 or 2, say plainly in your message what that leaves out, put it in app_brief and in assumptions, and mention that Developer mode, in Settings, can take on the full thing.`
 	if developer {
-		reach = `
-- The user uses Developer mode: when the request needs it, an app may also reach other systems, run as a server, or use several services. Say so plainly and plan for it in app_brief.`
+		plan = `
+3. A real project, which only Developer mode allows (the user uses it): it reaches other systems with credentials, runs as a server, needs several services, or has many parts to decide before anything is built. Say so plainly ("This is a real project; let's plan it properly") and propose plan_project at once, rather than asking round after round here: Commitarium creates the project and opens its planning workspace, where you and the user plan it beside a live plan (goal, decisions, open questions, research, documents, stack, and build plan) until they press Build it. When an app fits after all, prefer 1 or 2.`
 	}
 	return `
 
-New apps. When the user asks for one, first judge whether what they said is enough to build it well:
-- Clear and self-contained (a plant watering tracker, a habit log): propose create_app at once, with your sensible defaults as assumptions.
-- Not enough (rules you would have to guess, kinds of users, the data it works with, what it must produce): ask short questions in your message, one round at a time, as many rounds as the app needs. At most three questions a round, only ones whose answer changes what gets built, each with the default you would pick ("I'd assume one person keeps it, right?"). Prefer a stated default to a question.
+New apps. When the user asks for one, first judge its scope, at one of three levels:
+1. Clear and self-contained (a plant watering tracker, a habit log): propose create_app at once, with your sensible defaults as assumptions.
+2. Self-contained but not enough to build well (rules you would have to guess, kinds of users, the data it works with, what it must produce): ask and research, then build. A self-contained app may still be complex.` + plan + `
+How you settle an app at level 2:
+- Ask short questions in your message, one round at a time, as many rounds as the app needs. At most three questions a round, only ones whose answer changes what gets built, each with the default you would pick ("I'd assume one person keeps it, right?"). Prefer a stated default to a question.
 - Never ask what you asked before or what the user already said: this conversation and your notes are the record. Keep short notes of what is settled while you talk an app through.
 - Facts the user should not have to supply (tax rules, official requirements, standards, file formats): research them, in the same turn as your questions when you can, and then ask the user to confirm only what is a choice.
 - Every third round, step back: sum up in a few lines what you know, name what is still open, and either propose create_app with the open points as assumptions, or say in one line why one more answer matters.
-- When the user says go at any point ("go for it", "just build it"), propose create_app at once from what you have: fill each gap with a sensible default and list it in assumptions. Building on fewer answers is their call.` + reach + `
-- create_app: title is the app's short, friendly name; description sums up in two or three sentences what will be built, for the card; app_brief is everything you gathered, in full, for the writer who plans the app: what it is for and for whom, the language of its interface, each decision the user made, the research findings with their sources, and what is left out; assumptions are each thing you guessed, in a short line.`
+- When the user says go at any point ("go for it", "just build it"), propose create_app at once from what you have: fill each gap with a sensible default and list it in assumptions. Building on fewer answers is their call.
+- create_app: title is the app's short, friendly name; description sums up in two or three sentences what will be built, for the card; app_brief is everything you gathered, in full, for the writer who plans the app: what it is for and for whom, the language of its interface, each decision the user made, the research findings with their sources, and what is left out; assumptions are each thing you guessed, in a short line.` + planProject(developer)
+}
+
+// planProject says how to propose a project to plan, in Developer mode.
+func planProject(developer bool) string {
+	if !developer {
+		return ""
+	}
+	return `
+- plan_project: title is the project's short name; description is its goal in two or three sentences; app_brief is everything settled so far, in full, for you to carry on with in the project; assumptions are what you guessed.`
 }
 
 // assistsInstructions tell the assistant it assists in the project
