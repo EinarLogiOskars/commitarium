@@ -686,7 +686,11 @@ function ActionCard({
     <div className={`assistant-action assistant-action--${action.status}`}>
       <div className="assistant-action__head">
         <strong>{heading}</strong>
-        {!pending && <span className="pill">{STATUS_LABEL[action.status]}</span>}
+        {!pending && (
+          <span className="pill">
+            {action.settled ? "No longer needed" : STATUS_LABEL[action.status]}
+          </span>
+        )}
       </div>
       {action.description &&
         (action.type === "accept_brief" || action.type === "apply_stack" ? (
@@ -1067,6 +1071,15 @@ function AppliedLine({ action }: { action: AssistantAction }) {
 }
 
 function AppliedText({ action }: { action: AssistantAction }) {
+  if (action.settled) {
+    // "Already started: Add a beginner glossary"
+    const why = (action.result ?? "").split(":")[0].replace(/\.$/, "") || "No longer needed";
+    return (
+      <p className="muted assistant__applied">
+        ✓ {why}: {appliedWhat(action.title) || "the work order"}
+      </p>
+    );
+  }
   if (action.type === "answer_helper") {
     return (
       <p className="muted assistant__applied">

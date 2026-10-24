@@ -155,7 +155,8 @@ func (watcher Watcher) settleVision(ctx context.Context, scope string) {
 }
 
 // autopilot applies the actions autopilot takes over. One that fails stays
-// a card for the user, with a note saying why.
+// a card for the user, with a note saying why, unless it failed because it
+// was no longer needed.
 func (watcher Watcher) autopilot(ctx context.Context, scope string) {
 	if watcher.Apply == nil {
 		return
@@ -167,6 +168,11 @@ func (watcher Watcher) autopilot(ctx context.Context, scope string) {
 	}
 	for _, action := range actions {
 		err := watcher.Apply(ctx, scope, action.ID)
+		if err != nil && watcher.Service.settleIfStale(ctx, scope, action) {
+			// Refused only because its work order got there first: nothing
+			// waits for the user.
+			continue
+		}
 		if err := watcher.Service.autopilotOutcome(scope, action, err); err != nil {
 			log.Printf("autopilot outcome for %s: %v", scope, err)
 		}

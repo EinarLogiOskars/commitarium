@@ -33,6 +33,7 @@ type ConversationService interface {
 	SaveNotes(ctx context.Context, scope, notes string) (conversations.Conversation, error)
 	Action(ctx context.Context, scope, actionID string) (conversations.Action, error)
 	Resolve(ctx context.Context, scope, actionID string, status conversations.ActionStatus, result string, created conversations.Created) (conversations.Conversation, error)
+	Settle(ctx context.Context, scope, actionID, result string) (conversations.Conversation, error)
 	StartGoal(ctx context.Context, scope string, level int) (conversations.Conversation, error)
 	StopGoal(ctx context.Context, scope string) (conversations.Conversation, error)
 	ActiveGoals(ctx context.Context) (map[string]conversations.Goal, error)
@@ -335,6 +336,20 @@ func (api *API) approveConversationActionHandler(w http.ResponseWriter, r *http.
 		writeError(w, http.StatusConflict, "action_needs_project", "this action runs in a project's conversation, and a new app at the top level")
 		return
 	}
+	// A card whose work order already got where it leads settles, rather
+	// than fail: the user pressed it late, or autopilot came after them.
+	if result, err := api.staleResult(r.Context(), scope, action); err != nil {
+		writeConversationError(w, err)
+		return
+	} else if result != "" {
+		conversation, err := api.conversations.Settle(r.Context(), scope, actionID, result)
+		if err != nil {
+			writeConversationError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, conversation, "assistant conversation")
+		return
+	}
 	// A project is planned only in Developer mode; without it, an app stays
 	// self-contained (ADR-035).
 	if action.Type == featureartifact.AssistantPlanProject {
@@ -475,6 +490,40 @@ func (api *API) approveConversationActionHandler(w http.ResponseWriter, r *http.
 		return
 	}
 	writeJSON(w, http.StatusOK, conversation, "assistant conversation")
+}
+
+// staleResult says why an action on a work order is no longer needed, as
+// the work order is now, or "" while it is (conversations.StaleResult).
+func (api *API) staleResult(ctx context.Context, scope string, action conversations.Action) (string, error) {
+	switch action.Type {
+	case featureartifact.AssistantStartWorkOrder, featureartifact.AssistantCloseWorkOrder,
+		featureartifact.AssistantContinueWorkOrder, featureartifact.AssistantRecoverWorkOrder:
+	default:
+		return "", nil
+	}
+	if action.WorkOrderID == "" || api.features == nil {
+		return "", nil
+	}
+	stored, err := api.features.GetByID(ctx, scope, action.WorkOrderID)
+	if errors.Is(err, feature.ErrNotFound) {
+		// The action's own path answers a missing work order.
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	blocked, canTell := false, api.execution != nil
+	if canTell {
+		runs, err := api.execution.RunsForFeature(ctx, stored.ID)
+		if err != nil {
+			return "", err
+		}
+		if len(runs) > 0 {
+			latest := execution.NewestRun(runs)
+			blocked = latest.Status == execution.RunStatusWaitingForUser && latest.WaitKind == execution.RunWaitKindBlocker
+		}
+	}
+	return conversations.StaleResult(action.AssistantAction, stored.State, blocked, canTell), nil
 }
 
 // usersWorkOrder says why the assistant may not act on its own on the work

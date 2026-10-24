@@ -94,6 +94,9 @@ export interface AssistantAction {
   project_id?: string;
   /** Autopilot took it over. */
   auto_tried?: boolean;
+  /** Its work order already got where it leads, so it was not needed: it
+   * counts as applied, and result says why ("Already started."). */
+  settled?: boolean;
   /** Autopilot holds it until the work it follows (after) has merged. */
   queued?: boolean;
   /** Autopilot created the work order without starting it; a queued start follows. */

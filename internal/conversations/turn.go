@@ -498,7 +498,10 @@ func recentActions(actions []Action, buildsSince *time.Time) string {
 			}
 		case ActionApplied:
 			outcome = "applied"
-			if action.AutoTried {
+			switch {
+			case action.Settled:
+				outcome = "settled without applying: its work order no longer needed it"
+			case action.AutoTried:
 				outcome = "applied by autopilot"
 			}
 		case ActionDismissed:
