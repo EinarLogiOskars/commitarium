@@ -417,3 +417,11 @@ func TestTheAssistantIsToldHowToRecover(t *testing.T) {
 		}
 	}
 }
+
+// The assistant never has an agent commit something the work does not need
+// just to satisfy a check.
+func TestTheAssistantNeverAsksForADummyCommit(t *testing.T) {
+	if instructions := rules("prj_test", Settings{}); !strings.Contains(instructions, "Never tell an agent to make a throwaway commit") {
+		t.Fatalf("rules = %s", instructions)
+	}
+}

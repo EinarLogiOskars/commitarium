@@ -1336,7 +1336,7 @@ func TestServiceVerifiesLeadReviewResponseAsNewDescendantCommit(t *testing.T) {
 	got, err := service.VerifyImplementationReviewResponse(
 		t.Context(), "prj_test", "fea_test", "sev_final_plan", "Final plan",
 		"att_correction_1", "Added the missing failure-path test.", reviewedCommit,
-		correctedCommit, 8, "codex-lead",
+		correctedCommit, 8, "codex-lead", false,
 	)
 	if err != nil || got != stored {
 		t.Fatalf("verify review response: workspace=%+v err=%v", got, err)
@@ -1356,9 +1356,49 @@ func TestServiceVerifiesLeadReviewResponseAsNewDescendantCommit(t *testing.T) {
 	}
 	if _, err := service.VerifyImplementationReviewResponse(
 		t.Context(), "prj_test", "fea_test", "sev_final_plan", "Final plan",
-		"att_correction_1", "No new revision.", reviewedCommit, reviewedCommit, 8, "codex-lead",
-	); err == nil {
-		t.Fatal("review response accepted the already-reviewed commit")
+		"att_correction_1", "No new revision.", reviewedCommit, reviewedCommit, 8, "codex-lead", false,
+	); err == nil || !strings.Contains(err.Error(), "review response must publish a new commit") {
+		t.Fatalf("review response accepted the already-reviewed commit without answering every finding: %v", err)
+	}
+}
+
+// A review response that changes nothing (every finding answered as already
+// fixed, declined, or out of scope) keeps the reviewed commit as the head
+// and still needs its audit comment.
+func TestServiceVerifiesALeadReviewResponseThatChangesNothing(t *testing.T) {
+	now := time.Date(2026, time.September, 10, 5, 30, 0, 0, time.UTC)
+	stored := readyTestWorkspace(now)
+	pullRequestReadyAt := now.Add(3 * time.Minute)
+	stored.PullRequestNumber = 8
+	stored.PullRequestURL = "http://localhost:3001/owner/repository/pulls/8"
+	stored.PullRequestRecordedAt = &pullRequestReadyAt
+	stored.UpdatedAt = pullRequestReadyAt
+	reviewedCommit := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	branches := &recordingBranches{base: Branch{Name: stored.Branch, CommitID: reviewedCommit}}
+	checkout := &recordingCheckout{}
+	pullRequests := &recordingPullRequests{planResult: PullRequest{
+		Number: 8, URL: stored.PullRequestURL, State: "open", Draft: true,
+		BaseBranch: stored.BaseBranch, HeadBranch: stored.Branch, HeadCommitID: reviewedCommit,
+	}}
+	reviewing := acceptedTestFeature(now)
+	reviewing.State = feature.StateReviewing
+	service := NewServiceWithPreparation(
+		&memoryStore{stored: stored}, fixedFeatureFinder{stored: reviewing},
+		fixedProjectFinder{stored: project.Project{ID: "prj_test", ForgejoRepository: testRepository(now)}},
+		branches, checkout, pullRequests,
+	)
+	got, err := service.VerifyImplementationReviewResponse(
+		t.Context(), "prj_test", "fea_test", "sev_final_plan", "Final plan",
+		"att_correction_1", "F1 out of scope: a manual screen-reader check is for after merge.", reviewedCommit,
+		reviewedCommit, 8, "codex-lead", true,
+	)
+	if err != nil || got != stored {
+		t.Fatalf("verify an unchanged review response: workspace=%+v err=%v", got, err)
+	}
+	if len(checkout.specs) != 1 || checkout.specs[0].ExpectedHeadCommitID != reviewedCommit ||
+		len(pullRequests.implementationSpecs) != 1 ||
+		pullRequests.implementationSpecs[0].PublicationKind != ImplementationPublicationReviewResponse {
+		t.Fatalf("an unchanged response skipped its checks: checkout=%+v pull_requests=%+v", checkout.specs, pullRequests.implementationSpecs)
 	}
 }
 

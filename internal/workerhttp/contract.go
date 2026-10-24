@@ -268,6 +268,28 @@ type EnvironmentRequest struct {
 type ImplementationPublication struct {
 	CommitID          string `json:"commit_id"`
 	PullRequestNumber int64  `json:"pull_request_number"`
+	// FindingAnswers answer a review's findings by number, in a review
+	// response.
+	FindingAnswers []FindingAnswer `json:"finding_answers,omitempty"`
+}
+
+// FindingAnswer is how the lead answered one numbered review finding: fixed,
+// already_fixed, declined, or out_of_scope.
+type FindingAnswer struct {
+	Finding string `json:"finding"`
+	Answer  string `json:"answer"`
+}
+
+// ChangesNothing reports whether answers, one per finding at least, all say
+// the code needs no change: already fixed, declined, or out of scope. A
+// review response that changes nothing then needs no new commit.
+func ChangesNothing(answers []FindingAnswer) bool {
+	for _, answer := range answers {
+		if answer.Answer != "already_fixed" && answer.Answer != "declined" && answer.Answer != "out_of_scope" {
+			return false
+		}
+	}
+	return len(answers) > 0
 }
 
 type ReviewPublication struct {

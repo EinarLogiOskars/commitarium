@@ -87,8 +87,17 @@ func OutputJSONSchema(contract OutputContract) any {
 				"pull_request_number": map[string]any{"type": "integer"},
 				"system_packages":     map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
 				"environment_reason":  map[string]any{"type": "string"},
+				"finding_answers": map[string]any{"type": "array", "items": objectSchema(
+					map[string]any{
+						"finding": map[string]any{"type": "string"},
+						"answer": map[string]any{"type": "string", "enum": []string{
+							FindingFixed, FindingAlreadyFixed, FindingDeclined, FindingOutOfScope,
+						}},
+					},
+					[]string{"finding", "answer"},
+				)},
 			},
-			[]string{"action", "summary", "commit_id", "pull_request_number", "system_packages", "environment_reason"},
+			[]string{"action", "summary", "commit_id", "pull_request_number", "system_packages", "environment_reason", "finding_answers"},
 		)
 	case OutputContractAcceptanceTests:
 		testSchema := objectSchema(
@@ -406,6 +415,10 @@ func ResolveStructuredOutput(
 			PullRequestNumber int64    `json:"pull_request_number"`
 			SystemPackages    []string `json:"system_packages"`
 			EnvironmentReason string   `json:"environment_reason"`
+			FindingAnswers    []struct {
+				Finding string `json:"finding"`
+				Answer  string `json:"answer"`
+			} `json:"finding_answers"`
 		}
 		if err := decodeStructuredOutput(raw, &response); err != nil {
 			return StructuredOutput{}, err
@@ -459,6 +472,16 @@ func ResolveStructuredOutput(
 		}
 		publication := &ImplementationPublication{
 			CommitID: response.CommitID, PullRequestNumber: response.PullRequestNumber,
+		}
+		for _, answer := range response.FindingAnswers {
+			switch answer.Answer {
+			case FindingFixed, FindingAlreadyFixed, FindingDeclined, FindingOutOfScope:
+			default:
+				return StructuredOutput{}, invalidStructuredOutput(
+					"implementation finding_answers answer must be fixed, already_fixed, declined, or out_of_scope")
+			}
+			publication.FindingAnswers = append(publication.FindingAnswers,
+				FindingAnswer{Finding: strings.TrimSpace(answer.Finding), Answer: answer.Answer})
 		}
 		if err := publication.Validate(); err != nil {
 			return StructuredOutput{}, invalidStructuredOutput("implementation publication: %v", err)

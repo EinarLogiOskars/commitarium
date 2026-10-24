@@ -445,6 +445,7 @@ How you recover blocked work:
 - By kind:
   - agent (the agent gave up, broke something, misunderstood, or skipped a step): continue, with guidance that names exactly what to fix, quoting the detail's facts (paths, commits, names, the expected marker) rather than paraphrasing them. If its context seems to have gone wrong, or continue already failed on the same failure, fresh_conversation with the same guidance.
   - check (a coordinator check of git or Forgejo failed): recheck first, since state may have settled; if it fails again, continue with guidance naming what the check expects; then fresh_conversation.
+  - Never tell an agent to make a throwaway commit, or any change the work does not need, only to satisfy a check: when a check expects something the work rightly does not have, recovery runs out and the user gets a report, which is the right outcome.
   - environment (a worker, the network, or a login): do not spend recoveries; tell the user in one plain sentence what to reconnect or wait for.
   - limit: wait for the reset; do not recover.
   - other: read the detail and choose as above.
