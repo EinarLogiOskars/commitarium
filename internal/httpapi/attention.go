@@ -246,8 +246,9 @@ func (api *API) attentionForFeature(
 	return []attentionItem{item}, nil, nil
 }
 
-// autopilotStallAfter is how long autopilot handles a blocker quietly. Past
-// it, the user hears that autopilot has not finished, in plain words.
+// autopilotStallAfter is how long autopilot handles a blocker quietly
+// without a step of its own. Past it, the user hears that autopilot has not
+// finished, in plain words.
 const autopilotStallAfter = 10 * time.Minute
 
 // runStateSince is implemented by execution services that keep when a run
@@ -262,8 +263,10 @@ type runStateSince interface {
 // desktop notifies, only once autopilot gives up. Should autopilot still be
 // on it autopilotStallAfter after the run blocked, the item becomes an
 // autopilot_stalled one (a new ID, so it notifies once) that sends the user
-// to the assistant rather than to the blocker's details. In an app, a
-// blocker autopilot gave up on reads plainly too.
+// to the assistant rather than to the blocker's details. Each step autopilot
+// takes on it (a recovery it proposed or applied, a turn it runs) restarts
+// that wait, so work it is still recovering never reads as stalled. In an
+// app, a blocker autopilot gave up on reads plainly too.
 func (api *API) autopilotAttention(
 	ctx context.Context, item attentionItem, run execution.Run, app bool,
 ) (attentionItem, error) {
@@ -301,7 +304,11 @@ func (api *API) autopilotAttention(
 		}
 		return item, nil
 	}
-	if stalledAt := blockedAt.Add(autopilotStallAfter); api.clock().After(stalledAt) {
+	quietSince := blockedAt
+	if active := api.conversations.AutopilotActiveAt(ctx, item.ProjectID, item.FeatureID); active.After(quietSince) {
+		quietSince = active
+	}
+	if stalledAt := quietSince.Add(autopilotStallAfter); api.clock().After(stalledAt) {
 		item.ID = "autopilot-stalled:" + item.ID
 		item.Kind = "autopilot_stalled"
 		item.Severity = "warning"

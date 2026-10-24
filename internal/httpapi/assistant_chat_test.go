@@ -27,6 +27,8 @@ type conversationStub struct {
 	handling map[string]bool
 	// blockedAt is the blocker time attention last asked about.
 	blockedAt time.Time
+	// activeAt is when autopilot last moved each work order on.
+	activeAt map[string]time.Time
 	// settings are the assistant's; an empty agent means not set up.
 	settings conversations.Settings
 	// goal is the conversation's autopilot goal.
@@ -52,6 +54,10 @@ func testAgents() *recordingAgentService {
 func (stub *conversationStub) AutopilotHandles(_ context.Context, _, workOrderID string, blockedAt time.Time) bool {
 	stub.blockedAt = blockedAt
 	return stub.handling[workOrderID]
+}
+
+func (stub *conversationStub) AutopilotActiveAt(_ context.Context, _, workOrderID string) time.Time {
+	return stub.activeAt[workOrderID]
 }
 
 func (stub *conversationStub) Settings(context.Context) (conversations.Settings, error) {

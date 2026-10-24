@@ -357,14 +357,17 @@ func TestAttentionSurfacesAutopilotThatHasNotFinished(t *testing.T) {
 		handling bool
 		app      bool
 		now      time.Time
+		active   time.Time
 		kind     string
 		id       string
 		title    string
 	}{
-		{"handling", true, false, blockedAt.Add(autopilotStallAfter - time.Second), "autopilot_handling", "autopilot:", "Autopilot is handling this"},
-		{"stalled", true, false, blockedAt.Add(autopilotStallAfter + time.Second), "autopilot_stalled", "autopilot-stalled:", "Autopilot hasn't finished this yet"},
-		{"gave up", false, false, blockedAt.Add(time.Hour), "blocker", "run_wait:", "Run blocked"},
-		{"gave up in an app", false, true, blockedAt.Add(time.Hour), "blocker", "run_wait:", "This needs your help"},
+		{"handling", true, false, blockedAt.Add(autopilotStallAfter - time.Second), time.Time{}, "autopilot_handling", "autopilot:", "Autopilot is handling this"},
+		{"stalled", true, false, blockedAt.Add(autopilotStallAfter + time.Second), time.Time{}, "autopilot_stalled", "autopilot-stalled:", "Autopilot hasn't finished this yet"},
+		// Still recovering: its last step was five minutes ago.
+		{"still recovering", true, false, blockedAt.Add(autopilotStallAfter + time.Second), blockedAt.Add(5 * time.Minute), "autopilot_handling", "autopilot:", "Autopilot is handling this"},
+		{"gave up", false, false, blockedAt.Add(time.Hour), time.Time{}, "blocker", "run_wait:", "Run blocked"},
+		{"gave up in an app", false, true, blockedAt.Add(time.Hour), time.Time{}, "blocker", "run_wait:", "This needs your help"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -378,7 +381,9 @@ func TestAttentionSurfacesAutopilotThatHasNotFinished(t *testing.T) {
 				}}},
 				since: map[string]time.Time{"run_one": blockedAt},
 			}
-			stub := &conversationStub{handling: map[string]bool{"fea_one": tc.handling}}
+			stub := &conversationStub{
+				handling: map[string]bool{"fea_one": tc.handling}, activeAt: map[string]time.Time{"fea_one": tc.active},
+			}
 			api := &API{
 				projects: &recordingProjectService{listResult: []project.Project{{ID: "prj_one", Name: "One", App: tc.app}}},
 				features: &recordingFeatureService{listResult: []feature.Feature{{

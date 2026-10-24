@@ -40,6 +40,7 @@ type ConversationService interface {
 	StartLaunch(ctx context.Context, scope string) (conversations.Conversation, error)
 	ActiveLaunches(ctx context.Context) (map[string]conversations.LaunchStage, error)
 	AutopilotHandles(ctx context.Context, scope, workOrderID string, blockedAt time.Time) bool
+	AutopilotActiveAt(ctx context.Context, scope, workOrderID string) time.Time
 }
 
 // startLaunchHandler marks a new app's launch (APPS_PLAN.md): the

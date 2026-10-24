@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/EinarLogiOskars/commitarium/internal/feature"
 	"github.com/EinarLogiOskars/commitarium/internal/featureartifact"
@@ -96,5 +97,37 @@ func TestARefusedStaleActionSettlesInsteadOfWaiting(t *testing.T) {
 		if strings.Contains(message.Text, "waits for your approval") {
 			t.Fatalf("noted %q", message.Text)
 		}
+	}
+}
+
+// Autopilot's last step on a work order is its latest action on it, or now
+// while the assistant works, so a blocker it keeps recovering never reads as
+// stalled.
+func TestAutopilotActiveAtFollowsItsLastStep(t *testing.T) {
+	service, _ := newTestService(t)
+	now := time.Date(2026, time.October, 24, 12, 0, 0, 0, time.UTC)
+	service.now = func() time.Time { return now }
+	stored, _ := service.read("prj_test")
+	recovered := now.Add(-3 * time.Minute)
+	stored.Actions = append(stored.Actions,
+		Action{ID: "act_old", Status: ActionApplied, UpdatedAt: now.Add(-time.Hour), AssistantAction: featureartifact.AssistantAction{
+			Type: featureartifact.AssistantRecoverWorkOrder, WorkOrderID: "fea_ui", How: "recheck"}},
+		Action{ID: "act_new", Status: ActionApplied, UpdatedAt: recovered, AssistantAction: featureartifact.AssistantAction{
+			Type: featureartifact.AssistantRecoverWorkOrder, WorkOrderID: "fea_ui", How: "continue"}},
+		Action{ID: "act_other", Status: ActionApplied, UpdatedAt: now, AssistantAction: featureartifact.AssistantAction{
+			Type: featureartifact.AssistantRecoverWorkOrder, WorkOrderID: "fea_other", How: "continue"}},
+	)
+	if err := service.write(stored); err != nil {
+		t.Fatal(err)
+	}
+	if got := service.AutopilotActiveAt(t.Context(), "prj_test", "fea_ui"); !got.Equal(recovered) {
+		t.Fatalf("active at %v, want %v", got, recovered)
+	}
+	stored.Status = StatusRunning
+	if err := service.write(stored); err != nil {
+		t.Fatal(err)
+	}
+	if got := service.AutopilotActiveAt(t.Context(), "prj_test", "fea_ui"); !got.Equal(now) {
+		t.Fatalf("in a turn, active at %v, want now", got)
 	}
 }

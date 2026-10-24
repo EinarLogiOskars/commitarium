@@ -664,6 +664,29 @@ func (service *Service) AutopilotHandles(ctx context.Context, scope, workOrderID
 	return true
 }
 
+// AutopilotActiveAt is when autopilot last moved a work order on: the
+// latest change to one of the assistant's actions on it, or now while the
+// assistant is in a turn or one waits to start. A blocker autopilot keeps
+// working on does not stall.
+func (service *Service) AutopilotActiveAt(_ context.Context, scope, workOrderID string) time.Time {
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	stored, err := service.read(scope)
+	if err != nil {
+		return time.Time{}
+	}
+	if stored.Status == StatusRunning || len(stored.PendingEvents) > 0 {
+		return service.now()
+	}
+	var latest time.Time
+	for _, action := range stored.Actions {
+		if action.WorkOrderID == workOrderID && action.UpdatedAt.After(latest) {
+			latest = action.UpdatedAt
+		}
+	}
+	return latest
+}
+
 // isApp reports whether a project is used as an app (APPS_PLAN.md): how the
 // assistant speaks to its user, not how freely it acts.
 func (service *Service) isApp(ctx context.Context, scope string) bool {
