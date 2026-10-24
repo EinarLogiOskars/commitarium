@@ -16,9 +16,10 @@ import {
 } from "../api/assistant";
 import { ApiError } from "../api/client";
 import { openAppWindow } from "../ipc";
-import { getVision } from "../api/vision";
+import { getVision, pausePlanning, startPlanning } from "../api/vision";
+import { developerModeOn } from "../devMode";
 import { getProject } from "../api/projects";
-import type { AssistantMode, VisionItem, VisionPriority } from "../api/types";
+import type { AssistantMode, Vision, VisionItem, VisionPriority } from "../api/types";
 import { appliesItself, assistantMode, assistantModeNote } from "./assistantMode";
 import { Markdown } from "./Markdown";
 import { useCatalogModels, useModelName } from "./useModelName";
@@ -139,6 +140,13 @@ export function AssistantDrawer({
 
   // Vision items by ID, labelled "P0.2 Title", for the cards.
   const [visionItems, setVisionItems] = useState<Map<string, string>>(new Map());
+  // How the project's vision is planned (planning mode): null without a
+  // vision, "" for one not planned.
+  const [planning, setPlanning] = useState<string | null>(null);
+  const showVision = useCallback((vision: Vision) => {
+    setVisionItems(visionLabels(vision.plan.priorities));
+    setPlanning(vision.planning?.status ?? "");
+  }, []);
   const load = useCallback(async () => {
     getAssistantSettings()
       .then(setSettings)
@@ -151,10 +159,34 @@ export function AssistantDrawer({
     }
     if (scope !== "commitarium") {
       getVision(scope)
-        .then((vision) => setVisionItems(visionLabels(vision.plan.priorities)))
-        .catch(() => setVisionItems(new Map()));
+        .then(showVision)
+        .catch(() => {
+          setVisionItems(new Map());
+          setPlanning(null);
+        });
+    } else {
+      setPlanning(null);
     }
-  }, [scope, setConversation]);
+  }, [scope, setConversation, showVision]);
+
+  // In Developer mode, planning starts or resumes from here, and stops
+  // with the plan kept as it is.
+  const [togglingPlan, setTogglingPlan] = useState(false);
+  const togglePlanning = async () => {
+    setTogglingPlan(true);
+    setError(null);
+    try {
+      const planned = planning === "planning";
+      showVision(planned ? await pausePlanning(scope) : await startPlanning(scope, ""));
+      window.dispatchEvent(new Event(WORK_CHANGED));
+      if (!planned) window.dispatchEvent(new Event(OPEN_VISION));
+      setConversation(await getConversation(scope));
+    } catch (e) {
+      setError(describe(e));
+    } finally {
+      setTogglingPlan(false);
+    }
+  };
 
   useEffect(() => {
     const reload = () => void load();
@@ -358,6 +390,32 @@ export function AssistantDrawer({
               >
                 {assistantModeNote(mode)}
               </span>
+            )}
+            {planning === "planning" && (
+              <span
+                className="pill pill--planning assistant-drawer__mode"
+                title="You're planning this project with the assistant. The plan fills in beside you, and nothing is built until you press Build it."
+              >
+                Planning
+              </span>
+            )}
+            {planning !== null && developerModeOn() && (
+              <button
+                className="ghost"
+                onClick={() => void togglePlanning()}
+                disabled={togglingPlan}
+                title={
+                  planning === "planning"
+                    ? "Stop planning. The plan stays as it is and nothing is built; you can resume any time."
+                    : "Plan this project with the assistant beside a live plan. Nothing is built until you press Build it."
+                }
+              >
+                {planning === "planning"
+                  ? "Stop planning"
+                  : planning === "paused"
+                    ? "Resume planning"
+                    : "Plan it"}
+              </button>
             )}
             <button
               className={`ghost ${notesOpen ? "ghost--on" : ""}`}

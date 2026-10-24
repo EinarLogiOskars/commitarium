@@ -135,6 +135,21 @@ func (store *Store) Add(ctx context.Context, projectID, name string, contents []
 	return Document{Name: name, Size: int64(len(contents)), AddedAt: time.Now().UTC()}, nil
 }
 
+// Read answers one document's contents.
+func (store *Store) Read(_ context.Context, projectID, name string) ([]byte, error) {
+	directory, err := store.directory(projectID)
+	if err != nil || !ValidName(name) {
+		return nil, ErrNotFound
+	}
+	contents, err := os.ReadFile(filepath.Join(directory, name))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, ErrNotFound
+	} else if err != nil {
+		return nil, ErrUnavailable
+	}
+	return contents, nil
+}
+
 // Delete removes one document.
 func (store *Store) Delete(_ context.Context, projectID, name string) error {
 	directory, err := store.directory(projectID)

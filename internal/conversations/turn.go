@@ -133,10 +133,13 @@ func (service *Service) startTurn(
 		}
 	}
 	instructions += service.focusInstructions(ctx, scope, stored.Focus)
+	// While the vision is planned, every turn carries the plan as it stands.
+	contract := workerhttp.OutputContractAssistantTurn
 	if scope == TopLevel {
 		instructions += newAppInstructions(stored.Developer)
 	} else if service.planning(ctx, scope) {
 		instructions += planningInstructions
+		contract = workerhttp.OutputContractAssistantPlanningTurn
 	}
 	if err := service.write(stored); err != nil {
 		return Conversation{}, err
@@ -154,7 +157,7 @@ func (service *Service) startTurn(
 		},
 		ProviderSessionID: stored.ProviderSessionID,
 		Instructions:      instructions,
-		OutputContract:    workerhttp.OutputContractAssistantTurn,
+		OutputContract:    contract,
 		WorkspaceAccess:   workerhttp.WorkspaceAccessReadOnly,
 	}
 	if fresh {

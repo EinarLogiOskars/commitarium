@@ -31,5 +31,12 @@ export const addDocument = async (id: string, file: File): Promise<ProjectDocume
   });
 };
 
+/** The start of a text document; preview is empty for any other file. */
+export const previewDocument = (
+  id: string,
+  name: string,
+): Promise<{ name: string; preview: string; truncated: boolean }> =>
+  request(`${documentsPath(id)}/${encodeURIComponent(name)}`);
+
 export const removeDocument = (id: string, name: string): Promise<void> =>
   request(`${documentsPath(id)}/${encodeURIComponent(name)}`, { method: "DELETE" });

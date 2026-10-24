@@ -124,8 +124,9 @@ func (watcher Watcher) projectState(ctx context.Context, current project.Project
 	state := projectState{App: current.App, Runs: map[string]execution.Run{}}
 	plan, err := watcher.Visions.Get(ctx, current.ID)
 	switch {
-	case err == nil && plan.Planning.Open():
-		// Being planned with the user: nothing is missing until they build it.
+	case err == nil && (plan.Planning.Open() || plan.Planning.Paused()):
+		// Being planned with the user, or paused: nothing is missing until
+		// they build it.
 		state.Planning = true
 	case err == nil:
 		state.Vision = &plan.Plan

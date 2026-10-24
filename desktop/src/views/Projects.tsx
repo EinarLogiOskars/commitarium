@@ -11,7 +11,7 @@ import {
   initialProjectDefaults,
   projectDefaultsPayload,
 } from "./ProjectDefaultsFields";
-import type { Project, VisionMode } from "../api/types";
+import type { Project } from "../api/types";
 
 // Absent repository_status means a pre-slice-1 coordinator that always bound a
 // repo on create — treat as ready.
@@ -65,7 +65,7 @@ export function Projects({
   // A project created with an idea opens with the assistant on its vision,
   // which also recommends the stack, or in the planning workspace, where the
   // user plans it with the assistant before anything is built.
-  const submit = async (mode: VisionMode | "plan" | null) => {
+  const submit = async (mode: "describe" | "plan" | null) => {
     if (!name.trim()) return;
     setCreating(true);
     setError(null);
@@ -84,14 +84,12 @@ export function Projects({
         await startPlanning(created.id, description);
       }
       onSelect(created.id);
-      if (mode && mode !== "plan" && description) {
+      if (mode === "describe" && description) {
         // The assistant writes the vision with the user (ADR-035) once the
         // project is open.
         openAssistantOn(
           { kind: "vision" },
-          mode === "describe"
-            ? `Write the vision from my description:\n\n${description}`
-            : `Let's talk the vision through. My idea:\n\n${description}`,
+          `Write the vision from my description:\n\n${description}`,
           created.id,
         );
       }
@@ -218,16 +216,6 @@ export function Projects({
           <button className="primary" type="submit" disabled={creating || !name.trim()}>
             {creating ? "Creating…" : idea.trim() ? "Create and write the vision" : "Create"}
           </button>
-          {idea.trim() && (
-            <button
-              type="button"
-              onClick={() => void submit("converse")}
-              disabled={creating || !name.trim()}
-              title="The assistant asks what it needs to know first."
-            >
-              Create and talk it through
-            </button>
-          )}
           {idea.trim() && (
             <button
               type="button"

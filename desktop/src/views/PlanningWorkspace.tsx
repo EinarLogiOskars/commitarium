@@ -3,6 +3,7 @@ import { finishPlanning, getVision } from "../api/vision";
 import {
   addDocument,
   listDocuments,
+  previewDocument,
   removeDocument,
   MAX_DOCUMENT_BYTES,
   type ProjectDocument,
@@ -12,9 +13,19 @@ import { ASSISTANT_CHANGED } from "./AssistantDrawer";
 import { openAssistant } from "../attention/askAssistant";
 import { Markdown } from "./Markdown";
 import { openExternal } from "../ipc";
-import type { Vision, VisionItem } from "../api/types";
+import { Overlay } from "./Overlay";
+import type { Vision, VisionItem, VisionPlanning } from "../api/types";
 
 const POLL_MS = 3000;
+// Decisions and questions longer than this show cut short, and open in full.
+const LONG_LINE = 140;
+
+// What is open in the detail overlay.
+type Detail =
+  | { kind: "line"; title: string; text: string }
+  | { kind: "research"; note: VisionPlanning["research"][number] }
+  | { kind: "item"; label: string; item: VisionItem }
+  | { kind: "document"; name: string };
 
 // The planning workspace (planning mode, Developer mode): the assistant's
 // chat, in its drawer beside the page, and the plan it fills in as the user
@@ -34,6 +45,8 @@ export function PlanningWorkspace({
   const [docs, setDocs] = useState<ProjectDocument[]>([]);
   const [busy, setBusy] = useState<null | "build" | "self" | "upload" | string>(null);
   const [error, setError] = useState<string | null>(null);
+  const [detail, setDetail] = useState<Detail | null>(null);
+  const closeDetail = useCallback(() => setDetail(null), []);
   const fileRef = useRef<HTMLInputElement | null>(null);
 
   const loadDocs = useCallback(() => {
@@ -131,12 +144,20 @@ export function PlanningWorkspace({
       <div className="planning__grid">
         <PlanCard title="Decisions" empty="Nothing decided yet.">
           {planning?.decisions.map((d) => (
-            <li key={d}>{d}</li>
+            <PlanLine
+              key={d}
+              text={d}
+              onOpen={() => setDetail({ kind: "line", title: "Decision", text: d })}
+            />
           ))}
         </PlanCard>
         <PlanCard title="Open questions" empty="No open questions.">
           {planning?.open_questions.map((q) => (
-            <li key={q}>{q}</li>
+            <PlanLine
+              key={q}
+              text={q}
+              onOpen={() => setDetail({ kind: "line", title: "Open question", text: q })}
+            />
           ))}
         </PlanCard>
       </div>
@@ -151,23 +172,17 @@ export function PlanningWorkspace({
           <ul className="planning__list">
             {planning?.research.map((note) => (
               <li key={`${note.title}-${note.added_at}`}>
-                <details>
-                  <summary>{note.title}</summary>
-                  <Markdown text={note.findings} />
-                </details>
+                <button
+                  className="planning__open"
+                  onClick={() => setDetail({ kind: "research", note })}
+                >
+                  {note.title}
+                </button>
                 {note.sources.length > 0 && (
-                  <div className="planning__sources">
-                    {note.sources.map((source) => (
-                      <button
-                        key={source}
-                        className="linkish"
-                        onClick={() => void openExternal(source)}
-                        title={source}
-                      >
-                        {hostOf(source)}
-                      </button>
-                    ))}
-                  </div>
+                  <span className="muted note">
+                    {" "}
+                    · {note.sources.length} {note.sources.length === 1 ? "source" : "sources"}
+                  </span>
                 )}
               </li>
             ))}
@@ -202,7 +217,15 @@ export function PlanningWorkspace({
             {docs.map((doc) => (
               <li key={doc.name} className="vision__row">
                 <span className="vision__text">
-                  {doc.name} <span className="muted note">{size(doc.size)}</span>
+                  <span>
+                    <button
+                      className="planning__open"
+                      onClick={() => setDetail({ kind: "document", name: doc.name })}
+                    >
+                      {doc.name}
+                    </button>{" "}
+                    <span className="muted note">{size(doc.size)}</span>
+                  </span>
                 </span>
                 <button
                   className="ghost vision__actions"
@@ -242,7 +265,11 @@ export function PlanningWorkspace({
                 P{priority.level}
                 {priority.level === 0 ? " · needed first" : ""}
               </strong>
-              <PlanItems items={priority.items} prefix={`P${priority.level}`} />
+              <PlanItems
+                items={priority.items}
+                prefix={`P${priority.level}`}
+                onOpen={(label, item) => setDetail({ kind: "item", label, item })}
+              />
             </div>
           ))
         )}
@@ -270,7 +297,89 @@ export function PlanningWorkspace({
             : "Build it hands the plan to the assistant, which sets the project up and builds it."}
         </span>
       </div>
+
+      {detail && (
+        <Overlay
+          title={
+            detail.kind === "line"
+              ? detail.title
+              : detail.kind === "research"
+                ? detail.note.title
+                : detail.kind === "item"
+                  ? `${detail.label} ${detail.item.title}`
+                  : detail.name
+          }
+          onClose={closeDetail}
+        >
+          {detail.kind === "line" && <p className="overlay__text">{detail.text}</p>}
+          {detail.kind === "research" && (
+            <>
+              <Markdown text={detail.note.findings} />
+              {detail.note.sources.length > 0 && (
+                <div>
+                  <h3>Sources</h3>
+                  <ul className="planning__list">
+                    {detail.note.sources.map((source) => (
+                      <li key={source}>
+                        <button
+                          className="planning__open planning__source"
+                          onClick={() => void openExternal(source)}
+                          title={source}
+                        >
+                          {source}
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </>
+          )}
+          {detail.kind === "item" &&
+            (detail.item.description ? (
+              <Markdown text={detail.item.description} />
+            ) : (
+              <p className="muted">No description yet.</p>
+            ))}
+          {detail.kind === "document" && (
+            <DocumentPreview projectId={projectId} name={detail.name} />
+          )}
+        </Overlay>
+      )}
     </div>
+  );
+}
+
+// A decision or question, cut short when long; a long one opens in full.
+function PlanLine({ text, onOpen }: { text: string; onOpen: () => void }) {
+  if (text.length <= LONG_LINE) return <li>{text}</li>;
+  return (
+    <li>
+      <button className="planning__open" onClick={onOpen}>
+        {text.slice(0, LONG_LINE).trimEnd()}…
+      </button>
+    </li>
+  );
+}
+
+// The start of a text document; other files have no preview.
+function DocumentPreview({ projectId, name }: { projectId: string; name: string }) {
+  const [file, setFile] = useState<{ preview: string; truncated: boolean } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    previewDocument(projectId, name)
+      .then(setFile)
+      .catch((e: unknown) => setError(describe(e)));
+  }, [projectId, name]);
+
+  if (error) return <div className="banner banner--error">{error}</div>;
+  if (!file) return <p className="muted">Loading…</p>;
+  if (!file.preview) return <p className="muted">There is no preview for this file.</p>;
+  return (
+    <>
+      <pre className="overlay__preview">{file.preview}</pre>
+      {file.truncated && <p className="muted note">Only the start of the file is shown.</p>}
+    </>
   );
 }
 
@@ -295,7 +404,16 @@ function PlanCard({
   );
 }
 
-function PlanItems({ items, prefix }: { items: VisionItem[]; prefix: string }) {
+// The build plan's items by title; each opens with its full description.
+function PlanItems({
+  items,
+  prefix,
+  onOpen,
+}: {
+  items: VisionItem[];
+  prefix: string;
+  onOpen: (label: string, item: VisionItem) => void;
+}) {
   return (
     <ul className="vision__items">
       {items.map((item, index) => (
@@ -305,25 +423,21 @@ function PlanItems({ items, prefix }: { items: VisionItem[]; prefix: string }) {
               {prefix}.{index + 1}
             </span>
             <div className="vision__text">
-              <strong>{item.title}</strong>
-              {item.description && <p className="muted">{item.description}</p>}
+              <button
+                className="planning__open"
+                onClick={() => onOpen(`${prefix}.${index + 1}`, item)}
+              >
+                <strong>{item.title}</strong>
+              </button>
             </div>
           </div>
           {item.items && item.items.length > 0 && (
-            <PlanItems items={item.items} prefix={`${prefix}.${index + 1}`} />
+            <PlanItems items={item.items} prefix={`${prefix}.${index + 1}`} onOpen={onOpen} />
           )}
         </li>
       ))}
     </ul>
   );
-}
-
-function hostOf(url: string): string {
-  try {
-    return new URL(url).host;
-  } catch {
-    return url;
-  }
 }
 
 function size(bytes: number): string {

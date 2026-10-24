@@ -935,7 +935,9 @@ export interface Vision {
 /** A vision being planned: what the plan holds besides its goal (the
  * statement), stack, and build plan (the items). */
 export interface VisionPlanning {
-  status: "planning" | "built";
+  /** Paused is planning the user stopped: the plan is kept and nothing is
+   * built until planning resumes. */
+  status: "planning" | "paused" | "built";
   decisions: string[];
   open_questions: string[];
   research: { title: string; findings: string; sources: string[]; added_at: string }[];

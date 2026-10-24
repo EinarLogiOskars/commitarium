@@ -19,6 +19,7 @@ type planningVisions struct {
 	goals    []string
 	updates  []vision.PlanningUpdate
 	finished int
+	paused   int
 }
 
 func (stub *planningVisions) Get(context.Context, string) (vision.Vision, error) {
@@ -33,6 +34,11 @@ func (stub *planningVisions) StartPlanning(_ context.Context, projectID, goal st
 func (stub *planningVisions) UpdatePlanning(_ context.Context, projectID string, update vision.PlanningUpdate) (vision.Vision, error) {
 	stub.updates = append(stub.updates, update)
 	return vision.Vision{ProjectID: projectID}, nil
+}
+
+func (stub *planningVisions) PausePlanning(_ context.Context, projectID string) (vision.Vision, error) {
+	stub.paused++
+	return vision.Vision{ProjectID: projectID, Planning: &vision.Planning{Status: vision.PlanningPaused}}, nil
 }
 
 func (stub *planningVisions) FinishPlanning(_ context.Context, projectID string) (vision.Vision, error) {
@@ -85,6 +91,10 @@ func TestAVisionIsPlannedThroughTheAssistant(t *testing.T) {
 	}
 	if len(stub.woken) != 1 || !strings.Contains(stub.woken["prj_shop"], "planning workspace") {
 		t.Fatalf("woken = %v", stub.woken)
+	}
+	if recorder := call("/api/v1/projects/prj_shop/vision/planning/pause", ``); recorder.Code != http.StatusOK ||
+		visions.paused != 1 || !strings.Contains(recorder.Body.String(), `"paused"`) {
+		t.Fatalf("pause: status %d: %s", recorder.Code, recorder.Body.String())
 	}
 
 	if recorder := call("/api/v1/assistant/conversations/prj_shop/actions/act_1/approve", `{}`); recorder.Code != http.StatusOK {
