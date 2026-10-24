@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/EinarLogiOskars/commitarium/internal/feature"
+	"github.com/EinarLogiOskars/commitarium/internal/project"
 )
 
 // Opened on a Draft, the assistant hears which work order the user means
@@ -30,5 +31,37 @@ func TestTheFocusTellsTheAssistantWhatTheUserMeans(t *testing.T) {
 	}
 	if conversation, err := service.SetFocus(t.Context(), "prj_test", nil); err != nil || conversation.Focus != nil {
 		t.Fatalf("cleared focus = %+v, %v", conversation.Focus, err)
+	}
+}
+
+// Opened on a work order that already started because the assistant builds
+// everything, the assistant says so plainly, offers to pass the user's wishes
+// to the working agent, and points at Assists me, rather than clarifying it
+// as if it were a draft.
+func TestTheFocusTellsTheAssistantAWorkOrderAlreadyStarted(t *testing.T) {
+	service, worker := newTestService(t)
+	service.config.Projects = gapProjects{mode: project.AssistantModeBuilds}
+	service.config.Features = &featuresStub{features: []feature.Feature{
+		{ID: "fea_glossary", Title: "Add a beginner glossary", State: feature.StateImplementing},
+	}}
+	if _, err := service.SetFocus(t.Context(), "prj_test", &Focus{Kind: FocusWorkOrder, WorkOrderID: "fea_glossary"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Send(t.Context(), "prj_test", "Help me clarify it.", "msg-1"); err != nil {
+		t.Fatal(err)
+	}
+	instructions := worker.puts[0].Instructions
+	for _, want := range []string{
+		"“Add a beginner glossary” (fea_glossary, running (implementing))",
+		"already started when you added it",
+		"recover_work_order with how message",
+		"\"Assists me\", in Project settings",
+	} {
+		if !strings.Contains(instructions, want) {
+			t.Fatalf("instructions lack %q:\n%s", want, instructions)
+		}
+	}
+	if strings.Contains(instructions, "propose write_brief with everything you settled") {
+		t.Fatal("the assistant was told to clarify a started work order as a draft")
 	}
 }

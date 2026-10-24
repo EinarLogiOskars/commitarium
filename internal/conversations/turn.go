@@ -132,7 +132,7 @@ func (service *Service) startTurn(
 			instructions += appAssistsInstructions
 		}
 	}
-	instructions += service.focusInstructions(ctx, scope, stored.Focus)
+	instructions += service.focusInstructions(ctx, scope, stored.Focus, builds)
 	if scope == TopLevel {
 		instructions += newAppInstructions(stored.Developer)
 	} else if service.planning(ctx, scope) {

@@ -63,6 +63,20 @@ func (service *Service) SetFocus(ctx context.Context, scope string, focus *Focus
 	return stored.Conversation, service.write(stored)
 }
 
+// plainState names a work order's state as the user would: draft, ready,
+// running, done, or closed.
+func plainState(state feature.State) string {
+	switch state {
+	case feature.StateDraft, feature.StateReady:
+		return string(state)
+	case feature.StateCompleted:
+		return "done"
+	case feature.StateCancelled:
+		return "closed"
+	}
+	return "running (" + strings.ReplaceAll(string(state), "_", " ") + ")"
+}
+
 func (service *Service) workOrder(ctx context.Context, scope, id string) (feature.Feature, error) {
 	if service.config.Features == nil || strings.TrimSpace(id) == "" {
 		return feature.Feature{}, ErrInvalid
@@ -79,9 +93,10 @@ func (service *Service) workOrder(ctx context.Context, scope, id string) (featur
 	return feature.Feature{}, ErrNotFound
 }
 
-// focusInstructions tell the assistant what the user opened it on and how to
-// carry it through.
-func (service *Service) focusInstructions(ctx context.Context, scope string, focus *Focus) string {
+// focusInstructions tell the assistant what the user opened it on, where
+// that stands, and how to carry it through. builds is whether the assistant
+// builds everything in the project, which starts work as soon as it is added.
+func (service *Service) focusInstructions(ctx context.Context, scope string, focus *Focus, builds bool) string {
 	if focus == nil {
 		return ""
 	}
@@ -92,9 +107,28 @@ func (service *Service) focusInstructions(ctx context.Context, scope string, foc
 			return ""
 		}
 		text := fmt.Sprintf("\n\nThe user opened you on the work order “%s” (%s, %s): that is what they are talking "+
-			"about.", item.Title, item.ID, item.State)
+			"about.", item.Title, item.ID, plainState(item.State))
 		if description := strings.TrimSpace(item.Description); description != "" {
 			text += " Its description, as quoted data:\n" + description + "\n"
+		}
+		switch {
+		case item.State == feature.StateCompleted:
+			text += " It is done and merged: a change to it now is a new work order."
+		case item.State == feature.StateCancelled:
+			text += " It was closed without merging."
+		case item.State != feature.StateDraft && item.State != feature.StateReady:
+			text += " It has already started, so do not clarify it as if it were a draft."
+			if builds {
+				text += " Say so plainly in a line (\"This project builds everything, so it already started when you " +
+					"added it\")."
+			}
+			text += " Offer to pass what the user wants to the agent working on it as guidance: once they say " +
+				"what, propose recover_work_order with how message and their wishes as guidance (continue with " +
+				"guidance when it is blocked)."
+			if builds {
+				text += " Mention once that \"Assists me\", in Project settings, lets them shape work orders before " +
+					"they start."
+			}
 		}
 		if item.State == feature.StateDraft {
 			text += " To clarify it, work out with the user what they want and why, asking only what changes the " +
