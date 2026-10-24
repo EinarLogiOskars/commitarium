@@ -41,7 +41,10 @@ func TestAPlannedProjectIsPlannedWithTheUser(t *testing.T) {
 	if _, err := service.Send(t.Context(), "prj_test", "Let's plan it", "msg-1"); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"Planning mode.", "update_plan", "propose build_plan", "Every third round, step back",
+	if worker.puts[0].OutputContract != workerhttp.OutputContractAssistantPlanningTurn {
+		t.Fatalf("contract = %q, want the planning turn's", worker.puts[0].OutputContract)
+	}
+	for _, want := range []string{"Planning mode.", "Every reply carries the plan", "propose build_plan", "Every third round, step back",
 		"the plan being written in the planning workspace"} {
 		if !strings.Contains(worker.puts[0].Instructions, want) {
 			t.Fatalf("the planning turn lacks %q", want)

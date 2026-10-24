@@ -59,7 +59,7 @@ func (api *API) startPlanningHandler(w http.ResponseWriter, r *http.Request) {
 		if err := waker.Wake(r.Context(), projectID, "Planning the project with the assistant.",
 			"The user opened the planning workspace to plan this project with you before anything is built. "+
 				"Open the conversation: sum up in a few lines what you know (your notes may hold what was settled "+
-				"before), fill the plan in with update_plan, and ask the first round of what matters most."); err != nil {
+				"before), fill the plan in, and ask the first round of what matters most."); err != nil {
 			log.Printf("wake the assistant of project %q to plan it: %v", projectID, err)
 		}
 	}

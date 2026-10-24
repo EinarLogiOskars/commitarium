@@ -3,6 +3,7 @@ package worker
 import (
 	"errors"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -373,5 +374,42 @@ func TestResolveAssistantTurn(t *testing.T) {
 	}
 	if OutputJSONSchema(OutputContractAssistantTurn) == nil {
 		t.Fatal("no schema")
+	}
+}
+
+// While a vision is planned, every turn carries the plan, which resolves to
+// an update_plan ahead of the turn's own actions; other turns have no plan.
+func TestResolveAssistantPlanningTurn(t *testing.T) {
+	resolved, err := ResolveStructuredOutput(OutputContractAssistantPlanningTurn, []byte(`{
+		"message": "Who uses it?",
+		"actions": [{"type":"research","reason":"r","title":"GitHub's API","description":"Rate limits?","vision_item_id":"",
+			"steps":"","lead_agent":"","lead_model":"","reviewer_agent":"","reviewer_model":"","work_order_id":"","when":""}],
+		"notes": "",
+		"plan": {"goal":"A dashboard of open pull requests.","decisions":[" Dark theme "],"open_questions":["Who uses it?",""],
+			"items":[{"priority":0,"title":"List pull requests","description":"Open ones, newest first."}],
+			"stack_presets":[],"frameworks":""}}`))
+	if err != nil || resolved.AssistantTurn == nil || len(resolved.AssistantTurn.Actions) != 2 {
+		t.Fatalf("resolved = %+v err=%v", resolved, err)
+	}
+	plan := resolved.AssistantTurn.Actions[0]
+	if plan.Type != featureartifact.AssistantUpdatePlan || plan.Description != "A dashboard of open pull requests." ||
+		len(plan.Decisions) != 1 || plan.Decisions[0] != "Dark theme" || len(plan.OpenQuestions) != 1 ||
+		len(plan.PlanItems) != 1 || resolved.AssistantTurn.Actions[1].Type != featureartifact.AssistantResearch {
+		t.Fatalf("actions = %+v", resolved.AssistantTurn.Actions)
+	}
+	if _, err := ResolveStructuredOutput(OutputContractAssistantPlanningTurn,
+		[]byte(`{"message":"x","actions":[],"notes":""}`)); !errors.Is(err, ErrInvalidStructuredOutput) {
+		t.Fatalf("a planning turn without a plan: %v", err)
+	}
+	required := func(contract OutputContract) []string {
+		return OutputJSONSchema(contract).(map[string]any)["required"].([]string)
+	}
+	if !slices.Contains(required(OutputContractAssistantPlanningTurn), "plan") ||
+		slices.Contains(required(OutputContractAssistantTurn), "plan") {
+		t.Fatal("only the planning turn requires the plan")
+	}
+	plain, err := ResolveStructuredOutput(OutputContractAssistantTurn, []byte(`{"message":"x","actions":[],"notes":""}`))
+	if err != nil || len(plain.AssistantTurn.Actions) != 0 {
+		t.Fatalf("plain turn = %+v err=%v", plain, err)
 	}
 }

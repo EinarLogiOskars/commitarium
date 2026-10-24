@@ -2733,7 +2733,11 @@ actions, and its notes.
   it is refused with `409 developer_mode_required` unless the conversation's
   `developer` is set by a message's `developer_mode`. Any other action
   there, or `create_app` or `plan_project` in a project, returns
-  `409 action_needs_project`. `update_plan` changes the vision being planned:
+  `409 action_needs_project`. `update_plan` changes the vision being planned.
+  The assistant does not propose it: while the vision is planned, every
+  turn uses the `assistant_planning_turn` result, whose required `plan`
+  (`goal`, `decisions`, `open_questions`, `items`, `stack_presets`,
+  `frameworks`) becomes the turn's first action, an `update_plan`:
   `description` is the goal, `decisions` and `open_questions` replace those
   lists, and `plan_items` (`[{"priority", "title", "description"}]`) and
   `stack_presets` with `frameworks` replace the build plan and the stack when
