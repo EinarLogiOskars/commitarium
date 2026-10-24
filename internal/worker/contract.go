@@ -29,10 +29,12 @@ type SessionRequest struct {
 	Role      Role
 	Model     string
 	// Effort is the turn's reasoning effort; empty keeps the model's default.
-	Effort            string
-	Instructions      string
-	OutputContract    OutputContract
-	WorkspaceAccess   WorkspaceAccess
+	Effort          string
+	Instructions    string
+	OutputContract  OutputContract
+	WorkspaceAccess WorkspaceAccess
+	// Web lets the turn search and read the web without asking.
+	Web               bool
 	LaunchEnvironment LaunchEnvironment
 }
 

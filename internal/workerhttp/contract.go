@@ -145,6 +145,9 @@ type PutAttemptRequest struct {
 	OutputContract    OutputContract  `json:"output_contract,omitempty"`
 	WorkspaceAccess   WorkspaceAccess `json:"workspace_access,omitempty"`
 	ProviderSessionID string          `json:"provider_session_id,omitempty"`
+	// Web lets a read-only turn search and read the web without asking,
+	// for research (ADR-035).
+	Web bool `json:"web,omitempty"`
 }
 
 type WorkspaceAccess string

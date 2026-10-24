@@ -16,7 +16,7 @@ import (
 
 // WorkOrderAssistant clarifies draft work orders into handoff briefs.
 type WorkOrderAssistant interface {
-	Start(ctx context.Context, projectID, featureID, agentID, model string) (assistant.Session, bool, error)
+	Start(ctx context.Context, projectID, featureID, agentID, model, description string) (assistant.Session, bool, error)
 	Get(ctx context.Context, projectID, featureID string) (assistant.Session, error)
 	Reply(ctx context.Context, projectID, featureID, message, idempotencyKey string) (assistant.Session, bool, error)
 	AcceptBrief(ctx context.Context, projectID, featureID, idempotencyKey string) (feature.Feature, error)
@@ -59,6 +59,9 @@ type startAssistantRequest struct {
 	Agent    string `json:"agent"`
 	Provider string `json:"provider"`
 	Model    string `json:"model"`
+	// Message, when set, is what Commitarium's assistant gathered: the brief
+	// is written from it at once (ADR-035).
+	Message string `json:"message,omitempty"`
 }
 
 type assistantReplyRequest struct {
@@ -110,7 +113,7 @@ func (api *API) startAssistantHandler(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	session, created, err := api.assistant.Start(r.Context(), projectID, featureID, agentID, model)
+	session, created, err := api.assistant.Start(r.Context(), projectID, featureID, agentID, model, request.Message)
 	if err != nil {
 		writeAssistantError(w, featureID, err)
 		return

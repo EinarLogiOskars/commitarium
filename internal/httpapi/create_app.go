@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
 
 	"github.com/EinarLogiOskars/commitarium/internal/conversations"
 	"github.com/EinarLogiOskars/commitarium/internal/project"
@@ -16,7 +17,9 @@ import (
 // applyCreateApp creates the app the user and the assistant settled on
 // (APPS_PLAN.md): a project used as an app that runs to its merge gate and
 // merges on its own; its launch; and its vision, written from the agreed
-// description. No template project lends it agents or models (ADR-027): the
+// description and the brief the assistant gathered, in full (ADR-035). The
+// brief also becomes the new app's assistant notes, so the assistant there
+// knows what was settled. No template project lends it agents or models (ADR-027): the
 // assistant writes the vision and sets the stack up on its own agent, and
 // chooses each work order's agents and models as autopilot builds the app.
 // Each step goes through the API's own route, so it keeps that route's
@@ -45,6 +48,11 @@ func (api *API) applyCreateApp(w http.ResponseWriter, r *http.Request, action co
 	// Its launch moves the new app along; setting it to build everything
 	// hands nothing over yet.
 	ctx = context.WithValue(ctx, ownSetup{}, true)
+	notes := ""
+	if action.AppBrief != "" {
+		notes = "The app's brief, settled with the user before it was created:\n\n" + action.AppBrief
+	}
+	conversation := "/api/v1/assistant/conversations/" + url.PathEscape(created.ID)
 	steps := []struct {
 		method, path, key string
 		body              any
@@ -53,8 +61,9 @@ func (api *API) applyCreateApp(w http.ResponseWriter, r *http.Request, action co
 		// everything (ADR-027).
 		{http.MethodPut, base + "/assistant-mode", "", map[string]project.AssistantMode{"assistant_mode": project.AssistantModeBuilds}},
 		{http.MethodPut, base + "/app", "", map[string]bool{"app": true}},
-		{http.MethodPost, "/api/v1/assistant/conversations/" + url.PathEscape(created.ID) + "/launch", "", nil},
-		{http.MethodPost, base + "/vision/assistant", key + ":vision", map[string]string{"mode": "describe", "message": action.Description}},
+		{http.MethodPut, conversation + "/notes", "", map[string]string{"notes": notes}},
+		{http.MethodPost, conversation + "/launch", "", nil},
+		{http.MethodPost, base + "/vision/assistant", key + ":vision", map[string]string{"mode": "describe", "message": appBrief(action)}},
 	}
 	for _, step := range steps {
 		if err := api.callOwn(ctx, step.method, step.path, step.key, step.body, nil); err != nil {
@@ -64,6 +73,19 @@ func (api *API) applyCreateApp(w http.ResponseWriter, r *http.Request, action co
 		}
 	}
 	return fmt.Sprintf("Created the app “%s”. It is being planned, set up, and built.", action.Title), created.ID, true
+}
+
+// appBrief is what the vision writer hears of a new app: the summary, the
+// brief the assistant gathered, and what it assumed.
+func appBrief(action conversations.Action) string {
+	text := action.Description
+	if action.AppBrief != "" {
+		text += "\n\nWhat the user and the assistant settled:\n" + action.AppBrief
+	}
+	if len(action.Assumptions) > 0 {
+		text += "\n\nAssumed where the user did not say:\n- " + strings.Join(action.Assumptions, "\n- ")
+	}
+	return text
 }
 
 // callOwn sends a request to the API's own routes and decodes the answer.

@@ -35,10 +35,15 @@ type RetryWaitReader interface {
 }
 
 // Event is something that happened in a project. Wake asks for the
-// assistant's turn; otherwise it is only noted in the conversation.
+// assistant's turn; otherwise it is only noted in the conversation, where
+// the drawer's dot shows it, and the assistant reads the project's current
+// state on its next turn anyway. News wakes it only where it drives the work
+// (an autopilot goal, or building everything): there it moves on from it;
+// elsewhere it would only repeat it.
 type Event struct {
 	Text string
 	Wake bool
+	News bool
 }
 
 // Watcher turns changes in the projects' work into events.
@@ -67,6 +72,9 @@ type Watcher struct {
 	Toolchains     ToolchainReader
 	VisionSessions VisionSessions
 	AgentLimited   func(ctx context.Context, agentID string) bool
+	// Helpers, when set, reads the helpers the assistant started, so their
+	// questions and results come back to it (helpers.go).
+	Helpers HelperReader
 }
 
 // watchEvery is how often the watcher looks at the projects' work.
@@ -93,6 +101,7 @@ func (watcher Watcher) Tick(ctx context.Context) {
 	watcher.Service.RetryDueSignIns(ctx)
 	for _, scope := range watcher.Service.projectScopes() {
 		watcher.settleVision(ctx, scope)
+		watcher.followHelpers(ctx, scope)
 		if err := watcher.Service.observe(ctx, scope, watcher.snapshot); err != nil {
 			log.Printf("assistant events for %s: %v", scope, err)
 		}
@@ -100,6 +109,39 @@ func (watcher Watcher) Tick(ctx context.Context) {
 		watcher.autopilot(ctx, scope)
 		watcher.gapCheck(ctx, scope)
 	}
+	// The top level has no project's work, but research it started comes
+	// back to it, and is sent without a card (research.go).
+	watcher.followHelpers(ctx, TopLevel)
+	watcher.autopilot(ctx, TopLevel)
+	if err := watcher.Service.wakeIfWaiting(ctx, TopLevel); err != nil {
+		log.Printf("assistant events for %s: %v", TopLevel, err)
+	}
+}
+
+// wakeIfWaiting starts the turn for what waits in a conversation with no
+// project's work to observe: the top level, where research comes back and
+// the user's messages queue while the assistant answers.
+func (service *Service) wakeIfWaiting(ctx context.Context, scope string) error {
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	stored, err := service.read(scope)
+	if err != nil {
+		return err
+	}
+	if stored.Status == StatusRunning {
+		// refresh writes what it folds in.
+		if stored, err = service.refresh(ctx, stored); err != nil || stored.Status == StatusRunning {
+			return err
+		}
+	}
+	if (len(stored.PendingEvents) == 0 && len(stored.Queued) == 0) || stored.SignIn != nil {
+		return nil
+	}
+	settings, err := service.Readiness(ctx)
+	if err != nil || settings.Agent == "" || settings.Model == "" {
+		return err
+	}
+	return service.startWaitingTurn(ctx, stored, settings)
 }
 
 // settleVision stores a vision the assistant has finished writing: the
@@ -324,12 +366,12 @@ func (item work) event() (Event, bool) {
 	}
 	switch {
 	case item.State == feature.StateCompleted:
-		return Event{Text: name + " merged.", Wake: true}, true
+		return Event{Text: name + " merged.", Wake: true, News: true}, true
 	case item.State.IsTerminal():
 		return Event{}, false
 	case item.State == feature.StateReady && item.RunStatus == execution.RunStatusStopped:
 		// Returned to Ready to start over: under autopilot it starts again.
-		return Event{Text: name + " is back in Ready to start over.", Wake: true}, true
+		return Event{Text: name + " is back in Ready to start over.", Wake: true, News: true}, true
 	case item.RunStatus == execution.RunStatusFailed:
 		return Event{Text: with(name + " failed"), Wake: true}, true
 	case item.RunStatus != execution.RunStatusWaitingForUser:
@@ -408,6 +450,7 @@ func (service *Service) observe(
 	changed := !sameSignatures(stored.Watched, watched)
 	stored.Watched = watched
 	now := service.now()
+	driving := stored.Goal.active() || service.assistantBuilds(ctx, scope)
 	if stored.Goal.active() && seen.Plan != nil {
 		before := fmt.Sprint(stored.Goal.Items)
 		if stored.Goal.progress(*seen.Plan, current) {
@@ -420,7 +463,7 @@ func (service *Service) observe(
 		stored.Messages = append(stored.Messages, Message{
 			ID: messageID(stored, len(stored.Messages)), Role: "event", Text: event.Text, OccurredAt: now,
 		})
-		if event.Wake {
+		if event.Wake && (!event.News || driving) {
 			stored.PendingEvents = append(stored.PendingEvents, event.Text)
 		}
 		stored.UpdatedAt = now

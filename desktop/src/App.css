@@ -4470,6 +4470,17 @@ select:focus {
   text-align: right;
 }
 
+/* What the conversation is about, above the composer (ADR-035). */
+.assistant__focus {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 6px;
+}
+.assistant__focus .ghost {
+  padding: 0 6px;
+}
+
 /* An agent's account usage, one bar per limit window. */
 .usage-bars {
   display: flex;

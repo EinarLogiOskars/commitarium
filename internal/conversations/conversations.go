@@ -153,6 +153,8 @@ type Conversation struct {
 	// SignIn is set while the last turn waits for its agent's login: the
 	// message is kept and sent once the agent works (sign_in.go).
 	SignIn *SignInWait `json:"sign_in,omitempty"`
+	// Focus is the item the user opened the assistant on (focus.go).
+	Focus *Focus `json:"focus,omitempty"`
 }
 
 type record struct {
@@ -189,6 +191,11 @@ type record struct {
 	// PreviewFailedAt is when the app's preview last failed to start, as the
 	// desktop reported it; a preview work order merged since fixes it.
 	PreviewFailedAt *time.Time `json:"preview_failed_at,omitempty"`
+	// Helpers are the helper sessions the assistant started (helpers.go).
+	Helpers []Helper `json:"helpers,omitempty"`
+	// Developer is whether the user's app shows Developer mode, as its last
+	// message said: without it, a new app stays self-contained (ADR-035).
+	Developer bool `json:"developer,omitempty"`
 }
 
 // maxSessionTurns bounds a provider session; the next turn starts fresh.
@@ -529,6 +536,21 @@ func (service *Service) Get(ctx context.Context, scope string) (Conversation, er
 	return stored.Conversation, nil
 }
 
+// SetDeveloperMode records whether the user's app shows Developer mode.
+func (service *Service) SetDeveloperMode(ctx context.Context, scope string, on bool) error {
+	if err := service.checkScope(ctx, scope); err != nil {
+		return err
+	}
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	stored, err := service.read(scope)
+	if err != nil || stored.Developer == on {
+		return err
+	}
+	stored.Developer = on
+	return service.write(stored)
+}
+
 // SaveNotes replaces a scope's notes with the user's edit.
 func (service *Service) SaveNotes(ctx context.Context, scope, notes string) (Conversation, error) {
 	if err := service.checkScope(ctx, scope); err != nil {
@@ -568,6 +590,9 @@ func (service *Service) Action(ctx context.Context, scope, actionID string) (Act
 // Created names what an applied action created, so the app can open it.
 type Created struct {
 	WorkOrderID, ProjectID string
+	// Helper is a helper the action started, whose questions and results
+	// come back to the assistant (helpers.go).
+	Helper *Helper
 }
 
 // Resolve records an action's outcome and what it created.
@@ -599,6 +624,18 @@ func (service *Service) Resolve(ctx context.Context, scope, actionID string, sta
 			action.WorkOrderID = created.WorkOrderID
 		}
 		action.ProjectID = created.ProjectID
+		if status == ActionApplied && created.Helper != nil {
+			stored.follow(*created.Helper)
+		}
+		if status == ActionApplied && (action.Type == featureartifact.AssistantAcceptBrief ||
+			action.Type == featureartifact.AssistantApplyStack) {
+			// An accepted result ends its helper's work.
+			for index := range stored.Helpers {
+				if stored.Helpers[index].ID == action.Helper {
+					stored.Helpers[index].Done = true
+				}
+			}
+		}
 		if status == ActionApplied && action.Type == featureartifact.AssistantCreateWorkOrder && stored.Goal.active() {
 			// The goal item follows its new work order, a replacement too, at
 			// once rather than at the next look at the vision.

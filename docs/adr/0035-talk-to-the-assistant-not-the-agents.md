@@ -1,6 +1,6 @@
 # ADR-035: Talk to the assistant, not the agents
 
-- Status: Proposed (extends [ADR-022](0022-one-assistant-that-proposes-and-the-user-approves.md))
+- Status: Accepted (extends [ADR-022](0022-one-assistant-that-proposes-and-the-user-approves.md))
 - Date: 2026-10-19
 
 ## Context
@@ -64,3 +64,9 @@ user in Developer mode meets four different chats.
   like a user's Draft.
 - The helpers' services and endpoints stay; the assistant calls them
   through the coordinator API, as it already does for `write_vision`.
+- Implemented by [ONE_CONVERSATION_PLAN.md](../plans/ONE_CONVERSATION_PLAN.md)
+  phase 1 (O1–O10). Two helpers joined the three: research, which looks up
+  facts on the web for the assistant, and the clarification of a new app at
+  the top level, which happens in the assistant's own chat. Sending an
+  answer to a helper, or starting research, needs no card in either mode:
+  neither changes the project.

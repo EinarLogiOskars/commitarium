@@ -176,9 +176,10 @@ func findGaps(state projectState, stored record) []gap {
 		gaps = append(gaps, gap{gapVision, "The project has no vision yet. Propose write_vision with what it is for, " +
 			"from the user's words, your notes, and the repository."})
 	}
-	if !state.StackReady && !state.SettingUp && (state.Vision != nil || state.HasCode) {
+	if !state.StackReady && !state.SettingUp && !stored.designing() && (state.Vision != nil || state.HasCode) {
 		gaps = append(gaps, gap{gapStack, "Its stack is not set up. Propose set_up_stack: it sets the project up on " +
-			"the stack the vision recommends, or detects the stack of the code."})
+			"the stack the vision recommends, or detects the stack of the code. When the vision names no stack, " +
+			"propose design_stack."})
 	}
 	if state.Vision != nil && state.StackReady && !stored.Goal.active() {
 		if level, open := openItems(*state.Vision, state.Features); open > 0 {
@@ -255,8 +256,12 @@ func waitingWork(features []feature.Feature, stored record) []string {
 }
 
 // handles reports whether one of the assistant's actions on a work order
-// waits, or the user turned one down since the assistant builds everything.
+// waits, one of its helpers works on it, or the user turned one down since
+// the assistant builds everything.
 func (stored record) handles(workOrderID string) bool {
+	if stored.writing(workOrderID) {
+		return true
+	}
 	for _, action := range stored.Actions {
 		if action.WorkOrderID != workOrderID {
 			continue

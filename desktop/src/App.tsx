@@ -28,10 +28,10 @@ import { Agents } from "./views/Agents";
 import { ForgejoViewer } from "./views/ForgejoViewer";
 import { UpdateModal } from "./views/UpdateModal";
 import { useDesktopUpdate } from "./update/useDesktopUpdate";
+import { DEV_MODE_KEY } from "./devMode";
 import "./App.css";
 
 const AREA_KEY = "commitarium.area";
-const DEV_MODE_KEY = "commitarium.devMode";
 
 function readFlag(key: string): boolean {
   try {

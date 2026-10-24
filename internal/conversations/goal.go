@@ -249,7 +249,10 @@ func (service *Service) autopilotActions(ctx context.Context, scope string) ([]A
 	service.mu.Lock()
 	defer service.mu.Unlock()
 	stored, err := service.read(scope)
-	if err != nil || (!stored.Goal.active() && !builds) {
+	answers := slices.ContainsFunc(stored.Actions, func(action Action) bool {
+		return talksToHelper(action.Type) && action.Status == ActionProposed && !action.AutoTried
+	})
+	if err != nil || (!stored.Goal.active() && !builds && !answers) {
 		return nil, err
 	}
 	var goalItems []GoalItem
@@ -349,11 +352,18 @@ func (service *Service) autopilotActions(ctx context.Context, scope string) ([]A
 			// Building everything, the assistant may finish the vision.
 			inGoal = builds && !stored.Goal.active()
 		case featureartifact.AssistantSetUpPreview, featureartifact.AssistantWriteVision,
-			featureartifact.AssistantSetUpStack:
+			featureartifact.AssistantSetUpStack, featureartifact.AssistantDesignStack, featureartifact.AssistantApplyStack:
 			// An app that does not run, a project without a vision or a stack,
 			// is the assistant's to fix when it builds everything (ADR-024,
 			// ADR-027, ADR-028).
 			inGoal = builds
+		case featureartifact.AssistantWriteBrief, featureartifact.AssistantAcceptBrief:
+			inGoal, target = builds, action.WorkOrderID
+		case featureartifact.AssistantAnswerHelper, featureartifact.AssistantResearch:
+			// Answering a helper the assistant started, or researching a
+			// question, changes nothing in the project: it is sent at once,
+			// assisting too (ADR-035).
+			inGoal = true
 		}
 		// A queued start the user did themselves is done: the work order no
 		// longer waits.
@@ -698,7 +708,16 @@ func (stored *record) addEvent(text string, at time.Time) {
 	})
 }
 
+// talksToHelper reports whether an action only talks to a helper, so it is
+// sent without a card.
+func talksToHelper(kind featureartifact.AssistantActionType) bool {
+	return kind == featureartifact.AssistantAnswerHelper || kind == featureartifact.AssistantResearch
+}
+
 func actionName(action featureartifact.AssistantAction) string {
+	if action.Type == featureartifact.AssistantAnswerHelper {
+		return "your answer to a helper's question"
+	}
 	if action.Title != "" {
 		return fmt.Sprintf("%q", action.Title)
 	}

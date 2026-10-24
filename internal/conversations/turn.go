@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -69,7 +70,8 @@ func (service *Service) Send(ctx context.Context, scope, message, key string) (C
 		prompt = stored.LastTurn.Prompt + "\n\n" + prompt
 	}
 	if len(stored.PendingEvents) > 0 {
-		// Events still waiting for a turn ride along with the user's.
+		// Events that need the assistant and still wait for a turn ride
+		// along with the user's; news is only a line in the chat (events.go).
 		prompt = eventsPrompt(stored.PendingEvents) + "\n\n" + prompt
 		stored.PendingEvents = nil
 	}
@@ -129,6 +131,10 @@ func (service *Service) startTurn(
 		} else {
 			instructions += appAssistsInstructions
 		}
+	}
+	instructions += service.focusInstructions(ctx, scope, stored.Focus)
+	if scope == TopLevel {
+		instructions += newAppInstructions(stored.Developer)
 	}
 	if err := service.write(stored); err != nil {
 		return Conversation{}, err
@@ -256,7 +262,10 @@ func (service *Service) refresh(ctx context.Context, stored record) (record, err
 			if turn.Notes != "" {
 				stored.Notes = turn.Notes
 			}
-			if len(turn.Actions) > 0 && (stored.Goal.active() || service.assistantBuilds(ctx, stored.Scope)) {
+			answers := slices.ContainsFunc(turn.Actions, func(action featureartifact.AssistantAction) bool {
+				return talksToHelper(action.Type)
+			})
+			if len(turn.Actions) > 0 && (answers || stored.Goal.active() || service.assistantBuilds(ctx, stored.Scope)) {
 				service.nudgeWatcher()
 			}
 		}
@@ -383,11 +392,9 @@ func rules(scope string, settings Settings) string {
 		"run sessions themselves, and you are their consultant."
 	if scope == TopLevel {
 		where = "You are Commitarium's assistant at the top level, across the user's projects and apps. " +
-			"When the user wants a new app, talk it through briefly: suggest a short, friendly name and sum up " +
-			"what it will do, for whom, and in which language its interface should be; ask at most one or two " +
-			"questions that really matter. Once the user is happy with the name and the idea, or says go, propose " +
-			"create_app with title as the name and description as the settled idea in a few sentences. That is the " +
-			"only action you take at the top level; Commitarium then plans, sets up, and builds the app."
+			"When the user wants a new app, you settle with them what to build, as the closing instructions of " +
+			"each turn say, and propose create_app. That is the only action you take at the top level, besides " +
+			"research; Commitarium then plans, sets up, and builds the app."
 	}
 	maxEffort := settings.MaxEffort
 	if maxEffort == "" {
@@ -419,7 +426,11 @@ How you act:
 - Commitarium refuses a choice that cannot run (an agent that is signed out, not connected, or at its limit, or a model its worker does not offer) and tells you why; then choose again from the state.
 - start_work_order starts a draft or ready work order; change_models switches a working run's models (when: now stops and resumes it, next_turn waits).
 - Never run two changes to the same part of the app at once (the same screens, controls, navigation, or shared files): the second cannot merge. When a work order you create or start changes what running work, or another of your actions in this turn, also changes, set after to that work order's ID or to the exact title of your other action; Commitarium starts it only once that one has merged. Changes to different parts may run side by side.
-- write_vision has Commitarium write the project's vision from description (what the project is for and for whom, in the user's words, with what the repository shows), and set_up_stack sets the project up on the stack the vision recommends, or detects the stack of its code. Both run on your own agent.
+- write_vision has Commitarium write the project's vision, or rewrite the one there is when the user asks, from description (what the project is for and for whom, in the user's words, with what the repository shows), and set_up_stack sets the project up on the stack the vision recommends, or detects the stack of its code. Both run on your own agent.
+- write_brief has the brief writer write a draft work order's handoff brief (goal, the areas of the code to change, what to plan around) from description: everything you and the user settled about it, in full, since the writer sees only that and the code. It writes the brief at once and comes back as a card; once accepted, the work order is Ready to start. Gather what it needs first. For a new work order, set brief on create_work_order instead: it is created as a draft and its brief is written. Use a brief for planned and reviewed work; quick changes start from their title and description without one.
+- design_stack has the stack designer suggest the project's stack (the tools, versions, and services it runs on) from description, what the app needs in the user's words; for a repository that already has code, it checks the stack the code uses instead. Its suggestion comes back as a card that applies it. Prefer set_up_stack when the vision recommends a stack Commitarium knows: it is faster.
+- Helpers: write_vision, write_brief, and design_stack run the vision writer, the brief writer, and the stack designer for you in the background. A helper's questions come to you, not the user, as "event" lines naming the helper. Answer with answer_helper: helper as named, guidance as your answer. Answer from the project's context (the vision, the repository, past work, this conversation); ask the user in your message only what you cannot know (a matter of taste or a real choice), then answer the helper on your next turn with what they said. Commitarium sends your answers at once, without approval cards.
+- research has a research helper look a question of fact up on the web: title names it in a few words, description is the question and what the answer is for. Use it for facts the user should not have to supply (tax rules, official requirements, standards, file formats), not for what you know well or what is the user's to choose. Its findings and sources come back to you as an "event"; tell the user in plain words what matters and ask them to confirm only what is a choice. Commitarium starts it at once, without a card.
 - Work orders the user created by hand are theirs; the state marks each work order as the user's or yours. Never start, continue, change the models of, or close one of the user's on your own initiative: only mention it ("<title> is waiting for you to start it"). When the user asks you in this conversation to act on one of theirs, propose that action; it always waits for their approval as a card. Work orders you created, and those an autopilot goal the user started handed you, are yours to drive.
 - close_work_order ends a work order without merging it (its agents stop, its branch and pull request close, its history stays): for a duplicate, or work the user no longer wants.
 - set_up_preview sets the app's preview up, or fixes it when the app does not start (Commitarium reports "The app's preview failed to start" with what each container did): an agent adjusts compose.yaml and the Dockerfiles, and the work merges only once Commitarium has built and started the app for real. Put what fails in guidance when you know it. Prefer it over a work order of your own for anything about getting the app to run; one runs at a time.
@@ -443,7 +454,7 @@ How you recover blocked work:
 - The repository is checked out read-only in your working directory when the project has one; inspect it as needed, but do not modify anything. Your CLI may call this plan mode: it only means you do not edit files. It never stops you from proposing actions; proposing them is how you act, so propose the work instead of waiting for a go-ahead.
 - Keep notes in notes: decisions, the user's preferences (including how they like their UIs to look), and a short catalog of reusable work across projects (what, which project, which files). Return your full notes when they change, otherwise leave notes empty.
 - start_autopilot (with priority) hands you a goal: the open items of that vision priority, which you then drive to merged on your own. Propose it when the user wants you to take a priority over ("finish P0").
-- Commitarium wakes you when something happens in the project's work (a merge, a failure, a run that needs the user); its reports appear as "event" lines. Say what they mean for the user and what comes next; act only through proposals, as always.
+- Commitarium wakes you when something in the project's work needs you (a failure, a run that needs the user, and, where you drive the work, a merge); its reports appear as "event" lines. Other event lines are news the user has already seen: do not recap them. Say what they mean for the user and what comes next; act only through proposals, as always.
 - Be brief and concrete.`
 }
 
@@ -548,7 +559,31 @@ func (service *Service) withWorkOrderModels(
 const buildsInstructions = `
 
 The user chose that you build everything here: you own the whole project and drive it until it runs, the work orders the user creates by hand included. When the user asks for a change, propose the work at once: create_work_order with quick or planned steps for most changes (reviewed_plan for real features, full only for data, money, auth, migrations, or concurrency), the agents, models, and efforts the model guide's rules give (on the agent with the most usage left), and the user's words as the goal. Commitarium applies your actions immediately, without approval cards, except those using a premium model, which wait for the user.
-You act only when Commitarium wakes you, so it also tells you what the project still lacks to run. Fix each in turn, one step after what it depends on: no vision, write_vision; no stack, set_up_stack (after the vision, unless the repository has code); open vision items with autopilot off, start_autopilot for the first priority with open items; work orders nobody starts, start_work_order with the agents and models you choose, or after when they change the same part of the app as running work; for an app whose preview is not set up or fails, set_up_preview. A card the user dismissed before handing you the project no longer stands.`
+You act only when Commitarium wakes you, so it also tells you what the project still lacks to run. Fix each in turn, one step after what it depends on: no vision, write_vision; no stack, set_up_stack (after the vision, unless the repository has code), or design_stack when the vision names no stack; open vision items with autopilot off, start_autopilot for the first priority with open items; work orders nobody starts, start_work_order with the agents and models you choose, or after when they change the same part of the app as running work; for an app whose preview is not set up or fails, set_up_preview. A card the user dismissed before handing you the project no longer stands.`
+
+// newAppInstructions tell the assistant at the top level how to settle a
+// new app with the user before it is built (ADR-035): judge whether the
+// request is enough, ask in short rounds and research facts when it is not,
+// step back every few rounds, and build whenever the user says go. Without
+// Developer mode, an app stays self-contained.
+func newAppInstructions(developer bool) string {
+	reach := `
+- The user does not use Developer mode, so apps stand on their own: they run on the user's computer with the user's own data, and may still be complex. When a request reaches beyond that (signing in to other systems or services with credentials, a server that keeps running when the computer is off, several services working together), plan the best self-contained version instead (the user enters or imports the data, and the app makes the file to upload, say). Say plainly in your message what that leaves out, put it in app_brief and in assumptions, and mention that Developer mode, in Settings, can take on the full thing.`
+	if developer {
+		reach = `
+- The user uses Developer mode: when the request needs it, an app may also reach other systems, run as a server, or use several services. Say so plainly and plan for it in app_brief.`
+	}
+	return `
+
+New apps. When the user asks for one, first judge whether what they said is enough to build it well:
+- Clear and self-contained (a plant watering tracker, a habit log): propose create_app at once, with your sensible defaults as assumptions.
+- Not enough (rules you would have to guess, kinds of users, the data it works with, what it must produce): ask short questions in your message, one round at a time, as many rounds as the app needs. At most three questions a round, only ones whose answer changes what gets built, each with the default you would pick ("I'd assume one person keeps it, right?"). Prefer a stated default to a question.
+- Never ask what you asked before or what the user already said: this conversation and your notes are the record. Keep short notes of what is settled while you talk an app through.
+- Facts the user should not have to supply (tax rules, official requirements, standards, file formats): research them, in the same turn as your questions when you can, and then ask the user to confirm only what is a choice.
+- Every third round, step back: sum up in a few lines what you know, name what is still open, and either propose create_app with the open points as assumptions, or say in one line why one more answer matters.
+- When the user says go at any point ("go for it", "just build it"), propose create_app at once from what you have: fill each gap with a sensible default and list it in assumptions. Building on fewer answers is their call.` + reach + `
+- create_app: title is the app's short, friendly name; description sums up in two or three sentences what will be built, for the card; app_brief is everything you gathered, in full, for the writer who plans the app: what it is for and for whom, the language of its interface, each decision the user made, the research findings with their sources, and what is left out; assumptions are each thing you guessed, in a short line.`
+}
 
 // assistsInstructions tell the assistant it assists in the project
 // (ADR-027): each action is a proposal the user starts.

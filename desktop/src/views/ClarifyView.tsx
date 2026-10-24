@@ -1,13 +1,6 @@
 import { Markdown } from "./Markdown";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import {
-  acceptBrief,
-  getAssistant,
-  reopenWorkOrder,
-  replyToAssistant,
-  startAssistant,
-  updateHandoffBrief,
-} from "../api/features";
+import { acceptBrief, getAssistant, reopenWorkOrder, updateHandoffBrief } from "../api/features";
 import {
   StartSettings,
   startBody,
@@ -20,6 +13,7 @@ import { ApiError } from "../api/client";
 import { Transcript, type TranscriptEntry } from "./Transcript";
 import { useFeatureArtifact } from "./useFeatureArtifact";
 import { WORK } from "../vocab";
+import { openAssistantOn } from "../attention/askAssistant";
 import type { WorkOrderAssistantSession, Feature, HandoffBriefDocument } from "../api/types";
 
 const POLL_MS = 1500;
@@ -105,8 +99,7 @@ function AssistantChat({
   // Clarification is optional (ADR-018): until the assistant has started, the
   // user chooses to clarify or to start right away.
   const [choice, setChoice] = useState<null | "unstarted" | "start">(null);
-  const [reply, setReply] = useState("");
-  const [busy, setBusy] = useState<null | "send" | "accept">(null);
+  const [busy, setBusy] = useState<null | "accept">(null);
   const [error, setError] = useState<string | null>(null);
   const chatRef = useRef<HTMLDivElement | null>(null);
   const pinnedToBottom = useRef(true);
@@ -153,49 +146,6 @@ function AssistantChat({
     const el = chatRef.current;
     if (el && pinnedToBottom.current) el.scrollTop = el.scrollHeight;
   }, [entries]);
-
-  const send = async () => {
-    const text = reply.trim();
-    if (!text) return;
-    setBusy("send");
-    setError(null);
-    try {
-      setSession(await replyToAssistant(projectId, feature.id, text, crypto.randomUUID()));
-      setReply("");
-    } catch (e) {
-      setError(describe(e));
-    } finally {
-      setBusy(null);
-    }
-  };
-
-  const clarify = async () => {
-    setChoice(null);
-    try {
-      setSession(await startAssistant(projectId, feature.id));
-      setError(null);
-    } catch (startError) {
-      setError(describe(startError));
-    }
-  };
-
-  const canReply = !!session && !running && busy === null;
-
-  // Enter sends; Shift+Enter or Alt+Enter starts a new line.
-  const onReplyKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key !== "Enter" || e.shiftKey) return;
-    e.preventDefault();
-    if (e.altKey) {
-      const ta = e.currentTarget;
-      const start = ta.selectionStart;
-      setReply(reply.slice(0, start) + "\n" + reply.slice(ta.selectionEnd));
-      requestAnimationFrame(() => {
-        ta.selectionStart = ta.selectionEnd = start + 1;
-      });
-      return;
-    }
-    if (canReply && reply.trim()) void send();
-  };
 
   const accept = async () => {
     setBusy("accept");
@@ -247,12 +197,20 @@ function AssistantChat({
           </div>
         )}
         <p className="muted">
-          The assistant can look into the code with you and turn this {WORK.short} into a handoff
-          brief. For a small, clear change, start right away: the title and description become the
-          goal.
+          The assistant can talk this {WORK.short} through with you and have its brief written from
+          the code. For a small, clear change, start right away: the title and description become
+          the goal.
         </p>
         <div className="row">
-          <button className="primary" onClick={() => void clarify()}>
+          <button
+            className="primary"
+            onClick={() =>
+              openAssistantOn(
+                { kind: "work_order", work_order_id: feature.id },
+                `Help me clarify “${feature.title}” so its brief can be written.`,
+              )
+            }
+          >
             Clarify with the assistant
           </button>
           <button onClick={() => setChoice("start")}>Start without clarifying</button>
@@ -263,7 +221,7 @@ function AssistantChat({
 
   return (
     <section className="panel panel--phase">
-      <h2>Clarify with the assistant</h2>
+      <h2>Clarify</h2>
       {error && <div className="banner banner--error">{error}</div>}
       <div className="clarify">
         <div className="clarify__main">
@@ -277,29 +235,24 @@ function AssistantChat({
           >
             <Transcript entries={entries} empty="Starting the assistant…" />
           </div>
+          {/* The conversation continues with the assistant (ADR-035); a
+              clarification from before shows here as it was. */}
           <div className="composer">
             <p className="muted status-line">
-              {!session
-                ? "Starting…"
-                : running
-                  ? "The assistant is looking into it…"
-                  : session.status === "failed"
-                    ? "The assistant's last turn failed. Send a message to try again."
-                    : "Your turn."}
+              {running
+                ? "The brief is being written…"
+                : "Talk it through with the assistant; it has the brief written or revised."}
             </p>
-            <div className="reply">
-              <textarea
-                placeholder="Reply to the assistant…"
-                value={reply}
-                onChange={(e) => setReply(e.target.value)}
-                onKeyDown={onReplyKeyDown}
-                disabled={!canReply}
-                rows={2}
-              />
-              <button onClick={() => void send()} disabled={!canReply || !reply.trim()}>
-                {busy === "send" ? "Sending…" : "Send"}
-              </button>
-            </div>
+            <button
+              onClick={() =>
+                openAssistantOn(
+                  { kind: "work_order", work_order_id: feature.id },
+                  `Let's continue clarifying “${feature.title}”.`,
+                )
+              }
+            >
+              Continue with the assistant
+            </button>
           </div>
         </div>
         <aside className="clarify__side">

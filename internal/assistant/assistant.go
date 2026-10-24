@@ -167,12 +167,16 @@ func NewService(config Config) (*Service, error) {
 }
 
 // Start opens the work order's clarification, or returns the existing one.
+// With a description, what Commitarium's assistant gathered, it writes the
+// brief at once and asks only what it must (ADR-035); its questions then go
+// to the assistant.
 func (service *Service) Start(
 	ctx context.Context,
 	projectID string,
 	featureID string,
 	agentID string,
 	model string,
+	description string,
 ) (Session, bool, error) {
 	service.mu.Lock()
 	defer service.mu.Unlock()
@@ -204,6 +208,11 @@ func (service *Service) Start(
 	}
 	now := service.now()
 	request := workOrderText(storedFeature)
+	instructions := initialInstructions(request)
+	if description = strings.TrimSpace(description); description != "" {
+		request += "\n\nWhat the assistant gathered:\n" + description
+		instructions = writeInstructions(request)
+	}
 	id := sessionID(featureID)
 	record, created, err := service.store.CreateAssistantSession(ctx, Record{
 		Session: Session{
@@ -222,7 +231,7 @@ func (service *Service) Start(
 	}, workerhttp.PutAttemptRequest{
 		Mode:            workerhttp.AttemptModeStart,
 		Assignment:      service.assignment(record, configured),
-		Instructions:    initialInstructions(request),
+		Instructions:    instructions,
 		OutputContract:  workerhttp.OutputContractWorkOrderBrief,
 		WorkspaceAccess: workerhttp.WorkspaceAccessReadOnly,
 	})
@@ -532,12 +541,25 @@ func workOrderText(storedFeature feature.Feature) string {
 }
 
 func initialInstructions(request string) string {
+	return briefInstructions(request, "Ask only questions whose answers would change the work, and do not "+
+		"ask what you can find in the code. While something important is unclear, return action 'ask'")
+}
+
+// writeInstructions write the brief at once from what Commitarium's
+// assistant gathered, like the vision's describe mode (ADR-035).
+func writeInstructions(request string) string {
+	return briefInstructions(request, "Commitarium's assistant gathered what the user wants, below, so write the "+
+		"brief now without asking. Only when something would change the work and neither the request nor the "+
+		"code answers it, ask: your question goes to the assistant, which answers from the project's context or "+
+		"asks the user. Then return action 'ask'")
+}
+
+func briefInstructions(request, asking string) string {
 	return "You are the project assistant. Help the user turn the work order below into a handoff brief " +
 		"that a lead agent and a reviewer agent will later plan and implement. The repository is checked " +
 		"out read-only in your working directory: inspect it as needed, but do not modify files, install " +
 		"anything, commit, or push. Work out what the user wants and why, where in the code it belongs, and " +
-		"what is worth planning around. Ask only questions whose answers would change the work, and do not " +
-		"ask what you can find in the code. While something important is unclear, return action 'ask' with " +
+		"what is worth planning around. " + asking + " with " +
 		"your question in message and leave goal empty and the lists empty. When the work is clear, return " +
 		"action 'propose' with a short message and the brief: goal (what and why, self-contained, because " +
 		"the agents will not see this conversation), areas (files, modules, or components to touch, each " +

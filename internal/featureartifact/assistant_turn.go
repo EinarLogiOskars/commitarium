@@ -42,7 +42,9 @@ const (
 	// its history: a duplicate, or work the user no longer wants.
 	AssistantCloseWorkOrder AssistantActionType = "close_work_order"
 	// AssistantCreateApp creates a new app at the top level: a project used
-	// as an app, named by Title and built from Description (APPS_PLAN.md).
+	// as an app, named by Title and built from Description, the card's
+	// summary, and AppBrief, all the assistant gathered (APPS_PLAN.md,
+	// ADR-035).
 	AssistantCreateApp AssistantActionType = "create_app"
 	// AssistantSetUpPreview sets the app's preview up, or fixes one that
 	// fails to start, in a work order that merges only once Commitarium's
@@ -56,6 +58,28 @@ const (
 	// AssistantSetUpStack sets the project up on the stack its vision
 	// recommends, or detects the stack of the code it has.
 	AssistantSetUpStack AssistantActionType = "set_up_stack"
+	// AssistantAnswerHelper answers a helper the assistant started (ADR-035):
+	// Guidance is the answer to the question Helper asked.
+	AssistantAnswerHelper AssistantActionType = "answer_helper"
+	// AssistantWriteBrief has the brief writer write a draft work order's
+	// brief from Description, what the assistant gathered (ADR-035).
+	AssistantWriteBrief AssistantActionType = "write_brief"
+	// AssistantAcceptBrief accepts the brief the brief writer proposed, which
+	// makes the work order Ready. Commitarium proposes it from the helper's
+	// result; the assistant never does.
+	AssistantAcceptBrief AssistantActionType = "accept_brief"
+	// AssistantDesignStack has the stack designer suggest the project's
+	// stack from Description, or check the stack of an imported repository's
+	// code (ADR-035).
+	AssistantDesignStack AssistantActionType = "design_stack"
+	// AssistantApplyStack applies the stack the stack designer suggested.
+	// Commitarium proposes it from the helper's result; the assistant never
+	// does.
+	AssistantApplyStack AssistantActionType = "apply_stack"
+	// AssistantResearch has a research helper look up Description, a
+	// question of fact, on the web (ADR-035); Title names it in a few
+	// words. Its findings and sources come back to the assistant.
+	AssistantResearch AssistantActionType = "research"
 )
 
 // AssistantAction is one proposed action. Fields that do not apply to its
@@ -106,6 +130,18 @@ type AssistantAction struct {
 	// Autopilot starts it only once that work has merged, so two changes to
 	// the same part of the app do not run at once.
 	After string `json:"after"`
+	// Helper, for answer_helper, names the helper that asked; for a card
+	// from a helper's result, the helper that proposed it.
+	Helper string `json:"helper"`
+	// Brief, for create_work_order, has the new work order's brief written
+	// from Description before it starts (ADR-035): it is created as a draft.
+	Brief bool `json:"brief,omitempty"`
+	// AppBrief, for create_app, is what the assistant gathered with the user
+	// (what the app is for, decisions, research with sources, what is left
+	// out), handed in full to the writer who plans the app; Assumptions are
+	// what it guessed, shown on the card.
+	AppBrief    string   `json:"app_brief,omitempty"`
+	Assumptions []string `json:"assumptions,omitempty"`
 }
 
 // PhaseChoices are the action's planning models and efforts (ADR-031); nil
@@ -125,6 +161,10 @@ func (action AssistantAction) PhaseChoices() *project.PhaseChoices {
 const (
 	maxAssistantActions   = 8
 	MaxAssistantNoteBytes = 16 * 1024
+	// MaxAppBriefBytes bounds a new app's brief, so it fits the new app's
+	// notes with a line that introduces it.
+	MaxAppBriefBytes = 15 * 1024
+	maxAssumptions   = 20
 )
 
 // Normalize trims the turn and checks its actions.
@@ -143,10 +183,18 @@ func (turn AssistantTurn) Normalize() (AssistantTurn, error) {
 			&action.LeadAgent, &action.LeadModel, &action.ReviewerAgent, &action.ReviewerModel,
 			&action.LeadPlanModel, &action.LeadPlanEffort, &action.LeadEffort,
 			&action.ReviewerPlanModel, &action.ReviewerPlanEffort, &action.ReviewerEffort,
-			&action.WorkOrderID, &action.When, &action.How, &action.Guidance, &action.After,
+			&action.WorkOrderID, &action.When, &action.How, &action.Guidance, &action.After, &action.Helper,
+			&action.AppBrief,
 		} {
 			*field = strings.TrimSpace(*field)
 		}
+		assumptions := action.Assumptions[:0:0]
+		for _, assumption := range action.Assumptions {
+			if assumption = strings.TrimSpace(assumption); assumption != "" {
+				assumptions = append(assumptions, assumption)
+			}
+		}
+		action.Assumptions = assumptions
 		if err := action.validate(); err != nil {
 			return AssistantTurn{}, fmt.Errorf("%w: action %d: %v", ErrInvalidArtifact, index+1, err)
 		}
@@ -186,6 +234,14 @@ func (action AssistantAction) validate() error {
 		if action.Title == "" || len(action.Title) > 80 || action.Description == "" || len(action.Description) > MaxGoalBytes {
 			return fmt.Errorf("an app needs a short name and a description")
 		}
+		if len(action.AppBrief) > MaxAppBriefBytes || len(action.Assumptions) > maxAssumptions {
+			return fmt.Errorf("the app's brief is too long, or it lists more than %d assumptions", maxAssumptions)
+		}
+		for _, assumption := range action.Assumptions {
+			if len(assumption) > MaxStepTextBytes {
+				return fmt.Errorf("an assumption is too long")
+			}
+		}
 	case AssistantCloseWorkOrder:
 		if action.WorkOrderID == "" {
 			return fmt.Errorf("closing needs a work order")
@@ -216,6 +272,23 @@ func (action AssistantAction) validate() error {
 			return fmt.Errorf("writing the vision needs a bounded description of the project")
 		}
 	case AssistantSetUpStack:
+	case AssistantAnswerHelper:
+		if action.Helper == "" || action.Guidance == "" || len(action.Guidance) > MaxGoalBytes {
+			return fmt.Errorf("answering a helper needs the helper and a bounded answer in guidance")
+		}
+	case AssistantWriteBrief:
+		if action.WorkOrderID == "" || action.Description == "" || len(action.Description) > MaxGoalBytes {
+			return fmt.Errorf("writing a brief needs a work order and a bounded description")
+		}
+	case AssistantDesignStack:
+		if len(action.Description) > MaxGoalBytes {
+			return fmt.Errorf("the stack's description is too long")
+		}
+	case AssistantResearch:
+		if action.Title == "" || len(action.Title) > MaxStepTextBytes ||
+			action.Description == "" || len(action.Description) > MaxGoalBytes {
+			return fmt.Errorf("research needs a short title and the question in description")
+		}
 	case AssistantStartAutopilot:
 		if action.Priority < 0 || action.Priority > maxVisionPriority {
 			return fmt.Errorf("priority runs from 0 to %d", maxVisionPriority)

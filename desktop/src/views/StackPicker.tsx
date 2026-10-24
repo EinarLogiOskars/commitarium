@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { openAssistantOn } from "../attention/askAssistant";
 import {
   detectProjectToolchain,
   getProjectToolchain,
@@ -7,7 +8,6 @@ import {
 } from "../api/toolchains";
 import { ApiError } from "../api/client";
 import { TOOL_NAMES } from "../api/types";
-import { SetupAssistant } from "./SetupAssistant";
 import {
   RunEditor,
   runDraftComplete,
@@ -36,11 +36,9 @@ function rowsFrom(tools: Record<string, string>): Row[] {
  * a project's toolchain "configured" — the gate for creating work orders. */
 export function StackPicker({
   projectId,
-  preferred,
   onSaved,
 }: {
   projectId: string;
-  preferred?: { agent?: string; model?: string };
   onSaved: (t: ProjectToolchain) => void;
 }) {
   const [presets, setPresets] = useState<ToolchainPreset[]>([]);
@@ -56,7 +54,6 @@ export function StackPicker({
   const [busy, setBusy] = useState(false);
   const [detecting, setDetecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [helping, setHelping] = useState(false);
   // A configured stack shows as a summary until the user changes it.
   const [editing, setEditing] = useState(false);
 
@@ -172,23 +169,6 @@ export function StackPicker({
     }
   };
 
-  if (helping) {
-    return (
-      <section className="panel">
-        <h2>Stack — ask an agent</h2>
-        <SetupAssistant
-          projectId={projectId}
-          preferred={preferred}
-          onApplied={(t) => {
-            setHelping(false);
-            onSaved(t);
-          }}
-          onCancel={() => setHelping(false)}
-        />
-      </section>
-    );
-  }
-
   if (current?.status === "configured" && !editing) {
     return (
       <section className="panel">
@@ -224,8 +204,14 @@ export function StackPicker({
       <div className="panel__head">
         <h2>Stack</h2>
         <div className="row">
-          <button className="ghost" onClick={() => setHelping(true)} disabled={busy}>
-            Ask an agent
+          <button
+            className="ghost"
+            onClick={() =>
+              openAssistantOn({ kind: "stack" }, "Help me choose the stack for this project.")
+            }
+            disabled={busy}
+          >
+            Ask the assistant
           </button>
           {current?.status === "configured" && (
             <button className="ghost" onClick={() => setEditing(false)} disabled={busy}>

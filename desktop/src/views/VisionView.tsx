@@ -3,9 +3,7 @@ import {
   getVision,
   getOpenVisionSession,
   getVisionSession,
-  replyToVisionAssistant,
   saveVision,
-  startVisionAssistant,
   startVisionWorkOrder,
   setUpProject,
   addVisionItem,
@@ -16,6 +14,7 @@ import { ApiError } from "../api/client";
 import { startAutopilot } from "../api/assistant";
 import { ASSISTANT_CHANGED, WORK_CHANGED } from "./AssistantDrawer";
 import { Markdown } from "./Markdown";
+import { openAssistantOn } from "../attention/askAssistant";
 import { rememberIdea, rememberedIdea } from "./visionSession";
 import type {
   Feature,
@@ -131,19 +130,17 @@ export function VisionView({
     return () => clearInterval(timer);
   }, [projectId, sessionId, sessionRunning, loadVision]);
 
-  const start = async (mode: VisionMode, message: string) => {
-    setBusy(mode);
-    setError(null);
-    try {
-      const s = await startVisionAssistant(projectId, mode, message, crypto.randomUUID());
-      rememberIdea(projectId, null);
-      setSession(s);
-      setDraft(null);
-    } catch (e) {
-      setError(describe(e));
-    } finally {
-      setBusy(null);
-    }
+  // The vision is written through the assistant (ADR-035): it talks it
+  // through as far as needed and has the vision writer write it.
+  const start = (mode: VisionMode, message: string) => {
+    rememberIdea(projectId, null);
+    setRewriting(false);
+    openAssistantOn(
+      { kind: "vision" },
+      mode === "describe"
+        ? `Write the vision from my description:\n\n${message}`
+        : `Let's talk the vision through. My idea:\n\n${message}`,
+    );
   };
 
   const startOrder = async (item: VisionItem) => {
@@ -202,9 +199,7 @@ export function VisionView({
 
       {session ? (
         <VisionConversation
-          projectId={projectId}
           session={session}
-          onSession={setSession}
           onClose={() => {
             setSession(null);
           }}
@@ -214,7 +209,7 @@ export function VisionView({
           rewriting={!!vision}
           initial={vision ? "" : (rememberedIdea(projectId) ?? "")}
           busy={busy}
-          onStart={(mode, message) => void start(mode, message)}
+          onStart={(mode, message) => start(mode, message)}
           onCancel={vision ? () => setRewriting(false) : undefined}
         />
       ) : draft ? (
@@ -262,14 +257,14 @@ export function VisionView({
                 </ul>
                 <button
                   onClick={() =>
-                    void start(
+                    start(
                       "converse",
                       "Go through the guesses in the current vision with me, then rewrite it with my answers.",
                     )
                   }
                   disabled={busy !== null}
                 >
-                  {busy === "converse" ? "Starting…" : "Answer these"}
+                  Answer these
                 </button>
               </div>
             )}
@@ -565,14 +560,14 @@ function WriteVision({
           disabled={!message || busy !== null}
           title="The assistant writes it at once and lists what it had to guess."
         >
-          {busy === "describe" ? "Starting…" : "Write it from my description"}
+          Write it from my description
         </button>
         <button
           onClick={() => onStart("converse", message)}
           disabled={!message || busy !== null}
           title="The assistant asks what it needs to know first."
         >
-          {busy === "converse" ? "Starting…" : "Talk it through"}
+          Talk it through
         </button>
         {onCancel && (
           <button className="ghost" onClick={onCancel} disabled={busy !== null}>
@@ -584,42 +579,15 @@ function WriteVision({
   );
 }
 
-function VisionConversation({
-  projectId,
-  session,
-  onSession,
-  onClose,
-}: {
-  projectId: string;
-  session: VisionSession;
-  onSession: (s: VisionSession) => void;
-  onClose: () => void;
-}) {
-  const [reply, setReply] = useState("");
-  const [sending, setSending] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+// A vision being written: the conversation shows as it was, read-only; the
+// user talks it through with the assistant (ADR-035).
+function VisionConversation({ session, onClose }: { session: VisionSession; onClose: () => void }) {
   const chatRef = useRef<HTMLDivElement | null>(null);
-  const waiting = session.status === "waiting_for_user";
 
   useEffect(() => {
     const el = chatRef.current;
     if (el) el.scrollTop = el.scrollHeight;
   }, [session.messages.length]);
-
-  const send = async () => {
-    const text = reply.trim();
-    if (!text) return;
-    setSending(true);
-    setError(null);
-    try {
-      onSession(await replyToVisionAssistant(projectId, session.id, text, crypto.randomUUID()));
-      setReply("");
-    } catch (e) {
-      setError(describe(e));
-    } finally {
-      setSending(false);
-    }
-  };
 
   return (
     <section className="panel vision__conversation">
@@ -633,39 +601,22 @@ function VisionConversation({
           </div>
         ))}
       </div>
-      {error && <div className="banner banner--error">{error}</div>}
       {session.status === "running" && (
-        <p className="muted status-line">
-          {session.mode === "describe"
-            ? "The assistant is writing the vision…"
-            : "The assistant is thinking…"}
-        </p>
+        <p className="muted status-line">The vision is being written…</p>
       )}
       {session.status === "failed" && (
         <div className="banner banner--warn">
-          <span>The assistant stopped before writing the vision.</span>
+          <span>Writing the vision stopped before it was done.</span>
           <button onClick={onClose}>Start again</button>
         </div>
       )}
-      {waiting && (
-        <div className="composer">
-          <div className="reply">
-            <textarea
-              rows={2}
-              value={reply}
-              placeholder="Answer the assistant…"
-              onChange={(e) => setReply(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key !== "Enter" || e.shiftKey) return;
-                e.preventDefault();
-                if (!sending && reply.trim()) void send();
-              }}
-              disabled={sending}
-            />
-            <button onClick={() => void send()} disabled={sending || !reply.trim()}>
-              {sending ? "Sending…" : "Send"}
-            </button>
-          </div>
+      {session.status === "waiting_for_user" && (
+        <div className="row">
+          <button
+            onClick={() => openAssistantOn({ kind: "vision" }, "Let's continue with the vision.")}
+          >
+            Continue with the assistant
+          </button>
         </div>
       )}
     </section>

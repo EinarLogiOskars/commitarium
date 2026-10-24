@@ -21,6 +21,14 @@ Done on `feat/ready-work-orders`: R1–R8, with the lead-clarification removal
 goal-draft writes) as separate commits after the desktop moved over. The
 assistant chat polls rather than streams; live streaming comes with sessions.
 
+Since ADR-035 (ONE_CONVERSATION_PLAN.md), step 2 below happens in the
+project assistant's chat rather than a chat of its own: **Clarify with the
+assistant** opens the drawer focused on the Draft, and the assistant runs
+the brief writer (this plan's `internal/assistant` sessions, in a write-now
+mode) as its helper, answers its questions, and brings the brief back as a
+card with Accept and Edit. The brief editor, Accept, Reopen, the Ready view,
+and Start without clarifying are unchanged.
+
 ## Flow
 
 1. **Create.** Title and description, plus the per-order settings as today.

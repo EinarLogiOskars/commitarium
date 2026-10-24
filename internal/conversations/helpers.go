@@ -1,0 +1,272 @@
+package conversations
+
+import (
+	"context"
+	"fmt"
+	"log"
+	"slices"
+	"time"
+	"unicode"
+	"unicode/utf8"
+
+	"github.com/EinarLogiOskars/commitarium/internal/featureartifact"
+)
+
+// Helpers (ADR-035): the brief writer, the vision writer, the stack
+// designer, and research (research.go), run in the background for the
+// assistant. The user talks to the
+// assistant, and the assistant to them: a helper's question wakes the
+// assistant, which answers it with answer_helper, and a helper's result comes
+// back as a card. Only helpers the assistant started are followed here; those
+// the user starts on the Vision or Stack page keep their own chat.
+
+type HelperKind string
+
+const (
+	HelperBrief  HelperKind = "brief"
+	HelperVision HelperKind = "vision"
+	HelperStack  HelperKind = "stack"
+	// HelperResearch looks a question of fact up on the web; Title names it.
+	HelperResearch HelperKind = "research"
+)
+
+// Helper is a helper session the assistant started.
+type Helper struct {
+	// ID is the helper's session, the name the assistant answers it by.
+	ID   string     `json:"id"`
+	Kind HelperKind `json:"kind"`
+	// WorkOrderID and Title name the work order a brief writer writes for;
+	// Title alone names what research looks up.
+	WorkOrderID string `json:"work_order_id,omitempty"`
+	Title       string `json:"title,omitempty"`
+	// Agent is the agent research runs on, to read it back.
+	Agent string `json:"agent,omitempty"`
+	// Seen is the helper's state as last followed; Done ends following it.
+	Seen string `json:"seen,omitempty"`
+	Done bool   `json:"done,omitempty"`
+	// SignIn names the agent whose login stopped the helper: the assistant
+	// starts it again once the agent works (sign_in.go).
+	SignIn string `json:"sign_in,omitempty"`
+}
+
+type HelperStatus string
+
+const (
+	HelperWorking  HelperStatus = "working"
+	HelperAsks     HelperStatus = "asks"
+	HelperProposes HelperStatus = "proposes"
+	HelperFinished HelperStatus = "finished"
+	HelperFailed   HelperStatus = "failed"
+)
+
+// HelperState is a helper as its service reports it. Turn counts its turns,
+// so a new question or proposal differs from the last; Text is the question,
+// the proposal in plain words, or why it stopped. Agent is the agent it runs
+// on.
+type HelperState struct {
+	Status HelperStatus
+	Turn   int
+	Text   string
+	Agent  string
+}
+
+// HelperReader reads a helper's state through its service.
+type HelperReader func(ctx context.Context, projectID string, helper Helper) (HelperState, error)
+
+// Name is how the user and the assistant hear of the helper.
+func (helper Helper) Name() string {
+	switch helper.Kind {
+	case HelperBrief:
+		return fmt.Sprintf("the brief writer for “%s”", helper.Title)
+	case HelperVision:
+		return "the vision writer"
+	case HelperResearch:
+		return fmt.Sprintf("the research on “%s”", helper.Title)
+	default:
+		return "the stack designer"
+	}
+}
+
+// restart is how the assistant starts the helper again.
+func (helper Helper) restart() string {
+	switch helper.Kind {
+	case HelperBrief:
+		return fmt.Sprintf("write_brief for “%s” (%s)", helper.Title, helper.WorkOrderID)
+	case HelperVision:
+		return "write_vision"
+	case HelperResearch:
+		return "research, on the same question"
+	default:
+		return "design_stack"
+	}
+}
+
+// LookUpHelper returns a helper the assistant started in the scope, so only
+// those are answered for it.
+func (service *Service) LookUpHelper(_ context.Context, scope, id string) (Helper, error) {
+	stored, err := service.readLocked(scope)
+	if err != nil {
+		return Helper{}, err
+	}
+	for _, helper := range stored.Helpers {
+		if helper.ID == id {
+			return helper, nil
+		}
+	}
+	return Helper{}, ErrNotFound
+}
+
+// follow records a helper an applied action started, or follows it afresh
+// when the action started it again.
+func (stored *record) follow(helper Helper) {
+	for index := range stored.Helpers {
+		if stored.Helpers[index].ID == helper.ID {
+			stored.Helpers[index].Done, stored.Helpers[index].SignIn = false, ""
+			return
+		}
+	}
+	stored.Helpers = append(stored.Helpers, helper)
+}
+
+// followHelpers looks at each helper the assistant started: a question wakes
+// the assistant, a result becomes a card, and a helper that stopped short
+// wakes it to decide what next.
+func (watcher Watcher) followHelpers(ctx context.Context, scope string) {
+	stored, err := watcher.Service.readLocked(scope)
+	if err != nil {
+		return
+	}
+	states := map[string]HelperState{}
+	for _, helper := range stored.Helpers {
+		var state HelperState
+		switch {
+		case helper.Done:
+			continue
+		case helper.Kind == HelperResearch:
+			state, err = watcher.Service.readResearch(ctx, helper)
+		case watcher.Helpers == nil:
+			continue
+		default:
+			state, err = watcher.Helpers(ctx, scope, helper)
+		}
+		if err != nil {
+			log.Printf("follow helper %s of %s: %v", helper.ID, scope, err)
+			continue
+		}
+		states[helper.ID] = state
+	}
+	if len(states) == 0 {
+		return
+	}
+	if err := watcher.Service.helpersChanged(ctx, scope, states); err != nil {
+		log.Printf("helpers of %s: %v", scope, err)
+	}
+}
+
+func (service *Service) helpersChanged(ctx context.Context, scope string, states map[string]HelperState) error {
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	stored, err := service.read(scope)
+	if err != nil {
+		return err
+	}
+	now, changed := service.now(), false
+	for index := range stored.Helpers {
+		helper := &stored.Helpers[index]
+		state, ok := states[helper.ID]
+		seen := fmt.Sprintf("%s:%d", state.Status, state.Turn)
+		if !ok || helper.Done || helper.Seen == seen {
+			continue
+		}
+		helper.Seen, changed = seen, true
+		name := helper.Name()
+		switch state.Status {
+		case HelperAsks:
+			stored.addEvent(capitalized(name)+" asks: "+state.Text, now)
+			stored.PendingEvents = append(stored.PendingEvents, fmt.Sprintf(
+				"%s (helper %s) asks: %s\nAnswer it with answer_helper (helper %s) from what you know of the project. "+
+					"If only the user can answer, ask them in your message, and answer the helper on your next turn.",
+				capitalized(name), helper.ID, state.Text, helper.ID))
+		case HelperProposes:
+			if helper.Kind == HelperResearch {
+				stored.found(helper, state.Text, now)
+				continue
+			}
+			stored.propose(*helper, state.Text, now)
+		case HelperFinished:
+			helper.Done = true
+		case HelperFailed:
+			helper.Done = true
+			if service.waitsForSignIn(ctx, &stored, helper, state, now) {
+				continue
+			}
+			text := capitalized(name) + " stopped before it finished."
+			if state.Text != "" {
+				text += " " + state.Text
+			}
+			stored.addEvent(text, now)
+			stored.PendingEvents = append(stored.PendingEvents,
+				text+" Start it again if it is still needed, or tell the user plainly what is wrong.")
+		}
+	}
+	if !changed {
+		return nil
+	}
+	stored.UpdatedAt = now
+	if len(stored.PendingEvents) > 0 {
+		service.nudgeWatcher()
+	}
+	return service.write(stored)
+}
+
+// propose turns a helper's result into a card, approved as the project's
+// mode says: by the user, or by autopilot where the assistant builds
+// everything. A newer result replaces an older card still waiting.
+func (stored *record) propose(helper Helper, text string, now time.Time) {
+	card := featureartifact.AssistantAction{Helper: helper.ID, Description: text}
+	switch helper.Kind {
+	case HelperBrief:
+		card.Type, card.WorkOrderID, card.Title = featureartifact.AssistantAcceptBrief, helper.WorkOrderID, helper.Title
+		card.Reason = "The brief writer wrote it from what you and the assistant settled."
+		stored.addEvent(fmt.Sprintf("The brief for “%s” is ready.", helper.Title), now)
+	case HelperStack:
+		card.Type = featureartifact.AssistantApplyStack
+		card.Reason = "The stack designer suggested it for the project."
+		stored.addEvent("A stack is suggested for the project.", now)
+	default:
+		return
+	}
+	for index := range stored.Actions {
+		older := &stored.Actions[index]
+		if older.Helper == helper.ID && older.Type == card.Type && older.Status == ActionProposed {
+			older.Status, older.Result, older.UpdatedAt = ActionDismissed, "A newer proposal replaced it.", now
+		}
+	}
+	// The card follows the line that announces it.
+	message := stored.Messages[len(stored.Messages)-1].ID
+	stored.Actions = append(stored.Actions, Action{
+		ID: fmt.Sprintf("act_%s_%s_%d", stored.Scope, helper.ID, len(stored.Actions)+1), MessageID: message,
+		AssistantAction: card, Status: ActionProposed, UpdatedAt: now,
+	})
+}
+
+// writing reports whether a helper the assistant started still works on the
+// work order, or waits to start again after a sign-in.
+func (stored record) writing(workOrderID string) bool {
+	return slices.ContainsFunc(stored.Helpers, func(helper Helper) bool {
+		return helper.WorkOrderID == workOrderID && (!helper.Done || helper.SignIn != "")
+	})
+}
+
+// designing reports whether the stack designer still works on the stack, or
+// waits to start again after a sign-in.
+func (stored record) designing() bool {
+	return slices.ContainsFunc(stored.Helpers, func(helper Helper) bool {
+		return helper.Kind == HelperStack && (!helper.Done || helper.SignIn != "")
+	})
+}
+
+func capitalized(text string) string {
+	first, size := utf8.DecodeRuneInString(text)
+	return string(unicode.ToUpper(first)) + text[size:]
+}

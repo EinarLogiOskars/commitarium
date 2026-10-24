@@ -1,6 +1,39 @@
 # One Conversation: Implementation Plan
 
-**Status:** proposed 2026-10-19 ([ADR-035](../adr/0035-talk-to-the-assistant-not-the-agents.md)).
+**Status:** phase 1 built 2026-10-19 (O1–O10), [ADR-035](../adr/0035-talk-to-the-assistant-not-the-agents.md)
+accepted; phase 2 (Planning mode) not started. Departures from the slices as
+written:
+
+- **O1–O3:** `answer_helper` is sent without a card in both modes, since it
+  changes nothing in the project; `create_work_order` takes `brief`, so a
+  new work order is created as a draft and its brief written first; and
+  brief and stack cards already render in the drawer, under the line that
+  announces them (O4 keeps the focus).
+- **O6:** a helper's login failure is told from other failures by ADR-034's
+  record of agents needing a sign-in. The assistant hears why at once (and
+  is told not to restart yet), and is woken to start the helper again with
+  the same action once the agent works; when no turn waits on the agent,
+  the coordinator's periodic try restarts one stopped helper.
+- **O7:** only events that wake the assistant were ever queued; the old news
+  came from merges and work back in Ready, which woke it everywhere. They
+  now wake it only where it drives the work (an autopilot goal, or Builds
+  everything); elsewhere they stay event lines. `Service.Report` (a failed
+  preview) and the prepend of waiting events to the user's message stay,
+  since what they carry needs the assistant.
+- **O8:** research has no output contract: its findings are the attempt's
+  plain reply, sources included. Web access is a new `web` flag on attempts,
+  which Claude Code honours with `--allowedTools WebSearch,WebFetch`; Codex
+  keeps its own web search setting. Like `answer_helper`, research is sent
+  without a card in both modes, and it runs at the top level too.
+- **O9:** the scope-down without Developer mode, planned for P1, is built
+  here; the desktop sends `developer_mode` with each message. The new-app
+  rules are added to every top-level turn rather than the session's opening
+  rules, the step back comes every third round, and the brief also becomes
+  the new app's assistant notes, so its own assistant knows what was
+  settled.
+- **Not verified with real agents:** web access from the workers (and
+  Codex's web search), the clarifying rounds' behaviour, and a helper
+  restarting after a real sign-in. Go and desktop tests cover the plumbing.
 
 ## Problem
 

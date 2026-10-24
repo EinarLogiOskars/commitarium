@@ -7,6 +7,8 @@ import {
   getConversation,
   saveAssistantNotes,
   sendToAssistant,
+  setAssistantFocus,
+  type AssistantFocus,
   type AssistantAction,
   type AutopilotGoal,
   type LaunchStage,
@@ -158,18 +160,57 @@ export function AssistantDrawer({
     return () => window.removeEventListener(ASSISTANT_CHANGED, reload);
   }, [load]);
 
+  // Opened on an item (ADR-035): the conversation is focused on it and the
+  // message that starts it is sent. One for a project the app is about to
+  // open waits until the drawer follows it there.
+  const pendingFocus = useRef<{ focus: AssistantFocus; send?: string; scope?: string } | null>(
+    null,
+  );
+  const focusOn = useCallback(
+    async (focus: AssistantFocus, send?: string) => {
+      setError(null);
+      try {
+        setConversation(await setAssistantFocus(scope, focus));
+        if (send) setConversation(await sendToAssistant(scope, send, crypto.randomUUID()));
+      } catch (e) {
+        setError(describe(e));
+      }
+    },
+    [scope, setConversation],
+  );
+  useEffect(() => {
+    const pending = pendingFocus.current;
+    if (!pending || (pending.scope && pending.scope !== scope)) return;
+    pendingFocus.current = null;
+    void focusOn(pending.focus, pending.send);
+  }, [scope, focusOn]);
+
   useEffect(() => {
     const openWith = (event: Event) => {
-      const started = (event as CustomEvent<{ draft?: string }>).detail?.draft;
-      if (started) {
-        setDraft(started);
+      const detail = (
+        event as CustomEvent<{
+          draft?: string;
+          focus?: AssistantFocus;
+          send?: string;
+          scope?: string;
+        }>
+      ).detail;
+      if (detail?.draft) {
+        setDraft(detail.draft);
         caretToEnd.current = true;
+      }
+      if (detail?.focus) {
+        if (detail.scope && detail.scope !== scope) {
+          pendingFocus.current = { focus: detail.focus, send: detail.send, scope: detail.scope };
+        } else {
+          void focusOn(detail.focus, detail.send);
+        }
       }
       setOpen(true);
     };
     window.addEventListener(OPEN_ASSISTANT, openWith);
     return () => window.removeEventListener(OPEN_ASSISTANT, openWith);
-  }, [setOpen]);
+  }, [setOpen, scope, focusOn]);
 
   useEffect(() => {
     const composer = composerRef.current;
@@ -238,6 +279,21 @@ export function AssistantDrawer({
   for (const action of conversation?.actions ?? []) {
     byMessage.set(action.message_id, [...(byMessage.get(action.message_id) ?? []), action]);
   }
+
+  const renderAction = (action: AssistantAction) =>
+    (builds || action.type === "answer_helper" || action.type === "research") &&
+    appliesItself(action) ? (
+      <AppliedLine key={action.id} action={action} />
+    ) : (
+      <ActionCard
+        key={action.id}
+        scope={scope}
+        action={action}
+        onChanged={setConversation}
+        onOpenOrder={onOpenOrder}
+        visionLabel={visionItems.get(action.vision_item_id)}
+      />
+    );
 
   return (
     <>
@@ -327,9 +383,11 @@ export function AssistantDrawer({
                 )}
                 {conversation.messages.map((message) =>
                   message.role === "event" ? (
-                    <p key={message.id} className="muted assistant__event">
-                      {message.text}
-                    </p>
+                    <div key={message.id}>
+                      <p className="muted assistant__event">{message.text}</p>
+                      {/* A helper's result comes back as a card under its line. */}
+                      {(byMessage.get(message.id) ?? []).map(renderAction)}
+                    </div>
                   ) : (
                     <div key={message.id} className="assistant__turn">
                       <div className={`msg ${message.role === "user" ? "msg--user" : "msg--lead"}`}>
@@ -340,20 +398,7 @@ export function AssistantDrawer({
                           <Markdown text={message.text} />
                         </div>
                       </div>
-                      {(byMessage.get(message.id) ?? []).map((action) =>
-                        builds && appliesItself(action) ? (
-                          <AppliedLine key={action.id} action={action} />
-                        ) : (
-                          <ActionCard
-                            key={action.id}
-                            scope={scope}
-                            action={action}
-                            onChanged={setConversation}
-                            onOpenOrder={onOpenOrder}
-                            visionLabel={visionItems.get(action.vision_item_id)}
-                          />
-                        ),
-                      )}
+                      {(byMessage.get(message.id) ?? []).map(renderAction)}
                     </div>
                   ),
                 )}
@@ -391,6 +436,24 @@ export function AssistantDrawer({
               </div>
               {error && <div className="banner banner--error">{error}</div>}
               <div className="composer">
+                {conversation.focus && (
+                  <div className="assistant__focus">
+                    <span className="pill" title="What this conversation is about">
+                      About: {conversation.focus.label}
+                    </span>
+                    <button
+                      className="ghost"
+                      aria-label="Clear what this conversation is about"
+                      onClick={() =>
+                        void setAssistantFocus(scope, null)
+                          .then(setConversation)
+                          .catch((e) => setError(describe(e)))
+                      }
+                    >
+                      ×
+                    </button>
+                  </div>
+                )}
                 <div className="reply">
                   <textarea
                     ref={composerRef}
@@ -531,7 +594,19 @@ function ActionCard({
                       ? "Write the vision"
                       : action.type === "set_up_stack"
                         ? "Set up the stack"
-                        : "Switch models";
+                        : action.type === "answer_helper"
+                          ? "Answer a question about the work"
+                          : action.type === "write_brief"
+                            ? "Write the brief for a work order"
+                            : action.type === "accept_brief"
+                              ? `Brief: ${action.title}`
+                              : action.type === "design_stack"
+                                ? "Design the stack"
+                                : action.type === "apply_stack"
+                                  ? "Suggested stack"
+                                  : action.type === "research"
+                                    ? `Look up: ${action.title}`
+                                    : "Switch models";
   const models = [
     action.lead_model &&
       `Lead ${action.lead_agent ? agentName(agents, action.lead_agent) + " · " : ""}${modelName(action.lead_model)}`,
@@ -546,11 +621,31 @@ function ActionCard({
         <strong>{heading}</strong>
         {!pending && <span className="pill">{STATUS_LABEL[action.status]}</span>}
       </div>
-      {action.description && <p className="assistant-action__desc">{action.description}</p>}
+      {action.description &&
+        (action.type === "accept_brief" || action.type === "apply_stack" ? (
+          <div className="assistant-action__desc">
+            <Markdown text={action.description} />
+          </div>
+        ) : (
+          <p className="assistant-action__desc">{action.description}</p>
+        ))}
+      {action.type === "create_app" && (action.assumptions ?? []).length > 0 && (
+        <div className="assistant-action__desc">
+          Assumed where you didn&apos;t say:
+          <ul>
+            {action.assumptions?.map((assumption) => (
+              <li key={assumption}>{assumption}</li>
+            ))}
+          </ul>
+        </div>
+      )}
       {action.type === "continue_work_order" && (
         <p className="assistant-action__desc">
           {action.guidance ? `Guidance: ${action.guidance}` : "Retries without guidance."}
         </p>
+      )}
+      {action.type === "answer_helper" && action.guidance && (
+        <p className="assistant-action__desc">Answer: {action.guidance}</p>
       )}
       {action.type === "set_up_preview" && (
         <p className="assistant-action__desc">
@@ -657,6 +752,13 @@ function ActionCard({
               : `Best after ${action.after}: it changes the same part of the app`}
           </li>
         )}
+        {action.type === "create_work_order" && action.brief && (
+          <li>Its brief is written first; you review it before it starts</li>
+        )}
+        {action.type === "accept_brief" && <li>Accepting makes the work order ready to start</li>}
+        {action.type === "design_stack" && (
+          <li>An agent suggests the tools and services the app runs on; you review it first</li>
+        )}
         {action.type === "set_up_stack" && (
           <li>The stack the vision recommends, or the one the code already uses</li>
         )}
@@ -686,7 +788,30 @@ function ActionCard({
       {error && <div className="banner banner--error">{error}</div>}
       {pending && (
         <div className="row">
-          {action.type === "create_work_order" ? (
+          {action.type === "create_work_order" && action.brief ? (
+            <button
+              className="primary"
+              onClick={() => void approve(false)}
+              disabled={busy !== null || blocked}
+            >
+              {busy === "approve" ? "Creating…" : "Create and write brief"}
+            </button>
+          ) : action.type === "accept_brief" ? (
+            <>
+              <button
+                className="primary"
+                onClick={() => void approve(false)}
+                disabled={busy !== null || blocked}
+              >
+                {busy === "approve" ? "Accepting…" : "Accept"}
+              </button>
+              {onOpenOrder && (
+                <button onClick={() => onOpenOrder(action.work_order_id)} disabled={busy !== null}>
+                  Edit
+                </button>
+              )}
+            </>
+          ) : action.type === "create_work_order" ? (
             <>
               <button
                 className="primary"
@@ -733,6 +858,12 @@ const APPLY_LABEL: Record<AssistantAction["type"], string> = {
   set_up_preview: "Set up preview",
   write_vision: "Write vision",
   set_up_stack: "Set up stack",
+  answer_helper: "Send answer",
+  write_brief: "Write brief",
+  accept_brief: "Accept",
+  design_stack: "Design stack",
+  apply_stack: "Apply",
+  research: "Look it up",
 };
 
 const STATUS_LABEL: Record<AssistantAction["status"], string> = {
@@ -852,6 +983,46 @@ function isPremium(model: string, families: string[]): boolean {
 
 // Where it builds everything, what the assistant set going, said in a line.
 function AppliedLine({ action }: { action: AssistantAction }) {
+  if (action.type === "answer_helper") {
+    return (
+      <p className="muted assistant__applied">
+        {action.status === "applied" ? "✓ Answered" : "Answering"}: {action.guidance}
+      </p>
+    );
+  }
+  if (action.type === "research") {
+    return (
+      <p className="muted assistant__applied">
+        {action.status === "applied" ? "✓ Looking up" : "Looking up"}: {action.title}
+      </p>
+    );
+  }
+  if (action.type === "design_stack" || action.type === "apply_stack") {
+    const done = action.status === "applied";
+    return (
+      <p className="muted assistant__applied">
+        {action.type === "apply_stack"
+          ? done
+            ? "✓ Set up the stack"
+            : "Setting up the stack…"
+          : done
+            ? "✓ Designing the stack"
+            : "Designing the stack…"}
+      </p>
+    );
+  }
+  if (action.type === "write_brief" || action.type === "accept_brief") {
+    const done = action.status === "applied";
+    return (
+      <p className="muted assistant__applied">
+        {action.type === "accept_brief"
+          ? `${done ? "✓ Accepted" : "Accepting"} the brief: ${action.title}`
+          : done
+            ? "✓ Writing the brief"
+            : "Writing the brief…"}
+      </p>
+    );
+  }
   const what =
     appliedWhat(action.title) ||
     (action.type === "set_up_preview"
@@ -874,7 +1045,7 @@ function AppliedLine({ action }: { action: AssistantAction }) {
             ? ["Writing", "Writing"]
             : action.type === "set_up_stack"
               ? ["Setting up", "Setting up"]
-              : action.hold_start
+              : action.hold_start || action.brief
                 ? ["Creating", "Created"]
                 : ["Starting", "Started"];
   return (

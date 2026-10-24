@@ -46,9 +46,15 @@ that waits for a sign-in, which fails again.
 
 ## Status
 
-Built (ADR-034). L4 is thinner than planned: the vision, clarification, and
-setup chats say to sign in and record the agent, but the user starts them
-again; New app's launch does restart its vision by itself.
+Built (ADR-034). L4 was thinner than planned: the vision, clarification, and
+setup chats said to sign in and recorded the agent, but the user started
+them again; New app's launch did restart its vision by itself. The gap is
+closed by ADR-035 (ONE_CONVERSATION_PLAN.md O5, O6): those chats are gone,
+and the brief writer, vision writer, stack designer, and research run as
+the assistant's helpers. A helper stopped by its agent's login waits on
+the same record of agents needing a sign-in; once the agent works again (a
+sign-in, any turn on it that works, or the coordinator's try), the
+assistant is woken to start it again from what it gathered.
 
 ## Slices
 

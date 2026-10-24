@@ -203,15 +203,33 @@ func (api *API) getConversationHandler(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, conversation, "assistant conversation")
 }
 
+// conversationMessageRequest is the user's message, with whether the app
+// shows Developer mode, which decides how far a new app may reach (ADR-035).
+type conversationMessageRequest struct {
+	Message       string `json:"message"`
+	DeveloperMode *bool  `json:"developer_mode,omitempty"`
+}
+
+// developerModeSetter records whether the user uses Developer mode.
+type developerModeSetter interface {
+	SetDeveloperMode(ctx context.Context, scope string, on bool) error
+}
+
 func (api *API) sendConversationHandler(w http.ResponseWriter, r *http.Request) {
 	key := strings.TrimSpace(r.Header.Get("Idempotency-Key"))
 	if key == "" {
 		writeError(w, http.StatusBadRequest, "idempotency_key_required", "Idempotency-Key header is required")
 		return
 	}
-	var body sessionMessageRequest
+	var body conversationMessageRequest
 	if !decodeSingleJSON(w, r, &body) {
 		return
+	}
+	if setter, ok := api.conversations.(developerModeSetter); ok && body.DeveloperMode != nil {
+		if err := setter.SetDeveloperMode(r.Context(), r.PathValue("scope"), *body.DeveloperMode); err != nil {
+			writeConversationError(w, err)
+			return
+		}
 	}
 	conversation, err := api.conversations.Send(r.Context(), r.PathValue("scope"), body.Message, key)
 	if err != nil {
@@ -231,6 +249,34 @@ func (api *API) saveConversationNotesHandler(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	conversation, err := api.conversations.SaveNotes(r.Context(), r.PathValue("scope"), body.Notes)
+	if err != nil {
+		writeConversationError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, conversation, "assistant conversation")
+}
+
+// focusSetter focuses a project's conversation on an item (ADR-035).
+type focusSetter interface {
+	SetFocus(ctx context.Context, scope string, focus *conversations.Focus) (conversations.Conversation, error)
+}
+
+// setConversationFocusHandler focuses the conversation on what the user
+// opened the assistant from; DELETE clears it.
+func (api *API) setConversationFocusHandler(w http.ResponseWriter, r *http.Request) {
+	setter, ok := api.conversations.(focusSetter)
+	if !ok {
+		writeError(w, http.StatusServiceUnavailable, "assistant_unavailable", "the assistant's focus is unavailable")
+		return
+	}
+	var focus *conversations.Focus
+	if r.Method != http.MethodDelete {
+		focus = &conversations.Focus{}
+		if !decodeSingleJSON(w, r, focus) {
+			return
+		}
+	}
+	conversation, err := setter.SetFocus(r.Context(), r.PathValue("scope"), focus)
 	if err != nil {
 		writeConversationError(w, err)
 		return
@@ -283,8 +329,9 @@ func (api *API) approveConversationActionHandler(w http.ResponseWriter, r *http.
 		return
 	}
 	// At the top level the assistant only creates apps; everything else acts
-	// in a project.
-	if (scope == conversations.TopLevel) != (action.Type == featureartifact.AssistantCreateApp) {
+	// in a project, except research, which needs none.
+	if action.Type != featureartifact.AssistantResearch &&
+		(scope == conversations.TopLevel) != (action.Type == featureartifact.AssistantCreateApp) {
 		writeError(w, http.StatusConflict, "action_needs_project", "this action runs in a project's conversation, and a new app at the top level")
 		return
 	}
@@ -336,13 +383,28 @@ func (api *API) approveConversationActionHandler(w http.ResponseWriter, r *http.
 	// is known only once it exists.
 	workOrderID := action.WorkOrderID
 	projectID := ""
+	// A helper the action started, whose questions and results come back to
+	// the assistant (ADR-035).
+	var helper *conversations.Helper
 	switch action.Type {
 	case featureartifact.AssistantCreateApp:
 		result, projectID, ok = api.applyCreateApp(w, r, action)
 	case featureartifact.AssistantCreateWorkOrder:
 		// A work order queued behind other work is created now and started
 		// later (HoldStart).
-		result, workOrderID, ok = api.applyCreateWorkOrder(w, r, scope, action, body.Start && !action.HoldStart)
+		// One whose brief is written first is created as a draft (ADR-035).
+		result, workOrderID, ok = api.applyCreateWorkOrder(w, r, scope, action, body.Start && !action.HoldStart && !action.Brief)
+		if ok && action.Brief {
+			result, helper, ok = api.applyWriteBrief(w, r, scope, workOrderID, action.Description, "assistant-"+action.ID)
+		}
+	case featureartifact.AssistantWriteBrief:
+		result, helper, ok = api.applyWriteBrief(w, r, scope, action.WorkOrderID, action.Description, "assistant-"+action.ID)
+	case featureartifact.AssistantAcceptBrief:
+		result, ok = api.applyAcceptBrief(w, r, scope, action)
+	case featureartifact.AssistantDesignStack:
+		result, helper, ok = api.applyDesignStack(w, r, scope, action)
+	case featureartifact.AssistantApplyStack:
+		result, ok = api.applyStack(w, r, scope, action)
 	case featureartifact.AssistantStartWorkOrder:
 		result, ok = api.applyStartWorkOrder(w, r, scope, action)
 	case featureartifact.AssistantChangeModels:
@@ -357,7 +419,11 @@ func (api *API) approveConversationActionHandler(w http.ResponseWriter, r *http.
 	case featureartifact.AssistantSetUpPreview:
 		result, workOrderID, ok = api.applySetUpPreview(w, r, scope, action)
 	case featureartifact.AssistantWriteVision:
-		result, ok = api.applyWriteVision(w, r, scope, action)
+		result, helper, ok = api.applyWriteVision(w, r, scope, action)
+	case featureartifact.AssistantAnswerHelper:
+		result, ok = api.applyAnswerHelper(w, r, scope, action)
+	case featureartifact.AssistantResearch:
+		result, helper, ok = api.applyResearch(w, r, scope, action)
 	case featureartifact.AssistantSetUpStack:
 		result, workOrderID, ok = api.applySetUpStack(w, r, scope)
 	case featureartifact.AssistantCloseWorkOrder:
@@ -383,7 +449,7 @@ func (api *API) approveConversationActionHandler(w http.ResponseWriter, r *http.
 	if len(chosen) > 0 {
 		result += " The user chose " + strings.Join(chosen, " and ") + "."
 	}
-	conversation, err := api.conversations.Resolve(r.Context(), scope, actionID, conversations.ActionApplied, result, conversations.Created{WorkOrderID: workOrderID, ProjectID: projectID})
+	conversation, err := api.conversations.Resolve(r.Context(), scope, actionID, conversations.ActionApplied, result, conversations.Created{WorkOrderID: workOrderID, ProjectID: projectID, Helper: helper})
 	if err != nil {
 		writeConversationError(w, err)
 		return
@@ -398,7 +464,7 @@ func (api *API) usersWorkOrder(ctx context.Context, scope string, action convers
 	switch action.Type {
 	case featureartifact.AssistantStartWorkOrder, featureartifact.AssistantChangeModels,
 		featureartifact.AssistantContinueWorkOrder, featureartifact.AssistantRecoverWorkOrder,
-		featureartifact.AssistantCloseWorkOrder,
+		featureartifact.AssistantCloseWorkOrder, featureartifact.AssistantWriteBrief, featureartifact.AssistantAcceptBrief,
 		featureartifact.AssistantAddVisionItem:
 	default:
 		return "", nil

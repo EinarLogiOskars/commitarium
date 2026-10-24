@@ -14,14 +14,15 @@ import (
 )
 
 type recordingWorkOrderAssistant struct {
-	agent     string
-	model     string
-	acceptKey string
-	acceptErr error
+	agent       string
+	model       string
+	description string
+	acceptKey   string
+	acceptErr   error
 }
 
-func (a *recordingWorkOrderAssistant) Start(_ context.Context, _, featureID, agentID, model string) (assistant.Session, bool, error) {
-	a.agent, a.model = agentID, model
+func (a *recordingWorkOrderAssistant) Start(_ context.Context, _, featureID, agentID, model, description string) (assistant.Session, bool, error) {
+	a.agent, a.model, a.description = agentID, model, description
 	return assistant.Session{ID: "ast_test", FeatureID: featureID, Agent: agentID, Model: model, Status: assistant.StatusRunning}, true, nil
 }
 

@@ -1,3 +1,4 @@
+import { developerModeOn } from "../devMode";
 import { request } from "./client";
 
 // The assistant (ASSISTANT_PLAN.md): one conversation at the top level
@@ -32,7 +33,13 @@ export type AssistantActionType =
   | "create_app"
   | "set_up_preview"
   | "write_vision"
-  | "set_up_stack";
+  | "set_up_stack"
+  | "answer_helper"
+  | "write_brief"
+  | "accept_brief"
+  | "design_stack"
+  | "apply_stack"
+  | "research";
 
 export interface AssistantAction {
   id: string;
@@ -51,8 +58,18 @@ export interface AssistantAction {
   work_order_id: string;
   when: "" | "now" | "next_turn";
   /** For continue_work_order: what to tell its agents; empty retries. For
-   * set_up_preview: what fails, when the assistant knows. */
+   * set_up_preview: what fails, when the assistant knows. For answer_helper:
+   * the assistant's answer. */
   guidance?: string;
+  /** For answer_helper: the helper it answers; for a card from a helper's
+   * result, the helper that proposed it (ADR-035). */
+  helper?: string;
+  /** For create_work_order: its brief is written before it starts. */
+  brief?: boolean;
+  /** For create_app: all the assistant gathered, for the app's planner, and
+   * what it assumed where the user did not say (ADR-035). */
+  app_brief?: string;
+  assumptions?: string[];
   /** For add_vision_item and start_autopilot: 0 for P0, 1 for P1, and so on. */
   priority: number;
   /** For a work order to create or start: the work order ID, or the title of
@@ -99,6 +116,16 @@ export interface Conversation {
   /** Set while the last turn waits for its agent's login: the message is
    * kept and sent once the agent works (needs_user: the user signs in). */
   sign_in?: { agent: string; since: string; needs_user?: boolean; retry_at?: string };
+  /** The item the user opened the assistant on (ADR-035). */
+  focus?: AssistantFocus;
+}
+
+/** What the conversation is about: a work order, the vision, or the stack. */
+export interface AssistantFocus {
+  kind: "work_order" | "vision" | "stack";
+  work_order_id?: string;
+  /** What the chip says; the coordinator fills it in. */
+  label?: string;
 }
 
 export type LaunchStage = "vision" | "setup" | "building";
@@ -122,9 +149,18 @@ export const sendToAssistant = (
 ): Promise<Conversation> =>
   request(`${conversationPath(scope)}/messages`, {
     method: "POST",
-    body: { message },
+    body: { message, developer_mode: developerModeOn() },
     idempotencyKey: key,
   });
+
+/** Focus the conversation on an item, or clear the focus with null. */
+export const setAssistantFocus = (
+  scope: string,
+  focus: AssistantFocus | null,
+): Promise<Conversation> =>
+  focus
+    ? request(`${conversationPath(scope)}/focus`, { method: "PUT", body: focus })
+    : request(`${conversationPath(scope)}/focus`, { method: "DELETE" });
 
 export const saveAssistantNotes = (scope: string, notes: string): Promise<Conversation> =>
   request(`${conversationPath(scope)}/notes`, { method: "PUT", body: { notes } });

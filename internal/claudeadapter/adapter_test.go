@@ -830,16 +830,28 @@ func TestUnifiedWindowsGiveEveryWindowItsUse(t *testing.T) {
 func TestClaudeTurnsPassTheirEffort(t *testing.T) {
 	adapter := &Adapter{permissionMode: "default"}
 	arguments, err := adapter.commandArguments(
-		"claude-sonnet-5-5", "high", worker.OutputContract(""), worker.WorkspaceAccessReadWrite, testSessionID, false, "Go.",
+		"claude-sonnet-5-5", "high", worker.OutputContract(""), worker.WorkspaceAccessReadWrite, false, testSessionID, false, "Go.",
 	)
 	if err != nil || !helperHasPair(arguments, "--effort", "high") {
 		t.Fatalf("arguments = %v err=%v", arguments, err)
 	}
 	arguments, err = adapter.commandArguments(
-		"claude-sonnet-5-5", "", worker.OutputContract(""), worker.WorkspaceAccessReadWrite, testSessionID, false, "Go.",
+		"claude-sonnet-5-5", "", worker.OutputContract(""), worker.WorkspaceAccessReadWrite, false, testSessionID, false, "Go.",
 	)
-	if err != nil || slices.Contains(arguments, "--effort") {
+	if err != nil || slices.Contains(arguments, "--effort") || slices.Contains(arguments, "--allowedTools") {
 		t.Fatalf("default effort arguments = %v err=%v", arguments, err)
+	}
+}
+
+// A research turn reads the web without asking; it stays read-only.
+func TestClaudeResearchTurnsMayUseTheWeb(t *testing.T) {
+	adapter := &Adapter{permissionMode: "default"}
+	arguments, err := adapter.commandArguments(
+		"claude-sonnet-5-5", "", worker.OutputContract(""), worker.WorkspaceAccessReadOnly, true, testSessionID, false, "Go.",
+	)
+	if err != nil || !helperHasPair(arguments, "--allowedTools", "WebSearch,WebFetch") ||
+		!helperHasPair(arguments, "--permission-mode", "plan") {
+		t.Fatalf("arguments = %v err=%v", arguments, err)
 	}
 }
 

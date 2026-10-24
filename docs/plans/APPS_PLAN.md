@@ -42,11 +42,20 @@ them into one flow and gives the result a place to live.
 
 ### Building and changing
 
-6. **New app is one sentence.** "New app" asks what to build, creates the
-   project with the defaults, has the assistant write the vision, sets up the
-   stack it recommends, and starts autopilot on the whole vision. The window
-   shows progress ("Building: 3 of 8") until the first item that runs merges,
-   then the app itself.
+6. **New app starts from a sentence.** "New app" asks what to build, creates
+   the project with the defaults, has the assistant write the vision, sets up
+   the stack it recommends, and starts autopilot on the whole vision. The
+   window shows progress ("Building: 3 of 8") until the first item that runs
+   merges, then the app itself. Since ADR-035 the assistant first judges
+   whether the sentence is enough: a clear request (a plant watering
+   tracker) gets the card at once; a thin one (an Icelandic VAT return app)
+   gets short rounds of questions, research for facts like tax rules, and a
+   summary every third round, and "go for it" builds from what is gathered
+   at any point. `create_app` carries the gathered brief and the
+   assumptions, which the launch's vision writer receives in full. Without
+   Developer mode, an app that depends on outside systems (credentials, a
+   server, several services) is scoped down to a self-contained version,
+   with a plain note of what is left out (ONE_CONVERSATION_PLAN.md).
 7. **Apps mode: the assistant drives.** In an app's conversation, autopilot is
    always on: the assistant's work actions run without cards, goal or not,
    so a change request becomes a work order that is built at once. (Simpler

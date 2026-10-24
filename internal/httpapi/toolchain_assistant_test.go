@@ -16,10 +16,13 @@ type toolchainAssistantStub struct {
 	err      error
 	message  string
 	purpose  toolchain.AssistantPurpose
+	// agent and opening are the started session's agent and message.
+	agent, opening string
+	applied        int
 }
 
-func (stub *toolchainAssistantStub) Start(_ context.Context, _, _, _, _ string, purpose toolchain.AssistantPurpose, _ string) (toolchain.AssistantSession, bool, error) {
-	stub.purpose = purpose
+func (stub *toolchainAssistantStub) Start(_ context.Context, _, agent, _, opening string, purpose toolchain.AssistantPurpose, _ string) (toolchain.AssistantSession, bool, error) {
+	stub.purpose, stub.agent, stub.opening = purpose, agent, opening
 	return stub.session, true, stub.err
 }
 func (stub *toolchainAssistantStub) Get(context.Context, string, string) (toolchain.AssistantSession, error) {
@@ -30,6 +33,7 @@ func (stub *toolchainAssistantStub) Reply(_ context.Context, _, _, message, _ st
 	return stub.session, true, stub.err
 }
 func (stub *toolchainAssistantStub) Apply(context.Context, string, string) (toolchain.Manifest, error) {
+	stub.applied++
 	return stub.manifest, stub.err
 }
 
