@@ -403,6 +403,12 @@ func TestHowTheAssistantWorksFollowsTheProjectsSetting(t *testing.T) {
 			if builds := strings.Contains(instructions, "The user chose that you build everything here"); builds != test.applies {
 				t.Fatalf("builds instructions = %t, want %t", builds, test.applies)
 			}
+			// Building everything, it reports in a line or two and asks only
+			// what is the user's to decide.
+			if short := strings.Contains(instructions, "report it in one or two short lines") &&
+				strings.Contains(instructions, "never say that nothing needs the user"); short != test.applies {
+				t.Fatalf("short updates = %t, want %t", short, test.applies)
+			}
 			if app := strings.Contains(instructions, "This project is an app the user uses"); app != test.project.app {
 				t.Fatalf("app instructions = %t, want %t", app, test.project.app)
 			}
