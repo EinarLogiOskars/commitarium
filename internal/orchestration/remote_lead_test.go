@@ -3450,6 +3450,18 @@ func startFailingPlanningRun(
 	code workerhttp.ErrorCode,
 ) (*RemoteLeadStarter, *execution.Service, *conversationalRemoteLeadWorker) {
 	t.Helper()
+	return startFailingPlanningRunWithSteps(t, runID, code, project.WorkSteps{})
+}
+
+// startFailingPlanningRunWithSteps is startFailingPlanningRun for a work
+// order with the given steps.
+func startFailingPlanningRunWithSteps(
+	t *testing.T,
+	runID string,
+	code workerhttp.ErrorCode,
+	steps project.WorkSteps,
+) (*RemoteLeadStarter, *execution.Service, *conversationalRemoteLeadWorker) {
+	t.Helper()
 	db, executions, storedProject, storedFeature := newRemoteLeadExecution(t)
 	stub := newConversationalRemoteLeadWorker(runID, storedProject.ID, storedFeature.ID)
 	addCompletedPlanningAttempt(stub, runID, storedProject.ID, storedFeature.ID)
@@ -3490,6 +3502,17 @@ func startFailingPlanningRun(
 		t.Fatalf("create remote starter: %v", err)
 	}
 	readyRemoteLeadFeature(t, workflowService, storedFeature.ID)
+	if steps != (project.WorkSteps{}) {
+		features := database.NewFeatureStore(db)
+		chosen, err := features.GetByID(t.Context(), storedFeature.ID)
+		if err != nil {
+			t.Fatalf("load ready feature: %v", err)
+		}
+		chosen.Steps = steps
+		if err := features.UpdateReadySettings(t.Context(), chosen); err != nil {
+			t.Fatalf("choose steps: %v", err)
+		}
+	}
 	if _, _, err := starter.Start(
 		t.Context(), runID, storedProject.ID, storedFeature.ID, storedFeature.Title,
 		storedProject.DialogueLimits, storedProject.AgentProviders, storedProject.MergePolicy,
