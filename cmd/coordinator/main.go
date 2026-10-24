@@ -422,17 +422,20 @@ func run(ctx context.Context, coordinatorConfig config) error {
 			Visions: visions, Features: featureService,
 			Guide: modelGuide, Models: models, ChatUsage: executionStore,
 			SignIns: agentSignIns,
+			Blocked: func(ctx context.Context, workOrderID string) bool {
+				_, blocked := blockedRun(ctx, executionService, workOrderID)
+				return blocked
+			},
 			RecoveryExhausted: func(ctx context.Context, workOrderID string) bool {
-				runs, err := executionService.RunsForFeature(ctx, workOrderID)
-				if err != nil || len(runs) == 0 {
+				run, blocked := blockedRun(ctx, executionService, workOrderID)
+				if !blocked {
 					return false
 				}
-				runID := execution.NewestRun(runs).ID
-				blocker, found, err := executionStore.RunBlocker(ctx, runID)
+				blocker, found, err := executionStore.RunBlocker(ctx, run.ID)
 				if err != nil || !found {
 					return false
 				}
-				recoveries, err := executionStore.RunRecoveries(ctx, runID)
+				recoveries, err := executionStore.RunRecoveries(ctx, run.ID)
 				return err == nil && execution.RecoveryExhausted(blocker, recoveries)
 			},
 		})
@@ -752,4 +755,15 @@ func (late *lateSignIns) AgentAnswered(ctx context.Context, agentID string) {
 	if late.target != nil {
 		late.target.AgentAnswered(ctx, agentID)
 	}
+}
+
+// blockedRun returns a work order's newest run when it waits for the user on
+// a blocker.
+func blockedRun(ctx context.Context, executions *execution.Service, workOrderID string) (execution.Run, bool) {
+	runs, err := executions.RunsForFeature(ctx, workOrderID)
+	if err != nil || len(runs) == 0 {
+		return execution.Run{}, false
+	}
+	run := execution.NewestRun(runs)
+	return run, run.Status == execution.RunStatusWaitingForUser && run.WaitKind == execution.RunWaitKindBlocker
 }

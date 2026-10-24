@@ -646,3 +646,74 @@ func TestAClosedWorkOrderNoLongerClaimsItsVisionItem(t *testing.T) {
 		t.Fatalf("autopilot applies %+v err=%v, want the replacement", apply, err)
 	}
 }
+
+// blockedReplacement is replacementSetup in a project in the given mode,
+// whose old work order is blocked (or not) without its recovery running out.
+func blockedReplacement(t *testing.T, old feature.Feature, mode project.AssistantMode, blocked bool) *Service {
+	t.Helper()
+	service := replacementSetup(t, old, false)
+	service.config.Projects = modeProjectsStub{mode: mode}
+	service.config.Blocked = func(_ context.Context, workOrderID string) bool {
+		return blocked && workOrderID == old.ID
+	}
+	return service
+}
+
+// Building everything, a blocked goal work order is replaced in one move:
+// the close and the replacement both apply, and the replacement starts.
+func TestAutopilotReplacesABlockedGoalWorkOrderWhereItBuildsEverything(t *testing.T) {
+	old := feature.Feature{ID: "fea_old", Title: "Edit and delete single items", State: feature.StateImplementing,
+		CreatedBy: feature.CreatedByAssistant}
+	service := blockedReplacement(t, old, project.AssistantModeBuilds, true)
+	apply, err := service.autopilotActions(t.Context(), "prj_test")
+	if err != nil || len(apply) != 2 || apply[0].ID != "act_close_old" || apply[1].ID != "act_rebuild" || apply[1].HoldStart {
+		t.Fatalf("autopilot applies %+v err=%v, want the close, then the replacement created and started", apply, err)
+	}
+}
+
+func TestAutopilotDoesNotCloseAHealthyGoalWorkOrderWhereItBuildsEverything(t *testing.T) {
+	old := feature.Feature{ID: "fea_old", Title: "Edit and delete single items", State: feature.StateImplementing,
+		CreatedBy: feature.CreatedByAssistant}
+	service := blockedReplacement(t, old, project.AssistantModeBuilds, false)
+	apply, err := service.autopilotActions(t.Context(), "prj_test")
+	if err != nil || len(apply) != 0 {
+		t.Fatalf("autopilot applies %+v err=%v, want nothing", apply, err)
+	}
+}
+
+func TestAutopilotLeavesReplacingTheUsersBlockedWorkOrderToTheUser(t *testing.T) {
+	old := feature.Feature{ID: "fea_old", Title: "Edit and delete single items", State: feature.StateImplementing,
+		CreatedBy: feature.CreatedByUser}
+	service := blockedReplacement(t, old, project.AssistantModeBuilds, true)
+	// The user created it after the goal started, so the goal did not hand
+	// it over.
+	stored, err := service.read("prj_test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored.Goal.Handed = nil
+	if err := service.write(stored); err != nil {
+		t.Fatal(err)
+	}
+	apply, err := service.autopilotActions(t.Context(), "prj_test")
+	if err != nil || len(apply) != 0 {
+		t.Fatalf("autopilot applies %+v err=%v, want nothing", apply, err)
+	}
+}
+
+// Assisting, a blocked work order's close and replacement wait for the user.
+func TestAutopilotLeavesABlockedReplacementToTheUserWhereItAssists(t *testing.T) {
+	old := feature.Feature{ID: "fea_old", Title: "Edit and delete single items", State: feature.StateImplementing,
+		CreatedBy: feature.CreatedByAssistant}
+	service := blockedReplacement(t, old, project.AssistantModeAssists, true)
+	apply, err := service.autopilotActions(t.Context(), "prj_test")
+	if err != nil || len(apply) != 0 {
+		t.Fatalf("autopilot applies %+v err=%v, want nothing", apply, err)
+	}
+	conversation, _ := service.Get(t.Context(), "prj_test")
+	for _, action := range conversation.Actions {
+		if action.Status != ActionProposed {
+			t.Fatalf("%s is %s, want it waiting for the user", action.ID, action.Status)
+		}
+	}
+}

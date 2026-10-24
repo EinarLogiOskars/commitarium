@@ -1,6 +1,7 @@
 package execution
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"strings"
@@ -93,7 +94,7 @@ const (
 
 // RecoveryExhausted reports whether recovering a run's blocker has run out:
 // its failure had as many recoveries as it gets, the run as many in total,
-// or a coordinator check kept failing after a fresh conversation (ADR-032).
+// or the same failure came back after a fresh conversation (ADR-032).
 func RecoveryExhausted(blocker Blocker, recoveries []Recovery) bool {
 	onFailure, freshTried := 0, false
 	for _, recovery := range recoveries {
@@ -102,8 +103,48 @@ func RecoveryExhausted(blocker Blocker, recoveries []Recovery) bool {
 			freshTried = freshTried || recovery.How == RecoveryFreshConversation
 		}
 	}
-	return onFailure >= MaxRecoveriesPerFailure || len(recoveries) >= MaxRecoveriesPerRun ||
-		(blocker.Kind == BlockerCheck && freshTried)
+	return onFailure >= MaxRecoveriesPerFailure || len(recoveries) >= MaxRecoveriesPerRun || freshTried
+}
+
+// BlockerStore keeps what blocked a run and the recoveries tried on it.
+type BlockerStore interface {
+	RecordRunBlocker(context.Context, Blocker) error
+	RunBlocker(context.Context, string) (Blocker, bool, error)
+	RecordRunRecovery(context.Context, Recovery) error
+	RunRecoveries(context.Context, string) ([]Recovery, error)
+}
+
+// RecordRunBlocker stores a run's latest blocker, when the store keeps them.
+func (s *Service) RecordRunBlocker(ctx context.Context, blocker Blocker) error {
+	if store, ok := s.store.(BlockerStore); ok {
+		return store.RecordRunBlocker(ctx, blocker)
+	}
+	return nil
+}
+
+// RunBlocker returns a run's latest blocker; false when none was recorded.
+func (s *Service) RunBlocker(ctx context.Context, runID string) (Blocker, bool, error) {
+	if store, ok := s.store.(BlockerStore); ok {
+		return store.RunBlocker(ctx, runID)
+	}
+	return Blocker{}, false, nil
+}
+
+// RecordRunRecovery stores a recovery tried on a blocked run, when the store
+// keeps them.
+func (s *Service) RecordRunRecovery(ctx context.Context, recovery Recovery) error {
+	if store, ok := s.store.(BlockerStore); ok {
+		return store.RecordRunRecovery(ctx, recovery)
+	}
+	return nil
+}
+
+// RunRecoveries lists the recoveries tried on a run.
+func (s *Service) RunRecoveries(ctx context.Context, runID string) ([]Recovery, error) {
+	if store, ok := s.store.(BlockerStore); ok {
+		return store.RunRecoveries(ctx, runID)
+	}
+	return nil, nil
 }
 
 // NewestRun is the run started last; runs must not be empty.

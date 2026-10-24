@@ -79,8 +79,8 @@ func TestRecoveringAWorkOrderIsBoundedByTheFailure(t *testing.T) {
 	}
 }
 
-// Recovery runs out after four tries of one failure, eight in all, or a
-// check that keeps failing after a fresh conversation (ADR-032).
+// Recovery runs out after four tries of one failure, eight in all, or the
+// same failure coming back after a fresh conversation (ADR-032).
 func TestRecoveryRunsOutPlainly(t *testing.T) {
 	executions := &blockedExecutions{
 		recordingExecutionService: &recordingExecutionService{},
@@ -95,8 +95,12 @@ func TestRecoveryRunsOutPlainly(t *testing.T) {
 		t.Fatal("a check failing after a fresh conversation is not exhausted")
 	}
 	executions.blocker.Kind = execution.BlockerAgent
+	if _, exhausted := api.recoveryExhausted(t.Context(), "run_1"); !exhausted {
+		t.Fatal("an agent failure coming back after a fresh conversation is not exhausted")
+	}
+	executions.recoveries = []execution.Recovery{{How: execution.RecoveryMessage, Fingerprint: "fp1"}}
 	if _, exhausted := api.recoveryExhausted(t.Context(), "run_1"); exhausted {
-		t.Fatal("an agent failure after one fresh conversation is exhausted")
+		t.Fatal("one message is exhausted")
 	}
 	for range 3 {
 		executions.recoveries = append(executions.recoveries, execution.Recovery{How: execution.RecoveryContinue, Fingerprint: "fp1"})
