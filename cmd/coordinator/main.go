@@ -597,6 +597,10 @@ func run(ctx context.Context, coordinatorConfig config) error {
 	if resumer, ok := realWorkflowStarter.(interface{ RunRetryResumer(context.Context) }); ok {
 		go resumer.RunRetryResumer(ctx)
 	}
+	// Work orders that merge on their own merge one at a time per project.
+	if queue, ok := realWorkflowStarter.(interface{ RunMergeQueue(context.Context) }); ok {
+		go queue.RunMergeQueue(ctx)
+	}
 	// Preview checks no desktop picked up block their work order with a
 	// reason that says to open the app (ADR-028).
 	if watcher, ok := realWorkflowStarter.(interface{ RunPreviewCheckWatcher(context.Context) }); ok {

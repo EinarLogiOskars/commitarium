@@ -283,9 +283,12 @@ type remoteLeadWorkspaceStub struct {
 	// mergeErrs are returned, in order, by the next merges instead of merging.
 	mergeErrs     []error
 	mergedCommits []string
-	// stillBehind keeps mainHead after a verified update onto main, as if main
-	// moved again meanwhile.
-	stillBehind            bool
+	// stillBehind keeps mainHead after a verified update onto main, as if the
+	// update did not bring main in.
+	stillBehind bool
+	// mainMoves moves mainHead on after each verified update onto main, as if
+	// other work merged meanwhile.
+	mainMoves              bool
 	baseUpdateVerifyCalls  int
 	baseUpdateVerifyCommit string
 	baseUpdateVerifyErr    error
@@ -485,7 +488,10 @@ func (stub *remoteLeadWorkspaceStub) VerifyImplementationBaseUpdate(
 	if stub.prepared.ApprovedCommitID == "" || stub.prepared.ApprovedCommitID == commitID {
 		return workspace.Workspace{}, errors.New("base update does not follow an approved commit")
 	}
-	if !stub.stillBehind {
+	switch {
+	case stub.mainMoves:
+		stub.mainHead = fmt.Sprintf("%040x", stub.baseUpdateVerifyCalls)
+	case !stub.stillBehind:
 		stub.mainHead = ""
 	}
 	return stub.prepared, nil
