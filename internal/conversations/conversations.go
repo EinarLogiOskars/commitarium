@@ -142,6 +142,10 @@ type Action struct {
 	// because it follows work that has not merged: it shows as a draft at
 	// once, and a queued start action starts it once that work has merged.
 	HoldStart bool `json:"hold_start,omitempty"`
+	// PlansEarly marks a start autopilot applied before the work it follows
+	// (After) merged, once that work was implementing: the work order plans
+	// now and implements once that work has merged (ADR-037).
+	PlansEarly bool `json:"plans_early,omitempty"`
 	// Settled marks an action that was not needed any more: its work order
 	// already got where it leads (stale.go). It counts as applied.
 	Settled   bool      `json:"settled,omitempty"`

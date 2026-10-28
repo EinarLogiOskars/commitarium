@@ -724,7 +724,8 @@ func initialInstructions(
 		"ones, and every item without sub-items becomes one work order that an agent builds in one go, so keep those " +
 		"focused and independently useful. Write titles as short imperative tasks and give each item a one or two " +
 		"sentence description of the outcome. Prefer a small plan that ships a useful first version over an " +
-		"exhaustive one. This is planning only: do not edit files or begin implementation.\n\n")
+		"exhaustive one. " + featureartifact.WidePlan + " This is planning only: do not edit files or begin " +
+		"implementation.\n\n")
 	if !overview.HasCode() {
 		builder.WriteString("The repository has no code yet. Recommend its stack in stack: one or more of these " +
 			"runtime presets, by ID (" + presetList() + "); the frameworks to build it with, in a few words (for " +
