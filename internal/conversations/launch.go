@@ -53,12 +53,15 @@ func (service *Service) StartLaunch(ctx context.Context, scope string) (Conversa
 	if err := service.checkScope(ctx, scope); err != nil {
 		return Conversation{}, err
 	}
-	service.mu.Lock()
-	defer service.mu.Unlock()
-	stored, err := service.read(scope)
+	chat, err := service.chatFor(ctx, scope)
 	if err != nil {
 		return Conversation{}, err
 	}
+	stored, done, err := service.open(scope, chat)
+	if err != nil {
+		return Conversation{}, err
+	}
+	defer done()
 	if stored.Launch != nil {
 		return stored.Conversation, nil
 	}
@@ -77,7 +80,7 @@ func (service *Service) StartLaunch(ctx context.Context, scope string) (Conversa
 // the stack, and from the merged setup to autopilot on the whole vision.
 func (watcher Watcher) launch(ctx context.Context, scope string) {
 	service := watcher.Service
-	stored, err := service.readLocked(scope)
+	stored, err := service.sharedOf(scope)
 	if err != nil || stored.Launch == nil || stored.Launch.Stage == LaunchBuilding {
 		return
 	}
@@ -140,10 +143,12 @@ func (watcher Watcher) restartVision(ctx context.Context, scope string, launch L
 		return
 	}
 	service := watcher.Service
-	service.mu.Lock()
-	defer service.mu.Unlock()
-	stored, err := service.read(scope)
-	if err != nil || stored.Launch == nil || stored.Launch.Stage != LaunchVision {
+	stored, done, err := service.open(scope, "")
+	if err != nil {
+		return
+	}
+	defer done()
+	if stored.Launch == nil || stored.Launch.Stage != LaunchVision {
 		return
 	}
 	stored.Launch.VisionRestartedAt = &now
@@ -165,10 +170,12 @@ func (watcher Watcher) startBuilding(ctx context.Context, scope string) {
 }
 
 func (service *Service) setLaunchStage(scope string, stage LaunchStage, text string) {
-	service.mu.Lock()
-	defer service.mu.Unlock()
-	stored, err := service.read(scope)
-	if err != nil || stored.Launch == nil {
+	stored, done, err := service.open(scope, "")
+	if err != nil {
+		return
+	}
+	defer done()
+	if stored.Launch == nil {
 		return
 	}
 	now := service.now()
@@ -180,20 +187,12 @@ func (service *Service) setLaunchStage(scope string, stage LaunchStage, text str
 	_ = service.write(stored)
 }
 
-func (service *Service) readLocked(scope string) (record, error) {
-	service.mu.Lock()
-	defer service.mu.Unlock()
-	return service.read(scope)
-}
-
 // ActiveLaunches lists the apps still being launched, by project, with their
 // stage.
 func (service *Service) ActiveLaunches(_ context.Context) (map[string]LaunchStage, error) {
-	service.mu.Lock()
-	defer service.mu.Unlock()
 	launches := map[string]LaunchStage{}
 	for _, scope := range service.projectScopes() {
-		stored, err := service.read(scope)
+		stored, err := service.sharedOf(scope)
 		if err != nil {
 			return nil, err
 		}

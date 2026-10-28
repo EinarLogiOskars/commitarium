@@ -47,6 +47,9 @@ type Helper struct {
 	// SignIn names the agent whose login stopped the helper: the assistant
 	// starts it again once the agent works (sign_in.go).
 	SignIn string `json:"sign_in,omitempty"`
+	// Chat is the chat whose action started it, where its questions and
+	// results go (ADR-038).
+	Chat string `json:"chat,omitempty"`
 }
 
 type HelperStatus string
@@ -104,7 +107,7 @@ func (helper Helper) restart() string {
 // LookUpHelper returns a helper the assistant started in the scope, so only
 // those are answered for it.
 func (service *Service) LookUpHelper(_ context.Context, scope, id string) (Helper, error) {
-	stored, err := service.readLocked(scope)
+	stored, err := service.sharedOf(scope)
 	if err != nil {
 		return Helper{}, err
 	}
@@ -122,6 +125,7 @@ func (stored *record) follow(helper Helper) {
 	for index := range stored.Helpers {
 		if stored.Helpers[index].ID == helper.ID {
 			stored.Helpers[index].Done, stored.Helpers[index].SignIn = false, ""
+			stored.Helpers[index].Chat = helper.Chat
 			return
 		}
 	}
@@ -132,7 +136,7 @@ func (stored *record) follow(helper Helper) {
 // the assistant, a result becomes a card, and a helper that stopped short
 // wakes it to decide what next.
 func (watcher Watcher) followHelpers(ctx context.Context, scope string) {
-	stored, err := watcher.Service.readLocked(scope)
+	stored, err := watcher.Service.sharedOf(scope)
 	if err != nil {
 		return
 	}
@@ -163,19 +167,60 @@ func (watcher Watcher) followHelpers(ctx context.Context, scope string) {
 	}
 }
 
+// helpersChanged tells each chat what became of the helpers it started.
 func (service *Service) helpersChanged(ctx context.Context, scope string, states map[string]HelperState) error {
-	service.mu.Lock()
-	defer service.mu.Unlock()
-	stored, err := service.read(scope)
+	shared, err := service.sharedOf(scope)
 	if err != nil {
 		return err
 	}
+	for _, chat := range service.helperChats(scope, shared.Helpers, func(helper Helper) bool {
+		_, ok := states[helper.ID]
+		return ok
+	}) {
+		if err := service.helpersChangedIn(ctx, scope, chat, states); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// helperChats lists the chats the helpers that match go to.
+func (service *Service) helperChats(scope string, helpers []Helper, match func(Helper) bool) []string {
+	chats := make([]string, 0)
+	for _, helper := range helpers {
+		if chat := service.helperChat(scope, helper); match(helper) && !slices.Contains(chats, chat) {
+			chats = append(chats, chat)
+		}
+	}
+	return chats
+}
+
+// helperChat is the chat a helper's news goes to: the one that started it
+// while it is open, or else the most recently used.
+func (service *Service) helperChat(scope string, helper Helper) string {
+	if helper.Chat != "" {
+		if chat, err := service.chatFor(InChat(context.Background(), helper.Chat), scope); err == nil {
+			if state, err := service.readChatFile(scope, chat); err == nil && !state.Archived {
+				return chat
+			}
+		}
+	}
+	chat, _ := service.recentChat(scope)
+	return chat
+}
+
+func (service *Service) helpersChangedIn(ctx context.Context, scope, chat string, states map[string]HelperState) error {
+	stored, done, err := service.open(scope, chat)
+	if err != nil {
+		return err
+	}
+	defer done()
 	now, changed := service.now(), false
 	for index := range stored.Helpers {
 		helper := &stored.Helpers[index]
 		state, ok := states[helper.ID]
 		seen := fmt.Sprintf("%s:%d", state.Status, state.Turn)
-		if !ok || helper.Done || helper.Seen == seen {
+		if !ok || helper.Done || helper.Seen == seen || service.helperChat(scope, *helper) != stored.Chat {
 			continue
 		}
 		helper.Seen, changed = seen, true
@@ -246,7 +291,7 @@ func (stored *record) propose(helper Helper, text string, now time.Time) {
 	// The card follows the line that announces it.
 	message := stored.Messages[len(stored.Messages)-1].ID
 	stored.Actions = append(stored.Actions, Action{
-		ID: fmt.Sprintf("act_%s_%s_%d", stored.Scope, helper.ID, len(stored.Actions)+1), MessageID: message,
+		ID: fmt.Sprintf("act_%s_%s_%d", stored.idPart(), helper.ID, len(stored.Actions)+1), MessageID: message,
 		AssistantAction: card, Status: ActionProposed, UpdatedAt: now,
 	})
 }

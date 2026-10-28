@@ -110,19 +110,21 @@ func (service *Service) agentName(ctx context.Context, agentID string) string {
 	return "The assistant's agent"
 }
 
-// retrySignIn starts again the turn a conversation keeps for its agent's
-// login, when its try is due or force says the agent works again. What
-// waited meanwhile (events, the user's messages) rides along.
-func (service *Service) retrySignIn(ctx context.Context, scope string, force bool, now time.Time) error {
+// retrySignIn starts again the turn a chat keeps for its agent's login,
+// when its try is due or force says the agent works again. What waited
+// meanwhile (events, the user's messages) rides along.
+func (service *Service) retrySignIn(ctx context.Context, where chatRef, force bool, now time.Time) error {
 	settings, err := service.Readiness(ctx)
 	if err != nil || settings.Agent == "" || settings.Model == "" {
 		return err
 	}
-	service.mu.Lock()
-	defer service.mu.Unlock()
-	stored, err := service.read(scope)
-	if err != nil || stored.SignIn == nil || stored.Status == StatusRunning || stored.LastTurn == nil {
+	stored, done, err := service.open(where.scope, where.chat)
+	if err != nil {
 		return err
+	}
+	defer done()
+	if stored.SignIn == nil || stored.Status == StatusRunning || stored.LastTurn == nil {
+		return nil
 	}
 	wait := stored.SignIn
 	// The user chose another agent for the assistant: no need to wait.
@@ -140,74 +142,79 @@ func (service *Service) retrySignIn(ctx context.Context, scope string, force boo
 	return err
 }
 
-// AgentSignedIn starts again every conversation's turn that waits on the
-// agent: its login works again. The helpers it stopped are started again
-// first, so a turn kept for the sign-in hears of them too.
+// AgentSignedIn starts again every chat's turn that waits on the agent: its
+// login works again. The helpers it stopped are started again first, so a
+// turn kept for the sign-in hears of them too.
 func (service *Service) AgentSignedIn(ctx context.Context, agentID string) {
 	for _, scope := range service.helperSignInScopes(agentID) {
 		service.restartHelpers(scope, agentID)
 	}
-	for _, scope := range service.signInScopes(agentID, false) {
-		if err := service.retrySignIn(ctx, scope, true, service.now()); err != nil {
-			log.Printf("resume the assistant in %s after %q signed in: %v", scope, agentID, err)
+	for _, where := range service.signInChats(agentID, false) {
+		if err := service.retrySignIn(ctx, where, true, service.now()); err != nil {
+			log.Printf("resume the assistant in %s after %q signed in: %v", where, agentID, err)
 		}
 	}
 }
 
-// TrySignIn starts again the longest-waiting conversation turn that waits
-// for the agent's sign-in: if it works, the agent's login is back.
+// TrySignIn starts again the longest-waiting chat turn that waits for the
+// agent's sign-in: if it works, the agent's login is back.
 func (service *Service) TrySignIn(ctx context.Context, agentID string) {
-	scopes := service.signInScopes(agentID, true)
-	if len(scopes) == 0 {
+	waiting := service.signInChats(agentID, true)
+	if len(waiting) == 0 {
 		// No turn waits: a helper the login stopped is the try.
 		if helpers := service.helperSignInScopes(agentID); len(helpers) > 0 {
 			service.restartHelpers(helpers[0], agentID)
 		}
 		return
 	}
-	if err := service.retrySignIn(ctx, scopes[0], true, service.now()); err != nil {
-		log.Printf("try the assistant in %s for %q: %v", scopes[0], agentID, err)
+	if err := service.retrySignIn(ctx, waiting[0], true, service.now()); err != nil {
+		log.Printf("try the assistant in %s for %q: %v", waiting[0], agentID, err)
 	}
 }
 
-// RetryDueSignIns starts again the conversation turns whose next try is
-// due, the top-level one too.
+// RetryDueSignIns starts again the chat turns whose next try is due, at the
+// top level too.
 func (service *Service) RetryDueSignIns(ctx context.Context) {
-	for _, scope := range append(service.projectScopes(), TopLevel) {
-		if err := service.retrySignIn(ctx, scope, false, service.now()); err != nil {
-			log.Printf("retry the assistant in %s: %v", scope, err)
+	for _, where := range service.signInChats("", false) {
+		if err := service.retrySignIn(ctx, where, false, service.now()); err != nil {
+			log.Printf("retry the assistant in %s: %v", where, err)
 		}
 	}
 }
 
-// signInScopes lists the conversations waiting on the agent's login, the
-// longest waiting first; only those waiting for the user when needsUser.
-func (service *Service) signInScopes(agentID string, needsUser bool) []string {
-	service.mu.Lock()
-	defer service.mu.Unlock()
+// chatRef names a chat in a scope.
+type chatRef struct{ scope, chat string }
+
+func (where chatRef) String() string { return where.scope + "/" + where.chat }
+
+// signInChats lists the chats waiting on the agent's login (any agent's for
+// ""), the longest waiting first; only those waiting for the user when
+// needsUser.
+func (service *Service) signInChats(agentID string, needsUser bool) []chatRef {
 	type waiting struct {
-		scope string
+		where chatRef
 		since time.Time
 	}
 	found := make([]waiting, 0)
 	for _, scope := range append(service.projectScopes(), TopLevel) {
-		stored, err := service.read(scope)
-		if err != nil || stored.SignIn == nil || stored.SignIn.Agent != agentID ||
-			(needsUser && !stored.SignIn.NeedsUser) {
+		chats, err := service.chatsOf(scope)
+		if err != nil {
 			continue
 		}
-		found = append(found, waiting{scope, stored.SignIn.Since})
-	}
-	for i := 1; i < len(found); i++ {
-		for j := i; j > 0 && found[j].since.Before(found[j-1].since); j-- {
-			found[j], found[j-1] = found[j-1], found[j]
+		for _, chat := range chats {
+			if chat.SignIn == nil || (agentID != "" && chat.SignIn.Agent != agentID) ||
+				(needsUser && !chat.SignIn.NeedsUser) {
+				continue
+			}
+			found = append(found, waiting{chatRef{scope, chat.ID}, chat.SignIn.Since})
 		}
 	}
-	scopes := make([]string, 0, len(found))
+	slices.SortStableFunc(found, func(a, b waiting) int { return a.since.Compare(b.since) })
+	chats := make([]chatRef, 0, len(found))
 	for _, item := range found {
-		scopes = append(scopes, item.scope)
+		chats = append(chats, item.where)
 	}
-	return scopes
+	return chats
 }
 
 // Helpers the assistant started run in the background on its agent
@@ -236,18 +243,27 @@ func (service *Service) waitsForSignIn(
 }
 
 // restartHelpers wakes the assistant to start again the helpers in the scope
-// that the agent's login stopped.
+// that the agent's login stopped, in the chat that started each.
 func (service *Service) restartHelpers(scope, agentID string) {
-	service.mu.Lock()
-	defer service.mu.Unlock()
-	stored, err := service.read(scope)
+	shared, err := service.sharedOf(scope)
 	if err != nil {
 		return
 	}
+	for _, chat := range service.helperChats(scope, shared.Helpers, func(helper Helper) bool { return helper.SignIn == agentID }) {
+		service.restartHelpersIn(scope, chat, agentID)
+	}
+}
+
+func (service *Service) restartHelpersIn(scope, chat, agentID string) {
+	stored, done, err := service.open(scope, chat)
+	if err != nil {
+		return
+	}
+	defer done()
 	now, restarted := service.now(), false
 	for index := range stored.Helpers {
 		helper := &stored.Helpers[index]
-		if helper.SignIn != agentID {
+		if helper.SignIn != agentID || service.helperChat(stored.Scope, *helper) != stored.Chat {
 			continue
 		}
 		helper.SignIn, restarted = "", true
@@ -268,11 +284,9 @@ func (service *Service) restartHelpers(scope, agentID string) {
 // helperSignInScopes lists the projects with a helper the agent's login
 // stopped.
 func (service *Service) helperSignInScopes(agentID string) []string {
-	service.mu.Lock()
-	defer service.mu.Unlock()
 	scopes := make([]string, 0)
 	for _, scope := range append(service.projectScopes(), TopLevel) {
-		stored, err := service.read(scope)
+		stored, err := service.sharedOf(scope)
 		if err == nil && slices.ContainsFunc(stored.Helpers, func(helper Helper) bool { return helper.SignIn == agentID }) {
 			scopes = append(scopes, scope)
 		}

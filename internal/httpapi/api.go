@@ -536,6 +536,7 @@ func newAPI(
 		mux.HandleFunc("POST /api/v1/assistant/conversations/{scope}/launch", api.startLaunchHandler)
 		mux.HandleFunc("POST /api/v1/assistant/conversations/{scope}/autopilot", api.startAutopilotHandler)
 		mux.HandleFunc("DELETE /api/v1/assistant/conversations/{scope}/autopilot", api.stopAutopilotHandler)
+		api.registerChatRoutes(mux)
 	}
 	if toolchainService != nil && projects != nil && features != nil {
 		mux.HandleFunc("POST /api/v1/projects/{id}/setup", api.setUpProjectHandler)

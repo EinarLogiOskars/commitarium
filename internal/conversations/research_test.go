@@ -70,7 +70,7 @@ func TestResearchBringsItsFindingsBackToTheAssistant(t *testing.T) {
 		t.Fatalf("the research directory is still there: %v", err)
 	}
 	// The top level has no work to observe, yet the findings start its turn.
-	if err := service.wakeIfWaiting(t.Context(), TopLevel); err != nil {
+	if err := service.wakeChats(t.Context(), TopLevel); err != nil {
 		t.Fatal(err)
 	}
 	if len(worker.puts) != 2 || !strings.Contains(worker.puts[1].Instructions, "standard rate is 24%") {

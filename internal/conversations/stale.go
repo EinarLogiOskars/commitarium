@@ -79,12 +79,15 @@ func (service *Service) Settle(ctx context.Context, scope, actionID, result stri
 	if err := service.checkScope(ctx, scope); err != nil {
 		return Conversation{}, err
 	}
-	service.mu.Lock()
-	defer service.mu.Unlock()
-	stored, err := service.read(scope)
+	chat, err := service.chatOfAction(ctx, scope, actionID)
 	if err != nil {
 		return Conversation{}, err
 	}
+	stored, done, err := service.open(scope, chat)
+	if err != nil {
+		return Conversation{}, err
+	}
+	defer done()
 	for index := range stored.Actions {
 		action := &stored.Actions[index]
 		if action.ID != actionID {

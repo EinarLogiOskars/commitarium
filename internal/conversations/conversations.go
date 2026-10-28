@@ -1,5 +1,5 @@
-// Package conversations is the assistant (see ASSISTANT_PLAN.md): one
-// continuous conversation for the top level and one per project, in which the
+// Package conversations is the assistant (see ASSISTANT_PLAN.md): chats at
+// the top level and in each project (ADR-038, chats.go), in which the
 // assistant answers, proposes actions the user approves one by one, and keeps
 // notes for itself. Underneath, provider sessions are disposable: a long one is
 // replaced by a fresh one that starts from the project's state, the recent
@@ -154,11 +154,17 @@ type Action struct {
 	// already got where it leads (stale.go). It counts as applied.
 	Settled   bool      `json:"settled,omitempty"`
 	UpdatedAt time.Time `json:"updated_at"`
+	// Chat names the chat that holds it, where Service.Action answers it;
+	// it is not stored.
+	Chat string `json:"chat,omitempty"`
 }
 
-// Conversation is what the user sees of a scope's conversation.
+// Conversation is what the user sees of a chat, with its project's state.
 type Conversation struct {
-	Scope    string    `json:"scope"`
+	Scope string `json:"scope"`
+	// Chat and Title name the chat (chats.go).
+	Chat     string    `json:"chat"`
+	Title    string    `json:"title"`
 	Status   Status    `json:"status"`
 	Agent    string    `json:"agent"`
 	Model    string    `json:"model"`
@@ -235,6 +241,15 @@ type record struct {
 	// Retry is the current turn's automatic retry, while one is due or
 	// running (retry.go).
 	Retry *turnRetry `json:"retry,omitempty"`
+	// Archived, CreatedAt, and UsedAt are the chat's place in the scope's
+	// list (chats.go).
+	Archived  bool      `json:"-"`
+	CreatedAt time.Time `json:"-"`
+	UsedAt    time.Time `json:"-"`
+	// base is the project's state as read, so a write keeps what other chats
+	// changed meanwhile; elsewhere the other chats' actions, when loaded.
+	base      sharedState
+	elsewhere []Action
 }
 
 // maxSessionTurns bounds a provider session; the next turn starts fresh.
@@ -336,10 +351,13 @@ type Service struct {
 	// nudge asks the watcher to look now, as when a turn proposed actions
 	// autopilot may take over.
 	nudge chan struct{}
-	// activity is what each scope's running turn last did, in memory only
+	// activity is what each chat's running turn last did, in memory only
 	// (activity.go).
 	activityMu sync.Mutex
 	activity   map[string]liveActivity
+	// chatLocks are held by each chat's work (chats.go).
+	locksMu   sync.Mutex
+	chatLocks map[string]*sync.Mutex
 }
 
 var scopePattern = regexp.MustCompile(`^(commitarium|prj_[A-Za-z0-9]{1,64})$`)
@@ -478,19 +496,17 @@ func (service *Service) earlierDefault(ctx context.Context, settings Settings) (
 	return settings, writeJSON(service.settingsPath(), settings)
 }
 
-// answeredBefore reports whether any conversation has had a turn.
+// answeredBefore reports whether any chat has had a turn.
 func (service *Service) answeredBefore() bool {
-	entries, err := os.ReadDir(filepath.Join(service.config.Root, "conversations"))
-	if err != nil {
-		return false
-	}
-	for _, entry := range entries {
-		scope, ok := strings.CutSuffix(entry.Name(), ".json")
-		if !ok || !scopePattern.MatchString(scope) {
+	for _, scope := range append(service.projectScopes(), TopLevel) {
+		chats, err := service.chatsOf(scope)
+		if err != nil {
 			continue
 		}
-		if stored, err := service.read(scope); err == nil && stored.Turn > 0 {
-			return true
+		for _, chat := range chats {
+			if chat.Turn > 0 {
+				return true
+			}
 		}
 	}
 	return false
@@ -575,17 +591,21 @@ func (service *Service) settingsPath() string {
 	return filepath.Join(service.config.Root, "settings.json")
 }
 
-// Get returns a scope's conversation, folding in a finished turn.
+// Get returns a chat (ctx's, or the scope's most recently used one),
+// folding in a finished turn.
 func (service *Service) Get(ctx context.Context, scope string) (Conversation, error) {
 	if err := service.checkScope(ctx, scope); err != nil {
 		return Conversation{}, err
 	}
-	service.mu.Lock()
-	defer service.mu.Unlock()
-	stored, err := service.read(scope)
+	chat, err := service.chatFor(ctx, scope)
 	if err != nil {
 		return Conversation{}, err
 	}
+	stored, done, err := service.open(scope, chat)
+	if err != nil {
+		return Conversation{}, err
+	}
+	defer done()
 	if stored.Status == StatusRunning {
 		if stored, err = service.refresh(ctx, stored); err != nil {
 			return Conversation{}, err
@@ -606,14 +626,11 @@ func (service *Service) SetDeveloperMode(ctx context.Context, scope string, on b
 	if err := service.checkScope(ctx, scope); err != nil {
 		return err
 	}
-	service.mu.Lock()
-	defer service.mu.Unlock()
-	stored, err := service.read(scope)
-	if err != nil || stored.Developer == on {
-		return err
-	}
-	stored.Developer = on
-	return service.write(stored)
+	return service.updateShared(scope, func(shared *sharedState) bool {
+		changed := shared.Developer != on
+		shared.Developer = on
+		return changed
+	})
 }
 
 // SaveNotes replaces a scope's notes with the user's edit.
@@ -625,25 +642,37 @@ func (service *Service) SaveNotes(ctx context.Context, scope, notes string) (Con
 	if len(notes) > featureartifact.MaxAssistantNoteBytes {
 		return Conversation{}, fmt.Errorf("%w: the notes are too long", ErrInvalid)
 	}
-	service.mu.Lock()
-	defer service.mu.Unlock()
-	stored, err := service.read(scope)
+	chat, err := service.chatFor(ctx, scope)
 	if err != nil {
 		return Conversation{}, err
 	}
+	stored, done, err := service.open(scope, chat)
+	if err != nil {
+		return Conversation{}, err
+	}
+	defer done()
 	stored.Notes = notes
 	stored.UpdatedAt = service.now()
 	return stored.Conversation, service.write(stored)
 }
 
-// Action returns one of a scope's actions.
+// Action returns one of a scope's actions, from whichever chat holds it,
+// with Chat naming that chat.
 func (service *Service) Action(ctx context.Context, scope, actionID string) (Action, error) {
-	conversation, err := service.Get(ctx, scope)
+	if err := service.checkScope(ctx, scope); err != nil {
+		return Action{}, err
+	}
+	chat, err := service.chatOfAction(ctx, scope, actionID)
+	if err != nil {
+		return Action{}, err
+	}
+	conversation, err := service.Get(InChat(ctx, chat), scope)
 	if err != nil {
 		return Action{}, err
 	}
 	for _, action := range conversation.Actions {
 		if action.ID == actionID {
+			action.Chat = chat
 			return action, nil
 		}
 	}
@@ -668,12 +697,15 @@ func (service *Service) Resolve(ctx context.Context, scope, actionID string, sta
 	if err := service.checkScope(ctx, scope); err != nil {
 		return Conversation{}, err
 	}
-	service.mu.Lock()
-	defer service.mu.Unlock()
-	stored, err := service.read(scope)
+	chat, err := service.chatOfAction(ctx, scope, actionID)
 	if err != nil {
 		return Conversation{}, err
 	}
+	stored, done, err := service.open(scope, chat)
+	if err != nil {
+		return Conversation{}, err
+	}
+	defer done()
 	for index := range stored.Actions {
 		action := &stored.Actions[index]
 		if action.ID != actionID {
@@ -690,7 +722,10 @@ func (service *Service) Resolve(ctx context.Context, scope, actionID string, sta
 		}
 		action.ProjectID = created.ProjectID
 		if status == ActionApplied && created.Helper != nil {
-			stored.follow(*created.Helper)
+			// Its questions and results come back to this chat.
+			helper := *created.Helper
+			helper.Chat = stored.Chat
+			stored.follow(helper)
 		}
 		if status == ActionApplied && (action.Type == featureartifact.AssistantAcceptBrief ||
 			action.Type == featureartifact.AssistantApplyStack) {
@@ -723,50 +758,30 @@ func (service *Service) checkScope(ctx context.Context, scope string) error {
 	return err
 }
 
-func (service *Service) read(scope string) (record, error) {
-	contents, err := os.ReadFile(service.path(scope))
-	if errors.Is(err, os.ErrNotExist) {
-		return record{Conversation: Conversation{
-			Scope: scope, Status: StatusIdle, Messages: []Message{}, Actions: []Action{},
-		}}, nil
-	}
-	if err != nil {
-		return record{}, ErrUnavailable
-	}
-	var stored record
-	if json.Unmarshal(contents, &stored) != nil || stored.Scope != scope {
-		return record{}, ErrUnavailable
-	}
-	return stored, nil
-}
-
-func (service *Service) write(stored record) error {
-	return writeJSON(service.path(stored.Scope), stored)
-}
-
-func (service *Service) path(scope string) string {
-	return filepath.Join(service.config.Root, "conversations", scope+".json")
-}
-
-// DeleteProject forgets a project's conversation.
+// DeleteProject forgets a project's chats.
 func (service *Service) DeleteProject(_ context.Context, projectID string) error {
 	if !scopePattern.MatchString(projectID) || projectID == TopLevel {
 		return nil
 	}
 	service.mu.Lock()
 	defer service.mu.Unlock()
-	if err := os.Remove(service.path(projectID)); err != nil && !errors.Is(err, os.ErrNotExist) {
+	if err := os.Remove(service.legacyPath(projectID)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return ErrUnavailable
+	}
+	if err := os.RemoveAll(service.scopeDir(projectID)); err != nil {
 		return ErrUnavailable
 	}
 	return nil
 }
 
 func messageID(stored record, index int) string {
-	return fmt.Sprintf("msg_%s_%d", stored.Scope, index+1)
+	return fmt.Sprintf("msg_%s_%d", stored.idPart(), index+1)
 }
 
-func conversationID(scope string, session int) string {
-	digest := sha256.Sum256([]byte("assistant\x00" + scope + "\x00" + fmt.Sprint(session)))
+// conversationID names a chat's provider session: its workspace and worker
+// session. idPart is the scope for the main chat.
+func conversationID(idPart string, session int) string {
+	digest := sha256.Sum256([]byte("assistant\x00" + idPart + "\x00" + fmt.Sprint(session)))
 	return "asc_" + hex.EncodeToString(digest[:12])
 }
 

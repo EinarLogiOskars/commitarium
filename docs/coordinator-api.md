@@ -2632,11 +2632,48 @@ port, and the desktop saves it on the stack.
 
 ## The assistant
 
-The assistant (ADR-022, ASSISTANT_PLAN.md) keeps one conversation per scope:
-`commitarium` for the top level, or a project ID. Each turn runs on the
-assistant's agent as a consultant with a read-only checkout of the project's
-default branch, and returns the `assistant_turn` result: its reply, proposed
-actions, and its notes.
+The assistant (ADR-022, ASSISTANT_PLAN.md) works in scopes: `commitarium`
+for the top level, or a project ID. A scope holds many chats that share one
+assistant (ADR-038). Each turn runs on the assistant's agent as a consultant
+with a read-only checkout of the project's default branch, and returns the
+`assistant_turn` result: its reply, proposed actions, and its notes.
+
+- What belongs to the project is shared by its chats: the notes, the
+  autopilot `goal`, the work the coordinator watches, the events the
+  assistant has yet to hear, helpers, gap checks, the `launch`, and
+  `developer`. Each chat keeps its own messages, actions, `queued` messages,
+  `focus`, provider session, `failure`, and `sign_in`. A conversation answer
+  is a chat with its project's state, and names the chat in `chat` and
+  `title`.
+- `GET .../{scope}/chats` answers `{"chats": [{"id", "scope", "title",
+  "status", "archived", "used_at", "created_at", "updated_at"}]}`, the most
+  recently used first (`used_at` is when the user last wrote in it); open
+  chats only, unless `?archived=true`. `POST .../{scope}/chats` with an
+  optional `{"title"}` starts a chat and answers `201` with it as a
+  conversation; without a title, the chat is named after its first message.
+  A scope's first chat is `main`; the others are `chat_` and 16 hex digits.
+  `PATCH .../{scope}/chats/{chat}` with `{"title"}` (1 to 80 characters)
+  renames it, and `DELETE` archives it: it leaves the list, keeps its
+  history, finishes a turn it runs, and no longer receives events. Writing
+  in an archived chat brings it back. Each answers the chat; `404 not_found`
+  for a chat the scope does not have.
+- `GET .../{scope}/chats/{chat}` answers the chat as a conversation, and
+  `POST .../{scope}/chats/{chat}/messages`, `.../retry`, `PUT` and `DELETE
+  .../focus`, `POST .../actions/{actionID}/approve` and `.../dismiss`, and
+  `POST .../autopilot` work as the scope's routes below, in that chat. The
+  scope's own routes act on its most recently used open chat, so a client
+  that knows nothing of chats keeps working. An action's ID is unique across
+  a scope's chats: the scope's approve and dismiss routes find its chat.
+- Chats answer side by side: each runs its own turns, and a turn's
+  instructions add a line for each other open chat that changed since this
+  chat last answered. An event about a work order goes to the chat whose
+  action created it, or else started it; one about work an autopilot goal
+  drives, and the goal's own events, to the chat that started the goal;
+  anything else to the most recently used chat. A helper's questions and
+  results go to the chat whose action started it.
+- A scope's single conversation from before chats becomes its `main` chat
+  on first read, named after its first message, with its messages and
+  actions keeping their IDs.
 
 - `GET /api/v1/assistant/settings` answers `{"agent", "model", "ask_before",
   "max_effort", "max_running", "updated_at"}`; without saved settings, an empty agent and model (ADR-027:
@@ -2672,8 +2709,9 @@ actions, and its notes.
   refuses at Start returns the Start's code. When autopilot's action is
   refused, the assistant hears why and may choose again, at most twice in a
   row.
-- `GET /api/v1/assistant/conversations/{scope}` answers `{"scope", "status":
-  "idle"|"running", "agent", "model", "messages", "actions", "notes", "goal"}`. A
+- `GET /api/v1/assistant/conversations/{scope}` answers `{"scope", "chat",
+  "title", "status": "idle"|"running", "agent", "model", "messages",
+  "actions", "notes", "goal"}`. A
   message's `role` is `user`, `assistant`, or `event` (an outcome from
   Commitarium, or something that happened in the project's work). A finished
   turn is folded in on read. Every 20 seconds the coordinator compares each
@@ -2815,8 +2853,8 @@ actions, and its notes.
   items of that vision priority (ADR-023); approving a `start_autopilot` action
   does the same. `goal` is then `{"title", "level", "items": [{"id", "label",
   "title", "work_order_id", "done"}], "status": "active"|"done"|"stopped",
-  "started_at", "ended_at"}`. While it is active, the coordinator approves the
-  assistant's create, start, change-models, and continue actions for the goal's
+  "started_at", "ended_at", "chat"}`, where `chat` started it. While it is
+  active, the coordinator approves the assistant's create, start, change-models, and continue actions for the goal's
   items as the user would (with a new work order started, one per item, and at
   most two continues per work order), and closes duplicates it created itself,
   except premium ones, and

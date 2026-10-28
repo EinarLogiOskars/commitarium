@@ -83,8 +83,12 @@ func (watcher Watcher) gapCheck(ctx context.Context, scope string) {
 	if err != nil || !current.AssistantBuilds() || watcher.Visions == nil || watcher.Toolchains == nil {
 		return
 	}
-	stored, err := service.readLocked(scope)
+	stored, err := service.readEvery(scope)
 	if err != nil || !stored.free() {
+		return
+	}
+	if chats, err := service.chatsOf(scope); err != nil || service.busy(scope, chats) {
+		// Another chat's turn is on it already.
 		return
 	}
 	settings, err := service.Readiness(ctx)
@@ -270,7 +274,7 @@ func (stored record) handles(workOrderID string) bool {
 	if stored.writing(workOrderID) {
 		return true
 	}
-	for _, action := range stored.Actions {
+	for _, action := range stored.everyAction() {
 		if action.WorkOrderID != workOrderID {
 			continue
 		}
@@ -343,11 +347,13 @@ func dueGaps(stored record, found []gap, now time.Time) []gap {
 // tellGaps wakes the assistant with the gaps that are due, and forgets those
 // that closed, so one that opens again is told at once.
 func (service *Service) tellGaps(scope string, found []gap) error {
-	service.mu.Lock()
-	defer service.mu.Unlock()
-	stored, err := service.read(scope)
-	if err != nil || !stored.free() {
+	stored, done, err := service.open(scope, "")
+	if err != nil {
 		return err
+	}
+	defer done()
+	if !stored.free() {
+		return nil
 	}
 	open := map[string]bool{}
 	for _, item := range found {

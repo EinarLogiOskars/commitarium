@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -19,8 +20,11 @@ import (
 
 // Events (ASSISTANT_PLAN.md phase 3): the coordinator watches the work in
 // each project whose conversation the user has started, notes what happened
-// in the conversation, and wakes the assistant for what matters, one turn at
-// a time. Events that arrive while it answers wait for its next turn.
+// in a chat, and wakes the assistant there for what matters, one turn at a
+// time per chat. An event goes to the chat whose action created or started
+// its work order, autopilot's to the chat that started the goal, and the
+// rest to the most recently used chat (ADR-038). Events that arrive while a
+// chat's turn runs wait for its next turn.
 
 type RunReader interface {
 	RunsForFeature(ctx context.Context, featureID string) ([]execution.Run, error)
@@ -44,6 +48,8 @@ type Event struct {
 	Text string
 	Wake bool
 	News bool
+	// WorkOrderID is the work order it is about, which decides its chat.
+	WorkOrderID string
 }
 
 // Watcher turns changes in the projects' work into events.
@@ -117,21 +123,35 @@ func (watcher Watcher) Tick(ctx context.Context) {
 	// back to it, and is sent without a card (research.go).
 	watcher.followHelpers(ctx, TopLevel)
 	watcher.autopilot(ctx, TopLevel)
-	if err := watcher.Service.wakeIfWaiting(ctx, TopLevel); err != nil {
+	if err := watcher.Service.wakeChats(ctx, TopLevel); err != nil {
 		log.Printf("assistant events for %s: %v", TopLevel, err)
 	}
 }
 
-// wakeIfWaiting starts the turn for what waits in a conversation with no
-// project's work to observe: the top level, where research comes back and
-// the user's messages queue while the assistant answers.
-func (service *Service) wakeIfWaiting(ctx context.Context, scope string) error {
-	service.mu.Lock()
-	defer service.mu.Unlock()
-	stored, err := service.read(scope)
+// wakeChats folds in each of a scope's chats' finished turns, and starts
+// the turn for what waits in each: events, and the user's messages queued
+// while the assistant answered.
+func (service *Service) wakeChats(ctx context.Context, scope string) error {
+	chats, err := service.chatsOf(scope)
 	if err != nil {
 		return err
 	}
+	for _, chat := range chats {
+		if err := service.wakeIfWaiting(ctx, scope, chat.ID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// wakeIfWaiting folds in a chat's finished turn and starts the turn for what
+// waits in it.
+func (service *Service) wakeIfWaiting(ctx context.Context, scope, chat string) error {
+	stored, done, err := service.open(scope, chat)
+	if err != nil {
+		return err
+	}
+	defer done()
 	if stored.Status == StatusRunning {
 		// refresh writes what it folds in.
 		if stored, err = service.refresh(ctx, stored); err != nil || stored.Status == StatusRunning {
@@ -166,9 +186,7 @@ func (watcher Watcher) releaseHeld(ctx context.Context, scope string) {
 	if watcher.ReleaseImplementation == nil || watcher.Runs == nil {
 		return
 	}
-	watcher.Service.mu.Lock()
-	stored, err := watcher.Service.read(scope)
-	watcher.Service.mu.Unlock()
+	stored, err := watcher.Service.readEvery(scope)
 	if err != nil {
 		return
 	}
@@ -230,12 +248,18 @@ const maxRefusals = 2
 // the assistant with the reason so it can choose again (ADR-027: the
 // coordinator refuses agents that cannot run, but never picks others).
 func (service *Service) autopilotOutcome(scope string, action Action, applyErr error) error {
-	service.mu.Lock()
-	defer service.mu.Unlock()
-	stored, err := service.read(scope)
+	// The chat that proposed it hears what became of it.
+	chat, err := service.chatOfAction(context.Background(), scope, action.ID)
+	if errors.Is(err, ErrNotFound) {
+		chat = ""
+	} else if err != nil {
+		return err
+	}
+	stored, done, err := service.open(scope, chat)
 	if err != nil {
 		return err
 	}
+	defer done()
 	now := service.now()
 	if applyErr == nil {
 		changed := stored.Refusals != 0
@@ -394,6 +418,7 @@ func changes(previous map[string]string, current map[string]work) []Event {
 			continue
 		}
 		if event, ok := item.event(); ok {
+			event.WorkOrderID = id
 			events = append(events, event)
 		}
 	}
@@ -469,7 +494,8 @@ func (service *Service) nudgeWatcher() {
 	}
 }
 
-// projectScopes are the projects whose conversation exists.
+// projectScopes are the projects whose conversation exists: a folder of
+// chats, or a single conversation stored before chats.
 func (service *Service) projectScopes() []string {
 	entries, err := os.ReadDir(filepath.Join(service.config.Root, "conversations"))
 	if err != nil {
@@ -477,16 +503,19 @@ func (service *Service) projectScopes() []string {
 	}
 	scopes := make([]string, 0, len(entries))
 	for _, entry := range entries {
-		scope, ok := strings.CutSuffix(entry.Name(), ".json")
-		if ok && scope != TopLevel && scopePattern.MatchString(scope) {
+		scope, ok := entry.Name(), entry.IsDir()
+		if !ok {
+			scope, ok = strings.CutSuffix(entry.Name(), ".json")
+		}
+		if ok && scope != TopLevel && scopePattern.MatchString(scope) && !slices.Contains(scopes, scope) {
 			scopes = append(scopes, scope)
 		}
 	}
 	return scopes
 }
 
-// observe records a project's work, notes what changed, and wakes the
-// assistant for it when it is free.
+// observe records a project's work, notes what changed in the chat each
+// change goes to, and wakes the assistant there when it is free.
 func (service *Service) observe(
 	ctx context.Context, scope string, snapshot func(context.Context, string) (view, error),
 ) error {
@@ -495,61 +524,75 @@ func (service *Service) observe(
 		return err
 	}
 	current := seen.Work
-	service.mu.Lock()
-	defer service.mu.Unlock()
-	stored, err := service.read(scope)
+	driving := service.assistantBuilds(ctx, scope)
+	routed := map[string][]Event{}
+	err = service.updateShared(scope, func(shared *sharedState) bool {
+		events := changes(shared.Watched, current)
+		watched := make(map[string]string, len(current))
+		for id, item := range current {
+			watched[id] = item.signature()
+		}
+		changed := !sameSignatures(shared.Watched, watched)
+		shared.Watched = watched
+		chats, err := service.chatsLocked(scope)
+		if err != nil {
+			return changed
+		}
+		for _, event := range events {
+			chat := routeWorkOrder(chats, shared.Goal, event.WorkOrderID)
+			routed[chat] = append(routed[chat], event)
+		}
+		driving = driving || shared.Goal.active()
+		if shared.Goal.active() && seen.Plan != nil {
+			before := fmt.Sprint(shared.Goal.Items)
+			if shared.Goal.progress(*seen.Plan, current) {
+				now := service.now()
+				shared.Goal.Status, shared.Goal.EndedAt = GoalDone, &now
+				chat := ""
+				if shared.Goal.Chat != "" && slices.ContainsFunc(chats, func(state chatState) bool {
+					return state.ID == shared.Goal.Chat && !state.Archived
+				}) {
+					chat = shared.Goal.Chat
+				}
+				routed[chat] = append(routed[chat], Event{Text: "Autopilot finished: " + shared.Goal.Title + " is done.", Wake: true})
+			}
+			changed = changed || before != fmt.Sprint(shared.Goal.Items) || !shared.Goal.active()
+		}
+		return changed
+	})
 	if err != nil {
 		return err
 	}
-	events := changes(stored.Watched, current)
-	watched := make(map[string]string, len(current))
-	for id, item := range current {
-		watched[id] = item.signature()
+	chats := make([]string, 0, len(routed))
+	for chat := range routed {
+		chats = append(chats, chat)
 	}
-	changed := !sameSignatures(stored.Watched, watched)
-	stored.Watched = watched
-	now := service.now()
-	driving := stored.Goal.active() || service.assistantBuilds(ctx, scope)
-	if stored.Goal.active() && seen.Plan != nil {
-		before := fmt.Sprint(stored.Goal.Items)
-		if stored.Goal.progress(*seen.Plan, current) {
-			stored.Goal.Status, stored.Goal.EndedAt = GoalDone, &now
-			events = append(events, Event{Text: "Autopilot finished: " + stored.Goal.Title + " is done.", Wake: true})
+	slices.Sort(chats)
+	for _, chat := range chats {
+		if err := service.tell(scope, chat, routed[chat], driving); err != nil {
+			return err
 		}
-		changed = changed || before != fmt.Sprint(stored.Goal.Items) || !stored.Goal.active()
 	}
+	return service.wakeChats(ctx, scope)
+}
+
+// tell notes events in a chat ("" for the most recently used one), and has
+// those that need the assistant wait for its next turn there.
+func (service *Service) tell(scope, chat string, events []Event, driving bool) error {
+	stored, done, err := service.open(scope, chat)
+	if err != nil {
+		return err
+	}
+	defer done()
+	now := service.now()
 	for _, event := range events {
-		stored.Messages = append(stored.Messages, Message{
-			ID: messageID(stored, len(stored.Messages)), Role: "event", Text: event.Text, OccurredAt: now,
-		})
+		stored.addEvent(event.Text, now)
 		if event.Wake && (!event.News || driving) {
 			stored.PendingEvents = append(stored.PendingEvents, event.Text)
 		}
-		stored.UpdatedAt = now
 	}
-	if stored.Status == StatusRunning {
-		// refresh writes what it folds in.
-		if stored, err = service.refresh(ctx, stored); err != nil || stored.Status == StatusRunning {
-			if err == nil && (changed || len(events) > 0) {
-				err = service.write(stored)
-			}
-			return err
-		}
-		changed = true
-	}
-	if (len(stored.PendingEvents) == 0 && len(stored.Queued) == 0) || stored.SignIn != nil {
-		// Waiting for its agent's login, the assistant hears these with the
-		// turn it keeps (sign_in.go).
-		if changed || len(events) > 0 {
-			return service.write(stored)
-		}
-		return nil
-	}
-	settings, err := service.Readiness(ctx)
-	if err != nil || settings.Agent == "" || settings.Model == "" {
-		return service.write(stored)
-	}
-	return service.startWaitingTurn(ctx, stored, settings)
+	stored.UpdatedAt = now
+	return service.write(stored)
 }
 
 // startWaitingTurn starts the turn for what waited while the assistant was
@@ -604,26 +647,23 @@ func (service *Service) Report(_ context.Context, scope, text string) error {
 	if scope == TopLevel || !scopePattern.MatchString(scope) || text == "" {
 		return ErrNotFound
 	}
-	service.mu.Lock()
-	if _, err := os.Stat(service.path(scope)); errors.Is(err, os.ErrNotExist) {
-		service.mu.Unlock()
-		return nil
+	if chats, err := service.chatsOf(scope); err != nil || len(chats) == 0 {
+		return err
 	}
-	stored, err := service.read(scope)
+	stored, done, err := service.open(scope, "")
 	if err != nil {
-		service.mu.Unlock()
 		return err
 	}
 	// A new app's preview fails until its setup creates the stack; the launch
 	// moves along by itself, so the assistant is not woken over it.
 	if strings.HasPrefix(text, PreviewFailure) && stored.launching() {
-		service.mu.Unlock()
+		done()
 		return nil
 	}
 	// The same report from two windows is told once.
 	if count := len(stored.Messages); count > 0 && stored.Messages[count-1].Role == "event" &&
 		stored.Messages[count-1].Text == text {
-		service.mu.Unlock()
+		done()
 		return nil
 	}
 	now := service.now()
@@ -634,7 +674,7 @@ func (service *Service) Report(_ context.Context, scope, text string) error {
 	}
 	stored.UpdatedAt = now
 	err = service.write(stored)
-	service.mu.Unlock()
+	done()
 	if err == nil {
 		service.nudgeWatcher()
 	}
@@ -674,10 +714,8 @@ func (service *Service) wake(ctx context.Context, scope, note, text string, hand
 	if err := service.checkScope(ctx, scope); err != nil {
 		return err
 	}
-	service.mu.Lock()
-	stored, err := service.read(scope)
+	stored, done, err := service.open(scope, "")
 	if err != nil {
-		service.mu.Unlock()
 		return err
 	}
 	now := service.now()
@@ -690,7 +728,7 @@ func (service *Service) wake(ctx context.Context, scope, note, text string, hand
 	stored.PendingEvents = append(stored.PendingEvents, text)
 	stored.UpdatedAt = now
 	err = service.write(stored)
-	service.mu.Unlock()
+	done()
 	if err == nil {
 		service.nudgeWatcher()
 	}
