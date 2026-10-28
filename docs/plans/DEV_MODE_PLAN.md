@@ -1,0 +1,97 @@
+# Chat-first Developer Mode: Implementation Plan
+
+**Status:** proposed 2026-10-28, [ADR-038](../adr/0038-developer-mode-is-chat-first.md).
+
+The slices build bottom-up. D1 and D2 change the conversation store and API
+without changing what the user sees. D3 puts the new shell behind Developer
+mode, and D4–D6 fill it. The old project page stays until D6 replaces it, so
+every slice ships on its own.
+
+## D1: Chats in a project (coordinator)
+
+- Split the conversation record:
+  - **project state:** goal, watched work, pending events, helpers, notes,
+    gaps, auto-continues, refusals, `builds_since`, preview failure;
+  - **chat:** messages, actions, queued messages, focus, provider session,
+    turn, retry, failure, sign-in wait, last turn.
+- Store chats at `conversations/<scope>/<chat>.json` and the project state
+  at `conversations/<scope>/project.json`. Migrate an old
+  `conversations/<scope>.json` into one chat, titled from its first user
+  message.
+- API:
+  - `GET/POST .../assistant/{scope}/chats` lists and creates chats;
+    `PATCH`/`DELETE .../chats/{chat}` renames and archives one.
+  - Messages, retry, focus, actions and the stream take `{chat}`.
+  - The old scope-only routes act on the most recently used chat, so the
+    current desktop keeps working until D3.
+- Turns run per chat, with the service lock held only for project-state
+  writes. Each turn's instructions add one line per other chat that changed
+  since this chat last spoke.
+- Route events to the chat whose action created or started the work order,
+  autopilot's to the chat that started the goal, and the rest to the most
+  recently used chat.
+- Tests:
+  - migration;
+  - two chats answering at once;
+  - event routing;
+  - the old routes.
+
+## D2: Loose chats and "make it a project" (coordinator)
+
+- The top level holds many chats the same way. A loose chat proposes
+  `plan_project` (Developer) or `create_app`, as today.
+- `POST .../assistant/commitarium/chats/{chat}/project` creates the project
+  through the same path as `plan_project`. It moves the chat under the new
+  scope as its first chat, and starts the vision writer with the chat's
+  transcript.
+- Test: the chat lands in the project, and the vision writer receives the
+  transcript.
+
+## D3: The chat shell (desktop, Developer mode)
+
+- A new Developer-mode layout replaces Projects + project page:
+  - **sidebar:** projects as expandable groups of chats, loose chats, New
+    chat, Search;
+  - **centre:** the chat, built from the drawer's conversation parts pulled
+    out into `ChatView`, which the app window's drawer keeps using;
+  - **right column:** the cards, empty placeholders until D4.
+- Dots per project and chat: pulsing for running work, amber for waiting
+  on the user, read from the same attention data the Inbox uses.
+- Header: project name, mode, and "Make it a project" on a loose chat.
+- A work order card in the chat shows the work order's live state and
+  pulses while it runs.
+
+## D4: Project, Work orders, Preview and Sync cards (desktop)
+
+- **Project:** progress by priority from the vision plan, the stack, and a
+  link to the vision.
+- **Work orders:**
+  - running and waiting work, with what each waits on (`queued_after`, the
+    ceiling);
+  - the merge queue in order, from the work order list's queue position;
+  - done out of total.
+- **Preview:** the preview rail item reshaped into a card.
+- **Sync:** `ProjectSyncCard` reshaped into a card.
+
+## D5: Agents card (coordinator + desktop)
+
+- `GET .../projects/{id}/agents-at-work` returns each agent session across
+  the project's open runs and helpers: agent, model, role, work order and
+  whether it works now.
+- Card: two columns of small agent cards, pulsing while working. "All"
+  opens a grid in an overlay once more than four are at work.
+
+## D6: Pages open in the centre; retire the old project page
+
+- A work order's page, the vision, the Planning workspace, a work session,
+  and project settings open in the centre, with "Back to chat".
+- Remove the old Developer-mode project page (rail, dashboard, drawer).
+  Move anything it still offers to a card or the sidebar.
+- Update `docs/ui-*.md` and the README's Developer mode section.
+
+## Later
+
+- The pulse hand-over animation from one work order to the next (UI
+  overhaul).
+- Search across chats.
+- Pinning or reordering projects in the sidebar.
