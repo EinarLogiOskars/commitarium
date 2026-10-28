@@ -20,6 +20,13 @@ type planningVisions struct {
 	updates  []vision.PlanningUpdate
 	finished int
 	paused   int
+	// described are the descriptions a new app's vision is written from.
+	described []string
+}
+
+func (stub *planningVisions) Start(_ context.Context, _, _, _ string, _ vision.Mode, message, _ string) (vision.Session, bool, error) {
+	stub.described = append(stub.described, message)
+	return vision.Session{ID: "vis_1"}, true, nil
 }
 
 func (stub *planningVisions) Get(context.Context, string) (vision.Vision, error) {

@@ -66,7 +66,9 @@ func newLooseChats(t *testing.T, actions ...featureartifact.AssistantAction) loo
 	}
 	recorder := &wakeRecorder{Service: service, woken: map[string]string{}}
 	visions := &planningVisions{}
-	handler := NewWithWorkspaceRealWorkflowDeletionAndModels(projects, &recordingFeatureService{}, nil, nil, nil, nil,
+	// New apps are made through the same projects.
+	apps := appProjects{&assistantModeProjects{recordingProjectService: projects}}
+	handler := NewWithWorkspaceRealWorkflowDeletionAndModels(apps, &recordingFeatureService{}, nil, nil, nil, nil,
 		nil, nil, nil, nil, nil, nil, recorder, agents, visions)
 	return looseChats{service: recorder, projects: projects, visions: visions, handler: handler}
 }
@@ -145,6 +147,45 @@ func TestALooseChatBecomesAProject(t *testing.T) {
 	}
 	if code, _, _ := loose.call(t, http.MethodPost, route, `{"name":"Bank import"}`); code != http.StatusNotFound {
 		t.Fatalf("a moved chat moved again: %d", code)
+	}
+}
+
+// Approving a create_app card in a loose chat, in Developer mode, moves the
+// chat into the new app as its chat, with its applied card; the app's
+// launch is told there and its vision is written from the brief.
+func TestApprovingCreateAppMovesTheChat(t *testing.T) {
+	loose := newLooseChats(t, featureartifact.AssistantAction{
+		Type: featureartifact.AssistantCreateApp, Reason: "Clear and small", Title: "Pep Talk",
+		Description: "A random motivational quote each time it opens.", AppBrief: "About 150 bundled quotes.",
+	})
+	if err := loose.service.SetDeveloperMode(t.Context(), conversations.TopLevel, true); err != nil {
+		t.Fatal(err)
+	}
+	chat := loose.talk(t, "A tiny app that gives a motivational quote every time it opens?")
+	_, conversation, _ := loose.call(t, http.MethodGet, "/api/v1/assistant/conversations/commitarium/chats/"+chat, "")
+	if len(conversation.Actions) != 1 {
+		t.Fatalf("actions = %+v", conversation.Actions)
+	}
+	code, moved, body := loose.call(t, http.MethodPost,
+		"/api/v1/assistant/conversations/commitarium/actions/"+conversation.Actions[0].ID+"/approve", `{}`)
+	if code != http.StatusOK {
+		t.Fatalf("status %d: %s", code, body)
+	}
+	if moved.Scope != "prj_bank" || len(moved.Actions) != 1 || moved.Actions[0].Status != conversations.ActionApplied ||
+		moved.Messages[0].Text != "A tiny app that gives a motivational quote every time it opens?" {
+		t.Fatalf("moved = %s", body)
+	}
+	if moved.Launch == nil || !strings.Contains(moved.Notes, "About 150 bundled quotes.") {
+		t.Fatalf("the moved chat has launch %+v and notes %q", moved.Launch, moved.Notes)
+	}
+	if len(loose.visions.described) != 1 || !strings.Contains(loose.visions.described[0], "About 150 bundled quotes.") {
+		t.Fatalf("the vision was described as %q", loose.visions.described)
+	}
+	if chats, _ := loose.service.Chats(t.Context(), "prj_bank", true); len(chats) != 1 {
+		t.Fatalf("the app has chats %+v", chats)
+	}
+	if left, _ := loose.service.Chats(t.Context(), conversations.TopLevel, true); len(left) != 0 {
+		t.Fatalf("the top level kept %+v", left)
 	}
 }
 

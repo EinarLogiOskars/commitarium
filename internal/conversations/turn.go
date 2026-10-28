@@ -461,7 +461,8 @@ func rules(scope string, settings Settings) string {
 			"are the only actions you take at the top level, besides research; Commitarium then plans, sets up, " +
 			"and builds the app, or opens the project's planning workspace. Each chat here is a loose chat, not " +
 			"yet part of a project: research, sketch, and explain freely, but create no work; once the user makes " +
-			"it a project, this chat moves into the project with everything said in it."
+			"it a project, or approves your plan_project (or create_app, in Developer mode), this chat moves into the new app or " +
+			"project with everything said in it, and you carry on there."
 	}
 	maxEffort := settings.MaxEffort
 	if maxEffort == "" {

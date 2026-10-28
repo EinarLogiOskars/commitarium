@@ -23,7 +23,9 @@ import (
 // assistant writes the vision and sets the stack up on its own agent, and
 // chooses each work order's agents and models as autopilot builds the app.
 // Each step goes through the API's own route, so it keeps that route's
-// checks; a retry repeats them with the same keys.
+// checks; a retry repeats them with the same keys. Its launch and vision
+// start once the card is applied (startApp), after the chat that proposed
+// it has moved in, in Developer mode (ADR-038).
 func (api *API) applyCreateApp(w http.ResponseWriter, r *http.Request, action conversations.Action) (string, string, bool) {
 	ctx := r.Context()
 	key := "assistant-" + action.ID
@@ -45,34 +47,53 @@ func (api *API) applyCreateApp(w http.ResponseWriter, r *http.Request, action co
 		return "", "", false
 	}
 	base := "/api/v1/projects/" + url.PathEscape(created.ID)
-	// Its launch moves the new app along; setting it to build everything
-	// hands nothing over yet.
+	// Setting it to build everything hands nothing over yet.
 	ctx = context.WithValue(ctx, ownSetup{}, true)
-	notes := ""
-	if action.AppBrief != "" {
-		notes = "The app's brief, settled with the user before it was created:\n\n" + action.AppBrief
-	}
-	conversation := "/api/v1/assistant/conversations/" + url.PathEscape(created.ID)
-	steps := []struct {
-		method, path, key string
-		body              any
-	}{
+	steps := []appStep{
 		// The user asked the assistant to create it, so the assistant builds
 		// everything (ADR-027).
 		{http.MethodPut, base + "/assistant-mode", "", map[string]project.AssistantMode{"assistant_mode": project.AssistantModeBuilds}},
 		{http.MethodPut, base + "/app", "", map[string]bool{"app": true}},
+	}
+	if !api.runAppSteps(w, ctx, action, steps) {
+		return "", "", false
+	}
+	return fmt.Sprintf("Created the app “%s”. It is being planned, set up, and built.", action.Title), created.ID, true
+}
+
+// startApp starts the app applyCreateApp created: its assistant keeps the
+// brief in its notes, its launch moves it along, and its vision is written
+// from the brief.
+func (api *API) startApp(w http.ResponseWriter, r *http.Request, action conversations.Action, projectID string) bool {
+	ctx := context.WithValue(r.Context(), ownSetup{}, true)
+	notes := ""
+	if action.AppBrief != "" {
+		notes = "The app's brief, settled with the user before it was created:\n\n" + action.AppBrief
+	}
+	conversation := "/api/v1/assistant/conversations/" + url.PathEscape(projectID)
+	return api.runAppSteps(w, ctx, action, []appStep{
 		{http.MethodPut, conversation + "/notes", "", map[string]string{"notes": notes}},
 		{http.MethodPost, conversation + "/launch", "", nil},
-		{http.MethodPost, base + "/vision/assistant", key + ":vision", map[string]string{"mode": "describe", "message": appBrief(action)}},
-	}
+		{http.MethodPost, "/api/v1/projects/" + url.PathEscape(projectID) + "/vision/assistant",
+			"assistant-" + action.ID + ":vision", map[string]string{"mode": "describe", "message": appBrief(action)}},
+	})
+}
+
+// appStep is one request to the API's own routes while a new app starts.
+type appStep struct {
+	method, path, key string
+	body              any
+}
+
+func (api *API) runAppSteps(w http.ResponseWriter, ctx context.Context, action conversations.Action, steps []appStep) bool {
 	for _, step := range steps {
 		if err := api.callOwn(ctx, step.method, step.path, step.key, step.body, nil); err != nil {
 			writeError(w, http.StatusBadGateway, "app_not_started",
 				fmt.Sprintf("the app %q was created, but starting it failed: %v", action.Title, err))
-			return "", "", false
+			return false
 		}
 	}
-	return fmt.Sprintf("Created the app “%s”. It is being planned, set up, and built.", action.Title), created.ID, true
+	return true
 }
 
 // applyPlanProject creates the project the user and the assistant agreed to
