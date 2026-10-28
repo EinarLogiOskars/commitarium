@@ -19,6 +19,7 @@ import {
   workSignals,
   type ChatWork,
 } from "./chatActivity";
+import { ProjectCards } from "./ProjectCards";
 import { Projects } from "./Projects";
 
 const TOP = "commitarium";
@@ -461,26 +462,19 @@ export function DevShell({
             </button>
           </section>
         ) : (
-          (["Project", "Work orders", "Agents", "Preview", "Sync"] as const).map((card) => (
-            <section key={card} className="shell-card">
-              <h2 className="shell-card__head">{card}</h2>
-              <p className="muted shell-card__text">{PLACEHOLDER[card]}</p>
-            </section>
-          ))
+          <ProjectCards
+            key={selection.scope}
+            projectId={selection.scope}
+            project={project}
+            attention={attention}
+            onOpenOrder={onOpenOrder}
+            onOpenProjectPage={onOpenProjectPage}
+          />
         )}
       </aside>
     </div>
   );
 }
-
-// Until the cards are filled in (D4, D5), each says where to find it today.
-const PLACEHOLDER: Record<string, string> = {
-  Project: "The vision's progress and the stack. For now, they're on the project page.",
-  "Work orders": "What runs, what waits, and the merge queue. For now, see the project page.",
-  Agents: "The agents at work in the project. For now, each work order's page shows its own.",
-  Preview: "The app's preview. For now, it's on the project page.",
-  Sync: "Pulling and pushing the code. For now, it's on the project page.",
-};
 
 function describe(e: unknown): string {
   return e instanceof ApiError ? e.message : String(e);

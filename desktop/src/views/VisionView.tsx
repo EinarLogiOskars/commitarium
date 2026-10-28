@@ -14,6 +14,7 @@ import { ApiError } from "../api/client";
 import { startAutopilot } from "../api/assistant";
 import { ASSISTANT_CHANGED, WORK_CHANGED } from "./AssistantDrawer";
 import { ORDER_STATE_LABEL } from "./chatActivity";
+import { itemDone } from "./projectCardData";
 import { Markdown } from "./Markdown";
 import { PlanningWorkspace } from "./PlanningWorkspace";
 import { openAssistantOn } from "../attention/askAssistant";
@@ -644,7 +645,7 @@ function ItemList({
         const label = `${prefix}.${index + 1}`;
         const leaf = !item.items?.length;
         const linked = item.feature_id ? features.get(item.feature_id) : undefined;
-        const done = allDone(item, features);
+        const done = itemDone(item, features);
         return (
           <li key={item.id} className="vision__item">
             <div className="vision__row">
@@ -688,14 +689,6 @@ function ItemList({
       })}
     </ol>
   );
-}
-
-// An item is done when the project already delivered it or its work order
-// merged; a group is done when every item under it is.
-function allDone(item: VisionItem, features: Map<string, Feature>): boolean {
-  if (!item.items?.length)
-    return !!item.done || features.get(item.feature_id ?? "")?.state === "completed";
-  return item.items.every((child) => allDone(child, features));
 }
 
 function VisionEditor({
