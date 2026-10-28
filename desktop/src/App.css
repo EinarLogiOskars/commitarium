@@ -1010,6 +1010,15 @@ body {
   margin: 0 0 6px;
   color: var(--bad);
 }
+/* Hidden while the window is captured, so the screenshot is only the app. */
+.assistant--capturing {
+  visibility: hidden;
+}
+.composer__screenshot-hint {
+  margin: 0 0 6px;
+  border-color: var(--border);
+  color: var(--text);
+}
 .attach-button {
   flex: none;
   padding: 6px 8px;

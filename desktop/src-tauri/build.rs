@@ -4,6 +4,8 @@
 // A test keeps this list, the handler, and the main window's set the same.
 const COMMANDS: &[&str] = &[
     "open_app_window",
+    "webview_snapshot",
+    "webview_snapshot_supported",
     "agent_cli_status",
     "coordinator_freshness",
     "rebuild_coordinator",
