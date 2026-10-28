@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/EinarLogiOskars/commitarium/internal/execution"
+	"github.com/EinarLogiOskars/commitarium/internal/feature"
 	"github.com/EinarLogiOskars/commitarium/internal/project"
 	"github.com/EinarLogiOskars/commitarium/internal/workerhttp"
 )
@@ -202,5 +203,108 @@ func TestSelfCorrectionPromptsHideSecretsAndStayShort(t *testing.T) {
 	if len(prompt) > maxCorrectionReason+400 || !strings.Contains(prompt, "…") || !strings.HasPrefix(prompt,
 		"Commitarium could not accept your last turn: push to https://[REDACTED]@forgejo.local") {
 		t.Errorf("prompt not bounded on a rune boundary: %d bytes", len(prompt))
+	}
+}
+
+// copyAttempt scripts the turn to as a copy of the scripted turn from.
+func copyAttempt(stub *conversationalRemoteLeadWorker, sessionID, from, to string) {
+	source := workerhttp.AttemptReference{SessionID: sessionID, AttemptID: from}
+	target := workerhttp.AttemptReference{SessionID: sessionID, AttemptID: to}
+	initial, terminal := stub.initial[source], stub.terminal[source]
+	initial.AttemptReference, terminal.AttemptReference = target, target
+	events := append([]workerhttp.Event(nil), stub.events[source]...)
+	for index := range events {
+		events[index].AttemptReference = target
+	}
+	stub.initial[target], stub.terminal[target], stub.events[target] = initial, terminal, events
+}
+
+// correctionRequest returns the turn that handed a refused turn back to the
+// agent in role.
+func (fixture *baseUpdateFixture) correctionRequest(t *testing.T, role workerhttp.Role) workerhttp.PutAttemptRequest {
+	t.Helper()
+	for _, request := range fixture.requests() {
+		if request.Assignment.Role == role && strings.Contains(request.Instructions, "Commitarium's correction:") {
+			return request
+		}
+	}
+	t.Fatalf("no refused turn was handed back to the %s", role)
+	return workerhttp.PutAttemptRequest{}
+}
+
+// The lead's implementation hand-off and its answer to a review are handed
+// back the same way, in the lead's own conversation.
+func TestRefusedLeadTurnsAreHandedBack(t *testing.T) {
+	refusal := func() error {
+		return fmt.Errorf("%w: step 2 \"edit\" is in_progress: record its commit with "+
+			"'commitarium-artifact plan complete edit <lowercase-commit-id>'", errImplementationChecklist)
+	}
+	for _, test := range []struct {
+		name, from, to string
+		reviewed       bool
+		prepare        func(*baseUpdateFixture)
+	}{
+		{"implementation", ":implementation:1", ":implementation:2", false, func(fixture *baseUpdateFixture) {
+			fixture.workspace.publicationRefusals = map[int]error{1: refusal()}
+		}},
+		{"review response", ":correction:1", ":correction:1:2", true, func(fixture *baseUpdateFixture) {
+			fixture.workspace.responseRefusals = map[int]error{1: refusal()}
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			runID := "run_self_correct_lead_" + strings.ReplaceAll(test.name, " ", "_")
+			leadID := remoteLeadSessionID(runID)
+			fixture := startBaseUpdateRun(t, runID, test.reviewed, project.MergePolicyRequireUserApproval, 0,
+				func(fixture *baseUpdateFixture) {
+					copyAttempt(fixture.worker, leadID, leadID+test.from, leadID+test.to)
+					test.prepare(fixture)
+				})
+			fixture.waitAtMergeGate(t)
+			request := fixture.correctionRequest(t, workerhttp.RoleLead)
+			lead, err := fixture.executions.GetSession(t.Context(), leadID)
+			if err != nil {
+				t.Fatalf("load lead: %v", err)
+			}
+			if request.Mode != workerhttp.AttemptModeResume || request.ProviderSessionID != lead.ProviderSessionID ||
+				!strings.Contains(request.Instructions, "Commitarium's correction:\nCommitarium could not accept your last turn: ") ||
+				!strings.Contains(request.Instructions, "'commitarium-artifact plan complete edit <lowercase-commit-id>'") {
+				t.Fatalf("the refused turn was not handed back in the lead's conversation: %+v", request)
+			}
+			if corrections := fixture.selfCorrections(t); len(corrections) != 1 {
+				t.Fatalf("self-corrections = %+v", corrections)
+			}
+		})
+	}
+}
+
+func TestARefusedUpdateOntoMainIsHandedBack(t *testing.T) {
+	runID := "run_self_correct_update"
+	leadID := remoteLeadSessionID(runID)
+	fixture := startBaseUpdateRun(t, runID, false, project.MergePolicyRequireUserApproval, 1,
+		func(fixture *baseUpdateFixture) {
+			copyAttempt(fixture.worker, leadID, baseUpdateAttemptForVersion(leadID, 1, 1),
+				baseUpdateAttemptForVersion(leadID, 1, 2))
+			fixture.workspace.baseUpdateRefusals = map[int]error{1: fmt.Errorf(
+				"verify update onto main: %w: the update comment is missing", errTestReviewMarker)}
+		})
+	fixture.waitAtMergeGate(t)
+	fixture.workspace.mainHead = baseUpdateMainHead
+	fixture.workspace.mergeErrs = []error{baseUpdateNoMerge}
+	if _, _, err := fixture.starter.Merge(t.Context(), fixture.runID, "merge-behind-main"); err != nil {
+		t.Fatalf("merge behind main: %v", err)
+	}
+	fixture.waitFor(t, "the merge gate after the corrected update", func(run execution.Run, _ feature.Feature) bool {
+		return run.Status == execution.RunStatusWaitingForUser && run.WaitKind == execution.RunWaitKindMergeGate &&
+			fixture.leadCheckpoint(t).AttemptID == baseUpdateAttemptForVersion(leadID, 1, 2)
+	})
+	if fixture.workspace.baseUpdateVerifyCalls != 2 {
+		t.Fatalf("update checked %d times, want it and its correction", fixture.workspace.baseUpdateVerifyCalls)
+	}
+	request := fixture.correctionRequest(t, workerhttp.RoleLead)
+	if request.Mode != workerhttp.AttemptModeResume || !strings.Contains(request.Instructions, "the update comment is missing") {
+		t.Fatalf("the refused update was not handed back: %+v", request)
+	}
+	if corrections := fixture.selfCorrections(t); len(corrections) != 1 {
+		t.Fatalf("self-corrections = %+v", corrections)
 	}
 }
