@@ -984,11 +984,13 @@ body {
 .status-line {
   margin: 0 0 6px;
 }
-/* The message box every composer shares (Composer.tsx): text that grows up
-   to six lines, then a bar with the +, any controls, and the send button. */
+/* The message box every composer shares (Composer.tsx): one line of +,
+   text that grows up to six lines, and the return key. */
 .composer-box {
   display: flex;
-  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+  padding: 6px 8px;
   border: 1px solid var(--border);
   border-radius: 12px;
   background: var(--panel);
@@ -997,13 +999,13 @@ body {
   opacity: 0.7;
 }
 .composer-box__text {
-  display: block;
-  width: 100%;
+  flex: 1;
+  min-width: 0;
   box-sizing: border-box;
   resize: none;
   font: inherit;
   line-height: 1.45;
-  padding: 10px 12px 4px;
+  padding: 5px 4px;
   border: none;
   outline: none;
   background: transparent;
@@ -1014,43 +1016,32 @@ body {
 .composer-box__text:focus {
   outline: none;
 }
-.composer-box__bar {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 4px 6px 6px;
-}
-.composer-box__spacer {
-  flex: 1;
-}
 .composer-box__plus,
 .composer-box__send {
+  flex: none;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   width: 30px;
   height: 30px;
   padding: 0;
+  border: none;
   border-radius: 8px;
-}
-.composer-box__plus {
-  border: 1px solid var(--border);
   background: transparent;
   color: var(--muted);
 }
-.composer-box__plus:hover:not(:disabled) {
+.composer-box__plus:hover:not(:disabled),
+.composer-box__send:hover:not(:disabled) {
   color: var(--text);
-  border-color: var(--muted);
-}
-.composer-box__send {
-  border: none;
-  background: var(--accent);
-  color: var(--accent-text);
+  background: color-mix(in srgb, var(--text) 8%, transparent);
 }
 .composer-box__send:disabled {
-  background: var(--border);
-  color: var(--muted);
+  opacity: 0.4;
   cursor: default;
+}
+.composer-box .seg {
+  align-self: center;
+  height: 26px;
 }
 .composer-menu {
   position: relative;

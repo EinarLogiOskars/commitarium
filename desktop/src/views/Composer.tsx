@@ -9,10 +9,10 @@ import {
   type ReactNode,
 } from "react";
 
-// The message box every composer shares: the text grows with what is typed
-// up to MAX_LINES and then scrolls, the + opens what can go along with the
-// message (files, a screenshot of the app), and the send button sits inside
-// the box. Enter sends; the composer's own onKeyDown decides that.
+// The message box every composer shares, on one line: the + opens what can
+// go along with the message (files, a screenshot of the app), the text grows
+// with what is typed up to MAX_LINES and then scrolls, and the return key
+// sends. The + and the return stay on the last line as the text grows. Enter sends; the composer's own onKeyDown decides that.
 
 const MAX_LINES = 6;
 
@@ -76,6 +76,8 @@ export function ComposerBox({
 
   return (
     <div className={`composer-box${disabled ? " composer-box--disabled" : ""}`}>
+      <PlusMenu onFiles={onFiles} filesDisabled={filesDisabled} options={options} />
+      {leading}
       <textarea
         ref={(el) => {
           text.current = el;
@@ -91,20 +93,15 @@ export function ComposerBox({
         onKeyDown={onKeyDown}
         onPaste={onPaste}
       />
-      <div className="composer-box__bar">
-        <PlusMenu onFiles={onFiles} filesDisabled={filesDisabled} options={options} />
-        {leading}
-        <span className="composer-box__spacer" />
-        <button
-          className="composer-box__send"
-          onClick={onSubmit}
-          disabled={submitDisabled}
-          aria-label={submitLabel}
-          title={submitLabel}
-        >
-          {submitIcon === "pause" ? <PauseIcon /> : <SendIcon />}
-        </button>
-      </div>
+      <button
+        className="composer-box__send"
+        onClick={onSubmit}
+        disabled={submitDisabled}
+        aria-label={submitLabel}
+        title={submitLabel}
+      >
+        {submitIcon === "pause" ? <PauseIcon /> : <ReturnIcon />}
+      </button>
     </div>
   );
 }
@@ -210,11 +207,11 @@ function PlusIcon() {
   );
 }
 
-function SendIcon() {
+function ReturnIcon() {
   return (
     <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden>
       <path
-        d="M8 13V3.5M3.5 8 8 3.5 12.5 8"
+        d="M13 3.5v4.5a2 2 0 0 1-2 2H3.5M6.5 7 3.5 10l3 3"
         fill="none"
         stroke="currentColor"
         strokeWidth="1.8"
