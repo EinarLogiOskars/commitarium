@@ -82,6 +82,11 @@ func (starter *RemoteLeadStarter) planSelfCorrection(
 // back: the check's reason, without secrets, and bounded.
 func selfCorrectionPrompt(cause error) string {
 	reason := strings.TrimSuffix(strings.TrimSpace(sanitizeReason(cause.Error())), ".")
+	var incomplete acceptanceResultsIncomplete
+	if errors.As(cause, &incomplete) {
+		// As a guided Continue tells it (continueOrVerifyReviewTurn).
+		reason += ". " + strings.TrimSuffix(acceptanceResultsGuidance, ".")
+	}
 	if len(reason) > maxCorrectionReason {
 		cut := maxCorrectionReason
 		for cut > 0 && !utf8.RuneStart(reason[cut]) {
@@ -133,9 +138,10 @@ func selfCorrectionReason(agentName string, plan selfCorrection) string {
 	return ""
 }
 
-// correctAfterRelease hands a refused turn back once the run is free: the
-// refusal is noted while the turn's goroutine still holds the run, and
-// recovery claims it. A run nobody holds is corrected at once.
+// correctAfterRelease hands a refused turn back as soon as the run is free:
+// the refusal is noted while the turn's goroutine still holds the run, and
+// recovery claims it, so release starts the correction. A run nobody holds
+// is corrected at once.
 func (starter *RemoteLeadStarter) correctAfterRelease(runID, actionID, prompt string) {
 	correct := func() {
 		ctx := starter.lifetime
@@ -152,13 +158,14 @@ func (starter *RemoteLeadStarter) correctAfterRelease(runID, actionID, prompt st
 		}
 	}
 	starter.activeMu.Lock()
-	defer starter.activeMu.Unlock()
 	if _, held := starter.active[runID]; held {
 		if starter.corrections == nil {
 			starter.corrections = map[string]func(){}
 		}
 		starter.corrections[runID] = correct
+		starter.activeMu.Unlock()
 		return
 	}
-	go correct()
+	starter.activeMu.Unlock()
+	correct()
 }

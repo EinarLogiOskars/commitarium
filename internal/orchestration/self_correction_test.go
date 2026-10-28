@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/EinarLogiOskars/commitarium/internal/execution"
 	"github.com/EinarLogiOskars/commitarium/internal/feature"
@@ -33,6 +34,21 @@ func startSelfCorrectedReview(t *testing.T, runID string, refusals map[int]error
 					"I posted the review again with its marker.")
 			}
 		})
+}
+
+// spendSelfCorrections records the corrections a refusal by check (one
+// that words itself, with no outer context) gets, so it blocks at once.
+func (fixture *baseUpdateFixture) spendSelfCorrections(t *testing.T, check *turnRejection) {
+	t.Helper()
+	for try := 1; try <= MaxSelfCorrections; try++ {
+		if err := fixture.executions.RecordRunRecovery(t.Context(), execution.Recovery{
+			ID: fmt.Sprintf("spent-%d", try), RunID: fixture.runID, How: execution.RecoverySelfCorrection,
+			Fingerprint: execution.BlockerFingerprint(check.kind, check.check, check.check),
+			Guidance:    "an earlier correction", CreatedAt: time.Now().UTC(),
+		}); err != nil {
+			t.Fatalf("spend self-corrections: %v", err)
+		}
+	}
 }
 
 func (fixture *baseUpdateFixture) selfCorrections(t *testing.T) []execution.Recovery {
@@ -306,5 +322,19 @@ func TestARefusedUpdateOntoMainIsHandedBack(t *testing.T) {
 	}
 	if corrections := fixture.selfCorrections(t); len(corrections) != 1 {
 		t.Fatalf("self-corrections = %+v", corrections)
+	}
+}
+
+// A refusal that words its check itself (the acceptance results) is named by
+// the check, not by its first clause, which names the test.
+func TestARefusalWithoutContextKeepsItsFingerprint(t *testing.T) {
+	first := acceptanceResultsIncomplete(`acceptance test "at-1" has no final result`)
+	second := acceptanceResultsIncomplete(`the reviewer approved while its acceptance test "at-2" is recorded as failed`)
+	fingerprint := func(cause error) string {
+		kind, check := classifyCause(cause)
+		return execution.BlockerFingerprint(kind, check, blockerFingerprintDetail(cause))
+	}
+	if fingerprint(first) != fingerprint(second) {
+		t.Fatal("acceptance refusals naming different tests have different fingerprints")
 	}
 }

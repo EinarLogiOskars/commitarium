@@ -7252,6 +7252,7 @@ func (starter *RemoteLeadStarter) release(runID string) {
 	delete(starter.corrections, runID)
 	starter.activeMu.Unlock()
 	if correct != nil {
-		go correct()
+		// Before anyone else sees the run free and blocked.
+		correct()
 	}
 }

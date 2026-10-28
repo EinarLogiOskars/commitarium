@@ -15,8 +15,9 @@ const reviewContinueGuidance = "The export test checked the old file name; fix t
 // startRefusedReview runs a reviewed work order to its second review, an
 // approval that is refused because the reviewer's own acceptance test is
 // recorded as failed. The reviewer's next try of that round is scripted to
-// approve again, and records the test as passed during its turn.
-func startRefusedReview(t *testing.T, runID string) (*baseUpdateFixture, string) {
+// approve again, and records the test as passed during its turn. spent
+// spends the refusal's self-corrections first, so it blocks.
+func startRefusedReview(t *testing.T, runID string, spent bool) (*baseUpdateFixture, string) {
 	t.Helper()
 	reviewerID := remoteReviewerSessionID(runID)
 	retryID := reviewRetryAttemptID(reviewerID, 1, 2, 2)
@@ -62,6 +63,10 @@ func startRefusedReview(t *testing.T, runID string) (*baseUpdateFixture, string)
 		}
 	}
 	fixture.worker.mu.Unlock()
+	if !spent {
+		return fixture, retryID
+	}
+	fixture.spendSelfCorrections(t, errAcceptanceResultsIncomplete)
 
 	// Re-check checks the same review again, which the failed test refuses.
 	if _, _, err := fixture.starter.RecoverBlockerWithDirective(
@@ -143,7 +148,7 @@ func (fixture *baseUpdateFixture) expectReviewRetryAccepted(t *testing.T, retryI
 }
 
 func TestContinueWithGuidanceReachesAReviewerWhoseApprovalWasRefused(t *testing.T) {
-	fixture, retryID := startRefusedReview(t, "run_review_guided_continue")
+	fixture, retryID := startRefusedReview(t, "run_review_guided_continue", true)
 	if _, admitted, err := fixture.starter.RecoverBlockerWithDirective(
 		t.Context(), fixture.runID, "continue-refused-review",
 		RecoveryDirective{Action: RecoveryActionContinue, Message: reviewContinueGuidance, FromAssistant: true},
@@ -160,7 +165,7 @@ func TestContinueWithGuidanceReachesAReviewerWhoseApprovalWasRefused(t *testing.
 func TestContinueAloneTellsAReviewerWhyItsApprovalWasRefused(t *testing.T) {
 	// Checking the same approval again could never pass, so Continue without
 	// guidance gives the reviewer the reason instead.
-	fixture, retryID := startRefusedReview(t, "run_review_plain_continue")
+	fixture, retryID := startRefusedReview(t, "run_review_plain_continue", true)
 	if _, admitted, err := fixture.starter.RecoverBlockerWithDirective(
 		t.Context(), fixture.runID, "continue-refused-review",
 		RecoveryDirective{Action: RecoveryActionContinue},
@@ -170,6 +175,21 @@ func TestContinueAloneTellsAReviewerWhyItsApprovalWasRefused(t *testing.T) {
 	request := fixture.expectReviewRetryAccepted(t, retryID)
 	if strings.Contains(request.Instructions, "The user asked you") {
 		t.Fatalf("the reviewer was given guidance the user did not write:\n%s", request.Instructions)
+	}
+}
+
+// Before anyone continues it, Commitarium hands the refused approval back to
+// the reviewer with the same reason (self_correction.go).
+func TestARefusedApprovalIsHandedBackToTheReviewer(t *testing.T) {
+	fixture, retryID := startRefusedReview(t, "run_review_self_correct", false)
+	if _, _, err := fixture.starter.RecoverBlockerWithDirective(
+		t.Context(), fixture.runID, "recheck-refused-review", RecoveryDirective{Action: RecoveryActionRecheck},
+	); err != nil {
+		t.Fatalf("recheck review: %v", err)
+	}
+	request := fixture.expectReviewRetryAccepted(t, retryID)
+	if !strings.Contains(request.Instructions, "Commitarium's correction:") {
+		t.Fatalf("the reviewer's new try was not Commitarium's correction:\n%s", request.Instructions)
 	}
 }
 

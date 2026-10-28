@@ -299,7 +299,6 @@ func TestOnlyInfrastructureFailuresRetry(t *testing.T) {
 		{workerhttp.ErrorUsageLimit, "You've hit your usage limit.", false},
 		// A login failure may pass on the next turn, so it retries before asking for a sign-in.
 		{workerhttp.ErrorProviderLoginRequired, "Failed to authenticate: OAuth session expired", true},
-		{workerhttp.ErrorIncompleteResult, "the turn ended without its structured result", false},
 	} {
 		run := startInterruptedPlanningRun(t, "run_failure_"+string(tc.code), func(run *interruptedRun) {
 			run.fail(run.attempts[0], tc.code, tc.message)
@@ -352,5 +351,29 @@ func TestTheUsersContinueStartsRetriesAfresh(t *testing.T) {
 	waitForRetriedTurn(t, run.executions, run.runID)
 	if wait, _ := run.executions.RetryWaitForRun(t.Context(), run.runID); wait.RunID != "" {
 		t.Fatalf("the user's continue kept the retry wait: %+v", wait)
+	}
+}
+
+// A planning turn that ended without its structured result is the agent's to
+// put right: it is not retried, but handed back to the lead in its own
+// conversation, and planning goes on (self_correction.go).
+func TestAnIncompletePlanningResultIsHandedBackNotRetried(t *testing.T) {
+	run := startInterruptedPlanningRun(t, "run_failure_incomplete_planning", func(run *interruptedRun) {
+		run.fail(run.attempts[0], workerhttp.ErrorIncompleteResult, "the turn ended without its structured result")
+	})
+	waitForRunReason(t, run.executions, run.runID, "The lead planning proposal is ready for reviewer consultation.")
+	if wait, _ := run.executions.RetryWaitForRun(t.Context(), run.runID); wait.RunID != "" {
+		t.Fatalf("an incomplete result was retried: %+v", wait)
+	}
+	recoveries, err := run.executions.RunRecoveries(t.Context(), run.runID)
+	if err != nil || len(recoveries) != 1 || recoveries[0].How != execution.RecoverySelfCorrection ||
+		!strings.Contains(recoveries[0].Guidance, "the turn ended without its required structured result") {
+		t.Fatalf("the incomplete result was not handed back: %+v err=%v", recoveries, err)
+	}
+	run.stub.mu.Lock()
+	defer run.stub.mu.Unlock()
+	last := run.stub.putRequests[len(run.stub.putRequests)-1]
+	if last.Mode != workerhttp.AttemptModeResume || !strings.Contains(last.Instructions, "Commitarium's correction:") {
+		t.Fatalf("the correction did not continue the lead's conversation: %+v", last)
 	}
 }

@@ -123,6 +123,11 @@ func classifyCause(cause error) (execution.BlockerKind, string) {
 	case interruption(cause) != "":
 		return execution.BlockerEnvironment, check
 	case errors.As(cause, &rejection):
+		if !strings.Contains(text, rejection.check) {
+			// A refusal that words its check itself has no outer context
+			// to name: the check's own words name it, stably.
+			check = rejection.check
+		}
 		return rejection.kind, check
 	case errors.Is(cause, workspace.ErrAuditCommentMissing):
 		// The agent's own step is missing: it fixes it once told exactly

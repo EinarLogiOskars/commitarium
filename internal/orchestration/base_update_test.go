@@ -606,6 +606,8 @@ func TestUpdateOntoMainResetsAcceptanceTestsForTheNewCommit(t *testing.T) {
 	fixture.starter.artifacts = fixture.workflow
 	fixture.workspace.mainHead = baseUpdateMainHead
 	fixture.workspace.mergeErrs = []error{baseUpdateNoMerge}
+	// Its refusal blocks, as once Commitarium's corrections are spent.
+	fixture.spendSelfCorrections(t, errAcceptanceResultsIncomplete)
 	if _, _, err := fixture.starter.Merge(t.Context(), fixture.runID, "merge-with-acceptance"); err != nil {
 		t.Fatalf("merge behind main: %v", err)
 	}
