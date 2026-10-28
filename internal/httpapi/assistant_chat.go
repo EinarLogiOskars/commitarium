@@ -549,6 +549,29 @@ func (api *API) approveConversationActionHandler(w http.ResponseWriter, r *http.
 		writeConversationError(w, err)
 		return
 	}
+	if action.Type == featureartifact.AssistantCreateApp {
+		// In Developer mode, the loose chat that proposed it moves into the
+		// new app as its chat, with its applied card, and hears the app's
+		// launch there (ADR-038).
+		moved := false
+		if mover, ok := api.conversations.(chatMover); ok && conversation.Developer && action.Chat != "" {
+			chat, err := mover.MoveChat(r.Context(), conversations.TopLevel, action.Chat, projectID)
+			if err != nil {
+				writeError(w, http.StatusBadGateway, "app_not_started",
+					fmt.Sprintf("the app %q was created, but this chat could not move into it: %v", action.Title, err))
+				return
+			}
+			r, moved = r.WithContext(conversations.InChat(r.Context(), chat.Chat)), true
+		}
+		if !api.startApp(w, r, action, projectID) {
+			return
+		}
+		if moved {
+			if current, err := api.conversations.Get(r.Context(), projectID); err == nil {
+				conversation = current
+			}
+		}
+	}
 	if action.Type == featureartifact.AssistantPlanProject {
 		// The chat that proposed it moves into the new project, with its
 		// applied card (ADR-038).
