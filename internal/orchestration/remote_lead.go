@@ -4934,7 +4934,10 @@ func (starter *RemoteLeadStarter) finish(
 	case workerhttp.OutcomeCompleted:
 		if request.interventionID != "" {
 			if !worker.InterventionEffect(attempt.Result.InterventionEffect).IsValid() {
-				starter.requireReview(ctx, request, errors.New("completed intervention omitted its structured effect"))
+				starter.requireReview(ctx, request, fmt.Errorf(
+					"completed intervention omitted its structured effect: %w: found effect %q; answer with "+
+						"effect guidance_applied, clarification_required, or replanning_required and your response",
+					errInterventionEffect, attempt.Result.InterventionEffect))
 				return
 			}
 			_, _, err = starter.executions.CompleteIntervention(
@@ -4969,7 +4972,9 @@ func (starter *RemoteLeadStarter) finish(
 		}
 		if request.request.OutputContract == workerhttp.OutputContractAcceptanceTests {
 			if attempt.Result.Disposition != workerhttp.DispositionInputRequired && attempt.Result.AcceptanceTests == nil {
-				err = errors.New("reviewer completed acceptance-test authoring without structured test metadata")
+				err = fmt.Errorf("reviewer completed acceptance-test authoring without structured test metadata: %w: "+
+					"return action 'authored' with your summary, the private test commit in test_commit_id, and "+
+					"each test in tests", errAcceptanceTestsResult)
 				break
 			}
 			if attempt.Result.Disposition != workerhttp.DispositionInputRequired {
@@ -4980,7 +4985,8 @@ func (starter *RemoteLeadStarter) finish(
 				}
 				normalized, normalizeErr := attempt.Result.AcceptanceTests.NormalizeInitial(run.PlanVersion)
 				if normalizeErr != nil {
-					err = normalizeErr
+					err = fmt.Errorf("reviewer's acceptance tests are invalid: %w: %v; fix that in the tests "+
+						"you hand in and return action 'authored' again", errAcceptanceTestsResult, normalizeErr)
 					break
 				}
 				acceptanceArtifacts, ok := starter.artifacts.(remoteLeadAcceptanceArtifactService)
@@ -5026,7 +5032,9 @@ func (starter *RemoteLeadStarter) finish(
 			if planningMessage.Type == worker.EventPlanSubmitted {
 				if starter.artifacts != nil {
 					if attempt.Result.ImplementationPlan == nil {
-						starter.requireReview(ctx, request, errors.New("submitted plan omitted its structured implementation checklist"))
+						starter.requireReview(ctx, request, fmt.Errorf(
+							"submitted plan omitted its structured implementation checklist: %w: submit the plan "+
+								"again with its plan_title, plan_subtitle, and steps", errPlanChecklistResult))
 						return
 					}
 					run, loadErr := starter.executions.GetRun(ctx, request.runID)
@@ -5036,7 +5044,9 @@ func (starter *RemoteLeadStarter) finish(
 					}
 					normalized, normalizeErr := attempt.Result.ImplementationPlan.NormalizeInitial(run.PlanVersion)
 					if normalizeErr != nil {
-						starter.requireReview(ctx, request, normalizeErr)
+						starter.requireReview(ctx, request, fmt.Errorf(
+							"submitted plan's implementation checklist is invalid: %w: %v; fix that in the steps "+
+								"and submit the plan again", errPlanChecklistResult, normalizeErr))
 						return
 					}
 					if _, artifactErr := starter.artifacts.UpsertImplementationPlan(
@@ -5175,7 +5185,9 @@ func (starter *RemoteLeadStarter) finish(
 		}
 	case workerhttp.OutcomeFailed:
 		if attempt.Result.Error != nil && attempt.Result.Error.Code == workerhttp.ErrorIncompleteResult {
-			err = fmt.Errorf("%s ended before returning its required structured result: %s", request.agentName, attempt.Result.Error.Message)
+			err = fmt.Errorf("%s ended before returning its required structured result: %w: the worker "+
+				"found: %s; hand in your final result again in the required format, without redoing work "+
+				"that is already published", request.agentName, errIncompleteResult, attempt.Result.Error.Message)
 		} else {
 			err = starter.pauseFailedTurn(ctx, request, session, attempt)
 		}
@@ -5185,6 +5197,62 @@ func (starter *RemoteLeadStarter) finish(
 	if err != nil {
 		starter.requireReview(ctx, request, err)
 	}
+}
+
+// Checks of the structured result an agent hands in. Each refusal says what
+// the result lacks and how to hand it in again; the sentinel's text is the
+// blocker's stable fingerprint.
+var (
+	errIncompleteResult      = agentRejection("the turn ended without its required structured result")
+	errPublicationResult     = agentRejection("the result has no publication facts")
+	errReviewResult          = agentRejection("the result has no review facts")
+	errAcceptanceTestsResult = agentRejection("the acceptance-test result is missing or invalid")
+	errPlanChecklistResult   = agentRejection("the submitted plan's checklist is missing or invalid")
+	errInterventionEffect    = agentRejection("the intervention answer has no valid effect")
+	errReadinessDecision     = agentRejection("the merge-readiness result has no valid decision")
+	errPlanApprovalDecision  = agentRejection("the plan approval has no valid decision")
+)
+
+// publicationFactsGuidance says how a lead hands in a publication.
+const publicationFactsGuidance = "return action 'published' with your summary, the exact lowercase HEAD in " +
+	"commit_id, and pull_request_number"
+
+// Checks of what an agent published in Forgejo and its checkout, which its
+// next turn can put right (see rejectPublication).
+var (
+	errAuditCommentMissing    = agentRejection("the audit comment is not on the pull request")
+	errAuditCommentInvalid    = agentRejection("the audit comment is not in the required form")
+	errReviewNotAsReported    = agentRejection("the Forgejo review does not match the reported review")
+	errReportedPullRequest    = agentRejection("the reported pull request is not the work order's")
+	errNoNewCommit            = agentRejection("the turn did not publish a new commit")
+	errReportedCommitNotFound = stateRejection("the reported commit is not the feature branch head")
+	errCheckoutNotAsReported  = stateRejection("the checkout is not as the turn reported")
+)
+
+// publicationRejections pairs each workspace verification failure an agent
+// can fix with the check that names it.
+var publicationRejections = []struct {
+	cause     error
+	rejection *turnRejection
+}{
+	{workspace.ErrAuditCommentMissing, errAuditCommentMissing},
+	{workspace.ErrAuditCommentInvalid, errAuditCommentInvalid},
+	{workspace.ErrReviewNotAsReported, errReviewNotAsReported},
+	{workspace.ErrReportedPullRequestMismatch, errReportedPullRequest},
+	{workspace.ErrNoNewCommit, errNoNewCommit},
+	{workspace.ErrReportedCommitNotPushed, errReportedCommitNotFound},
+	{workspace.ErrCheckoutNotAsReported, errCheckoutNotAsReported},
+}
+
+// rejectPublication marks a workspace verification failure the agent can fix
+// with its check; any other failure is returned as it is.
+func rejectPublication(err error) error {
+	for _, known := range publicationRejections {
+		if errors.Is(err, known.cause) {
+			return fmt.Errorf("%w: %w", known.rejection, err)
+		}
+	}
+	return err
 }
 
 // errImplementationChecklist is a lead's checklist not matching its
@@ -5242,7 +5310,8 @@ func (starter *RemoteLeadStarter) verifyImplementationPublication(
 	result workerhttp.TerminalResult,
 ) error {
 	if result.Publication == nil {
-		return errors.New("lead completed implementation without structured publication facts")
+		return fmt.Errorf("lead completed implementation without structured publication facts: %w: %s",
+			errPublicationResult, publicationFactsGuidance)
 	}
 	run, err := starter.executions.GetRun(ctx, request.runID)
 	if err != nil {
@@ -5298,7 +5367,7 @@ func (starter *RemoteLeadStarter) verifyImplementationPublication(
 		)
 	}
 	if verifyErr != nil {
-		return fmt.Errorf("verify lead publication before review: %w", verifyErr)
+		return fmt.Errorf("verify lead publication before review: %w", rejectPublication(verifyErr))
 	}
 	_, err = starter.executions.RecordSessionEventWithID(
 		ctx,
@@ -5785,7 +5854,8 @@ func (starter *RemoteLeadStarter) verifyImplementationCorrection(
 	result workerhttp.TerminalResult,
 ) error {
 	if result.Publication == nil {
-		return errors.New("lead completed correction without structured publication facts")
+		return fmt.Errorf("lead completed correction without structured publication facts: %w: %s, "+
+			"and finding_answers answering each review finding", errPublicationResult, publicationFactsGuidance)
 	}
 	round, correcting := implementationCorrectionTurnNumber(
 		request.identity.SessionID, request.identity.AttemptID,
@@ -5840,7 +5910,7 @@ func (starter *RemoteLeadStarter) verifyImplementationCorrection(
 		result.Publication.CommitID, result.Publication.PullRequestNumber, starter.forgejoAuthorFor(run, worker.RoleLead),
 		workerhttp.ChangesNothing(result.Publication.FindingAnswers),
 	); err != nil {
-		return fmt.Errorf("verify lead review response: %w", err)
+		return fmt.Errorf("verify lead review response: %w", rejectPublication(err))
 	}
 	verified := fmt.Sprintf(
 		"Verified lead response to review #%d: corrected commit %s is the head of Forgejo pull request #%d and its audit comment is attributed to %s.",
@@ -5940,7 +6010,9 @@ func (starter *RemoteLeadStarter) verifyImplementationReview(
 	result workerhttp.TerminalResult,
 ) error {
 	if result.Review == nil {
-		return errors.New("reviewer completed without structured review facts")
+		return fmt.Errorf("reviewer completed without structured review facts: %w: return action 'approved' or "+
+			"'changes_requested' with your summary, the reviewed commit in commit_id, pull_request_number, and "+
+			"the posted review's ID in review_id", errReviewResult)
 	}
 	round, reviewing := implementationReviewTurnNumber(
 		request.identity.SessionID, request.identity.AttemptID,
@@ -5979,7 +6051,7 @@ func (starter *RemoteLeadStarter) verifyImplementationReview(
 		result.Review.PullRequestNumber, result.Review.ReviewID,
 		starter.forgejoAuthorFor(run, worker.RoleReviewer), expectedState,
 	); err != nil {
-		return fmt.Errorf("verify reviewer publication: %w", err)
+		return fmt.Errorf("verify reviewer publication: %w", rejectPublication(err))
 	}
 	if _, err := starter.executions.RecordSessionEventWithID(
 		ctx, implementationReviewVerificationEventID(request.identity.AttemptID), request.identity.SessionID,
@@ -6033,8 +6105,13 @@ func validateAcceptanceReviewResults(
 	if err := tests.Validate(); err != nil {
 		return err
 	}
-	if tests.PlanVersion != planVersion || tests.ImplementationCommitID != commitID {
+	if tests.PlanVersion != planVersion {
 		return errors.New("acceptance results do not describe the reviewed implementation commit")
+	}
+	if tests.ImplementationCommitID != commitID {
+		return fmt.Errorf("%w: the review is of commit %s but the acceptance tests ran against commit %s; "+
+			"review commit %s, the one the tests ran against, and report it in commit_id",
+			errAcceptanceResultsCommit, commitID, tests.ImplementationCommitID, tests.ImplementationCommitID)
 	}
 	for _, test := range tests.Tests {
 		switch test.Status {
@@ -6051,12 +6128,21 @@ func validateAcceptanceReviewResults(
 	return nil
 }
 
+// errAcceptanceResultsCommit is a review of another commit than the one the
+// acceptance tests ran against.
+var errAcceptanceResultsCommit = agentRejection("acceptance results do not describe the reviewed implementation commit")
+
+// errAcceptanceResultsIncomplete is the check behind acceptanceResultsIncomplete.
+var errAcceptanceResultsIncomplete = agentRejection("the review's acceptance results are incomplete")
+
 // acceptanceResultsIncomplete refuses a review whose acceptance results only
 // the reviewer can put right, by recording them for the reviewed commit.
 // Checking the same review again can never pass.
 type acceptanceResultsIncomplete string
 
 func (refusal acceptanceResultsIncomplete) Error() string { return string(refusal) }
+
+func (refusal acceptanceResultsIncomplete) Unwrap() error { return errAcceptanceResultsIncomplete }
 
 // acceptanceReviewRefusal checks a finished review against the acceptance
 // results recorded for its commit. It returns why the review cannot be
@@ -6256,7 +6342,9 @@ func (starter *RemoteLeadStarter) verifyImplementationReadiness(
 	}
 	if result.Disposition != workerhttp.DispositionSucceeded &&
 		result.Disposition != workerhttp.DispositionChangesRequested {
-		return errors.New("lead merge-readiness acknowledgement has an invalid decision")
+		return fmt.Errorf("lead merge-readiness acknowledgement has an invalid decision: %w: found %q; return "+
+			"action 'ready_to_merge' when no material blocker remains, or 'concern' with the remaining concern",
+			errReadinessDecision, result.Disposition)
 	}
 	run, err := starter.executions.GetRun(ctx, request.runID)
 	if err != nil {
@@ -6314,7 +6402,7 @@ func (starter *RemoteLeadStarter) verifyImplementationReadiness(
 		request.identity.AttemptID, result.Summary, approved.CommitID,
 		approved.PullRequestNumber, starter.forgejoAuthorFor(run, worker.RoleLead),
 	); err != nil {
-		return fmt.Errorf("verify lead merge-readiness decision: %w", err)
+		return fmt.Errorf("verify lead merge-readiness decision: %w", rejectPublication(err))
 	}
 	decision := "remaining concern"
 	if result.Disposition == workerhttp.DispositionSucceeded {
@@ -6489,7 +6577,9 @@ func (starter *RemoteLeadStarter) continueSubmittedPlan(
 		case workerhttp.DispositionChangesRequested:
 			return starter.returnPlanToLead(ctx, run, reviewer.ID, attemptID)
 		default:
-			return fmt.Errorf("%w: plan approval ended with disposition %q", ErrPlanningNotAllowed, attempt.Result.Disposition)
+			return fmt.Errorf("%w: plan approval ended with disposition %q: %w: return action 'approve' with a "+
+				"one-line confirmation, or 'request_changes' with exactly what differs from what you agreed",
+				ErrPlanningNotAllowed, attempt.Result.Disposition, errPlanApprovalDecision)
 		}
 	}
 	if run.Paused {

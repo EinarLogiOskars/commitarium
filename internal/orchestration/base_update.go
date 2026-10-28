@@ -349,7 +349,8 @@ func (starter *RemoteLeadStarter) verifyImplementationBaseUpdate(
 	result workerhttp.TerminalResult,
 ) error {
 	if result.Publication == nil {
-		return errors.New("lead completed its update onto main without structured publication facts")
+		return fmt.Errorf("lead completed its update onto main without structured publication facts: %w: %s",
+			errPublicationResult, publicationFactsGuidance)
 	}
 	version, _, updating := workflowAttemptVersionAndTurn(
 		request.identity.SessionID, "update", request.identity.AttemptID,
@@ -396,7 +397,7 @@ func (starter *RemoteLeadStarter) verifyImplementationBaseUpdate(
 			request.identity.AttemptID, result.Summary, commitID,
 			result.Publication.PullRequestNumber, starter.forgejoAuthorFor(run, worker.RoleLead),
 		); err != nil {
-			return fmt.Errorf("verify lead update onto main: %w", err)
+			return fmt.Errorf("verify lead update onto main: %w", rejectPublication(err))
 		}
 		if _, err := starter.executions.RecordSessionEventWithID(
 			ctx, verifiedEventID, request.identity.SessionID,

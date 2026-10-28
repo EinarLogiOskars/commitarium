@@ -1045,7 +1045,10 @@ func (client *Client) VerifyPullRequestImplementation(
 		return workspace.PullRequest{}, workspace.ErrPullRequestConflict
 	}
 	publicationMarker := spec.PublicationKind.Marker(spec.AttemptID)
-	publicationPrefix := publicationMarker + "\n\n## " + spec.PublicationKind.CommentHeading() + "\n\n"
+	heading := "## " + spec.PublicationKind.CommentHeading()
+	publicationPrefix := publicationMarker + "\n\n" + heading + "\n\n"
+	form := fmt.Sprintf("exactly the marker %s, a blank line, '%s', a blank line, and your summary, posted by %s",
+		publicationMarker, heading, spec.ExpectedAuthor)
 	matches := 0
 	for _, comment := range comments {
 		if strings.Contains(comment.Body, publicationMarker) {
@@ -1054,20 +1057,37 @@ func (client *Client) VerifyPullRequestImplementation(
 			// paraphrase the worker's terminal summary, so byte equality between
 			// the two is not a safety invariant. This mirrors formal review
 			// verification, which requires attributable, non-empty findings.
-			if strings.Count(comment.Body, publicationMarker) != 1 ||
-				!strings.HasPrefix(comment.Body, publicationPrefix) ||
-				strings.TrimSpace(strings.TrimPrefix(comment.Body, publicationPrefix)) == "" ||
-				!strings.EqualFold(strings.TrimSpace(comment.User.Login), spec.ExpectedAuthor) {
-				return workspace.PullRequest{}, workspace.ErrPullRequestConflict
+			found := ""
+			switch {
+			case !strings.EqualFold(strings.TrimSpace(comment.User.Login), spec.ExpectedAuthor):
+				found = "it was posted by " + strings.TrimSpace(comment.User.Login)
+			case strings.Count(comment.Body, publicationMarker) != 1:
+				found = "it contains the marker more than once"
+			case !strings.HasPrefix(comment.Body, publicationPrefix):
+				found = "it does not start with the marker, a blank line, and the heading"
+			case strings.TrimSpace(strings.TrimPrefix(comment.Body, publicationPrefix)) == "":
+				found = "its summary is empty"
+			}
+			if found != "" {
+				return workspace.PullRequest{}, fmt.Errorf(
+					"%w: the comment on pull request #%d must be %s, but %s; edit that comment to the "+
+						"required form (do not post another one with the marker)",
+					workspace.ErrAuditCommentInvalid, spec.Number, form, found)
 			}
 			matches++
 		}
 	}
 	if matches == 0 {
-		return workspace.PullRequest{}, workspace.ErrAuditCommentMissing
+		return workspace.PullRequest{}, fmt.Errorf(
+			"%w: no comment on pull request #%d contains the marker %s; post one comment on that pull "+
+				"request that is %s, then hand in the result again",
+			workspace.ErrAuditCommentMissing, spec.Number, publicationMarker, form)
 	}
 	if matches != 1 {
-		return workspace.PullRequest{}, workspace.ErrPullRequestConflict
+		return workspace.PullRequest{}, fmt.Errorf(
+			"%w: %d comments on pull request #%d contain the marker %s, but exactly one must; delete the "+
+				"extra copies and keep one that is %s",
+			workspace.ErrAuditCommentInvalid, matches, spec.Number, publicationMarker, form)
 	}
 	return pullRequest, nil
 }
@@ -1130,13 +1150,30 @@ func (client *Client) VerifyPullRequestReview(
 		)
 	}
 	reviewPrefix := spec.PublicationMarker + "\n\n## Review\n\n"
-	if review.ID != spec.ReviewID || review.CommitID != spec.HeadCommitID ||
-		review.State != spec.ExpectedState || review.Stale ||
-		strings.Count(review.Body, spec.PublicationMarker) != 1 ||
-		!strings.HasPrefix(review.Body, reviewPrefix) ||
-		strings.TrimSpace(strings.TrimPrefix(review.Body, reviewPrefix)) == "" ||
-		!strings.EqualFold(strings.TrimSpace(review.User.Login), spec.ExpectedAuthor) {
-		return workspace.PullRequest{}, workspace.ErrPullRequestConflict
+	found := ""
+	switch {
+	case review.ID != spec.ReviewID:
+		found = fmt.Sprintf("Forgejo returned review #%d instead", review.ID)
+	case review.CommitID != spec.HeadCommitID:
+		found = "it is on commit " + review.CommitID + ", not " + spec.HeadCommitID
+	case review.Stale:
+		found = "it is stale: the branch moved after it was posted"
+	case review.State != spec.ExpectedState:
+		found = "its state is " + review.State + ", not " + spec.ExpectedState
+	case !strings.EqualFold(strings.TrimSpace(review.User.Login), spec.ExpectedAuthor):
+		found = "it was posted by " + strings.TrimSpace(review.User.Login) + ", not " + spec.ExpectedAuthor
+	case strings.Count(review.Body, spec.PublicationMarker) != 1 || !strings.HasPrefix(review.Body, reviewPrefix):
+		found = "its body does not start with exactly the marker " + spec.PublicationMarker +
+			", a blank line, '## Review', and a blank line"
+	case strings.TrimSpace(strings.TrimPrefix(review.Body, reviewPrefix)) == "":
+		found = "its body has no findings or approval after the heading"
+	}
+	if found != "" {
+		return workspace.PullRequest{}, fmt.Errorf(
+			"%w: review #%d on pull request #%d must be a %s review of commit %s by %s, but %s; post a "+
+				"review that matches your result and report its ID in review_id",
+			workspace.ErrReviewNotAsReported, spec.ReviewID, spec.Number, spec.ExpectedState,
+			spec.HeadCommitID, spec.ExpectedAuthor, found)
 	}
 	return pullRequest, nil
 }

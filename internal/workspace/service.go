@@ -45,6 +45,53 @@ var ErrAuditCommentMissing error = &refinedError{
 	parent: ErrPullRequestConflict,
 }
 
+// ErrAuditCommentInvalid is an agent's audit comment that carries its
+// marker but not in the required form: the wrong author, heading or layout,
+// an empty summary, or the marker posted more than once. The agent fixes it
+// by editing or deleting its own comment. It still matches
+// ErrPullRequestConflict.
+var ErrAuditCommentInvalid error = &refinedError{
+	text:   "the agent's audit comment on the Forgejo pull request is not in the required form",
+	parent: ErrPullRequestConflict,
+}
+
+// ErrReviewNotAsReported is a reviewer's reported Forgejo review that does
+// not match what it handed in: another commit, decision, author or body. The
+// reviewer fixes it by posting the review it reported. It still matches
+// ErrPullRequestConflict.
+var ErrReviewNotAsReported error = &refinedError{
+	text:   "the reviewer's Forgejo review does not match its reported result",
+	parent: ErrPullRequestConflict,
+}
+
+// ErrReportedCommitNotPushed is an agent reporting a commit that is not the
+// head of the Forgejo feature branch: it was not pushed, or another commit
+// was reported. It still matches ErrBranchConflict.
+var ErrReportedCommitNotPushed error = &refinedError{
+	text:   "the reported commit is not the head of the Forgejo feature branch",
+	parent: ErrBranchConflict,
+}
+
+// ErrReportedPullRequestMismatch is an agent reporting a pull request other
+// than the work order's own. It still matches ErrConflict.
+var ErrReportedPullRequestMismatch error = &refinedError{
+	text:   "the reported pull request is not the work order's pull request",
+	parent: ErrConflict,
+}
+
+// ErrCheckoutNotAsReported is the agent's checkout not in the state its turn
+// reported: on another branch, at another commit, or with uncommitted
+// changes. The agent's next turn can put it right. It still matches
+// ErrCheckoutConflict.
+var ErrCheckoutNotAsReported error = &refinedError{
+	text:   "the agent's checkout is not in the state its turn reported",
+	parent: ErrCheckoutConflict,
+}
+
+// ErrNoNewCommit is a turn that had to publish a new commit reporting the
+// commit it started from.
+var ErrNoNewCommit = errors.New("the turn did not publish a new commit")
+
 // refinedError is a sentinel that reads on its own but still matches the
 // broader sentinel it refines.
 type refinedError struct {
@@ -1205,8 +1252,10 @@ func (service *Service) VerifyImplementationReviewResponse(
 		}
 	}
 	if reviewedCommitID == commitID && !changesNothing {
-		return Workspace{}, errors.New("review response must publish a new commit: HEAD is still the reviewed " +
-			"commit, but finding_answers do not answer every finding as already_fixed, declined, or out_of_scope")
+		return Workspace{}, fmt.Errorf("%w: review response must publish a new commit: commit_id is still the "+
+			"reviewed commit %s, but finding_answers do not answer every finding as already_fixed, declined, or "+
+			"out_of_scope. Commit and push the fixes and report the new HEAD, or answer each finding you did not "+
+			"change as already_fixed, declined, or out_of_scope", ErrNoNewCommit, reviewedCommitID)
 	}
 	storedFeature, err := service.features.GetByID(ctx, projectID, featureID)
 	if err != nil {
@@ -1301,7 +1350,9 @@ func (service *Service) VerifyImplementationBaseUpdate(
 		return Workspace{}, ErrConflict
 	}
 	if commitID == stored.ApprovedCommitID {
-		return Workspace{}, errors.New("base update must publish a new commit")
+		return Workspace{}, fmt.Errorf("%w: an update onto main must publish a new commit: commit_id is still "+
+			"the approved commit %s. Merge %s into the feature branch, commit the merge, push it, and report "+
+			"the new HEAD", ErrNoNewCommit, stored.ApprovedCommitID, stored.BaseBranch)
 	}
 	return service.verifyImplementationAudit(ctx, storedFeature, implementationAuditVerification{
 		ProjectID: projectID, PlanEventID: planEventID, Plan: plan,
@@ -1313,6 +1364,14 @@ func (service *Service) VerifyImplementationBaseUpdate(
 		// request marked ready; it is a draft again until the next merge.
 		ReturnToDraft: true,
 	})
+}
+
+// reportedPullRequestMismatch says which pull request the agent reported and
+// which one is the work order's.
+func reportedPullRequestMismatch(stored Workspace, reported int64) error {
+	return fmt.Errorf("%w: the result reports pull request #%d but the work order's pull request is #%d; "+
+		"report pull_request_number %d, and post on that pull request if you posted elsewhere",
+		ErrReportedPullRequestMismatch, reported, stored.PullRequestNumber, stored.PullRequestNumber)
 }
 
 type implementationAuditVerification struct {
@@ -1348,16 +1407,24 @@ func (service *Service) verifyImplementationAudit(
 	repository := storedProject.ForgejoRepository
 	if stored.RepositoryOwner != repository.Owner || stored.RepositoryName != repository.Name ||
 		stored.BaseBranch != repository.DefaultBranch || !stored.CheckoutReady() ||
-		!stored.PullRequestReady() || service.checkouts == nil || service.pullRequests == nil ||
-		stored.PullRequestNumber != verification.PullRequestNumber {
+		!stored.PullRequestReady() || service.checkouts == nil || service.pullRequests == nil {
 		return Workspace{}, ErrConflict
+	}
+	if stored.PullRequestNumber != verification.PullRequestNumber {
+		return Workspace{}, reportedPullRequestMismatch(stored, verification.PullRequestNumber)
 	}
 	branch, err := service.branches.GetBranch(ctx, stored.RepositoryOwner, stored.RepositoryName, stored.Branch)
 	if err != nil {
 		return Workspace{}, fmt.Errorf("verify Forgejo feature branch: %w", err)
 	}
-	if branch.Name != stored.Branch || branch.CommitID != verification.CommitID {
+	if branch.Name != stored.Branch {
 		return Workspace{}, ErrBranchConflict
+	}
+	if branch.CommitID != verification.CommitID {
+		return Workspace{}, fmt.Errorf("%w: the result reports commit %s but the Forgejo branch %s is at %s; "+
+			"push your HEAD to the 'commitarium' remote (git push commitarium HEAD:%s) and report that exact "+
+			"lowercase commit in commit_id", ErrReportedCommitNotPushed, verification.CommitID, stored.Branch,
+			branch.CommitID, stored.Branch)
 	}
 	checkoutBaseCommitID := verification.CheckoutBaseCommitID
 	if checkoutBaseCommitID == "" {
@@ -1453,16 +1520,23 @@ func (service *Service) VerifyImplementationReview(
 	repository := storedProject.ForgejoRepository
 	if stored.RepositoryOwner != repository.Owner || stored.RepositoryName != repository.Name ||
 		stored.BaseBranch != repository.DefaultBranch || !stored.CheckoutReady() ||
-		!stored.PullRequestReady() || service.checkouts == nil || service.pullRequests == nil ||
-		stored.PullRequestNumber != pullRequestNumber {
+		!stored.PullRequestReady() || service.checkouts == nil || service.pullRequests == nil {
 		return Workspace{}, ErrConflict
+	}
+	if stored.PullRequestNumber != pullRequestNumber {
+		return Workspace{}, reportedPullRequestMismatch(stored, pullRequestNumber)
 	}
 	branch, err := service.branches.GetBranch(ctx, stored.RepositoryOwner, stored.RepositoryName, stored.Branch)
 	if err != nil {
 		return Workspace{}, fmt.Errorf("verify reviewed Forgejo branch: %w", err)
 	}
-	if branch.Name != stored.Branch || branch.CommitID != commitID {
+	if branch.Name != stored.Branch {
 		return Workspace{}, ErrBranchConflict
+	}
+	if branch.CommitID != commitID {
+		return Workspace{}, fmt.Errorf("%w: the review reports commit %s but the Forgejo branch %s is at %s; "+
+			"review the branch's head commit and report that exact commit in commit_id",
+			ErrReportedCommitNotPushed, commitID, stored.Branch, branch.CommitID)
 	}
 	if err := service.checkouts.Ensure(ctx, CheckoutSpec{
 		WorkspaceID: stored.ID, RepositoryOwner: stored.RepositoryOwner,
