@@ -92,7 +92,8 @@ func TestTheAssistantWritesTheVisionAfterAQuestion(t *testing.T) {
 	}
 	first := worker.puts[0]
 	if first.OutputContract != workerhttp.OutputContractVisionPlan || first.Assignment.Role != workerhttp.RoleConsultant ||
-		!strings.Contains(first.Instructions, "First ask the user") || !strings.Contains(first.Instructions, "Track meals.") {
+		!strings.Contains(first.Instructions, "First ask the user") || !strings.Contains(first.Instructions, "Track meals.") ||
+		!strings.Contains(first.Instructions, featureartifact.WidePlan) {
 		t.Fatalf("unexpected first turn: %+v", first)
 	}
 	worker.finish(workerhttp.TerminalResult{

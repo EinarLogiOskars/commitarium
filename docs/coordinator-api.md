@@ -1846,6 +1846,18 @@ Clients should use `wait_kind` to choose controls and labels, and show `reason`
 as the human-readable explanation. They must not infer control state by parsing
 the reason text.
 
+A work order that autopilot started early, while the work it follows (`after`)
+was still being built, plans and has its plan reviewed as usual, then stays at
+the plan's `phase_checkpoint` instead of implementing (ADR-037). Its reason says
+why in plain words: "Planned; implements once “X” has merged." or "Planned;
+implements when a slot frees: …" when as many work orders as `max_running`
+allows are already working. Early planning takes no slot; a work order counts
+toward `max_running` once it implements. The coordinator implements it on its
+own once nothing holds it, also after a restart; its first implementation turn
+merges the default branch in and checks the plan against the merged code first,
+posting a `## Plan update` section when the plan had to change. The user's own
+`POST /api/v1/runs/{runID}/implementation` is not held.
+
 Every run also exposes `plan_version`. It begins at `1` for the original
 lead/reviewer agreement. A user-approved scope-changing intervention advances
 the same run to the next version; earlier planning messages remain available

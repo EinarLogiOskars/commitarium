@@ -483,6 +483,9 @@ function UsageLine({ usage }: { usage: FeatureUsage }) {
 const UPDATING_ONTO_MAIN = /^Main moved after this revision was approved/;
 // The coordinator's reason while approved work waits its turn to merge.
 const IN_MERGE_QUEUE = /^Waiting to merge: /;
+// The coordinator's reason while work that planned early waits to implement
+// (ADR-037); it implements on its own.
+const HELD_TO_IMPLEMENT = /^Planned; implements /;
 
 function waitBanner(run: Run, state: string) {
   if (!run.paused && run.status === "running" && UPDATING_ONTO_MAIN.test(run.reason ?? "")) {
@@ -510,14 +513,18 @@ function waitBanner(run: Run, state: string) {
   // Work that merges on its own waits its turn in the project's merge queue
   // (ADR-036); the reason says its place.
   const inLine = kind === "merge_gate" && IN_MERGE_QUEUE.test(run.reason ?? "");
+  // Work that planned early waits for the work it builds on to merge.
+  const held = kind === "phase_checkpoint" && HELD_TO_IMPLEMENT.test(run.reason ?? "");
   const label = validationPending
     ? "Validation pending"
     : inLine
       ? "Waiting to merge"
-      : WAIT_LABELS[kind];
+      : held
+        ? "Planned early"
+        : WAIT_LABELS[kind];
   if (!label && !run.reason) return null;
   const tone =
-    kind === "paused" || validationPending || inLine
+    kind === "paused" || validationPending || inLine || held
       ? "warn"
       : kind === "merge_gate"
         ? "ok"

@@ -549,6 +549,7 @@ func run(ctx context.Context, coordinatorConfig config) error {
 			EnvironmentRequests: environmentService,
 			Validation:          validationService,
 			PreviewChecks:       previewCheckService,
+			Holds:               implementationHolds(projectConversations),
 			Toolchains:          toolchainService,
 			Usage:               executionStore,
 			Lifetime:            ctx,
@@ -561,6 +562,11 @@ func run(ctx context.Context, coordinatorConfig config) error {
 		runRecoverer = remoteStarter
 		sessionController = remoteStarter
 		realWorkflowStarter = remoteStarter
+		if assistantWatcher != nil {
+			// Work that planned early implements once nothing holds it
+			// (ADR-037).
+			assistantWatcher.ReleaseImplementation = remoteStarter.ReleaseImplementation
+		}
 		agentSignIns.target = remoteStarter
 		if projectConversations != nil {
 			assistant := projectConversations
@@ -783,4 +789,14 @@ func blockedRun(ctx context.Context, executions *execution.Service, workOrderID 
 	}
 	run := execution.NewestRun(runs)
 	return run, run.Status == execution.RunStatusWaitingForUser && run.WaitKind == execution.RunWaitKindBlocker
+}
+
+// implementationHolds lets runs that planned early wait before they
+// implement, as the assistant's records say (ADR-037); none without an
+// assistant.
+func implementationHolds(assistant *conversations.Service) orchestration.RemoteLeadImplementationHolds {
+	if assistant == nil {
+		return nil
+	}
+	return assistant
 }

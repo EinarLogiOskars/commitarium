@@ -22,6 +22,17 @@ type VisionPlan struct {
 	Stack *VisionStack `json:"stack,omitempty"`
 }
 
+// WidePlan is how a build plan orders its items so most of them can be
+// built at the same time (ADR-037): the shared foundation first, then
+// features that need only the foundation.
+const WidePlan = "Order the plan so most of it can be built at the same time. Make the first item the " +
+	"shared foundation the features build on: the app's structure and navigation, its routes, the data types " +
+	"and API shapes the features share, and the main page with a clear place for each feature, without the " +
+	"features themselves. Then plan each feature so it needs only the foundation: filters, refreshing, and " +
+	"keyboard shortcuts each add to the page the foundation made, so none of them waits on another. An item " +
+	"needs another only when it truly uses that one's behaviour (not when it only touches the same page); " +
+	"then end its description with \"Needs: <that item's title>.\""
+
 type VisionStack struct {
 	Presets    []string `json:"presets"`
 	Frameworks string   `json:"frameworks"`
