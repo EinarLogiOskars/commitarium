@@ -148,8 +148,8 @@ type AssistantAction struct {
 	Guidance string `json:"guidance"`
 	// After, for a work order to create or start, names work it must follow:
 	// a work order's ID, or the title of another of the assistant's actions.
-	// Autopilot starts it only once that work has merged, so two changes to
-	// the same part of the app do not run at once.
+	// Autopilot starts it only once that work has merged: it needs that
+	// work's code or result (ADR-036).
 	After string `json:"after"`
 	// Helper, for answer_helper, names the helper that asked; for a card
 	// from a helper's result, the helper that proposed it.

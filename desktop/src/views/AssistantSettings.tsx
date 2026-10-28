@@ -108,6 +108,19 @@ export function AssistantSettingsSection() {
             ))}
           </select>
         </label>
+        <label className="field">
+          <span>Work orders at once, per project</span>
+          <select
+            value={settings.max_running ?? 4}
+            onChange={(e) => update({ max_running: Number(e.target.value) })}
+          >
+            {[1, 2, 3, 4, 5, 6, 8, 10, 12].map((count) => (
+              <option key={count} value={count}>
+                {count}
+              </option>
+            ))}
+          </select>
+        </label>
       </div>
       <p className="muted note">
         <strong>Effort</strong> is how long a model thinks before it acts. More effort can catch
@@ -115,6 +128,11 @@ export function AssistantSettingsSection() {
         of your agents&apos; limits. The assistant picks an effort for each phase of the work it
         starts, usually high for planning and medium for implementing, and never above the highest
         you set here. Your own work orders are not limited.
+      </p>
+      <p className="muted note">
+        <strong>Work orders at once</strong>: the assistant starts everything that is ready, like a
+        team, and the work merges one at a time. More at once builds faster but uses your
+        agents&apos; limits faster too; the rest start as running ones finish.
       </p>
       {error && <div className="banner banner--error">{error}</div>}
       <div className="row">

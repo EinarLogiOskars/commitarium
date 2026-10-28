@@ -891,7 +891,7 @@ function ActionCard({
           <li>
             {action.queued
               ? `Queued: starts once ${action.after} has merged`
-              : `Best after ${action.after}: it changes the same part of the app`}
+              : `Best after ${action.after}: it builds on that work`}
           </li>
         )}
         {action.type === "create_work_order" && action.brief && (
