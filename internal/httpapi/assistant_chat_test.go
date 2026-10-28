@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -27,6 +28,8 @@ type conversationStub struct {
 	handling map[string]bool
 	// blockedAt is the blocker time attention last asked about.
 	blockedAt time.Time
+	// goalErr is what starting a goal answers.
+	goalErr error
 	// activeAt is when autopilot last moved each work order on.
 	activeAt map[string]time.Time
 	// settings are the assistant's; an empty agent means not set up.
@@ -101,7 +104,7 @@ func (stub *conversationStub) Action(context.Context, string, string) (conversat
 
 func (stub *conversationStub) StartGoal(_ context.Context, scope string, level int) (conversations.Conversation, error) {
 	stub.goalLevel = level
-	return conversations.Conversation{Scope: scope}, nil
+	return conversations.Conversation{Scope: scope}, stub.goalErr
 }
 
 func (stub *conversationStub) ActiveGoals(context.Context) (map[string]conversations.Goal, error) {
@@ -202,6 +205,29 @@ func TestAutopilotAppliesActionsThroughTheSameApproval(t *testing.T) {
 	}
 	if stub.goalLevel != 1 || stub.resolvedStatus != conversations.ActionApplied || !strings.Contains(stub.resolvedResult, "P1") {
 		t.Fatalf("goal level %d, resolved %s %q", stub.goalLevel, stub.resolvedStatus, stub.resolvedResult)
+	}
+}
+
+// Starting autopilot on a priority whose items are all done settles the
+// card as already done, rather than leave it for the user with an error.
+func TestAutopilotOnFinishedWorkIsAlreadyDone(t *testing.T) {
+	stub := &conversationStub{
+		action: conversations.Action{
+			ID: "act_1", Status: conversations.ActionProposed,
+			AssistantAction: featureartifact.AssistantAction{
+				Type: featureartifact.AssistantStartAutopilot, Reason: "Build the first version", Priority: 0,
+			},
+		},
+		goalErr: fmt.Errorf("%w in P0", conversations.ErrNothingLeft),
+	}
+	projects := &recordingProjectService{getByIDResult: project.Project{ID: "prj_test"}}
+	handler := NewWithWorkspaceRealWorkflowDeletionAndModels(projects, &recordingFeatureService{}, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, stub, testAgents())
+
+	if err := AssistantActionApplier(handler)(t.Context(), "prj_test", "act_1"); err != nil {
+		t.Fatal(err)
+	}
+	if !stub.settled || stub.resolvedResult != "Already done." {
+		t.Fatalf("settled %v, result %q", stub.settled, stub.resolvedResult)
 	}
 }
 

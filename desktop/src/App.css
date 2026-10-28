@@ -984,20 +984,110 @@ body {
 .status-line {
   margin: 0 0 6px;
 }
-.reply {
+/* The message box every composer shares (Composer.tsx): text that grows up
+   to six lines, then a bar with the +, any controls, and the send button. */
+.composer-box {
   display: flex;
-  gap: 8px;
-  align-items: flex-end;
-}
-.reply textarea {
-  flex: 1;
-  font: inherit;
-  resize: vertical;
-  padding: 8px 12px;
-  border-radius: 8px;
+  flex-direction: column;
   border: 1px solid var(--border);
+  border-radius: 12px;
   background: var(--panel);
+}
+.composer-box--disabled {
+  opacity: 0.7;
+}
+.composer-box__text {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  resize: none;
+  font: inherit;
+  line-height: 1.45;
+  padding: 10px 12px 4px;
+  border: none;
+  outline: none;
+  background: transparent;
   color: var(--text);
+  caret-color: var(--accent);
+}
+/* The caret shows where typing goes; the box needs no focus ring. */
+.composer-box__text:focus {
+  outline: none;
+}
+.composer-box__bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px 6px;
+}
+.composer-box__spacer {
+  flex: 1;
+}
+.composer-box__plus,
+.composer-box__send {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border-radius: 8px;
+}
+.composer-box__plus {
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--muted);
+}
+.composer-box__plus:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--muted);
+}
+.composer-box__send {
+  border: none;
+  background: var(--accent);
+  color: var(--accent-text);
+}
+.composer-box__send:disabled {
+  background: var(--border);
+  color: var(--muted);
+  cursor: default;
+}
+.composer-menu {
+  position: relative;
+}
+.composer-menu__list {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  z-index: 20;
+  min-width: 240px;
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel);
+  box-shadow: var(--float-shadow);
+}
+.composer-menu__item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  width: 100%;
+  padding: 7px 10px;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+}
+.composer-menu__item:hover {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+.composer-menu__hint {
+  font-size: 12px;
+  color: var(--muted);
 }
 /* Files attached to a message: chips above the composer's text, and
    thumbnails or file chips on a sent message. */
@@ -1013,15 +1103,6 @@ body {
 /* Hidden while the window is captured, so the screenshot is only the app. */
 .assistant--capturing {
   visibility: hidden;
-}
-.composer__screenshot-hint {
-  margin: 0 0 6px;
-  border-color: var(--border);
-  color: var(--text);
-}
-.attach-button {
-  flex: none;
-  padding: 6px 8px;
 }
 .attachments {
   display: flex;
@@ -2218,28 +2299,7 @@ button.danger:not(.ghost) {
   gap: 8px;
 }
 .intervene__composer {
-  display: flex;
-  align-items: flex-end;
-  gap: 8px;
   margin-top: 12px;
-}
-.intervene__text {
-  flex: 1 1 auto;
-  resize: vertical;
-  min-height: 40px;
-  font: inherit;
-  padding: 8px 12px;
-  border-radius: 8px;
-  border: 1px solid var(--border);
-  background: var(--panel);
-  color: var(--text);
-}
-.intervene__text:focus {
-  outline: none;
-  border-color: var(--accent);
-}
-.intervene__text:disabled {
-  opacity: 0.6;
 }
 .intervene__hint {
   margin: 8px 0 0;

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { AttachButton, AttachmentChips, useAttachments } from "./Attachments";
+import { AttachmentChips, useAttachments } from "./Attachments";
+import { ComposerBox } from "./Composer";
 import { deleteFeature, finishSession, renameFeature, sendSessionTurn } from "../api/features";
 import { recoverRun } from "../api/runs";
 import { ApiError } from "../api/client";
@@ -367,21 +368,18 @@ export function SessionView({
               onRemove={attachments.remove}
               disabled={busy !== null}
             />
-            <div className="reply">
-              <textarea
-                placeholder={model ? `Message ${model}…` : "Message the agent…"}
-                value={reply}
-                onChange={(e) => setReply(e.target.value)}
-                onPaste={attachments.onPaste}
-                onKeyDown={onKeyDown}
-                disabled={!canSend}
-                rows={2}
-              />
-              <AttachButton onFiles={attachments.add} disabled={!canSend} />
-              <button onClick={() => void send()} disabled={!canSend || !hasMessage}>
-                {busy === "send" ? "Sending…" : "Send"}
-              </button>
-            </div>
+            <ComposerBox
+              placeholder={model ? `Message ${model}…` : "Message the agent…"}
+              value={reply}
+              onChange={setReply}
+              onPaste={attachments.onPaste}
+              onKeyDown={onKeyDown}
+              disabled={!canSend}
+              onFiles={attachments.add}
+              onSubmit={() => void send()}
+              submitDisabled={!canSend || !hasMessage}
+              submitLabel={busy === "send" ? "Sending…" : "Send"}
+            />
           </div>
         )}
       </section>

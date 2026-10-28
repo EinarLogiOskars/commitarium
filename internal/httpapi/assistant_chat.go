@@ -509,7 +509,17 @@ func (api *API) approveConversationActionHandler(w http.ResponseWriter, r *http.
 		}
 		result, ok = fmt.Sprintf("Closed “%s”.", closed.Title), true
 	case featureartifact.AssistantStartAutopilot:
-		if _, err := api.conversations.StartGoal(r.Context(), scope, action.Priority); err != nil {
+		if _, err := api.conversations.StartGoal(r.Context(), scope, action.Priority); errors.Is(err, conversations.ErrNothingLeft) {
+			// Everything it would finish is done: the card settles, the
+			// user pressed it late or autopilot came after the work.
+			conversation, err := api.conversations.Settle(r.Context(), scope, actionID, "Already done.")
+			if err != nil {
+				writeConversationError(w, err)
+				return
+			}
+			writeJSON(w, http.StatusOK, conversation, "assistant conversation")
+			return
+		} else if err != nil {
 			writeConversationError(w, err)
 			return
 		}

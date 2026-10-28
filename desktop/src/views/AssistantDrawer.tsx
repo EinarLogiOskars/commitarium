@@ -1,5 +1,6 @@
 import { SCREENSHOT_PROMPT, captureScreenshot, nextPaint } from "./screenshot";
-import { AttachButton, AttachmentChips, SentAttachments, useAttachments } from "./Attachments";
+import { AttachmentChips, SentAttachments, useAttachments } from "./Attachments";
+import { ComposerBox } from "./Composer";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   approveAssistantAction,
@@ -628,59 +629,47 @@ export function AssistantDrawer({
                 {attachments.problem && (
                   <p className="note composer__problem">{attachments.problem}</p>
                 )}
-                {canCapture && !draft.trim() && attachments.items.length === 0 && (
-                  <button
-                    className="ghost composer__screenshot-hint"
-                    onClick={() => void takeScreenshot()}
-                    disabled={sending}
-                  >
-                    📷 Show the assistant
-                  </button>
-                )}
                 <AttachmentChips
                   items={attachments.items}
                   onRemove={attachments.remove}
                   disabled={sending}
                 />
-                <div className="reply">
-                  <textarea
-                    ref={composerRef}
-                    rows={2}
-                    value={draft}
-                    autoFocus
-                    placeholder={
-                      askChange
-                        ? SCREENSHOT_PROMPT
-                        : running
-                          ? "The assistant is busy; write anyway, it answers next…"
-                          : "Ask the assistant…"
-                    }
-                    onChange={(e) => setDraft(e.target.value)}
-                    onPaste={attachments.onPaste}
-                    onKeyDown={(e) => {
-                      if (e.key === "Escape") setOpen(false);
-                      if (e.key !== "Enter" || e.shiftKey) return;
-                      e.preventDefault();
-                      if (!sending && !guidance && canSend) void send();
-                    }}
-                    disabled={sending}
-                  />
-                  {canCapture && (
-                    <button
-                      className="ghost attach-button"
-                      aria-label="Take a screenshot and describe what to change"
-                      title="Take a screenshot and describe what to change"
-                      onClick={() => void takeScreenshot()}
-                      disabled={sending}
-                    >
-                      📷
-                    </button>
-                  )}
-                  <AttachButton onFiles={attachments.add} disabled={sending} />
-                  <button onClick={() => void send()} disabled={sending || !!guidance || !canSend}>
-                    {sending ? "Sending…" : "Send"}
-                  </button>
-                </div>
+                <ComposerBox
+                  textareaRef={composerRef}
+                  value={draft}
+                  autoFocus
+                  placeholder={
+                    askChange
+                      ? SCREENSHOT_PROMPT
+                      : running
+                        ? "The assistant is busy; write anyway, it answers next…"
+                        : "Ask the assistant…"
+                  }
+                  onChange={setDraft}
+                  onPaste={attachments.onPaste}
+                  onKeyDown={(e) => {
+                    if (e.key === "Escape") setOpen(false);
+                    if (e.key !== "Enter" || e.shiftKey) return;
+                    e.preventDefault();
+                    if (!sending && !guidance && canSend) void send();
+                  }}
+                  disabled={sending}
+                  onFiles={attachments.add}
+                  options={
+                    canCapture
+                      ? [
+                          {
+                            label: "Screenshot the app",
+                            hint: "Show the assistant what to change",
+                            onSelect: () => void takeScreenshot(),
+                          },
+                        ]
+                      : []
+                  }
+                  onSubmit={() => void send()}
+                  submitDisabled={sending || !!guidance || !canSend}
+                  submitLabel={sending ? "Sending…" : "Send"}
+                />
               </div>
             </>
           )}

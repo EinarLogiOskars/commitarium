@@ -1,12 +1,7 @@
 import { useContext, useState } from "react";
 import { splitAttached } from "../api/attachments";
-import {
-  AttachButton,
-  AttachmentChips,
-  AttachmentOwner,
-  SentAttachments,
-  useAttachments,
-} from "./Attachments";
+import { AttachmentChips, AttachmentOwner, SentAttachments, useAttachments } from "./Attachments";
+import { ComposerBox } from "./Composer";
 import { pauseRun, queueIntervention, reopenRun, resumeRun } from "../api/runs";
 import { ApiError } from "../api/client";
 import { RecoveryPanel } from "./RecoveryPanel";
@@ -279,36 +274,14 @@ export function InterveneBar({
         className={`intervene__composer${attachments.dragging ? " composer--drop" : ""}`}
         {...attachments.dropProps}
       >
-        {/* A work order without a reviewer has only the lead to message. */}
-        {run.steps?.reviewer !== false && (
-          <div className="seg">
-            <button
-              className={`seg__opt ${agent === "lead" ? "seg__opt--on" : ""}`}
-              onClick={() => setAgent("lead")}
-              disabled={busy != null}
-            >
-              Lead
-            </button>
-            <button
-              className={`seg__opt ${agent === "reviewer" ? "seg__opt--on" : ""}`}
-              onClick={() => setAgent("reviewer")}
-              disabled={busy != null || !reviewerAvailable}
-              title={reviewerAvailable ? undefined : "The reviewer has not joined this run yet"}
-            >
-              Reviewer
-            </button>
-          </div>
-        )}
-        <textarea
-          className="intervene__text"
-          rows={2}
+        <ComposerBox
           placeholder={
             run.agent_models?.[agent]
               ? `Message the ${agent} (${modelName(run.agent_models[agent])})…`
               : `Message the ${agent}…`
           }
           value={text}
-          onChange={(e) => setText(e.target.value)}
+          onChange={setText}
           onPaste={attachments.onPaste}
           onKeyDown={(e) => {
             if (e.key === "Enter" && !e.shiftKey) {
@@ -317,16 +290,41 @@ export function InterveneBar({
             }
           }}
           disabled={busy != null || delivering}
+          onFiles={attachments.add}
+          filesDisabled={busy != null || delivering || !owner}
+          leading={
+            <>
+              {/* A work order without a reviewer has only the lead to message. */}
+              {run.steps?.reviewer !== false && (
+                <div className="seg">
+                  <button
+                    className={`seg__opt ${agent === "lead" ? "seg__opt--on" : ""}`}
+                    onClick={() => setAgent("lead")}
+                    disabled={busy != null}
+                  >
+                    Lead
+                  </button>
+                  <button
+                    className={`seg__opt ${agent === "reviewer" ? "seg__opt--on" : ""}`}
+                    onClick={() => setAgent("reviewer")}
+                    disabled={busy != null || !reviewerAvailable}
+                    title={
+                      reviewerAvailable ? undefined : "The reviewer has not joined this run yet"
+                    }
+                  >
+                    Reviewer
+                  </button>
+                </div>
+              )}
+            </>
+          }
+          onSubmit={submit}
+          submitDisabled={busy != null || delivering || (!hasMessage && !running)}
+          submitLabel={
+            running && !hasMessage ? `${submitLabel}: stops at the next safe boundary` : submitLabel
+          }
+          submitIcon={running && !hasMessage ? "pause" : "send"}
         />
-        <AttachButton onFiles={attachments.add} disabled={busy != null || delivering || !owner} />
-        <button
-          className="primary"
-          onClick={submit}
-          disabled={busy != null || delivering || (!hasMessage && !running)}
-          title={running ? "Pauses at the next safe boundary" : undefined}
-        >
-          {submitLabel}
-        </button>
       </div>
       <p className="muted intervene__hint">
         {delivering
