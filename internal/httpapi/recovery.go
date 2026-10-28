@@ -199,6 +199,9 @@ func exhaustedDetail(title string, kind execution.BlockerKind) string {
 		return title + ": a check on Commitarium's side keeps failing. Report it, or start the work order over."
 	case execution.BlockerAgent:
 		return title + ": its agents couldn't fix what went wrong. Report it, or start the work order over."
+	case execution.BlockerCommitarium:
+		return title + ": a check in Commitarium keeps refusing work its agent put right, which looks like a " +
+			"problem in Commitarium. Report it, or start the work order over."
 	}
 	return title + " couldn't be finished. Report it, or start the work order over."
 }

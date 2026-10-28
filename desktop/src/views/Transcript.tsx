@@ -34,7 +34,7 @@ function agentText(text: string): string {
 
 export interface TranscriptEntry {
   key: string;
-  role: string; // "lead" | "reviewer" | "user" | "assistant_guidance" | agent id
+  role: string; // "lead" | "reviewer" | "user" | "assistant_guidance" | "commitarium_guidance" | agent id
   type: string; // "message" | "plan_submitted" | "activity" | ...
   text: string;
   activity?: ActivityDetail; // structured command / file-change detail
@@ -110,13 +110,15 @@ function MessageEntry({ e }: { e: TranscriptEntry }) {
         ? "You"
         : e.role === "assistant" || e.role === "assistant_guidance"
           ? "Assistant"
-          : "Lead";
+          : e.role === "commitarium_guidance"
+            ? "Commitarium"
+            : "Lead";
   // Guidance the assistant gave an agent sits on the user's side: it is a
   // message to the agent, written on the user's behalf.
   const cls =
     e.role === "reviewer"
       ? "msg--reviewer"
-      : e.role === "user" || e.role === "assistant_guidance"
+      : e.role === "user" || e.role === "assistant_guidance" || e.role === "commitarium_guidance"
         ? "msg--user"
         : "msg--lead";
   return (

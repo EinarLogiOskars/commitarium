@@ -106,6 +106,9 @@ type RecoveryDirective struct {
 	// previewCheck is what a failed preview check saw, which Commitarium
 	// hands to the lead to fix (preview_check.go).
 	previewCheck string
+	// selfCorrection says Commitarium wrote Message: a refused turn handed
+	// back to its agent (self_correction.go).
+	selfCorrection bool
 }
 
 // answersBlocker reports whether the user chose to move the work on, which
@@ -339,7 +342,10 @@ type RemoteLeadStarter struct {
 
 	activeMu sync.Mutex
 	active   map[string]struct{}
-	mergeMu  sync.Mutex
+	// corrections are refused turns to hand back to their agents once their
+	// runs are released (self_correction.go).
+	corrections map[string]func()
+	mergeMu     sync.Mutex
 	// acceptanceJoinMu closes the small window where both parallel workers can
 	// observe the other as incomplete and then both leave without starting the
 	// review. The durable turn admission still provides cross-process safety.
@@ -750,7 +756,7 @@ func (starter *RemoteLeadStarter) recoverWithDirective(
 				starter.release(run.ID)
 				return checkpointErr
 			}
-			request := remoteLeadRequest{runID: run.ID, allowRecoveryContinuation: recoveryPolicy == project.RecoveryPolicyAutomatic, forceFreshRecovery: directive.Action == RecoveryActionReplace, recoveryMessage: directive.Message, guidanceFromAssistant: directive.FromAssistant, answerBlocker: directive.answersBlocker(), interruption: directive.interruption, identity: workerhttp.MutationIdentity{AttemptReference: workerhttp.AttemptReference{SessionID: active.ID, AttemptID: checkpoint.AttemptID}}}
+			request := remoteLeadRequest{runID: run.ID, allowRecoveryContinuation: recoveryPolicy == project.RecoveryPolicyAutomatic, forceFreshRecovery: directive.Action == RecoveryActionReplace, recoveryMessage: directive.Message, guidanceFromAssistant: directive.FromAssistant, answerBlocker: directive.answersBlocker(), guided: directive.selfCorrection, selfCorrection: directive.selfCorrection, interruption: directive.interruption, identity: workerhttp.MutationIdentity{AttemptReference: workerhttp.AttemptReference{SessionID: active.ID, AttemptID: checkpoint.AttemptID}}}
 			switch {
 			case active.Role == worker.RoleLead:
 				version, _, ok := workflowAttemptVersionAndTurn(active.ID, "implementation", checkpoint.AttemptID)
@@ -871,6 +877,8 @@ func (starter *RemoteLeadStarter) recoverWithDirective(
 		recoveryMessage:           directive.Message,
 		guidanceFromAssistant:     directive.FromAssistant,
 		answerBlocker:             directive.answersBlocker(),
+		guided:                    directive.selfCorrection,
+		selfCorrection:            directive.selfCorrection,
 		interruption:              directive.interruption,
 		agentName:                 "lead agent",
 		waitingReason:             waitingReasonForAttempt(session, checkpoint.AttemptID),
@@ -2137,6 +2145,15 @@ func (starter *RemoteLeadStarter) recoverIdleReviewingRun(
 			}
 			return starter.answerLeadBlocker(ctx, run, lead, leadCheckpoint, attempt, directive, false, contract)
 		}
+		if directive.selfCorrection {
+			// Commitarium refused the lead's answer to the review and hands
+			// it back: the lead tries the same round again.
+			contract := workerhttp.OutputContractImplementationLead
+			if acknowledging {
+				contract = workerhttp.OutputContractImplementationReadiness
+			}
+			return starter.answerLeadBlocker(ctx, run, lead, leadCheckpoint, attempt, directive, true, contract)
+		}
 		request := remoteLeadRequest{runID: run.ID, agentName: "lead agent", identity: workerhttp.MutationIdentity{
 			AttemptReference: workerhttp.AttemptReference{SessionID: lead.ID, AttemptID: leadCheckpoint.AttemptID},
 		}}
@@ -2235,6 +2252,7 @@ func (starter *RemoteLeadStarter) continueOrVerifyReviewTurn(
 			runID: run.ID, agentName: "reviewer", allowRecoveryContinuation: true,
 			answerBlocker: true, guided: guided, forceFreshRecovery: directive.Action == RecoveryActionReplace,
 			recoveryMessage: directive.Message, guidanceFromAssistant: directive.FromAssistant, refusal: refusal,
+			selfCorrection: directive.selfCorrection,
 			identity: workerhttp.MutationIdentity{AttemptReference: workerhttp.AttemptReference{
 				SessionID: reviewer.ID, AttemptID: checkpoint.AttemptID,
 			}},
@@ -2518,6 +2536,10 @@ type remoteLeadRequest struct {
 	// previewCheck is the evidence of a failed preview check the lead's next
 	// turn fixes.
 	previewCheck string
+	// selfCorrection says recoveryMessage is Commitarium handing a refused
+	// turn back to its agent (self_correction.go): it continues the turn as
+	// guided, whatever phase it was in.
+	selfCorrection bool
 }
 
 func interventionAttemptID(sessionID, interventionID string) string {
@@ -4395,6 +4417,8 @@ func (starter *RemoteLeadStarter) continueFailedAttempt(
 			guidance += "\n\nThe user continued the work order with this guidance: " + message
 		}
 		request.recoveryMessage = guidance
+	} else if answered && request.selfCorrection {
+		// The correction already says what was refused and what to do.
 	} else if answered && request.guided && attempt.Result.Disposition != workerhttp.DispositionInputRequired {
 		guidance := "Your previous turn finished, but Commitarium could not accept its result, so " +
 			"the work order was blocked."
@@ -4534,7 +4558,8 @@ func (starter *RemoteLeadStarter) continueFailedAttempt(
 		return false, err
 	}
 	if guidance != "" {
-		starter.recordGuidance(ctx, session.ID, nextAttemptID, guidance, request.guidanceFromAssistant)
+		starter.recordGuidanceBy(ctx, session.ID, nextAttemptID, guidance,
+			guidanceAuthor(request.guidanceFromAssistant, request.selfCorrection))
 	}
 	starter.launchRecoverySuccessor(ctx, request, session, storedFeature, briefing)
 	return true, nil
@@ -4546,10 +4571,24 @@ func (starter *RemoteLeadStarter) continueFailedAttempt(
 func (starter *RemoteLeadStarter) recordGuidance(
 	ctx context.Context, sessionID, attemptID, guidance string, fromAssistant bool,
 ) {
-	author := "user"
-	if fromAssistant {
-		author = "assistant"
+	starter.recordGuidanceBy(ctx, sessionID, attemptID, guidance, guidanceAuthor(fromAssistant, false))
+}
+
+// guidanceAuthor names who wrote a continuation's guidance: the user, the
+// assistant, or Commitarium handing a refused turn back.
+func guidanceAuthor(fromAssistant, selfCorrection bool) string {
+	switch {
+	case selfCorrection:
+		return "commitarium"
+	case fromAssistant:
+		return "assistant"
 	}
+	return "user"
+}
+
+func (starter *RemoteLeadStarter) recordGuidanceBy(
+	ctx context.Context, sessionID, attemptID, guidance, author string,
+) {
 	if _, err := starter.executions.RecordSessionEventWithID(
 		ctx, attemptID+":guidance:"+author, sessionID,
 		worker.Event{Type: worker.EventUserMessage, Text: guidance},
@@ -4696,8 +4735,11 @@ func (starter *RemoteLeadStarter) launchRecoverySuccessor(
 ) {
 	if request.recoveryMessage != "" {
 		heading := "User recovery guidance:"
-		if request.previewCheck != "" {
+		switch {
+		case request.previewCheck != "":
 			heading = "Commitarium's preview check:"
+		case request.selfCorrection:
+			heading = "Commitarium's correction:"
 		}
 		briefing += "\n\n" + heading + "\n" + request.recoveryMessage
 		if len(briefing) > workerhttp.MaxInstructionsBytes {
@@ -6911,9 +6953,15 @@ func (starter *RemoteLeadStarter) requireReview(
 	} else {
 		starter.turnEnded(ctx, request.runID, request.identity.SessionID)
 	}
+	kind, check := classifyCause(cause)
+	fingerprint := execution.BlockerFingerprint(kind, check, blockerFingerprintDetail(cause))
+	correction := starter.planSelfCorrection(ctx, request.runID, cause, fingerprint)
 	text := "The coordinator could not complete the " + request.agentName + " turn. " +
 		"The work order is paused so its durable work can be checked and continued safely." +
 		spentRetries(retries)
+	if correction.prompt != "" {
+		text = selfCorrectionReason(request.agentName, correction)
+	}
 	// What failed, so the user (and the assistant) can tell the agent what to fix.
 	if detail := strings.TrimSpace(cause.Error()); detail != "" {
 		if len(detail) > 400 {
@@ -6921,8 +6969,13 @@ func (starter *RemoteLeadStarter) requireReview(
 		}
 		text += " What failed: " + detail + "."
 	}
-	kind, check := classifyCause(cause)
-	starter.noteBlockerFingerprinted(ctx, request.runID, kind, check, cause.Error(), blockerFingerprintDetail(cause), text)
+	if correction.prompt == "" {
+		text += selfCorrectionReason(request.agentName, correction)
+	}
+	if correction.suspect {
+		kind = execution.BlockerCommitarium
+	}
+	starter.recordBlocker(ctx, request.runID, kind, check, cause.Error(), fingerprint, text)
 	_, _ = starter.executions.RecordSessionEventWithID(
 		ctx, request.identity.AttemptID+":recovery:review-required",
 		request.identity.SessionID,
@@ -6938,6 +6991,10 @@ func (starter *RemoteLeadStarter) requireReview(
 		)
 	}
 	_ = starter.waitRun(ctx, request.runID, text, execution.RunWaitKindBlocker)
+	if correction.prompt != "" {
+		starter.correctAfterRelease(request.runID,
+			request.identity.AttemptID+":self-correction:"+fingerprint, correction.prompt)
+	}
 }
 
 func (starter *RemoteLeadStarter) handleInputRequired(
@@ -7101,5 +7158,10 @@ func (starter *RemoteLeadStarter) claim(runID string) bool {
 func (starter *RemoteLeadStarter) release(runID string) {
 	starter.activeMu.Lock()
 	delete(starter.active, runID)
+	correct := starter.corrections[runID]
+	delete(starter.corrections, runID)
 	starter.activeMu.Unlock()
+	if correct != nil {
+		go correct()
+	}
 }

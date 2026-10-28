@@ -597,7 +597,7 @@ func (starter *RemoteLeadStarter) answerLeadBlocker(
 		runID: run.ID, agentName: "lead agent", allowRecoveryContinuation: true,
 		answerBlocker: true, guided: guided, forceFreshRecovery: directive.Action == RecoveryActionReplace,
 		recoveryMessage: directive.Message, guidanceFromAssistant: directive.FromAssistant,
-		previewCheck: directive.previewCheck,
+		previewCheck: directive.previewCheck, selfCorrection: directive.selfCorrection,
 		identity: workerhttp.MutationIdentity{AttemptReference: workerhttp.AttemptReference{
 			SessionID: lead.ID, AttemptID: checkpoint.AttemptID,
 		}},

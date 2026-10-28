@@ -37,6 +37,16 @@ func (starter *RemoteLeadStarter) noteBlocker(
 func (starter *RemoteLeadStarter) noteBlockerFingerprinted(
 	ctx context.Context, runID string, kind execution.BlockerKind, check, detail, fingerprintDetail, reason string,
 ) {
+	starter.recordBlocker(ctx, runID, kind, check, detail,
+		execution.BlockerFingerprint(kind, check, fingerprintDetail), reason)
+}
+
+// recordBlocker is noteBlocker with the failure's fingerprint already known:
+// a refusal found to be likely Commitarium's own keeps the fingerprint of
+// the failure it was.
+func (starter *RemoteLeadStarter) recordBlocker(
+	ctx context.Context, runID string, kind execution.BlockerKind, check, detail, fingerprint, reason string,
+) {
 	store, ok := starter.executions.(blockerStore)
 	if !ok {
 		return
@@ -47,7 +57,7 @@ func (starter *RemoteLeadStarter) noteBlockerFingerprinted(
 	}
 	if err := store.RecordRunBlocker(ctx, execution.Blocker{
 		RunID: runID, Kind: kind, Check: check, Detail: detail, Reason: reason,
-		Fingerprint: execution.BlockerFingerprint(kind, check, fingerprintDetail), RecordedAt: time.Now().UTC(),
+		Fingerprint: fingerprint, RecordedAt: time.Now().UTC(),
 	}); err != nil {
 		starter.reportError(err)
 	}
@@ -130,7 +140,8 @@ func classifyCause(cause error) (execution.BlockerKind, string) {
 
 // noteRecovery records a recovery the user or the assistant chose for the
 // run's current blocker, so a move that already failed on the same failure
-// is not tried again (ADR-032). Automatic retries are not recoveries.
+// is not tried again (ADR-032). Automatic retries are not recoveries; a
+// refused turn handed back to its agent is one (self_correction.go).
 func (starter *RemoteLeadStarter) noteRecovery(
 	ctx context.Context, runID, actionID string, directive RecoveryDirective,
 ) {
@@ -139,10 +150,12 @@ func (starter *RemoteLeadStarter) noteRecovery(
 		return
 	}
 	how := execution.RecoveryContinue
-	switch directive.Action {
-	case RecoveryActionRecheck:
+	switch {
+	case directive.selfCorrection:
+		how = execution.RecoverySelfCorrection
+	case directive.Action == RecoveryActionRecheck:
 		how = execution.RecoveryRecheck
-	case RecoveryActionReplace:
+	case directive.Action == RecoveryActionReplace:
 		how = execution.RecoveryFreshConversation
 	}
 	fingerprint := ""

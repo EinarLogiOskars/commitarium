@@ -46,7 +46,10 @@ export function useSessionEvents(
         : // Guidance the assistant (autopilot) wrote for a Continue.
           e.id.endsWith(":guidance:assistant")
           ? "assistant_guidance"
-          : "user";
+          : // A refused turn Commitarium handed back to its agent.
+            e.id.endsWith(":guidance:commitarium")
+            ? "commitarium_guidance"
+            : "user";
     const previewKey = (sessionId: string, streamId: string) => `${sessionId}::${streamId}`;
 
     const addDurable = (sessionId: string, role: string, e: SessionEvent) => {

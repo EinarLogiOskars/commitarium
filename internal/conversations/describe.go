@@ -483,7 +483,10 @@ func (describer StateDescriber) blockerNote(ctx context.Context, runID string) s
 		builder.WriteString("\n    Recoveries tried:")
 		for _, recovery := range recoveries {
 			who := "the user"
-			if recovery.FromAssistant {
+			switch {
+			case recovery.How == execution.RecoverySelfCorrection:
+				who = "Commitarium"
+			case recovery.FromAssistant:
 				who = "you"
 			}
 			line := "\n    - " + string(recovery.How) + " by " + who
