@@ -28,23 +28,7 @@ export function ProjectSyncCard({
   projectId: string;
   projectName: string;
 }) {
-  const [state, setState] = useState<ProjectSyncState | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  const load = useCallback(async () => {
-    try {
-      setState(await getProjectSyncState(projectId));
-      setError(null);
-    } catch (e) {
-      setError(String(e));
-    }
-  }, [projectId]);
-
-  useEffect(() => {
-    void load();
-    const id = setInterval(() => void load(), POLL_MS);
-    return () => clearInterval(id);
-  }, [load]);
+  const { state, error, load } = useProjectSync(projectId);
 
   if (error && !state) {
     return (
@@ -64,12 +48,7 @@ export function ProjectSyncCard({
   }
 
   const isGit = state.source?.sourceType === "git";
-  const creatingFirstRemote = Boolean(
-    isGit &&
-    state.source?.createdByCommitarium &&
-    state.local.watermarkCommitId === state.canonical.headCommitId &&
-    !state.upstreams.some((upstream) => upstream.watermarkCommitId != null),
-  );
+  const creatingFirstRemote = needsFirstRemote(state);
 
   return (
     <section className="panel">
@@ -94,6 +73,234 @@ export function ProjectSyncCard({
         <CreateRemote state={state} projectName={projectName} onDone={load} />
       )}
     </section>
+  );
+}
+
+/** The project's sync state, read again every few seconds. */
+export function useProjectSync(projectId: string) {
+  const [state, setState] = useState<ProjectSyncState | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      setState(await getProjectSyncState(projectId));
+      setError(null);
+    } catch (e) {
+      setError(String(e));
+    }
+  }, [projectId]);
+
+  useEffect(() => {
+    setState(null);
+    setError(null);
+    void load();
+    const id = setInterval(() => void load(), POLL_MS);
+    return () => clearInterval(id);
+  }, [load]);
+
+  return { state, error, load };
+}
+
+/** Whether the project's first remote is still to be created: Commitarium
+ * made the local repository, it holds the project, and nothing was pushed. */
+function needsFirstRemote(state: ProjectSyncState): boolean {
+  return Boolean(
+    state.source?.sourceType === "git" &&
+    state.source.createdByCommitarium &&
+    state.local.watermarkCommitId === state.canonical.headCommitId &&
+    !state.upstreams.some((upstream) => upstream.watermarkCommitId != null),
+  );
+}
+
+// The chat shell's Sync card (ADR-038): the user's copy and each remote
+// against the project, with Pull and Push. Setting up a local copy or a first
+// remote takes a form, so those open the full card on the project page.
+export function CompactProjectSync({
+  projectId,
+  onOpenFull,
+}: {
+  projectId: string;
+  onOpenFull: () => void;
+}) {
+  const { state, error, load } = useProjectSync(projectId);
+  const [busy, setBusy] = useState<null | "pull" | "prepare" | "push">(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>(null);
+  const [push, setPush] = useState<ProjectUpstreamResult | null>(null);
+
+  if (!state) {
+    return error ? (
+      <p className="sync-card__error">{error}</p>
+    ) : (
+      <p className="muted shell-card__text">Checking…</p>
+    );
+  }
+
+  const git = state.source?.sourceType === "git";
+  const behind = state.local.unsyncedFeatures.length;
+  const localSynced = state.local.watermarkCommitId === state.canonical.headCommitId;
+  const firstRemote = needsFirstRemote(state);
+
+  const pull = async () => {
+    setBusy("pull");
+    setActionError(null);
+    setNote(null);
+    try {
+      const r = await synchronizeProjectLocally(
+        state.projectId,
+        `Sync from Commitarium (${state.canonical.headCommitId.slice(0, 12)})`,
+      );
+      setNote(r.created ? "Your copy has the latest work." : "Already up to date.");
+      await load();
+    } catch (e) {
+      setActionError(String(e));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  // Like the full card, a push is prepared first: it names the branch it
+  // creates, and the user confirms it.
+  const prepare = async (remote: string) => {
+    setBusy("prepare");
+    setActionError(null);
+    setNote(null);
+    try {
+      const p = await previewProjectUpstreamBranch(state.projectId);
+      setPush({ ...p, selectedRemote: remote });
+    } catch (e) {
+      setActionError(String(e));
+    } finally {
+      setBusy(null);
+    }
+  };
+  const publish = async () => {
+    if (!push?.selectedRemote) return;
+    setBusy("push");
+    setActionError(null);
+    try {
+      const r = await publishProjectUpstreamBranch(
+        state.projectId,
+        push.selectedRemote,
+        push.branchName,
+      );
+      setPush(null);
+      setNote(
+        r.status === "published" || r.status === "already_published"
+          ? `Pushed to ${push.selectedRemote}/${r.branchName}.`
+          : (upstreamHint(r.status, r.detail) ?? "The push didn't go through."),
+      );
+      await load();
+    } catch (e) {
+      setActionError(String(e));
+    } finally {
+      setBusy(null);
+    }
+  };
+  const pushHint = push && push.status !== "ready" ? upstreamHint(push.status, push.detail) : null;
+
+  return (
+    <>
+      <div className="sync-card__row">
+        <span
+          className={`dot ${!state.source ? "dot--muted" : behind ? "dot--warn" : "dot--ok"}`}
+          aria-hidden
+        />
+        <span className="sync-card__what">
+          <span>Your computer</span>
+          <span className="muted">
+            {!state.source
+              ? "Not set up yet"
+              : behind
+                ? `${behind} work order${behind === 1 ? "" : "s"} to pull`
+                : "Up to date"}
+          </span>
+        </span>
+        {!state.source ? (
+          <button className="ghost sync-card__btn" onClick={onOpenFull}>
+            Set up
+          </button>
+        ) : (
+          behind > 0 && (
+            <button
+              className="ghost sync-card__btn"
+              onClick={() => void pull()}
+              disabled={busy !== null}
+              title={
+                git ? "Commit the latest work to your local repository" : "Copy it to your folder"
+              }
+            >
+              {busy === "pull" ? "Pulling…" : "Pull"}
+            </button>
+          )
+        )}
+      </div>
+
+      {git &&
+        !firstRemote &&
+        state.upstreams.map((upstream) => {
+          const ahead = upstream.unsyncedFeatures.length;
+          return (
+            <div className="sync-card__row" key={upstream.remoteName}>
+              <span className={`dot ${ahead ? "dot--warn" : "dot--ok"}`} aria-hidden />
+              <span className="sync-card__what">
+                <span title={upstream.displayLocation}>{upstream.displayLocation}</span>
+                <span className="muted">
+                  {ahead ? `${ahead} work order${ahead === 1 ? "" : "s"} to push` : "Up to date"}
+                </span>
+              </span>
+              {ahead > 0 && (
+                <button
+                  className="ghost sync-card__btn"
+                  onClick={() => void prepare(upstream.remoteName)}
+                  disabled={busy !== null || !localSynced}
+                  title={localSynced ? "Push to a new branch" : "Pull to your computer first"}
+                >
+                  {busy === "prepare" ? "Checking…" : "Push"}
+                </button>
+              )}
+            </div>
+          );
+        })}
+      {firstRemote && (
+        <p className="muted shell-card__text">
+          Only on your computer.{" "}
+          <button className="shell-card__link" onClick={onOpenFull}>
+            Add GitHub or another remote
+          </button>
+        </p>
+      )}
+
+      {push && (
+        <div className="sync-card__confirm">
+          {pushHint ? (
+            <p className="muted shell-card__text">
+              {pushHint}{" "}
+              <button className="shell-card__link" onClick={onOpenFull}>
+                Open sync options
+              </button>
+            </p>
+          ) : (
+            <p className="shell-card__text">
+              Push to a new branch, <strong>{push.branchName}</strong>, on {push.selectedRemote}?
+              Nothing there is overwritten.
+            </p>
+          )}
+          <div className="row">
+            {!pushHint && (
+              <button className="primary" onClick={() => void publish()} disabled={busy !== null}>
+                {busy === "push" ? "Pushing…" : "Push"}
+              </button>
+            )}
+            <button className="ghost" onClick={() => setPush(null)} disabled={busy === "push"}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+      {(actionError || error) && <p className="sync-card__error">{actionError || error}</p>}
+      {note && <p className="muted shell-card__text">{note}</p>}
+    </>
   );
 }
 
