@@ -302,6 +302,42 @@ func TestAttentionAsksToAutoRunValidationOnlyUnderAutoMerge(t *testing.T) {
 
 // A blocker autopilot is still on is shown quietly, under its own kind and ID,
 // so the inbox asks (and the desktop notifies) only once autopilot gives up.
+// A run that planned early and waits to implement until the work it builds
+// on merges goes on by itself: the inbox shows it, but asks nothing.
+func TestAttentionQuietsWorkWaitingToImplement(t *testing.T) {
+	now := time.Date(2026, time.October, 28, 12, 0, 0, 0, time.UTC)
+	for reason, held := range map[string]bool{
+		execution.ImplementationHoldReason("Build the app shell"): true,
+		execution.ImplementationSlotReason(3):                     true,
+		"Review the plan before implementing.":                    false,
+	} {
+		handler := New(
+			&recordingProjectService{listResult: []project.Project{{ID: "prj_one", Name: "One"}}},
+			&recordingFeatureService{listResult: []feature.Feature{{
+				ID: "fea_one", ProjectID: "prj_one", Title: "Live list", State: feature.StatePlanning,
+			}}}, nil,
+			&recordingExecutionService{runs: []execution.Run{{
+				ID: "run_one", FeatureID: "fea_one", Status: execution.RunStatusWaitingForUser,
+				WaitKind: execution.RunWaitKindPhaseCheckpoint, Reason: reason, StartedAt: now, UpdatedAt: now,
+			}}}, nil, nil,
+		)
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/v1/attention", nil))
+		var response attentionResponse
+		if err := json.NewDecoder(recorder.Body).Decode(&response); err != nil {
+			t.Fatalf("decode attention response: %v", err)
+		}
+		if len(response.Items) != 1 {
+			t.Fatalf("%q: items = %+v", reason, response.Items)
+		}
+		item := response.Items[0]
+		if held && (item.Kind != "implementation_held" || item.Actionable || item.Detail != reason) ||
+			!held && (item.Kind != "phase_checkpoint" || !item.Actionable) {
+			t.Fatalf("%q: item = %+v", reason, item)
+		}
+	}
+}
+
 func TestAttentionQuietsABlockerAutopilotIsHandling(t *testing.T) {
 	// Blocked just now: autopilot has yet to run out of time.
 	now := time.Now().UTC()
