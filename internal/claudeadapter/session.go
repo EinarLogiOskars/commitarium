@@ -449,7 +449,10 @@ type contentBlock struct {
 }
 
 type pendingTool struct {
-	Name      string
+	Name string
+	// Target is what a read, search, or web tool looks at, for its
+	// activity line.
+	Target    string
 	Command   string
 	Path      string
 	Operation worker.FileOperation
@@ -603,7 +606,7 @@ func (session *session) assistantEvents(blocks []contentBlock) []worker.Event {
 			session.tools[id] = tool
 			session.mu.Unlock()
 			if tool.Command == "" && tool.Path == "" {
-				events = append(events, worker.Event{Type: worker.EventActivity, Text: startedToolText(name)})
+				events = append(events, worker.Event{Type: worker.EventActivity, Text: startedToolText(name, tool.Target)})
 			}
 		}
 	}
@@ -673,8 +676,27 @@ func (session *session) describeTool(name string, input json.RawMessage) pending
 		OldString string `json:"old_string"`
 		NewString string `json:"new_string"`
 		Content   string `json:"content"`
+		Pattern   string `json:"pattern"`
+		Query     string `json:"query"`
+		URL       string `json:"url"`
 	}
 	if json.Unmarshal(input, &fields) != nil {
+		return tool
+	}
+	switch name {
+	case "Read":
+		if publicPath, _, err := session.resolveFilePath(fields.FilePath); err == nil {
+			tool.Target = publicPath
+		}
+		return tool
+	case "Grep", "Glob":
+		tool.Target = strings.TrimSpace(fields.Pattern)
+		return tool
+	case "WebSearch":
+		tool.Target = strings.TrimSpace(fields.Query)
+		return tool
+	case "WebFetch":
+		tool.Target = strings.TrimSpace(fields.URL)
 		return tool
 	}
 	if name == "Bash" && strings.TrimSpace(fields.Command) != "" {
@@ -960,7 +982,22 @@ func (session *session) complete(result worker.Result, err error) {
 	session.mu.Unlock()
 }
 
-func startedToolText(name string) string {
+// startedToolText announces a tool starting, naming its target when it has
+// one; the assistant's activity line reads these (conversations).
+func startedToolText(name, target string) string {
+	if target = strings.Join(strings.Fields(target), " "); len(target) > 200 {
+		target = strings.ToValidUTF8(target[:200], "") + "…"
+	}
+	switch {
+	case name == "Read" && target != "":
+		return "Claude started reading " + target + "."
+	case (name == "Grep" || name == "Glob") && target != "":
+		return "Claude started searching the workspace for " + target + "."
+	case name == "WebSearch" && target != "":
+		return "Claude started a web search: " + target + "."
+	case name == "WebFetch" && target != "":
+		return "Claude started a web request: " + target + "."
+	}
 	switch name {
 	case "Edit", "Write", "NotebookEdit":
 		return "Claude started a file change."

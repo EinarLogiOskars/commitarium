@@ -4,11 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"regexp"
 	"strings"
 	"unicode/utf8"
 
 	"github.com/EinarLogiOskars/commitarium/internal/execution"
+	"github.com/EinarLogiOskars/commitarium/internal/redact"
 )
 
 // A turn a check refused for something the agent can put right (a
@@ -99,26 +99,10 @@ func selfCorrectionPrompt(cause error) string {
 		"check is wrong, do not work around it with a change the work does not need: say so in your result."
 }
 
-// secretPatterns find what looks like a credential in a check's reason. The
-// worker redacts the secrets it knows from agents' activity; the coordinator
-// does not know them, so it redacts by shape. Commit IDs stay: the agent
-// needs them.
-var secretPatterns = []*regexp.Regexp{
-	// A URL's user and password.
-	regexp.MustCompile(`(://)[^/\s:@]+:[^/\s@]+(@)`),
-	// An authorization header, or a named secret's value.
-	regexp.MustCompile(`(?i)(authorization\s*:\s*(?:bearer|token|basic)\s+|\b(?:token|password|passwd|secret|api[_-]?key|access[_-]?token)\s*[=:]\s*)[^\s'"]+`),
-	// Provider tokens by their prefixes.
-	regexp.MustCompile(`()\b(?:ghp|gho|ghs|ghu|github_pat|glpat|sk|xox[abp])[-_][A-Za-z0-9_-]{16,}`),
-}
-
 // sanitizeReason replaces what looks like a credential with [REDACTED], as
 // the worker does.
 func sanitizeReason(reason string) string {
-	for _, pattern := range secretPatterns {
-		reason = pattern.ReplaceAllString(reason, "${1}[REDACTED]${2}")
-	}
-	return reason
+	return redact.Secrets(reason)
 }
 
 // selfCorrectionReason is the run's reason while a refused turn is handed

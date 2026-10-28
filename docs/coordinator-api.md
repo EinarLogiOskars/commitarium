@@ -2694,6 +2694,25 @@ actions, and its notes.
   records them as `attachments`, and its turn receives them (see
   [Message attachments](#message-attachments)). `400 invalid_assistant_request` when one
   is not there any more.
+- While a turn runs, the conversation's `activity` is `{"label", "detail",
+  "started_at", "retry"}`: the assistant's latest step, read from its
+  worker's activity stream and put in plain words (`label`, such as
+  "Searching the repository"), what it looked at (`detail`: a path, a
+  command, or a search, redacted; the desktop shows it in Developer mode
+  only), when the turn started (`turn_started_at` too), and which automatic
+  retry runs, if any. It is kept in memory only and is absent once the turn
+  ends.
+- A turn that ends without a reply runs again by itself, at most twice
+  (ADR-032): a reply Commitarium could not accept (an invalid structured
+  result, such as too many actions) runs again at once with the reason
+  handed back; a worker that could not be reached, restarted, or whose
+  provider service failed runs again after 5 s, then 30 s. Meanwhile the
+  conversation stays `running`. Once the retries run out, an `event` line
+  says plainly what happened and `failure` is `{"message_id", "detail"}`
+  (`detail` is the exact reason, for Developer mode). `POST
+  .../{scope}/retry` (empty body) runs that turn again and answers `202`
+  with the conversation; `409 nothing_to_retry` when no turn failed,
+  `409 assistant_busy` while one runs. A usage limit is not retried.
 - `PUT .../{scope}/focus` with `{"kind": "work_order"|"vision"|"stack",
   "work_order_id", "label"}` opens a project's conversation on an item: the
   assistant's turns name it and how to carry it through, and the

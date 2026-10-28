@@ -97,6 +97,17 @@ func (service *Service) SendAttached(ctx context.Context, scope, message, key st
 func (service *Service) startTurn(
 	ctx context.Context, stored record, settings Settings, key, promptRole, prompt string,
 ) (Conversation, error) {
+	now := service.now()
+	stored.Retry, stored.Failure, stored.TurnStartedAt = nil, nil, &now
+	return service.launchTurn(ctx, stored, settings, key, promptRole, prompt, prompt)
+}
+
+// launchTurn runs a turn on prompt, a new one or a retry (retry.go).
+// lastPrompt is what the turn is kept as, to run it again; prompt may add a
+// correction to it.
+func (service *Service) launchTurn(
+	ctx context.Context, stored record, settings Settings, key, promptRole, lastPrompt, prompt string,
+) (Conversation, error) {
 	scope := stored.Scope
 	now := service.now()
 	// A new provider session when there is none, when it grew long, or when
@@ -119,7 +130,7 @@ func (service *Service) startTurn(
 	}
 	stored.Keys[key] = stored.AttemptID
 	attached := turnAttachments(stored, promptRole)
-	stored.LastTurn = &turnInput{Role: promptRole, Prompt: prompt, Attachments: attached}
+	stored.LastTurn = &turnInput{Role: promptRole, Prompt: lastPrompt, Attachments: attached}
 	stored.Status = StatusRunning
 	stored.UpdatedAt = now
 	if fresh {
@@ -191,23 +202,25 @@ func (service *Service) startTurn(
 	}, request)
 	if err != nil {
 		log.Printf("assistant turn %q on agent %q (model %q): %v", stored.AttemptID, settings.Agent, settings.Model, err)
-		stored.Status = StatusIdle
-		stored.Messages = append(stored.Messages, Message{
-			ID: messageID(stored, len(stored.Messages)), Role: "event", OccurredAt: service.now(),
-			Text: "The assistant's agent could not be reached. Send your message again in a moment.",
-		})
+		// The worker did not take the turn: it runs again by itself.
+		service.failTurn(&stored, failureTransient, "the worker could not be reached: "+err.Error(), service.now())
 		_ = service.write(stored)
 		return stored.Conversation, nil
 	}
 	if attempt.ProviderSessionID != "" {
 		stored.ProviderSessionID = attempt.ProviderSessionID
 	}
+	service.followActivity(ctx, scope, settings.Agent, attempt.AttemptReference)
 	return stored.Conversation, service.write(stored)
 }
 
 // refresh folds a finished turn into the conversation: the reply, the
 // proposed actions, and the notes.
 func (service *Service) refresh(ctx context.Context, stored record) (record, error) {
+	if stored.Retry != nil && stored.Retry.DueAt != nil {
+		// The turn waits to run again (retry.go).
+		return service.retryDue(ctx, stored)
+	}
 	worker, err := service.config.Workers(stored.SessionAgent)
 	if err != nil || worker == nil {
 		return stored, nil
@@ -238,19 +251,25 @@ func (service *Service) refresh(ctx context.Context, stored record) (record, err
 	}
 	switch {
 	case attempt.State == workerhttp.AttemptStateIndeterminate:
-		note("The assistant's turn could not be recovered. Send your message again.")
+		kind, reason := turnFailure(attempt)
+		return service.failAndRetry(ctx, stored, kind, reason, now)
 	case attempt.State != workerhttp.AttemptStateTerminal:
 		return stored, service.write(stored)
 	case loginFailed(attempt.Result):
 		// The turn waits for its agent's login, its prompt kept.
 		logFailedTurn(stored.AttemptID, attempt.Result)
 		service.waitForSignIn(ctx, &stored, attempt.Result, now)
-	case attempt.Result == nil || attempt.Result.Outcome != workerhttp.OutcomeCompleted:
+	case usageLimited(attempt.Result):
 		logFailedTurn(stored.AttemptID, attempt.Result)
 		note(failureText(attempt.Result))
 		// The next turn starts a fresh provider session from the state.
 		stored.ProviderSessionID = ""
+		stored.Retry = nil
+	case attempt.Result == nil || attempt.Result.Outcome != workerhttp.OutcomeCompleted:
+		kind, reason := turnFailure(attempt)
+		return service.failAndRetry(ctx, stored, kind, reason, now)
 	default:
+		stored.Retry = nil
 		if stored.SignIn != nil {
 			stored.SignIn = nil
 		}
@@ -305,8 +324,7 @@ func (service *Service) refresh(ctx context.Context, stored record) (record, err
 	return stored, service.write(stored)
 }
 
-// logFailedTurn records why a turn ended without a reply; the conversation
-// only tells the user to try again.
+// logFailedTurn records why a turn ended without a reply.
 func logFailedTurn(attemptID string, result *workerhttp.TerminalResult) {
 	switch {
 	case result == nil:
@@ -318,15 +336,18 @@ func logFailedTurn(attemptID string, result *workerhttp.TerminalResult) {
 	}
 }
 
+// usageLimited reports whether a turn ended on its agent's usage limit:
+// running it again cannot help before the reset.
+func usageLimited(result *workerhttp.TerminalResult) bool {
+	return result != nil && result.Error != nil && result.Error.Code == workerhttp.ErrorUsageLimit
+}
+
 func failureText(result *workerhttp.TerminalResult) string {
-	if result != nil && result.Error != nil && result.Error.Code == workerhttp.ErrorUsageLimit {
-		if result.Error.ResetsAt != nil {
-			return "The assistant's agent reached its usage limit. Try again after " +
-				result.Error.ResetsAt.UTC().Format(time.RFC3339) + ", or choose another agent on the Agents page."
-		}
-		return "The assistant's agent reached its usage limit. Try again later, or choose another agent on the Agents page."
+	if result.Error.ResetsAt != nil {
+		return "The assistant's agent reached its usage limit. Try again after " +
+			result.Error.ResetsAt.UTC().Format(time.RFC3339) + ", or choose another agent on the Agents page."
 	}
-	return "The assistant's turn did not complete. Send your message again."
+	return "The assistant's agent reached its usage limit. Try again later, or choose another agent on the Agents page."
 }
 
 // prepareWorkspace gives a new provider session its working directory: a
