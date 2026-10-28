@@ -119,6 +119,9 @@ export interface AutopilotGoal {
 
 export interface Conversation {
   scope: string;
+  /** The chat this is (ADR-038), and its title; absent on older coordinators. */
+  chat?: string;
+  title?: string;
   status: "idle" | "running";
   agent: string;
   model: string;
@@ -167,8 +170,27 @@ export interface AssistantFocus {
 
 export type LaunchStage = "vision" | "setup" | "building";
 
-const conversationPath = (scope: string) =>
-  `/api/v1/assistant/conversations/${encodeURIComponent(scope)}`;
+/** A chat in a scope (ADR-038). */
+export interface ChatSummary {
+  id: string;
+  scope: string;
+  title: string;
+  status: "idle" | "running";
+  archived?: boolean;
+  /** When the user last wrote in it. */
+  used_at: string;
+  created_at: string;
+  updated_at: string;
+}
+
+/** A scope, which acts on its most recently used chat, or one chat in it. */
+export type ChatTarget = string | { scope: string; chat?: string };
+
+const conversationPath = (target: ChatTarget) => {
+  const { scope, chat } = typeof target === "string" ? { scope: target, chat: undefined } : target;
+  const path = `/api/v1/assistant/conversations/${encodeURIComponent(scope)}`;
+  return chat ? `${path}/chats/${encodeURIComponent(chat)}` : path;
+};
 
 export const getAssistantSettings = (): Promise<AssistantSettings> =>
   request("/api/v1/assistant/settings");
@@ -176,11 +198,11 @@ export const getAssistantSettings = (): Promise<AssistantSettings> =>
 export const saveAssistantSettings = (settings: AssistantSettings): Promise<AssistantSettings> =>
   request("/api/v1/assistant/settings", { method: "PUT", body: settings });
 
-export const getConversation = (scope: string): Promise<Conversation> =>
+export const getConversation = (scope: ChatTarget): Promise<Conversation> =>
   request(conversationPath(scope));
 
 export const sendToAssistant = (
-  scope: string,
+  scope: ChatTarget,
   message: string,
   key: string,
   attachments: string[] = [],
@@ -196,12 +218,12 @@ export const sendToAssistant = (
   });
 
 /** Runs again the turn whose automatic retries ran out. */
-export const retryAssistantTurn = (scope: string): Promise<Conversation> =>
+export const retryAssistantTurn = (scope: ChatTarget): Promise<Conversation> =>
   request(`${conversationPath(scope)}/retry`, { method: "POST" });
 
 /** Focus the conversation on an item, or clear the focus with null. */
 export const setAssistantFocus = (
-  scope: string,
+  scope: ChatTarget,
   focus: AssistantFocus | null,
 ): Promise<Conversation> =>
   focus
@@ -214,7 +236,7 @@ export const saveAssistantNotes = (scope: string, notes: string): Promise<Conver
 /** Run an action the assistant proposed. A premium model needs
  * confirm_premium; start also starts a created work order. */
 export const approveAssistantAction = (
-  scope: string,
+  scope: ChatTarget,
   actionId: string,
   options: {
     start?: boolean;
@@ -232,7 +254,10 @@ export const approveAssistantAction = (
     body: options,
   });
 
-export const dismissAssistantAction = (scope: string, actionId: string): Promise<Conversation> =>
+export const dismissAssistantAction = (
+  scope: ChatTarget,
+  actionId: string,
+): Promise<Conversation> =>
   request(`${conversationPath(scope)}/actions/${encodeURIComponent(actionId)}/dismiss`, {
     method: "POST",
   });
@@ -252,5 +277,18 @@ export const listAutopilotGoals = (): Promise<{
 
 /** Launch a new app: once its vision is written, the coordinator sets up
  * its stack and builds the whole vision on autopilot. */
+/** A scope's open chats, the most recently used first. */
+export const listChats = (scope: string): Promise<ChatSummary[]> =>
+  request<{ chats: ChatSummary[] }>(`${conversationPath(scope)}/chats`).then((r) => r.chats);
+
+/** Starts a chat in a scope; it is named after its first message. */
+export const createChat = (scope: string): Promise<Conversation> =>
+  request(`${conversationPath(scope)}/chats`, { method: "POST" });
+
+/** Makes a loose chat a project (ADR-038): the chat moves into the new
+ * project as its first chat, and its planning starts from the chat. */
+export const makeChatProject = (chat: string): Promise<Conversation> =>
+  request(`${conversationPath({ scope: "commitarium", chat })}/project`, { method: "POST" });
+
 export const startLaunch = (scope: string): Promise<Conversation> =>
   request(`${conversationPath(scope)}/launch`, { method: "POST" });
