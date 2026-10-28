@@ -541,6 +541,7 @@ func ResolveStructuredOutput(
 			Notes   string                            `json:"notes"`
 			Plan    *struct {
 				Goal          string                     `json:"goal"`
+				Step          string                     `json:"step"`
 				Decisions     []string                   `json:"decisions"`
 				OpenQuestions []string                   `json:"open_questions"`
 				Items         []featureartifact.PlanItem `json:"items"`
@@ -569,6 +570,7 @@ func ResolveStructuredOutput(
 				Type: featureartifact.AssistantUpdatePlan, Reason: "The plan as it stands", Description: response.Plan.Goal,
 				Decisions: response.Plan.Decisions, OpenQuestions: response.Plan.OpenQuestions,
 				PlanItems: response.Plan.Items, StackPresets: response.Plan.StackPresets, Frameworks: response.Plan.Frameworks,
+				PlanStep: response.Plan.Step,
 			}}}.Normalize()
 			if err != nil {
 				return StructuredOutput{}, invalidStructuredOutput("planning turn: %v", err)
@@ -823,9 +825,11 @@ func assistantTurnSchema(planning bool) map[string]any {
 	if planning {
 		properties["plan"] = objectSchema(
 			map[string]any{
-				"goal":           map[string]any{"type": "string", "description": "What the project is for, in two or three sentences; empty keeps it."},
-				"decisions":      map[string]any{"type": "array", "items": text, "description": "Every decision made so far, one short line each; it replaces the plan's list."},
-				"open_questions": map[string]any{"type": "array", "items": text, "description": "Every question or topic still to cover, one short line each; it replaces the plan's list."},
+				"goal": map[string]any{"type": "string", "description": "What the project is for, in two or three sentences; empty keeps it."},
+				"step": map[string]any{"type": "string", "enum": []string{"purpose", "features", "data", "look", "details", "priorities", "stack", "review"},
+					"description": "The agenda step the conversation is on now; review once everything is covered or the user says go."},
+				"decisions":      map[string]any{"type": "array", "items": text, "description": "Every decision made so far, one short line each, starting with its step and a colon (\"look: dark theme\"); it replaces the plan's list."},
+				"open_questions": map[string]any{"type": "array", "items": text, "description": "Every question still open, one short line each, starting with its step and a colon (\"data: which repositories\"); it replaces the plan's list."},
 				"items": map[string]any{"type": "array", "description": "The whole build plan, in order; empty keeps it.", "items": objectSchema(
 					map[string]any{
 						"priority":    map[string]any{"type": "integer", "description": "0 for P0 (the first version), 1 for P1 (next), and so on."},
@@ -837,7 +841,7 @@ func assistantTurnSchema(planning bool) map[string]any {
 				"stack_presets": map[string]any{"type": "array", "items": text, "description": "The stack's runtime presets, by ID, once it is decided; empty keeps it."},
 				"frameworks":    map[string]any{"type": "string", "description": "With stack_presets: the frameworks to build it with, in a few words. Otherwise empty."},
 			},
-			[]string{"goal", "decisions", "open_questions", "items", "stack_presets", "frameworks"},
+			[]string{"goal", "step", "decisions", "open_questions", "items", "stack_presets", "frameworks"},
 		)
 		required = append(required, "plan")
 	}

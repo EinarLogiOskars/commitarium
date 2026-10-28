@@ -121,6 +121,8 @@ export interface Conversation {
   queued?: AssistantMessage[];
   /** A new app being set up, until it starts building (APPS_PLAN.md). */
   launch?: { stage: LaunchStage; started_at: string };
+  /** Research still being looked up; the user can carry on meanwhile. */
+  researching?: string[];
   updated_at: string;
   /** Set while the last turn waits for its agent's login: the message is
    * kept and sent once the agent works (needs_user: the user signs in). */

@@ -112,6 +112,26 @@ func TestPlanningPausesAndResumes(t *testing.T) {
 	}
 }
 
+// The conversation's step is kept until it moves; an unknown step is refused.
+func TestPlanningFollowsTheAgendaStep(t *testing.T) {
+	service, _ := newTestService(t)
+	ctx := t.Context()
+	if _, _, err := service.StartPlanning(ctx, "prj_shop", "Keep stock in step."); err != nil {
+		t.Fatal(err)
+	}
+	moved, err := service.UpdatePlanning(ctx, "prj_shop", PlanningUpdate{Step: "look", Decisions: []string{"look: dark theme"}})
+	if err != nil || moved.Planning.Step != "look" {
+		t.Fatalf("moved = %+v, %v", moved.Planning, err)
+	}
+	kept, err := service.UpdatePlanning(ctx, "prj_shop", PlanningUpdate{Decisions: []string{"look: dark theme"}})
+	if err != nil || kept.Planning.Step != "look" {
+		t.Fatalf("kept = %+v, %v", kept.Planning, err)
+	}
+	if _, err := service.UpdatePlanning(ctx, "prj_shop", PlanningUpdate{Step: "colours"}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("an unknown step = %v", err)
+	}
+}
+
 // The user's edit of a vision being planned keeps its planning.
 func TestEditingAPlannedVisionKeepsItsPlanning(t *testing.T) {
 	service, _ := newTestService(t)

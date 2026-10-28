@@ -171,6 +171,9 @@ type AssistantAction struct {
 	PlanItems     []PlanItem `json:"plan_items,omitempty"`
 	StackPresets  []string   `json:"stack_presets,omitempty"`
 	Frameworks    string     `json:"frameworks,omitempty"`
+	// PlanStep, for update_plan, is the planning agenda step the
+	// conversation is on.
+	PlanStep string `json:"plan_step,omitempty"`
 }
 
 // PhaseChoices are the action's planning models and efforts (ADR-031); nil
@@ -215,7 +218,7 @@ func (turn AssistantTurn) Normalize() (AssistantTurn, error) {
 			&action.LeadPlanModel, &action.LeadPlanEffort, &action.LeadEffort,
 			&action.ReviewerPlanModel, &action.ReviewerPlanEffort, &action.ReviewerEffort,
 			&action.WorkOrderID, &action.When, &action.How, &action.Guidance, &action.After, &action.Helper,
-			&action.AppBrief, &action.Frameworks,
+			&action.AppBrief, &action.Frameworks, &action.PlanStep,
 		} {
 			*field = strings.TrimSpace(*field)
 		}

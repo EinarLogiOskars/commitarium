@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -33,8 +34,18 @@ const (
 // being planned.
 var ErrNotPlanning = errors.New("the vision is not being planned")
 
+// PlanningSteps are the planning agenda, in order: the assistant works
+// through one at a time and the workspace shows where they are. Decisions
+// and open questions start with their step and a colon ("look: dark theme")
+// so the workspace can show each under its step. Review is the last step: the
+// whole plan, ready to build.
+var PlanningSteps = []string{"purpose", "features", "data", "look", "details", "priorities", "stack", "review"}
+
 type Planning struct {
-	Status    PlanningStatus `json:"status"`
+	Status PlanningStatus `json:"status"`
+	// Step is the agenda step the conversation is on; empty before the
+	// assistant has named one.
+	Step      string         `json:"step,omitempty"`
 	Decisions []string       `json:"decisions"`
 	Questions []string       `json:"open_questions"`
 	Research  []ResearchNote `json:"research"`
@@ -54,7 +65,9 @@ type ResearchNote struct {
 // Decisions and Questions replace the lists there are; an empty Goal, a nil
 // Stack, and no Items keep what there is.
 type PlanningUpdate struct {
-	Goal      string                       `json:"goal"`
+	Goal string `json:"goal"`
+	// Step, when set, is the agenda step the conversation moved to.
+	Step      string                       `json:"step,omitempty"`
 	Decisions []string                     `json:"decisions"`
 	Questions []string                     `json:"open_questions"`
 	Stack     *featureartifact.VisionStack `json:"stack,omitempty"`
@@ -126,6 +139,10 @@ func (service *Service) UpdatePlanning(ctx context.Context, projectID string, up
 		return Vision{}, err
 	}
 	decisions, questions := trimmed(update.Decisions), trimmed(update.Questions)
+	step := strings.TrimSpace(update.Step)
+	if step != "" && !slices.Contains(PlanningSteps, step) {
+		return Vision{}, fmt.Errorf("%w: the step must be one of %s", ErrInvalid, strings.Join(PlanningSteps, ", "))
+	}
 	if len(decisions) > maxDecisions || len(questions) > maxQuestions {
 		return Vision{}, fmt.Errorf("%w: at most %d decisions and %d open questions", ErrInvalid, maxDecisions, maxQuestions)
 	}
@@ -166,6 +183,9 @@ func (service *Service) UpdatePlanning(ctx context.Context, projectID string, up
 	}
 	planning := *current.Planning
 	planning.Decisions, planning.Questions = decisions, questions
+	if step != "" {
+		planning.Step = step
+	}
 	current.Plan, current.Planning, current.Source = plan, &planning, "assistant"
 	current.Revision++
 	return service.write(current)

@@ -938,6 +938,8 @@ export interface VisionPlanning {
   /** Paused is planning the user stopped: the plan is kept and nothing is
    * built until planning resumes. */
   status: "planning" | "paused" | "built";
+  /** The agenda step the conversation is on (purpose … review). */
+  step?: string;
   decisions: string[];
   open_questions: string[];
   research: { title: string; findings: string; sources: string[]; added_at: string }[];

@@ -320,7 +320,13 @@ export function AssistantDrawer({
       action.type === "research" ||
       action.type === "update_plan") &&
     appliesItself(action) ? (
-      <AppliedLine key={action.id} action={action} />
+      <AppliedLine
+        key={action.id}
+        action={action}
+        running={
+          action.type === "research" && (conversation?.researching ?? []).includes(action.title)
+        }
+      />
     ) : (
       <ActionCard
         key={action.id}
@@ -375,54 +381,60 @@ export function AssistantDrawer({
           aria-label="Assistant"
         >
           <header className="assistant-drawer__head">
-            <div className="assistant-drawer__title">
-              <strong>Assistant</strong>
-              <span className="muted">{scopeLabel}</span>
-            </div>
-            {mode && (
-              <span
-                className="pill assistant-drawer__mode"
-                title={
-                  builds
-                    ? "It starts and finishes its own work without asking. Change this in the project's settings."
-                    : "It suggests; nothing happens until you approve. Change this in the project's settings."
-                }
-              >
-                {assistantModeNote(mode)}
-              </span>
-            )}
-            {planning === "planning" && (
-              <span
-                className="pill pill--planning assistant-drawer__mode"
-                title="You're planning this project with the assistant. The plan fills in beside you, and nothing is built until you press Build it."
-              >
-                Planning
-              </span>
-            )}
-            {planning !== null && developerModeOn() && (
+            {/* The project is the title: the drawer itself is the assistant. */}
+            <div className="assistant-drawer__top">
+              <strong className="assistant-drawer__title" title={scopeLabel}>
+                {scopeLabel}
+              </strong>
               <button
-                className="ghost"
-                onClick={() => void togglePlanning()}
-                disabled={togglingPlan}
-                title={
-                  planning === "planning"
-                    ? "Stop planning. The plan stays as it is and nothing is built; you can resume any time."
-                    : "Plan this project with the assistant beside a live plan. Nothing is built until you press Build it."
-                }
+                className={`ghost ${notesOpen ? "ghost--on" : ""}`}
+                onClick={() => setNotesOpen((v) => !v)}
               >
-                {planning === "planning"
-                  ? "Stop planning"
-                  : planning === "paused"
-                    ? "Resume planning"
-                    : "Plan it"}
+                Notes
               </button>
+            </div>
+            {(mode || planning !== null) && (
+              <div className="assistant-drawer__meta">
+                {mode && (
+                  <span
+                    className="pill assistant-drawer__mode"
+                    title={
+                      builds
+                        ? "It starts and finishes its own work without asking. Change this in the project's settings."
+                        : "It suggests; nothing happens until you approve. Change this in the project's settings."
+                    }
+                  >
+                    {assistantModeNote(mode)}
+                  </span>
+                )}
+                {planning === "planning" && (
+                  <span
+                    className="pill pill--planning assistant-drawer__mode"
+                    title="You're planning this project with the assistant. The plan fills in beside you, and nothing is built until you press Build it."
+                  >
+                    Planning
+                  </span>
+                )}
+                {planning !== null && developerModeOn() && (
+                  <button
+                    className="ghost"
+                    onClick={() => void togglePlanning()}
+                    disabled={togglingPlan}
+                    title={
+                      planning === "planning"
+                        ? "Stop planning. The plan stays as it is and nothing is built; you can resume any time."
+                        : "Plan this project with the assistant beside a live plan. Nothing is built until you press Build it."
+                    }
+                  >
+                    {planning === "planning"
+                      ? "Stop planning"
+                      : planning === "paused"
+                        ? "Resume planning"
+                        : "Plan it"}
+                  </button>
+                )}
+              </div>
             )}
-            <button
-              className={`ghost ${notesOpen ? "ghost--on" : ""}`}
-              onClick={() => setNotesOpen((v) => !v)}
-            >
-              Notes
-            </button>
           </header>
           {!conversation ? (
             error ? (
@@ -1057,7 +1069,17 @@ function isPremium(model: string, families: string[]): boolean {
 }
 
 // Where it builds everything, what the assistant set going, said in a line.
-function AppliedLine({ action }: { action: AssistantAction }) {
+function AppliedLine({ action, running }: { action: AssistantAction; running?: boolean }) {
+  // Research runs in the background: while it does, the line says so and
+  // that the user can carry on, instead of a tick that reads as done.
+  if (running) {
+    return (
+      <p className="muted assistant__applied assistant__applied--running">
+        <span className="assistant__pulse" aria-hidden />
+        Looking up: {action.title}… You can keep answering meanwhile.
+      </p>
+    );
+  }
   if (action.type === "answer_helper") {
     return (
       <p className="muted assistant__applied">
@@ -1075,7 +1097,7 @@ function AppliedLine({ action }: { action: AssistantAction }) {
   if (action.type === "research") {
     return (
       <p className="muted assistant__applied">
-        {action.status === "applied" ? "✓ Looking up" : "Looking up"}: {action.title}
+        {action.status === "applied" ? "✓ Looked up" : "Looking up"}: {action.title}
       </p>
     );
   }

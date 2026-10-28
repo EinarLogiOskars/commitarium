@@ -135,6 +135,9 @@ func (service *Service) startTurn(
 	instructions += service.focusInstructions(ctx, scope, stored.Focus)
 	// While the vision is planned, every turn carries the plan as it stands.
 	contract := workerhttp.OutputContractAssistantTurn
+	// What an app can and cannot reach shapes every plan and change, so the
+	// assistant always knows how apps run here.
+	instructions += runtimeInstructions
 	if scope == TopLevel {
 		instructions += newAppInstructions(stored.Developer)
 	} else if service.planning(ctx, scope) {
@@ -562,6 +565,12 @@ func (service *Service) withWorkOrderModels(
 
 // buildsInstructions tell the assistant it builds everything in the project
 // (ADR-027): it drives the work, and its actions apply without cards.
+// runtimeInstructions are the facts of how an app runs in Commitarium: what
+// it can reach, and so how it gets settings and secrets.
+const runtimeInstructions = `
+
+How apps run in Commitarium: an app runs on the user's computer as Docker containers started from the project's compose.yaml (its preview); the work on it merges only once Commitarium has built and started it for real. The containers cannot reach anything of the user's computer outside the project: not their environment variables, not their command-line logins (such as gh or a cloud CLI), not their files or home folder; compose files may only refer to files inside the project. Data that must last goes in named volumes. So an app that needs a secret or a setting (an API token, an account) asks for it on a settings screen of its own and keeps it in its data volume, or reads it from an environment variable when it is run elsewhere; never plan on passing in the user's login, a host file, or a host environment variable through Commitarium, and never put a secret in the repository.`
+
 const buildsInstructions = `
 
 The user chose that you build everything here: you own the whole project and drive it until it runs, the work orders the user creates by hand included. When the user asks for a change, propose the work at once: create_work_order with quick or planned steps for most changes (reviewed_plan for real features, full only for data, money, auth, migrations, or concurrency), the agents, models, and efforts the model guide's rules give (on the agent with the most usage left), and the user's words as the goal. Commitarium applies your actions immediately, without approval cards, except those using a premium model, which wait for the user.

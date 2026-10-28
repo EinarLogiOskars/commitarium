@@ -156,7 +156,8 @@ func (api *API) applyUpdatePlan(
 	w http.ResponseWriter, r *http.Request, projectID string, action conversations.Action,
 ) (string, bool) {
 	update := vision.PlanningUpdate{
-		Goal: action.Description, Decisions: action.Decisions, Questions: action.OpenQuestions, Items: action.PlanItems,
+		Goal: action.Description, Step: action.PlanStep, Decisions: action.Decisions, Questions: action.OpenQuestions,
+		Items: action.PlanItems,
 	}
 	if update.Decisions == nil {
 		update.Decisions = []string{}
