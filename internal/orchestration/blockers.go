@@ -66,12 +66,37 @@ func (starter *RemoteLeadStarter) noteUnnamedBlocker(ctx context.Context, runID,
 	starter.noteBlocker(ctx, runID, execution.BlockerOther, "", reason, reason)
 }
 
+// turnRejection is one check that refuses an agent's turn for something the
+// agent can put right. A refusal wraps it with what the check expected, what
+// it found, and how to fix it; the blocker's fingerprint is the check's own
+// words, so a reworded detail or one naming other state is still the same
+// failure. A refusal the agent can fix is handed straight back to it
+// (self_correction.go).
+type turnRejection struct {
+	kind  execution.BlockerKind
+	check string
+}
+
+func (rejection *turnRejection) Error() string { return rejection.check }
+
+// agentRejection is a check refusing what the agent handed in.
+func agentRejection(check string) *turnRejection {
+	return &turnRejection{kind: execution.BlockerAgent, check: check}
+}
+
+// stateRejection is a check of git or Forgejo state refusing the turn, for
+// something the agent's next turn can change.
+func stateRejection(check string) *turnRejection {
+	return &turnRejection{kind: execution.BlockerCheck, check: check}
+}
+
 // blockerFingerprintDetail is the part of cause that recognises a repeat of
 // the same failure: a checklist mismatch is one failure however many steps
 // its detail names.
 func blockerFingerprintDetail(cause error) string {
-	if errors.Is(cause, errImplementationChecklist) {
-		return errImplementationChecklist.Error()
+	var rejection *turnRejection
+	if errors.As(cause, &rejection) {
+		return rejection.check
 	}
 	return cause.Error()
 }
@@ -83,9 +108,12 @@ func blockerFingerprintDetail(cause error) string {
 func classifyCause(cause error) (execution.BlockerKind, string) {
 	text := cause.Error()
 	check, _, _ := strings.Cut(text, ": ")
+	var rejection *turnRejection
 	switch {
 	case interruption(cause) != "":
 		return execution.BlockerEnvironment, check
+	case errors.As(cause, &rejection):
+		return rejection.kind, check
 	case errors.Is(cause, workspace.ErrAuditCommentMissing):
 		// The agent's own step is missing: it fixes it once told exactly
 		// what to post where.
@@ -93,7 +121,7 @@ func classifyCause(cause error) (execution.BlockerKind, string) {
 	case errors.Is(cause, workspace.ErrPullRequestConflict), errors.Is(cause, workspace.ErrCheckoutConflict),
 		strings.HasPrefix(text, "verify "):
 		return execution.BlockerCheck, check
-	case strings.Contains(text, "without structured"), errors.Is(cause, errImplementationChecklist),
+	case strings.Contains(text, "without structured"),
 		strings.Contains(text, "no durable agreed plan"):
 		return execution.BlockerAgent, check
 	}

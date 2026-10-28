@@ -5190,7 +5190,7 @@ func (starter *RemoteLeadStarter) finish(
 // errImplementationChecklist is a lead's checklist not matching its
 // publication. Its text is the blocker's stable fingerprint; the wrapped
 // detail says what to fix.
-var errImplementationChecklist = errors.New("implementation checklist is incomplete or does not end at the published commit")
+var errImplementationChecklist = agentRejection("implementation checklist is incomplete or does not end at the published commit")
 
 // checkImplementationChecklist reports how checklist falls short of a
 // publication at publishedCommit for planVersion, naming each unfinished
