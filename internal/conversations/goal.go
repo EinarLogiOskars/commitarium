@@ -414,8 +414,10 @@ func (service *Service) autopilotActions(ctx context.Context, scope string) ([]A
 			noted = true
 			continue
 		}
-		if action.Type == featureartifact.AssistantRecoverWorkOrder && action.How == "back_to_ready" {
-			// Back to Ready throws work away: always the user's call.
+		if action.Type == featureartifact.AssistantRecoverWorkOrder && action.How == "back_to_ready" && !builds {
+			// Back to Ready throws work away: the user's call, unless the
+			// assistant builds everything here, where it may start stuck work
+			// over as it may close and replace it.
 			stored.addEvent(fmt.Sprintf("Autopilot left %s for you: sending work back to Ready needs your approval.",
 				actionName(action.AssistantAction)), now)
 			noted = true
