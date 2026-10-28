@@ -48,6 +48,8 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             docker::prepare_runtime(app.handle()).map_err(std::io::Error::other)?;
+            // No preview runs yet in this process, so whatever is left is
+            // from an earlier one.
             preview::sweep_leftovers();
             // The agents' CLIs stay current in the background, from launch on.
             cli_updates::spawn(app.handle().clone());

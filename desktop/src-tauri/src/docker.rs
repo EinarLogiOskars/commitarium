@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use tauri::{AppHandle, Manager, State};
 
-use crate::{agents, bootstrap, cleanup, cli_updates, environment, preview, profiles};
+use crate::{agents, bootstrap, cleanup, cli_updates, environment, profiles};
 
 /// Fixed Compose project name. Scoping every command to this project keeps the
 /// launcher from touching any other Compose stack on the host.
@@ -562,7 +562,9 @@ pub(crate) fn stack_up_with_manager(manager: &profiles::ProfileManager) -> Resul
     // Forgejo must exist before its own admin CLI can create the internal
     // identities and tokens required by the other services.
     start_forgejo()?;
-    preview::sweep_leftovers();
+    // Preview leftovers are swept once, as the app starts (lib.rs): this
+    // runs again on every window reload and agent sign-in, while previews
+    // run, and sweeping here removed their folders and containers.
     let forgejo_changed = bootstrap::provision_forgejo(&file, PROJECT_NAME)?;
     let agents_changed = refresh_agent_identities(&file);
     let credentials_changed = transport_changed || forgejo_changed;
