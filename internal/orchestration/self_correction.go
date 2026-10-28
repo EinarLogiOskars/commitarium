@@ -100,7 +100,7 @@ func selfCorrectionPrompt(cause error) string {
 // needs them.
 var secretPatterns = []*regexp.Regexp{
 	// A URL's user and password.
-	regexp.MustCompile(`(://)[^/\s:@]+:[^/\s@]+@`),
+	regexp.MustCompile(`(://)[^/\s:@]+:[^/\s@]+(@)`),
 	// An authorization header, or a named secret's value.
 	regexp.MustCompile(`(?i)(authorization\s*:\s*(?:bearer|token|basic)\s+|\b(?:token|password|passwd|secret|api[_-]?key|access[_-]?token)\s*[=:]\s*)[^\s'"]+`),
 	// Provider tokens by their prefixes.
@@ -111,7 +111,7 @@ var secretPatterns = []*regexp.Regexp{
 // the worker does.
 func sanitizeReason(reason string) string {
 	for _, pattern := range secretPatterns {
-		reason = pattern.ReplaceAllString(reason, "${1}[REDACTED]")
+		reason = pattern.ReplaceAllString(reason, "${1}[REDACTED]${2}")
 	}
 	return reason
 }

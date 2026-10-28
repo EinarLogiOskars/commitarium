@@ -291,6 +291,8 @@ type remoteLeadWorkspaceStub struct {
 	baseUpdateVerifyErr    error
 	// failReviewVerifyCall makes that review verification fail once.
 	failReviewVerifyCall int
+	// reviewRefusals refuse review verifications by call number.
+	reviewRefusals map[int]error
 }
 
 func (stub *remoteLeadWorkspaceStub) PrepareReplanningBaseline(
@@ -446,6 +448,9 @@ func (stub *remoteLeadWorkspaceStub) VerifyImplementationReview(
 	stub.reviewVerifyAttempts = append(stub.reviewVerifyAttempts, attemptID)
 	if stub.reviewVerifyCalls == stub.failReviewVerifyCall {
 		return workspace.Workspace{}, errors.New("the reviewer's review could not be confirmed")
+	}
+	if refusal := stub.reviewRefusals[stub.reviewVerifyCalls]; refusal != nil {
+		return workspace.Workspace{}, refusal
 	}
 	return stub.prepared, stub.reviewVerifyErr
 }
