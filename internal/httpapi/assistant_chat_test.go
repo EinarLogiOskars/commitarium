@@ -37,6 +37,14 @@ type conversationStub struct {
 	queued map[string]string
 	// developer is whether the user's app shows Developer mode.
 	developer bool
+	// retries counts RetryTurn calls; retryErr is what they answer.
+	retries  int
+	retryErr error
+}
+
+func (stub *conversationStub) RetryTurn(_ context.Context, scope string) (conversations.Conversation, error) {
+	stub.retries++
+	return conversations.Conversation{Scope: scope, Status: conversations.StatusRunning}, stub.retryErr
 }
 
 func (stub *conversationStub) QueuedStarts(context.Context, string) (map[string]string, error) {
@@ -422,5 +430,25 @@ func TestTheTopLevelCreatesAppsAndProjectsDoTheRest(t *testing.T) {
 		if recorder.Code != http.StatusConflict || !strings.Contains(recorder.Body.String(), "action_needs_project") {
 			t.Errorf("%s: %d %s", name, recorder.Code, recorder.Body.String())
 		}
+	}
+}
+
+// Retry runs the assistant's failed turn again; with none failed it says so.
+func TestRetryingTheAssistantsFailedTurn(t *testing.T) {
+	stub := &conversationStub{}
+	handler := NewWithWorkspaceRealWorkflowDeletionAndModels(&recordingProjectService{}, &recordingFeatureService{},
+		nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, stub, testAgents())
+	retry := func() *httptest.ResponseRecorder {
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/api/v1/assistant/conversations/prj_test/retry", nil))
+		return recorder
+	}
+	if recorder := retry(); recorder.Code != http.StatusAccepted || stub.retries != 1 ||
+		!strings.Contains(recorder.Body.String(), `"status":"running"`) {
+		t.Fatalf("retry = %d %s", recorder.Code, recorder.Body.String())
+	}
+	stub.retryErr = conversations.ErrNothingToRetry
+	if recorder := retry(); recorder.Code != http.StatusConflict || !strings.Contains(recorder.Body.String(), "nothing_to_retry") {
+		t.Fatalf("retry with nothing failed = %d %s", recorder.Code, recorder.Body.String())
 	}
 }

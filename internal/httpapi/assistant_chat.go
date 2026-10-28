@@ -241,6 +241,30 @@ func (api *API) sendConversationHandler(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusAccepted, conversation, "assistant conversation")
 }
 
+// turnRetrier runs again a turn whose automatic retries ran out.
+type turnRetrier interface {
+	RetryTurn(ctx context.Context, scope string) (conversations.Conversation, error)
+}
+
+// retryConversationTurnHandler runs the assistant's failed turn again, so
+// the user need not send their message again.
+func (api *API) retryConversationTurnHandler(w http.ResponseWriter, r *http.Request) {
+	if !emptyBody(w, r) {
+		return
+	}
+	retrier, ok := api.conversations.(turnRetrier)
+	if !ok {
+		writeError(w, http.StatusServiceUnavailable, "assistant_unavailable", "the assistant is unavailable")
+		return
+	}
+	conversation, err := retrier.RetryTurn(r.Context(), r.PathValue("scope"))
+	if err != nil {
+		writeConversationError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, conversation, "assistant conversation")
+}
+
 type conversationNotesRequest struct {
 	Notes string `json:"notes"`
 }
@@ -876,6 +900,8 @@ func writeConversationError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusConflict, "assistant_busy", err.Error())
 	case errors.Is(err, conversations.ErrNotPending):
 		writeError(w, http.StatusConflict, "action_not_pending", err.Error())
+	case errors.Is(err, conversations.ErrNothingToRetry):
+		writeError(w, http.StatusConflict, "nothing_to_retry", err.Error())
 	case errors.Is(err, conversations.ErrInvalid):
 		writeError(w, http.StatusBadRequest, "invalid_assistant_request", err.Error())
 	case errors.Is(err, conversations.ErrUnavailable):

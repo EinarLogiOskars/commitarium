@@ -135,6 +135,22 @@ export interface Conversation {
   sign_in?: { agent: string; since: string; needs_user?: boolean; retry_at?: string };
   /** The item the user opened the assistant on (ADR-035). */
   focus?: AssistantFocus;
+  /** When the current or last turn started, its automatic retries included. */
+  turn_started_at?: string;
+  /** What the assistant is doing while it answers. */
+  activity?: AssistantActivity;
+  /** The last turn ended without a reply once its automatic retries ran out. */
+  failure?: { message_id: string; detail?: string };
+}
+
+/** The assistant's latest step while it answers: plain words, and what it
+ * looked at (a path, a command, a search) for Developer mode. */
+export interface AssistantActivity {
+  label: string;
+  detail?: string;
+  started_at?: string;
+  /** The automatic retry running, from 1. */
+  retry?: number;
 }
 
 /** What the conversation is about: a work order, the vision, or the stack. */
@@ -169,6 +185,10 @@ export const sendToAssistant = (
     body: { message, developer_mode: developerModeOn() },
     idempotencyKey: key,
   });
+
+/** Runs again the turn whose automatic retries ran out. */
+export const retryAssistantTurn = (scope: string): Promise<Conversation> =>
+  request(`${conversationPath(scope)}/retry`, { method: "POST" });
 
 /** Focus the conversation on an item, or clear the focus with null. */
 export const setAssistantFocus = (

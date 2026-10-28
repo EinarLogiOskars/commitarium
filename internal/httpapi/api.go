@@ -526,6 +526,7 @@ func newAPI(
 		mux.HandleFunc("PUT /api/v1/assistant/settings", api.saveAssistantSettingsHandler)
 		mux.HandleFunc("GET /api/v1/assistant/conversations/{scope}", api.getConversationHandler)
 		mux.HandleFunc("POST /api/v1/assistant/conversations/{scope}/messages", api.sendConversationHandler)
+		mux.HandleFunc("POST /api/v1/assistant/conversations/{scope}/retry", api.retryConversationTurnHandler)
 		mux.HandleFunc("PUT /api/v1/assistant/conversations/{scope}/notes", api.saveConversationNotesHandler)
 		mux.HandleFunc("PUT /api/v1/assistant/conversations/{scope}/focus", api.setConversationFocusHandler)
 		mux.HandleFunc("DELETE /api/v1/assistant/conversations/{scope}/focus", api.setConversationFocusHandler)

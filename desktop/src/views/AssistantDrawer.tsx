@@ -5,6 +5,7 @@ import {
   getAssistantSettings,
   type AssistantSettings,
   getConversation,
+  retryAssistantTurn,
   saveAssistantNotes,
   sendToAssistant,
   setAssistantFocus,
@@ -29,6 +30,7 @@ import { Agents } from "./Agents";
 import { AgentLogin } from "./AgentLogin";
 import { assistantGuidance, GUIDANCE } from "./setupGuidance";
 import { appliedWhat, chooseAgent, choiceOverrides, type RoleChoice } from "./actionCard";
+import { AssistantActivityLine, TurnFailureControls } from "./AssistantActivity";
 
 const IDLE_POLL_MS = 20_000;
 const POLL_MS = 2000;
@@ -461,6 +463,17 @@ export function AssistantDrawer({
                   message.role === "event" ? (
                     <div key={message.id}>
                       <p className="muted assistant__event">{message.text}</p>
+                      {!running && conversation.failure?.message_id === message.id && (
+                        <TurnFailureControls
+                          detail={conversation.failure.detail}
+                          developer={developerModeOn()}
+                          onRetry={() =>
+                            retryAssistantTurn(scope)
+                              .then(setConversation)
+                              .catch((e) => setError(describe(e)))
+                          }
+                        />
+                      )}
                       {/* A helper's result comes back as a card under its line. */}
                       {(byMessage.get(message.id) ?? []).map(renderAction)}
                     </div>
@@ -489,7 +502,12 @@ export function AssistantDrawer({
                     </button>
                   </div>
                 )}
-                {running && <p className="muted status-line">The assistant is thinking…</p>}
+                {running && (
+                  <AssistantActivityLine
+                    conversation={conversation}
+                    developer={developerModeOn()}
+                  />
+                )}
                 {!running && conversation.sign_in?.needs_user && (
                   <SignInNotice
                     agentId={conversation.sign_in.agent}

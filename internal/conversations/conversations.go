@@ -36,6 +36,8 @@ var (
 	ErrBusy        = errors.New("the assistant is still answering")
 	ErrInvalid     = errors.New("invalid assistant request")
 	ErrNotPending  = errors.New("the action is no longer waiting for approval")
+	// ErrNothingToRetry is a retry with no failed turn to run again.
+	ErrNothingToRetry = errors.New("the assistant has no failed turn to retry")
 	// ErrNoAgents and ErrNotSetUp say, in the user's words, why the assistant
 	// cannot answer yet (ADR-027).
 	ErrNoAgents = errors.New("the assistant needs an AI account to work with. Add one on the Agents page, then come back here")
@@ -166,6 +168,15 @@ type Conversation struct {
 	// Researching names the research still being looked up, so the user sees
 	// it running while they carry on; only Get fills it in.
 	Researching []string `json:"researching,omitempty"`
+	// TurnStartedAt is when the assistant's current or last turn started,
+	// its automatic retries included.
+	TurnStartedAt *time.Time `json:"turn_started_at,omitempty"`
+	// Activity is what the assistant is doing while it answers; only Get
+	// fills it in (activity.go).
+	Activity *Activity `json:"activity,omitempty"`
+	// Failure is set when the last turn ended without a reply once its
+	// automatic retries ran out: the user can retry it (retry.go).
+	Failure *TurnFailure `json:"failure,omitempty"`
 }
 
 type record struct {
@@ -204,6 +215,9 @@ type record struct {
 	PreviewFailedAt *time.Time `json:"preview_failed_at,omitempty"`
 	// Helpers are the helper sessions the assistant started (helpers.go).
 	Helpers []Helper `json:"helpers,omitempty"`
+	// Retry is the current turn's automatic retry, while one is due or
+	// running (retry.go).
+	Retry *turnRetry `json:"retry,omitempty"`
 }
 
 // maxSessionTurns bounds a provider session; the next turn starts fresh.
@@ -270,6 +284,9 @@ type Config struct {
 	// the user on a blocker: where the assistant builds everything,
 	// autopilot may then close it together with its replacement.
 	Blocked func(ctx context.Context, workOrderID string) bool
+	// ActivityStreams, when set, opens a turn's worker event stream, so the
+	// user sees what the assistant does while it answers (activity.go).
+	ActivityStreams func(ctx context.Context, agentID string, reference workerhttp.AttemptReference) (ActivityStream, error)
 }
 
 // ChatUsage is one assistant turn's usage.
@@ -299,6 +316,10 @@ type Service struct {
 	// nudge asks the watcher to look now, as when a turn proposed actions
 	// autopilot may take over.
 	nudge chan struct{}
+	// activity is what each scope's running turn last did, in memory only
+	// (activity.go).
+	activityMu sync.Mutex
+	activity   map[string]liveActivity
 }
 
 var scopePattern = regexp.MustCompile(`^(commitarium|prj_[A-Za-z0-9]{1,64})$`)
@@ -542,6 +563,7 @@ func (service *Service) Get(ctx context.Context, scope string) (Conversation, er
 		}
 	}
 	conversation := stored.Conversation
+	conversation.Activity = service.currentActivity(stored)
 	for _, helper := range stored.Helpers {
 		if helper.Kind == HelperResearch && !helper.Done {
 			conversation.Researching = append(conversation.Researching, helper.Title)

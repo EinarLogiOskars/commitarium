@@ -420,6 +420,15 @@ func run(ctx context.Context, coordinatorConfig config) error {
 				Blockers: executionStore,
 			},
 			Workers: func(agentID string) (workerhttp.Service, error) { return agentWorkers.Client(agentID) },
+			ActivityStreams: func(
+				ctx context.Context, agentID string, reference workerhttp.AttemptReference,
+			) (conversations.ActivityStream, error) {
+				client, err := agentWorkers.Client(agentID)
+				if err != nil {
+					return nil, err
+				}
+				return client.OpenEventStream(ctx, reference, 0)
+			},
 			DefaultModel: func(ctx context.Context, provider project.AgentProvider) string {
 				for _, choice := range models(ctx) {
 					if choice.Provider == provider {
