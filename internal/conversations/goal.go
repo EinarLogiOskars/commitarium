@@ -28,6 +28,10 @@ import (
 
 var ErrGoalActive = errors.New("autopilot is already on")
 
+// ErrNothingLeft is a goal whose items are all done: there is nothing for
+// autopilot to finish, so a card that would start it is no longer needed.
+var ErrNothingLeft = fmt.Errorf("%w: nothing left to do", ErrInvalid)
+
 // AllPriorities is the level of a goal that finishes the whole vision.
 const AllPriorities = -1
 
@@ -109,7 +113,7 @@ func (service *Service) StartGoal(ctx context.Context, scope string, level int) 
 		name = "the vision"
 	}
 	if len(items) == 0 {
-		return Conversation{}, fmt.Errorf("%w: %s has nothing left to do", ErrInvalid, name)
+		return Conversation{}, fmt.Errorf("%w in %s", ErrNothingLeft, name)
 	}
 
 	service.mu.Lock()

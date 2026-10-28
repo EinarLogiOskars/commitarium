@@ -19,9 +19,10 @@ import {
 import { Overlay } from "./Overlay";
 
 // Attaching files to a message, in every composer: Cmd+V pastes a screenshot
-// from the clipboard, files drop on the composer, and the paperclip picks
+// from the clipboard, files drop on the composer, and the composer's + picks
 // them. They show as chips above the text and upload when the message is
-// sent; a sent message shows them as thumbnails and file chips.
+// sent; a sent message shows them as thumbnails and file chips. Clicking an
+// image, before or after sending, opens it full size.
 
 /** Whose documents a message's files are: the project the view belongs to. */
 export const AttachmentOwner = createContext<string | null>(null);
@@ -156,63 +157,43 @@ export function AttachmentChips({
   onRemove: (id: string) => void;
   disabled?: boolean;
 }) {
+  const [open, setOpen] = useState<{ name: string; url: string } | null>(null);
   if (items.length === 0) return null;
   return (
-    <ul className="attachments">
-      {items.map((item) => (
-        <li key={item.id} className="attachment" title={item.name}>
-          {item.url ? (
-            <img className="attachment__thumb" src={item.url} alt="" />
-          ) : (
-            <span className="attachment__icon" aria-hidden>
-              📄
-            </span>
-          )}
-          <span className="attachment__name">{item.name}</span>
-          <button
-            className="ghost attachment__remove"
-            aria-label={`Remove ${item.name}`}
-            onClick={() => onRemove(item.id)}
-            disabled={disabled}
-          >
-            ×
-          </button>
-        </li>
-      ))}
-    </ul>
-  );
-}
-
-/** The paperclip: picks files to attach. */
-export function AttachButton({
-  onFiles,
-  disabled,
-}: {
-  onFiles: (files: File[]) => void;
-  disabled?: boolean;
-}) {
-  const input = useRef<HTMLInputElement | null>(null);
-  return (
     <>
-      <button
-        className="ghost attach-button"
-        aria-label="Attach files"
-        title="Attach files or screenshots (you can also paste or drop them)"
-        onClick={() => input.current?.click()}
-        disabled={disabled}
-      >
-        📎
-      </button>
-      <input
-        ref={input}
-        type="file"
-        multiple
-        hidden
-        onChange={(e) => {
-          onFiles(Array.from(e.target.files ?? []));
-          e.target.value = "";
-        }}
-      />
+      <ul className="attachments">
+        {items.map((item) => (
+          <li key={item.id} className="attachment" title={item.name}>
+            {item.url ? (
+              <button
+                className="attachment__open"
+                aria-label={`Show ${item.name} full size`}
+                onClick={() => setOpen({ name: item.name, url: item.url! })}
+              >
+                <img className="attachment__thumb" src={item.url} alt="" />
+              </button>
+            ) : (
+              <span className="attachment__icon" aria-hidden>
+                📄
+              </span>
+            )}
+            <span className="attachment__name">{item.name}</span>
+            <button
+              className="ghost attachment__remove"
+              aria-label={`Remove ${item.name}`}
+              onClick={() => onRemove(item.id)}
+              disabled={disabled}
+            >
+              ×
+            </button>
+          </li>
+        ))}
+      </ul>
+      {open && (
+        <Overlay title={open.name} onClose={() => setOpen(null)}>
+          <img className="attachment__large" src={open.url} alt={open.name} />
+        </Overlay>
+      )}
     </>
   );
 }
