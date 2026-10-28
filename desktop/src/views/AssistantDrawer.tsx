@@ -31,6 +31,8 @@ import { AgentLogin } from "./AgentLogin";
 import { assistantGuidance, GUIDANCE } from "./setupGuidance";
 import { appliedWhat, chooseAgent, choiceOverrides, type RoleChoice } from "./actionCard";
 import { AssistantActivityLine, TurnFailureControls } from "./AssistantActivity";
+import { AppliedGroup } from "./AppliedGroup";
+import { foldedEvent, groupTurn } from "./appliedSummary";
 
 const IDLE_POLL_MS = 20_000;
 const POLL_MS = 2000;
@@ -316,12 +318,41 @@ export function AssistantDrawer({
     byMessage.set(action.message_id, [...(byMessage.get(action.message_id) ?? []), action]);
   }
 
-  const renderAction = (action: AssistantAction) =>
+  const asLine = (action: AssistantAction) =>
     (builds ||
       action.type === "answer_helper" ||
       action.type === "research" ||
       action.type === "update_plan") &&
-    appliesItself(action) ? (
+    appliesItself(action);
+  // A turn's work actions fold into one summary line, and the autopilot
+  // lines that repeat them are not shown again.
+  const turnPieces = new Map(
+    [...byMessage].map(([messageId, actions]) => [messageId, groupTurn(actions, asLine)]),
+  );
+  const groupedTitles = new Set(
+    [...turnPieces.values()].flatMap((pieces) =>
+      pieces.flatMap((piece) =>
+        piece.kind === "group" ? piece.items.map((item) => item.title.toLowerCase()) : [],
+      ),
+    ),
+  );
+  const renderTurn = (messageId: string) =>
+    (turnPieces.get(messageId) ?? []).map((piece) =>
+      piece.kind === "one" ? (
+        renderAction(piece.action)
+      ) : (
+        <AppliedGroup
+          key={piece.actions[0].id}
+          summary={piece.summary}
+          items={piece.items}
+          failed={piece.items.some((item) => item.bucket === "failed")}
+          onOpenOrder={onOpenOrder}
+        />
+      ),
+    );
+
+  const renderAction = (action: AssistantAction) =>
+    asLine(action) ? (
       <AppliedLine
         key={action.id}
         action={action}
@@ -461,22 +492,24 @@ export function AssistantDrawer({
                 )}
                 {conversation.messages.map((message) =>
                   message.role === "event" ? (
-                    <div key={message.id}>
-                      <p className="muted assistant__event">{message.text}</p>
-                      {!running && conversation.failure?.message_id === message.id && (
-                        <TurnFailureControls
-                          detail={conversation.failure.detail}
-                          developer={developerModeOn()}
-                          onRetry={() =>
-                            retryAssistantTurn(scope)
-                              .then(setConversation)
-                              .catch((e) => setError(describe(e)))
-                          }
-                        />
-                      )}
-                      {/* A helper's result comes back as a card under its line. */}
-                      {(byMessage.get(message.id) ?? []).map(renderAction)}
-                    </div>
+                    foldedEvent(message.text, groupedTitles) ? null : (
+                      <div key={message.id}>
+                        <p className="muted assistant__event">{message.text}</p>
+                        {!running && conversation.failure?.message_id === message.id && (
+                          <TurnFailureControls
+                            detail={conversation.failure.detail}
+                            developer={developerModeOn()}
+                            onRetry={() =>
+                              retryAssistantTurn(scope)
+                                .then(setConversation)
+                                .catch((e) => setError(describe(e)))
+                            }
+                          />
+                        )}
+                        {/* A helper's result comes back as a card under its line. */}
+                        {renderTurn(message.id)}
+                      </div>
+                    )
                   ) : (
                     <div key={message.id} className="assistant__turn">
                       <div className={`msg ${message.role === "user" ? "msg--user" : "msg--lead"}`}>
@@ -487,7 +520,7 @@ export function AssistantDrawer({
                           <Markdown text={message.text} />
                         </div>
                       </div>
-                      {(byMessage.get(message.id) ?? []).map(renderAction)}
+                      {renderTurn(message.id)}
                     </div>
                   ),
                 )}

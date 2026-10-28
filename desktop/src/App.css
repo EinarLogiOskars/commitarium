@@ -4734,6 +4734,20 @@ select:focus {
 .assistant__applied--failed {
   color: var(--bad);
 }
+.assistant__applied-group > .linkish {
+  display: block;
+  margin: 4px 0 0 2px;
+  text-align: left;
+  color: inherit;
+}
+.assistant__applied-items .linkish {
+  margin: 0;
+}
+.assistant__applied-items {
+  margin: 2px 0 0 18px;
+  padding: 0;
+  font-size: 12px;
+}
 
 /* Running from source: the coordinator was built before the code was pulled. */
 .coordinator-banner {
