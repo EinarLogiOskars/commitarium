@@ -844,6 +844,9 @@ export type AttentionKind =
   // An interrupted turn retries by itself; it becomes a `blocker` if the
   // retries run out.
   | "retrying"
+  // A work order planned early waits to implement until the work it builds
+  // on merges or a slot frees, then goes on by itself.
+  | "implementation_held"
   // A blocked or failed run autopilot is still continuing; it becomes a
   // `blocker` / `run_failed` item (a new ID) if autopilot gives up.
   | "autopilot_handling"

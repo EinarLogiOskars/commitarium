@@ -421,6 +421,15 @@ func runWaitAttention(base attentionItem, run execution.Run) attentionItem {
 		base.Title = "Clarification needed"
 	case execution.RunWaitKindPhaseCheckpoint:
 		base.Title = "Phase approval needed"
+		// A run that planned early waits to implement until the work it
+		// builds on merges or a slot frees (ADR-037), and then goes on by
+		// itself: nothing waits on the user.
+		if execution.HeldBeforeImplementation(run.Reason) {
+			base.Kind = "implementation_held"
+			base.Severity = "info"
+			base.Actionable = false
+			base.Title = "Planned, waiting to implement"
+		}
 	case execution.RunWaitKindRoundCap:
 		base.Title = "Round limit reached"
 	case execution.RunWaitKindMergeGate:
