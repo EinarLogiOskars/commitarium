@@ -1180,7 +1180,9 @@ func (service *Service) verifyImplementationPublication(
 // VerifyImplementationReviewResponse confirms the lead answered a formal
 // review with a new clean commit and a marker-owned Forgejo audit comment. The
 // reviewed commit is used as the required Git ancestor, so a correction cannot
-// silently replace or discard the exact revision the reviewer inspected.
+// silently replace or discard the exact revision the reviewer inspected. A
+// response that changes nothing (each finding answered as already fixed,
+// declined, or out of scope) keeps the reviewed commit instead.
 func (service *Service) VerifyImplementationReviewResponse(
 	ctx context.Context,
 	projectID string,
@@ -1193,6 +1195,7 @@ func (service *Service) VerifyImplementationReviewResponse(
 	commitID string,
 	pullRequestNumber int64,
 	expectedAuthor string,
+	changesNothing bool,
 ) (Workspace, error) {
 	for _, value := range []string{
 		planEventID, plan, attemptID, summary, reviewedCommitID, commitID, expectedAuthor,
@@ -1201,8 +1204,9 @@ func (service *Service) VerifyImplementationReviewResponse(
 			return Workspace{}, errors.New("review response identities are required and must be trimmed")
 		}
 	}
-	if reviewedCommitID == commitID {
-		return Workspace{}, errors.New("review response must publish a new commit")
+	if reviewedCommitID == commitID && !changesNothing {
+		return Workspace{}, errors.New("review response must publish a new commit: HEAD is still the reviewed " +
+			"commit, but finding_answers do not answer every finding as already_fixed, declined, or out_of_scope")
 	}
 	storedFeature, err := service.features.GetByID(ctx, projectID, featureID)
 	if err != nil {

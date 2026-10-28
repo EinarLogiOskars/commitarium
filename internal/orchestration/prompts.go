@@ -396,6 +396,13 @@ func implementationReviewInstructions(
 			"'git diff " + previousReviewedCommitID + " " + commitID + "'. Confirm each of your numbered findings " +
 			"as fixed or not fixed, and look beyond the diff only where the change touches code outside your " +
 			"findings. Re-run the relevant tests. Number any new finding after your last one. "
+		if previousReviewedCommitID == commitID {
+			scope = "You requested changes to commit " + previousReviewedCommitID + ". The lead changed nothing: " +
+				"it answered each of your numbered findings as already fixed, declined, or out of scope in its " +
+				"review response comment on the pull request. Read those answers and judge each one: accept it, " +
+				"or keep the finding open when it is a real defect or missed requirement the lead must fix. Do not " +
+				"re-review the rest of the commit. Number any new finding after your last one. "
+		}
 	}
 	if rereview && previousApproved {
 		scope = "You approved commit " + previousReviewedCommitID + ", but the base branch moved before it could " +
@@ -491,15 +498,20 @@ func implementationCorrectionInstructions(
 		"changes to the exact commit below. First check Git HEAD and status against these facts. Do not " +
 		"repeat completed work or discard unexpected user changes. Address every material review finding " +
 		"while preserving the accepted goal and agreed plan, then run the relevant tests. Answer each " +
-		"numbered finding by its number: fixed (say how) or disputed (with evidence). " +
+		"numbered finding by its number: fixed (say how), already fixed (where, in the reviewed commit), declined " +
+		"(with evidence that it is not a defect), or out of scope (it asks for more than the accepted goal, or " +
+		"for something this environment cannot do, such as a manual check). " +
 		implementationToolchainInstructions + "When the " +
-		"correction is ready, create a new commit descended from the reviewed commit, push that exact HEAD to " +
-		"the 'commitarium' remote, and post one pull-request comment using the worker-provided Forgejo URL and " +
+		"correction is ready, create a new commit descended from the reviewed commit and push that exact HEAD to " +
+		"the 'commitarium' remote; when no finding needs a change, make no commit (never one just to have a new " +
+		"commit) and keep the reviewed commit as HEAD. Either way, post one pull-request comment using the worker-provided Forgejo URL and " +
 		"token-file environment variables. Never print, log, commit, or include the token in a URL. " + forgejoTokenNote + " The comment " +
 		"must be exactly the marker below, a blank line, '## Review response', another blank line, and your " +
 		"answer to each finding by number, with how it was tested. Check existing comments for the marker " +
 		"before posting so recovery never duplicates it. Do not change the PR body or merge. Return action " +
-		"'published' with that same summary, the new lowercase Git HEAD in commit_id, and the PR number. If state " +
+		"'published' with that same summary, the lowercase Git HEAD in commit_id (the reviewed commit when you " +
+		"changed nothing), the PR number, and finding_answers: one entry per finding, its number in finding (F1) " +
+		"and fixed, already_fixed, declined, or out_of_scope in answer. If state " +
 		"is contradictory, the prior commit or review is unavailable, work is ambiguous, or publication cannot " +
 		"be confirmed, return action 'blocked', leave commit_id empty, and explain why. Durable Git, Forgejo, and " +
 		"coordinator state are authoritative over conversational memory.\n\n" +

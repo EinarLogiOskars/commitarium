@@ -249,11 +249,24 @@ func (service *Service) autopilotActions(ctx context.Context, scope string) ([]A
 	service.mu.Lock()
 	defer service.mu.Unlock()
 	stored, err := service.read(scope)
+	if err != nil {
+		return nil, err
+	}
+	now := service.now()
+	// A card whose work order already got where it leads settles itself, in
+	// every mode.
+	settled := stored.settleStale(titles, states, func(workOrderID string) bool {
+		return service.config.Blocked != nil && service.config.Blocked(ctx, workOrderID)
+	}, service.config.Blocked != nil, now)
 	answers := slices.ContainsFunc(stored.Actions, func(action Action) bool {
 		return sentAtOnce(action.Type) && action.Status == ActionProposed && !action.AutoTried
 	})
-	if err != nil || (!stored.Goal.active() && !builds && !answers) {
-		return nil, err
+	if !stored.Goal.active() && !builds && !answers {
+		if settled {
+			stored.UpdatedAt = now
+			return nil, service.write(stored)
+		}
+		return nil, nil
 	}
 	var goalItems []GoalItem
 	if stored.Goal.active() {
@@ -323,8 +336,7 @@ func (service *Service) autopilotActions(ctx context.Context, scope string) ([]A
 		}
 		return 0
 	})
-	now := service.now()
-	apply, noted := make([]Action, 0), false
+	apply, noted := make([]Action, 0), settled
 	for _, index := range order {
 		action := &stored.Actions[index]
 		if action.Status != ActionProposed || action.AutoTried {
@@ -365,18 +377,6 @@ func (service *Service) autopilotActions(ctx context.Context, scope string) ([]A
 			// only fills in what the user watches being planned: each is sent
 			// at once, assisting too (ADR-035).
 			inGoal = true
-		}
-		// A queued start the user did themselves is done: the work order no
-		// longer waits.
-		if action.Type == featureartifact.AssistantStartWorkOrder && action.Queued && target != "" {
-			if state, known := states[target]; known && state != feature.StateDraft && state != feature.StateReady {
-				action.Status, action.Queued, action.UpdatedAt = ActionApplied, false, now
-				action.Result = "The user started it."
-				stored.addEvent(fmt.Sprintf("You started “%s”, so it no longer waits for “%s”.",
-					titles[target], followsName(action.After, titles)), now)
-				noted = true
-				continue
-			}
 		}
 		if !inGoal {
 			continue
@@ -662,6 +662,29 @@ func (service *Service) AutopilotHandles(ctx context.Context, scope, workOrderID
 		}
 	}
 	return true
+}
+
+// AutopilotActiveAt is when autopilot last moved a work order on: the
+// latest change to one of the assistant's actions on it, or now while the
+// assistant is in a turn or one waits to start. A blocker autopilot keeps
+// working on does not stall.
+func (service *Service) AutopilotActiveAt(_ context.Context, scope, workOrderID string) time.Time {
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	stored, err := service.read(scope)
+	if err != nil {
+		return time.Time{}
+	}
+	if stored.Status == StatusRunning || len(stored.PendingEvents) > 0 {
+		return service.now()
+	}
+	var latest time.Time
+	for _, action := range stored.Actions {
+		if action.WorkOrderID == workOrderID && action.UpdatedAt.After(latest) {
+			latest = action.UpdatedAt
+		}
+	}
+	return latest
 }
 
 // isApp reports whether a project is used as an app (APPS_PLAN.md): how the

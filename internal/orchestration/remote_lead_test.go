@@ -269,6 +269,7 @@ type remoteLeadWorkspaceStub struct {
 	mergeCalls                    int
 	mergeApprovalNotes            []string
 	responseReviewedCommit        string
+	responseChangesNothing        bool
 	responseCommit                string
 	publishedEventID              string
 	publishedPlan                 string
@@ -487,8 +488,10 @@ func (stub *remoteLeadWorkspaceStub) VerifyImplementationReviewResponse(
 	commit string,
 	_ int64,
 	_ string,
+	changesNothing bool,
 ) (workspace.Workspace, error) {
 	stub.responseVerifyCalls++
+	stub.responseChangesNothing = changesNothing
 	stub.responseReviewedCommit = reviewedCommit
 	stub.responseCommit = commit
 	return stub.prepared, stub.responseVerifyErr

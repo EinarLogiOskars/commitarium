@@ -44,7 +44,7 @@ func TestRecoveringAWorkOrderIsBoundedByTheFailure(t *testing.T) {
 	}}
 	projects := &recordingProjectService{getByIDResult: project.Project{ID: "prj_test"}}
 	executions := &blockedExecutions{
-		recordingExecutionService: &recordingExecutionService{runs: []execution.Run{{ID: "run_1", StartedAt: time.Now()}}},
+		recordingExecutionService: &recordingExecutionService{runs: []execution.Run{{ID: "run_1", StartedAt: time.Now(), Status: execution.RunStatusWaitingForUser, WaitKind: execution.RunWaitKindBlocker}}},
 		blocker:                   execution.Blocker{RunID: "run_1", Kind: execution.BlockerCheck, Fingerprint: "fp1"},
 	}
 	workflow := &planningStarterStub{run: execution.Run{ID: "run_1"}}
@@ -137,7 +137,7 @@ func TestAutopilotLeavesARunWaitingForASignIn(t *testing.T) {
 	}}
 	projects := &recordingProjectService{getByIDResult: project.Project{ID: "prj_test"}}
 	executions := &signedOutExecutions{&blockedExecutions{
-		recordingExecutionService: &recordingExecutionService{runs: []execution.Run{{ID: "run_1", StartedAt: time.Now()}}},
+		recordingExecutionService: &recordingExecutionService{runs: []execution.Run{{ID: "run_1", StartedAt: time.Now(), Status: execution.RunStatusWaitingForUser, WaitKind: execution.RunWaitKindBlocker}}},
 		blocker:                   execution.Blocker{RunID: "run_1", Kind: execution.BlockerEnvironment, Fingerprint: "fp1"},
 	}}
 	workflow := &planningStarterStub{run: execution.Run{ID: "run_1"}}
