@@ -77,6 +77,10 @@ const (
 	// OutputContractAssistantTurn is a turn of the project assistant: its
 	// reply, the actions it proposes, and its notes.
 	OutputContractAssistantTurn OutputContract = "assistant_turn"
+	// OutputContractAssistantPlanningTurn is an assistant turn while the
+	// project's vision is being planned: it also carries the plan as it
+	// stands.
+	OutputContractAssistantPlanningTurn OutputContract = "assistant_planning_turn"
 )
 
 // LaunchEnvironment is the worker-resolved view of the profile and workspace
@@ -403,7 +407,8 @@ func (request SessionRequest) Validate() error {
 		request.OutputContract != OutputContractWorkOrderBrief &&
 		request.OutputContract != OutputContractSessionOpening &&
 		request.OutputContract != OutputContractVisionPlan &&
-		request.OutputContract != OutputContractAssistantTurn:
+		request.OutputContract != OutputContractAssistantTurn &&
+		request.OutputContract != OutputContractAssistantPlanningTurn:
 		return fmt.Errorf("%w: output contract %q is not recognized", ErrInvalidSessionRequest, request.OutputContract)
 	case (request.OutputContract == OutputContractPlanningLead ||
 		request.OutputContract == OutputContractGoalClarification ||
@@ -414,7 +419,8 @@ func (request SessionRequest) Validate() error {
 	case (request.OutputContract == OutputContractToolchainSetup ||
 		request.OutputContract == OutputContractWorkOrderBrief ||
 		request.OutputContract == OutputContractVisionPlan ||
-		request.OutputContract == OutputContractAssistantTurn) &&
+		request.OutputContract == OutputContractAssistantTurn ||
+		request.OutputContract == OutputContractAssistantPlanningTurn) &&
 		request.Role != RoleLead && request.Role != RoleConsultant:
 		return fmt.Errorf("%w: toolchain setup output contract requires a consultation role", ErrInvalidSessionRequest)
 	case (request.OutputContract == OutputContractImplementationReview ||

@@ -2733,7 +2733,11 @@ actions, and its notes.
   it is refused with `409 developer_mode_required` unless the conversation's
   `developer` is set by a message's `developer_mode`. Any other action
   there, or `create_app` or `plan_project` in a project, returns
-  `409 action_needs_project`. `update_plan` changes the vision being planned:
+  `409 action_needs_project`. `update_plan` changes the vision being planned.
+  The assistant does not propose it: while the vision is planned, every
+  turn uses the `assistant_planning_turn` result, whose required `plan`
+  (`goal`, `decisions`, `open_questions`, `items`, `stack_presets`,
+  `frameworks`) becomes the turn's first action, an `update_plan`:
   `description` is the goal, `decisions` and `open_questions` replace those
   lists, and `plan_items` (`[{"priority", "title", "description"}]`) and
   `stack_presets` with `frameworks` replace the build plan and the stack when
@@ -2832,7 +2836,7 @@ Only an item without sub-items starts a work order.
 In Developer mode a project's vision can be planned with the assistant before
 anything is built (ONE_CONVERSATION_PLAN.md phase 2). The vision is the plan:
 its statement is the goal, its `stack` and items the stack and build plan,
-and `planning` holds the rest: `{"status": "planning"|"built",
+and `planning` holds the rest: `{"status": "planning"|"paused"|"built",
 "decisions", "open_questions", "research": [{"title", "findings",
 "sources", "added_at"}], "started_at", "built_at"}`. It stays, built, as
 the plan's record; the user's edits and the vision writer keep it.
@@ -2840,7 +2844,8 @@ the plan's record; the user's edits and the vision writer keep it.
 - `POST /api/v1/projects/{id}/vision/planning` with `{"goal"}` puts the
   vision in planning, or starts one from `goal` when there is none
   (`400 invalid_vision` without it), and wakes the project's assistant to
-  plan it with the user. A vision already being planned is answered as is.
+  plan it with the user. A vision already being planned is answered as is;
+  paused planning resumes with its plan as it was.
 - `PUT /api/v1/projects/{id}/vision/planning` with `{"goal", "decisions",
   "open_questions", "stack", "items": [{"priority", "title", "description"}]}`
   updates it: the lists replace those there are; an empty `goal`, no
@@ -2848,6 +2853,10 @@ the plan's record; the user's edits and the vision writer keep it.
   stack without a known runtime preset; `409 vision_not_planning` once it is
   built. Research the assistant starts while a vision is planned is added to
   `research`, with the URLs after its "Sources:".
+- `POST /api/v1/projects/{id}/vision/planning/pause` stops planning:
+  `planning` is `paused`, the plan is kept as it is, and nothing is built.
+  Planning turns and updates stop until planning starts again. `409
+  vision_not_planning` unless it is being planned.
 - `POST /api/v1/projects/{id}/vision/planning/finish` with `{"autopilot"}` is
   Build it: the open questions become the plan's `guesses`, and `planning`
   is `built`. With `autopilot`, the project is set to `builds` and launched,
@@ -2868,6 +2877,10 @@ The assistant's state lists them.
   adds one, replacing one of the same name: `201` with the document.
   `400 invalid_document` for a name that is not a plain file name, or an
   empty or oversized file; `409 too_many_documents` past 30.
+- `GET /api/v1/projects/{id}/documents/{name}` answers `{"name", "preview",
+  "truncated"}`: the document's first 64 KB when it is text, for the
+  planning workspace to show; `preview` is empty for any other file.
+  `404 document_not_found` for a missing one.
 - `DELETE /api/v1/projects/{id}/documents/{name}` removes one (`204`;
   `404 document_not_found`). Deleting the project removes them all.
 

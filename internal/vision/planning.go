@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -22,16 +23,29 @@ import (
 type PlanningStatus string
 
 const (
-	PlanningOpen  PlanningStatus = "planning"
-	PlanningBuilt PlanningStatus = "built"
+	PlanningOpen PlanningStatus = "planning"
+	// PlanningPaused is planning the user stopped: the plan is kept as it
+	// is, nothing is built, and starting planning again resumes it.
+	PlanningPaused PlanningStatus = "paused"
+	PlanningBuilt  PlanningStatus = "built"
 )
 
 // ErrNotPlanning is returned for a planning change to a vision that is not
 // being planned.
 var ErrNotPlanning = errors.New("the vision is not being planned")
 
+// PlanningSteps are the planning agenda, in order: the assistant works
+// through one at a time and the workspace shows where they are. Decisions
+// and open questions start with their step and a colon ("look: dark theme")
+// so the workspace can show each under its step. Review is the last step: the
+// whole plan, ready to build.
+var PlanningSteps = []string{"purpose", "features", "data", "look", "details", "priorities", "stack", "review"}
+
 type Planning struct {
-	Status    PlanningStatus `json:"status"`
+	Status PlanningStatus `json:"status"`
+	// Step is the agenda step the conversation is on; empty before the
+	// assistant has named one.
+	Step      string         `json:"step,omitempty"`
 	Decisions []string       `json:"decisions"`
 	Questions []string       `json:"open_questions"`
 	Research  []ResearchNote `json:"research"`
@@ -51,7 +65,9 @@ type ResearchNote struct {
 // Decisions and Questions replace the lists there are; an empty Goal, a nil
 // Stack, and no Items keep what there is.
 type PlanningUpdate struct {
-	Goal      string                       `json:"goal"`
+	Goal string `json:"goal"`
+	// Step, when set, is the agenda step the conversation moved to.
+	Step      string                       `json:"step,omitempty"`
 	Decisions []string                     `json:"decisions"`
 	Questions []string                     `json:"open_questions"`
 	Stack     *featureartifact.VisionStack `json:"stack,omitempty"`
@@ -71,8 +87,14 @@ func (planning *Planning) Open() bool {
 	return planning != nil && planning.Status == PlanningOpen
 }
 
+// Paused reports whether the user stopped planning the vision.
+func (planning *Planning) Paused() bool {
+	return planning != nil && planning.Status == PlanningPaused
+}
+
 // StartPlanning puts the project's vision in planning, or starts one from
-// goal when it has none. started is false when it was already being planned.
+// goal when it has none; paused planning resumes as it was. started is false
+// when it was already being planned.
 func (service *Service) StartPlanning(ctx context.Context, projectID, goal string) (Vision, bool, error) {
 	// Reading first seeds a vision the repository carries.
 	if _, err := service.Get(ctx, projectID); err != nil && !errors.Is(err, ErrNotFound) {
@@ -94,6 +116,13 @@ func (service *Service) StartPlanning(ctx context.Context, projectID, goal strin
 		return Vision{}, false, err
 	case current.Planning.Open():
 		return current, false, nil
+	case current.Planning.Paused():
+		planning := *current.Planning
+		planning.Status = PlanningOpen
+		current.Planning = &planning
+		current.Revision++
+		stored, err := service.write(current)
+		return stored, err == nil, err
 	}
 	current.Planning = &Planning{
 		Status: PlanningOpen, Decisions: []string{}, Questions: []string{}, Research: []ResearchNote{},
@@ -110,6 +139,10 @@ func (service *Service) UpdatePlanning(ctx context.Context, projectID string, up
 		return Vision{}, err
 	}
 	decisions, questions := trimmed(update.Decisions), trimmed(update.Questions)
+	step := strings.TrimSpace(update.Step)
+	if step != "" && !slices.Contains(PlanningSteps, step) {
+		return Vision{}, fmt.Errorf("%w: the step must be one of %s", ErrInvalid, strings.Join(PlanningSteps, ", "))
+	}
 	if len(decisions) > maxDecisions || len(questions) > maxQuestions {
 		return Vision{}, fmt.Errorf("%w: at most %d decisions and %d open questions", ErrInvalid, maxDecisions, maxQuestions)
 	}
@@ -150,7 +183,35 @@ func (service *Service) UpdatePlanning(ctx context.Context, projectID string, up
 	}
 	planning := *current.Planning
 	planning.Decisions, planning.Questions = decisions, questions
+	if step != "" {
+		planning.Step = step
+	}
 	current.Plan, current.Planning, current.Source = plan, &planning, "assistant"
+	current.Revision++
+	return service.write(current)
+}
+
+// PausePlanning stops planning the vision: the plan is kept as it is and
+// nothing is built until planning resumes.
+func (service *Service) PausePlanning(ctx context.Context, projectID string) (Vision, error) {
+	if _, err := service.projects.GetByID(ctx, projectID); err != nil {
+		return Vision{}, err
+	}
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	current, err := service.read(projectID)
+	if err != nil {
+		return Vision{}, err
+	}
+	if current.Planning.Paused() {
+		return current, nil
+	}
+	if !current.Planning.Open() {
+		return Vision{}, ErrNotPlanning
+	}
+	planning := *current.Planning
+	planning.Status = PlanningPaused
+	current.Planning = &planning
 	current.Revision++
 	return service.write(current)
 }

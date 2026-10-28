@@ -82,6 +82,56 @@ func TestAVisionIsPlannedThenBuilt(t *testing.T) {
 	}
 }
 
+// Stopping planning keeps the plan as it is, and starting again resumes it.
+func TestPlanningPausesAndResumes(t *testing.T) {
+	service, _ := newTestService(t)
+	ctx := t.Context()
+	if _, err := service.PausePlanning(ctx, "prj_shop"); err == nil {
+		t.Fatal("paused a vision that was never planned")
+	}
+	if _, _, err := service.StartPlanning(ctx, "prj_shop", "Keep stock in step."); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.UpdatePlanning(ctx, "prj_shop", PlanningUpdate{Decisions: []string{"Sync nightly"}}); err != nil {
+		t.Fatal(err)
+	}
+	paused, err := service.PausePlanning(ctx, "prj_shop")
+	if err != nil || !paused.Planning.Paused() || paused.Planning.Open() {
+		t.Fatalf("paused = %+v, %v", paused.Planning, err)
+	}
+	if _, err := service.UpdatePlanning(ctx, "prj_shop", PlanningUpdate{}); !errors.Is(err, ErrNotPlanning) {
+		t.Fatalf("updating paused planning = %v", err)
+	}
+	if _, err := service.FinishPlanning(ctx, "prj_shop"); !errors.Is(err, ErrNotPlanning) {
+		t.Fatalf("building paused planning = %v", err)
+	}
+	resumed, started, err := service.StartPlanning(ctx, "prj_shop", "")
+	if err != nil || !started || !resumed.Planning.Open() ||
+		strings.Join(resumed.Planning.Decisions, "|") != "Sync nightly" || resumed.Plan.Statement != "Keep stock in step." {
+		t.Fatalf("resumed = %+v, %t, %v", resumed, started, err)
+	}
+}
+
+// The conversation's step is kept until it moves; an unknown step is refused.
+func TestPlanningFollowsTheAgendaStep(t *testing.T) {
+	service, _ := newTestService(t)
+	ctx := t.Context()
+	if _, _, err := service.StartPlanning(ctx, "prj_shop", "Keep stock in step."); err != nil {
+		t.Fatal(err)
+	}
+	moved, err := service.UpdatePlanning(ctx, "prj_shop", PlanningUpdate{Step: "look", Decisions: []string{"look: dark theme"}})
+	if err != nil || moved.Planning.Step != "look" {
+		t.Fatalf("moved = %+v, %v", moved.Planning, err)
+	}
+	kept, err := service.UpdatePlanning(ctx, "prj_shop", PlanningUpdate{Decisions: []string{"look: dark theme"}})
+	if err != nil || kept.Planning.Step != "look" {
+		t.Fatalf("kept = %+v, %v", kept.Planning, err)
+	}
+	if _, err := service.UpdatePlanning(ctx, "prj_shop", PlanningUpdate{Step: "colours"}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("an unknown step = %v", err)
+	}
+}
+
 // The user's edit of a vision being planned keeps its planning.
 func TestEditingAPlannedVisionKeepsItsPlanning(t *testing.T) {
 	service, _ := newTestService(t)

@@ -64,6 +64,11 @@ Phase 2:
   hands over to autopilot (the project is set to build everything and
   launched like a new app); "I'll build it myself" finishes the plan for the
   project's own flow.
+- **After testing (2026-10-24):** the assistant never proposed
+  `update_plan`, so the cards stayed empty. Every turn while the vision is
+  planned now uses the `assistant_planning_turn` result with a required
+  `plan`, applied as an `update_plan` ahead of the turn's actions, and
+  `update_plan` left the actions the assistant can propose.
 - **Not verified:** nothing in phase 2 was tried with real agents or in the
   running app: the scope judgement, the planning conversation, live cards,
   document uploads from the desktop, and Build it's launch. Go and desktop

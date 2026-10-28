@@ -838,7 +838,7 @@ func TestClaudeTurnsPassTheirEffort(t *testing.T) {
 	arguments, err = adapter.commandArguments(
 		"claude-sonnet-5-5", "", worker.OutputContract(""), worker.WorkspaceAccessReadWrite, false, testSessionID, false, "Go.",
 	)
-	if err != nil || slices.Contains(arguments, "--effort") || slices.Contains(arguments, "--allowedTools") {
+	if err != nil || slices.Contains(arguments, "--effort") || slices.Contains(arguments, "--allowedTools=WebSearch,WebFetch") {
 		t.Fatalf("default effort arguments = %v err=%v", arguments, err)
 	}
 }
@@ -849,9 +849,14 @@ func TestClaudeResearchTurnsMayUseTheWeb(t *testing.T) {
 	arguments, err := adapter.commandArguments(
 		"claude-sonnet-5-5", "", worker.OutputContract(""), worker.WorkspaceAccessReadOnly, true, testSessionID, false, "Go.",
 	)
-	if err != nil || !helperHasPair(arguments, "--allowedTools", "WebSearch,WebFetch") ||
+	if err != nil || !slices.Contains(arguments, "--allowedTools=WebSearch,WebFetch") ||
 		!helperHasPair(arguments, "--permission-mode", "plan") {
 		t.Fatalf("arguments = %v err=%v", arguments, err)
+	}
+	// The prompt stays the last argument, not a value of the tools flag:
+	// with no schema in between, a separate flag would take it as a tool.
+	if arguments[len(arguments)-1] != "Go." || slices.Contains(arguments, "--allowedTools") {
+		t.Fatalf("the prompt is not on its own: %v", arguments)
 	}
 }
 

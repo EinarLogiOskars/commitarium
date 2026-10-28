@@ -173,6 +173,7 @@ const (
 	OutputContractSessionOpening          OutputContract = "session_opening"
 	OutputContractVisionPlan              OutputContract = "vision_plan"
 	OutputContractAssistantTurn           OutputContract = "assistant_turn"
+	OutputContractAssistantPlanningTurn   OutputContract = "assistant_planning_turn"
 )
 
 type AttemptState string

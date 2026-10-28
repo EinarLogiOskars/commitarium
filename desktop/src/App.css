@@ -1151,6 +1151,41 @@ textarea {
   margin: 0;
   font-size: 17px;
 }
+/* The full detail of something shown compactly (Overlay.tsx). */
+.modal__card.overlay {
+  max-width: 720px;
+}
+.overlay__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+.overlay__close {
+  flex: none;
+  font-size: 16px;
+  line-height: 1;
+  padding: 4px 10px;
+}
+.overlay h3 {
+  margin: 0 0 8px;
+  font-size: 14px;
+}
+.overlay__text {
+  margin: 0;
+  white-space: pre-wrap;
+}
+.overlay__preview {
+  margin: 0;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-x: auto;
+}
 .modal__footer {
   display: flex;
   justify-content: flex-end;
@@ -3433,15 +3468,22 @@ button.danger:not(.ghost) {
   list-style: none;
   margin-left: -18px;
 }
-.planning__list summary {
+/* A compact entry that opens its full detail in an overlay. */
+.planning__open {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  text-align: left;
   cursor: pointer;
 }
-.planning__sources {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px 10px;
-  margin-top: 4px;
-  font-size: 12px;
+.planning__open:hover {
+  color: var(--accent);
+}
+.planning__source {
+  color: var(--accent);
+  word-break: break-all;
 }
 .planning__priority + .planning__priority {
   margin-top: 12px;
@@ -3452,6 +3494,91 @@ button.danger:not(.ghost) {
 .planning__build {
   align-items: center;
   flex-wrap: wrap;
+}
+/* The title row, with Build it, and the steps stay at the top while the plan
+   scrolls. The shadow covers the page's top padding, so nothing scrolls into
+   view above them. */
+.planning__head {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-bottom: 8px;
+  background: var(--bg);
+  box-shadow: 0 -48px 0 0 var(--bg);
+}
+.planning__bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 0;
+  background: var(--bg);
+}
+.planning__bar h2 {
+  margin: 0;
+}
+.planning__bar-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+/* Eight steps: wrap rather than squeeze on a narrow window. */
+.planning__steps {
+  flex-wrap: wrap;
+  row-gap: 8px;
+}
+/* Decided lines read as settled, open ones as still to answer: a mark in
+   place of the bullet, and a light rule between lines. */
+.planning__list--decided,
+.planning__list--open {
+  list-style: none;
+  padding-left: 0;
+  gap: 0;
+}
+.planning__list--decided > li,
+.planning__list--open > li {
+  position: relative;
+  padding: 6px 0 6px 24px;
+}
+.planning__list--decided > li + li,
+.planning__list--open > li + li {
+  border-top: 1px solid var(--border);
+}
+.planning__list--decided > li::before,
+.planning__list--open > li::before {
+  position: absolute;
+  left: 2px;
+  top: 6px;
+  font-weight: 600;
+}
+.planning__list--decided > li::before {
+  content: "✓";
+  color: var(--ok, #2f9e5b);
+}
+.planning__list--open > li::before {
+  content: "?";
+  color: var(--accent);
+}
+/* An earlier step's decisions, folded until opened. */
+.planning__fold + .planning__fold {
+  border-top: 1px solid var(--border);
+}
+.planning__fold > summary {
+  cursor: pointer;
+  padding: 8px 0;
+  list-style-position: inside;
+}
+.planning__fold > .planning__list {
+  margin-bottom: 8px;
+}
+.planning__topic + .planning__topic {
+  margin-top: 10px;
+}
+.planning__topic .planning__list {
+  margin-top: 4px;
 }
 .vision__preset--on {
   border-color: var(--accent);
@@ -3955,15 +4082,24 @@ button.danger:not(.ghost) {
 }
 .assistant-drawer__head {
   display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.assistant-drawer__top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+/* The mode and planning pills, and the planning toggle, under the title. */
+.assistant-drawer__meta {
+  display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
 }
 .assistant-drawer__title {
   flex: 1;
   min-width: 0;
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -3980,6 +4116,15 @@ button.danger:not(.ghost) {
   padding: 2px 8px;
   white-space: nowrap;
   color: var(--muted);
+  /* A label with a tooltip, not text to select. */
+  cursor: default;
+  user-select: none;
+}
+/* While the project is planned (planning mode). */
+.assistant-drawer__mode.pill--planning {
+  color: var(--text);
+  border-color: var(--lavender);
+  background: color-mix(in srgb, var(--lavender) 30%, transparent);
 }
 .assistant-drawer__close {
   font-size: 18px;
@@ -4052,7 +4197,7 @@ button.danger:not(.ghost) {
   color: var(--text);
   box-shadow: none;
 }
-.assistant-drawer__head {
+.assistant-drawer__top {
   padding-right: 52px;
 }
 
@@ -4787,4 +4932,42 @@ select:focus {
   margin-top: 0;
   padding-top: 0;
   border-top: none;
+}
+
+/* Research the assistant started, still running in the background. */
+.assistant__applied--running {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.assistant__pulse {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: assistant-pulse 1.4s ease-in-out infinite;
+}
+@keyframes assistant-pulse {
+  0%,
+  100% {
+    opacity: 0.35;
+    transform: scale(0.8);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.1);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .assistant__pulse {
+    animation: none;
+  }
+}
+
+.planning__researching {
+  list-style: none;
+  padding-left: 0;
+  margin-bottom: 8px;
+  color: var(--muted);
 }

@@ -518,6 +518,7 @@ func newAPI(
 		mux.HandleFunc("POST /api/v1/projects/{id}/vision/items", api.addVisionItemHandler)
 		mux.HandleFunc("POST /api/v1/projects/{id}/vision/planning", api.startPlanningHandler)
 		mux.HandleFunc("PUT /api/v1/projects/{id}/vision/planning", api.updatePlanningHandler)
+		mux.HandleFunc("POST /api/v1/projects/{id}/vision/planning/pause", api.pausePlanningHandler)
 		mux.HandleFunc("POST /api/v1/projects/{id}/vision/planning/finish", api.finishPlanningHandler)
 	}
 	if assistantConversations != nil && projects != nil && features != nil {

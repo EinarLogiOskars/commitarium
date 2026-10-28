@@ -79,8 +79,11 @@ complex it is: without Developer mode an app stands on its own, and a
 request beyond that is scoped down with a plain note of what is left out.
 With it, the assistant can propose `plan_project`, and the project is
 planned in the planning workspace, where the plan is the vision being
-written: the assistant fills it in with `update_plan`, sent at once without
-a card like research, since it changes only the plan the user watches.
+written: every assistant turn there carries the plan as it stands, applied
+at once without a card like research, since it changes only the plan the
+user watches. (At first the plan was an `update_plan` action the assistant
+could propose; in live use it never did, so the plan is now a required part
+of each planning turn.)
 Building it stays the user's decision: Build it in the workspace, or a
 `build_plan` card when they tell the assistant to go. Documents the user
 attaches are copied into every checkout, so helpers and agents read them

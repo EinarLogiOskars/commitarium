@@ -75,9 +75,15 @@ export const setUpProject = (
   });
 
 /** Plan the project's vision with the assistant, from goal when it has none
- * yet; its assistant is woken to plan it with the user. */
+ * yet, or resume paused planning; its assistant is woken to plan it with the
+ * user. */
 export const startPlanning = (id: string, goal: string): Promise<Vision> =>
   request(`${visionPath(id)}/planning`, { method: "POST", body: { goal } });
+
+/** Stop planning: the plan is kept as it is and nothing is built; starting
+ * planning again resumes it. */
+export const pausePlanning = (id: string): Promise<Vision> =>
+  request(`${visionPath(id)}/planning/pause`, { method: "POST" });
 
 /** Build it: the vision is the plan as it stands. With autopilot, the
  * assistant sets the project up and builds it; otherwise the user does. */

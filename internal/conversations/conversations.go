@@ -163,6 +163,9 @@ type Conversation struct {
 	// message said: without it, a new app stays self-contained, and only
 	// with it may the assistant plan a project (ADR-035).
 	Developer bool `json:"developer,omitempty"`
+	// Researching names the research still being looked up, so the user sees
+	// it running while they carry on; only Get fills it in.
+	Researching []string `json:"researching,omitempty"`
 }
 
 type record struct {
@@ -538,7 +541,13 @@ func (service *Service) Get(ctx context.Context, scope string) (Conversation, er
 			return Conversation{}, err
 		}
 	}
-	return stored.Conversation, nil
+	conversation := stored.Conversation
+	for _, helper := range stored.Helpers {
+		if helper.Kind == HelperResearch && !helper.Done {
+			conversation.Researching = append(conversation.Researching, helper.Title)
+		}
+	}
+	return conversation, nil
 }
 
 // SetDeveloperMode records whether the user's app shows Developer mode.
