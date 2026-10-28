@@ -83,6 +83,8 @@ this API beyond the host loopback interface is unsupported.
 | `PUT` | `/api/v1/projects/{id}/app` | Mark a project as an app (`{"app": true}`) or a project only; projects answer `app`. A project that changes kind takes that kind's assistant mode |
 | `PUT` | `/api/v1/projects/{id}/assistant-mode` | Set how the assistant works (`{"assistant_mode": "builds"}` or `"assists"`, ADR-027); projects answer `assistant_mode`, `builds` for apps and `assists` for projects by default |
 | `POST` | `/api/v1/runs/{runID}/interventions` | Queue a user message for the lead or reviewer and stop at the next safe boundary |
+| `POST` | `/api/v1/attachments/{owner}` | Store a file attached to a message (see [Message attachments](#message-attachments)) |
+| `GET` | `/api/v1/attachments/{owner}/{name}` | Read an attached file itself |
 | `GET` | `/api/v1/runs/{runID}/planning/messages` | Retrieve the ordered lead/reviewer planning messages |
 | `GET` | `/api/v1/runs/{runID}/planning/messages/stream` | Replay and stream ordered planning messages with SSE |
 | `GET` | `/api/v1/sessions/{sessionID}` | Retrieve a session |
@@ -1967,8 +1969,12 @@ Content-Type: application/json
 }
 ```
 
-`target` must be `lead` or `reviewer`, and `message` must not be blank. The
-reviewer becomes available only after its persistent reviewer session exists.
+`target` must be `lead` or `reviewer`, and `message` must not be blank unless
+an optional `attachments` names project files uploaded to
+`/api/v1/attachments/{projectID}` (see
+[Message attachments](#message-attachments)); the stored `message` then ends
+with the line naming them. The reviewer becomes available only after its
+persistent reviewer session exists.
 The response is the ordinary run resource with `202 Accepted`; its additive
 fields have this shape:
 
@@ -2470,7 +2476,11 @@ Content-Type: application/json
 {"message":"Fix the Icelandic wording on the front page."}
 ```
 
-Each message starts one agent turn and returns `202` with the run.
+Each message starts one agent turn and returns `202` with the run. An
+optional `attachments` names project files uploaded to
+`/api/v1/attachments/{projectID}`; the message the agent reads names them
+(see [Message attachments](#message-attachments)), and `400
+invalid_attachments` answers one that is not there any more.
 
 - **First message.** It starts the provider conversation with the session's
   instructions in front of the message, using the `session_opening` output
@@ -2655,12 +2665,17 @@ actions, and its notes.
   Ready, starts one only where the assistant drives the work (an autopilot
   goal, or `builds`); elsewhere it stays an event line and is not repeated
   to the assistant on the user's next message (ADR-035).
-- `POST .../{scope}/messages` with `{"message", "developer_mode"}` and an
-  `Idempotency-Key` starts a turn. While one runs, the message is queued in
-  the conversation's `queued` and starts the next turn, with any events that
-  waited, as soon as the current one ends. `developer_mode` (optional) says
-  whether the desktop shows Developer mode; without it, a new app the
-  top-level assistant plans stays self-contained (ADR-035).
+- `POST .../{scope}/messages` with `{"message", "developer_mode",
+  "attachments"}` and an `Idempotency-Key` starts a turn. While one runs, the
+  message is queued in the conversation's `queued` and starts the next turn,
+  with any events that waited, as soon as the current one ends.
+  `developer_mode` (optional) says whether the desktop shows Developer mode;
+  without it, a new app the top-level assistant plans stays self-contained
+  (ADR-035). `attachments` (optional, at most 10) names files uploaded to
+  `/api/v1/attachments/{scope}`; the message may then be empty. The message
+  records them as `attachments`, and its turn receives them (see
+  [Message attachments](#message-attachments)). `400 invalid_assistant_request` when one
+  is not there any more.
 - `PUT .../{scope}/focus` with `{"kind": "work_order"|"vision"|"stack",
   "work_order_id", "label"}` opens a project's conversation on an item: the
   assistant's turns name it and how to carry it through, and the
@@ -2887,6 +2902,38 @@ The assistant's state lists them.
   `404 document_not_found` for a missing one.
 - `DELETE /api/v1/projects/{id}/documents/{name}` removes one (`204`;
   `404 document_not_found`). Deleting the project removes them all.
+
+## Message attachments
+
+Screenshots and files the user pastes, drops, or picks in a composer (the
+assistant, an intervention, a session) are stored as their owner's
+documents: a project's, or, for the top-level conversation, those of the
+owner `commitarium`, which has no project. The top level keeps at most 30 as
+well; its oldest makes room for a new one, since it has no page to remove
+them from.
+
+- `POST /api/v1/attachments/{owner}` with `{"name", "content_base64"}` stores
+  one, never replacing another: a taken name gets a number before its
+  extension (`screenshot-2026-10-28-1612-2.png`). `201` with the document,
+  whose `name` the message then names. `400 invalid_document` for a name that
+  is not a plain file name or an empty file, with "the file is larger than 5
+  MB" past 5 MB; `409 too_many_documents` when a project holds 30.
+- `GET /api/v1/attachments/{owner}/{name}` answers the file itself: an image
+  (png, jpg, gif, webp) with its type, anything else as
+  `application/octet-stream`, always `nosniff`. `404 document_not_found`.
+
+A message names its files on a line of its own, `Attached, in your working
+directory: .commitarium/documents/<name>, ...`, so whoever reads it finds
+them. Before a turn that reads such a message, the coordinator copies the
+files into the turn's working directory under `.commitarium/documents/` and
+asks the worker to show it the images among them (`images` in the worker's
+attempt request, at most 10 paths relative to the working directory): Claude
+Code is told to read each with its Read tool, and Codex receives them as
+`localImage` inputs. This covers the assistant's turns, interventions (in
+the lead's or the reviewer's checkout), session messages, and a work order
+the assistant creates with `attachments` on its `create_work_order` action:
+its description, and so its goal and its lead's first prompt, names them, and
+a brief written from the description keeps them.
 
 ## Setting a new project up
 
