@@ -138,16 +138,52 @@ func selfCorrectionReason(agentName string, plan selfCorrection) string {
 	return ""
 }
 
-// correctAfterRelease hands a refused turn back as soon as the run is free:
-// the refusal is noted while the turn's goroutine still holds the run, and
-// recovery claims it, so release starts the correction. A run nobody holds
-// is corrected at once.
-func (starter *RemoteLeadStarter) correctAfterRelease(runID, actionID, prompt string) {
+// pendingCorrection is a refused turn waiting to be handed back while
+// another goroutine holds its run.
+type pendingCorrection struct {
+	// correct is set once the refusal is noted.
+	correct func()
+	// released says the holder let the run go before then; the run stays
+	// held for the correction.
+	released bool
+}
+
+// holdForCorrection keeps a refused turn's run held from before its blocker
+// is noted until the correction starts, so no one sees the run free and
+// blocked in between. It reports whether it claimed the run itself; when
+// another goroutine holds it, its release hands the run over instead.
+func (starter *RemoteLeadStarter) holdForCorrection(runID string) bool {
+	starter.activeMu.Lock()
+	defer starter.activeMu.Unlock()
+	if _, held := starter.active[runID]; !held {
+		starter.active[runID] = struct{}{}
+		return true
+	}
+	if starter.corrections == nil {
+		starter.corrections = map[string]*pendingCorrection{}
+	}
+	starter.corrections[runID] = &pendingCorrection{}
+	return false
+}
+
+// correctWhenFree hands a refused turn back once the run is the
+// correction's: at once when holdForCorrection claimed it or its holder has
+// let it go, otherwise when the holder releases it.
+func (starter *RemoteLeadStarter) correctWhenFree(runID string, owned bool, actionID, prompt string) {
+	// correct runs holding the run: it moves the run off its blocker, then
+	// releases it, and recovery claims it again to continue.
 	correct := func() {
 		ctx := starter.lifetime
-		_, admitted, err := starter.RecoverBlockerWithDirective(ctx, runID, actionID, RecoveryDirective{
+		recovery, err := starter.beginRecovery(ctx, runID, actionID, RecoveryDirective{
 			Action: RecoveryActionContinue, Message: prompt, selfCorrection: true,
 		})
+		starter.activeMu.Lock()
+		delete(starter.active, runID)
+		starter.activeMu.Unlock()
+		admitted := false
+		if err == nil && recovery.rechecking.ID != "" {
+			_, admitted, err = starter.finishRecovery(ctx, recovery)
+		}
 		switch {
 		case errors.Is(err, ErrRecoveryNotAllowed):
 			// Someone else moved the run on first.
@@ -157,15 +193,16 @@ func (starter *RemoteLeadStarter) correctAfterRelease(runID, actionID, prompt st
 			starter.reportError(fmt.Errorf("hand a refused turn of run %q back to its agent: not admitted", runID))
 		}
 	}
-	starter.activeMu.Lock()
-	if _, held := starter.active[runID]; held {
-		if starter.corrections == nil {
-			starter.corrections = map[string]func(){}
+	if !owned {
+		starter.activeMu.Lock()
+		pending := starter.corrections[runID]
+		if pending != nil && !pending.released {
+			pending.correct = correct
+			starter.activeMu.Unlock()
+			return
 		}
-		starter.corrections[runID] = correct
+		delete(starter.corrections, runID)
 		starter.activeMu.Unlock()
-		return
 	}
-	starter.activeMu.Unlock()
 	correct()
 }

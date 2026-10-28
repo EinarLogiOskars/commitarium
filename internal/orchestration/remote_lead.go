@@ -344,7 +344,7 @@ type RemoteLeadStarter struct {
 	active   map[string]struct{}
 	// corrections are refused turns to hand back to their agents once their
 	// runs are released (self_correction.go).
-	corrections map[string]func()
+	corrections map[string]*pendingCorrection
 	mergeMu     sync.Mutex
 	// acceptanceJoinMu closes the small window where both parallel workers can
 	// observe the other as incomplete and then both leave without starting the
@@ -978,8 +978,35 @@ func (starter *RemoteLeadStarter) RecoverBlockerWithDirective(
 	actionID string,
 	directive RecoveryDirective,
 ) (execution.Run, bool, error) {
+	recovery, err := starter.beginRecovery(ctx, runID, actionID, directive)
+	if err != nil || recovery.rechecking.ID == "" {
+		return recovery.run, false, err
+	}
+	return starter.finishRecovery(ctx, recovery)
+}
+
+// blockerRecovery is a recovery begun: the run moved from its blocker to
+// rechecking, and what continues it.
+type blockerRecovery struct {
+	run, rechecking execution.Run
+	storedFeature   feature.Feature
+	policy          project.RecoveryPolicy
+	directive       RecoveryDirective
+}
+
+// beginRecovery checks that the run waits on a blocker and moves it to
+// rechecking. It takes no claim on the run, so a holder can begin a
+// recovery before it releases the run (self_correction.go). A run left as
+// it was returns with no recovery to finish.
+func (starter *RemoteLeadStarter) beginRecovery(
+	ctx context.Context,
+	runID string,
+	actionID string,
+	directive RecoveryDirective,
+) (blockerRecovery, error) {
+	fail := func(err error) (blockerRecovery, error) { return blockerRecovery{}, err }
 	if strings.TrimSpace(runID) == "" || strings.TrimSpace(actionID) == "" {
-		return execution.Run{}, false, ErrInvalidRunRequest
+		return fail(ErrInvalidRunRequest)
 	}
 	if directive.Action == "" {
 		directive.Action = RecoveryActionContinue
@@ -987,26 +1014,26 @@ func (starter *RemoteLeadStarter) RecoverBlockerWithDirective(
 	directive.Message = strings.TrimSpace(directive.Message)
 	if directive.Action != RecoveryActionRecheck && directive.Action != RecoveryActionContinue &&
 		directive.Action != RecoveryActionReplace && directive.Action != RecoveryActionLeavePaused {
-		return execution.Run{}, false, ErrInvalidRunRequest
+		return fail(ErrInvalidRunRequest)
 	}
 	if len(directive.Message) > 16*1024 {
-		return execution.Run{}, false, ErrInvalidRunRequest
+		return fail(ErrInvalidRunRequest)
 	}
 	run, err := starter.executions.GetRun(ctx, runID)
 	if err != nil {
-		return execution.Run{}, false, err
+		return fail(err)
 	}
 	if run.Status != execution.RunStatusWaitingForUser || run.Paused ||
 		run.WaitKind != execution.RunWaitKindBlocker {
-		return execution.Run{}, false, ErrRecoveryNotAllowed
+		return fail(ErrRecoveryNotAllowed)
 	}
 	if directive.Action == RecoveryActionLeavePaused {
-		return run, false, nil
+		return blockerRecovery{run: run}, nil
 	}
 	starter.noteRecovery(ctx, run.ID, actionID, directive)
 	storedFeature, err := starter.features.GetByID(ctx, run.FeatureID)
 	if err != nil {
-		return execution.Run{}, false, err
+		return fail(err)
 	}
 	rechecking, err := starter.executions.TransitionRun(
 		ctx, run.ID, execution.RunStatusWaitingForUser, execution.RunStatusRunning,
@@ -1016,11 +1043,11 @@ func (starter *RemoteLeadStarter) RecoverBlockerWithDirective(
 		if errors.Is(err, execution.ErrStateConflict) {
 			current, getErr := starter.executions.GetRun(ctx, run.ID)
 			if getErr == nil && current.Status == execution.RunStatusRunning && !current.Paused {
-				return current, false, nil
+				return blockerRecovery{run: current}, nil
 			}
-			return execution.Run{}, false, errors.Join(err, getErr)
+			return fail(errors.Join(err, getErr))
 		}
-		return execution.Run{}, false, err
+		return fail(err)
 	}
 
 	policy := project.RecoveryPolicyAutomatic
@@ -1045,8 +1072,18 @@ func (starter *RemoteLeadStarter) RecoverBlockerWithDirective(
 		starter.clearRetryWait(ctx, run.ID)
 	}
 	directive.blockedReason = run.Reason
-	err = starter.recoverWithDirective(
-		context.WithoutCancel(ctx), rechecking, storedFeature, policy, directive,
+	return blockerRecovery{
+		run: run, rechecking: rechecking, storedFeature: storedFeature, policy: policy, directive: directive,
+	}, nil
+}
+
+// finishRecovery continues a recovery begun from the run's durable state.
+func (starter *RemoteLeadStarter) finishRecovery(
+	ctx context.Context, recovery blockerRecovery,
+) (execution.Run, bool, error) {
+	run := recovery.run
+	err := starter.recoverWithDirective(
+		context.WithoutCancel(ctx), recovery.rechecking, recovery.storedFeature, recovery.policy, recovery.directive,
 	)
 	if err != nil && !errors.Is(err, ErrRunAlreadyActive) {
 		// A failed re-check is itself a safe outcome: retain the existing blocker
@@ -7080,9 +7117,13 @@ func (starter *RemoteLeadStarter) requireReview(
 			ctx, session.ID, session.Status, execution.SessionStatusPauseRequested, session.ProviderSessionID,
 		)
 	}
+	owned := false
+	if correction.prompt != "" {
+		owned = starter.holdForCorrection(request.runID)
+	}
 	_ = starter.waitRun(ctx, request.runID, text, execution.RunWaitKindBlocker)
 	if correction.prompt != "" {
-		starter.correctAfterRelease(request.runID,
+		starter.correctWhenFree(request.runID, owned,
 			request.identity.AttemptID+":self-correction:"+fingerprint, correction.prompt)
 	}
 }
@@ -7247,12 +7288,21 @@ func (starter *RemoteLeadStarter) claim(runID string) bool {
 
 func (starter *RemoteLeadStarter) release(runID string) {
 	starter.activeMu.Lock()
-	delete(starter.active, runID)
-	correct := starter.corrections[runID]
-	delete(starter.corrections, runID)
+	pending := starter.corrections[runID]
+	switch {
+	case pending == nil:
+		delete(starter.active, runID)
+	case pending.correct == nil:
+		// The refusal is still being noted: the run stays held for it.
+		pending.released = true
+		pending = nil
+	default:
+		delete(starter.corrections, runID)
+	}
 	starter.activeMu.Unlock()
-	if correct != nil {
-		// Before anyone else sees the run free and blocked.
-		correct()
+	if pending != nil {
+		// The correction takes the run off its blocker while it is still
+		// held, so no one sees it free and blocked, then releases it.
+		pending.correct()
 	}
 }

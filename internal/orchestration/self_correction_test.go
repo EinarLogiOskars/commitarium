@@ -116,7 +116,8 @@ func TestTwoFailedCorrectionsPauseAsABlocker(t *testing.T) {
 	}, 2)
 	blocked := fixture.waitBlocked(t, "")
 	if fixture.workspace.reviewVerifyCalls != 4 {
-		t.Fatalf("review checked %d times, want the review and its two corrections", fixture.workspace.reviewVerifyCalls)
+		t.Fatalf("review checked %d times, want the review and its two corrections: %q",
+			fixture.workspace.reviewVerifyCalls, blocked.Reason)
 	}
 	if corrections := fixture.selfCorrections(t); len(corrections) != MaxSelfCorrections {
 		t.Fatalf("self-corrections = %+v, want %d", corrections, MaxSelfCorrections)

@@ -162,8 +162,14 @@ func (fixture *baseUpdateFixture) waitFor(
 		run, runErr := fixture.executions.GetRun(t.Context(), fixture.runID)
 		current, featureErr := fixture.features.GetByID(t.Context(), fixture.featureID)
 		if runErr == nil && featureErr == nil && done(run, current) && fixture.starter.claim(fixture.runID) {
+			// Read again while holding the run: it may have moved on between
+			// the first read and the claim.
+			run, runErr = fixture.executions.GetRun(t.Context(), fixture.runID)
+			current, featureErr = fixture.features.GetByID(t.Context(), fixture.featureID)
 			fixture.starter.release(fixture.runID)
-			return run
+			if runErr == nil && featureErr == nil && done(run, current) {
+				return run
+			}
 		}
 		if time.Now().After(deadline) {
 			t.Fatalf("run did not reach %s: run=%+v feature=%+v errors=%v %v", what, run, current.State, runErr, featureErr)
