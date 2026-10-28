@@ -618,7 +618,8 @@ func (session *session) completedItem(item threadItem) ([]worker.Event, error) {
 			session.outputContract == worker.OutputContractWorkOrderBrief ||
 			session.outputContract == worker.OutputContractSessionOpening ||
 			session.outputContract == worker.OutputContractVisionPlan ||
-			session.outputContract == worker.OutputContractAssistantTurn {
+			session.outputContract == worker.OutputContractAssistantTurn ||
+			session.outputContract == worker.OutputContractAssistantPlanningTurn {
 			session.mu.Lock()
 			session.pendingMessage = text
 			session.pendingStreamID = item.ID

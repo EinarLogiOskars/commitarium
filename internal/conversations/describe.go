@@ -257,7 +257,7 @@ func (describer StateDescriber) writeProject(ctx context.Context, builder *strin
 		switch {
 		case errors.Is(err, vision.ErrNotFound):
 			builder.WriteString("\nVision: none written yet.\n")
-		case err == nil && stored.Planning.Open():
+		case err == nil && (stored.Planning.Open() || stored.Planning.Paused()):
 			writePlanning(builder, stored)
 		case err == nil:
 			builder.WriteString("\n### Vision\n" + stored.Plan.Statement + "\n")
@@ -326,7 +326,12 @@ func agentsNote(item feature.Feature) string {
 // as it stands in the planning workspace.
 func writePlanning(builder *strings.Builder, stored vision.Vision) {
 	planning := stored.Planning
-	builder.WriteString("\n### Vision (being planned)\nGoal: " + stored.Plan.Statement + "\n")
+	if planning.Paused() {
+		builder.WriteString("\n### Vision (planning stopped)\nThe user stopped planning: the plan is kept as it is " +
+			"and nothing is built until they resume planning.\nGoal: " + stored.Plan.Statement + "\n")
+	} else {
+		builder.WriteString("\n### Vision (being planned)\nGoal: " + stored.Plan.Statement + "\n")
+	}
 	lines := func(title string, values []string) {
 		builder.WriteString(title + ":")
 		if len(values) == 0 {

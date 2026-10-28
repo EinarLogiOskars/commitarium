@@ -628,7 +628,7 @@ func isStructuredEnvelope(contract worker.OutputContract, text string) bool {
 		discriminator = "effect"
 	case worker.OutputContractSessionOpening:
 		discriminator = "title"
-	case worker.OutputContractAssistantTurn:
+	case worker.OutputContractAssistantTurn, worker.OutputContractAssistantPlanningTurn:
 		discriminator = "actions"
 	}
 	_, ok := object[discriminator]

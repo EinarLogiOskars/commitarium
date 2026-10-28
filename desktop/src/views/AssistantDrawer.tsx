@@ -16,9 +16,10 @@ import {
 } from "../api/assistant";
 import { ApiError } from "../api/client";
 import { openAppWindow } from "../ipc";
-import { getVision } from "../api/vision";
+import { getVision, pausePlanning, startPlanning } from "../api/vision";
+import { developerModeOn } from "../devMode";
 import { getProject } from "../api/projects";
-import type { AssistantMode, VisionItem, VisionPriority } from "../api/types";
+import type { AssistantMode, Vision, VisionItem, VisionPriority } from "../api/types";
 import { appliesItself, assistantMode, assistantModeNote } from "./assistantMode";
 import { Markdown } from "./Markdown";
 import { useCatalogModels, useModelName } from "./useModelName";
@@ -139,6 +140,13 @@ export function AssistantDrawer({
 
   // Vision items by ID, labelled "P0.2 Title", for the cards.
   const [visionItems, setVisionItems] = useState<Map<string, string>>(new Map());
+  // How the project's vision is planned (planning mode): null without a
+  // vision, "" for one not planned.
+  const [planning, setPlanning] = useState<string | null>(null);
+  const showVision = useCallback((vision: Vision) => {
+    setVisionItems(visionLabels(vision.plan.priorities));
+    setPlanning(vision.planning?.status ?? "");
+  }, []);
   const load = useCallback(async () => {
     getAssistantSettings()
       .then(setSettings)
@@ -151,10 +159,34 @@ export function AssistantDrawer({
     }
     if (scope !== "commitarium") {
       getVision(scope)
-        .then((vision) => setVisionItems(visionLabels(vision.plan.priorities)))
-        .catch(() => setVisionItems(new Map()));
+        .then(showVision)
+        .catch(() => {
+          setVisionItems(new Map());
+          setPlanning(null);
+        });
+    } else {
+      setPlanning(null);
     }
-  }, [scope, setConversation]);
+  }, [scope, setConversation, showVision]);
+
+  // In Developer mode, planning starts or resumes from here, and stops
+  // with the plan kept as it is.
+  const [togglingPlan, setTogglingPlan] = useState(false);
+  const togglePlanning = async () => {
+    setTogglingPlan(true);
+    setError(null);
+    try {
+      const planned = planning === "planning";
+      showVision(planned ? await pausePlanning(scope) : await startPlanning(scope, ""));
+      window.dispatchEvent(new Event(WORK_CHANGED));
+      if (!planned) window.dispatchEvent(new Event(OPEN_VISION));
+      setConversation(await getConversation(scope));
+    } catch (e) {
+      setError(describe(e));
+    } finally {
+      setTogglingPlan(false);
+    }
+  };
 
   useEffect(() => {
     const reload = () => void load();
@@ -288,7 +320,13 @@ export function AssistantDrawer({
       action.type === "research" ||
       action.type === "update_plan") &&
     appliesItself(action) ? (
-      <AppliedLine key={action.id} action={action} />
+      <AppliedLine
+        key={action.id}
+        action={action}
+        running={
+          action.type === "research" && (conversation?.researching ?? []).includes(action.title)
+        }
+      />
     ) : (
       <ActionCard
         key={action.id}
@@ -343,28 +381,60 @@ export function AssistantDrawer({
           aria-label="Assistant"
         >
           <header className="assistant-drawer__head">
-            <div className="assistant-drawer__title">
-              <strong>Assistant</strong>
-              <span className="muted">{scopeLabel}</span>
-            </div>
-            {mode && (
-              <span
-                className="pill assistant-drawer__mode"
-                title={
-                  builds
-                    ? "It starts and finishes its own work without asking. Change this in the project's settings."
-                    : "It suggests; nothing happens until you approve. Change this in the project's settings."
-                }
+            {/* The project is the title: the drawer itself is the assistant. */}
+            <div className="assistant-drawer__top">
+              <strong className="assistant-drawer__title" title={scopeLabel}>
+                {scopeLabel}
+              </strong>
+              <button
+                className={`ghost ${notesOpen ? "ghost--on" : ""}`}
+                onClick={() => setNotesOpen((v) => !v)}
               >
-                {assistantModeNote(mode)}
-              </span>
+                Notes
+              </button>
+            </div>
+            {(mode || planning !== null) && (
+              <div className="assistant-drawer__meta">
+                {mode && (
+                  <span
+                    className="pill assistant-drawer__mode"
+                    title={
+                      builds
+                        ? "It starts and finishes its own work without asking. Change this in the project's settings."
+                        : "It suggests; nothing happens until you approve. Change this in the project's settings."
+                    }
+                  >
+                    {assistantModeNote(mode)}
+                  </span>
+                )}
+                {planning === "planning" && (
+                  <span
+                    className="pill pill--planning assistant-drawer__mode"
+                    title="You're planning this project with the assistant. The plan fills in beside you, and nothing is built until you press Build it."
+                  >
+                    Planning
+                  </span>
+                )}
+                {planning !== null && developerModeOn() && (
+                  <button
+                    className="ghost"
+                    onClick={() => void togglePlanning()}
+                    disabled={togglingPlan}
+                    title={
+                      planning === "planning"
+                        ? "Stop planning. The plan stays as it is and nothing is built; you can resume any time."
+                        : "Plan this project with the assistant beside a live plan. Nothing is built until you press Build it."
+                    }
+                  >
+                    {planning === "planning"
+                      ? "Stop planning"
+                      : planning === "paused"
+                        ? "Resume planning"
+                        : "Plan it"}
+                  </button>
+                )}
+              </div>
             )}
-            <button
-              className={`ghost ${notesOpen ? "ghost--on" : ""}`}
-              onClick={() => setNotesOpen((v) => !v)}
-            >
-              Notes
-            </button>
           </header>
           {!conversation ? (
             error ? (
@@ -999,7 +1069,17 @@ function isPremium(model: string, families: string[]): boolean {
 }
 
 // Where it builds everything, what the assistant set going, said in a line.
-function AppliedLine({ action }: { action: AssistantAction }) {
+function AppliedLine({ action, running }: { action: AssistantAction; running?: boolean }) {
+  // Research runs in the background: while it does, the line says so and
+  // that the user can carry on, instead of a tick that reads as done.
+  if (running) {
+    return (
+      <p className="muted assistant__applied assistant__applied--running">
+        <span className="assistant__pulse" aria-hidden />
+        Looking up: {action.title}… You can keep answering meanwhile.
+      </p>
+    );
+  }
   if (action.type === "answer_helper") {
     return (
       <p className="muted assistant__applied">
@@ -1017,7 +1097,7 @@ function AppliedLine({ action }: { action: AssistantAction }) {
   if (action.type === "research") {
     return (
       <p className="muted assistant__applied">
-        {action.status === "applied" ? "✓ Looking up" : "Looking up"}: {action.title}
+        {action.status === "applied" ? "✓ Looked up" : "Looking up"}: {action.title}
       </p>
     );
   }

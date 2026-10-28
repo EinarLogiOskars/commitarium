@@ -223,7 +223,10 @@ func (adapter *Adapter) commandArguments(
 	}
 	if web {
 		// Research searches and reads the web without a prompt to allow it.
-		arguments = append(arguments, "--allowedTools", "WebSearch,WebFetch")
+		// The flag takes any number of values, so it is joined to its value:
+		// apart, it would swallow the prompt that follows when there is no
+		// schema in between, and Claude Code would exit without one.
+		arguments = append(arguments, "--allowedTools=WebSearch,WebFetch")
 	}
 	if schema := worker.OutputJSONSchema(contract); schema != nil {
 		encoded, err := json.Marshal(schema)

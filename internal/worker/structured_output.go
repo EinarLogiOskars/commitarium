@@ -136,66 +136,9 @@ func OutputJSONSchema(contract OutputContract) any {
 			[]string{"action", "message", "goal", "areas", "considerations", "open_questions"},
 		)
 	case OutputContractAssistantTurn:
-		text := map[string]any{"type": "string"}
-		action := objectSchema(
-			map[string]any{
-				"type": map[string]any{
-					"type": "string", "enum": []string{"create_work_order", "start_work_order", "change_models", "add_vision_item", "start_autopilot", "continue_work_order", "recover_work_order", "close_work_order", "create_app", "plan_project", "set_up_preview", "write_vision", "set_up_stack", "answer_helper", "write_brief", "design_stack", "research", "update_plan", "build_plan"},
-				},
-				"reason":               text,
-				"title":                text,
-				"description":          text,
-				"vision_item_id":       text,
-				"steps":                map[string]any{"type": "string", "enum": []string{"", "full", "reviewed_plan", "planned", "quick"}},
-				"lead_agent":           text,
-				"lead_model":           text,
-				"reviewer_agent":       text,
-				"reviewer_model":       text,
-				"lead_plan_model":      map[string]any{"type": "string", "description": "For create_work_order and start_work_order with a documented plan: a different model the lead plans with, offered by the lead agent; empty plans with lead_model."},
-				"lead_plan_effort":     map[string]any{"type": "string", "description": "The lead's reasoning effort while planning; empty uses lead_effort."},
-				"lead_effort":          map[string]any{"type": "string", "description": "The lead's reasoning effort after the plan, one its model accepts; empty is the model's default."},
-				"reviewer_plan_model":  map[string]any{"type": "string", "description": "A different model the reviewer reviews the plan with, offered by the reviewer agent; empty uses reviewer_model."},
-				"reviewer_plan_effort": map[string]any{"type": "string", "description": "The reviewer's reasoning effort for plan review; empty uses reviewer_effort."},
-				"reviewer_effort":      map[string]any{"type": "string", "description": "The reviewer's reasoning effort for code review; empty is the model's default."},
-				"work_order_id":        text,
-				"when":                 map[string]any{"type": "string", "enum": []string{"", "now", "next_turn"}},
-				"how":                  map[string]any{"type": "string", "enum": []string{"", "recheck", "continue", "message", "fresh_conversation", "back_to_ready"}, "description": "For recover_work_order: how to recover the blocked work order. Otherwise empty."},
-				"guidance":             map[string]any{"type": "string", "description": "For continue_work_order: what to tell the work order's agents; empty retries as is. For answer_helper: your answer to the helper's question."},
-				"priority":             map[string]any{"type": "integer", "description": "For add_vision_item: the priority level, 0 for P0 through 9 for P9; any level the vision has or a new one. For start_autopilot: the priority to finish. Otherwise 0."},
-				"after":                map[string]any{"type": "string", "description": "For create_work_order and start_work_order: the work order ID, or the exact title of another of your actions, that this one must wait for because both change the same part of the app; it starts once that one merges. Otherwise empty."},
-				"helper":               map[string]any{"type": "string", "description": "For answer_helper: the helper that asked, as Commitarium named it. Otherwise empty."},
-				"brief":                map[string]any{"type": "boolean", "description": "For create_work_order: true has its brief written from description before it starts; it is created as a draft. False for quick changes. Otherwise false."},
-				"app_brief":            map[string]any{"type": "string", "description": "For create_app and plan_project: everything you gathered with the user, in full, for whoever plans it next. Otherwise empty."},
-				"assumptions":          map[string]any{"type": "array", "items": text, "description": "For create_app and plan_project: each thing you assumed where the user did not say, in a short line. Otherwise empty."},
-				"decisions":            map[string]any{"type": "array", "items": text, "description": "For update_plan: every decision made so far, in full, one short line each; it replaces the plan's list. Otherwise empty."},
-				"open_questions":       map[string]any{"type": "array", "items": text, "description": "For update_plan: every question still open, in full, one short line each; it replaces the plan's list. Otherwise empty."},
-				"plan_items": map[string]any{"type": "array", "description": "For update_plan: the whole build plan, in order, when it changes; empty keeps it. Otherwise empty.", "items": objectSchema(
-					map[string]any{
-						"priority":    map[string]any{"type": "integer", "description": "0 for P0 (needed first), 1 for P1, and so on."},
-						"title":       text,
-						"description": text,
-					},
-					[]string{"priority", "title", "description"},
-				)},
-				"stack_presets": map[string]any{"type": "array", "items": text, "description": "For update_plan: the runtime presets of the stack, by ID, when it is decided; empty keeps it. Otherwise empty."},
-				"frameworks":    map[string]any{"type": "string", "description": "For update_plan with stack_presets: the frameworks to build it with, in a few words. Otherwise empty."},
-			},
-			[]string{
-				"type", "reason", "title", "description", "vision_item_id", "steps",
-				"lead_agent", "lead_model", "reviewer_agent", "reviewer_model",
-				"lead_plan_model", "lead_plan_effort", "lead_effort", "reviewer_plan_model", "reviewer_plan_effort", "reviewer_effort",
-				"work_order_id", "when", "how", "priority", "guidance", "after", "helper", "brief", "app_brief", "assumptions",
-				"decisions", "open_questions", "plan_items", "stack_presets", "frameworks",
-			},
-		)
-		return objectSchema(
-			map[string]any{
-				"message": text,
-				"actions": map[string]any{"type": "array", "items": action},
-				"notes":   map[string]any{"type": "string", "description": "Your full notes, replacing the old ones; empty keeps them."},
-			},
-			[]string{"message", "actions", "notes"},
-		)
+		return assistantTurnSchema(false)
+	case OutputContractAssistantPlanningTurn:
+		return assistantTurnSchema(true)
 	case OutputContractVisionPlan:
 		text := map[string]any{"type": "string"}
 		done := map[string]any{
@@ -591,11 +534,20 @@ func ResolveStructuredOutput(
 			return StructuredOutput{}, invalidStructuredOutput("work order brief response has an unknown action")
 		}
 
-	case OutputContractAssistantTurn:
+	case OutputContractAssistantTurn, OutputContractAssistantPlanningTurn:
 		var response struct {
 			Message string                            `json:"message"`
 			Actions []featureartifact.AssistantAction `json:"actions"`
 			Notes   string                            `json:"notes"`
+			Plan    *struct {
+				Goal          string                     `json:"goal"`
+				Step          string                     `json:"step"`
+				Decisions     []string                   `json:"decisions"`
+				OpenQuestions []string                   `json:"open_questions"`
+				Items         []featureartifact.PlanItem `json:"items"`
+				StackPresets  []string                   `json:"stack_presets"`
+				Frameworks    string                     `json:"frameworks"`
+			} `json:"plan"`
 		}
 		if err := decodeStructuredOutput(raw, &response); err != nil {
 			return StructuredOutput{}, err
@@ -607,6 +559,23 @@ func ResolveStructuredOutput(
 		turn, err := featureartifact.AssistantTurn{Actions: response.Actions, Notes: response.Notes}.Normalize()
 		if err != nil {
 			return StructuredOutput{}, invalidStructuredOutput("assistant turn: %v", err)
+		}
+		if contract == OutputContractAssistantPlanningTurn {
+			// The plan is applied as an update_plan of its own, first, so the
+			// turn's other actions see it.
+			if response.Plan == nil {
+				return StructuredOutput{}, invalidStructuredOutput("planning turn has no plan")
+			}
+			plan, err := featureartifact.AssistantTurn{Actions: []featureartifact.AssistantAction{{
+				Type: featureartifact.AssistantUpdatePlan, Reason: "The plan as it stands", Description: response.Plan.Goal,
+				Decisions: response.Plan.Decisions, OpenQuestions: response.Plan.OpenQuestions,
+				PlanItems: response.Plan.Items, StackPresets: response.Plan.StackPresets, Frameworks: response.Plan.Frameworks,
+				PlanStep: response.Plan.Step,
+			}}}.Normalize()
+			if err != nil {
+				return StructuredOutput{}, invalidStructuredOutput("planning turn: %v", err)
+			}
+			turn.Actions = append(plan.Actions, turn.Actions...)
 		}
 		return StructuredOutput{
 			Event: Event{Type: EventMessage, Text: response.Message}, Disposition: DispositionSucceeded,
@@ -802,6 +771,81 @@ func ResolveStructuredOutput(
 	default:
 		return StructuredOutput{}, invalidStructuredOutput("output contract %q is unsupported", contract)
 	}
+}
+
+// assistantTurnSchema is the project assistant's turn. While a project's
+// vision is being planned, every turn also carries the plan as it stands,
+// which Commitarium applies at once (ONE_CONVERSATION_PLAN.md phase 2).
+func assistantTurnSchema(planning bool) map[string]any {
+	text := map[string]any{"type": "string"}
+	action := objectSchema(
+		map[string]any{
+			"type": map[string]any{
+				"type": "string", "enum": []string{"create_work_order", "start_work_order", "change_models", "add_vision_item", "start_autopilot", "continue_work_order", "recover_work_order", "close_work_order", "create_app", "plan_project", "set_up_preview", "write_vision", "set_up_stack", "answer_helper", "write_brief", "design_stack", "research", "build_plan"},
+			},
+			"reason":               text,
+			"title":                text,
+			"description":          text,
+			"vision_item_id":       text,
+			"steps":                map[string]any{"type": "string", "enum": []string{"", "full", "reviewed_plan", "planned", "quick"}},
+			"lead_agent":           text,
+			"lead_model":           text,
+			"reviewer_agent":       text,
+			"reviewer_model":       text,
+			"lead_plan_model":      map[string]any{"type": "string", "description": "For create_work_order and start_work_order with a documented plan: a different model the lead plans with, offered by the lead agent; empty plans with lead_model."},
+			"lead_plan_effort":     map[string]any{"type": "string", "description": "The lead's reasoning effort while planning; empty uses lead_effort."},
+			"lead_effort":          map[string]any{"type": "string", "description": "The lead's reasoning effort after the plan, one its model accepts; empty is the model's default."},
+			"reviewer_plan_model":  map[string]any{"type": "string", "description": "A different model the reviewer reviews the plan with, offered by the reviewer agent; empty uses reviewer_model."},
+			"reviewer_plan_effort": map[string]any{"type": "string", "description": "The reviewer's reasoning effort for plan review; empty uses reviewer_effort."},
+			"reviewer_effort":      map[string]any{"type": "string", "description": "The reviewer's reasoning effort for code review; empty is the model's default."},
+			"work_order_id":        text,
+			"when":                 map[string]any{"type": "string", "enum": []string{"", "now", "next_turn"}},
+			"how":                  map[string]any{"type": "string", "enum": []string{"", "recheck", "continue", "message", "fresh_conversation", "back_to_ready"}, "description": "For recover_work_order: how to recover the blocked work order. Otherwise empty."},
+			"guidance":             map[string]any{"type": "string", "description": "For continue_work_order: what to tell the work order's agents; empty retries as is. For answer_helper: your answer to the helper's question."},
+			"priority":             map[string]any{"type": "integer", "description": "For add_vision_item: the priority level, 0 for P0 through 9 for P9; any level the vision has or a new one. For start_autopilot: the priority to finish. Otherwise 0."},
+			"after":                map[string]any{"type": "string", "description": "For create_work_order and start_work_order: the work order ID, or the exact title of another of your actions, that this one must wait for because both change the same part of the app; it starts once that one merges. Otherwise empty."},
+			"helper":               map[string]any{"type": "string", "description": "For answer_helper: the helper that asked, as Commitarium named it. Otherwise empty."},
+			"brief":                map[string]any{"type": "boolean", "description": "For create_work_order: true has its brief written from description before it starts; it is created as a draft. False for quick changes. Otherwise false."},
+			"app_brief":            map[string]any{"type": "string", "description": "For create_app and plan_project: everything you gathered with the user, in full, for whoever plans it next. Otherwise empty."},
+			"assumptions":          map[string]any{"type": "array", "items": text, "description": "For create_app and plan_project: each thing you assumed where the user did not say, in a short line. Otherwise empty."},
+		},
+		[]string{
+			"type", "reason", "title", "description", "vision_item_id", "steps",
+			"lead_agent", "lead_model", "reviewer_agent", "reviewer_model",
+			"lead_plan_model", "lead_plan_effort", "lead_effort", "reviewer_plan_model", "reviewer_plan_effort", "reviewer_effort",
+			"work_order_id", "when", "how", "priority", "guidance", "after", "helper", "brief", "app_brief", "assumptions",
+		},
+	)
+	properties := map[string]any{
+		"message": text,
+		"actions": map[string]any{"type": "array", "items": action},
+		"notes":   map[string]any{"type": "string", "description": "Your full notes, replacing the old ones; empty keeps them."},
+	}
+	required := []string{"message", "actions", "notes"}
+	if planning {
+		properties["plan"] = objectSchema(
+			map[string]any{
+				"goal": map[string]any{"type": "string", "description": "What the project is for, in two or three sentences; empty keeps it."},
+				"step": map[string]any{"type": "string", "enum": []string{"purpose", "features", "data", "look", "details", "priorities", "stack", "review"},
+					"description": "The agenda step the conversation is on now; review once everything is covered or the user says go."},
+				"decisions":      map[string]any{"type": "array", "items": text, "description": "Every decision made so far, one short line each, starting with its step and a colon (\"look: dark theme\"); it replaces the plan's list."},
+				"open_questions": map[string]any{"type": "array", "items": text, "description": "Every question still open, one short line each, starting with its step and a colon (\"data: which repositories\"); it replaces the plan's list."},
+				"items": map[string]any{"type": "array", "description": "The whole build plan, in order; empty keeps it.", "items": objectSchema(
+					map[string]any{
+						"priority":    map[string]any{"type": "integer", "description": "0 for P0 (the first version), 1 for P1 (next), and so on."},
+						"title":       text,
+						"description": text,
+					},
+					[]string{"priority", "title", "description"},
+				)},
+				"stack_presets": map[string]any{"type": "array", "items": text, "description": "The stack's runtime presets, by ID, once it is decided; empty keeps it."},
+				"frameworks":    map[string]any{"type": "string", "description": "With stack_presets: the frameworks to build it with, in a few words. Otherwise empty."},
+			},
+			[]string{"goal", "step", "decisions", "open_questions", "items", "stack_presets", "frameworks"},
+		)
+		required = append(required, "plan")
+	}
+	return objectSchema(properties, required)
 }
 
 func objectSchema(properties map[string]any, required []string) map[string]any {
