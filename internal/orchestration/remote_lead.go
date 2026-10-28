@@ -106,6 +106,9 @@ type RecoveryDirective struct {
 	// previewCheck is what a failed preview check saw, which Commitarium
 	// hands to the lead to fix (preview_check.go).
 	previewCheck string
+	// selfCorrection says Commitarium wrote Message: a refused turn handed
+	// back to its agent (self_correction.go).
+	selfCorrection bool
 }
 
 // answersBlocker reports whether the user chose to move the work on, which
@@ -339,7 +342,10 @@ type RemoteLeadStarter struct {
 
 	activeMu sync.Mutex
 	active   map[string]struct{}
-	mergeMu  sync.Mutex
+	// corrections are refused turns to hand back to their agents once their
+	// runs are released (self_correction.go).
+	corrections map[string]*pendingCorrection
+	mergeMu     sync.Mutex
 	// acceptanceJoinMu closes the small window where both parallel workers can
 	// observe the other as incomplete and then both leave without starting the
 	// review. The durable turn admission still provides cross-process safety.
@@ -750,7 +756,7 @@ func (starter *RemoteLeadStarter) recoverWithDirective(
 				starter.release(run.ID)
 				return checkpointErr
 			}
-			request := remoteLeadRequest{runID: run.ID, allowRecoveryContinuation: recoveryPolicy == project.RecoveryPolicyAutomatic, forceFreshRecovery: directive.Action == RecoveryActionReplace, recoveryMessage: directive.Message, guidanceFromAssistant: directive.FromAssistant, answerBlocker: directive.answersBlocker(), interruption: directive.interruption, identity: workerhttp.MutationIdentity{AttemptReference: workerhttp.AttemptReference{SessionID: active.ID, AttemptID: checkpoint.AttemptID}}}
+			request := remoteLeadRequest{runID: run.ID, allowRecoveryContinuation: recoveryPolicy == project.RecoveryPolicyAutomatic, forceFreshRecovery: directive.Action == RecoveryActionReplace, recoveryMessage: directive.Message, guidanceFromAssistant: directive.FromAssistant, answerBlocker: directive.answersBlocker(), guided: directive.selfCorrection, selfCorrection: directive.selfCorrection, interruption: directive.interruption, identity: workerhttp.MutationIdentity{AttemptReference: workerhttp.AttemptReference{SessionID: active.ID, AttemptID: checkpoint.AttemptID}}}
 			switch {
 			case active.Role == worker.RoleLead:
 				version, _, ok := workflowAttemptVersionAndTurn(active.ID, "implementation", checkpoint.AttemptID)
@@ -871,6 +877,8 @@ func (starter *RemoteLeadStarter) recoverWithDirective(
 		recoveryMessage:           directive.Message,
 		guidanceFromAssistant:     directive.FromAssistant,
 		answerBlocker:             directive.answersBlocker(),
+		guided:                    directive.selfCorrection,
+		selfCorrection:            directive.selfCorrection,
 		interruption:              directive.interruption,
 		agentName:                 "lead agent",
 		waitingReason:             waitingReasonForAttempt(session, checkpoint.AttemptID),
@@ -970,8 +978,35 @@ func (starter *RemoteLeadStarter) RecoverBlockerWithDirective(
 	actionID string,
 	directive RecoveryDirective,
 ) (execution.Run, bool, error) {
+	recovery, err := starter.beginRecovery(ctx, runID, actionID, directive)
+	if err != nil || recovery.rechecking.ID == "" {
+		return recovery.run, false, err
+	}
+	return starter.finishRecovery(ctx, recovery)
+}
+
+// blockerRecovery is a recovery begun: the run moved from its blocker to
+// rechecking, and what continues it.
+type blockerRecovery struct {
+	run, rechecking execution.Run
+	storedFeature   feature.Feature
+	policy          project.RecoveryPolicy
+	directive       RecoveryDirective
+}
+
+// beginRecovery checks that the run waits on a blocker and moves it to
+// rechecking. It takes no claim on the run, so a holder can begin a
+// recovery before it releases the run (self_correction.go). A run left as
+// it was returns with no recovery to finish.
+func (starter *RemoteLeadStarter) beginRecovery(
+	ctx context.Context,
+	runID string,
+	actionID string,
+	directive RecoveryDirective,
+) (blockerRecovery, error) {
+	fail := func(err error) (blockerRecovery, error) { return blockerRecovery{}, err }
 	if strings.TrimSpace(runID) == "" || strings.TrimSpace(actionID) == "" {
-		return execution.Run{}, false, ErrInvalidRunRequest
+		return fail(ErrInvalidRunRequest)
 	}
 	if directive.Action == "" {
 		directive.Action = RecoveryActionContinue
@@ -979,26 +1014,26 @@ func (starter *RemoteLeadStarter) RecoverBlockerWithDirective(
 	directive.Message = strings.TrimSpace(directive.Message)
 	if directive.Action != RecoveryActionRecheck && directive.Action != RecoveryActionContinue &&
 		directive.Action != RecoveryActionReplace && directive.Action != RecoveryActionLeavePaused {
-		return execution.Run{}, false, ErrInvalidRunRequest
+		return fail(ErrInvalidRunRequest)
 	}
 	if len(directive.Message) > 16*1024 {
-		return execution.Run{}, false, ErrInvalidRunRequest
+		return fail(ErrInvalidRunRequest)
 	}
 	run, err := starter.executions.GetRun(ctx, runID)
 	if err != nil {
-		return execution.Run{}, false, err
+		return fail(err)
 	}
 	if run.Status != execution.RunStatusWaitingForUser || run.Paused ||
 		run.WaitKind != execution.RunWaitKindBlocker {
-		return execution.Run{}, false, ErrRecoveryNotAllowed
+		return fail(ErrRecoveryNotAllowed)
 	}
 	if directive.Action == RecoveryActionLeavePaused {
-		return run, false, nil
+		return blockerRecovery{run: run}, nil
 	}
 	starter.noteRecovery(ctx, run.ID, actionID, directive)
 	storedFeature, err := starter.features.GetByID(ctx, run.FeatureID)
 	if err != nil {
-		return execution.Run{}, false, err
+		return fail(err)
 	}
 	rechecking, err := starter.executions.TransitionRun(
 		ctx, run.ID, execution.RunStatusWaitingForUser, execution.RunStatusRunning,
@@ -1008,11 +1043,11 @@ func (starter *RemoteLeadStarter) RecoverBlockerWithDirective(
 		if errors.Is(err, execution.ErrStateConflict) {
 			current, getErr := starter.executions.GetRun(ctx, run.ID)
 			if getErr == nil && current.Status == execution.RunStatusRunning && !current.Paused {
-				return current, false, nil
+				return blockerRecovery{run: current}, nil
 			}
-			return execution.Run{}, false, errors.Join(err, getErr)
+			return fail(errors.Join(err, getErr))
 		}
-		return execution.Run{}, false, err
+		return fail(err)
 	}
 
 	policy := project.RecoveryPolicyAutomatic
@@ -1037,8 +1072,18 @@ func (starter *RemoteLeadStarter) RecoverBlockerWithDirective(
 		starter.clearRetryWait(ctx, run.ID)
 	}
 	directive.blockedReason = run.Reason
-	err = starter.recoverWithDirective(
-		context.WithoutCancel(ctx), rechecking, storedFeature, policy, directive,
+	return blockerRecovery{
+		run: run, rechecking: rechecking, storedFeature: storedFeature, policy: policy, directive: directive,
+	}, nil
+}
+
+// finishRecovery continues a recovery begun from the run's durable state.
+func (starter *RemoteLeadStarter) finishRecovery(
+	ctx context.Context, recovery blockerRecovery,
+) (execution.Run, bool, error) {
+	run := recovery.run
+	err := starter.recoverWithDirective(
+		context.WithoutCancel(ctx), recovery.rechecking, recovery.storedFeature, recovery.policy, recovery.directive,
 	)
 	if err != nil && !errors.Is(err, ErrRunAlreadyActive) {
 		// A failed re-check is itself a safe outcome: retain the existing blocker
@@ -2137,6 +2182,15 @@ func (starter *RemoteLeadStarter) recoverIdleReviewingRun(
 			}
 			return starter.answerLeadBlocker(ctx, run, lead, leadCheckpoint, attempt, directive, false, contract)
 		}
+		if directive.selfCorrection {
+			// Commitarium refused the lead's answer to the review and hands
+			// it back: the lead tries the same round again.
+			contract := workerhttp.OutputContractImplementationLead
+			if acknowledging {
+				contract = workerhttp.OutputContractImplementationReadiness
+			}
+			return starter.answerLeadBlocker(ctx, run, lead, leadCheckpoint, attempt, directive, true, contract)
+		}
 		request := remoteLeadRequest{runID: run.ID, agentName: "lead agent", identity: workerhttp.MutationIdentity{
 			AttemptReference: workerhttp.AttemptReference{SessionID: lead.ID, AttemptID: leadCheckpoint.AttemptID},
 		}}
@@ -2235,6 +2289,7 @@ func (starter *RemoteLeadStarter) continueOrVerifyReviewTurn(
 			runID: run.ID, agentName: "reviewer", allowRecoveryContinuation: true,
 			answerBlocker: true, guided: guided, forceFreshRecovery: directive.Action == RecoveryActionReplace,
 			recoveryMessage: directive.Message, guidanceFromAssistant: directive.FromAssistant, refusal: refusal,
+			selfCorrection: directive.selfCorrection,
 			identity: workerhttp.MutationIdentity{AttemptReference: workerhttp.AttemptReference{
 				SessionID: reviewer.ID, AttemptID: checkpoint.AttemptID,
 			}},
@@ -2518,6 +2573,10 @@ type remoteLeadRequest struct {
 	// previewCheck is the evidence of a failed preview check the lead's next
 	// turn fixes.
 	previewCheck string
+	// selfCorrection says recoveryMessage is Commitarium handing a refused
+	// turn back to its agent (self_correction.go): it continues the turn as
+	// guided, whatever phase it was in.
+	selfCorrection bool
 }
 
 func interventionAttemptID(sessionID, interventionID string) string {
@@ -4395,6 +4454,8 @@ func (starter *RemoteLeadStarter) continueFailedAttempt(
 			guidance += "\n\nThe user continued the work order with this guidance: " + message
 		}
 		request.recoveryMessage = guidance
+	} else if answered && request.selfCorrection {
+		// The correction already says what was refused and what to do.
 	} else if answered && request.guided && attempt.Result.Disposition != workerhttp.DispositionInputRequired {
 		guidance := "Your previous turn finished, but Commitarium could not accept its result, so " +
 			"the work order was blocked."
@@ -4534,7 +4595,8 @@ func (starter *RemoteLeadStarter) continueFailedAttempt(
 		return false, err
 	}
 	if guidance != "" {
-		starter.recordGuidance(ctx, session.ID, nextAttemptID, guidance, request.guidanceFromAssistant)
+		starter.recordGuidanceBy(ctx, session.ID, nextAttemptID, guidance,
+			guidanceAuthor(request.guidanceFromAssistant, request.selfCorrection))
 	}
 	starter.launchRecoverySuccessor(ctx, request, session, storedFeature, briefing)
 	return true, nil
@@ -4546,10 +4608,24 @@ func (starter *RemoteLeadStarter) continueFailedAttempt(
 func (starter *RemoteLeadStarter) recordGuidance(
 	ctx context.Context, sessionID, attemptID, guidance string, fromAssistant bool,
 ) {
-	author := "user"
-	if fromAssistant {
-		author = "assistant"
+	starter.recordGuidanceBy(ctx, sessionID, attemptID, guidance, guidanceAuthor(fromAssistant, false))
+}
+
+// guidanceAuthor names who wrote a continuation's guidance: the user, the
+// assistant, or Commitarium handing a refused turn back.
+func guidanceAuthor(fromAssistant, selfCorrection bool) string {
+	switch {
+	case selfCorrection:
+		return "commitarium"
+	case fromAssistant:
+		return "assistant"
 	}
+	return "user"
+}
+
+func (starter *RemoteLeadStarter) recordGuidanceBy(
+	ctx context.Context, sessionID, attemptID, guidance, author string,
+) {
 	if _, err := starter.executions.RecordSessionEventWithID(
 		ctx, attemptID+":guidance:"+author, sessionID,
 		worker.Event{Type: worker.EventUserMessage, Text: guidance},
@@ -4696,8 +4772,11 @@ func (starter *RemoteLeadStarter) launchRecoverySuccessor(
 ) {
 	if request.recoveryMessage != "" {
 		heading := "User recovery guidance:"
-		if request.previewCheck != "" {
+		switch {
+		case request.previewCheck != "":
 			heading = "Commitarium's preview check:"
+		case request.selfCorrection:
+			heading = "Commitarium's correction:"
 		}
 		briefing += "\n\n" + heading + "\n" + request.recoveryMessage
 		if len(briefing) > workerhttp.MaxInstructionsBytes {
@@ -4934,7 +5013,10 @@ func (starter *RemoteLeadStarter) finish(
 	case workerhttp.OutcomeCompleted:
 		if request.interventionID != "" {
 			if !worker.InterventionEffect(attempt.Result.InterventionEffect).IsValid() {
-				starter.requireReview(ctx, request, errors.New("completed intervention omitted its structured effect"))
+				starter.requireReview(ctx, request, fmt.Errorf(
+					"completed intervention omitted its structured effect: %w: found effect %q; answer with "+
+						"effect guidance_applied, clarification_required, or replanning_required and your response",
+					errInterventionEffect, attempt.Result.InterventionEffect))
 				return
 			}
 			_, _, err = starter.executions.CompleteIntervention(
@@ -4969,7 +5051,9 @@ func (starter *RemoteLeadStarter) finish(
 		}
 		if request.request.OutputContract == workerhttp.OutputContractAcceptanceTests {
 			if attempt.Result.Disposition != workerhttp.DispositionInputRequired && attempt.Result.AcceptanceTests == nil {
-				err = errors.New("reviewer completed acceptance-test authoring without structured test metadata")
+				err = fmt.Errorf("reviewer completed acceptance-test authoring without structured test metadata: %w: "+
+					"return action 'authored' with your summary, the private test commit in test_commit_id, and "+
+					"each test in tests", errAcceptanceTestsResult)
 				break
 			}
 			if attempt.Result.Disposition != workerhttp.DispositionInputRequired {
@@ -4980,7 +5064,8 @@ func (starter *RemoteLeadStarter) finish(
 				}
 				normalized, normalizeErr := attempt.Result.AcceptanceTests.NormalizeInitial(run.PlanVersion)
 				if normalizeErr != nil {
-					err = normalizeErr
+					err = fmt.Errorf("reviewer's acceptance tests are invalid: %w: %v; fix that in the tests "+
+						"you hand in and return action 'authored' again", errAcceptanceTestsResult, normalizeErr)
 					break
 				}
 				acceptanceArtifacts, ok := starter.artifacts.(remoteLeadAcceptanceArtifactService)
@@ -5026,7 +5111,9 @@ func (starter *RemoteLeadStarter) finish(
 			if planningMessage.Type == worker.EventPlanSubmitted {
 				if starter.artifacts != nil {
 					if attempt.Result.ImplementationPlan == nil {
-						starter.requireReview(ctx, request, errors.New("submitted plan omitted its structured implementation checklist"))
+						starter.requireReview(ctx, request, fmt.Errorf(
+							"submitted plan omitted its structured implementation checklist: %w: submit the plan "+
+								"again with its plan_title, plan_subtitle, and steps", errPlanChecklistResult))
 						return
 					}
 					run, loadErr := starter.executions.GetRun(ctx, request.runID)
@@ -5036,7 +5123,9 @@ func (starter *RemoteLeadStarter) finish(
 					}
 					normalized, normalizeErr := attempt.Result.ImplementationPlan.NormalizeInitial(run.PlanVersion)
 					if normalizeErr != nil {
-						starter.requireReview(ctx, request, normalizeErr)
+						starter.requireReview(ctx, request, fmt.Errorf(
+							"submitted plan's implementation checklist is invalid: %w: %v; fix that in the steps "+
+								"and submit the plan again", errPlanChecklistResult, normalizeErr))
 						return
 					}
 					if _, artifactErr := starter.artifacts.UpsertImplementationPlan(
@@ -5175,7 +5264,9 @@ func (starter *RemoteLeadStarter) finish(
 		}
 	case workerhttp.OutcomeFailed:
 		if attempt.Result.Error != nil && attempt.Result.Error.Code == workerhttp.ErrorIncompleteResult {
-			err = fmt.Errorf("%s ended before returning its required structured result: %s", request.agentName, attempt.Result.Error.Message)
+			err = fmt.Errorf("%s ended before returning its required structured result: %w: the worker "+
+				"found: %s; hand in your final result again in the required format, without redoing work "+
+				"that is already published", request.agentName, errIncompleteResult, attempt.Result.Error.Message)
 		} else {
 			err = starter.pauseFailedTurn(ctx, request, session, attempt)
 		}
@@ -5187,10 +5278,66 @@ func (starter *RemoteLeadStarter) finish(
 	}
 }
 
+// Checks of the structured result an agent hands in. Each refusal says what
+// the result lacks and how to hand it in again; the sentinel's text is the
+// blocker's stable fingerprint.
+var (
+	errIncompleteResult      = agentRejection("the turn ended without its required structured result")
+	errPublicationResult     = agentRejection("the result has no publication facts")
+	errReviewResult          = agentRejection("the result has no review facts")
+	errAcceptanceTestsResult = agentRejection("the acceptance-test result is missing or invalid")
+	errPlanChecklistResult   = agentRejection("the submitted plan's checklist is missing or invalid")
+	errInterventionEffect    = agentRejection("the intervention answer has no valid effect")
+	errReadinessDecision     = agentRejection("the merge-readiness result has no valid decision")
+	errPlanApprovalDecision  = agentRejection("the plan approval has no valid decision")
+)
+
+// publicationFactsGuidance says how a lead hands in a publication.
+const publicationFactsGuidance = "return action 'published' with your summary, the exact lowercase HEAD in " +
+	"commit_id, and pull_request_number"
+
+// Checks of what an agent published in Forgejo and its checkout, which its
+// next turn can put right (see rejectPublication).
+var (
+	errAuditCommentMissing    = agentRejection("the audit comment is not on the pull request")
+	errAuditCommentInvalid    = agentRejection("the audit comment is not in the required form")
+	errReviewNotAsReported    = agentRejection("the Forgejo review does not match the reported review")
+	errReportedPullRequest    = agentRejection("the reported pull request is not the work order's")
+	errNoNewCommit            = agentRejection("the turn did not publish a new commit")
+	errReportedCommitNotFound = stateRejection("the reported commit is not the feature branch head")
+	errCheckoutNotAsReported  = stateRejection("the checkout is not as the turn reported")
+)
+
+// publicationRejections pairs each workspace verification failure an agent
+// can fix with the check that names it.
+var publicationRejections = []struct {
+	cause     error
+	rejection *turnRejection
+}{
+	{workspace.ErrAuditCommentMissing, errAuditCommentMissing},
+	{workspace.ErrAuditCommentInvalid, errAuditCommentInvalid},
+	{workspace.ErrReviewNotAsReported, errReviewNotAsReported},
+	{workspace.ErrReportedPullRequestMismatch, errReportedPullRequest},
+	{workspace.ErrNoNewCommit, errNoNewCommit},
+	{workspace.ErrReportedCommitNotPushed, errReportedCommitNotFound},
+	{workspace.ErrCheckoutNotAsReported, errCheckoutNotAsReported},
+}
+
+// rejectPublication marks a workspace verification failure the agent can fix
+// with its check; any other failure is returned as it is.
+func rejectPublication(err error) error {
+	for _, known := range publicationRejections {
+		if errors.Is(err, known.cause) {
+			return fmt.Errorf("%w: %w", known.rejection, err)
+		}
+	}
+	return err
+}
+
 // errImplementationChecklist is a lead's checklist not matching its
 // publication. Its text is the blocker's stable fingerprint; the wrapped
 // detail says what to fix.
-var errImplementationChecklist = errors.New("implementation checklist is incomplete or does not end at the published commit")
+var errImplementationChecklist = agentRejection("implementation checklist is incomplete or does not end at the published commit")
 
 // checkImplementationChecklist reports how checklist falls short of a
 // publication at publishedCommit for planVersion, naming each unfinished
@@ -5242,7 +5389,8 @@ func (starter *RemoteLeadStarter) verifyImplementationPublication(
 	result workerhttp.TerminalResult,
 ) error {
 	if result.Publication == nil {
-		return errors.New("lead completed implementation without structured publication facts")
+		return fmt.Errorf("lead completed implementation without structured publication facts: %w: %s",
+			errPublicationResult, publicationFactsGuidance)
 	}
 	run, err := starter.executions.GetRun(ctx, request.runID)
 	if err != nil {
@@ -5298,7 +5446,7 @@ func (starter *RemoteLeadStarter) verifyImplementationPublication(
 		)
 	}
 	if verifyErr != nil {
-		return fmt.Errorf("verify lead publication before review: %w", verifyErr)
+		return fmt.Errorf("verify lead publication before review: %w", rejectPublication(verifyErr))
 	}
 	_, err = starter.executions.RecordSessionEventWithID(
 		ctx,
@@ -5785,7 +5933,8 @@ func (starter *RemoteLeadStarter) verifyImplementationCorrection(
 	result workerhttp.TerminalResult,
 ) error {
 	if result.Publication == nil {
-		return errors.New("lead completed correction without structured publication facts")
+		return fmt.Errorf("lead completed correction without structured publication facts: %w: %s, "+
+			"and finding_answers answering each review finding", errPublicationResult, publicationFactsGuidance)
 	}
 	round, correcting := implementationCorrectionTurnNumber(
 		request.identity.SessionID, request.identity.AttemptID,
@@ -5840,7 +5989,7 @@ func (starter *RemoteLeadStarter) verifyImplementationCorrection(
 		result.Publication.CommitID, result.Publication.PullRequestNumber, starter.forgejoAuthorFor(run, worker.RoleLead),
 		workerhttp.ChangesNothing(result.Publication.FindingAnswers),
 	); err != nil {
-		return fmt.Errorf("verify lead review response: %w", err)
+		return fmt.Errorf("verify lead review response: %w", rejectPublication(err))
 	}
 	verified := fmt.Sprintf(
 		"Verified lead response to review #%d: corrected commit %s is the head of Forgejo pull request #%d and its audit comment is attributed to %s.",
@@ -5940,7 +6089,9 @@ func (starter *RemoteLeadStarter) verifyImplementationReview(
 	result workerhttp.TerminalResult,
 ) error {
 	if result.Review == nil {
-		return errors.New("reviewer completed without structured review facts")
+		return fmt.Errorf("reviewer completed without structured review facts: %w: return action 'approved' or "+
+			"'changes_requested' with your summary, the reviewed commit in commit_id, pull_request_number, and "+
+			"the posted review's ID in review_id", errReviewResult)
 	}
 	round, reviewing := implementationReviewTurnNumber(
 		request.identity.SessionID, request.identity.AttemptID,
@@ -5979,7 +6130,7 @@ func (starter *RemoteLeadStarter) verifyImplementationReview(
 		result.Review.PullRequestNumber, result.Review.ReviewID,
 		starter.forgejoAuthorFor(run, worker.RoleReviewer), expectedState,
 	); err != nil {
-		return fmt.Errorf("verify reviewer publication: %w", err)
+		return fmt.Errorf("verify reviewer publication: %w", rejectPublication(err))
 	}
 	if _, err := starter.executions.RecordSessionEventWithID(
 		ctx, implementationReviewVerificationEventID(request.identity.AttemptID), request.identity.SessionID,
@@ -6033,8 +6184,13 @@ func validateAcceptanceReviewResults(
 	if err := tests.Validate(); err != nil {
 		return err
 	}
-	if tests.PlanVersion != planVersion || tests.ImplementationCommitID != commitID {
+	if tests.PlanVersion != planVersion {
 		return errors.New("acceptance results do not describe the reviewed implementation commit")
+	}
+	if tests.ImplementationCommitID != commitID {
+		return fmt.Errorf("%w: the review is of commit %s but the acceptance tests ran against commit %s; "+
+			"review commit %s, the one the tests ran against, and report it in commit_id",
+			errAcceptanceResultsCommit, commitID, tests.ImplementationCommitID, tests.ImplementationCommitID)
 	}
 	for _, test := range tests.Tests {
 		switch test.Status {
@@ -6051,12 +6207,21 @@ func validateAcceptanceReviewResults(
 	return nil
 }
 
+// errAcceptanceResultsCommit is a review of another commit than the one the
+// acceptance tests ran against.
+var errAcceptanceResultsCommit = agentRejection("acceptance results do not describe the reviewed implementation commit")
+
+// errAcceptanceResultsIncomplete is the check behind acceptanceResultsIncomplete.
+var errAcceptanceResultsIncomplete = agentRejection("the review's acceptance results are incomplete")
+
 // acceptanceResultsIncomplete refuses a review whose acceptance results only
 // the reviewer can put right, by recording them for the reviewed commit.
 // Checking the same review again can never pass.
 type acceptanceResultsIncomplete string
 
 func (refusal acceptanceResultsIncomplete) Error() string { return string(refusal) }
+
+func (refusal acceptanceResultsIncomplete) Unwrap() error { return errAcceptanceResultsIncomplete }
 
 // acceptanceReviewRefusal checks a finished review against the acceptance
 // results recorded for its commit. It returns why the review cannot be
@@ -6256,7 +6421,9 @@ func (starter *RemoteLeadStarter) verifyImplementationReadiness(
 	}
 	if result.Disposition != workerhttp.DispositionSucceeded &&
 		result.Disposition != workerhttp.DispositionChangesRequested {
-		return errors.New("lead merge-readiness acknowledgement has an invalid decision")
+		return fmt.Errorf("lead merge-readiness acknowledgement has an invalid decision: %w: found %q; return "+
+			"action 'ready_to_merge' when no material blocker remains, or 'concern' with the remaining concern",
+			errReadinessDecision, result.Disposition)
 	}
 	run, err := starter.executions.GetRun(ctx, request.runID)
 	if err != nil {
@@ -6314,7 +6481,7 @@ func (starter *RemoteLeadStarter) verifyImplementationReadiness(
 		request.identity.AttemptID, result.Summary, approved.CommitID,
 		approved.PullRequestNumber, starter.forgejoAuthorFor(run, worker.RoleLead),
 	); err != nil {
-		return fmt.Errorf("verify lead merge-readiness decision: %w", err)
+		return fmt.Errorf("verify lead merge-readiness decision: %w", rejectPublication(err))
 	}
 	decision := "remaining concern"
 	if result.Disposition == workerhttp.DispositionSucceeded {
@@ -6489,7 +6656,9 @@ func (starter *RemoteLeadStarter) continueSubmittedPlan(
 		case workerhttp.DispositionChangesRequested:
 			return starter.returnPlanToLead(ctx, run, reviewer.ID, attemptID)
 		default:
-			return fmt.Errorf("%w: plan approval ended with disposition %q", ErrPlanningNotAllowed, attempt.Result.Disposition)
+			return fmt.Errorf("%w: plan approval ended with disposition %q: %w: return action 'approve' with a "+
+				"one-line confirmation, or 'request_changes' with exactly what differs from what you agreed",
+				ErrPlanningNotAllowed, attempt.Result.Disposition, errPlanApprovalDecision)
 		}
 	}
 	if run.Paused {
@@ -6911,9 +7080,15 @@ func (starter *RemoteLeadStarter) requireReview(
 	} else {
 		starter.turnEnded(ctx, request.runID, request.identity.SessionID)
 	}
+	kind, check := classifyCause(cause)
+	fingerprint := execution.BlockerFingerprint(kind, check, blockerFingerprintDetail(cause))
+	correction := starter.planSelfCorrection(ctx, request.runID, cause, fingerprint)
 	text := "The coordinator could not complete the " + request.agentName + " turn. " +
 		"The work order is paused so its durable work can be checked and continued safely." +
 		spentRetries(retries)
+	if correction.prompt != "" {
+		text = selfCorrectionReason(request.agentName, correction)
+	}
 	// What failed, so the user (and the assistant) can tell the agent what to fix.
 	if detail := strings.TrimSpace(cause.Error()); detail != "" {
 		if len(detail) > 400 {
@@ -6921,8 +7096,13 @@ func (starter *RemoteLeadStarter) requireReview(
 		}
 		text += " What failed: " + detail + "."
 	}
-	kind, check := classifyCause(cause)
-	starter.noteBlockerFingerprinted(ctx, request.runID, kind, check, cause.Error(), blockerFingerprintDetail(cause), text)
+	if correction.prompt == "" {
+		text += selfCorrectionReason(request.agentName, correction)
+	}
+	if correction.suspect {
+		kind = execution.BlockerCommitarium
+	}
+	starter.recordBlocker(ctx, request.runID, kind, check, cause.Error(), fingerprint, text)
 	_, _ = starter.executions.RecordSessionEventWithID(
 		ctx, request.identity.AttemptID+":recovery:review-required",
 		request.identity.SessionID,
@@ -6937,7 +7117,15 @@ func (starter *RemoteLeadStarter) requireReview(
 			ctx, session.ID, session.Status, execution.SessionStatusPauseRequested, session.ProviderSessionID,
 		)
 	}
+	owned := false
+	if correction.prompt != "" {
+		owned = starter.holdForCorrection(request.runID)
+	}
 	_ = starter.waitRun(ctx, request.runID, text, execution.RunWaitKindBlocker)
+	if correction.prompt != "" {
+		starter.correctWhenFree(request.runID, owned,
+			request.identity.AttemptID+":self-correction:"+fingerprint, correction.prompt)
+	}
 }
 
 func (starter *RemoteLeadStarter) handleInputRequired(
@@ -7100,6 +7288,21 @@ func (starter *RemoteLeadStarter) claim(runID string) bool {
 
 func (starter *RemoteLeadStarter) release(runID string) {
 	starter.activeMu.Lock()
-	delete(starter.active, runID)
+	pending := starter.corrections[runID]
+	switch {
+	case pending == nil:
+		delete(starter.active, runID)
+	case pending.correct == nil:
+		// The refusal is still being noted: the run stays held for it.
+		pending.released = true
+		pending = nil
+	default:
+		delete(starter.corrections, runID)
+	}
 	starter.activeMu.Unlock()
+	if pending != nil {
+		// The correction takes the run off its blocker while it is still
+		// held, so no one sees it free and blocked, then releases it.
+		pending.correct()
+	}
 }

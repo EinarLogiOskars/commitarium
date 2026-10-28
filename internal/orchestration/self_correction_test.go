@@ -1,0 +1,341 @@
+package orchestration
+
+import (
+	"errors"
+	"fmt"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/EinarLogiOskars/commitarium/internal/execution"
+	"github.com/EinarLogiOskars/commitarium/internal/feature"
+	"github.com/EinarLogiOskars/commitarium/internal/project"
+	"github.com/EinarLogiOskars/commitarium/internal/workerhttp"
+)
+
+// errTestReviewMarker stands in for a check the reviewer can put right.
+var errTestReviewMarker = agentRejection("the review comment does not carry the review marker")
+
+func reviewMarkerRefusal(found string) error {
+	return fmt.Errorf("verify review: %w: expected the marker on the review comment, found %s; "+
+		"post the review again with the marker", errTestReviewMarker, found)
+}
+
+// startSelfCorrectedReview runs a reviewed work order whose second review is
+// refused by the calls in refusals; tries scripts that many new tries of it.
+func startSelfCorrectedReview(t *testing.T, runID string, refusals map[int]error, tries int) *baseUpdateFixture {
+	t.Helper()
+	reviewerID := remoteReviewerSessionID(runID)
+	return startBaseUpdateRun(t, runID, true, project.MergePolicyRequireUserApproval, 0,
+		func(fixture *baseUpdateFixture) {
+			fixture.workspace.reviewRefusals = refusals
+			for try := 2; try < 2+tries; try++ {
+				addReviewRetryAttempt(fixture, reviewRetryAttemptID(reviewerID, 1, 2, try), int64(20+try),
+					"I posted the review again with its marker.")
+			}
+		})
+}
+
+// spendSelfCorrections records the corrections a refusal by check (one
+// that words itself, with no outer context) gets, so it blocks at once.
+func (fixture *baseUpdateFixture) spendSelfCorrections(t *testing.T, check *turnRejection) {
+	t.Helper()
+	for try := 1; try <= MaxSelfCorrections; try++ {
+		if err := fixture.executions.RecordRunRecovery(t.Context(), execution.Recovery{
+			ID: fmt.Sprintf("spent-%d", try), RunID: fixture.runID, How: execution.RecoverySelfCorrection,
+			Fingerprint: execution.BlockerFingerprint(check.kind, check.check, check.check),
+			Guidance:    "an earlier correction", CreatedAt: time.Now().UTC(),
+		}); err != nil {
+			t.Fatalf("spend self-corrections: %v", err)
+		}
+	}
+}
+
+func (fixture *baseUpdateFixture) selfCorrections(t *testing.T) []execution.Recovery {
+	t.Helper()
+	recoveries, err := fixture.executions.RunRecoveries(t.Context(), fixture.runID)
+	if err != nil {
+		t.Fatalf("load recoveries: %v", err)
+	}
+	var corrections []execution.Recovery
+	for _, recovery := range recoveries {
+		if recovery.How == execution.RecoverySelfCorrection {
+			corrections = append(corrections, recovery)
+		}
+	}
+	return corrections
+}
+
+func TestARefusedTurnIsHandedBackWithItsReasonAndAcceptedOnTheCorrection(t *testing.T) {
+	refusal := reviewMarkerRefusal("no marker")
+	fixture := startSelfCorrectedReview(t, "run_self_correct_review", map[int]error{2: refusal}, 1)
+	fixture.waitAtMergeGate(t)
+
+	reviewerID := remoteReviewerSessionID(fixture.runID)
+	retryID := reviewRetryAttemptID(reviewerID, 1, 2, 2)
+	request := fixture.reviewRetryRequest(retryID)
+	if request == nil {
+		t.Fatal("the refused review was not handed back to the reviewer")
+	}
+	reviewer, err := fixture.executions.GetSession(t.Context(), reviewerID)
+	if err != nil {
+		t.Fatalf("load reviewer: %v", err)
+	}
+	if request.Mode != workerhttp.AttemptModeResume || request.ProviderSessionID != reviewer.ProviderSessionID {
+		t.Fatalf("the correction did not continue the reviewer's conversation: %+v", request)
+	}
+	prompt := selfCorrectionPrompt(fmt.Errorf("verify reviewer publication: %w", refusal))
+	for _, want := range []string{
+		"Commitarium's correction:\n" + prompt,
+		"Commitarium could not accept your last turn: verify reviewer publication: verify review: the review comment does not carry the review marker",
+		"post the review again with the marker",
+	} {
+		if !strings.Contains(request.Instructions, want) {
+			t.Fatalf("the correction did not carry %q:\n%s", want, request.Instructions)
+		}
+	}
+	if strings.Contains(request.Instructions, "The user asked you") {
+		t.Fatalf("the correction was framed as the user's guidance:\n%s", request.Instructions)
+	}
+	if verified := fixture.workspace.reviewVerifyAttempts; len(verified) != 3 || verified[2] != retryID {
+		t.Fatalf("the corrected review was not the one verified: %v", verified)
+	}
+	corrections := fixture.selfCorrections(t)
+	if len(corrections) != 1 || corrections[0].Guidance != prompt || corrections[0].FromAssistant ||
+		corrections[0].Fingerprint != execution.BlockerFingerprint(execution.BlockerAgent, "verify reviewer publication", errTestReviewMarker.Error()) {
+		t.Fatalf("the correction was not recorded as a self-correction of that failure: %+v", corrections)
+	}
+	assertGuidanceShown(t, fixture.executions, reviewerID, "commitarium", prompt)
+}
+
+func TestTwoFailedCorrectionsPauseAsABlocker(t *testing.T) {
+	fixture := startSelfCorrectedReview(t, "run_self_correct_twice", map[int]error{
+		2: reviewMarkerRefusal("no marker"),
+		3: reviewMarkerRefusal("a marker for another attempt"),
+		4: reviewMarkerRefusal("a marker for a third attempt"),
+	}, 2)
+	blocked := fixture.waitBlocked(t, "")
+	if fixture.workspace.reviewVerifyCalls != 4 {
+		t.Fatalf("review checked %d times, want the review and its two corrections: %q",
+			fixture.workspace.reviewVerifyCalls, blocked.Reason)
+	}
+	if corrections := fixture.selfCorrections(t); len(corrections) != MaxSelfCorrections {
+		t.Fatalf("self-corrections = %+v, want %d", corrections, MaxSelfCorrections)
+	}
+	for _, want := range []string{
+		"The coordinator could not complete the reviewer turn",
+		"a marker for a third attempt",
+		"Commitarium handed it back to the reviewer 2 times; it came back each time.",
+	} {
+		if !strings.Contains(blocked.Reason, want) {
+			t.Fatalf("blocker reason does not say %q: %q", want, blocked.Reason)
+		}
+	}
+	blocker, found, err := fixture.executions.RunBlocker(t.Context(), fixture.runID)
+	if err != nil || !found || blocker.Kind != execution.BlockerAgent {
+		t.Fatalf("blocker = %+v found=%t err=%v", blocker, found, err)
+	}
+	// The assistant may still recover it: the corrections count towards the
+	// limits, but do not use them up.
+	recoveries, _ := fixture.executions.RunRecoveries(t.Context(), fixture.runID)
+	if execution.RecoveryExhausted(blocker, recoveries) {
+		t.Fatal("two self-corrections exhausted recovery")
+	}
+}
+
+func TestTheSameRefusalAfterACorrectionIsLikelyACommitariumProblem(t *testing.T) {
+	refusal := reviewMarkerRefusal("no marker")
+	fixture := startSelfCorrectedReview(t, "run_self_correct_suspect", map[int]error{2: refusal, 3: refusal}, 2)
+	blocked := fixture.waitBlocked(t, "")
+	if fixture.workspace.reviewVerifyCalls != 3 || len(fixture.selfCorrections(t)) != 1 {
+		t.Fatalf("handed back again after the same refusal: checks=%d corrections=%+v",
+			fixture.workspace.reviewVerifyCalls, fixture.selfCorrections(t))
+	}
+	if !strings.Contains(blocked.Reason, "this is likely a problem in Commitarium, not in the work") {
+		t.Fatalf("blocker reason does not name a likely Commitarium problem: %q", blocked.Reason)
+	}
+	blocker, found, err := fixture.executions.RunBlocker(t.Context(), fixture.runID)
+	if err != nil || !found || blocker.Kind != execution.BlockerCommitarium ||
+		blocker.Fingerprint != execution.BlockerFingerprint(execution.BlockerAgent, "verify reviewer publication", errTestReviewMarker.Error()) {
+		t.Fatalf("blocker = %+v found=%t err=%v", blocker, found, err)
+	}
+	recoveries, _ := fixture.executions.RunRecoveries(t.Context(), fixture.runID)
+	if !execution.RecoveryExhausted(blocker, recoveries) {
+		t.Fatal("a likely Commitarium problem is left for the assistant to recover")
+	}
+}
+
+// Only a check's refusal of what the agent did goes back to it: an
+// interrupted turn retries by itself, and a failure on Commitarium's side
+// (its store, a worker it cannot reach) is nothing the agent can fix.
+func TestOnlyRefusalsTheAgentCanFixAreHandedBack(t *testing.T) {
+	fixture := startBaseUpdateRun(t, "run_self_correct_kinds", true, project.MergePolicyRequireUserApproval, 0, nil)
+	fixture.waitAtMergeGate(t)
+	for _, cause := range []error{
+		errInterruptedAttempt,
+		fmt.Errorf("observe: %w", workerhttp.ErrRequestFailed),
+		fmt.Errorf("verify review: %w", errors.New("database is locked")),
+		errors.New("lead completed implementation without structured publication facts"),
+		fmt.Errorf("observe: %w: %w", errTestReviewMarker, workerhttp.ErrRequestFailed),
+	} {
+		if plan := fixture.starter.planSelfCorrection(t.Context(), fixture.runID, cause, "fingerprint"); plan.prompt != "" {
+			t.Errorf("%v was handed back to the agent", cause)
+		}
+	}
+	if plan := fixture.starter.planSelfCorrection(
+		t.Context(), fixture.runID, reviewMarkerRefusal("no marker"), "fingerprint",
+	); plan.prompt == "" {
+		t.Error("a refusal the agent can fix was not handed back")
+	}
+}
+
+func TestRejectionFingerprintsIgnoreTheirWording(t *testing.T) {
+	first, second := reviewMarkerRefusal("no marker"), fmt.Errorf("verify review again: %w: reworded", errTestReviewMarker)
+	if blockerFingerprintDetail(first) != blockerFingerprintDetail(second) ||
+		blockerFingerprintDetail(first) != errTestReviewMarker.Error() {
+		t.Fatalf("fingerprint details differ: %q, %q", blockerFingerprintDetail(first), blockerFingerprintDetail(second))
+	}
+	other := fmt.Errorf("verify review: %w: no marker", agentRejection("another check"))
+	if blockerFingerprintDetail(other) == blockerFingerprintDetail(first) {
+		t.Fatal("two checks share a fingerprint")
+	}
+	if kind, _ := classifyCause(fmt.Errorf("verify: %w: detail", stateRejection("the branch is behind"))); kind != execution.BlockerCheck {
+		t.Fatalf("a state rejection classified as %s", kind)
+	}
+}
+
+func TestSelfCorrectionPromptsHideSecretsAndStayShort(t *testing.T) {
+	cause := errors.New("push to https://lead:s3cr3t-value@forgejo.local/o/r.git failed with Authorization: token abcdef0123456789; " +
+		"token=hunter2 password: swordfish ghp_0123456789abcdefABCDEF at commit 0123456789abcdef0123456789abcdef01234567 " +
+		strings.Repeat("é", maxCorrectionReason))
+	prompt := selfCorrectionPrompt(cause)
+	for _, secret := range []string{"s3cr3t-value", "abcdef0123456789;", "hunter2", "swordfish", "ghp_0123456789abcdefABCDEF"} {
+		if strings.Contains(prompt, secret) {
+			t.Errorf("prompt leaks %q: %s", secret, prompt)
+		}
+	}
+	if !strings.Contains(prompt, "0123456789abcdef0123456789abcdef01234567") || !strings.Contains(prompt, "[REDACTED]") {
+		t.Errorf("prompt lost the commit or redacted nothing: %s", prompt)
+	}
+	if len(prompt) > maxCorrectionReason+400 || !strings.Contains(prompt, "…") || !strings.HasPrefix(prompt,
+		"Commitarium could not accept your last turn: push to https://[REDACTED]@forgejo.local") {
+		t.Errorf("prompt not bounded on a rune boundary: %d bytes", len(prompt))
+	}
+}
+
+// copyAttempt scripts the turn to as a copy of the scripted turn from.
+func copyAttempt(stub *conversationalRemoteLeadWorker, sessionID, from, to string) {
+	source := workerhttp.AttemptReference{SessionID: sessionID, AttemptID: from}
+	target := workerhttp.AttemptReference{SessionID: sessionID, AttemptID: to}
+	initial, terminal := stub.initial[source], stub.terminal[source]
+	initial.AttemptReference, terminal.AttemptReference = target, target
+	events := append([]workerhttp.Event(nil), stub.events[source]...)
+	for index := range events {
+		events[index].AttemptReference = target
+	}
+	stub.initial[target], stub.terminal[target], stub.events[target] = initial, terminal, events
+}
+
+// correctionRequest returns the turn that handed a refused turn back to the
+// agent in role.
+func (fixture *baseUpdateFixture) correctionRequest(t *testing.T, role workerhttp.Role) workerhttp.PutAttemptRequest {
+	t.Helper()
+	for _, request := range fixture.requests() {
+		if request.Assignment.Role == role && strings.Contains(request.Instructions, "Commitarium's correction:") {
+			return request
+		}
+	}
+	t.Fatalf("no refused turn was handed back to the %s", role)
+	return workerhttp.PutAttemptRequest{}
+}
+
+// The lead's implementation hand-off and its answer to a review are handed
+// back the same way, in the lead's own conversation.
+func TestRefusedLeadTurnsAreHandedBack(t *testing.T) {
+	refusal := func() error {
+		return fmt.Errorf("%w: step 2 \"edit\" is in_progress: record its commit with "+
+			"'commitarium-artifact plan complete edit <lowercase-commit-id>'", errImplementationChecklist)
+	}
+	for _, test := range []struct {
+		name, from, to string
+		reviewed       bool
+		prepare        func(*baseUpdateFixture)
+	}{
+		{"implementation", ":implementation:1", ":implementation:2", false, func(fixture *baseUpdateFixture) {
+			fixture.workspace.publicationRefusals = map[int]error{1: refusal()}
+		}},
+		{"review response", ":correction:1", ":correction:1:2", true, func(fixture *baseUpdateFixture) {
+			fixture.workspace.responseRefusals = map[int]error{1: refusal()}
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			runID := "run_self_correct_lead_" + strings.ReplaceAll(test.name, " ", "_")
+			leadID := remoteLeadSessionID(runID)
+			fixture := startBaseUpdateRun(t, runID, test.reviewed, project.MergePolicyRequireUserApproval, 0,
+				func(fixture *baseUpdateFixture) {
+					copyAttempt(fixture.worker, leadID, leadID+test.from, leadID+test.to)
+					test.prepare(fixture)
+				})
+			fixture.waitAtMergeGate(t)
+			request := fixture.correctionRequest(t, workerhttp.RoleLead)
+			lead, err := fixture.executions.GetSession(t.Context(), leadID)
+			if err != nil {
+				t.Fatalf("load lead: %v", err)
+			}
+			if request.Mode != workerhttp.AttemptModeResume || request.ProviderSessionID != lead.ProviderSessionID ||
+				!strings.Contains(request.Instructions, "Commitarium's correction:\nCommitarium could not accept your last turn: ") ||
+				!strings.Contains(request.Instructions, "'commitarium-artifact plan complete edit <lowercase-commit-id>'") {
+				t.Fatalf("the refused turn was not handed back in the lead's conversation: %+v", request)
+			}
+			if corrections := fixture.selfCorrections(t); len(corrections) != 1 {
+				t.Fatalf("self-corrections = %+v", corrections)
+			}
+		})
+	}
+}
+
+func TestARefusedUpdateOntoMainIsHandedBack(t *testing.T) {
+	runID := "run_self_correct_update"
+	leadID := remoteLeadSessionID(runID)
+	fixture := startBaseUpdateRun(t, runID, false, project.MergePolicyRequireUserApproval, 1,
+		func(fixture *baseUpdateFixture) {
+			copyAttempt(fixture.worker, leadID, baseUpdateAttemptForVersion(leadID, 1, 1),
+				baseUpdateAttemptForVersion(leadID, 1, 2))
+			fixture.workspace.baseUpdateRefusals = map[int]error{1: fmt.Errorf(
+				"verify update onto main: %w: the update comment is missing", errTestReviewMarker)}
+		})
+	fixture.waitAtMergeGate(t)
+	fixture.workspace.mainHead = baseUpdateMainHead
+	fixture.workspace.mergeErrs = []error{baseUpdateNoMerge}
+	if _, _, err := fixture.starter.Merge(t.Context(), fixture.runID, "merge-behind-main"); err != nil {
+		t.Fatalf("merge behind main: %v", err)
+	}
+	fixture.waitFor(t, "the merge gate after the corrected update", func(run execution.Run, _ feature.Feature) bool {
+		return run.Status == execution.RunStatusWaitingForUser && run.WaitKind == execution.RunWaitKindMergeGate &&
+			fixture.leadCheckpoint(t).AttemptID == baseUpdateAttemptForVersion(leadID, 1, 2)
+	})
+	if fixture.workspace.baseUpdateVerifyCalls != 2 {
+		t.Fatalf("update checked %d times, want it and its correction", fixture.workspace.baseUpdateVerifyCalls)
+	}
+	request := fixture.correctionRequest(t, workerhttp.RoleLead)
+	if request.Mode != workerhttp.AttemptModeResume || !strings.Contains(request.Instructions, "the update comment is missing") {
+		t.Fatalf("the refused update was not handed back: %+v", request)
+	}
+	if corrections := fixture.selfCorrections(t); len(corrections) != 1 {
+		t.Fatalf("self-corrections = %+v", corrections)
+	}
+}
+
+// A refusal that words its check itself (the acceptance results) is named by
+// the check, not by its first clause, which names the test.
+func TestARefusalWithoutContextKeepsItsFingerprint(t *testing.T) {
+	first := acceptanceResultsIncomplete(`acceptance test "at-1" has no final result`)
+	second := acceptanceResultsIncomplete(`the reviewer approved while its acceptance test "at-2" is recorded as failed`)
+	fingerprint := func(cause error) string {
+		kind, check := classifyCause(cause)
+		return execution.BlockerFingerprint(kind, check, blockerFingerprintDetail(cause))
+	}
+	if fingerprint(first) != fingerprint(second) {
+		t.Fatal("acceptance refusals naming different tests have different fingerprints")
+	}
+}

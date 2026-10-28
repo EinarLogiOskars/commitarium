@@ -536,6 +536,30 @@ func TestAutopilotLeavesBackToReadyToTheUser(t *testing.T) {
 	}
 }
 
+// Where the assistant builds everything, it may start stuck work over itself,
+// as it may close and replace it.
+func TestAutopilotSendsWorkBackToReadyWhereItBuildsEverything(t *testing.T) {
+	service, worker := newTestService(t)
+	service.config.Projects = modeProjectsStub{app: true, mode: project.AssistantModeBuilds}
+	service.config.Features = &featuresStub{features: []feature.Feature{{ID: "fea_list", State: feature.StateImplementing}}}
+	if _, err := service.Send(t.Context(), "prj_test", "Go on", "msg-1"); err != nil {
+		t.Fatal(err)
+	}
+	worker.finish(workerhttp.TerminalResult{
+		Outcome: workerhttp.OutcomeCompleted, Disposition: workerhttp.DispositionSucceeded, Summary: "Starting over.",
+		AssistantTurn: &featureartifact.AssistantTurn{Actions: []featureartifact.AssistantAction{
+			{Type: featureartifact.AssistantRecoverWorkOrder, Reason: "Unusable", WorkOrderID: "fea_list", How: "back_to_ready"},
+		}},
+	})
+	if _, err := service.Get(t.Context(), "prj_test"); err != nil {
+		t.Fatal(err)
+	}
+	apply, err := service.autopilotActions(t.Context(), "prj_test")
+	if err != nil || len(apply) != 1 || apply[0].How != "back_to_ready" {
+		t.Fatalf("apply = %+v err=%v", apply, err)
+	}
+}
+
 // replacementSetup starts a goal whose one item is delivered by fea_old, and
 // proposes the assistant's replacement: a fresh work order for the item, and
 // closing the old one, in that order.

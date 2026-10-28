@@ -22,6 +22,10 @@ const (
 	BlockerLimit BlockerKind = "limit"
 	// BlockerOther: anything not yet named.
 	BlockerOther BlockerKind = "other"
+	// BlockerCommitarium: a check kept refusing a turn after the agent did
+	// what it asked, so the check is likely wrong: a Commitarium problem to
+	// report, not one to recover.
+	BlockerCommitarium BlockerKind = "commitarium"
 )
 
 // Blocker is what a run's latest blocker is.
@@ -53,9 +57,12 @@ const (
 	RecoveryMessage           RecoveryHow = "message"
 	RecoveryFreshConversation RecoveryHow = "fresh_conversation"
 	RecoveryBackToReady       RecoveryHow = "back_to_ready"
+	// RecoverySelfCorrection is Commitarium handing a refused turn back to
+	// its agent with the reason; only Commitarium chooses it.
+	RecoverySelfCorrection RecoveryHow = "self_correction"
 )
 
-// Valid reports whether how is a recovery.
+// Valid reports whether how is a recovery the assistant may choose.
 func (how RecoveryHow) Valid() bool {
 	switch how {
 	case RecoveryRecheck, RecoveryContinue, RecoveryMessage, RecoveryFreshConversation, RecoveryBackToReady:
@@ -94,8 +101,12 @@ const (
 
 // RecoveryExhausted reports whether recovering a run's blocker has run out:
 // its failure had as many recoveries as it gets, the run as many in total,
-// or the same failure came back after a fresh conversation (ADR-032).
+// or the same failure came back after a fresh conversation (ADR-032). A
+// blocker that is likely Commitarium's own problem has nothing to recover.
 func RecoveryExhausted(blocker Blocker, recoveries []Recovery) bool {
+	if blocker.Kind == BlockerCommitarium {
+		return true
+	}
 	onFailure, freshTried := 0, false
 	for _, recovery := range recoveries {
 		if recovery.Fingerprint == blocker.Fingerprint {

@@ -291,6 +291,12 @@ type remoteLeadWorkspaceStub struct {
 	baseUpdateVerifyErr    error
 	// failReviewVerifyCall makes that review verification fail once.
 	failReviewVerifyCall int
+	// reviewRefusals, publicationRefusals and responseRefusals refuse those
+	// verifications by call number.
+	reviewRefusals      map[int]error
+	publicationRefusals map[int]error
+	responseRefusals    map[int]error
+	baseUpdateRefusals  map[int]error
 }
 
 func (stub *remoteLeadWorkspaceStub) PrepareReplanningBaseline(
@@ -405,6 +411,9 @@ func (stub *remoteLeadWorkspaceStub) VerifyImplementationPublication(
 	stub.publicationVerifyCalls++
 	stub.publishedEventID = eventID
 	stub.publishedPlan = plan
+	if refusal := stub.publicationRefusals[stub.publicationVerifyCalls]; refusal != nil {
+		return workspace.Workspace{}, refusal
+	}
 	return stub.prepared, stub.publicationVerifyErr
 }
 
@@ -447,6 +456,9 @@ func (stub *remoteLeadWorkspaceStub) VerifyImplementationReview(
 	if stub.reviewVerifyCalls == stub.failReviewVerifyCall {
 		return workspace.Workspace{}, errors.New("the reviewer's review could not be confirmed")
 	}
+	if refusal := stub.reviewRefusals[stub.reviewVerifyCalls]; refusal != nil {
+		return workspace.Workspace{}, refusal
+	}
 	return stub.prepared, stub.reviewVerifyErr
 }
 
@@ -464,6 +476,9 @@ func (stub *remoteLeadWorkspaceStub) VerifyImplementationBaseUpdate(
 ) (workspace.Workspace, error) {
 	stub.baseUpdateVerifyCalls++
 	stub.baseUpdateVerifyCommit = commitID
+	if refusal := stub.baseUpdateRefusals[stub.baseUpdateVerifyCalls]; refusal != nil {
+		return workspace.Workspace{}, refusal
+	}
 	if stub.baseUpdateVerifyErr != nil {
 		return workspace.Workspace{}, stub.baseUpdateVerifyErr
 	}
@@ -493,6 +508,9 @@ func (stub *remoteLeadWorkspaceStub) VerifyImplementationReviewResponse(
 	stub.responseVerifyCalls++
 	stub.responseChangesNothing = changesNothing
 	stub.responseReviewedCommit = reviewedCommit
+	if refusal := stub.responseRefusals[stub.responseVerifyCalls]; refusal != nil {
+		return workspace.Workspace{}, refusal
+	}
 	stub.responseCommit = commit
 	return stub.prepared, stub.responseVerifyErr
 }

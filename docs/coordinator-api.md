@@ -1795,12 +1795,16 @@ before, its reason saying how many ran.
 is `agent` (the agent gave up, broke something, misunderstood, or skipped a
 step, such as its audit comment), `check` (a coordinator check of git or
 Forgejo failed), `environment` (an interrupted turn, a login, no desktop),
-`limit`, or `other`. `fingerprint` recognises the same failure when it
-repeats. `recoveries` lists each recovery chosen for the run (`how`,
-`guidance`, `from_assistant`, `fingerprint`, `created_at`); automatic retries
-are not listed. `recovery_exhausted` is set once the blocker's failure has
-had four recoveries, the run eight, or the same failure still blocks after a
-fresh conversation; its attention item is then `recovery_exhausted`,
+`limit`, `commitarium` (a check kept refusing a turn after the agent handed
+in exactly what it asked for: likely a problem in Commitarium), or `other`.
+`fingerprint` recognises the same failure when it repeats. `recoveries` lists
+each recovery chosen for the run (`how`, `guidance`, `from_assistant`,
+`fingerprint`, `created_at`); automatic retries are not listed, but a refused
+turn Commitarium handed back to its agent is, as `how` `self_correction`
+with the correction as `guidance` (at most two per failure; the assistant
+cannot choose it). `recovery_exhausted` is set once the blocker's failure has
+had four recoveries, the run eight, the same failure still blocks after a
+fresh conversation, or the kind is `commitarium`; its attention item is then `recovery_exhausted`,
 actionable, titled "Commitarium couldn't finish this", with a plain reason. Failed checks, refused results, an
 agent's question, usage limits, and expired logins are never retried this way.
 `GET /api/v1/agents/usage` answers `{"agents": [{"agent", "windows": [{"name",

@@ -52,15 +52,6 @@ func packageRequestResult() *workerhttp.TerminalResult {
 	}
 }
 
-func incompleteResult() *workerhttp.TerminalResult {
-	return &workerhttp.TerminalResult{
-		Outcome: workerhttp.OutcomeFailed, Summary: "The turn ended without its structured result.",
-		Error: &workerhttp.ProtocolError{
-			Code: workerhttp.ErrorIncompleteResult, Message: "the turn ended without its structured result",
-		},
-	}
-}
-
 // startPackageRequest runs a lead-only work order until its lead asks for
 // packages. Every later implementation turn publishes unless prepare scripts
 // it otherwise.
@@ -207,7 +198,10 @@ func TestRecheckAfterAnInterventionKeepsThePackageRequest(t *testing.T) {
 // failed: the lead cannot take a reply, so the rejection goes with Continue.
 func TestRejectingPackagesAfterALaterTurnFailedContinuesWithTheReason(t *testing.T) {
 	run := startPackageRequest(t, "run_reject_after_failure", func(run *packageRequestRun) {
-		run.script(run.attempt(2), incompleteResult())
+		run.script(run.attempt(2), &workerhttp.TerminalResult{
+			Outcome: workerhttp.OutcomeFailed, Summary: "The tests still fail after the change.",
+			Error: &workerhttp.ProtocolError{Code: workerhttp.ErrorInternal, Message: "The tests still fail after the change."},
+		})
 	})
 	if _, admitted, err := run.starter.RecoverBlockerWithDirective(
 		t.Context(), run.runID, "continue-without-deciding", RecoveryDirective{Action: RecoveryActionContinue},
@@ -215,7 +209,7 @@ func TestRejectingPackagesAfterALaterTurnFailedContinuesWithTheReason(t *testing
 		t.Fatalf("continue: admitted=%t err=%v", admitted, err)
 	}
 	blocked := run.waitBlocked(t, "")
-	if !strings.Contains(blocked.Reason, "required structured result") {
+	if !strings.Contains(blocked.Reason, "The tests still fail") {
 		t.Fatalf("the later turn did not fail: %+v", blocked)
 	}
 	if err := run.reject(t, 1); err != nil {

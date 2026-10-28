@@ -293,7 +293,13 @@ func (manager *Manager) reconcile(
 	}
 	branch, err := run("symbolic-ref", "--quiet", "--short", "HEAD")
 	if err != nil || branch != spec.Branch {
-		return manager.localConflict(ctx, "checkout is not on its assigned feature branch")
+		found := "a detached HEAD"
+		if err == nil {
+			found = "branch " + branch
+		}
+		return manager.agentConflict(ctx, fmt.Sprintf(
+			"the checkout must be on its feature branch %s but is on %s; switch back with 'git switch %s' "+
+				"and bring any commits made elsewhere onto it", spec.Branch, found, spec.Branch))
 	}
 	head, err := run("rev-parse", "HEAD")
 	if err != nil {
@@ -322,21 +328,34 @@ func (manager *Manager) reconcile(
 		}
 		if head != spec.BaseCommitID {
 			if _, err := run("merge-base", "--is-ancestor", spec.BaseCommitID, head); err != nil {
-				return manager.localConflict(ctx, "checkout HEAD no longer contains its recorded base commit")
+				return manager.agentConflict(ctx, fmt.Sprintf(
+					"the checkout's HEAD %s no longer contains its base commit %s, so history was rewritten "+
+						"(a rebase or reset); bring the base commit back into the branch without rewriting "+
+						"published commits", head, spec.BaseCommitID))
 			}
 		}
 		if spec.ExpectedHeadCommitID != "" && head != spec.ExpectedHeadCommitID {
 			if !spec.AllowDescendantHead {
-				return manager.localConflict(ctx, "checkout HEAD does not match the agent's reported commit")
+				return manager.agentConflict(ctx, fmt.Sprintf(
+					"the result reports commit %s but the checkout's HEAD is %s; report the HEAD you "+
+						"pushed in commit_id, or check out and push the commit you meant",
+					spec.ExpectedHeadCommitID, head))
 			}
 			if _, err := run("merge-base", "--is-ancestor", spec.ExpectedHeadCommitID, head); err != nil {
-				return manager.localConflict(ctx, "checkout HEAD does not descend from the expected commit")
+				return manager.agentConflict(ctx, fmt.Sprintf(
+					"the checkout's HEAD %s does not descend from commit %s; build on that commit "+
+						"instead of replacing it", head, spec.ExpectedHeadCommitID))
 			}
 		}
 		if spec.RequireCleanBaseline || spec.RequireClean {
 			status, err := run("status", "--porcelain=v1", "--untracked-files=all")
-			if err != nil || status != "" {
-				return manager.localConflict(ctx, "checkout has uncommitted changes")
+			if err != nil {
+				return manager.localConflict(ctx, "checkout status is unavailable")
+			}
+			if status != "" {
+				return manager.agentConflict(ctx, "the checkout must be clean at the reported commit but has "+
+					"uncommitted changes ("+changedPaths(status)+"); commit what belongs to the work and "+
+					"remove the rest, push, and report the new HEAD")
 			}
 		}
 		// Deliberately do not reject a dirty ready checkout: it may contain
@@ -369,6 +388,34 @@ func (manager *Manager) localConflict(ctx context.Context, message string) error
 		return err
 	}
 	return fmt.Errorf("%w: %s", workspace.ErrCheckoutConflict, message)
+}
+
+// agentConflict is a checkout the agent left in another state than its turn
+// reported, which its next turn can put right.
+func (manager *Manager) agentConflict(ctx context.Context, message string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return fmt.Errorf("%w: %s", workspace.ErrCheckoutNotAsReported, message)
+}
+
+// changedPaths names up to five paths from git status --porcelain output.
+func changedPaths(status string) string {
+	lines := strings.Split(strings.TrimSpace(status), "\n")
+	paths := make([]string, 0, 5)
+	for _, line := range lines {
+		if len(paths) == 5 {
+			break
+		}
+		if len(line) > 3 {
+			paths = append(paths, strings.TrimSpace(line[3:]))
+		}
+	}
+	text := strings.Join(paths, ", ")
+	if len(lines) > len(paths) {
+		text += fmt.Sprintf(" and %d more", len(lines)-len(paths))
+	}
+	return text
 }
 
 func (manager *Manager) localUnavailable(ctx context.Context, message string) error {
