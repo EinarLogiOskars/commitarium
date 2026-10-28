@@ -365,6 +365,11 @@ func (api *API) approveConversationActionHandler(w http.ResponseWriter, r *http.
 		writeConversationError(w, err)
 		return
 	}
+	if action.Chat != "" {
+		// What the action does acts in the chat that proposed it: a goal it
+		// starts reports there (ADR-038).
+		r = r.WithContext(conversations.InChat(r.Context(), action.Chat))
+	}
 	if action.Status != conversations.ActionProposed {
 		writeError(w, http.StatusConflict, "action_not_pending", "the action is no longer waiting for approval")
 		return

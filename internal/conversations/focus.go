@@ -28,8 +28,8 @@ type Focus struct {
 	Label string `json:"label"`
 }
 
-// SetFocus focuses a project's conversation on an item, or clears the focus
-// when focus is nil.
+// SetFocus focuses a project's chat (ctx's, or the most recently used) on
+// an item, or clears the focus when focus is nil.
 func (service *Service) SetFocus(ctx context.Context, scope string, focus *Focus) (Conversation, error) {
 	if scope == TopLevel {
 		return Conversation{}, fmt.Errorf("%w: only a project's conversation has a focus", ErrInvalid)
@@ -53,12 +53,15 @@ func (service *Service) SetFocus(ctx context.Context, scope string, focus *Focus
 			return Conversation{}, fmt.Errorf("%w: focus on a work order, the vision, or the stack", ErrInvalid)
 		}
 	}
-	service.mu.Lock()
-	defer service.mu.Unlock()
-	stored, err := service.read(scope)
+	chat, err := service.chatFor(ctx, scope)
 	if err != nil {
 		return Conversation{}, err
 	}
+	stored, done, err := service.open(scope, chat)
+	if err != nil {
+		return Conversation{}, err
+	}
+	defer done()
 	stored.Focus, stored.UpdatedAt = focus, service.now()
 	return stored.Conversation, service.write(stored)
 }

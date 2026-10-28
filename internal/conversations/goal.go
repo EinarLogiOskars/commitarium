@@ -62,6 +62,9 @@ type Goal struct {
 	Handed    []string   `json:"handed,omitempty"`
 	StartedAt time.Time  `json:"started_at"`
 	EndedAt   *time.Time `json:"ended_at,omitempty"`
+	// Chat is the chat that started it, where autopilot's events go
+	// (ADR-038).
+	Chat string `json:"chat,omitempty"`
 }
 
 // maxAutoContinues bounds how often autopilot recovers one work order across
@@ -73,13 +76,24 @@ func (goal *Goal) active() bool {
 	return goal != nil && goal.Status == GoalActive
 }
 
+// drives reports whether a work order is one of the goal's: an item's, or
+// one the user handed it.
+func (goal *Goal) drives(workOrderID string) bool {
+	if goal == nil || workOrderID == "" {
+		return false
+	}
+	return slices.Contains(goal.Handed, workOrderID) ||
+		slices.ContainsFunc(goal.Items, func(item GoalItem) bool { return item.WorkOrderID == workOrderID })
+}
+
 // Hands reports whether the goal, while it is on, hands the assistant a
 // work order the user created.
 func (goal *Goal) Hands(workOrderID string) bool {
 	return goal.active() && workOrderID != "" && slices.Contains(goal.Handed, workOrderID)
 }
 
-// StartGoal turns autopilot on for the open items of a vision priority.
+// StartGoal turns autopilot on for the open items of a vision priority, from
+// ctx's chat or the scope's most recently used one: its events go there.
 func (service *Service) StartGoal(ctx context.Context, scope string, level int) (Conversation, error) {
 	if scope == TopLevel {
 		return Conversation{}, fmt.Errorf("%w: autopilot runs in a project", ErrInvalid)
@@ -116,12 +130,15 @@ func (service *Service) StartGoal(ctx context.Context, scope string, level int) 
 		return Conversation{}, fmt.Errorf("%w in %s", ErrNothingLeft, name)
 	}
 
-	service.mu.Lock()
-	defer service.mu.Unlock()
-	stored, err := service.read(scope)
+	chat, err := service.chatFor(ctx, scope)
 	if err != nil {
 		return Conversation{}, err
 	}
+	stored, done, err := service.open(scope, chat)
+	if err != nil {
+		return Conversation{}, err
+	}
+	defer done()
 	if stored.Goal.active() {
 		return Conversation{}, ErrGoalActive
 	}
@@ -132,7 +149,10 @@ func (service *Service) StartGoal(ctx context.Context, scope string, level int) 
 			handed = append(handed, item.WorkOrderID)
 		}
 	}
-	stored.Goal = &Goal{Title: "Finish " + name, Level: level, Items: items, Status: GoalActive, Handed: handed, StartedAt: now}
+	stored.Goal = &Goal{
+		Title: "Finish " + name, Level: level, Items: items, Status: GoalActive, Handed: handed, StartedAt: now,
+		Chat: stored.Chat,
+	}
 	text := fmt.Sprintf("Autopilot is on: finish %s (%d %s).", name, len(items), plural(len(items), "item", "items"))
 	stored.addEvent(text, now)
 	stored.PendingEvents = append(stored.PendingEvents, text+" Start driving its items to merged.")
@@ -146,11 +166,9 @@ func (service *Service) StartGoal(ctx context.Context, scope string, level int) 
 
 // ActiveGoals lists the autopilot goals that are on, by project.
 func (service *Service) ActiveGoals(_ context.Context) (map[string]Goal, error) {
-	service.mu.Lock()
-	defer service.mu.Unlock()
 	goals := map[string]Goal{}
 	for _, scope := range service.projectScopes() {
-		stored, err := service.read(scope)
+		stored, err := service.sharedOf(scope)
 		if err != nil {
 			return nil, err
 		}
@@ -161,17 +179,17 @@ func (service *Service) ActiveGoals(_ context.Context) (map[string]Goal, error) 
 	return goals, nil
 }
 
-// StopGoal turns autopilot off; the work it started carries on.
+// StopGoal turns autopilot off; the work it started carries on. The chat
+// that started it hears so.
 func (service *Service) StopGoal(ctx context.Context, scope string) (Conversation, error) {
 	if err := service.checkScope(ctx, scope); err != nil {
 		return Conversation{}, err
 	}
-	service.mu.Lock()
-	defer service.mu.Unlock()
-	stored, err := service.read(scope)
+	stored, done, err := service.open(scope, service.goalChat(scope))
 	if err != nil {
 		return Conversation{}, err
 	}
+	defer done()
 	if !stored.Goal.active() {
 		return stored.Conversation, nil
 	}
@@ -250,14 +268,47 @@ func priorityItems(plan featureartifact.VisionPlan, level int) []GoalItem {
 // its replacement with the close; the replacement is then created in the
 // same look.
 func (service *Service) autopilotActions(ctx context.Context, scope string) ([]Action, error) {
-	builds := service.assistantBuilds(ctx, scope)
-	ours, titles, states, made := service.workOrders(ctx, scope)
-	service.mu.Lock()
-	defer service.mu.Unlock()
-	stored, err := service.read(scope)
+	look := autopilotLook{builds: service.assistantBuilds(ctx, scope)}
+	look.ours, look.titles, look.states, look.made = service.workOrders(ctx, scope)
+	chats, err := service.chatsOf(scope)
 	if err != nil {
 		return nil, err
 	}
+	apply := make([]Action, 0)
+	for _, chat := range chats {
+		found, err := service.autopilotChat(ctx, scope, chat.ID, &look)
+		if err != nil {
+			return apply, err
+		}
+		apply = append(apply, found...)
+	}
+	return apply, nil
+}
+
+// autopilotLook is one look at a project's actions, across its chats: what
+// one chat's actions claim, close, or start counts for the next.
+type autopilotLook struct {
+	builds           bool
+	ours, made       map[string]bool
+	titles           map[string]string
+	states           map[string]feature.State
+	started          bool
+	claims           map[string][]string
+	created, closing map[string]bool
+	running, ceiling int
+	steps            map[string]project.WorkSteps
+}
+
+// autopilotChat marks the actions of one chat autopilot takes over, and
+// returns those it may apply.
+func (service *Service) autopilotChat(ctx context.Context, scope, chat string, look *autopilotLook) ([]Action, error) {
+	builds, ours, titles, states, made := look.builds, look.ours, look.titles, look.states, look.made
+	stored, done, err := service.open(scope, chat)
+	if err != nil {
+		return nil, err
+	}
+	defer done()
+	stored.elsewhere = service.actionsElsewhere(stored)
 	now := service.now()
 	// A card whose work order already got where it leads settles itself, in
 	// every mode.
@@ -285,28 +336,31 @@ func (service *Service) autopilotActions(ctx context.Context, scope string) ([]A
 			orders[item.WorkOrderID] = true
 		}
 	}
-	// One work order per item: an item whose work order is still open, or
-	// whose create autopilot already applied for one still open, takes no
-	// other. A closed work order, or one this look closes, frees its item for
-	// a replacement.
-	claims := map[string][]string{}
-	for _, item := range goalItems {
-		if item.WorkOrderID != "" {
-			claims[item.ID] = append(claims[item.ID], item.WorkOrderID)
-		}
-	}
-	// Work orders autopilot created: those not delivering an item (a
-	// duplicate) are its own to close.
-	created := map[string]bool{}
-	for _, action := range stored.Actions {
-		if action.Type == featureartifact.AssistantCreateWorkOrder && action.Status == ActionApplied {
-			claims[action.VisionItemID] = append(claims[action.VisionItemID], action.WorkOrderID)
-			if action.AutoTried && action.WorkOrderID != "" {
-				created[action.WorkOrderID] = true
+	if !look.started {
+		// One work order per item: an item whose work order is still open, or
+		// whose create autopilot already applied for one still open, takes no
+		// other. A closed work order, or one this look closes, frees its item
+		// for a replacement.
+		look.started = true
+		look.claims, look.created, look.closing = map[string][]string{}, map[string]bool{}, map[string]bool{}
+		for _, item := range goalItems {
+			if item.WorkOrderID != "" {
+				look.claims[item.ID] = append(look.claims[item.ID], item.WorkOrderID)
 			}
 		}
+		// Work orders autopilot created: those not delivering an item (a
+		// duplicate) are its own to close.
+		for _, action := range stored.everyAction() {
+			if action.Type == featureartifact.AssistantCreateWorkOrder && action.Status == ActionApplied {
+				look.claims[action.VisionItemID] = append(look.claims[action.VisionItemID], action.WorkOrderID)
+				if action.AutoTried && action.WorkOrderID != "" {
+					look.created[action.WorkOrderID] = true
+				}
+			}
+		}
+		look.running, look.ceiling = service.running(ctx, scope, stored.earlyPlanners()), service.maxRunning(ctx)
 	}
-	closing := map[string]bool{}
+	claims, created, closing := look.claims, look.created, look.closing
 	claimed := func(itemID string) bool {
 		return slices.ContainsFunc(claims[itemID], func(workOrderID string) bool {
 			return workOrderID == "" || (!closing[workOrderID] && states[workOrderID] != feature.StateCancelled)
@@ -321,7 +375,7 @@ func (service *Service) autopilotActions(ctx context.Context, scope string) ([]A
 	// replaced reports whether a create for a vision item a work order
 	// claims waits to be applied: the work order's replacement.
 	replaced := func(workOrderID string) bool {
-		return slices.ContainsFunc(stored.Actions, func(action Action) bool {
+		return slices.ContainsFunc(stored.everyAction(), func(action Action) bool {
 			return action.Type == featureartifact.AssistantCreateWorkOrder && action.Status == ActionProposed &&
 				!action.AutoTried && slices.Contains(claims[action.VisionItemID], workOrderID)
 		})
@@ -342,13 +396,12 @@ func (service *Service) autopilotActions(ctx context.Context, scope string) ([]A
 		}
 		return 0
 	})
-	running, ceiling := service.running(ctx, scope, stored.earlyPlanners()), service.maxRunning(ctx)
-	var steps map[string]project.WorkSteps
+	running, ceiling := &look.running, look.ceiling
 	planned := func(action Action) bool {
-		if steps == nil {
-			steps = service.workSteps(ctx, scope)
+		if look.steps == nil {
+			look.steps = service.workSteps(ctx, scope)
 		}
-		return plansFirst(action, steps)
+		return plansFirst(action, look.steps)
 	}
 	apply, noted := make([]Action, 0), settled
 	for _, index := range order {
@@ -429,23 +482,23 @@ func (service *Service) autopilotActions(ctx context.Context, scope string) ([]A
 		// Planning early takes no slot: it counts once it implements.
 		if starts := (action.Type == featureartifact.AssistantStartWorkOrder && !action.PlansEarly) ||
 			(action.Type == featureartifact.AssistantCreateWorkOrder && !holdStart && !action.Brief); starts {
-			if running >= ceiling {
+			if *running >= ceiling {
 				if action.Type == featureartifact.AssistantCreateWorkOrder {
 					holdStart = true
 					stored.addEvent(fmt.Sprintf("Autopilot created %s and queued its start: %s", actionName(action.AssistantAction),
-						ceilingNote(running)), now)
+						ceilingNote(*running)), now)
 					noted = true
 				} else {
 					if !action.Queued {
 						action.Queued = true
 						stored.addEvent(fmt.Sprintf("Autopilot queued %s: %s", actionName(action.AssistantAction),
-							ceilingNote(running)), now)
+							ceilingNote(*running)), now)
 						noted = true
 					}
 					continue
 				}
 			} else {
-				running++
+				*running++
 			}
 		}
 		action.Queued = false
@@ -567,7 +620,7 @@ func (service *Service) running(ctx context.Context, scope string, early map[str
 // (ADR-037).
 func (stored record) earlyPlanners() map[string]bool {
 	early := map[string]bool{}
-	for _, action := range stored.Actions {
+	for _, action := range stored.everyAction() {
 		if action.PlansEarly && action.Status == ActionApplied && action.WorkOrderID != "" {
 			early[action.WorkOrderID] = true
 		}
@@ -621,15 +674,14 @@ func (service *Service) workSteps(ctx context.Context, scope string) map[string]
 // follows has not merged, or as many work orders as may run at once already
 // do (ADR-037). Any other work order is not held.
 func (service *Service) ImplementationHold(ctx context.Context, scope, workOrderID string) (string, bool) {
-	service.mu.Lock()
-	stored, err := service.read(scope)
-	service.mu.Unlock()
+	stored, err := service.readEvery(scope)
 	if err != nil {
 		return "", false
 	}
 	var start *Action
-	for index := range stored.Actions {
-		action := &stored.Actions[index]
+	every := stored.everyAction()
+	for index := range every {
+		action := &every[index]
 		if action.PlansEarly && action.Status == ActionApplied && action.WorkOrderID == workOrderID &&
 			(start == nil || action.UpdatedAt.After(start.UpdatedAt)) {
 			start = action
@@ -682,7 +734,7 @@ func (stored record) waitsFor(
 	if _, known := states[after]; known {
 		return unfinished(after)
 	}
-	for _, other := range stored.Actions {
+	for _, other := range stored.everyAction() {
 		if other.ID == action.ID || !strings.EqualFold(strings.TrimSpace(other.Title), after) {
 			continue
 		}
@@ -705,15 +757,13 @@ func (stored record) waitsFor(
 // orders waits for before autopilot starts it: a queued start action. The
 // user may still start one; it then no longer waits.
 func (service *Service) QueuedStarts(ctx context.Context, scope string) (map[string]string, error) {
-	service.mu.Lock()
-	stored, err := service.read(scope)
-	service.mu.Unlock()
+	stored, err := service.readEvery(scope)
 	if err != nil {
 		return nil, err
 	}
 	queued := map[string]string{}
 	var titles map[string]string
-	for _, action := range stored.Actions {
+	for _, action := range stored.everyAction() {
 		if action.Type != featureartifact.AssistantStartWorkOrder || action.Status != ActionProposed ||
 			!action.Queued || action.WorkOrderID == "" {
 			continue
@@ -746,22 +796,19 @@ type CreatorMarker interface {
 // else stays the user's. It is safe to repeat: it only ever marks the
 // assistant's.
 func (service *Service) MarkCreatedWork(ctx context.Context, marker CreatorMarker) error {
-	service.mu.Lock()
 	created := map[string][]string{}
 	for _, scope := range service.projectScopes() {
-		stored, err := service.read(scope)
+		stored, err := service.readEvery(scope)
 		if err != nil {
-			service.mu.Unlock()
 			return err
 		}
-		for _, action := range stored.Actions {
+		for _, action := range stored.everyAction() {
 			if action.Type == featureartifact.AssistantCreateWorkOrder && action.Status == ActionApplied &&
 				action.WorkOrderID != "" {
 				created[scope] = append(created[scope], action.WorkOrderID)
 			}
 		}
 	}
-	service.mu.Unlock()
 	for scope, ids := range created {
 		if err := marker.MarkCreatedByAssistant(ctx, scope, ids); err != nil {
 			return err
@@ -778,7 +825,7 @@ func (stored record) mayAct(workOrderID string, ours map[string]bool) bool {
 	if ours[workOrderID] || stored.Goal.Hands(workOrderID) {
 		return true
 	}
-	for _, action := range stored.Actions {
+	for _, action := range stored.everyAction() {
 		if action.Type == featureartifact.AssistantCreateWorkOrder && action.Status == ActionApplied &&
 			action.WorkOrderID == workOrderID {
 			return true
@@ -801,9 +848,11 @@ func (service *Service) AutopilotHandles(ctx context.Context, scope, workOrderID
 	if _, err := service.Readiness(ctx); err != nil {
 		return false
 	}
-	service.mu.Lock()
-	defer service.mu.Unlock()
-	stored, err := service.read(scope)
+	chats, err := service.chatsOf(scope)
+	if err != nil {
+		return false
+	}
+	stored, err := service.readEvery(scope)
 	if err != nil || stored.AutoContinues[workOrderID] >= maxAutoContinues {
 		return false
 	}
@@ -819,7 +868,7 @@ func (service *Service) AutopilotHandles(ctx context.Context, scope, workOrderID
 	if !inGoal || !stored.mayAct(workOrderID, ours) {
 		return false
 	}
-	for _, action := range stored.Actions {
+	for _, action := range stored.everyAction() {
 		if (action.Type == featureartifact.AssistantContinueWorkOrder || action.Type == featureartifact.AssistantRecoverWorkOrder) &&
 			action.WorkOrderID == workOrderID &&
 			action.Status == ActionProposed {
@@ -827,15 +876,48 @@ func (service *Service) AutopilotHandles(ctx context.Context, scope, workOrderID
 			return !action.AutoTried
 		}
 	}
-	if stored.Status == StatusRunning || len(stored.PendingEvents) > 0 {
+	if service.busy(scope, chats) {
 		return true
 	}
-	for _, message := range stored.Messages {
-		if message.Role == "assistant" && !message.OccurredAt.Before(blockedAt) {
-			return false
+	// The chat that hears of the blocker is the one that answers it.
+	hears := routeWorkOrder(chats, stored.Goal, workOrderID)
+	for _, chat := range chats {
+		if (hears == "" && chat.ID != stored.Chat) || (hears != "" && chat.ID != hears) {
+			continue
+		}
+		for _, message := range chat.Messages {
+			if message.Role == "assistant" && !message.OccurredAt.Before(blockedAt) {
+				return false
+			}
 		}
 	}
 	return true
+}
+
+// busy reports whether any of a scope's chats runs a turn or has events
+// waiting for one.
+func (service *Service) busy(scope string, chats []chatState) bool {
+	shared, err := service.sharedOf(scope)
+	if err != nil {
+		return false
+	}
+	for _, chat := range chats {
+		if chat.Status == StatusRunning || len(shared.PendingEvents[chat.ID]) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// readEvery reads the scope's most recently used chat with every other
+// chat's actions, to read the whole project's.
+func (service *Service) readEvery(scope string) (record, error) {
+	stored, err := service.read(scope)
+	if err != nil {
+		return record{}, err
+	}
+	stored.elsewhere = service.actionsElsewhere(stored)
+	return stored, nil
 }
 
 // AutopilotActiveAt is when autopilot last moved a work order on: the
@@ -843,17 +925,19 @@ func (service *Service) AutopilotHandles(ctx context.Context, scope, workOrderID
 // assistant is in a turn or one waits to start. A blocker autopilot keeps
 // working on does not stall.
 func (service *Service) AutopilotActiveAt(_ context.Context, scope, workOrderID string) time.Time {
-	service.mu.Lock()
-	defer service.mu.Unlock()
-	stored, err := service.read(scope)
+	chats, err := service.chatsOf(scope)
 	if err != nil {
 		return time.Time{}
 	}
-	if stored.Status == StatusRunning || len(stored.PendingEvents) > 0 {
+	if service.busy(scope, chats) {
 		return service.now()
 	}
 	var latest time.Time
-	for _, action := range stored.Actions {
+	stored, err := service.readEvery(scope)
+	if err != nil {
+		return time.Time{}
+	}
+	for _, action := range stored.everyAction() {
 		if action.WorkOrderID == workOrderID && action.UpdatedAt.After(latest) {
 			latest = action.UpdatedAt
 		}
@@ -881,14 +965,13 @@ func (service *Service) assistantBuilds(ctx context.Context, scope string) bool 
 	return err == nil && stored.AssistantBuilds()
 }
 
-// note adds an event line to a scope's conversation.
+// note adds an event line to a scope's most recently used chat.
 func (service *Service) note(scope, text string) error {
-	service.mu.Lock()
-	defer service.mu.Unlock()
-	stored, err := service.read(scope)
+	stored, done, err := service.open(scope, "")
 	if err != nil {
 		return err
 	}
+	defer done()
 	// A step the watcher retries each look (a launch whose setup is refused
 	// until an agent has usage again, say) is noted once, not every time.
 	if last := len(stored.Messages) - 1; last >= 0 && stored.Messages[last].Role == "event" && stored.Messages[last].Text == text {

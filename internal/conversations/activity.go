@@ -47,13 +47,13 @@ const activityLifetime = time.Hour
 const maxActivityDetail = 160
 
 // followActivity reads the turn's activity stream in the background until
-// the turn ends or another replaces it.
-func (service *Service) followActivity(ctx context.Context, scope, agentID string, reference workerhttp.AttemptReference) {
+// the turn ends or another replaces it. chat is the chat's idPart.
+func (service *Service) followActivity(ctx context.Context, chat, agentID string, reference workerhttp.AttemptReference) {
 	service.activityMu.Lock()
 	if service.activity == nil {
 		service.activity = map[string]liveActivity{}
 	}
-	service.activity[scope] = liveActivity{attemptID: reference.AttemptID}
+	service.activity[chat] = liveActivity{attemptID: reference.AttemptID}
 	service.activityMu.Unlock()
 	if service.config.ActivityStreams == nil {
 		return
@@ -75,22 +75,22 @@ func (service *Service) followActivity(ctx context.Context, scope, agentID strin
 			if label == "" {
 				continue
 			}
-			if !service.noteActivity(scope, reference.AttemptID, label, detail) {
+			if !service.noteActivity(chat, reference.AttemptID, label, detail) {
 				return
 			}
 		}
 	}()
 }
 
-// noteActivity keeps a step of the scope's turn; false once another turn
+// noteActivity keeps a step of the chat's turn; false once another turn
 // replaced it.
-func (service *Service) noteActivity(scope, attemptID, label, detail string) bool {
+func (service *Service) noteActivity(chat, attemptID, label, detail string) bool {
 	service.activityMu.Lock()
 	defer service.activityMu.Unlock()
-	if service.activity[scope].attemptID != attemptID {
+	if service.activity[chat].attemptID != attemptID {
 		return false
 	}
-	service.activity[scope] = liveActivity{attemptID: attemptID, label: label, detail: detail}
+	service.activity[chat] = liveActivity{attemptID: attemptID, label: label, detail: detail}
 	return true
 }
 
@@ -111,7 +111,7 @@ func (service *Service) currentActivity(stored record) *Activity {
 		}
 	}
 	service.activityMu.Lock()
-	live, ok := service.activity[stored.Scope]
+	live, ok := service.activity[stored.idPart()]
 	service.activityMu.Unlock()
 	if ok && live.attemptID == stored.AttemptID && live.label != "" {
 		activity.Label, activity.Detail = live.label, live.detail

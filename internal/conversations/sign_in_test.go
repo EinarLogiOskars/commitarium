@@ -61,12 +61,12 @@ func TestALoginFailureKeepsTheMessageUntilTheAgentWorks(t *testing.T) {
 		t.Fatalf("waiting = %+v (last event %q) err=%v", waiting.SignIn, lastEvent(waiting), err)
 	}
 	now := time.Now()
-	if err := service.retrySignIn(t.Context(), "prj_test", false, now); err != nil || len(worker.puts) != 1 {
+	if err := service.retrySignIn(t.Context(), chatRef{"prj_test", MainChat}, false, now); err != nil || len(worker.puts) != 1 {
 		t.Fatalf("tried again before it was due: puts=%d err=%v", len(worker.puts), err)
 	}
 	// Each try fails the same way; once they are spent, the user is asked.
 	for try := 1; try <= len(signInBackoff); try++ {
-		if err := service.retrySignIn(t.Context(), "prj_test", false, now.Add(time.Hour)); err != nil {
+		if err := service.retrySignIn(t.Context(), chatRef{"prj_test", MainChat}, false, now.Add(time.Hour)); err != nil {
 			t.Fatal(err)
 		}
 		if len(worker.puts) != try+1 || !strings.Contains(worker.puts[try].Instructions, "Add a dark mode") {
@@ -82,7 +82,7 @@ func TestALoginFailureKeepsTheMessageUntilTheAgentWorks(t *testing.T) {
 		!strings.Contains(lastEvent(asked), "needs you to sign in again") {
 		t.Fatalf("asked = %+v marked=%v last event %q", asked.SignIn, signIns.marked, lastEvent(asked))
 	}
-	if err := service.retrySignIn(t.Context(), "prj_test", false, now.Add(24*time.Hour)); err != nil ||
+	if err := service.retrySignIn(t.Context(), chatRef{"prj_test", MainChat}, false, now.Add(24*time.Hour)); err != nil ||
 		len(worker.puts) != len(signInBackoff)+1 {
 		t.Fatalf("a turn waiting for the user tried by itself: puts=%d err=%v", len(worker.puts), err)
 	}

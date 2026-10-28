@@ -192,10 +192,11 @@ func (service *Service) retryDue(ctx context.Context, stored record) (record, er
 	if _, err := service.launchTurn(ctx, stored, settings, key, stored.LastTurn.Role, stored.LastTurn.Prompt, prompt); err != nil {
 		return stored, err
 	}
-	return service.read(stored.Scope)
+	return service.readChat(stored.Scope, stored.Chat)
 }
 
-// RetryTurn runs again the turn whose retries ran out, as the user asked.
+// RetryTurn runs again the turn whose retries ran out, as the user asked,
+// in ctx's chat or the scope's most recently used one.
 func (service *Service) RetryTurn(ctx context.Context, scope string) (Conversation, error) {
 	if err := service.checkScope(ctx, scope); err != nil {
 		return Conversation{}, err
@@ -204,12 +205,15 @@ func (service *Service) RetryTurn(ctx context.Context, scope string) (Conversati
 	if err != nil {
 		return Conversation{}, err
 	}
-	service.mu.Lock()
-	defer service.mu.Unlock()
-	stored, err := service.read(scope)
+	chat, err := service.chatFor(ctx, scope)
 	if err != nil {
 		return Conversation{}, err
 	}
+	stored, done, err := service.open(scope, chat)
+	if err != nil {
+		return Conversation{}, err
+	}
+	defer done()
 	if stored.Status == StatusRunning {
 		return Conversation{}, ErrBusy
 	}
