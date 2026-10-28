@@ -1349,3 +1349,34 @@ func TestProjectAgentSettingsResolveAgents(t *testing.T) {
 		}
 	}
 }
+
+// Handing a project to the assistant makes its runs go through and merge on
+// their own, as a new app's do: nothing waits on a user who handed it over.
+func TestBuildingEverythingRunsAndMergesOnItsOwn(t *testing.T) {
+	built := project.Project{ID: "prj_app", Name: "Sleep Log", AssistantMode: project.AssistantModeBuilds,
+		AutonomyPolicy: project.AutonomyPolicyRunToCompletion, MergePolicy: project.MergePolicyAutoAfterGates}
+	service := &assistantModeProjects{recordingProjectService: &recordingProjectService{
+		getByIDResult: project.Project{ID: "prj_app", Name: "Sleep Log"},
+		updateResult:  built,
+	}}
+	handler := New(service, nil, nil, nil, nil, nil)
+	update := httptest.NewRecorder()
+	handler.ServeHTTP(update, httptest.NewRequest(http.MethodPut, "/api/v1/projects/prj_app/assistant-mode",
+		strings.NewReader(`{"assistant_mode":"builds"}`)))
+	if update.Code != http.StatusOK ||
+		service.receivedAutonomyPolicy != project.AutonomyPolicyRunToCompletion ||
+		service.receivedMergePolicy != project.MergePolicyAutoAfterGates {
+		t.Fatalf("status=%d autonomy=%q merge=%q", update.Code,
+			service.receivedAutonomyPolicy, service.receivedMergePolicy)
+	}
+
+	service.receivedAutonomyPolicy, service.receivedMergePolicy = "", ""
+	service.getByIDResult = built
+	again := httptest.NewRecorder()
+	handler.ServeHTTP(again, httptest.NewRequest(http.MethodPut, "/api/v1/projects/prj_app/assistant-mode",
+		strings.NewReader(`{"assistant_mode":"assists"}`)))
+	if again.Code != http.StatusOK || service.receivedAutonomyPolicy != "" || service.receivedMergePolicy != "" {
+		t.Fatalf("switching back changed the policies: autonomy=%q merge=%q",
+			service.receivedAutonomyPolicy, service.receivedMergePolicy)
+	}
+}

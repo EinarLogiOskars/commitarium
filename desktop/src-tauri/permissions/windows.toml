@@ -5,6 +5,8 @@ identifier = "main-window"
 description = "Every command: the main window is Commitarium's trusted UI, loaded from the app itself."
 permissions = [
   "allow-open-app-window",
+  "allow-webview-snapshot",
+  "allow-webview-snapshot-supported",
   "allow-agent-cli-status",
   "allow-coordinator-freshness",
   "allow-rebuild-coordinator",
@@ -65,13 +67,15 @@ permissions = [
 
 [[set]]
 identifier = "app-page"
-description = "What an app's window needs and no more: its preview, the assistant's agent sign-in, and bringing the stack up. Its page is served from 127.0.0.1 so the app it frames is same-site (ADR-029)."
+description = "What an app's window needs and no more: its preview, the assistant's agent sign-in, a snapshot of itself to show the assistant, and bringing the stack up. Its page is served from 127.0.0.1 so the app it frames is same-site (ADR-029)."
 permissions = [
   "allow-get-preview-status",
   "allow-start-preview",
   "allow-stop-preview",
   "allow-reset-preview-data",
   "allow-open-app-window",
+  "allow-webview-snapshot",
+  "allow-webview-snapshot-supported",
   "allow-agent-cli-status",
   "allow-list-profiles",
   "allow-begin-login",

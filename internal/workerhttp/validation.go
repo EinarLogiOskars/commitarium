@@ -191,6 +191,15 @@ func (request PutAttemptRequest) Validate(identity MutationIdentity) error {
 	if err := validateRequiredText("instructions", request.Instructions, MaxInstructionsBytes); err != nil {
 		return err
 	}
+	if len(request.Images) > MaxImages {
+		return invalid("a turn looks at most at %d images", MaxImages)
+	}
+	for _, image := range request.Images {
+		if clean := path.Clean(image); image == "" || len(image) > 512 || clean != image ||
+			path.IsAbs(image) || clean == ".." || strings.HasPrefix(clean, "../") {
+			return invalid("image %q must be a relative path inside the working directory", image)
+		}
+	}
 	if request.WorkspaceAccess != "" && request.WorkspaceAccess != WorkspaceAccessReadOnly &&
 		request.WorkspaceAccess != WorkspaceAccessReadWrite {
 		return invalid("workspace access %q is not recognized", request.WorkspaceAccess)

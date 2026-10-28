@@ -1,5 +1,7 @@
-import { useEffect, useRef, useState } from "react";
+import { useContext, useEffect, useRef, useState } from "react";
 import { Markdown } from "./Markdown";
+import { splitAttached } from "../api/attachments";
+import { AttachmentOwner, SentAttachments } from "./Attachments";
 import type { ActivityDetail } from "../api/types";
 
 // A phase transcript. Messages render as attributed bubbles; runs of low-signal
@@ -82,6 +84,7 @@ export function Transcript({
 }
 
 function MessageEntry({ e }: { e: TranscriptEntry }) {
+  const owner = useContext(AttachmentOwner);
   if (e.type === "activity" && e.activity?.kind === "narration") {
     const who = e.role === "reviewer" ? "Reviewer" : "Lead";
     return (
@@ -121,11 +124,15 @@ function MessageEntry({ e }: { e: TranscriptEntry }) {
       : e.role === "user" || e.role === "assistant_guidance" || e.role === "commitarium_guidance"
         ? "msg--user"
         : "msg--lead";
+  // The user's message names its files on a line of its own; they show as
+  // thumbnails and chips instead.
+  const sent = e.role === "user" ? splitAttached(e.text) : { text: e.text, names: [] };
   return (
     <div className={`msg ${cls}${e.streaming ? " msg--streaming" : ""}`}>
       <span className="msg__who">{who}</span>
       <div className="msg__text">
-        <Markdown text={agentText(e.text)} />
+        <Markdown text={agentText(sent.text)} />
+        <SentAttachments owner={owner} names={sent.names} />
       </div>
     </div>
   );

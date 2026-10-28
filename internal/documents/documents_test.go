@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/EinarLogiOskars/commitarium/internal/project"
 	"github.com/EinarLogiOskars/commitarium/internal/workspace"
@@ -113,5 +115,83 @@ func TestDocumentsAreCopiedIntoCheckouts(t *testing.T) {
 	}
 	if entries, _ := os.ReadDir(other); len(entries) != 0 || strings.Contains(other, Dir) {
 		t.Fatalf("another checkout got %v", entries)
+	}
+}
+
+// A message's file never replaces another: a taken name gets a number. The
+// top-level conversation, which has no page to remove files from, makes
+// room by dropping its oldest.
+func TestAttachedFilesKeepTheirOwnNames(t *testing.T) {
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := t.Context()
+	for _, want := range []string{"shot.png", "shot-2.png", "shot-3.png"} {
+		if added, err := store.Attach(ctx, "prj_shop", "shot.png", []byte("png")); err != nil || added.Name != want {
+			t.Fatalf("attached %+v, %v; want %s", added, err, want)
+		}
+	}
+	if _, err := store.Attach(ctx, "prj_shop", "../shot.png", []byte("png")); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("an unsafe name = %v", err)
+	}
+	if _, err := store.Attach(ctx, "other", "shot.png", []byte("png")); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("an unknown owner = %v", err)
+	}
+	for index := range MaxDocuments {
+		if _, err := store.Attach(ctx, TopLevel, fmt.Sprintf("shot-%02d.png", index), []byte("png")); err != nil {
+			t.Fatal(err)
+		}
+		// Each file is older than the next.
+		at := time.Now().Add(time.Duration(index-MaxDocuments) * time.Minute)
+		directory, _ := store.directory(TopLevel)
+		_ = os.Chtimes(filepath.Join(directory, fmt.Sprintf("shot-%02d.png", index)), at, at)
+	}
+	if _, err := store.Attach(ctx, TopLevel, "newest.png", []byte("png")); err != nil {
+		t.Fatalf("the top level is full: %v", err)
+	}
+	listed, _ := store.List(ctx, TopLevel)
+	if len(listed) != MaxDocuments || slices.ContainsFunc(listed, func(d Document) bool { return d.Name == "shot-00.png" }) {
+		t.Fatalf("the oldest file was not the one dropped: %d files", len(listed))
+	}
+}
+
+// Delivered files land in a working directory, which git ignores in a
+// checkout, and their paths name them there; the line naming them reads back.
+func TestDeliveredFilesReachAWorkingDirectory(t *testing.T) {
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := t.Context()
+	if _, err := store.Attach(ctx, "prj_shop", "shot (1).png", []byte("png")); err != nil {
+		t.Fatal(err)
+	}
+	checkout := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(checkout, ".git", "info"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	paths, err := store.Deliver(ctx, "prj_shop", []string{"shot (1).png"}, checkout)
+	if err != nil || !slices.Equal(paths, []string{Dir + "/shot (1).png"}) {
+		t.Fatalf("delivered %v, %v", paths, err)
+	}
+	if contents, err := os.ReadFile(filepath.Join(checkout, filepath.FromSlash(paths[0]))); err != nil || string(contents) != "png" {
+		t.Fatalf("the file in the checkout = %q, %v", contents, err)
+	}
+	if exclude, _ := os.ReadFile(filepath.Join(checkout, ".git", "info", "exclude")); !strings.Contains(string(exclude), "/"+Dir+"/") {
+		t.Fatalf("git does not ignore the documents: %q", exclude)
+	}
+	if _, err := store.Deliver(ctx, "prj_shop", []string{"missing.png"}, checkout); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("a missing file = %v", err)
+	}
+	text := WithAttached("Fix the header", []string{"shot (1).png", "spec.pdf"})
+	if got := AttachedIn(text); !slices.Equal(got, []string{"shot (1).png", "spec.pdf"}) {
+		t.Fatalf("read back %v from %q", got, text)
+	}
+	if !IsImage("a.PNG") || !IsImage("b.webp") || IsImage("c.svg") || IsImage("spec.pdf") {
+		t.Fatal("images are png, jpg, gif, and webp")
+	}
+	if got := AttachedIn("Attached is a list.\n" + Attached([]string{"../x"})); len(got) != 0 {
+		t.Fatalf("read back %v", got)
 	}
 }

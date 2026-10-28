@@ -37,6 +37,7 @@ import (
 	"github.com/EinarLogiOskars/commitarium/internal/toolchain"
 	"github.com/EinarLogiOskars/commitarium/internal/validation"
 	"github.com/EinarLogiOskars/commitarium/internal/vision"
+	"github.com/EinarLogiOskars/commitarium/internal/worker"
 	"github.com/EinarLogiOskars/commitarium/internal/workerhttp"
 	"github.com/EinarLogiOskars/commitarium/internal/workeringest"
 	"github.com/EinarLogiOskars/commitarium/internal/workflow"
@@ -440,7 +441,7 @@ func run(ctx context.Context, coordinatorConfig config) error {
 			Checkouts: checkoutManager, Branches: forgejoClient,
 			Visions: visions, Features: featureService,
 			Guide: modelGuide, Models: models, ChatUsage: executionStore,
-			SignIns: agentSignIns,
+			SignIns: agentSignIns, Attachments: documentStore,
 			Blocked: func(ctx context.Context, workOrderID string) bool {
 				_, blocked := blockedRun(ctx, executionService, workOrderID)
 				return blocked
@@ -558,6 +559,7 @@ func run(ctx context.Context, coordinatorConfig config) error {
 			EnvironmentRequests: environmentService,
 			Validation:          validationService,
 			PreviewChecks:       previewCheckService,
+			Holds:               implementationHolds(projectConversations),
 			Toolchains:          toolchainService,
 			Usage:               executionStore,
 			Lifetime:            ctx,
@@ -570,7 +572,23 @@ func run(ctx context.Context, coordinatorConfig config) error {
 		runRecoverer = remoteStarter
 		sessionController = remoteStarter
 		realWorkflowStarter = remoteStarter
+		if assistantWatcher != nil {
+			// Work that planned early implements once nothing holds it
+			// (ADR-037).
+			assistantWatcher.ReleaseImplementation = remoteStarter.ReleaseImplementation
+		}
 		agentSignIns.target = remoteStarter
+		// Files attached to an intervention, a session message, or a work
+		// order reach the checkout of the agent that reads them.
+		remoteStarter.DeliverAttachments(func(
+			ctx context.Context, projectID string, role worker.Role, workspaceID string, names []string,
+		) ([]string, error) {
+			root := coordinatorConfig.workspaceRoot
+			if role == worker.RoleReviewer {
+				root = coordinatorConfig.reviewerWorkspaceRoot
+			}
+			return documentStore.Deliver(ctx, projectID, names, filepath.Join(root, workspaceID))
+		})
 		if projectConversations != nil {
 			assistant := projectConversations
 			remoteStarter.FollowSignIns(
@@ -605,6 +623,10 @@ func run(ctx context.Context, coordinatorConfig config) error {
 	// Turns that infrastructure cut off retry by themselves, on schedule.
 	if resumer, ok := realWorkflowStarter.(interface{ RunRetryResumer(context.Context) }); ok {
 		go resumer.RunRetryResumer(ctx)
+	}
+	// Work orders that merge on their own merge one at a time per project.
+	if queue, ok := realWorkflowStarter.(interface{ RunMergeQueue(context.Context) }); ok {
+		go queue.RunMergeQueue(ctx)
 	}
 	// Preview checks no desktop picked up block their work order with a
 	// reason that says to open the app (ADR-028).
@@ -788,4 +810,14 @@ func blockedRun(ctx context.Context, executions *execution.Service, workOrderID 
 	}
 	run := execution.NewestRun(runs)
 	return run, run.Status == execution.RunStatusWaitingForUser && run.WaitKind == execution.RunWaitKindBlocker
+}
+
+// implementationHolds lets runs that planned early wait before they
+// implement, as the assistant's records say (ADR-037); none without an
+// assistant.
+func implementationHolds(assistant *conversations.Service) orchestration.RemoteLeadImplementationHolds {
+	if assistant == nil {
+		return nil
+	}
+	return assistant
 }

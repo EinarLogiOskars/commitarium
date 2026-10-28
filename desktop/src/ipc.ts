@@ -654,3 +654,13 @@ export const coordinatorFreshness = (): Promise<CoordinatorFreshness> =>
 
 /** Rebuild and restart the coordinator, unless an agent is running a turn ("busy"). */
 export const rebuildCoordinator = (): Promise<"rebuilt" | "busy"> => invoke("rebuild_coordinator");
+
+/** Whether this system can take a snapshot of the window (macOS for now). */
+export const webviewSnapshotSupported = (): Promise<boolean> =>
+  invoke<boolean>("webview_snapshot_supported");
+
+/** The window's page as the webview draws it, framed apps included: a PNG.
+ * It is the webview's own snapshot, so it needs no screen-recording
+ * permission. */
+export const webviewSnapshot = async (): Promise<Blob> =>
+  new Blob([await invoke<ArrayBuffer>("webview_snapshot")], { type: "image/png" });

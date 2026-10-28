@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -19,11 +20,21 @@ import (
 // Send adds the user's message and starts the assistant's turn. A retry with
 // the same key answers the turn it started.
 func (service *Service) Send(ctx context.Context, scope, message, key string) (Conversation, error) {
+	return service.SendAttached(ctx, scope, message, key, nil)
+}
+
+// SendAttached sends a message carrying files, named among the scope's
+// documents (attachments.go).
+func (service *Service) SendAttached(ctx context.Context, scope, message, key string, attachments []string) (Conversation, error) {
 	message, key = strings.TrimSpace(message), strings.TrimSpace(key)
-	if message == "" || key == "" || len(message) > workerhttp.MaxInstructionsBytes/4 {
+	if (message == "" && len(attachments) == 0) || key == "" || len(message) > workerhttp.MaxInstructionsBytes/4 {
 		return Conversation{}, ErrInvalid
 	}
 	if err := service.checkScope(ctx, scope); err != nil {
+		return Conversation{}, err
+	}
+	attachments, err := service.checkAttachments(ctx, scope, attachments)
+	if err != nil {
 		return Conversation{}, err
 	}
 	// Without an agent to run on, the assistant says what to set up rather
@@ -54,16 +65,17 @@ func (service *Service) Send(ctx context.Context, scope, message, key string) (C
 			stored.Keys[key] = "queued"
 			stored.Queued = append(stored.Queued, Message{
 				ID: fmt.Sprintf("queued_%s_%d", stored.Scope, stored.Turn*100+len(stored.Queued)+1), Role: "user",
-				Text: message, OccurredAt: service.now(),
+				Text: message, Attachments: attachments, OccurredAt: service.now(),
 			})
 			stored.UpdatedAt = service.now()
 			return stored.Conversation, service.write(stored)
 		}
 	}
 	stored.Messages = append(stored.Messages, Message{
-		ID: messageID(stored, len(stored.Messages)), Role: "user", Text: message, OccurredAt: service.now(),
+		ID: messageID(stored, len(stored.Messages)), Role: "user", Text: message, Attachments: attachments,
+		OccurredAt: service.now(),
 	})
-	prompt := "The user says:\n" + message
+	prompt := "The user says:\n" + withAttachments(message, attachments)
 	if stored.SignIn != nil && stored.LastTurn != nil {
 		// The turn kept for its agent's login is still unanswered: this one
 		// carries it along.
@@ -117,13 +129,18 @@ func (service *Service) launchTurn(
 		stored.Keys = map[string]string{}
 	}
 	stored.Keys[key] = stored.AttemptID
-	stored.LastTurn = &turnInput{Role: promptRole, Prompt: lastPrompt}
+	attached := turnAttachments(stored, promptRole)
+	stored.LastTurn = &turnInput{Role: promptRole, Prompt: lastPrompt, Attachments: attached}
 	stored.Status = StatusRunning
 	stored.UpdatedAt = now
 	if fresh {
 		if err := service.prepareWorkspace(ctx, scope, workspaceID); err != nil {
 			return Conversation{}, err
 		}
+	}
+	images, err := service.deliverAttachments(ctx, scope, workspaceID, attached)
+	if err != nil {
+		return Conversation{}, err
 	}
 	state, err := service.config.Describer.Describe(ctx, scope)
 	if err != nil {
@@ -173,6 +190,7 @@ func (service *Service) launchTurn(
 		Instructions:      instructions,
 		OutputContract:    contract,
 		WorkspaceAccess:   workerhttp.WorkspaceAccessReadOnly,
+		Images:            images,
 	}
 	if fresh {
 		request.Mode = workerhttp.AttemptModeStart
@@ -407,7 +425,7 @@ func recentConversation(stored record, promptRole string) string {
 	}
 	var builder strings.Builder
 	for _, message := range messages {
-		text := message.Text
+		text := withAttachments(message.Text, message.Attachments)
 		if len(text) > 2000 {
 			text = text[:2000] + "…"
 		}
@@ -438,7 +456,7 @@ func rules(scope string, settings Settings) string {
 
 How you act:
 - You never edit code. Dev agents do the work in work orders, each with its own lead (and reviewer, unless the steps skip it).
-- You propose actions in actions; nothing happens until the user approves each one. Say in your message what you propose and why; do not claim an action happened.
+- You propose actions in actions, at most ` + strconv.Itoa(featureartifact.MaxAssistantActions) + ` a turn (propose the rest on your next turn); nothing happens until the user approves each one. Say in your message what you propose and why; do not claim an action happened.
 - Your message must match your actions exactly: say something starts now only when an action starts it now, and say it waits only when it waits (see after).
 - create_work_order drafts a work order: a short imperative title, a description of the outcome, vision_item_id when it delivers an item of the vision, steps (quick for docs, copy, config values, renames, and one-line fixes, never with a reviewer; planned for a small, low-risk change that benefits from a commit-ordered plan without review; reviewed_plan for a real feature: a reviewer checks the plan against the repository, with no code review after; full for data, money, auth, migrations, or concurrency, where a reviewer also checks the code), and the agents and models you choose for it.
 - You choose the agents and models of every work order you create or start; Commitarium never picks them for you, and a project has no defaults. Choose by these preferences, and say in the action's reason, in one line, why the choice fits:
@@ -455,7 +473,7 @@ How you act:
   - Efforts are optional: lead_effort and reviewer_effort, and lead_plan_effort and reviewer_plan_effort for planning; empty is the model's default. Never choose one above ` + maxEffort + `, the highest the user allows you, and only one the model's catalog lists.
 - Commitarium refuses a choice that cannot run (an agent that is signed out, not connected, or at its limit, or a model its worker does not offer) and tells you why; then choose again from the state.
 - start_work_order starts a draft or ready work order; change_models switches a working run's models (when: now stops and resumes it, next_turn waits).
-- Never run two changes to the same part of the app at once (the same screens, controls, navigation, or shared files): the second cannot merge. When a work order you create or start changes what running work, or another of your actions in this turn, also changes, set after to that work order's ID or to the exact title of your other action; Commitarium starts it only once that one has merged. Changes to different parts may run side by side.
+- Work orders run side by side, like a team: start every one whose real dependencies are met, all at once. They merge one at a time, and each lead brings in what merged before it and resolves any conflicts, so touching the same screens, controls, or files is fine. Set after only when a work order needs another's code or result (it builds on a model, an API, or a screen the other adds), or both rewrite the same thing wholesale: after names that work order's ID or the exact title of your other action, and Commitarium starts it only once that one has merged. Where a plan starts with a foundation, a feature waits on the foundation, or on a feature whose behaviour it truly uses (its description says "Needs: …"), never on a sibling feature that only adds to the same page. Where a plan gives an order, plan in waves: start everything in a wave together, and set the next wave's after to the work it builds on. Work that waits still plans early: Commitarium starts its planning once the work it follows is implementing, and it implements once that has merged.
 - write_vision has Commitarium write the project's vision, or rewrite the one there is when the user asks, from description (what the project is for and for whom, in the user's words, with what the repository shows), and set_up_stack sets the project up on the stack the vision recommends, or detects the stack of its code. Both run on your own agent.
 - write_brief has the brief writer write a draft work order's handoff brief (goal, the areas of the code to change, what to plan around) from description: everything you and the user settled about it, in full, since the writer sees only that and the code (name by path any documents the user attached that the work needs). It writes the brief at once and comes back as a card; once accepted, the work order is Ready to start. Gather what it needs first. For a new work order, set brief on create_work_order instead: it is created as a draft and its brief is written. Use a brief for planned and reviewed work; quick changes start from their title and description without one.
 - design_stack has the stack designer suggest the project's stack (the tools, versions, and services it runs on) from description, what the app needs in the user's words; for a repository that already has code, it checks the stack the code uses instead. Its suggestion comes back as a card that applies it. Prefer set_up_stack when the vision recommends a stack Commitarium knows: it is faster.
@@ -601,8 +619,8 @@ How apps run in Commitarium: an app runs on the user's computer as Docker contai
 
 const buildsInstructions = `
 
-The user chose that you build everything here: you own the whole project and drive it until it runs, the work orders the user creates by hand included. When the user asks for a change, propose the work at once: create_work_order with quick or planned steps for most changes (reviewed_plan for real features, full only for data, money, auth, migrations, or concurrency), the agents, models, and efforts the model guide's rules give (on the agent with the most usage left), and the user's words as the goal. Commitarium applies your actions immediately, without approval cards, except those using a premium model, which wait for the user.
-You act only when Commitarium wakes you, so it also tells you what the project still lacks to run. Fix each in turn, one step after what it depends on: no vision, write_vision; no stack, set_up_stack (after the vision, unless the repository has code), or design_stack when the vision names no stack; open vision items with autopilot off, start_autopilot for the first priority with open items; work orders nobody starts, start_work_order with the agents and models you choose, or after when they change the same part of the app as running work; for an app whose preview is not set up or fails, set_up_preview. A card the user dismissed before handing you the project no longer stands.
+The user chose that you build everything here: you own the whole project and drive it until it runs, the work orders the user creates by hand included. When the user asks for a change, propose the work at once: create_work_order with quick or planned steps for most changes (reviewed_plan for real features, full only for data, money, auth, migrations, or concurrency), the agents, models, and efforts the model guide's rules give (on the agent with the most usage left), and the user's words as the goal. Commitarium applies your actions immediately, without approval cards, except those using a premium model, which wait for the user. The user wants the app soon, so for every work order choose the lightest steps its risk allows: quick for small, low-risk items (keyboard shortcuts, empty states, copy), planned for small changes that gain from a plan, reviewed_plan only for real features, full only for data, money, auth, migrations, or concurrency.
+You act only when Commitarium wakes you, so it also tells you what the project still lacks to run. Fix each in turn, one step after what it depends on: no vision, write_vision; no stack, set_up_stack (after the vision, unless the repository has code), or design_stack when the vision names no stack; open vision items with autopilot off, start_autopilot for the first priority with open items; work orders nobody starts, start_work_order with the agents and models you choose, all at once unless one needs another's code or result; for an app whose preview is not set up or fails, set_up_preview. A card the user dismissed before handing you the project no longer stands.
 The user handed you the project so they need not follow it. Commitarium shows each action you take as a one-line result in the chat, so never describe your actions again. When you are woken and something finished or changed, report it in one or two short lines: what changed for the user, and what comes next only when that is not obvious. Never recap earlier events or work, never list what is running, and never say that nothing needs the user ("Nothing needs you"): say nothing about their part unless they must act. Fix what is technical yourself (recover, retry, replace stuck work) without asking. Ask the user only what only they can decide (a matter of taste about the product, a secret, money), and first pick a sensible default and go ahead with it where you can, saying in a line which you chose.`
 
 // newAppInstructions tell the assistant at the top level how to settle a

@@ -54,7 +54,7 @@ type featureResponse struct {
 	// preview check of its commit passed (ADR-028).
 	PreviewCheck bool `json:"preview_check,omitempty"`
 	// QueuedAfter names the work this one waits for before autopilot starts
-	// it, so two changes to the same part of the app do not run at once.
+	// it, because it needs that work's code or result.
 	QueuedAfter string `json:"queued_after,omitempty"`
 	// PhaseChoices are its planning models and efforts (ADR-031), on a single
 	// work order's response.

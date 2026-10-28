@@ -81,11 +81,12 @@ export const queueIntervention = (
   target: InterventionTargetRole,
   message: string,
   key: string,
+  attachments: string[] = [],
 ): Promise<Run> =>
   request(`${runPath(runId)}/interventions`, {
     method: "POST",
     idempotencyKey: key,
-    body: { target, message },
+    body: { target, message, ...(attachments.length ? { attachments } : {}) },
   });
 
 // --- Isolated validation jobs (Phase 4) ---

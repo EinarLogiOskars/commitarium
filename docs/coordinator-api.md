@@ -83,6 +83,8 @@ this API beyond the host loopback interface is unsupported.
 | `PUT` | `/api/v1/projects/{id}/app` | Mark a project as an app (`{"app": true}`) or a project only; projects answer `app`. A project that changes kind takes that kind's assistant mode |
 | `PUT` | `/api/v1/projects/{id}/assistant-mode` | Set how the assistant works (`{"assistant_mode": "builds"}` or `"assists"`, ADR-027); projects answer `assistant_mode`, `builds` for apps and `assists` for projects by default |
 | `POST` | `/api/v1/runs/{runID}/interventions` | Queue a user message for the lead or reviewer and stop at the next safe boundary |
+| `POST` | `/api/v1/attachments/{owner}` | Store a file attached to a message (see [Message attachments](#message-attachments)) |
+| `GET` | `/api/v1/attachments/{owner}/{name}` | Read an attached file itself |
 | `GET` | `/api/v1/runs/{runID}/planning/messages` | Retrieve the ordered lead/reviewer planning messages |
 | `GET` | `/api/v1/runs/{runID}/planning/messages/stream` | Replay and stream ordered planning messages with SSE |
 | `GET` | `/api/v1/sessions/{sessionID}` | Retrieve a session |
@@ -1846,6 +1848,18 @@ Clients should use `wait_kind` to choose controls and labels, and show `reason`
 as the human-readable explanation. They must not infer control state by parsing
 the reason text.
 
+A work order that autopilot started early, while the work it follows (`after`)
+was still being built, plans and has its plan reviewed as usual, then stays at
+the plan's `phase_checkpoint` instead of implementing (ADR-037). Its reason says
+why in plain words: "Planned; implements once “X” has merged." or "Planned;
+implements when a slot frees: …" when as many work orders as `max_running`
+allows are already working. Early planning takes no slot; a work order counts
+toward `max_running` once it implements. The coordinator implements it on its
+own once nothing holds it, also after a restart; its first implementation turn
+merges the default branch in and checks the plan against the merged code first,
+posting a `## Plan update` section when the plan had to change. The user's own
+`POST /api/v1/runs/{runID}/implementation` is not held.
+
 Every run also exposes `plan_version`. It begins at `1` for the original
 lead/reviewer agreement. A user-approved scope-changing intervention advances
 the same run to the next version; earlier planning messages remain available
@@ -1967,8 +1981,12 @@ Content-Type: application/json
 }
 ```
 
-`target` must be `lead` or `reviewer`, and `message` must not be blank. The
-reviewer becomes available only after its persistent reviewer session exists.
+`target` must be `lead` or `reviewer`, and `message` must not be blank unless
+an optional `attachments` names project files uploaded to
+`/api/v1/attachments/{projectID}` (see
+[Message attachments](#message-attachments)); the stored `message` then ends
+with the line naming them. The reviewer becomes available only after its
+persistent reviewer session exists.
 The response is the ordinary run resource with `202 Accepted`; its additive
 fields have this shape:
 
@@ -2470,7 +2488,11 @@ Content-Type: application/json
 {"message":"Fix the Icelandic wording on the front page."}
 ```
 
-Each message starts one agent turn and returns `202` with the run.
+Each message starts one agent turn and returns `202` with the run. An
+optional `attachments` names project files uploaded to
+`/api/v1/attachments/{projectID}`; the message the agent reads names them
+(see [Message attachments](#message-attachments)), and `400
+invalid_attachments` answers one that is not there any more.
 
 - **First message.** It starts the provider conversation with the session's
   instructions in front of the message, using the `session_opening` output
@@ -2617,7 +2639,7 @@ default branch, and returns the `assistant_turn` result: its reply, proposed
 actions, and its notes.
 
 - `GET /api/v1/assistant/settings` answers `{"agent", "model", "ask_before",
-  "max_effort", "updated_at"}`; without saved settings, an empty agent and model (ADR-027:
+  "max_effort", "max_running", "updated_at"}`; without saved settings, an empty agent and model (ADR-027:
   the user chooses them). `ask_before` lists the models the model guide says
   need approval: its `premium` models and the unrated models connected agents
   offer. An assistant that had answered before keeps the default it had then
@@ -2630,6 +2652,12 @@ actions, and its notes.
   `high`) is the highest reasoning effort the assistant may choose (ADR-031):
   applying an assistant action with a higher effort returns
   `400 effort_above_ceiling`. The user's own Starts are not limited.
+  `max_running` (1 to 12; default 4) is the most of the assistant's work
+  orders that are planned, implemented, or reviewed at once in a project
+  (ADR-036). Autopilot queues a start beyond it, with a note in the
+  conversation, and starts it once one of them waits to merge or ends; a
+  value outside the range returns `400 invalid_assistant_request`. The user's own Starts are not
+  limited.
 - Until it can answer, sending a message returns `409 no_agents` (no agent
   exists yet) or `409 assistant_not_set_up` (none is chosen for it, or the
   chosen one is gone), each with a plain message for the user. Work
@@ -2655,12 +2683,17 @@ actions, and its notes.
   Ready, starts one only where the assistant drives the work (an autopilot
   goal, or `builds`); elsewhere it stays an event line and is not repeated
   to the assistant on the user's next message (ADR-035).
-- `POST .../{scope}/messages` with `{"message", "developer_mode"}` and an
-  `Idempotency-Key` starts a turn. While one runs, the message is queued in
-  the conversation's `queued` and starts the next turn, with any events that
-  waited, as soon as the current one ends. `developer_mode` (optional) says
-  whether the desktop shows Developer mode; without it, a new app the
-  top-level assistant plans stays self-contained (ADR-035).
+- `POST .../{scope}/messages` with `{"message", "developer_mode",
+  "attachments"}` and an `Idempotency-Key` starts a turn. While one runs, the
+  message is queued in the conversation's `queued` and starts the next turn,
+  with any events that waited, as soon as the current one ends.
+  `developer_mode` (optional) says whether the desktop shows Developer mode;
+  without it, a new app the top-level assistant plans stays self-contained
+  (ADR-035). `attachments` (optional, at most 10) names files uploaded to
+  `/api/v1/attachments/{scope}`; the message may then be empty. The message
+  records them as `attachments`, and its turn receives them (see
+  [Message attachments](#message-attachments)). `400 invalid_assistant_request` when one
+  is not there any more.
 - While a turn runs, the conversation's `activity` is `{"label", "detail",
   "started_at", "retry"}`: the assistant's latest step, read from its
   worker's activity stream and put in plain words (`label`, such as
@@ -2907,6 +2940,38 @@ The assistant's state lists them.
 - `DELETE /api/v1/projects/{id}/documents/{name}` removes one (`204`;
   `404 document_not_found`). Deleting the project removes them all.
 
+## Message attachments
+
+Screenshots and files the user pastes, drops, or picks in a composer (the
+assistant, an intervention, a session) are stored as their owner's
+documents: a project's, or, for the top-level conversation, those of the
+owner `commitarium`, which has no project. The top level keeps at most 30 as
+well; its oldest makes room for a new one, since it has no page to remove
+them from.
+
+- `POST /api/v1/attachments/{owner}` with `{"name", "content_base64"}` stores
+  one, never replacing another: a taken name gets a number before its
+  extension (`screenshot-2026-10-28-1612-2.png`). `201` with the document,
+  whose `name` the message then names. `400 invalid_document` for a name that
+  is not a plain file name or an empty file, with "the file is larger than 5
+  MB" past 5 MB; `409 too_many_documents` when a project holds 30.
+- `GET /api/v1/attachments/{owner}/{name}` answers the file itself: an image
+  (png, jpg, gif, webp) with its type, anything else as
+  `application/octet-stream`, always `nosniff`. `404 document_not_found`.
+
+A message names its files on a line of its own, `Attached, in your working
+directory: .commitarium/documents/<name>, ...`, so whoever reads it finds
+them. Before a turn that reads such a message, the coordinator copies the
+files into the turn's working directory under `.commitarium/documents/` and
+asks the worker to show it the images among them (`images` in the worker's
+attempt request, at most 10 paths relative to the working directory): Claude
+Code is told to read each with its Read tool, and Codex receives them as
+`localImage` inputs. This covers the assistant's turns, interventions (in
+the lead's or the reviewer's checkout), session messages, and a work order
+the assistant creates with `attachments` on its `create_work_order` action:
+its description, and so its goal and its lead's first prompt, names them, and
+a brief written from the description keeps them.
+
 ## Setting a new project up
 
 `POST /api/v1/projects/{id}/setup` with `{"presets": ["node-lts", "python"],
@@ -2956,9 +3021,20 @@ merged PR and resulting merge commit are visible in Forgejo and recorded in
 SQLite.
 
 With `auto_after_gates`, the coordinator invokes this same operation as soon as
-the verified lead green light is durable. Automatic mode has no weaker path or
+the verified lead green light is durable and the work order's turn in its
+project's merge queue has come (ADR-036). Automatic mode has no weaker path or
 different checks. A conflict or unavailable dependency records visible merge-
 blocked activity and leaves the run waiting for user review.
+
+Work orders that merge on their own merge one at a time per project, in the
+order their gates passed. The queue is durable, so a restart keeps it. While
+the first in line merges or brings main in, the others stay `waiting_for_user`
+with `wait_kind` `merge_gate` and a reason that gives their place, for example
+"Waiting to merge: 2nd in line. Work orders merge one at a time; …". When its
+turn comes and main has moved, the work order brings main in as below, then
+merges. A run leaves the line when it merges, blocks, pauses, or waits for the
+user, and joins at the back when it reaches the gate again. Merges the user
+approves (`require_user_approval`) do not wait in line.
 
 When Forgejo refuses the merge (`405`/`409`) and the default branch has moved
 past the work order's checkout, the lead brings main in instead (ADR-025). Its
@@ -2971,8 +3047,12 @@ publication verification, a re-review of the merge and the lead's readiness
 acknowledgement when the work order has a reviewer, validation of the new
 commit when configured, and the merge itself. The merge route does this too:
 for a work order behind main it returns `200` with the run, now `running`,
-instead of `409 merge_not_ready`. Automatic merges bring main in at most three
-times per plan version; after that the run waits as a blocker with the reason
+instead of `409 merge_not_ready`. Being overtaken while in line is normal and is not
+counted: automatic merges stop after three failed updates per plan version,
+where an update failed when its turn blocked before it reached the merge gate,
+when the reviewer asked for changes to the merge, or when Forgejo still refused
+it with main where the lead brought it in from. After that the run waits as a
+blocker with the reason
 "Main moved and the approved revision no longer merges cleanly. Continue
 (optionally with guidance) …". `continue` on that blocker starts another update
 with the guidance in the lead's instructions. A refused merge while the

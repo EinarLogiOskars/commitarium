@@ -11,6 +11,7 @@ import {
 } from "../api/documents";
 import { ApiError } from "../api/client";
 import { ASSISTANT_CHANGED } from "./AssistantDrawer";
+import { DOCUMENTS_CHANGED } from "./Attachments";
 import { openAssistant } from "../attention/askAssistant";
 import { Markdown } from "./Markdown";
 import { openExternal } from "../ipc";
@@ -73,6 +74,12 @@ export function PlanningWorkspace({
     }, POLL_MS);
     return () => clearInterval(timer);
   }, [projectId, onChanged, loadDocs]);
+
+  // Files attached in the conversation are documents too.
+  useEffect(() => {
+    window.addEventListener(DOCUMENTS_CHANGED, loadDocs);
+    return () => window.removeEventListener(DOCUMENTS_CHANGED, loadDocs);
+  }, [loadDocs]);
 
   // The conversation is in the assistant's drawer, beside the plan.
   useEffect(() => openAssistant(), [projectId]);

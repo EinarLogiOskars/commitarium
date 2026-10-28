@@ -747,3 +747,47 @@ func TestAutopilotLeavesABlockedReplacementToTheUserWhereItAssists(t *testing.T)
 		}
 	}
 }
+
+// Building everything, autopilot starts every work order that is ready at
+// once, up to the ceiling; the rest wait for a slot, with a plain note, and
+// start when running work reaches the merge queue or ends (ADR-036).
+func TestAutopilotStartsWorkSideBySideUpToTheCeiling(t *testing.T) {
+	service, _ := newTestService(t)
+	service.config.Projects = gapProjects{mode: project.AssistantModeBuilds}
+	features := &featuresStub{}
+	service.config.Features = features
+	stored, err := service.read("prj_test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index := 1; index <= 6; index++ {
+		id := fmt.Sprintf("fea_%d", index)
+		features.features = append(features.features, feature.Feature{ID: id, Title: "Screen " + id, State: feature.StateReady})
+		stored.Actions = append(stored.Actions, Action{ID: "act_" + id, Status: ActionProposed,
+			AssistantAction: featureartifact.AssistantAction{Type: featureartifact.AssistantStartWorkOrder, WorkOrderID: id}})
+	}
+	if err := service.write(stored); err != nil {
+		t.Fatal(err)
+	}
+	apply, err := service.autopilotActions(t.Context(), "prj_test")
+	if err != nil || len(apply) != DefaultMaxRunning {
+		t.Fatalf("applied %d err=%v, want %d at once", len(apply), err, DefaultMaxRunning)
+	}
+	conversation, _ := service.Get(t.Context(), "prj_test")
+	if last := conversation.Messages[len(conversation.Messages)-1]; !strings.Contains(last.Text,
+		"4 work orders already run here, the most at once") {
+		t.Fatalf("last note = %q", last.Text)
+	}
+	for index := range DefaultMaxRunning {
+		features.features[index].State = feature.StateImplementing
+	}
+	if apply, _ := service.autopilotActions(t.Context(), "prj_test"); len(apply) != 0 {
+		t.Fatalf("started beyond the ceiling: %+v", apply)
+	}
+	// One reaches the merge queue: its slot frees.
+	features.features[0].State = feature.StateReadyToMerge
+	apply, err = service.autopilotActions(t.Context(), "prj_test")
+	if err != nil || len(apply) != 1 || apply[0].WorkOrderID != "fea_5" {
+		t.Fatalf("applied %+v err=%v, want fea_5 in the freed slot", apply, err)
+	}
+}

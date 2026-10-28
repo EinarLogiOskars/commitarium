@@ -8,8 +8,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/EinarLogiOskars/commitarium/internal/execution"
 	"github.com/EinarLogiOskars/commitarium/internal/feature"
 	"github.com/EinarLogiOskars/commitarium/internal/featureartifact"
+	"github.com/EinarLogiOskars/commitarium/internal/project"
 )
 
 // Autopilot (ASSISTANT_PLAN.md phase 3): the user hands the assistant a
@@ -336,6 +338,14 @@ func (service *Service) autopilotActions(ctx context.Context, scope string) ([]A
 		}
 		return 0
 	})
+	running, ceiling := service.running(ctx, scope, stored.earlyPlanners()), service.maxRunning(ctx)
+	var steps map[string]project.WorkSteps
+	planned := func(action Action) bool {
+		if steps == nil {
+			steps = service.workSteps(ctx, scope)
+		}
+		return plansFirst(action, steps)
+	}
 	apply, noted := make([]Action, 0), settled
 	for _, index := range order {
 		action := &stored.Actions[index]
@@ -381,17 +391,25 @@ func (service *Service) autopilotActions(ctx context.Context, scope string) ([]A
 		if !inGoal {
 			continue
 		}
-		// Work that follows other work waits until that has merged, so two
-		// changes to the same part of the app do not run at once. A new work
-		// order is created at once, so it shows as a draft; only its start
-		// waits.
+		// Work that needs other work's code or result waits until that has
+		// merged. A new work order is created at once, so it shows as a
+		// draft; only its start waits.
 		holdStart := false
-		if follows, waiting := stored.waitsFor(*action, titles, states); waiting {
+		if follows, followed, waiting := stored.waitsFor(*action, titles, states); waiting {
 			if action.Type == featureartifact.AssistantCreateWorkOrder {
 				holdStart = true
 				stored.addEvent(fmt.Sprintf("Autopilot created %s and queued its start: it starts once “%s” has merged.",
 					actionName(action.AssistantAction), follows), now)
 				noted = true
+			} else if implementing(states[followed]) && planned(*action) {
+				// It plans while the work it follows is built, and
+				// implements once that has merged (ADR-037).
+				if !action.PlansEarly {
+					action.PlansEarly = true
+					stored.addEvent(fmt.Sprintf("Autopilot started %s to plan now: it implements once “%s” has merged.",
+						actionName(action.AssistantAction), follows), now)
+					noted = true
+				}
 			} else {
 				if !action.Queued {
 					action.Queued = true
@@ -400,6 +418,30 @@ func (service *Service) autopilotActions(ctx context.Context, scope string) ([]A
 					noted = true
 				}
 				continue
+			}
+		}
+		// Work orders run side by side up to the ceiling the user set; a
+		// start beyond it waits for a slot (ADR-036).
+		// Planning early takes no slot: it counts once it implements.
+		if starts := (action.Type == featureartifact.AssistantStartWorkOrder && !action.PlansEarly) ||
+			(action.Type == featureartifact.AssistantCreateWorkOrder && !holdStart && !action.Brief); starts {
+			if running >= ceiling {
+				if action.Type == featureartifact.AssistantCreateWorkOrder {
+					holdStart = true
+					stored.addEvent(fmt.Sprintf("Autopilot created %s and queued its start: %s", actionName(action.AssistantAction),
+						ceilingNote(running)), now)
+					noted = true
+				} else {
+					if !action.Queued {
+						action.Queued = true
+						stored.addEvent(fmt.Sprintf("Autopilot queued %s: %s", actionName(action.AssistantAction),
+							ceilingNote(running)), now)
+						noted = true
+					}
+					continue
+				}
+			} else {
+				running++
 			}
 		}
 		action.Queued = false
@@ -490,22 +532,148 @@ func (service *Service) workOrders(
 	return ours, titles, states, made
 }
 
+// running counts a project's work orders that are being worked on: planned,
+// implemented, or reviewed. Sessions are the user's, background work
+// Commitarium's own, and work waiting to merge needs no agent. Work that
+// plans early (early) counts only once it implements (ADR-037).
+func (service *Service) running(ctx context.Context, scope string, early map[string]bool) int {
+	if service.config.Features == nil || scope == TopLevel {
+		return 0
+	}
+	features, err := service.config.Features.List(ctx, scope)
+	if err != nil {
+		return 0
+	}
+	running := 0
+	for _, item := range features {
+		if item.Background || item.Kind == feature.KindSession {
+			continue
+		}
+		switch {
+		case item.State == feature.StatePlanning && early[item.ID]:
+		case item.State == feature.StatePlanning, item.State == feature.StateImplementing,
+			item.State == feature.StateReviewing:
+			running++
+		}
+	}
+	return running
+}
+
+// earlyPlanners are the work orders autopilot started to plan early
+// (ADR-037).
+func (stored record) earlyPlanners() map[string]bool {
+	early := map[string]bool{}
+	for _, action := range stored.Actions {
+		if action.PlansEarly && action.Status == ActionApplied && action.WorkOrderID != "" {
+			early[action.WorkOrderID] = true
+		}
+	}
+	return early
+}
+
+// implementing reports whether work is past its plan: it has a published,
+// reviewed plan, and its code is being written, reviewed, or merged.
+func implementing(state feature.State) bool {
+	switch state {
+	case feature.StateImplementing, feature.StateReviewing, feature.StateReadyToMerge:
+		return true
+	}
+	return false
+}
+
+// plansFirst reports whether a start runs a documented plan before it
+// implements, so it can plan early: its own steps, or else its work
+// order's. Quick work has no plan to make early.
+func plansFirst(action Action, steps map[string]project.WorkSteps) bool {
+	chosen := action.Steps
+	if chosen == "" {
+		current, known := steps[action.WorkOrderID]
+		if !known {
+			return false
+		}
+		chosen = stepsName(current)
+	}
+	return chosen != "quick"
+}
+
+// workSteps are the steps of a project's work orders.
+func (service *Service) workSteps(ctx context.Context, scope string) map[string]project.WorkSteps {
+	steps := map[string]project.WorkSteps{}
+	if service.config.Features == nil || scope == TopLevel {
+		return steps
+	}
+	features, err := service.config.Features.List(ctx, scope)
+	if err != nil {
+		return steps
+	}
+	for _, item := range features {
+		steps[item.ID] = item.Steps
+	}
+	return steps
+}
+
+// ImplementationHold says whether a work order autopilot started to plan
+// early waits before it implements, and why in plain words: the work it
+// follows has not merged, or as many work orders as may run at once already
+// do (ADR-037). Any other work order is not held.
+func (service *Service) ImplementationHold(ctx context.Context, scope, workOrderID string) (string, bool) {
+	service.mu.Lock()
+	stored, err := service.read(scope)
+	service.mu.Unlock()
+	if err != nil {
+		return "", false
+	}
+	var start *Action
+	for index := range stored.Actions {
+		action := &stored.Actions[index]
+		if action.PlansEarly && action.Status == ActionApplied && action.WorkOrderID == workOrderID &&
+			(start == nil || action.UpdatedAt.After(start.UpdatedAt)) {
+			start = action
+		}
+	}
+	if start == nil {
+		return "", false
+	}
+	_, titles, states, _ := service.workOrders(ctx, scope)
+	if follows, _, waiting := stored.waitsFor(*start, titles, states); waiting {
+		return execution.ImplementationHoldReason(follows), true
+	}
+	if running := service.running(ctx, scope, stored.earlyPlanners()); running >= service.maxRunning(ctx) {
+		return execution.ImplementationSlotReason(running), true
+	}
+	return "", false
+}
+
+// maxRunning is the most work orders autopilot runs at once in a project.
+func (service *Service) maxRunning(ctx context.Context) int {
+	settings, err := service.storedSettings(ctx)
+	if err != nil || settings.MaxRunning < 1 {
+		return DefaultMaxRunning
+	}
+	return settings.MaxRunning
+}
+
+func ceilingNote(running int) string {
+	return fmt.Sprintf("%d work orders already run here, the most at once (set in Settings). It starts when one "+
+		"of them is done or waits to merge.", running)
+}
+
 // waitsFor reports whether an action must wait for the work it follows
 // (After): a work order, named by its ID or title, that has not merged or
 // closed yet, or another of the assistant's actions not yet applied. It
-// returns the title of what it waits for. Work it cannot find does not hold
-// it back.
+// returns the title of what it waits for, and its work order once it has
+// one. Work it cannot find does not hold it back.
 func (stored record) waitsFor(
 	action Action, titles map[string]string, states map[string]feature.State,
-) (string, bool) {
+) (string, string, bool) {
 	after := strings.TrimSpace(action.After)
 	if after == "" || (action.Type != featureartifact.AssistantCreateWorkOrder &&
 		action.Type != featureartifact.AssistantStartWorkOrder) {
-		return "", false
+		return "", "", false
 	}
-	unfinished := func(id string) (string, bool) {
+	unfinished := func(id string) (string, string, bool) {
 		state, known := states[id]
-		return titles[id], known && !state.IsTerminal()
+		return titles[id], id, known && !state.IsTerminal()
 	}
 	if _, known := states[after]; known {
 		return unfinished(after)
@@ -518,7 +686,7 @@ func (stored record) waitsFor(
 		case other.Status == ActionApplied && other.WorkOrderID != "":
 			return unfinished(other.WorkOrderID)
 		case other.Status == ActionProposed:
-			return other.Title, true
+			return other.Title, "", true
 		}
 	}
 	for id, title := range titles {
@@ -526,7 +694,7 @@ func (stored record) waitsFor(
 			return unfinished(id)
 		}
 	}
-	return "", false
+	return "", "", false
 }
 
 // QueuedStarts names, by work order, the work each of a project's work
@@ -779,10 +947,14 @@ func goalInstructions(goal *Goal) string {
 		"an item without a work order and without a create card already waiting (autopilot applies a waiting one; " +
 		"never propose a second for the same item), start_work_order for one that is drafted, and change_models when a run " +
 		"needs a different model. Commitarium applies your actions for these items at once, without the user's " +
-		"approval, except those using a premium model. Start an item only once the items it builds on have " +
-		"merged; at most two of the goal's work orders run at a time, and only when they touch different parts of " +
-		"the app (two that both change the same screens, navigation, or shared files run one after the other, or " +
-		"the second cannot merge). Restart a goal item that is back in Ready. When one is blocked or failed, recover it " +
+		"approval, except those using a premium model. Start every item whose real dependencies have merged, " +
+		"all at once, like a team: work orders run side by side and merge one at a time, each lead bringing in " +
+		"what merged before it and resolving any conflicts. Touching the same screens or files is fine. Set after " +
+		"only when an item needs another's code or result, or both rewrite the same thing wholesale: an item " +
+		"waits on the plan's foundation, or on an item whose behaviour it truly uses (its description says " +
+		"\"Needs: …\"), never on a sibling that only adds to the same page. Work that waits still plans early, " +
+		"once the work it follows is implementing. Where the " +
+		"plan gives an order, plan in waves and start each wave together. Restart a goal item that is back in Ready. When one is blocked or failed, recover it " +
 		"with recover_work_order the way its blocker calls for (see How you recover blocked work). When a work " +
 		"order needs the user (a question about the product, a merge approval, a secret), tell the user exactly " +
 		"what it needs. When autopilot made a duplicate work order for an item, propose close_work_order for the one that " +

@@ -16,6 +16,7 @@ mod preview_check;
 mod preview_compose;
 mod process;
 mod profiles;
+mod snapshot;
 mod store;
 mod updater;
 
@@ -59,6 +60,8 @@ pub fn run() {
         // access reaches the untrusted UI.
         .invoke_handler(tauri::generate_handler![
             apps::open_app_window,
+            snapshot::webview_snapshot,
+            snapshot::webview_snapshot_supported,
             cli_updates::agent_cli_status,
             coordinator_build::coordinator_freshness,
             coordinator_build::rebuild_coordinator,

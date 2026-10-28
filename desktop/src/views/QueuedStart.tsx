@@ -2,7 +2,7 @@ import { useState } from "react";
 import type { Feature } from "../api/types";
 
 // Start for a work order the assistant queued behind other work: it asks
-// first, since both change the same part of the app, and keeping it queued
+// first, since it builds on that work, and keeping it queued
 // is the default. Starting it anyway takes it out of the queue.
 export function QueuedStart({
   feature,
@@ -18,8 +18,8 @@ export function QueuedStart({
     return (
       <div className="queued-start">
         <p>
-          This changes the same part of the app as “{feature.queued_after}”, which is still being
-          built. Starting now may cost extra work to combine the two.
+          This builds on “{feature.queued_after}”, which is still being built. Starting now may cost
+          extra work once that one lands.
         </p>
         <div className="row">
           <button className="primary" autoFocus onClick={() => setAsking(false)}>

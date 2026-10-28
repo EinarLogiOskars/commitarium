@@ -1,3 +1,4 @@
+import { AttachmentOwner } from "./Attachments";
 import { useCallback, useEffect, useState } from "react";
 import { getProject } from "../api/projects";
 import { createSession, listFeatures } from "../api/features";
@@ -461,20 +462,22 @@ export function ProjectWorkspace({
           )}
 
           {mode === "order" && orderId && (
-            <FeatureView
-              projectId={id}
-              featureId={orderId}
-              hasRepo={hasRepo}
-              autopilot={autopilotOn(attention, orderId)}
-              onOpenValidation={() => setMode("settings")}
-              onChanged={bumpRail}
-              onKind={setRailKind}
-              onDeleted={() => {
-                setMode("overview");
-                setOrderId(null);
-                bumpRail();
-              }}
-            />
+            <AttachmentOwner.Provider value={id}>
+              <FeatureView
+                projectId={id}
+                featureId={orderId}
+                hasRepo={hasRepo}
+                autopilot={autopilotOn(attention, orderId)}
+                onOpenValidation={() => setMode("settings")}
+                onChanged={bumpRail}
+                onKind={setRailKind}
+                onDeleted={() => {
+                  setMode("overview");
+                  setOrderId(null);
+                  bumpRail();
+                }}
+              />
+            </AttachmentOwner.Provider>
           )}
 
           {mode === "preview" && project && (

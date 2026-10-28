@@ -180,11 +180,12 @@ export const sendSessionTurn = (
   featureId: string,
   message: string,
   idempotencyKey: string,
+  attachments: string[] = [],
 ): Promise<Run> =>
   request(`${featurePath(projectId, featureId)}/messages`, {
     method: "POST",
     idempotencyKey,
-    body: { message },
+    body: { message, ...(attachments.length ? { attachments } : {}) },
   });
 
 /** Ask the session's agent to commit the work for the merge gate. */

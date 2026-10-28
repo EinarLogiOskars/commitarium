@@ -75,6 +75,9 @@ type Watcher struct {
 	// Helpers, when set, reads the helpers the assistant started, so their
 	// questions and results come back to it (helpers.go).
 	Helpers HelperReader
+	// ReleaseImplementation, when set, has a run that planned early look
+	// again at whether it may implement (ADR-037).
+	ReleaseImplementation func(ctx context.Context, runID string) error
 }
 
 // watchEvery is how often the watcher looks at the projects' work.
@@ -106,6 +109,7 @@ func (watcher Watcher) Tick(ctx context.Context) {
 			log.Printf("assistant events for %s: %v", scope, err)
 		}
 		watcher.launch(ctx, scope)
+		watcher.releaseHeld(ctx, scope)
 		watcher.autopilot(ctx, scope)
 		watcher.gapCheck(ctx, scope)
 	}
@@ -151,6 +155,43 @@ func (service *Service) wakeIfWaiting(ctx context.Context, scope string) error {
 func (watcher Watcher) settleVision(ctx context.Context, scope string) {
 	if watcher.VisionSessions != nil {
 		_, _ = watcher.VisionSessions.OpenSession(ctx, scope)
+	}
+}
+
+// releaseHeld has each run that planned early and waits to implement look
+// again once what held it changed: the work it follows merged, or a slot
+// freed (ADR-037). The wait is the run's own, so this picks it up after a
+// restart too.
+func (watcher Watcher) releaseHeld(ctx context.Context, scope string) {
+	if watcher.ReleaseImplementation == nil || watcher.Runs == nil {
+		return
+	}
+	watcher.Service.mu.Lock()
+	stored, err := watcher.Service.read(scope)
+	watcher.Service.mu.Unlock()
+	if err != nil {
+		return
+	}
+	_, _, states, _ := watcher.Service.workOrders(ctx, scope)
+	for workOrderID := range stored.earlyPlanners() {
+		if states[workOrderID] != feature.StatePlanning {
+			continue
+		}
+		runs, err := watcher.Runs.RunsForFeature(ctx, workOrderID)
+		if err != nil {
+			continue
+		}
+		run, ok := newest(runs)
+		if !ok || run.Paused || run.Status != execution.RunStatusWaitingForUser ||
+			run.WaitKind != execution.RunWaitKindPhaseCheckpoint || !execution.HeldBeforeImplementation(run.Reason) {
+			continue
+		}
+		if reason, _ := watcher.Service.ImplementationHold(ctx, scope, workOrderID); reason == run.Reason {
+			continue
+		}
+		if err := watcher.ReleaseImplementation(ctx, run.ID); err != nil {
+			log.Printf("release %s to implement: %v", workOrderID, err)
+		}
 	}
 }
 
@@ -226,6 +267,7 @@ func (service *Service) autopilotOutcome(scope string, action Action, applyErr e
 	for index := range stored.Actions {
 		if stored.Actions[index].ID == action.ID {
 			stored.Actions[index].HoldStart = false
+			stored.Actions[index].PlansEarly = false
 		}
 	}
 	name := actionName(action.AssistantAction)
@@ -397,12 +439,23 @@ func (item work) event() (Event, bool) {
 		return Event{Text: name + " is waiting for the user's answer.", Wake: true}, true
 	case execution.RunWaitKindMergeGate:
 		if item.AutoMerge {
-			// Its gates run and it merges on its own.
+			// Its gates run and it merges on its own, when its turn in the
+			// merge queue comes (ADR-036).
+			if place, found := execution.MergeQueuePlace(item.Reason); found {
+				return Event{Text: name + " is waiting to merge, " + place + "."}, true
+			}
 			return Event{}, false
 		}
 		return Event{Text: name + " is ready to merge and waits for the user's approval.", Wake: true}, true
 	case execution.RunWaitKindBlocker:
 		return Event{Text: with(name + " is blocked"), Wake: true}, true
+	case execution.RunWaitKindPhaseCheckpoint:
+		// Planned early, it implements on its own once nothing holds it
+		// (ADR-037).
+		if what, held := execution.ImplementationHoldWhat(item.Reason); held {
+			return Event{Text: name + " is planned and implements " + what}, true
+		}
+		return Event{Text: with(name + " is waiting for the user"), Wake: true}, true
 	default:
 		return Event{Text: with(name + " is waiting for the user"), Wake: true}, true
 	}
@@ -515,9 +568,10 @@ func (service *Service) startWaitingTurn(ctx context.Context, stored record, set
 	texts := make([]string, 0, len(stored.Queued))
 	now := service.now()
 	for _, queued := range stored.Queued {
-		texts = append(texts, queued.Text)
+		texts = append(texts, withAttachments(queued.Text, queued.Attachments))
 		stored.Messages = append(stored.Messages, Message{
-			ID: messageID(stored, len(stored.Messages)), Role: "user", Text: queued.Text, OccurredAt: now,
+			ID: messageID(stored, len(stored.Messages)), Role: "user", Text: queued.Text,
+			Attachments: queued.Attachments, OccurredAt: now,
 		})
 	}
 	stored.Queued = nil

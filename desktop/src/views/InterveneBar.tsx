@@ -1,4 +1,12 @@
-import { useState } from "react";
+import { useContext, useState } from "react";
+import { splitAttached } from "../api/attachments";
+import {
+  AttachButton,
+  AttachmentChips,
+  AttachmentOwner,
+  SentAttachments,
+  useAttachments,
+} from "./Attachments";
 import { pauseRun, queueIntervention, reopenRun, resumeRun } from "../api/runs";
 import { ApiError } from "../api/client";
 import { RecoveryPanel } from "./RecoveryPanel";
@@ -42,6 +50,9 @@ export function InterveneBar({
 }) {
   const [agent, setAgent] = useState<InterventionTargetRole>("lead");
   const [text, setText] = useState("");
+  const owner = useContext(AttachmentOwner);
+  const attachments = useAttachments(owner);
+  const hasMessage = !!text.trim() || attachments.items.length > 0;
   const [busy, setBusy] = useState<null | "send" | "control">(null);
   const [error, setError] = useState<string | null>(null);
   const agents = useAgents();
@@ -86,12 +97,14 @@ export function InterveneBar({
   const continueBlocked = delivering || clarification;
 
   const send = async () => {
-    if (!text.trim() || delivering) return;
+    if (!hasMessage || delivering) return;
     setBusy("send");
     setError(null);
     try {
-      await queueIntervention(run.id, agent, text.trim(), crypto.randomUUID());
+      const names = await attachments.upload();
+      await queueIntervention(run.id, agent, text.trim(), crypto.randomUUID(), names);
       setText("");
+      attachments.clear();
       onChanged();
     } catch (e) {
       setError(sendError(e));
@@ -131,12 +144,12 @@ export function InterveneBar({
       : busy === "control"
         ? "…"
         : running
-          ? text.trim()
+          ? hasMessage
             ? "Pause & send"
             : "Pause"
           : "Send";
   const submit = () => {
-    if (text.trim()) void send();
+    if (hasMessage) void send();
     else if (running) void control(pauseRun);
   };
 
@@ -248,12 +261,24 @@ export function InterveneBar({
         <div className={`intervene__queued ${answered ? "intervene__queued--done" : ""}`}>
           <span className="intervene__queued-badge">{queueLabel(iv)}</span>
           <span className="intervene__queued-to">to {iv.target}</span>
-          <span className="msg__text">{iv.message}</span>
+          <span className="msg__text">
+            {splitAttached(iv.message).text}
+            <SentAttachments owner={owner} names={splitAttached(iv.message).names} />
+          </span>
         </div>
       )}
       {pendingEffect && <EffectNote effect={pendingEffect} />}
 
-      <div className="intervene__composer">
+      {attachments.problem && <p className="note composer__problem">{attachments.problem}</p>}
+      <AttachmentChips
+        items={attachments.items}
+        onRemove={attachments.remove}
+        disabled={busy != null}
+      />
+      <div
+        className={`intervene__composer${attachments.dragging ? " composer--drop" : ""}`}
+        {...attachments.dropProps}
+      >
         {/* A work order without a reviewer has only the lead to message. */}
         {run.steps?.reviewer !== false && (
           <div className="seg">
@@ -284,6 +309,7 @@ export function InterveneBar({
           }
           value={text}
           onChange={(e) => setText(e.target.value)}
+          onPaste={attachments.onPaste}
           onKeyDown={(e) => {
             if (e.key === "Enter" && !e.shiftKey) {
               e.preventDefault();
@@ -292,10 +318,11 @@ export function InterveneBar({
           }}
           disabled={busy != null || delivering}
         />
+        <AttachButton onFiles={attachments.add} disabled={busy != null || delivering || !owner} />
         <button
           className="primary"
           onClick={submit}
-          disabled={busy != null || delivering || (!text.trim() && !running)}
+          disabled={busy != null || delivering || (!hasMessage && !running)}
           title={running ? "Pauses at the next safe boundary" : undefined}
         >
           {submitLabel}

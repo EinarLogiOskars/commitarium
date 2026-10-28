@@ -826,17 +826,19 @@ func assistantTurnSchema(planning bool) map[string]any {
 			"how":                  map[string]any{"type": "string", "enum": []string{"", "recheck", "continue", "message", "fresh_conversation", "back_to_ready"}, "description": "For recover_work_order: how to recover the blocked work order. Otherwise empty."},
 			"guidance":             map[string]any{"type": "string", "description": "For continue_work_order: what to tell the work order's agents; empty retries as is. For answer_helper: your answer to the helper's question."},
 			"priority":             map[string]any{"type": "integer", "description": "For add_vision_item: the priority level, 0 for P0 through 9 for P9; any level the vision has or a new one. For start_autopilot: the priority to finish. Otherwise 0."},
-			"after":                map[string]any{"type": "string", "description": "For create_work_order and start_work_order: the work order ID, or the exact title of another of your actions, that this one must wait for because both change the same part of the app; it starts once that one merges. Otherwise empty."},
+			"after":                map[string]any{"type": "string", "description": "For create_work_order and start_work_order: the work order ID, or the exact title of another of your actions, that this one must wait for because it needs that one's code or result, or both rewrite the same thing wholesale; it starts once that one merges. Touching the same files is no reason. Otherwise empty."},
 			"helper":               map[string]any{"type": "string", "description": "For answer_helper: the helper that asked, as Commitarium named it. Otherwise empty."},
 			"brief":                map[string]any{"type": "boolean", "description": "For create_work_order: true has its brief written from description before it starts; it is created as a draft. False for quick changes. Otherwise false."},
 			"app_brief":            map[string]any{"type": "string", "description": "For create_app and plan_project: everything you gathered with the user, in full, for whoever plans it next. Otherwise empty."},
 			"assumptions":          map[string]any{"type": "array", "items": text, "description": "For create_app and plan_project: each thing you assumed where the user did not say, in a short line. Otherwise empty."},
+			"attachments":          map[string]any{"type": "array", "items": text, "description": "For create_work_order: the files the user attached that its agents need, such as screenshots of what to change, by file name (screenshot-2026-10-28-1612.png, as in the user's Attached line); the lead sees them with the work order. Otherwise empty."},
 		},
 		[]string{
 			"type", "reason", "title", "description", "vision_item_id", "steps",
 			"lead_agent", "lead_model", "reviewer_agent", "reviewer_model",
 			"lead_plan_model", "lead_plan_effort", "lead_effort", "reviewer_plan_model", "reviewer_plan_effort", "reviewer_effort",
 			"work_order_id", "when", "how", "priority", "guidance", "after", "helper", "brief", "app_brief", "assumptions",
+			"attachments",
 		},
 	)
 	properties := map[string]any{

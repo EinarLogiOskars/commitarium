@@ -220,6 +220,7 @@ func (service *Service) resumeInterruptedAttempt(
 		OutputContract:    worker.OutputContract(request.OutputContract),
 		WorkspaceAccess:   worker.WorkspaceAccess(request.WorkspaceAccess),
 		Web:               request.Web,
+		Images:            request.Images,
 		LaunchEnvironment: launchEnvironment.Clone(),
 	}
 	providerSession, err := service.provider.Resume(service.lifetime, worker.ResumeRequest{
@@ -687,6 +688,7 @@ func providerSessionRequest(
 		OutputContract:    worker.OutputContract(request.OutputContract),
 		WorkspaceAccess:   worker.WorkspaceAccess(request.WorkspaceAccess),
 		Web:               request.Web,
+		Images:            request.Images,
 		LaunchEnvironment: launchEnvironment,
 	}
 }

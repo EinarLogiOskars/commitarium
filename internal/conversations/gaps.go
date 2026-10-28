@@ -198,8 +198,8 @@ func findGaps(state projectState, stored record) []gap {
 	if state.StackReady {
 		if waiting := waitingWork(state.Features, stored); len(waiting) > 0 {
 			gaps = append(gaps, gap{gapWaiting, "Nothing runs, and these work orders wait: " + strings.Join(waiting, ", ") +
-				". Start them (start_work_order with the agents and models you choose), one after the other where " +
-				"they change the same part of the app."})
+				". Start them all (start_work_order with the agents and models you choose); set after only on one " +
+				"that needs another's code or result."})
 		}
 	}
 	if state.App && state.HasCode {

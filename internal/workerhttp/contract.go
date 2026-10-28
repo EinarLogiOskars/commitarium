@@ -14,6 +14,8 @@ const (
 	APIBasePath          = "/internal/v1"
 	MaxInstructionsBytes = 64 * 1024
 	MaxEventTextBytes    = 64 * 1024
+	// MaxImages bounds the images one turn looks at.
+	MaxImages = 10
 )
 
 type Provider string
@@ -148,6 +150,9 @@ type PutAttemptRequest struct {
 	// Web lets a read-only turn search and read the web without asking,
 	// for research (ADR-035).
 	Web bool `json:"web,omitempty"`
+	// Images are images the turn looks at, as paths relative to its working
+	// directory: the screenshots attached to the user's message.
+	Images []string `json:"images,omitempty"`
 }
 
 type WorkspaceAccess string

@@ -285,10 +285,13 @@ type RemoteLeadConfig struct {
 	// PreviewChecks, when set, checks that the app runs before a
 	// preview-setup work order merges (ADR-028).
 	PreviewChecks RemoteLeadPreviewChecks
-	Toolchains    RemoteLeadToolchainReader
-	Usage         RemoteLeadUsageRecorder
-	Lifetime      context.Context
-	ReportError   func(error)
+	// Holds, when set, says whether a run that planned early waits before it
+	// implements (ADR-037).
+	Holds       RemoteLeadImplementationHolds
+	Toolchains  RemoteLeadToolchainReader
+	Usage       RemoteLeadUsageRecorder
+	Lifetime    context.Context
+	ReportError func(error)
 }
 
 // RemoteLeadLoginWaits records runs that wait for an agent to log in again
@@ -330,6 +333,7 @@ type RemoteLeadStarter struct {
 	environmentRequests RemoteLeadEnvironmentRequests
 	validation          RemoteLeadValidationGate
 	previewChecks       RemoteLeadPreviewChecks
+	holds               RemoteLeadImplementationHolds
 	toolchains          RemoteLeadToolchainReader
 	usage               RemoteLeadUsageRecorder
 	lifetime            context.Context
@@ -339,6 +343,9 @@ type RemoteLeadStarter struct {
 	signInCleared func(agentID string)
 	signInTry     func(agentID string)
 	reportError   func(error)
+	// attachments copies the files a turn's instructions name into its
+	// checkout (attachments.go).
+	attachments AttachmentDelivery
 
 	activeMu sync.Mutex
 	active   map[string]struct{}
@@ -346,6 +353,8 @@ type RemoteLeadStarter struct {
 	// runs are released (self_correction.go).
 	corrections map[string]*pendingCorrection
 	mergeMu     sync.Mutex
+	// queueMu orders changes to the merge queue (merge_queue.go).
+	queueMu sync.Mutex
 	// acceptanceJoinMu closes the small window where both parallel workers can
 	// observe the other as incomplete and then both leave without starting the
 	// review. The durable turn admission still provides cross-process safety.
@@ -369,8 +378,8 @@ func NewRemoteLeadStarter(config RemoteLeadConfig) (*RemoteLeadStarter, error) {
 		planning: config.Planning, artifacts: config.Artifacts, briefs: config.Briefs, workspaces: config.Workspaces,
 		worker: config.Worker, pump: config.Pump,
 		environmentRequests: config.EnvironmentRequests, validation: config.Validation, toolchains: config.Toolchains,
-		previewChecks: config.PreviewChecks,
-		usage:         config.Usage, lifetime: config.Lifetime, reportError: reportError,
+		previewChecks: config.PreviewChecks, holds: config.Holds,
+		usage: config.Usage, lifetime: config.Lifetime, reportError: reportError,
 		active: make(map[string]struct{}),
 	}, nil
 }
@@ -491,7 +500,7 @@ func (starter *RemoteLeadStarter) StartWithModels(
 	sessionID := remoteLeadSessionID(runID)
 	userActor := workflow.Actor{Kind: workflow.ActorKindUser, ID: "local-user"}
 	if _, err := starter.goals.AcceptGoalAtStart(
-		ctx, featureID, sessionID, briefGoal(brief), userActor, runID+":start-goal",
+		ctx, featureID, sessionID, withAttachedFrom(briefGoal(brief), storedFeature.Description), userActor, runID+":start-goal",
 	); err != nil {
 		return execution.Run{}, false, err
 	}
@@ -1289,18 +1298,35 @@ func (starter *RemoteLeadStarter) recoverIdleReadyToMergeRun(
 	return starter.waitRun(ctx, run.ID, implementationApprovedReason, execution.RunWaitKindMergeGate)
 }
 
-// maxAutomaticBaseUpdates bounds how often a work order brings main in on its
-// own within one plan version before it waits for the user (ADR-025).
+// maxAutomaticBaseUpdates bounds how many updates onto main may fail within
+// one plan version before the work order waits for the user (ADR-025,
+// ADR-036). Being overtaken while in line does not count.
 const maxAutomaticBaseUpdates = 3
 
 // mergeAfterGates merges a work order whose policy merges once every gate
-// passed. When Forgejo refuses because main moved past the approved revision,
-// the lead brings main in and the updated commit goes through the gates
-// again, at most maxAutomaticBaseUpdates times per plan version; any other
-// refusal blocks the run. owned says the caller already holds the run, so an
-// update runs in the caller's goroutine.
+// passed, when its turn in the project's merge queue comes (ADR-036); until
+// then it waits in line. When Forgejo refuses because main moved past the
+// approved revision, the lead brings main in and the updated commit goes
+// through the gates again, until maxAutomaticBaseUpdates updates failed in
+// the plan version; any other refusal blocks the run. owned says the caller
+// already holds the run, so an update runs in the caller's goroutine.
 func (starter *RemoteLeadStarter) mergeAfterGates(ctx context.Context, run execution.Run, owned bool) error {
-	_, _, err := starter.merge(ctx, run.ID, run.ID+":automatic-merge")
+	storedFeature, err := starter.features.GetByID(ctx, run.FeatureID)
+	if err != nil {
+		return err
+	}
+	if storedFeature.State != feature.StateReadyToMerge {
+		// Its update onto main is under way; it merges once that is checked.
+		return nil
+	}
+	place, err := starter.mergePlace(ctx, storedFeature.ProjectID, run.ID)
+	if err != nil {
+		return fmt.Errorf("join the merge queue: %w", err)
+	}
+	if place > 1 {
+		return starter.waitRun(ctx, run.ID, execution.MergeQueueReason(place), execution.RunWaitKindMergeGate)
+	}
+	_, _, err = starter.merge(ctx, run.ID, run.ID+":automatic-merge")
 	if err == nil {
 		return nil
 	}
@@ -1309,11 +1335,13 @@ func (starter *RemoteLeadStarter) mergeAfterGates(ctx context.Context, run execu
 		starter.noteBlocker(ctx, run.ID, execution.BlockerCheck, "merge", implementationMergeBlockedReason, implementationMergeBlockedReason)
 		return starter.waitRun(ctx, run.ID, implementationMergeBlockedReason, execution.RunWaitKindBlocker)
 	}
-	requested, countErr := starter.baseUpdatesRequested(ctx, run)
+	mainHead, _ := starter.behindMain(ctx, storedFeature)
+	starter.noteUpdateRefusedAgain(ctx, run, mainHead)
+	failed, countErr := starter.baseUpdatesFailed(ctx, run)
 	if countErr != nil {
-		starter.reportError(fmt.Errorf("count updates onto main for run %q: %w", run.ID, countErr))
+		starter.reportError(fmt.Errorf("count failed updates onto main for run %q: %w", run.ID, countErr))
 	}
-	if countErr != nil || requested >= maxAutomaticBaseUpdates {
+	if countErr != nil || failed >= maxAutomaticBaseUpdates {
 		starter.noteBlocker(ctx, run.ID, execution.BlockerCheck, "merge", implementationMergeBehindMainReason, implementationMergeBehindMainReason)
 		return starter.waitRun(ctx, run.ID, implementationMergeBehindMainReason, execution.RunWaitKindBlocker)
 	}
@@ -1497,6 +1525,8 @@ func (starter *RemoteLeadStarter) merge(
 	if err != nil {
 		return execution.Run{}, false, fmt.Errorf("complete merged run: %w", err)
 	}
+	// The next work order in line takes its turn (ADR-036).
+	starter.leaveMergeQueue(ctx, run.ID)
 	return completed, mergedNow, nil
 }
 
@@ -1959,6 +1989,9 @@ func (starter *RemoteLeadStarter) advanceWaitingRun(ctx context.Context, runID s
 				return err
 			}
 			if published {
+				if held, err := starter.holdImplementation(ctx, run, storedFeature); err != nil || held {
+					return err
+				}
 				_, _, err = starter.StartImplementation(ctx, run.ID, run.ID+":autonomy:implementation")
 				return err
 			}
@@ -3738,6 +3771,9 @@ func (starter *RemoteLeadStarter) implementationRequest(
 	if run.Steps.SkipPlan {
 		instructions = planlessImplementationInstructions(storedFeature, prepared, attemptID)
 	}
+	if attemptID == implementationAttemptForVersion(lead.ID, run.PlanVersion, 1) && starter.wasHeld(ctx, run.ID) {
+		instructions = heldImplementationInstructions + instructions
+	}
 	if starter.previewCheckApplies(storedFeature) {
 		instructions += previewCheckInstructions
 	}
@@ -4258,6 +4294,7 @@ func (starter *RemoteLeadStarter) launchAdmitted(request remoteLeadRequest) {
 	} else {
 		request.request.WorkspaceAccess = workerhttp.WorkspaceAccessReadWrite
 	}
+	starter.withAttachments(ctx, &request.request)
 	attempt, _, putErr := starter.worker.PutAttempt(ctx, request.identity, request.request)
 	if putErr != nil {
 		// The PUT response may have been lost after the worker durably admitted
@@ -5769,6 +5806,9 @@ func (starter *RemoteLeadStarter) startImplementationReview(
 		previousReviewedCommitID, previousApproved = starter.previousReviewedCommit(ctx, reviewer.ID, checkpoint.AttemptID)
 		previousApproved = previousApproved && previousReviewedCommitID != publication.CommitID
 	}
+	if starter.wasHeld(ctx, run.ID) {
+		previewContext = heldReviewInstructions + previewContext
+	}
 	request := remoteLeadRequest{
 		runID: run.ID, agentName: "reviewer", waitingReason: implementationReviewRunningReason,
 		identity: workerhttp.MutationIdentity{
@@ -5851,6 +5891,10 @@ func (starter *RemoteLeadStarter) startImplementationCorrection(
 	updated, err := starter.baseUpdatePrecedesReview(ctx, run, lead, checkpoint, review)
 	if err != nil {
 		return remoteLeadRequest{}, false, err
+	}
+	if updated {
+		// A merge the reviewer questions is a failed update (ADR-036).
+		starter.noteFailedBaseUpdate(ctx, lead.ID, checkpoint.AttemptID, "the reviewer asked for changes to the merge.")
 	}
 	if alreadyCorrecting {
 		if priorRound >= round {
@@ -7224,6 +7268,12 @@ func (starter *RemoteLeadStarter) waitRun(
 	}
 	if waitKind == execution.RunWaitKindBlocker {
 		starter.noteUnnamedBlocker(ctx, runID, reason)
+		starter.noteBlockedBaseUpdate(ctx, run, reason)
+	}
+	if waitKind != execution.RunWaitKindMergeGate {
+		// Waiting for anything but its turn, it leaves the merge queue
+		// (ADR-036).
+		starter.leaveMergeQueue(ctx, runID)
 	}
 	if run.Status == execution.RunStatusWaitingForUser {
 		storedKind := run.WaitKind

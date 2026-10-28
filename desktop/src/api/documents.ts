@@ -18,18 +18,22 @@ const documentsPath = (id: string) => `/api/v1/projects/${encodeURIComponent(id)
 export const listDocuments = (id: string): Promise<{ documents: ProjectDocument[] }> =>
   request(documentsPath(id));
 
-/** Attach a file, replacing one of the same name. */
-export const addDocument = async (id: string, file: File): Promise<ProjectDocument> => {
+/** A file's contents as base64, as the coordinator takes them. */
+export const base64Of = async (file: Blob): Promise<string> => {
   const bytes = new Uint8Array(await file.arrayBuffer());
   let binary = "";
   for (let i = 0; i < bytes.length; i += 0x8000) {
     binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
   }
-  return request(documentsPath(id), {
-    method: "POST",
-    body: { name: file.name, content_base64: btoa(binary) },
-  });
+  return btoa(binary);
 };
+
+/** Attach a file, replacing one of the same name. */
+export const addDocument = async (id: string, file: File): Promise<ProjectDocument> =>
+  request(documentsPath(id), {
+    method: "POST",
+    body: { name: file.name, content_base64: await base64Of(file) },
+  });
 
 /** The start of a text document; preview is empty for any other file. */
 export const previewDocument = (

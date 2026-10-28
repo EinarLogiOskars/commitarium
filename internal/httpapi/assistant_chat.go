@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/EinarLogiOskars/commitarium/internal/conversations"
+	"github.com/EinarLogiOskars/commitarium/internal/documents"
 	"github.com/EinarLogiOskars/commitarium/internal/execution"
 	"github.com/EinarLogiOskars/commitarium/internal/feature"
 	"github.com/EinarLogiOskars/commitarium/internal/featureartifact"
@@ -210,6 +211,14 @@ func (api *API) getConversationHandler(w http.ResponseWriter, r *http.Request) {
 type conversationMessageRequest struct {
 	Message       string `json:"message"`
 	DeveloperMode *bool  `json:"developer_mode,omitempty"`
+	// Attachments name the files attached to it, among the scope's
+	// documents (POST /api/v1/attachments/{scope}).
+	Attachments []string `json:"attachments,omitempty"`
+}
+
+// attachedSender sends a message carrying files.
+type attachedSender interface {
+	SendAttached(ctx context.Context, scope, message, key string, attachments []string) (conversations.Conversation, error)
 }
 
 // developerModeSetter records whether the user uses Developer mode.
@@ -233,7 +242,13 @@ func (api *API) sendConversationHandler(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 	}
-	conversation, err := api.conversations.Send(r.Context(), r.PathValue("scope"), body.Message, key)
+	var conversation conversations.Conversation
+	var err error
+	if sender, ok := api.conversations.(attachedSender); ok && len(body.Attachments) > 0 {
+		conversation, err = sender.SendAttached(r.Context(), r.PathValue("scope"), body.Message, key, body.Attachments)
+	} else {
+		conversation, err = api.conversations.Send(r.Context(), r.PathValue("scope"), body.Message, key)
+	}
 	if err != nil {
 		writeConversationError(w, err)
 		return
@@ -640,6 +655,9 @@ func (api *API) applyCreateWorkOrder(
 			}
 		}
 	}
+	// The files the user attached that its agents need: the goal names them,
+	// so they reach the lead's checkout and its prompt.
+	description = documents.WithAttached(description, api.attachedDocuments(ctx, projectID, action.Attachments))
 	// The assistant's work order is its own to drive (ADR-027).
 	overrides.CreatedBy = feature.CreatedByAssistant
 	created, err := api.features.Create(ctx, projectID, action.Title, description, overrides)

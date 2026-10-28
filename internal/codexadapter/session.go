@@ -132,12 +132,12 @@ func (session *session) Send(ctx context.Context, command worker.Command) error 
 			ThreadID            string      `json:"threadId"`
 			ExpectedTurnID      string      `json:"expectedTurnId"`
 			ClientUserMessageID string      `json:"clientUserMessageId"`
-			Input               []textInput `json:"input"`
+			Input               []userInput `json:"input"`
 		}{
 			ThreadID:            threadID,
 			ExpectedTurnID:      turnID,
 			ClientUserMessageID: command.ID,
-			Input:               []textInput{{Type: "text", Text: command.Message}},
+			Input:               []userInput{{Type: "text", Text: command.Message}},
 		}
 		var response struct {
 			TurnID string `json:"turnId"`
