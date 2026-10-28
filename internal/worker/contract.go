@@ -34,8 +34,19 @@ type SessionRequest struct {
 	OutputContract  OutputContract
 	WorkspaceAccess WorkspaceAccess
 	// Web lets the turn search and read the web without asking.
-	Web               bool
+	Web bool
+	// Images are images the turn looks at, relative to its working
+	// directory.
+	Images            []string
 	LaunchEnvironment LaunchEnvironment
+}
+
+// ValidImagePath reports whether path names a file inside a working
+// directory: relative, clean, and never above it.
+func ValidImagePath(path string) bool {
+	clean := filepath.ToSlash(filepath.Clean(path))
+	return path != "" && len(path) <= 512 && clean == path && !filepath.IsAbs(path) &&
+		clean != ".." && !strings.HasPrefix(clean, "../")
 }
 
 // WorkspaceAccess is an explicit per-turn capability boundary. The zero value
@@ -392,6 +403,8 @@ func (request SessionRequest) Validate() error {
 		return fmt.Errorf("%w: model %q is a floating alias", ErrInvalidSessionRequest, request.Model)
 	case strings.TrimSpace(request.Instructions) == "":
 		return fmt.Errorf("%w: instructions are required", ErrInvalidSessionRequest)
+	case slices.ContainsFunc(request.Images, func(image string) bool { return !ValidImagePath(image) }):
+		return fmt.Errorf("%w: images must be relative paths inside the working directory", ErrInvalidSessionRequest)
 	case request.WorkspaceAccess != "" && !request.WorkspaceAccess.IsValid():
 		return fmt.Errorf("%w: workspace access %q is not recognized", ErrInvalidSessionRequest, request.WorkspaceAccess)
 	case request.OutputContract != "" &&
@@ -523,6 +536,7 @@ func (environment LaunchEnvironment) Equal(other LaunchEnvironment) bool {
 
 func (request SessionRequest) Clone() SessionRequest {
 	request.LaunchEnvironment = request.LaunchEnvironment.Clone()
+	request.Images = slices.Clone(request.Images)
 	return request
 }
 

@@ -343,6 +343,9 @@ type RemoteLeadStarter struct {
 	signInCleared func(agentID string)
 	signInTry     func(agentID string)
 	reportError   func(error)
+	// attachments copies the files a turn's instructions name into its
+	// checkout (attachments.go).
+	attachments AttachmentDelivery
 
 	activeMu sync.Mutex
 	active   map[string]struct{}
@@ -497,7 +500,7 @@ func (starter *RemoteLeadStarter) StartWithModels(
 	sessionID := remoteLeadSessionID(runID)
 	userActor := workflow.Actor{Kind: workflow.ActorKindUser, ID: "local-user"}
 	if _, err := starter.goals.AcceptGoalAtStart(
-		ctx, featureID, sessionID, briefGoal(brief), userActor, runID+":start-goal",
+		ctx, featureID, sessionID, withAttachedFrom(briefGoal(brief), storedFeature.Description), userActor, runID+":start-goal",
 	); err != nil {
 		return execution.Run{}, false, err
 	}
@@ -4291,6 +4294,7 @@ func (starter *RemoteLeadStarter) launchAdmitted(request remoteLeadRequest) {
 	} else {
 		request.request.WorkspaceAccess = workerhttp.WorkspaceAccessReadWrite
 	}
+	starter.withAttachments(ctx, &request.request)
 	attempt, _, putErr := starter.worker.PutAttempt(ctx, request.identity, request.request)
 	if putErr != nil {
 		// The PUT response may have been lost after the worker durably admitted

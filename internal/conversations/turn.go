@@ -20,11 +20,21 @@ import (
 // Send adds the user's message and starts the assistant's turn. A retry with
 // the same key answers the turn it started.
 func (service *Service) Send(ctx context.Context, scope, message, key string) (Conversation, error) {
+	return service.SendAttached(ctx, scope, message, key, nil)
+}
+
+// SendAttached sends a message carrying files, named among the scope's
+// documents (attachments.go).
+func (service *Service) SendAttached(ctx context.Context, scope, message, key string, attachments []string) (Conversation, error) {
 	message, key = strings.TrimSpace(message), strings.TrimSpace(key)
-	if message == "" || key == "" || len(message) > workerhttp.MaxInstructionsBytes/4 {
+	if (message == "" && len(attachments) == 0) || key == "" || len(message) > workerhttp.MaxInstructionsBytes/4 {
 		return Conversation{}, ErrInvalid
 	}
 	if err := service.checkScope(ctx, scope); err != nil {
+		return Conversation{}, err
+	}
+	attachments, err := service.checkAttachments(ctx, scope, attachments)
+	if err != nil {
 		return Conversation{}, err
 	}
 	// Without an agent to run on, the assistant says what to set up rather
@@ -55,16 +65,17 @@ func (service *Service) Send(ctx context.Context, scope, message, key string) (C
 			stored.Keys[key] = "queued"
 			stored.Queued = append(stored.Queued, Message{
 				ID: fmt.Sprintf("queued_%s_%d", stored.Scope, stored.Turn*100+len(stored.Queued)+1), Role: "user",
-				Text: message, OccurredAt: service.now(),
+				Text: message, Attachments: attachments, OccurredAt: service.now(),
 			})
 			stored.UpdatedAt = service.now()
 			return stored.Conversation, service.write(stored)
 		}
 	}
 	stored.Messages = append(stored.Messages, Message{
-		ID: messageID(stored, len(stored.Messages)), Role: "user", Text: message, OccurredAt: service.now(),
+		ID: messageID(stored, len(stored.Messages)), Role: "user", Text: message, Attachments: attachments,
+		OccurredAt: service.now(),
 	})
-	prompt := "The user says:\n" + message
+	prompt := "The user says:\n" + withAttachments(message, attachments)
 	if stored.SignIn != nil && stored.LastTurn != nil {
 		// The turn kept for its agent's login is still unanswered: this one
 		// carries it along.
@@ -107,13 +118,18 @@ func (service *Service) startTurn(
 		stored.Keys = map[string]string{}
 	}
 	stored.Keys[key] = stored.AttemptID
-	stored.LastTurn = &turnInput{Role: promptRole, Prompt: prompt}
+	attached := turnAttachments(stored, promptRole)
+	stored.LastTurn = &turnInput{Role: promptRole, Prompt: prompt, Attachments: attached}
 	stored.Status = StatusRunning
 	stored.UpdatedAt = now
 	if fresh {
 		if err := service.prepareWorkspace(ctx, scope, workspaceID); err != nil {
 			return Conversation{}, err
 		}
+	}
+	images, err := service.deliverAttachments(ctx, scope, workspaceID, attached)
+	if err != nil {
+		return Conversation{}, err
 	}
 	state, err := service.config.Describer.Describe(ctx, scope)
 	if err != nil {
@@ -163,6 +179,7 @@ func (service *Service) startTurn(
 		Instructions:      instructions,
 		OutputContract:    contract,
 		WorkspaceAccess:   workerhttp.WorkspaceAccessReadOnly,
+		Images:            images,
 	}
 	if fresh {
 		request.Mode = workerhttp.AttemptModeStart
@@ -387,7 +404,7 @@ func recentConversation(stored record, promptRole string) string {
 	}
 	var builder strings.Builder
 	for _, message := range messages {
-		text := message.Text
+		text := withAttachments(message.Text, message.Attachments)
 		if len(text) > 2000 {
 			text = text[:2000] + "…"
 		}

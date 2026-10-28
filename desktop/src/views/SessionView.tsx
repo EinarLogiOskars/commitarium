@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { AttachButton, AttachmentChips, useAttachments } from "./Attachments";
 import { deleteFeature, finishSession, renameFeature, sendSessionTurn } from "../api/features";
 import { recoverRun } from "../api/runs";
 import { ApiError } from "../api/client";
@@ -42,6 +43,7 @@ export function SessionView({
   onOpenValidation?: () => void;
 }) {
   const [reply, setReply] = useState("");
+  const attachments = useAttachments(projectId);
   const [busy, setBusy] = useState<null | "send" | "finish" | "continue" | "rename" | "delete">(
     null,
   );
@@ -109,21 +111,25 @@ export function SessionView({
     }
   };
 
+  const hasMessage = !!reply.trim() || attachments.items.length > 0;
   const send = async () => {
     const text = reply.trim();
-    if (!text) return;
+    if (!hasMessage) return;
     pinnedToBottom.current = true;
-    const sent = await act("send", () =>
-      sendSessionTurn(projectId, feature.id, text, crypto.randomUUID()),
+    const sent = await act("send", async () =>
+      sendSessionTurn(projectId, feature.id, text, crypto.randomUUID(), await attachments.upload()),
     );
-    if (sent) setReply("");
+    if (sent) {
+      setReply("");
+      attachments.clear();
+    }
   };
 
   // Enter sends; Shift+Enter starts a new line.
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key !== "Enter" || e.shiftKey) return;
     e.preventDefault();
-    if (canSend && reply.trim()) void send();
+    if (canSend && hasMessage) void send();
   };
 
   const discard = async () => {
@@ -330,7 +336,10 @@ export function SessionView({
           />
         )}
         {!done && (
-          <div className="composer">
+          <div
+            className={`composer${attachments.dragging ? " composer--drop" : ""}`}
+            {...attachments.dropProps}
+          >
             {status && (
               <p className="muted status-line">
                 {status}
@@ -352,16 +361,24 @@ export function SessionView({
                 onClose={() => setChangingModel(false)}
               />
             )}
+            {attachments.problem && <p className="note composer__problem">{attachments.problem}</p>}
+            <AttachmentChips
+              items={attachments.items}
+              onRemove={attachments.remove}
+              disabled={busy !== null}
+            />
             <div className="reply">
               <textarea
                 placeholder={model ? `Message ${model}…` : "Message the agent…"}
                 value={reply}
                 onChange={(e) => setReply(e.target.value)}
+                onPaste={attachments.onPaste}
                 onKeyDown={onKeyDown}
                 disabled={!canSend}
                 rows={2}
               />
-              <button onClick={() => void send()} disabled={!canSend || !reply.trim()}>
+              <AttachButton onFiles={attachments.add} disabled={!canSend} />
+              <button onClick={() => void send()} disabled={!canSend || !hasMessage}>
                 {busy === "send" ? "Sending…" : "Send"}
               </button>
             </div>

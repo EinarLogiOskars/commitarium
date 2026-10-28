@@ -1,3 +1,5 @@
+import { SCREENSHOT_PROMPT, captureScreenshot, nextPaint } from "./screenshot";
+import { AttachButton, AttachmentChips, SentAttachments, useAttachments } from "./Attachments";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   approveAssistantAction,
@@ -15,7 +17,7 @@ import {
   type Conversation,
 } from "../api/assistant";
 import { ApiError } from "../api/client";
-import { openAppWindow } from "../ipc";
+import { openAppWindow, webviewSnapshot, webviewSnapshotSupported } from "../ipc";
 import { getVision, pausePlanning, startPlanning } from "../api/vision";
 import { developerModeOn } from "../devMode";
 import { getProject } from "../api/projects";
@@ -65,6 +67,7 @@ export function AssistantDrawer({
   docked,
   onGoalChange,
   onLaunchChange,
+  screenshot = false,
 }: {
   scope: string;
   scopeLabel: string;
@@ -77,6 +80,9 @@ export function AssistantDrawer({
   onGoalChange?: (goal: AutopilotGoal | null) => void;
   /** A new app's launch stage while it is planned or set up, else null. */
   onLaunchChange?: (stage: LaunchStage | null) => void;
+  /** Offers "Take a screenshot and describe what to change": over an app's
+   * own window, a capture of the app as the user sees it. */
+  screenshot?: boolean;
 }) {
   const [conversation, setConversationState] = useState<Conversation | null>(null);
   // Work autopilot changed reloads the project's lists, as the user's own
@@ -99,7 +105,36 @@ export function AssistantDrawer({
   );
   const [error, setError] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
+  // The top-level conversation's files are its own; a project's are the
+  // project's documents.
+  const attachments = useAttachments(scope);
   const [sending, setSending] = useState(false);
+  // The screenshot button shows where the window can be captured; while it
+  // is, the assistant hides, so the image is only the app.
+  const [captureSupported, setCaptureSupported] = useState(false);
+  const canCapture = screenshot && captureSupported;
+  const [capturing, setCapturing] = useState(false);
+  const [askChange, setAskChange] = useState(false);
+  useEffect(() => {
+    webviewSnapshotSupported()
+      .then(setCaptureSupported)
+      .catch(() => setCaptureSupported(false));
+  }, []);
+  const takeScreenshot = async () => {
+    setError(null);
+    try {
+      const shot = await captureScreenshot({
+        hide: setCapturing,
+        painted: nextPaint,
+        snapshot: webviewSnapshot,
+      });
+      attachments.add([shot]);
+      setAskChange(true);
+      composerRef.current?.focus();
+    } catch (e) {
+      setError(`The screenshot could not be taken: ${describe(e)}`);
+    }
+  };
   const [notesOpen, setNotesOpen] = useState(false);
   const [unseen, setUnseen] = useState(false);
   const chatRef = useRef<HTMLDivElement | null>(null);
@@ -288,14 +323,18 @@ export function AssistantDrawer({
     if (el) el.scrollTop = el.scrollHeight;
   }, [count, running, open, notesOpen]);
 
+  const canSend = !!draft.trim() || attachments.items.length > 0;
   const send = async () => {
     const text = draft.trim();
-    if (!text) return;
+    if (!canSend) return;
     setSending(true);
     setError(null);
     try {
-      setConversation(await sendToAssistant(scope, text, crypto.randomUUID()));
+      const names = await attachments.upload();
+      setConversation(await sendToAssistant(scope, text, crypto.randomUUID(), names));
       setDraft("");
+      attachments.clear();
+      setAskChange(false);
     } catch (e) {
       if (e instanceof ApiError && (e.code === "no_agents" || e.code === "assistant_not_set_up")) {
         // The guidance shows what to set up; the message waits in the box.
@@ -343,7 +382,7 @@ export function AssistantDrawer({
     <>
       {/* One button in the corner opens and closes the drawer. */}
       <button
-        className={`assistant-fab ${open ? "assistant-fab--open" : ""} ${running && !open ? "assistant-fab--working" : ""}`}
+        className={`assistant-fab ${open ? "assistant-fab--open" : ""} ${running && !open ? "assistant-fab--working" : ""} ${capturing ? "assistant--capturing" : ""}`}
         onClick={() => setOpen(!open)}
         title={
           open
@@ -378,7 +417,7 @@ export function AssistantDrawer({
       </button>
       {open && (
         <aside
-          className={`assistant-drawer ${docked ? "assistant-drawer--docked" : ""}`}
+          className={`assistant-drawer ${docked ? "assistant-drawer--docked" : ""} ${capturing ? "assistant--capturing" : ""}`}
           aria-label="Assistant"
         >
           <header className="assistant-drawer__head">
@@ -472,6 +511,7 @@ export function AssistantDrawer({
                         </span>
                         <div className="msg__text">
                           <Markdown text={message.text} />
+                          <SentAttachments owner={scope} names={message.attachments} />
                         </div>
                       </div>
                       {(byMessage.get(message.id) ?? []).map(renderAction)}
@@ -502,6 +542,7 @@ export function AssistantDrawer({
                       <span className="msg__who">You · queued</span>
                       <div className="msg__text">
                         <Markdown text={message.text} />
+                        <SentAttachments owner={scope} names={message.attachments} />
                       </div>
                     </div>
                     <p className="muted note assistant__queued-note">
@@ -511,7 +552,10 @@ export function AssistantDrawer({
                 ))}
               </div>
               {error && <div className="banner banner--error">{error}</div>}
-              <div className="composer">
+              <div
+                className={`composer${attachments.dragging ? " composer--drop" : ""}`}
+                {...attachments.dropProps}
+              >
                 {conversation.focus && (
                   <div className="assistant__focus">
                     <span className="pill" title="What this conversation is about">
@@ -530,6 +574,23 @@ export function AssistantDrawer({
                     </button>
                   </div>
                 )}
+                {attachments.problem && (
+                  <p className="note composer__problem">{attachments.problem}</p>
+                )}
+                {canCapture && !draft.trim() && attachments.items.length === 0 && (
+                  <button
+                    className="ghost composer__screenshot-hint"
+                    onClick={() => void takeScreenshot()}
+                    disabled={sending}
+                  >
+                    📷 Show the assistant
+                  </button>
+                )}
+                <AttachmentChips
+                  items={attachments.items}
+                  onRemove={attachments.remove}
+                  disabled={sending}
+                />
                 <div className="reply">
                   <textarea
                     ref={composerRef}
@@ -537,23 +598,35 @@ export function AssistantDrawer({
                     value={draft}
                     autoFocus
                     placeholder={
-                      running
-                        ? "The assistant is busy; write anyway, it answers next…"
-                        : "Ask the assistant…"
+                      askChange
+                        ? SCREENSHOT_PROMPT
+                        : running
+                          ? "The assistant is busy; write anyway, it answers next…"
+                          : "Ask the assistant…"
                     }
                     onChange={(e) => setDraft(e.target.value)}
+                    onPaste={attachments.onPaste}
                     onKeyDown={(e) => {
                       if (e.key === "Escape") setOpen(false);
                       if (e.key !== "Enter" || e.shiftKey) return;
                       e.preventDefault();
-                      if (!sending && !guidance && draft.trim()) void send();
+                      if (!sending && !guidance && canSend) void send();
                     }}
                     disabled={sending}
                   />
-                  <button
-                    onClick={() => void send()}
-                    disabled={sending || !!guidance || !draft.trim()}
-                  >
+                  {canCapture && (
+                    <button
+                      className="ghost attach-button"
+                      aria-label="Take a screenshot and describe what to change"
+                      title="Take a screenshot and describe what to change"
+                      onClick={() => void takeScreenshot()}
+                      disabled={sending}
+                    >
+                      📷
+                    </button>
+                  )}
+                  <AttachButton onFiles={attachments.add} disabled={sending} />
+                  <button onClick={() => void send()} disabled={sending || !!guidance || !canSend}>
                     {sending ? "Sending…" : "Send"}
                   </button>
                 </div>

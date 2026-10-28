@@ -829,3 +829,30 @@ func TestChangesNothingNeedsEveryFindingAnsweredWithoutAChange(t *testing.T) {
 		}
 	}
 }
+
+// A turn's images are paths inside its working directory, and few.
+func TestATurnsImagesStayInItsWorkingDirectory(t *testing.T) {
+	identity := MutationIdentity{AttemptReference: AttemptReference{SessionID: "ses_1", AttemptID: "att_1"}, IdempotencyKey: "key"}
+	request := PutAttemptRequest{
+		Mode:         AttemptModeStart,
+		Assignment:   Assignment{AgentProfileID: "codex", ProjectID: "prj_1", FeatureID: "fea_1", Role: RoleConsultant, WorkspaceID: "ws_1"},
+		Instructions: "Look.",
+		Images:       []string{".commitarium/documents/shot.png"},
+	}
+	if err := request.Validate(identity); err != nil {
+		t.Fatal(err)
+	}
+	for _, image := range []string{"/etc/passwd", "../shot.png", "a/../../shot.png", "./shot.png", ""} {
+		request.Images = []string{image}
+		if err := request.Validate(identity); err == nil {
+			t.Fatalf("image %q was accepted", image)
+		}
+	}
+	request.Images = make([]string, MaxImages+1)
+	for index := range request.Images {
+		request.Images[index] = "shot.png"
+	}
+	if err := request.Validate(identity); err == nil {
+		t.Fatal("too many images were accepted")
+	}
+}

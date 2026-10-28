@@ -35,6 +35,8 @@ type SignInWait struct {
 type turnInput struct {
 	Role   string `json:"role"`
 	Prompt string `json:"prompt"`
+	// Attachments are the files the turn carried.
+	Attachments []string `json:"attachments,omitempty"`
 }
 
 // SignIns records agents that need the user to sign in again, shared with

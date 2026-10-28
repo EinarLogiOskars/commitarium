@@ -163,6 +163,10 @@ type AssistantAction struct {
 	// what it guessed, shown on the card.
 	AppBrief    string   `json:"app_brief,omitempty"`
 	Assumptions []string `json:"assumptions,omitempty"`
+	// Attachments, for create_work_order, name the files the user attached
+	// that its agents need; the work order's goal names them, so the lead
+	// sees them.
+	Attachments []string `json:"attachments,omitempty"`
 	// Decisions and OpenQuestions, for update_plan, replace the plan's lists
 	// in full; PlanItems, when any, replace its build plan, and
 	// StackPresets, when any, with Frameworks, its stack.
@@ -199,6 +203,7 @@ const (
 	// notes with a line that introduces it.
 	MaxAppBriefBytes = 15 * 1024
 	maxAssumptions   = 20
+	maxAttachments   = 10
 	maxPlanItems     = 60
 	maxPlanLines     = 40
 )
@@ -224,7 +229,9 @@ func (turn AssistantTurn) Normalize() (AssistantTurn, error) {
 		} {
 			*field = strings.TrimSpace(*field)
 		}
-		for _, list := range []*[]string{&action.Assumptions, &action.Decisions, &action.OpenQuestions, &action.StackPresets} {
+		for _, list := range []*[]string{
+			&action.Assumptions, &action.Decisions, &action.OpenQuestions, &action.StackPresets, &action.Attachments,
+		} {
 			kept := (*list)[:0:0]
 			for _, line := range *list {
 				if line = strings.TrimSpace(line); line != "" {
@@ -260,6 +267,14 @@ func (action AssistantAction) validate() error {
 	case AssistantCreateWorkOrder:
 		if action.Title == "" || len(action.Title) > MaxStepTextBytes || len(action.Description) > MaxGoalBytes {
 			return fmt.Errorf("a work order needs a title and a bounded description")
+		}
+		if len(action.Attachments) > maxAttachments {
+			return fmt.Errorf("a work order carries at most %d attached files", maxAttachments)
+		}
+		for _, name := range action.Attachments {
+			if len(name) > 100 || strings.ContainsAny(name, "/\\") {
+				return fmt.Errorf("an attached file is named by its file name alone")
+			}
 		}
 	case AssistantStartWorkOrder:
 		if action.WorkOrderID == "" {

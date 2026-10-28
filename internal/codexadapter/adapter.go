@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -274,14 +275,27 @@ func (adapter *Adapter) Models(ctx context.Context, workingDirectory string, env
 	return models, nil
 }
 
-type textInput struct {
+// userInput is a turn's text, or an image Codex reads from a local path.
+type userInput struct {
 	Type string `json:"type"`
-	Text string `json:"text"`
+	Text string `json:"text,omitempty"`
+	Path string `json:"path,omitempty"`
+}
+
+// turnInput is the prompt followed by the turn's images, by absolute path.
+func turnInput(prompt string, request worker.SessionRequest) []userInput {
+	input := []userInput{{Type: "text", Text: prompt}}
+	for _, image := range request.Images {
+		input = append(input, userInput{
+			Type: "localImage", Path: filepath.Join(request.LaunchEnvironment.WorkingDirectory, filepath.FromSlash(image)),
+		})
+	}
+	return input
 }
 
 type turnStartParams struct {
 	ThreadID     string      `json:"threadId"`
-	Input        []textInput `json:"input"`
+	Input        []userInput `json:"input"`
 	OutputSchema any         `json:"outputSchema,omitempty"`
 	// Effort overrides the reasoning effort for this turn and later ones.
 	Effort string `json:"effort,omitempty"`
@@ -392,7 +406,7 @@ func (adapter *Adapter) launch(
 	var turnStarted turnResponse
 	if err := client.request(operationCtx, "turn/start", turnStartParams{
 		ThreadID:     threadID,
-		Input:        []textInput{{Type: "text", Text: prompt}},
+		Input:        turnInput(prompt, request),
 		OutputSchema: worker.OutputJSONSchema(request.OutputContract),
 		Effort:       strings.TrimSpace(request.Effort),
 	}, &turnStarted); err != nil {

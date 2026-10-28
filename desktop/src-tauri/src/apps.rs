@@ -52,6 +52,8 @@ pub async fn open_app_window(
         .inner_size(1100.0, 780.0)
         .min_inner_size(480.0, 360.0)
         .initialization_script(&script)
+        // Files dropped on a composer reach the page, to attach them.
+        .disable_drag_drop_handler()
         .build()
         .map(|_| ())
         .map_err(|e| e.to_string())

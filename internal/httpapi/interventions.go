@@ -18,6 +18,8 @@ const maxInterventionRequestBytes = 128 * 1024
 type interventionRequest struct {
 	Target  worker.Role `json:"target"`
 	Message string      `json:"message"`
+	// Attachments name the project's documents attached to it.
+	Attachments []string `json:"attachments,omitempty"`
 }
 
 func (api *API) queueInterventionHandler(w http.ResponseWriter, r *http.Request) {
@@ -35,12 +37,25 @@ func (api *API) queueInterventionHandler(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if (request.Target != worker.RoleLead && request.Target != worker.RoleReviewer) ||
-		strings.TrimSpace(request.Message) == "" {
+		(strings.TrimSpace(request.Message) == "" && len(request.Attachments) == 0) {
 		writeError(w, http.StatusBadRequest, "invalid_intervention", "target must be lead or reviewer and message must not be blank")
 		return
 	}
 
 	runID := r.PathValue("id")
+	if len(request.Attachments) > 0 {
+		// The agent reads the files in its checkout, named in the message.
+		projectID, found := api.runProject(r, runID)
+		if !found {
+			writeError(w, http.StatusNotFound, "run_not_found", "run not found")
+			return
+		}
+		message, ok := api.attachedMessage(w, r, projectID, request.Message, request.Attachments)
+		if !ok {
+			return
+		}
+		request.Message = message
+	}
 	_, _, err := api.realWorkflow.QueueIntervention(
 		r.Context(), runID, interventionIDForKey(key), request.Target, request.Message,
 	)
@@ -77,4 +92,22 @@ func (api *API) queueInterventionHandler(w http.ResponseWriter, r *http.Request)
 func interventionIDForKey(key string) string {
 	digest := sha256.Sum256([]byte(key))
 	return "int_" + hex.EncodeToString(digest[:16])
+}
+
+// runProject finds the project a run's work order belongs to.
+func (api *API) runProject(r *http.Request, runID string) (string, bool) {
+	run, err := api.execution.GetRun(r.Context(), runID)
+	if err != nil {
+		return "", false
+	}
+	projects, err := api.projects.List(r.Context())
+	if err != nil {
+		return "", false
+	}
+	for _, candidate := range projects {
+		if _, err := api.features.GetByID(r.Context(), candidate.ID, run.FeatureID); err == nil {
+			return candidate.ID, true
+		}
+	}
+	return "", false
 }

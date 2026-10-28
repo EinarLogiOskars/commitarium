@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-webview-snapshot-supported"
+description = "Enables the webview_snapshot_supported command without any pre-configured scope."
+commands.allow = ["webview_snapshot_supported"]
+
+[[permission]]
+identifier = "deny-webview-snapshot-supported"
+description = "Denies the webview_snapshot_supported command without any pre-configured scope."
+commands.deny = ["webview_snapshot_supported"]
