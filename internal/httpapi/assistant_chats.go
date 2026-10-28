@@ -35,6 +35,7 @@ func (api *API) registerChatRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST "+chat+"/actions/{actionID}/approve", inChat(api.approveConversationActionHandler))
 	mux.HandleFunc("POST "+chat+"/actions/{actionID}/dismiss", inChat(api.dismissConversationActionHandler))
 	mux.HandleFunc("POST "+chat+"/autopilot", inChat(api.startAutopilotHandler))
+	mux.HandleFunc("POST /api/v1/assistant/conversations/"+conversations.TopLevel+"/chats/{chat}/project", api.makeProjectHandler)
 }
 
 // inChat has a scope's handler act on the route's chat.

@@ -47,6 +47,32 @@ every slice ships on its own.
 - Test: the chat lands in the project, and the vision writer receives the
   transcript.
 
+**Decided differently (D2, with chat naming):**
+
+- **The "vision writer" is the planning assistant.** `plan_project` opens
+  the planning workspace rather than running the write_vision helper, so
+  the transcript goes to the project's assistant as planning wakes it
+  (`vision/planning` takes an optional `transcript`). The moved chat's next
+  turn starts a fresh provider session, which also reads the chat so far.
+- **Approving the card moves the chat after the card is applied**, so the
+  chat arrives in the project with its applied card, and the approval
+  answers the moved chat. A failure after the project exists says so
+  (`502 project_not_started`), as before.
+- **The route takes an optional `name` and `goal`.** Without them the
+  project is named after the chat's title and planning starts from the
+  name; the assistant fills the goal in from the transcript.
+- **`main` is never reused once it moves.** The top level's `main` chat
+  moving out marks the scope, so its next chats are `chat_` ones: the
+  moved chat's action IDs (and the idempotency keys built on them) stay
+  unique.
+- **The events a chat had yet to hear move with it.** Helpers it started
+  at the top level stay there and report to the most recently used chat.
+- **Chat names come from the assistant.** Each turn's result has an
+  optional `chat_title`. A chat named after its first message (D1's
+  migration and new chats) is a placeholder: the next turn asks the
+  assistant for a name and takes it, once. A name the user gave, by
+  renaming or when creating the chat, is never overwritten.
+
 ## D3: The chat shell (desktop, Developer mode)
 
 - A new Developer-mode layout replaces Projects + project page:

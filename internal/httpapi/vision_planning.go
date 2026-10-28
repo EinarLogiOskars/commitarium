@@ -37,6 +37,9 @@ type startPlanningRequest struct {
 	// Goal is what the project is for; it starts the vision when there is
 	// none yet.
 	Goal string `json:"goal"`
+	// Transcript is the chat the project grew from, which its assistant
+	// hears as planning starts.
+	Transcript string `json:"transcript,omitempty"`
 }
 
 // startPlanningHandler puts the project's vision in planning, or resumes
@@ -62,7 +65,8 @@ func (api *API) startPlanningHandler(w http.ResponseWriter, r *http.Request) {
 				"Open the conversation like a first meeting: say in a line or two what you understood (your notes "+
 				"may hold what was settled before), fill the plan in with the goal and the agenda's topics as open "+
 				"questions, and ask one to three questions on the first topic still open. If the plan already has "+
-				"decisions, planning was stopped and is resumed: pick up where you left off instead."); err != nil {
+				"decisions, planning was stopped and is resumed: pick up where you left off instead."+
+				grewFrom(body.Transcript)); err != nil {
 			log.Printf("wake the assistant of project %q to plan it: %v", projectID, err)
 		}
 	}

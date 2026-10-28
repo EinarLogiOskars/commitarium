@@ -246,6 +246,8 @@ type record struct {
 	Archived  bool      `json:"-"`
 	CreatedAt time.Time `json:"-"`
 	UsedAt    time.Time `json:"-"`
+	// TitleBy says who named the chat (chats.go).
+	TitleBy string `json:"-"`
 	// base is the project's state as read, so a write keeps what other chats
 	// changed meanwhile; elsewhere the other chats' actions, when loaded.
 	base      sharedState

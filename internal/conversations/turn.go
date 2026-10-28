@@ -317,6 +317,7 @@ func (service *Service) refresh(ctx context.Context, stored record) (record, err
 			if turn.Notes != "" {
 				stored.Notes = turn.Notes
 			}
+			stored.nameChat(turn.ChatTitle)
 			answers := slices.ContainsFunc(turn.Actions, func(action featureartifact.AssistantAction) bool {
 				return sentAtOnce(action.Type)
 			})
@@ -418,6 +419,10 @@ func turnInstructions(scope string, stored record, settings Settings, state, oth
 	builder.WriteString(goalInstructions(stored.Goal))
 	builder.WriteString(recentActions(stored.Actions, stored.BuildsSince))
 	builder.WriteString(others)
+	if stored.untitled() {
+		builder.WriteString("\n\nThis chat has no name yet: set chat_title to a few words saying what it is about " +
+			"(\"Bank CSV import\", \"Sign-in bug\"), once you can tell.")
+	}
 	builder.WriteString("\n\n" + prompt)
 	text := builder.String()
 	if len(text) > workerhttp.MaxInstructionsBytes {
@@ -454,7 +459,9 @@ func rules(scope string, settings Settings) string {
 			"When the user wants a new app, you settle with them what to build, as the closing instructions of " +
 			"each turn say, and propose create_app, or plan_project for a real project in Developer mode. Those " +
 			"are the only actions you take at the top level, besides research; Commitarium then plans, sets up, " +
-			"and builds the app, or opens the project's planning workspace."
+			"and builds the app, or opens the project's planning workspace. Each chat here is a loose chat, not " +
+			"yet part of a project: research, sketch, and explain freely, but create no work; once the user makes " +
+			"it a project, this chat moves into the project with everything said in it."
 	}
 	maxEffort := settings.MaxEffort
 	if maxEffort == "" {

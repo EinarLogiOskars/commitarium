@@ -559,10 +559,11 @@ func ResolveStructuredOutput(
 
 	case OutputContractAssistantTurn, OutputContractAssistantPlanningTurn:
 		var response struct {
-			Message string                            `json:"message"`
-			Actions []featureartifact.AssistantAction `json:"actions"`
-			Notes   string                            `json:"notes"`
-			Plan    *struct {
+			Message   string                            `json:"message"`
+			Actions   []featureartifact.AssistantAction `json:"actions"`
+			Notes     string                            `json:"notes"`
+			ChatTitle string                            `json:"chat_title"`
+			Plan      *struct {
 				Goal          string                     `json:"goal"`
 				Step          string                     `json:"step"`
 				Decisions     []string                   `json:"decisions"`
@@ -579,7 +580,9 @@ func ResolveStructuredOutput(
 		if response.Message == "" {
 			return StructuredOutput{}, invalidStructuredOutput("assistant response has no message")
 		}
-		turn, err := featureartifact.AssistantTurn{Actions: response.Actions, Notes: response.Notes}.Normalize()
+		turn, err := featureartifact.AssistantTurn{
+			Actions: response.Actions, Notes: response.Notes, ChatTitle: response.ChatTitle,
+		}.Normalize()
 		if err != nil {
 			return StructuredOutput{}, invalidStructuredOutput("assistant turn: %v", err)
 		}
@@ -845,8 +848,10 @@ func assistantTurnSchema(planning bool) map[string]any {
 		"message": text,
 		"actions": map[string]any{"type": "array", "items": action},
 		"notes":   map[string]any{"type": "string", "description": "Your full notes, replacing the old ones; empty keeps them."},
+		"chat_title": map[string]any{"type": "string", "description": "When Commitarium says this chat has no name yet: " +
+			"a few words saying what it is about. Otherwise empty."},
 	}
-	required := []string{"message", "actions", "notes"}
+	required := []string{"message", "actions", "notes", "chat_title"}
 	if planning {
 		properties["plan"] = objectSchema(
 			map[string]any{

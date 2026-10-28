@@ -66,3 +66,18 @@ func TestAProjectToPlanNeedsANameAndAGoal(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// A turn's chat title is optional: trimmed to one line, and refused only
+// when far too long.
+func TestATurnsChatTitleIsOptional(t *testing.T) {
+	turn, err := AssistantTurn{ChatTitle: "  Bank \n CSV   import "}.Normalize()
+	if err != nil || turn.ChatTitle != "Bank CSV import" {
+		t.Fatalf("turn = %+v err=%v", turn, err)
+	}
+	if turn, err := (AssistantTurn{}).Normalize(); err != nil || turn.ChatTitle != "" {
+		t.Fatalf("turn = %+v err=%v", turn, err)
+	}
+	if _, err := (AssistantTurn{ChatTitle: strings.Repeat("x", MaxChatTitleBytes+1)}).Normalize(); !errors.Is(err, ErrInvalidArtifact) {
+		t.Fatalf("an overlong title = %v", err)
+	}
+}

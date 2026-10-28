@@ -14,6 +14,9 @@ type AssistantTurn struct {
 	// Notes replaces the assistant's notes for its scope when non-empty:
 	// decisions, preferences, and a catalog of reusable work.
 	Notes string `json:"notes"`
+	// ChatTitle names the chat in a few words, while it has no name the user
+	// or the assistant gave it; empty keeps its name.
+	ChatTitle string `json:"chat_title,omitempty"`
 }
 
 type AssistantActionType string
@@ -199,6 +202,9 @@ const (
 	// start a whole wave of work orders at once.
 	MaxAssistantActions   = 32
 	MaxAssistantNoteBytes = 16 * 1024
+	// MaxChatTitleBytes bounds the title an assistant turn gives its chat,
+	// which the coordinator shortens to fit the chat list.
+	MaxChatTitleBytes = 1024
 	// MaxAppBriefBytes bounds a new app's brief, so it fits the new app's
 	// notes with a line that introduces it.
 	MaxAppBriefBytes = 15 * 1024
@@ -211,6 +217,10 @@ const (
 // Normalize trims the turn and checks its actions.
 func (turn AssistantTurn) Normalize() (AssistantTurn, error) {
 	turn.Notes = strings.TrimSpace(turn.Notes)
+	turn.ChatTitle = strings.Join(strings.Fields(turn.ChatTitle), " ")
+	if len(turn.ChatTitle) > MaxChatTitleBytes {
+		return AssistantTurn{}, fmt.Errorf("%w: the chat's title is too long", ErrInvalidArtifact)
+	}
 	if len(turn.Notes) > MaxAssistantNoteBytes {
 		return AssistantTurn{}, fmt.Errorf("%w: the assistant's notes are too long", ErrInvalidArtifact)
 	}
