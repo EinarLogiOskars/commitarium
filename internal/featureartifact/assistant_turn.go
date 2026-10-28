@@ -191,7 +191,9 @@ func (action AssistantAction) PhaseChoices() *project.PhaseChoices {
 }
 
 const (
-	maxAssistantActions   = 8
+	// MaxAssistantActions bounds a turn's actions: enough to create and
+	// start a whole wave of work orders at once.
+	MaxAssistantActions   = 32
 	MaxAssistantNoteBytes = 16 * 1024
 	// MaxAppBriefBytes bounds a new app's brief, so it fits the new app's
 	// notes with a line that introduces it.
@@ -207,8 +209,8 @@ func (turn AssistantTurn) Normalize() (AssistantTurn, error) {
 	if len(turn.Notes) > MaxAssistantNoteBytes {
 		return AssistantTurn{}, fmt.Errorf("%w: the assistant's notes are too long", ErrInvalidArtifact)
 	}
-	if len(turn.Actions) > maxAssistantActions {
-		return AssistantTurn{}, fmt.Errorf("%w: at most %d actions per turn", ErrInvalidArtifact, maxAssistantActions)
+	if len(turn.Actions) > MaxAssistantActions {
+		return AssistantTurn{}, fmt.Errorf("%w: at most %d actions per turn", ErrInvalidArtifact, MaxAssistantActions)
 	}
 	for index := range turn.Actions {
 		action := &turn.Actions[index]
