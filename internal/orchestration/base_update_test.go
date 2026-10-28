@@ -362,6 +362,9 @@ func TestAutomaticUpdatesStopAtTheLimitAndContinueTakesGuidance(t *testing.T) {
 		len(fixture.updateRequests()) != maxAutomaticBaseUpdates || blocked.Reason != implementationMergeBehindMainReason {
 		t.Fatalf("automatic updates did not stop after %d: run=%+v workspace=%+v", maxAutomaticBaseUpdates, blocked, fixture.workspace)
 	}
+	if failed, err := fixture.starter.baseUpdatesFailed(t.Context(), blocked); err != nil || failed != maxAutomaticBaseUpdates {
+		t.Fatalf("failed updates = %d err=%v, want each refused with main unchanged", failed, err)
+	}
 	for _, update := range fixture.updateRequests() {
 		if strings.Contains(update.Instructions, "User guidance") {
 			t.Fatalf("an automatic update carried user guidance: %q", update.Instructions)

@@ -481,6 +481,8 @@ function UsageLine({ usage }: { usage: FeatureUsage }) {
 // The coordinator's reason while the lead brings main into approved work
 // (ADR-025); the update then goes through review and the merge gate again.
 const UPDATING_ONTO_MAIN = /^Main moved after this revision was approved/;
+// The coordinator's reason while approved work waits its turn to merge.
+const IN_MERGE_QUEUE = /^Waiting to merge: /;
 
 function waitBanner(run: Run, state: string) {
   if (!run.paused && run.status === "running" && UPDATING_ONTO_MAIN.test(run.reason ?? "")) {
@@ -505,10 +507,21 @@ function waitBanner(run: Run, state: string) {
   // than on the mere presence of one.
   const validationPending =
     kind === "merge_gate" && /waiting for isolated validation/i.test(run.reason ?? "");
-  const label = validationPending ? "Validation pending" : WAIT_LABELS[kind];
+  // Work that merges on its own waits its turn in the project's merge queue
+  // (ADR-036); the reason says its place.
+  const inLine = kind === "merge_gate" && IN_MERGE_QUEUE.test(run.reason ?? "");
+  const label = validationPending
+    ? "Validation pending"
+    : inLine
+      ? "Waiting to merge"
+      : WAIT_LABELS[kind];
   if (!label && !run.reason) return null;
   const tone =
-    kind === "paused" || validationPending ? "warn" : kind === "merge_gate" ? "ok" : "warn";
+    kind === "paused" || validationPending || inLine
+      ? "warn"
+      : kind === "merge_gate"
+        ? "ok"
+        : "warn";
   return (
     <div className={`wait-banner wait-banner--${tone}`}>
       <span className="wait-banner__kind">{label ?? "Waiting"}</span>

@@ -59,12 +59,23 @@ type Settings struct {
 	AskBeforeMigrated bool     `json:"ask_before_migrated,omitempty"`
 	// MaxEffort is the highest reasoning effort the assistant may choose
 	// (ADR-031); the user's own choices are not limited.
-	MaxEffort string    `json:"max_effort"`
-	UpdatedAt time.Time `json:"updated_at"`
+	MaxEffort string `json:"max_effort"`
+	// MaxRunning is the most work orders the assistant runs at once in a
+	// project (ADR-036); its further starts wait for a slot. The user's own
+	// Starts are not limited.
+	MaxRunning int       `json:"max_running"`
+	UpdatedAt  time.Time `json:"updated_at"`
 }
 
 // DefaultMaxEffort caps the assistant's efforts until the user chooses.
 const DefaultMaxEffort = "high"
+
+// DefaultMaxRunning and MaxRunningLimit bound how many work orders the
+// assistant runs at once in a project.
+const (
+	DefaultMaxRunning = 4
+	MaxRunningLimit   = 12
+)
 
 // DefaultAskBefore are the premium model families marked by default.
 var DefaultAskBefore = []string{"fable", "astra"}
@@ -358,6 +369,9 @@ func (service *Service) storedSettings(ctx context.Context) (Settings, error) {
 	if settings.MaxEffort == "" {
 		settings.MaxEffort = DefaultMaxEffort
 	}
+	if settings.MaxRunning < 1 {
+		settings.MaxRunning = DefaultMaxRunning
+	}
 	return settings, nil
 }
 
@@ -486,6 +500,12 @@ func (service *Service) SaveSettings(ctx context.Context, settings Settings) (Se
 	}
 	if !project.ValidEffortCeiling(settings.MaxEffort) {
 		return Settings{}, fmt.Errorf("%w: the highest effort must be low, medium, high, xhigh, max, or ultra", ErrInvalid)
+	}
+	if settings.MaxRunning == 0 {
+		settings.MaxRunning = DefaultMaxRunning
+	}
+	if settings.MaxRunning < 1 || settings.MaxRunning > MaxRunningLimit {
+		return Settings{}, fmt.Errorf("%w: work orders at once must be between 1 and %d", ErrInvalid, MaxRunningLimit)
 	}
 	agents, err := service.config.Agents.List(ctx)
 	if err != nil {

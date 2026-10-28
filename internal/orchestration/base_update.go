@@ -66,27 +66,6 @@ func leadAttemptPlanVersion(sessionID, attemptID string) (int, bool) {
 	return 0, false
 }
 
-// baseUpdatesRequested counts the updates onto main requested for the run's
-// current plan version.
-func (starter *RemoteLeadStarter) baseUpdatesRequested(ctx context.Context, run execution.Run) (int, error) {
-	leadID := remoteLeadSessionID(run.ID)
-	events, err := starter.executions.EventsForSession(ctx, leadID)
-	if err != nil {
-		return 0, err
-	}
-	requested := 0
-	for _, event := range events {
-		attemptID, found := strings.CutSuffix(event.ID, ":base-update-requested")
-		if !found {
-			continue
-		}
-		if version, ok := leadAttemptPlanVersion(leadID, attemptID); ok && version == run.PlanVersion {
-			requested++
-		}
-	}
-	return requested, nil
-}
-
 // baseUpdateIntent returns the recorded request to bring main in after a lead
 // turn, with the guidance it carried and whether the assistant wrote it.
 func (starter *RemoteLeadStarter) baseUpdateIntent(
@@ -325,6 +304,16 @@ func (starter *RemoteLeadStarter) startBaseUpdate(
 	}
 	if err == nil && admitted && strings.TrimSpace(guidance) != "" {
 		starter.recordGuidance(ctx, lead.ID, attemptID, strings.TrimSpace(guidance), fromAssistant)
+	}
+	if err == nil && admitted && mainHead != "" {
+		// Where main was, so a refusal after the update can tell whether it
+		// was overtaken or failed (ADR-036).
+		if _, recordErr := starter.executions.RecordSessionEventWithID(
+			ctx, baseUpdateOntoID(attemptID, mainHead), lead.ID,
+			worker.Event{Type: worker.EventActivity, Text: "The lead is bringing in main at commit " + mainHead + "."},
+		); recordErr != nil {
+			starter.reportError(fmt.Errorf("record where main was for an update: %w", recordErr))
+		}
 	}
 	return request, admitted, err
 }

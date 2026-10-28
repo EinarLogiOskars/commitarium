@@ -533,6 +533,19 @@ func (api *API) updateProjectAssistantModeHandler(w http.ResponseWriter, r *http
 	}
 	updated, err := settings.UpdateAssistantMode(r.Context(), r.PathValue("id"), request.AssistantMode)
 	if err == nil && updated.AssistantBuilds() && !before.AssistantBuilds() {
+		// Building everything runs on its own: runs go through to the merge
+		// gate and merge once every gate passes, as a new app's do, so no
+		// phase or merge waits on a user who handed the project over.
+		if _, autoErr := api.projects.UpdateAutonomyPolicy(r.Context(), updated.ID, project.AutonomyPolicyRunToCompletion); autoErr == nil {
+			updated.AutonomyPolicy = project.AutonomyPolicyRunToCompletion
+		} else {
+			log.Printf("run project %q to completion: %v", updated.ID, autoErr)
+		}
+		if _, autoErr := api.projects.UpdateMergePolicy(r.Context(), updated.ID, project.MergePolicyAutoAfterGates); autoErr == nil {
+			updated.MergePolicy = project.MergePolicyAutoAfterGates
+		} else {
+			log.Printf("merge project %q after its gates: %v", updated.ID, autoErr)
+		}
 		// Switching to building everything hands the project over: the
 		// assistant takes it from here at once.
 		api.handOverToAssistant(r.Context(), updated.ID)

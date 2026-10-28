@@ -12,6 +12,8 @@ export interface AssistantSettings {
   ask_before: string[];
   /** The highest reasoning effort the assistant may choose. */
   max_effort?: string;
+  /** The most work orders the assistant runs at once in a project (ADR-036). */
+  max_running?: number;
   updated_at?: string;
 }
 

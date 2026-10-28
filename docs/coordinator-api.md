@@ -2617,7 +2617,7 @@ default branch, and returns the `assistant_turn` result: its reply, proposed
 actions, and its notes.
 
 - `GET /api/v1/assistant/settings` answers `{"agent", "model", "ask_before",
-  "max_effort", "updated_at"}`; without saved settings, an empty agent and model (ADR-027:
+  "max_effort", "max_running", "updated_at"}`; without saved settings, an empty agent and model (ADR-027:
   the user chooses them). `ask_before` lists the models the model guide says
   need approval: its `premium` models and the unrated models connected agents
   offer. An assistant that had answered before keeps the default it had then
@@ -2630,6 +2630,12 @@ actions, and its notes.
   `high`) is the highest reasoning effort the assistant may choose (ADR-031):
   applying an assistant action with a higher effort returns
   `400 effort_above_ceiling`. The user's own Starts are not limited.
+  `max_running` (1 to 12; default 4) is the most of the assistant's work
+  orders that are planned, implemented, or reviewed at once in a project
+  (ADR-036). Autopilot queues a start beyond it, with a note in the
+  conversation, and starts it once one of them waits to merge or ends; a
+  value outside the range returns `400 invalid_assistant_request`. The user's own Starts are not
+  limited.
 - Until it can answer, sending a message returns `409 no_agents` (no agent
   exists yet) or `409 assistant_not_set_up` (none is chosen for it, or the
   chosen one is gone), each with a plain message for the user. Work
@@ -2937,9 +2943,20 @@ merged PR and resulting merge commit are visible in Forgejo and recorded in
 SQLite.
 
 With `auto_after_gates`, the coordinator invokes this same operation as soon as
-the verified lead green light is durable. Automatic mode has no weaker path or
+the verified lead green light is durable and the work order's turn in its
+project's merge queue has come (ADR-036). Automatic mode has no weaker path or
 different checks. A conflict or unavailable dependency records visible merge-
 blocked activity and leaves the run waiting for user review.
+
+Work orders that merge on their own merge one at a time per project, in the
+order their gates passed. The queue is durable, so a restart keeps it. While
+the first in line merges or brings main in, the others stay `waiting_for_user`
+with `wait_kind` `merge_gate` and a reason that gives their place, for example
+"Waiting to merge: 2nd in line. Work orders merge one at a time; …". When its
+turn comes and main has moved, the work order brings main in as below, then
+merges. A run leaves the line when it merges, blocks, pauses, or waits for the
+user, and joins at the back when it reaches the gate again. Merges the user
+approves (`require_user_approval`) do not wait in line.
 
 When Forgejo refuses the merge (`405`/`409`) and the default branch has moved
 past the work order's checkout, the lead brings main in instead (ADR-025). Its
@@ -2952,8 +2969,12 @@ publication verification, a re-review of the merge and the lead's readiness
 acknowledgement when the work order has a reviewer, validation of the new
 commit when configured, and the merge itself. The merge route does this too:
 for a work order behind main it returns `200` with the run, now `running`,
-instead of `409 merge_not_ready`. Automatic merges bring main in at most three
-times per plan version; after that the run waits as a blocker with the reason
+instead of `409 merge_not_ready`. Being overtaken while in line is normal and is not
+counted: automatic merges stop after three failed updates per plan version,
+where an update failed when its turn blocked before it reached the merge gate,
+when the reviewer asked for changes to the merge, or when Forgejo still refused
+it with main where the lead brought it in from. After that the run waits as a
+blocker with the reason
 "Main moved and the approved revision no longer merges cleanly. Continue
 (optionally with guidance) …". `continue` on that blocker starts another update
 with the guidance in the lead's instructions. A refused merge while the

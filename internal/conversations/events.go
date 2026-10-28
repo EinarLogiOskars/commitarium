@@ -397,7 +397,11 @@ func (item work) event() (Event, bool) {
 		return Event{Text: name + " is waiting for the user's answer.", Wake: true}, true
 	case execution.RunWaitKindMergeGate:
 		if item.AutoMerge {
-			// Its gates run and it merges on its own.
+			// Its gates run and it merges on its own, when its turn in the
+			// merge queue comes (ADR-036).
+			if place, found := execution.MergeQueuePlace(item.Reason); found {
+				return Event{Text: name + " is waiting to merge, " + place + "."}, true
+			}
 			return Event{}, false
 		}
 		return Event{Text: name + " is ready to merge and waits for the user's approval.", Wake: true}, true

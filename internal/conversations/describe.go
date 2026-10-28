@@ -156,9 +156,16 @@ func (describer StateDescriber) writeAgents(ctx context.Context, builder *string
 	}
 	describer.writeModelGuide(ctx, builder, models)
 	if describer.Settings != nil {
-		if settings, err := describer.Settings(ctx); err == nil && settings.Agent != "" {
-			builder.WriteString(fmt.Sprintf("You, the assistant, run on agent %s with %s; your turns use its usage too.\n",
-				settings.Agent, settings.Model))
+		if settings, err := describer.Settings(ctx); err == nil {
+			if settings.Agent != "" {
+				builder.WriteString(fmt.Sprintf("You, the assistant, run on agent %s with %s; your turns use its usage too.\n",
+					settings.Agent, settings.Model))
+			}
+			if settings.MaxRunning > 0 {
+				builder.WriteString(fmt.Sprintf("Commitarium runs at most %d of your work orders at once in a project "+
+					"(the user's choice); a start beyond that waits for a slot. Start no more at once than the agents' "+
+					"usage left can carry.\n", settings.MaxRunning))
+			}
 		}
 	}
 }
