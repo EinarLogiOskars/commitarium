@@ -13,13 +13,13 @@ import { getToolchainPresets } from "../api/toolchains";
 import { ApiError } from "../api/client";
 import { startAutopilot } from "../api/assistant";
 import { ASSISTANT_CHANGED, WORK_CHANGED } from "./AssistantDrawer";
+import { ORDER_STATE_LABEL } from "./chatActivity";
 import { Markdown } from "./Markdown";
 import { PlanningWorkspace } from "./PlanningWorkspace";
 import { openAssistantOn } from "../attention/askAssistant";
 import { rememberIdea, rememberedIdea } from "./visionSession";
 import type {
   Feature,
-  FeatureState,
   Vision,
   VisionItem,
   VisionMode,
@@ -31,16 +31,6 @@ import type {
 } from "../api/types";
 
 const MAX_DEPTH = 3;
-const STATE_LABEL: Record<FeatureState, string> = {
-  draft: "Draft",
-  ready: "Ready",
-  planning: "Planning",
-  implementing: "In progress",
-  reviewing: "In review",
-  ready_to_merge: "Ready to merge",
-  completed: "Done",
-  cancelled: "Cancelled",
-};
 const VISION_SOURCE_LABELS: Record<Vision["source"], string> = {
   assistant: "Written by the assistant",
   user: "Edited by you",
@@ -350,7 +340,7 @@ function OtherWork({
                 <strong>{f.title}</strong>
                 <span className="muted note">
                   {f.kind === "session" ? "Session · " : ""}
-                  {STATE_LABEL[f.state]}
+                  {ORDER_STATE_LABEL[f.state]}
                 </span>
               </div>
               <div className="row vision__actions">
@@ -666,7 +656,9 @@ function ItemList({
               <div className="row vision__actions">
                 {done && <span className="pill pill--ok">Done</span>}
                 {leaf && item.feature_id && !done && (
-                  <span className="pill">{linked ? STATE_LABEL[linked.state] : "Work order"}</span>
+                  <span className="pill">
+                    {linked ? ORDER_STATE_LABEL[linked.state] : "Work order"}
+                  </span>
                 )}
                 {leaf &&
                   !(item.done && !item.feature_id) &&

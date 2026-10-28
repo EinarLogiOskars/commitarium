@@ -24,6 +24,7 @@ import type { AutopilotGoal, LaunchStage } from "./api/assistant";
 import { Launcher } from "./views/Launcher";
 import { Projects } from "./views/Projects";
 import { ProjectWorkspace } from "./views/ProjectWorkspace";
+import { DevShell } from "./views/DevShell";
 import { Agents } from "./views/Agents";
 import { ForgejoViewer } from "./views/ForgejoViewer";
 import { UpdateModal } from "./views/UpdateModal";
@@ -65,6 +66,9 @@ function App() {
   const [autoEntered, setAutoEntered] = useState(false);
   const [projectId, setProjectId] = useState<string | null>(null);
   const [projectName, setProjectName] = useState<string | null>(null);
+  // In Developer mode a project shows as chats (ADR-038); its own page opens
+  // from the chat's header until D6 retires it.
+  const [projectPage, setProjectPage] = useState(false);
   const [showAgents, setShowAgents] = useState(false);
   const [showViewer, setShowViewer] = useState(false);
   const [showInbox, setShowInbox] = useState(false);
@@ -89,7 +93,10 @@ function App() {
   const [devMode, setDevModeState] = useState(() => readFlag(DEV_MODE_KEY));
   const setDevMode = (on: boolean) => {
     setDevModeState(on);
-    if (!on) setProjectId(null);
+    if (!on) {
+      setProjectId(null);
+      setProjectPage(false);
+    }
     try {
       localStorage.setItem(DEV_MODE_KEY, on ? "1" : "0");
     } catch {
@@ -113,6 +120,7 @@ function App() {
       if (!id) return;
       setAreaState("projects");
       setProjectName(null);
+      setProjectPage(false);
       setProjectId(id);
     };
     window.addEventListener(OPEN_PROJECT, open);
@@ -258,10 +266,17 @@ function App() {
     );
   }
 
+  // In Developer mode, Projects and a project's chats are the chat shell,
+  // and leaving the project page goes back to its chats.
+  const chatShell = devMode && !projectPage && (area === "projects" || projectId !== null);
   const exitProject = () => {
+    setOrderTarget(null);
+    if (devMode) {
+      setProjectPage(false);
+      return;
+    }
     setProjectId(null);
     setProjectName(null);
-    setOrderTarget(null);
   };
 
   // Inbox items carry navigation identifiers, not routes — resolve them here.
@@ -270,6 +285,7 @@ function App() {
       setProjectId(targetProject);
       setProjectName(null);
     }
+    if (devMode) setProjectPage(true);
     setOrderTarget({ featureId, nonce: Date.now() });
     setShowInbox(false);
   };
@@ -351,7 +367,7 @@ function App() {
     </button>
   );
   // Leaving a project is an explicit way back to where the user came from.
-  const backLabel = area === "projects" ? "Projects" : "Apps";
+  const backLabel = devMode ? "Chats" : area === "projects" ? "Projects" : "Apps";
   const projectSwitch = projectId && (
     <div className="rail__switch rail__switch--static">
       <button className="rail__back" onClick={exitProject}>
@@ -363,10 +379,10 @@ function App() {
 
   return (
     <div
-      className={`shell ${layout.docked ? "shell--docked" : ""}`}
+      className={`shell ${layout.docked && !chatShell ? "shell--docked" : ""}`}
       style={{ "--assistant-width": `${layout.assistantWidth}px` } as React.CSSProperties}
     >
-      {!projectId && (
+      {!projectId && !chatShell && (
         <header className="topbar">
           <span className="topbar__brand">Commitarium</span>
           <span className="view-switch" role="tablist">
@@ -431,20 +447,47 @@ function App() {
       )}
 
       {/* The assistant follows where the user is: the open project's
-          conversation, or the top-level one. */}
-      <AssistantDrawer
-        scope={projectId ?? "commitarium"}
-        scopeLabel={projectId ? (projectName ?? "") : "All projects"}
-        onOpenOrder={projectId ? (featureId) => openFromInbox(projectId, featureId) : undefined}
-        open={layout.assistantOpen}
-        onOpenChange={layout.setAssistantOpen}
-        docked={layout.docked}
-        onGoalChange={setGoal}
-        onLaunchChange={setLaunch}
-      />
+          conversation, or the top-level one. The chat shell is its own. */}
+      {!chatShell && (
+        <AssistantDrawer
+          scope={projectId ?? "commitarium"}
+          scopeLabel={projectId ? (projectName ?? "") : "All projects"}
+          onOpenOrder={projectId ? (featureId) => openFromInbox(projectId, featureId) : undefined}
+          open={layout.assistantOpen}
+          onOpenChange={layout.setAssistantOpen}
+          docked={layout.docked}
+          onGoalChange={setGoal}
+          onLaunchChange={setLaunch}
+        />
+      )}
 
       <div className="shell__body">
-        {projectId ? (
+        {chatShell ? (
+          <DevShell
+            reachable={reachable}
+            attention={attention}
+            focusProject={projectId}
+            onProjectChange={setProjectId}
+            onOpenOrder={openFromInbox}
+            onOpenProjectPage={(id) => {
+              setProjectId(id);
+              setProjectPage(true);
+            }}
+            areaNav={(["apps", "marketplace"] as const).map((value) => (
+              <button
+                key={value}
+                className="ghost"
+                onClick={() => {
+                  setProjectId(null);
+                  setArea(value);
+                }}
+              >
+                {AREA_LABELS[value]}
+              </button>
+            ))}
+            systemNav={systemNav}
+          />
+        ) : projectId ? (
           <ProjectWorkspace
             id={projectId}
             onLoaded={setProjectName}
@@ -476,7 +519,14 @@ function App() {
                   reachable={reachable}
                   attention={attention.items}
                   running={attention.running}
-                  onShowWork={devMode ? setProjectId : undefined}
+                  onShowWork={
+                    devMode
+                      ? (id) => {
+                          setArea("projects");
+                          setProjectId(id);
+                        }
+                      : undefined
+                  }
                 />
               ) : (
                 <Projects reachable={reachable} onSelect={setProjectId} />
