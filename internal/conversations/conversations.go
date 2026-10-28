@@ -96,9 +96,11 @@ type Message struct {
 	ID string `json:"id"`
 	// Role is "user", "assistant", or "event" (a note from Commitarium, such
 	// as an approved action's outcome).
-	Role       string    `json:"role"`
-	Text       string    `json:"text"`
-	OccurredAt time.Time `json:"occurred_at"`
+	Role string `json:"role"`
+	Text string `json:"text"`
+	// Attachments name the scope's documents the user attached to it.
+	Attachments []string  `json:"attachments,omitempty"`
+	OccurredAt  time.Time `json:"occurred_at"`
 }
 
 type ActionStatus string
@@ -270,6 +272,9 @@ type Config struct {
 	// the user on a blocker: where the assistant builds everything,
 	// autopilot may then close it together with its replacement.
 	Blocked func(ctx context.Context, workOrderID string) bool
+	// Attachments, when set, holds the files attached to messages
+	// (attachments.go).
+	Attachments Attachments
 }
 
 // ChatUsage is one assistant turn's usage.

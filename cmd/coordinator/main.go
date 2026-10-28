@@ -37,6 +37,7 @@ import (
 	"github.com/EinarLogiOskars/commitarium/internal/toolchain"
 	"github.com/EinarLogiOskars/commitarium/internal/validation"
 	"github.com/EinarLogiOskars/commitarium/internal/vision"
+	"github.com/EinarLogiOskars/commitarium/internal/worker"
 	"github.com/EinarLogiOskars/commitarium/internal/workerhttp"
 	"github.com/EinarLogiOskars/commitarium/internal/workeringest"
 	"github.com/EinarLogiOskars/commitarium/internal/workflow"
@@ -431,7 +432,7 @@ func run(ctx context.Context, coordinatorConfig config) error {
 			Checkouts: checkoutManager, Branches: forgejoClient,
 			Visions: visions, Features: featureService,
 			Guide: modelGuide, Models: models, ChatUsage: executionStore,
-			SignIns: agentSignIns,
+			SignIns: agentSignIns, Attachments: documentStore,
 			Blocked: func(ctx context.Context, workOrderID string) bool {
 				_, blocked := blockedRun(ctx, executionService, workOrderID)
 				return blocked
@@ -562,6 +563,17 @@ func run(ctx context.Context, coordinatorConfig config) error {
 		sessionController = remoteStarter
 		realWorkflowStarter = remoteStarter
 		agentSignIns.target = remoteStarter
+		// Files attached to an intervention, a session message, or a work
+		// order reach the checkout of the agent that reads them.
+		remoteStarter.DeliverAttachments(func(
+			ctx context.Context, projectID string, role worker.Role, workspaceID string, names []string,
+		) ([]string, error) {
+			root := coordinatorConfig.workspaceRoot
+			if role == worker.RoleReviewer {
+				root = coordinatorConfig.reviewerWorkspaceRoot
+			}
+			return documentStore.Deliver(ctx, projectID, names, filepath.Join(root, workspaceID))
+		})
 		if projectConversations != nil {
 			assistant := projectConversations
 			remoteStarter.FollowSignIns(

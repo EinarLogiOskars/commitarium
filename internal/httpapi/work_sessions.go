@@ -31,6 +31,8 @@ type featureRenamer interface {
 
 type sessionMessageRequest struct {
 	Message string `json:"message"`
+	// Attachments name the project's documents attached to it.
+	Attachments []string `json:"attachments,omitempty"`
 }
 
 // sendSessionMessageHandler starts the session's next agent turn.
@@ -48,13 +50,18 @@ func (api *API) sendSessionMessageHandler(w http.ResponseWriter, r *http.Request
 	if !ok {
 		return
 	}
+	// The agent reads the files in its checkout, named in the message.
+	message, ok := api.attachedMessage(w, r, r.PathValue("projectID"), body.Message, body.Attachments)
+	if !ok {
+		return
+	}
 	messenger, ok := api.realWorkflow.(sessionMessenger)
 	if !ok {
 		writeError(w, http.StatusServiceUnavailable, "sessions_unavailable", "sessions need real agents")
 		return
 	}
 	run, err := messenger.SendSessionMessage(r.Context(), runID, worker.Command{
-		ID: idempotencyKey, Type: worker.CommandMessage, Message: body.Message,
+		ID: idempotencyKey, Type: worker.CommandMessage, Message: message,
 	})
 	if err != nil {
 		writeSessionError(w, r.PathValue("id"), "send a message to", err)

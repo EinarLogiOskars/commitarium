@@ -515,9 +515,10 @@ func (service *Service) startWaitingTurn(ctx context.Context, stored record, set
 	texts := make([]string, 0, len(stored.Queued))
 	now := service.now()
 	for _, queued := range stored.Queued {
-		texts = append(texts, queued.Text)
+		texts = append(texts, withAttachments(queued.Text, queued.Attachments))
 		stored.Messages = append(stored.Messages, Message{
-			ID: messageID(stored, len(stored.Messages)), Role: "user", Text: queued.Text, OccurredAt: now,
+			ID: messageID(stored, len(stored.Messages)), Role: "user", Text: queued.Text,
+			Attachments: queued.Attachments, OccurredAt: now,
 		})
 	}
 	stored.Queued = nil

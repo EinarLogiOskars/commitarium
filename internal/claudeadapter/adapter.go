@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -161,7 +162,7 @@ func (adapter *Adapter) launch(
 	}
 	arguments, err := adapter.commandArguments(
 		model, strings.TrimSpace(request.Effort), request.OutputContract, request.WorkspaceAccess, request.Web,
-		providerSessionID, resume, prompt,
+		providerSessionID, resume, withImages(prompt, request),
 	)
 	if err != nil {
 		return nil, err
@@ -237,6 +238,21 @@ func (adapter *Adapter) commandArguments(
 	}
 	arguments = append(arguments, prompt)
 	return arguments, nil
+}
+
+// withImages has Claude Code look at the turn's images: it reads an image
+// file with its Read tool, which every permission mode allows, and sees it
+// as an image.
+func withImages(prompt string, request worker.SessionRequest) string {
+	if len(request.Images) == 0 {
+		return prompt
+	}
+	var builder strings.Builder
+	builder.WriteString(prompt + "\n\nThe user attached these images. Look at each one with your Read tool before you answer:")
+	for _, image := range request.Images {
+		builder.WriteString("\n- " + filepath.Join(request.LaunchEnvironment.WorkingDirectory, filepath.FromSlash(image)))
+	}
+	return builder.String()
 }
 
 func (adapter *Adapter) permissionModeFor(access worker.WorkspaceAccess) string {

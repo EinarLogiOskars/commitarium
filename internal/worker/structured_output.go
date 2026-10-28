@@ -831,12 +831,14 @@ func assistantTurnSchema(planning bool) map[string]any {
 			"brief":                map[string]any{"type": "boolean", "description": "For create_work_order: true has its brief written from description before it starts; it is created as a draft. False for quick changes. Otherwise false."},
 			"app_brief":            map[string]any{"type": "string", "description": "For create_app and plan_project: everything you gathered with the user, in full, for whoever plans it next. Otherwise empty."},
 			"assumptions":          map[string]any{"type": "array", "items": text, "description": "For create_app and plan_project: each thing you assumed where the user did not say, in a short line. Otherwise empty."},
+			"attachments":          map[string]any{"type": "array", "items": text, "description": "For create_work_order: the files the user attached that its agents need, such as screenshots of what to change, by file name (screenshot-2026-10-28-1612.png, as in the user's Attached line); the lead sees them with the work order. Otherwise empty."},
 		},
 		[]string{
 			"type", "reason", "title", "description", "vision_item_id", "steps",
 			"lead_agent", "lead_model", "reviewer_agent", "reviewer_model",
 			"lead_plan_model", "lead_plan_effort", "lead_effort", "reviewer_plan_model", "reviewer_plan_effort", "reviewer_effort",
 			"work_order_id", "when", "how", "priority", "guidance", "after", "helper", "brief", "app_brief", "assumptions",
+			"attachments",
 		},
 	)
 	properties := map[string]any{

@@ -870,3 +870,20 @@ func TestClaudeBillingComesFromTheKeySource(t *testing.T) {
 		}
 	}
 }
+
+// Claude Code sees a turn's images by reading them with its Read tool, which
+// every permission mode allows: the prompt names each by absolute path.
+func TestATurnsImagesAreReadByPath(t *testing.T) {
+	request := worker.SessionRequest{
+		Images:            []string{".commitarium/documents/screenshot-2026-10-28-1612.png"},
+		LaunchEnvironment: worker.LaunchEnvironment{WorkingDirectory: "/workspaces/asc_1"},
+	}
+	prompt := withImages("What is wrong here?", request)
+	if !strings.HasPrefix(prompt, "What is wrong here?\n\n") || !strings.Contains(prompt, "Read tool") ||
+		!strings.HasSuffix(prompt, "\n- /workspaces/asc_1/.commitarium/documents/screenshot-2026-10-28-1612.png") {
+		t.Fatalf("prompt = %q", prompt)
+	}
+	if got := withImages("Hi", worker.SessionRequest{}); got != "Hi" {
+		t.Fatalf("a turn without images = %q", got)
+	}
+}

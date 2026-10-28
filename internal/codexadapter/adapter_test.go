@@ -950,7 +950,7 @@ func helpWriteTurnCompleted(writer *json.Encoder, status string) {
 func helperTurnPromptMatches(raw json.RawMessage, want string) bool {
 	var params struct {
 		ThreadID string      `json:"threadId"`
-		Input    []textInput `json:"input"`
+		Input    []userInput `json:"input"`
 	}
 	return json.Unmarshal(raw, &params) == nil && params.ThreadID == "thr_test" &&
 		len(params.Input) == 1 && params.Input[0].Type == "text" && params.Input[0].Text == want
@@ -1031,7 +1031,7 @@ func helperSteerMatches(raw json.RawMessage) bool {
 		ThreadID            string      `json:"threadId"`
 		ExpectedTurnID      string      `json:"expectedTurnId"`
 		ClientUserMessageID string      `json:"clientUserMessageId"`
-		Input               []textInput `json:"input"`
+		Input               []userInput `json:"input"`
 	}
 	return json.Unmarshal(raw, &params) == nil && params.ThreadID == "thr_test" &&
 		params.ExpectedTurnID == "turn_test" && params.ClientUserMessageID == "cmd_guidance" &&
@@ -1233,5 +1233,18 @@ func TestCodexTurnsPassTheirEffort(t *testing.T) {
 	encoded, _ = json.Marshal(turnStartParams{ThreadID: "thr"})
 	if strings.Contains(string(encoded), "effort") {
 		t.Fatalf("default effort params = %s", encoded)
+	}
+}
+
+// Codex takes a turn's images as local images after the prompt, by absolute
+// path.
+func TestATurnsImagesAreLocalImages(t *testing.T) {
+	input := turnInput("What is wrong here?", worker.SessionRequest{
+		Images:            []string{".commitarium/documents/shot.png"},
+		LaunchEnvironment: worker.LaunchEnvironment{WorkingDirectory: "/workspaces/asc_1"},
+	})
+	encoded, _ := json.Marshal(input)
+	if string(encoded) != `[{"type":"text","text":"What is wrong here?"},{"type":"localImage","path":"/workspaces/asc_1/.commitarium/documents/shot.png"}]` {
+		t.Fatalf("input = %s", encoded)
 	}
 }
