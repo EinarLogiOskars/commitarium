@@ -285,10 +285,13 @@ type RemoteLeadConfig struct {
 	// PreviewChecks, when set, checks that the app runs before a
 	// preview-setup work order merges (ADR-028).
 	PreviewChecks RemoteLeadPreviewChecks
-	Toolchains    RemoteLeadToolchainReader
-	Usage         RemoteLeadUsageRecorder
-	Lifetime      context.Context
-	ReportError   func(error)
+	// Holds, when set, says whether a run that planned early waits before it
+	// implements (ADR-037).
+	Holds       RemoteLeadImplementationHolds
+	Toolchains  RemoteLeadToolchainReader
+	Usage       RemoteLeadUsageRecorder
+	Lifetime    context.Context
+	ReportError func(error)
 }
 
 // RemoteLeadLoginWaits records runs that wait for an agent to log in again
@@ -330,6 +333,7 @@ type RemoteLeadStarter struct {
 	environmentRequests RemoteLeadEnvironmentRequests
 	validation          RemoteLeadValidationGate
 	previewChecks       RemoteLeadPreviewChecks
+	holds               RemoteLeadImplementationHolds
 	toolchains          RemoteLeadToolchainReader
 	usage               RemoteLeadUsageRecorder
 	lifetime            context.Context
@@ -371,8 +375,8 @@ func NewRemoteLeadStarter(config RemoteLeadConfig) (*RemoteLeadStarter, error) {
 		planning: config.Planning, artifacts: config.Artifacts, briefs: config.Briefs, workspaces: config.Workspaces,
 		worker: config.Worker, pump: config.Pump,
 		environmentRequests: config.EnvironmentRequests, validation: config.Validation, toolchains: config.Toolchains,
-		previewChecks: config.PreviewChecks,
-		usage:         config.Usage, lifetime: config.Lifetime, reportError: reportError,
+		previewChecks: config.PreviewChecks, holds: config.Holds,
+		usage: config.Usage, lifetime: config.Lifetime, reportError: reportError,
 		active: make(map[string]struct{}),
 	}, nil
 }
@@ -1982,6 +1986,9 @@ func (starter *RemoteLeadStarter) advanceWaitingRun(ctx context.Context, runID s
 				return err
 			}
 			if published {
+				if held, err := starter.holdImplementation(ctx, run, storedFeature); err != nil || held {
+					return err
+				}
 				_, _, err = starter.StartImplementation(ctx, run.ID, run.ID+":autonomy:implementation")
 				return err
 			}
@@ -3760,6 +3767,9 @@ func (starter *RemoteLeadStarter) implementationRequest(
 	instructions := implementationInstructions(prepared, attemptID)
 	if run.Steps.SkipPlan {
 		instructions = planlessImplementationInstructions(storedFeature, prepared, attemptID)
+	}
+	if attemptID == implementationAttemptForVersion(lead.ID, run.PlanVersion, 1) && starter.wasHeld(ctx, run.ID) {
+		instructions = heldImplementationInstructions + instructions
 	}
 	if starter.previewCheckApplies(storedFeature) {
 		instructions += previewCheckInstructions
@@ -5791,6 +5801,9 @@ func (starter *RemoteLeadStarter) startImplementationReview(
 	} else {
 		previousReviewedCommitID, previousApproved = starter.previousReviewedCommit(ctx, reviewer.ID, checkpoint.AttemptID)
 		previousApproved = previousApproved && previousReviewedCommitID != publication.CommitID
+	}
+	if starter.wasHeld(ctx, run.ID) {
+		previewContext = heldReviewInstructions + previewContext
 	}
 	request := remoteLeadRequest{
 		runID: run.ID, agentName: "reviewer", waitingReason: implementationReviewRunningReason,
