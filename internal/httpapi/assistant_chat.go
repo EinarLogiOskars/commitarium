@@ -408,6 +408,11 @@ func (api *API) approveConversationActionHandler(w http.ResponseWriter, r *http.
 				"planning a project needs Developer mode, in Settings; without it the assistant builds a self-contained app")
 			return
 		}
+		// Its chat moves into the project, which waits for its turn to end.
+		if conversation.Status == conversations.StatusRunning {
+			writeConversationError(w, conversations.ErrBusy)
+			return
+		}
 	}
 	// The user's approval may act on any work order; autopilot's only on the
 	// assistant's own (ADR-027).
@@ -543,6 +548,18 @@ func (api *API) approveConversationActionHandler(w http.ResponseWriter, r *http.
 	if err != nil {
 		writeConversationError(w, err)
 		return
+	}
+	if action.Type == featureartifact.AssistantPlanProject {
+		// The chat that proposed it moves into the new project, with its
+		// applied card (ADR-038).
+		notes := "The project's brief, settled with the user before it was created:\n\n" + appBrief(action)
+		moved, ok := api.planProject(w, r, action.Chat, projectID, action.Title, notes, action.Description)
+		if !ok {
+			return
+		}
+		if moved.Scope != "" {
+			conversation = moved
+		}
 	}
 	writeJSON(w, http.StatusOK, conversation, "assistant conversation")
 }

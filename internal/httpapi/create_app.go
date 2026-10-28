@@ -76,40 +76,76 @@ func (api *API) applyCreateApp(w http.ResponseWriter, r *http.Request, action co
 }
 
 // applyPlanProject creates the project the user and the assistant agreed to
-// plan, in Developer mode (ADR-035): a project like one from New project,
-// whose assistant keeps the brief gathered so far in its notes, and whose
-// vision is planned from its goal in the planning workspace. Nothing is
-// built until the user says so.
+// plan, in Developer mode (ADR-035): a project like one from New project.
+// Once the card is applied, planProject moves the chat into it and starts
+// its planning. Nothing is built until the user says so.
 func (api *API) applyPlanProject(w http.ResponseWriter, r *http.Request, action conversations.Action) (string, string, bool) {
+	projectID, ok := api.createPlannedProject(w, r, action.Title, "assistant-"+action.ID+":project")
+	if !ok {
+		return "", "", false
+	}
+	return fmt.Sprintf("Created the project “%s”. Plan it with the assistant, then build it.", action.Title), projectID, true
+}
+
+// createPlannedProject creates a project to plan, once the assistant can do
+// its planning. key makes a retry find the same project.
+func (api *API) createPlannedProject(w http.ResponseWriter, r *http.Request, name, key string) (string, bool) {
 	ctx := r.Context()
-	key := "assistant-" + action.ID
 	if _, _, err := api.assistantAgent(ctx); err != nil {
 		if !writeChoiceError(w, err) {
 			writeConversationError(w, err)
 		}
-		return "", "", false
+		return "", false
 	}
 	var created projectResponse
-	if err := api.callOwn(ctx, http.MethodPost, "/api/v1/projects", key+":project", map[string]any{"name": action.Title}, &created); err != nil {
+	if err := api.callOwn(ctx, http.MethodPost, "/api/v1/projects", key, map[string]any{"name": name}, &created); err != nil {
 		writeError(w, http.StatusBadGateway, "project_not_created", "the project could not be created: "+err.Error())
-		return "", "", false
+		return "", false
 	}
-	conversation := "/api/v1/assistant/conversations/" + url.PathEscape(created.ID)
-	if err := api.callOwn(ctx, http.MethodPut, conversation+"/notes", "",
-		map[string]string{"notes": "The project's brief, settled with the user before it was created:\n\n" + appBrief(action)}, nil); err != nil {
+	return created.ID, true
+}
+
+// planProject starts planning a new project (ADR-038): the top-level chat
+// it came from moves into it as one of its chats, its assistant keeps notes
+// in its own notes, and its vision is planned from goal with the user. The
+// assistant hears the chat's transcript as planning starts, so nothing said
+// there is asked again. It answers the moved chat, or an empty conversation
+// when the chat could not move (an assistant without chats).
+func (api *API) planProject(
+	w http.ResponseWriter, r *http.Request, chat, projectID, name, notes, goal string,
+) (conversations.Conversation, bool) {
+	ctx := r.Context()
+	failed := func(err error) (conversations.Conversation, bool) {
 		writeError(w, http.StatusBadGateway, "project_not_started",
-			fmt.Sprintf("the project %q was created, but its planning could not start: %v", action.Title, err))
-		return "", "", false
+			fmt.Sprintf("the project %q was created, but its planning could not start: %v", name, err))
+		return conversations.Conversation{}, false
 	}
-	// Its vision is planned from the goal; starting it wakes the project's
-	// assistant to plan it with the user.
-	if err := api.callOwn(ctx, http.MethodPost, "/api/v1/projects/"+url.PathEscape(created.ID)+"/vision/planning", "",
-		map[string]string{"goal": action.Description}, nil); err != nil {
-		writeError(w, http.StatusBadGateway, "project_not_started",
-			fmt.Sprintf("the project %q was created, but its planning could not start: %v", action.Title, err))
-		return "", "", false
+	var moved conversations.Conversation
+	if mover, ok := api.conversations.(chatMover); ok && chat != "" {
+		var err error
+		if moved, err = mover.MoveChat(ctx, conversations.TopLevel, chat, projectID); err != nil {
+			return failed(err)
+		}
 	}
-	return fmt.Sprintf("Created the project “%s”. Plan it with the assistant, then build it.", action.Title), created.ID, true
+	conversation := "/api/v1/assistant/conversations/" + url.PathEscape(projectID)
+	if notes != "" {
+		if err := api.callOwn(ctx, http.MethodPut, conversation+"/notes", "", map[string]string{"notes": notes}, nil); err != nil {
+			return failed(err)
+		}
+	}
+	// Starting it wakes the project's assistant to plan it with the user.
+	if err := api.callOwn(ctx, http.MethodPost, "/api/v1/projects/"+url.PathEscape(projectID)+"/vision/planning", "",
+		startPlanningRequest{Goal: goal, Transcript: transcript(moved.Messages)}, nil); err != nil {
+		return failed(err)
+	}
+	if moved.Scope == "" {
+		return moved, true
+	}
+	current, err := api.conversations.Get(conversations.InChat(ctx, moved.Chat), projectID)
+	if err != nil {
+		return moved, true
+	}
+	return current, true
 }
 
 // appBrief is what the vision writer hears of a new app: the summary, the

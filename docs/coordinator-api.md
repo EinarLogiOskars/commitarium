@@ -2636,7 +2636,8 @@ The assistant (ADR-022, ASSISTANT_PLAN.md) works in scopes: `commitarium`
 for the top level, or a project ID. A scope holds many chats that share one
 assistant (ADR-038). Each turn runs on the assistant's agent as a consultant
 with a read-only checkout of the project's default branch, and returns the
-`assistant_turn` result: its reply, proposed actions, and its notes.
+`assistant_turn` result: its reply, proposed actions, its notes, and an
+optional `chat_title`.
 
 - What belongs to the project is shared by its chats: the notes, the
   autopilot `goal`, the work the coordinator watches, the events the
@@ -2674,6 +2675,28 @@ with a read-only checkout of the project's default branch, and returns the
 - A scope's single conversation from before chats becomes its `main` chat
   on first read, named after its first message, with its messages and
   actions keeping their IDs.
+- A chat named after its first message is a placeholder: while it has no
+  other title, the turn asks the assistant for one, and the turn's
+  `chat_title` (a few words saying what the chat is about) becomes the
+  chat's title. The assistant names a chat once, and never one the user
+  named, by `PATCH` or when starting it.
+- The top level's chats are loose chats (ADR-038): they belong to no
+  project, research, sketch, and explain, and propose only `create_app`,
+  `plan_project`, and `research`. `POST .../commitarium/chats/{chat}/project`
+  with an optional `{"name", "goal"}` makes one a project, in Developer
+  mode: it creates the project as `plan_project` does, named `name` or else
+  the chat's title, moves the chat into it, and starts planning its vision
+  from `goal` (else the name). It answers `201` with the moved chat as a
+  conversation of the new project. A moved chat keeps its messages, actions,
+  and the events it had yet to hear, and is the project's `main` chat when
+  it has none; its provider session stays behind, so its next turn starts a
+  fresh one that reads the chat so far. The project's assistant hears the
+  chat's transcript as planning starts, so it does not ask again what was
+  said there. Once the top level's `main` chat moved, its next chats are
+  `chat_` ones. It returns `409 developer_mode_required` without Developer
+  mode, `400 name_required` when the chat has no title and no `name` is
+  given, `409 assistant_busy` while the chat answers, and `404 not_found`
+  for a chat the top level does not have.
 
 - `GET /api/v1/assistant/settings` answers `{"agent", "model", "ask_before",
   "max_effort", "max_running", "updated_at"}`; without saved settings, an empty agent and model (ADR-027:
@@ -2822,9 +2845,12 @@ with a read-only checkout of the project's default branch, and returns the
   `description`, `app_brief`, and `assumptions` (what the assistant guessed,
   listed on the card); the action's `project_id` names the new project.
   `plan_project`, the top level's other action, creates a project like New
-  project does, named by `title`, saves `app_brief` as its assistant's notes,
-  and starts planning its vision from `description` (see Planning a vision);
-  it is refused with `409 developer_mode_required` unless the conversation's
+  project does, named by `title`, moves the chat that proposed it into the
+  project with the applied card (as "Make it a project" does, above), saves
+  `app_brief` as its assistant's notes, and starts planning its vision from
+  `description` (see Planning a vision); the approval answers the moved
+  chat. It returns `409 assistant_busy` while that chat answers, and it is
+  refused with `409 developer_mode_required` unless the conversation's
   `developer` is set by a message's `developer_mode`. Any other action
   there, or `create_app` or `plan_project` in a project, returns
   `409 action_needs_project`. `update_plan` changes the vision being planned.
@@ -2938,7 +2964,8 @@ the plan's record; the user's edits and the vision writer keep it.
 - `POST /api/v1/projects/{id}/vision/planning` with `{"goal"}` puts the
   vision in planning, or starts one from `goal` when there is none
   (`400 invalid_vision` without it), and wakes the project's assistant to
-  plan it with the user. A vision already being planned is answered as is;
+  plan it with the user. An optional `transcript`, the chat the project grew
+  from, is quoted to the assistant as it is woken. A vision already being planned is answered as is;
   paused planning resumes with its plan as it was.
 - `PUT /api/v1/projects/{id}/vision/planning` with `{"goal", "decisions",
   "open_questions", "stack", "items": [{"priority", "title", "description"}]}`
