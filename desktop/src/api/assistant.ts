@@ -19,6 +19,8 @@ export interface AssistantMessage {
   id: string;
   role: "user" | "assistant" | "event";
   text: string;
+  /** The files attached to it, among the scope's documents. */
+  attachments?: string[];
   occurred_at: string;
 }
 
@@ -163,10 +165,15 @@ export const sendToAssistant = (
   scope: string,
   message: string,
   key: string,
+  attachments: string[] = [],
 ): Promise<Conversation> =>
   request(`${conversationPath(scope)}/messages`, {
     method: "POST",
-    body: { message, developer_mode: developerModeOn() },
+    body: {
+      message,
+      developer_mode: developerModeOn(),
+      ...(attachments.length ? { attachments } : {}),
+    },
     idempotencyKey: key,
   });
 

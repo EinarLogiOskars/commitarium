@@ -1,3 +1,4 @@
+import { AttachButton, AttachmentChips, SentAttachments, useAttachments } from "./Attachments";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   approveAssistantAction,
@@ -99,6 +100,9 @@ export function AssistantDrawer({
   );
   const [error, setError] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
+  // The top-level conversation's files are its own; a project's are the
+  // project's documents.
+  const attachments = useAttachments(scope);
   const [sending, setSending] = useState(false);
   const [notesOpen, setNotesOpen] = useState(false);
   const [unseen, setUnseen] = useState(false);
@@ -288,14 +292,17 @@ export function AssistantDrawer({
     if (el) el.scrollTop = el.scrollHeight;
   }, [count, running, open, notesOpen]);
 
+  const canSend = !!draft.trim() || attachments.items.length > 0;
   const send = async () => {
     const text = draft.trim();
-    if (!text) return;
+    if (!canSend) return;
     setSending(true);
     setError(null);
     try {
-      setConversation(await sendToAssistant(scope, text, crypto.randomUUID()));
+      const names = await attachments.upload();
+      setConversation(await sendToAssistant(scope, text, crypto.randomUUID(), names));
       setDraft("");
+      attachments.clear();
     } catch (e) {
       if (e instanceof ApiError && (e.code === "no_agents" || e.code === "assistant_not_set_up")) {
         // The guidance shows what to set up; the message waits in the box.
@@ -472,6 +479,7 @@ export function AssistantDrawer({
                         </span>
                         <div className="msg__text">
                           <Markdown text={message.text} />
+                          <SentAttachments owner={scope} names={message.attachments} />
                         </div>
                       </div>
                       {(byMessage.get(message.id) ?? []).map(renderAction)}
@@ -502,6 +510,7 @@ export function AssistantDrawer({
                       <span className="msg__who">You · queued</span>
                       <div className="msg__text">
                         <Markdown text={message.text} />
+                        <SentAttachments owner={scope} names={message.attachments} />
                       </div>
                     </div>
                     <p className="muted note assistant__queued-note">
@@ -511,7 +520,10 @@ export function AssistantDrawer({
                 ))}
               </div>
               {error && <div className="banner banner--error">{error}</div>}
-              <div className="composer">
+              <div
+                className={`composer${attachments.dragging ? " composer--drop" : ""}`}
+                {...attachments.dropProps}
+              >
                 {conversation.focus && (
                   <div className="assistant__focus">
                     <span className="pill" title="What this conversation is about">
@@ -530,6 +542,14 @@ export function AssistantDrawer({
                     </button>
                   </div>
                 )}
+                {attachments.problem && (
+                  <p className="note composer__problem">{attachments.problem}</p>
+                )}
+                <AttachmentChips
+                  items={attachments.items}
+                  onRemove={attachments.remove}
+                  disabled={sending}
+                />
                 <div className="reply">
                   <textarea
                     ref={composerRef}
@@ -542,18 +562,17 @@ export function AssistantDrawer({
                         : "Ask the assistant…"
                     }
                     onChange={(e) => setDraft(e.target.value)}
+                    onPaste={attachments.onPaste}
                     onKeyDown={(e) => {
                       if (e.key === "Escape") setOpen(false);
                       if (e.key !== "Enter" || e.shiftKey) return;
                       e.preventDefault();
-                      if (!sending && !guidance && draft.trim()) void send();
+                      if (!sending && !guidance && canSend) void send();
                     }}
                     disabled={sending}
                   />
-                  <button
-                    onClick={() => void send()}
-                    disabled={sending || !!guidance || !draft.trim()}
-                  >
+                  <AttachButton onFiles={attachments.add} disabled={sending} />
+                  <button onClick={() => void send()} disabled={sending || !!guidance || !canSend}>
                     {sending ? "Sending…" : "Send"}
                   </button>
                 </div>
