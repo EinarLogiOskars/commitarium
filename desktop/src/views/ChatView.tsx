@@ -76,6 +76,7 @@ export function ChatView({
   onGoalChange,
   onLaunchChange,
   onConversation,
+  onMoved,
   onCapturingChange,
   screenshot = false,
   chips,
@@ -101,6 +102,9 @@ export function ChatView({
   onLaunchChange?: (stage: LaunchStage | null) => void;
   /** Each conversation as it loads. */
   onConversation?: (conversation: Conversation | null) => void;
+  /** The chat moved into the app or project an approved card created
+   * (ADR-038): the shell follows it there. */
+  onMoved?: (scope: string, chat: string) => void;
   /** While a screenshot is taken, so the drawer's button hides too. */
   onCapturingChange?: (capturing: boolean) => void;
   /** Offers "Take a screenshot and describe what to change": over an app's
@@ -450,6 +454,7 @@ export function ChatView({
         scope={target}
         action={action}
         onChanged={setConversation}
+        onMoved={onMoved}
         onOpenOrder={onOpenOrder}
         visionLabel={visionItems.get(action.vision_item_id)}
         plain={builds}
@@ -767,6 +772,7 @@ function ActionCard({
   scope,
   action,
   onChanged,
+  onMoved,
   onOpenOrder,
   visionLabel,
   plain,
@@ -779,6 +785,7 @@ function ActionCard({
    * user: one plain question with one action, its details on hover. */
   plain?: boolean;
   onChanged: (conversation: Conversation) => void;
+  onMoved?: (scope: string, chat: string) => void;
   onOpenOrder?: (featureId: string) => void;
 }) {
   const modelName = useModelName();
@@ -811,6 +818,14 @@ function ActionCard({
     setError(null);
     try {
       const conversation = await fn();
+      const from = typeof scope === "string" ? scope : scope.scope;
+      if (onMoved && conversation.chat && conversation.scope !== from) {
+        // The chat now lives in what the card created, and shows its work
+        // there: the shell opens it rather than another window.
+        window.dispatchEvent(new Event(WORK_CHANGED));
+        onMoved(conversation.scope, conversation.chat);
+        return;
+      }
       onChanged(conversation);
       if (kind !== "dismiss") {
         // An approved action may have created or started work: the open

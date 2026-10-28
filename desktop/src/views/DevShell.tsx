@@ -403,6 +403,12 @@ export function DevShell({
             title={chatTitle || "New chat"}
             work={signals}
             onConversation={onConversation}
+            onMoved={(scope, chat) => {
+              expand(scope);
+              select({ scope, chat });
+              loadProjects();
+              void loadChats();
+            }}
             onOpenOrder={loose ? undefined : (id) => onOpenOrder(selection.scope, id)}
             chips={
               loose ? (
