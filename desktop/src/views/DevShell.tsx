@@ -19,12 +19,15 @@ import {
   workSignals,
   type ChatWork,
 } from "./chatActivity";
+import { RECENT_PROJECTS, later, sidebarProjects } from "./sidebarProjects";
 import { ProjectCards } from "./ProjectCards";
 import { Projects } from "./Projects";
 
 const TOP = "commitarium";
 const SELECTED_KEY = "commitarium.chats.selected";
 const EXPANDED_KEY = "commitarium.chats.expanded";
+const OPENED_KEY = "commitarium.chats.opened";
+const ALL_PROJECTS_KEY = "commitarium.chats.allProjects";
 const POLL_MS = 10_000;
 
 /** The chat on screen: a scope's chat, or its most recently used one. */
@@ -56,6 +59,17 @@ function readExpanded(): Set<string> {
     // Nothing remembered yet.
   }
   return new Set();
+}
+
+/** When the user last opened each project's chats. */
+function readOpened(): Record<string, string> {
+  try {
+    const stored = JSON.parse(localStorage.getItem(OPENED_KEY) ?? "{}");
+    if (stored && typeof stored === "object") return stored;
+  } catch {
+    // Nothing remembered yet.
+  }
+  return {};
 }
 
 function remember(key: string, value: unknown) {
@@ -107,6 +121,14 @@ export function DevShell({
   const [chatWorks, setChatWorks] = useState<Record<string, ChatWork>>({});
   const read = useRef<Record<string, string>>({});
   const [showProjects, setShowProjects] = useState(false);
+  const [opened, setOpened] = useState<Record<string, string>>(readOpened);
+  const [allProjects, setAllProjects] = useState(() => {
+    try {
+      return localStorage.getItem(ALL_PROJECTS_KEY) === "true";
+    } catch {
+      return false;
+    }
+  });
   const [searching, setSearching] = useState(false);
   const [query, setQuery] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -118,6 +140,13 @@ export function DevShell({
     setShowProjects(false);
     setError(null);
     remember(SELECTED_KEY, next);
+    if (next.scope !== TOP) {
+      setOpened((current) => {
+        const stamped = { ...current, [next.scope]: new Date().toISOString() };
+        remember(OPENED_KEY, stamped);
+        return stamped;
+      });
+    }
   }, []);
   const expand = useCallback((id: string, open = true) => {
     setExpanded((current) => {
@@ -283,9 +312,47 @@ export function DevShell({
         <ActivityDot activity={activityOf(chat)} />
       </button>
     );
-  const visibleProjects = (projects ?? []).filter(
+  const activities = Object.fromEntries(
+    (projects ?? []).map((p) => [
+      p.id,
+      projectActivity(
+        p.id,
+        attention.items,
+        attention.running,
+        (chats[p.id] ?? []).map(activityOf),
+      ),
+    ]),
+  );
+  // The most recently worked on come first; the rest fold under "Show all",
+  // except any that is busy or on screen. A search looks through them all.
+  const recent = Object.fromEntries(
+    (projects ?? []).map((p) => [
+      p.id,
+      (chats[p.id] ?? []).reduce<string | undefined>(
+        (at, c) => later(at, c.updated_at),
+        opened[p.id],
+      ) ?? p.created_at,
+    ]),
+  );
+  const keep = new Set(
+    (projects ?? [])
+      .filter((p) => p.id === selection.scope || activities[p.id] !== "idle")
+      .map((p) => p.id),
+  );
+  const listed = sidebarProjects(
+    projects ?? [],
+    recent,
+    keep,
+    query.trim() || allProjects ? Infinity : RECENT_PROJECTS,
+  );
+  const folded = sidebarProjects(projects ?? [], recent, keep).hidden;
+  const visibleProjects = listed.shown.filter(
     (p) => match(p.name) || (chats[p.id] ?? []).some((c) => match(c.title || "New chat")),
   );
+  const showAll = (on: boolean) => {
+    setAllProjects(on);
+    remember(ALL_PROJECTS_KEY, on);
+  };
 
   return (
     <div className="dev-shell">
@@ -350,14 +417,7 @@ export function DevShell({
               >
                 <Chevron open={open} />
                 <span className="chat-side__name">{p.name}</span>
-                <ActivityDot
-                  activity={projectActivity(
-                    p.id,
-                    attention.items,
-                    attention.running,
-                    (chats[p.id] ?? []).map(activityOf),
-                  )}
-                />
+                <ActivityDot activity={activities[p.id]} />
               </button>
               {open && (
                 <>
@@ -373,6 +433,14 @@ export function DevShell({
             </div>
           );
         })}
+        {folded > 0 && !query.trim() && (
+          <button
+            className="chat-side__item chat-side__item--quiet"
+            onClick={() => showAll(!allProjects)}
+          >
+            {allProjects ? "Show fewer" : `Show all (${folded} more)`}
+          </button>
+        )}
 
         <div className="chat-side__label">Chats</div>
         {(chats[TOP] ?? []).map((chat) => chatButton(chat, false))}
