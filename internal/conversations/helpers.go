@@ -119,6 +119,16 @@ func (service *Service) LookUpHelper(_ context.Context, scope, id string) (Helpe
 	return Helper{}, ErrNotFound
 }
 
+// HelpersOf lists the helpers the assistant started in the scope, finished
+// ones too, for the Agents card (ADR-038).
+func (service *Service) HelpersOf(_ context.Context, scope string) ([]Helper, error) {
+	stored, err := service.sharedOf(scope)
+	if err != nil {
+		return nil, err
+	}
+	return slices.Clone(stored.Helpers), nil
+}
+
 // follow records a helper an applied action started, or follows it afresh
 // when the action started it again.
 func (stored *record) follow(helper Helper) {

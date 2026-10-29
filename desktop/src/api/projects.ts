@@ -1,5 +1,6 @@
 import { request, ApiError } from "./client";
 import type {
+  AgentAtWork,
   AssistantMode,
   AutonomyPolicy,
   CreateProjectInput,
@@ -124,3 +125,8 @@ export const updateAutonomyPolicy = (
     method: "PUT",
     body: { autonomy_policy },
   });
+
+/** The agents at work across the project's open runs and the assistant's
+ * helpers, for the Agents card (ADR-038). */
+export const getAgentsAtWork = (id: string): Promise<{ agents: AgentAtWork[] }> =>
+  request(`/api/v1/projects/${encodeURIComponent(id)}/agents-at-work`);

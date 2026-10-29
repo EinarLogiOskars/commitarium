@@ -543,6 +543,7 @@ func newAPI(
 	}
 	if projects != nil && features != nil && executionService != nil {
 		mux.HandleFunc("GET /api/v1/attention", api.listAttentionHandler)
+		mux.HandleFunc("GET /api/v1/projects/{id}/agents-at-work", api.agentsAtWorkHandler)
 	}
 	if modelGuide != nil {
 		mux.HandleFunc("GET /api/v1/model-guide", api.getModelGuideHandler)

@@ -963,3 +963,35 @@ export interface VisionSession {
   created_at: string;
   updated_at: string;
 }
+
+/** What an agent at work in a project does now (ADR-038): a turn in flight,
+ * idle while the other agent of its run works, or waiting on the user, a
+ * checkpoint, or a limit. */
+export type AgentAtWorkState = "working" | "idle" | "waiting";
+
+/** One agent at work in a project: a run's lead or reviewer, a work
+ * session's agent, or a helper the assistant started. */
+export interface AgentAtWork {
+  id: string;
+  agent: string;
+  agent_name?: string;
+  provider?: string;
+  model?: string;
+  role:
+    | "lead"
+    | "reviewer"
+    | "session"
+    | "brief_writer"
+    | "vision_writer"
+    | "stack_designer"
+    | "research";
+  work_order_id?: string;
+  work_order_title?: string;
+  run_id?: string;
+  /** What a helper without a work order works on, such as research's question. */
+  title?: string;
+  state: AgentAtWorkState;
+  working: boolean;
+  /** What it waits on, in plain words, while it is not working. */
+  detail?: string;
+}

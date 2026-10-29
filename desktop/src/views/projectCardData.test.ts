@@ -1,6 +1,20 @@
 import { describe, expect, it } from "vitest";
-import type { AttentionItem, Feature, RunningWorkOrder, VisionPlan } from "../api/types";
-import { mergeQueuePlace, priorityProgress, workBoard } from "./projectCardData";
+import type {
+  AgentAtWork,
+  AttentionItem,
+  Feature,
+  RunningWorkOrder,
+  VisionPlan,
+} from "../api/types";
+import {
+  agentLabel,
+  agentRoleLabel,
+  agentSubject,
+  mergeQueuePlace,
+  priorityProgress,
+  shownAgents,
+  workBoard,
+} from "./projectCardData";
 
 function order(id: string, overrides: Partial<Feature> = {}): Feature {
   return {
@@ -188,5 +202,34 @@ describe("workBoard", () => {
       tone: "waiting",
       reason: "Waiting for codex's usage limit",
     });
+  });
+});
+
+function agent(id: string, overrides: Partial<AgentAtWork> = {}): AgentAtWork {
+  return { id, agent: "claude", role: "lead", state: "idle", working: false, ...overrides };
+}
+
+describe("agents card", () => {
+  it("shows four agents and counts the rest for All", () => {
+    const five = ["a", "b", "c", "d", "e"].map((id) => agent(id));
+    expect(shownAgents(five)).toEqual({ shown: five.slice(0, 4), more: 1 });
+    expect(shownAgents(five.slice(0, 4))).toEqual({ shown: five.slice(0, 4), more: 0 });
+    expect(shownAgents([])).toEqual({ shown: [], more: 0 });
+  });
+
+  it("names the agent by the name the user gave it", () => {
+    expect(agentLabel(agent("a", { agent_name: "Work Claude" }))).toBe("Work Claude");
+    expect(agentLabel(agent("a", { agent: "codex" }))).toBe("Codex");
+    expect(agentLabel(agent("a", { agent: "", provider: "claude" }))).toBe("Claude");
+  });
+
+  it("says the job and what it works on in plain words", () => {
+    expect(agentRoleLabel("brief_writer")).toBe("Brief writer");
+    expect(agentRoleLabel("reviewer")).toBe("Reviewer");
+    expect(agentSubject(agent("a", { work_order_title: "Sign in" }))).toBe("Sign in");
+    expect(agentSubject(agent("a", { role: "research", title: "CSV formats" }))).toBe(
+      "CSV formats",
+    );
+    expect(agentSubject(agent("a", { role: "vision_writer" }))).toBe("The project's vision");
   });
 });
