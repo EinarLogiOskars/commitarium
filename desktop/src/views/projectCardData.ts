@@ -1,4 +1,5 @@
 import type {
+  AgentAtWork,
   AttentionItem,
   Feature,
   RunningWorkOrder,
@@ -146,4 +147,50 @@ export function workBoard(
   }
   board.queue.sort((a, b) => a.place - b.place || a.title.localeCompare(b.title));
   return board;
+}
+
+/** How many agents the Agents card shows before "All" opens the rest. */
+export const AGENTS_SHOWN = 4;
+
+const AGENT_ROLE: Record<AgentAtWork["role"], string> = {
+  lead: "Lead",
+  reviewer: "Reviewer",
+  session: "Work session",
+  brief_writer: "Brief writer",
+  vision_writer: "Vision writer",
+  stack_designer: "Stack designer",
+  research: "Research",
+};
+
+/** An agent's job, in plain words. */
+export function agentRoleLabel(role: AgentAtWork["role"]): string {
+  return AGENT_ROLE[role] ?? role;
+}
+
+/** The agent's name as the user knows it: the name they gave it, else its
+ * ID with a capital letter. */
+export function agentLabel(agent: AgentAtWork): string {
+  const name = agent.agent_name?.trim() || agent.agent || agent.provider || "Agent";
+  return name.charAt(0).toUpperCase() + name.slice(1);
+}
+
+/** What the agent works on: its work order, else what a helper looks into. */
+export function agentSubject(agent: AgentAtWork): string {
+  if (agent.work_order_title) return agent.work_order_title;
+  if (agent.title) return agent.title;
+  return agent.role === "vision_writer"
+    ? "The project's vision"
+    : agent.role === "stack_designer"
+      ? "The project's stack"
+      : "";
+}
+
+/** The agents the card shows (those working first, as the coordinator
+ * orders them) and how many more "All" holds. */
+export function shownAgents(
+  agents: AgentAtWork[],
+  limit: number = AGENTS_SHOWN,
+): { shown: AgentAtWork[]; more: number } {
+  if (agents.length <= limit) return { shown: agents, more: 0 };
+  return { shown: agents.slice(0, limit), more: agents.length - limit };
 }

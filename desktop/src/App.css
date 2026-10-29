@@ -5474,6 +5474,76 @@ select:focus {
   font-variant-numeric: tabular-nums;
 }
 
+/* Agents card: a small card per agent at work, two to a row; it pulses
+   while the agent works and is calm while idle. "All" shows them in a grid. */
+.shell-agents {
+  list-style: none;
+  margin: 2px 0 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+.shell-agents--all {
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 8px;
+  margin-top: 12px;
+}
+.shell-agent {
+  width: 100%;
+  height: 100%;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 7px 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  font: inherit;
+  font-size: 11px;
+}
+button.shell-agent {
+  cursor: pointer;
+}
+button.shell-agent:hover {
+  background: color-mix(in srgb, var(--border) 45%, transparent);
+}
+.shell-agent--working {
+  animation: work-card-glow 2.2s ease-in-out infinite;
+}
+.shell-agent__name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-size: 12px;
+  font-weight: 500;
+}
+.shell-agent__text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.shell-agent__model,
+.shell-agent__role {
+  color: var(--muted);
+}
+.shell-agent__subject {
+  margin-top: 2px;
+}
+.shell-agents__all {
+  margin-top: 8px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .shell-agent--working {
+    animation: none;
+  }
+}
+
 /* Preview card. */
 .shell-preview__state {
   display: inline-flex;

@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { getAssistantSettings } from "../api/assistant";
+import { getAgentsAtWork } from "../api/projects";
 import { ApiError } from "../api/client";
 import { listFeatures } from "../api/features";
 import { getProjectToolchain } from "../api/toolchains";
 import type {
+  AgentAtWork,
   AttentionItem,
   Feature,
   Project,
@@ -16,7 +18,18 @@ import { openExternal } from "../ipc";
 import { OPEN_VISION, WORK_CHANGED } from "./ChatView";
 import { ActivityDot } from "./chatActivity";
 import { CompactProjectSync } from "./ProjectSyncCard";
-import { DEFAULT_MAX_RUNNING, priorityProgress, workBoard, type WorkRow } from "./projectCardData";
+import { Overlay } from "./Overlay";
+import {
+  agentLabel,
+  agentRoleLabel,
+  agentSubject,
+  DEFAULT_MAX_RUNNING,
+  priorityProgress,
+  shownAgents,
+  workBoard,
+  type WorkRow,
+} from "./projectCardData";
+import { useModelName } from "./useModelName";
 import { PREVIEW_STATE, primaryUrl, usePreview } from "./usePreview";
 
 const POLL_MS = 10_000;
@@ -68,12 +81,7 @@ export function ProjectCards({
         maxRunning={data.maxRunning}
         onOpen={(id) => onOpenOrder(projectId, id)}
       />
-      <section className="shell-card">
-        <h2 className="shell-card__head">Agents</h2>
-        <p className="muted shell-card__text">
-          The agents at work in the project. For now, each work order&apos;s page shows its own.
-        </p>
-      </section>
+      <AgentsCard projectId={projectId} onOpen={(id) => onOpenOrder(projectId, id)} />
       {hasRepo && (
         <PreviewCard
           projectId={projectId}
@@ -295,6 +303,123 @@ function OrderRow({ row, onOpen }: { row: WorkRow; onOpen: (featureId: string) =
           </span>
         </span>
       </button>
+    </li>
+  );
+}
+
+// The agents at work in the project, read again every few seconds and
+// whenever the assistant changes work. null until the first read.
+function useAgentsAtWork(projectId: string): AgentAtWork[] | null {
+  const [agents, setAgents] = useState<AgentAtWork[] | null>(null);
+  const load = useCallback(() => {
+    getAgentsAtWork(projectId)
+      .then((r) => setAgents(r.agents ?? []))
+      // An older coordinator has no such route: the card says nobody works.
+      .catch((e) => {
+        if (e instanceof ApiError && e.status === 404) setAgents([]);
+      });
+  }, [projectId]);
+  useEffect(() => {
+    load();
+    const timer = setInterval(load, POLL_MS);
+    window.addEventListener(WORK_CHANGED, load);
+    return () => {
+      clearInterval(timer);
+      window.removeEventListener(WORK_CHANGED, load);
+    };
+  }, [load]);
+  return agents;
+}
+
+// A small card per agent at work, two to a row, pulsing while the agent
+// works. "All" opens every one of them as a grid once there are more than
+// fit.
+function AgentsCard({
+  projectId,
+  onOpen,
+}: {
+  projectId: string;
+  onOpen: (featureId: string) => void;
+}) {
+  const agents = useAgentsAtWork(projectId);
+  const modelName = useModelName();
+  const [showAll, setShowAll] = useState(false);
+  const working = agents?.filter((a) => a.working).length ?? 0;
+  const { shown, more } = shownAgents(agents ?? []);
+  const tile = (agent: AgentAtWork) => (
+    <AgentTile
+      key={agent.id}
+      agent={agent}
+      model={modelName(agent.model)}
+      onOpen={(id) => {
+        setShowAll(false);
+        onOpen(id);
+      }}
+    />
+  );
+
+  return (
+    <section className="shell-card">
+      <div className="shell-card__top">
+        <h2 className="shell-card__head">Agents</h2>
+        {working > 0 && <span className="muted shell-card__meta">{working} working</span>}
+      </div>
+      {agents === null ? (
+        <p className="muted shell-card__text">Loading…</p>
+      ) : agents.length === 0 ? (
+        <p className="muted shell-card__text">No agents at work right now.</p>
+      ) : (
+        <ul className="shell-agents">{shown.map(tile)}</ul>
+      )}
+      {more > 0 && (
+        <button className="shell-card__link shell-agents__all" onClick={() => setShowAll(true)}>
+          All ({agents?.length})
+        </button>
+      )}
+      {showAll && agents && (
+        <Overlay title="Agents at work" onClose={() => setShowAll(false)}>
+          <ul className="shell-agents shell-agents--all">{agents.map(tile)}</ul>
+        </Overlay>
+      )}
+    </section>
+  );
+}
+
+function AgentTile({
+  agent,
+  model,
+  onOpen,
+}: {
+  agent: AgentAtWork;
+  model: string;
+  onOpen: (featureId: string) => void;
+}) {
+  const subject = agentSubject(agent);
+  const status = agent.working ? "Working now" : (agent.detail ?? "Idle");
+  const body = (
+    <>
+      <span className="shell-agent__name">
+        <ActivityDot activity={agent.working ? "running" : "idle"} />
+        <span className="shell-agent__text">{agentLabel(agent)}</span>
+      </span>
+      {model && <span className="shell-agent__text shell-agent__model">{model}</span>}
+      <span className="shell-agent__text shell-agent__role">{agentRoleLabel(agent.role)}</span>
+      {subject && <span className="shell-agent__text shell-agent__subject">{subject}</span>}
+    </>
+  );
+  const className = `shell-agent ${agent.working ? "shell-agent--working" : ""}`;
+  const title = subject ? `${subject}: ${status}` : status;
+  return (
+    <li>
+      {agent.work_order_id ? (
+        <button className={className} title={title} onClick={() => onOpen(agent.work_order_id!)}>
+          {body}
+        </button>
+      ) : (
+        <div className={className} title={title}>
+          {body}
+        </div>
+      )}
     </li>
   );
 }
