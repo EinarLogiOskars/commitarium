@@ -364,7 +364,9 @@ export function ChatView({
 
   const count = (conversation?.messages.length ?? 0) + (conversation?.queued?.length ?? 0);
   // The chat stays at its end while what it shows grows (cards and work
-  // orders fill in after the messages), until the user scrolls up to read.
+  // orders fill in after the messages) or its box shrinks, until the user
+  // scrolls up to read. Only the user's own scrolling unpins it: layout
+  // shifts scroll too, and WebKit has no scroll anchoring.
   const pinned = useRef(true);
   useEffect(() => {
     pinned.current = true;
@@ -385,20 +387,46 @@ export function ChatView({
     const resized = new ResizeObserver(stick);
     const watch = () => {
       resized.disconnect();
+      resized.observe(el);
       for (const child of el.children) resized.observe(child);
       stick();
     };
     const added = new MutationObserver(watch);
     added.observe(el, { childList: true });
     watch();
+    const atEnd = () => el.scrollHeight - el.scrollTop - el.clientHeight < 48;
+    // Dragging the scrollbar: its scrolls are the user's.
+    let dragging = false;
     const onScroll = () => {
-      pinned.current = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
+      if (dragging) pinned.current = atEnd();
+      else if (atEnd()) pinned.current = true;
+    };
+    const onWheel = (e: WheelEvent) => {
+      if (e.deltaY < 0) pinned.current = false;
+      else if (atEnd()) pinned.current = true;
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (["ArrowUp", "PageUp", "Home"].includes(e.key)) pinned.current = false;
+    };
+    const onDown = () => {
+      dragging = true;
+    };
+    const onUp = () => {
+      dragging = false;
     };
     el.addEventListener("scroll", onScroll, { passive: true });
+    el.addEventListener("wheel", onWheel, { passive: true });
+    el.addEventListener("keydown", onKey);
+    el.addEventListener("pointerdown", onDown);
+    window.addEventListener("pointerup", onUp);
     return () => {
       resized.disconnect();
       added.disconnect();
       el.removeEventListener("scroll", onScroll);
+      el.removeEventListener("wheel", onWheel);
+      el.removeEventListener("keydown", onKey);
+      el.removeEventListener("pointerdown", onDown);
+      window.removeEventListener("pointerup", onUp);
     };
   }, [loaded]);
 
