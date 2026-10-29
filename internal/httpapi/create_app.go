@@ -156,7 +156,7 @@ func (api *API) planProject(
 	}
 	// Starting it wakes the project's assistant to plan it with the user.
 	if err := api.callOwn(ctx, http.MethodPost, "/api/v1/projects/"+url.PathEscape(projectID)+"/vision/planning", "",
-		startPlanningRequest{Goal: goal, Transcript: transcript(moved.Messages)}, nil); err != nil {
+		startPlanningRequest{Goal: goal, Transcript: transcript(moved.Messages), Chat: moved.Chat, Idea: goal}, nil); err != nil {
 		return failed(err)
 	}
 	if moved.Scope == "" {

@@ -23,7 +23,21 @@ export interface AssistantMessage {
   text: string;
   /** The files attached to it, among the scope's documents. */
   attachments?: string[];
+  /** The assistant's questions with suggested answers (ADR-039), each
+   * answered once. */
+  questions?: AssistantQuestion[];
   occurred_at: string;
+}
+
+/** A question the assistant asked, with the answers it suggests. */
+export interface AssistantQuestion {
+  id: string;
+  text: string;
+  options: string[];
+  /** The option the assistant would pick. */
+  suggested: number;
+  /** Set once answered; option is absent when the user wrote their own. */
+  answer?: { option?: number; text: string; answered_at: string };
 }
 
 export type AssistantActionType =
@@ -47,7 +61,8 @@ export type AssistantActionType =
   | "apply_stack"
   | "research"
   | "update_plan"
-  | "build_plan";
+  | "build_plan"
+  | "start_planning";
 
 export interface AssistantAction {
   id: string;
@@ -83,7 +98,15 @@ export interface AssistantAction {
   /** For update_plan: the plan's sections (description is its goal). */
   decisions?: string[];
   open_questions?: string[];
-  plan_items?: { priority: number; title: string; description: string }[];
+  plan_items?: {
+    priority: number;
+    title: string;
+    description: string;
+    items?: { title: string; description: string }[];
+  }[];
+  /** For update_plan: the written plan, when this update drafts or
+   * revises it. */
+  plan_document?: string;
   stack_presets?: string[];
   frameworks?: string;
   /** For add_vision_item and start_autopilot: 0 for P0, 1 for P1, and so on. */
@@ -289,6 +312,32 @@ export const createChat = (scope: string): Promise<Conversation> =>
  * project as its first chat, and its planning starts from the chat. */
 export const makeChatProject = (chat: string): Promise<Conversation> =>
   request(`${conversationPath({ scope: "commitarium", chat })}/project`, { method: "POST" });
+
+/** Answers a question of the assistant's with one of its options or the
+ * user's own words; the answer goes into the chat as the user's message. */
+export const answerAssistantQuestion = (
+  target: { scope: string; chat: string },
+  messageId: string,
+  questionId: string,
+  answer: { option: number } | { text: string },
+): Promise<Conversation> =>
+  request(
+    `${conversationPath(target)}/messages/${encodeURIComponent(messageId)}/questions/${encodeURIComponent(questionId)}/answer`,
+    { method: "POST", body: answer },
+  );
+
+/** Answers several questions of the assistant's message at once; the
+ * answers go into the chat as one message of the user's, so the assistant
+ * hears them all in one turn. */
+export const answerAssistantQuestions = (
+  target: { scope: string; chat: string },
+  messageId: string,
+  answers: ({ question: string } & ({ option: number } | { text: string }))[],
+): Promise<Conversation> =>
+  request(`${conversationPath(target)}/messages/${encodeURIComponent(messageId)}/answers`, {
+    method: "POST",
+    body: { answers },
+  });
 
 export const startLaunch = (scope: string): Promise<Conversation> =>
   request(`${conversationPath(scope)}/launch`, { method: "POST" });

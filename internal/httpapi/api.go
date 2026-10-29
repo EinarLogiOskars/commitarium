@@ -519,6 +519,7 @@ func newAPI(
 		mux.HandleFunc("POST /api/v1/projects/{id}/vision/planning", api.startPlanningHandler)
 		mux.HandleFunc("PUT /api/v1/projects/{id}/vision/planning", api.updatePlanningHandler)
 		mux.HandleFunc("POST /api/v1/projects/{id}/vision/planning/pause", api.pausePlanningHandler)
+		mux.HandleFunc("POST /api/v1/projects/{id}/vision/planning/discard", api.discardPlanningHandler)
 		mux.HandleFunc("POST /api/v1/projects/{id}/vision/planning/finish", api.finishPlanningHandler)
 	}
 	if assistantConversations != nil && projects != nil && features != nil {
@@ -527,6 +528,9 @@ func newAPI(
 		mux.HandleFunc("GET /api/v1/assistant/conversations/{scope}", api.getConversationHandler)
 		mux.HandleFunc("POST /api/v1/assistant/conversations/{scope}/messages", api.sendConversationHandler)
 		mux.HandleFunc("POST /api/v1/assistant/conversations/{scope}/retry", api.retryConversationTurnHandler)
+		mux.HandleFunc("POST /api/v1/assistant/conversations/{scope}/messages/{messageID}/questions/{questionID}/answer",
+			api.answerQuestionHandler)
+		mux.HandleFunc("POST /api/v1/assistant/conversations/{scope}/messages/{messageID}/answers", api.answerQuestionsHandler)
 		mux.HandleFunc("PUT /api/v1/assistant/conversations/{scope}/notes", api.saveConversationNotesHandler)
 		mux.HandleFunc("PUT /api/v1/assistant/conversations/{scope}/focus", api.setConversationFocusHandler)
 		mux.HandleFunc("DELETE /api/v1/assistant/conversations/{scope}/focus", api.setConversationFocusHandler)

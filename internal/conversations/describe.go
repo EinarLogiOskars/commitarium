@@ -350,6 +350,20 @@ func writePlanning(builder *strings.Builder, stored vision.Vision) {
 			builder.WriteString("- " + value + "\n")
 		}
 	}
+	if !planning.Paused() {
+		// The checklist as it stands, so a turn knows what is still to cover.
+		left := []string{}
+		for _, key := range planning.Checklist() {
+			if !slices.Contains(planning.Covered, key) {
+				left = append(left, key)
+			}
+		}
+		covered := "none yet"
+		if len(planning.Covered) > 0 {
+			covered = strings.Join(planning.Covered, ", ")
+		}
+		builder.WriteString("Covered: " + covered + "; still to cover: " + strings.Join(left, ", ") + "\n")
+	}
 	lines("Decisions", planning.Decisions)
 	lines("Open questions", planning.Questions)
 	research := make([]string, 0, len(planning.Research))
@@ -371,6 +385,12 @@ func writePlanning(builder *strings.Builder, stored vision.Vision) {
 	for _, priority := range stored.Plan.Priorities {
 		writeVisionItems(builder, priority.Items, fmt.Sprintf("P%d", priority.Level), "", nil)
 	}
+	if !planning.Drafted() {
+		builder.WriteString("Written plan: no draft yet (talking).\n")
+		return
+	}
+	builder.WriteString("Written plan (drafted, at " + planning.DocumentPath + "; the user reviews it, and a revision sends it in full):\n" +
+		planning.Document + "\n")
 }
 
 func writeVisionItems(builder *strings.Builder, items []featureartifact.VisionItem, prefix, indent string, byID map[string]feature.Feature) {

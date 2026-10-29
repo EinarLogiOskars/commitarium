@@ -683,6 +683,18 @@ func (service *Service) chatFor(ctx context.Context, scope string) (string, erro
 	return chat, nil
 }
 
+// ChatOrRecent names chat when the scope has it, or, for an empty chat, the
+// scope's most recently used one.
+func (service *Service) ChatOrRecent(ctx context.Context, scope, chat string) (string, error) {
+	if err := service.checkScope(ctx, scope); err != nil {
+		return "", err
+	}
+	if chat != "" {
+		return service.chatFor(InChat(ctx, chat), scope)
+	}
+	return service.recentChat(scope)
+}
+
 // Chats lists a scope's chats, the most recently used first; archived ones
 // only with archived.
 func (service *Service) Chats(ctx context.Context, scope string, archived bool) ([]Chat, error) {

@@ -46,6 +46,9 @@ type Vision struct {
 	// Planning is set once the vision is planned with the assistant in the
 	// planning workspace (planning.go); it stays, built, as its record.
 	Planning *Planning `json:"planning,omitempty"`
+	// Plans are the planning sessions that were built, oldest first
+	// (plan_records.go): the first plan, then each next round.
+	Plans []PlanRecord `json:"plans,omitempty"`
 }
 
 // Mode is how the assistant writes the vision.
@@ -213,6 +216,7 @@ func (service *Service) Save(ctx context.Context, projectID string, plan feature
 	}
 	return service.write(Vision{
 		ProjectID: projectID, Plan: plan, Source: "user", Revision: current.Revision + 1, Planning: current.Planning,
+		Plans: current.Plans,
 	})
 }
 
@@ -596,7 +600,7 @@ func (service *Service) refresh(ctx context.Context, record sessionRecord) (sess
 		}
 		if _, err := service.write(Vision{
 			ProjectID: record.ProjectID, Plan: plan, Source: "assistant", Revision: previous.Revision + 1,
-			Planning: previous.Planning,
+			Planning: previous.Planning, Plans: previous.Plans,
 		}); err != nil {
 			return record, err
 		}

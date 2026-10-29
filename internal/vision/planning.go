@@ -34,23 +34,81 @@ const (
 // being planned.
 var ErrNotPlanning = errors.New("the vision is not being planned")
 
-// PlanningSteps are the planning agenda, in order: the assistant works
-// through one at a time and the workspace shows where they are. Decisions
-// and open questions start with their step and a colon ("look: dark theme")
-// so the workspace can show each under its step. Review is the last step: the
-// whole plan, ready to build.
-var PlanningSteps = []string{"purpose", "features", "data", "look", "details", "priorities", "stack", "review"}
+// ErrNoDraft is returned for Build it before the plan is written: planning
+// ends with a written plan and its slices (PLAN_MODE_PLAN.md PM6).
+var ErrNoDraft = errors.New("the plan has no written draft yet: write the plan first")
+
+// PlanningChecklist is what a good plan covers (ADR-039): a checklist, not
+// an order. The assistant marks the keys the plan covers as it goes, and
+// decisions and open questions start with their key and a colon ("look:
+// dark theme") so the plan can show each under it.
+var PlanningChecklist = []string{"purpose", "features", "data", "look", "details", "priorities", "stack"}
+
+// RoundChecklist is what a next round's plan covers: what the round is for
+// rather than the app's purpose, and no stack, which is settled.
+var RoundChecklist = []string{"round", "features", "data", "look", "details", "priorities"}
+
+// ReviewStep is the step once everything is covered: the plan, ready to
+// build.
+const ReviewStep = "review"
 
 type Planning struct {
 	Status PlanningStatus `json:"status"`
-	// Step is the agenda step the conversation is on; empty before the
-	// assistant has named one.
-	Step      string         `json:"step,omitempty"`
+	// Step is the checklist key the conversation is mostly on, or review;
+	// empty before the assistant has named one.
+	Step string `json:"step,omitempty"`
+	// Covered are the checklist keys the plan covers, in checklist order;
+	// absent on plans from before the checklist.
+	Covered   []string       `json:"covered,omitempty"`
 	Decisions []string       `json:"decisions"`
 	Questions []string       `json:"open_questions"`
 	Research  []ResearchNote `json:"research"`
 	StartedAt time.Time      `json:"started_at"`
 	BuiltAt   *time.Time     `json:"built_at,omitempty"`
+	// Chat is the assistant chat the planning is in (ADR-039): only its
+	// turns plan. Empty, as planning started before chats had it, every
+	// chat of the project plans.
+	Chat string `json:"chat,omitempty"`
+	// Round marks the planning of a next round: the vision had built work
+	// when it started, so its checklist is RoundChecklist, the items it adds go in
+	// from RoundPriority on, and the built items stay as they are.
+	Round         bool `json:"round,omitempty"`
+	RoundPriority int  `json:"round_priority,omitempty"`
+	// Phase is where the planning stands (PLAN_MODE_PLAN.md PM6): talking
+	// (empty) until the assistant writes the plan's draft, then drafted,
+	// while the user reviews it. Build it needs a draft.
+	Phase PlanningPhase `json:"phase,omitempty"`
+	// Document is the written plan, in markdown: the goal, decisions with
+	// their reasons, design notes, and the slices as a numbered checklist.
+	// DocumentPath is where in the repository its first slice commits it,
+	// such as docs/plans/sharing.md; set with the first draft, it stays.
+	Document     string `json:"document,omitempty"`
+	DocumentPath string `json:"document_path,omitempty"`
+	// Before is the vision as the session found it, which Discard puts
+	// back (plan_records.go); absent on sessions from before it.
+	Before *PlanningSnapshot `json:"before,omitempty"`
+}
+
+// PlanningPhase is where a planning stands: talking, or drafted once the
+// written plan is there to review.
+type PlanningPhase string
+
+const (
+	PhaseTalking PlanningPhase = ""
+	PhaseDrafted PlanningPhase = "drafted"
+)
+
+// Drafted reports whether the planning has its written plan.
+func (planning *Planning) Drafted() bool {
+	return planning != nil && planning.Phase == PhaseDrafted && planning.Document != ""
+}
+
+// Checklist is what the planning's plan covers.
+func (planning *Planning) Checklist() []string {
+	if planning != nil && planning.Round {
+		return RoundChecklist
+	}
+	return PlanningChecklist
 }
 
 // ResearchNote is what a research helper found, with its sources.
@@ -66,12 +124,18 @@ type ResearchNote struct {
 // Stack, and no Items keep what there is.
 type PlanningUpdate struct {
 	Goal string `json:"goal"`
-	// Step, when set, is the agenda step the conversation moved to.
+	// Step, when set, is the checklist key the conversation moved to, or
+	// review. Covered, when set, replaces the keys the plan covers. Keys
+	// not on the planning's checklist are ignored.
 	Step      string                       `json:"step,omitempty"`
+	Covered   []string                     `json:"covered,omitempty"`
 	Decisions []string                     `json:"decisions"`
 	Questions []string                     `json:"open_questions"`
 	Stack     *featureartifact.VisionStack `json:"stack,omitempty"`
 	Items     []featureartifact.PlanItem   `json:"items"`
+	// Document, when set, is the written plan: the first draft, or its
+	// revision in full. Empty keeps it.
+	Document string `json:"document,omitempty"`
 }
 
 const (
@@ -92,10 +156,11 @@ func (planning *Planning) Paused() bool {
 	return planning != nil && planning.Status == PlanningPaused
 }
 
-// StartPlanning puts the project's vision in planning, or starts one from
-// goal when it has none; paused planning resumes as it was. started is false
-// when it was already being planned.
-func (service *Service) StartPlanning(ctx context.Context, projectID, goal string) (Vision, bool, error) {
+// StartPlanning puts the project's vision in planning in chat, or starts one
+// from goal when it has none; paused planning resumes as it was. Planning
+// open in another chat moves to chat, and an empty chat keeps the one it is
+// in. started is false when it was already being planned in that chat.
+func (service *Service) StartPlanning(ctx context.Context, projectID, goal, chat string) (Vision, bool, error) {
 	// Reading first seeds a vision the repository carries.
 	if _, err := service.Get(ctx, projectID); err != nil && !errors.Is(err, ErrNotFound) {
 		return Vision{}, false, err
@@ -104,6 +169,7 @@ func (service *Service) StartPlanning(ctx context.Context, projectID, goal strin
 	service.mu.Lock()
 	defer service.mu.Unlock()
 	current, err := service.read(projectID)
+	existed := err == nil
 	switch {
 	case errors.Is(err, ErrNotFound):
 		if goal == "" {
@@ -114,19 +180,29 @@ func (service *Service) StartPlanning(ctx context.Context, projectID, goal strin
 		}}
 	case err != nil:
 		return Vision{}, false, err
-	case current.Planning.Open():
+	case current.Planning.Open() && (chat == "" || chat == current.Planning.Chat):
 		return current, false, nil
-	case current.Planning.Paused():
+	case current.Planning.Open(), current.Planning.Paused():
 		planning := *current.Planning
 		planning.Status = PlanningOpen
+		if chat != "" {
+			planning.Chat = chat
+		}
 		current.Planning = &planning
 		current.Revision++
 		stored, err := service.write(current)
 		return stored, err == nil, err
 	}
+	// A built planning from before plan records is kept as the first plan,
+	// and the session keeps the vision as it finds it for Discard.
+	archiveBuilt(&current)
+	before := snapshotOf(current, existed)
 	current.Planning = &Planning{
 		Status: PlanningOpen, Decisions: []string{}, Questions: []string{}, Research: []ResearchNote{},
-		StartedAt: service.now(),
+		StartedAt: service.now(), Chat: chat, Before: before,
+	}
+	if built(current.Plan) {
+		current.Planning.Round, current.Planning.RoundPriority = true, nextPriority(current.Plan)
 	}
 	current.Revision++
 	stored, err := service.write(current)
@@ -139,9 +215,10 @@ func (service *Service) UpdatePlanning(ctx context.Context, projectID string, up
 		return Vision{}, err
 	}
 	decisions, questions := trimmed(update.Decisions), trimmed(update.Questions)
-	step := strings.TrimSpace(update.Step)
-	if step != "" && !slices.Contains(PlanningSteps, step) {
-		return Vision{}, fmt.Errorf("%w: the step must be one of %s", ErrInvalid, strings.Join(PlanningSteps, ", "))
+	step := strings.ToLower(strings.TrimSpace(update.Step))
+	document := strings.TrimSpace(update.Document)
+	if len(document) > featureartifact.MaxPlanDocumentBytes {
+		return Vision{}, fmt.Errorf("%w: the written plan is too long", ErrInvalid)
 	}
 	if len(decisions) > maxDecisions || len(questions) > maxQuestions {
 		return Vision{}, fmt.Errorf("%w: at most %d decisions and %d open questions", ErrInvalid, maxDecisions, maxQuestions)
@@ -160,9 +237,22 @@ func (service *Service) UpdatePlanning(ctx context.Context, projectID string, up
 	if !current.Planning.Open() {
 		return Vision{}, ErrNotPlanning
 	}
+	checklist := current.Planning.Checklist()
+	if step != ReviewStep && !slices.Contains(checklist, step) {
+		step = ""
+	}
 	plan := current.Plan
 	if goal := strings.TrimSpace(update.Goal); goal != "" {
 		plan.Statement = goal
+	}
+	planning := *current.Planning
+	if document != "" {
+		// The draft, or its revision: the planning is drafted, and its path
+		// is set with the first draft.
+		planning.Document, planning.Phase = document, PhaseDrafted
+		if planning.DocumentPath == "" {
+			planning.DocumentPath = documentPath(document, plan)
+		}
 	}
 	if update.Stack != nil {
 		if plan.Stack = knownStack(update.Stack); plan.Stack == nil {
@@ -170,7 +260,7 @@ func (service *Service) UpdatePlanning(ctx context.Context, projectID string, up
 		}
 	}
 	if len(update.Items) > 0 {
-		priorities, err := plannedPriorities(plan, update.Items)
+		priorities, err := plannedPriorities(plan, update.Items, &planning)
 		if err != nil {
 			return Vision{}, fmt.Errorf("%w: %v", ErrInvalid, err)
 		}
@@ -181,10 +271,15 @@ func (service *Service) UpdatePlanning(ctx context.Context, projectID string, up
 	if len(questions) > 0 {
 		plan.Confidence = "medium"
 	}
-	planning := *current.Planning
+	if planning.DocumentPath != "" {
+		stampDocument(plan.Priorities, planning.DocumentPath)
+	}
 	planning.Decisions, planning.Questions = decisions, questions
 	if step != "" {
 		planning.Step = step
+	}
+	if update.Covered != nil {
+		planning.Covered = coveredKeys(checklist, update.Covered)
 	}
 	current.Plan, current.Planning, current.Source = plan, &planning, "assistant"
 	current.Revision++
@@ -217,16 +312,93 @@ func (service *Service) PausePlanning(ctx context.Context, projectID string) (Vi
 }
 
 // plannedPriorities builds the plan's priorities from the build plan's
-// items, with IDs derived from their titles.
-func plannedPriorities(plan featureartifact.VisionPlan, items []featureartifact.PlanItem) ([]featureartifact.VisionPriority, error) {
-	plan.Priorities = []featureartifact.VisionPriority{}
+// items, with IDs derived from their titles. In a round, the built items
+// stay as they are, whatever the items say of them, and the others go in at
+// the round's priority or after it.
+func plannedPriorities(
+	plan featureartifact.VisionPlan, items []featureartifact.PlanItem, planning *Planning,
+) ([]featureartifact.VisionPriority, error) {
+	kept := map[string]bool{}
+	if planning.Round {
+		plan.Priorities = builtItems(plan)
+		for _, priority := range plan.Priorities {
+			for _, item := range priority.Items {
+				kept[strings.ToLower(item.Title)] = true
+			}
+		}
+	} else {
+		plan.Priorities = []featureartifact.VisionPriority{}
+	}
 	for _, item := range items {
+		if kept[strings.ToLower(strings.TrimSpace(item.Title))] {
+			continue
+		}
+		level := item.Priority
+		if planning.Round {
+			level = max(level, planning.RoundPriority)
+		}
 		var err error
-		if plan, _, err = plan.AddItem(item.Priority, item.Title, item.Description, ""); err != nil {
+		if plan, _, err = plan.AddPlannedItem(level, item, planning.DocumentPath); err != nil {
 			return nil, err
 		}
 	}
 	return plan.Priorities, nil
+}
+
+// built reports whether the plan has built work: an item done, or with a
+// work order of its own.
+func built(plan featureartifact.VisionPlan) bool {
+	for _, priority := range plan.Priorities {
+		for _, item := range priority.Items {
+			if itemBuilt(item) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// itemBuilt reports whether an item, or one of its sub-items, is done or
+// has a work order.
+func itemBuilt(item featureartifact.VisionItem) bool {
+	if item.Done || item.FeatureID != "" {
+		return true
+	}
+	for _, sub := range item.Items {
+		if itemBuilt(sub) {
+			return true
+		}
+	}
+	return false
+}
+
+// builtItems are the plan's priorities with only their built items.
+func builtItems(plan featureartifact.VisionPlan) []featureartifact.VisionPriority {
+	priorities := []featureartifact.VisionPriority{}
+	for _, priority := range plan.Priorities {
+		items := []featureartifact.VisionItem{}
+		for _, item := range priority.Items {
+			if itemBuilt(item) {
+				items = append(items, item)
+			}
+		}
+		if len(items) > 0 {
+			priorities = append(priorities, featureartifact.VisionPriority{Level: priority.Level, Items: items})
+		}
+	}
+	return priorities
+}
+
+// nextPriority is the priority after the plan's highest one, where a
+// round's items go.
+func nextPriority(plan featureartifact.VisionPlan) int {
+	next := 0
+	for _, priority := range plan.Priorities {
+		if len(priority.Items) > 0 {
+			next = max(next, priority.Level+1)
+		}
+	}
+	return min(next, 9) // P9 is the last priority there is
 }
 
 // AddResearch records what a research helper found on a vision being
@@ -283,13 +455,19 @@ func (service *Service) FinishPlanning(ctx context.Context, projectID string) (V
 	if !current.Planning.Open() {
 		return Vision{}, ErrNotPlanning
 	}
+	if !current.Planning.Drafted() {
+		return Vision{}, fmt.Errorf("%w: %w", ErrInvalid, ErrNoDraft)
+	}
 	if !hasItems(current.Plan) {
 		return Vision{}, fmt.Errorf("%w: the build plan has no items yet", ErrInvalid)
 	}
 	now := service.now()
 	planning := *current.Planning
-	planning.Status, planning.BuiltAt = PlanningBuilt, &now
+	planning.Status, planning.BuiltAt, planning.Before = PlanningBuilt, &now, nil
 	current.Planning = &planning
+	// The session is kept as a plan of its own.
+	current.Plans = append(append([]PlanRecord{}, current.Plans...),
+		recordOf(planning, current.Plan, fmt.Sprintf("plan-%d", len(current.Plans)+1)))
 	current.Plan.Guesses = append([]string{}, planning.Questions...)
 	if len(current.Plan.Guesses) > featureartifact.MaxBriefItems {
 		current.Plan.Guesses = current.Plan.Guesses[:featureartifact.MaxBriefItems]
@@ -305,6 +483,20 @@ func hasItems(plan featureartifact.VisionPlan) bool {
 		}
 	}
 	return false
+}
+
+// coveredKeys are the checklist's keys that covered names, in checklist
+// order.
+func coveredKeys(checklist, covered []string) []string {
+	keys := []string{}
+	for _, key := range checklist {
+		if slices.ContainsFunc(covered, func(named string) bool {
+			return strings.EqualFold(strings.TrimSpace(named), key)
+		}) {
+			keys = append(keys, key)
+		}
+	}
+	return keys
 }
 
 func trimmed(values []string) []string {

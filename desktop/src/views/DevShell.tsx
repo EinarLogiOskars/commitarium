@@ -211,7 +211,7 @@ export function DevShell({
   }, [openOrder, onOrderOpened, expand]);
   // A project the assistant created to plan opens on its vision; asking the
   // assistant something goes back to the chat. A page that only opens the
-  // assistant beside it, as the Planning workspace does, stays.
+  // assistant beside it stays.
   useEffect(() => {
     const planProject = (event: Event) => {
       const id = (event as CustomEvent<string>).detail;
@@ -720,6 +720,13 @@ export function DevShell({
               loadProjects();
               void loadChats();
             }}
+            onOpenChat={(chat) => select({ scope: selection.scope, chat })}
+            planSwitch={false}
+            projectName={loose ? undefined : project?.name}
+            chatName={(chat) => {
+              const found = chats[selection.scope]?.find((c) => c.id === chat);
+              return found ? found.title || "New chat" : undefined;
+            }}
             onOpenOrder={loose ? undefined : (id) => setScopePage({ mode: "order", orderId: id })}
             chips={
               loose ? (
@@ -768,6 +775,7 @@ export function DevShell({
             key={selection.scope}
             projectId={selection.scope}
             project={project}
+            chat={currentChat}
             attention={attention}
             onOpenPage={(target) => {
               setShowProjects(false);

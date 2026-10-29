@@ -14,10 +14,21 @@ import { ApiError } from "../api/client";
 import { startAutopilot } from "../api/assistant";
 import { ASSISTANT_CHANGED, WORK_CHANGED } from "./AssistantDrawer";
 import { ORDER_STATE_LABEL } from "./chatActivity";
-import { itemDone } from "./projectCardData";
+import { itemDone, priorityProgress, type PriorityProgress } from "./projectCardData";
 import { Markdown } from "./Markdown";
-import { PlanningWorkspace } from "./PlanningWorkspace";
-import { openAssistantOn } from "../attention/askAssistant";
+import { openAssistant, openAssistantOn } from "../attention/askAssistant";
+import { Overlay } from "./Overlay";
+import { PlanDocumentView } from "./PlanPage";
+import { DecisionGroups, PlanInsights, ProjectDocuments, ResearchList } from "./PlanInsights";
+import { planPhase } from "./planMode";
+import {
+  plannedFrom,
+  plansOf,
+  selectPlan,
+  sliceRows,
+  withoutTopic,
+  type ShownPlan,
+} from "./visionPlans";
 import { rememberIdea, rememberedIdea } from "./visionSession";
 import type {
   Feature,
@@ -60,6 +71,11 @@ export function VisionView({
   const [draft, setDraft] = useState<VisionPlan | null>(null);
   const [rewriting, setRewriting] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
+  // The tab on screen: null for the overview, or a plan's ID.
+  const [tab, setTab] = useState<string | null>(null);
+  // The plan being written, or Insights, over the page while planning.
+  const [planOverlay, setPlanOverlay] = useState<null | "plan" | "insights">(null);
+  const closeOverlay = useCallback(() => setPlanOverlay(null), []);
 
   const loadVision = useCallback(async () => {
     try {
@@ -168,19 +184,25 @@ export function VisionView({
   };
 
   if (!loaded) return <p className="muted">Loading…</p>;
-  // A vision being planned is the planning workspace (planning mode).
-  if (vision?.planning?.status === "planning") {
-    return <PlanningWorkspace projectId={projectId} vision={vision} onChanged={setVision} />;
-  }
 
   const plan = vision?.plan;
   const lowConfidence = plan && plan.confidence !== "high" && plan.guesses.length > 0;
+  const plans = plansOf(vision);
+  // The tab on screen: the overview, or one of the plans.
+  const selected = selectPlan(plans, tab);
+  const overview = !selected;
+  const planning = vision?.planning;
+  const planningOn = planning?.status === "planning";
+  const progress = new Map(
+    plan ? priorityProgress(plan, [...features.values()]).map((p) => [p.level, p]) : [],
+  );
+  const from = plannedFrom(plans);
 
   return (
     <div className="vision">
       <div className="vision__head">
         <h2>Vision</h2>
-        {vision && !draft && !session && (
+        {vision && overview && !draft && !session && (
           <div className="row">
             <button className="ghost" onClick={() => setDraft(structuredClone(vision.plan))}>
               Edit
@@ -192,10 +214,32 @@ export function VisionView({
         )}
       </div>
       {error && <div className="banner banner--error">{error}</div>}
-      {vision?.planning?.status === "paused" && (
-        <p className="muted">
-          Planning is stopped. The plan is kept as it is; resume it from the assistant.
-        </p>
+      {vision && !draft && !session && !rewriting && plans.length > 0 && (
+        <nav className="rail__tabs vision__tabs" role="tablist" aria-label="Vision and its plans">
+          <button
+            role="tab"
+            aria-selected={overview}
+            className={`rail__tab ${overview ? "rail__tab--on" : ""}`}
+            onClick={() => setTab(null)}
+          >
+            Overview
+          </button>
+          {plans.map((p) => (
+            <button
+              key={p.id}
+              role="tab"
+              aria-selected={selected?.id === p.id}
+              className={`rail__tab ${selected?.id === p.id ? "rail__tab--on" : ""}`}
+              onClick={() => setTab(p.id)}
+              title={p.built_at ? `Built ${new Date(p.built_at).toLocaleDateString()}` : undefined}
+            >
+              {p.title}
+            </button>
+          ))}
+        </nav>
+      )}
+      {overview && (planningOn || planning?.status === "paused") && (
+        <PlanningNote vision={vision!} onOpen={setPlanOverlay} />
       )}
 
       {session ? (
@@ -225,6 +269,10 @@ export function VisionView({
             void loadVision();
           }}
         />
+      ) : selected ? (
+        plan && (
+          <PlanRecordView record={selected} plan={plan} features={features} onOpen={onOpenOrder} />
+        )
       ) : (
         plan && (
           <>
@@ -236,6 +284,7 @@ export function VisionView({
               />
             )}
             <section className="panel vision__statement">
+              <h3>Goal</h3>
               <Markdown text={plan.statement} />
               <p className="muted vision__source">
                 {VISION_SOURCE_LABELS[vision.source]} ·{" "}
@@ -269,12 +318,45 @@ export function VisionView({
                 </button>
               </div>
             )}
+            {from.decisions.length > 0 && (
+              <section className="panel">
+                <h3>Decisions</h3>
+                <DecisionGroups lines={from.decisions} empty="Nothing decided yet." />
+              </section>
+            )}
+            {from.research.length > 0 && (
+              <section className="panel">
+                <h3>Research</h3>
+                <ResearchList notes={from.research} empty={null} />
+              </section>
+            )}
+            <section className="panel">
+              <h3>Documents</h3>
+              <ProjectDocuments projectId={projectId} />
+            </section>
+            {plan.stack && (
+              <section className="panel">
+                <h3>Stack</h3>
+                <p className="note">
+                  {plan.stack.frameworks || plan.stack.presets.join(", ")}
+                  {plan.stack.frameworks && (
+                    <span className="muted"> · {plan.stack.presets.join(", ")}</span>
+                  )}
+                </p>
+                {plan.stack.reason && <p className="muted note">{plan.stack.reason}</p>}
+              </section>
+            )}
+            <h3 className="vision__section">Build plan</h3>
             {plan.priorities.length === 0 && <p className="muted">The plan has no items yet.</p>}
             {[...plan.priorities]
               .sort((a, b) => a.level - b.level)
               .map((priority) => (
                 <section className="panel vision__priority" key={priority.level}>
-                  <PriorityAutopilot projectId={projectId} level={priority.level} />
+                  <PriorityAutopilot
+                    projectId={projectId}
+                    level={priority.level}
+                    progress={progress.get(priority.level)}
+                  />
                   <ItemList
                     items={priority.items}
                     prefix={`P${priority.level}`}
@@ -295,7 +377,172 @@ export function VisionView({
           </>
         )
       )}
+      {planOverlay === "plan" && (
+        <Overlay title="Plan" onClose={closeOverlay}>
+          <PlanDocumentView projectId={projectId} onBack={closeOverlay} inOverlay />
+        </Overlay>
+      )}
+      {planOverlay === "insights" && vision && (
+        <Overlay title="Insights" onClose={closeOverlay}>
+          <PlanInsights projectId={projectId} vision={vision} />
+        </Overlay>
+      )}
     </div>
+  );
+}
+
+// Planning in progress, over the vision's overview: the plan being written
+// opens over the page, as on the Plan card, and the vision itself stays the
+// overview (ADR-039: the planning workspace page is gone).
+function PlanningNote({
+  vision,
+  onOpen,
+}: {
+  vision: Vision;
+  onOpen: (what: "plan" | "insights") => void;
+}) {
+  const planning = vision.planning!;
+  const open = planning.status === "planning";
+  return (
+    <div className="banner vision__planning">
+      <span>
+        {open
+          ? planning.round
+            ? "The next round is being planned in a chat. Nothing new is built until Build it."
+            : "This project is being planned in a chat. Nothing is built until Build it."
+          : "Planning is stopped. The plan is kept as it is; turn plan mode on in a chat to pick it up."}
+      </span>
+      <span className="row">
+        {open && (
+          <button className="ghost" onClick={() => onOpen("plan")}>
+            {planPhase(planning) === "drafted" ? "Open the plan" : "The plan"}
+          </button>
+        )}
+        <button className="ghost" onClick={() => onOpen("insights")}>
+          Insights
+        </button>
+        {open && (
+          <button className="ghost" onClick={() => openAssistant(true)}>
+            Talk to the assistant
+          </button>
+        )}
+      </span>
+    </div>
+  );
+}
+
+// One plan the project was built from: its goal, written plan, decisions by
+// topic, research, and its slices with how far each has got.
+function PlanRecordView({
+  record,
+  plan,
+  features,
+  onOpen,
+}: {
+  record: ShownPlan;
+  plan: VisionPlan;
+  features: Map<string, Feature>;
+  onOpen: (featureId: string) => void;
+}) {
+  const rows = sliceRows(plan, record.slices);
+  const done = rows.filter((r) => itemDone(r.item, features)).length;
+  return (
+    <>
+      <p className="muted note">
+        {record.round ? "A next round" : "The first plan"}
+        {record.built_at ? ` · built ${new Date(record.built_at).toLocaleString()}` : ""}
+        {record.document_path ? ` · ${record.document_path}` : ""}
+        {record.derived ? " · read from the vision as it was planned" : ""}
+      </p>
+      <section className="panel vision__statement">
+        <h3>Goal</h3>
+        <Markdown text={record.goal} />
+      </section>
+      {record.document && (
+        <section className="panel">
+          <details className="planning__fold">
+            <summary>
+              <strong>The written plan</strong>
+            </summary>
+            <article className="plan-page__document">
+              <Markdown text={record.document} />
+            </article>
+          </details>
+        </section>
+      )}
+      <section className="panel">
+        <h3>Decisions</h3>
+        <DecisionGroups
+          lines={record.decisions}
+          empty={
+            record.derived ? "This plan was written before decisions were kept." : "None recorded."
+          }
+        />
+      </section>
+      {record.open_questions.length > 0 && (
+        <section className="panel">
+          <h3>Left open</h3>
+          <p className="muted note">Built with the assistant&apos;s suggested default for each.</p>
+          <ul className="planning__list planning__list--open">
+            {record.open_questions.map((q) => (
+              <li key={q}>{withoutTopic(q)}</li>
+            ))}
+          </ul>
+        </section>
+      )}
+      {record.research.length > 0 && (
+        <section className="panel">
+          <h3>Research</h3>
+          <ResearchList notes={record.research} empty={null} />
+        </section>
+      )}
+      <section className="panel">
+        <div className="vision__priority-head">
+          <h3>Slices</h3>
+          {rows.length > 0 && (
+            <span className="muted note">
+              {done} of {rows.length} done
+            </span>
+          )}
+        </div>
+        {rows.length === 0 ? (
+          <p className="muted note">The vision no longer has this plan&apos;s items.</p>
+        ) : (
+          <ul className="vision__items">
+            {rows.map(({ label, item }) => {
+              const linked = item.feature_id ? features.get(item.feature_id) : undefined;
+              const isDone = itemDone(item, features);
+              return (
+                <li key={item.id} className="vision__item">
+                  <div className="vision__row">
+                    <span className="vision__label">{label}</span>
+                    <div className="vision__text">
+                      <strong>{item.title}</strong>
+                    </div>
+                    <div className="row vision__actions">
+                      {isDone ? (
+                        <span className="pill pill--ok">Done</span>
+                      ) : item.items?.length ? null : item.feature_id ? (
+                        <span className="pill">
+                          {linked ? ORDER_STATE_LABEL[linked.state] : "Work order"}
+                        </span>
+                      ) : (
+                        <span className="muted note">Not started</span>
+                      )}
+                      {item.feature_id && (
+                        <button className="ghost" onClick={() => onOpen(item.feature_id!)}>
+                          Open
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </section>
+    </>
   );
 }
 
@@ -925,7 +1172,16 @@ function describe(e: unknown): string {
 
 // A priority's heading, with autopilot: the assistant finishes the
 // priority's open items, creating and starting their work orders itself.
-function PriorityAutopilot({ projectId, level }: { projectId: string; level: number }) {
+function PriorityAutopilot({
+  projectId,
+  level,
+  progress,
+}: {
+  projectId: string;
+  level: number;
+  /** How many of the priority's items are done. */
+  progress?: PriorityProgress;
+}) {
   const [confirming, setConfirming] = useState(false);
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -948,6 +1204,11 @@ function PriorityAutopilot({ projectId, level }: { projectId: string; level: num
     <>
       <div className="vision__priority-head">
         <h3>P{level}</h3>
+        {progress && (
+          <span className="muted note vision__progress">
+            {progress.done} of {progress.total} done
+          </span>
+        )}
         {!confirming && (
           <button className="ghost" onClick={() => setConfirming(true)}>
             Autopilot

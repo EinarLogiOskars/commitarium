@@ -84,3 +84,44 @@ func TestVisionGetAnswersNotFoundBeforeOneIsWritten(t *testing.T) {
 		t.Fatalf("status %d: %s", recorder.Code, recorder.Body.String())
 	}
 }
+
+// A slice of a written plan starts a work order whose brief carries the
+// plan: the first slice commits it, and a later one reads it at its path
+// (PLAN_MODE_PLAN.md PM6).
+func TestASliceWorkOrderCarriesTheWrittenPlan(t *testing.T) {
+	projects := &recordingProjectService{getByIDResult: project.Project{ID: "prj_test"}}
+	visions, err := vision.NewService(t.TempDir(), t.TempDir(), projects, noVisionWorkers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := t.Context()
+	if _, _, err := visions.StartPlanning(ctx, "prj_test", "A to-do app.", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := visions.UpdatePlanning(ctx, "prj_test", vision.PlanningUpdate{
+		Document: "# To-do app\n\n- [ ] 1. Lists\n- [ ] 2. Sharing",
+		Items:    []featureartifact.PlanItem{{Title: "Lists"}, {Title: "Sharing"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	features := &recordingFeatureService{createResult: feature.Feature{ID: "fea_x", ProjectID: "prj_test", State: feature.StateDraft}}
+	handler := NewWithWorkspaceRealWorkflowDeletionAndModels(
+		projects, features, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, visions)
+	start := func(itemID string) string {
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost,
+			"/api/v1/projects/prj_test/vision/items/"+itemID+"/work-order", nil))
+		if recorder.Code != http.StatusCreated {
+			t.Fatalf("status %d: %s", recorder.Code, recorder.Body.String())
+		}
+		return features.receivedDescription
+	}
+	if first := start("lists"); !strings.Contains(first, "Commit the plan, as it is, at docs/plans/to-do-app.md") ||
+		!strings.Contains(first, "- [ ] 2. Sharing") {
+		t.Fatalf("the first slice's brief = %q", first)
+	}
+	if later := start("sharing"); !strings.Contains(later, "read the plan there") ||
+		!strings.Contains(later, "docs/plans/to-do-app.md") || strings.Contains(later, "2. Sharing\n") {
+		t.Fatalf("a later slice's brief = %q", later)
+	}
+}

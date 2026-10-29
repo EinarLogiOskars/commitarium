@@ -559,18 +559,21 @@ func ResolveStructuredOutput(
 
 	case OutputContractAssistantTurn, OutputContractAssistantPlanningTurn:
 		var response struct {
-			Message   string                            `json:"message"`
-			Actions   []featureartifact.AssistantAction `json:"actions"`
-			Notes     string                            `json:"notes"`
-			ChatTitle string                            `json:"chat_title"`
+			Message   string                              `json:"message"`
+			Actions   []featureartifact.AssistantAction   `json:"actions"`
+			Notes     string                              `json:"notes"`
+			ChatTitle string                              `json:"chat_title"`
+			Questions []featureartifact.AssistantQuestion `json:"questions"`
 			Plan      *struct {
 				Goal          string                     `json:"goal"`
 				Step          string                     `json:"step"`
+				Covered       []string                   `json:"covered"`
 				Decisions     []string                   `json:"decisions"`
 				OpenQuestions []string                   `json:"open_questions"`
 				Items         []featureartifact.PlanItem `json:"items"`
 				StackPresets  []string                   `json:"stack_presets"`
 				Frameworks    string                     `json:"frameworks"`
+				Document      string                     `json:"document"`
 			} `json:"plan"`
 		}
 		if err := decodeStructuredOutput(raw, &response); err != nil {
@@ -581,7 +584,7 @@ func ResolveStructuredOutput(
 			return StructuredOutput{}, invalidStructuredOutput("assistant response has no message")
 		}
 		turn, err := featureartifact.AssistantTurn{
-			Actions: response.Actions, Notes: response.Notes, ChatTitle: response.ChatTitle,
+			Actions: response.Actions, Notes: response.Notes, ChatTitle: response.ChatTitle, Questions: response.Questions,
 		}.Normalize()
 		if err != nil {
 			return StructuredOutput{}, invalidStructuredOutput("assistant turn: %v", err)
@@ -596,7 +599,7 @@ func ResolveStructuredOutput(
 				Type: featureartifact.AssistantUpdatePlan, Reason: "The plan as it stands", Description: response.Plan.Goal,
 				Decisions: response.Plan.Decisions, OpenQuestions: response.Plan.OpenQuestions,
 				PlanItems: response.Plan.Items, StackPresets: response.Plan.StackPresets, Frameworks: response.Plan.Frameworks,
-				PlanStep: response.Plan.Step,
+				PlanStep: response.Plan.Step, PlanCovered: response.Plan.Covered, PlanDocument: response.Plan.Document,
 			}}}.Normalize()
 			if err != nil {
 				return StructuredOutput{}, invalidStructuredOutput("planning turn: %v", err)
@@ -804,11 +807,14 @@ func ResolveStructuredOutput(
 // which Commitarium applies at once (ONE_CONVERSATION_PLAN.md phase 2).
 func assistantTurnSchema(planning bool) map[string]any {
 	text := map[string]any{"type": "string"}
+	types := []string{"create_work_order", "start_work_order", "change_models", "add_vision_item", "start_autopilot", "continue_work_order", "recover_work_order", "close_work_order", "create_app", "plan_project", "set_up_preview", "write_vision", "set_up_stack", "answer_helper", "write_brief", "design_stack", "research", "build_plan"}
+	if !planning {
+		// Plan mode is suggested only in a chat that is not planning.
+		types = append(types, "start_planning")
+	}
 	action := objectSchema(
 		map[string]any{
-			"type": map[string]any{
-				"type": "string", "enum": []string{"create_work_order", "start_work_order", "change_models", "add_vision_item", "start_autopilot", "continue_work_order", "recover_work_order", "close_work_order", "create_app", "plan_project", "set_up_preview", "write_vision", "set_up_stack", "answer_helper", "write_brief", "design_stack", "research", "build_plan"},
-			},
+			"type":                 map[string]any{"type": "string", "enum": types},
 			"reason":               text,
 			"title":                text,
 			"description":          text,
@@ -851,27 +857,51 @@ func assistantTurnSchema(planning bool) map[string]any {
 		"chat_title": map[string]any{"type": "string", "description": "When Commitarium says this chat has no name yet: " +
 			"a few words saying what it is about. Otherwise empty."},
 	}
-	required := []string{"message", "actions", "notes", "chat_title"}
+	properties["questions"] = map[string]any{
+		"type": "array",
+		"description": "Up to three questions for the user to answer with a tap, when a choice is theirs; " +
+			"do not repeat them in message. Otherwise empty.",
+		"items": objectSchema(
+			map[string]any{
+				"text": text,
+				"options": map[string]any{"type": "array", "items": text,
+					"description": "Two to four short answers."},
+				"suggested": map[string]any{"type": "integer", "description": "The index in options of the answer you would pick."},
+			},
+			[]string{"text", "options", "suggested"},
+		),
+	}
+	required := []string{"message", "actions", "notes", "chat_title", "questions"}
 	if planning {
+		// The keys of both planning checklists (vision.PlanningChecklist and
+		// RoundChecklist), and review.
+		planKeys := []string{"purpose", "round", "features", "data", "look", "details", "priorities", "stack", "review"}
 		properties["plan"] = objectSchema(
 			map[string]any{
 				"goal": map[string]any{"type": "string", "description": "What the project is for, in two or three sentences; empty keeps it."},
-				"step": map[string]any{"type": "string", "enum": []string{"purpose", "features", "data", "look", "details", "priorities", "stack", "review"},
-					"description": "The agenda step the conversation is on now; review once everything is covered or the user says go."},
-				"decisions":      map[string]any{"type": "array", "items": text, "description": "Every decision made so far, one short line each, starting with its step and a colon (\"look: dark theme\"); it replaces the plan's list."},
-				"open_questions": map[string]any{"type": "array", "items": text, "description": "Every question still open, one short line each, starting with its step and a colon (\"data: which repositories\"); it replaces the plan's list."},
+				"step": map[string]any{"type": "string", "enum": planKeys,
+					"description": "The checklist key the conversation is mostly on now (round only for a next round); review once everything is covered or the user says go."},
+				"covered": map[string]any{"type": "array", "items": map[string]any{"type": "string", "enum": planKeys},
+					"description": "Every checklist key the plan now covers well enough to build, in any order; it replaces the plan's list."},
+				"decisions":      map[string]any{"type": "array", "items": text, "description": "Every decision made so far, one short line each, starting with its checklist key and a colon (\"look: dark theme\"); it replaces the plan's list."},
+				"open_questions": map[string]any{"type": "array", "items": text, "description": "Every question still open, one short line each, starting with its checklist key and a colon (\"data: which repositories\"); it replaces the plan's list."},
 				"items": map[string]any{"type": "array", "description": "The whole build plan, in order; empty keeps it.", "items": objectSchema(
 					map[string]any{
 						"priority":    map[string]any{"type": "integer", "description": "0 for P0 (the first version), 1 for P1 (next), and so on."},
 						"title":       text,
 						"description": text,
+						"items": map[string]any{"type": "array", "description": "The item's slices, when it is one feature built in several commits: each a sub-item that one work order builds. Otherwise empty.",
+							"items": objectSchema(map[string]any{"title": text, "description": text}, []string{"title", "description"})},
 					},
-					[]string{"priority", "title", "description"},
+					[]string{"priority", "title", "description", "items"},
 				)},
 				"stack_presets": map[string]any{"type": "array", "items": text, "description": "The stack's runtime presets, by ID, once it is decided; empty keeps it."},
 				"frameworks":    map[string]any{"type": "string", "description": "With stack_presets: the frameworks to build it with, in a few words. Otherwise empty."},
+				"document": map[string]any{"type": "string", "description": "The written plan in markdown, in full: the first draft, or its revision. " +
+					"Starts with a # title; then the goal, decisions with their reasons, design notes, and the slices as a numbered checklist " +
+					"(\"- [ ] 1. <title> — <what changes>; done when <...>\"), the same slices as items. Empty keeps it; empty until you write the draft."},
 			},
-			[]string{"goal", "step", "decisions", "open_questions", "items", "stack_presets", "frameworks"},
+			[]string{"goal", "step", "covered", "decisions", "open_questions", "items", "stack_presets", "frameworks", "document"},
 		)
 		required = append(required, "plan")
 	}

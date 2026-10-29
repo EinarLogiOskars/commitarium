@@ -30,6 +30,8 @@ func (api *API) registerChatRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE "+chat, api.archiveChatHandler)
 	mux.HandleFunc("POST "+chat+"/messages", inChat(api.sendConversationHandler))
 	mux.HandleFunc("POST "+chat+"/retry", inChat(api.retryConversationTurnHandler))
+	mux.HandleFunc("POST "+chat+"/messages/{messageID}/questions/{questionID}/answer", inChat(api.answerQuestionHandler))
+	mux.HandleFunc("POST "+chat+"/messages/{messageID}/answers", inChat(api.answerQuestionsHandler))
 	mux.HandleFunc("PUT "+chat+"/focus", inChat(api.setConversationFocusHandler))
 	mux.HandleFunc("DELETE "+chat+"/focus", inChat(api.setConversationFocusHandler))
 	mux.HandleFunc("POST "+chat+"/actions/{actionID}/approve", inChat(api.approveConversationActionHandler))
@@ -119,4 +121,64 @@ func (api *API) archiveChatHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, archived, "assistant chat")
+}
+
+// questionAnswerer answers the assistant's question cards (ADR-039).
+type questionAnswerer interface {
+	AnswerQuestion(ctx context.Context, scope, messageID, questionID string, option *int, text string) (conversations.Conversation, error)
+	AnswerQuestions(ctx context.Context, scope, messageID string, replies []conversations.QuestionReply) (conversations.Conversation, error)
+}
+
+type answerQuestionRequest struct {
+	// Option indexes the suggested answer the user chose; without it, Text
+	// is the answer they wrote themselves.
+	Option *int   `json:"option,omitempty"`
+	Text   string `json:"text,omitempty"`
+}
+
+// answerQuestionHandler answers a question of an assistant's message and
+// sends the answer as the user's message in its chat. A question is answered
+// once; answering it again answers the chat as it is.
+func (api *API) answerQuestionHandler(w http.ResponseWriter, r *http.Request) {
+	answerer, ok := api.conversations.(questionAnswerer)
+	if !ok {
+		writeError(w, http.StatusServiceUnavailable, "assistant_unavailable", "the assistant is unavailable")
+		return
+	}
+	var body answerQuestionRequest
+	if !decodeSingleJSON(w, r, &body) {
+		return
+	}
+	conversation, err := answerer.AnswerQuestion(r.Context(), r.PathValue("scope"), r.PathValue("messageID"),
+		r.PathValue("questionID"), body.Option, body.Text)
+	if err != nil {
+		writeConversationError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, conversation, "assistant conversation")
+}
+
+type answerQuestionsRequest struct {
+	Answers []conversations.QuestionReply `json:"answers"`
+}
+
+// answerQuestionsHandler answers several questions of an assistant's
+// message at once and sends the answers as one message of the user's, so the
+// assistant hears them all in one turn.
+func (api *API) answerQuestionsHandler(w http.ResponseWriter, r *http.Request) {
+	answerer, ok := api.conversations.(questionAnswerer)
+	if !ok {
+		writeError(w, http.StatusServiceUnavailable, "assistant_unavailable", "the assistant is unavailable")
+		return
+	}
+	var body answerQuestionsRequest
+	if !decodeSingleJSON(w, r, &body) {
+		return
+	}
+	conversation, err := answerer.AnswerQuestions(r.Context(), r.PathValue("scope"), r.PathValue("messageID"), body.Answers)
+	if err != nil {
+		writeConversationError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, conversation, "assistant conversation")
 }

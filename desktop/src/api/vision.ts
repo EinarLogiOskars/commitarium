@@ -74,16 +74,45 @@ export const setUpProject = (
     body: { presets, frameworks },
   });
 
+/** How planning starts: idea is what the user wants to plan, when they came
+ * with one; withMessage says their message with it is sent right after.
+ * Without either, the assistant opens by asking what to plan. */
+export interface PlanningStart {
+  idea?: string;
+  withMessage?: boolean;
+}
+
 /** Plan the project's vision with the assistant, from goal when it has none
  * yet, or resume paused planning; its assistant is woken to plan it with the
- * user. */
-export const startPlanning = (id: string, goal: string): Promise<Vision> =>
-  request(`${visionPath(id)}/planning`, { method: "POST", body: { goal } });
+ * user. With chat, planning belongs to that chat, and moves there from
+ * another (ADR-039). */
+export const startPlanning = (
+  id: string,
+  goal: string,
+  chat?: string,
+  start: PlanningStart = {},
+): Promise<Vision> =>
+  request(`${visionPath(id)}/planning`, {
+    method: "POST",
+    body: {
+      goal,
+      ...(chat ? { chat } : {}),
+      ...(start.idea ? { idea: start.idea } : {}),
+      ...(start.withMessage ? { with_message: true } : {}),
+    },
+  });
 
 /** Stop planning: the plan is kept as it is and nothing is built; starting
  * planning again resumes it. */
 export const pausePlanning = (id: string): Promise<Vision> =>
   request(`${visionPath(id)}/planning/pause`, { method: "POST" });
+
+/** Switch plan mode off without keeping the plan: the session's draft,
+ * notes, and unbuilt plan changes are dropped and the vision is put back as
+ * it was before it, built work kept. vision is null when the session had
+ * created it. */
+export const discardPlanning = (id: string): Promise<{ vision: Vision | null; removed: boolean }> =>
+  request(`${visionPath(id)}/planning/discard`, { method: "POST" });
 
 /** Build it: the vision is the plan as it stands. With autopilot, the
  * assistant sets the project up and builds it; otherwise the user does. */
