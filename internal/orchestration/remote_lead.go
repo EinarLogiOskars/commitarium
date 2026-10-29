@@ -1499,13 +1499,20 @@ func (starter *RemoteLeadStarter) merge(
 		}
 	}
 	leadSessionID := remoteLeadSessionID(run.ID)
+	mergedText := fmt.Sprintf(
+		"Forgejo merged approved commit %s as %s in pull request #%d.",
+		mergedWorkspace.ApprovedCommitID, mergedWorkspace.MergeCommitID,
+		mergedWorkspace.PullRequestNumber,
+	)
+	if mergedWorkspace.NothingMerged() {
+		mergedText = fmt.Sprintf(
+			"Approved commit %s is already on %s, so there was nothing to merge; pull request #%d was closed.",
+			mergedWorkspace.ApprovedCommitID, mergedWorkspace.BaseBranch, mergedWorkspace.PullRequestNumber,
+		)
+	}
 	if _, err := starter.executions.RecordSessionEventWithID(
 		ctx, run.ID+":merge-completed", leadSessionID,
-		worker.Event{Type: worker.EventActivity, Text: fmt.Sprintf(
-			"Forgejo merged approved commit %s as %s in pull request #%d.",
-			mergedWorkspace.ApprovedCommitID, mergedWorkspace.MergeCommitID,
-			mergedWorkspace.PullRequestNumber,
-		)},
+		worker.Event{Type: worker.EventActivity, Text: mergedText},
 	); err != nil {
 		return execution.Run{}, false, fmt.Errorf("record completed merge activity: %w", err)
 	}

@@ -458,6 +458,65 @@ func TestRefusedMergeWithoutMainMovingKeepsThePlainBlocker(t *testing.T) {
 	})
 }
 
+// A work order whose lead changed nothing has its approved commit already
+// on main. It completes rather than blocking, whichever way it merges, and
+// one blocked before by Forgejo's refusal completes on Continue.
+func TestWorkOrderWithNothingToMergeCompletes(t *testing.T) {
+	assertCompleted := func(t *testing.T, fixture *baseUpdateFixture) {
+		t.Helper()
+		fixture.waitMerged(t)
+		if fixture.workspace.closedEmptyMerges != 1 || len(fixture.workspace.mergedCommits) != 0 ||
+			fixture.workspace.prepared.MergeCommitID != fixture.workspace.prepared.ApprovedCommitID ||
+			len(fixture.updateRequests()) != 0 {
+			t.Fatalf("closed=%d merged=%v workspace=%+v updates=%d", fixture.workspace.closedEmptyMerges,
+				fixture.workspace.mergedCommits, fixture.workspace.prepared, len(fixture.updateRequests()))
+		}
+		if line := fixture.line(t); len(line) != 0 {
+			t.Fatalf("line after completing = %v", line)
+		}
+		events, err := fixture.executions.EventsForSession(t.Context(), remoteLeadSessionID(fixture.runID))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, event := range events {
+			if event.ID == fixture.runID+":merge-completed" {
+				if !strings.Contains(event.Text, "nothing to merge") {
+					t.Fatalf("merge activity = %q", event.Text)
+				}
+				return
+			}
+		}
+		t.Fatal("no merge activity recorded")
+	}
+	t.Run("auto-merge", func(t *testing.T) {
+		fixture := startBaseUpdateRun(t, "run_nothing_auto", false, project.MergePolicyAutoAfterGates, 0,
+			func(fixture *baseUpdateFixture) { fixture.workspace.nothingToMerge = true })
+		assertCompleted(t, fixture)
+	})
+	t.Run("the user's merge", func(t *testing.T) {
+		fixture := startBaseUpdateRun(t, "run_nothing_user", false, project.MergePolicyRequireUserApproval, 0,
+			func(fixture *baseUpdateFixture) { fixture.workspace.nothingToMerge = true })
+		fixture.waitAtMergeGate(t)
+		if _, merged, err := fixture.starter.Merge(t.Context(), fixture.runID, "merge-nothing"); err != nil || !merged {
+			t.Fatalf("merge: merged=%t err=%v", merged, err)
+		}
+		assertCompleted(t, fixture)
+	})
+	t.Run("blocked before, continued", func(t *testing.T) {
+		fixture := startBaseUpdateRun(t, "run_nothing_blocked", false, project.MergePolicyAutoAfterGates, 0,
+			func(fixture *baseUpdateFixture) { fixture.workspace.mergeErrs = []error{baseUpdateNoMerge} })
+		fixture.waitBlocked(t, implementationMergeBlockedReason)
+		fixture.workspace.nothingToMerge = true
+		if _, admitted, err := fixture.starter.RecoverBlockerWithDirective(
+			t.Context(), fixture.runID, "continue-nothing",
+			RecoveryDirective{Action: RecoveryActionContinue},
+		); err != nil || !admitted {
+			t.Fatalf("continue: admitted=%t err=%v", admitted, err)
+		}
+		assertCompleted(t, fixture)
+	})
+}
+
 func TestBaseUpdateResumesAfterARestartWithoutTheOldCommit(t *testing.T) {
 	updated := baseUpdateCommits[0]
 	recordIntent := func(t *testing.T, fixture *baseUpdateFixture) string {

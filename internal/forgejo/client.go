@@ -959,6 +959,94 @@ func (client *Client) ClosePullRequest(
 	return nil
 }
 
+var _ workspace.EmptyPullRequestCloser = (*Client)(nil)
+
+// CloseEmptyPullRequest closes the exact managed pull request when its head
+// commit is already on the base branch, so there is nothing to merge: for
+// example a work order whose lead found that nothing needed to change.
+// Forgejo refuses to merge such a pull request. It reports false and changes
+// nothing when the pull request was merged or the head carries commits the
+// base branch lacks; those merge as usual. A closed exact match is accepted
+// on retry.
+func (client *Client) CloseEmptyPullRequest(
+	ctx context.Context,
+	owner string,
+	repository string,
+	spec workspace.PullRequestMergeSpec,
+) (bool, error) {
+	var err error
+	owner, repository, err = project.NormalizeRepositoryCoordinate(owner, repository)
+	if err != nil {
+		return false, err
+	}
+	if err := spec.Validate(); err != nil {
+		return false, err
+	}
+	stored, err := client.getPullRequest(ctx, owner, repository, spec.Number)
+	if err != nil {
+		return false, err
+	}
+	if stored.Number != spec.Number || stored.BaseBranch != spec.BaseBranch ||
+		stored.HeadBranch != spec.HeadBranch || stored.HeadCommitID != spec.HeadCommitID ||
+		strings.Count(stored.Body, spec.FeatureMarker) != 1 {
+		return false, workspace.ErrPullRequestConflict
+	}
+	if stored.Merged {
+		return false, nil
+	}
+	// Forgejo keeps the merge base current as either branch moves. A head
+	// that is its own merge base is already on the base branch; the compare
+	// below confirms it, and is only asked when it answers with nothing.
+	if stored.MergeBase != stored.HeadCommitID {
+		return false, nil
+	}
+	contained, err := client.branchContainsCommit(ctx, owner, repository, spec.BaseBranch, spec.HeadCommitID)
+	if err != nil || !contained {
+		return false, err
+	}
+	if err := client.ClosePullRequest(
+		ctx, owner, repository, spec.Number, spec.BaseBranch, spec.HeadBranch, spec.FeatureMarker,
+	); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// branchContainsCommit reports whether a commit is reachable from a branch:
+// Forgejo's compare of the branch with the commit lists no commits the
+// branch lacks.
+func (client *Client) branchContainsCommit(
+	ctx context.Context,
+	owner string,
+	repository string,
+	branch string,
+	commitID string,
+) (bool, error) {
+	status, body, err := client.doJSON(
+		ctx, http.MethodGet,
+		"/api/v1/repos/"+url.PathEscape(owner)+"/"+url.PathEscape(repository)+
+			"/compare/"+url.PathEscape(branch)+"..."+url.PathEscape(commitID),
+		nil,
+	)
+	if err != nil {
+		return false, err
+	}
+	switch status {
+	case http.StatusOK:
+	case http.StatusNotFound:
+		return false, workspace.ErrCommitNotFound
+	default:
+		return false, fmt.Errorf("%w: compare returned HTTP %d", project.ErrForgejoUnavailable, status)
+	}
+	var decoded struct {
+		TotalCommits *int `json:"total_commits"`
+	}
+	if err := json.Unmarshal(body, &decoded); err != nil || decoded.TotalCommits == nil {
+		return false, fmt.Errorf("%w: compare response is invalid", project.ErrForgejoUnavailable)
+	}
+	return *decoded.TotalCommits == 0, nil
+}
+
 func (client *Client) EnsurePullRequestPlan(
 	ctx context.Context,
 	owner string,
@@ -1868,6 +1956,7 @@ func decodePullRequest(body []byte) (workspace.PullRequest, error) {
 		Merged        bool    `json:"merged"`
 		MergedAt      *string `json:"merged_at"`
 		MergeCommitID string  `json:"merge_commit_sha"`
+		MergeBase     string  `json:"merge_base"`
 		Base          struct {
 			Ref string `json:"ref"`
 		} `json:"base"`
@@ -1897,6 +1986,7 @@ func decodePullRequest(body []byte) (workspace.PullRequest, error) {
 		HeadBranch:   strings.TrimSpace(decoded.Head.Ref),
 		HeadCommitID: strings.TrimSpace(decoded.Head.SHA), CreatedAt: createdAt.UTC(),
 		Merged: decoded.Merged, MergeCommitID: strings.TrimSpace(decoded.MergeCommitID),
+		MergeBase: strings.TrimSpace(decoded.MergeBase),
 	}
 	if decoded.MergedAt != nil {
 		mergedAt, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(*decoded.MergedAt))

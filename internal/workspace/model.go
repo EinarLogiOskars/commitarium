@@ -237,6 +237,13 @@ func (workspace Workspace) PullRequestReady() bool {
 		workspace.PullRequestRecordedAt != nil
 }
 
+// NothingMerged reports a work order completed with nothing to merge: its
+// approved commit was already on the base branch, so the commit itself is
+// recorded as the merge. A Forgejo merge always makes a new commit.
+func (workspace Workspace) NothingMerged() bool {
+	return workspace.MergeCommitID != "" && workspace.MergeCommitID == workspace.ApprovedCommitID
+}
+
 type PullRequestSpec struct {
 	Title               string
 	Body                string
@@ -283,6 +290,9 @@ type PullRequest struct {
 	Merged        bool
 	MergeCommitID string
 	MergedAt      *time.Time
+	// MergeBase is the commit Forgejo last found the head and base branches
+	// share. It equals the head commit when the head is already on the base.
+	MergeBase string
 }
 
 type PullRequestMergeSpec struct {

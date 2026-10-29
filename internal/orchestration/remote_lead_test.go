@@ -283,6 +283,10 @@ type remoteLeadWorkspaceStub struct {
 	// mergeErrs are returned, in order, by the next merges instead of merging.
 	mergeErrs     []error
 	mergedCommits []string
+	// nothingToMerge makes the next merges find the approved commit already
+	// on main: the pull request is closed and the commit recorded as merged.
+	nothingToMerge    bool
+	closedEmptyMerges int
 	// stillBehind keeps mainHead after a verified update onto main, as if the
 	// update did not bring main in.
 	stillBehind bool
@@ -361,6 +365,12 @@ func (stub *remoteLeadWorkspaceStub) MergeApproved(
 		err := stub.mergeErrs[0]
 		stub.mergeErrs = stub.mergeErrs[1:]
 		return workspace.Workspace{}, false, err
+	}
+	if stub.prepared.MergeCommitID == "" && stub.nothingToMerge {
+		stub.closedEmptyMerges++
+		stub.prepared.MergeCommitID = stub.prepared.ApprovedCommitID
+		mergedAt := time.Now().UTC()
+		stub.prepared.MergedAt = &mergedAt
 	}
 	if stub.prepared.MergeCommitID == "" {
 		stub.mergedCommits = append(stub.mergedCommits, stub.prepared.ApprovedCommitID)
