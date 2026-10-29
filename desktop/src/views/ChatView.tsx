@@ -59,6 +59,7 @@ import {
   eventLine,
   foldQuiet,
   groupLine,
+  orderLine,
   type QuietEntry,
   type QuietLine,
 } from "./quietLines";
@@ -79,7 +80,7 @@ import {
 import { usePlanSwitch } from "./usePlanSwitch";
 import { StopPlanDialog } from "./StopPlanDialog";
 import { QuestionCards } from "./QuestionCards";
-import { ActivityDot, isLiveOrder, ORDER_STATE_LABEL, type WorkSignals } from "./chatActivity";
+import { isLiveOrder, ORDER_STATE_LABEL, type WorkSignals } from "./chatActivity";
 
 const IDLE_POLL_MS = 20_000;
 const POLL_MS = 2000;
@@ -545,7 +546,10 @@ export function ChatView({
   // Questions the user has since written past fade, still answerable.
   const passedOver = passedOverQuestions(conversation?.messages ?? []);
 
+  // A created app or project that did not start keeps its card, with Try
+  // again.
   const asLine = (action: AssistantAction) =>
+    !action.start_failed &&
     (builds ||
       action.type === "answer_helper" ||
       action.type === "research" ||
@@ -590,7 +594,39 @@ export function ChatView({
         };
       }
       const action = piece.action;
-      if ((work && isLiveOrder(action)) || !asLine(action)) return { block: renderAction(action) };
+      if (work && isLiveOrder(action)) {
+        const id = action.work_order_id;
+        const order = orders.get(id);
+        const running = work.running.has(id);
+        const waiting = !running && work.waiting.has(id);
+        const title = order?.title ?? (appliedWhat(action.title) || action.title || id);
+        const state = waiting ? "Waits for you" : order ? ORDER_STATE_LABEL[order.state] : "";
+        const line = orderLine(title, state, {
+          running,
+          waiting,
+          done: order?.state === "completed" || order?.state === "cancelled",
+        });
+        return {
+          quiet: line,
+          node: (
+            <QuietRow
+              key={action.id}
+              tone={line.tone}
+              pulse={running}
+              title={action.reason ? `Why: ${action.reason}` : undefined}
+            >
+              {onOpenOrder ? (
+                <button className="quiet__order" onClick={() => onOpenOrder(id)}>
+                  {line.text} ›
+                </button>
+              ) : (
+                line.text
+              )}
+            </QuietRow>
+          ),
+        };
+      }
+      if (!asLine(action)) return { block: renderAction(action) };
       const running =
         action.type === "research" && (conversation?.researching ?? []).includes(action.title);
       const change = changes.get(action.id);
@@ -610,29 +646,19 @@ export function ChatView({
       };
     });
 
-  // A card for what is not a quiet line: a live work order, or an action
-  // card.
-  const renderAction = (action: AssistantAction) =>
-    work && isLiveOrder(action) ? (
-      <LiveWorkOrder
-        key={action.id}
-        action={action}
-        order={orders.get(action.work_order_id)}
-        work={work}
-        onOpenOrder={onOpenOrder}
-      />
-    ) : (
-      <ActionCard
-        key={action.id}
-        scope={target}
-        action={action}
-        onChanged={setConversation}
-        onMoved={onMoved}
-        onOpenOrder={onOpenOrder}
-        visionLabel={visionItems.get(action.vision_item_id)}
-        plain={builds}
-      />
-    );
+  // A card for what is not a quiet line: an action card.
+  const renderAction = (action: AssistantAction) => (
+    <ActionCard
+      key={action.id}
+      scope={target}
+      action={action}
+      onChanged={setConversation}
+      onMoved={onMoved}
+      onOpenOrder={onOpenOrder}
+      visionLabel={visionItems.get(action.vision_item_id)}
+      plain={builds}
+    />
+  );
 
   // The chat's rows in order: messages and cards as they are, and the quiet
   // lines between them deduplicated and folded into runs (quietLines.ts).
@@ -1021,41 +1047,6 @@ export function ChatView({
 // A work order the assistant created or started, as it is now (ADR-038): it
 // pulses while it runs, shows amber while it waits for the user, and opens
 // the work order's page.
-function LiveWorkOrder({
-  action,
-  order,
-  work,
-  onOpenOrder,
-}: {
-  action: AssistantAction;
-  order?: Feature;
-  work: WorkSignals;
-  onOpenOrder?: (featureId: string) => void;
-}) {
-  const id = action.work_order_id;
-  const running = work.running.has(id);
-  const waiting = !running && work.waiting.has(id);
-  const title = order?.title ?? (appliedWhat(action.title) || action.title || id);
-  const state = waiting ? "Waits for you" : order ? ORDER_STATE_LABEL[order.state] : "";
-  return (
-    <div
-      className={`work-card ${running ? "work-card--running" : ""}`}
-      title={action.reason ? `Why: ${action.reason}` : undefined}
-    >
-      <ActivityDot activity={running ? "running" : waiting ? "waiting" : "idle"} />
-      <div className="work-card__text">
-        <strong>{title}</strong>
-        {state && <span className="muted">{state}</span>}
-      </div>
-      {onOpenOrder && (
-        <button className="ghost" onClick={() => onOpenOrder(id)}>
-          Open
-        </button>
-      )}
-    </div>
-  );
-}
-
 function ActionCard({
   scope,
   action,
@@ -1120,7 +1111,9 @@ function ActionCard({
         // project's lists reload, and the app goes to what changed.
         window.dispatchEvent(new Event(WORK_CHANGED));
         const applied = conversation.actions?.find((a) => a.id === action.id);
-        if (applied?.type === "create_app" && applied.project_id) {
+        if (applied?.start_failed) {
+          // It stays here, showing why, with Try again.
+        } else if (applied?.type === "create_app" && applied.project_id) {
           void openAppWindow(applied.project_id, applied.title);
         } else if (applied?.type === "plan_project" && applied.project_id) {
           window.dispatchEvent(new CustomEvent(OPEN_PROJECT, { detail: applied.project_id }));
@@ -1427,6 +1420,21 @@ function ActionCard({
         </label>
       )}
       {error && <div className="banner banner--error">{error}</div>}
+      {action.status === "applied" && action.start_failed && (
+        <>
+          <div className="banner banner--error">{action.start_failed}</div>
+          <div className="row">
+            <button
+              className="primary"
+              onClick={() => void approve(true)}
+              disabled={busy !== null}
+              title="Finish starting it, on the same project"
+            >
+              {busy === "start" ? "Trying again…" : "Try again"}
+            </button>
+          </div>
+        </>
+      )}
       {pending && (
         <div className="row">
           {action.type === "create_work_order" && action.brief ? (

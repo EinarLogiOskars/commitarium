@@ -26,7 +26,7 @@ const DOCKER_START_TIMEOUT_MS = 120_000;
 // occupied port becomes an actionable retry screen instead of an endless bar.
 const STACK_READY_TIMEOUT_MS = 120_000;
 const PROGRESS_TICK_MS = 80;
-const FINISH_MESSAGE = "Forge lit — entering the workshop…";
+const FINISH_MESSAGE = "Ready — opening Commitarium…";
 const REQUIRED_CORE_SERVICES = ["forgejo", "coordinator", "simulated-codex-worker"];
 
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));

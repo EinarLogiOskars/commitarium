@@ -2,16 +2,17 @@ import { useCallback, useEffect, useState } from "react";
 import { ApiError } from "../api/client";
 import type { Vision } from "../api/types";
 import { finishPlanning, getVision } from "../api/vision";
-import { ASSISTANT_CHANGED, WORK_CHANGED, WRITE_PLAN } from "./chatEvents";
+import { ASSISTANT_CHANGED, OPEN_PLAN, WORK_CHANGED, WRITE_PLAN } from "./chatEvents";
 import { Markdown } from "./Markdown";
+import { Overlay } from "./Overlay";
 import { planPhase } from "./planMode";
 
 // The written plan (PLAN_MODE_PLAN.md PM6): the document the assistant
 // drafts once it has enough, with its slices as a checklist. The user
 // reviews it here and asks for changes in the chat; Build it hands the
 // slices to autopilot, a work order each. PlanDocumentView stands on its
-// own, so it renders as a centre page or inside an Overlay; onBack returns
-// to the chat (or closes the overlay).
+// own, so it renders inside the plan Overlay or the vision page's; onBack
+// closes it and returns to the chat.
 
 export function PlanDocumentView({
   projectId,
@@ -132,7 +133,22 @@ function describe(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
 
-/** The written plan as a page of the project, over the chat. */
-export function PlanPage({ projectId, onBack }: { projectId: string; onBack: () => void }) {
-  return <PlanDocumentView projectId={projectId} onBack={onBack} />;
+/** The written plan over the page (ADR-039): every "open the plan" opener,
+ * the chat's "Plan drafted · Open" line, the composer's "Open the plan" and
+ * the Plan card, sends OPEN_PLAN, and this opens the plan in an Overlay. One
+ * is mounted per project screen. */
+export function PlanOverlay({ projectId }: { projectId: string }) {
+  const [shown, setShown] = useState(false);
+  const close = useCallback(() => setShown(false), []);
+  useEffect(() => {
+    const open = () => setShown(true);
+    window.addEventListener(OPEN_PLAN, open);
+    return () => window.removeEventListener(OPEN_PLAN, open);
+  }, []);
+  if (!shown) return null;
+  return (
+    <Overlay title="Plan" onClose={close}>
+      <PlanDocumentView projectId={projectId} onBack={close} inOverlay />
+    </Overlay>
+  );
 }

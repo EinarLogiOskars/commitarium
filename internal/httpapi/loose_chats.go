@@ -73,7 +73,7 @@ func (api *API) makeProjectHandler(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	moved, ok := api.planProject(w, r, loose.Chat, "", projectID, name, "", goal)
+	moved, ok := api.planProject(w, r, loose.Chat, projectID, name, "", goal)
 	if !ok {
 		return
 	}

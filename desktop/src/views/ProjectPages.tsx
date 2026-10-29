@@ -9,8 +9,6 @@ import { WORK } from "../vocab";
 import type { AttentionItem, Project, ProjectToolchain, WorkKind } from "../api/types";
 import { AttachmentOwner } from "./Attachments";
 import { OPEN_VISION, WORK_CHANGED } from "./ChatView";
-import { OPEN_PLAN } from "./chatEvents";
-import { PlanPage } from "./PlanPage";
 import { FeatureView } from "./FeatureView";
 import { NewWorkOrder, type OrderDraft } from "./NewWorkOrder";
 import { PreviewView } from "./PreviewView";
@@ -89,13 +87,8 @@ export function useProjectPages(
   }, [bump]);
   useEffect(() => {
     const showVision = () => setPage({ mode: "vision" });
-    const showPlan = () => setPage({ mode: "plan" });
     window.addEventListener(OPEN_VISION, showVision);
-    window.addEventListener(OPEN_PLAN, showPlan);
-    return () => {
-      window.removeEventListener(OPEN_VISION, showVision);
-      window.removeEventListener(OPEN_PLAN, showPlan);
-    };
+    return () => window.removeEventListener(OPEN_VISION, showVision);
   }, [setPage]);
 
   const load = useCallback(async () => {
@@ -248,8 +241,6 @@ export function ProjectPageBody({
           }}
         />
       );
-    case "plan":
-      return <PlanPage projectId={id} onBack={home} />;
     case "repository":
       return <RepositoryCard projectId={id} />;
     case "stack":

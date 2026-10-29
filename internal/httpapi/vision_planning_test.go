@@ -24,9 +24,14 @@ type planningVisions struct {
 	discarded int
 	// described are the descriptions a new app's vision is written from.
 	described []string
+	// fail fails writing or planning a vision while set.
+	fail error
 }
 
 func (stub *planningVisions) Start(_ context.Context, _, _, _ string, _ vision.Mode, message, _ string) (vision.Session, bool, error) {
+	if stub.fail != nil {
+		return vision.Session{}, false, stub.fail
+	}
 	stub.described = append(stub.described, message)
 	return vision.Session{ID: "vis_1"}, true, nil
 }
@@ -36,6 +41,9 @@ func (stub *planningVisions) Get(context.Context, string) (vision.Vision, error)
 }
 
 func (stub *planningVisions) StartPlanning(_ context.Context, projectID, goal, chat string) (vision.Vision, bool, error) {
+	if stub.fail != nil {
+		return vision.Vision{}, false, stub.fail
+	}
 	stub.goals = append(stub.goals, goal)
 	stub.chats = append(stub.chats, chat)
 	return vision.Vision{ProjectID: projectID, Planning: &vision.Planning{Status: vision.PlanningOpen}}, len(stub.goals) == 1, nil

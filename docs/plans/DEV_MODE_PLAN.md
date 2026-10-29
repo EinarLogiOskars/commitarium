@@ -1,6 +1,7 @@
 # Chat-first Developer Mode: Implementation Plan
 
-**Status:** proposed 2026-10-28, [ADR-038](../adr/0038-developer-mode-is-chat-first.md).
+**Status:** merged (D1–D6, PRs #128–#140), [ADR-038](../adr/0038-developer-mode-is-chat-first.md).
+What is left is the [Later](#later) list.
 
 The slices build bottom-up. D1 and D2 change the conversation store and API
 without changing what the user sees. D3 puts the new shell behind Developer

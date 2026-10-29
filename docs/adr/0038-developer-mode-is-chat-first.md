@@ -1,6 +1,6 @@
 # ADR-038: Developer mode is chat-first
 
-- Status: Proposed (extends [ADR-035](0035-talk-to-the-assistant-not-the-agents.md))
+- Status: Accepted (extends [ADR-035](0035-talk-to-the-assistant-not-the-agents.md))
 - Date: 2026-10-28
 
 ## Context

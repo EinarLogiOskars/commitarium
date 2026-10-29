@@ -2853,7 +2853,13 @@ optional `chat_title`.
   refused with `409 developer_mode_required` unless the conversation's
   `developer` is set by a message's `developer_mode`. Any other action
   there, or `create_app` or `plan_project` in a project, returns
-  `409 action_needs_project`. `update_plan` changes the vision being planned.
+  `409 action_needs_project`. When a `create_app` or `plan_project` was
+  created but what follows failed (the chat moving in, the app's start, or
+  the planning), the approval still answers `200` with the conversation that
+  holds the applied card, whose `start_failed` says why; approving that card
+  again, where it now is, finishes those steps on the same project without
+  creating another or moving the chat again, and clears `start_failed`.
+  `update_plan` changes the vision being planned.
   The assistant does not propose it: while the vision is planned, every
   turn uses the `assistant_planning_turn` result, whose required `plan`
   (`goal`, `decisions`, `open_questions`, `items`, `stack_presets`,

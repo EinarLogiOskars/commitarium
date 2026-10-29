@@ -117,6 +117,10 @@ export interface AssistantAction {
   result?: string;
   /** The project a create_app or plan_project action created. */
   project_id?: string;
+  /** Why what follows an applied create_app or plan_project failed: its
+   * chat moving in, the app's start, or the project's planning. Approving
+   * the card again finishes it on the same project. */
+  start_failed?: string;
   /** Autopilot took it over. */
   auto_tried?: boolean;
   /** Its work order already got where it leads, so it was not needed: it

@@ -1,6 +1,6 @@
 # ADR-039: Planning is a mode of the chat
 
-- Status: Proposed (extends [ADR-038](0038-developer-mode-is-chat-first.md); revises the planning workspace of [ADR-035](0035-talk-to-the-assistant-not-the-agents.md))
+- Status: Accepted (extends [ADR-038](0038-developer-mode-is-chat-first.md); revises the planning workspace of [ADR-035](0035-talk-to-the-assistant-not-the-agents.md))
 - Date: 2026-10-29
 
 ## Context

@@ -19,6 +19,10 @@ const MERGE_POLL_MS = 15_000;
 // from its own local address, so its code never reaches Commitarium; the
 // assistant's round button floats over it. The app runs on the project's
 // preview, started when the window opens and rebuilt when work merges.
+// A Developer-mode project that is not an app opens its running preview here
+// too (the Preview card's Open): it has no launch, so the window never says
+// it is being built, and merged work is not rebuilt on its own; the
+// project's Restart does that.
 export function AppWindow({ projectId }: { projectId: string }) {
   const [project, setProject] = useState<Project | null>(null);
   const [status, setStatus] = useState<PreviewStatus | null>(null);
@@ -64,6 +68,7 @@ export function AppWindow({ projectId }: { projectId: string }) {
 
   // Work that merges reaches the app: rebuild it from the new head. Its data
   // volumes are kept. The work fixing the app's setup is followed too.
+  const app = !!project?.app;
   const merged = useRef<Set<string> | null>(null);
   const [fixingWork, setFixingWork] = useState<Feature | null>(null);
   useEffect(() => {
@@ -78,7 +83,7 @@ export function AppWindow({ projectId }: { projectId: string }) {
         const done = new Set(features.filter((f) => f.state === "completed").map((f) => f.id));
         const seen = merged.current;
         merged.current = done;
-        if (seen && [...done].some((id) => !seen.has(id))) void start();
+        if (app && seen && [...done].some((id) => !seen.has(id))) void start();
       } catch {
         // The next look tries again.
       }
@@ -86,7 +91,7 @@ export function AppWindow({ projectId }: { projectId: string }) {
     void look();
     const timer = setInterval(() => void look(), MERGE_POLL_MS);
     return () => clearInterval(timer);
-  }, [projectId, start]);
+  }, [projectId, start, app]);
 
   // While the app is still being built, the window says how far along it is
   // instead of showing a preview that has nothing to run yet.
@@ -205,6 +210,16 @@ export function AppWindow({ projectId }: { projectId: string }) {
                 </div>
               )}
               {fixError && <p className="muted">{fixError}</p>}
+            </>
+          ) : project && !app && status?.state === "stopped" ? (
+            // A project's preview stopped from its Preview card stays stopped.
+            <>
+              <p className="muted">The preview isn&apos;t running.</p>
+              <div className="row">
+                <button className="primary" onClick={() => void start()}>
+                  Run
+                </button>
+              </div>
             </>
           ) : (
             <p className="muted app-window__starting">Starting {name}…</p>

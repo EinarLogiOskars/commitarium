@@ -1,12 +1,12 @@
 import type { BootPhase } from "../boot/useBoot";
 import type { DockerProbe } from "../ipc";
 import { openExternal } from "../ipc";
-import workshop from "../assets/loading/workshop.png";
 import "./BootScreen.css";
 
 /**
- * Full-screen startup splash. Docker and stack failures keep the same pixel-art
- * backdrop, but the bottom band swaps progress for an actionable retry.
+ * Full-screen startup splash in the app's Geist look: a centred mark and
+ * wordmark over a thin progress bar. Docker and stack failures swap the
+ * progress for an actionable retry.
  */
 export function BootScreen({
   phase,
@@ -40,9 +40,9 @@ export function BootScreen({
 
   return (
     <main className="boot">
-      <div className="boot__art" style={{ backgroundImage: `url(${workshop})` }} />
       <div className="boot__band">
         <div className="boot__inner">
+          <span className="boot__mark" aria-hidden />
           <h1 className="boot__title">Commitarium</h1>
 
           {needsAction ? (

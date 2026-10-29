@@ -348,3 +348,87 @@ func TestApprovingCreateAppFromTheMainChat(t *testing.T) {
 		t.Fatalf("the vision was described as %q", loose.visions.described)
 	}
 }
+
+// A create_app card whose app was created but did not start shows why, in
+// the chat that moved into the app; approving it again there starts the
+// same app, without creating another or moving the chat again.
+func TestACreatedAppThatDidNotStartStartsOnRetry(t *testing.T) {
+	loose := newLooseChats(t, featureartifact.AssistantAction{
+		Type: featureartifact.AssistantCreateApp, Reason: "Clear and small", Title: "Pep Talk",
+		Description: "A random motivational quote each time it opens.", AppBrief: "About 150 bundled quotes.",
+	})
+	if err := loose.service.SetDeveloperMode(t.Context(), conversations.TopLevel, true); err != nil {
+		t.Fatal(err)
+	}
+	chat := loose.talk(t, "A tiny app that gives a motivational quote every time it opens?")
+	_, conversation, _ := loose.call(t, http.MethodGet, "/api/v1/assistant/conversations/commitarium/chats/"+chat, "")
+	actionID := conversation.Actions[0].ID
+	loose.visions.fail = errors.New("the vision writer is away")
+	code, moved, body := loose.call(t, http.MethodPost,
+		"/api/v1/assistant/conversations/commitarium/actions/"+actionID+"/approve", `{}`)
+	if code != http.StatusOK || moved.Scope != "prj_bank" || len(moved.Actions) != 1 ||
+		moved.Actions[0].Status != conversations.ActionApplied ||
+		!strings.Contains(moved.Actions[0].StartFailed, "starting it failed") {
+		t.Fatalf("first try: %d %s", code, body)
+	}
+	if len(loose.visions.described) != 0 || loose.projects.calls != 1 {
+		t.Fatalf("described %v, projects created %d", loose.visions.described, loose.projects.calls)
+	}
+
+	loose.visions.fail = nil
+	code, retried, body := loose.call(t, http.MethodPost,
+		"/api/v1/assistant/conversations/prj_bank/chats/"+moved.Chat+"/actions/"+actionID+"/approve", `{}`)
+	if code != http.StatusOK || retried.Scope != "prj_bank" || retried.Chat != moved.Chat ||
+		retried.Actions[0].StartFailed != "" || retried.Launch == nil {
+		t.Fatalf("retry: %d %s", code, body)
+	}
+	if len(loose.visions.described) != 1 || loose.projects.calls != 1 {
+		t.Fatalf("described %v, projects created %d", loose.visions.described, loose.projects.calls)
+	}
+	if chats, _ := loose.service.Chats(t.Context(), "prj_bank", true); len(chats) != 1 {
+		t.Fatalf("the app has chats %+v", chats)
+	}
+	// Once started, the card is done.
+	if code, _, body := loose.call(t, http.MethodPost,
+		"/api/v1/assistant/conversations/prj_bank/chats/"+moved.Chat+"/actions/"+actionID+"/approve", `{}`); code != http.StatusConflict {
+		t.Fatalf("a started card ran again: %d %s", code, body)
+	}
+}
+
+// The same for a plan_project card whose planning could not start: the
+// retry starts the planning of the project already made, in the moved chat.
+func TestAPlannedProjectThatDidNotStartStartsOnRetry(t *testing.T) {
+	loose := newLooseChats(t, featureartifact.AssistantAction{
+		Type: featureartifact.AssistantPlanProject, Reason: "A real project", Title: "Bank import",
+		Description: "Reads the bank's CSV exports every night.", AppBrief: "Landsbankinn exports, nightly.",
+	})
+	if err := loose.service.SetDeveloperMode(t.Context(), conversations.TopLevel, true); err != nil {
+		t.Fatal(err)
+	}
+	chat := loose.talk(t, "Could something read my bank's CSVs every night?")
+	_, conversation, _ := loose.call(t, http.MethodGet, "/api/v1/assistant/conversations/commitarium/chats/"+chat, "")
+	actionID := conversation.Actions[0].ID
+	loose.visions.fail = errors.New("the planner is away")
+	code, moved, body := loose.call(t, http.MethodPost,
+		"/api/v1/assistant/conversations/commitarium/actions/"+actionID+"/approve", `{}`)
+	if code != http.StatusOK || moved.Scope != "prj_bank" ||
+		!strings.Contains(moved.Actions[0].StartFailed, "its planning could not start") {
+		t.Fatalf("first try: %d %s", code, body)
+	}
+	if len(loose.visions.goals) != 0 || loose.projects.calls != 1 {
+		t.Fatalf("goals %v, projects created %d", loose.visions.goals, loose.projects.calls)
+	}
+
+	loose.visions.fail = nil
+	code, retried, body := loose.call(t, http.MethodPost,
+		"/api/v1/assistant/conversations/prj_bank/chats/"+moved.Chat+"/actions/"+actionID+"/approve", `{}`)
+	if code != http.StatusOK || retried.Chat != moved.Chat || retried.Actions[0].StartFailed != "" {
+		t.Fatalf("retry: %d %s", code, body)
+	}
+	if strings.Join(loose.visions.chats, ",") != moved.Chat || loose.projects.calls != 1 {
+		t.Fatalf("planned in chats %v, projects created %d", loose.visions.chats, loose.projects.calls)
+	}
+	if woken := loose.service.woken["prj_bank"]; !strings.Contains(woken, "user: Could something read my bank's CSVs every night?") {
+		t.Fatalf("the assistant was woken with %q", woken)
+	}
+}

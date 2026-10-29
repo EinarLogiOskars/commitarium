@@ -7,6 +7,7 @@ import {
   eventLine,
   foldQuiet,
   groupLine,
+  orderLine,
   repeatKey,
   runSummary,
   type QuietEntry,
@@ -250,5 +251,19 @@ describe("a run's summary", () => {
         eventLine("Vision written."),
       ]),
     ).toBe("1 merged · started 1 work order · looked something up · 2 more");
+  });
+});
+
+describe("orderLine", () => {
+  it("is under way, needs the user, done, or where it stands", () => {
+    const flags = { running: false, waiting: false, done: false };
+    expect(orderLine("FSRS", "Planning", { ...flags, running: true }).tone).toBe("busy");
+    expect(orderLine("FSRS", "Waits for you", { ...flags, waiting: true }).tone).toBe("needs");
+    expect(orderLine("FSRS", "Done", { ...flags, done: true })).toMatchObject({
+      tone: "done",
+      kind: "order",
+      text: "FSRS · Done",
+    });
+    expect(orderLine("FSRS", "", flags)).toMatchObject({ tone: "info", text: "FSRS" });
   });
 });
