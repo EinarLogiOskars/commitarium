@@ -1619,10 +1619,11 @@ button {
   color: var(--text);
   font-weight: 500;
   cursor: pointer;
+  /* No opacity in the transition: a button that turns disabled while its
+     label changes ("Deleting…") left the old label painted in WebKit. */
   transition:
     background-color 120ms ease,
-    border-color 120ms ease,
-    opacity 120ms ease;
+    border-color 120ms ease;
 }
 
 button:hover:not(:disabled) {
@@ -1860,6 +1861,16 @@ button.danger:not(.ghost) {
 .ghost.danger:hover:not(:disabled) {
   border-color: color-mix(in srgb, var(--bad) 45%, transparent);
   color: var(--bad);
+}
+/* The buttons keep their width while the label turns to "Deleting…", so
+   nothing shifts under the half-transparent disabled buttons (WebKit left
+   the old labels painted beside the new ones). */
+.delete-confirm .row button {
+  min-width: 132px;
+  justify-content: center;
+}
+.delete-confirm .row button.ghost {
+  min-width: 0;
 }
 .delete-confirm {
   display: flex;
