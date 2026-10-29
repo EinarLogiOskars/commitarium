@@ -5231,22 +5231,23 @@ select:focus {
 .chat-side__item--quiet {
   color: var(--muted);
 }
-/* A chat, with room on its left for folding its work orders. */
-.chat-side__row {
-  position: relative;
-}
+/* Folds a chat's work orders, right of its name. */
 .chat-side__fold {
-  position: absolute;
-  left: 12px;
-  top: 50%;
-  transform: translateY(-50%);
-  z-index: 1;
   display: grid;
   place-items: center;
-  width: 16px;
-  height: 16px;
-  padding: 0;
+  flex: none;
+  width: 18px;
+  height: 18px;
+  margin-right: auto;
+  border-radius: 4px;
   color: var(--muted);
+}
+.chat-side__fold:hover {
+  color: var(--text);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+.chat-side__name--fit {
+  flex: 0 1 auto;
 }
 /* A work order under the chat that started it. */
 .chat-side__item--order {
@@ -5254,12 +5255,17 @@ select:focus {
   font-size: 12px;
   color: var(--muted);
 }
+/* A long name fades out instead of ending in an ellipsis. The fade covers
+   the right padding, so a name that fits is never dimmed. */
 .chat-side__name {
   flex: 1;
   min-width: 0;
   overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
+  padding-right: 16px;
+  margin-right: -10px;
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 22px), transparent);
+  mask-image: linear-gradient(to right, #000 calc(100% - 22px), transparent);
 }
 .chat-side__chevron {
   flex: none;

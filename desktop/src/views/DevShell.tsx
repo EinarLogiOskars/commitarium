@@ -373,20 +373,20 @@ export function DevShell({
   // A project found by its name shows all its chats.
   const chatButton = (chat: ChatSummary, sub: boolean, all = false, toggle?: ReactNode) =>
     (all || match(chat.title || "New chat")) && (
-      <div key={chat.id} className="chat-side__row">
+      <button
+        key={chat.id}
+        className={`chat-side__item ${sub ? "chat-side__item--sub" : ""} ${
+          selection.scope === chat.scope && currentChat === chat.id ? "chat-side__item--on" : ""
+        }`}
+        onClick={() => select({ scope: chat.scope, chat: chat.id })}
+        title={chat.title || "New chat"}
+      >
+        <span className={`chat-side__name ${toggle ? "chat-side__name--fit" : ""}`}>
+          {chat.title || "New chat"}
+        </span>
         {toggle}
-        <button
-          key={chat.id}
-          className={`chat-side__item ${sub ? "chat-side__item--sub" : ""} ${
-            selection.scope === chat.scope && currentChat === chat.id ? "chat-side__item--on" : ""
-          }`}
-          onClick={() => select({ scope: chat.scope, chat: chat.id })}
-          title={chat.title || "New chat"}
-        >
-          <span className="chat-side__name">{chat.title || "New chat"}</span>
-          <ActivityDot activity={activityOf(chat)} />
-        </button>
-      </div>
+        <ActivityDot activity={activityOf(chat)} />
+      </button>
     );
   // The work orders the open chat started, under it: every one still going
   // and the latest finished, four in all, unless the user shows them all or
@@ -410,22 +410,35 @@ export function DevShell({
       ordersAll.has(key) ? Infinity : undefined,
     );
     const on = (id: string) => shownPage?.mode === "order" && shownPage.orderId === id;
+    const fold = () =>
+      setOrdersHidden((current) => {
+        const next = flip(current, key);
+        remember(ORDERS_HIDDEN_KEY, [...next]);
+        return next;
+      });
+    // Right of the chat's name, so its work orders read as its own and not
+    // as more chats. It sits inside the chat's button, so it acts on its own.
     const toggle = (
-      <button
-        className="ghost chat-side__fold"
-        onClick={() =>
-          setOrdersHidden((current) => {
-            const next = flip(current, key);
-            remember(ORDERS_HIDDEN_KEY, [...next]);
-            return next;
-          })
-        }
+      <span
+        role="button"
+        tabIndex={0}
+        className="chat-side__fold"
+        onClick={(e) => {
+          e.stopPropagation();
+          fold();
+        }}
+        onKeyDown={(e) => {
+          if (e.key !== "Enter" && e.key !== " ") return;
+          e.preventDefault();
+          e.stopPropagation();
+          fold();
+        }}
         aria-expanded={!hidden}
         aria-label={hidden ? "Show its work orders" : "Hide its work orders"}
         title={hidden ? "Show its work orders" : "Hide its work orders"}
       >
         <Chevron open={!hidden} />
-      </button>
+      </span>
     );
     return (
       <Fragment key={chat.id}>
