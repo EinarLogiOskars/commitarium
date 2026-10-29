@@ -227,7 +227,7 @@ func (adapter *Adapter) Models(ctx context.Context, workingDirectory string, env
 	client := newProtocolClient(process)
 	var initialized map[string]any
 	if err := client.request(operationCtx, "initialize", initializeParams{ClientInfo: clientInfo{
-		Name: "commitarium", Title: "Commitarium worker", Version: "0.8.3",
+		Name: "commitarium", Title: "Commitarium worker", Version: "0.9.0",
 	}}, &initialized); err != nil {
 		return nil, fmt.Errorf("initialize Codex app-server for model discovery: %w", err)
 	}
@@ -339,7 +339,7 @@ func (adapter *Adapter) launch(
 
 	var initialized map[string]any
 	if err := client.request(operationCtx, "initialize", initializeParams{ClientInfo: clientInfo{
-		Name: "commitarium", Title: "Commitarium worker", Version: "0.8.3",
+		Name: "commitarium", Title: "Commitarium worker", Version: "0.9.0",
 	}}, &initialized); err != nil {
 		cleanupWithoutSession()
 		return nil, fmt.Errorf("initialize Codex app-server: %w", err)
